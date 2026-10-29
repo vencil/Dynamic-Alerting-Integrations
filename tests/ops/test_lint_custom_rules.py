@@ -725,3 +725,92 @@ def test_lint_result_no_rule_name():
     """測試 LintResult 無規則名稱。"""
     r = lint_custom_rules.LintResult("test.yaml", None, None, "ERROR", "msg")
     assert str(r) == "ERROR: test.yaml - msg"
+
+
+# ── Which files are rule files (#3206) ─────────────────────────────
+# A plain file and a ConfigMap data value pass the same test before the rule
+# loader sees them: a document of the Kubernetes reading with a `groups` key
+# (`documents_declare_rule_groups`). A file without one — a recipe, the
+# registry beside the packs — is no rule file and is not read (as on main);
+# a file with one that the loader refuses is an ERROR naming it.
+
+_RECIPE = "recipe: threshold\nparams:\n  metric: {type: string}\n"
+_REGISTRY = "entries:\n- metric: mysql_up\n  default: 1\n"
+_OK_RULE = (
+    "groups:\n- name: g\n  rules:\n  - alert: Ok\n    expr: up{tenant=\"t\"} == 0\n"
+    "    labels: {tenant: t, severity: warning}\n"
+)
+
+
+def _run_main(argv, monkeypatch):
+    """main() 的 exit code：失敗時 sys.exit，乾淨時正常 return（= 0）。"""
+    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", *argv])
+    try:
+        lint_custom_rules.main()
+    except SystemExit as exc:
+        return exc.code
+    return 0
+
+
+def test_yaml_without_groups_is_no_rule_file(tmp_path, monkeypatch, capsys):
+    """(a) 目錄內的非規則 YAML（無 `groups`）→ 不交給規則載入器、不報錯。"""
+    (tmp_path / "recipes").mkdir()
+    (tmp_path / "recipes" / "threshold.yaml").write_text(_RECIPE, encoding="utf-8")
+    (tmp_path / "threshold-registry.yaml").write_text(_REGISTRY, encoding="utf-8")
+    (tmp_path / "rules.yaml").write_text(_OK_RULE, encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 0
+    out = capsys.readouterr().out
+    assert "ERROR" not in out, out
+    results, count = lint_custom_rules.lint_file(
+        str(tmp_path / "recipes" / "threshold.yaml"), lint_custom_rules.DEFAULT_POLICY)
+    assert (results, count) == ([], 0)
+
+
+@pytest.mark.parametrize("text,why", [
+    # PromQL the loader does not parse
+    ("groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n", "parse error"),
+    # a key Prometheus does not know
+    ("groups:\n- name: g\n  type: prometheus\n  rules: []\n", "field type not found"),
+    # a second document Prometheus would drop
+    (_OK_RULE + "---\nfoo: 1\n", "document 2"),
+    # neither kubectl's reading nor the loader reads it: never skipped
+    ("groups: [unclosed\n", "rule loader"),
+])
+def test_broken_plain_rule_file_is_an_error(tmp_path, monkeypatch, capsys, text, why):
+    """(b) 有 `groups:` 但規則載入器拒收的 plain 檔 → ERROR，點名檔案。"""
+    bad = tmp_path / "broken.yaml"
+    bad.write_text(text, encoding="utf-8")
+    (tmp_path / "recipe.yaml").write_text(_RECIPE, encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    out = capsys.readouterr().out
+    errors = [line for line in out.splitlines() if line.startswith("ERROR")]
+    assert len(errors) == 1, errors
+    assert "broken.yaml" in errors[0] and "rule loader refuses" in errors[0], errors
+    assert why in out, out
+
+
+def test_rule_file_kubectl_refuses_but_prometheus_loads_is_linted(tmp_path):
+    """kubectl 的讀法（sigs.k8s.io/yaml）拒收、規則載入器會讀的檔：照樣 lint，
+    不因 Kubernetes 讀法拒收而略過。`.inf` 對 sigs.k8s.io/yaml 是 +Inf（無
+    JSON 表示），對 rulefmt 是字串 ".inf"。"""
+    rule = tmp_path / "inf.yaml"
+    rule.write_text(
+        "groups:\n- name: g\n  rules:\n  - alert: Forecast\n"
+        "    expr: predict_linear(disk_free[1h], 3600) < 0\n"
+        "    annotations: {x: .inf}\n", encoding="utf-8")
+    import _lib_consumer_read
+    with pytest.raises(_lib_consumer_read.InputRefused):
+        _lib_consumer_read.kubernetes_documents(str(rule))
+    results, count = lint_custom_rules.lint_file(str(rule), lint_custom_rules.DEFAULT_POLICY)
+    assert count == 1
+    assert any(r.severity == "ERROR" and "predict_linear" in r.message
+               for r in results), [str(r) for r in results]
+
+
+def test_repo_rule_packs_pass_the_ci_policy(monkeypatch, capsys):
+    """(c) smoke：repo 真實的 rule-packs/（含 recipes/、threshold-registry.yaml）
+    以 CI 的 policy 跑 --ci → rc 0。"""
+    code = _run_main([os.path.join(_REPO_ROOT, "rule-packs"),
+                      "--policy", _REAL_POLICY, "--ci"], monkeypatch)
+    out = capsys.readouterr().out
+    assert code == 0, [line for line in out.splitlines() if line.startswith("ERROR")]

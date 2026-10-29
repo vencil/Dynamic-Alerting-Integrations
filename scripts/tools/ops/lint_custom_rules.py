@@ -255,25 +255,37 @@ def read_rule_files(files):
     (#3206, ADR-036 §12). A file whose Kubernetes reading (da-crdecode) holds
     a ``kind: ConfigMap`` is a ConfigMap: each of its data values that sets
     out to be a rule file (a ``groups:`` key; ``manifest_rule_file_results``
-    with ``only_declared``) is one; any other file — one kubectl's
-    reading refuses included — is itself a rule file. The rule files are read
-    by Prometheus' rule loader (``da-read prometheus-rules``), the plain
-    ones in one run and the ConfigMaps' in another. Raises
-    ``_lib_consumer_read.ConsumerReadError`` when a binary cannot be had."""
-    plain, configmaps = [], []
+    with ``only_declared``) is one. Any other file is a rule file by the
+    same test — a document of its Kubernetes reading is a mapping with a
+    ``groups`` key (``documents_declare_rule_groups``); one without is no
+    rule file (a recipe, the registry beside the packs) and is not read, as
+    before. A file kubectl's reading refuses is handed to the rule loader
+    all the same: that reading refuses some files the loader loads (an
+    annotation value ``.inf``), and a file here that neither reads is an
+    ERROR, as a YAML parse error was — never skipped. The rule files are
+    read by Prometheus' rule loader (``da-read prometheus-rules``), the
+    plain ones in one run and the ConfigMaps' in another; a file that is no
+    rule file maps to ``[]``. Raises ``_lib_consumer_read.ConsumerReadError``
+    when a binary cannot be had."""
+    plain, configmaps, others = [], [], []
     for path in files:
         try:
             docs = _lib_consumer_read.kubernetes_documents(path)
         except _lib_consumer_read.InputRefused:
-            docs = []
-        is_cm = any(isinstance(d, dict) and d.get("kind") == "ConfigMap" for d in docs)
-        (configmaps if is_cm else plain).append(path)
+            plain.append(path)
+            continue
+        if any(isinstance(d, dict) and d.get("kind") == "ConfigMap" for d in docs):
+            configmaps.append(path)
+        elif _lib_consumer_read.documents_declare_rule_groups(docs):
+            plain.append(path)
+        else:
+            others.append(path)
     out = {p: [rf] for p, rf in zip(
         plain, _lib_consumer_read.prometheus_rule_file_results(plain))}
     for rf in _lib_consumer_read.manifest_rule_file_results(configmaps, only_declared=True):
         if rf.kind == "ConfigMap":
             out.setdefault(rf.manifest, []).append(rf)
-    for p in configmaps:
+    for p in (*configmaps, *others):
         out.setdefault(p, [])
     return out
 
@@ -306,8 +318,8 @@ def lint_file(filepath, policy, rule_files=None):
     # and each data value by the rule loader. A file or data value the loader
     # refuses is an ERROR naming it, with the loader's reason; it is never
     # skipped (a ConfigMap value with a `groups:` key that did not parse used
-    # to be dropped silently). A value that is no rule file at all (no
-    # `groups:` key) is not read, as before.
+    # to be dropped silently). A file or value that is no rule file at all
+    # (no `groups:` key) is not read, as before — the same test for both.
     if rule_files is None:
         rule_files = read_rule_files([filepath])[filepath]
     groups = []

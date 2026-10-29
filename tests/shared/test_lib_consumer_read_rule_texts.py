@@ -141,6 +141,11 @@ def test_a_manifest_kubectl_refuses_is_named(tmp_path) -> None:
 @pytest.mark.parametrize("text,declared", [
     (RULES, True), ("groups: []\n", True), ("route: {}\n", False),
     ("not: [yaml\n", False), ("", False), ("- a\n- b\n", False),
+    # kubectl's reading refuses it (+Inf has no JSON); the rule loader loads it
+    ("groups:\n- name: g\n  rules:\n  - alert: A\n    expr: up == 0\n"
+     "    annotations: {x: .inf}\n", True),
+    # both refuse it (a markdown template): no rule file
+    ("# - alert: example\n*markdown*\n", False),
 ])
 def test_declares_rule_groups(text, declared) -> None:
     assert cr.declares_rule_groups(text) is declared

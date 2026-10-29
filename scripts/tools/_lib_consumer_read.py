@@ -500,17 +500,34 @@ def prometheus_rule_text_results(texts: "Iterable[tuple[str, str | bytes]]",
     return out
 
 
-def declares_rule_groups(text: "str | bytes", binary: str | None = None) -> bool:
+def documents_declare_rule_groups(docs: "list[Any]") -> bool:
+    """Whether a file whose Kubernetes reading (da-crdecode) is *docs* sets
+    out to be a rule file: one of the documents is a mapping with a
+    ``groups`` key. The one test ``declares_rule_groups`` and a caller that
+    already holds the documents both use."""
+    return any(isinstance(d, dict) and "groups" in d for d in docs)
+
+
+def declares_rule_groups(text: "str | bytes", binary: str | None = None,
+                         read_binary: str | None = None) -> bool:
     """Whether *text* — a ConfigMap data value, say — sets out to be a rule
     file: a document of its Kubernetes reading (da-crdecode) is a mapping
-    with a ``groups`` key. A text that reading refuses (a markdown template)
-    does not. This only picks what to hand to the rule loader; what the
-    file says is the rule loader's reading."""
+    with a ``groups`` key (``documents_declare_rule_groups``). This only
+    picks what to hand to the rule loader; what the file says is the rule
+    loader's reading.
+
+    A text that reading refuses is not dropped on its say alone: kubectl's
+    reading refuses some text Prometheus' rule loader reads (an annotation
+    value ``.inf`` is +Inf to sigs.k8s.io/yaml and has no JSON; to rulefmt it
+    is the string ``".inf"``). Such a text is asked of the rule loader
+    (*read_binary*): when it loads a ``groups`` key, the text is a rule file.
+    One both refuse (a markdown template) is not."""
     try:
         docs = kubernetes_text_documents(text, binary)
     except InputRefused:
-        return False
-    return any(isinstance(d, dict) and "groups" in d for d in docs)
+        (rf,) = prometheus_rule_text_results([("text", text)], read_binary)
+        return rf.problem is None and documents_declare_rule_groups(rf.documents)
+    return documents_declare_rule_groups(docs)
 
 
 def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
@@ -556,7 +573,7 @@ def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
                 data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
                 for key, value in data.items():
                     if isinstance(value, str):
-                        if only_declared and not declares_rule_groups(value, crdecode_binary):
+                        if only_declared and not declares_rule_groups(value, crdecode_binary, binary):
                             continue
                         keyed.append((path, kind, key, value, None))
                     else:
@@ -570,7 +587,7 @@ def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
                         keyed.append((path, kind, key, None,
                                       "binaryData value is not base64 of UTF-8 text"))
                     else:
-                        if only_declared and not declares_rule_groups(text, crdecode_binary):
+                        if only_declared and not declares_rule_groups(text, crdecode_binary, binary):
                             continue
                         keyed.append((path, kind, key, text, None))
     readable = [(f"{p}#{k}", t) for p, _kind, k, t, _ in keyed if t is not None]
