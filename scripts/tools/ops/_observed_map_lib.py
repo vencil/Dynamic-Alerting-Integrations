@@ -89,15 +89,25 @@ def _direction_before(expr: str, key: str) -> Optional[str]:
     return None
 
 
-def extract_pack(path: str) -> dict[str, dict[str, Any]]:
-    """Extract per-key observed candidates from one rule pack.
+def read_packs(pack_paths: list[str]) -> dict[str, dict]:
+    """``{path: the pack as Prometheus' rule loader reads it}`` for every
+    path, all in one ``da-read prometheus-rules`` run (#3206, ADR-036 §12).
+
+    Raises ``_lib_consumer_read.RuleFilesRefused`` when the loader refuses a
+    pack and ``ConsumerReadError`` when da-read cannot be had — the map is
+    never built around a pack Prometheus would not load."""
+    return {p: rf.documents[0] for p, rf in zip(
+        pack_paths, _lib_consumer_read.prometheus_rule_files(pack_paths))}
+
+
+def extract_pack(path: str, doc: Optional[dict] = None) -> dict[str, dict[str, Any]]:
+    """Extract per-key observed candidates from one rule pack (*doc*, its
+    reading from ``read_packs``; read here when not given).
 
     Returns ``{key: {candidates:set, directions:set, scaled:bool, alerts:set}}``.
     """
-    if yaml is None:
-        raise RuntimeError("pyyaml required")
-    with open(path, encoding="utf-8") as fh:
-        doc = yaml.safe_load(fh) or {}
+    if doc is None:
+        doc = read_packs([path])[path]
     by_key: dict[str, dict[str, Any]] = {}
     for rule in _alert_rules(doc):
         expr = rule.get("expr", "") or ""
@@ -203,8 +213,9 @@ def build_map(pack_paths: list[str]) -> dict[str, Any]:
     """
     raw: dict[str, dict[str, Any]] = {}
     pack_of: dict[str, str] = {}
+    docs = read_packs(list(pack_paths))
     for p in pack_paths:
-        for key, e in extract_pack(p).items():
+        for key, e in extract_pack(p, docs[p]).items():
             if key in raw:
                 # same key in two packs: merge (rare); flag later
                 raw[key]["candidates"].update(e["candidates"])
@@ -350,6 +361,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo layout: _lib_compat
 from _lib_compat import find_project_root  # noqa: E402
 from _lib_exitcodes import die_caller_error  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
 DEFAULT_MAP_PATH = os.path.join(_THIS_DIR, "metric_observed_map.yaml")
 
@@ -756,13 +768,18 @@ def exit_on_observed_map_error(fn):
     exits 2 (``EXIT_CALLER_ERROR``, an environment error) with one ``ERROR:``
     line naming the file, instead of a traceback at rc 1; a tool that armed
     its ``--json`` envelope gets one, ``reason: observed_map_unavailable``
-    (#3115, the name backtest_threshold already used)."""
+    (#3115, the name backtest_threshold already used). Rule packs that
+    cannot be read the way Prometheus reads them (#3206: a refused pack, or
+    no da-read) exit the same way, ``reason: rule_packs_unreadable``."""
     @functools.wraps(fn)
     def _wrapped(*args, **kwargs):
         try:
             return fn(*args, **kwargs)
         except ObservedMapError as exc:
             die_caller_error(f"ERROR: {exc}", reason="observed_map_unavailable")
+        except _lib_consumer_read.ConsumerReadError as exc:
+            die_caller_error(f"ERROR: rule packs: {_lib_consumer_read.error_text(exc)}",
+                             reason="rule_packs_unreadable")
     return _wrapped
 
 
@@ -889,11 +906,7 @@ def alert_referenced_keys(pack_paths: list[str]) -> set[str]:
     the alert-based extractor and are NOT a map bug — they're a rule-pack gap.
     """
     keys: set[str] = set()
-    if yaml is None:
-        return keys
-    for p in pack_paths:
-        with open(p, encoding="utf-8") as fh:
-            doc = yaml.safe_load(fh) or {}
+    for doc in read_packs(list(pack_paths)).values():
         for rule in _alert_rules(doc):
             keys.update(THRESHOLD_RE.findall(rule.get("expr", "") or ""))
     return keys

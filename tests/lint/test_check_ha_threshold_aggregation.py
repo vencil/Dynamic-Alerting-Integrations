@@ -134,11 +134,25 @@ def test_check_file_all_three_formats(tmp_path, template):
     assert lint.check_file(max_file) == []
 
 
-def test_iter_rule_groups_non_dict_safe(tmp_path):
-    """A YAML scalar / list document must not crash the parser."""
+def test_a_file_prometheus_refuses_is_named_not_skipped(tmp_path):
+    """#3206: a YAML scalar document is no rule file Prometheus loads; it is
+    refused by name (it used to be skipped as "no groups")."""
     p = tmp_path / "scalar.yaml"
     p.write_text("just a string\n", encoding="utf-8")
-    assert list(lint._iter_rule_groups(p)) == []
+    with pytest.raises(lint._lib_consumer_read.RuleFilesRefused) as exc_info:
+        lint.check_file(p)
+    assert [rf.path for rf in exc_info.value.refused] == [str(p)]
+
+
+def test_main_names_a_refused_file_rc2(tmp_path, monkeypatch, capsys):
+    (tmp_path / "rule-packs").mkdir()
+    (tmp_path / "rule-packs" / "rule-pack-t.yaml").write_text(
+        "groups:\n  - name: g\n    rulez: []\n", encoding="utf-8")
+    monkeypatch.setattr(lint, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["check_ha_threshold_aggregation.py", "--ci"])
+    assert lint.main() == 2
+    err = capsys.readouterr().err
+    assert "rule-pack-t.yaml" in err and "field rulez not found" in err
 
 
 def test_main_exit_codes(tmp_path, monkeypatch):

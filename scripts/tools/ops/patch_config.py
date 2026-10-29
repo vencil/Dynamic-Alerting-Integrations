@@ -556,8 +556,9 @@ def patch_multifile(cm_data, tenant, metric_key, value):
 def find_affected_alerts(metric_key):
     """Alert names that read ``metric_key`` in the rule packs.
 
-    [] when no rule-pack alert reads the key; None when the rule packs were
-    not found (stderr says so) — never a pattern guessed from the key's
+    [] when no rule-pack alert reads the key; None when the rule packs could
+    not be read — none found, a pack Prometheus' rule loader refuses, or no
+    da-read (stderr says which) — never a pattern guessed from the key's
     spelling, which named no real alert (``*MysqlConnections*`` for what the
     pack calls ``MariaDBHighConnections``).
     """
@@ -619,7 +620,7 @@ def print_diff(diff):
     alerts = diff["affected_alerts"]
     print()
     if alerts is None:
-        print("  Affected alerts: unknown (rule packs not found)")
+        print("  Affected alerts: unknown (rule packs not read; stderr says why)")
     elif alerts:
         print(f"  Affected alerts: {', '.join(alerts)}")
     else:

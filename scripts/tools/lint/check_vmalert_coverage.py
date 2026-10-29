@@ -49,6 +49,7 @@ from pathlib import Path
 # legacy Windows console. scripts/tools is one level up from lint/.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
+import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
 try:
     import yaml
@@ -81,7 +82,13 @@ _BASELINE_HEADER = """\
 
 
 def _load_yaml(p: Path) -> dict:
+    """A promtool test fixture or this lint's own baseline — never a rule
+    pack, which is read the way Prometheus reads it (`declared_alerts`)."""
     return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+
+
+class RulePacksRefused(Exception):
+    """A rule pack Prometheus' rule loader refuses (each named)."""
 
 
 def _rule_pack_files() -> list[Path]:
@@ -105,11 +112,26 @@ def declared_alerts() -> dict[str, str]:
     ``OracleDatabaseDown``). The "covered" check keys on the bare alertname, so a cross-pack
     collision would (a) silently drop one pack's alert from tracking via dict-overwrite and
     (b) let a test in one pack falsely "cover" a same-named untested alert in another. Rather
-    than mask that, a collision is detected and FAILS loudly (CodeRabbit #969)."""
+    than mask that, a collision is detected and FAILS loudly (CodeRabbit #969).
+
+    #3206 (ADR-036 §12): a file under rule-packs/ is a rule pack when it sets
+    out to be one (a `groups:` key in its plain YAML reading) or when that
+    reading refuses it — it cannot then be ruled out (`may_be_rule_file`);
+    every pack is read the way Prometheus' rule loader reads it (one `da-read
+    prometheus-rules` run). A pack the loader refuses raises RulePacksRefused
+    naming it."""
     out: dict[str, str] = {}
     dupes: dict[str, list[str]] = {}
-    for f in _rule_pack_files():
-        for grp in (_load_yaml(f).get("groups") or []):
+    files = [f for f in _rule_pack_files()
+             if _lib_consumer_read.may_be_rule_file(f.read_bytes())]
+    rule_files = _lib_consumer_read.prometheus_rule_file_results(files)
+    refused = [f"{Path(rf.path).name}: {rf.problem}" for rf in rule_files
+               if rf.problem is not None]
+    if refused:
+        raise RulePacksRefused("rule pack(s) Prometheus' rule loader refuses: "
+                               + "; ".join(refused))
+    for f, rf in zip(files, rule_files):
+        for grp in rf.groups:
             for rule in (grp.get("rules") or []):
                 name = rule.get("alert")
                 if not name:
@@ -223,6 +245,12 @@ def main() -> int:
     except ValueError as e:   # duplicate-alertname collision (declared_alerts) — fail loud
         print(f"check_vmalert_coverage: {e}", file=sys.stderr)
         return 1
+    except RulePacksRefused as e:   # malformed input, named (dev-rules §13)
+        print(f"check_vmalert_coverage: {e}", file=sys.stderr)
+        return 2
+    except _lib_consumer_read.ConsumerReadError as e:
+        print(f"check_vmalert_coverage: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

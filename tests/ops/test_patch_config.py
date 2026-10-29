@@ -149,7 +149,7 @@ class TestPrintDiff:
     @pytest.mark.parametrize("alerts, line", [
         (["MariaDBHighConnections"], "Affected alerts: MariaDBHighConnections"),
         ([], "Affected alerts: none (no rule-pack alert reads this key)"),
-        (None, "Affected alerts: unknown (rule packs not found)"),
+        (None, "Affected alerts: unknown (rule packs not read; stderr says why)"),
     ])
     def test_affected_alerts_line(self, capsys, alerts, line):
         """三種狀態分開印：有名字、沒有告警讀它、不知道。"""

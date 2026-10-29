@@ -87,6 +87,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_python import write_text_secure  # noqa: E402
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1789; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
@@ -192,21 +193,30 @@ def _scan_reserved_labels(name: str, gname: str, rule: dict) -> None:
 def parse_rules(named_texts: list[tuple[str, str]]) -> dict:
     """解析候選規則檔 → {groups, groups_meta, alertnames, record_names}。
 
-    fail-loud：malformed YAML / 頂層非 groups 列表 / 跨檔重複 group name /
-    沒有任何 alert 規則 / 與 sentinel 撞名 / 保留 label 偽裝 / interval 無法解析
-    → InjectError（exit 2）。多檔以 groups 串接合併成單一 rules 文件（vmalert
-    -rule 吃一個檔）。groups_meta 記各 group 的 interval_s（讀回網格偏差對帳）。
+    規則檔以 Prometheus 的 rule loader 讀（#3206，ADR-036 §12：`da-read
+    prometheus-rules`，所有候選檔一次讀完；權威讀法以 rulefmt 為準，之後餵
+    `vmalert -replay` 的部分不變）。
+
+    fail-loud：rule loader 拒收（含非 YAML、未知欄位、PromQL 錯誤）/ 頂層非
+    groups 列表 / 跨檔重複 group name / 沒有任何 alert 規則 / 與 sentinel 撞名 /
+    保留 label 偽裝 / interval 無法解析 / 找不到 da-read → InjectError（exit 2）。
+    多檔以 groups 串接合併成單一 rules 文件（vmalert -rule 吃一個檔）。
+    groups_meta 記各 group 的 interval_s（讀回網格偏差對帳）。
     """
     groups: list[dict] = []
     groups_meta: list[dict] = []
     alertnames: set[str] = set()
     record_names: set[str] = set()
     seen_groups: set[str] = set()
-    for name, text in named_texts:
-        try:
-            doc = yaml.safe_load(text)
-        except yaml.YAMLError as exc:
-            raise InjectError(f"候選規則檔 {name} 不是有效 YAML: {exc}") from exc
+    try:
+        read = _lib_consumer_read.prometheus_rule_text_results(named_texts)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        raise InjectError(f"候選規則檔讀取失敗: {_lib_consumer_read.error_text(exc)}") from exc
+    for (name, _text), rule_file in zip(named_texts, read):
+        if rule_file.problem is not None:
+            raise InjectError(
+                f"候選規則檔 {name} Prometheus 的 rule loader 拒收: {rule_file.problem}")
+        doc = rule_file.documents[0]
         if not isinstance(doc, dict) or not isinstance(doc.get("groups"), list) or not doc["groups"]:
             raise InjectError(
                 f"候選規則檔 {name} 不是有效 vmalert 規則檔（頂層需非空 `groups:` 列表）")

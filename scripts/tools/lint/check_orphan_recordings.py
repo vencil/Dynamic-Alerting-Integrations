@@ -60,7 +60,8 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
-import yaml  # noqa: E402
+import yaml  # noqa: E402  (only the observed-map, Python's own data)
+import _lib_consumer_read  # noqa: E402  (#3206: rule files / manifests as their consumers read them)
 
 # The 12 recording rules already orphaned when this gate landed — series with
 # values that nothing reads. Grandfathered as INFO (see module docstring);
@@ -151,13 +152,37 @@ def metric_tokens(expr: str) -> set[str]:
 
 
 def _load_yaml(path: Path):
+    """The observed-map — the repo's own threshold data, read only by Python
+    tools. Every other file here has a consumer and is read its way."""
     with open(path, encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
+_RULE_FILES: "dict[Path, list]" = {}
+
+
+def _rule_files(root: Path) -> list:
+    """[(source, RuleFile)] for both trees, read the way Prometheus' rule
+    loader reads them (#3206, ADR-036 §12: `da-read prometheus-rules`; a T2
+    ConfigMap's outer layer the way kubectl reads it) — once per root. A
+    rule file the loader refuses raises `RuleFilesRefused` naming it."""
+    if root not in _RULE_FILES:
+        t1_dir, t1_pat = T1_GLOB
+        t1_files = sorted((root / t1_dir).glob(t1_pat))
+        t1 = list(zip((f.name for f in t1_files),
+                      _lib_consumer_read.prometheus_rule_file_results(t1_files)))
+        t2_dir, t2_pat = T2_GLOB
+        t2 = [(f"{Path(rf.manifest).name}#{rf.key}", rf)
+              for rf in _lib_consumer_read.manifest_rule_file_results(
+                  sorted((root / t2_dir).glob(t2_pat))) if rf.kind == "ConfigMap"]
+        _lib_consumer_read.require_read([rf for _s, rf in t1 + t2])
+        _RULE_FILES[root] = t1 + t2
+    return _RULE_FILES[root]
+
+
 def iter_rules(root: Path = PROJECT_ROOT):
     """Yield (source, kind, name, expr) for every alert/recording rule in
-    both trees. T2 ConfigMap `data` values are re-parsed as YAML."""
+    both trees (`_rule_files`)."""
     def eat(doc, source):
         if not doc or "groups" not in doc:
             return
@@ -168,15 +193,8 @@ def iter_rules(root: Path = PROJECT_ROOT):
                 elif "alert" in r:
                     yield source, "alert", r["alert"], str(r.get("expr", ""))
 
-    t1_dir, t1_pat = T1_GLOB
-    for f in sorted((root / t1_dir).glob(t1_pat)):
-        yield from eat(_load_yaml(f), f.name)
-
-    t2_dir, t2_pat = T2_GLOB
-    for f in sorted((root / t2_dir).glob(t2_pat)):
-        cm = _load_yaml(f)
-        for key, val in (cm.get("data") or {}).items():
-            yield from eat(yaml.safe_load(val), f"{f.name}#{key}")
+    for source, rule_file in _rule_files(root):
+        yield from eat(rule_file.documents[0], source)
 
 
 def _walk_json_strings(obj, keys=("expr", "query")):
@@ -206,11 +224,14 @@ def iter_dashboard_exprs(root: Path = PROJECT_ROOT):
         doc = json.loads(p.read_text(encoding="utf-8"))
         yield from _walk_json_strings(doc)
 
+    # #3206: the Grafana ConfigMaps the way kubectl reads them (da-crdecode).
     cm_dir, cm_pat = GRAFANA_CM_GLOB
     for p in sorted((root / cm_dir).glob(cm_pat)):
-        cm = _load_yaml(p)
-        for _key, val in (cm.get("data") or {}).items():
-            yield from _walk_json_strings(json.loads(val))
+        for cm in _lib_consumer_read.kubernetes_documents(str(p)):
+            if not isinstance(cm, dict):
+                continue
+            for _key, val in (cm.get("data") or {}).items():
+                yield from _walk_json_strings(json.loads(val))
 
 
 def _walk_observed_series(obj):
@@ -328,6 +349,11 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = run_check()
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # #3206: a rule file Prometheus would not load (each named, with the
+        # loader's reason), or no da-read — malformed input, not a violation.
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     except Exception as exc:  # noqa: BLE001 — caller error, not a violation
         print(f"ERROR: orphan-recording check crashed: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR

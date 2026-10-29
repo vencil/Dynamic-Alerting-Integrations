@@ -87,11 +87,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat)
 
-try:
-    import yaml
-except ImportError:  # pragma: no cover - environment guard
-    print("check_maintenance_symmetry: PyYAML required (pip install pyyaml)", file=sys.stderr)
-    sys.exit(2)
+import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
 _HERE = Path(__file__).resolve()
 _REPO = _HERE.parents[3]                         # <repo>/scripts/tools/lint/x.py -> <repo>
@@ -274,18 +270,43 @@ def _check_expr(expr: str) -> tuple[str, str | None]:
         "or 2 one-per-arm)"))
 
 
+def read_rule_packs() -> "list[_lib_consumer_read.RuleFile]":
+    """The rule files under rule-packs/, as Prometheus' rule loader reads them
+    (#3206, ADR-036 §12: one `da-read prometheus-rules` run). A file is a
+    rule file when it sets out to be one — a `groups:` key in its plain YAML
+    reading — or when that reading refuses it, which cannot rule it out
+    (`may_be_rule_file`); the registry beside the packs is not. Refused ones
+    are in the list with their `problem`."""
+    files = [f for f in _rule_pack_files()
+             if _lib_consumer_read.may_be_rule_file(f.read_bytes())]
+    return _lib_consumer_read.prometheus_rule_file_results(files)
+
+
+class RulePacksRefused(Exception):
+    """A rule pack Prometheus' rule loader refuses; ``lines`` name each."""
+
+    def __init__(self, lines: list[str]) -> None:
+        super().__init__("; ".join(lines))
+        self.lines = lines
+
+
 def classify_all() -> tuple[dict[str, int], list[str], int]:
     """(classification counts, violations, scanned) over rule-packs/. Shared by check()
     and the distribution-floor test (adversarial-review P2-4: a classifier that stops
     RECOGNISING the two-arm shape must fail loudly, not print an unchanged \"OK — N
-    scanned\")."""
+    scanned\"). Raises RulePacksRefused when the rule loader refuses a pack."""
     counts = {"two-arm-2copy": 0, "two-arm-factored": 0, "two-arm-0copy": 0,
               "two-arm-other": 0, "single-arm": 0}
     violations: list[str] = []
     scanned = 0
-    for f in _rule_pack_files():
-        doc = yaml.safe_load(f.read_text(encoding="utf-8")) or {}
-        for grp in (doc.get("groups") or []):
+    rule_files = read_rule_packs()
+    refused = [f"    {Path(rf.path).name}: Prometheus' rule loader refuses it: {rf.problem}"
+               for rf in rule_files if rf.problem is not None]
+    if refused:
+        raise RulePacksRefused(refused)
+    for rf in rule_files:
+        f = Path(rf.path)
+        for grp in rf.groups:
             for rule in (grp.get("rules") or []):
                 name = rule.get("alert")
                 expr = rule.get("expr")
@@ -300,7 +321,18 @@ def classify_all() -> tuple[dict[str, int], list[str], int]:
 
 
 def check() -> int:
-    counts, violations, scanned = classify_all()
+    try:
+        counts, violations, scanned = classify_all()
+    except RulePacksRefused as exc:
+        # Malformed input, named — rc 2 (dev-rules §13), never skipped.
+        print("check_maintenance_symmetry: rule pack(s) Prometheus would not load:",
+              file=sys.stderr)
+        print("\n".join(exc.lines), file=sys.stderr)
+        return 2
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"check_maintenance_symmetry: {_lib_consumer_read.error_text(exc)}",
+              file=sys.stderr)
+        return 2
     if violations:
         print("check_maintenance_symmetry: per-arm maintenance suppression violation(s) "
               "(#947/#977 bare-arm class):")

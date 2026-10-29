@@ -28,6 +28,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Chart.yaml, read Helm's way)
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4)
@@ -163,51 +164,45 @@ def load_scaffold_rule_packs() -> dict:
 # ---------------------------------------------------------------------------
 # Count rules from YAML source files (authoritative)
 # ---------------------------------------------------------------------------
-def count_rules_in_yaml(filepath: Path) -> tuple:
-    """Count recording and alert rules in a rule-pack YAML file."""
-    data = yaml.safe_load(filepath.read_text(encoding="utf-8"))
+def _count(groups: list) -> tuple:
+    """(recording, alert) rules in *groups*, as Prometheus loads them."""
     rec = alert = 0
-    if data and "groups" in data:
-        for g in data["groups"]:
-            for r in g.get("rules", []):
-                if "alert" in r:
-                    alert += 1
-                elif "record" in r:
-                    rec += 1
-    return rec, alert
-
-
-def count_rules_in_configmap(filepath: Path) -> tuple:
-    """Count rules inside a Kubernetes ConfigMap YAML."""
-    data = yaml.safe_load(filepath.read_text(encoding="utf-8"))
-    rec = alert = 0
-    if data and data.get("kind") == "ConfigMap":
-        for _key, inner_yaml in data.get("data", {}).items():
-            inner = yaml.safe_load(inner_yaml)
-            if inner and "groups" in inner:
-                for g in inner["groups"]:
-                    for r in g.get("rules", []):
-                        if "alert" in r:
-                            alert += 1
-                        elif "record" in r:
-                            rec += 1
+    for g in groups:
+        for r in g.get("rules") or []:
+            if "alert" in r:
+                alert += 1
+            elif "record" in r:
+                rec += 1
     return rec, alert
 
 
 def gather_rule_counts() -> dict:
-    """Gather authoritative rule counts from YAML source files."""
+    """Gather authoritative rule counts from the rule packs and the rules
+    ConfigMaps, each read the way its consumer reads it (#3206): one
+    `da-read` run for the packs, one for the ConfigMaps. Any rule file
+    Prometheus would refuse raises `RuleFilesRefused` — a generator does not
+    count around it."""
     packs = {}
 
     # rule-packs/ directory
-    for f in sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml")):
+    pack_files = sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml"))
+    for f, rf in zip(pack_files, _lib_consumer_read.prometheus_rule_files(pack_files)):
         name = f.stem.replace("rule-pack-", "")
-        rec, alert = count_rules_in_yaml(f)
+        rec, alert = _count(rf.groups)
         packs[name] = {"recording": rec, "alert": alert}
 
     # k8s ConfigMaps (may have additional rules, e.g. platform)
-    for f in sorted(K8S_RULES_DIR.glob("configmap-rules-*.yaml")):
+    cm_files = sorted(K8S_RULES_DIR.glob("configmap-rules-*.yaml"))
+    per_cm: dict = {str(f): [0, 0] for f in cm_files}
+    for rf in _lib_consumer_read.require_read(
+            _lib_consumer_read.manifest_rule_file_results(cm_files)):
+        if rf.kind == "ConfigMap":
+            r, a = _count(rf.groups)
+            per_cm[rf.manifest][0] += r
+            per_cm[rf.manifest][1] += a
+    for f in cm_files:
         name = f.stem.replace("configmap-rules-", "")
-        rec, alert = count_rules_in_configmap(f)
+        rec, alert = per_cm[str(f)]
         if name not in packs:
             packs[name] = {"recording": rec, "alert": alert}
         else:
@@ -697,6 +692,12 @@ def main():
             at = None  # the comparison below reports the file itself
     try:
         data = build_platform_data(at=at)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # #3206: the rule files are read the way Prometheus reads them; a
+        # missing da-read / da-crdecode or a refused rule file stops the
+        # generator — it does not count around it.
+        print(f"ERROR: rule files: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     except TenantMetadataError as exc:
         # fail-loud（dev-rules #5）：寧可讓 target / gate 紅，也不要靜默
         # 產出缺 tenant metadata 的 platform-data.json。

@@ -46,8 +46,6 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
-import yaml
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 try:
@@ -186,25 +184,45 @@ def _extract(groups: List[dict]) -> Dict[str, str]:
     return out
 
 
+def _consumer_read():
+    """`_lib_consumer_read`, imported where a file is read (#3206).
+
+    ⛔ Not at module scope: the recipe-preview image copies this module (for
+    `_extract` / `_diff_maps`, which read no file) without `_lib_consumer_read`
+    or da-read; the readers below are never called there."""
+    import _lib_consumer_read  # noqa: PLC0415
+    return _lib_consumer_read
+
+
 def _groups_from_rulepack(path: Path) -> List[dict]:
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return data.get("groups", [])
+    """The pack's rule groups as Prometheus' rule loader reads them (#3206,
+    ADR-036 §12: `da-read prometheus-rules`). A pack the loader refuses
+    raises `RuleFilesRefused`, naming it."""
+    cr = _consumer_read()
+    return cr.prometheus_rule_files([path])[0].groups
 
 
-def _groups_from_configmap(path: Path) -> List[dict]:
-    """A ConfigMap wraps rules in `data:` keys; each value is a YAML document
-    with its own top-level `groups:`. Merge them all."""
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+def _manifest_groups(path: Path, kind: str) -> List[dict]:
+    cr = _consumer_read()
     groups: List[dict] = []
-    for _key, val in (data.get("data") or {}).items():
-        sub = yaml.safe_load(val) or {}
-        groups.extend(sub.get("groups", []))
+    for rf in cr.require_read(cr.manifest_rule_file_results([path])):
+        if rf.kind == kind:
+            groups.extend(rf.groups)
     return groups
 
 
+def _groups_from_configmap(path: Path) -> List[dict]:
+    """A ConfigMap wraps rules in `data:` keys; each value is a rule file with
+    its own top-level `groups:`. Merge them all. The manifest is read the way
+    kubectl reads it, each value the way Prometheus' rule loader does
+    (#3206); a value the loader refuses raises `RuleFilesRefused`."""
+    return _manifest_groups(path, "ConfigMap")
+
+
 def _groups_from_operator(path: Path) -> List[dict]:
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    return (data.get("spec") or {}).get("groups", [])
+    """A PrometheusRule's `spec.groups`, read as the rule file the Prometheus
+    Operator writes from it is read by Prometheus' rule loader (#3206)."""
+    return _manifest_groups(path, "PrometheusRule")
 
 
 def _diff_maps(canonical: Dict[str, str], other: Dict[str, str]) -> List[str]:
@@ -221,8 +239,38 @@ def _diff_maps(canonical: Dict[str, str], other: Dict[str, str]) -> List[str]:
     return findings
 
 
-def check_pack(repo: Path, name: str) -> Tuple[bool, List[str]]:
-    """Compare the three copies of one pack. Returns (ok, findings)."""
+def read_copies(repo: Path, names: List[str]) -> Dict[str, Tuple[List[dict], List[dict], List[dict]]]:
+    """{pack: (rule-pack groups, configmap groups, operator groups)} for every
+    pack of *names* whose two copies exist, read the way their consumers read
+    them (#3206) in two da-read runs for the whole set — not three per pack.
+    Raises `RuleFilesRefused` naming any copy Prometheus' rule loader refuses."""
+    cr = _consumer_read()
+    present = [n for n in names
+               if (repo / "k8s" / "03-monitoring" / f"configmap-rules-{n}.yaml").exists()
+               and (repo / "operator-manifests" / f"da-rule-pack-{n}.yaml").exists()]
+    packs = cr.prometheus_rule_files(
+        [repo / "rule-packs" / f"rule-pack-{n}.yaml" for n in present])
+    manifests = cr.require_read(cr.manifest_rule_file_results(
+        [p for n in present for p in (
+            repo / "k8s" / "03-monitoring" / f"configmap-rules-{n}.yaml",
+            repo / "operator-manifests" / f"da-rule-pack-{n}.yaml")]))
+    out = {}
+    for n, rf in zip(present, packs):
+        cm = str(repo / "k8s" / "03-monitoring" / f"configmap-rules-{n}.yaml")
+        op = str(repo / "operator-manifests" / f"da-rule-pack-{n}.yaml")
+        out[n] = (rf.groups,
+                  [g for m in manifests if m.manifest == cm and m.kind == "ConfigMap"
+                   for g in m.groups],
+                  [g for m in manifests if m.manifest == op and m.kind == "PrometheusRule"
+                   for g in m.groups])
+    return out
+
+
+def check_pack(repo: Path, name: str,
+               copies: "Tuple[List[dict], List[dict], List[dict]] | None" = None
+               ) -> Tuple[bool, List[str]]:
+    """Compare the three copies of one pack (*copies* from `read_copies`;
+    read here when not given). Returns (ok, findings)."""
     rp = repo / "rule-packs" / f"rule-pack-{name}.yaml"
     cm = repo / "k8s" / "03-monitoring" / f"configmap-rules-{name}.yaml"
     op = repo / "operator-manifests" / f"da-rule-pack-{name}.yaml"
@@ -235,9 +283,12 @@ def check_pack(repo: Path, name: str) -> Tuple[bool, List[str]]:
     if findings:
         return False, findings
 
-    canonical = _extract(_groups_from_rulepack(rp))
-    cm_map = _extract(_groups_from_configmap(cm))
-    op_map = _extract(_groups_from_operator(op))
+    if copies is None:
+        copies = (_groups_from_rulepack(rp), _groups_from_configmap(cm),
+                  _groups_from_operator(op))
+    canonical = _extract(copies[0])
+    cm_map = _extract(copies[1])
+    op_map = _extract(copies[2])
 
     for label, other in (("configmap", cm_map), ("operator", op_map)):
         for f in _diff_maps(canonical, other):
@@ -266,14 +317,17 @@ def main() -> int:
     results = {}
     any_drift = False
     try:
+        copies = read_copies(repo, [pf.stem.replace("rule-pack-", "") for pf in pack_files])
         for pf in pack_files:
             name = pf.stem.replace("rule-pack-", "")
-            ok, findings = check_pack(repo, name)
+            ok, findings = check_pack(repo, name, copies.get(name))
             results[name] = {"ok": ok, "findings": findings}
             if not ok:
                 any_drift = True
-    except yaml.YAMLError as exc:
-        print(f"ERROR: YAML parse failure: {exc}", file=sys.stderr)
+    except _consumer_read().ConsumerReadError as exc:
+        # #3206: a copy Prometheus' rule loader refuses (named, with the
+        # loader's reason), or no da-read — the parse-failure exit as before.
+        print(f"ERROR: {_consumer_read().error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     if args.json:

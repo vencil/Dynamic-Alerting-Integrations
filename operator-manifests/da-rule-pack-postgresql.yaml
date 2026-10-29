@@ -61,10 +61,10 @@ spec:
         severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: PostgreSQL instance {{ $labels.instance }} is DOWN
-        summary_zh: PostgreSQL 實例 {{ $labels.instance }} 已關閉
         description: pg_up=0 for 15s on {{ $labels.instance }}
         description_zh: pg_up=0，持續 15 秒，實例：{{ $labels.instance }}
+        summary: PostgreSQL instance {{ $labels.instance }} is DOWN
+        summary_zh: PostgreSQL 實例 {{ $labels.instance }} 已關閉
     - alert: PostgreSQLExporterAbsent
       expr: absent(pg_up{job="tenant-exporters"})
       for: 30s
@@ -72,10 +72,10 @@ spec:
         severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: postgres_exporter target missing
-        summary_zh: postgres_exporter 目標缺失
         description: No pg_up metric found for 30s
         description_zh: 找不到 pg_up 指標，持續 30 秒
+        summary: postgres_exporter target missing
+        summary_zh: postgres_exporter 目標缺失
     - alert: PostgreSQLHighConnections
       expr: "(\n  (\n    (\n      tenant:pg_connection_usage:ratio\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:pg_connections\n    )\n    unless\
@@ -87,21 +87,21 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
-        severity: warning
         metric_group: pg_connections
+        severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: High connection usage on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 連線使用率過高'
+        description: '{{ $value | printf "%.1f" }}% of max_connections used (warning
+          threshold exceeded)'
+        description_zh: 已使用 {{ $value | printf "%.1f" }}% 的 max_connections（超過警告閾值）
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: connection usage
           high — review max_connections and pool sizing'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：連線使用率過高 —
           檢查 max_connections 與連線集區大小設定'
-        description: '{{ $value | printf "%.1f" }}% of max_connections used (warning
-          threshold exceeded)'
-        description_zh: 已使用 {{ $value | printf "%.1f" }}% 的 max_connections（超過警告閾值）
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: High connection usage on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 連線使用率過高'
         tier: '{{ $labels.tier }}'
     - alert: PostgreSQLHighConnectionsCritical
       expr: "(\n  (\n    (\n      tenant:pg_connection_usage:ratio\n      > on(tenant)\
@@ -114,20 +114,20 @@ spec:
         \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
-        severity: critical
         metric_group: pg_connections
+        severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: Critical connection usage on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 連線使用率嚴重過高'
-        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical connection
-          saturation — immediate action needed'
-        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：連線飽和 — 需立即採取行動'
         description: '{{ $value | printf "%.1f" }}% of max_connections used (critical
           threshold exceeded)'
         description_zh: 已使用 {{ $value | printf "%.1f" }}% 的 max_connections（超過嚴重閾值）
-        runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical connection
+          saturation — immediate action needed'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：連線飽和 — 需立即採取行動'
+        runbook_url: '{{ $labels.runbook_url }}'
+        summary: Critical connection usage on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 連線使用率嚴重過高'
         tier: '{{ $labels.tier }}'
     - alert: PostgreSQLHighReplicationLag
       expr: "(\n  (\n    (\n      tenant:pg_replication_lag:max\n      > on(tenant)\
@@ -140,20 +140,20 @@ spec:
         \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
-        severity: warning
         metric_group: pg_replication_lag
+        severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: High replication lag on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 複寫延遲過高'
-        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: replication
-          lag elevated — check replica health'
-        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：複寫延遲升高 — 檢查副本健態'
         description: '{{ $value | printf "%.1f" }}s replication lag (warning threshold
           exceeded)'
         description_zh: 複寫延遲 {{ $value | printf "%.1f" }}s（超過警告閾值）
-        runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: replication
+          lag elevated — check replica health'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：複寫延遲升高 — 檢查副本健態'
+        runbook_url: '{{ $labels.runbook_url }}'
+        summary: High replication lag on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 複寫延遲過高'
         tier: '{{ $labels.tier }}'
     - alert: PostgreSQLHighReplicationLagCritical
       expr: "(\n  (\n    (\n      tenant:pg_replication_lag:max\n      > on(tenant)\
@@ -166,20 +166,20 @@ spec:
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
-        severity: critical
         metric_group: pg_replication_lag
+        severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: Critical replication lag on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 複寫延遲嚴重'
-        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical replication
-          lag — failover risk, escalate'
-        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：複寫延遲嚴重 — 有容錯移轉風險，需升級處理'
         description: '{{ $value | printf "%.1f" }}s replication lag (critical threshold
           exceeded)'
         description_zh: 複寫延遲 {{ $value | printf "%.1f" }}s（超過嚴重閾值）
-        runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
+        platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: critical replication
+          lag — failover risk, escalate'
+        platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：複寫延遲嚴重 — 有容錯移轉風險，需升級處理'
+        runbook_url: '{{ $labels.runbook_url }}'
+        summary: Critical replication lag on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 複寫延遲嚴重'
         tier: '{{ $labels.tier }}'
     - alert: PostgreSQLHighDeadlocks
       expr: "(\n  (\n    tenant:pg_deadlocks:rate5m > 0.1\n    unless on(tenant)\n\
@@ -192,15 +192,15 @@ spec:
         severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: Deadlocks detected on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 偵測到死鎖'
+        description: '{{ $value | printf "%.2f" }} deadlocks/sec over 5m'
+        description_zh: '{{ $value | printf "%.2f" }} 次死鎖／秒（5 分鐘內）'
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: deadlocks detected
           — application-level lock contention'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：偵測到死鎖 — 應用層鎖競爭'
-        description: '{{ $value | printf "%.2f" }} deadlocks/sec over 5m'
-        description_zh: '{{ $value | printf "%.2f" }} 次死鎖／秒（5 分鐘內）'
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: Deadlocks detected on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 偵測到死鎖'
         tier: '{{ $labels.tier }}'
     - alert: PostgreSQLHighRollbackRatio
       expr: "(\n  (\n    tenant:pg_rollback_ratio:rate5m > 0.05\n    unless on(tenant)\n\
@@ -214,15 +214,15 @@ spec:
         severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: High rollback ratio on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 回滾比率過高'
+        description: '{{ $value | humanizePercentage }} of transactions are rollbacks'
+        description_zh: '{{ $value | humanizePercentage }} 的交易已回滾'
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: high rollback
           ratio — application error pattern'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：回滾比率過高 — 應用程式錯誤樣式'
-        description: '{{ $value | humanizePercentage }} of transactions are rollbacks'
-        description_zh: '{{ $value | humanizePercentage }} 的交易已回滾'
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: High rollback ratio on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 回滾比率過高'
         tier: '{{ $labels.tier }}'
     - alert: PostgreSQLRecentRestart
       expr: '(time() - pg_postmaster_start_time_seconds) < 300
@@ -233,8 +233,8 @@ spec:
         severity: info
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: '{{ $labels.instance }} restarted recently'
-        summary_zh: '{{ $labels.instance }} 最近已重新啟動'
         description: PostgreSQL uptime is only {{ $value | printf "%.0f" }}s (< 5
           min)
         description_zh: PostgreSQL 運行時間僅 {{ $value | printf "%.0f" }}s（少於 5 分鐘）
+        summary: '{{ $labels.instance }} restarted recently'
+        summary_zh: '{{ $labels.instance }} 最近已重新啟動'

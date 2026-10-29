@@ -24,7 +24,6 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Tuple
 
-import yaml
 
 # Import version patterns from centralized registry
 from _version_patterns import (
@@ -76,7 +75,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_VIOLATION  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_toolcount import count_scope, is_tool_file  # noqa: E402
 from _lib_versions import read_platform_version  # noqa: E402
 
@@ -178,39 +178,41 @@ def count_rule_packs(rule_packs_dir: Path = None,
     # gate the docs (mirrors generate_rule_pack_stats.py + PACK_ORDER).
     _EXCLUDE = {"custom-alerts"}
 
-    # rule-packs/ directory (recording rules + operational alerts)
-    for f in sorted(rule_packs_dir.glob("rule-pack-*.yaml")):
-        name = f.stem.replace("rule-pack-", "")
-        if name in _EXCLUDE:
-            continue
-        data = yaml.safe_load(f.read_text(encoding="utf-8"))
+    def _count(groups: list) -> "tuple[int, int]":
         rec = alert = 0
-        if data and "groups" in data:
-            for g in data["groups"]:
-                for r in g.get("rules", []):
-                    if "alert" in r:
-                        alert += 1
-                    elif "record" in r:
-                        rec += 1
-        packs[name] = {"recording": rec, "alert": alert}
+        for g in groups:
+            for r in g.get("rules") or []:
+                if "alert" in r:
+                    alert += 1
+                elif "record" in r:
+                    rec += 1
+        return rec, alert
+
+    # #3206 (ADR-036 §12): every rule file is read the way Prometheus' rule
+    # loader reads it (`da-read prometheus-rules`), a ConfigMap's outer layer
+    # the way kubectl reads it — one run for the packs, one for the
+    # ConfigMaps. A file the loader refuses raises `RuleFilesRefused`: the
+    # count is never taken around it.
+    # rule-packs/ directory (recording rules + operational alerts)
+    pack_files = [f for f in sorted(rule_packs_dir.glob("rule-pack-*.yaml"))
+                  if f.stem.replace("rule-pack-", "") not in _EXCLUDE]
+    for f, rf in zip(pack_files, _lib_consumer_read.prometheus_rule_files(pack_files)):
+        rec, alert = _count(rf.groups)
+        packs[f.stem.replace("rule-pack-", "")] = {"recording": rec, "alert": alert}
 
     # k8s ConfigMaps (may have alert rules not in rule-packs/ source)
-    for f in sorted(k8s_rules_dir.glob("configmap-rules-*.yaml")):
+    cm_files = [f for f in sorted(k8s_rules_dir.glob("configmap-rules-*.yaml"))
+                if f.stem.replace("configmap-rules-", "") not in _EXCLUDE]
+    per_cm: "dict[str, list[int]]" = {str(f): [0, 0] for f in cm_files}
+    for rf in _lib_consumer_read.require_read(
+            _lib_consumer_read.manifest_rule_file_results(cm_files)):
+        if rf.kind == "ConfigMap":
+            r, a = _count(rf.groups)
+            per_cm[rf.manifest][0] += r
+            per_cm[rf.manifest][1] += a
+    for f in cm_files:
         name = f.stem.replace("configmap-rules-", "")
-        if name in _EXCLUDE:
-            continue
-        data = yaml.safe_load(f.read_text(encoding="utf-8"))
-        rec = alert = 0
-        if data and data.get("kind") == "ConfigMap":
-            for _key, inner_yaml in data.get("data", {}).items():
-                inner = yaml.safe_load(inner_yaml)
-                if inner and "groups" in inner:
-                    for g in inner["groups"]:
-                        for r in g.get("rules", []):
-                            if "alert" in r:
-                                alert += 1
-                            elif "record" in r:
-                                rec += 1
+        rec, alert = per_cm[str(f)]
         if name not in packs:
             packs[name] = {"recording": rec, "alert": alert}
         else:
@@ -1236,7 +1238,11 @@ def main():
 
     # Read source of truth
     versions = read_source_versions()
-    rule_counts = count_rule_packs()
+    try:
+        rule_counts = count_rule_packs()
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: rule files: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     bilingual_pairs = count_bilingual_pairs()
 
     if not args.json:

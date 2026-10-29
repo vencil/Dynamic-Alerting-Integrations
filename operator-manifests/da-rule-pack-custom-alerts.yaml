@@ -47,31 +47,31 @@ spec:
     - record: custom_recipe_info
       expr: vector(1)
       labels:
-        recipe_id: rate__mysql_global_status_slow_queries__gt__w5m__for1m
         recipe: rate
+        recipe_id: rate__mysql_global_status_slow_queries__gt__w5m__for1m
         status: active
     - record: custom_recipe_info
       expr: vector(1)
       labels:
-        recipe_id: threshold__mysql_global_status_threads_connected__gt__w5m__for1m
         recipe: threshold
+        recipe_id: threshold__mysql_global_status_threads_connected__gt__w5m__for1m
         status: active
   - name: custom-alerts
     rules:
     - alert: CustomRecipeSilent
       expr: max by(tenant, name) (user_threshold{component="custom", mode="silent"})
       labels:
-        severity: none
         component: sentinel
-        tenant: '{{ $labels.tenant }}'
         name: '{{ $labels.name }}'
+        severity: none
+        tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: Custom recipe [{{ $labels.name }}] is silent for {{ $labels.tenant
-          }}
-        summary_zh: '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 處於靜默模式'
         description: The recipe is still evaluated and visible as an ALERTS series
           (dashboard-only); its notifications are suppressed via inhibit, not deleted.
         description_zh: 此自訂告警仍會評估並可於監控面板（ALERTS series）查看，通知經 inhibit 抑制而非刪除。
+        summary: Custom recipe [{{ $labels.name }}] is silent for {{ $labels.tenant
+          }}
+        summary_zh: '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 處於靜默模式'
     - alert: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m
       expr: "(\n  custom:rate__mysql_global_status_slow_queries__gt__w5m__for1m:warning:core\n\
         \  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
@@ -79,20 +79,20 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)"
       for: 1m
       labels:
-        severity: warning
-        tenant: '{{ $labels.tenant }}'
-        recipe: rate
         component: custom
         mode: '{{ $labels.mode }}'
+        recipe: rate
+        severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: Custom alert [{{ $labels.name }}] for {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 觸發'
         description: 'rate on mysql_global_status_slow_queries: value {{ $value |
           printf "%.2f" }} crossed the configured threshold'
         description_zh: 'mysql_global_status_slow_queries 的 rate: 值 {{ $value | printf
           "%.2f" }} 已越過設定閾值'
-        runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
+        runbook_url: '{{ $labels.runbook_url }}'
+        summary: Custom alert [{{ $labels.name }}] for {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 觸發'
         tier: '{{ $labels.tier }}'
     - alert: Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m
       expr: "(\n  custom:threshold__mysql_global_status_threads_connected__gt__w5m__for1m:warning:core\n\
@@ -101,18 +101,18 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)"
       for: 1m
       labels:
-        severity: warning
-        tenant: '{{ $labels.tenant }}'
-        recipe: threshold
         component: custom
         mode: '{{ $labels.mode }}'
+        recipe: threshold
+        severity: warning
+        tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: Custom alert [{{ $labels.name }}] for {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 觸發'
         description: 'threshold on mysql_global_status_threads_connected: value {{
           $value | printf "%.2f" }} crossed the configured threshold'
         description_zh: 'mysql_global_status_threads_connected 的 threshold: 值 {{ $value
           | printf "%.2f" }} 已越過設定閾值'
-        runbook_url: '{{ $labels.runbook_url }}'
         owner: '{{ $labels.owner }}'
+        runbook_url: '{{ $labels.runbook_url }}'
+        summary: Custom alert [{{ $labels.name }}] for {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] 觸發'
         tier: '{{ $labels.tier }}'

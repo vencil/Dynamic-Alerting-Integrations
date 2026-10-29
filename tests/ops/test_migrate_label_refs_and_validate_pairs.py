@@ -264,3 +264,19 @@ def test_non_mapping_entries_are_skipped(tmp_path):
         "custom_x": {"original_metric": "x", "old_query": "max by(tenant) (x)",
                      "new_query": "tenant:custom_x:max"}}), encoding="utf-8")
     assert [q["label"] for q in vm.load_mapping_pairs(str(p))] == ["custom_x"]
+
+
+def test_every_label_value_is_a_double_quoted_scalar():
+    """#3206: label values are always double-quoted, so every YAML reading —
+    Prometheus' rulefmt reads a plain `null` as "" and `010` as "010", PyYAML
+    as None and 8 — sees the original string. No reader is guessed at."""
+    rule = {"alert": "X", "expr": "up == 0",
+            "labels": {"a": "null", "b": "010", "c": "warning", "d": "true"}}
+    r = mr.process_rule(rule, prefix="custom_", dictionary={}, use_ast=True)
+    out = mr.render_alert_rules([r], "custom_")
+    for k, v in rule["labels"].items():
+        assert f'          {k}: "{v}"\n' in out
+    import _lib_consumer_read  # noqa: PLC0415
+    (rf,) = _lib_consumer_read.prometheus_rule_text_results([("out", out)])
+    got = rf.groups[0]["rules"][0]["labels"]
+    assert {k: got[k] for k in rule["labels"]} == rule["labels"]

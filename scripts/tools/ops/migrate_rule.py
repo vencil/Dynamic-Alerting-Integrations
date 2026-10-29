@@ -54,6 +54,7 @@ sys.path.insert(0, str(_THIS_DIR))  # Docker flat layout
 sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import ensure_dir_or_die, write_text_or_die  # noqa: E402
 from _lib_io import find_metric_dictionary  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
@@ -1270,15 +1271,16 @@ def render_recording_rules(results, prefix="custom_"):
     return buf.getvalue()
 
 
-_PLAIN_SCALAR = re.compile(r'^[A-Za-z0-9_][A-Za-z0-9_.\-/]*$')
-
-
 def _yaml_scalar(value):
-    """label 值：簡單字串照舊不加引號，其他（含 `{{ … }}` 模板）寫成雙引號純量。"""
-    text = str(value)
-    if _PLAIN_SCALAR.match(text) and yaml.safe_load(text) == text:
-        return text
-    return json.dumps(text, ensure_ascii=False)
+    """label 值一律寫成雙引號純量（JSON 字串即合法的 YAML 雙引號純量）。
+
+    ⛔ #3206（ADR-036 §12）：這裡曾以 PyYAML 猜「Prometheus 會不會把這個值讀成
+    字串」來決定要不要加引號——那是在模仿消費者，而且猜錯方向：Prometheus 的
+    rulefmt（yaml v3 解進 map[string]string）把 `true`、`010` 這類純量照原文
+    讀成字串，卻把未加引號的 `null` 讀成空字串，而 PyYAML 的猜測放行了
+    `null`。雙引號純量在每一種 YAML 讀法裡都是原字串，不需要任何讀者的判斷，
+    也與 annotations 的寫法一致。"""
+    return json.dumps(str(value), ensure_ascii=False)
 
 
 def render_alert_rules(results, prefix="custom_"):
@@ -1599,14 +1601,16 @@ def main():
         print("[WARN] 找不到 metric-dictionary.yaml（工具同層與上一層都沒有），"
               "本次不做黃金標準比對。", file=sys.stderr)
 
+    # #3206（ADR-036 §12）：輸入的規則檔以 Prometheus 的 rule loader 讀
+    # （da-read prometheus-rules）；它拒收的檔、或找不到 da-read，都以
+    # rc 2 結束並說明原因，不改用其他讀法。
     try:
-        with open(args.input_file, 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f)
-    except (OSError, yaml.YAMLError) as e:
-        print(f"Error reading YAML file: {e}", file=sys.stderr)
+        (rule_file,) = _lib_consumer_read.prometheus_rule_files([args.input_file])
+    except _lib_consumer_read.ConsumerReadError as e:
+        print(f"Error reading rule file: {_lib_consumer_read.error_text(e)}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    groups = data.get('groups', [])
+    groups = rule_file.groups
     if not groups:
         print("No 'groups' found in YAML.")
         return

@@ -48,13 +48,12 @@ import sys
 from pathlib import Path
 from typing import List, Tuple
 
-import yaml
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 try:
     from _lib_compat import try_utf8_stdout  # noqa: E402
 except Exception:  # pragma: no cover
@@ -76,20 +75,15 @@ def _repo_root() -> Path:
     return require_project_root(_THIS_DIR)
 
 
-def _iter_rule_groups(path: Path):
-    """Yield rule groups from a rule-pack / PrometheusRule / ConfigMap file."""
-    data = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    if not isinstance(data, dict):
-        return
-    if "groups" in data:  # raw rule-pack
-        yield from data["groups"]
-    elif (data.get("spec") or {}).get("groups"):  # PrometheusRule CRD
-        yield from data["spec"]["groups"]
-    elif "data" in data:  # ConfigMap wrapping rule YAML in data keys
-        for val in (data.get("data") or {}).values():
-            sub = yaml.safe_load(val) or {}
-            if isinstance(sub, dict):  # defensive: skip non-rule data keys
-                yield from sub.get("groups", [])
+def read_rule_files(rule_packs: List[Path], manifests: List[Path]) -> "list":
+    """Every rule file the targets hold, as Prometheus loads it (#3206,
+    ADR-036 §12): a raw rule pack by Prometheus' rule loader (`da-read
+    prometheus-rules`); a ConfigMap's data values and a PrometheusRule's spec
+    the same way after the manifest is read the way kubectl reads it
+    (`manifest_rule_file_results`). Two da-read runs in all. Refused ones
+    are in the list with their `problem`."""
+    return (_lib_consumer_read.prometheus_rule_file_results(rule_packs)
+            + _lib_consumer_read.manifest_rule_file_results(manifests))
 
 
 def nonmax_aggregations(expr: str) -> List[Tuple[str, str]]:
@@ -114,16 +108,31 @@ def nonmax_aggregations(expr: str) -> List[Tuple[str, str]]:
     return out
 
 
-def check_file(path: Path) -> List[Tuple[str, str, str]]:
+def check_groups(groups: list) -> List[Tuple[str, str, str]]:
     """Return [(rule_name, operator, expr_excerpt)] for non-max aggregations."""
     findings: List[Tuple[str, str, str]] = []
-    for group in _iter_rule_groups(path):
+    for group in groups:
         for rule in group.get("rules", []):
             expr = str(rule.get("expr", ""))
             name = rule.get("record") or rule.get("alert") or "?"
             for op, excerpt in nonmax_aggregations(expr):
                 findings.append((name, op, excerpt))
     return findings
+
+
+def check_file(path: Path) -> List[Tuple[str, str, str]]:
+    """`check_groups` over one file: a Kubernetes manifest (a ConfigMap or a
+    PrometheusRule, by its kubectl reading) or else a raw rule pack. Raises
+    `RuleFilesRefused` when Prometheus' rule loader refuses a rule file in it."""
+    try:
+        docs = _lib_consumer_read.kubernetes_documents(str(path))
+    except _lib_consumer_read.InputRefused:
+        docs = []
+    manifest = any(isinstance(d, dict) and d.get("kind") in ("ConfigMap", "PrometheusRule")
+                   for d in docs)
+    rule_files = _lib_consumer_read.require_read(
+        read_rule_files([], [path]) if manifest else read_rule_files([path], []))
+    return [f for rf in rule_files for f in check_groups(rf.groups)]
 
 
 def main() -> int:
@@ -143,20 +152,35 @@ def main() -> int:
         print("ERROR: no rule-pack files found", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    total_violations = 0
+    packs = [t for t in targets if t.parent.name == "rule-packs"]
+    manifests = [t for t in targets if t.parent.name != "rule-packs"]
     try:
-        for path in targets:
-            findings = check_file(path)
-            if findings:
-                total_violations += len(findings)
-                rel = path.relative_to(repo)
-                print(f"  ❌ {rel}")
-                for name, op, excerpt in findings:
-                    print(f"       {name}: aggregates user_threshold with "
-                          f"`{op}` (must be `max`) — …{excerpt}…")
-    except yaml.YAMLError as exc:
-        print(f"ERROR: YAML parse failure: {exc}", file=sys.stderr)
+        rule_files = read_rule_files(packs, manifests)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
+    refused = [rf for rf in rule_files if rf.problem is not None]
+    if refused:
+        # A rule file Prometheus would not load is malformed input — the
+        # parse-failure exit this lint always had, now naming each file.
+        for rf in refused:
+            print(f"ERROR: Prometheus' rule loader refuses {rf.path}: {rf.problem}",
+                  file=sys.stderr)
+        return EXIT_CALLER_ERROR
+
+    total_violations = 0
+    by_file: "dict[str, list]" = {}
+    for rf in rule_files:
+        by_file.setdefault(rf.manifest or rf.path, []).extend(check_groups(rf.groups))
+    for path in targets:
+        findings = by_file.get(str(path), [])
+        if findings:
+            total_violations += len(findings)
+            rel = path.relative_to(repo)
+            print(f"  ❌ {rel}")
+            for name, op, excerpt in findings:
+                print(f"       {name}: aggregates user_threshold with "
+                      f"`{op}` (must be `max`) — …{excerpt}…")
 
     if total_violations:
         print(f"\n❌ {total_violations} non-`max` aggregation(s) of "

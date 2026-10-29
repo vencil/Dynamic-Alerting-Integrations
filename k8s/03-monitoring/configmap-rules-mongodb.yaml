@@ -35,37 +35,38 @@ data:
     , severity=\"warning\"})\n"
   mongodb-alert.yml: "groups:\n- name: mongodb-alerts\n  rules:\n  - alert: MongoDBDown\n\
     \    expr: '(mongodb_up == 0)\n\n      unless on(tenant)\n\n      (user_state_filter{filter=\"\
-    maintenance\"} == 1)\n\n      '\n    for: 15s\n    labels:\n      severity: warning\n\
-    \      metric_group: liveness\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      summary: MongoDB member {{ $labels.instance }} is down (tenant {{ $labels.tenant\
-    \ }})\n      summary_zh: MongoDB 成員 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant\
-    \ }}）\n      description: mongodb_up=0 on {{ $labels.instance }} — one member\
-    \ of an HA replica set being down keeps the set available (warning). Total outage\
-    \ escalates to MongoDBClusterDown (critical); loss of PRIMARY to MongoDBNoPrimary\
+    maintenance\"} == 1)\n\n      '\n    for: 15s\n    labels:\n      metric_group:\
+    \ liveness\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n  \
+    \  annotations:\n      description: mongodb_up=0 on {{ $labels.instance }} — one\
+    \ member of an HA replica set being down keeps the set available (warning). Total\
+    \ outage escalates to MongoDBClusterDown (critical); loss of PRIMARY to MongoDBNoPrimary\
     \ (critical).\n      description_zh: '{{ $labels.instance }} 的 mongodb_up=0。HA\
     \ replica set 的單一成員停機時叢集仍可用（warning）。整體中斷會升級為 MongoDBClusterDown（critical）；失去\
-    \ PRIMARY 則為 MongoDBNoPrimary（critical）。'\n  - alert: MongoDBClusterDown\n   \
-    \ expr: max by(tenant) (mongodb_up{job=\"tenant-exporters\"}) == 0\n    for: 30s\n\
-    \    labels:\n      severity: critical\n      metric_group: liveness\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      summary: 'MongoDB: ALL instances\
-    \ down for tenant {{ $labels.tenant }}'\n      summary_zh: MongoDB：租戶 {{ $labels.tenant\
-    \ }} 的所有實例皆停機\n      description: No mongod reports up=1 for tenant {{ $labels.tenant\
-    \ }} — total service outage, not a single-member failover. For a planned single-instance\
-    \ drain, silence via the Alertmanager Silence API (no maintenance-window opt-out\
-    \ by design; a tenant's silent-critical sentinel still suppresses it).\n     \
-    \ description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mongod 回報 up=1 — 整體服務中斷，非單一成員 failover。若為計畫性單實例維護，請用\
-    \ Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。\n\
-    \  - alert: MongoDBNoPrimary\n    expr: 'count by(tenant) (mongodb_mongod_replset_member_state{job=\"\
-    tenant-exporters\"})\n\n      unless\n\n      count by(tenant) (mongodb_mongod_replset_member_state{job=\"\
-    tenant-exporters\"} == 1)\n\n      '\n    for: 2m\n    labels:\n      severity:\
-    \ critical\n      metric_group: liveness\n      tenant: '{{ $labels.tenant }}'\n\
-    \    annotations:\n      summary: 'MongoDB: no PRIMARY in replica set for tenant\
-    \ {{ $labels.tenant }}'\n      summary_zh: MongoDB：租戶 {{ $labels.tenant }} 的 replica\
-    \ set 沒有 PRIMARY\n      description: Replica-set members are reachable but none\
+    \ PRIMARY 則為 MongoDBNoPrimary（critical）。'\n      summary: MongoDB member {{ $labels.instance\
+    \ }} is down (tenant {{ $labels.tenant }})\n      summary_zh: MongoDB 成員 {{ $labels.instance\
+    \ }} 停機（租戶 {{ $labels.tenant }}）\n  - alert: MongoDBClusterDown\n    expr: max\
+    \ by(tenant) (mongodb_up{job=\"tenant-exporters\"}) == 0\n    for: 30s\n    labels:\n\
+    \      metric_group: liveness\n      severity: critical\n      tenant: '{{ $labels.tenant\
+    \ }}'\n    annotations:\n      description: No mongod reports up=1 for tenant\
+    \ {{ $labels.tenant }} — total service outage, not a single-member failover. For\
+    \ a planned single-instance drain, silence via the Alertmanager Silence API (no\
+    \ maintenance-window opt-out by design; a tenant's silent-critical sentinel still\
+    \ suppresses it).\n      description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mongod 回報\
+    \ up=1 — 整體服務中斷，非單一成員 failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗\
+    \ opt-out；租戶的 silent-critical sentinel 仍會壓制此告警）。\n      summary: 'MongoDB: ALL\
+    \ instances down for tenant {{ $labels.tenant }}'\n      summary_zh: MongoDB：租戶\
+    \ {{ $labels.tenant }} 的所有實例皆停機\n  - alert: MongoDBNoPrimary\n    expr: 'count\
+    \ by(tenant) (mongodb_mongod_replset_member_state{job=\"tenant-exporters\"})\n\
+    \n      unless\n\n      count by(tenant) (mongodb_mongod_replset_member_state{job=\"\
+    tenant-exporters\"} == 1)\n\n      '\n    for: 2m\n    labels:\n      metric_group:\
+    \ liveness\n      severity: critical\n      tenant: '{{ $labels.tenant }}'\n \
+    \   annotations:\n      description: Replica-set members are reachable but none\
     \ is PRIMARY for tenant {{ $labels.tenant }} — elections failing / quorum lost\
     \ → writes rejected. Unlike MongoDBClusterDown this fires while secondaries are\
     \ still up.\n      description_zh: 租戶 {{ $labels.tenant }} 的 replica set 成員可連線但沒有\
     \ PRIMARY — 選舉失敗／失去 quorum → 寫入被拒。與 MongoDBClusterDown 不同，此告警在 secondary 仍存活時就會觸發。\n\
+    \      summary: 'MongoDB: no PRIMARY in replica set for tenant {{ $labels.tenant\
+    \ }}'\n      summary_zh: MongoDB：租戶 {{ $labels.tenant }} 的 replica set 沒有 PRIMARY\n\
     \  - alert: MongoDBHighConnections\n    expr: \"(\\n  (\\n    (\\n      tenant:mongodb_connections_current:max\\\
     n      > on(tenant) group_left\\n      tenant:alert_threshold:mongodb_connections_current\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
@@ -75,31 +76,32 @@ data:
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
     \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
     \ 5m\n    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n\
-    \    annotations:\n      summary: MongoDB high connection count on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 MongoDB 連線數過高'\n      platform_summary:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection threshold breached\
-    \ — pool sizing review'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: MongoDB 連線閾值超過 — 請檢查連線池大小'\n      description: '{{ $value }} current connections'\n\
-    \      description_zh: '{{ $value }} 個目前連線'\n      runbook_url: '{{ $labels.runbook_url\
-    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
-    \  - alert: MongoDBReplicationLag\n    expr: \"(\\n  (\\n    (\\n      tenant:mongodb_replication_lag:max\\\
-    n      > on(tenant) group_left\\n      tenant:alert_threshold:mongodb_replication_lag\\\
-    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    \    annotations:\n      description: '{{ $value }} current connections'\n   \
+    \   description_zh: '{{ $value }} 個目前連線'\n      owner: '{{ $labels.owner }}'\n\
+    \      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection\
+    \ threshold breached — pool sizing review'\n      platform_summary_zh: '[{{ $labels.tier\
+    \ }}] {{ $labels.tenant }}: MongoDB 連線閾值超過 — 請檢查連線池大小'\n      runbook_url: '{{\
+    \ $labels.runbook_url }}'\n      summary: MongoDB high connection count on {{\
+    \ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 的 MongoDB 連線數過高'\n\
+    \      tier: '{{ $labels.tier }}'\n  - alert: MongoDBReplicationLag\n    expr:\
+    \ \"(\\n  (\\n    (\\n      tenant:mongodb_replication_lag:max\\n      > on(tenant)\
+    \ group_left\\n      tenant:alert_threshold:mongodb_replication_lag\\n    )\\\
+    n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} ==\
+    \ 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
     n)\\nor\\n(\\n  (\\n    (\\n      tenant:mongodb_replication_lag:max\\n      >\
     \ on(tenant) group_left\\n      tenant:alert_threshold:mongodb_replication_lag\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
     \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
     \ 2m\n    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n\
-    \    annotations:\n      summary: MongoDB replication lag on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 MongoDB 複製延遲'\n      platform_summary:\
+    \    annotations:\n      description: 'Replication lag: {{ $value | printf \"\
+    %.1f\" }}s behind primary'\n      description_zh: '複製延遲: 落後 Primary {{ $value\
+    \ | printf \"%.1f\" }}s'\n      owner: '{{ $labels.owner }}'\n      platform_summary:\
     \ '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB replication lag — check\
     \ replica health'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: MongoDB 複製延遲 — 請檢查副本狀態'\n      description: 'Replication lag: {{ $value\
-    \ | printf \"%.1f\" }}s behind primary'\n      description_zh: '複製延遲: 落後 Primary\
-    \ {{ $value | printf \"%.1f\" }}s'\n      runbook_url: '{{ $labels.runbook_url\
-    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
-    \  - alert: MongoDBHighOperations\n    expr: \"(\\n  (\\n    (\\n      tenant:mongodb_opcounters:rate5m\\\
+    \ }}: MongoDB 複製延遲 — 請檢查副本狀態'\n      runbook_url: '{{ $labels.runbook_url }}'\n\
+    \      summary: MongoDB replication lag on {{ $labels.tenant }}\n      summary_zh:\
+    \ '{{ $labels.tenant }} 的 MongoDB 複製延遲'\n      tier: '{{ $labels.tier }}'\n  -\
+    \ alert: MongoDBHighOperations\n    expr: \"(\\n  (\\n    (\\n      tenant:mongodb_opcounters:rate5m\\\
     n      > on(tenant) group_left\\n      tenant:alert_threshold:mongodb_opcounters_rate\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
     \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
@@ -108,41 +110,41 @@ data:
     n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} ==\
     \ 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n\
     \    labels:\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n\
-    \    annotations:\n      summary: MongoDB high operation rate on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 的 MongoDB 作業率過高'\n      platform_summary:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB operation rate elevated\
-    \ — workload review'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: MongoDB 作業率提升 — 請檢查工作負載'\n      description: '{{ $value | printf \"%.0f\"\
-    \ }} ops/sec'\n      description_zh: '{{ $value | printf \"%.0f\" }} 作業/秒'\n \
-    \     runbook_url: '{{ $labels.runbook_url }}'\n      owner: '{{ $labels.owner\
-    \ }}'\n      tier: '{{ $labels.tier }}'\n  - alert: MongoDBHighPageFaults\n  \
-    \  expr: \"(\\n  (\\n    tenant:mongodb_page_faults:rate5m > 100\\n    unless\
+    \    annotations:\n      description: '{{ $value | printf \"%.0f\" }} ops/sec'\n\
+    \      description_zh: '{{ $value | printf \"%.0f\" }} 作業/秒'\n      owner: '{{\
+    \ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: MongoDB operation rate elevated — workload review'\n      platform_summary_zh:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 作業率提升 — 請檢查工作負載'\n     \
+    \ runbook_url: '{{ $labels.runbook_url }}'\n      summary: MongoDB high operation\
+    \ rate on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 的 MongoDB\
+    \ 作業率過高'\n      tier: '{{ $labels.tier }}'\n  - alert: MongoDBHighPageFaults\n\
+    \    expr: \"(\\n  (\\n    tenant:mongodb_page_faults:rate5m > 100\\n    unless\
     \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
     n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
     n)\\nor\\n(\\n  (\\n    tenant:mongodb_page_faults:rate5m > 100\\n    unless on(tenant)\\\
     n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
     \ tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n      severity: warning\n\
-    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      summary: MongoDB\
-    \ high page faults on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} 的 MongoDB Page Fault 過多'\n      platform_summary: '[{{ $labels.tier }}] {{\
-    \ $labels.tenant }}: MongoDB page fault rate high — memory sizing review'\n  \
-    \    platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB\
-    \ Page Fault 率過高 — 請檢查記憶體大小'\n      description: '{{ $value | printf \"%.1f\"\
-    \ }} page faults/sec — check memory'\n      description_zh: '{{ $value | printf\
-    \ \"%.1f\" }} Page Fault/秒 — 請檢查記憶體'\n      runbook_url: '{{ $labels.runbook_url\
-    \ }}'\n      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n\
-    \  - alert: MongoDBConnectionSaturation\n    expr: \"(\\n  (\\n    tenant:mongodb_connection_usage:ratio\
-    \ > 0.8\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: '{{\
+    \ $value | printf \"%.1f\" }} page faults/sec — check memory'\n      description_zh:\
+    \ '{{ $value | printf \"%.1f\" }} Page Fault/秒 — 請檢查記憶體'\n      owner: '{{ $labels.owner\
+    \ }}'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB\
+    \ page fault rate high — memory sizing review'\n      platform_summary_zh: '[{{\
+    \ $labels.tier }}] {{ $labels.tenant }}: MongoDB Page Fault 率過高 — 請檢查記憶體大小'\n\
+    \      runbook_url: '{{ $labels.runbook_url }}'\n      summary: MongoDB high page\
+    \ faults on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant }} 的 MongoDB\
+    \ Page Fault 過多'\n      tier: '{{ $labels.tier }}'\n  - alert: MongoDBConnectionSaturation\n\
+    \    expr: \"(\\n  (\\n    tenant:mongodb_connection_usage:ratio > 0.8\\n    unless\
+    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
+    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    tenant_metadata_info\\\
     n)\\nor\\n(\\n  (\\n    tenant:mongodb_connection_usage:ratio > 0.8\\n    unless\
     \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
     n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n\
     \      severity: warning\n      tenant: '{{ $labels.tenant }}'\n    annotations:\n\
-    \      summary: MongoDB connection pool near saturation on {{ $labels.tenant }}\n\
-    \      summary_zh: '{{ $labels.tenant }} 的 MongoDB 連線池接近飽和'\n      platform_summary:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection pool near saturation\
-    \ — capacity action needed'\n      platform_summary_zh: '[{{ $labels.tier }}]\
-    \ {{ $labels.tenant }}: MongoDB 連線池接近飽和 — 需要容量擴展'\n      description: '{{ $value\
-    \ | humanizePercentage }} of connections used'\n      description_zh: 已使用 {{ $value\
-    \ | humanizePercentage }} 的連線\n      runbook_url: '{{ $labels.runbook_url }}'\n\
-    \      owner: '{{ $labels.owner }}'\n      tier: '{{ $labels.tier }}'\n"
+    \      description: '{{ $value | humanizePercentage }} of connections used'\n\
+    \      description_zh: 已使用 {{ $value | humanizePercentage }} 的連線\n      owner:\
+    \ '{{ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}: MongoDB connection pool near saturation — capacity action needed'\n    \
+    \  platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 連線池接近飽和\
+    \ — 需要容量擴展'\n      runbook_url: '{{ $labels.runbook_url }}'\n      summary: MongoDB\
+    \ connection pool near saturation on {{ $labels.tenant }}\n      summary_zh: '{{\
+    \ $labels.tenant }} 的 MongoDB 連線池接近飽和'\n      tier: '{{ $labels.tier }}'\n"

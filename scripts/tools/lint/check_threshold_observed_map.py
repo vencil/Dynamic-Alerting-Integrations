@@ -105,6 +105,13 @@ def main(argv: list[str] | None = None) -> int:
         # #3017: an absent map used to load as {} and pass with every key a gap.
         print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
+    except observed_map_lib._lib_consumer_read.ConsumerReadError as exc:
+        # #3206: the packs are read the way Prometheus reads them; a pack its
+        # rule loader refuses (named, with the loader's reason) or a missing
+        # da-read is malformed input / a missing prerequisite — rc 2.
+        print(f"ERROR: rule packs: {observed_map_lib._lib_consumer_read.error_text(exc)}",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
     errors = result["errors"]
     infos = result["infos"]
     orphans = result["orphan_thresholds"]

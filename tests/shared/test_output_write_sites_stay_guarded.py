@@ -252,7 +252,7 @@ NOT_GUARDED: dict[str, str] = {
         "behaviour: an unwritable carrier means 'perturb the next one', not "
         "'the operator mistyped a flag'. Wrapping it would blame "
         "`--output-dir` for a failure on a path that flag never named.",
-    "scripts/tools/ops/generate_rule_pack_split.py:156":
+    "scripts/tools/ops/generate_rule_pack_split.py:157":
         "_safe_mkdir's no-_lib_python fallback. It runs only when the "
         "`from _lib_python import ...` at the top of that file raised "
         "ImportError, which (measured) means PyYAML is missing — and "

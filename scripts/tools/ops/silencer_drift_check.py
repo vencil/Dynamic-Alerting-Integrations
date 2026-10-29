@@ -139,14 +139,7 @@ from _lib_exitcodes import (  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_paths import require_path  # noqa: E402  (#3276)
 
-try:
-    import yaml
-except ImportError:
-    print(
-        "ERROR: PyYAML not installed. Install with: pip install pyyaml",
-        file=sys.stderr,
-    )
-    sys.exit(EXIT_CALLER_ERROR)
+import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 
 
 # ─── Loading ──────────────────────────────────────────────────────────
@@ -229,32 +222,36 @@ def extract_alerts_from_pack(pack: dict, source_path: str) -> list[dict]:
 
 
 def load_alerts(rule_source: Path) -> tuple[list[dict], list[str]]:
-    """Load all alerts from a rule-source path. Returns (alerts, errors)."""
+    """Load all alerts from a rule-source path. Returns (alerts, errors).
+    Raises ``_lib_consumer_read.ConsumerReadError`` when da-read /
+    da-crdecode cannot be had."""
     errors: list[str] = []
     files = _yaml_files_in(rule_source)
     if not files:
         return [], [f"no YAML files found at {rule_source}"]
 
+    # #3206 (ADR-036 §12): a file is a rule file when its Kubernetes reading
+    # (da-crdecode, a plain YAML reading) is a mapping with `groups:` — other
+    # YAML here (tenant `_defaults.yaml`, inventory lists) is skipped
+    # silently, as before. Each rule file is then read the way Prometheus'
+    # rule loader reads it (`da-read prometheus-rules`, one run for all); a
+    # file the loader refuses is an error naming it, with the loader's reason.
     alerts: list[dict] = []
+    rule_files: list[Path] = []
     for f in files:
         try:
-            with f.open(encoding="utf-8") as h:
-                data = yaml.safe_load(h)
-        except OSError as exc:
-            errors.append(f"cannot read {f}: {exc}")
+            docs = _lib_consumer_read.kubernetes_documents(str(f))
+        except _lib_consumer_read.InputRefused as exc:
+            errors.append(f"invalid YAML in {f}: {'; '.join(exc.stderr_lines) or exc}")
             continue
-        except yaml.YAMLError as exc:
-            errors.append(f"invalid YAML in {f}: {exc}")
+        if docs and isinstance(docs[0], dict) and "groups" in docs[0]:
+            rule_files.append(f)
+    for f, rule_file in zip(rule_files,
+                            _lib_consumer_read.prometheus_rule_file_results(rule_files)):
+        if rule_file.problem is not None:
+            errors.append(f"Prometheus' rule loader refuses {f}: {rule_file.problem}")
             continue
-        if not isinstance(data, dict):
-            # File is YAML but not a mapping at top — skip silently
-            # (e.g. some inventory files use YAML lists).
-            continue
-        # Only files with `groups:` at root contribute alerts; skip
-        # tenant `_defaults.yaml` etc. silently.
-        if "groups" not in data:
-            continue
-        alerts.extend(extract_alerts_from_pack(data, source_path=str(f)))
+        alerts.extend(extract_alerts_from_pack(rule_file.documents[0], source_path=str(f)))
     return alerts, errors
 
 
@@ -691,7 +688,11 @@ def main(argv: list[str] | None = None) -> int:
 
     require_path(rule_source, "any", lang="en", flag="--rule-source")  # #3276
 
-    alerts, errors = load_alerts(rule_source)
+    try:
+        alerts, errors = load_alerts(rule_source)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     if not alerts and errors:
         # No alerts AND errors → caller probably typo'd or pointed at wrong dir.
         # Empty alerts with no errors is legitimate (rule source is empty).

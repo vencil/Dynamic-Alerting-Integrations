@@ -233,7 +233,7 @@ def test_critical_only_rule_reads_the_base_row_so_defaults_arm_it(tmp_path):
     assert 'metric="mysql_global_status_threads_connected", severity="warning"' in rec
     assert "_critical" not in rec
     assert "tenant:alert_threshold:custom_mysql_global_status_threads_connected\n" in alert
-    assert "severity: critical" in alert
+    assert 'severity: "critical"' in alert   # #3206: label values always quoted
     tenant_cfg = yaml.safe_load((out / "tenant-config.yaml").read_text(encoding="utf-8"))
     assert tenant_cfg == {"custom_mysql_global_status_threads_connected": "200"}
 

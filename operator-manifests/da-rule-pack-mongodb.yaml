@@ -51,28 +51,26 @@ spec:
         '
       for: 15s
       labels:
-        severity: warning
         metric_group: liveness
+        severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: MongoDB member {{ $labels.instance }} is down (tenant {{ $labels.tenant
-          }})
-        summary_zh: MongoDB 成員 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant }}）
         description: mongodb_up=0 on {{ $labels.instance }} — one member of an HA
           replica set being down keeps the set available (warning). Total outage escalates
           to MongoDBClusterDown (critical); loss of PRIMARY to MongoDBNoPrimary (critical).
         description_zh: '{{ $labels.instance }} 的 mongodb_up=0。HA replica set 的單一成員停機時叢集仍可用（warning）。整體中斷會升級為
           MongoDBClusterDown（critical）；失去 PRIMARY 則為 MongoDBNoPrimary（critical）。'
+        summary: MongoDB member {{ $labels.instance }} is down (tenant {{ $labels.tenant
+          }})
+        summary_zh: MongoDB 成員 {{ $labels.instance }} 停機（租戶 {{ $labels.tenant }}）
     - alert: MongoDBClusterDown
       expr: max by(tenant) (mongodb_up{job="tenant-exporters"}) == 0
       for: 30s
       labels:
-        severity: critical
         metric_group: liveness
+        severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: 'MongoDB: ALL instances down for tenant {{ $labels.tenant }}'
-        summary_zh: MongoDB：租戶 {{ $labels.tenant }} 的所有實例皆停機
         description: No mongod reports up=1 for tenant {{ $labels.tenant }} — total
           service outage, not a single-member failover. For a planned single-instance
           drain, silence via the Alertmanager Silence API (no maintenance-window opt-out
@@ -80,6 +78,8 @@ spec:
         description_zh: 租戶 {{ $labels.tenant }} 沒有任何 mongod 回報 up=1 — 整體服務中斷，非單一成員
           failover。若為計畫性單實例維護，請用 Alertmanager Silence API 靜音（刻意不提供維護窗 opt-out；租戶的
           silent-critical sentinel 仍會壓制此告警）。
+        summary: 'MongoDB: ALL instances down for tenant {{ $labels.tenant }}'
+        summary_zh: MongoDB：租戶 {{ $labels.tenant }} 的所有實例皆停機
     - alert: MongoDBNoPrimary
       expr: 'count by(tenant) (mongodb_mongod_replset_member_state{job="tenant-exporters"})
 
@@ -91,18 +91,18 @@ spec:
         '
       for: 2m
       labels:
-        severity: critical
         metric_group: liveness
+        severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: 'MongoDB: no PRIMARY in replica set for tenant {{ $labels.tenant
-          }}'
-        summary_zh: MongoDB：租戶 {{ $labels.tenant }} 的 replica set 沒有 PRIMARY
         description: Replica-set members are reachable but none is PRIMARY for tenant
           {{ $labels.tenant }} — elections failing / quorum lost → writes rejected.
           Unlike MongoDBClusterDown this fires while secondaries are still up.
         description_zh: 租戶 {{ $labels.tenant }} 的 replica set 成員可連線但沒有 PRIMARY — 選舉失敗／失去
           quorum → 寫入被拒。與 MongoDBClusterDown 不同，此告警在 secondary 仍存活時就會觸發。
+        summary: 'MongoDB: no PRIMARY in replica set for tenant {{ $labels.tenant
+          }}'
+        summary_zh: MongoDB：租戶 {{ $labels.tenant }} 的 replica set 沒有 PRIMARY
     - alert: MongoDBHighConnections
       expr: "(\n  (\n    (\n      tenant:mongodb_connections_current:max\n      >\
         \ on(tenant) group_left\n      tenant:alert_threshold:mongodb_connections_current\n\
@@ -117,16 +117,16 @@ spec:
         severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: MongoDB high connection count on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 的 MongoDB 連線數過高'
+        description: '{{ $value }} current connections'
+        description_zh: '{{ $value }} 個目前連線'
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection
           threshold breached — pool sizing review'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 連線閾值超過
           — 請檢查連線池大小'
-        description: '{{ $value }} current connections'
-        description_zh: '{{ $value }} 個目前連線'
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: MongoDB high connection count on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的 MongoDB 連線數過高'
         tier: '{{ $labels.tier }}'
     - alert: MongoDBReplicationLag
       expr: "(\n  (\n    (\n      tenant:mongodb_replication_lag:max\n      > on(tenant)\
@@ -142,16 +142,16 @@ spec:
         severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: MongoDB replication lag on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 的 MongoDB 複製延遲'
+        description: 'Replication lag: {{ $value | printf "%.1f" }}s behind primary'
+        description_zh: '複製延遲: 落後 Primary {{ $value | printf "%.1f" }}s'
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB replication
           lag — check replica health'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 複製延遲
           — 請檢查副本狀態'
-        description: 'Replication lag: {{ $value | printf "%.1f" }}s behind primary'
-        description_zh: '複製延遲: 落後 Primary {{ $value | printf "%.1f" }}s'
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: MongoDB replication lag on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的 MongoDB 複製延遲'
         tier: '{{ $labels.tier }}'
     - alert: MongoDBHighOperations
       expr: "(\n  (\n    (\n      tenant:mongodb_opcounters:rate5m\n      > on(tenant)\
@@ -167,16 +167,16 @@ spec:
         severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: MongoDB high operation rate on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 的 MongoDB 作業率過高'
+        description: '{{ $value | printf "%.0f" }} ops/sec'
+        description_zh: '{{ $value | printf "%.0f" }} 作業/秒'
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB operation
           rate elevated — workload review'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 作業率提升
           — 請檢查工作負載'
-        description: '{{ $value | printf "%.0f" }} ops/sec'
-        description_zh: '{{ $value | printf "%.0f" }} 作業/秒'
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: MongoDB high operation rate on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的 MongoDB 作業率過高'
         tier: '{{ $labels.tier }}'
     - alert: MongoDBHighPageFaults
       expr: "(\n  (\n    tenant:mongodb_page_faults:rate5m > 100\n    unless on(tenant)\n\
@@ -190,16 +190,16 @@ spec:
         severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: MongoDB high page faults on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 的 MongoDB Page Fault 過多'
+        description: '{{ $value | printf "%.1f" }} page faults/sec — check memory'
+        description_zh: '{{ $value | printf "%.1f" }} Page Fault/秒 — 請檢查記憶體'
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB page
           fault rate high — memory sizing review'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB Page
           Fault 率過高 — 請檢查記憶體大小'
-        description: '{{ $value | printf "%.1f" }} page faults/sec — check memory'
-        description_zh: '{{ $value | printf "%.1f" }} Page Fault/秒 — 請檢查記憶體'
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: MongoDB high page faults on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的 MongoDB Page Fault 過多'
         tier: '{{ $labels.tier }}'
     - alert: MongoDBConnectionSaturation
       expr: "(\n  (\n    tenant:mongodb_connection_usage:ratio > 0.8\n    unless on(tenant)\n\
@@ -213,14 +213,14 @@ spec:
         severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
-        summary: MongoDB connection pool near saturation on {{ $labels.tenant }}
-        summary_zh: '{{ $labels.tenant }} 的 MongoDB 連線池接近飽和'
+        description: '{{ $value | humanizePercentage }} of connections used'
+        description_zh: 已使用 {{ $value | humanizePercentage }} 的連線
+        owner: '{{ $labels.owner }}'
         platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection
           pool near saturation — capacity action needed'
         platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 連線池接近飽和
           — 需要容量擴展'
-        description: '{{ $value | humanizePercentage }} of connections used'
-        description_zh: 已使用 {{ $value | humanizePercentage }} 的連線
         runbook_url: '{{ $labels.runbook_url }}'
-        owner: '{{ $labels.owner }}'
+        summary: MongoDB connection pool near saturation on {{ $labels.tenant }}
+        summary_zh: '{{ $labels.tenant }} 的 MongoDB 連線池接近飽和'
         tier: '{{ $labels.tier }}'

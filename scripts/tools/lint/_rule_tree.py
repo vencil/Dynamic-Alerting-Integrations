@@ -31,14 +31,21 @@ import subprocess
 import sys
 from pathlib import Path, PurePosixPath
 
-import yaml
-
 # Guarded and deduped, unlike the bare double-insert most siblings use: this
 # module is imported by test suites whose conftest has already added the same
 # directory, and `check_rulepack_sync` below inserts one more on its own.
 _THIS_DIR = str(Path(__file__).resolve().parent)
 if _THIS_DIR not in sys.path:
     sys.path.insert(0, _THIS_DIR)
+_TOOLS_DIR = str(Path(__file__).resolve().parent.parent)
+if _TOOLS_DIR not in sys.path:
+    sys.path.insert(0, _TOOLS_DIR)
+# ⛔ #3206 (ADR-036 §12): nothing here reads YAML itself. A manifest is read
+# the way kubectl reads it (da-crdecode) and every rule file — a rule pack, a
+# ConfigMap data value, a PrometheusRule's spec — the way Prometheus' rule
+# loader reads it (`da-read prometheus-rules`). Without either binary this
+# module raises `ConsumerReadError`; it never falls back to another reading.
+import _lib_consumer_read  # noqa: E402
 
 
 def _find_repo_root() -> str:
@@ -180,16 +187,21 @@ def _generated_pack_names() -> frozenset:
     """
     packs_dir = Path(_REPO_ROOT) / "rule-packs"
     names = set()
-    for path in packs_dir.rglob("*"):
+    candidates = []
+    for path in sorted(packs_dir.rglob("*")):
         if not path.is_file():
             continue
         stem = _strip_rules_ext(path.name)
         if not (stem and stem.startswith(_RULE_PACK_PREFIX)):
             continue
-        try:
-            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (yaml.YAMLError, UnicodeDecodeError, OSError):
+        candidates.append((stem, path))
+    # The packs as Prometheus' rule loader reads them, in one da-read run; a
+    # pack the loader refuses is not a pack (it is the sentinel's business).
+    for (stem, _path), rf in zip(candidates, _lib_consumer_read.prometheus_rule_file_results(
+            [p for _s, p in candidates])):
+        if rf.problem is not None:
             continue
+        doc = rf.documents[0]
         # ⛔ Test for the KEY, not for a truthy value. `rule-pack-custom-alerts`
         # is generated, and a conf.d tree that declares no `_custom_alerts` —
         # an ordinary, supported deployment — makes the generator emit
@@ -566,28 +578,35 @@ def _header_provenance(chunk: str):
             return m.group(1)
     return None
 
-def _documents(text: str):
-    """(is-first-document, parsed doc) per YAML document.
+def _kubernetes_reading(text: str):
+    """(documents, None) — *text* as kubectl reads it (da-crdecode: documents
+    split as `kubectl apply -f` splits them, each converted by
+    sigs.k8s.io/yaml) — or (None, the reason) when kubectl's reading refuses
+    it. Raises `ConsumerReadError` when da-crdecode cannot be had.
 
-    ⛔ Let the YAML parser find document boundaries. Hand-splitting on
-    `line == "---"` missed the legal spellings `--- ` (one trailing space)
-    and `--- # comment`: the file then failed to split, `safe_load` raised
-    ComposerError on the multi-document text, and the `except` swallowed
-    the ENTIRE FILE — a whole rules ConfigMap gone, alert counts unchanged,
-    so no floor noticed. Worse, `_rule_shaped_but_unparsed` uses
-    `safe_load_all`, which parses that same file fine, so the one guard
-    meant to catch silent-zero could not see it. Two parsers disagreeing
-    about how many documents a file has WAS the hole; there is one now.
-
-    The generator header belongs to the file's opening comments, so it
-    applies to the first document only — a hand-authored document appended
-    after a `---` does not inherit its neighbour's provenance.
+    ⛔ The document boundaries are kubectl's, found by the binary. Hand-
+    splitting on `line == "---"` missed the legal spellings `--- ` (one
+    trailing space) and `--- # comment`: the file then failed to split and
+    the ENTIRE FILE was swallowed — a whole rules ConfigMap gone, alert
+    counts unchanged, so no floor noticed. Two readers disagreeing about how
+    many documents a file has WAS that hole; there is one reading now, and it
+    is the one that deploys.
     """
     try:
-        for i, doc in enumerate(yaml.safe_load_all(text)):
-            yield i == 0, doc
-    except yaml.YAMLError:
-        return
+        return _lib_consumer_read.kubernetes_text_documents(text), None
+    except _lib_consumer_read.InputRefused as exc:
+        return None, "; ".join(exc.stderr_lines) or str(exc)
+
+
+@functools.lru_cache(maxsize=None)
+def _tracked_reading(rel: str):
+    """`_kubernetes_reading` of the tracked file *rel* (decoded as
+    `_read_manifest` decodes it), once per run: the container scan and the
+    sentinel both ask. (None, None) for a file no encoding decodes."""
+    text, _enc = _read_manifest(rel)
+    if text is None:
+        return None, None
+    return _kubernetes_reading(text)
 
 
 def _iter_rule_containers():
@@ -621,15 +640,32 @@ def _iter_rule_containers():
     rule-packs/. None means "nobody generated this", which is what makes it a
     platform artifact — see _is_platform_cm_location.
     """
+    files = []
     for rel in _tracked_yaml_paths():
         text, _enc = _read_manifest(rel)
         if text is None:
             continue          # reported by _rule_shaped_but_unparsed, not dropped
-        yield from _containers_from_text(rel, text)
+        files.append((rel, text))
+    yield from _containers_from_texts(files, _tracked_reading)
 
 
 def _containers_from_text(rel: str, text: str):
-    """The per-file half of `_iter_rule_containers`, split out to be TESTABLE.
+    """One file's containers: `_containers_from_texts` for a single file."""
+    yield from _containers_from_texts([(rel, text)])
+
+
+def _containers_from_texts(files, reading=None):
+    """The per-file half of `_iter_rule_containers`, split out to be TESTABLE:
+    (where, rules_doc, provenance) for every container in *files* (`(rel,
+    text)` pairs), in file order.
+
+    #3206: each file is read the way kubectl reads it (*reading*: rel ->
+    `_kubernetes_reading`; computed from the text when not given), and every
+    rule file found in it — a ConfigMap data value, a PrometheusRule's spec,
+    a bare `groups:` file — the way Prometheus' rule loader reads it, all of
+    them in ONE `da-read prometheus-rules` run. `rules_doc` is that reading.
+    A rule-shaped container the loader refuses is yielded as
+    `{"_refused_by_rule_loader": <reason>}` for the sentinel, never dropped.
 
     ⛔ Every guard below — the widened prefilter, `kind: List` unwrapping,
     binaryData decoding, parser-driven document splitting, header locality —
@@ -649,118 +685,165 @@ def _containers_from_text(rel: str, text: str):
     # past is not an optimisation, it IS the criterion. `_is_rule_groups`
     # below is the real test; parsing ~90 files costs about a second.
 
-    file_header = _header_provenance(text)
-    for is_first, top_doc in _documents(text):
-        header_prov = file_header if is_first else None
-        docs_todo = [top_doc]
-        while docs_todo:
-            doc = docs_todo.pop(0)
-            if not isinstance(doc, dict):
-                continue
-            kind = doc.get("kind")
-            if isinstance(doc.get("items"), list):
-                # ⛔ Mirror kubectl, which does NOT look at the kind name.
-                # `apply` builds with `.Flatten()`, whose FlattenListVisitor
-                # defers to `Unstructured.IsList()` — and that is literally
-                # "is `items` a list". `decodeToList` then back-fills each
-                # item's kind from the list's own (`ConfigMapList` → ConfigMap),
-                # so `kubectl get cm -o yaml` output round-trips, and so does a
-                # wrapper with a kind nobody has ever heard of. Matching the
-                # bare `List` spelling left every named variant open, and the
-                # worse face is SUBTRACTIVE: wrapping an EXISTING deployed file
-                # removed 14 alerts from every contract while all five floors
-                # still held.
-                # `kind: List` is what `kubectl get -o yaml` emits for multiple
-                # objects and what `kubectl apply -f` happily takes back. Three
-                # hard-coded kinds meant a wrapper nobody had to invent made the
-                # contents invisible — including, measured, a tenant alert
-                # wearing the RESERVED `alert_source: platform`, which turned the
-                # reserved-value contract off entirely.
-                # ⛔ …and the outer document's OWN content is dropped, by
-                # kubectl and therefore by us. Verified against
-                # `unstructured.UnstructuredJSONScheme` (k8s 1.36 apimachinery),
-                # which is what `apply` decodes with:
-                #   ConfigMap + data                 -> 1 object, data kept
-                #   ConfigMap + `items: []` + data   -> 0 objects
-                #   items non-empty + own data       -> only the items
-                # So skipping it is CORRECT — but it is a SILENT ZERO, and a
-                # cheap accident: paste the `items:` key out of a
-                # `kubectl get -o yaml` dump into a hand-authored ConfigMap, or
-                # delete the wrapped objects and leave `items: []` behind, and
-                # your platform rules stop deploying with nothing saying so.
-                # Hand it to the sentinel rather than dropping it quietly.
-                if (doc.get("data") or doc.get("binaryData")
-                        or isinstance(doc.get("spec"), dict)):
-                    yield (f"{rel}:{doc.get('metadata', {}).get('name', '?')}",
-                           {"_own_content_shadowed_by_items": True}, header_prov)
-                for item in (doc.get("items") or []):
-                    if isinstance(item, dict):
-                        docs_todo.append(item)
-                continue
-            if kind == "ConfigMap":
-                prov = header_prov
-                # ⛔ binaryData counts. kubelet's configmap MakePayload falls
-                # back to BinaryData when a projected `items` key is absent from
-                # Data (k8s pkg/volume/configmap/configmap.go), and this repo
-                # mounts its rules exactly that way — so base64 is a real
-                # delivery path, not an obfuscation. Reading only `data` left it
-                # unscanned AND defeated the raw-text `- alert:` tripwire.
-                entries = dict(doc.get("data") or {})
-                for key, blob in (doc.get("binaryData") or {}).items():
-                    # ⛔ validate=True, matching `_grar_validate`'s reader of the
-                    # SAME keys. Without it b64decode silently drops every
-                    # character outside the alphabet, so a corrupt value decodes
-                    # to arbitrary bytes instead of raising — and the two readers
-                    # then disagree about which keys exist, which is precisely
-                    # the drift TestPlatformReaderParity exists to prevent.
-                    try:
-                        entries.setdefault(key, base64.b64decode(
-                            str(blob), validate=True).decode("utf-8"))
-                    except (ValueError, UnicodeDecodeError, binascii.Error):
-                        continue
-                for key, body in entries.items():
-                    try:
-                        inner = yaml.safe_load(body) if isinstance(body, str) else body
-                    except yaml.YAMLError:
-                        # ⛔ Not silent — but only when the body was TRYING to be
-                        # rules. The OUTER file parses, so the whole-file tripwire
-                        # sees nothing wrong; an indentation slip inside one `|`
-                        # block therefore deleted a whole block of alerts with no
-                        # counter moving. A ConfigMap may legitimately carry
-                        # non-YAML data keys (this repo ships a markdown
-                        # Alertmanager template that way), so flag only bodies
-                        # that visibly declare rules.
-                        # The KEY's extension is the declaration of intent: a
-                        # `.yml`/`.yaml` data key promises YAML, a `.md` one does
-                        # not. (Matching on `- alert:` in the body was too loose —
-                        # this repo's Alertmanager markdown template contains that
-                        # exact string as a documentation example.)
-                        if key.lower().endswith((".yml", ".yaml")):
-                            yield f"{rel}:{key}", {"_unparsable_body": True}, prov
-                        continue
-                    if isinstance(inner, dict) and (
-                            _is_rule_groups(inner.get("groups"))
-                            or isinstance(inner.get("spec"), dict)):
-                        yield f"{rel}:{key}", inner, prov
-            elif kind == "PrometheusRule":
-                # ⛔ `groups` at the TOP level of a PrometheusRule is the
-                # commonest paste error and the tripwire below cannot see it:
-                # that check receives `doc["spec"]`, so the misplaced key is
-                # outside what it is handed. Normalise here, where both halves
-                # are still visible, and let the tripwire flag the empty spec.
-                if _is_rule_groups(doc.get("groups")) and not (
-                        isinstance(doc.get("spec"), dict) and doc["spec"].get("groups")):
-                    yield rel, {"_misplaced_groups": doc.get("groups")}, None
+    # (rel, where, prov, rule-file text | None, ready doc | None, data key | None)
+    pending = []
+    for rel, text in files:
+        docs, _refused = (reading(rel) if reading is not None
+                          else _kubernetes_reading(text))
+        if docs is None:
+            continue          # not a manifest kubectl reads; the sentinel's business
+        file_header = _header_provenance(text)
+        for i, top_doc in enumerate(docs):
+            header_prov = file_header if i == 0 else None
+            pending.extend(_containers_of_document(rel, text, top_doc, header_prov))
+    texts = [(str(n), t) for n, (_r, _w, _p, t, _d, _k) in enumerate(pending) if t is not None]
+    read = {int(rf.path): rf for rf in _lib_consumer_read.prometheus_rule_text_results(texts)}
+    for n, (rel, where, prov, text, ready, key) in enumerate(pending):
+        if text is None:
+            yield where, ready, prov
+            continue
+        rf = read[n]
+        if rf.problem is None:
+            doc = rf.documents[0]
+            if key is None or _is_rule_groups(doc.get("groups")):
+                yield where, doc, prov
+            continue
+        if key is None:
+            # A bare `groups:` file or a PrometheusRule spec: rule-shaped by
+            # construction, so a refusal is the silent zero the sentinel names.
+            yield where, {"_refused_by_rule_loader": rf.problem}, prov
+            continue
+        # A ConfigMap data value the rule loader refuses. A ConfigMap may
+        # legitimately carry non-rule data (this repo ships a markdown
+        # Alertmanager template and dashboards that way), so only a value
+        # that visibly sets out to be rules is an offender — judged on its
+        # plain reading, which is not what deploys and decides nothing else.
+        inner, why = _kubernetes_reading(text)
+        if inner is None:
+            # ⛔ Not silent — but only when the body was TRYING to be rules.
+            # The OUTER file parses, so the whole-file tripwire sees nothing
+            # wrong; an indentation slip inside one `|` block therefore
+            # deleted a whole block of alerts with no counter moving. The
+            # KEY's extension is the declaration of intent: a `.yml`/`.yaml`
+            # data key promises YAML, a `.md` one does not. (Matching on
+            # `- alert:` in the body was too loose — this repo's Alertmanager
+            # markdown template contains that exact string as a
+            # documentation example.)
+            if key.lower().endswith((".yml", ".yaml")):
+                yield where, {"_unparsable_body": why}, prov
+            continue
+        body = inner[0] if inner and isinstance(inner[0], dict) else None
+        if body is None:
+            continue
+        if _is_rule_groups(body.get("groups")):
+            yield where, {"_refused_by_rule_loader": rf.problem}, prov
+        elif isinstance(body.get("spec"), dict):
+            yield where, body, prov     # the sentinel names `spec.groups`
+
+
+def _containers_of_document(rel: str, text: str, top_doc, header_prov):
+    """The containers one document of *rel* (its kubectl reading) holds, as
+    `_containers_from_texts`' pending entries: (rel, where, provenance, the
+    rule-file text to hand to the rule loader or None, the doc to yield as
+    it is when there is no rule file, the ConfigMap data key or None)."""
+    out = []
+    docs_todo = [top_doc]
+    while docs_todo:
+        doc = docs_todo.pop(0)
+        if not isinstance(doc, dict):
+            continue
+        kind = doc.get("kind")
+        if isinstance(doc.get("items"), list):
+            # ⛔ Mirror kubectl, which does NOT look at the kind name.
+            # `apply` builds with `.Flatten()`, whose FlattenListVisitor
+            # defers to `Unstructured.IsList()` — and that is literally
+            # "is `items` a list". `decodeToList` then back-fills each
+            # item's kind from the list's own (`ConfigMapList` → ConfigMap),
+            # so `kubectl get cm -o yaml` output round-trips, and so does a
+            # wrapper with a kind nobody has ever heard of. Matching the
+            # bare `List` spelling left every named variant open, and the
+            # worse face is SUBTRACTIVE: wrapping an EXISTING deployed file
+            # removed 14 alerts from every contract while all five floors
+            # still held.
+            # ⛔ …and the outer document's OWN content is dropped, by
+            # kubectl and therefore by us. Verified against
+            # `unstructured.UnstructuredJSONScheme` (k8s 1.36 apimachinery),
+            # which is what `apply` decodes with:
+            #   ConfigMap + data                 -> 1 object, data kept
+            #   ConfigMap + `items: []` + data   -> 0 objects
+            #   items non-empty + own data       -> only the items
+            # So skipping it is CORRECT — but it is a SILENT ZERO, and a
+            # cheap accident: paste the `items:` key out of a
+            # `kubectl get -o yaml` dump into a hand-authored ConfigMap, or
+            # delete the wrapped objects and leave `items: []` behind, and
+            # your platform rules stop deploying with nothing saying so.
+            # Hand it to the sentinel rather than dropping it quietly.
+            if (doc.get("data") or doc.get("binaryData")
+                    or isinstance(doc.get("spec"), dict)):
+                out.append((rel, f"{rel}:{(doc.get('metadata') or {}).get('name', '?')}",
+                            header_prov, None, {"_own_content_shadowed_by_items": True}, None))
+            for item in (doc.get("items") or []):
+                if isinstance(item, dict):
+                    docs_todo.append(item)
+            continue
+        if kind == "ConfigMap":
+            # ⛔ binaryData counts. kubelet's configmap MakePayload falls
+            # back to BinaryData when a projected `items` key is absent from
+            # Data (k8s pkg/volume/configmap/configmap.go), and this repo
+            # mounts its rules exactly that way — so base64 is a real
+            # delivery path, not an obfuscation. Reading only `data` left it
+            # unscanned AND defeated the raw-text `- alert:` tripwire.
+            entries = dict(doc.get("data") or {})
+            for key, blob in (doc.get("binaryData") or {}).items():
+                # ⛔ validate=True, as `_lib_consumer_read.manifest_rule_file_results`
+                # decodes the SAME keys for `_grar_validate`. Without it
+                # b64decode silently drops every character outside the
+                # alphabet, so a corrupt value decodes to arbitrary bytes
+                # instead of raising — and the two readers then disagree
+                # about which keys exist, which is precisely the drift
+                # TestPlatformReaderParity exists to prevent.
+                try:
+                    entries.setdefault(key, base64.b64decode(
+                        str(blob), validate=True).decode("utf-8"))
+                except (ValueError, UnicodeDecodeError, binascii.Error):
                     continue
-                name = (doc.get("metadata") or {}).get("name") or ""
-                prov = (name[len("da-rule-pack-"):]
-                        if name.startswith("da-rule-pack-") else header_prov)
-                yield rel, (doc.get("spec") or {}), prov
-            elif _is_rule_groups(doc.get("groups")):
-                stem = _strip_rules_ext(PurePosixPath(rel).name)
-                prov = (stem[len(_RULE_PACK_PREFIX):]
-                        if stem and stem.startswith(_RULE_PACK_PREFIX) else None)
-                yield rel, doc, prov
+            for key, body in entries.items():
+                if isinstance(body, str):
+                    out.append((rel, f"{rel}:{key}", header_prov, body, None, key))
+                else:
+                    # A data value written as nested YAML instead of a `|`
+                    # block. The API server takes only strings, so the whole
+                    # ConfigMap is refused and its rules do not deploy — not
+                    # silently dropped here either: the sentinel names it.
+                    out.append((rel, f"{rel}:{key}", header_prov, None,
+                                {"_data_value_not_a_string": type(body).__name__}, None))
+        elif kind == "PrometheusRule":
+            # ⛔ `groups` at the TOP level of a PrometheusRule is the
+            # commonest paste error and the tripwire below cannot see it:
+            # that check receives `doc["spec"]`, so the misplaced key is
+            # outside what it is handed. Normalise here, where both halves
+            # are still visible, and let the tripwire flag the empty spec.
+            if _is_rule_groups(doc.get("groups")) and not (
+                    isinstance(doc.get("spec"), dict) and doc["spec"].get("groups")):
+                out.append((rel, rel, None, None, {"_misplaced_groups": doc.get("groups")},
+                            None))
+                continue
+            name = (doc.get("metadata") or {}).get("name") or ""
+            prov = (name[len("da-rule-pack-"):]
+                    if name.startswith("da-rule-pack-") else header_prov)
+            # The rule file the Prometheus Operator writes from the spec,
+            # as the rule loader reads it (JSON is YAML).
+            spec = doc.get("spec")
+            out.append((rel, rel, prov, json.dumps(spec if isinstance(spec, dict) else {}),
+                        None, None))
+        elif _is_rule_groups(doc.get("groups")):
+            stem = _strip_rules_ext(PurePosixPath(rel).name)
+            prov = (stem[len(_RULE_PACK_PREFIX):]
+                    if stem and stem.startswith(_RULE_PACK_PREFIX) else None)
+            # A wrapper-less rule file: the file itself is what Prometheus
+            # loads.
+            out.append((rel, rel, prov, text, None, None))
+    return out
 
 
 def _reset_caches() -> None:
@@ -775,7 +858,7 @@ def _reset_caches() -> None:
     """
     for fn in (_generated_pack_names, _platform_rule_locations,
                _source_pack_alerts, _expected_rule_files, _rule_containers,
-               _rule_shaped_but_unparsed):
+               _rule_shaped_but_unparsed, _tracked_reading):
         fn.cache_clear()
 
 
@@ -883,10 +966,8 @@ def _rule_shaped_but_unparsed():
         # of the 21 `toYaml .Values.*` injections targets anything close, so
         # this starts at zero and stays there until someone actually does it.
         if rel.startswith("helm/"):
-            try:
-                docs = list(yaml.safe_load_all(text))
-            except yaml.YAMLError:
-                docs = []                 # a template; the tripwire below applies
+            # kubectl's reading; a template it refuses -> the tripwire below
+            docs = _tracked_reading(rel)[0] or []
             for doc in docs:
                 at = _rules_shaped_at_any_depth(doc)
                 if at is not None:
@@ -917,15 +998,27 @@ def _rule_shaped_but_unparsed():
                                    "UTF-8 — whether kubectl applies it depends "
                                    "on the byte order"))
             continue
-        try:
-            list(yaml.safe_load_all(text))
-        except yaml.YAMLError as exc:
-            offenders.append((rel, f"declares alerts but will not parse: {exc.__class__.__name__}"))
+        docs, refused = _tracked_reading(rel)
+        if docs is None:
+            offenders.append((rel, f"declares alerts but kubectl's reading refuses it: "
+                                   f"{refused}"))
     for where, doc, _prov in _rule_containers():
         if doc.get("groups"):
             continue
         if "_unparsable_body" in doc:
-            offenders.append((where, "ConfigMap data key does not parse as YAML"))
+            offenders.append((where, "ConfigMap data key does not parse as YAML: "
+                                     f"{doc['_unparsable_body']}"))
+            continue
+        if "_data_value_not_a_string" in doc:
+            offenders.append((where, "ConfigMap data value is a "
+                                     f"{doc['_data_value_not_a_string']}, not a string — "
+                                     "the API server refuses the ConfigMap, its rules "
+                                     "do not deploy"))
+            continue
+        if "_refused_by_rule_loader" in doc:
+            offenders.append((where, "rule file Prometheus' rule loader refuses — "
+                                     "its rules do not load: "
+                                     f"{doc['_refused_by_rule_loader']}"))
             continue
         if "_misplaced_groups" in doc:
             offenders.append((where, "PrometheusRule with groups: at the top "

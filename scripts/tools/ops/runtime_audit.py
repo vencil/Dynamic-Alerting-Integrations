@@ -91,14 +91,13 @@ import sys
 from pathlib import Path
 from typing import Any, Optional
 
-import yaml
-
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_prometheus import QueryError, prometheus_rules, rules_groups  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
@@ -204,17 +203,20 @@ def parse_declared_rules(
     """Parse declared rules from rule-pack YAML files.
 
     Returns a map keyed by ``(group_name, rule_name)`` → ``{"type": ...}``.
-    ``rule_name`` is the ``alert:`` or ``record:`` value. Raises ValueError on
-    malformed YAML so the caller can map it to a caller-error exit.
+    ``rule_name`` is the ``alert:`` or ``record:`` value. The packs are read
+    the way Prometheus' rule loader reads them (#3206, ADR-036 §12:
+    ``da-read prometheus-rules``, one run for all) — the same loader whose
+    runtime answer this audit compares against. Raises ValueError naming a
+    pack the loader refuses (or when da-read cannot be had) so the caller
+    can map it to a caller-error exit.
     """
     declared: dict[tuple[str, str], dict[str, str]] = {}
-    for path in rule_pack_paths:
-        try:
-            doc = yaml.safe_load(path.read_text(encoding="utf-8"))
-        except (yaml.YAMLError, OSError) as exc:
-            raise ValueError(f"{path}: {exc}") from exc
-        if not isinstance(doc, dict):
-            continue
+    try:
+        rule_files = _lib_consumer_read.prometheus_rule_files(list(rule_pack_paths))
+    except _lib_consumer_read.ConsumerReadError as exc:
+        raise ValueError(exc.detail()) from exc
+    for path, rule_file in zip(rule_pack_paths, rule_files):
+        doc = rule_file.documents[0]
         # Fail loud on a structurally-wrong top-level `groups:` (e.g.
         # `groups: "foo"` or `groups: 123`) rather than iterating a string
         # into a cryptic AttributeError. Mirrors rule_pack_diff.py's validation

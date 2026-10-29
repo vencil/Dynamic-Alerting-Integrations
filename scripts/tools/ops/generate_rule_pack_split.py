@@ -80,6 +80,7 @@ except ImportError:
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
 )
+import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
 
 # ─ I18n Fallback ────────────────────────────────────────────────────────
@@ -474,8 +475,14 @@ def to_prometheus_rule_crd(
 # ─ YAML I/O with GitOps mode ────────────────────────────────────────────
 
 
-def load_rule_pack(path: str) -> Dict[str, Any]:
-    """Load YAML rule pack."""
+def load_rule_pack(path: str, rule_file: Any = None) -> Dict[str, Any]:
+    """The rule pack at *path* as Prometheus' rule loader reads it (#3206,
+    ADR-036 §12: ``da-read prometheus-rules``); *rule_file* is its reading
+    from a batch run (``process_rule_packs`` reads every pack in one run),
+    read here when not given. A pack the loader refuses, or no da-read, is a
+    ``RuntimeError`` naming the pack and the reason — never read another way.
+
+    PyYAML is still required: the split rule files are written with it."""
     if not yaml:
         raise RuntimeError(t(
             "YAML 模組不可用，請安裝 PyYAML",
@@ -483,11 +490,12 @@ def load_rule_pack(path: str) -> Dict[str, Any]:
         ))
 
     try:
-        with open(path, 'r', encoding='utf-8') as f:
-            data = yaml.safe_load(f)
-        return data if data else {}
-    except (OSError, yaml.YAMLError) as e:
-        raise RuntimeError(f"{t('載入失敗', 'Failed to load')} {path}: {e}")
+        if rule_file is None:
+            (rule_file,) = _lib_consumer_read.prometheus_rule_file_results([path])
+        return rule_file.documents[0]
+    except _lib_consumer_read.ConsumerReadError as e:
+        raise RuntimeError(f"{t('載入失敗', 'Failed to load')} {path}: "
+                           f"{_lib_consumer_read.error_text(e)}")
 
 
 def dump_yaml(data: Dict[str, Any], gitops: bool = False) -> str:
@@ -552,10 +560,21 @@ def process_rule_packs(
 
     report["validation"]["total_packs"] = len(rule_files)
 
-    for rule_file in rule_files:
+    # Every pack in one da-read run (#3206); without da-read every pack fails
+    # with the same reason, as without PyYAML.
+    try:
+        readings = _lib_consumer_read.prometheus_rule_file_results(
+            [str(f) for f in rule_files])
+    except _lib_consumer_read.ConsumerReadError as e:
+        readings = [None] * len(rule_files)
+        report["status"] = "error"
+        report["errors"].append(f"rule packs: {_lib_consumer_read.error_text(e)}")
+        rule_files = []
+
+    for rule_file, reading in zip(rule_files, readings):
         filename = rule_file.name
         try:
-            data = load_rule_pack(str(rule_file))
+            data = load_rule_pack(str(rule_file), reading)
             groups = data.get("groups", [])
 
             if not groups:
