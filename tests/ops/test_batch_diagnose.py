@@ -2,7 +2,7 @@
 """test_batch_diagnose.py — batch_diagnose.py pytest 風格測試。
 
 驗證:
-  1. discover_tenants() — ConfigMap key 解析
+  1. read_configmap_files() + resolve_tenants() — ConfigMap 落成樹、租戶取 Go 的答案（#1525）
   2. run_diagnose_for_tenant() — 單租戶診斷執行
   3. generate_report() — 報告產出 + health score
   4. print_text_report() — 文字報告格式
@@ -21,6 +21,8 @@ import pytest
 import _lib_kubectl  # noqa: E402
 from _kubectl_fake import kubectl_run  # noqa: E402  (#3349)
 import batch_diagnose as bd  # noqa: E402
+from _lib_tenant_values import DaGuardError, DaGuardNotFoundError  # noqa: E402
+from _go_refusal import refuses  # noqa: E402  (#3206: the shared refusal)
 
 
 _REAL_RUN = subprocess.run
@@ -28,10 +30,10 @@ _REAL_RUN = subprocess.run
 
 def _kubectl_only(fake):
     """A `subprocess.run` that hands every `kubectl` call to *fake* and runs
-    everything else for real: `discover_tenants` classes the ConfigMap keys
-    through `da-guard parse-tree --names` (#3206), a subprocess too, and a
-    fake that answered it as well would be the ConfigMap's JSON read as
-    da-guard's document."""
+    everything else for real: `resolve_tenants` reads the ConfigMap's tree
+    through `da-guard effective` / `served-values` (#1525), subprocesses too,
+    and a fake that answered them as well would be the ConfigMap's JSON read
+    as da-guard's document."""
     def run(cmd, *args, **kwargs):
         if cmd and os.path.basename(str(cmd[0])) == "kubectl":
             return fake(cmd, *args, **kwargs)
@@ -41,7 +43,7 @@ def _kubectl_only(fake):
 
 @pytest.fixture
 def mock_run(monkeypatch, da_guard_env):
-    """The `kubectl` that `discover_tenants` runs (a MagicMock: set its
+    """The `kubectl` that `read_configmap_files` runs (a MagicMock: set its
     `return_value` / `side_effect`); da-guard is the real one. #3349: the
     read goes through `_lib_kubectl.kubectl_get`, so this is that runner's
     `subprocess.run` — the process boundary, with kubectl_get's own reading
@@ -67,6 +69,36 @@ def _fake_kubectl(tmp_path, rc, stdout="", stderr=""):
     return f"{bindir}{os.pathsep}{os.environ['PATH']}"
 
 
+def _discover():
+    """The tenants batch-diagnose finds in the ConfigMap kubectl returns."""
+    return bd.resolve_tenants(bd.read_configmap_files())[0]
+
+
+def _cm(data, binary=None):
+    """A `kubectl get configmap -o json` answer."""
+    doc = {"data": data}
+    if binary is not None:
+        doc["binaryData"] = binary
+    return MagicMock(returncode=0, stdout=json.dumps(doc), stderr="")
+
+
+_DEFAULTS = "defaults:\n  cpu: 50\n"
+#: The tenants the CLI tests below name; one file declares them all.
+_CM_TENANTS = ("db-a", "db-b", "t0", "t1", "t2", "t3")
+
+
+def _cm_files(tenants=_CM_TENANTS):
+    return {"_defaults.yaml": _DEFAULTS.encode(),
+            "tenants.yaml": ("tenants:\n" + "".join(
+                f"  {t}:\n    cpu: 90\n" for t in tenants)).encode()}
+
+
+@pytest.fixture
+def configmap(monkeypatch, da_guard_env):
+    """main() reads this ConfigMap (#1525: in both modes); da-guard is real."""
+    monkeypatch.setattr(bd, "read_configmap_files", lambda **kw: _cm_files())
+
+
 def _batch_cli(tmp_path, path, *args):
     return subprocess.run(
         [sys.executable, str(Path(bd.__file__)), *args],
@@ -75,40 +107,90 @@ def _batch_cli(tmp_path, path, *args):
 
 
 class TestDiscoverTenants:
-    """discover_tenants() 測試。"""
+    """read_configmap_files() + resolve_tenants()（#1525：租戶取 Go 的答案）。"""
 
     def test_normal_discovery(self, mock_run):
         """正常 ConfigMap 應返回排序的 tenant 列表。"""
-        cm_data = {
-            "data": {
-                "_defaults.yaml": "defaults: {}",
-                "db-b.yaml": "tenants: {}",
-                "db-a.yaml": "tenants: {}",
-            }
-        }
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps(cm_data),
-        )
-        result = bd.discover_tenants()
-        assert result == ["db-a", "db-b"]
+        mock_run.return_value = _cm({
+            "_defaults.yaml": _DEFAULTS,
+            "db-b.yaml": "tenants:\n  db-b: {}\n",
+            "db-a.yaml": "tenants:\n  db-a: {}\n",
+        })
+        assert _discover() == ["db-a", "db-b"]
         cmd = mock_run.call_args.args[0]
         assert cmd == ["kubectl", "get", "configmap", "threshold-config", "-n", "monitoring",
                        "--ignore-not-found", "-o", "json"]
 
     def test_skip_underscore_keys(self, mock_run):
-        """_ 前綴的 key 應被忽略。"""
-        cm_data = {
-            "data": {
-                "_defaults.yaml": "defaults: {}",
-                "_internal.yaml": "stuff",
-                "db-a.yaml": "tenants: {}",
-            }
-        }
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps(cm_data),
-        )
-        result = bd.discover_tenants()
-        assert result == ["db-a"]
+        """_ 前綴的 key 不是租戶檔。"""
+        mock_run.return_value = _cm({
+            "_defaults.yaml": _DEFAULTS,
+            "_profiles.yaml": "profiles:\n  p:\n    cpu: 1\n",
+            "db-a.yaml": "tenants:\n  db-a: {}\n",
+        })
+        assert _discover() == ["db-a"]
+
+    def test_the_tenant_ids_are_the_files_not_the_key_names(self, mock_run):
+        """#1525: one key declaring two tenants. Discovery by key name reported
+        the tenant `team-x` and missed `db-a` and `db-b`."""
+        mock_run.return_value = _cm({
+            "_defaults.yaml": _DEFAULTS,
+            "team-x.yaml": "tenants:\n  db-a:\n    cpu: 90\n  db-b:\n    cpu: 70\n",
+        })
+        assert _discover() == ["db-a", "db-b"]
+
+    def test_every_tenant_gets_its_chain_from_the_configmap(self, mock_run):
+        """#1525: the chain is resolved from the same read, per tenant — the
+        report's conf.d side used to be empty in batch."""
+        mock_run.return_value = _cm({
+            "_defaults.yaml": "defaults:\n  cpu: 50\n  mem: 60\n",
+            "team-x.yaml": "tenants:\n  db-a:\n    cpu: 90\n  db-b:\n    mem: 70\n",
+        })
+        tenants, chains = bd.resolve_tenants(bd.read_configmap_files())
+        assert tenants == ["db-a", "db-b"]
+        assert chains["db-a"]["resolved"] == {"cpu": 90, "mem": 60}
+        assert chains["db-b"]["resolved"] == {"cpu": 50, "mem": 70}
+        assert [c["source"] for c in chains["db-a"]["chain"]] == ["_defaults.yaml", "team-x.yaml"]
+
+    def test_binary_data_is_part_of_the_tree(self, mock_run):
+        """The kubelet mounts binaryData keys as files too."""
+        import base64
+        mock_run.return_value = _cm(
+            {"_defaults.yaml": _DEFAULTS},
+            {"db-c.yaml": base64.b64encode(b"tenants:\n  db-c: {}\n").decode()})
+        assert _discover() == ["db-c"]
+
+    @pytest.mark.parametrize("data, binary", [
+        ({"../x.yaml": "tenants: {}"}, None),
+        ({"..": "tenants: {}"}, None),
+        ({"a.yaml": 1}, None),
+        ({}, {"b.yaml": "not base64!"}),
+    ], ids=["path-key", "dotdot", "not-a-string", "bad-base64"])
+    def test_a_key_that_is_not_a_mountable_file_is_refused(self, mock_run, data, binary):
+        """Written as it is, `../x.yaml` would land outside the tree."""
+        mock_run.return_value = _cm({"_defaults.yaml": _DEFAULTS, **data}, binary)
+        with pytest.raises(bd.CallerError) as exc:
+            bd.read_configmap_files()
+        assert exc.value.reason == "configmap_unreadable"
+
+    def test_a_tree_the_exporter_cannot_load_is_refused(self, mock_run):
+        """No tenant is checked against a partial read: rc 2 in main."""
+        mock_run.return_value = _cm({
+            "_defaults.yaml": _DEFAULTS,
+            "db-a.yaml": "tenants:\n  db-a: {}\n",
+            "zzz.yaml": "tenants:\n  db-b: [\n",
+        })
+        with refuses("zzz.yaml"):
+            _discover()
+
+    def test_requested_tenants_must_be_in_the_tree(self, mock_run):
+        mock_run.return_value = _cm({
+            "_defaults.yaml": _DEFAULTS, "db-a.yaml": "tenants:\n  db-a: {}\n"})
+        with pytest.raises(bd.TenantNotFoundError, match="'nope', 'gone'") as exc:
+            bd.resolve_tenants(bd.read_configmap_files(), ["db-a", "nope", "gone"])
+        assert exc.value.reason == "tenant_not_found"
+        # must-fire control: the same tree answers the tenant it has
+        assert bd.resolve_tenants(bd.read_configmap_files(), ["db-a"])[0] == ["db-a"]
 
     def test_kubectl_failure(self, mock_run):
         """kubectl 失敗是 KubectlError（rc 2，點名 kubectl 自己那行話）。
@@ -117,13 +199,13 @@ class TestDiscoverTenants:
             returncode=1, stdout="",
             stderr='Error from server (Forbidden): configmaps "threshold-config" is forbidden')
         with pytest.raises(bd.KubectlError, match=r"\(exit 1\).*Forbidden"):
-            bd.discover_tenants()
+            bd.read_configmap_files()
 
     def test_kubectl_timeout(self, mock_run):
         """kubectl timeout 是 KubectlError（#3349：以前返回空列表）。"""
         mock_run.side_effect = subprocess.TimeoutExpired(cmd="kubectl", timeout=15)
         with pytest.raises(bd.KubectlError, match="no answer within 15s"):
-            bd.discover_tenants()
+            bd.read_configmap_files()
 
     def test_missing_configmap_is_named(self, mock_run):
         """ConfigMap 不存在（`--ignore-not-found`：rc 0、stdout 空）→ 具名的呼叫端
@@ -132,18 +214,14 @@ class TestDiscoverTenants:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
         with pytest.raises(bd.CallerError, match="ConfigMap 'threshold-config' not found "
                                                  "in namespace 'monitoring'") as exc:
-            bd.discover_tenants()
+            bd.read_configmap_files()
         assert not isinstance(exc.value, bd.KubectlError)
         assert exc.value.reason == "configmap_not_found"
 
-    def test_empty_configmap(self, mock_run):
-        """空 ConfigMap 應返回空列表。"""
-        cm_data = {"data": {}}
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps(cm_data),
-        )
-        result = bd.discover_tenants()
-        assert result == []
+    def test_a_tree_without_tenants_has_none(self, mock_run):
+        """只有 `_defaults.yaml` 的 ConfigMap：沒有租戶（main 報 No tenants found）。"""
+        mock_run.return_value = _cm({"_defaults.yaml": _DEFAULTS})
+        assert _discover() == []
 
 
 class TestGenerateReport:
@@ -310,7 +388,7 @@ class TestRunDiagnoseForTenant:
 
     def test_healthy_result(self, monkeypatch):
         """正常診斷回傳 JSON 結果。"""
-        def mock_check(tenant, prom_url, *, out):
+        def mock_check(tenant, prom_url, *, out, chain=None):
             out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
         monkeypatch.setattr(bd, "diagnose_check", mock_check)
         result = bd.run_diagnose_for_tenant("db-a", "http://prom")
@@ -320,14 +398,14 @@ class TestRunDiagnoseForTenant:
 
     def test_empty_output(self, monkeypatch):
         """空輸出回傳 error 狀態。"""
-        monkeypatch.setattr(bd, "diagnose_check", lambda t, p, *, out: None)
+        monkeypatch.setattr(bd, "diagnose_check", lambda t, p, *, out, chain=None: None)
         result = bd.run_diagnose_for_tenant("db-a", "http://prom")
         assert result["status"] == "error"
         assert "empty output" in result["issues"][0]
 
     def test_exception_caught(self, monkeypatch):
         """例外回傳 error 狀態。"""
-        def mock_check(tenant, prom_url, *, out):
+        def mock_check(tenant, prom_url, *, out, chain=None):
             raise OSError("connection refused")
         monkeypatch.setattr(bd, "diagnose_check", mock_check)
         result = bd.run_diagnose_for_tenant("db-a", "http://prom")
@@ -349,7 +427,7 @@ class TestRunDiagnoseForTenant:
         """
         seen = []
 
-        def mock_check(tenant, prom_url, *, out):
+        def mock_check(tenant, prom_url, *, out, chain=None):
             seen.append(sys.stdout)
             out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
 
@@ -365,30 +443,30 @@ class TestRunDiagnoseForTenant:
         assert sys.stdout is before
 
 
-# ── discover_tenants JSON decode ──────────────────────────────────
+# ── read_configmap_files / resolve_tenants 邊際 ──────────────────────────────────
 
 
 class TestDiscoverTenantsEdge:
-    """discover_tenants() 邊際案例。"""
+    """read_configmap_files() / resolve_tenants() 邊際案例。"""
 
     def test_invalid_json(self, mock_run):
         """無效 JSON 是 KubectlError（#3349：以前回傳空清單）。"""
         mock_run.return_value = MagicMock(returncode=0, stdout="not json")
         with pytest.raises(bd.KubectlError, match="not JSON"):
-            bd.discover_tenants()
+            bd.read_configmap_files()
 
-    def test_non_yaml_keys_ignored(self, mock_run):
-        """非 .yaml 結尾的 key 被忽略。"""
-        cm_data = {"data": {"readme.txt": "info", "db-a.yaml": "tenants: {}"}}
-        mock_run.return_value = MagicMock(
-            returncode=0, stdout=json.dumps(cm_data))
-        result = bd.discover_tenants()
-        assert result == ["db-a"]
+    def test_non_yaml_keys_are_not_read(self, mock_run):
+        """非設定檔副檔名的 key，exporter 不讀，裡面的 `tenants:` 不算。"""
+        mock_run.return_value = _cm({
+            "_defaults.yaml": _DEFAULTS, "readme.txt": "tenants:\n  db-r: {}\n",
+            "db-a.yaml": "tenants:\n  db-a: {}\n"})
+        assert _discover() == ["db-a"]
 
 
 # ── main() CLI 測試 ─────────────────────────────────────────────
 
 
+@pytest.mark.usefixtures("configmap")
 class TestMainCLI:
     """main() CLI 整合測試。"""
 
@@ -462,18 +540,62 @@ class TestMainCLI:
     def test_no_tenants_exits(self, monkeypatch, cli_argv):
         """沒有 tenant 時 exit 2 (caller error: nothing to act on, #452)。"""
         cli_argv("batch_diagnose", "--tenants", "")
-        # Empty tenants string → discover from ConfigMap → mock empty
-        with patch.object(bd, "discover_tenants", return_value=[]):
-            with pytest.raises(SystemExit) as exc_info:
-                bd.main()
-            assert exc_info.value.code == 2  # EXIT_CALLER_ERROR (#452: no tenants found)
+        # Empty tenants string → every tenant of the ConfigMap → it has none
+        monkeypatch.setattr(bd, "read_configmap_files",
+                            lambda **kw: {"_defaults.yaml": _DEFAULTS.encode()})
+        with pytest.raises(SystemExit) as exc_info:
+            bd.main()
+        assert exc_info.value.code == 2  # EXIT_CALLER_ERROR (#452: no tenants found)
+
+    def test_each_tenant_carries_its_chain_from_the_configmap(self, monkeypatch, capsys,
+                                                              cli_argv):
+        """#1525 end to end through the real check(): the report's conf.d
+        side, empty in batch before, is each tenant's chain."""
+        import diagnose
+        monkeypatch.setattr(diagnose, "tenant_db_type", lambda *a: (None, None))
+        monkeypatch.setattr(diagnose, "query_prometheus", lambda *a: ([], None))
+        cli_argv("batch_diagnose", "--tenants", "db-a,db-b",
+                 "--prometheus", "http://prom:9090", "--json")
+        assert bd.main() == 0
+        doc = json.loads(capsys.readouterr().out)
+        for t in ("db-a", "db-b"):
+            chain = doc["tenants"][t]["inheritance_chain"]
+            assert [c["layer"] for c in chain["layers"]] == ["tenant"], chain
+            assert chain["layers"][0]["source"] == "tenants.yaml", chain
+
+    def test_a_tree_the_exporter_cannot_load_checks_no_tenant(self, monkeypatch, cli_argv):
+        """A broken ConfigMap stops the whole batch (rc 2) before any check —
+        not one `status: error` per tenant (rc 1)."""
+        monkeypatch.setattr(bd, "read_configmap_files", lambda **kw: {
+            **_cm_files(), "zzz.yaml": b"tenants:\n  db-z: [\n"})
+        ran = []
+        monkeypatch.setattr(bd, "run_diagnose_for_tenant", lambda *a, **k: ran.append(a))
+        cli_argv("batch_diagnose", "--prometheus", "http://prom:9090", "--json")
+        with refuses("zzz.yaml"):
+            bd.main()
+        assert ran == []
+
+    def test_a_named_tenant_the_configmap_lacks_exits_2(self, monkeypatch, cli_argv, capsys):
+        ran = []
+        monkeypatch.setattr(bd, "run_diagnose_for_tenant", lambda *a, **k: ran.append(a))
+        cli_argv("batch_diagnose", "--tenants", "db-a,nope", "--json")
+        with pytest.raises(bd.TenantNotFoundError, match="'nope'"):
+            bd.main()
+        assert ran == []
+
+    def test_a_tenants_flag_naming_none_exits(self, cli_argv):
+        """`--tenants ,` names no tenant: not read as "every tenant"."""
+        cli_argv("batch_diagnose", "--tenants", ",", "--dry-run")
+        with pytest.raises(SystemExit) as exc_info:
+            bd.main()
+        assert exc_info.value.code == 2
 
     def test_json_output(self, monkeypatch, capsys, cli_argv):
         """--json 輸出 JSON 格式。"""
         cli_argv("batch_diagnose", "--tenants", "db-a",
             "--prometheus", "http://prom:9090", "--json")
 
-        def mock_run_for_tenant(tenant, prom_url, timeout=30):
+        def mock_run_for_tenant(tenant, prom_url, timeout=30, chain=None):
             return {"tenant": tenant, "status": "healthy",
                     "elapsed_seconds": 0.1}
 
@@ -490,7 +612,7 @@ class TestMainCLI:
         cli_argv("batch_diagnose", "--tenants", "db-a",
             "--prometheus", "http://prom:9090")
 
-        def mock_run_for_tenant(tenant, prom_url, timeout=30):
+        def mock_run_for_tenant(tenant, prom_url, timeout=30, chain=None):
             return {"tenant": tenant, "status": "healthy",
                     "operational_mode": "normal", "elapsed_seconds": 0.5}
 
@@ -508,7 +630,7 @@ class TestMainCLI:
             "--prometheus", "http://prom:9090",
             "--output", str(out_file))
 
-        def mock_run_for_tenant(tenant, prom_url, timeout=30):
+        def mock_run_for_tenant(tenant, prom_url, timeout=30, chain=None):
             return {"tenant": tenant, "status": "healthy",
                     "operational_mode": "normal", "elapsed_seconds": 0.5}
 
@@ -524,7 +646,7 @@ class TestMainCLI:
         cli_argv("batch_diagnose", "--tenants", "db-a",
             "--prometheus", "http://prom:9090", "--json")
 
-        def mock_run_for_tenant(tenant, prom_url, timeout=30):
+        def mock_run_for_tenant(tenant, prom_url, timeout=30, chain=None):
             raise RuntimeError("boom")
 
         monkeypatch.setattr(bd, "run_diagnose_for_tenant",
@@ -538,8 +660,6 @@ class TestMainCLI:
         """不指定 --tenants 時自動探索（清單走 stderr，#1112）。"""
         cli_argv("batch_diagnose", "--prometheus", "http://prom:9090",
             "--dry-run")
-        monkeypatch.setattr(bd, "discover_tenants",
-                            lambda **kw: ["db-a", "db-b"])
         bd.main()
         err = capsys.readouterr().err
         assert "db-a" in err
@@ -555,7 +675,7 @@ class TestMainCLI:
         cli_argv("batch_diagnose", "--tenants", "db-a", "--json")
         captured = {}
 
-        def mock_run(tenant, prom_url, timeout=30):
+        def mock_run(tenant, prom_url, timeout=30, chain=None):
             captured["url"] = prom_url
             return {"tenant": tenant, "status": "healthy", "elapsed_seconds": 0.1}
 
@@ -569,7 +689,7 @@ class TestMainCLI:
         cli_argv("batch_diagnose", "--tenants", "db-a", "--json")
         captured = {}
 
-        def mock_run(tenant, prom_url, timeout=30):
+        def mock_run(tenant, prom_url, timeout=30, chain=None):
             captured["url"] = prom_url
             return {"tenant": tenant, "status": "healthy", "elapsed_seconds": 0.1}
 
@@ -587,18 +707,24 @@ class TestDiscoverTenantsSpellingMatchesTheProducer:
     rule, so both spellings ship; a narrower set here would report a smaller
     tenant set than what is deployed. Bounded on both sides below.
 
-    ⚠️ The coupling is to that RULE, not to how either side is wired: both
-    now take it from Go (`pkg/confdname`; here `da-guard parse-tree --names`,
-    #3206). This docstring once said "globs `conf.d/` straight into
-    `--from-file`" long after the glob was gone (#1792/#1796), which is a
-    reader of this file being told the wrong thing about why the two sides
-    have to agree.
+    #1525: the tenants are now the ones the exporter reads from those files
+    (`da-guard effective` on the ConfigMap written out as a tree), so which
+    key is read and what id a file declares are both Go's answer; the cases
+    below pin that answer, each file declaring a tenant named after its stem
+    unless said otherwise.
     """
 
-    def _discover(self, monkeypatch, keys):
-        cm = {"data": {k: "tenants: {}" for k in keys}}
-        monkeypatch.setattr(bd, "kubectl_get", lambda *a, **k: cm)
-        return bd.discover_tenants()
+    @staticmethod
+    def _discover(monkeypatch, keys, bodies=None):
+        bodies = bodies or {}
+        data = {}
+        for k in keys:
+            stem = k.rsplit(".", 1)[0]
+            data[k] = bodies.get(k, _DEFAULTS if k == "_defaults.yaml"
+                                 else "profiles:\n  p:\n    cpu: 1\n" if k.startswith("_")
+                                 else f"tenants:\n  {stem}: {{}}\n")
+        monkeypatch.setattr(bd, "kubectl_get", lambda *a, **k: {"data": data})
+        return _discover()
 
     def test_yml_key_is_a_tenant(self, monkeypatch):
         """LOWER + CONTROL."""
@@ -614,15 +740,19 @@ class TestDiscoverTenantsSpellingMatchesTheProducer:
              "x.yang", "plain.y"])
         assert got == ["db-a"]
 
-    def test_a_same_stem_pair_counts_once_and_says_so(self, monkeypatch, capsys):
-        """Accepting both spellings made one stem reachable through two keys.
-        A ConfigMap in that state makes the exporter reject the ENTIRE config
-        dir, so counting `db-a` twice — or de-duplicating it quietly — would
-        both be misleading. Counted once, and named on stderr."""
-        got = self._discover(
-            monkeypatch, ["_defaults.yaml", "db-a.yaml", "db-a.yml"])
-        assert got == ["db-a"]
-        assert "db-a" in capsys.readouterr().err
+    def test_a_tenant_declared_under_both_spellings_refuses_the_tree(self, monkeypatch):
+        """`db-a.yaml` + `db-a.yml` both declaring `db-a`: the exporter rejects
+        the ENTIRE config dir (duplicate tenant ID). It used to be counted once
+        here and the batch ran on; now the run is refused (rc 2 in main)."""
+        with pytest.raises(DaGuardError, match="duplicate tenant ID"):
+            self._discover(monkeypatch, ["_defaults.yaml", "db-a.yaml", "db-a.yml"])
+
+    def test_a_same_stem_pair_declaring_two_ids_is_two_tenants(self, monkeypatch):
+        """Must-fire for the case above: same stem, different ids — both are
+        served, and the old stem rule reported only `db-a`."""
+        got = self._discover(monkeypatch, ["_defaults.yaml", "db-a.yaml", "db-a.yml"],
+                             {"db-a.yml": "tenants:\n  db-x: {}\n"})
+        assert got == ["db-a", "db-x"]
 
     def test_reserved_keys_stay_out_in_both_spellings(self, monkeypatch):
         """The `_` filter is orthogonal to the spelling and must survive it."""
@@ -632,17 +762,16 @@ class TestDiscoverTenantsSpellingMatchesTheProducer:
         assert got == ["db-a", "db-b"]
 
     def test_upper_case_key_keeps_its_case_as_go_names_it(self, monkeypatch):
-        """The tenant id is Go's `tenant_named` (case kept), not a fold."""
+        """The tenant id is the one the file declares (case kept), not a fold."""
         got = self._discover(monkeypatch, ["_defaults.yaml", "Tenant-Q.YAML"])
         assert got == ["Tenant-Q"]
 
-    def test_no_da_guard_finds_no_tenant_and_says_why(self, monkeypatch, tmp_path, capsys):
-        """No usable da-guard: the keys are not classed, so no tenant is
-        reported (main: `No tenants found`, exit 2) — never a Python guess."""
+    def test_no_da_guard_refuses_the_run(self, monkeypatch, tmp_path):
+        """No usable da-guard: no tenant list at all (rc 2 in main, named) —
+        never a Python guess, and no longer `No tenants found`."""
         monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
-        got = self._discover(monkeypatch, ["_defaults.yaml", "db-a.yaml"])
-        assert got == []
-        assert "da-guard parse-tree" in capsys.readouterr().err
+        with pytest.raises(DaGuardNotFoundError):
+            self._discover(monkeypatch, ["_defaults.yaml", "db-a.yaml"])
 
 
 # ── unchecked 不算健康（issue 1513，本輪決策 N2 的後續）─────────────
@@ -683,6 +812,7 @@ _PROM_FAIL = {"status": "error",
 _OTHER_FAIL = {"status": "error", "issues": ["exporter down"]}
 
 
+@pytest.mark.usefixtures("configmap")
 class TestExitCode:
     """#2493：租戶檢查失敗原本也回 0，拿它當 CI 閘門永遠放行。
 
@@ -705,7 +835,7 @@ class TestExitCode:
                  "--prometheus", "http://prom:9090", "--json")
         monkeypatch.setattr(
             bd, "run_diagnose_for_tenant",
-            lambda tenant, prom_url, timeout=30: {"tenant": tenant,
+            lambda tenant, prom_url, timeout=30, chain=None: {"tenant": tenant,
                                                   **by_tenant[tenant]})
         assert bd.main() == want
         json.loads(capsys.readouterr().out)   # the report is still printed
@@ -716,12 +846,14 @@ class TestExitCode:
 
     def test_the_process_exit_code_carries_it(self, tmp_path):
         """端到端：票上的重現指令，Prometheus 連不上必須是 rc 2，不是 0。"""
+        cm = {"data": {k: v.decode() for k, v in _cm_files().items()}}
+        path = _fake_kubectl(tmp_path, 0, stdout=json.dumps(cm))
         script = Path(bd.__file__)
         r = subprocess.run(
             [sys.executable, str(script), "--tenants", "t1",
              "--prometheus", "http://127.0.0.1:1", "--json"],
             capture_output=True, timeout=120, cwd=str(tmp_path),
-            env={**os.environ, "PROMETHEUS_URL": ""})
+            env={**os.environ, "PROMETHEUS_URL": "", "PATH": path})
         assert r.returncode == 2, r.stderr.decode("utf-8", "replace")[-600:]
         doc = json.loads(r.stdout.decode("utf-8"))
         assert doc["tenants"]["t1"]["status"] == "error"
@@ -729,7 +861,7 @@ class TestExitCode:
     def test_missing_kubectl_is_2_as_in_diagnose(self, monkeypatch, capsys,
                                                  cli_argv):
         """`da-tools diagnose` alone exits 2 without kubectl; batch must too."""
-        def no_kubectl(tenant, prom_url, out=None):
+        def no_kubectl(tenant, prom_url, out=None, chain=None):
             raise bd.KubectlError("`kubectl get pods` in namespace 't1': kubectl is not on PATH")
         monkeypatch.setattr(bd, "diagnose_check", no_kubectl)
         cli_argv("batch_diagnose", "--tenants", "t1",
@@ -760,7 +892,7 @@ class TestExitCode:
         cli_argv("batch_diagnose", "--tenants", "t1", "--workers", "3",
                  "--prometheus", "http://prom:9090", "--json")
         monkeypatch.setattr(bd, "run_diagnose_for_tenant",
-                            lambda tenant, prom_url, timeout=30:
+                            lambda tenant, prom_url, timeout=30, chain=None:
                             {"tenant": tenant, "status": "healthy"})
         assert bd.main() == 0
         json.loads(capsys.readouterr().out)
@@ -786,6 +918,19 @@ class TestDiscoveryWithoutAnAnswer:
         assert "kubectl get configmap threshold-config" in r.stderr and "Forbidden" in r.stderr
         assert json.loads(r.stdout)["reason"] == "kubectl_error"
 
+    def test_a_configmap_the_exporter_rejects_exits_2(self, tmp_path, da_guard_env):
+        """#1525: one tenant in two keys — the exporter rejects the whole tree,
+        so the batch stops (rc 2, da-guard's reason), it does not run on."""
+        cm = {"data": {"_defaults.yaml": _DEFAULTS,
+                       "db-a.yaml": "tenants:\n  db-a: {}\n",
+                       "db-a.yml": "tenants:\n  db-a: {}\n"}}
+        path = _fake_kubectl(tmp_path, 0, stdout=json.dumps(cm))
+        r = _batch_cli(tmp_path, path, "--prometheus", "http://127.0.0.1:1", "--json")
+        assert r.returncode == 2, r.stdout + r.stderr
+        assert "Traceback" not in r.stderr
+        assert "duplicate tenant ID" in r.stderr
+        assert json.loads(r.stdout)["reason"] == "served_values_unavailable"
+
     def test_a_missing_configmap_exits_2_naming_it(self, tmp_path):
         path = _fake_kubectl(tmp_path, 0)   # --ignore-not-found: rc 0, nothing on stdout
         r = _batch_cli(tmp_path, path, "--prometheus", "http://127.0.0.1:1", "--json")
@@ -804,7 +949,7 @@ class TestPerTenantTimeout:
 
     @staticmethod
     def _slow(seconds):
-        def check(tenant, prom_url, *, out):
+        def check(tenant, prom_url, *, out, chain=None):
             time.sleep(seconds)
             out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
         return check
@@ -827,12 +972,13 @@ class TestPerTenantTimeout:
     def test_an_unexpected_exception_still_reaches_main(self, monkeypatch):
         """Moving the check into a thread must not swallow what main() used to
         catch from future.result() ("executor error")."""
-        def boom(tenant, prom_url, *, out):
+        def boom(tenant, prom_url, *, out, chain=None):
             raise RuntimeError("boom")
         monkeypatch.setattr(bd, "diagnose_check", boom)
         with pytest.raises(RuntimeError, match="boom"):
             bd.run_diagnose_for_tenant("db-a", "http://prom", timeout_sec=5)
 
+    @pytest.mark.usefixtures("configmap")
     def test_cli_timeout_ends_the_run_with_2(self, monkeypatch, capsys, cli_argv):
         """End to end: --timeout reaches the check, and a tenant that could not
         be checked in time is an environment failure (rc 2, as a missing

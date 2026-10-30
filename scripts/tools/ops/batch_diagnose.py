@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """batch_diagnose.py — Post-cutover multi-tenant health report.
 
-Auto-discovers all tenants from the threshold-config ConfigMap and runs
-diagnose checks on each in parallel, producing a unified health report.
+Reads the threshold-config ConfigMap — the conf.d threshold-exporter mounts —
+as a tree, takes its tenants and each one's inheritance chain from
+threshold-exporter's own reading of it (`da-guard`, #1525), and runs diagnose
+checks on each in parallel, producing a unified health report.
 
 Usage:
   # Auto-discover tenants, parallel health check
@@ -21,13 +23,19 @@ Usage:
   python3 batch_diagnose.py --output /tmp/health-report.json
 
 需求:
-  - kubectl 可用且 ConfigMap threshold-config 存在（auto-discover 模式）
+  - kubectl 可用且 ConfigMap threshold-config 存在（兩種模式都讀它；--tenants 只挑其中的租戶）
+  - da-guard（映像內建）
   - Prometheus Query API 可達（health check 模式）
 """
 import argparse
+import base64
+import binascii
+import contextlib
 import json
 import os
 import sys
+import re
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -40,6 +48,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from diagnose import check as diagnose_check  # noqa: E402
+from diagnose import TenantNotFoundError, chain_for, load_chain_source  # noqa: E402  (#1525)
 from diagnose import query_prometheus  # noqa: E402
 from diagnose import exit_code as diagnose_exit_code  # noqa: E402  (#2493)
 from _lib_kubectl import KubectlError, kubectl_get  # noqa: E402  (#3349)
@@ -53,7 +62,9 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError,
     arm_crash_envelope, disarm_crash_envelope,
 )
-import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 9, #3206: Go classes the keys)
+import _lib_parse_cache  # noqa: E402  (#1525: exit_on_parse_tree_error)
+from _lib_io import safe_label  # noqa: E402
+from _lib_tenant_values import exit_on_served_values_error  # noqa: E402  (#1525)
 
 
 # #2954: per-tenant deadline. diagnose.check() makes up to four Prometheus
@@ -65,86 +76,92 @@ import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 9, #3206: Go classes the
 DEFAULT_TIMEOUT_S = 60
 
 
-def discover_tenants(namespace="monitoring", configmap="threshold-config"):
-    """Discover tenant names from threshold-config ConfigMap keys.
+#: A ConfigMap key Kubernetes accepts (`[-._a-zA-Z0-9]+`, not `.`/`..`):
+#: anything else would be written outside the tree below, so it is refused.
+_CM_KEY = re.compile(r"[-._a-zA-Z0-9]+")
 
-    Returns sorted list of tenant IDs (excludes _defaults.yaml and
-    other reserved keys starting with '_').
+
+def read_configmap_files(namespace="monitoring", configmap="threshold-config"):
+    """The ConfigMap's files, ``{key: bytes}`` — `data` and `binaryData`, as
+    the kubelet mounts both into threshold-exporter's conf.d.
 
     #3349: a read that got no answer (forbidden, unreachable, no kubectl, out
-    of time) raises `KubectlError` (rc 2, named) — it used to return [] and
-    end as "No tenants found"; a ConfigMap that is not there is named too.
+    of time) raises `KubectlError` (rc 2, named); a ConfigMap that is not
+    there is named too (`configmap_not_found`).
     """
     cm_data = kubectl_get("configmap", configmap, namespace=namespace, timeout=15)
     if cm_data is None:
         # kubectl answered: the ConfigMap is not there — not a kubectl_error.
         raise CallerError(f"ConfigMap {configmap!r} not found in namespace {namespace!r}: "
-                          "nothing to discover tenants from (or pass --tenants)",
+                          "nothing to read the tenants from",
                           reason="configmap_not_found")
-
-    # #1588: the carrier here is a ConfigMap KEY, not a directory entry —
-    # but the key names ARE the conf.d filenames, so this is the same
-    # filename->tenant-id question the exporter's scanner answers, asked on
-    # a different carrier. It was answered with yet another hand-written
-    # copy of the rule, and a case-SENSITIVE one: measured with a synthetic
-    # ConfigMap holding one tenant key, `db-a.yaml` -> ['db-a'] while
-    # `DB-A.YAML` -> [], i.e. every tenant in the report vanished and the
-    # run still exited 0.
-    #
-    # #1603: match the PRODUCER. `threshold-config` is built from a conf.d
-    # by `scripts/ops/configmap_assemble.py` (what `make configmap-assemble`
-    # runs), so its keys are conf.d filenames. A narrower set here
-    # reproduces the original defect one hop downstream: a tenant set
-    # smaller than what is deployed.
-    #
-    # ⛔ What each key IS is Go's answer, not a Python name predicate
-    # (ADR-036 §7 step 9, #3206): `da-guard parse-tree --list-only --names`
-    # classes each key by its name alone, by the exporter's own rule
-    # (`confdname`, case-insensitive suffix — the producer's selection,
-    # #1792). A key of class `tenant` carries the tenant id Go names
-    # (`tenant_named`, case kept); `_`-prefixed keys (defaults / platform)
-    # and names that are not config files are not tenants.
-    data_keys = [k for k in cm_data.get("data", {}) if isinstance(k, str)]
-    try:
-        named = _lib_parse_tree.classify_names(data_keys) if data_keys else {}
-    except _lib_parse_tree.ParseTreeError as exc:
-        print(f"ERROR: cannot class the ConfigMap keys through `da-guard parse-tree "
-              f"--names` (ADR-036): {' '.join(str(exc).split())}", file=sys.stderr)
-        return []
-    tenants = []
-    for key in data_keys:
-        entry = named[key]
-        if entry.cls == "hidden":
-            # The exporter's walk skips a hidden name, so agreeing with it is
-            # right — but a dropped key must not be silent: the symptom of
-            # the bug above was a tenant quietly missing from the report.
-            print(f"WARNING: ConfigMap key {key!r} carries no tenant id — "
-                  f"skipped", file=sys.stderr)
-            continue
-        if entry.cls != "tenant":
-            continue
-        tenant = entry.tenant_named
-        if tenant in tenants:
-            # Only reachable since this site started accepting both spellings:
-            # `db-a.yaml` + `db-a.yml` are two keys, one stem.
-            # ⛔ Says only what it knows. This tool identifies tenants by KEY
-            # NAME; the exporter's own predicate is "one id declared in two
-            # files", and an id comes from the file's `tenants:` mapping, not
-            # from its stem (`validate_config` states this explicitly). So two
-            # same-stem keys may or may not be a duplicate declaration — what
-            # is certain is that this report can only count the stem once.
-            print(f"WARNING: ConfigMap keys collapse to one tenant id here — "
-                  f"{key!r} repeats {tenant!r}; counted once. This report "
-                  f"names tenants by key, so check those two keys by hand",
-                  file=sys.stderr)
-            continue
-        tenants.append(tenant)
-    return sorted(tenants)
+    files = {}
+    for section in ("data", "binaryData"):
+        for key, value in (cm_data.get(section) or {}).items():
+            if (not isinstance(key, str) or not _CM_KEY.fullmatch(key)
+                    or key in (".", "..") or not isinstance(value, str)):
+                raise CallerError(f"ConfigMap {configmap!r}: {section} key "
+                                  f"{safe_label(str(key))!r} is not a file this tool can "
+                                  "write as the exporter would mount it",
+                                  reason="configmap_unreadable")
+            if section == "data":
+                files[key] = value.encode("utf-8")
+                continue
+            try:
+                files[key] = base64.b64decode(value, validate=True)
+            except (binascii.Error, ValueError):
+                raise CallerError(f"ConfigMap {configmap!r}: binaryData key {key!r} "
+                                  "is not base64", reason="configmap_unreadable") from None
+    return files
 
 
-def _check_tenant(tenant, prom_url):
+@contextlib.contextmanager
+def configmap_tree(files, configmap="threshold-config"):
+    """The ConfigMap written out as the flat conf.d threshold-exporter mounts
+    (one file per key), in a temporary directory removed on exit."""
+    with tempfile.TemporaryDirectory(prefix="batch-diagnose-") as tmp:
+        root = os.path.join(tmp, configmap)
+        os.mkdir(root)
+        for key, body in files.items():
+            with open(os.path.join(root, key), "xb") as fh:
+                fh.write(body)
+        yield root
+
+
+def resolve_tenants(files, requested=None, *, where="ConfigMap threshold-config",
+                    configmap="threshold-config"):
+    """``(tenants, chains)`` from the ConfigMap's files, answered by
+    threshold-exporter's own reading of them (`da-guard`, #1525).
+
+    ⛔ The tenant ids are Go's: the ids the files' `tenants:` mappings
+    declare, not the key names. A key named `team-x.yaml` declaring `db-a`
+    and `db-b` used to be reported as tenant `team-x`, and both real tenants
+    were missing from the report. A tree the exporter cannot load raises
+    (rc 2 through main's decorators), so no tenant is checked against a
+    partial read. *requested* (``--tenants``) picks among them; a name the
+    tree does not have raises `TenantNotFoundError` naming every one.
+    Each tenant's chain is resolved here, in the main thread, before any
+    health check runs.
+    """
+    with configmap_tree(files, configmap) as root:
+        source = load_chain_source(root, where=where)
+        known = sorted(source.effective.tenants)
+        if requested is not None:
+            absent = [t for t in requested if t not in source.effective.tenants]
+            if absent:
+                raise TenantNotFoundError(
+                    f"no tenant {', '.join(repr(safe_label(t)) for t in absent)} in "
+                    f"{where}: threshold-exporter reads {len(known)} tenant(s) there")
+            tenants = list(dict.fromkeys(requested))
+        else:
+            tenants = known
+        return tenants, {t: chain_for(t, source) for t in tenants}
+
+
+def _check_tenant(tenant, prom_url, chain=None):
     """diagnose.check() for one tenant, as a result dict (never raises for the
-    failures diagnose itself can report)."""
+    failures diagnose itself can report). *chain*: the tenant's chain,
+    already resolved (`resolve_tenants`)."""
     import io
 
     try:
@@ -157,7 +174,7 @@ def _check_tenant(tenant, prom_url):
         # exits 0 having printed nothing. Measured before this fix: 91 of 100
         # runs of `batch_diagnose --tenants a,b --json` produced empty stdout.
         buf = io.StringIO()
-        diagnose_check(tenant, prom_url, out=buf)
+        diagnose_check(tenant, prom_url, out=buf, chain=chain)
         output = buf.getvalue().strip()
         if output:
             result = json.loads(output)
@@ -175,7 +192,7 @@ def _check_tenant(tenant, prom_url):
     return result
 
 
-def run_diagnose_for_tenant(tenant, prom_url, timeout_sec=30):
+def run_diagnose_for_tenant(tenant, prom_url, timeout_sec=30, chain=None):
     """Run diagnose.check() for a single tenant, giving up after timeout_sec.
 
     Returns dict: {tenant, status, ...}; status "error" when the check could
@@ -209,7 +226,7 @@ def run_diagnose_for_tenant(tenant, prom_url, timeout_sec=30):
             # ⚠️ Set here, in the tenant's own thread: a new thread does not
             # inherit the context of the thread that started it.
             with diagnose_deadline(start + timeout_sec, grace=grace):
-                box["result"] = _check_tenant(tenant, prom_url)
+                box["result"] = _check_tenant(tenant, prom_url, chain)
         except BaseException as exc:  # noqa: BLE001 — re-raised in the caller below
             box["exc"] = exc
 
@@ -364,6 +381,8 @@ def batch_exit_code(results, environment_errors=()) -> int:
     return EXIT_OK
 
 
+@exit_on_served_values_error  # #1525: a tree the exporter cannot load → rc 2, named
+@_lib_parse_cache.exit_on_parse_tree_error
 def main():
     """CLI entry point: Post-cutover multi-tenant health report."""
     parser = argparse.ArgumentParser(
@@ -371,7 +390,8 @@ def main():
     )
     parser.add_argument(
         "--tenants",
-        help="Comma-separated tenant IDs (default: auto-discover from ConfigMap)",
+        help="Comma-separated tenant IDs, each one the ConfigMap must declare "
+             "(default: every tenant it declares)",
     )
     add_prometheus_arg(
         parser,
@@ -420,14 +440,12 @@ def main():
             "recommendations": [],
         })
 
-    # Discover or parse tenants
-    if args.tenants:
-        tenants = [t.strip() for t in args.tenants.split(",") if t.strip()]
-    else:
-        tenants = discover_tenants(
-            namespace=args.namespace,
-            configmap="threshold-config",
-        )
+    # #1525: both modes read the ConfigMap; --tenants picks among its tenants.
+    requested = ([t.strip() for t in args.tenants.split(",") if t.strip()]
+                 if args.tenants else None)
+    tenants, chains = resolve_tenants(
+        read_configmap_files(namespace=args.namespace, configmap="threshold-config"),
+        requested, where=f"ConfigMap {args.namespace}/threshold-config")
 
     if not tenants:
         print("ERROR: No tenants found", file=sys.stderr)
@@ -470,6 +488,7 @@ def main():
         futures = {
             executor.submit(
                 run_diagnose_for_tenant, tenant, args.prometheus, args.timeout,
+                chains[tenant],
             ): tenant
             for tenant in tenants
         }

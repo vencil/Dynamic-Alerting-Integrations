@@ -345,6 +345,8 @@ da-tools diagnose db-a --config-dir ./conf.d
 
 **用途**：遷移完成後的定期健檢；快速掃描整個平台狀態。
 
+**租戶與繼承鏈從哪裡來**（[#1525](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1525)）：兩種模式都讀 `--namespace` 裡的 ConfigMap `threshold-config`（threshold-exporter 掛成 conf.d 的那一份，`data` 與 `binaryData` 都算），把它落成暫存樹，用 da-guard 一次讀完：租戶清單是 exporter 實際服務的租戶（檔內 `tenants:` 宣告的 id，不是 ConfigMap key 的檔名），每個租戶的輸出都附 `inheritance_chain`（與 `diagnose --config-dir` 相同）。exporter 讀不了的樹（壞檔、同一租戶宣告在兩個檔等）整批結束碼 2，不檢查任何租戶。需要 da-guard（映像內建）。ConfigMap 更新後，exporter 要等 kubelet 同步（約一分鐘）才熱載，這段期間報告依的是 ConfigMap 而非 exporter 當下載入的版本。⚠️ v2.9.0 映像仍以 key 名推租戶、不附繼承鏈，`--tenants` 模式不讀 ConfigMap。 <!-- image-caveat: v2.9.0 -->
+
 **語法**
 
 ```bash
@@ -355,13 +357,13 @@ da-tools batch-diagnose [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--tenants <LIST>` | 逗號分隔租戶列表（若不指定則自動探索） | （自動） |
+| `--tenants <LIST>` | 逗號分隔租戶列表，每個都必須是 ConfigMap 宣告的租戶，否則結束碼 2（`tenant_not_found`，逐一點名）；不指定則檢查 ConfigMap 的全部租戶 | （全部） |
 | `--workers <N>` | 並行診斷執行緒數 | `5` |
 | `--timeout <SEC>` | 單一租戶檢查的期限（秒）：到期仍未完成的租戶記為 `error`（`timed out after …s`），整批不再等它。須大於 0、可帶小數。預設值大於 diagnose 最多 4 次 Prometheus 查詢（每次 10 秒上限）的總和，Prometheus 卡住時仍能回報具體原因（[#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)）。期限也傳到檢查裡的每次呼叫：`kubectl` 在期限前稍早（`min(0.5 秒, --timeout/4)`）被終止，不會在整批結束後留下行程（`--timeout` 很短（低於約 0.5 秒）或機器負載高時不保證）；期限已過就不再啟動 `kubectl` 或送出 Prometheus 查詢（[#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)） | `60` |
 | `-o, --output <FILE>` | 另把 JSON 報告寫到檔案；stdout 照樣印報告 | （無） |
 | `--json` | stdout 只印 JSON，不印文字報告 | false |
 | `--dry-run` | 僅列出租戶，不執行檢查 | false |
-| `--namespace <NS>` | K8s namespace（auto-discover 用） | `monitoring` |
+| `--namespace <NS>` | `threshold-config` ConfigMap 所在的 namespace | `monitoring` |
 | `--prometheus <URL>` | Prometheus Query API URL。`da-tools` 映像在沒給這個旗標時以 `$PROMETHEUS_URL` 補上 | `$PROMETHEUS_URL`，否則 `http://localhost:9090` |
 
 **輸出**
@@ -381,7 +383,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 |------|------|
 | `0` | 所有租戶都是 `healthy` 或 `unchecked`（含 `--dry-run`） |
 | `1` | 一個或多個租戶檢查失敗（看輸出裡各租戶的 `status` 與 `issues`） |
-| `2` | 呼叫端錯誤：參數錯誤（含 `--workers` 小於 1、`--timeout` 不大於 0）、任一租戶的 Prometheus 查詢失敗、缺少 `kubectl` 或 `kubectl` 在時限內沒回應，或在 `--timeout` 內沒檢查完（優先於 `1`，與單跑 `diagnose` 一致），或 `-o/--output` 指到的輸出路徑寫不進去（#1641） |
+| `2` | 呼叫端錯誤：參數錯誤（含 `--workers` 小於 1、`--timeout` 不大於 0）、任一租戶的 Prometheus 查詢失敗、缺少 `kubectl` 或 `kubectl` 在時限內沒回應，或在 `--timeout` 內沒檢查完（優先於 `1`，與單跑 `diagnose` 一致），或 `-o/--output` 指到的輸出路徑寫不進去（#1641）；讀不到 ConfigMap（`kubectl_error`／`configmap_not_found`）、key 不是可掛載的檔名或 `binaryData` 不是 base64（`configmap_unreadable`）、exporter 讀不了那棵樹（共用的拒絕或 `served_values_unavailable`），或 `--tenants` 有 ConfigMap 沒有的租戶（`tenant_not_found`）——這幾種在任何租戶檢查之前就停（[#1525](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1525)） |
 
 ⚠️ v2.9.0 映像還沒有這套結束碼：租戶檢查失敗與 Prometheus 查詢失敗都回 `0`。用 v2.9.0 時請讀輸出裡各租戶的 `status`。 <!-- image-caveat: v2.9.0 -->
 

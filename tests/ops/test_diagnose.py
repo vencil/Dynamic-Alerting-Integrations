@@ -1197,3 +1197,9 @@ class TestGivenConfigDirIsNeverSilent:
             buf = io.StringIO()
             doc = diagnose.check("db-a", "http://prom", config_dir=target, out=buf)
             assert "inheritance_chain" in doc, doc
+
+    def test_check_takes_a_chain_or_a_dir_not_both(self, tmp_path):
+        """#1525: batch-diagnose hands check() a chain it resolved once."""
+        with pytest.raises(TypeError):
+            diagnose.check("db-a", "http://prom", config_dir=self._tree(tmp_path),
+                           chain={}, out=io.StringIO())

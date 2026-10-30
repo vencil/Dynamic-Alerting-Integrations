@@ -344,6 +344,8 @@ Run parallel health checks on all tenants.
 
 **Purpose**: Post-migration regular health checks; quick platform-wide status scan.
 
+**Where the tenants and their chains come from** ([#1525](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1525)): both modes read the ConfigMap `threshold-config` in `--namespace` (the one threshold-exporter mounts as its conf.d, `data` and `binaryData` alike), write it out as a temporary tree and read it once with da-guard: the tenants are the ones the exporter serves (the ids the files' `tenants:` declare, not the ConfigMap key names), and every tenant's result carries `inheritance_chain` (as `diagnose --config-dir` does). A tree the exporter cannot load (a broken file, one tenant declared in two files, …) ends the batch with exit 2 before any tenant is checked. Needs da-guard (shipped in the image). After a ConfigMap update the exporter reloads only once the kubelet syncs it (about a minute); in that window the report follows the ConfigMap, not what the exporter has loaded. ⚠️ The v2.9.0 image still derives tenants from key names, attaches no chain, and does not read the ConfigMap with `--tenants`. <!-- image-caveat: v2.9.0 -->
+
 **Syntax**
 
 ```bash
@@ -358,13 +360,13 @@ None (auto-discover tenants).
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--tenants <LIST>` | Comma-separated tenant list (if omitted, auto-discover) | (auto) |
+| `--tenants <LIST>` | Comma-separated tenant list; each must be a tenant the ConfigMap declares, else exit 2 (`tenant_not_found`, each one named); if omitted, every tenant the ConfigMap declares | (all) |
 | `--workers <N>` | Number of parallel diagnosis threads | `5` |
 | `--timeout <SEC>` | Deadline in seconds for one tenant's check: a tenant still being checked then is recorded as `error` (`timed out after …s`) and the batch stops waiting for it. Must be above 0, fractions allowed. The default outlasts diagnose's up to four Prometheus queries (10s limit each), so a stuck Prometheus is still reported as such ([#2954](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2954)). The deadline reaches every call inside the check: `kubectl` is stopped slightly before it (`min(0.5s, --timeout/4)`), so no process is left behind after the batch ends (not guaranteed with a very short `--timeout`, below about 0.5s, or on a heavily loaded machine), and past the deadline no `kubectl` is started and no Prometheus query is sent ([#2968](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2968)) | `60` |
 | `-o, --output <FILE>` | Also write the JSON report to a file; the report still goes to stdout | (none) |
 | `--json` | Print only JSON on stdout, no text report | false |
 | `--dry-run` | Only list tenants, don't run checks | false |
-| `--namespace <NS>` | K8s namespace (for auto-discover) | `monitoring` |
+| `--namespace <NS>` | Namespace of the `threshold-config` ConfigMap | `monitoring` |
 | `--prometheus <URL>` | Prometheus Query API URL. The `da-tools` image fills it in from `$PROMETHEUS_URL` when the flag is not given | `$PROMETHEUS_URL`, else `http://localhost:9090` |
 
 **Output**
@@ -384,7 +386,7 @@ da-tools batch-diagnose --tenants db-a,db-b,db-c --output report.json
 |------|-------------|
 | `0` | Every tenant is `healthy` or `unchecked` (including `--dry-run`) |
 | `1` | One or more tenant checks failed (see each tenant's `status` and `issues` in the output) |
-| `2` | Caller error: bad arguments (including `--workers` below 1 and `--timeout` not above 0), a failed Prometheus query, a missing `kubectl`, a `kubectl` that does not answer in time, or a check not finished within `--timeout` for any tenant (takes precedence over `1`, as `diagnose` alone does), or the output path given to `-o/--output` cannot be written (#1641) |
+| `2` | Caller error: bad arguments (including `--workers` below 1 and `--timeout` not above 0), a failed Prometheus query, a missing `kubectl`, a `kubectl` that does not answer in time, or a check not finished within `--timeout` for any tenant (takes precedence over `1`, as `diagnose` alone does), or the output path given to `-o/--output` cannot be written (#1641); the ConfigMap cannot be read (`kubectl_error` / `configmap_not_found`), has a key that is not a mountable file name or `binaryData` that is not base64 (`configmap_unreadable`), holds a tree the exporter cannot load (the shared refusal or `served_values_unavailable`), or `--tenants` names a tenant it does not declare (`tenant_not_found`) — each stops before any tenant is checked ([#1525](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1525)) |
 
 ⚠️ The v2.9.0 image does not have these exit codes yet: a failed tenant check and a failed Prometheus query both return `0`. On v2.9.0, read each tenant's `status` in the output. <!-- image-caveat: v2.9.0 -->
 
