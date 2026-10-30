@@ -4323,6 +4323,118 @@ def _existing_tag(kind: str, is_zh: bool) -> str:
     }[kind]
 
 
+class _Stale(NamedTuple):
+    """Files init wrote on an earlier run that this run does not write.
+
+    `known` is False when the marker has no usable ledger: then nothing can
+    be said about what init wrote before, and nothing is removed — which is
+    not the same as "nothing is stale". `remove` (unchanged since init wrote
+    them) are deleted by a run that has --force; `keep` maps the rest to why
+    they stay (`_EXIST_EDITED`, `_EXIST_UNREADABLE`, `_EXIST_NOT_FILE`).
+    """
+    known: bool
+    remove: list
+    keep: dict
+
+
+def _still_generated(config: dict, output_dir: str,
+                     plan: '_ConfdPlan') -> set[str]:
+    """Output-relative paths this configuration generates (marker excluded).
+
+    The preview set, plus the root `.gitlab-ci.yml` whenever the GitLab leg
+    is selected: init writes that shell only when there is none yet, so a
+    re-run with the same --ci does not list it, yet still needs it.
+    """
+    out = Path(output_dir)
+    paths = {Path(p).relative_to(out).as_posix()
+             for p in _preview_files(config, output_dir, plan)}
+    if config['ci'] in ('gitlab', 'both'):
+        paths.add(_GL_ROOT_SHELL_REL.as_posix())
+    paths.discard(_MARKER_REL)
+    return paths
+
+
+def _stale_files(config: dict, output_dir: str, plan: '_ConfdPlan',
+                 own: _Ownership) -> Optional[_Stale]:
+    """Issue 1462: what the previous run's ledger lists and this run drops.
+
+    None when there is no marker (init owns nothing, so nothing of it can be
+    stale). A ledger path whose file is already gone is not stale.
+    """
+    if own.state == _OWN_ABSENT:
+        return None
+    if own.state != _OWN_LEDGER:
+        return _Stale(False, [], {})
+    out = Path(output_dir)
+    keep_now = _still_generated(config, output_dir, plan)
+    remove: list = []
+    keep: dict = {}
+    for rel in sorted(set(own.files) - keep_now):
+        path = out / rel
+        if not path.is_file():
+            if path.exists() or path.is_symlink():
+                keep[rel] = _EXIST_NOT_FILE
+            continue
+        try:
+            digest = _sha256_file(path)
+        except OSError:
+            keep[rel] = _EXIST_UNREADABLE
+            continue
+        if digest == own.files[rel]:
+            remove.append(rel)
+        else:
+            keep[rel] = _EXIST_EDITED
+    return _Stale(True, remove, keep)
+
+
+def _stale_lines(stale: Optional[_Stale], is_zh: bool, *,
+                 done: bool) -> list[str]:
+    """What the preview (`done=False`) or the summary (`done=True`) says."""
+    if stale is None:
+        return []
+    if not stale.known:
+        return [("⚠️ .da-init.yaml 沒有可讀的檔案清冊：無法得知 init 先前產生過"
+                 "哪些檔，這次不再產生的檔量不到，一個都不刪。下一次執行後"
+                 "就有清冊。") if is_zh else
+                ("⚠️ .da-init.yaml has no readable file ledger: what init "
+                 "generated before cannot be known, so files it no longer "
+                 "generates cannot be found, and none is removed. The next "
+                 "run has a ledger.")]
+    lines = []
+    for rel in stale.remove:
+        if is_zh:
+            lines.append(f"{rel}（stale：不再產生；init 上次產生、未改過 → "
+                         + ("已刪除）" if done else "會刪除）"))
+        else:
+            lines.append(f"{rel} (stale: no longer generated; unchanged since "
+                         "init wrote it → " + ("removed)" if done
+                                               else "would be removed)"))
+    for rel, kind in sorted(stale.keep.items()):
+        why = _existing_tag(kind, is_zh).strip()
+        if is_zh:
+            lines.append(f"{rel}（stale：不再產生）{why} → 保留，請自行處理")
+        else:
+            lines.append(f"{rel} (stale: no longer generated) {why} → kept; "
+                         "remove it yourself if it is no longer needed")
+    return lines
+
+
+def _remove_stale_outside_confd(out: Path, rels: list) -> list[str]:
+    """Unlink init-owned, unchanged files outside conf.d/ and the directories
+    that empties (up to, not including, `out`). conf.d/ deletions go through
+    the da-guard batch instead (ADR-036 §2). Returns the removed paths."""
+    removed = []
+    for rel in rels:
+        path = out / rel
+        path.unlink()
+        removed.append(str(path))
+        parent = path.parent
+        while parent != out and parent.is_dir() and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+    return removed
+
+
 def _refuse_unowned(existing: dict[str, str]) -> None:
     """Issue 1465: with no marker, init owns no file, so it overwrites none.
 
@@ -4361,7 +4473,8 @@ class _ConfdWriteRefused(ValueError):
     before any file of the run is written."""
 
 
-def _write_confd(conf_dir: Path, files: list) -> None:
+def _write_confd(conf_dir: Path, files: list,
+                 delete: Optional[list] = None) -> None:
     """`files` (`_lib_confedit.NewFile`) in one `da-guard write` batch under
     *conf_dir*, each replacing what is at its path. Raises _ConfdWriteRefused
     for a file that cannot be sent; a batch da-guard does not write ends the
@@ -4376,6 +4489,10 @@ def _write_confd(conf_dir: Path, files: list) -> None:
     # A conf.d that is already not servable is not written into (#3206; the
     # plan read it first, so this holds for the tree as it is now).
     _lib_write_check.require_output_tree(conf_dir)
+    # Issue 1462: init-owned stale conf.d files, deleted in the SAME batch —
+    # judged with the writes, all or none — each on the precondition that it
+    # still declares exactly its tenant.
+    entries.extend(delete or [])
     if not entries:
         return
     # da-guard's --config-dir: made only when the batch is sent, and removed
@@ -4387,8 +4504,15 @@ def _write_confd(conf_dir: Path, files: list) -> None:
 
 
 def run_init(config: dict, output_dir: str,
-             plan: Optional[_ConfdPlan] = None) -> list[str]:
+             plan: Optional[_ConfdPlan] = None,
+             prune: Optional[list] = None) -> list[str]:
     """Generate all files based on config. Returns list of created file paths.
+
+    `prune` (issue 1462) is `_stale_files(...).remove`: output-relative paths
+    init wrote earlier, unchanged since, that this configuration no longer
+    generates. They are deleted — conf.d/ ones in the same da-guard batch as
+    the writes, the rest after them. Only the CLI passes it (with --force);
+    a direct caller that passes nothing deletes nothing.
 
     `plan` is `_plan_confd(config, output_dir)`, taken before any write; the
     CLI passes the one it already reported. A plan with conflicts raises
@@ -4445,7 +4569,12 @@ def run_init(config: dict, output_dir: str,
     # rc 2, nothing written); a batch da-guard does not write — refused, a
     # caller error, no usable da-guard, a write stopped part-way (the files
     # left named) — exits 2 in `_lib_confedit.write_all_or_exit`.
-    _write_confd(conf_dir, confd_files)
+    prune = list(prune or [])
+    confd_prune = [r for r in prune if r.startswith('conf.d/')]
+    _write_confd(conf_dir, confd_files, delete=[
+        _lib_confedit.delete_entry(r[len('conf.d/'):],
+                                   tenants=[Path(r).stem])
+        for r in confd_prune])
     for f in confd_files:
         created.append(str(conf_dir / f.rel))
 
@@ -4529,6 +4658,13 @@ def run_init(config: dict, output_dir: str,
         created,
     )
 
+    # ── 4b. Stale files (issue 1462) ───────────────────────
+    # After every write, so a run stopped part-way never removed anything it
+    # was replacing; before the marker, so the ledger below no longer lists
+    # them (the carry-over keeps only files still on disk).
+    _remove_stale_outside_confd(
+        out, [r for r in prune if not r.startswith('conf.d/')])
+
     # ── 5. Marker file ─────────────────────────────────────
     # issue 1465: the ledger hashes what is ON DISK after the writes, not the
     # strings handed to them — conf.d goes through `da-guard write`, and the
@@ -4585,7 +4721,8 @@ def _as_typed_here(output_dir: str, rel: str) -> str:
 def _print_summary(created: list[str], output_dir: str, config: dict,
                    pre_existing: set[str] | None = None,
                    plan: Optional[_ConfdPlan] = None,
-                   existing: Optional[dict[str, str]] = None) -> None:
+                   existing: Optional[dict[str, str]] = None,
+                   stale: Optional[_Stale] = None) -> None:
     """Print post-init summary.
 
     `plan` is the `_plan_confd` result the run wrote from; `None` means the
@@ -4637,6 +4774,15 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
             print("     " + ("其中這些是 init 上次產生後被改過的：" if is_zh else
                              "Of those, edited since init wrote them:")
                   + " " + ", ".join(edited))
+
+    # Issue 1462: what init wrote before and this run no longer generates.
+    stale_lines = _stale_lines(stale, is_zh, done=True)
+    if stale_lines:
+        print()
+        print("  " + ("上次由 init 產生、這次不再產生：" if is_zh else
+                      "Generated by init before, no longer generated:"))
+        for line in stale_lines:
+            print(f"  ✗ {line}")
 
     # #1942: what the run did NOT write, and why — the receipt for the skip
     # notices already printed on stderr.
@@ -5503,7 +5649,8 @@ def _handle_dry_run(config: dict, output_dir: str,
                     plan: Optional[_ConfdPlan] = None,
                     existing: Optional[dict[str, str]] = None,
                     force: bool = False,
-                    own: Optional[_Ownership] = None) -> None:
+                    own: Optional[_Ownership] = None,
+                    stale: Optional[_Stale] = None) -> None:
     """Handle --dry-run mode: preview files without writing.
 
     #1447: this is the only non-destructive way to see what `init` will do,
@@ -5576,6 +5723,15 @@ def _handle_dry_run(config: dict, output_dir: str,
                             "regular file\": the real "
                             "run refuses without --force (rc 1) and writes "
                             "nothing."))
+    stale_lines = _stale_lines(stale, is_zh, done=False)
+    if stale_lines:
+        print()
+        print("  " + ("上次由 init 產生、這次不再產生（加 --force 執行時處理）："
+                      if is_zh else
+                      "Generated by init before, no longer generated (handled "
+                      "by a run with --force):"))
+        for line in stale_lines:
+            print(f"  ✗ {line}")
     skip_lines = _plan_notice_lines(plan, is_zh,
                                     str(Path(output_dir) / 'conf.d'))
     if skip_lines:
@@ -5764,7 +5920,11 @@ def _build_parser() -> argparse.ArgumentParser:
                              'the run is refused (rc 1, nothing written) '
                              'unless given --force. --force names the files '
                              'edited since init wrote them (from the '
-                             '.da-init.yaml file ledger)'
+                             '.da-init.yaml file ledger). A file init wrote '
+                             'before that this run no longer generates (a '
+                             'dropped tenant, CI leg or deploy method) is '
+                             'removed if unchanged, and kept and named if '
+                             'edited'
                         if _LANG == 'en'
                         # ⚠️ 大寫「重寫所有產生的檔案」而非 markdown `**`：這是
                         # argparse help，會**原樣**印到終端機（實測 `--help` 輸出
@@ -5784,7 +5944,9 @@ def _build_parser() -> argparse.ArgumentParser:
                              '不寫入任何檔案。沒有 .da-init.yaml 時，init '
                              '要寫的路徑上已有的檔不屬於 init：不加 --force '
                              '就拒絕（rc 1，不寫入任何檔案）。--force 會依 '
-                             '.da-init.yaml 的檔案清冊點名 init 產生後被改過的檔')
+                             '.da-init.yaml 的檔案清冊點名 init 產生後被改過的檔。'
+                             'init 先前產生、這次不再產生的檔（拿掉的租戶、CI '
+                             '或部署方式）未改過就刪除，改過則保留並點名')
     parser.add_argument('--dry-run', action='store_true',
                         help='Show what files would be created without '
                              'writing, and for each existing one whether init '
@@ -5843,9 +6005,10 @@ def main():
     own = _read_ownership(output_dir)
     existing = _classify_existing(_preview_files(config, output_dir, plan),
                                   output_dir, own)
+    stale = _stale_files(config, output_dir, plan, own)
     if args.dry_run:
         _handle_dry_run(config, output_dir, plan, existing=existing,
-                        force=args.force, own=own)
+                        force=args.force, own=own, stale=stale)
     if not args.force and own.state == _OWN_ABSENT:
         _refuse_unowned(existing)
 
@@ -5853,7 +6016,8 @@ def main():
     # overwrite from a fresh file (#1447).
     pre_existing = _existing_files(output_dir)
     try:
-        created = run_init(config, output_dir, plan)
+        created = run_init(config, output_dir, plan,
+                           prune=stale.remove if stale and args.force else None)
     except _ConfdWriteRefused as exc:
         # ADR-036 §2 (#3206 10c-3): a conf.d file that cannot be sent to
         # `da-guard write` — rc 2, as every refusal of the batch; nothing
@@ -5861,7 +6025,7 @@ def main():
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
     _print_summary(created, output_dir, config, pre_existing, plan,
-                   existing=existing)
+                   existing=existing, stale=stale)
 
 
 if __name__ == "__main__":
