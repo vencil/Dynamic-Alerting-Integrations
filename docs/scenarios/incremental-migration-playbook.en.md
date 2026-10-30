@@ -587,19 +587,43 @@ Read the exit code (full definitions under [`guard`](../cli-reference.en.md#guar
 | 0 | No error-level finding | Ready to upgrade |
 | 1 | An error-level finding | Fix it as the report says |
 | 3 | Files the new exporter will not serve, each listed in the report (files it cannot decode under "Files the exporter cannot parse", files it fails to read under "Files the exporter cannot read"); the route generator and tenant-api refuse them too (all three use the same verdict) | Fix or remove these files before upgrading |
-| 4 | The tree holds content only the route generator judges (undecided) | Add `da-tools generate-routes --validate --strict` to the same CI job |
+| 4 | The tree holds content only the route generator judges (undecided) | In the same CI step, run `da-tools generate-routes --config-dir conf.d/ --validate --strict` next; only its success passes (see the example below) |
+
+A CI shell runs as `bash -e` by default: once guard exits non-zero, the step stops on that line and the strict validation never runs. So turn `-e` off to take the exit code, then decide on it (the same shape as this repo's `.github/workflows/guard-defaults-impact.yml`: guard's 4 counts as 0 only when the route generator ran and passed):
+
+```bash
+set +e
+da-tools guard defaults-impact --config-dir conf.d/
+rc=$?
+set -e
+if [ "$rc" -eq 4 ]; then
+  # undecided: the route generator judges routing and domain policy; if it fails, bash -e fails the step with its exit code
+  da-tools generate-routes --config-dir conf.d/ --validate --strict
+  rc=0
+fi
+if [ "$rc" -ne 0 ]; then
+  echo "da-guard exit $rc" >&2
+  exit "$rc"
+fi
+```
 
 ### Check 2: render with the old and new images, compare the output
 
 Generate the Alertmanager routing config from the same conf.d once with the version you run today and once with the version you are upgrading to, then compare the two:
 
 ```bash
+set -e
 # run with the current version's image
 da-tools generate-routes --config-dir ./conf.d -o routes-current.yaml
 # run with the new version's image
-da-tools generate-routes --config-dir ./conf.d -o routes-new.yaml
+if ! da-tools generate-routes --config-dir ./conf.d -o routes-new.yaml; then
+  echo "the new version refuses this conf.d and wrote no routes-new.yaml: see Check 1's result" >&2
+  exit 1
+fi
 diff -u routes-current.yaml routes-new.yaml
 ```
+
+When the new version refuses the tree, `generate-routes` exits non-zero and writes no output file, so there is nothing to compare: the example fails the job right there, and the reason is in Check 1 (the new da-guard's exit code and the files it names). When the two outputs differ, `diff` exits 1 and fails the job too; review the differences before deciding to upgrade.
 
 The comparison shows where the rendered output changed, but not which change in reading caused it; to attribute it, look at the source at that place (for example, `send_resolved: yes` is a string in the new version and is refused; write `true`).
 

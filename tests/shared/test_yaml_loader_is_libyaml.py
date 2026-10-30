@@ -12,7 +12,12 @@ would then run on a parser the tool never uses in production.
 (The libyaml opt-in, `_lib_io.SAFE_LOADER` / `_lib_io.safe_load()` and
 `strict_safe_load(fast=True)`, lost its last caller when the readers of
 files with a Go consumer moved to that consumer's reading, ADR-036 §12; it
-was deleted in #3206 together with the tests that pinned it.)
+was deleted in #3206 together with the tests that pinned it. Nothing in
+`scripts/` uses libyaml any more, so "CI has libyaml" — what
+`test_libyaml_is_present_in_ci` guarded — is no longer a requirement, and
+that test went with it. What stays needs no libyaml: the pure parser's
+refusal is measured directly, and libyaml only adds a control when present,
+so the test never skips.)
 """
 from __future__ import annotations
 
@@ -28,12 +33,15 @@ _LIBYAML = bool(getattr(yaml, "__with_libyaml__", False))
 _TRAILING_TAB = "defaults:\n  cpu_usage: 80\t\n"
 
 
-@pytest.mark.skipif(not _LIBYAML, reason="no libyaml on this machine")
 def test_the_shared_reader_is_the_pure_parser(tmp_path):
-    """On the one input the parsers disagree about: libyaml reads it (the
-    control), the shared reader refuses it."""
+    """On the one input the parsers disagree about: the pure parser refuses
+    it, and so does the shared reader. When libyaml is installed it reads the
+    same input (the control: the input does separate the two parsers)."""
     import _lib_io
-    assert yaml.load(_TRAILING_TAB, Loader=yaml.CSafeLoader) == {"defaults": {"cpu_usage": 80}}
+    with pytest.raises(yaml.scanner.ScannerError):
+        yaml.load(_TRAILING_TAB, Loader=_pure.SafeLoader)
+    if _LIBYAML:
+        assert yaml.load(_TRAILING_TAB, Loader=yaml.CSafeLoader) == {"defaults": {"cpu_usage": 80}}
 
     assert yaml.SafeLoader is _pure.SafeLoader, (
         "something rebound yaml.SafeLoader in the test process — in-process "

@@ -586,19 +586,43 @@ da-tools guard defaults-impact --config-dir conf.d/
 | 0 | 沒有 error 級 finding | 可以升級 |
 | 1 | 有 error 級 finding | 照報告修好 |
 | 3 | 有新版 exporter 不服務的檔，報告逐檔列出（解不開的檔在「Files the exporter cannot parse」，讀取失敗的在「Files the exporter cannot read」）；這些檔路由產生器與 tenant-api 也拒收（三者用同一份判定） | 升級前修好或移走這些檔 |
-| 4 | 樹上有只能由路由產生器判的內容（未判定） | 在同一個 CI job 加跑 `da-tools generate-routes --validate --strict` |
+| 4 | 樹上有只能由路由產生器判的內容（未判定） | 在同一個 CI step 接著跑 `da-tools generate-routes --config-dir conf.d/ --validate --strict`，它成功才算通過（見下方範例） |
+
+CI 的 shell 預設是 `bash -e`：guard 一回非 0，step 就在那一行停下，後面的 strict 驗證跑不到。所以先關掉 `-e` 取得結束碼，再依結束碼決定（與本 repo 的 `.github/workflows/guard-defaults-impact.yml` 同一種寫法：guard 的 4 只在路由產生器跑過、且通過時才算 0）：
+
+```bash
+set +e
+da-tools guard defaults-impact --config-dir conf.d/
+rc=$?
+set -e
+if [ "$rc" -eq 4 ]; then
+  # 未判定：路由與 domain policy 由路由產生器判；它失敗時 bash -e 讓 step 以它的結束碼失敗
+  da-tools generate-routes --config-dir conf.d/ --validate --strict
+  rc=0
+fi
+if [ "$rc" -ne 0 ]; then
+  echo "da-guard exit $rc" >&2
+  exit "$rc"
+fi
+```
 
 ### 檢查二：新舊兩版映像各渲染一次，比對結果
 
 同一棵 conf.d，分別用目前在用的版本與要升級的版本各產生一次 Alertmanager 路由設定，再比對兩份輸出：
 
 ```bash
+set -e
 # 以目前版本的映像執行
 da-tools generate-routes --config-dir ./conf.d -o routes-current.yaml
 # 以新版映像執行
-da-tools generate-routes --config-dir ./conf.d -o routes-new.yaml
+if ! da-tools generate-routes --config-dir ./conf.d -o routes-new.yaml; then
+  echo "新版拒收這棵 conf.d，沒有產生 routes-new.yaml：先看檢查一的結果" >&2
+  exit 1
+fi
 diff -u routes-current.yaml routes-new.yaml
 ```
+
+新版拒收這棵樹時，`generate-routes` 以非 0 結束、不寫輸出檔，這時沒有東西可比：範例讓 job 在這裡失敗，原因要回頭看檢查一（新版 da-guard 的結束碼與它點名的檔）。兩份輸出有差異時 `diff` 以 1 結束，job 也會失敗，請審閱差異後再決定升級。
 
 比對看得到渲染結果哪裡變了，但不會指出是哪一項讀法改變造成的；要歸因，回頭看那一處的原文（例如 `send_resolved: yes` 在新版是字串、會被拒收，要寫成 `true`）。
 

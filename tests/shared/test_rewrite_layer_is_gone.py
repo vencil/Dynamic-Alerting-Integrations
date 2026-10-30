@@ -31,7 +31,10 @@ Two checks, by name:
    readers to their consumers' reading (ADR-036 §12); step 13 deleted it
    with the migration audit, its last user, and moved the tests that read
    back what a tool wrote to the exporter's reading (`tests/_exporter_reading.py`).
-   A test that needs "what the exporter reads" asks `da-guard parse-tree`.
+   A test that needs "what the exporter reads" asks `da-guard parse-tree`;
+3. no hook, workflow, Makefile, Dockerfile or build.sh names a file step 13
+   deleted (`_lib_yaml_keys`, `migration_audit`) outside a comment —
+   `test_no_infra_file_names_a_deleted_script`.
 
 ⚠️ WHAT THE GATE CANNOT CATCH (it reads names, not intent): the layer
 re-written under new names; a name built at run time
@@ -43,6 +46,7 @@ from __future__ import annotations
 
 import ast
 import pathlib
+import re
 import sys
 
 import pytest
@@ -213,6 +217,70 @@ def test_nothing_in_scripts_or_tests_uses_the_loader() -> None:
 ])
 def test_the_module_import_is_caught(src, want) -> None:
     assert imports_module(ast.parse(src), LOADER_MODULE) is want
+
+
+# ── the files that name a script by path, not by import ──────────────
+#
+# A hook's `files:` pattern, a workflow's path filter, a Dockerfile's COPY or
+# build.sh's file list name a script by its file name; deleting the script
+# leaves them pointing at nothing, and no AST walk sees them. The names of the
+# step-13 deletions must not appear in these files.
+#
+# Exclusion rule, explicit: a whole-line comment (first non-blank character
+# `#`) and an inline comment (from a `#` that follows whitespace to the end
+# of the line) are not read — history may be told there. ADRs and changelogs
+# are not in the scanned set at all.
+
+#: The deleted names, as a file name or a regex alternative would spell them
+#: (`_lib_yaml_keys.py`, `(…|yaml_keys)\.py`, `ops/migration_audit.py`,
+#: `migration-audit`).
+DELETED_NAMES = re.compile(r"(?<![A-Za-z0-9])(?:_lib_)?yaml_keys(?![A-Za-z0-9])"
+                           r"|migration[_-]audit")
+
+
+def _infra_files() -> "list[pathlib.Path]":
+    out = [REPO / ".pre-commit-config.yaml", REPO / "Makefile"]
+    out += sorted((REPO / ".github" / "workflows").glob("*.y*ml"))
+    out += sorted((REPO / "components").rglob("Dockerfile"))
+    out += sorted((REPO / "components").rglob("build.sh"))
+    return [p for p in out if not _SKIP_DIRS.intersection(p.relative_to(REPO).parts[:-1])]
+
+
+def _uncommented(line: str) -> str:
+    if line.lstrip().startswith("#"):
+        return ""
+    return re.split(r"\s#", line, maxsplit=1)[0]
+
+
+def deleted_names_in(text: str) -> "list[tuple[int, str]]":
+    return [(i, m.group(0)) for i, line in enumerate(text.splitlines(), 1)
+            for m in DELETED_NAMES.finditer(_uncommented(line))]
+
+
+def test_no_infra_file_names_a_deleted_script() -> None:
+    files = _infra_files()
+    names = {p.relative_to(REPO).as_posix() for p in files}
+    for must in (".pre-commit-config.yaml", "Makefile",
+                 "components/da-tools/app/build.sh", "components/recipe-preview/Dockerfile",
+                 ".github/workflows/component-docker-build.yaml"):
+        assert must in names, f"tripwire: {must} is not scanned"
+    found = [f"{p.relative_to(REPO).as_posix()}:{n}: {hit}"
+             for p in files for n, hit in deleted_names_in(p.read_text(encoding="utf-8"))]
+    assert not found, ("a hook, workflow, Makefile, Dockerfile or build.sh still names a "
+                       "file deleted in ADR-036 step 13:\n" + "".join(f"  {k}\n" for k in found))
+
+
+@pytest.mark.parametrize("text, want", [
+    ("files: ^scripts/tools/_lib_(io|yaml_keys)\\.py\n", ["yaml_keys"]),
+    ("COPY scripts/tools/_lib_yaml_keys.py ./core/\n", ["_lib_yaml_keys"]),
+    ("    ops/migration_audit.py\n", ["migration_audit"]),
+    ('      - "scripts/tools/_lib_yaml_keys.py"   # recipe-preview\n', ["_lib_yaml_keys"]),
+    ("# _lib_yaml_keys was deleted in step 13\n", []),             # whole-line comment
+    ("x: 1  # migration-audit is gone\n", []),                     # inline comment
+    ("load_exporter_keys\n", []),                                  # another name
+])
+def test_the_deleted_name_scan(text, want) -> None:
+    assert [hit for _, hit in deleted_names_in(text)] == want
 
 
 # ── the detector (synthetic, no repo file) ───────────────────────────
