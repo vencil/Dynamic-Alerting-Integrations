@@ -79,12 +79,21 @@ from _threshold_alerts import alerts_for_key  # noqa: E402
 
 LEGACY_KEY = "config.yaml"
 
-# Where the ConfigMap and the exporter pods are. Taken from the chart
-# (helm/threshold-exporter/templates/{service,deployment}.yaml: namespace,
-# pod label, container port name); tests/ops/test_patch_config_verify.py pins
-# them against it. The exporter three are the defaults of their flags.
+# Where the ConfigMap and the exporter pods are, by default. The chart puts
+# every resource in the release namespace (issue 1425), so NAMESPACE is the
+# documented install namespace (helm/threshold-exporter/README.md `-n`), not a
+# chart constant; CONFIGMAP is the chart's default name, which
+# `thresholdConfig.existingConfigMap` replaces. Both are only the defaults of
+# --namespace / --configmap; the pod label and port name are taken from the
+# chart templates. tests/ops/test_patch_config_verify.py pins all of them.
 NAMESPACE = "monitoring"
 CONFIGMAP = "threshold-config"
+
+# The ConfigMap this run reads and patches: --namespace / --configmap, set
+# once in main() before any kubectl call. Module state because the three
+# kubectl call sites sit in helpers several frames below main().
+_CM_NS = NAMESPACE
+_CM_NAME = CONFIGMAP
 EXPORTER_SELECTOR = "app=threshold-exporter"
 EXPORTER_PORT = "http"
 RELOAD_TIMEOUT_S = 120.0
@@ -726,7 +735,7 @@ def configmap_files(cm):
             files[key] = base64.b64decode(value, validate=True)
         except (binascii.Error, TypeError, ValueError) as exc:
             raise ConfigMapShapeError(
-                f"{CONFIGMAP} binaryData key {key} is not base64: {exc}") from exc
+                f"{_CM_NAME} binaryData key {key} is not base64: {exc}") from exc
     return files
 
 
@@ -1058,8 +1067,8 @@ def _kubectl_patch(patch_data, resource_version):
         temp_path = temp.name
     try:
         try:
-            out = run_cmd(["kubectl", "patch", "configmap", CONFIGMAP,
-                           "-n", NAMESPACE, "--type", "merge",
+            out = run_cmd(["kubectl", "patch", "configmap", _CM_NAME,
+                           "-n", _CM_NS, "--type", "merge",
                            "--patch-file", temp_path, "-o", "json"])
         except KubectlError as exc:
             if "(Conflict)" in str(exc):
@@ -1197,7 +1206,7 @@ def apply_patch(cm_data, mode, tenant, metric_key, value, exporter=None,
     write.rv_read = (cm_data.get("metadata") or {}).get("resourceVersion")
     if not write.rv_read:
         raise ConfigMapShapeError(
-            f"{CONFIGMAP} as read has no metadata.resourceVersion; refusing "
+            f"{_CM_NAME} as read has no metadata.resourceVersion; refusing "
             f"to write without a version precondition.")
 
     exporter = exporter or Exporter()
@@ -1361,7 +1370,7 @@ def _read_cm():
     """(data, resourceVersion) of the ConfigMap now, or _UNREADABLE."""
     try:
         cm = json.loads(run_cmd([
-            "kubectl", "get", "configmap", CONFIGMAP, "-n", NAMESPACE,
+            "kubectl", "get", "configmap", _CM_NAME, "-n", _CM_NS,
             "-o", "json"]))
         return _cm_keys(cm), cm["metadata"]["resourceVersion"]
     except BaseException:  # noqa: BLE001 — any failure is "cannot tell"
@@ -1498,7 +1507,7 @@ def _send_rollback(write):
 
 def _wait_rolled_back(write):
     """Best effort: pods that reloaded since `before` load the old bytes."""
-    _say(f"rolling back {CONFIGMAP} key {write.key}: done; waiting for the "
+    _say(f"rolling back {_CM_NAME} key {write.key}: done; waiting for the "
          f"pods that reloaded...")
     moved = {p: write.seen[p] for p in write.before
              if write.seen[p] != write.before[p][0]}
@@ -1591,9 +1600,19 @@ def build_parser():
              "stderr",
     )
     parser.add_argument(
-        "--exporter-namespace", default=NAMESPACE, metavar="NS",
-        help=f"Namespace of the exporter pods apply verifies on "
-             f"(default: {NAMESPACE})")
+        "--namespace", default=NAMESPACE, metavar="NS",
+        help=f"Namespace of the ConfigMap: the namespace the chart was "
+             f"installed in (helm -n), or the kustomize namespace when the "
+             f"ConfigMap comes from kustomize (default: {NAMESPACE})")
+    parser.add_argument(
+        "--configmap", default=CONFIGMAP, metavar="NAME",
+        help=f"Name of the ConfigMap: the chart's "
+             f"thresholdConfig.existingConfigMap when set (default: "
+             f"{CONFIGMAP})")
+    parser.add_argument(
+        "--exporter-namespace", default=None, metavar="NS",
+        help="Namespace of the exporter pods apply verifies on "
+             "(default: --namespace; the chart puts them together)")
     parser.add_argument(
         "--exporter-selector", default=EXPORTER_SELECTOR, metavar="LABELS",
         help=f"Label selector of those pods (default: {EXPORTER_SELECTOR})")
@@ -1689,13 +1708,15 @@ def _main():
     if args.json:  # #3094: a crash in --json mode still prints one envelope
         arm_crash_envelope(build=lambda: json.loads(_envelope("caller_error", "internal_error")))
 
+    global _CM_NS, _CM_NAME
+    _CM_NS, _CM_NAME = args.namespace, args.configmap
     mode, report, write = None, new_report(), _Write()
     status, exc = None, None
     try:
         try:
             cm_data = json.loads(run_cmd([
-                "kubectl", "get", "configmap", CONFIGMAP,
-                "-n", NAMESPACE, "-o", "json"]))
+                "kubectl", "get", "configmap", _CM_NAME,
+                "-n", _CM_NS, "-o", "json"]))
             if not isinstance(cm_data, dict):
                 raise ValueError("not a JSON object")
         except ValueError as err:
@@ -1715,7 +1736,8 @@ def _main():
             _say(f"Detected ConfigMap mode: {mode}", out=True)
             status = apply_patch(
                 cm_data, mode, args.tenant, args.metric_key, args.value,
-                Exporter(args.exporter_namespace, args.exporter_selector,
+                Exporter(args.exporter_namespace or args.namespace,
+                         args.exporter_selector,
                          args.exporter_port, args.reload_timeout,
                          args.poll_interval), report, write)
     except BaseException as caught:  # noqa: BLE001 — every path goes to _conclude

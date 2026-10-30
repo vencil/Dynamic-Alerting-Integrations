@@ -252,9 +252,43 @@ class TestExporterAccessDefaults:
 
     def test_flags_default_to_them(self):
         args = pc.build_parser().parse_args(["t", "k", "v"])
-        assert (args.exporter_namespace, args.exporter_selector,
-                args.exporter_port, args.reload_timeout) == (
-            pc.NAMESPACE, pc.EXPORTER_SELECTOR, pc.EXPORTER_PORT, 120)
+        assert (args.namespace, args.configmap, args.exporter_namespace,
+                args.exporter_selector, args.exporter_port,
+                args.reload_timeout) == (
+            pc.NAMESPACE, pc.CONFIGMAP, None, pc.EXPORTER_SELECTOR,
+            pc.EXPORTER_PORT, 120)
+
+    def test_the_configmap_and_pods_follow_namespace_and_name(self, monkeypatch):
+        """#1425: the chart now lands in the release namespace and the
+        ConfigMap may be `existingConfigMap`, so every kubectl call must use
+        --namespace / --configmap — the ConfigMap read, the patch, and (with
+        no --exporter-namespace) the pods it verifies on. Before, the
+        ConfigMap half was a constant no flag reached."""
+        monkeypatch.setattr(pc, "_CM_NS", pc.NAMESPACE)
+        monkeypatch.setattr(pc, "_CM_NAME", pc.CONFIGMAP)
+        c = FakeCluster(_multi())
+        code = _run(c, "--namespace", "obs", "--configmap", "foo",
+                    "t-a", "mysql_connections", "65")
+        assert code == 0
+        assert c.patches, "the apply path was not exercised"
+        namespaces = {cmd[cmd.index("-n") + 1] for cmd in c.calls if "-n" in cmd}
+        assert namespaces == {"obs"}, namespaces
+        cm_calls = [cmd for cmd in c.calls if "configmap" in cmd]
+        assert cm_calls and all(cmd[cmd.index("configmap") + 1] == "foo"
+                                for cmd in cm_calls), cm_calls
+
+    def test_exporter_namespace_still_overrides_the_pods_only(self, monkeypatch):
+        monkeypatch.setattr(pc, "_CM_NS", pc.NAMESPACE)
+        monkeypatch.setattr(pc, "_CM_NAME", pc.CONFIGMAP)
+        c = FakeCluster(_multi())
+        code = _run(c, "--namespace", "obs", "--exporter-namespace", "pods-ns",
+                    "t-a", "mysql_connections", "65")
+        assert code == 0
+        cm_ns = {cmd[cmd.index("-n") + 1] for cmd in c.calls
+                 if "configmap" in cmd and "-n" in cmd}
+        other_ns = {cmd[cmd.index("-n") + 1] for cmd in c.calls
+                    if "configmap" not in cmd and "-n" in cmd}
+        assert cm_ns == {"obs"} and other_ns == {"pods-ns"}, (cm_ns, other_ns)
 
     @pytest.mark.parametrize("bad", ["0", "-1", "nan", "inf", "x"])
     def test_non_positive_timeout_is_a_caller_error(self, bad):

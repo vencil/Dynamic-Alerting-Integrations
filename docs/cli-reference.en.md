@@ -1982,10 +1982,10 @@ ConfigMap partial update tool with preview (--diff) and direct application suppo
 **Syntax**
 
 ```bash
-python3 scripts/tools/ops/patch_config.py [--diff] [--json] [--exporter-namespace NS] [--exporter-selector LABELS] [--exporter-port PORT] [--reload-timeout SECONDS] [--poll-interval SECONDS] <tenant> <metric> <value>
+python3 scripts/tools/ops/patch_config.py [--diff] [--json] [--namespace NS] [--configmap NAME] [--exporter-namespace NS] [--exporter-selector LABELS] [--exporter-port PORT] [--reload-timeout SECONDS] [--poll-interval SECONDS] <tenant> <metric> <value>
 ```
 
-Reads and patches `threshold-config` in the `monitoring` namespace; needs `kubectl` on PATH and a working kubeconfig. `<value>` is a concrete value, `default` (delete the tenant's key) or `disable`. Apply (no `--diff`) also needs `list pods` and `get pods/proxy` in the exporter's namespace (why, and what that grants: [Cross-tenant ConfigMap hardening §2.2](cross-tenant-configmap-hardening.en.md)).
+Reads and patches the ConfigMap named by `--configmap` (default `threshold-config`) in `--namespace` (default `monitoring`); needs `kubectl` on PATH and a working kubeconfig. `<value>` is a concrete value, `default` (delete the tenant's key) or `disable`. Apply (no `--diff`) also needs `list pods` and `get pods/proxy` in the exporter's namespace (why, and what that grants: [Cross-tenant ConfigMap hardening §2.2](cross-tenant-configmap-hardening.en.md)).
 
 **Options**
 
@@ -1993,7 +1993,9 @@ Reads and patches `threshold-config` in the `monitoring` namespace; needs `kubec
 |-----------|-------------|
 | `--diff` | Preview only, apply nothing |
 | `--json` | stdout carries one JSON document: the preview under `--diff`, apply's outcome otherwise; all other output goes to stderr |
-| `--exporter-namespace` | Namespace of the exporter pods apply verifies on (default from the chart) |
+| `--namespace` | Namespace of the ConfigMap: the one the chart was installed in (`helm -n`), or the kustomize namespace when kustomize builds the ConfigMap (default `monitoring`) |
+| `--configmap` | Name of the ConfigMap: the chart's `thresholdConfig.existingConfigMap` when set (default `threshold-config`) |
+| `--exporter-namespace` | Namespace of the exporter pods apply verifies on (default: `--namespace`; the chart puts them together) |
 | `--exporter-selector` | Label selector of those pods (default from the chart) |
 | `--exporter-port` | Container port name or number of their HTTP listener (default from the chart) |
 | `--reload-timeout` | Deadline (seconds) that ends the wait for every pod to serve the written bytes, checked between polling passes |
