@@ -2,7 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: threshold-exporter
-  namespace: monitoring
+  namespace: {{ .Release.Namespace }}
   labels:
     app: threshold-exporter
 spec:
@@ -97,15 +97,23 @@ spec:
           {{- toYaml .Values.readinessProbe | nindent 10 }}
         resources:
           {{- toYaml .Values.resources | nindent 10 }}
+      {{- /* #1425: one name for both mount branches. A non-string value
+             (`--set thresholdConfig.existingConfigMap=true`) would mount a
+             ConfigMap literally named "true"; refuse it instead. */}}
+      {{- $existing := .Values.thresholdConfig.existingConfigMap }}
+      {{- if not (or (kindIs "invalid" $existing) (kindIs "string" $existing)) }}
+      {{- fail (printf "thresholdConfig.existingConfigMap must be a ConfigMap NAME (string), got %s" (kindOf $existing)) }}
+      {{- end }}
+      {{- $configMapName := $existing | default "threshold-config" }}
       volumes:
       {{- if eq .Values.rules.mode "configmap" }}
       - name: config
         configMap:
-          name: threshold-config
+          name: {{ $configMapName | quote }}
       {{- else }}
       # Operator mode: threshold-exporter still reads conf.d/ for tenant thresholds.
       # Rule Packs are delivered via PrometheusRule CRD (not file-mounted).
       - name: config
         configMap:
-          name: threshold-config
+          name: {{ $configMapName | quote }}
       {{- end }}

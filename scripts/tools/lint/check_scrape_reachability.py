@@ -169,13 +169,15 @@ INJECTED_EXACT = {"up", "ALERTS"}
 # to be scrapeable (see the monitoring-components job comment).
 VECTOR_NAMESPACE = "vector"
 
-# threshold-exporter's install namespace. Unlike Vector's (pinned only
-# operationally), this one is HARDCODED in the chart template —
-# helm/threshold-exporter/templates/service.yaml:5 writes `namespace:
-# monitoring` literally, NOT `{{ .Release.Namespace }}` — and `monitoring` is a
-# repo-pinned Namespace manifest (k8s/00-namespaces/namespaces.yaml:32). So the
-# target's namespace IS statically decidable on this single-cluster face, and
-# the family is judged, not ledgered as unknown-source.
+# threshold-exporter's install namespace. Pinned operationally, like Vector's
+# and tenant-api's: since #1425 the chart renders every resource into
+# `{{ .Release.Namespace }}` (it used to write `namespace: monitoring`
+# literally, which made a `helm install -n obs` land in monitoring anyway), and
+# the platform installs the release into `monitoring` — the chart README's
+# install command, held equal to this constant by
+# tests/lint/test_check_scrape_reachability.py — a repo-pinned Namespace
+# manifest (k8s/00-namespaces/namespaces.yaml:32). The chart face is pinned by
+# rendering, like every other helm-service family.
 THRESHOLD_EXPORTER_NAMESPACE = "monitoring"
 
 # tenant-api's install namespace (#1004 canonical namespace). Like Vector's it

@@ -343,6 +343,8 @@ kubectl apply --dry-run=server -f /tmp/manifests.yaml
 kubectl apply -f /tmp/manifests.yaml
 ```
 
+⛔ **這棵樹只產生 `threshold-config` ConfigMap，沒有 exporter 本身。** exporter 由 threshold-exporter Helm chart 安裝，而 chart 預設會從自己的 values 再產生一份同名的 `threshold-config`，兩邊每次 apply 都會蓋掉對方。安裝 chart 時要帶 `--set thresholdConfig.existingConfigMap=threshold-config`（chart 就不建 ConfigMap、改掛這棵樹的那一份），並用 `-n` 指定與 overlay 相同的 namespace（[#1425](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1425)；`existingConfigMap` 自 2.9.0 之後的 chart 版本起才有，`init` 產生的 README 與 Next steps 會印出完整指令）。
+
 ### 3.2 Helm
 
 適合：已經使用 threshold-exporter Helm chart 的團隊。

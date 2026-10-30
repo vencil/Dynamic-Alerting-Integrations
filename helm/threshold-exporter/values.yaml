@@ -169,6 +169,16 @@ thresholdConfig:
   # 完整範例參見 config/conf.d/examples/
   tenants: {}
 
+  # #1425: name of a ConfigMap this chart must NOT create — it mounts that
+  # one instead. Use it when something else owns the thresholds, e.g.
+  # `da-tools init --deploy kustomize`, whose tree builds `threshold-config`
+  # from conf.d/: install with
+  #   --set thresholdConfig.existingConfigMap=threshold-config
+  # in the SAME namespace as the kustomize tree. Left empty, the chart renders
+  # `threshold-config` from the values above. Set, every other
+  # thresholdConfig.* value is ignored (nothing renders them).
+  existingConfigMap: ""
+
 # Rules deployment mode: configmap (default) or operator (CRD-based).
 # This chart does NOT ship Rule Packs in either mode — the mode only decides
 # whether it renders a ServiceMonitor for the exporter (operator) or not.

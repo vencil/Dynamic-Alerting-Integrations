@@ -1970,10 +1970,10 @@ ConfigMap 局部更新工具，支援 preview（--diff）和直接應用。
 **語法**
 
 ```bash
-python3 scripts/tools/ops/patch_config.py [--diff] [--json] [--exporter-namespace NS] [--exporter-selector LABELS] [--exporter-port PORT] [--reload-timeout SECONDS] [--poll-interval SECONDS] <tenant> <metric> <value>
+python3 scripts/tools/ops/patch_config.py [--diff] [--json] [--namespace NS] [--configmap NAME] [--exporter-namespace NS] [--exporter-selector LABELS] [--exporter-port PORT] [--reload-timeout SECONDS] [--poll-interval SECONDS] <tenant> <metric> <value>
 ```
 
-讀寫 `monitoring` namespace 的 `threshold-config`，需要 PATH 上的 `kubectl` 與可用的 kubeconfig。`<value>` 是具體值、`default`（刪掉租戶的 key）或 `disable`。apply（不帶 `--diff`）另需在 exporter 所在 namespace 有 `list pods` 與 `get pods/proxy`（理由與範圍見[跨租戶 ConfigMap 硬化基線 §2.2](cross-tenant-configmap-hardening.md)）。
+讀寫 `--namespace`（預設 `monitoring`）裡名為 `--configmap`（預設 `threshold-config`）的 ConfigMap，需要 PATH 上的 `kubectl` 與可用的 kubeconfig。`<value>` 是具體值、`default`（刪掉租戶的 key）或 `disable`。apply（不帶 `--diff`）另需在 exporter 所在 namespace 有 `list pods` 與 `get pods/proxy`（理由與範圍見[跨租戶 ConfigMap 硬化基線 §2.2](cross-tenant-configmap-hardening.md)）。
 
 **選項**
 
@@ -1981,7 +1981,9 @@ python3 scripts/tools/ops/patch_config.py [--diff] [--json] [--exporter-namespac
 |------|------|
 | `--diff` | 只預覽，不套用 |
 | `--json` | stdout 只印一份 JSON：`--diff` 時是預覽，否則是 apply 的結果；其餘輸出走 stderr |
-| `--exporter-namespace` | apply 驗收用的 exporter pod 所在 namespace（預設取自 chart） |
+| `--namespace` | ConfigMap 所在 namespace：chart 安裝的 namespace（`helm -n`），ConfigMap 由 kustomize 產生時則是 kustomize 的 namespace（預設 `monitoring`） |
+| `--configmap` | ConfigMap 名稱：chart 設了 `thresholdConfig.existingConfigMap` 時填那個名字（預設 `threshold-config`） |
+| `--exporter-namespace` | apply 驗收用的 exporter pod 所在 namespace（預設同 `--namespace`：chart 把兩者放在同一個 namespace） |
 | `--exporter-selector` | 那些 pod 的 label selector（預設取自 chart） |
 | `--exporter-port` | 其 HTTP listener 的 container port 名稱或號碼（預設取自 chart） |
 | `--reload-timeout` | 等每個 pod 服務本次寫入的位元組的期限（秒），於每輪輪詢之間檢查 |

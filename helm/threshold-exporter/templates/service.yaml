@@ -2,7 +2,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: threshold-exporter
-  namespace: monitoring
+  namespace: {{ .Release.Namespace }}
   labels:
     app: threshold-exporter
   annotations:

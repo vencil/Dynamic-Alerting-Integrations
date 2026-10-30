@@ -467,37 +467,35 @@ def test_threshold_exporter_series_are_dead_if_monitoring_ns_leaves_sd_list():
         _THRESHOLD_EXPORTER_METRICS), result["errors"]
 
 
-def test_threshold_exporter_chart_still_hardcodes_the_pinned_namespace():
+def test_threshold_exporter_install_namespace_is_the_pinned_namespace():
     """⛔ Pin the EXTERNAL premise the whole family entry rests on.
 
     THRESHOLD_EXPORTER_NAMESPACE is an ASSERTION, not a check: the gate reads
-    only k8s/**, rule-packs/ and the prometheus ConfigMap — never helm/. It is
-    sound today solely because the chart template writes `namespace: monitoring`
-    literally instead of `{{ .Release.Namespace }}`.
+    only k8s/**, rule-packs/ and the prometheus ConfigMap — never helm/. Until
+    #1425 it rested on the chart writing `namespace: monitoring` literally; the
+    chart now renders into `{{ .Release.Namespace }}`, so the premise moved to
+    the namespace the release is INSTALLED into — the same operational tier
+    vector_ and tenant_api_ already sit on. The documented install command in
+    the chart README is that pin: change it without moving the constant (or the
+    other way round) and the 15 REACHABLE verdicts describe a namespace the
+    exporter is not in.
 
-    That is a one-line edit away from false, and a tempting one: the SAME chart
-    already uses the templated form in servicemonitor.yaml, so "make the
-    namespace handling consistent" would silently turn 15 REACHABLE verdicts
-    into fiction with no gate firing (helm/** is not in this hook's files
-    filter either). Verifying the chart at gate runtime is deferred (#1286);
-    until then this test is the tripwire.
+    What this does NOT buy: an operator who installs with another `-n` gets a
+    target this single-cluster gate cannot see, exactly as for vector_ and
+    tenant_api_. The render half is
+    test_helm_service_charts_render_an_annotated_service_under_defaults.
     """
-    svc = (REPO_ROOT / "helm" / "threshold-exporter" / "templates" / "service.yaml"
-           ).read_text(encoding="utf-8")
-    docs = [d for d in yaml.safe_load_all(
-        re.sub(r"\{\{-?.*?-?\}\}", "PLACEHOLDER", svc, flags=re.S))
-        if isinstance(d, dict)]
-    assert docs, "chart Service template no longer parses as YAML"
-    ns = docs[0].get("metadata", {}).get("namespace")
-    assert ns == gate.THRESHOLD_EXPORTER_NAMESPACE, (
-        f"chart Service namespace is now {ns!r}, but the gate assumes "
-        f"{gate.THRESHOLD_EXPORTER_NAMESPACE!r}. If the chart was templatised, the "
-        "15 threshold-exporter metrics are no longer statically decidable — drop "
-        "the threshold-exporter rows from _FAMILY_TABLE/_FAMILY_EXACT FIRST, then "
-        "ledger them in KNOWN_UNKNOWN_SOURCE. Ledgering alone does not work: "
-        "classify() resolves the family before any ledger lookup, so the metrics "
-        "would keep classifying REACHABLE and the rows would trip STALE-EXEMPTION."
-    )
+    readme = (REPO_ROOT / "helm" / "threshold-exporter" / "README.md"
+              ).read_text(encoding="utf-8")
+    installs = re.findall(r"helm install threshold-exporter\b[^`]*?-n (\S+)",
+                          readme, flags=re.S)
+    assert installs, "chart README no longer shows a `helm install … -n <ns>` line"
+    assert set(installs) == {gate.THRESHOLD_EXPORTER_NAMESPACE}, (
+        f"chart README installs into {sorted(set(installs))}, but the gate "
+        f"assumes {gate.THRESHOLD_EXPORTER_NAMESPACE!r} for every "
+        "threshold-exporter family. Move both together, and the Prometheus SD "
+        "namespace list with them.")
+
 
 
 # ── helm-service chart face (#1286) ───────────────────────────────────────

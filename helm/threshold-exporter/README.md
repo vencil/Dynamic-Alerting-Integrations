@@ -27,7 +27,7 @@ helm install threshold-exporter ./helm/threshold-exporter \
 
 ## Chart 內容
 
-建立 Deployment (2 replicas + PDB) · Service (含 Prometheus scrape annotations) · ConfigMap (`threshold-config`) · ServiceMonitor (optional)。
+建立 Deployment (2 replicas + PDB) · Service (含 Prometheus scrape annotations) · ConfigMap (`threshold-config`；設 `thresholdConfig.existingConfigMap` 時不建) · ServiceMonitor (optional)。所有資源都落在 release 的 namespace（`-n`）；平台的 Prometheus SD 清單預設涵蓋 `monitoring`，裝到別的 namespace 要一併把它加進 SD 清單（#1425）。
 
 ## 完整文件
 
@@ -46,5 +46,6 @@ helm install threshold-exporter ./helm/threshold-exporter \
 | `image.tag` | `""`（＝`v<Chart appVersion>`） | 留空由 chart appVersion 推導；需要釘版本才設 |
 | `rules.mode` | `configmap` | `configmap` 或 `operator`。`operator` 時依 `rules.operator.serviceMonitor.*` 建立 ServiceMonitor；兩種模式都掛同一個 `threshold-config` 到 `/etc/threshold-exporter/conf.d`（固定路徑，不可設定）。⚠️ 本 chart 不出貨 Rule Pack——Rule Pack 是 `k8s/03-monitoring/configmap-rules-*.yaml`，需自行掛進 Prometheus |
 | `rules.operator.serviceMonitor.labels` | `{release: kube-prometheus-stack}` | `operator` 模式下加在 ServiceMonitor 上的 label，讓 Prometheus 的 `serviceMonitorSelector` 對得上（kube-prometheus-stack 預設比對 `release: <Helm release 名稱>`）；預設與 `da-tools operator-generate` 一致，stack 的 release 名稱不同就改 `release`，設 `release: null` 可拿掉；不可覆寫 `app`／`app.kubernetes.io/part-of`（#2075） |
+| `thresholdConfig.existingConfigMap` | `""` | 設了名字時 chart 不建 `threshold-config`，改掛這個 ConfigMap；其餘 `thresholdConfig.*` 不再渲染。`da-tools init --deploy kustomize` 的樹自建 `threshold-config`，搭配它安裝時設 `threshold-config`、`-n` 與樹相同，否則兩份同名 ConfigMap 互相覆蓋（#1425） |
 | `thresholdConfig.max_metrics_per_tenant` | `null`（＝內建 500） | 每租戶 threshold series 上限；只寫進根目錄 `_defaults.yaml`，負值＝不截斷（#2028） |
 | `startupProbe.failureThreshold` / `.periodSeconds` | `60` / `10`（＝最多等 10 分鐘） | 冷載入的等待上限。exporter 把 conf.d 載入完才啟動 HTTP server，載入期間 `/health` 連不上；startupProbe 成功前 liveness 不會執行，所以冷載入不會被重啟。載入超過 10 分鐘就調高 `failureThreshold`（實際載入秒數見 `da_config_initial_load_duration_seconds`）；設 `startupProbe: null` 可拿掉（#2153） |

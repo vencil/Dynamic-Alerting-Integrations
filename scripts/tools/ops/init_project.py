@@ -359,6 +359,30 @@ DA_TOOLS_IMAGE: Optional[str] = (
 THRESHOLD_EXPORTER_CHART = 'oci://ghcr.io/vencil/charts/threshold-exporter'
 THRESHOLD_EXPORTER_CHART_VERSION = '2.9.0'
 
+# Issue 1425: the last PUBLISHED chart without `thresholdConfig.existingConfigMap`.
+# The chart has no values.schema.json, so that chart takes `--set` of the key
+# and silently ignores it: both ConfigMaps are still rendered, both in
+# `monitoring`. While the pin above equals this, every instruction that sets
+# the switch says so; the release that moves the pin past it drops the note.
+_CHART_WITHOUT_EXISTING_CONFIGMAP = '2.9.0'
+
+
+def _existing_configmap_caveat(is_zh: bool) -> str:
+    """The note an `existingConfigMap` instruction carries, or ''."""
+    if THRESHOLD_EXPORTER_CHART_VERSION != _CHART_WITHOUT_EXISTING_CONFIGMAP:
+        return ''
+    v = THRESHOLD_EXPORTER_CHART_VERSION
+    if is_zh:
+        return (f"⚠️ chart {v} 還沒有 thresholdConfig.existingConfigMap，會靜默"
+                f"忽略這個設定：兩份 threshold-config 仍會互相覆蓋，資源也仍在 "
+                f"monitoring。這個開關從 {v} 之後的 chart 版本起才生效；在那"
+                f"之前請只保留一個 ConfigMap 寫入者。")
+    return (f"⚠️ chart {v} does not have thresholdConfig.existingConfigMap and "
+            f"silently ignores it: both threshold-config ConfigMaps are still "
+            f"written, and its resources still land in monitoring. The switch "
+            f"takes effect from the chart release after {v}; until then keep "
+            f"a single writer of that ConfigMap.")
+
 # deploy method -> (GitLab CI variable name, pinned ref). Single source for
 # BOTH the `variables:` block and the apply stage's `image:` line, so the two
 # cannot drift apart.
@@ -3154,7 +3178,7 @@ _KUSTOMIZE_COPY_CMD = (
 )
 
 
-def _gen_kustomize_base_readme(files: list[str]) -> str:
+def _gen_kustomize_base_readme(files: list[str], namespace: str = 'monitoring') -> str:
     """Generate kustomize/base/README.md from the SAME list as `files:`.
 
     ⛔ The names come from `_kustomize_carrier_files`, never re-derived here.
@@ -3223,7 +3247,26 @@ def _gen_kustomize_base_readme(files: list[str]) -> str:
 
     It builds with the default restrictor, at the cost of having to re-copy
     whenever `conf.d/` changes — and `files:` still has to name every file.
-    """).format(links=links, copy_cmd=_KUSTOMIZE_COPY_CMD)
+
+    ## ⛔ This tree builds the ConfigMap only — install the exporter with it
+
+    The tree above contains no Deployment: the exporter comes from the
+    `threshold-exporter` Helm chart, which by default renders its OWN
+    `threshold-config` ConfigMap from its values. Two writers of one
+    ConfigMap overwrite each other on every apply. Tell the chart to mount
+    this tree's ConfigMap instead, and install it into the SAME namespace
+    the overlays set (`init --namespace`):
+
+    ```bash
+    helm upgrade --install threshold-exporter {chart} \\
+      --version {chart_version} -n {namespace} \\
+      --set thresholdConfig.existingConfigMap=threshold-config
+    ```
+    """).format(links=links, copy_cmd=_KUSTOMIZE_COPY_CMD,
+                chart=THRESHOLD_EXPORTER_CHART,
+                chart_version=THRESHOLD_EXPORTER_CHART_VERSION,
+                namespace=shlex.quote(namespace)) + (
+        f"\n{caveat}\n" if (caveat := _existing_configmap_caveat(False)) else '')
 
 
 def _gen_kustomize_overlay(env_name: str, namespace: str) -> str:
@@ -4292,7 +4335,7 @@ def run_init(config: dict, output_dir: str,
         )
         _write_file(
             str(kust_base / 'README.md'),
-            _gen_kustomize_base_readme(carriers),
+            _gen_kustomize_base_readme(carriers, namespace),
             created,
         )
 
@@ -4432,6 +4475,28 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
             print(f"  {step}. Create symlinks from "
                   f"{_as_typed_here(output_dir, 'conf.d/')} to "
                   f"{_as_typed_here(output_dir, 'kustomize/base/')}")
+        step += 1
+        # #1425: the tree builds `threshold-config` and no Deployment; the
+        # chart that supplies the exporter renders a ConfigMap of the same
+        # name unless told not to, and the two overwrite each other.
+        helm_line = (f"helm upgrade --install threshold-exporter "
+                     f"{THRESHOLD_EXPORTER_CHART} --version "
+                     f"{THRESHOLD_EXPORTER_CHART_VERSION} "
+                     f"-n {shlex.quote(config['namespace'])} "
+                     f"--set thresholdConfig.existingConfigMap=threshold-config")
+        if is_zh:
+            print(f"  {step}. kustomize 樹只產生 threshold-config ConfigMap；"
+                  f"exporter 用 chart 安裝在同一個 namespace，並讓 chart "
+                  f"不要再建自己的 ConfigMap：")
+        else:
+            print(f"  {step}. The kustomize tree builds only the threshold-config "
+                  f"ConfigMap. Install the exporter chart into the same "
+                  f"namespace, mounting that ConfigMap instead of creating "
+                  f"its own:")
+        print(f"     {helm_line}")
+        caveat = _existing_configmap_caveat(is_zh)
+        if caveat:
+            print(f"     {caveat}")
         step += 1
 
     # ⛔ Point at the file that carries the defaults. When the run skipped

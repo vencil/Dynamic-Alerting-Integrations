@@ -2175,6 +2175,85 @@ class TestKustomizeBaseEnumeratesConfd:
 # ── 9. _gen_kustomize_overlay ──
 # ============================================================
 
+class TestKustomizeTreeTellsTheChartNotToOwnTheConfigMap:
+    """#1425: the kustomize tree builds `threshold-config` and no Deployment;
+    the chart that supplies the exporter renders a ConfigMap of the same name
+    unless `thresholdConfig.existingConfigMap` says someone else owns it. Both
+    places a customer reads must say so, in the namespace the tree uses."""
+
+    _SET = '--set thresholdConfig.existingConfigMap=threshold-config'
+
+    def test_the_value_named_is_one_the_chart_declares(self):
+        values = yaml.safe_load(
+            (ip.Path(REPO_ROOT) / 'helm' / 'threshold-exporter'
+             / 'values.yaml').read_text(encoding='utf-8'))
+        assert 'existingConfigMap' in values['thresholdConfig']
+
+    def test_readme_says_to_mount_this_trees_configmap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            text = _readme_text(tmp)
+        assert self._SET in text
+        assert ip.THRESHOLD_EXPORTER_CHART in text
+        assert f'--version {ip.THRESHOLD_EXPORTER_CHART_VERSION}' in text
+
+    def test_readme_names_the_trees_namespace_quoted(self):
+        """The README's helm line is pasted as is: it must carry the overlays'
+        namespace (not a placeholder), shell-quoted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one'], namespace='obs'), tmp)
+            text = _readme_text(tmp)
+        assert ' -n obs ' in text and "<the overlays' namespace>" not in text
+        quoted = ip._gen_kustomize_base_readme(['_defaults.yaml'], 'my obs')
+        assert " -n 'my obs' " in quoted
+
+    def test_next_steps_name_the_trees_namespace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = dict(_KUST_CFG, tenants=['t-one'], namespace='obs')
+            created = ip.run_init(cfg, tmp)
+            out = _summary_text(tmp, cfg, created)
+        lines = [ln for ln in out.splitlines() if self._SET in ln]
+        assert len(lines) == 1, out
+        assert ' -n obs ' in lines[0]
+
+    def test_the_pinned_chart_that_lacks_the_switch_is_said_to(self):
+        """The pin is a published chart that has no existingConfigMap and no
+        values.schema.json, so it takes the `--set` and ignores it. Both
+        places that print the instruction must say so while that holds."""
+        assert (ip.THRESHOLD_EXPORTER_CHART_VERSION
+                == ip._CHART_WITHOUT_EXISTING_CONFIGMAP)
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = dict(_KUST_CFG, tenants=['t-one'])
+            created = ip.run_init(cfg, tmp)
+            readme = _readme_text(tmp)
+            out = _summary_text(tmp, cfg, created)
+        note = f'chart {ip.THRESHOLD_EXPORTER_CHART_VERSION} '
+        assert note + 'does not have thresholdConfig.existingConfigMap' in readme
+        assert any(note in ln and ('silently ignores' in ln or '靜默' in ln)
+                   for ln in out.splitlines()), out
+
+    def test_a_pin_past_that_chart_drops_the_note(self, monkeypatch):
+        """Control: once the pin moves to a chart that has the switch, the
+        note would be false, and it goes."""
+        monkeypatch.setattr(ip, 'THRESHOLD_EXPORTER_CHART_VERSION', '99.0.0')
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = dict(_KUST_CFG, tenants=['t-one'])
+            created = ip.run_init(cfg, tmp)
+            readme = _readme_text(tmp)
+            out = _summary_text(tmp, cfg, created)
+        assert 'existingConfigMap and silently' not in readme
+        assert self._SET in readme
+        assert 'silently ignores' not in out and '靜默' not in out
+
+    def test_helm_deploy_does_not_get_the_kustomize_step(self):
+        """Control: under --deploy helm the chart DOES own the ConfigMap."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = dict(_KUST_CFG, tenants=['t-one'], deploy='helm')
+            created = ip.run_init(cfg, tmp)
+            out = _summary_text(tmp, cfg, created)
+        assert 'existingConfigMap' not in out
+
+
 class TestGenKustomizeOverlay:
     """Tests for _gen_kustomize_overlay — Kustomize overlay generation."""
 

@@ -243,9 +243,11 @@ commands:
     "--secret-name": not_path
     "--selector-label": not_path
   patch-config:
+    "--configmap": not_path
     "--exporter-namespace": not_path
     "--exporter-port": not_path
     "--exporter-selector": not_path
+    "--namespace": not_path
     "--poll-interval": not_path
     "--reload-timeout": not_path
     metric_key: not_path
