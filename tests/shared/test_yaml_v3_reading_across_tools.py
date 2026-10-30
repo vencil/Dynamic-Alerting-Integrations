@@ -247,6 +247,10 @@ _NOT_PROBED: dict[str, str] = {
                                           "read in parse-tree's file mode (ADR-036 §12), no "
                                           "conf.d tree to probe; `tenants: [010]` is the text "
                                           "\"010\" — tests/lint/test_check_admin_config_schema.py"),
+    "_lib_doc_yaml_inventory.py": (_GO + "; the docs' YAML inventory (#3416): every example "
+                                   "quoted in docs/**/*.md, each written into a scratch tree it "
+                                   "makes itself, no conf.d argument to probe — "
+                                   "tests/lint/test_doc_yaml_inventory.py"),
     "lint/check_md_yaml_drift.py": (_GO + "; the conf.d examples quoted in docs/**/*.md, each "
                                     "written into a scratch tree it makes itself (ADR-036 step "
                                     "11), no conf.d argument to probe — "

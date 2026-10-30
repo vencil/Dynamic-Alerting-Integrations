@@ -382,7 +382,7 @@ Best for: teams already using the threshold-exporter Helm chart.
 
 **Concept**: Embed `conf.d/` thresholds in Helm values. Helm upgrade automatically updates the ConfigMap.
 
-```yaml
+```yaml {.helm-values}
 # environments/prod/values.yaml
 thresholdConfig:
   defaults:

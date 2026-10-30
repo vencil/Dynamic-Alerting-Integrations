@@ -377,6 +377,9 @@ NOT_IN_MATRIX: dict[str, str] = {
                                                 "parse-tree's file mode, ADR-036 §12), not a conf.d tree"),
     "tools/lint/check_md_yaml_drift.py": "checks YAML examples in docs against the schema; "
                                          "reads no conf.d tree",
+    "tools/_lib_doc_yaml_inventory.py": "the docs' YAML inventory (#3416): reads docs/**/*.md "
+                                        "and each example in a scratch tree of its own; no "
+                                        "conf.d tree operand",
     "tools/lint/check_structure.py": "checks the repo layout; reads no conf.d",
     "tools/lint/check_scrape_reachability.py": "repo self-check over fixed in-repo paths; no conf.d operand",
     "tools/lint/check_threshold_observed_map.py": "repo self-check over fixed in-repo paths; "

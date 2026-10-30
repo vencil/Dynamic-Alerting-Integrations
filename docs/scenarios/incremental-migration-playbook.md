@@ -153,7 +153,7 @@ chart 以 OCI 發布（[ADR-002](../adr/002-oci-registry-over-chartmuseum.md)）
 
 ⚠️ chart 出貨的 `thresholdConfig.defaults` 只含 Kubernetes、MariaDB、PostgreSQL 的預設值，redis 的 key 要自己補。從步驟 1.1 scaffold 產出的 `conf.d/_defaults.yaml` 抄 `redis_*` 那幾行即可。沒補的話，租戶設了也不會發射，exporter 會記一行 `unknown key "redis_memory_used_bytes" not in defaults`。
 
-```yaml
+```yaml {.helm-values}
 # values-redis.yaml
 thresholdConfig:
   defaults:                 # chart 出貨不含 redis；取自 scaffold 產出的 conf.d/_defaults.yaml

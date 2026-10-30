@@ -63,6 +63,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_write_check.py",  # #3206: a writer's fail-closed check of the tree it writes into
     "_lib_confedit.py",  # #3206: a tool's change of an existing conf.d file, sent to `da-guard write` (ADR-036 §2)
     "_lib_consumer_read.py",  # #3206: a manifest / Alertmanager config read the consumer's way (da-crdecode / da-read, ADR-036 §12)
+    "_lib_doc_yaml_inventory.py",  # #3416: the one inventory of the docs' ```yaml examples (drift / unit-sanity lints, Go loader test)
     "metric-dictionary.yaml",
     "validate_all.py",
     "vendor_download.sh",

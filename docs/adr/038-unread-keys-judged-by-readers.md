@@ -70,8 +70,7 @@ updated_at: 2026-10-28
 
 根 `_defaults.yaml` 與一個租戶檔：
 
-<!-- md-yaml-drift: ignore — 故意拼錯的範例：拼錯的鍵正是本節要說明的 -->
-```yaml
+```yaml {.confd .expect-invalid}
 # _defaults.yaml
 defaults:
   mysql_connections: 80

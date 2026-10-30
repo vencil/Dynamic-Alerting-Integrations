@@ -38,9 +38,10 @@ def _mkrepo(tmp_path: Path, name: str, body: str) -> Path:
     return tmp_path
 
 
-def _run(root: Path, env: dict[str, str] | None = None):
+def _run(root: Path, env: dict[str, str] | None = None, check: str = "schema"):
     return subprocess.run(  # noqa: S603
-        [sys.executable, "-X", "utf8", str(SCRIPT), "--ci", "--repo-root", str(root)],
+        [sys.executable, "-X", "utf8", str(SCRIPT), "--ci", "--repo-root", str(root),
+         "--check", check],
         capture_output=True, text=True, encoding="utf-8", timeout=60,
         env={**os.environ, **(env or {})},
     )
@@ -117,29 +118,47 @@ def test_an_unreadable_confd_example_fails(tmp_path: Path, body: str, kind: str)
     """ADR-036 step 11 (#3206): an example is read as conf.d is read (da-guard
     parse-tree). One the exporter refuses whole is a violation — a reader who
     copies it gets a file that is not served. Before, PyYAML read it
-    leniently (each document, the last of a repeated key) and judged that."""
-    r = _run(_mkrepo(tmp_path, "bad.md", body))
+    leniently (each document, the last of a repeated key) and judged that.
+
+    #3416: the refusal is the inventory's error, reported by `--check
+    fences`; the schema pass counts the unit as not judged here."""
+    root = _mkrepo(tmp_path, "bad.md", body)
+    r = _run(root, check="fences")
     assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
-    assert f"[UNREADABLE] docs/bad.md:2 ({kind})" in r.stdout, r.stdout
+    assert "[FENCE] docs/bad.md:2" in r.stdout and f"({kind}:" in r.stdout, r.stdout
+    s = _run(root)
+    assert "Units not judged here:       1" in s.stdout, s.stdout
 
 
-def test_a_marked_unreadable_example_passes(tmp_path: Path) -> None:
-    """Control: a deliberate counter-example carries the marker and a reason."""
-    body = ("<!-- md-yaml-drift: ignore — shows a refused file -->\n"
-            "```yaml\ndefaults:\n  a: 1\n---\ndefaults:\n  b: 2\n```\n")
-    r = _run(_mkrepo(tmp_path, "marked.md", body))
-    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+def test_a_declared_unreadable_example_passes(tmp_path: Path) -> None:
+    """Control: a deliberate counter-example declares the refusal it shows."""
+    body = ("```yaml {.confd .expect-refused=multiple_documents}\n"
+            "defaults:\n  a: 1\n---\ndefaults:\n  b: 2\n```\n")
+    root = _mkrepo(tmp_path, "marked.md", body)
+    for check in ("schema", "fences"):
+        r = _run(root, check=check)
+        assert r.returncode == EXIT_OK, check + r.stdout + r.stderr
 
 
-def test_an_unreadable_block_that_is_no_confd_example_passes(tmp_path: Path) -> None:
-    """Control: `---`-separated k8s manifests (and a frontmatter example) are
-    no conf.d; parse-tree refusing them as one conf.d file says nothing."""
-    body = ("```yaml\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n---\n"
-            "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: b}\n```\n"
-            "```yaml\n---\ntitle: x\nlang: zh\n---\n```\n")
-    r = _run(_mkrepo(tmp_path, "k8s.md", body))
-    assert r.returncode == EXIT_OK, r.stdout + r.stderr
-    assert "Unreadable conf.d examples:  0" in r.stdout, r.stdout
+def test_an_unreadable_block_that_is_no_confd_example_is_declared(tmp_path: Path) -> None:
+    """`---`-separated k8s manifests (and a frontmatter example) are no
+    conf.d; parse-tree refusing them as one conf.d file says nothing about
+    them. #3416: so the author says what they are — undeclared, the fence
+    check asks for that; declared, both pass."""
+    k8s = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n---\n"
+           "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: b}\n```\n")
+    front = "---\ntitle: x\nlang: zh\n---\n```\n"
+    root = _mkrepo(tmp_path, "k8s.md", "```yaml\n" + k8s + "```yaml\n" + front)
+    r = _run(root, check="fences")
+    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
+    assert r.stdout.count("[FENCE]") == 2, r.stdout
+    (root / "docs" / "k8s.md").write_text(
+        "```yaml {.k8s}\n" + k8s
+        + '```yaml {.illustrative reason="a frontmatter example"}\n' + front,
+        encoding="utf-8")
+    for check in ("schema", "fences"):
+        r = _run(root, check=check)
+        assert r.returncode == EXIT_OK, check + r.stdout + r.stderr
 
 
 def test_values_are_read_as_conf_d_reads_them(tmp_path: Path) -> None:
@@ -285,64 +304,65 @@ def test_bare_tenants_block_is_selected(tmp_path: Path) -> None:
     assert "(tenant-file)" in r.stdout
 
 
-def test_ignore_marker_exempts_and_is_reported(tmp_path: Path) -> None:
-    """A deliberate ❌ counter-example opts out — but never silently. The skip
-    is printed with the reason the marker had to supply, so `git grep
-    'md-yaml-drift: ignore'` plus the report is the full audit."""
-    body = (
-        "<!-- md-yaml-drift: ignore — deliberate counter-example -->\n"
-        '```yaml\ntenants:\n  example-tenant:\n    bogus_key: "1"\n```\n'
-    )
+def test_illustrative_exempts_and_is_reported(tmp_path: Path) -> None:
+    """A block no gate should judge opts out — but never silently. The skip
+    is printed with the reason the attribute had to supply, so a search for
+    `.illustrative` plus the report is the full audit."""
+    body = ('```yaml {.illustrative reason="shows a shape on purpose"}\n'
+            'tenants:\n  example-tenant:\n    bogus_key: "1"\n```\n')
     r = _run(_mkrepo(tmp_path, "ig.md", body))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
-    assert "Blocks exempted by marker:   1" in r.stdout
-    assert "deliberate counter-example" in r.stdout
-    assert "docs/ig.md:2" in r.stdout
+    assert "Units exempted (.illustrative): 1" in r.stdout
+    assert "docs/ig.md:2 — shows a shape on purpose" in r.stdout
 
 
-def test_ignore_marker_requires_a_reason(tmp_path: Path) -> None:
-    """⛔ A bare `ignore` must NOT exempt anything. An exemption without a stated
-    reason is the silent-exclusion pattern this marker exists to avoid."""
+def test_expect_invalid_holds_a_counter_example_to_being_invalid(tmp_path: Path) -> None:
+    """`{.confd .expect-invalid}` (rustdoc's compile_fail): the schema must
+    find the block wrong. Wrong: passes, its violations are not reported.
+    Right after all: that is the violation (the block is no counter-example)."""
+    bad = '```yaml {.confd .expect-invalid}\ntenants:\n  t1:\n    mysql_connections: 123\n```\n'
+    r = _run(_mkrepo(tmp_path, "ce.md", bad))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "docs/ce.md:1 — 1 violation(s) on purpose" in r.stdout, r.stdout
+    ok = '```yaml {.confd .expect-invalid}\ntenants:\n  t1:\n    mysql_connections: "123"\n```\n'
+    (tmp_path / "docs" / "ce.md").write_text(ok, encoding="utf-8")
+    r = _run(tmp_path)
+    assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "[SCHEMA] docs/ce.md:1 (expect-invalid)" in r.stdout, r.stdout
+
+
+def test_retired_marker_is_an_error_naming_the_attribute(tmp_path: Path) -> None:
+    """⛔ The retired comment marker exempts nothing any more: the fence check
+    names it and the attribute to write instead, and the block below it is
+    judged as any other."""
     body = (
-        "<!-- md-yaml-drift: ignore -->\n"
+        "<!-- md-yaml-drift: ignore — old style -->\n"
         "```yaml\ntenants:\n  example-tenant:\n    mysql_connections: 123\n```\n"
     )
-    r = _run(_mkrepo(tmp_path, "bare.md", body))
+    root = _mkrepo(tmp_path, "old.md", body)
+    r = _run(root, check="fences")
+    assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "[FENCE] docs/old.md:1" in r.stdout and ".illustrative" in r.stdout, r.stdout
+    r = _run(root)
     assert r.returncode == EXIT_VIOLATION, r.stdout
     assert "123" in r.stdout
 
 
-def test_ignore_marker_survives_multiple_blank_lines(tmp_path: Path) -> None:
-    """⛔ Regression: the look-back used a two-line window, so a marker with two
-    blank lines before the fence was silently lost and the block it exempted got
-    reported as a violation — with nothing pointing at the marker. The scan now
-    walks back to the first non-blank line."""
+def test_preceding_prose_is_no_declaration(tmp_path: Path) -> None:
+    """Only the fence's own attribute list declares it: prose above is prose."""
     body = (
-        "<!-- md-yaml-drift: ignore — two blank lines below -->\n"
-        "\n\n"
-        "```yaml\ntenants:\n  example-tenant:\n    mysql_connections: 123\n```\n"
-    )
-    r = _run(_mkrepo(tmp_path, "blanks.md", body))
-    assert r.returncode == EXIT_OK, r.stdout + r.stderr
-    assert "Blocks exempted by marker:   1" in r.stdout
-
-
-def test_preceding_prose_is_not_mistaken_for_a_marker(tmp_path: Path) -> None:
-    """The reverse of the above: walking back further must not start treating
-    ordinary prose as an exemption."""
-    body = (
-        "Some prose paragraph here.\n\n"
+        "Some prose paragraph here (illustrative only).\n\n"
         "```yaml\ntenants:\n  example-tenant:\n    mysql_connections: 123\n```\n"
     )
     r = _run(_mkrepo(tmp_path, "prose.md", body))
     assert r.returncode == EXIT_VIOLATION, r.stdout
 
 
-def test_ignore_marker_only_applies_to_the_next_block(tmp_path: Path) -> None:
-    """Scope check: the marker exempts ONE block, not the rest of the file."""
+def test_illustrative_applies_to_its_own_fence_only(tmp_path: Path) -> None:
+    """Scope check: the attribute exempts ONE fence, not the rest of the file."""
     body = (
-        "<!-- md-yaml-drift: ignore — first only -->\n"
-        "```yaml\ntenants:\n  a:\n    mysql_connections: 111\n```\n"
+        '```yaml {.illustrative reason="first only"}\n'
+        "tenants:\n  a:\n    mysql_connections: 111\n```\n"
         "\ntext between\n\n"
         "```yaml\ntenants:\n  b:\n    mysql_connections: 222\n```\n"
     )
@@ -355,9 +375,12 @@ def test_ignore_marker_only_applies_to_the_next_block(tmp_path: Path) -> None:
 def test_unparseable_block_is_left_to_the_fence_check(tmp_path: Path) -> None:
     """Fence hygiene is a separate hook; reporting it here too would let a
     mislabelled directory tree fail the schema gate for an unrelated reason."""
-    body = "```yaml\nconf.d/\n├── a.yaml\n```\n"
-    r = _run(_mkrepo(tmp_path, "tree.md", body))
+    body = "```yaml\nconf.d/\n├── a.yaml\n  : broken\n```\n"
+    root = _mkrepo(tmp_path, "tree.md", body)
+    r = _run(root)
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    # ...and the fence check, which reports every inventory error, does.
+    assert _run(root, check="fences").returncode == EXIT_VIOLATION
 
 
 def _break_tenant_schema_id(root: Path) -> None:

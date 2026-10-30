@@ -71,15 +71,10 @@ _YAML_LENIENT = {"safe_load", "safe_load_all", "load", "load_all", "full_load",
 # in ADR-036 §7 step 13, #3206.)
 _LENIENT_ANY = {"load_yaml_file"}
 
-LENIENT_BY_DESIGN: dict[str, str] = {
-    "lint/check_md_yaml_drift.py":
-        "the fence and CRD passes read YAML fences / k8s objects quoted in docs, not a "
-        "tenant conf.d; its conf.d examples are read by da-guard parse-tree (ADR-036 "
-        "step 11) — PyYAML only tells whether a file parse-tree refuses looks like one",
-    "lint/check_threshold_unit_sanity.py":
-        "its conf.d trees are read by da-guard parse-tree (#2906); the lenient reads "
-        "left are docs' fenced YAML and template-data's embedded examples, not a conf.d",
-}
+# (#3416: check_md_yaml_drift and check_threshold_unit_sanity read the
+# docs' examples and template-data's from the docs' YAML inventory, through
+# their consumers; neither holds a lenient read any more.)
+LENIENT_BY_DESIGN: dict[str, str] = {}
 
 
 def _name(call: ast.Call) -> str:

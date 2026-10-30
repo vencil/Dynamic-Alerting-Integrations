@@ -318,10 +318,6 @@ NOT_A_CELL: dict[str, str] = {
     "dx/run_chaos_soak.py":
         "`trigger_reload` WRITES a carrier; its hidden axis is pinned by "
         "tests/dx/test_run_chaos_soak.py (#1630)",
-    "lint/check_threshold_unit_sanity.py":
-        "walks only docs/ itself; its fixed conf.d dirs are listed by da-guard "
-        "parse-tree (#2906); hidden axis pinned by "
-        "test_hidden_carriers_are_not_linted (#1630)",
     "_lib_parse_cache.py":
         "lists only through `_lib_confd.iter_config_files` (library cell): "
         "a directory's carriers, for the cache-mode `not_read` verdict",
@@ -348,7 +344,9 @@ NOT_A_CELL: dict[str, str] = {
     "lint/check_cli_contract.py": "walks docs/, not a conf.d",
     "lint/check_cli_default_drift.py": "walks scripts/, not a conf.d",
     "lint/check_doc_datools_cmds.py": "walks docs/, not a conf.d",
-    "lint/check_md_yaml_drift.py": "walks docs/, not a conf.d",
+    # #3416: check_md_yaml_drift and check_threshold_unit_sanity walk docs/
+    # only through this inventory now; they list no directory themselves.
+    "_lib_doc_yaml_inventory.py": "walks docs/, not a conf.d (#3416)",
     "lint/check_scrape_reachability.py": "walks k8s manifests, not a conf.d",
     "lint/check_threshold_reachability.py":
         "walks scripts/ for a census, not a conf.d",

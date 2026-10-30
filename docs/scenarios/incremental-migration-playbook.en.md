@@ -153,7 +153,7 @@ The chart is published as an OCI artifact ([ADR-002](../adr/002-oci-registry-ove
 
 ⚠️ The chart's shipped `thresholdConfig.defaults` only covers Kubernetes, MariaDB and PostgreSQL; you must add the redis keys yourself. Copy the `redis_*` lines from the `conf.d/_defaults.yaml` that scaffold produced in Step 1.1. Without them the tenant's values are not emitted, and the exporter logs `unknown key "redis_memory_used_bytes" not in defaults`.
 
-```yaml
+```yaml {.helm-values}
 # values-redis.yaml
 thresholdConfig:
   defaults:                 # not shipped by the chart; taken from scaffold's conf.d/_defaults.yaml

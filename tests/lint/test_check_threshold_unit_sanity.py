@@ -309,15 +309,30 @@ def test_template_data_embedded_yaml_is_scanned(tmp_path):
     assert not any("[fine]" in e for e in errs), errs
 
 
-def test_template_data_unparseable_yaml_is_skipped_not_fatal(tmp_path):
-    """A malformed template must not take the whole gate down with it."""
+def test_template_data_unreadable_yaml_is_named_not_fatal(tmp_path):
+    """A malformed template must not take the whole gate down with it — nor
+    pass unseen: its text is tenant conf.d, read as conf.d is read (da-guard
+    parse-tree, #3416), and one parse-tree refuses is an UNREADABLE finding
+    (its values were not checked). The gate still reaches the next one."""
     _write(tmp_path, "docs/assets/template-data.json", json.dumps(
         {"templates": [
             {"id": "broken", "yaml": "key: [unclosed"},
             {"id": "demo", "yaml": 'pg_connections: "300"'},
         ]}))
     errs = _errors(_registry(pg_connections=_spec(80, "% of max_connections")), tmp_path)
-    assert any("template-data.json[demo]" in e for e in errs), errs
+    assert any("template-data.json[demo]" in e and "OUT-OF-DOMAIN" in e for e in errs), errs
+    assert any(e.startswith("UNREADABLE: docs/assets/template-data.json[broken]")
+               and "syntax_error" in e for e in errs), errs
+
+
+def test_template_data_is_read_as_conf_d_reads_it(tmp_path):
+    """#3416: a repeated key is a file the exporter refuses whole; PyYAML
+    took the last value (here an in-domain one) and judged that."""
+    _write(tmp_path, "docs/assets/template-data.json", json.dumps(
+        {"templates": [{"id": "dup", "yaml": 'pct: "300"\npct: "30"'}]}))
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert any("UNREADABLE" in e and "[dup]" in e and "duplicate_key" in e
+               for e in errs), errs
 
 
 def test_platform_data_value_and_declared_unit_are_scanned(tmp_path):
@@ -337,6 +352,39 @@ def test_markdown_fenced_yaml_is_scanned(tmp_path):
            "設定範例：\n\n```yaml\ndefaults:\n  pct: 300\n```\n")
     errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
     assert any("example.md" in e and "OUT-OF-DOMAIN" in e for e in errs), errs
+
+
+def test_markdown_units_are_scanned_one_documented_file_at_a_time(tmp_path):
+    """#3416: a fence that documents two files is two units. Read whole (as
+    PyYAML read the fence before), the second `tenants:` replaced the first,
+    and the first tenant's value was never looked at."""
+    _write(tmp_path, "docs/x.md",
+           "```yaml\n# a.yaml\ntenants:\n  t1:\n    pct: \"300\"\n\n"
+           "# b.yaml\ntenants:\n  t2:\n    pct: \"30\"\n```\n")
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert any(e.startswith("OUT-OF-DOMAIN: docs/x.md:2: pct = 300") for e in errs), errs
+
+
+@pytest.mark.parametrize("info", ["{.confd}", "{.helm-values}", "{.k8s}"])
+def test_an_attributed_fence_stays_in_scope(tmp_path, info):
+    """#3416: declaring a fence must not take it out of this gate — every
+    consumer's reading is scanned, not only conf.d's (a Helm values file as
+    Helm reads it, da-crdecode)."""
+    body = {"{.confd}": "defaults:\n  pct: 300\n",
+            "{.helm-values}": "thresholdConfig:\n  defaults:\n    pct: 300\n",
+            "{.k8s}": "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n"
+                      "data:\n  pct: \"300\"\n"}[info]
+    _write(tmp_path, "docs/x.md", f"```yaml {info}\n{body}```\n")
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert any(e.startswith("OUT-OF-DOMAIN: docs/x.md:2: pct = 300") for e in errs), errs
+
+
+def test_an_illustrative_fence_is_out_of_scope(tmp_path):
+    """The deliberate narrowing: an `.illustrative` fence is judged by no
+    gate (its reason is printed by every drift report)."""
+    _write(tmp_path, "docs/x.md",
+           '```yaml {.illustrative reason="r"}\ndefaults:\n  pct: 300\n```\n')
+    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
 
 
 def test_markdown_non_yaml_and_fragment_blocks_are_tolerated(tmp_path):
@@ -401,6 +449,52 @@ def test_real_repo_is_clean():
     """Smoke: the shipped artifacts satisfy the gate. If this goes red, an
     asset drifted from the registry — read the message, don't relax the gate."""
     assert gate.run_check()["errors"] == []
+
+
+#: The registry-key values written in docs/**/*.md that this gate does not
+#: look at: each sits in a unit no reader judges — an `.illustrative`
+#: fence, a unit its reader refuses, a unit with an inventory error (#3416).
+#: Listed one by one, so the narrowing is deliberate: a new entry here is a
+#: value a doc change took out of scope, and is decided in review.
+DROPPED_SINCE_INVENTORY = {
+    # The flat-shape ❌ counter-example (`.illustrative`): wrong in shape,
+    # not in value. The one entry the scan before the inventory looked at
+    # (PyYAML over every fence, the old ignore marker not consulted).
+    ("docs/internal/testing-playbook.md", "mysql_connections", 70.0),
+    # ADR-036's two-document example ({.confd .expect-refused=
+    # multiple_documents}): the exporter serves neither document. The scan
+    # before did not see these either (PyYAML's single-document load
+    # refused the stream).
+    ("docs/adr/036-single-parser-effective-config.en.md", "mysql_connections", 80.0),
+    ("docs/adr/036-single-parser-effective-config.en.md", "mysql_connections", 90.0),
+    ("docs/adr/036-single-parser-effective-config.md", "mysql_connections", 80.0),
+    ("docs/adr/036-single-parser-effective-config.md", "mysql_connections", 90.0),
+}
+
+
+def test_values_out_of_scope_are_the_listed_ones():
+    """Every registry-key value in a docs unit the inventory does not judge,
+    read leniently (PyYAML, every document, in this test only), is in
+    DROPPED_SINCE_INVENTORY — and every listed one is still such a value."""
+    import _lib_doc_yaml_inventory as doc_inventory
+    registry = gate.registry_lib.load_registry()
+    gate.run_check(registry=registry, root=_ROOT)  # seeds _REGISTRY_KEYS
+    inv = doc_inventory.build(_ROOT)
+    judged = {id(u) for u in inv.judged()}
+    dropped = set()
+    for u in inv.units:
+        if id(u) in judged:
+            continue
+        try:
+            docs = list(yaml.safe_load_all(u.text))
+        except yaml.YAMLError:
+            continue
+        for doc in docs:
+            for key, val in gate._walk_values(doc):
+                dropped.add((u.path, key, val))
+    assert dropped == DROPPED_SINCE_INVENTORY, (
+        f"newly out of scope: {sorted(dropped - DROPPED_SINCE_INVENTORY)}; "
+        f"listed but back in scope (drop the row): {sorted(DROPPED_SINCE_INVENTORY - dropped)}")
 
 
 def test_main_names_a_values_file_helm_cannot_read_and_exits_2(tmp_path, monkeypatch, capsys):

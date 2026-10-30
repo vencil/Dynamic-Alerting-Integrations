@@ -1,5 +1,11 @@
 """Contract tests for `check_md_yaml_drift.py --check fences`.
 
+Since #3416 this check reports the errors of the docs' YAML inventory
+(scripts/tools/_lib_doc_yaml_inventory.py): a block its reader refuses, a
+fence attribute outside the vocabulary (tests/lint/test_doc_yaml_inventory.py
+pins those). The reader of an undeclared block is da-guard parse-tree, which
+conftest builds for the session.
+
 Deliberately synthetic (each case builds its own tiny docs/ tree under
 ``tmp_path``) rather than asserting against the live repo. The live tree is
 already guarded by the `md-yaml-fence-check` pre-commit hook, which runs in
@@ -47,20 +53,34 @@ def test_plain_yaml_fence_passes(tmp_path: Path) -> None:
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
 
 
-def test_multi_document_stream_passes(tmp_path: Path) -> None:
-    """`---`-separated manifests are valid YAML — the reason this check uses
-    ``safe_load_all``. Four real blocks in docs/ are exactly this shape, and a
-    single-document loader would wrongly demand they be split apart."""
-    body = "```yaml\napiVersion: v1\nkind: A\n---\napiVersion: v1\nkind: B\n```\n"
+def test_a_declared_multi_document_stream_passes(tmp_path: Path) -> None:
+    """`---`-separated manifests are kubectl's to read: declared `{.k8s}`,
+    da-crdecode reads every document and the fence passes."""
+    body = ("```yaml {.k8s}\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n---\n"
+            "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: b}\n```\n")
     r = _run(_docs(tmp_path, "multi.md", body))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
+    assert "k8s (declared)" in r.stdout, r.stdout
+
+
+def test_an_undeclared_multi_document_stream_asks_for_a_declaration(tmp_path: Path) -> None:
+    """#3416: an undeclared fence is read by the conf.d reader (parse-tree),
+    which refuses several documents. That says nothing about a manifest, so
+    the author is asked to say what the block is — never a silent pass."""
+    body = "```yaml\napiVersion: v1\nkind: A\n---\napiVersion: v1\nkind: B\n```\n"
+    r = _run(_docs(tmp_path, "multi.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "[FENCE] docs/multi.md:2" in r.stdout, r.stdout
+    assert "multiple_documents" in r.stdout and "{.k8s}" in r.stdout, r.stdout
 
 
 def test_directory_tree_in_yaml_fence_fails(tmp_path: Path) -> None:
     body = "```yaml\nconf.d/\n├── _defaults.yaml   # global\n└── a.yaml\n```\n"
     r = _run(_docs(tmp_path, "tree.md", body))
     assert r.returncode == EXIT_VIOLATION, r.stdout
-    assert "[FENCE] docs/tree.md:1" in r.stdout
+    # The unit's first line (the fence is line 1), as every inventory error.
+    assert "[FENCE] docs/tree.md:2" in r.stdout
+    assert "syntax_error" in r.stdout, r.stdout
 
 
 def test_shell_mixed_with_yaml_in_one_fence_fails(tmp_path: Path) -> None:
@@ -83,9 +103,10 @@ def test_shell_mixed_with_yaml_in_one_fence_fails(tmp_path: Path) -> None:
 
 def test_pure_shell_fence_is_a_known_blind_spot(tmp_path: Path) -> None:
     """⚠️ Stated rather than papered over: a fence containing ONLY shell, with
-    no `key:` anywhere, is a valid YAML *scalar* and therefore passes.
+    no `key:` anywhere, is a YAML *scalar*: a top level that is not a mapping,
+    which is no conf.d file, so it passes.
 
-    "Parses as YAML" is necessary, not sufficient, for an honest fence tag. It
+    "A reader reads it" is necessary, not sufficient, for an honest fence tag. It
     catches the mislabels that actually occur here (directory trees, and shell
     mixed with a manifest) because those contain colons that collide. Closing
     this fully would need language detection, which is a different tool with a
@@ -104,7 +125,25 @@ def test_failure_names_file_and_line(tmp_path: Path) -> None:
     body = "# heading\n\nprose\n\n```yaml\na: [1\n```\n"
     r = _run(_docs(tmp_path, "loc.md", body))
     assert r.returncode == EXIT_VIOLATION, r.stdout
-    assert "docs/loc.md:5" in r.stdout
+    assert "docs/loc.md:6" in r.stdout
+
+
+def test_a_text_pyyaml_reads_but_yaml_v3_refuses_fails(tmp_path: Path) -> None:
+    """#3416: the fence check no longer asks PyYAML. `"\\/"` in a double-
+    quoted scalar is an escape PyYAML reads and yaml.v3 refuses
+    (syntax_error): a block of this repo is read by yaml.v3's readers."""
+    body = '```yaml\nurl: "https:\\/\\/x"\n```\n'
+    r = _run(_docs(tmp_path, "esc.md", body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "syntax_error" in r.stdout, r.stdout
+
+
+def test_a_text_yaml_v3_reads_but_pyyaml_refuses_passes(tmp_path: Path) -> None:
+    """The other direction: a TAB after `key:` is refused by PyYAML and read
+    by yaml.v3, the reader of these blocks — no error."""
+    body = "```yaml\nk:\tv\n```\n"
+    r = _run(_docs(tmp_path, "tab.md", body))
+    assert r.returncode == EXIT_OK, r.stdout + r.stderr
 
 
 def test_non_yaml_fences_are_ignored(tmp_path: Path) -> None:

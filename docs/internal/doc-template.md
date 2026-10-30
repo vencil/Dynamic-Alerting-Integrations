@@ -30,7 +30,7 @@ lang: zh
 
 **Frontmatter 範例**：
 
-```yaml
+```yaml {.illustrative reason="Markdown 文件的 frontmatter（含前後兩條 --- 分隔線），由 mkdocs 讀，不是 YAML 設定檔"}
 ---
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
@@ -213,6 +213,13 @@ da-tools diagnose db-a --config-dir conf.d/
 # PromQL 示例
 rate(requests_total[5m]) > 100
 ```
+
+- **`yaml` 區塊由它的讀者判**（[#3416](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3416)）：`check_md_yaml_drift`（`md-yaml-fence-check`／`md-yaml-drift-check`／`md-yaml-crd-check`）與 `threshold-unit-sanity-check` 都從同一份清冊（`scripts/tools/_lib_doc_yaml_inventory.py`，詞彙與判定規則寫在它的 docstring）取區塊。沒宣告的區塊用 conf.d 的讀法（`da-guard parse-tree`）讀，讀得了就照結構判定（conf.d 範例、k8s 物件、其他）；讀不了（多份文件、重複鍵、語法錯誤；頂層不是 mapping 除外）就報錯，要你在語言後面用大括號宣告它是什麼：
+  - 消費者：```` ```yaml {.k8s} ````（`---` 分隔的 manifest）、`{.confd}`、`{.helm-values}`、`{.prom-rules}`、`{.alertmanager}`、`{.prometheus}`。
+  - 故意拒收的反例：`{.confd .expect-refused=<kind>}`（kind 是 parse-tree 回報的那個，例如 `multiple_documents`）。
+  - 讀得了但故意寫錯的反例：`{.confd .expect-invalid}`（schema 檢查必須判它不合法）。
+  - 不給任何閘門判的區塊：`{.illustrative reason="…"}`（reason 必填，每份報告都會列出）。
+  - 屬性詞彙是封閉的，寫錯或沒有大括號（```` ```yaml confd ````，mkdocs 不會當成程式碼區塊）都報錯；舊的 `md-yaml-drift` HTML 註解標記已退役，留著也會報錯。
 
 ### 3.3 表格
 

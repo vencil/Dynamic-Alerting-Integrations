@@ -64,8 +64,7 @@ This ADR only decides how to judge and how to report. When each gate (validate-c
 
 A root `_defaults.yaml` and one tenant file:
 
-<!-- md-yaml-drift: ignore — deliberate typo example: the misspelled keys are the point of this section -->
-```yaml
+```yaml {.confd .expect-invalid}
 # _defaults.yaml
 defaults:
   mysql_connections: 80

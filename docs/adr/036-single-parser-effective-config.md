@@ -76,8 +76,7 @@ updated_at: 2026-10-30
 
 YAML 有一種「把另一個 mapping 併進來」的寫法，常見的是 `<<:`。PyYAML 把任何標上 `!!merge` 的鍵都當成這種合併；yaml.v3 只認字面上的 `<<`。下面這份租戶檔就踩在這個落差上：
 
-<!-- md-yaml-drift: ignore — 示範讀不了的輸入：`!!merge` 標記在白名單外，exporter 整份拒收 -->
-```yaml
+```yaml {.confd .expect-refused=tag_not_allowed}
 # t1.yaml
 tenants:
   t1:
@@ -222,8 +221,7 @@ Python 端不再有自己的一份規則。兩邊選檔的差異列進固定語�
 
 這是 breaking change：前面「問題」一節實測的 9 種寫法裡，exporter 今天照讀 7 種，之後這些檔整份不服務。範例。輸入：
 
-<!-- md-yaml-drift: ignore — 示範讀不了的輸入：一個檔裡有兩份文件，exporter 整份拒收 -->
-```yaml
+```yaml {.confd .expect-refused=multiple_documents}
 # t1.yaml
 tenants:
   t1:
@@ -254,8 +252,7 @@ tenants:
 
 範例。輸入：
 
-<!-- md-yaml-drift: ignore — 示範讀法的輸入：yaml.v3 把 send_resolved: yes 讀成字串 "yes"，不是可照抄的設定 -->
-```yaml
+```yaml {.confd .expect-invalid}
 # t010.yaml
 tenants:
   010:
