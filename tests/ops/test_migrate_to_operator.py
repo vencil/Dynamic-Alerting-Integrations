@@ -163,16 +163,14 @@ class TestParseConfigMapRules:
         assert total_groups == 2
 
     def test_parse_configmap_rules_invalid_yaml(self, temp_configmap_dir):
-        """Graceful handling of invalid YAML."""
-        # Add an invalid YAML file
-        invalid_yaml = "invalid: yaml: content: ["
-        (temp_configmap_dir / "invalid.yaml").write_text(invalid_yaml)
-
-        # Should not raise, but skip invalid files
-        rules = mto.parse_configmap_rules(temp_configmap_dir)
-        files = {r["file"] for r in rules}
-        assert "invalid.yaml" not in files
-        assert len(rules) == 2  # Still got the 2 valid files
+        """#3426: a file no reader reads stops the run, named with the
+        reader's reason — it used to be a WARNING and a skip."""
+        (temp_configmap_dir / "invalid.yaml").write_text("invalid: yaml: content: [")
+        with pytest.raises(mto.SourceFilesUnreadable) as exc_info:
+            mto.parse_configmap_rules(temp_configmap_dir)
+        (name, why), = exc_info.value.files
+        assert name == "invalid.yaml" and "yaml:" in why, exc_info.value.files
+        assert "invalid.yaml: " in str(exc_info.value)
 
     def test_parse_configmap_rules_directory_not_found(self):
         """FileNotFoundError when directory does not exist."""
@@ -1139,6 +1137,67 @@ class TestSourceDirNamesWhatItDoesNotRead:
         (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
         mto.parse_configmap_rules(src)
         assert "not read" not in capsys.readouterr().err
+
+
+class TestSourceFilesAreWhatTheReadersSay:
+    """#3426: a --source-dir file is a manifest kubectl reads, or else a
+    plain rule file (one object declaring `groups`, read with
+    `da-crdecode --any-shape`); anything else stops the run at rc 2 before a
+    single file is written, every such file named with the reader's reason.
+    Before, a file kubectl's reading refused was a WARNING and a skip, and a
+    document that was no mapping was skipped without a word."""
+
+    _RULES = "groups:\n  - name: g\n    rules:\n      - alert: A\n        expr: up == 0\n"
+
+    @pytest.mark.parametrize("name,text,reason", [
+        ("top-level-list.yaml", "- groups: []\n", "the document is array, not a mapping"),
+        ("scalar.yaml", "just text\n", "the document is string, not a mapping"),
+        # kubectl's reading refuses it (no kind); as a plain file it is no
+        # rule file either (two documents).
+        ("two-rule-docs.yaml", _RULES + "---\n" + _RULES, "it has no `kind`"),
+        # `kubectl get cm -o yaml` writes a List; its ConfigMaps used to be
+        # passed over by the kind filter without a word.
+        ("list.yaml", "apiVersion: v1\nkind: List\nitems: []\n", "a List document is not read"),
+        ("cm-then-junk.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n---\n- x\n",
+         "the document starting at line 5"),
+    ])
+    def test_unreadable_file_is_named(self, tmp_path, name, text, reason):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / name).write_text(text, encoding="utf-8")
+        with pytest.raises(mto.SourceFilesUnreadable) as exc_info:
+            mto.parse_configmap_rules(src)
+        (got_name, why), = exc_info.value.files
+        assert got_name == name and reason in why, exc_info.value.files
+
+    def test_plain_rule_file_still_migrates(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
+        (got,) = mto.parse_configmap_rules(src)
+        assert got["file"] == "rules.yaml" and got["cm_data_key"] is None
+        assert [g["name"] for g in got["rule_groups"]] == ["g"]
+
+    def test_main_stops_and_writes_nothing(self, tmp_path, temp_config_dir, capsys):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / "bad.yaml").write_text("- groups: []\n", encoding="utf-8")
+        out = tmp_path / "out"
+        with patch("sys.argv", [
+            "migrate_to_operator.py",
+            "--source-dir", str(src),
+            "--config-dir", str(temp_config_dir),
+            "--output-dir", str(out),
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                mto.main()
+        assert exc_info.value.code == 2
+        assert not out.exists(), "nothing may be written when a source file is unreadable"
+        err = capsys.readouterr().err
+        assert "bad.yaml: " in err and "the document is array" in err, err
+        assert "WARNING: Failed to parse" not in err
 
 
 class TestConfigMapScanAcceptsBothSpellings:

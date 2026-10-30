@@ -64,6 +64,7 @@ class TestParseAlertmanagerConfig:
             "receivers": [{"name": "default"}],
         })
         path = write_yaml(config_dir, "cm.yaml", yaml.dump({
+            "apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "am"},
             "data": {"alertmanager.yml": inner},
         }))
         result = parse_alertmanager_config(path)
@@ -1095,6 +1096,7 @@ class TestParseScrapeConfigs:
         """ConfigMap 包裝的抓取設定正確解析。"""
         inner = yaml.dump({"scrape_configs": [{"job_name": "kubelet"}]})
         path = write_yaml(config_dir, "cm.yaml", yaml.dump({
+            "apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "prom"},
             "data": {"prometheus.yml": inner},
         }))
         result = parse_scrape_configs(path)

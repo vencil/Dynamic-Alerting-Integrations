@@ -1650,7 +1650,7 @@ da-tools migrate-to-operator [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄。讀的是頂層的 YAML 檔，清單取自 da-guard 只列檔模式（`parse-tree --list-only`）對這個目錄的走訪，所以需要 da-guard（找不到結束碼 `2`）；子目錄裡的檔不讀，stderr 會點名；頂層不讀的項目（以 `.` 開頭的隱藏檔或目錄、懸空 symlink、FIFO 等）也由一行 `WARNING:` 逐一點名並附原因。這個目錄不是 conf.d，不套用 conf.d 的拒絕：解析不了的檔印 WARNING 並略過 | （必填） |
+| `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄。讀的是頂層的 YAML 檔，清單取自 da-guard 只列檔模式（`parse-tree --list-only`）對這個目錄的走訪，所以需要 da-guard（找不到結束碼 `2`）；子目錄裡的檔不讀，stderr 會點名；頂層不讀的項目（以 `.` 開頭的隱藏檔或目錄、懸空 symlink、FIFO 等）也由一行 `WARNING:` 逐一點名並附原因。這個目錄不是 conf.d，不套用 conf.d 的拒絕；每個檔由讀者判定它是什麼（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：先以 kubectl 的 manifest 讀法（`da-crdecode`）讀，其中 ConfigMap 的 data 值若是 rule file 就遷移；被拒收時，若以任意 YAML 讀法（`da-crdecode --any-shape`）讀出的是「單一 mapping、宣告 `groups`」的純 rule file，就當 rule file 遷移；其餘的檔（YAML 壞掉、頂層是 list 或純量、沒有 `kind` 的 document、`kind: List`——`kubectl get cm -o yaml` 的輸出就是 List，請改成一個 document 一個 ConfigMap）一律讓整次執行以結束碼 `2` 停下、一個檔都不寫，stderr 逐檔點名並附讀者的理由（`--json` 的 envelope `reason` 為 `source_files_unreadable`）。⚠️ 先前這些檔只印 WARNING 並略過、結束碼 0 | （必填） |
 | `--config-dir <DIR>` | 租戶配置目錄。租戶的認定與 `operator-generate` 相同：整棵樹各租戶檔 `tenants:` 的鍵（經 `da-guard parse-tree`），不是檔名。⚠️ 有讀不了的租戶檔、同一租戶在兩個檔宣告、或沒有可用的 da-guard ⇒ exit `2`（`--json` 的 envelope `reason` 為 `tenant_set_unknown`）。不符合 RFC 1123 的租戶 id 進 `issues` 並略過 | `conf.d` |
 | `--output-dir <DIR>` | 把 CRD 與 checklist 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run` _且_ 沒帶 `--checklist-only`**（與下面 `--json` 信封同一組判別條件）；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |

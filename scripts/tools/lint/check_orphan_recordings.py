@@ -227,9 +227,7 @@ def iter_dashboard_exprs(root: Path = PROJECT_ROOT):
     # #3206: the Grafana ConfigMaps the way kubectl reads them (da-crdecode).
     cm_dir, cm_pat = GRAFANA_CM_GLOB
     for p in sorted((root / cm_dir).glob(cm_pat)):
-        for cm in _lib_consumer_read.kubernetes_documents(str(p)):
-            if not isinstance(cm, dict):
-                continue
+        for cm in _lib_consumer_read.kubernetes_documents(str(p)):   # a Kubernetes object: the manifest reading's guarantee (#3426)
             for _key, val in (cm.get("data") or {}).items():
                 yield from _walk_json_strings(json.loads(val))
 

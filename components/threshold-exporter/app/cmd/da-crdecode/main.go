@@ -19,12 +19,36 @@
 // Usage:
 //
 //	da-crdecode <file>
-//	da-crdecode -        (reads standard input)
+//	da-crdecode -              (reads standard input)
+//	da-crdecode --any-shape <file|->
+//
+// Two readings (#3426):
+//
+//   - The default is a Kubernetes manifest, as kubectl reads one. After the
+//     conversion kubectl decodes each document into an object
+//     (k8s.io/apimachinery's unstructured.UnstructuredJSONScheme), which
+//     refuses a document that is not a mapping ("cannot unmarshal array into
+//     Go value of type unstructured.detector") and one with no kind ("Object
+//     'Kind' is missing"). Here each such document is refused too, naming the
+//     line it starts on: a document that is no object — an array, a string, a
+//     number — or one whose `kind` is missing, not a string, or empty. So a
+//     caller can rely on every entry of `documents` being an object with a
+//     non-empty string `kind`.
+//   - `--any-shape` reads YAML that is not a manifest with the same
+//     conversion: a ConfigMap data value (a rule file, an Alertmanager
+//     config), a plain rule file, a Helm values file. Nothing is checked about
+//     the shape of a document; everything else (the split, the conversion,
+//     the as-written comparison) is the same.
 //
 // Output (stdout, on exit 0): one JSON object,
 //
 //	{"documents": [<each document, as JSON>, ...],
-//	 "differs_from_text": [[<difference>, ...], ...]}
+//	 "differs_from_text": [[<difference>, ...], ...],
+//	 "reading": "manifest" | "any-shape"}
+//
+// `reading` names which of the two readings below produced the output, so a
+// caller that relies on the manifest reading's guarantee can tell that it
+// was given (an older da-crdecode prints no `reading` and checks no shape).
 //
 // A file may hold several documents (ADR-036 §12, #3206). They are split the
 // way `kubectl apply -f` splits a file (k8s.io/apimachinery's YAMLReader,
@@ -42,7 +66,12 @@
 // Not reproduced: kubectl first tries to read a stream as JSON (a file that
 // starts with `{`) and reads several concatenated JSON objects that way; here
 // every piece goes through the YAML conversion, which reads one JSON object
-// the same way and refuses several.
+// the same way and refuses several. Nor is a list: kubectl reads a document
+// with a top-level `items` key (`kind: List`, `kind: ConfigMapList`) as a
+// list and applies each of its items. This reading refuses such a document
+// instead of expanding it ("a List document is not read; write its items as
+// separate documents"): the callers look for objects by kind, and an object
+// inside a list they do not open would be passed over without a word.
 //
 // Exit codes:
 //
@@ -50,8 +79,10 @@
 //	2  caller error: bad arguments, the file cannot be read, a `---` line
 //	   carries content, the conversion refuses a document (the reason is on
 //	   stderr, with the line the document starts on), a piece between two
-//	   `---` lines holds more than one YAML document, or a document cannot
-//	   be read as written to compare with the conversion
+//	   `---` lines holds more than one YAML document, a document cannot be
+//	   read as written to compare with the conversion, or — without
+//	   `--any-shape` — a document is no Kubernetes object (not a mapping; no
+//	   string `kind`, or an empty one) or is a list
 package main
 
 import (
@@ -78,7 +109,14 @@ const (
 type output struct {
 	Documents       []json.RawMessage `json:"documents"`
 	DiffersFromText [][]difference    `json:"differs_from_text"`
+	Reading         string            `json:"reading"`
 }
+
+// The values of output.Reading.
+const (
+	readingManifest = "manifest"
+	readingAnyShape = "any-shape"
+)
 
 func main() {
 	os.Exit(run(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
@@ -87,13 +125,23 @@ func main() {
 // stdinName is how standard input is named in messages.
 const stdinName = "<stdin>"
 
+// anyShapeFlag reads YAML that is not a manifest: no document shape is checked.
+const anyShapeFlag = "--any-shape"
+
 func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	anyShape := false
+	if len(args) > 0 && args[0] == anyShapeFlag {
+		anyShape = true
+		args = args[1:]
+	}
 	if len(args) != 1 || args[0] == "" || args[0] == "-h" || args[0] == "--help" {
-		fmt.Fprintf(stderr, "usage: %s <file|->\n", programName)
+		fmt.Fprintf(stderr, "usage: %s [%s] <file|->\n", programName, anyShapeFlag)
 		fmt.Fprintf(stderr, "Decodes a YAML file as Kubernetes clients do "+
 			"(sigs.k8s.io/yaml.YAMLToJSON, one document after another as `kubectl apply -f` "+
 			"splits them) and prints {\"documents\": [...], \"differs_from_text\": [...]} as JSON. "+
-			"`-` reads standard input.\n")
+			"`-` reads standard input. Every document must be a Kubernetes object (a mapping "+
+			"with a non-empty string `kind`, not a list) unless %s is given, which reads YAML "+
+			"that is not a manifest (a ConfigMap data value, a rule file, Helm values).\n", anyShapeFlag)
 		return exitCallerErr
 	}
 	name := args[0]
@@ -114,9 +162,15 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		fmt.Fprintf(stderr, "%s: %s: %v\n", programName, name, err)
 		return exitCallerErr
 	}
-	result := output{Documents: []json.RawMessage{}, DiffersFromText: [][]difference{}}
+	result := output{Documents: []json.RawMessage{}, DiffersFromText: [][]difference{}, Reading: readingManifest}
+	if anyShape {
+		result.Reading = readingAnyShape
+	}
 	for _, p := range pieces {
 		doc, differs, skip, err := decodeDocument(p.atFileLines())
+		if err == nil && !skip && !anyShape {
+			err = manifestObject(doc)
+		}
 		if err != nil {
 			if len(pieces) > 1 {
 				fmt.Fprintf(stderr, "%s: %s: the document starting at line %d: %v\n", programName, name, p.line, err)
@@ -216,6 +270,60 @@ func decodeDocument(data []byte) (json.RawMessage, []difference, bool, error) {
 		return nil, nil, false, err
 	}
 	return doc, differs, false, nil
+}
+
+// manifestObject refuses a converted document kubectl would not read as one
+// Kubernetes object (unstructured.UnstructuredJSONScheme.Decode, apimachinery
+// v0.37.0): a document that is not a mapping, one whose `kind` is missing,
+// not a string or empty (all "Object 'Kind' is missing" there), and a list —
+// any document with a top-level `items` key, which that decoder reads as a
+// list (even `items: null`) and kubectl expands. The kind is checked first,
+// as there: `{items: []}` is refused for its missing kind.
+func manifestObject(doc json.RawMessage) error {
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(doc, &obj); err != nil || obj == nil {
+		return fmt.Errorf("it is not a Kubernetes object: the document is %s, not a mapping "+
+			"(kubectl: cannot unmarshal %s into Go value of type unstructured.detector)",
+			jsonShape(doc), jsonShape(doc))
+	}
+	var kind string
+	raw, ok := obj["kind"]
+	switch {
+	case !ok:
+		return errors.New("it is not a Kubernetes object: it has no `kind` (kubectl: Object 'Kind' is missing)")
+	case json.Unmarshal(raw, &kind) != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")):
+		return fmt.Errorf("it is not a Kubernetes object: its `kind` is %s, not a string "+
+			"(kubectl: Object 'Kind' is missing)", jsonShape(raw))
+	case kind == "":
+		return errors.New("it is not a Kubernetes object: its `kind` is empty (kubectl: Object 'Kind' is missing)")
+	}
+	if _, ok := obj["items"]; ok {
+		return fmt.Errorf("a List document is not read (kind %q with a top-level `items`, "+
+			"which kubectl expands into its items); write its items as separate documents", kind)
+	}
+	return nil
+}
+
+// jsonShape names the JSON type of *v*, as encoding/json's errors do.
+func jsonShape(v json.RawMessage) string {
+	t := bytes.TrimSpace(v)
+	if len(t) == 0 {
+		return "empty"
+	}
+	switch t[0] {
+	case '{':
+		return "object"
+	case '[':
+		return "array"
+	case '"':
+		return "string"
+	case 't', 'f':
+		return "bool"
+	case 'n':
+		return "null"
+	default:
+		return "number"
+	}
 }
 
 // errMultiDoc is returned for a piece holding more than one YAML document,

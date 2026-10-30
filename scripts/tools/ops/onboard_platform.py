@@ -157,9 +157,7 @@ def _configmap_inner(documents, path, key=_AM_CONFIGMAP_KEY, error=AlertmanagerC
     file is the config itself."""
     holders = []
     configmaps = 0
-    for doc in documents:
-        if not isinstance(doc, dict):
-            continue
+    for doc in documents:   # a Kubernetes object: the manifest reading's guarantee (#3426)
         data = doc.get("data")
         if doc.get("kind") == "ConfigMap":
             configmaps += 1
@@ -713,7 +711,7 @@ def _read_rule_files(file_paths):
             docs = _lib_consumer_read.kubernetes_documents(fpath)
         except _lib_consumer_read.InputRefused:
             docs = []
-        if any(isinstance(d, dict) and d.get("kind") == "ConfigMap" for d in docs):
+        if any(d["kind"] == "ConfigMap" for d in docs):   # objects (#3426)
             configmaps.append(fpath)
         else:
             plain.append(fpath)

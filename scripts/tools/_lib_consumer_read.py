@@ -4,11 +4,14 @@ The Python tools do not read these files with PyYAML: PyYAML's reading is
 YAML 1.1 as PyYAML implements it, which is neither kubectl's nor
 Alertmanager's. They ask the Go binary that runs the consumer's own reading:
 
-* ``kubernetes_documents(path)`` — a Kubernetes manifest (or Helm values
-  file) as kubectl reads it: ``da-crdecode`` (sigs.k8s.io/yaml, documents
-  split as ``kubectl apply -f`` splits them). One entry per document kubectl
-  would apply, in file order; an empty file has none. ``instance: 010`` is
-  the number 8 here, as it is to kubectl.
+* ``kubernetes_documents(path)`` — a Kubernetes manifest as kubectl reads
+  it: ``da-crdecode`` (sigs.k8s.io/yaml, documents split as ``kubectl apply
+  -f`` splits them). One entry per document kubectl would apply, in file
+  order; an empty file has none. ``instance: 010`` is the number 8 here, as
+  it is to kubectl. ⛔ Every entry is a Kubernetes object — a ``dict`` with
+  a non-empty ``str`` ``kind``, not a list (#3426): a file with any other
+  document is refused, naming it, so a caller never skips one with an
+  ``isinstance`` of its own.
 * ``kubernetes_text_documents(text)`` — the same reading of text held in
   memory (a manifest ``kubectl ... -o yaml`` or ``helm template`` printed, a
   ConfigMap a tool assembled), handed over on standard input.
@@ -16,6 +19,13 @@ Alertmanager's. They ask the Go binary that runs the consumer's own reading:
   — the same for several files / texts. da-crdecode reads one input per run,
   so these run one per input, a few at a time (``PARALLEL_RUNS``), and return
   them in the order given.
+* ``any_yaml_documents(path)`` / ``any_yaml_text_documents(text)`` /
+  ``any_yaml_documents_of(paths)`` / ``any_yaml_text_documents_each(texts)``
+  — YAML that is NOT a manifest (a Helm values file, ``Chart.yaml``, a plain
+  rule file, a ConfigMap data value) with the same conversion
+  (``da-crdecode --any-shape``). Nothing about a document's shape is
+  promised. The two groups are separate names, never one name with a flag:
+  which reading a call is, is in its name.
 * ``alertmanager_config(text)`` — an Alertmanager config as Alertmanager
   loads it: ``da-read alertmanager`` (Alertmanager's own ``config.Load``, at
   the amtool version the da-tools image ships), keeping only the keys the
@@ -45,7 +55,7 @@ Alertmanager's. They ask the Go binary that runs the consumer's own reading:
   ``data`` / ``binaryData`` value and every PrometheusRule ``spec`` by the
   rule loader (``RuleFile.manifest`` / ``.kind`` / ``.key`` say where it came
   from). ``rule_file_declaration(text)`` says whether a text sets out to be
-  a rule file (yes / no / undecided: kubectl's reading refuses it);
+  a rule file (yes / no / undecided: its any-YAML reading refuses it);
   ``may_be_rule_file`` (a whole file: undecided goes to the rule loader)
   and ``configmap_value_is_rule_file`` (a ConfigMap value, which may be a
   template no reader reads) build on it.
@@ -140,14 +150,17 @@ class InputRefused(ConsumerReadError):
     exit 2 (da-crdecode's and da-read's answer to the input; the arguments
     are ours, so not a usage error) with a reason on stderr that is not a Go
     runtime crash — a panic also exits 2 with stderr, and is not an answer
-    about the input. Not found, could not run, did not finish, any other exit
+    about the input — nor a usage line (a binary too old for our arguments). Not found, could not run, did not finish, any other exit
     code, exit 0 without the JSON contract: a plain ConsumerReadError.
     """
 
 
 #: A Go runtime crash: the first stderr line of an unrecovered panic or a
-#: fatal runtime error (both exit 2, as a refusal does).
-_GO_CRASH_PREFIXES = ("panic: ", "fatal error: ")
+#: fatal runtime error (both exit 2, as a refusal does) — and the usage
+#: line, which a binary older than the arguments we give it prints (exit 2;
+#: an old da-crdecode does not know ``--any-shape``, #3426). None of them is
+#: an answer about the input.
+_GO_CRASH_PREFIXES = ("panic: ", "fatal error: ", "usage: ")
 
 
 def _refused(returncode: int, lines: list[str]) -> bool:
@@ -224,24 +237,65 @@ def _run(binary: str | None, name: str, env: str, build_hint: str,
     return out
 
 
-def kubernetes_documents(path: str, binary: str | None = None) -> list[Any]:
-    """The documents of the Kubernetes manifest at *path*, as kubectl reads
-    them (``da-crdecode``): one per document kubectl would apply, in order."""
+#: da-crdecode's flag for YAML that is not a manifest, and the ``reading``
+#: each of its two readings reports (#3426).
+_ANY_SHAPE_FLAG = "--any-shape"
+_READING_MANIFEST = "manifest"
+_READING_ANY_SHAPE = "any-shape"
+
+
+def _crdecode(source: "str | None", data: "bytes | None", binary: str | None,
+              any_shape: bool) -> list[Any]:
+    """One da-crdecode run on the file *source* (or *data* on stdin), with
+    the manifest reading or ``--any-shape``. The public functions below each
+    fix *any_shape*; none takes it as an argument, so a name says which
+    reading it is."""
     resolved = resolve_binary(binary, CRDECODE_ENV, CRDECODE_BINARY_NAME)
     # An absolute path never starts with `-`, so it is not read as stdin.
+    target = ["-"] if source is None else [os.path.abspath(source)]
+    args = ([_ANY_SHAPE_FLAG] if any_shape else []) + target
     out = _run(resolved, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build",
-               [os.path.abspath(path)], None)
+               args, data)
+    want = _READING_ANY_SHAPE if any_shape else _READING_MANIFEST
+    if out.get("reading") != want:
+        # An older da-crdecode prints no `reading`: its manifest reading does
+        # not refuse a document that is no Kubernetes object, so the
+        # guarantee below would be silently missing.
+        raise ConsumerReadError(
+            f"{CRDECODE_BINARY_NAME} printed \"reading\": {out.get('reading')!r}, not "
+            f"{want!r} (an older {CRDECODE_BINARY_NAME}? rebuild it)")
     return out["documents"]
+
+
+def _as_bytes(text: "str | bytes") -> bytes:
+    return text.encode("utf-8") if isinstance(text, str) else text
+
+
+# --- The manifest reading: what kubectl applies -----------------------------
+
+
+def kubernetes_documents(path: str, binary: str | None = None) -> list[Any]:
+    """The documents of the Kubernetes manifest at *path*, as kubectl reads
+    them (``da-crdecode``): one per document kubectl would apply, in order.
+
+    ⛔ The guarantee (#3426): every document is a Kubernetes object — a
+    ``dict`` whose ``kind`` is a non-empty ``str`` — and none is a list
+    (a top-level ``items``). A file with a document that is not (an array, a
+    scalar, a mapping with no ``kind``, a ``kind: List``) is refused
+    (:class:`InputRefused`, the document's line and the reason in
+    ``stderr_lines``), as kubectl refuses it; nothing is passed over. A
+    caller therefore needs no ``isinstance(doc, dict)`` of its own, and
+    must not skip a document with one. YAML that is not a manifest (Helm
+    values, a rule file, a ConfigMap data value) is read with
+    :func:`any_yaml_documents` instead."""
+    return _crdecode(path, None, binary, any_shape=False)
 
 
 def kubernetes_text_documents(text: str | bytes, binary: str | None = None) -> list[Any]:
     """The documents of the Kubernetes manifest *text*, as kubectl reads them
-    (``da-crdecode -``): for text a tool holds rather than a file."""
-    resolved = resolve_binary(binary, CRDECODE_ENV, CRDECODE_BINARY_NAME)
-    data = text.encode("utf-8") if isinstance(text, str) else text
-    out = _run(resolved, CRDECODE_BINARY_NAME, CRDECODE_ENV, "make da-crdecode-build",
-               ["-"], data)
-    return out["documents"]
+    (``da-crdecode -``): for text a tool holds rather than a file. The
+    guarantee of :func:`kubernetes_documents` holds."""
+    return _crdecode(None, _as_bytes(text), binary, any_shape=False)
 
 
 #: How many da-crdecode runs ``kubernetes_documents_of`` keeps going at once.
@@ -259,12 +313,61 @@ def kubernetes_documents_of(paths: Iterable[Any], binary: str | None = None, *,
     that reports per file. A run that gave no reason (no binary, it could not
     run, it printed no JSON contract) is raised either way — that is not an
     answer about the file."""
+    return _files_of(paths, binary, keep_refusals, kubernetes_documents)
+
+
+def kubernetes_text_documents_each(texts: Iterable[str | bytes], binary: str | None = None, *,
+                                   keep_refusals: bool = False
+                                   ) -> "list[list[Any] | ConsumerReadError]":
+    """``kubernetes_text_documents`` for every text in *texts*, in order, a
+    few runs at a time. Errors as :func:`kubernetes_documents_of` (by
+    position instead of path)."""
+    return _texts_each(texts, binary, keep_refusals, kubernetes_text_documents)
+
+
+# --- The any-YAML reading: the same conversion, no manifest shape -----------
+
+
+def any_yaml_documents(path: str, binary: str | None = None) -> list[Any]:
+    """The documents of the YAML file at *path* that is NOT a Kubernetes
+    manifest — a Helm values file, ``Chart.yaml``, a plain rule file —
+    with the conversion kubectl and Helm use (``da-crdecode --any-shape``:
+    sigs.k8s.io/yaml, split as ``kubectl apply -f`` splits a file). A
+    document may be anything (a mapping, a list, a scalar); nothing about
+    its shape is promised, so the caller checks the shape it needs."""
+    return _crdecode(path, None, binary, any_shape=True)
+
+
+def any_yaml_text_documents(text: str | bytes, binary: str | None = None) -> list[Any]:
+    """:func:`any_yaml_documents` of *text* held in memory — a ConfigMap
+    data value, a spliced values file (``da-crdecode --any-shape -``)."""
+    return _crdecode(None, _as_bytes(text), binary, any_shape=True)
+
+
+def any_yaml_documents_of(paths: Iterable[Any], binary: str | None = None, *,
+                          keep_refusals: bool = False
+                          ) -> "dict[str, list[Any] | ConsumerReadError]":
+    """:func:`any_yaml_documents` for every path, as
+    :func:`kubernetes_documents_of` runs and reports them."""
+    return _files_of(paths, binary, keep_refusals, any_yaml_documents)
+
+
+def any_yaml_text_documents_each(texts: Iterable[str | bytes], binary: str | None = None, *,
+                                 keep_refusals: bool = False
+                                 ) -> "list[list[Any] | ConsumerReadError]":
+    """:func:`any_yaml_text_documents` for every text, as
+    :func:`kubernetes_text_documents_each` runs and reports them."""
+    return _texts_each(texts, binary, keep_refusals, any_yaml_text_documents)
+
+
+def _files_of(paths: Iterable[Any], binary: str | None, keep_refusals: bool,
+              read_one) -> "dict[str, list[Any] | ConsumerReadError]":
     keys = [str(p) for p in paths]
     resolved = resolve_binary(binary, CRDECODE_ENV, CRDECODE_BINARY_NAME)
 
     def one(path: str) -> "list[Any] | ConsumerReadError":
         try:
-            return kubernetes_documents(path, binary=resolved)
+            return read_one(path, binary=resolved)
         except ConsumerReadError as e:
             return e
 
@@ -286,12 +389,8 @@ def kubernetes_documents_of(paths: Iterable[Any], binary: str | None = None, *,
     return out
 
 
-def kubernetes_text_documents_each(texts: Iterable[str | bytes], binary: str | None = None, *,
-                                   keep_refusals: bool = False
-                                   ) -> "list[list[Any] | ConsumerReadError]":
-    """``kubernetes_text_documents`` for every text in *texts*, in order, a
-    few runs at a time. Errors as :func:`kubernetes_documents_of` (by
-    position instead of path)."""
+def _texts_each(texts: Iterable[str | bytes], binary: str | None, keep_refusals: bool,
+                read_one) -> "list[list[Any] | ConsumerReadError]":
     items = list(texts)
     if not items:
         return []
@@ -301,7 +400,7 @@ def kubernetes_text_documents_each(texts: Iterable[str | bytes], binary: str | N
 
     def one(text: str | bytes) -> "list[Any] | ConsumerReadError":
         try:
-            return kubernetes_text_documents(text, binary=resolved)
+            return read_one(text, binary=resolved)
         except ConsumerReadError as e:
             return e
 
@@ -538,22 +637,24 @@ UNDECIDED = "undecided"
 
 
 def documents_declare_rule_groups(docs: "list[Any]") -> bool:
-    """Whether a file whose Kubernetes reading (da-crdecode) is *docs* sets
-    out to be a rule file: one of the documents is a mapping with a
-    ``groups`` key. ``rule_file_declaration`` and a caller that already
+    """Whether a file whose any-YAML reading (``da-crdecode --any-shape``) is
+    *docs* sets out to be a rule file: one of the documents is a mapping
+    with a ``groups`` key. ``rule_file_declaration`` and a caller that already
     holds the documents both use it."""
     return any(isinstance(d, dict) and "groups" in d for d in docs)
 
 
 def rule_file_declaration(text: "str | bytes", binary: str | None = None) -> str:
     """Whether *text* — a file, a ConfigMap data value — sets out to be a
-    rule file, by its Kubernetes reading (da-crdecode). Three answers:
+    rule file, by its any-YAML reading (``da-crdecode --any-shape``: a rule
+    file is no Kubernetes object, so the manifest reading would refuse every
+    one). Three answers:
 
     * ``RULE_FILE`` — a document is a mapping with a ``groups`` key;
     * ``NOT_A_RULE_FILE`` — it reads, and no document has one (a recipe,
       the registry beside the packs);
     * ``UNDECIDED`` — that reading refuses the text, so it cannot say. This
-      is not "no": kubectl's reading refuses some text Prometheus' rule
+      is not "no": sigs.k8s.io/yaml's conversion refuses some text Prometheus' rule
       loader reads (an annotation value ``.inf`` is +Inf to sigs.k8s.io/yaml
       and has no JSON; rulefmt reads the string ``".inf"``), and a broken
       rule file (a tab in its indentation) is refused by both.
@@ -563,7 +664,7 @@ def rule_file_declaration(text: "str | bytes", binary: str | None = None) -> str
     picks what to hand to the rule loader; what the file says is the rule
     loader's reading."""
     try:
-        docs = kubernetes_text_documents(text, binary)
+        docs = any_yaml_text_documents(text, binary)
     except InputRefused:
         return UNDECIDED
     return RULE_FILE if documents_declare_rule_groups(docs) else NOT_A_RULE_FILE
@@ -623,7 +724,10 @@ def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
     (``configmap_value_is_rule_file``) — for a ConfigMap that may also carry other
     files (an Alertmanager template); without it every value is a rule file
     and one that is not is refused. Raises :class:`InputRefused` naming the
-    manifest when kubectl's reading refuses it.
+    manifest when kubectl's reading refuses it — a document in it that is no
+    Kubernetes object (a top-level list, a mapping with no ``kind``) or a
+    ``kind: List`` included (#3426): no document of a manifest is passed over
+    because of its shape.
     """
     keyed: "list[tuple[str, str, str, str | None, str | None]]" = []
     for path in paths:
@@ -632,8 +736,8 @@ def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
             docs = kubernetes_documents(path, binary=crdecode_binary)
         except InputRefused as e:
             raise InputRefused(f"{path}: {e}", e.stderr_lines) from e
-        for doc in docs:
-            kind = doc.get("kind") if isinstance(doc, dict) else None
+        for doc in docs:   # each a Kubernetes object: the reading's guarantee
+            kind = doc["kind"]
             if kind == "PrometheusRule":
                 spec = doc.get("spec")
                 keyed.append((path, kind, "spec", json.dumps(spec if spec is not None else {}),

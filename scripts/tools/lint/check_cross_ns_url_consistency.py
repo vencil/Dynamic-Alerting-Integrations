@@ -360,9 +360,19 @@ def _scan_docs(text: str, docs: list, rel: str, context_for_doc,
     return findings
 
 
-def _kubernetes_docs(path: Path, docs: Optional[list]) -> list:
-    """*docs* when the caller already read *path*, else Kubernetes' / Helm's
-    reading of it (da-crdecode, ADR-036 §12). Raises ConsumerReadError."""
+def _values_docs(path: Path, docs: Optional[list]) -> list:
+    """*docs* when the caller already read *path*, else Helm's reading of the
+    values file (``da-crdecode --any-shape``, ADR-036 §12: a values file is
+    no Kubernetes manifest, #3426). Raises ConsumerReadError."""
+    if docs is not None:
+        return docs
+    return _lib_consumer_read.any_yaml_documents(str(path))
+
+
+def _manifest_docs(path: Path, docs: Optional[list]) -> list:
+    """*docs* when the caller already read *path*, else kubectl's reading of
+    the manifest (da-crdecode, ADR-036 §12): every document a Kubernetes
+    object (#3426). Raises ConsumerReadError."""
     if docs is not None:
         return docs
     return _lib_consumer_read.kubernetes_documents(str(path))
@@ -371,16 +381,16 @@ def _kubernetes_docs(path: Path, docs: Optional[list]) -> list:
 def scan_helm_values(path: Path, rel: str, chart: str,
                      docs: Optional[list] = None) -> List[Finding]:
     ctx = CHART_CONTEXT_NS.get(chart)  # unmapped chart -> None (conservative)
-    return _scan_docs(path.read_text(encoding="utf-8"), _kubernetes_docs(path, docs),
+    return _scan_docs(path.read_text(encoding="utf-8"), _values_docs(path, docs),
                       rel, lambda _doc: ctx, apply_bare=True)
 
 
 def scan_k8s_manifest(path: Path, rel: str, docs: Optional[list] = None) -> List[Finding]:
-    def ctx(doc):
-        meta = doc.get("metadata") if isinstance(doc, dict) else None
+    def ctx(doc):   # a Kubernetes object: the manifest reading's guarantee
+        meta = doc.get("metadata")
         ns = meta.get("namespace") if isinstance(meta, dict) else None
         return ns if isinstance(ns, str) else None
-    return _scan_docs(path.read_text(encoding="utf-8"), _kubernetes_docs(path, docs),
+    return _scan_docs(path.read_text(encoding="utf-8"), _manifest_docs(path, docs),
                       rel, ctx, apply_bare=True)
 
 
@@ -439,8 +449,10 @@ def check_repo(repo: Path) -> Tuple[List[str], List[str], int]:
     # 2. k8s/**/*.yaml — raw manifests, per-doc metadata.namespace context
     manifests = _targets(("k8s/**/*.yaml", "k8s/**/*.yml"), files_only=True)
     # ADR-036 §12 (#3206): read as Helm / kubectl read them (da-crdecode), all
-    # files in one batch so the per-file runs overlap.
-    read = _lib_consumer_read.kubernetes_documents_of(p for p, _ in values + manifests)
+    # files of a kind in one batch so the per-file runs overlap; a values
+    # file with no object shape, a manifest as kubectl applies it (#3426).
+    read = {**_lib_consumer_read.any_yaml_documents_of(p for p, _ in values),
+            **_lib_consumer_read.kubernetes_documents_of(p for p, _ in manifests)}
     n_files = len(values) + len(manifests)
     for p, rel in values:
         findings.extend(scan_helm_values(p, rel, chart=p.parent.name, docs=read[str(p)]))

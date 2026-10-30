@@ -67,8 +67,8 @@ def configmap_rule_packs(monitor_dir: Path) -> Dict[str, Set[str]]:
              # customer-managed, not in the platform gold-standard mount list
              if not path.name.startswith(CUSTOMER_MANAGED_PREFIX)]
     for docs in _lib_consumer_read.kubernetes_documents_of(paths).values():
-        for doc in docs:
-            if not isinstance(doc, dict) or doc.get("kind") != "ConfigMap":
+        for doc in docs:   # each a Kubernetes object (the reading's guarantee, #3426)
+            if doc["kind"] != "ConfigMap":
                 continue
             name = ((doc.get("metadata") or {}).get("name")) or ""
             data = doc.get("data")
@@ -85,7 +85,7 @@ def deployment_mounts(deployment_path: Path) -> Dict[str, Dict[str, str]]:
     """
     out: Dict[str, Dict[str, str]] = {}
     for doc in _lib_consumer_read.kubernetes_documents(str(deployment_path)):
-        if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
+        if doc["kind"] != "Deployment":   # every doc an object (#3426)
             continue
         volumes = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {}).get("volumes") or []
         for vol in volumes:

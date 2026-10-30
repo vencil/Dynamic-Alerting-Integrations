@@ -11,6 +11,9 @@ Pinned contracts
    exact gap the runtime sentinel cannot see.
 4. **Live dogfood**: the committed k8s/ KSM Deployment allowlists the version
    label (gates a regression of the ADR-024 PR3b deployment fix).
+5. **Readers decide (#3426)**: a KSM Deployment is what kubectl's reading of
+   k8s/ holds, not what the text mentions; a file that reading refuses is
+   named at rc 2, never passed over.
 """
 from __future__ import annotations
 
@@ -61,7 +64,69 @@ def test_allowlist_without_pods_entry_flagged():
 
 def test_live_repo_ksm_deployment_compliant():
     repo = lint._repo_root()
-    targets = lint._ksm_deployment_files(repo)
-    assert targets, "expected at least one KSM Deployment manifest under k8s/"
+    tree = lint.read_k8s_tree(repo)
+    targets = [p for p, docs in tree.items() if lint.ksm_containers(docs)]
+    assert targets, "expected at least one KSM Deployment under k8s/ in kubectl's reading"
     for path in targets:
         assert lint.check_file(path) == [], f"{path} KSM deployment missing version allowlist"
+
+
+# ── #3426: which files is the readers' answer, never the raw text ─────────────
+
+_KSM_OK = """\
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: kube-state-metrics}
+spec:
+  template:
+    spec:
+      containers:
+      - name: ksm
+        image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.13.0
+        args: ["--metric-labels-allowlist=pods=[app.kubernetes.io/version]"]
+"""
+
+
+def _tree(tmp_path, monkeypatch, files):
+    for rel, text in files.items():
+        p = tmp_path / "k8s" / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(text, encoding="utf-8")
+    monkeypatch.setattr(lint, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["check_ksm_version_allowlist.py", "--ci"])
+
+
+def test_ksm_only_in_a_comment_is_no_ksm_deployment(tmp_path, monkeypatch, capsys):
+    # The raw text has both `kube-state-metrics` and `kind: Deployment`; the
+    # old text preselection took the file, read no KSM Deployment from it,
+    # and reported "All 1 ... allowlist" at rc 0.
+    _tree(tmp_path, monkeypatch, {"03/ksm.yaml": (
+        "# kind: Deployment of kube-state-metrics was removed\n"
+        "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n")})
+    assert lint.main() == lint.EXIT_CALLER_ERROR
+    captured = capsys.readouterr()
+    assert "no kube-state-metrics Deployment under k8s/" in captured.err
+    assert "✅" not in captured.out
+
+
+def test_a_file_kubectl_refuses_is_named(tmp_path, monkeypatch, capsys):
+    # A compliant KSM Deployment elsewhere does not make the unread files pass.
+    _tree(tmp_path, monkeypatch, {
+        "03/deployment-ksm.yaml": _KSM_OK,
+        "03/list.yaml": "apiVersion: v1\nkind: List\nitems: []\n",
+        "03/no-kind.yaml": "replicas: 1\n",
+    })
+    assert lint.main() == lint.EXIT_CALLER_ERROR
+    err = capsys.readouterr().err
+    assert "2 file(s) under k8s/ that kubectl's reading refuses" in err
+    assert "k8s/03/list.yaml: " in err and "a List document is not read" in err
+    assert "k8s/03/no-kind.yaml: " in err and "it has no `kind`" in err
+
+
+def test_ksm_deployment_found_by_its_reading(tmp_path, monkeypatch, capsys):
+    # Control: a tree with only the compliant Deployment passes — found by
+    # its reading though no line spells `kind: Deployment`.
+    _tree(tmp_path, monkeypatch, {"03/d.yaml": _KSM_OK.replace(
+        "kind: Deployment", 'kind: "Deployment"')})
+    assert lint.main() == lint.EXIT_OK
+    assert "All 1 kube-state-metrics Deployment(s)" in capsys.readouterr().out

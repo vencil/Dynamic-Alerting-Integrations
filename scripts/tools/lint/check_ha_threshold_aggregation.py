@@ -128,7 +128,7 @@ def check_file(path: Path) -> List[Tuple[str, str, str]]:
         docs = _lib_consumer_read.kubernetes_documents(str(path))
     except _lib_consumer_read.InputRefused:
         docs = []
-    manifest = any(isinstance(d, dict) and d.get("kind") in ("ConfigMap", "PrometheusRule")
+    manifest = any(d["kind"] in ("ConfigMap", "PrometheusRule")   # objects (#3426)
                    for d in docs)
     rule_files = _lib_consumer_read.require_read(
         read_rule_files([], [path]) if manifest else read_rule_files([path], []))

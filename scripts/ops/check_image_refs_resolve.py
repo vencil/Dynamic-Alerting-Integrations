@@ -429,8 +429,14 @@ def _walk_sources(root: Path, dropped: set[str] | None = None) -> set[str]:
     that checked less (it used to be a `::warning::` and a skip)."""
     cr = _consumer_read()
     paths = [path for pattern in SOURCE_GLOBS for path in sorted(root.glob(pattern))]
+    # #3426: a Helm values file is no Kubernetes manifest — it is read with
+    # the same conversion but no object shape (`any_yaml_documents_of`); the
+    # k8s/ files are manifests, every document an object kubectl applies.
+    values = [p for p in paths if p.parent.parent == root / "helm"]
+    manifests = [p for p in paths if p not in values]
     try:
-        read = cr.kubernetes_documents_of(paths)
+        read = {**cr.any_yaml_documents_of(values), **cr.kubernetes_documents_of(manifests)}
+        read = {str(p): read[str(p)] for p in paths}
     except cr.ConsumerReadError as exc:
         print(f"check_image_refs_resolve: cannot read a deployment source the way kubectl "
               f"does: {exc}", file=sys.stderr)

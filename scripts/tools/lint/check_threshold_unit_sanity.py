@@ -407,7 +407,9 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
     # No da-crdecode raises ConsumerReadError; a file its reading refuses is
     # named and raised as ArtifactRefused once every file was read — both
     # caller errors in `main` (exit 2), never a skip (#3206).
-    read = _lib_consumer_read.kubernetes_documents_of(
+    # Values files and a CR example, walked for values: no object shape is
+    # required of them (#3426), so the any-YAML reading.
+    read = _lib_consumer_read.any_yaml_documents_of(
         [path for rel, path in files if rel != _REGISTRY_REL], keep_refusals=True)
     refused = [(rel, " | ".join(read[path].stderr_lines) or str(read[path]))
                for rel, path in files

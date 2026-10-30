@@ -101,7 +101,8 @@ def test_first_party_namespace_is_skipped(tmp_path: Path) -> None:
     # to resolve → skipped by L1-B; a public third-party ref alongside is still kept.
     _write(
         tmp_path / "k8s/x/deploy.yaml",
-        "spec:\n  template:\n    spec:\n      containers:\n"
+        # A k8s/ file is a manifest: kubectl reads only objects with a kind (#3426).
+        "kind: Deployment\nspec:\n  template:\n    spec:\n      containers:\n"
         '        - image: "ghcr.io/vencil/tenant-api:v2.7.0"\n'
         '        - image: "quay.io/o/p:v1"\n',
     )

@@ -252,14 +252,17 @@ def check_owner_label(labels, filepath, rule_name):
 # ---------------------------------------------------------------------------
 def read_rule_files(files):
     """{path: [RuleFile, ...]} — every file of *files* as Prometheus loads it
-    (#3206, ADR-036 §12). A file whose Kubernetes reading (da-crdecode) holds
-    a ``kind: ConfigMap`` is a ConfigMap: each of its data values that sets
+    (#3206, ADR-036 §12). A file whose plain YAML reading (``da-crdecode
+    --any-shape``: the file may be a rule file, which is no Kubernetes object,
+    #3426) holds a ``kind: ConfigMap`` is a ConfigMap — then read again as
+    the manifest it is (``manifest_rule_file_results``, which refuses a
+    document that is no object, naming the file): each of its data values that sets
     out to be a rule file (a ``groups:`` key; ``manifest_rule_file_results``
     with ``only_declared``) is one. Any other file is a rule file by the
-    same test — a document of its Kubernetes reading is a mapping with a
+    same test — a document of its plain YAML reading is a mapping with a
     ``groups`` key (``documents_declare_rule_groups``); one without is no
     rule file (a recipe, the registry beside the packs) and is not read, as
-    before. A file kubectl's reading refuses is handed to the rule loader
+    before. A file that reading refuses is handed to the rule loader
     all the same: that reading refuses some files the loader loads (an
     annotation value ``.inf``), and a file here that neither reads is an
     ERROR, as a YAML parse error was — never skipped. The rule files are
@@ -270,7 +273,7 @@ def read_rule_files(files):
     plain, configmaps, others = [], [], []
     for path in files:
         try:
-            docs = _lib_consumer_read.kubernetes_documents(path)
+            docs = _lib_consumer_read.any_yaml_documents(path)
         except _lib_consumer_read.InputRefused:
             plain.append(path)
             continue

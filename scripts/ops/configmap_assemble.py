@@ -207,7 +207,7 @@ def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], di
             raise
         return [f"kubectl's own reading refuses its output: {exc}: "
                 + " | ".join(exc.stderr_lines)], {}
-    if len(docs) != 1 or not isinstance(docs[0], dict):
+    if len(docs) != 1:   # each doc is an object: the reading's guarantee (#3426)
         return [f"kubectl's output is {len(docs)} document(s), expected one ConfigMap"], {}
     doc = docs[0]
 

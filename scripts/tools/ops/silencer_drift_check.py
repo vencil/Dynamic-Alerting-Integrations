@@ -230,8 +230,9 @@ def load_alerts(rule_source: Path) -> tuple[list[dict], list[str]]:
     if not files:
         return [], [f"no YAML files found at {rule_source}"]
 
-    # #3206 (ADR-036 §12): a file is a rule file when its Kubernetes reading
-    # (da-crdecode, a plain YAML reading) is a mapping with `groups:` — other
+    # #3206 (ADR-036 §12): a file is a rule file when its plain YAML reading
+    # (`da-crdecode --any-shape`, #3426: a rule file is no Kubernetes
+    # object) is a mapping with `groups:` — other
     # YAML here (tenant `_defaults.yaml`, inventory lists) is skipped
     # silently, as before. Each rule file is then read the way Prometheus'
     # rule loader reads it (`da-read prometheus-rules`, one run for all); a
@@ -240,7 +241,7 @@ def load_alerts(rule_source: Path) -> tuple[list[dict], list[str]]:
     rule_files: list[Path] = []
     for f in files:
         try:
-            docs = _lib_consumer_read.kubernetes_documents(str(f))
+            docs = _lib_consumer_read.any_yaml_documents(str(f))
         except _lib_consumer_read.InputRefused as exc:
             errors.append(f"invalid YAML in {f}: {'; '.join(exc.stderr_lines) or exc}")
             continue

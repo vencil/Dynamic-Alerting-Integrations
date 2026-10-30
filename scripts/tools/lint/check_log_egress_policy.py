@@ -153,7 +153,7 @@ def render_chart(chart_dir: Path, values_files: list[Path], sets: list[str]) -> 
         for line in e.stderr_lines:
             print(f"  {line}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
-    return [d for d in docs if d]
+    return docs   # every doc an object with a kind (#3426)
 
 
 def _iter_sink_endpoints(vector_config: dict):

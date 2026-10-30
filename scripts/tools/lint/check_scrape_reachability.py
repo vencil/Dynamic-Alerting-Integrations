@@ -448,7 +448,7 @@ def load_repo_jobs() -> list[dict]:
     string inside it the way Prometheus does (``parse_scrape_jobs``)."""
     holders = [doc["data"][PROM_CONFIGMAP_KEY]
                for doc in _lib_consumer_read.kubernetes_documents(str(PROM_CONFIGMAP))
-               if isinstance(doc, dict) and doc.get("kind") == "ConfigMap"
+               if doc["kind"] == "ConfigMap"   # every doc an object (#3426)
                and isinstance(doc.get("data"), dict) and PROM_CONFIGMAP_KEY in doc["data"]]
     rel = PROM_CONFIGMAP.relative_to(PROJECT_ROOT).as_posix()
     if len(holders) != 1 or not isinstance(holders[0], str):
@@ -485,8 +485,8 @@ def parse_services(paths: list[Path]) -> list[dict]:
             # refuses is kube-linter's problem (L4 gate), not silently a
             # missing Service.
             continue
-        for doc in docs:
-            if not isinstance(doc, dict) or doc.get("kind") != "Service":
+        for doc in docs:   # a Kubernetes object: the manifest reading's guarantee (#3426)
+            if doc["kind"] != "Service":
                 continue
             meta = doc.get("metadata") or {}
             services.append({

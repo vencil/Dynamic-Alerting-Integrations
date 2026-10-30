@@ -138,6 +138,27 @@ def test_a_manifest_kubectl_refuses_is_named(tmp_path) -> None:
         cr.manifest_rule_file_results([path])
 
 
+@pytest.mark.parametrize("doc,reason", [
+    ("- " + RULES.replace("\n", "\n  "), "the document is array, not a mapping"),
+    ("groups: []\n", "it has no `kind`"),
+    ("kind: 3\n", "its `kind` is number, not a string"),
+    ("apiVersion: v1\nkind: List\nitems:\n- " + _cm(_block("x.yml", RULES)).replace("\n", "\n  "),
+     "a List document is not read"),
+])
+def test_a_document_that_is_no_object_is_named_not_skipped(tmp_path, doc, reason) -> None:
+    """#3426: a document of a manifest that is no Kubernetes object used to
+    be passed over (`isinstance(doc, dict)`) and the ConfigMap beside it
+    read as if it were the whole file. The manifest reading refuses it now,
+    naming the document's first line."""
+    path = _write(tmp_path, "cm.yaml", _cm(_block("a.yml", RULES)) + "---\n" + doc)
+    with pytest.raises(cr.InputRefused) as exc_info:
+        cr.manifest_rule_file_results([path])
+    assert "cm.yaml" in str(exc_info.value)
+    detail = " ".join(exc_info.value.stderr_lines)
+    first = 1 + _cm(_block("a.yml", RULES)).count("\n") + 1
+    assert f"the document starting at line {first}: " in detail and reason in detail, detail
+
+
 _INF_RULES = ("groups:\n- name: g\n  rules:\n  - alert: A\n    expr: up == 0\n"
               "    annotations: {x: .inf}\n")
 _TAB_BROKEN = "groups:\n  - name: x\n    rules:\n\t- alert: BrokenTabAlert\n      expr: up == 0\n"
