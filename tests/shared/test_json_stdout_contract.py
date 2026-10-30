@@ -1093,6 +1093,16 @@ RECIPES: list[Recipe] = [
                     "--prometheus", "http://127.0.0.1:1", "--json"],
       env=_MISSING_DA_GUARD, expect_caller_error=True,
       doc_check=_caller_error_doc("served_values_unavailable")),
+    # #1524: a given --config-dir that is not there, or a tree without the
+    # tenant — once an `{"error": ...}` object and rc 0.
+    R("diagnose", "config-dir-missing",
+      lambda t, s: ["db-demo", "--config-dir", str(t / "no-such-conf.d"),
+                    "--show-inheritance", "--json"],
+      expect_caller_error=True, doc_check=_caller_error_doc("dir_not_found")),
+    R("diagnose", "tenant-not-found",
+      lambda t, s: ["no-such-tenant", "--config-dir", str(SEED_CONF_D),
+                    "--show-inheritance", "--json"],
+      expect_caller_error=True, doc_check=_caller_error_doc("tenant_not_found")),
 
     # ── discover_instance_mappings  (⚠ known multi-mode trap) ──────────────
     R("discover_instance_mappings", "prometheus",

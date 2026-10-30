@@ -93,7 +93,7 @@ commands:
     "--root-dir": {kind: reader, by: "da-guard parse-tree", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     metrics: not_path
   diagnose:
-    "--config-dir": {kind: pending, ticket: 3392}
+    "--config-dir": dir
     "--prometheus": not_path
     tenant: not_path
   discover-mappings:

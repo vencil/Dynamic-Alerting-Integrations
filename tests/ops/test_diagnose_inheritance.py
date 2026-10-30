@@ -101,13 +101,13 @@ class TestResolveInheritanceChain:
             assert "a" not in profile_layer[0]["keys"]
 
     def test_nonexistent_tenant(self):
-        """不存在的 tenant 回 None（#2526：exporter 沒有這個租戶，不再只回 defaults）。"""
+        """不存在的 tenant 拒絕（#2526：exporter 沒有這個租戶，不再只回 defaults；#1524：不再回 None）。"""
         with tempfile.TemporaryDirectory() as d:
             self._make_config_dir(d,
                 defaults={"x": 1},
                 tenants={"db-a": {}})
-            result = diagnose.resolve_inheritance_chain("nonexistent", d)
-            assert result is None
+            with pytest.raises(diagnose.TenantNotFoundError):
+                diagnose.resolve_inheritance_chain("nonexistent", d)
 
     def test_no_config_dir(self):
         """None config_dir 應返回 None。"""

@@ -140,7 +140,10 @@ class TestLookupTenantProfile:
         assert diagnose.lookup_tenant_profile("db-a", None) is None
 
     def test_nonexistent_dir(self):
-        assert diagnose.lookup_tenant_profile("db-a", "/nonexistent/path") is None
+        """#1524: a given dir that is not there refuses, not None."""
+        with pytest.raises(diagnose.CallerError) as exc:
+            diagnose.lookup_tenant_profile("db-a", "/nonexistent/path")
+        assert exc.value.reason == "dir_not_found"
 
     def test_finds_profile_in_tenants_block(self, tmp_path):
         d = self._tree(tmp_path, **{
@@ -154,10 +157,10 @@ class TestLookupTenantProfile:
         d = self._tree(tmp_path, **{
             "_profiles.yaml": "profiles:\n  low-load:\n    cpu: 10\n",
             "db-b.yaml": "_profile: low-load\nmem: 80\n"})
-        assert diagnose.lookup_tenant_profile("db-b", d) is None
+        with pytest.raises(diagnose.TenantNotFoundError, match="no tenant 'db-b'"):
+            diagnose.lookup_tenant_profile("db-b", d)
         err = capsys.readouterr().err
         assert "WARN: db-b.yaml: declares no tenant" in err, err
-        assert "no tenant 'db-b'" in err, err
 
     def test_an_unknown_profile_binds_nothing_and_says_so(self, tmp_path, capsys):
         d = self._tree(tmp_path, **{
@@ -167,11 +170,13 @@ class TestLookupTenantProfile:
 
     def test_skips_hidden_files(self, tmp_path):
         d = self._tree(tmp_path, **{".hidden.yaml": "tenants:\n  .hidden:\n    _profile: x\n"})
-        assert diagnose.lookup_tenant_profile(".hidden", d) is None
+        with pytest.raises(diagnose.TenantNotFoundError):
+            diagnose.lookup_tenant_profile(".hidden", d)
 
     def test_skips_non_yaml_files(self, tmp_path):
         d = self._tree(tmp_path, **{"readme.txt": "not yaml"})
-        assert diagnose.lookup_tenant_profile("readme", d) is None
+        with pytest.raises(diagnose.TenantNotFoundError):
+            diagnose.lookup_tenant_profile("readme", d)
 
     @pytest.mark.parametrize("body", [": : : invalid", "- item1\n- item2\n"],
                              ids=["bad-syntax", "not-a-mapping"])
@@ -183,8 +188,11 @@ class TestLookupTenantProfile:
             diagnose.lookup_tenant_profile("bad", d)
 
     def test_tenant_not_found(self, tmp_path):
+        """#1524: the tree has no such tenant — refused (rc 2), not None."""
         d = self._tree(tmp_path, **{"multi.yaml": "tenants:\n  db-a:\n    cpu: 90\n"})
-        assert diagnose.lookup_tenant_profile("db-z", d) is None
+        with pytest.raises(diagnose.TenantNotFoundError) as exc:
+            diagnose.lookup_tenant_profile("db-z", d)
+        assert exc.value.reason == "tenant_not_found"
 
     def test_no_profile_key(self, tmp_path):
         d = self._tree(tmp_path, **{"db-a.yaml": "tenants:\n  db-a:\n    cpu: 90\n"})
@@ -209,8 +217,11 @@ class TestResolveInheritanceChain:
     def test_returns_none_for_no_config_dir(self):
         assert diagnose.resolve_inheritance_chain("db-a", None) is None
 
-    def test_returns_none_for_nonexistent_dir(self):
-        assert diagnose.resolve_inheritance_chain("db-a", "/nonexistent") is None
+    def test_refuses_a_nonexistent_dir(self):
+        """#1524: it used to be None, which the CLI exited 0 on."""
+        with pytest.raises(diagnose.CallerError) as exc:
+            diagnose.resolve_inheritance_chain("db-a", "/nonexistent")
+        assert exc.value.reason == "dir_not_found"
 
     def test_basic_defaults_only(self, tmp_path):
         defaults = {"defaults": {"cpu": 80, "mem": 70}}
@@ -656,18 +667,13 @@ class TestPlatformTenantBlock:
         assert chain["resolved"]["mysql_connections"] == 60
         assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) == "p1"
 
-    def test_platform_file_cannot_create_a_tenant(self, tmp_path, capsys):
+    def test_platform_file_cannot_create_a_tenant(self, tmp_path):
         (tmp_path / "_defaults.yaml").write_text(self._PLATFORM, encoding="utf-8")
         # #2526: the exporter has no tenant tx, so there is no chain (the
-        # old reader answered with the defaults alone).
-        def _not_found():
-            return [ln for ln in capsys.readouterr().err.splitlines()
-                    if "no tenant 'tx'" in ln]
-
-        assert diagnose.resolve_inheritance_chain("tx", str(tmp_path)) is None
-        assert len(_not_found()) == 1
-        assert diagnose.lookup_tenant_profile("tx", str(tmp_path)) is None
-        assert len(_not_found()) == 1
+        # old reader answered with the defaults alone); #1524: refused.
+        for lookup in (diagnose.resolve_inheritance_chain, diagnose.lookup_tenant_profile):
+            with pytest.raises(diagnose.TenantNotFoundError, match="no tenant 'tx'"):
+                lookup("tx", str(tmp_path))
 
     def test_unselected_carrier_spelling_is_not_read(self, tmp_path):
         """`_defaults.yaml` + `_defaults.yml`: only the selected `.yaml` is
@@ -1101,3 +1107,88 @@ class TestRound1ReviewPins:
         assert chain["declared"] == ["extra_key"]
         err = capsys.readouterr().err
         assert "FLAT" not in err and "SKIPPED" not in err, err
+
+
+# ---------------------------------------------------------------------------
+# #1524: a given --config-dir is a question, never a no-op
+# ---------------------------------------------------------------------------
+
+class TestGivenConfigDirIsNeverSilent:
+    """#1524: `--config-dir` given but unusable (not there, not a directory,
+    '') or naming a tree without the tenant used to exit 0 — printing
+    `{"error": "Could not resolve inheritance chain"}` under
+    `--show-inheritance`, and answering `check()` as if no `--config-dir`
+    had been given. Each is now rc 2 with a reason; the good tree is the
+    must-fire control that the refusals are not just "rc 2 for everything"."""
+
+    @staticmethod
+    def _tree(tmp_path):
+        (tmp_path / "_defaults.yaml").write_text("defaults:\n  cpu: 50\n  mem: 60\n",
+                                                 encoding="utf-8")
+        (tmp_path / "db-a.yaml").write_text("tenants:\n  db-a:\n    cpu: 90\n",
+                                            encoding="utf-8")
+        return str(tmp_path)
+
+    @staticmethod
+    def _cli(*argv):
+        p = subprocess.run([sys.executable, diagnose.__file__, *argv, "--json"],
+                           capture_output=True, text=True, encoding="utf-8", timeout=120)
+        return p, json.loads(p.stdout)   # one JSON document on every path
+
+    @pytest.mark.parametrize("case", ["missing", "plain-file", "empty"])
+    def test_an_unusable_dir_exits_2_naming_it(self, tmp_path, case):
+        target = {"missing": str(tmp_path / "nope"),
+                  "plain-file": str(tmp_path / "f.yaml"),
+                  "empty": ""}[case]
+        (tmp_path / "f.yaml").write_text("tenants: {}\n", encoding="utf-8")
+        p, doc = self._cli("db-a", "--config-dir", target, "--show-inheritance")
+        assert p.returncode == 2, (p.stdout, p.stderr)
+        assert doc["status"] == "caller_error" and doc["reason"] == "dir_not_found", doc
+        assert "--config-dir" in p.stderr, p.stderr
+        assert "Could not resolve" not in p.stdout
+
+    def test_a_tree_without_the_tenant_exits_2(self, tmp_path):
+        p, doc = self._cli("db-z", "--config-dir", self._tree(tmp_path), "--show-inheritance")
+        assert p.returncode == 2, (p.stdout, p.stderr)
+        assert doc["reason"] == "tenant_not_found", doc
+        assert "no tenant 'db-z'" in p.stderr, p.stderr
+
+    def test_must_fire_control_the_good_tree_still_answers(self, tmp_path):
+        p, doc = self._cli("db-a", "--config-dir", self._tree(tmp_path), "--show-inheritance")
+        assert p.returncode == 0, p.stderr
+        assert [c["layer"] for c in doc["chain"]] == ["defaults", "tenant"], doc
+        assert doc["resolved"] == {"cpu": 90, "mem": 60}, doc
+
+    def test_the_cli_refuses_before_any_cluster_query(self, tmp_path, monkeypatch):
+        """Without `--show-inheritance`: refused before `check()` queries
+        anything (the chain would raise too, but only after up to four
+        Prometheus queries and a kubectl call)."""
+        asked = []
+        monkeypatch.setattr(diagnose, "tenant_db_type",
+                            lambda *a: asked.append(a) or (None, None))
+        monkeypatch.setattr(diagnose, "query_prometheus",
+                            lambda *a: asked.append(a) or ([], None))
+        monkeypatch.setattr(sys, "argv", ["diagnose", "db-a", "--config-dir",
+                                          str(tmp_path / "nope")])
+        monkeypatch.setattr(diagnose, "arm_crash_envelope", lambda: None)
+        with pytest.raises(diagnose.CallerError) as exc:
+            diagnose.main()
+        assert exc.value.reason == "dir_not_found"
+        assert asked == []
+
+    @pytest.mark.parametrize("case", ["missing", "empty", "no-tenant"])
+    def test_check_does_not_answer_as_if_no_dir_was_given(self, tmp_path, monkeypatch, case):
+        """`check()` (batch-diagnose imports it) used to skip the chain for
+        '' and answer without it for the other two."""
+        monkeypatch.setattr(diagnose, "tenant_db_type", lambda *a: (None, None))
+        monkeypatch.setattr(diagnose, "query_prometheus", lambda *a: ([], None))
+        target = {"missing": str(tmp_path / "nope"), "empty": "",
+                  "no-tenant": self._tree(tmp_path)}[case]
+        want = diagnose.TenantNotFoundError if case == "no-tenant" else diagnose.CallerError
+        with pytest.raises(want):
+            diagnose.check("db-z", "http://prom", config_dir=target, out=io.StringIO())
+        # must-fire control: the same check with the tenant the tree has
+        if case == "no-tenant":
+            buf = io.StringIO()
+            doc = diagnose.check("db-a", "http://prom", config_dir=target, out=buf)
+            assert "inheritance_chain" in doc, doc
