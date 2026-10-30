@@ -142,6 +142,8 @@ ALLOWED = {
         (1, "the customer repo's .gitlab-ci.yml, read by GitLab CI; no Go consumer"),
     ('scripts/tools/ops/init_project.py', '_precommit_root_relative_paths'):
         (1, "the customer repo's .pre-commit-config.yaml, read only by pre-commit (Python)"),
+    ('scripts/tools/ops/init_project.py', '_read_ownership'):
+        (1, "the customer repo's .da-init.yaml (issue 1465 file ledger), written and read only by init; no Go consumer"),
     ('scripts/tools/ops/init_project.py', '_root_relative_ci_paths'):
         (1, "the customer repo's GitHub workflows, read by GitHub Actions; no Go consumer"),
     ('scripts/tools/ops/lint_custom_rules.py', 'load_policy'):

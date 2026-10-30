@@ -1230,12 +1230,22 @@ class TestCriticalTierPlacement:
             assert all('HAND-EDIT' in f.read_text(encoding='utf-8')
                        for f in (defaults, tenant))
 
-            # with --force: BOTH files are rewritten, both edits gone
+            # with --force: BOTH files are rewritten, both edits gone — and
+            # (issue 1465) both are named as edited, from the ledger, while a
+            # file init wrote and nobody touched is not.
             forced = subprocess.run(base + ['--force'], capture_output=True,
-                                    env=env, timeout=180)
+                                    text=True, encoding='utf-8',
+                                    errors='replace',
+                                    env={**env, 'DA_LANG': 'en'}, timeout=180)
             assert forced.returncode == 0, forced.stderr[-500:]
             for f in (defaults, tenant):
                 assert 'HAND-EDIT' not in f.read_text(encoding='utf-8'), f.name
+            assert ('Of those, edited since init wrote them: '
+                    'conf.d/_defaults.yaml, conf.d/db-a.yaml'
+                    in forced.stdout), forced.stdout[-800:]
+            assert ('.pre-commit-config.da.yaml (overwritten) '
+                    '(init wrote it last time, unchanged)'
+                    in forced.stdout), forced.stdout[-800:]
 
     def test_overwrites_are_named_on_both_paths(self):
         """#1447: the destruction has to be visible where it happens.
@@ -1279,17 +1289,17 @@ class TestCriticalTierPlacement:
 
         with tempfile.TemporaryDirectory() as tmpdir:
             # (3) the shape with no marker at all: hand-written conf.d/.
+            # Issue 1465: without a marker the file is not init's, so the
+            # overwrite now needs --force (the refusal itself is pinned in
+            # TestOwnershipLedger); with it, the receipt still names it.
             conf = Path(tmpdir) / 'conf.d'
             conf.mkdir()
             (conf / '_defaults.yaml').write_text(
                 'defaults:\n  mysql_connections: 412\n', encoding='utf-8')
-            # ⛔ No --force: this path never reaches _check_existing_init,
-            # which is exactly why it used to be silent.
-            proc = run(tmpdir)
+            proc = run(tmpdir, '--force')
             assert proc.returncode == 0, proc.stderr[-400:]
-            assert 'conf.d\\_defaults.yaml (overwritten)' in proc.stdout \
-                or 'conf.d/_defaults.yaml (overwritten)' in proc.stdout, \
-                proc.stdout[-600:]
+            assert ('conf.d/_defaults.yaml (overwritten) (not written by init)'
+                    in proc.stdout), proc.stdout[-600:]
 
     def test_dry_run_previews_which_files_would_be_replaced(self):
         """--dry-run is the only place the notice is still actionable."""
@@ -1345,15 +1355,19 @@ class TestCriticalTierPlacement:
         from pathlib import Path
 
         tool = str(Path(ip.__file__).resolve())
+        # Issue 1465: deleting the marker no longer reproduces the overwrite
+        # (init then owns nothing and refuses), and `--force` now names the
+        # edited files — the message says both, and must not say the old
+        # "no diff" / "deleting it reproduces the overwrite".
         expectations = {
             'en': ('REWRITES every generated file',
                    'conf.d/_defaults.yaml',
-                   'no backup and no diff',
-                   'Deleting .da-init.yaml is not the safer option'),
+                   'edited since init wrote them are named',
+                   'does not get around this'),
             'zh': ('重新產生每一個檔案並覆寫',
                    'conf.d/_defaults.yaml',
-                   '不會有備份或差異提示',
-                   '刪掉 .da-init.yaml 不是比較安全的做法'),
+                   '被改過的檔會逐一點名',
+                   '繞不過這道檢查'),
         }
         with tempfile.TemporaryDirectory() as tmpdir:
             base = [sys.executable, tool, '-o', tmpdir, '--non-interactive',
@@ -1375,6 +1389,11 @@ class TestCriticalTierPlacement:
                     assert phrase in rerun.stderr, (
                         f"{lang}: the already-initialized warning no longer "
                         f"says {phrase!r}:\n{rerun.stderr}")
+                for stale in ('no backup and no diff',
+                              'reproduces the same overwrite',
+                              '不會有備份或差異提示',
+                              '也會發生同樣的覆寫'):
+                    assert stale not in rerun.stderr, (lang, stale)
 
     def test_only_kustomize_deploy_generates_the_kustomize_tree(self):
         """The fact that made the removed sentence wrong, pinned so it cannot
@@ -6588,7 +6607,7 @@ _ENTRYPOINT = os.path.join(REPO_ROOT, "components", "da-tools", "app",
                            "entrypoint.py")
 
 
-def _init_in(repo, out, lang, deploy="helm"):
+def _init_in(repo, out, lang, deploy="helm", *extra):
     import subprocess
     env = dict(os.environ, LANG=lang, PYTHONUTF8="1",
                PYTHONDONTWRITEBYTECODE="1")
@@ -6596,7 +6615,7 @@ def _init_in(repo, out, lang, deploy="helm"):
     env.pop("LC_ALL", None)
     run = subprocess.run(
         [sys.executable, _TOOL, "--non-interactive", "--ci", "both",
-         "--deploy", deploy, "--tenants", "t1", "-o", out],
+         "--deploy", deploy, "--tenants", "t1", "-o", out, *extra],
         cwd=repo, capture_output=True, text=True, encoding="utf-8",
         errors="replace", timeout=300, env=env)
     assert run.returncode == 0, run.stderr[-800:]
@@ -6668,7 +6687,9 @@ def test_kustomize_and_restore_paths_are_prefixed_too(tmp_path):
     (repo / "alerting" / "conf.d").mkdir(parents=True)
     (repo / "alerting" / "conf.d" / "t1.yaml").write_text(
         "tenants:\n  t1: {}\n", encoding="utf-8")
-    summary = _init_in(repo, "alerting", "en_US.UTF-8", deploy="kustomize")
+    # issue 1465: the pre-existing t1.yaml is not init's (no marker), so the
+    # overwrite whose restore hint this measures needs --force.
+    summary = _init_in(repo, "alerting", "en_US.UTF-8", "kustomize", "--force")
     link = re.search(r"Create symlinks from (\S+) to (\S+)", summary)
     assert link, summary
     for p in link.groups():
@@ -6731,3 +6752,188 @@ def test_confd_files_are_created_0600_and_a_replaced_one_keeps_its_mode(tmp_path
     (conf / "db-a.yaml").chmod(0o640)
     ip.run_init(config, str(tmp_path))
     assert (conf / "db-a.yaml").stat().st_mode & 0o777 == 0o640
+
+
+# ── issue 1465: the ownership ledger in .da-init.yaml ──────────────────────
+class TestOwnershipLedger:
+    """`.da-init.yaml` `files:` is the only answer to "which files are init's".
+
+    The defect: with no marker, init owned nothing yet overwrote a
+    hand-written `_defaults.yaml` (412 → 80) and `t1.yaml` with rc 0 — the
+    marker was the whole gate, so a repo that never ran init (or deleted the
+    marker) had none. Every test drives the real CLI in a throwaway directory
+    and compares bytes, not messages alone, so a build that prints the refusal
+    and writes anyway still fails.
+    """
+
+    _HAND_DEFAULTS = 'defaults:\n  mysql_connections: 412\n'
+    _HAND_TENANT = 'tenants:\n  t1:\n    mysql_connections: "412"\n'
+
+    @staticmethod
+    def _cli(out, *extra):
+        import subprocess
+        env = {**os.environ, 'PYTHONUTF8': '1', 'DA_LANG': 'en',
+               'PYTHONDONTWRITEBYTECODE': '1'}
+        return subprocess.run(
+            [sys.executable, _TOOL, '-o', str(out), '--non-interactive',
+             '--tenants', 't1', '--rule-packs', 'mariadb', *extra],
+            capture_output=True, text=True, encoding='utf-8',
+            errors='replace', env=env, timeout=300)
+
+    @staticmethod
+    def _snapshot(root):
+        """{relpath: (bytes, mtime_ns)} — `--dry-run` must change neither."""
+        return {p.relative_to(root).as_posix(): (p.read_bytes(), p.stat().st_mtime_ns)
+                for p in root.rglob('*') if p.is_file()}
+
+    def _hand_written(self, tmp_path):
+        out = tmp_path / 'repo'
+        conf = out / 'conf.d'
+        conf.mkdir(parents=True)
+        (conf / '_defaults.yaml').write_text(self._HAND_DEFAULTS, encoding='utf-8')
+        (conf / 't1.yaml').write_text(self._HAND_TENANT, encoding='utf-8')
+        return out
+
+    def test_no_marker_refuses_and_leaves_every_byte(self, tmp_path):
+        out = self._hand_written(tmp_path)
+        before = self._snapshot(out)
+        run = self._cli(out)
+        assert run.returncode == 1, (run.returncode, run.stderr[-800:])
+        assert self._snapshot(out) == before, 'refused, yet the tree changed'
+        assert not (out / '.da-init.yaml').exists()
+        assert 'conf.d/_defaults.yaml' in run.stderr
+        assert 'conf.d/t1.yaml' in run.stderr
+        assert 'Nothing was written' in run.stderr
+
+    def test_control_an_empty_directory_still_initializes(self, tmp_path):
+        out = tmp_path / 'fresh'
+        run = self._cli(out)
+        assert run.returncode == 0, run.stderr[-800:]
+        assert (out / 'conf.d' / '_defaults.yaml').is_file()
+
+    def test_force_is_the_escape_hatch(self, tmp_path):
+        out = self._hand_written(tmp_path)
+        run = self._cli(out, '--force')
+        assert run.returncode == 0, run.stderr[-800:]
+        assert '412' not in (out / 'conf.d' / '_defaults.yaml').read_text(encoding='utf-8')
+        assert ('conf.d/_defaults.yaml (overwritten) (not written by init)'
+                in run.stdout), run.stdout[-800:]
+
+    def test_dry_run_needs_no_force_and_writes_nothing(self, tmp_path):
+        out = self._hand_written(tmp_path)
+        before = self._snapshot(out)
+        run = self._cli(out, '--dry-run')
+        assert run.returncode == 0, run.stderr[-800:]
+        assert self._snapshot(out) == before
+        assert ('conf.d/t1.yaml (exists — would be overwritten) '
+                '(not written by init)') in run.stdout, run.stdout[-800:]
+        assert 'the real run refuses without --force (rc 1)' in run.stdout
+
+        # …and in an initialized directory, where the real run also refuses.
+        fresh = tmp_path / 'init'
+        assert self._cli(fresh).returncode == 0
+        before = self._snapshot(fresh)
+        run = self._cli(fresh, '--dry-run')
+        assert run.returncode == 0, run.stderr[-800:]
+        assert self._snapshot(fresh) == before
+        assert 'already initialized: the real run refuses without --force' in run.stdout
+
+    def test_the_ledger_is_every_written_file_and_its_bytes_on_disk(self, tmp_path):
+        import hashlib
+        out = tmp_path / 'repo'
+        assert self._cli(out).returncode == 0
+        marker = yaml.safe_load((out / '.da-init.yaml').read_text(encoding='utf-8'))
+        ledger = marker['files']
+        on_disk = {p.relative_to(out).as_posix() for p in out.rglob('*')
+                   if p.is_file()} - {'.da-init.yaml'}
+        assert set(ledger) == on_disk
+        for rel, digest in ledger.items():
+            assert digest == hashlib.sha256((out / rel).read_bytes()).hexdigest(), rel
+
+    @pytest.mark.parametrize('marker_body', [
+        'ci_platform: github\ndeploy_method: kustomize\n',      # pre-ledger marker
+        'files:\n  - conf.d/t1.yaml\n',                          # unreadable ledger
+        'files: {conf.d/t1.yaml: 1}\n',                          # non-str digest
+    ], ids=['no-ledger', 'list', 'int-digest'])
+    def test_a_marker_without_a_usable_ledger_cannot_answer(self, tmp_path, marker_body):
+        """"Cannot tell" must not read as "unchanged" (nothing edited) nor as
+        "not init's": the marker says init ran, its ledger says nothing."""
+        out = tmp_path / 'repo'
+        assert self._cli(out).returncode == 0
+        (out / '.da-init.yaml').write_text(marker_body, encoding='utf-8')
+        run = self._cli(out, '--dry-run', '--force')
+        assert run.returncode == 0, run.stderr[-800:]
+        line = next(ln for ln in run.stdout.splitlines() if 'conf.d/t1.yaml' in ln)
+        assert 'cannot tell whether it was edited' in line, line
+        assert 'unchanged' not in line and 'not written by init' not in line, line
+
+    def test_a_file_init_wrote_earlier_stays_in_the_ledger(self, tmp_path):
+        """A run that does not rewrite one of init's files must not disown it.
+
+        Two shapes: a tenant dropped from --tenants, and the root
+        .gitlab-ci.yml that only the first run writes. Both stay listed with
+        the digest of the run that wrote them, so an edit is still named."""
+        out = tmp_path / 'repo'
+        assert self._cli(out, '--tenants', 't1,t2', '--ci', 'both').returncode == 0
+        first = yaml.safe_load((out / '.da-init.yaml').read_text(encoding='utf-8'))['files']
+        assert '.gitlab-ci.yml' in first and 'conf.d/t2.yaml' in first
+        run = self._cli(out, '--ci', 'both', '--force')          # t1 only
+        assert run.returncode == 0, run.stderr[-800:]
+        second = yaml.safe_load((out / '.da-init.yaml').read_text(encoding='utf-8'))['files']
+        for rel in ('.gitlab-ci.yml', 'conf.d/t2.yaml'):
+            assert second[rel] == first[rel], rel
+
+        t2 = out / 'conf.d' / 't2.yaml'
+        t2.write_text(t2.read_text(encoding='utf-8') + '# HAND-EDIT\n', encoding='utf-8')
+        run = self._cli(out, '--tenants', 't1,t2', '--ci', 'both', '--force')
+        assert run.returncode == 0, run.stderr[-800:]
+        assert 'conf.d/t2.yaml (overwritten) (edited since init wrote it)' in run.stdout, \
+            run.stdout[-800:]
+
+    def test_a_ledger_entry_that_was_deleted_is_dropped(self, tmp_path):
+        """Control for the carry-over: only files still on disk are carried."""
+        out = tmp_path / 'repo'
+        assert self._cli(out, '--tenants', 't1,t2').returncode == 0
+        (out / 'conf.d' / 't2.yaml').unlink()
+        assert self._cli(out, '--force').returncode == 0
+        ledger = yaml.safe_load((out / '.da-init.yaml').read_text(encoding='utf-8'))['files']
+        assert 'conf.d/t2.yaml' not in ledger
+
+    def test_an_unreadable_listed_file_cannot_answer(self, tmp_path, monkeypatch):
+        """Unreadable is "cannot tell", never a traceback and never "unchanged".
+        Driven through the seam: the suite runs as root, which reads mode 000."""
+        out = tmp_path / 'repo'
+        assert self._cli(out).returncode == 0
+        own = ip._read_ownership(str(out))
+        assert own.state == ip._OWN_LEDGER
+        target = out / 'conf.d' / 't1.yaml'
+
+        def unreadable(path):
+            if path == target:
+                raise PermissionError(13, 'Permission denied', str(path))
+            return __import__('hashlib').sha256(path.read_bytes()).hexdigest()
+        monkeypatch.setattr(ip, '_sha256_file', unreadable)
+        found = ip._classify_existing([str(target), str(out / 'conf.d' / '_defaults.yaml')],
+                                      str(out), own)
+        assert found == {'conf.d/t1.yaml': ip._EXIST_UNREADABLE,
+                         'conf.d/_defaults.yaml': ip._EXIST_UNCHANGED}
+
+    def test_a_directory_at_an_init_path_is_refused_before_any_write(self, tmp_path):
+        out = tmp_path / 'repo'
+        (out / '.pre-commit-config.da.yaml').mkdir(parents=True)
+        before = self._snapshot(out)
+        run = self._cli(out)
+        assert run.returncode == 1, (run.returncode, run.stderr[-800:])
+        assert self._snapshot(out) == before
+        assert not (out / 'conf.d').exists()
+        assert '.pre-commit-config.da.yaml' in run.stderr
+
+    def test_dry_run_counts_the_marker_like_the_real_run(self, tmp_path):
+        out = tmp_path / 'repo'
+        assert self._cli(out).returncode == 0
+        dry = self._cli(out, '--dry-run')
+        real = self._cli(out, '--force')
+        n_dry = re.search(r'(\d+) of them already exist', dry.stdout)
+        n_real = re.search(r'(\d+) of the files above already existed', real.stdout)
+        assert n_dry and n_real, (dry.stdout[-600:], real.stdout[-600:])
+        assert n_dry.group(1) == n_real.group(1)
