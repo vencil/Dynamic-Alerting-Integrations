@@ -36,7 +36,7 @@ updated_at: 2026-10-30
 - **2026-10-23 修訂**：§3「快取的去留」記下結果：保留快取，冷啟動改以 `parse-tree` 的批次單檔模式整批讀沒命中的檔；後果段的「快取的去留未定」改為「快取保留」。
 - **2026-10-28 修訂**：決定 tenant-api 管理設定的取得方式：Python 讀 tenant-api 自己的 `state show` 與 `config check` 子命令的輸出，它們用的是 server 的解析函式（§12）；Alertmanager 設定與 Kubernetes manifest 在 §12 分成兩列；§7 步驟 12 寫明分成哪幾件。同日再修訂：Prometheus 的規則檔與 `prometheus.yml` 都以權威讀法讀，代價是 da-tools 映像多帶服務探索的依賴；規則檔以上游 rulefmt 為準，vmalert 的相容性由 vmalert-tool 測試把關（§12、「已知限制與風險」）；§7 步驟 12 改為 AST lint 先上、以棘輪凍結既有呼叫點。
 - **2026-10-30 修訂**：遷移稽核指令與模仿 yaml.v3 的 Python loader 已刪除（§7 步驟 13），兩項升級前檢查寫進漸進遷移 playbook（§8）；§8 與附錄改寫為現況；決策不變。
-- **2026-10-30 再修訂**：§7 的步驟全部完成，狀態標為已實作；§7 與「實作順序」改寫為現況，刪去「進行中」與「下一步」的敘述；步驟 11 寫明文件裡的 yaml 範例改由單一清冊判定、以 fence 屬性宣告讀者；決策不變。
+- **2026-10-30 再修訂**：§7 的步驟全部完成，狀態標為已實作；§7 與「實作順序」改寫為現況，刪去「進行中」與「下一步」的敘述；步驟 11 寫明文件裡的 yaml 範例改由單一清冊判定、以 fence 屬性宣告讀者；§3「快取的去留」的結果寫明量測時沒有先做串流輸出；決策不變。
 
 ## 摘要
 
@@ -347,7 +347,7 @@ tenant-api pod
   - 量測時，記憶體上限與判定期限取自 Helm chart 與程式本身，不另寫一份數字；上限或期限改了，量測跟著改。
   - 撤快取的條件，兩者都要成立：子程序與它啟動的每一支程式，峰值記憶體各自不超過 144 MiB（192 MiB 的 75%）；判定時間不超過 10 秒（20 秒判定期限的一半，另一半留給排隊與租戶成長）。成立就撤快取：容器與 CLI 走同一條整棵樹模式的路徑，本節的快取、淘汰規則與快取大小的 metric 一併移除。
   - 不成立就保留快取，只修冷啟動 O(N²) 的成因。
-  - **結果**：條件不成立（量測工具 `scripts/tools/dx/measure_judgement_budget.py`，數字見 [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)），快取保留；冷啟動改走上面的批次單檔模式，批次呼叫的次數不隨檔案數增加，時間隨檔案數線性成長。冷啟動前後的量測見 [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)。
+  - **結果**：條件不成立（量測工具 `scripts/tools/dx/measure_judgement_budget.py`，數字見 [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)），快取保留；冷啟動改走上面的批次單檔模式，批次呼叫的次數不隨檔案數增加，時間隨檔案數線性成長。冷啟動前後的量測見 [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)。量測時 `parse-tree` 仍先在記憶體裡組完整份輸出，原訂先做的串流輸出沒有做；結論不受影響，因為保留快取不需要串流。之後若要重新評估撤快取，先做串流，再依同樣的條件量測。
 - **期限**：一個請求只有一個總期限，從 tenant-api 收到請求起算 30 秒，也就是 HTTP server 的寫入逾時（`--write-timeout`，預設 30 秒；另有固定 30 秒的請求逾時 middleware）。等寫入鎖、呼叫產生器容器、重驗、commit 都在這 30 秒之內。
   - tenant-api 每次呼叫產生器容器都帶上剩餘時間。容器的判定期限取「20 秒」與「剩餘時間減 5 秒」兩者較小的那個；那 5 秒留給 tenant-api 收到結果後核對與 commit。做法類似 gRPC 的 deadline propagation（期限傳遞）：呼叫端把自己剩下的期限傳給下游，下游不會做到呼叫端已經放棄之後。
   - 判定期限從常駐程序收到請求時起算，排隊時間也算在內。到期時不論那筆請求還在排隊或已在判定，都由常駐程序回應「拒收該筆」；已在判定的，子程序一併結束（見下一點）。剩餘時間以「還剩多久」傳遞，不依賴兩個容器的時鐘一致；判定期限比 tenant-api 的剩餘時間早 5 秒到，這 5 秒涵蓋回應的傳遞，以及上一點所說的核對與 commit。所以只要常駐程序本身正常，tenant-api 就會在自己的期限內收到這一筆的結果，不會因為等不到而把容器當成不可用。
@@ -737,6 +737,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - 步驟 12：conf.d 以外的 YAML 改以消費者為準（§12）。`da-crdecode` 通用化（多份文件、標準輸入），與 `da-read alertmanager`、`da-read prometheus-rules`、`da-read prometheus` 一起放進 da-tools 映像；tenant-api 加上 `state show` 與 `config check`；讀 Prometheus 規則檔、`prometheus.yml`、Alertmanager 設定、Kubernetes manifest 與 Helm values 的工具改用對應的讀法；以 conf.d 格式讀的其餘文字改經 `parse-tree`（文件裡的範例經步驟 11 的清冊）。AST lint（`tests/shared/test_yaml_reader_boundary.py`）列出每個 PyYAML 呼叫點，白名單與棘輪 baseline 在 `tests/shared/_yaml_reader_baseline.py`；baseline 已清空。
 - 步驟 13：刪除遷移稽核指令與模仿 yaml.v3 的 Python loader（`_lib_yaml_keys`、`_lib_io` 的 exporter-key 讀取函式）；漸進遷移 playbook 補上升級前檢查。測試裡要知道「exporter 讀到什麼」的地方改問 `da-guard parse-tree`；兩份固定語料記錄舊產生器讀法的那一欄改為凍結的歷史值，之後新增的列寫 `n/a`。
 - 與上列平行：「快取的去留」的量測（§3），結果是保留快取，冷啟動改走批次單檔模式；vendored yaml.v3 基底升級到上游 v3.0.5，unhashable merge key 的 patch 刪除。
+- 未做：`parse-tree` 串流輸出（§3）。只在重新評估撤快取時才需要。
 
 ## 附錄：實作對照
 
