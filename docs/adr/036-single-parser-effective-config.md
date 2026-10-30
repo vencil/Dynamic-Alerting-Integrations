@@ -672,7 +672,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | Python 啟動 | 0.11 秒、25 MB |
 | 從 git 取出 1000 個檔 | 0.21 秒、12 MB |
 
-映像裡的 Go binary（2026-10-30 在 commit `0634a81` 上實測，linux/amd64）：以出貨用的建置 `scripts/ops/go_build.sh` 建（`CGO_ENABLED=0 go build -trimpath -ldflags "-s -w"`；da-tools 映像、tenant-api 映像與 release 的離線 binary 都經這支腳本建），量未壓縮與 `gzip -9` 後的大小。這裡只量 binary，不含 base image 與 Python 的層；整個映像壓縮後的大小不在這次量測裡。重量時以同一支腳本建，例如 `sh scripts/ops/go_build.sh --goos linux --goarch amd64 components/da-read . /tmp/da-read`，再 `gzip -9 -c /tmp/da-read | wc -c`。
+映像裡的 Go binary（2026-10-30 在 commit `0634a81` 上實測，linux/amd64）：以出貨用的建置 `scripts/ops/go_build.sh` 建（`CGO_ENABLED=0 go build -trimpath -ldflags "-s -w"`；da-tools 映像、tenant-api 映像與 release 的離線 binary 都經這支腳本建），量未壓縮與 `gzip -9` 後的大小。這裡只量 binary，不含 base image 與 Python 的層；整個映像壓縮後的大小不在這次量測裡。`0634a81` 是被量的原始碼；那個版本還沒有這支腳本，重量時在含有 `scripts/ops/go_build.sh` 的版本上建（要量 `0634a81` 本身，先把腳本複製出來再切換），例如 `sh scripts/ops/go_build.sh --goos linux --goarch amd64 components/da-read . /tmp/da-read`，再 `gzip -9 -c /tmp/da-read | wc -c`。
 
 | binary | 未壓縮 | `gzip -9` 後 |
 |---|---|---|

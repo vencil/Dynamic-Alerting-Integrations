@@ -668,7 +668,7 @@ Semantic layer (the generator, measured 2026-10-09):
 | Python startup | 0.11 s, 25 MB |
 | Checking 1000 files out of git | 0.21 s, 12 MB |
 
-The Go binaries in the images (measured 2026-10-30 on commit `0634a81`, linux/amd64): built with the shipping build, `scripts/ops/go_build.sh` (`CGO_ENABLED=0 go build -trimpath -ldflags "-s -w"`; the da-tools image, the tenant-api image and the release's offline binaries are all built through that script), measured uncompressed and after `gzip -9`. Only the binaries are measured, not the base image or the Python layers; the size of a whole compressed image is not part of this measurement. To measure again, build with the same script, e.g. `sh scripts/ops/go_build.sh --goos linux --goarch amd64 components/da-read . /tmp/da-read`, then `gzip -9 -c /tmp/da-read | wc -c`.
+The Go binaries in the images (measured 2026-10-30 on commit `0634a81`, linux/amd64): built with the shipping build, `scripts/ops/go_build.sh` (`CGO_ENABLED=0 go build -trimpath -ldflags "-s -w"`; the da-tools image, the tenant-api image and the release's offline binaries are all built through that script), measured uncompressed and after `gzip -9`. Only the binaries are measured, not the base image or the Python layers; the size of a whole compressed image is not part of this measurement. `0634a81` is the source that was measured; it predates the script, so measure again from a revision that has `scripts/ops/go_build.sh` (to measure `0634a81` itself, copy the script out before checking it out), e.g. `sh scripts/ops/go_build.sh --goos linux --goarch amd64 components/da-read . /tmp/da-read`, then `gzip -9 -c /tmp/da-read | wc -c`.
 
 | Binary | Uncompressed | After `gzip -9` |
 |---|---|---|
