@@ -129,8 +129,9 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 # ADR-036 step 4 (#2906): the tracked defaults artifacts (conf.d files) are
-# read by `da-guard parse-tree`; the chart values and the generators' output
-# are not conf.d and keep PyYAML.
+# read by `da-guard parse-tree`; so is the `_defaults.yaml` a generator writes
+# (ADR-036 §12, #3206: it is a conf.d file once written). The chart values are
+# read as Helm reads them (da-crdecode). This module reads no YAML itself.
 from _lib_parse_tree import FileUnreadable as _FileUnreadable  # noqa: E402
 from _lib_parse_tree import ParseTreeError as _ParseTreeError  # noqa: E402
 
@@ -359,9 +360,10 @@ def _init_project_declared() -> set[str]:
     only one of the two producers would leave the other free to drop the list
     silently — and "I fixed the instance the review named" is how this contract
     ended up with copies in the first place.
-    """
-    import yaml  # local import: only this face needs it
 
+    The text is the customer's `_defaults.yaml`, read as the exporter and
+    tenant-api read it (`_generated_defaults`, ADR-036 §12, #3206).
+    """
     # Guarded: this face is called per run (and per test), and an unguarded
     # insert would grow sys.path without bound. The module-level insert above
     # already put _OPS on the path; this is belt-and-braces for callers that
@@ -371,7 +373,8 @@ def _init_project_declared() -> set[str]:
     import init_project  # noqa: E402
 
     packs = sorted(init_project.RULE_PACK_CATALOG)
-    doc = yaml.safe_load(init_project._gen_defaults_yaml(packs, "monitoring")) or {}
+    doc = _generated_defaults("init_project._gen_defaults_yaml",
+                              init_project._gen_defaults_yaml(packs, "monitoring"))
     return set(doc.get("optional_overrides") or [])
 
 
@@ -1847,10 +1850,13 @@ _ONBOARD_PROBE = (
 
 # Depth cap for the `defaults:` walk below. Generous — the deepest real nesting
 # in the tree is 2 — because its job is not to model a schema but to make a
-# runaway walk LOUD. `yaml.safe_load` happily builds a self-referential document
-# from a recursive anchor (`defaults: &a {x: *a}`, measured: the walk recurses
-# forever without this), and a silent truncation there would hand back a partial
-# key set that passes the placement check for the half it never reached.
+# runaway walk LOUD. PyYAML built a self-referential document from a recursive
+# anchor (`defaults: &a {x: *a}`, measured: the walk recursed forever without
+# this); the readers this gate uses now refuse that text (parse-tree:
+# decode_error "anchor 'a' value contains itself") or cannot express it (Helm's
+# JSON), and the cap stays for any mapping a caller hands in — a silent
+# truncation would hand back a partial key set that passes the placement check
+# for the half it never reached.
 _DEFAULTS_MAX_DEPTH = 16
 
 
@@ -1922,10 +1928,10 @@ def _walk_defaults_keys(node: object, prefix: str = "",
     if depth > _DEFAULTS_MAX_DEPTH:
         raise RuntimeError(
             f"`defaults:` walk exceeded {_DEFAULTS_MAX_DEPTH} levels at {prefix!r}. "
-            "A recursive YAML anchor builds a self-referential document that "
-            "`yaml.safe_load` accepts, and truncating the walk would silently "
-            "stop checking whatever lies below. Flatten the section or fix the "
-            "anchor; do not raise the cap to paper over a cycle.")
+            "A self-referential mapping (a cycle) has no bottom, and truncating "
+            "the walk would silently stop checking whatever lies below. "
+            "Flatten the section or break the cycle; do not raise the cap to "
+            "paper over it.")
     if isinstance(node, dict):
         for k, v in node.items():
             path = f"{prefix}.{k}" if prefix else str(k)
@@ -1952,15 +1958,21 @@ def _defaults_section(text: "str | dict", *, unwrap_chart: bool = False) -> dict
     everything else silently vanished, rc=0. A conf.d file has no
     `thresholdConfig:` in its schema, so for those the top level IS the root.
 
-    *text* is YAML text (a generator's conf.d-shaped output, read here with
-    PyYAML until conf.d-shaped text moves to `parse-tree`) or an already-read
-    mapping — the chart's values as Helm reads them (`_chart_values`, #3206).
+    *text* is a `_defaults.yaml`'s text (a generator's output) or an
+    already-read mapping — the chart's values as Helm reads them
+    (`_chart_values`, #3206). The text is read as the exporter reads that
+    file (`_read_defaults_text`: parse-tree, ADR-036 §12), so it raises
+    `FileUnreadable` for one the exporter refuses whole and ParseTreeError
+    when da-guard cannot answer. ⛔ Chart values are never text here: Helm
+    reads them, not the exporter, so `unwrap_chart` takes the mapping only.
     """
     if isinstance(text, dict):
         doc = text
     else:
-        import yaml  # local import: only the generator faces need it
-        doc = yaml.safe_load(text) or {}
+        if unwrap_chart:
+            raise TypeError("unwrap_chart takes the chart's values as Helm reads them "
+                            "(a mapping, `_chart_values`), not text")
+        doc = _read_defaults_text(text)
     root = (doc.get("thresholdConfig") or doc) if unwrap_chart else doc
     return _walk_defaults_keys(root.get("defaults") or {})
 
@@ -1981,6 +1993,29 @@ def _parse_artifact(rel: str, data: bytes) -> dict:
     inner = rel[len(root) + 1:] if root else rel
     with tempfile.TemporaryDirectory(prefix="da-reach-") as empty:
         return _lib_parse_cache.read_text_as(empty, inner, data)
+
+
+def _read_defaults_text(text: str) -> dict:
+    """A `_defaults.yaml` a generator writes (`init_project._gen_defaults_yaml`),
+    read as the exporter and tenant-api read that file in the customer's
+    conf.d (ADR-036 §12, #3206): `da-guard parse-tree`'s file mode, as the
+    root `_defaults.yaml` of an empty tree. Raises FileUnreadable (``file``
+    is `_defaults.yaml`; the caller names the generator) and ParseTreeError."""
+    return _parse_artifact("_defaults.yaml", text.encode("utf-8"))
+
+
+def _generated_defaults(producer: str, text: str) -> dict:
+    """`_read_defaults_text` of *producer*'s output, a refusal raised as the
+    floor breach it is: the generator writes a `_defaults.yaml` the exporter
+    refuses whole, so none of its keys exists anywhere — never an empty face.
+    No usable da-guard stays ParseTreeError (a caller error in `main`)."""
+    try:
+        return _read_defaults_text(text)
+    except _FileUnreadable as exc:
+        raise _GateViolation(
+            f"{producer} writes a `_defaults.yaml` the exporter refuses whole "
+            f"({exc.kind}: {exc.message}); `da-guard parse-tree` reads it as the "
+            "exporter does (ADR-036 §12, #3206). Fix the generator.") from exc
 
 
 def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str, KeyInfo]]]:
@@ -2052,8 +2087,9 @@ def _defaults_faces() -> tuple[dict[str, dict[str, KeyInfo]], dict[str, dict[str
             _walk_defaults_keys(
                 scaffold_tenant.generate_defaults(scaffold_packs)["defaults"]),
         "onboarding/init (init_project._gen_defaults_yaml)":
-            _defaults_section(
-                init_project._gen_defaults_yaml(init_packs, "monitoring")),
+            _defaults_section(_generated_defaults(
+                "init_project._gen_defaults_yaml",
+                init_project._gen_defaults_yaml(init_packs, "monitoring"))),
         "migration/onboard (onboard_platform.generate_defaults_from_candidates, "
         "probed)": _walk_defaults_keys(onboard_suggestion.get("defaults") or {}),
     }
