@@ -1203,9 +1203,8 @@ def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
     passes its own, in the judgement process. *key_verdict*: whether
     ``--validate`` also reports the shared key verdict (ADR-038 §5). The
     container passes False: it judges the keys itself, after the generator
-    and under its own deadline (``_gsvc_child.key_verdict``), so running it
-    here too would judge every write twice, the second time outside that
-    deadline."""
+    passes the write (``_gsvc_child.key_verdict``), so running it here too
+    would judge every write twice."""
     parser = _build_parser()
     # #2766: every finding the run prints, in the order it was determined.
     # --findings-json writes it on EVERY exit — a refusal, a verdict, a caller

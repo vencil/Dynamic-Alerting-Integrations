@@ -91,7 +91,7 @@ func TestAdviseKeyVerdict_NotCompletedTruncatedAndEmpty(t *testing.T) {
 		t.Errorf("truncated, whole tree: lines = %q", got)
 	}
 	// Every reason the generator sends has its own text.
-	for _, r := range []string{"no_time", "deadline", "preempted", "memory", "error", "platform_file"} {
+	for _, r := range []string{"no_time", "deadline", "preempted", "memory", "error", "undecidable", "platform_file"} {
 		if verdictReasons[r] == "" {
 			t.Errorf("reason %s has no text", r)
 		}

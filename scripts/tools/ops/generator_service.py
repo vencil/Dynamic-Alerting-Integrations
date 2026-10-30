@@ -291,8 +291,9 @@ class Metrics:
     #: (KEY_VERDICT_OUTCOMES) — and the latest one's duration.
     key_verdicts: Counter = field(default_factory=Counter)
     key_verdict_seconds: float = 0.0
-    #: ADR-038 decision 5: the latest judgement's run time over its time
-    #: budget (deadline_ms, capped) — the supported size's own measure.
+    #: ADR-038 decision 5: the time the latest judgement took from its
+    #: request's arrival (queue included) over its time budget (deadline_ms,
+    #: capped) — the supported size's own measure.
     judgement_deadline_ratio: float = 0.0
 
 
@@ -320,18 +321,34 @@ def da_guard_version(binary: Optional[str]) -> Optional[str]:
     return words[-1] if proc.returncode == 0 and words else None
 
 
+#: The last da-guard that answered ``--version``: (path, mtime_ns, size).
+_DA_GUARD_RAN: list = [None]
+
+
 def da_guard_problem() -> Optional[str]:
     """Why the judgement process cannot run da-guard — the one it resolves
-    ($DA_GUARD_BINARY, then PATH) is missing or not executable — or None.
-    Checked before every judgement, like amtool (ADR-036 §3): without it
-    the key verdict (ADR-038 §5) cannot be given."""
+    ($DA_GUARD_BINARY, then PATH) is missing, not executable, or does not
+    answer ``--version`` (a wrong architecture, a broken interpreter line)
+    — or None. Checked before every judgement, like amtool (ADR-036 §3):
+    without it the key verdict (ADR-038 §5) cannot be given. The run is
+    repeated only when the file changes."""
     import guard_dispatch
     exe = guard_dispatch.DISPATCHER.resolve_binary(None)
     if exe is None:
         return ("da-guard is not found ($DA_GUARD_BINARY, then PATH): without it "
                 "the key verdict cannot be given")
-    if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+    try:
+        st = os.stat(exe)
+    except OSError as exc:
+        return f"da-guard at {exe} cannot be read ({exc}): the key verdict cannot be given"
+    if not (stat.S_ISREG(st.st_mode) and os.access(exe, os.X_OK)):
         return f"da-guard at {exe} is not an executable file: the key verdict cannot be given"
+    seen = (exe, st.st_mtime_ns, st.st_size)
+    if _DA_GUARD_RAN[0] != seen:
+        if da_guard_version(exe) is None:
+            return (f"da-guard at {exe} does not run (`--version` failed): "
+                    "the key verdict cannot be given")
+        _DA_GUARD_RAN[0] = seen
     return None
 
 
@@ -608,9 +625,6 @@ class Service:
         finally:
             self.running = None
             self.child_pid = None
-        if ticket.started is not None and ticket.deadline_at > ticket.received:
-            self.metrics.judgement_deadline_ratio = round(
-                (self.loop.time() - ticket.started) / (ticket.deadline_at - ticket.received), 4)
         if resp.doc is not None and resp.status == 200 and ticket.started is not None:
             resp.doc["queue_wait_ms"] = round((ticket.started - ticket.received) * 1000)
         if not ticket.future.done():
@@ -683,6 +697,11 @@ class Service:
                 # with is load, not a broken container — reject this write.
                 return _rejected("busy", f"cannot start a judgement "
                                          f"({errno.errorcode.get(exc.errno, exc.errno)}); retry")
+            # ADR-038 §5: how much of its time budget the judgement used,
+            # queue included — only when the judgement process ran.
+            if ticket.deadline_at > ticket.received:
+                self.metrics.judgement_deadline_ratio = round(
+                    (self.loop.time() - ticket.received) / (ticket.deadline_at - ticket.received), 4)
             # #2901 E2: a new base: warm it after this request, so whatever
             # this request did not get to parse is parsed off the clock.
             if ticket.request.base_commit != pinned_before:
@@ -964,7 +983,7 @@ class Service:
         out += ["# HELP da_generator_key_verdict_seconds Duration of the latest key verdict.",
                 "# TYPE da_generator_key_verdict_seconds gauge",
                 f"da_generator_key_verdict_seconds {self.metrics.key_verdict_seconds}",
-                "# HELP da_generator_judgement_deadline_ratio The latest judgement's run time over its time budget; alert above 0.5, at 1 writes are refused for want of time (ADR-038 decision 5).",
+                "# HELP da_generator_judgement_deadline_ratio The time the latest judgement took, queue included, over its time budget; alert above 0.5, near 1 key verdicts run out of time (ADR-038 decision 5).",
                 "# TYPE da_generator_judgement_deadline_ratio gauge",
                 f"da_generator_judgement_deadline_ratio {self.metrics.judgement_deadline_ratio}"]
         out += ["# HELP da_generator_cache_base_coverage_ratio Share of the pinned base tree's blobs with a parse-cache entry.",

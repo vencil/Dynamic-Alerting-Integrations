@@ -138,13 +138,29 @@ def test_the_deadline_running_out_stops_it_and_reports_it(monkeypatch, tmp_path)
     assert time.monotonic() - start < 5, "the verdict ran past the judgement deadline"
 
 
-def test_an_undecidable_tree_is_not_completed(monkeypatch, tmp_path):
-    """ADR-038 §5/§7: no root platform file read — the tenants' threshold keys
-    cannot be judged, and a retry changes nothing: not a complete verdict."""
-    got = _run(monkeypatch, tmp_path, 15.0,
-               lambda *_a, **_k: SimpleNamespace(findings=[], undecidable=True))
+def _key(verdict: str, key: str = "mysql_connections") -> SimpleNamespace:
+    return SimpleNamespace(key=key, verdict=verdict)
+
+
+def test_an_undecidable_key_is_not_completed(monkeypatch, tmp_path):
+    """ADR-038 §5/§7: no root platform file read and a threshold key written
+    — it cannot be judged, and a retry changes nothing: not complete."""
+    got = _run(monkeypatch, tmp_path, 15.0, lambda *_a, **_k: SimpleNamespace(
+        findings=[], undecidable=True, keys={"t-a": [_key(kv.UNDECIDABLE), _key(kv.READ, "_routing")]}))
     assert (got["status"], got["reason"]) == ("not_completed", "undecidable"), got
     assert "root platform file" in got["message"]
+
+
+def test_reserved_keys_alone_are_judged_without_a_root_platform_file(tmp_path, monkeypatch):
+    """ADR-038 §7: with no root platform file only threshold keys are
+    undecidable; a tenant writing reserved keys alone gets a complete
+    verdict, its error findings included (the real judge_tree)."""
+    tree = h.write_tree(tmp_path / "conf.d", {
+        "t-a.yaml": "tenants:\n  t-a:\n    _silent_mode: warning\n    _routng: {}\n"})
+    monkeypatch.setattr(child, "written_scope", lambda *_a: ([], ["t-a"]))
+    got = child.key_verdict(_job(tmp_path, 60.0), str(tree), {}, pc.ParseCache())
+    assert got["status"] == "complete", got
+    assert any(f["key"] == "_routng" and f["severity"] == kv.ERROR for f in got["findings"]), got
 
 
 def _finding(severity: str, n: int) -> kv.Finding:
@@ -163,7 +179,7 @@ def test_error_findings_are_never_truncated(monkeypatch, tmp_path, errors, other
     found = ([_finding(kv.WARNING, i) for i in range(others)]
              + [_finding(kv.ERROR, i) for i in range(errors)])
     got = _run(monkeypatch, tmp_path, 15.0,
-               lambda *_a, **_k: SimpleNamespace(findings=found, undecidable=False))
+               lambda *_a, **_k: SimpleNamespace(findings=found, undecidable=False, keys={}))
     assert got["status"] == "complete", got
     sev = [f["severity"] for f in got["findings"]]
     assert sev.count(kv.ERROR) == sent_errors
@@ -189,6 +205,7 @@ def test_served_values_runs_with_gotraceback_crash_under_the_memory_limit(
     reports as memory — not exit 2, reported as error."""
     import _lib_parse_tree as lpt
     monkeypatch.setattr(lpt, "_MEMORY_LIMITED", limited)
+    monkeypatch.delenv("GOTRACEBACK", raising=False)  # "unset" is what the run inherits
     fake, seen = _gotraceback_da_guard(tmp_path)
     missing = tmp_path / "no-such-conf.d"  # not a directory: no parse-tree run first
     for load in (tv.load_served_tree, tv.load_effective_tree):
@@ -205,7 +222,7 @@ def test_the_verdicts_parses_are_not_streamed(monkeypatch, tmp_path):
 
     def storing(*_a, **_k):
         pc.active().store(("k" * 64, "mode"), {"tenants": {}})
-        return SimpleNamespace(findings=[], undecidable=False)
+        return SimpleNamespace(findings=[], undecidable=False, keys={})
     _run(monkeypatch, tmp_path, 15.0, storing, cache)
     assert sent == [], "a verdict entry went down the pipe"
     assert cache.on_store is not None, "the generator's streaming is not restored"

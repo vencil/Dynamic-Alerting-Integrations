@@ -5,8 +5,8 @@ package handler
 //
 //   - tenant_api_policy_available — 1 when the generator container's status
 //     endpoint says it can judge: the deployment policy file is usable,
-//     amtool is there and the generator is not older than the policy
-//     requires (`ready`); 0 otherwise, and 0 when the status cannot be read
+//     amtool and da-guard are there and the generator is not older than the
+//     policy requires (`ready`); 0 otherwise, and 0 when the status cannot be read
 //     (the container is unreachable) — every content-changing write then
 //     answers 503. Read live at scrape time, within generator.ScrapeTimeout.
 //     The name is kept (an alert reads it); its meaning is ADR-036 §5's, no
@@ -46,7 +46,7 @@ func writePolicyAvailabilityMetrics(ctx context.Context, w io.Writer) {
 			available = 1
 		}
 	}
-	_, _ = fmt.Fprintf(w, "# HELP tenant_api_policy_available Whether the generator container can judge writes (1): its status endpoint reports the deployment policy file usable, amtool present and the generator not older than the policy requires. 0 when it cannot, or when its status cannot be read: every content-changing write then answers 503 (POLICY_UNAVAILABLE / VALIDATOR_UNAVAILABLE). Alert on == 0.\n")
+	_, _ = fmt.Fprintf(w, "# HELP tenant_api_policy_available Whether the generator container can judge writes (1): its status endpoint reports the deployment policy file usable, amtool and da-guard present and the generator not older than the policy requires. 0 when it cannot, or when its status cannot be read: every content-changing write then answers 503 (POLICY_UNAVAILABLE / VALIDATOR_UNAVAILABLE). Alert on == 0.\n")
 	_, _ = fmt.Fprintf(w, "# TYPE tenant_api_policy_available gauge\n")
 	_, _ = fmt.Fprintf(w, "tenant_api_policy_available %d\n", available)
 }

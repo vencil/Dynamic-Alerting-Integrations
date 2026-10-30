@@ -588,12 +588,15 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
             return report("complete", tenants=0, findings=[], truncated=0)
         verdict = _lib_key_verdict.judge_tree(
             tree_dir, tenants=tenants, timeout=budget, reader=reader)
-        if verdict.undecidable:
-            # ADR-038 §7: no root platform file, so a tenant's threshold key
-            # cannot be told from a misspelt one; a retry changes nothing.
+        undecidable = sorted({k.key for ks in verdict.keys.values() for k in ks
+                              if k.verdict == _lib_key_verdict.UNDECIDABLE})
+        if undecidable:
+            # ADR-038 §7: no root platform file, so a threshold key the
+            # tenants write cannot be told from a misspelt one; a retry
+            # changes nothing. Reserved keys alone are judged as always.
             return report("not_completed", reason="undecidable", tenants=len(tenants),
-                          message="no root platform file was read: the tenants' threshold "
-                                  "keys cannot be judged")
+                          message=f"no root platform file was read: {len(undecidable)} threshold "
+                                  "key(s) cannot be judged")
         kept, truncated = kept_findings(verdict.findings)
         findings = [{"severity": f.severity, "kind": f.kind, "key": f.key, "file": f.file,
                      "tenants": list(f.tenants), "reason": f.reason} for f in kept]
