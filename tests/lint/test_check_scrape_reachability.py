@@ -792,9 +792,26 @@ def test_extract_metrics_compact_operator_writing():
     assert "rate" not in extract_metrics("rate(foo_total[5m])*100")
 
 
+def test_a_refused_manifest_is_named_not_skipped(tmp_path):
+    """#3426: a manifest kubectl's reading refuses used to be skipped (its
+    Services silently missing); every one is named now, with its reason."""
+    good = tmp_path / "svc.yaml"
+    good.write_text("apiVersion: v1\nkind: Service\nmetadata:\n  name: s\n", encoding="utf-8")
+    bad = tmp_path / "bad.yaml"
+    bad.write_text("apiVersion: v1\nkind: Service\n---\n- not an object\n", encoding="utf-8")
+    nokind = tmp_path / "nokind.yaml"
+    nokind.write_text("metadata: {name: x}\n", encoding="utf-8")
+    with pytest.raises(gate._lib_consumer_read.InputRefused) as exc:
+        gate.parse_services([good, bad, nokind])
+    assert "2 manifest(s)" in str(exc.value)
+    lines = exc.value.stderr_lines
+    assert any(str(bad) in ln and "the document is array" in ln for ln in lines), lines
+    assert any(str(nokind) in ln and "it has no `kind`" in ln for ln in lines), lines
+    assert gate.parse_services([good]) == [{"name": "s", "namespace": None, "annotations": {}}]
+
+
 def test_a_crashed_da_crdecode_is_raised_not_a_skipped_file(tmp_path, monkeypatch):
-    """#3407 review: `parse_services` skips a manifest kubectl's reading
-    refuses; a da-crdecode that crashes (a Go panic exits 2 with stderr, as a
+    """#3407 review: a da-crdecode that crashes (a Go panic exits 2 with stderr, as a
     refusal does) is no answer about the file, so it is raised (a caller
     error in `main`) — never a manifest silently missing its Services."""
     svc = tmp_path / "svc.yaml"

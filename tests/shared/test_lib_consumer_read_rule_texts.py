@@ -138,12 +138,22 @@ def test_a_manifest_kubectl_refuses_is_named(tmp_path) -> None:
         cr.manifest_rule_file_results([path])
 
 
+def test_a_list_of_configmaps_is_read_item_by_item(tmp_path) -> None:
+    """#3426: the ConfigMaps of a `kind: List` (`kubectl get cm -o yaml`)
+    are read as kubectl applies them, one by one."""
+    item = _cm(_block("x.yml", RULES), name="listed").replace("\n", "\n  ").rstrip()
+    path = _write(tmp_path, "list.yaml", "apiVersion: v1\nkind: List\nitems:\n- " + item + "\n")
+    (rf,) = cr.manifest_rule_file_results([path])
+    assert (rf.kind, rf.key, rf.problem) == ("ConfigMap", "x.yml", None)
+    assert rf.groups[0]["name"]
+
+
 @pytest.mark.parametrize("doc,reason", [
     ("- " + RULES.replace("\n", "\n  "), "the document is array, not a mapping"),
     ("groups: []\n", "it has no `kind`"),
     ("kind: 3\n", "its `kind` is number, not a string"),
-    ("apiVersion: v1\nkind: List\nitems:\n- " + _cm(_block("x.yml", RULES)).replace("\n", "\n  "),
-     "a List document is not read"),
+    ("apiVersion: v1\nkind: List\nitems:\n- {kind: ConfigMap}\n",
+     "it has no `apiVersion`"),
 ])
 def test_a_document_that_is_no_object_is_named_not_skipped(tmp_path, doc, reason) -> None:
     """#3426: a document of a manifest that is no Kubernetes object used to

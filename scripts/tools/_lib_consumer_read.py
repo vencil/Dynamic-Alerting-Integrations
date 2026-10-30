@@ -9,9 +9,10 @@ Alertmanager's. They ask the Go binary that runs the consumer's own reading:
   -f`` splits them). One entry per document kubectl would apply, in file
   order; an empty file has none. ``instance: 010`` is the number 8 here, as
   it is to kubectl. ⛔ Every entry is a Kubernetes object — a ``dict`` with
-  a non-empty ``str`` ``kind``, not a list (#3426): a file with any other
-  document is refused, naming it, so a caller never skips one with an
-  ``isinstance`` of its own.
+  a non-empty ``str`` ``kind``, never a list: a ``kind: List`` is replaced by
+  its items, as kubectl applies them (#3426). A file with any other document,
+  or an item kubectl would not apply, is refused, naming it, so a caller
+  never skips one with an ``isinstance`` of its own.
 * ``kubernetes_text_documents(text)`` — the same reading of text held in
   memory (a manifest ``kubectl ... -o yaml`` or ``helm template`` printed, a
   ConfigMap a tool assembled), handed over on standard input.
@@ -279,11 +280,14 @@ def kubernetes_documents(path: str, binary: str | None = None) -> list[Any]:
     them (``da-crdecode``): one per document kubectl would apply, in order.
 
     ⛔ The guarantee (#3426): every document is a Kubernetes object — a
-    ``dict`` whose ``kind`` is a non-empty ``str`` — and none is a list
-    (a top-level ``items``). A file with a document that is not (an array, a
-    scalar, a mapping with no ``kind``, a ``kind: List``) is refused
-    (:class:`InputRefused`, the document's line and the reason in
-    ``stderr_lines``), as kubectl refuses it; nothing is passed over. A
+    ``dict`` whose ``kind`` is a non-empty ``str`` — and none is a list: a
+    document with a top-level ``items`` (``kind: List``, the output of
+    ``kubectl get … -o yaml``) is replaced by its items, in order, as kubectl
+    applies them. A file with a document that is no object (an array, a
+    scalar, a mapping with no ``kind``), or a list with an item kubectl would
+    not apply (no ``apiVersion`` or ``kind``, a list inside it), is refused
+    (:class:`InputRefused`, the line and the reason in ``stderr_lines``), as
+    kubectl refuses it; nothing is passed over. A
     caller therefore needs no ``isinstance(doc, dict)`` of its own, and
     must not skip a document with one. YAML that is not a manifest (Helm
     values, a rule file, a ConfigMap data value) is read with
@@ -725,9 +729,10 @@ def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
     files (an Alertmanager template); without it every value is a rule file
     and one that is not is refused. Raises :class:`InputRefused` naming the
     manifest when kubectl's reading refuses it — a document in it that is no
-    Kubernetes object (a top-level list, a mapping with no ``kind``) or a
-    ``kind: List`` included (#3426): no document of a manifest is passed over
-    because of its shape.
+    Kubernetes object (a top-level list, a mapping with no ``kind``), or a
+    ``kind: List`` item kubectl would not apply, included (#3426): no
+    document of a manifest is passed over because of its shape. A List's
+    ConfigMaps are read as its items.
     """
     keyed: "list[tuple[str, str, str, str | None, str | None]]" = []
     for path in paths:

@@ -24,7 +24,8 @@ runtime sentinel catches no-allowlist in the live cluster.
 
 Which files: every `*.yaml` under k8s/ is read the way kubectl reads it
 (da-crdecode, one batch; #3426), and a KSM Deployment is a `kind: Deployment`
-of that reading with a container whose `image` names kube-state-metrics. The
+of that reading (a `kind: List`'s items included, as kubectl applies them)
+with a container whose `image` names kube-state-metrics. The
 raw text decides nothing: a file that mentions the image only in a comment
 is no KSM Deployment, and a file kubectl's reading refuses is named (rc 2)
 rather than passed over.

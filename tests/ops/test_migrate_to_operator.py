@@ -1155,9 +1155,11 @@ class TestSourceFilesAreWhatTheReadersSay:
         # kubectl's reading refuses it (no kind); as a plain file it is no
         # rule file either (two documents).
         ("two-rule-docs.yaml", _RULES + "---\n" + _RULES, "it has no `kind`"),
-        # `kubectl get cm -o yaml` writes a List; its ConfigMaps used to be
-        # passed over by the kind filter without a word.
-        ("list.yaml", "apiVersion: v1\nkind: List\nitems: []\n", "a List document is not read"),
+        # A List is read as its items; one kubectl would not apply is named.
+        ("list.yaml", "apiVersion: v1\nkind: List\nitems:\n- {kind: ConfigMap}\n",
+         "items[0] (line 4): it is not a Kubernetes object: it has no `apiVersion`"),
+        # Neither YAML reading reads it, and the rule loader refuses it too.
+        ("broken.yaml", "groups: [\n", "Prometheus' rule loader refuses it"),
         ("cm-then-junk.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n---\n- x\n",
          "the document starting at line 5"),
     ])
@@ -1170,6 +1172,33 @@ class TestSourceFilesAreWhatTheReadersSay:
             mto.parse_configmap_rules(src)
         (got_name, why), = exc_info.value.files
         assert got_name == name and reason in why, exc_info.value.files
+
+    def test_a_list_of_configmaps_migrates(self, tmp_path):
+        """`kubectl get cm -o yaml` writes a List: its ConfigMaps are read
+        as kubectl applies them (they used to be passed over by the kind
+        filter without a word)."""
+        src = tmp_path / "src"
+        src.mkdir()
+        rules = self._RULES.replace("\n", "\n        ")
+        (src / "dump.yaml").write_text(
+            "apiVersion: v1\nkind: List\nitems:\n- apiVersion: v1\n  kind: ConfigMap\n"
+            "  metadata: {name: listed}\n  data:\n    r.yml: |\n      " + rules.rstrip() + "\n",
+            encoding="utf-8")
+        (got,) = mto.parse_configmap_rules(src)
+        assert (got["name"], got["cm_data_key"]) == ("listed", "r.yml")
+        assert [g["name"] for g in got["rule_groups"]] == ["g"]
+
+    def test_a_rule_file_only_the_rule_loader_reads_migrates(self, tmp_path):
+        """An annotation value `.inf` has no JSON: neither da-crdecode
+        reading reads the file. Prometheus' rule loader reads it (the string
+        ".inf"), so it is a rule file, as `may_be_rule_file` would say."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "inf.yaml").write_text(
+            self._RULES + "        annotations: {x: .inf}\n", encoding="utf-8")
+        (got,) = mto.parse_configmap_rules(src)
+        assert got["file"] == "inf.yaml" and got["cm_data_key"] is None
+        assert got["rule_groups"][0]["rules"][0]["annotations"] == {"x": ".inf"}
 
     def test_plain_rule_file_still_migrates(self, tmp_path):
         src = tmp_path / "src"

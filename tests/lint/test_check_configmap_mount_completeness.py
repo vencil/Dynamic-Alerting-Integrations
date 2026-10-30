@@ -3,7 +3,7 @@
 這支 lint 讀 `configmap-rules-*.yaml` 與 Prometheus Deployment，原本對「不是 mapping」的
 document 一律 `continue`：一份 manifest 裡被寫成 list 或沒有 `kind` 的 document，lint
 不讀也不說，最後照樣印全數掛載、rc 0。現在 da-crdecode 的 manifest 讀法保證每個
-document 是帶非空字串 `kind` 的物件、不是 List，讀不了就拒收；lint 把拒收以 rc 2
+document 是帶非空字串 `kind` 的物件（List 換成它的 items），讀不了就拒收；lint 把拒收以 rc 2
 點名，不再有略過的路徑。
 """
 from __future__ import annotations
@@ -77,11 +77,18 @@ def test_a_deployment_document_without_kind_is_named(tmp_path, capsys):
         in err, err
 
 
-def test_a_list_of_packs_is_named_not_expanded(tmp_path, capsys):
-    # kubectl applies a `kind: List`'s items; the reading refuses it rather
-    # than let the ConfigMap inside go unseen by a kind filter.
+def test_a_pack_inside_a_list_is_read(tmp_path, capsys):
+    # kubectl applies a `kind: List`'s items, and so are they read here: the
+    # ConfigMap inside is a pack, and it is not mounted.
     listed = ("apiVersion: v1\nkind: List\nitems:\n- apiVersion: v1\n  kind: ConfigMap\n"
-              "  metadata: {name: prometheus-rules-other}\n  data: {x.txt: ''}\n")
+              "  metadata: {name: prometheus-rules-other}\n  data: {x.yml: ''}\n")
+    d = _tree(tmp_path, _PACK + "---\n" + listed, _DEPLOYMENT)
+    assert lint.main(["--monitor-dir", str(d)]) == lint.EXIT_VIOLATION
+    assert "ConfigMap 'prometheus-rules-other'" in capsys.readouterr().err
+
+
+def test_a_list_item_kubectl_would_not_apply_is_named(tmp_path, capsys):
+    listed = "apiVersion: v1\nkind: List\nitems:\n- {apiVersion: v1, kind: List, items: []}\n"
     d = _tree(tmp_path, _PACK + "---\n" + listed, _DEPLOYMENT)
     assert lint.main(["--monitor-dir", str(d)]) == lint.EXIT_CALLER_ERROR
-    assert "a List document is not read" in capsys.readouterr().err
+    assert "a list inside a list is not read" in capsys.readouterr().err

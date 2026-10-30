@@ -475,16 +475,20 @@ def name_passes(metric: str, name_rules: list[tuple[str, str]]) -> bool:
 def parse_services(paths: list[Path]) -> list[dict]:
     """Every `kind: Service` doc found in *paths* → {name, namespace, annotations},
     each file read the way kubectl reads it (da-crdecode, ADR-036 §12, #3206).
-    No da-crdecode raises ConsumerReadError (a caller error in `main`)."""
+    No da-crdecode raises ConsumerReadError; files kubectl's reading refuses
+    raise InputRefused naming every one, with its reason (#3426) — both
+    caller errors in `main`. A refused file used to be skipped: a Service in
+    it was then silently missing, and a metric it serves read as unscraped."""
     services: list[dict] = []
     read = _lib_consumer_read.kubernetes_documents_of(paths, keep_refusals=True)
+    refused = [(p, read[str(p)]) for p in paths
+               if isinstance(read[str(p)], _lib_consumer_read.ConsumerReadError)]
+    if refused:
+        raise _lib_consumer_read.InputRefused(
+            f"{len(refused)} manifest(s) kubectl's reading refuses, so their Services "
+            f"cannot be checked", [f"{p}: {e.detail()}" for p, e in refused])
     for p in paths:
         docs = read[str(p)]
-        if isinstance(docs, _lib_consumer_read.ConsumerReadError):
-            # Raw k8s manifests read clean today; a file kubectl's reading
-            # refuses is kube-linter's problem (L4 gate), not silently a
-            # missing Service.
-            continue
         for doc in docs:   # a Kubernetes object: the manifest reading's guarantee (#3426)
             if doc["kind"] != "Service":
                 continue
@@ -763,8 +767,10 @@ def main(argv: list[str] | None = None) -> int:
         result = run_check()
     except _lib_consumer_read.ConsumerReadError as exc:
         # No da-read / da-crdecode, or Prometheus (or kubectl) refuses the
-        # config: no verdict, and no falling back to reading it ourselves.
-        print(f"ERROR: cannot read the Prometheus config: {exc}", file=sys.stderr)
+        # config or a manifest: no verdict, and no falling back to reading
+        # it ourselves.
+        print(f"ERROR: cannot read the Prometheus config or the k8s/ manifests "
+              f"the way their consumers do: {exc}", file=sys.stderr)
         for line in exc.stderr_lines:
             print(f"  {line}", file=sys.stderr)
         return EXIT_CALLER_ERROR

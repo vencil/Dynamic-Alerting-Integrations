@@ -59,9 +59,8 @@ func withoutReading(t *testing.T, out, reading string) string {
 
 // #3426: without --any-shape, every document must be what kubectl decodes
 // into one object (unstructured.UnstructuredJSONScheme, measured at
-// apimachinery v0.37.0): a mapping with a non-empty string `kind`. A list
-// (a top-level `items`, which kubectl expands) is refused rather than
-// expanded. The refusal names the document's first line.
+// apimachinery v0.37.0): a mapping with a non-empty string `kind`. The
+// refusal names the document's first line. Lists: TestManifestExpandsLists.
 func TestManifestDocumentsMustBeKubernetesObjects(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
@@ -76,10 +75,6 @@ func TestManifestDocumentsMustBeKubernetesObjects(t *testing.T) {
 		{"kind-null", "kind: null\n", "its `kind` is null, not a string"},
 		{"kind-list-value", "kind: [ConfigMap]\n", "its `kind` is array, not a string"},
 		{"kind-empty", "kind: \"\"\n", "its `kind` is empty"},
-		{"list", "apiVersion: v1\nkind: List\nitems:\n- {apiVersion: v1, kind: ConfigMap, metadata: {name: a}}\n",
-			"a List document is not read (kind \"List\""},
-		{"typed-list", "apiVersion: v1\nkind: ConfigMapList\nitems: []\n", "kind \"ConfigMapList\" with a top-level `items`"},
-		{"items-null", "kind: ConfigMap\nitems: null\n", "a List document is not read"},
 		// Kind first, as kubectl: `{items: []}` is refused for its kind.
 		{"items-without-kind", "items: []\n", "it has no `kind`"},
 		// The third document is the one refused, and named by its first line.
@@ -417,5 +412,85 @@ func TestConfigMapInnerLayerThroughStandardInput(t *testing.T) {
 	if rc := run([]string{anyShapeFlag, "-"}, strings.NewReader(inner), &stdout, &stderr); rc != exitOK ||
 		stdout.String() != `{"documents":[{"route":{"receiver":"r"},"x":8}],"differs_from_text":[[]],"reading":"any-shape"}`+"\n" {
 		t.Fatalf("inner: rc=%d stdout=%q stderr=%q", rc, stdout.String(), stderr.String())
+	}
+}
+
+// #3426: a list — any document with a top-level `items` — is replaced by its
+// items, in order, as `kubectl apply -f` applies them (cli-runtime v0.37.0,
+// local builder, flattened: measured). Each item's differences are its own,
+// with paths from the item.
+func TestManifestExpandsLists(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name, in, want string
+	}{
+		{"list", "apiVersion: v1\nkind: List\nitems:\n- {apiVersion: v1, kind: ConfigMap, metadata: {name: a}}\n" +
+			"- {apiVersion: v1, kind: Secret, metadata: {name: b}}\n---\nkind: Namespace\n",
+			`{"documents":[{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"a"}},` +
+				`{"apiVersion":"v1","kind":"Secret","metadata":{"name":"b"}},{"kind":"Namespace"}],` +
+				`"differs_from_text":[[],[],[]]}`},
+		{"typed-list", "apiVersion: v1\nkind: ConfigMapList\nitems:\n- {apiVersion: v1, kind: ConfigMap}\n",
+			`{"documents":[{"apiVersion":"v1","kind":"ConfigMap"}],"differs_from_text":[[]]}`},
+		// kubectl reads any document with `items` as a list, whatever its kind.
+		{"items-on-a-configmap", "kind: ConfigMap\nitems: []\n", `{"documents":[],"differs_from_text":[]}`},
+		{"items-null", "apiVersion: v1\nkind: List\nitems: null\n", `{"documents":[],"differs_from_text":[]}`},
+		{"items-empty", "apiVersion: v1\nkind: List\nitems: []\n---\nkind: A\n",
+			`{"documents":[{"kind":"A"}],"differs_from_text":[[]]}`},
+		// An item whose `items` is null is an object to kubectl.
+		{"item-items-null", "kind: List\nitems:\n- {apiVersion: v1, kind: ConfigMap, items: null}\n",
+			`{"documents":[{"apiVersion":"v1","kind":"ConfigMap","items":null}],"differs_from_text":[[]]}`},
+		// The differences of item 1 go to item 1, its path from the item.
+		{"differs-per-item", "kind: List\nitems:\n- {apiVersion: v1, kind: A, x: {b: c}}\n" +
+			"- {apiVersion: v1, kind: B, metadata: {labels: {010: x, yes: y}}}\n",
+			`{"documents":[{"apiVersion":"v1","kind":"A","x":{"b":"c"}},` +
+				`{"apiVersion":"v1","kind":"B","metadata":{"labels":{"8":"x","true":true}}}],"differs_from_text":[[],` +
+				`[{"kind":"keys","path":["metadata","labels"],"read_keys":["8","true"],"written_keys":["010","yes"]}]]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rc, out, errOut := runManifest(t, tc.in)
+			if rc != exitOK || out != tc.want+"\n" || errOut != "" {
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 0 stdout %q", rc, out, errOut, tc.want)
+			}
+		})
+	}
+}
+
+// A list item kubectl would not apply is refused, named by its index and the
+// line it starts on; so is a list inside a list (kubectl: "is not a list: no
+// Items field in this object"), and a list whose own text is not read as
+// written, whose differences no item could carry.
+func TestManifestRefusesBadListItems(t *testing.T) {
+	t.Parallel()
+	const head = "apiVersion: v1\nkind: List\nitems:\n- {apiVersion: v1, kind: ConfigMap, metadata: {name: ok}}\n"
+	cases := []struct {
+		name, in, wantErr string
+	}{
+		{"item-scalar", head + "- x\n", "in this list, items[1] (line 5): it is not a Kubernetes object: the document is string"},
+		{"item-no-kind", head + "- {apiVersion: v1, metadata: {name: b}}\n", "items[1] (line 5): it is not a Kubernetes object: it has no `kind`"},
+		{"item-kind-number", head + "- {apiVersion: v1, kind: 3}\n", "items[1] (line 5): it is not a Kubernetes object: its `kind` is number"},
+		{"item-no-apiversion", head + "- {kind: ConfigMap}\n",
+			"items[1] (line 5): it is not a Kubernetes object: it has no `apiVersion` (kubectl: Object 'apiVersion' is missing)"},
+		{"nested-list", head + "- apiVersion: v1\n  kind: List\n  items: []\n", "items[1] (line 5): a list inside a list is not read"},
+		{"item-with-items", head + "- {apiVersion: v1, kind: ConfigMap, items: [{kind: A}]}\n", "a list inside a list is not read"},
+		{"items-not-a-list", "kind: List\nitems: {a: 1}\n", "a list document's `items` is object, not a list"},
+		{"list-without-kind", "items:\n- {apiVersion: v1, kind: A}\n", "it has no `kind`"},
+		{"list-text-differs", "kind: List\nmetadata: {labels: {010: x}}\nitems:\n- {apiVersion: v1, kind: A}\n",
+			"a list document whose own text is not read as written (at .metadata.labels)"},
+		{"second-document", "kind: A\n---\n" + head + "- [x]\n",
+			"the document starting at line 3: in this list, items[1] (line 7): it is not a Kubernetes object: the document is array"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			rc, out, errOut := runManifest(t, tc.in)
+			if rc != exitCallerErr || out != "" || !strings.Contains(errOut, tc.wantErr) {
+				t.Fatalf("rc=%d stdout=%q stderr=%q; want rc 2, stderr with %q", rc, out, errOut, tc.wantErr)
+			}
+			if rc, _, errOut := runOn(t, tc.in); rc != exitOK {
+				t.Fatalf("--any-shape: rc=%d stderr=%q; want rc 0", rc, errOut)
+			}
+		})
 	}
 }

@@ -37,8 +37,21 @@ _NOT_OBJECTS = [
     ("a: 1\n", "it has no `kind`"),
     ("kind: ''\n", "its `kind` is empty"),
     ("kind: [x]\n", "its `kind` is array, not a string"),
-    ("kind: List\nitems: []\n", "a List document is not read"),
+    # a list is read as its items (#3426); an item kubectl would not apply,
+    # or a list inside a list, is refused
+    ("kind: List\nitems:\n- {kind: A}\n", "items[0] (line 5): it is not a Kubernetes object: "
+                                            "it has no `apiVersion`"),
+    ("kind: List\nitems:\n- {apiVersion: v1, kind: List, items: []}\n",
+     "a list inside a list is not read"),
 ]
+
+
+def test_a_list_is_read_as_its_items() -> None:
+    """`kubectl get … -o yaml` writes a List; kubectl applies its items."""
+    assert cr.kubernetes_text_documents(
+        "apiVersion: v1\nkind: List\nitems:\n- {apiVersion: v1, kind: A}\n"
+        "- {apiVersion: v1, kind: B}\n---\nkind: C\n---\nkind: List\nitems: null\n") == [
+        {"apiVersion": "v1", "kind": "A"}, {"apiVersion": "v1", "kind": "B"}, {"kind": "C"}]
 
 
 @pytest.mark.parametrize("text,reason", _NOT_OBJECTS)

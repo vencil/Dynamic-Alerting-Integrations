@@ -11,10 +11,12 @@ tenant file parse-tree cannot read, a tenant id declared in two files, or no
 usable da-guard exits 2.
 
 The --source-dir files are what their readers say (#3426): a manifest kubectl
-reads (da-crdecode), or else a plain rule file (one mapping declaring
-`groups`). Any other file — broken YAML, a top-level list, a document with no
-`kind`, a `kind: List` — exits 2 before anything is written, every such file
-named with the reader's reason.
+reads (da-crdecode; a `kind: List` is read as its items), or else a plain rule
+file (one mapping declaring `groups`, or — when no YAML reading reads it —
+one Prometheus' rule loader reads `groups` from). Any other file — broken
+YAML, a top-level list, a document with no `kind`, a list item kubectl would
+not apply — exits 2 before anything is written, every such file named with
+its reader's reason.
 
 Usage:
     da-tools migrate-to-operator --source-dir configmaps/ --config-dir conf.d/   # stdout; nothing written
@@ -205,7 +207,8 @@ def list_source_dir(source_dir: Path) -> "_lib_parse_tree.Listing":
 class SourceFilesUnreadable(Exception):
     """Files of --source-dir that are neither a Kubernetes manifest kubectl
     reads nor a plain rule file (#3426). ``files`` is ``[(name, reason)]``,
-    every such file, in listing order; ``str()`` names them all. The run
+    every such file (the ones the rule loader judged last); ``str()`` names
+    them all. The run
     stops on it (rc 2) before any file is written: a migration that left a
     source file out would read as a complete one."""
 
@@ -252,11 +255,14 @@ def parse_configmap_rules(source_dir: Path,
 
     # #3206 (ADR-036 §12) / #3426: what a file is, is its readers' answer,
     # never its text. Each file is read first as the manifest kubectl reads
-    # (da-crdecode: every document an object with a kind, no `kind: List`);
+    # (da-crdecode: every document an object with a kind);
     # its ConfigMaps' data values that set out to be rule files are rule
-    # files. A file that reading refuses is a plain rule file when its
+    # files (a `kind: List`, which `kubectl get … -o yaml` writes, is read as
+    # its items). A file that reading refuses is a plain rule file when its
     # any-YAML reading (`da-crdecode --any-shape`) is one object declaring
-    # `groups` — a rule file is no Kubernetes object. Any other file stops
+    # `groups` — a rule file is no Kubernetes object — or, when that reading
+    # refuses it too, when Prometheus' rule loader reads `groups` from it.
+    # Any other file stops
     # the run (`SourceFilesUnreadable`, every one named with the reason); it
     # used to be a WARNING and a skip. The rule files are then read the way
     # Prometheus' rule loader reads them (`da-read prometheus-rules`, all of
@@ -268,16 +274,16 @@ def parse_configmap_rules(source_dir: Path,
     warn_nested(source_dir, tool="migrate_to_operator", listing=listing)
     found: "list[tuple[dict, str | None, str]]" = []   # (entry, cm text | None, path)
     unreadable: "list[tuple[str, str]]" = []
+    undecided: "list[Path]" = []
     for yaml_file in [source_dir / e.path for e in listing.config_files() if e.depth == 0]:
         try:
             docs = _lib_consumer_read.kubernetes_documents(str(yaml_file))
         except _lib_consumer_read.InputRefused as exc:
-            if _is_plain_rule_file(yaml_file):
-                found.append(({
-                    "name": yaml_file.stem,
-                    "file": yaml_file.name,
-                    "cm_data_key": None,
-                }, None, str(yaml_file)))
+            shape = _plain_rule_file_shape(yaml_file)
+            if shape is _RULE_FILE:
+                found.append((_plain_entry(yaml_file), None, str(yaml_file)))
+            elif shape is _UNDECIDED:
+                undecided.append(yaml_file)
             else:
                 unreadable.append((yaml_file.name, "; ".join(exc.stderr_lines) or str(exc)))
             continue
@@ -294,6 +300,18 @@ def parse_configmap_rules(source_dir: Path,
                             "file": yaml_file.name,
                             "cm_data_key": key,
                         }, value, f"{yaml_file}#{key}"))
+    # A file neither reading of da-crdecode reads (sigs.k8s.io/yaml has no
+    # JSON for an annotation value `.inf`, say) is the rule loader's to judge,
+    # as `may_be_rule_file` hands an undecided file to it: one whose reading
+    # declares `groups` is a rule file; one it refuses is named with its reason.
+    for path, rf in zip(undecided, _lib_consumer_read.prometheus_rule_file_results(undecided)):
+        if rf.problem is not None:
+            unreadable.append((path.name, f"Prometheus' rule loader refuses it: {rf.problem}"))
+        elif not _lib_consumer_read.documents_declare_rule_groups(rf.documents):
+            unreadable.append((path.name, "neither kubectl's reading nor the any-YAML reading "
+                                          "reads it, and the rule loader finds no `groups` in it"))
+        else:
+            found.append((_plain_entry(path), None, str(path)))
     if unreadable:
         raise SourceFilesUnreadable(unreadable)
     plain = [path for _e, text, path in found if text is None]
@@ -308,16 +326,29 @@ def parse_configmap_rules(source_dir: Path,
     return results
 
 
-def _is_plain_rule_file(path: Path) -> bool:
+#: `_plain_rule_file_shape`'s answers.
+_RULE_FILE, _NOT_A_RULE_FILE, _UNDECIDED = object(), object(), object()
+
+
+def _plain_rule_file_shape(path: Path) -> object:
     """Whether *path*, which kubectl's manifest reading refused, is a plain
-    rule file: its any-YAML reading (``da-crdecode --any-shape``) is one
-    document, a mapping that declares ``groups``. The rule loader then gives
-    the verdict on its content."""
+    rule file, by its any-YAML reading (``da-crdecode --any-shape``):
+    ``_RULE_FILE`` when that is one document, a mapping that declares
+    ``groups`` (the rule loader then gives the verdict on its content);
+    ``_NOT_A_RULE_FILE`` when it reads as anything else; ``_UNDECIDED`` when
+    that reading refuses it too — the rule loader decides (#3426)."""
     try:
         docs = _lib_consumer_read.any_yaml_documents(str(path))
     except _lib_consumer_read.InputRefused:
-        return False
-    return len(docs) == 1 and isinstance(docs[0], dict) and "groups" in docs[0]
+        return _UNDECIDED
+    if len(docs) == 1 and isinstance(docs[0], dict) and "groups" in docs[0]:
+        return _RULE_FILE
+    return _NOT_A_RULE_FILE
+
+
+def _plain_entry(path: Path) -> dict:
+    """The result entry of a plain rule file (no ConfigMap around it)."""
+    return {"name": path.stem, "file": path.name, "cm_data_key": None}
 
 
 def convert_rules_to_crd(

@@ -31,9 +31,14 @@
 //     Go value of type unstructured.detector") and one with no kind ("Object
 //     'Kind' is missing"). Here each such document is refused too, naming the
 //     line it starts on: a document that is no object — an array, a string, a
-//     number — or one whose `kind` is missing, not a string, or empty. So a
-//     caller can rely on every entry of `documents` being an object with a
-//     non-empty string `kind`.
+//     number — or one whose `kind` is missing, not a string, or empty. A list
+//     (a document with a top-level `items`: `kind: List`, the output of
+//     `kubectl get … -o yaml`) is replaced by its items, in order, as kubectl
+//     applies them; each item must be an object with a non-empty string
+//     `kind` and `apiVersion`, and a list inside a list is refused, as kubectl
+//     refuses it (manifest.go). So a caller can rely on every entry of
+//     `documents` being an object with a non-empty string `kind`, none of
+//     them a list.
 //   - `--any-shape` reads YAML that is not a manifest with the same
 //     conversion: a ConfigMap data value (a rule file, an Alertmanager
 //     config), a plain rule file, a Helm values file. Nothing is checked about
@@ -58,20 +63,16 @@
 // it. Each piece is converted on its own, and a piece kubectl skips is
 // skipped: one that converts to nothing or to null (only `---`, blank lines,
 // comments, or an explicit `null`). So `documents` holds one entry per
-// document kubectl would apply, in file order — none for an empty file — and
-// `differs_from_text` holds one list per entry of `documents`.
+// object kubectl would apply, in file order — none for an empty file, a list's
+// items in its place — and `differs_from_text` holds one list per entry of
+// `documents` (an item's differences, with paths from the item).
 // Each document's objects carry their keys in the order the file writes them;
 // aswritten.go describes the entries of `differs_from_text`.
 //
 // Not reproduced: kubectl first tries to read a stream as JSON (a file that
 // starts with `{`) and reads several concatenated JSON objects that way; here
 // every piece goes through the YAML conversion, which reads one JSON object
-// the same way and refuses several. Nor is a list: kubectl reads a document
-// with a top-level `items` key (`kind: List`, `kind: ConfigMapList`) as a
-// list and applies each of its items. This reading refuses such a document
-// instead of expanding it ("a List document is not read; write its items as
-// separate documents"): the callers look for objects by kind, and an object
-// inside a list they do not open would be passed over without a word.
+// the same way and refuses several.
 //
 // Exit codes:
 //
@@ -81,8 +82,10 @@
 //	   stderr, with the line the document starts on), a piece between two
 //	   `---` lines holds more than one YAML document, a document cannot be
 //	   read as written to compare with the conversion, or — without
-//	   `--any-shape` — a document is no Kubernetes object (not a mapping; no
-//	   string `kind`, or an empty one) or is a list
+//	   `--any-shape` — a document or a list item is no Kubernetes object (not
+//	   a mapping; no string `kind`, or an empty one; an item without a string
+//	   `apiVersion`), a list holds a list, or a list's own text is not read as
+//	   written (its items' differences could not be told apart)
 package main
 
 import (
@@ -140,7 +143,7 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			"(sigs.k8s.io/yaml.YAMLToJSON, one document after another as `kubectl apply -f` "+
 			"splits them) and prints {\"documents\": [...], \"differs_from_text\": [...]} as JSON. "+
 			"`-` reads standard input. Every document must be a Kubernetes object (a mapping "+
-			"with a non-empty string `kind`, not a list) unless %s is given, which reads YAML "+
+			"with a non-empty string `kind`; a list is replaced by its items) unless %s is given, which reads YAML "+
 			"that is not a manifest (a ConfigMap data value, a rule file, Helm values).\n", anyShapeFlag)
 		return exitCallerErr
 	}
@@ -167,9 +170,11 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		result.Reading = readingAnyShape
 	}
 	for _, p := range pieces {
-		doc, differs, skip, err := decodeDocument(p.atFileLines())
+		source := p.atFileLines()
+		doc, differs, skip, err := decodeDocument(source)
+		docs, docDiffers := []json.RawMessage{doc}, [][]difference{differs}
 		if err == nil && !skip && !anyShape {
-			err = manifestObject(doc)
+			docs, docDiffers, err = manifestDocuments(source, doc, differs)
 		}
 		if err != nil {
 			if len(pieces) > 1 {
@@ -182,8 +187,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 		if skip {
 			continue
 		}
-		result.Documents = append(result.Documents, doc)
-		result.DiffersFromText = append(result.DiffersFromText, differs)
+		result.Documents = append(result.Documents, docs...)
+		result.DiffersFromText = append(result.DiffersFromText, docDiffers...)
 	}
 	out, err := json.Marshal(result)
 	if err != nil {
@@ -270,38 +275,6 @@ func decodeDocument(data []byte) (json.RawMessage, []difference, bool, error) {
 		return nil, nil, false, err
 	}
 	return doc, differs, false, nil
-}
-
-// manifestObject refuses a converted document kubectl would not read as one
-// Kubernetes object (unstructured.UnstructuredJSONScheme.Decode, apimachinery
-// v0.37.0): a document that is not a mapping, one whose `kind` is missing,
-// not a string or empty (all "Object 'Kind' is missing" there), and a list —
-// any document with a top-level `items` key, which that decoder reads as a
-// list (even `items: null`) and kubectl expands. The kind is checked first,
-// as there: `{items: []}` is refused for its missing kind.
-func manifestObject(doc json.RawMessage) error {
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(doc, &obj); err != nil || obj == nil {
-		return fmt.Errorf("it is not a Kubernetes object: the document is %s, not a mapping "+
-			"(kubectl: cannot unmarshal %s into Go value of type unstructured.detector)",
-			jsonShape(doc), jsonShape(doc))
-	}
-	var kind string
-	raw, ok := obj["kind"]
-	switch {
-	case !ok:
-		return errors.New("it is not a Kubernetes object: it has no `kind` (kubectl: Object 'Kind' is missing)")
-	case json.Unmarshal(raw, &kind) != nil || bytes.Equal(bytes.TrimSpace(raw), []byte("null")):
-		return fmt.Errorf("it is not a Kubernetes object: its `kind` is %s, not a string "+
-			"(kubectl: Object 'Kind' is missing)", jsonShape(raw))
-	case kind == "":
-		return errors.New("it is not a Kubernetes object: its `kind` is empty (kubectl: Object 'Kind' is missing)")
-	}
-	if _, ok := obj["items"]; ok {
-		return fmt.Errorf("a List document is not read (kind %q with a top-level `items`, "+
-			"which kubectl expands into its items); write its items as separate documents", kind)
-	}
-	return nil
 }
 
 // jsonShape names the JSON type of *v*, as encoding/json's errors do.

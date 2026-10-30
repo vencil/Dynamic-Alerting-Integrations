@@ -113,14 +113,25 @@ def test_a_file_kubectl_refuses_is_named(tmp_path, monkeypatch, capsys):
     # A compliant KSM Deployment elsewhere does not make the unread files pass.
     _tree(tmp_path, monkeypatch, {
         "03/deployment-ksm.yaml": _KSM_OK,
-        "03/list.yaml": "apiVersion: v1\nkind: List\nitems: []\n",
+        "03/list.yaml": "apiVersion: v1\nkind: List\nitems:\n- {kind: Deployment}\n",
         "03/no-kind.yaml": "replicas: 1\n",
     })
     assert lint.main() == lint.EXIT_CALLER_ERROR
     err = capsys.readouterr().err
     assert "2 file(s) under k8s/ that kubectl's reading refuses" in err
-    assert "k8s/03/list.yaml: " in err and "a List document is not read" in err
+    assert "k8s/03/list.yaml: " in err and "items[0] (line 4)" in err
+    assert "it has no `apiVersion`" in err
     assert "k8s/03/no-kind.yaml: " in err and "it has no `kind`" in err
+
+
+def test_ksm_deployment_inside_a_list_is_checked(tmp_path, monkeypatch, capsys):
+    # #3426: a List (`kubectl get deploy -o yaml`) is read as its items, so a
+    # KSM Deployment inside one is found — and judged.
+    item = _KSM_OK.replace("\n", "\n  ").replace("pods=[app.kubernetes.io/version]",
+                                                  "pods=[app.kubernetes.io/name]").rstrip()
+    _tree(tmp_path, monkeypatch, {"03/list.yaml": "apiVersion: v1\nkind: List\nitems:\n- " + item + "\n"})
+    assert lint.main() == lint.EXIT_VIOLATION
+    assert "k8s/03/list.yaml [kube-state-metrics]" in capsys.readouterr().out
 
 
 def test_ksm_deployment_found_by_its_reading(tmp_path, monkeypatch, capsys):
