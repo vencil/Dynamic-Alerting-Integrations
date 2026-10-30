@@ -597,7 +597,7 @@ Scope: the order of this section's work is in §7. The portal's js-yaml previews
 | Situation | Behaviour |
 |---|---|
 | The generator's exit code on the whole tree after the write is not 0 | Refused; the error response lists the findings, marking those that existed before the write and their source |
-| The generator container is unavailable: the long-running process fails or does not respond, or amtool is missing | Every write that changes file content gets 503, error code `VALIDATOR_UNAVAILABLE`; `tenant_api_policy_available` is 0 (§5) |
+| The generator container is unavailable: the long-running process fails or does not respond, amtool is missing, or da-guard is missing or cannot run | Every write that changes file content gets 503, error code `VALIDATOR_UNAVAILABLE`; `tenant_api_policy_available` is 0 (§5) |
 | The judging deadline passes (including while queued), or a child exceeds its memory limit or produces incomplete output, or the remaining time is not enough to revalidate | Only that write is refused, no 503 (the line is drawn in §3) |
 | The deployment policy file is unavailable | Every write that changes file content gets 503, error code `POLICY_UNAVAILABLE` |
 | A policy file inside the repo has an error | The generator reports a finding; refused as in the first row, not with 503 |
@@ -608,6 +608,7 @@ Scope: the order of this section's work is in §7. The portal's js-yaml previews
 | Text written by da-guard's `write` reads back through `parse-tree` differently from what was expected | Nothing is written, and the differing value is reported |
 | A reader meets an unknown `schema` value | The whole document is treated as unusable |
 | The generator in the container is older than a policy requires | Every write that changes file content gets 503, error code `VALIDATOR_UNAVAILABLE`, until the operator raises the chart's da-tools version |
+| The container returns no key verdict (an image older than [ADR-038](./038-unread-keys-judged-by-readers.en.md) decision 5's verdict) | Every write that changes file content gets 503, error code `VALIDATOR_UNAVAILABLE`, until the operator raises the chart's da-tools version |
 | No da-guard locally and no Go to build it | Python tools that read or write conf.d and the pre-commit hooks fail with the reason; they never fall back to parsing or writing on their own. The affected hooks and the CI jobs without Go are listed by code in the implementation PR; those CI jobs switch to the da-tools image or install Go |
 
 ## Known limits and risks
@@ -643,7 +644,7 @@ Risks that are new or remain:
   - [#2674](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2674): a self-referencing YAML alias.
 - **The offline differential test for batch patch merging** (§4).
 - **da-guard's "not judged"**: exit code 4 and the report content are tested, including no 4 when there is no content only the generator can judge, and the precedence when 3 or 1 also applies.
-- **The generator container's refusal conditions**: amtool missing, validated and to-be-written content still differing after one revalidation, and a generator older than a policy requires each have a test, and each ends in a refusal. A judging child exceeding its memory limit, the judging deadline passing during judging, and it passing while queued each have a test too: only that one write is refused, no 503, the next write is judged as usual, and no descendant process (amtool, da-guard and so on) is left behind after a timeout; a retryable refusal is returned when the remaining time is not enough to revalidate; and after an interrupted advance, this batch's paths are reset to the branch's content.
+- **The generator container's refusal conditions**: amtool missing, validated and to-be-written content still differing after one revalidation, a generator older than a policy requires, da-guard missing or not runnable, and no key verdict returned each have a test, and each ends in a refusal. A judging child exceeding its memory limit, the judging deadline passing during judging, and it passing while queued each have a test too: only that one write is refused, no 503, the next write is judged as usual, and no descendant process (amtool, da-guard and so on) is left behind after a timeout; a retryable refusal is returned when the remaining time is not enough to revalidate; and after an interrupted advance, this batch's paths are reset to the branch's content.
 - In CI, run against the version pair the chart pins.
 
 ## Cost
