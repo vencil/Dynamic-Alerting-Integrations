@@ -1033,7 +1033,9 @@ _KNOWN_SITES = {
     # file → sinks that must still be found there. Measured on this tree;
     # each is a real argv-fed output path from the #1789 survey.
     "scripts/tools/dx/describe_tenant.py": {".write_text"},
-    "scripts/tools/ops/baseline_discovery.py": {"os.makedirs", "open(w)"},
+    # #3107: the CSVs go through write_operator_output; the `-o` makedirs
+    # is the tool's own sink left.
+    "scripts/tools/ops/baseline_discovery.py": {"os.makedirs", "write_operator_output()"},
     # #3206: the copies are da-guard write's; the `--output` mkdir and the
     # manifest write (#3107: through write_operator_output) are the tool's
     # own sinks left.

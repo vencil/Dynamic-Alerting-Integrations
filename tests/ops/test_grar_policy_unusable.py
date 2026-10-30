@@ -47,6 +47,7 @@ sys.path.insert(0, str(REPO / "scripts" / "tools"))
 sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _lib_constants import RECEIVER_TYPES  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402
 from _grar_parse import load_tenant_tree  # noqa: E402
 import explain_route as er  # noqa: E402
 import generate_alertmanager_routes as gar  # noqa: E402
@@ -364,7 +365,7 @@ def test_trace_reads_no_policy_of_a_refused_tree(tmp_path, capsys, name):
     """explain-route --trace says the generator refuses the tree, and its
     policy step reads no policy then (it used to read the list leniently)."""
     d = _write(tmp_path, CASES[name][0])
-    rc = er.main(["--config-dir", str(d), "--tenant", "t-a", "--trace", "--json"])
+    rc = emit_result(er.main(["--config-dir", str(d), "--tenant", "t-a", "--trace", "--json"]))  # #3216
     captured = capsys.readouterr()
     assert rc == 0, captured.err
     assert "the generator refuses this config" in captured.err, captured.err
