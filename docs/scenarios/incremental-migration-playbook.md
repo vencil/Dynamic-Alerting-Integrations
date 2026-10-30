@@ -615,17 +615,37 @@ fi
 
 ```bash
 set -e
+out="$(mktemp -d)"            # 每次執行一個新的目錄，不會比到上次留下的檔
+trap 'rm -rf "$out"' EXIT
 # 以目前版本的映像執行
-da-tools generate-routes --config-dir ./conf.d -o routes-current.yaml
+da-tools generate-routes --config-dir ./conf.d -o "$out/routes-current.yaml"
 # 以新版映像執行
-if ! da-tools generate-routes --config-dir ./conf.d -o routes-new.yaml; then
-  echo "新版拒收這棵 conf.d，沒有產生 routes-new.yaml：先看檢查一的結果" >&2
+if ! da-tools generate-routes --config-dir ./conf.d -o "$out/routes-new.yaml"; then
+  echo "新版拒收這棵 conf.d：先看檢查一的結果" >&2
   exit 1
 fi
-diff -u routes-current.yaml routes-new.yaml
+cur="$out/routes-current.yaml"; new="$out/routes-new.yaml"
+if [ ! -e "$cur" ] && [ ! -e "$new" ]; then
+  echo "兩版都沒有產生路由輸出：一致"
+elif [ ! -e "$new" ]; then
+  echo "目前版本有路由輸出、新版沒有：有差異" >&2
+  exit 1
+elif [ ! -e "$cur" ]; then
+  echo "新版有路由輸出、目前版本沒有：有差異" >&2
+  exit 1
+elif ! diff -q "$cur" "$new" > /dev/null; then
+  echo "兩版的渲染結果不同（完整差異不印在 CI 日誌，見下方說明）" >&2
+  exit 1
+else
+  echo "兩版的渲染結果一致"
+fi
 ```
 
-新版拒收這棵樹時，`generate-routes` 以非 0 結束、不寫輸出檔，這時沒有東西可比：範例讓 job 在這裡失敗，原因要回頭看檢查一（新版 da-guard 的結束碼與它點名的檔）。兩份輸出有差異時 `diff` 以 1 結束，job 也會失敗，請審閱差異後再決定升級。
+以 `docker run` 執行時，暫存目錄要掛進容器，輸出檔才寫得到它。
+
+- **新版拒收這棵樹**：`generate-routes` 以非 0 結束、不寫輸出檔，沒有東西可比。範例讓 job 在這裡失敗，原因要回頭看檢查一（新版 da-guard 的結束碼與它點名的檔）。目前版本就拒收時，`set -e` 讓 job 在第一條指令失敗。
+- **沒有輸出檔**：樹上沒有租戶時，`generate-routes` 以 0 結束、不寫輸出檔。兩版都沒有輸出視為一致；只有一版有輸出視為有差異，訊息說明是哪一版沒有。
+- **有差異**：範例只以 `diff -q` 判斷有沒有差異，並讓 job 失敗，不把完整差異印進 CI 日誌，因為輸出含租戶 `_routing.receiver` 的 webhook URL（例如 Slack 的 `api_url`），印出來就等於把它們寫進日誌。要看完整差異，請在本機或有權限控管的環境，以兩版映像跑同樣兩條 `generate-routes` 後再 `diff -u`。輸出檔同樣含這些 URL，不要上傳成公開的 CI artifact。
 
 比對看得到渲染結果哪裡變了，但不會指出是哪一項讀法改變造成的；要歸因，回頭看那一處的原文（例如 `send_resolved: yes` 在新版是字串、會被拒收，要寫成 `true`）。
 

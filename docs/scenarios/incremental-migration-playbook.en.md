@@ -616,17 +616,37 @@ Generate the Alertmanager routing config from the same conf.d once with the vers
 
 ```bash
 set -e
+out="$(mktemp -d)"            # a fresh directory each run: never compares a file left by the last one
+trap 'rm -rf "$out"' EXIT
 # run with the current version's image
-da-tools generate-routes --config-dir ./conf.d -o routes-current.yaml
+da-tools generate-routes --config-dir ./conf.d -o "$out/routes-current.yaml"
 # run with the new version's image
-if ! da-tools generate-routes --config-dir ./conf.d -o routes-new.yaml; then
-  echo "the new version refuses this conf.d and wrote no routes-new.yaml: see Check 1's result" >&2
+if ! da-tools generate-routes --config-dir ./conf.d -o "$out/routes-new.yaml"; then
+  echo "the new version refuses this conf.d: see Check 1's result" >&2
   exit 1
 fi
-diff -u routes-current.yaml routes-new.yaml
+cur="$out/routes-current.yaml"; new="$out/routes-new.yaml"
+if [ ! -e "$cur" ] && [ ! -e "$new" ]; then
+  echo "neither version produced routing output: the same"
+elif [ ! -e "$new" ]; then
+  echo "the current version produced routing output, the new one did not: they differ" >&2
+  exit 1
+elif [ ! -e "$cur" ]; then
+  echo "the new version produced routing output, the current one did not: they differ" >&2
+  exit 1
+elif ! diff -q "$cur" "$new" > /dev/null; then
+  echo "the rendered output differs (the full diff is not printed in the CI log; see below)" >&2
+  exit 1
+else
+  echo "the rendered output is the same"
+fi
 ```
 
-When the new version refuses the tree, `generate-routes` exits non-zero and writes no output file, so there is nothing to compare: the example fails the job right there, and the reason is in Check 1 (the new da-guard's exit code and the files it names). When the two outputs differ, `diff` exits 1 and fails the job too; review the differences before deciding to upgrade.
+When running with `docker run`, mount the temporary directory into the container so the output files can be written to it.
+
+- **The new version refuses the tree**: `generate-routes` exits non-zero and writes no output file, so there is nothing to compare. The example fails the job right there; the reason is in Check 1 (the new da-guard's exit code and the files it names). If the current version already refuses it, `set -e` fails the job on the first command.
+- **No output file**: on a tree with no tenants, `generate-routes` exits 0 and writes no output file. No output from both versions counts as the same; output from only one counts as a difference, and the message says which version produced none.
+- **A difference**: the example only asks `diff -q` whether the outputs differ and fails the job; it does not print the full diff into the CI log, because the output holds the webhook URLs of tenants' `_routing.receiver` (a Slack `api_url`, for example), and printing it writes them into the log. To see the full diff, run the same two `generate-routes` commands with the two images on your machine or in an access-controlled environment, then `diff -u`. The output files hold those URLs too: do not upload them as public CI artifacts.
 
 The comparison shows where the rendered output changed, but not which change in reading caused it; to attribute it, look at the source at that place (for example, `send_resolved: yes` is a string in the new version and is refused; write `true`).
 
