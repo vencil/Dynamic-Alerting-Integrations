@@ -64,13 +64,15 @@ This ADR only decides how to judge and how to report. When each gate (validate-c
 
 A root `_defaults.yaml` and one tenant file:
 
-```yaml {.confd .expect-invalid}
+```yaml
 # _defaults.yaml
 defaults:
   mysql_connections: 80
   mysql_slave_lag: 30
   redis_memory: 70
+```
 
+```yaml {.confd .expect-invalid}
 # db-a.yaml
 tenants:
   db-a:

@@ -108,6 +108,63 @@ def test_bare_word_fence_is_extracted_and_refused(tmp_path):
     assert "[FENCE] docs/x.md:2" in r.stdout and "not an attribute list" in r.stdout
 
 
+@pytest.mark.parametrize("opening", [
+    "~~~yaml", "```YAML", "```Yml", "````yaml", "``` yaml", "```yaml+jinja", "~~~ YAML {.confd}",
+])
+def test_a_yaml_fence_spelled_another_way_is_an_error(tmp_path, opening):
+    """#3416 review: every one of these used to fall out of every gate in
+    silence. Fences are found as CommonMark finds them; a yaml fence that is
+    not ```yaml / ```yml is an error naming the standard spelling."""
+    close = opening[:4] if opening.startswith("````") else opening[:3]
+    root = _docs(tmp_path, f"{opening}\ntenants:\n  t: {{a: '1'}}\n  t: {{a: '2'}}\n{close}\n")
+    i = inv.build(root)
+    assert i.units == []
+    assert [(p, ln) for p, ln, _e in i.file_errors] == [("docs/x.md", 1)], i.file_errors
+    assert "write it as ```yaml" in i.file_errors[0][2]
+
+
+@pytest.mark.parametrize("body", [
+    "```yaml\na: 1\n",                          # a yaml fence never closed
+    "```bash\necho\n\n```yaml\na: 1\n",          # a bash fence never closed
+    "````yaml\na: 1\n```\n",                     # ``` does not close ````
+])
+def test_an_unclosed_fence_is_an_error(tmp_path, body):
+    i = inv.build(_docs(tmp_path, body))
+    assert any("never closed" in e for _p, _l, e in i.file_errors), i.file_errors
+
+
+def test_fences_are_tracked_as_commonmark_tracks_them():
+    """A ``` line inside another fence is that fence's text, and a longer or
+    tilde fence is closed only by its own kind (#3416 review)."""
+    md = ("````markdown\n```yaml\nhidden: 1\n```\n````\n"
+          "```yaml\na: 1\n````\n"                  # ```` closes ``` (longer is fine)
+          "~~~text\n```yaml\n~~~\n"
+          "```yaml\nb: 2\n```\n")
+    got = [(f.line, f.body) for f in inv.extract_fences("x.md", md)]
+    assert got == [(6, ["a: 1"]), (12, ["b: 2"])]
+
+
+@pytest.mark.parametrize("blank", ["\u3000", "\x1c", "\u00a0"])
+def test_only_ascii_blanks_are_trimmed_from_a_fence_line(blank):
+    """#3416 review: `str.strip()` also takes U+3000 / \\x1c away, Go's side
+    does not — the two extractors would cut different units. Both trim only
+    ' \\t\\r'; a line starting with another blank is no fence."""
+    md = f"{blank}```yaml\na: 1\n```\n"
+    assert list(inv.extract_fences("x.md", md)) == []
+
+
+def test_crlf_and_a_lone_cr_keep_go_lines(tmp_path):
+    """#3416 review (CodeRabbit): the file is read as bytes, so a lone CR is
+    no line break and a CRLF's CR stays in the body line — as Go's
+    os.ReadFile + strings.Split("\\n") sees it; line numbers agree."""
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "x.md").write_bytes(
+        b"prose\rmore prose\r\n\r\n```yaml\r\na: 1\r\nb: 2\r\n```\r\n")
+    (rel, text), = inv.iter_markdown(tmp_path)
+    f, = inv.extract_fences(rel, text)
+    assert (f.line, f.body) == (3, ["a: 1\r", "b: 2\r"])
+
+
 def test_extractor_takes_attributed_and_indented_fences():
     md = ("```yaml {.confd}\na: 1\n```\n"
           "  ```yml {.k8s}\n  b: 2\n  ```\n"
@@ -181,6 +238,47 @@ def test_undeclared_units_are_judged_by_structure(tmp_path):
     assert units[0].confd_kind == "platform"
 
 
+@pytest.mark.parametrize("body, needle", [
+    # conf.d text with a repeated key, declared .k8s to get past parse-tree:
+    # kubectl keeps the last key, so only the object check stops it
+    ("tenants:\n  t:\n    a: \"1\"\n    a: \"2\"\n", "not Kubernetes objects"),
+    ("apiVersion: v1\nkind: ConfigMap\n---\n- a\n", "document(s) [2]"),
+    ("# only a comment\n", "finds no document"),
+])
+def test_a_k8s_unit_must_hold_kubernetes_objects(tmp_path, body, needle):
+    u, = inv.build(_docs(tmp_path, "```yaml {.k8s}\n" + body + "```\n")).units
+    assert any(needle in e for e in u.errors), u.errors
+
+
+def test_a_repeated_key_in_a_k8s_object_is_kubectls_to_answer(tmp_path):
+    """Kept on purpose: kubectl reads a repeated key as the last one, so a
+    declared manifest with one is read, not refused."""
+    u, = inv.build(_docs(tmp_path, "```yaml {.k8s}\napiVersion: v1\nkind: A\nkind: B\n```\n")).units
+    assert u.errors == [] and u.documents == [{"apiVersion": "v1", "kind": "B"}]
+
+
+def test_each_expect_invalid_unit_must_be_invalid(tmp_path):
+    """#3416 review: judged per fence, a counter-example unit (B1) hid every
+    violation of a second, really broken unit (B2: a receiver that is a
+    number). Per unit, B2 has violations of its own and passes — and a
+    correct unit in such a fence is named."""
+    b1 = "# a/_defaults.yaml\ndefaults:\n  foo: 1\nbogus_top: 1\n"
+    b2 = "# b/t.yaml\ntenants:\n  tenant-x:\n    _routing:\n      receiver: 5\n"
+    ok = "# c/t.yaml\ntenants:\n  tenant-x:\n    mysql_connections: \"70\"\n"
+    root = _docs(tmp_path, "```yaml {.confd .expect-invalid}\n" + b1 + b2 + ok + "```\n")
+    (tmp_path / "docs" / "schemas").mkdir()
+    for name in ("tenant-config.schema.json", "platform-defaults.schema.json"):
+        shutil.copy(REPO / "docs" / "schemas" / name, tmp_path / "docs" / "schemas" / name)
+    r = subprocess.run(  # noqa: S603
+        [sys.executable, "-X", "utf8", str(DRIFT), "--ci", "--repo-root", str(root)],
+        capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert r.stdout.count("[SCHEMA]") == 1, r.stdout
+    assert "[SCHEMA] docs/x.md:11 (expect-invalid)" in r.stdout, r.stdout
+    assert "'# c/t.yaml'" in r.stdout, r.stdout
+    assert "docs/x.md:2 — " in r.stdout and "docs/x.md:6 — " in r.stdout, r.stdout
+
+
 def test_retired_marker_is_an_error(tmp_path):
     root = _docs(tmp_path, "<!-- md-yaml-drift: ignore — old -->\n```yaml\na: 1\n```\n")
     i = inv.build(root)
@@ -206,6 +304,7 @@ def test_a_repeated_key_the_lints_let_through_is_now_an_error(tmp_path, body):
 
 # ── Go parity ────────────────────────────────────────────────────────────────
 
+@pytest.mark.timeout(960)  # CI runs pytest with --timeout=300; the go build + test can take longer
 def test_go_loader_test_agrees_with_the_inventory():
     """Runs the Go half (pkg/config TestDocsYAMLInventoryParity and the loader
     tests that take their samples from the inventory) against this checkout.
@@ -218,7 +317,7 @@ def test_go_loader_test_agrees_with_the_inventory():
         env["DA_GUARD_BINARY"] = os.path.abspath(os.environ["DA_GUARD_BINARY"])
     proc = subprocess.run(  # noqa: S603
         [go, "test", "-count=1", "-run",
-         "^(TestDocsYAMLInventoryParity|TestExtractYAMLBlocksTakesFenceAttributes|"
+         "^(TestDocsYAMLInventoryParity|TestExtractYAMLBlocks.*|"
          "TestDocsDefaults.*|TestDocsYamlSplit.*)$", "./pkg/config/"],
         cwd=REPO / "components" / "threshold-exporter" / "app",
         capture_output=True, text=True, encoding="utf-8", errors="replace",

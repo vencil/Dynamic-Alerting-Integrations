@@ -229,12 +229,41 @@ func TestExtractYAMLBlocksTakesFenceAttributes(t *testing.T) {
 		"  ```yml {.illustrative reason=\"x y\"}\n  b: 2\n  ```\n" +
 		"```yaml\nc: 3\n```\n" +
 		"```yamlx\nd: 4\n```\n"
-	got := extractYAMLBlocks("x.md", md)
-	want := []docYAMLBlock{
+	assertBlocks(t, extractYAMLBlocks("x.md", md), []docYAMLBlock{
 		{file: "x.md", line: 1, info: "{.confd}", body: "a: 1"},
 		{file: "x.md", line: 4, info: "{.illustrative reason=\"x y\"}", body: "  b: 2"},
 		{file: "x.md", line: 7, info: "", body: "c: 3"},
+	})
+}
+
+// TestExtractYAMLBlocksTracksFencesAsCommonMark: a ``` line inside another
+// fence is that fence's text; ```` closes ```; only ASCII blanks are trimmed
+// (U+3000 / \x1c before a fence make it no fence); a CRLF's CR stays in the
+// body line and a lone CR is no line break — the inventory's cases
+// (tests/lint/test_doc_yaml_inventory.py), so the two extractors cut alike.
+func TestExtractYAMLBlocksTracksFencesAsCommonMark(t *testing.T) {
+	t.Parallel()
+	md := "````markdown\n```yaml\nhidden: 1\n```\n````\n" +
+		"```yaml\na: 1\n````\n" +
+		"~~~text\n```yaml\n~~~\n" +
+		"```yaml\nb: 2\n```\n"
+	assertBlocks(t, extractYAMLBlocks("x.md", md), []docYAMLBlock{
+		{file: "x.md", line: 6, body: "a: 1"},
+		{file: "x.md", line: 12, body: "b: 2"},
+	})
+	for _, blank := range []string{"\u3000", "\x1c", "\u00a0"} {
+		if got := extractYAMLBlocks("x.md", blank+"```yaml\na: 1\n```\n"); len(got) != 0 {
+			t.Errorf("%q before ```yaml: got %+v, want no fence", blank, got)
+		}
 	}
+	crlf := "prose\rmore prose\r\n\r\n```yaml\r\na: 1\r\nb: 2\r\n```\r\n"
+	assertBlocks(t, extractYAMLBlocks("x.md", crlf), []docYAMLBlock{
+		{file: "x.md", line: 3, body: "a: 1\r\nb: 2\r"},
+	})
+}
+
+func assertBlocks(t *testing.T, got, want []docYAMLBlock) {
+	t.Helper()
 	if len(got) != len(want) {
 		t.Fatalf("got %d blocks %+v, want %+v", len(got), got, want)
 	}

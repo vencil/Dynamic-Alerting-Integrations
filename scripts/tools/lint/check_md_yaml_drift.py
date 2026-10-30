@@ -384,8 +384,11 @@ class MdYamlDriftChecker:
 
         A unit is a conf.d example when it is declared `{.confd}` or, undeclared,
         when parse-tree's reading has the shape of one (`inventory.is_confd_example`).
-        A `{.confd .expect-invalid}` fence must yield at least one violation,
-        and none of its violations is reported; yielding none is the violation.
+        Every unit of a `{.confd .expect-invalid}` fence must yield at least
+        one violation, and none of its violations is reported; a unit that
+        yields none is the violation (#3416 review: judged per fence, one wrong
+        unit hid every violation of a second, really broken one). A fence
+        that documents a correct file beside the counter-example is two fences.
         """
         if jsonschema is None:
             print("ERROR: jsonschema not installed — the schema check cannot run. "
@@ -418,8 +421,9 @@ class MdYamlDriftChecker:
         inv, rc = self._inventory_or_exit()
         if inv is None:
             return rc
-        # (path, fence line) → violations found in an `.expect-invalid` fence
+        # an `.expect-invalid` unit → the violations found in it (on purpose)
         expected: Dict[Tuple[str, int], List[str]] = {}
+        first_line: Dict[Tuple[str, int], str] = {}
         for unit in inv.judged("confd"):
             data = unit.documents[0]
             schema, doc, kind = self._route(data)
@@ -439,14 +443,15 @@ class MdYamlDriftChecker:
                                "platform+tenants"))
             checks.extend(self._receiver_checks(data, kind))
             if unit.expect_invalid:
-                expected.setdefault((unit.path, unit.fence_line), [])
+                expected.setdefault((unit.path, unit.line), [])
+                first_line[(unit.path, unit.line)] = unit.text.split("\n", 1)[0]
             for active_schema, active_doc, active_kind in checks:
                 try:
                     jsonschema.validate(active_doc, active_schema,
                                         registry=registry)
                 except jsonschema.ValidationError as e:
                     if unit.expect_invalid:
-                        expected[(unit.path, unit.fence_line)].append(
+                        expected[(unit.path, unit.line)].append(
                             f"{unit.where} ({active_kind}): {e.message}")
                         continue
                     issues.append({
@@ -458,13 +463,16 @@ class MdYamlDriftChecker:
                     return EXIT_CALLER_ERROR
             if self.verbose:
                 print(f"  OK   {unit.where} ({kind})")
-        for (path, fence_line), found in sorted(expected.items()):
+        for (path, line), found in sorted(expected.items()):
             if not found:
                 issues.append({
-                    "file": path, "line": fence_line, "kind": "expect-invalid",
-                    "error": ("the fence is declared {.confd .expect-invalid}, but every "
-                              "unit in it meets its schema: a block that only shows a "
-                              "reading is {.illustrative reason=\"…\"}"),
+                    "file": path, "line": line, "kind": "expect-invalid",
+                    "error": (f"the fence is declared {{.confd .expect-invalid}}, but this "
+                              f"unit ({first_line[(path, line)]!r}) meets its schema: every "
+                              "unit of such a fence must be wrong. A correct file shown "
+                              "beside the counter-example goes in a fence of its own; a "
+                              "block that only shows a reading is "
+                              "{.illustrative reason=\"…\"}"),
                 })
 
         not_judged = [u for u in inv.units
@@ -476,10 +484,10 @@ class MdYamlDriftChecker:
         inventory.print_exemptions(inv)
         for kind in sorted(by_kind):
             print(f"  {kind:<24} {by_kind[kind]}")
-        print(f"Counter-examples (.expect-invalid): {len(expected)}")
-        for (path, fence_line), found in sorted(expected.items()):
+        print(f"Counter-example units (.expect-invalid): {len(expected)}")
+        for (path, line), found in sorted(expected.items()):
             if found:
-                print(f"    {path}:{fence_line} — {len(found)} violation(s) on purpose")
+                print(f"    {path}:{line} — {len(found)} violation(s) on purpose")
         print(f"Units not judged here:       {len(not_judged)} "
               "(inventory errors: --check fences)")
         print(f"Schema violations:           {len(issues)}")

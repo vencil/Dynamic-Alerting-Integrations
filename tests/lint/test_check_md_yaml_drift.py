@@ -323,12 +323,12 @@ def test_expect_invalid_holds_a_counter_example_to_being_invalid(tmp_path: Path)
     bad = '```yaml {.confd .expect-invalid}\ntenants:\n  t1:\n    mysql_connections: 123\n```\n'
     r = _run(_mkrepo(tmp_path, "ce.md", bad))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
-    assert "docs/ce.md:1 — 1 violation(s) on purpose" in r.stdout, r.stdout
+    assert "docs/ce.md:2 — 1 violation(s) on purpose" in r.stdout, r.stdout
     ok = '```yaml {.confd .expect-invalid}\ntenants:\n  t1:\n    mysql_connections: "123"\n```\n'
     (tmp_path / "docs" / "ce.md").write_text(ok, encoding="utf-8")
     r = _run(tmp_path)
     assert r.returncode == EXIT_VIOLATION, r.stdout
-    assert "[SCHEMA] docs/ce.md:1 (expect-invalid)" in r.stdout, r.stdout
+    assert "[SCHEMA] docs/ce.md:2 (expect-invalid)" in r.stdout, r.stdout
 
 
 def test_retired_marker_is_an_error_naming_the_attribute(tmp_path: Path) -> None:

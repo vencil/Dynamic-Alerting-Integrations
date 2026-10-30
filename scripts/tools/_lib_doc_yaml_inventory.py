@@ -34,7 +34,11 @@ rustdoc's `invalid_codeblock_attributes`:
   same sigs.k8s.io/yaml conversion), `.prom-rules` (da-read prometheus-rules),
   `.alertmanager` (da-read alertmanager), `.prometheus` (da-read prometheus).
   Every reading is an entry of `_lib_parse_tree` / `_lib_consumer_read`; this
-  module reads no YAML itself.
+  module reads no YAML itself. A repeated key is the declared consumer's to
+  answer: parse-tree refuses it, kubectl / Helm (`.k8s` / `.helm-values`)
+  keep the last one. So every document of a `.k8s` unit must be a Kubernetes
+  object (a mapping with a string `apiVersion` and `kind`), or `.k8s` would
+  hide anything from the conf.d reader.
 * `.illustrative reason="…"`: the fence is judged by no gate. The reason is
   mandatory and non-empty, and every exemption is printed by every report.
   It takes no other attribute.
@@ -44,12 +48,17 @@ rustdoc's `invalid_codeblock_attributes`:
   readings give a reason without one, so they take no `.expect-refused`.
 * `.expect-invalid` (with `.confd`): a counter-example that reads but is
   wrong on purpose (rustdoc's `compile_fail`). The schema check must find at
-  least one violation among the fence's units, and reports none of them;
-  finding none is an error. A block that only shows a reading, and meets the
-  schema, is `.illustrative`.
+  least one violation in EVERY unit of the fence, and reports none of them; a
+  unit with none is an error (a correct file shown beside the counter-example
+  goes in a fence of its own). A block that only shows a reading, and meets
+  the schema, is `.illustrative`. Its values are still read by the
+  unit-sanity lint: a reader copies them as they are.
 
 ⛔ Written without braces (```` ```yaml confd ````) is an error: mkdocs does not
-render that as a code block at all. The retired comment marker
+render that as a code block at all. So is a yaml fence spelled any other way
+(``~~~yaml``, ```` ```YAML ````, four backticks, ```` ``` yaml ````,
+```` ```yaml+jinja ````) and any fence left open: fences are found as
+CommonMark finds them, and only ```` ```yaml ```` / ```` ```yml ```` is read. The retired comment marker
 (`<!-- md-yaml-drift: … -->`) is an error that names the attribute to write.
 
 Which consumer reads a unit:
@@ -106,16 +115,32 @@ ILLUSTRATIVE = "illustrative"
 EXPECT_REFUSED = "expect-refused"
 EXPECT_INVALID = "expect-invalid"
 
-#: The opening line of a yaml fence (stripped): ```yaml / ```yml, then nothing,
-#: or what follows after whitespace or `{`. Mirrored by yamlFenceRe in the Go
-#: loader test; the parity test holds the two to the same units.
-FENCE_RE = re.compile(r"^```(?:yaml|yml)(?=$|[\s{])(.*)$")
-FENCE_CLOSE = "```"
+#: What a fence line is compared without: ASCII blanks only. Go's side
+#: trims the same set (`strings.Trim(line, " \t\r")`); `str.strip()` would also
+#: take U+3000 or \x1c away, and the two extractors would cut different units.
+FENCE_TRIM = " \t\r"
+
+#: Any fence opening (CommonMark): three or more backticks or tildes, then the
+#: info string (a backtick fence's info holds no backtick). Every fence is
+#: tracked, not only yaml ones, so a ``` line inside another fence is that
+#: fence's text.
+OPEN_RE = re.compile(r"^(?P<fence>`{3,}|~{3,})(?P<info>.*)$", re.ASCII)
+
+#: The one spelling of a yaml fence (#3416): exactly three backticks,
+#: lower-case `yaml` / `yml`, then nothing, or what follows after a blank or
+#: `{` (the attributes). Mirrored by yamlFenceRe in the Go loader test; the
+#: parity test holds the two to the same units.
+FENCE_RE = re.compile(r"^```(?:yaml|yml)(?=$|[ \t{])(.*)$", re.ASCII)
+
+#: An info string whose first word reads as yaml (any case, `yaml+jinja`
+#: too): such a fence is a yaml fence written another way, which no extractor
+#: reads — an error, never a block that silently drops out of every gate.
+YAMLISH_RE = re.compile(r"^[ \t]*(?:yaml|yml)(?![A-Za-z0-9_])", re.ASCII | re.IGNORECASE)
 
 #: A file-header comment naming a YAML file. Anchored at column 0: an indented
 #: `#` that mentions a filename in passing is prose, and cutting there would
 #: sever a block mid-mapping. Mirrored by fileHeaderRe in the Go loader test.
-FILE_HEADER_RE = re.compile(r"^#.*\.ya?ml\b")
+FILE_HEADER_RE = re.compile(r"^#.*\.ya?ml\b", re.ASCII)
 
 #: The retired exemption marker (`<!-- md-yaml-drift: ignore — … -->`).
 RETIRED_MARKER_RE = re.compile(r"<!--\s*md-yaml-drift\s*:")
@@ -318,24 +343,56 @@ def parse_declaration(info: str) -> "Declaration | None":
     return decl
 
 
-def extract_fences(path: str, content: str) -> "Iterator[Fence]":
-    """Every ```yaml / ```yml fence of a Markdown text, in order. Lines are
-    split on ``\\n`` only (a ``\\r`` stays in a body line, as Go's
-    strings.Split leaves it); the fence lines are compared stripped. A fence
-    with no line inside is no fence."""
-    in_yaml, start, info, body = False, 0, "", []
+def extract_fences(path: str, content: str,
+                   errors: "list[tuple[str, int, str]] | None" = None
+                   ) -> "Iterator[Fence]":
+    """Every ```yaml / ```yml fence of a Markdown text, in order.
+
+    Fences are found as CommonMark finds them (three or more backticks or
+    tildes; the closing fence is the same character, at least as long, with
+    nothing after it), whatever their language, so a ``` line inside another
+    fence is text. A yaml fence is the one standard spelling (`FENCE_RE`); a
+    fence whose info reads as yaml any other way (```` ```YAML ````,
+    ``~~~yaml``, four backticks, ```` ``` yaml ````, ```` ```yaml+jinja ````)
+    and a fence that is never closed are appended to *errors* as (path,
+    line, message) — none of them is read by any gate.
+
+    Lines are split on ``\\n`` only (a ``\\r`` stays in a body line, as Go's
+    strings.Split leaves it); fence lines are compared without ASCII blanks
+    (`FENCE_TRIM`). A fence with no line inside is no fence.
+    """
+    errors = [] if errors is None else errors
+    open_char, open_len, start, info, body = "", 0, 0, None, []
+    yaml_fence = False
     for i, line in enumerate(content.split("\n"), 1):
-        stripped = line.strip()
-        if not in_yaml:
-            m = FENCE_RE.match(stripped)
-            if m:
-                in_yaml, start, info, body = True, i, m.group(1).strip(), []
-        elif stripped == FENCE_CLOSE:
-            in_yaml = False
-            if body:
+        stripped = line.strip(FENCE_TRIM)
+        if not open_char:
+            m = OPEN_RE.match(stripped)
+            if not m or (m.group("fence")[0] == "`" and "`" in m.group("info")):
+                continue
+            open_char, open_len = m.group("fence")[0], len(m.group("fence"))
+            start, body, info = i, [], None
+            std = FENCE_RE.match(stripped)
+            yaml_fence = bool(std)
+            if std:
+                info = std.group(1).strip(FENCE_TRIM)
+            elif YAMLISH_RE.match(m.group("info")):
+                errors.append((path, i, (
+                    f"yaml fence written {stripped!r}: write it as ```yaml (three "
+                    "backticks, lower case, attributes in {…} after it) — no gate "
+                    "reads a yaml fence spelled another way")))
+            continue
+        if (stripped and set(stripped) == {open_char} and len(stripped) >= open_len):
+            if yaml_fence and body:
                 yield Fence(path, start, info, body)
-        else:
+            open_char, yaml_fence = "", False
+            continue
+        if yaml_fence:
             body.append(line)
+    if open_char:
+        errors.append((path, start, (
+            "a fence opened here is never closed: everything below it is read as "
+            "its text (CommonMark), and no gate reads it — close it")))
 
 
 def split_documented_files(block_lines: "list[str]") -> "list[tuple[int, str]]":
@@ -364,11 +421,14 @@ def split_documented_files(block_lines: "list[str]") -> "list[tuple[int, str]]":
 
 
 def iter_markdown(repo_root: Path) -> "Iterator[tuple[str, str]]":
-    """(repo path, text) of every docs/**/*.md, sorted."""
+    """(repo path, text) of every docs/**/*.md, sorted. Read as bytes and
+    decoded, never with `read_text`: its universal newlines turn a CRLF or a
+    lone CR into LF, and the lines (and line numbers) would no longer be the
+    ones Go's `os.ReadFile` + `strings.Split("\\n")` cuts."""
     docs = repo_root / "docs"
     for md in sorted(docs.rglob("*.md")):
         rel = md.relative_to(repo_root).as_posix()
-        yield rel, md.read_text(encoding="utf-8", errors="replace")
+        yield rel, md.read_bytes().decode("utf-8", errors="replace")
 
 
 # ── reading ─────────────────────────────────────────────────────────────────
@@ -457,6 +517,20 @@ def _judge_refusals(u: Unit) -> None:
     elif u.consumer == "k8s" and u.refusal is not None:
         u.errors.append("a Kubernetes object (apiVersion / kind) that kubectl's reading "
                         f"(da-crdecode) refuses: {u.refusal[1]}")
+    # `.k8s` says "Kubernetes objects": kubectl reads a repeated key as the
+    # last one, so without this a block of anything (a conf.d example with a
+    # repeated key) declared `.k8s` would pass every gate unjudged (#3416
+    # review). Each document must be an object kubectl could apply.
+    if u.consumer == "k8s" and u.read and not u.errors:
+        bad = [i + 1 for i, d in enumerate(u.documents) if not _is_k8s_object(d)]
+        if not u.documents:
+            u.errors.append("declared .k8s, but kubectl's reading (da-crdecode) finds no "
+                            "document in it")
+        elif bad:
+            u.errors.append(
+                f"declared .k8s, but document(s) {bad} of kubectl's reading are not "
+                "Kubernetes objects (a mapping with a string apiVersion and kind): "
+                "declare the block's real consumer")
 
 
 def build(repo_root: "Path | str", *,
@@ -479,7 +553,7 @@ def build(repo_root: "Path | str", *,
                     rel, i, "the `md-yaml-drift:` comment marker is retired (#3416): declare "
                     "the fence instead — ```yaml {.illustrative reason=\"…\"}, "
                     "{.confd .expect-refused=<kind>} or {.confd .expect-invalid}"))
-        for fence in extract_fences(rel, content):
+        for fence in extract_fences(rel, content, inv.file_errors):
             decl = parse_declaration(fence.info)
             for offset, text in split_documented_files(fence.body):
                 # `fence.line` is the ```yaml line itself; +1 lands on the
@@ -553,15 +627,17 @@ class Inventory:
                 and (consumer is ... or u.consumer == consumer)]
 
 
-def print_exemptions(inv: Inventory) -> None:
-    """Name every exempted unit: a gate that drops inputs silently reads as
-    'covered everything' when it did not."""
-    ex = inv.exemptions()
+def print_exemptions(inv: "Inventory | list[tuple[str, str]]", file=None) -> None:
+    """Name every exempted unit (or every (where, reason) pair given): a gate
+    that drops inputs silently reads as 'covered everything' when it did not.
+    Every gate that reads the inventory prints this."""
+    ex = ([(u.where, u.exemption) for u in inv.exemptions()]
+          if isinstance(inv, Inventory) else list(inv))
     if not ex:
         return
-    print(f"Units exempted (.{ILLUSTRATIVE}): {len(ex)}")
-    for u in ex:
-        print(f"    {u.where} — {u.exemption}")
+    print(f"Units exempted (.{ILLUSTRATIVE}): {len(ex)}", file=file)
+    for where, reason in ex:
+        print(f"    {where} — {reason}", file=file)
 
 
 def as_json(inv: Inventory) -> dict:

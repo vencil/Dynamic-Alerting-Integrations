@@ -339,7 +339,7 @@ def _iter_confd_docs(root: str):
             yield surface, _as_source_text(reader.node(rel))
 
 
-def _doc_units(root: str):
+def _doc_units(root: str, exempted: "list[tuple[str, str]] | None" = None):
     """(surface, document) for every documented ```yaml unit the inventory
     has a reading of (#3416): any consumer, not only conf.d — a Helm values
     example (`{.helm-values}`) as Helm reads it, a manifest as kubectl
@@ -354,6 +354,8 @@ def _doc_units(root: str):
     if not os.path.isdir(os.path.join(root, "docs")):
         return
     inv = doc_inventory.build(root)
+    if exempted is not None:
+        exempted.extend((u.where, u.exemption) for u in inv.exemptions())
     for unit in inv.judged():
         if unit.node is not None:
             yield unit.where, _as_source_text(unit.node)
@@ -382,7 +384,8 @@ class ArtifactRefused(Exception):
         self.refused = refused
 
 
-def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None
+def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
+             exempted: "list[tuple[str, str]] | None" = None
              ) -> list[tuple[str, str, float, bool]]:
     """Return [(surface, key, value, is_threshold)] over every scannable artifact.
 
@@ -390,7 +393,8 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None
     percentiles): they share the key's unit, so the domain check applies, but
     they are not a configured threshold and must not feed tier ordering.
     A template-data example parse-tree refuses is appended to *unreadable*
-    as (surface, why).
+    as (surface, why); every `.illustrative` docs unit (not read) to
+    *exempted* as (where, reason).
     """
     found: list[tuple[str, str, float, bool]] = []
     unreadable = [] if unreadable is None else unreadable
@@ -466,7 +470,7 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None
             for key, val in _walk_values(_as_source_text(node)):
                 found.append((surface, key, val, True))
 
-    for surface, doc in _doc_units(root):
+    for surface, doc in _doc_units(root, exempted):
         for key, val in _walk_values(doc):
             found.append((surface, key, val, True))
 
@@ -544,7 +548,8 @@ def run_check(
     # 2. Value-in-domain.
     per_surface: dict[str, dict[str, float]] = {}
     unreadable: list[tuple[str, str]] = []
-    collected = _collect(root, unreadable)
+    exempted: list[tuple[str, str]] = []
+    collected = _collect(root, unreadable, exempted)
     for surface, why in unreadable:
         errors.append(f"UNREADABLE: {surface}: conf.d's reader (da-guard parse-tree) "
                       f"refuses it ({why}), so its threshold values were not checked")
@@ -578,7 +583,7 @@ def run_check(
                     "warning permanently."
                 )
 
-    return {"errors": sorted(set(errors))}
+    return {"errors": sorted(set(errors)), "exempted": exempted}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -622,10 +627,16 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CALLER_ERROR
 
     errors = result["errors"]
+    exempted = result.get("exempted", [])
+    # #3416: a docs unit no gate judges is named in every report (stderr, so
+    # `--json` keeps exactly one document on stdout; the JSON carries it too).
+    doc_inventory.print_exemptions(exempted, file=sys.stderr)
 
     if args.json:
         print(json.dumps({"status": "violation" if errors else "ok",
-                          "errors": errors}, ensure_ascii=False, indent=2))
+                          "errors": errors,
+                          "exempted": [{"unit": w, "reason": r} for w, r in exempted]},
+                         ensure_ascii=False, indent=2))
     else:
         for msg in errors:
             print(f"❌ {msg}", file=sys.stderr)

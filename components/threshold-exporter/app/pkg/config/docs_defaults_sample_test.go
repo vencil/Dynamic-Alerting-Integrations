@@ -69,37 +69,63 @@ type docYAMLBlock struct {
 	body string
 }
 
-// yamlFenceRe matches the opening line of a yaml fence (trimmed): ```yaml or
-// ```yml, then nothing, or what follows after whitespace or `{` — the fence
-// attributes (```yaml {.confd}, #3416). Mirrors FENCE_RE in
+// yamlFenceRe matches the opening line of a yaml fence (trimmed): exactly
+// ```yaml or ```yml, then nothing, or what follows after a blank or `{` — the
+// fence attributes (```yaml {.confd}, #3416). Mirrors FENCE_RE in
 // scripts/tools/_lib_doc_yaml_inventory.py; TestDocsYAMLInventoryParity holds
-// the two extractors to the same units.
-var yamlFenceRe = regexp.MustCompile("^```(?:yaml|yml)(?:[\\s{].*)?$")
+// the two extractors to the same units. Any other spelling of a yaml fence is
+// the inventory's error, so docs/ holds none for this extractor to miss.
+var yamlFenceRe = regexp.MustCompile("^```(?:yaml|yml)(?:[ \\t{].*)?$")
+
+// anyFenceRe matches the opening line of any fence (CommonMark): three or
+// more backticks or tildes, then the info string.
+var anyFenceRe = regexp.MustCompile("^(`{3,}|~{3,})(.*)$")
+
+// fenceTrim is what a fence line is compared without: ASCII blanks only, as
+// the inventory (FENCE_TRIM) — strings.TrimSpace would also take U+3000 away.
+const fenceTrim = " \t\r"
 
 // extractYAMLBlocks pulls fenced ```yaml / ```yml blocks out of Markdown,
 // attributes and all: a fence that declares what it is (```yaml {.k8s}) is
-// still a yaml fence. Deliberately literal about the fence otherwise: docs
-// also carry ```bash and directory trees, and only blocks the author tagged as
-// YAML are in scope. Whether its attributes are ones the inventory knows is
-// the inventory's to say, not this extractor's.
+// still a yaml fence. Every fence is tracked as CommonMark tracks it (the
+// closing fence is the same character, at least as long, with nothing after
+// it), so a ``` line inside another fence is that fence's text. Whether its
+// attributes are ones the inventory knows is the inventory's to say, not this
+// extractor's.
 func extractYAMLBlocks(file, content string) []docYAMLBlock {
 	var out []docYAMLBlock
 	var buf []string
-	inYAML, start, info := false, 0, ""
+	openChar, openLen, start, info, isYAML := "", 0, 0, "", false
 
 	for i, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(line)
-		switch {
-		case !inYAML && yamlFenceRe.MatchString(trimmed):
-			inYAML, start, buf = true, i+1, nil
-			info = strings.TrimSpace(strings.TrimPrefix(strings.TrimPrefix(
-				strings.TrimPrefix(trimmed, "```"), "yaml"), "yml"))
-		case inYAML && trimmed == "```":
-			inYAML = false
-			if len(buf) > 0 {
+		trimmed := strings.Trim(line, fenceTrim)
+		if openChar == "" {
+			m := anyFenceRe.FindStringSubmatch(trimmed)
+			if m == nil || (m[1][0] == '`' && strings.Contains(m[2], "`")) {
+				continue
+			}
+			openChar, openLen, start, buf = m[1][:1], len(m[1]), i+1, nil
+			isYAML = yamlFenceRe.MatchString(trimmed)
+			info = ""
+			if isYAML {
+				rest := strings.TrimPrefix(trimmed, "```")
+				if strings.HasPrefix(rest, "yaml") {
+					rest = strings.TrimPrefix(rest, "yaml")
+				} else {
+					rest = strings.TrimPrefix(rest, "yml")
+				}
+				info = strings.Trim(rest, fenceTrim)
+			}
+			continue
+		}
+		if trimmed != "" && strings.Trim(trimmed, openChar) == "" && len(trimmed) >= openLen {
+			if isYAML && len(buf) > 0 {
 				out = append(out, docYAMLBlock{file: file, line: start, info: info, body: strings.Join(buf, "\n")})
 			}
-		case inYAML:
+			openChar, isYAML = "", false
+			continue
+		}
+		if isYAML {
 			buf = append(buf, line)
 		}
 	}

@@ -381,10 +381,29 @@ def test_an_attributed_fence_stays_in_scope(tmp_path, info):
 
 def test_an_illustrative_fence_is_out_of_scope(tmp_path):
     """The deliberate narrowing: an `.illustrative` fence is judged by no
-    gate (its reason is printed by every drift report)."""
+    gate — and named, with its reason, by every report, this one included."""
     _write(tmp_path, "docs/x.md",
            '```yaml {.illustrative reason="r"}\ndefaults:\n  pct: 300\n```\n')
-    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+    res = gate.run_check(registry=_registry(pct=_spec(80, "%")), root=str(tmp_path))
+    assert res["errors"] == []
+    assert res["exempted"] == [("docs/x.md:2", "r")]
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_main_names_every_illustrative_unit(tmp_path, monkeypatch, capsys, as_json):
+    """#3416 review (CodeRabbit): "every report prints the exemptions" holds
+    for this gate too — on stderr, so `--json` stays one document on stdout
+    (which carries them as well)."""
+    _write(tmp_path, "docs/x.md",
+           '```yaml {.illustrative reason="shown on purpose"}\na: 1\n```\n')
+    monkeypatch.setattr(gate, "PROJECT_ROOT", str(tmp_path))
+    assert gate.main(["--ci", "--json"] if as_json else ["--ci"]) == gate.EXIT_OK
+    out = capsys.readouterr()
+    assert "Units exempted (.illustrative): 1" in out.err
+    assert "docs/x.md:2 — shown on purpose" in out.err
+    if as_json:
+        assert json.loads(out.out)["exempted"] == [
+            {"unit": "docs/x.md:2", "reason": "shown on purpose"}]
 
 
 def test_markdown_non_yaml_and_fragment_blocks_are_tolerated(tmp_path):
