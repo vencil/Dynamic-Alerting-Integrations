@@ -82,9 +82,87 @@ const (
 	undeterminedDuplicateTenant = "duplicate_tenant"
 )
 
-// undeterminedRemedy is the one remedy the report and stderr give.
-const undeterminedRemedy = "run `da-tools generate-routes --validate --strict` — " +
-	"da-guard no longer judges routing or domain policy (ADR-036 §9)"
+// configDirPlaceholder stands for --config-dir in text that has no run's value
+// (the help), spelled as the usage lines spell it.
+const configDirPlaceholder = "<dir>"
+
+// generatorCommand is the route generator's command as da-guard tells a reader
+// to run it, for the conf.d at configDir — the --config-dir value as the caller
+// gave it, so the line is right when pasted where da-guard ran (#3420). It is
+// shell-quoted (shellQuote): what the shell splits it into is what argparse
+// reads. A value argparse would take for an option (a leading '-') is joined
+// with '=': `--config-dir -x` is a usage error there, `--config-dir=-x` is not.
+//
+// ⛔ THE ONE SPELLING. Every place da-guard names this command — the report,
+// stderr, the help — takes it from here (generatorHelpCommand for the help);
+// before #3420 three hand-written copies all lacked the required --config-dir,
+// so the line pasted as told ended in rc 2. tests/shared/
+// test_da_guard_generator_hint.py parses what da-guard prints with the
+// generator's own argparse parser.
+func generatorCommand(configDir string) string {
+	if strings.HasPrefix(configDir, "-") {
+		return generatorCommandWith("--config-dir=" + shellQuote(configDir))
+	}
+	return generatorCommandWith("--config-dir " + shellQuote(configDir))
+}
+
+// generatorHelpCommand is generatorCommand for the help: the placeholder
+// stands as written, unquoted.
+func generatorHelpCommand() string {
+	return generatorCommandWith("--config-dir " + configDirPlaceholder)
+}
+
+func generatorCommandWith(configDirArg string) string {
+	return "da-tools generate-routes " + configDirArg + " --validate --strict"
+}
+
+// shellQuote is s as one POSIX shell word: as is when every byte is one no
+// shell treats specially (Python's shlex.quote set), else in single quotes,
+// each ' written '"'"'. The empty string is a pair of single quotes.
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	for i := 0; i < len(s); i++ {
+		if !shellSafeByte(s[i]) {
+			return "'" + strings.ReplaceAll(s, "'", `'"'"'`) + "'"
+		}
+	}
+	return s
+}
+
+func shellSafeByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
+		strings.IndexByte("@%+=:,./_-", c) >= 0
+}
+
+// codeSpan is s as one Markdown code span: fenced with one backtick more than
+// the longest run in s, so a backtick in a path cannot end it early.
+func codeSpan(s string) string {
+	longest, run := 0, 0
+	for i := 0; i < len(s); i++ {
+		if s[i] == '`' {
+			run++
+			if run > longest {
+				longest = run
+			}
+		} else {
+			run = 0
+		}
+	}
+	fence := strings.Repeat("`", longest+1)
+	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
+		return fence + " " + s + " " + fence
+	}
+	return fence + s + fence
+}
+
+// undeterminedRemedy is the one remedy the report and stderr give, for the
+// run's --config-dir.
+func undeterminedRemedy(configDir string) string {
+	return "run " + codeSpan(generatorCommand(configDir)) + " — " +
+		"da-guard no longer judges routing or domain policy (ADR-036 §9)"
+}
 
 // undeterminedMarkdownLimit caps the Markdown list (a sticky PR comment);
 // the JSON report always lists every item.
@@ -222,14 +300,14 @@ func routingKeysIn(out []undeterminedItem, rel, at string, v any) []undetermined
 
 // undeterminedMarkdown is the report block naming the evidence; "" when there
 // is none, so a tree with nothing of the routing plane reads as before.
-func undeterminedMarkdown(items []undeterminedItem) string {
+func undeterminedMarkdown(configDir string, items []undeterminedItem) string {
 	if len(items) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString("### Routing and domain policy: not judged\n\n")
 	b.WriteString("This tree holds what only the route generator judges, so its result is undetermined (exit 4): " +
-		undeterminedRemedy + ".\n\n")
+		undeterminedRemedy(configDir) + ".\n\n")
 	for i, it := range items {
 		if i == undeterminedMarkdownLimit {
 			fmt.Fprintf(&b, "- … and %d more (the JSON report lists every one)\n", len(items)-i)
@@ -247,9 +325,9 @@ func undeterminedMarkdown(items []undeterminedItem) string {
 
 // reportUndetermined is the stderr line for exit 4, so a CI log says it even
 // when the report went to --output.
-func reportUndetermined(errOut io.Writer, items []undeterminedItem) {
+func reportUndetermined(errOut io.Writer, configDir string, items []undeterminedItem) {
 	fmt.Fprintf(errOut, "%s: routing and domain policy not judged: %d item(s) only the route generator judges — %s (exit 4)\n",
-		programName, len(items), undeterminedRemedy)
+		programName, len(items), undeterminedRemedy(configDir))
 }
 
 // routingRequiredField is the first --required-fields path whose first

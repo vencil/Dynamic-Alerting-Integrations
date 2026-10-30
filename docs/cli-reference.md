@@ -2795,7 +2795,7 @@ da-tools opa-evaluate --config-dir conf.d/ --dry-run
 
 #### guard
 
-Dangling Defaults Guard（v2.8.0）。Python 包裝 shell-out 到 `da-guard` Go binary，驗證 `conf.d/` 樹是否安全（schema / cardinality）。⚠️ 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)（[ADR-036](adr/036-single-parser-effective-config.md) §9）起，`defaults-impact` **不再判路由與 domain policy**，交給 route generator：在原本跑 `da-tools guard defaults-impact` 的地方加一步 `da-tools generate-routes --validate --strict`。樹上有只能由 generator 判的內容時，報告列為「未判定」並回 exit 4（見下方 Exit codes）。
+Dangling Defaults Guard（v2.8.0）。Python 包裝 shell-out 到 `da-guard` Go binary，驗證 `conf.d/` 樹是否安全（schema / cardinality）。⚠️ 自 [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)（[ADR-036](adr/036-single-parser-effective-config.md) §9）起，`defaults-impact` **不再判路由與 domain policy**，交給 route generator：在原本跑 `da-tools guard defaults-impact` 的地方加一步 `da-tools generate-routes --config-dir <conf.d> --validate --strict`（`--config-dir` 必填；da-guard 的提示會帶入這次的值）。樹上有只能由 generator 判的內容時，報告列為「未判定」並回 exit 4（見下方 Exit codes）。
 
 **用法**
 

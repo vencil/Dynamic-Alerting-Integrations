@@ -281,7 +281,7 @@ docker run --rm \
     --warn-as-error
 # exit 0 = clean, 1 = guard found errors, 2 = caller error,
 #      3 = files the exporter cannot decode or read, 4 = routing / domain policy not judged here
-#      (run `da-tools generate-routes --validate --strict` too)
+#      (run `da-tools generate-routes --config-dir conf.d/ --validate --strict` too)
 ```
 
 ### 5.5 Hierarchy-aware Batch PR（v2.8.0）

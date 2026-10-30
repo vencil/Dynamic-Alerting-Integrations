@@ -293,7 +293,7 @@ func TestUndetermined_ZeroTenants(t *testing.T) {
 	testutil.WriteTree(t, tmp, map[string]string{"conf.d/_defaults.yaml": withRouting["_defaults.yaml"]})
 	code, stdout, _ := runOnce(t, "--config-dir", filepath.Join(tmp, "conf.d"))
 	if code != exitUndetermined || strings.Contains(stdout, "vacuously safe") || !strings.Contains(stdout, "NOT a safe result (exit 4)") ||
-		!strings.Contains(stdout, "generate-routes --validate --strict") {
+		!strings.Contains(stdout, generatorCommand(filepath.Join(tmp, "conf.d"))) {
 		t.Errorf("md: exit %d, report %q; want 4, no all-clear, the remedy", code, stdout)
 	}
 }
@@ -528,7 +528,8 @@ func TestUndetermined_Markdown(t *testing.T) {
 		"conf.d/tx.yaml":        udTenant + udRouting,
 	})
 	out := filepath.Join(tmp, "report.md")
-	code, _, stderr := runOnce(t, "--config-dir", filepath.Join(tmp, "conf.d"), "--output", out)
+	confD := filepath.Join(tmp, "conf.d")
+	code, _, stderr := runOnce(t, "--config-dir", confD, "--output", out)
 	body, err := os.ReadFile(out)
 	if err != nil {
 		t.Fatal(err)
@@ -537,8 +538,7 @@ func TestUndetermined_Markdown(t *testing.T) {
 		t.Errorf("exit %d, want %d", code, exitUndetermined)
 	}
 	for _, want := range []string{"### Routing and domain policy: not judged", "`tx.yaml` `tenants.tx._routing` (routing_key)",
-		"run `da-tools generate-routes --validate --strict` — da-guard no longer judges routing or domain policy (ADR-036 §9)",
-		noFindingsUndeterminedLine} {
+		undeterminedRemedy(confD), noFindingsUndeterminedLine} {
 		if !bytes.Contains(body, []byte(want)) {
 			t.Errorf("report lacks %q:\n%s", want, body)
 		}
@@ -546,7 +546,8 @@ func TestUndetermined_Markdown(t *testing.T) {
 	if bytes.Contains(body, []byte("safe to merge")) {
 		t.Errorf("report calls an undetermined run safe:\n%s", body)
 	}
-	for _, want := range []string{"undetermined=1", "routing and domain policy not judged: 1 item(s)", "(exit 4)"} {
+	for _, want := range []string{"undetermined=1", "routing and domain policy not judged: 1 item(s)", "(exit 4)",
+		undeterminedRemedy(confD)} {
 		if !strings.Contains(stderr, want) {
 			t.Errorf("stderr lacks %q: %s", want, stderr)
 		}
@@ -560,7 +561,7 @@ func TestUndetermined_MarkdownListIsCapped(t *testing.T) {
 	for i := 0; i < undeterminedMarkdownLimit+3; i++ {
 		items = append(items, undeterminedItem{File: "t.yaml", Field: "tenants.t" + string(rune('a'+i)) + "._routing", Reason: undeterminedRoutingKey})
 	}
-	md := undeterminedMarkdown(items)
+	md := undeterminedMarkdown("conf.d", items)
 	if n := strings.Count(md, "(routing_key)"); n != undeterminedMarkdownLimit || !strings.Contains(md, "… and 3 more") {
 		t.Errorf("%d items listed, md=%s; want %d and the rest counted", n, md, undeterminedMarkdownLimit)
 	}
@@ -678,5 +679,75 @@ func TestUndetermined_UnscannableTreeIsUndetermined(t *testing.T) {
 	}
 	if again.Len() != 0 {
 		t.Errorf("rootReported: stderr %q, want none", again.String())
+	}
+}
+
+// #3420: the generator command da-guard tells a reader to run carries the
+// --config-dir the generator requires, as one shell word whatever the path.
+// The spelling is pinned here literally; tests/shared/
+// test_da_guard_generator_hint.py parses what the binary prints with the
+// generator's own argparse parser.
+func TestGeneratorCommand_CarriesConfigDirAsOneShellWord(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct{ dir, want string }{
+		{"conf.d", "da-tools generate-routes --config-dir conf.d --validate --strict"},
+		{"/repo/conf.d/", "da-tools generate-routes --config-dir /repo/conf.d/ --validate --strict"},
+		{"my conf.d", "da-tools generate-routes --config-dir 'my conf.d' --validate --strict"},
+		{"it's", `da-tools generate-routes --config-dir 'it'"'"'s' --validate --strict`},
+		{"$HOME/*", "da-tools generate-routes --config-dir '$HOME/*' --validate --strict"},
+		{"~/conf.d", "da-tools generate-routes --config-dir '~/conf.d' --validate --strict"},
+		{"-x", "da-tools generate-routes --config-dir=-x --validate --strict"},
+		{"-a b", "da-tools generate-routes --config-dir='-a b' --validate --strict"},
+		{"", "da-tools generate-routes --config-dir '' --validate --strict"},
+	} {
+		if got := generatorCommand(tc.dir); got != tc.want {
+			t.Errorf("generatorCommand(%q) = %s\nwant %s", tc.dir, got, tc.want)
+		}
+	}
+	if got, want := generatorHelpCommand(), "da-tools generate-routes --config-dir <dir> --validate --strict"; got != want {
+		t.Errorf("generatorHelpCommand() = %s, want %s", got, want)
+	}
+}
+
+// A backtick in the path cannot end the Markdown code span early.
+func TestUndeterminedRemedy_CodeSpanSurvivesBackticks(t *testing.T) {
+	t.Parallel()
+	if got, want := undeterminedRemedy("conf.d"),
+		"run `da-tools generate-routes --config-dir conf.d --validate --strict` — "+
+			"da-guard no longer judges routing or domain policy (ADR-036 §9)"; got != want {
+		t.Errorf("remedy = %s\nwant %s", got, want)
+	}
+	got := undeterminedRemedy("a`b``c")
+	if want := "run ```da-tools generate-routes --config-dir 'a`b``c' --validate --strict``` — "; !strings.HasPrefix(got, want) {
+		t.Errorf("remedy = %s\nwant prefix %s", got, want)
+	}
+}
+
+// The report, stderr and the --required-fields refusal carry the run's own
+// --config-dir, spelled as the caller gave it (relative stays relative), and
+// the help carries the placeholder: no copy of the command lacks it.
+// Not parallel: t.Chdir, so the relative --config-dir is what the run sees.
+func TestUndetermined_RemedyCarriesTheRunsConfigDir(t *testing.T) {
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"my conf.d/_defaults.yaml": udDefaults,
+		"my conf.d/tx.yaml":        udTenant + udRouting,
+	})
+	t.Chdir(tmp)
+	const dir = "my conf.d"
+	want := "da-tools generate-routes --config-dir 'my conf.d' --validate --strict"
+
+	code, stdout, stderr := runOnce(t, "--config-dir", dir)
+	if code != exitUndetermined || !strings.Contains(stdout, "`"+want+"`") || !strings.Contains(stderr, want) {
+		t.Errorf("exit %d; want 4 and %q in the report and stderr\nstdout: %s\nstderr: %s", code, want, stdout, stderr)
+	}
+	code, _, stderr = runOnce(t, "--config-dir", dir, "--required-fields", "_routing.receiver")
+	if code != exitCallerErr || !strings.Contains(stderr, want) {
+		t.Errorf("--required-fields _routing.*: exit %d, stderr %q; want 2 naming %q", code, stderr, want)
+	}
+	code, _, stderr = runOnce(t, "-h")
+	if code != exitOK || strings.Count(stderr, generatorHelpCommand()) != 2 ||
+		strings.Contains(stderr, "generate-routes --validate") {
+		t.Errorf("help: exit %d; want 0, the placeholder command at --required-fields and exit 4, no copy without --config-dir:\n%s", code, stderr)
 	}
 }

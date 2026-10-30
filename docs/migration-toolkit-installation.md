@@ -153,7 +153,7 @@ da-guard --config-dir conf.d/ \
     --format md
 ```
 
-Exit code：`0` 通過 / `1` 偵測到 error 級 finding（block CI）/ `2` caller error / `3` exporter 無法 decode 或讀不到的設定檔 / `4` 未判定（樹上有路由或 domain policy，da-guard 不判，改跑 `da-tools generate-routes --validate --strict`）；優先序與完整定義見 [cli-reference §guard](cli-reference.md#guard)。完整 flag 參考見 `components/threshold-exporter/README.md` § da-guard CLI（位於 MkDocs site 範圍外，請從 GitHub 端開啟）。
+Exit code：`0` 通過 / `1` 偵測到 error 級 finding（block CI）/ `2` caller error / `3` exporter 無法 decode 或讀不到的設定檔 / `4` 未判定（樹上有路由或 domain policy，da-guard 不判，改跑 `da-tools generate-routes --config-dir <conf.d> --validate --strict`）；優先序與完整定義見 [cli-reference §guard](cli-reference.md#guard)。完整 flag 參考見 `components/threshold-exporter/README.md` § da-guard CLI（位於 MkDocs site 範圍外，請從 GitHub 端開啟）。
 
 ---
 

@@ -2809,7 +2809,7 @@ da-tools opa-evaluate --config-dir conf.d/ --dry-run
 
 #### guard
 
-Dangling Defaults Guard (v2.8.0). Python wrapper that shells out to the `da-guard` Go binary to validate a `conf.d/` tree across schema / cardinality. ⚠️ Since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) ([ADR-036](adr/036-single-parser-effective-config.md) §9) `defaults-impact` **no longer judges routing or domain policy**; the route generator does: wherever you ran `da-tools guard defaults-impact`, add a `da-tools generate-routes --validate --strict` step. When the tree holds what only the generator can judge, the report lists it as "undetermined" and exits 4 (see Exit codes below).
+Dangling Defaults Guard (v2.8.0). Python wrapper that shells out to the `da-guard` Go binary to validate a `conf.d/` tree across schema / cardinality. ⚠️ Since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904) ([ADR-036](adr/036-single-parser-effective-config.md) §9) `defaults-impact` **no longer judges routing or domain policy**; the route generator does: wherever you ran `da-tools guard defaults-impact`, add a `da-tools generate-routes --config-dir <conf.d> --validate --strict` step (`--config-dir` is required; da-guard's hint carries the run's own value). When the tree holds what only the generator can judge, the report lists it as "undetermined" and exits 4 (see Exit codes below).
 
 **Usage**
 

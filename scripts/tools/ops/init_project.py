@@ -3926,7 +3926,7 @@ def _plan_notice_lines(plan: _ConfdPlan, is_zh: bool,
             f"exporter 能否讀取該檔——請用 `da-tools guard defaults-impact "
             f"--config-dir {conf_dir}` 確認（它以 exporter 的讀法掃描；該檔"
             f"應出現在 Scanned files 裡；exit 4 表示樹上有路由，交給 "
-            f"`da-tools generate-routes --validate --strict` 判）"
+            f"`da-tools generate-routes --config-dir {conf_dir} --validate --strict` 判）"
             if is_zh else
             f"{t} may already be declared by {carriers} — conf.d/{t}.yaml was "
             f"not generated; init does not check whether the exporter can "
@@ -3934,7 +3934,7 @@ def _plan_notice_lines(plan: _ConfdPlan, is_zh: bool,
             f"--config-dir {conf_dir}` (it reads the tree the way the "
             f"exporter does; the file should be listed under Scanned files; "
             f"exit 4 means the tree holds routing, which "
-            f"`da-tools generate-routes --validate --strict` judges)")
+            f"`da-tools generate-routes --config-dir {conf_dir} --validate --strict` judges)")
     return lines
 
 
