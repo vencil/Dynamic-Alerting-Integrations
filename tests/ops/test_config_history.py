@@ -453,6 +453,25 @@ class TestCmdSnapshotInitial:
             assert snap_file.exists()
             assert snap_file.read_text() == content
 
+    @pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+    def test_snapshot_files_are_0600(self):
+        """快照可能含敏感設定：每個檔都是 0600，即使先前已存在、權限較寬
+        （#3107：由唯一的輸出寫入器設定）。"""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_dir = Path(tmpdir) / 'conf.d'
+            config_dir.mkdir()
+            (config_dir / 'db-a.yaml').write_text('threshold: 100\n')
+            snap = Path(tmpdir) / '.da-history' / 'snap-1'
+            snap.mkdir(parents=True)
+            (snap / 'db-a.yaml').write_text('old\n')
+            (snap / 'db-a.yaml').chmod(0o644)
+
+            with patch('sys.stdout', new=StringIO()):
+                ch.cmd_snapshot(str(config_dir))
+
+            assert (snap / 'db-a.yaml').stat().st_mode & 0o777 == 0o600
+            assert (snap / 'db-a.yaml').read_text() == 'threshold: 100\n'
+
     def test_initial_snapshot_records_metadata(self):
         """快照應記錄元資料（id、timestamp、hash、files）。"""
         with tempfile.TemporaryDirectory() as tmpdir:
