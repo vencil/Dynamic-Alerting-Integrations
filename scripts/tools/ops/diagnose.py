@@ -44,7 +44,8 @@ from _lib_python import detect_cli_lang, add_prometheus_arg  # noqa: E402
 from _lib_prometheus import QueryError, prometheus_instant  # noqa: E402
 from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope)
+from _lib_paths import require_dir  # noqa: E402  (#3276 / #3392)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_kubectl import KubectlError, kubectl_list, kubectl_logs  # noqa: E402  (#3349)
 # #2526 / #2547: the tenant's resolution is threshold-exporter's own
@@ -256,11 +257,27 @@ def query_prometheus(prom_url: str, promql: str):
 _LAYER_ORDER = ("defaults", "platform", "profile", "tenant")
 
 
+class TenantNotFoundError(CallerError):
+    """#1524: the tree at `--config-dir` has no such tenant — the question
+    names something that is not there, as tenant-api's `/effective` answers
+    404 `tenant not found`; not a finding about the tenant (rc 1)."""
+
+    reason = "tenant_not_found"
+
+
+def require_config_dir(config_dir: str) -> None:
+    """`--config-dir` as given must be a directory (`_lib_paths`, #3276):
+    else `CallerError`, rc 2. The one check, so `main()` can make it before
+    any query and `resolve_inheritance_chain` makes the same one."""
+    require_dir(config_dir, lang="en", flag="--config-dir")
+
+
 def lookup_tenant_profile(tenant: str, config_dir: str | None) -> str | None:
     """The profile `tenant` is bound to under `config_dir`, or None.
 
     A thin view over `resolve_inheritance_chain` (#1522: one reader, not
-    two); raises what it raises when da-guard is missing or fails.
+    two); raises what it raises — an unusable `config_dir` or a tenant the
+    tree does not have included (#1524).
     """
     inheritance = resolve_inheritance_chain(tenant, config_dir)
     return inheritance["profile_name"] if inheritance else None
@@ -304,8 +321,7 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
     key's layer from `da-guard effective` (/effective); each value from
     `da-guard served-values` (/metrics).
 
-    Returns None when `config_dir` is not a directory or the tree has no
-    tenant `tenant` (a line on stderr says which), else a dict with:
+    Returns None when no `config_dir` was given (None), else a dict with:
       - chain: one entry per layer file that supplies a value the tenant
         ends up with, lowest first — `defaults` (each `_defaults.yaml` on the
         tenant's path, root first), `platform` (a root platform file's
@@ -339,22 +355,28 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
     served-values refusing the tree, or having no entry for a tenant
     effective resolves, included): the chain is never answered
     from a partial read.
+
+    #1524: a `config_dir` that was given is a question, never a no-op. One
+    that is not a directory (`''` included) raises `CallerError` with
+    `_lib_paths`' reason (`dir_not_found` / `dir_not_accessible`), and a
+    tree without `tenant` raises `TenantNotFoundError` — both rc 2 under
+    `run()`. Either used to be None, which the CLI printed as an error
+    object and exited 0 on, and `check()` answered as if no `--config-dir`
+    had been given.
     """
-    if not config_dir:
+    if config_dir is None:
         return None
+    require_config_dir(config_dir)
     base = Path(config_dir)
-    if not base.is_dir():
-        return None
 
     tree = load_effective_tree(base)
     for s in tree.skipped:
         print(f"  WARN: {safe_label(s.file)}: {safe_label(s.reason)}", file=sys.stderr)
     te = tree.tenants.get(tenant)
     if te is None:
-        print(f"  WARN: no tenant '{safe_label(tenant)}' in {safe_label(str(base))}: "
-              f"threshold-exporter reads {len(tree.tenants)} tenant(s) there",
-              file=sys.stderr)
-        return None
+        raise TenantNotFoundError(
+            f"no tenant '{safe_label(tenant)}' in {safe_label(str(base))}: "
+            f"threshold-exporter reads {len(tree.tenants)} tenant(s) there")
     for w in te.warnings:
         print(f"  WARN: {safe_label(w)}", file=sys.stderr)
     # `profile_name` is the profile the exporter binds; a reference that
@@ -461,6 +483,10 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
     """
     errors = []
     skipped = []
+    if config_dir is not None:
+        # #1524: an importer gets the path refusal before any query too, not
+        # after up to four Prometheus queries and a kubectl call (step 4).
+        require_config_dir(config_dir)
 
     # 0. 資料庫類型：Pod 與 exporter 兩項只為 MariaDB 寫（本輪決策 N2）
     db_type, db_type_err = tenant_db_type(tenant, prom_url)
@@ -528,7 +554,7 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
     # `profile_name`. #2526: that read is `da-guard effective`; when it
     # cannot be made, this raises (the CLI exits 2) rather than answer
     # without the chain.
-    inheritance = resolve_inheritance_chain(tenant, config_dir) if config_dir else None
+    inheritance = resolve_inheritance_chain(tenant, config_dir)
     profile_name = inheritance["profile_name"] if inheritance else None
 
     # 5. 輸出結果 (Token Saving 核心：正常時只回傳極簡 JSON)
@@ -608,19 +634,21 @@ def main() -> None:
     if args.json:  # #3094: a crash in --json mode still prints one envelope
         arm_crash_envelope()
 
+    if args.show_inheritance and args.config_dir is None:
+        print("ERROR: --show-inheritance requires --config-dir",
+              file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)  # #452: missing required arg
+    if args.config_dir is not None:
+        # #1524: before any query — a run told to read a tree it cannot
+        # read stops here (rc 2), not after the cluster checks.
+        require_config_dir(args.config_dir)
+
     if args.show_inheritance:
-        if not args.config_dir:
-            print("ERROR: --show-inheritance requires --config-dir",
-                  file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)  # #452: missing required arg
         # #2526: fail closed — da-guard missing or failing, or a file the
-        # exporter's load drops, exits 2 through the decorators on main().
+        # exporter's load drops, exits 2 through the decorators on main();
+        # #1524: so does a tree without the tenant (TenantNotFoundError).
         inheritance = resolve_inheritance_chain(args.tenant, args.config_dir)
-        if inheritance:
-            print(format_json_report(inheritance, default=str))
-        else:
-            print(json.dumps({"error": "Could not resolve inheritance chain"},
-                             indent=2))
+        print(format_json_report(inheritance, default=str))
         sys.exit(EXIT_OK)
 
     try:

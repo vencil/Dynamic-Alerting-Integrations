@@ -64,7 +64,6 @@ PENDING: frozenset[tuple[str, str]] = frozenset({
     ("alert-correlate", "--input"),
     ("blind-spot", "--config-dir"),
     ("cutover", "--readiness-json"),
-    ("diagnose", "--config-dir"),
     ("generator-service", "--config-subdir"),
     ("generator-service", "--da-guard-binary"),
     ("generator-service", "--git"),
