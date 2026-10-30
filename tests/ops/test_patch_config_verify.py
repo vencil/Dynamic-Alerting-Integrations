@@ -238,7 +238,14 @@ class TestExporterAccessDefaults:
         labels = dep["spec"]["template"]["metadata"]["labels"]
         key, _, value = pc.EXPORTER_SELECTOR.partition("=")
         assert labels.get(key) == value
-        assert dep["metadata"]["namespace"] == pc.NAMESPACE == svc["metadata"]["namespace"]
+        # #1425: the chart renders into the release namespace, so the default
+        # here is the namespace the chart README installs the release into.
+        assert dep["metadata"]["namespace"] == "X" == svc["metadata"]["namespace"]
+        readme = (REPO / "helm/threshold-exporter/README.md").read_text(
+            encoding="utf-8")
+        installs = set(re.findall(
+            r"helm install threshold-exporter\b[^`]*?-n (\S+)", readme, flags=re.S))
+        assert installs == {pc.NAMESPACE}, installs
         ports = [p["name"] for c in dep["spec"]["template"]["spec"]["containers"]
                  for p in c.get("ports", [])]
         assert pc.EXPORTER_PORT in ports

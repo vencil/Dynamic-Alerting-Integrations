@@ -1,8 +1,14 @@
+{{- /* #1425: thresholdConfig.existingConfigMap names a ConfigMap someone
+       ELSE owns (`da-tools init --deploy kustomize` builds one named
+       threshold-config from conf.d). Set, this chart renders no ConfigMap
+       of its own and the Deployment mounts that one; every other
+       thresholdConfig.* value is then not rendered anywhere. */}}
+{{- if not .Values.thresholdConfig.existingConfigMap }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: threshold-config
-  namespace: monitoring
+  namespace: {{ .Release.Namespace }}
   labels:
     app: threshold-exporter
 data:
@@ -90,3 +96,4 @@ data:
       {{ $tenant }}:
         {{- $overrides | toYaml | nindent 8 }}
   {{- end }}
+{{- end }}

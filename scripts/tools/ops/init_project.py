@@ -3223,7 +3223,24 @@ def _gen_kustomize_base_readme(files: list[str]) -> str:
 
     It builds with the default restrictor, at the cost of having to re-copy
     whenever `conf.d/` changes — and `files:` still has to name every file.
-    """).format(links=links, copy_cmd=_KUSTOMIZE_COPY_CMD)
+
+    ## ⛔ This tree builds the ConfigMap only — install the exporter with it
+
+    The tree above contains no Deployment: the exporter comes from the
+    `threshold-exporter` Helm chart, which by default renders its OWN
+    `threshold-config` ConfigMap from its values. Two writers of one
+    ConfigMap overwrite each other on every apply. Tell the chart to mount
+    this tree's ConfigMap instead, and install it into the SAME namespace
+    the overlays set:
+
+    ```bash
+    helm upgrade --install threshold-exporter {chart} \\
+      --version {chart_version} -n <the overlays' namespace> \\
+      --set thresholdConfig.existingConfigMap=threshold-config
+    ```
+    """).format(links=links, copy_cmd=_KUSTOMIZE_COPY_CMD,
+                chart=THRESHOLD_EXPORTER_CHART,
+                chart_version=THRESHOLD_EXPORTER_CHART_VERSION)
 
 
 def _gen_kustomize_overlay(env_name: str, namespace: str) -> str:
@@ -4432,6 +4449,25 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
             print(f"  {step}. Create symlinks from "
                   f"{_as_typed_here(output_dir, 'conf.d/')} to "
                   f"{_as_typed_here(output_dir, 'kustomize/base/')}")
+        step += 1
+        # #1425: the tree builds `threshold-config` and no Deployment; the
+        # chart that supplies the exporter renders a ConfigMap of the same
+        # name unless told not to, and the two overwrite each other.
+        helm_line = (f"helm upgrade --install threshold-exporter "
+                     f"{THRESHOLD_EXPORTER_CHART} --version "
+                     f"{THRESHOLD_EXPORTER_CHART_VERSION} "
+                     f"-n {shlex.quote(config['namespace'])} "
+                     f"--set thresholdConfig.existingConfigMap=threshold-config")
+        if is_zh:
+            print(f"  {step}. kustomize 樹只產生 threshold-config ConfigMap；"
+                  f"exporter 用 chart 安裝在同一個 namespace，並讓 chart "
+                  f"不要再建自己的 ConfigMap：")
+        else:
+            print(f"  {step}. The kustomize tree builds only the threshold-config "
+                  f"ConfigMap. Install the exporter chart into the same "
+                  f"namespace, mounting that ConfigMap instead of creating "
+                  f"its own:")
+        print(f"     {helm_line}")
         step += 1
 
     # ⛔ Point at the file that carries the defaults. When the run skipped

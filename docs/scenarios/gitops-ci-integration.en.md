@@ -376,6 +376,8 @@ kubectl apply --dry-run=server -f /tmp/manifests.yaml
 kubectl apply -f /tmp/manifests.yaml
 ```
 
+⛔ **This tree builds the `threshold-config` ConfigMap only — not the exporter.** The exporter is installed with the threshold-exporter Helm chart, which by default renders its own `threshold-config` from its values; the two overwrite each other on every apply. Install the chart with `--set thresholdConfig.existingConfigMap=threshold-config` (the chart then creates no ConfigMap and mounts this tree's), and with `-n` set to the overlays' namespace ([#1425](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1425); `existingConfigMap` exists from the chart version after 2.9.0, and the README and Next steps `init` generates print the full command).
+
 ### 3.2 Helm
 
 Best for: teams already using the threshold-exporter Helm chart.

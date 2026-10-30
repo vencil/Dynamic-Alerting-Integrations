@@ -2175,6 +2175,46 @@ class TestKustomizeBaseEnumeratesConfd:
 # ── 9. _gen_kustomize_overlay ──
 # ============================================================
 
+class TestKustomizeTreeTellsTheChartNotToOwnTheConfigMap:
+    """#1425: the kustomize tree builds `threshold-config` and no Deployment;
+    the chart that supplies the exporter renders a ConfigMap of the same name
+    unless `thresholdConfig.existingConfigMap` says someone else owns it. Both
+    places a customer reads must say so, in the namespace the tree uses."""
+
+    _SET = '--set thresholdConfig.existingConfigMap=threshold-config'
+
+    def test_the_value_named_is_one_the_chart_declares(self):
+        values = yaml.safe_load(
+            (ip.Path(REPO_ROOT) / 'helm' / 'threshold-exporter'
+             / 'values.yaml').read_text(encoding='utf-8'))
+        assert 'existingConfigMap' in values['thresholdConfig']
+
+    def test_readme_says_to_mount_this_trees_configmap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
+            text = _readme_text(tmp)
+        assert self._SET in text
+        assert ip.THRESHOLD_EXPORTER_CHART in text
+        assert f'--version {ip.THRESHOLD_EXPORTER_CHART_VERSION}' in text
+
+    def test_next_steps_name_the_trees_namespace(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = dict(_KUST_CFG, tenants=['t-one'], namespace='obs')
+            created = ip.run_init(cfg, tmp)
+            out = _summary_text(tmp, cfg, created)
+        lines = [ln for ln in out.splitlines() if self._SET in ln]
+        assert len(lines) == 1, out
+        assert ' -n obs ' in lines[0]
+
+    def test_helm_deploy_does_not_get_the_kustomize_step(self):
+        """Control: under --deploy helm the chart DOES own the ConfigMap."""
+        with tempfile.TemporaryDirectory() as tmp:
+            cfg = dict(_KUST_CFG, tenants=['t-one'], deploy='helm')
+            created = ip.run_init(cfg, tmp)
+            out = _summary_text(tmp, cfg, created)
+        assert 'existingConfigMap' not in out
+
+
 class TestGenKustomizeOverlay:
     """Tests for _gen_kustomize_overlay — Kustomize overlay generation."""
 

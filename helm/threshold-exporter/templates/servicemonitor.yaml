@@ -4,7 +4,7 @@ apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
   name: da-threshold-exporter
-  namespace: {{ .Release.Namespace | default "monitoring" }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: threshold-exporter
     app.kubernetes.io/part-of: dynamic-alerting
