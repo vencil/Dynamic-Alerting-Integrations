@@ -2315,17 +2315,17 @@ paths:
             or the forge is degraded (FORGE_UNAVAILABLE). Also, for every write that
             changes a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE
             when the route generator container cannot judge (reason unreachable, bad_response,
-            amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
-            when its deployment policy file is unusable (reason policy_unusable, or
-            policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
-            In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
-            batch branch to the config repository failed, a timeout included: the
-            whole batch fails, no PR/MR opened, Retry-After (the branch may be left
-            on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when
-            a synchronous batch was stopped before anything of it was committed: the
-            request was cancelled or reached its deadline, or a git command hit its
-            own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back
-            unmoved; nothing written, safe to retry. And code WRITE_OUTCOME_UNKNOWN
+            amtool_missing, da_guard_missing, generator_too_old, internal_error),
+            or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason
+            policy_unusable, or policy_unreadable for tenant-api''s own copy); Retry-After;
+            nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724)
+            when pushing the batch branch to the config repository failed, a timeout
+            included: the whole batch fails, no PR/MR opened, Retry-After (the branch
+            may be left on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535,
+            #3173) when a synchronous batch was stopped before anything of it was
+            committed: the request was cancelled or reached its deadline, or a git
+            command hit its own deadline (TENANT_API_GIT_TIMEOUT) and the server read
+            the branch back unmoved; nothing written, safe to retry. And code WRITE_OUTCOME_UNKNOWN
             (#3202) when updating the branch failed and the server could not read
             the branch back: unlike the cases above the batch may already be committed,
             so refresh to see whether it was before retrying (an async task says the
@@ -2668,15 +2668,15 @@ paths:
             on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes
             a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the
             route generator container cannot judge (reason unreachable, bad_response,
-            amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
-            when its deployment policy file is unusable (reason policy_unusable, or
-            policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
-            In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
-            feature branch to the config repository failed, a timeout included: no
-            PR/MR opened, Retry-After (the branch may be left on origin without a
-            PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped
-            before anything of it was committed: the request was cancelled or reached
-            its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
+            amtool_missing, da_guard_missing, generator_too_old, internal_error),
+            or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason
+            policy_unusable, or policy_unreadable for tenant-api''s own copy); Retry-After;
+            nothing written. In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724)
+            when pushing the feature branch to the config repository failed, a timeout
+            included: no PR/MR opened, Retry-After (the branch may be left on origin
+            without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when the write
+            was stopped before anything of it was committed: the request was cancelled
+            or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
             and the server read the branch back unmoved; nothing written, safe to
             retry. And code WRITE_OUTCOME_UNKNOWN (#3202) when updating the branch
             failed and the server could not read the branch back: unlike the cases
@@ -2860,12 +2860,12 @@ paths:
             on the base branch (TREE_NOT_ON_BASE). Also, for every write that changes
             a conf.d file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the
             route generator container cannot judge (reason unreachable, bad_response,
-            amtool_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
-            when its deployment policy file is unusable (reason policy_unusable, or
-            policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
-            Also code UPSTREAM_ERROR (#1535, #3173) when the write was stopped before
-            anything of it was committed: the request was cancelled or reached its
-            deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
+            amtool_missing, da_guard_missing, generator_too_old, internal_error),
+            or POLICY_UNAVAILABLE when its deployment policy file is unusable (reason
+            policy_unusable, or policy_unreadable for tenant-api''s own copy); Retry-After;
+            nothing written. Also code UPSTREAM_ERROR (#1535, #3173) when the write
+            was stopped before anything of it was committed: the request was cancelled
+            or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
             and the server read the branch back unmoved; nothing written, safe to
             retry. And code WRITE_OUTCOME_UNKNOWN (#3202) when updating the branch
             failed and the server could not read the branch back: unlike the cases
@@ -3346,20 +3346,21 @@ paths:
             a PR branch (TREE_NOT_ON_BASE). Also, for every write that changes a conf.d
             file (#2903, ADR-036 §5): code VALIDATOR_UNAVAILABLE when the route generator
             container cannot judge (reason unreachable, bad_response, amtool_missing,
-            generator_too_old, internal_error), or POLICY_UNAVAILABLE when its deployment
-            policy file is unusable (reason policy_unusable, or policy_unreadable
-            for tenant-api''s own copy); Retry-After; nothing written. In PR/MR write-back
-            mode, code GIT_PUSH_FAILED (#1724) when pushing the batch branch to the
-            config repository failed, a timeout included: the whole batch fails, no
-            PR/MR opened, Retry-After (the branch may be left on origin without a
-            PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when a synchronous batch
-            was stopped before anything of it was committed: the request was cancelled
-            or reached its deadline, or a git command hit its own deadline (TENANT_API_GIT_TIMEOUT)
-            and the server read the branch back unmoved; nothing written, safe to
-            retry. And code WRITE_OUTCOME_UNKNOWN (#3202) when updating the branch
-            failed and the server could not read the branch back: unlike the cases
-            above the batch may already be committed, so refresh to see whether it
-            was before retrying (an async task says the same in its error)'
+            da_guard_missing, generator_too_old, internal_error), or POLICY_UNAVAILABLE
+            when its deployment policy file is unusable (reason policy_unusable, or
+            policy_unreadable for tenant-api''s own copy); Retry-After; nothing written.
+            In PR/MR write-back mode, code GIT_PUSH_FAILED (#1724) when pushing the
+            batch branch to the config repository failed, a timeout included: the
+            whole batch fails, no PR/MR opened, Retry-After (the branch may be left
+            on origin without a PR/MR). Also code UPSTREAM_ERROR (#1535, #3173) when
+            a synchronous batch was stopped before anything of it was committed: the
+            request was cancelled or reached its deadline, or a git command hit its
+            own deadline (TENANT_API_GIT_TIMEOUT) and the server read the branch back
+            unmoved; nothing written, safe to retry. And code WRITE_OUTCOME_UNKNOWN
+            (#3202) when updating the branch failed and the server could not read
+            the branch back: unlike the cases above the batch may already be committed,
+            so refresh to see whether it was before retrying (an async task says the
+            same in its error)'
           schema:
             $ref: '#/definitions/ErrorResponse'
       summary: Batch tenant operations

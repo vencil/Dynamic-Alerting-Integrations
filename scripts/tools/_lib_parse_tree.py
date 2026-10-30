@@ -294,6 +294,15 @@ def file_document(raw: bytes) -> dict:
     return read_document(raw)
 
 
+def da_guard_env() -> "dict[str, str] | None":
+    """The environment of a da-guard this process starts: with
+    ``GOTRACEBACK=crash`` under :func:`run_under_memory_limit`, so the Go
+    runtime's own out-of-memory ends it by a signal; else None (inherit).
+    Every da-guard run of the judgement takes it (parse-tree here,
+    served-values and effective in ``_lib_tenant_values``)."""
+    return {**os.environ, "GOTRACEBACK": "crash"} if _MEMORY_LIMITED else None
+
+
 def _run(args: list[str], binary: Optional[str], timeout: Optional[float],
          stdin: Optional[bytes] = None, *,
          check: "Callable[[dict], None] | None" = None,
@@ -329,7 +338,7 @@ def _run_stdout(args: list[str], binary: Optional[str], timeout: Optional[float]
             msg = msg.removeprefix(prefix)
         raise BinaryMissing(msg)
     cmd = [exe, *args]
-    env = {**os.environ, "GOTRACEBACK": "crash"} if _MEMORY_LIMITED else None
+    env = da_guard_env()
     try:
         proc = subprocess.run(cmd, capture_output=True, check=False, timeout=timeout,
                               input=stdin if stdin is not None else b"", env=env)

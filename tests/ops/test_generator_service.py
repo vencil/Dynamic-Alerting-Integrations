@@ -678,6 +678,76 @@ def test_amtool_missing_is_503(tmp_path, world):
         assert st["amtool_available"] is False and st["ready"] is False
 
 
+@pytest.mark.parametrize("how", ["missing", "not_executable", "does_not_run"])
+def test_da_guard_missing_is_503(tmp_path, world, how):
+    """ADR-036 §3 (2026-10-30): without a da-guard the judgement process can
+    run, no key verdict (ADR-038 §5) can be given — the container is
+    unavailable, checked before every judgement like amtool."""
+    target = tmp_path / "da-guard"
+    if how == "not_executable":
+        target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        target.chmod(0o644)
+    elif how == "does_not_run":  # an interpreter line naming nothing: exec fails
+        target.write_text("#!/no/such/interpreter\n", encoding="utf-8")
+        target.chmod(0o755)
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   env={"DA_GUARD_BINARY": str(target)}) as svc:
+        status, doc = svc.validate(world["commits"]["clean"])
+        assert status == 503, doc
+        assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "da_guard_missing")
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["da_guard_available"] is False and st["ready"] is False
+        m = svc.metrics()
+        assert m['da_generator_unavailable_total{reason="da_guard_missing"}'] == 1
+        # No judgement process ran: the ratio keeps the last real reading (none).
+        assert m["da_generator_judgement_deadline_ratio"] == 0
+
+
+def test_a_hanging_da_guard_is_probed_once(tmp_path, world):
+    """The --version probe runs on the event loop: a da-guard that hangs is
+    probed once per file (at start, before listening), its failure kept —
+    later judgements and status requests answer 503 at once."""
+    calls = tmp_path / "calls"
+    target = tmp_path / "da-guard"
+    target.write_text(f"#!/bin/sh\necho x >> '{calls}'\nsleep 30\n", encoding="utf-8")
+    target.chmod(0o755)
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   env={"DA_GUARD_BINARY": str(target)}) as svc:
+        at_start = calls.read_text(encoding="utf-8").count("x")
+        assert at_start >= 1, "no probe before listening"
+        for _ in range(2):
+            start = time.monotonic()
+            status, doc = svc.validate(world["commits"]["clean"])
+            assert status == 503 and doc["reason"] == "da_guard_missing", doc
+            assert time.monotonic() - start < 2, "the probe ran again on the event loop"
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["da_guard_available"] is False
+        # Startup also reads the reported version; requests ran it no more.
+        assert calls.read_text(encoding="utf-8").count("x") == at_start
+
+
+def test_tenant_api_knows_every_reason_the_service_sends():
+    """The service's 503 reasons and key-verdict reasons, each known to
+    tenant-api (Go): an unknown 503 reason is shown as `unknown`, an
+    unknown verdict reason without its text."""
+    import re
+    go = cases.REPO / "components/tenant-api/internal"
+    errors = (go / "generator/errors.go").read_text(encoding="utf-8")
+    listed = re.search(r"var UnavailableReasons = \[\]string\{(.*?)\}", errors, re.S)
+    assert listed, "UnavailableReasons not found in errors.go"
+    consts = dict(re.findall(r'^\s*(Reason\w+)\s*=\s*"([a-z_]+)"', errors, re.M))
+    unavailable = {consts[n] for n in re.findall(r"Reason\w+", listed.group(1))}
+    assert unavailable
+    assert set(_gsvc_proto.UNAVAILABLE_REASONS) <= unavailable, set(_gsvc_proto.UNAVAILABLE_REASONS) - unavailable
+    verdict = (go / "gitops/key_verdict.go").read_text(encoding="utf-8")
+    texts = re.search(r"var verdictReasons = map\[string\]string\{(.*?)\n\}", verdict, re.S)
+    assert texts, "verdictReasons not found in key_verdict.go"
+    have = set(re.findall(r'^\s*"([a-z_]+)":', texts.group(1), re.M))
+    import generator_service
+    want = set(generator_service.KEY_VERDICT_OUTCOMES) - {"complete"}
+    assert want <= have, want - have
+
+
 def test_policy_is_read_for_every_judgement(tmp_path, world):
     policy = tmp_path / "policy.yaml"
     policy.write_text("allowed_domains: []\n", encoding="utf-8")
@@ -765,11 +835,11 @@ def test_status_reports_versions(world):
     status, st = world["svc"].call("GET", "/v1/status")
     assert status == 200
     assert set(st) == {"policy", "generator_version", "generator_too_old",
-                       "da_guard_version", "amtool_available", "ready",
+                       "da_guard_version", "amtool_available", "da_guard_available", "ready",
                        "cache_base_coverage_ratio", "warm"}
     assert st["policy"] == {"configured": False, "available": True, "sha256": None,
                             "error": None, "min_generator_version": None}
-    assert st["ready"] is True
+    assert st["ready"] is True and st["da_guard_available"] is True
     m = world["svc"].metrics()
     info = [k for k in m if k.startswith("da_generator_build_info")]
     assert info and f'generator_version="{st["generator_version"]}"' in info[0]

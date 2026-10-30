@@ -387,8 +387,8 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
     rc, memory = 1, False
     try:
         # ADR-038 §5: not the CLI's key verdict — this process judges the
-        # keys itself below (key_verdict()), after a pass and under its own
-        # deadline; the CLI's would judge every write a second time, outside it.
+        # keys itself below (key_verdict()), after a pass and within this
+        # judgement's deadline; the CLI's would judge every write a second time.
         gar.main(argv, key_verdict=False)
         rc = 0
     except SystemExit as exc:
@@ -426,7 +426,7 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
     out = {"outcome": "ran", "rc": rc, "findings": doc, **common}
     if rc == 0:
         # A write the generator refuses is refused whatever the verdict
-        # says; one it passes gets the verdict, never refused by it.
+        # says; one it passes gets the verdict (ADR-038 §5).
         out["key_verdict"] = key_verdict(job, tree_dir, base, cache)
         out["hit_keys"] = [list(k) for k in cache.hits]  # the verdict's hits keep their entries too
     return out
@@ -436,13 +436,14 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
 #
 # After a write the generator passes, the shared verdict on the keys of the
 # tenants the write touches (_lib_key_verdict.judge_tree, `--tenant`), in
-# this process, under its RLIMIT_DATA. It never refuses the write: it has
-# its own share of the judgement deadline, and a verdict that does not fit
-# — out of time or memory, or da-guard failing — is reported as not
-# completed, with the reason (ADR-038 §5: "verdict not completed" is a
-# notice, never a refusal). Its cost grows with the tree (measured: about
-# 1.2 s at 1000 tenants, 3 s at 2500, 6 s at 5000 on one CPU, #3206), so on
-# a large tree it is the share that runs out, not the write's deadline.
+# this process, under its RLIMIT_DATA, within the same judgement deadline as
+# the generator: it has no deadline of its own and does not yield to a
+# waiting write. A verdict that does not fit — out of time or memory,
+# da-guard failing, an undecidable tree — is reported as not completed, with
+# the reason. The counterfactual of `disable` (`--disable-effects`) is
+# computed for the requested tenants only (da-guard's subset). Its cost grows
+# with the tree (measured: about 1.2 s at 1000 tenants, 3 s at 2500, 6 s at
+# 5000 on one CPU, #3206).
 
 #: The verdict stops this long before the judgement deadline, so the result
 #: is still sent in time — with room for a C call (a JSON decode of
@@ -451,35 +452,19 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
 VERDICT_RESERVE_SECONDS = 2.0
 #: Less time than this left for the verdict: it is not started.
 VERDICT_MIN_SECONDS = 0.5
-#: Findings sent at most (the rest counted in ``truncated``).
+#: Findings below error severity sent at most (the rest counted in
+#: ``truncated``). Error findings are never dropped: the write is refused on
+#: them (ADR-038 §5), so a refusal must list every one.
 VERDICT_MAX_FINDINGS = 1000
 
 
 class _VerdictDeadline(BaseException):
-    """The verdict's share of the deadline ran out (SIGALRM). A
+    """The judgement deadline, less the reserve, ran out (SIGALRM). A
     BaseException, so no ``except Exception`` on the way swallows it."""
-
-
-class _VerdictPreempted(BaseException):
-    """Another write is waiting (the service's SIGUSR1): the verdict yields
-    to it, as a warming run does — judgements run one at a time, and the
-    queued write's deadline counts its wait."""
-
-
-#: Whether the verdict is running in this process (on_preempt's switch).
-_VERDICT_RUNNING = [False]
 
 
 def _on_alarm(_signum, _frame) -> None:
     raise _VerdictDeadline()
-
-
-def on_preempt(_signum, _frame) -> None:
-    """The SIGUSR1 handler. The long-running service installs it at start,
-    so every judgement process has it from its fork on (SIGUSR1's default
-    would end the process); outside the verdict it does nothing."""
-    if _VERDICT_RUNNING[0]:
-        raise _VerdictPreempted()
 
 
 def written_scope(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
@@ -547,23 +532,29 @@ def written_scope(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
 def key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
                 cache: "_lib_parse_cache.ParseCache") -> dict:
     """The verdict's report: ``status`` complete or not_completed (with
-    ``reason`` no_time / deadline / preempted / memory / error /
+    ``reason`` no_time / deadline / memory / error / undecidable /
     platform_file and ``message``), ``tenants`` judged, ``seconds``, and
     when complete the findings."""
     started = time.monotonic()
     try:
         return _key_verdict(job, tree_dir, base, cache, started)
-    except (_VerdictDeadline, _VerdictPreempted) as exc:
-        # The signal came after the verdict's own handlers, on its way out.
-        _VERDICT_RUNNING[0] = False
+    except _VerdictDeadline:
+        # The alarm came after the verdict's own handlers, on its way out.
         signal.setitimer(signal.ITIMER_REAL, 0)
-        reason = "deadline" if isinstance(exc, _VerdictDeadline) else "preempted"
-        return {"status": "not_completed", "reason": reason, "tenants": 0,
-                "seconds": round(time.monotonic() - started, 3), "message": _STOPPED[reason]}
+        return {"status": "not_completed", "reason": "deadline", "tenants": 0,
+                "seconds": round(time.monotonic() - started, 3), "message": _OUT_OF_TIME}
 
 
-_STOPPED = {"deadline": "its share of the judgement deadline ran out",
-            "preempted": "another write was waiting: the verdict yields to it"}
+_OUT_OF_TIME = "the judgement deadline ran out"
+
+
+def kept_findings(findings: list) -> "tuple[list, int]":
+    """``(sent, truncated)``: every error finding, then the others up to
+    VERDICT_MAX_FINDINGS in all; ``truncated`` counts the others dropped."""
+    errors = [f for f in findings if f.severity == _lib_key_verdict.ERROR]
+    others = [f for f in findings if f.severity != _lib_key_verdict.ERROR]
+    room = max(0, VERDICT_MAX_FINDINGS - len(errors))
+    return errors + others[:room], max(0, len(others) - room)
 
 
 def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
@@ -582,7 +573,6 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
     # result after it unreadable. They stay in this process.
     on_store, cache.on_store = cache.on_store, None
     _lib_parse_cache.install(cache)
-    _VERDICT_RUNNING[0] = True
     tenants: list[str] = []
     try:
         # One reader for the whole verdict: its tree-mode document is read once.
@@ -598,27 +588,35 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
             return report("complete", tenants=0, findings=[], truncated=0)
         verdict = _lib_key_verdict.judge_tree(
             tree_dir, tenants=tenants, timeout=budget, reader=reader)
+        undecidable = sorted({k.key for ks in verdict.keys.values() for k in ks
+                              if k.verdict == _lib_key_verdict.UNDECIDABLE})
+        if undecidable:
+            # ADR-038 §7: no root platform file, so a threshold key the
+            # tenants write cannot be told from a misspelt one; a retry
+            # changes nothing. Reserved keys alone are judged as always.
+            return report("not_completed", reason="undecidable", tenants=len(tenants),
+                          message=f"no root platform file was read: {len(undecidable)} threshold "
+                                  "key(s) cannot be judged")
+        kept, truncated = kept_findings(verdict.findings)
         findings = [{"severity": f.severity, "kind": f.kind, "key": f.key, "file": f.file,
-                     "tenants": list(f.tenants), "reason": f.reason}
-                    for f in verdict.findings[:VERDICT_MAX_FINDINGS]]
-        return report("complete", tenants=len(tenants), findings=findings,
-                      truncated=max(0, len(verdict.findings) - VERDICT_MAX_FINDINGS))
-    except (_VerdictDeadline, _VerdictPreempted) as exc:
-        reason = "deadline" if isinstance(exc, _VerdictDeadline) else "preempted"
-        return report("not_completed", reason=reason, tenants=len(tenants), message=_STOPPED[reason])
+                     "tenants": list(f.tenants), "reason": f.reason} for f in kept]
+        return report("complete", tenants=len(tenants), findings=findings, truncated=truncated)
+    except _VerdictDeadline:
+        return report("not_completed", reason="deadline", tenants=len(tenants),
+                      message=_OUT_OF_TIME)
     except MemoryError as exc:
         return report("not_completed", reason="memory", tenants=len(tenants),
                       message=" ".join(str(exc).split())[:300] or "MemoryError")
     except _lib_tenant_values.DaGuardError as exc:
-        # A da-guard ended by a signal under RLIMIT_DATA is its memory limit.
+        # A da-guard ended by a signal under RLIMIT_DATA (GOTRACEBACK=crash:
+        # the Go runtime's own out-of-memory too) is its memory limit.
         reason = "memory" if (exc.returncode or 0) < 0 else "error"
         return report("not_completed", reason=reason, tenants=len(tenants),
                       message=" ".join(str(exc).split())[:300])
-    except BaseException as exc:  # noqa: BLE001 — a verdict that fails never refuses the write
+    except BaseException as exc:  # noqa: BLE001 — reported as not completed, with its reason
         return report("not_completed", reason="error", tenants=len(tenants),
                       message=f"{type(exc).__name__}: {' '.join(str(exc).split())[:300]}")
     finally:
-        _VERDICT_RUNNING[0] = False
         signal.setitimer(signal.ITIMER_REAL, 0)
         signal.signal(signal.SIGALRM, previous)
         if outer[0] > 0:

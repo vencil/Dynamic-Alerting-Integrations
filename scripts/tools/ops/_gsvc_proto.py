@@ -26,7 +26,8 @@ STDERR_TAIL_BYTES = 64 * 1024
 REJECT_REASONS = ("deadline", "memory", "incomplete", "git_read", "busy")
 
 #: Why the container answers 503 VALIDATOR_UNAVAILABLE.
-UNAVAILABLE_REASONS = ("amtool_missing", "generator_too_old", "internal_error")
+UNAVAILABLE_REASONS = ("amtool_missing", "da_guard_missing", "generator_too_old",
+                       "internal_error")
 
 _COMMIT_LEN = {"sha1": 40, "sha256": 64}
 _HEX = re.compile(r"[0-9a-f]+")
