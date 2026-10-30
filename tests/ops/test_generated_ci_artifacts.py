@@ -93,12 +93,15 @@ WHAT THIS GUARD DOES **NOT** BUY
   measurement behind that sentence is broken: `validate_config`'s known-key set
   IS the sibling `_defaults.yaml` in the same directory, and `init` writes both
   from one catalog — so the probe carries its own fix and 100% bogus keys still
-  pass 5/5. The right thing to measure is the REGISTRY identity, and that guard
-  would open **36 red** on today's output (nginx / clickhouse / db2 score zero
-  against `threshold-registry.yaml`) — the opposite of what the exemption
-  predicted. Tracked as #1387, together with the reason the existing
-  reachability gate misses it. **A probe that cannot go red is not evidence of
-  health; it is a broken instrument.**
+  pass 5/5. The right thing to measure is the REGISTRY identity, and at the
+  time that guard would have opened 36 red (nginx / clickhouse / db2 scored
+  zero against `threshold-registry.yaml`) — the opposite of what the exemption
+  predicted. **A probe that cannot go red is not evidence of health; it is a
+  broken instrument.** The defect itself (#1387) is fixed by #2134 and is not
+  this file's to guard: ``init`` now takes its values from
+  ``scaffold_tenant.RULE_PACKS`` (held equal to the registry by
+  ``check_threshold_registry.py``), and ``check_threshold_reachability.py``'s
+  written-keys face fails on any key ``init`` writes that no alert reads.
 * **One coverage gap left open on purpose.** The wizard's third claim surface,
   `cicdGenerateInitCommand`, is checked only by substring in the portal suite;
   its five flags were verified against `_build_parser()` by hand and all exist,
