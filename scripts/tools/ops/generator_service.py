@@ -94,7 +94,7 @@ from _gsvc_proto import (  # noqa: E402
     judgement_seconds, parse_validate_request,
 )
 from _lib_parse_cache import restricted_loads  # noqa: E402
-import _lib_parse_tree  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (absolute_reader_binaries, #3424)
 from _grar_validate import (  # noqa: E402
     PolicyInputError, generator_version_problem, load_policy_document,
 )
@@ -1263,9 +1263,10 @@ async def serve(settings: Settings, object_format: str) -> None:
 def main(argv: Optional[list[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     settings = Settings(**{k: getattr(args, k) for k in Settings.__dataclass_fields__})
-    # Absolute: the judgement process runs in its own job directory — the
-    # da-guard it runs too (a relative $DA_GUARD_BINARY, #2906 review).
-    _lib_parse_tree.absolute_da_guard_binary()
+    # Absolute: the judgement process runs in its own job directory, and so
+    # does every reader binary it runs — da-guard (#2906 review), and the
+    # da-read / da-crdecode of the route generator (#3424).
+    _lib_consumer_read.absolute_reader_binaries()
     for name in ("socket", "repo", "work_dir", "policy"):
         value = getattr(settings, name)
         if value is not None:

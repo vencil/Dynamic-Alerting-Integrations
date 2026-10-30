@@ -109,7 +109,8 @@ COPY scripts/tools/_lib_compat.py               ./core/_lib_compat.py
 # The core's imports (#2873): compile_custom_alerts → _lib_io → _lib_constants;
 # the da-guard reader _lib_tenant_values (#3229: the preview
 # judges the recipe through da-guard) → _lib_parse_cache / _lib_parse_tree
-# (the reader's fail-closed exit, #3206), guard_dispatch → _lib_godispatch, and
+# (the reader's fail-closed exit, #3206), guard_dispatch → _lib_godispatch, both
+# of them → _lib_consumer_read (the reader binaries' env names, #3424), and
 # _lib_python → _lib_validation, _lib_prometheus. Missing any of them fails the
 # preview — and `docker build` still succeeds.
 # tests/ops/test_recipe_preview_image_layout.py judges a recipe in this layout.
@@ -122,6 +123,7 @@ COPY scripts/tools/_lib_tenant_values.py        ./core/_lib_tenant_values.py
 COPY scripts/tools/_lib_parse_cache.py          ./core/_lib_parse_cache.py
 COPY scripts/tools/_lib_parse_tree.py           ./core/_lib_parse_tree.py
 COPY scripts/tools/_lib_godispatch.py           ./core/_lib_godispatch.py
+COPY scripts/tools/_lib_consumer_read.py        ./core/_lib_consumer_read.py
 COPY scripts/tools/ops/guard_dispatch.py        ./core/ops/guard_dispatch.py
 COPY scripts/tools/_lib_python.py               ./core/_lib_python.py
 COPY scripts/tools/_lib_validation.py           ./core/_lib_validation.py

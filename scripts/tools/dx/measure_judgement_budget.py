@@ -832,7 +832,8 @@ def main(argv: "list[str] | None" = None) -> int:
 
 def _preflight(a: argparse.Namespace) -> str:
     """Everything checkable before anything is created; returns da-guard."""
-    da_guard = a.da_guard_binary or os.environ.get("DA_GUARD_BINARY") or shutil.which("da-guard")
+    from _lib_consumer_read import DA_GUARD_ENV  # the env-name register (#3424)
+    da_guard = a.da_guard_binary or os.environ.get(DA_GUARD_ENV) or shutil.which("da-guard")
     if not da_guard or not os.access(da_guard, os.X_OK):
         raise NotMeasured("no da-guard (--da-guard-binary, $DA_GUARD_BINARY, PATH); "
                           "`make da-guard-build` builds .build/da-guard")

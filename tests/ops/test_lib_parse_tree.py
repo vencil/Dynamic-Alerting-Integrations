@@ -566,18 +566,21 @@ def test_a_relative_da_guard_binary_is_the_current_directory_s(tmp_path, monkeyp
                                                                da_guard_binary) -> None:
     """#2906 review: a relative `$DA_GUARD_BINARY` means what it means in the
     shell — relative to the working directory at resolution — and a process
-    about to change directory makes it absolute first."""
+    about to change directory makes it absolute first
+    (`_lib_consumer_read.absolute_reader_binaries`, #3424; the other reader
+    binaries: tests/shared/test_lib_consumer_read_reader_envs.py)."""
     import shutil
+    import _lib_consumer_read as cr
     root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
     (tmp_path / "bin").mkdir()
     shutil.copy2(da_guard_binary, tmp_path / "bin" / "da-guard")
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("DA_GUARD_BINARY", "bin/da-guard")
+    monkeypatch.setenv(cr.DA_GUARD_ENV, "bin/da-guard")
     assert lpt.load(root, None, 60).value("t.yaml") == {"a": 1}
-    env = {"DA_GUARD_BINARY": "bin/da-guard"}
-    lpt.absolute_da_guard_binary(env)
-    assert env["DA_GUARD_BINARY"] == str(tmp_path / "bin" / "da-guard")
-    for unchanged in ({}, {"DA_GUARD_BINARY": " "}, {"DA_GUARD_BINARY": "/abs/da-guard"}):
+    env = {cr.DA_GUARD_ENV: "bin/da-guard"}
+    cr.absolute_reader_binaries(env)
+    assert env[cr.DA_GUARD_ENV] == str(tmp_path / "bin" / "da-guard")
+    for unchanged in ({}, {cr.DA_GUARD_ENV: " "}, {cr.DA_GUARD_ENV: "/abs/da-guard"}):
         before = dict(unchanged)
-        lpt.absolute_da_guard_binary(unchanged)
+        cr.absolute_reader_binaries(unchanged)
         assert unchanged == before
