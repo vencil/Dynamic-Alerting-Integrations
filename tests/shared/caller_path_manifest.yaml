@@ -106,7 +106,7 @@ commands:
     "--context": not_path
     "--dirs": dir
     "--ignore-prefix": not_path
-    "--kubeconfig": {kind: reader, by: "kubectl, relayed as rc 2", pinned_by: "tests/shared/test_caller_path_manifest.py::test_drift_detect_relays_kubectls_refusal_of_its_kubeconfig"}
+    "--kubeconfig": {kind: reader, by: "kubectl, relayed as rc 2", pinned_by: "tests/shared/test_caller_path_manifest.py::test_kubectls_refusal_of_a_kubeconfig_is_relayed"}
     "--labels": not_path
     "--mode": not_path
     "--namespace": not_path
@@ -149,7 +149,7 @@ commands:
     "--policy": file
   generator-service:
     "--cache-max-bytes": not_path
-    "--config-subdir": not_path
+    "--config-subdir": {kind: pending, ticket: 3392}
     "--da-guard-binary": {kind: pending, ticket: 3415}
     "--deadline-reserve-seconds": not_path
     "--git": {kind: pending, ticket: 3415}
@@ -231,7 +231,7 @@ commands:
     "--policy-package": not_path
     "--policy-path": {kind: reader, by: "opa eval -d (a failed eval is rc 2)", pinned_by: "tests/ops/test_policy_opa_bridge.py::test_binary_that_does_not_evaluate"}
   operator-check:
-    "--kubeconfig": {kind: reader, by: "kubectl through _lib_kubectl (KubectlError)", pinned_by: "tests/ops/test_operator_check.py::test_kubeconfig_namespace_and_selector_reach_the_reader"}
+    "--kubeconfig": {kind: reader, by: "kubectl through _lib_kubectl (KubectlError)", pinned_by: "tests/shared/test_caller_path_manifest.py::test_kubectls_refusal_of_a_kubeconfig_is_relayed"}
     "--namespace": not_path
     "--prometheus": not_path
     "--rule-packs-dir": {kind: pending, ticket: 3392}
@@ -299,7 +299,7 @@ commands:
     "--rule-source": any
     "--silences-file": {kind: reader, by: "OSError -> caller error", pinned_by: "tests/ops/test_silencer_drift_check.py::test_main_missing_silences_file"}
   state-reconcile:
-    "--manifest-path": output
+    "--manifest-path": {kind: pending, ticket: 3392}
     "--state-dir": {kind: pending, ticket: 3392}
   tenant-verify:
     "--conf-d": dir

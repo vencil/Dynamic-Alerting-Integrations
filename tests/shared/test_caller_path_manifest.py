@@ -21,6 +21,22 @@ that takes a value to be declared in ``caller_path_manifest.yaml`` as one of:
 
 A declaration the parser no longer has is a fault too: the manifest may not
 outlive the flag it describes.
+
+What a judged kind is checked against: the row's own argument — a row that
+hands the flag a locked DIRECTORY ({D}) proves ``dir``, a locked FILE ({F})
+``file``; ``any`` takes either. A site (script, flag) answers for one
+declaration only.
+
+⚠️ Not mechanised, so a green run does not claim it:
+
+* Re-declaring an input as ``not_path`` / ``output`` (or a ``pending`` one as
+  either, with its PENDING line dropped) is a reviewed edit of this file and
+  the manifest, not something the gate can refuse: no structure tells a path
+  from a name, and a vocabulary net (help text mentioning "file") would read
+  as a rule while missing whatever it did not spell.
+* The walk reads the parser the tool builds with ``DA_LANG`` unset. Four
+  tools build a second, Chinese parser (alert-quality, cardinality-forecast,
+  policy-engine, opa-evaluate); a flag added to that one alone is not seen.
 """
 from __future__ import annotations
 
@@ -49,6 +65,7 @@ PENDING: frozenset[tuple[str, str]] = frozenset({
     ("blind-spot", "--config-dir"),
     ("cutover", "--readiness-json"),
     ("diagnose", "--config-dir"),
+    ("generator-service", "--config-subdir"),
     ("generator-service", "--da-guard-binary"),
     ("generator-service", "--git"),
     ("migrate-to-operator", "--config-dir"),
@@ -63,6 +80,7 @@ PENDING: frozenset[tuple[str, str]] = frozenset({
     ("shadow-verify", "--mapping"),
     ("shadow-verify", "--readiness-json"),
     ("shadow-verify", "--report-csv"),
+    ("state-reconcile", "--manifest-path"),
     ("state-reconcile", "--state-dir"),
     ("validate", "--mapping"),
 })
@@ -77,16 +95,29 @@ def _caller_paths():
     return module
 
 
-def rows_by_site() -> dict[tuple[str, str | None], str | None]:
-    """(script relative to scripts/tools, flag or None) -> the row's `--json`
-    reason (None when the row asserts the message only)."""
+def _locked_argument(argv: list[str]) -> tuple[str | None, str]:
+    """(the flag, or None for a positional; "D" or "F") of the argument a row
+    hands the locked parent — read from the row's argv, not its label."""
+    # {NX}: a directory that stats but cannot be entered — a directory too.
+    for i, token in enumerate(argv):
+        for holder, means in (("D", "D"), ("NX", "D"), ("F", "F")):
+            if "{" + holder + "}" in token:
+                before = argv[i - 1] if i else ""
+                return (before if before.startswith("-") else None), means
+    raise AssertionError(f"a row with no locked argument: {argv}")
+
+
+def rows_by_site() -> dict[tuple[str, str | None], list[tuple[str, str | None]]]:
+    """(script relative to scripts/tools, flag or None) -> one (D|F, the row's
+    `--json` reason or None) per row that runs it."""
     tables = _caller_paths()
-    rows: dict[tuple[str, str | None], str | None] = {}
-    for _id, script, _argv, flag, reason in tables.OPS_SITES:
-        rows[(f"ops/{script}", flag)] = reason
-    for _id, script, _argv, named, _rc in tables.DX_SITES:
-        first = named.split()[0]
-        rows[(script, first if first.startswith("--") else None)] = None
+    rows: dict[tuple[str, str | None], list[tuple[str, str | None]]] = {}
+    for _id, script, argv, _flag, reason in tables.OPS_SITES:
+        flag, holder = _locked_argument(argv)
+        rows.setdefault((f"ops/{script}", flag), []).append((holder, reason))
+    for _id, script, argv, _named, _rc in tables.DX_SITES:
+        flag, holder = _locked_argument(argv)
+        rows.setdefault((script, flag), []).append((holder, None))
     return rows
 
 
@@ -136,13 +167,20 @@ def _entries(manifest: dict) -> dict[tuple[str, str], dict]:
 
 
 def _test_exists(ref: str) -> bool:
-    """`tests/x.py::test_name` names a test function that is there."""
+    """`tests/…/test_x.py::test_name` names a test pytest collects: a
+    ``test_*`` function at module level or in a class, in a ``test_*.py``
+    under tests/ — read from the syntax tree, so a docstring that spells
+    ``def test_x(`` is not one."""
+    import ast
     file, _, name = ref.partition("::")
     path = REPO / file
-    if not name or not path.is_file():
+    if not (file.startswith("tests/") and path.name.startswith("test_")
+            and path.suffix == ".py" and name.startswith("test_") and path.is_file()):
         return False
-    return re.search(rf"^\s*def {re.escape(name)}\(", path.read_text(encoding="utf-8"),
-                     re.M) is not None
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    scopes = [tree.body] + [n.body for n in tree.body if isinstance(n, ast.ClassDef)]
+    return any(isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name == name
+               for body in scopes for n in body)
 
 
 def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
@@ -157,6 +195,7 @@ def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
         faults.append(f"{key[0]} {key[1]}: takes a value and is not declared")
     for key in sorted(set(entries) - set(parsed)):
         faults.append(f"{key[0]} {key[1]}: declared, but the parser has no such argument")
+    claims: dict[tuple, list[str]] = {}
     for key in sorted(set(entries) & set(parsed)):
         where, decl = f"{key[0]} {key[1]}", entries[key]
         kind = decl.get("kind")
@@ -166,10 +205,14 @@ def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
         if kind in JUDGED:
             site = (parsed[key], key[1] if key[1].startswith("-") else None)
             if site in rows:
-                reason = rows[site]
-                if reason is not None and reason.startswith(tuple(REASON_PREFIX.values())) \
-                        and not reason.startswith(REASON_PREFIX[kind]):
-                    faults.append(f"{where}: declared {kind}, its row answers {reason}")
+                claims.setdefault(site, []).append(where)
+                for holder, reason in rows[site]:
+                    if kind != "any" and holder != kind[0].upper():
+                        faults.append(f"{where}: declared {kind}, its row hands it a locked "
+                                      f"{'directory' if holder == 'D' else 'file'}")
+                    if reason is not None and reason.startswith(tuple(REASON_PREFIX.values())) \
+                            and not reason.startswith(REASON_PREFIX[kind]):
+                        faults.append(f"{where}: declared {kind}, its row answers {reason}")
             elif not (decl.get("no_row") and _test_exists(decl.get("pinned_by", ""))):
                 faults.append(f"{where}: judged as {kind} but no row runs it — add one to "
                               "test_caller_paths.py, or say why not (no_row) and name the "
@@ -183,6 +226,10 @@ def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
             if key not in pending_ceiling:
                 faults.append(f"{where}: a new pending input path — judge it, or raise "
                               "PENDING in this file with its ticket")
+    for site, claimants in sorted(claims.items()):
+        if len(claimants) > 1:
+            faults.append(f"{' / '.join(claimants)}: one row ({site[0]} {site[1]}) "
+                          "cannot answer for more than one declaration")
     pending_now = {k for k, d in entries.items() if d.get("kind") == "pending"}
     for key in sorted(pending_ceiling - pending_now):
         faults.append(f"{key[0]} {key[1]}: no longer pending — drop it from PENDING")
@@ -195,67 +242,112 @@ _MISSING = "/nonexistent/g1-missing"
 _CONF = str(REPO / "tests" / "golden" / "fixtures" / "flat" / "conf.d")
 _AM = str(REPO / "try-local" / "alertmanager.yml")
 
-#: (command, argument, script under scripts/tools, argv). {M} is a path with
-#: nothing there, {OUT} a scratch directory. Each row: rc 2, no traceback, the
-#: path named — the reader's own refusal, not a crash or an empty result.
+#: (command, argument, script under scripts/tools, argv, the reader's own
+#: words). {M} is a path with nothing there, {OUT} a scratch directory. Each
+#: row: rc 2, the reader's refusal naming the path — not a traceback, not a
+#: catch-all that turned some other exception into rc 2 (that also names the
+#: path, so the words are what tells the two apart).
+_GUARD_STAT = 'stat "' + _MISSING + '"'
 READER_SITES = [
     ("backtest", "--config-dir", "ops/backtest_threshold.py",
-     ["--config-dir", "{M}", "--baseline", _CONF, "--json"]),
+     ["--config-dir", "{M}", "--baseline", _CONF, "--json"], "da-guard served-values: " + _GUARD_STAT),
     ("backtest", "--baseline", "ops/backtest_threshold.py",
-     ["--config-dir", _CONF, "--baseline", "{M}"]),
+     ["--config-dir", _CONF, "--baseline", "{M}"], "da-guard served-values: " + _GUARD_STAT),
     ("deprecate", "--root-dir", "ops/deprecate_rule.py",
-     ["--config-dir", _CONF, "--plane", "subtree", "--root-dir", "{M}", "some_metric"]),
-    ("offboard", "--config-dir", "ops/offboard_tenant.py", ["tenant-a", "--config-dir", "{M}"]),
+     ["--config-dir", _CONF, "--plane", "subtree", "--root-dir", "{M}", "some_metric"],
+     "da-guard parse-tree: " + _GUARD_STAT),
+    ("offboard", "--config-dir", "ops/offboard_tenant.py", ["tenant-a", "--config-dir", "{M}"],
+     "da-guard parse-tree: " + _GUARD_STAT),
     ("opa-evaluate", "--config-dir", "ops/policy_opa_bridge.py",
-     ["--config-dir", "{M}", "--opa-url", "http://127.0.0.1:9"]),
+     ["--config-dir", "{M}", "--opa-url", "http://127.0.0.1:9"],
+     "da-guard served-values: " + _GUARD_STAT),
     ("explain-keys", "--da-guard-binary", "ops/explain_keys.py",
-     ["--config-dir", _CONF, "--da-guard-binary", "{M}"]),
+     ["--config-dir", _CONF, "--da-guard-binary", "{M}"],
+     f"da-guard binary not found at '{_MISSING}'"),
     ("migration-audit", "--da-guard-binary", "ops/migration_audit.py",
-     ["--config-dir", _CONF, "--da-guard-binary", "{M}"]),
+     ["--config-dir", _CONF, "--da-guard-binary", "{M}"],
+     f"da-guard binary not found at '{_MISSING}'"),
     ("onboard", "--da-crdecode-binary", "ops/onboard_platform.py",
-     ["--alertmanager-config", _AM, "--da-crdecode-binary", "{M}", "--output-dir", "{OUT}"]),
+     ["--alertmanager-config", _AM, "--da-crdecode-binary", "{M}", "--output-dir", "{OUT}"],
+     f"cannot run da-crdecode ({_MISSING})"),
     ("onboard", "--da-read-binary", "ops/onboard_platform.py",
-     ["--alertmanager-config", _AM, "--da-read-binary", "{M}", "--output-dir", "{OUT}"]),
+     ["--alertmanager-config", _AM, "--da-read-binary", "{M}", "--output-dir", "{OUT}"],
+     f"cannot run da-read ({_MISSING})"),
 ]
 _READER_TEST = ("tests/shared/test_caller_path_manifest.py::"
                 "test_a_reader_refuses_a_missing_input_by_name")
+#: What a catch-all says when it turned an unexpected exception into rc 2.
+_CRASH_WORDS = ("Traceback", "could not finish", "unexpected internal error")
 
 
 @pytest.mark.usefixtures("da_guard_env", "da_read_env")
-@pytest.mark.parametrize("command, argument, script, argv", READER_SITES,
-                         ids=[f"{c} {a}" for c, a, _s, _v in READER_SITES])
-def test_a_reader_refuses_a_missing_input_by_name(tmp_path, command, argument, script, argv):
+@pytest.mark.parametrize("command, argument, script, argv, words", READER_SITES,
+                         ids=[f"{c} {a}" for c, a, _s, _v, _w in READER_SITES])
+def test_a_reader_refuses_a_missing_input_by_name(tmp_path, command, argument, script, argv,
+                                                   words):
     import subprocess
     args = [a.replace("{M}", _MISSING).replace("{OUT}", str(tmp_path / "out")) for a in argv]
     proc = subprocess.run([sys.executable, str(TOOLS / script), *args], capture_output=True,
                           text=True, encoding="utf-8", timeout=300, stdin=subprocess.DEVNULL)
     out = proc.stdout + proc.stderr
     assert proc.returncode == 2, out[-3000:]
-    assert "Traceback" not in out, out[-3000:]
-    assert _MISSING in out, out[-3000:]
+    assert not [w for w in _CRASH_WORDS if w in out], out[-3000:]
+    assert words in out, out[-3000:]
 
 
-def test_drift_detect_relays_kubectls_refusal_of_its_kubeconfig(tmp_path):
-    """--kubeconfig is judged by kubectl; what drift-detect owes is to relay
-    that refusal as a caller error, not to read it as an empty cluster. A
-    stand-in kubectl answers the way kubectl does for a kubeconfig that is
-    not there (this environment has no kubectl to ask)."""
+_KUBECTL = ("#!/bin/sh\n"
+            "# Stands in for kubectl refusing a kubeconfig that is not there.\n"
+            "while [ $# -gt 0 ]; do\n"
+            "  case \"$1\" in\n"
+            "    --kubeconfig) echo \"error: stat $2: no such file or directory\" >&2; exit 1;;\n"
+            "    --kubeconfig=*) echo \"error: stat ${1#--kubeconfig=}: no such file or directory\" >&2;"
+            " exit 1;;\n"
+            "  esac\n  shift\ndone\nexit 0\n")
+_KUBECTL_TEST = ("tests/shared/test_caller_path_manifest.py::"
+                 "test_kubectls_refusal_of_a_kubeconfig_is_relayed")
+KUBECONFIG_SITES = [
+    ("drift-detect", "ops/drift_detect.py", ["--mode", "operator", "--dirs", _CONF]),
+    ("operator-check", "ops/operator_check.py",
+     ["--rule-packs-dir", str(REPO / "rule-packs")]),
+]
+
+
+@pytest.mark.parametrize("command, script, argv", KUBECONFIG_SITES,
+                         ids=[c for c, _s, _v in KUBECONFIG_SITES])
+def test_kubectls_refusal_of_a_kubeconfig_is_relayed(tmp_path, command, script, argv):
+    """--kubeconfig is judged by kubectl; what the tool owes is to relay that
+    refusal as a caller error, not to read it as an empty cluster. A stand-in
+    kubectl answers the way kubectl does for a kubeconfig that is not there
+    (CI has no kubectl to ask)."""
     import os
     import subprocess
     fake = tmp_path / "bin" / "kubectl"
     fake.parent.mkdir()
-    fake.write_text("#!/bin/sh\nwhile [ $# -gt 0 ]; do\n"
-                    "  if [ \"$1\" = --kubeconfig ]; then\n"
-                    "    echo \"error: stat $2: no such file or directory\" >&2; exit 1\n"
-                    "  fi\n  shift\ndone\nexit 0\n", encoding="utf-8")
+    fake.write_text(_KUBECTL, encoding="utf-8")
     fake.chmod(0o755)
-    proc = subprocess.run([sys.executable, str(TOOLS / "ops" / "drift_detect.py"),
-                           "--mode", "operator", "--dirs", _CONF, "--kubeconfig", _MISSING],
+    proc = subprocess.run([sys.executable, str(TOOLS / script), *argv, "--kubeconfig", _MISSING],
                           capture_output=True, text=True, encoding="utf-8", timeout=120,
-                          env={**os.environ, "PATH": f"{fake.parent}{os.pathsep}{os.environ['PATH']}"})
+                          env={**os.environ,
+                               "PATH": f"{fake.parent}{os.pathsep}{os.environ['PATH']}"})
     out = proc.stdout + proc.stderr
     assert proc.returncode == 2, out[-3000:]
-    assert "Traceback" not in out and f"stat {_MISSING}" in out, out[-3000:]
+    assert not [w for w in _CRASH_WORDS if w in out], out[-3000:]
+    assert f"stat {_MISSING}: no such file or directory" in out, out[-3000:]
+
+
+def test_the_go_dispatchers_dispatch_to_go():
+    """`dispatched_to_go` takes a command out of the walk; only a script that
+    is a Go dispatcher (`_lib_godispatch`) may be there."""
+    sys.path[:0] = [str(TOOLS / "lint"), str(TOOLS)]
+    try:
+        import check_cli_contract as cli
+    finally:
+        del sys.path[:2]
+    command_map = cli.parse_command_map()
+    for command in load_manifest()["dispatched_to_go"]:
+        script = cli._resolve(command_map[command])
+        assert script.name.endswith("_dispatch.py") and "_lib_godispatch" in \
+            script.read_text(encoding="utf-8"), f"{command}: {script} is not a Go dispatcher"
 
 
 # ── the gate ─────────────────────────────────────────────────────────────
@@ -274,15 +366,17 @@ def test_every_da_tools_argument_is_declared(parsed):
 
 def test_a_reader_pinned_here_has_its_row():
     """A `pinned_by` naming the reader table is only true for a row it has."""
-    rows = {(c, a) for c, a, _s, _v in READER_SITES}
-    claimed = {k for k, d in _entries(load_manifest()).items()
-               if d.get("kind") == "reader" and d.get("pinned_by") == _READER_TEST}
-    assert claimed == rows, {"claimed, no row": claimed - rows, "row, not claimed": rows - claimed}
+    for test, rows in ((_READER_TEST, {(c, a) for c, a, _s, _v, _w in READER_SITES}),
+                       (_KUBECTL_TEST, {(c, "--kubeconfig") for c, _s, _v in KUBECONFIG_SITES})):
+        claimed = {k for k, d in _entries(load_manifest()).items()
+                   if d.get("kind") == "reader" and d.get("pinned_by") == test}
+        assert claimed == rows, (test, {"claimed, no row": claimed - rows,
+                                        "row, not claimed": rows - claimed})
 
 
 # ── each rule bites (synthetic inputs, no parser walk) ───────────────────
 
-_ROWS = {("ops/t.py", "--d"): "dir_not_accessible"}
+_ROWS = {("ops/t.py", "--d"): [("D", "dir_not_accessible")]}
 _PARSED = {("t", "--d"): "ops/t.py", ("t", "--n"): "ops/t.py"}
 
 
@@ -320,7 +414,43 @@ def test_no_row_needs_a_test_that_exists():
 
 def test_a_kind_its_row_contradicts_is_a_fault():
     assert _faults({"t": {"--d": "file", "--n": "not_path"}}) == [
+        "t --d: declared file, its row hands it a locked directory",
         "t --d: declared file, its row answers dir_not_accessible"]
+
+
+def test_a_kind_is_read_off_the_row_even_without_a_reason():
+    rows = {("ops/t.py", "--d"): [("D", None)]}
+    assert _faults({"t": {"--d": "dir", "--n": "not_path"}}, rows=rows) == []
+    assert _faults({"t": {"--d": "any", "--n": "not_path"}}, rows=rows) == []
+    assert _faults({"t": {"--d": "file", "--n": "not_path"}}, rows=rows) == [
+        "t --d: declared file, its row hands it a locked directory"]
+
+
+def test_one_row_answers_for_one_declaration():
+    parsed = {("t", "--d"): "ops/t.py", ("u", "--d"): "ops/t.py"}
+    faults = _faults({"t": {"--d": "dir"}, "u": {"--d": "dir"}}, parsed=parsed)
+    assert faults == ["t --d / u --d: one row (ops/t.py --d) cannot answer for more than "
+                      "one declaration"]
+
+
+def test_a_pinning_test_is_a_collected_test_function(tmp_path):
+    here = "tests/shared/test_caller_path_manifest.py"
+    assert _test_exists(f"{here}::test_a_pinning_test_is_a_collected_test_function")
+    # a method of a test class counts
+    assert _test_exists("tests/ops/test_migrate_rule_outputs.py::"
+                        "test_missing_input_file_exits_caller_error")
+    # product code, a conftest docstring, a non-test name: not tests
+    assert not _test_exists("scripts/tools/ops/lint_custom_rules.py::load_policy")
+    assert not _test_exists("tests/conftest.py::test_x")
+    assert not _test_exists(f"{here}::_faults")
+    # spelled only inside a string here
+    assert not _test_exists(f"{here}::test_spelled_only_in_a_string")
+
+
+_SPELLED = """
+def test_spelled_only_in_a_string():
+    pass
+"""
 
 
 def test_an_unknown_kind_is_a_fault():
