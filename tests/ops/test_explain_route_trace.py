@@ -16,6 +16,13 @@ sys.path.insert(0, _TOOLS_DIR)
 sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 
 import explain_route as er  # noqa: E402
+import _lib_exitcodes  # noqa: E402
+
+
+def _main(argv):
+    """explain-route's main, its --json Report written the way run() writes
+    it (#3216: the tool hands the document back, the lib prints it)."""
+    return _lib_exitcodes.emit_result(er.main(argv))
 
 # #2293: --trace asks Alertmanager (`amtool config routes test --tree`) where
 # an alert goes. Tests about THAT verdict need a real amtool: they skip without
@@ -219,7 +226,7 @@ def label_conf(tmp_path):
 
 
 def _run_trace(capsys, conf, *extra):
-    rc = er.main(["--config-dir", str(conf), "--tenant", _DEMO, "--trace",
+    rc = _main(["--config-dir", str(conf), "--tenant", _DEMO, "--trace",
                   "--json", *extra])
     out = capsys.readouterr().out
     assert rc == 0
@@ -279,7 +286,7 @@ class TestTraceLabelCli:
     ])
     def test_invalid_label_is_caller_error(self, capsys, label_conf, args, needle):
         with pytest.raises(SystemExit) as exc:
-            er.main(["--config-dir", str(label_conf), "--tenant", _DEMO,
+            _main(["--config-dir", str(label_conf), "--tenant", _DEMO,
                      "--trace", *args])
         assert exc.value.code == 2
         captured = capsys.readouterr()
@@ -288,7 +295,7 @@ class TestTraceLabelCli:
 
     def test_label_without_trace_is_caller_error(self, capsys, label_conf):
         with pytest.raises(SystemExit) as exc:
-            er.main(["--config-dir", str(label_conf), "--label", "team=x"])
+            _main(["--config-dir", str(label_conf), "--label", "team=x"])
         assert exc.value.code == 2
         assert "only with --trace" in capsys.readouterr().err
 
@@ -301,7 +308,7 @@ class TestTraceLabelCli:
             self, capsys, label_conf, flag, value):
         """#2926: these have defaults, so they used to be dropped silently."""
         with pytest.raises(SystemExit) as exc:
-            er.main(["--config-dir", str(label_conf), flag, value])
+            _main(["--config-dir", str(label_conf), flag, value])
         assert exc.value.code == 2
         captured = capsys.readouterr()
         assert f"{flag} is read only with --trace" in captured.err
@@ -323,7 +330,7 @@ class TestTraceLabelCli:
 
     def test_control_chars_in_bad_label_are_escaped(self, capsys, label_conf):
         with pytest.raises(SystemExit):
-            er.main(["--config-dir", str(label_conf), "--tenant", _DEMO,
+            _main(["--config-dir", str(label_conf), "--tenant", _DEMO,
                      "--trace", "--label", "evil\n[PASS] ok"])
         assert "\n[PASS] ok" not in capsys.readouterr().err
 
@@ -365,7 +372,7 @@ def _tree(tmp_path, routing=None, enforced=None, policy=None):
 
 
 def _trace(capsys, conf, *args, severity="warning", alertname="X"):
-    rc = er.main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
+    rc = _main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
                   "--alertname", alertname, "--severity", severity, "--json",
                   *args])
     captured = capsys.readouterr()
@@ -376,7 +383,7 @@ def _trace(capsys, conf, *args, severity="warning", alertname="X"):
 
 def _trace_err(capsys, conf, *args):
     """``_trace`` that also returns what went to stderr."""
-    rc = er.main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
+    rc = _main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
                   "--json", *args])
     captured = capsys.readouterr()
     assert rc == 0, captured.err
@@ -450,10 +457,10 @@ class TestBaseConfigFlag:
     def test_base_config_is_trace_only_and_checked(self, capsys, tmp_path):
         conf = _tree(tmp_path)
         with pytest.raises(SystemExit) as exc:
-            er.main(["--config-dir", str(conf), "--base-config", "x.yml"])
+            _main(["--config-dir", str(conf), "--base-config", "x.yml"])
         assert exc.value.code == 2
         capsys.readouterr()
-        rc = er.main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
+        rc = _main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
                       "--base-config", str(tmp_path / "missing.yml")])
         assert rc == 2
         assert f"--base-config {tmp_path / 'missing.yml'}: " in capsys.readouterr().err
@@ -472,7 +479,7 @@ class TestBaseConfigFlag:
         base.write_text(yaml.safe_dump({"route": {"receiver": "ops"},
                                         "receivers": receivers}),
                         encoding="utf-8")
-        rc = er.main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
+        rc = _main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
                       "--trace", "--json", "--base-config", str(base)])
         err = capsys.readouterr().err
         assert rc == 2
@@ -495,7 +502,7 @@ class TestBaseConfigFlag:
             raise KeyError("injected")
         monkeypatch.setattr(er, "_conf_receiver_types", _boom)
         with pytest.raises(KeyError, match="injected"):
-            er.main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
+            _main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
                      "--trace", "--json"])
 
 
@@ -542,7 +549,7 @@ class TestInhibitRulesStep:
         assert not {"inhibited", "inhibit_reason"} & (set(trace) | set(step4))
         for lang, note in (("en", "does not evaluate"), ("zh", "不評估")):
             monkeypatch.setenv("DA_LANG", lang)
-            assert er.main(["--config-dir", str(conf), "--tenant", _TT,
+            assert _main(["--config-dir", str(conf), "--tenant", _TT,
                             "--trace", *args]) == 0
             out = capsys.readouterr().out
             assert note in out and "TenantSilentWarning" in out
@@ -572,7 +579,7 @@ class TestInhibitRulesStep:
         conf = _tree(tmp_path)
         args = ["--config-dir", str(conf), "--tenant", _TT, "--trace",
                 "--base-config", str(base)]
-        assert er.main([*args, "--json"]) == 0
+        assert _main([*args, "--json"]) == 0
 
         def _reject(const):
             raise ValueError(f"non-standard JSON constant {const}")
@@ -581,7 +588,7 @@ class TestInhibitRulesStep:
         key, want = value
         assert {key: want}.items() <= next(
             r["source_match"] for r in rules if "source_match" in r).items()
-        assert er.main(args) == 0
+        assert _main(args) == 0
         assert "source_match:" in capsys.readouterr().out
 
     def test_a_label_name_alertmanager_refuses_is_a_refused_base(self, capsys, tmp_path):
@@ -593,7 +600,7 @@ class TestInhibitRulesStep:
             "inhibit_rules:\n- equal: [tenant]\n"
             "  source_match:\n    severity: critical\n    2020-01-01: a\n",
             encoding="utf-8")
-        rc = er.main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
+        rc = _main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
                       "--trace", "--base-config", str(base)])
         assert rc == 2
         assert 'invalid label name "2020-01-01"' in capsys.readouterr().err
@@ -670,7 +677,7 @@ class TestTraceThroughAmtool:
         trace = _trace(capsys, conf)
         assert trace["steps"][1]["receiver_type"] == "slack"
         assert trace["final_receiver"].startswith(f"slack → tenant-{_TT} ")
-        er.main(["--config-dir", str(conf), "--tenant", _TT, "--trace"])
+        _main(["--config-dir", str(conf), "--tenant", _TT, "--trace"])
         assert f"Receiver: slack → tenant-{_TT}" in capsys.readouterr().out
 
     def test_policy_checks_the_real_type(self, capsys, tmp_path):
@@ -889,7 +896,7 @@ def failing_amtool(tmp_path, monkeypatch):
 
 
 def test_amtool_failure_is_unknown_not_a_crash(capsys, tmp_path, failing_amtool):
-    rc = er.main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
+    rc = _main(["--config-dir", str(_tree(tmp_path)), "--tenant", _TT,
                   "--trace", "--json"])
     captured = capsys.readouterr()
     assert rc == 0
@@ -907,7 +914,7 @@ class TestWithoutAmtool:
 
     def test_json_says_unknown_and_keeps_the_key_set(self, capsys, tmp_path):
         conf = _tree(tmp_path)
-        rc = er.main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
+        rc = _main(["--config-dir", str(conf), "--tenant", _TT, "--trace",
                       "--json"])
         captured = capsys.readouterr()
         assert rc == 0
@@ -925,7 +932,7 @@ class TestWithoutAmtool:
 
     def test_text_prints_the_rendered_tree(self, capsys, tmp_path):
         conf = _tree(tmp_path)
-        assert er.main(["--config-dir", str(conf), "--tenant", _TT,
+        assert _main(["--config-dir", str(conf), "--tenant", _TT,
                         "--trace"]) == 0
         out = capsys.readouterr().out
         assert "Rendered route tree (not evaluated by Alertmanager):" in out
@@ -967,7 +974,7 @@ def _assert_trace_refused(conf, *extra):
     could not read whole as unknown, rc 0."""
     from _go_refusal import go_refused, refuses
     with refuses(*go_refused(conf)):
-        er.main(["--config-dir", str(conf), "--tenant", _TT, "--trace", *extra])
+        _main(["--config-dir", str(conf), "--tenant", _TT, "--trace", *extra])
 
 
 @pytest.mark.parametrize("kind", ["duplicate-tenant", "unreadable-file"])
@@ -1016,7 +1023,7 @@ class TestGeneratorRefusedTree:
         if kind == "unreadable-file":
             _assert_trace_refused(conf)
             return
-        assert er.main(["--config-dir", str(conf), "--tenant", _TT,
+        assert _main(["--config-dir", str(conf), "--tenant", _TT,
                         "--trace"]) == 0
         captured = capsys.readouterr()
         assert f"Receiver: {_REFUSED}" in captured.out
@@ -1066,7 +1073,7 @@ class TestSubdirectoryTenantTrace:
         am_yml = tmp_path / "alertmanager.yml"
         am_yml.write_text(yaml.safe_load(cm.read_text(encoding="utf-8"))
                           ["data"]["alertmanager.yml"], encoding="utf-8")
-        rc = er.main(["--config-dir", str(conf), "--tenant", tenant,
+        rc = _main(["--config-dir", str(conf), "--tenant", tenant,
                       "--trace", "--json"])
         captured = capsys.readouterr()
         assert rc == 0, captured.err
@@ -1105,7 +1112,7 @@ class TestRoutingTreeRefusedTrace:
         refusal = [ln for ln in gen.stderr.splitlines()
                    if ln.startswith("ERROR:") or ln.startswith("  ")]
         assert refusal and "routing-tree error(s)" in refusal[0]
-        rc = er.main(["--config-dir", str(conf), "--tenant", "nestedb",
+        rc = _main(["--config-dir", str(conf), "--tenant", "nestedb",
                       "--trace", "--json"])
         captured = capsys.readouterr()
         assert rc == 0, captured.err
@@ -1120,7 +1127,7 @@ class TestRoutingTreeRefusedTrace:
 
     def test_non_trace_still_warns(self, capsys, tmp_path):
         conf = _nested_tree(tmp_path, self._ENFORCED_BELOW)
-        assert er.main(["--config-dir", str(conf), "--tenant", "nestedb",
+        assert _main(["--config-dir", str(conf), "--tenant", "nestedb",
                         "--json"]) == 0
         err = capsys.readouterr().err
         assert "generate-routes refuses this tree" in err
@@ -1295,7 +1302,7 @@ class TestSubtreePolicyTrace:
 
     @staticmethod
     def _step5(capsys, conf, tenant):
-        rc = er.main(["--config-dir", str(conf), "--tenant", tenant,
+        rc = _main(["--config-dir", str(conf), "--tenant", tenant,
                       "--trace"])
         out = capsys.readouterr().out
         assert rc == 0
@@ -1325,7 +1332,7 @@ class TestSubtreePolicyTrace:
         assert rc == 1
         trace_violations = set()
         for tenant in (_T_TEAM, _T_ROOT_POLICED, _T_ROOT_FREE):
-            assert er.main(["--config-dir", str(conf), "--tenant", tenant,
+            assert _main(["--config-dir", str(conf), "--tenant", tenant,
                             "--trace", "--json"]) == 0
             [trace] = json.loads(capsys.readouterr().out)
             step5 = trace["steps"][4]

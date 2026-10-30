@@ -18,10 +18,15 @@ from explain_route import (  # noqa: E402
     explain_profile_expansion,
     format_explanation,
     format_profile_expansion,
-    main,
 )
 from generate_alertmanager_routes import _parse_config_files  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, emit_result  # noqa: E402
+from explain_route import main as _er_main  # noqa: E402
+
+
+def main(argv):
+    """explain-route's main, a --json Report written as run() writes it (#3216)."""
+    return emit_result(_er_main(argv))
 
 
 # ===========================================================================

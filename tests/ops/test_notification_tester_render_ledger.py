@@ -393,13 +393,6 @@ def _slot_ref(label: str, tenant: str) -> str:
             "overrides": "'overrides'", "routes": "'routes'"}[kind]
 
 
-# explain-route --json crashes on these trees on main already (a YAML date
-# value in `final` is not JSON serializable) — tracked in #3144. Recognised by
-# the crash line, not by rc 2: under the test suite a crash ends at
-# DA_TEST_CRASH_EXIT_CODE (#3092).
-_EXPLAIN_JSON_CRASHES = {"routing-values-yaml11"}
-
-
 def test_explain_tester_and_generator_agree_across_parity_matrix(tmp_path):
     """explain-route 的生效子路由 == tester 測的子項目 == 產生器產出的子 receiver；
     tester 沒測的子項目，explain-route 都列在略過清單。"""
@@ -425,12 +418,6 @@ def test_explain_tester_and_generator_agree_across_parity_matrix(tmp_path):
         except nt.RoutingTreeRefused:
             continue
         proc = _run_explain(root, "--json")
-        if tree["name"] in _EXPLAIN_JSON_CRASHES:
-            assert proc.returncode not in (0, 1) and \
-                "unexpected internal error (TypeError)" in proc.stderr and \
-                "not JSON serializable" in proc.stderr, \
-                "fixed? drop it from _EXPLAIN_JSON_CRASHES"
-            continue
         assert proc.returncode == 0, (tree["name"], proc.stderr)
         explained = {t["tenant"]: t for t in json.loads(proc.stdout)}
         _r, receivers, _w = gar._build_tenant_routes(

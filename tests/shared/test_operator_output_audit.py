@@ -36,6 +36,20 @@ ROWS = {
                                          "--output", str(d / "out"), "--manifest", str(p)],
 }
 
+# Operator outputs whose file name the tool DERIVES (from a directory flag),
+# so no sentinel path can be handed in: the row returns its argv and the path
+# it must write. Same verdict as ROWS.
+DERIVED_ROWS = {
+    # Prometheus unreachable: the samples fail, both CSVs are still written.
+    "baseline -o/--output-dir": lambda d: (
+        ["scripts/tools/ops/baseline_discovery.py", "--tenant", "t1", "--prometheus", "http://127.0.0.1:1",
+         "--duration", "1", "--interval", "1", "--metrics", "cpu", "-o", str(d / "out")],
+        d / "out" / "baseline-t1-summary.csv"),
+    "config-history snapshot": lambda d: (
+        ["scripts/tools/ops/config_history.py", "--config-dir", str(_conf_dir(d)), "snapshot"],
+        d / ".da-history" / "snap-1" / "a.yaml"),
+}
+
 # Artifacts (#3107 risk 1, owner 2026-10-24: cmasm is one): replaced
 # atomically by `_lib_atomic_write` — a tmp beside the target, renamed onto
 # it — and by nothing else.
@@ -45,6 +59,13 @@ ARTIFACT_ROWS = {
     "state-reconcile --manifest-path": lambda p, d: ["scripts/tools/ops/state_reconcile.py",
                                                      "--state-dir", str(_state_dir(d)), "--manifest-path", str(p)],
 }
+
+
+def _conf_dir(d: Path) -> Path:
+    c = d / "conf"
+    c.mkdir(exist_ok=True)
+    (c / "a.yaml").write_text("a: 1\n", encoding="utf-8")
+    return c
 
 
 def _state_dir(d: Path) -> Path:
@@ -86,10 +107,14 @@ def _touching(events: list[dict], target: Path) -> list[dict]:
                 and os.path.basename(e["path"]).startswith(target.name))]
 
 
-@pytest.mark.parametrize("row", sorted(ROWS))
+@pytest.mark.parametrize("row", sorted([*ROWS, *DERIVED_ROWS]))
 def test_operator_output_written_only_by_the_operator_writer(row: str, tmp_path: Path) -> None:
-    target = tmp_path / "target.out"
-    mine = _touching(_run_audited(ROWS[row](target, tmp_path), tmp_path), target)
+    if row in DERIVED_ROWS:
+        argv, target = DERIVED_ROWS[row](tmp_path)
+    else:
+        target = tmp_path / "target.out"
+        argv = ROWS[row](target, tmp_path)
+    mine = _touching(_run_audited(argv, tmp_path), target)
     assert any(e["ev"] == "open" for e in mine), f"{row}: no write reached {target} — row is dead"
     bad = [e for e in mine if e["ev"] != "open" or OPERATOR_WRITER not in e["stack"]]
     assert not bad, f"{row}: writes to the operator path outside _lib_io: {bad}"
@@ -132,5 +157,6 @@ def test_every_writer_caller_has_a_row(tmp_path: Path) -> None:
     callers = _writer_callers()
     assert callers, "no caller of the writer entry points found — the scan measured nothing"
     rowed = {row(tmp_path / "t", tmp_path)[0] for row in (*ROWS.values(), *ARTIFACT_ROWS.values())}
+    rowed |= {row(tmp_path)[0][0] for row in DERIVED_ROWS.values()}
     missing = sorted(callers - rowed)
     assert not missing, f"CLIs calling a writer entry point with no audit row: {missing}"
