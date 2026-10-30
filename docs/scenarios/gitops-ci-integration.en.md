@@ -68,7 +68,7 @@ docker run --rm -it \
 
 The CLI guides you through: CI/CD platform, deployment method, Rule Pack selection, tenant names.
 
-**The generated configuration pins the da-tools version**: `DA_TOOLS_IMAGE` in the GitHub workflow `env`, the GitLab `variables` and `.pre-commit-config.da.yaml` defaults to the version tag of **the da-tools release that ran `init`** (`ghcr.io/vencil/da-tools:v<version>`), not `:latest` — so the same commit is always judged by the same generator in your CI, and that version can be aligned with the da-tools version the tenant-api chart pins ([ADR-036](../adr/036-single-parser-effective-config.en.md) §6). To upgrade only the image, edit that one `DA_TOOLS_IMAGE` line in the generated files (recommended); re-running `init` on an initialized project is refused unless you pass `--force`, and `--force` overwrites files you edited (pass `--da-tools-image` at generation time to name a different image). ⚠️ The v2.9.0 image's `init` still writes `:latest`; the version pin starts with the next image. <!-- image-caveat: v2.9.0 -->
+**The generated configuration pins the da-tools version**: `DA_TOOLS_IMAGE` in the GitHub workflow `env`, the GitLab `variables` and `.pre-commit-config.da.yaml` defaults to the version tag of **the da-tools release that ran `init`** (`ghcr.io/vencil/da-tools:v<version>`), not `:latest` — so the same commit is always judged by the same generator in your CI, and that version can be aligned with the da-tools version the tenant-api chart pins ([ADR-036](../adr/036-single-parser-effective-config.en.md) §6). To upgrade only the image, edit that one `DA_TOOLS_IMAGE` line in the generated files (recommended); re-running `init` on an initialized project is refused unless you pass `--force`, and `--force` overwrites files you edited (it names them in the summary; preview which ones with `--dry-run`, which needs no `--force`; pass `--da-tools-image` at generation time to name a different image). ⚠️ The v2.9.0 image's `init` still writes `:latest`; the version pin starts with the next image. <!-- image-caveat: v2.9.0 -->
 
 **Non-interactive mode (CI-friendly):**
 
@@ -101,7 +101,7 @@ your-repo/
 │       ├── dev/
 │       └── prod/
 ├── .pre-commit-config.da.yaml   # Pre-commit hooks snippet
-└── .da-init.yaml                # Init marker (a repeat init refuses unless --force)
+└── .da-init.yaml                # Init marker + file ledger (files init wrote and their sha256; a repeat init refuses unless --force)
 ```
 
 ⚠️ **On a repo that already has a `conf.d/`**: the tree above is a fresh repo. A tenant that may already be declared by one of your files (judged by content, deliberately generously — `db-c.yml`, `DB-C.YAML`, a multi-tenant file and subdirectories all count), and root defaults in another spelling (e.g. `_defaults.yml`), get no `<tenant>.yaml` / `_defaults.yaml` from init: it skips and names them. init does not check whether the exporter can read those files — confirm with `da-tools guard defaults-impact` on your conf.d (usage at the link below). It refuses (rc 1, nothing written) when its own file already sits beside one that concretely names the same tenant. See the [CLI reference for `init`](../cli-reference.en.md#init).

@@ -77,12 +77,23 @@ def _generated_tenant(conf: Path, name: str) -> list:
 
 
 def _brownfield(tmp_path: Path) -> Path:
-    """一棵既有 repo：跑過一次 init 再刪掉 marker（＝從沒跑過 init 的 repo）。"""
+    """一棵既有 repo：跑過一次 init 再刪掉 marker（＝從沒跑過 init 的 repo）。
+
+    ⚠️ issue 1465 起，沒有 marker 就表示 init 不擁有這些檔，不帶 `--force`
+    重跑會在寫入前拒絕（rc 1）。本檔要量的是 #1942 的跳過／拒絕，所以成功路徑
+    的重跑走 `_rerun`（帶 `--force`）；拒絕路徑照舊用 `_run`——#1942 的衝突
+    排在所有權檢查之前，`--force` 也解不開。
+    """
     out = tmp_path / "repo"
     first = _run(out, BASE_TENANTS)
     assert first.returncode == 0, first.stderr[-800:]
     (out / ".da-init.yaml").unlink()
     return out
+
+
+def _rerun(out: Path, tenants: str, *extra: str, **kw):
+    """在 `_brownfield` 樹上重跑：init 的檔已不屬於它，覆寫要 `--force`。"""
+    return _run(out, tenants, "--force", *extra, **kw)
 
 
 def _place(out: Path, rel: str, body) -> Path:
@@ -142,7 +153,7 @@ def test_a_tenant_the_customers_file_may_declare_is_skipped(
     theirs = _place(out, rel, body)
     before = theirs.read_bytes()
 
-    run = _run(out, f"{BASE_TENANTS},{tenant}")
+    run = _rerun(out, f"{BASE_TENANTS},{tenant}")
 
     assert run.returncode == 0, run.stderr[-800:]
     # init 沒有為它另造載體：conf.d 只有 init 自己的三個檔＋客戶那一個
@@ -201,7 +212,7 @@ def test_a_customer_defaults_carrier_in_another_spelling_is_kept(tmp_path):
     (conf / "_defaults.yaml").rename(conf / "_defaults.yml")
     before = (conf / "_defaults.yml").read_bytes()
 
-    run = _run(out, RERUN_TENANTS)
+    run = _rerun(out, RERUN_TENANTS)
 
     assert run.returncode == 0, run.stderr[-800:]
     assert _confd_files(conf) == {"_defaults.yml", "db-a.yaml", "db-b.yaml",
@@ -304,7 +315,7 @@ def test_the_tenants_an_own_path_declares_are_yaml_v3_s_reading(tmp_path):
     重寫，另宣告 db-z 就是 'drops' 拒絕。"""
     out = tmp_path / "repo"
     own = _place(out, "db-a.yaml", "tenants:\n  db-a: {}\nnote:\t1\n")
-    run = _run(out, "db-a")
+    run = _run(out, "db-a", "--force")   # 沒有 marker：覆寫要 --force（issue 1465）
     assert run.returncode == 0, run.stderr[-800:]
     assert "note" not in own.read_text(encoding="utf-8")
     out2 = tmp_path / "repo2"
@@ -316,11 +327,16 @@ def test_the_tenants_an_own_path_declares_are_yaml_v3_s_reading(tmp_path):
     assert "also declares db-z, which this run was not asked for" in run.stderr
 
 
-def test_an_own_path_declaring_only_its_tenant_is_still_rewritten(tmp_path):
-    """對照組：只宣告 db-a 的 db-a.yaml 照常重寫。"""
+def test_an_own_path_declaring_only_its_tenant_is_rewritten_only_with_force(
+        tmp_path):
+    """對照組：只宣告 db-a 的 db-a.yaml 不構成 #1942 衝突——帶 `--force` 照常重寫。
+
+    issue 1465 之前這支不帶 `--force` 就斷言重寫成功，等於把「沒有 marker 時
+    手寫檔被靜默蓋掉」釘成契約；那一半改由 `test_init_project.py` 的
+    `TestOwnershipLedger` 斷言拒絕。"""
     out = tmp_path / "repo"
     own = _place(out, "db-a.yaml", "tenants:\n  db-a: {}\n# HAND-EDIT\n")
-    run = _run(out, "db-a")
+    run = _run(out, "db-a", "--force")
     assert run.returncode == 0, run.stderr[-800:]
     assert "HAND-EDIT" not in own.read_text(encoding="utf-8")
     assert "init refused" not in run.stderr
@@ -407,7 +423,7 @@ def test_the_deploy_artifacts_name_the_customers_carrier(tmp_path):
     """kustomize 的 `files:` 列客戶的載體、不列沒寫的；marker 記下誰是客戶的。"""
     out = _brownfield(tmp_path)
     _place(out, "db-c.yml", _ONE)
-    run = _run(out, RERUN_TENANTS, "--deploy", "kustomize")
+    run = _rerun(out, RERUN_TENANTS, "--deploy", "kustomize")
     assert run.returncode == 0, run.stderr[-800:]
     kust = yaml.safe_load((out / "kustomize" / "base" / "kustomization.yaml")
                           .read_text(encoding="utf-8"))
@@ -426,7 +442,7 @@ def test_a_skipped_tenant_below_the_root_is_named_for_kustomize(tmp_path,
     """F3：`configMapGenerator.files` 是扁平的，子目錄載體進不了 ConfigMap。"""
     out = _brownfield(tmp_path)
     _place(out, "prod/db-c.yaml", _ONE)
-    run = _run(out, RERUN_TENANTS, "--deploy", deploy)
+    run = _rerun(out, RERUN_TENANTS, "--deploy", deploy)
     assert run.returncode == 0, run.stderr[-800:]
     says = ("db-c's carrier conf.d/prod/db-c.yaml is below the conf.d root, "
             "so it is not in the kustomize ConfigMap")
@@ -443,7 +459,7 @@ def test_a_skipped_tenant_below_the_root_is_named_for_kustomize(tmp_path,
 def test_helm_values_do_not_skeleton_a_skipped_tenant(tmp_path):
     out = _brownfield(tmp_path)
     _place(out, "db-c.yml", _ONE)
-    run = _run(out, RERUN_TENANTS, "--deploy", "helm")
+    run = _rerun(out, RERUN_TENANTS, "--deploy", "helm")
     assert run.returncode == 0, run.stderr[-800:]
     text = (out / "environments" / "prod" / "values.yaml").read_text(
         encoding="utf-8")
@@ -462,7 +478,7 @@ def test_helm_values_do_not_skeleton_a_skipped_tenant(tmp_path):
 def test_the_notices_follow_the_cli_language(tmp_path):
     out = _brownfield(tmp_path)
     _place(out, "db-c.yml", _ONE)
-    run = _run(out, RERUN_TENANTS, lang="zh_TW.UTF-8")
+    run = _rerun(out, RERUN_TENANTS, lang="zh_TW.UTF-8")
     assert run.returncode == 0, run.stderr[-800:]
     assert "db-c 可能已由 conf.d/db-c.yml 宣告，未產生 conf.d/db-c.yaml" in run.stderr
 
@@ -512,7 +528,7 @@ def test_the_printed_guard_command_runs_and_lists_the_file(
         tmp_path, da_guard, case, rel, body, tenant):
     out = _brownfield(tmp_path)
     _place(out, rel, body)
-    run = _run(out, f"{BASE_TENANTS},{tenant}")
+    run = _rerun(out, f"{BASE_TENANTS},{tenant}")
     assert run.returncode == 0, run.stderr[-800:]
     hint = _GUARD_HINT.search(run.stderr)
     assert hint, run.stderr

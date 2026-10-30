@@ -1323,8 +1323,8 @@ da-tools init [--ci <github|gitlab|both>] [--tenants <list>] [--rule-packs <list
 | `--rule-packs` | 逗號分隔的 Rule Pack | `mariadb,kubernetes`（互動模式） |
 | `--deploy` | 部署方式 | `kustomize` |
 | `--non-interactive` | 跳過互動提示（需搭配 `--tenants`） | — |
-| `--dry-run` | 顯示會產生的檔案但不寫入 | — |
-| `--force` | 在已初始化的目錄重跑：**重寫所有產生的檔案**，含 `conf.d/_defaults.yaml` 與每一份 `conf.d/<tenant>.yaml`（手動調整會遺失）。⚠️ **例外：不會重寫已存在的根目錄 `.gitlab-ci.yml`** —— 那可能是客戶自己的 pipeline，因此任何情況下都不覆寫（也就沒有工具內的重生路徑）；⚠️ 自有檔若還宣告了這次沒要求的租戶，`--force` 同樣拒絕（見上方）；⚠️ **也不會改寫 conf.d 裡 init 以外的載體**：可能已由你其他檔案宣告的租戶／其他拼法的 defaults 照樣跳過並列出，並存時照樣拒絕（見上方說明） | — |
+| `--dry-run` | 顯示會產生的檔案但不寫入，並標出每個既有檔是否為 init 產生、產生後是否被改過（依 `.da-init.yaml` 的檔案清冊）。不需 `--force`，已初始化的目錄也可直接跑 | — |
+| `--force` | 在已初始化的目錄重跑：**重寫所有產生的檔案**，含 `conf.d/_defaults.yaml` 與每一份 `conf.d/<tenant>.yaml`（手動調整會遺失）。⚠️ **例外：不會重寫已存在的根目錄 `.gitlab-ci.yml`** —— 那可能是客戶自己的 pipeline，因此任何情況下都不覆寫（也就沒有工具內的重生路徑）；⚠️ 自有檔若還宣告了這次沒要求的租戶，`--force` 同樣拒絕（見上方）；⚠️ **也不會改寫 conf.d 裡 init 以外的載體**：可能已由你其他檔案宣告的租戶／其他拼法的 defaults 照樣跳過並列出，並存時照樣拒絕（見上方說明）；init 上次產生後被改過的檔會在摘要逐一點名。⚠️ **沒有 `.da-init.yaml` 時**，init 不擁有任何檔：要寫的路徑上已經有檔（例如手寫的 `conf.d/_defaults.yaml`）就拒絕、rc 1、不寫入任何檔案，要覆寫須加 `--force`；刪掉 `.da-init.yaml` 繞不過這道檢查 | — |
 | `-o, --output-dir <DIR>` | 輸出根目錄 | `.`（目前目錄） |
 | `--namespace <NS>` | Kubernetes 監控 namespace | `monitoring` |
 | `--da-tools-image <IMAGE>` | 產生的 CI pipeline 與 pre-commit 設定使用的 da-tools 映像；給空字串結束碼 2 | 執行這次 init 的 da-tools 版本的映像 |

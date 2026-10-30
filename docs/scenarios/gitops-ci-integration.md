@@ -64,7 +64,7 @@ docker run --rm -it \
 
 CLI 會引導你選擇：CI/CD 平台、部署方式、Rule Pack 組合、租戶名稱。
 
-**產生的設定固定 da-tools 版本**：GitHub workflow 的 `env`、GitLab 的 `variables` 與 `.pre-commit-config.da.yaml` 裡的 `DA_TOOLS_IMAGE`，預設是**執行 `init` 的那一版** da-tools 的版號 tag（`ghcr.io/vencil/da-tools:v<版號>`），不是 `:latest`——同一個 commit 在你的 CI 永遠用同一版產生器判定，也才能和 tenant-api chart 固定的 da-tools 版本對齊（[ADR-036](../adr/036-single-parser-effective-config.md) §6）。只升映像時，直接改產生物裡那一行 `DA_TOOLS_IMAGE`（建議做法）；對已初始化的專案重跑 `init` 會被拒絕，除非帶 `--force`，而 `--force` 會覆寫你改過的檔案（產生時要指定別的映像就帶 `--da-tools-image`）。⚠️ v2.9.0 映像的 `init` 仍寫 `:latest`，下一版映像起才固定版號。 <!-- image-caveat: v2.9.0 -->
+**產生的設定固定 da-tools 版本**：GitHub workflow 的 `env`、GitLab 的 `variables` 與 `.pre-commit-config.da.yaml` 裡的 `DA_TOOLS_IMAGE`，預設是**執行 `init` 的那一版** da-tools 的版號 tag（`ghcr.io/vencil/da-tools:v<版號>`），不是 `:latest`——同一個 commit 在你的 CI 永遠用同一版產生器判定，也才能和 tenant-api chart 固定的 da-tools 版本對齊（[ADR-036](../adr/036-single-parser-effective-config.md) §6）。只升映像時，直接改產生物裡那一行 `DA_TOOLS_IMAGE`（建議做法）；對已初始化的專案重跑 `init` 會被拒絕，除非帶 `--force`，而 `--force` 會覆寫你改過的檔案（會在摘要逐一點名；先用不需 `--force` 的 `--dry-run` 看哪些被改過；產生時要指定別的映像就帶 `--da-tools-image`）。⚠️ v2.9.0 映像的 `init` 仍寫 `:latest`，下一版映像起才固定版號。 <!-- image-caveat: v2.9.0 -->
 
 **非互動模式（CI 友好）：**
 
@@ -97,7 +97,7 @@ your-repo/
 │       ├── dev/
 │       └── prod/
 ├── .pre-commit-config.da.yaml   # Pre-commit hooks 片段
-└── .da-init.yaml                # 初始化標記（存在時再跑 init 會被擋，除非加 --force）
+└── .da-init.yaml                # 初始化標記＋檔案清冊（init 產生的檔與其 sha256；存在時再跑 init 會被擋，除非加 --force）
 ```
 
 ⚠️ **在已有 `conf.d/` 的 repo 上**：上圖是全新 repo 的樣子。可能已由你既有檔案宣告的租戶（依內容判斷，刻意寬鬆——`db-c.yml`、`DB-C.YAML`、多租戶檔、子目錄都算）與其他拼法的根 defaults（如 `_defaults.yml`），init 不會再產生 `<tenant>.yaml`／`_defaults.yaml`，會跳過並列出；init 不檢查 exporter 能否讀取那些檔，請用 `da-tools guard defaults-impact` 對你的 conf.d 確認（用法見下方連結）。init 自己的檔案已與具體提到同一租戶的檔並存時則拒絕（rc 1、不寫任何檔案）。詳見 [CLI 參考 `init`](../cli-reference.md#init)。

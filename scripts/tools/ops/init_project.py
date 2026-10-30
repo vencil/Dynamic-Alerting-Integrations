@@ -10,8 +10,11 @@ Generates:
   2. CI/CD pipeline (GitHub Actions / GitLab CI / both)
   3. Kustomize overlays for ConfigMap generation
   4. .pre-commit-config.yaml snippet for shift-left validation
-  5. .da-init.yaml marker — a second `init` in this directory refuses
-     unless given --force
+  5. .da-init.yaml marker + ownership ledger (every file init wrote and its
+     sha256) — a second `init` in this directory refuses unless given
+     --force, which names the files edited since; with NO marker, init owns
+     no file, and refuses (rc 1, nothing written) to overwrite one already
+     at a path it writes unless given --force (issue 1465)
 
 Usage:
   da-tools init                                   # Interactive mode
@@ -21,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -3354,6 +3358,7 @@ def _gen_da_init_marker(
     rule_packs: list[str],
     tenants: list[str],
     declared_elsewhere: Optional[dict[str, list[str]]] = None,
+    files: Optional[dict[str, str]] = None,
 ) -> str:
     """Generate .da-init.yaml marker file.
 
@@ -3363,6 +3368,10 @@ def _gen_da_init_marker(
     with the customer's files, so nothing later reads `conf.d/<t>.yaml` as
     init's for them. The key is absent when there are none, so a marker from
     a fresh tree is unchanged.
+
+    `files` is the ownership ledger (issue 1465): output-relative POSIX path
+    → sha256 of the bytes this run left on disk. `run_init` always passes it;
+    it is optional only so the settings half can be rendered on its own.
     """
     marker = {
         'generated_at': datetime.now(timezone.utc).isoformat(),
@@ -3374,11 +3383,16 @@ def _gen_da_init_marker(
     }
     if declared_elsewhere:
         marker['tenants_declared_by_existing_files'] = {
-            t: list(files) for t, files in declared_elsewhere.items()}
+            t: list(carriers) for t, carriers in declared_elsewhere.items()}
+    if files is not None:
+        marker[_LEDGER_KEY] = dict(sorted(files.items()))
     header = textwrap.dedent("""\
     # .da-init.yaml — Dynamic Alerting project marker
     # Do not edit manually. While this file exists, `da-tools init` refuses to
     # run here again unless given --force (which overwrites every file).
+    # `files:` lists the files init wrote and their sha256; a file it does
+    # not list is yours, and a listed file whose bytes changed is named as
+    # edited before --force replaces it.
     """)
     return header + yaml.dump(marker, default_flow_style=False, sort_keys=False)
 
@@ -4138,6 +4152,166 @@ def _existing_files(output_dir: str) -> set[str]:
     return {str(p.resolve()) for p in root.rglob("*") if p.is_file()}
 
 
+# ============================================================
+# Ownership ledger (issue 1465)
+# ============================================================
+# `.da-init.yaml` records `files:` — every path this run wrote (output-relative,
+# POSIX) and the sha256 of its bytes on disk. It is the ONLY answer to "which
+# files are init's": a file at an init path that the ledger does not list is
+# the customer's, however much it looks like init output. Before the ledger
+# the marker held settings only, so an absent marker meant "no gate at all"
+# and a hand-written `_defaults.yaml` was replaced with rc 0 (issue 1465), and
+# a `--force` re-run could not tell a hand-tuned threshold from its own output.
+
+_MARKER_REL = '.da-init.yaml'
+_LEDGER_KEY = 'files'
+
+# What `_read_ownership` found. `ledger` is the only state whose `files` says
+# anything; the other three are three different ways of knowing nothing, kept
+# apart so no reader mistakes "cannot tell" for "nothing is edited".
+_OWN_ABSENT = 'absent'          # no marker: init owns no file here
+_OWN_NO_LEDGER = 'no-ledger'    # marker from before issue 1465
+_OWN_UNREADABLE = 'unreadable'  # marker present, `files:` not a str→str map
+_OWN_LEDGER = 'ledger'
+
+# Classification of a file that already sits at a path this run writes.
+_EXIST_UNCHANGED = 'unchanged'  # in the ledger, bytes match: init's own output
+_EXIST_EDITED = 'edited'        # in the ledger, bytes differ: edited since
+_EXIST_UNOWNED = 'unowned'      # ledger does not list it (or there is none)
+_EXIST_UNKNOWN = 'unknown'      # a marker exists but its ledger cannot answer
+_EXIST_UNREADABLE = 'unreadable'  # listed, but its bytes cannot be read
+_EXIST_NOT_FILE = 'not-a-file'  # a directory or a dangling symlink sits there
+
+
+class _Ownership(NamedTuple):
+    state: str
+    files: dict
+
+
+def _sha256_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _read_ownership(output_dir: str) -> _Ownership:
+    """What `.da-init.yaml` says this directory's init owns.
+
+    Never raises: a marker that does not parse is `unreadable`, not a crash
+    and not an empty ledger — an empty ledger would read as "init owns
+    nothing", which is a claim, while an unparsable one supports no claim.
+    """
+    marker = Path(output_dir) / _MARKER_REL
+    if not marker.is_file():
+        return _Ownership(_OWN_ABSENT, {})
+    try:
+        doc = yaml.safe_load(marker.read_text(encoding='utf-8'))
+    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        return _Ownership(_OWN_UNREADABLE, {})
+    if not isinstance(doc, dict):
+        return _Ownership(_OWN_UNREADABLE, {})
+    if _LEDGER_KEY not in doc:
+        return _Ownership(_OWN_NO_LEDGER, {})
+    files = doc[_LEDGER_KEY]
+    if not isinstance(files, dict) or not all(
+            isinstance(k, str) and isinstance(v, str) for k, v in files.items()):
+        return _Ownership(_OWN_UNREADABLE, {})
+    return _Ownership(_OWN_LEDGER, dict(files))
+
+
+def _classify_existing(paths: list[str], output_dir: str,
+                       own: _Ownership) -> dict[str, str]:
+    """{output-relative POSIX path: _EXIST_*} for each of `paths` already on disk.
+
+    `paths` are the ones this run would write (`_preview_files`); the marker
+    itself is not classified — init rewrites it on every run by definition.
+    """
+    out = Path(output_dir)
+    found: dict[str, str] = {}
+    for p in paths:
+        path = Path(p)
+        rel = path.relative_to(out).as_posix()
+        if rel == _MARKER_REL:
+            continue
+        if not path.is_file():
+            # Something occupies the path that is not a regular file — a
+            # directory, or a symlink to nowhere that a write would follow
+            # out of --output-dir. It is not init's whatever the ledger says.
+            if path.exists() or path.is_symlink():
+                found[rel] = _EXIST_NOT_FILE
+            continue
+        if own.state == _OWN_LEDGER:
+            recorded = own.files.get(rel)
+            if recorded is None:
+                found[rel] = _EXIST_UNOWNED
+                continue
+            try:
+                digest = _sha256_file(path)
+            except OSError:
+                # Unreadable is "cannot tell", never "unchanged".
+                found[rel] = _EXIST_UNREADABLE
+                continue
+            found[rel] = _EXIST_UNCHANGED if digest == recorded else _EXIST_EDITED
+        elif own.state == _OWN_ABSENT:
+            found[rel] = _EXIST_UNOWNED
+        else:
+            found[rel] = _EXIST_UNKNOWN
+    return found
+
+
+def _existing_tag(kind: str, is_zh: bool) -> str:
+    """The parenthesised note printed after a path that is already on disk."""
+    if is_zh:
+        return {
+            _EXIST_UNCHANGED: '（init 上次產生、未改過）',
+            _EXIST_EDITED: '（init 上次產生後被改過）',
+            _EXIST_UNOWNED: '（不是 init 產生的）',
+            _EXIST_UNKNOWN: '（.da-init.yaml 沒有可讀的檔案清冊，無法判斷是否改過）',
+            _EXIST_UNREADABLE: '（讀不到內容，無法判斷是否改過）',
+            _EXIST_NOT_FILE: '（不是一般檔案：目錄或懸空的符號連結）',
+        }[kind]
+    return {
+        _EXIST_UNCHANGED: ' (init wrote it last time, unchanged)',
+        _EXIST_EDITED: ' (edited since init wrote it)',
+        _EXIST_UNOWNED: ' (not written by init)',
+        _EXIST_UNKNOWN: (' (.da-init.yaml has no readable file ledger: '
+                         'cannot tell whether it was edited)'),
+        _EXIST_UNREADABLE: (' (cannot be read: cannot tell whether it was '
+                            'edited)'),
+        _EXIST_NOT_FILE: ' (not a regular file: a directory or a dangling symlink)',
+    }[kind]
+
+
+def _refuse_unowned(existing: dict[str, str]) -> None:
+    """Issue 1465: with no marker, init owns no file, so it overwrites none.
+
+    Called only when there is no `.da-init.yaml` and no `--force`: a marker
+    without `--force` is refused earlier by `_check_existing_init`. Exits
+    EXIT_VIOLATION before any write.
+    """
+    unowned = sorted(r for r, k in existing.items()
+                     if k in (_EXIST_UNOWNED, _EXIST_NOT_FILE))
+    if not unowned:
+        return
+    is_zh = _LANG == 'zh'
+    if is_zh:
+        print("⚠️  這個目錄沒有 .da-init.yaml，但下列 init 會寫的路徑已經有檔案：",
+              file=sys.stderr)
+    else:
+        print("⚠️  There is no .da-init.yaml here, but these paths init "
+              "writes already hold files:", file=sys.stderr)
+    for rel in unowned:
+        print(f"     {rel}", file=sys.stderr)
+    if is_zh:
+        print("   沒有 .da-init.yaml 就表示這些檔不是 init 的，init 不覆寫它們。"
+              "加上 --force 會把它們全部取代（手調的閾值會遺失，沒有備份）；"
+              "先用 --dry-run 看清楚。未寫入任何檔案。", file=sys.stderr)
+    else:
+        print("   Without .da-init.yaml these files are not init's, and init "
+              "does not overwrite them. --force replaces all of them "
+              "(hand-tuned thresholds are lost, with no backup); preview with "
+              "--dry-run first. Nothing was written.", file=sys.stderr)
+    sys.exit(EXIT_VIOLATION)
+
+
 class _ConfdWriteRefused(ValueError):
     """A conf.d file of this run that cannot be sent to `da-guard write`: an
     input no comment can carry, a value with no edit-contract type; raised
@@ -4201,6 +4375,8 @@ def run_init(config: dict, output_dir: str,
         plan = _plan_confd(config, output_dir)
     if plan.conflicts:
         raise ValueError(_conflict_message(plan, is_zh=False))
+    # Issue 1465: read before step 1 — the marker is rewritten in step 5.
+    previous = _read_ownership(output_dir)
 
     # ── 1. conf.d/ ─────────────────────────────────────────
     # #1942: only the carriers the plan leaves to init. A tenant another file
@@ -4311,10 +4487,23 @@ def run_init(config: dict, output_dir: str,
     )
 
     # ── 5. Marker file ─────────────────────────────────────
+    # issue 1465: the ledger hashes what is ON DISK after the writes, not the
+    # strings handed to them — conf.d goes through `da-guard write`, and the
+    # bytes a later run compares against are the bytes that landed.
+    #
+    # An entry the previous ledger holds for a file this run did NOT write but
+    # that is still on disk is carried over with its ORIGINAL digest: init
+    # wrote it, and a later run must still name it edited (a tenant dropped
+    # from --tenants, the root .gitlab-ci.yml written only on the first run).
+    # Dropping it would turn init's own file into "not written by init".
+    ledger = {rel: digest for rel, digest in previous.files.items()
+              if (out / rel).is_file()} if previous.state == _OWN_LEDGER else {}
+    ledger.update({Path(p).relative_to(out).as_posix(): _sha256_file(Path(p))
+                   for p in created})
     _write_file(
-        str(out / '.da-init.yaml'),
+        str(out / _MARKER_REL),
         _gen_da_init_marker(ci, deploy, rule_packs, tenants,
-                            declared_elsewhere=plan.skipped),
+                            declared_elsewhere=plan.skipped, files=ledger),
         created,
     )
 
@@ -4352,7 +4541,8 @@ def _as_typed_here(output_dir: str, rel: str) -> str:
 
 def _print_summary(created: list[str], output_dir: str, config: dict,
                    pre_existing: set[str] | None = None,
-                   plan: Optional[_ConfdPlan] = None) -> None:
+                   plan: Optional[_ConfdPlan] = None,
+                   existing: Optional[dict[str, str]] = None) -> None:
     """Print post-init summary.
 
     `plan` is the `_plan_confd` result the run wrote from; `None` means the
@@ -4379,7 +4569,9 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
         rel = Path(f).relative_to(output_dir).as_posix()
         if pre_existing and str(Path(f).resolve()) in pre_existing:
             overwritten.append(rel)
-            print(f"  ✓ {rel}" + ("（已覆寫）" if is_zh else " (overwritten)"))
+            # Issue 1465: the ledger class, taken before the writes.
+            tag = _existing_tag(existing[rel], is_zh) if existing and rel in existing else ''
+            print(f"  ✓ {rel}" + ("（已覆寫）" if is_zh else " (overwritten)") + tag)
         else:
             print(f"  ✓ {rel}")
 
@@ -4396,6 +4588,12 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
             print("     If any held hand-tuned thresholds, recover them from "
                   f"version control (e.g. git checkout -- "
                   f"{_as_typed_here(output_dir, 'conf.d/')}).")
+        edited = sorted(r for r in overwritten
+                        if existing and existing.get(r) == _EXIST_EDITED)
+        if edited:
+            print("     " + ("其中這些是 init 上次產生後被改過的：" if is_zh else
+                             "Of those, edited since init wrote them:")
+                  + " " + ", ".join(edited))
 
     # #1942: what the run did NOT write, and why — the receipt for the skip
     # notices already printed on stderr.
@@ -4945,7 +5143,8 @@ def _print_summary(created: list[str], output_dir: str, config: dict,
 # Initialization & CLI Validation
 # ============================================================
 
-def _check_existing_init(output_dir: str, force: bool, parser: argparse.ArgumentParser) -> None:
+def _check_existing_init(output_dir: str, force: bool, parser: argparse.ArgumentParser,
+                         dry_run: bool = False) -> None:
     """Check if directory is already initialized.
 
     #1447: this message is the only warning most people ever read — `--help`
@@ -4956,10 +5155,13 @@ def _check_existing_init(output_dir: str, force: bool, parser: argparse.Argument
     at all: the marker is the *entire* gate, so deleting it reproduces the
     same overwrite **without** `--force` and without even this warning.
 
-    ⛔ The behaviour is unchanged; only the description of it is.  Making
-    `--force` non-destructive would need a separate decision (and would break
-    `tests/ops/test_init_project.py::test_force_really_discards_hand_edits_in_both_files`,
-    which pins today's semantics on purpose).
+    Issue 1465 closed the hole that sentence described: deleting the marker
+    now leaves init owning nothing, and `_refuse_unowned` refuses to overwrite
+    any file at its paths without `--force`. `--force` stays destructive
+    (`test_force_really_discards_hand_edits_in_both_files` pins that on
+    purpose); what changed is that the files edited since init wrote them are
+    named from the ledger. `dry_run` skips the refusal: the preview is how a
+    reader sees what `--force` would replace, so it must not need `--force`.
     """
     marker_path = str(Path(output_dir) / '.da-init.yaml')
     # ⛔ Exists but is not a regular file — a directory, a fifo, a dangling
@@ -4993,31 +5195,35 @@ def _check_existing_init(output_dir: str, force: bool, parser: argparse.Argument
             print("   Remove or rename that path yourself and re-run; "
                   "--force will not delete it.", file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
-    if marker.is_file() and not force:
+    if marker.is_file() and not force and not dry_run:
         if _LANG == 'zh':
             print(f"⚠️  此目錄已初始化 ({marker_path})。", file=sys.stderr)
             print("   加上 --force 會**重新產生每一個檔案並覆寫**——包含"
                   "conf.d/_defaults.yaml 與每一份 conf.d/<tenant>.yaml，"
-                  "你手動調整過的閾值會遺失，且不會有備份或差異提示。",
+                  "你手動調整過的閾值會遺失，且不會有備份；.da-init.yaml 有"
+                  "檔案清冊時，init 上次產生後被改過的檔會逐一點名。先用 "
+                  "--dry-run 看（不需 --force）。",
                   file=sys.stderr)
             print("   先備份（或先 commit）再重跑；只想改設定的話，"
                   "直接編輯既有檔案即可，不需要重跑 init。", file=sys.stderr)
-            print("   ⛔ 刪掉 .da-init.yaml 不是比較安全的做法——"
-                  "那個檔案就是這道檢查的全部，刪了之後不加 --force "
-                  "也會發生同樣的覆寫，而且不會再出現這則警告。",
+            print("   刪掉 .da-init.yaml 繞不過這道檢查：沒有它，init 就"
+                  "不擁有這裡任何檔，會拒絕覆寫（rc 1），除非加 --force。",
                   file=sys.stderr)
         else:
             print(f"⚠️  This directory is already initialized ({marker_path}).", file=sys.stderr)
             print("   Adding --force REWRITES every generated file, including "
                   "conf.d/_defaults.yaml and each conf.d/<tenant>.yaml: "
-                  "hand-tuned thresholds are lost, with no backup and no diff.",
+                  "hand-tuned thresholds are lost, with no backup. If "
+                  ".da-init.yaml has a file ledger, files edited since init "
+                  "wrote them are named; preview with --dry-run (no --force "
+                  "needed).",
                   file=sys.stderr)
             print("   Back up (or commit) first. To change settings you do "
                   "not need to re-run init at all — edit the existing files.",
                   file=sys.stderr)
-            print("   ⛔ Deleting .da-init.yaml is not the safer option: that "
-                  "marker is this entire check, so removing it reproduces the "
-                  "same overwrite without --force and without this warning.",
+            print("   Deleting .da-init.yaml does not get around this: "
+                  "without it init owns no file here and refuses to "
+                  "overwrite any (rc 1) unless given --force.",
                   file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
 
@@ -5229,7 +5435,10 @@ def _validate_config(config: dict) -> None:
 
 
 def _handle_dry_run(config: dict, output_dir: str,
-                    plan: Optional[_ConfdPlan] = None) -> None:
+                    plan: Optional[_ConfdPlan] = None,
+                    existing: Optional[dict[str, str]] = None,
+                    force: bool = False,
+                    own: Optional[_Ownership] = None) -> None:
     """Handle --dry-run mode: preview files without writing.
 
     #1447: this is the only non-destructive way to see what `init` will do,
@@ -5242,14 +5451,26 @@ def _handle_dry_run(config: dict, output_dir: str,
     #1942: the preview follows the same `_plan_confd` the real run writes
     from — a tree the real run refuses exits EXIT_VIOLATION here too, and a
     carrier left to the customer is not listed but named, with the reason.
+
+    Issue 1465: each existing file carries its ledger classification, and a
+    refusal the real run would make without `--force` (initialized directory,
+    or files that are not init's) is SAID, not enacted — that refusal is
+    lifted by `--force`, and seeing what `--force` would replace is the
+    reason to run the preview. The #1942 conflicts above stay a hard exit:
+    `--force` does not lift them either.
     """
     is_zh = _LANG == 'zh'
     if plan is None:
         plan = _plan_confd(config, output_dir)
     _refuse_conflicts(plan)
+    if own is None:
+        own = _read_ownership(output_dir)
+    if existing is None:
+        existing = _classify_existing(_preview_files(config, output_dir, plan),
+                                      output_dir, own)
     print("DRY RUN — " + ("以下檔案會被產生：" if is_zh else "The following files would be created:"))
     print()
-    existing = _existing_files(output_dir)
+    on_disk = _existing_files(output_dir)
     files = _preview_files(config, output_dir, plan)
     overwritten = 0
     for f in files:
@@ -5257,7 +5478,13 @@ def _handle_dry_run(config: dict, output_dir: str,
         # platform, and a bare `Path` printed `conf.d\db-a.yaml` on Windows —
         # two spellings of one tree in one preview (#2558).
         rel = Path(f).relative_to(output_dir).as_posix()
-        if str(Path(f).resolve()) in existing:
+        if rel in existing:
+            overwritten += 1
+            print(f"  {rel}" + ("（已存在，會被覆寫）" if is_zh
+                                else " (exists — would be overwritten)")
+                  + _existing_tag(existing[rel], is_zh))
+        elif str(Path(f).resolve()) in on_disk:
+            # The marker: init rewrites it on every run by definition.
             overwritten += 1
             print(f"  {rel}" + ("（已存在，會被覆寫）" if is_zh
                                 else " (exists — would be overwritten)"))
@@ -5270,6 +5497,20 @@ def _handle_dry_run(config: dict, output_dir: str,
         else:
             print(f"  ⚠️  {overwritten} of them already exist and would be "
                   f"replaced, with no backup.")
+    if not force:
+        if own.state != _OWN_ABSENT:
+            print("  ⛔ " + ("此目錄已初始化：實際執行不加 --force 會拒絕（rc 1）。"
+                            if is_zh else
+                            "This directory is already initialized: the real "
+                            "run refuses without --force (rc 1)."))
+        elif any(k in (_EXIST_UNOWNED, _EXIST_NOT_FILE)
+                 for k in existing.values()):
+            print("  ⛔ " + ("上列標「不是 init 產生的」或「不是一般檔案」的路徑：實際執行不加 "
+                            "--force 會拒絕（rc 1），不寫任何檔。" if is_zh else
+                            "Paths marked \"not written by init\" or \"not a "
+                            "regular file\": the real "
+                            "run refuses without --force (rc 1) and writes "
+                            "nothing."))
     skip_lines = _plan_notice_lines(plan, is_zh,
                                     str(Path(output_dir) / 'conf.d'))
     if skip_lines:
@@ -5453,7 +5694,12 @@ def _build_parser() -> argparse.ArgumentParser:
                              'conf.d/<tenant>.yaml '
                              'it would rewrite also declares a tenant not in '
                              '--tenants, the run is refused (rc 1) and nothing '
-                             'is written'
+                             'is written. With no .da-init.yaml, a file '
+                             'already at a path init writes is not init\'s: '
+                             'the run is refused (rc 1, nothing written) '
+                             'unless given --force. --force names the files '
+                             'edited since init wrote them (from the '
+                             '.da-init.yaml file ledger)'
                         if _LANG == 'en'
                         # ⚠️ 大寫「重寫所有產生的檔案」而非 markdown `**`：這是
                         # argparse help，會**原樣**印到終端機（實測 `--help` 輸出
@@ -5470,10 +5716,19 @@ def _build_parser() -> argparse.ArgumentParser:
                              'key），'
                              '或它要重寫的 conf.d/<tenant>.yaml 還宣告了不在 '
                              '--tenants 裡的租戶，則拒絕執行（rc 1），'
-                             '不寫入任何檔案')
+                             '不寫入任何檔案。沒有 .da-init.yaml 時，init '
+                             '要寫的路徑上已有的檔不屬於 init：不加 --force '
+                             '就拒絕（rc 1，不寫入任何檔案）。--force 會依 '
+                             '.da-init.yaml 的檔案清冊點名 init 產生後被改過的檔')
     parser.add_argument('--dry-run', action='store_true',
-                        help='Show what files would be created without writing'
-                        if _LANG == 'en' else '顯示會產生的檔案但不寫入')
+                        help='Show what files would be created without '
+                             'writing, and for each existing one whether init '
+                             'wrote it and whether it was edited since. Needs '
+                             'no --force, also in an initialized directory'
+                        if _LANG == 'en' else
+                        '顯示會產生的檔案但不寫入，並標出既有檔是否為 init '
+                        '產生、產生後是否被改過。不需 --force，已初始化的'
+                        '目錄也可直接跑')
     parser.add_argument('--namespace', default='monitoring', help=_h('namespace'))
     parser.add_argument('--da-tools-image',
                         default=DA_TOOLS_IMAGE,
@@ -5502,7 +5757,8 @@ def main():
 
     args = parser.parse_args()
 
-    _check_existing_init(args.output_dir, args.force, parser)
+    _check_existing_init(args.output_dir, args.force, parser,
+                         dry_run=args.dry_run)
     config = _build_config_from_args(args, parser)
     _validate_config(config)
 
@@ -5516,8 +5772,17 @@ def main():
     _report_plan(plan, config, str(Path(output_dir) / 'conf.d'))
     _refuse_conflicts(plan)
 
+    # Issue 1465: classify, BEFORE any write, every file already at a path
+    # this run writes — against the ledger the previous run left. The preview,
+    # the refusal and the summary all print this one answer.
+    own = _read_ownership(output_dir)
+    existing = _classify_existing(_preview_files(config, output_dir, plan),
+                                  output_dir, own)
     if args.dry_run:
-        _handle_dry_run(config, output_dir, plan)
+        _handle_dry_run(config, output_dir, plan, existing=existing,
+                        force=args.force, own=own)
+    if not args.force and own.state == _OWN_ABSENT:
+        _refuse_unowned(existing)
 
     # Snapshot before generation: after the writes there is no way to tell an
     # overwrite from a fresh file (#1447).
@@ -5530,7 +5795,8 @@ def main():
         # written.
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
-    _print_summary(created, output_dir, config, pre_existing, plan)
+    _print_summary(created, output_dir, config, pre_existing, plan,
+                   existing=existing)
 
 
 if __name__ == "__main__":
