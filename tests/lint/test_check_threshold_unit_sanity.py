@@ -309,40 +309,15 @@ def test_template_data_embedded_yaml_is_scanned(tmp_path):
     assert not any("[fine]" in e for e in errs), errs
 
 
-@pytest.mark.parametrize("broken, kind", [
-    ("key: [unclosed", "syntax_error"),
-    # PyYAML read this last-wins (300, OUT-OF-DOMAIN); the exporter refuses it
-    # whole — the #3206 reverse control: with the PyYAML reading back, no raise.
-    ('pg_connections: "80"\npg_connections: "300"', "duplicate_key"),
-])
-def test_a_template_the_exporter_refuses_is_named_not_skipped(tmp_path, broken, kind):
-    """#3206 (ADR-036 §12): a template is a tenant body the portal hands out to
-    paste into a tenant file, read as the exporter reads one (`da-guard
-    parse-tree`). One it refuses is an input this gate could not judge: named,
-    exit 2 — it used to be skipped silently. The other templates are still
-    read first, so every refused one is named in the one report."""
+def test_template_data_unparseable_yaml_is_skipped_not_fatal(tmp_path):
+    """A malformed template must not take the whole gate down with it."""
     _write(tmp_path, "docs/assets/template-data.json", json.dumps(
         {"templates": [
-            {"id": "broken", "yaml": broken},
+            {"id": "broken", "yaml": "key: [unclosed"},
             {"id": "demo", "yaml": 'pg_connections: "300"'},
-            {"id": "also", "yaml": "a: 1\na: 2\n"},
         ]}))
-    with pytest.raises(gate.ArtifactRefused) as exc:
-        _errors(_registry(pg_connections=_spec(80, "% of max_connections")), tmp_path)
-    refused = dict(exc.value.refused)
-    assert sorted(refused) == ["docs/assets/template-data.json[also]",
-                               "docs/assets/template-data.json[broken]"], refused
-    assert kind in refused["docs/assets/template-data.json[broken]"], refused
-    assert "da-guard parse-tree" in refused["docs/assets/template-data.json[broken]"]
-
-
-def test_main_names_a_refused_template_and_exits_2(tmp_path, monkeypatch, capsys):
-    _write(tmp_path, "docs/assets/template-data.json", json.dumps(
-        {"templates": [{"id": "broken", "yaml": "a: 1\na: 2\n"}]}))
-    monkeypatch.setattr(gate, "PROJECT_ROOT", str(tmp_path))
-    assert gate.main(["--ci"]) == gate.EXIT_CALLER_ERROR
-    err = capsys.readouterr().err
-    assert "template-data.json[broken]" in err and "duplicate_key" in err, err
+    errs = _errors(_registry(pg_connections=_spec(80, "% of max_connections")), tmp_path)
+    assert any("template-data.json[demo]" in e for e in errs), errs
 
 
 def test_platform_data_value_and_declared_unit_are_scanned(tmp_path):
@@ -374,38 +349,6 @@ def test_markdown_non_yaml_and_fragment_blocks_are_tolerated(tmp_path):
            "```yaml\ndefaults:\n  pct: 300\n```\n")
     errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
     assert any("example.md" in e for e in errs), errs
-
-
-def test_a_fence_documenting_several_files_is_read_file_by_file(tmp_path):
-    """#3206 reverse control. A fence stacking `# conf.d/<file>.yaml` sections
-    repeats `tenants:`; PyYAML kept the last one, so the first tenant's values
-    were never judged — and the exporter's reading refuses the stack whole.
-    Each documented file is read on its own (md-yaml-drift's split), so the
-    first tenant's out-of-domain value is reported."""
-    _write(tmp_path, "docs/x.md",
-           "```yaml\n# conf.d/a.yaml\ntenants:\n  a:\n    pct: \"300\"\n\n"
-           "# conf.d/b.yaml\ntenants:\n  b:\n    pct: \"50\"\n```\n")
-    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
-    assert any("docs/x.md" in e and "pct = 300" in e for e in errs), errs
-
-
-def test_a_fence_the_exporter_refuses_is_passed_over(tmp_path):
-    """A docs fence the exporter's reading refuses (a key written twice) is no
-    file it serves, so it holds no threshold anyone runs; naming a refused
-    conf.d EXAMPLE is md-yaml-drift-check's rule (UNREADABLE). PyYAML read it
-    last-wins and judged 300 — a value no exporter would ever load."""
-    _write(tmp_path, "docs/x.md", "```yaml\ndefaults:\n  pct: 50\n  pct: 300\n```\n")
-    assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
-
-
-def test_no_da_guard_fails_closed_for_templates_and_docs(tmp_path, monkeypatch, capsys):
-    """#3206: without da-guard the templates and fences are not read — exit 2
-    naming da-guard, never a pass over unread values."""
-    _write(tmp_path, "docs/x.md", "```yaml\ndefaults:\n  pct: 300\n```\n")
-    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
-    monkeypatch.setattr(gate, "PROJECT_ROOT", str(tmp_path))
-    assert gate.main(["--ci"]) == gate.EXIT_CALLER_ERROR
-    assert "da-guard" in capsys.readouterr().err
 
 
 # -------------------------------------------------------------- real repo

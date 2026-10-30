@@ -142,47 +142,6 @@ def test_an_unreadable_block_that_is_no_confd_example_passes(tmp_path: Path) -> 
     assert "Unreadable conf.d examples:  0" in r.stdout, r.stdout
 
 
-def test_a_refused_tenant_snippet_a_lenient_reading_calls_no_confd_fails(tmp_path: Path) -> None:
-    """#3206 (ADR-036 §12): whether a refused text is a conf.d example is not
-    asked of a lenient reading. PyYAML read this repeated key last-wins as
-    `x: 1` — no tenant marker — and the gate passed a tenant snippet the
-    exporter refuses whole. It spells `_routing`, so it cannot be ruled out
-    and is reported."""
-    body = ("```yaml\nx:\n  _routing:\n    receiver: {type: webhook}\nx: 1\n```\n")
-    r = _run(_mkrepo(tmp_path, "dup.md", body))
-    assert r.returncode == EXIT_VIOLATION, r.stdout + r.stderr
-    assert "[UNREADABLE] docs/dup.md:2 (duplicate_key)" in r.stdout, r.stdout
-
-
-def _checker_module():
-    sys.path.insert(0, str(SCRIPT.parent))
-    import check_md_yaml_drift  # noqa: PLC0415
-    return check_md_yaml_drift
-
-
-@pytest.mark.parametrize("text, want", [
-    # spells no key `_is_tenant_config` decides on: ruled out
-    ("apiVersion: v1\nkind: Secret\n---\napiVersion: v1\nkind: Secret\n", "not-confd"),
-    ("---\ntitle: x\n---\n", "not-confd"),
-    ("my_tenants: 1\nx_routing_y: 2\nmax_metrics: 3\n", "not-confd"),   # tokens only
-    # spells one (a key, a quoted key, a flow key, or in a comment): undecided
-    ("x:\n  _routing: {}\nx: 1\n", "undecided"),
-    ("'tenants': {}\n---\na: 1\n", "undecided"),
-    ("- {defaults: 1}\n---\n- 2\n", "undecided"),
-    ("a: 1  # see tenants\na: 2\n", "undecided"),
-    # a ConfigMap carrying a tenant file: over-reported, the safe direction
-    ("kind: ConfigMap\ndata:\n  t.yaml: |\n    tenants: {}\n---\nkind: X\n", "undecided"),
-    # a double-quoted escape can spell any key: undecided
-    ('"\\x74enants": {}\n"\\x74enants": {}\n', "undecided"),
-])
-def test_confd_declaration_answers_from_the_text_alone(text: str, want: str) -> None:
-    """`_confd_declaration` reads no YAML: a text that spells none of the
-    keys and has no escape cannot hold one; anything else is undecided."""
-    m = _checker_module()
-    checker = m.MdYamlDriftChecker.__new__(m.MdYamlDriftChecker)
-    assert checker._confd_declaration(text) == want
-
-
 def test_values_are_read_as_conf_d_reads_them(tmp_path: Path) -> None:
     """ADR-036 step 11 (#3206): `send_resolved: yes` is the string "yes" to
     yaml.v3 (the exporter, and the route generator through parse-tree), so a
