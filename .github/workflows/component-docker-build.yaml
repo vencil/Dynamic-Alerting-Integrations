@@ -118,7 +118,7 @@ jobs:
         # COPY targets resolve, not that binaries run.
         include:
           - name: threshold-exporter
-            context: components/threshold-exporter/app
+            context: .   # repo root: the builder runs scripts/ops/go_build.sh (#3425)
             dockerfile: components/threshold-exporter/app/Dockerfile
           - name: da-tools
             context: components/da-tools/app

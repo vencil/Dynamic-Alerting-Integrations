@@ -108,9 +108,9 @@ DOCKERFILE_CONTEXTS: dict[str, str] = {
     "components/da-portal/Dockerfile": ".",
     "components/recipe-preview/Dockerfile": ".",
     "components/tenant-api/Dockerfile": ".",
-    "components/threshold-exporter/app/Dockerfile": "components/threshold-exporter/app",
+    "components/threshold-exporter/app/Dockerfile": ".",
     "tests/e2e-bench/driver/Dockerfile": "tests/e2e-bench/driver",
-    "tests/e2e-bench/receiver/Dockerfile": "tests/e2e-bench/receiver",
+    "tests/e2e-bench/receiver/Dockerfile": ".",
     "helm/federation-gateway/audit-sidecar/Dockerfile": "helm/federation-gateway/audit-sidecar",
     "helm/vector/projection-gate/Dockerfile": "helm/vector/projection-gate",
     # try-local's generator service runtime (#2903): built by the demo
@@ -158,6 +158,8 @@ def find_dockerfiles() -> list[str]:
             continue
         # Skip .dockerignore-style siblings; only actual Dockerfiles.
         if p.name != "Dockerfile" and not p.name.startswith("Dockerfile."):
+            continue
+        if p.name.endswith(".dockerignore"):  # BuildKit's per-Dockerfile ignore file
             continue
         out.append(rel.as_posix())
     return sorted(out)
@@ -386,9 +388,21 @@ def collect_findings(dockerfiles: list[str]) -> dict[str, list[str]]:
                 f"{df}:{ln} [V2 broad-copy] over-broad COPY/ADD source: {snippet}"
             )
 
-    # Vibe rule V3 — .dockerignore per unique build context.
-    for ctx in sorted(set(DOCKERFILE_CONTEXTS[df] for df in registered)):
-        di = REPO_ROOT / (".dockerignore" if ctx == "." else f"{ctx}/.dockerignore")
+    # Vibe rule V3 — the ignore file each build actually reads. BuildKit reads
+    # `<Dockerfile>.dockerignore` (next to the Dockerfile) IN PLACE OF the
+    # context root's .dockerignore when it exists (#3425: the exporter and the
+    # e2e receiver build from the repo root and narrow the context that way),
+    # so that file is the one the baseline is checked on.
+    effective: dict[str, str] = {}
+    for df in registered:
+        own = f"{df}.dockerignore"
+        if (REPO_ROOT / own).is_file():
+            effective[own] = own
+        else:
+            ctx = DOCKERFILE_CONTEXTS[df]
+            effective[ctx] = ".dockerignore" if ctx == "." else f"{ctx}/.dockerignore"
+    for ctx, rel in sorted(effective.items()):
+        di = REPO_ROOT / rel
         ctx_label = "<repo root>" if ctx == "." else ctx
         if not di.exists():
             findings["BLOCK"].append(

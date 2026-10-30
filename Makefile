@@ -165,7 +165,11 @@ demo-showcase: ## 5-Tenant 產品展演 — 展示 7 個 Rule Pack、四層路�
 .PHONY: component-build
 component-build: ## Build component image (使用: make component-build COMP=threshold-exporter)
 	@echo "Building $(COMP)..."
-	@if [ -d "components/$(COMP)/app" ]; then \
+	@# threshold-exporter builds from the repo root: its builder runs
+	@# scripts/ops/go_build.sh (#3425; Dockerfile.dockerignore narrows the context).
+	@if [ "$(COMP)" = "threshold-exporter" ]; then \
+		docker build -t $(COMP):dev -f components/$(COMP)/app/Dockerfile .; \
+	elif [ -d "components/$(COMP)/app" ]; then \
 		cd components/$(COMP)/app && docker build -t $(COMP):dev .; \
 	else \
 		echo "Error: components/$(COMP)/app not found"; exit 1; \
@@ -863,7 +867,7 @@ draft-advisory-check: ## ⛔ 擋住「有未發布 draft advisory 就打 tag」�
 # without adding it there (or vice versa) is a hard test failure, by design.
 .PHONY: docker-build-all trivy-scan-all
 docker-build-all: ## 建 8 個 self-built image（local --load，無 push；#474 Layer 2）
-	@docker buildx build --load -t local-test:threshold-exporter components/threshold-exporter/app
+	@docker buildx build --load -t local-test:threshold-exporter -f components/threshold-exporter/app/Dockerfile .
 	@mkdir -p docs/assets/vendor  # da-portal COPYs vendor/（空目錄即可，runtime CDN fallback）
 	@docker buildx build --load -t local-test:da-portal -f components/da-portal/Dockerfile .
 	@docker buildx build --load -t local-test:tenant-api -f components/tenant-api/Dockerfile .

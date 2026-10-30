@@ -36,12 +36,6 @@ SCRIPT = "scripts/ops/go_build.sh"
 _EXEMPT = {
     # 旗標的單一來源本身。
     SCRIPT: "the one place the flags are written",
-    # build context 是 components/threshold-exporter/app（release.yaml、
-    # component-docker-build.yaml、nightly-image-scan.yaml、Makefile、
-    # tests/e2e-bench/docker-compose.yml 都這樣建），context 外的 scripts/ops/ COPY 不進來。
-    "components/threshold-exporter/app/Dockerfile": "build context has no scripts/ops/",
-    # build context 是 tests/e2e-bench/receiver（docker-compose.yml）；量測用的 webhook 接收器，不出貨。
-    "tests/e2e-bench/receiver/Dockerfile": "build context has no scripts/ops/",
     # 本檔的必響對照（test_an_unstripped_build_is_caught）刻意不經腳本建一支。
     "tests/ops/test_go_build_ssot.py": "the must-fire control builds the unscripted shape",
 }
@@ -296,6 +290,8 @@ def classify(rel: str, head: str) -> "str | None":
     name = rel.rsplit("/", 1)[-1]
     if name == "Makefile" or name.endswith(".mk"):
         return "make"
+    if name.endswith(".dockerignore"):  # BuildKit's per-Dockerfile ignore file
+        return None
     if name.startswith("Dockerfile") or name.endswith(".Dockerfile"):
         return "docker"
     suffix = os.path.splitext(name)[1]

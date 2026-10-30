@@ -56,7 +56,9 @@ log "Building and Deploying Threshold Exporter..."
 
 # 5.1 編譯最新影像檔
 log "Building image: threshold-exporter:dev..."
-docker build -t threshold-exporter:dev "${PROJECT_ROOT}/components/threshold-exporter/app"
+# Repo-root context: the builder runs scripts/ops/go_build.sh (#3425).
+docker build -t threshold-exporter:dev \
+    -f "${PROJECT_ROOT}/components/threshold-exporter/app/Dockerfile" "${PROJECT_ROOT}"
 
 # 5.2 載入到 Kind 節點 (直接 memory stream，避免 tar disk I/O)
 log "Loading image into Kind cluster..."
