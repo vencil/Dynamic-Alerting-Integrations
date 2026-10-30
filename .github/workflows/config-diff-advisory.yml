@@ -100,12 +100,10 @@ jobs:
 
       - name: Build da-guard
         run: |
-          cd components/threshold-exporter/app
-          # #3174: the shipped shape (CGO_ENABLED=0, as build.sh / release.yaml).
-          CGO_ENABLED=0 go build -buildvcs=false \
-              -ldflags "-X main.Version=ci-$GITHUB_SHA" \
-              -o "$RUNNER_TEMP/da-guard" \
-              ./cmd/da-guard
+          # The shipped shape: scripts/ops/go_build.sh holds the build flags
+          # (#3174 CGO_ENABLED=0, #3425 -trimpath / -s -w), as build.sh / release.yaml.
+          sh scripts/ops/go_build.sh -X "main.Version=ci-$GITHUB_SHA" \
+              components/threshold-exporter/app ./cmd/da-guard "$RUNNER_TEMP/da-guard"
           "$RUNNER_TEMP/da-guard" --version
 
       # #3206 (ADR-036 §12): the routes view reads the generator's ConfigMap

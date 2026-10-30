@@ -45,3 +45,9 @@
 # scripts/tools/ rides along in the build context (the unanchored *.md/*.log/
 # .env* exclusions still strip docs/logs/secrets underneath).
 !/scripts/tools/
+
+# Re-include scripts/ops/ for the tenant-api and recipe-preview builder stages:
+# they COPY scripts/ops/go_build.sh, the one place the repo's `go build` flags
+# are written (#3425). Same direct-child re-include as /scripts/tools/ above
+# (BuildKit required); only that one script is COPY'd into an image.
+!/scripts/ops/

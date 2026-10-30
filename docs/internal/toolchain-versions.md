@@ -68,7 +68,13 @@ Renovate（repo 根目錄 `renovate.json`，由 `.github/workflows/renovate.yaml
 | GitHub Actions | 無單一 SSOT：同一個 action 在全部 workflow 必須同一個 ref | `.github/workflows/**`（Renovate 的 github-actions manager 以單一 grouped PR 一起升，見上節） | `test_toolchain_pin_parity.py`（single version）、`tests/ops/test_renovate_config.py`（grouping） |
 | Python 套件 | `requirements/ci-constraints.txt` | 每個 `pip install … -c`、devcontainer `postCreateCommand`、`.claude/hooks/session-start.sh` | `check_unpinned_deps`、`check_devcontainer_dep_parity.py` |
 
+## Go 建置旗標
+
+版本之外，`go build` 的旗標也只有一個來源：[`scripts/ops/go_build.sh`](../../scripts/ops/go_build.sh)（`CGO_ENABLED=0`、`-trimpath`、`-ldflags "-s -w"`、`-buildvcs=false`；每個旗標為何存在寫在腳本頂部）。da-tools 映像的 `build.sh`、tenant-api 與 recipe-preview 的 Dockerfile、`release.yaml` 的離線 binary、CI workflow、Makefile 的 `*-build` 目標、pytest fixture（經 `tests/_go_build.py`）與 Go 測試都經它建。守衛 `tests/ops/test_go_build_ssot.py` 結構化掃描所有追蹤檔，任何不經腳本的 `go build` 都轉紅，並量測測試 session 建出的 binary 是這個形狀。
+
 ## 已知未統一（刻意保留，附理由）
+
+- **threshold-exporter 與 e2e-bench receiver 的 Dockerfile 自己寫 `go build`**：兩者的 build context 是各自的目錄（`components/threshold-exporter/app`、`tests/e2e-bench/receiver`），拿不到 `scripts/ops/`，在上面 `go_build.sh` 守衛的豁免名單裡、各附理由。要收進來得改所有建它們的地方（release、component-docker-build、nightly scan、Makefile、e2e-bench compose）的 context，或改用 BuildKit 的具名 context。
 
 - **Container SAST job 的 Helm 仍是 3.x**，其餘 CI 與 dev container 是 4.x。它必須與 `check_iac_helm.py` 的 Docker fallback 同版，而那個 fallback 是 image + digest 釘住的；要升，得連同 `HELM_VERSION`／`HELM_DIGEST` 一起重新解析 digest。守衛已把這一對綁住，升的時候不會只動一半。
 - **hadolint、kube-linter、pint、golangci-lint 落後上游**：每一個都有「CI 二進位 + wrapper 的 digest-pinned fallback image」兩處要一起動，升版需要重新解析 image digest，另開 PR。

@@ -141,6 +141,9 @@ jobs:
               # ⚠️ Found by hand: that guard's step-input scan does not read
               # `cp` arguments, so dropping this line keeps it green.
               - "scripts/ops/golangci_floor_probe.go.txt"
+              # validate-config builds its da-guard through the Go build flags'
+              # one source (#3425).
+              - "scripts/ops/go_build.sh"
               # The pin SSOT validate-config and version-check INSTALL FROM
               # (`pip install pyyaml -c requirements/ci-constraints.txt`,
               # #1158) — the suite's ENVIRONMENT, not an input any check reads,
@@ -520,9 +523,9 @@ jobs:
             components/da-read/go.sum
       - name: Build da-guard
         run: |
-          cd components/threshold-exporter/app
-          # #3174: the shipped shape (CGO_ENABLED=0, as build.sh / release.yaml).
-          CGO_ENABLED=0 go build -buildvcs=false -o "$RUNNER_TEMP/da-guard" ./cmd/da-guard
+          # The shipped shape: scripts/ops/go_build.sh holds the build flags
+          # (#3174 CGO_ENABLED=0, #3425 -trimpath / -s -w), as build.sh / release.yaml.
+          sh scripts/ops/go_build.sh components/threshold-exporter/app ./cmd/da-guard "$RUNNER_TEMP/da-guard"
           echo "DA_GUARD_BINARY=$RUNNER_TEMP/da-guard" >> "$GITHUB_ENV"
       # The route generator's platform probe set (configmap-rules-platform)
       # and the custom-rule lint read rule files too.

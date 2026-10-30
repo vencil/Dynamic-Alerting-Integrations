@@ -38,7 +38,7 @@ import pytest
 import _lib_tenant_values as tv
 import deprecate_rule
 import patch_config as pc
-from _da_guard_build import go_build_env  # #3174: 與出貨同形，CGO_ENABLED=0
+from _go_build import go_build_argv  # #3425: 建置旗標的單一來源，與出貨同形
 import _lib_parse_cache
 from _go_refusal import assert_refused, go_refused  # noqa: E402  (#3206)
 
@@ -161,10 +161,9 @@ def test_go_present_when_required():
 @pytest.fixture(scope="module")
 def da_guard(tmp_path_factory):
     out = tmp_path_factory.mktemp("da-guard") / "da-guard"
-    env = go_build_env()
+    env = dict(os.environ)
     env.setdefault("GOTOOLCHAIN", "auto")
-    subprocess.run(["go", "build", "-buildvcs=false", "-o", str(out),
-                    "./cmd/da-guard"], cwd=APP, env=env, check=True,
+    subprocess.run(go_build_argv(APP, "./cmd/da-guard", out), env=env, check=True,
                    timeout=600)
     return str(out)
 

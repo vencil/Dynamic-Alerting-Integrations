@@ -356,8 +356,9 @@ echo "  Copied ${#REPO_DATA_FILES[@]} data file(s) from the repo tree"
 #
 # #463 multi-arch: build BOTH linux/amd64 and linux/arm64 (per-arch
 # suffix), so the Dockerfile can `COPY da-guard.${TARGETARCH}` and the
-# image works natively on Apple Silicon. CGO_ENABLED=0 cross-compiles
-# on the amd64 builder with no libc / QEMU dependency.
+# image works natively on Apple Silicon. CGO_ENABLED=0 (set by
+# scripts/ops/go_build.sh) cross-compiles on the amd64 builder with no libc /
+# QEMU dependency.
 #
 # Local devs without Go on PATH get a clear "Go not found" error
 # (rather than a cryptic Dockerfile COPY failure later). Production
@@ -375,14 +376,13 @@ DA_TOOLS_VERSION=$(cat "$SCRIPT_DIR/VERSION" | tr -d '[:space:]')
 # #3206 (ADR-036 §12): da-crdecode reads Kubernetes manifests the way kubectl
 # does; onboard_platform hands it the ConfigMap that holds alertmanager.yml.
 echo "▸ Cross-compiling da-guard / da-batchpr / da-parser / da-crdecode for amd64 + arm64..."
+# The build flags (CGO_ENABLED=0, -trimpath, -ldflags "-s -w") are written in
+# ONE place, scripts/ops/go_build.sh, which says why each one is there (#3425).
+GO_BUILD="$PROJECT_ROOT/scripts/ops/go_build.sh"
 for cmd in da-guard da-batchpr da-parser da-crdecode; do
     for arch in amd64 arm64; do
-        (cd "$EXPORTER_APP" && \
-            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
-                -buildvcs=false \
-                -ldflags "-X main.Version=v${DA_TOOLS_VERSION}" \
-                -o "$SCRIPT_DIR/${cmd}.${arch}" \
-                "./cmd/${cmd}")
+        sh "$GO_BUILD" -X "main.Version=v${DA_TOOLS_VERSION}" --goos linux --goarch "$arch" \
+            "$EXPORTER_APP" "./cmd/${cmd}" "$SCRIPT_DIR/${cmd}.${arch}"
     done
     echo "  Built ${cmd}.{amd64,arm64} (DA_TOOLS_VERSION=v${DA_TOOLS_VERSION})"
 done
@@ -400,11 +400,8 @@ if [ ! -d "$DA_READ_APP" ]; then
 fi
 for module_cmd in da-read; do
     for arch in amd64 arm64; do
-        (cd "$DA_READ_APP" && \
-            CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build \
-                -buildvcs=false \
-                -o "$SCRIPT_DIR/${module_cmd}.${arch}" \
-                .)
+        sh "$GO_BUILD" --goos linux --goarch "$arch" \
+            "$DA_READ_APP" . "$SCRIPT_DIR/${module_cmd}.${arch}"
     done
     echo "  Built ${module_cmd}.{amd64,arm64}"
 done

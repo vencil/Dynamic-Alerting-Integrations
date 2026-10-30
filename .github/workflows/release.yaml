@@ -422,10 +422,10 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/da-guard-bin"
-          cd components/threshold-exporter/app
           # All three Go CLIs use the same matrix + ldflags. C-10 PR-5
           # added da-batchpr alongside da-guard; C-8 PR-2 adds
-          # da-parser for the Prometheus rule import path.
+          # da-parser for the Prometheus rule import path. The build flags
+          # are scripts/ops/go_build.sh's (#3425), as the da-tools image's.
           for BIN in da-guard da-batchpr da-parser; do
             for OS in linux darwin windows; do
               for ARCH in amd64 arm64; do
@@ -433,11 +433,9 @@ jobs:
                 [ "$OS" = "windows" ] && EXT=".exe"
                 OUT="$RUNNER_TEMP/da-guard-bin/${BIN}-${OS}-${ARCH}${EXT}"
                 echo "▸ Building ${BIN} $OS/$ARCH..."
-                CGO_ENABLED=0 GOOS="$OS" GOARCH="$ARCH" go build \
-                    -buildvcs=false \
-                    -ldflags "-X main.Version=v${VERSION}" \
-                    -o "$OUT" \
-                    "./cmd/${BIN}"
+                sh scripts/ops/go_build.sh -X "main.Version=v${VERSION}" \
+                    --goos "$OS" --goarch "$ARCH" \
+                    components/threshold-exporter/app "./cmd/${BIN}" "$OUT"
               done
             done
           done

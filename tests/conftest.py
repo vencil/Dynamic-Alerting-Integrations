@@ -35,7 +35,7 @@ if _DA_TOOLS_DIR not in sys.path:
 
 # ── Local imports (factories helper) ──────────────────────────────────
 from factories import populate_routing_dir  # noqa: E402
-from _da_guard_build import go_build_env  # noqa: E402  (#3174: 與出貨同形，CGO_ENABLED=0)
+from _go_build import go_build_argv  # noqa: E402  (#3425: 建置旗標的單一來源，與出貨同形)
 
 # ── Runtime encoding gate (#2005): see tests/_encoding_gate.py ─────────
 pytest_plugins = ["_encoding_gate"]
@@ -290,10 +290,10 @@ def da_guard_binary(tmp_path_factory):
                     "take their values from it cannot be measured")
     out = tmp_path_factory.mktemp("da-guard-bin") / "da-guard"
     proc = subprocess.run(
-        [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-guard"],
-        cwd=os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
+        go_build_argv(os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
+                      "./cmd/da-guard", str(out)),
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=False, timeout=600, env=go_build_env())
+        check=False, timeout=600)
     if proc.returncode != 0:
         pytest.fail(f"go build da-guard failed (rc={proc.returncode}):\n{proc.stderr}")
     return str(out)
@@ -333,10 +333,10 @@ def da_crdecode_binary(tmp_path_factory):
                     "`da_assembler --render-cr` cannot be measured")
     out = tmp_path_factory.mktemp("da-crdecode-bin") / "da-crdecode"
     proc = subprocess.run(
-        [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-crdecode"],
-        cwd=os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
+        go_build_argv(os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
+                      "./cmd/da-crdecode", str(out)),
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=False, timeout=600, env=go_build_env())
+        check=False, timeout=600)
     if proc.returncode != 0:
         pytest.fail(f"go build da-crdecode failed (rc={proc.returncode}):\n{proc.stderr}")
     return str(out)
@@ -363,10 +363,9 @@ def da_read_binary(tmp_path_factory):
                     "that take an Alertmanager config from it cannot be measured")
     out = tmp_path_factory.mktemp("da-read-bin") / "da-read"
     proc = subprocess.run(
-        [go, "build", "-buildvcs=false", "-o", str(out), "."],
-        cwd=os.path.join(REPO_ROOT, "components", "da-read"),
+        go_build_argv(os.path.join(REPO_ROOT, "components", "da-read"), ".", str(out)),
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=False, timeout=600, env=go_build_env())
+        check=False, timeout=600)
     if proc.returncode != 0:
         pytest.fail(f"go build da-read failed (rc={proc.returncode}):\n{proc.stderr}")
     return str(out)
@@ -396,10 +395,10 @@ def tenant_api_binary(tmp_path_factory):
                     "`config check` (the readers of tenant-api's own records) cannot be measured")
     out = tmp_path_factory.mktemp("tenant-api-bin") / "tenant-api"
     proc = subprocess.run(
-        [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/server"],
-        cwd=os.path.join(REPO_ROOT, "components", "tenant-api"),
+        go_build_argv(os.path.join(REPO_ROOT, "components", "tenant-api"),
+                      "./cmd/server", str(out)),
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=False, timeout=900, env=go_build_env())
+        check=False, timeout=900)
     if proc.returncode != 0:
         pytest.fail(f"go build tenant-api failed (rc={proc.returncode}):\n{proc.stderr}")
     return str(out)
@@ -664,10 +663,10 @@ def _provide_session_da_guard() -> None:
     d = tempfile.mkdtemp(prefix="vibe-da-guard-")
     out = os.path.join(d, "da-guard")
     proc = subprocess.run(
-        [go, "build", "-buildvcs=false", "-o", out, "./cmd/da-guard"],
-        cwd=os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
+        go_build_argv(os.path.join(REPO_ROOT, "components", "threshold-exporter", "app"),
+                      "./cmd/da-guard", out),
         capture_output=True, text=True, encoding="utf-8", errors="replace",
-        check=False, timeout=600, env=go_build_env())
+        check=False, timeout=600)
     if proc.returncode != 0:
         shutil.rmtree(d, ignore_errors=True)
         return  # da_guard_binary fails with go's message where it is asked for
@@ -699,8 +698,8 @@ _SESSION_CONSUMER_DIRS: "list[str]" = []
 
 def _provide_session_consumer_binaries() -> None:
     """da-crdecode 與 da-read，比照 `_provide_session_da_guard`：從本 checkout 建一次
-    （與出貨同形 CGO_ENABLED=0：產生器的判定在 RLIMIT_DATA 下也跑它們，見
-    tests/_da_guard_build.py）、
+    （經 scripts/ops/go_build.sh，與出貨同形：產生器的判定在 RLIMIT_DATA 下也跑它們，
+    CGO_ENABLED=0 的理由見該腳本頂部）、
     設進環境變數（子行程與 xdist worker 繼承）；沒有 go 或建不起來就不設，要它的
     測試照樣以缺失失敗、不 skip。要量「沒有它」的測試自己 `monkeypatch.delenv`。"""
     import subprocess
@@ -715,10 +714,9 @@ def _provide_session_consumer_binaries() -> None:
         d = tempfile.mkdtemp(prefix=f"vibe-{name}-")
         out = os.path.join(d, name)
         proc = subprocess.run(
-            [go, "build", "-buildvcs=false", "-o", out, pkg],
-            cwd=os.path.join(REPO_ROOT, *module),
+            go_build_argv(os.path.join(REPO_ROOT, *module), pkg, out),
             capture_output=True, text=True, encoding="utf-8", errors="replace",
-            check=False, timeout=600, env=go_build_env())
+            check=False, timeout=600)
         if proc.returncode != 0:
             shutil.rmtree(d, ignore_errors=True)
             continue  # the session fixtures fail with go's message where asked for

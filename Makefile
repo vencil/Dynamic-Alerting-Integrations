@@ -596,9 +596,9 @@ configmap-assemble: ## 從 conf.d/ 組裝 threshold-config ConfigMap YAML（供 
 assembler-render: ## CRD Assembler: 離線渲染 CR → YAML (使用: make assembler-render CR=k8s/crd/example-thresholdconfig.yaml)
 	@mkdir -p .build/config-dir
 	@# #2476: --render-cr 以 da-crdecode（Kubernetes client 的 YAML→JSON）解碼 CR
-	@cd components/threshold-exporter/app && go build -buildvcs=false -o $(CURDIR)/.build/da-crdecode ./cmd/da-crdecode
+	@$(GO_BUILD) components/threshold-exporter/app ./cmd/da-crdecode $(CURDIR)/.build/da-crdecode
 	@# ADR-036 §2（#2906）：寫入前以 da-guard parse-tree 確認渲染結果
-	@cd components/threshold-exporter/app && $(DA_GUARD_GO_ENV) go build -buildvcs=false -o $(CURDIR)/.build/da-guard ./cmd/da-guard
+	@$(GO_BUILD) components/threshold-exporter/app ./cmd/da-guard $(CURDIR)/.build/da-guard
 	@DA_CRDECODE_BINARY=$(CURDIR)/.build/da-crdecode DA_GUARD_BINARY=$(CURDIR)/.build/da-guard \
 		python3 ./scripts/tools/ops/da_assembler.py \
 		--render-cr $(CR) --config-dir .build/config-dir
@@ -613,15 +613,16 @@ assembler-install-crd: ## CRD Assembler: 安裝 ThresholdConfig CRD + RBAC
 # da-guard（#2115）：validate-config 的 profiles 列經 da-guard 讀 exporter 的答案，
 # 沒有它該列 FAIL、結束碼 2；policy_dsl 列只在有 policy 規則時才讀租戶，那時才同樣
 # FAIL。repo 內從本 checkout 的 Go 原始碼建（與 tests/conftest.py 的
-# da_guard_binary 同一條 go build），輸出在 gitignore 的 .build/。每次都重建：
+# da_guard_binary 同一支 $(GO_BUILD)），輸出在 gitignore 的 .build/。每次都重建：
 # go 的 build cache 讓沒改動時只花一秒左右，而「沿用上次建的」會在 Go 原始碼改過
 # 之後悄悄驗舊的語意。
 DA_GUARD_BUILD := $(CURDIR)/.build/da-guard
-# #3174：repo 內自建的 da-guard 與出貨版同形（da-tools 映像的 build.sh、release.yaml
-# 都是 CGO_ENABLED=0 的靜態檔）。⛔ cgo 版每條 OS thread 的 pthread stack（RLIMIT_STACK，
-# 通常 8 MiB）全數計入 RLIMIT_DATA，產生器容器的判定在 RLIMIT_DATA 下跑 da-guard——
-# 用 cgo 版跑，預算量到的是 thread 數 × stack 上限而不是判定的記憶體。
-DA_GUARD_GO_ENV := CGO_ENABLED=0
+# #3425：repo 內每一次 `go build` 都經 scripts/ops/go_build.sh——建置旗標
+# （CGO_ENABLED=0、-trimpath、-ldflags "-s -w"）只寫在那裡，映像、release、CI、測試與
+# 這裡建出的 binary 同形；每個旗標為何存在見該腳本頂部（⛔ CGO_ENABLED=0 不是風格：
+# cgo 版的 pthread stack 計入 RLIMIT_DATA，產生器的判定會量到 thread 數，#3174）。
+# 守衛：tests/ops/test_go_build_ssot.py。
+GO_BUILD := sh $(CURDIR)/scripts/ops/go_build.sh
 
 .PHONY: da-guard-build
 da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（validate-config 等讀取端需要；da-tools 映像已內建）
@@ -631,7 +632,7 @@ da-guard-build: ## 從本 repo Go 原始碼建 da-guard 到 .build/da-guard（va
 		echo "       DA_GUARD_BINARY to a da-guard binary (the da-tools image ships one)." >&2; \
 		exit 2; }
 	@mkdir -p "$(dir $(DA_GUARD_BUILD))"
-	@cd components/threshold-exporter/app && $(DA_GUARD_GO_ENV) go build -buildvcs=false -o "$(DA_GUARD_BUILD)" ./cmd/da-guard
+	@$(GO_BUILD) components/threshold-exporter/app ./cmd/da-guard "$(DA_GUARD_BUILD)"
 
 # tenant-api（ADR-036 §12）：check_admin_config_schema 經 `tenant-api config check`
 # 以 server 的解析函式判 `_rbac.yaml`／`_tenant_orgs.yaml`。理由同 da-guard-build：
@@ -646,7 +647,7 @@ tenant-api-build: ## 從本 repo Go 原始碼建 tenant-api 到 .build/tenant-ap
 		echo "       TENANT_API_BINARY to a tenant-api binary (the tenant-api image ships one)." >&2; \
 		exit 2; }
 	@mkdir -p "$(dir $(TENANT_API_BUILD))"
-	@cd components/tenant-api && CGO_ENABLED=0 go build -buildvcs=false -o "$(TENANT_API_BUILD)" ./cmd/server
+	@$(GO_BUILD) components/tenant-api ./cmd/server "$(TENANT_API_BUILD)"
 
 # 用哪支 da-guard 只有兩種來源：$DA_GUARD_BINARY 已設（非空白）就用它、不建；
 # 否則經 prerequisite 建 .build/da-guard 並用它（沒有 go 時 da-guard-build 印
@@ -680,7 +681,7 @@ da-read-build: ## 從本 repo Go 原始碼建 da-read 到 .build/da-read（onboa
 		echo "       DA_READ_BINARY to a da-read binary (the da-tools image ships one)." >&2; \
 		exit 2; }
 	@mkdir -p "$(dir $(DA_READ_BUILD))"
-	@cd components/da-read && CGO_ENABLED=0 go build -buildvcs=false -o "$(DA_READ_BUILD)" .
+	@$(GO_BUILD) components/da-read . "$(DA_READ_BUILD)"
 
 .PHONY: da-crdecode-build
 da-crdecode-build: ## 從本 repo Go 原始碼建 da-crdecode 到 .build/da-crdecode（--render-cr、onboard-analyze 與 check_admin_config_schema 讀 Helm values 需要；da-tools 映像已內建）
@@ -690,7 +691,7 @@ da-crdecode-build: ## 從本 repo Go 原始碼建 da-crdecode 到 .build/da-crde
 		echo "       DA_CRDECODE_BINARY to a da-crdecode binary (the da-tools image ships one)." >&2; \
 		exit 2; }
 	@mkdir -p "$(dir $(DA_CRDECODE_BUILD))"
-	@cd components/threshold-exporter/app && CGO_ENABLED=0 go build -buildvcs=false -o "$(DA_CRDECODE_BUILD)" ./cmd/da-crdecode
+	@$(GO_BUILD) components/threshold-exporter/app ./cmd/da-crdecode "$(DA_CRDECODE_BUILD)"
 
 # #3206 12d-3：只要 da-crdecode 的目標（讀 Kubernetes manifest／Helm values 的 lint、
 # 產生器讀回自己組出的 ConfigMap）掛 $(DA_CRDECODE_PREREQ)、在指令前加 $(DA_CRDECODE_ENV)。

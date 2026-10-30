@@ -22,9 +22,12 @@ COPY components/threshold-exporter/app/go.mod components/threshold-exporter/app/
 COPY components/threshold-exporter/app/third_party ./third_party
 RUN go mod download
 COPY components/threshold-exporter/app/ ./
+# The build flags live in ONE place, scripts/ops/go_build.sh (#3425): the same
+# flags as the da-tools image's da-guard. The root .dockerignore re-includes
+# scripts/ops/ for this COPY; it lands outside the module directory.
+COPY scripts/ops/go_build.sh /opt/go_build.sh
 ARG TARGETOS TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" \
-    -o /da-guard ./cmd/da-guard
+RUN sh /opt/go_build.sh --goos "${TARGETOS}" --goarch "${TARGETARCH}" . ./cmd/da-guard /da-guard
 
 # ── Python + promtool ────────────────────────────────────────────────────
 FROM python:3.13.15-alpine3.23 AS builder

@@ -65,6 +65,7 @@ on:
       - "scripts/tools/_lib_python.py"                  # recipe-preview COPY source (#3229)
       - "scripts/tools/_lib_validation.py"              # recipe-preview COPY source (#3229)
       - "scripts/tools/_lib_prometheus.py"              # recipe-preview COPY source (#3229)
+      - "scripts/ops/go_build.sh"                       # the Go build flags (#3425): tenant-api / recipe-preview COPY it, da-tools' build.sh runs it
       - "docs/interactive/**"        # da-portal Dockerfile COPY source
       - "tools/portal/src/**"        # da-portal COPY source (post TD-042 restructure)
       - "docs/assets/**"             # da-portal COPY source

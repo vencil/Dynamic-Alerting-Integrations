@@ -32,6 +32,7 @@ lang: en
 - **Revised 2026-10-28**: decides how the Python side gets tenant-api's admin config: it reads the output of tenant-api's own `state show` and `config check` subcommands, which use the server's parse functions (§12); Alertmanager config and Kubernetes manifests become two rows in §12; §7 step 12 says what it is made of. Revised again the same day: both Prometheus's rule files and `prometheus.yml` get the authoritative reading, at the cost of the da-tools image carrying the service-discovery dependencies; for rule files rulefmt is authoritative, and vmalert's compatibility is held by the vmalert-tool test (§12, "Known limits and risks"); §7 step 12 now puts the AST lint first, freezing the existing call sites with a ratchet.
 - **Revised 2026-10-30**: the migration audit command and the Python loaders that imitate yaml.v3 are deleted (§7 step 13), and the two pre-upgrade checks are in the incremental migration playbook (§8); §8 and the appendix describe the current state; the decision is unchanged.
 - **Further revision 2026-10-30**: every step of §7 is done, and the status says implemented; §7 and "Implementation order" describe the current state, without the "in progress" and "next step" sentences; step 11 says that the YAML examples in the docs are judged by one inventory, with fence attributes declaring their reader; the outcome in §3 "Whether the cache stays" says that the streaming output was not done before the measurement; the decision is unchanged.
+- **Third revision 2026-10-30**: the size figures in "Cost" and "Known limits and risks" are re-measured with the shipping build (`scripts/ops/go_build.sh`), with the date, commit and command of the measurement; the earlier figures were taken with build flags that differed from what shipped. The decision is unchanged.
 
 ## Summary
 
@@ -625,7 +626,15 @@ Risks that are new or remain:
 - **The cost of the judgement, and its cache**: every file is judged once more before it is decoded. The exporter keeps verdicts by the SHA-256 of the file content (at most 8,192; when full the set is dropped whole, with one DEBUG log line), so the same content is not judged twice; a cold start still judges every file once (measured: a cold scan of 1,000 tenant files takes 109 ms, 70 ms with every verdict kept). A process that meets more distinct contents than the bound keeps dropping the set, its hit rate falls towards 0 and the cost goes back to the uncached figure; the verdicts do not change. An unreadable file's message is bounded to 512 bytes where `parse-tree` makes it: a longer one keeps its head (the line number and what was refused) and its tail (a repeated key's "first at line M", for one), the middle omitted — so the exporter's log, tenant-api, da-guard's reports and the `parse-tree` JSON carry the same text.
 - **yaml.v3's output format**: once the tools that write conf.d write through Go, blank lines, the alignment of end-of-line comments and the quoting style change, and customers' diffs show format differences unrelated to the change itself (§2).
 - **The cache stays**: the generator container keeps caching parse results across requests, because the conditions for removing it do not hold (§3 "Whether the cache stays"). The cost is that the cache, its eviction rules and the cache-size metric must be maintained; the cold start fills it with the batch single-file mode, in time that grows linearly with the number of files.
-- **The image-size cost**: for `da-read prometheus` to read the repo's own Prometheus config (which uses `kubernetes_sd_configs`) it must register every service discovery, which builds in every cloud SDK and the Kubernetes client. `da-read` grows from 15.9 MB to 79.5 MB (uncompressed binary; built against the Go module matching Prometheus v3.15.0 with `CGO_ENABLED=0 go build -trimpath -ldflags='-s -w'`, comparing today's `da-read` with one that adds `config.Load`, the service-discovery registration and `rulefmt.Parse`); compressed with `gzip -9` it goes from 6.0 MB to 22.9 MB. Service discovery is the bulk of it: a program calling only `config.Load` is 15.5 MB without the registration and 77.0 MB with it; one calling only `rulefmt.Parse` is 11.6 MB. In exchange `prometheus.yml` is read the way Prometheus reads it.
+- **The image-size cost**: for `da-read prometheus` to read the repo's own Prometheus config (which uses `kubernetes_sd_configs`) it must register every service discovery, which builds in every cloud SDK and the Kubernetes client. Service discovery is the bulk of it; measured 2026-10-30 on commit `0634a81` (linux/amd64; built with the shipping build, `scripts/ops/go_build.sh`, i.e. `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w"`; sizes are uncompressed / after `gzip -9`):
+
+  | Version of `da-read` | Size |
+  |---|---|
+  | Today's `da-read` (reads the Alertmanager config, rule files and `prometheus.yml`) | 79.5 MB / 22.9 MB |
+  | The same source without the service-discovery registration (the `discovery/install` import line in `prometheus.go`) | 22.8 MB / 8.4 MB |
+  | The version that only read the Alertmanager config, before the `prometheus` and `prometheus-rules` subcommands (commit `85050493`) | 15.9 MB / 6.0 MB |
+
+  In exchange `prometheus.yml` is read the way Prometheus reads it.
 - **Getting the state references needs tenant-api itself**: on a cluster, the right to `kubectl exec` into the tenant-api pod (more than `get configmap`, the same as `state restore`); offline from a backup, docker to run the deployed tenant-api image. A site with neither cannot get the state references, and `offboard_tenant` runs only with `--skip-state-check`. Only when a site reports this case is a separate binary built in the tenant-api module, calling the same parse functions and shipped in da-tools, with a version pin test as for amtool.
 - **A writing change brought by the new yaml.v3 base**: when the base moved to upstream v3.0.5, the old and new bases were compared with the fixed corpus and the readings do not differ. Writing differs in one place: when a string that starts with a line break is written as a literal block (`|`), the old base left out the leading blank line, so it read back without that line break; the new base writes it. Two places in tenant-api change: when it merges custom alerts, such a string used to be written double-quoted and is now a literal block, and both read back as the same string; a partial update over a block scalar that opens with a blank line used to be refused (`not_round_trippable`) because the re-encode changed it, and now the re-encode keeps it and the write goes through. A later upstream upgrade is compared with the fixed corpus first in the same way (§11).
 - **The rendered-output comparison cannot attribute**: §8's comparison says where the result changed, not which reading caused it.
@@ -648,7 +657,7 @@ Risks that are new or remain:
 
 ## Cost
 
-Every measurement in this section was taken before the generator read `parse-tree`, while it read files with PyYAML; samples after the switch are in §3, "Whether the cache stays".
+The generator and write-judging measurements in this section were taken before the generator read `parse-tree`, while it read files with PyYAML; samples after the switch are in §3, "Whether the cache stays".
 
 Semantic layer (the generator, measured 2026-10-09):
 
@@ -658,7 +667,18 @@ Semantic layer (the generator, measured 2026-10-09):
 | Parsing one file | 0.47 ms |
 | Python startup | 0.11 s, 25 MB |
 | Checking 1000 files out of git | 0.21 s, 12 MB |
-| Image size (compressed, amd64) | da-tools 36.9 MB; tenant-api 14.0 MB |
+
+The Go binaries in the images (measured 2026-10-30 on commit `0634a81`, linux/amd64): built with the shipping build, `scripts/ops/go_build.sh` (`CGO_ENABLED=0 go build -trimpath -ldflags "-s -w"`; the da-tools image, the tenant-api image and the release's offline binaries are all built through that script), measured uncompressed and after `gzip -9`. Only the binaries are measured, not the base image or the Python layers; the size of a whole compressed image is not part of this measurement. To measure again, build with the same script, e.g. `sh scripts/ops/go_build.sh --goos linux --goarch amd64 components/da-read . /tmp/da-read`, then `gzip -9 -c /tmp/da-read | wc -c`.
+
+| Binary | Uncompressed | After `gzip -9` |
+|---|---|---|
+| da-guard | 10.3 MB | 4.1 MB |
+| da-batchpr | 2.8 MB | 1.2 MB |
+| da-parser | 9.9 MB | 3.9 MB |
+| da-crdecode | 3.0 MB | 1.3 MB |
+| da-read | 79.5 MB | 22.9 MB |
+| These five in the da-tools image, together | 105.5 MB | 33.4 MB |
+| tenant-api | 48.9 MB | 14.2 MB |
 
 Generator container (measured 2026-10-10, a 1000-tenant tree): about 3.1 s with a new process per request; about 1.5–1.8 s in the same process with a parse cache.
 
