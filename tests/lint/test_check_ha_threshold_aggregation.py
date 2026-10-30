@@ -99,6 +99,8 @@ groups:
 _CRD = """\
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
+metadata:
+  name: da-rule-pack-t
 spec:
   groups:
     - name: t-threshold-normalization
@@ -121,17 +123,21 @@ data:
 """
 
 
+def _findings(path):
+    return lint.findings_by_file([path])[str(path)]
+
+
 @pytest.mark.parametrize("template", [_RAW, _CRD, _CM], ids=["raw", "crd", "configmap"])
 def test_check_file_all_three_formats(tmp_path, template):
     """_iter_rule_groups must parse raw rule-pack / CRD / ConfigMap alike."""
     sum_file = tmp_path / "sum.yaml"
     sum_file.write_text(template.format(op="sum"), encoding="utf-8")
-    findings = lint.check_file(sum_file)
+    findings = _findings(sum_file)
     assert len(findings) == 1 and findings[0][1] == "sum"
 
     max_file = tmp_path / "max.yaml"
     max_file.write_text(template.format(op="max"), encoding="utf-8")
-    assert lint.check_file(max_file) == []
+    assert _findings(max_file) == []
 
 
 def test_a_file_prometheus_refuses_is_named_not_skipped(tmp_path):
@@ -141,7 +147,7 @@ def test_a_file_prometheus_refuses_is_named_not_skipped(tmp_path):
     p = tmp_path / "scalar.yaml"
     p.write_text("just a string\n", encoding="utf-8")
     with pytest.raises(lint._lib_consumer_read.RuleFileSourcesRefused) as exc_info:
-        lint.check_file(p)
+        _findings(p)
     assert [path for path, _why in exc_info.value.files] == [str(p)]
 
 
@@ -154,6 +160,23 @@ def test_main_names_a_refused_file_rc2(tmp_path, monkeypatch, capsys):
     assert lint.main() == 2
     err = capsys.readouterr().err
     assert "rule-pack-t.yaml" in err and "field rulez not found" in err
+
+
+@pytest.mark.parametrize("where", ["rule-packs/rule-pack-t.yaml",
+                                   "operator-manifests/da-rule-pack-t.yaml",
+                                   "k8s/03-monitoring/configmap-rules-t.yaml"])
+def test_main_judges_a_file_by_its_readers_not_its_directory(tmp_path, monkeypatch, where):
+    """#3426 F7: main reads every target through `rule_files_in`. A
+    ConfigMap under rule-packs/ (or a raw pack among the manifests) used to
+    go to the wrong reader by its directory: refused, or read as no rules."""
+    for d in ("rule-packs", "operator-manifests", "k8s/03-monitoring"):
+        (tmp_path / d).mkdir(parents=True, exist_ok=True)
+    (tmp_path / where).write_text(_CM.format(op="sum"), encoding="utf-8")
+    monkeypatch.setattr(lint, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["check_ha_threshold_aggregation.py", "--ci"])
+    assert lint.main() == 1
+    (tmp_path / where).write_text(_RAW.format(op="sum"), encoding="utf-8")
+    assert lint.main() == 1
 
 
 def test_main_exit_codes(tmp_path, monkeypatch):
@@ -182,7 +205,7 @@ def test_live_repo_all_max():
     )
     offenders = {}
     for path in targets:
-        findings = lint.check_file(path)
+        findings = _findings(path)
         if findings:
             offenders[str(path.relative_to(repo))] = findings
     assert not offenders, f"non-max user_threshold aggregation(s): {offenders}"

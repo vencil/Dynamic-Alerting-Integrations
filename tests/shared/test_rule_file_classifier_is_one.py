@@ -23,6 +23,29 @@ search matches 7 modules — 6 of them read only the rule loader's results
 whose `groups` is the RBAC config's) — so the condition is what makes the
 search mean "classifies from a da-crdecode reading". With it, the matches are
 the three below, each named with why it stays.
+
+⚠️ A tripwire, not a proof. It is cheap and catches the shapes the replaced
+classifiers were written in; it does not catch a classifier written another
+way, and it is not to be grown into one that tries (that direction was tried
+and abandoned). Known misses, among others:
+
+* the decision taken off a condition: `ok = "groups" in doc` … `if ok:` is
+  caught (the membership test), but `has = doc.get("groups")` … `if has:`
+  is not (the access is not itself the condition);
+* the key spelled through a variable or a constant (`doc.get(KEY)`), or
+  built (`"gro" + "ups"`);
+* other spellings of the same test: `set(doc) & {"groups"}`, `match doc:
+  case {"groups": _}`, `try: doc["groups"] except KeyError`,
+  `operator.itemgetter("groups")`, `dict.get(doc, "groups")`;
+* the decision made in a helper of another module that does not itself read
+  through da-crdecode;
+* a module that reads YAML some other way (the text, a regex on it) and
+  then decides;
+* the narrowing itself: a module that classifies from a da-crdecode reading
+  it was HANDED (no `kubernetes_*` / `any_yaml_*` call of its own) is not
+  matched, and a module that both reads through da-crdecode and checks the
+  `groups` of rule-loader results is matched although it classifies nothing
+  (the two false positives below).
 """
 from __future__ import annotations
 

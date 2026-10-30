@@ -60,17 +60,19 @@ RULE_FILE_GLOB_SUFFIX = ".yml"
 
 
 class ConfigMapShapeError(ValueError):
-    """A ConfigMap in kubectl's reading that names no pack: no string
-    `metadata.name`, or a `data` that is not a mapping (#3426). It cannot be
-    read as a pack, so it is named — never taken for a pack with no keys."""
+    """A ConfigMap the API server would refuse
+    (`_lib_consumer_read.rule_object_problem`, the one judgement of its
+    shape: no string `metadata.name`, a `data` that is not a mapping —
+    #3426). It cannot be read as a pack, so it is named — never taken for a
+    pack with no keys."""
 
 
 def configmap_rule_packs(monitor_dir: Path) -> Dict[str, Set[str]]:
     """{metadata.name: {data keys}} for every ConfigMap in every
     configmap-rules-*.yaml, as kubectl reads the files (da-crdecode). A
-    ConfigMap without a `data` has no keys; one with no string
-    `metadata.name`, or a `data` that is not a mapping, raises
-    ConfigMapShapeError naming every such document."""
+    ConfigMap without a `data` has no keys; one the API server would refuse
+    (`rule_object_problem`) raises ConfigMapShapeError naming every such
+    document."""
     bad: List[str] = []
     out: Dict[str, Set[str]] = {}
     paths = [path for path in sorted(monitor_dir.glob("configmap-rules-*.yaml"))
@@ -80,16 +82,11 @@ def configmap_rule_packs(monitor_dir: Path) -> Dict[str, Set[str]]:
         for i, doc in enumerate(docs, start=1):   # each a Kubernetes object (#3426)
             if doc["kind"] != "ConfigMap":
                 continue
-            meta = doc.get("metadata")
-            name = meta.get("name") if isinstance(meta, dict) else None
-            data = doc.get("data")
-            if not isinstance(name, str) or not name:
-                bad.append(f"{path} (object {i}): a ConfigMap with no string metadata.name")
+            problem = _lib_consumer_read.rule_object_problem(doc)
+            if problem is not None:
+                bad.append(f"{path} (object {i}): {problem}")
                 continue
-            if data is not None and not isinstance(data, dict):
-                bad.append(f"{path} ({name}): its data is not a mapping")
-                continue
-            out[name] = set(data.keys()) if data else set()
+            out[doc["metadata"]["name"]] = set(doc.get("data") or {})
     if bad:
         raise ConfigMapShapeError("; ".join(bad))
     return out

@@ -108,4 +108,5 @@ def test_a_configmap_whose_data_is_no_mapping_is_named(tmp_path, capsys):
               _DEPLOYMENT.replace("              items:\n"
                                   "              - {key: demo.yml, path: demo.yml}\n", ""))
     assert lint.main(["--monitor-dir", str(d)]) == lint.EXIT_CALLER_ERROR
-    assert "(prometheus-rules-demo): its data is not a mapping" in capsys.readouterr().err
+    assert ("(object 1): ConfigMap prometheus-rules-demo: its data is list, not a mapping"
+            in capsys.readouterr().err)

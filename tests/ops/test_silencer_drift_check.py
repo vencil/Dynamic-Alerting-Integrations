@@ -1198,3 +1198,20 @@ def test_load_alerts_reads_rule_packs_held_in_a_configmap(tmp_path, text):
     alerts, errors = sdc.load_alerts(tmp_path)
     assert errors == []
     assert [a["name"] for a in alerts] == ["InCm"]
+
+
+# ── #3426 round 3: shapes the API server refuses are named, not read as empty ──
+_PR_TOP_GROUPS = ("apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+                  "metadata: {name: p}\ngroups:\n- name: g\n  rules:\n  - {alert: A, expr: up}\n")
+_CM_DATA_LIST = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\n"
+                 "data:\n- groups: []\n")
+_APIVERSION_NO_KIND = "apiVersion: v1\nmetadata: {name: c}\ndata: {r.yml: 'groups: []'}\n"
+
+
+def test_load_alerts_names_a_prometheusrule_with_top_level_groups(tmp_path):
+    """The API server refuses it (strict decoding error: unknown field
+    "groups"); it used to be read as a PrometheusRule with no rule file."""
+    (tmp_path / "pr.yaml").write_text(_PR_TOP_GROUPS, encoding="utf-8")
+    alerts, errors = sdc.load_alerts(tmp_path)
+    assert alerts == []
+    assert len(errors) == 1 and 'unknown field "groups"' in errors[0], errors

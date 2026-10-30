@@ -1155,6 +1155,13 @@ class TestSourceFilesAreWhatTheReadersSay:
         # A List is read as its items; one kubectl would not apply is named.
         ("list.yaml", "apiVersion: v1\nkind: List\nitems:\n- {kind: ConfigMap}\n",
          "items[0] (line 4): it is not a Kubernetes object: it has no `apiVersion`"),
+        # #3426 round 3: shapes the API server refuses.
+        ("pr.yaml", "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+                    "metadata: {name: p}\ngroups:\n- name: g\n  rules: []\n",
+         'unknown field "groups"'),
+        ("cm-data-list.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\n"
+                              "data:\n- groups: []\n",
+         "its data is list, not a mapping"),
         # Neither YAML reading reads it, and the rule loader refuses it too.
         ("broken.yaml", "groups: [\n", "Prometheus' rule loader refuses it"),
         ("cm-then-junk.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n---\n- x\n",

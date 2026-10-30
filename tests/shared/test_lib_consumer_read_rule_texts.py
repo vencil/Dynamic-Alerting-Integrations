@@ -289,3 +289,45 @@ def test_files_pyyaml_read_and_prometheus_refuses(text, why) -> None:
     yaml.safe_load_all(text)          # PyYAML read all of these
     (rf,) = cr.prometheus_rule_text_results([("t", text)])
     assert rf.problem is not None and why in rf.problem, rf.problem
+
+
+
+# ── rule_object_problem: the one judgement of these kinds' shape (#3426) ──
+
+_PR = "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata: {name: p}\n"
+
+
+@pytest.mark.parametrize("doc,problem", [
+    ({"kind": "PrometheusRule", "metadata": {"name": "p"}, "spec": {"groups": []}}, None),
+    ({"kind": "PrometheusRule", "metadata": {"name": "p"}, "groups": []},
+     'strict decoding error: unknown field "groups"'),
+    ({"kind": "PrometheusRule", "metadata": {"name": "p"}}, "spec: Required value"),
+    ({"kind": "PrometheusRule", "metadata": {"name": "p"}, "spec": "x"},
+     "spec in body must be of type object"),
+    ({"kind": "ConfigMap", "metadata": {"name": "c"}}, None),
+    ({"kind": "ConfigMap", "metadata": {"name": "c"}, "data": None}, None),
+    ({"kind": "ConfigMap", "metadata": {"name": "c"}, "data": ["x"]}, "its data is list"),
+    ({"kind": "ConfigMap", "metadata": {"name": "c"}, "binaryData": "x"}, "its binaryData is str"),
+    ({"kind": "ConfigMap", "data": {}}, "no string metadata.name"),
+    ({"kind": "Secret", "data": ["x"]}, None),
+])
+def test_rule_object_problem(doc, problem) -> None:
+    got = cr.rule_object_problem(doc)
+    assert (got is None) if problem is None else (problem in got), got
+
+
+def test_a_prometheusrule_without_spec_is_refused_not_empty(tmp_path) -> None:
+    """It used to be the rule file `{}` — no rules, no word."""
+    path = _write(tmp_path, "pr.yaml", _PR)
+    with pytest.raises(cr.InputRefused) as exc:
+        cr.manifest_rule_file_results([path])
+    assert "spec: Required value" in " ".join(exc.value.stderr_lines)
+
+
+def test_no_schema_is_no_answer(monkeypatch) -> None:
+    """The schema is what judges a PrometheusRule; without it nothing is."""
+    monkeypatch.setattr(cr, "_SCHEMA_CACHE", {})
+    monkeypatch.setattr(cr, "PROMETHEUSRULE_SCHEMA", "no-such-schema.json")
+    monkeypatch.setattr(cr, "_PROMETHEUSRULE_SCHEMA_IN_REPO", ("no", "such", "schema.json"))
+    with pytest.raises(cr.ConsumerReadError, match="schema"):
+        cr.rule_object_problem({"kind": "PrometheusRule", "metadata": {"name": "p"}})

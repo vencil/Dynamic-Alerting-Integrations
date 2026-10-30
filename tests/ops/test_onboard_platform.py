@@ -1417,3 +1417,17 @@ class TestConfdThroughDaGuardWrite:
         err = capsys.readouterr().err
         assert "phase1-routing/tenant-a.yaml" in err and "group_wait" in err, err
         assert not out.exists() or not any(out.rglob("*"))
+
+
+
+def test_read_rule_files_names_a_manifest_without_kind(tmp_path):
+    """#3426 round 3: a file with an `apiVersion` but no `kind` sets out to
+    be a Kubernetes object; kubectl's reason is the error, not "No 'groups'
+    found" (it used to be taken for other YAML)."""
+    from onboard_platform import _read_rule_files
+    p = tmp_path / "cm.yaml"
+    p.write_text("apiVersion: v1\nmetadata: {name: c}\ndata: {r.yml: 'groups: []'}\n",
+                 encoding="utf-8")
+    ((path, groups, error),) = _read_rule_files([str(p)])
+    assert path == str(p) and groups is None
+    assert "it has no `kind`" in error and "No 'groups'" not in error, error

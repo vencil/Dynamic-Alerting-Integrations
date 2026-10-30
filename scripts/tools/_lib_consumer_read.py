@@ -712,6 +712,104 @@ _Keyed = "tuple[str, str, str, str | None, str | None, str | None]"
 #: The kinds whose documents deliver rule files to Prometheus.
 RULE_FILE_KINDS = ("ConfigMap", "PrometheusRule")
 
+#: The PrometheusRule CRD schema (its openAPIV3Schema), the one the
+#: docs' CRD lint validates against (`make crd-schemas` vendors it from the
+#: pinned upstream CRD; docs/schemas/crd/SOURCES.yaml). The da-tools image
+#: ships it beside this module (build.sh REPO_DATA_FILES).
+PROMETHEUSRULE_SCHEMA = "PrometheusRule_v1.json"
+_PROMETHEUSRULE_SCHEMA_IN_REPO = ("docs", "schemas", "crd", "monitoring.coreos.com",
+                                  PROMETHEUSRULE_SCHEMA)
+_SCHEMA_CACHE: "dict[str, dict]" = {}
+
+
+def _prometheusrule_schema() -> dict:
+    """The vendored PrometheusRule schema: beside this module (the image),
+    else under the repo root above it. Raises ConsumerReadError when it is in
+    neither place — no shape is then judged, and that is no answer."""
+    if PROMETHEUSRULE_SCHEMA in _SCHEMA_CACHE:
+        return _SCHEMA_CACHE[PROMETHEUSRULE_SCHEMA]
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [os.path.join(here, PROMETHEUSRULE_SCHEMA)]
+    d = here
+    while True:
+        candidates.append(os.path.join(d, *_PROMETHEUSRULE_SCHEMA_IN_REPO))
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    for c in candidates:
+        if os.path.isfile(c):
+            with open(c, encoding="utf-8") as fh:
+                _SCHEMA_CACHE[PROMETHEUSRULE_SCHEMA] = json.load(fh)
+            return _SCHEMA_CACHE[PROMETHEUSRULE_SCHEMA]
+    raise ConsumerReadError(f"the PrometheusRule CRD schema ({PROMETHEUSRULE_SCHEMA}) was "
+                            "not found beside _lib_consumer_read.py or under "
+                            + "/".join(_PROMETHEUSRULE_SCHEMA_IN_REPO))
+
+
+_JSON_TYPES = {"object": dict, "array": list, "string": str, "boolean": bool}
+
+
+def rule_object_problem(doc: "dict[str, Any]") -> "str | None":
+    """Why the API server would refuse the ConfigMap or PrometheusRule *doc*
+    (one Kubernetes object of kubectl's reading) as a whole, or None — the
+    one judgement of these two kinds' shape (#3426); None for another kind.
+
+    * Both: ``metadata.name`` must be a non-empty string (kubectl: "resource
+      name may not be empty").
+    * ConfigMap (its Go type, k8s.io/api core/v1): ``data`` is a
+      ``map[string]string`` and ``binaryData`` a ``map[string][]byte``, so
+      either, when present and not null, must be a mapping. (A value of the
+      wrong type is a per-key problem of its rule file.)
+    * PrometheusRule (the vendored CRD schema, ``PROMETHEUSRULE_SCHEMA``):
+      every key the schema ``required`` must be there; a top-level key the
+      schema's ``properties`` does not name is an unknown field, which
+      ``kubectl apply`` (``--validate=strict``, the default) refuses — the
+      API server's strict field validation prunes it and answers
+      ``strict decoding error: unknown field "groups"`` (measured with
+      apiextensions-apiserver v0.37.0's pruning on this schema); a
+      top-level property of the wrong JSON type (``spec`` not a mapping) is
+      refused by the schema's ``type``. Below the top level the rule loader
+      judges ``spec``."""
+    kind = doc.get("kind")
+    if kind not in RULE_FILE_KINDS:
+        return None
+    meta = doc.get("metadata")
+    name = meta.get("name") if isinstance(meta, dict) else None
+    if not isinstance(name, str) or not name:
+        return f"a {kind} with no string metadata.name (kubectl: resource name may not be empty)"
+    if kind == "ConfigMap":
+        for field in ("data", "binaryData"):
+            value = doc.get(field)
+            if value is not None and not isinstance(value, dict):
+                return (f"ConfigMap {name}: its {field} is {type(value).__name__}, not a "
+                        f"mapping (a ConfigMap's {field} is a map of key to "
+                        f"{'string' if field == 'data' else 'base64'})")
+        return None
+    schema = _prometheusrule_schema()
+    props = schema.get("properties") or {}
+    unknown = sorted(k for k in doc if k not in props)
+    if unknown:
+        fields = ", ".join(f'unknown field "{k}"' for k in unknown)
+        return (f"PrometheusRule {name}: the API server refuses it (strict decoding error: "
+                f"{fields}; the CRD schema has no such top-level field — rule groups go "
+                "under spec)")
+    missing = [k for k in schema.get("required") or [] if doc.get(k) is None]
+    if missing:
+        return f"PrometheusRule {name}: {', '.join(missing)}: Required value (the CRD schema)"
+    for key, sub in props.items():
+        want = _JSON_TYPES.get(sub.get("type") if isinstance(sub, dict) else None)
+        if want is not None and key in doc and doc[key] is not None \
+                and not isinstance(doc[key], want):
+            return (f"PrometheusRule {name}: {key} in body must be of type {sub['type']} "
+                    f"(the CRD schema), not {type(doc[key]).__name__}")
+    return None
+
+
+class _ObjectRefused(Exception):
+    """A rule-file-delivering object the API server would refuse
+    (``rule_object_problem``)."""
+
 
 def _manifest_keyed(path: str, docs: "list[Any]", only_declared: bool,
                     crdecode_binary: str | None, binary: str | None,
@@ -720,19 +818,20 @@ def _manifest_keyed(path: str, docs: "list[Any]", only_declared: bool,
     reading, every one an object) deliver, before the rule loader reads them
     (see ``manifest_rule_file_results``)."""
     keyed: "list[Any]" = []
-    for doc in docs:   # each a Kubernetes object: the reading's guarantee
+    for i, doc in enumerate(docs, start=1):   # each a Kubernetes object
         kind = doc["kind"]
-        meta = doc.get("metadata")
-        name = meta.get("name") if isinstance(meta, dict) else None
-        name = name if isinstance(name, str) else None
+        # Judged whatever *kinds* asks for: an object the API server would
+        # refuse makes the file unreadable, not one without rule files.
+        problem = rule_object_problem(doc)
+        if problem is not None:
+            raise _ObjectRefused(f"object {i} of kubectl's reading: {problem}")
         if kind not in kinds:
             continue
+        name = doc["metadata"]["name"]
         if kind == "PrometheusRule":
-            spec = doc.get("spec")
-            keyed.append((path, kind, "spec", json.dumps(spec if spec is not None else {}),
-                          None, name))
+            keyed.append((path, kind, "spec", json.dumps(doc["spec"]), None, name))
         elif kind == "ConfigMap":
-            data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
+            data = doc.get("data") or {}
             for key, value in data.items():
                 if isinstance(value, str):
                     if only_declared and not _configmap_value_is_rule_file(
@@ -742,7 +841,7 @@ def _manifest_keyed(path: str, docs: "list[Any]", only_declared: bool,
                 else:
                     keyed.append((path, kind, key, None,
                                   "a ConfigMap data value must be a string", name))
-            bdata = doc.get("binaryData") if isinstance(doc.get("binaryData"), dict) else {}
+            bdata = doc.get("binaryData") or {}
             for key, value in bdata.items():
                 try:
                     text = base64.b64decode(str(value), validate=True).decode("utf-8")
@@ -800,7 +899,10 @@ def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
     refuses it — a document in it that is no Kubernetes object (a top-level
     list, a mapping with no ``kind``), or a ``kind: List`` item kubectl would
     not apply, included (#3426): no document of a manifest is passed over
-    because of its shape.
+    because of its shape — and when a ConfigMap or PrometheusRule in it is
+    one the API server would refuse (``rule_object_problem``: a ``data`` that
+    is no mapping, a PrometheusRule with a top-level ``groups`` or no
+    ``spec``), never taken for one with no rule files.
     """
     keyed: "list[Any]" = []
     for path in paths:
@@ -809,7 +911,10 @@ def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
             docs = kubernetes_documents(path, binary=crdecode_binary)
         except InputRefused as e:
             raise InputRefused(f"{path}: {e}", e.stderr_lines) from e
-        keyed += _manifest_keyed(path, docs, only_declared, crdecode_binary, binary)
+        try:
+            keyed += _manifest_keyed(path, docs, only_declared, crdecode_binary, binary)
+        except _ObjectRefused as e:
+            raise InputRefused(f"{path}: the API server would refuse it", [str(e)]) from e
     return _read_keyed(keyed, binary)
 
 
@@ -849,15 +954,18 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
        ``data`` / ``binaryData`` values and its PrometheusRules' ``spec``
        (``manifest_rule_file_results``, *only_declared* as there; *kinds*
        narrows it, e.g. to ConfigMaps alone). A manifest with none holds no
-       rule file (``[]``).
+       rule file (``[]``). A ConfigMap or PrometheusRule the API server would
+       refuse (``rule_object_problem``) makes the file refused, never one
+       with no rule files.
     2. When that reading refuses it: with the any-YAML reading
        (``da-crdecode --any-shape``). A file with a document that is a
        mapping declaring ``groups`` is a plain rule file (one
        :class:`RuleFile`, ``kind`` / ``key`` None, ``manifest`` the path);
        the rule loader gives the verdict on its content (a second document,
        say). Any other YAML is refused, or with ``other_yaml=NO_RULE_FILES``
-       holds no rule file — unless a document of it has a ``kind``: a
-       manifest kubectl refuses is refused in either mode.
+       holds no rule file — unless a document of it is a mapping with an
+       ``apiVersion`` or a ``kind``: a manifest kubectl refuses is refused,
+       with kubectl's reason, in either mode.
     3. When that reading refuses it too (sigs.k8s.io/yaml has no JSON for an
        annotation value ``.inf``, say): Prometheus' rule loader decides. A
        file it reads ``groups`` from is a rule file; any other is refused.
@@ -884,18 +992,23 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
             undecided.append(p)
         elif _documents_declare_rule_groups(docs):
             plain.append(p)
-        elif other_yaml != NO_RULE_FILES or any(isinstance(d, dict) and "kind" in d
-                                                for d in docs):
-            # A document with a `kind` sets out to be a Kubernetes object:
-            # a manifest kubectl refuses is named even where other YAML is
-            # allowed, never taken for a file without rule files.
+        elif other_yaml != NO_RULE_FILES or any(
+                isinstance(d, dict) and ("apiVersion" in d or "kind" in d) for d in docs):
+            # A document with an `apiVersion` or a `kind` sets out to be a
+            # Kubernetes object: a manifest kubectl refuses is named even
+            # where other YAML is allowed, never taken for a file without
+            # rule files.
             refused[p] = (f"kubectl's reading refuses it ({why}), and it is no rule file "
                           "(no document declares `groups`)")
     keyed: "list[Any]" = []
     for p in keys:
         if p not in manifests or isinstance(manifests[p], ConsumerReadError):
             continue
-        keyed += _manifest_keyed(p, manifests[p], only_declared, crdecode_binary, binary, kinds)
+        try:
+            keyed += _manifest_keyed(p, manifests[p], only_declared, crdecode_binary, binary,
+                                     kinds)
+        except _ObjectRefused as e:
+            refused[p] = f"the API server would refuse it: {e}"
     for rf in _read_keyed(keyed, binary):
         out[rf.manifest].append(rf)
     for p, rf in zip(plain, prometheus_rule_file_results(plain, binary)):

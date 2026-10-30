@@ -1503,7 +1503,7 @@ da-tools silencer-drift-check --silences-file <silences.json> --rule-source <pat
 | 參數 | 用途 |
 |------|------|
 | `--silences-file <path>` | `amtool silence query -o json` 輸出的 JSON 檔（必須） |
-| `--rule-source <path>` | Rule pack YAML 檔或目錄（遞迴掃 `*.yaml`/`*.yml`；無 `groups:` root 的檔案 silently 跳過，如 `_defaults.yaml`） |
+| `--rule-source <path>` | Rule pack YAML 檔或目錄（遞迴掃 `*.yaml`/`*.yml`）。每個檔裡有哪些 rule file 由讀者判定（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：純 rule file、ConfigMap 的 data 值、PrometheusRule 的 `spec`，`kind: List`（`kubectl get … -o yaml` 的輸出）展開成 items 逐一讀。不是 Kubernetes 物件也不是 rule file 的 YAML（例如 `_defaults.yaml`）不含 rule file、不報錯；帶 `apiVersion` 或 `kind`、kubectl 卻讀不了的檔（例如頂層寫 `groups` 的 PrometheusRule、`data` 不是 mapping 的 ConfigMap），以及 rule loader 拒收的 rule file，都逐檔點名為錯誤。⚠️ 已知例外：ConfigMap 的 data 值若兩個讀法（Kubernetes 的 YAML 讀法與 Prometheus 的 rule loader）都讀不了，視為不是 rule file 的檔（例如 Alertmanager 的 markdown 模板），不讀也不報錯；後果是縮排用了 tab 之類壞到兩者都讀不了的 rule 值，放在 ConfigMap 裡時不會被讀到、也不會報錯（整個檔本身是 rule file 時不在此列，會點名報錯）。 |
 | `--include-inactive` | 包含 expired / pending silence。預設只檢 active 那批 |
 | `--json` | 輸出 JSON 結構化報告 |
 | `--ci` | 偵測到 orphan silence 時 exit 1（CI gate） |
@@ -1650,7 +1650,7 @@ da-tools migrate-to-operator [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄。讀的是頂層的 YAML 檔，清單取自 da-guard 只列檔模式（`parse-tree --list-only`）對這個目錄的走訪，所以需要 da-guard（找不到結束碼 `2`）；子目錄裡的檔不讀，stderr 會點名；頂層不讀的項目（以 `.` 開頭的隱藏檔或目錄、懸空 symlink、FIFO 等）也由一行 `WARNING:` 逐一點名並附原因。這個目錄不是 conf.d，不套用 conf.d 的拒絕；每個檔由讀者判定它是什麼（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：先以 kubectl 的 manifest 讀法（`da-crdecode`）讀，其中 ConfigMap 的 data 值若是 rule file 就遷移；`kind: List`（`kubectl get cm -o yaml` 的輸出）照 kubectl 展開成它的 items 逐一讀，item 必須是帶 `apiVersion` 與 `kind` 的物件、不能再是 List；被拒收時，若以任意 YAML 讀法（`da-crdecode --any-shape`）讀出的是「單一 mapping、宣告 `groups`」的純 rule file，就當 rule file 遷移；兩種讀法都讀不了的檔（例如 annotation 值是 `.inf`）交給 Prometheus 的 rule loader（`da-read prometheus-rules`）判，讀得出 `groups` 就當 rule file；其餘的檔（YAML 壞掉、頂層是 list 或純量、沒有 `kind` 的 document、kubectl 不會套用的 List item）一律讓整次執行以結束碼 `2` 停下、一個檔都不寫，stderr 逐檔點名並附讀者的理由（`--json` 的 envelope `reason` 為 `source_files_unreadable`）。rule file 被 Prometheus 的 rule loader 拒收，或找不到 `da-crdecode`／`da-read` 時，同樣在寫任何檔之前以結束碼 `2` 停下並附原因（`reason` 為 `rule_files_unreadable`）。⚠️ 先前這些情況只印 WARNING（或記進 `issues`／`errors`）並照常寫出其餘 CRD、結束碼 0 | （必填） |
+| `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄。讀的是頂層的 YAML 檔，清單取自 da-guard 只列檔模式（`parse-tree --list-only`）對這個目錄的走訪，所以需要 da-guard（找不到結束碼 `2`）；子目錄裡的檔不讀，stderr 會點名；頂層不讀的項目（以 `.` 開頭的隱藏檔或目錄、懸空 symlink、FIFO 等）也由一行 `WARNING:` 逐一點名並附原因。這個目錄不是 conf.d，不套用 conf.d 的拒絕；每個檔由讀者判定它是什麼（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：先以 kubectl 的 manifest 讀法（`da-crdecode`）讀，其中 ConfigMap 的 data 值若是 rule file 就遷移；`kind: List`（`kubectl get cm -o yaml` 的輸出）照 kubectl 展開成它的 items 逐一讀，item 必須是帶 `apiVersion` 與 `kind` 的物件、不能再是 List；被拒收時，若以任意 YAML 讀法（`da-crdecode --any-shape`）讀出的是「單一 mapping、宣告 `groups`」的純 rule file，就當 rule file 遷移；兩種讀法都讀不了的檔（例如 annotation 值是 `.inf`）交給 Prometheus 的 rule loader（`da-read prometheus-rules`）判，讀得出 `groups` 就當 rule file；其餘的檔（YAML 壞掉、頂層是 list 或純量、沒有 `kind` 的 document、kubectl 不會套用的 List item）一律讓整次執行以結束碼 `2` 停下、一個檔都不寫，stderr 逐檔點名並附讀者的理由（`--json` 的 envelope `reason` 為 `source_files_unreadable`）。⚠️ 已知例外：ConfigMap 的 data 值若兩個讀法（Kubernetes 的 YAML 讀法與 Prometheus 的 rule loader）都讀不了，視為不是 rule file 的檔（例如 Alertmanager 的 markdown 模板），不讀也不報錯；後果是縮排用了 tab 之類壞到兩者都讀不了的 rule 值，放在 ConfigMap 裡時不會被讀到、也不會報錯（整個檔本身是 rule file 時不在此列，會點名報錯）。rule file 被 Prometheus 的 rule loader 拒收，或找不到 `da-crdecode`／`da-read` 時，同樣在寫任何檔之前以結束碼 `2` 停下並附原因（`reason` 為 `rule_files_unreadable`）。⚠️ 先前這些情況只印 WARNING（或記進 `issues`／`errors`）並照常寫出其餘 CRD、結束碼 0 | （必填） |
 | `--config-dir <DIR>` | 租戶配置目錄。租戶的認定與 `operator-generate` 相同：整棵樹各租戶檔 `tenants:` 的鍵（經 `da-guard parse-tree`），不是檔名。⚠️ 有讀不了的租戶檔、同一租戶在兩個檔宣告、或沒有可用的 da-guard ⇒ exit `2`（`--json` 的 envelope `reason` 為 `tenant_set_unknown`）。不符合 RFC 1123 的租戶 id 進 `issues` 並略過 | `conf.d` |
 | `--output-dir <DIR>` | 把 CRD 與 checklist 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run` _且_ 沒帶 `--checklist-only`**（與下面 `--json` 信封同一組判別條件）；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
@@ -2470,6 +2470,8 @@ da-tools lint <path...> [options]
 | `--ci` | 有 ERROR 級違規時以結束碼 1 結束 | false |
 
 WARN 不會升級成 ERROR，也沒有 JSON 輸出（尚未實作）；CI 請用 `--ci`，輸出是逐條的 `ERROR:`／`WARN:` 文字。
+
+**讀哪些 rule file**（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：每個檔裡有哪些 rule file 由讀者判定——純 rule file，或 ConfigMap（含 `kind: List` 裡的 ConfigMap）宣告為 rule file 的 data 值。不是 Kubernetes 物件也不是 rule file 的 YAML（recipe、registry）不讀、不報錯；帶 `apiVersion` 或 `kind`、kubectl 卻讀不了的檔（例如 `data` 不是 mapping 的 ConfigMap）、沒有讀者讀得了的檔、以及 rule loader 拒收的 rule file，都是點名的 `ERROR`。⚠️ 已知例外：ConfigMap 的 data 值若兩個讀法（Kubernetes 的 YAML 讀法與 Prometheus 的 rule loader）都讀不了，視為不是 rule file 的檔（例如 Alertmanager 的 markdown 模板），不讀也不報錯；後果是縮排用了 tab 之類壞到兩者都讀不了的 rule 值，放在 ConfigMap 裡時不會被 lint、也不會報錯（整個檔本身是 rule file 時不在此列，會點名報錯）。
 
 **檢查項目**（內建政策的預設值，可用 `--policy` 覆寫）
 

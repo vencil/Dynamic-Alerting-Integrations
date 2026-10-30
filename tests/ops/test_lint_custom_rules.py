@@ -854,3 +854,26 @@ def test_a_configmap_inside_a_list_is_linted(tmp_path, monkeypatch, capsys):
     assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
     out = capsys.readouterr().out
     assert "data key 'r.yml'" in out and "parse error" in out, out
+
+
+# ── #3426 round 3: shapes the API server refuses are named, not read as empty ──
+_PR_TOP_GROUPS = ("apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+                  "metadata: {name: p}\ngroups:\n- name: g\n  rules:\n  - {alert: A, expr: up}\n")
+_CM_DATA_LIST = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\n"
+                 "data:\n- groups: []\n")
+_APIVERSION_NO_KIND = "apiVersion: v1\nmetadata: {name: c}\ndata: {r.yml: 'groups: []'}\n"
+
+
+@pytest.mark.parametrize("text,why", [
+    (_CM_DATA_LIST, "its data is list, not a mapping"),
+    (_APIVERSION_NO_KIND, "it has no `kind`"),
+])
+def test_a_manifest_the_api_server_refuses_is_an_error(tmp_path, monkeypatch, capsys, text, why):
+    """A ConfigMap whose `data` is a list used to be a ConfigMap with no
+    rule files; a manifest with an `apiVersion` but no `kind` used to be
+    other YAML. Both are named now."""
+    (tmp_path / "bad.yaml").write_text(text, encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    out = capsys.readouterr().out
+    errors = [ln for ln in out.splitlines() if ln.startswith("ERROR")]
+    assert len(errors) == 1 and "bad.yaml" in errors[0] and why in errors[0], errors
