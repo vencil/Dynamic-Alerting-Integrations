@@ -684,9 +684,9 @@ func TestUndetermined_UnscannableTreeIsUndetermined(t *testing.T) {
 
 // #3420: the generator command da-guard tells a reader to run carries the
 // --config-dir the generator requires, as one shell word whatever the path.
-// The spelling is pinned here literally; tests/shared/
-// test_da_guard_generator_hint.py parses what the binary prints with the
-// generator's own argparse parser.
+// The spelling is pinned here literally;
+// tests/shared/test_da_guard_generator_hint.py parses what the binary prints
+// with the generator's own argparse parser.
 func TestGeneratorCommand_CarriesConfigDirAsOneShellWord(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct{ dir, want string }{

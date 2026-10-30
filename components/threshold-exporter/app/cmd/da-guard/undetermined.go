@@ -98,9 +98,9 @@ const configDirPlaceholder = "<dir>"
 // ⛔ THE ONE SPELLING. Every place da-guard names this command — the report,
 // stderr, the help — takes it from here (generatorHelpCommand for the help);
 // before #3420 three hand-written copies all lacked the required --config-dir,
-// so the line pasted as told ended in rc 2. tests/shared/
-// test_da_guard_generator_hint.py parses what da-guard prints with the
-// generator's own argparse parser.
+// so the line pasted as told ended in rc 2.
+// tests/shared/test_da_guard_generator_hint.py parses what da-guard prints
+// with the generator's own argparse parser.
 func generatorCommand(configDir string) string {
 	if strings.HasPrefix(configDir, "-") {
 		return generatorCommandWith("--config-dir=" + shellQuote(configDir))
