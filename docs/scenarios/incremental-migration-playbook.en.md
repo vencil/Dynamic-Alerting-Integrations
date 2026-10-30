@@ -587,23 +587,26 @@ Read the exit code (full definitions under [`guard`](../cli-reference.en.md#guar
 | 0 | No error-level finding | Ready to upgrade |
 | 1 | An error-level finding | Fix it as the report says |
 | 3 | Files the new exporter will not serve, each listed in the report (files it cannot decode under "Files the exporter cannot parse", files it fails to read under "Files the exporter cannot read"); the route generator and tenant-api refuse them too (all three use the same verdict) | Fix or remove these files before upgrading |
-| 4 | The tree holds content only the route generator judges (undecided) | In the same CI step, run `da-tools generate-routes --config-dir conf.d/ --validate --strict` next; only its success passes (see the example below) |
+| 4 | The tree holds content only the route generator judges (undecided) | Counts as 0: routing and domain policy are judged by `da-tools generate-routes --config-dir conf.d/ --validate --strict`, which always runs; only its success passes (see the example below) |
 
-A CI shell runs as `bash -e` by default: once guard exits non-zero, the step stops on that line and the strict validation never runs. So turn `-e` off to take the exit code, then decide on it (the same shape as this repo's `.github/workflows/guard-defaults-impact.yml`: guard's 4 counts as 0 only when the route generator ran and passed):
+guard judges only its own part. Routing and domain policy are judged by the route generator, and the generator can fail on a tree guard passes with 0 (for example, `_defaults.yaml` and `_defaults.yml` both at the root: guard exits 0, `generate-routes --validate --strict` exits 1). So the strict validation **always runs**, not only when guard exits 4; the result passes only when guard is 0 or 4 and the strict validation succeeds, and fails in every other case. This is the logic of this repo's `.github/workflows/guard-defaults-impact.yml`: after guard, each tree also runs the generator, a non-zero generator fails the run, and guard's 4 counts as 0 because the generator has run. A CI shell runs as `bash -e` by default, so a non-zero command stops the step; both exit codes are therefore taken under `set +e`:
 
 ```bash
 set +e
 da-tools guard defaults-impact --config-dir conf.d/
-rc=$?
+guard_rc=$?
+da-tools generate-routes --config-dir conf.d/ --validate --strict
+gen_rc=$?
 set -e
-if [ "$rc" -eq 4 ]; then
-  # undecided: the route generator judges routing and domain policy; if it fails, bash -e fails the step with its exit code
-  da-tools generate-routes --config-dir conf.d/ --validate --strict
-  rc=0
+# 4 (undecided) counts as 0: what only the generator judges, the generator judged above
+if [ "$guard_rc" -eq 4 ]; then guard_rc=0; fi
+if [ "$gen_rc" -ne 0 ]; then
+  echo "route generator (generate-routes --validate --strict) exit $gen_rc" >&2
+  exit 1
 fi
-if [ "$rc" -ne 0 ]; then
-  echo "da-guard exit $rc" >&2
-  exit "$rc"
+if [ "$guard_rc" -ne 0 ]; then
+  echo "da-guard exit $guard_rc" >&2
+  exit 1
 fi
 ```
 

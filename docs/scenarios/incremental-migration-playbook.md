@@ -586,23 +586,26 @@ da-tools guard defaults-impact --config-dir conf.d/
 | 0 | 沒有 error 級 finding | 可以升級 |
 | 1 | 有 error 級 finding | 照報告修好 |
 | 3 | 有新版 exporter 不服務的檔，報告逐檔列出（解不開的檔在「Files the exporter cannot parse」，讀取失敗的在「Files the exporter cannot read」）；這些檔路由產生器與 tenant-api 也拒收（三者用同一份判定） | 升級前修好或移走這些檔 |
-| 4 | 樹上有只能由路由產生器判的內容（未判定） | 在同一個 CI step 接著跑 `da-tools generate-routes --config-dir conf.d/ --validate --strict`，它成功才算通過（見下方範例） |
+| 4 | 樹上有只能由路由產生器判的內容（未判定） | 視同 0：路由與 domain policy 由一律執行的 `da-tools generate-routes --config-dir conf.d/ --validate --strict` 判，它成功才算通過（見下方範例） |
 
-CI 的 shell 預設是 `bash -e`：guard 一回非 0，step 就在那一行停下，後面的 strict 驗證跑不到。所以先關掉 `-e` 取得結束碼，再依結束碼決定（與本 repo 的 `.github/workflows/guard-defaults-impact.yml` 同一種寫法：guard 的 4 只在路由產生器跑過、且通過時才算 0）：
+guard 只判它自己的部分。路由與 domain policy 由路由產生器判，而且產生器也會在 guard 回 0 的樹上失敗（例如根目錄同時有 `_defaults.yaml` 與 `_defaults.yml`：guard 回 0，`generate-routes --validate --strict` 回 1）。所以 strict 驗證**一律執行**，不只在 guard 回 4 時跑；最後 guard 為 0 或 4、且 strict 驗證成功才算通過，其他情況都失敗。這與本 repo 的 `.github/workflows/guard-defaults-impact.yml` 同一套邏輯：每棵樹跑完 guard 都接著跑產生器，產生器非 0 就失敗；guard 的 4 因為產生器已經跑過才算 0。CI 的 shell 預設是 `bash -e`，指令一回非 0 step 就停下，所以兩個結束碼都要在 `set +e` 之下取得：
 
 ```bash
 set +e
 da-tools guard defaults-impact --config-dir conf.d/
-rc=$?
+guard_rc=$?
+da-tools generate-routes --config-dir conf.d/ --validate --strict
+gen_rc=$?
 set -e
-if [ "$rc" -eq 4 ]; then
-  # 未判定：路由與 domain policy 由路由產生器判；它失敗時 bash -e 讓 step 以它的結束碼失敗
-  da-tools generate-routes --config-dir conf.d/ --validate --strict
-  rc=0
+# 4（未判定）視同 0：只能由產生器判的內容，產生器上面已經判過
+if [ "$guard_rc" -eq 4 ]; then guard_rc=0; fi
+if [ "$gen_rc" -ne 0 ]; then
+  echo "route generator (generate-routes --validate --strict) exit $gen_rc" >&2
+  exit 1
 fi
-if [ "$rc" -ne 0 ]; then
-  echo "da-guard exit $rc" >&2
-  exit "$rc"
+if [ "$guard_rc" -ne 0 ]; then
+  echo "da-guard exit $guard_rc" >&2
+  exit 1
 fi
 ```
 
