@@ -92,9 +92,11 @@ except ImportError:
 # file (`--policy`, validate-config's `--policy-dsl`) in parse-tree's file
 # mode, in no tree. A key written twice is a file parse-tree cannot read.
 try:
-    from _lib_io import classify_path, load_confd_file
+    from _lib_io import load_confd_file
+    from _lib_paths import classify_path
 except ImportError:
-    from scripts.tools._lib_io import classify_path, load_confd_file  # type: ignore[no-redef]
+    from scripts.tools._lib_io import load_confd_file  # type: ignore[no-redef]
+    from scripts.tools._lib_paths import classify_path  # type: ignore[no-redef]
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
@@ -1290,7 +1292,7 @@ def _main(argv: Optional[list[str]] = None) -> int:
     # the `if not rules` path and left at EXIT_OK.)
     # #3276: judged by the shared caller-path check; `--json` gets the armed
     # envelope (the keys above) with that check's reason.
-    config_dir_problem = classify_path(args.config_dir, "dir", flag="--config-dir")
+    config_dir_problem = classify_path(args.config_dir, "dir", lang=lang, flag="--config-dir")
     if config_dir_problem is not None:
         raise CallerError(f"設定目錄無法使用: {config_dir_problem.message}" if lang == "zh"
                           else config_dir_problem.message, config_dir_problem.reason)
@@ -1303,7 +1305,7 @@ def _main(argv: Optional[list[str]] = None) -> int:
     # Both then printed "No policy rules found" — a typo'd gate that passes.
     # Omitted is `is None` (argparse default); '' is supplied.
     policy_problem = (None if args.policy is None
-                      else classify_path(args.policy, "file", flag="--policy"))  # #3276
+                      else classify_path(args.policy, "file", lang=lang, flag="--policy"))  # #3276
     if policy_problem is not None:
         raise CallerError(
             f"{policy_problem.message}\n  ⛔ 不要靠拿掉 --policy 轉綠——那等於不帶你的策略檔評估。"

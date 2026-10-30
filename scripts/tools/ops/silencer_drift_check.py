@@ -137,7 +137,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
 )
 from _lib_python import format_json_report  # noqa: E402
-from _lib_io import require_path  # noqa: E402  (#3276)
+from _lib_paths import require_path  # noqa: E402  (#3276)
 
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 
@@ -686,7 +686,7 @@ def main(argv: list[str] | None = None) -> int:
     if silences is None:
         return EXIT_CALLER_ERROR
 
-    require_path(rule_source, "any", flag="--rule-source")  # #3276
+    require_path(rule_source, "any", lang="en", flag="--rule-source")  # #3276
 
     try:
         alerts, errors = load_alerts(rule_source)

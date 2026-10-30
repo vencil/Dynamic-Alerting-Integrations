@@ -225,6 +225,7 @@ _PROSE_ONLY = ("only mentions a conf.d in prose (docstring / comment / help / ou
                "— the K3 text net; reads no tenant conf.d")
 _NOT_PROBED: dict[str, str] = {
     "_lib_confd.py": _LIB, "_lib_constants.py": _LIB, "_lib_io.py": _LIB,
+    "_lib_paths.py": _LIB,
     "_lib_key_verdict.py": _LIB, "_lib_parse_cache.py": _LIB, "_lib_parse_tree.py": _LIB,
     "_lib_python.py": _LIB, "_lib_tenant_uniqueness.py": _LIB, "_lib_tenant_values.py": _LIB,
     "_lib_yaml_keys.py": (_LIB + "; read by no conf.d reader since ADR-036 step 11 — its "

@@ -45,6 +45,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo tools root
 from _lib_python import ensure_dir_or_die, write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 
 # Known abbreviations that don't require parentheses to be recognized
@@ -83,8 +84,12 @@ def extract_abbreviations_from_glossary(glossary_path: Path) -> dict:
     """
     abbreviations = {}
 
-    if not glossary_path.exists():
-        print(f"ERROR: Glossary file not found: {glossary_path}", file=sys.stderr)
+    # #3276: the shared judgement of a caller-given path ("any", as `exists()`
+    # was: a non-regular file is still read as before).
+    problem = classify_path(glossary_path, "any", lang="en", flag="--glossary")
+    if problem is not None:
+        word = "not found" if problem.missing else "not usable"
+        print(f"ERROR: Glossary file {word}: {problem.message}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     with open(glossary_path, encoding="utf-8") as f:

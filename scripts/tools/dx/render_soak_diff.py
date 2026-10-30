@@ -39,7 +39,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 # How much rise across the run counts as drift?
 WARN_THRESHOLD_PCT = 5.0
@@ -136,7 +137,16 @@ def render(input_dir: Path, warmup_sec_override: int | None = None) -> tuple[str
     run_config_path = input_dir / "run-config.json"
     csv_path = input_dir / "metrics-timeseries.csv"
 
-    if not run_config_path.exists() or not csv_path.exists():
+    # #3276: the shared judgement of a caller-given path (and of the two
+    # files read from it, "any" as `exists()` was) — `exists()` raised on a
+    # path under a parent the caller cannot enter (3.13).
+    problems = [classify_path(input_dir, "dir", lang="en", flag="--input-dir")]
+    if problems[0] is None:
+        problems = [classify_path(p, "any", lang="en") for p in (run_config_path, csv_path)]
+    if any(p is not None and not p.missing for p in problems):
+        named = "".join(f"Error: {p.message}\n" for p in problems if p is not None)
+        return named, EXIT_CALLER_ERROR
+    if any(p is not None for p in problems):
         return f"Error: missing run-config.json or metrics-timeseries.csv in {input_dir}\n", EXIT_CALLER_ERROR
 
     with open(run_config_path, encoding="utf-8") as f:

@@ -476,6 +476,9 @@ func IsRoutingKey(k string) bool {
 // profile and ProfileRoutingKeys names each one a profile writes (#2914; why:
 // routing_in_unread_location in docs/cli-reference.md#guard). Broader than
 // IsRoutingKey, which is the routing keys alone (`_routing`, `_routing_<…>`).
+// Every key the registry says the route generator reads must be one
+// (TestIsRoutingLayerKey_CoversEveryKeyTheGeneratorReads): da-guard's exit 4
+// names a tree "only the generator judges" by it.
 func IsRoutingLayerKey(k string) bool {
 	return k == "_severity_dedup" || strings.HasPrefix(k, "_routing")
 }

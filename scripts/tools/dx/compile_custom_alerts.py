@@ -79,7 +79,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 import check_rulepack_sync as sync  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import find_project_root  # noqa: E402  (#2852)
-from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 try:
@@ -521,8 +522,11 @@ def main() -> int:
               f"   To compare without writing:      --check", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    if not config_dir.exists():
-        print(f"ERROR: config dir not found: {config_dir}", file=sys.stderr)
+    # #3276: the shared judgement of a caller-given path.
+    problem = classify_path(config_dir, "dir", lang="en", flag="--config-dir" if args.config_dir else None)
+    if problem is not None:
+        word = "not found" if problem.missing else "not usable"
+        print(f"ERROR: config dir {word}: {problem.message}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     try:

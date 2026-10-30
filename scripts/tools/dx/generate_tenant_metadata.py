@@ -46,7 +46,8 @@ from _lib_validation import (  # noqa: E402  (#2137 one presence rule)
     FIELD_SET,
     receiver_field_state,
 )
-from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4: the exporter's answer)
     exit_on_served_values_error,
     load_served_tree,
@@ -533,11 +534,11 @@ def main():
     args = parser.parse_args()
 
     # Validate config directory
-    if not args.config_dir.exists():
-        print(
-            f"ERROR: Config directory not found: {args.config_dir}",
-            file=sys.stderr,
-        )
+    # #3276: the shared judgement of a caller-given path.
+    problem = classify_path(args.config_dir, "dir", lang="en", flag="--config-dir")
+    if problem is not None:
+        word = "not found" if problem.missing else "not usable"
+        print(f"ERROR: Config directory {word}: {problem.message}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
     # Build metadata. --check evaluates at the instant the existing file

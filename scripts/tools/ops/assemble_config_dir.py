@@ -62,7 +62,7 @@ from _lib_confd import (  # noqa: E402
 )
 from _lib_parse_tree import classify_names, names_carrier  # noqa: E402  (#3206: Go judges names)
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
-from _lib_io import require_dir  # noqa: E402  (#3276)
+from _lib_paths import require_dir  # noqa: E402  (#3276)
 from _lib_io import claim_stdout, targets_stdout, write_operator_output  # noqa: E402  (#3107)
 import _lib_confedit  # noqa: E402  (#3206: da-guard write puts the files in place)
 import _lib_parse_cache  # noqa: E402  (ADR-036 step 4: the artifact's reader)
@@ -211,7 +211,7 @@ def discover_yamls(source_dir: Path) -> List[Path]:
     Raises CallerError (rc 2) for a source that is not a usable
     directory (#3276: the shared judgement of a caller-given path).
     """
-    require_dir(source_dir, flag="--sources")
+    require_dir(source_dir, lang="en", flag="--sources")
     # ⛔ Same listing as `iter_config_files` (which `carriers_already_in`
     # and the residue question already use), not a second spelling of it:
     # a hidden carrier the exporter will never read must not reach the copy,
@@ -235,7 +235,7 @@ def discover_entries(source_dir: Path) -> "Tuple[List[Tuple[Path, Any]], str | N
     and the root carrier the source's own chain selects (Go's
     `defaults_carriers`, None when it has none). Raises CallerError as
     `discover_yamls`."""
-    require_dir(source_dir, flag="--sources")
+    require_dir(source_dir, lang="en", flag="--sources")
     listing = config_listing(source_dir)
     named = list_visible_config_entries(source_dir, listing)
     selected = None if listing is None else listing.defaults_carriers.get(".")

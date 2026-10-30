@@ -32,7 +32,7 @@ from _lib_exitcodes import (  # noqa: E402
 )
 # ADR-036 step 4 (#2906): the conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ def check_local(dir_path: str) -> CheckResult:
     # No directory to check is the caller's input, not a verdict (#3211):
     # the caller-error exit (rc 2, its --json envelope) via `run()`, named
     # by the shared judgement of a caller-given path (#3241 → #3276).
-    problem = classify_path(dir_path, "dir", flag="--dir")
+    problem = classify_path(dir_path, "dir", lang=_LANG, flag="--dir")
     if problem is not None:
         raise CallerError(_h(f"ERROR: --dir 無法使用：{problem.message}",
                              f"ERROR: {problem.message}"), problem.reason)

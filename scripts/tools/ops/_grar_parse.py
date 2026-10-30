@@ -25,7 +25,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_validation import routing_disabled as _is_disabled  # noqa: E402  (#3141: the generator's own reading)
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (#2341 R8)
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import classify_path, safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 # ADR-036 step 4 (#2906): every conf.d read on this path is `da-guard
 # parse-tree`'s, through one reader per run (and, in the generator container,
 # its content-addressed cache).
@@ -677,7 +678,8 @@ def _is_routing_key(key: object) -> bool:
 def _is_routing_layer_key(key: object) -> bool:
     """``_severity_dedup`` or any key starting with ``_routing`` (Go:
     ``config.IsRoutingLayerKey``; #2914, why: ``routing_in_unread_location``
-    in docs/cli-reference.md#guard)."""
+    in docs/cli-reference.md#guard). Every key the registry says the
+    generator reads must be one (tests/ops/test_routing_layer_key_registry.py)."""
     return isinstance(key, str) and (key == "_severity_dedup" or key.startswith("_routing"))
 
 
@@ -1176,7 +1178,7 @@ def _parse_config_files(config_dir: str, reader: "_lib_parse_cache.ConfdReader |
         "duplicate_tenants": {},
     }
 
-    config_dir_problem = classify_path(config_dir, "dir", flag="--config-dir")  # #3276
+    config_dir_problem = classify_path(config_dir, "dir", lang="en", flag="--config-dir")  # #3276
     if config_dir_problem is not None:
         print(f"ERROR: {config_dir_problem.message}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)

@@ -48,7 +48,7 @@ from _lib_constants import (  # noqa: E402  (ADR-038: generated from the registr
     TENANT_ROUTING_KEYS,
 )
 from _lib_compat import find_project_root  # noqa: E402  (#2845)
-from _lib_io import classify_path  # noqa: E402  (#3276)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
@@ -1013,7 +1013,7 @@ def load_policy_document(policy_path: str | None) -> PolicyDocument:
     # so nothing else reaches this branch. Same split as #1616's --base-config.
     if policy_path is None:
         return PolicyDocument([], None)
-    policy_problem = classify_path(policy_path, "file", flag="--policy")  # #3276
+    policy_problem = classify_path(policy_path, "file", lang="en", flag="--policy")  # #3276
     if policy_problem is not None:
         raise PolicyInputError(
             f"{policy_problem.message}\n"

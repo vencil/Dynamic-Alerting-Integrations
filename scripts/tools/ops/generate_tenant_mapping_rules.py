@@ -46,7 +46,8 @@ from _lib_python import (  # noqa: E402
     load_yaml_file,
     write_text_or_die,
 )
-from _lib_io import YamlFileError, require_dir, require_file  # noqa: E402  (#3276)
+from _lib_io import YamlFileError  # noqa: E402  (#3276)
+from _lib_paths import require_dir, require_file  # noqa: E402  (#3276)
 # ADR-036 step 4 (#2906): conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
 import _lib_parse_tree  # noqa: E402
@@ -423,7 +424,7 @@ def main() -> None:
     args = parser.parse_args()
 
     config_dir = args.config_dir
-    require_dir(config_dir, flag="--config-dir")  # #3276
+    require_dir(config_dir, lang="en", flag="--config-dir")  # #3276
 
     # Find mapping file
     mapping_path = find_mapping_file(config_dir)
@@ -445,7 +446,7 @@ def main() -> None:
         # Auto-detect from metric-dictionary.yaml
         dict_path = args.metric_dictionary
         if dict_path:
-            require_file(dict_path, flag="--metric-dictionary")  # #3276
+            require_file(dict_path, lang="en", flag="--metric-dictionary")  # #3276
         else:
             this_dir = Path(_THIS_DIR)
             candidate = this_dir.parent / "metric-dictionary.yaml"

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import errno
 import functools
 import io
 import json
@@ -16,7 +15,7 @@ import re
 import stat
 import sys
 from pathlib import Path
-from typing import Any, Callable, Iterator, NamedTuple, Optional, TypeVar
+from typing import Any, Callable, Iterator, Optional, TypeVar
 
 import yaml
 
@@ -25,6 +24,7 @@ from _lib_constants import ONBOARD_HINTS_FILENAME
 from _lib_yaml_keys import ExporterKeyLoader, load_exporter_keys
 # No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
 import _lib_exitcodes  # noqa: E402
+from _lib_label import safe_label  # noqa: E402,F401  (re-export, #3276)
 from _lib_exitcodes import EXIT_CALLER_ERROR, die_caller_error
 
 _F = TypeVar("_F", bound=Callable[..., Any])
@@ -1293,93 +1293,6 @@ def ensure_dir_or_die(
         _die_on_write_error(exc, exit_code)
 
 
-class PathProblem(NamedTuple):
-    """Why a caller-given path cannot be used (`classify_path`)."""
-
-    reason: str
-    """`--json` reason: ``{dir,file,path}_not_{found,accessible}``."""
-    message: str
-    """The stderr line, without ``ERROR:``."""
-    missing: bool
-    """True only when nothing is at the path (ENOENT, ENOTDIR, ELOOP)."""
-
-
-#: #3276: what a stat errno means for a caller-given path. Only "nothing is
-#: there" is not-found; every other errno (EACCES under a parent the caller
-#: cannot enter, EIO, …) is not-accessible — never folded into "not found".
-_STAT_MISSING = frozenset({errno.ENOENT, errno.ENOTDIR, errno.ELOOP})
-
-
-def classify_path(path: Any, kind: str, *, flag: Optional[str] = None) -> Optional[PathProblem]:
-    """None when *path* (given by the caller, via *flag*) is usable as a
-    *kind* — ``"dir"``, ``"file"`` or ``"any"`` — else the `PathProblem`.
-
-    #3276. The one judgement of a caller-given path, replacing each tool's
-    ``Path.is_dir()`` / ``exists()`` / ``is_file()`` and ``os.path.*``:
-    which errnos those swallow differs across Python versions (3.13 raises
-    EACCES, 3.14 answers False) and ``os.path.*`` already answers False, so
-    a path under a parent the caller cannot enter was a traceback or a
-    "not found". Here ``os.stat`` decides by errno.
-
-    * ``"dir"``: a directory. Only stat: whether its content can be listed
-      is the reader's verdict (for a conf.d, da-guard's ``walk_error``).
-    * ``"file"``: a regular file that opens for reading — what
-      ``Path.is_file()`` answered, so a reader that still asks ``is_file()``
-      never sees a FIFO or a device it would take for "no file" (fail-open:
-      ``--policy /dev/null`` evaluating no policy). The open is made only on
-      a regular file: on a FIFO or a device it would have side effects.
-    * ``"any"``: anything that stats.
-    """
-    # '' is SUPPLIED (an unset shell variable) and must stay visible.
-    shown = safe_label(str(path)) if str(path) else "''"
-    label = f"{flag} {shown}" if flag else shown
-    noun = {"dir": "dir", "file": "file", "any": "path"}[kind]
-    try:
-        st = os.stat(path)
-    except OSError as exc:
-        missing = exc.errno in _STAT_MISSING
-        return PathProblem(f"{noun}_not_{'found' if missing else 'accessible'}",
-                           f"{label}: {exc.strerror}", missing)
-    if kind == "dir" and not stat.S_ISDIR(st.st_mode):
-        return PathProblem("dir_not_found", f"{label}: not a directory", False)
-    if kind == "file":
-        if not stat.S_ISREG(st.st_mode):
-            return PathProblem("file_not_found", f"{label}: not a regular file", False)
-        try:
-            os.close(os.open(path, os.O_RDONLY))
-        except OSError as exc:
-            return PathProblem("file_not_accessible", f"{label}: {exc.strerror}", False)
-    return None
-
-
-def require_path(path: Any, kind: str, *, flag: Optional[str] = None) -> None:
-    """`classify_path`, raising `CallerError` (rc 2 under ``run()``, the
-    reason in the ``--json`` envelope) when *path* is not usable."""
-    problem = classify_path(path, kind, flag=flag)
-    if problem is not None:
-        raise _lib_exitcodes.CallerError(problem.message, problem.reason)
-
-
-def require_dir(path: Any, *, flag: Optional[str] = None) -> None:
-    """`require_path` for a directory."""
-    require_path(path, "dir", flag=flag)
-
-
-def require_file(path: Any, *, flag: Optional[str] = None) -> None:
-    """`require_path` for a file."""
-    require_path(path, "file", flag=flag)
-
-
-def raise_path_problems(problems: "list[Optional[PathProblem]]") -> None:
-    """Raise one `CallerError` naming every problem in *problems* (one
-    ``ERROR:`` line each, Nones skipped) with the first one's reason; return
-    when there is none. For a tool given several paths at once."""
-    found = [p for p in problems if p is not None]
-    if found:
-        raise _lib_exitcodes.CallerError("\nERROR: ".join(p.message for p in found),
-                                         found[0].reason)
-
-
 def _output_write_names_target(exc: OSError, path: Any) -> bool:
     """Does *exc* name *path* (or a parent of it) as the thing that failed?
 
@@ -1589,92 +1502,6 @@ def read_onboard_hints(path: Optional[str]) -> Optional[dict[str, Any]]:
         return None
     with open(path, encoding="utf-8") as f:
         return json.load(f)
-
-
-_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f-\x9f]")
-
-
-def safe_label(value: Any) -> str:
-    """Neutralise control characters in an untrusted value before it is PRINTED.
-
-    #1538. A tenant config *filename* is untrusted input — ``tenants/onboarding``
-    and the tenant self-service flow both create files whose names the platform
-    never chose. Every plain-text report in ``scripts/tools/`` interpolates those
-    names (and the exception text derived from them) straight into ``print()``.
-    Two things ride in on that:
-
-    * **a newline** ends the current report line and starts a new one, so a file
-      named ``evil\\n[PASS] all good\\nx.yaml`` prints ``[PASS] all good`` at
-      column 0 — indistinguishable, to a human or to a ``grep '^\\[PASS\\]'``, from
-      a verdict the tool actually emitted;
-    * **an ESC (``\\x1b``)** starts an ANSI sequence, so the same channel can
-      recolour the terminal, move the cursor, or clear the screen.
-
-    Replacing each control char with ``?`` defuses both while keeping the payload
-    visible (``\\x1b[2J`` prints as ``?[2J``) — the operator still sees that
-    something odd is in the name, which deleting the characters would hide.
-
-    ⛔ **Scope, stated so nobody over-reads it.** This covers C0
-    ``\x00-\x1f``, DEL ``\x7f``, and the C1 range ``\x80-\x9f``.
-
-    C1 was added in the #1538 review round, and not as widening for its own
-    sake: ``U+0085`` (NEL) is *the same attack as the newline* — terminals that
-    decode C1 treat it as a line break, so an unescaped NEL forges a report line
-    exactly as ``\n`` does, which is the one thing this function exists to stop.
-    An adversarial review measured it passing through ten already-fixed tools.
-
-    ⚠️ Honest boundary on that evidence: what was measured is **byte
-    passthrough**, not rendering. Nobody drove a real terminal to confirm NEL
-    breaks the line there. C1 is covered because it belongs to the same attack
-    class, not because the terminal behaviour was demonstrated.
-
-    ⛔ This also means the class is NO LONGER byte-identical to the one
-    ``compile_custom_alerts._safe_log`` carried from #1008 until this change: a
-    C1 character that used to survive that tool's quarantine line now renders as
-    ``?``. A deliberate behaviour change, not a refactoring accident.
-
-    Still NOT covered, deliberately:
-
-    * bidi overrides ``U+202A-U+202E`` / ``U+2066-U+2069``. They reorder a line
-      **visually** without breaking it — a different attack class from forging a
-      line, and folding it in here would blur what this function promises.
-    * homoglyph or zero-width confusables.
-
-    Those remain open. Do not read "went through ``safe_label``" as "is safe to
-    render in an arbitrary terminal."
-
-    This is an OUTPUT-layer helper, not a validator: it must not be used to
-    sanitise a value on its way *into* a config, a filename, or a subprocess
-    argument. It lives beside :func:`format_json_report` because they are the two
-    halves of the same decision — ``--json`` carries its own escaping and this is
-    the plain-text branch's equivalent. ⛔ Never apply it to data destined for the
-    ``--json`` branch: that would corrupt machine-readable output.
-
-    ⚠️ **``--json`` is NOT unconditionally safe, and an earlier wording here said
-    it was.** ``json.dumps`` is only required to escape ``"``, ``\\`` and
-    ``U+0000``–``U+001F``; under ``ensure_ascii=False`` (this repo's default, see
-    :func:`format_json_report`) the **C1** range passes through verbatim —
-    measured, ``json.dumps("a\\x85b", ensure_ascii=False)`` keeps the raw byte
-    while ``"a\\x0ab"`` becomes ``\\n``. So a ``--json`` payload piped straight to
-    a terminal that interprets C1 is still forgeable. That is EXISTING behaviour,
-    deliberately not changed here: the byte-for-byte stability of ``--json`` is
-    the mechanism guarantee this escaping rests on, and rewriting the serialized
-    output would trade a measured guarantee for an unmeasured one. Tracked
-    separately; do not read this paragraph as "handled".
-
-    ⛔ Apply it to the FIELD, never to a whole rendered multi-line report — the
-    report's own ``\\n`` separators are control characters too and would become
-    ``?``, collapsing the layout.
-
-    Args:
-        value: Any value; coerced with ``str()``.
-
-    Returns:
-        *value* as text with every C0, DEL **and C1** character replaced by
-        ``?`` — the class is ``[\\x00-\\x1f\\x7f-\\x9f]``. C1 is in because
-        ``\\x85`` (NEL) forges a line exactly like ``\\n`` does.
-    """
-    return _CONTROL_CHARS_RE.sub("?", str(value))
 
 
 def format_json_report(data: Any, **kwargs: Any) -> str:

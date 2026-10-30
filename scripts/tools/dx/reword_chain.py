@@ -71,8 +71,10 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR,
     EXIT_OK,
     EXIT_VIOLATION,
+    CallerError,
     die_caller_error,
 )
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +166,11 @@ class Entry:
 
 def parse_mapping(path: Path) -> list[Entry]:
     """Parse TSV mapping; validate non-empty."""
-    if not path.is_file():
-        raise SystemExit(f"mapping file not found: {path}")
+    # #3276: the shared judgement of a caller-given path; a caller error
+    # (rc 2, one line), no longer the rc 1 of `SystemExit(<text>)`.
+    problem = classify_path(path, "file", lang="en")
+    if problem is not None:
+        raise CallerError(f"mapping file {problem.message}", problem.reason)
 
     entries: list[Entry] = []
     for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):

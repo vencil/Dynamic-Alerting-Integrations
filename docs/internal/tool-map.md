@@ -255,8 +255,10 @@ lang: zh
 - `scripts/tools/_lib_io.py`：File I/O and YAML helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_key_verdict.py`：The one verdict on "does any reader read this key" (ADR-038 decisions 4–7).
 - `scripts/tools/_lib_kubectl.py`：Read Kubernetes resources through ``kubectl get -o json`` (#3207, #3210).
+- `scripts/tools/_lib_label.py`：`safe_label`: neutralise control characters in a value before it is printed.
 - `scripts/tools/_lib_parse_cache.py`：the conf.d reader of the routing tools, with a cache.
 - `scripts/tools/_lib_parse_tree.py`：read `da-guard parse-tree`'s document (ADR-036 §2).
+- `scripts/tools/_lib_paths.py`：The one judgement of a path the caller gave (#3276).
 - `scripts/tools/_lib_prometheus.py`：HTTP and Prometheus query helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_python.py`：Shared library for Dynamic Alerting Python tools.
 - `scripts/tools/_lib_redact.py`：Which config fields hold a credential, and how a report prints them.

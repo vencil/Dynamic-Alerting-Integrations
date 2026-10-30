@@ -90,9 +90,9 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import (  # noqa: E402  (#1789)
-    OutputWriteError, exit_on_output_write_error, output_write, safe_label,
-)
+from _lib_io import (  # noqa: E402  (#1789; #3276)
+    OutputWriteError, exit_on_output_write_error, output_write, safe_label)
+from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 
 # Metrics we extract from /metrics (Prometheus text format).
@@ -278,8 +278,12 @@ def main() -> int:
     )
 
     config_dir = Path(args.config_dir)
-    if not config_dir.exists():
-        print(f"[error] config-dir not found: {config_dir}", file=sys.stderr)
+    # #3276: the shared judgement of a caller-given path.
+    problem = classify_path(config_dir, "dir", lang="en", flag="--config-dir")
+    if problem is not None:
+        word = "not found" if problem.missing else "not usable"
+        print(f"[error] config-dir {word}: "
+              f"{problem.message}", file=sys.stderr)
         return EXIT_CALLER_ERROR
     carriers = reload_carriers(config_dir)
 
