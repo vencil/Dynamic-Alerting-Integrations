@@ -186,8 +186,8 @@ func lengthCapViolation(fieldPrefix, k, v string, maxValueLen int) (Violation, b
 
 // validatePatchMap walks every key/value pair in a patch map and
 // returns Violations for generic length-cap failures and for keys a patch
-// cannot set: a `_` key the registry does not list, an unknown routing key,
-// or a reserved key whose value is a mapping or a list. Returns the FULL
+// cannot set: a reserved key whose value is a mapping or a list. (Whether
+// any reader reads a key is the shared key verdict's, ADR-038 §11.) Returns the FULL
 // list, not first-only — caller can render once for the whole batch.
 //
 // ⚠️ A reserved key's VALUE is not judged here (#3227): the write gate does,

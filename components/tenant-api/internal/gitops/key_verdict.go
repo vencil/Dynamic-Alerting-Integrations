@@ -103,7 +103,7 @@ const (
 	msgVerdictOtherWithheld  = "key verdict: there are findings about platform files, profiles or tenants you cannot view (the details are in the server log)"
 	msgVerdictMoreLinesFmt   = "key verdict: %d more line(s) not shown"
 	msgVerdictTruncatedFmt   = "key verdict: %d more finding(s) the generator did not send"
-	msgVerdictNotCompleteFmt = "key verdict: not completed (%s); the write was not refused — the keys of this write were not judged"
+	msgVerdictNotCompleteFmt = "key verdict: not completed (%s); the keys of this write were not judged"
 )
 
 // verdictReasons are the texts of a verdict that did not complete. A

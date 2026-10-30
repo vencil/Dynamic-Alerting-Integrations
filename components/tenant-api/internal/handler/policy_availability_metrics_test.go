@@ -40,6 +40,9 @@ func TestPolicyAvailabilityMetrics(t *testing.T) {
 	for name, body := range map[string]map[string]any{
 		"policy unusable": {"policy": map[string]any{"configured": true, "available": false}, "amtool_available": true, "ready": false},
 		"amtool missing":  {"policy": map[string]any{"configured": false, "available": true}, "amtool_available": false, "ready": false},
+		// Ready, but an image older than the key verdict (no
+		// da_guard_available): every write it passes is refused 503.
+		"no key verdict": {"policy": map[string]any{"configured": false, "available": true}, "amtool_available": true, "ready": true},
 	} {
 		fake.SetStatus(func() (int, any) { return 200, body })
 		if got := render(); !strings.Contains(got, "\ntenant_api_policy_available 0\n") {

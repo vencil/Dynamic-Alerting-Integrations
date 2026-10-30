@@ -41,12 +41,12 @@ generatorRejectedText(invalid_request) = "the route generator could not judge th
 generatorRejectedText(mismatch) = "the route generator could not judge this write (mismatch); nothing was written — retry — the server log has the detail"
 generatorRejectedText(no_time) = "the route generator could not judge this write (no_time); nothing was written — retry — the server log has the detail"
 generatorRejectedText(normalized) = "the route generator could not judge this write (normalized); nothing was written — the server log has the detail"
-generatorRejectedText(key_verdict_no_time) = "the route generator could not judge this write (key_verdict_no_time); nothing was written — retry — the server log has the detail"
-generatorRejectedText(key_verdict_deadline) = "the route generator could not judge this write (key_verdict_deadline); nothing was written — retry — the server log has the detail"
-generatorRejectedText(key_verdict_memory) = "the route generator could not judge this write (key_verdict_memory); nothing was written — the server log has the detail"
-generatorRejectedText(key_verdict_error) = "the route generator could not judge this write (key_verdict_error); nothing was written — the server log has the detail"
-generatorRejectedText(key_verdict_undecidable) = "the route generator could not judge this write (key_verdict_undecidable); nothing was written — the server log has the detail"
-generatorRejectedText(key_verdict_platform_file) = "the route generator could not judge this write (key_verdict_platform_file); nothing was written — the server log has the detail"
+generatorRejectedText(key_verdict_no_time) = "the route generator passed this write, but too little time was left to judge whether every key of it is read (key_verdict_no_time); nothing was written — retry"
+generatorRejectedText(key_verdict_deadline) = "the route generator passed this write, but its time ran out before it judged whether every key of it is read (key_verdict_deadline); nothing was written — retry"
+generatorRejectedText(key_verdict_memory) = "the route generator passed this write, but judging whether every key of it is read ran out of memory (key_verdict_memory); nothing was written — the server log has the detail"
+generatorRejectedText(key_verdict_error) = "the route generator passed this write, but judging whether every key of it is read failed (key_verdict_error); nothing was written — the server log has the detail"
+generatorRejectedText(key_verdict_undecidable) = "no root platform file (such as _defaults.yaml) was read, so whether the threshold keys of this write are read cannot be judged (key_verdict_undecidable); nothing was written — add the root platform file to conf.d"
+generatorRejectedText(key_verdict_platform_file) = "this write changes a platform file, whose keys only a whole-tree judgement can judge (key_verdict_platform_file); nothing was written"
 generatorRejectedText(not_a_known_reason) = "the route generator could not judge this write (unknown); nothing was written — the server log has the detail"
 
 ## Part 1: HTTP entries
@@ -1271,17 +1271,17 @@ msgWriteOutcomeUnknown
   <- generator.RejectedError{no_time}
 "batch failed, nothing was written: the route generator could not judge this write (normalized); nothing was written — the server log has the detail"
   <- generator.RejectedError{normalized}
-"batch failed, nothing was written: the route generator could not judge this write (key_verdict_no_time); nothing was written — retry — the server log has the detail"
+"batch failed, nothing was written: the route generator passed this write, but too little time was left to judge whether every key of it is read (key_verdict_no_time); nothing was written — retry"
   <- generator.RejectedError{key_verdict_no_time}
-"batch failed, nothing was written: the route generator could not judge this write (key_verdict_deadline); nothing was written — retry — the server log has the detail"
+"batch failed, nothing was written: the route generator passed this write, but its time ran out before it judged whether every key of it is read (key_verdict_deadline); nothing was written — retry"
   <- generator.RejectedError{key_verdict_deadline}
-"batch failed, nothing was written: the route generator could not judge this write (key_verdict_memory); nothing was written — the server log has the detail"
+"batch failed, nothing was written: the route generator passed this write, but judging whether every key of it is read ran out of memory (key_verdict_memory); nothing was written — the server log has the detail"
   <- generator.RejectedError{key_verdict_memory}
-"batch failed, nothing was written: the route generator could not judge this write (key_verdict_error); nothing was written — the server log has the detail"
+"batch failed, nothing was written: the route generator passed this write, but judging whether every key of it is read failed (key_verdict_error); nothing was written — the server log has the detail"
   <- generator.RejectedError{key_verdict_error}
-"batch failed, nothing was written: the route generator could not judge this write (key_verdict_undecidable); nothing was written — the server log has the detail"
+"batch failed, nothing was written: no root platform file (such as _defaults.yaml) was read, so whether the threshold keys of this write are read cannot be judged (key_verdict_undecidable); nothing was written — add the root platform file to conf.d"
   <- generator.RejectedError{key_verdict_undecidable}
-"batch failed, nothing was written: the route generator could not judge this write (key_verdict_platform_file); nothing was written — the server log has the detail"
+"batch failed, nothing was written: this write changes a platform file, whose keys only a whole-tree judgement can judge (key_verdict_platform_file); nothing was written"
   <- generator.RejectedError{key_verdict_platform_file}
 "batch failed, nothing was written: the route generator could not judge this write (unknown); nothing was written — the server log has the detail"
   <- generator.RejectedError{not_a_known_reason}

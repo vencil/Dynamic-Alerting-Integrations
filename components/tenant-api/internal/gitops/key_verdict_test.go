@@ -78,16 +78,16 @@ func TestAdviseKeyVerdict_NotCompletedTruncatedAndEmpty(t *testing.T) {
 		"none":          {nil, nil},
 		"nothing found": {&KeyVerdict{Status: KeyVerdictComplete}, nil},
 		"memory": {&KeyVerdict{Status: KeyVerdictNotCompleted, Reason: "memory"},
-			[]string{"key verdict: not completed (it ran out of memory); the write was not refused — the keys of this write were not judged"}},
+			[]string{"key verdict: not completed (it ran out of memory); the keys of this write were not judged"}},
 		"not reported": {&KeyVerdict{Status: KeyVerdictNotCompleted, Reason: KeyVerdictNotReported},
-			[]string{"key verdict: not completed (the generator container did not report one; it predates ADR-038 decision 5); the write was not refused — the keys of this write were not judged"}},
+			[]string{"key verdict: not completed (the generator container did not report one; it predates ADR-038 decision 5); the keys of this write were not judged"}},
 		"a reason this tenant-api does not know": {&KeyVerdict{Status: KeyVerdictNotCompleted, Reason: "newer"},
-			[]string{"key verdict: not completed (newer); the write was not refused — the keys of this write were not judged"}},
+			[]string{"key verdict: not completed (newer); the keys of this write were not judged"}},
 		// The count covers findings about anyone: a number only for a
 		// caller who sees the whole tree (below).
 		"truncated": {&KeyVerdict{Status: KeyVerdictComplete, Truncated: 7}, []string{msgVerdictOtherWithheld}},
 		"no reason": {&KeyVerdict{Status: KeyVerdictNotCompleted},
-			[]string{"key verdict: not completed (no reason given); the write was not refused — the keys of this write were not judged"}},
+			[]string{"key verdict: not completed (no reason given); the keys of this write were not judged"}},
 	} {
 		if got := adviseKeyVerdict(ctx, files, tc.kv).lines(); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: lines = %q, want %q", name, got, tc.want)
@@ -316,5 +316,31 @@ func TestKeyVerdict_ErrorRefusesPRWrites(t *testing.T) {
 	var rej *BatchRejectedError
 	if !errors.As(err, &rej) || !errors.Is(err, ErrValidation) {
 		t.Fatalf("WritePRBatch: %v", err)
+	}
+}
+
+// rejectBatchOnVerdict puts a refused tenant's lines on that tenant's first
+// op that changed something — not on an op before it that changed nothing,
+// nor on its later ops.
+func TestRejectBatchOnVerdict_FirstChangedOpOfTheTenant(t *testing.T) {
+	t.Parallel()
+	kve := &KeyVerdictError{ByTenant: map[string][]string{"db-a": {"line"}}}
+	ops := []BatchOp{{TenantID: "db-a"}, {TenantID: "db-b"}, {TenantID: "db-a"}, {TenantID: "db-a"}}
+	outcomes := []BatchOpOutcome{{NoOp: true}, {}, {}, {}}
+	var rej *BatchRejectedError
+	if err := rejectBatchOnVerdict(kve, ops, outcomes); !errors.As(err, &rej) {
+		t.Fatalf("err = %v", err)
+	}
+	for i, o := range rej.Outcomes {
+		if refused := o.Err != nil; refused != (i == 2) {
+			t.Errorf("op %d: err %v, want the refusal on op 2 only", i, o.Err)
+		}
+	}
+	if outcomes[2].Err != nil {
+		t.Error("the caller's outcomes were changed")
+	}
+	// Any other error is returned as it is.
+	if err := rejectBatchOnVerdict(errFakeRefusal, ops, outcomes); err != errFakeRefusal {
+		t.Errorf("err = %v", err)
 	}
 }

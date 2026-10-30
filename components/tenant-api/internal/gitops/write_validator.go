@@ -48,7 +48,8 @@ type ProposedFile struct {
 // A nil error lets the write commit those exact bytes; any error refuses it,
 // and is returned to the Writer's caller unchanged. With a nil error it may
 // return the key verdict on the write (ADR-038 decision 5, key_verdict.go),
-// which never refuses it; nil when it has none.
+// on which the Writer may still refuse it (keyVerdictRefusal); nil when it
+// has none.
 type WriteValidator interface {
 	ValidateWrites(ctx context.Context, base string, files []ProposedFile) (*KeyVerdict, error)
 }

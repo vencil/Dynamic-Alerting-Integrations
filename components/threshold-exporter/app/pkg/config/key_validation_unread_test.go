@@ -92,8 +92,9 @@ func TestKeyValidation_WithoutUnreadKeepsTheValueChecks(t *testing.T) {
 	}
 	// ByTenant and Ratchet carry Unread, so the write gate's order
 	// (ValidateTenantKeysByTenant → Ratchet → WithoutUnread) drops the same.
+	// (Order is the map walk's: compared sorted.)
 	byTenant := c.ValidateTenantKeysByTenant().Ratchet(PriorValues(nil)).WithoutUnread()
-	if !reflect.DeepEqual(byTenant.Tenants["t-a"].Errors, got.Errors) {
+	if !reflect.DeepEqual(sortedCopy(byTenant.Tenants["t-a"].Errors), sortedCopy(got.Errors)) {
 		t.Errorf("by tenant, after Ratchet: Errors = %q, want %q", byTenant.Tenants["t-a"].Errors, got.Errors)
 	}
 }
@@ -105,4 +106,21 @@ func containsString(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// ADR-038 §2: the `version` label is a value check, so a dimensional key
+// whose base has no platform value still has its label judged — dropping
+// the unread line must not drop that.
+func TestKeyValidation_VersionLabelIsJudgedWhateverTheBase(t *testing.T) {
+	t.Parallel()
+	for _, key := range []string{`nosuch{version="default"}`, `nosuch2{version=~"v.*"}`} {
+		c := ThresholdConfig{
+			Defaults: map[string]float64{"cpu": 80},
+			Tenants:  map[string]map[string]ScheduledValue{"t-a": {key: {Default: "3"}}},
+		}
+		got := c.ValidateTenantKeys().WithoutUnread()
+		if len(got.Errors) == 0 {
+			t.Errorf("%s: no error after WithoutUnread: the version label went unjudged", key)
+		}
+	}
 }

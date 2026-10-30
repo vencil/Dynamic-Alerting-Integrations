@@ -212,7 +212,7 @@ func (f *FakeGenerator) serve(w http.ResponseWriter, r *http.Request) {
 		f.mu.Unlock()
 		if hook == nil {
 			reply(200, map[string]any{"policy": map[string]any{"configured": false, "available": true},
-				"amtool_available": true, "ready": true})
+				"amtool_available": true, "da_guard_available": true, "ready": true})
 			return
 		}
 		status, body := hook()

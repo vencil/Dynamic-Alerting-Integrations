@@ -1,11 +1,15 @@
 package gitops
 
-// #2518: a threshold written as YAML null is no write. Whether a key so
-// written is read — a body `typo_key: null`, or a tenant value for a key the
-// ROOT `_defaults.yaml` writes as null (which declares nothing: da-guard
-// root_default_null_undeclared) — is the shared key verdict's to judge since
-// ADR-038 §11, not the write gate's key validation: the gate is silent about
-// both, as about any key no reader reads.
+// #2518: a threshold written as YAML null is no write. Whether a key is read
+// is the shared key verdict's to judge since ADR-038 §11, not the write
+// gate's key validation, which is silent about both cases below:
+//
+//   - a tenant value for a key the ROOT `_defaults.yaml` writes as null
+//     (which declares nothing: da-guard root_default_null_undeclared) — the
+//     verdict refuses it (error, no_row);
+//   - a body `typo_key: null` — no reader reads a null, so the verdict
+//     reports nothing and the write is taken: a deliberate relaxation, the
+//     key writes no value (the gate used to refuse it as an unknown key).
 
 import (
 	"context"
@@ -33,7 +37,7 @@ func TestWriteGate_NullKeysAreTheKeyVerdicts(t *testing.T) {
 			"tenants:\n  tx:\n    mysql_connections: \"70\"\n"},
 	} {
 		if errs := nullGateErrs(t, tc.root, tc.body); len(errs) != 0 {
-			t.Errorf("%s: errs = %q, want none: the key verdict judges whether it is read", name, errs)
+			t.Errorf("%s: errs = %q, want none: whether it is read is the key verdict's", name, errs)
 		}
 	}
 }

@@ -55,7 +55,7 @@ tenant_api_config_last_reload_successful{component="federation-policy"} 1
 tenant_api_config_last_reload_successful{component="groups"} 1
 tenant_api_config_last_reload_successful{component="tenantorg"} 1
 tenant_api_config_last_reload_successful{component="views"} 1
-# HELP tenant_api_policy_available Whether the generator container can judge writes (1): its status endpoint reports the deployment policy file usable, amtool and da-guard present and the generator not older than the policy requires. 0 when it cannot, or when its status cannot be read: every content-changing write then answers 503 (POLICY_UNAVAILABLE / VALIDATOR_UNAVAILABLE). Alert on == 0.
+# HELP tenant_api_policy_available Whether the generator container can judge writes (1): its status endpoint reports the deployment policy file usable, amtool and da-guard present and the generator not older than the policy requires, nor than the key verdict tenant-api refuses on. 0 when it cannot, or when its status cannot be read: every content-changing write then answers 503 (POLICY_UNAVAILABLE / VALIDATOR_UNAVAILABLE). Alert on == 0.
 # TYPE tenant_api_policy_available gauge
 tenant_api_policy_available 0
 # HELP tenant_api_async_task_panics_total Async batch tasks whose work panicked; each was marked failed and the worker went on. Should stay 0 (the tenant-api log has the panic and stack per task id).

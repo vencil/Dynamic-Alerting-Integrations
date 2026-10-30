@@ -228,8 +228,18 @@ type Status struct {
 	GeneratorTooOld  *string `json:"generator_too_old"`
 	DAGuardVersion   *string `json:"da_guard_version"`
 	AmtoolAvailable  bool    `json:"amtool_available"`
-	Ready            bool    `json:"ready"`
+	// DAGuardAvailable is nil from an image older than the shared key
+	// verdict tenant-api refuses on (ADR-038 decision 5): such an image
+	// passes writes without one, so it cannot judge them (ReadyForVerdicts).
+	DAGuardAvailable *bool `json:"da_guard_available"`
+	Ready            bool  `json:"ready"`
 }
+
+// ReadyForVerdicts is whether the container can judge writes as tenant-api
+// takes them: ready, and an image that gives the key verdict
+// (DAGuardAvailable present). An older image answers ready, yet every write
+// it passes is refused 503 generator_too_old (Gate.refuseUnjudged).
+func (s *Status) ReadyForVerdicts() bool { return s.Ready && s.DAGuardAvailable != nil }
 
 // Status reads GET /v1/status.
 func (c *Client) Status(ctx context.Context) (*Status, error) {

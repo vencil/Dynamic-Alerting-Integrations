@@ -1669,8 +1669,8 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			if shape == shapeReserved {
 				// #2983: reserved by the `_routing` prefix, read by no one —
 				// `_routing_profle`, or the flat `_routing_receiver_type` the
-				// route generator never read. tenant-api's write gate refuses
-				// on this line, as the generator's `--validate` does.
+				// route generator never read. The shared key verdict refuses it
+				// at tenant-api's write gate (ADR-038 §11; this line is Unread).
 				if IsUnknownRoutingKey(canonKey, false) {
 					unread(fmt.Sprintf(
 						"WARN: tenant=%s: unknown routing key %q — not a key the route generator reads (%s); "+
@@ -1714,6 +1714,12 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 						validateVersionLabel(tenant, canonKey, baseKey, customLabels, regexLabels)...)
 					continue
 				}
+				// The `version` label is a value check: judged whatever the
+				// base, so a gate that drops the unread line below (the
+				// shared key verdict reads such a key as served) still
+				// refuses a bad label.
+				v.Errors = append(v.Errors,
+					validateVersionLabel(tenant, canonKey, baseKey, customLabels, regexLabels)...)
 				// Unknown base key in dimensional key
 				unread(fmt.Sprintf(
 					"WARN: tenant=%s: unknown base metric %q in dimensional key %q",

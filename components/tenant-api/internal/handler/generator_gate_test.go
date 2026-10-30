@@ -710,8 +710,12 @@ func TestGeneratorGate_KeyVerdictNotCompletedRefusesEveryPath(t *testing.T) {
 				return 200, v
 			})
 			// An async batch answers 202 and its task holds the refusal.
+			want := http.StatusUnprocessableEntity
+			if strings.HasSuffix(p.name, "async") {
+				want = http.StatusAccepted
+			}
 			code, results := p.run(t, f)
-			if (code != http.StatusUnprocessableEntity && code != http.StatusAccepted) ||
+			if code != want ||
 				!strings.Contains(f.lastBody, "key_verdict_memory") ||
 				!strings.Contains(f.lastBody, string(errcode.GeneratorRejected)) {
 				t.Fatalf("status %d, results %+v:\n%s", code, results, f.lastBody)
@@ -719,7 +723,28 @@ func TestGeneratorGate_KeyVerdictNotCompletedRefusesEveryPath(t *testing.T) {
 			if strings.Contains(f.lastBody, secret) {
 				t.Errorf("the generator's message reached the answer:\n%s", f.lastBody)
 			}
+			if !strings.Contains(f.lastBody, "passed this write") {
+				t.Errorf("the answer does not say the generator passed the write and the key verdict ran out:\n%s", f.lastBody)
+			}
 		})
+	}
+}
+
+// Every key_verdict_* reason has its own fixed text; undecidable names the
+// missing root platform file.
+func TestKeyVerdictRejectedTexts(t *testing.T) {
+	t.Parallel()
+	for _, r := range generator.RejectionReasons {
+		if !strings.HasPrefix(r, "key_verdict_") {
+			continue
+		}
+		text := generatorRejectedText(&generator.RejectedError{Reason: r, Message: "/srv/secret"})
+		if !strings.Contains(text, "("+r+")") || strings.Contains(text, "/srv/secret") {
+			t.Errorf("%s: %q", r, text)
+		}
+	}
+	if text := generatorRejectedText(&generator.RejectedError{Reason: generator.ReasonKeyVerdictUndecidable}); !strings.Contains(text, "root platform file") {
+		t.Errorf("undecidable: %q", text)
 	}
 }
 
