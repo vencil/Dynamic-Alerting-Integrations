@@ -15,9 +15,15 @@ resolvers (`_lib_consumer_read.resolve_binary` for da-read and da-crdecode,
 `_lib_parse_tree` → `guard_dispatch` for da-guard) from another directory —
 and, as its control, shows the same setting without the call finds none of
 them there.
+
+Two AST guards over `scripts/tools/**/*.py` keep it that way: no string
+constant or keyword argument outside the register is one of the env names,
+and a module that calls `chdir` also calls `absolute_reader_binaries` (or is
+in `_CHDIR_EXEMPT` with its reason; an entry that no longer applies is red).
 """
 from __future__ import annotations
 
+import ast
 import os
 import shutil
 import sys
@@ -31,6 +37,7 @@ for _p in (_TOOLS, _TOOLS / "ops"):
         sys.path.insert(0, str(_p))
 import _lib_consumer_read as cr  # noqa: E402
 import _lib_parse_tree as lpt  # noqa: E402
+from _tree import REPO_ROOT, repo_files  # noqa: E402
 
 _ALERTMANAGER = "route:\n  receiver: x\nreceivers:\n  - name: x\n"
 
@@ -138,3 +145,114 @@ def test_control_without_the_call_none_of_them_is_found_elsewhere(
         cr.kubernetes_text_documents("a: 1\n")
     with pytest.raises(cr.ConsumerReadError):
         cr.alertmanager_config(_ALERTMANAGER)
+
+
+# ── guard: the register is the only place the names are written, and every
+#    module that changes directory makes the readers absolute first ─────────
+
+_REGISTER = "scripts/tools/_lib_consumer_read.py"
+_ENV_NAMES = frozenset({"DA_GUARD_BINARY", "DA_READ_BINARY", "DA_CRDECODE_BINARY"})
+
+#: Modules that change directory without calling `absolute_reader_binaries`,
+#: each with the reason it needs none (checked by reading the module).
+_CHDIR_EXEMPT = {
+    "scripts/tools/ops/_gsvc_child.py":
+        "the judgement process: forked by generator_service, whose main made "
+        "every reader binary absolute before the service started",
+    "scripts/tools/lint/check_cli_contract.py":
+        "changes into a scratch dir only around argparse's parse_args (a "
+        "type= callable must not touch the checkout) and back in finally; no "
+        "reader binary runs there",
+}
+
+
+def _tools_sources() -> "list[tuple[str, str]]":
+    out = []
+    for path in repo_files(".py"):
+        rel = path.relative_to(REPO_ROOT).as_posix()
+        if rel.startswith("scripts/tools/"):
+            out.append((rel, path.read_text(encoding="utf-8")))
+    return out
+
+
+def _env_name_literals(sources: "list[tuple[str, str]]") -> "list[str]":
+    """Every string constant that IS one of the env names (a longer string
+    that mentions one is not), and every keyword argument named like one,
+    outside the register."""
+    found = []
+    for rel, text in sources:
+        if rel == _REGISTER:
+            continue
+        for node in ast.walk(ast.parse(text, filename=rel)):
+            if isinstance(node, ast.Constant) and node.value in _ENV_NAMES:
+                found.append(f"{rel}:{node.lineno}: {node.value!r}")
+            elif isinstance(node, ast.keyword) and node.arg in _ENV_NAMES:
+                found.append(f"{rel}:{node.value.lineno}: {node.arg}=")
+    return found
+
+
+def _called_names(tree: ast.AST) -> "set[str]":
+    """The name of every function called (`f()` → f, `m.f()` → f)."""
+    names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            if isinstance(node.func, ast.Name):
+                names.add(node.func.id)
+            elif isinstance(node.func, ast.Attribute):
+                names.add(node.func.attr)
+    return names
+
+
+def _chdir_problems(sources: "list[tuple[str, str]]",
+                    exempt: "dict[str, str]") -> "list[str]":
+    """A module that calls chdir without calling `absolute_reader_binaries`
+    and is not exempt; an exempt module that no longer calls chdir, or that
+    calls the function after all, or that is gone (a dead entry)."""
+    problems, seen = [], set()
+    for rel, text in sources:
+        called = _called_names(ast.parse(text, filename=rel))
+        chdirs = "chdir" in called
+        absolutes = "absolute_reader_binaries" in called
+        if rel in exempt:
+            seen.add(rel)
+            if absolutes:
+                problems.append(f"{rel}: exempt, but calls absolute_reader_binaries — drop the entry")
+            elif not chdirs:
+                problems.append(f"{rel}: exempt, but no longer changes directory — drop the entry")
+        elif chdirs and not absolutes:
+            problems.append(f"{rel}: changes directory without calling "
+                            "_lib_consumer_read.absolute_reader_binaries() first")
+    problems += [f"{rel}: exempt but not found" for rel in sorted(set(exempt) - seen)]
+    return problems
+
+
+def test_no_env_name_literal_outside_the_register() -> None:
+    sources = _tools_sources()
+    assert any(rel == _REGISTER for rel, _ in sources), "the scan did not see the register"
+    assert _env_name_literals(sources) == []
+
+
+def test_every_module_that_changes_directory_makes_the_readers_absolute() -> None:
+    sources = _tools_sources()
+    assert len(sources) > 100, len(sources)
+    assert _chdir_problems(sources, _CHDIR_EXEMPT) == []
+
+
+def test_the_guards_see_what_they_are_for() -> None:
+    """Each guard, on a source that breaks it, says so."""
+    src = ('import os\nos.environ.get("DA_READ_BINARY")\n'
+           'dict(os.environ, DA_GUARD_BINARY="g")\n'
+           '"set $DA_GUARD_BINARY to it"\n'
+           'os.chdir("/")\n')
+    bad = [("scripts/tools/x.py", src)]
+    assert _env_name_literals(bad) == ["scripts/tools/x.py:2: 'DA_READ_BINARY'",
+                                       "scripts/tools/x.py:3: DA_GUARD_BINARY="]
+    assert _env_name_literals([(_REGISTER, src)]) == []
+    assert len(_chdir_problems(bad, {})) == 1
+    fixed = [("scripts/tools/x.py", "import os\nabsolute_reader_binaries()\nos.chdir('/')\n")]
+    assert _chdir_problems(fixed, {}) == []
+    assert len(_chdir_problems(fixed, {"scripts/tools/x.py": "r"})) == 1      # redundant entry
+    assert len(_chdir_problems([("scripts/tools/x.py", "pass\n")],
+                               {"scripts/tools/x.py": "r"})) == 1             # no longer chdirs
+    assert _chdir_problems([], {"scripts/tools/gone.py": "r"}) == [
+        "scripts/tools/gone.py: exempt but not found"]

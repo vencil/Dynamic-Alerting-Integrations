@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276: stdlib only)
+from _lib_consumer_read import absolute_reader_binaries  # noqa: E402  (#3424: stdlib only)
 
 
 class Status(Enum):
@@ -1646,8 +1647,11 @@ def main() -> int:
         )
     args = parser.parse_args()
 
-    # cd to repo root
+    # cd to repo root. What runs from there (`pre-commit run --all-files`)
+    # inherits the reader binaries' env: a relative $DA_*_BINARY is made
+    # absolute first, against the directory this was started in (#3424).
     repo_root = find_repo_root()
+    absolute_reader_binaries()
     os.chdir(repo_root)
 
     # Exit-early modes: just-validate-one-thing

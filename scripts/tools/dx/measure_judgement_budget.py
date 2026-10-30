@@ -238,6 +238,9 @@ sys.path.insert(0, os.path.join(_TOOLS, "ops"))
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
+from _lib_consumer_read import (  # noqa: E402  (the env-name register, #3424)
+    DA_GUARD_ENV, absolute_reader_binaries,
+)
 
 #: ADR-036 §3's pass rule (the owner's decision rule, not a limit): peak
 #: memory ≤ 75 % of the judgement limit, wall time ≤ half the deadline.
@@ -373,7 +376,7 @@ def prepare_repo(tree: "str | None", work: str, count: int, seed: int, da_guard:
         proc = subprocess.run(
             [sys.executable, _FIXTURE_TOOL, "--layout", "synthetic-v2", "--count", str(count),
              "--with-defaults", "--seed", str(seed), "--output", repo],
-            capture_output=True, env=dict(os.environ, DA_GUARD_BINARY=da_guard), check=False,
+            capture_output=True, env={**os.environ, DA_GUARD_ENV: da_guard}, check=False,
             timeout=_HANG_GUARD_S)
         if proc.returncode != 0:
             raise NotMeasured("generate_tenant_fixture.py exited "
@@ -605,7 +608,7 @@ def run_judgement(spec: dict, cpus: "list[int]", limit: "int | None") -> dict:
             resource.setrlimit(resource.RLIMIT_DATA, (limit, limit))
         resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
 
-    env = dict(os.environ, DA_GUARD_BINARY=spec["da_guard"], PYTHONDONTWRITEBYTECODE="1")
+    env = {**os.environ, DA_GUARD_ENV: spec["da_guard"], "PYTHONDONTWRITEBYTECODE": "1"}
     t0 = time.monotonic()
     proc = subprocess.Popen([sys.executable, os.path.abspath(__file__), "--_judge", spec_path],
                             preexec_fn=pre, env=env)
@@ -819,6 +822,10 @@ def main(argv: "list[str] | None" = None) -> int:
                         "temp dir, removed)")
     p.add_argument("--_judge", help=argparse.SUPPRESS)
     a = p.parse_args(argv)
+    # Before any chdir or child process: the judgement process changes into
+    # its job directory and runs the route generator there (da-guard, da-read,
+    # da-crdecode), so a relative $DA_*_BINARY is made absolute here (#3424).
+    absolute_reader_binaries()
     if a._judge:
         return _judge_main(a._judge)
     if a.runs < 1:
@@ -832,7 +839,6 @@ def main(argv: "list[str] | None" = None) -> int:
 
 def _preflight(a: argparse.Namespace) -> str:
     """Everything checkable before anything is created; returns da-guard."""
-    from _lib_consumer_read import DA_GUARD_ENV  # the env-name register (#3424)
     da_guard = a.da_guard_binary or os.environ.get(DA_GUARD_ENV) or shutil.which("da-guard")
     if not da_guard or not os.access(da_guard, os.X_OK):
         raise NotMeasured("no da-guard (--da-guard-binary, $DA_GUARD_BINARY, PATH); "
@@ -847,6 +853,8 @@ def _preflight(a: argparse.Namespace) -> str:
         raise NotMeasured(problem.message)
     if a.work_dir is not None and os.path.lexists(a.work_dir):
         raise NotMeasured(f"--work-dir {a.work_dir} already exists: name a new directory")
+    # The env value is already absolute (main); --da-guard-binary and a
+    # $PATH hit are not, and the judgement runs in another directory.
     return os.path.abspath(da_guard)
 
 
