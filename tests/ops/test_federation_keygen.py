@@ -115,8 +115,9 @@ def test_merge_jwks_rejects_non_jwks_document(tmp_path):
 
 
 def test_merge_jwks_rejects_missing_file(tmp_path):
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit) as exc:
         fk._merge_jwks(str(tmp_path / "does-not-exist.json"), {"kid": "new-kid"})
+    assert exc.value.code == 2  # a caller error, not any exit
 
 
 # ---------------------------------------------------------------------------

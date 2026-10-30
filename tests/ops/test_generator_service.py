@@ -703,6 +703,11 @@ def test_policy_is_read_for_every_judgement(tmp_path, world):
         _s, st = svc.call("GET", "/v1/status")
         assert st["policy"]["available"] is False and st["ready"] is False
 
+        # #3276 G1: a --policy with nothing there is the same refusal, named.
+        policy.unlink()
+        doc = check(503, "POLICY_UNAVAILABLE", "policy_unusable")
+        assert str(policy) in doc["message"]
+
         major = int(own.split(".")[0])
         policy.write_text(f'allowed_domains: []\nmin_generator_version: "{major + 1}.0.0"\n',
                           encoding="utf-8")
@@ -727,7 +732,7 @@ def test_policy_is_read_for_every_judgement(tmp_path, world):
         assert st["ready"] is True and st["generator_version"] == own
         assert st["policy"]["sha256"] == hashlib.sha256(policy.read_bytes()).hexdigest()
         m = svc.metrics()
-        assert m['da_generator_unavailable_total{reason="policy_unusable"}'] == 3
+        assert m['da_generator_unavailable_total{reason="policy_unusable"}'] == 4
         assert m['da_generator_unavailable_total{reason="generator_too_old"}'] == 1
 
 
