@@ -453,8 +453,20 @@ jobs:
             # (schemathesis included) into every doc typo, which is the exact
             # CI-ROI 6C waste the banner comment above set out to remove.
             # Only the threshold-exporter leg consumes docs/.
+            #
+            # #3416: that test takes its samples from the docs' YAML
+            # inventory (it runs the module below with python3, and the
+            # module runs da-guard parse-tree), so the inventory and its
+            # reader's Python side are inputs of the leg too. Reads by a
+            # child process are not in go_test_reads.py's log, so this entry
+            # is kept by hand.
             docs:
               - "docs/**"
+              - "scripts/tools/_lib_doc_yaml_inventory.py"
+              - "scripts/tools/_lib_parse_tree.py"
+              - "scripts/tools/_lib_consumer_read.py"
+              - "scripts/tools/_lib_godispatch.py"
+              - "scripts/tools/ops/guard_dispatch.py"
             # schema: the am-inhibit leg pins the tenant schema's http_config
             # key sets to the structs Alertmanager decodes into (#2984), so a
             # schema-only PR must run it. Its own filter for the reason `docs`

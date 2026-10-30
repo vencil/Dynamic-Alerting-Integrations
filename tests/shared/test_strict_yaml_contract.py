@@ -4,7 +4,7 @@ The exporter rejects a file that writes one key twice in one mapping;
 `yaml.safe_load` / `_lib_io.load_yaml_file` keep the last value silently. A
 tool that walks a conf.d and parses each file with those gives a verdict on
 a file the exporter never serves. #2123 moved the judging tools onto
-`_lib_io.strict_safe_load` / `strict_safe_load_all` / `load_yaml_file_strict`;
+`_lib_io.strict_safe_load` / `strict_safe_load_all`;
 this gate keeps a new reader from quietly going back.
 
 Derivation, not a list of tools (#2033 R′ rejected enumeration):
@@ -67,23 +67,14 @@ TOOLS = REPO / "scripts" / "tools"
 # `find_duplicate_key` / `duplicate_in_mapping`.
 _YAML_LENIENT = {"safe_load", "safe_load_all", "load", "load_all", "full_load",
                  "unsafe_load", "full_load_all", "unsafe_load_all"}
-# #2114: the exporter-key readers (`_lib_yaml_keys` and `_lib_io`'s file
-# sibling) keep the last value of a repeated key too — lenient in exactly
-# this sense, so they are named here; their strict counterpart
-# (`strict_load_exporter_keys`) is not.
-_LENIENT_ANY = {"load_yaml_file", "load_exporter_keys",
-                "load_first_document_exporter_keys", "load_all_exporter_keys",
-                "load_yaml_file_exporter_keys"}
+# (The exporter-key readers of #2114, lenient in this sense too, were deleted
+# in ADR-036 §7 step 13, #3206.)
+_LENIENT_ANY = {"load_yaml_file"}
 
-LENIENT_BY_DESIGN: dict[str, str] = {
-    "lint/check_md_yaml_drift.py":
-        "the fence and CRD passes read YAML fences / k8s objects quoted in docs, not a "
-        "tenant conf.d; its conf.d examples are read by da-guard parse-tree (ADR-036 "
-        "step 11) — PyYAML only tells whether a file parse-tree refuses looks like one",
-    "lint/check_threshold_unit_sanity.py":
-        "its conf.d trees are read by da-guard parse-tree (#2906); the lenient reads "
-        "left are docs' fenced YAML and template-data's embedded examples, not a conf.d",
-}
+# (#3416: check_md_yaml_drift and check_threshold_unit_sanity read the
+# docs' examples and template-data's from the docs' YAML inventory, through
+# their consumers; neither holds a lenient read any more.)
+LENIENT_BY_DESIGN: dict[str, str] = {}
 
 
 def _name(call: ast.Call) -> str:
@@ -201,7 +192,7 @@ def test_every_lenient_confd_reader_is_migrated_or_pinned():
         f"{ {k: flagged[k] for k in sorted(actual - pinned)} }\n"
         f"  stale pin (no longer flagged — delete the row): {sorted(pinned - actual)}\n"
         "A tool that gives a pass/fail verdict on a tenant conf.d reads it with "
-        "`_lib_io.strict_safe_load` / `strict_safe_load_all` / `load_yaml_file_strict`; "
+        "`_lib_io.strict_safe_load` / `strict_safe_load_all`; "
         "a key written twice is then a YAMLError on the tool's existing syntax-error path.")
 
 
@@ -231,18 +222,11 @@ _CAUGHT = {
     "comprehension": (
         "import yaml, os\n"
         "def scan(d):\n    return [yaml.safe_load(open(n)) for n in os.listdir(d)]\n"),
-    "exporter_key_reader_in_the_loop": (
-        "from _lib_yaml_keys import load_exporter_keys\n"
-        "from _lib_confd import iter_config_files\n"
-        "def scan(d):\n    for p in iter_config_files(d):\n        load_exporter_keys(open(p))\n"),
 }
 _NOT_CAUGHT = {
     "strict_reader_in_the_loop": (
         "from _lib_io import strict_safe_load\nfrom _lib_confd import iter_config_files\n"
         "def scan(d):\n    for p in iter_config_files(d):\n        strict_safe_load(open(p))\n"),
-    "strict_exporter_key_reader_in_the_loop": (
-        "from _lib_io import strict_load_exporter_keys\nfrom _lib_confd import iter_config_files\n"
-        "def scan(d):\n    for p in iter_config_files(d):\n        strict_load_exporter_keys(open(p))\n"),
     "lenient_read_outside_any_loop": (
         "import yaml\ndef read(p):\n    return yaml.safe_load(open(p))\n"),
     "json_load_in_the_loop": (

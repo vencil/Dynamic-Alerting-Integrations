@@ -228,10 +228,6 @@ _NOT_PROBED: dict[str, str] = {
     "_lib_paths.py": _LIB,
     "_lib_key_verdict.py": _LIB, "_lib_parse_cache.py": _LIB, "_lib_parse_tree.py": _LIB,
     "_lib_python.py": _LIB, "_lib_tenant_uniqueness.py": _LIB, "_lib_tenant_values.py": _LIB,
-    "_lib_yaml_keys.py": (_LIB + "; read by no conf.d reader since ADR-036 step 11 — its "
-                          "PyYAML rewrite layer is deleted "
-                          "(tests/shared/test_rewrite_layer_is_gone.py) and its loader "
-                          "serves only YAML that is not conf.d until step 12"),
     "_lib_write_check.py": _LIB, "_lib_confedit.py": _LIB,
     "lint/_lint_helpers.py": _LIB, "lint/_rule_tree.py": _LIB,
     "ops/_grar_merge.py": _LIB, "ops/_grar_parse.py": _LIB, "ops/_grar_render.py": _LIB,
@@ -251,14 +247,16 @@ _NOT_PROBED: dict[str, str] = {
                                           "read in parse-tree's file mode (ADR-036 §12), no "
                                           "conf.d tree to probe; `tenants: [010]` is the text "
                                           "\"010\" — tests/lint/test_check_admin_config_schema.py"),
+    "_lib_doc_yaml_inventory.py": (_GO + "; the docs' YAML inventory (#3416): every example "
+                                   "quoted in docs/**/*.md, each written into a scratch tree it "
+                                   "makes itself, no conf.d argument to probe — "
+                                   "tests/lint/test_doc_yaml_inventory.py"),
     "lint/check_md_yaml_drift.py": (_GO + "; the conf.d examples quoted in docs/**/*.md, each "
                                     "written into a scratch tree it makes itself (ADR-036 step "
                                     "11), no conf.d argument to probe — "
                                     "tests/lint/test_check_md_yaml_drift.py"),
     "ops/config_diff.py": ("renders both trees through da-guard and the route generator "
                            "(subprocess): its routing half is the generator's probe"),
-    "ops/migration_audit.py": ("reads with both readers on purpose (PyYAML vs parse-tree) "
-                               "to list where they differ (ADR-036 §8)"),
     "dx/describe_tenant.py": _GO,
     "dx/generate_tenant_fixture.py": _GO_WRITER, "dx/run_chaos_soak.py": _NAMES,
     "dx/measure_judgement_budget.py": (_GO + "; a benchmark of the generator container's "

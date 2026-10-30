@@ -467,7 +467,7 @@ helm repo add external-secrets https://charts.external-secrets.io
 helm install external-secrets external-secrets/external-secrets -n external-secrets --create-namespace
 ```
 
-```yaml
+```yaml {.k8s}
 # 2. Configure SecretStore (connect to Vault)
 apiVersion: external-secrets.io/v1beta1
 kind: SecretStore
@@ -551,7 +551,7 @@ In production environments, communication between threshold-exporter, Prometheus
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.14.0/cert-manager.yaml
 ```
 
-```yaml
+```yaml {.k8s}
 # Create self-signed CA (dev) or reference production CA
 apiVersion: cert-manager.io/v1
 kind: ClusterIssuer

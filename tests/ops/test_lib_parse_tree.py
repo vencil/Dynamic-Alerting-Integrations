@@ -1,14 +1,12 @@
 """`_lib_parse_tree`: the one reader of `da-guard parse-tree`'s document.
 
 ADR-036 makes Go the only YAML parser of conf.d; a Python tool reads a file's
-content from parse-tree's JSON. migration-audit had the only reader; #1516 P3
-(config-diff's carrier table) needs the same one, so it moved here and both
-use it. What the document must look like, and every way of refusing one, is
-held through migration-audit's CLI in `test_migration_audit.py`
-(`test_cli_refuses_a_da_guard_answer_it_cannot_read`,
-`test_cli_refuses_a_parse_tree_document_of_the_wrong_shape`); this module
-holds the library's own contract and that migration-audit goes through it
-instead of keeping a copy.
+content from parse-tree's JSON. This module holds the library's own contract,
+including what the document must look like and every way of refusing one
+(`test_refuses_a_da_guard_answer_it_cannot_read`,
+`test_refuses_a_parse_tree_document_of_the_wrong_shape` — held through the
+migration audit's CLI until that command was deleted in ADR-036 §7 step 13,
+#3206).
 """
 from __future__ import annotations
 
@@ -25,7 +23,6 @@ sys.path.insert(0, str(ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(ROOT / "scripts" / "tools" / "ops"))
 
 import _lib_parse_tree as lpt  # noqa: E402
-import migration_audit as ma  # noqa: E402
 
 
 def _tree(tmp_path: Path, files: dict[str, str]) -> Path:
@@ -131,44 +128,78 @@ def test_is_scalar(node, scalar) -> None:
     assert lpt.is_scalar(node) is scalar
 
 
-# ── migration-audit goes through this module, it does not keep a copy ───
+# ── refusing a da-guard answer: no partial document (ADR-036 §2) ────────
 
-def test_migration_audit_reads_through_the_shared_reader(tmp_path, monkeypatch) -> None:
-    calls = []
-
-    sentinel = lpt.Tree(selected={}, unreadable={}, not_read={}, rendered_by={}, _files={})
-
-    def fake(root, binary, timeout):
-        calls.append((root, binary, timeout))
-        return sentinel
-
-    monkeypatch.setattr(lpt, "load", fake)
-    assert ma.run_parse_tree(tmp_path, "bin", 5) is sentinel
-    assert calls == [(tmp_path, "bin", 5)]
-    assert ma._is_v3_scalar is lpt.is_scalar
-    assert (ma.PARSE_TREE_SUBCOMMAND, ma.PARSE_TREE_SCHEMA) == (lpt.SUBCOMMAND, lpt.SCHEMA)
+def _fake_da_guard(tmp_path: Path, body: str) -> str:
+    p = tmp_path / "fake-da-guard"
+    p.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    p.chmod(0o755)
+    return str(p)
 
 
-@pytest.mark.parametrize("err, audit_note", [
-    (lpt.BinaryMissing("da-guard not found"), True),
-    (lpt.ParseTreeError("da-guard parse-tree exited 3"), False),
+_ENTRY = ('{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t", '
+          '"defaults_document": false, "config_extension": true, '
+          '"readers": ["exporter"], "not_read": null, '
+          '"role": "config", "problem": null, "verdict": null}')
+
+
+@pytest.mark.parametrize("body,needle", [
+    ('echo \'{"schema": "da-guard.parse-tree/v3", "entries": [], "files": {}}\'\n',
+     "schema 'da-guard.parse-tree/v3'"),
+    # A da-guard from before the per-path entries (#3206) is named as older.
+    ('echo \'{"schema": "da-guard.parse-tree/v1", "selected": {}}\'\n', "older than this tool"),
+    ('echo \'{"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree", "defaults_carriers": {}, '
+     '"files": {}, "rendered_by": {}}\'\n', "field 'entries' missing"),
+    ("echo not-json\n", "wrote no document"),
+    ('echo \'{"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree", "defaults_carriers": {}, '
+     '"entries": [' + _ENTRY + '], "files": {}, "rendered_by": {}}\'\n',
+     "neither content nor a problem"),
+    ('echo "flag provided but not defined" >&2; exit 2\n', "older than this tool"),
+    ("exit 3\n", "exited 3"),
 ])
-def test_migration_audit_turns_the_shared_errors_into_its_own(tmp_path, monkeypatch, err,
-                                                              audit_note) -> None:
-    def fail(*_a):
-        raise err
+def test_refuses_a_da_guard_answer_it_cannot_read(tmp_path, body, needle) -> None:
+    root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
+    with pytest.raises(lpt.ParseTreeError) as e:
+        lpt.load(root, _fake_da_guard(tmp_path, body), 30)
+    assert needle in str(e.value), str(e.value)
 
-    monkeypatch.setattr(lpt, "load", fail)
-    with pytest.raises(ma.AuditError) as e:
-        ma.run_parse_tree(tmp_path, None, 5)
-    assert str(e.value).startswith(str(err))
-    assert ("does not parse the YAML another way" in str(e.value)) is audit_note
+
+@pytest.mark.parametrize("doc,needle", [
+    ('{"entries": [1]}', "entries[0] is not an object"),
+    ('{"entries": [{"path": "t.yaml"}]}', "entries[0] ('t.yaml'): no depth"),
+    ('{"entries": [{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t", '
+     '"defaults_document": false, "config_extension": true, "readers": "exporter", '
+     '"not_read": null, "role": "config", '
+     '"problem": null, "verdict": null}]}', "readers is not a list"),
+    ('{"entries": [{"path": "t.yaml", "depth": 0, "class": "tenant", "tenant_named": "t", '
+     '"defaults_document": false, "config_extension": true, "readers": ["exporter"], '
+     '"not_read": null, "role": "maybe", '
+     '"problem": null, "verdict": null}]}', "role 'maybe'"),
+    ('{"files": {"t.yaml": [1]}}', "files['t.yaml'] is not a mapping"),
+    ('{"files": {"t.yaml": {"a": 1}}}', "wrong shape"),
+    ('{"files": {"t.yaml": {"a": {"text": "x", "tag": "!!str", "value": [1]}}}}', "wrong shape"),
+    ('{"files": {"t.yaml": {"a": {"text": "x"}}}}', "wrong shape"),
+])
+def test_refuses_a_parse_tree_document_of_the_wrong_shape(tmp_path, doc, needle) -> None:
+    base = {"schema": "da-guard.parse-tree/v2", "da_guard_version": "t", "mode": "tree",
+            "defaults_carriers": {}, "entries": [json.loads(_ENTRY)], "files": {"t.yaml": {}},
+            "rendered_by": {}}
+    patch = json.loads(doc)
+    base.update(patch)
+    if "entries" in patch and "files" not in patch:
+        base["files"] = {}
+    root = _tree(tmp_path, {"t.yaml": "a: 1\n"})
+    fake = _fake_da_guard(tmp_path, "cat <<'JSON'\n" + json.dumps(base) + "\nJSON\n")
+    with pytest.raises(lpt.ParseTreeError) as e:
+        lpt.load(root, fake, 30)
+    assert needle in str(e.value), str(e.value)
 
 
 def test_the_image_ships_the_module() -> None:
     build = (ROOT / "components/da-tools/app/build.sh").read_text(encoding="utf-8")
     assert any(line.strip() == "_lib_parse_tree.py" for line in build.splitlines()), (
-        "build.sh does not copy _lib_parse_tree.py: migration-audit would ImportError in the image")
+        "build.sh does not copy _lib_parse_tree.py: every conf.d tool in the image "
+        "would ImportError")
 
 
 

@@ -66,14 +66,15 @@ This ADR decides how to judge and how to report, and the rules tenant-api's writ
 
 A root `_defaults.yaml` and one tenant file:
 
-<!-- md-yaml-drift: ignore — deliberate typo example: the misspelled keys are the point of this section -->
 ```yaml
 # _defaults.yaml
 defaults:
   mysql_connections: 80
   mysql_slave_lag: 30
   redis_memory: 70
+```
 
+```yaml {.confd .expect-invalid}
 # db-a.yaml
 tenants:
   db-a:

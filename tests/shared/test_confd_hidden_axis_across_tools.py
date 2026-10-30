@@ -182,8 +182,7 @@ def _generate_tenant_metadata(root):
 # db_type) from da-guard (#2115 0-B; config_diff renders through it, ADR-037).
 # The operator-plane readers take their tenant set from parse-tree (#2906).
 _SERVED_VALUES_CELLS = frozenset({"generate_tenant_metadata", "check_retire_drift", "config_diff",
-                                  "migration_audit", "tree_tenants", "operator_generate",
-                                  "migrate_to_operator"})
+                                  "tree_tenants", "operator_generate", "migrate_to_operator"})
 
 
 @pytest.fixture(autouse=True)
@@ -274,16 +273,6 @@ def _config_diff(root):
     return sorted(config_diff._changed_tenants(report)) + report["uncovered_files"]
 
 
-def _migration_audit(root):
-    import migration_audit
-    # Both of its listings (#2898): today's generator walk, and the files
-    # `da-guard parse-tree` selects (the exporter's walk) — every file named
-    # in the report, compared or listed.
-    report = migration_audit.audit(root)
-    return sorted({e["file"] for k in migration_audit.ALL_LISTS for e in report[k]}
-                  | set(report["files_compared"]))
-
-
 # cell id -> (defining file, relative to scripts/tools; adapter)
 CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "tree_tenants": ("_lib_confd.py", _tree_tenants),
@@ -309,7 +298,6 @@ CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
                             _assemble_config_dir),
     "deprecate_rule": ("ops/deprecate_rule.py", _deprecate_rule),
     "config_diff": ("ops/config_diff.py", _config_diff),
-    "migration_audit": ("ops/migration_audit.py", _migration_audit),
     # #2360: both were KNOWN_OPEN below until they pruned hidden directories
     # (check_confd_schema) and hidden names at all (check_retire_drift).
     "check_confd_schema": ("lint/check_confd_schema.py", _check_confd_schema),
@@ -330,10 +318,6 @@ NOT_A_CELL: dict[str, str] = {
     "dx/run_chaos_soak.py":
         "`trigger_reload` WRITES a carrier; its hidden axis is pinned by "
         "tests/dx/test_run_chaos_soak.py (#1630)",
-    "lint/check_threshold_unit_sanity.py":
-        "walks only docs/ itself; its fixed conf.d dirs are listed by da-guard "
-        "parse-tree (#2906); hidden axis pinned by "
-        "test_hidden_carriers_are_not_linted (#1630)",
     "_lib_parse_cache.py":
         "lists only through `_lib_confd.iter_config_files` (library cell): "
         "a directory's carriers, for the cache-mode `not_read` verdict",
@@ -360,7 +344,9 @@ NOT_A_CELL: dict[str, str] = {
     "lint/check_cli_contract.py": "walks docs/, not a conf.d",
     "lint/check_cli_default_drift.py": "walks scripts/, not a conf.d",
     "lint/check_doc_datools_cmds.py": "walks docs/, not a conf.d",
-    "lint/check_md_yaml_drift.py": "walks docs/, not a conf.d",
+    # #3416: check_md_yaml_drift and check_threshold_unit_sanity walk docs/
+    # only through this inventory now; they list no directory themselves.
+    "_lib_doc_yaml_inventory.py": "walks docs/, not a conf.d (#3416)",
     "lint/check_scrape_reachability.py": "walks k8s manifests, not a conf.d",
     "lint/check_threshold_reachability.py":
         "walks scripts/ for a census, not a conf.d",

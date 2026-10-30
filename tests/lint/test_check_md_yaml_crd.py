@@ -138,19 +138,32 @@ def test_builtin_kind_is_out_of_scope_and_counted(tmp_path: Path) -> None:
     assert "built-in, out of scope" in r.stdout
 
 
-def test_ignore_marker_exempts_and_is_reported(tmp_path: Path) -> None:
-    """Exemptions are never silent — the reason the marker had to supply is
+def test_illustrative_exempts_and_is_reported(tmp_path: Path) -> None:
+    """Exemptions are never silent — the reason the attribute had to supply is
     printed, so a gate that dropped an input cannot read as full coverage."""
-    body = ("# t\n\n<!-- md-yaml-drift: ignore — counter-example on purpose -->\n"
-            "```yaml\napiVersion: example.io/v1\nkind: Widget\nspec:\n  replicas: 1\n```\n")
+    body = ('# t\n\n```yaml {.illustrative reason="counter-example on purpose"}\n'
+            "apiVersion: example.io/v1\nkind: Widget\nspec:\n  replicas: 1\n```\n")
     r = _run(_tree(tmp_path, body))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
     assert "counter-example on purpose" in r.stdout
 
 
+def test_a_declared_k8s_fence_is_validated(tmp_path: Path) -> None:
+    """#3416: an attribute on the fence (`{.k8s}`) must not take it out of
+    this gate — the object is read and judged as an undeclared one is."""
+    body = ("# t\n\n```yaml {.k8s}\napiVersion: example.io/v1\nkind: Widget\n"
+            "spec:\n  replicas: 1\n---\napiVersion: example.io/v1\nkind: Widget\n"
+            "spec:\n  project: p\n```\n")
+    r = _run(_tree(tmp_path, body))
+    assert r.returncode == EXIT_VIOLATION, r.stdout
+    assert "CRD objects validated:       2" in r.stdout, r.stdout
+    assert "'project' is a required property" in r.stdout
+
+
 def test_unparseable_block_is_left_to_the_fences_pass(tmp_path: Path) -> None:
     """Duplicating fence hygiene here would let a mislabelled directory tree
-    fail the CRD gate for a reason that has nothing to do with CRDs."""
+    fail the CRD gate for a reason that has nothing to do with CRDs (the
+    fence check reports it: the inventory's error)."""
     body = "# t\n\n```yaml\nconf.d/\n├── a.yaml\n  : broken\n```\n"
     r = _run(_tree(tmp_path, body, with_schema=False))
     assert r.returncode == EXIT_OK, r.stdout + r.stderr
@@ -159,7 +172,9 @@ def test_unparseable_block_is_left_to_the_fences_pass(tmp_path: Path) -> None:
 def test_a_crashed_da_crdecode_fails_closed(tmp_path: Path) -> None:
     """#3407 review: a da-crdecode that crashes (a Go panic exits 2 with
     stderr, as a refusal does) is no answer about the fence — the pass exits
-    2 naming the reading; it does not skip the fence as a refused one."""
+    2 naming the reading; it does not skip the fence as a refused one.
+    (#3416: the inventory runs da-crdecode for the k8s units; the crash is
+    raised from there, never taken as a refusal.)"""
     fake = tmp_path / "fake-da-crdecode"
     fake.write_text("#!/bin/sh\necho 'panic: boom' >&2\necho 'goroutine 1' >&2\nexit 2\n",
                     encoding="utf-8")

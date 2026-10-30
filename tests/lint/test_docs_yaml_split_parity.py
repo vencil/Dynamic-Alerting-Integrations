@@ -3,7 +3,9 @@
 Both gates that read docs/**/*.md must cut a fenced block into the same units:
 
   * Go     pkg/config/docs_defaults_sample_test.go  (loader oracle)
-  * Python scripts/tools/lint/check_md_yaml_drift.py (schema oracle)
+  * Python scripts/tools/_lib_doc_yaml_inventory.py (the inventory every
+    Python gate reads, #3416: the drift lint's three checks and the
+    unit-sanity lint)
 
 Neither asserts the other. Both assert tests/shared/docs_yaml_split_matrix.json,
 which makes their agreement transitive rather than claimed — the same shape as
@@ -28,16 +30,14 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 MATRIX = REPO / "tests" / "shared" / "docs_yaml_split_matrix.json"
-SCRIPT = REPO / "scripts" / "tools" / "lint" / "check_md_yaml_drift.py"
+SCRIPT = REPO / "scripts" / "tools" / "_lib_doc_yaml_inventory.py"
 
 
 def _load_checker_module():
-    """Import the lint module by path (it is a script, not a package member)."""
-    # The script bootstraps its own sys.path for _lib_compat; mirror that here.
-    for extra in (SCRIPT.parent, SCRIPT.parent.parent):
-        if str(extra) not in sys.path:
-            sys.path.insert(0, str(extra))
-    spec = importlib.util.spec_from_file_location("check_md_yaml_drift", SCRIPT)
+    """Import the inventory module by path (it is a script, not a package member)."""
+    if str(SCRIPT.parent) not in sys.path:
+        sys.path.insert(0, str(SCRIPT.parent))
+    spec = importlib.util.spec_from_file_location("_lib_doc_yaml_inventory", SCRIPT)
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -55,7 +55,7 @@ def test_matrix_is_not_empty() -> None:
 @pytest.mark.parametrize("case", CASES, ids=[c["name"] for c in CASES])
 def test_python_splitter_matches_matrix(case: dict) -> None:
     mod = _load_checker_module()
-    segments = mod.MdYamlDriftChecker._split_documented_files(case["block"])
+    segments = mod.split_documented_files(case["block"])
     got = [offset for offset, _text in segments]
     assert got == case["offsets"], (
         f"{case['name']}\n  expected offsets {case['offsets']}, got {got}\n"
@@ -71,7 +71,7 @@ def test_segments_reconstruct_the_block(case: dict) -> None:
     while quietly removing config from the gate's view.
     """
     mod = _load_checker_module()
-    segments = mod.MdYamlDriftChecker._split_documented_files(case["block"])
+    segments = mod.split_documented_files(case["block"])
     rebuilt: list[str] = []
     for _offset, text in segments:
         rebuilt.extend(text.split("\n"))

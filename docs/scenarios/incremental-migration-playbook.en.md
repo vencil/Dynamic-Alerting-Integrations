@@ -153,7 +153,7 @@ The chart is published as an OCI artifact ([ADR-002](../adr/002-oci-registry-ove
 
 ⚠️ The chart's shipped `thresholdConfig.defaults` only covers Kubernetes, MariaDB and PostgreSQL; you must add the redis keys yourself. Copy the `redis_*` lines from the `conf.d/_defaults.yaml` that scaffold produced in Step 1.1. Without them the tenant's values are not emitted, and the exporter logs `unknown key "redis_memory_used_bytes" not in defaults`.
 
-```yaml
+```yaml {.helm-values}
 # values-redis.yaml
 thresholdConfig:
   defaults:                 # not shipped by the chart; taken from scaffold's conf.d/_defaults.yaml
@@ -566,6 +566,89 @@ lessons_learned:
   - "Extend Phase 2 beyond 2 weeks to cover diverse alert scenarios"
 EOF
 ```
+
+---
+
+## Checks before upgrading the platform
+
+A new platform version may read conf.d differently from the old one: all YAML is read by Go (yaml.v3), so unquoted `yes` / `no` / `on` / `off` are strings rather than booleans, and the exporter does not serve a file it cannot read ([ADR-036](../adr/036-single-parser-effective-config.en.md) §8). So before every upgrade of da-tools and threshold-exporter, run these two checks on your own conf.d in CI, with the **new** version's tools. The commands are written as `da-tools`; run each with the image of the version being compared (for the `docker run` form see [Docker Usage Pattern](../cli-reference.en.md#docker-usage-pattern)).
+
+### Check 1: validate conf.d with the new da-guard
+
+```bash
+# run with the new da-tools image (it ships da-guard)
+da-tools guard defaults-impact --config-dir conf.d/
+```
+
+Read the exit code (full definitions under [`guard`](../cli-reference.en.md#guard)):
+
+| Exit code | Meaning | What to do before upgrading |
+|---|---|---|
+| 0 | No error-level finding | Ready to upgrade |
+| 1 | An error-level finding | Fix it as the report says |
+| 3 | Files the new exporter will not serve, each listed in the report (files it cannot decode under "Files the exporter cannot parse", files it fails to read under "Files the exporter cannot read"); the route generator and tenant-api refuse them too (all three use the same verdict) | Fix or remove these files before upgrading |
+| 4 | The tree holds content only the route generator judges (undecided) | Counts as 0: routing and domain policy are judged by `da-tools generate-routes --config-dir conf.d/ --validate --strict`, which always runs; only its success passes (see the example below) |
+
+guard judges only its own part. Routing and domain policy are judged by the route generator, and the generator can fail on a tree guard passes with 0 (for example, `_defaults.yaml` and `_defaults.yml` both at the root: guard exits 0, `generate-routes --validate --strict` exits 1). So the strict validation **always runs**, not only when guard exits 4; the result passes only when guard is 0 or 4 and the strict validation succeeds, and fails in every other case. This is the logic of this repo's `.github/workflows/guard-defaults-impact.yml`: after guard, each tree also runs the generator, a non-zero generator fails the run, and guard's 4 counts as 0 because the generator has run. A CI shell runs as `bash -e` by default, so a non-zero command stops the step; both exit codes are therefore taken under `set +e`:
+
+```bash
+set +e
+da-tools guard defaults-impact --config-dir conf.d/
+guard_rc=$?
+da-tools generate-routes --config-dir conf.d/ --validate --strict
+gen_rc=$?
+set -e
+# 4 (undecided) counts as 0: what only the generator judges, the generator judged above
+if [ "$guard_rc" -eq 4 ]; then guard_rc=0; fi
+if [ "$gen_rc" -ne 0 ]; then
+  echo "route generator (generate-routes --validate --strict) exit $gen_rc" >&2
+  exit 1
+fi
+if [ "$guard_rc" -ne 0 ]; then
+  echo "da-guard exit $guard_rc" >&2
+  exit 1
+fi
+```
+
+### Check 2: render with the old and new images, compare the output
+
+Generate the Alertmanager routing config from the same conf.d once with the version you run today and once with the version you are upgrading to, then compare the two:
+
+```bash
+set -e
+out="$(mktemp -d)"            # a fresh directory each run: never compares a file left by the last one
+trap 'rm -rf "$out"' EXIT
+# run with the current version's image
+da-tools generate-routes --config-dir ./conf.d -o "$out/routes-current.yaml"
+# run with the new version's image
+if ! da-tools generate-routes --config-dir ./conf.d -o "$out/routes-new.yaml"; then
+  echo "the new version refuses this conf.d: see Check 1's result" >&2
+  exit 1
+fi
+cur="$out/routes-current.yaml"; new="$out/routes-new.yaml"
+if [ ! -e "$cur" ] && [ ! -e "$new" ]; then
+  echo "neither version produced routing output: the same"
+elif [ ! -e "$new" ]; then
+  echo "the current version produced routing output, the new one did not: they differ" >&2
+  exit 1
+elif [ ! -e "$cur" ]; then
+  echo "the new version produced routing output, the current one did not: they differ" >&2
+  exit 1
+elif ! diff -q "$cur" "$new" > /dev/null; then
+  echo "the rendered output differs (the full diff is not printed in the CI log; see below)" >&2
+  exit 1
+else
+  echo "the rendered output is the same"
+fi
+```
+
+When running with `docker run`, mount the temporary directory into the container so the output files can be written to it.
+
+- **The new version refuses the tree**: `generate-routes` exits non-zero and writes no output file, so there is nothing to compare. The example fails the job right there; the reason is in Check 1 (the new da-guard's exit code and the files it names). If the current version already refuses it, `set -e` fails the job on the first command.
+- **No output file**: on a tree with no tenants, `generate-routes` exits 0 and writes no output file. No output from both versions counts as the same; output from only one counts as a difference, and the message says which version produced none.
+- **A difference**: the example only asks `diff -q` whether the outputs differ and fails the job; it does not print the full diff into the CI log, because the output holds the webhook URLs of tenants' `_routing.receiver` (a Slack `api_url`, for example), and printing it writes them into the log. To see the full diff, run the same two `generate-routes` commands with the two images on your machine or in an access-controlled environment, then `diff -u`. The output files hold those URLs too: do not upload them as public CI artifacts.
+
+The comparison shows where the rendered output changed, but not which change in reading caused it; to attribute it, look at the source at that place (for example, `send_resolved: yes` is a string in the new version and is refused; write `true`).
 
 ---
 

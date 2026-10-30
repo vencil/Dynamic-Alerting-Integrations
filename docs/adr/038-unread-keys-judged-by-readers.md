@@ -72,14 +72,15 @@ updated_at: 2026-10-30
 
 根 `_defaults.yaml` 與一個租戶檔：
 
-<!-- md-yaml-drift: ignore — 故意拼錯的範例：拼錯的鍵正是本節要說明的 -->
 ```yaml
 # _defaults.yaml
 defaults:
   mysql_connections: 80
   mysql_slave_lag: 30
   redis_memory: 70
+```
 
+```yaml {.confd .expect-invalid}
 # db-a.yaml
 tenants:
   db-a:

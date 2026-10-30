@@ -833,10 +833,12 @@ def test_the_reader_supplies_the_path_that_the_parser_does_not(tmp_path):
     # genuinely malformed: a mapping value where YAML cannot accept one
     bad.write_text("defaults:\n  a: b: c\n", encoding="utf-8")
 
-    # 1) the parser's own error names no file — the premise for the wrapper.
+    # 1) the reader's own error does not name the repo file — the premise for
+    #    the wrapper. (#3206: the text is read by parse-tree as the root
+    #    `_defaults.yaml` of a scratch tree, so that name is all it can say.)
     with pytest.raises(Exception) as raw:
         gate._defaults_section(bad.read_text(encoding="utf-8"))
-    assert "_defaults.yaml" not in str(raw.value), (
+    assert "some/conf.d" not in str(raw.value), (
         "the parser now names the file on its own; if that is really true the "
         f"wrapper's justification has changed, so re-read it: {raw.value}")
 
@@ -3262,11 +3264,11 @@ def test_a_key_whose_value_is_a_mapping_is_still_checked():
     assert "pg_connections_critical" in keys, keys
 
 
-def test_the_walk_refuses_a_recursive_anchor_instead_of_truncating():
-    """⛔ `yaml.safe_load` accepts a self-referential anchor, and a walk without a
-    cap recurses until the interpreter stops it. Truncating silently would hand
-    back a partial key set that passes the placement check for everything it
-    never reached — so the cap RAISES.
+def test_the_walk_refuses_a_cycle_instead_of_truncating():
+    """⛔ A walk without a cap recurses over a self-referential mapping until the
+    interpreter stops it. Truncating silently would hand back a partial key set
+    that passes the placement check for everything it never reached — so the
+    cap RAISES.
 
     ⛔ The match is anchored on OUR message and the type is checked exactly.
     Measured (blind review, mutation): with `pytest.raises(RuntimeError,
@@ -3274,17 +3276,79 @@ def test_the_walk_refuses_a_recursive_anchor_instead_of_truncating():
     forbids — still passed, because `RecursionError` subclasses `RuntimeError`
     and its text also contains "exceeded". The assertion could not tell "our cap
     fired" from "the interpreter blew the stack".
+
+    #3206: the cycle is built in Python. PyYAML built one from the text
+    `defaults: &a {x: *a}`; the exporter's reading refuses that text (next test).
     """
+    cyclic: dict = {}
+    cyclic["x"] = cyclic
     with pytest.raises(RuntimeError, match="walk exceeded") as exc:
-        gate._defaults_section("defaults: &a\n  x: *a\n")
+        gate._defaults_section({"defaults": cyclic})
     assert type(exc.value) is RuntimeError, type(exc.value)
+
+
+def test_a_recursive_anchor_is_refused_as_the_exporter_refuses_it():
+    """#3206 (ADR-036 §12): a `_defaults.yaml` text is read as the exporter reads
+    it (`da-guard parse-tree`), which refuses a self-referential anchor — the
+    file is not served, so no key of it exists. PyYAML built the cycle and only
+    this gate's depth cap stood between it and a partial key set."""
+    with pytest.raises(gate._FileUnreadable) as exc:
+        gate._defaults_section("defaults: &a\n  x: *a\n")
+    assert exc.value.kind == "decode_error", exc.value
+
+
+def test_a_generator_text_is_read_as_the_exporter_reads_it(monkeypatch):
+    """#3206 reverse control: `da-tools init` writes `_defaults.yaml`, which the
+    exporter and tenant-api read with yaml.v3. `on` is the string "on" there;
+    PyYAML (YAML 1.1) read it as True, so this face reported a key nobody
+    declared. With the PyYAML reading back, this goes red."""
+    import init_project  # noqa: PLC0415 — on sys.path through the gate module
+    monkeypatch.setattr(init_project, "_gen_defaults_yaml",
+                        lambda *_a, **_k: "optional_overrides:\n  - on\n  - mysql_x\n")
+    assert gate._init_project_declared() == {"on", "mysql_x"}
+
+
+@pytest.mark.parametrize("face", ["declared", "faces"])
+def test_a_generator_text_the_exporter_refuses_is_a_floor_breach(monkeypatch, face):
+    """#3206 fail-closed: a generator that writes a `_defaults.yaml` the exporter
+    refuses whole (a key written twice) is reported, naming the generator —
+    never read last-wins (PyYAML's reading) and never an empty face."""
+    import init_project  # noqa: PLC0415
+    monkeypatch.setattr(init_project, "_gen_defaults_yaml",
+                        lambda *_a, **_k: "defaults:\n  a: 1\n  a: 2\noptional_overrides: [a]\n")
+    with pytest.raises(gate._GateViolation, match="duplicate_key") as exc:
+        if face == "declared":
+            gate._init_project_declared()
+        else:
+            gate._defaults_faces()
+    assert "init_project._gen_defaults_yaml" in str(exc.value), exc.value
+
+
+def test_main_reports_a_refused_generator_text_and_exits_1(monkeypatch, capsys):
+    """…and through `main`: under `--ci` a floor breach, exit 1, generator named."""
+    import init_project  # noqa: PLC0415
+    monkeypatch.setattr(init_project, "_gen_defaults_yaml",
+                        lambda *_a, **_k: "defaults: [unclosed\n")
+    assert gate.main(["--ci"]) == gate.EXIT_VIOLATION
+    err = capsys.readouterr().err
+    assert "init_project._gen_defaults_yaml" in err and "syntax_error" in err, err[-800:]
+
+
+def test_no_da_guard_for_a_generator_text_is_a_caller_error(monkeypatch, tmp_path, capsys):
+    """#3206 fail-closed: without da-guard the generator's text is not read —
+    exit 2 naming da-guard, never an empty face or a PyYAML fallback."""
+    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+    with pytest.raises(gate._ParseTreeError):
+        gate._defaults_section("defaults:\n  a: 1\n")
+    assert gate.main(["--ci"]) == gate.EXIT_CALLER_ERROR
+    assert "da-guard" in capsys.readouterr().err
 
 
 def test_the_walk_leaves_flat_faces_unchanged():
     """Anti-regression for the change itself: on a flat section the path IS the
     key and its depth is 0, so those faces must not have moved at all."""
-    chart = gate._CHART_VALUES.read_text(encoding="utf-8")
-    chart_defaults = (yaml.safe_load(chart) or {})["thresholdConfig"]["defaults"]
+    chart = gate._chart_values()   # as Helm reads it (#3206)
+    chart_defaults = chart["thresholdConfig"]["defaults"]
     walked = gate._defaults_section(chart, unwrap_chart=True)
     assert set(walked) == set(chart_defaults)
     assert set(walked.values()) == {0}, walked
@@ -3307,8 +3371,13 @@ def test_only_the_chart_face_unwraps_thresholdConfig():
            "defaults:\n  pg_conn_critical: 90\n")
     # artifact reading: the top level IS the root
     assert gate._defaults_section(doc) == {"pg_conn_critical": 0}
-    # chart reading of the same bytes: one level down
-    assert gate._defaults_section(doc, unwrap_chart=True) == {"chart_key": 0}
+    # chart reading of the same bytes (as Helm reads them, #3206): one level down
+    import _lib_consumer_read  # noqa: PLC0415 — on sys.path through the gate
+    as_helm = _lib_consumer_read.kubernetes_text_documents(doc)[0]
+    assert gate._defaults_section(as_helm, unwrap_chart=True) == {"chart_key": 0}
+    # …and text is never unwrapped: the chart is Helm's to read, not the exporter's
+    with pytest.raises(TypeError):
+        gate._defaults_section(doc, unwrap_chart=True)
 
     result = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},

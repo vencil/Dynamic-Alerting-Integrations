@@ -5,13 +5,14 @@ PyYAML's YAML 1.1 typing reads `010` as 8, `0x1F` as 31, `yes` as True and
 `123` as the int 123. Before #2114 each Python reader below took PyYAML's
 value, and the suite had no numeric or bool-looking tenant id anywhere — a
 key-only change passed the whole suite while policy exclusion regressed.
-Each test here names what it pins; the loader's own Go-parity table is
-tests/shared/test_tenant_id_yaml_spelling_parity.py, the platform overlay
+Each test here names what it pins; what a written file holds is read back as
+the exporter reads it, through `da-guard parse-tree` (`tests/_exporter_reading.py`,
+ADR-036 §12); the Go half of the spelling table is
+components/threshold-exporter/app/pkg/config/tenant_id_spelling_parity_test.go, the platform overlay
 rows are in tests/shared/platform_tenant_overlay_matrix.json.
 """
 from __future__ import annotations
 
-import io
 import json
 import os
 import shutil
@@ -27,7 +28,7 @@ TOOLS = REPO_ROOT / "scripts" / "tools"
 
 import _grar_parse  # noqa: E402
 import _lib_tenant_values  # noqa: E402
-import _lib_yaml_keys  # noqa: E402
+from _exporter_reading import exporter_reading  # noqa: E402  (#3206)
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 import check_routing_profiles as crp  # noqa: E402
 import da_assembler  # noqa: E402
@@ -308,17 +309,16 @@ _ASSEMBLER_CTRL_ON_MAIN = (
 
 
 def _as_text(path: Path):
-    """Re-read a written file the way the exporter reads it."""
-    return _lib_yaml_keys.load_exporter_keys(
-        io.StringIO(path.read_text(encoding="utf-8")))
+    """Re-read a written file the way the exporter reads it
+    (`da-guard parse-tree`, ADR-036 §12)."""
+    return exporter_reading(path.read_text(encoding="utf-8"), rel=path.name)
 
 
 def _as_text_profiles(path: Path):
     """`_as_text`, plus a `_profile:` VALUE read as its source text — as the
     exporter reads it (`ScheduledValue` keeps the text, #2216)."""
-    return _lib_yaml_keys.load_exporter_keys(
-        io.StringIO(path.read_text(encoding="utf-8")),
-        raw_text_scalars=("_profile",))
+    return exporter_reading(path.read_text(encoding="utf-8"), rel=path.name,
+                            text_scalars=("_profile",))
 
 
 @pytest.fixture(scope="module")
@@ -761,7 +761,7 @@ def _pc_cm(mode: str, tenants_body: str) -> dict:
 
 
 def _pc_tenants(text: str) -> dict:
-    return _lib_yaml_keys.load_exporter_keys(io.StringIO(text))["tenants"]
+    return exporter_reading(text)["tenants"]
 
 
 @pytest.mark.parametrize("mode", ["multi-file", "legacy"])
@@ -814,7 +814,7 @@ def test_patch_config_keeps_a_profile_outside_tenants_typed():
     cm["data"]["config.yaml"] = text
     patch = pc.build_patch(cm, "legacy", "acme", "connections", "3")
     written = patch["data"]["config.yaml"]
-    got = _lib_yaml_keys.load_exporter_keys(io.StringIO(written))
+    got = exporter_reading(written)
     assert got["defaults"] == {"connections": 100, "mem": 80, "_profile": 8}, written
     assert all(isinstance(v, (int, float)) for v in got["defaults"].values()), written
     # #2220: the tenant's `_profile: 010` is now written back plain, as it
@@ -822,8 +822,7 @@ def test_patch_config_keeps_a_profile_outside_tenants_typed():
     # exporter does — the scalar's text — instead of with PyYAML's typing,
     # which says 8 for the plain spelling. Same invariant: the reference is
     # still "010" while the `defaults:` one above stays a number.
-    tenants = _lib_yaml_keys.load_exporter_keys(
-        io.StringIO(written), raw_text_scalars=("_profile",))["tenants"]
+    tenants = exporter_reading(written, text_scalars=("_profile",))["tenants"]
     assert tenants == {"acme": {"_profile": "010", "connections": 3}}, written
 
 
@@ -856,7 +855,7 @@ def _render_as_text(data, pod=None):
     for key in sorted(data):
         if key.startswith("_") or not data[key]:
             continue
-        doc = _lib_yaml_keys.load_exporter_keys(io.StringIO(data[key])) or {}
+        doc = exporter_reading(data[key], rel=key) or {}
         for tenant, block in sorted((doc.get("tenants") or {}).items()):
             for metric, value in sorted((block or {}).items()):
                 if not metric.startswith("_"):
@@ -1028,21 +1027,6 @@ def test_md_yaml_drift_judges_each_tenant_body(tmp_path, capsys, variant):
     out = capsys.readouterr().out
     assert rc == 1, out
     assert out.count("[SCHEMA]") == 1, out
-
-
-def test_load_all_exporter_keys_reads_every_document_as_text():
-    src = "tenants:\n  010: {}\n---\n---\na: 1\n"
-    assert _lib_yaml_keys.load_all_exporter_keys(src) == [
-        {"tenants": {"010": {}}}, None, {"a": 1}]
-    assert _lib_yaml_keys.load_all_exporter_keys("") == []
-    # Not strict, like the single-document entry: the last value is kept.
-    assert _lib_yaml_keys.load_all_exporter_keys("a: 1\na: 2\n") == [{"a": 2}]
-    # The opt-ins reach every document; without them values keep their type.
-    two = "instance: 010\n---\ninstance: yes\nn: 010\n"
-    assert _lib_yaml_keys.load_all_exporter_keys(
-        two, raw_text_scalars=("instance",)) == [
-            {"instance": "010"}, {"instance": "yes", "n": 8}]
-    assert _lib_yaml_keys.load_all_exporter_keys(two)[0] == {"instance": 8}
 
 
 # ── #2216: tenant ids written as VALUES ──────────────────────────────

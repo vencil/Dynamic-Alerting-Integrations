@@ -52,7 +52,6 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_versions.py",    # platform / da-tools version SSOT readers for doc generators
     "_lib_yaml.py",        # v2.10.0 ROI r5 W2: minimal CRD YAML serializer (operator_generate + migrate_to_operator)
     "_lib_confd.py",       # #1911: single answer to "what is in a conf.d/" (recursive read + flat-reader guard)
-    "_lib_yaml_keys.py",   # #2114: one reader of tenant ids as the exporter keys them (the scalar's raw text)
     "_lib_toolcount.py",   # #1511: single answer to "what counts as a Python tool" (lint checker + two dx writers)
     "_lib_tenant_uniqueness.py",  # #1794: one answer to "does this artifact declare a tenant twice" (two producers)
     "_lib_tenant_values.py",  # #2115/#2564: per-tenant values from Go (runs da-guard served-values / effective)
@@ -64,6 +63,7 @@ ALLOWED_TOOLS_ROOT = {
     "_lib_write_check.py",  # #3206: a writer's fail-closed check of the tree it writes into
     "_lib_confedit.py",  # #3206: a tool's change of an existing conf.d file, sent to `da-guard write` (ADR-036 §2)
     "_lib_consumer_read.py",  # #3206: a manifest / Alertmanager config read the consumer's way (da-crdecode / da-read, ADR-036 §12)
+    "_lib_doc_yaml_inventory.py",  # #3416: the one inventory of the docs' ```yaml examples (drift / unit-sanity lints, Go loader test)
     "metric-dictionary.yaml",
     "validate_all.py",
     "vendor_download.sh",

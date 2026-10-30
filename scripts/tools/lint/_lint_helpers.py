@@ -64,10 +64,6 @@ BUILD_EXEMPT = frozenset({
     # plus the guard a flat reader calls so a hierarchical tree can never
     # look empty. Library, not CLI.
     "_lib_confd.py",
-    # #2114 — tenant ids read as the exporter keys them (the YAML scalar's
-    # raw text). Leaf module (yaml + stdlib) imported by _lib_io /
-    # _lib_confd and the conf.d readers. Library, not CLI.
-    "_lib_yaml_keys.py",
     # #2115 — per-tenant values as /metrics serves them (runs `da-guard
     # served-values`). Imported by blind_spot_discovery,
     # analyze_rule_pack_gaps, policy_engine and policy_opa_bridge.
@@ -79,7 +75,7 @@ BUILD_EXEMPT = frozenset({
     # _render_diff (list mirrors tenant-api credmask). Library, not CLI.
     "_lib_redact.py",
     # #1516 — runs `da-guard parse-tree` and reads its document; imported by
-    # migration_audit and config_diff. Library, not CLI.
+    # config_diff and _lib_parse_cache. Library, not CLI.
     "_lib_parse_tree.py",
     # #1516 (ADR-037) — renders both conf.d trees and compares the renders.
     # Library imported by config_diff.py, not a CLI command.

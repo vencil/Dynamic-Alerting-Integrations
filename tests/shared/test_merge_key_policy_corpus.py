@@ -12,8 +12,9 @@ refused `require_critical_escalation` values wherever written (in place
 under constraints included: hub #2486 PR-7c round 2, B1), and repeated keys
 where no policy reader looks. Rows with nothing enforced are thinned to one
 in four. Each row holds what the route generator's reader before ADR-036 step 4
-(`_parse_config_files` over PyYAML — `_PyYamlReader` below; the generator
-itself reads `da-guard parse-tree` since then) makes of it: `unusable` (the file or its
+(`_parse_config_files` over PyYAML with keys as their source text; the
+generator itself reads `da-guard parse-tree` since then) made of it — ⛔ a
+HISTORICAL verdict, FROZEN (see "The `pyyaml` column" below): `unusable` (the file or its
 domain_policies block is dropped) or, per domain with a non-empty
 `forbidden_receiver_types` or `allowed_receiver_types` or with
 require_critical_escalation True (escalation alone is enforced), its tenants and
@@ -43,7 +44,7 @@ TAB at a line's end or right after an indicator (PyYAML takes a TAB as a
 separator only inside quotes, comments and block scalars), NEL / LS / PS
 as the line break, and `encoding` rows — a policy written as UTF-16 with its
 byte order mark, or as Latin-1, which the generator (UTF-8 only) cannot
-read and yaml.v3 can. Their verdicts are `_verdict()`'s
+read and yaml.v3 can. Their verdicts were measured
 like any other row's, and Go skips none of them (`nonspecific_tag` marks
 the rows that carry the non-specific tag `!` on a quoted scalar, which PyYAML
 reads as if plain and yaml.v3 drops — #2730 §6). The shapes also
@@ -68,93 +69,50 @@ every row by `id` under `merge_key_rows`, and
 components/threshold-exporter/app/pkg/parsetree/corpus_test.go
 categorises each one.
 
-The rows are generated from a fixed seed, never hand-edited:
+The `pyyaml` column (and `pyyaml_strict_blocks`). The reader that measured
+it was deleted in ADR-036 §7 step 13 (#3206), so the column can no longer
+be recomputed: it is a fact about a reader that no longer exists. The
+values committed then are pinned by digest (`FROZEN_PYYAML`). Allowed
+values: `"unusable"`, a mapping of enforced domains (the shape above), or
+`"n/a"` — the ONLY value a row added after the freeze may carry (and then
+no `pyyaml_strict_blocks`): nobody can measure that reader any more, so
+nobody writes its verdict.
+
+The rows are generated, never hand-edited: the seeded rows are the frozen
+ones as committed (choosing them took the deleted reader's verdict — one in
+four "nothing enforced" kept — so they are checked against the seeded
+document stream, not re-chosen), and the `shape` rows come from their
+generators below, each row's verdict carried over by `id` (`n/a` for a new
+one):
 
     REGEN_MERGE_KEY_CORPUS=1 python3 -m pytest \
         tests/shared/test_merge_key_policy_corpus.py -q -p no:cacheprovider
 """
 from __future__ import annotations
 
-import contextlib
 import hashlib
-import io
 import json
 import os
 import random
 import re
 import sys
-import tempfile
 from pathlib import Path
-
-import yaml
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
-from _grar_parse import _parse_config_files, load_tenant_tree  # noqa: E402
-from _lib_io import strict_load_exporter_keys  # noqa: E402
-from _lib_parse_tree import FileUnreadable  # noqa: E402
-
-
-class _PyYamlReader:
-    """The generator's reader before ADR-036 step 4 (#2906), for the frozen
-    `pyyaml` column: each file through PyYAML (`strict_load_exporter_keys`,
-    `tenants` sequences as text), every failure a whole-file drop, as the
-    read loop dropped it. The generator itself reads `da-guard parse-tree`
-    since step 4; this keeps the corpus reproducible without it."""
-
-    def __init__(self, root: Path) -> None:
-        self.root = Path(root)
-
-    def require(self) -> None:
-        pass
-
-    def prefetch(self, paths, mode=None) -> None:
-        """No cache, no parse-tree read to batch (`ConfdReader.prefetch`)."""
-
-    def prefetch_reads(self, reads) -> None:
-        """As `prefetch`."""
-
-    def listing(self):
-        """Which files there are: da-guard's listing (#3206) — the walk the
-        generator shared with this reader; only the CONTENT is PyYAML's."""
-        from _lib_parse_tree import list_tree
-        return list_tree(self.root)
-
-    def read(self, path, mode=None):
-        rel = Path(path).relative_to(self.root).as_posix()
-        try:
-            with open(path, encoding="utf-8") as f:
-                data = strict_load_exporter_keys(f, raw_text_sequences=("tenants",))
-        except Exception as e:  # noqa: BLE001 — as the read loop: any failure drops the file
-            raise FileUnreadable(rel, "pyyaml", " ".join(str(e).split())) from e
-        if data is None:
-            return {}
-        if not isinstance(data, dict):
-            raise FileUnreadable(rel, "top_level_not_mapping", type(data).__name__)
-        return data
-
-    def split_not_read(self, paths):
-        """The read loop's carrier selection: Go's (the listing's `not_read`;
-        #3206 deleted the Python copy of the rule this stub used before)."""
-        listing = self.listing()
-        read, skipped = [], []
-        for p in map(Path, paths):
-            e = listing.entry(p.relative_to(self.root).as_posix())
-            if e is not None and e.not_read is not None:
-                skipped.append((p, e.not_read))
-            else:
-                read.append(p)
-        return read, skipped
-
-    def carrier(self, directory) -> "Path | None":
-        rel = Path(directory).relative_to(self.root).as_posix() if Path(directory) != self.root else "."
-        chosen = self.listing().defaults_carriers.get(rel)
-        return None if chosen is None else self.root / chosen
 
 CORPUS_PATH = Path(__file__).parent / "merge_key_policy_corpus.json"
 SEED = 2677
 DOCS = 500
+
+#: The `pyyaml` column's marker for a row added after the freeze.
+NOT_MEASURED = "n/a"
+#: (number of rows, sha256 of their (id, pyyaml, pyyaml_strict_blocks)) of the
+#: rows that carry a frozen verdict, as committed when the reader that
+#: measured them was deleted (ADR-036 §7 step 13, #3206). A changed verdict,
+#: a verdict given to a new row, or a frozen row dropped turns this red.
+FROZEN_PYYAML = (1586, "1719e221bc743d132d8fc4a8738f4bcc5d3bb4ddf930eaa1749e6045dce93835")
 
 # The keys each level of a policy reads, by depth: the top, domain_policies,
 # a domain, its constraints.
@@ -163,8 +121,8 @@ LEVEL_KEYS = (("domain_policies",), ("fin", "ops"), ("tenants", "constraints"),
 TENANT_LISTS = ("[t1]", "[t2]", "[t1, t2]")
 RECEIVER_LISTS = ("[slack]", "[email]", "[slack, email]")
 # Tenant ids a `tenants:` list may hold besides t1 / t2 ("full" documents):
-# the generator reads a `tenants` list's scalar items as their source text
-# (_lib_yaml_keys.ExporterKeyLoader, raw_text_sequences), so a merge-tagged
+# the generator's reader before ADR-036 step 4 read a `tenants` list's scalar
+# items as their source text (a loader deleted in step 13), so a merge-tagged
 # item is a tenant id there — unless the list is also built as a value
 # elsewhere (written in x-lists, aliased from x-use), where PyYAML has no
 # constructor for it and drops the file.
@@ -397,7 +355,8 @@ def _block_document(r: random.Random) -> str:
 
 
 def _documents():
-    """Documents in a fixed order, endless; _rows keeps what it needs."""
+    """Documents in a fixed order, endless; the frozen seeded rows were chosen
+    from it (`test_the_seeded_rows_are_the_seeded_stream`)."""
     r = random.Random(SEED)
     seen: set = set()
     while True:
@@ -410,8 +369,8 @@ def _documents():
 # --- Shapes: deterministic rows after the seeded ones (hub #2486, PR-7c/7d) --
 #
 # One `_domain_policy.yaml` per shape, each tagged with the section of the
-# ticket it pins (`shape`). The verdict is the same `_verdict()`: these rows
-# are not hand-judged. Every shape is a single-file divergence measured on
+# ticket it pins (`shape`). Their verdicts were measured like the seeded
+# rows' (frozen since; a new shape row is n/a), never hand-judged. Every shape is a single-file divergence measured on
 # main (#2730, #2715); parse-tree's corpus categorises them like any other
 # row.
 
@@ -1191,59 +1150,6 @@ def _shapes() -> list[tuple[str, str]]:
     return unique
 
 
-def _verdict(doc: str, root: Path, encoding: str | None = None) -> object:
-    (root / "_domain_policy.yaml").write_bytes(_encode(doc, encoding))
-    with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
-        res = _parse_config_files(str(root), _PyYamlReader(root))
-    if res["policy_file_errors"]:
-        return "unusable"
-    out = {}
-    for name, body in res["domain_policies"].items():
-        if not isinstance(body, dict):
-            continue
-        # As check_domain_policies (_grar_validate) reads a policy: `tenants`
-        # present and not a list skips the policy (a finding of its own),
-        # and a `tenants` entry that is not a string names no tenant.
-        tenants = body.get("tenants", [])
-        if not isinstance(tenants, list):
-            continue
-        cons = body.get("constraints")
-        if not isinstance(cons, dict):
-            continue
-        forbidden = cons.get("forbidden_receiver_types")
-        forbidden = forbidden if isinstance(forbidden, list) else []
-        allowed = cons.get("allowed_receiver_types")
-        allowed = allowed if isinstance(allowed, list) else []
-        # #3116: an entry that is not a receiver type (a non-string one, or an
-        # unknown name) refuses the whole tree — the row's
-        # `pyyaml_strict_blocks` says so; the verdict below is what the
-        # policy's entries read as, not what a run enforces.
-        # Only a string entry can forbid anything: a non-string one (`! "null"`
-        # is None, `! "true"` True to PyYAML) equals only a non-string
-        # receiver type, which the generator already refuses on its own
-        # ("missing required 'receiver.type'", blocking). So `forbidden` is
-        # the string entries, and a list of none forbids nothing (#2730 §6).
-        forbidden = sorted(f for f in forbidden if isinstance(f, str))
-        # A domain enforces something when it forbids a type, restricts to an
-        # allowlist, or requires critical escalation — the generator checks
-        # escalation whatever the receiver-type lists say (_grar_validate).
-        escalation = cons.get("require_critical_escalation") is True
-        if not forbidden and not allowed and not escalation:
-            continue
-        entry = {"tenants": [t for t in tenants if isinstance(t, str)], "forbidden": forbidden}
-        # allowed_receiver_types, when a non-empty list: it restricts, and only
-        # its string entries are types it allows (a list of only non-string
-        # entries — `[!!null webhook]` is [None] — allows no type at all).
-        if allowed:
-            entry["allowed"] = sorted(a for a in allowed if isinstance(a, str))
-        # require_critical_escalation as the generator enforces it (`is True`,
-        # _grar_validate): `! "true"` is True to PyYAML (#2730 §6).
-        if escalation:
-            entry["escalation"] = True
-        out[str(name)] = entry
-    return out
-
-
 def row_id(doc: str, encoding: str | None = None) -> str:
     """A row's stable id: the first 16 hex digits of the sha256 of the file
     it stands for. parse-tree's Go corpus test computes the same from its own
@@ -1251,70 +1157,49 @@ def row_id(doc: str, encoding: str | None = None) -> str:
     return hashlib.sha256(_encode(doc, encoding)).hexdigest()[:16]
 
 
-# Finding.blocks values that block the generator as production runs it
-# (`generate-routes --validate --strict`): all but "never" (_grar_merge).
-_PRODUCTION_BLOCKS = ("always", "strict", "validate")
+def _committed() -> dict:
+    return json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
 
 
-def _strict_blocks(root: Path) -> list[dict]:
-    """The generator's own blocking findings on the policy file in `root`,
-    run as production runs it (strict policies): load_tenant_tree's
-    structured findings (`Finding.kind` / `.blocks`, _grar_merge) whose
-    `blocks` stops `--validate --strict`. The tree holds the policy file
-    alone, so every finding is about it — and none depends on a tenant's
-    routing (a violation by a tenant is the tenant's, not the file's)."""
-    with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
-        tree = load_tenant_tree(str(root), strict_policies=True, reader=_PyYamlReader(root))
-    found = {(f.kind, f.policy or "", f.field or "") for f in tree.schema_warnings
-             if getattr(f, "blocks", None) in _PRODUCTION_BLOCKS}
-    return [{"kind": k, "policy": p, "field": fld} for k, p, fld in sorted(found)]
+_VERDICT_FIELDS = ("pyyaml", "pyyaml_strict_blocks")
 
 
-def _row(doc: str, root: Path, encoding: str | None = None, **extra) -> dict:
-    row: dict = {"doc": doc, "id": row_id(doc, encoding), "pyyaml": _verdict(doc, root, encoding)}
+def _row(doc: str, carried: "dict[str, dict]", encoding: str | None = None, **extra) -> dict:
+    """A `shape` row: its document, and its verdict carried over by `id` —
+    `n/a` for a row the deleted reader never measured, never a verdict made
+    up now."""
+    rid = row_id(doc, encoding)
+    row: dict = {"doc": doc, "id": rid, **carried.get(rid, {"pyyaml": NOT_MEASURED})}
     if encoding is not None:
         row["encoding"] = encoding
-    # A file the generator reads but blocks on under --strict: the verdict
-    # alone (what it enforces) cannot say so. An unusable file blocks anyway.
-    if row["pyyaml"] != "unusable":
-        blocks = _strict_blocks(root)
-        if blocks:
-            row["pyyaml_strict_blocks"] = blocks
     row.update(extra)
     return row
 
 
-def _rows() -> list[dict]:
-    rows = []
-    empty = 0
-    with tempfile.TemporaryDirectory() as d:
-        root = Path(d)
-        for doc in _documents():
-            row = _row(doc, root)
-            if row["pyyaml"] == {}:  # nothing enforced: one in four kept
-                empty += 1
-                if empty % 4:
-                    continue
-            if NONSPECIFIC_SPELLING in doc:
-                row["nonspecific_tag"] = NONSPECIFIC
-            rows.append(row)
-            if len(rows) == DOCS:
-                break
-        for shape, doc in _shapes():
-            row = _row(doc, root, shape=shape)
-            if _NONSPECIFIC_RE.search(doc):
-                row["nonspecific_tag"] = NONSPECIFIC
-            rows.append(row)
-        for encoding, doc in _encoded():
-            rows.append(_row(doc, root, encoding, shape="encoding-not-utf8"))
+def _rows(committed: dict) -> list[dict]:
+    """The frozen seeded rows as committed, then every `shape` row from its
+    generator (see the module docstring)."""
+    rows = [r for r in committed["rows"] if "shape" not in r]
+    carried = {r["id"]: {k: r[k] for k in _VERDICT_FIELDS if k in r}
+               for r in committed["rows"]}
+    for shape, doc in _shapes():
+        row = _row(doc, carried, shape=shape)
+        if _NONSPECIFIC_RE.search(doc):
+            row["nonspecific_tag"] = NONSPECIFIC
+        rows.append(row)
+    for encoding, doc in _encoded():
+        rows.append(_row(doc, carried, encoding, shape="encoding-not-utf8"))
     return rows
 
 
-def _render(rows: list[dict]) -> str:
+def _render(rows: list[dict], committed: dict) -> str:
     comment = [
-        "What the route generator's reader (_parse_config_files, PyYAML) makes",
-        "of `_domain_policy.yaml` documents built around YAML merge keys",
-        "(#2677). GENERATED by tests/shared/test_merge_key_policy_corpus.py",
+        "What the route generator's reader before ADR-036 step 4 (_parse_config_files,",
+        "PyYAML) made of `_domain_policy.yaml` documents built around YAML merge",
+        "keys (#2677). ⛔ `pyyaml` / `pyyaml_strict_blocks` are HISTORICAL and",
+        "FROZEN: that reader was deleted in ADR-036 §7 step 13 (#3206); the values",
+        "are pinned by digest, and a row added since writes `pyyaml: \"n/a\"`.",
+        "GENERATED by tests/shared/test_merge_key_policy_corpus.py",
         "from a fixed seed — regenerate with REGEN_MERGE_KEY_CORPUS=1; never",
         "edit by hand. `pyyaml`: \"unusable\" (the file or its domain_policies",
         "block is dropped), else each domain the generator enforces (a list",
@@ -1343,18 +1228,89 @@ def _render(rows: list[dict]) -> str:
     # line, and editors and hooks treat these as breaks or a file header.
     for ch in ("\u2028", "\u2029", "\x85", "\ufeff"):
         body = body.replace(ch, "\\u%04x" % ord(ch))
+    # `pyyaml` (top level): the PyYAML version the frozen verdicts were measured with.
     return ("{\n  \"_comment\": " + json.dumps(comment, ensure_ascii=False, indent=4).replace("\n", "\n  ")
-            + ",\n  \"pyyaml\": \"" + yaml.__version__ + "\",\n  \"rows\": [\n" + body + "\n  ]\n}\n")
+            + ",\n  \"pyyaml\": " + json.dumps(committed["pyyaml"]) + ",\n  \"rows\": [\n" + body
+            + "\n  ]\n}\n")
 
 
-def test_corpus_is_what_the_generator_reads() -> None:
-    fresh = _render(_rows())
+def test_corpus_is_its_generators_with_the_frozen_verdicts() -> None:
+    """The shape rows are what their generators write (verdicts carried by
+    `id`); an edit by hand or a dropped shape row is red."""
+    committed = _committed()
+    fresh = _render(_rows(committed), committed)
     if os.environ.get("REGEN_MERGE_KEY_CORPUS"):
         CORPUS_PATH.write_text(fresh, encoding="utf-8")
     on_disk = CORPUS_PATH.read_text(encoding="utf-8")
     assert on_disk == fresh, (
-        "merge_key_policy_corpus.json is not what the generator's reader says; "
+        "merge_key_policy_corpus.json is not its generators with the frozen verdicts; "
         "regenerate with REGEN_MERGE_KEY_CORPUS=1 and review the diff")
+
+
+def test_the_seeded_rows_are_the_seeded_stream() -> None:
+    """The frozen seeded rows are documents of the seeded stream, in its
+    order, and carry `nonspecific_tag` exactly when the stream's rule says —
+    choosing WHICH of them took the deleted reader's verdict, so that choice
+    is frozen, not the documents."""
+    seeded = [r for r in _committed()["rows"] if "shape" not in r]
+    assert len(seeded) == DOCS, len(seeded)
+    stream = _documents()
+    for i, r in enumerate(seeded):
+        for _ in range(50_000):
+            if next(stream) == r["doc"]:
+                break
+        else:
+            raise AssertionError(f"seeded row {i} ({r['id']}) is not in the seeded stream "
+                                 "after the previous one")
+        assert ("nonspecific_tag" in r) == (NONSPECIFIC_SPELLING in r["doc"]), r["id"]
+
+
+def _domain_entry_ok(entry: object) -> bool:
+    if not isinstance(entry, dict) or not {"tenants", "forbidden"} <= set(entry) \
+            or not set(entry) <= {"tenants", "forbidden", "allowed", "escalation"}:
+        return False
+    lists_ok = all(isinstance(entry.get(k, []), list) and all(isinstance(x, str) for x in entry.get(k, []))
+                   for k in ("tenants", "forbidden", "allowed"))
+    return lists_ok and entry.get("escalation", True) is True
+
+
+def frozen_digest(corpus: dict) -> "tuple[int, str]":
+    rows = sorted([r["id"], r["pyyaml"], r.get("pyyaml_strict_blocks")]
+                  for r in corpus["rows"] if r["pyyaml"] != NOT_MEASURED)
+    return len(rows), hashlib.sha256(
+        json.dumps(rows, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def test_the_pyyaml_column_is_frozen() -> None:
+    """⛔ HISTORICAL (see the module docstring): each value is one the column
+    allows, the frozen ones are exactly those committed when their reader was
+    deleted, and a row added since says `n/a` with no strict blocks."""
+    corpus = _committed()
+    for r in corpus["rows"]:
+        v = r["pyyaml"]
+        if v == NOT_MEASURED:
+            assert "pyyaml_strict_blocks" not in r, f"{r['id']}: n/a with strict blocks"
+        elif v == "unusable":
+            assert "pyyaml_strict_blocks" not in r, f"{r['id']}: an unusable file blocks anyway"
+        else:
+            assert isinstance(v, dict) and all(_domain_entry_ok(e) for e in v.values()), (r["id"], v)
+    assert frozen_digest(corpus) == FROZEN_PYYAML, (
+        "the frozen `pyyaml` verdicts changed: a historical value was edited, a frozen "
+        "row was dropped, or a new row was given a verdict instead of n/a")
+
+
+def test_the_freeze_check_bites() -> None:
+    corpus = _committed()
+    assert frozen_digest(corpus) == FROZEN_PYYAML  # the control
+    edited = json.loads(json.dumps(corpus))
+    edited["rows"][0]["pyyaml"] = "unusable" if edited["rows"][0]["pyyaml"] != "unusable" else {}
+    assert frozen_digest(edited) != FROZEN_PYYAML
+    added = json.loads(json.dumps(corpus))
+    added["rows"].append({"doc": "a: 1\n", "id": row_id("a: 1\n"), "pyyaml": {}})
+    assert frozen_digest(added) != FROZEN_PYYAML
+    marked = json.loads(json.dumps(corpus))
+    marked["rows"].append({"doc": "a: 1\n", "id": row_id("a: 1\n"), "pyyaml": NOT_MEASURED})
+    assert frozen_digest(marked) == FROZEN_PYYAML
 
 
 def test_corpus_is_not_vacuous() -> None:

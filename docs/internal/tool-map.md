@@ -52,7 +52,6 @@ lang: zh
 | `maintenance_scheduler.py` | Evaluate recurring maintenance schedules and create |
 | `migrate_rule.py` | 傳統 Prometheus 警報規則遷移輔助工具 (v4 — AST Engine)。 |
 | `migrate_to_operator.py` | migrate-to-operator — Migrate ConfigMap-based rules to Operator CRD format. |
-| `migration_audit.py` | `da-tools migration-audit`: list where PyYAML and parse-tree differ. |
 | `notification_tester.py` | Multi-channel notification connectivity testing. |
 | `offboard_tenant.py` | 安全的 Tenant 下架工具。 |
 | `onboard_platform.py` | Reverse-analyze existing configs for Dynamic Alerting onboarding. |
@@ -250,6 +249,7 @@ lang: zh
 - `scripts/tools/_lib_confedit.py`：a Python tool's change to conf.d files, made by Go (ADR-036 §2).
 - `scripts/tools/_lib_constants.py`：Domain constants for Dynamic Alerting platform.
 - `scripts/tools/_lib_consumer_read.py`：A file outside conf.d, read the way its consumer reads it (ADR-036 §12, #3206).
+- `scripts/tools/_lib_doc_yaml_inventory.py`：The one inventory of the YAML fences in docs/**/*.md (ADR-036 §12, #3416).
 - `scripts/tools/_lib_exitcodes.py`：Canonical exit-code contract for da-tools CLI tools (#452 Track A).
 - `scripts/tools/_lib_godispatch.py`：Shared dispatcher for da-tools subcommands that wrap a Go binary.
 - `scripts/tools/_lib_io.py`：File I/O and YAML helpers for Dynamic Alerting platform.
@@ -270,7 +270,6 @@ lang: zh
 - `scripts/tools/_lib_versions.py`：Version SSOT readers for the dx doc-generation tools.
 - `scripts/tools/_lib_write_check.py`：a writer's check of the tree it writes into (#3206).
 - `scripts/tools/_lib_yaml.py`：Minimal CRD YAML serialization helpers for operator tooling.
-- `scripts/tools/_lib_yaml_keys.py`：Read YAML that is not conf.d with tenant ids as the exporter keys them (scalar TEXT).
 - `scripts/tools/ops/_federation_revocation_reconciler.py`：Federation revocation reconciler — ADR-028 D1 detective control (#924).
 - `scripts/tools/ops/_grar_merge.py`：Routing-config merging + tenant substitution + receiver building.
 - `scripts/tools/ops/_grar_parse.py`：Configuration loading + parsing for generate_alertmanager_routes.

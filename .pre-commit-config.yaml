@@ -1091,25 +1091,28 @@ repos:
         pass_filenames: false
         files: ^docs/.*\.md$
 
-      # Fence hygiene: a ```yaml fence in docs/ must actually be YAML. Split
-      # out from md-yaml-drift-check (below) on purpose — it covers every
-      # fenced block that is not explicitly exempted by an ignore marker,
-      # rather than only those that look like tenant config, and a
-      # mislabelled directory-tree diagram must not be able to block an
-      # unrelated schema fix. Parses with safe_load_all: `---`-separated k8s
-      # manifests are valid YAML and four blocks in docs/ are exactly that.
-      # Auto-run (not manual) and listed in ci.yml's always-on Lint job, so a
-      # docs-only PR cannot skip it.
+      # Fence hygiene: a ```yaml fence in docs/ must be one its reader reads.
+      # Split out from md-yaml-drift-check (below) on purpose — it covers
+      # every fenced block that is not declared `{.illustrative reason="…"}`,
+      # rather than only the conf.d examples, and a mislabelled
+      # directory-tree diagram must not be able to block an unrelated schema
+      # fix. #3416: it reports every error of the docs' YAML inventory
+      # (scripts/tools/_lib_doc_yaml_inventory.py) — a fence attribute it does
+      # not know, a block its declared consumer refuses, an undeclared block
+      # the conf.d reader (da-guard parse-tree) refuses; a `---`-separated
+      # manifest is declared ```yaml {.k8s}. The readers are Go's, so the
+      # wrappers build them. Auto-run (not manual) and listed in ci.yml's
+      # always-on Lint job, so a docs-only PR cannot skip it.
       - id: md-yaml-fence-check
-        name: Markdown ```yaml fences must parse as YAML
-        entry: python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --check fences --ci
+        name: Markdown ```yaml fences are read by their reader
+        entry: bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/with_da_read.sh python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --check fences --ci
         language: python
         pass_filenames: false
-        # Includes the scanner itself: `pass_filenames: false` means `files:`
-        # only decides WHEN the hook runs, so a commit that touches only the
-        # extractor would otherwise run no gate locally (same rule the sibling
-        # confd-schema-check follows).
-        files: ^(docs/.*\.md|scripts/tools/lint/check_md_yaml_drift\.py)$
+        # Includes the scanner and the inventory: `pass_filenames: false`
+        # means `files:` only decides WHEN the hook runs, so a commit that
+        # touches only the extractor would otherwise run no gate locally (same
+        # rule the sibling confd-schema-check follows).
+        files: ^(docs/.*\.md|scripts/tools/lint/check_md_yaml_drift\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
         additional_dependencies: ['pyyaml']
 
       # jsonschema is REQUIRED here. It used to be absent while the script did
@@ -1129,14 +1132,16 @@ repos:
         name: Markdown YAML example ↔ schema drift
         # ADR-036 step 11 (#3206): the documented conf.d examples are read by
         # `da-guard parse-tree` (with_da_guard.sh, as for confd-schema-check).
-        entry: bash scripts/ops/with_da_guard.sh python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --ci
+        # #3416: the examples come from the docs' YAML inventory, which runs
+        # every unit's reader (da-guard, da-crdecode, da-read): all three built.
+        entry: bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/with_da_read.sh python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --ci
         language: python
         pass_filenames: false
         # Both SCHEMAS are inputs too: editing a schema can turn a documented
         # example red, and without them here that edit never runs this gate.
         # check_confd_schema.py is imported for its registry builder (#2232);
-        # the reader of the examples is Go's, so its source is an input too.
-        files: ^(docs/.*\.(md|yaml)|docs/schemas/(tenant-config|platform-defaults)\.schema\.json|scripts/tools/lint/check_(md_yaml_drift|confd_schema)\.py|scripts/tools/_lib_(parse_tree|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/)
+        # the readers of the examples are Go's, so their source is an input too.
+        files: ^(docs/.*\.(md|yaml)|docs/schemas/(tenant-config|platform-defaults)\.schema\.json|scripts/tools/lint/check_(md_yaml_drift|confd_schema)\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
         additional_dependencies: ['pyyaml', 'jsonschema']
 
       # Third sibling of the two above, and separate for the same reason: it
@@ -1150,10 +1155,12 @@ repos:
         name: Markdown embedded k8s objects ↔ real CRD schema
         # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
         # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
-        entry: bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --check crd --ci
+        # #3416: the objects are the docs' YAML inventory's k8s units; the
+        # inventory runs every unit's reader, so all three are built.
+        entry: bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/with_da_read.sh python3 -X utf8 scripts/tools/lint/check_md_yaml_drift.py --check crd --ci
         language: python
         pass_filenames: false
-        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|docs/.*\.md|docs/schemas/crd/.*\.json|scripts/tools/lint/check_md_yaml_drift\.py)$
+        files: ^(docs/.*\.md|docs/schemas/crd/.*\.json|scripts/tools/lint/check_md_yaml_drift\.py|scripts/tools/_lib_(doc_yaml_inventory|parse_tree|consumer_read|godispatch)\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_(guard|crdecode|read)\.sh|components/threshold-exporter/app/|components/da-read/)
         additional_dependencies: ['pyyaml', 'jsonschema']
 
       - id: playwright-e2e
@@ -1682,7 +1689,7 @@ repos:
         # `migrate_rule` and six more `_lib_*` modules — loaded on every run via
         # onboard_platform / scaffold_tenant / check_confd_schema — joined this
         # list: all seven were read by the gate and none fired it.
-        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|label|parse_cache|parse_tree|prometheus|python|validation|write_check|yaml_keys)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
+        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/rule-pack-.*\.yaml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|label|parse_cache|parse_tree|prometheus|python|validation|write_check)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + scaffold equivalence + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"
@@ -1712,7 +1719,10 @@ repos:
         # #2906: its conf.d trees are read through `da-guard parse-tree` (with_da_guard.sh).
         # #3206 (ADR-036 §12): manifests / Helm values are read through da-crdecode
         # (kubectl's reading); with_da_crdecode.sh builds it as for retire-drift-check.
-        entry: bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_threshold_unit_sanity.py --ci
+        # #3416: the docs' examples come from the docs' YAML inventory, which
+        # runs every unit's reader (da-read too, for a declared rule /
+        # Prometheus / Alertmanager file).
+        entry: bash scripts/ops/with_da_guard.sh bash scripts/ops/with_da_crdecode.sh bash scripts/ops/with_da_read.sh python3 -X utf8 scripts/tools/lint/check_threshold_unit_sanity.py --ci
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
@@ -1727,7 +1737,7 @@ repos:
         # gate itself. (#1231 later knowingly reversed the #992/#944 "keep
         # mysql_cpu" decision — the key is now mysql_threads_running; this gate
         # predates and outlives that rename.)
-        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|scripts/tools/lint/check_threshold_unit_sanity\.py|scripts/tools/_lib_parse_(cache|tree)\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$
+        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|scripts/tools/lint/check_threshold_unit_sanity\.py|scripts/tools/_lib_parse_cache\.py|scripts/tools/_lib_doc_yaml_inventory\.py|scripts/tools/_lib_parse_tree\.py|scripts/ops/with_da_(guard|read)\.sh|components/da-read/.*|components/threshold-exporter/app/.*)$
 
       - id: scrape-reachability-check
         name: "scrape-face reachability — every rule-consumed leaf metric must be admitted by a scrape job (TRK-340 / #1203)"

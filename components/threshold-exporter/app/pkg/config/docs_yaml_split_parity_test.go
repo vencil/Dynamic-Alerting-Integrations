@@ -8,9 +8,11 @@ package config
 //   - this package's docs_defaults_sample_test.go (splitConcatenatedFiles) —
 //     the LOADER oracle, which catches value-type errors the schema leaves
 //     loose;
-//   - scripts/tools/lint/check_md_yaml_drift.py (_split_documented_files) —
-//     the SCHEMA oracle, which catches unknown/typo'd keys the loader decodes
-//     non-strictly and therefore cannot see.
+//   - scripts/tools/_lib_doc_yaml_inventory.py (split_documented_files) —
+//     the inventory the SCHEMA oracle (check_md_yaml_drift.py) reads, which
+//     catches unknown/typo'd keys the loader decodes non-strictly and
+//     therefore cannot see (#3416; TestDocsYAMLInventoryParity also holds
+//     the two extractors to the same units of the live docs/).
 //
 // The two catch DISJOINT defect classes, so neither can be deleted in favour of
 // the other — which is exactly why their shared extraction rule needs a pin.

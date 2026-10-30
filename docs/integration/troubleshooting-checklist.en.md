@@ -1310,7 +1310,7 @@ grep -rnE 'tenant\s*=\s*"[a-z0-9-]+"' <conf.d-dir>/ <rules-dir>/
 
 # Situation B: rule really should only fire for a specific tenant (rare; needs review)
 # Use the conf.d structure to place it in that tenant's subdirectory; don't hardcode in PromQL
-# conf.d/<domain>/<region>/<tenant>.yaml:
+# conf.d/your-domain/your-region/your-tenant.yaml — the file in that tenant's subdirectory:
 - expr: 'mysql_up == 0'
   for: 5m
 # The file's directory context implies tenant scope; PromQL doesn't need hardcoding

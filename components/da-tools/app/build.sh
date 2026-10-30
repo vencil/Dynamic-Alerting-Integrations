@@ -142,8 +142,6 @@ TOOL_FILES=(
     ops/rule_pack_diff.py
     # v2.8.0 #405 Cat B — AM silence drift auditor (offline, eats amtool dump)
     ops/silencer_drift_check.py
-    # #2898 — ADR-036 §8 migration audit (PyYAML vs `da-guard parse-tree`)
-    ops/migration_audit.py
     # #3016 — ADR-038 decision 9: `da-tools explain-keys` (per-key verdict)
     ops/explain_keys.py
     # #2901 — ADR-036 §3 generator container service and its two helpers
@@ -198,11 +196,6 @@ TOOL_FILES=(
     # every other tool that enumerates a tenant config dir; without it the
     # flat-layout image ImportErrors on startup. Stdlib-only; safe to bundle.
     _lib_confd.py
-    # #2114 — tenant ids read as the exporter keys them (raw scalar text).
-    # Imported by _lib_io, _lib_confd and the conf.d
-    # readers; without it the flat-layout image ImportErrors on startup.
-    # Imports only yaml + stdlib.
-    _lib_yaml_keys.py
     _lib_validation.py
     # v2.8.0 — cross-platform compat helpers (try_utf8_stdout etc.)
     # Imported by state_reconcile / rule_pack_diff / silencer_drift_check.
@@ -243,7 +236,7 @@ TOOL_FILES=(
     # prints them; imported by ops/config_diff. Stdlib-only.
     _lib_redact.py
     # #1516 — reads `da-guard parse-tree`'s document (ADR-036 §2); imported
-    # by ops/migration_audit and ops/config_diff. Imports ops/guard_dispatch (above).
+    # by ops/config_diff and _lib_parse_cache. Imports ops/guard_dispatch (above).
     _lib_parse_tree.py
     # #2901 — the conf.d parse entry point + content-addressed cache; imported
     # by _lib_confd and ops/_grar_parse, so without it every conf.d reader

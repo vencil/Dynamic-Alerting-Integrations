@@ -349,7 +349,7 @@ kubectl apply -f /tmp/manifests.yaml
 
 **概念**：將 `conf.d/` 的閾值寫進 Helm values，Helm upgrade 時自動更新 ConfigMap。
 
-```yaml
+```yaml {.helm-values}
 # environments/prod/values.yaml
 thresholdConfig:
   defaults:
