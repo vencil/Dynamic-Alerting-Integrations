@@ -2197,6 +2197,16 @@ class TestKustomizeTreeTellsTheChartNotToOwnTheConfigMap:
         assert ip.THRESHOLD_EXPORTER_CHART in text
         assert f'--version {ip.THRESHOLD_EXPORTER_CHART_VERSION}' in text
 
+    def test_readme_names_the_trees_namespace_quoted(self):
+        """The README's helm line is pasted as is: it must carry the overlays'
+        namespace (not a placeholder), shell-quoted."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ip.run_init(dict(_KUST_CFG, tenants=['t-one'], namespace='obs'), tmp)
+            text = _readme_text(tmp)
+        assert ' -n obs ' in text and "<the overlays' namespace>" not in text
+        quoted = ip._gen_kustomize_base_readme(['_defaults.yaml'], 'my obs')
+        assert " -n 'my obs' " in quoted
+
     def test_next_steps_name_the_trees_namespace(self):
         with tempfile.TemporaryDirectory() as tmp:
             cfg = dict(_KUST_CFG, tenants=['t-one'], namespace='obs')

@@ -3178,7 +3178,7 @@ _KUSTOMIZE_COPY_CMD = (
 )
 
 
-def _gen_kustomize_base_readme(files: list[str]) -> str:
+def _gen_kustomize_base_readme(files: list[str], namespace: str = 'monitoring') -> str:
     """Generate kustomize/base/README.md from the SAME list as `files:`.
 
     ⛔ The names come from `_kustomize_carrier_files`, never re-derived here.
@@ -3255,16 +3255,17 @@ def _gen_kustomize_base_readme(files: list[str]) -> str:
     `threshold-config` ConfigMap from its values. Two writers of one
     ConfigMap overwrite each other on every apply. Tell the chart to mount
     this tree's ConfigMap instead, and install it into the SAME namespace
-    the overlays set:
+    the overlays set (`init --namespace`):
 
     ```bash
     helm upgrade --install threshold-exporter {chart} \\
-      --version {chart_version} -n <the overlays' namespace> \\
+      --version {chart_version} -n {namespace} \\
       --set thresholdConfig.existingConfigMap=threshold-config
     ```
     """).format(links=links, copy_cmd=_KUSTOMIZE_COPY_CMD,
                 chart=THRESHOLD_EXPORTER_CHART,
-                chart_version=THRESHOLD_EXPORTER_CHART_VERSION) + (
+                chart_version=THRESHOLD_EXPORTER_CHART_VERSION,
+                namespace=shlex.quote(namespace)) + (
         f"\n{caveat}\n" if (caveat := _existing_configmap_caveat(False)) else '')
 
 
@@ -4334,7 +4335,7 @@ def run_init(config: dict, output_dir: str,
         )
         _write_file(
             str(kust_base / 'README.md'),
-            _gen_kustomize_base_readme(carriers),
+            _gen_kustomize_base_readme(carriers, namespace),
             created,
         )
 
