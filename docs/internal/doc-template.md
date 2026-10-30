@@ -219,6 +219,7 @@ rate(requests_total[5m]) > 100
   - 故意拒收的反例：`{.confd .expect-refused=<kind>}`（kind 是 parse-tree 回報的那個，例如 `multiple_documents`）。
   - 讀得了但故意寫錯的反例：`{.confd .expect-invalid}`（schema 檢查必須判 fence 裡**每一個**單元都不合法；要並列一份正確的檔，就拆成兩個 fence）。它的值照樣會被 `threshold-unit-sanity-check` 判：讀者會照抄。
   - 不給任何閘門判的區塊：`{.illustrative reason="…"}`（reason 必填，每份報告都會列出）。
+  - 一個 fence 示範好幾個檔時，在每個檔的第一行寫 column-0 的檔頭註解，**註解以檔名開頭**：`# conf.d/db-a.yaml`、`# conf.d/db-a.yaml (edge tenant)`、`# _defaults.yaml — 模式 A`（檔名之後要嘛換行，要嘛先空一格再寫註）。`# 見 conf.d/_defaults.yaml`、`# 層級 2：conf.d/finance/_defaults.yaml` 這種檔名不在開頭的是散文，不切檔；要當檔頭就改寫成檔名開頭。
   - 重複鍵由宣告的消費者決定：`.confd` 拒收；`.k8s`／`.helm-values` 依 kubectl／Helm 的讀法是後者勝。所以 `.k8s` 區塊的每份文件都必須是帶字串 `apiVersion` 與 `kind` 的物件，否則報錯。
   - 屬性詞彙是封閉的，寫錯或沒有大括號（```` ```yaml confd ````，mkdocs 不會當成程式碼區塊）都報錯；yaml 區塊只認 ```` ```yaml ````／```` ```yml ```` 這個寫法，`~~~yaml`、大寫、四個反引號、```` ``` yaml ````、```` ```yaml+jinja ```` 與沒關上的 fence 都報錯；舊的 `md-yaml-drift` HTML 註解標記已退役，留著也會報錯。
 

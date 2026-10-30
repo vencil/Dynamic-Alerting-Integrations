@@ -137,10 +137,15 @@ FENCE_RE = re.compile(r"^```(?:yaml|yml)(?=$|[ \t{])(.*)$", re.ASCII)
 #: reads — an error, never a block that silently drops out of every gate.
 YAMLISH_RE = re.compile(r"^[ \t]*(?:yaml|yml)(?![A-Za-z0-9_])", re.ASCII | re.IGNORECASE)
 
-#: A file-header comment naming a YAML file. Anchored at column 0: an indented
-#: `#` that mentions a filename in passing is prose, and cutting there would
-#: sever a block mid-mapping. Mirrored by fileHeaderRe in the Go loader test.
-FILE_HEADER_RE = re.compile(r"^#.*\.ya?ml\b", re.ASCII)
+#: A file-header comment: a column-0 `#` whose comment STARTS with the file's
+#: name, then the end of the line or a blank and any note
+#: (`# conf.d/db-a.yaml (edge-asia-1 tenant)`, `# _defaults.yaml — Mode A`).
+#: A comment that only mentions a file (`# see conf.d/_defaults.yaml`,
+#: `# Level 2: conf.d/finance/_defaults.yaml`) is prose: cutting there split
+#: one file in two, and a key repeated across the cut was read by nobody
+#: (#3416 review). An indented `#` is prose too. Mirrored by fileHeaderRe in
+#: the Go loader test.
+FILE_HEADER_RE = re.compile(r"^# ?(?P<path>[\w./-]+\.ya?ml)(?:[ \t]+.*)?$", re.ASCII)
 
 #: The retired exemption marker (`<!-- md-yaml-drift: ignore — … -->`).
 RETIRED_MARKER_RE = re.compile(r"<!--\s*md-yaml-drift\s*:")

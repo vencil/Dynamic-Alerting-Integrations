@@ -302,6 +302,29 @@ def test_a_repeated_key_the_lints_let_through_is_now_an_error(tmp_path, body):
     assert "[FENCE] docs/x.md:2" in r.stdout and "duplicate_key" in r.stdout, r.stdout
 
 
+# ── file headers ─────────────────────────────────────────────────────────────
+
+def test_a_comment_that_mentions_a_file_does_not_cut(tmp_path):
+    """#3416 review (F4): `# see conf.d/_defaults.yaml` used to cut the block,
+    and a key repeated across the cut was in two units, read by nobody as
+    one file. A header is a comment that starts with the file name; this one
+    is prose, the block is one file, and the repeated key is refused."""
+    body = ('```yaml\ntenants:\n  tenant-x:\n    pg_connections: "30"\n'
+            "# 見 conf.d/_defaults.yaml\n"
+            '    pg_connections: "300"\n```\n')
+    u, = inv.build(_docs(tmp_path, body)).units
+    assert u.line == 2 and "duplicate_key" in u.errors[0], u.errors
+    r = _fences(tmp_path)
+    assert r.returncode == 1 and "[FENCE] docs/x.md:2" in r.stdout, r.stdout
+
+
+def test_a_header_with_a_trailing_note_still_cuts(tmp_path):
+    body = ("```yaml\n# conf.d/_defaults.yaml (central)\ndefaults:\n  a: 1\n"
+            "# conf.d/db-a.yaml — edge tenant\ntenants:\n  tenant-x: {}\n```\n")
+    units = inv.build(_docs(tmp_path, body)).units
+    assert [(u.line, u.errors) for u in units] == [(2, []), (5, [])]
+
+
 # ── Go parity ────────────────────────────────────────────────────────────────
 
 @pytest.mark.timeout(960)  # CI runs pytest with --timeout=300; the go build + test can take longer

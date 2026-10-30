@@ -132,8 +132,13 @@ func extractYAMLBlocks(file, content string) []docYAMLBlock {
 	return out
 }
 
-// fileHeaderRe matches a comment line that names a YAML file, e.g.
-// `# conf.d/_defaults.yaml (central)` or `# L1 finance/_defaults.yaml`.
+// fileHeaderRe matches a comment line that STARTS with a YAML file's name,
+// then the end of the line or a blank and any note, e.g.
+// `# conf.d/_defaults.yaml (central)` or `# _defaults.yaml — Mode A`. A
+// comment that only mentions a file (`# see conf.d/_defaults.yaml`) is prose:
+// cutting there split one file in two, and a key repeated across the cut was
+// read by nobody (#3416 review). Mirrors FILE_HEADER_RE in
+// scripts/tools/_lib_doc_yaml_inventory.py.
 //
 // ⚠️ Anchored at column 0 on purpose, and that anchor is load-bearing. With a
 // leading `\s*` this also matches an INDENTED comment that merely mentions a
@@ -142,7 +147,7 @@ func extractYAMLBlocks(file, content string) []docYAMLBlock {
 // file header severs a block mid-mapping: the tail is then validated as its own
 // document, and the head silently loses the entries below it. A real file header
 // in these illustrations always starts at column 0; an indented `#` is prose.
-var fileHeaderRe = regexp.MustCompile(`^#.*\.ya?ml\b`)
+var fileHeaderRe = regexp.MustCompile(`^# ?([\w./-]+\.ya?ml)(?:[ \t]+.*)?$`)
 
 // splitConcatenatedFiles divides a block that illustrates SEVERAL files in one
 // fence (each introduced by a `# path/to/file.yaml` comment) into one segment

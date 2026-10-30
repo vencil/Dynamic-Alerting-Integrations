@@ -86,13 +86,13 @@ def test_composite_fence_is_split_per_documented_file(tmp_path: Path) -> None:
     repeated top-level key), which says nothing about the documented config."""
     body = (
         "```yaml\n"
-        "# L0 _defaults.yaml\n"
+        "# _defaults.yaml (L0)\n"
         "defaults:\n  a: 1\n"
         "\n"
         # `defaults:` keeps this segment SELECTED (a lone `state_flters` is not
         # a key the selector recognises, so the segment would drop out and the
         # unit count would fall back to 1); the typo is what makes it fail.
-        "# L1 finance/_defaults.yaml\n"
+        "# finance/_defaults.yaml (L1)\n"
         "defaults:\n  b: 2\n"
         "state_flters:\n  m:\n    severity: info\n"
         "```\n"
