@@ -243,7 +243,7 @@ def parse_configmap_rules(source_dir: Path,
             reason; #3426)
         _lib_consumer_read.ConsumerReadError: a rule file Prometheus' rule
             loader refuses (RuleFilesRefused, naming each), or no
-            da-read / da-crdecode
+            da-read / da-crdecode — each stops the run at rc 2 in `main`
     """
     if not source_dir.is_dir():
         raise FileNotFoundError(
@@ -253,102 +253,36 @@ def parse_configmap_rules(source_dir: Path,
             )
         )
 
-    # #3206 (ADR-036 §12) / #3426: what a file is, is its readers' answer,
-    # never its text. Each file is read first as the manifest kubectl reads
-    # (da-crdecode: every document an object with a kind);
-    # its ConfigMaps' data values that set out to be rule files are rule
-    # files (a `kind: List`, which `kubectl get … -o yaml` writes, is read as
-    # its items). A file that reading refuses is a plain rule file when its
-    # any-YAML reading (`da-crdecode --any-shape`) is one object declaring
-    # `groups` — a rule file is no Kubernetes object — or, when that reading
-    # refuses it too, when Prometheus' rule loader reads `groups` from it.
-    # Any other file stops
-    # the run (`SourceFilesUnreadable`, every one named with the reason); it
-    # used to be a WARNING and a skip. The rule files are then read the way
-    # Prometheus' rule loader reads them (`da-read prometheus-rules`, all of
-    # them in one run); one the loader refuses raises `RuleFilesRefused` —
-    # no CRD is generated around it.
+    # #3206 (ADR-036 §12) / #3426: which rule files a file holds is
+    # `_lib_consumer_read.rule_files_in`'s answer — the one classifier: the
+    # manifest kubectl reads (a `kind: List`, which `kubectl get … -o yaml`
+    # writes, is its items; a ConfigMap's data values that set out to be rule
+    # files), else a plain rule file (its YAML reading, or — when none reads
+    # it — Prometheus' rule loader, declares `groups`). Any other file stops
+    # the run (`SourceFilesUnreadable`, every one named with its readers'
+    # reason), and so does a rule file the rule loader refuses
+    # (`RuleFilesRefused`): no CRD set is generated with a source left out.
     # Top level only; `warn_nested` names what that leaves out.
     if listing is None:
         listing = list_source_dir(source_dir)
     warn_nested(source_dir, tool="migrate_to_operator", listing=listing)
-    found: "list[tuple[dict, str | None, str]]" = []   # (entry, cm text | None, path)
-    unreadable: "list[tuple[str, str]]" = []
-    undecided: "list[Path]" = []
-    for yaml_file in [source_dir / e.path for e in listing.config_files() if e.depth == 0]:
-        try:
-            docs = _lib_consumer_read.kubernetes_documents(str(yaml_file))
-        except _lib_consumer_read.InputRefused as exc:
-            shape = _plain_rule_file_shape(yaml_file)
-            if shape is _RULE_FILE:
-                found.append((_plain_entry(yaml_file), None, str(yaml_file)))
-            elif shape is _UNDECIDED:
-                undecided.append(yaml_file)
-            else:
-                unreadable.append((yaml_file.name, "; ".join(exc.stderr_lines) or str(exc)))
-            continue
-        for data in docs:   # each a Kubernetes object: the manifest reading's guarantee
-            if data["kind"] != "ConfigMap":
-                continue
-            data_section = data.get("data", {})
-            if isinstance(data_section, dict):
-                for key, value in data_section.items():
-                    if isinstance(value, str) and \
-                            _lib_consumer_read.configmap_value_is_rule_file(value):
-                        found.append(({
-                            "name": (data.get("metadata") or {}).get("name", yaml_file.stem),
-                            "file": yaml_file.name,
-                            "cm_data_key": key,
-                        }, value, f"{yaml_file}#{key}"))
-    # A file neither reading of da-crdecode reads (sigs.k8s.io/yaml has no
-    # JSON for an annotation value `.inf`, say) is the rule loader's to judge,
-    # as `may_be_rule_file` hands an undecided file to it: one whose reading
-    # declares `groups` is a rule file; one it refuses is named with its reason.
-    for path, rf in zip(undecided, _lib_consumer_read.prometheus_rule_file_results(undecided)):
-        if rf.problem is not None:
-            unreadable.append((path.name, f"Prometheus' rule loader refuses it: {rf.problem}"))
-        elif not _lib_consumer_read.documents_declare_rule_groups(rf.documents):
-            unreadable.append((path.name, "neither kubectl's reading nor the any-YAML reading "
-                                          "reads it, and the rule loader finds no `groups` in it"))
-        else:
-            found.append((_plain_entry(path), None, str(path)))
-    if unreadable:
-        raise SourceFilesUnreadable(unreadable)
-    plain = [path for _e, text, path in found if text is None]
-    texts = [(path, text) for _e, text, path in found if text is not None]
-    read = {r.path: r for r in _lib_consumer_read.require_read(
-        _lib_consumer_read.prometheus_rule_file_results(plain)
-        + _lib_consumer_read.prometheus_rule_text_results(texts))}
-    results = []
-    for entry, _text, path in found:
-        entry["rule_groups"] = read[path].groups
-        results.append(entry)
-    return results
-
-
-#: `_plain_rule_file_shape`'s answers.
-_RULE_FILE, _NOT_A_RULE_FILE, _UNDECIDED = object(), object(), object()
-
-
-def _plain_rule_file_shape(path: Path) -> object:
-    """Whether *path*, which kubectl's manifest reading refused, is a plain
-    rule file, by its any-YAML reading (``da-crdecode --any-shape``):
-    ``_RULE_FILE`` when that is one document, a mapping that declares
-    ``groups`` (the rule loader then gives the verdict on its content);
-    ``_NOT_A_RULE_FILE`` when it reads as anything else; ``_UNDECIDED`` when
-    that reading refuses it too — the rule loader decides (#3426)."""
+    paths = [source_dir / e.path for e in listing.config_files() if e.depth == 0]
     try:
-        docs = _lib_consumer_read.any_yaml_documents(str(path))
-    except _lib_consumer_read.InputRefused:
-        return _UNDECIDED
-    if len(docs) == 1 and isinstance(docs[0], dict) and "groups" in docs[0]:
-        return _RULE_FILE
-    return _NOT_A_RULE_FILE
-
-
-def _plain_entry(path: Path) -> dict:
-    """The result entry of a plain rule file (no ConfigMap around it)."""
-    return {"name": path.stem, "file": path.name, "cm_data_key": None}
+        found = _lib_consumer_read.rule_files_in(paths, kinds=("ConfigMap",))
+    except _lib_consumer_read.RuleFileSourcesRefused as exc:
+        raise SourceFilesUnreadable([(Path(p).name, why) for p, why in exc.files]) from exc
+    rule_files = _lib_consumer_read.require_read(
+        [rf for path in paths for rf in found[str(path)]])
+    results = []
+    for rf in rule_files:
+        path = Path(rf.manifest)
+        results.append({
+            "name": (rf.object_name or path.stem) if rf.kind == "ConfigMap" else path.stem,
+            "file": path.name,
+            "cm_data_key": rf.key,
+            "rule_groups": rf.groups,
+        })
+    return results
 
 
 def convert_rules_to_crd(
@@ -521,11 +455,9 @@ def analyze_migration(source_dir: Path, config_dir: Path,
             f"來源目錄錯誤: {exc}",
             f"Source directory error: {exc}",
         ))
-    except _lib_consumer_read.ConsumerReadError as exc:
-        analysis["issues"].append(i18n_text(
-            f"規則檔讀取失敗: {_lib_consumer_read.error_text(exc)}",
-            f"Rule files unreadable: {_lib_consumer_read.error_text(exc)}",
-        ))
+    # #3426: a rule file the rule loader refuses, an unreadable source file
+    # and a missing da-read / da-crdecode are no `issues` entry beside a
+    # partial count: they reach `main` (`_tenant_set_or_exit`), rc 2.
 
     try:
         # ⛔ The tenant set is parse-tree's (#2906); an invalid id becomes an
@@ -839,8 +771,8 @@ def generate_migration(
                 )
     except FileNotFoundError as exc:
         result["errors"].append(str(exc))
-    except _lib_consumer_read.ConsumerReadError as exc:
-        result["errors"].append(_lib_consumer_read.error_text(exc))
+    # ConsumerReadError (a refused rule file, no da-read / da-crdecode)
+    # reaches `main`: rc 2 before any write (#3426).
 
     # Generate AlertmanagerConfig CRDs for tenants
     try:
@@ -1014,6 +946,12 @@ def _tenant_set_or_exit(fn, *args, **kwargs):
         # #3426: a source file no reader reads stops the run before anything
         # is written, every such file named.
         die_caller_error(f"ERROR: {exc}", reason="source_files_unreadable")
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # #3426: a rule file Prometheus' rule loader refuses, or no
+        # da-read / da-crdecode — no answer about the sources, so no CRD set:
+        # the run stops before anything is written.
+        die_caller_error(f"ERROR: --source-dir rule files: {_lib_consumer_read.error_text(exc)}",
+                         reason="rule_files_unreadable")
     except ParseTreeError as exc:
         die_caller_error(_lib_parse_cache.parse_tree_error_line(exc),
                          reason="tenant_set_unknown")

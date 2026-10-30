@@ -230,29 +230,23 @@ def load_alerts(rule_source: Path) -> tuple[list[dict], list[str]]:
     if not files:
         return [], [f"no YAML files found at {rule_source}"]
 
-    # #3206 (ADR-036 §12): a file is a rule file when its plain YAML reading
-    # (`da-crdecode --any-shape`, #3426: a rule file is no Kubernetes
-    # object) is a mapping with `groups:` — other
-    # YAML here (tenant `_defaults.yaml`, inventory lists) is skipped
-    # silently, as before. Each rule file is then read the way Prometheus'
-    # rule loader reads it (`da-read prometheus-rules`, one run for all); a
-    # file the loader refuses is an error naming it, with the loader's reason.
+    # #3206 (ADR-036 §12) / #3426: which rule files a file holds is
+    # `_lib_consumer_read.rule_files_in`'s answer — a plain rule file, a
+    # ConfigMap's or PrometheusRule's rule files (a `kind: List` read as its
+    # items); other YAML here (tenant `_defaults.yaml`, inventory lists)
+    # holds none. A file no reader reads, and a rule file Prometheus' rule
+    # loader refuses, is an error naming it with the reason.
     alerts: list[dict] = []
-    rule_files: list[Path] = []
+    found = _lib_consumer_read.rule_files_in(
+        files, other_yaml=_lib_consumer_read.NO_RULE_FILES, keep_refusals=True)
     for f in files:
-        try:
-            docs = _lib_consumer_read.any_yaml_documents(str(f))
-        except _lib_consumer_read.InputRefused as exc:
-            errors.append(f"invalid YAML in {f}: {'; '.join(exc.stderr_lines) or exc}")
-            continue
-        if docs and isinstance(docs[0], dict) and "groups" in docs[0]:
-            rule_files.append(f)
-    for f, rule_file in zip(rule_files,
-                            _lib_consumer_read.prometheus_rule_file_results(rule_files)):
-        if rule_file.problem is not None:
-            errors.append(f"Prometheus' rule loader refuses {f}: {rule_file.problem}")
-            continue
-        alerts.extend(extract_alerts_from_pack(rule_file.documents[0], source_path=str(f)))
+        for rf in found[str(f)]:
+            if rf.unread:
+                errors.append(f"invalid YAML in {f} (no reader reads it): {rf.problem}")
+            elif rf.problem is not None:
+                errors.append(f"Prometheus' rule loader refuses {rf.path}: {rf.problem}")
+            else:
+                alerts.extend(extract_alerts_from_pack(rf.documents[0], source_path=rf.path))
     return alerts, errors
 
 

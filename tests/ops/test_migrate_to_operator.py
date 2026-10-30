@@ -1152,9 +1152,6 @@ class TestSourceFilesAreWhatTheReadersSay:
     @pytest.mark.parametrize("name,text,reason", [
         ("top-level-list.yaml", "- groups: []\n", "the document is array, not a mapping"),
         ("scalar.yaml", "just text\n", "the document is string, not a mapping"),
-        # kubectl's reading refuses it (no kind); as a plain file it is no
-        # rule file either (two documents).
-        ("two-rule-docs.yaml", _RULES + "---\n" + _RULES, "it has no `kind`"),
         # A List is read as its items; one kubectl would not apply is named.
         ("list.yaml", "apiVersion: v1\nkind: List\nitems:\n- {kind: ConfigMap}\n",
          "items[0] (line 4): it is not a Kubernetes object: it has no `apiVersion`"),
@@ -1172,6 +1169,76 @@ class TestSourceFilesAreWhatTheReadersSay:
             mto.parse_configmap_rules(src)
         (got_name, why), = exc_info.value.files
         assert got_name == name and reason in why, exc_info.value.files
+
+    def test_a_rule_file_the_rule_loader_refuses_stops_the_run(self, tmp_path):
+        """Two documents that each declare `groups`: a rule file, which
+        Prometheus' rule loader refuses (it reads one document) — named with
+        the loader's reason."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "two.yaml").write_text(self._RULES + "---\n" + self._RULES, encoding="utf-8")
+        with pytest.raises(mto._lib_consumer_read.RuleFilesRefused) as exc_info:
+            mto.parse_configmap_rules(src)
+        assert [rf.path for rf in exc_info.value.refused] == [str(src / "two.yaml")]
+
+    def _main(self, src, config_dir, out):
+        with patch("sys.argv", [
+            "migrate_to_operator.py",
+            "--source-dir", str(src),
+            "--config-dir", str(config_dir),
+            "--output-dir", str(out),
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                mto.main()
+        return exc_info.value.code
+
+    @pytest.mark.parametrize("json_mode", [False, True])
+    def test_main_stops_on_a_rule_file_the_loader_refuses(
+            self, tmp_path, temp_config_dir, capsys, json_mode):
+        """#3426 F2: a rule file Prometheus' rule loader refuses used to be an
+        `issues` WARNING beside a CRD set written without it (rc 0)."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "ok.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / "bad.yaml").write_text(
+            "groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n", encoding="utf-8")
+        out = tmp_path / "out"
+        argv_json = ["--json"] if json_mode else []
+        with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src),
+                                "--config-dir", str(temp_config_dir),
+                                "--output-dir", str(out), *argv_json]):
+            with pytest.raises(SystemExit) as exc_info:
+                mto.main()
+        assert exc_info.value.code == 2
+        assert not out.exists(), "nothing may be written when a rule file is refused"
+        captured = capsys.readouterr()
+        assert "bad.yaml" in captured.err + captured.out and "parse error" in captured.err + captured.out
+
+    def test_checklist_only_stops_on_a_refused_rule_file(self, tmp_path, temp_config_dir, capsys):
+        """--checklist-only runs the analysis alone: a refused rule file
+        there is rc 2 too, not an `issues` line beside a plan."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "bad.yaml").write_text(
+            "groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n", encoding="utf-8")
+        with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src),
+                                "--config-dir", str(temp_config_dir), "--checklist-only"]):
+            with pytest.raises(SystemExit) as exc_info:
+                mto.main()
+        assert exc_info.value.code == 2
+        assert "bad.yaml" in capsys.readouterr().err
+
+    def test_main_stops_without_da_read(self, tmp_path, temp_config_dir, capsys, monkeypatch):
+        """#3426 F2: no reader binary is no answer about the sources: rc 2,
+        nothing written (it used to be an `errors` line and rc 0)."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "ok.yaml").write_text(self._RULES, encoding="utf-8")
+        monkeypatch.setenv("DA_READ_BINARY", str(tmp_path / "no-such-da-read"))
+        out = tmp_path / "out"
+        assert self._main(src, temp_config_dir, out) == 2
+        assert not out.exists()
+        assert "da-read" in capsys.readouterr().err
 
     def test_a_list_of_configmaps_migrates(self, tmp_path):
         """`kubectl get cm -o yaml` writes a List: its ConfigMaps are read
@@ -1191,7 +1258,7 @@ class TestSourceFilesAreWhatTheReadersSay:
     def test_a_rule_file_only_the_rule_loader_reads_migrates(self, tmp_path):
         """An annotation value `.inf` has no JSON: neither da-crdecode
         reading reads the file. Prometheus' rule loader reads it (the string
-        ".inf"), so it is a rule file, as `may_be_rule_file` would say."""
+        ".inf"), so it is a rule file (`rule_files_in`)."""
         src = tmp_path / "src"
         src.mkdir()
         (src / "inf.yaml").write_text(

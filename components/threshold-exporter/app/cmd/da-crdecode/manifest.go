@@ -27,10 +27,11 @@ import (
 //   - Each item must be an object with a non-empty string `kind` AND a
 //     non-empty string `apiVersion` (kubectl asks every item for its type:
 //     "Object 'apiVersion' is missing", which it does not ask of a document).
-//   - An item that is itself a list — any item with a non-null `items`, a
-//     nested `kind: List` included — is refused by kubectl ("is not a list: no
-//     Items field in this object"), and is refused here. An item whose
-//     `items` is null is an ordinary object to kubectl, and here.
+//   - An item that is itself a list — any item whose `items` is a JSON array,
+//     an empty one and a nested `kind: List` included — is refused by kubectl
+//     ("is not a list: no Items field in this object"), and is refused here.
+//     An item whose `items` is null, a string, a number or an object is an
+//     ordinary object to kubectl (measured: it is applied), and here.
 //
 // The as-written comparison (aswritten.go) is made on the whole list
 // document; each of its differences is given to the item its path starts
@@ -127,7 +128,7 @@ func listItem(item json.RawMessage) error {
 	if err := nonEmptyString(obj, "apiVersion", "Object 'apiVersion' is missing"); err != nil {
 		return err
 	}
-	if inner, ok := obj["items"]; ok && !isNull(inner) {
+	if inner, ok := obj["items"]; ok && jsonShape(inner) == "array" {
 		return errors.New("a list inside a list is not read " +
 			"(kubectl: is not a list: no Items field in this object); write its items as items of the outer list")
 	}

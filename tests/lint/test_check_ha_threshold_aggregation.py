@@ -136,12 +136,13 @@ def test_check_file_all_three_formats(tmp_path, template):
 
 def test_a_file_prometheus_refuses_is_named_not_skipped(tmp_path):
     """#3206: a YAML scalar document is no rule file Prometheus loads; it is
-    refused by name (it used to be skipped as "no groups")."""
+    refused by name (it used to be skipped as "no groups"). #3426: it is no
+    manifest either, so `rule_files_in` names it with its readers' reason."""
     p = tmp_path / "scalar.yaml"
     p.write_text("just a string\n", encoding="utf-8")
-    with pytest.raises(lint._lib_consumer_read.RuleFilesRefused) as exc_info:
+    with pytest.raises(lint._lib_consumer_read.RuleFileSourcesRefused) as exc_info:
         lint.check_file(p)
-    assert [rf.path for rf in exc_info.value.refused] == [str(p)]
+    assert [path for path, _why in exc_info.value.files] == [str(p)]
 
 
 def test_main_names_a_refused_file_rc2(tmp_path, monkeypatch, capsys):

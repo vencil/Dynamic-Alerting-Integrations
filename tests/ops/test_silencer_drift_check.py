@@ -1173,3 +1173,28 @@ def test_json_output_keeps_alertname_byte_faithful(tmp_path, capsys):
     raw = capsys.readouterr().out
     assert "\x1b" not in raw  # serialized as an escape sequence, never live
     assert json.loads(raw)["coverage"][0]["matched_alertnames"] == [_EVIL]
+
+
+_PACK = "groups:\n- name: g\n  rules:\n  - {alert: InCm, expr: up}\n"
+
+
+def _configmap(name: str, indent: str = "") -> str:
+    body = "".join(f"{indent}    {ln}\n" for ln in _PACK.splitlines())
+    return (f"{indent}apiVersion: v1\n{indent}kind: ConfigMap\n{indent}metadata: {{name: {name}}}\n"
+            f"{indent}data:\n{indent}  rules.yml: |\n" + body)
+
+
+@pytest.mark.parametrize("text", [
+    _configmap("cm"),
+    # `kubectl get cm -o yaml`: a List of them
+    "apiVersion: v1\nkind: List\nitems:\n- " + _configmap("cm", "  ").lstrip(),
+])
+def test_load_alerts_reads_rule_packs_held_in_a_configmap(tmp_path, text):
+    """#3426: a ConfigMap holding a rule pack used to be skipped (only a
+    file whose first document declared `groups` was read); the rule files
+    a file holds are `rule_files_in`'s answer."""
+    (tmp_path / "cm.yaml").write_text(text, encoding="utf-8")
+    (tmp_path / "_defaults.yaml").write_text("defaults: {a: 1}\n", encoding="utf-8")
+    alerts, errors = sdc.load_alerts(tmp_path)
+    assert errors == []
+    assert [a["name"] for a in alerts] == ["InCm"]

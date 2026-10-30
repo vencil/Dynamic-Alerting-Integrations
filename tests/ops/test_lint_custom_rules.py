@@ -730,7 +730,7 @@ def test_lint_result_no_rule_name():
 # ── Which files are rule files (#3206) ─────────────────────────────
 # A plain file and a ConfigMap data value pass the same test before the rule
 # loader sees them: a document of the Kubernetes reading with a `groups` key
-# (`documents_declare_rule_groups`). A file without one — a recipe, the
+# (`_lib_consumer_read.rule_files_in`, #3426). A file without one — a recipe, the
 # registry beside the packs — is no rule file and is not read (as on main);
 # a file with one that the loader refuses is an ERROR naming it.
 
@@ -832,3 +832,25 @@ def test_configmap_good_and_broken_rule_values(tmp_path, monkeypatch, capsys):
               if line.startswith("ERROR")]
     assert len(errors) == 1, errors
     assert "cm.yaml" in errors[0] and "'bad.yml'" in errors[0], errors
+
+
+def _cm_list(rule_text: str) -> str:
+    """A `kind: List` (`kubectl get cm -o yaml`) holding one ConfigMap whose
+    `r.yml` is *rule_text*."""
+    body = "".join(f"        {ln}\n" for ln in rule_text.splitlines())
+    return ("apiVersion: v1\nkind: List\nitems:\n- apiVersion: v1\n  kind: ConfigMap\n"
+            "  metadata: {name: listed}\n  data:\n    r.yml: |\n" + body)
+
+
+def test_a_configmap_inside_a_list_is_linted(tmp_path, monkeypatch, capsys):
+    """#3426: the rule files a file holds are `rule_files_in`'s answer, which
+    reads a List as its items — a ConfigMap in one used to be passed over
+    (`read_rule_files(['list.yaml']) == {'list.yaml': []}`)."""
+    lst = tmp_path / "list.yaml"
+    lst.write_text(_cm_list("groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n"),
+                   encoding="utf-8")
+    got = lint_custom_rules.read_rule_files([str(lst)])[str(lst)]
+    assert [(rf.kind, rf.key) for rf in got] == [("ConfigMap", "r.yml")]
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    out = capsys.readouterr().out
+    assert "data key 'r.yml'" in out and "parse error" in out, out

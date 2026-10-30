@@ -3,7 +3,8 @@ ADR-036 §12): `prometheus_rule_text_results` (the one helper that hands
 several inner strings to `da-read prometheus-rules` in one run),
 `manifest_rule_file_results` (a ConfigMap / PrometheusRule read the way
 kubectl reads it, its rule files the way Prometheus' rule loader reads them)
-and `rule_file_declaration`.
+and `rule_files_in` (#3426: the one classifier of the rule files a file
+holds), with the value-level declaration under it.
 
 The last part pins what changed for every migrated reader when the reading
 moved from PyYAML (YAML 1.1) to rulefmt (go-yaml v3 into Prometheus' typed
@@ -184,8 +185,7 @@ _TEMPLATE = "# - alert: example\n*markdown*\n"
     (_TAB_BROKEN, cr.UNDECIDED), (_TEMPLATE, cr.UNDECIDED),
 ])
 def test_rule_file_declaration(text, declaration) -> None:
-    assert cr.rule_file_declaration(text) == declaration
-    assert cr.may_be_rule_file(text) is (declaration != cr.NOT_A_RULE_FILE)
+    assert cr._rule_file_declaration(text) == declaration
 
 
 @pytest.mark.parametrize("text,is_rule_file", [
@@ -196,7 +196,56 @@ def test_rule_file_declaration(text, declaration) -> None:
     (_TEMPLATE, False),
 ])
 def test_configmap_value_is_rule_file(text, is_rule_file) -> None:
-    assert cr.configmap_value_is_rule_file(text) is is_rule_file
+    assert cr._configmap_value_is_rule_file(text) is is_rule_file
+
+
+# ── rule_files_in: the one classifier (#3426) ───────────────────────
+
+def _list_of(cm: str) -> str:
+    return "apiVersion: v1\nkind: List\nitems:\n- " + cm.replace("\n", "\n  ").rstrip() + "\n"
+
+
+def test_rule_files_in_reads_every_shape_a_file_comes_in(tmp_path) -> None:
+    files = {
+        "list.yaml": _list_of(_cm(_block("x.yml", RULES), name="listed")),
+        "plain.yaml": RULES,
+        "inf.yaml": _INF_RULES,                # only the rule loader reads it
+        "pr.yaml": ("apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+                    "metadata: {name: p}\nspec:\n  groups: []\n"),
+        "deploy.yaml": "apiVersion: apps/v1\nkind: Deployment\nmetadata: {name: d}\n",
+    }
+    paths = [_write(tmp_path, n, t) for n, t in files.items()]
+    got = cr.rule_files_in(paths)
+    lst, plain, inf, pr, deploy = (got[p] for p in paths)
+    assert [(rf.kind, rf.key, rf.object_name, rf.problem) for rf in lst] == [
+        ("ConfigMap", "x.yml", "listed", None)]
+    assert [(rf.kind, rf.manifest, rf.problem) for rf in plain] == [(None, paths[1], None)]
+    assert inf[0].problem is None
+    assert inf[0].groups[0]["rules"][0]["annotations"] == {"x": ".inf"}
+    assert [rf.kind for rf in pr] == ["PrometheusRule"]
+    assert deploy == []
+    # *kinds* narrows a manifest's rule files
+    assert cr.rule_files_in([paths[3]], kinds=("ConfigMap",))[paths[3]] == []
+
+
+def test_rule_files_in_names_every_file_no_reader_reads(tmp_path) -> None:
+    recipe = _write(tmp_path, "recipe.yaml", "recipe: threshold\n")
+    broken = _write(tmp_path, "broken.yaml", "groups: [\n")
+    bad_cm = _write(tmp_path, "cm.yaml", _cm(_block("a.yml", RULES)) + "---\n- x\n")
+    with pytest.raises(cr.RuleFileSourcesRefused) as exc:
+        cr.rule_files_in([recipe, broken, bad_cm])
+    assert [p for p, _why in exc.value.files] == [recipe, broken, bad_cm]
+    why = dict(exc.value.files)
+    assert "it is no rule file" in why[recipe]
+    assert "Prometheus' rule loader refuses it" in why[broken]
+    assert "the document is array" in why[bad_cm]
+    # Other YAML may hold no rule file; a manifest kubectl refuses never does;
+    # with keep_refusals a file no reader reads is kept, named.
+    got = cr.rule_files_in([recipe, broken, bad_cm], other_yaml=cr.NO_RULE_FILES,
+                           keep_refusals=True)
+    assert got[recipe] == []
+    assert [(rf.unread, rf.problem is not None) for rf in got[broken]] == [(True, True)]
+    assert [rf.unread for rf in got[bad_cm]] == [True]
 
 
 # ── what the reading changed (PyYAML YAML 1.1 → rulefmt) ─────────────

@@ -691,56 +691,31 @@ def _read_rule_files(file_paths):
     """[(path, groups | None, error | None)] for every path, in order, each
     read the way Prometheus loads it (#3206, ADR-036 §12).
 
-    A file whose Kubernetes reading (da-crdecode) holds a ConfigMap is a
-    ConfigMap: its rule files are the data values
-    `_lib_consumer_read.configmap_value_is_rule_file` picks — a value whose
-    plain YAML reading has a `groups:` key, or one that reading refuses but
-    the rule loader loads a `groups:` key from. Any other value is not read
-    and not reported: one without `groups:` (an alertmanager.yml), and one
-    both readings refuse (a markdown template — or a rule file broken so
-    badly neither reads it). Every other file — one kubectl's reading
-    refuses included — is itself a rule file, read by the rule loader; one
-    it refuses, or one with no `groups`, is an error naming it. All the rule
-    loader's reading happens in two `da-read prometheus-rules` runs (plus
-    one per ConfigMap value kubectl's reading refuses). A rule file the
-    loader refuses is an error naming it with the loader's reason. Raises
+    Which rule files a file holds is `_lib_consumer_read.rule_files_in`'s
+    answer (#3426), ConfigMaps only: a manifest's ConfigMap data values that
+    set out to be rule files (a `kind: List` read as its items), else the
+    file itself when it is a plain rule file. A ConfigMap value no reading
+    reads as a rule file (an alertmanager.yml, a markdown template) is not
+    read and not reported. A file that holds no rule file is an error naming
+    it ("No 'groups' found"); so is one no reader reads (its readers'
+    reason) and a rule file the loader refuses (the loader's reason). Raises
     `_lib_consumer_read.ConsumerReadError` when a binary cannot be had."""
-    plain, configmaps = [], []
-    for fpath in file_paths:
-        try:
-            docs = _lib_consumer_read.kubernetes_documents(fpath)
-        except _lib_consumer_read.InputRefused:
-            docs = []
-        if any(d["kind"] == "ConfigMap" for d in docs):   # objects (#3426)
-            configmaps.append(fpath)
-        else:
-            plain.append(fpath)
-    read = {}
-    for fpath, rf in zip(plain, _lib_consumer_read.prometheus_rule_file_results(plain)):
-        if rf.problem is not None:
-            read[fpath] = (None, f"Failed to load: {fpath}: {rf.problem}")
-        elif not rf.groups:
-            read[fpath] = (None, f"No 'groups' found in: {fpath}")
-        else:
-            read[fpath] = (rf.groups, None)
-    by_cm: dict = {p: [] for p in configmaps}
-    for rf in _lib_consumer_read.manifest_rule_file_results(configmaps, only_declared=True):
-        if rf.kind == "ConfigMap":
-            by_cm[rf.manifest].append(rf)
+    found = _lib_consumer_read.rule_files_in(
+        file_paths, kinds=("ConfigMap",), other_yaml=_lib_consumer_read.NO_RULE_FILES,
+        keep_refusals=True)
     out = []
     for fpath in file_paths:
-        if fpath in read:
-            out.append((fpath, *read[fpath]))
-            continue
-        groups = []
-        for rf in by_cm[fpath]:
+        groups, failed = [], False
+        for rf in found[os.fspath(fpath)]:
             if rf.problem is not None:
-                out.append((fpath, None, f"Failed to load: {rf.path}: {rf.problem}"))
+                where = rf.path if rf.kind is not None else fpath
+                out.append((fpath, None, f"Failed to load: {where}: {rf.problem}"))
+                failed = True
             else:
                 groups.extend(rf.groups)
         if groups:
             out.append((fpath, groups, None))
-        elif not by_cm[fpath]:
+        elif not failed:
             out.append((fpath, None, f"No 'groups' found in: {fpath}"))
     return out
 

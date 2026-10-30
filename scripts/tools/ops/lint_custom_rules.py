@@ -251,46 +251,17 @@ def check_owner_label(labels, filepath, rule_name):
 # File processing
 # ---------------------------------------------------------------------------
 def read_rule_files(files):
-    """{path: [RuleFile, ...]} — every file of *files* as Prometheus loads it
-    (#3206, ADR-036 §12). A file whose plain YAML reading (``da-crdecode
-    --any-shape``: the file may be a rule file, which is no Kubernetes object,
-    #3426) holds a ``kind: ConfigMap`` is a ConfigMap — then read again as
-    the manifest it is (``manifest_rule_file_results``, which refuses a
-    document that is no object, naming the file): each of its data values that sets
-    out to be a rule file (a ``groups:`` key; ``manifest_rule_file_results``
-    with ``only_declared``) is one. Any other file is a rule file by the
-    same test — a document of its plain YAML reading is a mapping with a
-    ``groups`` key (``documents_declare_rule_groups``); one without is no
-    rule file (a recipe, the registry beside the packs) and is not read, as
-    before. A file that reading refuses is handed to the rule loader
-    all the same: that reading refuses some files the loader loads (an
-    annotation value ``.inf``), and a file here that neither reads is an
-    ERROR, as a YAML parse error was — never skipped. The rule files are
-    read by Prometheus' rule loader (``da-read prometheus-rules``), the
-    plain ones in one run and the ConfigMaps' in another; a file that is no
-    rule file maps to ``[]``. Raises ``_lib_consumer_read.ConsumerReadError``
-    when a binary cannot be had."""
-    plain, configmaps, others = [], [], []
-    for path in files:
-        try:
-            docs = _lib_consumer_read.any_yaml_documents(path)
-        except _lib_consumer_read.InputRefused:
-            plain.append(path)
-            continue
-        if any(isinstance(d, dict) and d.get("kind") == "ConfigMap" for d in docs):
-            configmaps.append(path)
-        elif _lib_consumer_read.documents_declare_rule_groups(docs):
-            plain.append(path)
-        else:
-            others.append(path)
-    out = {p: [rf] for p, rf in zip(
-        plain, _lib_consumer_read.prometheus_rule_file_results(plain))}
-    for rf in _lib_consumer_read.manifest_rule_file_results(configmaps, only_declared=True):
-        if rf.kind == "ConfigMap":
-            out.setdefault(rf.manifest, []).append(rf)
-    for p in (*configmaps, *others):
-        out.setdefault(p, [])
-    return out
+    """{path: [RuleFile, ...]} — the rule files each of *files* hands to
+    Prometheus, as Prometheus loads them: `_lib_consumer_read.rule_files_in`
+    (#3426), ConfigMaps' values and plain rule files, other YAML (a recipe,
+    the registry beside the packs) holding none (``[]``). A file no reader
+    reads is a RuleFile with ``unread`` set and its readers' reason; a rule
+    file the loader refuses one with the loader's reason — both ERRORs in
+    `lint_file`, never skipped. Raises
+    ``_lib_consumer_read.ConsumerReadError`` when a binary cannot be had."""
+    return _lib_consumer_read.rule_files_in(
+        files, kinds=("ConfigMap",), other_yaml=_lib_consumer_read.NO_RULE_FILES,
+        keep_refusals=True)
 
 
 def lint_file(filepath, policy, rule_files=None):
@@ -329,9 +300,9 @@ def lint_file(filepath, policy, rule_files=None):
     for rf in rule_files:
         if rf.problem is not None:
             where = f" (data key {rf.key!r})" if rf.key is not None else ""
-            results.append(LintResult(
-                filepath, None, None, "ERROR",
-                f"Prometheus' rule loader refuses it{where}: {rf.problem}"))
+            what = ("no reader reads it as a manifest or a rule file" if rf.unread
+                    else f"Prometheus' rule loader refuses it{where}")
+            results.append(LintResult(filepath, None, None, "ERROR", f"{what}: {rf.problem}"))
             continue
         groups.extend(rf.groups)
 

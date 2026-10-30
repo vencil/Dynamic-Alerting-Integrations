@@ -59,22 +59,39 @@ CUSTOMER_MANAGED_PREFIX = "configmap-rules-custom-"
 RULE_FILE_GLOB_SUFFIX = ".yml"
 
 
+class ConfigMapShapeError(ValueError):
+    """A ConfigMap in kubectl's reading that names no pack: no string
+    `metadata.name`, or a `data` that is not a mapping (#3426). It cannot be
+    read as a pack, so it is named — never taken for a pack with no keys."""
+
+
 def configmap_rule_packs(monitor_dir: Path) -> Dict[str, Set[str]]:
     """{metadata.name: {data keys}} for every ConfigMap in every
-    configmap-rules-*.yaml, as kubectl reads the files (da-crdecode)."""
+    configmap-rules-*.yaml, as kubectl reads the files (da-crdecode). A
+    ConfigMap without a `data` has no keys; one with no string
+    `metadata.name`, or a `data` that is not a mapping, raises
+    ConfigMapShapeError naming every such document."""
+    bad: List[str] = []
     out: Dict[str, Set[str]] = {}
     paths = [path for path in sorted(monitor_dir.glob("configmap-rules-*.yaml"))
              # customer-managed, not in the platform gold-standard mount list
              if not path.name.startswith(CUSTOMER_MANAGED_PREFIX)]
-    for docs in _lib_consumer_read.kubernetes_documents_of(paths).values():
-        for doc in docs:   # each a Kubernetes object (the reading's guarantee, #3426)
+    for path, docs in _lib_consumer_read.kubernetes_documents_of(paths).items():
+        for i, doc in enumerate(docs, start=1):   # each a Kubernetes object (#3426)
             if doc["kind"] != "ConfigMap":
                 continue
-            name = ((doc.get("metadata") or {}).get("name")) or ""
+            meta = doc.get("metadata")
+            name = meta.get("name") if isinstance(meta, dict) else None
             data = doc.get("data")
-            keys = set(data.keys()) if isinstance(data, dict) else set()
-            if name:
-                out[str(name)] = keys
+            if not isinstance(name, str) or not name:
+                bad.append(f"{path} (object {i}): a ConfigMap with no string metadata.name")
+                continue
+            if data is not None and not isinstance(data, dict):
+                bad.append(f"{path} ({name}): its data is not a mapping")
+                continue
+            out[name] = set(data.keys()) if data else set()
+    if bad:
+        raise ConfigMapShapeError("; ".join(bad))
     return out
 
 
@@ -186,6 +203,9 @@ def main(argv: List[str] | None = None) -> int:
         print(f"Error: cannot read a manifest the way kubectl does: {exc}", file=sys.stderr)
         for line in exc.stderr_lines:
             print(f"  {line}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    except ConfigMapShapeError as exc:
+        print(f"Error: a rules ConfigMap cannot be read as a pack: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     n_packs = len(packs)

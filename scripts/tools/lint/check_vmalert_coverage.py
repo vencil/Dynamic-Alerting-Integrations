@@ -114,23 +114,23 @@ def declared_alerts() -> dict[str, str]:
     (b) let a test in one pack falsely "cover" a same-named untested alert in another. Rather
     than mask that, a collision is detected and FAILS loudly (CodeRabbit #969).
 
-    #3206 (ADR-036 §12): a file under rule-packs/ is a rule pack when it sets
-    out to be one (a `groups:` key in its plain YAML reading) or when that
-    reading refuses it — it cannot then be ruled out (`may_be_rule_file`);
-    every pack is read the way Prometheus' rule loader reads it (one `da-read
-    prometheus-rules` run). A pack the loader refuses raises RulePacksRefused
-    naming it."""
+    #3206 (ADR-036 §12) / #3426: the rule files under rule-packs/ are
+    `_lib_consumer_read.rule_files_in`'s answer (other YAML there, the
+    registry, holds none), each read the way Prometheus' rule loader reads
+    it. A file no reader reads, or a pack the loader refuses, raises
+    RulePacksRefused naming it."""
     out: dict[str, str] = {}
     dupes: dict[str, list[str]] = {}
-    files = [f for f in _rule_pack_files()
-             if _lib_consumer_read.may_be_rule_file(f.read_bytes())]
-    rule_files = _lib_consumer_read.prometheus_rule_file_results(files)
+    found = _lib_consumer_read.rule_files_in(
+        _rule_pack_files(), other_yaml=_lib_consumer_read.NO_RULE_FILES, keep_refusals=True)
+    rule_files = [rf for rfs in found.values() for rf in rfs]
     refused = [f"{Path(rf.path).name}: {rf.problem}" for rf in rule_files
                if rf.problem is not None]
     if refused:
         raise RulePacksRefused("rule pack(s) Prometheus' rule loader refuses: "
                                + "; ".join(refused))
-    for f, rf in zip(files, rule_files):
+    for rf in rule_files:
+        f = Path(rf.manifest)
         for grp in rf.groups:
             for rule in (grp.get("rules") or []):
                 name = rule.get("alert")

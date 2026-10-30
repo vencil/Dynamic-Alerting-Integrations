@@ -55,11 +55,13 @@ Alertmanager's. They ask the Go binary that runs the consumer's own reading:
   on it: each manifest the way kubectl reads it, then every ConfigMap
   ``data`` / ``binaryData`` value and every PrometheusRule ``spec`` by the
   rule loader (``RuleFile.manifest`` / ``.kind`` / ``.key`` say where it came
-  from). ``rule_file_declaration(text)`` says whether a text sets out to be
-  a rule file (yes / no / undecided: its any-YAML reading refuses it);
-  ``may_be_rule_file`` (a whole file: undecided goes to the rule loader)
-  and ``configmap_value_is_rule_file`` (a ConfigMap value, which may be a
-  template no reader reads) build on it.
+  from), for files known to be manifests.
+* ``rule_files_in(paths)`` — ⛔ the one answer to "which rule files does each
+  file hand to Prometheus" for a file that may be a manifest, a plain rule
+  file or other YAML (#3426): the manifest reading first, then the any-YAML
+  reading, then the rule loader; a file none of them reads as either is
+  refused, named. No tool classifies files from a reading of its own
+  (``tests/shared/test_rule_file_classifier_is_one.py``).
 
 Each raises :class:`ConsumerReadError` when the binary is missing, cannot
 be run, does not finish, refuses the input (its reason is in
@@ -225,6 +227,10 @@ def _json(proc: subprocess.CompletedProcess, name: str, lines: list[str]) -> Any
 def _run(binary: str | None, name: str, env: str, build_hint: str,
          args: list[str], stdin: bytes | None) -> dict:
     proc, lines = _invoke(binary, name, env, build_hint, args, stdin)
+    if proc.returncode == 2 and lines and lines[0].startswith("usage: "):
+        raise ConsumerReadError(
+            f"{name} printed its usage for the arguments {args[:-1] or args} "
+            f"(an older {name}? rebuild it)", lines)
     if _refused(proc.returncode, lines):
         raise InputRefused(f"{name} refused the input", lines)
     if proc.returncode != 0:
@@ -483,7 +489,8 @@ class RuleFile:
     a refused file, so its contents cannot be taken as empty by accident.
     """
 
-    __slots__ = ("path", "problem", "_documents", "manifest", "kind", "key")
+    __slots__ = ("path", "problem", "_documents", "manifest", "kind", "key", "object_name",
+                 "unread")
 
     def __init__(self, path: str, documents: "list[Any] | None", problem: "str | None") -> None:
         self.path = path
@@ -497,6 +504,11 @@ class RuleFile:
         self.manifest: "str | None" = None
         self.kind: "str | None" = None
         self.key: "str | None" = None
+        #: the delivering document's ``metadata.name`` (a manifest's rule file)
+        self.object_name: "str | None" = None
+        #: True for a file ``rule_files_in`` could not read as a manifest or a
+        #: rule file (``keep_refusals``): ``problem`` is its readers' reason
+        self.unread = False
 
     @property
     def documents(self) -> list:
@@ -634,54 +646,43 @@ def prometheus_rule_text_results(texts: "Iterable[tuple[str, str | bytes]]",
     return out
 
 
-#: ``rule_file_declaration``'s answers.
+#: ``_rule_file_declaration``'s answers.
 RULE_FILE = "rule-file"
 NOT_A_RULE_FILE = "not-a-rule-file"
 UNDECIDED = "undecided"
 
 
-def documents_declare_rule_groups(docs: "list[Any]") -> bool:
-    """Whether a file whose any-YAML reading (``da-crdecode --any-shape``) is
-    *docs* sets out to be a rule file: one of the documents is a mapping
-    with a ``groups`` key. ``rule_file_declaration`` and a caller that already
-    holds the documents both use it."""
+def _documents_declare_rule_groups(docs: "list[Any]") -> bool:
+    """Whether a reading *docs* sets out to be a rule file: one of the
+    documents is a mapping with a ``groups`` key. ⛔ Only this module asks
+    it: which files hold rule files is ``rule_files_in``'s answer, never a
+    tool's own (``tests/shared/test_rule_file_classifier_is_one.py``)."""
     return any(isinstance(d, dict) and "groups" in d for d in docs)
 
 
-def rule_file_declaration(text: "str | bytes", binary: str | None = None) -> str:
-    """Whether *text* — a file, a ConfigMap data value — sets out to be a
-    rule file, by its any-YAML reading (``da-crdecode --any-shape``: a rule
-    file is no Kubernetes object, so the manifest reading would refuse every
-    one). Three answers:
+def _rule_file_declaration(text: "str | bytes", binary: str | None = None) -> str:
+    """Whether *text* — a ConfigMap data value — sets out to be a rule file,
+    by its any-YAML reading (``da-crdecode --any-shape``: a rule file is no
+    Kubernetes object, so the manifest reading would refuse every one).
+    Three answers:
 
     * ``RULE_FILE`` — a document is a mapping with a ``groups`` key;
     * ``NOT_A_RULE_FILE`` — it reads, and no document has one (a recipe,
-      the registry beside the packs);
+      an ``alertmanager.yml``);
     * ``UNDECIDED`` — that reading refuses the text, so it cannot say. This
-      is not "no": sigs.k8s.io/yaml's conversion refuses some text Prometheus' rule
-      loader reads (an annotation value ``.inf`` is +Inf to sigs.k8s.io/yaml
-      and has no JSON; rulefmt reads the string ``".inf"``), and a broken
-      rule file (a tab in its indentation) is refused by both.
-
-    A whole file that is ``UNDECIDED`` is handed to the rule loader, whose
-    refusal is the authoritative reason (``may_be_rule_file``). This only
-    picks what to hand to the rule loader; what the file says is the rule
-    loader's reading."""
+      is not "no": sigs.k8s.io/yaml's conversion refuses some text
+      Prometheus' rule loader reads (an annotation value ``.inf`` is +Inf to
+      sigs.k8s.io/yaml and has no JSON; rulefmt reads the string ``".inf"``),
+      and a broken rule file (a tab in its indentation) is refused by both."""
     try:
         docs = any_yaml_text_documents(text, binary)
     except InputRefused:
         return UNDECIDED
-    return RULE_FILE if documents_declare_rule_groups(docs) else NOT_A_RULE_FILE
+    return RULE_FILE if _documents_declare_rule_groups(docs) else NOT_A_RULE_FILE
 
 
-def may_be_rule_file(text: "str | bytes", binary: str | None = None) -> bool:
-    """Whether a whole file whose text is *text* goes to the rule loader:
-    anything ``rule_file_declaration`` does not rule out."""
-    return rule_file_declaration(text, binary) != NOT_A_RULE_FILE
-
-
-def configmap_value_is_rule_file(text: "str | bytes", crdecode_binary: str | None = None,
-                                 read_binary: str | None = None) -> bool:
+def _configmap_value_is_rule_file(text: "str | bytes", crdecode_binary: str | None = None,
+                                  read_binary: str | None = None) -> bool:
     """Whether a ConfigMap data value goes to the rule loader. ``RULE_FILE``
     does, ``NOT_A_RULE_FILE`` does not. An ``UNDECIDED`` value goes only when
     the rule loader loads a ``groups`` key from it.
@@ -696,12 +697,76 @@ def configmap_value_is_rule_file(text: "str | bytes", crdecode_binary: str | Non
     da-crdecode nor the rule loader reads it (a tab in its indentation, say)
     is not read and not reported when it sits in a ConfigMap — as on main,
     where PyYAML's parse error on a data value was passed over. A whole file
-    is not judged this way (``may_be_rule_file``)."""
-    decl = rule_file_declaration(text, crdecode_binary)
+    is not judged this way (``rule_files_in``)."""
+    decl = _rule_file_declaration(text, crdecode_binary)
     if decl != UNDECIDED:
         return decl == RULE_FILE
     (rf,) = prometheus_rule_text_results([("text", text)], read_binary)
-    return rf.problem is None and documents_declare_rule_groups(rf.documents)
+    return rf.problem is None and _documents_declare_rule_groups(rf.documents)
+
+
+#: ``(manifest, kind, key, text | None, problem | None, metadata.name | None)``
+_Keyed = "tuple[str, str, str, str | None, str | None, str | None]"
+
+
+#: The kinds whose documents deliver rule files to Prometheus.
+RULE_FILE_KINDS = ("ConfigMap", "PrometheusRule")
+
+
+def _manifest_keyed(path: str, docs: "list[Any]", only_declared: bool,
+                    crdecode_binary: str | None, binary: str | None,
+                    kinds: "tuple[str, ...]" = RULE_FILE_KINDS) -> "list[Any]":
+    """The rule files the documents *docs* of the manifest *path* (kubectl's
+    reading, every one an object) deliver, before the rule loader reads them
+    (see ``manifest_rule_file_results``)."""
+    keyed: "list[Any]" = []
+    for doc in docs:   # each a Kubernetes object: the reading's guarantee
+        kind = doc["kind"]
+        meta = doc.get("metadata")
+        name = meta.get("name") if isinstance(meta, dict) else None
+        name = name if isinstance(name, str) else None
+        if kind not in kinds:
+            continue
+        if kind == "PrometheusRule":
+            spec = doc.get("spec")
+            keyed.append((path, kind, "spec", json.dumps(spec if spec is not None else {}),
+                          None, name))
+        elif kind == "ConfigMap":
+            data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
+            for key, value in data.items():
+                if isinstance(value, str):
+                    if only_declared and not _configmap_value_is_rule_file(
+                            value, crdecode_binary, binary):
+                        continue
+                    keyed.append((path, kind, key, value, None, name))
+                else:
+                    keyed.append((path, kind, key, None,
+                                  "a ConfigMap data value must be a string", name))
+            bdata = doc.get("binaryData") if isinstance(doc.get("binaryData"), dict) else {}
+            for key, value in bdata.items():
+                try:
+                    text = base64.b64decode(str(value), validate=True).decode("utf-8")
+                except (ValueError, UnicodeDecodeError, binascii.Error):
+                    keyed.append((path, kind, key, None,
+                                  "binaryData value is not base64 of UTF-8 text", name))
+                else:
+                    if only_declared and not _configmap_value_is_rule_file(
+                            text, crdecode_binary, binary):
+                        continue
+                    keyed.append((path, kind, key, text, None, name))
+    return keyed
+
+
+def _read_keyed(keyed: "list[Any]", binary: str | None) -> "list[RuleFile]":
+    """The rule loader's reading of every keyed rule file, all in one run."""
+    readable = [(f"{p}#{k}", t) for p, _kind, k, t, _, _n in keyed if t is not None]
+    read = iter(prometheus_rule_text_results(readable, binary))
+    out = []
+    for path, kind, key, text, problem, name in keyed:
+        r = next(read) if text is not None else RuleFile(f"{path}#{key}", None, problem)
+        r.manifest, r.kind, r.key, r.object_name = path, kind, key, name
+        out.append(r)
+    return out
 
 
 def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
@@ -709,9 +774,11 @@ def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
                                crdecode_binary: str | None = None,
                                binary: str | None = None) -> "list[RuleFile]":
     """The rule files the Kubernetes manifests at *paths* deliver to
-    Prometheus, as Prometheus loads them. Each manifest is read the way
-    kubectl reads it (``da-crdecode``); then, all in one ``da-read
-    prometheus-rules`` run:
+    Prometheus, as Prometheus loads them — for files a caller KNOWS are
+    manifests (a file that may be a plain rule file goes to
+    ``rule_files_in``). Each manifest is read the way kubectl reads it
+    (``da-crdecode``; a ``kind: List`` as its items); then, all in one
+    ``da-read prometheus-rules`` run:
 
     * every ``data`` value and every ``binaryData`` value (base64, UTF-8) of a
       ``kind: ConfigMap`` document — the files a mounted ConfigMap holds;
@@ -719,62 +786,141 @@ def manifest_rule_file_results(paths: "Iterable[str | os.PathLike[str]]", *,
       YAML) — the rule file the Prometheus Operator writes from it.
 
     One :class:`RuleFile` per (manifest, key), in file order, with
-    ``manifest`` / ``kind`` / ``key`` set (``key`` is the data key, or
-    ``spec`` for a PrometheusRule) and ``path`` ``<manifest>#<key>``. A value
-    that cannot be a file (a data value that is not a string; ``binaryData``
-    that is not base64 of UTF-8) is a :class:`RuleFile` with that problem.
-    Documents of other kinds are not read. With *only_declared*, a
-    ConfigMap value is read only when it sets out to be a rule file
-    (``configmap_value_is_rule_file``) — for a ConfigMap that may also carry other
-    files (an Alertmanager template); without it every value is a rule file
-    and one that is not is refused. Raises :class:`InputRefused` naming the
-    manifest when kubectl's reading refuses it — a document in it that is no
-    Kubernetes object (a top-level list, a mapping with no ``kind``), or a
-    ``kind: List`` item kubectl would not apply, included (#3426): no
-    document of a manifest is passed over because of its shape. A List's
-    ConfigMaps are read as its items.
+    ``manifest`` / ``kind`` / ``key`` / ``object_name`` (the document's
+    ``metadata.name``) set (``key`` is the data key, or ``spec`` for a
+    PrometheusRule) and ``path`` ``<manifest>#<key>``. A value that cannot be
+    a file (a data value that is not a string; ``binaryData`` that is not
+    base64 of UTF-8) is a :class:`RuleFile` with that problem. Documents of
+    other kinds are not read. With *only_declared*, a ConfigMap value is read
+    only when it sets out to be a rule file (a ``groups`` key in its YAML
+    reading, or — when no YAML reading reads it — in the rule loader's) — for
+    a ConfigMap that may also carry other files (an Alertmanager template);
+    without it every value is a rule file and one that is not is refused.
+    Raises :class:`InputRefused` naming the manifest when kubectl's reading
+    refuses it — a document in it that is no Kubernetes object (a top-level
+    list, a mapping with no ``kind``), or a ``kind: List`` item kubectl would
+    not apply, included (#3426): no document of a manifest is passed over
+    because of its shape.
     """
-    keyed: "list[tuple[str, str, str, str | None, str | None]]" = []
+    keyed: "list[Any]" = []
     for path in paths:
         path = os.fspath(path)
         try:
             docs = kubernetes_documents(path, binary=crdecode_binary)
         except InputRefused as e:
             raise InputRefused(f"{path}: {e}", e.stderr_lines) from e
-        for doc in docs:   # each a Kubernetes object: the reading's guarantee
-            kind = doc["kind"]
-            if kind == "PrometheusRule":
-                spec = doc.get("spec")
-                keyed.append((path, kind, "spec", json.dumps(spec if spec is not None else {}),
-                              None))
-            elif kind == "ConfigMap":
-                data = doc.get("data") if isinstance(doc.get("data"), dict) else {}
-                for key, value in data.items():
-                    if isinstance(value, str):
-                        if only_declared and not configmap_value_is_rule_file(
-                                value, crdecode_binary, binary):
-                            continue
-                        keyed.append((path, kind, key, value, None))
-                    else:
-                        keyed.append((path, kind, key, None,
-                                      "a ConfigMap data value must be a string"))
-                bdata = doc.get("binaryData") if isinstance(doc.get("binaryData"), dict) else {}
-                for key, value in bdata.items():
-                    try:
-                        text = base64.b64decode(str(value), validate=True).decode("utf-8")
-                    except (ValueError, UnicodeDecodeError, binascii.Error):
-                        keyed.append((path, kind, key, None,
-                                      "binaryData value is not base64 of UTF-8 text"))
-                    else:
-                        if only_declared and not configmap_value_is_rule_file(
-                                text, crdecode_binary, binary):
-                            continue
-                        keyed.append((path, kind, key, text, None))
-    readable = [(f"{p}#{k}", t) for p, _kind, k, t, _ in keyed if t is not None]
-    read = iter(prometheus_rule_text_results(readable, binary))
-    out = []
-    for path, kind, key, text, problem in keyed:
-        r = next(read) if text is not None else RuleFile(f"{path}#{key}", None, problem)
-        r.manifest, r.kind, r.key = path, kind, key
-        out.append(r)
+        keyed += _manifest_keyed(path, docs, only_declared, crdecode_binary, binary)
+    return _read_keyed(keyed, binary)
+
+
+class RuleFileSourcesRefused(InputRefused):
+    """Files ``rule_files_in`` cannot tell the rule files of: no reader reads
+    them as a manifest or as a rule file. ``files`` is ``[(path, reason)]``,
+    every such file, in the order given; ``stderr_lines`` names each."""
+
+    def __init__(self, files: "list[tuple[str, str]]") -> None:
+        super().__init__(f"{len(files)} file(s) no reader reads as a Kubernetes manifest "
+                         "or a rule file", [f"{p}: {why}" for p, why in files])
+        self.files = list(files)
+
+
+#: ``rule_files_in``'s *other_yaml*: a file that reads as YAML but is neither
+#: a manifest nor a rule file is refused (``REFUSE``) or holds no rule file
+#: (``NO_RULE_FILES`` — a directory that also holds other YAML: a recipe, a
+#: tenant ``_defaults.yaml``, the registry beside the packs).
+REFUSE = "refuse"
+NO_RULE_FILES = "no-rule-files"
+
+
+def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
+                  other_yaml: str = REFUSE,
+                  kinds: "tuple[str, ...]" = RULE_FILE_KINDS,
+                  only_declared: bool = True,
+                  keep_refusals: bool = False,
+                  crdecode_binary: str | None = None,
+                  binary: str | None = None) -> "dict[str, list[RuleFile]]":
+    """⛔ THE one answer to "which rule files does each file hand to
+    Prometheus" (#3426). No tool decides it from a reading of its own.
+
+    Each path (keyed ``os.fspath(path)``, in the order given) is read:
+
+    1. as the Kubernetes manifest kubectl reads (``da-crdecode``; a
+       ``kind: List`` is its items): its rule files are its ConfigMaps'
+       ``data`` / ``binaryData`` values and its PrometheusRules' ``spec``
+       (``manifest_rule_file_results``, *only_declared* as there; *kinds*
+       narrows it, e.g. to ConfigMaps alone). A manifest with none holds no
+       rule file (``[]``).
+    2. When that reading refuses it: with the any-YAML reading
+       (``da-crdecode --any-shape``). A file with a document that is a
+       mapping declaring ``groups`` is a plain rule file (one
+       :class:`RuleFile`, ``kind`` / ``key`` None, ``manifest`` the path);
+       the rule loader gives the verdict on its content (a second document,
+       say). Any other YAML is refused, or with ``other_yaml=NO_RULE_FILES``
+       holds no rule file — unless a document of it has a ``kind``: a
+       manifest kubectl refuses is refused in either mode.
+    3. When that reading refuses it too (sigs.k8s.io/yaml has no JSON for an
+       annotation value ``.inf``, say): Prometheus' rule loader decides. A
+       file it reads ``groups`` from is a rule file; any other is refused.
+
+    Refused files — every one, each with its readers' reason — raise
+    :class:`RuleFileSourcesRefused`; with *keep_refusals* each is instead a
+    :class:`RuleFile` with that ``problem`` and ``unread`` True, for a caller
+    that reports per file. A rule file the rule loader refuses is a
+    :class:`RuleFile` with its ``problem`` either way (``require_read``
+    raises on it). Raises :class:`ConsumerReadError` when a binary cannot
+    be had."""
+    keys = [os.fspath(p) for p in paths]
+    out: "dict[str, list[RuleFile]]" = {p: [] for p in keys}
+    if not keys:
+        return out
+    manifests = kubernetes_documents_of(keys, crdecode_binary, keep_refusals=True)
+    not_manifests = [p for p in keys if isinstance(manifests[p], ConsumerReadError)]
+    as_yaml = any_yaml_documents_of(not_manifests, crdecode_binary, keep_refusals=True)
+    plain, undecided, refused = [], [], {}
+    for p in not_manifests:
+        why = _reason(manifests[p])
+        docs = as_yaml[p]
+        if isinstance(docs, ConsumerReadError):
+            undecided.append(p)
+        elif _documents_declare_rule_groups(docs):
+            plain.append(p)
+        elif other_yaml != NO_RULE_FILES or any(isinstance(d, dict) and "kind" in d
+                                                for d in docs):
+            # A document with a `kind` sets out to be a Kubernetes object:
+            # a manifest kubectl refuses is named even where other YAML is
+            # allowed, never taken for a file without rule files.
+            refused[p] = (f"kubectl's reading refuses it ({why}), and it is no rule file "
+                          "(no document declares `groups`)")
+    keyed: "list[Any]" = []
+    for p in keys:
+        if p not in manifests or isinstance(manifests[p], ConsumerReadError):
+            continue
+        keyed += _manifest_keyed(p, manifests[p], only_declared, crdecode_binary, binary, kinds)
+    for rf in _read_keyed(keyed, binary):
+        out[rf.manifest].append(rf)
+    for p, rf in zip(plain, prometheus_rule_file_results(plain, binary)):
+        rf.manifest = p
+        out[p].append(rf)
+    for p, rf in zip(undecided, prometheus_rule_file_results(undecided, binary)):
+        if rf.problem is None and _documents_declare_rule_groups(rf.documents):
+            rf.manifest = p
+            out[p].append(rf)
+            continue
+        loader = (f"Prometheus' rule loader refuses it: {rf.problem}" if rf.problem is not None
+                  else "Prometheus' rule loader finds no `groups` in it")
+        if rf.problem is None and other_yaml == NO_RULE_FILES:
+            continue
+        refused[p] = (f"neither kubectl's reading ({_reason(manifests[p])}) nor the "
+                      f"any-YAML reading ({_reason(as_yaml[p])}) reads it; {loader}")
+    if refused and not keep_refusals:
+        raise RuleFileSourcesRefused([(p, refused[p]) for p in keys if p in refused])
+    for p, why in refused.items():
+        rf = RuleFile(p, None, why)
+        rf.manifest, rf.unread = p, True
+        out[p] = [rf]
     return out
+
+
+def _reason(e: ConsumerReadError) -> str:
+    """A refusal's reason in one line: the binary's stderr, else the message."""
+    return "; ".join(e.stderr_lines) or str(e)

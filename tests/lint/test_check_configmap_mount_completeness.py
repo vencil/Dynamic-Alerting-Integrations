@@ -92,3 +92,20 @@ def test_a_list_item_kubectl_would_not_apply_is_named(tmp_path, capsys):
     d = _tree(tmp_path, _PACK + "---\n" + listed, _DEPLOYMENT)
     assert lint.main(["--monitor-dir", str(d)]) == lint.EXIT_CALLER_ERROR
     assert "a list inside a list is not read" in capsys.readouterr().err
+
+
+def test_a_configmap_with_no_name_is_named(tmp_path, capsys):
+    # #3426: it used to be dropped (no name, no pack) and the run passed.
+    d = _tree(tmp_path, _PACK + "---\napiVersion: v1\nkind: ConfigMap\ndata: {x.yml: ''}\n",
+              _DEPLOYMENT)
+    assert lint.main(["--monitor-dir", str(d)]) == lint.EXIT_CALLER_ERROR
+    assert "(object 2): a ConfigMap with no string metadata.name" in capsys.readouterr().err
+
+
+def test_a_configmap_whose_data_is_no_mapping_is_named(tmp_path, capsys):
+    # #3426: it used to be a pack with no keys — mounted whole, so it passed.
+    d = _tree(tmp_path, _PACK.replace("data:\n  demo.yml: |\n    groups: []\n", "data: [x]\n"),
+              _DEPLOYMENT.replace("              items:\n"
+                                  "              - {key: demo.yml, path: demo.yml}\n", ""))
+    assert lint.main(["--monitor-dir", str(d)]) == lint.EXIT_CALLER_ERROR
+    assert "(prometheus-rules-demo): its data is not a mapping" in capsys.readouterr().err

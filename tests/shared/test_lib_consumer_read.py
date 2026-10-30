@@ -95,6 +95,8 @@ def test_a_usage_line_is_no_refusal(tmp_path) -> None:
     with pytest.raises(cr.ConsumerReadError) as exc:
         cr.any_yaml_text_documents("a: 1\n", binary=old)
     assert not isinstance(exc.value, cr.InputRefused)
+    assert "older da-crdecode? rebuild it" in str(exc.value)
+    assert "--any-shape" in str(exc.value)
 
 
 def test_files_come_back_in_the_order_given(tmp_path) -> None:

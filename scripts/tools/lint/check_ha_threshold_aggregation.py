@@ -121,17 +121,13 @@ def check_groups(groups: list) -> List[Tuple[str, str, str]]:
 
 
 def check_file(path: Path) -> List[Tuple[str, str, str]]:
-    """`check_groups` over one file: a Kubernetes manifest (a ConfigMap or a
-    PrometheusRule, by its kubectl reading) or else a raw rule pack. Raises
-    `RuleFilesRefused` when Prometheus' rule loader refuses a rule file in it."""
-    try:
-        docs = _lib_consumer_read.kubernetes_documents(str(path))
-    except _lib_consumer_read.InputRefused:
-        docs = []
-    manifest = any(d["kind"] in ("ConfigMap", "PrometheusRule")   # objects (#3426)
-                   for d in docs)
+    """`check_groups` over one file: whatever rule files it hands to
+    Prometheus (`_lib_consumer_read.rule_files_in`, #3426: a manifest's
+    ConfigMaps and PrometheusRules, or a raw rule pack). Raises
+    `RuleFileSourcesRefused` when no reader reads it, `RuleFilesRefused`
+    when Prometheus' rule loader refuses a rule file in it."""
     rule_files = _lib_consumer_read.require_read(
-        read_rule_files([], [path]) if manifest else read_rule_files([path], []))
+        _lib_consumer_read.rule_files_in([path], only_declared=False)[str(path)])
     return [f for rf in rule_files for f in check_groups(rf.groups)]
 
 

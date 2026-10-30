@@ -272,14 +272,13 @@ def _check_expr(expr: str) -> tuple[str, str | None]:
 
 def read_rule_packs() -> "list[_lib_consumer_read.RuleFile]":
     """The rule files under rule-packs/, as Prometheus' rule loader reads them
-    (#3206, ADR-036 §12: one `da-read prometheus-rules` run). A file is a
-    rule file when it sets out to be one — a `groups:` key in its plain YAML
-    reading — or when that reading refuses it, which cannot rule it out
-    (`may_be_rule_file`); the registry beside the packs is not. Refused ones
+    (#3206, ADR-036 §12). Which files hold rule files is
+    `_lib_consumer_read.rule_files_in`'s answer (#3426); the registry beside
+    the packs holds none. Refused ones — a file no reader reads included —
     are in the list with their `problem`."""
-    files = [f for f in _rule_pack_files()
-             if _lib_consumer_read.may_be_rule_file(f.read_bytes())]
-    return _lib_consumer_read.prometheus_rule_file_results(files)
+    found = _lib_consumer_read.rule_files_in(
+        _rule_pack_files(), other_yaml=_lib_consumer_read.NO_RULE_FILES, keep_refusals=True)
+    return [rf for rfs in found.values() for rf in rfs]
 
 
 class RulePacksRefused(Exception):

@@ -436,9 +436,16 @@ func TestManifestExpandsLists(t *testing.T) {
 		{"items-null", "apiVersion: v1\nkind: List\nitems: null\n", `{"documents":[],"differs_from_text":[]}`},
 		{"items-empty", "apiVersion: v1\nkind: List\nitems: []\n---\nkind: A\n",
 			`{"documents":[{"kind":"A"}],"differs_from_text":[[]]}`},
-		// An item whose `items` is null is an object to kubectl.
+		// An item whose `items` is no JSON array is an object to kubectl
+		// (cli-runtime v0.37.0, measured): null, a string, a number, an object.
 		{"item-items-null", "kind: List\nitems:\n- {apiVersion: v1, kind: ConfigMap, items: null}\n",
 			`{"documents":[{"apiVersion":"v1","kind":"ConfigMap","items":null}],"differs_from_text":[[]]}`},
+		{"item-items-string", "kind: List\nitems:\n- {apiVersion: v1, kind: ConfigMap, items: s}\n",
+			`{"documents":[{"apiVersion":"v1","kind":"ConfigMap","items":"s"}],"differs_from_text":[[]]}`},
+		{"item-items-number", "kind: List\nitems:\n- {apiVersion: v1, kind: ConfigMap, items: 3}\n",
+			`{"documents":[{"apiVersion":"v1","kind":"ConfigMap","items":3}],"differs_from_text":[[]]}`},
+		{"item-items-object", "kind: List\nitems:\n- {apiVersion: v1, kind: ConfigMap, items: {x: 1}}\n",
+			`{"documents":[{"apiVersion":"v1","kind":"ConfigMap","items":{"x":1}}],"differs_from_text":[[]]}`},
 		// The differences of item 1 go to item 1, its path from the item.
 		{"differs-per-item", "kind: List\nitems:\n- {apiVersion: v1, kind: A, x: {b: c}}\n" +
 			"- {apiVersion: v1, kind: B, metadata: {labels: {010: x, yes: y}}}\n",
@@ -474,6 +481,8 @@ func TestManifestRefusesBadListItems(t *testing.T) {
 			"items[1] (line 5): it is not a Kubernetes object: it has no `apiVersion` (kubectl: Object 'apiVersion' is missing)"},
 		{"nested-list", head + "- apiVersion: v1\n  kind: List\n  items: []\n", "items[1] (line 5): a list inside a list is not read"},
 		{"item-with-items", head + "- {apiVersion: v1, kind: ConfigMap, items: [{kind: A}]}\n", "a list inside a list is not read"},
+		// An empty array is a list to kubectl too.
+		{"item-with-empty-items", head + "- {apiVersion: v1, kind: ConfigMap, items: []}\n", "items[1] (line 5): a list inside a list is not read"},
 		{"items-not-a-list", "kind: List\nitems: {a: 1}\n", "a list document's `items` is object, not a list"},
 		{"list-without-kind", "items:\n- {apiVersion: v1, kind: A}\n", "it has no `kind`"},
 		{"list-text-differs", "kind: List\nmetadata: {labels: {010: x}}\nitems:\n- {apiVersion: v1, kind: A}\n",
