@@ -1,0 +1,20 @@
+# Build context of this Dockerfile: the REPO ROOT (#3425) — the builder runs
+# scripts/ops/go_build.sh, the one place the repo's `go build` flags are
+# written, and that file sits outside this module directory. Docker BuildKit
+# reads THIS file (`<Dockerfile>.dockerignore`, next to the Dockerfile) in
+# place of the context root's .dockerignore, so the context stays what it was
+# before the move — this module — plus that one script.
+#
+# Allowlist: exclude everything, re-include what the Dockerfile COPYs.
+# Requires BuildKit (CI uses docker/setup-buildx; Docker 23+ defaults to it);
+# the legacy builder ignores this file and would send the root context.
+*
+!scripts/ops/go_build.sh
+!components/threshold-exporter/app/
+
+# Container SAST baseline (epic #448 / TRK-311): the `*` above already covers
+# .git/ .github/ scripts/ tests/ docs/ at the root; these keep stray docs,
+# logs and env files out of the re-included module, at any depth.
+**/*.md
+**/*.log
+**/.env*

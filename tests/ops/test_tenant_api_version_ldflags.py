@@ -11,7 +11,6 @@ turns this red); the last is behaviour — a binary built with the same
 from __future__ import annotations
 
 import json
-import os
 import re
 import shutil
 import subprocess
@@ -19,14 +18,15 @@ from pathlib import Path
 
 import pytest
 import yaml
+from _go_build import go_build_argv
 
 REPO = Path(__file__).resolve().parents[2]
 DOCKERFILE = REPO / "components" / "tenant-api" / "Dockerfile"
 RELEASE = REPO / ".github" / "workflows" / "release.yaml"
 SERVER = REPO / "components" / "tenant-api" / "cmd" / "server"
 
-#: What the Dockerfile's go build must pass to the linker.
-LDFLAG = "-X main.version=${VERSION}"
+#: What the Dockerfile's build (scripts/ops/go_build.sh, #3425) must pass to the linker.
+LDFLAG = '-X "main.version=${VERSION}"'
 
 
 def _dockerfile_instructions() -> list[str]:
@@ -48,8 +48,8 @@ def _dockerfile_instructions() -> list[str]:
 def test_dockerfile_passes_the_version_arg_to_the_linker():
     ins = _dockerfile_instructions()
     builds = [i for i, s in enumerate(ins)
-              if s.startswith("RUN ") and " go build " in s and "./cmd/server" in s]
-    assert len(builds) == 1, f"expected one go build of ./cmd/server, got {builds}"
+              if s.startswith("RUN ") and "scripts/ops/go_build.sh" in s and "./cmd/server" in s]
+    assert len(builds) == 1, f"expected one go_build.sh build of ./cmd/server, got {builds}"
     build = ins[builds[0]]
     assert LDFLAG in build, f"the go build does not pass {LDFLAG!r}: {build}"
     # The ARG must be declared in the same stage, before the build.
@@ -77,11 +77,10 @@ def test_the_linked_symbol_is_what_state_show_prints(tmp_path):
     if go is None:
         pytest.fail("`go` is not on PATH: the linked version cannot be measured")
     binary = tmp_path / "tenant-api"
-    proc = subprocess.run([go, "build", "-buildvcs=false", "-ldflags", "-X main.version=v9.9.9-test",
-                           "-o", str(binary), "./cmd/server"],
-                          cwd=SERVER.parents[1], capture_output=True, text=True,
-                          encoding="utf-8", errors="replace", timeout=900,
-                          env={**os.environ, "CGO_ENABLED": "0"})
+    proc = subprocess.run(go_build_argv(SERVER.parents[1], "./cmd/server", binary,
+                                        ldflags_x=["main.version=v9.9.9-test"]),
+                          capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=900)
     assert proc.returncode == 0, proc.stderr
     state = tmp_path / "state"
     state.mkdir()

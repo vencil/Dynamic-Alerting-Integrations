@@ -68,7 +68,12 @@ Renovate（repo 根目錄 `renovate.json`，由 `.github/workflows/renovate.yaml
 | GitHub Actions | 無單一 SSOT：同一個 action 在全部 workflow 必須同一個 ref | `.github/workflows/**`（Renovate 的 github-actions manager 以單一 grouped PR 一起升，見上節） | `test_toolchain_pin_parity.py`（single version）、`tests/ops/test_renovate_config.py`（grouping） |
 | Python 套件 | `requirements/ci-constraints.txt` | 每個 `pip install … -c`、devcontainer `postCreateCommand`、`.claude/hooks/session-start.sh` | `check_unpinned_deps`、`check_devcontainer_dep_parity.py` |
 
+## Go 建置旗標
+
+版本之外，`go build` 的旗標也只有一個來源：[`scripts/ops/go_build.sh`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/scripts/ops/go_build.sh)（`CGO_ENABLED=0`、`-trimpath`、`-ldflags "-s -w"`、`-buildvcs=false`；每個旗標為何存在寫在腳本頂部）。da-tools 映像的 `build.sh`、tenant-api、recipe-preview、threshold-exporter 與 e2e-bench receiver 的 Dockerfile（build context 都是 repo 根；後兩者以同目錄的 `Dockerfile.dockerignore` 把 context 收窄回自己的模組加上這支腳本）、`release.yaml` 的離線 binary、CI workflow、Makefile 的 `*-build` 目標、pytest fixture（經 `tests/_go_build.py`）與 Go 測試都經它建。守衛 `tests/ops/test_go_build_ssot.py` 分兩半。保證來自產物那半：量測試 session 建出的 binary，`go version -m` 要是 `CGO_ENABLED=0`、`-trimpath=true`，`go tool nm` 要讀不到符號表（`-trimpath` 建的 binary 不記 `-ldflags`，strip 只能這樣讀）；腳本拿掉這三項之一、或測試繞過腳本建出的 binary 少了其中之一，這半就紅；`-buildvcs=false` 不在這半的檢查範圍內，繞過腳本但三項都對的建置也抓不到。另一半結構化掃描追蹤檔裡直接執行的 `go build`，只認它 docstring 列出的形狀（命令位置的 `go`／名字含 go 的變數，接 `build` 或 `-C <dir> build`；Python 與 Go 的 argv 字面值），`eval`、執行期組出的 argv 等寫法掃不到。
+
 ## 已知未統一（刻意保留，附理由）
+
 
 - **Container SAST job 的 Helm 仍是 3.x**，其餘 CI 與 dev container 是 4.x。它必須與 `check_iac_helm.py` 的 Docker fallback 同版，而那個 fallback 是 image + digest 釘住的；要升，得連同 `HELM_VERSION`／`HELM_DIGEST` 一起重新解析 digest。守衛已把這一對綁住，升的時候不會只動一半。
 - **hadolint、kube-linter、pint、golangci-lint 落後上游**：每一個都有「CI 二進位 + wrapper 的 digest-pinned fallback image」兩處要一起動，升版需要重新解析 image digest，另開 PR。

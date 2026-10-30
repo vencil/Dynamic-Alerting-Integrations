@@ -254,7 +254,7 @@ OWN_JSON = {
     "ops/check_alert.py": 3,
     "ops/config_diff.py": 1,
     "ops/cutover_tenant.py": 1,
-    "ops/diagnose.py": 4,
+    "ops/diagnose.py": 3,
     "ops/discover_instance_mappings.py": 4,
     "ops/drift_detect.py": 1,
     "ops/explain_keys.py": 2,

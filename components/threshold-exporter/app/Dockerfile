@@ -10,11 +10,16 @@
 # the distroless image at the bottom of the file.
 FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine3.23 AS builder
 
+# Build context: the REPO ROOT (#3425), so the build runs
+# scripts/ops/go_build.sh — the one place the repo's `go build` flags are
+# written. Dockerfile.dockerignore next to this file narrows the context back
+# to this module plus that script (BuildKit). Build with:
+#   docker buildx build -f components/threshold-exporter/app/Dockerfile .
 WORKDIR /app
-COPY go.mod go.sum ./
-# go.mod replaces gopkg.in/yaml.v3 with this in-context directory (#2681);
+COPY components/threshold-exporter/app/go.mod components/threshold-exporter/app/go.sum ./
+# go.mod replaces gopkg.in/yaml.v3 with this in-module directory (#2681);
 # `go mod download` reads the replacement's go.mod, so it must be here first.
-COPY third_party ./third_party
+COPY components/threshold-exporter/app/third_party ./third_party
 RUN go mod download
 
 # main package files live at app root; pkg/ holds the config library the
@@ -23,11 +28,12 @@ RUN go mod download
 # packages the main package and cmd/ import. All three must be
 # COPY'd or `go build` fails with "no required module provides package
 # github.com/vencil/threshold-exporter/<pkg|internal/...>".
-COPY *.go ./
-COPY pkg ./pkg
-COPY internal ./internal
+COPY components/threshold-exporter/app/*.go ./
+COPY components/threshold-exporter/app/pkg ./pkg
+COPY components/threshold-exporter/app/internal ./internal
+COPY scripts/ops/go_build.sh /opt/go_build.sh
 ARG TARGETOS TARGETARCH
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /threshold-exporter .
+RUN sh /opt/go_build.sh --goos "${TARGETOS}" --goarch "${TARGETARCH}" . . /threshold-exporter
 
 FROM gcr.io/distroless/static-debian12:nonroot
 
