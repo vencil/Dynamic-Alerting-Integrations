@@ -96,13 +96,13 @@ func TestValidate_ValueRatchet_NoConfigDirIsStrict(t *testing.T) {
 	}
 }
 
-// Ratchet moves the value findings only: an unknown key the base also had
-// still blocks.
+// Ratchet moves the value findings only: an unknown profile the base also
+// had still blocks.
 func TestValidate_ValueRatchet_OtherErrorsStay(t *testing.T) {
 	t.Parallel()
-	doc := vrBody("    _silent_mode: purple\n    _silent_mod: warning\n")
+	doc := vrBody("    _silent_mode: purple\n    _profile: nope\n")
 	errs, notices := validateOn(t, doc, doc)
-	if countSub(errs, `unknown reserved key "_silent_mod"`) != 1 || countSub(errs, purpleNote) != 0 ||
+	if countSub(errs, `unknown profile "nope"`) != 1 || countSub(errs, purpleNote) != 0 ||
 		countSub(notices, purpleNote) != 1 {
 		t.Errorf("errs=%q notices=%q", errs, notices)
 	}

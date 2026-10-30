@@ -223,7 +223,7 @@ Prometheus 文字格式(`text/plain; version=0.0.4`)。「何時出現」寫「�
 | `tenant_api_human_socket_up` | Gauge | 設了 `--human-socket` | 1 = human-plane Unix socket 回應了 readiness 自我探測 |
 | `tenant_api_forge_circuit_state{provider}` | Gauge | PR／MR 寫回模式 | forge 斷路器狀態:0 = closed、1 = half-open、2 = open(forge 故障,寫入回 503) |
 | `tenant_api_forge_pr_conflicts{provider}` | Gauge | PR／MR 寫回模式,tracker 同步過一次後 | 上次同步時處於 merge conflict 的 PR／MR 數 |
-| `tenant_api_generator_rejections_total{reason}` | Counter | 恆有 | 產生器容器沒能判定而拒收的寫入數(`GENERATOR_REJECTED`／可重試的 `GENERATOR_BUSY`,#2903、#3202);全部未寫入。值:`deadline` / `memory` / `incomplete` / `git_read` / `busy` / `too_large` / `invalid_request` / `mismatch` / `no_time` / `normalized` |
+| `tenant_api_generator_rejections_total{reason}` | Counter | 恆有 | 產生器容器沒能判定而拒收的寫入數(`GENERATOR_REJECTED`／可重試的 `GENERATOR_BUSY`,#2903、#3202);全部未寫入。值:`deadline` / `memory` / `incomplete` / `git_read` / `busy` / `too_large` / `invalid_request` / `mismatch` / `no_time` / `normalized` / `key_verdict_no_time` / `key_verdict_deadline` / `key_verdict_memory` / `key_verdict_error` / `key_verdict_undecidable` / `key_verdict_platform_file`;`key_verdict_*` 是產生器放行、但鍵的判決沒判完而拒收的(ADR-038 決定 5),其中 `key_verdict_no_time`、`key_verdict_deadline` 可重試 |
 | `tenant_api_generator_scrape_success` | Gauge | 恆有 | 1 = 這次 scrape 讀到產生器容器自己的 `/metrics` 並附在輸出最後(它只有 Unix socket,由 tenant-api 轉出:`da_generator_*`,含版本 `da_generator_build_info`、判定峰值記憶體 `da_generator_judgement_peak_rss_bytes`,告警 `GeneratorJudgementMemoryNearLimit` 讀它);0 = 這次讀取失敗(逾時 2 秒、連不上或讀取錯誤皆是),不附 |
 
 ### Request 對應

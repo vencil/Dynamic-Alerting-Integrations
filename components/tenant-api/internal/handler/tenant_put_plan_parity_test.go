@@ -144,7 +144,7 @@ func parityCases() []parityCase {
 				"      overrides:\n        - window: \"01:00-02:00\"\n          value: \"-Inf:critical\"\n",
 			want: http.StatusBadRequest, wantText: "is not a finite number"},
 		{name: "invalid_body", file: parityOwn, groups: "in-team",
-			body: "tenants:\n  " + parityIn + ":\n    no_such_key_xyz: \"1\"\n", want: http.StatusBadRequest, tree: true},
+			body: "tenants:\n  " + parityIn + ":\n    _profile: no_such_profile_xyz\n", want: http.StatusBadRequest, tree: true},
 		{name: "accepted", file: parityOwn, groups: "in-team",
 			body: parityBodyIn, want: http.StatusOK},
 		{name: "accepted_anchor_inside_own_section",

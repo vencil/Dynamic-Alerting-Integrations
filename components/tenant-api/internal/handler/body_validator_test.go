@@ -49,14 +49,13 @@ func TestValidatePatchMap_ReservedValuesAreNotJudgedHere(t *testing.T) {
 	}
 }
 
-// A `_` key the registry does not list is read by nothing: refused, with the
-// same reason whatever the key (`_timeout_ms` was a hand-kept rule here).
-func TestValidatePatchMap_UnregisteredUnderscoreKey(t *testing.T) {
+// Whether any reader reads a key is the shared key verdict's to judge
+// (ADR-038 §11), not this check's: an unregistered `_` key or a `_routing`
+// key the generator does not read is no violation here.
+func TestValidatePatchMap_UnreadKeysAreTheKeyVerdicts(t *testing.T) {
 	t.Parallel()
-	for _, k := range []string{"_timeout_ms", "_silent_mod", "_some_future_reserved_key"} {
-		v := validatePatchMap(map[string]string{k: "1"}, "operations[0].patch")
-		if len(v) != 1 || v[0].Field != `operations[0].patch["`+k+`"]` ||
-			v[0].Reason != "unknown reserved key (typo?); nothing reads it" {
+	for _, k := range []string{"_timeout_ms", "_silent_mod", "_some_future_reserved_key", "_routing_profle", "_routing_receiver_type"} {
+		if v := validatePatchMap(map[string]string{k: "1"}, "operations[0].patch"); len(v) != 0 {
 			t.Errorf("%s: %+v", k, v)
 		}
 	}
@@ -78,9 +77,10 @@ func TestValidatePatchMap_MultipleViolations_AllReported(t *testing.T) {
 	// Per #134 spec: report ALL violations, not first-only — matches
 	// PR-2 forbidden-member listing UX (one round-trip to fix everything).
 	patch := map[string]string{
-		"_timeout_ms":     "99999999999", // unregistered
-		"_routing_profle": "p",           // unknown routing key
-		"_metadata":       "env: prod",   // a mapping
+		strings.Repeat("k", maxPatchKeyLen+1): "v",         // an oversized key
+		"_custom_alerts":                      "x",         // a list
+		"_metadata":                           "env: prod", // a mapping
+		"_routing_profle":                     "p",         // the key verdict's: no violation
 	}
 	v := validatePatchMap(patch, "operations[0].patch")
 	if len(v) != 3 {
@@ -93,8 +93,8 @@ func TestValidatePatchMap_MultipleViolations_AllReported(t *testing.T) {
 		gotFields[vio.Field] = true
 	}
 	wantFields := []string{
-		`operations[0].patch["_timeout_ms"]`,
-		`operations[0].patch["_routing_profle"]`,
+		`operations[0].patch["` + strings.Repeat("k", maxPatchKeyLen+1) + `"]`,
+		`operations[0].patch["_custom_alerts"]`,
 		`operations[0].patch["_metadata"]`,
 	}
 	for _, want := range wantFields {
@@ -283,11 +283,11 @@ func TestWriteValidationErrors_JSONShape(t *testing.T) {
 
 func TestBatchTenants_BodyValidation_RejectsBadValue(t *testing.T) {
 	t.Parallel()
-	// Fixture: one op with an unregistered `_` key (#3227: refused by the
-	// registry, no longer by a hand-kept integer rule)
+	// Fixture: one op with a key a patch cannot set (a mapping). (An
+	// unregistered `_` key is the shared key verdict's since ADR-038 §11.)
 	body := bytes.NewBufferString(`{
 		"operations": [
-			{"tenant_id": "db-a", "patch": {"_timeout_ms": "99999999999"}}
+			{"tenant_id": "db-a", "patch": {"_metadata": "env: prod"}}
 		]
 	}`)
 
@@ -317,10 +317,10 @@ func TestBatchTenants_BodyValidation_RejectsBadValue(t *testing.T) {
 		t.Errorf("expected at least 1 violation, got 0")
 	}
 	first, _ := vios[0].(map[string]any)
-	if !strings.Contains(first["field"].(string), "_timeout_ms") {
-		t.Errorf("expected violation field referencing _timeout_ms, got %v", first["field"])
+	if !strings.Contains(first["field"].(string), "_metadata") {
+		t.Errorf("expected violation field referencing _metadata, got %v", first["field"])
 	}
-	if first["reason"] != "unknown reserved key (typo?); nothing reads it" {
+	if reason, _ := first["reason"].(string); !strings.HasPrefix(reason, "_metadata is a mapping") {
 		t.Errorf("reason = %v", first["reason"])
 	}
 }
@@ -331,7 +331,7 @@ func TestBatchTenants_BodyValidation_ReportsAllViolations(t *testing.T) {
 	body := bytes.NewBufferString(`{
 		"operations": [
 			{"tenant_id": "db-a", "patch": {"_namespaces": "ns-a"}},
-			{"tenant_id": "db-b", "patch": {"_timeout_ms": "abc"}}
+			{"tenant_id": "db-b", "patch": {"_custom_alerts": "abc"}}
 		]
 	}`)
 

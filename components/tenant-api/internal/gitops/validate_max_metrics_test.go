@@ -21,7 +21,7 @@ func TestValidate_RootMaxMetricsPerTenantDoesNotGateWrites(t *testing.T) {
 		wantErrs bool
 	}{
 		"clean, over cap": {"tenants:\n  tx:\n    m1_x: \"2\"\n    m2_x: \"3\"\n    m3_x: \"4\"\n", false},
-		"unknown key":     {"tenants:\n  tx:\n    m1_x: \"2\"\n    not_a_default_x: \"3\"\n", true},
+		"unknown profile": {"tenants:\n  tx:\n    m1_x: \"2\"\n    _profile: nope\n", true},
 	}
 	run := func(t *testing.T, capLine, body string) (errs, notices []string) {
 		t.Helper()

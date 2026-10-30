@@ -484,42 +484,60 @@ func TestValidateWrites_KeyVerdictOfTheMatchingPassOnly(t *testing.T) {
 	}
 }
 
-// A verdict that did not complete keeps its reason, never the service's
-// message (it can carry a platform path or stderr); a pass without one
-// (an older service) is "not reported", never an empty complete verdict.
-func TestValidateWrites_KeyVerdictNotCompletedOrNotReported(t *testing.T) {
+// ADR-038 decision 5: a pass whose key verdict did not complete refuses the
+// write — retryable (429) only when time ran out — and never passes on the
+// service's message (it can carry a platform path or stderr); a pass without
+// one (an image older than that decision) is VALIDATOR_UNAVAILABLE.
+func TestValidateWrites_KeyVerdictNotCompletedOrNotReportedRefuses(t *testing.T) {
 	t.Parallel()
+	const secret = "da-guard: /srv/conf.d/_defaults.yaml killed"
 	for name, tc := range map[string]struct {
-		kv   any
-		want *gitops.KeyVerdict
+		kv        any
+		reason    string
+		retryable bool
 	}{
-		"not completed": {map[string]any{"status": "not_completed", "reason": "memory", "tenants": 4,
-			"seconds": 1.5, "message": "da-guard: /srv/conf.d/_defaults.yaml killed"},
-			&gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: "memory"}},
-		"absent": {nil, &gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: gitops.KeyVerdictNotReported}},
-		// A status this tenant-api does not know is no complete verdict.
-		"unknown status": {map[string]any{"status": "partial", "reason": "x"},
-			&gitops.KeyVerdict{Status: gitops.KeyVerdictNotCompleted, Reason: "x"}},
+		"no_time":       {map[string]any{"status": "not_completed", "reason": "no_time", "message": secret}, ReasonKeyVerdictNoTime, true},
+		"deadline":      {map[string]any{"status": "not_completed", "reason": "deadline", "message": secret}, ReasonKeyVerdictDeadline, true},
+		"preempted":     {map[string]any{"status": "not_completed", "reason": "preempted"}, ReasonKeyVerdictDeadline, true},
+		"memory":        {map[string]any{"status": "not_completed", "reason": "memory", "tenants": 4, "seconds": 1.5, "message": secret}, ReasonKeyVerdictMemory, false},
+		"error":         {map[string]any{"status": "not_completed", "reason": "error", "message": secret}, ReasonKeyVerdictError, false},
+		"undecidable":   {map[string]any{"status": "not_completed", "reason": "undecidable"}, ReasonKeyVerdictUndecidable, false},
+		"platform_file": {map[string]any{"status": "not_completed", "reason": "platform_file", "message": secret}, ReasonKeyVerdictPlatformFile, false},
+		// A reason, or a status, this tenant-api does not know: no complete
+		// verdict, refused as an error.
+		"unknown reason": {map[string]any{"status": "not_completed", "reason": "x"}, ReasonKeyVerdictError, false},
+		"unknown status": {map[string]any{"status": "partial", "reason": "x"}, ReasonKeyVerdictError, false},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			fake := testutil.StartFakeGenerator(t)
 			fake.SetValidate(func(_ int, req testutil.FakeValidateRequest) (int, any) {
 				v := testutil.PassVerdict(req, nil)
-				if tc.kv == nil {
-					delete(v, "key_verdict")
-				} else {
-					v["key_verdict"] = tc.kv
-				}
+				v["key_verdict"] = tc.kv
 				return 200, v
 			})
 			kv, err := fastGate(t, fake, "").ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())
-			if err != nil {
-				t.Fatalf("pass: %v", err)
+			var rej *RejectedError
+			if kv != nil || !errors.As(err, &rej) || rej.Reason != tc.reason || Retryable(rej.Reason) != tc.retryable {
+				t.Fatalf("kv %+v, err %v: want refused %s (retryable %v)", kv, err, tc.reason, tc.retryable)
 			}
-			if !reflect.DeepEqual(kv, tc.want) {
-				t.Fatalf("key verdict = %+v, want %+v", kv, tc.want)
+			if strings.Contains(rej.Message, "/srv/conf.d") {
+				t.Errorf("the service's message reached the refusal: %q", rej.Message)
 			}
 		})
 	}
+	t.Run("absent", func(t *testing.T) {
+		t.Parallel()
+		fake := testutil.StartFakeGenerator(t)
+		fake.SetValidate(func(_ int, req testutil.FakeValidateRequest) (int, any) {
+			v := testutil.PassVerdict(req, nil)
+			delete(v, "key_verdict")
+			return 200, v
+		})
+		kv, err := fastGate(t, fake, "").ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())
+		var u *UnavailableError
+		if kv != nil || !errors.As(err, &u) || u.Code != CodeValidatorUnavailable || u.Reason != ReasonGeneratorTooOld {
+			t.Fatalf("kv %+v, err %v: want VALIDATOR_UNAVAILABLE generator_too_old", kv, err)
+		}
+	})
 }

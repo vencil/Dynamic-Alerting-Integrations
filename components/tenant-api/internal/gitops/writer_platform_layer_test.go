@@ -33,15 +33,19 @@ var platformLayerCases = []struct {
 	// wantNotice is a fragment the platform-side notice must carry.
 	wantNotice string
 	// bodyBlocks: whether the same block in the tenant body is refused
-	// (false only for the deprecated alias, which is itself a notice).
+	// (false for the deprecated alias, which is itself a notice, and for a
+	// key no reader reads: unread — the shared key verdict refuses that,
+	// not this gate, ADR-038 §11).
 	bodyBlocks bool
+	// unread: the block only says no reader reads a key.
+	unread bool
 }{
-	{"unknown key", "    mysql_conections_typo: \"5\"\n", "mysql_conections_typo", true},
-	{"invalid expires", "    mysql_threads_running:\n      default: \"75\"\n      expires: \"not-a-date\"\n", "not-a-date", true},
-	{"dangling _critical", "    nosuch_critical: \"9\"\n", "nosuch_critical", true},
-	{"unknown _profile", "    _profile: nope\n", "nope", true},
-	{"bad version label", "    mysql_connections{version=\"v2\"}: \"3\"\n", "version", true},
-	{"deprecated alias", "    mysql_cpu: \"7\"\n", "mysql_cpu", false},
+	{"unknown key", "    mysql_conections_typo: \"5\"\n", "mysql_conections_typo", false, true},
+	{"invalid expires", "    mysql_threads_running:\n      default: \"75\"\n      expires: \"not-a-date\"\n", "not-a-date", true, false},
+	{"dangling _critical", "    nosuch_critical: \"9\"\n", "nosuch_critical", false, true},
+	{"unknown _profile", "    _profile: nope\n", "nope", true, false},
+	{"bad version label", "    mysql_connections{version=\"v2\"}: \"3\"\n", "version", true, false},
+	{"deprecated alias", "    mysql_cpu: \"7\"\n", "mysql_cpu", false, false},
 }
 
 func platformLayerRepo(t *testing.T, platform string) (*Writer, string) {
@@ -95,6 +99,12 @@ func TestPlatformLayerControlSameKeyInTheTenantBodyIsRefused(t *testing.T) {
 			if err != nil {
 				t.Fatalf("DryRunValidate: %v", err)
 			}
+			if tc.unread {
+				if len(errs) != 0 || strings.Contains(strings.Join(notices, "\n"), tc.wantNotice) {
+					t.Fatalf("errs = %q, notices = %q: whether any reader reads %q is the key verdict's (ADR-038 §11), not this gate's", errs, notices, tc.wantNotice)
+				}
+				return
+			}
 			if tc.bodyBlocks {
 				if len(errs) == 0 {
 					t.Fatalf("the must-fire control did not fire: %q in the tenant body is accepted (notices %q)", tc.block, notices)
@@ -121,16 +131,17 @@ func TestPlatformLayerControlSameKeyInTheTenantBodyIsRefused(t *testing.T) {
 
 // TestPlatformLayerKeyTheTenantWritesIsJudgedAsTheTenants: a key the tenant
 // body writes is the tenant's, whatever the platform file says about it; a
-// platform value the tenant overrides produces no notice at all.
+// platform value the tenant overrides produces no notice at all. (An unknown
+// key is the key verdict's now, ADR-038 §11: the case is a value problem.)
 func TestPlatformLayerKeyTheTenantWritesIsJudgedAsTheTenants(t *testing.T) {
-	w, _ := platformLayerRepo(t, "tenants:\n  tx:\n    mysql_conections_typo: \"5\"\n")
-	body := "tenants:\n  tx:\n    mysql_conections_typo: null\n"
+	w, _ := platformLayerRepo(t, "tenants:\n  tx:\n    _profile: nope\n")
+	body := "tenants:\n  tx:\n    _profile: nope2\n"
 	errs, notices, err := previewDryRun(context.Background(), w, "tx", body)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(errs) == 0 {
-		t.Errorf("the tenant's own unknown key is accepted because the platform file names it too")
+		t.Errorf("the tenant's own unknown profile is accepted because the platform file names it too")
 	}
 	for _, n := range notices {
 		if strings.Contains(n, "platform file") {

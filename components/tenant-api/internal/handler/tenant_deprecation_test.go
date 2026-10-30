@@ -255,9 +255,11 @@ func TestValidateTenant_DeprecatedKey_ChannelSplit(t *testing.T) {
 	}
 	assertHandlerDeprecationNotices(t, resp.Notices)
 
-	// Case 2: deprecated key + unknown key → invalid; the unknown key is in
-	// warnings, the rename notice stays in notices (no channel bleed).
-	body = bytes.NewBufferString("tenants:\n  db-a:\n    mysql_cpu: \"70\"\n    not_a_real_metric: \"1\"\n")
+	// Case 2: deprecated key + unknown profile → invalid; the profile is in
+	// warnings, the rename notice stays in notices (no channel bleed). (An
+	// unknown key is the shared key verdict's since ADR-038 §11, which this
+	// endpoint does not ask.)
+	body = bytes.NewBufferString("tenants:\n  db-a:\n    mysql_cpu: \"70\"\n    _profile: not_a_real_profile\n")
 	req = newRequestWithChiParam("POST", "/api/v1/tenants/db-a/validate", "id", "db-a", body)
 	w = httptest.NewRecorder()
 	h(w, req)
@@ -265,11 +267,11 @@ func TestValidateTenant_DeprecatedKey_ChannelSplit(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if resp.Valid {
-		t.Error("unknown key must still invalidate the body")
+		t.Error("an unknown profile must still invalidate the body")
 	}
 	joined := strings.Join(resp.Warnings, "; ")
-	if !strings.Contains(joined, "not_a_real_metric") {
-		t.Errorf("warnings must carry the blocking unknown-key entry, got: %v", resp.Warnings)
+	if !strings.Contains(joined, "not_a_real_profile") {
+		t.Errorf("warnings must carry the blocking unknown-profile entry, got: %v", resp.Warnings)
 	}
 	if strings.Contains(joined, "renamed") {
 		t.Errorf("the rename notice must NOT ride the blocking warnings channel, got: %v", resp.Warnings)

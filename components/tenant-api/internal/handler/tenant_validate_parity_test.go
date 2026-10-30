@@ -67,7 +67,10 @@ func TestValidateTenant_VerdictMatchesWrite(t *testing.T) {
 		{name: "missing_tenant_section", body: "tenants:\n  other-t:\n    container_cpu: \"70\"\n"},
 		{name: "second_document", body: body("    container_cpu: \"70\"\n") + "---\ntenants:\n  other-t:\n    container_cpu: \"1\"\n"},
 		{name: "adds_foreign_section", body: body("    container_cpu: \"70\"\n") + "  other-t:\n    container_cpu: \"1\"\n"},
-		{name: "unknown_key", body: body("    unknown_key_xyz: \"70\"\n")},
+		// An unknown key is the shared key verdict's (ADR-038 §11), which
+		// neither the dry-run nor this test's validator gives: an unknown
+		// profile is this gate's.
+		{name: "unknown_profile", body: body("    _profile: unknown_profile_xyz\n")},
 		{name: "declared_elsewhere",
 			files: map[string]string{"shared.yaml": body("    container_cpu: \"1\"\n")},
 			body:  body("    container_cpu: \"70\"\n")},

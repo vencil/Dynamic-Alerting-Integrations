@@ -75,7 +75,8 @@ var ErrNoValidator = errors.New("gitops: no write validator installed; refusing 
 var errValidatorBase = errors.New("cannot read the commit the write lands on")
 
 // validateProposed asks the validator about files over base and renders
-// its key verdict for ctx's caller (adviseKeyVerdict); nothing when there is
+// its key verdict for ctx's caller (adviseKeyVerdict) — or refuses the
+// write on it (*KeyVerdictError, keyVerdictRefusal); nothing when there is
 // nothing to write, ErrNoValidator when no validator is installed. Caller
 // holds w.mu.
 func (w *Writer) validateProposed(ctx context.Context, base string, files []ProposedFile) (verdictAdvice, error) {
@@ -88,6 +89,9 @@ func (w *Writer) validateProposed(ctx context.Context, base string, files []Prop
 	kv, err := w.validator.ValidateWrites(ctx, base, files)
 	if err != nil {
 		return verdictAdvice{}, err
+	}
+	if refusal := keyVerdictRefusal(files, kv); refusal != nil {
+		return verdictAdvice{}, refusal
 	}
 	return adviseKeyVerdict(ctx, files, kv), nil
 }

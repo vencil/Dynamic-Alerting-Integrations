@@ -205,26 +205,10 @@ func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 			violations = append(violations, viol)
 			continue
 		}
-		// #2983: a `_routing`-prefixed key the route generator does not read
-		// (`_routing_profle`, the flat `_routing_receiver_type`) — refused
-		// here, so the answer names the key rather than a generator finding
-		// on a value nothing renders.
-		if cfg.IsUnknownRoutingKey(k, false) {
-			violations = append(violations, Violation{
-				Field:  fmt.Sprintf("%s[%q]", fieldPrefix, k),
-				Reason: "not a key the route generator reads (" + cfg.UnknownRoutingKeyHint(k, false) + "); it has no effect",
-			})
-			continue
-		}
-		// #3227: the `_` namespace is the registry's; a key it does not list
-		// is read by nothing (`_timeout_ms`, `_silent_mod`).
-		if cfg.IsUnregisteredUnderscoreKey(k) {
-			violations = append(violations, Violation{
-				Field:  fmt.Sprintf("%s[%q]", fieldPrefix, k),
-				Reason: "unknown reserved key (typo?); nothing reads it",
-			})
-			continue
-		}
+		// Whether any reader reads k (an unregistered `_` key, a `_routing`
+		// key the generator does not read) is not judged here: the shared
+		// key verdict refuses it (ADR-038 §11).
+		//
 		// A mapping or a list cannot be written from a string (`_metadata`,
 		// #2859; `_custom_alerts`, `_namespaces`).
 		if ok, reason := cfg.PatchableAsString(k); !ok {

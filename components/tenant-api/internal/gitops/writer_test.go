@@ -159,14 +159,15 @@ func TestValidate_TenantOnlyMetricBody(t *testing.T) {
 		t.Fatalf("tenant-only metric body should validate against merged defaults, got: %v", errs)
 	}
 
-	// Negative: validation is NOT neutered — a genuinely unknown metric key
-	// (absent from _defaults.yaml, not a reserved key) still warns.
-	bad := "tenants:\n  db-a:\n    not_a_real_metric: \"70\"\n"
+	// Negative: validation is NOT neutered — a key the merged defaults
+	// declare, with an `expires:` that is no time, still warns. (An unknown
+	// key is the shared key verdict's since ADR-038 §11, not validate's.)
+	bad := "tenants:\n  db-a:\n    mysql_threads_running:\n      default: \"70\"\n      expires: \"not_a_real_time\"\n"
 	errs, _ := validate(dir, "db-a", tenantPathFor(t, dir, "db-a"), bad)
 	if len(errs) == 0 {
-		t.Fatal("an unknown metric key must still warn after the defaults merge")
+		t.Fatal("a bad expires must still warn after the defaults merge")
 	}
-	if !strings.Contains(strings.Join(errs, "; "), "not_a_real_metric") {
+	if !strings.Contains(strings.Join(errs, "; "), "not_a_real_time") {
 		t.Errorf("warning should name the unknown key, got: %v", errs)
 	}
 }
