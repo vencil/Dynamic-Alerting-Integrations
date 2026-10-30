@@ -678,6 +678,26 @@ def test_amtool_missing_is_503(tmp_path, world):
         assert st["amtool_available"] is False and st["ready"] is False
 
 
+@pytest.mark.parametrize("how", ["missing", "not_executable"])
+def test_da_guard_missing_is_503(tmp_path, world, how):
+    """ADR-036 §3 (2026-10-30): without a da-guard the judgement process can
+    run, no key verdict (ADR-038 §5) can be given — the container is
+    unavailable, checked before every judgement like amtool."""
+    target = tmp_path / "da-guard"
+    if how == "not_executable":
+        target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        target.chmod(0o644)
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   env={"DA_GUARD_BINARY": str(target)}) as svc:
+        status, doc = svc.validate(world["commits"]["clean"])
+        assert status == 503, doc
+        assert (doc["error"], doc["reason"]) == ("VALIDATOR_UNAVAILABLE", "da_guard_missing")
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["da_guard_available"] is False and st["ready"] is False
+        m = svc.metrics()
+        assert m['da_generator_unavailable_total{reason="da_guard_missing"}'] == 1
+
+
 def test_policy_is_read_for_every_judgement(tmp_path, world):
     policy = tmp_path / "policy.yaml"
     policy.write_text("allowed_domains: []\n", encoding="utf-8")
@@ -765,11 +785,11 @@ def test_status_reports_versions(world):
     status, st = world["svc"].call("GET", "/v1/status")
     assert status == 200
     assert set(st) == {"policy", "generator_version", "generator_too_old",
-                       "da_guard_version", "amtool_available", "ready",
+                       "da_guard_version", "amtool_available", "da_guard_available", "ready",
                        "cache_base_coverage_ratio", "warm"}
     assert st["policy"] == {"configured": False, "available": True, "sha256": None,
                             "error": None, "min_generator_version": None}
-    assert st["ready"] is True
+    assert st["ready"] is True and st["da_guard_available"] is True
     m = world["svc"].metrics()
     info = [k for k in m if k.startswith("da_generator_build_info")]
     assert info and f'generator_version="{st["generator_version"]}"' in info[0]

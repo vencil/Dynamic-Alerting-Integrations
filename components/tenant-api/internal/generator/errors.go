@@ -59,6 +59,7 @@ var RejectionReasons = []string{
 // Reasons of an *UnavailableError the service gives (its 503s, ADR-036 §5).
 const (
 	ReasonAmtoolMissing   = "amtool_missing"
+	ReasonDaGuardMissing  = "da_guard_missing"
 	ReasonGeneratorTooOld = "generator_too_old"
 	ReasonInternalError   = "internal_error"
 	ReasonPolicyUnusable  = "policy_unusable"
@@ -139,7 +140,7 @@ func unavailable(reason, message string) *UnavailableError {
 // UnavailableReasons lists every *UnavailableError reason tenant-api knows:
 // the service's and its own.
 var UnavailableReasons = []string{
-	ReasonAmtoolMissing, ReasonGeneratorTooOld, ReasonInternalError, ReasonPolicyUnusable,
+	ReasonAmtoolMissing, ReasonDaGuardMissing, ReasonGeneratorTooOld, ReasonInternalError, ReasonPolicyUnusable,
 	ReasonUnreachable, ReasonBadResponse, ReasonInternal, ReasonUnknown, ReasonPolicyUnreadable,
 }
 

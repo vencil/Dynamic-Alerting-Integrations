@@ -10,11 +10,11 @@ HTTP/1.1 on a Unix socket (no network port) and serves:
 * ``POST /v1/validate`` — judge a base commit plus writes; answers 200 with
   ``result`` ``pass`` / ``findings`` / ``rejected`` whenever this process
   reaches a verdict for that request, 400 for a malformed request, 503 when
-  the container cannot judge at all (``VALIDATOR_UNAVAILABLE``: no amtool, a
-  generator older than the policy's ``min_generator_version``;
+  the container cannot judge at all (``VALIDATOR_UNAVAILABLE``: no amtool,
+  no da-guard, a generator older than the policy's ``min_generator_version``;
   ``POLICY_UNAVAILABLE``: the deployment ``--policy`` file is unusable);
 * ``GET /v1/status`` — policy availability, generator and da-guard versions,
-  amtool, readiness;
+  amtool and da-guard availability, readiness;
 * ``GET /metrics`` — Prometheus text format.
 
 Defaults of every limit are in ``--help``; this docstring does not repeat
@@ -90,7 +90,7 @@ from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _gsvc_child  # noqa: E402  (imports the whole generator — see _gsvc_child)
 from _gsvc_child import ChildJob, gar  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
-    CacheStore, FrameReader, RequestError, ValidateRequest,
+    UNAVAILABLE_REASONS, CacheStore, FrameReader, RequestError, ValidateRequest,
     judgement_seconds, parse_validate_request,
 )
 from _lib_parse_cache import restricted_loads  # noqa: E402
@@ -288,10 +288,17 @@ class Metrics:
     peer_rejected: int = 0
     peak_rss_bytes: int = 0
     #: ADR-038 decision 5: key verdicts by outcome — complete, or why not
-    #: (no_time, deadline, preempted, memory, error, platform_file) — and
-    #: the latest one's duration.
+    #: (KEY_VERDICT_OUTCOMES) — and the latest one's duration.
     key_verdicts: Counter = field(default_factory=Counter)
     key_verdict_seconds: float = 0.0
+    #: ADR-038 decision 5: the latest judgement's run time over its time
+    #: budget (deadline_ms, capped) — the supported size's own measure.
+    judgement_deadline_ratio: float = 0.0
+
+
+#: A key verdict's outcomes (``complete`` or ``_gsvc_child``'s reasons).
+KEY_VERDICT_OUTCOMES = ("complete", "no_time", "deadline", "memory", "error",
+                        "undecidable", "platform_file")
 
 
 def _escape_label(value: str) -> str:
@@ -311,6 +318,21 @@ def da_guard_version(binary: Optional[str]) -> Optional[str]:
         return None
     words = proc.stdout.decode("utf-8", "replace").split()
     return words[-1] if proc.returncode == 0 and words else None
+
+
+def da_guard_problem() -> Optional[str]:
+    """Why the judgement process cannot run da-guard — the one it resolves
+    ($DA_GUARD_BINARY, then PATH) is missing or not executable — or None.
+    Checked before every judgement, like amtool (ADR-036 §3): without it
+    the key verdict (ADR-038 §5) cannot be given."""
+    import guard_dispatch
+    exe = guard_dispatch.DISPATCHER.resolve_binary(None)
+    if exe is None:
+        return ("da-guard is not found ($DA_GUARD_BINARY, then PATH): without it "
+                "the key verdict cannot be given")
+    if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+        return f"da-guard at {exe} is not an executable file: the key verdict cannot be given"
+    return None
 
 
 def snapshot_policy(path: Optional[str], into: str) -> PolicySnapshot:
@@ -538,13 +560,6 @@ class Service:
                         received=received)
         self.waiting.append(ticket)
         ticket.timer = self.loop.call_at(ticket.deadline_at, self._expire, ticket)
-        # ADR-038 decision 5: a running judgement's key verdict yields to a
-        # waiting write (the judgement's own verdict is already given).
-        if self.running is not None and self.child_pid is not None:
-            try:
-                os.kill(self.child_pid, signal.SIGUSR1)
-            except ProcessLookupError:
-                pass
         # #2901 E2: a request never waits for a warming run — end it now; the
         # entries it already handed back stay in the cache (E1).
         self._preempt_warm()
@@ -593,6 +608,9 @@ class Service:
         finally:
             self.running = None
             self.child_pid = None
+        if ticket.started is not None and ticket.deadline_at > ticket.received:
+            self.metrics.judgement_deadline_ratio = round(
+                (self.loop.time() - ticket.started) / (ticket.deadline_at - ticket.received), 4)
         if resp.doc is not None and resp.status == 200 and ticket.started is not None:
             resp.doc["queue_wait_ms"] = round((ticket.started - ticket.received) * 1000)
         if not ticket.future.done():
@@ -639,6 +657,9 @@ class Service:
                 "VALIDATOR_UNAVAILABLE", "amtool_missing",
                 "amtool is not on PATH: without it the generator's check of the "
                 "rendered Alertmanager config is skipped, so no verdict is given")
+        missing = da_guard_problem()
+        if missing is not None:
+            return _unavailable("VALIDATOR_UNAVAILABLE", "da_guard_missing", missing)
         job_dir = self._new_job_dir()
         try:
             policy = snapshot_policy(self.s.policy, job_dir)
@@ -877,6 +898,7 @@ class Service:
     def _status(self) -> Response:
         policy = self._policy_now()
         amtool = shutil.which("amtool") is not None
+        da_guard = da_guard_problem() is None
         too_old = (generator_version_problem(self.generator_version,
                                              policy.min_generator_version)
                    if policy.available else None)
@@ -889,7 +911,8 @@ class Service:
             "generator_too_old": too_old,
             "da_guard_version": self.da_guard_version,
             "amtool_available": amtool,
-            "ready": policy.available and amtool and too_old is None,
+            "da_guard_available": da_guard,
+            "ready": policy.available and amtool and da_guard and too_old is None,
             "cache_base_coverage_ratio": self.store.coverage(),
             "warm": {"ref": self.s.warm_ref or None, "commit": self.warm_commit,
                      "error": self.warm_error, "running": self.warming,
@@ -925,8 +948,7 @@ class Service:
                        f"{self.metrics.rejections[reason]}")
         out += ["# HELP da_generator_unavailable_total Validate requests answered 503, by reason.",
                 "# TYPE da_generator_unavailable_total counter"]
-        for reason in ("amtool_missing", "generator_too_old", "policy_unusable",
-                       "internal_error"):
+        for reason in (*UNAVAILABLE_REASONS, "policy_unusable"):
             out.append(f'da_generator_unavailable_total{{reason="{reason}"}} '
                        f"{self.metrics.unavailable[reason]}")
         out += ["# HELP da_generator_warm_runs_total Pre-warming runs (cache filling, no verdict), by outcome.",
@@ -936,13 +958,15 @@ class Service:
                        f"{self.metrics.warm_runs[outcome]}")
         out += ["# HELP da_generator_key_verdicts_total Key verdicts (ADR-038) on writes the generator passed, by outcome: complete, or why not completed.",
                 "# TYPE da_generator_key_verdicts_total counter"]
-        for outcome in ("complete", "no_time", "deadline", "preempted", "memory", "error",
-                        "platform_file"):
+        for outcome in KEY_VERDICT_OUTCOMES:
             out.append(f'da_generator_key_verdicts_total{{outcome="{outcome}"}} '
                        f"{self.metrics.key_verdicts[outcome]}")
         out += ["# HELP da_generator_key_verdict_seconds Duration of the latest key verdict.",
                 "# TYPE da_generator_key_verdict_seconds gauge",
-                f"da_generator_key_verdict_seconds {self.metrics.key_verdict_seconds}"]
+                f"da_generator_key_verdict_seconds {self.metrics.key_verdict_seconds}",
+                "# HELP da_generator_judgement_deadline_ratio The latest judgement's run time over its time budget; alert above 0.5, at 1 writes are refused for want of time (ADR-038 decision 5).",
+                "# TYPE da_generator_judgement_deadline_ratio gauge",
+                f"da_generator_judgement_deadline_ratio {self.metrics.judgement_deadline_ratio}"]
         out += ["# HELP da_generator_cache_base_coverage_ratio Share of the pinned base tree's blobs with a parse-cache entry.",
                 "# TYPE da_generator_cache_base_coverage_ratio gauge",
                 f"da_generator_cache_base_coverage_ratio {self.store.coverage()}"]
@@ -1244,9 +1268,6 @@ async def serve(settings: Settings, object_format: str) -> None:
     print(f"generator-service: listening on {settings.socket}", file=sys.stderr,
           flush=True)
     service.loop.add_signal_handler(signal.SIGCHLD, service._reap_orphans)
-    # Inherited by every judgement process from its fork on: a key verdict
-    # yields to a waiting write (submit); anywhere else SIGUSR1 does nothing.
-    signal.signal(signal.SIGUSR1, _gsvc_child.on_preempt)
     service.loop.set_exception_handler(service.loop_exception)
     service.start_warming()
     try:

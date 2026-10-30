@@ -264,7 +264,8 @@ const (
 	// write while the generator container cannot judge at all (#2903,
 	// ADR-036 §5): no answer (unreachable — not running, or no answer within
 	// the request's time), an unreadable answer (bad_response), amtool
-	// missing (amtool_missing), a generator older than the deployment
+	// missing (amtool_missing), da-guard missing or not executable
+	// (da_guard_missing), a generator older than the deployment
 	// policy's min_generator_version (generator_too_old), or the service's
 	// own error (internal_error). reason names which; the detail is in the
 	// server log only. Retry-After. Nothing was written. Also the generator

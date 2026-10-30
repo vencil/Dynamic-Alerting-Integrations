@@ -40,7 +40,8 @@ type KeyVerdict struct {
 	// Status is KeyVerdictComplete or KeyVerdictNotCompleted.
 	Status string
 	// Reason is why a verdict did not complete: the generator's reasons
-	// (no_time, deadline, preempted, memory, error, platform_file) or
+	// (no_time, deadline, memory, error, undecidable, platform_file; an
+	// older generator's preempted) or
 	// KeyVerdictNotReported.
 	Reason string
 	// Findings are the keys no reader reads (complete only); Truncated
@@ -106,10 +107,11 @@ const (
 // reason not listed (a newer generator) is shown as its name.
 var verdictReasons = map[string]string{
 	"no_time":             "too little of the judgement's time was left for it",
-	"deadline":            "its share of the judgement's time ran out",
-	"preempted":           "it yielded to another write waiting for the generator",
+	"deadline":            "the judgement's time ran out",
+	"preempted":           "it yielded to another write waiting for the generator", // a generator before ADR-038's 2026-10-30 revision
 	"memory":              "it ran out of memory",
 	"error":               "it failed",
+	"undecidable":         "no root platform file was read, so threshold keys cannot be judged",
 	"platform_file":       "the write changes a platform file, which only a whole-tree verdict judges",
 	KeyVerdictNotReported: "the generator container did not report one; it predates ADR-038 decision 5",
 }
