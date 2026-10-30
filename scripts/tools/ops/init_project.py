@@ -4224,6 +4224,8 @@ _EXIST_UNOWNED = 'unowned'      # ledger does not list it (or there is none)
 _EXIST_UNKNOWN = 'unknown'      # a marker exists but its ledger cannot answer
 _EXIST_UNREADABLE = 'unreadable'  # listed, but its bytes cannot be read
 _EXIST_NOT_FILE = 'not-a-file'  # a directory or a dangling symlink sits there
+_EXIST_OUTSIDE = 'outside'      # its directory resolves outside --output-dir
+_EXIST_UNREMOVABLE = 'unremovable'  # stale and unchanged, but unlink failed
 
 
 class _Ownership(NamedTuple):
@@ -4255,9 +4257,32 @@ def _read_ownership(output_dir: str) -> _Ownership:
         return _Ownership(_OWN_NO_LEDGER, {})
     files = doc[_LEDGER_KEY]
     if not isinstance(files, dict) or not all(
-            isinstance(k, str) and isinstance(v, str) for k, v in files.items()):
+            isinstance(k, str) and isinstance(v, str) and _is_safe_ledger_key(k)
+            for k, v in files.items()):
         return _Ownership(_OWN_UNREADABLE, {})
     return _Ownership(_OWN_LEDGER, dict(files))
+
+
+def _is_safe_ledger_key(rel: str) -> bool:
+    """A ledger path init could have written: relative, POSIX, no `..`.
+
+    `.da-init.yaml` is committed to the customer repo, so its keys are input:
+    `../x` or `/x` would have issue 1462's removal delete outside --output-dir.
+    One such key makes the whole ledger unreadable ("cannot tell"), not a
+    smaller ledger — a marker that names it was not written by init.
+    """
+    if not rel or '\\' in rel or rel.startswith('/') or ':' in rel:
+        return False
+    return all(part not in ('', '.', '..') for part in rel.split('/'))
+
+
+def _inside(out: Path, path: Path) -> bool:
+    """Whether `path`, symlinks in its directories resolved, is under `out`."""
+    try:
+        Path(os.path.realpath(path.parent)).relative_to(Path(os.path.realpath(out)))
+        return True
+    except ValueError:
+        return False
 
 
 def _classify_existing(paths: list[str], output_dir: str,
@@ -4310,6 +4335,8 @@ def _existing_tag(kind: str, is_zh: bool) -> str:
             _EXIST_UNKNOWN: '（.da-init.yaml 沒有可讀的檔案清冊，無法判斷是否改過）',
             _EXIST_UNREADABLE: '（讀不到內容，無法判斷是否改過）',
             _EXIST_NOT_FILE: '（不是一般檔案：目錄或懸空的符號連結）',
+            _EXIST_OUTSIDE: '（所在目錄經符號連結指到輸出目錄之外）',
+            _EXIST_UNREMOVABLE: '（刪除失敗）',
         }[kind]
     return {
         _EXIST_UNCHANGED: ' (init wrote it last time, unchanged)',
@@ -4320,6 +4347,8 @@ def _existing_tag(kind: str, is_zh: bool) -> str:
         _EXIST_UNREADABLE: (' (cannot be read: cannot tell whether it was '
                             'edited)'),
         _EXIST_NOT_FILE: ' (not a regular file: a directory or a dangling symlink)',
+        _EXIST_OUTSIDE: ' (its directory resolves outside --output-dir through a symlink)',
+        _EXIST_UNREMOVABLE: ' (could not be removed)',
     }[kind]
 
 
@@ -4371,6 +4400,9 @@ def _stale_files(config: dict, output_dir: str, plan: '_ConfdPlan',
     keep: dict = {}
     for rel in sorted(set(own.files) - keep_now):
         path = out / rel
+        if not _inside(out, path):
+            keep[rel] = _EXIST_OUTSIDE
+            continue
         if not path.is_file():
             if path.exists() or path.is_symlink():
                 keep[rel] = _EXIST_NOT_FILE
@@ -4394,12 +4426,15 @@ def _stale_lines(stale: Optional[_Stale], is_zh: bool, *,
         return []
     if not stale.known:
         return [("⚠️ .da-init.yaml 沒有可讀的檔案清冊：無法得知 init 先前產生過"
-                 "哪些檔，這次不再產生的檔量不到，一個都不刪。下一次執行後"
-                 "就有清冊。") if is_zh else
+                 "哪些檔，這次不再產生的檔量不到，一個都不刪。之後的執行也"
+                 "找不到它們（新清冊只記這次寫的檔）——請自行檢查 conf.d/ 與 "
+                 "CI、kustomize 檔裡有沒有已不需要的。") if is_zh else
                 ("⚠️ .da-init.yaml has no readable file ledger: what init "
                  "generated before cannot be known, so files it no longer "
-                 "generates cannot be found, and none is removed. The next "
-                 "run has a ledger.")]
+                 "generates cannot be found, and none is removed. Later runs "
+                 "cannot find them either (the new ledger lists only what "
+                 "this run writes): check conf.d/ and the CI and kustomize "
+                 "files for ones you no longer need.")]
     lines = []
     for rel in stale.remove:
         if is_zh:
@@ -4419,18 +4454,42 @@ def _stale_lines(stale: Optional[_Stale], is_zh: bool, *,
     return lines
 
 
-def _remove_stale_outside_confd(out: Path, rels: list) -> list[str]:
+def _remove_stale_outside_confd(out: Path, rels: list,
+                                failed: Optional[dict] = None) -> list[str]:
     """Unlink init-owned, unchanged files outside conf.d/ and the directories
-    that empties (up to, not including, `out`). conf.d/ deletions go through
-    the da-guard batch instead (ADR-036 §2). Returns the removed paths."""
+    that empties, never at or above `out`. conf.d/ deletions go through the
+    da-guard batch instead (ADR-036 §2). Returns the removed paths.
+
+    Never raises: a file that cannot be removed goes into `failed` ({rel:
+    reason}) and the run goes on to write the marker — stopping here would
+    leave conf.d already changed and the ledger describing the old tree.
+    """
     removed = []
+    root = Path(os.path.realpath(out))
     for rel in rels:
         path = out / rel
-        path.unlink()
+        if not _inside(out, path):
+            (failed if failed is not None else {})[rel] = 'outside --output-dir'
+            continue
+        try:
+            path.unlink()
+        except OSError as exc:
+            (failed if failed is not None else {})[rel] = exc.strerror or str(exc)
+            continue
         removed.append(str(path))
         parent = path.parent
-        while parent != out and parent.is_dir() and not any(parent.iterdir()):
-            parent.rmdir()
+        while True:
+            if parent.is_symlink() or not parent.is_dir():
+                break
+            real = Path(os.path.realpath(parent))
+            if real == root or root not in real.parents:
+                break
+            try:
+                if any(parent.iterdir()):
+                    break
+                parent.rmdir()
+            except OSError:
+                break
             parent = parent.parent
     return removed
 
@@ -4505,7 +4564,8 @@ def _write_confd(conf_dir: Path, files: list,
 
 def run_init(config: dict, output_dir: str,
              plan: Optional[_ConfdPlan] = None,
-             prune: Optional[list] = None) -> list[str]:
+             prune: Optional[list] = None,
+             prune_failed: Optional[dict] = None) -> list[str]:
     """Generate all files based on config. Returns list of created file paths.
 
     `prune` (issue 1462) is `_stale_files(...).remove`: output-relative paths
@@ -4633,6 +4693,11 @@ def run_init(config: dict, output_dir: str,
         # answers; no da-guard call after a write.
         carriers = _kustomize_carrier_files(
             plan.generate, conf_dir, write_defaults=plan.write_defaults, plan=plan)
+        # Issue 1462: the plan read conf.d before step 1 deleted the stale
+        # files in it; listing them would point configMapGenerator (and the
+        # README's ln -s lines) at files that no longer exist.
+        gone = {r[len('conf.d/'):] for r in confd_prune}
+        carriers = [c for c in carriers if c not in gone]
         _write_file(
             str(kust_base / 'kustomization.yaml'),
             _gen_kustomize_base(plan.generate, namespace, carriers),
@@ -4663,7 +4728,7 @@ def run_init(config: dict, output_dir: str,
     # was replacing; before the marker, so the ledger below no longer lists
     # them (the carry-over keeps only files still on disk).
     _remove_stale_outside_confd(
-        out, [r for r in prune if not r.startswith('conf.d/')])
+        out, [r for r in prune if not r.startswith('conf.d/')], prune_failed)
 
     # ── 5. Marker file ─────────────────────────────────────
     # issue 1465: the ledger hashes what is ON DISK after the writes, not the
@@ -6016,8 +6081,18 @@ def main():
     # overwrite from a fresh file (#1447).
     pre_existing = _existing_files(output_dir)
     try:
+        prune_failed: dict = {}
         created = run_init(config, output_dir, plan,
-                           prune=stale.remove if stale and args.force else None)
+                           prune=stale.remove if stale and args.force else None,
+                           prune_failed=prune_failed)
+        if stale and prune_failed:
+            stale = _Stale(stale.known,
+                           [r for r in stale.remove if r not in prune_failed],
+                           {**stale.keep,
+                            **{r: _EXIST_UNREMOVABLE for r in prune_failed}})
+            for rel, why in sorted(prune_failed.items()):
+                print(f"WARN: init_project: could not remove {rel}: {why}",
+                      file=sys.stderr)
     except _ConfdWriteRefused as exc:
         # ADR-036 §2 (#3206 10c-3): a conf.d file that cannot be sent to
         # `da-guard write` — rc 2, as every refusal of the batch; nothing
