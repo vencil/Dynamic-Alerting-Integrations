@@ -987,22 +987,28 @@ class Report:
     exit *status*. ``run`` encodes the document (:func:`encode_json`), writes
     it to stdout and exits with *status* — the tool never serializes or
     prints its own document, so a crash can never leave a complete-looking
-    one on stdout next to rc 2, and the encoder's rules hold for every tool."""
+    one on stdout next to rc 2, and the encoder's rules hold for every tool.
+    *status* is an exit code (an int in 0..255); anything else is the
+    tool's defect, refused here rather than read the way ``sys.exit`` would."""
 
     __slots__ = ("document", "status")
 
     def __init__(self, document: Any, status: int = 0) -> None:
+        if status != 0 or isinstance(status, bool):
+            _check_code("Report status", status)
         self.document = document
         self.status = status
 
 
 class OutputNotSerializable(Exception):
-    """A document holds a value JSON cannot carry: a non-finite float, or a
-    type other than the JSON ones, ``date`` / ``datetime`` and a type with
-    ``__json__``. Named by where in the document it is. Usually a defect of
-    the tool that built it; a conf.d value written ``.inf`` / ``.nan`` (read
-    as a float by `_lib_parse_tree`) lands here too — JSON has no spelling
-    for it, so the run refuses rather than print one."""
+    """A document holds a value JSON cannot carry as what it means: a
+    non-finite float, an int too long to print, a reference cycle, two keys
+    that print as the same JSON key, or a type other than the JSON ones,
+    ``date`` / ``datetime`` and a type with ``__json__``. Named by where in
+    the document it is. Usually a defect of the tool that built it; a conf.d
+    value written ``.inf`` / ``.nan`` (read as a float by `_lib_parse_tree`)
+    lands here too — JSON has no spelling for it, so the run refuses rather
+    than print one."""
 
     reason = "output_not_serializable"
 
@@ -1011,55 +1017,97 @@ class OutputNotSerializable(Exception):
         self.where = where
 
 
-def _json_path(base: str, key: Any) -> str:
-    if isinstance(key, int) and not isinstance(key, bool):
-        return f"{base}[{key}]"
-    if isinstance(key, str) and key.isidentifier():
-        return f"{base}.{key}" if base else key
+def _json_key(key: Any) -> Optional[str]:
+    """*key* as the JSON object key ``json.dumps`` prints it, or None when
+    it has none."""
+    if isinstance(key, str):
+        return key
+    if key is None:
+        return "null"
+    if isinstance(key, bool):
+        return "true" if key else "false"
+    if isinstance(key, int):
+        return int.__repr__(key)
+    return None
+
+
+def _json_path(base: str, step: Any) -> str:
+    """*base* extended by *step*: an int is a list index (``[3]``), a str an
+    object key (``.name``, or ``["x y"]`` when it is not an identifier) —
+    every key as the JSON key it prints as, so ``{1: …}`` reads ``["1"]``."""
     import json
-    return f"{base}[{json.dumps(key, ensure_ascii=False)}]"
+    if isinstance(step, int):
+        return f"{base}[{step}]"
+    if step.isidentifier():
+        return f"{base}.{step}" if base else step
+    return f"{base}[{json.dumps(step, ensure_ascii=False)}]"
 
 
-def _check_serializable(value: Any, where: str = "") -> None:
-    """Raise :class:`OutputNotSerializable` at the first value of *value*
-    :func:`encode_json` would not carry as the JSON it means."""
+def _to_json_tree(value: Any) -> Any:
+    """*value* as plain JSON data — dicts with str keys, lists, str, finite
+    float, int, bool, None — or :class:`OutputNotSerializable` at the first
+    value that is not JSON as what it means. ``__json__`` is called once
+    and its answer obeys the same rules; ``date`` / ``datetime`` become ISO
+    8601. Iterative, so a deep document is not a RecursionError."""
     import datetime
     import math
-    stack: list[tuple[Any, str]] = [(value, where)]
+    root: list[Any] = [None]
+    # (value, where, container to put it in, slot) — or an exit marker
+    # (None, None, id, None) that ends a container's place on the path.
+    stack: list[tuple[Any, Any, Any, Any]] = [(value, "", root, 0)]
+    open_ids: set[int] = set()
     while stack:
-        cur, at = stack.pop()
-        if cur is None or isinstance(cur, (str, bool, int)):
+        cur, at, into, slot = stack.pop()
+        if at is None:
+            open_ids.discard(into)
             continue
-        if isinstance(cur, float):
+        while callable(getattr(type(cur), "__json__", None)):
+            # The type says what it is in JSON; what it says obeys the rules.
+            if id(cur) in open_ids:
+                raise OutputNotSerializable(at, "a reference cycle has no JSON form")
+            nxt = cur.__json__()
+            if nxt is cur:
+                raise OutputNotSerializable(at, f"{type(cur).__name__}.__json__ returns itself")
+            cur = nxt
+        if cur is None or isinstance(cur, (str, bool)):
+            into[slot] = cur if cur is None or type(cur) in (str, bool) else str.__str__(cur)
+        elif isinstance(cur, int):
+            try:
+                into[slot] = int(int.__repr__(cur))
+            except ValueError:
+                raise OutputNotSerializable(at, "an int too long to print") from None
+        elif isinstance(cur, float):
             if not math.isfinite(cur):
                 raise OutputNotSerializable(at, f"{cur!r} is not a JSON number")
-            continue
-        if isinstance(cur, (datetime.date, datetime.datetime)):
-            continue
-        if callable(getattr(type(cur), "__json__", None)):
-            # The type says what it is in JSON; what it says obeys the rules.
-            stack.append((cur.__json__(), at))
-            continue
-        if isinstance(cur, dict):
-            for k, v in cur.items():
-                if not (k is None or isinstance(k, (str, int, bool))):
-                    raise OutputNotSerializable(
-                        _json_path(at, str(k)), f"a {type(k).__name__} key is not a JSON key")
-                stack.append((v, _json_path(at, k)))
-            continue
-        if isinstance(cur, (list, tuple)):
-            stack.extend((v, _json_path(at, i)) for i, v in enumerate(cur))
-            continue
-        raise OutputNotSerializable(at, f"a {type(cur).__name__} is not a JSON value")
-
-
-def _iso(value: Any) -> Any:
-    import datetime
-    if isinstance(value, (datetime.date, datetime.datetime)):
-        return value.isoformat()
-    if callable(getattr(type(value), "__json__", None)):
-        return value.__json__()
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+            into[slot] = float(cur)
+        elif isinstance(cur, (datetime.date, datetime.datetime)):
+            into[slot] = cur.isoformat()
+        elif isinstance(cur, (dict, list, tuple)):
+            if id(cur) in open_ids:
+                raise OutputNotSerializable(at, "a reference cycle has no JSON form")
+            open_ids.add(id(cur))
+            stack.append((None, None, id(cur), None))
+            if isinstance(cur, dict):
+                out: Any = {}
+                children = []
+                for k, v in cur.items():
+                    key = _json_key(k)
+                    if key is None:
+                        raise OutputNotSerializable(
+                            f"{at}[{k!r}]", f"a {type(k).__name__} key is not a JSON key")
+                    if key in out:
+                        raise OutputNotSerializable(
+                            _json_path(at, key), f"two keys print as the JSON key {key!r}")
+                    out[key] = None
+                    children.append((v, _json_path(at, key), out, key))
+            else:
+                out = [None] * len(cur)
+                children = [(v, _json_path(at, i), out, i) for i, v in enumerate(cur)]
+            into[slot] = out
+            stack.extend(reversed(children))
+        else:
+            raise OutputNotSerializable(at, f"a {type(cur).__name__} is not a JSON value")
+    return root[0]
 
 
 def encode_json(document: Any) -> str:
@@ -1069,26 +1117,28 @@ def encode_json(document: Any) -> str:
     ``Infinity`` (they are not JSON), ``date`` / ``datetime`` as ISO 8601, a
     value whose type defines ``__json__()`` as what that returns (checked by
     the same rules — `_lib_parse_tree.Timestamp` gives its source text); any
-    other non-JSON value is :class:`OutputNotSerializable`, named by its path
-    in the document. No formatting options: one format for every tool.
+    other value that is not JSON as what it means is
+    :class:`OutputNotSerializable`, named by its path in the document. No
+    formatting options: one format for every tool. ``json.dumps`` only
+    prints the plain tree :func:`_to_json_tree` built, so what was checked
+    is what is printed.
     """
     import json
-    _check_serializable(document)
-    return json.dumps(document, allow_nan=False, ensure_ascii=False, indent=2, default=_iso)
+    return json.dumps(_to_json_tree(document), allow_nan=False, ensure_ascii=False, indent=2)
 
 
 def _write_report(report: Report) -> int:
     """Encode and print *report*'s document; the exit status. A document
     that cannot be encoded is the tool's defect: one named line on stderr,
-    the ``output_not_serializable`` envelope instead of any part of the
-    document, and the crash exit code."""
+    no part of the document, and the crash exit code — with the
+    ``output_not_serializable`` envelope on stdout when armed, as every
+    other rc-2 exit of an armed run (none when not armed, or when the tool
+    already wrote to stdout itself: the same rule as theirs)."""
     try:
         text = encode_json(report.document)
     except OutputNotSerializable as exc:
         line = f"ERROR: the --json document cannot be written as JSON: {exc}"
         _to_stderr(line)
-        if _crash_envelope_armed is None:
-            arm_crash_envelope()
         _print_armed_envelope(OutputNotSerializable.reason, line)
         return _crash_code()
     print(text)

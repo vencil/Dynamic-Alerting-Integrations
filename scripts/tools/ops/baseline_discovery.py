@@ -395,14 +395,10 @@ def main():
 
     # 寫入 CSV
     #
-    # CRLF note: csv.writer emits "\r\n" line terminators per RFC 4180.
-    # If we route through write_text_secure (default text-mode open),
-    # Python's universal-newlines on Windows translates "\n" → "\r\n"
-    # again, producing "\r\r\n" on disk. csv.reader can technically
-    # recover but produces empty rows that break parsers/tests. Fix:
-    # write in binary mode (UTF-8 + BOM) so the writer's terminators
-    # reach disk verbatim. Matches write_text_secure's UTF-8 + 0o600
-    # contract without the newline translation step.
+    # CRLF note: csv.writer emits "\r\n" line terminators per RFC 4180; a
+    # text-mode open that translates "\n" (Windows) would put "\r\r\n" on
+    # disk. write_operator_output opens with newline="\n", so the writer's
+    # terminators reach disk verbatim.
     with output_write(args.output_dir, flag="-o/--output-dir",
                       action="create directory"):
         os.makedirs(args.output_dir, exist_ok=True)

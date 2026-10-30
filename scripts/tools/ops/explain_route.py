@@ -1486,7 +1486,7 @@ def main(argv: list[str] | None = None) -> int | Report:
             trace["policy_applied"] = policy.applied
             traces.append(trace)
         if args.json:
-            return Report(traces)  # #3216: run() encodes it (a YAML date: ISO 8601)
+            return Report(traces)  # #3216: run() encodes it (a YAML date: its source text)
         for trace in traces:
             print(format_trace(trace, lang=lang))
         return EXIT_OK
