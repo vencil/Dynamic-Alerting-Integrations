@@ -166,9 +166,10 @@ demo-showcase: ## 5-Tenant 產品展演 — 展示 7 個 Rule Pack、四層路�
 component-build: ## Build component image (使用: make component-build COMP=threshold-exporter)
 	@echo "Building $(COMP)..."
 	@# threshold-exporter builds from the repo root: its builder runs
-	@# scripts/ops/go_build.sh (#3425; Dockerfile.dockerignore narrows the context).
+	@# scripts/ops/go_build.sh (#3425; Dockerfile.dockerignore narrows the context,
+	@# which only BuildKit reads — hence buildx, as docker-build-all).
 	@if [ "$(COMP)" = "threshold-exporter" ]; then \
-		docker build -t $(COMP):dev -f components/$(COMP)/app/Dockerfile .; \
+		docker buildx build --load -t $(COMP):dev -f components/$(COMP)/app/Dockerfile .; \
 	elif [ -d "components/$(COMP)/app" ]; then \
 		cd components/$(COMP)/app && docker build -t $(COMP):dev .; \
 	else \

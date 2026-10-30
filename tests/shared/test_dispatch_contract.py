@@ -381,7 +381,7 @@ def test_path_lookup_misses_returns_two_with_install_hints(spec, monkeypatch, ca
     assert spec.env_var in captured.err
     assert "Install options" in captured.err
     assert "github.com/vencil/Dynamic-Alerting-Integrations/releases" in captured.err
-    assert "go build" in captured.err
+    assert "scripts/ops/go_build.sh" in captured.err
 
 
 # ---------------------------------------------------------------------------

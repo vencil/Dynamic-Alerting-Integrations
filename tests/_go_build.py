@@ -4,8 +4,8 @@
 那支腳本裡，映像、release、CI、Makefile 與測試都經它建，測的 binary 才與出貨的同形。
 ⛔ `CGO_ENABLED=0` 不是風格選擇：cgo 版每條 OS thread 的 pthread stack 計入
 RLIMIT_DATA，產生器在 RLIMIT_DATA 下判定時量到的是 thread 數而不是判定的記憶體——
-量測與每個旗標的理由都在腳本頂部。守衛：tests/ops/test_go_build_ssot.py（任何不經
-腳本的 `go build` 呼叫點都轉紅，並量測測試 session 建出的 binary 確實是那個形狀）。
+量測與每個旗標的理由都在腳本頂部。守衛：tests/ops/test_go_build_ssot.py（量測試
+session 建出的 binary 確實是那個形狀；另掃描常見寫法的直接 `go build` 呼叫點）。
 """
 from __future__ import annotations
 

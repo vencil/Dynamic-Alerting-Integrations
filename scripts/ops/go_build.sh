@@ -1,11 +1,15 @@
 #!/bin/sh
 # go_build.sh — the ONE place this repository's `go build` flags are written
 # (#3425). Every build of a Go binary goes through it: the images (da-tools'
-# build.sh, the tenant-api and recipe-preview Dockerfiles), the release
-# workflow's air-gapped binaries, the CI workflows, the Makefile's *-build
-# targets, the pytest fixtures (tests/_go_build.py builds the argv) and the
-# Go tests that build a da-guard. tests/ops/test_go_build_ssot.py turns red
-# on any other place that runs `go build`.
+# build.sh and the tenant-api, recipe-preview, threshold-exporter and e2e
+# receiver Dockerfiles), the release workflow's air-gapped binaries, the CI
+# workflows, the Makefile's *-build targets, the pytest fixtures
+# (tests/_go_build.py builds the argv) and the Go tests that build a da-guard.
+# tests/ops/test_go_build_ssot.py holds this two ways. It measures the binaries
+# the test session builds (`go version -m`: CGO_ENABLED=0 and -trimpath;
+# `go tool nm`: no symbol table), which is the guarantee. It also scans the
+# tracked files for a direct `go build` in the shapes its docstring lists;
+# a shape it does not model (eval, a runtime-built argv, …) gets past the scan.
 #
 #   sh scripts/ops/go_build.sh [-X importpath.name=value]... \
 #       [--goos OS] [--goarch ARCH] <module-dir> <package> <output>

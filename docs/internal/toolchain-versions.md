@@ -70,7 +70,7 @@ Renovate（repo 根目錄 `renovate.json`，由 `.github/workflows/renovate.yaml
 
 ## Go 建置旗標
 
-版本之外，`go build` 的旗標也只有一個來源：[`scripts/ops/go_build.sh`](../../scripts/ops/go_build.sh)（`CGO_ENABLED=0`、`-trimpath`、`-ldflags "-s -w"`、`-buildvcs=false`；每個旗標為何存在寫在腳本頂部）。da-tools 映像的 `build.sh`、tenant-api、recipe-preview、threshold-exporter 與 e2e-bench receiver 的 Dockerfile（build context 都是 repo 根；後兩者以同目錄的 `Dockerfile.dockerignore` 把 context 收窄回自己的模組加上這支腳本）、`release.yaml` 的離線 binary、CI workflow、Makefile 的 `*-build` 目標、pytest fixture（經 `tests/_go_build.py`）與 Go 測試都經它建。守衛 `tests/ops/test_go_build_ssot.py` 結構化掃描所有追蹤檔，任何不經腳本的 `go build` 都轉紅，並量測測試 session 建出的 binary 是這個形狀。
+版本之外，`go build` 的旗標也只有一個來源：[`scripts/ops/go_build.sh`](../../scripts/ops/go_build.sh)（`CGO_ENABLED=0`、`-trimpath`、`-ldflags "-s -w"`、`-buildvcs=false`；每個旗標為何存在寫在腳本頂部）。da-tools 映像的 `build.sh`、tenant-api、recipe-preview、threshold-exporter 與 e2e-bench receiver 的 Dockerfile（build context 都是 repo 根；後兩者以同目錄的 `Dockerfile.dockerignore` 把 context 收窄回自己的模組加上這支腳本）、`release.yaml` 的離線 binary、CI workflow、Makefile 的 `*-build` 目標、pytest fixture（經 `tests/_go_build.py`）與 Go 測試都經它建。守衛 `tests/ops/test_go_build_ssot.py` 分兩半。保證來自產物那半：量測試 session 建出的 binary，`go version -m` 要是 `CGO_ENABLED=0`、`-trimpath=true`，`go tool nm` 要讀不到符號表（`-trimpath` 建的 binary 不記 `-ldflags`，strip 只能這樣讀）；腳本被改壞或測試繞過腳本建，這半就紅。另一半結構化掃描追蹤檔裡直接執行的 `go build`，只認它 docstring 列出的形狀（命令位置的 `go`／名字含 go 的變數，接 `build` 或 `-C <dir> build`；Python 與 Go 的 argv 字面值），`eval`、執行期組出的 argv 等寫法掃不到。
 
 ## 已知未統一（刻意保留，附理由）
 

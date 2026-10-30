@@ -1,18 +1,26 @@
-"""#3425：repo 內每一次 `go build` 都經 `scripts/ops/go_build.sh`，建置旗標只有這一個來源。
+"""#3425：Go binary 的建置旗標只有一個來源，`scripts/ops/go_build.sh`。
 
-兩半：
+兩半，保證來自第 2 半：
 
-1. **呼叫點**（結構化掃描，不是整行字串比對）：`git ls-files` 裡的 Makefile／*.mk、
-   shell（*.sh、*.bash、shebang 是 sh/bash 的無副檔名檔）、Dockerfile*、YAML、Python、Go，
-   找「實際執行」的 `go build`——shell 指令以 shlex 斷詞、去註解後看命令位置的字；
-   Dockerfile 只看 RUN；Makefile 看 recipe 與變數定義；YAML 解析後看每個字串值；Python
-   以 AST 看開頭兩項是 `go`、`build` 的 list/tuple 字面值與交給 `os.system`／`subprocess.*`
-   的字串；Go 看 `exec.Command(…)` 的引數。純註解、文件、給人看的訊息字串不算。
-   `go_build.sh` 本身以外一律紅，豁免只有 `_EXEMPT` 列的、各附理由。
-2. **產物**（行為）：測試 session 建出的 binary 量 `go version -m` 與 ELF section——
-   `CGO_ENABLED=0`、`-trimpath`、沒有符號表與 DWARF（`-s -w`）。只看呼叫點的話，腳本本身
-   被改壞（例如掉了 CGO_ENABLED=0）照樣綠；cgo 版 da-guard 在產生器的 RLIMIT_DATA 下量到的
-   是 thread 數，理由與量測在腳本頂部。
+1. **呼叫點**（結構化掃描，不是整行字串比對）：`git ls-files`（含未 add 的新檔）裡的
+   Makefile／*.mk、shell（*.sh、*.bash、shebang 是 sh/bash 的無副檔名檔）、Dockerfile*、
+   YAML、Python、Go。認得的形狀：
+   - shell（含 Makefile recipe 與變數定義、Dockerfile 的 RUN、YAML 的每個字串值、
+     `sh -c '…'` 的內文）：命令位置上的 `go`（或 `…/go`、名字含 go 的變數 `$GO`／
+     `$(GO)`／`${GO}`），其後是 `build` 或 `-C <dir> build`；命令前的 `VAR=…` 與
+     `exec`／`env`／`time` 等字略過；
+   - Python：開頭是 go（字面值或名字含 go 的變數）的 list/tuple 字面值，以及交給
+     `os.system`／`subprocess.*` 的字串字面值；
+   - Go：`exec.Command(…)`／`exec.CommandContext(ctx, …)` 的引數，判準同 Python。
+   純註解、文件、給人看的訊息字串不算。⚠️ **認不得的寫法照樣漏**：`eval`、
+   `timeout 60 go build`、`shlex.split("go build")`、f-string、heredoc、
+   `exec.Command("go", args...)` 這類由執行期組出的 argv 都不在上面的形狀裡。
+   命中就紅，`_EXEMPT` 只有腳本本身與本檔的必響對照。
+2. **產物**（行為）：量測試 session 建出的 binary——`go version -m` 的 build settings
+   要是 `CGO_ENABLED=0`、`-trimpath=true`，`go tool nm` 要讀不到符號表（`-s -w`）。
+   不論呼叫點怎麼寫，測試用的 binary 不是這個形狀就紅；腳本本身被改壞（掉了
+   CGO_ENABLED=0 或 -s -w）也是這半抓到。cgo 版 da-guard 在產生器的 RLIMIT_DATA 下量到
+   的是 thread 數，理由與量測在腳本頂部。
 """
 from __future__ import annotations
 
@@ -22,7 +30,6 @@ import os
 import re
 import shlex
 import shutil
-import struct
 import subprocess
 from pathlib import Path
 
@@ -50,13 +57,32 @@ _ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 _SHELLS = {"sh", "bash", "ash", "dash", "zsh"}
 
 
+def _var_is_go(name: str) -> bool:
+    """變數名含 go（不分大小寫）就當它是 go：`$GO`、`$(GO)`、`goBin`、`go_exe`。三種語言
+    的偵測器共用這一條判準。"""
+    return "go" in name.lower()
+
+
 def _is_go(word: str) -> bool:
-    return word == "go" or word.endswith("/go")
+    """字面的 go（含路徑），或 shell 變數展開 `$NAME`（`$(NAME)`／`${NAME}` 先正規化成它）。"""
+    if word == "go" or word.endswith("/go"):
+        return True
+    m = re.fullmatch(r"\$([A-Za-z_]\w*)", word)
+    return m is not None and _var_is_go(m.group(1))
+
+
+def _then_build(seq: list, i: int) -> bool:
+    """seq[i] 是 go 時，其後是 `build`，或 `-C <dir> build`。"""
+    if i + 1 < len(seq) and seq[i + 1] == "build":
+        return True
+    return i + 3 < len(seq) and seq[i + 1] == "-C" and seq[i + 3] == "build"
 
 
 def _shell_tokens(text: str) -> list[str]:
     # 註解吃到行尾時連換行一起吃掉，換行加倍才留得下命令邊界。
     text = text.replace("\\\n", " ").replace("\n", "\n\n")
+    # `$(GO)`（make）與 `${GO}` 正規化成 `$GO`，否則 `(` 會被斷成分隔符。
+    text = re.sub(r"\$[({]([A-Za-z_]\w*)[)}]", r"$\1", text)
     lx = shlex.shlex(text, posix=True, punctuation_chars=_SEP_CHARS)
     lx.whitespace = " \t\r"
     lx.whitespace_split = True  # `GOOS=${X}` 是一個字，不是 `GOOS=` `$` `{` …
@@ -90,7 +116,7 @@ def shell_runs_go_build_tokens(tokens: list[str]) -> bool:
         if at_cmd:
             if _ASSIGN.match(tok) or tok in _PREFIX_WORDS:
                 continue
-            if _is_go(tok) and i + 1 < len(tokens) and tokens[i + 1] == "build":
+            if _is_go(tok) and _then_build(tokens, i):
                 return True
             at_cmd, prev_cmd = False, tok
             continue
@@ -152,7 +178,7 @@ def dockerfile_runs_go_build(text: str) -> bool:
             except ValueError:
                 argv = None
             if isinstance(argv, list):
-                if len(argv) >= 2 and _is_go(str(argv[0])) and argv[1] == "build":
+                if argv and _is_go(str(argv[0])) and _then_build([str(a) for a in argv], 0):
                     return True
                 if len(argv) >= 3 and Path(str(argv[0])).name in _SHELLS and argv[1] == "-c":
                     if shell_runs_go_build(str(argv[2])):
@@ -192,23 +218,27 @@ _PY_SHELL_CALLS = {"system", "popen", "getoutput", "getstatusoutput",
                    "run", "call", "check_call", "check_output", "Popen"}
 
 
-def _py_word(node) -> "str | None":
+def _py_is_go(node) -> bool:
+    """字面值 go（含路徑），或變數名含 go 的 Name（判準同 `_var_is_go`）。"""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value == "go" or node.value.endswith("/go")
+    return isinstance(node, ast.Name) and _var_is_go(node.id)
+
+
+def _py_const(node) -> "str | None":
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
-    if isinstance(node, ast.Name):
-        return node.id
     return None
 
 
 def python_runs_go_build(text: str) -> bool:
-    """開頭兩項是 `go`（字面值或名為 go 的變數）、`build` 的 list/tuple 字面值；
-    或交給 os.system／subprocess.* 的字串字面值裡的 shell 指令。"""
+    """開頭是 go（字面值或名字含 go 的變數）、接著 `build` 或 `-C <dir> build` 的
+    list/tuple 字面值；或交給 os.system／subprocess.* 的字串字面值裡的 shell 指令。"""
     tree = ast.parse(text)
     for node in ast.walk(tree):
-        if isinstance(node, (ast.List, ast.Tuple)) and len(node.elts) >= 2:
-            first, second = _py_word(node.elts[0]), _py_word(node.elts[1])
-            if first is not None and _is_go(first) and second == "build" \
-                    and isinstance(node.elts[1], ast.Constant):
+        if isinstance(node, (ast.List, ast.Tuple)) and len(node.elts) >= 2 \
+                and _py_is_go(node.elts[0]):
+            if _then_build([None] + [_py_const(e) for e in node.elts[1:]], 0):
                 return True
         if isinstance(node, ast.Call) and node.args:
             fn = node.func
@@ -261,7 +291,8 @@ def _go_str(arg: str) -> "str | None":
 
 def go_runs_go_build(text: str) -> bool:
     """`exec.Command(…)`／`exec.CommandContext(ctx, …)` 的引數：第一個是 "go"（或以 /go
-    結尾的字面值、名字含 go 的變數）、第二個是 "build"；或 `sh -c "<script>"`。"""
+    結尾的字面值、名字含 go 的變數，判準同 `_var_is_go`）、其後是 "build" 或
+    "-C", <dir>, "build"；或 `sh -c "<script>"`。"""
     tokens = [t for t in _GO_TOKEN.findall(text) if not t.startswith(("//", "/*"))]
     for i, tok in enumerate(tokens):
         if tok not in ("exec.Command", "exec.CommandContext") or tokens[i + 1:i + 2] != ["("]:
@@ -272,11 +303,12 @@ def go_runs_go_build(text: str) -> bool:
         if len(args) < 2:
             continue
         first, second = _go_str(args[0]), _go_str(args[1])
-        if second == "build":
-            if first is not None and _is_go(first):
-                return True
-            if first is None and "go" in args[0].lower():
-                return True
+        if first is not None:
+            is_go = first == "go" or first.endswith("/go")
+        else:  # 一個識別字（可帶 `.`），名字含 go
+            is_go = re.fullmatch(r"[A-Za-z_][\w.]*", args[0]) is not None and _var_is_go(args[0])
+        if is_go and _then_build([None] + [_go_str(a) for a in args[1:]], 0):
+            return True
         if first is not None and Path(first).name in _SHELLS and second == "-c" and len(args) > 2:
             script = _go_str(args[2])
             if script is not None and shell_runs_go_build(script):
@@ -364,6 +396,11 @@ def test_every_go_build_goes_through_the_script():
     ("shell", "for a in b; do\n  (cd x && go build \\\n    -o y .)\ndone\n"),
     ("shell", "# a comment\nexec /usr/local/go/bin/go build .\n"),
     ("shell", "bash -c 'go build ./...'\n"),
+    ("shell", '"$GO" build ./cmd/x\n'),
+    ("shell", "${GOBIN} build .\n"),
+    ("shell", "go -C components/da-read build -o x .\n"),
+    ("make", "x:\n\t@$(GO) build -o b .\n"),
+    ("make", "x:\n\t@cd a && $(GO_CMD) -C app build .\n"),
     ("make", "x:\n\t@cd a && go build -o b .\n"),
     ("make", "x:\n\t@cd a && \\\n\t\tgo build -o b .\n"),
     ("make", "GOB := CGO_ENABLED=0 go build\n"),
@@ -376,10 +413,14 @@ def test_every_go_build_goes_through_the_script():
     ("python", 'subprocess.run([go, "build", "-o", out, "."])\n'),
     ("python", 'subprocess.run(("go", "build"))\n'),
     ("python", 'os.system("cd x && go build .")\n'),
+    ("python", 'subprocess.run([go_bin, "build", "."])\n'),
+    ("python", 'subprocess.run([GO, "-C", app, "build", "."])\n'),
     ("go", 'cmd := exec.Command("go", "build", "-o", out, ".")\n'),
     ("go", 'cmd := exec.CommandContext(ctx, "go", "build", ".")\n'),
     ("go", 'cmd := exec.Command(goBin, "build", ".")\n'),
     ("go", 'cmd := exec.Command("sh", "-c", "go build .")\n'),
+    ("go", 'cmd := exec.Command("go", "-C", dir, "build", ".")\n'),
+    ("go", 'cmd := exec.Command(cfg.GoBin, "-C", dir, "build")\n'),
 ])
 def test_the_detectors_fire(kind, text):
     assert _DETECTORS[kind](text), text
@@ -391,6 +432,9 @@ def test_the_detectors_fire(kind, text):
     ("shell", "echo go build\n"),
     ("shell", "sh scripts/ops/go_build.sh app ./cmd/x out\n"),
     ("shell", "docker build -t x .\n"),
+    ("shell", "$(DOCKER) build -t x .\n"),
+    ("shell", "go -C app test ./...\n"),
+    ("make", "x:\n\t@$(GO) test ./...\n"),
     ("make", "# the go build cache\nx:\n\t@# a go build comment\n\t@echo hi\n"),
     ("make", "x:\n\t@$(GO_BUILD) app ./cmd/x out\n"),
     ("docker", "FROM a\n# RUN go build .\nRUN sh /opt/go_build.sh . ./cmd/x /x\n"),
@@ -400,6 +444,7 @@ def test_the_detectors_fire(kind, text):
     ("python", 'f"CGO_ENABLED=0 go build -o /usr/local/bin/{bn}"\n'),
     ("python", 'argv = ["retry", "--", "go", "build", "./..."]\n'),
     ("python", 'subprocess.run(go_build_argv(app, "./cmd/x", out))\n'),
+    ("python", 'subprocess.run([docker, "build", "."])\n'),
     ("go", '// exec.Command("go", "build")\nx := "go build"\n'),
     ("go", 'exec.Command("go", "test", "./...")\n'),
     ("go", 'exec.Command("sh", filepath.Join(root, "scripts", "ops", "go_build.sh"), app)\n'),
@@ -442,29 +487,31 @@ def _build_settings(binary: str) -> dict[str, str]:
     return settings
 
 
-def _elf_section_names(binary: str) -> list[str]:
-    """ELF64 little-endian 的 section 名稱（linux/amd64、arm64 的 Go binary）。"""
-    with open(binary, "rb") as f:
-        data = f.read()
-    assert data[:4] == b"\x7fELF" and data[4] == 2 and data[5] == 1, \
-        f"{binary} is not an ELF64 LE binary: the strip check reads ELF sections"
-    shoff, = struct.unpack_from("<Q", data, 0x28)
-    shentsize, shnum, shstrndx = struct.unpack_from("<HHH", data, 0x3A)
-    headers = [struct.unpack_from("<IIQQQQ", data, shoff + i * shentsize) for i in range(shnum)]
-    str_off, str_size = headers[shstrndx][4], headers[shstrndx][5]
-    table = data[str_off:str_off + str_size]
-    names = [table[h[0]:table.index(b"\0", h[0])].decode() for h in headers]
-    assert ".text" in names, names  # 解析對了的必響對照
-    return names
+def _symbol_table(binary: str) -> "tuple[int, str]":
+    """`go tool nm <binary>` 的 (rc, 輸出)。Go 自己的讀法，ELF／Mach-O／PE 都認。"""
+    go = shutil.which("go")
+    if go is None:
+        pytest.fail("`go` is not on PATH: the symbol table cannot be read")
+    proc = subprocess.run([go, "tool", "nm", binary], capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", check=False, timeout=120)
+    return proc.returncode, proc.stdout + proc.stderr
 
 
 def _assert_shipped_shape(binary: str) -> None:
+    """CGO_ENABLED=0 與 -trimpath 讀 `go version -m` 的 build settings。
+
+    `-ldflags` 讀不到：binary 以 -trimpath 建時，Go 不把 -ldflags 記進 build
+    settings（實測 go1.26.8：列出 -buildmode、-compiler、-trimpath、CGO_ENABLED、
+    GOARCH、GOOS、GOAMD64，沒有 -ldflags）。所以 strip 改問 `go tool nm`：-s 建的
+    binary 沒有符號表，它以非零結束並說 no symbols。go1.26.8 上 -s 單獨建出的
+    binary 與 -s -w 逐 byte 同大、都沒有 .debug_* section，-s 已含 -w。
+    """
     settings = _build_settings(binary)
     assert settings.get("CGO_ENABLED") == "0", (binary, settings)
     assert settings.get("-trimpath") == "true", (binary, settings)
-    names = _elf_section_names(binary)
-    unstripped = [n for n in names if n == ".symtab" or n.startswith((".debug", ".zdebug"))]
-    assert not unstripped, f"{binary} keeps {unstripped}: not built with -ldflags '-s -w'"
+    rc, out = _symbol_table(binary)
+    assert rc != 0 and "no symbols" in out, (
+        f"{binary} has a symbol table: not built with -ldflags '-s -w'\n{out[:300]}")
 
 
 def test_the_session_binaries_have_the_shipped_shape(
@@ -483,17 +530,22 @@ def test_the_session_wide_binaries_have_the_shipped_shape():
 
 
 def test_an_unstripped_build_is_caught(tmp_path):
-    """必響對照：同一個套件不經腳本、以 go 的預設旗標建，上面的判定要不成立。"""
+    """必響對照：CGO_ENABLED=0 與 -trimpath 都對、只少了 -s -w——只有 strip 那條判定
+    能讓它不成立，所以它紅就是那條判定真的會響。"""
     go = shutil.which("go")
     if go is None:
         pytest.fail("`go` is not on PATH")
     out = tmp_path / "da-crdecode"
-    proc = subprocess.run([go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-crdecode"],
+    proc = subprocess.run([go, "build", "-buildvcs=false", "-trimpath", "-o", str(out),
+                           "./cmd/da-crdecode"],
                           cwd=REPO / "components" / "threshold-exporter" / "app",
                           capture_output=True, text=True, encoding="utf-8",
-                          errors="replace", timeout=600)
+                          errors="replace", timeout=600,
+                          env={**os.environ, "CGO_ENABLED": "0"})
     assert proc.returncode == 0, proc.stderr
-    with pytest.raises(AssertionError):
+    settings = _build_settings(str(out))
+    assert settings.get("CGO_ENABLED") == "0" and settings.get("-trimpath") == "true", settings
+    with pytest.raises(AssertionError, match="symbol table"):
         _assert_shipped_shape(str(out))
 
 
