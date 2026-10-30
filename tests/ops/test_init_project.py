@@ -7100,7 +7100,7 @@ class TestStaleFiles:
         import shutil
         shutil.copytree(out / 'kustomize', shared)
         shutil.rmtree(out / 'kustomize')
-        (out / 'kustomize').symlink_to(shared, target_is_directory=True)
+        symlink_or_skip(shared, out / 'kustomize')
         before = {p.relative_to(shared).as_posix(): p.read_bytes()
                   for p in shared.rglob('*') if p.is_file()}
         run = self._cli(out, *self._SECOND)

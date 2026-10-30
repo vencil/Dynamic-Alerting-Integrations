@@ -4484,9 +4484,10 @@ def _remove_stale_outside_confd(out: Path, rels: list,
             real = Path(os.path.realpath(parent))
             if real == root or root not in real.parents:
                 break
+            # rmdir removes only an EMPTY directory (ENOTEMPTY otherwise):
+            # trying it is the emptiness test, with no listing to race and
+            # no conf.d-style flat scan for the enumeration contract to flag.
             try:
-                if any(parent.iterdir()):
-                    break
                 parent.rmdir()
             except OSError:
                 break
