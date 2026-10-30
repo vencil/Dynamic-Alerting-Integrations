@@ -1179,14 +1179,19 @@ class TestGivenConfigDirIsNeverSilent:
     @pytest.mark.parametrize("case", ["missing", "empty", "no-tenant"])
     def test_check_does_not_answer_as_if_no_dir_was_given(self, tmp_path, monkeypatch, case):
         """`check()` (batch-diagnose imports it) used to skip the chain for
-        '' and answer without it for the other two."""
-        monkeypatch.setattr(diagnose, "tenant_db_type", lambda *a: (None, None))
-        monkeypatch.setattr(diagnose, "query_prometheus", lambda *a: ([], None))
+        '' and answer without it for the other two. An unusable path is
+        refused before any query, as on the CLI."""
+        asked = []
+        monkeypatch.setattr(diagnose, "tenant_db_type",
+                            lambda *a: asked.append(a) or (None, None))
+        monkeypatch.setattr(diagnose, "query_prometheus",
+                            lambda *a: asked.append(a) or ([], None))
         target = {"missing": str(tmp_path / "nope"), "empty": "",
                   "no-tenant": self._tree(tmp_path)}[case]
         want = diagnose.TenantNotFoundError if case == "no-tenant" else diagnose.CallerError
         with pytest.raises(want):
             diagnose.check("db-z", "http://prom", config_dir=target, out=io.StringIO())
+        assert (asked == []) is (case != "no-tenant"), asked
         # must-fire control: the same check with the tenant the tree has
         if case == "no-tenant":
             buf = io.StringIO()

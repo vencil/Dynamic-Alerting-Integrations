@@ -483,6 +483,10 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
     """
     errors = []
     skipped = []
+    if config_dir is not None:
+        # #1524: an importer gets the path refusal before any query too, not
+        # after up to four Prometheus queries and a kubectl call (step 4).
+        require_config_dir(config_dir)
 
     # 0. 資料庫類型：Pod 與 exporter 兩項只為 MariaDB 寫（本輪決策 N2）
     db_type, db_type_err = tenant_db_type(tenant, prom_url)
