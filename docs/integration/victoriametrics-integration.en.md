@@ -190,7 +190,7 @@ After finding your path via the §1 decision tree:
 - [ ] Check dialect distribution + non-portable ratio
 - [ ] Extract cluster + Profile-as-Directory-Default via the Profile Builder library (the standalone `da-tools profile build` CLI is not yet shipped — planned) <!-- datools-cmd-ignore: planned CLI, not shipped -->
 - [ ] Run `da-batchpr apply` to open Base + tenant chunk PRs
-- [ ] Run `da-guard` through the schema / cardinality / redundant-override checks; on exit 4 (the tree holds routing or domain policy, which da-guard no longer judges since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)) also run `da-tools generate-routes --validate --strict`
+- [ ] Run `da-guard` through the schema / cardinality / redundant-override checks; on exit 4 (the tree holds routing or domain policy, which da-guard no longer judges since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904)) also run `da-tools generate-routes --config-dir <conf.d> --validate --strict`
 - [ ] Details → [Migration Toolkit Installation](../migration-toolkit-installation.en.md)
 
 </details>

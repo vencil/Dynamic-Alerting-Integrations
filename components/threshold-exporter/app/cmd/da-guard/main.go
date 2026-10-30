@@ -63,7 +63,8 @@
 //	   no longer judges routing or domain policy: it reports no routing
 //	   finding at all. The report lists the evidence (`undetermined`, always
 //	   present in the JSON, [] when there is none); the remedy is
-//	   `da-tools generate-routes --validate --strict`. A tree without any of
+//	   `da-tools generate-routes --config-dir <dir> --validate --strict`
+//	   with this run's --config-dir (generatorCommand). A tree without any of
 //	   it is 0 as before — an empty scope included.
 //
 // Precedence 3 > 1 > 4 > 0. 1 wins over 4: a threshold error is
@@ -193,7 +194,7 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		"Comma-separated dotted paths every tenant's effective config must have "+
 			"(e.g. 'thresholds.cpu'). A path under a routing key ('_routing', '_routing.*', "+
 			"'_severity_dedup', ...) is refused (exit 2): routing is judged by "+
-			"'da-tools generate-routes --validate --strict', not here. "+
+			"'"+generatorHelpCommand()+"', not here. "+
 			"Empty disables the schema check.")
 	fs.IntVar(&f.cardinalityLimit, "cardinality-limit", 0,
 		"Per-tenant ceiling on the user_threshold rows the exporter would produce (at the busiest "+
@@ -242,7 +243,7 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 			"  2  caller error, or a conf.d path that is not valid UTF-8 (no output can carry it)\n"+
 			"  3  config files the exporter cannot decode or cannot read; the report names them (fix, re-run)\n"+
 			"  4  routing or domain policy in the tree, which this check does not judge; the report names it\n"+
-			"     (run 'da-tools generate-routes --validate --strict'). 3 wins over 1, 1 over 4.\n")
+			"     (run '%s'). 3 wins over 1, 1 over 4.\n", generatorHelpCommand())
 	}
 
 	if err := fs.Parse(args); err != nil {
@@ -322,7 +323,7 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 
 	if field := routingRequiredField(splitNonEmpty(f.requiredFields)); field != "" {
 		fmt.Fprintf(errOut, "%s: --required-fields %q: routing is no longer judged by da-guard; "+
-			"require it in the route generator's checks instead (%s)\n", programName, field, undeterminedRemedy)
+			"require it in the route generator's checks instead (%s)\n", programName, field, undeterminedRemedy(f.configDir))
 		return exitCallerErr
 	}
 
@@ -439,7 +440,7 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 			fmt.Fprintf(errOut, "%s: %v\n", programName, err)
 			return exitCallerErr
 		}
-		return reportDroppedFiles(errOut, scoped, undeterminedExit(errOut, undetermined, exitOK))
+		return reportDroppedFiles(errOut, scoped, undeterminedExit(errOut, f.configDir, undetermined, exitOK))
 	}
 
 	spellFindingsAsWritten(report, scoped)
@@ -462,17 +463,17 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	if report.Summary.Errors > 0 || (f.warnAsError && report.Summary.Warnings > 0) {
 		code = exitFindings
 	}
-	return reportDroppedFiles(errOut, scoped, undeterminedExit(errOut, undetermined, code))
+	return reportDroppedFiles(errOut, scoped, undeterminedExit(errOut, f.configDir, undetermined, code))
 }
 
 // undeterminedExit: when the tree holds what only the route generator judges
 // (undetermined.go), say so on stderr — whatever the exit code — and turn
 // exitOK into exitUndetermined; any other code (1) is returned as is.
-func undeterminedExit(errOut io.Writer, undetermined []undeterminedItem, code int) int {
+func undeterminedExit(errOut io.Writer, configDir string, undetermined []undeterminedItem, code int) int {
 	if len(undetermined) == 0 {
 		return code
 	}
-	reportUndetermined(errOut, undetermined)
+	reportUndetermined(errOut, configDir, undetermined)
 	if code == exitOK {
 		return exitUndetermined
 	}
@@ -808,7 +809,7 @@ func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenant
 	var body string
 	switch f.format {
 	case "md":
-		body = renderMarkdown(scoped, report, notices, undetermined)
+		body = renderMarkdown(f.configDir, scoped, report, notices, undetermined)
 	case "json":
 		b, err := json.MarshalIndent(struct {
 			ConfigDir   string        `json:"config_dir"`
@@ -856,14 +857,14 @@ func writeReport(stdout, errOut io.Writer, f *flags, scoped *config.ScopedTenant
 // preamble (config dir, scanned files) so the PR-comment reader
 // has the context they need without scrolling back to the workflow
 // definition.
-func renderMarkdown(scoped *config.ScopedTenants, report *guard.GuardReport, notices []string, undetermined []undeterminedItem) string {
+func renderMarkdown(configDir string, scoped *config.ScopedTenants, report *guard.GuardReport, notices []string, undetermined []undeterminedItem) string {
 	var b strings.Builder
 	for _, n := range notices {
 		b.WriteString("> ⚠️ " + n + "\n\n")
 	}
 	b.WriteString(parseFailedMarkdown(scoped.ParseFailed))
 	b.WriteString(unreadableMarkdown(scoped.Unreadable))
-	b.WriteString(undeterminedMarkdown(undetermined))
+	b.WriteString(undeterminedMarkdown(configDir, undetermined))
 	body := report.Markdown()
 	if len(scoped.ParseFailed) > 0 || len(scoped.Unreadable) > 0 {
 		// #2123: the guard library's all-clear line says the change is safe
@@ -913,7 +914,7 @@ func writeEmptyReport(stdout, errOut io.Writer, f *flags, parseFailed []string, 
 			verdict = "_No tenants under the requested scope; the routing and domain policy listed above " +
 				"are not judged here, so this is NOT a safe result (exit 4)._\n"
 		}
-		body = parseFailedMarkdown(parseFailed) + unreadableMarkdown(unreadable) + undeterminedMarkdown(undetermined) +
+		body = parseFailedMarkdown(parseFailed) + unreadableMarkdown(unreadable) + undeterminedMarkdown(f.configDir, undetermined) +
 			"## Dangling Defaults Guard\n\n" +
 			"### Summary\n\n" +
 			"- Tenants in scope: **0**\n" +
@@ -979,7 +980,7 @@ func writeDecodeStopReport(stdout, errOut io.Writer, f *flags, de *config.Decode
 	var body string
 	switch f.format {
 	case "md":
-		body = parseFailedMarkdown(files) + unreadableMarkdownEntries(unreadable) + undeterminedMarkdown(undetermined) +
+		body = parseFailedMarkdown(files) + unreadableMarkdownEntries(unreadable) + undeterminedMarkdown(f.configDir, undetermined) +
 			"## Dangling Defaults Guard\n\n" +
 			"_Stopped before checking any tenant: resolving the scope hit the file above " +
 			"(`" + de.Err.Error() + "`). The run stops at the first such file; fix it and re-run._\n"

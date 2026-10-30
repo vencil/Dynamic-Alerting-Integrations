@@ -23,7 +23,8 @@ Subcommands:
                     default mode takes flags directly. It judges no
                     routing or domain policy (#2904, ADR-036 §9):
                     exit 4 says the tree holds some, which
-                    `da-tools generate-routes --validate --strict` judges.
+                    `da-tools generate-routes --config-dir <path> --validate --strict`
+                    judges.
   served-values     Print, as JSON, the values the exporter's /metrics
                     serves per tenant (#2115; forwarded as
                     da-guard served-values ...). The reader library is
@@ -79,7 +80,7 @@ _USAGE_EN = (
     "  defaults-impact   Validate a conf.d/ tree against the C-12 Dangling\n"
     "                    Defaults Guard (schema + cardinality; routing and\n"
     "                    domain policy are judged by\n"
-    "                    `da-tools generate-routes --validate --strict`).\n"
+    "                    `da-tools generate-routes --config-dir <path> --validate --strict`).\n"
     "  served-values     Print, as JSON, the values the exporter's /metrics\n"
     "                    serves per tenant (--config-dir, optional --at RFC3339).\n"
     "  effective         Print, as JSON, every tenant's effective config as\n"
@@ -106,7 +107,8 @@ _USAGE_EN = (
     "  0  clean    1  guard found errors    2  caller error / binary missing\n"
     "  3  config files the exporter cannot decode or read (see docs/cli-reference.md §guard)\n"
     "  4  routing or domain policy in the tree, not judged here; run\n"
-    "     `da-tools generate-routes --validate --strict` (3 > 1 > 4 > 0)\n"
+    "     `da-tools generate-routes --config-dir <path> --validate --strict`\n"
+    "     (3 > 1 > 4 > 0)\n"
     "\n"
     "Binary resolution:\n"
     "  1. --da-guard-binary <path>\n"
@@ -125,7 +127,8 @@ _USAGE_ZH = (
     "子命令:\n"
     "  defaults-impact   依 C-12 Dangling Defaults Guard 規則\n"
     "                    驗證 conf.d/ 樹 (schema + cardinality；路由與 domain policy\n"
-    "                    由 `da-tools generate-routes --validate --strict` 判定)。\n"
+    "                    由 `da-tools generate-routes --config-dir <path> --validate --strict`\n"
+    "                    判定)。\n"
     "  served-values     以 JSON 印出 exporter /metrics 對每個租戶實際發出的值\n"
     "                    (--config-dir，可加 --at RFC3339)。\n"
     "  effective         以 JSON 印出每個租戶在 tenant-api /effective 的有效設定，\n"
@@ -149,7 +152,8 @@ _USAGE_ZH = (
     "  0  通過    1  guard 偵測到 error    2  caller error / 找不到 binary\n"
     "  3  exporter 無法 decode 或讀不到的設定檔（見 docs/cli-reference.md §guard）\n"
     "  4  樹上有路由或 domain policy，此處不判定；請跑\n"
-    "     `da-tools generate-routes --validate --strict`（3 > 1 > 4 > 0）\n"
+    "     `da-tools generate-routes --config-dir <path> --validate --strict`\n"
+    "     （3 > 1 > 4 > 0）\n"
     "\n"
     "Binary 解析順序:\n"
     "  1. --da-guard-binary <path>\n"

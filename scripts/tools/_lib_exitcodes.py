@@ -262,7 +262,8 @@ extensions today:
   passes it through): the tree holds routing or domain policy, which the
   default check no longer judges — "not judged", kept apart from 0
   ("judged, nothing wrong"). Neither a finding (1) nor a caller error (2):
-  the remedy is to run `da-tools generate-routes --validate --strict`.
+  the remedy is to run
+  `da-tools generate-routes --config-dir <dir> --validate --strict`.
   Precedence 3 > 1 > 4 > 0. Same contract places as exit 3.
 
 One tool — dx/tenant_verify.py — INVERTS 1/2 (exit 2 = verification

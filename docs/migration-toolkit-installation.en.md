@@ -28,7 +28,7 @@ The Migration Toolkit packages this pipeline into a customer-runnable bundle tha
 | Tool | Interface | Purpose |
 |---|---|---|
 | `da-tools` | Python CLI | 41+ existing ops / config-gen / policy-eval subcommands; new `guard` + `batch-pr` + `parser` subcommands wrapping da-guard / da-batchpr / da-parser |
-| `da-guard` | Go binary | Dangling Defaults Guard CLI (schema / cardinality / redundant-override checks; routing and domain policy are left to `da-tools generate-routes --validate --strict` since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904), exit 4 when the tree holds them) |
+| `da-guard` | Go binary | Dangling Defaults Guard CLI (schema / cardinality / redundant-override checks; routing and domain policy are left to `da-tools generate-routes --config-dir <conf.d> --validate --strict` since [#2904](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2904), exit 4 when the tree holds them) |
 | `da-batchpr` | Go binary | Migration Batch PR Pipeline CLI (apply / refresh / refresh-source subcommands; plan → open PRs → rebase after Base merge / data-layer hot-fix) |
 | `da-parser` | Go binary | PromRule parser CLI (import / allowlist subcommands; strict-PromQL compatibility check + dialect / VM-only function classification; anti-vendor-lock-in) |
 
@@ -153,7 +153,7 @@ da-guard --config-dir conf.d/ \
     --format md
 ```
 
-Exit codes: `0` clean / `1` error-tier finding (block CI) / `2` caller error / `3` config files the exporter cannot decode or read / `4` undetermined (the tree holds routing or domain policy, which da-guard does not judge; run `da-tools generate-routes --validate --strict`); precedence and the full definition are in [cli-reference §guard](cli-reference.en.md#guard). The full flag reference lives in `components/threshold-exporter/README.md` § da-guard CLI (outside the MkDocs site — open from GitHub).
+Exit codes: `0` clean / `1` error-tier finding (block CI) / `2` caller error / `3` config files the exporter cannot decode or read / `4` undetermined (the tree holds routing or domain policy, which da-guard does not judge; run `da-tools generate-routes --config-dir <conf.d> --validate --strict`); precedence and the full definition are in [cli-reference §guard](cli-reference.en.md#guard). The full flag reference lives in `components/threshold-exporter/README.md` § da-guard CLI (outside the MkDocs site — open from GitHub).
 
 ---
 
