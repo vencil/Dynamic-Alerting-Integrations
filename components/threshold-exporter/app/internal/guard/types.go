@@ -38,7 +38,8 @@
 //     duplication is harmless at runtime.
 //
 //  3. Routing schema guardrails (PR-2) — deleted (ADR-036 §7 step 3, #2905).
-//     The route generator (`da-tools generate-routes --validate --strict`)
+//     The route generator
+//     (`da-tools generate-routes --config-dir <dir> --validate --strict`)
 //     is the one judge of routing and domain policy; the CLI names a tree
 //     that holds them as undetermined (cmd/da-guard/undetermined.go, exit 4).
 //     The number is kept so the check numbers below stay as cited.

@@ -723,6 +723,49 @@ func TestUndeterminedRemedy_CodeSpanSurvivesBackticks(t *testing.T) {
 	}
 }
 
+// A --config-dir the report cannot show as written (a line break, another
+// control character, bytes that are not UTF-8) is not spelled out: the remedy
+// carries the help's placeholder and says why — never a command that pastes
+// as another path.
+func TestUndeterminedRemedy_UnshowablePathGetsThePlaceholder(t *testing.T) {
+	t.Parallel()
+	const why = "with <dir> this run's --config-dir (the path holds characters this report cannot show)"
+	for _, dir := range []string{"a\nb", "a\rb", "a\x1bb", "a\u0085b", "a\xffb"} {
+		got := undeterminedRemedy(dir)
+		if !strings.HasPrefix(got, "run `"+generatorHelpCommand()+"` "+why+" — ") || strings.Contains(got, dir) {
+			t.Errorf("remedy(%q) = %q; want the placeholder command and the reason, not the path", dir, got)
+		}
+	}
+	for _, dir := range []string{"conf.d", "my conf.d", "設定/conf.d", "a b"} {
+		if got := undeterminedRemedy(dir); strings.Contains(got, why) || !strings.Contains(got, generatorCommand(dir)) {
+			t.Errorf("remedy(%q) = %q; want the path itself", dir, got)
+		}
+	}
+}
+
+// The same through the CLI: the report and stderr of a run over a directory
+// whose name holds a line break, and the --required-fields refusal for a
+// --config-dir that is not UTF-8 (refused before the tree is read).
+func TestUndetermined_UnshowableConfigDirThroughTheCLI(t *testing.T) {
+	t.Parallel()
+	tmp := t.TempDir()
+	testutil.WriteTree(t, tmp, map[string]string{
+		"conf\nd/_defaults.yaml": udDefaults,
+		"conf\nd/tx.yaml":        udTenant + udRouting,
+	})
+	dir := filepath.Join(tmp, "conf\nd")
+	want := "`" + generatorHelpCommand() + "` with <dir>"
+	code, stdout, stderr := runOnce(t, "--config-dir", dir)
+	if code != exitUndetermined || !strings.Contains(stdout, want) || !strings.Contains(stderr, want) ||
+		strings.Contains(stderr, shellQuote(dir)) {
+		t.Errorf("exit %d; want 4 and %q in the report and stderr, no quoted path\nstdout: %s\nstderr: %s", code, want, stdout, stderr)
+	}
+	code, _, stderr = runOnce(t, "--config-dir", "conf\xffd", "--required-fields", "_routing.receiver")
+	if code != exitCallerErr || !strings.Contains(stderr, want) {
+		t.Errorf("--required-fields _routing.*: exit %d, stderr %q; want 2 naming %q", code, stderr, want)
+	}
+}
+
 // The report, stderr and the --required-fields refusal carry the run's own
 // --config-dir, spelled as the caller gave it (relative stays relative), and
 // the help carries the placeholder: no copy of the command lacks it.

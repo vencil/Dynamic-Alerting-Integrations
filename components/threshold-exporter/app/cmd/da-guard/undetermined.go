@@ -30,6 +30,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/vencil/threshold-exporter/internal/confdlayout"
 	"github.com/vencil/threshold-exporter/pkg/confdname"
@@ -137,7 +139,9 @@ func shellSafeByte(c byte) bool {
 }
 
 // codeSpan is s as one Markdown code span: fenced with one backtick more than
-// the longest run in s, so a backtick in a path cannot end it early.
+// the longest run in s, so a backtick in a path cannot end it early. s is a
+// generator command, so it never starts or ends with a backtick (CommonMark
+// would want a space between such an s and the fence).
 func codeSpan(s string) string {
 	longest, run := 0, 0
 	for i := 0; i < len(s); i++ {
@@ -151,16 +155,35 @@ func codeSpan(s string) string {
 		}
 	}
 	fence := strings.Repeat("`", longest+1)
-	if strings.HasPrefix(s, "`") || strings.HasSuffix(s, "`") {
-		return fence + " " + s + " " + fence
-	}
 	return fence + s + fence
 }
 
+// showablePath: s can stand in one line of the report and of stderr as
+// written — valid UTF-8, no control character. A line break cannot be inside
+// a Markdown code span (it renders as a space, so the pasted path is another
+// one), and a control character in stderr is the terminal's, not the reader's.
+func showablePath(s string) bool {
+	if !utf8.ValidString(s) {
+		return false
+	}
+	for _, r := range s {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
+}
+
 // undeterminedRemedy is the one remedy the report and stderr give, for the
-// run's --config-dir.
+// run's --config-dir. A path that cannot be shown (showablePath) is not
+// spelled out: the command carries the help's placeholder and says why.
 func undeterminedRemedy(configDir string) string {
-	return "run " + codeSpan(generatorCommand(configDir)) + " — " +
+	cmd, why := generatorCommand(configDir), ""
+	if !showablePath(configDir) {
+		cmd = generatorHelpCommand()
+		why = " with " + configDirPlaceholder + " this run's --config-dir (the path holds characters this report cannot show)"
+	}
+	return "run " + codeSpan(cmd) + why + " — " +
 		"da-guard no longer judges routing or domain policy (ADR-036 §9)"
 }
 

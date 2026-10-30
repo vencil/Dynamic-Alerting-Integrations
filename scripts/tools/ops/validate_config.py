@@ -1253,8 +1253,8 @@ def _effective_tree(config_dir: str):
 _PROFILE_ROUTING_KEY_HINT = (
     "A threshold profile (`profiles:`) may not carry `_severity_dedup` or any "
     "`_routing*` key: the route generator never reads them there (each line "
-    "above says where the key belongs). `da-tools generate-routes --validate "
-    "--strict` names each as routing_in_unread_location.")
+    "above says where the key belongs). `da-tools generate-routes --config-dir "
+    "<conf.d> --validate --strict` names each as routing_in_unread_location.")
 
 # #2904: the route generator could not read the tree for the row's #2914 check.
 _PROFILE_ROUTING_UNREAD_HINT = (
@@ -1449,7 +1449,8 @@ _POLICY_DSL_NO_CONFIG_FILE_HINT = (
 _POLICY_DSL_NO_DA_GUARD_HINT = _DA_GUARD_SOURCES + " No policy was evaluated."
 _POLICY_DSL_ROUTING_REFUSED_HINT = (
     "A rule reads `_routing`, and the route generator refuses this tree for the "
-    "reasons above (`da-tools generate-routes --validate` shows the same): fix "
+    "reasons above (`da-tools generate-routes --config-dir <conf.d> --validate` "
+    "shows the same): fix "
     "them, then re-run. No policy was evaluated.")
 
 
