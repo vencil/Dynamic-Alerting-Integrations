@@ -70,7 +70,6 @@ def _build_help_text(lang):
     state-reconcile   遷移狀態目錄聲明式一致化 (.da/state/ schema 驗證 + .da/manifest.json 重建)
     rule-pack-diff    Rule Pack 兩版本機械比對 (added / removed / breaking label schema)
     silencer-drift-check  AM silence 對 v2 rule pack 漂移偵測 (offline，吃 amtool silence query -o json)
-    migration-audit   遷移稽核：同一棵 conf.d 以 PyYAML 與 da-guard parse-tree 各讀一次，列出讀法差異 (ADR-036 §8)
     explain-keys      逐鍵列出來源、讀取端、判決與 disable 的作用；--assert 對照預期結果 (ADR-038 決定 9)
     generator-service 產生器容器的服務：經 Unix socket 判定寫入後的 conf.d 能否通過 generate-routes --validate --strict (ADR-036 §3)
 
@@ -161,7 +160,6 @@ Commands (File System — offline):
     state-reconcile   Migration state directory declarative reconciliation (.da/state/ schema + .da/manifest.json rebuild)
     rule-pack-diff    Mechanical diff between two Rule Pack versions (added / removed / breaking label schema)
     silencer-drift-check  AM silence drift audit against v2 rule pack (offline, eats amtool silence query -o json)
-    migration-audit   Read a conf.d with PyYAML and with da-guard parse-tree; list where they differ (ADR-036 §8)
     explain-keys      Per key: source, readers, verdict, what a disable does; --assert checks it (ADR-038 decision 9)
     generator-service Generator container service: judge a conf.d plus writes with generate-routes --validate --strict over a Unix socket (ADR-036 §3)
 
@@ -382,9 +380,6 @@ COMMAND_MAP = {
     # v2.8.0 — Alertmanager silence drift auditor (issue #405 Category B)
     # Offline check: silences JSON dump + rule pack source → list orphan silences.
     "silencer-drift-check": "silencer_drift_check.py",
-    # #2898 — ADR-036 §8 one-off migration audit: the conf.d read by today's
-    # PyYAML reader and by `da-guard parse-tree`, differences listed.
-    "migration-audit": "migration_audit.py",
     # #3016 — ADR-038 decision 9: per tenant and key, where it comes from,
     # who reads it, the shared verdict and what a `disable` does; --assert.
     "explain-keys": "explain_keys.py",

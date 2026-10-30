@@ -446,13 +446,12 @@ class TestFileWritePermissions:
 #    `unsafe_load` / `full_load`，以及自己建 loader 再 `.get_single_data()`。
 #    唯一的反向例外是 `Loader=<SafeLoader 子類>`：兩者都**誤紅**。
 #    本 repo 的活實例（今天安全，但改壞了沒有人會看見）：
-#      `_lib_yaml_keys.load_exporter_keys()` / `load_first_document_exporter_keys()`
-#      / `load_all_exporter_keys()`
-#      （自己建 loader；#2114 自 `validate_config._load_with_exporter_keys()` 搬來，
-#      第三個入口 #2216 加入）。
-#    它的安全性質由**行為級**測試釘住（`tests/shared/test_tenant_id_yaml_spelling_parity.py::
-#    test_the_loader_cannot_construct_python_objects`，對該檔 `LOADS` 表裡的
-#    每個入口都餵真的 `!!python/object/apply` payload）。⛔ 刪那支測試等於讓它完全無人看守。
+#      `_lib_io.strict_safe_load()` / `strict_safe_load_all()`
+#      （自己建 loader 再 `.get_single_data()`／`.get_data()`）。
+#    它的安全性質由**行為級**測試釘住（`tests/shared/test_yaml_strict_loader.py::
+#    test_the_loader_cannot_construct_python_objects`，對兩個入口都餵真的
+#    `!!python/object/apply` payload）。⛔ 刪那支測試等於讓它完全無人看守。
+#    （#2114 的 `_lib_yaml_keys` 那組入口已於 ADR-036 §7 步驟 13 刪除，#3206。）
 #
 #    ⛔ 不要在本檔重新長出第二份 AST 實作——同一個判定兩份實作正是 #1643。
 # ============================================================

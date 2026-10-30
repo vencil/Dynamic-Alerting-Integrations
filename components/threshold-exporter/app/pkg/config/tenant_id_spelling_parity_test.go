@@ -5,10 +5,12 @@ package config
 //
 // The exporter keys a tenant by the `tenants:` key's scalar TEXT (a
 // map[string] decode), while PyYAML's YAML 1.1 typing reads `010` as 8 and
-// `yes` as True. The Python tools now read tenant ids through
-// scripts/tools/_lib_yaml_keys.py; the Python half asserts that reader
-// against the same `exporter_key` column this test derives from the
-// exporter's own decode (ParseConfigFile, the flat plane's decode).
+// `yes` as True. The Python tools read tenant ids from `da-guard
+// parse-tree` (ADR-036); this test pins the `exporter_key` column from the
+// exporter's own decode (ParseConfigFile, the flat plane's decode), and
+// tests/ops/test_tenant_id_as_text.py drives the Python tools with the
+// table's rows. (The Python loader that imitated this decode, and its half
+// of the table, were deleted in ADR-036 §7 step 13, #3206.)
 
 import (
 	"bytes"

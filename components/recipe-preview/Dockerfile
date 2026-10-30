@@ -106,8 +106,8 @@ COPY scripts/tools/lint/check_rulepack_sync.py  ./core/lint/check_rulepack_sync.
 # exactly as in the repo.
 COPY scripts/tools/_lib_exitcodes.py            ./core/_lib_exitcodes.py
 COPY scripts/tools/_lib_compat.py               ./core/_lib_compat.py
-# The core's imports (#2873): compile_custom_alerts → _lib_io → _lib_constants,
-# _lib_yaml_keys; the da-guard reader _lib_tenant_values (#3229: the preview
+# The core's imports (#2873): compile_custom_alerts → _lib_io → _lib_constants;
+# the da-guard reader _lib_tenant_values (#3229: the preview
 # judges the recipe through da-guard) → _lib_parse_cache / _lib_parse_tree
 # (the reader's fail-closed exit, #3206), guard_dispatch → _lib_godispatch, and
 # _lib_python → _lib_validation, _lib_prometheus. Missing any of them fails the
@@ -118,7 +118,6 @@ COPY scripts/tools/_lib_io.py                   ./core/_lib_io.py
 COPY scripts/tools/_lib_label.py                ./core/_lib_label.py
 COPY scripts/tools/_lib_paths.py                ./core/_lib_paths.py
 COPY scripts/tools/_lib_constants.py            ./core/_lib_constants.py
-COPY scripts/tools/_lib_yaml_keys.py            ./core/_lib_yaml_keys.py
 COPY scripts/tools/_lib_tenant_values.py        ./core/_lib_tenant_values.py
 COPY scripts/tools/_lib_parse_cache.py          ./core/_lib_parse_cache.py
 COPY scripts/tools/_lib_parse_tree.py           ./core/_lib_parse_tree.py

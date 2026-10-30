@@ -13,10 +13,11 @@ What is pinned here, and why each is pinned:
   written; the Go probe is in the #2123 PR description. ⛔ It is NOT a list
   of PyYAML-vs-yaml.v3 differences to extend (#2033 R′ rejected that shape):
   it pins the ONE comparison rule, with a row per branch of that rule.
-* **The parser underneath does not change** — pure by default, libyaml on
-  `fast=True`. Tools have made the pure parser's limits part of their
-  contract (`test_yaml_loader_is_libyaml.py`), so strictness must not bring a
-  different parser in with it.
+* **The parser underneath does not change** — the pure one. Tools have made
+  the pure parser's limits part of their contract
+  (`test_yaml_loader_is_libyaml.py`), so strictness must not bring a
+  different parser in with it. (The libyaml path, `fast=True`, lost its last
+  caller in ADR-036 §12 and was deleted, #3206.)
 * **Safety by behaviour**: these entry points drive a loader by hand, which
   is outside bandit B506's predicate (`test_sast.py` §4). A real
   `!!python/object/apply` payload must be refused. ⛔ Deleting that test
@@ -36,15 +37,10 @@ import yaml
 import _lib_io
 from _lib_io import (
     DuplicateKeyError,
-    YamlFileError,
     find_duplicate_key,
-    load_yaml_file_strict,
     strict_safe_load,
     strict_safe_load_all,
 )
-
-_LIBYAML = bool(getattr(yaml, "__with_libyaml__", False))
-_PARSERS = [False] + ([True] if _LIBYAML else [])
 
 # (name, document, rejected-by-yaml.v3)
 _IDENTITY = [
@@ -61,70 +57,46 @@ _IDENTITY = [
 ]
 
 
-@pytest.mark.parametrize("fast", _PARSERS, ids=lambda f: "libyaml" if f else "pure")
 @pytest.mark.parametrize("name,doc,rejected", _IDENTITY, ids=[r[0] for r in _IDENTITY])
-def test_key_identity_is_yaml_v3s(name, doc, rejected, fast):
+def test_key_identity_is_yaml_v3s(name, doc, rejected):
     if rejected:
         with pytest.raises(DuplicateKeyError) as exc:
-            strict_safe_load(doc, fast=fast)
+            strict_safe_load(doc)
         assert isinstance(exc.value, yaml.YAMLError)  # every existing handler sees it
         assert "found duplicate key" in str(exc.value)
     else:
-        assert strict_safe_load(doc, fast=fast) == yaml.safe_load(doc)
+        assert strict_safe_load(doc) == yaml.safe_load(doc)
 
 
-def test_the_error_names_the_key_both_lines_and_the_file(tmp_path):
-    path = tmp_path / "tenant-a.yaml"
-    path.write_text("tenants:\n  tenant-a:\n    cpu: 1\n    mem: 2\n    cpu: 3\n",
-                    encoding="utf-8")
-    with pytest.raises(YamlFileError) as exc:
-        load_yaml_file_strict(str(path))
-    cause = exc.value.cause
-    assert isinstance(cause, DuplicateKeyError)
+def test_the_error_names_the_key_both_lines_and_the_file():
+    stream = io.StringIO("tenants:\n  tenant-a:\n    cpu: 1\n    mem: 2\n    cpu: 3\n")
+    stream.name = "tenant-a.yaml"
+    with pytest.raises(DuplicateKeyError) as exc:
+        strict_safe_load(stream)
+    cause = exc.value
     assert cause.key == "cpu" and cause.first_line == 3
     assert cause.problem_mark.line + 1 == 5
-    text = str(exc.value)
-    assert str(path) in text and "line 5" in text and "'cpu'" in text
+    text = str(cause)
+    assert "tenant-a.yaml" in text and "line 5" in text and "'cpu'" in text
 
 
-def test_load_yaml_file_strict_keeps_load_yaml_files_contract(tmp_path):
-    """Same default for missing / empty, same value for a clean file."""
-    assert load_yaml_file_strict(None, default={}) == {}
-    assert load_yaml_file_strict(str(tmp_path / "missing.yaml"), default=[]) == []
-    empty = tmp_path / "e.yaml"
-    empty.write_text("# nothing\n", encoding="utf-8")
-    assert load_yaml_file_strict(str(empty), default={}) == {}
-    clean = tmp_path / "c.yaml"
-    clean.write_text("a: 1\nb: [x, y]\n", encoding="utf-8")
-    assert load_yaml_file_strict(str(clean)) == _lib_io.load_yaml_file(str(clean))
-    bad_utf8 = tmp_path / "b.yaml"
-    bad_utf8.write_bytes(b"a: \xff\n")
-    with pytest.raises(YamlFileError) as exc:
-        load_yaml_file_strict(str(bad_utf8))
-    assert isinstance(exc.value.cause, UnicodeDecodeError)
-
-
-@pytest.mark.skipif(not _LIBYAML, reason="no libyaml on this machine")
 def test_the_parser_underneath_is_unchanged():
     """A trailing tab: libyaml accepts it, the pure parser rejects it. The
-    strict default must reject (pure, like `load_yaml_file`); `fast=True`
-    must accept (libyaml, like `_lib_io.safe_load`)."""
+    strict loader must reject (pure, like `load_yaml_file`)."""
     trailing_tab = "defaults:\n  cpu_usage: 80\t\n"
     with pytest.raises(yaml.scanner.ScannerError):
         strict_safe_load(trailing_tab)
-    assert strict_safe_load(trailing_tab, fast=True) == {"defaults": {"cpu_usage": 80}}
 
 
-@pytest.mark.parametrize("fast", _PARSERS, ids=lambda f: "libyaml" if f else "pure")
-def test_the_loader_cannot_construct_python_objects(fast):
+def test_the_loader_cannot_construct_python_objects():
     """Behavioural safety pin (see module docstring) — with a must-still-work
     control, so a loader that refuses everything cannot pass."""
     payload = '!!python/object/apply:os.system ["echo strict-loader-pwned"]\n'
     with pytest.raises(yaml.constructor.ConstructorError):
-        strict_safe_load(payload, fast=fast)
+        strict_safe_load(payload)
     with pytest.raises(yaml.constructor.ConstructorError):
-        list(strict_safe_load_all(payload, fast=fast))
-    assert strict_safe_load("a: [1, 2]\n", fast=fast) == {"a": [1, 2]}
+        list(strict_safe_load_all(payload))
+    assert strict_safe_load("a: [1, 2]\n") == {"a": [1, 2]}
 
 
 def test_a_caller_supplied_loader_must_be_a_strict_one():
@@ -199,88 +171,3 @@ def test_every_folded_in_check_refuses_what_yaml_v3_refuses(name, doc, rejected)
     with pytest.raises(yaml.YAMLError):
         pin.load_all_strict(doc)
     assert find_duplicate_key(yaml.compose(doc)) is not None
-
-
-# ── #2114: the strict + exporter-key composition in `_lib_io` ──────────────
-#
-# `StrictExporterKeyLoader` = `RejectDuplicateKeys` + `_lib_yaml_keys`'s
-# `ExporterKeyLoader`. Its entry points must refuse exactly what the strict
-# loader refuses (same `_key_identity`, same error), be safe by behaviour
-# like it, and build the keys as the exporter's raw text.
-
-from _lib_io import (  # noqa: E402
-    StrictExporterKeyLoader,
-    strict_load_exporter_keys,
-)
-from _lib_yaml_keys import ExporterKeyLoader, load_exporter_keys  # noqa: E402
-
-_EXPORTER_KEY_ENTRIES = {
-    "strict_load_exporter_keys": lambda d: strict_load_exporter_keys(d),
-    "strict_load_exporter_keys+raw_text_sequences":
-        lambda d: strict_load_exporter_keys(d, raw_text_sequences=("x",)),
-    "strict_load_exporter_keys+raw_text_scalars":
-        lambda d: strict_load_exporter_keys(d, raw_text_scalars=("_profile",)),
-}
-
-
-@pytest.mark.parametrize("entry", sorted(_EXPORTER_KEY_ENTRIES))
-@pytest.mark.parametrize("name,doc,rejected", _IDENTITY, ids=[r[0] for r in _IDENTITY])
-def test_the_exporter_key_entry_points_share_the_identity(name, doc, rejected, entry):
-    load = _EXPORTER_KEY_ENTRIES[entry]
-    if rejected:
-        with pytest.raises(DuplicateKeyError, match="found duplicate key"):
-            load(doc)
-    else:
-        # Accepted: the same document the non-strict exporter-key read gives.
-        assert load(doc) == load_exporter_keys(io.StringIO(doc))
-
-
-@pytest.mark.parametrize("entry", sorted(_EXPORTER_KEY_ENTRIES))
-def test_the_exporter_key_entry_points_cannot_construct_python_objects(entry):
-    payload = '!!python/object/apply:os.system ["echo strict-loader-pwned"]\n'
-    with pytest.raises(yaml.constructor.ConstructorError):
-        _EXPORTER_KEY_ENTRIES[entry](payload)
-    assert _EXPORTER_KEY_ENTRIES[entry]("a: [1, 2]\n") == {"a": [1, 2]}
-
-
-def test_the_composed_loader_is_strict_and_pure_underneath():
-    assert issubclass(StrictExporterKeyLoader, ExporterKeyLoader)
-    assert issubclass(StrictExporterKeyLoader, yaml.SafeLoader)
-    with pytest.raises(yaml.scanner.ScannerError):
-        strict_load_exporter_keys("defaults:\n  cpu_usage: 80\t\n")
-    # The non-strict key loader is not accepted where a strict one is required.
-    with pytest.raises(TypeError):
-        strict_safe_load("a: 1\n", loader=ExporterKeyLoader)
-
-
-_PROFILE_SRC = ("tenants:\n  a:\n    _profile: 010\n    cpu: 010\n"
-                "  b:\n    _profile: ~\n  c:\n    _profile: yes\n"
-                "exclude_tenants: [010]\n")
-
-
-def test_strict_raw_text_scalars_matches_the_lenient_loader():
-    """#2216 / #2237: `raw_text_scalars` means what `_lib_yaml_keys`'s
-    parameter of the same name means — only the opted-in key's scalar value
-    is source text, a null stays None, every other value keeps its type."""
-    load = strict_load_exporter_keys
-    got = load(_PROFILE_SRC, raw_text_scalars=("_profile",))
-    assert got["tenants"] == {"a": {"_profile": "010", "cpu": 8},
-                              "b": {"_profile": None},
-                              "c": {"_profile": "yes"}}, got
-    assert got["exclude_tenants"] == [8], got  # a sequence is not a scalar
-    assert got == load_exporter_keys(io.StringIO(_PROFILE_SRC),
-                                     raw_text_scalars=("_profile",))
-    # Control: without the opt-in the value keeps PyYAML's type.
-    assert load(_PROFILE_SRC)["tenants"]["a"]["_profile"] == 8
-    # Both sets are part of the loader-class cache key: opting into the
-    # sequences only must not hand back a class that retypes scalars too.
-    both = load(_PROFILE_SRC, raw_text_sequences=("exclude_tenants",))
-    assert both["tenants"]["a"]["_profile"] == 8
-    assert both["exclude_tenants"] == ["010"]
-
-
-def test_strict_raw_text_scalars_is_still_strict():
-    with pytest.raises(DuplicateKeyError):
-        strict_load_exporter_keys('a:\n  _profile: 010\n  _profile: "010"\n',
-                                  raw_text_scalars=("_profile",))
-

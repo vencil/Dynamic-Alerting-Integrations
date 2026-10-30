@@ -208,10 +208,6 @@ commands:
     "--secret-key": not_path
     "--secret-name": not_path
     "--source-dir": {kind: pending, ticket: 3392}
-  migration-audit:
-    "--config-dir": dir
-    "--da-guard-binary": {kind: reader, by: "the da-guard resolver", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
-    "--timeout": not_path
   offboard:
     "--config-dir": {kind: reader, by: "da-guard parse-tree", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--state": any

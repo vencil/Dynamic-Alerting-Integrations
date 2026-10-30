@@ -2548,10 +2548,6 @@ class TestTenantIdParity:
         assert r["status"] == vc.WARN, r
         assert "a.yaml, c.yaml" in " ".join(r["details"]), r
 
-    # #2114: `test_the_loader_cannot_construct_python_objects` moved with the
-    # loader to `tests/shared/test_tenant_id_yaml_spelling_parity.py` — the
-    # ONE exporter-key loader now lives in `scripts/tools/_lib_yaml_keys.py`.
-
     def test_a_defaults_carrier_declaring_a_tenant_is_still_not_a_declaration(
             self, tmp_path):
         """The reserved-name rule stated on the shape the docstring names.

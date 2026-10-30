@@ -222,3 +222,9 @@ tests/ops/test_lib_write_check.py
 # subcommands (GitOps Native Mode, refused since #1349) and `--ci` are
 # removed, not truncated.
 scripts/tools/ops/gitops_check.py
+
+# #3206 (ADR-036 §7 step 13): the libyaml opt-in (`_lib_io.SAFE_LOADER` /
+# `safe_load`, `strict_safe_load(fast=True)`) is deleted, so the tests that
+# pinned it go; only the "shared reader stays pure" half remains — removed,
+# not truncated.
+tests/shared/test_yaml_loader_is_libyaml.py

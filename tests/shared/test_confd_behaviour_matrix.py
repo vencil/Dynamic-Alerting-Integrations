@@ -295,7 +295,6 @@ TOOLS: dict[str, Tool] = {
     "explain_route": Tool((_PY, _T + "ops/explain_route.py", "--config-dir", "{conf}")),
     "maintenance_scheduler": Tool((_PY, _T + "ops/maintenance_scheduler.py", "--config-dir", "{conf}",
                                    "--dry-run")),
-    "migration_audit": Tool((_PY, _T + "ops/migration_audit.py", "--config-dir", "{conf}")),
     "notification_tester": Tool((_PY, _T + "ops/notification_tester.py", "--config-dir", "{conf}",
                                  "--dry-run")),
     "policy_engine": Tool((_PY, _T + "ops/policy_engine.py", "--config-dir", "{conf}", "--ci")),

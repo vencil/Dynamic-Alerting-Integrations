@@ -1332,7 +1332,7 @@ def _one_line(text: Any) -> str:
 _PLAIN_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*", re.ASCII)
 # The one plain spelling the exporter does not read back as that text: it
 # decodes an unquoted `null` key as no key at all; `010`, `true`, `2024-01-01`
-# it keeps as written, as `_lib_yaml_keys` reads them (#2116; measured in
+# it keeps as written (#2116; measured in
 # tests/shared/tenant_id_yaml_spelling_matrix.json).
 _NULL_WORDS = frozenset({"null", "Null", "NULL"})
 

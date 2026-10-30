@@ -475,7 +475,10 @@ def test_every_armed_tool_enters_through_run():
     # anti-vacuity: the population is the --json tools, both directories
     assert "scripts/tools/validate_all.py" in tools
     assert "scripts/tools/ops/alert_quality.py" in tools
-    assert len(tools) >= 40, sorted(tools)
+    # 39 since migration-audit was deleted (#3419). Not derived from
+    # test_json_stdout_contract.JSON_TOOLS: that set is "declares a --json
+    # flag", this one "arms the envelope" — equal today, not by definition.
+    assert len(tools) >= 39, sorted(tools)
     bad = {path: why for path, tree in tools.items() if (why := _guard_problem(tree))}
     assert not bad, "\n".join(f"{p}: {w}" for p, w in sorted(bad.items()))
 
@@ -717,7 +720,7 @@ def test_armed_tools_write_stdout_only_through_sys_stdout():
     (print, json.dump) only. A tool that writes around it would get the
     library's envelope after its own document."""
     tools = _armed_tools()
-    assert len(tools) >= 40
+    assert len(tools) >= 39  # 39 since migration-audit was deleted (#3419); see above
     bad = {p: b for p, tree in tools.items() if (b := _stdout_bypasses(tree))}
     assert not bad, bad
 

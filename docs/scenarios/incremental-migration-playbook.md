@@ -568,6 +568,89 @@ EOF
 
 ---
 
+## 升級平台版本前的檢查
+
+新版平台讀 conf.d 的方式可能和舊版不同：YAML 一律由 Go（yaml.v3）讀，未加引號的 `yes`／`no`／`on`／`off` 是字串而不是布林，exporter 也不服務它讀不了的檔（[ADR-036](../adr/036-single-parser-effective-config.md) §8）。所以每次升級 da-tools 與 threshold-exporter 之前，在 CI 上用**新版**的工具對自己的 conf.d 做下面兩件事。指令以 `da-tools` 表示，實際以要比對的那個版本的映像執行（`docker run` 的寫法見 [Docker 使用模式](../cli-reference.md#docker-使用模式)）。
+
+### 檢查一：用新版 da-guard 驗 conf.d
+
+```bash
+# 以新版 da-tools 映像執行（映像內建 da-guard）
+da-tools guard defaults-impact --config-dir conf.d/
+```
+
+看結束碼（完整定義見 [`guard`](../cli-reference.md#guard)）：
+
+| 結束碼 | 意思 | 升級前要做的事 |
+|---|---|---|
+| 0 | 沒有 error 級 finding | 可以升級 |
+| 1 | 有 error 級 finding | 照報告修好 |
+| 3 | 有新版 exporter 不服務的檔，報告逐檔列出（解不開的檔在「Files the exporter cannot parse」，讀取失敗的在「Files the exporter cannot read」）；這些檔路由產生器與 tenant-api 也拒收（三者用同一份判定） | 升級前修好或移走這些檔 |
+| 4 | 樹上有只能由路由產生器判的內容（未判定） | 視同 0：路由與 domain policy 由一律執行的 `da-tools generate-routes --config-dir conf.d/ --validate --strict` 判，它成功才算通過（見下方範例） |
+
+guard 只判它自己的部分。路由與 domain policy 由路由產生器判，而且產生器也會在 guard 回 0 的樹上失敗（例如根目錄同時有 `_defaults.yaml` 與 `_defaults.yml`：guard 回 0，`generate-routes --validate --strict` 回 1）。所以 strict 驗證**一律執行**，不只在 guard 回 4 時跑；最後 guard 為 0 或 4、且 strict 驗證成功才算通過，其他情況都失敗。這與本 repo 的 `.github/workflows/guard-defaults-impact.yml` 同一套邏輯：每棵樹跑完 guard 都接著跑產生器，產生器非 0 就失敗；guard 的 4 因為產生器已經跑過才算 0。CI 的 shell 預設是 `bash -e`，指令一回非 0 step 就停下，所以兩個結束碼都要在 `set +e` 之下取得：
+
+```bash
+set +e
+da-tools guard defaults-impact --config-dir conf.d/
+guard_rc=$?
+da-tools generate-routes --config-dir conf.d/ --validate --strict
+gen_rc=$?
+set -e
+# 4（未判定）視同 0：只能由產生器判的內容，產生器上面已經判過
+if [ "$guard_rc" -eq 4 ]; then guard_rc=0; fi
+if [ "$gen_rc" -ne 0 ]; then
+  echo "route generator (generate-routes --validate --strict) exit $gen_rc" >&2
+  exit 1
+fi
+if [ "$guard_rc" -ne 0 ]; then
+  echo "da-guard exit $guard_rc" >&2
+  exit 1
+fi
+```
+
+### 檢查二：新舊兩版映像各渲染一次，比對結果
+
+同一棵 conf.d，分別用目前在用的版本與要升級的版本各產生一次 Alertmanager 路由設定，再比對兩份輸出：
+
+```bash
+set -e
+out="$(mktemp -d)"            # 每次執行一個新的目錄，不會比到上次留下的檔
+trap 'rm -rf "$out"' EXIT
+# 以目前版本的映像執行
+da-tools generate-routes --config-dir ./conf.d -o "$out/routes-current.yaml"
+# 以新版映像執行
+if ! da-tools generate-routes --config-dir ./conf.d -o "$out/routes-new.yaml"; then
+  echo "新版拒收這棵 conf.d：先看檢查一的結果" >&2
+  exit 1
+fi
+cur="$out/routes-current.yaml"; new="$out/routes-new.yaml"
+if [ ! -e "$cur" ] && [ ! -e "$new" ]; then
+  echo "兩版都沒有產生路由輸出：一致"
+elif [ ! -e "$new" ]; then
+  echo "目前版本有路由輸出、新版沒有：有差異" >&2
+  exit 1
+elif [ ! -e "$cur" ]; then
+  echo "新版有路由輸出、目前版本沒有：有差異" >&2
+  exit 1
+elif ! diff -q "$cur" "$new" > /dev/null; then
+  echo "兩版的渲染結果不同（完整差異不印在 CI 日誌，見下方說明）" >&2
+  exit 1
+else
+  echo "兩版的渲染結果一致"
+fi
+```
+
+以 `docker run` 執行時，暫存目錄要掛進容器，輸出檔才寫得到它。
+
+- **新版拒收這棵樹**：`generate-routes` 以非 0 結束、不寫輸出檔，沒有東西可比。範例讓 job 在這裡失敗，原因要回頭看檢查一（新版 da-guard 的結束碼與它點名的檔）。目前版本就拒收時，`set -e` 讓 job 在第一條指令失敗。
+- **沒有輸出檔**：樹上沒有租戶時，`generate-routes` 以 0 結束、不寫輸出檔。兩版都沒有輸出視為一致；只有一版有輸出視為有差異，訊息說明是哪一版沒有。
+- **有差異**：範例只以 `diff -q` 判斷有沒有差異，並讓 job 失敗，不把完整差異印進 CI 日誌，因為輸出含租戶 `_routing.receiver` 的 webhook URL（例如 Slack 的 `api_url`），印出來就等於把它們寫進日誌。要看完整差異，請在本機或有權限控管的環境，以兩版映像跑同樣兩條 `generate-routes` 後再 `diff -u`。輸出檔同樣含這些 URL，不要上傳成公開的 CI artifact。
+
+比對看得到渲染結果哪裡變了，但不會指出是哪一項讀法改變造成的；要歸因，回頭看那一處的原文（例如 `send_resolved: yes` 在新版是字串、會被拒收，要寫成 `true`）。
+
+---
+
 ## Emergency Rollback Procedures（緊急退版程序）
 
 > **適用情境**：客戶 cutover 後發現結構性 bug（例：parser 吃掉 label / Dangling Guard 誤判 / 大量 false positive），需要把 Base Infrastructure PR + 多個 tenant PR 整批退版。

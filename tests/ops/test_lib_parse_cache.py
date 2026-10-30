@@ -54,10 +54,7 @@ READER_MODULES = [TOOLS / "_lib_confd.py", TOOLS / "_lib_parse_cache.py",
                   TOOLS / "ops" / "generate_alertmanager_routes.py"]
 # PyYAML entry points (and the repo's PyYAML loaders).
 _PARSER_NAMES = {"safe_load", "safe_load_all", "load", "load_all", "compose", "compose_all",
-                 "strict_load_exporter_keys", "strict_safe_load", "strict_safe_load_all",
-                 "load_exporter_keys", "load_yaml_file", "load_yaml_file_strict",
-                 "load_yaml_file_exporter_keys",
-                 "load_first_document_exporter_keys", "load_all_exporter_keys",
+                 "strict_safe_load", "strict_safe_load_all", "load_yaml_file",
                  "get_single_data", "get_data"}
 _YAML_ONLY = {"safe_load", "safe_load_all", "load", "load_all", "compose", "compose_all"}
 # (file, enclosing function) of the PyYAML calls that read something other

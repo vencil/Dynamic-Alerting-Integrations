@@ -18,8 +18,8 @@ components) — not only a call:
 constant `getattr(yaml, "safe_load")` are counted under the canonical name
 (`tests/shared/_ast_refs.py`, shared with `test_rewrite_layer_is_gone.py`).
 `except yaml.YAMLError` and `yaml.dump` / `yaml.safe_dump` are not points (a
-writer is not a reader). The readers in `_lib_io` and `_lib_yaml_keys`
-(`WRAPPER_HOMES`) — every top-level function, class or assignment there whose
+writer is not a reader). The readers in `_lib_io` (`WRAPPER_HOMES`;
+`_lib_yaml_keys` was deleted in step 13) — every top-level function, class or assignment there whose
 definition reaches an entry, directly or through another one — are entries
 themselves, computed from the AST (`wrappers()`): where they are defined is
 not a point, where they are used is. A module that re-exports an entry
@@ -91,8 +91,8 @@ RUAMEL_ENTRIES = frozenset({
 })
 
 #: The shared readers whose definitions reaching an entry make them entries
-#: (`_lib_yaml_keys` is deleted in step 13).
-WRAPPER_HOMES = ("scripts/tools/_lib_io.py", "scripts/tools/_lib_yaml_keys.py")
+#: (`_lib_yaml_keys`, the other one, was deleted in step 13).
+WRAPPER_HOMES = ("scripts/tools/_lib_io.py",)
 
 Key = "tuple[str, str]"
 
@@ -185,8 +185,8 @@ def test_the_files_are_read(found: Scan) -> None:
                  "scripts/ops/ci_flake_retry.py", "scripts/dx/generate_adr_index.py"):
         assert must in paths, must
     # the wrappers are derived, not listed: the two everyone uses must be among them
-    assert {"load_yaml_file", "safe_load", "strict_safe_load"} <= found.wrappers["_lib_io"]
-    assert "load_exporter_keys" in found.wrappers["_lib_yaml_keys"]
+    assert {"load_yaml_file", "strict_safe_load"} <= found.wrappers["_lib_io"]
+    assert not (REPO / "scripts/tools/_lib_yaml_keys.py").exists()
 
 
 def test_the_baseline_has_no_key_twice() -> None:
