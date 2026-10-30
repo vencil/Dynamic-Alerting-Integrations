@@ -703,6 +703,29 @@ def test_da_guard_missing_is_503(tmp_path, world, how):
         assert m["da_generator_judgement_deadline_ratio"] == 0
 
 
+def test_a_hanging_da_guard_is_probed_once(tmp_path, world):
+    """The --version probe runs on the event loop: a da-guard that hangs is
+    probed once per file (at start, before listening), its failure kept —
+    later judgements and status requests answer 503 at once."""
+    calls = tmp_path / "calls"
+    target = tmp_path / "da-guard"
+    target.write_text(f"#!/bin/sh\necho x >> '{calls}'\nsleep 30\n", encoding="utf-8")
+    target.chmod(0o755)
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   env={"DA_GUARD_BINARY": str(target)}) as svc:
+        at_start = calls.read_text(encoding="utf-8").count("x")
+        assert at_start >= 1, "no probe before listening"
+        for _ in range(2):
+            start = time.monotonic()
+            status, doc = svc.validate(world["commits"]["clean"])
+            assert status == 503 and doc["reason"] == "da_guard_missing", doc
+            assert time.monotonic() - start < 2, "the probe ran again on the event loop"
+        _s, st = svc.call("GET", "/v1/status")
+        assert st["da_guard_available"] is False
+        # Startup also reads the reported version; requests ran it no more.
+        assert calls.read_text(encoding="utf-8").count("x") == at_start
+
+
 def test_tenant_api_knows_every_reason_the_service_sends():
     """The service's 503 reasons and key-verdict reasons, each known to
     tenant-api (Go): an unknown 503 reason is shown as `unknown`, an

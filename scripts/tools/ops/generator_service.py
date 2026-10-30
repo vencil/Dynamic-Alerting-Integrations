@@ -306,7 +306,7 @@ def _escape_label(value: str) -> str:
     return value.replace("\\", "\\\\").replace("\n", "\\n").replace('"', '\\"')
 
 
-def da_guard_version(binary: Optional[str]) -> Optional[str]:
+def da_guard_version(binary: Optional[str], timeout: float = 10) -> Optional[str]:
     """``da-guard --version``'s version, or None when there is no binary."""
     import guard_dispatch
     exe = guard_dispatch.DISPATCHER.resolve_binary(binary)
@@ -314,15 +314,21 @@ def da_guard_version(binary: Optional[str]) -> Optional[str]:
         return None
     try:
         proc = subprocess.run([exe, "--version"], capture_output=True,
-                              timeout=10, check=False)
+                              timeout=timeout, check=False)
     except (OSError, subprocess.SubprocessError):
         return None
     words = proc.stdout.decode("utf-8", "replace").split()
     return words[-1] if proc.returncode == 0 and words else None
 
 
-#: The last da-guard that answered ``--version``: (path, mtime_ns, size).
+#: The last da-guard probed with ``--version``: ((path, mtime_ns, size),
+#: whether it answered). Failures are kept too, so a da-guard that hangs
+#: costs one probe per file, not one per judgement or status request.
 _DA_GUARD_RAN: list = [None]
+#: The probe's time limit. It runs on the event loop (a subprocess there is
+#: synchronous: no thread, and an asyncio child would race the SIGCHLD
+#: reaper), so it is short, and serve() runs it once before listening.
+DA_GUARD_PROBE_SECONDS = 3.0
 
 
 def da_guard_problem() -> Optional[str]:
@@ -331,7 +337,7 @@ def da_guard_problem() -> Optional[str]:
     answer ``--version`` (a wrong architecture, a broken interpreter line)
     — or None. Checked before every judgement, like amtool (ADR-036 §3):
     without it the key verdict (ADR-038 §5) cannot be given. The run is
-    repeated only when the file changes."""
+    repeated only when the file changes; its result, good or bad, is kept."""
     import guard_dispatch
     exe = guard_dispatch.DISPATCHER.resolve_binary(None)
     if exe is None:
@@ -344,11 +350,11 @@ def da_guard_problem() -> Optional[str]:
     if not (stat.S_ISREG(st.st_mode) and os.access(exe, os.X_OK)):
         return f"da-guard at {exe} is not an executable file: the key verdict cannot be given"
     seen = (exe, st.st_mtime_ns, st.st_size)
-    if _DA_GUARD_RAN[0] != seen:
-        if da_guard_version(exe) is None:
-            return (f"da-guard at {exe} does not run (`--version` failed): "
-                    "the key verdict cannot be given")
-        _DA_GUARD_RAN[0] = seen
+    if _DA_GUARD_RAN[0] is None or _DA_GUARD_RAN[0][0] != seen:
+        _DA_GUARD_RAN[0] = (seen, da_guard_version(exe, DA_GUARD_PROBE_SECONDS) is not None)
+    if not _DA_GUARD_RAN[0][1]:
+        return (f"da-guard at {exe} does not run (`--version` failed): "
+                "the key verdict cannot be given")
     return None
 
 
@@ -1274,6 +1280,7 @@ def _prepare_work_dir(path: str) -> None:
 async def serve(settings: Settings, object_format: str) -> None:
     service = Service(settings, object_format)
     service.loop = asyncio.get_running_loop()
+    da_guard_problem()  # the probe, before any request can wait on it
     old = os.umask(0o177)  # the socket is created 0600
     try:
         server = await asyncio.start_unix_server(
