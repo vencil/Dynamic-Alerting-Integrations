@@ -998,10 +998,16 @@ _ALLOWED_EXITS = ("EXIT_OK", "EXIT_CALLER_ERROR")
 
 
 def _is_allowed_exit(node) -> bool:
-    """EXIT_OK / EXIT_CALLER_ERROR by name or as `<module>.<name>`, or a
-    conditional expression whose both arms are."""
+    """EXIT_OK / EXIT_CALLER_ERROR by name or as `<module>.<name>`, a
+    conditional expression whose both arms are, or a `Report(doc)` (#3216:
+    the --json document handed to run()) whose status is omitted (EXIT_OK)
+    or one of them."""
     if isinstance(node, ast.IfExp):
         return _is_allowed_exit(node.body) and _is_allowed_exit(node.orelse)
+    if isinstance(node, ast.Call) and ast.unparse(node.func).split(".")[-1] == "Report":
+        status = node.args[1] if len(node.args) > 1 else next(
+            (k.value for k in node.keywords if k.arg == "status"), None)
+        return status is None or _is_allowed_exit(status)
     if isinstance(node, ast.Name):
         return node.id in _ALLOWED_EXITS
     return isinstance(node, ast.Attribute) and node.attr in _ALLOWED_EXITS

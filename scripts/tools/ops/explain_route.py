@@ -84,10 +84,11 @@ from _grar_merge import (  # noqa: E402
     resolve_routing_defaults,
     visible_routing_profiles,
 )
-from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
+from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 from _lib_paths import require_dir  # noqa: E402  (#3276)
-from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope)
 
 #: the status of a receiver slot the --policy domain allowlist refuses (#3142).
 STATUS_POLICY_REFUSED = "POLICY_REFUSED"
@@ -346,7 +347,7 @@ def format_explanation(explanation: dict, *, lang: str = "en") -> str:
     """Format a tenant routing explanation as human-readable text."""
     lines: list[str] = []
     # #1538: tenant names and layer sources are tenant-controlled. Escaped in the
-    # TEXT renderer only — format_json_report() gets the same dict unescaped.
+    # TEXT renderer only — the --json document (run() encodes it) gets the same dict unescaped.
     t = safe_label(explanation["tenant"])
     ref = safe_label(explanation["profile_ref"]) if explanation["profile_ref"] else \
         explanation["profile_ref"]
@@ -1362,7 +1363,7 @@ class _StoreTraceInput(argparse.Action):
         namespace.given_trace_inputs = [*given, self.option_strings[0]]
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int | Report:
     lang = detect_cli_lang()
 
     def _h(key: str) -> str:
@@ -1485,19 +1486,17 @@ def main(argv: list[str] | None = None) -> int:
             trace["policy_applied"] = policy.applied
             traces.append(trace)
         if args.json:
-            print(format_json_report(traces))
-        else:
-            for trace in traces:
-                print(format_trace(trace, lang=lang))
+            return Report(traces)  # #3216: run() encodes it (a YAML date: ISO 8601)
+        for trace in traces:
+            print(format_trace(trace, lang=lang))
         return EXIT_OK
 
     # --show-profile-expansion mode
     if args.show_profile_expansion:
         expansion = explain_profile_expansion(parsed)
         if args.json:
-            print(format_json_report(expansion))
-        else:
-            print(format_profile_expansion(expansion, lang=lang))
+            return Report(expansion)
+        print(format_profile_expansion(expansion, lang=lang))
         return EXIT_OK
 
     # Default: explain tenant routing
@@ -1526,11 +1525,9 @@ def main(argv: list[str] | None = None) -> int:
         results.append(explanation)
 
     if args.json:
-        print(format_json_report(results))
-    else:
-        for explanation in results:
-            print(format_explanation(explanation, lang=lang))
-
+        return Report(results)
+    for explanation in results:
+        print(format_explanation(explanation, lang=lang))
     return EXIT_OK
 
 

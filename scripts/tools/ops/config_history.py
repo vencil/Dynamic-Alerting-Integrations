@@ -33,7 +33,7 @@ from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import exit_on_output_write_error, output_write, write_operator_output  # noqa: E402  (#1789, #3107)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 # Canonical lang detection (da-tools ROI r3 W2 bug fix): the former local
@@ -173,11 +173,11 @@ def cmd_snapshot(config_dir, message=None):
         snap_dir.mkdir(exist_ok=True)
     for f in files:
         fp = snap_dir / f['name']
-        # The 0o600 is inside the block with the write: a snapshot may hold
-        # sensitive config, so a chmod that fails is not a success (#1789).
+        # A snapshot may hold sensitive config: 0o600, set by the one writer
+        # of operator-named output (#3107) — the kernel opens it, and the mode
+        # is applied to a regular file this euid owns, never through a symlink.
         with output_write(fp, flag="--config-dir", action="write"):
-            fp.write_text(f['content'], encoding='utf-8', newline='\n')
-            os.chmod(fp, 0o600)  # Restrict snapshot files (may contain sensitive config)
+            write_operator_output(str(fp), f['content'], flag="--config-dir")
 
     history.append(entry)
     _save_history(config_dir, history)

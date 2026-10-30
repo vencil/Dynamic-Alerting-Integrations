@@ -70,7 +70,7 @@ from _lib_prometheus import QueryError, prometheus_instant, vector_sample  # noq
 # The query seam tests replace (the lib's raising reader).
 query_prometheus = prometheus_instant
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
+from _lib_io import exit_on_output_write_error, output_write, write_operator_output  # noqa: E402  (#1789, #3107)
 
 # 預設觀測指標：PromQL 模板 (tenant 會被替換)
 # `config_key`：建議值要寫進哪個租戶 key。先前一律拼成 `mysql_<名稱>`，其中
@@ -411,13 +411,12 @@ def main():
         # #1789: the `with` lives INSIDE this helper, not around its two call
         # sites: the static pin walks up from a sink and stops at the
         # enclosing `def`, so a wrapper around the CALL would leave these two
-        # sinks reading as bare. The chmod is inside the same block as the
-        # open — 0o600 is part of producing this file, and a chmod that fails
-        # leaves the operator a CSV whose mode is not the promised one.
+        # sinks reading as bare.
         with output_write(path, flag="-o/--output-dir"):
-            with open(path, "wb") as fh:
-                fh.write(body_with_bom.encode("utf-8"))
-            os.chmod(path, 0o600)
+            # #3107: the one writer of operator-named output — 0o600 on a
+            # regular file this euid owns; the bytes as before (no newline
+            # translation of the CSV's \r\n, the BOM as EF BB BF).
+            write_operator_output(path, body_with_bom, flag="-o/--output-dir")
 
     # 原始時間序列
     ts_path = str(Path(args.output_dir) / f"baseline-{args.tenant}-timeseries.csv")

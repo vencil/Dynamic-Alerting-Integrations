@@ -980,12 +980,139 @@ if sys.excepthook is sys.__excepthook__:
 # ── The single process entry (#3115) ──────────────────────────────────
 
 
+# ── the one JSON encoder; a --json run's document goes out through run() (#3216) ──
+
+class Report:
+    """What a ``--json`` run hands back to :func:`run`: its *document* and its
+    exit *status*. ``run`` encodes the document (:func:`encode_json`), writes
+    it to stdout and exits with *status* — the tool never serializes or
+    prints its own document, so a crash can never leave a complete-looking
+    one on stdout next to rc 2, and the encoder's rules hold for every tool."""
+
+    __slots__ = ("document", "status")
+
+    def __init__(self, document: Any, status: int = 0) -> None:
+        self.document = document
+        self.status = status
+
+
+class OutputNotSerializable(Exception):
+    """A document holds a value JSON cannot carry: a non-finite float, or a
+    type other than the JSON ones, ``date`` / ``datetime`` and a type with
+    ``__json__``. Named by where in the document it is. Usually a defect of
+    the tool that built it; a conf.d value written ``.inf`` / ``.nan`` (read
+    as a float by `_lib_parse_tree`) lands here too — JSON has no spelling
+    for it, so the run refuses rather than print one."""
+
+    reason = "output_not_serializable"
+
+    def __init__(self, where: str, why: str) -> None:
+        super().__init__(f"{where or '(the document)'}: {why}")
+        self.where = where
+
+
+def _json_path(base: str, key: Any) -> str:
+    if isinstance(key, int) and not isinstance(key, bool):
+        return f"{base}[{key}]"
+    if isinstance(key, str) and key.isidentifier():
+        return f"{base}.{key}" if base else key
+    import json
+    return f"{base}[{json.dumps(key, ensure_ascii=False)}]"
+
+
+def _check_serializable(value: Any, where: str = "") -> None:
+    """Raise :class:`OutputNotSerializable` at the first value of *value*
+    :func:`encode_json` would not carry as the JSON it means."""
+    import datetime
+    import math
+    stack: list[tuple[Any, str]] = [(value, where)]
+    while stack:
+        cur, at = stack.pop()
+        if cur is None or isinstance(cur, (str, bool, int)):
+            continue
+        if isinstance(cur, float):
+            if not math.isfinite(cur):
+                raise OutputNotSerializable(at, f"{cur!r} is not a JSON number")
+            continue
+        if isinstance(cur, (datetime.date, datetime.datetime)):
+            continue
+        if callable(getattr(type(cur), "__json__", None)):
+            # The type says what it is in JSON; what it says obeys the rules.
+            stack.append((cur.__json__(), at))
+            continue
+        if isinstance(cur, dict):
+            for k, v in cur.items():
+                if not (k is None or isinstance(k, (str, int, bool))):
+                    raise OutputNotSerializable(
+                        _json_path(at, str(k)), f"a {type(k).__name__} key is not a JSON key")
+                stack.append((v, _json_path(at, k)))
+            continue
+        if isinstance(cur, (list, tuple)):
+            stack.extend((v, _json_path(at, i)) for i, v in enumerate(cur))
+            continue
+        raise OutputNotSerializable(at, f"a {type(cur).__name__} is not a JSON value")
+
+
+def _iso(value: Any) -> Any:
+    import datetime
+    if isinstance(value, (datetime.date, datetime.datetime)):
+        return value.isoformat()
+    if callable(getattr(type(value), "__json__", None)):
+        return value.__json__()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def encode_json(document: Any) -> str:
+    """The one JSON encoder for what a tool hands its caller (#3216).
+
+    Two-space indent, UTF-8 text (``ensure_ascii=False``), no ``NaN`` /
+    ``Infinity`` (they are not JSON), ``date`` / ``datetime`` as ISO 8601, a
+    value whose type defines ``__json__()`` as what that returns (checked by
+    the same rules — `_lib_parse_tree.Timestamp` gives its source text); any
+    other non-JSON value is :class:`OutputNotSerializable`, named by its path
+    in the document. No formatting options: one format for every tool.
+    """
+    import json
+    _check_serializable(document)
+    return json.dumps(document, allow_nan=False, ensure_ascii=False, indent=2, default=_iso)
+
+
+def _write_report(report: Report) -> int:
+    """Encode and print *report*'s document; the exit status. A document
+    that cannot be encoded is the tool's defect: one named line on stderr,
+    the ``output_not_serializable`` envelope instead of any part of the
+    document, and the crash exit code."""
+    try:
+        text = encode_json(report.document)
+    except OutputNotSerializable as exc:
+        line = f"ERROR: the --json document cannot be written as JSON: {exc}"
+        _to_stderr(line)
+        if _crash_envelope_armed is None:
+            arm_crash_envelope()
+        _print_armed_envelope(OutputNotSerializable.reason, line)
+        return _crash_code()
+    print(text)
+    disarm_crash_envelope()  # the document is out; a late failure must not add a second
+    return report.status
+
+
+def emit_result(result: Any) -> Any:
+    """What *entry* returned, as the exit status: a :class:`Report` is
+    written here (its document encoded and printed) and its status
+    returned; anything else is returned as it is. :func:`run` takes this
+    step; a caller that runs a tool's ``main`` in-process (a test, a tool
+    driving another) takes it too, so the document comes out the one way."""
+    return _write_report(result) if isinstance(result, Report) else result
+
+
 def run(entry: Callable[[], Any]) -> NoReturn:
     """Run a tool's *entry* (its ``main``) and exit — the one way out.
 
     ``if __name__ == "__main__": _lib_exitcodes.run(main)`` replaces both
     ``main()`` and ``sys.exit(main())``: *entry*'s return value is the exit
-    status, as ``sys.exit`` reads it. On top of that:
+    status, as ``sys.exit`` reads it — or a :class:`Report`, whose document
+    is encoded and printed here (``_write_report``) before its status is
+    the exit's. On top of that:
 
     * an ``Exception`` is a crash (``exit_on_crash``) — except a
       ``CallerError`` or a recorded stdout ``OSError``, which leave by their
@@ -1009,7 +1136,7 @@ def run(entry: Callable[[], Any]) -> NoReturn:
     global _stdout_owner
     _stdout_owner = None  # #3107 v2: each run starts with stdout unclaimed
     try:
-        status = entry()
+        status = emit_result(entry())  # #3216: a Report's document goes out here
     except SystemExit as exc:
         status = exc.code
     except Exception as exc:  # noqa: BLE001 — that is the point

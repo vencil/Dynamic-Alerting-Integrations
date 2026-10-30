@@ -793,6 +793,11 @@ class Timestamp:
     def __repr__(self) -> str:
         return self.text
 
+    def __json__(self) -> str:
+        """In a --json document: the text as written — what the generator
+        and Alertmanager read (`_lib_exitcodes.encode_json`, #3216)."""
+        return self.text
+
 
 # yaml.v3's spellings of the !!float values parse-tree gives no "value" for
 # (third_party/yaml.v3/resolve.go, resolveMapList): an explicit `!!float`
