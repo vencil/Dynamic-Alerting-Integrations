@@ -1,0 +1,350 @@
+# #3276 G1: every value a da-tools command takes, and what it is.
+# The rules and the kinds: tests/shared/test_caller_path_manifest.py (module docstring).
+# `by` names the reader that judges a `reader` input (documentation; the gate checks pinned_by).
+
+# COMMAND_MAP entries that dispatch to Go: no Python parser to walk.
+dispatched_to_go: [batch-pr, guard, parser]
+
+commands:
+  alert-correlate:
+    "--input": {kind: "pending", ticket: 3415}
+    "--lookback": not_path
+    "--min-score": not_path
+    "--prometheus": not_path
+    "--window": not_path
+  alert-quality:
+    "--min-score": not_path
+    "--period": not_path
+    "--prometheus": not_path
+    "--tenant": not_path
+  analyze-gaps:
+    "--config-dir": dir
+    "--metric-dictionary": file
+    "--output": output
+    "--tenant-config": file
+  backtest:
+    "--baseline": {kind: "reader", by: "da-guard served-values", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
+    "--config-dir": {kind: "reader", by: "da-guard served-values", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
+    "--git-diff": not_path
+    "--lookback": not_path
+    "--markdown-output": output
+    "--metric": not_path
+    "--new-value": not_path
+    "--old-value": not_path
+    "--output": output
+    "--prometheus": not_path
+    "--tenant": not_path
+  baseline:
+    "--duration": not_path
+    "--interval": not_path
+    "--metrics": not_path
+    "--output-dir": output
+    "--prometheus": not_path
+    "--tenant": not_path
+  batch-diagnose:
+    "--namespace": not_path
+    "--output": output
+    "--prometheus": not_path
+    "--tenants": not_path
+    "--timeout": not_path
+    "--workers": not_path
+  blind-spot:
+    "--config-dir": {kind: "pending", ticket: 3392}
+    "--exclude-jobs": not_path
+    "--prometheus": not_path
+  byo-check:
+    "--alertmanager": not_path
+    "--prometheus": not_path
+    target: not_path
+  cardinality-forecast:
+    "--limit": not_path
+    "--lookback": not_path
+    "--prometheus": not_path
+    "--tenant": not_path
+    "--warn-days": not_path
+  check-alert:
+    "--prometheus": not_path
+    alert_name: not_path
+    tenant: not_path
+  config-diff:
+    "--at": not_path
+    "--format": not_path
+    "--new-dir": dir
+    "--old-dir": dir
+  config-history:
+    "--config-dir": {kind: "dir", no_row: "every subcommand creates .da-history beside --config-dir first, so a locked parent never reaches the check; a missing one does", pinned_by: "tests/shared/test_caller_paths.py::test_config_history_says_it_in_its_own_language"}
+  config-history diff:
+    id_a: not_path
+    id_b: not_path
+  config-history log:
+    "--limit": not_path
+  config-history show:
+    id: not_path
+  config-history snapshot:
+    "--message": not_path
+  cutover:
+    "--namespace": not_path
+    "--prometheus": not_path
+    "--readiness-json": {kind: "pending", ticket: 3415}
+    "--tenant": not_path
+  deprecate:
+    "--config-dir": dir
+    "--plane": not_path
+    "--root-dir": {kind: "reader", by: "da-guard parse-tree", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
+    metrics: not_path
+  diagnose:
+    "--config-dir": {kind: "pending", ticket: 3392}
+    "--prometheus": not_path
+    tenant: not_path
+  discover-mappings:
+    "--endpoint": not_path
+    "--instance": not_path
+    "--job": not_path
+    "--output": output
+    "--prometheus": not_path
+  drift-detect:
+    "--context": not_path
+    "--dirs": dir
+    "--ignore-prefix": not_path
+    "--kubeconfig": {kind: "reader", by: "kubectl, relayed as rc 2", pinned_by: "tests/shared/test_caller_path_manifest.py::test_drift_detect_relays_kubectls_refusal_of_its_kubeconfig"}
+    "--labels": not_path
+    "--mode": not_path
+    "--namespace": not_path
+  evaluate-policy:
+    "--config-dir": dir
+    "--policy": file
+  explain-keys:
+    "--assert": {kind: "reader", by: "explain_keys (ExplainError)", pinned_by: "tests/ops/test_explain_keys.py::test_caller_errors_exit_2_with_one_json_document"}
+    "--at": not_path
+    "--config-dir": dir
+    "--da-guard-binary": {kind: "reader", by: "the da-guard resolver", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
+    "--tenant": not_path
+    "--timeout": not_path
+  explain-route:
+    "--alertname": not_path
+    "--base-config": file
+    "--config-dir": dir
+    "--label": not_path
+    "--policy": file
+    "--severity": not_path
+    "--tenant": not_path
+  fed-key:
+    "--existing-jwks": {kind: "reader", by: "die_caller_error on OSError", pinned_by: "tests/ops/test_federation_keygen.py::test_merge_jwks_rejects_missing_file"}
+    "--jwks-out": output
+    "--key-bits": not_path
+    "--namespace": not_path
+    "--secret-key": not_path
+    "--secret-name": not_path
+  federation-check:
+    "--edge-urls": not_path
+    "--prometheus": not_path
+    target: not_path
+  generate-routes:
+    "--base-config": file
+    "--config-dir": dir
+    "--configmap": not_path
+    "--findings-json": output
+    "--namespace": not_path
+    "--output": output
+    "--policy": file
+  generator-service:
+    "--cache-max-bytes": not_path
+    "--config-subdir": not_path
+    "--da-guard-binary": {kind: "pending", ticket: 3415}
+    "--deadline-reserve-seconds": not_path
+    "--git": {kind: "pending", ticket: 3415}
+    "--max-body-bytes": not_path
+    "--max-cache-transfer-bytes": not_path
+    "--max-connections": not_path
+    "--max-inflight-body-bytes": not_path
+    "--max-judgement-seconds": not_path
+    "--max-queue": not_path
+    "--max-result-bytes": not_path
+    "--max-writes": not_path
+    "--memory-limit-bytes": not_path
+    "--policy": {kind: "reader", by: "read for every judgement: policy_unusable", pinned_by: "tests/ops/test_generator_service.py::test_policy_is_read_for_every_judgement"}
+    "--read-timeout-seconds": not_path
+    "--repo": dir
+    "--socket": output
+    "--warm-ref": not_path
+    "--warm-seconds": not_path
+    "--work-dir": output
+  gitops-check local:
+    "--dir": dir
+  grafana-import:
+    "--dashboard": file
+    "--dashboard-dir": dir
+    "--name": not_path
+    "--namespace": not_path
+  init:
+    "--ci": not_path
+    "--config-source": not_path
+    "--da-tools-image": not_path
+    "--deploy": not_path
+    "--git-branch": not_path
+    "--git-path": not_path
+    "--git-period": not_path
+    "--git-repo": not_path
+    "--namespace": not_path
+    "--output-dir": output
+    "--rule-packs": not_path
+    "--tenants": not_path
+  lint:
+    "--policy": {kind: "reader", by: "load_policy: die_caller_error", pinned_by: "tests/ops/test_lint_custom_rules.py::test_load_policy_unreadable_policy_is_caller_error"}
+    paths: any
+  maintenance-scheduler:
+    "--alertmanager": not_path
+    "--config-dir": dir
+    "--pushgateway": not_path
+  migrate:
+    "--output-dir": output
+    "--prefix": not_path
+    input_file: {kind: "reader", by: "da-read (Prometheus' rule loader)", pinned_by: "tests/ops/test_migrate_rule_outputs.py::test_missing_input_file_exits_caller_error"}
+  migrate-to-operator:
+    "--config-dir": {kind: "pending", ticket: 3392}
+    "--namespace": not_path
+    "--output-dir": output
+    "--receiver-template": not_path
+    "--secret-key": not_path
+    "--secret-name": not_path
+    "--source-dir": {kind: "pending", ticket: 3392}
+  migration-audit:
+    "--config-dir": dir
+    "--da-guard-binary": {kind: "reader", by: "the da-guard resolver", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
+    "--timeout": not_path
+  offboard:
+    "--config-dir": {kind: "reader", by: "da-guard parse-tree", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
+    "--state": any
+    tenant: not_path
+  onboard:
+    "--alertmanager-config": {kind: "reader", by: "AlertmanagerConfigError", pinned_by: "tests/ops/test_onboard_platform.py::test_nonexistent_file"}
+    "--da-crdecode-binary": {kind: "reader", by: "_lib_consumer_read", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
+    "--da-read-binary": {kind: "reader", by: "_lib_consumer_read", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
+    "--output-dir": output
+    "--rule-files": {kind: "pending", ticket: 3392}
+    "--scrape-config": {kind: "reader", by: "PrometheusConfigError", pinned_by: "tests/ops/test_onboard_platform.py::test_main_missing_scrape_config_is_a_caller_error"}
+    "--tenant-label": not_path
+  opa-evaluate:
+    "--config-dir": {kind: "reader", by: "da-guard served-values", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
+    "--opa-binary": {kind: "reader", by: "OPA binary not found", pinned_by: "tests/ops/test_policy_opa_bridge.py::test_binary_missing"}
+    "--opa-url": not_path
+    "--policy-package": not_path
+    "--policy-path": {kind: "reader", by: "opa eval -d (a failed eval is rc 2)", pinned_by: "tests/ops/test_policy_opa_bridge.py::test_binary_that_does_not_evaluate"}
+  operator-check:
+    "--kubeconfig": {kind: "reader", by: "kubectl through _lib_kubectl (KubectlError)", pinned_by: "tests/ops/test_operator_check.py::test_kubeconfig_namespace_and_selector_reach_the_reader"}
+    "--namespace": not_path
+    "--prometheus": not_path
+    "--rule-packs-dir": {kind: "pending", ticket: 3392}
+  operator-generate:
+    "--api-version": not_path
+    "--components": not_path
+    "--config-dir": {kind: "pending", ticket: 3392}
+    "--namespace": not_path
+    "--output-dir": output
+    "--receiver-template": not_path
+    "--rule-packs-dir": {kind: "pending", ticket: 3392}
+    "--secret-key": not_path
+    "--secret-name": not_path
+    "--selector-label": not_path
+  patch-config:
+    "--exporter-namespace": not_path
+    "--exporter-port": not_path
+    "--exporter-selector": not_path
+    "--poll-interval": not_path
+    "--reload-timeout": not_path
+    metric_key: not_path
+    tenant: not_path
+    value: not_path
+  rule-pack-diff:
+    "--from": {kind: "reader", by: "da-read (Prometheus' rule loader)", pinned_by: "tests/ops/test_rule_pack_diff.py::test_main_missing_input_exits_2"}
+    "--to": {kind: "reader", by: "da-read (Prometheus' rule loader)", pinned_by: "tests/ops/test_rule_pack_diff.py::test_main_missing_input_exits_2"}
+  rule-pack-split:
+    "--namespace": not_path
+    "--output-dir": output
+    "--rule-packs-dir": {kind: "pending", ticket: 3415}
+  runtime-audit:
+    "--prometheus": not_path
+    "--rule-packs-dir": dir
+    "--runtime-json": {kind: "pending", ticket: 3415}
+  scaffold:
+    "--db": not_path
+    "--from-onboard": {kind: "pending", ticket: 3415}
+    "--generate-profile": not_path
+    "--mapping-filter": not_path
+    "--mapping-instance": not_path
+    "--namespaces": not_path
+    "--output-dir": output
+    "--profile": not_path
+    "--routing-group-by": not_path
+    "--routing-group-interval": not_path
+    "--routing-group-wait": not_path
+    "--routing-profile": not_path
+    "--routing-receiver": not_path
+    "--routing-receiver-type": not_path
+    "--routing-repeat-interval": not_path
+    "--routing-smarthost": not_path
+    "--severity-dedup": not_path
+    "--silent-mode": not_path
+    "--tenant": not_path
+    "--tier": not_path
+    "--topology": not_path
+  shadow-verify:
+    "--alertmanager": not_path
+    "--mapping": {kind: "pending", ticket: 3392}
+    "--prometheus": not_path
+    "--readiness-json": {kind: "pending", ticket: 3392}
+    "--report-csv": {kind: "pending", ticket: 3392}
+    phase: not_path
+  silencer-drift-check:
+    "--rule-source": any
+    "--silences-file": {kind: "reader", by: "OSError -> caller error", pinned_by: "tests/ops/test_silencer_drift_check.py::test_main_missing_silences_file"}
+  state-reconcile:
+    "--manifest-path": output
+    "--state-dir": {kind: "pending", ticket: 3392}
+  tenant-verify:
+    "--conf-d": dir
+    "--expect-merged-hash": not_path
+    tenant_id: not_path
+  test-notification:
+    "--config-dir": dir
+    "--policy": file
+    "--rate-limit": not_path
+    "--tenant": not_path
+    "--timeout": not_path
+  threshold-govern:
+    "--auth-token": not_path
+    "--auth-token-file": {kind: "reader", by: "deliberate fail-open (#962, ADR-027): warns and continues without a Bearer", pinned_by: "tests/ops/test_threshold_govern.py::test_resolve_auth_token_file_read_error_degrades_not_raises"}
+    "--config-dir": dir
+    "--identity-email": not_path
+    "--identity-groups": not_path
+    "--lookback": not_path
+    "--max-prs": not_path
+    "--min-delta-pct": not_path
+    "--min-samples": not_path
+    "--prometheus": not_path
+    "--tenant": not_path
+    "--tenant-api-url": not_path
+    "--throttle-seconds": not_path
+    "--timeout": not_path
+  threshold-recommend:
+    "--config-dir": dir
+    "--lookback": not_path
+    "--min-samples": not_path
+    "--prometheus": not_path
+    "--tenant": not_path
+  validate:
+    "--convergence-output": output
+    "--interval": not_path
+    "--mapping": {kind: "pending", ticket: 3415}
+    "--new": not_path
+    "--old": not_path
+    "--output-dir": output
+    "--prometheus": not_path
+    "--rounds": not_path
+    "--stability-window": not_path
+    "--tolerance": not_path
+  validate-config:
+    "--config-dir": dir
+    "--policy": file
+    "--policy-dsl": file
+    "--rule-packs": dir

@@ -43,7 +43,29 @@ REASON_PREFIX = {"dir": "dir_", "file": "file_", "any": "path_"}
 
 #: ⛔ The ceiling of `pending`: remove an entry when its flag is migrated; an
 #: addition here is a new unjudged input path and needs its own ticket first.
-PENDING: frozenset[tuple[str, str]] = frozenset()
+#: #3392 (missing read as empty) and #3415 (traceback, misworded, silent).
+PENDING: frozenset[tuple[str, str]] = frozenset({
+    ("alert-correlate", "--input"),
+    ("blind-spot", "--config-dir"),
+    ("cutover", "--readiness-json"),
+    ("diagnose", "--config-dir"),
+    ("generator-service", "--da-guard-binary"),
+    ("generator-service", "--git"),
+    ("migrate-to-operator", "--config-dir"),
+    ("migrate-to-operator", "--source-dir"),
+    ("onboard", "--rule-files"),
+    ("operator-check", "--rule-packs-dir"),
+    ("operator-generate", "--config-dir"),
+    ("operator-generate", "--rule-packs-dir"),
+    ("rule-pack-split", "--rule-packs-dir"),
+    ("runtime-audit", "--runtime-json"),
+    ("scaffold", "--from-onboard"),
+    ("shadow-verify", "--mapping"),
+    ("shadow-verify", "--readiness-json"),
+    ("shadow-verify", "--report-csv"),
+    ("state-reconcile", "--state-dir"),
+    ("validate", "--mapping"),
+})
 
 
 def _caller_paths():
@@ -167,6 +189,75 @@ def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
     return faults
 
 
+# ── readers no other test runs on a missing input ────────────────────────
+
+_MISSING = "/nonexistent/g1-missing"
+_CONF = str(REPO / "tests" / "golden" / "fixtures" / "flat" / "conf.d")
+_AM = str(REPO / "try-local" / "alertmanager.yml")
+
+#: (command, argument, script under scripts/tools, argv). {M} is a path with
+#: nothing there, {OUT} a scratch directory. Each row: rc 2, no traceback, the
+#: path named — the reader's own refusal, not a crash or an empty result.
+READER_SITES = [
+    ("backtest", "--config-dir", "ops/backtest_threshold.py",
+     ["--config-dir", "{M}", "--baseline", _CONF, "--json"]),
+    ("backtest", "--baseline", "ops/backtest_threshold.py",
+     ["--config-dir", _CONF, "--baseline", "{M}"]),
+    ("deprecate", "--root-dir", "ops/deprecate_rule.py",
+     ["--config-dir", _CONF, "--plane", "subtree", "--root-dir", "{M}", "some_metric"]),
+    ("offboard", "--config-dir", "ops/offboard_tenant.py", ["tenant-a", "--config-dir", "{M}"]),
+    ("opa-evaluate", "--config-dir", "ops/policy_opa_bridge.py",
+     ["--config-dir", "{M}", "--opa-url", "http://127.0.0.1:9"]),
+    ("explain-keys", "--da-guard-binary", "ops/explain_keys.py",
+     ["--config-dir", _CONF, "--da-guard-binary", "{M}"]),
+    ("migration-audit", "--da-guard-binary", "ops/migration_audit.py",
+     ["--config-dir", _CONF, "--da-guard-binary", "{M}"]),
+    ("onboard", "--da-crdecode-binary", "ops/onboard_platform.py",
+     ["--alertmanager-config", _AM, "--da-crdecode-binary", "{M}", "--output-dir", "{OUT}"]),
+    ("onboard", "--da-read-binary", "ops/onboard_platform.py",
+     ["--alertmanager-config", _AM, "--da-read-binary", "{M}", "--output-dir", "{OUT}"]),
+]
+_READER_TEST = ("tests/shared/test_caller_path_manifest.py::"
+                "test_a_reader_refuses_a_missing_input_by_name")
+
+
+@pytest.mark.usefixtures("da_guard_env", "da_read_env")
+@pytest.mark.parametrize("command, argument, script, argv", READER_SITES,
+                         ids=[f"{c} {a}" for c, a, _s, _v in READER_SITES])
+def test_a_reader_refuses_a_missing_input_by_name(tmp_path, command, argument, script, argv):
+    import subprocess
+    args = [a.replace("{M}", _MISSING).replace("{OUT}", str(tmp_path / "out")) for a in argv]
+    proc = subprocess.run([sys.executable, str(TOOLS / script), *args], capture_output=True,
+                          text=True, encoding="utf-8", timeout=300, stdin=subprocess.DEVNULL)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 2, out[-3000:]
+    assert "Traceback" not in out, out[-3000:]
+    assert _MISSING in out, out[-3000:]
+
+
+def test_drift_detect_relays_kubectls_refusal_of_its_kubeconfig(tmp_path):
+    """--kubeconfig is judged by kubectl; what drift-detect owes is to relay
+    that refusal as a caller error, not to read it as an empty cluster. A
+    stand-in kubectl answers the way kubectl does for a kubeconfig that is
+    not there (this environment has no kubectl to ask)."""
+    import os
+    import subprocess
+    fake = tmp_path / "bin" / "kubectl"
+    fake.parent.mkdir()
+    fake.write_text("#!/bin/sh\nwhile [ $# -gt 0 ]; do\n"
+                    "  if [ \"$1\" = --kubeconfig ]; then\n"
+                    "    echo \"error: stat $2: no such file or directory\" >&2; exit 1\n"
+                    "  fi\n  shift\ndone\nexit 0\n", encoding="utf-8")
+    fake.chmod(0o755)
+    proc = subprocess.run([sys.executable, str(TOOLS / "ops" / "drift_detect.py"),
+                           "--mode", "operator", "--dirs", _CONF, "--kubeconfig", _MISSING],
+                          capture_output=True, text=True, encoding="utf-8", timeout=120,
+                          env={**os.environ, "PATH": f"{fake.parent}{os.pathsep}{os.environ['PATH']}"})
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 2, out[-3000:]
+    assert "Traceback" not in out and f"stat {_MISSING}" in out, out[-3000:]
+
+
 # ── the gate ─────────────────────────────────────────────────────────────
 
 @pytest.fixture(scope="module")
@@ -179,6 +270,14 @@ def test_every_da_tools_argument_is_declared(parsed):
     assert len(arguments) > 200, "the walk found too few arguments to be measuring anything"
     faults = manifest_faults(arguments, dispatched, load_manifest(), rows_by_site(), PENDING)
     assert not faults, "\n".join(faults)
+
+
+def test_a_reader_pinned_here_has_its_row():
+    """A `pinned_by` naming the reader table is only true for a row it has."""
+    rows = {(c, a) for c, a, _s, _v in READER_SITES}
+    claimed = {k for k, d in _entries(load_manifest()).items()
+               if d.get("kind") == "reader" and d.get("pinned_by") == _READER_TEST}
+    assert claimed == rows, {"claimed, no row": claimed - rows, "row, not claimed": rows - claimed}
 
 
 # ── each rule bites (synthetic inputs, no parser walk) ───────────────────
