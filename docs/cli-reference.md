@@ -345,7 +345,7 @@ da-tools diagnose db-a --config-dir ./conf.d
 
 **用途**：遷移完成後的定期健檢；快速掃描整個平台狀態。
 
-**租戶與繼承鏈從哪裡來**（[#1525](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1525)）：兩種模式都讀 `--namespace` 裡的 ConfigMap `threshold-config`（threshold-exporter 掛成 conf.d 的那一份，`data` 與 `binaryData` 都算），把它落成暫存樹，用 da-guard 一次讀完：租戶清單是 exporter 實際服務的租戶（檔內 `tenants:` 宣告的 id，不是 ConfigMap key 的檔名），每個租戶的輸出都附 `inheritance_chain`（與 `diagnose --config-dir` 相同）。exporter 讀不了的樹（壞檔、同一租戶宣告在兩個檔等）整批結束碼 2，不檢查任何租戶。需要 da-guard（映像內建）。ConfigMap 更新後，exporter 要等 kubelet 同步（約一分鐘）才熱載，這段期間報告依的是 ConfigMap 而非 exporter 當下載入的版本。⚠️ v2.9.0 映像仍以 key 名推租戶、不附繼承鏈，`--tenants` 模式不讀 ConfigMap。 <!-- image-caveat: v2.9.0 -->
+**租戶與繼承鏈從哪裡來**（[#1525](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1525)）：兩種模式都讀 `--namespace` 裡的 ConfigMap `threshold-config`（chart 預設讓 threshold-exporter 掛成 conf.d 的那一份，`data` 與 `binaryData` 都算；以 `thresholdConfig.existingConfigMap` 改掛其他名稱的部署，本工具讀的仍是 `threshold-config`），把它落成暫存樹，用 da-guard 一次讀完：租戶清單是 exporter 實際服務的租戶（檔內 `tenants:` 宣告的 id，不是 ConfigMap key 的檔名），檢查有跑完的租戶，輸出都附 `inheritance_chain`（與 `diagnose --config-dir` 相同；逾時或檢查本身出例外的租戶沒有）。exporter 不讀的隱藏名稱 key 會略過並在 stderr 點名。exporter 讀不了的樹（壞檔、同一租戶宣告在兩個檔等）整批結束碼 2，不檢查任何租戶。需要 da-guard（映像內建）。ConfigMap 更新後，exporter 要等 kubelet 同步（約一分鐘）才熱載，這段期間報告依的是 ConfigMap 而非 exporter 當下載入的版本。⚠️ v2.9.0 映像仍以 key 名推租戶、不附繼承鏈，`--tenants` 模式不讀 ConfigMap。 <!-- image-caveat: v2.9.0 -->
 
 **語法**
 

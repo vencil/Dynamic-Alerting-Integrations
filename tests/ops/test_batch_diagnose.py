@@ -192,6 +192,59 @@ class TestDiscoverTenants:
         # must-fire control: the same tree answers the tenant it has
         assert bd.resolve_tenants(bd.read_configmap_files(), ["db-a"])[0] == ["db-a"]
 
+    @pytest.mark.parametrize("doc, why", [
+        ({"data": ["a.yaml"]}, "data is not a mapping"),
+        ({"data": {"a.yaml": "tenants: {}"}, "binaryData": {"a.yaml": "dGVuYW50czoge30K"}},
+         "in both data and binaryData"),
+        ({"data": {"a.yaml": "x\ud800"}}, "not encodable as UTF-8"),
+    ], ids=["data-not-mapping", "key-in-both", "lone-surrogate"])
+    def test_a_configmap_of_an_impossible_shape_is_refused_by_name(self, mock_run, doc, why):
+        """Not something an API server returns, but never a traceback (the
+        lone surrogate was `UnicodeEncodeError`), and never one key's body
+        silently served as the other's."""
+        mock_run.return_value = MagicMock(returncode=0, stdout=json.dumps(doc), stderr="")
+        with pytest.raises(bd.CallerError, match=why) as exc:
+            bd.read_configmap_files()
+        assert exc.value.reason == "configmap_unreadable"
+
+    def test_two_keys_one_name_on_this_filesystem_is_refused(self, monkeypatch):
+        """A case-insensitive filesystem makes `a.yaml` and `A.yaml` one file."""
+        real_open = open
+        seen = set()
+
+        def folding_open(path, mode="r", *a, **k):
+            folded = str(path).lower()
+            if "x" in mode and folded in seen:
+                raise FileExistsError(path)
+            seen.add(folded)
+            return real_open(path, mode, *a, **k)
+
+        monkeypatch.setattr(bd, "open", folding_open, raising=False)
+        with pytest.raises(bd.CallerError, match="collides") as exc:
+            with bd.configmap_tree({"a.yaml": b"", "A.yaml": b""}):
+                pass
+        assert exc.value.reason == "configmap_unreadable"
+
+    def test_the_written_tree_is_removed_on_every_exit(self, monkeypatch):
+        roots = []
+        with bd.configmap_tree({"a.yaml": b"x"}) as root:
+            roots.append(root)
+            assert os.path.isfile(os.path.join(root, "a.yaml"))
+        with pytest.raises(RuntimeError):
+            with bd.configmap_tree({"b.yaml": b"x"}) as root:
+                roots.append(root)
+                raise RuntimeError("boom")
+        assert not any(os.path.exists(os.path.dirname(r)) for r in roots), roots
+
+    def test_a_refusal_says_which_configmap_the_paths_are_keys_of(self, mock_run):
+        """da-guard names files of the written-out copy; the run says whose
+        keys they are."""
+        mock_run.return_value = _cm({
+            "_defaults.yaml": _DEFAULTS, "zzz.yaml": "tenants:\n  db-b: [\n"})
+        with refuses("zzz.yaml") as err:
+            bd.resolve_tenants(bd.read_configmap_files(), where="ConfigMap ns/threshold-config")
+        assert "NOTE: the paths named are keys of ConfigMap ns/threshold-config" in err.getvalue()
+
     def test_kubectl_failure(self, mock_run):
         """kubectl 失敗是 KubectlError（rc 2，點名 kubectl 自己那行話）。
         #3349：以前返回空列表，main 再報成 `No tenants found`。"""
@@ -578,10 +631,19 @@ class TestMainCLI:
     def test_a_named_tenant_the_configmap_lacks_exits_2(self, monkeypatch, cli_argv, capsys):
         ran = []
         monkeypatch.setattr(bd, "run_diagnose_for_tenant", lambda *a, **k: ran.append(a))
-        cli_argv("batch_diagnose", "--tenants", "db-a,nope", "--json")
-        with pytest.raises(bd.TenantNotFoundError, match="'nope'"):
+        cli_argv("batch_diagnose", "--tenants", "db-a,nope", "--namespace", "ops", "--json")
+        with pytest.raises(bd.TenantNotFoundError,
+                           match="'nope' in ConfigMap ops/threshold-config"):
             bd.main()
         assert ran == []
+
+    def test_a_tenant_named_twice_is_checked_once(self, monkeypatch, cli_argv, capsys):
+        ran = []
+        monkeypatch.setattr(bd, "run_diagnose_for_tenant",
+                            lambda t, *a, **k: ran.append(t) or {"tenant": t, "status": "healthy"})
+        cli_argv("batch_diagnose", "--tenants", "db-a,db-a,db-b", "--json")
+        assert bd.main() == 0
+        assert sorted(ran) == ["db-a", "db-b"]
 
     def test_a_tenants_flag_naming_none_exits(self, cli_argv):
         """`--tenants ,` names no tenant: not read as "every tenant"."""

@@ -1532,8 +1532,9 @@ def test_unit_sanity_gate_reads_both_casings(tmp_path: pathlib.Path) -> None:
 
 def _kubectl_only(result):
     """A `subprocess.run` answering every `kubectl` call with *result* and
-    running everything else for real: `discover_tenants` classes the keys
-    through `da-guard parse-tree --names` (#3206), a subprocess too."""
+    running everything else for real: batch-diagnose reads the ConfigMap's
+    tree and classes its keys through da-guard (#3206, #1525), subprocesses
+    too."""
     real = subprocess.run
 
     def run(cmd, *args, **kwargs):
@@ -1546,9 +1547,14 @@ def _kubectl_only(result):
 def test_batch_diagnose_discovers_tenants_from_either_casing(
         monkeypatch, da_guard_env) -> None:
     """The carrier is a ConfigMap KEY, and the keys ARE the conf.d
-    filenames — so the exporter's filename->tenant rule applies to them.
-    Measured before the fix: `db-a.yaml` -> ['db-a'], `DB-A.YAML` -> [],
+    filenames — so the exporter's rule for which file it reads applies to
+    them. Measured before the fix: `db-a.yaml` -> ['db-a'], `DB-A.YAML` -> [],
     i.e. every tenant vanished from the report and the run still exited 0.
+
+    #1525: the tenant ids are now what the read files DECLARE (Go's
+    `da-guard effective` on the ConfigMap written out as a tree), so the
+    key's case decides only whether the file is read: both arms must find
+    the same ids.
     """
     import json as _json  # noqa: PLC0415
     import contextlib  # noqa: PLC0415
@@ -1574,9 +1580,9 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
         #                     above still pin their filters.
         payload = _json.dumps(
             {"data": {fname: _TENANT_BODY,
-                      "_defaults.yaml": "d: {}\n",
-                      "README.md": "# notes\n",
-                      "db-c.yml": _TENANT_BODY}})
+                      "_defaults.yaml": "defaults:\n  cpu_usage: 50\n",
+                      "README.md": "tenants:\n  readme-tenant: {}\n",
+                      "db-c.yml": "tenants:\n  db-c:\n    cpu_usage: 70\n"}})
 
         class _Result:
             returncode = 0
@@ -1588,24 +1594,18 @@ def test_batch_diagnose_discovers_tenants_from_either_casing(
         monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(_kubectl_only(_Result())))
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
-            found[arm] = mod.discover_tenants()
+            found[arm] = mod.resolve_tenants(mod.read_configmap_files())[0]
         noise[arm] = err.getvalue()
     # ⚠️ `db-c` joined this list at #1603 — see the neighbour note above.
     # If you added a key, the tool is fine and THIS expectation is what needs
     # updating; do not remove your key to get green.
-    assert found["lower"] == ["db-a", "db-c"], (
-        f"the lower arm did not find exactly the two carrier keys this "
-        f"ConfigMap has; got {found['lower']}")
-    # ⛔ Compare the SHAPE, not the strings: the id a name carries (Go's
-    # `tenant_named`) preserves the
-    # carrier's case on purpose (folding it would rename the tenant on the
-    # write plane only), so the two arms legitimately carry different ids.
-    assert len(found["UPPER"]) == len(found["lower"]), (
+    assert found["lower"] == ["acme", "db-c"], (
+        f"the lower arm did not find exactly the two tenants the carrier keys "
+        f"of this ConfigMap declare; got {found['lower']}")
+    # `README.md` declares `readme-tenant`: not a carrier, so not read.
+    assert found["UPPER"] == found["lower"], (
         f"upper-cased ConfigMap keys yielded {found['UPPER']} against "
-        f"{found['lower']} for the identical body")
-    assert found["UPPER"] == ["DB-A", "db-c"], (
-        f"the tenant id must keep the key's original case; got "
-        f"{found['UPPER']}")
+        f"{found['lower']} for the identical bodies")
     # ⛔ The `_defaults.yaml` neighbour above does NOT pin the reserved
     # filter through the RETURN VALUE — a reserved name carries no tenant
     # id either way, so dropping the reserved test leaves the list identical.
@@ -1819,8 +1819,8 @@ def test_batch_diagnose_names_a_configmap_key_that_carries_no_tenant(
         monkeypatch, da_guard_env) -> None:
     """⛔ The branch that DROPS a key must be walked by a test.
 
-    `discover_tenants` skips a key Go classes `hidden` and says so
-    on stderr. Nothing exercised that branch: the parity test above hands it
+    batch-diagnose skips a key Go classes `hidden` (the exporter does not
+    read it) and says so on stderr. Nothing exercised that branch: the parity test above hands it
     only legitimate keys and asserts stderr stays CLEAN, so the `if not
     tenant:` arm was an `if` with no test walking it — the repo's own
     self-review checklist calls that hidden dead code, and the coverage bot
@@ -1834,8 +1834,9 @@ def test_batch_diagnose_names_a_configmap_key_that_carries_no_tenant(
     import io  # noqa: PLC0415
     import json as _json  # noqa: PLC0415
     mod = _import_tool("ops", "batch_diagnose")
-    payload = _json.dumps({"data": {"db-a.yaml": _TENANT_BODY,
-                                    ".hidden.yaml": _TENANT_BODY}})
+    payload = _json.dumps({"data": {"_defaults.yaml": "defaults:\n  cpu_usage: 50\n",
+                                    "db-a.yaml": "tenants:\n  db-a: {}\n",
+                                    ".hidden.yaml": "tenants:\n  db-h: {}\n"}})
 
     class _Result:
         returncode = 0
@@ -1847,7 +1848,7 @@ def test_batch_diagnose_names_a_configmap_key_that_carries_no_tenant(
     monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(_kubectl_only(_Result())))
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
-        found = mod.discover_tenants()
+        found = mod.resolve_tenants(mod.read_configmap_files())[0]
     noise = err.getvalue()
 
     assert found == ["db-a"], (
@@ -1856,5 +1857,5 @@ def test_batch_diagnose_names_a_configmap_key_that_carries_no_tenant(
     assert ".hidden.yaml" in noise, (
         f"the dropped key was skipped SILENTLY; the whole point of this "
         f"change is that a vanished tenant must be audible.\n{noise!r}")
-    assert "carries no tenant id" in noise, (
+    assert "hidden name threshold-exporter does not read" in noise, (
         f"the warning must say WHY the key was dropped; got {noise!r}")

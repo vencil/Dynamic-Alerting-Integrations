@@ -63,6 +63,7 @@ from _lib_exitcodes import (  # noqa: E402
     arm_crash_envelope, disarm_crash_envelope,
 )
 import _lib_parse_cache  # noqa: E402  (#1525: exit_on_parse_tree_error)
+import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 9: Go classes the key names)
 from _lib_io import safe_label  # noqa: E402
 from _lib_tenant_values import exit_on_served_values_error  # noqa: E402  (#1525)
 
@@ -95,23 +96,28 @@ def read_configmap_files(namespace="monitoring", configmap="threshold-config"):
         raise CallerError(f"ConfigMap {configmap!r} not found in namespace {namespace!r}: "
                           "nothing to read the tenants from",
                           reason="configmap_not_found")
+    def unreadable(why):
+        return CallerError(f"ConfigMap {configmap!r}: {why}", reason="configmap_unreadable")
+
     files = {}
     for section in ("data", "binaryData"):
-        for key, value in (cm_data.get(section) or {}).items():
+        entries = cm_data.get(section) or {}
+        if not isinstance(entries, dict):
+            raise unreadable(f"{section} is not a mapping")
+        for key, value in entries.items():
             if (not isinstance(key, str) or not _CM_KEY.fullmatch(key)
                     or key in (".", "..") or not isinstance(value, str)):
-                raise CallerError(f"ConfigMap {configmap!r}: {section} key "
-                                  f"{safe_label(str(key))!r} is not a file this tool can "
-                                  "write as the exporter would mount it",
-                                  reason="configmap_unreadable")
-            if section == "data":
-                files[key] = value.encode("utf-8")
-                continue
+                raise unreadable(f"{section} key {safe_label(str(key))!r} is not a file "
+                                 "this tool can write as the exporter would mount it")
+            if key in files:
+                raise unreadable(f"key {key!r} is in both data and binaryData")
             try:
-                files[key] = base64.b64decode(value, validate=True)
+                files[key] = (value.encode("utf-8") if section == "data"
+                              else base64.b64decode(value, validate=True))
+            except UnicodeEncodeError:
+                raise unreadable(f"data key {key!r} is not encodable as UTF-8") from None
             except (binascii.Error, ValueError):
-                raise CallerError(f"ConfigMap {configmap!r}: binaryData key {key!r} "
-                                  "is not base64", reason="configmap_unreadable") from None
+                raise unreadable(f"binaryData key {key!r} is not base64") from None
     return files
 
 
@@ -123,8 +129,15 @@ def configmap_tree(files, configmap="threshold-config"):
         root = os.path.join(tmp, configmap)
         os.mkdir(root)
         for key, body in files.items():
-            with open(os.path.join(root, key), "xb") as fh:
-                fh.write(body)
+            try:
+                with open(os.path.join(root, key), "xb") as fh:
+                    fh.write(body)
+            except FileExistsError:
+                # Two keys one name here (a case-insensitive filesystem):
+                # writing on would serve one key's body as the other's.
+                raise CallerError(f"ConfigMap {configmap!r}: key {key!r} collides with "
+                                  "another key on this filesystem",
+                                  reason="configmap_unreadable") from None
         yield root
 
 
@@ -144,7 +157,21 @@ def resolve_tenants(files, requested=None, *, where="ConfigMap threshold-config"
     health check runs.
     """
     with configmap_tree(files, configmap) as root:
-        source = load_chain_source(root, where=where)
+        try:
+            source = load_chain_source(root, where=where)
+            named = _lib_parse_tree.classify_names(list(files)) if files else {}
+        except BaseException:
+            # da-guard's lines name files of the copy below, not the keys.
+            print(f"NOTE: the paths named are keys of {where}, written out under "
+                  f"{root} for da-guard (removed on exit)", file=sys.stderr)
+            raise
+        for key in sorted(files):
+            if named[key].cls == "hidden":
+                # The exporter's walk skips a hidden name, so agreeing with it
+                # is right — but a dropped key must not be silent: the symptom
+                # this tool once had was a tenant quietly missing (#1603).
+                print(f"WARNING: ConfigMap key {key!r} is a hidden name threshold-exporter "
+                      "does not read — skipped", file=sys.stderr)
         known = sorted(source.effective.tenants)
         if requested is not None:
             absent = [t for t in requested if t not in source.effective.tenants]
