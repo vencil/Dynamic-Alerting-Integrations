@@ -406,6 +406,9 @@ class Row:
     reach: str                                  # how the write is reached offline
     out_name: str = "out"
     cwd: Callable[[Ctx], Path] | None = None    # subprocess cwd, if any
+    # Extra environment for the run, built from the context (#1525:
+    # batch_diagnose reads its ConfigMap through a fake `kubectl` on PATH).
+    env: Callable[[Ctx], dict[str, str]] | None = None
     # Bad-path shapes to drive. A FILE tool whose own mkdir -p creates the
     # parent (sync_glossary_abbr) legitimately succeeds on missing_parent, so
     # it lists parent_is_file only.
@@ -638,9 +641,10 @@ ROWS: list[Row] = [
       for flag, opt, name in (("-o/--output", "--output", "backtest.json"),
                               ("--markdown-output", "--markdown-output", "backtest.md"))),
     R("ops/batch_diagnose.py", "-o/--output", "file",
-      lambda c, out: ["--tenants", "alpha,beta", "--prometheus", c.stub,
+      lambda c, out: ["--tenants", "db-a,db-b", "--prometheus", c.stub,
                       "--output", str(out)],
-      reach="local Prometheus stub", out_name="health.json"),
+      reach="local Prometheus stub + the --json gate's fake kubectl (#1525)",
+      out_name="health.json", env=lambda c: _fake_kubectl_env(c.tmp)),
     R("ops/discover_instance_mappings.py", "-o/--output", "file",
       lambda c, out: ["--prometheus", c.stub + "/rich", "--instance", "stub:9104",
                       "--output", str(out)],
@@ -805,8 +809,26 @@ def _skip_if_unavailable(row: Row) -> None:
         pytest.skip(f"{row.id}: {row.requires} is not on PATH")
 
 
+def _fake_kubectl_env(tmp: Path) -> dict[str, str]:
+    """PATH with the --json gate's fake `kubectl` first (POSIX launcher; its
+    threshold-config declares db-a and db-b)."""
+    bindir = tmp / "fake-kubectl-bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    impl = bindir / "fake_kubectl.py"
+    impl.write_text(_jsc._FAKE_KUBECTL_PY, encoding="utf-8")
+    exe = bindir / "kubectl"
+    exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{impl}" "$@"\n',
+                   encoding="utf-8", newline="\n")
+    exe.chmod(0o755)
+    return {"PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
 def _run(row: Row, ctx: Ctx, out: Path) -> subprocess.CompletedProcess:
     env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
+    if row.env is not None:
+        if os.name == "nt":
+            pytest.skip(f"{row.id}: its fake executable is a POSIX launcher")
+        env.update(row.env(ctx))
     cwd = row.cwd(ctx) if row.cwd else None
     return subprocess.run(
         [sys.executable, str(TOOLS_DIR / row.tool), *row.build(ctx, out)],
