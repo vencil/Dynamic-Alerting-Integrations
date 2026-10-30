@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-09
-updated_at: 2026-10-28
+updated_at: 2026-10-30
 ---
 
 # ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判
@@ -35,6 +35,7 @@ updated_at: 2026-10-28
 - **2026-10-22 修訂**：vendored yaml.v3 的基底升級為上游 `go.yaml.in/yaml/v3`（版本見 §11），unhashable merge key 修正改由上游提供（§4 的例子、§7、§11、「已知限制與風險」）；決策不變。
 - **2026-10-23 修訂**：§3「快取的去留」記下結果：保留快取，冷啟動改以 `parse-tree` 的批次單檔模式整批讀沒命中的檔；後果段的「快取的去留未定」改為「快取保留」。
 - **2026-10-28 修訂**：決定 tenant-api 管理設定的取得方式：Python 讀 tenant-api 自己的 `state show` 與 `config check` 子命令的輸出，它們用的是 server 的解析函式（§12）；Alertmanager 設定與 Kubernetes manifest 在 §12 分成兩列；§7 步驟 12 寫明分成哪幾件。同日再修訂：Prometheus 的規則檔與 `prometheus.yml` 都以權威讀法讀，代價是 da-tools 映像多帶服務探索的依賴；規則檔以上游 rulefmt 為準，vmalert 的相容性由 vmalert-tool 測試把關（§12、「已知限制與風險」）；§7 步驟 12 改為 AST lint 先上、以棘輪凍結既有呼叫點。
+- **2026-10-30 修訂**：遷移稽核指令與模仿 yaml.v3 的 Python loader 已刪除（§7 步驟 13），兩項升級前檢查寫進漸進遷移 playbook（§8）；§8 與附錄改寫為現況；決策不變。
 
 ## 摘要
 
@@ -508,9 +509,9 @@ YAML 改由 yaml.v3 解析後，產生器與 Python 工具看到的值，凡是�
 - **輸出差在哪裡**：以新舊兩版的 da-tools 映像各渲染一次同一棵樹，比對渲染結果（Alertmanager 路由設定等），作法與 [ADR-037](./037-config-diff-compares-rendered-output.md) 的 config-diff 相同。
 - 代價：比對看得到渲染結果哪裡變了，但不會指出是哪一項讀法改變造成的；要歸因，得回頭看那一處的原文。
 - 發布說明列出受影響的寫法與遷移步驟。
-- 刪除遷移稽核指令的那一步，同時在 [漸進遷移 playbook](../scenarios/incremental-migration-playbook.md) 補上這兩項升級前檢查（新版 da-guard 驗 conf.d、新舊映像渲染結果比對）。
+- 這兩項升級前檢查（新版 da-guard 驗 conf.d、新舊映像渲染結果比對）的做法寫在 [漸進遷移 playbook](../scenarios/incremental-migration-playbook.md) 的「升級平台版本前的檢查」。
 
-**遷移稽核指令退場**：它在客戶的樹上以兩個解析器各讀一次、列出差異，但它當作「今天」的那一側，是 PyYAML 加上模仿 yaml.v3 的 loader，這個讀法從沒在任何發布的版本裡出現過（已發布的 `tools/v2.9.0` 沒有那層 loader）。它回答的是「一個沒發布過的讀法與新讀法差在哪裡」，不是客戶要問的「新版拒收什麼、輸出差在哪裡」；它也是 Python 端以 PyYAML 讀 conf.d 的最後一處。所以由上面兩件事取代：在刪除它的那一步之前，這個指令仍在，但不建議依賴；那一步移除它（§7）。
+**遷移稽核指令退場**：它在客戶的樹上以兩個解析器各讀一次、列出差異，但它當作「今天」的那一側，是 PyYAML 加上模仿 yaml.v3 的 loader，這個讀法從沒在任何發布的版本裡出現過（已發布的 `tools/v2.9.0` 沒有那層 loader）。它回答的是「一個沒發布過的讀法與新讀法差在哪裡」，不是客戶要問的「新版拒收什麼、輸出差在哪裡」；它也是 Python 端以 PyYAML 讀 conf.d 的最後一處。所以由上面兩件事取代，指令已移除（§7 步驟 13）；它從未出現在任何發布的版本裡。
 
 刪除 vendored yaml.v3 的「非特定 tag」patch 不另外改變 exporter 的讀法：刪除時 exporter 與 tenant-api 都只解碼 `parse-tree` 判為讀得了的檔，而含 `! "<<"`、`objective: ! "99.9"` 這類帶 `!` 標記的檔整份讀不了，與其他讀不了的檔一樣不服務，也會在新版 da-guard 的 exit 3 裡列出。
 
@@ -735,7 +736,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - 已完成，步驟 10：編輯原語的共用套件（`pkg/confedit`，含 §4 的不變式）與 da-guard 的 `write`（一次改寫、新建、取代、搬移、複製、刪除一批檔，整棵樹判一次，讀回確認後由它自己寫檔）；tenant-api 的批次 patch 與 custom-alerts 合併改用該套件。所有寫 conf.d 的 Python 工具都只送「要改什麼」：改既有檔的 `patch_config`、`threshold_govern`、`deprecate_rule`；產生新檔的 `generate_tenant_fixture`、`onboard_platform`、`migrate_rule`、`scaffold_tenant`、`init_project`、`da_assembler`（長跑的 controller 遇到拒寫只記在該 CR 的狀態、不結束程序）；搬檔的 `migrate_conf_d`；刪檔的 `offboard_tenant`（每個刪除項目帶「這個檔恰好宣告這個租戶」的前提，以同一次判定讀到的內容比對）；以及把多個來源組裝成一個 config-dir 的 `assemble_config_dir`（逐位元組複製，`--check` 判同一批）；還有把產生的區塊拼進 dev 範本與 try-local seed 兩個 `_defaults.yaml` 的 `check_threshold_registry --regen`（拼好的檔整份取代）。除了 `check_threshold_registry --regen`，每支都是一批交給 `da-guard write`、全部通過才寫，預覽問同一批的 dry run；`--regen` 的兩個檔在不同的 conf.d 根目錄，每個根目錄一批，寫入前兩批都先 dry run，兩批都通過才開始寫，但後面那批寫到一半停下時，前面那批已寫入的不還原（點名列出）。Python 端不再直接寫、搬或刪 conf.d 檔；`run_chaos_soak` 與 bench 的 fixture 腳本直接改檔，是刻意模擬人手改檔的測試工具，不在此列。
 - 已完成，步驟 11：刪除 Python 端以 PyYAML 改寫 conf.d 的那一層（把未加引號的純量留成原文的 loader、照原文寫回的 dumper、保留 null 寫法的輔助函式）。最後一個讀它、但不寫 conf.d 的 `da_assembler --render-cr`（讀 CR 原文，比對 id 與 Kubernetes 的讀法、保留鍵順序）改由 `da-crdecode` 回答：它的輸出每份文件另帶 `differs_from_text`，列出 Kubernetes 讀法與原文不同的鍵與字串，物件的鍵照原文順序排；原文以 yaml.v3 的節點讀、`<<` 照 Kubernetes 的順序展開，所以只因 merge 順序不同的 CR 不再被拒收。文件裡的 conf.d 範例（`check_md_yaml_drift`）改經 `parse-tree` 讀；exporter 整份拒收的 conf.d 範例（多份文件、重複鍵、白名單外的標記）判為違規，刻意示範讀不了的輸入要加 ignore 標記並寫理由。模仿 yaml.v3 的 loader 不再讀任何 conf.d，只剩讀 conf.d 以外 YAML 的地方還用它（步驟 12、13 處理）；CI 檢查守住改寫層不再出現、loader 的使用者只有這幾處。
 - 進行中，步驟 12：conf.d 以外的 YAML 改以消費者為準。已完成取得方式寫定（§12）；`da-crdecode` 通用化（多份文件、標準輸入）與 `da-read alertmanager` 放進 da-tools 映像；tenant-api 加上 `state show` 與 `config check`。未完成：AST lint 與它的棘輪 baseline；`da-read prometheus-rules`、`da-read prometheus` 與它們的讀者；其餘 Alertmanager 設定、Kubernetes manifest 與 Helm values 的讀者；以 conf.d 格式讀的其餘文字改經 `parse-tree`。
-- 步驟 13：刪除遷移稽核指令；漸進遷移 playbook 補上升級前檢查。
+- 已完成，步驟 13：刪除遷移稽核指令與模仿 yaml.v3 的 Python loader（`_lib_yaml_keys`、`_lib_io` 的 exporter-key 讀取函式）；漸進遷移 playbook 補上升級前檢查。測試裡要知道「exporter 讀到什麼」的地方改問 `da-guard parse-tree`；兩份固定語料記錄舊產生器讀法的那一欄改為凍結的歷史值，之後新增的列寫 `n/a`。
 - 可平行：`parse-tree` 串流輸出與「快取的去留」的量測。
 - 已完成，可平行的一項：vendored yaml.v3 基底升級到上游 v3.0.5，unhashable merge key 的 patch 刪除。
 
@@ -748,8 +749,8 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | 本文用語 | 程式碼 |
 |---|---|
 | Python 呼叫 Go binary、讀 JSON 的現有機制 | `scripts/tools/_lib_tenant_values.py`（`served-values`／`effective`） |
-| Python 端的 YAML 讀取與檔案選擇函式庫（改讀 `parse-tree`） | `scripts/tools/_lib_io.py`、`_lib_confd.py`、`_lib_yaml_keys.py` |
-| Python 端模仿 yaml.v3 的 loader | `_lib_yaml_keys.ExporterKeyLoader`、`_lib_io` 的 `StrictExporterKeyLoader` 系列、`describe_tenant` 的 `_GoKeyLoader`（已刪除：describe-tenant 讀 `da-guard effective`）。`ExporterKeyLoader` 與 `StrictExporterKeyLoader` 系列不再讀任何 conf.d，也不再有 conf.d 以外的讀者；唯一的使用者是遷移稽核指令 `migration_audit`（步驟 13 刪除）。`tests/shared/test_rewrite_layer_is_gone.py` 守住這一點 |
+| Python 端的 YAML 讀取與檔案選擇函式庫（改讀 `parse-tree`） | `scripts/tools/_lib_io.py`、`_lib_confd.py` |
+| Python 端模仿 yaml.v3 的 loader（已刪除，步驟 13） | `_lib_yaml_keys`（整個模組）、`_lib_io` 的 `StrictExporterKeyLoader` 系列、`describe_tenant` 的 `_GoKeyLoader`（describe-tenant 讀 `da-guard effective`）。`tests/shared/test_rewrite_layer_is_gone.py` 守住它們不再定義、`scripts/` 與 `tests/` 底下不再引用 |
 | 寫 conf.d 的工具的 PyYAML 改寫層（已刪除，步驟 11） | `_lib_yaml_keys` 的 `RawPlain`、`KeepPlainScalarText`、`RewriteLoader`、`RewriteDumper`、`load_for_rewrite`、`dump_for_rewrite`；`_lib_io` 的 `load_yaml_file_for_rewrite`、`StrictRewriteLoader`、`strict_load_for_rewrite`；`_lib_write_check` 的 `NullText`、`keep_null_spelling`。寫 conf.d 的工具改經 `da-guard write`（`_lib_confedit`）；`da_assembler` 原文與 Kubernetes 讀法的比對移到 `da-crdecode`（`differs_from_text`）。`tests/shared/test_rewrite_layer_is_gone.py` 守住它們不再定義、`scripts/` 與 `tests/` 底下不再引用 |
 | Python 端的寫入前確認（已移進 Go，已刪除） | 判定與寫入是 `da-guard write`（`cmd/da-guard/write.go`），Python 端只送要改什麼（`scripts/tools/_lib_confedit.py`）；`scripts/tools/_lib_write_check.py` 只剩寫進既有輸出目錄前的共用拒絕 `require_output_tree` |
 | 編輯原語（共用套件） | `pkg/confedit`：節點編輯（`Doc` 的 `Set`、`Unset`、`EnsureMap`）、值的寫法（`StringNode`、`BlockStringNode`、`DropImplicitTags`）、§4 的不變式（`Verify`）；抽自 tenant-api 的 `internal/customalerts/merge.go` 與批次 patch 的 `mergePatchYAML`，兩者現在呼叫它。da-guard 的 `write` 在 `cmd/da-guard/write.go` |
@@ -760,7 +761,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | Python 端的名稱述詞（已刪除）與名稱規則對照表（改由 Go 獨有） | 原本在 `scripts/tools/_lib_confd.py` 的名稱判定（例如 `is_reserved_name`、`config_stem`）與拿它們比對對照表的 Python 測試；對照表 `tests/shared/confd_name_classification_matrix.json` 留作 Go 測試的 fixture（`pkg/confdname` 的矩陣測試逐格驗證並守住涵蓋下限） |
 | 以 sigs.k8s.io/yaml 解碼的先例（通用化） | `cmd/da-crdecode`（一個檔可以有多份文件，也可以從標準輸入讀）；Kubernetes 讀法與原文的比對（`differs_from_text`）在 `cmd/da-crdecode/aswritten.go` |
 | tenant-api 管理設定的讀法輸出（步驟 12 新增） | `tenant-api state show`、`tenant-api config check`，與 `state restore` 同在 `components/tenant-api/cmd/server/`；呼叫的是 `groups`、`views`、`fedpolicy`、`account` 的解析函式、`rbac.ParseCandidateConfig`、`tenantorg` 的解析函式與 `staterestore` 的備份讀取；Python 讀取端是 `scripts/tools/_lib_tenant_state.py` |
-| 遷移稽核指令（退場） | `scripts/tools/ops/migration_audit.py` |
+| 遷移稽核指令（已刪除，步驟 13） | 原 `scripts/tools/ops/migration_audit.py`；升級前檢查見漸進遷移 playbook |
 | 產生器另外讀的 policy 檔名 | `_grar_parse.py` 的 `_POLICY_FILENAMES`；exporter 不讀巢狀 `_` 檔的說明在 `flat_build.go` |
 | portal 只做預覽的解析 | js-yaml 經 `tools/portal/src/interactive/tools/_common/validation/yaml-parser.js`；手寫的逐行解析 `tools/portal/src/interactive/tools/config-lint/lint.js` |
 | 與解析無關、搬出的小工具 | `IsValidTenantID`（呼叫端改用 `pkg/tenantid`）、`LevelOf` 與 `IsDomainPolicyFile`（`internal/confdlayout`）；routing profiles 的檔名是 `cmd/da-guard` 的 `routingProfilesNames` |

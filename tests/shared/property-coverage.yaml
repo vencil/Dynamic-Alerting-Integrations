@@ -98,7 +98,6 @@ modules:
       - load_yaml_file
       - format_json_report
     excluded:
-      load_yaml_file_exporter_keys: "load_yaml_file's I/O + error contract over _lib_yaml_keys' loader (#2114); the key rule is table-pinned against the exporter's decode in tests/shared/test_tenant_id_yaml_spelling_parity.py (22 spellings, Go half asserts the same table), not a value computation this function owns"
       write_text_secure: "Side-effecting I/O; SAST guard ensures chmod pairing"
       write_json_secure: "Side-effecting I/O; same SAST guarantee as write_text_secure"
       write_onboard_hints: "Thin wrapper over write_json_secure"
@@ -141,10 +140,6 @@ modules:
       _strict_loader_class: "Loader-class selector + type guard (#2123); example-pinned (TypeError on a non-strict loader)"
       strict_safe_load: "I/O-free but a thin driver over a PyYAML loader (#2123); matrix, parser-preservation and python/object refusal pinned in tests/shared/test_yaml_strict_loader.py"
       strict_safe_load_all: "Lazy multi-document driver (#2123); laziness and refusal pinned in tests/shared/test_yaml_strict_loader.py"
-      load_yaml_file_strict: "File-reading twin of load_yaml_file (#2123); I/O-bound, contract parity pinned in tests/shared/test_yaml_strict_loader.py and across tools in tests/shared/test_duplicate_key_rejected_across_tools.py"
-      # #2114 × #2123: strict reading composed with the exporter's key rule.
-      _strict_exporter_key_class: "Loader-class selector (#2114 × #2123) over StrictExporterKeyLoader; exercised through every strict_*_exporter_keys pin in tests/shared/test_yaml_strict_loader.py"
-      strict_load_exporter_keys: "strict_safe_load driven with StrictExporterKeyLoader (#2114 × #2123); identity matrix, python/object refusal and parser pinned in tests/shared/test_yaml_strict_loader.py; key text pinned in tests/shared/test_tenant_id_yaml_spelling_parity.py"
       load_confd_file: "A conf.d file through da-guard parse-tree (ADR-036 step 4, #2906); I/O and subprocess-bound, contract pinned in tests/ops/test_lib_parse_cache.py and across tools in tests/shared/test_yaml_v3_reading_across_tools.py"
       # #2164 → #2906 quoting of string fields. The verdict is yaml.v3's tag (da-guard
       # parse-tree) × the repo's JSON Schemas; a generator would re-derive both from

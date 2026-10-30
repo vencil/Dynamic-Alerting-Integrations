@@ -1,5 +1,5 @@
-"""The PyYAML rewrite layer is gone, and nothing reads conf.d through the
-yaml.v3-imitating loader — an AST gate (ADR-036 §7 step 11, #3206).
+"""The PyYAML rewrite layer is gone, and so is the yaml.v3-imitating loader
+— an AST gate (ADR-036 §7 steps 11 and 13, #3206).
 
 ADR-036 makes Go the only parser and the only writer of conf.d: a tool reads
 it from `da-guard parse-tree` (`_lib_parse_tree`) and writes it through
@@ -24,10 +24,14 @@ Two checks, by name:
    (`from _lib_yaml_keys import RawPlain as R`), a module alias
    (`import _lib_yaml_keys as k` … `k.load_for_rewrite`) or a constant
    `getattr(k, "dump_for_rewrite")` is caught under its canonical name;
-2. the files under `scripts/` that use the yaml.v3-imitating loader
-   (`LOADER`) are exactly `LOADER_READERS`, each reading YAML that is NOT
-   conf.d — ADR-036 §12 moves each to its consumer's reading (step 12; the
-   migration audit is deleted in step 13). A new reader turns this red.
+2. the yaml.v3-imitating loader (`LOADER`: `_lib_yaml_keys`' and
+   `_lib_io`'s exporter-key readers) is gone the same way: no Python file in
+   the repo defines one of its names, no file under `scripts/` or `tests/`
+   uses one, and nothing imports `_lib_yaml_keys`. Step 12 moved its last
+   readers to their consumers' reading (ADR-036 §12); step 13 deleted it
+   with the migration audit, its last user, and moved the tests that read
+   back what a tool wrote to the exporter's reading (`tests/_exporter_reading.py`).
+   A test that needs "what the exporter reads" asks `da-guard parse-tree`.
 
 ⚠️ WHAT THE GATE CANNOT CATCH (it reads names, not intent): the layer
 re-written under new names; a name built at run time
@@ -65,23 +69,15 @@ TESTS = REPO / "tests"
 #: This gate names the layer in strings and synthetic sources only; it is
 #: read like any other file (it must report nothing).
 
-#: The yaml.v3-imitating loader that stays until step 12 (`_lib_yaml_keys`,
-#: and `_lib_io`'s strict and file siblings).
+#: The deleted yaml.v3-imitating loader (step 13): `_lib_yaml_keys`, and
+#: `_lib_io`'s strict and file siblings, with the private helpers that made them.
 LOADER = frozenset({
     "ExporterKeyLoader", "load_exporter_keys", "load_first_document_exporter_keys",
     "load_all_exporter_keys", "StrictExporterKeyLoader", "strict_load_exporter_keys",
-    "load_yaml_file_exporter_keys",
+    "load_yaml_file_exporter_keys", "_strict_exporter_key_class",
 })
-
-#: Every file under `scripts/` that uses `LOADER`, and the YAML it reads —
-#: none of it conf.d.
-LOADER_READERS = {
-    "tools/_lib_io.py": "the loader's strict and file siblings are defined here",
-    "tools/ops/migration_audit.py": "reads a tree with both readers on purpose to list where "
-                                    "they differ (ADR-036 §8); deleted in step 13",
-}
-#: Where the loader is defined (not a reader of it).
-LOADER_HOME = "tools/_lib_yaml_keys.py"
+#: The module it lived in (deleted with it).
+LOADER_MODULE = "_lib_yaml_keys"
 
 _SKIP_DIRS = frozenset({".git", "node_modules", "__pycache__", ".build", "site-packages",
                         ".venv", "venv", ".tox", ".mypy_cache", ".pytest_cache"})
@@ -135,9 +131,8 @@ def _read(p: pathlib.Path) -> ast.AST:
 def test_the_files_are_read() -> None:
     """Tripwire: the gate is only as wide as the files it walks."""
     scripts = {p.relative_to(SCRIPTS).as_posix() for p in _scripts_python()}
-    for must in ("tools/_lib_yaml_keys.py", "tools/_lib_io.py", "tools/_lib_write_check.py",
-                 "tools/ops/da_assembler.py", "tools/lint/check_md_yaml_drift.py",
-                 *LOADER_READERS):
+    for must in ("tools/_lib_io.py", "tools/_lib_write_check.py",
+                 "tools/ops/da_assembler.py", "tools/lint/check_md_yaml_drift.py"):
         assert must in scripts, must
     repo = {p.relative_to(REPO).as_posix() for p in _repo_python()}
     assert "tests/ops/test_lib_write_check.py" in repo
@@ -168,14 +163,56 @@ def test_nothing_in_scripts_or_tests_uses_the_rewrite_layer() -> None:
           "`da-guard write` (`_lib_confedit`); a CR's text is compared by da-crdecode.")
 
 
-def test_the_loader_reads_no_conf_d() -> None:
-    """Exactly `LOADER_READERS` use the yaml.v3-imitating loader, both ways."""
-    readers = {p.relative_to(SCRIPTS).as_posix() for p in _scripts_python()
-               if uses(_read(p), LOADER)} - {LOADER_HOME}
-    assert readers == set(LOADER_READERS), (
-        f"new: {sorted(readers - set(LOADER_READERS))}; "
-        f"gone (drop its row): {sorted(set(LOADER_READERS) - readers)}. conf.d is read "
-        "through `_lib_parse_tree`, never this loader (ADR-036 step 11).")
+_LOADER_FIX = ("YAML a Go program consumes is read through that consumer's reading "
+               "(conf.d: `da-guard parse-tree`, `_lib_parse_tree`; ADR-036 §12); a test "
+               "that checks what the exporter reads asks parse-tree (`tests/_exporter_reading.py`).")
+
+
+def test_no_file_defines_the_loader() -> None:
+    assert not (SCRIPTS / "tools" / f"{LOADER_MODULE}.py").exists(), LOADER_MODULE
+    found = {f"{p.relative_to(REPO).as_posix()}:{n}"
+             for p in _repo_python() for n in defines(_read(p), LOADER)}
+    assert not found, ("the deleted yaml.v3-imitating loader is defined again "
+                       "(ADR-036 step 13):\n" + "".join(f"  {k}\n" for k in sorted(found))
+                       + _LOADER_FIX)
+
+
+def imports_module(tree: ast.AST, module: str) -> bool:
+    """Whether *tree* imports *module* by its last component, under any
+    spelling (`import m`, `import m as k`, `from tools import m`,
+    `from m import x`)."""
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(a.name.rsplit(".", 1)[-1] == module for a in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            if node.module and node.module.rsplit(".", 1)[-1] == module:
+                return True
+            if any(a.name == module for a in node.names):
+                return True
+    return False
+
+
+def test_nothing_in_scripts_or_tests_uses_the_loader() -> None:
+    files = _scripts_and_tests()
+    found = {f"{p.relative_to(REPO).as_posix()}:{n}"
+             for p in files for n in uses(_read(p), LOADER)}
+    found |= {f"{p.relative_to(REPO).as_posix()}:import {LOADER_MODULE}"
+              for p in files if imports_module(_read(p), LOADER_MODULE)}
+    assert not found, ("a script or test uses the deleted yaml.v3-imitating loader:\n"
+                       + "".join(f"  {k}\n" for k in sorted(found)) + _LOADER_FIX)
+
+
+@pytest.mark.parametrize("src, want", [
+    ("import _lib_yaml_keys\n", True),
+    ("import _lib_yaml_keys as k\n", True),
+    ("from tools import _lib_yaml_keys\n", True),
+    ("from _lib_yaml_keys import x\n", True),
+    ("import _lib_io\n", False),
+    ("x = '_lib_yaml_keys'\n", False),
+])
+def test_the_module_import_is_caught(src, want) -> None:
+    assert imports_module(ast.parse(src), LOADER_MODULE) is want
 
 
 # ── the detector (synthetic, no repo file) ───────────────────────────

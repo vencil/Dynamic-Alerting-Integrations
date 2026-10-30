@@ -10,7 +10,6 @@
   6. run_cmd() — 指令執行
 """
 
-import io
 import json
 from unittest import mock
 
@@ -19,7 +18,7 @@ import yaml
 
 import patch_config as pc  # noqa: E402
 from _patch_config_fake import FakeCluster  # noqa: E402
-from _lib_yaml_keys import load_exporter_keys  # noqa: E402
+from _exporter_reading import exporter_reading  # noqa: E402  (#3206)
 
 
 @pytest.fixture(autouse=True)
@@ -404,8 +403,9 @@ def _decl(tenant, **metrics):
 
 
 def _exporter_keys(text):
-    """`text` read the way the exporter reads it: keys as source text."""
-    return load_exporter_keys(io.StringIO(text))
+    """`text` read the way the exporter reads it (`da-guard parse-tree`):
+    keys as source text."""
+    return exporter_reading(text)
 
 
 def _own(cm, tenant, metric):

@@ -4,10 +4,8 @@
 meaning is ambiguous between YAML readers (the kinds of pkg/parsetree;
 owner decision on ADR-036 §2, option B). Everything else it reads as yaml.v3
 reads it, including files today's route generator refuses only because
-PyYAML does (a TAB separator, a duplicate anchor, deep nesting, …); the
-migration audit (#2898) lists those per file as "previously refused, now
-read as X". This corpus pins both directions, row by row, so neither drifts
-silently.
+PyYAML does (a TAB separator, a duplicate anchor, deep nesting, …). This
+corpus pins both directions, row by row, so neither drifts silently.
 
 Every row carries a written `category`:
 - `unreadable:<kind>` — parse-tree must refuse it with exactly that kind.
@@ -17,22 +15,29 @@ Every row carries a written `category`:
   `note` says what yaml.v3 reads.
 - `both_read` — both read it.
 
-The generator's verdict is frozen as data: the file alone in an empty
-conf.d, run through the reader `generate-routes --validate --strict` had
-before ADR-036 step 4 (#2906) — PyYAML via `_lib_io.strict_load_exporter_keys`,
-kept as `migration_audit.read_tree_today`; since step 4 the generator itself
-reads parse-tree, so "today" here means "before the switch". A file it drops whole is booked in
-`files_skipped` and refuses the run; `generator` is then "rejected", with
-the reason, else "read". One drop is not a YAML verdict and does not count:
-"'tenants' must be a mapping" (a semantic question). This test checks each
-category against that verdict (`pyyaml_only` ⇒ rejected, `both_read` ⇒ read).
+⛔ The `generator` column is a HISTORICAL verdict, frozen: the file alone in
+an empty conf.d, run through the reader `generate-routes --validate
+--strict` had before ADR-036 step 4 (#2906) — PyYAML with keys as their
+source text; since step 4 the generator itself reads parse-tree, so "today"
+here means "before the switch". A file it dropped whole was booked in
+`files_skipped` and refused the run; `generator` is then "rejected", with
+the reason (`generator_reason`), else "read". That reader was deleted in
+ADR-036 §7 step 13 (#3206), so the column can no longer be recomputed: it
+is a fact about a reader that no longer exists, and the values committed
+then are pinned by digest (`FROZEN_GENERATOR`). A row added after the
+freeze writes `"generator": "n/a"` (and no `generator_reason`) — never a
+verdict nobody can measure — and, since `pyyaml_only` / `both_read` are
+statements about that reader, its category must be `unreadable:<kind>`.
+This test checks each frozen row's category against its verdict
+(`pyyaml_only` ⇒ rejected, `both_read` ⇒ read).
 
 Rows:
 - `rows`: hand-picked files — every text kind, the ADR §2 example, values
   whose meaning changes (yes / on / off, 0777, a `010` key), the examples
   of #2759, #2700, #2713 and #2674, and the PyYAML-only refusals.
 - `merge_key_rows`: every row of merge_key_policy_corpus.json, by `id`
-  (its file is not copied here), with the frozen generator verdict. Their
+  (its file is not copied here), with the frozen generator verdict (or
+  "n/a" for a row added after the freeze). Their
   categories are in parse_tree_merge_key_categories.json, written by the Go
   test (UPDATE_PARSE_TREE_CATEGORIES=1) from parse-tree itself and checked
   here against the generator verdict.
@@ -40,16 +45,16 @@ Rows:
 The Go half
 (components/threshold-exporter/app/pkg/parsetree/corpus_test.go) asserts parse-tree's verdict equals every row's category.
 
-Regenerate (never edit by hand):
+Regenerate (never edit by hand) — the rows from `_ROWS` and the merge-key
+corpus, each row's `generator` / `generator_reason` carried over from the
+committed file by `id` (`n/a` for a new one):
 
     REGEN_PARSE_TREE_CORPUS=1 python3 -m pytest \\
         tests/shared/test_parse_tree_corpus.py -q -p no:cacheprovider
 """
 from __future__ import annotations
 
-import contextlib
 import hashlib
-import io
 import json
 import os
 import subprocess
@@ -63,11 +68,6 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
 sys.path.insert(0, str(Path(__file__).parent))
-# ADR-036 step 4 (#2906): the route generator reads parse-tree now; the
-# PyYAML reading it had is kept by migration_audit (its "today" half), and
-# that is what the frozen verdicts are recomputed with.
-from migration_audit import read_tree_today  # noqa: E402
-import _lib_parse_cache  # noqa: E402
 from test_merge_key_policy_corpus import _encode, row_id  # noqa: E402
 
 CORPUS_PATH = Path(__file__).parent / "parse_tree_corpus.json"
@@ -87,8 +87,16 @@ TEXT_KINDS = ("invalid_utf8", "bom_not_at_start", "syntax_error", "multiple_docu
               "non_specific_tag", "tag_not_allowed", "non_scalar_key", "null_key", "duplicate_key",
               "decode_error", "top_level_not_mapping")
 
-# The one whole-file drop that is not about the YAML (see the docstring).
-_NOT_A_YAML_VERDICT = "'tenants' must be a mapping"
+#: The `generator` column's values: the frozen verdicts, and the marker of a
+#: row added after the freeze (see the docstring).
+GENERATOR_VERDICTS = frozenset({"rejected", "read"})
+NOT_MEASURED = "n/a"
+#: (number of rows, sha256 of their (id, generator, generator_reason)) of the
+#: rows that carry a frozen verdict, `rows` and `merge_key_rows` together, as
+#: committed when the reader that measured them was deleted (ADR-036 §7
+#: step 13, #3206). A changed verdict, a verdict added to a new row, or a
+#: frozen row dropped turns this red.
+FROZEN_GENERATOR = (1659, "369275561eb3e66f109056656cc3d15b4da59f1caa8866e1ee7018b64669b54d")
 
 _POLICY = ("domain_policies:\n  fin:\n    tenants: [t1]\n    constraints:\n"
            "      forbidden_receiver_types: [slack]\n")
@@ -333,33 +341,31 @@ _ROWS: tuple[tuple, ...] = (
      "cannot build", None),
 )
 
-def generator_verdict(data: bytes, fname: str) -> tuple[str, str]:
-    """("rejected" | "read", the drop's reason) — the generator's reader
-    before ADR-036 step 4 (PyYAML, `migration_audit.read_tree_today`) on
-    `data` written as `fname`, alone in a conf.d. The route generator is a
-    judge (#3206): its reader reads such a tree, so this runs as one."""
-    with tempfile.TemporaryDirectory() as d:
-        (Path(d) / fname).write_bytes(data)
-        with contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()), \
-                _lib_parse_cache.judging():
-            _read, refused = read_tree_today(Path(d))
-    for f, reason in refused.items():
-        if f == fname and not reason.startswith(_NOT_A_YAML_VERDICT):
-            # The temporary directory is no part of the verdict.
-            return "rejected", " ".join(reason.replace(str(Path(d)) + os.sep, "").split())
-    return "read", ""
+def _committed() -> dict:
+    return json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
 
 
-def _rows() -> list[dict]:
+def _carried(committed_rows: list[dict]) -> "dict[str, dict]":
+    """id -> the frozen `generator` / `generator_reason` of a committed row."""
+    return {r["id"]: {k: r[k] for k in ("generator", "generator_reason") if k in r}
+            for r in committed_rows}
+
+
+def _frozen(carried: "dict[str, dict]", rid: str) -> dict:
+    """A row's generator fields: carried over by `id`, or `n/a` for a row the
+    deleted reader never measured — never a verdict made up now."""
+    return carried.get(rid, {"generator": NOT_MEASURED})
+
+
+def _rows(committed: dict) -> list[dict]:
+    carried = _carried(committed.get("rows", []))
     out = []
     for name, fname, doc, encoding, category, note, source in _ROWS:
-        verdict, reason = generator_verdict(_encode(doc, encoding), fname)
-        row = {"name": name, "file": fname, "doc": doc, "id": row_id(doc, encoding),
-               "category": category, "generator": verdict}
+        rid = row_id(doc, encoding)
+        row = {"name": name, "file": fname, "doc": doc, "id": rid,
+               "category": category, **_frozen(carried, rid)}
         if encoding is not None:
             row["encoding"] = encoding
-        if reason:
-            row["generator_reason"] = reason[:200]
         if note is not None:
             row["note"] = note
         if source is not None:
@@ -368,25 +374,21 @@ def _rows() -> list[dict]:
     return out
 
 
-def _merge_key_rows() -> list[dict]:
+def _merge_key_rows(committed: dict) -> list[dict]:
+    carried = _carried(committed.get("merge_key_rows", []))
     rows = json.loads(MERGE_KEY_CORPUS_PATH.read_text(encoding="utf-8"))["rows"]
-    out = []
-    for r in rows:
-        verdict, reason = generator_verdict(_encode(r["doc"], r.get("encoding")),
-                                            "_domain_policy.yaml")
-        row = {"id": r["id"], "generator": verdict}
-        if reason:
-            row["generator_reason"] = reason[:200]
-        out.append(row)
-    return out
+    return [{"id": r["id"], **_frozen(carried, r["id"])} for r in rows]
 
 
-def _render() -> str:
+def _render(committed: dict) -> str:
     comment = [
-        "The route generator's reader before ADR-036 step 4 (PyYAML, kept as migration_audit.read_tree_today) on",
+        "The route generator's reader before ADR-036 step 4 (PyYAML, keys as source text) on",
         "each file, alone in a conf.d: `generator` is \"rejected\" when it drops the",
         "file whole (which refuses `generate-routes --validate --strict`), else",
-        "\"read\". GENERATED by tests/shared/test_parse_tree_corpus.py — regenerate with",
+        "\"read\". ⛔ HISTORICAL and FROZEN: that reader was deleted in ADR-036 §7",
+        "step 13 (#3206); the values are pinned by digest, and a row added since",
+        "writes \"n/a\" (its category then must be unreadable:<kind>).",
+        "GENERATED by tests/shared/test_parse_tree_corpus.py — regenerate with",
         "REGEN_PARSE_TREE_CORPUS=1; never edit by hand. `rows`: hand-picked files,",
         "`doc` written as UTF-8 or in `encoding`; `category`: unreadable:<kind>",
         "(parse-tree refuses it with that kind), pyyaml_only (the generator refuses",
@@ -398,7 +400,8 @@ def _render() -> str:
         "digits of the sha256 of the file. Go half:",
         "components/threshold-exporter/app/pkg/parsetree/corpus_test.go.",
     ]
-    doc = {"_comment": comment, "pyyaml": yaml.__version__, "closed_list": list(CLOSED_LIST),
+    # `pyyaml`: the PyYAML version the frozen verdicts were measured with.
+    doc = {"_comment": comment, "pyyaml": committed["pyyaml"], "closed_list": list(CLOSED_LIST),
            "text_kinds": list(TEXT_KINDS)}
     head = json.dumps(doc, ensure_ascii=False, indent=2)[:-2]
 
@@ -408,18 +411,67 @@ def _render() -> str:
             text = text.replace(ch, "\\u%04x" % ord(ch))
         return text
 
-    return (head + ",\n  \"rows\": [\n" + body(_rows()) + "\n  ],\n  \"merge_key_rows\": [\n"
-            + body(_merge_key_rows()) + "\n  ]\n}\n")
+    return (head + ",\n  \"rows\": [\n" + body(_rows(committed)) + "\n  ],\n  \"merge_key_rows\": [\n"
+            + body(_merge_key_rows(committed)) + "\n  ]\n}\n")
 
 
-def test_corpus_is_what_the_generator_reads() -> None:
-    fresh = _render()
+def test_corpus_is_its_table_and_the_merge_key_corpus() -> None:
+    """The committed file is `_ROWS` and the merge-key corpus's ids, with the
+    generator column carried over \u2014 so an edit by hand, a row dropped from
+    the table or a merge-key row missing here is red."""
+    committed = _committed()
+    fresh = _render(committed)
     if os.environ.get("REGEN_PARSE_TREE_CORPUS"):
         CORPUS_PATH.write_text(fresh, encoding="utf-8")
     on_disk = CORPUS_PATH.read_text(encoding="utf-8")
     assert on_disk == fresh, (
-        "parse_tree_corpus.json is not what today's generator reader says; regenerate with "
-        "REGEN_PARSE_TREE_CORPUS=1 and review the diff")
+        "parse_tree_corpus.json is not its table (_ROWS) and the merge-key corpus; "
+        "regenerate with REGEN_PARSE_TREE_CORPUS=1 and review the diff")
+
+
+def _frozen_rows(corpus: dict) -> list[dict]:
+    return [r for r in corpus["rows"] + corpus["merge_key_rows"]
+            if r["generator"] != NOT_MEASURED]
+
+
+def frozen_digest(corpus: dict) -> "tuple[int, str]":
+    rows = sorted([r["id"], r["generator"], r.get("generator_reason")]
+                  for r in _frozen_rows(corpus))
+    return len(rows), hashlib.sha256(
+        json.dumps(rows, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+def test_the_generator_column_is_frozen() -> None:
+    """\u26d4 HISTORICAL (see the docstring): the frozen verdicts are exactly the
+    ones committed when their reader was deleted, and every other row says
+    `n/a` \u2014 nobody can measure that reader any more, so nobody writes its
+    verdict."""
+    corpus = _committed()
+    for r in corpus["rows"] + corpus["merge_key_rows"]:
+        where = r.get("name") or r["id"]
+        if r["generator"] == NOT_MEASURED:
+            assert "generator_reason" not in r, f"{where}: n/a with a reason"
+        else:
+            assert r["generator"] in GENERATOR_VERDICTS, (where, r["generator"])
+            assert ("generator_reason" in r) == (r["generator"] == "rejected"), where
+    assert frozen_digest(corpus) == FROZEN_GENERATOR, (
+        "the frozen `generator` verdicts changed: a historical value was edited, a "
+        "frozen row was dropped, or a new row was given a verdict instead of n/a")
+
+
+def test_the_freeze_check_bites() -> None:
+    corpus = _committed()
+    assert frozen_digest(corpus) == FROZEN_GENERATOR  # the control
+    edited = json.loads(json.dumps(corpus))
+    r = edited["rows"][0]
+    r["generator"] = "rejected" if r["generator"] == "read" else "read"
+    assert frozen_digest(edited) != FROZEN_GENERATOR
+    added = json.loads(json.dumps(corpus))
+    added["merge_key_rows"].append({"id": "0" * 16, "generator": "read"})
+    assert frozen_digest(added) != FROZEN_GENERATOR
+    marked = json.loads(json.dumps(corpus))
+    marked["merge_key_rows"].append({"id": "0" * 16, "generator": NOT_MEASURED})
+    assert frozen_digest(marked) == FROZEN_GENERATOR
 
 
 def test_every_text_kind_has_a_row_and_rows_are_unique() -> None:
@@ -437,7 +489,13 @@ def test_every_text_kind_has_a_row_and_rows_are_unique() -> None:
 
 
 def _check_category(where: str, category: str, generator: str) -> None:
-    if category == "pyyaml_only":
+    if generator == NOT_MEASURED:
+        # pyyaml_only / both_read are statements about the deleted reader.
+        kind = category.removeprefix("unreadable:")
+        assert category.startswith("unreadable:") and kind in CLOSED_LIST, (
+            f"{where}: added after the freeze (generator n/a), so its category can only "
+            f"be unreadable:<kind>, not {category}")
+    elif category == "pyyaml_only":
         assert generator == "rejected", f"{where}: pyyaml_only, but today's generator reads it"
     elif category == "both_read":
         assert generator == "read", f"{where}: both_read, but today's generator refuses it"
@@ -452,8 +510,11 @@ def test_hand_rows_categories_agree_with_the_generator() -> None:
     corpus = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
     for r in corpus["rows"]:
         _check_category(r["name"], r["category"], r["generator"])
-        stricter = r["category"].startswith("unreadable:") and r["generator"] == "read"
         note = r.get("note", "")
+        if r["generator"] == NOT_MEASURED:
+            assert not note.startswith(STRICTER), (r["name"], "n/a cannot be stricter than it")
+            continue
+        stricter = r["category"].startswith("unreadable:") and r["generator"] == "read"
         assert stricter == note.startswith(STRICTER), (r["name"], note)
         assert bool(note) == (stricter or r["category"] == "pyyaml_only"), (r["name"], note)
     assert {r["category"] for r in corpus["rows"]} >= {"pyyaml_only", "both_read"}

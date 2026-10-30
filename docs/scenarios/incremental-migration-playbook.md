@@ -568,6 +568,42 @@ EOF
 
 ---
 
+## 升級平台版本前的檢查
+
+新版平台讀 conf.d 的方式可能和舊版不同：YAML 一律由 Go（yaml.v3）讀，未加引號的 `yes`／`no`／`on`／`off` 是字串而不是布林，exporter 也不服務它讀不了的檔（[ADR-036](../adr/036-single-parser-effective-config.md) §8）。所以每次升級 da-tools 與 threshold-exporter 之前，在 CI 上用**新版**的工具對自己的 conf.d 做下面兩件事。指令以 `da-tools` 表示，實際以要比對的那個版本的映像執行（`docker run` 的寫法見 [Docker 使用模式](../cli-reference.md#docker-使用模式)）。
+
+### 檢查一：用新版 da-guard 驗 conf.d
+
+```bash
+# 以新版 da-tools 映像執行（映像內建 da-guard）
+da-tools guard defaults-impact --config-dir conf.d/
+```
+
+看結束碼（完整定義見 [`guard`](../cli-reference.md#guard)）：
+
+| 結束碼 | 意思 | 升級前要做的事 |
+|---|---|---|
+| 0 | 沒有 error 級 finding | 可以升級 |
+| 1 | 有 error 級 finding | 照報告修好 |
+| 3 | 有新版 exporter 不服務的檔，報告逐檔列出（解不開的檔在「Files the exporter cannot parse」，讀取失敗的在「Files the exporter cannot read」）；這些檔路由產生器與 tenant-api 也拒收（三者用同一份判定） | 升級前修好或移走這些檔 |
+| 4 | 樹上有只能由路由產生器判的內容（未判定） | 在同一個 CI job 加跑 `da-tools generate-routes --validate --strict` |
+
+### 檢查二：新舊兩版映像各渲染一次，比對結果
+
+同一棵 conf.d，分別用目前在用的版本與要升級的版本各產生一次 Alertmanager 路由設定，再比對兩份輸出：
+
+```bash
+# 以目前版本的映像執行
+da-tools generate-routes --config-dir ./conf.d -o routes-current.yaml
+# 以新版映像執行
+da-tools generate-routes --config-dir ./conf.d -o routes-new.yaml
+diff -u routes-current.yaml routes-new.yaml
+```
+
+比對看得到渲染結果哪裡變了，但不會指出是哪一項讀法改變造成的；要歸因，回頭看那一處的原文（例如 `send_resolved: yes` 在新版是字串、會被拒收，要寫成 `true`）。
+
+---
+
 ## Emergency Rollback Procedures（緊急退版程序）
 
 > **適用情境**：客戶 cutover 後發現結構性 bug（例：parser 吃掉 label / Dangling Guard 誤判 / 大量 false positive），需要把 Base Infrastructure PR + 多個 tenant PR 整批退版。

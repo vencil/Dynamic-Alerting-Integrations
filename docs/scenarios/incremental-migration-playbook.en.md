@@ -569,6 +569,42 @@ EOF
 
 ---
 
+## Checks before upgrading the platform
+
+A new platform version may read conf.d differently from the old one: all YAML is read by Go (yaml.v3), so unquoted `yes` / `no` / `on` / `off` are strings rather than booleans, and the exporter does not serve a file it cannot read ([ADR-036](../adr/036-single-parser-effective-config.en.md) §8). So before every upgrade of da-tools and threshold-exporter, run these two checks on your own conf.d in CI, with the **new** version's tools. The commands are written as `da-tools`; run each with the image of the version being compared (for the `docker run` form see [Docker Usage Pattern](../cli-reference.en.md#docker-usage-pattern)).
+
+### Check 1: validate conf.d with the new da-guard
+
+```bash
+# run with the new da-tools image (it ships da-guard)
+da-tools guard defaults-impact --config-dir conf.d/
+```
+
+Read the exit code (full definitions under [`guard`](../cli-reference.en.md#guard)):
+
+| Exit code | Meaning | What to do before upgrading |
+|---|---|---|
+| 0 | No error-level finding | Ready to upgrade |
+| 1 | An error-level finding | Fix it as the report says |
+| 3 | Files the new exporter will not serve, each listed in the report (files it cannot decode under "Files the exporter cannot parse", files it fails to read under "Files the exporter cannot read"); the route generator and tenant-api refuse them too (all three use the same verdict) | Fix or remove these files before upgrading |
+| 4 | The tree holds content only the route generator judges (undecided) | Add `da-tools generate-routes --validate --strict` to the same CI job |
+
+### Check 2: render with the old and new images, compare the output
+
+Generate the Alertmanager routing config from the same conf.d once with the version you run today and once with the version you are upgrading to, then compare the two:
+
+```bash
+# run with the current version's image
+da-tools generate-routes --config-dir ./conf.d -o routes-current.yaml
+# run with the new version's image
+da-tools generate-routes --config-dir ./conf.d -o routes-new.yaml
+diff -u routes-current.yaml routes-new.yaml
+```
+
+The comparison shows where the rendered output changed, but not which change in reading caused it; to attribute it, look at the source at that place (for example, `send_resolved: yes` is a string in the new version and is refused; write `true`).
+
+---
+
 ## Emergency Rollback Procedures
 
 > **Applies to**: structural bug discovered after customer cutover (e.g. parser eats labels / Dangling Guard false positives / mass false alerts) requiring batch reversal of a Base Infrastructure PR plus multiple tenant PRs.

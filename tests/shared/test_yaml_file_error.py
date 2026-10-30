@@ -577,10 +577,9 @@ def test_validate_config_unchanged_rc_1_named(fx):
 # ---------------------------------------------------------------------------
 # Regression tripwire (derivation): every lib load site is guarded or wrapped
 # ---------------------------------------------------------------------------
-# `load_yaml_file_strict` (#2123) raises the same YamlFileError, so its sites
-# owe the same guard; so do the #2114 exporter-key siblings of both.
-_LIB_ROOTS = {"load_yaml_file", "load_yaml_file_strict",
-              "load_yaml_file_exporter_keys",
+# (`load_yaml_file_strict` and the #2114 exporter-key sibling, which raised
+# the same YamlFileError, were deleted in ADR-036 §7 step 13, #3206.)
+_LIB_ROOTS = {"load_yaml_file",
               # #2115: raises YamlFileError for a file the exporter's load skips.
               "load_served_tree", "load_served_values"}
 _LIB_MODULES = {"_lib_io", "_lib_python", "scripts.tools._lib_io", "scripts.tools._lib_python",

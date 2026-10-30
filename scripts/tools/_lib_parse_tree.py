@@ -18,7 +18,7 @@ Node shapes in ``files[<rel>]``: a mapping is a JSON object, a sequence is a
 JSON array, and a scalar is ``{"text": <source text>, "tag": <resolved tag>,
 "value": <str | bool | null>}`` — `is_scalar` tells a scalar from a mapping.
 
-Used by `ops/migration_audit`, by `ops/config_diff`'s platform-settings
+Used by `ops/config_diff`'s platform-settings
 comparison (ADR-037 decision 3) and, through `_lib_parse_cache.ConfdReader`,
 by the route generator and every tool that reads conf.d through it (ADR-036
 step 4, #2906).

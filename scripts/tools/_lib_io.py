@@ -20,8 +20,6 @@ from typing import Any, Callable, Iterator, Optional, TypeVar
 import yaml
 
 from _lib_constants import ONBOARD_HINTS_FILENAME
-# Leaf module (yaml + stdlib only), so no import cycle (#2114).
-from _lib_yaml_keys import ExporterKeyLoader, load_exporter_keys
 # No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
 import _lib_exitcodes  # noqa: E402
 from _lib_label import safe_label  # noqa: E402,F401  (re-export, #3276)
@@ -55,42 +53,15 @@ class YamlFileError(yaml.YAMLError):
         super().__init__(f"{path}: {detail} ({cause.__class__.__name__})")
 
 
-# libyaml's C parser when the wheel ships it (every PyPI wheel does), the
-# pure-Python one otherwise. Same document model, same error classes and
-# marks (a named stream still names the file); only the wording of a few
-# parser messages differs ("did not find expected" vs "expected … but got").
-# Measured on the tracked corpus: 422 files parse to identical objects, 11.7x
-# faster; rule-pack-heavy tools halve their wall time (#1910 line, PR-7).
-#
-# ⛔ OPT-IN, per tool. `load_yaml_file()` below deliberately stays on
-# `yaml.safe_load` (the pure parser): the two parsers differ on MALFORMED
-# input — libyaml accepts a trailing tab the pure parser rejects, and parses
-# nesting the pure parser dies on with RecursionError — and tools that read
-# operator files have made the pure parser's limits part of their contract
-# (`deprecate_rule` names "本工具讀不了（pure parser 限制）" as a distinct
-# verdict, `validate_config` / `_grar_parse` route RecursionError as
-# "unreadable file, exit 1"). Switch a tool here only when it reads
-# repository-tracked YAML and no test pins its behaviour on a bad file.
-# `tests/shared/test_yaml_loader_is_libyaml.py` pins both the opt-in and the
-# boundary.
-SAFE_LOADER = (yaml.CSafeLoader if getattr(yaml, "__with_libyaml__", False)
-               else yaml.SafeLoader)
-
-
-if getattr(yaml, "__with_libyaml__", False):
-    def safe_load(stream: Any) -> Any:
-        """`yaml.safe_load` on libyaml's C parser (see SAFE_LOADER above).
-
-        Two literal branches rather than `Loader=SAFE_LOADER`: bandit B506
-        (a hard gate here, run with --ignore-nosec) only recognises the
-        loader when it is spelled `yaml.CSafeLoader` / `yaml.SafeLoader` at
-        the call, and this is the one place in the tool family that spells it.
-        """
-        return yaml.load(stream, Loader=yaml.CSafeLoader)
-else:
-    def safe_load(stream: Any) -> Any:
-        """Pure-Python fallback when PyYAML was built without libyaml."""
-        return yaml.load(stream, Loader=yaml.SafeLoader)
+# ⛔ The pure-Python parser, never libyaml's C one. The two differ on
+# MALFORMED input — libyaml accepts a trailing tab the pure parser rejects,
+# and parses nesting the pure parser dies on with RecursionError — and tools
+# that read operator files have made the pure parser's limits part of their
+# contract (`validate_config` / `_grar_parse` route RecursionError as
+# "unreadable file, exit 1"). The libyaml opt-in (`SAFE_LOADER` /
+# `safe_load`, `strict_safe_load(fast=True)`) lost its last caller in
+# ADR-036 §12 and was deleted (#3206); `tests/shared/test_yaml_loader_is_libyaml.py`
+# pins that `load_yaml_file` stays on the pure parser.
 
 
 def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
@@ -130,55 +101,10 @@ def load_yaml_file(path: Optional[str], default: Any = None) -> Any:
     try:
         stream = io.StringIO(raw.decode("utf-8"))
         stream.name = str(path)
-        data = yaml.safe_load(stream)   # deliberately the pure parser: see safe_load()
+        data = yaml.safe_load(stream)   # deliberately the pure parser: see above
     except (UnicodeDecodeError, yaml.YAMLError) as exc:
         raise YamlFileError(str(path), exc) from exc
     return data if data is not None else default
-
-
-def load_yaml_file_exporter_keys(
-    path: Optional[str],
-    default: Any = None,
-    *,
-    raw_text_sequences: "tuple[str, ...] | frozenset[str]" = (),
-    raw_text_scalars: "tuple[str, ...] | frozenset[str]" = (),
-) -> Any:
-    """:func:`load_yaml_file`, except every mapping KEY is the scalar's raw
-    TEXT — the tenant id the exporter reads (#2114; ``_lib_yaml_keys``).
-
-    Same contract as :func:`load_yaml_file` in every other respect — *default*
-    for a missing / empty file, :class:`YamlFileError` naming the file for
-    non-UTF-8 content or bad syntax, and the SAME pure-Python parser, so a
-    file this refuses is exactly a file :func:`load_yaml_file` refuses (its
-    callers route those limits, see ``SAFE_LOADER``). Values stay
-    PyYAML-typed; *raw_text_sequences* names the keys whose list value is a
-    list of tenant ids and comes back as source text too; *raw_text_scalars*
-    names the keys whose scalar value names a key (``_profile``, #2216).
-
-    ⚠️ NOT strict: a duplicate key keeps the last value, like
-    :func:`load_yaml_file`. A reader that must refuse a duplicate key reads
-    the text with :func:`strict_load_exporter_keys` (#2123 decided which
-    readers are strict); a conf.d reader goes through da-guard parse-tree
-    instead (ADR-036).
-
-    ⚠️ A sibling rather than a flag on :func:`load_yaml_file`: that helper
-    has dozens of callers reading files that hold no tenant id, and changing
-    their key types would be a change nobody asked them about.
-    """
-    if not path:
-        return default
-    file = Path(path)
-    if not file.is_file():
-        return default
-    try:
-        stream = io.StringIO(file.read_bytes().decode("utf-8"))
-        stream.name = str(path)   # PyYAML marks keep naming the real file
-        data = load_exporter_keys(stream,
-                                  raw_text_sequences=raw_text_sequences,
-                                  raw_text_scalars=raw_text_scalars)
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise YamlFileError(str(path), exc) from exc
-    return default if data is None else data
 
 
 # ── Strict reading: a duplicate mapping key is an error (#2123) ─────────────
@@ -340,43 +266,6 @@ class StrictSafeLoader(RejectDuplicateKeys, yaml.SafeLoader):
     """``yaml.SafeLoader`` (pure parser) that rejects a duplicate key."""
 
 
-if getattr(yaml, "__with_libyaml__", False):
-    class StrictCSafeLoader(RejectDuplicateKeys, yaml.CSafeLoader):
-        """``yaml.CSafeLoader`` (libyaml) that rejects a duplicate key."""
-else:  # pragma: no cover - every PyPI wheel ships libyaml
-    StrictCSafeLoader = StrictSafeLoader  # type: ignore[misc,assignment]
-
-
-class StrictExporterKeyLoader(RejectDuplicateKeys, ExporterKeyLoader):
-    """Strict (#2123) AND exporter keys (#2114): the two compose.
-
-    ``RejectDuplicateKeys`` checks the composed node tree before anything is
-    constructed, by ``_key_identity`` — kind + raw text, which is the
-    exporter's identity too — so ``123:`` and ``"123":`` in one mapping are
-    ONE key and raise :class:`DuplicateKeyError`, as yaml.v3 rejects them
-    (``mapping key "123" already defined``). ``ExporterKeyLoader`` then
-    builds the keys as that same raw text. Pure-Python parser underneath
-    (``ExporterKeyLoader`` is a ``yaml.SafeLoader``), like every reader that
-    uses it had before.
-    """
-
-
-@functools.lru_cache(maxsize=None)
-def _strict_exporter_key_class(raw_text_sequences: "frozenset[str]",
-                               raw_text_scalars: "frozenset[str]" = frozenset()
-                               ) -> type:
-    """``StrictExporterKeyLoader``, or a subclass that also reads the lists
-    under *raw_text_sequences* / the non-null scalars under
-    *raw_text_scalars* as source text (``ExporterKeyLoader``'s attributes of
-    the same names) — a class, because the strict entry points below build
-    the loader themselves. Both sets are part of the cache key."""
-    if not raw_text_sequences and not raw_text_scalars:
-        return StrictExporterKeyLoader
-    return type("StrictExporterKeyLoader_raw", (StrictExporterKeyLoader,),
-                {"raw_text_sequences": raw_text_sequences,
-                 "raw_text_scalars": raw_text_scalars})
-
-
 # ⛔ The loader is DRIVEN here rather than passed as `yaml.load(..., Loader=)`:
 # bandit B506 (a hard gate) name-matches only a literal `yaml.SafeLoader` /
 # `yaml.CSafeLoader` and flags any subclass, while a loader built and driven
@@ -384,67 +273,39 @@ def _strict_exporter_key_class(raw_text_sequences: "frozenset[str]",
 # So safety is pinned by BEHAVIOUR: `tests/shared/test_yaml_strict_loader.py`
 # feeds these entry points a real `!!python/object/apply` payload and requires
 # it to be refused. Deleting that test leaves them unguarded.
-def _strict_loader_class(fast: bool, loader: Optional[type]) -> type:
+def _strict_loader_class(loader: Optional[type]) -> type:
     if loader is None:
-        return StrictCSafeLoader if fast else StrictSafeLoader
+        return StrictSafeLoader
     # A caller-supplied class must still be one of these underneath:
     # anything else could be a loader that constructs arbitrary objects.
-    if not issubclass(loader, (StrictSafeLoader, StrictCSafeLoader,
-                               StrictExporterKeyLoader)):
-        raise TypeError(f"{loader.__name__} is not a StrictSafeLoader / "
-                        f"StrictCSafeLoader / StrictExporterKeyLoader subclass")
+    if not issubclass(loader, StrictSafeLoader):
+        raise TypeError(f"{loader.__name__} is not a StrictSafeLoader subclass")
     return loader
 
 
-def strict_safe_load(stream: Any, *, fast: bool = False,
-                     loader: Optional[type] = None) -> Any:
+def strict_safe_load(stream: Any, *, loader: Optional[type] = None) -> Any:
     """``yaml.safe_load`` that raises :class:`DuplicateKeyError` on a repeated
-    key. ``fast=True`` uses libyaml (see ``SAFE_LOADER``); the default is the
-    pure parser, the one ``load_yaml_file`` and ``yaml.safe_load`` use.
-    *loader* is a subclass of one of the two strict loaders, for a caller
-    that adds a constructor rule of its own on top."""
-    loader = _strict_loader_class(fast, loader)(stream)
+    key. The pure parser, the one ``load_yaml_file`` and ``yaml.safe_load``
+    use. *loader* is a :class:`StrictSafeLoader` subclass, for a caller that
+    adds a constructor rule of its own on top."""
+    loader = _strict_loader_class(loader)(stream)
     try:
         return loader.get_single_data()
     finally:
         loader.dispose()
 
 
-def strict_safe_load_all(stream: Any, *, fast: bool = False,
-                         loader: Optional[type] = None) -> Iterator[Any]:
+def strict_safe_load_all(stream: Any, *, loader: Optional[type] = None) -> Iterator[Any]:
     """``yaml.safe_load_all`` that raises :class:`DuplicateKeyError` on a
     repeated key. LAZY like the original: a caller that takes only the first
     document (``next(...)``) never parses — or checks — a later one.
-    *fast* / *loader* as in :func:`strict_safe_load`."""
-    loader = _strict_loader_class(fast, loader)(stream)
+    *loader* as in :func:`strict_safe_load`."""
+    loader = _strict_loader_class(loader)(stream)
     try:
         while loader.check_data():
             yield loader.get_data()
     finally:
         loader.dispose()
-
-
-def load_yaml_file_strict(path: Optional[str], default: Any = None) -> Any:
-    """:func:`load_yaml_file`, but a duplicate key is an error (#2123).
-
-    Same contract in every other respect — same pure parser, same strict
-    UTF-8 decode, same *default* for a missing or empty file — and the
-    duplicate key raises the same :class:`YamlFileError` a syntax error
-    does (``cause`` is the :class:`DuplicateKeyError`), so a caller's
-    existing "cannot read this file" path reports it with no new branch.
-    """
-    # Spelled differently from load_yaml_file on purpose: the mutation
-    # catalogue anchors on that function's lines being unique in the file.
-    if not (path and Path(path).is_file()):
-        return default
-    raw = Path(path).read_bytes()
-    try:
-        stream = io.StringIO(raw.decode("utf-8"))
-        stream.name = str(path)
-        data = strict_safe_load(stream)
-    except (UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise YamlFileError(str(path), exc) from exc
-    return default if data is None else data
 
 
 def load_confd_file(config_dir: "str | os.PathLike[str]", path: Optional[str],
@@ -480,19 +341,6 @@ def load_confd_file(config_dir: "str | os.PathLike[str]", path: Optional[str],
             path, mode if mode is not None else _lib_parse_cache.VALUES)
     except FileUnreadable as exc:
         raise YamlFileError(str(path), exc) from exc
-
-
-def strict_load_exporter_keys(stream: Any, *,
-                              raw_text_sequences: "frozenset[str] | tuple[str, ...]" = (),
-                              raw_text_scalars: "frozenset[str] | tuple[str, ...]" = ()
-                              ) -> Any:
-    """:func:`strict_safe_load` whose mapping keys are the exporter's tenant
-    ids (raw text, #2114). Same driver, same errors — only the loader class
-    differs (:class:`StrictExporterKeyLoader`). *raw_text_scalars* names the
-    keys whose non-null scalar value comes back as source text too — a value
-    that names a key (``_profile: 010``, #2216/#2237); a null stays None."""
-    return strict_safe_load(stream, loader=_strict_exporter_key_class(
-        frozenset(raw_text_sequences), frozenset(raw_text_scalars)))
 
 
 # ── #2164 → ADR-036 step 4 (#2906): a scalar in a STRING field that yaml.v3

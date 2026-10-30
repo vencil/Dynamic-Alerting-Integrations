@@ -1292,17 +1292,6 @@ RECIPES: list[Recipe] = [
          json.dumps({"data": {"_defaults.yaml": "defaults: {}", "t.yaml": 5}})),
       ]],
 
-    # ── migration_audit ────────────────────────────────────────────────────
-    # #2898: a difference found (exit 1) and the caller-error envelope (no
-    # such --config-dir), both one document. da-guard via $DA_GUARD_BINARY.
-    R("migration_audit", "differences",
-      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json"],
-      doc_check=lambda d: None if isinstance(d, dict) and d.get("status") == "ok"
-      and d.get("schema") == "da-tools.migration-audit/v1" else f"not the audit report: {str(d)[:80]}"),
-    R("migration_audit", "missing-config-dir",
-      lambda t, s: ["--config-dir", str(t / "no-such-conf.d"), "--json"],
-      expect_caller_error=True, doc_check=_status_doc("caller_error")),
-
     # ── explain_keys ───────────────────────────────────────────────────────
     # #3016 (ADR-038 decision 9): the per-key report (exit 0) and the
     # caller-error envelope (no such --config-dir), both one document.
@@ -1515,8 +1504,8 @@ def test_recipe_table_covers_every_json_tool():
         f"no recipe in RECIPES: {uncovered}"
     )
     assert not stale, f"RECIPES names tool(s) that no longer exist: {stale}"
-    assert len(JSON_TOOLS) == 40, (
-        f"expected 40 JSON-flag tools (36 --json + 4 --json-output), "
+    assert len(JSON_TOOLS) == 39, (
+        f"expected 39 JSON-flag tools (35 --json + 4 --json-output), "
         f"found {len(JSON_TOOLS)}: {sorted(JSON_TOOLS)}"
     )
 

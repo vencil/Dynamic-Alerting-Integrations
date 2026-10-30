@@ -99,8 +99,6 @@ OPS_SITES = [
       "--work-dir", "{BOX}/gs-work"], "--repo", None),
     ("lint-custom-rules (dir)", "lint_custom_rules.py", ["{D}"], None, None),
     ("lint-custom-rules (file)", "lint_custom_rules.py", ["{F}"], None, None),
-    ("migration-audit --config-dir", "migration_audit.py", ["--config-dir", "{D}", "--json"],
-     "--config-dir", None),
     ("drift-detect operator", "drift_detect.py", ["--mode", "operator", "--dirs", "{D}", "--json"],
      "--dirs", "dir_not_accessible"),
     ("drift-detect configmap", "drift_detect.py", ["--dirs", "{CONF},{D}", "--json"],
