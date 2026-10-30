@@ -232,7 +232,7 @@ profile 裡的 `_` 鍵另依登錄表的 profile 層直接判，不經租戶：�
 - tenant-api 改成判到就擋之後（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）：
   - 寫入對象租戶有 error 級的 finding，寫入不收，回 400，與今天鍵名檢查擋下時相同，回應列出這些 finding。這筆寫入沒有碰到、但寫入對象租戶既有的 error 也算，與今天 Go 的鍵名檢查相同；決定 12 的作法只用於新加的值檢查。
   - 判決未完成時寫入不收。依 ADR-036 §3 的分界，這是「拒收該筆」，不是容器不可用：時間不夠的回可重試的錯誤，其他原因回不可重試的錯誤並說明原因。`undecidable` 是沒讀到任何根平台檔，重試也不會改變，回應指名缺少根平台檔；今天 Go 對這種樹的閾值鍵也會擋。
-  - 容器沒有回判決（映像早於這一步），視同 ADR-036 §3 容器不可用的「產生器比要求的版本舊」，回 503。
+  - 找不到或無法執行 da-guard，或容器沒有回判決（映像早於這一步），依 ADR-036 §3 是容器不可用，回 503；與找不到 amtool 相同，每次判定前先確認 da-guard，所以長期缺 da-guard 會出現在容器可用性的告警上，不會變成一筆筆的拒收。
   - 其餘的 finding 放進寫入回應的 `warnings`。
 
   在那之前，判決只放進 `warnings`，不擋寫入；判決未完成或容器沒有回判決時，回應明說沒有判決，不留成看起來像「沒找到問題」。
@@ -274,7 +274,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 - 寫在 profile 或平台檔的 `disable` 影響所有選用它的租戶，報在那個檔上。
 - 租戶檔自己寫的同族鍵是刻意的：`X: disable` 加 `X_critical: 90` 表示只留 critical 那一級。explain 的 `disable` 欄照實列 `partial`，但不成為警告；報出來的警告會指名仍送出的鍵各自來自哪個檔。
 - 兩者在整棵樹報警告。這次變更**新引入**的，另外出現在 config-diff 的 PR 留言，因為 reviewer 實際會看的是那裡（[ADR-037](./037-config-diff-compares-rendered-output.md)）；config-diff 不分同族鍵的來源，新引入的 partial 都列。
-- tenant-api 的寫入檢查只對被寫的租戶重算：輪數取決於那個租戶有幾個 `disable`，每輪只重建那個租戶，比起載入整棵樹，成本可以忽略。整棵樹的重算只在 explain、config-diff 與 CI 中進行，因為它的輪數取決於設定內容、不固定，放不進寫入檢查的時間上限（[ADR-036](./036-single-parser-effective-config.md) §3）。
+- tenant-api 的寫入檢查只對被寫的租戶重算：輪數取決於那個租戶有幾個 `disable`，每輪只重建那個租戶，比起載入整棵樹，成本可以忽略。整棵樹的重算只在 explain、config-diff 與 CI 中進行：它的每一輪都要重建所有該輪的租戶，輪數又取決於設定內容，放不進寫入檢查的時間上限（[ADR-036](./036-single-parser-effective-config.md) §3）。
 
 `disable` 只關 base 鍵、不連帶關掉 `_critical` 與維度鍵，這是現行語意。之後會改成一律連帶關掉同一族的鍵、不分來源，只留 critical 那一級時改寫成 `X: "90:critical"`（它送出的 series 與 `X: disable` 加 `X_critical: 90` 相同）；這是 breaking change，與各閘門改成「判到就擋」一起推出（[#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)）。不採用「租戶檔寫的同族鍵保留、繼承來的才連帶關掉」：exporter 算閾值時分不出同族鍵來自哪一層，profile 與子目錄 defaults 的值在那之前已併進租戶的設定。
 
@@ -360,7 +360,7 @@ db-a
 - **登錄表沒有的 `_` 鍵不再產生閾值列**：exporter 與 JSON schema 對這種鍵的結論一致。靠根 defaults 宣告這種鍵送出閾值的部署，升級後少掉那些列（遷移方式見決定 2）。根 defaults 宣告了這種鍵時，產生器自己的鍵名檢查不警告租戶寫的同名鍵；共用判決把它判為 `unread`（原因 `unregistered`），validate-config 與產生器 `--validate` 都報出。
 - **鍵名判決只需要 da-guard 與登錄表**：產生器那半取登錄表的宣告，不跑產生器。值在產生器語意下是否有效（例如 `_routing_profile` 指向的 profile）仍只有產生器能判；只有 da-guard 的環境，這部分回 exit 4（未判定）。
 - **寫入的判定變慢，單一產生器容器支援的租戶數變少**：判決併進產生器容器的一次判定，約佔三成時間；以 1 CPU 為例，約 2500 個租戶時一次判定就接近期限的一半（示意值，依主機而異）。樹再大，或有寫入在排隊時，寫入會因判決判不完而被拒、要重試。界線看決定 5 的 metric；拿回容量的方向是讓 served-values 與 effective 在同一次 da-guard 裡算完、讓判決與產生器並行，以及加速產生器本身。
-- **判決壞了，寫入就不收**：da-guard 失敗時 tenant-api 的寫入不收，與產生器本身壞掉相同（決定 5）。
+- **判決壞了，寫入就不收**：容器裡找不到或無法執行 da-guard 時，與找不到 amtool 一樣是容器不可用，寫入回 503；da-guard 在個別寫入上判不完時，拒收那一筆（決定 5）。
 - **寫入時只因 `disable_noop` 而未讀的鍵照收**：決定 4 讓它只報 warning，所以拼錯的鍵寫成 `disable` 時寫入照收、只附 warning，而今天 Go 會擋。
 - **direct 模式沒有整棵樹的判決**：寫入時只判被寫的租戶。平台檔改動讓既有租戶的鍵變成沒人讀這類不屬於單筆寫入的情況，PR 模式由 CI 判；direct 模式（寫入只留在 pod 裡、沒有 PR）目前沒有對應的整棵樹判決。
 - **錯字與有意省略不區分**：平台沒有宣告的閾值鍵，判決不知道是租戶拼錯還是平台漏宣告，兩者報同一個原因。
@@ -393,6 +393,6 @@ db-a
 
 ## 相關
 
-- [ADR-036](./036-single-parser-effective-config.md)：YAML 只由 Go 解析，路由語意只由產生器判；本 ADR 修訂其 §9 的 exit 4 範圍，並把 §3 容器不可用的「產生器比要求的版本舊」擴及「容器沒有回判決」。
+- [ADR-036](./036-single-parser-effective-config.md)：YAML 只由 Go 解析，路由語意只由產生器判；本 ADR 修訂其 §9 的 exit 4 範圍，並在 §3 容器不可用的情況加上「找不到或無法執行 da-guard」與「容器沒有回判決」。
 - [ADR-037](./037-config-diff-compares-rendered-output.md)：config-diff 比較渲染結果；`disable` 新引入的問題出現在它的 PR 留言。
 - [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)：拼錯的鍵改由讀取端實報判定，以及之後改成擋下的步驟。
