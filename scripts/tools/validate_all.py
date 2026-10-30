@@ -62,6 +62,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
 )
+from _lib_consumer_read import absolute_reader_binaries  # noqa: E402  (#3424)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent
@@ -1255,11 +1256,10 @@ def main():
 
     tools_dir = Path(__file__).parent
     project_root = tools_dir.parent.parent
-    # A relative $DA_GUARD_BINARY means "relative to where I ran this": made
-    # absolute before the chdir below (#2906 review).
-    _da_guard = os.environ.get("DA_GUARD_BINARY", "")
-    if _da_guard.strip() and not os.path.isabs(_da_guard):
-        os.environ["DA_GUARD_BINARY"] = os.path.abspath(_da_guard)
+    # A relative reader-binary path ($DA_GUARD_BINARY and the others) means
+    # "relative to where I ran this": made absolute before the chdir below
+    # (#2906 review, #3424).
+    absolute_reader_binaries()
     os.chdir(project_root)
 
     # --watch: enter watch mode

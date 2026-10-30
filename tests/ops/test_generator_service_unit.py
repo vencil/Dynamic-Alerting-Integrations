@@ -709,3 +709,23 @@ def test_config_subdir_is_normalised_to_what_ls_tree_prints(given, expected):
 def test_config_subdir_outside_the_repository_is_refused(given):
     with pytest.raises(RuntimeError, match="--config-subdir"):
         gs._normalize_config_subdir(given)
+
+
+# ── reader binaries named by relative paths (#3424) ─────────────────────
+
+def test_main_makes_every_reader_binary_absolute_before_anything_else(tmp_path, monkeypatch):
+    """The judgement process runs the route generator in a job directory: a
+    relative `$DA_GUARD_BINARY`, `$DA_READ_BINARY` or `$DA_CRDECODE_BINARY`
+    is made absolute (against the directory the service started in) by
+    `main` — here before it refuses a `--repo` that does not exist, so no
+    service starts."""
+    import os
+    import _lib_consumer_read as cr
+    monkeypatch.chdir(tmp_path)
+    for name in cr.READER_BINARY_ENVS:
+        monkeypatch.setenv(name, f"bin/{name}")
+    rc = gs.main(["--socket", str(tmp_path / "s.sock"), "--repo", str(tmp_path / "no-repo"),
+                  "--config-subdir", "conf.d", "--work-dir", str(tmp_path / "work")])
+    assert rc == gs.EXIT_CALLER_ERROR
+    for name in cr.READER_BINARY_ENVS:
+        assert os.environ[name] == str(tmp_path / "bin" / name), name

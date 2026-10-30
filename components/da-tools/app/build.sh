@@ -236,7 +236,8 @@ TOOL_FILES=(
     # prints them; imported by ops/config_diff. Stdlib-only.
     _lib_redact.py
     # #1516 — reads `da-guard parse-tree`'s document (ADR-036 §2); imported
-    # by ops/config_diff and _lib_parse_cache. Imports ops/guard_dispatch (above).
+    # by ops/config_diff and _lib_parse_cache. Imports ops/guard_dispatch (above)
+    # and _lib_consumer_read (below; the reader-binary env names, #3424).
     _lib_parse_tree.py
     # #2901 — the conf.d parse entry point + content-addressed cache; imported
     # by _lib_confd and ops/_grar_parse, so without it every conf.d reader

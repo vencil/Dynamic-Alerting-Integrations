@@ -71,6 +71,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_consumer_read import CRDECODE_ENV  # noqa: E402  (the env-name register, #3424)
 from _lib_io import (  # noqa: E402  (#1789)
     OutputWriteError,
     exit_on_output_write_error,
@@ -744,7 +745,6 @@ def run_watch(
 #: checks (the CRD schema) are not part of that conversion; the checks below
 #: cover some of them, without a guarantee that they match.
 CRDECODE_BINARY_NAME = "da-crdecode"
-CRDECODE_ENV = "DA_CRDECODE_BINARY"
 CRDECODE_TIMEOUT_SECONDS = 60
 #: Every line of da-crdecode's stderr is passed on behind this, so none of
 #: it starts at column 0.

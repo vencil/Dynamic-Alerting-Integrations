@@ -78,10 +78,38 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Iterable
 
 CRDECODE_BINARY_NAME = "da-crdecode"
-CRDECODE_ENV = "DA_CRDECODE_BINARY"
 DA_READ_BINARY_NAME = "da-read"
-DA_READ_ENV = "DA_READ_BINARY"
 TIMEOUT_SECONDS = 60
+
+# The one register of the environment variables that name a reader binary
+# (#3424): every tool reads these names from here, not from a literal of its
+# own. da-guard's is here too, though da-guard is not run by this module:
+# `absolute_reader_binaries` has to cover all three, and a second register
+# would be the one that falls behind.
+DA_GUARD_ENV = "DA_GUARD_BINARY"
+DA_READ_ENV = "DA_READ_BINARY"
+CRDECODE_ENV = "DA_CRDECODE_BINARY"
+#: Every reader binary's environment variable, in no particular order.
+READER_BINARY_ENVS: "tuple[str, ...]" = (DA_GUARD_ENV, DA_READ_ENV, CRDECODE_ENV)
+
+
+def absolute_reader_binaries(environ: "dict[str, str] | None" = None) -> None:
+    """Make each variable of ``READER_BINARY_ENVS`` in *environ* (default:
+    this process's environment) an absolute path, against the current
+    working directory.
+
+    A relative path in one of them means "relative to the directory of the
+    shell that set it" — which is this process's working directory only
+    until the process changes directory, or starts a process with another
+    ``cwd``. Call this before either, so the binary the user named is the
+    one that runs wherever it is resolved. A value that is unset, blank or
+    already absolute is left as it is (blank still means "not set": the
+    resolvers then look on ``$PATH``)."""
+    env = os.environ if environ is None else environ
+    for name in READER_BINARY_ENVS:
+        value = env.get(name, "")
+        if value.strip() and not os.path.isabs(value):
+            env[name] = os.path.abspath(value)
 
 
 class ConsumerReadError(Exception):

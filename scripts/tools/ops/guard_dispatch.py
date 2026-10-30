@@ -70,6 +70,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_godispatch import GoBinaryDispatcher  # noqa: E402
+from _lib_consumer_read import DA_GUARD_ENV  # noqa: E402  (the env-name register, #3424)
 
 _USAGE_EN = (
     "Usage: da-tools guard <subcommand> [flags]\n"
@@ -169,7 +170,7 @@ _DISPATCHER = GoBinaryDispatcher(
     binary_name="da-guard",
     cli_alias="guard",
     binary_flag="--da-guard-binary",
-    env_var="DA_GUARD_BINARY",
+    env_var=DA_GUARD_ENV,
     subcommands={"defaults-impact", "served-values", "effective"},
     pass_subcommand=False,
     usage_en=_USAGE_EN,

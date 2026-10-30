@@ -127,6 +127,7 @@ if (_HERE / "ops").is_dir() and str(_HERE / "ops") not in sys.path:
     sys.path.append(str(_HERE / "ops"))
 
 import guard_dispatch  # noqa: E402
+from _lib_consumer_read import DA_GUARD_ENV  # noqa: E402  (the env-name register, #3424)
 
 SUBCOMMAND = "parse-tree"
 SCHEMA = "da-guard.parse-tree/v2"
@@ -291,18 +292,6 @@ def file_document(raw: bytes) -> dict:
     item: the same reading of the same bytes (the line, without its
     newline, is file mode's stdout)."""
     return read_document(raw)
-
-
-def absolute_da_guard_binary(environ: "dict[str, str] | None" = None) -> None:
-    """Make `$DA_GUARD_BINARY` in *environ* (default: this process's) an
-    absolute path, against the current working directory — the meaning a
-    relative path has in the shell that set it. Call it before changing
-    directory, or before starting a process with another `cwd`, so the
-    binary the user named is the one that runs. Unset or blank: unchanged."""
-    env = os.environ if environ is None else environ
-    value = env.get("DA_GUARD_BINARY", "")
-    if value.strip() and not os.path.isabs(value):
-        env["DA_GUARD_BINARY"] = os.path.abspath(value)
 
 
 def _run(args: list[str], binary: Optional[str], timeout: Optional[float],
@@ -1139,7 +1128,7 @@ def _names_key(binary: Optional[str]) -> "tuple[Optional[str], str]":
     binary = _resolve(binary, None)[0]
     exe = guard_dispatch.DISPATCHER.resolve_binary(binary)
     return (os.path.abspath(exe) if exe is not None else None,
-            os.environ.get("DA_GUARD_BINARY", ""))
+            os.environ.get(DA_GUARD_ENV, ""))
 
 
 def classify_names(names: "Iterable[str]", binary: Optional[str] = None,
