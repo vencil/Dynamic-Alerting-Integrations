@@ -54,8 +54,6 @@ package config
 // `defaults:` breaks decode, which is exactly how it shipped broken.
 
 import (
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
@@ -67,36 +65,80 @@ import (
 type docYAMLBlock struct {
 	file string // repo-relative, forward slashes
 	line int    // 1-indexed line of the opening fence
+	info string // what follows ```yaml on the fence line, trimmed ("{.confd}"; "" for none)
 	body string
 }
 
-// extractYAMLBlocks pulls fenced ```yaml / ```yml blocks out of Markdown.
-// Deliberately literal about the fence: docs also carry ```bash and directory
-// trees, and only blocks the author tagged as YAML are in scope.
+// yamlFenceRe matches the opening line of a yaml fence (trimmed): exactly
+// ```yaml or ```yml, then nothing, or what follows after a blank or `{` — the
+// fence attributes (```yaml {.confd}, #3416). Mirrors FENCE_RE in
+// scripts/tools/_lib_doc_yaml_inventory.py; TestDocsYAMLInventoryParity holds
+// the two extractors to the same units. Any other spelling of a yaml fence is
+// the inventory's error, so docs/ holds none for this extractor to miss.
+var yamlFenceRe = regexp.MustCompile("^```(?:yaml|yml)(?:[ \\t{].*)?$")
+
+// anyFenceRe matches the opening line of any fence (CommonMark): three or
+// more backticks or tildes, then the info string.
+var anyFenceRe = regexp.MustCompile("^(`{3,}|~{3,})(.*)$")
+
+// fenceTrim is what a fence line is compared without: ASCII blanks only, as
+// the inventory (FENCE_TRIM) — strings.TrimSpace would also take U+3000 away.
+const fenceTrim = " \t\r"
+
+// extractYAMLBlocks pulls fenced ```yaml / ```yml blocks out of Markdown,
+// attributes and all: a fence that declares what it is (```yaml {.k8s}) is
+// still a yaml fence. Every fence is tracked as CommonMark tracks it (the
+// closing fence is the same character, at least as long, with nothing after
+// it), so a ``` line inside another fence is that fence's text. Whether its
+// attributes are ones the inventory knows is the inventory's to say, not this
+// extractor's.
 func extractYAMLBlocks(file, content string) []docYAMLBlock {
 	var out []docYAMLBlock
 	var buf []string
-	inYAML, start := false, 0
+	openChar, openLen, start, info, isYAML := "", 0, 0, "", false
 
 	for i, line := range strings.Split(content, "\n") {
-		trimmed := strings.TrimSpace(strings.TrimSuffix(line, "\r"))
-		switch {
-		case !inYAML && (trimmed == "```yaml" || trimmed == "```yml"):
-			inYAML, start, buf = true, i+1, nil
-		case inYAML && trimmed == "```":
-			inYAML = false
-			if len(buf) > 0 {
-				out = append(out, docYAMLBlock{file: file, line: start, body: strings.Join(buf, "\n")})
+		trimmed := strings.Trim(line, fenceTrim)
+		if openChar == "" {
+			m := anyFenceRe.FindStringSubmatch(trimmed)
+			if m == nil || (m[1][0] == '`' && strings.Contains(m[2], "`")) {
+				continue
 			}
-		case inYAML:
+			openChar, openLen, start, buf = m[1][:1], len(m[1]), i+1, nil
+			isYAML = yamlFenceRe.MatchString(trimmed)
+			info = ""
+			if isYAML {
+				rest := strings.TrimPrefix(trimmed, "```")
+				if strings.HasPrefix(rest, "yaml") {
+					rest = strings.TrimPrefix(rest, "yaml")
+				} else {
+					rest = strings.TrimPrefix(rest, "yml")
+				}
+				info = strings.Trim(rest, fenceTrim)
+			}
+			continue
+		}
+		if trimmed != "" && strings.Trim(trimmed, openChar) == "" && len(trimmed) >= openLen {
+			if isYAML && len(buf) > 0 {
+				out = append(out, docYAMLBlock{file: file, line: start, info: info, body: strings.Join(buf, "\n")})
+			}
+			openChar, isYAML = "", false
+			continue
+		}
+		if isYAML {
 			buf = append(buf, line)
 		}
 	}
 	return out
 }
 
-// fileHeaderRe matches a comment line that names a YAML file, e.g.
-// `# conf.d/_defaults.yaml (central)` or `# L1 finance/_defaults.yaml`.
+// fileHeaderRe matches a comment line that STARTS with a YAML file's name,
+// then the end of the line or a blank and any note, e.g.
+// `# conf.d/_defaults.yaml (central)` or `# _defaults.yaml — Mode A`. A
+// comment that only mentions a file (`# see conf.d/_defaults.yaml`) is prose:
+// cutting there split one file in two, and a key repeated across the cut was
+// read by nobody (#3416 review). Mirrors FILE_HEADER_RE in
+// scripts/tools/_lib_doc_yaml_inventory.py.
 //
 // ⚠️ Anchored at column 0 on purpose, and that anchor is load-bearing. With a
 // leading `\s*` this also matches an INDENTED comment that merely mentions a
@@ -105,7 +147,7 @@ func extractYAMLBlocks(file, content string) []docYAMLBlock {
 // file header severs a block mid-mapping: the tail is then validated as its own
 // document, and the head silently loses the entries below it. A real file header
 // in these illustrations always starts at column 0; an indented `#` is prose.
-var fileHeaderRe = regexp.MustCompile(`^#.*\.ya?ml\b`)
+var fileHeaderRe = regexp.MustCompile(`^# ?([\w./-]+\.ya?ml)(?:[ \t]+.*)?$`)
 
 // splitConcatenatedFiles divides a block that illustrates SEVERAL files in one
 // fence (each introduced by a `# path/to/file.yaml` comment) into one segment
@@ -142,127 +184,58 @@ func splitConcatenatedFiles(body string) []struct {
 	return segments
 }
 
-// isPlatformDefaultsSample reports whether a block claims to be a
-// `_defaults.yaml`. Two independent selectors, unioned on purpose:
+// collectDocDefaultsSamples returns every `_defaults.yaml` sample in docs/:
+// the units of the docs' YAML inventory (scripts/tools/_lib_doc_yaml_inventory.py,
+// #3416) that it reads as conf.d and judges a PLATFORM file (a platform key at
+// the top: `defaults:`, `state_filters:`, `_routing_defaults:` …). Which unit
+// is a `_defaults.yaml` is the inventory's one answer — this test used to
+// have its own (a header comment naming the file, or a top-level `defaults:`
+// mapping), a fourth judgement beside the drift lint's two and the unit
+// lint's. An `.illustrative` unit, a refused one and one with an inventory
+// error are not samples; an `.expect-invalid` counter-example is (wrong
+// against the schema on purpose, it must still load). Fail-closed like its
+// siblings in this package: a repo root it cannot find, an inventory that
+// cannot be had, or zero samples is a broken test, not a reason to pass.
 //
-//   - the header comment names the file (catches the `_routing_defaults:` /
-//     `_routing_enforced:` samples, which carry no `defaults:` key at all), and
-//   - the document has a top-level `defaults:` mapping (catches a sample whose
-//     author forgot the header comment).
+// docs/adr/** IS in scope. It was excluded when this gate landed (#1327), on
+// the reasoning that an ADR is a historical decision record whose snippets
+// illustrate a proposed MODEL, so editing one to satisfy today's loader would
+// rewrite the record. That exclusion was reversed deliberately, for two
+// reasons:
 //
-// A block that does not parse as a YAML mapping is not a config sample at all
-// (prose, a directory tree in a mislabeled fence) and is left alone — this test
-// pins the platform-defaults contract, not Markdown fence hygiene.
+//   - The concrete case that motivated it is gone. #1327's own comment named
+//     ADR-017's L0 sample (`_routing:` nested inside `defaults:`) as a real
+//     defect it was choosing not to silence; #1330 fixed it. Nothing in
+//     docs/adr/ is now knowingly broken, so keeping the exclusion buys no
+//     protection from churn — it only hides the next one.
+//   - The premise does not survive contact with what these samples are.
+//     ADR-017's block is not a sketch of a rejected alternative; it is
+//     labelled `# L0 _defaults.yaml` and shows the shipping inheritance
+//     model. A reader copies it exactly as they would copy the
+//     platform-engineer guide. "Historical record" protects the DECISION and
+//     its rationale, not a config sample that silently stopped matching the
+//     loader.
 //
-// ⚠️ Known blind spot, stated rather than papered over: a sample that is BOTH
-// malformed AND carries no `_defaults.yaml` header comment fails the generic
-// parse here and is therefore skipped, not reported. The header selector is what
-// keeps that hole small — every sample in the platform-engineer guide names its
-// file. Widening this to "every unparseable ```yaml block is an error" is a
-// separate call: docs/ currently has 17 such blocks, nearly all directory-tree
-// diagrams in mislabeled fences, so it would land as noise, not signal.
-func isPlatformDefaultsSample(body string) bool {
-	if firstLine, _, _ := strings.Cut(body, "\n"); strings.Contains(firstLine, "_defaults.yaml") {
-		return true
-	}
-	var generic map[string]any
-	if err := yaml.Unmarshal([]byte(body), &generic); err != nil {
-		return false
-	}
-	_, ok := generic["defaults"].(map[string]any)
-	return ok
-}
-
-// collectDocDefaultsSamples walks docs/ and returns every `_defaults.yaml`
-// sample block. Fail-closed like its siblings in this package: a repo root it
-// cannot find is a broken test, not a reason to pass quietly.
+// Sibling doc lints (_version_patterns.DOC_MAP_SKIP_DIRS) still skip adr/ —
+// they police metadata, where "don't churn the record" genuinely applies.
+// This gate asserts loadability, which is timeless: a sample that cannot
+// decode was never a faithful illustration of the model on any date. A
+// counter-example that is not meant to load is declared in the doc
+// (```yaml {.illustrative reason="…"}), never by narrowing this walk.
 func collectDocDefaultsSamples(t *testing.T) []docYAMLBlock {
 	t.Helper()
-	root := findRepoRootForRegistry(t)
-	docsDir := filepath.Join(root, "docs")
-	if fi, err := os.Stat(docsDir); err != nil || !fi.IsDir() {
-		t.Fatalf("docs/ not found under repo root %s — this gate must not pass by skipping", root)
-	}
-
 	var samples []docYAMLBlock
-	err := filepath.WalkDir(docsDir, func(path string, d os.DirEntry, werr error) error {
-		if werr != nil {
-			return werr
+	for _, u := range docYAMLInventory(t).Units {
+		if u.Consumer == nil || *u.Consumer != "confd" || !u.Read || u.Exemption != nil ||
+			len(u.Errors) > 0 || u.ConfdKind == nil || *u.ConfdKind != "platform" {
+			continue
 		}
-		// docs/adr/** IS in scope. It was excluded when this gate landed
-		// (#1327), on the reasoning that an ADR is a historical decision
-		// record whose snippets illustrate a proposed MODEL, so editing one to
-		// satisfy today's loader would rewrite the record. That exclusion was
-		// reversed deliberately, for two reasons:
-		//
-		//   - The concrete case that motivated it is gone. #1327's own comment
-		//     named ADR-017's L0 sample (`_routing:` nested inside `defaults:`)
-		//     as a real defect it was choosing not to silence; #1330 fixed it.
-		//     Nothing in docs/adr/ is now knowingly broken, so keeping the
-		//     exclusion buys no protection from churn — it only hides the next
-		//     one.
-		//   - The premise does not survive contact with what these samples are.
-		//     ADR-017's block is not a sketch of a rejected alternative; it is
-		//     labelled `# L0 _defaults.yaml` and shows the shipping inheritance
-		//     model. A reader copies it exactly as they would copy the
-		//     platform-engineer guide. "Historical record" protects the
-		//     DECISION and its rationale, not a config sample that silently
-		//     stopped matching the loader.
-		//
-		// Sibling doc lints (_version_patterns.DOC_MAP_SKIP_DIRS) still skip
-		// adr/ — they police metadata, where "don't churn the record"
-		// genuinely applies. This gate
-		// asserts loadability, which is timeless: a sample that cannot decode
-		// was never a faithful illustration of the model on any date.
-		//
-		// ⚠️ The cost this scope does carry, stated plainly: the repo has an
-		// `#### ❌ 錯誤` convention for deliberate counter-examples, and a
-		// counter-example that IS a `_defaults.yaml` would be failed here on
-		// purpose-built wrongness. No such sample exists today — the existing
-		// ❌ blocks are recording-rule sequences, which isPlatformDefaultsSample
-		// does not select — and the house style for this file is "show the
-		// correct shape, put the trap in a comment" (see the platform-engineer
-		// guide). If one is ever wanted, express it in prose or an untagged
-		// fence rather than re-narrowing this walk.
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(d.Name(), ".md") {
-			return nil
-		}
-		raw, rerr := os.ReadFile(path)
-		if rerr != nil {
-			return rerr
-		}
-		rel, rerr := filepath.Rel(root, path)
-		if rerr != nil {
-			rel = path
-		}
-		rel = filepath.ToSlash(rel)
-		for _, b := range extractYAMLBlocks(rel, string(raw)) {
-			for _, s := range splitConcatenatedFiles(b.body) {
-				if isPlatformDefaultsSample(s.text) {
-					samples = append(samples, docYAMLBlock{
-						file: b.file,
-						// b.line is the opening fence; body line 0 sits one line
-						// below it, so +1 makes offset=0 point at the segment's
-						// first real line instead of the ```yaml fence.
-						line: b.line + s.offset + 1,
-						body: s.text,
-					})
-				}
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("walk docs/: %v", err)
+		samples = append(samples, docYAMLBlock{file: u.Path, line: u.Line, body: u.Text})
 	}
 	if len(samples) == 0 {
-		t.Fatal("found zero _defaults.yaml samples in docs/ — the extractor is broken, " +
+		t.Fatal("found zero _defaults.yaml samples in docs/ — the inventory is broken, " +
 			"or the samples moved; a gate that measures nothing must fail loudly")
 	}
-
 	return samples
 }
 

@@ -225,7 +225,7 @@ spec:
 
 ## 5. Flux 範例
 
-```yaml
+```yaml {.k8s}
 # flux/dynamic-alerting.yaml
 apiVersion: source.toolkit.fluxcd.io/v1
 kind: GitRepository

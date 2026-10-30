@@ -70,8 +70,7 @@ lang: en
 
 YAML has a way to "merge another mapping in", usually written `<<:`. PyYAML treats any key tagged `!!merge` as such a merge; yaml.v3 recognises only a literal `<<`. This tenant file falls into that gap:
 
-<!-- md-yaml-drift: ignore — an unreadable input on purpose: the `!!merge` tag is outside the allowed set, so the exporter refuses the file whole -->
-```yaml
+```yaml {.confd .expect-refused=tag_not_allowed}
 # t1.yaml
 tenants:
   t1:
@@ -216,8 +215,7 @@ The Python side no longer has its own copy of these rules. Differences between t
 
 This is a breaking change: of the 9 spellings measured in "Problem" above, the exporter reads 7 today, and afterwards those files are not served at all. Example. Input:
 
-<!-- md-yaml-drift: ignore — an unreadable input on purpose: two documents in one file, so the exporter refuses the file whole -->
-```yaml
+```yaml {.confd .expect-refused=multiple_documents}
 # t1.yaml
 tenants:
   t1:
@@ -248,8 +246,7 @@ The fixed corpus is `tests/shared/parse_tree_corpus.json`, built like the existi
 
 Example. Input:
 
-<!-- md-yaml-drift: ignore — an input that shows a reading: yaml.v3 reads send_resolved: yes as the string "yes"; not a config to copy -->
-```yaml
+```yaml {.confd .expect-invalid}
 # t010.yaml
 tenants:
   010:

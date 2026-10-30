@@ -65,7 +65,7 @@ updated_at: 2026-05-13
 
 每個 planning item（不論在哪份 source file）都要在自身 markdown section（或 yaml block）帶以下 frontmatter：
 
-```yaml
+```yaml {.illustrative reason="planning item 的 frontmatter 契約（各欄位列出可選值），不是任何程式讀的設定檔"}
 ---
 id: TRK-042 | S#74 | ADR-018    # 三 namespace 共存，見下方 namespace policy
 tracking_kind: tech-debt | feature | dx | regression | adr | sprint
@@ -107,7 +107,7 @@ owner: poyu                     # optional：誰負責
 
 ADR 與 S# 的 frontmatter `id:` 維持原 namespace：
 
-```yaml
+```yaml {.illustrative reason="三種 namespace 的 id 寫法並列，同一個 id 鍵寫了三次；不是一份可照抄的 frontmatter"}
 # ADR
 id: ADR-019
 tracking_kind: adr

@@ -63,8 +63,6 @@ import os
 import re
 import sys
 
-import yaml
-
 PROJECT_ROOT = os.path.abspath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..")
 )
@@ -86,6 +84,9 @@ import _lib_parse_cache  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: values / manifests read Helm's / kubectl's way)
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
+# #3416: the docs' ```yaml examples come from the one inventory, read by
+# their consumer there; this gate reads none of them itself.
+import _lib_doc_yaml_inventory as doc_inventory  # noqa: E402
 
 # ---------------------------------------------------------------- dimensions
 
@@ -279,10 +280,8 @@ def _walk_values(node, key_of_interest: str | None = None):
 
 _REGISTRY_KEYS: set[str] = set()
 
-_MD_YAML_RE = re.compile(r"```ya?ml\n(.*?)```", re.S)
-
-# Structured artifacts that carry threshold values. Markdown docs are scanned
-# separately (best-effort fenced-YAML) because a fragment may not parse.
+# Structured artifacts that carry threshold values. The docs' ```yaml examples
+# are not listed here: they are the inventory's units (`_doc_units`).
 # The registry is the repo's own data (read by `_registry_lib.load_registry`,
 # Python only); every other entry is a Helm values file or a manifest, read
 # the way Helm / kubectl read it (da-crdecode, ADR-036 §12, #3206).
@@ -298,7 +297,6 @@ _YAML_DIRS = [
     "components/threshold-exporter/config/conf.d",
     "try-local/seed/conf.d",
 ]
-_DOC_DIRS = ["docs"]
 
 
 def _iter_yaml_files(root: str):
@@ -341,15 +339,29 @@ def _iter_confd_docs(root: str):
             yield surface, _as_source_text(reader.node(rel))
 
 
-def _iter_doc_files(root: str):
-    for d in _DOC_DIRS:
-        base = os.path.join(root, d)
-        for dirpath, dirs, files in os.walk(base):
-            dirs[:] = [x for x in dirs if x not in ("assets", "site")]
-            for f in sorted(files):
-                if f.endswith(".md"):
-                    p = os.path.join(dirpath, f)
-                    yield os.path.relpath(p, root).replace(os.sep, "/"), p
+def _doc_units(root: str, exempted: "list[tuple[str, str]] | None" = None):
+    """(surface, document) for every documented ```yaml unit the inventory
+    has a reading of (#3416): any consumer, not only conf.d — a Helm values
+    example (`{.helm-values}`) as Helm reads it, a manifest as kubectl
+    reads it, a conf.d example (and a block with no consumer) as parse-tree
+    reads it, every scalar as its source text, as the conf.d trees are.
+
+    Not read, so not here: an `.illustrative` fence (its reason is in every
+    drift report), a unit refused by its reader, a unit the inventory found
+    an error on (`check_md_yaml_drift.py --check fences` names those), a
+    block whose top level is not a mapping. `DROPPED_SINCE_INVENTORY` in
+    the tests names the values that left this gate's scope that way."""
+    if not os.path.isdir(os.path.join(root, "docs")):
+        return
+    inv = doc_inventory.build(root)
+    if exempted is not None:
+        exempted.extend((u.where, u.exemption) for u in inv.exemptions())
+    for unit in inv.judged():
+        if unit.node is not None:
+            yield unit.where, _as_source_text(unit.node)
+            continue
+        for doc in unit.documents:
+            yield unit.where, doc
 
 
 def _read(path: str) -> str:
@@ -372,14 +384,20 @@ class ArtifactRefused(Exception):
         self.refused = refused
 
 
-def _collect(root: str) -> list[tuple[str, str, float, bool]]:
+def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
+             exempted: "list[tuple[str, str]] | None" = None
+             ) -> list[tuple[str, str, float, bool]]:
     """Return [(surface, key, value, is_threshold)] over every scannable artifact.
 
     `is_threshold` is False for OBSERVED values (the recommendation file's
     percentiles): they share the key's unit, so the domain check applies, but
     they are not a configured threshold and must not feed tier ordering.
+    A template-data example parse-tree refuses is appended to *unreadable*
+    as (surface, why); every `.illustrative` docs unit (not read) to
+    *exempted* as (where, reason).
     """
     found: list[tuple[str, str, float, bool]] = []
+    unreadable = [] if unreadable is None else unreadable
 
     for rel, doc in _iter_confd_docs(root):
         for key, val in _walk_values(doc):
@@ -435,24 +453,26 @@ def _collect(root: str) -> list[tuple[str, str, float, bool]]:
                     found.append((f"docs/assets/recommendation-data.json[{field}]",
                                   key, num, field == "recommended"))
 
+    # template-data's `yaml` strings are tenant conf.d text: read as conf.d
+    # is read (parse-tree, #3416). One parse-tree refuses is an UNREADABLE
+    # finding of its own, never a skip: its values were not checked.
     td = os.path.join(root, "docs/assets/template-data.json")
     if os.path.isfile(td):
-        for tpl in json.loads(_read(td)).get("templates") or []:
-            try:
-                doc = yaml.safe_load(tpl.get("yaml") or "")
-            except Exception:
+        templates = [t for t in json.loads(_read(td)).get("templates") or []
+                     if isinstance(t, dict)]
+        readings = doc_inventory.read_confd_texts(
+            [t.get("yaml") or "" for t in templates])
+        for tpl, (_value, node, problem) in zip(templates, readings):
+            surface = f"docs/assets/template-data.json[{tpl.get('id')}]"
+            if problem is not None:
+                unreadable.append((surface, f"{problem[0]}: {problem[1]}"))
                 continue
-            for key, val in _walk_values(doc):
-                found.append((f"docs/assets/template-data.json[{tpl.get('id')}]", key, val, True))
+            for key, val in _walk_values(_as_source_text(node)):
+                found.append((surface, key, val, True))
 
-    for rel, path in _iter_doc_files(root):
-        for block in _MD_YAML_RE.findall(_read(path)):
-            try:
-                doc = yaml.safe_load(block)
-            except Exception:
-                continue  # doc fragments legitimately aren't standalone YAML
-            for key, val in _walk_values(doc):
-                found.append((rel, key, val, True))
+    for surface, doc in _doc_units(root, exempted):
+        for key, val in _walk_values(doc):
+            found.append((surface, key, val, True))
 
     return found
 
@@ -527,7 +547,12 @@ def run_check(
 
     # 2. Value-in-domain.
     per_surface: dict[str, dict[str, float]] = {}
-    collected = _collect(root)
+    unreadable: list[tuple[str, str]] = []
+    exempted: list[tuple[str, str]] = []
+    collected = _collect(root, unreadable, exempted)
+    for surface, why in unreadable:
+        errors.append(f"UNREADABLE: {surface}: conf.d's reader (da-guard parse-tree) "
+                      f"refuses it ({why}), so its threshold values were not checked")
     for surface, key, value, is_threshold in collected:
         meta = spec[key]
         unit = meta.get("unit")
@@ -558,7 +583,7 @@ def run_check(
                     "warning permanently."
                 )
 
-    return {"errors": sorted(set(errors))}
+    return {"errors": sorted(set(errors)), "exempted": exempted}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -602,10 +627,16 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CALLER_ERROR
 
     errors = result["errors"]
+    exempted = result.get("exempted", [])
+    # #3416: a docs unit no gate judges is named in every report (stderr, so
+    # `--json` keeps exactly one document on stdout; the JSON carries it too).
+    doc_inventory.print_exemptions(exempted, file=sys.stderr)
 
     if args.json:
         print(json.dumps({"status": "violation" if errors else "ok",
-                          "errors": errors}, ensure_ascii=False, indent=2))
+                          "errors": errors,
+                          "exempted": [{"unit": w, "reason": r} for w, r in exempted]},
+                         ensure_ascii=False, indent=2))
     else:
         for msg in errors:
             print(f"❌ {msg}", file=sys.stderr)

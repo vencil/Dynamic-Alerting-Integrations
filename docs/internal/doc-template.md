@@ -30,7 +30,7 @@ lang: zh
 
 **Frontmatter 範例**：
 
-```yaml
+```yaml {.illustrative reason="Markdown 文件的 frontmatter（含前後兩條 --- 分隔線），由 mkdocs 讀，不是 YAML 設定檔"}
 ---
 title: "da-tools CLI Reference"
 tags: [cli, reference, da-tools, tools]
@@ -213,6 +213,15 @@ da-tools diagnose db-a --config-dir conf.d/
 # PromQL 示例
 rate(requests_total[5m]) > 100
 ```
+
+- **`yaml` 區塊由它的讀者判**（[#3416](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3416)）：`check_md_yaml_drift`（`md-yaml-fence-check`／`md-yaml-drift-check`／`md-yaml-crd-check`）與 `threshold-unit-sanity-check` 都從同一份清冊（`scripts/tools/_lib_doc_yaml_inventory.py`，詞彙與判定規則寫在它的 docstring）取區塊。沒宣告的區塊用 conf.d 的讀法（`da-guard parse-tree`）讀，讀得了就照結構判定（conf.d 範例、k8s 物件、其他）；讀不了（多份文件、重複鍵、語法錯誤；頂層不是 mapping 除外）就報錯，要你在語言後面用大括號宣告它是什麼：
+  - 消費者：```` ```yaml {.k8s} ````（`---` 分隔的 manifest）、`{.confd}`、`{.helm-values}`、`{.prom-rules}`、`{.alertmanager}`、`{.prometheus}`。
+  - 故意拒收的反例：`{.confd .expect-refused=<kind>}`（kind 是 parse-tree 回報的那個，例如 `multiple_documents`）。
+  - 讀得了但故意寫錯的反例：`{.confd .expect-invalid}`（schema 檢查必須判 fence 裡**每一個**單元都不合法；要並列一份正確的檔，就拆成兩個 fence）。它的值照樣會被 `threshold-unit-sanity-check` 判：讀者會照抄。
+  - 不給任何閘門判的區塊：`{.illustrative reason="…"}`（reason 必填，每份報告都會列出）。
+  - 一個 fence 示範好幾個檔時，在每個檔的第一行寫 column-0 的檔頭註解，**註解以檔名開頭**：`# conf.d/db-a.yaml`、`# conf.d/db-a.yaml (edge tenant)`、`# _defaults.yaml — 模式 A`（檔名之後要嘛換行，要嘛先空一格再寫註）。`# 見 conf.d/_defaults.yaml`、`# 層級 2：conf.d/finance/_defaults.yaml` 這種檔名不在開頭的是散文，不切檔；要當檔頭就改寫成檔名開頭。
+  - 重複鍵由宣告的消費者決定：`.confd` 拒收；`.k8s`／`.helm-values` 依 kubectl／Helm 的讀法是後者勝。所以 `.k8s` 區塊的每份文件都必須是帶字串 `apiVersion` 與 `kind` 的物件，否則報錯。
+  - 屬性詞彙是封閉的，寫錯或沒有大括號（```` ```yaml confd ````，mkdocs 不會當成程式碼區塊）都報錯；yaml 區塊只認 ```` ```yaml ````／```` ```yml ```` 這個寫法，`~~~yaml`、大寫、四個反引號、```` ``` yaml ````、```` ```yaml+jinja ```` 與沒關上的 fence 都報錯；舊的 `md-yaml-drift` HTML 註解標記已退役，留著也會報錯。
 
 ### 3.3 表格
 

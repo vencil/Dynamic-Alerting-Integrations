@@ -97,7 +97,7 @@ configmap-rules-{mariadb,kubernetes,redis,mongodb,elasticsearch,oracle,db2,click
 
 ### YAML Heredoc 中嵌入 Python
 
-```yaml
+```yaml {.illustrative reason="❌／✅ 對照：同一個 command 鍵寫兩次，是兩種寫法並列，不是一份可照抄的設定"}
 # ❌ heredoc 內嵌 heredoc → YAML parser 崩潰
 command: |
   python3 - <<'PYEOF'
@@ -289,8 +289,7 @@ tenants:
       receiver: { type: "webhook", url: "https://hooks.example.com/alerts" }
 ```
 
-<!-- md-yaml-drift: ignore — deliberate ❌ counter-example: the flat shape this section tells tools NOT to expect -->
-```yaml
+```yaml {.illustrative reason="❌ 反例：本節要工具別假設的扁平形狀；當成 fragment 讀它合 schema，錯在形狀不在內容，所以不是 .expect-invalid"}
 # ❌ flat 格式（僅用於簡化測試或文件範例）
 mysql_connections: "70"
 ```

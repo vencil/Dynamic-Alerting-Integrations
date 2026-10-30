@@ -1308,7 +1308,7 @@ grep -rnE 'tenant\s*=\s*"[a-z0-9-]+"' <conf.d-dir>/ <rules-dir>/
 
 # 情境 B：規則確實只該 fire 對特定 tenant（少見、需審視）
 # 用 conf.d 結構放在該 tenant 子目錄、PromQL 不寫死
-# conf.d/<domain>/<region>/<tenant>.yaml:
+# conf.d/your-domain/your-region/your-tenant.yaml —— 該 tenant 子目錄裡的檔：
 - expr: 'mysql_up == 0'
   for: 5m
 # 該檔案的 directory context 已隱含 tenant scope，PromQL 不需 hardcode

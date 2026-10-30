@@ -94,12 +94,6 @@ ALLOWED = {
             "strict PyYAML refuses the duplicate key two {{ if }}/{{ else }} branches leave"),
     ('scripts/tools/lint/check_log_egress_policy.py', 'lint_chart'):
         (1, 'a Vector config read by Vector (Rust); no Go consumer and no da-tools reading'),
-    ('scripts/tools/lint/check_md_yaml_drift.py', 'MdYamlDriftChecker.run_fences'):
-        (1, "only a PyYAML syntax smoke over every yaml fence in docs/**/*.md (rule, "
-            "Alertmanager and Kubernetes examples included); no deployed consumer reads "
-            "these examples. The conf.d examples are read through parse-tree by this "
-            "lint's conf.d path; the CRD examples by run_crd, which is itself a DEBT D "
-            "point (still PyYAML, moves to da-crdecode)"),
     ('scripts/tools/lint/check_metric_dictionary.py', 'check_dictionary_coverage'):
         (1, "metric-dictionary.yaml, the repo's own metric catalogue read only by Python tools"),
     ('scripts/tools/lint/check_metric_dictionary.py', 'load_dictionary_golden_rules'):
@@ -160,9 +154,4 @@ ALLOWED = {
         (1, 'the prefix-mapping file, a migration input read only by Python tools'),
 }
 
-DEBT = {
-    ('scripts/tools/lint/check_md_yaml_drift.py', 'MdYamlDriftChecker._looks_like_confd'):
-        (1, Reading.E),  # 由 #3416 處理
-    ('scripts/tools/lint/check_threshold_unit_sanity.py', '_collect'):
-        (2, Reading.E),  # 由 #3416 處理
-}
+DEBT: dict = {}

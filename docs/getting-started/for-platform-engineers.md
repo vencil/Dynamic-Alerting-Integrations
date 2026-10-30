@@ -447,7 +447,7 @@ helm repo add external-secrets https://charts.external-secrets.io
 helm install external-secrets external-secrets/external-secrets -n external-secrets --create-namespace
 ```
 
-```yaml
+```yaml {.k8s}
 # 2. 設定 SecretStore（連接 Vault）
 apiVersion: external-secrets.io/v1beta1
 kind: SecretStore

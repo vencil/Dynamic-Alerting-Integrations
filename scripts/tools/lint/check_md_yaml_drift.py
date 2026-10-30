@@ -1,25 +1,34 @@
 #!/usr/bin/env python3
 """check_md_yaml_drift.py — Markdown 內 YAML 範例與 Schema 漂移偵測
 
-掃描 docs/ 下 Markdown 文件中的 ```yaml 區塊，送入 tenant-config.schema.json 校驗。
-確保文件上的 YAML 範例永遠是合法配置，schema 變更時自動偵測漂移。
+掃描 docs/ 下 Markdown 文件中的 ```yaml 區塊：conf.d 範例送入 tenant-config /
+platform-defaults schema 校驗、內嵌的 k8s 物件送入真正的 CRD schema 校驗，並要求
+每個 ```yaml 區塊都是它的讀者讀得了的 YAML。確保文件上的 YAML 範例永遠是合法配置，
+schema 變更時自動偵測漂移。
 
 用法:
   python3 scripts/tools/lint/check_md_yaml_drift.py              # 顯示報告
   python3 scripts/tools/lint/check_md_yaml_drift.py --ci          # CI 模式（exit 1 if drift）
   python3 scripts/tools/lint/check_md_yaml_drift.py --verbose     # 顯示所有掃描的區塊
+  python3 scripts/tools/lint/check_md_yaml_drift.py --check fences|crd
 
-需要: pyyaml, jsonschema；schema 檢查另需 da-guard（$DA_GUARD_BINARY 或 $PATH）：
-文件裡的 conf.d 範例由 `da-guard parse-tree` 讀（ADR-036 §7 步驟 11），
-本工具不自己解析 conf.d 的 YAML。
+Every check reads the documented examples from ONE inventory
+(scripts/tools/_lib_doc_yaml_inventory.py, #3416): which fence is which file,
+which consumer reads it, its reading or its refusal, its declaration and its
+exemption are decided there and nowhere here. A fence says what it is with an
+attribute list (```` ```yaml {.confd} ````, ``{.k8s}``,
+``{.illustrative reason="…"}``, ``{.confd .expect-refused=<kind>}``,
+``{.confd .expect-invalid}``; the module docstring has the closed vocabulary).
+
+需要: jsonschema（schema / crd）；da-guard（$DA_GUARD_BINARY 或 $PATH：每個區塊
+預設由 `da-guard parse-tree` 讀）、da-crdecode（k8s 物件與 Helm values）、宣告了
+da-read 讀者的區塊另需 da-read。本工具不自己解析任何 YAML。
 """
 
 import json
 import os
-import re
 import sys
 import argparse
-import tempfile
 from pathlib import Path
 from typing import Dict, List, Tuple
 
@@ -31,14 +40,9 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
-import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 11: conf.d examples read by Go)
-import _lib_consumer_read  # noqa: E402  (ADR-036 §12: embedded k8s objects read kubectl's way)
-
-try:
-    import yaml
-except ImportError:
-    print("ERROR: pyyaml not installed. Run: pip install pyyaml", file=sys.stderr)
-    sys.exit(EXIT_CALLER_ERROR)
+import _lib_parse_tree  # noqa: E402
+import _lib_consumer_read  # noqa: E402
+import _lib_doc_yaml_inventory as inventory  # noqa: E402  (#3416: the one inventory)
 
 try:
     import jsonschema
@@ -46,41 +50,12 @@ except ImportError:
     # Import stays optional so `--help` and `--check fences` (which need no
     # schema at all) keep working in an env without it — the same reason
     # check_confd_schema.py injects the module lazily. The schema pass itself
-    # now REFUSES to run without it (see _require_jsonschema): this used to be
+    # REFUSES to run without it (see `run`): this used to be
     # `jsonschema = None  # Graceful degradation`, and because the hook's
     # additional_dependencies listed only pyyaml, that degradation meant the
     # schema check silently validated nothing on every run it ever did.
     jsonschema = None
 
-
-# A block carrying any of these top-level keys is a PLATFORM file
-# (`_defaults.yaml`) and is judged by platform-defaults.schema.json, which also
-# permits `tenants:` — so a doc that stacks L0 + a tenant block in one file
-# still routes correctly.
-PLATFORM_KEYS = {
-    "defaults", "state_filters", "optional_overrides", "profiles",
-    "max_metrics_per_tenant", "_routing_defaults", "_routing_enforced",
-}
-
-# Opt-out marker for a block that is WRONG ON PURPOSE — the `#### ❌` style
-# counter-example. Placed on the line above the fence:
-#
-#     <!-- md-yaml-drift: ignore — <reason> -->
-#     ```yaml
-#
-# A reason is mandatory (the regex will not match a bare `ignore`), and every
-# skip is printed in the report. Deliberately a marker in the DOC rather than a
-# filename list in this script: a list rots silently as docs move, and it hides
-# from the person reading the example why it is exempt. Exemptions must be
-# greppable — `git grep 'md-yaml-drift: ignore'` is the audit.
-IGNORE_RE = re.compile(r"<!--\s*md-yaml-drift:\s*ignore\s*[—\-:]\s*(\S.*?)\s*-->")
-
-# File-header comment naming a YAML file, e.g. `# conf.d/_defaults.yaml`.
-# Anchored at column 0: an indented `#` that merely mentions a filename in
-# passing is prose, and treating it as a boundary would sever a block
-# mid-mapping. Mirrors fileHeaderRe in the Go gate
-# (components/threshold-exporter/app/pkg/config/docs_defaults_sample_test.go).
-FILE_HEADER_RE = re.compile(r"^#.*\.ya?ml\b")
 
 # ── `--check crd` scope ──────────────────────────────────────────────────────
 # Where the vendored CRD schemas live. Produced by
@@ -112,47 +87,15 @@ BUILTIN_GROUPS = {
 }
 
 
-def _read_as_confd(texts: List[str]) -> List[Tuple[object, "str | None"]]:
-    """Each of *texts* read as a conf.d file: ``(content, None)``, or
-    ``(None, <parse-tree problem kind>)`` for one parse-tree cannot read.
-
-    One `da-guard parse-tree --inputs -` run over an empty scratch tree, each
-    text as its own tenant file there (ADR-036 §2: Go is the only YAML parser
-    of conf.d). Raises `_lib_parse_tree.ParseTreeError` (BinaryMissing
-    included) when da-guard cannot answer: the run is then unusable whole.
-    """
-    if not texts:
-        return []
-    names = [f"unit{i:06d}.yaml" for i in range(len(texts))]
-    with tempfile.TemporaryDirectory(prefix="md-yaml-drift-") as root:
-        lines = _lib_parse_tree.run_files_raw(
-            root, [(n, t.encode("utf-8")) for n, t in zip(names, texts)])
-    out: List[Tuple[object, "str | None"]] = []
-    for name, raw in zip(names, lines):
-        tree = _lib_parse_tree.tree_of(_lib_parse_tree.file_document(raw))
-        try:
-            out.append((tree.value(name), None))
-        except _lib_parse_tree.FileUnreadable as e:
-            out.append((None, e.kind))
-    return out
-
-
 class MdYamlDriftChecker:
     """掃描 Markdown 中的 YAML code blocks 並驗證 schema 合規性。"""
-
-    # Tenant-shaped markers: keys that only appear INSIDE a tenant's body, so a
-    # block carrying one is a tenant snippet even without a `tenants:` wrapper.
-    TENANT_CONFIG_MARKERS = {
-        "_thresholds", "_routing", "_silent_mode", "_state_maintenance",
-        "_routing_defaults", "_routing_enforced", "_threshold_mode",
-        "_write_mode", "_write_back_mode",
-    }
 
     def __init__(self, repo_root: str, verbose: bool = False):
         self.repo_root = Path(repo_root).resolve()
         self.verbose = verbose
         self.schema: Dict = {}
         self.platform_schema: Dict = {}
+        self._inventory = None
         self._load_schema()
 
     def _load_schema(self):
@@ -168,230 +111,113 @@ class MdYamlDriftChecker:
             except (json.JSONDecodeError, OSError) as e:
                 print(f"WARNING: Cannot load {name}: {e}", file=sys.stderr)
 
-    def _extract_yaml_blocks(self, filepath: Path,
-                             skipped: List[str] = None) -> List[Tuple[int, str]]:
-        """Extract ```yaml code blocks from a markdown file.
+    def inventory(self) -> "inventory.Inventory":
+        """The docs' inventory, built once. Raises when a reader cannot
+        answer (ParseTreeError / ConsumerReadError): nothing is judged then."""
+        if self._inventory is None:
+            self._inventory = inventory.build(self.repo_root)
+        return self._inventory
 
-        Returns list of (line_number, yaml_content) tuples. A block preceded by
-        an `md-yaml-drift: ignore — <reason>` marker is left out and, when
-        `skipped` is given, recorded there so the report can name it.
-        """
-        blocks = []
+    def _inventory_or_exit(self):
+        """(inventory, None), or (None, EXIT_CALLER_ERROR) after naming the
+        reader that did not answer."""
         try:
-            content = filepath.read_text(encoding="utf-8", errors="replace")
-        except OSError:
-            return blocks
-
-        in_yaml = False
-        ignoring = False   # inside a block an ignore marker exempted
-        block_start = 0
-        block_lines = []
-        lines = content.splitlines()
-
-        for i, line in enumerate(lines, 1):
-            stripped = line.strip()
-            if ignoring:
-                # Consume the exempted block wholly, so nothing inside it can be
-                # read as a fence and desynchronise the state machine.
-                if stripped == "```":
-                    ignoring = False
-                continue
-            if stripped in ("```yaml", "```yml") and not in_yaml:
-                # Look back to the first NON-BLANK line and test that for a
-                # marker. Deliberately unbounded rather than a fixed window: a
-                # two-line window silently lost the exemption when an author
-                # left two blank lines between the marker and the fence, and a
-                # marker that fails to apply is the worst outcome here — the
-                # block it was meant to exempt gets reported as a violation with
-                # no hint that a marker exists.
-                marker = None
-                for back in range(i - 2, -1, -1):
-                    prev = lines[back].strip()
-                    if not prev:
-                        continue
-                    marker = IGNORE_RE.search(prev)
-                    break
-                if marker:
-                    ignoring = True
-                    if skipped is not None:
-                        try:
-                            rel = str(filepath.relative_to(self.repo_root))
-                        except ValueError:
-                            rel = str(filepath)
-                        skipped.append(
-                            f"{rel.replace(os.sep, '/')}:{i} — {marker.group(1)}")
-                    continue
-                in_yaml = True
-                block_start = i
-                block_lines = []
-            elif stripped == "```" and in_yaml:
-                in_yaml = False
-                if block_lines:
-                    blocks.append((block_start, "\n".join(block_lines)))
-            elif in_yaml:
-                block_lines.append(line)
-
-        return blocks
-
-    @staticmethod
-    def _print_skipped(skipped: List[str]) -> None:
-        """Name every exempted block. A gate that silently drops inputs reads as
-        'covered everything' when it did not — so exemptions are always printed,
-        with the reason the marker had to supply."""
-        if not skipped:
-            return
-        print(f"Blocks exempted by marker:   {len(skipped)}")
-        for s in skipped:
-            print(f"    {s}")
-
-    @staticmethod
-    def _split_documented_files(block_lines: List[str]) -> List[Tuple[int, str]]:
-        """Split a fence that illustrates SEVERAL files into one segment per file.
-
-        Several docs teach inheritance by stacking `# L0 _defaults.yaml`,
-        `# L1 finance/_defaults.yaml` and a tenant file into ONE fence. Judged
-        whole, such a block is not even valid YAML (a repeated top-level key),
-        which says nothing about whether the documented config is right.
-
-        Returns (line_offset, text) pairs so a violation points at the offending
-        file rather than at the fence. Mirrors splitConcatenatedFiles in the Go
-        gate so the two extractors see the same units.
-        """
-        segments: List[Tuple[int, str]] = []
-        current: List[str] = []
-        start = 0
-        for i, line in enumerate(block_lines):
-            if FILE_HEADER_RE.match(line) and current:
-                segments.append((start, "\n".join(current)))
-                current, start = [], i
-            current.append(line)
-        if current:
-            segments.append((start, "\n".join(current)))
-        return segments
-
-    def _is_tenant_config(self, data) -> bool:
-        """Is this block a Vibe config example (platform file or tenant snippet)?
-
-        Widened beyond the tenant markers to include the PLATFORM keys: a block
-        that is plainly a `_defaults.yaml` (`defaults:` / `state_filters:` /
-        `optional_overrides:`) had no schema oracle at all before, so a typo'd
-        top-level key such as `state_flters` passed unnoticed — the Go loader is
-        non-strict and cannot see it either.
-
-        A bare top-level `tenants:` counts too. That widening was deferred once
-        because it surfaced 18 failures spanning four unrelated causes, and a
-        gate that cannot go green is how this one ended up parked. They were
-        since triaged individually: real defects fixed (a state filter given a
-        `_silent_mode` value; an email receiver with no `smarthost`; an unquoted
-        tenant threshold in the very doc that teaches schema validation); one
-        genuine `#### ❌` counter-example given an explicit ignore marker; and a
-        config model that was never implemented anywhere — `alerts.threshold` /
-        `receivers` / a `"_defaults"` pseudo-tenant / `_cluster`, zero
-        occurrences in Go structs, both schemas, every shipping conf.d and every
-        golden fixture — rewritten to the real shapes.
-        """
-        if not isinstance(data, dict):
-            return False
-        if "tenants" in data:
-            return True
-        for key in data:
-            if key in self.TENANT_CONFIG_MARKERS or key in PLATFORM_KEYS:
-                return True
-        # Nested under a tenant name (`tenants:` omitted in the snippet).
-        for value in data.values():
-            if isinstance(value, dict):
-                for key in value:
-                    if key in self.TENANT_CONFIG_MARKERS:
-                        return True
-        return False
+            return self.inventory(), None
+        except _lib_parse_tree.ParseTreeError as e:
+            print(f"ERROR: the documented YAML examples are read by `da-guard "
+                  f"parse-tree`, which did not answer: {e}", file=sys.stderr)
+        except _lib_consumer_read.ConsumerReadError as e:
+            print(f"ERROR: cannot read the docs' examples the way their consumer does "
+                  f"(da-crdecode for k8s objects, the way kubectl does; da-read for a "
+                  f"declared Prometheus / Alertmanager file): {e}", file=sys.stderr)
+        return None, EXIT_CALLER_ERROR
 
     def _route(self, data: Dict) -> Tuple[Dict, Dict, str]:
         """Pick the schema this block is actually governed by.
 
-        Three shapes, and using one schema for all of them is why this check
-        reported 38/38 violations while proving nothing: a `_defaults.yaml`
-        block judged against tenant-config.schema.json fails on
-        `'tenants' is a required property`, which is a statement about the
+        Three shapes (`inventory.confd_kind`), and using one schema for all of
+        them is why this check reported 38/38 violations while proving nothing:
+        a `_defaults.yaml` block judged against tenant-config.schema.json fails
+        on `'tenants' is a required property`, which is a statement about the
         WRONG contract.
         """
-        keys = set(data)
-        if keys & PLATFORM_KEYS:
-            return self.platform_schema, data, "platform"
-        if "tenants" in keys:
-            return self.schema, data, "tenant-file"
+        kind = inventory.confd_kind(data)
+        if kind == "platform":
+            return self.platform_schema, data, kind
+        if kind == "tenant-file":
+            return self.schema, data, kind
         # A bare tenant body (`_routing:` etc. with no wrapper). Wrap it in a
         # synthetic tenant so it is judged by the real per-tenant subschema
         # instead of being skipped.
         return self.schema, {"tenants": {"example-tenant": data}}, "fragment"
 
     def run_fences(self) -> int:
-        """Fence hygiene: every ```yaml block in docs/ must parse as YAML.
+        """Fence hygiene: every ```yaml block in docs/ is one its reader reads.
 
-        Deliberately a SEPARATE check from the schema pass below, and wired as
-        its own hook, because the two differ on every axis that matters:
+        Every error the inventory finds is reported here: an attribute outside
+        the closed vocabulary or written without braces, the retired comment
+        marker, a declared consumer refusing its block, an `.expect-refused`
+        that does not hold, and an undeclared block the conf.d reader
+        (parse-tree, the default reader) refuses for a reason other than a top
+        level that is not a mapping — a syntax error included (a mislabelled
+        directory tree, shell mixed into a manifest).
 
-        * Coverage — this rule speaks for every fenced yaml block in docs/
-          that is not exempted by an explicit ignore marker; the schema pass
-          speaks only for the subset that reads as tenant config. Both totals
-          are printed by the run itself (scanned / exempted / config units),
-          so neither is restated here.
+        Deliberately a SEPARATE check from the schema pass, and wired as its
+        own hook, because the two differ on every axis that matters:
+
+        * Coverage — this rule speaks for every fenced yaml block in docs/;
+          the schema pass speaks only for the conf.d examples. Both totals are
+          printed by the run itself, so neither is restated here.
         * Concern — this one asks "is the fence honestly labelled?", the other
           asks "does this config match the contract?". Bundling them lets one
           mislabelled directory-tree diagram block an unrelated schema fix.
 
-        Parsed with `safe_load_all`, not `safe_load`: a multi-document stream
-        (`---`-separated k8s manifests, a frontmatter example) is perfectly
-        valid YAML, and four blocks in docs/ are exactly that. Using the
-        single-document loader here would report them as broken and push
-        authors toward splitting legitimate manifests apart.
-
-        ⚠️ Known blind spot, stated rather than papered over: "parses as YAML"
-        is NECESSARY but not SUFFICIENT for an honest fence tag. A fence holding
-        only shell, with no `key:` anywhere, is a valid YAML *scalar* and passes
+        ⚠️ Known blind spot, stated rather than papered over: "a reader reads
+        it" is NECESSARY but not SUFFICIENT for an honest fence tag. A fence
+        holding only shell, with no `key:` anywhere, is a YAML *scalar*: its
+        top level is not a mapping, which tells no conf.d file, so it passes
         here. What it does catch is the mislabelling that actually occurs in
-        this repo — directory-tree diagrams, and shell mixed into the same fence
-        as a manifest — because those contain colons that collide with the
-        surrounding structure. Closing the gap fully needs language detection,
-        a different tool with a different false-positive profile; deliberately
-        not attempted. Pinned by tests/lint/test_check_md_yaml_fences.py.
+        this repo — directory-tree diagrams, and shell mixed into the same
+        fence as a manifest — because those contain colons that collide with
+        the surrounding structure. Pinned by tests/lint/test_check_md_yaml_fences.py.
         """
-        issues = []
-        skipped: List[str] = []
-        total = 0
-        docs_dir = self.repo_root / "docs"
-        for md_file in sorted(docs_dir.rglob("*.md")):
-            rel_path = str(md_file.relative_to(self.repo_root)).replace(os.sep, "/")
-            for line_num, yaml_content in self._extract_yaml_blocks(md_file, skipped):
-                total += 1
-                try:
-                    list(yaml.safe_load_all(yaml_content))
-                except yaml.YAMLError as e:
-                    first = str(e).splitlines()[0]
-                    issues.append((rel_path, line_num, first))
-                    continue
-                if self.verbose:
-                    print(f"  OK   {rel_path}:{line_num}")
+        inv, rc = self._inventory_or_exit()
+        if inv is None:
+            return rc
+        errors = inv.errors()
+        by_consumer: Dict[str, int] = {}
+        for u in inv.units:
+            if u.exemption is not None or u.errors:
+                continue
+            label = (f"{u.consumer} ({u.how})" if u.consumer
+                     else "no consumer (parse-tree)" if u.read
+                     else "no consumer, not a mapping")
+            by_consumer[label] = by_consumer.get(label, 0) + 1
+            if self.verbose:
+                print(f"  OK   {u.where} ({label})")
 
         print("=" * 60)
         print("MARKDOWN YAML FENCE HYGIENE")
         print("=" * 60)
-        print(f"Fenced yaml blocks scanned:  {total}")
-        self._print_skipped(skipped)
-        print(f"Blocks that do not parse:    {len(issues)}")
+        print(f"Documented units scanned:    {len(inv.units)}")
+        for label in sorted(by_consumer):
+            print(f"  {label:<36} {by_consumer[label]}")
+        inventory.print_exemptions(inv)
+        print(f"Fence errors:                {len(errors)}")
         print()
-        if not issues:
-            print("✓ Every ```yaml block in docs/ parses as YAML.")
+        if not errors:
+            print("✓ Every ```yaml block in docs/ is read by its reader.")
             return EXIT_OK
-        for rel_path, line_num, err in issues:
-            print(f"  [FENCE] {rel_path}:{line_num}")
+        for path, line, err in errors:
+            print(f"  [FENCE] {path}:{line}")
             print(f"          {err}")
         print()
-        print("A ```yaml fence that is not YAML misleads readers who copy it and")
-        print("breaks syntax highlighting. Fix by re-tagging the fence to what it")
-        print("actually is (```text for directory trees, ```bash for shell), or by")
-        print("splitting mixed content into one fence per language. Separate k8s")
-        print("manifests inside ONE block with `---` (a multi-document stream is")
-        print("valid here and is what `kubectl apply -f` expects).")
+        print("A ```yaml fence its reader cannot read misleads readers who copy it.")
+        print("Fix the text; re-tag a fence that is not YAML (```text for a directory")
+        print("tree, ```bash for shell); or declare what the block is, with attributes")
+        print("after the language: ```yaml {.k8s} (a `---`-separated manifest),")
+        print("{.confd .expect-refused=<kind>} (a refused file shown on purpose) or")
+        print("{.illustrative reason=\"…\"} (no gate judges it; the reason is printed).")
         return EXIT_VIOLATION
 
     def run_crd(self) -> int:
@@ -401,6 +227,11 @@ class MdYamlDriftChecker:
         the API server reject it (#1353: an ArgoCD Application with no
         `spec.project`, which the CRD makes required). Nothing covered it — the
         original was found by a human doing a category sweep by hand.
+
+        The objects are the inventory's `k8s` units — declared `{.k8s}`, or an
+        undeclared mapping with a string `apiVersion` and `kind` — as kubectl
+        reads them (da-crdecode, ADR-036 §12). A unit kubectl's reading
+        refuses is an inventory error, reported by `--check fences`.
 
         ⛔ A missing schema is a VIOLATION, not a skip. That is the whole design
         of this pass. Measured three times over while building it: the stripped
@@ -420,40 +251,22 @@ class MdYamlDriftChecker:
 
         False positives were the stated risk (docs abbreviate). Measured at
         adoption: 31 in-scope objects, 4 violations, all four genuine. The
-        shared `md-yaml-drift: ignore — <reason>` marker is the escape hatch if
-        one ever appears; no block needed it.
+        escape hatch if one ever appears is `{.illustrative reason="…"}`; no
+        block needed it.
         """
-        base = self.repo_root.joinpath(*CRD_SCHEMA_DIR)
-        issues: List[Dict] = []
-        skipped: List[str] = []
-        checked = 0
-        out_of_scope: Dict[str, int] = {}
-        docs_dir = self.repo_root / "docs"
-
-        # ADR-036 §12 (#3206): an embedded object is read the way kubectl
-        # reads it (da-crdecode), not with PyYAML. Only a fence whose text
-        # holds `apiVersion` can yield an object this pass looks at (it needs
-        # a string `apiVersion` key), so only those are handed over — one
-        # da-crdecode run per fence, a few at a time. A fence kubectl's
-        # reading refuses is skipped: fence hygiene is `--check fences`' job.
-        # No da-crdecode is a caller error, never a PyYAML reading.
-        fences: List[Tuple[str, int, str]] = []
-        for md_file in sorted(docs_dir.rglob("*.md")):
-            rel_path = str(md_file.relative_to(self.repo_root)).replace(os.sep, "/")
-            for line_num, yaml_content in self._extract_yaml_blocks(md_file, skipped):
-                if "apiVersion" in yaml_content:
-                    fences.append((rel_path, line_num, yaml_content))
-        try:
-            readings = _lib_consumer_read.kubernetes_text_documents_each(
-                [f[2] for f in fences], keep_refusals=True)
-        except _lib_consumer_read.ConsumerReadError as e:
-            print(f"ERROR: cannot read the docs' k8s objects the way kubectl does: {e}",
+        if jsonschema is None:
+            print("ERROR: jsonschema not installed — the CRD check cannot run.",
                   file=sys.stderr)
             return EXIT_CALLER_ERROR
-        for (rel_path, line_num, _text), documents in zip(fences, readings):
-            if isinstance(documents, _lib_consumer_read.ConsumerReadError):
-                continue  # fence hygiene is `--check fences`' job
-            for data in documents:
+        inv, rc = self._inventory_or_exit()
+        if inv is None:
+            return rc
+        base = self.repo_root.joinpath(*CRD_SCHEMA_DIR)
+        issues: List[Dict] = []
+        checked = 0
+        out_of_scope: Dict[str, int] = {}
+        for unit in inv.judged("k8s"):
+            for data in unit.documents:
                 if not isinstance(data, dict):
                     continue
                 api_version, kind = data.get("apiVersion"), data.get("kind")
@@ -461,17 +274,17 @@ class MdYamlDriftChecker:
                     continue
                 group, _, version = api_version.rpartition("/")
                 if group in NON_CLUSTER_GROUPS:
-                    out_of_scope[f"{api_version} {kind} (not a cluster object)"] = \
-                        out_of_scope.get(f"{api_version} {kind} (not a cluster object)", 0) + 1
+                    label = f"{api_version} {kind} (not a cluster object)"
+                    out_of_scope[label] = out_of_scope.get(label, 0) + 1
                     continue
                 if group in BUILTIN_GROUPS:
-                    out_of_scope[f"{api_version} {kind} (built-in, out of scope)"] = \
-                        out_of_scope.get(f"{api_version} {kind} (built-in, out of scope)", 0) + 1
+                    label = f"{api_version} {kind} (built-in, out of scope)"
+                    out_of_scope[label] = out_of_scope.get(label, 0) + 1
                     continue
                 schema_path = base / group / f"{kind}_{version}.json"
                 if not schema_path.exists():
                     issues.append({
-                        "file": rel_path, "line": line_num,
+                        "file": unit.path, "line": unit.line,
                         "what": f"{api_version} {kind}",
                         "error": (f"no vendored schema at "
                                   f"{'/'.join(CRD_SCHEMA_DIR)}/{group}/{kind}_{version}.json "
@@ -491,22 +304,24 @@ class MdYamlDriftChecker:
                 for err in errors:
                     where = "/".join(str(x) for x in err.path) or "<root>"
                     issues.append({
-                        "file": rel_path, "line": line_num,
+                        "file": unit.path, "line": unit.line,
                         "what": f"{api_version} {kind}",
                         "error": f"{where}: {err.message}",
                     })
                 if self.verbose and not errors:
-                    print(f"  OK   {rel_path}:{line_num} ({api_version} {kind})")
+                    print(f"  OK   {unit.where} ({api_version} {kind})")
 
         print("=" * 60)
         print("MARKDOWN EMBEDDED CRD OBJECTS")
         print("=" * 60)
         print(f"CRD objects validated:       {checked}")
-        self._print_skipped(skipped)
+        inventory.print_exemptions(inv)
         # Printed, never silent: a gate that drops inputs quietly reads as
         # "covered everything" when it did not.
         for label in sorted(out_of_scope):
             print(f"  out of scope: {label:<52} {out_of_scope[label]}")
+        unread = [u for u in inv.units if u.consumer == "k8s" and u.errors]
+        print(f"k8s units not judged here:   {len(unread)} (inventory errors: --check fences)")
         print(f"Schema violations:           {len(issues)}")
         print()
         if not issues:
@@ -521,74 +336,6 @@ class MdYamlDriftChecker:
         print("example against the CRD, or re-vendor the schema if upstream really")
         print("changed (`make crd-schemas`, then review the diff).")
         return EXIT_VIOLATION
-
-    def iter_config_units(self):
-        """Yield every documented config unit as (rel_path, line, data).
-
-        One fence can document several files, and one file can be a
-        multi-document stream, so a "unit" is a single YAML document inside a
-        single documented file — not a fence.
-
-        Each documented file is read as conf.d is read (ADR-036 §7 step 11,
-        #3206): written into a scratch tree and read by `da-guard parse-tree`
-        (one batch for every unit), so a unit is what the exporter and the
-        route generator read — tenant ids are the keys' text (`010:` and `8:`
-        are two tenants, both bodies judged), `send_resolved: yes` is the
-        string "yes". This tool reads no conf.d YAML itself.
-
-        A file parse-tree cannot read is NOT a unit: a syntax error is the
-        `--check fences` pass's job (a mislabelled directory-tree diagram must
-        not fail the schema gate for a reason that has nothing to do with
-        schemas), and a top level that is not a mapping is no config file.
-
-        ⛔ Any other refusal — more than one document, a repeated key, a tag
-        outside the allowed set — is a file the exporter refuses whole. When
-        that file is a conf.d example it is a VIOLATION (`self._unreadable`,
-        reported by `run`): a reader who copies it gets a file that is not
-        served. A deliberate counter-example carries the ignore marker with a
-        reason. Whether such a file is a conf.d example is asked of its
-        content, which parse-tree cannot give: `_looks_like_confd` reads it
-        leniently (PyYAML, as the fence and CRD passes read every fence) and
-        applies `_is_tenant_config` to each document — a classification only,
-        nothing of it is judged. So a `---`-separated k8s manifest or a
-        frontmatter example is no conf.d example and passes, as before.
-        """
-        docs_dir = self.repo_root / "docs"
-        self._skipped = []
-        self._unreadable = []
-        units = []
-        for md_file in sorted(docs_dir.rglob("*.md")):
-            rel_path = str(md_file.relative_to(self.repo_root)).replace(os.sep, "/")
-            for line_num, yaml_content in self._extract_yaml_blocks(md_file, self._skipped):
-                for offset, text in self._split_documented_files(yaml_content.split("\n")):
-                    # `line_num` is the ```yaml fence itself; +1 lands on the
-                    # segment's first real line. Matches the Go gate's
-                    # `b.line + s.offset + 1` exactly — the two gates
-                    # reporting the same block at different line numbers is
-                    # the first symptom of their extractors drifting apart.
-                    units.append((rel_path, line_num + offset + 1, text))
-        for (rel_path, line, text), (data, problem) in zip(
-                units, _read_as_confd([text for _r, _l, text in units])):
-            if problem is not None:
-                # Not named: a syntax error is the fence pass's; a top level
-                # that is not a mapping is no config file's shape (a list, a
-                # shell line), as it never was.
-                if (problem not in ("syntax_error", "top_level_not_mapping")
-                        and self._looks_like_confd(text)):
-                    self._unreadable.append((rel_path, line, problem))
-                continue
-            if self._is_tenant_config(data):
-                yield rel_path, line, data
-
-    def _looks_like_confd(self, text: str) -> bool:
-        """Is a file parse-tree refused a conf.d example? Classification
-        only (see `iter_config_units`). A text PyYAML cannot read either is
-        taken as one (fail-closed: its marker says what it is)."""
-        try:
-            docs = list(yaml.safe_load_all(text))
-        except yaml.YAMLError:
-            return True
-        return any(self._is_tenant_config(d) for d in docs)
 
     def _receiver_checks(self, data: Dict, kind: str) -> List[Tuple[Dict, Dict, str]]:
         """Hold every `receiver:` to the one contract the generator enforces.
@@ -633,7 +380,16 @@ class MdYamlDriftChecker:
         return out
 
     def run(self) -> int:
-        """Execute the schema-conformance pass."""
+        """Execute the schema-conformance pass over the inventory's conf.d units.
+
+        A unit is a conf.d example when it is declared `{.confd}` or, undeclared,
+        when parse-tree's reading has the shape of one (`inventory.is_confd_example`).
+        Every unit of a `{.confd .expect-invalid}` fence must yield at least
+        one violation, and none of its violations is reported; a unit that
+        yields none is the violation (#3416 review: judged per fence, one wrong
+        unit hid every violation of a second, really broken one). A fence
+        that documents a correct file beside the counter-example is two fences.
+        """
         if jsonschema is None:
             print("ERROR: jsonschema not installed — the schema check cannot run. "
                   "Install it (pip install jsonschema) or invoke --check fences.",
@@ -662,13 +418,14 @@ class MdYamlDriftChecker:
             print(f"ERROR: docs/schemas: {e}", file=sys.stderr)
             return EXIT_CALLER_ERROR
 
-        try:
-            units = list(self.iter_config_units())
-        except _lib_parse_tree.ParseTreeError as e:
-            print(f"ERROR: the documented config examples are read by `da-guard "
-                  f"parse-tree`, which did not answer: {e}", file=sys.stderr)
-            return EXIT_CALLER_ERROR
-        for rel_path, line_num, data in units:
+        inv, rc = self._inventory_or_exit()
+        if inv is None:
+            return rc
+        # an `.expect-invalid` unit → the violations found in it (on purpose)
+        expected: Dict[Tuple[str, int], List[str]] = {}
+        first_line: Dict[Tuple[str, int], str] = {}
+        for unit in inv.judged("confd"):
+            data = unit.documents[0]
             schema, doc, kind = self._route(data)
             by_kind[kind] = by_kind.get(kind, 0) + 1
             checked += 1
@@ -685,56 +442,69 @@ class MdYamlDriftChecker:
                 checks.append((self.schema, {"tenants": data["tenants"]},
                                "platform+tenants"))
             checks.extend(self._receiver_checks(data, kind))
+            if unit.expect_invalid:
+                expected.setdefault((unit.path, unit.line), [])
+                first_line[(unit.path, unit.line)] = unit.text.split("\n", 1)[0]
             for active_schema, active_doc, active_kind in checks:
                 try:
                     jsonschema.validate(active_doc, active_schema,
                                         registry=registry)
                 except jsonschema.ValidationError as e:
+                    if unit.expect_invalid:
+                        expected[(unit.path, unit.line)].append(
+                            f"{unit.where} ({active_kind}): {e.message}")
+                        continue
                     issues.append({
-                        "file": rel_path, "line": line_num, "kind": active_kind,
+                        "file": unit.path, "line": unit.line, "kind": active_kind,
                         "error": e.message,
                     })
                 except jsonschema.SchemaError as e:
                     print(f"ERROR: schema itself is invalid: {e}", file=sys.stderr)
                     return EXIT_CALLER_ERROR
             if self.verbose:
-                print(f"  OK   {rel_path}:{line_num} ({kind})")
+                print(f"  OK   {unit.where} ({kind})")
+        for (path, line), found in sorted(expected.items()):
+            if not found:
+                issues.append({
+                    "file": path, "line": line, "kind": "expect-invalid",
+                    "error": (f"the fence is declared {{.confd .expect-invalid}}, but this "
+                              f"unit ({first_line[(path, line)]!r}) meets its schema: every "
+                              "unit of such a fence must be wrong. A correct file shown "
+                              "beside the counter-example goes in a fence of its own; a "
+                              "block that only shows a reading is "
+                              "{.illustrative reason=\"…\"}"),
+                })
 
+        not_judged = [u for u in inv.units
+                      if u.errors and (u.consumer in (None, "confd"))]
         print("=" * 60)
         print("MARKDOWN YAML DRIFT CHECK")
         print("=" * 60)
         print(f"Config units checked:        {checked}")
-        self._print_skipped(getattr(self, "_skipped", []))
-        # #3206: a conf.d example the exporter refuses whole is a violation
-        # of its own (it has no content to judge against a schema).
-        unreadable = [{"file": rel_path, "line": line_num, "kind": problem,
-                       "error": f"da-guard parse-tree cannot read this conf.d example "
-                                f"({problem}); the exporter refuses such a file whole"}
-                      for rel_path, line_num, problem in getattr(self, "_unreadable", [])]
+        inventory.print_exemptions(inv)
         for kind in sorted(by_kind):
             print(f"  {kind:<24} {by_kind[kind]}")
-        print(f"Unreadable conf.d examples:  {len(unreadable)}")
+        print(f"Counter-example units (.expect-invalid): {len(expected)}")
+        for (path, line), found in sorted(expected.items()):
+            if found:
+                print(f"    {path}:{line} — {len(found)} violation(s) on purpose")
+        print(f"Units not judged here:       {len(not_judged)} "
+              "(inventory errors: --check fences)")
         print(f"Schema violations:           {len(issues)}")
         print()
 
-        if not issues and not unreadable:
+        if not issues:
             print("✓ Every documented config example matches its schema.")
             return EXIT_OK
-        for issue in unreadable:
-            print(f"  [UNREADABLE] {issue['file']}:{issue['line']} ({issue['kind']})")
-            print(f"               {issue['error']}")
         for issue in issues:
             print(f"  [SCHEMA] {issue['file']}:{issue['line']} ({issue['kind']})")
             print(f"           {issue['error']}")
         print()
-        if unreadable:
-            print("An unreadable example: fix it so it is one config file the exporter")
-            print("reads, or — when it shows refused input on purpose — mark it")
-            print("`<!-- md-yaml-drift: ignore — <reason> -->` on the line above the fence.")
         print("Fix the example, or the schema if the contract genuinely changed.")
         print("Note which contract the block was judged against — a `_defaults.yaml`")
         print("is governed by platform-defaults.schema.json, a tenant snippet by")
-        print("tenant-config.schema.json.")
+        print("tenant-config.schema.json. A counter-example wrong on purpose is")
+        print("declared ```yaml {.confd .expect-invalid}.")
         return EXIT_VIOLATION
 
 
@@ -748,8 +518,9 @@ def main():
     parser.add_argument("--repo-root", default=".", help="Repository root (default: .)")
     parser.add_argument(
         "--check", choices=("schema", "fences", "crd"), default="schema",
-        help="Which check to run: 'schema' (default; tenant-config blocks vs "
-             "JSON Schema), 'fences' (every ```yaml block in docs/ must parse), "
+        help="Which check to run: 'schema' (default; conf.d examples vs "
+             "JSON Schema), 'fences' (every ```yaml block in docs/ is read by its "
+             "reader, and every fence attribute is one this tool knows), "
              "or 'crd' (every embedded k8s object vs its real CRD schema). "
              "They are separate hooks so one cannot mask the other.")
     args = parser.parse_args()
