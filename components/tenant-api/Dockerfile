@@ -42,17 +42,19 @@ WORKDIR /src
 COPY components/tenant-api/ components/tenant-api/
 COPY components/threshold-exporter/app/ components/threshold-exporter/app/
 
-WORKDIR /src/components/tenant-api
+# The build flags live in ONE place, scripts/ops/go_build.sh (#3425): the
+# image, the tests and the release binaries are built the same way. The root
+# .dockerignore re-includes scripts/ops/ for this COPY.
+COPY scripts/ops/go_build.sh scripts/ops/go_build.sh
 ARG TARGETOS TARGETARCH
 # The version `tenant-api state show` / `config check` print as
 # tenant_api_version (ADR-036 §12): release.yaml passes the tenant-api/v* tag
 # (as `v<version>`, the image tag), the way da-tools' build.sh sets
 # main.Version on da-guard. A local build keeps "(devel)".
 ARG VERSION="(devel)"
-RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build \
-    -ldflags="-s -w -X main.version=${VERSION}" \
-    -o /tenant-api \
-    ./cmd/server
+RUN sh scripts/ops/go_build.sh -X "main.version=${VERSION}" \
+    --goos "${TARGETOS}" --goarch "${TARGETARCH}" \
+    components/tenant-api ./cmd/server /tenant-api
 
 # ── Final stage ──────────────────────────────────────────────────────────────
 # alpine + git: required because gitops/writer.go shells out to `git`.

@@ -25,7 +25,10 @@
 services:
   threshold-exporter:
     build:
-      context: ../../components/threshold-exporter/app
+      # Repo root: the builder runs scripts/ops/go_build.sh (#3425);
+      # Dockerfile.dockerignore next to the Dockerfile narrows the context.
+      context: ../..
+      dockerfile: components/threshold-exporter/app/Dockerfile
     volumes:
       # Driver writes new tenant YAMLs here mid-run; exporter watches
       # via its existing fsnotify path. Bind-mount over a Compose
@@ -102,7 +105,9 @@ services:
 
   receiver:
     build:
-      context: ./receiver
+      # Repo root, as the exporter's above (#3425).
+      context: ../..
+      dockerfile: tests/e2e-bench/receiver/Dockerfile
     expose:
       - "5001"
 

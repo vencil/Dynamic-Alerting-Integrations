@@ -70,9 +70,9 @@ func requireOrSkip(t *testing.T, why string) {
 }
 
 // inventoryDaGuard is $DA_GUARD_BINARY when set (relative to the repository
-// root: `go test` runs in the package directory), else one CGO_ENABLED=0
-// `go build` of ./cmd/da-guard into a temporary directory (#3174: the shipped
-// shape).
+// root: `go test` runs in the package directory), else one build of
+// ./cmd/da-guard into a temporary directory through scripts/ops/go_build.sh,
+// the one place the build flags are written (#3425: the shipped shape).
 func inventoryDaGuard(root string) (string, error) {
 	if p := strings.TrimSpace(os.Getenv("DA_GUARD_BINARY")); p != "" {
 		if !filepath.IsAbs(p) {
@@ -85,11 +85,10 @@ func inventoryDaGuard(root string) (string, error) {
 		return "", err
 	}
 	out := filepath.Join(dir, "da-guard")
-	cmd := exec.Command("go", "build", "-buildvcs=false", "-o", out, "./cmd/da-guard")
-	cmd.Dir = filepath.Join(root, "components", "threshold-exporter", "app")
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+	cmd := exec.Command("sh", filepath.Join(root, "scripts", "ops", "go_build.sh"),
+		filepath.Join(root, "components", "threshold-exporter", "app"), "./cmd/da-guard", out)
 	if b, err := cmd.CombinedOutput(); err != nil {
-		return "", fmt.Errorf("go build da-guard: %v: %s", err, strings.TrimSpace(string(b)))
+		return "", fmt.Errorf("build da-guard: %v: %s", err, strings.TrimSpace(string(b)))
 	}
 	return out, nil
 }

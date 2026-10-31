@@ -62,8 +62,9 @@ var (
 // daGuardBinary is the da-guard the Python generator runs: $DA_GUARD_BINARY
 // when set (a relative path is relative to the repository root — `go test`
 // runs in the package directory, so it cannot mean the shell's directory),
-// else one `go build` of components/threshold-exporter/app's cmd/da-guard
-// per test binary (into a directory removed with the process's temp files).
+// else one build of components/threshold-exporter/app's cmd/da-guard per test
+// binary through scripts/ops/go_build.sh (into a directory removed with the
+// process's temp files).
 // requireOrSkip when neither works.
 func daGuardBinary(t *testing.T) string {
 	t.Helper()
@@ -82,16 +83,16 @@ func daGuardBinary(t *testing.T) string {
 			return
 		}
 		out := filepath.Join(dir, "da-guard")
-		cmd := exec.Command("go", "build", "-buildvcs=false", "-o", out, "./cmd/da-guard")
-		cmd.Dir = filepath.Join(root, "components", "threshold-exporter", "app")
-		// #3174: the shipped shape (CGO_ENABLED=0, as build.sh / release.yaml).
-		// A cgo build gives every OS thread an RLIMIT_STACK-sized pthread
-		// stack that counts against the judgement's RLIMIT_DATA, so the
-		// generator's memory limit would measure thread count, not the
-		// judgement (tests/_da_guard_build.py).
-		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+		// #3425: the shipped shape — the build flags live only in
+		// scripts/ops/go_build.sh. Its CGO_ENABLED=0 is load-bearing here
+		// (#3174): a cgo build gives every OS thread an RLIMIT_STACK-sized
+		// pthread stack that counts against the judgement's RLIMIT_DATA, so
+		// the generator's memory limit would measure thread count, not the
+		// judgement.
+		cmd := exec.Command("sh", filepath.Join(root, "scripts", "ops", "go_build.sh"),
+			filepath.Join(root, "components", "threshold-exporter", "app"), "./cmd/da-guard", out)
 		if b, err := cmd.CombinedOutput(); err != nil {
-			daGuardErr = "go build da-guard: " + err.Error() + ": " + strings.TrimSpace(string(b))
+			daGuardErr = "build da-guard: " + err.Error() + ": " + strings.TrimSpace(string(b))
 			return
 		}
 		daGuardPath = out

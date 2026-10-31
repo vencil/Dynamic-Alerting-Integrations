@@ -3493,6 +3493,7 @@ GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     "validate.yaml": {
         ("validate", "requirements/**"),
         ("validate", "scripts/ops/_verify_download.sh"),
+        ("validate", "scripts/ops/go_build.sh"),
         ("validate", "scripts/tools/**"),
     },
 }

@@ -38,7 +38,8 @@ updated_at: 2026-10-30
 - **2026-10-28 修訂**：決定 tenant-api 管理設定的取得方式：Python 讀 tenant-api 自己的 `state show` 與 `config check` 子命令的輸出，它們用的是 server 的解析函式（§12）；Alertmanager 設定與 Kubernetes manifest 在 §12 分成兩列；§7 步驟 12 寫明分成哪幾件。同日再修訂：Prometheus 的規則檔與 `prometheus.yml` 都以權威讀法讀，代價是 da-tools 映像多帶服務探索的依賴；規則檔以上游 rulefmt 為準，vmalert 的相容性由 vmalert-tool 測試把關（§12、「已知限制與風險」）；§7 步驟 12 改為 AST lint 先上、以棘輪凍結既有呼叫點。
 - **2026-10-30 修訂**：遷移稽核指令與模仿 yaml.v3 的 Python loader 已刪除（§7 步驟 13），兩項升級前檢查寫進漸進遷移 playbook（§8）；§8 與附錄改寫為現況；決策不變。
 - **2026-10-30 再修訂**：§7 的步驟全部完成，狀態標為已實作；§7 與「實作順序」改寫為現況，刪去「進行中」與「下一步」的敘述；步驟 11 寫明文件裡的 yaml 範例改由單一清冊判定、以 fence 屬性宣告讀者；§3「快取的去留」的結果寫明量測時沒有先做串流輸出；決策不變。
-- **2026-10-30 三修**：§7 步驟 9 寫明 `batch_diagnose` 現在把 ConfigMap 落成樹、經共用出口讀取，租戶取 `da-guard effective` 的答案；決策不變。
+- **2026-10-30 第三次修訂**：「成本」與「已知限制與風險」的體積數字改為以出貨用的建置（`scripts/ops/go_build.sh`）重量的結果，附量測日期、commit 與指令；先前的數字所用的建置旗標與實際出貨的不同。決策不變。
+- **2026-10-30 第四次修訂**：§7 步驟 9 寫明 `batch_diagnose` 現在把 ConfigMap 落成樹、經共用出口讀取，租戶取 `da-guard effective` 的答案；決策不變。
 
 ## 摘要
 
@@ -630,7 +631,15 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 - **判定成本與它的快取**：每份檔在解碼前多一次判定。exporter 以檔案內容的 SHA-256 保留判定結果（上限 8,192 筆，滿了整份清掉並記一行 DEBUG log），同一份內容不重判；冷啟動仍要逐檔判一次（實測 1000 份租戶檔的冷掃描 109 ms，全部命中時 70 ms）。一個程序遇到的不同內容多於上限時，快取一再清空、命中率趨近 0，成本退回無快取的那個數字，判定結果不受影響。讀不了的說明文字在 `parse-tree` 產生它的地方就限制在 512 bytes 以內：過長時保留開頭（行號與被拒的內容）與結尾（例如重複鍵的「first at line M」），中間省略；所以 exporter 的 log、tenant-api、da-guard 的報告與 `parse-tree` 的 JSON 是同一份文字。
 - **yaml.v3 的輸出格式改變**：寫 conf.d 的工具改由 Go 寫出後，空行、行尾註解對齊與引號樣式會變，客戶的 diff 會出現與這次修改無關的格式差異（§2）。
 - **快取保留**：產生器容器繼續跨請求快取解析結果，因為撤快取的條件不成立（§3「快取的去留」）。代價是快取、淘汰規則與快取大小的 metric 都要維護；冷啟動以批次單檔模式填滿，時間隨檔案數線性成長。
-- **映像體積代價**：`da-read prometheus` 要讀得了 repo 自己的 Prometheus 設定（它用 `kubernetes_sd_configs`），就得註冊全部服務探索，連帶編進各家雲端 SDK 與 Kubernetes client。`da-read` 從 15.9 MB 變成 79.5 MB（未壓縮 binary；以 Prometheus v3.15.0 對應的 Go 模組與 `CGO_ENABLED=0 go build -trimpath -ldflags='-s -w'` 建置，比較現有的 `da-read` 與加上 `config.Load`、服務探索註冊與 `rulefmt.Parse` 的版本）；以 `gzip -9` 壓縮後是 6.0 MB 變成 22.9 MB。大宗是服務探索：只呼叫 `config.Load` 的程式不註冊服務探索時 15.5 MB，註冊之後 77.0 MB；只呼叫 `rulefmt.Parse` 的程式 11.6 MB。換來的是 `prometheus.yml` 的讀法與 Prometheus 相同。
+- **映像體積代價**：`da-read prometheus` 要讀得了 repo 自己的 Prometheus 設定（它用 `kubernetes_sd_configs`），就得註冊全部服務探索，連帶編進各家雲端 SDK 與 Kubernetes client。大宗是服務探索，下面是 2026-10-30 在 commit `0634a81` 上的量測（linux/amd64；以出貨用的建置 `scripts/ops/go_build.sh` 建，即 `CGO_ENABLED=0 go build -trimpath -ldflags "-s -w"`；數字是未壓縮／`gzip -9` 後）：
+
+  | `da-read` 的版本 | 大小 |
+  |---|---|
+  | 現在的 `da-read`（讀 Alertmanager 設定、規則檔與 `prometheus.yml`） | 79.5 MB／22.9 MB |
+  | 同一份原始碼，拿掉服務探索的註冊（`prometheus.go` 裡匯入 `discovery/install` 的那一行） | 22.8 MB／8.4 MB |
+  | 只讀 Alertmanager 設定、還沒有 `prometheus` 與 `prometheus-rules` 子命令的版本（commit `85050493`） | 15.9 MB／6.0 MB |
+
+  換來的是 `prometheus.yml` 的讀法與 Prometheus 相同。
 - **取得 state 引用需要 tenant-api 本身**：線上要能 `kubectl exec` 進 tenant-api 的 pod（權限比 `get configmap` 大，與 `state restore` 相同）；離線讀備份要能以 docker 跑部署中的 tenant-api 映像。兩者都沒有的站點取不到 state 引用，`offboard_tenant` 只能加 `--skip-state-check` 執行。有站點回報這種情境時，才在 tenant-api 模組裡另建一支呼叫同一組解析函式的 binary 打包進 da-tools，並比照 amtool 加版本釘值測試。
 - **升級 yaml.v3 基底帶進的寫法改變**：基底升級到上游 v3.0.5 時，以固定語料比對新舊基底，讀法沒有差異；寫法有一處不同：以換行開頭的字串寫成 literal block（`|`）時，舊基底漏寫開頭的空行，讀回少了那個換行，新基底照實寫出。影響 tenant-api 的兩處：合併 custom alerts 時，這種字串過去寫成雙引號，現在寫成 literal block，兩者讀回是同一個字串；部分更新遇到開頭有空行的 block scalar，過去因重新輸出會改掉它而拒收（`not_round_trippable`），現在重新輸出不變，照常寫入。之後再升級上游版本，同樣先以固定語料比對（§11）。
 - **渲染結果比對無法歸因**：§8 的比對指出結果哪裡變了，不指出是哪一項讀法造成的。
@@ -653,7 +662,7 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 
 ## 成本
 
-本節的量測都在產生器改讀 `parse-tree` 之前，產生器當時以 PyYAML 讀檔；改讀之後的樣本見 §3「快取的去留」。
+本節產生器與寫入判定的量測都在產生器改讀 `parse-tree` 之前，產生器當時以 PyYAML 讀檔；改讀之後的樣本見 §3「快取的去留」。
 
 語意層（產生器，2026-10-09 實測）：
 
@@ -663,7 +672,18 @@ Go 端單一判定、單一寫者與 conf.d 以外 YAML 的改動完成後消失
 | 解析單一檔案 | 0.47 ms |
 | Python 啟動 | 0.11 秒、25 MB |
 | 從 git 取出 1000 個檔 | 0.21 秒、12 MB |
-| 映像大小（壓縮後，amd64） | da-tools 36.9 MB；tenant-api 14.0 MB |
+
+映像裡的 Go binary（2026-10-30 在 commit `0634a81` 上實測，linux/amd64）：以出貨用的建置 `scripts/ops/go_build.sh` 建（`CGO_ENABLED=0 go build -trimpath -ldflags "-s -w"`；da-tools 映像、tenant-api 映像與 release 的離線 binary 都經這支腳本建），量未壓縮與 `gzip -9` 後的大小。這裡只量 binary，不含 base image 與 Python 的層；整個映像壓縮後的大小不在這次量測裡。`0634a81` 是被量的原始碼；那個版本還沒有這支腳本，重量時在含有 `scripts/ops/go_build.sh` 的版本上建（要量 `0634a81` 本身，先把腳本複製出來再切換），例如 `sh scripts/ops/go_build.sh --goos linux --goarch amd64 components/da-read . /tmp/da-read`，再 `gzip -9 -c /tmp/da-read | wc -c`。
+
+| binary | 未壓縮 | `gzip -9` 後 |
+|---|---|---|
+| da-guard | 10.3 MB | 4.1 MB |
+| da-batchpr | 2.8 MB | 1.2 MB |
+| da-parser | 9.9 MB | 3.9 MB |
+| da-crdecode | 3.0 MB | 1.3 MB |
+| da-read | 79.5 MB | 22.9 MB |
+| da-tools 映像裡這五支合計 | 105.5 MB | 33.4 MB |
+| tenant-api | 48.9 MB | 14.2 MB |
 
 產生器容器（2026-10-10 實測，1000 個租戶的樹）：每個請求開新程序約 3.1 秒；同一程序加上解析快取約 1.5～1.8 秒。
 

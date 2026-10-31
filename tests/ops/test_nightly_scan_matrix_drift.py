@@ -2652,6 +2652,8 @@ _DOCKERFILE_NAME_RE = re.compile(
 _NOT_A_DOCKERFILE_SUFFIX = (
     ".py", ".md", ".sh", ".txt", ".json", ".yaml", ".yml", ".js", ".ts", ".go",
     ".tpl", ".lock", ".toml", ".cfg", ".ini",
+    # BuildKit's per-Dockerfile ignore file (`Dockerfile.dockerignore`, #3425).
+    ".dockerignore",
 )
 
 
@@ -2938,7 +2940,7 @@ def test_dockerfile_name_rule_covers_the_spellings_it_claims_to() -> None:
     ]
     must_not_match = [
         ".dockerignore", "docker-compose.yml", "Dockerfilter.py", "README.md",
-        "dockerfile_helpers.py", "build.sh",
+        "dockerfile_helpers.py", "build.sh", "Dockerfile.dockerignore",
         # ⛔ Pinned in the NEGATIVE direction on purpose: a template is not a
         # buildable recipe, and an earlier round of this PR removed `.tpl` from
         # the subtraction list with no sample holding it either way. The rule
