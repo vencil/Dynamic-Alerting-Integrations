@@ -162,6 +162,7 @@ jobs:
     outputs:
       regression: ${{ steps.compare.outputs.regression }}
       regressions: ${{ steps.compare.outputs.regressions }}
+      over_bound: ${{ steps.compare.outputs.over_bound }}
       inconclusive: ${{ steps.compare.outputs.inconclusive }}
       inconclusive_reason: ${{ steps.compare.outputs.inconclusive_reason }}
     steps:
@@ -233,6 +234,8 @@ jobs:
           INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
           INCONCLUSIVE_CANARY: ${{ steps.compare.outputs.inconclusive_canary }}
           UNREPLICATED: ${{ steps.compare.outputs.unreplicated }}
+          ACCEPTED: ${{ steps.compare.outputs.accepted }}
+          OVER_BOUND: ${{ steps.compare.outputs.over_bound }}
           REGRESSION_BASIS: ${{ steps.compare.outputs.regression_basis }}
           BENCHSTAT_TXT: ${{ steps.compare.outputs.benchstat_txt }}
           COMPARE_DESC: |
@@ -274,6 +277,7 @@ jobs:
           REGRESSION: ${{ needs.bench.outputs.regression }}
           INCONCLUSIVE: ${{ needs.bench.outputs.inconclusive }}
           REGRESSIONS_LIST: ${{ needs.bench.outputs.regressions }}
+          OVER_BOUND: ${{ needs.bench.outputs.over_bound }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail

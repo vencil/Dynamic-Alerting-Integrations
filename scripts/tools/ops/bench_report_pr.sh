@@ -55,8 +55,16 @@ if [ "$is_regression" = "true" ]; then
     echo '```'
     echo "${REGRESSIONS_LIST:-}"
     echo '```'
-    echo "Fix the perf and push again, or note the deliberate trade-off in the PR. The"
-    echo "\`$LABEL\` label clears automatically once the regression is gone."
+    if [ -n "${OVER_BOUND:-}" ]; then
+      echo ""
+      echo "Declared in \`.github/bench-accepted.toml\`, but measured beyond the declared bound:"
+      echo '```'
+      echo "$OVER_BOUND"
+      echo '```'
+    fi
+    echo "Fix the perf and push again, or — if the cost is deliberate — declare it in"
+    echo "\`.github/bench-accepted.toml\` in this PR (benchmark, metric, bound, reason; see"
+    echo "ADR-039). The \`$LABEL\` label clears automatically once nothing uncovered remains."
   } > /tmp/perf_comment.md
   gh_try pr comment "$PR_NUMBER" --repo "$REPO" --body-file /tmp/perf_comment.md || true
   echo "::notice::Perf regression reported (informational). Merge is NOT blocked."

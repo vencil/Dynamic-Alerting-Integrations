@@ -60,6 +60,23 @@ SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
     fi
     echo ""
   fi
+  if [ -n "${ACCEPTED:-}" ]; then
+    echo "### Accepted — within a bound declared in \`.github/bench-accepted.toml\` (not counted)"
+    echo ""
+    echo "This change declared these costs in the acceptance ledger (ADR-039), and the measurement stays inside the declared bound."
+    echo '```'
+    echo "$ACCEPTED"
+    echo '```'
+    echo ""
+  fi
+  if [ -n "${OVER_BOUND:-}" ]; then
+    echo "### Declared, but beyond the declared bound (counted)"
+    echo ""
+    echo '```'
+    echo "$OVER_BOUND"
+    echo '```'
+    echo ""
+  fi
   case "${REGRESSION_BASIS:-}" in
     deterministic)
       echo "Evidence: **B/op or allocs/op moved** — these count work and are identical run to run, so no second pass was needed."

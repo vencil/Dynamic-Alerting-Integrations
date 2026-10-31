@@ -51,6 +51,7 @@ components/threshold-exporter/config/conf.d/_defaults.yaml  @vencil
 helm/threshold-exporter/Chart.yaml                          @vencil
 helm/threshold-exporter/values.yaml                         @vencil
 .github/custom-rule-policy.yaml                             @vencil
+.github/bench-accepted.toml                                 @vencil
 
 # ============================================================
 # 租戶設定（示意歸屬：各 Tenant Team 擁有自己的檔案）
