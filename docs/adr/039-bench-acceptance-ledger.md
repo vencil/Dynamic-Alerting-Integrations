@@ -14,6 +14,8 @@ updated_at: 2026-10-31
 
 # ADR-039: 刻意付出的效能成本寫進 repo 裡的接受帳本，由 bench 閘門核對實測
 
+> **Language / 語言：** **中文 (Current)** | [English](./039-bench-acceptance-ledger.en.md)
+
 ## 狀態
 
 ✅ **Accepted**（2026-10-31）。帳本與兩道閘門（PR 上的 bench gate、合併到 main 後的逐 commit 歸因）的判定已上線。累積預算、PR 上改為擋 merge、換參考版本時帳本如何處理，見 §尚未決定。

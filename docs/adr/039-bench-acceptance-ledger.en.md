@@ -4,15 +4,11 @@ tags: [adr, benchmark, ci, perf-regression]
 audience: [platform-engineers, contributors]
 version: v2.9.0
 lang: en
-id: ADR-039
-tracking_kind: adr
-status: accepted
-domain: dx
-created_at: 2026-10-31
-updated_at: 2026-10-31
 ---
 
 # ADR-039: Deliberate performance costs go into an in-repo acceptance ledger that the bench gates check against measurements
+
+> **Language / 語言：** [中文](./039-bench-acceptance-ledger.md) | **English (Current)**
 
 ## Status
 
