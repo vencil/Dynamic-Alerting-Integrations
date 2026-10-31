@@ -953,6 +953,23 @@ class TestCLI:
         assert doc["error_count"] == 0
         assert doc["passed"] is True
 
+    def test_main_no_tenant_configs_json_is_rc_0(self, tmp_path, capsys, monkeypatch):
+        """#1112 under --json (#3216): rules but no tenant read — the zeroed
+        report goes out through run() and the run is rc 0, as without --json."""
+        import types
+        (tmp_path / "_defaults.yaml").write_text("""
+_policies:
+  - name: routing-required
+    target: _routing
+    operator: required
+""", encoding="utf-8")
+        monkeypatch.setattr(pe, "load_policy_inputs",
+                            lambda *a, **kw: types.SimpleNamespace(views={}, aliases={}))
+        exit_code = emit_result(pe.main(["--config-dir", str(tmp_path), "--json", "--ci"]))
+        doc = json.loads(capsys.readouterr().out)
+        assert (doc["status"], doc["rules_evaluated"]) == ("no_tenant_configs", 1)
+        assert exit_code == 0
+
     def test_main_all_pass(self, tmp_path, capsys):
         """所有策略通過 → exit 0。"""
         (tmp_path / "_defaults.yaml").write_text(_THRESHOLD_DEFAULTS + """

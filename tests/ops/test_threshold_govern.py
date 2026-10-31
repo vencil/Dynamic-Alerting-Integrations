@@ -520,6 +520,25 @@ def test_missing_contract_is_rc2_before_any_write(monkeypatch, tmp_path, capsys)
     assert "tenant-api-errors.json not found" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("outcomes, rc", [
+    (["error", "error"], 1),          # every write failed: systemic → rc 1
+    (["pr_opened", "error"], 0),      # the write plane works → rc 0
+])
+def test_apply_json_exit_is_the_systemic_verdict(monkeypatch, tmp_path, capsys, outcomes, rc):
+    """#656 under --json (#3216): the document goes out through run(), and
+    an --apply run whose writes all failed still exits 1 (not 0, not 2)."""
+    monkeypatch.setattr(tg, "_error_remedies", lambda: {})
+    monkeypatch.setattr(tg, "run", lambda _a: tg.GovernanceResult(
+        plans=[], outcomes=[_oc(s) for s in outcomes], ungoverned=[]))
+    args = _args(apply=True, config_dir=str(tmp_path), json_output=True)
+    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda self: args)
+    with pytest.raises(SystemExit) as exc:
+        _as_run(tg.main())
+    assert exc.value.code == rc
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["applied"] is True and doc["summary"]["errors"] == outcomes.count("error")
+
+
 @pytest.mark.parametrize("doc", ['{"codes": []}', '{"codes": [{"code": "X"}]}', "not json"])
 def test_malformed_contract_raises(tmp_path, doc):
     p = tmp_path / "tenant-api-errors.json"

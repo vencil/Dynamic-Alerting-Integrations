@@ -404,6 +404,20 @@ class TestMainCLI:
         assert output["tool"] == "shadow-verify"
         assert len(output["phases"]) == 3
 
+    @pytest.mark.parametrize("caller_error, rc", [(True, 2), (False, 1)])
+    def test_json_caller_error_is_rc_2_not_1(self, capsys, caller_error, rc):
+        """#452/#737 under --json (#3216): a check that could not be made
+        (Prometheus answering 500) is rc 2; a failed finding is rc 1."""
+        check = {"check": "prometheus_reachable", "status": "fail", "detail": "HTTP 500"}
+        if caller_error:
+            check["caller_error"] = True
+        with patch.object(sv, "check_preflight", return_value=[check]):
+            with patch("sys.argv", ["shadow_verify.py", "preflight", "--json"]):
+                with pytest.raises(SystemExit) as exc_info:
+                    _as_run(sv.main())
+        assert json.loads(capsys.readouterr().out)["status"] == "fail"
+        assert exc_info.value.code == rc
+
     def test_json_exit_is_the_verdict(self, tmp_path, capsys):
         """#3216: under --json the document goes out through run(), and a
         failed check is still the exit (rc 1), not the document's rc 0."""
