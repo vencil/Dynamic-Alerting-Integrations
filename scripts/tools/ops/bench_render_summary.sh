@@ -60,7 +60,24 @@ SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
     fi
     echo ""
   fi
-  echo "### Full benchstat output"
+  case "${REGRESSION_BASIS:-}" in
+    deterministic)
+      echo "Evidence: **B/op or allocs/op moved** — these count work and are identical run to run, so no second pass was needed."
+      echo "" ;;
+    timing-replicated)
+      echo "Evidence: **sec/op only, confirmed** — a second independent interleaved pass flagged the same benchmark(s)."
+      echo "" ;;
+  esac
+  if [ -n "${UNREPLICATED:-}" ]; then
+    echo "### sec/op flags that did not replicate (not counted)"
+    echo ""
+    echo "The first pass flagged these on wall-clock time alone (B/op and allocs/op unchanged); a second independent interleaved pass did not. They are shown, not counted."
+    echo '```'
+    echo "$UNREPLICATED"
+    echo '```'
+    echo ""
+  fi
+  echo "### Full benchstat output (first pass)"
   echo "_\`BenchmarkControlCanaryCPU\` is the GATING drift probe; \`BenchmarkControlCanarySleep\` is informational only (scheduler jitter)._"
   echo '```'
   cat "$BENCHSTAT_TXT"

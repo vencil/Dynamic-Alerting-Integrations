@@ -156,6 +156,7 @@ grep "ns/op" /tmp/bench.txt   # 僅看結果行
 | 拓樸 | **單 runner INTERLEAVED + control canary**（v6）：兩個 worktree（base + pr 同時 checkout）→ `go test -c` 預編譯 → 迴圈交替跑 base,pr,base,pr,…（含 canary）→ benchstat。harness = `scripts/tools/ops/bench_interleave.sh` |
 | Wall time | **~20–25 min**（與 v5 count=6 同總 benchtime；多 process 啟動由「只編譯一次」抵銷）|
 | 統計判定 | `benchstat -alpha=0.01` AND `|Δ| ≥ 5%` 雙閾值 |
+| 指標分級（[#3468](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3468)） | 判定集中在 `scripts/tools/dx/bench_verdict.py`，依 benchstat 的單位區段判讀被標的列。`B/op`／`allocs/op` 是確定性指標（計的是工作量，兩側跑同一份輸入時逐次相同），被標就成立。**只有 `sec/op` 被標**時，`bench_gate_compare.sh` 再跑一輪獨立的交錯量測，兩輪都標到的 bench 才成立；沒重現的列只在 summary 列出（`unreplicated`），不留言、不貼 label、不開票。第二輪 canary 不穩 → INCONCLUSIVE。依據：#2324、#2628、#2806、#3401 都只有 sec/op 被標，重量後確定性指標完全相同；但 #3262 是 sec/op 單獨退化而且是真的，所以要重現，不能直接丟掉 |
 | Metric scope | **確定性 per-op metric only**（`sec/op` / `B/op` / `allocs/op`）via `benchstat -filter`；排除非確定性 process-level metric（`MB-sys` / `MB-heap-after-gc` / `goroutines`）—— GC/runtime high-water 雜訊，非 per-op work（[#608](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/608)）|
 | Control canary | `benchcanary` module（`scripts/tools/ops/bench-canary/`，自帶 go.mod、stdlib-only、stash 到 checkout 外、base/pr 共用同一份）。`BenchmarkControlCanaryCPU` = **gating**（base↔pr 顯著漂移 ≥4% → 判 INCONCLUSIVE）；`BenchmarkControlCanarySleep` = **informational-only**（µs 級排程 jitter，gating 會狂閃）|
 | INCONCLUSIVE 語意 | **runner 漂移 → re-run，非 regression**（綠燈 + warning）。canary 漂移 / 缺席 / 異質 CPU 三者任一觸發 |
@@ -221,7 +222,7 @@ This run is not counted as a regression — push again or re-run the job.
 1. **檢查 benchstat 輸出**，flagged regression 是哪些 benchmark？
 2. **這是真的 regression 嗎？**
    - **是真的** — 你的 diff 引入了 perf 問題：fix code（O(n²) 改 O(n log n)、減少 allocations、加 cache 等）後重 push
-   - **看起來像 noise** — 同 benchmark 在 nightly `bench-record.yaml` 沒這個趨勢？到 GitHub Actions UI 的 Checks panel 右上點 **"Re-run failed jobs"** 重跑。GH-hosted runner ~10% FP rate per design（hardware floor）。**不要**用 `git commit --allow-empty` 或 close+reopen PR 重跑 — 那會污染 git history + 觸發無關的 webhook noise（Slack / Jira / labels）
+   - **看起來像 noise** — 只有 `sec/op` 的旗標已經由 gate 自己重現過一次（見上表「指標分級」），還留著的是兩輪都標到的。仍懷疑時：同 benchmark 在 nightly `bench-record.yaml` 沒這個趨勢？到 GitHub Actions UI 的 Checks panel 右上點 **"Re-run failed jobs"** 重跑。GH-hosted runner ~10% FP rate per design（hardware floor）。**不要**用 `git commit --allow-empty` 或 close+reopen PR 重跑 — 那會污染 git history + 觸發無關的 webhook noise（Slack / Jira / labels）
    - **是 deliberate trade-off**（正確性修補 / 安全 patch / 演算法本質約束）→ Phase 2 起 gate 是 informational，**直接 merge**，在 PR 寫明 trade-off rationale 即可（無需 override）。`perf-regression` label 留作標記，待後續 perf 回收
 
 3. **重跑後仍 flag** → 多半是真的 regression；不擋 merge，但請當作待辦處理
