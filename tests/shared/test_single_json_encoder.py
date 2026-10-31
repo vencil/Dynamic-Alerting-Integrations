@@ -178,7 +178,9 @@ def test_a_report_status_is_an_exit_code(status):
 
 @pytest.mark.real_crash_exit_code
 def test_the_tools_own_crash_code_is_kept():
-    """tenant-verify's sanctioned crash code (1) is what a defect exits with."""
+    """A crash code a tool chose (``set_crash_exit_code``) is what a defect
+    exits with. Mechanism only: no tool chooses one since #3393 (tenant-verify
+    chose 1 until then)."""
     p = _run("lib.set_crash_exit_code(1)\nlib.run(lambda: lib.Report([math.nan]))")
     assert p.returncode == 1, p.stderr
 

@@ -598,7 +598,7 @@ def _exit_on_tool_crash(exc):
     The tool's crash code wins: if it loaded _lib_exitcodes (looked up in
     sys.modules, not imported — this module stays zero-import), that
     module's exit_on_crash reports and exits with whatever the tool set via
-    set_crash_exit_code (tenant_verify: 1). Otherwise print the same
+    set_crash_exit_code (none does since #3393). Otherwise print the same
     traceback + ERROR line here and exit EXIT_CALLER_ERROR — or, under a
     test suite, the code DA_TEST_CRASH_EXIT_CODE names (#3092).
     """

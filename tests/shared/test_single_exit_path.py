@@ -10,7 +10,7 @@ every behavioural case runs a subprocess:
   at rc **120** (the interpreter's own "could not flush stdout" status, outside
   the 0/1/2 contract), and a large write into a closed pipe was reported as
   ``ERROR: unexpected internal error (BrokenPipeError)``. Now the process
-  ends at the CALLER-ERROR code (2; tenant_verify's 1) with one line,
+  ends at the CALLER-ERROR code (2) with one line,
   ``ERROR: stdout was closed before all output was written``. A
   ``BrokenPipeError`` that did NOT come from stdout (a socket) is still a
   crash — the control case below.
@@ -174,7 +174,7 @@ def test_closed_stdout_ends_at_the_caller_error_code(tmp_path, ending, closure, 
 def test_closed_stdout_uses_the_caller_error_code_not_the_crash_code(tmp_path):
     """The two codes are separate: a tool that moves its crash code (#3092
     will, under tests) still ends a closed-stdout run at its caller-error
-    code; a tool whose caller-error code is 1 (tenant_verify) ends at 1."""
+    code; a tool that sets its caller-error code to 1 ends at 1."""
     body = ("_lib_exitcodes.set_crash_exit_code(70)\n"
             "print('partial report')\nos.close(1)\nraise RuntimeError('boom')\n")
     rc, err = _run_closed(tmp_path, body, "fd-closed")
@@ -186,9 +186,11 @@ def test_closed_stdout_uses_the_caller_error_code_not_the_crash_code(tmp_path):
     assert STDOUT_CLOSED_LINE in err
 
 
-def test_tenant_verify_ends_a_closed_stdout_at_its_own_caller_error_code():
-    """tenant_verify's 2 means "hash mismatch" (a shipped rollback runbook
-    keys on it), so its reader-gone exit is its caller-error code, 1."""
+def test_tenant_verify_ends_a_closed_stdout_at_the_caller_error_code():
+    """#3393: tenant_verify's reader-gone exit is the shared caller-error
+    code 2 — nothing was verified, which the rollback runbook reads as
+    "fix and re-run" — not 1, its "hash mismatch" since #3393 (it was 1
+    while the tool inverted 1/2)."""
     r, w = os.pipe()
     os.close(r)
     try:
@@ -198,7 +200,7 @@ def test_tenant_verify_ends_a_closed_stdout_at_its_own_caller_error_code():
     finally:
         os.close(w)
     err = proc.stderr.decode("utf-8", "replace")
-    assert proc.returncode == 1, err
+    assert proc.returncode == 2, err
     assert STDOUT_CLOSED_LINE in err
 
 
@@ -236,8 +238,8 @@ def test_an_open_stdout_keeps_the_tools_exit_code(tmp_path):
 
 
 # The conftest resets the process caller-error code after every test: a tool
-# run in-process as __main__ (tenant_verify sets 1) must not leak it into the
-# next test of the same worker — measured, it turned reword_chain's
+# run in-process as __main__ that sets it (tenant_verify set 1 until #3393)
+# must not leak it into the next test of the same worker — measured, it turned reword_chain's
 # die_caller_error into rc 1. The two probes run only in the ordered,
 # single-process pytest that the test below starts.
 _LEAK_PROBE = "DA_CALLER_CODE_LEAK_PROBE"

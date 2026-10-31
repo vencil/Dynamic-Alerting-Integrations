@@ -366,8 +366,8 @@ class TestBlindIsNotClean:
 
 
 # #3100: introspection runs each tool as __main__ in THIS process. A tool that
-# sets the process crash exit code that way (tenant_verify sets 1, #3090) must
-# not leave it set: a later tool in the same process (a pytest worker) would
+# sets the process crash exit code that way (no tool does since #3393;
+# tenant_verify set 1 until then, #3090) must not leave it set: a later tool in the same process (a pytest worker) would
 # crash with the wrong code.
 _SETS_CRASH_CODE = (
     "import _lib_exitcodes\n"
