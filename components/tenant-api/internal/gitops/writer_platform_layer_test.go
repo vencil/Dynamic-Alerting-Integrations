@@ -73,7 +73,18 @@ func TestPlatformLayerProblemsNeverBlockTheTenant(t *testing.T) {
 			if len(errs) != 0 {
 				t.Errorf("a platform-file problem blocks the tenant's dry-run: %q", errs)
 			}
-			assertPlatformNotice(t, "DryRunValidate", notices, tc.wantNotice)
+			// An unread key in a platform file is the shared key verdict's
+			// to report (ADR-038 decision 6, §11): no notice here.
+			check := func(where string, notices []string) {
+				if tc.unread {
+					if strings.Contains(strings.Join(notices, "\n"), tc.wantNotice) {
+						t.Errorf("%s: notice for the unread %q, which is the key verdict's: %q", where, tc.wantNotice, notices)
+					}
+					return
+				}
+				assertPlatformNotice(t, where, notices, tc.wantNotice)
+			}
+			check("DryRunValidate", notices)
 
 			// A different, valid write — the platform problem must not block it.
 			body := "tenants:\n  tx:\n    mysql_connections: \"91\"\n"
@@ -81,7 +92,7 @@ func TestPlatformLayerProblemsNeverBlockTheTenant(t *testing.T) {
 			if err != nil {
 				t.Fatalf("a platform-file problem blocks Writer.Write: %v", err)
 			}
-			assertPlatformNotice(t, "Write", notices, tc.wantNotice)
+			check("Write", notices)
 			got, rerr := os.ReadFile(filepath.Join(dir, "tx.yaml"))
 			if rerr != nil || string(got) != body {
 				t.Errorf("tx.yaml after the write = %q (%v), want the body", got, rerr)

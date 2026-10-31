@@ -821,12 +821,13 @@ func TestValidationMessagesNameOnlyReadableTenants(t *testing.T) {
 	t.Parallel()
 	const flat = "tenants:\n" +
 		"  " + orgEnfTenantIn + ":\n    _silent_mode: \"critical\"\n" +
-		"  " + orgEnfTenantOut + ":\n    _routing_receiver_type: webhook\n    secret_key_b: \"1\"\n    mysql_cpu: \"3\"\n"
+		"  " + orgEnfTenantOut + ":\n    _silent_mode: secret_mode_b\n    mysql_threads_running:\n      default: \"1\"\n      expires: secret_expiry_b\n    mysql_cpu: \"3\"\n"
 	// What a PUT of the caller's own section would send (API-shaped).
 	const own = "tenants:\n  " + orgEnfTenantIn + ":\n    _silent_mode: \"warning\"\n"
-	// The routing key and secret_key_b are errors; mysql_cpu is a renamed-key
-	// notice, which only GET carries.
-	hidden := []string{orgEnfTenantOut, "_routing_receiver_type", "secret_key_b", "mysql_cpu"}
+	// The bad expires is an error, the bad silent mode a value notice on GET,
+	// mysql_cpu a renamed-key notice. (An unread key is the shared key
+	// verdict's, which GET does not ask for: ADR-038 decision 11.)
+	hidden := []string{orgEnfTenantOut, "secret_mode_b", "secret_expiry_b", "mysql_cpu"}
 	files := map[string]string{
 		"_defaults.yaml":         "defaults:\n  mysql_threads_running: 5\n",
 		orgEnfTenantIn + ".yaml": flat,

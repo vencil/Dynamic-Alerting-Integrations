@@ -124,3 +124,23 @@ func TestKeyValidation_VersionLabelIsJudgedWhateverTheBase(t *testing.T) {
 		}
 	}
 }
+
+// ADR-038 decision 6, §11: a platform file's or a profile's key no reader
+// reads is reported by the shared key verdict, not as a notice here; its
+// value problems still are.
+func TestKeyValidation_PlatformAndProfileUnreadAreNoNotice(t *testing.T) {
+	t.Parallel()
+	files := map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+		"_platform.yaml": "tenants:\n  tx:\n    platform_typo: \"1\"\n    _silent_mode: purple\n",
+		"_profiles.yaml": "profiles:\n  strict:\n    profile_typo: \"1\"\n",
+	}
+	kv, _ := profileKV(t, files, "tenants:\n  tx:\n    _profile: strict\n")
+	all := strings.Join(kv.Notices, "\n")
+	if strings.Contains(all, "platform_typo") || strings.Contains(all, "profile_typo") {
+		t.Errorf("an unread platform or profile key is a notice: %q", kv.Notices)
+	}
+	if !strings.Contains(all, "purple") {
+		t.Errorf("the platform entry's value problem is no longer a notice: %q", kv.Notices)
+	}
+}

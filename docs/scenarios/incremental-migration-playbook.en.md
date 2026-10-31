@@ -151,7 +151,7 @@ Based on Phase 0.2 audit results, adjust threshold parameters to match existing 
 
 The chart is published as an OCI artifact ([ADR-002](../adr/002-oci-registry-over-chartmuseum.en.md)). Tenant config goes under `thresholdConfig.tenants` in the values; the chart renders it into the `threshold-config` ConfigMap, and one exporter serves every tenant.
 
-⚠️ The chart's shipped `thresholdConfig.defaults` only covers Kubernetes, MariaDB and PostgreSQL; you must add the redis keys yourself. Copy the `redis_*` lines from the `conf.d/_defaults.yaml` that scaffold produced in Step 1.1. Without them the tenant's values are not emitted, and the exporter logs `unknown key "redis_memory_used_bytes" not in defaults`.
+⚠️ The chart's shipped `thresholdConfig.defaults` only covers Kubernetes, MariaDB and PostgreSQL; you must add the redis keys yourself. Copy the `redis_*` lines from the `conf.d/_defaults.yaml` that scaffold produced in Step 1.1. Without them the tenant's values are not emitted, and the exporter lists `key=redis_memory_used_bytes reason=unconsumed` in its "config keys no row of this exporter reads" line.
 
 ```yaml {.helm-values}
 # values-redis.yaml

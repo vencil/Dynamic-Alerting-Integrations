@@ -1380,7 +1380,10 @@ definitions:
       validation_warnings:
         description: |-
           Warnings is the BLOCKING validation set (KeyValidation.Errors) — what a
-          write of this exact file would be rejected on. It judges only the keys
+          write of this exact file would be rejected on by tenant-api's own value
+          checks. Whether any reader reads a key is not here: the shared key
+          verdict (ADR-038 decision 5) judges that, on a write; GET does not ask
+          for it (decision 11: `da-tools explain-keys`, CI). It judges only the keys
           the tenant's own file writes: a problem in a root platform file's
           `tenants:` entry for this tenant (#2208), or in the profile the tenant
           elects (#1385), is never here. Notices is the advisory set, which

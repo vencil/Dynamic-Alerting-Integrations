@@ -168,12 +168,78 @@ func (m *ConfigManager) auditValuesNotServed(cfg *ThresholdConfig, flatScan *fla
 	if flatScan != nil {
 		rejected = flatScan.rejected
 	}
-	vs := collectValuesNotServed(cfg, m.valuesNotServedCache.verdicts(cfg, m.Now()), rejected)
+	verdicts := m.valuesNotServedCache.verdicts(cfg, m.Now())
+	vs := collectValuesNotServed(cfg, verdicts, rejected)
 	metrics := m.getMetrics()
 	if m.valuesNotServed.recordAndDecide(vs, metrics.SetValuesNotServed) {
 		m.getLogger().Print(formatValuesNotServedLog(vs, m.path, context))
 	}
+	if ku := collectKeysUnread(cfg, verdicts); m.keysUnread.recordAndDecide(ku, func(map[string]int) {}) {
+		m.getLogger().Print(formatKeysUnreadLog(ku, m.path, context))
+	}
 	return vs
+}
+
+// collectKeysUnread is what this exporter itself records as read by none of
+// its rows (ADR-038 §11): a tenant key the resolver records unconsumed
+// (#3378), and a `_` key the reserved-key registry lists no reader for
+// (unregistered, #3045), in the written spelling. A fact of this reader, not
+// a judgement: whether such a key is an error is the shared key verdict's
+// (decision 4 — a generator key, for one, is read elsewhere and is in
+// neither set).
+func collectKeysUnread(cfg *ThresholdConfig, verdicts map[string]map[string]string) []valueNotServed {
+	var out []valueNotServed
+	for tenant, keys := range verdicts {
+		for canon, reason := range keys {
+			if reason == config.NotServedUnconsumed {
+				out = append(out, valueNotServed{Tenant: tenant, Key: writtenSpelling(cfg.Tenants[tenant], canon), Reason: reason})
+			}
+		}
+	}
+	for tenant, overrides := range cfg.Tenants {
+		for key := range overrides {
+			if config.IsUnregisteredUnderscoreKey(key) {
+				out = append(out, valueNotServed{Tenant: tenant, Key: key, Reason: config.NotServedUnregistered})
+			}
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Tenant != out[j].Tenant {
+			return out[i].Tenant < out[j].Tenant
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out
+}
+
+// keysUnreadLogPrefix opens formatKeysUnreadLog's line.
+const keysUnreadLogPrefix = "config keys no row of this exporter reads"
+
+// formatKeysUnreadLog is collectKeysUnread's line: no severity word, since
+// how severe an unread key is depends on where it is written (ADR-038
+// decision 4), which the shared key verdict judges.
+func formatKeysUnreadLog(ku []valueNotServed, root, context string) string {
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		keysUnreadLogPrefix+" (%s): %d tenant key(s) under %s: unconsumed is a key no "+
+			"threshold row reads (a misspelt key, a `_critical` whose base has no platform value), unregistered a `_` "+
+			"key the reserved-key registry lists no reader for. Whether one is an error is the shared key verdict's: "+
+			"run `da-tools explain-keys --config-dir %s` or validate-config. Keys:",
+		context, len(ku), root, root)
+	shown := ku
+	if len(shown) > valuesNotServedLogSampleLimit {
+		shown = shown[:valuesNotServedLogSampleLimit]
+	}
+	for i, v := range shown {
+		if i > 0 {
+			b.WriteString(";")
+		}
+		fmt.Fprintf(&b, " tenant=%s key=%s reason=%s", v.Tenant, v.Key, v.Reason)
+	}
+	if len(ku) > len(shown) {
+		fmt.Fprintf(&b, "; +%d more", len(ku)-len(shown))
+	}
+	return b.String()
 }
 
 // Now is the manager's clock (a test's fake one when set), else time.Now —

@@ -29,7 +29,10 @@ type TenantDetail struct {
 	RawYAML  string                  `json:"raw_yaml"`
 	Resolved []cfg.ResolvedThreshold `json:"resolved_thresholds"`
 	// Warnings is the BLOCKING validation set (KeyValidation.Errors) — what a
-	// write of this exact file would be rejected on. It judges only the keys
+	// write of this exact file would be rejected on by tenant-api's own value
+	// checks. Whether any reader reads a key is not here: the shared key
+	// verdict (ADR-038 decision 5) judges that, on a write; GET does not ask
+	// for it (decision 11: `da-tools explain-keys`, CI). It judges only the keys
 	// the tenant's own file writes: a problem in a root platform file's
 	// `tenants:` entry for this tenant (#2208), or in the profile the tenant
 	// elects (#1385), is never here. Notices is the advisory set, which
@@ -326,7 +329,7 @@ func GetTenant(d *Deps) http.HandlerFunc {
 		// not refused for it (SelfRatchetValues).
 		// #3039: the file may declare other tenants; messages about those the
 		// caller may not read are counted, not shown.
-		warnings, notices := gitops.DiscloseKeyValidation(tenantID, gitops.SelfRatchetValues(merged.ValidateTenantKeysByTenant()),
+		warnings, notices := gitops.DiscloseKeyValidation(tenantID, gitops.SelfRatchetValues(merged.ValidateTenantKeysByTenant().WithoutUnread()),
 			tenantNamesFor(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r)))
 		resolved := merged.ResolveAt(time.Now())
 
@@ -417,7 +420,7 @@ func getGitManagedTenant(w http.ResponseWriter, r *http.Request, d *Deps, tenant
 	}
 	// #3039: the file may declare other tenants; messages about those the
 	// caller may not read are counted, not shown.
-	out.Warnings, out.Notices = gitops.DiscloseKeyValidation(tenantID, gitops.SelfRatchetValues(merged.ValidateTenantKeysByTenant()),
+	out.Warnings, out.Notices = gitops.DiscloseKeyValidation(tenantID, gitops.SelfRatchetValues(merged.ValidateTenantKeysByTenant().WithoutUnread()),
 		tenantNamesFor(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r)))
 	resolved := make([]cfg.ResolvedThreshold, 0)
 	for _, rt := range merged.ResolveAt(time.Now()) {
