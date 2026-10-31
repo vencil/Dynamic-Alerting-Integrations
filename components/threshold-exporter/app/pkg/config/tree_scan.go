@@ -713,7 +713,8 @@ func scanRootPlatform(root string) (*TreeScan, error) {
 // segment (kubelet's `team-a -> ..data/team-a` resolves into `..<ts>/`), or
 // one that cannot be resolved — is NOT walked, and the caller warns.
 //
-// ⛔ Python twin: `_lib_confd.dir_link_target_is_walked`. Same rule, or one
+// ⛔ Python twin: `_lib_consumer_read._dir_symlink_problem` (rule-file
+// sources, not conf.d), for a link on no hidden path. Same rule, or one
 // plane names a loss the other calls clean.
 func dirLinkTargetIsWalked(absRoot, linkPath string) bool {
 	real, err := filepath.EvalSymlinks(linkPath)
