@@ -1640,7 +1640,15 @@ def main():
             print("  WARN: migrate_rule.py not available, Phase 2 will have limited analysis",
                   file=sys.stderr)
 
-        rule_files = scan_rule_files(args.rule_files, args.exclude)
+        try:
+            rule_files = scan_rule_files(args.rule_files, args.exclude)
+        except _lib_consumer_read.InputRefused as e:
+            # #3426: an entry that cannot be chosen (a dangling symlink, a
+            # directory that cannot be listed) or an --exclude that leaves
+            # no file is a caller error, named — never "no rule files".
+            print(f"ERROR: --rule-files: {safe_label(_lib_consumer_read.error_text(e))}",
+                  file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
         if not rule_files:
             print(f"  WARN: No rule files found matching: {args.rule_files}",
                   file=sys.stderr)

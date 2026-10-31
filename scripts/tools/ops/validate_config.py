@@ -1088,8 +1088,11 @@ def check_custom_rules(
         result["reads_config_dir"] = False
         return result
 
+    # #3426: the rule packs are chosen by the one declaration of what in a
+    # rule-packs directory is a rule pack (`_lib_consumer_read.rule_pack_files`
+    # behind `--rule-pack-dir`), never by a list of `--exclude` of our own.
     cmd = [sys.executable, str(_THIS_DIR / "lint_custom_rules.py"),
-           rule_packs_dir, "--ci"]
+           "--rule-pack-dir", rule_packs_dir, "--ci"]
     # #1556: pass the value through even when it is not a file. Dropping it
     # here made `validate-config --policy <typo>` lint with the built-in
     # policy while reporting success; lint_custom_rules now exits 2 on it.

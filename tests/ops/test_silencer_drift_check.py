@@ -20,11 +20,14 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import dedent
 
 import pytest
+
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 import silencer_drift_check as sdc
 
@@ -1252,3 +1255,59 @@ def test_load_alerts_names_a_prometheusrule_with_top_level_groups(tmp_path):
     alerts, errors = sdc.load_alerts(tmp_path)
     assert alerts == []
     assert len(errors) == 1 and 'unknown field "groups"' in errors[0], errors
+
+
+# ── #3426 round 5: --rule-pack-dir, exclude-all, no object, unreadable ──
+
+def _silences_none(tmp_path):
+    s = tmp_path / "s.json"
+    s.write_text("[]", encoding="utf-8")
+    return str(s)
+
+
+def test_rule_pack_dir_reads_the_declared_packs(tmp_path, capsys):
+    """F13: the packs come from `rule_pack_files`; the registry beside them
+    and recipes/ are not read, and no --exclude is written."""
+    rp = tmp_path / "rule-packs"
+    (rp / "recipes").mkdir(parents=True)
+    _write(rp / "rule-pack-x.yaml", """
+        groups: [{name: g, rules: [{alert: A, expr: up}]}]
+    """)
+    (rp / "threshold-registry.yaml").write_text("entries: []\n", encoding="utf-8")
+    (rp / "recipes" / "r.yaml").write_text("recipe: x\n", encoding="utf-8")
+    argv = ["--silences-file", _silences_none(tmp_path), "--rule-pack-dir", str(rp)]
+    assert sdc.main(argv) == 0
+    assert "1 alerts loaded" in capsys.readouterr().out
+    (rp / "stray.yaml").write_text("x: 1\n", encoding="utf-8")
+    assert sdc.main(argv) == 2
+    assert "stray.yaml" in capsys.readouterr().err
+    assert sdc.main([*argv, "--exclude", "x"]) == 2
+    assert sdc.main(["--silences-file", _silences_none(tmp_path)]) == 2
+
+
+def test_an_exclude_that_leaves_nothing_exits_2(tmp_path, capsys):
+    """F16."""
+    _write(tmp_path / "rules/a.yaml", """
+        groups: [{name: g, rules: [{alert: A, expr: up}]}]
+    """)
+    rc = sdc.main(["--silences-file", _silences_none(tmp_path),
+                   "--rule-source", str(tmp_path / "rules"), "--exclude", "*.yaml"])
+    assert rc == 2
+    assert "every one excluded" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["empty.yaml", "dangling.yaml"])
+def test_an_empty_file_or_a_dangling_symlink_exits_2(tmp_path, capsys, name):
+    """F14 / F15: named, never read as "no rule files"."""
+    rules = tmp_path / "rules"
+    _write(rules / "a.yaml", """
+        groups: [{name: g, rules: [{alert: A, expr: up}]}]
+    """)
+    if name == "empty.yaml":
+        (rules / name).write_text("", encoding="utf-8")
+    else:
+        symlink_or_skip(str(rules / "gone.yaml"), str(rules / name))
+    rc = sdc.main(["--silences-file", _silences_none(tmp_path), "--rule-source", str(rules)])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert name in captured.out + captured.err

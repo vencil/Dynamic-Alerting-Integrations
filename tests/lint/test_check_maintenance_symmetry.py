@@ -260,6 +260,15 @@ def test_an_undeclared_yaml_beside_the_packs_fails_naming_it(tree, capsys):
     assert "extra-pack.yaml" in capsys.readouterr().err
 
 
+def test_an_empty_rule_pack_fails_naming_it(tree, capsys):
+    """#3426 F14: a declared pack with no object and no `groups` is named."""
+    (tree / "rule-pack-x.yaml").write_text(_pack({"A": _two_arm()}), encoding="utf-8")
+    (tree / "rule-pack-empty.yaml").write_text("", encoding="utf-8")
+    assert sym.check() == 2
+    err = capsys.readouterr().err
+    assert "rule-pack-empty.yaml" in err and "no objects passed to apply" in err
+
+
 def test_repo_rule_packs_pass(monkeypatch):
     """smoke：repo 真實的 rule-packs/ → rc 0。"""
     monkeypatch.setattr(sys, "argv", ["check_maintenance_symmetry.py", "--ci"])

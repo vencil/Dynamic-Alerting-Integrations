@@ -910,6 +910,8 @@ def plan_stdout(
                 },
                 "prometheus_rules": [item["crd"] for item in result.get("prometheus_rules", [])],
                 "alertmanager_configs": [item["crd"] for item in result.get("alertmanager_configs", [])],
+                # #3426: PrometheusRules of --source-dir, named, not converted
+                "already_crd": list(result.get("already_crd", [])),
                 "errors": result.get("errors", []),
             }
             docs.append(format_json_report(output_obj) + "\n")

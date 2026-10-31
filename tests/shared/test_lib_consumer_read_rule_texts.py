@@ -19,6 +19,8 @@ import stat
 from pathlib import Path
 
 import pytest
+
+from _platform_fs import symlink_or_skip  # noqa: E402
 import yaml
 
 import _lib_consumer_read as cr
@@ -289,7 +291,9 @@ def test_files_to_read_walks_yaml_and_leaves_out_what_exclude_names(tmp_path) ->
     # a file given as such is read whatever its suffix, unless excluded
     md = str(root / "notes.md")
     assert cr.files_to_read([md]) == [md]
-    assert cr.files_to_read([md], ["*.md"]) == []
+    # #3426 F16: an --exclude that leaves none of the files found is no answer
+    with pytest.raises(cr.EverythingExcluded, match="every one excluded"):
+        cr.files_to_read([md], ["*.md"])
 
 
 def test_rule_pack_files_is_a_declaration_that_covers_the_directory(tmp_path) -> None:
@@ -431,3 +435,45 @@ def test_binary_data_refuses_every_other_character(tmp_path, value) -> None:
     path = _write(tmp_path, "cm.yaml", _cm(binary_data=f"  r.yml: {value!r}\n".replace("'", '"')))
     (rf,) = cr.manifest_rule_file_results([path])
     assert "not base64" in (rf.problem or ""), rf
+
+
+# ── #3426 round 5: no object, any-case suffixes, unreadable entries ──
+
+@pytest.mark.parametrize("text", [
+    "", "# only a comment\n", "---\n---\n", "apiVersion: v1\nkind: List\nitems: []\n",
+])
+def test_a_file_with_no_object_and_no_groups_is_refused(tmp_path, text) -> None:
+    """F14: kubectl refuses to apply it ("no objects passed to apply"); it
+    used to be a file with no rule files."""
+    path = _write(tmp_path, "empty.yaml", text)
+    with pytest.raises(cr.RuleFileSourcesRefused) as exc:
+        cr.rule_files_in([path])
+    assert "no objects passed to apply" in exc.value.files[0][1]
+
+
+def test_files_to_read_takes_any_case_suffix_and_names_what_it_cannot_read(tmp_path) -> None:
+    """F15: `.YAML` / `.Yml` are walked; a dangling symlink and a FIFO with a
+    YAML suffix are named, never skipped — unless --exclude leaves them out."""
+    root = _tree(tmp_path, ["a.YAML", "b.Yml", "c.yaml"])
+    assert sorted(Path(f).name for f in cr.files_to_read([root])) == ["a.YAML", "b.Yml", "c.yaml"]
+    symlink_or_skip(str(root / "gone.yaml"), str(root / "dangling.yaml"))
+    os.mkfifo(str(root / "pipe.yml"))
+    with pytest.raises(cr.SourcesUnlisted) as exc:
+        cr.files_to_read([root])
+    assert sorted((Path(p).name, why) for p, why in exc.value.files) == [
+        ("dangling.yaml", "a dangling symlink"), ("pipe.yml", "not a regular file")]
+    assert len(cr.files_to_read([root], ["dangling.yaml", "pipe.yml"])) == 3
+
+
+def test_rule_pack_files_names_any_case_suffix_and_a_dangling_pack(tmp_path) -> None:
+    """F15: the declaration's refusal of undeclared YAML holds for `.YAML`
+    too, and a dangling symlink named like a pack is named."""
+    _tree(tmp_path, ["rule-pack-a.yaml", "threshold-registry.yaml"])
+    (tmp_path / "rule-pack-b.YAML").write_text("groups: []\n", encoding="utf-8")
+    symlink_or_skip(str(tmp_path / "gone"), str(tmp_path / "rule-pack-c.yaml"))
+    with pytest.raises(cr.SourcesUnlisted) as exc:
+        cr.rule_pack_files(tmp_path)
+    got = {Path(p).name: why for p, why in exc.value.files}
+    assert set(got) == {"rule-pack-b.YAML", "rule-pack-c.yaml"}, got
+    assert "neither a rule pack" in got["rule-pack-b.YAML"]
+    assert got["rule-pack-c.yaml"] == "a dangling symlink"

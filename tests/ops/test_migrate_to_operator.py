@@ -537,7 +537,7 @@ class TestMainJsonEnvelope:
 
         doc = json.loads(captured.out)        # 兩份文件的話這裡就炸了
         assert set(doc) == {
-            "metadata", "prometheus_rules", "alertmanager_configs", "errors",
+            "metadata", "prometheus_rules", "alertmanager_configs", "already_crd", "errors",
         }
         assert "checklist" not in doc
         assert "status" not in doc
@@ -637,7 +637,7 @@ def _validate_text_checklist_preview(out):
 def _validate_json_crd_preview(out):
     doc = json.loads(out)
     assert set(doc) == {
-        "metadata", "prometheus_rules", "alertmanager_configs", "errors",
+        "metadata", "prometheus_rules", "alertmanager_configs", "already_crd", "errors",
     }
     # 不是 checklist envelope（bug-1 的反向保證：純 dry-run 不長出 checklist）
     assert "checklist" not in doc
@@ -814,7 +814,7 @@ class TestPlanStdout:
             assert len(docs) == 1
             doc = json.loads(docs[0])
             assert set(doc) == {
-                "metadata", "prometheus_rules", "alertmanager_configs", "errors",
+                "metadata", "prometheus_rules", "alertmanager_configs", "already_crd", "errors",
             }
         elif row.payload == "text_checklist":
             assert docs == [self._CHK + "\n"]
@@ -1284,6 +1284,30 @@ class TestSourceFilesAreWhatTheReadersSay:
             written = sorted(p.name for p in out.iterdir())
             assert not any("da-rule-pack-x" in n for n in written), written
             assert any("rule-pack-ok" in n for n in written), written
+
+    @pytest.mark.parametrize("extra", [["--dry-run"], []], ids=["dry-run", "no-output-dir"])
+    def test_the_json_preview_names_a_prometheusrule_too(self, tmp_path, temp_config_dir,
+                                                         capsys, extra):
+        """#3426 F17: the preview envelope (`--dry-run --json`, or `--json`
+        with no --output-dir) carries `already_crd` as the summary does."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "ok.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / "pr.yaml").write_text(self._PR, encoding="utf-8")
+        argv = ["migrate_to_operator.py", "--source-dir", str(src),
+                "--config-dir", str(temp_config_dir), "--json", *extra]
+        if extra:   # --dry-run with an --output-dir: still nothing written
+            argv += ["--output-dir", str(tmp_path / "out")]
+        with patch("sys.argv", argv):
+            try:
+                mto.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code or 0
+        assert code == 0
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["already_crd"] == [{"file": "pr.yaml", "name": "da-rule-pack-x"}], doc
+        assert not (tmp_path / "out").exists()
 
     def test_a_list_of_configmaps_migrates(self, tmp_path):
         """`kubectl get cm -o yaml` writes a List: its ConfigMaps are read

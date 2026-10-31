@@ -8,6 +8,8 @@ import os
 import tempfile
 
 import pytest
+
+from _platform_fs import symlink_or_skip  # noqa: E402
 import yaml
 
 from factories import make_am_config, make_am_receiver, write_yaml
@@ -1473,3 +1475,44 @@ def test_rule_files_reads_a_prometheusrule(tmp_path):
                      f"  {ln}\n" for ln in _ONBOARD_RULES.splitlines()), encoding="utf-8")
     ((path, groups, error),) = _read_rule_files([str(p)])
     assert error is None and groups[0]["rules"][0]["alert"] == "HighConn"
+
+
+def test_rule_files_exclude_that_leaves_nothing_exits_2(tmp_path, monkeypatch, capsys):
+    """#3426 F16: an --exclude that leaves none of the files found is rc 2,
+    saying so — it used to be "No rule files found" and rc 1."""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    argv = ["--rule-files", str(rules), "-o", str(tmp_path / "out"), "--exclude", "*.yaml"]
+    assert _onboard_rules(monkeypatch, argv) == 2
+    assert "every one excluded" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("kind", ["empty", "dangling"])
+def test_rule_files_empty_file_or_dangling_symlink_exits_2(tmp_path, monkeypatch, capsys, kind):
+    """#3426 F14 / F15: named, rc 2."""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    if kind == "empty":
+        (rules / "b.yaml").write_text("---\n", encoding="utf-8")
+    else:
+        symlink_or_skip(str(rules / "gone.yaml"), str(rules / "b.yaml"))
+    assert _onboard_rules(monkeypatch, ["--rule-files", str(rules),
+                                        "-o", str(tmp_path / "out")]) == 2
+    assert "b.yaml" in capsys.readouterr().err
+
+
+def test_rule_files_glob_exclude_matches_the_whole_path_as_matched(tmp_path, monkeypatch,
+                                                                    capsys):
+    """#3426 F16: for a file the glob matched, a pattern with `/` is matched
+    against the path as matched — `'*/recipes/*'`, as cli-reference says."""
+    rules = tmp_path / "rules"
+    (rules / "recipes").mkdir(parents=True)
+    (rules / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    (rules / "recipes" / "r.yaml").write_text("recipe: x\n", encoding="utf-8")
+    glob = str(rules) + "/**/*.yaml"
+    assert _onboard_rules(monkeypatch, ["--rule-files", glob, "-o", str(tmp_path / "o1"),
+                                        "--exclude", "*/recipes/*"]) == 0
+    assert _onboard_rules(monkeypatch, ["--rule-files", glob, "-o", str(tmp_path / "o2"),
+                                        "--exclude", "recipes/*"]) == 2

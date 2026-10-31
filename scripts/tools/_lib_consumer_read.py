@@ -991,7 +991,9 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
        (``manifest_rule_file_results``, *only_declared* as there). A manifest
        kubectl reads whose objects are of other kinds (a Deployment) hands
        Prometheus no rule file (``[]``): it is read, as kubectl reads it,
-       and holds none. A ConfigMap or PrometheusRule the API server would
+       and holds none. A file with no object at all (empty, comments only,
+       ``---`` only, a List with no items) is refused, as kubectl refuses
+       it ("no objects passed to apply"). A ConfigMap or PrometheusRule the API server would
        refuse (``rule_object_problem``) makes the file refused.
     2. When that reading refuses it: with the any-YAML reading
        (``da-crdecode --any-shape``). A file with a document that is a
@@ -1031,6 +1033,12 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
     for p in keys:
         if p not in manifests or isinstance(manifests[p], ConsumerReadError):
             continue
+        if not manifests[p]:
+            # Empty, comments only, `---` only, a List with no items: no
+            # object and no rule group. kubectl refuses to apply it.
+            refused[p] = ("kubectl's reading finds no object in it (kubectl: no objects "
+                          "passed to apply), and it is no rule file (no `groups`)")
+            continue
         try:
             keyed += _manifest_keyed(p, manifests[p], only_declared, crdecode_binary, binary)
         except _ObjectRefused as e:
@@ -1058,8 +1066,37 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
     return out
 
 
-#: The suffixes a directory given to ``files_to_read`` is walked for.
+#: The suffixes a directory given to ``files_to_read`` is walked for,
+#: compared without regard to case (``.YAML`` and ``.Yml`` are YAML too).
 YAML_SUFFIXES = (".yaml", ".yml")
+
+
+def _is_yaml_name(name: str) -> bool:
+    return os.path.splitext(name)[1].lower() in YAML_SUFFIXES
+
+
+class SourcesUnlisted(RuleFileSourcesRefused):
+    """Entries ``files_to_read`` / ``rule_pack_files`` would have chosen but
+    cannot read — a dangling symlink, a FIFO or other non-regular file with
+    a YAML suffix, a directory that cannot be listed — or (in rule-packs/)
+    a YAML file the declaration does not cover. Each is named, never
+    skipped (#3426)."""
+
+    def __init__(self, files: "list[tuple[str, str]]") -> None:
+        InputRefused.__init__(self, f"{len(files)} rule-file source entry/entries cannot "
+                              "be chosen to read", [f"{p}: {why}" for p, why in files])
+        self.files = list(files)
+
+class EverythingExcluded(InputRefused):
+    """``--exclude`` left no file to read: the files found were all
+    excluded. A run that reads nothing because of its own exclusions is no
+    clean run (#3426)."""
+
+    def __init__(self, found: int, patterns: "list[str]") -> None:
+        super().__init__(
+            f"--exclude left no file to read: {found} file(s) found, every one excluded "
+            f"by {', '.join(repr(p) for p in patterns)}")
+        self.found = found
 
 
 def excluded(pattern: str, name: str, relative: str) -> bool:
@@ -1076,6 +1113,32 @@ def excluded(pattern: str, name: str, relative: str) -> bool:
     return fnmatch.fnmatchcase(name, pattern)
 
 
+def _walk_yaml(root: str) -> "tuple[list[tuple[str, str]], list[tuple[str, str]]]":
+    """(files, problems) under the directory *root*: every entry with a
+    YAML suffix (any case) as ``(path, path relative to root)``, and every
+    entry that cannot be read as ``(path, why)`` — a directory that cannot
+    be listed, and a YAML-suffixed entry that is not a regular file (a
+    dangling symlink, a FIFO). Symlinked directories are not followed (as
+    ``Path.rglob`` did)."""
+    files, problems = [], []
+
+    def unlisted(err: OSError) -> None:
+        problems.append((err.filename or root, f"cannot list this directory: {err.strerror}"))
+
+    for d, _dirs, names in os.walk(root, onerror=unlisted):
+        for n in names:
+            if not _is_yaml_name(n):
+                continue
+            f = os.path.join(d, n)
+            if os.path.isfile(f):
+                files.append((f, pathlib.Path(os.path.relpath(f, root)).as_posix()))
+            elif os.path.islink(f) and not os.path.exists(f):
+                problems.append((f, "a dangling symlink"))
+            else:
+                problems.append((f, "not a regular file"))
+    return files, problems
+
+
 def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
                   exclude: "Iterable[str]" = ()) -> "list[str]":
     """⛔ The one answer to "which files does a rule-file CLI read" (#3426):
@@ -1085,56 +1148,87 @@ def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
 
     A target that is a file is read as given, whatever its suffix; a
     directory is walked, recursively, for files whose suffix is ``.yaml``
-    or ``.yml`` (``YAML_SUFFIXES``). A file any *exclude* pattern matches
-    (``excluded``: relative to the directory target it was found under) is
-    left out and not read. Returns the paths, sorted, each once. A target
-    that is neither (it does not exist) adds nothing: callers check their
-    targets first."""
+    or ``.yml`` in any case (``YAML_SUFFIXES``). A file any *exclude*
+    pattern matches (``excluded``: relative to the directory target it was
+    found under) is left out and not read. Returns the paths, sorted, each
+    once. A target that does not exist adds nothing: callers check their
+    targets first.
+
+    Raises :class:`SourcesUnlisted` naming every entry that would be
+    chosen but cannot be read (a dangling symlink, a non-regular file, a
+    directory that cannot be listed), unless an *exclude* pattern leaves it
+    out; :class:`EverythingExcluded` when files were found and *exclude*
+    left none of them."""
     patterns = list(exclude)
     chosen: "set[str]" = set()
+    problems: "list[tuple[str, str]]" = []
+    found = 0
     for target in targets:
-        root = pathlib.Path(target)
-        if root.is_file():
-            candidates = [(root, root.as_posix())]
-        elif root.is_dir():
-            candidates = [(f, f.relative_to(root).as_posix())
-                          for f in root.rglob("*")
-                          if f.suffix in YAML_SUFFIXES and f.is_file()]
+        t = os.fspath(target)
+        if os.path.isdir(t):
+            candidates, unread = _walk_yaml(t)
+        elif os.path.isfile(t):
+            candidates, unread = [(t, pathlib.Path(t).as_posix())], []
         else:
             continue
         for f, relative in candidates:
-            if not any(excluded(pat, f.name, relative) for pat in patterns):
-                chosen.add(str(f))
+            found += 1
+            if not any(excluded(pat, os.path.basename(f), relative) for pat in patterns):
+                chosen.add(f)
+        for f, why in unread:
+            relative = pathlib.Path(os.path.relpath(f, t)).as_posix()
+            if not any(excluded(pat, os.path.basename(f), relative) for pat in patterns):
+                problems.append((f, why))
+    if problems:
+        raise SourcesUnlisted(sorted(problems))
+    if found and not chosen and patterns:
+        raise EverythingExcluded(found, patterns)
     return sorted(chosen)
 
 
 #: rule-packs/, declared by path (#3426): the rule packs are the files these
 #: globs take; the other YAML that sits beside them is named here, not
-#: judged by its content. A YAML file in rule-packs/ (top level) that is
-#: neither is refused, so a pack named another way cannot slip past.
+#: judged by its content. A YAML file in rule-packs/ (top level, any case of
+#: suffix) that is neither is refused, so a pack named another way cannot
+#: slip past. ⛔ The one declaration: `lint --rule-pack-dir`,
+#: `silencer-drift-check --rule-pack-dir`, `validate-config --rule-packs`,
+#: the CI workflows and the repo lints all choose rule packs through
+#: ``rule_pack_files`` — no caller lists `--exclude` patterns for it.
 RULE_PACK_GLOBS = ("rule-pack-*.yaml", "rule-pack-*.yml")
 RULE_PACKS_OTHER_YAML = ("threshold-registry.yaml",)
 
 
 def rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathlib.Path]":
     """The rule packs of the directory *rule_packs* (``RULE_PACK_GLOBS``,
-    top level), sorted. Raises :class:`RuleFileSourcesRefused` naming every
-    top-level ``.yaml`` / ``.yml`` file that is neither a rule pack nor
-    one of ``RULE_PACKS_OTHER_YAML`` — a declaration that does not cover
-    the directory is no answer."""
+    top level), sorted. Raises :class:`SourcesUnlisted` naming every
+    top-level entry with a YAML suffix (any case) that is neither a rule
+    pack nor one of ``RULE_PACKS_OTHER_YAML``, every such entry that is not
+    a regular file (a dangling symlink), and a directory that cannot be
+    listed — a declaration that does not cover the directory is no
+    answer."""
     root = pathlib.Path(rule_packs)
-    packs = sorted({f for g in RULE_PACK_GLOBS for f in root.glob(g) if f.is_file()})
-    undeclared = sorted(
-        f for f in root.iterdir()
-        if f.is_file() and f.suffix in YAML_SUFFIXES and f not in packs
-        and f.name not in RULE_PACKS_OTHER_YAML)
-    if undeclared:
-        raise RuleFileSourcesRefused([
-            (str(f), "a YAML file in rule-packs/ that is neither a rule pack ("
-             + " / ".join(RULE_PACK_GLOBS) + ") nor declared beside them ("
-             + ", ".join(RULE_PACKS_OTHER_YAML) + "); name a rule pack rule-pack-*.yaml, "
-             "or declare the file in _lib_consumer_read.RULE_PACKS_OTHER_YAML")
-            for f in undeclared])
+    try:
+        entries = sorted(root.iterdir())
+    except OSError as e:
+        raise SourcesUnlisted([(str(root), f"cannot list this directory: {e.strerror}")]) from e
+    packs, problems = [], []
+    for f in entries:
+        if not _is_yaml_name(f.name):
+            continue
+        is_pack = any(fnmatch.fnmatchcase(f.name, g) for g in RULE_PACK_GLOBS)
+        if not (is_pack or f.name in RULE_PACKS_OTHER_YAML):
+            problems.append((str(f), (
+                "a YAML file in rule-packs/ that is neither a rule pack ("
+                + " / ".join(RULE_PACK_GLOBS) + ") nor declared beside them ("
+                + ", ".join(RULE_PACKS_OTHER_YAML) + "); name a rule pack rule-pack-*.yaml, "
+                "or declare the file in _lib_consumer_read.RULE_PACKS_OTHER_YAML")))
+        elif not f.is_file():
+            problems.append((str(f), "a dangling symlink" if f.is_symlink() and not f.exists()
+                             else "not a regular file"))
+        elif is_pack:
+            packs.append(f)
+    if problems:
+        raise SourcesUnlisted(problems)
     return packs
 
 

@@ -53,16 +53,15 @@ Coverage reporting:
 Usage:
     amtool silence query -o json --alertmanager.url=... > silences.json
     da-tools silencer-drift-check --silences-file silences.json \\
-        --rule-source rule-packs/ --exclude threshold-registry.yaml \\
-        --exclude 'recipes/*'
+        --rule-pack-dir rule-packs/
 
     # CI gate (exit 1 on orphans)
     da-tools silencer-drift-check --silences-file s.json \\
-        --rule-source rule-packs/ --ci
+        --rule-pack-dir rule-packs/ --ci
 
     # Machine-readable
     da-tools silencer-drift-check --silences-file s.json \\
-        --rule-source rule-packs/ --json
+        --rule-pack-dir rule-packs/ --json
 
 Exit codes:
     0  no orphaned silences (or orphans present but --ci not set)
@@ -220,13 +219,19 @@ def extract_alerts_from_pack(pack: dict, source_path: str) -> list[dict]:
 
 
 def load_alerts(rule_source: Path,
-                exclude: "list[str] | tuple[str, ...]" = ()) -> tuple[list[dict], list[str]]:
+                exclude: "list[str] | tuple[str, ...]" = (), *,
+                rule_pack_dir: bool = False) -> tuple[list[dict], list[str]]:
     """Load all alerts from a rule-source path, less the files *exclude*
-    leaves out. Returns (alerts, errors).
+    leaves out — or, with *rule_pack_dir*, from the rule packs the
+    directory *rule_source* declares (`_lib_consumer_read.rule_pack_files`,
+    #3426). Returns (alerts, errors).
     Raises ``_lib_consumer_read.ConsumerReadError`` when da-read /
-    da-crdecode cannot be had."""
+    da-crdecode cannot be had, and its ``InputRefused`` when the files
+    cannot be chosen (an undeclared YAML beside the packs, a dangling
+    symlink, an `--exclude` that leaves nothing)."""
     errors: list[str] = []
-    files = _yaml_files_in(rule_source, exclude)
+    files = ([Path(f) for f in _lib_consumer_read.rule_pack_files(rule_source)]
+             if rule_pack_dir else _yaml_files_in(rule_source, exclude))
     if not files:
         return [], [f"no YAML files found at {rule_source}"]
 
@@ -629,11 +634,11 @@ def main(argv: list[str] | None = None) -> int:
             "\n"
             "  # Offline drift check\n"
             "  da-tools silencer-drift-check --silences-file silences.json \\\n"
-            "      --rule-source rule-packs/\n"
+            "      --rule-pack-dir rule-packs/\n"
             "\n"
             "  # CI gate (exit 1 on orphans)\n"
             "  da-tools silencer-drift-check --silences-file silences.json \\\n"
-            "      --rule-source rule-packs/ --ci\n"
+            "      --rule-pack-dir rule-packs/ --ci\n"
         ),
     )
     ap.add_argument(
@@ -643,10 +648,22 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--rule-source",
-        required=True,
+        default=None,
         help=(
             "Path to a rule pack YAML file, or a directory containing "
-            "rule pack YAML files (scanned recursively for .yaml/.yml)."
+            "rule pack YAML files (scanned recursively for .yaml/.yml). "
+            "This or --rule-pack-dir is required."
+        ),
+    )
+    ap.add_argument(
+        "--rule-pack-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Read the rule packs of a rule-packs directory as declared "
+            "(rule-pack-*.yaml|yml at its top level; the registry beside "
+            "them is declared too, any other YAML there exits 2). Instead "
+            "of --rule-source; not with --exclude."
         ),
     )
     ap.add_argument(
@@ -688,17 +705,31 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         arm_crash_envelope()  # #3094: a crash in --json mode still prints one envelope
 
+    if (args.rule_source is None) == (args.rule_pack_dir is None):
+        print("ERROR: give --rule-source or --rule-pack-dir (exactly one of them)",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    if args.rule_pack_dir is not None and args.exclude:
+        print("ERROR: --exclude does not go with --rule-pack-dir: the rule packs are "
+              "declared by _lib_consumer_read.rule_pack_files, not by patterns",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
     silences_path = Path(args.silences_file)
-    rule_source = Path(args.rule_source)
+    by_declaration = args.rule_pack_dir is not None
+    rule_source = Path(args.rule_pack_dir if by_declaration else args.rule_source)
 
     silences = load_silences(silences_path)
     if silences is None:
         return EXIT_CALLER_ERROR
 
-    require_path(rule_source, "any", lang="en", flag="--rule-source")  # #3276
+    if by_declaration:
+        require_path(rule_source, "dir", lang="en", flag="--rule-pack-dir")
+    else:
+        require_path(rule_source, "any", lang="en", flag="--rule-source")  # #3276
 
     try:
-        alerts, errors = load_alerts(rule_source, args.exclude)
+        alerts, errors = load_alerts(rule_source, args.exclude,
+                                     rule_pack_dir=by_declaration)
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR

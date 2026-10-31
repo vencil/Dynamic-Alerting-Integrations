@@ -406,7 +406,7 @@ amtool silence add \
 amtool silence query -o json --alertmanager.url=http://<am>:9093 > active_silences.json
 
 # Step 2: compare locally / in CI (no AM connection needed) — one-liner
-da-tools silencer-drift-check --silences-file active_silences.json --rule-source rule-packs/ --exclude threshold-registry.yaml --exclude 'recipes/*'
+da-tools silencer-drift-check --silences-file active_silences.json --rule-pack-dir rule-packs/
 
 # Includes full matcher semantics (isEqual / isRegex four-combinations;
 # checks not just alertname= but also severity=, team=, and any other

@@ -26,8 +26,10 @@ policy 的 `file_overrides` 取得逐檔豁免（例如 forecast recipe 的 pred
   python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/ --ci
 
   # 目錄裡混有不是 rule file 的 YAML：以 --exclude 排除（可重複）
-  python3 scripts/tools/ops/lint_custom_rules.py rule-packs/ \
-      --exclude threshold-registry.yaml --exclude 'recipes/*'
+  python3 scripts/tools/ops/lint_custom_rules.py my-rules/ --exclude 'templates/*'
+
+  # rule-packs 目錄：依宣告（rule-pack-*.yaml|yml）取檔，不手寫 --exclude
+  python3 scripts/tools/ops/lint_custom_rules.py --rule-pack-dir rule-packs/ --ci
 
 讀哪些檔由路徑決定（#3426）：檔案照給的讀，目錄遞迴取 *.yaml／*.yml，減去
 --exclude 符合的。選到的每個檔都必須是 rule file 或 ConfigMap／PrometheusRule
@@ -491,8 +493,15 @@ def main():
         description="Lint custom Prometheus rules against platform governance policy."
     )
     parser.add_argument(
-        "paths", nargs="+",
-        help="YAML file(s) or directory to scan"
+        "paths", nargs="*",
+        help="YAML file(s) or directory to scan (or --rule-pack-dir instead)"
+    )
+    parser.add_argument(
+        "--rule-pack-dir", default=None, metavar="DIR",
+        help="Lint the rule packs of a rule-packs directory as declared "
+             "(rule-pack-*.yaml|yml at its top level; the registry beside them is "
+             "declared too, any other YAML there is a caller error). Instead of "
+             "paths; not with --exclude"
     )
     parser.add_argument(
         "--policy", default=None,
@@ -511,6 +520,11 @@ def main():
              "a ConfigMap / PrometheusRule manifest, or it is an ERROR"
     )
     args = parser.parse_args()
+    if (args.rule_pack_dir is None) == (not args.paths):
+        die_caller_error("give scan paths or --rule-pack-dir DIR (exactly one of them)")
+    if args.rule_pack_dir is not None and args.exclude:
+        die_caller_error("--exclude does not go with --rule-pack-dir: the rule packs are "
+                         "declared by _lib_consumer_read.rule_pack_files, not by patterns")
 
     policy = load_policy(args.policy)
 
@@ -527,22 +541,39 @@ def main():
     # family as a missing target, and `!r` makes it visible as ''.
     # #3276: every other target is judged by the shared caller-path check —
     # under a parent the caller cannot enter it is named, not a traceback.
-    if "" in args.paths:
+    if "" in args.paths or args.rule_pack_dir == "":
         die_caller_error(
             "scan target(s) not found or empty: ''"
             "\n  ⛔ Do not drop the path to clear this — an absent target "
             "is not a clean one, and '' is not the current directory.")
-    problems = [p for p in (classify_path(t, "any", lang="en") for t in args.paths) if p is not None]
+    if args.rule_pack_dir is not None:
+        problems = [p for p in [classify_path(args.rule_pack_dir, "dir", lang="en",
+                                              flag="--rule-pack-dir")] if p is not None]
+    else:
+        problems = [p for p in (classify_path(t, "any", lang="en") for t in args.paths)
+                    if p is not None]
     if problems:
         die_caller_error(
             "".join(f"ERROR: {p.message}\n" for p in problems)
             + "  ⛔ Do not drop the path to clear this — an absent target "
               "is not a clean one.", problems[0].reason)
 
-    files = collect_files(args.paths, args.exclude)
+    # #3426: which files are linted is a declaration by path — the rule
+    # packs of a rule-packs directory (`rule_pack_files`, the one
+    # declaration), or the targets less `--exclude`. An entry that cannot be
+    # chosen (an undeclared YAML beside the packs, a dangling symlink), and
+    # an `--exclude` that leaves nothing, are caller errors, named.
+    try:
+        if args.rule_pack_dir is not None:
+            files = [str(f) for f in _lib_consumer_read.rule_pack_files(args.rule_pack_dir)]
+        else:
+            files = collect_files(args.paths, args.exclude)
+    except _lib_consumer_read.InputRefused as exc:
+        die_caller_error(f"ERROR: {_lib_consumer_read.error_text(exc)}")
 
     if not files:
-        print("No YAML files found under: " + ", ".join(repr(p) for p in args.paths))
+        print("No YAML files found under: "
+              + ", ".join(repr(p) for p in (args.paths or [args.rule_pack_dir])))
         sys.exit(EXIT_OK)
 
     all_results = []

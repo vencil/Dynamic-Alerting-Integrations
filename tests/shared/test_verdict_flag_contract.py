@@ -605,6 +605,15 @@ def _silence_on(tmp: Path, alertname: str) -> str:
         "startsAt": "2026-01-01T00:00:00Z", "endsAt": "2030-01-01T00:00:00Z"}]))
 
 
+def _phase2_rules_and_rc(proc: subprocess.CompletedProcess) -> object:
+    """onboard --json: (rules Phase 2 analysed, exit code)."""
+    try:
+        return (json.loads(proc.stdout)["phases"]["phase2"]["summary"]["total_rules"],
+                proc.returncode)
+    except (ValueError, KeyError, TypeError):
+        return UNPARSABLE
+
+
 def _a_shipped_alertname() -> str:
     """An alert a shipped rule pack really declares (read, not hardcoded)."""
     m = re.search(r"^\s*-?\s*alert:\s*([A-Za-z0-9_]+)",
@@ -862,21 +871,22 @@ RECIPES: list[Recipe] = [
            "an orphan (1); a pattern matching no file keeps it matched (0)"),
     R("onboard_platform", "--exclude",
       lambda t, s: ["--rule-files", _exclude_tree(t), "-o", str(t / "onboard-out"),
-                    "--dry-run"],
-      flip=("--exclude", "*.yaml"), boundary=("--exclude", "nothing-*.yaml"),
-      note="both rule files analysed (0); excluding every file leaves Phase 2 "
-           "nothing and no phase a result (1); a pattern matching no file "
-           "changes nothing (0)"),
+                    "--dry-run", "--json"],
+      flip=("--exclude", "drop.yaml"), boundary=("--exclude", "nothing-*.yaml"),
+      without=(2, 0), with_=(1, 0), observe=_phase2_rules_and_rc,
+      note="both rule files analysed: 2 rules (rc 0); excluding drop.yaml "
+           "leaves keep.yaml's 1 rule (rc 0); a pattern matching no file "
+           "changes nothing"),
     R("silencer_drift_check", "--include-inactive",
       lambda t, s: ["--silences-file",
                     _silences(t, "gone", lambda sid: f"GoneAlert_{sid.replace('-', '_')}"),
-                    "--rule-source", str(RULE_PACKS), "--exclude", "threshold-registry.yaml", "--exclude", "recipes/*", "--json"],
+                    "--rule-pack-dir", str(RULE_PACKS), "--json"],
       flip=("--include-inactive",), boundary=("--include-inactive",),
       boundary_base=lambda t, s: [
           "--silences-file",
           _silences(t, "inactive-live", lambda sid: "GoneAlert_active" if sid == "active"
                     else _a_shipped_alertname()),
-          "--rule-source", str(RULE_PACKS), "--exclude", "threshold-registry.yaml", "--exclude", "recipes/*", "--json"],
+          "--rule-pack-dir", str(RULE_PACKS), "--json"],
       without=["active"],
       with_=["active", "ended-by-timestamp", "expired", "pending"],
       observe=_orphan_ids,

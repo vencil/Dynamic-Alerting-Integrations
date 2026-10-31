@@ -284,7 +284,8 @@ def test_lint_file_configmap_wrapper():
         os.unlink(fpath)
 
 def test_lint_file_empty_file():
-    """測試空檔案不應出錯。"""
+    """#3426 F14：空檔沒有任何物件也沒有 `groups`——比照 kubectl 的
+    「no objects passed to apply」點名為 ERROR，不當成沒有 rule 的檔。"""
     with tempfile.NamedTemporaryFile(
         mode='w', suffix='.yaml', delete=False, encoding='utf-8'
     ) as f:
@@ -295,7 +296,8 @@ def test_lint_file_empty_file():
             fpath, lint_custom_rules.DEFAULT_POLICY
         )
         assert count == 0
-        assert len(results) == 0
+        assert [r.severity for r in results] == ["ERROR"], [str(r) for r in results]
+        assert "no objects passed to apply" in results[0].message
     finally:
         os.unlink(fpath)
 
@@ -857,10 +859,9 @@ def test_rule_file_kubectl_refuses_but_prometheus_loads_is_linted(tmp_path):
 
 
 def test_repo_rule_packs_pass_the_ci_policy(monkeypatch, capsys):
-    """(c) smoke：repo 真實的 rule-packs/ 以 CI 的 policy 與 CI 的 `--exclude`
-    （recipes/、threshold-registry.yaml 不是 rule file）跑 --ci → rc 0。"""
-    code = _run_main([os.path.join(_REPO_ROOT, "rule-packs"),
-                      "--exclude", "threshold-registry.yaml", "--exclude", "recipes/*",
+    """(c) smoke：repo 真實的 rule-packs/ 以 CI 的 policy、CI 的呼叫方式
+    （`--rule-pack-dir`：依 rule_pack_files 的宣告取檔）跑 --ci → rc 0。"""
+    code = _run_main(["--rule-pack-dir", os.path.join(_REPO_ROOT, "rule-packs"),
                       "--policy", _REAL_POLICY, "--ci"], monkeypatch)
     out = capsys.readouterr().out
     assert code == 0, [line for line in out.splitlines() if line.startswith("ERROR")]
@@ -924,3 +925,58 @@ def test_a_manifest_the_api_server_refuses_is_an_error(tmp_path, monkeypatch, ca
     out = capsys.readouterr().out
     errors = [ln for ln in out.splitlines() if ln.startswith("ERROR")]
     assert len(errors) == 1 and "bad.yaml" in errors[0] and why in errors[0], errors
+
+
+# ── #3426 round 5: --rule-pack-dir, exclude-all, no object ─────────
+
+def _rule_packs_tree(tmp_path):
+    rp = tmp_path / "rule-packs"
+    (rp / "recipes").mkdir(parents=True)
+    (rp / "rule-pack-x.yaml").write_text(_OK_RULE, encoding="utf-8")
+    (rp / "threshold-registry.yaml").write_text(_REGISTRY, encoding="utf-8")
+    (rp / "recipes" / "threshold.yaml").write_text(_RECIPE, encoding="utf-8")
+    return rp
+
+
+def test_rule_pack_dir_lints_the_declared_packs_only(tmp_path, monkeypatch, capsys):
+    """F13: `--rule-pack-dir` takes the packs from `rule_pack_files` (the one
+    declaration) — the registry and recipes/ are not read, with no
+    `--exclude` written anywhere."""
+    rp = _rule_packs_tree(tmp_path)
+    assert _run_main(["--rule-pack-dir", str(rp), "--ci"], monkeypatch) == 0
+    out = capsys.readouterr().out
+    assert "Scanned 1 file(s)" in out and "ERROR" not in out, out
+
+
+def test_rule_pack_dir_names_an_undeclared_yaml(tmp_path, monkeypatch, capsys):
+    rp = _rule_packs_tree(tmp_path)
+    (rp / "extra-pack.YAML").write_text(_OK_RULE, encoding="utf-8")
+    assert _run_main(["--rule-pack-dir", str(rp), "--ci"], monkeypatch) == 2
+    assert "extra-pack.YAML" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("argv", [
+    [],                                              # neither
+    ["{rp}", "--rule-pack-dir", "{rp}"],            # both
+    ["--rule-pack-dir", "{rp}", "--exclude", "x"],  # a pattern beside the declaration
+])
+def test_rule_pack_dir_is_exactly_one_way_to_choose(tmp_path, monkeypatch, argv):
+    rp = _rule_packs_tree(tmp_path)
+    assert _run_main([a.replace("{rp}", str(rp)) for a in argv], monkeypatch) == 2
+
+
+def test_an_exclude_that_leaves_nothing_is_a_caller_error(tmp_path, monkeypatch, capsys):
+    """F16: every file found excluded is no clean run."""
+    (tmp_path / "a.yaml").write_text(_OK_RULE, encoding="utf-8")
+    assert _run_main([str(tmp_path), "--exclude", "*.yaml", "--ci"], monkeypatch) == 2
+    assert "every one excluded" in capsys.readouterr().err
+
+
+def test_a_file_with_no_object_is_an_error(tmp_path, monkeypatch, capsys):
+    """F14: an empty file in a scanned directory is named (kubectl: no
+    objects passed to apply)."""
+    (tmp_path / "rules.yaml").write_text(_OK_RULE, encoding="utf-8")
+    (tmp_path / "empty.yml").write_text("# nothing yet\n", encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    errors = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("ERROR")]
+    assert len(errors) == 1 and "empty.yml" in errors[0] and "no objects" in errors[0], errors

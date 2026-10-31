@@ -605,8 +605,7 @@ jobs:
       - name: Lint custom rules
         run: |
           python scripts/tools/ops/lint_custom_rules.py \
-            rule-packs/ \
-            --exclude threshold-registry.yaml --exclude 'recipes/*' \
+            --rule-pack-dir rule-packs/ \
             --policy .github/custom-rule-policy.yaml \
             --ci
 

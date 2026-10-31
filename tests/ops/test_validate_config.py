@@ -274,6 +274,34 @@ class TestCustomRulesCheck:
         assert "check" in result
         assert result["check"] == "custom_rules"
 
+    def test_real_rule_packs_do_not_fail(self):
+        """#3426 F13: `make validate-config` runs this row on the real
+        rule-packs/, which also holds the registry and recipes/. The rule
+        packs are chosen by the one declaration (`lint --rule-pack-dir`,
+        `_lib_consumer_read.rule_pack_files`); handing lint the directory
+        as a scan target made it read the registry and the recipes as
+        would-be rule files, and the row FAILed."""
+        rule_packs_dir = os.path.join(os.path.dirname(__file__), "..", "..", "rule-packs")
+        result = vc.check_custom_rules(rule_packs_dir)
+        assert result["status"] != vc.FAIL, result["details"][:5]
+        assert not any("no reader reads it" in d for d in result["details"])
+
+    def test_an_undeclared_yaml_beside_the_packs_fails_the_row(self, tmp_path):
+        """The declaration is the one `rule_pack_files` holds: a YAML file
+        in the rule-packs dir that is neither a pack nor declared beside them
+        is named, and the row FAILs (lint exits 2)."""
+        rp = tmp_path / "rule-packs"
+        rp.mkdir()
+        (rp / "rule-pack-x.yaml").write_text(
+            "groups:\n- name: g\n  rules:\n  - alert: A\n    expr: up{tenant=\"t\"} == 0\n"
+            "    labels: {tenant: t, severity: warning, owner: o, expiry: '2030-01-01'}\n",
+            encoding="utf-8")
+        assert vc.check_custom_rules(str(rp))["status"] == vc.PASS
+        (rp / "extra.yaml").write_text("x: 1\n", encoding="utf-8")
+        result = vc.check_custom_rules(str(rp))
+        assert result["status"] == vc.FAIL
+        assert any("extra.yaml" in d for d in result["details"]), result["details"]
+
 
 class TestVersionsCheck:
     """Check 6: Version consistency."""

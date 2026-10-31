@@ -1496,6 +1496,7 @@ Alertmanager silence 對 v2 rule pack 漂移偵測——吃 `amtool silence quer
 
 ```bash
 da-tools silencer-drift-check --silences-file <silences.json> --rule-source <path> [options]
+da-tools silencer-drift-check --silences-file <silences.json> --rule-pack-dir <DIR> [options]
 ```
 
 **主要參數**
@@ -1503,7 +1504,8 @@ da-tools silencer-drift-check --silences-file <silences.json> --rule-source <pat
 | 參數 | 用途 |
 |------|------|
 | `--silences-file <path>` | `amtool silence query -o json` 輸出的 JSON 檔（必須） |
-| `--rule-source <path>` | Rule pack YAML 檔或目錄（遞迴掃 `*.yaml`/`*.yml`，減去 `--exclude` 符合的）。每個檔裡有哪些 rule file 由讀者判定（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：純 rule file、ConfigMap 的 data 值、PrometheusRule 的 `spec`，`kind: List`（`kubectl get … -o yaml` 的輸出）展開成 items 逐一讀。kubectl 讀得了、但不含 ConfigMap／PrometheusRule 的 manifest（例如 Deployment）沒有 rule file。選到的檔（減去 `--exclude`）都必須讀得成 rule file 或 manifest：不是的檔（例如 `_defaults.yaml`、`Chart.yaml`、把 `groups` 拼錯的 rule pack、缺 `kind` 的 manifest）、API server 會拒收的 ConfigMap／PrometheusRule（頂層寫 `groups` 的 PrometheusRule、`data` 不是 mapping 或 data key 少縮排成了頂層 key 的 ConfigMap），以及 rule loader 拒收的 rule file，都逐檔點名為錯誤（前者附「以 `--exclude` 排除」的建議），報告照印、結束碼 `2`。⚠️ 已知例外：ConfigMap 的 data 值若兩個讀法（Kubernetes 的 YAML 讀法與 Prometheus 的 rule loader）都讀不了，視為不是 rule file 的檔（例如 Alertmanager 的 markdown 模板），不讀也不報錯；後果是縮排用了 tab 之類壞到兩者都讀不了的 rule 值，放在 ConfigMap 裡時不會被讀到、也不會報錯（整個檔本身是 rule file 時不在此列，會點名報錯）。 |
+| `--rule-source <path>` | Rule pack YAML 檔或目錄（遞迴掃 `*.yaml`/`*.yml`，減去 `--exclude` 符合的）。每個檔裡有哪些 rule file 由讀者判定（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：純 rule file、ConfigMap 的 data 值、PrometheusRule 的 `spec`，`kind: List`（`kubectl get … -o yaml` 的輸出）展開成 items 逐一讀。kubectl 讀得了、但不含 ConfigMap／PrometheusRule 的 manifest（例如 Deployment）沒有 rule file。選到的檔（減去 `--exclude`）都必須讀得成 rule file 或 manifest：不是的檔（例如 `_defaults.yaml`、`Chart.yaml`、把 `groups` 拼錯的 rule pack、缺 `kind` 的 manifest）、API server 會拒收的 ConfigMap／PrometheusRule（頂層寫 `groups` 的 PrometheusRule、`data` 不是 mapping 或 data key 少縮排成了頂層 key 的 ConfigMap），以及 rule loader 拒收的 rule file，都逐檔點名為錯誤（前者附「以 `--exclude` 排除」的建議），報告照印、結束碼 `2`。目錄走訪、讀不了的項目、`--exclude` 排光、零物件的檔：同 [`lint`](#lint)。⚠️ 已知例外：ConfigMap 的 data 值若兩個讀法（Kubernetes 的 YAML 讀法與 Prometheus 的 rule loader）都讀不了，視為不是 rule file 的檔（例如 Alertmanager 的 markdown 模板），不讀也不報錯；後果是縮排用了 tab 之類壞到兩者都讀不了的 rule 值，放在 ConfigMap 裡時不會被讀到、也不會報錯（整個檔本身是 rule file 時不在此列，會點名報錯）。 |
+| `--rule-pack-dir <DIR>` | 取代 `--rule-source`：依宣告取 rule-packs 目錄的 rule pack（`_lib_consumer_read.rule_pack_files`：頂層的 `rule-pack-*.yaml`／`*.yml`；旁邊的 `threshold-registry.yaml` 也列在宣告裡；頂層其他 YAML（副檔名不分大小寫）、懸空 symlink 都點名，結束碼 2）。這是「rule-packs 目錄裡哪些是 rule pack」唯一的宣告，`validate-config --rule-packs`、CI 與 repo 內的 lint 都經它，不手寫 `--exclude`。不能與 `--exclude` 併用 |
 | `--exclude <GLOB>` | 排除 `--rule-source` 裡符合的檔（可重複；不讀）。語意與 [`lint`](#lint) 的 `--exclude` 相同：不含 `/` 比對檔名，含 `/` 比對相對於 `--rule-source` 的路徑，`fnmatch.fnmatchcase` |
 | `--include-inactive` | 包含 expired / pending silence。預設只檢 active 那批 |
 | `--json` | 輸出 JSON 結構化報告 |
@@ -1551,13 +1553,13 @@ silence 有兩個相反的失效方向：orphan 命中零條、什麼都壓不�
 amtool silence query -o json --alertmanager.url=http://<am>:9093 > silences.json
 
 # Step 2: 離線比對（不需 AM 連線）
-da-tools silencer-drift-check --silences-file silences.json --rule-source rule-packs/ --exclude threshold-registry.yaml --exclude 'recipes/*'
+da-tools silencer-drift-check --silences-file silences.json --rule-pack-dir rule-packs/
 
 # CI gate：merge 前擋住會 silently miss 的 silence
-da-tools silencer-drift-check --silences-file silences.json --rule-source rule-packs/ --exclude threshold-registry.yaml --exclude 'recipes/*' --ci
+da-tools silencer-drift-check --silences-file silences.json --rule-pack-dir rule-packs/ --ci
 
 # 自動化讀取
-da-tools silencer-drift-check --silences-file silences.json --rule-source rule-packs/ --exclude threshold-registry.yaml --exclude 'recipes/*' --json
+da-tools silencer-drift-check --silences-file silences.json --rule-pack-dir rule-packs/ --json
 ```
 
 ⛔ **不要把 `--ci` 接到線上 silence dump 上**（上面的 CI gate 用法針對的是 cutover 時人工抓下來的那一份）。實測 2026-08-27：`rule-packs/` 的 122 條 alert **全部帶 `tenant:` label 且全為 templated（0 個字面值）**，而 `maintenance_scheduler.py` 建立的每條 silence 都帶字面 `tenant=<id>` matcher ⇒ 平台自己排程建立的 silence 全部落在既有的 templated-label 假陽性裡（見工具 docstring 的 Known limitations），那道閘門會對**每一個排程維護窗**轉紅。
@@ -2258,7 +2260,7 @@ da-tools validate-config --config-dir <path> [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 供了但用不了 → exit 2（不是檔案、讀不到、非 UTF-8、不是合法 YAML、頂層不是 mapping），不再靜默略過（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。檔裡的 `min_generator_version` 與 `generate-routes` 同一套規則：本工具比它舊時 routes 列是呼叫端錯誤、結束碼 `2`（先前不讀這個鍵、照樣判定；[#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)）。`--policy` 只由 routes 列判定：routes 列的阻擋錯誤全是 allowlist 拒收時，建議的修法是把 receiver 的 host 加進這份檔的 `allowed_domains`，或修正租戶的 receiver URL（[#3208](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3208)）。⚠️ **行為變更（[#3303](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3303)）**：`policy` 列移除——它以子字串（`domain`／`allowlist`／`blocked`）重挑 routes 已產出的警告，任何不阻擋的路由警告只要文字含其中之一（例如租戶 `domain-a`、`blocked-a` 的 clamp WARN）就被誤收成 FAIL；這類樹帶 `--policy` 時結束碼 `1` → `0`，`--json` 不再有 `policy` 列。真正的 allowlist 拒收本來就讓 routes 列 FAIL，結束碼不變。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
-| `--rule-packs <PATH>` | `rule-packs/` 目錄的路徑，供自訂規則 lint 使用。⚠️ 供了但用不了 → exit 2；**省略時整個 `custom_rules` 檢查列不會出現**（#1556） | （不跑此檢查） |
+| `--rule-packs <PATH>` | `rule-packs/` 目錄的路徑，供自訂規則 lint 使用；lint 的檔依 `lint --rule-pack-dir` 的宣告取（頂層 `rule-pack-*.yaml`／`.yml`，其他 YAML 點名，`custom_rules` 列 FAIL；[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）。⚠️ 供了但用不了 → exit 2；**省略時整個 `custom_rules` 檢查列不會出現**（#1556） | （不跑此檢查） |
 | `--policy-dsl <FILE>` | 獨立 Policy-as-Code DSL 檔的路徑（頂層 `policies:` key）。⚠️ 供了但用不了 → exit 2（五種形狀同 `--policy`）；修前的輸出與**完全不給旗標逐字相同**（#1556） | （只讀 `_defaults.yaml` 的 `_policies`） |
 | `--version-check` | 一併跑版號一致性檢查 | false |
 | `--json` | 以 JSON 輸出結果（供 CI 消費） | false |
@@ -2455,6 +2457,7 @@ docker run --rm \
 
 ```bash
 da-tools lint <path...> [options]
+da-tools lint --rule-pack-dir <DIR> [options]
 ```
 
 **必需參數**
@@ -2469,11 +2472,12 @@ da-tools lint <path...> [options]
 |------|------|--------|
 | `--policy <FILE>` | 政策檔（`custom-rule-policy.yaml`） | 內建政策 |
 | `--ci` | 有 ERROR 級違規時以結束碼 1 結束 | false |
+| `--rule-pack-dir <DIR>` | 依宣告取 rule-packs 目錄的 rule pack（`_lib_consumer_read.rule_pack_files`：頂層的 `rule-pack-*.yaml`／`*.yml`；旁邊的 `threshold-registry.yaml` 也列在宣告裡；頂層其他 YAML（副檔名不分大小寫）、懸空 symlink 都點名，結束碼 2）。這是「rule-packs 目錄裡哪些是 rule pack」唯一的宣告，`validate-config --rule-packs`、CI 與 repo 內的 lint 都經它，不手寫 `--exclude`。取代 `<path...>`，不能與 `--exclude` 併用 | — |
 | `--exclude <GLOB>` | 排除符合的檔（可重複；被排除的檔不讀）。不含 `/` 的樣式比對檔名、任何深度都算（`Chart.yaml`、`*-values.yaml`）；含 `/` 的樣式比對相對於所給目錄的路徑（`recipes/*`；直接給的檔則比對給的路徑）。以 Python `fnmatch.fnmatchcase` 比對：分大小寫，`*` 也跨 `/`。`lint`、`silencer-drift-check`、`onboard` 三者語意相同（共用 `_lib_consumer_read.files_to_read`） | — |
 
 WARN 不會升級成 ERROR，也沒有 JSON 輸出（尚未實作）；CI 請用 `--ci`，輸出是逐條的 `ERROR:`／`WARN:` 文字。
 
-**讀哪些檔、讀出哪些 rule file**（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：讀哪些檔由路徑決定——給的檔照讀（不論副檔名），給的目錄遞迴取 `*.yaml`／`*.yml`，再減去 `--exclude` 符合的。選到的每個檔都必須讀得成 rule file 或 Kubernetes manifest，不會依內容判定「這不是 rule file、不用管」：純 rule file（有 `groups` 的 mapping）、ConfigMap（含 `kind: List` 裡的）宣告為 rule file 的 data 值、PrometheusRule 的 `spec` 都會被 lint；kubectl 讀得了、但不含這兩種物件的 manifest（例如 Deployment）沒有 rule file。不是 manifest 也不是 rule file 的檔（recipe、registry、`Chart.yaml`、把 `groups` 拼錯的 rule pack、缺 `kind` 的 manifest）、API server 會拒收的 ConfigMap／PrometheusRule（`data` 不是 mapping、`data:` 下少縮排一層而成了頂層 key 的 `rules.yml:`、頂層寫 `groups` 的 PrometheusRule），以及 rule loader 拒收的 rule file，都是點名的 `ERROR`；前者的訊息附「若這不是 rule file，以 `--exclude` 排除」。⚠️ Breaking：目錄裡混有不是 rule file 的 YAML 時要加 `--exclude`，例如 `da-tools lint rule-packs/ --exclude threshold-registry.yaml --exclude 'recipes/*'`。⚠️ 已知例外：ConfigMap 的 data 值若兩個讀法（Kubernetes 的 YAML 讀法與 Prometheus 的 rule loader）都讀不了，視為不是 rule file 的檔（例如 Alertmanager 的 markdown 模板），不讀也不報錯；後果是縮排用了 tab 之類壞到兩者都讀不了的 rule 值，放在 ConfigMap 裡時不會被 lint、也不會報錯（整個檔本身是 rule file 時不在此列，會點名報錯）。
+**讀哪些檔、讀出哪些 rule file**（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：讀哪些檔由路徑決定——給的檔照讀（不論副檔名），給的目錄遞迴取 `*.yaml`／`*.yml`，再減去 `--exclude` 符合的。選到的每個檔都必須讀得成 rule file 或 Kubernetes manifest，不會依內容判定「這不是 rule file、不用管」：純 rule file（有 `groups` 的 mapping）、ConfigMap（含 `kind: List` 裡的）宣告為 rule file 的 data 值、PrometheusRule 的 `spec` 都會被 lint；kubectl 讀得了、但不含這兩種物件的 manifest（例如 Deployment）沒有 rule file。不是 manifest 也不是 rule file 的檔（recipe、registry、`Chart.yaml`、把 `groups` 拼錯的 rule pack、缺 `kind` 的 manifest）、API server 會拒收的 ConfigMap／PrometheusRule（`data` 不是 mapping、`data:` 下少縮排一層而成了頂層 key 的 `rules.yml:`、頂層寫 `groups` 的 PrometheusRule），以及 rule loader 拒收的 rule file，都是點名的 `ERROR`；前者的訊息附「若這不是 rule file，以 `--exclude` 排除」。目錄走訪的副檔名比對不分大小寫（`.YAML`、`.Yml` 也算）；選到但讀不了的項目（懸空 symlink、不是一般檔案、列不出內容的目錄）點名、結束碼 2，不略過；`--exclude` 把找到的檔全部排除時也是結束碼 2，訊息寫明是 exclude 排光的；讀出零個 Kubernetes 物件也沒有 `groups` 的檔（空檔、只有註解、只有 `---`、沒有 item 的 List）比照 kubectl 的 `no objects passed to apply` 點名拒收。⚠️ Breaking：目錄裡混有不是 rule file 的 YAML 時要加 `--exclude`（例如 `da-tools lint my-rules/ --exclude 'templates/*'`）；本 repo 的 `rule-packs/` 改用 `--rule-pack-dir rule-packs/`。⚠️ 已知例外：ConfigMap 的 data 值若兩個讀法（Kubernetes 的 YAML 讀法與 Prometheus 的 rule loader）都讀不了，視為不是 rule file 的檔（例如 Alertmanager 的 markdown 模板），不讀也不報錯；後果是縮排用了 tab 之類壞到兩者都讀不了的 rule 值，放在 ConfigMap 裡時不會被 lint、也不會報錯（整個檔本身是 rule file 時不在此列，會點名報錯）。
 
 **檢查項目**（內建政策的預設值，可用 `--policy` 覆寫）
 
@@ -2488,7 +2492,7 @@ WARN 不會升級成 ERROR，也沒有 JSON 輸出（尚未實作）；CI 請用
 ```bash
 da-tools lint ./my-custom-rules.yaml
 # 接進 CI 一定要帶 --ci：沒帶時即使有 ERROR 級違規也是結束碼 0
-da-tools lint ./rule-packs --exclude threshold-registry.yaml --exclude 'recipes/*' --ci
+da-tools lint --rule-pack-dir ./rule-packs --ci
 ```
 
 **結束碼**
@@ -2521,8 +2525,8 @@ da-tools onboard [--alertmanager-config <FILE>] [--rule-files '<GLOB>'] \
 | `--alertmanager-config <FILE>` | Phase 1：Alertmanager 設定。可以是設定檔本身，或 ConfigMap YAML；⚠️ ConfigMap 的鍵名必須是 `alertmanager.yml`，其他鍵名（例如 prometheus-operator 慣用的 `alertmanager.yaml`）與 Secret 都會解析失敗、rc=2。檔案先以 Kubernetes 的讀法（`da-crdecode`）判斷是不是 ConfigMap，設定本身以 Alertmanager 自己的載入函式（`da-read alertmanager`）讀：值是 Alertmanager 的讀法（`match: {tenant: 010}` 是租戶 `010`），只取原文寫了的鍵，Alertmanager 拒收的設定（例如沒有 `route`）rc=2 並印出原因（[ADR-036](adr/036-single-parser-effective-config.md) §12，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)） | — |
 | `--da-crdecode-binary <PATH>` | Phase 1 與 Phase 3 用的 `da-crdecode` | `$DA_CRDECODE_BINARY`，否則 PATH（映像內建） |
 | `--da-read-binary <PATH>` | Phase 1 與 Phase 3 用的 `da-read` | `$DA_READ_BINARY`，否則 PATH（映像內建） |
-| `--rule-files '<GLOB>'` | Phase 2：Prometheus 規則檔的 glob（支援 `**`）；配到目錄時遞迴取其中的 `*.yaml`／`*.yml`。每個選到的檔（減去 `--exclude`）都要讀得成 rule file 或 manifest：純 rule file、ConfigMap 宣告為 rule file 的 data 值、PrometheusRule 的 `spec` 都會讀；不是的檔（`Chart.yaml`、`groups` 拼錯、缺 `kind`）點名並建議 `--exclude`，結束碼 `2`（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）。⚠️ 要加引號：沒加時 shell 先展開，配到多個檔就只有第一個被當成值、其餘變成 `unrecognized arguments`（rc=2）；只配到一個檔時 rc=0 卻只分析了那一個（例如沒開 globstar 的 bash 把 `**` 當成 `*`） | — |
-| `--exclude <GLOB>` | Phase 2：排除 `--rule-files` 選到的檔（可重複；不讀）。語意與 [`lint`](#lint) 的 `--exclude` 相同：不含 `/` 比對檔名，含 `/` 比對相對於 glob 配到的目錄的路徑（glob 直接配到的檔則比對配到的路徑），`fnmatch.fnmatchcase` | — |
+| `--rule-files '<GLOB>'` | Phase 2：Prometheus 規則檔的 glob（支援 `**`）；配到目錄時遞迴取其中的 `*.yaml`／`*.yml`。每個選到的檔（減去 `--exclude`）都要讀得成 rule file 或 manifest：純 rule file、ConfigMap 宣告為 rule file 的 data 值、PrometheusRule 的 `spec` 都會讀；不是的檔（`Chart.yaml`、`groups` 拼錯、缺 `kind`）點名並建議 `--exclude`，結束碼 `2`；目錄走訪、讀不了的項目、`--exclude` 排光、零物件的檔同 [`lint`](#lint)（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）。⚠️ 要加引號：沒加時 shell 先展開，配到多個檔就只有第一個被當成值、其餘變成 `unrecognized arguments`（rc=2）；只配到一個檔時 rc=0 卻只分析了那一個（例如沒開 globstar 的 bash 把 `**` 當成 `*`） | — |
+| `--exclude <GLOB>` | Phase 2：排除 `--rule-files` 選到的檔（可重複；不讀）。語意與 [`lint`](#lint) 的 `--exclude` 相同：不含 `/` 比對檔名，含 `/` 比對相對於 glob 配到的目錄的路徑；⚠️ glob 直接配到的檔比對的是**配到的整條路徑**，所以 `--rule-files 'rules/**/*.yaml'` 要排除 `rules/recipes/` 底下的檔得寫 `--exclude '*/recipes/*'`（`recipes/*` 配不到 `rules/recipes/a.yaml`）；給目錄時（`--rule-files rules/`）才比對相對於它的路徑，`--exclude 'recipes/*'` 即可。`fnmatch.fnmatchcase` | — |
 | `--scrape-config <FILE>` | Phase 3：Prometheus 設定（`prometheus.yml`）。可以是設定檔本身，或 ConfigMap YAML（鍵名必須是 `prometheus.yml`）。讀法同 Phase 1：外層以 Kubernetes 的讀法（`da-crdecode`）判斷是不是 ConfigMap，設定本身以 Prometheus 自己的載入函式（`da-read prometheus`，已註冊全部服務探索）讀，只取原文寫了的鍵、值是 Prometheus 的讀法（例如 relabel 的 `action: Keep` 是 `keep`）；Prometheus 拒收的設定（不認得的鍵、重複的 `job_name`、壞掉的 regex）rc=2 並印出原因（[ADR-036](adr/036-single-parser-effective-config.md) §12，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)） | — |
 | `--tenant-label <NAME>` | 租戶標籤名稱 | `tenant` |
 | `-o, --output-dir <DIR>` | 輸出**目錄**（給檔名會得到一個同名目錄） | `onboard_output` |
