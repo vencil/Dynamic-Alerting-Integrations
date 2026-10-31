@@ -113,7 +113,7 @@ git push -u origin chore/vX.Y.Z-release-wrapup
 ⛔ **收尾 PR 合併後立刻推 tag（Step 3），中間不要停。** `da-tools init` 產生的設定固定在 `ghcr.io/vencil/da-tools:v<VERSION>`（[#2900](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2900)，ADR-036 §6），而收尾 PR 會把 `components/da-tools/app/VERSION` 與 `nightly-image-scan.yaml` 的 delivered 矩陣一起調到新版。從合併到 `tools/v*` tag 的映像發布之前，那個 tag 還不存在：
 - 這段期間 nightly 的 delivered 映像掃描（`delivered-da-tools`）**預期有一晚 degraded**（拉不到映像），不是事故；
 - 這段期間碰到 `scripts/tools/ops/init_project.py` 的 PR，`image-ref-resolve` 的 delivered scope 也會紅（非必要 check）。
-- init 產生的 helm 部署也固定 threshold-exporter chart 的版本（[#2932](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2932)），值是收尾 PR 調好的 `Chart.yaml` `version`。同一輪 `exporter/v*` 與 `tools/v*` 都要發時，兩條 job 並行；新的 da-tools 映像若比 chart 先發布，在 `exporter/v*` 的 `helm push` 完成之前，用它產生的 `--version` 拉不到 chart。所以兩個 tag 一起推，`exporter/v*` 的 job 沒跑完不要對外宣布新版 da-tools。
+- init 產生的 helm 部署也固定 threshold-exporter chart 的版本（[#2932](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2932)），值是收尾 PR 調好的 `Chart.yaml` `version`。同一輪 `exporter/v*` 與 `tools/v*` 都要發時，兩條 job 並行；新的 da-tools 映像若比 chart 先發布，在 `exporter/v*` 的 `helm push` 完成之前，用它產生的 `--version` 拉不到 chart。所以兩個 tag 一起推，`exporter/v*` 的 job 沒跑完不要對外宣布新版 da-tools。⛔ 反過來，**只發 `tools/v*`、不發 `exporter/v*` 的前提是 `helm/threshold-exporter/` 會被 `helm package` 打包的檔案自上次 `exporter/v<pin>` 起沒有改動**（`.helmignore` 掉的 chart README 等不算）：否則 init 會對已發布的舊 chart 印出它沒有的設定（#1425：舊 chart 沒有 values schema，`existingConfigMap` 被靜默忽略，`threshold-config` 變成兩個寫入者）。`make pre-tag` 的 `init-chart-pin-published` 擋這件事，release.yaml 的 `tools/v*` job 以 `--require-tag` 再擋一次。
 
 間隔拉得越長，這兩個訊號越像真問題。推完 tag、`release.yaml` 發布映像後即恢復。
 
