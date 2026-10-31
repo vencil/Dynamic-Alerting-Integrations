@@ -100,19 +100,84 @@ def test_yaml_listed_beside_rule_files_is_still_judged(tmp_path):
     assert len(rung) == 1 and rung[0].startswith(rel + ":"), rung
 
 
+def _rings(root, rels):
+    """The tripwire without exemptions — what `stale_rule_source_entries` asks."""
+    return _rule_tripwire.rule_shaped_outside_declaration(
+        root, rels, frozenset(), honour_exemptions=False)
+
+
 def test_stale_declaration_entries_are_named(tmp_path, monkeypatch):
     """An entry that names nothing is not left in silence."""
-    assert cr.stale_rule_source_entries(REPO_ROOT) == []
+    assert cr.stale_rule_source_entries(REPO_ROOT, rings=_rings) == []
     monkeypatch.setattr(cr, "NOT_RULE_FILES", (("k8s/gone.yaml", "why"),))
     monkeypatch.setattr(cr, "RULE_SOURCES", (cr.RuleSource("k8s", ("x-*.yaml",), ("gone.yaml",)),))
     monkeypatch.setattr(cr, "CHART_VALUES_RULES", (
         cr.ChartValuesRules("helm/gone/values.yaml", ("a",), cr.RULE_FILE_VALUE),))
     (tmp_path / "k8s").mkdir()
-    got = cr.stale_rule_source_entries(tmp_path)
+    (tmp_path / "k8s" / "x-a.yaml").write_text("groups: []\n", encoding="utf-8")
+    got = cr.stale_rule_source_entries(tmp_path, rings=_rings)
     assert len(got) == 3, got
     assert any("not_rule_files" in m for m in got)
     assert any("NOT_RULE_FILES" in m for m in got)
     assert any("CHART_VALUES_RULES" in m and "not there" in m for m in got)
+
+
+def test_an_exemption_no_longer_needed_is_stale(tmp_path, monkeypatch):
+    """N2: an exempted file must still ring without its exemption; clean
+    the content that rang and the exemption is named stale. And a path that
+    is exempted and a declared rule file at once is named."""
+    monkeypatch.setattr(cr, "RULE_SOURCES", (cr.RuleSource("k8s", ("x-*.yaml",), ()),))
+    monkeypatch.setattr(cr, "NOT_RULE_FILES", (("notes/doc.yaml", "documents a rule"),
+                                               ("k8s/x-a.yaml", "overlap")))
+    (tmp_path / "k8s").mkdir()
+    (tmp_path / "k8s" / "x-a.yaml").write_text("groups: []\n", encoding="utf-8")
+    (tmp_path / "notes").mkdir()
+    doc = tmp_path / "notes" / "doc.yaml"
+    doc.write_text("note: |\n  groups:\n    - name: g\n      rules:\n"
+                   "        - alert: Example\n          expr: up == 0\n", encoding="utf-8")
+    got = cr.stale_rule_source_entries(tmp_path, rings=_rings)
+    assert [m for m in got if m.startswith("k8s/x-a.yaml:")] and all(
+        "declared rule file" in m for m in got if m.startswith("k8s/x-a.yaml:")), got
+    assert not [m for m in got if m.startswith("notes/doc.yaml:")], got
+    assert len(got) == 1, got
+    doc.write_text("note: nothing rule-shaped here\n", encoding="utf-8")
+    got = cr.stale_rule_source_entries(tmp_path, rings=_rings)
+    assert [m for m in got if m.startswith("notes/doc.yaml:") and "no longer needed" in m], got
+
+
+def test_rules_in_a_template_ring_in_every_spelling(tmp_path):
+    """N1: in a file no reading reads (a Helm template), a rule written as one
+    line of JSON, as a flow mapping, or in a templated ConfigMap's
+    `binaryData` still rings when it sits outside the declaration."""
+    import base64  # noqa: PLC0415
+    head = "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: {{ .Release.Name }}\n"
+    rules_json = '{"groups":[{"name":"g","rules":[{"alert":"J","expr":"up == 0"}]}]}'
+    forms = {
+        "one-line JSON": head + "data:\n  r.json: '" + rules_json + "'\n",
+        "flow mapping": head + "data:\n  r.yml: |\n    groups:\n      - name: g\n"
+                        "        rules: [{record: job:up:sum, expr: sum(up)}]\n",
+        "flow entry": head + "data:\n  r.yml: |\n    groups:\n      - name: g\n"
+                      "        rules:\n          - {alert: F, expr: up == 0}\n",
+        "binaryData": head + "binaryData:\n  r.yml: " + base64.b64encode(
+            b"groups:\n  - name: g\n    rules:\n      - alert: B\n        expr: up == 0\n"
+        ).decode("ascii") + "\n",
+    }
+    for label, text in forms.items():
+        rel = "helm/c/templates/rules.yaml"
+        (tmp_path / label / rel).parent.mkdir(parents=True)
+        (tmp_path / label / rel).write_text(text, encoding="utf-8")
+        assert isinstance(cr.any_yaml_documents_of([str(tmp_path / label / rel)],
+                                                   keep_refusals=True)[str(tmp_path / label / rel)],
+                          cr.ConsumerReadError), f"{label}: the fixture is no template"
+        rung = _rule_tripwire.rule_shaped_outside_declaration(
+            str(tmp_path / label), [rel], frozenset())
+        assert len(rung) == 1 and "rule key" in rung[0], (label, rung)
+    # …and a template with none of them rings nothing.
+    (tmp_path / "quiet" / "helm").mkdir(parents=True)
+    (tmp_path / "quiet" / "helm" / "t.yaml").write_text(
+        head + "data:\n  alerting: {{ .Values.on }}\n  note: alert me later\n", encoding="utf-8")
+    assert _rule_tripwire.rule_shaped_outside_declaration(
+        str(tmp_path / "quiet"), ["helm/t.yaml"], frozenset()) == ()
 
 
 def test_every_declared_place_is_inside_the_tripwire_scope():
@@ -234,4 +299,4 @@ def test_a_template_that_spells_out_recording_rules_rings(tmp_path):
         "groups:\n  - name: {{ .Release.Name }}\n    rules:\n"
         "      - record: job:up:sum\n        expr: sum(up)\n", encoding="utf-8")
     rung = _rule_tripwire.rule_shaped_outside_declaration(str(tmp_path), [rel], frozenset())
-    assert len(rung) == 1 and "- record:" in rung[0], rung
+    assert len(rung) == 1 and "rule key" in rung[0], rung

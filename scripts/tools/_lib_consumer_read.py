@@ -92,7 +92,7 @@ import shutil
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Iterable, NamedTuple
+from typing import Any, Callable, Iterable, NamedTuple
 
 CRDECODE_BINARY_NAME = "da-crdecode"
 DA_READ_BINARY_NAME = "da-read"
@@ -1488,13 +1488,26 @@ def chart_values_rule_files(repo_root: "str | os.PathLike[str]",
     return out
 
 
-def stale_rule_source_entries(repo_root: "str | os.PathLike[str]") -> "list[str]":
-    """Declaration entries that name nothing (#3438): a ``RULE_SOURCES``
-    entry's ``not_rule_files`` name, a ``NOT_RULE_FILES`` path or a
-    ``CHART_VALUES_RULES`` values file that is not there, and a registered
-    key path the values file does not hold — one message each. A stale entry
-    is not left in silence: it reads as an account of a file that no longer
-    is one. Raises :class:`ConsumerReadError` when a binary cannot be had."""
+def stale_rule_source_entries(repo_root: "str | os.PathLike[str]", *,
+                              rings: "Callable[[str, list[str]], tuple[str, ...]]"
+                              ) -> "list[str]":
+    """Declaration entries that name nothing, or no longer need to (#3438),
+    one message each:
+
+    * a ``RULE_SOURCES`` entry's ``not_rule_files`` name, a
+      ``NOT_RULE_FILES`` path or a ``CHART_VALUES_RULES`` values file that
+      is not there, and a registered key path the values file does not hold;
+    * a ``NOT_RULE_FILES`` path that is also a declared rule file — it is
+      read as rules and exempted as no rules at once;
+    * a ``NOT_RULE_FILES`` path the coverage tripwire would not ring on
+      without its exemption: the exemption is no longer needed and would
+      hide whatever rules land there next.
+
+    *rings* is the coverage tripwire run on ``(repo_root, [paths])`` without
+    exemptions (the caller passes it: no module under scripts/tools imports
+    the tripwire). A stale entry is not left in silence: it reads as an
+    account of a file that no longer is one. Raises
+    :class:`ConsumerReadError` when a binary cannot be had."""
     root = pathlib.Path(repo_root)
     out = []
     for src in RULE_SOURCES:
@@ -1502,9 +1515,28 @@ def stale_rule_source_entries(repo_root: "str | os.PathLike[str]") -> "list[str]
             if not (root / src.directory / name).is_file():
                 out.append(f"{src.directory}/{name}: in the not_rule_files of the "
                            f"{src.directory} entry of RULE_SOURCES, and not there")
+    try:
+        rule_files = {p.relative_to(root).as_posix() for p in repo_rule_files(root)}
+    except SourcesUnlisted as e:
+        out.append(f"RULE_SOURCES: {e}: {_reason(e)}")
+        rule_files = set()
+    except NoDeclaredRuleFiles as e:
+        out.append(f"RULE_SOURCES: {e}")
+        rule_files = set()
+    still = []
     for path, _why in NOT_RULE_FILES:
         if not (root / path).is_file():
             out.append(f"{path}: in NOT_RULE_FILES, and not there")
+        elif path in rule_files:
+            out.append(f"{path}: in NOT_RULE_FILES and a declared rule file (RULE_SOURCES) "
+                       "at once — it cannot be both")
+        else:
+            still.append(path)
+    for path in still:
+        if not rings(str(root), [path]):
+            out.append(f"{path}: in NOT_RULE_FILES, and the coverage tripwire would not ring "
+                       "on it without the exemption — the exemption is no longer needed; "
+                       "drop it")
     for rf in chart_values_rule_files(root):
         if rf.unread:
             out.append(f"{rf.manifest}#{rf.key}: a CHART_VALUES_RULES registration that "

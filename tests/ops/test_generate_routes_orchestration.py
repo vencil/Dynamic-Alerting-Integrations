@@ -4365,7 +4365,7 @@ class TestSilentZeroSentinel:
             f"loudest silent-zero there is, and it went unreported: {got}")
         assert "kubectl's reading" in got[rel], got[rel]
         rung = _tripwire({"k8s/elsewhere.yaml": broken})
-        assert len(rung) == 1 and "- alert:" in rung[0], rung
+        assert len(rung) == 1 and "rule key" in rung[0], rung
 
 
 class TestScannerAnchorsAreFailClosed:

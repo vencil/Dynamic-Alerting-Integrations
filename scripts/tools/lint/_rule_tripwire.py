@@ -22,12 +22,19 @@ real rule (`alert` or `record`) at any depth, or a bare list of rules with
     (a ConfigMap data value — `|` block, quoted scalar or one-line JSON — is
     such a string; text without a `:` reads to no mapping, so to no rule),
     and of every `binaryData` value, base64-decoded;
-and, where a reading refuses the text (a Helm template, a broken value), the
-`- alert:` / `- record:` regex on that text.
+and, where a reading refuses the text (a Helm template, a broken value), a
+regex for a rule key (`alert` / `record`) written in any of YAML's spellings
+— a block sequence entry (`- alert:`), a flow mapping (`{alert: …`,
+`, record: …`) or a JSON key (`"alert":`) — on that text and, for a whole
+file no reading reads, on every base64-shaped scalar in it, decoded (a
+`binaryData` value of a templated ConfigMap).
 Known misses: a string inside a string (a rule file nested in a value of a
-value), rules a template builds from parts, a binaryData value that is not
-base64 of UTF-8 text (named nowhere: it is no rule file either). A file no
-standard encoding decodes is named (it cannot be judged at all).
+value), rules a template builds from parts (a key spelled through `{{ }}`),
+a rule key that is neither first in its block entry nor after `{` / `,`
+(in a block mapping below `- expr: …`, say) when no reading reads the text,
+and a binaryData value that is not base64 of UTF-8 text (named nowhere: it
+is no rule file either). A file no standard encoding decodes is named (it
+cannot be judged at all).
 """
 from __future__ import annotations
 
@@ -46,8 +53,30 @@ from _rule_tree import _decode_manifest  # noqa: E402
 
 # ⛔ Regex, not a literal. `-  alert:` (two spaces) is the same YAML and
 # evaded the substring, so the tripwire could be stepped around with a
-# whitespace edit.
-_ALERT_LINE = re.compile(r"^\s*-\s+(?:alert|record)\s*:", re.M)
+# whitespace edit. Three spellings of a rule key, for text no reading reads:
+# a block sequence entry (`- alert:`), a key after `{` or `,` (a flow
+# mapping, or JSON), each with the key bare, single- or double-quoted.
+_ALERT_LINE = re.compile(
+    r"""(?:^[ \t]*-[ \t]+|[{,]\s*)(?:alert|record|"alert"|"record"|'alert'|'record')\s*:""",
+    re.M)
+#: A scalar that may be base64 (a `binaryData` value) in a text no reading reads.
+_BASE64_SCALAR = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{16,}={0,2}(?![A-Za-z0-9+/=])")
+
+
+def _spells_out_rules(text: str) -> bool:
+    """Whether *text*, which no reading reads, spells out a rule key — in
+    itself, or in a base64-shaped scalar of it decoded (a templated
+    ConfigMap's `binaryData`)."""
+    if _ALERT_LINE.search(text):
+        return True
+    for m in _BASE64_SCALAR.finditer(text):
+        try:
+            decoded = _lib_consumer_read.binary_data_bytes(m.group(0)).decode("utf-8")
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if _ALERT_LINE.search(decoded):
+            return True
+    return False
 
 
 def _is_rule_groups(value) -> bool:
@@ -144,15 +173,18 @@ def declared_not_rules() -> "frozenset[str]":
 
 
 def rule_shaped_outside_declaration(repo_root: str, tracked_yaml: "list[str]",
-                                    declared: "frozenset[str]") -> "tuple[str, ...]":
+                                    declared: "frozenset[str]", *,
+                                    honour_exemptions: bool = True) -> "tuple[str, ...]":
     """One message per tracked YAML in *tracked_yaml* (repo-relative) that is
     not a *declared* rule file, not declared to ship no rules
     (``declared_not_rules``), and looks like rules — the empty tuple when
     nothing does. A registered chart values file (`CHART_VALUES_RULES`) is
     judged without its registered keys. Raises `ConsumerReadError` when
     da-crdecode cannot be had (an any-YAML refusal is no error: such a file
-    is judged on its text)."""
-    skip = declared | declared_not_rules()
+    is judged on its text). With *honour_exemptions* False, `NOT_RULE_FILES`
+    is judged too — the check that an exemption is still needed
+    (`_lib_consumer_read.stale_rule_source_entries`)."""
+    skip = declared | (declared_not_rules() if honour_exemptions else frozenset())
     registered: "dict[str, list[tuple[str, ...]]]" = {}
     for reg in _lib_consumer_read.CHART_VALUES_RULES:
         registered.setdefault(reg.values, []).append(reg.key_path)
@@ -177,9 +209,9 @@ def rule_shaped_outside_declaration(repo_root: str, tracked_yaml: "list[str]",
                            "tripwire nor kubectl can read it")
             continue
         if isinstance(docs, _lib_consumer_read.ConsumerReadError):
-            if _ALERT_LINE.search(text):
-                alarms[rel] = ("spells out `- alert:` / `- record:` (no YAML reading "
-                               "reads the file)")
+            if _spells_out_rules(text):
+                alarms[rel] = ("spells out a rule key (`alert` / `record`; no YAML "
+                               "reading reads the file)")
             continue
         for doc in docs:
             for key_path in registered.get(rel, ()):
@@ -196,8 +228,8 @@ def rule_shaped_outside_declaration(repo_root: str, tracked_yaml: "list[str]",
             continue
         if isinstance(docs, _lib_consumer_read.ConsumerReadError):
             if _ALERT_LINE.search(t):
-                alarms[rel] = ("holds a text that spells out `- alert:` / `- record:` "
-                               "(no YAML reading reads it)")
+                alarms[rel] = ("holds a text that spells out a rule key (`alert` / "
+                               "`record`; no YAML reading reads it)")
         elif any(_rules_shaped_at_any_depth(d) is not None for d in docs):
             alarms[rel] = "holds a text (a data value, say) that reads as Prometheus rules"
     return tuple(f"{rel}: {alarms[rel]}, and no rule contract reads it — {ask}"
