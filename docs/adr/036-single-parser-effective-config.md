@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-09
-updated_at: 2026-10-30
+updated_at: 2026-10-31
 ---
 
 # ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判
@@ -41,6 +41,7 @@ updated_at: 2026-10-30
 - **2026-10-30 第三次修訂**：「成本」與「已知限制與風險」的體積數字改為以出貨用的建置（`scripts/ops/go_build.sh`）重量的結果，附量測日期、commit 與指令；先前的數字所用的建置旗標與實際出貨的不同。決策不變。
 - **2026-10-30 第四次修訂**：§7 步驟 9 寫明 `batch_diagnose` 現在把 ConfigMap 落成樹、經共用出口讀取，租戶取 `da-guard effective` 的答案；決策不變。
 - **2026-10-30 第五次修訂**：§12 寫明 `da-crdecode` 的兩種讀法（manifest：每份文件是有 `kind` 的物件、list 換成它的 items；`--any-shape`：只轉換）與輸出的 `reading` 欄；Helm values 那列改為 `--any-shape`；決策不變。
+- **2026-10-31 修訂**：§12 寫明 list 的 item 在 `kind` 與 `apiVersion` 都沒寫時，照 kubectl 從 list 繼承兩者，輸出的是繼承後的 item；改寫 manifest 讀法比 kubectl 嚴格的地方（不只一處）；決策不變。
 
 ## 摘要
 
@@ -588,7 +589,7 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 
 **`da-crdecode` 的兩種讀法**：同一個轉換（sigs.k8s.io/yaml，照 `kubectl apply -f` 切文件），差在對每份文件的形狀要求什麼。
 
-- **manifest（預設）**：讀 Kubernetes manifest，與 kubectl 套用時一樣要求形狀。每份文件必須是 mapping，且 `kind` 是非空字串；不是就以結束碼 2 拒收，stderr 寫出 kubectl 的理由；檔案有多份文件時另寫出被拒那份的起始行（單一文件的檔不帶行號），被拒的是 list 的 item 時寫成 `items[i] (line N)`。有頂層 `items` 的文件就是 list，不論 `kind` 的值為何（它和每份文件一樣仍須有非空字串的 `kind`；`kubectl get … -o yaml` 輸出的是 `kind: List`，但不是由這個值決定），照 kubectl 換成它的 items、依序輸出，list 本身不輸出；每個 item 必須是 `apiVersion` 與 `kind` 都是非空字串的物件，item 本身又是 list 時拒收（kubectl 也拒收）。list 帶有自己的內容（`items` 旁邊有 `data`、`spec` 等 `apiVersion`／`kind`／`metadata` 以外的鍵）時拒收並點名那些鍵：kubectl 會不出聲地丟掉這些內容，寫在裡面的 rule 不會部署——這是這個讀法唯一比 kubectl 嚴格的地方。所以呼叫端拿到的每份文件都是有 `kind` 的物件、不是 list，不需要、也不應該再以型別判斷略過文件。每份輸出文件各有一份 `differs_from_text`，item 的路徑從 item 算起；list 外層（items 以外）的原文與讀法不同時，差異無法歸給任何 item，整份拒收，不讓差異遺失。
+- **manifest（預設）**：讀 Kubernetes manifest，與 kubectl 套用時一樣要求形狀。每份文件必須是 mapping，且 `kind` 是非空字串；不是就以結束碼 2 拒收，stderr 寫出 kubectl 的理由；檔案有多份文件時另寫出被拒那份的起始行（單一文件的檔不帶行號），被拒的是 list 的 item 時寫成 `items[i] (line N)`。有頂層 `items` 的文件就是 list，不論 `kind` 的值為何（它和每份文件一樣仍須有非空字串的 `kind`；`kubectl get … -o yaml` 輸出的是 `kind: List`。是不是 list 不由這個值決定，但 item 繼承到的 `kind` 由它決定，見下），照 kubectl 換成它的 items、依序輸出，list 本身不輸出。item 本身又是 list（它的 `items` 是陣列）時拒收，kubectl 也拒收；這一項先於 item 的型別檢查。item 的 `kind` 與 `apiVersion` 兩者都不是非空字串（沒寫、null、不是字串或空字串）時，照 kubectl 的解碼從 list 繼承兩者，取代 item 原本寫的值：`kind` 是 list 的 `kind` 去掉結尾的一個 `List`，`apiVersion` 是 list 的 `apiVersion`；只缺其中一個時不繼承。item 是 `null` 時與 kubectl 一樣當成空物件 `{}`，同樣繼承。繼承之後，每個 item 的 `kind` 與 `apiVersion` 都必須是非空字串，否則拒收。所以 `ConfigMapList` 裡兩者都沒寫的 item 是 `v1` 的 `ConfigMap`；`kind: List` 去掉 `List` 是空字串，它的 item 必須自己寫出型別。輸出的是 kubectl 實際套用的 item，帶著繼承來的 `kind` 與 `apiVersion`；原文比對以檔案的文字為準，繼承補上的鍵不產生差異。list 帶有自己的內容（`items` 旁邊有 `data`、`spec` 等 `apiVersion`／`kind`／`metadata` 以外的鍵）時拒收並點名那些鍵：kubectl 會不出聲地丟掉這些內容，寫在裡面的 rule 不會部署。這個讀法比 kubectl 嚴格的地方不只這一處：list 外層的原文與讀法不同時整份拒收（見本段末）；任何一個 item 或文件被拒收時整個檔都不輸出，而 kubectl 對型別不對的 item（繼承後仍缺 `kind` 或 `apiVersion`）或文件，會略過那一個、照樣讀出其他的，最後才回報錯誤（item 不是 mapping 時則不同：kubectl 在解碼時就丟掉整份 list，一個 item 也不讀出，但照樣讀出檔裡其他文件）。所以呼叫端拿到的每份文件都是有 `kind` 的物件、不是 list，不需要、也不應該再以型別判斷略過文件。每份輸出文件各有一份 `differs_from_text`，item 的路徑從 item 算起；list 外層（items 以外）的原文與讀法不同時，差異無法歸給任何 item，整份拒收，不讓差異遺失。
 - **`--any-shape`**：讀不是 manifest 的 YAML：Helm values、`Chart.yaml`、單獨的 rule file、ConfigMap 裡的字串值。只做轉換、切文件與原文比對，不要求文件的形狀。
 
 輸出另帶 `reading` 欄（`manifest` 或 `any-shape`），寫明這份輸出是哪一種讀法。呼叫端依賴 manifest 讀法的形狀保證，舊版的 `da-crdecode` 沒有這個保證也不印這個欄位；Python 端拿到的 `reading` 不是它要的那一種時，當成讀不到，不當成文件。Python 端兩種讀法是兩組函式名稱（`kubernetes_*` 與 `any_yaml_*`），每個呼叫點依它讀的是什麼檔選一組。
@@ -600,6 +601,8 @@ $ da-crdecode list.yaml          # kind: List，兩個 ConfigMap
 {"documents":[{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"a","labels":{"instance":8}}},{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"b"}}],"differs_from_text":[[],[]],"reading":"manifest"}
 $ da-crdecode bad.yaml           # kind: List，item 沒有 apiVersion
 da-crdecode: bad.yaml: in this list, items[0] (line 4): it is not a Kubernetes object: it has no `apiVersion` (kubectl: Object 'apiVersion' is missing)
+$ da-crdecode cmlist.yaml        # kind: ConfigMapList，item 只寫了 metadata 與 data
+{"documents":[{"metadata":{"name":"a"},"data":{"k":"v"},"apiVersion":"v1","kind":"ConfigMap"}],"differs_from_text":[[]],"reading":"manifest"}
 $ da-crdecode values.yaml        # replicaCount: 1
 da-crdecode: values.yaml: it is not a Kubernetes object: it has no `kind` (kubectl: Object 'Kind' is missing)
 $ da-crdecode --any-shape values.yaml

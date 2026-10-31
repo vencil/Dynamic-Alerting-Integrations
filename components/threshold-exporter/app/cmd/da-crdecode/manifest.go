@@ -30,16 +30,47 @@ import (
 //     `metadata` and `items` (a ConfigMap's `data`, a PrometheusRule's
 //     `spec`) — is discarded by kubectl without a word. That is no reading
 //     of the file a caller can stand on (rules written there never deploy),
-//     so here the document is refused, naming the keys (#3438). This is the
-//     one place this reading is stricter than kubectl.
-//   - Each item must be an object with a non-empty string `kind` AND a
-//     non-empty string `apiVersion` (kubectl asks every item for its type:
-//     "Object 'apiVersion' is missing", which it does not ask of a document).
+//     so here the document is refused, naming the keys (#3438), which is
+//     stricter than kubectl.
 //   - An item that is itself a list — any item whose `items` is a JSON array,
 //     an empty one and a nested `kind: List` included — is refused by kubectl
 //     ("is not a list: no Items field in this object"), and is refused here.
-//     An item whose `items` is null, a string, a number or an object is an
-//     ordinary object to kubectl (measured: it is applied), and here.
+//     This is checked before the item's type: an item with `items: [...]` and
+//     no `kind` is refused as a list inside a list. An item whose `items` is
+//     null, a string, a number or an object is an ordinary object to kubectl
+//     (measured: it is applied), and here.
+//   - An item takes its type from the list when it has neither: when its
+//     `kind` and its `apiVersion` both read as "" — missing, null, not a
+//     string, or empty, as unstructured's GetKind / GetAPIVersion read them —
+//     both are set (replacing what was there) to the list's `kind` with one
+//     trailing "List" taken off and the list's `apiVersion` ("" when that is
+//     not a string). apimachinery's decodeToList does this
+//     (unstructured/helpers.go). An item that lacks only one of the two takes
+//     nothing. So an item of a `ConfigMapList` with neither is a `v1`
+//     `ConfigMap`, of a `kind: ConfigMap` list one too, of a
+//     `ConfigMapListList` a `ConfigMapList`; of a `kind: List` it takes kind
+//     "" and is refused for it, and of a list with no `apiVersion` it is
+//     refused for its apiVersion.
+//   - Then each item must have a non-empty string `kind` AND a non-empty
+//     string `apiVersion` (kubectl asks every item for its type: "Object
+//     'apiVersion' is missing", which it does not ask of a document). The
+//     item given to the caller is the item as kubectl applies it: with the
+//     type it took from the list. Keys it did not have follow its own keys
+//     (`apiVersion` before `kind`), as a key the file does not write follows
+//     the written ones (aswritten.go); its differences (aswritten.go) under a
+//     `kind` or `apiVersion` it replaced are dropped, since that value is no
+//     longer in it. The comparison is made on the file's text, so the type
+//     the item took adds no difference.
+//   - kubectl goes on past an item (or a document) refused for its type and
+//     applies the others before it reports the error; an item that is no
+//     mapping (a number, a string, a bool, an array: "cannot unmarshal …
+//     into Go value of type map[string]interface {}") makes it drop the
+//     whole list (none of its items), the file's other documents still
+//     applied. Here the first refused one stops the whole file, which is
+//     stricter.
+//   - A null item is an empty object to kubectl (decodeToList unmarshals it
+//     into an empty map), and is read here as `{}`: it takes the list's type
+//     like any item with neither, and is given as `{}` with that type.
 //
 // The as-written comparison (aswritten.go) is made on the whole list
 // document; each of its differences is given to the item its path starts
@@ -52,14 +83,23 @@ import (
 // Kubernetes object.
 const notObject = "it is not a Kubernetes object: "
 
-// objectKind checks that *raw* is an object with a non-empty string `kind`
-// and returns its top-level fields.
-func objectKind(raw json.RawMessage) (map[string]json.RawMessage, error) {
+// object checks that *raw* is an object and returns its top-level fields.
+func object(raw json.RawMessage) (map[string]json.RawMessage, error) {
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &obj); err != nil || obj == nil {
 		return nil, fmt.Errorf(notObject+"the document is %s, not a mapping "+
 			"(kubectl: cannot unmarshal %s into Go value of type unstructured.detector)",
 			jsonShape(raw), jsonShape(raw))
+	}
+	return obj, nil
+}
+
+// objectKind checks that *raw* is an object with a non-empty string `kind`
+// and returns its top-level fields.
+func objectKind(raw json.RawMessage) (map[string]json.RawMessage, error) {
+	obj, err := object(raw)
+	if err != nil {
+		return nil, err
 	}
 	if err := nonEmptyString(obj, "kind", "Object 'Kind' is missing"); err != nil {
 		return nil, err
@@ -115,13 +155,19 @@ func manifestDocuments(source []byte, doc json.RawMessage, differs []difference)
 		return nil, nil, err
 	}
 	lines := itemLines(source, len(items))
+	listKind, listAPIVersion := stringField(obj, "kind"), stringField(obj, "apiVersion")
 	for i, item := range items {
-		if err := listItem(item); err != nil {
+		typed, took, err := listItem(item, listKind, listAPIVersion)
+		if err != nil {
 			where := fmt.Sprintf("items[%d]", i)
 			if lines[i] > 0 {
 				where += fmt.Sprintf(" (line %d)", lines[i])
 			}
 			return nil, nil, fmt.Errorf("in this list, %s: %w", where, err)
+		}
+		items[i] = typed
+		if took {
+			perItem[i] = outsideTypeFields(perItem[i])
 		}
 	}
 	return items, perItem, nil
@@ -144,20 +190,146 @@ func listOwnContent(obj map[string]json.RawMessage) []string {
 	return own
 }
 
-// listItem refuses an item of a list that kubectl would not apply.
-func listItem(item json.RawMessage) error {
-	obj, err := objectKind(item)
-	if err != nil {
-		return err
+// stringField is *obj*'s *key* as unstructured's GetKind / GetAPIVersion
+// read it (getNestedString): the string, or "" when it is missing, null or
+// not a string.
+func stringField(obj map[string]json.RawMessage, key string) string {
+	var s string
+	if raw, ok := obj[key]; ok && json.Unmarshal(raw, &s) == nil {
+		return s
 	}
-	if err := nonEmptyString(obj, "apiVersion", "Object 'apiVersion' is missing"); err != nil {
-		return err
+	return ""
+}
+
+// listItem is the item *item* of a list whose `kind` and `apiVersion` read
+// *listKind* and *listAPIVersion*, as kubectl applies it, and whether it took
+// its type from the list; an error for an item kubectl would not apply. See
+// the comment at the top of this file.
+func listItem(item json.RawMessage, listKind, listAPIVersion string) (json.RawMessage, bool, error) {
+	shape := jsonShape(item)
+	if shape == "null" {
+		item = json.RawMessage("{}") // kubectl's reading of a null item
 	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(item, &obj); err != nil || obj == nil {
+		return nil, false, fmt.Errorf(notObject+"the item is %s, not a mapping (kubectl: cannot "+
+			"unmarshal %s into Go value of type map[string]interface {}, and reads none of this "+
+			"list's items)", withArticle(shape), shape)
+	}
+	var err error
 	if inner, ok := obj["items"]; ok && jsonShape(inner) == "array" {
-		return errors.New("a list inside a list is not read " +
+		return nil, false, errors.New("a list inside a list is not read " +
 			"(kubectl: is not a list: no Items field in this object); write its items as items of the outer list")
 	}
-	return nil
+	if stringField(obj, "kind") != "" || stringField(obj, "apiVersion") != "" {
+		return item, false, typeFields(obj)
+	}
+	kind, apiVersion := strings.TrimSuffix(listKind, "List"), listAPIVersion
+	if item, err = withType(item, kind, apiVersion); err != nil {
+		return nil, false, err
+	}
+	if obj, err = object(item); err != nil {
+		return nil, false, err
+	}
+	if err := typeFields(obj); err != nil {
+		return nil, false, fmt.Errorf("%w — an item with neither a string `kind` nor a string "+
+			"`apiVersion` takes the list's: here kind %q (the list's, one trailing \"List\" "+
+			"taken off) and apiVersion %q", err, kind, apiVersion)
+	}
+	return item, true, nil
+}
+
+// withArticle is the JSON type name *shape* with its indefinite article.
+func withArticle(shape string) string {
+	if shape == "array" || shape == "object" {
+		return "an " + shape
+	}
+	return "a " + shape
+}
+
+// typeFields refuses an item unless its `kind` and its `apiVersion` are
+// non-empty strings, `kind` first, as kubectl asks.
+func typeFields(obj map[string]json.RawMessage) error {
+	if err := nonEmptyString(obj, "kind", "Object 'Kind' is missing"); err != nil {
+		return err
+	}
+	return nonEmptyString(obj, "apiVersion", "Object 'apiVersion' is missing")
+}
+
+// withType is the object *raw* with its `kind` and `apiVersion` set to *kind*
+// and *apiVersion*: a key it has keeps its place, a key it has not follows
+// its own keys, `apiVersion` first.
+func withType(raw json.RawMessage, kind, apiVersion string) (json.RawMessage, error) {
+	set := map[string]string{"apiVersion": apiVersion, "kind": kind}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	if _, err := dec.Token(); err != nil { // the object's `{`
+		return nil, err
+	}
+	var out bytes.Buffer
+	out.WriteByte('{')
+	write := func(key string, value []byte) error {
+		if out.Len() > 1 {
+			out.WriteByte(',')
+		}
+		kb, err := json.Marshal(key)
+		if err != nil {
+			return err
+		}
+		out.Write(kb)
+		out.WriteByte(':')
+		out.Write(value)
+		return nil
+	}
+	done := map[string]bool{}
+	for dec.More() {
+		tok, err := dec.Token()
+		if err != nil {
+			return nil, err
+		}
+		key, _ := tok.(string)
+		var value json.RawMessage
+		if err := dec.Decode(&value); err != nil {
+			return nil, err
+		}
+		if v, ok := set[key]; ok {
+			if value, err = json.Marshal(v); err != nil {
+				return nil, err
+			}
+			done[key] = true
+		}
+		if err := write(key, value); err != nil {
+			return nil, err
+		}
+	}
+	for _, key := range []string{"apiVersion", "kind"} {
+		if done[key] {
+			continue
+		}
+		value, err := json.Marshal(set[key])
+		if err != nil {
+			return nil, err
+		}
+		if err := write(key, value); err != nil {
+			return nil, err
+		}
+	}
+	out.WriteByte('}')
+	return json.RawMessage(out.Bytes()), nil
+}
+
+// outsideTypeFields is *differs* without the differences under an item's
+// `kind` or `apiVersion`, whose values the item no longer holds once it took
+// its type from the list.
+func outsideTypeFields(differs []difference) []difference {
+	out := []difference{}
+	for _, d := range differs {
+		path, _ := d["path"].([]interface{})
+		if len(path) > 0 && (path[0] == "kind" || path[0] == "apiVersion") {
+			continue
+		}
+		out = append(out, d)
+	}
+	return out
 }
 
 // itemDifferences gives each difference of a list document to the item its
