@@ -1,7 +1,7 @@
 {
   "_comment": [
     "Tenant-key membership matrix (#1189 / TRK-337), asserted on the shared key",
-    "verdict (ADR-038 \u00a711) by tests/shared/test_membership_matrix_verdict.py.",
+    "verdict (ADR-038 §11) by tests/shared/test_membership_matrix_verdict.py.",
     "",
     "It was the parity table of two hand-copies of one rule -- Go's",
     "ValidateTenantKeys and Python's validate_tenant_keys. Neither judges key",
@@ -113,13 +113,22 @@
       "why": "unchanged pre-existing behaviour"
     },
     {
+      "name": "dimensional key on a base the platform does not name",
+      "declared": [
+        "oracle_wait_time_rate"
+      ],
+      "key": "oracle_wiat_time_rate{db=\"ORCL\"}",
+      "verdict": "refuse",
+      "why": "a misspelt base: the exporter serves no row for it, as for a misspelt flat key (ADR-038 §11)"
+    },
+    {
       "name": "dimensional spelling named ON the list",
       "declared": [
         "oracle_wait_time_rate{db=\"ORCL\"}"
       ],
       "key": "oracle_wait_time_rate{db=\"ORCL\"}",
-      "verdict": "accept",
-      "why": "the exporter serves a dimensional key from the tenant's value alone (resolveDimensionalRows), whatever the platform names, so the shared verdict reads it as read; the list neither adds nor takes anything here (ADR-038 \u00a711; until then both hand-copies refused it on the parsed base)"
+      "verdict": "refuse",
+      "why": "the exporter serves a dimensional key only when the platform names its parsed BASE (resolveDimensionalRows, ADR-038 §11); the whole dimensional string on the list names no base"
     },
     {
       "name": "bad version label on a DECLARED base is still validated",

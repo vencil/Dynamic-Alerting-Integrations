@@ -90,6 +90,7 @@ func TestResolve_DimensionalBasic(t *testing.T) {
 		Defaults: map[string]float64{
 			"redis_memory": 80,
 		},
+		OptionalOverrides: []string{"redis_queue_length"},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				"redis_memory":                                        SV("75"),
@@ -156,7 +157,8 @@ func TestResolve_DimensionalBasic(t *testing.T) {
 func TestResolve_DimensionalDisable(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{},
+		Defaults:          map[string]float64{},
+		OptionalOverrides: []string{"redis_queue_length"},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				`redis_queue_length{queue="tasks"}`:  SV("500"),
@@ -217,6 +219,8 @@ func TestResolve_DimensionalWithDirMode(t *testing.T) {
 	writeTestFile(t, dir, "_defaults.yaml", `
 defaults:
   redis_memory: 80
+optional_overrides:
+  - redis_db_keys
 `)
 	writeTestFile(t, dir, "db-a.yaml", `
 tenants:
@@ -479,7 +483,8 @@ func TestResolve_RegexDimensionalCriticalNotSupported(t *testing.T) {
 
 	// Correct approach: use "95:critical" value syntax for regex dimensional
 	cfg2 := &ThresholdConfig{
-		Defaults: map[string]float64{},
+		Defaults:          map[string]float64{},
+		OptionalOverrides: []string{"oracle_tablespace"},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				`oracle_tablespace{tablespace=~"SYS.*"}`: SV("95:critical"),

@@ -240,7 +240,7 @@ RULE_PACKS = {
             "pg_replication_lag_critical": {"value": 60, "unit": "seconds", "desc": "Critical tier replication lag"},
         },
         "dimensional_example": {
-            "pg_stat_activity_count{datname=\"orders\"}": "50",
+            "pg_connections{datname=\"orders\"}": "70",
         },
     },
     "mariadb": {
@@ -271,8 +271,8 @@ RULE_PACKS = {
             "redis_replication_lag": {"value": 30, "unit": "seconds", "desc": "Replica lag warning; 30 = same anchor as mysql/pg replication_lag — redis replication is normally sub-second, so 30s is unambiguous trouble (noise-averse pick, #1231 owner call); #1196 C identity fix, no alias"},
         },
         "dimensional_example": {
-            "redis_queue_length{queue=\"order-processing\"}": "100",
-            "redis_db_keys{db=\"db0\"}": "1000000",
+            "redis_connected_clients{instance=\"redis-orders:6379\"}": "500",
+            "redis_evicted_keys_rate{instance=\"redis-cache:6379\"}": "500",
         },
     },
     "mongodb": {
@@ -286,7 +286,7 @@ RULE_PACKS = {
             "mongodb_opcounters_rate": {"value": 10000, "unit": "ops/s", "desc": "Total operations rate; #1196 B identity fix: renamed from mongodb_opcounters_total (alert demands _rate) + moved optional_overrides→defaults — unwired dead key, no alias"},
         },
         "dimensional_example": {
-            "mongodb_op_latency{database=\"orders\"}": "50",
+            "mongodb_replication_lag{rs=\"rs-orders\"}": "30",
         },
     },
     "elasticsearch": {
@@ -301,7 +301,7 @@ RULE_PACKS = {
             "es_search_latency_ms": {"value": 1000, "unit": "ms", "desc": "Avg search latency warning (rate(query_time)/rate(query_total), per-query mean); 1000 = Awesome Prometheus Alerts ElasticsearchHighQueryLatency anchor (same formula, 1s/5m warning) — the only community rule semantically identical to ours; full derivation + calibration caveat in the pack header (#1196 D)"},
         },
         "dimensional_example": {
-            "es_index_doc_count{index=\"logs-prod\"}": "50000000",
+            "es_search_latency_ms{index=\"logs-prod\"}": "2000",
         },
     },
     "oracle": {

@@ -524,8 +524,19 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 		// its own and serves the tenant's value of it).
 		return criticalBaseValued(cfg, base) || rootDefaultsHold(cfg, key)
 	}
-	if keyBypassesTheDeclaredSurface(key) {
-		return true
+	if isDimensionalKey(key) {
+		// resolveDimensionalRows' entry condition (dimensionalBaseNamed,
+		// ADR-038 §11): the root `defaults:` writes the key itself, or the
+		// platform names its base — either #1231 spelling.
+		if rootDefaultsHold(cfg, key) {
+			return true
+		}
+		base := key[:strings.Index(key, "{")]
+		if declaredAnywhere(cfg, base) {
+			return true
+		}
+		canon, _ := canonicalKeyFor(base)
+		return declaredAnywhere(cfg, canon)
 	}
 	if declaredAnywhere(cfg, key) {
 		return true
@@ -543,8 +554,8 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 	return false
 }
 
-// keyBypassesTheDeclaredSurface reports whether this key is served by a
-// resolver that reads the tenant's override map directly.
+// keyCanReachTheOutputPlane's arms for the keys a resolver reads from the
+// tenant's override map directly (`_critical`, dimensional).
 //
 // ⛔ THE ARMS MIRROR EACH RESOLVER'S ENTRY CONDITION, NOT ITS KEY NAMING.
 // A prefix is only safe to bypass on when the resolver ALSO keys off that
@@ -567,10 +578,12 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 // (subtree_default_undeliverable, the exporter's ERROR and gauge), and keeps
 // the common case — the base IS a root default — delivered.
 //
-// ⚠️ A dimensional key stays unconditional although its resolver has a
-// further condition (the label set must parse): a dimensional key is served
-// whether or not the root declares its base (measured), and an unparseable
-// label set WARNs on its own.
+// ⛔ A DIMENSIONAL KEY IS NOT ANSWERED HERE EITHER (ADR-038 §11): its
+// resolver serves it only when the platform names its base
+// (dimensionalBaseNamed), and keyCanReachTheOutputPlane asks that before
+// this function. It used to pass unconditionally, when the resolver served
+// a dimensional key whatever its base. An unparseable label set still WARNs
+// on its own.
 //
 // The exclusions below are not invented here. They are copied from what
 // `resolveDimensionalRows` and `resolveCriticalRows` THEMSELVES skip: this
@@ -585,14 +598,6 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 // here and is refused unless declared: `ResolveRouting` reads only the exact
 // key `_routing`, and `_routing` being a valid reserved prefix means
 // `ValidateTenantKeys` does not warn about `_routing_bogus: 5` either.
-func keyBypassesTheDeclaredSurface(key string) bool {
-	switch {
-	case strings.Contains(key, "{") && !reservedShapeWins(key): // resolveDimensionalRows
-		return true
-	}
-	return false
-}
-
 // criticalKeySuffix mirrors pkg/config's unexported `criticalSuffix`.
 const criticalKeySuffix = "_critical"
 
@@ -709,8 +714,8 @@ func declaredAnywhere(cfg *ThresholdConfig, key string) bool {
 // resolveDeclaredRows' leading-underscore net skips. Reserved keys keep
 // counting (see the ⛔ in declaredAnywhere). resolveDeclaredRows' other
 // skips (a valued default, `{`, `_critical`) hand the key to a sibling
-// resolver that declaredAnywhere's defaults arm or
-// keyBypassesTheDeclaredSurface already asks, so they are not repeated here.
+// resolver that declaredAnywhere's defaults arm or keyCanReachTheOutputPlane's
+// own arms already ask, so they are not repeated here.
 func optionalOverridesCanDeclare(key string) bool {
 	return !strings.HasPrefix(key, "_") || IsReservedKey(key)
 }

@@ -85,9 +85,9 @@ tenants:
     container_cpu: "70"              # 覆蓋預設值 80
     mysql_replication_lag: "disable" # 無 replica，停用
     # mysql_threads_running 未指定 → 使用預設值 30
-    # 維度標籤
-    "redis_queue_length{queue='tasks'}": "500"
-    "redis_queue_length{queue='events', priority='high'}": "1000:critical"
+    # 維度標籤（base 須是平台宣告的 key——這裡是上方 defaults 的 mysql_connections——或根 defaults 寫了整個鍵，否則不產生 metric）
+    "mysql_connections{instance='db-primary:3306'}": "500"
+    "mysql_connections{instance='db-replica:3306', role='replica'}": "1000:critical"
 ```
 
 #### 邊界強制規則 (Boundary Enforcement)
@@ -359,8 +359,10 @@ tenants:
 ```yaml
 tenants:
   redis-prod:
-    "redis_queue_length{queue='orders'}": "500:critical"
+    "redis_connected_clients{instance='redis-orders:6379'}": "500:critical"
 ```
+
+> 這只示範語法：出貨的 Redis Rule Pack 只讀 `severity="warning"` 的列（`RedisHighConnections` 也只是 warning 告警），要 critical 告警得自訂讀 `severity="critical"` 的 Recording／Alert Rule。
 
 severity 取最後一個 `:` 之後的部分，只能是 `warning` 或 `critical`（不分大小寫）。其他寫法（`500:high`、空的 `500:`）沒有任何 Rule Pack 規則會選，整個值視為讀不懂：基本 key 改送平台預設值（severity 為 warning），維度 key 與 `optional_overrides:` 宣告的 key 不送出該 series；兩者都由 da-guard 的 `value_not_served` 報出（[#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071)）。
 
@@ -417,6 +419,8 @@ tenants:
    ```
 2. **Recording Rule 層**：PromQL 使用 `label_replace` + `=~` 在查詢時完成實際匹配
 3. **設計原則**：Exporter 保持為純 config→metric 轉換器，匹配邏輯完全由 Prometheus 原生向量運算執行
+
+> ⚠️ **出貨的 Rule Pack 目前不依維度判斷**：門檻正規化寫的是 `max by(tenant)(user_threshold{…})`，維度 label 在這一步就丟掉了，觀測序列也只依 `tenant` 聚合。所以維度鍵（精確或 regex）改到的是**整個租戶**的門檻：各維度值與 base 值合成單一個值（取最大；沒有 base 列時就是維度值本身），不會依維度分開生效——告警方向是 `>` 的指標因此被放寬，方向是 `<` 的（例如 hit ratio）反而變嚴；對維度鍵寫 `disable` 只是不送出這一列，不會只停掉那個維度的告警。目前依 label 值分開讀的只有 kubernetes pack 的 `version` 標籤（[ADR-024](../adr/024-version-aware-threshold-via-dimensional-label.md)）。要依維度判斷得連同 Rule Pack 一起改，追蹤於 [#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)；出貨範例因此不放維度鍵。
 
 ### 2.6 排程式閾值 (Scheduled Thresholds)
 

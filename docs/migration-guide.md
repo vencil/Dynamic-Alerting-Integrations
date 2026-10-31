@@ -251,13 +251,15 @@ tenants:
 ```yaml
 tenants:
   redis-prod:
-    redis_queue_length: "1000"                                # 全域預設
-    "redis_queue_length{queue=\"order-processing\"}": "100"   # 嚴格
-    "redis_queue_length{queue=\"analytics\"}": "5000"         # 寬鬆
-    "redis_queue_length{queue=\"temp\"}": "disable"           # 停用
+    redis_connected_clients: "500"                                              # 全域預設
+    "redis_connected_clients{instance=\"redis-orders:6379\"}": "200"           # 嚴格
+    "redis_connected_clients{instance=\"redis-analytics:6379\"}": "1000"       # 寬鬆
+    "redis_connected_clients{instance=\"redis-temp:6379\"}": "disable"         # 停用
     # 多重 label：
-    "mongodb_collection_count{database=\"orders\",collection=\"transactions\"}": "10000000"
+    "mongodb_replication_lag{rs=\"rs-orders\",member=\"mongo-orders-dr\"}": "60"
 ```
+
+> ⚠️ 出貨的 Rule Pack 以 `max by(tenant)` 正規化門檻、維度 label 在那一步就丟掉，所以上面這幾列**目前不會依 instance 分開生效**：它們與 base 合成一個租戶門檻；`disable` 只是不送出這一列，不會只停掉那個 instance。要依維度判斷，得照下方「平台團隊 PromQL 適配」改 Rule Pack（[#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)）。
 
 **設計約束**：
 
@@ -265,10 +267,11 @@ tenants:
 |------|------|
 | YAML 需加引號 | 含 `{` 的 key 必須用雙引號包裹 |
 | 不支援 `_critical` 後綴 | 改用 `"value:severity"` 語法，如 `"500:critical"` |
-| Tenant-only | 維度 key 不繼承 `defaults`，僅允許在租戶設定中 |
-| 三態仍適用 | 數值=Custom, 省略=Default (僅基本 key，且該 key 在 `_defaults.yaml` 的 `defaults:` 有值；列在 `optional_overrides:` 的宣告 key 省略＝無值＝靜默), `"disable"`=停用 |
+| 預設值 | 租戶的維度 key 不繼承 base 的純量預設值。根 `defaults:` 寫的完整維度 key，exporter 會當作每個沒寫它的租戶的預設送出（#2031），但 threshold-reachability 檢查（`DIMENSIONAL-IN-DEFAULTS`）仍會擋下，兩者的矛盾追蹤於 #3478；請寫在租戶檔 |
+| base 須由平台宣告 | `{` 之前的 base 必須在 `_defaults.yaml` 的 `defaults:` 有值或列在 `optional_overrides:`，或根 `defaults:` 寫了整個維度鍵；否則不產生 metric，validate-config 報 `unread … (no_row)`（ADR-038 §11） |
+| 三態仍適用 | 數值=Custom, 省略=Default (基本 key 在 `_defaults.yaml` 的 `defaults:` 有值時；根 `defaults:` 寫了完整維度 key 時也取那個值，見上一列；列在 `optional_overrides:` 的宣告 key 省略＝無值＝靜默), `"disable"`=停用 |
 
-**平台團隊 PromQL 適配**：維度 label 必須同時出現在 Recording Rule 的 `by()` 與 Alert Rule 的 `on()` 中。三件套契約與 `tenant:<metric>:<agg>` 命名規範：[design/rule-packs.md](design/rule-packs.md)。Redis / ES / MongoDB 維度範例：`components/threshold-exporter/config/conf.d/examples/`。
+**平台團隊 PromQL 適配**：維度 label 必須同時出現在 Recording Rule 的 `by()` 與 Alert Rule 的 `on()` 中。三件套契約與 `tenant:<metric>:<agg>` 命名規範：[design/rule-packs.md](design/rule-packs.md)。出貨的 `conf.d/examples/` 因此不放維度鍵（#3475）。
 
 ### 10. LLM 輔助手動轉換
 
@@ -302,11 +305,11 @@ Exporter 每 30 秒 reload 一次，K8s ConfigMap propagation 約 1-2 分鐘。�
 
 **Q: 維度 key 可以設定在 defaults 裡嗎？**
 
-不行。維度 key 是 tenant-only 功能，因為每個租戶的 queue / index / database 都不同，全域預設沒有意義。
+建議不要。根 `defaults:` 寫的完整維度 key（例如 `"redis_queue_length{queue=\"orders\"}": 500`），exporter 會當作每個沒寫它的租戶的預設送出（#2031），但 threshold-reachability 檢查（`DIMENSIONAL-IN-DEFAULTS`）仍會擋下，兩者的矛盾追蹤於 #3478；請寫在租戶檔。租戶自己寫的維度 key 不會繼承 base 的純量預設值。另見上方 §9 的 ⚠️：出貨的 Rule Pack 目前不依維度判斷（#3475）。
 
 **Q: 維度 key 怎麼指定 critical？**
 
-使用 `"value:severity"` 語法：`"redis_queue_length{queue=\"orders\"}": "500:critical"`。
+使用 `"value:severity"` 語法：`"redis_connected_clients{instance=\"redis-orders:6379\"}": "500:critical"`。這只示範語法：出貨的 Redis Rule Pack 只讀 `severity="warning"` 的列，`RedisHighConnections` 也只是 warning 告警；要 critical 告警得自訂讀 `severity="critical"` 的 Recording／Alert Rule。
 
 **Q: 如何確認 hot-reload 成功？**
 

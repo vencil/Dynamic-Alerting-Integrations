@@ -182,13 +182,17 @@ func TestValuesNotServed_FlatIncrementalReload(t *testing.T) {
 	if err := m.Load(); err != nil {
 		t.Fatalf("Load: %v", err)
 	}
+	// ADR-038 §11: a flat tree has no carrier to name the base, so the
+	// dimensional key is unconsumed, not a dropped value.
 	writeTestYAML(t, path, "tenants:\n  tx:\n    'mysql_connections{db=\"x\"}': \"abc\"\n")
 	m.tickOnce()
-	if got := testutil.ToFloat64(fresh.valuesNotServed[config.NotServedValueUnparsedDropped]); got != 1 {
-		t.Errorf("value_unparsed_dropped = %v after the incremental reload, want 1\n%s", got, logBuf.String())
+	if got := testutil.ToFloat64(fresh.valuesNotServed[config.NotServedValueUnparsedDropped]); got != 0 {
+		t.Errorf("value_unparsed_dropped = %v after the incremental reload, want 0\n%s", got, logBuf.String())
 	}
-	if lines := logLinesWith(logBuf.String(), valuesNotServedAnchor); len(lines) != 1 || !strings.Contains(lines[0], `tenant=tx key=mysql_connections{db="x"} reason=value_unparsed_dropped`) {
-		t.Errorf("WARN lines %q, want one naming tx and the dimensional key", lines)
+	if lines := logLinesWith(logBuf.String(), keysUnreadLogPrefix); len(lines) == 0 ||
+		!strings.Contains(lines[len(lines)-1], "Config reloaded (incremental") ||
+		!strings.Contains(lines[len(lines)-1], `tenant="tx" key="mysql_connections{db=\"x\"}" reason=unconsumed`) {
+		t.Errorf("unread lines %q, want the reload's naming tx's dimensional key unconsumed", lines)
 	}
 	// #2031: a threshold written under two spellings is counted on this
 	// path too.

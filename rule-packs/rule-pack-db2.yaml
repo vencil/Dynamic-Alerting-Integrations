@@ -81,13 +81,8 @@
 #     db2-prod:
 #       db2_connections_active: "150"
 #       db2_bufferpool_hit_ratio: "0.98"
-#       # ── Regex 維度閾值 (v0.12.0 B1 feature) ──
-#       # 一次性控管多個 Bufferpool 的 hit ratio：
-#       "db2_bufferpool_hit_ratio{bufferpool_name=~\"IBMDEFAULT.*|BP_USER.*\"}": "0.90"
-#       # 單一 Bufferpool 精確匹配：
-#       "db2_bufferpool_hit_ratio{bufferpool_name=\"BP_TEMP\"}": "disable"
-#       # Tablespace 維度 — 多個 Tablespace Regex 匹配：
-#       "db2_tablespace_used_percent{tablespace_name=~\"USERSPACE.*|SYSTOOLSPACE\"}": "80"
+#       # 維度鍵（metric{label="value"}）在本 pack 不依維度判斷：門檻以 max by(tenant) 取租戶最大值，
+#       # 維度鍵只會改到整個租戶的門檻、寫 "disable" 只是不送出這一列、不會只停掉那個維度，所以這裡不示範（#3475）。
 # ============================================================
 groups:
   # -------------------------------------------------------

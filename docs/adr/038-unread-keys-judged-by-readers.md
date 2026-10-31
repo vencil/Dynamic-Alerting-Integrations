@@ -42,7 +42,7 @@ updated_at: 2026-10-31
 
 2026-10-30 修訂：判決併入產生器容器的同一次判定，不另有期限、不讓位，取代 2026-10-24 的「判決有自己的那一份期限」；tenant-api 改成判到就擋之後的規則，取代 2026-10-28 的「判決只放進 `warnings`」：判決未完成時寫入不收，不設降級路徑。寫入檢查只對被寫的租戶做反事實重算（決定 2、5、8、11）。
 
-2026-10-31 修訂：讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判，取代「GET 的鍵名回報改用共用判決」；exporter 載入時只記它自己讀不到哪些鍵、不帶嚴重度。Go、Python、portal 的鍵名判斷刪除，`version` 標籤與改名提示經 da-guard 交給 CI 照印（決定 11）。
+2026-10-31 修訂：讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判，取代「GET 的鍵名回報改用共用判決」；exporter 載入時只記它自己讀不到哪些鍵、不帶嚴重度。Go、Python、portal 的鍵名判斷刪除，`version` 標籤與改名提示經 da-guard 交給 CI 照印；維度鍵要平台宣告了 base（或根 defaults 寫了整個鍵）才送出（決定 11）。
 
 ## 摘要
 
@@ -64,7 +64,7 @@ updated_at: 2026-10-31
 ### 名詞
 
 - **保留鍵**：`_` 開頭、由平台定義意義的鍵，例如 `_silent_mode`、`_routing`、`_state_maintenance`。其他鍵是閾值鍵。
-- **維度鍵**：只對某個 label 值生效的閾值，寫成 `metric{label="value"}`，例如 `redis_queue_length{queue="tasks"}`；去掉大括號的部分叫 base。
+- **維度鍵**：只對某個 label 值生效的閾值，寫成 `metric{label="value"}`，例如 `redis_connected_clients{instance="redis-orders:6379"}`；去掉大括號的部分叫 base。
 - **`_critical` 鍵**：`X_critical` 是閾值 `X` 的 critical 等級門檻。
 - **profile**：平台定義的一組共用設定，租戶用 `_profile: <名稱>` 套用。
 - **根平台檔**：conf.d 根目錄下 `_` 開頭的檔，例如所有租戶繼承的 `_defaults.yaml`。
@@ -170,11 +170,11 @@ tenant-api 從這些欄位推出兩份清單，不再各自手寫：形狀是 `m
 
 值的檢查之後也走這條路：登錄表 `check` 指名的判斷式由 Go 寫入檢查呼叫（決定 1）。例如 `_silent_mode: purple`，exporter 讀了它（判決是 `read`），只是不認得這個值、什麼都不靜音；擋下它的是這個值檢查，不是鍵名判決。磁碟上已經有的錯值怎麼處理見決定 12。
 
-鍵名那一段指的是：登錄表沒有的 `_` 鍵、登錄表有但不在租戶層讀的 `_` 鍵（例如租戶檔裡的 `_policies`、`_routing_defaults`）、`_routing` 前綴下產生器不讀的鍵、平台預設與 `optional_overrides` 都沒有的閾值鍵（維度鍵除外，見下一段）、base 沒有平台預設值的 `_critical` 鍵。這幾種沒有讀取端讀，共用判決判為 `unread`，改由它判，同一件事只有一個地方說了算。維度鍵 `version` 標籤值的檢查屬於值的檢查，留在 Go；舊鍵名改名的提示是遷移說明、不擋寫入，也留在 Go。
+鍵名那一段指的是：登錄表沒有的 `_` 鍵、登錄表有但不在租戶層讀的 `_` 鍵（例如租戶檔裡的 `_policies`、`_routing_defaults`）、`_routing` 前綴下產生器不讀的鍵、平台預設與 `optional_overrides` 都沒有的閾值鍵（維度鍵見下一段）、base 沒有平台預設值的 `_critical` 鍵。這幾種沒有讀取端讀，共用判決判為 `unread`，改由它判，同一件事只有一個地方說了算。維度鍵 `version` 標籤值的檢查屬於值的檢查，留在 Go；舊鍵名改名的提示是遷移說明、不擋寫入，也留在 Go。
 
-base 不在平台預設、也不在 `optional_overrides` 的維度鍵，Go 今天擋，但 exporter 照樣送出它，判決是 `read`。Go 的擋法是誤擋，這一段刪除後 tenant-api 改為收下；這種鍵的問題是沒有規則讀它，由決定 10 報（永遠只是建議）。
+base 不在平台預設、也不在 `optional_overrides` 的維度鍵，Go 今天擋，但 exporter 照樣送出它，判決是 `read`。2026-10-31 修訂：exporter 改為不送出這種鍵（決定 11），判決讀成 `unread`，所以 Go 鍵名段刪除後 tenant-api 依判決照樣擋下，入口沒有因此放寬。
 
-tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共用判決擋下的同一步或之後才刪，不因 validate-config 等其他入口先擋就提前刪。判決未完成時寫入不收（決定 5），所以刪除之後，這條入口只在兩處比今天寬鬆，兩處都是刻意的：上一段的維度鍵（Go 誤擋），以及只因 `disable_noop` 而未讀的鍵（決定 4 只報 warning；例如 `mysql_slave_lagg: disable`，今天 Go 會擋）。
+tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共用判決擋下的同一步或之後才刪，不因 validate-config 等其他入口先擋就提前刪。判決未完成時寫入不收（決定 5），所以刪除之後，這條入口只在一處比今天寬鬆，而且是刻意的：只因 `disable_noop` 而未讀的鍵（決定 4 只報 warning；例如 `mysql_slave_lagg: disable`，今天 Go 會擋）。
 
 執行時各工具讀的是產生出來的常數，不在執行時讀這份 JSON，所以 da-tools 映像不需要多帶檔案。登錄表放在 Go module 內，是為了讓 Go 端日後若要直接嵌入，三個 Go 程式（exporter、da-guard、tenant-api）都不必再複製一份。
 
@@ -241,7 +241,7 @@ profile 裡的 `_` 鍵另依登錄表的 profile 層直接判，不經租戶：�
   在那之前，判決只放進 `warnings`，不擋寫入；判決未完成或容器沒有回判決時，回應明說沒有判決，不留成看起來像「沒找到問題」。
 
   誰看得到什麼，沿用寫入回應既有的揭露規則：被寫入的檔案裡、屬於這筆寫入對象租戶的 finding，寫入者一律看得到；同一檔案裡其他租戶的 finding，只在呼叫者能讀那個租戶時顯示；平台檔、profile，或這筆寫入沒有動到的檔案上的 finding，只給能看整棵樹的呼叫者，其他人只看到一行「有你看不到的 finding，細節在伺服器日誌」。判決未完成時只顯示原因，不轉述容器的訊息，因為那段訊息可能帶有平台檔的路徑或程式的 stderr。直接寫入的批次裡，租戶的 finding 掛在該租戶第一個有變更的操作上，整筆寫入共用的那幾行只掛一次，因為非同步批次的任務只保留逐操作的結果；只報不擋時，判決未完成則每個有變更的操作都寫，因為只看得到部分結果的讀者不能把其他操作讀成「沒找到問題」。PR 模式的回應只有一份清單，每行自己寫出租戶名。清單有行數上限，超過時先留寫入對象租戶自己的行。判決看的是寫入之後的樹，不與寫入之前比較，所以列出的問題可能早就存在；內容沒有改變的寫入不附判決。
-- 判決未完成時**不設降級路徑**：既不照收，也不退回另一份鍵名判斷。照收會讓今天會被擋的拼錯鍵進 repo；退回 Go 的鍵名判斷，等於永久保留第二份判斷，而它會誤擋 base 不在平台預設的維度鍵（決定 2）。代價是 da-guard 壞了，tenant-api 的寫入就不收。但產生器容器本來就是寫入的必要條件，產生器壞了寫入也不收；判決併進同一次判定，增加的是它的工作量，不是多一個依賴。
+- 判決未完成時**不設降級路徑**：既不照收，也不退回另一份鍵名判斷。照收會讓今天會被擋的拼錯鍵進 repo；退回 Go 的鍵名判斷，等於永久保留第二份判斷（決定 2）。代價是 da-guard 壞了，tenant-api 的寫入就不收。但產生器容器本來就是寫入的必要條件，產生器壞了寫入也不收；判決併進同一次判定，增加的是它的工作量，不是多一個依賴。
 
 da-guard 本身只輸出事實：exporter 實測的 `read_by` 與原因，以及登錄表對非 exporter 鍵的宣告。它對產生器負責的鍵不下判決。
 
@@ -298,7 +298,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 | 情況 | 處理 | 等級 |
 |---|---|---|
-| 送出了但沒有任何規則讀它（例如根 defaults 的錯字、維度鍵的 base 拼錯） | 讀取端是部署中的告警規則。以 repo 內規則包的索引判斷，涵蓋經 recording rule 間接讀、直接查 `user_threshold` 的規則，以及 `_critical` 鍵；可以宣告「外部讀取端」（客戶自己的 Prometheus 規則） | 永遠只是建議 |
+| 送出了但沒有任何規則讀它（例如根 defaults 的錯字、base 已宣告但沒有規則讀的維度鍵） | 讀取端是部署中的告警規則。以 repo 內規則包的索引判斷，涵蓋經 recording rule 間接讀、直接查 `user_threshold` 的規則，以及 `_critical` 鍵；可以宣告「外部讀取端」（客戶自己的 Prometheus 規則） | 永遠只是建議 |
 | 整份沒有讀取端讀的檔（租戶區沒有 `tenants:` 的檔、子目錄沒被選上的 `_defaults` 檔） | 沿用 served-values 現有的 `skipped`／`unread_keys` | notice：新建、還沒寫 `tenants:` 的檔不能凍結寫入 |
 | `_metadata` 不認得的子鍵 | 以 Go 的 `TenantMetadata` 為準；今天只有 validate-config 的 schema 檢查會報 | 租戶檔：error；平台檔與 profile：notice |
 | 讀了但值無效（`_silent_mode: garbage`、`_severity_dedup: maybe`、`_routing_profile: 5`） | 今天產生器與 da-guard 都不報，validate-config 只擋得到其中兩個（`_severity_dedup: maybe` 全無提示）。只有一個讀取端的鍵，由它驗；兩個讀取端都讀的 `_severity_dedup`，以一份共用案例表把兩邊的接受值釘成一致 | error |
@@ -318,7 +318,8 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 - 讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判。即時判要佔產生器容器的判定佇列，而讀權限的使用者也能觸發；要看用 `da-tools explain-keys` 或 CI 的 validate-config，寫入時則由判決擋下。這和 Kubernetes 的 warning 只出現在寫入回應裡同型。git 管理的租戶不經 API 寫入，它的這類問題只有 CI 會報。
 - exporter 載入時，改記它自己讀不到的鍵（沒有任何一列讀的鍵、對這種鍵寫的 `disable`、登錄表沒有讀取端的 `_` 鍵），不帶嚴重度：這是讀取端在原地的事實，嚴重度由判決決定（決定 4）。沒有跑 CI 的部署仍有這個訊號。exporter 另外兩則它自己讀取時的訊息照舊：profile 裡的路由層鍵不套用，以及 `_critical` 找不到 base 的預設值。
-- 產生器自己的鍵名警告與 Go、Python 兩份鍵名判斷，改成只用共用判決後刪除；`version` 標籤與改名提示這類值的檢查由 Go 一處判，經 da-guard served-values 每個租戶的 `key_checks` 交給 validate-config 與產生器 `--validate` 照它的措辭印出。portal 的鍵名判斷同時刪除。原本比對兩份手寫判斷的成員矩陣保留，改成驗證共用判決；其中一列因此改判：平台清單上整串宣告的維度鍵，exporter 照樣送出，判決讀成有人讀。
+- 產生器自己的鍵名警告與 Go、Python 兩份鍵名判斷，改成只用共用判決後刪除；`version` 標籤與改名提示這類值的檢查由 Go 一處判，經 da-guard served-values 每個租戶的 `key_checks` 交給 validate-config 與產生器 `--validate` 照它的措辭印出。portal 的鍵名判斷同時刪除。原本比對兩份手寫判斷的成員矩陣保留，改成驗證共用判決。
+- 維度鍵（`<base>{…}`）只有在平台宣告了它的 base（`defaults:` 有值或列在 `optional_overrides:`），或根 `defaults:` 寫了整個鍵時，exporter 才送出，和一般鍵同一個成員條件。base 拼錯或沒宣告的維度鍵沒有列，判決讀成 `unread`（`no_row`）。在這之前 exporter 對任何 base 都送出，判決因而把拼錯 base 的維度鍵讀成有人讀、照收，但沒有告警讀它。
 - 平台檔與 profile 層的 notice 不再含「沒有人讀」的鍵，由判決報（決定 6）。
 
 ### 12. 磁碟上既有的錯值

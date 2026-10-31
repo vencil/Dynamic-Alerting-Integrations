@@ -751,9 +751,10 @@ func dropShadowedSpellings(m map[string]any) map[string]any {
 	return out
 }
 
-// isDimensionalKey is resolveDimensionalRows' entry condition (the same one
-// keyBypassesTheDeclaredSurface mirrors): a key with a label segment that no
-// reserved-key resolver claims first.
+// isDimensionalKey is resolveDimensionalRows' shape test (keyCanReachTheOutputPlane
+// asks it too): a key with a label segment that no reserved-key resolver
+// claims first. Whether the key is served also needs its base named
+// (dimensionalBaseNamed).
 func isDimensionalKey(k string) bool {
 	return strings.Contains(k, "{") && !reservedShapeWins(k)
 }

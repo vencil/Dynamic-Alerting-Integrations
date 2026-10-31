@@ -56,7 +56,8 @@ func TestCollector_Collect_NilConfig(t *testing.T) {
 func TestCollector_Collect_CustomLabels(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{},
+		Defaults:          map[string]float64{},
+		OptionalOverrides: []string{"mysql_connections"},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				`mysql_connections{env="prod"}`: SV("100"),
@@ -298,7 +299,8 @@ func TestCollector_FullConfig(t *testing.T) {
 func TestCollector_MultipleRegexLabels(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{},
+		Defaults:          map[string]float64{},
+		OptionalOverrides: []string{"oracle_ts"},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				`oracle_ts{dc=~"us.*", env=~"prod.*"}`: SV("200"),
@@ -552,7 +554,8 @@ func TestCollector_Collect_OverLimitGaugeEvictsVanishedTenant(t *testing.T) {
 func TestCollector_RegexLabelOutput(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{},
+		Defaults:          map[string]float64{},
+		OptionalOverrides: []string{"oracle_tablespace"},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				`oracle_tablespace{tablespace=~"SYS.*"}`: SV("95"),
@@ -577,7 +580,8 @@ func TestCollector_RegexLabelOutput(t *testing.T) {
 func TestCollector_MixedExactAndRegexLabels(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{},
+		Defaults:          map[string]float64{},
+		OptionalOverrides: []string{"oracle_ts"},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				`oracle_ts{env='prod', tablespace=~"TEMP.*"}`: SV("200"),

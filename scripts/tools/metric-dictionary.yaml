@@ -220,7 +220,7 @@ oracledb_tablespace_used_percent:
   maps_to: oracle_tablespace_used_percent
   golden_rule: OracleTablespaceAlmostFull
   rule_pack: oracle
-  note: "Tablespace 使用率 — 支援 Regex 維度 (tablespace_name=~)"
+  note: "Tablespace 使用率 — Regex 維度鍵可寫但 rule pack 以 max by(tenant) 合成 #3475 (tablespace_name=~)"
 
 oracledb_wait_time_seconds_total:
   maps_to: oracle_wait_time_rate
@@ -253,7 +253,7 @@ db2_bufferpool_hit_ratio:
   maps_to: db2_bufferpool_hit_ratio
   golden_rule: DB2LowBufferpoolHitRatio
   rule_pack: db2
-  note: "Bufferpool hit ratio — 支援 Regex 維度 (bufferpool_name=~)"
+  note: "Bufferpool hit ratio — Regex 維度鍵可寫但 rule pack 以 max by(tenant) 合成 #3475 (bufferpool_name=~)"
 
 db2_log_usage_percent:
   maps_to: db2_log_usage_percent
@@ -271,7 +271,7 @@ db2_tablespace_used_percent:
   maps_to: db2_tablespace_used_percent
   golden_rule: DB2TablespaceAlmostFull
   rule_pack: db2
-  note: "Tablespace 使用率 — 支援 Regex 維度 (tablespace_name=~)"
+  note: "Tablespace 使用率 — Regex 維度鍵可寫但 rule pack 以 max by(tenant) 合成 #3475 (tablespace_name=~)"
 
 # ────────────────────────────────────────
 # ClickHouse
@@ -292,7 +292,7 @@ ClickHouseAsyncMetrics_MaxPartCountForPartition:
   maps_to: clickhouse_max_part_count
   golden_rule: ClickHouseHighPartCount
   rule_pack: clickhouse
-  note: "Max part count — merge 壓力指標, 支援 Regex 維度 (database=~)"
+  note: "Max part count — merge 壓力指標, Regex 維度鍵可寫但 rule pack 以 max by(tenant) 合成 #3475 (database=~)"
 
 ClickHouseMetrics_MemoryTracking:
   maps_to: clickhouse_memory_tracking_bytes
@@ -370,7 +370,7 @@ rabbitmq_queue_messages_ready:
   maps_to: rabbitmq_queue_messages
   golden_rule: RabbitMQHighQueueDepth
   rule_pack: rabbitmq
-  note: "Ready messages — max by(tenant), 支援 per-queue Regex 維度"
+  note: "Ready messages — per-queue Regex 維度鍵可寫但 rule pack 以 max by(tenant) 合成 #3475"
 
 rabbitmq_queue_messages:
   maps_to: rabbitmq_queue_messages

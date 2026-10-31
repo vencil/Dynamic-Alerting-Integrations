@@ -128,7 +128,7 @@ tenants:
 
 - 省略不寫的 key 會套用 `_defaults.yaml` 的 `defaults:` 值。⚠️ 列在 `optional_overrides:` 的 key 沒有平台預設值，省略就是沒有值、不產生 series。
 - 排程式閾值的時間窗一律是 UTC 的 `HH:MM-HH:MM`，可以跨午夜，多個窗口時第一個符合的生效。
-- 維度閾值（例如 `"redis_queue_length{queue='tasks'}": "500:critical"`）與完整語法見 [threshold-exporter 配置參考](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#4-配置參考) §4.4。
+- 維度閾值（例如 `"redis_connected_clients{instance='redis-orders:6379'}": "500:critical"`）與完整語法見 [threshold-exporter 配置參考](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#4-配置參考) §4.4。
 - 每個 Rule Pack 的檔頭列出它讀取的閾值 key 與建議起點。`defaults:` 的內容由 threshold registry 生成；改平台預設值要改 `scaffold_tenant.py` 的 `RULE_PACKS`，再跑 `check_threshold_registry.py --regen`。
 
 > 💡 **互動工具** — 想瀏覽所有 Rule Pack 的 recording/alert rule？用 [Rule Pack Details](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-detail.jsx)。比較各 Rule Pack 的指標覆蓋？用 [Rule Pack Matrix](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/rule-pack-matrix.jsx)。從 p50/p90/p99 推算建議閾值？用 [Threshold Calculator](https://vencil.github.io/Dynamic-Alerting-Integrations/assets/jsx-loader.html?component=../interactive/tools/threshold-calculator.jsx)。

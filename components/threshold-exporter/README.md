@@ -189,8 +189,8 @@ conf.d/
 | 形式 | 範例 key | 範例 value | 備註 |
 |------|---------|-----------|------|
 | 純量閾值 | `mysql_connections` | `"70"` | 最常見 |
-| 維度標籤（精確） | `"redis_queue_length{queue='tasks'}"` | `"500:critical"` | YAML key 必加引號；不繼承 defaults |
-| 維度標籤（regex） | `"oracle_tablespace{tablespace=~'SYS.*'}"` | `"95"` | 輸出 `tablespace_re` label，交 PromQL `label_replace` 匹配 |
+| 維度標籤（精確） | `"redis_connected_clients{instance='redis-orders:6379'}"` | `"500:critical"` | YAML key 必加引號；不繼承 defaults；base 須是平台宣告的 key（`defaults:` 有值或列在 `optional_overrides:`），或根 `defaults:` 寫了整個維度鍵，否則不產生 metric（ADR-038 §11）。⚠️ 出貨的 Rule Pack 以 `max by(tenant)` 取租戶最大值，維度鍵改到的是整個租戶的門檻（[#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)） |
+| 維度標籤（regex） | `"oracle_tablespace_used_percent{tablespace_name=~'SYS.*'}"` | `"95"` | 輸出 `tablespace_name_re` label，交 PromQL `label_replace` 匹配 |
 | 排程式閾值 | `mysql_connections:` | `default + overrides[]` | UTC `HH:MM-HH:MM` 窗口，多窗口 first-match-wins |
 | 租戶 metadata | `_metadata` | `{runbook_url, owner, tier, …}` | 注入 `tenant_metadata_info` |
 | Silent mode | `_silent_mode` | `"warning"` 或 `{target, expires, reason}` | `expires` 自動失效 |
