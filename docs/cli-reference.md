@@ -3380,7 +3380,7 @@ da-tools test-notification --config-dir conf.d/ --ci
 |------|------|
 | `0` | 所有 receiver 連通正常（或非 CI 模式） |
 | `1` | CI 模式：任一 receiver 失敗（連通失敗、receiver 設定無效或 URL 不合法、產生器不產出的項目 `NOT_RENDERED`、`--policy` 拒收的 `POLICY_REFUSED` 都算，`--dry-run` 不連線時也一樣）。非 CI 模式一律 `0`，但 `--json` 的 `status` 與文字報告的 `Overall` 同樣依失敗與否標 `fail`／`FAIL` |
-| `2` | 呼叫端錯誤：`--config-dir` 底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654），或路由產生器在讀取階段拒收這棵樹（stderr 是產生器自己的拒收訊息；`--json` 印 `status: caller_error`、`reason: routing_tree_refused`，#2752）；`--policy` 不可用或 `min_generator_version` 比本工具新（`reason: policy_unusable`，#3142）；`--tenant` 有樹裡沒宣告的租戶（`reason: tenant_not_found`，[#3431](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3431)） |
+| `2` | 呼叫端錯誤：`--config-dir` 底下有檔案讀不到（內容不是 UTF-8 或不是合法 YAML；訊息指名哪一檔，#1654），或路由產生器在讀取階段拒收這棵樹（stderr 是產生器自己的拒收訊息；`--json` 印 `status: caller_error`、`reason: routing_tree_refused`，#2752）；`--policy` 不可用或 `min_generator_version` 比本工具新（`reason: policy_unusable`，#3142） |
 
 #### explain-route
 

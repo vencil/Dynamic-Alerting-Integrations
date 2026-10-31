@@ -3394,7 +3394,7 @@ da-tools test-notification --config-dir conf.d/ --ci
 |------|-------------|
 | `0` | All receivers reachable (or non-CI mode) |
 | `1` | CI mode: one or more receivers failed (unreachable, an invalid receiver config or URL, a slot the generator does not render, `NOT_RENDERED`, or one the `--policy` refuses, `POLICY_REFUSED`; even under `--dry-run`, which connects to nothing). Without `--ci` the code is always `0`, but `status` in `--json` and `Overall` in the text report still read `fail` / `FAIL` |
-| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654), or the route generator refuses the tree while reading it (stderr carries the generator's own refusal; `--json` prints `status: caller_error`, `reason: routing_tree_refused`, #2752); `--policy` unusable or its `min_generator_version` newer than this tool (`reason: policy_unusable`, #3142); a `--tenant` the tree does not declare (`reason: tenant_not_found`, [#3431](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3431)) |
+| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654), or the route generator refuses the tree while reading it (stderr carries the generator's own refusal; `--json` prints `status: caller_error`, `reason: routing_tree_refused`, #2752); `--policy` unusable or its `min_generator_version` newer than this tool (`reason: policy_unusable`, #3142) |
 
 #### explain-route
 
