@@ -219,7 +219,9 @@ GATING_CANARIES = frozenset({"BenchmarkControlCanaryCPU"})
 # ⛔ And nothing mechanical caught this staleness: the gate that would have —
 # "a comment citing §PN must resolve to a real heading" — points the other way,
 # at a rule cited before it exists. This one denied a rule that had arrived.
-SUPPORTED_SCHEMAS = ("bench-paired/v1", "bench-paired/v2")
+# v3 only adds `deterministic` (B/op and allocs/op, ADR-039), which this tool
+# does not read: accepting it changes nothing it judges.
+SUPPORTED_SCHEMAS = ("bench-paired/v1", "bench-paired/v2", "bench-paired/v3")
 SCHEMA_V1 = "bench-paired/v1"
 SCHEMA_V1_STATUS_COMMIT = "60f4523"
 SCHEMA_V1_STATUS_PR = "#1455"

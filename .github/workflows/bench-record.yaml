@@ -415,7 +415,7 @@ jobs:
           # close it, so both fields are emitted here as `unreadable`: this
           # path never ran the closure comparison, and `unreadable` is the
           # state that says exactly that.
-          printf '{\n  "schema": "bench-paired/v2",\n  "reference_tag": "%s",\n  "reference_sha": "%s",\n  "status": "INCONCLUSIVE",\n  "reason": "%s",\n  "workload_drift": {\n    "status": "unreadable",\n    "files": []\n  },\n  "workload_digest": {\n    "status": "unreadable",\n    "sides": {},\n    "files": []\n  }\n}\n' \
+          printf '{\n  "schema": "bench-paired/v3",\n  "reference_tag": "%s",\n  "reference_sha": "%s",\n  "status": "INCONCLUSIVE",\n  "reason": "%s",\n  "workload_drift": {\n    "status": "unreadable",\n    "files": []\n  },\n  "workload_digest": {\n    "status": "unreadable",\n    "sides": {},\n    "files": []\n  }\n}\n' \
             "${REF_TAG}" "${REF_SHA}" "${REASON}" > .build/bench-paired.json
           tail -n 40 .build/paired/bench.err.log 2>/dev/null || true
 

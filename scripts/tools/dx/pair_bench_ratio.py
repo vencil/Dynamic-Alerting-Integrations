@@ -114,6 +114,12 @@ _BENCH_RE = re.compile(
     r"^(Benchmark[A-Za-z0-9_]+)-\d+\s+\d+\s+(\d+(?:\.\d+)?)\s+ns/op\b"
 )
 _CPU_RE = re.compile(r"^cpu:\s*(\S.*?)\s*$")
+# The same rows also carry `-benchmem` columns (bench_interleave.sh always
+# passes it). B/op and allocs/op count work rather than time it, so they are
+# the metrics a cumulative budget can stand on (ADR-039 §Not yet decided). This
+# script only RECORDS them; nothing reads them as a verdict yet.
+_MEM_RE = re.compile(r"\s(\d+(?:\.\d+)?)\s+(B/op|allocs/op)\b")
+DETERMINISTIC_UNITS = ("B/op", "allocs/op")
 
 
 def read_side(path: pathlib.Path) -> tuple[dict[str, list[float]], str | None]:
@@ -137,6 +143,46 @@ def read_side(path: pathlib.Path) -> tuple[dict[str, list[float]], str | None]:
                 if c:
                     cpu = c.group(1)
     return samples, cpu
+
+
+def read_side_deterministic(path: pathlib.Path) -> dict[str, dict[str, list[float]]]:
+    """Collect every B/op and allocs/op sample per benchmark.
+
+    Kept apart from `read_side` so the ns/op path the watchdogs judge is not
+    touched: a row without `-benchmem` columns simply contributes nothing here.
+    """
+    samples: dict[str, dict[str, list[float]]] = {}
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            m = _BENCH_RE.match(line)
+            if not m:
+                continue
+            for value, unit in _MEM_RE.findall(line[m.end():]):
+                samples.setdefault(m.group(1), {}).setdefault(unit, []).append(float(value))
+    return samples
+
+
+def pair_deterministic(ref: dict[str, dict[str, list[float]]],
+                       main: dict[str, dict[str, list[float]]]) -> dict:
+    """Per benchmark and unit: both medians and their ratio.
+
+    Only benchmarks and units present on BOTH sides appear — this block is a
+    record, and `evaluated` / `inconclusive` already say which benchmarks could
+    not be paired. A reference median of 0 (a path that does not allocate) has
+    no ratio, so `ratio` is null there rather than infinite or dropped: a
+    change from zero is exactly the thing worth seeing.
+    """
+    out: dict[str, dict] = {}
+    for bench in sorted(set(ref) & set(main)):
+        per_unit = {}
+        for unit in DETERMINISTIC_UNITS:
+            if unit in ref[bench] and unit in main[bench]:
+                r, m = st.median(ref[bench][unit]), st.median(main[bench][unit])
+                per_unit[unit] = {"reference": r, "main": m,
+                                  "ratio": (m / r) if r > 0 else None}
+        if per_unit:
+            out[bench] = per_unit
+    return out
 
 
 def pair(ref: dict[str, list[float]],
@@ -378,7 +424,9 @@ def main() -> int:
         # v2: `workload_digest` joined the payload. Bumped rather than added
         # silently so a consumer pinned to v1 stops instead of quietly reading a
         # night whose work-definition evidence it does not know how to weigh.
-        "schema": "bench-paired/v2",
+        # v3: `deterministic` (B/op and allocs/op medians and ratios) joined it;
+        # dev-rules §P5 — a top-level key change moves the schema string.
+        "schema": "bench-paired/v3",
         "status": "OK",
         "reference_tag": args.reference_tag,
         "reference_sha": args.reference_sha,
@@ -387,6 +435,8 @@ def main() -> int:
         "inconclusive": inconclusive,
         "workload_drift": read_workload_drift(args.workload_drift),
         "workload_digest": read_workload_digest(args.workload_digest),
+        "deterministic": pair_deterministic(read_side_deterministic(args.reference),
+                                            read_side_deterministic(args.main)),
     }
     # #1789: the wrapper is given the PARENT — the directory this mkdir
     # actually creates. Handing it the output FILE makes the message a
@@ -407,6 +457,15 @@ def main() -> int:
         print(f"  {100 * (d['ratio'] - 1):+7.2f}%  {bench}")
     for bench, why in sorted(inconclusive.items()):
         print(f"  {'INCONCLUSIVE':>12}  {bench}  ({why})")
+    det = payload["deterministic"]
+    print(f"[pair_bench_ratio] deterministic metrics recorded for {len(det)} "
+          f"benchmark(s) — not judged (ADR-039 §Not yet decided):")
+    for bench, units in sorted(det.items()):
+        cells = []
+        for unit, d in units.items():
+            cells.append(f"{unit} " + (f"{100 * (d['ratio'] - 1):+.2f}%" if d["ratio"] is not None
+                                       else f"0 → {d['main']:g}"))
+        print(f"    {bench}  " + "  ".join(cells))
     drift = payload["workload_drift"]
     if drift["files"]:
         print(f"[pair_bench_ratio] workload drift — {len(drift['files'])} "
