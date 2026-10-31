@@ -23,12 +23,11 @@
 #     redis-prod:
 #       redis_memory_used_bytes: "6442450944"   # 6 GB
 #       redis_connected_clients: "300"
-#       # 維度標籤 — 不同 queue 設定不同閾值
-#       "redis_queue_length{queue=\"order-processing\"}": "500:critical"
-#       "redis_queue_length{queue=\"email-notifications\"}": "1000"
-#       # 維度標籤 — 不同 db 設定不同閾值
-#       "redis_db_keys{db=\"db0\"}": "1000000"
-#       "redis_db_keys{db=\"db1\"}": "disable"
+#       # 維度標籤 — 不同 instance 設定不同閾值（base 須為上方平台宣告的 key）
+#       "redis_connected_clients{instance=\"redis-orders:6379\"}": "800:critical"
+#       "redis_connected_clients{instance=\"redis-cache:6379\"}": "1000"
+#       "redis_evicted_keys_rate{instance=\"redis-cache:6379\"}": "500"
+#       "redis_evicted_keys_rate{instance=\"redis-session:6379\"}": "disable"
 # ============================================================
 groups:
   # -------------------------------------------------------

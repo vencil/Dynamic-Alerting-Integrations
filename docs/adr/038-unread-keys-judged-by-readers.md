@@ -42,7 +42,7 @@ updated_at: 2026-10-31
 
 2026-10-30 修訂：判決併入產生器容器的同一次判定，不另有期限、不讓位，取代 2026-10-24 的「判決有自己的那一份期限」；tenant-api 改成判到就擋之後的規則，取代 2026-10-28 的「判決只放進 `warnings`」：判決未完成時寫入不收，不設降級路徑。寫入檢查只對被寫的租戶做反事實重算（決定 2、5、8、11）。
 
-2026-10-31 修訂：讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判，取代「GET 的鍵名回報改用共用判決」；exporter 載入時只記它自己讀不到哪些鍵、不帶嚴重度。Go、Python、portal 的鍵名判斷刪除，`version` 標籤與改名提示經 da-guard 交給 CI 照印（決定 11）。
+2026-10-31 修訂：讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判，取代「GET 的鍵名回報改用共用判決」；exporter 載入時只記它自己讀不到哪些鍵、不帶嚴重度。Go、Python、portal 的鍵名判斷刪除，`version` 標籤與改名提示經 da-guard 交給 CI 照印；維度鍵要平台宣告了 base 才送出（決定 11）。
 
 ## 摘要
 
@@ -64,7 +64,7 @@ updated_at: 2026-10-31
 ### 名詞
 
 - **保留鍵**：`_` 開頭、由平台定義意義的鍵，例如 `_silent_mode`、`_routing`、`_state_maintenance`。其他鍵是閾值鍵。
-- **維度鍵**：只對某個 label 值生效的閾值，寫成 `metric{label="value"}`，例如 `redis_queue_length{queue="tasks"}`；去掉大括號的部分叫 base。
+- **維度鍵**：只對某個 label 值生效的閾值，寫成 `metric{label="value"}`，例如 `redis_connected_clients{instance="redis-orders:6379"}`；去掉大括號的部分叫 base。
 - **`_critical` 鍵**：`X_critical` 是閾值 `X` 的 critical 等級門檻。
 - **profile**：平台定義的一組共用設定，租戶用 `_profile: <名稱>` 套用。
 - **根平台檔**：conf.d 根目錄下 `_` 開頭的檔，例如所有租戶繼承的 `_defaults.yaml`。
@@ -318,7 +318,8 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 - 讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判。即時判要佔產生器容器的判定佇列，而讀權限的使用者也能觸發；要看用 `da-tools explain-keys` 或 CI 的 validate-config，寫入時則由判決擋下。這和 Kubernetes 的 warning 只出現在寫入回應裡同型。git 管理的租戶不經 API 寫入，它的這類問題只有 CI 會報。
 - exporter 載入時，改記它自己讀不到的鍵（沒有任何一列讀的鍵、對這種鍵寫的 `disable`、登錄表沒有讀取端的 `_` 鍵），不帶嚴重度：這是讀取端在原地的事實，嚴重度由判決決定（決定 4）。沒有跑 CI 的部署仍有這個訊號。exporter 另外兩則它自己讀取時的訊息照舊：profile 裡的路由層鍵不套用，以及 `_critical` 找不到 base 的預設值。
-- 產生器自己的鍵名警告與 Go、Python 兩份鍵名判斷，改成只用共用判決後刪除；`version` 標籤與改名提示這類值的檢查由 Go 一處判，經 da-guard served-values 每個租戶的 `key_checks` 交給 validate-config 與產生器 `--validate` 照它的措辭印出。portal 的鍵名判斷同時刪除。原本比對兩份手寫判斷的成員矩陣保留，改成驗證共用判決；其中一列因此改判：平台清單上整串宣告的維度鍵，exporter 照樣送出，判決讀成有人讀。
+- 產生器自己的鍵名警告與 Go、Python 兩份鍵名判斷，改成只用共用判決後刪除；`version` 標籤與改名提示這類值的檢查由 Go 一處判，經 da-guard served-values 每個租戶的 `key_checks` 交給 validate-config 與產生器 `--validate` 照它的措辭印出。portal 的鍵名判斷同時刪除。原本比對兩份手寫判斷的成員矩陣保留，改成驗證共用判決。
+- 維度鍵（`<base>{…}`）只有在平台宣告了它的 base（`defaults:` 有值或列在 `optional_overrides:`），或根 `defaults:` 寫了整個鍵時，exporter 才送出，和一般鍵同一個成員條件。base 拼錯或沒宣告的維度鍵沒有列，判決讀成 `unread`（`no_row`）。在這之前 exporter 對任何 base 都送出，判決因而把拼錯 base 的維度鍵讀成有人讀、照收，但沒有告警讀它。
 - 平台檔與 profile 層的 notice 不再含「沒有人讀」的鍵，由判決報（決定 6）。
 
 ### 12. 磁碟上既有的錯值

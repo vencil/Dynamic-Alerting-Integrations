@@ -529,6 +529,9 @@ func TestDualEmitContract_Dimensional(t *testing.T) {
 		t.Run(tt.key+"="+tt.value, func(t *testing.T) {
 			t.Parallel()
 			cfg := &ThresholdConfig{
+				// ADR-038 §11: a dimensional key is served only with its base
+				// named; declared, so the base adds no row of its own.
+				OptionalOverrides: []string{"mysql_threads_running", "mysql_connections", "mysql_threads_running_extra"},
 				Tenants: map[string]map[string]ScheduledValue{
 					tenant: {tt.key: {Default: tt.value}},
 				},

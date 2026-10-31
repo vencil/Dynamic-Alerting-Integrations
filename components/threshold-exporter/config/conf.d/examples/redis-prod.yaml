@@ -2,7 +2,9 @@
 # 來源參考: Oliver006/redis_exporter + Prometheus Community redis rules
 #
 # 📌 基本閾值: 適用所有維度 (全域)
-# 📐 維度閾值: 針對特定 queue/db 設定不同水位
+# 📐 維度閾值: 針對特定 instance 設定不同水位
+# ⚠️ 維度 key 的 base（去掉 {…} 的部分）必須是平台宣告的 key：在 _defaults.yaml 的 defaults: 有值，
+#    或列在 optional_overrides:；否則不產生 metric，validate-config 報 unread（no_row）（ADR-038 §11）
 #
 # 三態（限 _defaults.yaml 的 defaults: 有值的 key）: 數值=Custom, 省略=Default, "disable"=停用
 # ⚠️ 列在 optional_overrides: 的宣告 key 沒有值可繼承 ⇒ 省略＝沒有值＝靜默，只有兩態（#1321）
@@ -18,19 +20,19 @@ tenants:
     redis_memory_used_bytes_critical: "10737418240"        # 10GB critical
     redis_connected_clients: "500"
 
-    # --- 維度閾值: 按 queue 分設 ---
+    # --- 維度閾值: 按 instance 分設 (連線數) ---
     # 語法: "metric{label=\"value\"}": "threshold" 或 "threshold:severity"
     # NOTE: 維度 key 不支援 `_critical` 兩階 severity（runtime 只走 dimensional
     # 單行 inline severity，見 config_resolve.go ResolveAt dimensional 分支），
     # 想要兩階請拆 label 或寫一條 inline severity。
-    "redis_queue_length{queue=\"order-processing\"}": "500:critical"
-    "redis_queue_length{queue=\"email-notifications\"}": "1000"
-    "redis_queue_length{queue=\"analytics\"}": "5000"
+    "redis_connected_clients{instance=\"redis-orders:6379\"}": "800:critical"
+    "redis_connected_clients{instance=\"redis-cache:6379\"}": "1000"
+    "redis_connected_clients{instance=\"redis-analytics:6379\"}": "300"
 
-    # --- 維度閾值: 按 db 分設 ---
-    "redis_db_keys{db=\"db0\"}": "1000000"                 # db0 主庫 100 萬 keys
-    "redis_db_keys{db=\"db1\"}": "500000"                  # db1 快取庫 50 萬 keys
-    "redis_db_keys{db=\"db2\"}": "disable"                 # db2 暫不監控
+    # --- 維度閾值: 按 instance 分設 (key 逐出速率) ---
+    "redis_evicted_keys_rate{instance=\"redis-orders:6379\"}": "10"      # 主庫不該逐出
+    "redis_evicted_keys_rate{instance=\"redis-cache:6379\"}": "500"      # 快取庫容許大量逐出
+    "redis_evicted_keys_rate{instance=\"redis-session:6379\"}": "disable" # session 庫暫不監控
 
     # --- 狀態控制 ---
     _state_maintenance: "enable"                            # 維護模式關閉

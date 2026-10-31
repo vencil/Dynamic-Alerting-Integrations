@@ -30,6 +30,8 @@ var scheduleTree = map[string]string{
   redis_memory: 70
   container_cpu: 75
   container_memory: 85
+optional_overrides:
+  - redis_queue_length
 tenants:
   tenant-p:
     redis_memory:

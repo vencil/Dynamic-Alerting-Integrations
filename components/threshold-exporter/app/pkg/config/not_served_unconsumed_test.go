@@ -58,9 +58,18 @@ var unconsumedCases = []struct {
 		"_defaults.yaml": "defaults:\n  redis_queue_length_critical: 9\n",
 		"tx.yaml":        "tenants:\n  tx:\n    redis_queue_length_critical: \"5\"\n",
 	}},
-	{name: "dimensional key, base undeclared: served", files: map[string]string{
+	// ADR-038 §11: a dimensional key needs its base named, as a flat key does.
+	{name: "dimensional key, base undeclared: unconsumed", files: map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
 		"tx.yaml":        "tenants:\n  tx:\n    'redis_evicted_keys{env=\"prod\"}': \"7\"\n",
+	}, want: map[string]NotServedKey{`redis_evicted_keys{env="prod"}`: {Reason: NotServedUnconsumed, File: "tx.yaml"}}},
+	{name: "dimensional key, base declared: served", files: map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\noptional_overrides:\n  - redis_evicted_keys\n",
+		"tx.yaml":        "tenants:\n  tx:\n    'redis_evicted_keys{env=\"prod\"}': \"7\"\n",
+	}},
+	{name: "dimensional key, base valued: served", files: map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+		"tx.yaml":        "tenants:\n  tx:\n    'mysql_connections{db=\"a\"}': \"7\"\n",
 	}},
 	{name: "undeclared key switched off", files: map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
@@ -216,6 +225,7 @@ func TestValuesNotServed_UnconsumedTable(t *testing.T) {
 		"redis_evicted_keys_critical": NotServedUnconsumed,
 		"redis_off_now":               NotServedUnconsumed,
 		"redis_on_now":                NotServedUnconsumed,
+		`redis_dim{env="prod"}`:       NotServedUnconsumed, // ADR-038 §11: base not named
 	}}
 	for _, at := range []int{0, 5 * 60, 12 * 60} { // outside, inside, outside the window
 		now := fixedNow.Truncate(24 * time.Hour).Add(time.Duration(at) * time.Minute)
@@ -253,7 +263,8 @@ func TestRejectRecorder_ClaimsChangeNoRow(t *testing.T) {
 	if !reflect.DeepEqual(plain, recorded) {
 		t.Errorf("rows differ with a recorder:\n%v\n%v", plain, recorded)
 	}
-	want := map[string]map[string]string{"ta": {"redis_x": NotServedUnconsumed}, "tb": {"redis_x": NotServedUnconsumed}}
+	want := map[string]map[string]string{"ta": {"redis_x": NotServedUnconsumed},
+		"tb": {"redis_x": NotServedUnconsumed, `redis_x{a="b"}`: NotServedUnconsumed}}
 	if !reflect.DeepEqual(rec.byTenant, want) {
 		t.Errorf("recorded %v, want %v", rec.byTenant, want)
 	}
@@ -287,5 +298,32 @@ func TestValueNotServedAsWritten_NotUnconsumed(t *testing.T) {
 		if r == NotServedUnconsumed {
 			t.Errorf("ValueNotServedReasons() = %v holds %q", ValueNotServedReasons(), NotServedUnconsumed)
 		}
+	}
+}
+
+// ADR-038 §11: the root `defaults:` writing a dimensional key names it, even
+// when its base is neither valued nor declared — a tenant's override of that
+// key is served (it replaces the root's row), not unconsumed.
+func TestDimensionalKey_RootDefaultNamesIt(t *testing.T) {
+	t.Parallel()
+	const key = `redis_x{env="a"}`
+	cfg := &ThresholdConfig{
+		Defaults: map[string]float64{key: 5},
+		Tenants: map[string]map[string]ScheduledValue{
+			"tx": {key: {Default: "7"}},
+			"ty": {},
+		},
+	}
+	got := map[string]float64{}
+	for _, r := range cfg.ResolveAt(fixedNow) {
+		if r.Metric == "x" && r.CustomLabels["env"] == "a" {
+			got[r.Tenant] = r.Value
+		}
+	}
+	if want := map[string]float64{"tx": 7, "ty": 5}; !reflect.DeepEqual(got, want) {
+		t.Errorf("rows %v, want %v", got, want)
+	}
+	if ns := cfg.ValuesNotServed(fixedNow); len(ns) != 0 {
+		t.Errorf("not served: %v", ns)
 	}
 }

@@ -85,9 +85,9 @@ tenants:
     container_cpu: "70"              # 覆蓋預設值 80
     mysql_replication_lag: "disable" # 無 replica，停用
     # mysql_threads_running 未指定 → 使用預設值 30
-    # 維度標籤
-    "redis_queue_length{queue='tasks'}": "500"
-    "redis_queue_length{queue='events', priority='high'}": "1000:critical"
+    # 維度標籤（base 須是平台宣告的 key，否則不產生 metric）
+    "redis_connected_clients{instance='redis-orders:6379'}": "500"
+    "redis_connected_clients{instance='redis-cache:6379', role='master'}": "1000:critical"
 ```
 
 #### 邊界強制規則 (Boundary Enforcement)
@@ -359,7 +359,7 @@ tenants:
 ```yaml
 tenants:
   redis-prod:
-    "redis_queue_length{queue='orders'}": "500:critical"
+    "redis_connected_clients{instance='redis-orders:6379'}": "500:critical"
 ```
 
 severity 取最後一個 `:` 之後的部分，只能是 `warning` 或 `critical`（不分大小寫）。其他寫法（`500:high`、空的 `500:`）沒有任何 Rule Pack 規則會選，整個值視為讀不懂：基本 key 改送平台預設值（severity 為 warning），維度 key 與 `optional_overrides:` 宣告的 key 不送出該 series；兩者都由 da-guard 的 `value_not_served` 報出（[#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071)）。

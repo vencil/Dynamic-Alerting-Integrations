@@ -45,9 +45,9 @@
 #     es-prod:
 #       es_heap_usage_percent: "80"
 #       es_disk_usage_percent: "75"
-#       # 維度標籤 — 不同 index 設定不同大小閾值
-#       "es_index_store_size_bytes{index=\"logs-prod\"}": "107374182400"
-#       "es_index_store_size_bytes{index=\"metrics\"}": "53687091200"
+#       # 維度標籤 — 不同 index 設定不同延遲閾值（base 須為上方平台宣告的 key）
+#       "es_search_latency_ms{index=\"logs-prod\"}": "2000"
+#       "es_search_latency_ms{index=\"metrics-prod\"}": "500"
 # ============================================================
 groups:
   # -------------------------------------------------------

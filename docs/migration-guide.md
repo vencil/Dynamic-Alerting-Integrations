@@ -251,12 +251,12 @@ tenants:
 ```yaml
 tenants:
   redis-prod:
-    redis_queue_length: "1000"                                # 全域預設
-    "redis_queue_length{queue=\"order-processing\"}": "100"   # 嚴格
-    "redis_queue_length{queue=\"analytics\"}": "5000"         # 寬鬆
-    "redis_queue_length{queue=\"temp\"}": "disable"           # 停用
+    redis_connected_clients: "500"                                              # 全域預設
+    "redis_connected_clients{instance=\"redis-orders:6379\"}": "200"           # 嚴格
+    "redis_connected_clients{instance=\"redis-analytics:6379\"}": "1000"       # 寬鬆
+    "redis_connected_clients{instance=\"redis-temp:6379\"}": "disable"         # 停用
     # 多重 label：
-    "mongodb_collection_count{database=\"orders\",collection=\"transactions\"}": "10000000"
+    "mongodb_replication_lag{rs=\"rs-orders\",member=\"mongo-orders-dr\"}": "60"
 ```
 
 **設計約束**：
@@ -266,6 +266,7 @@ tenants:
 | YAML 需加引號 | 含 `{` 的 key 必須用雙引號包裹 |
 | 不支援 `_critical` 後綴 | 改用 `"value:severity"` 語法，如 `"500:critical"` |
 | Tenant-only | 維度 key 不繼承 `defaults`，僅允許在租戶設定中 |
+| base 須由平台宣告 | `{` 之前的 base 必須在 `_defaults.yaml` 的 `defaults:` 有值或列在 `optional_overrides:`；否則不產生 metric，validate-config 報 `unread … (no_row)`（ADR-038 §11） |
 | 三態仍適用 | 數值=Custom, 省略=Default (僅基本 key，且該 key 在 `_defaults.yaml` 的 `defaults:` 有值；列在 `optional_overrides:` 的宣告 key 省略＝無值＝靜默), `"disable"`=停用 |
 
 **平台團隊 PromQL 適配**：維度 label 必須同時出現在 Recording Rule 的 `by()` 與 Alert Rule 的 `on()` 中。三件套契約與 `tenant:<metric>:<agg>` 命名規範：[design/rule-packs.md](design/rule-packs.md)。Redis / ES / MongoDB 維度範例：`components/threshold-exporter/config/conf.d/examples/`。
@@ -306,7 +307,7 @@ Exporter 每 30 秒 reload 一次，K8s ConfigMap propagation 約 1-2 分鐘。�
 
 **Q: 維度 key 怎麼指定 critical？**
 
-使用 `"value:severity"` 語法：`"redis_queue_length{queue=\"orders\"}": "500:critical"`。
+使用 `"value:severity"` 語法：`"redis_connected_clients{instance=\"redis-orders:6379\"}": "500:critical"`。
 
 **Q: 如何確認 hot-reload 成功？**
 

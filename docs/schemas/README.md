@@ -115,19 +115,23 @@ tenants:
 
 ### Dimensional Thresholds
 
-Schema supports dimensional (labeled) thresholds with literal or regex matching:
+Schema supports dimensional (labeled) thresholds with literal or regex matching.
+The base (the part before `{`) must be a key the platform declares — valued in the
+root `_defaults.yaml` `defaults:` or listed in `optional_overrides:` — otherwise the
+key passes the schema but serves no row and is reported `unread … (no_row)`
+(ADR-038 §11):
 
 ```yaml
 tenants:
   my-tenant:
-    # Literal dimension: queue="orders"
-    "redis_queue_length{queue=\"orders\"}": "100"
+    # Literal dimension: instance="redis-orders:6379"
+    "redis_connected_clients{instance=\"redis-orders:6379\"}": "500"
 
-    # Regex dimension: database matching pattern
-    "mongodb_dbstats_storage_size{database=~\"prod.*\"}": "53687091200"
+    # Regex dimension: replica set matching pattern
+    "mongodb_connections_current{rs=~\"rs-prod.*\"}": "800"
 
     # Multiple dimensions
-    "mongodb_collection_avg_obj_size{database=\"orders\",collection=\"transactions\"}": "4096"
+    "mongodb_replication_lag{rs=\"rs-orders\",member=\"mongo-orders-dr\"}": "60"
 ```
 
 ### Scheduled Values (Time-Window Overrides)

@@ -19,7 +19,7 @@ import (
 
 func scrapeTree(t *testing.T, tenantYAML string) (int, string) {
 	t.Helper()
-	return scrapeTreeWith(t, "defaults:\n  mysql_connections: 80\n", tenantYAML)
+	return scrapeTreeWith(t, "defaults:\n  mysql_connections: 80\noptional_overrides:\n  - redis_queue_length\n", tenantYAML)
 }
 
 func scrapeTreeWith(t *testing.T, defaultsYAML, tenantYAML string) (int, string) {

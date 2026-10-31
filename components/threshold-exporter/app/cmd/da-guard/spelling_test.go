@@ -192,7 +192,7 @@ func TestSpelling_FindingNamesTheKeyAsWritten(t *testing.T) {
 	const written = `pg_connections{env="prod",r="x"}`
 	const other = `xpg_connections{env="prod", r="x"}`
 	_, fs := guardFindingsOf(t, map[string]string{
-		"_defaults.yaml":     spellingRoot,
+		"_defaults.yaml":     spellingRoot + "optional_overrides:\n  - xpg_connections\n",
 		"sub/_defaults.yaml": "defaults:\n  'pg_connections{r=\"x\",env=\"prod\"}': 30\n",
 		"sub/tx.yaml":        "tenants:\n  tx:\n    '" + written + "': 30\n    '" + other + "': abc\n",
 	})

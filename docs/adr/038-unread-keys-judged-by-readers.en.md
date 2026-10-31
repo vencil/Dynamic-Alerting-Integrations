@@ -36,7 +36,7 @@ Revised 2026-10-28: the generator's `--validate` reports the shared verdict too;
 
 Revised 2026-10-30: the verdict joins the generator container's one judgement, with no deadline of its own and no yielding, replacing 2026-10-24's "the verdict has its own share of the deadline"; the rules once tenant-api blocks when judged replace 2026-10-28's "the verdict only goes in `warnings`": a write whose verdict does not complete is refused, with no degraded path. The write check recomputes counterfactually for the written tenants only (decisions 2, 5, 8, 11).
 
-Revised 2026-10-31: reading a tenant's config (GET) no longer reports whether any reader reads a key, and does not judge it on the spot, replacing "GET's key-name messages switch to the shared verdict"; on load the exporter states only which keys it does not read itself, with no severity. The Go, Python and portal key-name judgements are deleted; the `version` label and rename notices reach CI through da-guard, printed as they are (decision 11).
+Revised 2026-10-31: reading a tenant's config (GET) no longer reports whether any reader reads a key, and does not judge it on the spot, replacing "GET's key-name messages switch to the shared verdict"; on load the exporter states only which keys it does not read itself, with no severity. The Go, Python and portal key-name judgements are deleted; the `version` label and rename notices reach CI through da-guard, printed as they are; a dimensional key is served only when the platform declares its base (decision 11).
 
 ## Summary
 
@@ -58,7 +58,7 @@ This ADR decides how to judge and how to report, and the rules tenant-api's writ
 ### Terms
 
 - **Reserved key**: a `_`-prefixed key whose meaning the platform defines, for example `_silent_mode`, `_routing`, `_state_maintenance`. All other keys are threshold keys.
-- **Dimension key**: a threshold that applies only to one label value, written as `metric{label="value"}`, for example `redis_queue_length{queue="tasks"}`; the part without the braces is called the base.
+- **Dimension key**: a threshold that applies only to one label value, written as `metric{label="value"}`, for example `redis_connected_clients{instance="redis-orders:6379"}`; the part without the braces is called the base.
 - **`_critical` key**: `X_critical` is the critical-level threshold of threshold `X`.
 - **profile**: a set of shared settings defined by the platform; a tenant applies it with `_profile: <name>`.
 - **Root platform file**: a `_`-prefixed file in the conf.d root directory, for example `_defaults.yaml`, which every tenant inherits.
@@ -312,7 +312,8 @@ Changing the gates to "block when judged" is not part of this ADR and is driven 
 
 - Reading a tenant's config (GET) no longer reports whether any reader reads a key, and does not judge it on the spot: judging there would take the generator container's judgement queue, and a caller with read permission could trigger it. `da-tools explain-keys` or CI's validate-config show it, and the verdict refuses it on a write — as Kubernetes returns warnings in a write's response only. A git-managed tenant, never written through the API, has such problems reported by CI only.
 - On load the exporter states the keys it does not read itself (a key no row reads, a `disable` written for such a key, a `_` key the registry lists no reader for), with no severity: a reader's fact where it reads, the severity being the verdict's (decision 4). A deployment without CI keeps this signal. The exporter's two other messages about what it reads stay as they are: routing-layer keys in a profile are not applied, and a `_critical` with no base default.
-- The generator's own key-name warnings and the Go and Python key-name judgements are deleted once only the shared verdict is used; value checks such as the `version` label and the rename notice are judged in Go alone, and handed through each tenant's `key_checks` in da-guard served-values to validate-config and the generator's `--validate`, which print them in Go's words. The portal's key-name check is deleted at the same time. The membership matrix that compared the two hand-written judgements stays, now asserted on the shared verdict; one row changes with it: a dimensional key the platform list names whole is still served by the exporter, so the verdict reads it as read.
+- The generator's own key-name warnings and the Go and Python key-name judgements are deleted once only the shared verdict is used; value checks such as the `version` label and the rename notice are judged in Go alone, and handed through each tenant's `key_checks` in da-guard served-values to validate-config and the generator's `--validate`, which print them in Go's words. The portal's key-name check is deleted at the same time. The membership matrix that compared the two hand-written judgements stays, now asserted on the shared verdict.
+- A dimensional key (`<base>{…}`) is served by the exporter only when the platform names its base (valued in `defaults:` or listed in `optional_overrides:`) or the root `defaults:` writes the whole key — the same membership a flat key needs. A dimensional key on a misspelt or undeclared base has no row, and the verdict reads it as `unread` (`no_row`). Before, the exporter served it whatever the base, so the verdict read a misspelt base as read and accepted it, while no alert read it.
 - Platform-file and profile notices no longer carry keys no reader reads; the verdict reports them (decision 6).
 
 ### 12. Bad values already on disk

@@ -22,9 +22,9 @@
 #     mongo-prod:
 #       mongodb_connections_current: "300"
 #       mongodb_replication_lag: "5"
-#       # 維度標籤 — 不同 database 設定不同閾值
-#       "mongodb_dbstats_storage_size{database=\"orders\"}": "53687091200"
-#       "mongodb_dbstats_storage_size{database=\"logs\"}": "107374182400"
+#       # 維度標籤 — 不同 replica set 設定不同閾值（base 須為上方平台宣告的 key）
+#       "mongodb_connections_current{rs=\"rs-orders\"}": "800"
+#       "mongodb_connections_current{rs=\"rs-analytics\"}": "1500"
 # ============================================================
 groups:
   # -------------------------------------------------------

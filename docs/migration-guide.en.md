@@ -251,12 +251,12 @@ When the platform supports Redis / ES / MongoDB, the same metric can have differ
 ```yaml
 tenants:
   redis-prod:
-    redis_queue_length: "1000"                                # Global default
-    "redis_queue_length{queue=\"order-processing\"}": "100"   # Strict
-    "redis_queue_length{queue=\"analytics\"}": "5000"         # Loose
-    "redis_queue_length{queue=\"temp\"}": "disable"           # Disabled
+    redis_connected_clients: "500"                                              # Global default
+    "redis_connected_clients{instance=\"redis-orders:6379\"}": "200"           # Strict
+    "redis_connected_clients{instance=\"redis-analytics:6379\"}": "1000"       # Loose
+    "redis_connected_clients{instance=\"redis-temp:6379\"}": "disable"         # Disabled
     # Multiple labels:
-    "mongodb_collection_count{database=\"orders\",collection=\"transactions\"}": "10000000"
+    "mongodb_replication_lag{rs=\"rs-orders\",member=\"mongo-orders-dr\"}": "60"
 ```
 
 **Design constraints**:
@@ -266,6 +266,7 @@ tenants:
 | YAML quoting required | Keys containing `{` must be wrapped in double quotes |
 | No `_critical` suffix | Use `"value:severity"` syntax instead, e.g. `"500:critical"` |
 | Tenant-only | Dimension keys do not inherit from `defaults`; allowed only in tenant config |
+| Base must be platform-declared | The base before `{` must be valued in `defaults:` of `_defaults.yaml` or listed in `optional_overrides:`; otherwise no metric is served and validate-config reports `unread … (no_row)` (ADR-038 §11) |
 | Three-state still applies | Value=Custom, omitted=Default (basic key only, and only where the key has a value in `defaults:` of `_defaults.yaml`; a key listed under `optional_overrides:` inherits nothing, so omitted=no value=silent), `"disable"`=Disabled |
 
 **Platform-team PromQL adaptation**: the dimension label must appear in both the Recording Rule's `by()` and the Alert Rule's `on()`. Three-piece contract + `tenant:<metric>:<agg>` naming convention: [design/rule-packs.en.md](design/rule-packs.en.md). Redis / ES / MongoDB dimension examples live under `components/threshold-exporter/config/conf.d/examples/`.
@@ -306,7 +307,7 @@ No. Dimension keys are a tenant-only feature, because each tenant's queue / inde
 
 **Q: How do you mark a dimension key as critical?**
 
-Use the `"value:severity"` syntax: `"redis_queue_length{queue=\"orders\"}": "500:critical"`.
+Use the `"value:severity"` syntax: `"redis_connected_clients{instance=\"redis-orders:6379\"}": "500:critical"`.
 
 **Q: How do you confirm hot-reload succeeded?**
 
