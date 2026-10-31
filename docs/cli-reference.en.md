@@ -3394,7 +3394,7 @@ da-tools test-notification --config-dir conf.d/ --ci
 |------|-------------|
 | `0` | All receivers reachable (or non-CI mode) |
 | `1` | CI mode: one or more receivers failed (unreachable, an invalid receiver config or URL, a slot the generator does not render, `NOT_RENDERED`, or one the `--policy` refuses, `POLICY_REFUSED`; even under `--dry-run`, which connects to nothing). Without `--ci` the code is always `0`, but `status` in `--json` and `Overall` in the text report still read `fail` / `FAIL` |
-| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654), or the route generator refuses the tree while reading it (stderr carries the generator's own refusal; `--json` prints `status: caller_error`, `reason: routing_tree_refused`, #2752); `--policy` unusable or its `min_generator_version` newer than this tool (`reason: policy_unusable`, #3142) |
+| `2` | Caller error: a file under `--config-dir` cannot be read (content not UTF-8 or not valid YAML; the message names the file, #1654), or the route generator refuses the tree while reading it (stderr carries the generator's own refusal; `--json` prints `status: caller_error`, `reason: routing_tree_refused`, #2752); `--policy` unusable or its `min_generator_version` newer than this tool (`reason: policy_unusable`, #3142); a `--tenant` the tree does not declare (`reason: tenant_not_found`, [#3431](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3431)) |
 
 #### explain-route
 
@@ -3416,7 +3416,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `--config-dir` | Config directory path | (required) |
-| `--tenant` | Show only specified tenant(s) (repeatable). Any one the tree does not declare exits `2` (`reason: tenant_not_found`, each one named, no partial result; [#3431](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3431); it used to print a WARN, an empty list and exit `0`). A declared tenant with an invalid id is not absent: the generator renders no route for it, so it is skipped with a line on stderr. `--show-profile-expansion` does not read this flag | (all) |
+| `--tenant` | Show only specified tenant(s) (repeatable). Any one the tree does not declare exits `2` (`reason: tenant_not_found`, each one named, no partial result; [#3431](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3431); it used to print a WARN, an empty list and exit `0`). A tenant that is declared (a key under `tenants:`, whatever its value) but that the generator renders no route for, such as an invalid id or a null body, is not absent: it is skipped with a line on stderr. `--show-profile-expansion` alone (without `--trace`) does not read this flag | (all) |
 | `--show-profile-expansion` | Show all routing profile expansions and references | `false` |
 | `--trace` | Trace mode: one alert's routing path as Alertmanager (`amtool`) decides it (requires `--tenant`; needs `amtool` on PATH) | `false` |
 | `--alertname` | Alert name to trace (read only with `--trace`) | `GenericAlert` |

@@ -1466,10 +1466,13 @@ def main(argv: list[str] | None = None) -> int | Report:
     # #3431: a --tenant the tree does not declare is a question about
     # something that is not there — refused (rc 2, every one named), as
     # diagnose and batch-diagnose refuse it, not a WARN and an empty answer
-    # at rc 0. A declared id the generator renders nothing for
-    # (`invalid_tenant_ids`) is not "not found": it is named above.
+    # at rc 0. A tenant a file DECLARES but the generator renders nothing for
+    # (an invalid id, a body that is not a mapping) is not "not found": the
+    # declaration is the key of `tenants:`, whatever its value (#2326 F2).
     if args.tenants and (args.trace or not args.show_profile_expansion):
-        declared = set(parsed["all_tenants"]) | set(parsed.get("invalid_tenant_ids", []))
+        declared = {str(t) for t in parsed["all_tenants"]}
+        declared |= {str(t) for _f, t in parsed.get("tenant_declarations", [])}
+        declared |= {str(t) for t in parsed.get("invalid_tenant_ids", [])}
         absent = [t for t in dict.fromkeys(args.tenants) if t not in declared]
         if absent:
             raise CallerError(
@@ -1492,10 +1495,10 @@ def main(argv: list[str] | None = None) -> int | Report:
         traces = []
         for t in args.tenants:
             if t not in all_tenants:
-                # Declared, but an id the generator renders nothing for
-                # (`invalid_tenant_ids`; an undeclared one was refused above).
-                print(f"  WARN: tenant '{safe_label(t)}': generate-routes renders no "
-                      f"route for an invalid tenant id — not traced", file=sys.stderr)
+                # Declared, but nothing the generator renders a route for
+                # (an undeclared one was refused above).
+                print(f"  WARN: tenant '{safe_label(t)}' is declared, but generate-routes "
+                      f"renders no route for it — not traced", file=sys.stderr)
                 continue
             trace = trace_alert_routing(
                 parsed, t, args.alertname, args.severity,
@@ -1526,10 +1529,10 @@ def main(argv: list[str] | None = None) -> int | Report:
     results = []
     for t in target_tenants:
         if t not in all_tenants:
-            # Declared, but an id the generator renders nothing for
-            # (`invalid_tenant_ids`; an undeclared one was refused above).
-            print(f"  WARN: tenant '{safe_label(t)}': generate-routes renders no "
-                  f"route for an invalid tenant id — not explained", file=sys.stderr)
+            # Declared, but nothing the generator renders a route for
+            # (an undeclared one was refused above).
+            print(f"  WARN: tenant '{safe_label(t)}' is declared, but generate-routes "
+                  f"renders no route for it — not explained", file=sys.stderr)
             continue
         if t in disabled:
             print(f"  INFO: tenant '{safe_label(t)}' has routing disabled, skipping",

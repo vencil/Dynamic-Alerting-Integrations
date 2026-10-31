@@ -343,14 +343,31 @@ class TestCLI:
         assert rc == 0
         assert "team-sre" in json.loads(capsys.readouterr().out)
 
-    def test_a_declared_but_invalid_id_is_not_called_absent(self, full_config, capsys):
-        """It is declared, so not `tenant_not_found`; the generator renders
-        nothing for it, which the run says (the tree warning names it too)."""
-        _write(full_config, "bad.yaml", {"tenants": {"Bad Id": {"cpu_usage": "1"}}})
-        rc = main(["--config-dir", full_config, "--tenant", "Bad Id", "--json"])
+    @pytest.mark.parametrize("tenant, body", [
+        ("Bad Id", {"cpu_usage": "1"}),   # an id the generator refuses
+        ("db-n", None),                   # a null body: declared, not loaded
+        # (a list body is a file the exporter cannot decode: the whole tree
+        # is refused before any tenant is looked at)
+    ], ids=["invalid-id", "null-body"])
+    @pytest.mark.parametrize("extra", [[], ["--trace"]], ids=["explain", "trace"])
+    def test_a_declared_tenant_with_no_route_is_not_called_absent(
+            self, full_config, capsys, tenant, body, extra):
+        """It is declared (the key of `tenants:`, whatever its value — as
+        diagnose reads it), so not `tenant_not_found`; the generator renders
+        nothing for it, which the run says."""
+        _write(full_config, "extra.yaml", {"tenants": {tenant: body}})
+        rc = main(["--config-dir", full_config, *extra, "--tenant", tenant, "--json"])
         assert rc == 0
         cap = capsys.readouterr()
         assert json.loads(cap.out) == []
-        err = cap.err
-        assert "'Bad Id': generate-routes renders no route for an invalid tenant id" in err
-        assert "'Bad Id' not found" not in err
+        assert f"'{tenant}' is declared, but generate-routes renders no route for it" in cap.err
+        assert f"'{tenant}' not found" not in cap.err
+
+    def test_trace_reads_tenant_even_beside_profile_expansion(self, full_config):
+        """--trace wins over --show-profile-expansion and reads --tenant, so
+        an undeclared one is refused there too."""
+        from _lib_exitcodes import CallerError  # noqa: PLC0415
+        with pytest.raises(CallerError) as exc:
+            main(["--config-dir", full_config, "--trace", "--show-profile-expansion",
+                  "--tenant", "ghost", "--json"])
+        assert exc.value.reason == "tenant_not_found"
