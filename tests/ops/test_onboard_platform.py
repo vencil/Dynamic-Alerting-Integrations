@@ -1516,3 +1516,16 @@ def test_rule_files_glob_exclude_matches_the_whole_path_as_matched(tmp_path, mon
                                         "--exclude", "*/recipes/*"]) == 0
     assert _onboard_rules(monkeypatch, ["--rule-files", glob, "-o", str(tmp_path / "o2"),
                                         "--exclude", "recipes/*"]) == 2
+
+
+def test_rule_files_glob_returning_a_dangling_symlink_exits_2(tmp_path, monkeypatch, capsys):
+    """#3426: glob.glob returns a dangling symlink; it is named, rc 2 — it
+    used to be passed over (neither a file nor a directory)."""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    symlink_or_skip(str(rules / "gone.yaml"), str(rules / "b.yaml"))
+    assert _onboard_rules(monkeypatch, ["--rule-files", str(rules) + "/*.yaml",
+                                        "-o", str(tmp_path / "out")]) == 2
+    err = capsys.readouterr().err
+    assert "b.yaml" in err and "dangling symlink" in err

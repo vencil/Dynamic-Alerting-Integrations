@@ -477,3 +477,41 @@ def test_rule_pack_files_names_any_case_suffix_and_a_dangling_pack(tmp_path) -> 
     assert set(got) == {"rule-pack-b.YAML", "rule-pack-c.yaml"}, got
     assert "neither a rule pack" in got["rule-pack-b.YAML"]
     assert got["rule-pack-c.yaml"] == "a dangling symlink"
+
+
+def test_files_to_read_names_a_target_that_is_no_file_and_no_directory(tmp_path) -> None:
+    """A dangling symlink given as a target (an onboard glob returns one)
+    is named, not passed over; one that is not there at all adds nothing."""
+    ok = _write(tmp_path, "ok.yaml", RULES)
+    dangling = str(tmp_path / "dangling.yaml")
+    symlink_or_skip(str(tmp_path / "gone.yaml"), dangling)
+    with pytest.raises(cr.SourcesUnlisted) as exc:
+        cr.files_to_read([ok, dangling])
+    assert exc.value.files == [(dangling, "a dangling symlink")]
+    assert cr.files_to_read([ok, str(tmp_path / "absent.yaml")]) == [ok]
+
+
+def test_an_exclude_that_leaves_only_unread_entries_out_is_everything_excluded(tmp_path) -> None:
+    """Excluded entries count as found whether they read or not: excluding
+    the one dangling symlink a directory holds is "everything excluded"."""
+    root = tmp_path / "d"
+    root.mkdir()
+    symlink_or_skip(str(root / "gone.yaml"), str(root / "dangling.yaml"))
+    with pytest.raises(cr.EverythingExcluded, match="1 file"):
+        cr.files_to_read([str(root)], ["dangling.yaml"])
+
+
+def test_a_symlinked_directory_is_named_not_followed(tmp_path) -> None:
+    """os.walk does not follow it (no loop, no walk out of the tree); it
+    is named, asking for its target — unless --exclude leaves it out."""
+    root = tmp_path / "rules"
+    (tmp_path / "elsewhere").mkdir()
+    (tmp_path / "elsewhere" / "x.yaml").write_text(RULES, encoding="utf-8")
+    root.mkdir()
+    (root / "a.yaml").write_text(RULES, encoding="utf-8")
+    symlink_or_skip(str(tmp_path / "elsewhere"), str(root / "linked"))
+    with pytest.raises(cr.SourcesUnlisted) as exc:
+        cr.files_to_read([str(root)])
+    ((path, why),) = exc.value.files
+    assert path.endswith("linked") and "give its target instead" in why
+    assert [Path(f).name for f in cr.files_to_read([str(root)], ["linked"])] == ["a.yaml"]

@@ -1113,29 +1113,43 @@ def excluded(pattern: str, name: str, relative: str) -> bool:
     return fnmatch.fnmatchcase(name, pattern)
 
 
+#: Why a symlinked directory under a walked target is named, not walked.
+_DIR_SYMLINK = "a symlink to a directory is not followed; give its target instead"
+
+
+def _not_regular(path: str) -> str:
+    """Why *path* — an entry that exists as a link or a node but is no
+    regular file or directory — cannot be read."""
+    return ("a dangling symlink" if os.path.islink(path) and not os.path.exists(path)
+            else "not a regular file")
+
+
 def _walk_yaml(root: str) -> "tuple[list[tuple[str, str]], list[tuple[str, str]]]":
     """(files, problems) under the directory *root*: every entry with a
     YAML suffix (any case) as ``(path, path relative to root)``, and every
     entry that cannot be read as ``(path, why)`` — a directory that cannot
-    be listed, and a YAML-suffixed entry that is not a regular file (a
-    dangling symlink, a FIFO). Symlinked directories are not followed (as
-    ``Path.rglob`` did)."""
+    be listed, a YAML-suffixed entry that is not a regular file (a dangling
+    symlink, a FIFO), and a symlink to a directory. A symlinked directory
+    is not followed (a loop, or a walk out of the tree) and not passed over
+    in silence: it is named, so the caller gives its target instead."""
     files, problems = [], []
 
     def unlisted(err: OSError) -> None:
         problems.append((err.filename or root, f"cannot list this directory: {err.strerror}"))
 
-    for d, _dirs, names in os.walk(root, onerror=unlisted):
+    for d, dirs, names in os.walk(root, onerror=unlisted):
+        for n in dirs:
+            f = os.path.join(d, n)
+            if os.path.islink(f):
+                problems.append((f, _DIR_SYMLINK))
         for n in names:
             if not _is_yaml_name(n):
                 continue
             f = os.path.join(d, n)
             if os.path.isfile(f):
                 files.append((f, pathlib.Path(os.path.relpath(f, root)).as_posix()))
-            elif os.path.islink(f) and not os.path.exists(f):
-                problems.append((f, "a dangling symlink"))
             else:
-                problems.append((f, "not a regular file"))
+                problems.append((f, _not_regular(f)))
     return files, problems
 
 
@@ -1151,14 +1165,17 @@ def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
     or ``.yml`` in any case (``YAML_SUFFIXES``). A file any *exclude*
     pattern matches (``excluded``: relative to the directory target it was
     found under) is left out and not read. Returns the paths, sorted, each
-    once. A target that does not exist adds nothing: callers check their
-    targets first.
+    once. A target that is not there at all (``os.path.lexists`` false)
+    adds nothing: callers check their targets first; a target that is
+    there but neither a directory nor a regular file (a dangling symlink a
+    glob returned, a FIFO) is named like an entry of a walked directory.
 
     Raises :class:`SourcesUnlisted` naming every entry that would be
     chosen but cannot be read (a dangling symlink, a non-regular file, a
-    directory that cannot be listed), unless an *exclude* pattern leaves it
-    out; :class:`EverythingExcluded` when files were found and *exclude*
-    left none of them."""
+    symlink to a directory — not followed — or a directory that cannot be
+    listed), unless an *exclude* pattern leaves it out;
+    :class:`EverythingExcluded` when entries were found — readable or not
+    — and *exclude* left none of them."""
     patterns = list(exclude)
     chosen: "set[str]" = set()
     problems: "list[tuple[str, str]]" = []
@@ -1169,6 +1186,8 @@ def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
             candidates, unread = _walk_yaml(t)
         elif os.path.isfile(t):
             candidates, unread = [(t, pathlib.Path(t).as_posix())], []
+        elif os.path.lexists(t):
+            candidates, unread = [], [(t, _not_regular(t))]
         else:
             continue
         for f, relative in candidates:
@@ -1176,7 +1195,9 @@ def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
             if not any(excluded(pat, os.path.basename(f), relative) for pat in patterns):
                 chosen.add(f)
         for f, why in unread:
-            relative = pathlib.Path(os.path.relpath(f, t)).as_posix()
+            found += 1
+            relative = (pathlib.Path(t).as_posix() if f == t
+                        else pathlib.Path(os.path.relpath(f, t)).as_posix())
             if not any(excluded(pat, os.path.basename(f), relative) for pat in patterns):
                 problems.append((f, why))
     if problems:

@@ -339,7 +339,13 @@ class RuntimeAuditor:
         if rule_dir_problem is not None:
             self.caller_error = f"{i18n('err_rule_packs', self.lang)}: {rule_dir_problem.message}"
             return None
-        paths = sorted(rule_dir.glob("rule-pack-*.yaml"))
+        # #3426: the one declaration of which files are rule packs.
+        try:
+            paths = _lib_consumer_read.rule_pack_files(rule_dir)
+        except _lib_consumer_read.ConsumerReadError as exc:
+            self.caller_error = (f"{i18n('err_rule_packs', self.lang)}: "
+                                 f"{_lib_consumer_read.error_text(exc)}")
+            return None
         if not paths:
             self.caller_error = i18n("err_rule_packs", self.lang)
             return None

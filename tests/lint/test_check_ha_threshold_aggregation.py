@@ -195,6 +195,32 @@ def test_main_exit_codes(tmp_path, monkeypatch):
     assert lint.main() == 0
 
 
+def _ha_tree(tmp_path, monkeypatch):
+    for d in ("rule-packs", "operator-manifests", "k8s/03-monitoring"):
+        (tmp_path / d).mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(lint, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(sys, "argv", ["check_ha_threshold_aggregation.py", "--ci"])
+    return tmp_path / "rule-packs"
+
+
+def test_main_reads_a_yml_rule_pack(tmp_path, monkeypatch):
+    """#3426: rule-packs/ is read through `rule_pack_files` — a `.yml` pack
+    is a pack (the lint's own `glob("rule-pack-*.yaml")` did not see it)."""
+    rp = _ha_tree(tmp_path, monkeypatch)
+    (rp / "rule-pack-t.yml").write_text(_RAW.format(op="sum"), encoding="utf-8")
+    assert lint.main() == 1
+
+
+def test_main_names_an_undeclared_yaml_in_rule_packs(tmp_path, monkeypatch, capsys):
+    """#3426: a YAML in rule-packs/ that is neither a pack nor declared
+    beside them is named, rc 2 — it used to be passed over in silence."""
+    rp = _ha_tree(tmp_path, monkeypatch)
+    (rp / "rule-pack-t.yaml").write_text(_RAW.format(op="max"), encoding="utf-8")
+    (rp / "extra.yaml").write_text(_RAW.format(op="sum"), encoding="utf-8")
+    assert lint.main() == 2
+    assert "extra.yaml" in capsys.readouterr().err
+
+
 def test_live_repo_all_max():
     """Dogfood: every committed copy aggregates user_threshold with max."""
     repo = Path(__file__).resolve().parents[2]
