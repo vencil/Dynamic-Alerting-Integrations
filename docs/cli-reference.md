@@ -1407,7 +1407,7 @@ da-tools state-reconcile [options]
 |------|------|
 | `0` | state 目錄一致（或已成功套用變更） |
 | `1` | 有 unresolvable schema drift（含 state 檔讀不到或缺 `schema_version`）；或 `--ci` 搭配 `--dry-run` 偵測到需改動 |
-| `2` | 呼叫端錯誤，**什麼都沒寫**：argparse 拒絕的參數（未知旗標等）；明確給的 `--state-dir` 不存在、不是目錄或是 symlink 迴圈（`--json` 的 `reason` 為 `dir_not_found`／`dir_not_accessible`）；`--manifest-path` 已有檔案、但讀不出 manifest（不是合法 JSON、頂層不是物件、讀不到；`reason` 為 `manifest_unreadable`），原檔不動。⚠️ **行為變更**（[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）：先前明確給的 `--state-dir` 不存在（或指到一般檔）被當成空目錄、寫出 0 筆的 manifest、rc 0；讀不出的舊 manifest 被當成不存在、以 rc 0 覆寫。沒給 `--state-dir` 時，預設的 `.da/state` 不存在仍視為空目錄（文字模式印警告，`--json` 標 `state_dir_missing: true`；重建 0 筆的 manifest、rc 0；`--ci --dry-run` 下因需重建而 1）；`--manifest-path` 不存在仍是第一次建立；0 bytes 的 `--manifest-path` 視同不存在（stderr 警告；不帶 `--dry-run` 時重建，rc 0） |
+| `2` | 呼叫端錯誤，**什麼都沒寫**：argparse 拒絕的參數（未知旗標等）；明確給的 `--state-dir` 不存在、不是目錄或是 symlink 迴圈（`--json` 的 `reason` 為 `dir_not_found`／`dir_not_accessible`）；`--manifest-path` 已有檔案、但讀不出 manifest（不是合法 JSON、頂層不是物件、`states` 不是清單、讀不到；`reason` 為 `manifest_unreadable`），原檔不動。⚠️ **行為變更**（[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）：先前明確給的 `--state-dir` 不存在（或指到一般檔）被當成空目錄、寫出 0 筆的 manifest、rc 0；讀不出的舊 manifest 被當成不存在、以 rc 0 覆寫。沒給 `--state-dir` 時，預設的 `.da/state` 不存在仍視為空目錄（文字模式印警告，`--json` 標 `state_dir_missing: true`；重建 0 筆的 manifest、rc 0；`--ci --dry-run` 下因需重建而 1）；`--manifest-path` 不存在仍是第一次建立；0 bytes 的 `--manifest-path` 視同不存在（stderr 警告；不帶 `--dry-run` 時重建，rc 0） |
 
 **為什麼是 single declarative command 而非 micro-commands**
 

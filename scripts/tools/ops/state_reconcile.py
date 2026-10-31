@@ -261,6 +261,9 @@ def read_old_manifest(manifest_path: Path) -> dict | None:
         data, err = None, f"not UTF-8: {exc}"
     if err is None and not isinstance(data, dict):
         err = f"not a JSON object ({type(data).__name__})"
+    elif err is None and not isinstance(data.get("states", []), list):
+        # The one field reconcile() reads back (its count).
+        err = f"'states' is not a list ({type(data['states']).__name__})"
     if err is not None:
         raise CallerError(f"--manifest-path {manifest_path}: {err}; not overwritten",
                           "manifest_unreadable")

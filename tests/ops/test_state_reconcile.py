@@ -613,7 +613,8 @@ def test_the_default_state_dir_missing_is_distinct_from_empty(tmp_path, capsys, 
     assert rc == 0
 
 
-@pytest.mark.parametrize("body", ["{not json", "[1]", "\n", "\udcff\udcfe{}"])
+@pytest.mark.parametrize("body", ["{not json", "[1]", "\n", "\udcff\udcfe{}",
+                                  '{"states": null}', '{"states": 5}'])
 def test_an_unreadable_manifest_is_not_overwritten(tmp_path, body):
     """#3392: an existing manifest that cannot be read as one was taken for
     "no manifest", reported as "no count change" and overwritten at rc 0. Now
