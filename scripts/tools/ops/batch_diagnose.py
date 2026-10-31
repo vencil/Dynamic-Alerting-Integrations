@@ -28,8 +28,6 @@ Usage:
   - Prometheus Query API 可達（health check 模式）
 """
 import argparse
-import base64
-import binascii
 import contextlib
 import json
 import os
@@ -62,6 +60,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError,
     arm_crash_envelope, disarm_crash_envelope,
 )
+from _lib_consumer_read import binary_data_bytes  # noqa: E402  (#3461: the one binaryData decode)
 import _lib_parse_cache  # noqa: E402  (#1525: exit_on_parse_tree_error)
 import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 9: Go classes the key names)
 from _lib_io import safe_label  # noqa: E402
@@ -113,10 +112,10 @@ def read_configmap_files(namespace="monitoring", configmap="threshold-config"):
                 raise unreadable(f"key {key!r} is in both data and binaryData")
             try:
                 files[key] = (value.encode("utf-8") if section == "data"
-                              else base64.b64decode(value, validate=True))
+                              else binary_data_bytes(value))
             except UnicodeEncodeError:
                 raise unreadable(f"data key {key!r} is not encodable as UTF-8") from None
-            except (binascii.Error, ValueError):
+            except ValueError:   # binascii.Error is a ValueError
                 raise unreadable(f"binaryData key {key!r} is not base64") from None
     return files
 

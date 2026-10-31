@@ -73,7 +73,6 @@ recipe 這一側能做的（不讓 **shell** 再解析一次）已經做了—�
 from __future__ import annotations
 
 import argparse
-import base64
 import os
 import subprocess
 import sys
@@ -219,8 +218,8 @@ def measure_artifact(manifest: str, carriers: list[Path]) -> tuple[list[str], di
                          if isinstance(value, str) else None)
     for key, value in binary.items():
         try:
-            got[str(key)] = len(base64.b64decode(value, validate=True))
-        except (ValueError, TypeError):
+            got[str(key)] = len(_lib_consumer_read.binary_data_bytes(value))
+        except ValueError:   # binascii.Error too; a non-string value as well
             got[str(key)] = None
 
     want = {p.name: p.stat().st_size for p in carriers}

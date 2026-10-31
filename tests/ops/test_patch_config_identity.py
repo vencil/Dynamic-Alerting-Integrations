@@ -91,6 +91,20 @@ class TestCrossLanguageGolden:
                                     "binaryData": {"b.yaml": "eDogMgo="}})
         assert files == {"a.yaml": b"x: 1\n", "b.yaml": b"x: 2\n"}
 
+    @pytest.mark.parametrize("value", ["eDog\nMgo=\n", "eDog\r\nMgo=\r\n"],
+                             ids=["lf", "crlf"])
+    def test_binary_data_folded_over_lines_is_read_as_the_api_server_reads_it(self, value):
+        """#3461: a value folded with a YAML `|` block is base64 the API
+        server takes (Go's StdEncoding skips \\r and \\n)."""
+        files = pc.configmap_files({"binaryData": {"b.yaml": value}})
+        assert files == {"b.yaml": b"x: 2\n"}
+
+    @pytest.mark.parametrize("value", ["eDog@Mgo=", "eDog Mgo=", "eDog\tMgo=", 7],
+                             ids=["at-sign", "space", "tab", "not-a-string"])
+    def test_binary_data_that_is_not_base64_is_refused_by_name(self, value):
+        with pytest.raises(pc.ConfigMapShapeError, match="binaryData key b.yaml is not base64"):
+            pc.configmap_files({"binaryData": {"b.yaml": value}})
+
 
 class TestWrittenFiles:
     def test_taken_from_the_patch_response(self):

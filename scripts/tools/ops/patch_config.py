@@ -52,8 +52,6 @@ not hold (#1950 route E). The details, the exit codes and what this cannot
 see are in `VERIFY_HELP` below (also printed by --help).
 """
 import argparse
-import base64
-import binascii
 import contextlib
 import hashlib
 import re
@@ -73,6 +71,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope)
 from _lib_python import format_json_report, positive_seconds  # noqa: E402
 import _lib_confedit  # noqa: E402  (ADR-036 §2, #3206: Go writes the key's text)
+from _lib_consumer_read import binary_data_bytes  # noqa: E402  (#3461: the one binaryData decode)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection)
 import _lib_parse_tree  # noqa: E402
 from _threshold_alerts import alerts_for_key  # noqa: E402
@@ -726,14 +725,16 @@ def exporter_reads(key):
 
 def configmap_files(cm):
     """{key: bytes} of a ConfigMap object, as kubelet writes them into the
-    mounted directory: `data` values UTF-8 encoded, `binaryData` decoded."""
+    mounted directory: `data` values UTF-8 encoded, `binaryData` decoded the
+    API server's way (`_lib_consumer_read.binary_data_bytes`, #3461: a value
+    folded over lines is read)."""
     files = {}
     for key, value in ((cm or {}).get("data") or {}).items():
         files[key] = str(value).encode("utf-8", "surrogatepass")
     for key, value in ((cm or {}).get("binaryData") or {}).items():
         try:
-            files[key] = base64.b64decode(value, validate=True)
-        except (binascii.Error, TypeError, ValueError) as exc:
+            files[key] = binary_data_bytes(value)
+        except ValueError as exc:   # binascii.Error is a ValueError
             raise ConfigMapShapeError(
                 f"{_CM_NAME} binaryData key {key} is not base64: {exc}") from exc
     return files
