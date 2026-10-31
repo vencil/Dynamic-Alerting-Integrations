@@ -230,7 +230,7 @@ domain_policies:
       max_repeat_interval: 1h
 ```
 
-domain policy 用 `tenants:` 清單指名受約束的租戶。只有檔名是 `_domain_policy.yaml` 時這個區塊才會被讀；在租戶檔裡寫 `_domain_policy: finance` 不會套用任何政策，驗證只會在 `unread_keys` 那列報 `unread … (unregistered)`（點名 `_domain_policy`）。
+domain policy 用 `tenants:` 清單指名受約束的租戶。只有檔名是 `_domain_policy.yaml` 時這個區塊才會被讀；在租戶檔裡寫 `_domain_policy: finance` 不會套用任何政策，驗證會在 `unread_keys` 那列報 `unread … (unregistered)`（點名 `_domain_policy`）；裝了 Python `jsonschema` 時，`json_schema` 那列也會因為 `_` 命名空間是封閉的而 FAIL。
 
 ## 練習 3：驗證所有配置
 

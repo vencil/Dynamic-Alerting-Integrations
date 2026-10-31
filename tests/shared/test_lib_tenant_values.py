@@ -1094,3 +1094,14 @@ def test_a_request_that_is_not_tenant_ids_is_the_callers_mistake(tenants, error)
 def test_a_request_is_sorted_and_deduplicated():
     assert tv.requested_tenants(iter(["t-b", "t-a", "t-b"])) == ["t-a", "t-b"]
     assert tv.requested_tenants(None) is None
+
+
+def test_key_checks_of_the_wrong_shape_are_refused_not_read_as_none():
+    """served-values' key_checks is the exporter's word: a document of the
+    wrong shape (a field missing, a non-string message) is a broken da-guard,
+    never "no message"."""
+    assert tv._key_checks({"version_labels": ["a"], "renames": []}) == tv.KeyChecks(("a",), ())
+    for bad in ({"version_labels": []}, {"version_labels": [1], "renames": []},
+                {"version_labels": "a", "renames": []}, ["a"]):
+        with pytest.raises((TypeError, KeyError)):
+            tv._key_checks(bad)

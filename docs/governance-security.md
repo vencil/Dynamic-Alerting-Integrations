@@ -124,7 +124,7 @@ git push
 v1.7.0 起，`validate_config.py` 提供一站式配置驗證，涵蓋：
 
 1. **YAML 格式驗證** — 語法正確性
-2. **Schema 驗證** — 共用的鍵判決（[ADR-038](adr/038-unread-keys-judged-by-readers.md)）偵測沒有讀取端讀的 key（拼錯的 key）（JSON Schema 定義見 [docs/schemas/](schemas/README.md)）
+2. **Schema 與鍵的驗證** — validate-config 的 `json_schema` 列依 JSON Schema 檢查值的形狀（定義見 [docs/schemas/](schemas/README.md)）；沒有讀取端讀的 key（拼錯的 key）由 `unread_keys` 列以共用的鍵判決報出（[ADR-038](adr/038-unread-keys-judged-by-readers.md)）
 3. **路由驗證** — `generate_alertmanager_routes.py --validate` 檢查 receiver 結構 + domain allowlist
 4. **Custom Rule Lint** — `lint_custom_rules.py` deny-list 合規檢查
 5. **版號一致性** — `bump_docs.py --check` 確認三條版號線同步

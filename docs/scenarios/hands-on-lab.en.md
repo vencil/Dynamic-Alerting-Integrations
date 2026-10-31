@@ -235,7 +235,7 @@ domain_policies:
       max_repeat_interval: 1h
 ```
 
-A domain policy names the tenants it constrains in its `tenants:` list. The block is only read from a file named `_domain_policy.yaml`; writing `_domain_policy: finance` in a tenant file applies no policy, and validation only reports `unread … (unregistered)` naming `_domain_policy` on the `unread_keys` row.
+A domain policy names the tenants it constrains in its `tenants:` list. The block is only read from a file named `_domain_policy.yaml`; writing `_domain_policy: finance` in a tenant file applies no policy, and validation reports `unread … (unregistered)` naming `_domain_policy` on the `unread_keys` row; where the Python `jsonschema` package is installed, the `json_schema` row also FAILs, since the schema closes the `_` namespace.
 
 ## Exercise 3: Validate All Configs
 
