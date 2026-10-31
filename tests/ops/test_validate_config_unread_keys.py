@@ -245,3 +245,12 @@ class TestAPlatformDeclaringNothingIsNotAdvisedAway:
             sys.exit(2)
         monkeypatch.setattr(gen, "_parse_config_files", gone)
         assert vc._no_declared_defaults_hint(str(tmp_path)) is None
+
+
+def test_undecidable_keeps_its_advice_next_to_a_key_check(tmp_path):
+    """No root platform file and a renamed key: the rename line is the
+    exporter's key check, not a key found unread, so the advice stays about
+    the root file — never "remove a key nothing reads"."""
+    r = vc.check_unread_keys(_tree(tmp_path, {"t-a.yaml": "tenants:\n  t-a:\n    mysql_cpu: \"40\"\n"}))
+    assert any("renamed" in d for d in r["details"]), r["details"]
+    assert r["hint"] == vc._UNREAD_KEYS_UNDECIDABLE_HINT, r

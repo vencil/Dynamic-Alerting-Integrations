@@ -188,7 +188,7 @@ tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共�
 
 這條分界讓讀者知道某個清單該去哪裡改：頂層保留鍵改登錄表，子鍵改讀取它的那支程式。
 
-**`_` 命名空間以登錄表為準**：登錄表的 `_` 鍵沒有一個是閾值，所以 `_` 開頭的鍵在任何一層、任何形狀（base、`_critical`、維度鍵）都不產生閾值列，根 defaults 宣告了也一樣；登錄表沒有的 `_` 鍵則沒有任何讀取端讀，與 JSON schema 一致。例如根 defaults 寫 `_myth: 5`、租戶寫 `_myth: "7"`，exporter 不為 `_myth`、`_myth_critical`、`_myth{x="a"}` 產生任何列；served-values 把它列進 `unserved`，原因是 `unregistered`，`da-guard effective` 的 `not_served` 也標 `unregistered`；Go 的寫入檢查（tenant-api）報「unknown reserved key」並拒收；`expires:` 也不再為它發出過期事件。根 defaults 寫成數字的登錄表鍵（例如 `_namespaces: 5`）同樣不再成為閾值，判決照決定 4 判為 `unread`。這是 breaking change：依賴根 defaults 宣告這種鍵的部署，升級後少掉那些列；遷移方式是改用登錄表有的鍵，或拿掉 `_` 前綴讓它成為一般閾值鍵（[#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)）。
+**`_` 命名空間以登錄表為準**：登錄表的 `_` 鍵沒有一個是閾值，所以 `_` 開頭的鍵在任何一層、任何形狀（base、`_critical`、維度鍵）都不產生閾值列，根 defaults 宣告了也一樣；登錄表沒有的 `_` 鍵則沒有任何讀取端讀，與 JSON schema 一致。例如根 defaults 寫 `_myth: 5`、租戶寫 `_myth: "7"`，exporter 不為 `_myth`、`_myth_critical`、`_myth{x="a"}` 產生任何列；served-values 把它列進 `unserved`，原因是 `unregistered`，`da-guard effective` 的 `not_served` 也標 `unregistered`；tenant-api 的寫入依判決拒收；`expires:` 也不再為它發出過期事件。根 defaults 寫成數字的登錄表鍵（例如 `_namespaces: 5`）同樣不再成為閾值，判決照決定 4 判為 `unread`。這是 breaking change：依賴根 defaults 宣告這種鍵的部署，升級後少掉那些列；遷移方式是改用登錄表有的鍵，或拿掉 `_` 前綴讓它成為一般閾值鍵（[#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)）。
 
 ### 3. 防止登錄表與程式漂移
 

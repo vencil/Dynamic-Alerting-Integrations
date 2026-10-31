@@ -2141,8 +2141,10 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
     if details:
         # Only an undecidable line: no key was found unread, so the advice
         # is about the root file, not about a key.
+        # (The exporter's key checks are not findings: a rename notice next
+        # to an undecidable tree keeps the root-file advice.)
         hint = (_UNREAD_KEYS_UNDECIDABLE_HINT
-                if undecidable is not None and len(details) == 1 else None)
+                if undecidable is not None and not verdict.findings else None)
         if hint is None and verdict.findings:
             # ⛔ A platform declaring nothing: every key reads as unread, and
             # "remove a key nothing reads" would delete a working config.

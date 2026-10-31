@@ -661,10 +661,9 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 		if reserved || strings.HasPrefix(metricKey, "_state_") || strings.HasPrefix(metricKey, "_silent_") {
 			continue
 		}
-		// Any other leading underscore is a typo'd reserved key. ValidateTenantKeys
-		// has an "unknown reserved key (typo?)" branch for exactly this, but it
-		// sits AFTER the membership check — so a mistyped reserved name on the
-		// platform list (`_silence_mode`) validates clean. parseMetricKey maps a
+		// Any other leading underscore is a typo'd reserved key (the shared key
+		// verdict reads it as unregistered, ADR-038 §11) — a mistyped reserved
+		// name on the platform list (`_silence_mode`). parseMetricKey maps a
 		// leading-underscore key to component="default", so without this it would
 		// surface as user_threshold{component="default",metric="_silence_mode"}.
 		if strings.HasPrefix(metricKey, "_") {
