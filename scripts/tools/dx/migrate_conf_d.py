@@ -382,14 +382,17 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    conf_d = Path(args.conf_d).resolve()
     # #3276: the shared judgement of a caller-given path — a path under a
-    # parent the caller cannot enter is named, not a traceback.
-    problem = classify_path(conf_d, "dir", lang="en", flag="--conf-d")
+    # parent the caller cannot enter is named, not a traceback. Of the
+    # string the caller gave (#3406): `Path('')` is `.`, so `''` (an unset
+    # shell variable) judged after it was the current directory, planned at
+    # rc 0. Judged raw, `''` is named as `''`.
+    problem = classify_path(args.conf_d, "dir", lang="en", flag="--conf-d")
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         print(f"❌ conf.d/ {word}: {problem.message}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
+    conf_d = Path(args.conf_d).resolve()
 
     # A file the walk cannot read is a path da-guard validation names: the
     # reader's first read is the shared conf.d refusal (#3206), so the plan

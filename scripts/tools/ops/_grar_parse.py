@@ -45,13 +45,11 @@ from _lib_confd import (  # noqa: E402
 from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
     Finding,
-    chain_levels,
     domain_policy_levels,
     merge_routing_with_defaults,
     policy_reaches,
     resolve_routing_defaults,
     skipped_entry_warning,
-    unclassified,
     visible_routing_profiles,
 )
 from _grar_validate import (  # noqa: E402
@@ -76,7 +74,6 @@ from _grar_validate import (  # noqa: E402
     routing_not_mapping_text,
     routing_not_mapping_warning,
     routing_values_not_string,
-    validate_tenant_keys,
     value_not_string_message,
 )
 # #2503: the strict twin of the enforced routes' group_by render.
@@ -314,9 +311,11 @@ def _parse_platform_config(data: dict, fname: str, result: dict, *,
     "is this a platform (`_`-prefixed) file" gates the routing keys, and "is
     this the defaults CARRIER" gates `defaults:` / `optional_overrides:`.
     Before, any `_` file (and, for `defaults:`, any file at all) widened the
-    key universe validate_tenant_keys checks against, while the exporter
-    serves those keys only from the carrier — so a root `_profiles.yaml`
-    carrying `defaults:` passed here and was stripped there.
+    key universe recorded here, while the exporter serves those keys only
+    from the carrier — so a root `_profiles.yaml` carrying `defaults:` passed
+    here and was stripped there. (No key name is judged here any more: that
+    is the shared key verdict's, ADR-038 §11; the universe is still recorded,
+    with no reader in this tool.)
     Both are Go's class of the file (#3206): *cls* is the entry's (the read
     loop passes it), else the name's in names mode (`classify_names`) — no
     name rule here. Which of SEVERAL carriers is read is the caller's job —
@@ -343,11 +342,10 @@ def _parse_platform_config(data: dict, fname: str, result: dict, *,
 
     # #1189 / TRK-337: keys the platform RECOGNISES but supplies no value for
     # (the runtime half of the registry's `tier: optional_overrides`). They
-    # widen the membership universe validate_tenant_keys checks against, so a
-    # tenant can finally set them — which is precisely why they are honoured
-    # ONLY from _ prefixed files. A tenant naming its own keys here would be
-    # self-authorising past this very check; Go strips it from tenant-owned
-    # files for the same reason (applyBoundaryRules).
+    # widen the platform's key surface, which is precisely why they are
+    # honoured ONLY from _ prefixed files: a tenant naming its own keys here
+    # would be self-authorising; Go strips it from tenant-owned files for the
+    # same reason (applyBoundaryRules).
     if "optional_overrides" in data:
         if is_carrier:
             raw = data["optional_overrides"]
@@ -787,7 +785,7 @@ def _parse_nested_config(data: dict, fname: str, level: str,
     * routing profiles and domain policies below the root:
       `_parse_profiles_and_policies`.
     * the carrier's `defaults:` widens the key universe of the tenants below
-      it (validate_tenant_keys), as the root carrier's does for every tenant.
+      it, as the root carrier's does for every tenant.
 
     *reserved*: whether the file is a platform (`_`) file — the entry's Go
     class (the read loop passes it), else the name's (`classify_names`).
@@ -1739,18 +1737,8 @@ def load_tenant_tree(
     field_type_errors = list(parsed.get("field_type_errors", []))
     schema_warnings.extend(field_type_findings(field_type_errors))
 
-    # Schema validation: check tenant keys against defaults. #2326: a tenant
-    # below the root also sees the `defaults:` keys of every carrier on its
-    # directory chain — the keys the exporter merges into it.
-    by_dir_keys = parsed.get("defaults_keys_by_dir", {})
-    for tenant, keys in sorted(parsed["tenant_keys"].items()):
-        universe = set(parsed["defaults_keys"])
-        for d in chain_levels(tenant_dirs.get(tenant, ROOT_LEVEL)):
-            universe |= by_dir_keys.get(d, set())
-        schema_warnings.extend(
-            unclassified(w, blocks="never")
-            for w in validate_tenant_keys(tenant, keys, universe,
-                                          parsed["optional_override_keys"]))
+    # ADR-038 §11: whether a tenant key is read is the shared key verdict's
+    # (`--validate`, validate-config); this tool judges no key names.
 
     # v2.1.0 ADR-007: Validate profile references
     schema_warnings.extend(_validate_profile_refs(parsed))

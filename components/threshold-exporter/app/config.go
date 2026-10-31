@@ -1920,7 +1920,7 @@ func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
 	// Whether any reader reads a key is not judged here (ADR-038 §11): the
 	// shared key verdict does; this exporter states what it reads itself
 	// (auditValuesNotServed's keys-unread line).
-	kv := cfg.ValidateTenantKeys().WithoutUnread()
+	kv := cfg.ValidateTenantKeys()
 	for _, w := range kv.Errors {
 		logger.Printf("%s", w)
 	}

@@ -623,6 +623,21 @@ class TestCLI:
         assert _json(p)["tenants_added"] == ["db-a"]
 
     @pytest.mark.parametrize("side", ["old", "new"])
+    def test_a_symlink_loop_is_a_caller_error_not_a_first_import(self, tmp_path, side):
+        """#3392 (Q-a): a loop is listed by `ls` — not "nothing there" — so
+        --old-dir on one is no longer read as a first import (rc 1, every new
+        tenant added): rc 2, `dir_not_accessible`."""
+        from _platform_fs import symlink_or_skip
+        _write_tenant(tmp_path / "d", {"mysql_connections": "80"})
+        loop = tmp_path / "loop"
+        symlink_or_skip(loop, loop)
+        dirs = {"old": tmp_path / "d", "new": tmp_path / "d", side: loop}
+        p = _run_cli(dirs["old"], dirs["new"], "--format", "json")
+        assert p.returncode == 2, p.stderr
+        assert f"--{side}-dir {loop}: " in p.stderr, p.stderr
+        assert _json(p)["reason"] == "dir_not_accessible", p.stdout
+
+    @pytest.mark.parametrize("side", ["old", "new"])
     def test_a_file_given_as_a_directory_is_a_caller_error(self, tmp_path, side):
         _write_tenant(tmp_path / "d", {"mysql_connections": "80"})
         f = tmp_path / "file.yaml"

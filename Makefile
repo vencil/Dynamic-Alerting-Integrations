@@ -766,10 +766,10 @@ version-check: $(DA_READ_PREREQ) ## 檢查版號一致性 + 計數一致性 (CI 
 	@$(DA_READ_ENV) python3 ./scripts/tools/dx/bump_docs.py --sync-counts --check
 
 .PHONY: pre-tag
-pre-tag: version-check lint-docs lint-image-caveats playbook-freshness-ll changelog-fragments-consumed draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
+pre-tag: version-check lint-docs lint-image-caveats init-chart-pin-published playbook-freshness-ll changelog-fragments-consumed draft-advisory-check benchmark-report-warn docker-build-all trivy-scan-all ## ⛔ Pre-tag 品質閘門（所有檢查必須通過才能打 tag；benchmark-report + trivy informational）
 	@echo ""
 	@echo "============================================================"
-	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  image-caveats ✅  playbook-freshness (advisory — read its output above; it never blocks)"
+	@echo "  Pre-tag Gate: version-check ✅  lint-docs ✅  image-caveats ✅  init-chart-pin ✅  playbook-freshness (advisory — read its output above; it never blocks)"
 	@echo "  Changelog fragments assembled ✅  Draft-advisory check ✅  Docker build (8 self-built images) ✅  Trivy CVE scan (informational)"
 	@echo "  Bench baseline: .build/bench-baseline.txt (informational, issue #60 Phase 1)"
 	@echo "  Safe to create tags."
@@ -1061,6 +1061,10 @@ lint-docs: $(DA_GUARD_PREREQ) $(DA_READ_PREREQ) ## 一站式文件 lint（versio
 .PHONY: lint-image-caveats
 lint-image-caveats: ## 「已發布映像還是舊行為」註記的到期閘門：標記 <!-- image-caveat: vX.Y.Z --> 舊於 da-tools VERSION 即失敗（pre-tag 會跑）
 	@python3 ./scripts/tools/lint/check_image_caveats.py
+
+.PHONY: init-chart-pin-published
+init-chart-pin-published: ## #1425 init 釘的 chart 版本必須就是樹裡的 chart：helm/threshold-exporter/ 在 exporter/v<pin> 之後有改動就失敗（pre-tag 會跑；release.yaml 的 tools/v* job 以 --require-tag 再跑）
+	@python3 ./scripts/tools/lint/check_init_chart_pin_published.py
 
 .PHONY: lint-egress
 lint-egress: $(DA_CRDECODE_PREREQ) ## #566 T4 — log-aggregation 圖表 egress allowlist + env-override gate（需 helm；渲染結果經 da-crdecode 讀；ARGS="--values prod.yaml --allow-host siem.example.com"）

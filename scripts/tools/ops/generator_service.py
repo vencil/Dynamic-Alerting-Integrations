@@ -1238,6 +1238,48 @@ def _normalize_config_subdir(value: str) -> str:
     return "" if norm == "." else norm
 
 
+#: `git ls-tree`'s mode of a directory.
+_TREE_MODE = "040000"
+
+
+def _check_config_subdir(git: str, repo: str, sub: str, shown: str) -> None:
+    """#3392: --config-subdir is looked up in the tree of the revision the
+    service starts on (``HEAD``) — by its own entry, `_gsvc_child.path_mode`,
+    as a literal path like every judgement's reading. A directory starts;
+    what it holds is each judgement's to read. A path that is in the tree
+    but is no directory — a file, a
+    symlink, a submodule — is an empty conf.d for every judgement (a write
+    that duplicates a tenant came back ``pass``): the service refuses to
+    start.
+
+    A path with no entry at all is said on stderr and the service starts:
+    git keeps no empty directory, so a conf.d whose last tenant was
+    offboarded, or one the first write has yet to create, reads the same as
+    a misspelt one — and a service that refused it could never take that
+    first write. So does a ``HEAD`` that is no commit yet."""
+    proc = subprocess.run([git, "-C", repo, "rev-parse", "--verify", "--quiet",
+                           "HEAD^{commit}"], capture_output=True, check=False, timeout=60)
+    head = proc.stdout.decode("ascii", "replace").strip()
+    if proc.returncode != 0 or not head:
+        print(f"generator-service: --repo {safe_label(repo)} has no HEAD commit; "
+              f"--config-subdir {shown} is not checked", file=sys.stderr, flush=True)
+        return
+    if not sub:
+        return  # the root is a tree whatever it holds
+    try:
+        mode = _gsvc_child.path_mode(git, repo, head, sub)
+    except _gsvc_child.GitReadError as exc:
+        raise RuntimeError(f"--config-subdir {shown}: {exc}") from exc
+    if mode == _TREE_MODE:
+        return  # what is in it is each judgement's to read
+    if mode is not None:
+        raise RuntimeError(f"--config-subdir {shown}: not a directory in --repo "
+                           f"{safe_label(repo)} at HEAD ({head[:12]}; mode {mode})")
+    print(f"generator-service: --config-subdir {shown}: no entries in --repo "
+          f"{safe_label(repo)} at HEAD ({head[:12]}); judging it as an empty conf.d",
+          file=sys.stderr, flush=True)
+
+
 def _prepare_socket_path(path: str) -> None:
     try:
         st = os.lstat(path)
@@ -1361,6 +1403,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         return EXIT_CALLER_ERROR
     try:
         fmt = _object_format(settings.git, settings.repo)
+        _check_config_subdir(settings.git, settings.repo, settings.config_subdir,
+                             safe_label(repr(args.config_subdir)))
         _prepare_work_dir(settings.work_dir)
         _check_limits(settings)
         _prepare_socket_path(settings.socket)

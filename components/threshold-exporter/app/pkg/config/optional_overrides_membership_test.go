@@ -156,37 +156,6 @@ func TestDeclaredKey_DimensionalOverrideIsAccepted(t *testing.T) {
 	}
 }
 
-// ⛔ The deliberate non-union. resolveCriticalRows (resolve.go) requires
-// defaults[base] and drops the row with a scrape-time log line otherwise; a
-// declared base is absent from defaults by definition. Accepting this key
-// would produce exactly the failure the surrounding block comment forbids.
-func TestDeclaredKey_CriticalTwinIsStillRefused(t *testing.T) {
-	t.Parallel()
-	cfg := declaredCfg(
-		[]string{"oracle_wait_time_rate"},
-		map[string]ScheduledValue{"oracle_wait_time_rate_critical": {Default: "9"}},
-	)
-
-	kv := cfg.ValidateTenantKeys() // #1231 c2: dangling _critical is a blocking Error
-
-	if len(kv.Errors) != 1 {
-		t.Fatalf("expected exactly 1 error, got %d: %v", len(kv.Errors), kv.Errors)
-	}
-	e := kv.Errors[0]
-	// Name both keys AND the reason: "refused" is not actionable, "the base is
-	// declared without a value, so the row would never emit" is.
-	for _, want := range []string{
-		"oracle_wait_time_rate_critical",
-		"oracle_wait_time_rate",
-		"optional_overrides",
-		"resolveCriticalRows",
-	} {
-		if !strings.Contains(e, want) {
-			t.Errorf("error should mention %q, got %q", want, e)
-		}
-	}
-}
-
 // ⛔ PREVENT #656. `expires:` reverts an override TO the platform default; a
 // declared key has none, so a lapse leaves NO value and the alert goes quiet.
 // Declared keys are the fourth member of the "nothing to fall back to" family
@@ -276,89 +245,5 @@ func TestDeclaredKey_AlsoValuedKeepsExpiryWorkingAndEmitting(t *testing.T) {
 	}
 	if got := cfg.ResolveThresholdExpiriesAt(fixedNow); len(got) != 1 {
 		t.Fatalf("the expiry event must still fire for a valued key, got %+v", got)
-	}
-}
-
-// ⛔ Py↔Go parity pin for the shape that dominates the registry: 16 of the 25
-// `tier: optional_overrides` keys end in `_critical`. Go's cascade reaches the
-// _critical branch before the declared check and `continue`s out of both arms,
-// so such a key never reaches membership widening — and must not, because
-// resolveCriticalRows drops the row when the base has no value. The Python
-// twin carries the mirrored guard; if either side moves alone, CI and the
-// tenant-api write gate disagree about what is writable.
-func TestDeclaredKey_CriticalKeyNamedOnTheListIsStillRefused(t *testing.T) {
-	t.Parallel()
-	cfg := declaredCfg(
-		[]string{"jvm_memory_critical"}, // the _critical key itself is declared
-		map[string]ScheduledValue{"jvm_memory_critical": {Default: "90"}},
-	)
-
-	kv := cfg.ValidateTenantKeys()
-
-	if len(kv.Errors) != 1 {
-		t.Fatalf("expected exactly 1 error, got %d: %v", len(kv.Errors), kv.Errors)
-	}
-	for _, want := range []string{"jvm_memory_critical", "jvm_memory"} {
-		if !strings.Contains(kv.Errors[0], want) {
-			t.Errorf("error should mention %q, got %q", want, kv.Errors[0])
-		}
-	}
-}
-
-// The declared list is a membership set, not an amnesty: everything about the
-// old rejection path has to survive it.
-func TestDeclaredKey_ListIsNotABlanketAmnesty(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name     string
-		key      string
-		wantWord string
-	}{
-		// Never prefix-match — the package header forbids it for aliases and
-		// the same trap applies here: a declared oracle_wait_time_rate must
-		// not bless oracle_wait_time_rate_extra.
-		{"prefix lookalike", "oracle_wait_time_rate_extra", "unknown key"},
-		{"unrelated key", "postgres_nonsense", "unknown key"},
-		{"typo reserved key", "_silence_mode", "unknown reserved key"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			cfg := declaredCfg(
-				[]string{"oracle_wait_time_rate"},
-				map[string]ScheduledValue{tc.key: {Default: "1"}},
-			)
-
-			kv := cfg.ValidateTenantKeys()
-
-			if len(kv.Errors) != 1 {
-				t.Fatalf("expected exactly 1 error, got %d: %v", len(kv.Errors), kv.Errors)
-			}
-			if !strings.Contains(kv.Errors[0], tc.wantWord) {
-				t.Errorf("want %q in %q", tc.wantWord, kv.Errors[0])
-			}
-			if !strings.Contains(kv.Errors[0], tc.key) {
-				t.Errorf("want the offending key %q named in %q", tc.key, kv.Errors[0])
-			}
-		})
-	}
-}
-
-// An empty / absent list must leave every pre-existing verdict untouched —
-// this is what makes the change inert until the platform actually declares
-// something (no shipped _defaults.yaml does yet).
-func TestDeclaredKey_EmptyListPreservesRejection(t *testing.T) {
-	t.Parallel()
-	overrides := map[string]ScheduledValue{"oracle_wait_time_rate": {Default: "5"}}
-
-	withNil := declaredCfg(nil, overrides).ValidateTenantKeys()
-	withEmpty := declaredCfg([]string{}, overrides).ValidateTenantKeys()
-
-	if len(withNil.Errors) != 1 || len(withEmpty.Errors) != 1 {
-		t.Fatalf("an undeclared key stays rejected: nil=%v empty=%v", withNil.Errors, withEmpty.Errors)
-	}
-	if withNil.Errors[0] != withEmpty.Errors[0] {
-		t.Errorf("nil and empty list must behave identically:\n nil=%q\n empty=%q",
-			withNil.Errors[0], withEmpty.Errors[0])
 	}
 }

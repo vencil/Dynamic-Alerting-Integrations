@@ -124,7 +124,7 @@ describe('YamlValidatorTab — saturation _critical hint', () => {
 
   it('does NOT show the hint for a key whose pack is not selected', async () => {
     // postgresql is not in the default selectedPacks — the key never reaches
-    // allMetrics, mirroring validateConfig's knownMetrics scoping.
+    // allMetrics (selected packs only).
     const q = await renderTab();
     setYaml(q, 'pg_replication_lag_critical: "60"');
     expect(q.queryByTestId('saturation-critical-hint')).toBeNull();

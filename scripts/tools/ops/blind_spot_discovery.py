@@ -15,7 +15,6 @@ import os
 import re
 import sys
 import textwrap
-from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -38,6 +37,7 @@ from _lib_tenant_values import (  # noqa: E402
 )
 from _lib_exitcodes import EXIT_VIOLATION, arm_crash_envelope  # noqa: E402
 from _lib_prometheus import prometheus_targets  # noqa: E402
+from _lib_paths import require_dir  # noqa: E402  (#3392)
 
 
 def query_prometheus_targets(prom_url):
@@ -114,12 +114,12 @@ def load_monitored_db_types(config_dir):
     /metrics (e.g. no default for it) does not count. Files the load serves
     no tenant from are named on stderr, after whatever da-guard prints on
     stderr (line by line, each behind `DA_GUARD_PREFIX`). da-guard missing or failing, or a
-    file the load cannot decode, raises (the CLI exits 2).
+    file the load cannot decode, raises (the CLI exits 2). So does a
+    *config_dir* that is not there or not a directory (`CallerError`, #3392:
+    it was a WARN and every live DB reported as a blind spot, rc 0).
     """
     result = {}
-    if not Path(config_dir).is_dir():
-        print(f"WARN: config-dir not found: {config_dir}", file=sys.stderr)
-        return result
+    require_dir(config_dir, lang="en", flag="--config-dir")
 
     tree = load_served_tree(config_dir)
     print_load_warnings(tree)

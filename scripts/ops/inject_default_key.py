@@ -3,7 +3,8 @@
 
 Use case: `bench_e2e_run.sh` needs to register `bench_trigger=50` in the
 active fixture's root `_defaults.yaml` so bench-run-N tenants' overrides
-pass the exporter's `unknown key not in defaults` check. For the
+are served (an undeclared key gets no row: the shared key verdict reads
+it as unread, `no_row`). For the
 generator path this is now done in-place by `--extra-defaults`
 (generate_tenant_fixture.py); this helper still exists for the
 NON-generator path (customer-anon fixtures, hand-curated fixtures, or

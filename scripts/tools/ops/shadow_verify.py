@@ -39,7 +39,6 @@ import sys
 import urllib.parse
 from collections import defaultdict
 from datetime import datetime, timezone
-from pathlib import Path
 
 import yaml
 
@@ -57,6 +56,7 @@ from _lib_prometheus import (  # noqa: E402
 _DEFAULT_ALERTMANAGER = "http://localhost:9093"
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
+from _lib_paths import classify_path, raise_path_problems  # noqa: E402  (#3392)
 
 # The module's one query call: (rows, None) or (None, why).
 query_prometheus = instant_or_error
@@ -96,24 +96,18 @@ def check_preflight(args):
     """Pre-flight checks before starting shadow monitoring."""
     checks = []
 
-    # 1. Mapping file exists
+    # 1. Mapping file — judged by `judge_inputs` before any phase runs
+    # (#3392: a missing one was this check's "fail", rc 1, a finding).
     if args.mapping:
-        if Path(args.mapping).is_file():
-            with open(args.mapping, encoding="utf-8") as f:
-                mapping = yaml.safe_load(f) or {}
-            pair_count = sum(1 for v in mapping.values()
-                            if isinstance(v, dict) and v.get("original_metric"))
-            checks.append({
-                "check": "mapping_file",
-                "status": "pass",
-                "detail": f"{pair_count} comparison pairs found",
-            })
-        else:
-            checks.append({
-                "check": "mapping_file",
-                "status": "fail",
-                "detail": f"File not found: {args.mapping}",
-            })
+        with open(args.mapping, encoding="utf-8") as f:
+            mapping = yaml.safe_load(f) or {}
+        pair_count = sum(1 for v in mapping.values()
+                        if isinstance(v, dict) and v.get("original_metric"))
+        checks.append({
+            "check": "mapping_file",
+            "status": "pass",
+            "detail": f"{pair_count} comparison pairs found",
+        })
     else:
         checks.append({
             "check": "mapping_file",
@@ -198,9 +192,10 @@ def check_runtime(args):
     """Runtime health checks during shadow monitoring."""
     checks = []
 
-    # 1. CSV report analysis
+    # 1. CSV report analysis (judged by `judge_inputs`, #3392: a missing
+    # one was a "skip" and an Overall PASS)
     csv_path = args.report_csv
-    if csv_path and Path(csv_path).is_file():
+    if csv_path:
         mismatch_count = 0
         total_rows = 0
         tenants = set()
@@ -233,12 +228,6 @@ def check_runtime(args):
             "check": "csv_tenant_coverage",
             "status": "pass" if len(tenants) > 0 else "warn",
             "detail": f"{len(tenants)} tenants in report: {', '.join(sorted(tenants))}",
-        })
-    elif csv_path:
-        checks.append({
-            "check": "csv_report",
-            "status": "skip",
-            "detail": f"Report not found: {csv_path}",
         })
 
     # 2. Tenant operational modes
@@ -286,9 +275,10 @@ def check_convergence(args):
     """Convergence checks before cutover decision."""
     checks = []
 
-    # 1. cutover-readiness.json
+    # 1. cutover-readiness.json (judged by `judge_inputs`, #3392: a missing
+    # one was a "skip" and an Overall PASS)
     readiness_path = args.readiness_json
-    if readiness_path and Path(readiness_path).is_file():
+    if readiness_path:
         with open(readiness_path, encoding="utf-8") as f:
             report = json.load(f)
         ready = report.get("ready", False)
@@ -300,16 +290,10 @@ def check_convergence(args):
             "detail": f"Convergence {pct}%, "
                       + ("READY" if ready else f"{len(unconverged)} pairs not yet stable"),
         })
-    elif readiness_path:
-        checks.append({
-            "check": "cutover_readiness_json",
-            "status": "skip",
-            "detail": f"File not found: {readiness_path}",
-        })
 
     # 2. 7-day zero-mismatch (from CSV)
     csv_path = args.report_csv
-    if csv_path and Path(csv_path).is_file():
+    if csv_path:
         now = datetime.now(timezone.utc)
         recent_mismatches = 0
         recent_rows = 0
@@ -348,6 +332,34 @@ def check_convergence(args):
             })
 
     return checks
+
+
+#: #3392: the files each phase reads, by flag and argparse dest.
+_PHASE_INPUTS = {
+    "preflight": (("--mapping", "mapping"),),
+    "runtime": (("--report-csv", "report_csv"),),
+    "convergence": (("--readiness-json", "readiness_json"), ("--report-csv", "report_csv")),
+}
+
+
+def judge_inputs(args, phases):
+    """Raise one `CallerError` (rc 2, a `file_*` reason under ``--json``)
+    naming every file the given *phases* read that is not there, not a
+    regular file, or cannot be opened — before any phase runs or prints.
+
+    #3392: a missing --mapping was the preflight check's "fail" (rc 1, read
+    as a finding); a missing --report-csv / --readiness-json was a "skip"
+    under an Overall PASS (rc 0). A flag not given — ``''`` included, as the
+    checks' own ``if args.x:`` reads it — stays each check's skip, and a flag
+    no chosen phase reads is not judged.
+    """
+    given = {}
+    for phase in phases:
+        for flag, dest in _PHASE_INPUTS.get(phase, ()):
+            if getattr(args, dest):
+                given[flag] = getattr(args, dest)
+    raise_path_problems([classify_path(value, "file", lang="en", flag=flag)
+                         for flag, value in given.items()])
 
 
 def format_output(phase, checks, json_output=False):
@@ -408,6 +420,7 @@ def main():
         if args.phase == "all"
         else [args.phase]
     )
+    judge_inputs(args, phases)  # #3392: before any phase runs or prints
 
     for phase in phases:
         if phase == "preflight":

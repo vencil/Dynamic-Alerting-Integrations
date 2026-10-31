@@ -1071,18 +1071,9 @@ cat /tmp/b1_out/bench.out.txt
 
 Fixture 供 §v2.8.0 1000-Tenant Hierarchical Baseline (上方) 與 §Phase 2 e2e harness 使用。**ADR-016 引用**：[`docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md`](../adr/016-conf-d-directory-hierarchy-mixed-mode.md) flat vs hierarchical 效能對照即此表。
 
-### Schema Validation — `validate_tenant_keys`
+### Schema Validation — `validate_tenant_keys`（已移除）
 
-`scripts/tools/ops/validate_config.py` 內 `validate_tenant_keys()` 逐 tenant 驗證 key 合法性（20 輪 in-process median）：
-
-| Tenants | Median |
-|---:|---:|
-| 10 | 0.010 ms |
-| 100 | 0.128 ms |
-| 500 | 0.498 ms |
-| 1,000 | 0.978 ms |
-
-純 dict 操作，1000 tenant < 1ms，可安全嵌入 hot-reload path。
+這支 Python 鍵名驗證已刪除（[ADR-038](../adr/038-unread-keys-judged-by-readers.md) 決定 11）：一個 key 有沒有讀取端讀改由共用的鍵判決判，`version` label 與改名提示改由 da-guard served-values 的 `key_checks` 給。舊數據（1000 tenant 約 1 ms）不再對應任何現行程式，不再列出。
 
 ### pytest-benchmark 微觀基線
 

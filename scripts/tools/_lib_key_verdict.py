@@ -109,6 +109,33 @@ class TreeVerdict(NamedTuple):
     keys: dict[str, list[KeyVerdict]]   # tenant → its keys, sorted by key
     findings: list[Finding]
     undecidable: bool                   # no root platform file was read
+    # ADR-038 §11: per tenant, the exporter's own messages on its keys'
+    # `version` labels and retired spellings (served-values' key_checks),
+    # which a CI reader prints as they are; None from a da-guard older than
+    # the field. Not part of the verdict on whether a key is read.
+    key_checks: "dict[str, tv.KeyChecks | None]" = {}
+
+
+# key_check_lines' kinds: a `version` label the exporter refuses (it reads
+# the value as written; ADR-024 OQ-6) and a key in a retired spelling (#1231).
+KEY_CHECK_VERSION_LABEL = "version_label"
+KEY_CHECK_RENAMED = "renamed"
+
+
+def key_check_lines(verdict: TreeVerdict) -> "tuple[list[tuple[str, str, str]], list[str]]":
+    """The exporter's key checks of `verdict`, as (kind, tenant, message)
+    sorted by tenant, and the tenants whose da-guard reading has none (a
+    da-guard older than the field: not checked, not "no message")."""
+    lines: list[tuple[str, str, str]] = []
+    unchecked: list[str] = []
+    for tenant in sorted(verdict.key_checks):
+        kc = verdict.key_checks[tenant]
+        if kc is None:
+            unchecked.append(tenant)
+            continue
+        lines += [(KEY_CHECK_VERSION_LABEL, tenant, m) for m in kc.version_labels]
+        lines += [(KEY_CHECK_RENAMED, tenant, m) for m in kc.renames]
+    return lines, unchecked
 
 
 def registered_readers(key: str) -> tuple[dict[str, tuple[str, ...]], bool]:
@@ -265,7 +292,8 @@ def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary:
                     undecidable=not root_platform_files(conf_d, reader),
                     disable_effects=disable_effects)
     by_profile = profile_layer_findings(_root_profiles(conf_d, reader), effective)
-    return verdict._replace(findings=_merge_profile_findings(verdict, by_profile))
+    return verdict._replace(findings=_merge_profile_findings(verdict, by_profile),
+                            key_checks={t: v.key_checks for t, v in tree.tenants.items()})
 
 
 def _merge_profile_findings(verdict: TreeVerdict, by_profile: list[Finding]) -> list[Finding]:

@@ -1,9 +1,8 @@
 package config
 
-// key_validation_unread_test.go — ADR-038 §11: tenant-api's write gate
-// refuses an unread key on the shared key verdict, so KeyValidation marks the
-// Errors entries that only judge "does any reader read this key" (Unread)
-// and WithoutUnread drops exactly those, keeping every value check.
+// key_validation_unread_test.go — ADR-038 §11: whether any reader reads a
+// key is the shared key verdict's, so ValidateTenantKeys judges no key name
+// and keeps every value check.
 //
 // Tenant ids are fixture names (CLAUDE.md #9).
 
@@ -18,99 +17,54 @@ func unreadFixture() ThresholdConfig {
 		Defaults:          map[string]float64{"cpu": 80},
 		OptionalOverrides: []string{"mem"},
 		Tenants: map[string]map[string]ScheduledValue{"t-a": {
-			// who reads it — each is one Unread entry
+			// who reads it — the shared key verdict's, not judged here
 			"cpu_typo":        {Default: "1"},
 			"_myth":           {Default: "1"},
 			"_routing_profle": {Default: "x"},
 			`disk{mount="/"}`: {Default: "1"},
 			"disk_critical":   {Default: "1"},
 			"mem_critical":    {Default: "1"},
-			// value checks — never Unread
+			// value checks — judged here
 			"cpu":          {Default: "90", Expiry: &ExpiryMeta{Expires: "not-a-time"}},
 			"_silent_mode": {Default: "purple"},
 		}},
 	}
 }
 
-func TestKeyValidation_UnreadIsEveryWhoReadsItError(t *testing.T) {
+func TestKeyValidation_JudgesNoKeyName(t *testing.T) {
 	t.Parallel()
 	c := unreadFixture()
 	v := c.ValidateTenantKeys()
-	want := map[string]string{
-		"cpu_typo":        "not in defaults",
-		"_myth":           "unknown reserved key",
-		"_routing_profle": "unknown routing key",
-		`disk{mount="/"}`: "unknown base metric",
-		"disk_critical":   "has no base metric",
-		"mem_critical":    "cannot be set",
-	}
-	if len(v.Unread) != len(want) {
-		t.Fatalf("Unread = %q, want one entry for each of %v", v.Unread, want)
-	}
-	for key, phrase := range want {
-		found := false
-		for _, m := range v.Unread {
-			if strings.Contains(m, phrase) && strings.Contains(m, strings.ReplaceAll(key, `"`, `\"`)) {
-				found = true
+	for _, key := range []string{"cpu_typo", "_myth", "_routing_profle", `disk{mount=\"/\"}`, "disk_critical", "mem_critical"} {
+		for _, e := range append(append([]string{}, v.Errors...), v.Notices...) {
+			if strings.Contains(e, key) {
+				t.Errorf("%s: judged here (%q) — whether a reader reads it is the shared key verdict's", key, e)
 			}
 		}
-		if !found {
-			t.Errorf("no Unread entry for %s (%q) in %q", key, phrase, v.Unread)
-		}
-	}
-	for _, m := range v.Unread {
-		if !containsString(v.Errors, m) {
-			t.Errorf("Unread entry %q is not in Errors: a caller that does not drop it must stay strict", m)
-		}
-	}
-}
-
-func TestKeyValidation_WithoutUnreadKeepsTheValueChecks(t *testing.T) {
-	t.Parallel()
-	c := unreadFixture()
-	v := c.ValidateTenantKeys()
-	got := v.WithoutUnread()
-	if len(got.Unread) != 0 {
-		t.Errorf("WithoutUnread kept Unread %q", got.Unread)
-	}
-	if len(got.Errors) != len(v.Errors)-len(v.Unread) {
-		t.Fatalf("Errors = %q, want %d entries (all minus Unread)", got.Errors, len(v.Errors)-len(v.Unread))
 	}
 	for _, phrase := range []string{"invalid `expires:`", "_silent_mode"} {
 		found := false
-		for _, e := range got.Errors {
+		for _, e := range v.Errors {
 			if strings.Contains(e, phrase) {
 				found = true
 			}
 		}
 		if !found {
-			t.Errorf("value check %q dropped: %q", phrase, got.Errors)
+			t.Errorf("value check %q dropped: %q", phrase, v.Errors)
 		}
 	}
-	if !reflect.DeepEqual(got.Values, v.Values) {
-		t.Errorf("Values changed: %v, want %v", got.Values, v.Values)
+	if len(v.Errors) != 2 {
+		t.Errorf("Errors = %q, want the two value checks only", v.Errors)
 	}
-	// ByTenant and Ratchet carry Unread, so the write gate's order
-	// (ValidateTenantKeysByTenant → Ratchet → WithoutUnread) drops the same.
-	// (Order is the map walk's: compared sorted.)
-	byTenant := c.ValidateTenantKeysByTenant().Ratchet(PriorValues(nil)).WithoutUnread()
-	if !reflect.DeepEqual(sortedCopy(byTenant.Tenants["t-a"].Errors), sortedCopy(got.Errors)) {
-		t.Errorf("by tenant, after Ratchet: Errors = %q, want %q", byTenant.Tenants["t-a"].Errors, got.Errors)
+	// ByTenant and Ratchet say the same about the tenant.
+	byTenant := c.ValidateTenantKeysByTenant().Ratchet(PriorValues(nil))
+	if !reflect.DeepEqual(sortedCopy(byTenant.Tenants["t-a"].Errors), sortedCopy(v.Errors)) {
+		t.Errorf("by tenant, after Ratchet: Errors = %q, want %q", byTenant.Tenants["t-a"].Errors, v.Errors)
 	}
-}
-
-func containsString(list []string, s string) bool {
-	for _, e := range list {
-		if e == s {
-			return true
-		}
-	}
-	return false
 }
 
 // ADR-038 §2: the `version` label is a value check, so a dimensional key
-// whose base has no platform value still has its label judged — dropping
-// the unread line must not drop that.
+// whose base has no platform value still has its label judged.
 func TestKeyValidation_VersionLabelIsJudgedWhateverTheBase(t *testing.T) {
 	t.Parallel()
 	for _, key := range []string{`nosuch{version="default"}`, `nosuch2{version=~"v.*"}`} {
@@ -118,9 +72,9 @@ func TestKeyValidation_VersionLabelIsJudgedWhateverTheBase(t *testing.T) {
 			Defaults: map[string]float64{"cpu": 80},
 			Tenants:  map[string]map[string]ScheduledValue{"t-a": {key: {Default: "3"}}},
 		}
-		got := c.ValidateTenantKeys().WithoutUnread()
+		got := c.ValidateTenantKeys()
 		if len(got.Errors) == 0 {
-			t.Errorf("%s: no error after WithoutUnread: the version label went unjudged", key)
+			t.Errorf("%s: no error: the version label went unjudged", key)
 		}
 	}
 }

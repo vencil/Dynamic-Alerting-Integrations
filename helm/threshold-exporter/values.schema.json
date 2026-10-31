@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft-07/schema#",
+  "title": "threshold-exporter chart values — key sets",
+  "description": "Refuses a key this chart does not have at `helm template` / `helm install` / `helm upgrade`, instead of letting it be silently ignored (#1425: `--set thresholdConfig.existingConfigMap=…` against a chart without the switch rendered BOTH ConfigMaps and exit 0). Same shape as helm/tenant-api/values.schema.json (#1594): only KEY SETS are constrained (additionalProperties:false on the root and on every fixed-shape block); free-form maps (tenants, defaults, state_filters, annotations, resources, probes, serviceMonitor labels) stay open, and leaves are deliberately untyped — the templates' {{ fail }} guards carry the type checks because their messages say WHY (existingConfigMap, max_metrics_per_tenant, optional_overrides). Nulls stay legal wherever values.yaml documents them (`startupProbe: null`, `httpGet: null`, `release: null`). Held key-for-key equal to values.yaml by tests/helm/test_threshold_exporter_values_schema.py.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "global": {
+      "description": "Helm's own key, injected when this chart is used as a subchart. Not read by any template."
+    },
+    "enabled": {
+      "description": "Helm's subchart condition convention: an umbrella chart's `dependencies[].condition: threshold-exporter.enabled` passes this key down. Not read by any template."
+    },
+    "replicaCount": {},
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": {},
+        "tag": {},
+        "pullPolicy": {}
+      }
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "type": {},
+        "port": {},
+        "annotations": {
+          "description": "Free-form Service annotations."
+        }
+      }
+    },
+    "exporter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "listenAddr": {},
+        "reloadInterval": {},
+        "goMemLimit": {},
+        "freeOsMemAfterReload": {}
+      }
+    },
+    "extraEnv": {
+      "description": "Kubernetes EnvVar list, passed through."
+    },
+    "extraEnvFrom": {
+      "description": "Kubernetes EnvFromSource list, passed through."
+    },
+    "thresholdConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "defaults": {
+          "description": "Open map: the registry-generated keys plus any a custom rule pack adds."
+        },
+        "optional_overrides": {
+          "description": "Typed by the guard in templates/configmap.yaml (a list of key names)."
+        },
+        "max_metrics_per_tenant": {
+          "description": "Typed by the guard in templates/configmap.yaml (integer, or null for the built-in 500)."
+        },
+        "state_filters": {
+          "description": "Open map of state filter definitions."
+        },
+        "tenants": {
+          "description": "Open map: tenant id -> overrides."
+        },
+        "existingConfigMap": {
+          "description": "Typed by the guard in templates/deployment.yaml (a ConfigMap name)."
+        }
+      }
+    },
+    "rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {},
+        "operator": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "serviceMonitor": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": {},
+                "interval": {},
+                "labels": {
+                  "description": "Open map; `release: null` drops the default label."
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "resources": {
+      "description": "Kubernetes ResourceRequirements, passed through."
+    },
+    "startupProbe": {
+      "description": "Kubernetes Probe, passed through; null omits it."
+    },
+    "livenessProbe": {
+      "description": "Kubernetes Probe, passed through."
+    },
+    "readinessProbe": {
+      "description": "Kubernetes Probe, passed through."
+    }
+  }
+}

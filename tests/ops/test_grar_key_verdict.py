@@ -191,3 +191,44 @@ def test_the_generator_container_does_not_judge_keys_inside_the_generator(tmp_pa
     assert out.get("rc") == 0, out
     assert out.get("key_verdict") == {"status": "stubbed"}, out  # the container's own ran
     assert calls == [], "the generator judged the keys inside the container"
+
+
+# ── ADR-038 §11: the exporter's key checks, printed as it words them ──────
+
+KEY_CHECKS = {
+    "_defaults.yaml": "defaults:\n  container_cpu: 80\n  mysql_threads_running: 30\n",
+    "t-a.yaml": "tenants:\n  t-a:\n    mysql_cpu: \"40\"\n"
+                "    container_cpu{version=\"V2!\"}: \"5\"\n",
+}
+
+
+def test_validate_prints_the_exporters_key_checks(tmp_path):
+    """A `version` label the exporter refuses and a retired spelling: the
+    exporter's own lines (da-guard served-values' key_checks), not a judgement
+    of this tool's; reported only, the exit code unchanged."""
+    res, doc = _cli(tmp_path, KEY_CHECKS, "--validate")
+    assert res.returncode == 0, res.stderr
+    recs = {r["kind"]: r for r in _key_records(doc)}
+    label, renamed = recs.get("key_version_label"), recs.get("key_renamed")
+    assert label and 'version "V2!"' in label["message"], doc
+    assert renamed and '"mysql_cpu" was renamed to "mysql_threads_running"' in renamed["message"], doc
+    for r in (label, renamed):
+        assert r["blocks"] == "never" and r["tenant"] == "t-a", r
+        assert r["message"].strip() in res.stderr, res.stderr
+
+
+def test_without_validate_no_key_check_is_printed(tmp_path):
+    """Render mode judges no key name: the tool no longer warns on keys."""
+    d = h.write_tree(tmp_path / "conf.d", KEY_CHECKS)
+    res = cases.run_gar(d, [], [])
+    assert "renamed" not in res.stderr and "version" not in res.stderr, res.stderr
+
+
+def test_a_da_guard_without_key_checks_is_named_not_read_as_none(tmp_path, monkeypatch, capsys):
+    """A da-guard older than the field gives no key checks: said, as one
+    NOTICE naming the tenants — never read as "no message"."""
+    def judge(*_a, **_k):
+        return kv.TreeVerdict({}, [], False, key_checks={"t-a": None, "t-b": tv.KeyChecks((), ())})
+    assert _main(tmp_path, monkeypatch, judge) == 0
+    err = capsys.readouterr().err
+    assert "gives no key checks" in err and "tenants: t-a)" in err, err

@@ -128,12 +128,13 @@ func TestMergeTenantHonoursRootMaxMetricsPerTenant(t *testing.T) {
 // (MergeParsedTenantWithRootDefaults + ValidateTenantKeys, what
 // tenant-api's gitops.validate runs) gives the same Errors and Notices under
 // a cap of 1 as under no cap — for a clean body with more keys than the cap,
-// and for a body with an unknown key (which must still be refused).
+// and for a body with a value the exporter ignores (which must still be
+// refused).
 func TestMergeTenantMaxMetricsDoesNotReachTheWriteGate(t *testing.T) {
 	t.Parallel()
 	bodies := map[string]string{
 		"clean, over cap":   "tenants:\n  tx:\n    m1_x: \"2\"\n    m2_x: \"3\"\n    m3_x: \"4\"\n",
-		"unknown key":       "tenants:\n  tx:\n    m1_x: \"2\"\n    not_a_default_x: \"3\"\n",
+		"ignored value":     "tenants:\n  tx:\n    m1_x: \"2\"\n    _silent_mode: purple\n",
 		"tenant sets a cap": "max_metrics_per_tenant: 1\ntenants:\n  tx:\n    m1_x: \"2\"\n",
 	}
 	validateUnder := func(t *testing.T, capLine, body string) KeyValidation {
@@ -157,13 +158,13 @@ func TestMergeTenantMaxMetricsDoesNotReachTheWriteGate(t *testing.T) {
 			if !reflect.DeepEqual(capped.Errors, uncapped.Errors) || !reflect.DeepEqual(capped.Notices, uncapped.Notices) {
 				t.Errorf("cap changed the write gate\n capped:   %+v\n uncapped: %+v", capped, uncapped)
 			}
-			// Must-fire controls: the gate does refuse the unknown key and
+			// Must-fire controls: the gate does refuse the ignored value and
 			// does accept the clean body, so equality above is not two empties
 			// by accident.
 			switch name {
-			case "unknown key":
+			case "ignored value":
 				if len(capped.Errors) == 0 {
-					t.Error("unknown key was not refused")
+					t.Error("ignored value was not refused")
 				}
 			case "clean, over cap":
 				if len(capped.Errors) != 0 {

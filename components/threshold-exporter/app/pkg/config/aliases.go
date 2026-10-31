@@ -181,9 +181,10 @@ func canonicalizeDefaults(defaults map[string]float64) map[string]float64 {
 // only that. An entry that is a typo, carries stray whitespace (nothing strips
 // it), names a key no rule pack consumes, or is written in a `_critical` /
 // dimensional spelling the cascade never looks up whole, is still a silently
-// inert member. Nothing validates the list's CONTENTS on either side yet — the
-// shared verdict table records those rows as known gaps rather than pretending
-// they are covered (tests/shared/optional_overrides_membership_matrix.json).
+// inert member. Nothing validates the list's CONTENTS yet — the membership
+// matrix, asserted on the shared key verdict, records those rows as known gaps
+// rather than pretending they are covered
+// (tests/shared/optional_overrides_membership_matrix.json).
 //
 // A set, not a map view: membership is the entire payload, so both spellings of
 // one threshold collapse onto the same canonical entry for free (the

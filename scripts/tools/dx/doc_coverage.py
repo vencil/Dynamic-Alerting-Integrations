@@ -545,14 +545,17 @@ def main():
     args = parser.parse_args()
 
     # 解析 repo root
-    repo_root = Path(args.repo_root).resolve()
     # #3276: the shared judgement of a caller-given path. A directory: a file
     # given here used to pass `exists()` and report a coverage of nothing.
-    problem = classify_path(repo_root, "dir", lang="en", flag="--repo-root")
+    # Of the string the caller gave (#3406): `Path('')` is `.`, so `''` (an
+    # unset shell variable) judged after it reported the current directory
+    # at rc 0. Judged raw, `''` is named as `''`.
+    problem = classify_path(args.repo_root, "dir", lang="en", flag="--repo-root")
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         print(f"ERROR: Repository root {word}: {problem.message}", file=sys.stderr)
         return EXIT_CALLER_ERROR
+    repo_root = Path(args.repo_root).resolve()
 
     # 執行分析
     analyzer = DocCoverageAnalyzer(str(repo_root))

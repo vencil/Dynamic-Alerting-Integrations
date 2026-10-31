@@ -86,30 +86,6 @@ func TestThresholdExpiries_UnderscoreKeyHasNone(t *testing.T) {
 	}
 }
 
-// The write check (tenant-api's gate) names a tenant's unregistered `_` key
-// even when a `defaults:` declares it: the defaults-first membership test
-// used to pass it, and the write served nothing (#3045).
-func TestValidateTenantKeys_UnregisteredUnderscoreKeyTheDefaultsDeclare(t *testing.T) {
-	t.Parallel()
-	c := &ThresholdConfig{
-		Defaults: map[string]float64{"cpu": 80, "_myth": 5},
-		Tenants: map[string]map[string]ScheduledValue{"ta": {
-			"cpu": {Default: "70"}, "_myth": {Default: "7"}, "_myth_critical": {Default: "8"},
-			"_silent_mode": {Default: "warning"},
-		}},
-	}
-	errs := c.ValidateTenantKeys().Errors
-	joined := strings.Join(errs, "\n")
-	for _, k := range []string{`"_myth"`, `"_myth_critical"`} {
-		if !strings.Contains(joined, "unknown reserved key "+k) {
-			t.Errorf("no unknown-reserved-key error for %s: %q", k, errs)
-		}
-	}
-	if len(errs) != 2 {
-		t.Errorf("errors = %q, want the two `_myth` keys only", errs)
-	}
-}
-
 // `expires:` on a registered `_` key a `defaults:` declares is out of scope
 // for the write check like on any key with no base row: the expiry event
 // skips it, so accepting it would be a silent no-op (#3045, #656). Since

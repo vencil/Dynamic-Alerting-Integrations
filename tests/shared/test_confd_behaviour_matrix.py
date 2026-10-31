@@ -34,8 +34,8 @@ THE INVARIANT, for every tool in `TOOLS` on every tree
     cell timeout (exit 124 / 137: a hang, e.g. a FIFO opened for reading).
   * `matrix: refused` (a file name that is not UTF-8): as a flagged row —
     the tool exits non-zero (which code is §13's and the tool's documented
-    contract: `tenant_verify`'s 2 means a verification mismatch, so it exits
-    1), not by the cell timeout, with no traceback, naming the file in its
+    contract: the caller-error 2 for every tool, `tenant_verify` included
+    since #3393), not by the cell timeout, with no traceback, naming the file in its
     escaped form (`bad-\xff.yaml`, `_refused_names`). The oracle there is
     `da-guard parse-tree`, which must exit 2.
   * Sanity, never a pass: a `flagged` row on which Go validation exits

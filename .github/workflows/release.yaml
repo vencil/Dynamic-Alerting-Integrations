@@ -246,6 +246,16 @@ jobs:
             exit 1
           fi
 
+      # #1425: `da-tools init` pins the threshold-exporter chart at
+      # exporter/v<THRESHOLD_EXPORTER_CHART_VERSION>; the image built here must
+      # not print settings that published chart lacks. The playbook pushes
+      # exporter/v* before tools/v*, so the tag must already exist; full
+      # history and tags are fetched only here, for the diff against it.
+      - name: Verify init's pinned chart is the chart in the tree
+        run: |
+          git fetch --quiet --tags --unshallow origin || git fetch --quiet --tags origin
+          python3 scripts/tools/lint/check_init_chart_pin_published.py --require-tag
+
       - name: Log in to GHCR
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:

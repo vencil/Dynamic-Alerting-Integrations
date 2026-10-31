@@ -268,11 +268,12 @@ func TestMergeTenantProfileProblemsAreNoticesNamingFileAndProfile(t *testing.T) 
 		t.Errorf("notices %d, want %d (a non-numeric value is not judged, for a profile as for the tenant): %q", len(kv.Notices), len(want), kv.Notices)
 	}
 
-	// Must-fire control: the same keys in the tenant's own body are Errors.
+	// Must-fire control: the same value problem in the tenant's own body is an
+	// Error (its unread keys are the shared key verdict's, ADR-038 §11).
 	own := "tenants:\n  tx:\n    _profile: strict\n    bogus_key: \"1\"\n    _silense_mode: warning\n    redis_memory:\n      default: \"50\"\n      expires: not-a-time\n"
 	kv, _ = profileKV(t, files, own)
-	if len(kv.Errors) != 3 {
-		t.Errorf("control: the tenant's own bad keys give errors %q, want 3", kv.Errors)
+	if len(kv.Errors) != 1 || !strings.Contains(kv.Errors[0], "invalid `expires:`") {
+		t.Errorf("control: the tenant's own bad expires gives errors %q, want that one", kv.Errors)
 	}
 	for _, n := range kv.Notices {
 		if strings.Contains(n, "bogus_key") || strings.Contains(n, "_silense_mode") || strings.Contains(n, "expires") {
@@ -415,8 +416,8 @@ func TestMergeTenantKeyValidationByTenant(t *testing.T) {
 		"_profiles.yaml": "profiles:\n  strict:\n    _silent_mode: purple\n",
 		"_platform.yaml": "tenants:\n  ta:\n    mysql_connections:\n      default: \"7\"\n      expires: \"bad\"\n  tb:\n    mysql_connections:\n      default: \"7\"\n      expires: \"bad\"\n",
 	}
-	body := "tenants:\n  ta:\n    _profile: strict\n    bogus_ta: \"1\"\n    mysql_cpu: \"3\"\n" +
-		"  tb:\n    _profile: strict\n    bogus_tb: \"1\"\n    mysql_cpu: \"3\"\n"
+	body := "tenants:\n  ta:\n    _profile: strict\n    mysql_threads_running:\n      default: \"9\"\n      expires: bad\n    mysql_cpu: \"3\"\n" +
+		"  tb:\n    _profile: strict\n    mysql_threads_running:\n      default: \"9\"\n      expires: bad\n    mysql_cpu: \"3\"\n"
 	dir := t.TempDir()
 	writeMergeTree(t, dir, files)
 	parsed, err := ParseConfigFile([]byte(body))

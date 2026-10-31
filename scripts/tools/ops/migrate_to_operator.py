@@ -60,6 +60,7 @@ import _lib_parse_cache  # noqa: E402  (#2906: one parse-tree snapshot per run)
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
+from _lib_paths import classify_path, raise_path_problems, supplied  # noqa: E402  (#3392)
 
 _RECEIVER_TEMPLATES = ("slack", "pagerduty", "email", "teams", "opsgenie", "webhook")
 
@@ -1067,6 +1068,14 @@ def main():
     args = parser.parse_args()
     if args.json:  # #3094: a crash in --json mode still prints one envelope
         arm_crash_envelope()
+    # #3392: a directory the caller gave that is not there or not a
+    # directory is a caller error, named before anything is analysed or
+    # written — it was an `issues` WARNING and a checklist / CRD set made from
+    # nothing, rc 0. The --config-dir default nobody gave keeps that reading.
+    raise_path_problems([
+        classify_path(args.source_dir, "dir", lang=_LANG, flag="--source-dir"),
+        classify_path(args.config_dir, "dir", lang=_LANG, flag="--config-dir")
+        if supplied(args, parser, "config_dir") else None])
 
     # Resolve paths
     source_dir = args.source_dir.resolve()

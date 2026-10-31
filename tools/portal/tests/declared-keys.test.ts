@@ -158,13 +158,13 @@ describe('alert-engine — a declared key must not be called unknown', () => {
     expect(m.join(' ')).toMatch(/no platform default/i);
   });
 
-  it('still flags a genuinely unknown key', async () => {
-    // The counter-case: the original message must survive for keys that really
-    // are unknown, otherwise this change just deletes a useful signal.
+  it('judges no key name: an unknown key gets no "not found" line', async () => {
+    // ADR-038 §11: whether a key is read is the shared key verdict's (CI's
+    // validate-config, `da-tools explain-keys`, tenant-api's write gate); this
+    // page no longer guesses it from the Rule Pack defaults it ships.
     const { validateConfig } = await import(ENGINE_MOD);
     const out = validateConfig({ oracle_not_a_real_key: '1' }, [PACK]);
-    expect(msgs(out, 'oracle_not_a_real_key').join(' '))
-      .toMatch(/not found in selected Rule Pack defaults/);
+    expect(msgs(out, 'oracle_not_a_real_key')).toEqual([]);
   });
 
   it('leaves a key that does have a platform default alone', async () => {
@@ -186,19 +186,14 @@ describe('alert-engine — a declared key must not be called unknown', () => {
   });
 
   it('never tells a tenant that <declared_base>_critical will take effect', async () => {
-    // ⛔ The one place the two membership sets must NOT be unioned.
-    // ValidateTenantKeys refuses this shape with a BLOCKING error (its comment
-    // in pkg/config/resolve.go says exactly that), because resolveCriticalRows
-    // keys off defaults[base] and drops the row when the base has no value.
-    // Stripping `_critical` and matching the declared set would produce a
-    // confident "it takes effect once you set it" for a write tenant-api
-    // answers with HTTP 400 — worse than the vague message it replaced.
+    // ⛔ resolveCriticalRows keys off defaults[base] and drops the row when the
+    // base has no value, so this shape is refused on write (by the shared key
+    // verdict, ADR-038 §11). Stripping `_critical` and matching the declared
+    // set would produce a confident "it takes effect once you set it" for a
+    // write tenant-api refuses. The page judges no key name, so it says nothing.
     const { validateConfig } = await import(ENGINE_MOD);
     const field = `${DECLARED_KEY}_critical`;
-    const m = msgs(validateConfig({ [field]: '500' }, [PACK]), field).join(' ');
-    expect(m).not.toMatch(/takes effect only once you set it/);
-    expect(m).toMatch(/rejected on write/i);
-    expect(m).toContain(DECLARED_KEY);
+    expect(msgs(validateConfig({ [field]: '500' }, [PACK]), field)).toEqual([]);
   });
 });
 

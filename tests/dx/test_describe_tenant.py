@@ -1904,7 +1904,7 @@ class TestCustomAlertsAndMergedHash:
 
     def test_without_da_guard(self, tmp_path, monkeypatch):
         """da-guard 不可用：describe 結束碼 2、stdout 不輸出（不給 Python 自算的值）；
-        tenant-verify 回 1（不是 rollback checklist 讀成 mismatch 的 2）。"""
+        tenant-verify 回 2（什麼都沒驗；不是 rollback checklist 讀成 mismatch 的 1，#3393）。"""
         a = self._tree(tmp_path / "a")
         monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
         p = subprocess.run([sys.executable, DESCRIBE, "--all", "--conf-d", str(a)],
@@ -1914,5 +1914,9 @@ class TestCustomAlertsAndMergedHash:
         assert "da-guard binary not found" in p.stderr, p.stderr
         v = subprocess.run([sys.executable, self.VERIFY, "t1", "--conf-d", str(a), "--json"],
                            capture_output=True, text=True, encoding="utf-8", timeout=120)
-        assert v.returncode == 1, (v.returncode, v.stdout, v.stderr)
+        assert v.returncode == 2, (v.returncode, v.stdout, v.stderr)
         assert "da-guard binary not found" in v.stderr, v.stderr
+        # #3393 Q3: with --json, the one caller_error envelope on stdout.
+        env = json.loads(v.stdout)
+        assert (env["status"], env["reason"]) == ("caller_error", "served_values_unavailable"), env
+        assert "da-guard binary not found" in env["error"], env

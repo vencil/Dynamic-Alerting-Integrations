@@ -58,8 +58,8 @@ func overrideKeyShape(canonKey string) (overrideShape, string) {
 }
 
 // PlatformKeyFor is the platform key (a `defaults:` / `optional_overrides:`
-// entry, in its canonical spelling) that ValidateTenantKeys requires for a
-// tenant override key, in any spelling the exporter accepts: a #1231 retired
+// entry, in its canonical spelling) a tenant override key belongs to, in any
+// spelling the exporter accepts: a #1231 retired
 // spelling, a `_critical` tier, a dimensional key however its labels are
 // written. ok is false for a reserved key, which needs no platform key.
 //

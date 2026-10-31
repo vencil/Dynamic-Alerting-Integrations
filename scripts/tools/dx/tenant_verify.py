@@ -6,29 +6,30 @@ in `docs/scenarios/incremental-migration-playbook.md` §Emergency Rollback
 Procedures). After a batch-PR rollback wave, the operator needs to confirm
 each tenant's `merged_hash` returned to the pre-Base-PR snapshot. This
 tool prints `source_hash` + `merged_hash` for one tenant (or all tenants),
-optionally comparing against a reference value and returning nonzero exit
-if they diverge.
+optionally comparing against a reference value and returning exit 1 if
+they diverge.
 
 Usage:
     da-tools tenant-verify <tenant-id> [--conf-d PATH]
     da-tools tenant-verify <tenant-id> --expect-merged-hash <hash>
     da-tools tenant-verify --all [--conf-d PATH] [--json]
 
-Exit codes:
+Exit codes (scripts/tools/_lib_exitcodes.py — the shared 0/1/2 contract,
+since #3393; before it, 1 and 2 were swapped here):
     0  — verification passed (tenant exists; if --expect-merged-hash given,
          it matched)
-    1  — usage / IO error, or da-guard is missing, fails or refuses the
-         tree (named on stderr), or no merged_hash to report: it is
-         `da-guard effective`'s, and the exporter's load skips or cannot
-         read a file of the tree, or rejects the whole tree because another
-         tenant is declared twice (#1549; named on stderr and in the
-         entry's `detail`)
-    2  — verification failed (--expect-merged-hash mismatch, tenant not
+    1  — verification failed (--expect-merged-hash mismatch, tenant not
          found, or tenant declared in more than one file); with --all,
          any tenant declared in more than one file
-    An uncaught exception (traceback + one `ERROR: unexpected internal
-    error` line) also ends at 1 — not the da-tools-wide crash code 2,
-    which here would read as a mismatch (#3090).
+    2  — nothing was verified: usage / IO error, or da-guard is missing,
+         fails or refuses the tree (named on stderr), or no merged_hash to
+         report: it is `da-guard effective`'s, and the exporter's load
+         skips or cannot read a file of the tree, or rejects the whole tree
+         because another tenant is declared twice (#1549; named on stderr
+         and in the entry's `detail`); also an uncaught exception
+         (traceback + one `ERROR: unexpected internal error` line) and a
+         stdout that cannot be written. With --json, an exit 2 that printed
+         no document of its own prints the shared `caller_error` envelope.
 
 Design note: this tool reuses describe_tenant.ConfDScanner, whose every
 field — the inheritance chain, source_hash and merged_hash — is
@@ -54,20 +55,23 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 
-# Exit-code contract — SANCTIONED EXCEPTION to the #452 0/1/2 SSOT
-# (scripts/tools/_lib_exitcodes.py). tenant-verify predates the SSOT and
-# its codes are load-bearing in a shipped customer contract: the
-# docs/cli-reference.md §tenant-verify "Exit codes" table AND the Emergency
-# Rollback runbook (docs/scenarios/incremental-migration-playbook.md
-# checklist item 6 keys on "exit 2 = mismatch"). Here exit 2 is a FINDING
-# (verification failed) and exit 1 is a caller error — the inverse of the
-# SSOT. Realigning would be a BREAKING change to that contract; do not
-# change without a coordinated doc + runbook migration + CHANGELOG note.
-# Mirrors diag_pr_ci.py's documented extension.
-EXIT_PASS = 0           # verification passed (tenant exists; hash matched if given)
-EXIT_USAGE_ERROR = 1    # usage / IO error (bad args, conf.d missing, mutually-excl flags,
-                        # no merged_hash from da-guard — #1549)
-EXIT_VERIFY_FAILED = 2  # mismatch, not found, or duplicate (rollback-checklist signal)
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report, arm_crash_envelope,
+    exit_caller_error,
+)
+
+# Exit-code contract: the #452 0/1/2 SSOT (scripts/tools/_lib_exitcodes.py).
+# Until #3393 this tool inverted 1 and 2; the codes are load-bearing in a
+# shipped customer contract — the docs/cli-reference.md §tenant-verify
+# "Exit codes" table and the Emergency Rollback runbook
+# (docs/scenarios/incremental-migration-playbook.md checklist item 6:
+# exit 1 = mismatch → rollback decision; exit 2 = nothing verified → fix
+# and re-run, never roll back on it). Change neither without that doc and
+# runbook.
+EXIT_PASS = EXIT_OK                 # verification passed (tenant exists; hash matched if given)
+EXIT_VERIFY_FAILED = EXIT_VIOLATION  # mismatch, not found, or duplicate (rollback-checklist signal)
+EXIT_USAGE_ERROR = EXIT_CALLER_ERROR  # nothing verified: bad args, conf.d missing,
+                                      # mutually-excl flags, no merged_hash from da-guard (#1549)
 
 # Lazy-import describe_tenant — same dir, can't relative-import in script mode
 _TOOL_DIR = Path(__file__).resolve().parent
@@ -115,8 +119,9 @@ def verify_one(scanner,tenant_id: str, expect_merged_hash: str | None) -> tuple[
         "detail": ... }
     or, when there is no merged_hash to verify (#1549: da-guard missing or
     failing, or not resolving this tenant), { "tenant_id": ...,
-      "error": "merged_hash_unavailable", "detail": ... } with exit 1 — not
-    2, which rollback checklist item 6 reads as a mismatch.
+      "error": "merged_hash_unavailable", "detail": ... } with exit 2 —
+    nothing was compared, so not 1, which rollback checklist item 6 reads
+    as a mismatch (#3393).
 
     #2093: a tenant declared by more than one conf.d file is refused
     BEFORE any hash is computed. The scanner keeps one declaration for its
@@ -169,7 +174,7 @@ def verify_all(scanner) -> list[dict]:
 
     A tenant declared in more than one file comes back as an error entry
     (`error: "duplicate"`, `files`, no `merged_hash`); every other tenant
-    is still reported. `main` turns any such entry into exit 2 (#2093).
+    is still reported. `main` turns any such entry into exit 1 (#2093).
     """
     results = []
     for tid in scanner.tenant_ids():
@@ -233,7 +238,7 @@ def main() -> int:
         "--expect-merged-hash",
         help=(
             "Expected merged_hash. If given and the actual hash differs, "
-            "exit code 2. Useful for B-4 rollback verification checklist."
+            "exit code 1. Useful for B-4 rollback verification checklist."
         ),
     )
     parser.add_argument(
@@ -242,6 +247,10 @@ def main() -> int:
         help="Emit JSON instead of human-readable output.",
     )
     args = parser.parse_args()
+    if args.json:
+        # #3393: every exit 2 below that prints no document of its own
+        # prints the one `caller_error` envelope, as in every --json tool.
+        arm_crash_envelope()
 
     if not args.all and not args.tenant_id:
         print("error: tenant_id is required (or pass --all)", file=sys.stderr)
@@ -255,13 +264,13 @@ def main() -> int:
         )
         return EXIT_USAGE_ERROR
 
-    conf_d = Path(args.conf_d).resolve()
-    # #3276: the shared judgement of a caller-given path. A CallerError
-    # leaves through `run()` at this tool's caller-error code — 1 (set
-    # below), the inverted contract (#3393). Imported here: importing this
-    # module must not change the importing process (see the guard below).
+    # #3276: the shared judgement of a caller-given path — of the string the
+    # caller gave (#3406): `Path('')` is `.`, so `''` judged after it was the
+    # current directory, verified at rc 0. A CallerError leaves through
+    # `run()` at the caller-error code 2.
     from _lib_paths import require_dir
-    require_dir(conf_d, lang="en", flag="--conf-d")
+    require_dir(args.conf_d, lang="en", flag="--conf-d")
+    conf_d = Path(args.conf_d).resolve()
 
     describe_mod = _load_describe_module()
     try:
@@ -269,13 +278,15 @@ def main() -> int:
     except describe_mod.DescribeError as exc:
         # da-guard missing, failing or refusing the tree: no merged_hash is
         # reported for any tenant. Named on stderr as an input error (exit
-        # 1), not a traceback — and not exit 2, which the rollback checklist
+        # 2), not a traceback — and not exit 1, which the rollback checklist
         # reads as "hash mismatch".
+        # With --json, the envelope names the head line (not da-guard's
+        # last one) under the shared `served_values_unavailable` reason.
         lines = exc.lines or [str(exc)]
         print(f"error: {lines[0]}", file=sys.stderr)
         for line in lines[1:]:
             print(line, file=sys.stderr)
-        return EXIT_USAGE_ERROR
+        exit_caller_error(f"ERROR: {lines[0]}", "served_values_unavailable")
     describe_mod.warn_not_read(scanner)
     if scanner.refused is not None:
         # The exporter rejects the whole tree: no merged_hash anywhere.
@@ -310,32 +321,19 @@ def main() -> int:
                   f"{', '.join(str(r['tenant_id']) for r in unavailable)}",
                   file=sys.stderr)
             status = EXIT_USAGE_ERROR
-        return _report({"tenants": results}, status) if args.json else status
+        # #3216: run() encodes the --json document
+        return Report({"tenants": results}, status) if args.json else status
 
     info, exit_code = verify_one(scanner, args.tenant_id, args.expect_merged_hash)
     if args.json:
-        return _report(info, exit_code)
+        return Report(info, exit_code)
     _print_human(info)
     return exit_code
 
 
-def _report(document, status: int):
-    """The --json document for run() to encode (#3216). Imported here, not
-    at module level: importing this module must not install
-    `_lib_exitcodes`' hooks in the importing process (see the guard below)."""
-    from _lib_exitcodes import Report  # noqa: PLC0415
-    return Report(document, status)
-
-
-# An uncaught exception ends at EXIT_USAGE_ERROR (1), NOT the SSOT's crash
-# default 2 (#3090): here 2 would read as "hash mismatch". The caller-error
-# code too: a reader that closed stdout early ends at it (#3124). Set only
-# when run as a script (directly or via `da-tools`, both __main__) —
-# importing this module must not change the codes of the importing process.
-# Nothing above this guard runs tool code: the module body is definitions.
+# An uncaught exception and a stdout that cannot be written end at the
+# shared codes (crash 2, #3090; caller error 2, #3124) since #3393.
 if __name__ == "__main__":
     import _lib_exitcodes  # noqa: E402
 
-    _lib_exitcodes.set_crash_exit_code(EXIT_USAGE_ERROR)
-    _lib_exitcodes.set_caller_error_code(EXIT_USAGE_ERROR)
     _lib_exitcodes.run(main)

@@ -50,6 +50,7 @@ from _lib_confd import TenantSetUnknown, tree_tenants  # noqa: E402  (#2906: par
 from _lib_parse_cache import parse_tree_error_line  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
+from _lib_paths import classify_path, raise_path_problems, supplied  # noqa: E402  (#3392)
 
 # ---------------------------------------------------------------------------
 # Constants and Help Text
@@ -1080,6 +1081,17 @@ def main():
                 "--secret-name requires --receiver-template",
             )
         )
+
+    # #3392: a directory the caller gave that is not there or not a
+    # directory is a caller error, named before anything is generated or
+    # written — it was a WARNING and a CRD set without its PrometheusRules /
+    # AlertmanagerConfigs, rc 0. Only the directories the chosen
+    # --components read; a default nobody gave keeps the WARNING below.
+    raise_path_problems([
+        classify_path(getattr(args, dest), "dir", lang=_LANG, flag=flag)
+        for flag, dest, components in (("--rule-packs-dir", "rule_packs_dir", ("all", "rules")),
+                                       ("--config-dir", "config_dir", ("all", "alertmanager")))
+        if args.components in components and supplied(args, parser, dest)])
 
     # Generate CRDs
     try:

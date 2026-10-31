@@ -76,11 +76,12 @@ from _lib_python import (  # noqa: E402
     METRIC_PREFIX_DB_MAP,
 )
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope,
     disarm_crash_envelope)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: the Alertmanager config as its consumers read it)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
+from _lib_paths import require_path  # noqa: E402  (#3392)
 
 # #1641: every path this tool writes descends from -o/--output-dir, so every
 # writer names that flag; an unusable path is rc=2 + one line, not a
@@ -579,6 +580,50 @@ def scan_rule_files(pattern, exclude=()):
     """
     return _lib_consumer_read.files_to_read(sorted(glob.glob(pattern, recursive=True)),
                                             exclude)
+
+
+def _dangling_symlink(path):
+    try:
+        os.stat(path)
+    except FileNotFoundError:
+        return os.path.islink(path)
+    except OSError:
+        return False
+    return False
+
+
+def judge_rule_files(pattern, exclude=()):
+    """The rule files --rule-files (less --exclude) selects, judged before
+    any phase runs or anything is written (#3392: a pattern that selected
+    nothing was a WARN, an empty output tree and rc 1).
+
+    A *pattern* with no glob character (``*``, ``?``, ``[``) is a path the
+    caller wrote out, judged by `_lib_paths` like any other caller-given
+    path: nothing there is ``path_not_found``, a symlink loop
+    ``path_not_accessible``. An entry `scan_rule_files` cannot choose from
+    (#3426) is named, rc 2. A pattern that selects no file at all — a glob
+    that matched nothing, a directory with no *.yaml / *.yml — is
+    ``file_not_found``, rc 2.
+    """
+    if pattern == "":
+        # #3392 (owner ruling): '' names nothing — never "no --rule-files".
+        raise CallerError("--rule-files '': an empty value names no file", "file_not_found")
+    if not glob.has_magic(pattern) and not _dangling_symlink(pattern):
+        # A dangling symlink is there (ls lists it): #3426's reading names it.
+        require_path(pattern, "any", lang="en", flag="--rule-files")
+    try:
+        files = scan_rule_files(pattern, exclude)
+    except _lib_consumer_read.InputRefused as e:
+        # #3426: an entry that cannot be chosen (a dangling symlink, a
+        # directory that cannot be listed) or an --exclude that leaves
+        # no file is a caller error, named — never "no rule files".
+        print(f"ERROR: --rule-files: {safe_label(_lib_consumer_read.error_text(e))}",
+              file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
+    if not files:
+        raise CallerError(f"--rule-files {safe_label(pattern)}: selects no file",
+                          "file_not_found")
+    return files
 
 
 def classify_rule(rule):
@@ -1577,11 +1622,14 @@ def main():
     if args.json:  # #3094: a crash in --json mode still prints one envelope
         arm_crash_envelope()
 
-    if not any([args.alertmanager_config, args.rule_files, args.scrape_config]):
+    if not any([args.alertmanager_config, args.rule_files is not None, args.scrape_config]):
         # --json: stdout is the document's alone (#3115); the help is prose.
         parser.print_help(sys.stderr if args.json else None)
         print("\nERROR: At least one phase input is required.", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
+    # #3392: judged before any phase runs or anything is written.
+    rule_files = (judge_rule_files(args.rule_files, args.exclude)
+                  if args.rule_files is not None else [])
 
     phase1_results = None
     phase2_results = None
@@ -1634,46 +1682,33 @@ def main():
                   file=sys.stderr)
 
     # Phase 2: Rule files
-    if args.rule_files:
+    if rule_files:
         print(f"Phase 2: Analyzing rule files: {args.rule_files}", file=sys.stderr)
         if not HAS_MIGRATE:
             print("  WARN: migrate_rule.py not available, Phase 2 will have limited analysis",
                   file=sys.stderr)
 
+        metric_dict = load_metric_dictionary() if HAS_MIGRATE else {}
         try:
-            rule_files = scan_rule_files(args.rule_files, args.exclude)
-        except _lib_consumer_read.InputRefused as e:
-            # #3426: an entry that cannot be chosen (a dangling symlink, a
-            # directory that cannot be listed) or an --exclude that leaves
-            # no file is a caller error, named — never "no rule files".
-            print(f"ERROR: --rule-files: {safe_label(_lib_consumer_read.error_text(e))}",
+            candidates, recording_rules, summary = analyze_rule_files(
+                rule_files, args.tenant_label, metric_dict)
+        except _lib_consumer_read.ConsumerReadError as e:
+            # #3206: no da-read / da-crdecode to read the rule files
+            # with; never another reading.
+            print(f"ERROR: rule files: {safe_label(_lib_consumer_read.error_text(e))}",
                   file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
-        if not rule_files:
-            print(f"  WARN: No rule files found matching: {args.rule_files}",
-                  file=sys.stderr)
-        else:
-            metric_dict = load_metric_dictionary() if HAS_MIGRATE else {}
-            try:
-                candidates, recording_rules, summary = analyze_rule_files(
-                    rule_files, args.tenant_label, metric_dict)
-            except _lib_consumer_read.ConsumerReadError as e:
-                # #3206: no da-read / da-crdecode to read the rule files
-                # with; never another reading.
-                print(f"ERROR: rule files: {safe_label(_lib_consumer_read.error_text(e))}",
-                      file=sys.stderr)
-                sys.exit(EXIT_CALLER_ERROR)
-            phase2_results = (candidates, recording_rules, summary)
+        phase2_results = (candidates, recording_rules, summary)
 
-            print(f"  Scanned {summary['files_scanned']} file(s), "
-                  f"{summary['total_rules']} rule(s) in {summary['total_groups']} group(s)",
-                  file=sys.stderr)
-            print(f"  Alert rules: {summary['alert_rules']} "
-                  f"(parseable: {summary['parseable']}, unparseable: {summary['unparseable']})",
-                  file=sys.stderr)
-            print(f"  Recording rules: {summary['recording_rules']}", file=sys.stderr)
-            for e in summary["errors"]:
-                print(f"  ERROR: {e}", file=sys.stderr)
+        print(f"  Scanned {summary['files_scanned']} file(s), "
+              f"{summary['total_rules']} rule(s) in {summary['total_groups']} group(s)",
+              file=sys.stderr)
+        print(f"  Alert rules: {summary['alert_rules']} "
+              f"(parseable: {summary['parseable']}, unparseable: {summary['unparseable']})",
+              file=sys.stderr)
+        print(f"  Recording rules: {summary['recording_rules']}", file=sys.stderr)
+        for e in summary["errors"]:
+            print(f"  ERROR: {e}", file=sys.stderr)
 
     # Phase 3: Scrape config
     if args.scrape_config:

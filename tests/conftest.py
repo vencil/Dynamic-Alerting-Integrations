@@ -193,7 +193,8 @@ def _disarm_crash_envelope():
     """A tool's ``main([... "--json"])`` called in-process arms the
     process-wide crash envelope (#3094) with whatever ``sys.stdout`` was
     then (a capture or fake stream); a tool run in-process as ``__main__``
-    may set the process caller-error and crash codes (tenant_verify: 1);
+    may set the process caller-error and crash codes (no tool does since
+    #3393; tenant_verify set 1 until then);
     stdout write failures are recorded process-wide (#3124). None of it may
     outlive that test — a stale armed stream that fails turned a green run
     into rc 2 at interpreter exit, depending on test order. Idempotent
