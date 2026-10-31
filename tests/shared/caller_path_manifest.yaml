@@ -150,7 +150,7 @@ commands:
   generator-service:
     "--cache-max-bytes": not_path
     "--config-subdir": {kind: pending, ticket: 3392}
-    "--da-guard-binary": {kind: pending, ticket: 3415}
+    "--da-guard-binary": {kind: reader, by: "the one da-guard resolution (flag, then $DA_GUARD_BINARY, then PATH); 503 da_guard_missing naming the flag", pinned_by: "tests/ops/test_generator_service.py::test_the_da_guard_flag_is_the_one_that_judges_and_is_reported"}
     "--deadline-reserve-seconds": not_path
     "--git": {kind: reader, by: "the exec of --git (OSError named with the flag)", pinned_by: "tests/shared/test_caller_paths.py::test_generator_service_names_a_git_it_cannot_run"}
     "--max-body-bytes": not_path

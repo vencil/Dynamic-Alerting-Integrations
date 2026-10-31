@@ -63,7 +63,6 @@ REASON_PREFIX = {"dir": "dir_", "file": "file_", "any": "path_"}
 PENDING: frozenset[tuple[str, str]] = frozenset({
     ("blind-spot", "--config-dir"),
     ("generator-service", "--config-subdir"),
-    ("generator-service", "--da-guard-binary"),
     ("migrate-to-operator", "--config-dir"),
     ("migrate-to-operator", "--source-dir"),
     ("onboard", "--rule-files"),
