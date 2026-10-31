@@ -237,6 +237,22 @@ def test_an_empty_prometheus_namespace_is_refused_when_isolating():
 
 
 @_needs_helm
+@pytest.mark.parametrize("value", ['"false"', '"no"', "0"])
+def test_a_non_boolean_allow_external_is_refused(tmp_path, value):
+    """A quoted "false" in a values file is a non-empty string, which Helm reads
+    as true: the policy would silently admit every source. Refused instead."""
+    values = tmp_path / "v.yaml"
+    values.write_text(
+        "networkPolicy:\n"
+        f"  allowExternal: {value}\n"
+        "  prometheusNamespace: monitoring\n"
+        "  prometheusPodLabels: {app: prometheus}\n", encoding="utf-8")
+    proc = _render("-f", str(values))
+    assert proc.returncode != 0, f"allowExternal: {value} rendered"
+    assert "networkPolicy.allowExternal must be true or false" in proc.stderr, proc.stderr
+
+
+@_needs_helm
 def test_disabled_renders_no_policy():
     assert not _policies(_docs("--set", "networkPolicy.enabled=false"))
 

@@ -104,6 +104,14 @@ data:
       # own kube-state-metrics) carry it too. Same label face as before: the
       # job stamps NO `tenant` label (only job ← service name), so scraping
       # tenant-api here cannot pollute the tenant dimension.
+      # ⚠️ Trust boundary: because this keeps the label in EVERY namespace,
+      # whoever can create a Service (and its endpoints) anywhere can add a
+      # target here — and since `job` is the Service name, one named
+      # `threshold-exporter` would feed `user_threshold` series and satisfy
+      # `up{job="threshold-exporter"}` checks. That is safe only while just
+      # platform operators can create Services carrying this label. Where
+      # tenants get Service-create rights, enforce it (an admission policy on
+      # the label, or RBAC) or narrow this job's namespaces. (#1425)
       - job_name: "platform-components"
         scrape_interval: 15s
         kubernetes_sd_configs:

@@ -14,6 +14,9 @@
   install fail. The old ones only duplicate these allows; delete them.
 */ -}}
 {{- if .Values.networkPolicy.enabled }}
+{{- if not (kindIs "bool" .Values.networkPolicy.allowExternal) }}
+{{- fail (printf "networkPolicy.allowExternal must be true or false, not %s %q: a quoted \"false\" is a non-empty string, which Helm reads as true, so the policy would admit every source instead of restricting it" (kindOf .Values.networkPolicy.allowExternal) (toString .Values.networkPolicy.allowExternal)) }}
+{{- end }}
 {{- if not .Values.networkPolicy.allowExternal }}
 {{- if not .Values.networkPolicy.prometheusPodLabels }}
 {{- fail "networkPolicy.prometheusPodLabels must be a non-empty label selector when networkPolicy.allowExternal is false: an empty matchLabels admits every pod in networkPolicy.prometheusNamespace to the exporter" }}
