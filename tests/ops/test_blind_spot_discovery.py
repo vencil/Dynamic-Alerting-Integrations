@@ -13,6 +13,7 @@ import yaml
 
 
 import blind_spot_discovery as bsd  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ── 1. DB Type Inference ────────────────────────────────────────────
@@ -394,7 +395,7 @@ class TestMainIntegration:
             {"job": "mysqld_exporter", "instance": "10.0.0.1:9104",
              "namespace": "db-a", "labels": {}},
         ])
-        bsd.main()
+        emit_result(bsd.main())
         out = capsys.readouterr().out
         assert "Summary" in out
 
@@ -411,7 +412,8 @@ class TestMainIntegration:
             "--prometheus", "http://prom:9090",
             "--json-output")
         monkeypatch.setattr(bsd, "query_prometheus_targets", lambda url: [])
-        bsd.main()
+        # #3216: the --json status rides on the Report; nothing found is 0
+        assert emit_result(bsd.main()) == 0
         out = capsys.readouterr().out
         data = json.loads(out)
         assert isinstance(data, list)
@@ -432,7 +434,7 @@ class TestMainIntegration:
             {"job": "prometheus", "instance": "localhost:9090",
              "namespace": "monitoring", "labels": {}},
         ])
-        bsd.main()
+        emit_result(bsd.main())
         out = capsys.readouterr().out
         assert "Summary" in out
 
@@ -449,7 +451,7 @@ class TestMainIntegration:
             captured_url.append(url)
             return []
         monkeypatch.setattr(bsd, "query_prometheus_targets", mock_targets)
-        bsd.main()
+        emit_result(bsd.main())
         assert captured_url[0] == "http://env-prom:9090"
 
     def test_prom_empty_env_falls_back_to_localhost(self, monkeypatch, capsys,
@@ -470,5 +472,5 @@ class TestMainIntegration:
             captured_url.append(url)
             return []
         monkeypatch.setattr(bsd, "query_prometheus_targets", mock_targets)
-        bsd.main()
+        emit_result(bsd.main())
         assert captured_url[0] == "http://localhost:9090"

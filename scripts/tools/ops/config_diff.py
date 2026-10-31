@@ -43,7 +43,6 @@ from typing import NamedTuple
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import format_json_report  # noqa: E402
 from _lib_redact import REDACTED, SECRET_FIELDS, mask_values, redact, redact_pair  # noqa: E402
 from _lib_redact import is_secret_field as _lib_redact_is_secret  # noqa: E402
 from _lib_confd import printable_name  # noqa: E402
@@ -51,7 +50,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538; #3276)
 from _lib_paths import classify_path, raise_path_problems  # noqa: E402  (#3276)
 import _lib_parse_tree  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, die_caller_error)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope, die_caller_error)
 from _threshold_alerts import alerts_for_key  # noqa: E402
 import _render_diff as rd  # noqa: E402
 
@@ -1756,12 +1755,13 @@ def _run(args):
         elif v.status == "not_compared":
             print(f"WARNING: {VIEW_TITLES[name]}: not compared: {reason}", file=sys.stderr)
 
-    if args.json_output or args.format == "json":
-        print(format_json_report(report_json(report, code), default=str))
-    else:
-        print(render_markdown(report))
     # Spelled out, not `sys.exit(code)`: the CLI-contract lint reads which
     # codes this tool can exit with from the literal arguments.
+    if args.json_output or args.format == "json":
+        return Report(report_json(report, code),  # #3216: run() encodes it
+                      EXIT_CALLER_ERROR if code == EXIT_CALLER_ERROR
+                      else EXIT_VIOLATION if code == EXIT_VIOLATION else EXIT_OK)
+    print(render_markdown(report))
     if code == EXIT_CALLER_ERROR:
         sys.exit(EXIT_CALLER_ERROR)
     sys.exit(EXIT_VIOLATION if code == EXIT_VIOLATION else EXIT_OK)

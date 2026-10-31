@@ -22,7 +22,6 @@ Returns JSON: {"alert", "tenant", "state": "firing"|"pending"|"inactive"}
     * 叢集外: port-forward 或 Ingress
     * 多叢集: Thanos Query / VictoriaMetrics 等統一查詢端點亦可
 """
-import json
 import os
 import sys
 import argparse
@@ -34,15 +33,17 @@ from _lib_python import add_prometheus_arg  # noqa: E402
 # #3133: the alerts are read by the lib; an answer that is not one raises
 # QueryError (rc 2) — never "inactive".
 from _lib_prometheus import QueryError, prometheus_alerts  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, arm_crash_envelope  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, Report, arm_crash_envelope  # noqa: E402
 
 
-def check_alert(alert_name, tenant, prom_url):
+def check_alert(alert_name, tenant, prom_url) -> Report:
+    """The alert's state as the document for run() to encode (#3216)."""
     try:
         alerts = prometheus_alerts(prom_url)
     except QueryError as err:
-        print(json.dumps({"error": f"Cannot read Prometheus alerts ({prom_url}): {err}"}))
-        sys.exit(EXIT_CALLER_ERROR)  # #452: cannot reach Prometheus = caller/env error
+        # #452: cannot reach Prometheus = caller/env error
+        return Report({"error": f"Cannot read Prometheus alerts ({prom_url}): {err}"},
+                      EXIT_CALLER_ERROR)
 
     # 過濾出符合 Alert Name 且包含特定 Tenant 標籤的警報
     matched_alerts = []
@@ -56,8 +57,7 @@ def check_alert(alert_name, tenant, prom_url):
             matched_alerts.append(a)
 
     if not matched_alerts:
-        print(json.dumps({"alert": alert_name, "tenant": tenant, "state": "inactive"}))
-        return
+        return Report({"alert": alert_name, "tenant": tenant, "state": "inactive"})
 
     # 找出最嚴重的狀態 (firing > pending)
     states = [a.get('state') for a in matched_alerts]
@@ -68,12 +68,12 @@ def check_alert(alert_name, tenant, prom_url):
     else:
         final_state = 'unknown'
 
-    print(json.dumps({
+    return Report({
         "alert": alert_name,
         "tenant": tenant,
         "state": final_state,
         "details": [{"state": a.get('state'), "activeAt": a.get('activeAt')} for a in matched_alerts]
-    }, indent=2))
+    })
 
 
 def main():
@@ -98,7 +98,7 @@ def main():
     if args.json:
         # #3094: a crash in --json mode still prints one envelope
         arm_crash_envelope()
-    check_alert(args.alert_name, args.tenant, args.prometheus)
+    return check_alert(args.alert_name, args.tenant, args.prometheus)
 
 
 if __name__ == "__main__":

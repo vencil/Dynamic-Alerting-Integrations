@@ -300,7 +300,7 @@ The Pod is always looked up in the namespace named after the tenant; there is no
 
 **Output**
 
-One line of JSON. When healthy it has just two fields:
+One JSON document (two-space indent; one line before [#3216](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3216), and the examples below are still written on one line for brevity). When healthy it has just two fields:
 
 ```json
 {"status": "healthy", "tenant": "db-a"}

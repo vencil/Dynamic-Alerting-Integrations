@@ -301,7 +301,7 @@ Pod 一律查與租戶同名的 namespace，沒有另外指定 namespace 的選�
 
 **輸出**
 
-一行 JSON。健康時只有兩個欄位：
+一份 JSON（兩格縮排；[#3216](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3216) 之前是一行，下列範例為了簡短仍寫成一行）。健康時只有兩個欄位：
 
 ```json
 {"status": "healthy", "tenant": "db-a"}

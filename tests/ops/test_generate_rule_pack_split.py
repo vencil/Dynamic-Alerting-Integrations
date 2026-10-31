@@ -22,6 +22,17 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import generate_rule_pack_split as grps  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _exit_code(main, *args):
+    """`main()`'s exit the way `run()` ends it (#3216): a returned Report's
+    document is written and its status is the code, a `SystemExit` gives
+    its own."""
+    try:
+        return emit_result(main(*args))
+    except SystemExit as exc:
+        return exc.code
 
 
 # ---------------------------------------------------------------------------
@@ -672,7 +683,8 @@ class TestProcessRulePacks:
 # main — CLI
 # ---------------------------------------------------------------------------
 class TestMain:
-    def test_success_exits_zero(self, tmp_path, monkeypatch, capsys, cli_argv):
+    @pytest.mark.parametrize("flags", [[], ["--json"]], ids=["text", "json"])
+    def test_success_exits_zero(self, flags, tmp_path, monkeypatch, capsys, cli_argv):
         # Stub process_rule_packs to return clean report.
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {
             "status": "success",
@@ -684,12 +696,12 @@ class TestMain:
                 "metric_mismatches": [],
             },
         })
-        cli_argv("generate_rule_pack_split.py")
-        with pytest.raises(SystemExit) as exc:
-            grps.main()
-        assert exc.value.code == 0
+        cli_argv("generate_rule_pack_split.py", *flags)
+        # #3216: under --json the status rides on the Report run() exits with
+        assert _exit_code(grps.main) == 0
 
-    def test_metric_mismatch_exits_one(self, monkeypatch, cli_argv):
+    @pytest.mark.parametrize("flags", [[], ["--json"]], ids=["text", "json"])
+    def test_metric_mismatch_exits_one(self, flags, monkeypatch, cli_argv):
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {
             "status": "success",
             "errors": [],
@@ -700,12 +712,12 @@ class TestMain:
                 "metric_mismatches": [{"file": "x.yaml", "missing_in_edge": ["m"]}],
             },
         })
-        cli_argv("generate_rule_pack_split.py")
-        with pytest.raises(SystemExit) as exc:
-            grps.main()
-        assert exc.value.code == 1
+        cli_argv("generate_rule_pack_split.py", *flags)
+        # #3216: under --json the status rides on the Report run() exits with
+        assert _exit_code(grps.main) == 1
 
-    def test_error_status_exits_two(self, monkeypatch, cli_argv):
+    @pytest.mark.parametrize("flags", [[], ["--json"]], ids=["text", "json"])
+    def test_error_status_exits_two(self, flags, monkeypatch, cli_argv):
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {
             "status": "error",
             "errors": ["YAML parse failed"],
@@ -716,10 +728,9 @@ class TestMain:
                 "metric_mismatches": [],
             },
         })
-        cli_argv("generate_rule_pack_split.py")
-        with pytest.raises(SystemExit) as exc:
-            grps.main()
-        assert exc.value.code == 2
+        cli_argv("generate_rule_pack_split.py", *flags)
+        # #3216: under --json the status rides on the Report run() exits with
+        assert _exit_code(grps.main) == 2
 
     def test_json_flag_emits_json(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(grps, "process_rule_packs", lambda **kw: {
@@ -733,8 +744,7 @@ class TestMain:
             },
         })
         cli_argv("generate_rule_pack_split.py", "--json")
-        with pytest.raises(SystemExit):
-            grps.main()
+        _exit_code(grps.main)
         out = capsys.readouterr().out
         # Output is parseable JSON.
         payload = json.loads(out)
@@ -754,8 +764,7 @@ class TestMain:
             },
         })
         cli_argv("generate_rule_pack_split.py")
-        with pytest.raises(SystemExit):
-            grps.main()
+        _exit_code(grps.main)
         out = capsys.readouterr().out
         assert "WARN: wrong-name: no groups" in out
         assert "y.yaml" in out
@@ -790,7 +799,6 @@ class TestMain:
             },
         })
         cli_argv("generate_rule_pack_split.py")
-        with pytest.raises(SystemExit):
-            grps.main()
+        _exit_code(grps.main)
         out = capsys.readouterr().out
         assert "ERROR: parse failed" in out

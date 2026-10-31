@@ -61,7 +61,7 @@ for _p in (_TOOLS, _HERE):
 import _lib_key_verdict as kv  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, disarm_crash_envelope,
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report, arm_crash_envelope,
 )
 from _lib_io import YamlFileError, safe_label  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
@@ -257,19 +257,20 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _fail(reason: str, as_json: bool) -> int:
+def _fail(reason: str, as_json: bool) -> "int | Report":
     first, *rest = reason.split("\n")
     print(f"ERROR: {safe_label(first)}", file=sys.stderr)
     for line in rest:
         print(f"  {safe_label(line)}", file=sys.stderr)
     if as_json:
-        print(json.dumps({"schema": SCHEMA, "status": "caller_error", "reason": reason,
-                          "at": None, "undecidable": False, "tenants": {}, "findings": []},
-                         ensure_ascii=False))
+        # #3216: run() encodes it
+        return Report({"schema": SCHEMA, "status": "caller_error", "reason": reason,
+                       "at": None, "undecidable": False, "tenants": {}, "findings": []},
+                      EXIT_CALLER_ERROR)
     return EXIT_CALLER_ERROR
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> "int | Report":
     args = build_parser().parse_args(argv)
     if args.json:
         # #3094: a crash in --json mode still prints one envelope, with the
@@ -294,17 +295,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     except Exception as e:  # noqa: BLE001 — every failure is exit 2 with a reason, never a traceback
         return _fail(f"explain-keys could not finish: {type(e).__name__}: {' '.join(str(e).split())}",
                      args.json)
-    if args.json:
-        doc["assert_differences"] = diffs
-        print(json.dumps(doc, ensure_ascii=False, default=str))
-        disarm_crash_envelope()  # the document is out; a late crash must not add a second
-    else:
+    if not args.json:
         print(render_text(doc))
         for d in diffs:
             print(f"ASSERT: {safe_label(d)}", file=sys.stderr)
     if doc["undecidable"]:
         print("ERROR: no root platform file was read; threshold keys are undecidable "
               "(ADR-038 decision 7)", file=sys.stderr)
+    if args.json:
+        doc["assert_differences"] = diffs
+        # #3216: run() encodes it
+        return Report(doc, EXIT_CALLER_ERROR if doc["undecidable"]
+                      else EXIT_VIOLATION if diffs else EXIT_OK)
+    if doc["undecidable"]:
         return EXIT_CALLER_ERROR
     return EXIT_VIOLATION if diffs else EXIT_OK
 

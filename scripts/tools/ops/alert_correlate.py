@@ -27,14 +27,13 @@ from typing import List, Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
-    format_json_report,
     parse_duration_seconds,
 )
 # #3133: alerts are read by the lib; a Prometheus that does not answer raises
 # QueryError (rc 2) — never "no alerts".
 from _lib_prometheus import QueryError, alertmanager_alerts, prometheus_alerts  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope,
 )
 from _lib_paths import require_file  # noqa: E402  (#3415)
 
@@ -510,23 +509,21 @@ def main():
     clusters = analyze_alerts(alerts, window_secs, args.min_score)
     report = build_report(clusters, len(alerts))
 
-    # Output
+    # CI gate: exit 1 if any cluster has critical root cause
+    failed = args.ci and any(
+        c.get("root_cause", {}).get("severity") == "critical"
+        for c in report["clusters"])
+
+    # Output. The status is spelled out at each return: the CLI-contract lint
+    # reads which codes this tool can exit with from them.
     if args.json:
-        print(format_json_report(report))
-        disarm_crash_envelope()  # the --ci scan below must not add a second document
-    elif args.markdown:
+        # #3216: run() encodes it
+        return Report(report, EXIT_VIOLATION if failed else EXIT_OK)
+    if args.markdown:
         print(format_markdown_report(report))
     else:
         print(format_text_report(report))
-
-    # CI gate: exit 1 if any cluster has critical root cause
-    if args.ci:
-        critical = any(
-            c.get("root_cause", {}).get("severity") == "critical"
-            for c in report["clusters"]
-        )
-        if critical:
-            sys.exit(EXIT_VIOLATION)
+    return EXIT_VIOLATION if failed else EXIT_OK
 
 
 if __name__ == "__main__":

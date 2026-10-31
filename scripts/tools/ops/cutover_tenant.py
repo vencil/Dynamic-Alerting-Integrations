@@ -49,9 +49,9 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope,
 )
-from _lib_python import format_json_report, add_prometheus_arg  # noqa: E402
+from _lib_python import add_prometheus_arg  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3415)
 from _lib_prometheus import QueryError, prometheus_instant, vector_count  # noqa: E402
 
@@ -369,10 +369,6 @@ def main():
         force=args.force,
     )
 
-    if args.json_output:
-        print(format_json_report(report))
-        disarm_crash_envelope()  # #3094: the document is out; the stderr summary must not add one
-
     if report["success"]:
         print("\n✅ Cutover completed successfully.", file=sys.stderr)
         print("Next: run 'da-tools batch-diagnose' for full health report.",
@@ -384,12 +380,19 @@ def main():
         print(f"   Reason: {msg}", file=sys.stderr)
         print("   See shadow-monitoring-sop.md §7.2 for rollback steps.",
               file=sys.stderr)
-        # #452/#737: caller-error (bad/missing readiness JSON, unreachable
-        # Prometheus, missing kubectl) → exit 2; genuine cutover-step failure
-        # (rollback-worthy finding) → exit 1.
+
+    # #452/#737: caller-error (bad/missing readiness JSON, unreachable
+    # Prometheus, missing kubectl) → exit 2; genuine cutover-step failure
+    # (rollback-worthy finding) → exit 1.
+    if args.json_output:
+        # #3216: run() encodes it, after the stderr summary above.
+        return Report(report, EXIT_OK if report["success"]
+                      else EXIT_CALLER_ERROR if report.get("caller_error") else EXIT_VIOLATION)
+    if not report["success"]:
         if report.get("caller_error"):
             sys.exit(EXIT_CALLER_ERROR)
         sys.exit(EXIT_VIOLATION)
+    return EXIT_OK
 
 
 if __name__ == "__main__":

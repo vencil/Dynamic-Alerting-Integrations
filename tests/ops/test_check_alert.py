@@ -15,6 +15,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import check_alert as ca  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402
 
 
 def _stub_http(monkeypatch, payload, err=None):
@@ -34,7 +35,7 @@ def _stub_http(monkeypatch, payload, err=None):
 class TestCheckAlert:
     def test_inactive_when_no_matching_alerts(self, monkeypatch, capsys):
         _stub_http(monkeypatch, {"data": {"alerts": []}})
-        ca.check_alert("HighCPU", "db-a", "http://localhost:9090")
+        assert emit_result(ca.check_alert("HighCPU", "db-a", "http://localhost:9090")) == 0
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert payload["state"] == "inactive"
@@ -45,7 +46,7 @@ class TestCheckAlert:
         _stub_http(monkeypatch, {"data": {"alerts": [
             {"labels": {"alertname": "OtherAlert", "tenant": "db-a"}, "state": "firing"},
         ]}})
-        ca.check_alert("HighCPU", "db-a", "http://localhost:9090")
+        assert emit_result(ca.check_alert("HighCPU", "db-a", "http://localhost:9090")) == 0
         out = capsys.readouterr().out
         assert json.loads(out)["state"] == "inactive"
 
@@ -54,7 +55,7 @@ class TestCheckAlert:
             {"labels": {"alertname": "HighCPU", "tenant": "db-a"},
              "state": "firing", "activeAt": "2026-05-07T10:00:00Z"},
         ]}})
-        ca.check_alert("HighCPU", "db-a", "http://localhost:9090")
+        assert emit_result(ca.check_alert("HighCPU", "db-a", "http://localhost:9090")) == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["state"] == "firing"
         assert payload["details"][0]["state"] == "firing"
@@ -65,14 +66,14 @@ class TestCheckAlert:
             {"labels": {"alertname": "HighCPU", "instance": "db-a"},
              "state": "firing", "activeAt": "2026-05-07T10:00:00Z"},
         ]}})
-        ca.check_alert("HighCPU", "db-a", "http://localhost:9090")
+        assert emit_result(ca.check_alert("HighCPU", "db-a", "http://localhost:9090")) == 0
         assert json.loads(capsys.readouterr().out)["state"] == "firing"
 
     def test_pending_when_only_pending_matches(self, monkeypatch, capsys):
         _stub_http(monkeypatch, {"data": {"alerts": [
             {"labels": {"alertname": "HighCPU", "tenant": "db-a"}, "state": "pending"},
         ]}})
-        ca.check_alert("HighCPU", "db-a", "http://localhost:9090")
+        assert emit_result(ca.check_alert("HighCPU", "db-a", "http://localhost:9090")) == 0
         assert json.loads(capsys.readouterr().out)["state"] == "pending"
 
     def test_firing_takes_priority_over_pending(self, monkeypatch, capsys):
@@ -81,7 +82,7 @@ class TestCheckAlert:
             {"labels": {"alertname": "HighCPU", "tenant": "db-a"}, "state": "pending"},
             {"labels": {"alertname": "HighCPU", "tenant": "db-a"}, "state": "firing"},
         ]}})
-        ca.check_alert("HighCPU", "db-a", "http://localhost:9090")
+        assert emit_result(ca.check_alert("HighCPU", "db-a", "http://localhost:9090")) == 0
         assert json.loads(capsys.readouterr().out)["state"] == "firing"
 
     def test_unknown_when_no_firing_or_pending(self, monkeypatch, capsys):
@@ -90,14 +91,15 @@ class TestCheckAlert:
         _stub_http(monkeypatch, {"data": {"alerts": [
             {"labels": {"alertname": "HighCPU", "tenant": "db-a"}, "state": "resolved"},
         ]}})
-        ca.check_alert("HighCPU", "db-a", "http://localhost:9090")
+        assert emit_result(ca.check_alert("HighCPU", "db-a", "http://localhost:9090")) == 0
         assert json.loads(capsys.readouterr().out)["state"] == "unknown"
 
     def test_http_error_exits_caller_error(self, monkeypatch, capsys):
         _stub_http(monkeypatch, None, err="connection refused")
-        with pytest.raises(SystemExit) as exc:
-            ca.check_alert("HighCPU", "db-a", "http://localhost:9090")
-        assert exc.value.code == 2  # EXIT_CALLER_ERROR (#452: cannot reach Prometheus)
+        # #3216: the document comes back as a Report; emit_result writes it
+        # and gives its status, as run() does.
+        rc = emit_result(ca.check_alert("HighCPU", "db-a", "http://localhost:9090"))
+        assert rc == 2  # EXIT_CALLER_ERROR (#452: cannot reach Prometheus)
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert "error" in payload
@@ -114,7 +116,5 @@ class TestCheckAlert:
 def test_an_answer_that_is_not_one_is_rc2_not_inactive(monkeypatch, capsys, payload, defect):
     """#3133: these used to read as no alert — "inactive", rc 0."""
     _stub_http(monkeypatch, payload)
-    with pytest.raises(SystemExit) as exc:
-        ca.check_alert("HighCPU", "db-a", "http://localhost:9090")
-    assert exc.value.code == 2
+    assert emit_result(ca.check_alert("HighCPU", "db-a", "http://localhost:9090")) == 2
     assert defect in json.loads(capsys.readouterr().out)["error"]

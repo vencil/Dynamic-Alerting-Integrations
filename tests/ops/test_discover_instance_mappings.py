@@ -14,6 +14,7 @@ sys.path.insert(0, _TOOLS_DIR)
 sys.path.insert(0, os.path.join(_TOOLS_DIR, '..'))
 
 import discover_instance_mappings as dim  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 import _lib_prometheus  # noqa: E402
 from _lib_prometheus import QueryError  # noqa: E402
@@ -239,10 +240,10 @@ class TestQueryPrometheusLabelValues:
 class TestCliMain:
     def test_no_args_exits(self):
         with pytest.raises(SystemExit):
-            dim.main([])
+            emit_result(dim.main([]))
 
     def test_prometheus_without_instance_or_job(self, capsys):
-        rc = dim.main(["--prometheus", "http://localhost:9090"])
+        rc = emit_result(dim.main(["--prometheus", "http://localhost:9090"]))
         assert rc == EXIT_CALLER_ERROR
         captured = capsys.readouterr()
         assert "requires" in captured.err.lower() or "requires" in captured.out.lower()
@@ -264,8 +265,8 @@ class TestJsonEmptyEnvelope:
         """Prometheus 回不出任何標籤值 → reason=no_label_values、exit 1。"""
         monkeypatch.setattr(dim, "query_prometheus_label_values",
                             lambda *a, **kw: {})
-        rc = dim.main(["--prometheus", "http://prom:9090",
-                       "--instance", "stub:9104", "--json"])
+        rc = emit_result(dim.main(["--prometheus", "http://prom:9090",  # #3216
+                                   "--instance", "stub:9104", "--json"]))
 
         assert rc == EXIT_VIOLATION              # 空結果 = violation，exit 語意不變
         captured = capsys.readouterr()
@@ -290,8 +291,8 @@ class TestJsonEmptyEnvelope:
         """
         monkeypatch.setattr(dim, "query_prometheus_label_values",
                             lambda *a, **kw: {"schemaname": {"only-one-value"}})
-        rc = dim.main(["--prometheus", "http://prom:9090",
-                       "--instance", "stub:9104", "--json"])
+        rc = emit_result(dim.main(["--prometheus", "http://prom:9090",  # #3216
+                                   "--instance", "stub:9104", "--json"]))
 
         assert rc == EXIT_VIOLATION
         captured = capsys.readouterr()

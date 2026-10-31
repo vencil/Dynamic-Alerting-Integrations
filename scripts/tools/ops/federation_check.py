@@ -32,13 +32,13 @@ import urllib.parse
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import format_json_report, probe_health, add_prometheus_arg  # noqa: E402
+from _lib_python import probe_health, add_prometheus_arg  # noqa: E402
 # #3133: every answer is checked by the lib; a query not answered is a failed
 # check, never a missing one.
 from _lib_prometheus import (  # noqa: E402
     QueryError, instant_or_error, prometheus_rules, prometheus_status_config, vector_count)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
 
 # The module's one query call: (rows, None) or (None, why).
 query_prometheus = instant_or_error
@@ -377,18 +377,16 @@ def main():
     )
 
     if args.json:
-        print(format_json_report({
+        return Report({  # #3216: run() encodes it
             "tool": "federation-check",
             "section": section,
             "status": "fail" if has_failure else "pass",
             "checks": checks,
-        }))
-    else:
-        format_output(section, checks)
-        print(f"\n{'='*60}")
-        print(f"  Overall: {'FAIL' if has_failure else 'PASS'}")
-        print(f"{'='*60}\n")
-
+        }, EXIT_CALLER_ERROR if caller_error else EXIT_VIOLATION if has_failure else EXIT_OK)
+    format_output(section, checks)
+    print(f"\n{'='*60}")
+    print(f"  Overall: {'FAIL' if has_failure else 'PASS'}")
+    print(f"{'='*60}\n")
     if caller_error:
         sys.exit(EXIT_CALLER_ERROR)
     sys.exit(EXIT_VIOLATION if has_failure else EXIT_OK)

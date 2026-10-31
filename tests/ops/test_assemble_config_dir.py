@@ -26,7 +26,7 @@ from _go_refusal import refuses  # noqa: E402  (#3206)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts" / "tools"))
 import _lib_tenant_uniqueness as tu  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, emit_result  # noqa: E402
 
 from assemble_config_dir import (
     _file_sha256,
@@ -35,8 +35,14 @@ from assemble_config_dir import (
     detect_conflicts,
     discover_yamls,
     is_platform_file,
-    main,
 )
+import assemble_config_dir  # noqa: E402
+
+
+def main():
+    """`assemble_config_dir.main()` the way `run()` ends it (#3216): a
+    `--json` Report's document written to stdout, its status returned."""
+    return emit_result(assemble_config_dir.main())
 
 
 # ── Helpers ───────────────────────────────────────────────────

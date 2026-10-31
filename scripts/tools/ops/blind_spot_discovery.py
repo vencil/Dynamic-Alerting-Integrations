@@ -22,7 +22,6 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
-    format_json_report,
     JOB_DB_MAP,
     METRIC_PREFIX_DB_MAP,
 )
@@ -35,7 +34,7 @@ from _lib_tenant_values import (  # noqa: E402
     load_served_tree,
     print_load_warnings,
 )
-from _lib_exitcodes import EXIT_VIOLATION, arm_crash_envelope  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report, arm_crash_envelope  # noqa: E402
 from _lib_prometheus import prometheus_targets  # noqa: E402
 from _lib_paths import require_dir  # noqa: E402  (#3392)
 
@@ -293,9 +292,9 @@ def main():
 
     # 5. Output
     if args.json_output:
-        print(format_json_report(results))
-    else:
-        print(render_report(results))
+        return Report(results)  # #3216: run() encodes it
+    print(render_report(results))
+    return EXIT_OK
 
 
 if __name__ == "__main__":

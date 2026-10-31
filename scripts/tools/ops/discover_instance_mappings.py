@@ -44,7 +44,6 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import (  # noqa: E402
     detect_cli_lang,
-    format_json_report,
     write_text_or_die,
 )
 # #3133: series / label values are read by the lib; a query not answered
@@ -52,7 +51,7 @@ from _lib_python import (  # noqa: E402
 # "no label values" at exit 1.
 from _lib_prometheus import prometheus_label_values, prometheus_series  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope, encode_json,
 )
 
 _LANG = detect_cli_lang()
@@ -297,8 +296,9 @@ _HELP: dict[str, dict[str, str]] = {
 }
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI entry point: discover_instance_mappings.py."""
+def main(argv: list[str] | None = None) -> "int | Report":
+    """CLI entry point: discover_instance_mappings.py. Under --json, the
+    document comes back as a Report for run() to encode (#3216)."""
     try_utf8_stdout()
     lang = detect_cli_lang()
 
@@ -381,7 +381,7 @@ def main(argv: list[str] | None = None) -> int:
                        else "Check if the exporter exposes schema/tablespace labels"),
               file=sys.stderr)
         if args.json:
-            print(format_json_report(_empty_mapping("no_label_values"), default=str))
+            return Report(_empty_mapping("no_label_values"), EXIT_VIOLATION)
         return EXIT_VIOLATION
 
     # ── Rank and display ──────────────────────────────────────────
@@ -399,7 +399,7 @@ def main(argv: list[str] | None = None) -> int:
     if not ranked:
         print("  (none suitable for partitioning)", file=sys.stderr)
         if args.json:
-            print(format_json_report(_empty_mapping("no_suitable_label"), default=str))
+            return Report(_empty_mapping("no_suitable_label"), EXIT_VIOLATION)
         return EXIT_VIOLATION
 
     # Use top-ranked label
@@ -411,7 +411,8 @@ def main(argv: list[str] | None = None) -> int:
     draft = generate_mapping_draft(instance_id, best_label, best_values, db_type)
 
     if args.json:
-        output = format_json_report(draft, default=str)
+        # #3216: the one encoder, for the -o file and stdout alike
+        output = encode_json(draft)
     else:
         # Clean output: skip comment keys
         clean = {"instance_tenant_mapping": draft["instance_tenant_mapping"]}
@@ -432,9 +433,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         # #1112: `--json` ⇒ stdout carries the mapping document, whether or not
         # it was ALSO persisted with --output (same convention as
-        # analyze_rule_pack_gaps --output --json).
-        print(output)
-    elif not args.output:
+        # analyze_rule_pack_gaps --output --json). #3216: run() encodes it.
+        return Report(draft, EXIT_OK)
+    if not args.output:
         print(f"\n{'─' * 50}")
         print(output)
 
