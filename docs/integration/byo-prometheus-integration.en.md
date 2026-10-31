@@ -168,11 +168,14 @@ scrape_configs:
     static_configs:
       - targets: ["threshold-exporter.monitoring.svc.cluster.local:8080"]
     # Method 2: K8s Service Discovery (auto-discovery, recommended for production)
+    # Discovers by the platform label the chart puts on the Service, with no
+    # namespace list: found wherever the chart is installed (helm -n).
     # kubernetes_sd_configs:
     #   - role: service
-    #     namespaces:
-    #       names: ["monitoring"]
     # relabel_configs:
+    #   - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
+    #     action: keep
+    #     regex: "platform"
     #   - source_labels: [__meta_kubernetes_service_name]
     #     action: keep
     #     regex: "threshold-exporter"
@@ -185,6 +188,8 @@ scrape_configs:
 ```
 
 > **Tip**: `threshold-exporter` is deployed as HA ×2 replicas with Service-level load balancing. Both replicas emit identical metrics (based on the same ConfigMap), so Prometheus obtains the complete threshold set from either Pod.
+
+> **NetworkPolicy**: the chart creates a NetworkPolicy for the exporter that, by default, restricts ingress to the metrics port **without restricting the source** (`networkPolicy.allowExternal: true`) — the chart cannot know your Prometheus's pod labels, and a wrong guess silently cuts the scrape. To admit only your Prometheus, set `networkPolicy.allowExternal: false` and fill in `networkPolicy.prometheusNamespace` (the namespace it runs in) and `networkPolicy.prometheusPodLabels` (its pod labels); both must be non-empty, or the chart refuses to render.
 
 ### Verification
 
@@ -535,7 +540,7 @@ A: Yes. All rule packs use `optional: true`; you only need to add the ones you n
 A: No. Dynamic threshold rule packs use independent metric namespaces (`user_threshold`, `user_state_filter`, `tenant:*` recording rules) and won't conflict with your existing rules. However, we recommend running both in parallel during the Shadow Monitoring phase (see [Shadow Monitoring SOP](../shadow-monitoring-sop.md)) before switching.
 
 **Q: Does threshold-exporter need to be deployed in my cluster?**
-A: Yes. `threshold-exporter` must access tenant ConfigMaps, so it must be deployed in the same cluster's `monitoring` namespace. It is a lightweight Go binary deployed as HA ×2 replicas with extremely low resource consumption (< 50MB RSS).
+A: Yes. `threshold-exporter` must access tenant ConfigMaps, so it must be deployed in the same cluster, by default in the `monitoring` namespace; the chart's resources follow `helm -n`, and the platform Prometheus discovers the Service by its `dynamic-alerting.io/scrape: platform` label in any namespace. It is a lightweight Go binary deployed as HA ×2 replicas with extremely low resource consumption (< 50MB RSS).
 
 **Q: What if I use a multi-cluster Thanos architecture?**
 A: `threshold-exporter` is deployed in the data cluster (near tenant ConfigMaps). Thanos Sidecar automatically uploads threshold metrics to the Object Store. Rule packs are loaded into Thanos Ruler, which performs cross-cluster vector matching via Thanos Querier.

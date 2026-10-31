@@ -5,6 +5,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     app: threshold-exporter
+    # Platform scrape discovery (#1425): Prometheus' `platform-components` job
+    # keeps Services carrying this label in ANY namespace, so the release
+    # namespace is listed nowhere. A literal, not a value: the scrape contract
+    # is the chart's, and scripts/tools/lint/check_scrape_reachability.py
+    # matches it against that job.
+    dynamic-alerting.io/scrape: platform
   annotations:
     {{- toYaml .Values.service.annotations | nindent 4 }}
 spec:

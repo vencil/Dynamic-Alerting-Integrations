@@ -131,6 +131,7 @@ def _render(*args: str) -> subprocess.CompletedProcess:
     ("exporter.bogus=1", "'/exporter'"),
     ("thresholdConfig.bogus=1", "'/thresholdConfig'"),
     ("rules.bogus=1", "'/rules'"),
+    ("networkPolicy.bogus=1", "'/networkPolicy'"),
     # #2073 removed it: it never took effect, and now it says so.
     ("rules.operator.ruleLabels.x=1", "'/rules/operator'"),
     ("rules.operator.serviceMonitor.bogus=1", "'/rules/operator/serviceMonitor'"),
@@ -154,6 +155,9 @@ def test_a_key_the_chart_lacks_fails_where_it_is(setting: str, at: str) -> None:
     ("--set", "service.annotations.example\\.com/x=y"),
     ("--set", "global.anything=1"),
     ("--set", "enabled=true"),
+    ("--set", "networkPolicy.allowExternal=false",
+     "--set", "networkPolicy.prometheusNamespace=monitoring",
+     "--set", "networkPolicy.prometheusPodLabels.app\\.kubernetes\\.io/name=prometheus"),
 ], ids=lambda a: " ".join(a) or "defaults")
 def test_documented_values_still_render(args: tuple) -> None:
     proc = _render(*args)

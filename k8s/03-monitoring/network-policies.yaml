@@ -74,30 +74,10 @@ spec:
         - protocol: TCP
           port: 9093
 ---
-# threshold-exporter: allow scraping from Prometheus
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-threshold-exporter-ingress
-  namespace: monitoring
-spec:
-  podSelector:
-    matchLabels:
-      app: threshold-exporter
-  policyTypes:
-    - Ingress
-  ingress:
-    - from:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: monitoring
-          podSelector:
-            matchLabels:
-              app: prometheus
-      ports:
-        - protocol: TCP
-          port: 8080
----
+# threshold-exporter's ingress and egress policies are rendered by its chart
+# into the release namespace
+# (helm/threshold-exporter/templates/networkpolicy.yaml, #1425), not pinned
+# here to `monitoring`.
 # Grafana: allow from all within monitoring (for dashboard access)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -348,28 +328,6 @@ spec:
       ports:
         - protocol: TCP
           port: 6443
-    # DNS resolution
-    - to:
-        - namespaceSelector: {}
-      ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
----
-# threshold-exporter: only needs DNS (stateless, serves metrics)
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: allow-threshold-exporter-egress
-  namespace: monitoring
-spec:
-  podSelector:
-    matchLabels:
-      app: threshold-exporter
-  policyTypes:
-    - Egress
-  egress:
     # DNS resolution
     - to:
         - namespaceSelector: {}

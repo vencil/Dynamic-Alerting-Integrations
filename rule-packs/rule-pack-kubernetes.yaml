@@ -1040,7 +1040,7 @@ groups:
   # node-health uses below + the kubelet-volume-stats scrape relabel in
   # configmap-prometheus.yaml). It is a chosen scope, NOT the only db-* gate:
   # user_threshold's `tenant` is the conf.d id (collector.go emits `t.Tenant`; the
-  # monitoring-components scrape that reads the exporter has no tenant relabel), so
+  # platform-components scrape that reads the exporter has no tenant relabel), so
   # the declared leg CAN carry a non-db id. Such a tenant is suppressed HERE by this
   # filter — broadening it alone would START firing for non-db tenants (whose
   # volume-stats are dropped scrape-side anyway), so it is not a free knob. A BYO

@@ -128,6 +128,8 @@ spec:
 
 > **Helm Shortcut**: When `rules.mode: operator` is configured, the threshold-exporter chart automatically generates ServiceMonitor (see `rules.operator.serviceMonitor` in `values.yaml`).
 
+> **NetworkPolicy**: the chart creates a NetworkPolicy for the exporter that, by default, restricts ingress to the metrics port **without restricting the source** (`networkPolicy.allowExternal: true`) — the chart cannot know your Prometheus's pod labels, and a wrong guess silently cuts the scrape. To admit only your Prometheus, set `networkPolicy.allowExternal: false` and fill in `networkPolicy.prometheusNamespace` (the namespace it runs in) and `networkPolicy.prometheusPodLabels` (its pod labels; kube-prometheus-stack's carry `app.kubernetes.io/name: prometheus`); both must be non-empty, or the chart refuses to render.
+
 ### Verify ServiceMonitor
 
 ```bash

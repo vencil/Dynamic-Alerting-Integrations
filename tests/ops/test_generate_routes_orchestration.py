@@ -3016,7 +3016,7 @@ class TestPlatformRunbookCoverageContract:
 from check_scrape_reachability import (  # noqa: E402
     KNOWN_UNKNOWN_SOURCE,
     PLANE_OF_UNPINNED_SOURCE,
-    VECTOR_NAMESPACE,
+    VECTOR_CHART,
     extract_metrics,
 )
 
@@ -3050,7 +3050,7 @@ _EDGE_LOCAL_BY_SELECTOR: dict[str, str] = {
     "VectorProjectionGateStuck":
         'reads kube_pod_init_container_status_waiting_reason with NO namespace '
         'selector; container="projection-gate" exists only in the Vector '
-        f'DaemonSet ({VECTOR_NAMESPACE} ns), so the KSM that sees it is the '
+        f'DaemonSet ({VECTOR_CHART}), so the KSM that sees it is the '
         "EDGE cluster's, not central's (helm/vector/templates/daemonset.yaml)",
 }
 
@@ -3079,7 +3079,7 @@ def _alert_plane(alert: str, expr: str) -> tuple[str, list[str]]:
     for metric in sorted(extract_metrics(expr)):
         if metric.startswith("vector_"):
             verdicts.add(EDGE_LOCAL)
-            why.append(f"{metric}: vector_ family -> {VECTOR_NAMESPACE} ns (edge)")
+            why.append(f"{metric}: vector_ family -> {VECTOR_CHART} (edge)")
         elif metric in PLANE_OF_UNPINNED_SOURCE:
             verdicts.add(PLANE_OF_UNPINNED_SOURCE[metric])
             why.append(f"{metric}: unpinned-ns ledger -> "

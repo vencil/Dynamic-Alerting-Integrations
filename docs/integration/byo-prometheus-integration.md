@@ -168,11 +168,14 @@ scrape_configs:
     static_configs:
       - targets: ["threshold-exporter.monitoring.svc.cluster.local:8080"]
     # 方式二：K8s Service Discovery（自動發現，推薦生產環境）
+    # 依 chart 給 Service 的平台 label 探索，不列 namespace：
+    # chart 裝在哪個 namespace（helm -n）都找得到。
     # kubernetes_sd_configs:
     #   - role: service
-    #     namespaces:
-    #       names: ["monitoring"]
     # relabel_configs:
+    #   - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
+    #     action: keep
+    #     regex: "platform"
     #   - source_labels: [__meta_kubernetes_service_name]
     #     action: keep
     #     regex: "threshold-exporter"
@@ -185,6 +188,8 @@ scrape_configs:
 ```
 
 > **提示**：`threshold-exporter` 以 HA ×2 副本部署，Service 會自動負載均衡。兩個副本吐出的指標內容完全一致（基於相同 ConfigMap），Prometheus 不論抓到哪個 Pod 都能取得完整的閾值集合。
+
+> **NetworkPolicy**：chart 預設替 exporter 建 NetworkPolicy，入站**只限 metrics port、不限來源**（`networkPolicy.allowExternal: true`）——chart 無從得知你的 Prometheus 帶什麼 pod label，猜錯會讓 scrape 靜默斷掉。要把入站收到只放 Prometheus，設 `networkPolicy.allowExternal: false`，並填 `networkPolicy.prometheusNamespace`（它所在的 namespace）與 `networkPolicy.prometheusPodLabels`（它 pod 上的 label）；兩者都不可為空，否則 chart 拒絕 render。
 
 ### 驗證
 
@@ -535,7 +540,7 @@ A: 可以。所有規則包使用 `optional: true`，你只需加入你需要的
 A: 不會。動態閾值規則包使用獨立的指標命名空間（`user_threshold`、`user_state_filter`、`tenant:*` recording rules），不會與你現有的規則衝突。但建議在 Shadow Monitoring 階段（參考 [Shadow Monitoring SOP](../shadow-monitoring-sop.md)）雙軌並行一段時間再切換。
 
 **Q: threshold-exporter 需要部署在我的叢集裡嗎？**
-A: 是的。`threshold-exporter` 需要存取 tenant ConfigMap，因此必須部署在同一叢集的 `monitoring` namespace。它是一個輕量的 Go binary，HA ×2 副本，資源消耗極低（< 50MB RSS）。
+A: 是的。`threshold-exporter` 需要存取 tenant ConfigMap，因此必須部署在同一叢集，預設裝在 `monitoring` namespace；chart 的資源跟著 `helm -n` 走，平台的 Prometheus 依 Service 的 `dynamic-alerting.io/scrape: platform` label 探索，不限 namespace。它是一個輕量的 Go binary，HA ×2 副本，資源消耗極低（< 50MB RSS）。
 
 **Q: 如果我用的是 Thanos 多叢集架構怎麼辦？**
 A: `threshold-exporter` 部署在資料叢集內（靠近 tenant ConfigMap）。Thanos Sidecar 會自動將閾值指標上傳到 Object Store。規則包載入到 Thanos Ruler，它會透過 Thanos Querier 進行跨叢集的向量匹配。
