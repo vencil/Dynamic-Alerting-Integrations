@@ -35,9 +35,9 @@ from typing import Dict, List, Optional, Tuple
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
-from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
+from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope,
 )
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
@@ -606,17 +606,16 @@ def main():
                                 ignore_prefixes=ignore_prefixes)
         summary = build_summary(reports, is_operator=False)
 
+    failed = args.ci and not summary["drift_free"]
     # Output (same for both modes)
     if args.json:
-        print(format_json_report(summary))
-        disarm_crash_envelope()  # the document is out; a late crash must not add a second
-    elif args.markdown:
+        # #3216: run() encodes it
+        return Report(summary, EXIT_VIOLATION if failed else EXIT_OK)
+    if args.markdown:
         print(format_markdown_report(summary))
     else:
         print(format_text_report(summary))
-
-    if args.ci and not summary["drift_free"]:
-        sys.exit(EXIT_VIOLATION)
+    return EXIT_VIOLATION if failed else EXIT_OK
 
 
 if __name__ == "__main__":

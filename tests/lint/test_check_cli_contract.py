@@ -683,6 +683,20 @@ class TestV4ExitCodeTable:
         ec = mod.reachable_exit_codes(_OPAQUE_SOURCE)
         assert ec.reachable == {} and ec.undecidable == [3]
 
+    def test_a_report_exits_with_its_status(self):
+        """#3216: `return Report(doc, status)` hands run() the --json document
+        and the exit status; the status resolves like any other exit (0 when
+        omitted), so a migrated tool keeps its exit table judged."""
+        src = ("import _lib_exitcodes\nfrom _lib_exitcodes import Report\n\n"
+               "def main():\n    if a:\n        return Report({}, EXIT_VIOLATION if b else EXIT_OK)\n"
+               "    if c:\n        return _lib_exitcodes.Report({}, status=EXIT_CALLER_ERROR)\n"
+               "    return Report({})\n\n_lib_exitcodes.run(main)\n")
+        ec = mod.reachable_exit_codes(src)
+        assert set(ec.reachable) == {0, 1, 2} and ec.undecidable == [], ec
+        opaque = mod.reachable_exit_codes(
+            "import _lib_exitcodes\n\ndef main():\n    return Report({}, s)\n\n_lib_exitcodes.run(main)\n")
+        assert opaque.undecidable == [4], opaque
+
     def test_a_nested_functions_return_is_not_mains(self):
         src = ("import sys\n\ndef main():\n    def helper():\n        return 7\n"
                "    f = lambda: 9\n    helper()\n    return 0\n\nsys.exit(main())\n")

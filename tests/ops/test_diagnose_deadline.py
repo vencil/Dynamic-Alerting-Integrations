@@ -8,7 +8,6 @@ kubectl 卡住時，單跑 `diagnose` 曾經等滿 120 秒再以 traceback 結�
 再 sleep 會留下 sleep 孫程序，subprocess 殺不到，量到的是測試自己造的孤兒。
 """
 
-import io
 import json
 import os
 import random
@@ -234,9 +233,8 @@ class TestSingleDiagnoseCli:
             return subprocess.CompletedProcess(cmd, 0, json.dumps(pods), "")
         monkeypatch.setattr(_lib_kubectl.subprocess, "run", kubectl_run(kubectl))
         cli_argv("diagnose", "t1", "--prometheus", "http://prom:9090")
-        with pytest.raises(SystemExit) as exc:
-            diagnose.main()
-        assert exc.value.code == 1
+        # #3216: main() returns the document; emit_result writes it as run() does
+        assert _lib_exitcodes.emit_result(diagnose.main()) == 1
         doc = json.loads(capsys.readouterr().out)
         assert doc["issues"] == ["Pod status is CrashLoopBackOff"]
         assert doc["recent_logs"] == []
@@ -260,7 +258,7 @@ class TestSingleDiagnoseCli:
         def logs(tenant):
             raise failure
         monkeypatch.setattr(diagnose, "mariadb_logs", logs)
-        doc = diagnose.check("t1", "http://prom:9090", out=io.StringIO())
+        doc = diagnose.check("t1", "http://prom:9090")
         assert doc["issues"] == ["Pod status is CrashLoopBackOff"]
         assert doc["recent_logs"] == []
         assert doc["recent_logs_error"] == str(failure)
@@ -276,10 +274,10 @@ class TestBatchDeadline:
         around the thread instead of in it would silently never apply."""
         seen = {}
 
-        def check(tenant, prom_url, *, out, chain=None):
+        def check(tenant, prom_url, *, chain=None):
             seen["at"] = diagnose._DEADLINE.get()
             seen["thread"] = threading.current_thread().name
-            out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
+            return {"tenant": tenant, "status": "healthy"}
         monkeypatch.setattr(bd, "diagnose_check", check)
         before = time.monotonic()
         bd.run_diagnose_for_tenant("t1", "http://prom", timeout_sec=7)
@@ -293,9 +291,9 @@ class TestBatchDeadline:
         time at all: "not run: the deadline has passed" before anything ran."""
         seen = {}
 
-        def check(tenant, prom_url, *, out, chain=None):
+        def check(tenant, prom_url, *, chain=None):
             seen["at"] = diagnose._DEADLINE.get()
-            out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
+            return {"tenant": tenant, "status": "healthy"}
         monkeypatch.setattr(bd, "diagnose_check", check)
         bd.run_diagnose_for_tenant("t1", "http://prom", timeout_sec=0.3)
         assert seen["at"][1] == pytest.approx(0.3 / 4)
@@ -327,7 +325,7 @@ class TestBatchDeadline:
             "t.yaml": b"tenants:\n  t1: {}\n  t2: {}\n"})
         cli_argv("batch_diagnose", "--tenants", "t1,t2", "--timeout", "1",
                  "--prometheus", "http://prom:9090", "--json")
-        assert bd.main() == 2
+        assert _lib_exitcodes.emit_result(bd.main()) == 2  # #3216
         assert _alive(stuck_kubectl) == []
         doc = json.loads(capsys.readouterr().out)
         for tenant in ("t1", "t2"):

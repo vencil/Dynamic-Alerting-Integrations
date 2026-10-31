@@ -20,7 +20,7 @@ from unittest.mock import patch
 import pytest
 
 import drift_detect as dd  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, emit_result, encode_json  # noqa: E402  (#3216)
 from _lib_confd import reset_warned_for_test  # noqa: E402
 
 
@@ -465,7 +465,7 @@ class TestOutputFormatting:
             [str(dir_a), str(dir_b)], labels=["A", "B"],
         )
         summary = dd.build_summary(reports)
-        output = dd.format_json_report(summary)
+        output = encode_json(summary)
         data = json.loads(output)
         assert data["pair_count"] == 1
         assert data["unexpected_drift"] > 0
@@ -516,7 +516,7 @@ class TestCLI:
         """預設 text 輸出。"""
         dir_a, dir_b = two_dirs
         cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--labels", "A,B")
-        dd.main()
+        emit_result(dd.main())
         out = capsys.readouterr().out
         assert "Cross-Cluster" in out
         assert "Unexpected" in out
@@ -525,7 +525,7 @@ class TestCLI:
         """--json 輸出 JSON。"""
         dir_a, dir_b = two_dirs
         cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--json")
-        dd.main()
+        emit_result(dd.main())
         out = capsys.readouterr().out
         data = json.loads(out)
         assert "pair_count" in data
@@ -534,7 +534,7 @@ class TestCLI:
         """--markdown 輸出 Markdown。"""
         dir_a, dir_b = two_dirs
         cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--markdown")
-        dd.main()
+        emit_result(dd.main())
         out = capsys.readouterr().out
         assert "# Cross-Cluster" in out
 
@@ -542,9 +542,7 @@ class TestCLI:
         """--ci 有 unexpected drift 時 exit 1。"""
         dir_a, dir_b = two_dirs
         cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--ci")
-        with pytest.raises(SystemExit) as exc_info:
-            dd.main()
-        assert exc_info.value.code == 1
+        assert emit_result(dd.main()) == 1  # #3216: returned, as run() exits with it
 
     def test_main_ci_success(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--ci 無 drift 時 exit 0。"""
@@ -556,7 +554,7 @@ class TestCLI:
         _write_yaml(d2, "db-a.yaml", "same: true")
         cli_argv("drift_detect", "--dirs", f"{d1},{d2}", "--ci")
         # Should not raise
-        dd.main()
+        emit_result(dd.main())
 
     def test_main_insufficient_dirs(self, tmp_path, monkeypatch, cli_argv):
         """只給 1 個目錄 → caller error (bad args)。"""
@@ -564,7 +562,7 @@ class TestCLI:
         d.mkdir()
         cli_argv("drift_detect", "--dirs", str(d))
         with pytest.raises(SystemExit) as exc_info:
-            dd.main()
+            emit_result(dd.main())
         assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_main_missing_dir(self, tmp_path, monkeypatch, cli_argv):
@@ -574,7 +572,7 @@ class TestCLI:
         cli_argv("drift_detect", "--dirs", f"{d},{tmp_path / 'nope'}")
         from _lib_exitcodes import CallerError  # rc 2 at run()'s exit (#3276)
         with pytest.raises(CallerError) as exc_info:
-            dd.main()
+            emit_result(dd.main())
         assert exc_info.value.reason == "dir_not_found"
         assert str(tmp_path / "nope") in str(exc_info.value)
         assert f"{d}:" not in str(exc_info.value)
@@ -584,7 +582,7 @@ class TestCLI:
         dir_a, dir_b = two_dirs
         cli_argv("drift_detect", "--dirs", f"{dir_a},{dir_b}", "--labels", "A,B,C")
         with pytest.raises(SystemExit) as exc_info:
-            dd.main()
+            emit_result(dd.main())
         assert exc_info.value.code == EXIT_CALLER_ERROR
 
 

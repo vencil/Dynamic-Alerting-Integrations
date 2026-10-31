@@ -23,6 +23,7 @@ from unittest.mock import patch
 import pytest
 
 import alert_quality as aq  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ── compute_noise_score ─────────────────────────────────────────
@@ -459,7 +460,7 @@ class TestMain:
         monkeypatch.setattr("sys.argv", [
             "alert_quality", "--prometheus", "http://prom", "--json",
         ])
-        aq.main()
+        emit_result(aq.main())
         out = capsys.readouterr().out
         data = json.loads(out)
         assert "summary" in data
@@ -473,7 +474,7 @@ class TestMain:
         monkeypatch.setattr("sys.argv", [
             "alert_quality", "--prometheus", "http://prom", "--markdown",
         ])
-        aq.main()
+        emit_result(aq.main())
         out = capsys.readouterr().out
         assert "## Alert Quality Report" in out
 
@@ -486,7 +487,7 @@ class TestMain:
             "alert_quality", "--prometheus", "http://prom", "--ci",
         ])
         # 應該正常結束，不 raise
-        aq.main()
+        emit_result(aq.main())
 
     def test_ci_mode_fails_on_bad(self, monkeypatch):
         """CI 模式：有 BAD 時 exit code 1。"""
@@ -504,9 +505,7 @@ class TestMain:
         monkeypatch.setattr("sys.argv", [
             "alert_quality", "--prometheus", "http://prom", "--ci",
         ])
-        with pytest.raises(SystemExit) as exc_info:
-            aq.main()
-        assert exc_info.value.code == 1
+        assert emit_result(aq.main()) == 1  # #3216: returned, as run() exits with it
 
     def test_invalid_period_exits(self, monkeypatch):
         """無效 period 字串應 exit 2 (caller error, #452)。"""
@@ -514,7 +513,7 @@ class TestMain:
             "alert_quality", "--prometheus", "http://prom", "--period", "xyz",
         ])
         with pytest.raises(SystemExit) as exc_info:
-            aq.main()
+            emit_result(aq.main())
         assert exc_info.value.code == 2  # EXIT_CALLER_ERROR (#452: bad --period arg)
 
     def test_tenant_filter(self, monkeypatch, capsys):
@@ -530,7 +529,7 @@ class TestMain:
             "alert_quality", "--prometheus", "http://prom",
             "--tenant", "db-a", "--json",
         ])
-        aq.main()
+        emit_result(aq.main())
         assert any("db-a" in q for q in queries_made)
 
 
@@ -581,7 +580,7 @@ class TestTenantWhitelistRejectsTrailingNewline:
             "alert_quality", "--prometheus", "http://prom", "--tenant", tenant,
         ])
         with pytest.raises(SystemExit) as exc_info:
-            aq.main()
+            emit_result(aq.main())
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
         assert "invalid tenant name" in err and "DNS-1123" in err, err
@@ -591,7 +590,7 @@ class TestTenantWhitelistRejectsTrailingNewline:
             "alert_quality", "--prometheus", "http://prom", "--tenant", "alpha\n",
         ])
         with pytest.raises(SystemExit) as exc_info:
-            aq.main()
+            emit_result(aq.main())
         assert exc_info.value.code == 2
         assert "invalid tenant name" in capsys.readouterr().err
 

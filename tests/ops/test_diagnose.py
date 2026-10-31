@@ -1,6 +1,5 @@
 """Tests for diagnose.py — tenant health check tool."""
 
-import io
 import json
 import os
 import sys
@@ -414,25 +413,23 @@ class TestCheck:
             ([], None),                                     # silent
         ]
 
-        diagnose.check("db-a", "http://prom:9090")
-        out = json.loads(capsys.readouterr().out)
+        out = diagnose.check("db-a", "http://prom:9090")
         assert out["status"] == "healthy"
         assert out["tenant"] == "db-a"
 
     @mock.patch("diagnose.pod_phase")
     @mock.patch("diagnose.query_prometheus")
-    def test_check_writes_to_the_given_stream_not_sys_stdout(
+    def test_check_writes_nothing_to_stdout(
         self, mock_qp, mock_pod, capsys,
     ):
-        """`out=` 讓呼叫端不必動到行程全域就能拿到文件。
+        """check() 交回文件、不寫 stdout（#3216：CLI 的文件由 run() 編碼寫出）。
 
-        ⛔ 這個 seam 存在的理由在 check() 的 docstring 裡：唯一的替代方案
-        `contextlib.redirect_stdout` 換的是行程全域的 `sys.stdout`，平行呼叫時
-        會把真 stdout 弄丟。batch_diagnose.py 曾經就是那個形狀。
+        ⛔ 理由在 check() 的 docstring 裡：呼叫端（batch-diagnose 的 worker
+        執行緒）因此不必捕捉 stdout；唯一的捕捉手段 `contextlib.redirect_stdout`
+        換的是行程全域的 `sys.stdout`，平行呼叫時會把真 stdout 弄丟。
 
-        兩個方向都斷言：文件**進了** buf，而且**沒有**同時漏到 stdout —— 少了
-        後半，一個「寫 buf 也寫 stdout」的實作會照樣通過，而那正是把行程全域
-        重新拖下水的寫法。
+        兩個方向都斷言：文件**交回來了**，而且**沒有**同時漏到 stdout ——
+        少了後半，一個「回傳也印出」的實作會照樣通過。
         """
         mock_pod.return_value = "Running"
         mock_qp.side_effect = [
@@ -442,12 +439,11 @@ class TestCheck:
             ([], None),                                     # silent
         ]
 
-        buf = io.StringIO()
         before = sys.stdout
-        diagnose.check("db-a", "http://prom:9090", out=buf)
+        doc = diagnose.check("db-a", "http://prom:9090")
 
-        assert json.loads(buf.getvalue())["tenant"] == "db-a"
-        assert capsys.readouterr().out == "", "帶了 out= 就不該再寫 stdout"
+        assert doc["tenant"] == "db-a"
+        assert capsys.readouterr().out == "", "check() 不得寫 stdout"
         assert sys.stdout is before, "check() 不得改動行程全域的 sys.stdout"
 
     @pytest.mark.parametrize("failing", ["maintenance", "silent"])
@@ -463,8 +459,7 @@ class TestCheck:
         if failing == "silent":
             side.append((None, "connection refused"))
         mock_qp.side_effect = side
-        doc = diagnose.check("db-a", "http://prom:9090")
-        out = json.loads(capsys.readouterr().out)
+        doc = out = diagnose.check("db-a", "http://prom:9090")
         assert out["status"] == "error", out
         assert out["operational_mode"] == "unknown", out
         assert any(i.startswith(diagnose.PROMETHEUS_FAILURE) for i in out["issues"]), out
@@ -478,8 +473,7 @@ class TestCheck:
         mock_pod.return_value = None
         mock_qp.side_effect = _mariadb_then(None, "query failed")
 
-        diagnose.check("db-a", "http://prom:9090")
-        out = json.loads(capsys.readouterr().out)
+        out = diagnose.check("db-a", "http://prom:9090")
         assert out["status"] == "error"
         assert "Pod not found" in out["issues"]
 
@@ -490,8 +484,7 @@ class TestCheck:
         logs.return_value = "ERROR log line\nERROR another"
         mock_qp.side_effect = _mariadb_then(None, "query failed")
 
-        diagnose.check("db-a", "http://prom:9090")
-        out = json.loads(capsys.readouterr().out)
+        out = diagnose.check("db-a", "http://prom:9090")
         assert out["status"] == "error"
         assert any("Pending" in i for i in out["issues"])
 
@@ -506,8 +499,7 @@ class TestCheck:
             ([], None),                       # silent
         ]
 
-        diagnose.check("db-a", "http://prom:9090")
-        out = json.loads(capsys.readouterr().out)
+        out = diagnose.check("db-a", "http://prom:9090")
         assert out["status"] == "error"
         assert any("Exporter" in i for i in out["issues"])
 
@@ -517,8 +509,7 @@ class TestCheck:
         mock_pod.return_value = "Running"
         mock_qp.side_effect = _mariadb_then(None, "connection refused")
 
-        diagnose.check("db-a", "http://prom:9090")
-        out = json.loads(capsys.readouterr().out)
+        out = diagnose.check("db-a", "http://prom:9090")
         assert out["status"] == "error"
         assert any("Prometheus" in i for i in out["issues"])
 
@@ -532,8 +523,7 @@ class TestCheck:
             ([{"value": [1700000000, "1"]}], None),        # maintenance active
         ]
 
-        diagnose.check("db-a", "http://prom:9090")
-        out = json.loads(capsys.readouterr().out)
+        out = diagnose.check("db-a", "http://prom:9090")
         assert out["status"] == "healthy"
         assert out["operational_mode"] == "maintenance"
 
@@ -551,8 +541,7 @@ class TestCheck:
             ], None),
         ]
 
-        diagnose.check("db-a", "http://prom:9090")
-        out = json.loads(capsys.readouterr().out)
+        out = diagnose.check("db-a", "http://prom:9090")
         assert out["operational_mode"] == "silent:all"
 
     @mock.patch("diagnose.pod_phase")
@@ -566,8 +555,7 @@ class TestCheck:
             ([{"metric": {"target_severity": "warning"}, "value": [1700000000, "1"]}], None),
         ]
 
-        diagnose.check("db-a", "http://prom:9090")
-        out = json.loads(capsys.readouterr().out)
+        out = diagnose.check("db-a", "http://prom:9090")
         assert out["operational_mode"] == "silent:warning"
 
     @mock.patch("diagnose.pod_phase")
@@ -589,8 +577,7 @@ class TestCheck:
         (tmp_path / "_profiles.yaml").write_text(
             yaml.safe_dump({"profiles": {"prod": {"mem": 90}}}), encoding="utf-8")
 
-        diagnose.check("db-a", "http://prom:9090", config_dir=str(tmp_path))
-        out = json.loads(capsys.readouterr().out)
+        out = diagnose.check("db-a", "http://prom:9090", config_dir=str(tmp_path))
         assert out["status"] == "healthy"
         assert out["profile"] == "prod"
         assert "inheritance_chain" in out
@@ -608,8 +595,7 @@ class TestCheck:
             ([], None),  # silent
         ]
 
-        diagnose.check("db-a", "http://prom:9090")
-        out = json.loads(capsys.readouterr().out)
+        out = diagnose.check("db-a", "http://prom:9090")
         assert out["status"] == "error"
         assert any("Metrics check failed" in i for i in out["issues"])
 
@@ -621,8 +607,7 @@ class TestCheck:
         logs.return_value = "2024-01-01 ERROR crash\n2024-01-01 INFO ok\n2024-01-01 ERROR oom"
         mock_qp.side_effect = _mariadb_then(None, "query failed")
 
-        diagnose.check("db-a", "http://prom:9090")
-        out = json.loads(capsys.readouterr().out)
+        out = diagnose.check("db-a", "http://prom:9090")
         assert out["status"] == "error"
         assert len(out["recent_logs"]) <= 3
         assert all("ERROR" in log for log in out["recent_logs"])
@@ -738,7 +723,7 @@ class TestProfileLookupSharesTheChainRead:
                 mock.patch.object(diagnose, "query_prometheus",
                                   return_value=([], None)):
             return diagnose.check("tx", "http://prom:9090",
-                                  config_dir=d, out=io.StringIO())
+                                  config_dir=d)
 
     def test_check_resolves_the_chain_once(self, tmp_path):
         """Counts `resolve_inheritance_chain` CALLS from `check()` — the
@@ -1028,8 +1013,7 @@ class TestSetTagReadAsTheExporterReadsIt:
                                return_value=(None, None)), \
                 mock.patch.object(diagnose, "query_prometheus",
                                   return_value=([], None)):
-            result = diagnose.check("tx", "http://prom:9090", config_dir=d,
-                                    out=io.StringIO())
+            result = diagnose.check("tx", "http://prom:9090", config_dir=d)
         assert result["status"] == "unchecked"
 
 
@@ -1190,16 +1174,15 @@ class TestGivenConfigDirIsNeverSilent:
                   "no-tenant": self._tree(tmp_path)}[case]
         want = diagnose.TenantNotFoundError if case == "no-tenant" else diagnose.CallerError
         with pytest.raises(want):
-            diagnose.check("db-z", "http://prom", config_dir=target, out=io.StringIO())
+            diagnose.check("db-z", "http://prom", config_dir=target)
         assert (asked == []) is (case != "no-tenant"), asked
         # must-fire control: the same check with the tenant the tree has
         if case == "no-tenant":
-            buf = io.StringIO()
-            doc = diagnose.check("db-a", "http://prom", config_dir=target, out=buf)
+            doc = diagnose.check("db-a", "http://prom", config_dir=target)
             assert "inheritance_chain" in doc, doc
 
     def test_check_takes_a_chain_or_a_dir_not_both(self, tmp_path):
         """#1525: batch-diagnose hands check() a chain it resolved once."""
         with pytest.raises(TypeError):
             diagnose.check("db-a", "http://prom", config_dir=self._tree(tmp_path),
-                           chain={}, out=io.StringIO())
+                           chain={})

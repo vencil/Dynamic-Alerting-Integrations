@@ -41,7 +41,6 @@ import _lib_parse_cache  # noqa: E402  (#2906: the single file through parse-tre
 from _lib_parse_tree import FileUnreadable, Timestamp  # noqa: E402
 from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
-    format_json_report,
     load_yaml_file,
     write_json_or_die,
 )
@@ -51,7 +50,7 @@ from _lib_tenant_values import (  # noqa: E402  (#2115)
     print_load_warnings,
 )
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
+    EXIT_CALLER_ERROR, EXIT_OK, Report, arm_crash_envelope,
 )
 
 # ---------------------------------------------------------------------------
@@ -415,17 +414,19 @@ def main():
     results = analyze_gaps(custom_metrics, metric_dict)
 
     # Output
-    if args.json:
-        print(format_json_report(results))
-        disarm_crash_envelope()  # the -o write below must not add a second document
-    else:
+    if not args.json:
         print_report(results)
 
     if args.output:
         # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
+        # Under --json it is written before the document goes out (#3216):
+        # an unwritable -o is then the envelope, not a document beside rc 2.
         write_json_or_die(args.output, results, flag="-o/--output")
         if not args.json:
             print(f"  JSON report: {args.output}")
+    if args.json:
+        return Report(results)  # #3216: run() encodes it
+    return EXIT_OK
 
 
 if __name__ == "__main__":

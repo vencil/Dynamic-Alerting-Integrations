@@ -81,7 +81,7 @@ except ImportError:
         return _nullcontext()
 
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, die_caller_error,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope, die_caller_error,
 )
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
@@ -835,27 +835,28 @@ def main():
     )
 
     if args.json:
-        print(json.dumps(report, indent=2, ensure_ascii=False))
+        # #3216: run() encodes it
+        return Report(report, EXIT_VIOLATION if report["validation"]["metric_mismatches"]
+                      else EXIT_CALLER_ERROR if report["status"] == "error" else EXIT_OK)
+    # Text output
+    if report["status"] == "success":
+        print(t("✓ 規則包分割成功", "✓ Rule packs split successfully"))
+        print(f"  {t('邊緣規則組', 'Edge rule groups')}: {report['validation']['edge_rules']}")
+        print(f"  {t('中央規則組', 'Central rule groups')}: {report['validation']['central_rules']}")
+        print(f"  {t('已處理檔案', 'Files processed')}: {len(report['processed_files'])}")
     else:
-        # Text output
-        if report["status"] == "success":
-            print(t("✓ 規則包分割成功", "✓ Rule packs split successfully"))
-            print(f"  {t('邊緣規則組', 'Edge rule groups')}: {report['validation']['edge_rules']}")
-            print(f"  {t('中央規則組', 'Central rule groups')}: {report['validation']['central_rules']}")
-            print(f"  {t('已處理檔案', 'Files processed')}: {len(report['processed_files'])}")
-        else:
-            print(t("✗ 發生錯誤", "✗ Error occurred"))
-            for error in report["errors"]:
-                print(f"  ERROR: {error}")
+        print(t("✗ 發生錯誤", "✗ Error occurred"))
+        for error in report["errors"]:
+            print(f"  ERROR: {error}")
 
-        if report["warnings"]:
-            for warning in report["warnings"]:
-                print(f"  WARN: {warning}")
+    if report["warnings"]:
+        for warning in report["warnings"]:
+            print(f"  WARN: {warning}")
 
-        if report["validation"]["metric_mismatches"]:
-            print(t("\n⚠ 指標不匹配:", "\n⚠ Metric mismatches:"))
-            for mismatch in report["validation"]["metric_mismatches"]:
-                print(f"  {mismatch['file']}: {mismatch['missing_in_edge']}")
+    if report["validation"]["metric_mismatches"]:
+        print(t("\n⚠ 指標不匹配:", "\n⚠ Metric mismatches:"))
+        for mismatch in report["validation"]["metric_mismatches"]:
+            print(f"  {mismatch['file']}: {mismatch['missing_in_edge']}")
 
     # Exit codes
     if report["validation"]["metric_mismatches"]:

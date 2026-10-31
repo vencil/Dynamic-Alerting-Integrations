@@ -28,12 +28,11 @@ import argparse
 import contextlib
 import contextvars
 import inspect
-import json
 import os
 import sys
 import time
 from pathlib import Path
-from typing import NamedTuple, TextIO
+from typing import NamedTuple
 
 # Add script dir to path for lib imports
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -42,9 +41,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import detect_cli_lang, add_prometheus_arg  # noqa: E402
 # #3133: the lib's raising reader (shape checked, samples read once).
 from _lib_prometheus import QueryError, prometheus_instant  # noqa: E402
-from _lib_python import format_json_report  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope)
 from _lib_paths import require_dir  # noqa: E402  (#3276 / #3392)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_kubectl import KubectlError, kubectl_list, kubectl_logs  # noqa: E402  (#3349)
@@ -506,25 +504,20 @@ def _format_chain_summary(inheritance):
 
 
 def check(tenant: str, prom_url: str, config_dir: str | None = None,
-          *, out: TextIO | None = None, chain: dict | None = None) -> dict:
-    """Emit one JSON health document for `tenant`.
+          *, chain: dict | None = None) -> dict:
+    """The JSON health document for `tenant`.
 
     `chain` is the tenant's chain already resolved (`chain_for`), in place of
     `config_dir`: batch-diagnose reads its tree once for every tenant (#1525).
     Giving both is a programming error (`TypeError`).
 
-    ⛔ `out` exists because the caller may need the document WITHOUT touching
-    process-global state. `contextlib.redirect_stdout` rebinds `sys.stdout` for
-    the whole process, so two threads capturing concurrently can restore each
-    other's buffer and leave the real stdout permanently replaced — the process
-    then exits 0 having written nothing at all. batch_diagnose.py ran exactly
-    that shape; test_check_writes_to_the_given_stream_not_sys_stdout pins the
-    seam that replaced it.
-
-    ⚠️ Resolved at CALL time, not as a default argument value: binding
-    `sys.stdout` at def time would freeze the stream pytest's capsys swaps in.
-
-    Returns the document it printed, so the CLI can derive its exit code.
+    ⛔ Returned, never printed (#3216): the CLI hands it to run() to encode,
+    batch-diagnose takes it as it is. Nothing here writes stdout, so a caller
+    on a worker thread needs no capture — `contextlib.redirect_stdout`
+    rebinds the PROCESS-GLOBAL `sys.stdout`, and two threads capturing
+    concurrently left the real stdout replaced for good (the process exited
+    0 having written nothing; batch_diagnose.py ran exactly that shape).
+    test_check_writes_nothing_to_stdout pins it.
     """
     if chain is not None and config_dir is not None:
         raise TypeError("check(): pass config_dir or chain, not both")
@@ -605,8 +598,6 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
     profile_name = inheritance["profile_name"] if inheritance else None
 
     # 5. 輸出結果 (Token Saving 核心：正常時只回傳極簡 JSON)
-    stream = sys.stdout if out is None else out
-
     if not errors:
         # Skipped checks are not a pass: a tenant whose Pod and exporter were
         # never looked at must not read as healthy (issue 1513). `unchecked`
@@ -621,7 +612,6 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
             result["inheritance_chain"] = _format_chain_summary(inheritance)
         if skipped:
             result["skipped"] = skipped
-        print(json.dumps(result), file=stream)
     else:
         # 只有異常時，嘗試抓取最近的 error log（MariaDB 的 deploy 名稱）
         # #2968: an extra the findings above do not depend on — a log read that
@@ -653,14 +643,13 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
             result["inheritance_chain"] = _format_chain_summary(inheritance)
         if skipped:
             result["skipped"] = skipped
-        print(json.dumps(result, ensure_ascii=False), file=stream)
     return result
 
 
 @exit_on_yaml_file_error  # #1654: a file that does not decode → rc 2, named
 @exit_on_served_values_error  # #2526: da-guard missing or failing → rc 2, named
 @_lib_parse_cache.exit_on_parse_tree_error  # #2906: no usable parse-tree → rc 2
-def main() -> None:
+def main() -> Report:
     parser = argparse.ArgumentParser(
         description=_h('description'),
     )
@@ -670,8 +659,8 @@ def main() -> None:
                         help=_h('config_dir'))
     parser.add_argument("--show-inheritance", action="store_true",
                         help=_h('show_inheritance'))
-    # #452 Track C: diagnose emits JSON by design (consumers like
-    # scripts/tools/ops/batch_diagnose.py json.loads its stdout). --json is
+    # #452 Track C: diagnose emits JSON by design (consumers parse its
+    # stdout as JSON). --json is
     # the default, accepted explicitly so the documented
     # `da-tools diagnose ... --json | jq` idiom works and matches the
     # convention required of new subcommands (see dev-rules.md).
@@ -695,8 +684,7 @@ def main() -> None:
         # exporter's load drops, exits 2 through the decorators on main();
         # #1524: so does a tree without the tenant (TenantNotFoundError).
         inheritance = resolve_inheritance_chain(args.tenant, args.config_dir)
-        print(format_json_report(inheritance, default=str))
-        sys.exit(EXIT_OK)
+        return Report(inheritance, EXIT_OK)  # #3216: run() encodes it
 
     try:
         result = check(args.tenant, args.prometheus, config_dir=args.config_dir)
@@ -713,8 +701,8 @@ def main() -> None:
               "that answers", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
     # issue 1513: `status: error` used to exit 0, so `da-tools diagnose t && …`
-    # passed on an unhealthy tenant.
-    sys.exit(exit_code(result))
+    # passed on an unhealthy tenant. #3216: run() encodes the document.
+    return Report(result, exit_code(result))
 
 
 if __name__ == "__main__":

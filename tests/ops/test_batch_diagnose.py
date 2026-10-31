@@ -21,6 +21,7 @@ import pytest
 import _lib_kubectl  # noqa: E402
 from _kubectl_fake import kubectl_run  # noqa: E402  (#3349)
 import batch_diagnose as bd  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 from _lib_tenant_values import DaGuardError, DaGuardNotFoundError  # noqa: E402
 from _go_refusal import refuses  # noqa: E402  (#3206: the shared refusal)
 
@@ -440,25 +441,18 @@ class TestRunDiagnoseForTenant:
     """run_diagnose_for_tenant() 單租戶診斷。"""
 
     def test_healthy_result(self, monkeypatch):
-        """正常診斷回傳 JSON 結果。"""
-        def mock_check(tenant, prom_url, *, out, chain=None):
-            out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
+        """正常診斷回傳 check() 交回的文件（#3216：不再經 stdout 往返）。"""
+        def mock_check(tenant, prom_url, *, chain=None):
+            return {"tenant": tenant, "status": "healthy"}
         monkeypatch.setattr(bd, "diagnose_check", mock_check)
         result = bd.run_diagnose_for_tenant("db-a", "http://prom")
         assert result["tenant"] == "db-a"
         assert result["status"] == "healthy"
         assert "elapsed_seconds" in result
 
-    def test_empty_output(self, monkeypatch):
-        """空輸出回傳 error 狀態。"""
-        monkeypatch.setattr(bd, "diagnose_check", lambda t, p, *, out, chain=None: None)
-        result = bd.run_diagnose_for_tenant("db-a", "http://prom")
-        assert result["status"] == "error"
-        assert "empty output" in result["issues"][0]
-
     def test_exception_caught(self, monkeypatch):
         """例外回傳 error 狀態。"""
-        def mock_check(tenant, prom_url, *, out, chain=None):
+        def mock_check(tenant, prom_url, *, chain=None):
             raise OSError("connection refused")
         monkeypatch.setattr(bd, "diagnose_check", mock_check)
         result = bd.run_diagnose_for_tenant("db-a", "http://prom")
@@ -480,9 +474,9 @@ class TestRunDiagnoseForTenant:
         """
         seen = []
 
-        def mock_check(tenant, prom_url, *, out, chain=None):
+        def mock_check(tenant, prom_url, *, chain=None):
             seen.append(sys.stdout)
-            out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
+            return {"tenant": tenant, "status": "healthy"}
 
         monkeypatch.setattr(bd, "diagnose_check", mock_check)
         before = sys.stdout
@@ -531,7 +525,7 @@ class TestMainCLI:
         """
         cli_argv("batch_diagnose", "--tenants", "db-a,db-b",
             "--prometheus", "http://prom:9090", "--dry-run")
-        bd.main()
+        emit_result(bd.main())
         err = capsys.readouterr().err
         assert "db-a" in err
         assert "db-b" in err
@@ -540,7 +534,7 @@ class TestMainCLI:
     def test_dry_run_single(self, monkeypatch, capsys, cli_argv):
         """--dry-run 列出 tenant 但不執行檢查（清單走 stderr，#1112）。"""
         cli_argv("batch_diagnose", "--tenants", "db-a", "--dry-run")
-        bd.main()
+        emit_result(bd.main())
         err = capsys.readouterr().err
         assert "db-a" in err
         assert "dry-run" in err.lower() or "without --dry-run" in err
@@ -561,7 +555,7 @@ class TestMainCLI:
         """
         cli_argv("batch_diagnose", "--tenants", "db-a,db-b",
             "--prometheus", "http://prom:9090", "--dry-run", "--json")
-        bd.main()
+        emit_result(bd.main())
         captured = capsys.readouterr()
 
         doc = json.loads(captured.out)          # 全文 parse ⇒ stdout 只有 JSON
@@ -597,7 +591,7 @@ class TestMainCLI:
         monkeypatch.setattr(bd, "read_configmap_files",
                             lambda **kw: {"_defaults.yaml": _DEFAULTS.encode()})
         with pytest.raises(SystemExit) as exc_info:
-            bd.main()
+            emit_result(bd.main())
         assert exc_info.value.code == 2  # EXIT_CALLER_ERROR (#452: no tenants found)
 
     def test_each_tenant_carries_its_chain_from_the_configmap(self, monkeypatch, capsys,
@@ -609,7 +603,7 @@ class TestMainCLI:
         monkeypatch.setattr(diagnose, "query_prometheus", lambda *a: ([], None))
         cli_argv("batch_diagnose", "--tenants", "db-a,db-b",
                  "--prometheus", "http://prom:9090", "--json")
-        assert bd.main() == 0
+        assert emit_result(bd.main()) == 0
         doc = json.loads(capsys.readouterr().out)
         for t in ("db-a", "db-b"):
             chain = doc["tenants"][t]["inheritance_chain"]
@@ -625,7 +619,7 @@ class TestMainCLI:
         monkeypatch.setattr(bd, "run_diagnose_for_tenant", lambda *a, **k: ran.append(a))
         cli_argv("batch_diagnose", "--prometheus", "http://prom:9090", "--json")
         with refuses("zzz.yaml"):
-            bd.main()
+            emit_result(bd.main())
         assert ran == []
 
     def test_a_named_tenant_the_configmap_lacks_exits_2(self, monkeypatch, cli_argv, capsys):
@@ -634,7 +628,7 @@ class TestMainCLI:
         cli_argv("batch_diagnose", "--tenants", "db-a,nope", "--namespace", "ops", "--json")
         with pytest.raises(bd.TenantNotFoundError,
                            match="'nope' in ConfigMap ops/threshold-config"):
-            bd.main()
+            emit_result(bd.main())
         assert ran == []
 
     def test_a_tenant_named_twice_is_checked_once(self, monkeypatch, cli_argv, capsys):
@@ -642,14 +636,14 @@ class TestMainCLI:
         monkeypatch.setattr(bd, "run_diagnose_for_tenant",
                             lambda t, *a, **k: ran.append(t) or {"tenant": t, "status": "healthy"})
         cli_argv("batch_diagnose", "--tenants", "db-a,db-a,db-b", "--json")
-        assert bd.main() == 0
+        assert emit_result(bd.main()) == 0
         assert sorted(ran) == ["db-a", "db-b"]
 
     def test_a_tenants_flag_naming_none_exits(self, cli_argv):
         """`--tenants ,` names no tenant: not read as "every tenant"."""
         cli_argv("batch_diagnose", "--tenants", ",", "--dry-run")
         with pytest.raises(SystemExit) as exc_info:
-            bd.main()
+            emit_result(bd.main())
         assert exc_info.value.code == 2
 
     def test_json_output(self, monkeypatch, capsys, cli_argv):
@@ -663,7 +657,7 @@ class TestMainCLI:
 
         monkeypatch.setattr(bd, "run_diagnose_for_tenant",
                             mock_run_for_tenant)
-        bd.main()
+        emit_result(bd.main())
         out = capsys.readouterr().out
         data = json.loads(out)
         assert data["health_score"] == 1.0
@@ -680,7 +674,7 @@ class TestMainCLI:
 
         monkeypatch.setattr(bd, "run_diagnose_for_tenant",
                             mock_run_for_tenant)
-        bd.main()
+        emit_result(bd.main())
         out = capsys.readouterr().out
         assert "Health Score" in out
         assert "db-a" in out
@@ -698,7 +692,7 @@ class TestMainCLI:
 
         monkeypatch.setattr(bd, "run_diagnose_for_tenant",
                             mock_run_for_tenant)
-        bd.main()
+        emit_result(bd.main())
         assert out_file.exists()
         data = json.loads(out_file.read_text(encoding="utf-8"))
         assert data["total_tenants"] == 1
@@ -713,7 +707,7 @@ class TestMainCLI:
 
         monkeypatch.setattr(bd, "run_diagnose_for_tenant",
                             mock_run_for_tenant)
-        bd.main()
+        emit_result(bd.main())
         out = capsys.readouterr().out
         data = json.loads(out)
         assert data["issue_count"] == 1
@@ -722,7 +716,7 @@ class TestMainCLI:
         """不指定 --tenants 時自動探索（清單走 stderr，#1112）。"""
         cli_argv("batch_diagnose", "--prometheus", "http://prom:9090",
             "--dry-run")
-        bd.main()
+        emit_result(bd.main())
         err = capsys.readouterr().err
         assert "db-a" in err
         assert "db-b" in err
@@ -742,7 +736,7 @@ class TestMainCLI:
             return {"tenant": tenant, "status": "healthy", "elapsed_seconds": 0.1}
 
         monkeypatch.setattr(bd, "run_diagnose_for_tenant", mock_run)
-        bd.main()
+        emit_result(bd.main())
         assert captured["url"] == "http://test:1234"
 
     def test_prometheus_env_unset_fallback_localhost(self, monkeypatch, cli_argv):
@@ -756,7 +750,7 @@ class TestMainCLI:
             return {"tenant": tenant, "status": "healthy", "elapsed_seconds": 0.1}
 
         monkeypatch.setattr(bd, "run_diagnose_for_tenant", mock_run)
-        bd.main()
+        emit_result(bd.main())
         assert captured["url"] == "http://localhost:9090"
 
 
@@ -899,12 +893,12 @@ class TestExitCode:
             bd, "run_diagnose_for_tenant",
             lambda tenant, prom_url, timeout=30, chain=None: {"tenant": tenant,
                                                   **by_tenant[tenant]})
-        assert bd.main() == want
+        assert emit_result(bd.main()) == want
         json.loads(capsys.readouterr().out)   # the report is still printed
 
     def test_dry_run_still_exits_zero(self, cli_argv, capsys):
         cli_argv("batch_diagnose", "--tenants", "t1", "--dry-run")
-        assert bd.main() == 0
+        assert emit_result(bd.main()) == 0
 
     def test_the_process_exit_code_carries_it(self, tmp_path):
         """端到端：票上的重現指令，Prometheus 連不上必須是 rc 2，不是 0。"""
@@ -923,12 +917,12 @@ class TestExitCode:
     def test_missing_kubectl_is_2_as_in_diagnose(self, monkeypatch, capsys,
                                                  cli_argv):
         """`da-tools diagnose` alone exits 2 without kubectl; batch must too."""
-        def no_kubectl(tenant, prom_url, out=None, chain=None):
+        def no_kubectl(tenant, prom_url, chain=None):
             raise bd.KubectlError("`kubectl get pods` in namespace 't1': kubectl is not on PATH")
         monkeypatch.setattr(bd, "diagnose_check", no_kubectl)
         cli_argv("batch_diagnose", "--tenants", "t1",
                  "--prometheus", "http://prom:9090", "--json")
-        assert bd.main() == 2
+        assert emit_result(bd.main()) == 2
         doc = json.loads(capsys.readouterr().out)
         assert doc["tenants"]["t1"]["status"] == "error"
         assert "_environment_error" not in doc["tenants"]["t1"]
@@ -937,14 +931,14 @@ class TestExitCode:
         cli_argv("batch_diagnose", "--tenants", "t1", "--workers", "0",
                  "--prometheus", "http://prom:9090")
         with pytest.raises(SystemExit) as exc:
-            bd.main()
+            emit_result(bd.main())
         assert exc.value.code == 2
 
     def test_workers_must_be_an_integer(self, cli_argv, capsys):
         cli_argv("batch_diagnose", "--tenants", "t1", "--workers", "abc",
                  "--prometheus", "http://prom:9090")
         with pytest.raises(SystemExit) as exc:
-            bd.main()
+            emit_result(bd.main())
         assert exc.value.code == 2
         # argparse alone would say "invalid positive_int value"; name the problem.
         assert "not an integer: 'abc'" in capsys.readouterr().err
@@ -956,7 +950,7 @@ class TestExitCode:
         monkeypatch.setattr(bd, "run_diagnose_for_tenant",
                             lambda tenant, prom_url, timeout=30, chain=None:
                             {"tenant": tenant, "status": "healthy"})
-        assert bd.main() == 0
+        assert emit_result(bd.main()) == 0
         json.loads(capsys.readouterr().out)
 
 
@@ -1011,9 +1005,9 @@ class TestPerTenantTimeout:
 
     @staticmethod
     def _slow(seconds):
-        def check(tenant, prom_url, *, out, chain=None):
+        def check(tenant, prom_url, *, chain=None):
             time.sleep(seconds)
-            out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
+            return {"tenant": tenant, "status": "healthy"}
         return check
 
     def test_a_check_past_its_deadline_is_cut_off(self, monkeypatch):
@@ -1034,7 +1028,7 @@ class TestPerTenantTimeout:
     def test_an_unexpected_exception_still_reaches_main(self, monkeypatch):
         """Moving the check into a thread must not swallow what main() used to
         catch from future.result() ("executor error")."""
-        def boom(tenant, prom_url, *, out, chain=None):
+        def boom(tenant, prom_url, *, chain=None):
             raise RuntimeError("boom")
         monkeypatch.setattr(bd, "diagnose_check", boom)
         with pytest.raises(RuntimeError, match="boom"):
@@ -1049,7 +1043,7 @@ class TestPerTenantTimeout:
         cli_argv("batch_diagnose", "--tenants", "t1", "--timeout", "0.3",
                  "--prometheus", "http://prom:9090", "--json")
         start = time.monotonic()
-        assert bd.main() == 2
+        assert emit_result(bd.main()) == 2
         assert time.monotonic() - start < 2
         doc = json.loads(capsys.readouterr().out)
         assert doc["tenants"]["t1"]["status"] == "error"
@@ -1060,7 +1054,7 @@ class TestPerTenantTimeout:
         cli_argv("batch_diagnose", "--tenants", "t1", "--timeout", value,
                  "--prometheus", "http://prom:9090")
         with pytest.raises(SystemExit) as exc:
-            bd.main()
+            emit_result(bd.main())
         assert exc.value.code == 2
         assert "--timeout" in capsys.readouterr().err
 

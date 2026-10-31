@@ -31,7 +31,7 @@ import sys
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
-from _lib_python import format_json_report, probe_health, add_prometheus_arg  # noqa: E402
+from _lib_python import probe_health, add_prometheus_arg  # noqa: E402
 # #3133: every answer is checked by the lib (prometheus_instant's shape
 # check, one count reading); a query not answered is a failed check, never
 # a missing one or an advisory.
@@ -39,7 +39,7 @@ from _lib_prometheus import (  # noqa: E402
     QueryError, alertmanager_alerts, alertmanager_silences, alertmanager_status,
     instant_or_error, prometheus_rules, vector_count, vector_sample)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
 # #1132 structural check is the SINGLE implementation in _grar_validate.py (the
 # generator's fail-closed invariant); reuse it here so the BYO runtime check and
 # the generation-time guard can never disagree on "is this equal-label gated".
@@ -912,21 +912,18 @@ def main():
         else:
             format_output(target, checks)
 
+    # #452/#737: caller-error (cannot reach Prometheus/AM, query/API failed)
+    # wins over violation — the tool could not do its job.
     if args.json:
-        output = {
+        return Report({  # #3216: run() encodes it
             "tool": "byo-check",
             "status": "fail" if has_failure else "pass",
             "sections": all_results,
-        }
-        print(format_json_report(output))
+        }, EXIT_CALLER_ERROR if caller_error else EXIT_VIOLATION if has_failure else EXIT_OK)
 
-    if not args.json:
-        print(f"\n{'='*60}")
-        print(f"  Overall: {'FAIL' if has_failure else 'PASS'}")
-        print(f"{'='*60}\n")
-
-    # #452/#737: caller-error (cannot reach Prometheus/AM, query/API failed)
-    # wins over violation — the tool could not do its job.
+    print(f"\n{'='*60}")
+    print(f"  Overall: {'FAIL' if has_failure else 'PASS'}")
+    print(f"{'='*60}\n")
     if caller_error:
         sys.exit(EXIT_CALLER_ERROR)
     sys.exit(EXIT_VIOLATION if has_failure else EXIT_OK)

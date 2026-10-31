@@ -14,6 +14,7 @@ REPO_ROOT = os.path.dirname(TESTS_DIR)
 sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools", "ops"))
 
 import alert_correlate as ac  # noqa: E402
+from _lib_exitcodes import emit_result, encode_json  # noqa: E402  (#3216: run()'s step, its encoder)
 
 
 # ---------------------------------------------------------------------------
@@ -337,7 +338,7 @@ class TestOutputFormatting:
         assert "No correlated" in text
 
     def test_json_format(self, report):
-        text = ac.format_json_report(report)
+        text = encode_json(report)
         data = json.loads(text)
         assert data["cluster_count"] >= 1
 
@@ -405,7 +406,7 @@ class TestCLI:
         p = tmp_path / "alerts.json"
         p.write_text(json.dumps(data), encoding="utf-8")
         cli_argv("alert_correlate", "--input", str(p), "--json")
-        ac.main()
+        emit_result(ac.main())
         out = capsys.readouterr().out
         report = json.loads(out)
         assert report["total_alerts"] == 2
@@ -414,7 +415,7 @@ class TestCLI:
         cli_argv("alert_correlate", "--prometheus", "http://fake:9090")
         monkeypatch.setattr(ac, "load_alerts_from_alertmanager",
                             lambda *a, **k: [])
-        ac.main()
+        emit_result(ac.main())
         out = capsys.readouterr().out
         assert "No correlated" in out
 
@@ -425,7 +426,7 @@ class TestCLI:
         captured = []
         monkeypatch.setattr(ac, "load_alerts_from_alertmanager",
                             lambda url, *a, **k: (captured.append(url), [])[1])
-        ac.main()
+        emit_result(ac.main())
         assert captured[0] == "http://env-prom:9090"
 
     def test_main_empty_env_falls_back_to_localhost(self, monkeypatch, capsys,
@@ -440,13 +441,13 @@ class TestCLI:
         captured = []
         monkeypatch.setattr(ac, "load_alerts_from_alertmanager",
                             lambda url, *a, **k: (captured.append(url), [])[1])
-        ac.main()
+        emit_result(ac.main())
         assert captured[0] == "http://localhost:9090"
 
     def test_main_invalid_window(self, monkeypatch, cli_argv):
         cli_argv("alert_correlate", "--window", "invalid")
         with pytest.raises(SystemExit) as exc_info:
-            ac.main()
+            emit_result(ac.main())
         assert exc_info.value.code == 2  # EXIT_CALLER_ERROR (#452: bad --window arg)
 
     def test_main_ci_mode_critical(self, monkeypatch, tmp_path, cli_argv):
@@ -464,9 +465,7 @@ class TestCLI:
         p = tmp_path / "alerts.json"
         p.write_text(json.dumps(data), encoding="utf-8")
         cli_argv("alert_correlate", "--input", str(p), "--ci")
-        with pytest.raises(SystemExit) as exc_info:
-            ac.main()
-        assert exc_info.value.code == 1
+        assert emit_result(ac.main()) == 1  # #3216: returned, as run() exits with it
 
     def test_main_markdown(self, monkeypatch, capsys, tmp_path, cli_argv):
         data = [
@@ -478,7 +477,7 @@ class TestCLI:
         p = tmp_path / "alerts.json"
         p.write_text(json.dumps(data), encoding="utf-8")
         cli_argv("alert_correlate", "--input", str(p), "--markdown")
-        ac.main()
+        emit_result(ac.main())
         out = capsys.readouterr().out
         assert "# Alert Correlation Report" in out
 
@@ -534,4 +533,4 @@ class TestLoaderReadsThroughTheLib:
         monkeypatch.setattr(lp, "http_get_json", _route((None, "refused"), (None, "refused")))
         monkeypatch.setattr(sys, "argv", ["alert_correlate", "--prometheus", "http://prom:9090"])
         with pytest.raises(lp.QueryError):
-            ac.main()  # uncaught here; run() turns it into rc 2 (test_query_error pins that)
+            emit_result(ac.main())  # uncaught here; run() turns it into rc 2 (test_query_error pins that)

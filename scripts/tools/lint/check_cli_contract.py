@@ -352,7 +352,9 @@ def reachable_exit_codes(source: str) -> ExitCodes:
     arms), a module-level name bound to an int literal, or a module-level
     function whose own ``return`` statements resolve by the same rules
     (``sys.exit(main())``, and ``_lib_exitcodes.run(main)``, which exits with
-    main's return value the same way). Anything else is
+    main's return value the same way), or a ``Report(doc[, status])`` — the
+    ``--json`` document handed to ``run()``, which exits with its *status*
+    (0 when omitted, #3216). Anything else is
     undecidable and disclosed with its line. argparse's own rc 2 is not looked
     for here: the caller adds it for every command that HAS a parser.
     """
@@ -387,6 +389,10 @@ def reachable_exit_codes(source: str) -> ExitCodes:
         elif isinstance(expr, ast.IfExp):
             _resolve_expr(expr.body, line, depth)
             _resolve_expr(expr.orelse, line, depth)
+        elif isinstance(expr, ast.Call) and ast.unparse(expr.func).split(".")[-1] == "Report":
+            status = expr.args[1] if len(expr.args) > 1 else next(
+                (k.value for k in expr.keywords if k.arg == "status"), None)
+            _resolve_expr(status, line, depth)  # None: Report's default, 0
         elif isinstance(expr, ast.Call) and isinstance(expr.func, ast.Name) \
                 and expr.func.id in funcs and depth < 3:
             for ret in _own_returns(funcs[expr.func.id]):

@@ -13,6 +13,17 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import byo_check as bc  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _exit_code(main, *args):
+    """`main()`'s exit the way `run()` ends it (#3216): a returned Report's
+    document is written and its status is the code, a `SystemExit` gives
+    its own."""
+    try:
+        return emit_result(main(*args))
+    except SystemExit as exc:
+        return exc.code
 
 
 # ---------------------------------------------------------------------------
@@ -293,10 +304,9 @@ class TestMain:
 
         with patch("urllib.request.urlopen", side_effect=OSError("refused")):
             with patch("sys.argv", ["byo_check.py", "prometheus", "--json"]):
-                with pytest.raises(SystemExit) as exc_info:
-                    bc.main()
+                rc = _exit_code(bc.main)
         # #452/#737: unreachable Prometheus = transport caller-error → exit 2
-        assert exc_info.value.code == 2
+        assert rc == 2
         output = json.loads(capsys.readouterr().out)
         assert output["tool"] == "byo-check"
         assert output["status"] == "fail"
@@ -304,10 +314,9 @@ class TestMain:
     def test_all_target(self):
         with patch("urllib.request.urlopen", side_effect=OSError("refused")):
             with patch("sys.argv", ["byo_check.py", "all", "--json"]):
-                with pytest.raises(SystemExit) as exc_info:
-                    bc.main()
+                rc = _exit_code(bc.main)
         # #452/#737: unreachable endpoints = transport caller-error → exit 2
-        assert exc_info.value.code == 2
+        assert rc == 2
 
 
 # ---------------------------------------------------------------------------
@@ -526,8 +535,7 @@ class TestPrometheusEnvFallback:
 
         monkeypatch.setattr(bc, "check_prometheus", fake_check_prometheus)
         monkeypatch.setattr(sys, "argv", argv)
-        with pytest.raises(SystemExit):
-            bc.main()
+        _exit_code(bc.main)
         return captured["url"]
 
     def test_uses_env_when_flag_absent(self, monkeypatch):
@@ -1350,9 +1358,8 @@ class TestAnswersReadByTheLib:
         monkeypatch.setattr(sys, "argv", ["byo_check", "alertmanager", "--json"])
         with patch("urllib.request.urlopen", return_value=_healthy()):
             with _patch_http(_mock_http_get_json(mapping)):
-                with pytest.raises(SystemExit) as exc:
-                    bc.main()
-        assert exc.value.code == 2
+                rc = _exit_code(bc.main)
+        assert rc == 2
 
 
 class TestEveryCountIsReadByTheLib:

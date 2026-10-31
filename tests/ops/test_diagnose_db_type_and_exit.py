@@ -45,11 +45,8 @@ def _router(db_type="mariadb", up="1", fail=()):
 
 
 def _check(**kw):
-    import io
-    buf = io.StringIO()
-    result = diagnose.check("t1", "http://prom:9090", out=buf)
-    assert json.loads(buf.getvalue()) == result
-    return result
+    # #3216: check() returns the document; the CLI's run() encodes it.
+    return diagnose.check("t1", "http://prom:9090")
 
 
 @pytest.mark.parametrize("db_type,reason_word", [

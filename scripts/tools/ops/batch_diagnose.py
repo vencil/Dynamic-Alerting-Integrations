@@ -31,7 +31,6 @@ import argparse
 import base64
 import binascii
 import contextlib
-import json
 import os
 import sys
 import re
@@ -55,12 +54,12 @@ from _lib_kubectl import KubectlError, kubectl_get  # noqa: E402  (#3349)
 from diagnose import CommandTimeoutError, DEADLINE_GRACE_S  # noqa: E402  (#2968)
 from diagnose import deadline as diagnose_deadline  # noqa: E402  (#2968)
 from _lib_python import (  # noqa: E402
-    add_prometheus_arg, format_json_report, positive_int, positive_seconds,
+    add_prometheus_arg, positive_int, positive_seconds,
     write_json_or_die,
 )
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError,
-    arm_crash_envelope, disarm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report,
+    arm_crash_envelope,
 )
 import _lib_parse_cache  # noqa: E402  (#1525: exit_on_parse_tree_error)
 import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 9: Go classes the key names)
@@ -189,24 +188,16 @@ def _check_tenant(tenant, prom_url, chain=None):
     """diagnose.check() for one tenant, as a result dict (never raises for the
     failures diagnose itself can report). *chain*: the tenant's chain,
     already resolved (`resolve_tenants`)."""
-    import io
-
     try:
-        # ⛔ Ask check() to write into OUR buffer. Do NOT reach for
-        # `contextlib.redirect_stdout`: it rebinds the PROCESS-GLOBAL
-        # `sys.stdout`, and this function runs in a ThreadPoolExecutor worker.
-        # With two tenants the interleaving "A enters, B enters, A exits,
-        # B exits" makes B restore A's buffer, so the real stdout is gone for
-        # good and main()'s JSON report lands in a dead StringIO — the process
-        # exits 0 having printed nothing. Measured before this fix: 91 of 100
-        # runs of `batch_diagnose --tenants a,b --json` produced empty stdout.
-        buf = io.StringIO()
-        diagnose_check(tenant, prom_url, out=buf, chain=chain)
-        output = buf.getvalue().strip()
-        if output:
-            result = json.loads(output)
-        else:
-            result = {"status": "error", "tenant": tenant, "issues": ["empty output"]}
+        # ⛔ check() returns its document and writes nothing to stdout
+        # (#3216). Do NOT capture stdout here with `contextlib.redirect_stdout`:
+        # it rebinds the PROCESS-GLOBAL `sys.stdout`, and this function runs in
+        # a ThreadPoolExecutor worker. With two tenants the interleaving "A
+        # enters, B enters, A exits, B exits" makes B restore A's buffer, so the
+        # real stdout is gone for good and main()'s JSON report lands in a dead
+        # StringIO — the process exits 0 having printed nothing. Measured: 91 of
+        # 100 runs of `batch_diagnose --tenants a,b --json` produced empty stdout.
+        result = diagnose_check(tenant, prom_url, chain=chain)
     except (KubectlError, CommandTimeoutError) as exc:
         # `da-tools diagnose` alone exits 2 on these (the environment lacks
         # kubectl, or it did not answer in time), not 1; keep the same class
@@ -214,7 +205,7 @@ def _check_tenant(tenant, prom_url, chain=None):
         # CommandTimeoutError would otherwise fall into.
         result = {"status": "error", "tenant": tenant, "issues": [str(exc)],
                   "_environment_error": True}
-    except (OSError, json.JSONDecodeError, ValueError) as exc:
+    except (OSError, ValueError) as exc:
         result = {"status": "error", "tenant": tenant, "issues": [str(exc)]}
     return result
 
@@ -491,8 +482,8 @@ def main():
             # consumer cannot mistake "not measured" for "everything
             # unhealthy" (0/2 healthy would read as 0%). `total_tenants` stays
             # a real count: the tenants WERE discovered, just not checked.
-            # `status` is the discriminator.
-            print(format_json_report({
+            # `status` is the discriminator. #3216: run() encodes it.
+            return Report({
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "status": "dry_run",
                 "reason": "health_checks_skipped",
@@ -506,7 +497,7 @@ def main():
                     t: {"tenant": t, "status": "not_checked"} for t in tenants
                 },
                 "recommendations": [],
-            }))
+            }, EXIT_OK)
         return EXIT_OK
 
     # Run diagnose in parallel
@@ -544,19 +535,20 @@ def main():
     report = generate_report(results, args.prometheus)
 
     # Output
-    if args.json:
-        print(format_json_report(report))
-        # #3094: the document is out; a later -o write crash must not add a second
-        disarm_crash_envelope()
-    else:
+    if not args.json:
         print_text_report(report)
 
     if args.output:
         # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
+        # Under --json it is written before the document goes out (#3216):
+        # an unwritable -o is then the envelope, not a document beside rc 2.
         write_json_or_die(args.output, report, flag="-o/--output")
         if not args.json:
             print(f"\nJSON report written to: {args.output}")
 
+    if args.json:
+        # #3216: run() encodes it
+        return Report(report, batch_exit_code(results, environment_errors))
     return batch_exit_code(results, environment_errors)
 
 

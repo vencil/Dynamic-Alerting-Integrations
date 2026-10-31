@@ -51,7 +51,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope,
 )
 from _lib_python import format_json_report  # noqa: E402
 from _lib_confd import (  # noqa: E402
@@ -450,8 +450,10 @@ def build_manifest(
 
 @exit_on_output_write_error
 @_lib_parse_cache.exit_on_parse_tree_error  # #3206: the listing is da-guard's — rc 2, named
-def main() -> int:
-    """CLI entry point: merge multiple conf.d/ sources into one config-dir."""
+def main() -> "int | Report":
+    """CLI entry point: merge multiple conf.d/ sources into one config-dir.
+    Under --json every document comes back as a Report for run() to encode
+    (#3216)."""
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Merge multiple conf.d/ sources into a single config-dir.",
@@ -483,17 +485,16 @@ def main() -> int:
     if args.json:
         arm_crash_envelope()  # #3094: a crash in --json mode still prints one envelope
 
-    def reject(reason: str, message: str) -> int:
+    def reject(reason: str, message: str) -> "int | Report":
         """Contradictory or incomplete flags: exit 2 (dev-rules #13).
 
         Not `parser.error`: under `--json` stdout still has to carry exactly
         one document, so the rejection is answered there too.
         """
-        if args.json:
-            print(format_json_report({"status": "caller_error",
-                                      "reason": reason}))
         parser.print_usage(sys.stderr)
         print(f"{parser.prog}: error: {message}", file=sys.stderr)
+        if args.json:
+            return Report({"status": "caller_error", "reason": reason}, EXIT_CALLER_ERROR)
         return EXIT_CALLER_ERROR
 
     # ⛔ `--check` returns before anything is assembled, so a flag that acts
@@ -567,14 +568,14 @@ def main() -> int:
 
     if real_conflicts:
         if args.json:
-            print(format_json_report({
+            return Report({
                 "status": "conflict",
                 "conflicts": {
                     n: [{"source": l, "sha256": _file_sha256(p)}
                         for l, p in entries]
                     for n, entries in real_conflicts.items()
                 },
-            }))
+            }, EXIT_VIOLATION)
         return EXIT_VIOLATION
 
     # ⛔ Same call the sibling producer makes for a carrier-less
@@ -594,8 +595,8 @@ def main() -> int:
                   f"which the exporter reads as a platform with no tenants.",
                   file=sys.stderr)
         if args.json:
-            print(format_json_report({"status": "no_carriers",
-                                      "sources": [str(s) for s in sources]}))
+            return Report({"status": "no_carriers",
+                           "sources": [str(s) for s in sources]}, EXIT_VIOLATION)
         return EXIT_VIOLATION
 
     # ⛔ The filename question above is not the exporter's question: it
@@ -649,14 +650,14 @@ def main() -> int:
     if produced_carriers and stale_carriers:
         read = names_carrier(produced_carriers + stale_carriers)
         if args.json:
-            print(format_json_report({
+            return Report({
                 "status": "conflict",
                 "conflicts": {
                     "defaults carrier": {"produced": produced_carriers,
                                          "left_over": stale_carriers,
                                          "exporter_reads": read},
                 },
-            }))
+            }, EXIT_VIOLATION)
         else:
             print(f"\n❌ {output_dir} already holds defaults carrier(s) "
                   f"{', '.join(stale_carriers)} that no source produces, beside "
@@ -683,12 +684,12 @@ def main() -> int:
     verdict = tu.verdict_for({**residue, **file_map})
     if verdict.outcome != tu.CLEAN:
         if args.json:
-            print(format_json_report({
+            return Report({
                 "status": verdict.outcome,
                 "check": tu.CHECK_NAME,
                 "reason": verdict.reason,
                 "details": verdict.details,
-            }))
+            }, tu.EXIT_FOR[verdict.outcome])
         elif verdict.outcome == tu.DUPLICATE:
             print(f"\n❌ {tu.CHECK_NAME} failed — refusing to assemble a "
                   f"config-dir the exporter would reject in full.",
@@ -741,11 +742,11 @@ def main() -> int:
                       "include what is already in the target directory, which "
                       "the exporter reads too)")
         else:
-            print(format_json_report({
+            return Report({
                 "status": "ok",
                 "file_count": len(file_map),
                 "files": sorted(file_map.keys()),
-            }))
+            }, EXIT_OK)
         return EXIT_OK
 
     # Assemble (`--output` presence was settled before anything was read)
@@ -785,7 +786,7 @@ def main() -> int:
             # `count` included hidden entries before #1827; it no longer does,
             # and the re-derivation is what keeps that from mattering.)
             result["artifact_file_count"] = len(carriers_already_in(output_dir))
-        print(format_json_report(result))
+        return Report(result, EXIT_OK)
     else:
         print(f"\n✅ Assembled {count} file(s) into {output_dir}")
         print(f"   New files are mode 0600: if the exporter reads {output_dir} "

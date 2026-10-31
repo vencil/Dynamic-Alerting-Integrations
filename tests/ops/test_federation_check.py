@@ -13,6 +13,17 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import federation_check as fc  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _exit_code(main, *args):
+    """`main()`'s exit the way `run()` ends it (#3216): a returned Report's
+    document is written and its status is the code, a `SystemExit` gives
+    its own."""
+    try:
+        return emit_result(main(*args))
+    except SystemExit as exc:
+        return exc.code
 import _lib_prometheus  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 
@@ -293,10 +304,9 @@ class TestMain:
     def test_edge_json(self, capsys):
         with patch("urllib.request.urlopen", side_effect=OSError("refused")):
             with patch("sys.argv", ["federation_check.py", "edge", "--json"]):
-                with pytest.raises(SystemExit) as exc_info:
-                    fc.main()
+                rc = _exit_code(fc.main)
         # #452/#737: unreachable edge Prometheus = transport caller-error
-        assert exc_info.value.code == EXIT_CALLER_ERROR
+        assert rc == EXIT_CALLER_ERROR
         output = json.loads(capsys.readouterr().out)
         assert output["tool"] == "federation-check"
         assert output["section"] == "edge"
@@ -304,16 +314,14 @@ class TestMain:
     def test_central_json(self, capsys):
         with patch("urllib.request.urlopen", side_effect=OSError("refused")):
             with patch("sys.argv", ["federation_check.py", "central", "--json"]):
-                with pytest.raises(SystemExit) as exc_info:
-                    fc.main()
+                rc = _exit_code(fc.main)
         # #452/#737: unreachable central Prometheus = transport caller-error
-        assert exc_info.value.code == EXIT_CALLER_ERROR
+        assert rc == EXIT_CALLER_ERROR
 
     def test_e2e_requires_edge_urls(self, capsys):
         with patch("sys.argv", ["federation_check.py", "e2e"]):
-            with pytest.raises(SystemExit) as exc_info:
-                fc.main()
-        assert exc_info.value.code == EXIT_CALLER_ERROR
+            rc = _exit_code(fc.main)
+        assert rc == EXIT_CALLER_ERROR
         assert "edge-urls" in capsys.readouterr().err.lower()
 
     def test_e2e_with_urls(self, capsys):
@@ -324,10 +332,9 @@ class TestMain:
                     "--edge-urls", "http://e1:9090,http://e2:9090",
                     "--json",
                 ]):
-                    with pytest.raises(SystemExit) as exc_info:
-                        fc.main()
+                    rc = _exit_code(fc.main)
         # #452/#737: unreachable edges / transport failures = caller-error
-        assert exc_info.value.code == EXIT_CALLER_ERROR
+        assert rc == EXIT_CALLER_ERROR
         output = json.loads(capsys.readouterr().out)
         assert output["section"] == "e2e"
 
@@ -354,8 +361,7 @@ class TestPrometheusEnvFallback:
 
         monkeypatch.setattr(fc, "check_edge", fake_check_edge)
         monkeypatch.setattr(sys, "argv", argv)
-        with pytest.raises(SystemExit):
-            fc.main()
+        _exit_code(fc.main)
         return captured["url"]
 
     def test_uses_env_when_flag_absent(self, monkeypatch):
@@ -452,9 +458,8 @@ class TestQueryNotAnsweredIsACheck:
         with patch.object(fc, "check_central", return_value=list(_central(
                 lambda q: (None, "HTTP 503") if q == 'count(up{tenant!=""})'
                 else _vector()).values())):
-            with pytest.raises(SystemExit) as exc:
-                fc.main()
-        assert exc.value.code == EXIT_CALLER_ERROR
+            rc = _exit_code(fc.main)
+        assert rc == EXIT_CALLER_ERROR
 
 
 @pytest.mark.parametrize("query,check", [
