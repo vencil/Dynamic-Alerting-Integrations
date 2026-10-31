@@ -12,7 +12,6 @@
 import os
 import re
 import sys
-import json
 import argparse
 from pathlib import Path
 from collections import defaultdict
@@ -30,7 +29,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 # already use.
 sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "lint"))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _version_patterns import DOCS_TREE_SYMLINK_ALIAS_PATHS  # noqa: E402
 
@@ -560,13 +559,11 @@ def main():
     analyzer.analyze()
 
     # 輸出結果
-    if args.json:
-        report = analyzer.get_json_report()
-        print(json.dumps(report, indent=2, ensure_ascii=False))
-    else:
+    if not args.json:
         analyzer.print_text_report()
 
     # CI 模式檢查
+    status = EXIT_OK
     if args.ci:
         stats = analyzer.get_statistics()
 
@@ -591,10 +588,13 @@ def main():
                   f"below threshold {threshold_pct}%", file=sys.stderr)
 
         if not (fm_ok and bilingual_ok and link_ok):
-            return EXIT_VIOLATION
+            status = EXIT_VIOLATION
 
-    return EXIT_OK
+    if args.json:
+        return Report(analyzer.get_json_report(), status)  # #3216: run() encodes it
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

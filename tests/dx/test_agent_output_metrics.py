@@ -12,6 +12,7 @@ import pytest
 DX_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "dx")
 sys.path.insert(0, DX_DIR)
 import agent_output_metrics as aom  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402
 
 SCRIPT = os.path.join(DX_DIR, "agent_output_metrics.py")
 
@@ -332,9 +333,10 @@ def test_json_stdout_is_one_document(tmp_path):
     f.write_text(SAMPLE, encoding="utf-8")
     p = _run(["--json", "changelog", "--path", str(f), "--cap", "40"])
     assert p.returncode == 0, p.stderr
+    # One document — `json.loads` of the whole stdout; its layout is run()'s
+    # one format (two-space indent), not one line (#3216 owner ruling 3).
     doc = json.loads(p.stdout)
     assert doc["status"] == "ok" and doc["entries"] == 5 and doc["over_cap"] == 1
-    assert p.stdout.strip().count("\n") == 0
 
 
 def test_text_output_mentions_counts(tmp_path):
@@ -396,7 +398,7 @@ def test_pr_bodies_counts_fences(monkeypatch, capsys):
         {"number": 3, "body": None},
     ]
     monkeypatch.setattr(aom, "_run_gh", lambda state, limit: json.dumps(fake))
-    assert aom.main(["--json", "pr-bodies", "--limit", "3"]) == 0
+    assert emit_result(aom.main(["--json", "pr-bodies", "--limit", "3"])) == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["prs"] == 3
     assert doc["with_evidence_fence"] == 1

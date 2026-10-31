@@ -69,7 +69,6 @@ Usage / Exit codes
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import subprocess
 import sys
@@ -80,7 +79,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
@@ -415,8 +414,7 @@ def main(argv: "list[str] | None" = None) -> int:
         return unmeasurable(str(exc))
 
     if args.json:
-        print(json.dumps(data, ensure_ascii=False, indent=2))
-        return EXIT_OK
+        return Report(data)  # #3216: run() encodes it
 
     print(f"[subproc-only] coverage source: {', '.join(data['sources'])}")
     print(f"  coverage 資料檔              : {data['coverage_data']}")
@@ -438,4 +436,5 @@ def main(argv: "list[str] | None" = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

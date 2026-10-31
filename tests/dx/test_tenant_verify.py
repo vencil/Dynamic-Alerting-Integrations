@@ -32,6 +32,7 @@ import sys
 from pathlib import Path
 
 import pytest
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -178,7 +179,7 @@ def test_main_no_args_returns_usage_error(verify_module, conf_d, monkeypatch, ca
     """No tenant_id and no --all → exit 1 with error to stderr."""
     monkeypatch.chdir(conf_d.parent)  # cwd has conf.d/
     cli_argv("tenant-verify")
-    code = verify_module.main()
+    code = emit_result(verify_module.main())
     assert code == 1
     captured = capsys.readouterr()
     assert "tenant_id is required" in captured.err
@@ -188,7 +189,7 @@ def test_main_all_with_expect_merged_hash_is_error(verify_module, conf_d, monkey
     """--all + --expect-merged-hash makes no sense (one hash, many tenants)."""
     monkeypatch.chdir(conf_d.parent)
     cli_argv("tenant-verify", "--all", "--expect-merged-hash", "deadbeef", "--conf-d", str(conf_d))
-    code = verify_module.main()
+    code = emit_result(verify_module.main())
     assert code == 1
     captured = capsys.readouterr()
     assert "incompatible with --all" in captured.err
@@ -202,7 +203,7 @@ def test_main_conf_d_not_found_returns_error(verify_module, monkeypatch, capsys,
     bogus = tmp_path / "nonexistent"
     cli_argv("tenant-verify", "db-fin-a", "--conf-d", str(bogus))
     with pytest.raises(CallerError) as exc:
-        verify_module.main()
+        emit_result(verify_module.main())
     assert exc.value.reason == "dir_not_found"
     assert str(exc.value) == f"--conf-d {bogus}: No such file or directory"
     proc = subprocess.run([sys.executable, str(TOOL_PATH), "db-fin-a", "--conf-d", str(bogus)],
@@ -216,7 +217,7 @@ def test_main_json_output_is_parseable(verify_module, conf_d, monkeypatch, capsy
     import json as _json
 
     cli_argv("tenant-verify", "db-fin-a", "--conf-d", str(conf_d), "--json")
-    code = verify_module.main()
+    code = emit_result(verify_module.main())
     assert code == 0
     captured = capsys.readouterr()
     parsed = _json.loads(captured.out)
@@ -234,7 +235,7 @@ def test_main_expect_mismatch_exit_code_2(verify_module, conf_d, monkeypatch, cl
             "--expect-merged-hash",
             "0000000000000000",
             "--json")
-    code = verify_module.main()
+    code = emit_result(verify_module.main())
     assert code == 2
 
 
@@ -290,7 +291,7 @@ def test_duplicate_declaration_fails_item6_json(
     root = _dup_tree(tmp_path, stray_name)
     cli_argv("tenant-verify", "acme", "--conf-d", str(root),
              "--expect-merged-hash", expect, "--json")
-    code = verify_module.main()
+    code = emit_result(verify_module.main())
     assert code == 2
     parsed = _json.loads(capsys.readouterr().out)
     assert parsed["error"] == "duplicate"
@@ -307,7 +308,7 @@ def test_duplicate_declaration_fails_item6_human(
     root = _dup_tree(tmp_path, stray_name)
     cli_argv("tenant-verify", "acme", "--conf-d", str(root),
              "--expect-merged-hash", expect)
-    code = verify_module.main()
+    code = emit_result(verify_module.main())
     assert code == 2
     out = capsys.readouterr().out
     assert "duplicate" in out
@@ -325,7 +326,7 @@ def test_duplicate_declaration_fails_without_expect_json(
 
     root = _dup_tree(tmp_path, stray_name)
     cli_argv("tenant-verify", "acme", "--conf-d", str(root), "--json")
-    assert verify_module.main() == 2
+    assert emit_result(verify_module.main()) == 2
     parsed = _json.loads(capsys.readouterr().out)
     assert parsed["error"] == "duplicate"
     assert parsed["files"] == files
@@ -340,7 +341,7 @@ def test_duplicate_declaration_fails_without_expect_human(
         verify_module, tmp_path, capsys, cli_argv, stray_name, files):
     root = _dup_tree(tmp_path, stray_name)
     cli_argv("tenant-verify", "acme", "--conf-d", str(root))
-    assert verify_module.main() == 2
+    assert emit_result(verify_module.main()) == 2
     out = capsys.readouterr().out
     for f in files:
         assert out.count(f"declared in: {f}\n") == 1
@@ -355,7 +356,7 @@ def test_duplicate_tree_clean_tenant_has_no_merged_hash(verify_module, tmp_path,
     not rc 0 on a hash nothing in Go would serve, and not 2 (a mismatch)."""
     root = _dup_tree(tmp_path, "other.yaml")
     cli_argv("tenant-verify", "solo", "--conf-d", str(root))
-    assert verify_module.main() == 1
+    assert emit_result(verify_module.main()) == 1
     captured = capsys.readouterr()
     assert "merged_hash_unavailable" in captured.out, captured.out
     assert 'duplicate tenant ID "acme"' in captured.err, captured.err
@@ -366,7 +367,7 @@ def test_single_declaration_item6_passes(verify_module, tmp_path, cli_argv):
     expect = _pre_base_hash(verify_module, tmp_path)
     cli_argv("tenant-verify", "acme", "--conf-d", str(tmp_path / "pre"),
              "--expect-merged-hash", expect)
-    assert verify_module.main() == 0
+    assert emit_result(verify_module.main()) == 0
 
 
 def test_all_with_duplicate_exits_2_and_keeps_others(
@@ -378,7 +379,7 @@ def test_all_with_duplicate_exits_2_and_keeps_others(
 
     root = _dup_tree(tmp_path, "other.yaml")
     cli_argv("tenant-verify", "--all", "--conf-d", str(root), "--json")
-    code = verify_module.main()
+    code = emit_result(verify_module.main())
     assert code == 2
     captured = capsys.readouterr()
     doc = _json.loads(captured.out)
@@ -399,7 +400,7 @@ def test_all_human_with_duplicate_exits_2(verify_module, tmp_path, capsys, cli_a
     and the refusal summarised on stderr."""
     root = _dup_tree(tmp_path, "zz.yaml")
     cli_argv("tenant-verify", "--all", "--conf-d", str(root))
-    assert verify_module.main() == 2
+    assert emit_result(verify_module.main()) == 2
     captured = capsys.readouterr()
     assert "declared in: real.yaml" in captured.out
     assert "declared in: zz.yaml" in captured.out
@@ -414,7 +415,7 @@ def test_all_human_with_duplicate_exits_2(verify_module, tmp_path, capsys, cli_a
 def test_all_human_total_without_duplicate(verify_module, conf_d, capsys, cli_argv):
     """Must-ring control for the total line: clean tree → all verified."""
     cli_argv("tenant-verify", "--all", "--conf-d", str(conf_d))
-    assert verify_module.main() == 0
+    assert emit_result(verify_module.main()) == 0
     assert "# total: 3 tenants verified, 0 duplicate-declared (not verified), " \
         "0 without merged_hash (not verified)" in capsys.readouterr().out
 
@@ -422,7 +423,7 @@ def test_all_human_total_without_duplicate(verify_module, conf_d, capsys, cli_ar
 def test_all_without_duplicate_exits_0(verify_module, conf_d, cli_argv):
     """Must-ring control: a clean tree keeps the --all rc 0 contract."""
     cli_argv("tenant-verify", "--all", "--conf-d", str(conf_d), "--json")
-    assert verify_module.main() == 0
+    assert emit_result(verify_module.main()) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -459,7 +460,7 @@ def test_unparseable_defaults_is_a_named_usage_error(
     outer = _lib_exitcodes.get_caller_error_code()
     _lib_exitcodes.set_caller_error_code(1)  # as `__main__` sets it
     try:
-        code = verify_module.main()
+        code = emit_result(verify_module.main())
     except SystemExit as exc:
         code = exc.code
     finally:
@@ -489,7 +490,7 @@ def test_control_parseable_defaults_still_verify(verify_module, conf_d, capsys, 
     """Must-trigger control for the test above: the same tree with its
     defaults intact verifies with exit 0."""
     cli_argv("tenant-verify", "db-fin-a", "--conf-d", str(conf_d))
-    assert verify_module.main() == 0
+    assert emit_result(verify_module.main()) == 0
     assert "does not parse" not in capsys.readouterr().err
 
 

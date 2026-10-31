@@ -83,7 +83,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 import _waveform_lib as wf  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, encode_json  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1789; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
@@ -634,7 +634,7 @@ def _print_human(report: dict) -> None:
           + ("（labels 被聚合剝離？詳 --json）" if report["unattributed_alerts"] else ""))
 
 
-def main() -> int:
+def main() -> "int | Report":
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="fault-waveform 注入執行器（ADR-030 PR-2）：pack → 編譯 → 注入隔離 "
@@ -751,12 +751,11 @@ def main() -> int:
     # 報告輸出也是管線的一環——寫檔失敗（--out 目錄不存在等）是 operational
     # error（exit 2），不得帶著成功報告假綠或炸 traceback。
     try:
-        report_json = json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True)
+        # #3216: the one encoder, for --out and for the --json document
+        # run() prints — the two cannot differ.
         if args.out:
-            write_text_secure(args.out, report_json + "\n", flag="--out")
-        if args.json_output:
-            print(report_json)
-        else:
+            write_text_secure(args.out, encode_json(report) + "\n", flag="--out")
+        if not args.json_output:
             _print_human(report)
     except OutputWriteError as exc:
         # #1789: an unusable `--out` gets the shared one-line message that
@@ -778,8 +777,9 @@ def main() -> int:
         # `--out` problem and must not be blamed on that flag.
         print(f"ERROR: 報告輸出失敗: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
-    return EXIT_OK
+    return Report(report) if args.json_output else EXIT_OK
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

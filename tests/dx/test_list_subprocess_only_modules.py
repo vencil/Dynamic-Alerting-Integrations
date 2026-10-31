@@ -241,8 +241,11 @@ def test_main_returns_int_not_none(tmp_path: Path) -> None:
         "scripts/tools/ops/mytool.py": _TOOL_SRC,
         "tests/test_x.py": "def test_x():\n    pass\n",
     })
-    rc = _mod.main(["--repo", str(repo), "--coverage-data", str(repo / ".coverage"),
-                    "--json"])
+    # #3216: a --json run returns a Report; `emit_result` is the step run()
+    # takes, so an in-process caller sees the same exit status.
+    from _lib_exitcodes import emit_result  # noqa: PLC0415
+    rc = emit_result(_mod.main(["--repo", str(repo), "--coverage-data",
+                                str(repo / ".coverage"), "--json"]))
     assert isinstance(rc, int) and rc == 0
 
 

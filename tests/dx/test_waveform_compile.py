@@ -115,6 +115,15 @@ def test_selftest_seed_without_flag_exits_one():
     assert "self-test-seed" in r.stderr
 
 
+def test_json_with_an_issue_still_exits_one():
+    """#3216: under --json the document goes out through run(); the
+    violation's exit code travels with it."""
+    r = _run("--check", "--json", str(_DISK))
+    assert r.returncode == 1, r.stderr
+    doc = json.loads(r.stdout)
+    assert doc["pass"] is False and doc["issues"]
+
+
 def test_attestation_false_exits_one(tmp_path):
     bad = _mutate_fixture(
         tmp_path, _DISK,

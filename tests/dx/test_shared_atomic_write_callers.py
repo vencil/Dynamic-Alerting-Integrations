@@ -147,10 +147,10 @@ CALLERS: dict[str, Caller] = {
         "audit_rules_drift", "scripts/ops/audit_rules_drift.py:490", "--out",
         _setup_audit_rules_drift),
     "rule_pack_stats_fragment": Caller(
-        "generate_rule_pack_stats", "scripts/tools/dx/generate_rule_pack_stats.py:448",
+        "generate_rule_pack_stats", "scripts/tools/dx/generate_rule_pack_stats.py:445",
         None, _setup_rule_pack_stats_fragment),
     "rule_pack_stats_inject": Caller(
-        "generate_rule_pack_stats", "scripts/tools/dx/generate_rule_pack_stats.py:451",
+        "generate_rule_pack_stats", "scripts/tools/dx/generate_rule_pack_stats.py:449",
         None, _setup_rule_pack_stats_inject),
     "tool_map": Caller(
         "generate_tool_map", "scripts/tools/dx/generate_tool_map.py:374", None,

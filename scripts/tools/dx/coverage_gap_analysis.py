@@ -13,7 +13,6 @@ Usage:
   python3 scripts/tools/dx/coverage_gap_analysis.py --coverage-file .coverage
 """
 import argparse
-import json
 import os
 import re
 import subprocess
@@ -25,7 +24,7 @@ from typing import Dict, List, Optional, Tuple
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -214,10 +213,10 @@ def format_text_report(report: CoverageReport) -> str:
     return "\n".join(lines)
 
 
-def format_json_report(report: CoverageReport) -> str:
-    """Format a JSON coverage report."""
+def json_document(report: CoverageReport) -> dict:
+    """The --json document (run() encodes it, #3216)."""
     sorted_files = sorted(report.files, key=lambda f: f.coverage_pct)
-    result = {
+    return {
         "target_pct": report.target_pct,
         "overall_pct": report.overall_pct,
         "total_statements": report.total_statements,
@@ -227,10 +226,9 @@ def format_json_report(report: CoverageReport) -> str:
         "files_below_target": report.below_target_count,
         "files": [f.to_dict() for f in sorted_files],
     }
-    return json.dumps(result, indent=2, ensure_ascii=False)
 
 
-def main(argv: Optional[List[str]] = None) -> None:
+def main(argv: Optional[List[str]] = None) -> "int | Report":
     """CLI entry point."""
     parser = argparse.ArgumentParser(
         description="Per-file coverage ranking report with gap analysis",
@@ -282,14 +280,13 @@ def main(argv: Optional[List[str]] = None) -> None:
 
     report = build_report(files, args.target)
 
+    status = EXIT_VIOLATION if args.ci and report.below_target_count > 0 else EXIT_OK
     if args.json:
-        print(format_json_report(report))
-    else:
-        print(format_text_report(report))
-
-    if args.ci and report.below_target_count > 0:
-        sys.exit(EXIT_VIOLATION)
+        return Report(json_document(report), status)
+    print(format_text_report(report))
+    return status
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

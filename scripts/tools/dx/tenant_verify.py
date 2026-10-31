@@ -42,7 +42,6 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
-import json
 import sys
 from pathlib import Path
 import os
@@ -289,9 +288,7 @@ def main() -> int:
         results = verify_all(scanner)
         dups = _duplicated(results)
         unavailable = [r for r in results if r.get("error") == "merged_hash_unavailable"]
-        if args.json:
-            print(json.dumps({"tenants": results}, indent=2, ensure_ascii=False))
-        else:
+        if not args.json:
             for r in results:
                 _print_human(r)
                 print()
@@ -300,26 +297,34 @@ def main() -> int:
             print(f"# total: {len(results) - len(dups) - len(unavailable)} tenants verified, "
                   f"{len(dups)} duplicate-declared (not verified), "
                   f"{len(unavailable)} without merged_hash (not verified) in {conf_d}")
+        status = EXIT_PASS
         if dups:
             print(f"error: {len(dups)} tenant(s) declared in more than one "
                   f"file, no merged_hash reported for them: "
                   f"{', '.join(str(r['tenant_id']) for r in dups)}",
                   file=sys.stderr)
-            return EXIT_VERIFY_FAILED
-        if unavailable:
+            status = EXIT_VERIFY_FAILED
+        elif unavailable:
             print(f"error: no merged_hash for {len(unavailable)} tenant(s) — it is "
                   f"da-guard effective's (see above): "
                   f"{', '.join(str(r['tenant_id']) for r in unavailable)}",
                   file=sys.stderr)
-            return EXIT_USAGE_ERROR
-        return EXIT_PASS
+            status = EXIT_USAGE_ERROR
+        return _report({"tenants": results}, status) if args.json else status
 
     info, exit_code = verify_one(scanner, args.tenant_id, args.expect_merged_hash)
     if args.json:
-        print(json.dumps(info, indent=2, ensure_ascii=False))
-    else:
-        _print_human(info)
+        return _report(info, exit_code)
+    _print_human(info)
     return exit_code
+
+
+def _report(document, status: int):
+    """The --json document for run() to encode (#3216). Imported here, not
+    at module level: importing this module must not install
+    `_lib_exitcodes`' hooks in the importing process (see the guard below)."""
+    from _lib_exitcodes import Report  # noqa: PLC0415
+    return Report(document, status)
 
 
 # An uncaught exception ends at EXIT_USAGE_ERROR (1), NOT the SSOT's crash

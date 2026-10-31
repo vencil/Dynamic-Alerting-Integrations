@@ -35,7 +35,6 @@ Archived (registry opt-in, v2.8.0 A-5b):
 """
 from __future__ import annotations
 import argparse
-import json
 import re
 import os
 import subprocess
@@ -49,7 +48,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK  # noqa: E402
+from _lib_exitcodes import EXIT_OK, Report, encode_json  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#1789)
 
 # --- 自動偵測 repo 根目錄（從 script 位置往上找 .git） ---
@@ -512,7 +511,7 @@ def scan(today: datetime | None = None) -> dict:
 
 
 @exit_on_output_write_error
-def main() -> int:
+def main() -> "int | Report":
     parser = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     parser.add_argument(
         "--output", type=Path, default=DEFAULT_OUTPUT,
@@ -530,11 +529,7 @@ def main() -> int:
     data = scan(today=today)
 
     if args.stdout:
-        json.dump(data, sys.stdout, indent=2, ensure_ascii=False)
-        print()
-        return EXIT_OK
-
-    print(json.dumps(data["summary"], indent=2, ensure_ascii=False))
+        return Report(data)  # #3216: run() encodes it
 
     if not args.summary_only:
         # #1789: `--output` may name a path outside the repo, or a relative
@@ -553,17 +548,17 @@ def main() -> int:
                           action="create directory"):
             out_path.parent.mkdir(parents=True, exist_ok=True)
         with output_write(out_path, flag="--output"):
-            out_path.write_text(
-                json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8", newline="\n"
-            )
+            out_path.write_text(encode_json(data), encoding="utf-8", newline="\n")
         try:
             shown: Path = out_path.relative_to(REPO)
         except ValueError:
             shown = out_path
-        print(f"\nWrote: {shown}")
+        # stderr: stdout carries the summary document alone (#3216).
+        print(f"Wrote: {shown}", file=sys.stderr)
 
-    return EXIT_OK
+    return Report(data["summary"])  # #3216: run() encodes it
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

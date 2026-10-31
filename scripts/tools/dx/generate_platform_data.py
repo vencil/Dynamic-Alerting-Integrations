@@ -29,7 +29,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION, OutputNotSerializable, Report, encode_json  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Chart.yaml, read Helm's way)
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4)
     DaGuardError,
@@ -723,14 +723,13 @@ def main():
             tenant.pop("last_config_commit", None)
         return d
 
-    content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    content = encode_json(data) + "\n"
     fallback_content = (
-        json.dumps(build_fallback(data), indent=2, ensure_ascii=False) + "\n"
+        encode_json(build_fallback(data)) + "\n"
     )
 
     if args.dry_run:
-        print(content)
-        return
+        return Report(data)  # #3216: run() encodes it — the same text as the file
 
     if args.check:
         if not OUTPUT_PATH.exists():
@@ -738,8 +737,13 @@ def main():
                   f"Run without --check first.")
             sys.exit(EXIT_VIOLATION)
         existing = json.loads(OUTPUT_PATH.read_text(encoding="utf-8"))
-        new_stable = json.dumps(strip_volatile(data), indent=2, ensure_ascii=False) + "\n"
-        existing_stable = json.dumps(strip_volatile(existing), indent=2, ensure_ascii=False) + "\n"
+        new_stable = encode_json(strip_volatile(data)) + "\n"
+        try:
+            existing_stable = encode_json(strip_volatile(existing)) + "\n"
+        except OutputNotSerializable:
+            # A hand edit JSON reads but cannot carry (NaN / Infinity): the
+            # file is not what the generator writes — outdated, not a crash.
+            existing_stable = None
         if existing_stable != new_stable:
             print(f"❌ {OUTPUT_PATH.relative_to(REPO_ROOT)} is outdated. "
                   f"Run `make platform-data` to update.")
@@ -780,4 +784,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

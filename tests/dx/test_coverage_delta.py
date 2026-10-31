@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(__file__), "..", "..", "scripts", "tools", "dx",
 ))
 import coverage_delta as cd  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ============================================================
@@ -500,8 +501,8 @@ class TestEvaluateThresholds:
 class TestMainCLI:
 
     def test_missing_before_exits_two(self, tmp_path, capsys):
-        rc = cd.main([str(tmp_path / "nope.xml"),
-                       str(tmp_path / "also-nope.xml")])
+        rc = emit_result(cd.main([str(tmp_path / "nope.xml"),
+                       str(tmp_path / "also-nope.xml")]))
         assert rc == 2
         assert "ERROR" in capsys.readouterr().err
 
@@ -511,7 +512,7 @@ class TestMainCLI:
             tmp_path / "ok.xml",
             _make_cobertura(0.8, 80, 100, {"a.py": (0.8, 80, 100)}),
         )
-        rc = cd.main([str(bad), str(ok)])
+        rc = emit_result(cd.main([str(bad), str(ok)]))
         assert rc == 2
 
     def test_clean_delta_exits_zero(self, tmp_path, capsys):
@@ -523,7 +524,7 @@ class TestMainCLI:
             tmp_path / "a.xml",
             _make_cobertura(0.85, 85, 100, {"a.py": (0.85, 85, 100)}),
         )
-        rc = cd.main([str(b), str(a)])
+        rc = emit_result(cd.main([str(b), str(a)]))
         assert rc == 0
         assert "Coverage delta" in capsys.readouterr().out
 
@@ -536,13 +537,28 @@ class TestMainCLI:
             tmp_path / "a.xml",
             _make_cobertura(0.80, 80, 100, {"a.py": (0.80, 80, 100)}),
         )
-        rc = cd.main([
+        rc = emit_result(cd.main([
             str(b), str(a),
             "--max-total-regression", "1.0",
-        ])
+        ]))
         assert rc == 1
         err = capsys.readouterr().err
         assert "Threshold violations" in err
+
+    def test_json_with_a_threshold_violation_still_exits_one(self, tmp_path, capsys):
+        """#3216: under --json the document goes out through run(); the
+        violation's exit code travels with it, not lost to a bare document."""
+        b = _write_xml(
+            tmp_path / "b.xml",
+            _make_cobertura(0.90, 90, 100, {"a.py": (0.90, 90, 100)}),
+        )
+        a = _write_xml(
+            tmp_path / "a.xml",
+            _make_cobertura(0.80, 80, 100, {"a.py": (0.80, 80, 100)}),
+        )
+        rc = emit_result(cd.main([str(b), str(a), "--json", "--max-total-regression", "1.0"]))
+        assert rc == 1
+        assert "total" in json.loads(capsys.readouterr().out)
 
     def test_markdown_flag_emits_marker(self, tmp_path, capsys):
         b = _write_xml(
@@ -553,7 +569,7 @@ class TestMainCLI:
             tmp_path / "a.xml",
             _make_cobertura(0.85, 85, 100, {"a.py": (0.85, 85, 100)}),
         )
-        rc = cd.main([str(b), str(a), "--markdown"])
+        rc = emit_result(cd.main([str(b), str(a), "--markdown"]))
         assert rc == 0
         out = capsys.readouterr().out
         assert cd.PR_COMMENT_MARKER in out
@@ -568,7 +584,7 @@ class TestMainCLI:
             tmp_path / "a.xml",
             _make_cobertura(0.85, 85, 100, {"a.py": (0.85, 85, 100)}),
         )
-        rc = cd.main([str(b), str(a), "--json", "--markdown"])
+        rc = emit_result(cd.main([str(b), str(a), "--json", "--markdown"]))
         assert rc == 2
         assert "mutually exclusive" in capsys.readouterr().err
 
@@ -581,7 +597,7 @@ class TestMainCLI:
             tmp_path / "a.xml",
             _make_cobertura(0.85, 85, 100, {"a.py": (0.85, 85, 100)}),
         )
-        rc = cd.main([str(b), str(a), "--json"])
+        rc = emit_result(cd.main([str(b), str(a), "--json"]))
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
         assert "total" in payload
