@@ -67,7 +67,9 @@ func TestGetTenantPlatformProblemIsANoticeNotAWarning(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-		"_platform.yaml": "tenants:\n  tx:\n    mysql_conections_typo: \"5\"\n",
+		// A value problem (an unread key is the shared key verdict's, which
+		// GET does not ask for: ADR-038 decision 11).
+		"_platform.yaml": "tenants:\n  tx:\n    _silent_mode: purple\n",
 		"tx.yaml":        "tenants:\n  tx:\n    mysql_connections: \"90\"\n",
 	})
 	detail := getTenantDetail(t, &Deps{ConfigDir: configDir}, "tx")
@@ -76,7 +78,7 @@ func TestGetTenantPlatformProblemIsANoticeNotAWarning(t *testing.T) {
 	}
 	found := false
 	for _, n := range detail.Notices {
-		if strings.Contains(n, "platform file _platform.yaml") && strings.Contains(n, "mysql_conections_typo") {
+		if strings.Contains(n, "platform file _platform.yaml") && strings.Contains(n, "purple") {
 			found = true
 		}
 		if strings.Contains(n, configDir) {
@@ -90,9 +92,9 @@ func TestGetTenantPlatformProblemIsANoticeNotAWarning(t *testing.T) {
 	// Must-fire control: the same key in the tenant's own file is a warning.
 	own := setupConfigDir(t, map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-		"tx.yaml":        "tenants:\n  tx:\n    mysql_conections_typo: \"5\"\n",
+		"tx.yaml":        "tenants:\n  tx:\n    mysql_connections:\n      default: \"5\"\n      expires: bad-own\n",
 	})
 	if d := getTenantDetail(t, &Deps{ConfigDir: own}, "tx"); len(d.Warnings) == 0 {
-		t.Errorf("control: the tenant's own unknown key produced no validation_warnings (notices %q)", d.Notices)
+		t.Errorf("control: the tenant's own bad expires produced no validation_warnings (notices %q)", d.Notices)
 	}
 }

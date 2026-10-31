@@ -875,7 +875,7 @@ Resolve phase（fixture 不變、driver push 低值、alert 應 resolve；T1/T2 
 - `resolve.T3=0`：Prometheus alert `activeAt` 沒被 evict / state 沒進 resolve（rule TTL 設太短或 `for: 0s` 與 expression 互動異常）
 - `resolve.T4=0`：webhook receiver 沒收到 resolve POST（**Alertmanager `send_resolved: false` 是最常見原因**；其次是 `inhibit_rules` 把 resolve 也 inhibit 掉了）
 
-**診斷工件**：workflow 失敗時自動把 `docker compose logs threshold-exporter / prometheus / alertmanager / receiver / driver` dump 到 `bench-results/*.log`，與 `per-run-0000.json` 一起 upload artifact。Exporter `WARN: skip unparseable file` / `WARN: tenant=X: unknown key` 兩條是最高訊息密度的線索。
+**診斷工件**：workflow 失敗時自動把 `docker compose logs threshold-exporter / prometheus / alertmanager / receiver / driver` dump 到 `bench-results/*.log`，與 `per-run-0000.json` 一起 upload artifact。Exporter `WARN: skip unparseable file` 與 `config keys no row of this exporter reads`（列出沒有任何一列讀的鍵）兩條是最高訊息密度的線索。
 
 **Opt-out**：本機 debug harness 本身（不是想抓 cycle-6 那種）想看完整 30 runs 的 timeline，加 `--no-smoke-abort` 或 `NO_SMOKE_ABORT=1`：
 

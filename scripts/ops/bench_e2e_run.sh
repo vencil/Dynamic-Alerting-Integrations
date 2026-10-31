@@ -110,8 +110,8 @@ chmod -R a+rX fixture/active/conf.d
 # Register `bench_trigger` in the active root _defaults.yaml — the
 # synthetic-v* generator only knows DB-domain metrics (mysql_*, pg_*,
 # etc.), but our bench-run-{i} tenants override `bench_trigger`. Without
-# a default entry the exporter rejects the override (logs "unknown key
-# bench_trigger not in defaults") and never emits user_threshold{
+# a default entry the exporter reads no row for the override (lists
+# key="bench_trigger" reason=unconsumed) and never emits user_threshold{
 # metric="bench_trigger"} → alert rule never matches → driver T3/T4
 # poll forever (60s × 4 polls × 31 runs = workflow timeout territory).
 #
