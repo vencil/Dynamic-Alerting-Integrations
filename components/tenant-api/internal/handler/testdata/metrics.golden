@@ -55,7 +55,7 @@ tenant_api_config_last_reload_successful{component="federation-policy"} 1
 tenant_api_config_last_reload_successful{component="groups"} 1
 tenant_api_config_last_reload_successful{component="tenantorg"} 1
 tenant_api_config_last_reload_successful{component="views"} 1
-# HELP tenant_api_policy_available Whether the generator container can judge writes (1): its status endpoint reports the deployment policy file usable, amtool and da-guard present and the generator not older than the policy requires. 0 when it cannot, or when its status cannot be read: every content-changing write then answers 503 (POLICY_UNAVAILABLE / VALIDATOR_UNAVAILABLE). Alert on == 0.
+# HELP tenant_api_policy_available Whether the generator container can judge writes (1): its status endpoint reports the deployment policy file usable, amtool and da-guard present and the generator not older than the policy requires, nor than the key verdict tenant-api refuses on. 0 when it cannot, or when its status cannot be read: every content-changing write then answers 503 (POLICY_UNAVAILABLE / VALIDATOR_UNAVAILABLE). Alert on == 0.
 # TYPE tenant_api_policy_available gauge
 tenant_api_policy_available 0
 # HELP tenant_api_async_task_panics_total Async batch tasks whose work panicked; each was marked failed and the worker went on. Should stay 0 (the tenant-api log has the panic and stack per task id).
@@ -79,6 +79,12 @@ tenant_api_generator_rejections_total{reason="invalid_request"} 0
 tenant_api_generator_rejections_total{reason="mismatch"} 0
 tenant_api_generator_rejections_total{reason="no_time"} 0
 tenant_api_generator_rejections_total{reason="normalized"} 0
+tenant_api_generator_rejections_total{reason="key_verdict_no_time"} 0
+tenant_api_generator_rejections_total{reason="key_verdict_deadline"} 0
+tenant_api_generator_rejections_total{reason="key_verdict_memory"} 0
+tenant_api_generator_rejections_total{reason="key_verdict_error"} 0
+tenant_api_generator_rejections_total{reason="key_verdict_undecidable"} 0
+tenant_api_generator_rejections_total{reason="key_verdict_platform_file"} 0
 # HELP tenant_api_generator_scrape_success Whether the generator container's /metrics was read on this scrape and appended (its da_generator_* families). 0: not appended.
 # TYPE tenant_api_generator_scrape_success gauge
 tenant_api_generator_scrape_success 0

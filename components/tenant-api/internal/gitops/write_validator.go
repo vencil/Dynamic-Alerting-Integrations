@@ -48,7 +48,8 @@ type ProposedFile struct {
 // A nil error lets the write commit those exact bytes; any error refuses it,
 // and is returned to the Writer's caller unchanged. With a nil error it may
 // return the key verdict on the write (ADR-038 decision 5, key_verdict.go),
-// which never refuses it; nil when it has none.
+// on which the Writer may still refuse it (keyVerdictRefusal); nil when it
+// has none.
 type WriteValidator interface {
 	ValidateWrites(ctx context.Context, base string, files []ProposedFile) (*KeyVerdict, error)
 }
@@ -75,7 +76,8 @@ var ErrNoValidator = errors.New("gitops: no write validator installed; refusing 
 var errValidatorBase = errors.New("cannot read the commit the write lands on")
 
 // validateProposed asks the validator about files over base and renders
-// its key verdict for ctx's caller (adviseKeyVerdict); nothing when there is
+// its key verdict for ctx's caller (adviseKeyVerdict) — or refuses the
+// write on it (*KeyVerdictError, keyVerdictRefusal); nothing when there is
 // nothing to write, ErrNoValidator when no validator is installed. Caller
 // holds w.mu.
 func (w *Writer) validateProposed(ctx context.Context, base string, files []ProposedFile) (verdictAdvice, error) {
@@ -88,6 +90,9 @@ func (w *Writer) validateProposed(ctx context.Context, base string, files []Prop
 	kv, err := w.validator.ValidateWrites(ctx, base, files)
 	if err != nil {
 		return verdictAdvice{}, err
+	}
+	if refusal := keyVerdictRefusal(files, kv); refusal != nil {
+		return verdictAdvice{}, refusal
 	}
 	return adviseKeyVerdict(ctx, files, kv), nil
 }

@@ -753,7 +753,7 @@ func (w *Writer) WritePRBatch(ctx context.Context, ops []PRBatchOp, authorEmail 
 	// file the batch changed written over it, once for the whole batch.
 	verdict, err := w.validateStaging(ctx, st, strings.TrimSpace(string(before)))
 	if err != nil {
-		return nil, err
+		return nil, rejectBatchOnVerdict(err, batch, outcomes)
 	}
 	commit, err := w.commitStaging(st, strings.TrimSpace(string(before)), authorEmail)
 	if err != nil {

@@ -105,7 +105,7 @@ func TestBatchTenants_SilentModeValue_ExistingIsANotice(t *testing.T) {
 // Keys a batch patch cannot set are still a 400 for the whole request.
 func TestBatchTenants_PatchKeysRefusedUpFront(t *testing.T) {
 	t.Parallel()
-	for _, k := range []string{"_metadata", "_custom_alerts", "_namespaces", "_timeout_ms"} {
+	for _, k := range []string{"_metadata", "_custom_alerts", "_namespaces"} {
 		t.Run(k, func(t *testing.T) {
 			t.Parallel()
 			f := newSilentModeFixture(t, "tenants:\n  t-a:\n    mysql_connections: \"70\"\n")

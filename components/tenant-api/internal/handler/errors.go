@@ -786,11 +786,34 @@ func generatorRejectedText(e *generator.RejectedError) string {
 	if e.Reason == generator.ReasonTooLarge {
 		return msgGeneratorTooLarge
 	}
+	if text, ok := keyVerdictRejectedTexts[e.Reason]; ok {
+		return text
+	}
 	head := "the route generator could not judge this write (" + generator.ClientReason(e.Reason) + "); nothing was written"
 	if generator.Retryable(e.Reason) {
 		head += " — retry"
 	}
 	return head + generatorDetailInLog
+}
+
+// keyVerdictRejectedTexts are the client texts of a write the generator
+// passed but whose key verdict did not complete (ADR-038 decision 5): fixed
+// sentences per reason, never the generator's message. undecidable names
+// what is missing, as the decision asks.
+var keyVerdictRejectedTexts = map[string]string{
+	generator.ReasonKeyVerdictNoTime: "the route generator passed this write, but too little time was left to judge " +
+		"whether every key of it is read (key_verdict_no_time); nothing was written — retry",
+	generator.ReasonKeyVerdictDeadline: "the route generator passed this write, but its time ran out before it judged " +
+		"whether every key of it is read (key_verdict_deadline); nothing was written — retry",
+	generator.ReasonKeyVerdictMemory: "the route generator passed this write, but judging whether every key of it is " +
+		"read ran out of memory (key_verdict_memory); nothing was written" + generatorDetailInLog,
+	generator.ReasonKeyVerdictError: "the route generator passed this write, but judging whether every key of it is " +
+		"read failed (key_verdict_error); nothing was written" + generatorDetailInLog,
+	generator.ReasonKeyVerdictUndecidable: "no root platform file (such as _defaults.yaml) was read, so whether the " +
+		"threshold keys of this write are read cannot be judged (key_verdict_undecidable); nothing was written — add " +
+		"the root platform file to conf.d",
+	generator.ReasonKeyVerdictPlatformFile: "this write changes a platform file, whose keys only a whole-tree judgement " +
+		"can judge (key_verdict_platform_file); nothing was written",
 }
 
 // generatorUnavailableText is the client text of the generator's 503.

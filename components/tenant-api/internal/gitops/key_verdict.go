@@ -1,11 +1,12 @@
 package gitops
 
 // The shared key verdict on a write the generator passed (ADR-038 decision
-// 5, stage 2): which of the keys of the tenants the write touches no reader
-// reads. It never refuses a write — the gates only report today (#3016) —
-// so what the validator returns is turned into lines of the write's
-// warnings, under the same disclosure rules as every other message a write
-// returns (#1530, #3039):
+// 5): which of the keys of the tenants the write touches no reader reads.
+// An error finding about a tenant the write is for refuses the write
+// (keyVerdictRefusal, 400 as the key check that came before it); one the
+// file already held counts too. Everything else is turned into lines of the
+// write's warnings, under the same disclosure rules as every other message
+// a write returns (#1530, #3039):
 //
 //   - a finding in a file this write changes is about the tenants it names:
 //     about a tenant the write is for, it is shown (the caller's write for
@@ -32,6 +33,8 @@ import (
 	"log/slog"
 	"sort"
 	"strings"
+
+	"github.com/vencil/tenant-api/internal/errkind"
 )
 
 // KeyVerdict is the generator container's key verdict on a passed write
@@ -100,7 +103,7 @@ const (
 	msgVerdictOtherWithheld  = "key verdict: there are findings about platform files, profiles or tenants you cannot view (the details are in the server log)"
 	msgVerdictMoreLinesFmt   = "key verdict: %d more line(s) not shown"
 	msgVerdictTruncatedFmt   = "key verdict: %d more finding(s) the generator did not send"
-	msgVerdictNotCompleteFmt = "key verdict: not completed (%s); the write was not refused — the keys of this write were not judged"
+	msgVerdictNotCompleteFmt = "key verdict: not completed (%s); the keys of this write were not judged"
 )
 
 // verdictReasons are the texts of a verdict that did not complete. A
@@ -218,6 +221,104 @@ func adviseKeyVerdict(ctx context.Context, files []ProposedFile, kv *KeyVerdict)
 			"not_sent", kv.Truncated, "findings", kv.Findings)
 	}
 	return adv
+}
+
+// keyVerdictSeverityError is the severity of a finding that refuses a write
+// (ADR-038 decision 4).
+const keyVerdictSeverityError = "error"
+
+// KeyVerdictError refuses a write whose key verdict has error findings about
+// a tenant the write is for (ADR-038 decision 5): ByTenant is, per such
+// tenant, its findings' lines. Those are the caller's own (its write for the
+// tenant was admitted), so they are shown in full. It unwraps to
+// ErrValidation: the answer is the key check's, 400 BAD_REQUEST.
+type KeyVerdictError struct {
+	ByTenant map[string][]string
+}
+
+func (e *KeyVerdictError) Error() string {
+	return fmt.Sprintf("%v: %s", ErrValidation, strings.Join(e.lines(), "; "))
+}
+
+// Unwrap makes errors.Is(err, ErrValidation) hold.
+func (e *KeyVerdictError) Unwrap() error { return ErrValidation }
+
+// ErrorKind is errkind.Validation.
+func (e *KeyVerdictError) ErrorKind() errkind.Kind { return errkind.Validation }
+
+// lines is every tenant's lines, in tenant order, capped (capVerdictLines).
+func (e *KeyVerdictError) lines() []string {
+	tenants := make([]string, 0, len(e.ByTenant))
+	for t := range e.ByTenant {
+		tenants = append(tenants, t)
+	}
+	sort.Strings(tenants)
+	var out []string
+	for _, t := range tenants {
+		out = append(out, e.ByTenant[t]...)
+	}
+	return capVerdictLines(out)
+}
+
+// keyVerdictRefusal is the *KeyVerdictError of kv on files, nil when kv
+// refuses nothing: an error finding in a file this write changes, about a
+// tenant that file is written for. Another tenant the file declares, a
+// platform file or a profile refuses nothing (ADR-038 decision 6) — their
+// findings are reported as before (adviseKeyVerdict).
+func keyVerdictRefusal(files []ProposedFile, kv *KeyVerdict) *KeyVerdictError {
+	if kv == nil || kv.Status != KeyVerdictComplete {
+		return nil
+	}
+	written := make(map[string]map[string]bool, len(files))
+	for _, f := range files {
+		if written[f.Path] == nil {
+			written[f.Path] = map[string]bool{}
+		}
+		for _, t := range f.Tenants {
+			written[f.Path][t] = true
+		}
+	}
+	var out *KeyVerdictError
+	for _, f := range kv.Findings {
+		if f.Severity != keyVerdictSeverityError {
+			continue
+		}
+		for _, t := range f.Tenants {
+			if !written[f.File][t] {
+				continue
+			}
+			if out == nil {
+				out = &KeyVerdictError{ByTenant: map[string][]string{}}
+			}
+			out.ByTenant[t] = append(out.ByTenant[t], verdictLine(f, []string{t}))
+		}
+	}
+	return out
+}
+
+// rejectBatchOnVerdict is err as a batch's answer: a *KeyVerdictError
+// becomes a *BatchRejectedError whose first op that changed each refused
+// tenant carries that tenant's lines, so the answer names the ops to fix;
+// any other err is returned as it is.
+func rejectBatchOnVerdict(err error, ops []BatchOp, outcomes []BatchOpOutcome) error {
+	kve, ok := err.(*KeyVerdictError)
+	if !ok {
+		return err
+	}
+	out := append([]BatchOpOutcome(nil), outcomes...)
+	placed := map[string]bool{}
+	for i, op := range ops {
+		lines, refused := kve.ByTenant[op.TenantID]
+		if !refused || placed[op.TenantID] || outcomes[i].NoOp || outcomes[i].Err != nil {
+			continue
+		}
+		out[i] = BatchOpOutcome{Err: &KeyVerdictError{ByTenant: map[string][]string{op.TenantID: lines}}}
+		placed[op.TenantID] = true
+	}
+	if len(placed) != len(kve.ByTenant) {
+		return kve // a refused tenant no op changed: not a batch's shape; refuse it whole
+	}
+	return &BatchRejectedError{Outcomes: out}
 }
 
 // verdictLine is one finding's line, naming tenants.

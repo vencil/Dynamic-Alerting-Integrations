@@ -49,11 +49,26 @@ const (
 	ReasonNormalized = "normalized"
 )
 
+// Reasons of a *RejectedError for a write the generator passed but whose
+// key verdict did not complete (ADR-038 decision 5): the write is refused,
+// since whether every key of it is read was not judged. Retryable only when
+// time ran out (key_verdict_no_time, key_verdict_deadline).
+const (
+	ReasonKeyVerdictNoTime       = "key_verdict_no_time"
+	ReasonKeyVerdictDeadline     = "key_verdict_deadline"
+	ReasonKeyVerdictMemory       = "key_verdict_memory"
+	ReasonKeyVerdictError        = "key_verdict_error"
+	ReasonKeyVerdictUndecidable  = "key_verdict_undecidable"
+	ReasonKeyVerdictPlatformFile = "key_verdict_platform_file"
+)
+
 // RejectionReasons lists every *RejectedError reason, in the order
 // tenant_api_generator_rejections_total renders them.
 var RejectionReasons = []string{
 	ReasonDeadline, ReasonMemory, ReasonIncomplete, ReasonGitRead, ReasonBusy,
 	ReasonTooLarge, ReasonInvalidRequest, ReasonMismatch, ReasonNoTime, ReasonNormalized,
+	ReasonKeyVerdictNoTime, ReasonKeyVerdictDeadline, ReasonKeyVerdictMemory,
+	ReasonKeyVerdictError, ReasonKeyVerdictUndecidable, ReasonKeyVerdictPlatformFile,
 }
 
 // Reasons of an *UnavailableError the service gives (its 503s, ADR-036 §5).
@@ -82,7 +97,8 @@ const (
 // is).
 func Retryable(reason string) bool {
 	switch reason {
-	case ReasonBusy, ReasonDeadline, ReasonGitRead, ReasonMismatch, ReasonNoTime:
+	case ReasonBusy, ReasonDeadline, ReasonGitRead, ReasonMismatch, ReasonNoTime,
+		ReasonKeyVerdictNoTime, ReasonKeyVerdictDeadline:
 		return true
 	}
 	return false

@@ -136,7 +136,7 @@ func TestGroupBatch_PatchValueValidation(t *testing.T) {
 		t.Run(string(mode), func(t *testing.T) {
 			f := newGroupBatchFixture(t, mode)
 			before := f.mainSHA(t)
-			w := f.post(t, `{"patch":{"_timeout_ms":"99999999"}}`)
+			w := f.post(t, `{"patch":{"_metadata":"x"}}`)
 			if w.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
 			}
@@ -144,8 +144,8 @@ func TestGroupBatch_PatchValueValidation(t *testing.T) {
 			if err := json.Unmarshal(w.Body.Bytes(), &bad); err != nil {
 				t.Fatalf("unmarshal: %v", err)
 			}
-			if bad.Code != errcode.InvalidBody || len(bad.Violations) != 1 || bad.Violations[0].Field != `patch["_timeout_ms"]` {
-				t.Errorf("response = %+v, want one %s violation on patch[\"_timeout_ms\"]", bad, errcode.InvalidBody)
+			if bad.Code != errcode.InvalidBody || len(bad.Violations) != 1 || bad.Violations[0].Field != `patch["_metadata"]` {
+				t.Errorf("response = %+v, want one %s violation on patch[\"_metadata\"]", bad, errcode.InvalidBody)
 			}
 			if f.prCalls != 0 {
 				t.Errorf("CreatePR calls = %d, want 0", f.prCalls)

@@ -399,32 +399,37 @@ func TestGeneratorGate_AsyncBatchDeadline(t *testing.T) {
 	}
 }
 
-// G6: the flat `_routing_receiver_type` is a 400 on PUT (and on a batch
-// patch, validatePatchMap) before anything else judges it — the generator
-// is never asked (the domain policy here would forbid slack).
-func TestGeneratorGate_FlatReceiverTypeIs400(t *testing.T) {
+// ADR-038 decision 5: a key no reader reads (here the flat
+// `_routing_receiver_type`, which nothing renders) is refused on the shared
+// key verdict — 400 BAD_REQUEST naming it on PUT, the op refused in a batch,
+// nothing written. Neither the handler nor the gitops key check judges it
+// any more: the generator is asked, and its verdict refuses.
+func TestGeneratorGate_KeyVerdictErrorIs400(t *testing.T) {
 	t.Parallel()
-	f, fake := generatorDirectFixture(t, nil)
-	if err := os.WriteFile(filepath.Join(f.dir, "_domain_policy.yaml"), []byte("domain_policies:\n  d:\n    tenants: [t-a]\n"+
-		"    constraints:\n      forbidden_receiver_types: [slack]\n"), 0o644); err != nil {
-		t.Fatal(err)
+	const key = "_routing_receiver_type"
+	answer := func(_ int, req testutil.FakeValidateRequest) (int, any) {
+		v := testutil.PassVerdict(req, nil)
+		v["key_verdict"] = map[string]any{"status": "complete", "tenants": 1, "seconds": 0.1, "truncated": 0,
+			"findings": []map[string]any{{"severity": "error", "kind": "unread", "key": key,
+				"file": "t-a.yaml", "tenants": []string{"t-a"}, "reason": "unregistered"}}}
+		return 200, v
 	}
-	body := "tenants:\n  t-a:\n    mysql_connections: \"72\"\n    _routing_receiver_type: slack\n"
-	w := putTenantAs(t, f.deps, "t-a", body, "admins", nil)
-	// One source: the tenant key validation (gitops, cfg.ValidateTenantKeys)
-	// — code BAD_REQUEST with its "unknown routing key" text, not a handler
-	// INVALID_BODY violation.
+	f, fake := generatorDirectFixture(t, answer)
+	before, _ := os.ReadFile(filepath.Join(f.dir, "t-a.yaml"))
+	w := putTenantAs(t, f.deps, "t-a", "tenants:\n  t-a:\n    mysql_connections: \"72\"\n    "+key+": slack\n", "admins", nil)
 	if m := genEnvelope(t, w); w.Code != http.StatusBadRequest || m["code"] != string(errcode.BadRequest) ||
-		!strings.Contains(w.Body.String(), `unknown routing key \"_routing_receiver_type\"`) ||
-		!strings.Contains(w.Body.String(), "_routing.receiver.type") {
+		!strings.Contains(w.Body.String(), "key verdict: error: key "+key) {
 		t.Errorf("PUT: status %d body %s", w.Code, w.Body.String())
 	}
-	code, _, _ := f.run(t, "", `{"operations":[{"tenant_id":"t-a","patch":{"_routing_receiver_type":"slack"}}]}`, false)
-	if code != http.StatusBadRequest {
-		t.Errorf("batch: status %d", code)
+	code, results, _ := f.run(t, "", `{"operations":[{"tenant_id":"t-a","patch":{"`+key+`":"slack"}}]}`, false)
+	if code == http.StatusOK || len(results) != 1 || results[0].Status != "error" || !strings.Contains(results[0].Message, key) {
+		t.Errorf("batch: status %d results %+v", code, results)
 	}
-	if n := len(fake.Requests()); n != 0 {
-		t.Errorf("the generator was asked %d time(s)", n)
+	if n := len(fake.Requests()); n != 2 {
+		t.Errorf("the generator was asked %d time(s), want 2 (the verdict refuses)", n)
+	}
+	if after, _ := os.ReadFile(filepath.Join(f.dir, "t-a.yaml")); string(after) != string(before) {
+		t.Errorf("a refused write changed t-a.yaml:\n%s", after)
 	}
 }
 
@@ -686,13 +691,13 @@ func TestGeneratorGate_RefusalTextNeverEchoesTheMessage(t *testing.T) {
 	}
 }
 
-// ADR-038 decision 5, stage 2: a pass's key verdict reaches the warnings of
-// every write path — "not completed" with its reason, never the generator's
-// message (it can carry a platform path or stderr).
-func TestGeneratorGate_KeyVerdictReachesEveryPathsWarnings(t *testing.T) {
+// ADR-038 decision 5: a pass whose key verdict did not complete is refused
+// on every write path — 422 GENERATOR_REJECTED, reason key_verdict_memory
+// (not retryable) — never with the generator's message (it can carry a
+// platform path or stderr).
+func TestGeneratorGate_KeyVerdictNotCompletedRefusesEveryPath(t *testing.T) {
 	t.Parallel()
 	const secret = "/srv/secret/_defaults.yaml"
-	const line = "key verdict: not completed (it ran out of memory); the write was not refused — the keys of this write were not judged"
 	for _, p := range gatePaths() {
 		t.Run(p.name, func(t *testing.T) {
 			t.Parallel()
@@ -704,18 +709,42 @@ func TestGeneratorGate_KeyVerdictReachesEveryPathsWarnings(t *testing.T) {
 					"tenants": 1, "seconds": 1.0, "message": "da-guard killed reading " + secret}
 				return 200, v
 			})
-			code, results := p.run(t, f)
-			if code >= 400 {
-				t.Fatalf("status %d, results %+v", code, results)
+			// An async batch answers 202 and its task holds the refusal.
+			want := http.StatusUnprocessableEntity
+			if strings.HasSuffix(p.name, "async") {
+				want = http.StatusAccepted
 			}
-			// Once per op that changed something (a batch says it on each).
-			if n := strings.Count(f.lastBody, line); n == 0 {
-				t.Errorf("the not-completed line is not in the answer:\n%s", f.lastBody)
+			code, results := p.run(t, f)
+			if code != want ||
+				!strings.Contains(f.lastBody, "key_verdict_memory") ||
+				!strings.Contains(f.lastBody, string(errcode.GeneratorRejected)) {
+				t.Fatalf("status %d, results %+v:\n%s", code, results, f.lastBody)
 			}
 			if strings.Contains(f.lastBody, secret) {
 				t.Errorf("the generator's message reached the answer:\n%s", f.lastBody)
 			}
+			if !strings.Contains(f.lastBody, "passed this write") {
+				t.Errorf("the answer does not say the generator passed the write and the key verdict ran out:\n%s", f.lastBody)
+			}
 		})
+	}
+}
+
+// Every key_verdict_* reason has its own fixed text; undecidable names the
+// missing root platform file.
+func TestKeyVerdictRejectedTexts(t *testing.T) {
+	t.Parallel()
+	for _, r := range generator.RejectionReasons {
+		if !strings.HasPrefix(r, "key_verdict_") {
+			continue
+		}
+		text := generatorRejectedText(&generator.RejectedError{Reason: r, Message: "/srv/secret"})
+		if !strings.Contains(text, "("+r+")") || strings.Contains(text, "/srv/secret") {
+			t.Errorf("%s: %q", r, text)
+		}
+	}
+	if text := generatorRejectedText(&generator.RejectedError{Reason: generator.ReasonKeyVerdictUndecidable}); !strings.Contains(text, "root platform file") {
+		t.Errorf("undecidable: %q", text)
 	}
 }
 

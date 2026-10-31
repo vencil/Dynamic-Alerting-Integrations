@@ -5,11 +5,19 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 )
 
 func kvFinding(key, file string, tenants ...string) KeyFinding {
 	return KeyFinding{Severity: "error", Kind: "unread", Key: key, File: file, Tenants: tenants, Reason: "unregistered"}
+}
+
+// kvWarning is kvFinding at warning severity: reported, never refusing.
+func kvWarning(key, file string, tenants ...string) KeyFinding {
+	f := kvFinding(key, file, tenants...)
+	f.Severity = "warning"
+	return f
 }
 
 // ADR-038 decision 5, stage 2: who is told what of a key verdict.
@@ -70,16 +78,16 @@ func TestAdviseKeyVerdict_NotCompletedTruncatedAndEmpty(t *testing.T) {
 		"none":          {nil, nil},
 		"nothing found": {&KeyVerdict{Status: KeyVerdictComplete}, nil},
 		"memory": {&KeyVerdict{Status: KeyVerdictNotCompleted, Reason: "memory"},
-			[]string{"key verdict: not completed (it ran out of memory); the write was not refused — the keys of this write were not judged"}},
+			[]string{"key verdict: not completed (it ran out of memory); the keys of this write were not judged"}},
 		"not reported": {&KeyVerdict{Status: KeyVerdictNotCompleted, Reason: KeyVerdictNotReported},
-			[]string{"key verdict: not completed (the generator container did not report one; it predates ADR-038 decision 5); the write was not refused — the keys of this write were not judged"}},
+			[]string{"key verdict: not completed (the generator container did not report one; it predates ADR-038 decision 5); the keys of this write were not judged"}},
 		"a reason this tenant-api does not know": {&KeyVerdict{Status: KeyVerdictNotCompleted, Reason: "newer"},
-			[]string{"key verdict: not completed (newer); the write was not refused — the keys of this write were not judged"}},
+			[]string{"key verdict: not completed (newer); the keys of this write were not judged"}},
 		// The count covers findings about anyone: a number only for a
 		// caller who sees the whole tree (below).
 		"truncated": {&KeyVerdict{Status: KeyVerdictComplete, Truncated: 7}, []string{msgVerdictOtherWithheld}},
 		"no reason": {&KeyVerdict{Status: KeyVerdictNotCompleted},
-			[]string{"key verdict: not completed (no reason given); the write was not refused — the keys of this write were not judged"}},
+			[]string{"key verdict: not completed (no reason given); the keys of this write were not judged"}},
 	} {
 		if got := adviseKeyVerdict(ctx, files, tc.kv).lines(); !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: lines = %q, want %q", name, got, tc.want)
@@ -156,14 +164,15 @@ func TestAdviseKeyVerdict_AsksEachTenantOnce(t *testing.T) {
 }
 
 // The verdict a validator returns on a pass reaches every direct write's
-// notices; a refused write returns none of it.
+// notices (a warning: an error refuses, TestKeyVerdict_ErrorRefusesTheWrite);
+// a refused write returns none of it.
 func TestKeyVerdict_ReachesDirectWritesNotices(t *testing.T) {
 	t.Parallel()
 	verdict := func(tenant string) *KeyVerdict {
-		return &KeyVerdict{Status: KeyVerdictComplete, Findings: []KeyFinding{kvFinding("_x", tenant+".yaml", tenant)}}
+		return &KeyVerdict{Status: KeyVerdictComplete, Findings: []KeyFinding{kvWarning("_x", tenant+".yaml", tenant)}}
 	}
 	line := func(tenant string) string {
-		return "key verdict: error: key _x in " + tenant + ".yaml is read by no reader (unregistered) — tenant(s) " + tenant
+		return "key verdict: warning: key _x in " + tenant + ".yaml is read by no reader (unregistered) — tenant(s) " + tenant
 	}
 	body := func(id, v string) string {
 		return "tenants:\n  " + id + ":\n    mysql_threads_running: \"" + v + "\"\n"
@@ -191,7 +200,7 @@ func TestKeyVerdict_ReachesDirectWritesNotices(t *testing.T) {
 		t.Fatalf("no-op WriteMerged: notices %q, err %v, asked %d", notices, err, len(v.calls)-calls)
 	}
 	v.verdict = &KeyVerdict{Status: KeyVerdictComplete, Findings: []KeyFinding{
-		kvFinding("_x", "db-a.yaml", "db-a"), kvFinding("_x", "db-b.yaml", "db-b")}}
+		kvWarning("_x", "db-a.yaml", "db-a"), kvWarning("_x", "db-b.yaml", "db-b")}}
 	outcomes, err := w.WriteBatch(ctx, []BatchOp{{TenantID: "db-a", Merge: merge("db-a", "72")},
 		{TenantID: "db-b", Merge: merge("db-b", "72")}}, "op@example.com")
 	if err != nil || !contains(outcomes[0].Notices, line("db-a")) || contains(outcomes[0].Notices, line("db-b")) ||
@@ -211,13 +220,13 @@ func TestKeyVerdict_ReachesDirectWritesNotices(t *testing.T) {
 // PR mode: the single write's and the batch's one notice list carry it.
 func TestKeyVerdict_ReachesPRWritesNotices(t *testing.T) {
 	t.Parallel()
-	want := "key verdict: error: key _x in db-a.yaml is read by no reader (unregistered) — tenant(s) db-a"
+	want := "key verdict: warning: key _x in db-a.yaml is read by no reader (unregistered) — tenant(s) db-a"
 	dir := newNameDefaultsDir(t)
 	initMainBranchRepo(t, dir)
 	addBareRemote(t, dir)
 	w := newTestWriter(dir, dir)
 	w.SetValidator(&recordingValidator{verdict: &KeyVerdict{Status: KeyVerdictComplete,
-		Findings: []KeyFinding{kvFinding("_x", "db-a.yaml", "db-a")}}})
+		Findings: []KeyFinding{kvWarning("_x", "db-a.yaml", "db-a")}}})
 	res, err := w.WritePR(context.Background(), "db-a", "op@example.com", "tenants:\n  db-a:\n    mysql_threads_running: \"70\"\n")
 	if err != nil || !contains(res.Notices, want) {
 		t.Fatalf("WritePR: %+v, %v", res, err)
@@ -227,5 +236,111 @@ func TestKeyVerdict_ReachesPRWritesNotices(t *testing.T) {
 	}}}, "op@example.com")
 	if err != nil || !contains(res.Notices, want) {
 		t.Fatalf("WritePRBatch: %+v, %v", res, err)
+	}
+}
+
+// ADR-038 decision 5: an error finding about a tenant the write is for
+// refuses the write (ErrValidation, 400) and nothing is written; a warning,
+// or an error about a tenant the write is not for, does not.
+func TestKeyVerdict_ErrorRefusesTheWrite(t *testing.T) {
+	t.Parallel()
+	body := func(id, v string) string {
+		return "tenants:\n  " + id + ":\n    mysql_threads_running: \"" + v + "\"\n"
+	}
+	merge := func(id, v string) MergeFunc { return func([]byte) (string, error) { return body(id, v), nil } }
+	line := "key verdict: error: key _x in db-a.yaml is read by no reader (unregistered) — tenant(s) db-a"
+	dir := initRepoWithDefaults(t)
+	w := newTestWriter(dir, dir)
+	v := &recordingValidator{verdict: &KeyVerdict{Status: KeyVerdictComplete,
+		Findings: []KeyFinding{kvFinding("_x", "db-a.yaml", "db-a")}}}
+	w.SetValidator(v)
+	ctx := context.Background()
+	head := func() string { return strings.TrimSpace(gitOut(t, dir, "rev-parse", "HEAD")) }
+
+	before := head()
+	notices, err := w.Write(ctx, "db-a", "op@example.com", body("db-a", "70"))
+	var kve *KeyVerdictError
+	if !errors.Is(err, ErrValidation) || !errors.As(err, &kve) || !strings.Contains(err.Error(), line) || notices != nil {
+		t.Fatalf("Write: notices %q, err %v", notices, err)
+	}
+	if head() != before {
+		t.Fatal("a refused write was committed")
+	}
+
+	// A batch: the op of the refused tenant carries it; nothing is written.
+	v.verdict = &KeyVerdict{Status: KeyVerdictComplete, Findings: []KeyFinding{kvFinding("_x", "db-a.yaml", "db-a")}}
+	outcomes, err := w.WriteBatch(ctx, []BatchOp{{TenantID: "db-b", Merge: merge("db-b", "72")},
+		{TenantID: "db-a", Merge: merge("db-a", "72")}}, "op@example.com")
+	var rej *BatchRejectedError
+	if !errors.As(err, &rej) || outcomes != nil {
+		t.Fatalf("WriteBatch: outcomes %+v, err %v", outcomes, err)
+	}
+	if rej.Outcomes[0].Err != nil || !errors.As(rej.Outcomes[1].Err, &kve) || !strings.Contains(rej.Outcomes[1].Err.Error(), line) {
+		t.Fatalf("WriteBatch outcomes: %+v", rej.Outcomes)
+	}
+	if head() != before {
+		t.Fatal("a refused batch was committed")
+	}
+
+	// Not refused: a warning, and an error about a tenant this write is not
+	// for (its file is not written: the platform's to report).
+	n := 80
+	for name, f := range map[string]KeyFinding{
+		"warning":            kvWarning("_x", "db-a.yaml", "db-a"),
+		"another tenant's":   kvFinding("_x", "db-b.yaml", "db-b"),
+		"another in my file": kvFinding("_x", "db-a.yaml", "db-z"),
+	} {
+		v.verdict = &KeyVerdict{Status: KeyVerdictComplete, Findings: []KeyFinding{f}}
+		n++
+		if _, err := w.Write(ctx, "db-a", "op@example.com", body("db-a", fmt.Sprint(n))); err != nil {
+			t.Errorf("%s: Write refused: %v", name, err)
+		}
+	}
+}
+
+// PR mode refuses alike, the single write and the batch.
+func TestKeyVerdict_ErrorRefusesPRWrites(t *testing.T) {
+	t.Parallel()
+	dir := newNameDefaultsDir(t)
+	initMainBranchRepo(t, dir)
+	addBareRemote(t, dir)
+	w := newTestWriter(dir, dir)
+	w.SetValidator(&recordingValidator{verdict: &KeyVerdict{Status: KeyVerdictComplete,
+		Findings: []KeyFinding{kvFinding("_x", "db-a.yaml", "db-a")}}})
+	if _, err := w.WritePR(context.Background(), "db-a", "op@example.com", "tenants:\n  db-a:\n    mysql_threads_running: \"70\"\n"); !errors.Is(err, ErrValidation) {
+		t.Fatalf("WritePR: %v", err)
+	}
+	_, err := w.WritePRBatch(context.Background(), []PRBatchOp{{TenantID: "db-a", Merge: func([]byte) (string, error) {
+		return "tenants:\n  db-a:\n    mysql_threads_running: \"71\"\n", nil
+	}}}, "op@example.com")
+	var rej *BatchRejectedError
+	if !errors.As(err, &rej) || !errors.Is(err, ErrValidation) {
+		t.Fatalf("WritePRBatch: %v", err)
+	}
+}
+
+// rejectBatchOnVerdict puts a refused tenant's lines on that tenant's first
+// op that changed something — not on an op before it that changed nothing,
+// nor on its later ops.
+func TestRejectBatchOnVerdict_FirstChangedOpOfTheTenant(t *testing.T) {
+	t.Parallel()
+	kve := &KeyVerdictError{ByTenant: map[string][]string{"db-a": {"line"}}}
+	ops := []BatchOp{{TenantID: "db-a"}, {TenantID: "db-b"}, {TenantID: "db-a"}, {TenantID: "db-a"}}
+	outcomes := []BatchOpOutcome{{NoOp: true}, {}, {}, {}}
+	var rej *BatchRejectedError
+	if err := rejectBatchOnVerdict(kve, ops, outcomes); !errors.As(err, &rej) {
+		t.Fatalf("err = %v", err)
+	}
+	for i, o := range rej.Outcomes {
+		if refused := o.Err != nil; refused != (i == 2) {
+			t.Errorf("op %d: err %v, want the refusal on op 2 only", i, o.Err)
+		}
+	}
+	if outcomes[2].Err != nil {
+		t.Error("the caller's outcomes were changed")
+	}
+	// Any other error is returned as it is.
+	if err := rejectBatchOnVerdict(errFakeRefusal, ops, outcomes); err != errFakeRefusal {
+		t.Errorf("err = %v", err)
 	}
 }

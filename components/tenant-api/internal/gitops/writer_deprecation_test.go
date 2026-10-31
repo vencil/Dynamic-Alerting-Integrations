@@ -95,11 +95,12 @@ func TestValidate_DeprecatedKeyNotices(t *testing.T) {
 		},
 		{
 			// Exact-match contract (⛔ never prefix-match): a typo sharing the
-			// prefix must keep failing unknown-key validation, with no notice.
-			name:       "prefix typo still errors",
+			// prefix is no alias — no notice. Whether it is read is the
+			// shared key verdict's (ADR-038 §11), so this gate is silent.
+			name:       "prefix typo is no alias",
 			dir:        newNameDefaultsDir,
 			body:       "tenants:\n  db-a:\n    mysql_cpu_util: \"70\"\n",
-			wantErrs:   true,
+			wantErrs:   false,
 			wantNotice: false,
 		},
 	}

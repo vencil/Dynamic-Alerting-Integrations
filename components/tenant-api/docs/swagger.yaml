@@ -2206,7 +2206,7 @@ paths:
       - application/json
       description: |-
         Apply a patch to all tenants in a group, through the same pipeline as POST /api/v1/tenants/batch
-        (one operation per member): patch keys are checked against the reserved-key registry (400: a _ key it does not list, or a mapping / list key such as _metadata), a reserved value such as _silent_mode is judged per member by the write's validation (#3227: refused as that member, 422), and each member is checked for write permission; the route generator container judges the tree with every member's change applied (#2903).
+        (one operation per member): patch keys are checked against the reserved-key registry (400: a mapping / list key such as _metadata; a key no reader reads is refused by the shared key verdict as that member, 422), a reserved value such as _silent_mode is judged per member by the write's validation (#3227: refused as that member, 422), and each member is checked for write permission; the route generator container judges the tree with every member's change applied (#2903).
         unset removes keys from every member (only "_routing" and "_routing_receiver_type"): unset ["_routing"] turns routing back on for members a disabling _routing turned off; unset ["_routing_receiver_type"] removes the flat key tenant-api used to write (#2983). A patch may not write a _routing-prefixed key other than _routing and _routing_profile (400).
         All or nothing, in one commit, as POST /api/v1/tenants/batch: when any member is refused nothing is written (422, status rejected, the refused members with status error, the others not_applied);
         otherwise every changed member file is in one commit (direct mode) or one PR/MR with one commit (PR write-back mode). A rejected async run ends the task as failed with the same results.
@@ -2286,10 +2286,13 @@ paths:
             with code GENERATOR_FINDINGS (its message names the findings about that
             result''s tenant) and findings[] / findings_compared_with_base / unrelated_findings_withheld
             carry the findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED
-            (memory, incomplete, too_large: the files the batch produces are too large
-            to judge in one request — split the batch, invalid_request, normalized:
-            git attributes would commit other bytes than the ones judged). An async
-            batch''s task carries the same per-op results.'
+            (key_verdict_memory, key_verdict_error, key_verdict_undecidable (no root
+            platform file: threshold keys cannot be judged), key_verdict_platform_file
+            (the shared key verdict did not complete, ADR-038 decision 5), memory,
+            incomplete, too_large: the files the batch produces are too large to judge
+            in one request — split the batch, invalid_request, normalized: git attributes
+            would commit other bytes than the ones judged). An async batch''s task
+            carries the same per-op results.'
           schema:
             $ref: '#/definitions/internal_handler.GroupBatchResponse'
         "429":
@@ -2297,8 +2300,10 @@ paths:
             route generator container gave no verdict this time, retry (Retry-After):
             reason busy, deadline, git_read, mismatch (what it judged is still not
             what would be written after one re-judgement) or no_time (too little of
-            the request''s time left to judge). Nothing written. Also code RATE_LIMITED
-            (per-caller rate limit)'
+            the request''s time left to judge); or key_verdict_no_time / key_verdict_deadline:
+            the generator passed the write but its shared key verdict ran out of time
+            (ADR-038 decision 5). Nothing written. Also code RATE_LIMITED (per-caller
+            rate limit)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":
@@ -2552,25 +2557,27 @@ paths:
         "400":
           description: 'Bad request. A value the body writes that is the masked-credential
             placeholder is code INVALID_BODY with one violations[] entry per value
-            (#1560; send the real value; nothing written); The flat _routing_receiver_type
-            is a 400 BAD_REQUEST from the tenant key validation (#2903; the receiver
-            type is _routing.receiver.type). Routing (receivers, matcher values, group_by,
-            the domain policy) is judged by the route generator container: a refusal
-            is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not
-            a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending
-            with a letter or digit (ADR-035; the route generator refuses a tree that
-            declares any other id; nothing written). Also 400 when parse-tree refuses
-            the body, the error naming its kind (#3206, ADR-036): more than one YAML
-            document (an empty trailing --- included), a tag outside !!str !!int !!float
-            !!bool !!null !!timestamp !!map !!seq (!!binary, !!set and local or non-specific
-            ! tags included), a null or non-scalar key, a repeated key, a byte order
-            mark past the start, or a syntax or decode error (nothing written). Also
-            400 when the body is not API-shaped (#3064): it declares a tenant besides
-            {id}, several documents, or an anchor, alias, merge key or tagged key
-            at the top level or directly under tenants: (nothing written). Also 400
-            when the current tenant file''s tenants: block cannot be decoded for the
-            end-of-life check and the caller lacks write permission on all tenants
-            (#2405; nothing written)'
+            (#1560; send the real value; nothing written); A key no reader reads (a
+            misspelt threshold or reserved key, the flat _routing_receiver_type —
+            the receiver type is _routing.receiver.type) is a 400 BAD_REQUEST naming
+            it, from the shared key verdict the route generator container returns
+            (ADR-038 decision 5; a key the file already held counts too). Routing
+            (receivers, matcher values, group_by, the domain policy) is judged by
+            the route generator container: a refusal is a 422 GENERATOR_FINDINGS (#2903).
+            Also 400 when the tenant id is not a DNS-1123 label: 1-63 lowercase letters,
+            digits and -, starting and ending with a letter or digit (ADR-035; the
+            route generator refuses a tree that declares any other id; nothing written).
+            Also 400 when parse-tree refuses the body, the error naming its kind (#3206,
+            ADR-036): more than one YAML document (an empty trailing --- included),
+            a tag outside !!str !!int !!float !!bool !!null !!timestamp !!map !!seq
+            (!!binary, !!set and local or non-specific ! tags included), a null or
+            non-scalar key, a repeated key, a byte order mark past the start, or a
+            syntax or decode error (nothing written). Also 400 when the body is not
+            API-shaped (#3064): it declares a tenant besides {id}, several documents,
+            or an anchor, alias, merge key or tagged key at the top level or directly
+            under tenants: (nothing written). Also 400 when the current tenant file''s
+            tenants: block cannot be decoded for the end-of-life check and the caller
+            lacks write permission on all tenants (#2405; nothing written)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "403":
@@ -2629,11 +2636,13 @@ paths:
             tree before the write was judged too); a finding unrelated to this write
             is shown only to a caller with write permission on all tenants (others
             get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason
-            memory / incomplete / too_large (the files the write produces are too
-            large to judge in one request) / invalid_request: the generator gave no
-            verdict; or normalized: git attributes (.gitattributes eol, text or a
-            filter) would commit other bytes than the ones the generator judged. Nothing
-            written'
+            key_verdict_memory / key_verdict_error / key_verdict_undecidable (no root
+            platform file: threshold keys cannot be judged) / key_verdict_platform_file
+            (the shared key verdict did not complete, ADR-038 decision 5) / memory
+            / incomplete / too_large (the files the write produces are too large to
+            judge in one request) / invalid_request: the generator gave no verdict;
+            or normalized: git attributes (.gitattributes eol, text or a filter) would
+            commit other bytes than the ones the generator judged. Nothing written'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "429":
@@ -2641,8 +2650,10 @@ paths:
             route generator container gave no verdict this time, retry (Retry-After):
             reason busy, deadline, git_read, mismatch (what it judged is still not
             what would be written after one re-judgement) or no_time (too little of
-            the request''s time left to judge). Nothing written. Also code RATE_LIMITED
-            (per-caller rate limit)'
+            the request''s time left to judge); or key_verdict_no_time / key_verdict_deadline:
+            the generator passed the write but its shared key verdict ran out of time
+            (ADR-038 decision 5). Nothing written. Also code RATE_LIMITED (per-caller
+            rate limit)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":
@@ -2821,11 +2832,13 @@ paths:
             tree before the write was judged too); a finding unrelated to this write
             is shown only to a caller with write permission on all tenants (others
             get unrelated_findings_withheld). Or code GENERATOR_REJECTED with reason
-            memory / incomplete / too_large (the files the write produces are too
-            large to judge in one request) / invalid_request: the generator gave no
-            verdict; or normalized: git attributes (.gitattributes eol, text or a
-            filter) would commit other bytes than the ones the generator judged. Nothing
-            written'
+            key_verdict_memory / key_verdict_error / key_verdict_undecidable (no root
+            platform file: threshold keys cannot be judged) / key_verdict_platform_file
+            (the shared key verdict did not complete, ADR-038 decision 5) / memory
+            / incomplete / too_large (the files the write produces are too large to
+            judge in one request) / invalid_request: the generator gave no verdict;
+            or normalized: git attributes (.gitattributes eol, text or a filter) would
+            commit other bytes than the ones the generator judged. Nothing written'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "429":
@@ -2833,8 +2846,10 @@ paths:
             route generator container gave no verdict this time, retry (Retry-After):
             reason busy, deadline, git_read, mismatch (what it judged is still not
             what would be written after one re-judgement) or no_time (too little of
-            the request''s time left to judge). Nothing written. Also code RATE_LIMITED
-            (per-caller rate limit)'
+            the request''s time left to judge); or key_verdict_no_time / key_verdict_deadline:
+            the generator passed the write but its shared key verdict ran out of time
+            (ADR-038 decision 5). Nothing written. Also code RATE_LIMITED (per-caller
+            rate limit)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":
@@ -3242,7 +3257,7 @@ paths:
         With ?async=true (direct mode) the same verdict is reached when the task runs; a rejected batch ends the task as failed, with the same per-operation results.
         The batch is applied and judged in a separate staging git worktree; the branch is advanced first, then the served config files, so readers never see content that was not committed (while the files are updated they may see some of the batch's files new and others old, all committed).
         An operation may also remove keys with unset (only "_routing" and "_routing_receiver_type"): unset ["_routing"] turns routing back on for a tenant a disabling _routing turned off; unset ["_routing_receiver_type"] removes the flat key tenant-api used to write, which nothing renders and which, while on disk, makes every other write to the tenant fail key validation (#2983). A patch may not write a _routing-prefixed key other than _routing and _routing_profile (400 INVALID_BODY).
-        Patch keys are judged up front against the reserved-key registry (400 INVALID_BODY): a key starting with _ that the registry does not list (nothing reads it, e.g. _timeout_ms), and a key whose value is a mapping or a list (_metadata, _custom_alerts, _namespaces: write it with PUT /api/v1/tenants/{id}). A reserved key's value is judged per operation by the write's own validation, with the exporter's reader (#3227): an operation setting _silent_mode to a value the exporter ignores (e.g. purple) is refused with code BAD_REQUEST and rejects the batch (422; async: the task fails); a value the tenant file already holds that the operation leaves as it is does not block it and comes back as a NOTICE naming the tenant: in direct mode in that operation's warnings, in PR write-back mode in the batch-level warnings (the operations' results are fixed as included before the write runs).
+        Patch keys are judged up front against the reserved-key registry (400 INVALID_BODY): a key whose value is a mapping or a list (_metadata, _custom_alerts, _namespaces: write it with PUT /api/v1/tenants/{id}). Whether any reader reads a key (a _ key the registry does not list, e.g. _timeout_ms; a _routing key the generator does not read) is the shared key verdict's: the operation of that tenant is refused with code BAD_REQUEST and the batch rejected (422; ADR-038 decision 5). A reserved key's value is judged per operation by the write's own validation, with the exporter's reader (#3227): an operation setting _silent_mode to a value the exporter ignores (e.g. purple) is refused with code BAD_REQUEST and rejects the batch (422; async: the task fails); a value the tenant file already holds that the operation leaves as it is does not block it and comes back as a NOTICE naming the tenant: in direct mode in that operation's warnings, in PR write-back mode in the batch-level warnings (the operations' results are fixed as included before the write runs).
         Direct mode: an operation whose tenant config file cannot be loaded as a tenant config (config_error malformed_yaml | invalid_config)
         is refused with code TENANT_CONFIG_NOT_LOADABLE (and rejects the batch); repair the tenant file itself first.
         Also config_error not_round_trippable (#2903): re-encoding the tenant file would change content the update does not edit (the message names the first difference inside the tenant's own block); rewrite the file with a whole-file PUT.
@@ -3315,11 +3330,14 @@ paths:
             judged once): every result is status error with code GENERATOR_FINDINGS
             (its message names the findings about that result''s tenant) and findings[]
             / findings_compared_with_base / unrelated_findings_withheld carry the
-            findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (memory,
-            incomplete, too_large: the files the batch produces are too large to judge
-            in one request — split the batch, invalid_request, normalized: git attributes
-            would commit other bytes than the ones judged). An async batch''s task
-            carries the same per-op results.'
+            findings as for PUT /tenants/{id}; or code GENERATOR_REJECTED (key_verdict_memory,
+            key_verdict_error, key_verdict_undecidable (no root platform file: threshold
+            keys cannot be judged), key_verdict_platform_file (the shared key verdict
+            did not complete, ADR-038 decision 5), memory, incomplete, too_large:
+            the files the batch produces are too large to judge in one request — split
+            the batch, invalid_request, normalized: git attributes would commit other
+            bytes than the ones judged). An async batch''s task carries the same per-op
+            results.'
           schema:
             $ref: '#/definitions/internal_handler.BatchResponse'
         "429":
@@ -3327,8 +3345,10 @@ paths:
             route generator container gave no verdict this time, retry (Retry-After):
             reason busy, deadline, git_read, mismatch (what it judged is still not
             what would be written after one re-judgement) or no_time (too little of
-            the request''s time left to judge). Nothing written. Also code RATE_LIMITED
-            (per-caller rate limit)'
+            the request''s time left to judge); or key_verdict_no_time / key_verdict_deadline:
+            the generator passed the write but its shared key verdict ran out of time
+            (ADR-038 decision 5). Nothing written. Also code RATE_LIMITED (per-caller
+            rate limit)'
           schema:
             $ref: '#/definitions/ErrorResponse'
         "500":

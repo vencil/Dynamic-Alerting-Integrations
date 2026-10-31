@@ -1405,6 +1405,45 @@ type KeyValidation struct {
 	Errors  []string       // blocking channel: unknown keys, bad expires, version-label violations, dangling _critical, a reserved value the exporter ignores, ...
 	Notices []string       // advisory channel: #1231 deprecation notices, ratcheted reserved values; MUST never block a write
 	Values  []ValueFinding // the Errors entries about a reserved value, for Ratchet (#3227)
+	// Unread repeats the Errors entries that only judge whether any reader
+	// reads a key — an unknown key, an unregistered `_` key, a `_routing`
+	// key the generator does not read, a dimensional or `_critical` key
+	// whose base has no platform value. ADR-038 decision 5 gives that
+	// judgement to the shared key verdict (readers' own report): a gate
+	// that refuses on the verdict drops these (WithoutUnread) and keeps the
+	// value checks.
+	Unread []string
+}
+
+// WithoutUnread is v without the Errors entries Unread repeats (ADR-038
+// §11: tenant-api's write gate refuses an unread key on the shared key
+// verdict, not on this second judgement of it).
+func (v KeyValidation) WithoutUnread() KeyValidation {
+	if len(v.Unread) == 0 {
+		return v
+	}
+	out := KeyValidation{Notices: v.Notices, Values: v.Values}
+	drop := make(map[string]int, len(v.Unread))
+	for _, m := range v.Unread {
+		drop[m]++
+	}
+	for _, e := range v.Errors {
+		if drop[e] > 0 {
+			drop[e]--
+			continue
+		}
+		out.Errors = append(out.Errors, e)
+	}
+	return out
+}
+
+// WithoutUnread is KeyValidation.WithoutUnread for every tenant.
+func (kv KeyValidationByTenant) WithoutUnread() KeyValidationByTenant {
+	out := KeyValidationByTenant{Platform: kv.Platform.WithoutUnread(), Tenants: make(map[string]KeyValidation, len(kv.Tenants))}
+	for tid, v := range kv.Tenants {
+		out.Tenants[tid] = v.WithoutUnread()
+	}
+	return out
 }
 
 // ValidateTenantKeys checks all tenant config keys against the platform key
@@ -1446,6 +1485,7 @@ func (c *ThresholdConfig) validateTenantKeys() KeyValidation {
 	v.Errors = append(v.Errors, o.Errors...)
 	v.Notices = append(v.Notices, o.Notices...)
 	v.Values = append(v.Values, o.Values...)
+	v.Unread = append(v.Unread, o.Unread...)
 	return v
 }
 
@@ -1510,6 +1550,12 @@ func (c *ThresholdConfig) ValidateTenantKeysByTenant() KeyValidationByTenant {
 // notice once per platform file.
 func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 	var v KeyValidation
+	// unread records an Errors entry that only says no reader reads the key
+	// (KeyValidation.Unread).
+	unread := func(msg string) {
+		v.Errors = append(v.Errors, msg)
+		v.Unread = append(v.Unread, msg)
+	}
 	canonDefaults := canonicalizeDefaults(c.Defaults)
 	// The platform surface is TWO sets, not one (#1189 / TRK-337): keys the
 	// platform gives a value to (defaults), and keys it merely RECOGNISES
@@ -1557,7 +1603,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			// membership test below would otherwise accept it, and tenant-api
 			// would take a write that serves nothing.
 			if IsUnregisteredUnderscoreKey(canonKey) {
-				v.Errors = append(v.Errors, fmt.Sprintf(
+				unread(fmt.Sprintf(
 					"WARN: tenant=%s: unknown reserved key %q (typo?)", tenant, canonKey))
 				continue
 			}
@@ -1623,10 +1669,10 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			if shape == shapeReserved {
 				// #2983: reserved by the `_routing` prefix, read by no one —
 				// `_routing_profle`, or the flat `_routing_receiver_type` the
-				// route generator never read. tenant-api's write gate refuses
-				// on this line, as the generator's `--validate` does.
+				// route generator never read. The shared key verdict refuses it
+				// at tenant-api's write gate (ADR-038 §11; this line is Unread).
 				if IsUnknownRoutingKey(canonKey, false) {
-					v.Errors = append(v.Errors, fmt.Sprintf(
+					unread(fmt.Sprintf(
 						"WARN: tenant=%s: unknown routing key %q — not a key the route generator reads (%s); "+
 							"remove it", tenant, canonKey, UnknownRoutingKeyHint(canonKey, false)))
 				}
@@ -1668,8 +1714,14 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 						validateVersionLabel(tenant, canonKey, baseKey, customLabels, regexLabels)...)
 					continue
 				}
+				// The `version` label is a value check: judged whatever the
+				// base, so a gate that drops the unread line below (the
+				// shared key verdict reads such a key as served) still
+				// refuses a bad label.
+				v.Errors = append(v.Errors,
+					validateVersionLabel(tenant, canonKey, baseKey, customLabels, regexLabels)...)
 				// Unknown base key in dimensional key
-				v.Errors = append(v.Errors, fmt.Sprintf(
+				unread(fmt.Sprintf(
 					"WARN: tenant=%s: unknown base metric %q in dimensional key %q",
 					tenant, baseKey, canonKey))
 				continue
@@ -1736,12 +1788,12 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 				// answer whether a critical tier may exist with no warning tier
 				// beneath it (a tenant setting only `<base>_critical`).
 				if _, declared := canonOptional[baseKey]; declared {
-					v.Errors = append(v.Errors, fmt.Sprintf(
+					unread(fmt.Sprintf(
 						"WARN: tenant=%s: %q cannot be set — its base %q is declared without a platform value (optional_overrides), and the critical tier needs a base VALUE in defaults: resolveCriticalRows drops the row when the base is absent, so this override would be accepted and then emit nothing. Set %q itself instead, or ask the platform to move %q into defaults.",
 						tenant, canonKey, baseKey, baseKey, baseKey))
 					continue
 				}
-				v.Errors = append(v.Errors, fmt.Sprintf(
+				unread(fmt.Sprintf(
 					"WARN: tenant=%s: %q has no base metric %q in defaults — the critical "+
 						"tier is silently DROPPED (not defaulted): resolveCriticalRows only "+
 						"emits a critical row when the base key exists. Add %q to the platform "+
@@ -1775,13 +1827,13 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 
 			// Underscore-prefixed but not reserved → likely typo
 			if strings.HasPrefix(canonKey, "_") {
-				v.Errors = append(v.Errors, fmt.Sprintf(
+				unread(fmt.Sprintf(
 					"WARN: tenant=%s: unknown reserved key %q (typo?)", tenant, canonKey))
 				continue
 			}
 
 			// Not in defaults, not reserved → unknown metric key
-			v.Errors = append(v.Errors, fmt.Sprintf(
+			unread(fmt.Sprintf(
 				"WARN: tenant=%s: unknown key %q not in defaults", tenant, canonKey))
 		}
 	}

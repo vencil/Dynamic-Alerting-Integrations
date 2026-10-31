@@ -677,7 +677,7 @@ func (w *Writer) WriteBatch(ctx context.Context, ops []BatchOp, authorEmail stri
 	// tree is thrown away on a refusal.
 	verdict, err := w.validateStaging(ctx, st, headBefore)
 	if err != nil {
-		return nil, err
+		return nil, rejectBatchOnVerdict(err, ops, outcomes)
 	}
 	commit, err := w.commitStaging(st, headBefore, authorEmail)
 	if err != nil || commit == "" {

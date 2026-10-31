@@ -129,6 +129,9 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 		if problem == "" {
 			// Only this pass's key verdict: an earlier pass judged other
 			// content.
+			if err := g.refuseUnjudged(v.KeyVerdict, base, len(files)); err != nil {
+				return nil, err
+			}
 			return keyVerdict(v.KeyVerdict, base, len(files)), nil
 		}
 		slog.Warn("generator: the judged content is not what would be written", "attempt", attempt, "problem", problem)
@@ -136,6 +139,51 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 			return nil, g.reject(ReasonMismatch, "the generator judged other content than tenant-api would write, twice: "+problem+"; retry")
 		}
 	}
+}
+
+// refuseUnjudged refuses a pass whose key verdict is missing or did not
+// complete (ADR-038 decision 5: no fallback — neither taken unjudged nor
+// judged by another key check). No verdict at all is a generator image
+// older than that decision: the container is unavailable (ADR-036 §3). A
+// verdict that did not complete refuses this write (keyVerdictReasons):
+// retryable when time ran out, otherwise not. The service's message is
+// logged, not passed on: it can carry a platform path or a program's
+// stderr.
+func (g *Gate) refuseUnjudged(kv *KeyVerdict, base string, files int) error {
+	if kv == nil {
+		return unavailable(ReasonGeneratorTooOld, "the generator passed the write without a key "+
+			"verdict: its image predates ADR-038 decision 5, so whether every key of the write is read "+
+			"cannot be judged")
+	}
+	if kv.Status == gitops.KeyVerdictComplete {
+		return nil
+	}
+	slog.Info("generator: write refused, key verdict not completed", "base", base, "files", files,
+		"reason", kv.Reason, "message", kv.Message, "tenants", kv.Tenants, "seconds", kv.Seconds)
+	r, ok := keyVerdictReasons[kv.Reason]
+	if !ok {
+		r = keyVerdictReasons["error"]
+	}
+	return g.reject(r.reason, r.message)
+}
+
+// keyVerdictReasons maps the generator's reason for a key verdict that did
+// not complete to the refusal's reason and message. An unknown reason (a
+// newer generator) is refused as error.
+var keyVerdictReasons = map[string]struct{ reason, message string }{
+	"no_time": {ReasonKeyVerdictNoTime, "too little of the judgement's time was left for the key " +
+		"verdict; retry"},
+	"deadline": {ReasonKeyVerdictDeadline, "the judgement's time ran out before the key verdict " +
+		"completed; retry"},
+	// An image before ADR-038's 2026-10-30 revision yielded to a waiting
+	// write: time, for the caller — a retry may complete.
+	"preempted": {ReasonKeyVerdictDeadline, "the key verdict yielded to another write; retry"},
+	"memory":    {ReasonKeyVerdictMemory, "the key verdict ran out of memory"},
+	"error":     {ReasonKeyVerdictError, "the key verdict failed (the cause is in the logs)"},
+	"undecidable": {ReasonKeyVerdictUndecidable, "no root platform file was read, so the write's " +
+		"threshold keys cannot be judged: the conf.d tree needs a root platform file such as _defaults.yaml"},
+	"platform_file": {ReasonKeyVerdictPlatformFile, "the write changes a platform file, whose keys " +
+		"only a whole-tree verdict judges"},
 }
 
 // keyVerdict is a pass's key verdict for the Writer (ADR-038 decision 5):
