@@ -286,6 +286,7 @@ lang: en
 - `scripts/tools/dx/_recipe_preview.py`: recipe would-fire preview core (#657 P2).
 - `scripts/tools/dx/_waveform_lib.py`: fault-waveform pack 合成核心（ADR-030 決策層驗證 PR-1，純函式庫）
 - `scripts/tools/lint/_lint_helpers.py`: Shared utilities for lint tools.
-- `scripts/tools/lint/_rule_tree.py`: Rule-tree scanner — what alerting rules this repo actually ships.
+- `scripts/tools/lint/_rule_tree.py`: Rule-tree reader — what alerting rules this repo actually ships.
+- `scripts/tools/lint/_rule_tripwire.py`: Coverage tripwire: rule-shaped YAML outside the rule-source declaration (#3438).
 - `scripts/tools/lint/_version_patterns.py`: Version pattern registry for validate_docs_versions.py
 - `scripts/_lib.sh`: Shared across shell scenario/benchmark scripts

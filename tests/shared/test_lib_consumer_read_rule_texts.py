@@ -475,7 +475,7 @@ def test_rule_pack_files_names_any_case_suffix_and_a_dangling_pack(tmp_path) -> 
         cr.rule_pack_files(tmp_path)
     got = {Path(p).name: why for p, why in exc.value.files}
     assert set(got) == {"rule-pack-b.YAML", "rule-pack-c.yaml"}, got
-    assert "neither a rule pack" in got["rule-pack-b.YAML"]
+    assert "neither a rule file" in got["rule-pack-b.YAML"]
     assert got["rule-pack-c.yaml"] == "a dangling symlink"
 
 

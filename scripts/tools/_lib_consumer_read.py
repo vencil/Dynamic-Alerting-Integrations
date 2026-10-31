@@ -92,7 +92,7 @@ import shutil
 import subprocess
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable, NamedTuple
 
 CRDECODE_BINARY_NAME = "da-crdecode"
 DA_READ_BINARY_NAME = "da-read"
@@ -494,7 +494,7 @@ class RuleFile:
     """
 
     __slots__ = ("path", "problem", "_documents", "manifest", "kind", "key", "object_name",
-                 "unread")
+                 "document", "unread")
 
     def __init__(self, path: str, documents: "list[Any] | None", problem: "str | None") -> None:
         self.path = path
@@ -510,6 +510,10 @@ class RuleFile:
         self.key: "str | None" = None
         #: the delivering document's ``metadata.name`` (a manifest's rule file)
         self.object_name: "str | None" = None
+        #: which object of kubectl's reading of the manifest delivers it,
+        #: from 1 (a ``kind: List``'s items are objects of their own); None
+        #: for a plain rule file
+        self.document: "int | None" = None
         #: True for a file ``rule_files_in`` could not read as a manifest or a
         #: rule file (``keep_refusals``): ``problem`` is its readers' reason
         self.unread = False
@@ -709,8 +713,9 @@ def _configmap_value_is_rule_file(text: "str | bytes", crdecode_binary: str | No
     return rf.problem is None and _documents_declare_rule_groups(rf.documents)
 
 
-#: ``(manifest, kind, key, text | None, problem | None, metadata.name | None)``
-_Keyed = "tuple[str, str, str, str | None, str | None, str | None]"
+#: ``(manifest, kind, key, text | None, problem | None, metadata.name | None,
+#: object number)``
+_Keyed = "tuple[str, str, str, str | None, str | None, str | None, int]"
 
 
 #: The kinds whose documents deliver rule files to Prometheus.
@@ -786,8 +791,13 @@ def rule_object_problem(doc: "dict[str, Any]") -> "str | None":
       decoding error: unknown field "<name>"`` — a data key written one
       indent short (``rules.yml: |`` beside ``data:``) is one. ``data`` is
       a ``map[string]string`` and ``binaryData`` a ``map[string][]byte``, so
-      either, when present and not null, must be a mapping. (A value of the
-      wrong type is a per-key problem of its rule file.)
+      either, when present and not null, must be a mapping, and no key may be
+      in both (k8s.io/kubernetes pkg/apis/core/validation,
+      ``ValidateConfigMap``, which checks it in its ``data`` loop:
+      ``data[<key>]: Invalid value: "<key>": duplicate of key present in
+      binaryData`` — kubelet would serve the ``data`` one, but the API
+      server never takes the object). (A value of the wrong type is a
+      per-key problem of its rule file.)
     * PrometheusRule (the vendored CRD schema, ``PROMETHEUSRULE_SCHEMA``):
       every key the schema ``required`` must be there; a top-level key the
       schema's ``properties`` does not name is an unknown field, which
@@ -818,6 +828,11 @@ def rule_object_problem(doc: "dict[str, Any]") -> "str | None":
                 return (f"ConfigMap {name}: its {field} is {type(value).__name__}, not a "
                         f"mapping (a ConfigMap's {field} is a map of key to "
                         f"{'string' if field == 'data' else 'base64'})")
+        both = sorted(set(doc.get("data") or {}) & set(doc.get("binaryData") or {}))
+        if both:
+            return (f"ConfigMap {name}: the API server refuses it (data[{both[0]}]: Invalid "
+                    f"value: \"{both[0]}\": duplicate of key present in binaryData — a key "
+                    "is in data or in binaryData, not both)")
         return None
     schema = _prometheusrule_schema()
     props = schema.get("properties") or {}
@@ -861,7 +876,7 @@ def _manifest_keyed(path: str, docs: "list[Any]", only_declared: bool,
             continue
         name = doc["metadata"]["name"]
         if kind == "PrometheusRule":
-            keyed.append((path, kind, "spec", json.dumps(doc["spec"]), None, name))
+            keyed.append((path, kind, "spec", json.dumps(doc["spec"]), None, name, i))
         elif kind == "ConfigMap":
             data = doc.get("data") or {}
             for key, value in data.items():
@@ -869,33 +884,34 @@ def _manifest_keyed(path: str, docs: "list[Any]", only_declared: bool,
                     if only_declared and not _configmap_value_is_rule_file(
                             value, crdecode_binary, binary):
                         continue
-                    keyed.append((path, kind, key, value, None, name))
+                    keyed.append((path, kind, key, value, None, name, i))
                 else:
                     keyed.append((path, kind, key, None,
-                                  "a ConfigMap data value must be a string", name))
+                                  "a ConfigMap data value must be a string", name, i))
             bdata = doc.get("binaryData") or {}
             for key, value in bdata.items():
                 try:
                     text = binary_data_bytes(value).decode("utf-8")
                 except (ValueError, UnicodeDecodeError, binascii.Error):
                     keyed.append((path, kind, key, None,
-                                  "binaryData value is not base64 of UTF-8 text", name))
+                                  "binaryData value is not base64 of UTF-8 text", name, i))
                 else:
                     if only_declared and not _configmap_value_is_rule_file(
                             text, crdecode_binary, binary):
                         continue
-                    keyed.append((path, kind, key, text, None, name))
+                    keyed.append((path, kind, key, text, None, name, i))
     return keyed
 
 
 def _read_keyed(keyed: "list[Any]", binary: str | None) -> "list[RuleFile]":
     """The rule loader's reading of every keyed rule file, all in one run."""
-    readable = [(f"{p}#{k}", t) for p, _kind, k, t, _, _n in keyed if t is not None]
+    readable = [(f"{p}#{k}", t) for p, _kind, k, t, _, _n, _i in keyed if t is not None]
     read = iter(prometheus_rule_text_results(readable, binary))
     out = []
-    for path, kind, key, text, problem, name in keyed:
+    for path, kind, key, text, problem, name, number in keyed:
         r = next(read) if text is not None else RuleFile(f"{path}#{key}", None, problem)
         r.manifest, r.kind, r.key, r.object_name = path, kind, key, name
+        r.document = number
         out.append(r)
     return out
 
@@ -1230,50 +1246,302 @@ def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
     return sorted(chosen)
 
 
-#: rule-packs/, declared by path (#3426): the rule packs are the files these
-#: globs take; the other YAML that sits beside them is named here, not
-#: judged by its content. A YAML file in rule-packs/ (top level, any case of
-#: suffix) that is neither is refused, so a pack named another way cannot
-#: slip past. ⛔ The one declaration: `lint --rule-pack-dir`,
-#: `silencer-drift-check --rule-pack-dir`, `validate-config --rule-packs`,
-#: the CI workflows and the repo lints all choose rule packs through
-#: ``rule_pack_files`` — no caller lists `--exclude` patterns for it.
-RULE_PACK_GLOBS = ("rule-pack-*.yaml", "rule-pack-*.yml")
-RULE_PACKS_OTHER_YAML = ("threshold-registry.yaml",)
+# --- Where this repo ships rule files: the one declaration (#3438) ----------
 
 
-def rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathlib.Path]":
-    """The rule packs of the directory *rule_packs* (``RULE_PACK_GLOBS``,
-    top level), sorted. Raises :class:`SourcesUnlisted` naming every
-    top-level entry with a YAML suffix (any case) that is neither a rule
-    pack nor one of ``RULE_PACKS_OTHER_YAML``, every such entry that is not
-    a regular file (a dangling symlink), and a directory that cannot be
-    listed — a declaration that does not cover the directory is no
-    answer."""
-    root = pathlib.Path(rule_packs)
+class RuleSource(NamedTuple):
+    """One directory this repo ships rule files from, declared by path.
+
+    ``directory`` is POSIX, relative to the repo root. Its rule files are
+    the top-level files whose name matches one of ``rule_files``
+    (``fnmatchcase``, the whole name); ``not_rule_files`` names every other
+    top-level YAML file there — declared not to be rule files, not judged
+    by content. A top-level entry with a YAML suffix in any case
+    (``YAML_SUFFIXES``) that is neither is refused (:class:`SourcesUnlisted`),
+    so a rule file named another way — ``.YAML`` included — cannot slip past.
+    Subdirectories are not listed: what sits there is no declared rule file
+    (the repo's coverage tripwire, ``scripts/tools/lint/_rule_tripwire.py``,
+    names one that looks like rules)."""
+
+    directory: str
+    rule_files: "tuple[str, ...]"
+    not_rule_files: "tuple[str, ...]"
+
+
+#: rule-packs/: the source rule packs. ⛔ ``rule_pack_files`` is this entry
+#: applied to any directory: `lint --rule-pack-dir`, `silencer-drift-check
+#: --rule-pack-dir`, `validate-config --rule-packs`, the CI workflows and the
+#: repo lints all choose rule packs through it — no caller lists `--exclude`
+#: patterns for it, and no second glob exists.
+RULE_PACKS = RuleSource(
+    "rule-packs", ("rule-pack-*.yaml", "rule-pack-*.yml"), ("threshold-registry.yaml",))
+#: operator-manifests/: the PrometheusRule copies of the rule packs.
+OPERATOR_RULES = RuleSource(
+    "operator-manifests", ("da-rule-pack-*.yaml", "da-rule-pack-*.yml"), ())
+#: k8s/03-monitoring/: the rules ConfigMaps Prometheus mounts — the copies of
+#: the rule packs and the hand-authored platform rules.
+CONFIGMAP_RULES = RuleSource(
+    "k8s/03-monitoring", ("configmap-rules-*.yaml", "configmap-rules-*.yml"), (
+        "configmap-alertmanager.yaml",
+        "configmap-grafana-da-overview.yaml",
+        "configmap-grafana.yaml",
+        "configmap-prometheus.yaml",
+        "cronjob-maintenance-scheduler.yaml",
+        "cronjob-threshold-govern.yaml",
+        "deployment-alertmanager.yaml",
+        "deployment-grafana.yaml",
+        "deployment-kube-state-metrics.yaml",
+        "deployment-prometheus.yaml",
+        "network-policies.yaml",
+        "rbac-prometheus.yaml",
+        "secret-grafana.yaml",
+        "secret-watchdog-heartbeat.yaml",
+        "service-alertmanager.yaml",
+        "service-grafana.yaml",
+        "service-prometheus.yaml",
+        "validatingadmissionpolicy-projection-gate.yaml",
+    ))
+#: ⛔ Every place this repo ships rule files from. A rule file anywhere else
+#: is not read by the repo's rule contracts (``scripts/tools/lint/_rule_tree.py``);
+#: add it here, or to ``CHART_VALUES_RULES``.
+RULE_SOURCES: "tuple[RuleSource, ...]" = (RULE_PACKS, OPERATOR_RULES, CONFIGMAP_RULES)
+
+
+#: ``ChartValuesRules.shape``: the value at the key path is a whole rule
+#: file (a mapping with ``groups``) — the template writes it as the file.
+RULE_FILE_VALUE = "rule-file"
+#: ``ChartValuesRules.shape``: the value is a list of rules — the template
+#: writes it under a group's ``rules:``.
+RULE_LIST_VALUE = "rule-list"
+
+
+class ChartValuesRules(NamedTuple):
+    """Rules a Helm chart's values deliver (a template that writes
+    ``{{ toYaml .Values.<path> }}`` into a rules ConfigMap or a
+    PrometheusRule): the values file (POSIX, relative to the repo root), the
+    key path in it, and what the template makes of the value there
+    (``shape``): ``RULE_FILE_VALUE`` (the value is the rule file) or
+    ``RULE_LIST_VALUE`` (the value is a group's rule list)."""
+
+    values: str
+    key_path: "tuple[str, ...]"
+    shape: str
+
+
+#: ⛔ BREAKING (#3438): rules a chart's values inject are read only when
+#: registered here — the repo does not render charts, and nothing finds them
+#: by content. None today; the coverage tripwire names any chart values file
+#: that holds rule-shaped content and is not registered.
+CHART_VALUES_RULES: "tuple[ChartValuesRules, ...]" = ()
+
+#: YAML that looks like rules to the coverage tripwire
+#: (``scripts/tools/lint/_rule_tripwire.py``) and is declared NOT to ship
+#: rules, ``(path, why)`` (POSIX, relative to the repo root). Only these are
+#: passed over by the tripwire — a ``RULE_SOURCES`` entry's
+#: ``not_rule_files`` says which YAML beside the rule files is accounted
+#: for, and the tripwire still judges every one of them.
+NOT_RULE_FILES: "tuple[tuple[str, str], ...]" = (
+    ("k8s/03-monitoring/configmap-alertmanager.yaml",
+     "its Alertmanager markdown template documents `- alert:` as an example; "
+     "Alertmanager config and templates, no rule file"),
+)
+
+
+def _declared_in(directory: "str | os.PathLike[str]", source: RuleSource) -> "list[pathlib.Path]":
+    """*source*'s declaration applied to *directory*: its rule files, sorted
+    (see :class:`RuleSource`)."""
+    root = pathlib.Path(directory)
     try:
         entries = sorted(root.iterdir())
     except OSError as e:
         raise SourcesUnlisted([(str(root), f"cannot list this directory: {e.strerror}")]) from e
-    packs, problems = [], []
+    found, problems = [], []
     for f in entries:
         if not _is_yaml_name(f.name):
             continue
-        is_pack = any(fnmatch.fnmatchcase(f.name, g) for g in RULE_PACK_GLOBS)
-        if not (is_pack or f.name in RULE_PACKS_OTHER_YAML):
+        is_rule_file = any(fnmatch.fnmatchcase(f.name, g) for g in source.rule_files)
+        if not (is_rule_file or f.name in source.not_rule_files):
+            others = ", ".join(source.not_rule_files) or "none"
             problems.append((str(f), (
-                "a YAML file in rule-packs/ that is neither a rule pack ("
-                + " / ".join(RULE_PACK_GLOBS) + ") nor declared beside them ("
-                + ", ".join(RULE_PACKS_OTHER_YAML) + "); name a rule pack rule-pack-*.yaml, "
-                "or declare the file in _lib_consumer_read.RULE_PACKS_OTHER_YAML")))
+                f"a YAML file in {source.directory}/ that is neither a rule file ("
+                + " / ".join(source.rule_files) + f") nor declared beside them ({others}); "
+                f"name it {source.rule_files[0]}, or declare it in the "
+                f"{source.directory} entry of _lib_consumer_read.RULE_SOURCES")))
         elif not f.is_file():
             problems.append((str(f), "a dangling symlink" if f.is_symlink() and not f.exists()
                              else "not a regular file"))
-        elif is_pack:
-            packs.append(f)
+        elif is_rule_file:
+            found.append(f)
     if problems:
         raise SourcesUnlisted(problems)
-    return packs
+    return found
+
+
+def rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathlib.Path]":
+    """The rule packs of the directory *rule_packs* (``RULE_PACKS``, top
+    level), sorted. Raises :class:`SourcesUnlisted` naming every top-level
+    entry with a YAML suffix (any case) that is neither a rule pack nor
+    declared beside them, every such entry that is not a regular file (a
+    dangling symlink), and a directory that cannot be listed — a declaration
+    that does not cover the directory is no answer."""
+    return _declared_in(rule_packs, RULE_PACKS)
+
+
+class NoDeclaredRuleFiles(Exception):
+    """A ``RULE_SOURCES`` entry matched no file: the repo layout moved or the
+    declaration went stale. An empty source is no answer — every contract
+    that reads it would pass over nothing (Bazel's ``glob(allow_empty =
+    False)``)."""
+
+
+def repo_rule_files(repo_root: "str | os.PathLike[str]") -> "list[pathlib.Path]":
+    """⛔ THE files this repo ships rule files in (#3438): every
+    ``RULE_SOURCES`` entry applied to its directory under *repo_root*, in
+    declaration order, each sorted. Hand them to ``rule_files_in``.
+
+    Listed from the file system, not ``git ls-files``: ``rule_pack_files``
+    is the same declaration applied to a directory that is no checkout (the
+    da-tools image, a customer's ``--rule-pack-dir``), and one declaration
+    has one way to list. In CI the checkout's files are the tracked ones; a
+    local untracked file that matches is read too — it is read, not
+    skipped. Raises :class:`SourcesUnlisted` as ``rule_pack_files`` does,
+    and :class:`NoDeclaredRuleFiles` when an entry matches no file."""
+    out: "list[pathlib.Path]" = []
+    problems: "list[tuple[str, str]]" = []
+    empty = []
+    for source in RULE_SOURCES:
+        try:
+            files = _declared_in(pathlib.Path(repo_root, source.directory), source)
+        except SourcesUnlisted as e:
+            problems += e.files
+            continue
+        if not files:
+            empty.append(f"{source.directory}/ ({' / '.join(source.rule_files)})")
+        out += files
+    if problems:
+        raise SourcesUnlisted(problems)
+    if empty:
+        raise NoDeclaredRuleFiles(
+            f"{len(empty)} declared rule source(s) match no file under {repo_root}: "
+            + "; ".join(empty) + " — the repo layout moved or RULE_SOURCES is stale; an "
+            "empty source makes every contract that reads it pass over nothing")
+    return out
+
+
+def chart_values_rule_files(repo_root: "str | os.PathLike[str]",
+                            binary: str | None = None,
+                            crdecode_binary: str | None = None) -> "list[RuleFile]":
+    """The rule files ``CHART_VALUES_RULES`` registers, as Prometheus' rule
+    loader reads them, one :class:`RuleFile` per registration in order
+    (``manifest`` the values file as registered, ``key`` the dotted key
+    path, ``path`` ``<values>#<key>``). The values file is read with the
+    any-YAML reading (Helm values are no manifest); the value at the key
+    path goes to the rule loader as JSON. A values file that reading
+    refuses, or a key path that is not there, is a :class:`RuleFile` with
+    that ``problem`` (``unread`` True) — never taken for one with no rules.
+
+    ⛔ The shape is part of the reading, here and nowhere else: a
+    ``RULE_LIST_VALUE`` is read as the rule file the template makes of it,
+    ``groups: [{name: "<values>#<key path>", rules: <the list>}]``; a
+    ``RULE_FILE_VALUE`` is read as it is. Any other ``shape`` is a
+    problem."""
+    regs = list(CHART_VALUES_RULES)
+    if not regs:
+        return []
+    files = sorted({r.values for r in regs})
+    present = [f for f in files if os.path.isfile(os.path.join(repo_root, f))]
+    read = any_yaml_documents_of([os.path.join(repo_root, f) for f in present],
+                                 crdecode_binary, keep_refusals=True)
+    by_file: "dict[str, Any]" = dict(zip(present, read.values()))
+    keyed, out = [], []
+    for reg in regs:
+        key = ".".join(reg.key_path)
+        docs = by_file.get(reg.values)
+        problem = None
+        node: Any = None
+        if reg.shape not in (RULE_FILE_VALUE, RULE_LIST_VALUE):
+            problem = (f"shape {reg.shape!r} is neither {RULE_FILE_VALUE!r} nor "
+                       f"{RULE_LIST_VALUE!r}")
+        elif docs is None:
+            problem = "the registered values file is not there"
+        elif isinstance(docs, ConsumerReadError):
+            problem = f"the any-YAML reading refuses the values file: {_reason(docs)}"
+        elif len(docs) != 1:
+            problem = f"a values file is one YAML document; this one has {len(docs)}"
+        else:
+            node = docs[0]
+            for part in reg.key_path:
+                if not isinstance(node, dict) or part not in node:
+                    problem = f"the registered key path {key} is not in the values file"
+                    break
+                node = node[part]
+        if problem is None and reg.shape == RULE_LIST_VALUE:
+            node = {"groups": [{"name": f"{reg.values}#{key}", "rules": node}]}
+        keyed.append((reg, key, problem, None if problem else json.dumps(node)))
+    loaded = iter(prometheus_rule_text_results(
+        [(f"{r.values}#{k}", t) for r, k, p, t in keyed if p is None], binary))
+    for reg, key, problem, _text in keyed:
+        rf = next(loaded) if problem is None else RuleFile(f"{reg.values}#{key}", None, problem)
+        rf.manifest, rf.key = reg.values, key
+        rf.unread = problem is not None
+        out.append(rf)
+    return out
+
+
+def stale_rule_source_entries(repo_root: "str | os.PathLike[str]", *,
+                              rings: "Callable[[str, list[str]], tuple[str, ...]]"
+                              ) -> "list[str]":
+    """Declaration entries that name nothing, or no longer need to (#3438),
+    one message each:
+
+    * a ``RULE_SOURCES`` entry's ``not_rule_files`` name, a
+      ``NOT_RULE_FILES`` path or a ``CHART_VALUES_RULES`` values file that
+      is not there, and a registered key path the values file does not hold;
+    * a ``NOT_RULE_FILES`` path that is also a declared rule file — it is
+      read as rules and exempted as no rules at once;
+    * a ``NOT_RULE_FILES`` path the coverage tripwire would not ring on
+      without its exemption: the exemption is no longer needed and would
+      hide whatever rules land there next.
+
+    *rings* is the coverage tripwire run on ``(repo_root, [paths])`` without
+    exemptions (the caller passes it: no module under scripts/tools imports
+    the tripwire). A stale entry is not left in silence: it reads as an
+    account of a file that no longer is one. Raises
+    :class:`ConsumerReadError` when a binary cannot be had."""
+    root = pathlib.Path(repo_root)
+    out = []
+    for src in RULE_SOURCES:
+        for name in src.not_rule_files:
+            if not (root / src.directory / name).is_file():
+                out.append(f"{src.directory}/{name}: in the not_rule_files of the "
+                           f"{src.directory} entry of RULE_SOURCES, and not there")
+    try:
+        rule_files = {p.relative_to(root).as_posix() for p in repo_rule_files(root)}
+    except SourcesUnlisted as e:
+        out.append(f"RULE_SOURCES: {e}: {_reason(e)}")
+        rule_files = set()
+    except NoDeclaredRuleFiles as e:
+        out.append(f"RULE_SOURCES: {e}")
+        rule_files = set()
+    still = []
+    for path, _why in NOT_RULE_FILES:
+        if not (root / path).is_file():
+            out.append(f"{path}: in NOT_RULE_FILES, and not there")
+        elif path in rule_files:
+            out.append(f"{path}: in NOT_RULE_FILES and a declared rule file (RULE_SOURCES) "
+                       "at once — it cannot be both")
+        else:
+            still.append(path)
+    for path in still:
+        if not rings(str(root), [path]):
+            out.append(f"{path}: in NOT_RULE_FILES, and the coverage tripwire would not ring "
+                       "on it without the exemption — the exemption is no longer needed; "
+                       "drop it")
+    for rf in chart_values_rule_files(root):
+        if rf.unread:
+            out.append(f"{rf.manifest}#{rf.key}: a CHART_VALUES_RULES registration that "
+                       f"reads nothing: {rf.problem}")
+    return out
 
 
 def _reason(e: ConsumerReadError) -> str:

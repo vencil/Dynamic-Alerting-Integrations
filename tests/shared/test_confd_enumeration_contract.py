@@ -207,12 +207,14 @@ def _scope_kinds(scope: ast.AST, calls) -> set[str]:
 #: Functions whose top-level filter is the QUESTION, not a flat read of the
 #: tree — reviewed one by one, with why nothing below the root bears on it.
 _ROOT_ONLY_BY_DEFINITION: dict[tuple[str, str], str] = {
-    ("_lib_consumer_read.py", "rule_pack_files"):
-        "lists rule-packs/ (a repo-owned tree, never a tenant conf.d; the "
+    ("_lib_consumer_read.py", "_declared_in"):
+        "lists one RULE_SOURCES directory (rule-packs/, operator-manifests/, "
+        "k8s/03-monitoring/ — repo-owned trees, never a tenant conf.d; the "
         "module is in the population only because its docstring says it reads "
-        "files OUTSIDE conf.d): the rule packs are its top-level "
-        "rule-pack-*.yaml|yml by declaration (#3426), and every other top-level "
-        "YAML there is refused by name; rule-packs/recipes/ holds no rule pack",
+        "files OUTSIDE conf.d): the rule files are its top-level files by "
+        "declaration (#3426, #3438), every other top-level YAML there is "
+        "refused by name, and a rules file in a subdirectory rings the "
+        "coverage tripwire (lint/_rule_tripwire.py) instead of being read",
     ("_lib_key_verdict.py", "root_platform_files"):
         "asks whether the conf.d ROOT holds any platform (`_`) file — the "
         "`undecidable` switch of the key verdict (ADR-038); a `_` file below "
