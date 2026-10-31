@@ -28,6 +28,7 @@ from pathlib import Path
 import pytest
 
 import generate_rule_pack_readme as grpr  # noqa: E402  (path via conftest)
+import _lib_consumer_read as cr  # noqa: E402  (#3471: the rule-source declaration)
 import validate_docs_versions as vdv  # noqa: E402  (path via conftest)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -42,7 +43,7 @@ def test_default_rule_packs_dir_resolves_to_repo_root():
     assert default == REPO_ROOT / "rule-packs"
     assert default.is_dir(), f"{default} is not a directory (path-default bug?)"
     # ...and it actually holds rule-pack YAMLs, so generate_table_rows won't bail.
-    assert list(default.glob("rule-pack-*.yaml")), "no rule-pack-*.yaml under default dir"
+    assert cr.RULE_PACKS.files_in(default), "no declared rule pack under default dir"
 
 
 def test_prose_pack_count_is_derived_and_matches_authoritative():

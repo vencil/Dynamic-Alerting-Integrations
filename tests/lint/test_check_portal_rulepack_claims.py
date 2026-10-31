@@ -74,6 +74,39 @@ def test_shipped_index_covers_all_three_trees(repo: Path):
     assert len(shipped["ContainerOOMKilled"]["origins"]) >= 2
 
 
+def _rule_tree(root: Path) -> None:
+    """A three-tree repo: a `.yml` pack, a ConfigMap copy, and an operator
+    copy that alone holds `OnlyInOperator`."""
+    for d in ("rule-packs", "operator-manifests", "k8s/03-monitoring"):
+        (root / d).mkdir(parents=True)
+    rule = "      - alert: {a}\n        expr: up == 0\n        labels: {{severity: warning}}\n"
+    (root / "rule-packs" / "rule-pack-p.yml").write_text(
+        "groups:\n  - name: g\n    rules:\n" + rule.format(a="FromYmlPack"), encoding="utf-8")
+    (root / "k8s/03-monitoring" / "configmap-rules-p.yaml").write_text(
+        "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: prometheus-rules-p\ndata:\n"
+        "  p-alert.yml: |\n    groups:\n      - name: g\n        rules:\n"
+        "          - alert: FromConfigMap\n            expr: up == 0\n", encoding="utf-8")
+    (root / "operator-manifests" / "da-rule-pack-p.yaml").write_text(
+        "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+        "metadata:\n  name: da-rule-pack-p\nspec:\n  groups:\n  - name: g\n    rules:\n"
+        "    - alert: OnlyInOperator\n      expr: up == 0\n", encoding="utf-8")
+
+
+def test_index_reads_each_declared_tree(tmp_path: Path):
+    """#3471: the three trees are the declaration's. A `.yml` pack is read,
+    the operator copy is read (its alert is indexed under its pack), and a
+    YAML beside the copies that the declaration does not cover is named."""
+    import _lib_consumer_read
+    _rule_tree(tmp_path)
+    alerts, _records = guard.collect_shipped_rules(tmp_path)
+    assert {"FromYmlPack", "FromConfigMap", "OnlyInOperator"} <= set(alerts)
+    assert alerts["OnlyInOperator"]["origins"] == ["p"]
+    (tmp_path / "operator-manifests" / "stray.yaml").write_text("x: 1\n", encoding="utf-8")
+    with pytest.raises(_lib_consumer_read.SourcesUnlisted) as exc:
+        guard.collect_shipped_rules(tmp_path)
+    assert [Path(p).name for p, _ in exc.value.files] == ["stray.yaml"]
+
+
 def test_recording_index_is_populated(repo: Path):
     """Recording rules are indexed separately from alerts, and don't cross-contaminate."""
     alerts, records = guard.collect_shipped_rules(repo)

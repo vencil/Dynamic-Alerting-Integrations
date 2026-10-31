@@ -57,14 +57,16 @@ func ruleExprs(v any) []string {
 func TestRulePackSeveritySelectorsAreTheThresholdSeverities(t *testing.T) {
 	root := findRepoRoot(t)
 	var files []string
-	for _, pattern := range []string{
-		"rule-packs/rule-pack-*.yaml",
-		"operator-manifests/da-rule-pack-*.yaml",
-		"k8s/03-monitoring/configmap-rules-*.yaml",
+	// Each family's declared rule-file globs (`.yaml` and `.yml`; see
+	// globDeclared); a family that matches nothing is fatal.
+	for _, family := range [][]string{
+		{"rule-packs/rule-pack-*.yaml", "rule-packs/rule-pack-*.yml"},
+		{"operator-manifests/da-rule-pack-*.yaml", "operator-manifests/da-rule-pack-*.yml"},
+		{"k8s/03-monitoring/configmap-rules-*.yaml", "k8s/03-monitoring/configmap-rules-*.yml"},
 	} {
-		got, err := filepath.Glob(filepath.Join(root, pattern))
-		if err != nil || len(got) == 0 {
-			t.Fatalf("glob %s: %d files, %v — the scan would pass over nothing", pattern, len(got), err)
+		got := globDeclared(t, root, family...)
+		if len(got) == 0 {
+			t.Fatalf("glob %v: no files — the scan would pass over nothing", family)
 		}
 		files = append(files, got...)
 	}

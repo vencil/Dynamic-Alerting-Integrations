@@ -1345,6 +1345,7 @@ class RuleSource(NamedTuple):
             raise SourcesUnlisted([(str(root), f"cannot list this directory: {e.strerror}")]) from e
         named = [f for f in entries if self.member(f.name) is not None]
         problems = [(str(f), _not_regular(str(f))) for f in named if not f.is_file()]
+        problems += _same_member(named, self)
         if problems:
             raise SourcesUnlisted(problems)
         return named
@@ -1454,9 +1455,25 @@ def _declared_in(directory: "str | os.PathLike[str]", source: RuleSource) -> "li
                              else "not a regular file"))
         elif is_rule_file:
             found.append(f)
+    problems += _same_member(found, source)
     if problems:
         raise SourcesUnlisted(problems)
     return found
+
+
+def _same_member(files: "list[pathlib.Path]", source: RuleSource) -> "list[tuple[str, str]]":
+    """Every file of *files* whose member (pack) another one shares —
+    ``rule-pack-redis.yaml`` beside ``rule-pack-redis.yml`` — named with
+    the other (#3471). Every caller keys the files by member, so one of the
+    two would silently replace the other."""
+    by_member: "dict[str, list[pathlib.Path]]" = {}
+    for f in files:
+        by_member.setdefault(source.member(f.name), []).append(f)
+    return [(str(f), "another file of the same " + source.directory + " member "
+             f"{m!r} is beside it ({', '.join(o.name for o in group if o != f)}); "
+             "every reader keys rule files by member, so one would replace the "
+             "other — keep one")
+            for m, group in by_member.items() if len(group) > 1 for f in group]
 
 
 def rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathlib.Path]":

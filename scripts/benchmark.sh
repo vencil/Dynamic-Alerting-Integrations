@@ -324,7 +324,23 @@ if [[ "${SCALING_CURVE}" == true ]]; then
   #   Tier 3 (9): + oracle, db2, clickhouse      (full set = current state)
   TIER2_CMS="prometheus-rules-redis prometheus-rules-mongodb prometheus-rules-elasticsearch"
   TIER3_CMS="prometheus-rules-oracle prometheus-rules-db2 prometheus-rules-clickhouse"
-  K8S_DIR="${SCRIPT_DIR}/../k8s/03-monitoring"
+  # #3471: which files are the rules ConfigMaps (restored at the end) is the
+  # one declaration (_lib_consumer_read.CONFIGMAP_RULES), not a glob of this
+  # script's own. ⛔ Listed HERE, before anything is deleted: a listing that
+  # fails after the tier deletes would leave the cluster half torn down. An
+  # undeclared YAML (or two files of one pack) stops the run, named, rc 2.
+  RULE_CM_FILES=$(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import _lib_consumer_read as c
+try:
+    files = c.CONFIGMAP_RULES.files_under(sys.argv[2])
+except c.ConsumerReadError as e:
+    print("ERROR: cannot list the rules ConfigMaps: " + c.error_text(e), file=sys.stderr)
+    sys.exit(2)
+for f in files:
+    print(f)
+' "${SCRIPT_DIR}/tools" "${SCRIPT_DIR}/..") || exit 2
 
   # --- Measure at 9 Rule Packs (current state) ---
   sleep 20  # ensure stable eval metrics
@@ -362,16 +378,7 @@ if [[ "${SCALING_CURVE}" == true ]]; then
 
   # --- Restore all Rule Packs ---
   info "Restoring all Rule Pack ConfigMaps..."
-  # #3471: which files are the rules ConfigMaps is the one declaration
-  # (_lib_consumer_read.CONFIGMAP_RULES), not a glob of this script's own;
-  # an undeclared YAML there stops the restore, named.
-  RULE_CM_FILES=$(python3 -c '
-import sys
-sys.path.insert(0, sys.argv[1])
-import _lib_consumer_read as c
-for f in c.CONFIGMAP_RULES.files_under(sys.argv[2]):
-    print(f)
-' "${SCRIPT_DIR}/tools" "${SCRIPT_DIR}/..") || { err "cannot list the rules ConfigMaps"; exit 1; }
+  # The files listed before the first delete (RULE_CM_FILES, above).
   while IFS= read -r f; do
     [ -n "${f}" ] || continue
     kubectl apply -f "${f}" -n monitoring >/dev/null 2>&1

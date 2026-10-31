@@ -3877,6 +3877,13 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr)
         return EXIT_VIOLATION if args.ci else EXIT_OK
     except Exception as exc:  # noqa: BLE001 — caller error, not a violation
+        import _lib_consumer_read  # noqa: PLC0415  (imported where a file is read)
+        if isinstance(exc, _lib_consumer_read.ConsumerReadError):
+            # #3471: a rule-packs/ entry the declaration refuses (an
+            # undeclared YAML, two files of one pack), or a pack the rule
+            # loader refuses — named, with every file and why.
+            print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+            return EXIT_CALLER_ERROR
         print(f"ERROR: reachability check crashed: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 

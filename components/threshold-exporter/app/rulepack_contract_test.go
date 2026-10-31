@@ -28,6 +28,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 
@@ -253,12 +254,29 @@ func assertComponentMetric(t *testing.T, where string, vs *promqlparser.VectorSe
 	return component, metric, ok
 }
 
+// globDeclared is every file under root that one of patterns names, sorted.
+// ⛔ The patterns are a family's declared rule-file globs
+// (scripts/tools/_lib_consumer_read.RULE_SOURCES: `.yaml` AND `.yml`); Go
+// cannot import that declaration, so
+// tests/shared/test_rule_source_globs_declared_once.py requires every Go
+// file that spells one of a family's globs to spell them all (#3471).
+func globDeclared(t *testing.T, root string, patterns ...string) []string {
+	t.Helper()
+	var out []string
+	for _, p := range patterns {
+		got, err := filepath.Glob(filepath.Join(root, p))
+		if err != nil {
+			t.Fatalf("glob %s: %v", p, err)
+		}
+		out = append(out, got...)
+	}
+	sort.Strings(out)
+	return out
+}
+
 func TestRulePackExporterContract(t *testing.T) {
 	root := findRepoRoot(t)
-	packs, err := filepath.Glob(filepath.Join(root, "rule-packs", "rule-pack-*.yaml"))
-	if err != nil {
-		t.Fatalf("glob rule packs: %v", err)
-	}
+	packs := globDeclared(t, root, "rule-packs/rule-pack-*.yaml", "rule-packs/rule-pack-*.yml")
 
 	packCount := 0
 	thresholdSelectorCount := 0
@@ -433,10 +451,7 @@ const minThresholdRecords = 50
 // dozens of legit records).
 func TestThresholdRecordsAreConsumed(t *testing.T) {
 	root := findRepoRoot(t)
-	packs, err := filepath.Glob(filepath.Join(root, "rule-packs", "rule-pack-*.yaml"))
-	if err != nil {
-		t.Fatalf("glob rule packs: %v", err)
-	}
+	packs := globDeclared(t, root, "rule-packs/rule-pack-*.yaml", "rule-packs/rule-pack-*.yml")
 
 	recordCount := 0
 	for _, packPath := range packs {
