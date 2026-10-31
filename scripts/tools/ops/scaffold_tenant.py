@@ -37,7 +37,9 @@ from _lib_python import (  # noqa: E402
     read_onboard_hints, detect_cli_lang, ensure_dir_or_die, write_text_or_die,
     DOCS_INSTALL_URL, DOCS_SITE_BASE,
 )
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, die_caller_error  # noqa: E402
+from _lib_paths import classify_path  # noqa: E402  (#3415)
+from _lib_label import safe_label  # noqa: E402  (#3415)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: the conf.d files go to da-guard write)
 
@@ -1453,7 +1455,16 @@ def run_from_onboard(args: argparse.Namespace) -> None:
     Reads hints produced by onboard_platform.py and generates config
     for each tenant with pre-filled DB types and routing hints.
     """
-    hints = read_onboard_hints(args.from_onboard)
+    # #3415: a path that is missing, not a file, or cannot be opened is named
+    # by the shared judgement; a file that is not JSON is named too, not a
+    # JSONDecodeError traceback.
+    problem = classify_path(args.from_onboard, "file", lang=_LANG, flag="--from-onboard")
+    if problem is not None:
+        die_caller_error(f"ERROR: {problem.message}", problem.reason)
+    try:
+        hints = read_onboard_hints(args.from_onboard)
+    except (OSError, ValueError) as exc:
+        die_caller_error(f"ERROR: --from-onboard {safe_label(args.from_onboard)}: {exc}")
     if not hints:
         print(f"ERROR: Cannot read onboard hints: {args.from_onboard}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)

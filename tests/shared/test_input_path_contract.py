@@ -429,16 +429,16 @@ class TestArgvErrorIsNotDownstreamOfTheConfigTree:
 #     result: exactly 1 of them was a real defect, and 2 of the others were the
 #     CORRECT split being flagged.
 #   * Its exemption's premise held for 1 of 3 unusable inputs
-#     (`scaffold --from-onboard` exits 2 on a missing file, but raises an
-#     uncaught traceback at rc=1 on malformed JSON and on non-UTF-8).
+#     (`scaffold --from-onboard` exited 2 on a missing file, but with a
+#     traceback on malformed JSON and on non-UTF-8 — named errors since #3415).
 #   * Its anti-vacuity witness punished FIXING the defect it exempted: after a
 #     correct split of `_lib_io.read_onboard_hints`, the assertion went red
 #     with a message forbidding the only correct response.
 #
 # ⚠️ `_lib_io.read_onboard_hints` still collapses the two cases. Its one call
-# site (`scaffold_tenant.run_from_onboard`) turns a falsy return into exit 2,
-# which is why the missing-file path is fine and the malformed/non-UTF-8 paths
-# are not. Nothing here watches either fact.
+# site (`scaffold_tenant.run_from_onboard`) judges the path first and names a
+# file that is not JSON (#3415, pinned in tests/shared/test_caller_paths.py);
+# nothing here watches that.
 #
 # ⛔ Nor the call-site count itself. `test_known_site_still_has_exactly_one_
 # caller` went out with the scan, and it did NOT depend on the scan: it pinned

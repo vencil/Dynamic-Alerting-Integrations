@@ -39,14 +39,16 @@ DENIED_ZH = "無法存取（EACCES）"
 
 #: The tools whose refusal lines are Chinese (fixed, not by `DA_LANG`); every
 #: other row's tool speaks English unless `DA_LANG=zh` (BILINGUAL below).
-SPEAKS_ZH = {"ops/deprecate_rule.py", "dx/inject_waveform.py",
+SPEAKS_ZH = {"ops/deprecate_rule.py", "ops/validate_migration.py", "dx/inject_waveform.py",
              "dx/list_subprocess_only_modules.py", "dx/verify_diff.py"}
 
 #: OPS_SITES rows whose tool follows `DA_LANG` for its refusal line: run
 #: again under `DA_LANG=zh`, the detail is Chinese too.
 BILINGUAL = {"gitops-check", "policy-engine --config-dir", "policy-engine --policy",
              "threshold-govern --config-dir", "notification-tester --config-dir",
-             "threshold-recommend --config-dir", "runtime-audit --rule-packs-dir"}
+             "threshold-recommend --config-dir", "runtime-audit --rule-packs-dir",
+             "runtime-audit --runtime-json", "alert-correlate --input",
+             "scaffold --from-onboard", "rule-pack-split --rule-packs-dir"}
 
 
 def _denied(script: str, lang: str = "en") -> str:
@@ -62,7 +64,8 @@ def _one_language(out: str, script: str, lang: str = "en") -> None:
 #: the ``--json`` reason when the tool answers with an envelope, else None —
 #: a tool whose document keeps its own shape names the path in a row).
 #: {D} is a directory and {F} a file, both under the locked parent; {CONF}
-#: a usable conf.d, {MAP} one with `_instance_mapping.yaml`, {BOX} the box.
+#: a usable conf.d, {MAP} one with `_instance_mapping.yaml`, {RP} a usable
+#: rule-packs directory, {BOX} the box.
 OPS_SITES = [
     ("gitops-check", "gitops_check.py", ["local", "--dir", "{D}", "--json"], "--dir",
      "dir_not_accessible"),
@@ -148,6 +151,20 @@ OPS_SITES = [
     ("runtime-audit --rule-packs-dir", "runtime_audit.py",
      ["--rule-packs-dir", "{D}", "--runtime-json", "{BOX}/silences.json", "--json"],
      "--rule-packs-dir", None),
+    # #3415
+    ("alert-correlate --input", "alert_correlate.py", ["--input", "{F}", "--json"], "--input",
+     "file_not_accessible"),
+    ("validate --mapping", "validate_migration.py", ["--mapping", "{F}"], "--mapping", None),
+    ("cutover --readiness-json", "cutover_tenant.py",
+     ["--readiness-json", "{F}", "--tenant", "t", "--dry-run", "--json"], "--readiness-json",
+     None),
+    ("scaffold --from-onboard", "scaffold_tenant.py", ["--from-onboard", "{F}"],
+     "--from-onboard", None),
+    ("rule-pack-split --rule-packs-dir", "generate_rule_pack_split.py",
+     ["--rule-packs-dir", "{D}", "--output-dir", "{BOX}/rps-out", "--json"], "--rule-packs-dir",
+     "dir_not_accessible"),
+    ("runtime-audit --runtime-json", "runtime_audit.py",
+     ["--rule-packs-dir", "{RP}", "--runtime-json", "{F}", "--json"], "--runtime-json", None),
     # config-history is not a row: every subcommand creates `.da-history`
     # beside --config-dir first, so a locked parent never reaches its check;
     # test_config_history.py pins that check's message on a missing dir.
@@ -257,13 +274,15 @@ def box():
                           / "examples", "mapped")):
             shutil.copytree(src, root / dst)
         (root / "silences.json").write_text("[]\n", encoding="utf-8")
+        (root / "rp").mkdir()
+        shutil.copy2(REPO / "rule-packs" / "rule-pack-mariadb.yaml", root / "rp")
         # inject-waveform: its fixtures, and the VM harness it loads before
         # it asks for --vmalert (the box holds scripts/ only).
         shutil.copytree(REPO / "tests" / "dx" / "fixtures" / "waveform", root / "wf")
         (root / "tests" / "rulepacks").mkdir(parents=True)
         shutil.copy2(REPO / "tests" / "rulepacks" / "vm_harness.py",
                      root / "tests" / "rulepacks" / "vm_harness.py")
-        for top in ("locked", "conf.d", "mapped", "silences.json", "wf", "tests"):
+        for top in ("locked", "conf.d", "mapped", "silences.json", "wf", "tests", "rp"):
             for p in [root / top, *(root / top).rglob("*")]:
                 p.chmod(0o755 if p.is_dir() else 0o644)
         # 000, not 0700: the owner is root, but a non-root CI runs the table
@@ -276,7 +295,8 @@ def box():
                                        "below would be vacuous")
         yield root, run, {"{D}": str(locked / "x"), "{F}": str(locked / "f.yaml"),
                           "{CONF}": str(root / "conf.d"), "{MAP}": str(root / "mapped"),
-                          "{WF}": str(root / "wf"), "{BOX}": str(root), "{NX}": str(nx)}
+                          "{WF}": str(root / "wf"), "{BOX}": str(root), "{NX}": str(nx),
+                          "{RP}": str(root / "rp")}
 
 
 def _expand(arg: str, subst: dict) -> str:
@@ -605,3 +625,121 @@ def test_the_language_is_never_implied(tree):
                  lambda: _lib_paths.require_path(tree / "nope", "any")):
         with pytest.raises(TypeError, match="lang"):
             call()
+
+
+# ── #3415: inputs that bypassed the judgement ─────────────────────────────
+# Missing or of the wrong type, each was a traceback (alert-correlate,
+# validate, cutover, scaffold), "no rule pack files found" after the output
+# tree was made (rule-pack-split), or a message cut at 60 characters
+# (runtime-audit). The locked-parent rows above cover EACCES.
+
+NOT_FOUND = os.strerror(errno.ENOENT)
+
+#: (id, script under ops/, argv with {P} for the path under test, the flag,
+#: "file" or "dir", the tool's language for the detail).
+INPUT_SITES_3415 = [
+    ("alert-correlate --input", "alert_correlate.py", ["--input", "{P}"], "--input", "file", "en"),
+    ("validate --mapping", "validate_migration.py", ["--mapping", "{P}"], "--mapping", "file", "zh"),
+    ("cutover --readiness-json", "cutover_tenant.py",
+     ["--readiness-json", "{P}", "--tenant", "t", "--dry-run"], "--readiness-json", "file", "en"),
+    ("scaffold --from-onboard", "scaffold_tenant.py", ["--from-onboard", "{P}"],
+     "--from-onboard", "file", "en"),
+    ("rule-pack-split --rule-packs-dir", "generate_rule_pack_split.py",
+     ["--rule-packs-dir", "{P}", "--output-dir", "{OUT}"], "--rule-packs-dir", "dir", "en"),
+    ("runtime-audit --runtime-json", "runtime_audit.py",
+     ["--rule-packs-dir", str(REPO / "rule-packs"), "--runtime-json", "{P}"], "--runtime-json",
+     "file", "en"),
+]
+
+_DETAIL_3415 = {
+    ("missing", "en"): NOT_FOUND, ("missing", "zh"): "不存在",
+    ("file", "en"): "not a regular file", ("file", "zh"): "不是一般檔案",
+    ("dir", "en"): "not a directory", ("dir", "zh"): "不是目錄",
+}
+
+
+def _run_ops(script, args):
+    env = {k: v for k, v in os.environ.items() if k != "DA_LANG"}
+    env["DA_LANG"] = "en"
+    return subprocess.run([sys.executable, str(REPO / "scripts" / "tools" / "ops" / script), *args],
+                          capture_output=True, text=True, encoding="utf-8", timeout=120,
+                          env=env, stdin=subprocess.DEVNULL)
+
+
+@pytest.mark.usefixtures("da_read_env")
+@pytest.mark.parametrize("case", ["missing", "wrong_type"])
+@pytest.mark.parametrize("script, argv, flag, kind, lang",
+                         [c[1:] for c in INPUT_SITES_3415], ids=[c[0] for c in INPUT_SITES_3415])
+def test_an_unusable_input_is_named_not_a_traceback(tmp_path, script, argv, flag, kind, lang,
+                                                     case):
+    if case == "missing":
+        # Longer than the 60 characters runtime-audit used to cut at.
+        path = tmp_path / ("missing-" + "x" * 80)
+        detail = _DETAIL_3415[("missing", lang)]
+    else:
+        # A file where a directory is wanted, a directory where a file is.
+        path = tmp_path / "given"
+        if kind == "dir":
+            path.write_text("a: 1\n", encoding="utf-8")
+        else:
+            path.mkdir()
+        detail = _DETAIL_3415[(kind, lang)]
+    out_dir = tmp_path / "out"
+    args = [a.replace("{P}", str(path)).replace("{OUT}", str(out_dir)) for a in argv]
+    proc = _run_ops(script, args)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 2, out[-3000:]
+    assert "Traceback" not in out, out[-3000:]
+    assert f"{flag} {path}: {detail}" in out, out[-3000:]
+    assert not out_dir.exists(), "an output tree was made before the input was judged"
+
+
+def test_scaffold_names_onboard_hints_that_are_not_json(tmp_path):
+    hints = tmp_path / "hints.json"
+    hints.write_text("{bad", encoding="utf-8")
+    proc = _run_ops("scaffold_tenant.py", ["--from-onboard", str(hints)])
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 2, out[-3000:]
+    assert "Traceback" not in out, out[-3000:]
+    assert f"ERROR: --from-onboard {hints}: " in proc.stderr, out[-3000:]
+
+
+@pytest.mark.parametrize("case", ["missing", "not_executable", "empty"])
+def test_generator_service_names_a_git_it_cannot_run(tmp_path, case):
+    """--git is an executable: the exec decides, and its failure names the
+    flag — `''` shown as `''`, as `_lib_paths` shows a supplied empty value."""
+    git = tmp_path / "git"
+    if case == "not_executable":
+        git.write_text("#!/bin/sh\n", encoding="utf-8")
+        git.chmod(0o644)
+    (tmp_path / "repo").mkdir()
+    proc = _run_ops("generator_service.py",
+                    ["--socket", str(tmp_path / "gs.sock"), "--repo", str(tmp_path / "repo"),
+                     "--config-subdir", "conf.d", "--work-dir", str(tmp_path / "work"),
+                     "--git", "" if case == "empty" else str(git)])
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 2, out[-3000:]
+    if case == "empty":
+        assert "ERROR: --git '': " in proc.stderr, out[-3000:]
+        return
+    detail = NOT_FOUND if case == "missing" else os.strerror(errno.EACCES)
+    assert f"ERROR: --git {git}: {detail}" in proc.stderr, out[-3000:]
+
+
+def test_rule_pack_split_names_a_dir_it_cannot_list(box):
+    """A --rule-packs-dir that stats but cannot be listed (x, no r): the glob
+    swallowed the EACCES and said "No rule pack files found" after making the
+    output tree (#3415 review)."""
+    root, run, _subst = box
+    noread = root / "noread-3415"
+    noread.mkdir(exist_ok=True)
+    noread.chmod(0o311)
+    out_dir = root / "rps-noread-out"
+    proc = run(["env", "DA_LANG=en", sys.executable,
+                str(root / "scripts" / "tools" / "ops" / "generate_rule_pack_split.py"),
+                "--rule-packs-dir", str(noread), "--output-dir", str(out_dir), "--json"])
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 2, out[-3000:]
+    assert f"--rule-packs-dir {noread}: {DENIED}" in out, out[-3000:]
+    assert json.loads(proc.stdout)["reason"] == "dir_not_accessible", proc.stdout
+    assert not out_dir.exists(), "the output tree was made before the input was judged"
