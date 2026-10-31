@@ -13,7 +13,6 @@ Functions:
   load_policy_document(path)    → the same read, plus min_generator_version
   generator_version_problem(..) → why this generator is older than a policy
                                   asks for, or None (#2901)
-  validate_tenant_keys(...)      → schema-key typo / unknown-key warnings
   _validate_profile_refs(parsed) → ADR-007 profile-reference existence check
   check_domain_policies(...)    → ADR-007 domain-policy constraint validation
 """
@@ -39,8 +38,6 @@ from _lib_python import (  # noqa: E402
     parse_duration_seconds,
     RECEIVER_TYPES,
     RECEIVER_URL_FIELDS,
-    VALID_RESERVED_KEYS,
-    VALID_RESERVED_PREFIXES,
 )
 from _lib_constants import (  # noqa: E402  (ADR-038: generated from the registry)
     PLATFORM_ROUTING_KEYS,
@@ -1101,73 +1098,6 @@ def load_policy_document(policy_path: str | None) -> PolicyDocument:
     return PolicyDocument(list(domains), minimum)
 
 
-# --- ADR-024 Version-Aware Threshold: dimensional `version` label guard ---
-# Python mirror of Go config.validateVersionLabel (pkg/config/resolve.go).
-# Both sides MUST stay in sync (the ADR's "雙語 da-guard"): the Go side logs
-# these at exporter config-load; this Python side surfaces them as da-guard
-# schema warnings (escalatable to a reject in CI).
-#
-# VERSION_LABEL_PATTERN is the Phase-1 baseline and is pilot-calibratable
-# (OQ-6): real app.kubernetes.io/version strings may carry uppercase / long
-# Git SHAs — widen after pilot observation.
-VERSION_LABEL_PATTERN = r"^[a-z0-9][a-z0-9._-]*$"
-_VERSION_LABEL_RE = re.compile(VERSION_LABEL_PATTERN)
-# Captures the version label inside a dimensional key's {...}: op is "=~"
-# (regex) or "=" (exact); group 2 is the quoted value. The `[{,]` anchor
-# requires `version` to be a real label name (preceded by `{` or a `,`
-# separator), so a substring like `app_version="v2"` is NOT mis-matched.
-#
-# Known limitation (Gemini adversarial review, #691): this regex is not a
-# full PromQL label-set parser, so it MAY false-match if the literal
-# `,version="` appears INSIDE another label's quoted string value (e.g.
-# `foo_metric{query="...,version=\"x\""}`). The Go side (parseKeyWithLabels,
-# a real label-map parse) is immune. Probability is ~0 for threshold keys
-# (their values are bare numbers / simple strings, not embedded PromQL), so
-# we accept it rather than pull in a parser; this comment is the deliberate
-# record that the boundary is understood.
-_VERSION_IN_KEY_RE = re.compile(r'[{,]\s*version\s*(=~|=)\s*"([^"]*)"')
-# Phase-1 component scope (mirrors Go pilotVersionMetrics = container cpu/memory;
-# base metric keys map 1:1 to those component/metric pairs).
-PILOT_VERSION_BASE_KEYS = {"container_cpu", "container_memory"}
-
-
-def _validate_version_label(tenant: str, key: str, base: str) -> list[str]:
-    """ADR-024 OQ-6 checks on a dimensional `version` label (advisory)."""
-    m = _VERSION_IN_KEY_RE.search(key)
-    if not m:
-        return []  # no version label on this key
-    op, value = m.group(1), m.group(2)
-    out: list[str] = []
-
-    if base not in PILOT_VERSION_BASE_KEYS:
-        allowed = ", ".join(sorted(PILOT_VERSION_BASE_KEYS))
-        out.append(
-            f"  WARN: {tenant}: version label on non-pilot metric '{base}' in key "
-            f"'{key}' — ADR-024 Phase 1 only permits {allowed}; risks cross-pack "
-            f"double-count")
-
-    if op == "=~":
-        out.append(
-            f"  WARN: {tenant}: regex version matcher in key '{key}' — ADR-024 "
-            f"Phase 1 expects an exact version=\"...\" selector")
-    elif value == "":
-        out.append(
-            f"  WARN: {tenant}: empty version label in key '{key}' (ADR-024 OQ-6 "
-            f"forbids empty — it collides with the unversioned baseline)")
-    elif value == "default":
-        out.append(
-            f"  WARN: {tenant}: literal version=\"default\" in key '{key}' is "
-            f"reserved for the normalize-layer fallback (ADR-024 OQ-6)")
-    # fullmatch: `$` also succeeds before a trailing newline under `.match`,
-    # while the same literal run by Go RE2 (resolve.go) is end-of-text (#1779).
-    elif not _VERSION_LABEL_RE.fullmatch(value):
-        out.append(
-            f"  WARN: {tenant}: version '{value}' in key '{key}' violates "
-            f"{VERSION_LABEL_PATTERN} (ADR-024 OQ-6; pilot-calibratable)")
-
-    return out
-
-
 def is_null_schedule(value: object) -> bool:
     """Go ``nullSchedule`` (pkg/config/null_threshold.go, #2708): a mapping
     whose ``default`` is null, with no override window (``overrides``
@@ -1201,8 +1131,8 @@ def _canonical_tenant_key(key: str) -> tuple[str, bool]:
     pkg/config/aliases.go): EXACT match against DEPRECATED_KEY_ALIASES,
     plus exactly two structurally-derived shapes — ``<base>_critical`` and
     dimensional ``<base>{...}``. Everything else — including typos that
-    merely share the prefix, like ``mysql_cpu_util`` — returns unchanged,
-    so they keep failing unknown-key validation. Never prefix-match.
+    merely share the prefix, like ``mysql_cpu_util`` — returns unchanged.
+    Never prefix-match.
     """
     if key in DEPRECATED_KEY_ALIASES:
         return DEPRECATED_KEY_ALIASES[key], True
@@ -1214,165 +1144,6 @@ def _canonical_tenant_key(key: str) -> tuple[str, bool]:
     if brace > 0 and key[:brace] in DEPRECATED_KEY_ALIASES:
         return DEPRECATED_KEY_ALIASES[key[:brace]] + key[brace:], True
     return key, False
-
-
-def _canonicalize_alias_keys(
-        tenant: str, keys: set[str],
-        defaults_keys: set[str]) -> tuple[set[str], set[str], list[str]]:
-    """#1231 alias pre-pass for validate_tenant_keys.
-
-    Returns ``(keys_view, defaults_view, notices)``: deprecated spellings in
-    ``keys`` are replaced by their canonical form (so downstream checks and
-    messages name the NEW key), ``defaults_keys`` gets the same canonical
-    view (covers the pre-rename state where the platform defaults still
-    carry the old spelling), and each aliased key yields one non-blocking
-    NOTICE line. When BOTH spellings of the same threshold are present the
-    canonical entry wins and the deprecated one is reported as ignored —
-    matching the Go resolve boundary's dedup contract.
-
-    Wording contract (pinned by TestDeprecationNoticePin): NOTICE lines
-    must not contain the substring "skipping" and must not start with the
-    blocking prefix. The prefix is still matched as text (``--strict``
-    reads it); the word no longer decides anything for ``--validate`` since
-    #2489 — ``blocking_generation_errors`` tests the line's type, and a
-    NOTICE is a plain ``str``, not a ``SkippedEntryWarning`` — but it keeps
-    an advisory from reading like a dropped entry.
-    """
-    notices: list[str] = []
-    keys_view: set[str] = set()
-    for key in sorted(keys):
-        canon, was_alias = _canonical_tenant_key(key)
-        if not was_alias:
-            keys_view.add(key)
-            continue
-        if canon in keys:
-            notices.append(
-                f"  NOTICE: {tenant}: deprecated key '{key}' is ignored "
-                f"because its replacement '{canon}' is also set — remove "
-                f"'{key}' (#1231 rename)")
-            continue
-        notices.append(
-            f"  NOTICE: {tenant}: key '{key}' was renamed to '{canon}' "
-            f"(#1231) — the old name still resolves during the 2-release "
-            f"transition window; please update this override to '{canon}'")
-        keys_view.add(canon)
-    defaults_view = {_canonical_tenant_key(k)[0] for k in defaults_keys}
-    return keys_view, defaults_view, notices
-
-
-def validate_tenant_keys(tenant: str, keys: set[str], defaults_keys: set[str],
-                         optional_override_keys: set[str] | None = None) -> list[str]:
-    """Check tenant config keys for typos / unknown reserved keys.
-
-    Returns list of warning strings. Deprecated key aliases (#1231) emit a
-    non-blocking ``NOTICE:`` line INSTEAD of the unknown-key warning: the
-    key is canonicalized first (exact-match table, never prefix-match) and
-    validated under its canonical spelling against a canonicalized defaults
-    view — so an old-spelled ``mysql_cpu_critical`` whose renamed base
-    exists is NOT a dangling ``_critical``, while prefix typos keep warning.
-
-    ``optional_override_keys`` (#1189 / TRK-337) is the platform's DECLARED
-    surface: keys it recognises but supplies no value for. It is a second
-    membership set, deliberately NOT unioned into ``defaults_keys``, because
-    the two behave differently downstream and the Go twin
-    (``ValidateTenantKeys``) has to reach the same verdict key-for-key.
-
-    ⚠️ Note which way that asymmetry runs. This function's output is
-    ADVISORY: ``generate_alertmanager_routes._validate_mode`` only fails on
-    dropped-entry lines (``SkippedEntryWarning``, #2489) or on
-    ``ERROR:``-prefixed policy lines, and ``unknown key … not in defaults``
-    is neither. So a divergence never
-    shows up as a red build — it shows up as CI saying nothing at all about a
-    config the tenant-api write gate then refuses (or, in the other
-    direction, as a missing heads-up). Accepting something Go refuses is
-    therefore the dangerous direction, not the safe one. Verdict parity is
-    pinned mechanically against a shared table, not by these two suites
-    asserting it about each other: ``tests/shared/optional_overrides_membership_matrix.json``.
-
-    * flat / dimensional keys → accepted (Go accepts them too; dimensional
-      rows resolve tenant-only, so they emit as soon as they are written)
-    * ``<base>_critical`` on a declared base → still WARNS. Go refuses it
-      because ``resolveCriticalRows`` keys off ``defaults[base]`` and drops
-      the row otherwise; accepting here would mean CI blesses a key the
-      exporter silently discards.
-    * a ``_critical`` key named ON the list itself → also still WARNS, for
-      the same runtime reason. Go's cascade never even reaches its declared
-      check for that shape. This is the majority shape: 16 of the registry's
-      25 ``tier: optional_overrides`` keys end in ``_critical``.
-    """
-    warnings = []
-    # #1231 alias pre-pass — BEFORE the reserved/defaults checks, mirroring
-    # the Go resolve boundary. Reassigning the parameters (rather than
-    # rewriting the loop below) keeps the long-standing validation body
-    # byte-identical — tests/shared/_mutation_pilot.py pins three of its
-    # source snippets verbatim.
-    keys, defaults_keys, notices = _canonicalize_alias_keys(
-        tenant, keys, defaults_keys)
-    warnings.extend(notices)
-    # ⛔ Canonicalized by the same table as the defaults view above. A key
-    # listed under its retired spelling would never match the canonicalized
-    # tenant key, so the platform would be declaring something permanently
-    # un-settable with nothing saying so — the silent membership drift this
-    # change exists to end, reappearing inside its own fix. Go's twin is
-    # canonicalizeOptionalOverrides (pkg/config/aliases.go).
-    declared = {_canonical_tenant_key(k)[0]
-                for k in (optional_override_keys or ())}
-    for key in keys:
-        if key in VALID_RESERVED_KEYS:
-            continue
-        if any(key.startswith(p) for p in VALID_RESERVED_PREFIXES):
-            continue
-        if key in defaults_keys:
-            continue
-        # Declared without a platform value → settable, nothing to inherit.
-        #
-        # ⛔ This check is deliberately FLAT-ONLY, and both exclusions are
-        # load-bearing. Go's cascade reaches its `_critical` and dimensional
-        # branches BEFORE its declared check and `continue`s out of every arm,
-        # so a composite key named on the list never reaches Go's membership
-        # widening. Python's cascade has the opposite order, so without these
-        # guards a whole-key match here would shadow branches Go runs first:
-        #
-        #   `<base>_critical` on the list  — Go refuses (resolveCriticalRows
-        #       keys off defaults[base] and drops the row when the base has no
-        #       value). This is the registry's DOMINANT shape: 16 of the 25
-        #       `tier: optional_overrides` keys end in `_critical`.
-        #   `<base>{label="v"}` on the list — Go refuses (it looks up the
-        #       parsed BASE, never the full dimensional string). Worse, a
-        #       whole-key match would `continue` past the dimensional branch
-        #       below and silently skip ADR-024 OQ-6 version-label validation
-        #       entirely — accepting `{version="bad!!"}` that both sides
-        #       otherwise reject.
-        #
-        # Either shadow puts CI's verdict at odds with the tenant-api write
-        # gate: the Py↔Go split of #1189, reappearing inside its own fix.
-        if key in declared and not key.endswith("_critical") and "{" not in key:
-            continue
-        # _critical suffix → check base
-        if key.endswith("_critical"):
-            base = key.removesuffix("_critical")
-            if base in defaults_keys:
-                continue
-        # Dimensional base may be declared rather than valued. Checked ahead
-        # of the defaults-only block below so that block stays byte-identical
-        # for the mutation pins; a _critical key never reaches here (no brace).
-        if "{" in key and key.split("{")[0] in declared:
-            warnings.extend(
-                _validate_version_label(tenant, key, key.split("{")[0]))
-            continue
-        # Dimensional key with {labels}
-        if "{" in key:
-            base = key.split("{")[0]
-            if base in defaults_keys:
-                # ADR-024 OQ-6: validate any `version` dimensional label.
-                warnings.extend(_validate_version_label(tenant, key, base))
-                continue
-        # Unknown key
-        if key.startswith("_"):
-            warnings.append(f"  WARN: {tenant}: unknown reserved key '{key}' (typo?)")
-        else:
-            warnings.append(f"  WARN: {tenant}: unknown key '{key}' not in defaults")
-    return warnings
 
 
 def _validate_profile_refs(parsed: dict) -> list[str]:
@@ -1632,9 +1403,9 @@ def receiver_name_collisions(labelled: list[tuple[str, str]]) -> list[str]:
 # ── #1231: deprecated tenant-config key aliases ──
 # Python mirror of the Go alias boundary (threshold-exporter
 # pkg/config/aliases.go `deprecatedKeyAliases`): during the 2-release
-# transition window the OLD spelling keeps validating — as its canonical
-# key — and emits a non-blocking NOTICE line instead of the unknown-key
-# warning (see _canonical_tenant_key / _canonicalize_alias_keys above).
+# transition window the OLD spelling keeps resolving as its canonical key
+# (see _canonical_tenant_key above); the rename NOTICE is the exporter's own,
+# from da-guard served-values' key_checks (ADR-038 §11).
 # SSOT note: the alias SSOT is the registry's deprecated_aliases section
 # (rule-packs/threshold-registry.yaml, authored in _registry_lib.py
 # DEPRECATED_KEY_ALIASES). This dict is a runtime mirror, PINNED to that
@@ -2241,7 +2012,7 @@ def unknown_routing_keys(obj: object, *, layer: str, where: str,
     generator does not read in *layer* (#2983): ``tenant`` (a tenant's
     config, read for `TENANT_ROUTING_KEYS`) or ``platform`` (the top level of
     a `_` file, read for `PLATFORM_ROUTING_KEYS`). Keys without the prefix
-    are other checks' (`validate_tenant_keys`); a non-string key is passed
+    are the shared key verdict's (ADR-038 §11); a non-string key is passed
     over. ``field`` is the key itself."""
     if not isinstance(obj, dict):
         return []

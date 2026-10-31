@@ -760,31 +760,6 @@ MUTATIONS: list[Mutation] = [
         old="        if not any(fnmatch.fnmatch(host, pat) for pat in allowed_domains):",
         new="        if any(fnmatch.fnmatch(host, pat) for pat in allowed_domains):",
     ),
-    # ── validate_tenant_keys (_grar_validate) ────────────────────
-    Mutation(
-        target_file="scripts/tools/ops/_grar_validate.py",
-        test_file="tests/shared/test_property_tools.py",
-        label="tenant_keys: drop reserved-keys allowlist (every reserved → warning)",
-        fn_name="validate_tenant_keys",
-        old="        if key in VALID_RESERVED_KEYS:\n            continue",
-        new="        if False:\n            continue",
-    ),
-    Mutation(
-        target_file="scripts/tools/ops/_grar_validate.py",
-        test_file="tests/shared/test_property_tools.py",
-        label="tenant_keys: drop _critical suffix resolution (suffix keys warn)",
-        fn_name="validate_tenant_keys",
-        old='        if key.endswith("_critical"):\n            base = key.removesuffix("_critical")\n            if base in defaults_keys:\n                continue',
-        new='        if False:\n            base = ""\n            if base in defaults_keys:\n                continue',
-    ),
-    Mutation(
-        target_file="scripts/tools/ops/_grar_validate.py",
-        test_file="tests/shared/test_property_tools.py",
-        label="tenant_keys: drop dimensional-key resolution ({labels} keys warn)",
-        fn_name="validate_tenant_keys",
-        old='        if "{" in key:\n            base = key.split("{")[0]\n            if base in defaults_keys:\n                # ADR-024 OQ-6: validate any `version` dimensional label.\n                warnings.extend(_validate_version_label(tenant, key, base))\n                continue',
-        new='        if False:\n            base = ""\n            if base in defaults_keys:\n                warnings.extend(_validate_version_label(tenant, key, base))\n                continue',
-    ),
     # ── #1231 alias spellings (_grar_validate, #2368) ─────────────
     Mutation(
         target_file="scripts/tools/ops/_grar_validate.py",

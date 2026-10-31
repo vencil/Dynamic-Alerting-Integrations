@@ -9,8 +9,8 @@ migrate 產出三件套：租戶閾值、recording rule、alert rule。三者要
 2. 閾值 recording rule 的 selector 要對上 exporter 發射的 label。exporter 以
    key 的第一個 `_` 拆成 `component` 與 `metric`（`pkg/config/parse.go` 的
    `parseMetricKey`），先前的產物卻寫 `user_threshold{metric="<整個 key>"}`。
-3. key 要在 `_defaults.yaml` 宣告過。沒宣告時 exporter 只記一行
-   `unknown key ... not in defaults`，不發射任何 series。
+3. key 要在 `_defaults.yaml` 宣告過。沒宣告時 exporter 不發射任何 series
+   （共用的鍵判決報 `unread … (no_row)`）。
 
 三者任一不成立，產出的告警就永遠不會響，而且沒有任何錯誤訊息。
 """

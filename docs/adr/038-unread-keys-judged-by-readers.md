@@ -42,7 +42,7 @@ updated_at: 2026-10-31
 
 2026-10-30 修訂：判決併入產生器容器的同一次判定，不另有期限、不讓位，取代 2026-10-24 的「判決有自己的那一份期限」；tenant-api 改成判到就擋之後的規則，取代 2026-10-28 的「判決只放進 `warnings`」：判決未完成時寫入不收，不設降級路徑。寫入檢查只對被寫的租戶做反事實重算（決定 2、5、8、11）。
 
-2026-10-31 修訂：讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判，取代「GET 的鍵名回報改用共用判決」；exporter 載入時只記它自己讀不到哪些鍵、不帶嚴重度（決定 11）。
+2026-10-31 修訂：讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判，取代「GET 的鍵名回報改用共用判決」；exporter 載入時只記它自己讀不到哪些鍵、不帶嚴重度。Go、Python、portal 的鍵名判斷刪除，`version` 標籤與改名提示經 da-guard 交給 CI 照印（決定 11）。
 
 ## 摘要
 
@@ -188,7 +188,7 @@ tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共�
 
 這條分界讓讀者知道某個清單該去哪裡改：頂層保留鍵改登錄表，子鍵改讀取它的那支程式。
 
-**`_` 命名空間以登錄表為準**：登錄表的 `_` 鍵沒有一個是閾值，所以 `_` 開頭的鍵在任何一層、任何形狀（base、`_critical`、維度鍵）都不產生閾值列，根 defaults 宣告了也一樣；登錄表沒有的 `_` 鍵則沒有任何讀取端讀，與 JSON schema 一致。例如根 defaults 寫 `_myth: 5`、租戶寫 `_myth: "7"`，exporter 不為 `_myth`、`_myth_critical`、`_myth{x="a"}` 產生任何列；served-values 把它列進 `unserved`，原因是 `unregistered`，`da-guard effective` 的 `not_served` 也標 `unregistered`；Go 的寫入檢查（tenant-api）報「unknown reserved key」並拒收；`expires:` 也不再為它發出過期事件。根 defaults 寫成數字的登錄表鍵（例如 `_namespaces: 5`）同樣不再成為閾值，判決照決定 4 判為 `unread`。這是 breaking change：依賴根 defaults 宣告這種鍵的部署，升級後少掉那些列；遷移方式是改用登錄表有的鍵，或拿掉 `_` 前綴讓它成為一般閾值鍵（[#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)）。
+**`_` 命名空間以登錄表為準**：登錄表的 `_` 鍵沒有一個是閾值，所以 `_` 開頭的鍵在任何一層、任何形狀（base、`_critical`、維度鍵）都不產生閾值列，根 defaults 宣告了也一樣；登錄表沒有的 `_` 鍵則沒有任何讀取端讀，與 JSON schema 一致。例如根 defaults 寫 `_myth: 5`、租戶寫 `_myth: "7"`，exporter 不為 `_myth`、`_myth_critical`、`_myth{x="a"}` 產生任何列；served-values 把它列進 `unserved`，原因是 `unregistered`，`da-guard effective` 的 `not_served` 也標 `unregistered`；tenant-api 的寫入依判決拒收；`expires:` 也不再為它發出過期事件。根 defaults 寫成數字的登錄表鍵（例如 `_namespaces: 5`）同樣不再成為閾值，判決照決定 4 判為 `unread`。這是 breaking change：依賴根 defaults 宣告這種鍵的部署，升級後少掉那些列；遷移方式是改用登錄表有的鍵，或拿掉 `_` 前綴讓它成為一般閾值鍵（[#3045](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3045)）。
 
 ### 3. 防止登錄表與程式漂移
 
@@ -318,7 +318,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 - 讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判。即時判要佔產生器容器的判定佇列，而讀權限的使用者也能觸發；要看用 `da-tools explain-keys` 或 CI 的 validate-config，寫入時則由判決擋下。這和 Kubernetes 的 warning 只出現在寫入回應裡同型。git 管理的租戶不經 API 寫入，它的這類問題只有 CI 會報。
 - exporter 載入時，改記它自己讀不到的鍵（沒有任何一列讀的鍵、對這種鍵寫的 `disable`、登錄表沒有讀取端的 `_` 鍵），不帶嚴重度：這是讀取端在原地的事實，嚴重度由判決決定（決定 4）。沒有跑 CI 的部署仍有這個訊號。exporter 另外兩則它自己讀取時的訊息照舊：profile 裡的路由層鍵不套用，以及 `_critical` 找不到 base 的預設值。
-- 產生器自己的鍵名警告與 Go、Python 兩份鍵名判斷，改成只用共用判決後刪除；`version` 標籤與改名提示這類值的檢查由 Go 一處判。
+- 產生器自己的鍵名警告與 Go、Python 兩份鍵名判斷，改成只用共用判決後刪除；`version` 標籤與改名提示這類值的檢查由 Go 一處判，經 da-guard served-values 每個租戶的 `key_checks` 交給 validate-config 與產生器 `--validate` 照它的措辭印出。portal 的鍵名判斷同時刪除。原本比對兩份手寫判斷的成員矩陣保留，改成驗證共用判決；其中一列因此改判：平台清單上整串宣告的維度鍵，exporter 照樣送出，判決讀成有人讀。
 - 平台檔與 profile 層的 notice 不再含「沒有人讀」的鍵，由判決報（決定 6）。
 
 ### 12. 磁碟上既有的錯值
@@ -365,7 +365,7 @@ db-a
 ## 後果與已知限制
 
 - **保留鍵清單只剩一個來源**：新增保留鍵只改登錄表，再重新產生；各讀取端各自的鍵名判斷改由共用判決取代。
-- **登錄表沒有的 `_` 鍵不再產生閾值列**：exporter 與 JSON schema 對這種鍵的結論一致。靠根 defaults 宣告這種鍵送出閾值的部署，升級後少掉那些列（遷移方式見決定 2）。根 defaults 宣告了這種鍵時，產生器自己的鍵名檢查不警告租戶寫的同名鍵；共用判決把它判為 `unread`（原因 `unregistered`），validate-config 與產生器 `--validate` 都報出。
+- **登錄表沒有的 `_` 鍵不再產生閾值列**：exporter 與 JSON schema 對這種鍵的結論一致。靠根 defaults 宣告這種鍵送出閾值的部署，升級後少掉那些列（遷移方式見決定 2）。根 defaults 宣告了這種鍵時，共用判決把租戶寫的同名鍵判為 `unread`（原因 `unregistered`），validate-config 與產生器 `--validate` 都報出。
 - **鍵名判決只需要 da-guard 與登錄表**：產生器那半取登錄表的宣告，不跑產生器。值在產生器語意下是否有效（例如 `_routing_profile` 指向的 profile）仍只有產生器能判；只有 da-guard 的環境，這部分回 exit 4（未判定）。
 - **寫入的判定變慢，單一產生器容器支援的租戶數變少**：判決併進產生器容器的一次判定，約佔三成時間；以 1 CPU 為例，約 2500 個租戶時一次判定就接近期限的一半（示意值，依主機而異）。樹再大，或有寫入在排隊時，寫入可能因判決判不完而被拒：時間不夠的可重試，其他原因不可重試（決定 5）。界線看決定 5 的 metric；拿回容量的方向是讓 served-values 與 effective 在同一次 da-guard 裡算完、讓判決與產生器並行，以及加速產生器本身。
 - **判決壞了，寫入就不收**：容器裡找不到或無法執行 da-guard 時，與找不到 amtool 一樣是容器不可用，寫入回 503；da-guard 在個別寫入上判不完時，拒收那一筆（決定 5）。

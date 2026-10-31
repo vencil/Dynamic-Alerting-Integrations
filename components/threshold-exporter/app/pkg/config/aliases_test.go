@@ -194,28 +194,29 @@ func TestCriticalAliasMatrix(t *testing.T) {
 	}
 
 	cells := []struct {
-		base, crit   string
-		wantRows     []string
-		wantErrors   int  // dangling-_critical errors
-		wantDangling bool // error must name the NEW key spellings
-		wantNotices  int
+		base, crit  string
+		wantRows    []string
+		wantErrors  int // errors (none: no key name is judged here, ADR-038 §11)
+		wantNotices int
 	}{
-		{"old", "absent", base71, 0, false, 0},
-		{"old", "old", merged(base71, crit91), 0, false, 1}, // rename notice
-		{"old", "new", merged(base71, crit92), 0, false, 0},
-		{"old", "both", merged(base71, crit92), 0, false, 1}, // conflict notice
-		{"new", "absent", base72, 0, false, 0},
-		{"new", "old", merged(base72, crit91), 0, false, 1}, // rename notice
-		{"new", "new", merged(base72, crit92), 0, false, 0},
-		{"new", "both", merged(base72, crit92), 0, false, 1},  // conflict notice
-		{"both", "absent", base72, 0, false, 1},               // defaults-conflict notice
-		{"both", "old", merged(base72, crit91), 0, false, 2},  // defaults-conflict + rename
-		{"both", "new", merged(base72, crit92), 0, false, 1},  // defaults-conflict
-		{"both", "both", merged(base72, crit92), 0, false, 2}, // defaults-conflict + conflict
-		{"absent", "absent", []string{}, 0, false, 0},
-		{"absent", "old", []string{}, 1, true, 1},  // dangling error + rename notice
-		{"absent", "new", []string{}, 1, true, 0},  // dangling error
-		{"absent", "both", []string{}, 1, true, 1}, // dangling error + conflict notice
+		{"old", "absent", base71, 0, 0},
+		{"old", "old", merged(base71, crit91), 0, 1}, // rename notice
+		{"old", "new", merged(base71, crit92), 0, 0},
+		{"old", "both", merged(base71, crit92), 0, 1}, // conflict notice
+		{"new", "absent", base72, 0, 0},
+		{"new", "old", merged(base72, crit91), 0, 1}, // rename notice
+		{"new", "new", merged(base72, crit92), 0, 0},
+		{"new", "both", merged(base72, crit92), 0, 1},  // conflict notice
+		{"both", "absent", base72, 0, 1},               // defaults-conflict notice
+		{"both", "old", merged(base72, crit91), 0, 2},  // defaults-conflict + rename
+		{"both", "new", merged(base72, crit92), 0, 1},  // defaults-conflict
+		{"both", "both", merged(base72, crit92), 0, 2}, // defaults-conflict + conflict
+		{"absent", "absent", []string{}, 0, 0},
+		// A dangling `_critical` serves no row; whether that refuses it is the
+		// shared key verdict's (ADR-038 §11), not ValidateTenantKeys'.
+		{"absent", "old", []string{}, 0, 1}, // rename notice
+		{"absent", "new", []string{}, 0, 0},
+		{"absent", "both", []string{}, 0, 1}, // conflict notice
 	}
 
 	for _, cell := range cells {
@@ -235,16 +236,6 @@ func TestCriticalAliasMatrix(t *testing.T) {
 			kv := cfg.ValidateTenantKeys()
 			if len(kv.Errors) != cell.wantErrors {
 				t.Errorf("Errors = %d (%v), want %d", len(kv.Errors), kv.Errors, cell.wantErrors)
-			}
-			if cell.wantDangling {
-				joined := strings.Join(kv.Errors, "\n")
-				// #1227 convention carried through the rename: the dangling
-				// error names the NEW spellings so the fix advice is current.
-				for _, want := range []string{"mysql_threads_running_critical", `"mysql_threads_running"`, "has no base metric"} {
-					if !strings.Contains(joined, want) {
-						t.Errorf("dangling error should mention %q, got: %s", want, joined)
-					}
-				}
 			}
 			if len(kv.Notices) != cell.wantNotices {
 				t.Errorf("Notices = %d (%v), want %d", len(kv.Notices), kv.Notices, cell.wantNotices)
@@ -355,7 +346,7 @@ func TestDeprecationNotices_ForbiddenTokens(t *testing.T) {
 func TestAliasAdversarialPins(t *testing.T) {
 	t.Parallel()
 
-	t.Run("typo mysql_cpu_util stays an unknown-key Error", func(t *testing.T) {
+	t.Run("typo mysql_cpu_util is not a deprecated alias", func(t *testing.T) {
 		t.Parallel()
 		cfg := &ThresholdConfig{
 			Defaults: map[string]float64{"mysql_threads_running": 72},
@@ -363,10 +354,11 @@ func TestAliasAdversarialPins(t *testing.T) {
 				"tenant-t": {"mysql_cpu_util": {Default: "90"}},
 			},
 		}
+		// Whether a reader reads the typo is the shared key verdict's
+		// (ADR-038 §11); what is pinned here is that it is no alias.
 		kv := cfg.ValidateTenantKeys()
-		if len(kv.Errors) != 1 || !strings.Contains(kv.Errors[0], `"mysql_cpu_util"`) ||
-			!strings.Contains(kv.Errors[0], "unknown key") {
-			t.Errorf("typo must stay an unknown-key Error, got: %v", kv.Errors)
+		if len(kv.Errors) != 0 {
+			t.Errorf("a key name is judged here: %v", kv.Errors)
 		}
 		if len(kv.Notices) != 0 {
 			t.Errorf("typo must NOT be treated as a deprecated alias, got notices: %v", kv.Notices)
@@ -388,7 +380,7 @@ func TestAliasAdversarialPins(t *testing.T) {
 		}
 	})
 
-	t.Run("dangling mysql_cpu_critical still errors", func(t *testing.T) {
+	t.Run("dangling mysql_cpu_critical gets its rename notice only", func(t *testing.T) {
 		t.Parallel()
 		cfg := &ThresholdConfig{
 			Defaults: map[string]float64{},
@@ -396,9 +388,11 @@ func TestAliasAdversarialPins(t *testing.T) {
 				"tenant-t": {"mysql_cpu_critical": {Default: "90"}},
 			},
 		}
+		// The dangling `_critical` is the shared key verdict's to refuse
+		// (ADR-038 §11); here it is a retired spelling like any other.
 		kv := cfg.ValidateTenantKeys()
-		if len(kv.Errors) != 1 || !strings.Contains(kv.Errors[0], "has no base metric") {
-			t.Errorf("base-less _critical must keep its dangling Error, got: %v", kv.Errors)
+		if len(kv.Errors) != 0 || len(kv.Notices) != 1 || !strings.Contains(kv.Notices[0], `"mysql_threads_running_critical"`) {
+			t.Errorf("errors=%v notices=%v, want the rename notice only", kv.Errors, kv.Notices)
 		}
 	})
 }

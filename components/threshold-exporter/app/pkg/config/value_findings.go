@@ -105,7 +105,9 @@ func (v KeyValidation) Ratchet(prev func(tenant, key string) (ScheduledValue, bo
 	out := KeyValidation{
 		Errors:  append([]string(nil), v.Errors...),
 		Notices: append([]string(nil), v.Notices...),
-		Unread:  v.Unread,
+
+		VersionLabels: v.VersionLabels,
+		Renames:       v.Renames,
 	}
 	for _, f := range v.Values {
 		pv, ok := prev(f.Tenant, f.Key)

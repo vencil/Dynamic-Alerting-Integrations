@@ -1038,8 +1038,8 @@ func scheduledValueFromRaw(raw any) (ScheduledValue, bool) {
 //   - declared → `resolveDeclaredRows` logs `WARN: invalid declared threshold
 //     "us-east" …` — and that runs inside `ResolveAtWithStats`, i.e. ON EVERY
 //     SCRAPE, so three junk keys became three WARN lines per scrape;
-//   - not declared → `ValidateTenantKeys` logs `WARN: unknown key … not in
-//     defaults` on every config commit instead.
+//   - not declared → the exporter's keys-unread line names them on every
+//     config commit instead.
 //
 // Neither is acceptable, and both disappear if the key never enters the map.
 // The emitted series count was 0 either way — `resolveDeclaredRows` refuses

@@ -2257,9 +2257,7 @@ func validateReplacingOver(configDir, tenantID, tenantFilePath, yamlContent stri
 		kv = ratchetValues(kv, baseRaw, baseErr)
 	}
 	// ADR-038 §11: whether any reader reads a key is the shared key verdict's
-	// to judge (validateProposed refuses on it); this gate keeps the value
-	// checks only.
-	kv = kv.WithoutUnread()
+	// to judge (validateProposed refuses on it); kv holds the value checks only.
 	// #3039: the body may declare other tenants (a flat file, or the whole
 	// file a PATCH merges into); what is said about them depends on whether
 	// the caller may read them.

@@ -326,7 +326,6 @@ modules:
     covered:
       - _extract_host
       - validate_receiver_domains
-      - validate_tenant_keys
       - _legacy_tenant_key
       - _other_tenant_key_spellings
       - overlay_across_spellings
@@ -367,7 +366,6 @@ modules:
       _parse_policy_duration: "Pure duration parser (multi-unit/fractional/negative-reject); table-covered by test_grar_strict_hardening.py::TestParsePolicyDuration (23 example cases)"
       _timing_bound_violations: "#2490 the one max_repeat_interval / min_group_wait comparison both check_domain_policies modes call; table-pinned strict == lenient (only the level differs) by test_grar_policy_duration_strict_lenient_parity.py"
       _rendered_duration: "#2490 str() then _lib_validation.am_duration_seconds (pinned row by row against Go by test_am_duration_parity.py); strict-policy use pinned by test_grar_am_duration.py and test_grar_strict_hardening.py"
-      _validate_version_label: "ADR-024 OQ-6 version-label guard; fully branch-covered by test_generate_alertmanager_routes.py::TestValidateVersionLabel (8 example cases)"
       find_watchdog_suppressing_inhibits: "ADR-025 D1 inhibit-immunity validator; fully covered by test_generate_routes_orchestration.py::TestWatchdogInhibitImmunity (exact/regex/match-all/empty/severity/legacy-map cases)"
       assert_watchdog_inhibit_immunity: "Raises-wrapper over find_watchdog_suppressing_inhibits; covered by TestWatchdogInhibitImmunity + the assemble fail-closed test"
       find_tenant_silenceable_platform_inhibits: "Tenant-cannot-silence-platform finder (tenant-gated source × platform-matching target); example-covered by test_generate_routes_orchestration.py::TestPlatformAlertsNotTenantSilenceable (committed-base / mutation self-proof / narrowness / derived-label-set cases)"
@@ -387,8 +385,7 @@ modules:
       _matchers_gate_label_present: "#1132 presence-gate predicate (does a side exclude the empty string for a label); fully covered by test_generate_routes_orchestration.py::TestEqualLabelGatedInvariant (matchall/exact/neg-empty/legacy-map cases)"
       find_ungated_equal_label_inhibits: "#1132 ungated-equal-label finder; covered by TestEqualLabelGatedInvariant (gated/ungated/partial/legacy-map/malformed) + the committed-configmap regression guard"
       assert_equal_labels_gated: "Raises-wrapper over find_ungated_equal_label_inhibits; covered by TestEqualLabelGatedInvariant + the strict-raise/warn enforce test"
-      _canonical_tenant_key: "#1231 alias canonicalizer, exact-match mirror of Go canonicalKeyFor; example-covered by test_generate_alertmanager_routes.py::TestDeprecatedKeyAliases (exact/_critical/dimensional/prefix-typo-reject) + pinned to the registry SSOT by test_check_threshold_registry.py::test_python_alias_mirror_pinned_to_registry"
-      _canonicalize_alias_keys: "#1231 alias pre-pass (canonical view + NOTICE lines); covered by TestDeprecatedKeyAliases (old/new defaults, both-spellings dedup, notice wording pins) via validate_tenant_keys"
+      _canonical_tenant_key: "#1231 alias canonicalizer, exact-match mirror of Go canonicalKeyFor; its inverse law with _legacy_tenant_key is property-tested in test_property_tools.py (the alias-spellings class) + pinned to the registry SSOT by test_check_threshold_registry.py::test_python_alias_mirror_pinned_to_registry"
       is_routing_tree_error: "#2326 one-line prefix test on ROUTING_TREE_ERROR_PREFIX; example-pinned by test_generate_routes_nested_tree.py (validate-config schema row FAIL)"
       is_field_type_error: "#2906 one-line prefix test on FIELD_TYPE_ERROR_PREFIX; example-pinned by test_grar_field_types.py (validate-config schema row FAIL)"
       routing_block_receivers: "#2906 closed walk (receiver / overrides[i] / routes[i] receiver per block kind), the positions ignored_routing_keys looks into; example-pinned by test_grar_field_types.py"

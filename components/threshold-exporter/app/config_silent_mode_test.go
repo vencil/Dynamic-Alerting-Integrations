@@ -8,7 +8,6 @@ package main
 import (
 	"fmt"
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -710,20 +709,14 @@ func TestValidateTenantKeys(t *testing.T) {
 		{"NoWarningsForValidKeys",
 			ThresholdConfig{Defaults: map[string]float64{"mysql_connections": 70, "redis_memory": 80}, Tenants: map[string]map[string]ScheduledValue{"db-a": {"mysql_connections": {Default: "60"}, "mysql_connections_critical": {Default: "90"}, "_silent_mode": {Default: "warning"}, "_severity_dedup": {Default: "enable"}, "_state_maintenance": {Default: "enable"}, "_routing": {Default: "receiver: ..."}}}},
 			0, nil},
+		// A misspelt or unknown key is the shared key verdict's (ADR-038 §11):
+		// nothing to say here.
 		{"TypoReservedKey",
 			ThresholdConfig{Defaults: map[string]float64{"mysql_connections": 70}, Tenants: map[string]map[string]ScheduledValue{"db-a": {"_silence_mode": {Default: "warning"}}}},
-			1, func(t *testing.T, w []string) {
-				if !strings.Contains(w[0], "unknown reserved key") || !strings.Contains(w[0], "_silence_mode") {
-					t.Errorf("expected unknown reserved key with _silence_mode, got %q", w[0])
-				}
-			}},
+			0, nil},
 		{"UnknownMetricKey",
 			ThresholdConfig{Defaults: map[string]float64{"mysql_connections": 70}, Tenants: map[string]map[string]ScheduledValue{"db-a": {"postgres_connections": {Default: "60"}}}},
-			1, func(t *testing.T, w []string) {
-				if !strings.Contains(w[0], "not in defaults") {
-					t.Errorf("expected 'not in defaults', got %q", w[0])
-				}
-			}},
+			0, nil},
 		{"CriticalSuffixValid",
 			ThresholdConfig{Defaults: map[string]float64{"mysql_connections": 70}, Tenants: map[string]map[string]ScheduledValue{"db-a": {"mysql_connections_critical": {Default: "90"}}}},
 			0, nil},

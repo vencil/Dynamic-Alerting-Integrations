@@ -400,6 +400,31 @@ class TenantValues(NamedTuple):
     # not decode (Go's `guard.CustomAlertBlockFindingKind`); None when it
     # decodes. Go's verdict — a reader lists it.
     custom_alerts_finding: str | None = None
+    # ADR-038 §11: the exporter's own messages about the tenant's keys that a
+    # CI reader prints and no longer judges itself; None from a da-guard
+    # older than the field.
+    key_checks: "KeyChecks | None" = None
+
+
+class KeyChecks(NamedTuple):
+    """served-values' per-tenant `key_checks`: the exporter's messages
+    (Go's ValidateTenantKeys) about a dimensional key's `version` label
+    (ADR-024 OQ-6) and about a key written in a retired spelling (#1231),
+    each as Go wrote it, sorted. A reader prints them and judges nothing."""
+    version_labels: tuple[str, ...]
+    renames: tuple[str, ...]
+
+
+def _key_checks(e: Any) -> KeyChecks:
+    if not isinstance(e, dict):
+        raise TypeError(f"key_checks is a {type(e).__name__}")
+    out = []
+    for field in KeyChecks._fields:
+        msgs = e[field]
+        if not isinstance(msgs, list) or not all(isinstance(m, str) for m in msgs):
+            raise TypeError(f"key_checks.{field} is not a list of strings")
+        out.append(tuple(msgs))
+    return KeyChecks(*out)
 
 
 class CustomAlertEntry(NamedTuple):
@@ -1092,6 +1117,7 @@ def load_served_tree(
                                                       or custom_alerts_error is None):
                 raise ValueError(f"custom_alerts_finding {custom_alerts_finding!r} "
                                  f"with custom_alerts_error {custom_alerts_error!r}")
+            key_checks = None if "key_checks" not in tv else _key_checks(tv["key_checks"])
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries keys, routing or custom alerts that are not of their shape ({e!r})",
@@ -1111,7 +1137,8 @@ def load_served_tree(
         out[tenant_id] = TenantValues(tenant_id, values, severities, dict(tv["unserved"]),
                                      {k: list(v) for k, v in tv["dropped"].items()}, days, series,
                                      state_filters, time_boxes, routing, keys, alert_rows,
-                                     custom_alerts, custom_alerts_error, custom_alerts_finding)
+                                     custom_alerts, custom_alerts_error, custom_alerts_finding,
+                                     key_checks)
     return ServedTree(out, skipped, _nonempty_lines(stderr), aliases, *dropped, absent,
                       _root_defaults_refused(root_refused, returncode, stderr, SUBCOMMAND, ServedValuesError))
 

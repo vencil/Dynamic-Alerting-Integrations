@@ -225,14 +225,14 @@ type ThresholdConfig struct {
 	//
 	// The config model used to have exactly two expressible states: a key is in
 	// Defaults (⇒ resolveBaseRows emits a platform value for EVERY tenant), or
-	// it is not (⇒ nothing is emitted AND ValidateTenantKeys rejects any tenant
-	// that tries to set it, which gitops/writer.go turns into a write refusal).
+	// it is not (⇒ nothing is emitted AND any tenant that tries to set it is
+	// refused on write — today by the shared key verdict, ADR-038 §11).
 	// There was no slot for "declared, tenant-enablable, platform asserts
 	// nothing", so "dormant, waiting for the tenant" was not a state such a key
 	// could be in: it was dead, and the tenant could not help themselves.
 	//
 	// This field IS that slot, and it is now wired end to end —
-	// ValidateTenantKeys admits such a key and resolveDeclaredRows emits a row
+	// resolveDeclaredRows emits a row
 	// for it, State 1 only: a row exists iff the tenant supplied a value, with
 	// no platform fallback because there is no platform value to fall back to.
 	//
@@ -387,37 +387,6 @@ func RegisteredReaders(k string) (readers map[string][]string, registered bool) 
 	return out, true
 }
 
-// IsUnknownRoutingKey reports whether k carries the `_routing` prefix but is
-// not a key the route generator reads in that place: a tenant's config when
-// platform is false, the top level of a conf.d `_` file when it is true.
-func IsUnknownRoutingKey(k string, platform bool) bool {
-	if !strings.HasPrefix(k, "_routing") {
-		return false
-	}
-	if platform {
-		return !platformRoutingKeys[k]
-	}
-	return !tenantRoutingKeys[k]
-}
-
-// UnknownRoutingKeyHint is the hint printed after a key IsUnknownRoutingKey
-// names (platform as there): where the key belongs, or what replaces it.
-func UnknownRoutingKeyHint(k string, platform bool) string {
-	switch {
-	case !platform && platformRoutingKeys[k]:
-		return "a platform key: it is read only at the top level of a conf.d `_` file"
-	case platform && tenantRoutingKeys[k]:
-		return "a tenant key: set it in the tenant's own file (or its root platform `tenants:` entry); " +
-			"routing for every tenant is `_routing_defaults`"
-	case retiredHint(k) != "":
-		return retiredHint(k)
-	case platform:
-		return "read here: _routing_defaults, _routing_enforced"
-	default:
-		return "read here: _routing, _routing_profile"
-	}
-}
-
 // IsReservedKey reports whether k is a reserved tenant config key: one of
 // validReservedKeys, or starting with one of validReservedPrefixes.
 func IsReservedKey(k string) bool {
@@ -439,8 +408,8 @@ func IsReservedKey(k string) bool {
 // the JSON schema says: nothing reads such a key in any layer — no row
 // phase reads ANY `_` key (baseRowsSkipKey; before #3045 a root
 // `defaults:` entry made one a threshold) — so it is the not_served reason
-// `unregistered` and the write check's "unknown reserved key" even when a
-// `defaults:` declares it (#3045).
+// `unregistered`, which the shared key verdict refuses on write, even when a
+// `defaults:` declares it (#3045, ADR-038 §11).
 //
 // The retired-key test cannot be told apart from `true` with today's
 // registry: its one retired key, `_routing_receiver_type`, is under the
