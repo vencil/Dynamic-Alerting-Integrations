@@ -242,20 +242,15 @@ func formatKeysUnreadLog(ku []valueNotServed, context string) string {
 			"the tenant's file, a profile, a platform file's `tenants:` entry or a subtree `_defaults.yaml`. Whether one is "+
 			"an error is the shared key verdict's: run `da-tools explain-keys` on the conf.d tree, or validate-config. Keys:",
 		context, len(ku))
-	shown := ku
-	if len(shown) > valuesNotServedLogSampleLimit {
-		shown = shown[:valuesNotServedLogSampleLimit]
-	}
-	for i, v := range shown {
+	// Every key, not a sample: no metric names them, and this line is the one
+	// place the exporter states which keys it does not read.
+	for i, v := range ku {
 		if i > 0 {
 			b.WriteString(";")
 		}
-		// Quoted: a key is the tenant's own text, and may hold a newline
-		// or a "; tenant=" of its own.
+		// Quoted: a tenant id or key is the tenant's own text, and may hold
+		// a newline or a "; tenant=" of its own.
 		fmt.Fprintf(&b, " tenant=%q key=%q reason=%s", v.Tenant, v.Key, v.Reason)
-	}
-	if len(ku) > len(shown) {
-		fmt.Fprintf(&b, "; +%d more", len(ku)-len(shown))
 	}
 	return b.String()
 }

@@ -8,6 +8,7 @@ package main
 
 import (
 	"bytes"
+	"fmt"
 	"log"
 	"path/filepath"
 	"strings"
@@ -62,12 +63,37 @@ func TestKeysUnread_TheExporterStatesWhatItDoesNotRead(t *testing.T) {
 	}
 }
 
-// A key is the tenant's own text: quoted, it cannot open a log line of its
-// own nor pass for another entry.
-func TestKeysUnread_KeysAreQuoted(t *testing.T) {
+// A tenant id or key is the tenant's own text: quoted, it cannot open a log
+// line of its own nor pass for another entry.
+func TestKeysUnread_FieldsAreQuoted(t *testing.T) {
 	t.Parallel()
-	line := formatKeysUnreadLog([]valueNotServed{{Tenant: "tx", Key: "_a\nWARN: forged; tenant=ty key=x", Reason: "unregistered"}}, "Config loaded")
-	if strings.Contains(line, "\n") || strings.Contains(line, "; tenant=ty key=x reason") {
-		t.Errorf("an unquoted key in the line: %s", line)
+	const forged = "_a\nWARN: forged; tenant=ty key=x"
+	for _, tc := range []struct{ name, tenant, key string }{
+		{"key", "tx", forged},
+		{"tenant", forged, "_a"},
+	} {
+		line := formatKeysUnreadLog([]valueNotServed{{Tenant: tc.tenant, Key: tc.key, Reason: "unregistered"}}, "Config loaded")
+		if strings.Contains(line, "\n") || strings.Contains(line, "; tenant=ty key=x reason") {
+			t.Errorf("%s: an unquoted field in the line: %s", tc.name, line)
+		}
+	}
+}
+
+// Every unread key is named, however many: the line is the only place the
+// exporter states them, so a sample would hide the rest.
+func TestKeysUnread_NamesEveryKey(t *testing.T) {
+	t.Parallel()
+	var ku []valueNotServed
+	for i := 0; i < valuesNotServedLogSampleLimit+5; i++ {
+		ku = append(ku, valueNotServed{Tenant: "tx", Key: fmt.Sprintf("k%02d", i), Reason: "unconsumed"})
+	}
+	line := formatKeysUnreadLog(ku, "Config loaded")
+	for _, v := range ku {
+		if !strings.Contains(line, fmt.Sprintf("key=%q", v.Key)) {
+			t.Errorf("line omits %q: %s", v.Key, line)
+		}
+	}
+	if strings.Contains(line, "more") {
+		t.Errorf("line samples the keys: %s", line)
 	}
 }
