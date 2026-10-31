@@ -82,6 +82,7 @@ lang: en
 | `analyze_bench_history.py` | Aggregate bench-record nightly history into per-benchmark stats. |
 | `analyze_probe.py` | Summarise BenchmarkProbeWriteLatency PROBE records - write vs load attribution. |
 | `axe_lite_static.py` | Axe-lite: static WCAG heuristics for JSX files (Phase .a0 Day 5 verification). |
+| `bench_verdict.py` | Turn a benchstat comparison into the bench gate's verdict (shared core). |
 | `bump_docs.py` | 版號一致性管理工具 |
 | `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |
 | `check_aria_references.py` | Static JSX ARIA reference closure validator (Phase .a0 Day 5 verification). |

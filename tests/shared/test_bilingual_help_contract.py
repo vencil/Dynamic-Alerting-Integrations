@@ -148,6 +148,7 @@ ENGLISH_ONLY: dict[str, str] = {
     "add_frontmatter.py": _R_DX,
     "agent_output_metrics.py": _R_DX,
     "analyze_bench_history.py": _R_DX,
+    "bench_verdict.py": _R_DX,
     "analyze_probe.py": _R_DX,
     "axe_lite_static.py": _R_DX,
     "bump_playbook_versions.py": _R_DX,
@@ -545,8 +546,15 @@ def test_allowlists_shrink_only_count_pin():
     # ⛔ A choice, not a default — `scripts/tools/lint/` is English-only across
     # the board. ⚠️ Found the way write_baseline_marker.py's entry records: this
     # gate turned the PR red; the author had not run tests/shared/ locally.
-    assert len(ENGLISH_ONLY) <= 151, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=151). Adding an "
+    # pin 152: bumped from 151 for bench_verdict.py (#3468), the bench gate's
+    # single benchstat reader. Same class as pair_bench_ratio.py and
+    # analyze_bench_history.py beside it: a dx CLI invoked only by
+    # scripts/tools/ops/bench_gate_compare.sh inside CI, never by a customer;
+    # its output is GitHub step outputs and ::notice:: lines, which the three
+    # bench workflows render in English. ⚠️ Found the same way as
+    # check_pipestatus_errexit.py: this gate turned the PR red.
+    assert len(ENGLISH_ONLY) <= 152, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=152). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

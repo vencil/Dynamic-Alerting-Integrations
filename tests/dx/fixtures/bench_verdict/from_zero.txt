@@ -1,0 +1,38 @@
+goos: linux
+goarch: amd64
+pkg: example.com/app
+cpu: X
+        │ zero_base.txt │           zero_head.txt            │
+        │    sec/op     │    sec/op     vs base              │
+Hot-4       999.0n ± 1%   1002.5n ± 1%       ~ (p=0.509 n=6)
+Drop-4      1.003µ ± 1%    1.005µ ± 1%       ~ (p=0.364 n=6)
+geomean     1.001µ         1.003µ       +0.25%
+
+        │ zero_base.txt │            zero_head.txt             │
+        │     B/op      │    B/op     vs base                  │
+Hot-4       0.00 ± 0%     48.00 ± 0%         ? (p=0.002 n=6)
+Drop-4     48.00 ± 0%      0.00 ± 0%  -100.00% (p=0.002 n=6)
+geomean               ¹               ?                      ¹
+¹ summaries must be >0 to compute geomean
+
+        │ zero_base.txt │            zero_head.txt             │
+        │   allocs/op   │ allocs/op   vs base                  │
+Hot-4      0.000 ± 0%     3.000 ± 0%         ? (p=0.002 n=6)
+Drop-4     3.000 ± 0%     0.000 ± 0%  -100.00% (p=0.002 n=6)
+geomean               ¹               ?                      ¹
+¹ summaries must be >0 to compute geomean
+
+pkg: example.com/canary
+                   │ zero_base.txt │        zero_head.txt         │
+                   │    sec/op     │   sec/op     vs base         │
+ControlCanaryCPU-4     325.5µ ± 0%   325.7µ ± 0%  ~ (p=0.937 n=6)
+
+                   │ zero_base.txt │         zero_head.txt         │
+                   │     B/op      │    B/op     vs base           │
+ControlCanaryCPU-4      0.000 ± 0%   0.000 ± 0%  ~ (p=1.000 n=6) ¹
+¹ all samples are equal
+
+                   │ zero_base.txt │         zero_head.txt         │
+                   │   allocs/op   │ allocs/op   vs base           │
+ControlCanaryCPU-4      0.000 ± 0%   0.000 ± 0%  ~ (p=1.000 n=6) ¹
+¹ all samples are equal
