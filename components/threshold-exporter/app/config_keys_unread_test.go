@@ -21,7 +21,9 @@ func TestKeysUnread_TheExporterStatesWhatItDoesNotRead(t *testing.T) {
 		"    mysql_conections: \"5\"\n"+ // misspelt: no row reads it
 		"    _myth: \"1\"\n"+ // a `_` key the registry does not list
 		"    _silent_mode: warning\n"+ // registered: read
-		"    mysql_connections: \"70\"\n")
+		"    mysql_conectionz: disable\n"+ // a misspelt key switched off: the disable switches nothing off
+		"    mysql_connections: \"70\"\n"+
+		"  ty:\n    mysql_connections: disable\n") // a real key switched off: read, not listed
 	fresh, _ := freshMetrics(t)
 	var logBuf bytes.Buffer
 	m := NewConfigManager(path)
@@ -35,12 +37,13 @@ func TestKeysUnread_TheExporterStatesWhatItDoesNotRead(t *testing.T) {
 		t.Fatalf("keys-unread lines %q, want one\n%s", lines, logBuf.String())
 	}
 	line := lines[0]
-	for _, want := range []string{"tenant=tx key=mysql_conections reason=unconsumed", "tenant=tx key=_myth reason=unregistered"} {
+	for _, want := range []string{`tenant="tx" key="mysql_conections" reason=unconsumed`,
+		`tenant="tx" key="_myth" reason=unregistered`, `tenant="tx" key="mysql_conectionz" reason=disabled_unread`} {
 		if !strings.Contains(line, want) {
 			t.Errorf("line lacks %q: %s", want, line)
 		}
 	}
-	for _, not := range []string{"_silent_mode", "key=mysql_connections ", "WARN", "ERROR"} {
+	for _, not := range []string{"_silent_mode", `key="mysql_connections"`, `tenant="ty"`, "WARN", "ERROR"} {
 		if strings.Contains(line, not) {
 			t.Errorf("line carries %q: %s", not, line)
 		}
@@ -56,5 +59,15 @@ func TestKeysUnread_TheExporterStatesWhatItDoesNotRead(t *testing.T) {
 	}
 	if after := len(logLinesWith(logBuf.String(), keysUnreadLogPrefix)); after != before {
 		t.Errorf("keys-unread line repeated on an unchanged reload (%d → %d)", before, after)
+	}
+}
+
+// A key is the tenant's own text: quoted, it cannot open a log line of its
+// own nor pass for another entry.
+func TestKeysUnread_KeysAreQuoted(t *testing.T) {
+	t.Parallel()
+	line := formatKeysUnreadLog([]valueNotServed{{Tenant: "tx", Key: "_a\nWARN: forged; tenant=ty key=x", Reason: "unregistered"}}, "Config loaded")
+	if strings.Contains(line, "\n") || strings.Contains(line, "; tenant=ty key=x reason") {
+		t.Errorf("an unquoted key in the line: %s", line)
 	}
 }

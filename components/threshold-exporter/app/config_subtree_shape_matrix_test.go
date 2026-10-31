@@ -155,9 +155,14 @@ func assertPlanesAgreeOrReported(
 	// The keys-unread line carries no severity word (ADR-038 §11: the shared
 	// key verdict judges how severe an unread key is); it is the exporter
 	// saying it reads no row for the key, which is what this channel is.
+	// A keys-unread entry counts only as a whole (tenant and key in ONE
+	// entry): the line lists every tenant's keys.
+	entry := fmt.Sprintf("tenant=%q key=%q reason=", tenant, key)
 	for _, line := range strings.Split(logs, "\n") {
-		loud := strings.Contains(line, "WARN") || strings.HasPrefix(line, keysUnreadLogPrefix)
-		if loud && mentionsExactly(line, tenant) && strings.Contains(line, key) {
+		if strings.HasPrefix(line, keysUnreadLogPrefix) && strings.Contains(line, entry) {
+			return
+		}
+		if strings.Contains(line, "WARN") && mentionsExactly(line, tenant) && strings.Contains(line, key) {
 			return
 		}
 	}

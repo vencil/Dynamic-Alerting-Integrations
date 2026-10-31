@@ -265,7 +265,7 @@ def _gen_defaults_yaml(
     parser rejects the entire file with `cannot unmarshal !!str into
     float64`, which silently drops every default and breaks downstream
     tenant overrides that depend on key-presence-in-defaults validation
-    (see exporter `WARN: tenant=…: unknown key … not in defaults`).
+    (see the exporter's `config keys no row of this exporter reads` line).
     Always emit ints/floats here.
 
     `extra_defaults` (v2.8.0 Phase B Track A A6): caller-supplied

@@ -174,21 +174,31 @@ func (m *ConfigManager) auditValuesNotServed(cfg *ThresholdConfig, flatScan *fla
 	if m.valuesNotServed.recordAndDecide(vs, metrics.SetValuesNotServed) {
 		m.getLogger().Print(formatValuesNotServedLog(vs, m.path, context))
 	}
-	if ku := collectKeysUnread(cfg, verdicts); m.keysUnread.recordAndDecide(ku, func(map[string]int) {}) {
-		m.getLogger().Print(formatKeysUnreadLog(ku, m.path, context))
+	if ku := collectKeysUnread(cfg, verdicts, m.valuesNotServedCache.disabledUnread()); m.keysUnread.recordAndDecide(ku, func(map[string]int) {}) {
+		m.getLogger().Print(formatKeysUnreadLog(ku, context))
 	}
 	return vs
 }
 
 // collectKeysUnread is what this exporter itself records as read by none of
 // its rows (ADR-038 §11): a tenant key the resolver records unconsumed
-// (#3378), and a `_` key the reserved-key registry lists no reader for
-// (unregistered, #3045), in the written spelling. A fact of this reader, not
+// (#3378); one switched off in every window that no row phase reads
+// (disabled_unread: the `disable` switches nothing off — a misspelt key
+// written as `disable`); and a `_` key the reserved-key registry lists no
+// reader for (unregistered, #3045), in the written spelling. The tenant's
+// map is the built one: a key a profile, a platform file's `tenants:` entry
+// or a subtree `_defaults.yaml` hands it is listed for each tenant it
+// reaches. A fact of this reader, not
 // a judgement: whether such a key is an error is the shared key verdict's
 // (decision 4 — a generator key, for one, is read elsewhere and is in
 // neither set).
-func collectKeysUnread(cfg *ThresholdConfig, verdicts map[string]map[string]string) []valueNotServed {
+func collectKeysUnread(cfg *ThresholdConfig, verdicts map[string]map[string]string, disabled map[string][]string) []valueNotServed {
 	var out []valueNotServed
+	for tenant, keys := range disabled {
+		for _, canon := range keys {
+			out = append(out, valueNotServed{Tenant: tenant, Key: writtenSpelling(cfg.Tenants[tenant], canon), Reason: keysUnreadDisabled})
+		}
+	}
 	for tenant, keys := range verdicts {
 		for canon, reason := range keys {
 			if reason == config.NotServedUnconsumed {
@@ -215,17 +225,23 @@ func collectKeysUnread(cfg *ThresholdConfig, verdicts map[string]map[string]stri
 // keysUnreadLogPrefix opens formatKeysUnreadLog's line.
 const keysUnreadLogPrefix = "config keys no row of this exporter reads"
 
+// keysUnreadDisabled is the keys-unread reason of a key switched off in every
+// window that no row phase reads (not a NotServed reason: see
+// ValuesNotServedAndDisabled).
+const keysUnreadDisabled = "disabled_unread"
+
 // formatKeysUnreadLog is collectKeysUnread's line: no severity word, since
 // how severe an unread key is depends on where it is written (ADR-038
 // decision 4), which the shared key verdict judges.
-func formatKeysUnreadLog(ku []valueNotServed, root, context string) string {
+func formatKeysUnreadLog(ku []valueNotServed, context string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b,
-		keysUnreadLogPrefix+" (%s): %d tenant key(s) under %s: unconsumed is a key no "+
-			"threshold row reads (a misspelt key, a `_critical` whose base has no platform value), unregistered a `_` "+
-			"key the reserved-key registry lists no reader for. Whether one is an error is the shared key verdict's: "+
-			"run `da-tools explain-keys --config-dir %s` or validate-config. Keys:",
-		context, len(ku), root, root)
+		keysUnreadLogPrefix+" (%s): %d tenant key(s): unconsumed is a key no threshold row reads (a misspelt key, "+
+			"a `_critical` whose base has no platform value), disabled_unread a `disable` of such a key — it switches "+
+			"nothing off — and unregistered a `_` key the reserved-key registry lists no reader for. A key may come from "+
+			"the tenant's file, a profile, a platform file's `tenants:` entry or a subtree `_defaults.yaml`. Whether one is "+
+			"an error is the shared key verdict's: run `da-tools explain-keys` on the conf.d tree, or validate-config. Keys:",
+		context, len(ku))
 	shown := ku
 	if len(shown) > valuesNotServedLogSampleLimit {
 		shown = shown[:valuesNotServedLogSampleLimit]
@@ -234,7 +250,9 @@ func formatKeysUnreadLog(ku []valueNotServed, root, context string) string {
 		if i > 0 {
 			b.WriteString(";")
 		}
-		fmt.Fprintf(&b, " tenant=%s key=%s reason=%s", v.Tenant, v.Key, v.Reason)
+		// Quoted: a key is the tenant's own text, and may hold a newline
+		// or a "; tenant=" of its own.
+		fmt.Fprintf(&b, " tenant=%q key=%q reason=%s", v.Tenant, v.Key, v.Reason)
 	}
 	if len(ku) > len(shown) {
 		fmt.Fprintf(&b, "; +%d more", len(ku)-len(shown))
@@ -325,6 +343,9 @@ type valuesNotServedEntry struct {
 	edge     time.Time
 	hasEdge  bool
 	verdicts map[string]string // nil: nothing recorded
+	// disabled is the tenant's keys switched off in every window that no
+	// row phase reads (ValuesNotServedAndDisabled), for the keys-unread line.
+	disabled []string
 }
 
 // fresh reports whether e still holds the tenant's verdicts for input at now.
@@ -332,9 +353,9 @@ func (e valuesNotServedEntry) fresh(input uint64, now time.Time) bool {
 	return e.input == input && !now.Before(e.at) && (!e.hasEdge || !now.After(e.edge))
 }
 
-func newValuesNotServedEntry(overrides map[string]ScheduledValue, input uint64, now time.Time, v map[string]string) valuesNotServedEntry {
+func newValuesNotServedEntry(overrides map[string]ScheduledValue, input uint64, now time.Time, v map[string]string, disabled []string) valuesNotServedEntry {
 	edge, hasEdge := config.ValuesNotServedExpiryEdge(overrides, now)
-	return valuesNotServedEntry{input: input, at: now, edge: edge, hasEdge: hasEdge, verdicts: v}
+	return valuesNotServedEntry{input: input, at: now, edge: edge, hasEdge: hasEdge, verdicts: v, disabled: disabled}
 }
 
 // verdicts is cfg.ValuesNotServed(now), recomputed only where it may have
@@ -356,10 +377,10 @@ func (c *valuesNotServedCache) verdicts(cfg *ThresholdConfig, now time.Time) map
 		}
 	}
 	if !c.valid || c.global != global {
-		all := cfg.ValuesNotServed(now)
+		all, disabled := cfg.ValuesNotServedAndDisabled(now)
 		c.tenants = make(map[string]valuesNotServedEntry, len(cfg.Tenants))
 		for tenant, overrides := range cfg.Tenants {
-			c.tenants[tenant] = newValuesNotServedEntry(overrides, inputs[tenant], now, all[tenant])
+			c.tenants[tenant] = newValuesNotServedEntry(overrides, inputs[tenant], now, all[tenant], disabled[tenant])
 		}
 		c.global, c.valid = global, true
 		c.fullPasses++
@@ -367,7 +388,8 @@ func (c *valuesNotServedCache) verdicts(cfg *ThresholdConfig, now time.Time) map
 	}
 	for _, tenant := range stale {
 		overrides := cfg.Tenants[tenant]
-		c.tenants[tenant] = newValuesNotServedEntry(overrides, inputs[tenant], now, cfg.TenantValuesNotServed(tenant, now))
+		table, disabled := cfg.TenantValuesNotServedAndDisabled(tenant, now)
+		c.tenants[tenant] = newValuesNotServedEntry(overrides, inputs[tenant], now, table, disabled)
 		c.tenantPasses++
 	}
 	out := map[string]map[string]string{}
@@ -378,6 +400,20 @@ func (c *valuesNotServedCache) verdicts(cfg *ThresholdConfig, now time.Time) map
 		}
 		if len(e.verdicts) > 0 {
 			out[tenant] = e.verdicts
+		}
+	}
+	return out
+}
+
+// disabledUnread is, per tenant the last verdicts call kept, the keys
+// switched off in every window that no row phase reads.
+func (c *valuesNotServedCache) disabledUnread() map[string][]string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := map[string][]string{}
+	for tenant, e := range c.tenants {
+		if len(e.disabled) > 0 {
+			out[tenant] = e.disabled
 		}
 	}
 	return out

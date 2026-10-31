@@ -277,6 +277,12 @@ type rejectRecorder struct {
 	// claimed is the keys of the tenant being resolved that a row phase has
 	// read; emptied by noteUnclaimed after each tenant.
 	claimed map[string]struct{}
+	// disabledUnclaimed is, per tenant, the keys switched off in every window
+	// that no row phase claimed: a `disable` of a key the resolver would not
+	// read anyway (a misspelt key). Not a NotServed reason — `disable` asks
+	// for no row — so it stays out of byTenant; ValuesNotServedAndDisabled
+	// hands it to the exporter's keys-unread line (ADR-038 §11).
+	disabledUnclaimed map[string]map[string]bool
 }
 
 // recordedRank orders the reasons a recorder keeps for one key: a value no
@@ -345,7 +351,18 @@ func (r *rejectRecorder) claim(key string) {
 // applies): `disable` asks for no row.
 func (r *rejectRecorder) noteUnclaimed(tenant string, overrides map[string]ScheduledValue) {
 	for k, sv := range overrides {
-		if _, read := r.claimed[k]; read || baseRowsSkipKey(k) || disabledEverywhere(sv) {
+		_, read := r.claimed[k]
+		if read || baseRowsSkipKey(k) {
+			continue
+		}
+		if disabledEverywhere(sv) {
+			if r.disabledUnclaimed == nil {
+				r.disabledUnclaimed = map[string]map[string]bool{}
+			}
+			if r.disabledUnclaimed[tenant] == nil {
+				r.disabledUnclaimed[tenant] = map[string]bool{}
+			}
+			r.disabledUnclaimed[tenant][k] = true
 			continue
 		}
 		r.note(tenant, k, NotServedUnconsumed)
@@ -428,6 +445,17 @@ func ValueNotServedReasons() []string {
 // (TestValuesNotServed_PerTenantCutsMatchUnionOfCuts) at the cost of
 // tenants × all cuts.
 func (c *ThresholdConfig) ValuesNotServed(now time.Time) map[string]map[string]string {
+	table, _ := c.ValuesNotServedAndDisabled(now)
+	return table
+}
+
+// ValuesNotServedAndDisabled is ValuesNotServed, and per tenant the keys
+// switched off in every window that no row phase reads (sorted canonical
+// keys): a `disable` that switches nothing off because nothing reads the
+// key, which ValuesNotServed leaves out (`disable` asks for no row). The
+// exporter states them in its keys-unread line (ADR-038 §11), the one place
+// besides the shared key verdict's disable_noop that says so.
+func (c *ThresholdConfig) ValuesNotServedAndDisabled(now time.Time) (map[string]map[string]string, map[string][]string) {
 	rec := &rejectRecorder{}
 	c.resolveAtWithStats(now, nil, nil, rec)
 	utc := now.UTC()
@@ -452,7 +480,17 @@ func (c *ThresholdConfig) ValuesNotServed(now time.Time) map[string]map[string]s
 			one.AtMinuteOfDay(m).resolveAtWithStats(now, nil, nil, rec)
 		}
 	}
-	return rec.byTenant
+	var disabled map[string][]string
+	for tenant, keys := range rec.disabledUnclaimed {
+		if disabled == nil {
+			disabled = map[string][]string{}
+		}
+		for k := range keys {
+			disabled[tenant] = append(disabled[tenant], k)
+		}
+		sort.Strings(disabled[tenant])
+	}
+	return rec.byTenant, disabled
 }
 
 // noteInvalidWindows records NotServedWindowInvalid for key of tenant when a
