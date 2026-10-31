@@ -332,7 +332,23 @@ _DA_GUARD_RAN: list = [None]
 DA_GUARD_PROBE_SECONDS = 3.0
 
 
-def da_guard_problem() -> Optional[str]:
+def _given(flag: Optional[str]) -> bool:
+    """Whether --da-guard-binary names a da-guard. Blank is not given, as a
+    blank $DA_GUARD_BINARY is not set (the dispatcher strips it)."""
+    return bool(flag and flag.strip())
+
+
+def _da_guard_named(flag: Optional[str]) -> str:
+    """Where the one da-guard came from, for a line that says it is missing."""
+    return f"--da-guard-binary {flag!r}" if _given(flag) else "$DA_GUARD_BINARY, then PATH"
+
+
+def _via_flag(flag: Optional[str]) -> str:
+    """`` (--da-guard-binary '<value>')`` when the flag named it, else ``""``."""
+    return f" (--da-guard-binary {flag!r})" if _given(flag) else ""
+
+
+def da_guard_problem(flag: Optional[str] = None) -> Optional[str]:
     """Why the judgement process cannot run da-guard — the one it resolves
     ($DA_GUARD_BINARY, then PATH) is missing, not executable, or does not
     answer ``--version`` (a wrong architecture, a broken interpreter line)
@@ -342,19 +358,21 @@ def da_guard_problem() -> Optional[str]:
     import guard_dispatch
     exe = guard_dispatch.DISPATCHER.resolve_binary(None)
     if exe is None:
-        return ("da-guard is not found ($DA_GUARD_BINARY, then PATH): without it "
+        return (f"da-guard is not found ({_da_guard_named(flag)}): without it "
                 "the key verdict cannot be given")
     try:
         st = os.stat(exe)
     except OSError as exc:
-        return f"da-guard at {exe} cannot be read ({exc}): the key verdict cannot be given"
+        return (f"da-guard at {exe}{_via_flag(flag)} cannot be read ({exc}): "
+                "the key verdict cannot be given")
     if not (stat.S_ISREG(st.st_mode) and os.access(exe, os.X_OK)):
-        return f"da-guard at {exe} is not an executable file: the key verdict cannot be given"
+        return (f"da-guard at {exe}{_via_flag(flag)} is not an executable file: "
+                "the key verdict cannot be given")
     seen = (exe, st.st_mtime_ns, st.st_size)
     if _DA_GUARD_RAN[0] is None or _DA_GUARD_RAN[0][0] != seen:
         _DA_GUARD_RAN[0] = (seen, da_guard_version(exe, DA_GUARD_PROBE_SECONDS) is not None)
     if not _DA_GUARD_RAN[0][1]:
-        return (f"da-guard at {exe} does not run (`--version` failed): "
+        return (f"da-guard at {exe}{_via_flag(flag)} does not run (`--version` failed): "
                 "the key verdict cannot be given")
     return None
 
@@ -401,7 +419,9 @@ class Service:
         self._request_pinned = False
         self._preempting = False
         self.generator_version = gar.da_tools_version()
-        self.da_guard_version = da_guard_version(settings.da_guard_binary)
+        # #3415: the one resolution ($DA_GUARD_BINARY, which main() set from
+        # --da-guard-binary): the version reported is the da-guard that judges.
+        self.da_guard_version = da_guard_version(None)
         self._job_seq = 0
         self.connections = 0
         self.inflight_body_bytes = 0
@@ -678,7 +698,7 @@ class Service:
                 "VALIDATOR_UNAVAILABLE", "amtool_missing",
                 "amtool is not on PATH: without it the generator's check of the "
                 "rendered Alertmanager config is skipped, so no verdict is given")
-        missing = da_guard_problem()
+        missing = da_guard_problem(self.s.da_guard_binary)
         if missing is not None:
             return _unavailable("VALIDATOR_UNAVAILABLE", "da_guard_missing", missing)
         job_dir = self._new_job_dir()
@@ -924,7 +944,7 @@ class Service:
     def _status(self) -> Response:
         policy = self._policy_now()
         amtool = shutil.which("amtool") is not None
-        da_guard = da_guard_problem() is None
+        da_guard = da_guard_problem(self.s.da_guard_binary) is None
         too_old = (generator_version_problem(self.generator_version,
                                              policy.min_generator_version)
                    if policy.available else None)
@@ -1132,8 +1152,8 @@ def _build_parser() -> argparse.ArgumentParser:
                         "min_generator_version); read for every judgement")
     p.add_argument("--git", default="git", help="git executable (default: git)")
     p.add_argument("--da-guard-binary", default=None,
-                   help="da-guard used for the reported version (default: "
-                        "$DA_GUARD_BINARY, then PATH)")
+                   help="da-guard every judgement runs and whose version is "
+                        "reported (default: $DA_GUARD_BINARY, then PATH)")
     p.add_argument("--max-judgement-seconds", type=float,
                    default=DEFAULT_MAX_JUDGEMENT_SECONDS,
                    help="upper bound of one request's time, queue included "
@@ -1286,7 +1306,7 @@ def _prepare_work_dir(path: str) -> None:
 async def serve(settings: Settings, object_format: str) -> None:
     service = Service(settings, object_format)
     service.loop = asyncio.get_running_loop()
-    da_guard_problem()  # the probe, before any request can wait on it
+    da_guard_problem(settings.da_guard_binary)  # the probe, before any request can wait on it
     old = os.umask(0o177)  # the socket is created 0600
     try:
         server = await asyncio.start_unix_server(
@@ -1316,6 +1336,12 @@ async def serve(settings: Settings, object_format: str) -> None:
 def main(argv: Optional[list[str]] = None) -> int:
     args = _build_parser().parse_args(argv)
     settings = Settings(**{k: getattr(args, k) for k in Settings.__dataclass_fields__})
+    # #3415: --da-guard-binary is the first step of the one resolution, so
+    # it goes where every reader of it looks — $DA_GUARD_BINARY, inherited by
+    # each judgement process — not into a second lookup of its own: the
+    # version reported and the da-guard that judges are then one binary.
+    if _given(settings.da_guard_binary):
+        os.environ[_lib_consumer_read.DA_GUARD_ENV] = settings.da_guard_binary
     # Absolute: the judgement process runs in its own job directory, and so
     # does every reader binary it runs — da-guard (#2906 review), and the
     # da-read / da-crdecode of the route generator (#3424).
