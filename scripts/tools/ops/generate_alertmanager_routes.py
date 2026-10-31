@@ -78,7 +78,6 @@ from _grar_validate import (  # noqa: E402, F401
     find_watchdog_suppressing_inhibits,
     load_policy,
     validate_receiver_domains,
-    validate_tenant_keys,
 )
 
 # ── Re-exports from _grar_merge ────────────────────────────────────
@@ -1260,6 +1259,12 @@ _KEY_VERDICT_KINDS = {
     "disable_partial": "key_disable_partial",
 }
 
+# The exporter's key checks (`_lib_key_verdict.key_check_lines`) → FINDING_KINDS.
+_KEY_CHECK_KINDS = {
+    _lib_key_verdict.KEY_CHECK_VERSION_LABEL: "key_version_label",
+    _lib_key_verdict.KEY_CHECK_RENAMED: "key_renamed",
+}
+
 
 def _report_key_verdict(config_dir: str, findings: list[str]) -> None:
     """The shared verdict on keys no reader reads (``_lib_key_verdict``,
@@ -1292,6 +1297,19 @@ def _report_key_verdict(config_dir: str, findings: list[str]) -> None:
     if undecidable is not None:
         lines.append(Finding(f"  NOTICE: key verdict: {undecidable}",
                              kind="key_undecidable", blocks="never"))
+    # ADR-038 §11: the exporter's own key checks (a `version` label, a
+    # retired spelling), printed as it wrote them — this tool no longer
+    # judges keys itself.
+    checks, unchecked = _lib_key_verdict.key_check_lines(verdict)
+    for kind, tenant, msg in checks:
+        lines.append(Finding(f"  {msg}", kind=_KEY_CHECK_KINDS[kind],
+                             blocks="never", tenant=tenant))
+    if unchecked:
+        lines.append(Finding(
+            "  NOTICE: key verdict incomplete: this da-guard gives no key checks "
+            "(version labels, renamed keys) — it is older than this tool: upgrade "
+            f"or rebuild it (tenants: {', '.join(unchecked[:WARN_LIMIT])})",
+            kind="key_verdict_incomplete", blocks="never"))
     for line in lines:
         print(safe_label(line), file=sys.stderr)
     findings.extend(lines)

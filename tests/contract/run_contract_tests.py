@@ -233,10 +233,10 @@ def write_domain_policy_fixture(config_dir: Path) -> None:
 def _tenant_body(receiver_yaml: str) -> bytes:
     """Tenant-only PUT body (conf.d/{id}.yaml shape) with a _routing receiver.
 
-    Deliberately ONLY `_routing`: the write validation resolves plain
-    metric keys (cpu, ...) against the merged _defaults.yaml, and this
-    fixture ships no defaults — a metric key would 400 with "unknown key
-    not in defaults" before proving anything about the policy gate.
+    Deliberately ONLY `_routing`: this fixture ships no defaults, so a
+    plain metric key (cpu, ...) is one no reader reads, which the write
+    gate's shared key verdict refuses (ADR-038 §11) before proving anything
+    about the policy gate.
     `_`-prefixed structural keys skip that resolution.
     """
     return (

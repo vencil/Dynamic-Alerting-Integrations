@@ -38,39 +38,6 @@ func TestPlatformKeyFor(t *testing.T) {
 	}
 }
 
-// TestPlatformKeyFor_IsValidateTenantKeysMembership pins PlatformKeyFor to
-// the check it reports: an override key is accepted with its platform key
-// in defaults, and refused (an error naming it) without. Both directions,
-// so the classifier cannot drift from the validator it was taken out of.
-func TestPlatformKeyFor_IsValidateTenantKeysMembership(t *testing.T) {
-	t.Parallel()
-	keys := []string{
-		"mysql_threads_running", "mysql_cpu", "mysql_cpu_critical",
-		"mysql_threads_running_critical", `mysql_cpu{db="a"}`, `mysql_cpu{db='a'}`,
-		`redis_queue_length{queue="a", priority="high"}`, "mysql_cpu_util", "disk_usage_critical",
-	}
-	for _, key := range keys {
-		pk, ok := PlatformKeyFor(key)
-		if !ok {
-			t.Fatalf("%q: not a threshold key", key)
-		}
-		with := &ThresholdConfig{
-			Defaults: map[string]float64{pk: 1},
-			Tenants:  map[string]map[string]ScheduledValue{"t1": {key: {Default: "5"}}},
-		}
-		if errs := with.ValidateTenantKeys().Errors; len(errs) > 0 {
-			t.Errorf("%q with defaults {%q}: refused: %v", key, pk, errs)
-		}
-		without := &ThresholdConfig{
-			Defaults: map[string]float64{"other_metric": 1},
-			Tenants:  map[string]map[string]ScheduledValue{"t1": {key: {Default: "5"}}},
-		}
-		if errs := without.ValidateTenantKeys().Errors; len(errs) == 0 {
-			t.Errorf("%q without %q in defaults: accepted, so %q is not its platform key", key, pk, pk)
-		}
-	}
-}
-
 func TestKeyRefs(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

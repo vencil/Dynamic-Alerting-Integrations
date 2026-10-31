@@ -137,13 +137,13 @@ func TestRatchet_KeyDeleted(t *testing.T) {
 	}
 }
 
-// Ratchet moves value findings only: a key error the same base also had
-// (an unknown `_silent_mod`) still blocks.
+// Ratchet moves value findings only: another error the same base also had
+// (a `_profile` naming no profile) still blocks.
 func TestRatchet_LeavesOtherErrors(t *testing.T) {
 	t.Parallel()
-	doc := "tenants:\n  t1:\n    _silent_mod: warning\n    _silent_mode: purple\n"
+	doc := "tenants:\n  t1:\n    _profile: nosuch\n    _silent_mode: purple\n"
 	v := judge(t, doc, doc).Tenants["t1"]
-	if countWith(v.Errors, `unknown reserved key "_silent_mod"`) != 1 || countWith(v.Errors, "_silent_mode") != 0 {
+	if countWith(v.Errors, `unknown profile "nosuch"`) != 1 || countWith(v.Errors, "_silent_mode") != 0 {
 		t.Errorf("errors = %q", v.Errors)
 	}
 	if countWith(v.Notices, "_silent_mode") != 1 {
@@ -181,10 +181,10 @@ func TestRatchet_NoPrevStaysStrict(t *testing.T) {
 
 func TestSelfRatchet(t *testing.T) {
 	t.Parallel()
-	c := ThresholdConfig{Tenants: valueTenantsOf(t, "tenants:\n  t1:\n    _silent_mode: purple\n    _silent_mod: x\n")}
+	c := ThresholdConfig{Tenants: valueTenantsOf(t, "tenants:\n  t1:\n    _silent_mode: purple\n    _profile: nosuch\n")}
 	v := c.ValidateTenantKeysByTenant().SelfRatchet().Tenants["t1"]
 	if countWith(v.Errors, "_silent_mode ") != 0 || countWith(v.Notices, "_silent_mode ") != 1 ||
-		countWith(v.Errors, "_silent_mod\"") != 1 {
+		countWith(v.Errors, `unknown profile "nosuch"`) != 1 {
 		t.Errorf("errors=%q notices=%q", v.Errors, v.Notices)
 	}
 	if !strings.HasPrefix(v.Notices[len(v.Notices)-1], "NOTICE: tenant=t1: _silent_mode \"purple\"") {

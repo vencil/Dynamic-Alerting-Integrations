@@ -124,7 +124,7 @@ To narrow permissions, edit the content; never delete the file.
 Starting from v1.7.0, `validate_config.py` provides all-in-one configuration validation covering:
 
 1. **YAML Format Validation** — Syntax correctness
-2. **Schema Validation** — Go `ValidateTenantKeys()` + Python `validate_tenant_keys()` detect unknown/typo keys
+2. **Schema Validation** — the shared key verdict ([ADR-038](adr/038-unread-keys-judged-by-readers.en.md)) detects keys no reader reads (misspelt keys)
 3. **Routing Validation** — `generate_alertmanager_routes.py --validate` checks receiver structure + domain allowlist
 4. **Custom Rule Lint** — `lint_custom_rules.py` deny-list compliance check
 5. **Version Consistency** — `bump_docs.py --check` ensures three version lines are in sync

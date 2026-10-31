@@ -217,6 +217,12 @@ FINDING_KINDS: dict[str, str] = {
     "key_undecidable":
         "No root platform file was read, so the threshold keys were not "
         "judged (ADR-038 decision 7).",
+    "key_version_label":
+        "A dimensional key's `version` label the exporter refuses (ADR-024 "
+        "OQ-6), as the exporter words it.",
+    "key_renamed":
+        "A key written in a retired spelling (#1231), as the exporter words "
+        "it; advisory.",
     "key_verdict_incomplete":
         "The shared key verdict could not be given (da-guard failing); the "
         "keys were not judged and the run's verdict is unchanged.",

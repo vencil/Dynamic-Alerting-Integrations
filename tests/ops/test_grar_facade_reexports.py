@@ -70,7 +70,6 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "find_watchdog_suppressing_inhibits",
         "load_policy",
         "validate_receiver_domains",
-        "validate_tenant_keys",
     ),
     "_grar_merge": (
         "_apply_timing_params",

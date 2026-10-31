@@ -1159,7 +1159,8 @@ def defaults_snippet_entry(results):
     IO）。
 
     threshold-exporter 只發射 `_defaults.yaml` 宣告過的 key：租戶檔裡沒宣告
-    的 key 只得到 `unknown key ... not in defaults` 警告。所以 migrate 產出的
+    的 key 沒有任何一列送出（validate-config 的 `unread_keys` 列報 `unread …
+    (no_row)`）。所以 migrate 產出的
     key 必須連同一份 defaults 一起交付，否則三件套在 runtime 不會發射任何閾值
     （issue 1818）。
 
@@ -1178,8 +1179,8 @@ def defaults_snippet_entry(results):
         "Defaults 片段 — 合併進 conf.d/_defaults.yaml 的 defaults: 區塊",
         "============================================================",
         "threshold-exporter 只發射 _defaults.yaml 宣告過的 key。沒宣告時，",
-        "tenant-config.yaml 的值只會得到 `unknown key ... not in defaults`",
-        "警告，不發射任何 user_threshold，上面的告警規則永遠不會響。",
+        "tenant-config.yaml 的值不發射任何 user_threshold（validate-config 的",
+        "unread_keys 列報 `unread … (no_row)`），上面的告警規則永遠不會響。",
         "",
         "值取自原規則的閾值：宣告後 warning 層對所有租戶生效，與原本那條全域",
         "規則相同。有 warning 配對的 critical 層不能用 defaults 宣告：要 critical",

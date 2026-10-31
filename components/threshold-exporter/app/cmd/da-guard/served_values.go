@@ -246,6 +246,11 @@ type servedTenantValues struct {
 	// root_default_refused). Facts only: no verdict on keys another
 	// reader owns. Always present.
 	Keys map[string]servedKey `json:"keys"`
+	// KeyChecks (ADR-038 §11): the two checks on the tenant's keys as
+	// written that the CI readers print and no longer judge themselves —
+	// ValidateTenantKeys' messages about a `version` label and about a
+	// retired spelling. Always present.
+	KeyChecks servedKeyChecks `json:"key_checks"`
 	// CustomAlertRows: the custom-alert rows the tenant's `_custom_alerts`
 	// asks /metrics to serve, counted before the per-tenant metric limit
 	// (max_metrics_per_tenant) truncates them (config.CustomAlertRowCount)
@@ -310,6 +315,35 @@ func kindOrNil(k findingkind.Kind) *string {
 	}
 	s := k.String()
 	return &s
+}
+
+// servedKeyChecks is servedTenantValues.KeyChecks: the exporter's own
+// messages (config.KeyValidation.VersionLabels and Renames), sorted.
+type servedKeyChecks struct {
+	// VersionLabels: a dimensional key's `version` label the exporter
+	// refuses (ADR-024 OQ-6). Always present ([] when none).
+	VersionLabels []string `json:"version_labels"`
+	// Renames: a key written in a retired spelling (#1231), with its
+	// replacement. Advisory. Always present ([] when none).
+	Renames []string `json:"renames"`
+}
+
+// keyChecksOf fills KeyChecks of every tenant of tenants from cfg.
+func keyChecksOf(cfg *config.ThresholdConfig, tenants map[string]servedTenantValues) {
+	kv := cfg.ValidateTenantKeysByTenant()
+	for tid, tv := range tenants {
+		v := kv.Tenants[tid]
+		tv.KeyChecks = servedKeyChecks{
+			VersionLabels: sortedStrings(v.VersionLabels), Renames: sortedStrings(v.Renames)}
+		tenants[tid] = tv
+	}
+}
+
+// sortedStrings is s sorted, [] for none.
+func sortedStrings(s []string) []string {
+	out := append([]string{}, s...)
+	sort.Strings(out)
+	return out
 }
 
 // servedKey is one entry of servedTenantValues.Keys.
@@ -590,6 +624,7 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 			return exitCallerErr
 		}
 		spellAsWritten(tenants, written)
+		keyChecksOf(sub, tenants)
 	}
 	parseFailed := rep.ParseFailed
 	if parseFailed == nil {

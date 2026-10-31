@@ -39,9 +39,10 @@ func TestMergeTenantWithRootDefaults_PopulatesDefaults(t *testing.T) {
 }
 
 // TestMergeTenantWithRootDefaults_NoDefaultsFile confirms a missing
-// _defaults.yaml is tolerated (empty Defaults), and that ValidateTenantKeys
-// then still flags an ordinary metric key — i.e. the merge does not fabricate
-// defaults, it only surfaces ones that genuinely exist on disk.
+// _defaults.yaml is tolerated (empty Defaults): the merge does not fabricate
+// defaults, it only surfaces ones that genuinely exist on disk. Whether a
+// key with no platform value is read is the shared key verdict's (ADR-038
+// §11), so ValidateTenantKeys says nothing about it.
 func TestMergeTenantWithRootDefaults_NoDefaultsFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir() // no _defaults.yaml
@@ -52,8 +53,8 @@ func TestMergeTenantWithRootDefaults_NoDefaultsFile(t *testing.T) {
 	if len(merged.Defaults) != 0 {
 		t.Errorf("expected empty Defaults without a _defaults.yaml, got: %v", merged.Defaults)
 	}
-	if warnings := merged.ValidateTenantKeys().Errors; len(warnings) == 0 { // #1231 c2 accessor
-		t.Error("an unmatched metric key should warn when no defaults are present")
+	if warnings := merged.ValidateTenantKeys().Errors; len(warnings) != 0 { // #1231 c2 accessor
+		t.Errorf("a key name is judged here: %q", warnings)
 	}
 }
 

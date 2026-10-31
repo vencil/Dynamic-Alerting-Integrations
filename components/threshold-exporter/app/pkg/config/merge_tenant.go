@@ -228,7 +228,7 @@ func (m *TenantMerge) platformLayerNotices(tid string) []string {
 		}
 		// Whether any reader reads a key is the shared key verdict's: it
 		// reports a platform file's keys itself (ADR-038 decision 6).
-		pv := layer.validateOverrideKeys().WithoutUnread()
+		pv := layer.validateOverrideKeys()
 		msgs := append(append([]string(nil), pv.Errors...), pv.Notices...)
 		sort.Strings(msgs)
 		for _, msg := range msgs {
@@ -322,7 +322,7 @@ func (m *TenantMerge) profileLayerNoticesFor(tid string, canonDeclared map[strin
 				Tenants:           map[string]map[string]ScheduledValue{tid: keys},
 			}
 			// As platformLayerNotices: unread keys are the key verdict's.
-			pv := pl.validateOverrideKeys().WithoutUnread()
+			pv := pl.validateOverrideKeys()
 			msgs = append(append(msgs, pv.Errors...), pv.Notices...)
 		}
 		for _, k := range declaredBy[f] {

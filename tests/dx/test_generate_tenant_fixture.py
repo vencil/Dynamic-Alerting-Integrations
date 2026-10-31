@@ -202,7 +202,7 @@ def test_synthetic_v2_different_seeds_produce_different_trees(fixture_module, tm
 # and "disable" sentinels are valid only in tenant override files. If those
 # forms appear in defaults, the parser silently rejects the entire file
 # (`cannot unmarshal !!str into float64`) — every default is dropped, and
-# downstream tenant overrides break with `unknown key not in defaults`.
+# downstream tenant overrides serve nothing (`unread … (no_row)`).
 #
 # This was the root cause that took 6 RCA cycles to surface during B-1
 # Phase 2 e2e harness rollout (planning archive §S#37d cycle-6 cause #1).

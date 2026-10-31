@@ -158,7 +158,7 @@ python3 scripts/tools/ops/validate_config.py --config-dir conf.d/
 python3 scripts/tools/lint/check_threshold_registry.py --regen
 ```
 
-沒有宣告的 key，租戶設了也不會發射，validate 會報 `unknown key … not in defaults`。送 PR 前，下面兩道檢查要是綠的：「每個告警讀的 key 都有宣告」與「registry 和各處生成段沒有漂移」：
+沒有宣告的 key，租戶設了也不會發射，validate-config 的 `unread_keys` 那列會報 `unread … (no_row)`。送 PR 前，下面兩道檢查要是綠的：「每個告警讀的 key 都有宣告」與「registry 和各處生成段沒有漂移」：
 
 ```bash
 python3 scripts/tools/lint/check_threshold_reachability.py --ci

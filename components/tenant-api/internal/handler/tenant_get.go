@@ -329,7 +329,7 @@ func GetTenant(d *Deps) http.HandlerFunc {
 		// not refused for it (SelfRatchetValues).
 		// #3039: the file may declare other tenants; messages about those the
 		// caller may not read are counted, not shown.
-		warnings, notices := gitops.DiscloseKeyValidation(tenantID, gitops.SelfRatchetValues(merged.ValidateTenantKeysByTenant().WithoutUnread()),
+		warnings, notices := gitops.DiscloseKeyValidation(tenantID, gitops.SelfRatchetValues(merged.ValidateTenantKeysByTenant()),
 			tenantNamesFor(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r)))
 		resolved := merged.ResolveAt(time.Now())
 
@@ -420,7 +420,7 @@ func getGitManagedTenant(w http.ResponseWriter, r *http.Request, d *Deps, tenant
 	}
 	// #3039: the file may declare other tenants; messages about those the
 	// caller may not read are counted, not shown.
-	out.Warnings, out.Notices = gitops.DiscloseKeyValidation(tenantID, gitops.SelfRatchetValues(merged.ValidateTenantKeysByTenant().WithoutUnread()),
+	out.Warnings, out.Notices = gitops.DiscloseKeyValidation(tenantID, gitops.SelfRatchetValues(merged.ValidateTenantKeysByTenant()),
 		tenantNamesFor(d.RBAC, d.TenantOrg, rbac.RequestPrincipal(r)))
 	resolved := make([]cfg.ResolvedThreshold, 0)
 	for _, rt := range merged.ResolveAt(time.Now()) {

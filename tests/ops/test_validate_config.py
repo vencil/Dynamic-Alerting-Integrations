@@ -78,8 +78,9 @@ class TestSchemaCheck:
         result = vc.check_schema(conf_dir)
         assert result["status"] in (vc.PASS, vc.WARN)
 
-    def test_unknown_key_warns(self):
-        """Config with unknown reserved key should warn."""
+    def test_an_unknown_key_is_not_this_rows(self):
+        """ADR-038 §11: whether a key is read is the unread_keys row's (the
+        shared key verdict); the route generator judges no key name."""
         with tempfile.TemporaryDirectory() as d:
             # Defaults file
             with open(os.path.join(d, "_defaults.yaml"), "w", encoding="utf-8") as f:
@@ -90,9 +91,9 @@ class TestSchemaCheck:
                     "_unknown_reserved": "foo"
                 }}}, f)
             result = vc.check_schema(d)
-            assert result["status"] == vc.WARN
-            assert any("unknown" in detail.lower()
-                       for detail in result["details"])
+            assert result["status"] == vc.PASS, result
+            assert not any("_unknown_reserved" in detail
+                           for detail in result["details"]), result
 
 
 class TestRouteCheck:
@@ -1673,64 +1674,6 @@ class TestUnreadableInputIsNeverOurBug:
         assert "please report it with the traceback" in out, out
 
 
-class TestEmptyPlatformDefaultsSaysSoInsteadOfAdvisingDeletion:
-    """⛔ "Remove unknown keys" is destructive when nothing is declared.
-
-    Measured on ``origin/main``: a ``_defaults.yaml`` with no ``defaults:``
-    key at all makes ``check_schema`` report every tenant override as
-    ``unknown key … not in defaults``, the row prints "Remove unknown keys
-    or add them to the schema", and the run exits **0**. Those keys are
-    legal and in force; deleting them silently drops the tenant to platform
-    values that do not exist.
-
-    Only the advice changes. The warnings come from ``validate_tenant_keys``,
-    whose verdicts are pinned key-for-key against the Go twin.
-    """
-
-    @staticmethod
-    def _tree(tmp_path, defaults_body: str):
-        d = tmp_path / "conf.d"
-        d.mkdir()
-        (d / "_defaults.yaml").write_text(defaults_body, encoding="utf-8")
-        (d / "db-a.yaml").write_text(
-            "tenants:\n  db-a:\n    mysql_threads_running: 90\n",
-            encoding="utf-8")
-        return str(d)
-
-    @pytest.mark.parametrize("body", [
-        "# nothing declared here\n",
-        "defaults:\n",
-        "defaults: {}\n",
-    ], ids=["no-defaults-key", "null-defaults", "empty-defaults"])
-    def test_the_destructive_hint_is_replaced(self, body, tmp_path, capsys,
-                                              cli_argv):
-        cli_argv("validate_config", "--config-dir", self._tree(tmp_path, body))
-        with pytest.raises(SystemExit):
-            vc.main()
-        out = capsys.readouterr().out
-        assert "unknown key" in out, out
-        assert _generic_schema_hint() not in out, (
-            "the report is still telling the customer to delete overrides "
-            f"that are in force\n{out}")
-        assert vc.NO_DECLARED_DEFAULTS_HINT in out, out
-
-    def test_a_real_typo_still_gets_the_normal_advice(self, tmp_path, capsys,
-                                                     cli_argv):
-        """Must-tolerate side: when defaults ARE declared, an unknown key is
-        a typo and "remove it or add it to the schema" is the right thing to
-        say. Without this, suppressing the hint unconditionally would pass."""
-        d = self._tree(tmp_path, "defaults:\n  mysql_threads_running: 80\n")
-        (pathlib.Path(d) / "db-b.yaml").write_text(
-            "tenants:\n  db-b:\n    mysql_thredas_running: 90\n",
-            encoding="utf-8")
-        cli_argv("validate_config", "--config-dir", d)
-        with pytest.raises(SystemExit):
-            vc.main()
-        out = capsys.readouterr().out
-        assert "unknown key" in out, out
-        assert _generic_schema_hint() in out, out
-        assert vc.NO_DECLARED_DEFAULTS_HINT not in out, out
-
 
 class TestExitCodeAttributionIsPerRow:
     """Whose fault the run was is decided per check, not for the whole run.
@@ -1853,45 +1796,6 @@ class TestTheCaveatFollowsTheValueNotTheParameterName:
         assert row["reads_config_dir"] is True
 
 
-class TestTheDestructiveHintIsReplacedOnBothExits:
-    """⛔ `check_schema` returns from two places and only one was wired.
-
-    ``--strict`` plus an emptied ``defaults:`` plus any domain-policy
-    violation takes the FAIL branch, where the generic "Remove unknown
-    keys" survived — the exact advice the replacement exists to stop, on
-    the path where the reader is most likely to be in a hurry.
-    """
-
-    @staticmethod
-    def _tree(tmp_path):
-        d = tmp_path / "conf.d"
-        d.mkdir()
-        (d / "_defaults.yaml").write_text(
-            "defaults:\n\n_routing_defaults:\n"
-            "  group_by: [tenant, alertname]\n  group_wait: 30s\n"
-            "  repeat_interval: 4h\n  receiver:\n    type: slack\n"
-            "    api_url: https://hooks.example/a\n", encoding="utf-8")
-        (d / "_domain_policy.yaml").write_text(
-            "domain_policies:\n  fin:\n    tenants: [db-a]\n"
-            "    constraints:\n      forbidden_receiver_types: [slack]\n",
-            encoding="utf-8")
-        (d / "db-a.yaml").write_text(
-            "tenants:\n  db-a:\n    mysql_threads_running: 90\n",
-            encoding="utf-8")
-        return str(d)
-
-    def test_the_fail_branch_too(self, tmp_path, capsys, cli_argv):
-        cli_argv("validate_config", "--config-dir", self._tree(tmp_path),
-                 "--strict")
-        with pytest.raises(SystemExit):
-            vc.main()
-        out = capsys.readouterr().out
-        assert "[FAIL] schema" in out, out
-        assert _generic_schema_hint() not in out, (
-            "the FAIL path still tells the customer to delete overrides "
-            f"that are in force\n{out}")
-        assert vc.NO_DECLARED_DEFAULTS_HINT.split(".")[0] in out, out
-
 
 class TestUnwatchedHalvesFoundByMutation:
     """Layers a mutation sweep found with no control on them.
@@ -1902,38 +1806,6 @@ class TestUnwatchedHalvesFoundByMutation:
     that turned out to be reachable.
     """
 
-    def test_the_hint_counts_declared_optional_overrides_too(self, tmp_path):
-        """⛔ A platform can declare keys without giving them values.
-
-        ``optional_override_keys`` (#1189) is the platform's declared but
-        valueless surface. Dropping it from the union survived the whole
-        suite: a platform that declares only optional overrides would be
-        told "This config declares no platform defaults at all … ⛔ Do NOT
-        remove the keys named above" — the wrong advice, on the one path
-        this helper exists to make right. Every other test here ships a
-        `defaults:` block, so `defaults_keys` alone satisfied them.
-        """
-        d = tmp_path / "conf.d"
-        d.mkdir()
-        (d / "_defaults.yaml").write_text(
-            "optional_overrides:\n  - mysql_threads_running\n",
-            encoding="utf-8")
-        (d / "db-a.yaml").write_text(
-            "tenants:\n  db_a:\n    mysql_threads_running: 90\n",
-            encoding="utf-8")
-        assert vc._no_declared_defaults_hint(str(d)) is None, (
-            "the platform DOES declare this key, just without a value — "
-            "telling the customer nothing is declared is wrong here")
-
-    def test_a_platform_declaring_nothing_at_all_still_gets_the_hint(
-            self, tmp_path):
-        """Must-fire control for the test above: without it, "always return
-        None" would satisfy it and the destructive advice comes back."""
-        d = tmp_path / "conf.d"
-        d.mkdir()
-        (d / "_defaults.yaml").write_text("# nothing\n", encoding="utf-8")
-        assert vc._no_declared_defaults_hint(str(d)) == \
-            vc.NO_DECLARED_DEFAULTS_HINT
 
     def test_config_dir_passed_by_keyword_is_recognised(self):
         """⛔ The kwargs half of the comparison was dead code.
@@ -2100,50 +1972,20 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
         for row in rows:
             assert not [k for k in self.INTERNAL if k in row], row["check"]
 
-    def test_the_advice_still_reaches_json_under_its_public_name(
-            self, tmp_path, cli_argv, capsys):
-        """`hint` was popped, not silenced.
-
-        ⛔ Asserting only that `suggested_action` is non-empty proves
-        nothing: every non-PASS row gets a non-empty value from the static
-        `_CHECK_HINTS` table regardless. Measured — deleting the JSON
-        branch's `hint` override silently reverted this field to the
-        generic "Remove unknown keys", the very advice this branch exists
-        to stop, and the suite stayed green. The fixture therefore has to be
-        a tree with NO declared defaults, and the assertion has to be on the
-        content.
-        """
-        d = tmp_path / "conf.d"
-        d.mkdir()
-        (d / "_defaults.yaml").write_text("# nothing declared\n",
-                                          encoding="utf-8")
-        (d / "db-a.yaml").write_text(
-            "tenants:\n  db_a:\n    mysql_threads_running: 90\n",
-            encoding="utf-8")
-        cli_argv("validate_config", "--config-dir", str(d), "--json")
-        with pytest.raises(SystemExit):
-            vc.main()
-        rows = json.loads(capsys.readouterr().out)
-        schema = next(r for r in rows if r["check"] == "schema")
-        assert schema["suggested_action"] == vc.NO_DECLARED_DEFAULTS_HINT, (
-            schema.get("suggested_action"))
-        assert _generic_schema_hint() not in schema["suggested_action"]
-
 
 class TestACheckThatExitsTheProcessStillLeavesAReport:
-    """⛔ `SystemExit` is not an `Exception`, and both catchers had to learn it.
+    """⛔ `SystemExit` is not an `Exception`, and the catcher had to learn it.
 
     `_parse_config_files` calls `sys.exit(EXIT_CALLER_ERROR)` when the config
     directory has gone; `check_schema` / `check_routes` both
-    reach it, and so does `_no_declared_defaults_hint`. `main()` checks
+    reach it. `main()` checks
     `isdir` first, so firing it needs a TOCTOU — a GitOps ConfigMap projected
     volume swaps `..data` atomically — and then the process dies before
     `print_report`: #1448's own symptom, through the wrapper written to stop
     it.
 
-    Both catchers were fixed a round apart, and **neither fix had a test**:
-    deleting `_run_check`'s clause, or narrowing the hint helper's back to
-    `except Exception`, left the whole suite green. A fix nothing pins is a
+    The fix had no test: deleting `_run_check`'s clause left the whole
+    suite green. A fix nothing pins is a
     fix that leaves with the next refactor.
     """
 
@@ -2176,16 +2018,6 @@ class TestACheckThatExitsTheProcessStillLeavesAReport:
             f"({len(out)} bytes on stdout)")
         assert exc.value.code == vc.EXIT_CALLER_ERROR, out
 
-    def test_the_hint_helper_survives_it_too(self, tmp_path, monkeypatch):
-        """The sibling catcher. Without this, narrowing it back to
-        `except Exception` is invisible."""
-        import generate_alertmanager_routes as gen
-
-        def gone(_d):
-            sys.exit(2)
-
-        monkeypatch.setattr(gen, "_parse_config_files", gone)
-        assert vc._no_declared_defaults_hint(str(tmp_path)) is None
 
     def test_a_check_that_returns_normally_is_untouched(self):
         """Must-succeed control: catching SystemExit must not swallow a
@@ -2307,11 +2139,10 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
         assert _generic_schema_hint() not in out, out
         assert vc.POLICY_ONLY_SCHEMA_WARN_HINT in out, out
 
-    def test_an_unknown_key_still_gets_key_advice(self, tmp_path, capsys,
-                                                  cli_argv):
-        """Must-still-fire control: when the row DOES report keys, the
-        generic advice is the right one. Without this, suppressing it
-        unconditionally would pass the test above."""
+    def test_a_misspelt_key_is_not_this_rows(self, tmp_path, capsys,
+                                             cli_argv):
+        """ADR-038 §11: a misspelt key is the unread_keys row's; this row
+        judges no key name, so it neither reports nor advises on one."""
         d = self._tree(
             tmp_path,
             "domain_policies:\n  fin:\n    tenants: [db-a]\n")
@@ -2322,9 +2153,8 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
         with pytest.raises(SystemExit):
             vc.main()
         out = capsys.readouterr().out
-        assert "unknown key" in out, out
-        assert _generic_schema_hint() in out, out
-        assert vc.POLICY_ONLY_SCHEMA_HINT not in out, out
+        assert "not in defaults" not in out, out
+        assert "[PASS] schema" in out, out
 
 
 class TestTenantUniqueness:

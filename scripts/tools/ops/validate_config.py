@@ -254,19 +254,15 @@ READ_ERRORS_FIRST = ("-> Fix the read errors above FIRST — this check's "
 POLICY_ONLY_SCHEMA_HINT = (
     "The findings above are ADR-007 domain-policy errors (a policy that "
     "cannot be used is refused in every mode) or --strict errors (a routing "
-    "matcher value that is not a string, or a bad group_by entry), not "
-    "tenant key problems: no unknown key was reported in this "
-    "run. \u26d4 Ignore the generic advice about removing keys: fix what "
-    "each error names (fix the domain policy file, or move a misplaced "
+    "matcher value that is not a string, or a bad group_by entry): fix "
+    "what each error names (fix the domain policy file, or move a misplaced "
     "domain_policies block into _domain_policy.yaml; quote the matcher "
     "value in YAML, e.g. team: \"yes\", or quote / remove the group_by "
     "entry), then re-run.")
 # #2490: the non-strict twin — the same findings as WARNs (non-blocking).
 POLICY_ONLY_SCHEMA_WARN_HINT = (
-    "The findings above are ADR-007 domain-policy warnings, not tenant key "
-    "problems: no unknown key was reported in this run. \u26d4 Ignore the "
-    "generic advice about removing keys: change the value each warning "
-    "names or amend the domain policy.")
+    "The findings above are ADR-007 domain-policy warnings: change the value "
+    "each warning names or amend the domain policy.")
 SKIPPED_ENTRY_SCHEMA_HINT = (
     "A line above ends in 'skipping': that setting was dropped as unusable, "
     "not merely flagged. Fix the value it names — e.g. "
@@ -312,9 +308,10 @@ ROUTES_INVARIANT_HINT = (
     "re-run.")
 NO_DECLARED_DEFAULTS_HINT = (
     "This config declares no platform defaults at all, so every tenant key "
-    "is reported as unknown — that is the platform's side missing, not a "
+    "is reported as unread — that is the platform's side missing, not a "
     "typo in the tenant files. \u26d4 Do NOT remove the keys named above: "
-    "they are in force. Add a `defaults:` block — create "
+    "they are the tenants' settings, served once the platform declares "
+    "them. Add a `defaults:` block — create "
     "_defaults.yaml if the tree has none, or restore the block that "
     "was emptied.")
 
@@ -367,24 +364,15 @@ def _argv_error_row(name: str, detail: str, hint: str) -> dict[str, object]:
 def _no_declared_defaults_hint(config_dir: str) -> str | None:
     """Replacement hint for when the platform declares no defaults at all.
 
-    ⛔ ``check_schema`` reports every tenant key as ``unknown key … not in
-    defaults`` when nothing is declared, and the generic hint for that row
-    says **"Remove unknown keys"** — pointing at overrides that are legal
-    and in force. Following it deletes a working config, and the run exits
-    0 while saying so. Measured on ``origin/main`` with a ``_defaults.yaml``
-    that has no ``defaults:`` key, and again with ``defaults: {}``.
+    ⛔ When nothing is declared, the shared key verdict reads every tenant
+    threshold key as one no reader reads (``unread … (no_row)``), and the
+    generic hint for the ``unread_keys`` row says to remove a key nothing
+    reads — pointing at overrides that are legal and in force. Following it
+    deletes a working config. (Until ADR-038 §11 the ``schema`` row reported
+    these keys and carried this hint; the verdict's row now does.)
 
-    ⚠️ NOT with ``defaults:`` written as a bare key (null). That spelling
-    reached ``check_profiles`` first and died there with an
-    ``AttributeError`` — the crash this branch fixes elsewhere — so on
-    ``origin/main`` it produced no report at all rather than bad advice. The
-    three spellings are one class *here* and three different outcomes
-    *there*; an earlier version of this sentence collapsed them.
-
-    Only the *advice* changes here. The warnings themselves come from
-    ``validate_tenant_keys``, whose verdicts are pinned key-for-key against
-    the Go twin (``tests/shared/optional_overrides_membership_matrix.json``);
-    silencing them in this report would put the two out of step.
+    Only the *advice* changes here. The findings are the shared verdict's;
+    silencing them in this report would hide what the gates will refuse.
 
     Returns ``None`` when defaults *are* declared, so the generic hint —
     which is right for an actual typo — is used unchanged.
@@ -440,8 +428,7 @@ def _make_result(
     does not get re-guessed from a string downstream.
 
     #1448: ``hint`` replaces the generic ``_CHECK_HINTS`` line for this run
-    when the check knows the generic advice would be wrong — see
-    ``_no_declared_defaults_hint``.
+    when the check knows the generic advice would be wrong.
     """
     return {"check": name, "status": status, "details": details or [],
             "caller_error": caller_error,
@@ -858,15 +845,10 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
     if not schema_warnings:
         return _make_result(
             "schema", PASS,
-            ["No key warnings from the route generator (keys against the "
-             "declared defaults; the JSON Schema is the json_schema row)"])
-    # ⛔ Computed once, for BOTH exits. The first version wired it only to
-    # the WARN branch, so `--strict` plus an emptied `defaults:` plus any
-    # domain-policy violation took the FAIL branch and printed "Remove
-    # unknown keys" at overrides that are in force — the exact destructive
-    # advice this hint exists to replace, on the path where the customer is
-    # most likely to be in a hurry.
-    hint = _no_declared_defaults_hint(config_dir)
+            ["No finding from the route generator's tree checks (whether a "
+             "key is read is the unread_keys row's; the JSON Schema is the "
+             "json_schema row)"])
+    hint: str | None = None
     # #3284: only field-type lines (and not only an unusable domain policy,
     # which POLICY_ONLY_SCHEMA_HINT below names more precisely): neither the
     # "skipping" advice nor the key advice applies.
@@ -878,13 +860,12 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
         return _make_result("schema", FAIL, schema_warnings,
                             hint=FIELD_TYPE_HINT)
     if policy_errors:
-        # ⛔ This row is a multiplexer: its details carry unknown-key WARNs
-        # AND ADR-007 policy ERRORs, while the advice line is keyed on the
-        # check NAME. So a run whose only finding is a broken policy file
-        # was still told "Remove unknown keys or add them to the schema" —
-        # the same destructive advice this branch exists to stop, on a path
-        # that reports zero keys. Derived by set difference on the list the
-        # function already split, not by matching the message text.
+        # ⛔ This row is a multiplexer: its details carry the generator's
+        # tree findings AND ADR-007 policy ERRORs, while the advice line is
+        # keyed on the check NAME. A run whose only finding is a broken
+        # policy file gets the policy advice. Derived by set difference on
+        # the list the function already split, not by matching the message
+        # text.
         if not [w for w in schema_warnings if w not in policy_errors]:
             hint = POLICY_ONLY_SCHEMA_HINT
         return _make_result("schema", FAIL, schema_warnings, hint=hint)
@@ -892,8 +873,7 @@ def check_schema(config_dir: str, strict: bool = False) -> dict[str, object]:
         return _make_result("schema", FAIL, schema_warnings,
                             hint=hint or SKIPPED_ENTRY_SCHEMA_HINT)
     # #2490: the same set difference as the FAIL branch above — a row whose
-    # only findings are (lenient) domain-policy WARNs reports no key, so
-    # "Remove unknown keys" would be the destructive advice again.
+    # only findings are (lenient) domain-policy WARNs gets the policy advice.
     from _grar_validate import POLICY_WARN_PREFIX
     policy_warnings = [w for w in schema_warnings
                        if w.lstrip().startswith(POLICY_WARN_PREFIX)]
@@ -2149,10 +2129,24 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
     undecidable = key_verdict.undecidable_line(verdict)
     if undecidable is not None:
         details.append(undecidable)
+    # ADR-038 §11: the exporter's own key checks (a `version` label, a
+    # retired spelling), as it words them; this tool judges no key itself.
+    checks, unchecked = key_verdict.key_check_lines(verdict)
+    details += [msg for _, _, msg in checks]
+    if unchecked:
+        details.append(
+            "key checks incomplete: this da-guard gives no key checks (version labels, renamed "
+            f"keys) — it is older than this tool: upgrade or rebuild it (tenants: "
+            f"{', '.join(unchecked[:WARN_LIMIT])})")
     if details:
         # Only an undecidable line: no key was found unread, so the advice
         # is about the root file, not about a key.
-        hint = _UNREAD_KEYS_UNDECIDABLE_HINT if not verdict.findings else None
+        hint = (_UNREAD_KEYS_UNDECIDABLE_HINT
+                if undecidable is not None and len(details) == 1 else None)
+        if hint is None and verdict.findings:
+            # ⛔ A platform declaring nothing: every key reads as unread, and
+            # "remove a key nothing reads" would delete a working config.
+            hint = _no_declared_defaults_hint(config_dir)
         return _make_result("unread_keys", WARN, details, hint=hint)
     return _make_result("unread_keys", PASS, [
         f"{len(verdict.keys)} tenant(s): every key is read by some reader"])
@@ -2380,7 +2374,7 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "docs/cli-reference.md#validate-config",
     ),
     "schema": (
-        "Remove unknown keys or add them to the schema. "
+        "Fix the routing, profile or policy entries named above. "
         "Run: da-tools explain-route --tenant <id> to inspect resolved config.",
         "docs/scenarios/hands-on-lab.md",
     ),
@@ -2455,8 +2449,9 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
     # ADR-038: each line names the file, the key, the reason and the tenants.
     "unread_keys": (
         "Fix a misspelt key, or remove a key nothing reads; a `disable` that "
-        "switches nothing off usually sits on a misspelt key. "
-        "`da-tools explain-keys --config-dir <dir> --tenant <name>` shows, per "
+        "switches nothing off usually sits on a misspelt key; a line on a "
+        "`version` label or a renamed key is the exporter's and says what to "
+        "change. `da-tools explain-keys --config-dir <dir> --tenant <name>` shows, per "
         "key, who reads it and why not. Reported only, not yet blocking (#3016).",
         "docs/cli-reference.md#validate-config",
     ),
@@ -2590,11 +2585,11 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
             docs = r.get("hint_docs") or docs
             if hint:
                 # ⛔ The hint is written for a report that could read every
-                # file. With a broken `_defaults.yaml`, `schema` reports each
-                # legitimate tenant key as "unknown" and this line says
-                # "Remove unknown keys" — following it deletes a working
-                # config. The finding is not suppressed (it may be real once
-                # the read error is fixed); the order of operations is.
+                # file. With a broken `_defaults.yaml`, a row can report
+                # legitimate tenant keys as unread, and following its advice
+                # deletes a working config. The finding is not suppressed (it
+                # may be real once the read error is fixed); the order of
+                # operations is.
                 if caveat and _caveat_applies(r):
                     print(f"       {READ_ERRORS_FIRST}")
                 print(f"       -> Suggested action: {hint}")

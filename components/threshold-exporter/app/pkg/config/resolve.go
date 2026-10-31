@@ -1386,11 +1386,11 @@ func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf f
 // still uses an old spelling keeps writing successfully during the
 // transition window while being told to migrate.
 //
-// ⚠️ Parity with CI's Python validator (`_grar_validate.validate_tenant_keys`)
-// is about key MEMBERSHIP only — which keys are unknown, reserved, dangling.
-// The reserved-VALUE errors (#3227, Values below) have no Python counterpart:
-// the value is judged by the exporter's own reading of it, which only the Go
-// side has.
+// ⛔ Whether any reader reads a key — an unknown or misspelt key, an
+// unregistered `_` key, a `_critical` or dimensional key whose base has no
+// platform value — is NOT judged here: that is the shared key verdict's
+// (ADR-038 §11; the readers' own report through da-guard). Only the checks on
+// a key's VALUE and spelling are.
 //
 // Values repeats, one finding each, the Errors entries that are about a
 // reserved key's VALUE (CheckReservedValue). They are in Errors too, so a
@@ -1402,62 +1402,24 @@ func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf f
 // positional swap at a call site would compile clean and silently invert the
 // gate semantics.
 type KeyValidation struct {
-	Errors  []string       // blocking channel: unknown keys, bad expires, version-label violations, dangling _critical, a reserved value the exporter ignores, ...
+	Errors  []string       // blocking channel: bad expires, version-label violations, an unknown _profile, a reserved value the exporter ignores, ...
 	Notices []string       // advisory channel: #1231 deprecation notices, ratcheted reserved values; MUST never block a write
 	Values  []ValueFinding // the Errors entries about a reserved value, for Ratchet (#3227)
-	// Unread repeats the Errors entries that only judge whether any reader
-	// reads a key — an unknown key, an unregistered `_` key, a `_routing`
-	// key the generator does not read, a dimensional or `_critical` key
-	// whose base has no platform value. ADR-038 decision 5 gives that
-	// judgement to the shared key verdict (readers' own report): a gate
-	// that refuses on the verdict drops these (WithoutUnread) and keeps the
-	// value checks.
-	Unread []string
+	// VersionLabels repeats the Errors entries about a dimensional key's
+	// `version` label (ADR-024 OQ-6), and Renames the Notices about a
+	// retired key spelling (#1231): the two key checks da-guard
+	// served-values hands the CI readers (key_checks), which no longer judge
+	// keys themselves (ADR-038 §11).
+	VersionLabels []string
+	Renames       []string
 }
 
-// WithoutUnread is v without the Errors entries Unread repeats (ADR-038
-// §11: tenant-api's write gate refuses an unread key on the shared key
-// verdict, not on this second judgement of it).
-func (v KeyValidation) WithoutUnread() KeyValidation {
-	if len(v.Unread) == 0 {
-		return v
-	}
-	out := KeyValidation{Notices: v.Notices, Values: v.Values}
-	drop := make(map[string]int, len(v.Unread))
-	for _, m := range v.Unread {
-		drop[m]++
-	}
-	for _, e := range v.Errors {
-		if drop[e] > 0 {
-			drop[e]--
-			continue
-		}
-		out.Errors = append(out.Errors, e)
-	}
-	return out
-}
-
-// WithoutUnread is KeyValidation.WithoutUnread for every tenant.
-func (kv KeyValidationByTenant) WithoutUnread() KeyValidationByTenant {
-	out := KeyValidationByTenant{Platform: kv.Platform.WithoutUnread(), Tenants: make(map[string]KeyValidation, len(kv.Tenants))}
-	for tid, v := range kv.Tenants {
-		out.Tenants[tid] = v.WithoutUnread()
-	}
-	return out
-}
-
-// ValidateTenantKeys checks all tenant config keys against the platform key
-// surface and reserved patterns. That surface is TWO sets, not just `defaults:`
-// (see the body): the keys the platform gives a value to, plus the ones it
-// merely DECLARES on `optional_overrides:`. Errors lists warning messages for
-// unknown/invalid keys (this helps catch typos like "_silence_mode" that would
-// be silently ignored); Notices lists non-blocking deprecation advisories
-// (#1231).
-//
-// ⛔ This comment used to read "against known defaults" — the same
-// understatement the tenant-facing docs carried (#1321). It says a key with no
-// platform value cannot be valid, and the declared tier is precisely that key:
-// no platform value, tenant-settable, accepted here.
+// ValidateTenantKeys checks the values and spellings of all tenant config keys
+// (see KeyValidation): Errors lists what a write must not carry (a bad
+// `expires:`, a `version` label, a reserved value the exporter ignores, an
+// unknown `_profile`); Notices lists non-blocking deprecation advisories
+// (#1231). Whether any reader reads a key is the shared key verdict's
+// (ADR-038 §11), not this function's.
 //
 // Alias handling mirrors the resolve boundary: each key is canonicalized
 // first (exact-match table, never prefix-match) and validated under its
@@ -1470,8 +1432,7 @@ func (c *ThresholdConfig) ValidateTenantKeys() KeyValidation {
 }
 
 // validateTenantKeys is ValidateTenantKeys' body, shared with the tenant-api
-// merge core (TenantMerge.ValidateTenantKeys). Python parity: key membership
-// only (see KeyValidation).
+// merge core (TenantMerge.ValidateTenantKeys).
 //
 // ⚠️ There used to be an `aliasShadow` hook here (#2208): a tenant's legacy
 // key whose canonical spelling a root platform file supplied was reported as
@@ -1485,7 +1446,8 @@ func (c *ThresholdConfig) validateTenantKeys() KeyValidation {
 	v.Errors = append(v.Errors, o.Errors...)
 	v.Notices = append(v.Notices, o.Notices...)
 	v.Values = append(v.Values, o.Values...)
-	v.Unread = append(v.Unread, o.Unread...)
+	v.VersionLabels = append(v.VersionLabels, o.VersionLabels...)
+	v.Renames = append(v.Renames, o.Renames...)
 	return v
 }
 
@@ -1550,11 +1512,15 @@ func (c *ThresholdConfig) ValidateTenantKeysByTenant() KeyValidationByTenant {
 // notice once per platform file.
 func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 	var v KeyValidation
-	// unread records an Errors entry that only says no reader reads the key
-	// (KeyValidation.Unread).
-	unread := func(msg string) {
-		v.Errors = append(v.Errors, msg)
-		v.Unread = append(v.Unread, msg)
+	// versionLabels / renamed record the entries VersionLabels and Renames
+	// repeat.
+	versionLabels := func(msgs []string) {
+		v.Errors = append(v.Errors, msgs...)
+		v.VersionLabels = append(v.VersionLabels, msgs...)
+	}
+	renamed := func(msg string) {
+		v.Notices = append(v.Notices, msg)
+		v.Renames = append(v.Renames, msg)
 	}
 	canonDefaults := canonicalizeDefaults(c.Defaults)
 	// The platform surface is TWO sets, not one (#1189 / TRK-337): keys the
@@ -1588,23 +1554,20 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 					// Same-map conflict: resolve ignores this entry entirely
 					// (canonical wins), so don't validate it either — the
 					// canonical sibling gets validated on its own turn.
-					v.Notices = append(v.Notices, fmt.Sprintf(
+					renamed(fmt.Sprintf(
 						"NOTICE: tenant=%s: deprecated key %q is ignored because its replacement %q is also set — remove %q (#1231 rename)",
 						tenant, key, canonKey, key))
 					continue
 				}
-				v.Notices = append(v.Notices, fmt.Sprintf(
+				renamed(fmt.Sprintf(
 					"NOTICE: tenant=%s: key %q was renamed to %q (#1231) — the old name still resolves during the 2-release transition window; please update this override to %q",
 					tenant, key, canonKey, canonKey))
 			}
 
-			// #3045: a `_` key the registry does not list is read in no layer,
-			// even when a `defaults:` declares it — the defaults-first
-			// membership test below would otherwise accept it, and tenant-api
-			// would take a write that serves nothing.
+			// #3045: a `_` key the registry does not list is read in no layer;
+			// whether that refuses it is the shared key verdict's (ADR-038 §11),
+			// and none of the value checks below applies to it.
 			if IsUnregisteredUnderscoreKey(canonKey) {
-				unread(fmt.Sprintf(
-					"WARN: tenant=%s: unknown reserved key %q (typo?)", tenant, canonKey))
 				continue
 			}
 
@@ -1665,17 +1628,12 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			// #1822: the shape and the platform key it is judged against come
 			// from overrideKeyShape, which PlatformKeyFor (da-guard key-refs)
 			// shares, so "which metric does this key belong to" has one answer.
+			// ADR-038 §11: whether any reader reads the key — an unknown key, a
+			// `_routing` key the generator does not read, a `_critical` or
+			// dimensional key whose base has no platform value — is the shared
+			// key verdict's; only the value checks are judged here.
 			shape, baseKey := overrideKeyShape(canonKey)
 			if shape == shapeReserved {
-				// #2983: reserved by the `_routing` prefix, read by no one —
-				// `_routing_profle`, or the flat `_routing_receiver_type` the
-				// route generator never read. The shared key verdict refuses it
-				// at tenant-api's write gate (ADR-038 §11; this line is Unread).
-				if IsUnknownRoutingKey(canonKey, false) {
-					unread(fmt.Sprintf(
-						"WARN: tenant=%s: unknown routing key %q — not a key the route generator reads (%s); "+
-							"remove it", tenant, canonKey, UnknownRoutingKeyHint(canonKey, false)))
-				}
 				// #3227: a value the exporter's reader ignores (`_silent_mode:
 				// purple`) is refused where it is written, by that reader's own
 				// judgement. Written to Errors AND Values: a caller that does
@@ -1697,144 +1655,12 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 				continue
 			}
 
-			// Dimensional key with {labels}
+			// ADR-024 OQ-6: a dimensional key's `version` label is a value
+			// check, judged whatever the base.
 			if shape == shapeDimensional {
 				_, customLabels, regexLabels := parseKeyWithLabels(canonKey)
-				_, baseValued := canonDefaults[baseKey]
-				_, baseDeclared := canonOptional[baseKey]
-				// A declared base is accepted here with no reservation, unlike
-				// the _critical shape below: resolveDimensionalRows is
-				// tenant-only — it never consults defaults at all — so a
-				// dimensional override on a declared base resolves and emits
-				// the moment it is written. Accepting it does not promise
-				// anything the resolver won't deliver.
-				if baseValued || baseDeclared {
-					// ADR-024 OQ-6: validate any `version` dimensional label.
-					v.Errors = append(v.Errors,
-						validateVersionLabel(tenant, canonKey, baseKey, customLabels, regexLabels)...)
-					continue
-				}
-				// The `version` label is a value check: judged whatever the
-				// base, so a gate that drops the unread line below (the
-				// shared key verdict reads such a key as served) still
-				// refuses a bad label.
-				v.Errors = append(v.Errors,
-					validateVersionLabel(tenant, canonKey, baseKey, customLabels, regexLabels)...)
-				// Unknown base key in dimensional key
-				unread(fmt.Sprintf(
-					"WARN: tenant=%s: unknown base metric %q in dimensional key %q",
-					tenant, baseKey, canonKey))
-				continue
+				versionLabels(validateVersionLabel(tenant, canonKey, baseKey, customLabels, regexLabels))
 			}
-
-			// `<metric>_critical` → the BASE metric must be in defaults.
-			//
-			// This used to skip unconditionally, deferring to "base validation
-			// done by ResolveAt". ResolveAt does check — but it only
-			// `log.Printf`s at scrape time (resolveCriticalRows), and nobody
-			// authoring a config reads the exporter's log: the tenant author, CI
-			// (`generate_alertmanager_routes.py --validate`) and the tenant-api
-			// write path all read THIS function's output. So the critical tier
-			// was the ONLY key shape with no author-visible signal — and it is
-			// also the shape that fails hardest: a base key missing from defaults
-			// still resolves to the platform default, whereas a dangling
-			// `_critical` produces NO row at all. The tenant's critical alert
-			// silently never materialises.
-			//
-			// The base key already warns a few lines below, so this is a
-			// CONSISTENCY fix, not new strictness — and it restores parity with
-			// the Python validator (`_grar_validate.validate_tenant_keys`), which
-			// has always fallen through to a warning here.
-			//
-			// #1231: the lookup runs on canonical spellings, so an old-spelled
-			// `mysql_cpu_critical` whose (renamed) base exists gets only the
-			// rename notice above — no dangling error; a truly base-less
-			// `_critical` still errors, naming the NEW key.
-			if shape == shapeCritical {
-				if _, exists := canonDefaults[baseKey]; exists {
-					continue
-				}
-				// ⛔ A DECLARED base is still refused — deliberately, and this
-				// is the one place the two membership sets must NOT be unioned.
-				// resolveCriticalRows keys off `defaults[baseKey]` and drops
-				// the row with a scrape-time log line when it is absent; a
-				// declared base is absent from defaults by definition. So
-				// accepting this key would let the write succeed and then emit
-				// nothing, with the only signal in the exporter's log — the
-				// precise failure this validator was extended to end (see the
-				// block comment above).
-				//
-				// ⚠️ Read alongside the flat branch below, which IS accepted —
-				// and which, since resolveDeclaredRows landed, also EMITS. That
-				// is the difference now: accepting the flat shape promises a
-				// row the resolver delivers, while accepting this one would
-				// promise a row resolveCriticalRows drops.
-				//
-				// ⚠️ An earlier version of this comment said the refusal and
-				// resolveCriticalRows "flip together in the same commit, never
-				// one without the other". That overstated it, and the emission
-				// loop landing is the proof: resolveDeclaredRows now emits
-				// declared keys, and this refusal is UNCHANGED and still
-				// correct — because its premise was never "declared keys don't
-				// emit", it was "resolveCriticalRows keys off defaults[base]
-				// and drops the row when the base has no value", which the
-				// emission loop does not touch (resolveDeclaredRows skips the
-				// `_critical` shape precisely so it cannot route around this).
-				//
-				// The real invariant is narrower: this refusal must stay in
-				// lockstep with resolveCriticalRows' admission test. They only
-				// flip together if the critical tier is ever extended to
-				// declared bases — a separate decision, which also has to
-				// answer whether a critical tier may exist with no warning tier
-				// beneath it (a tenant setting only `<base>_critical`).
-				if _, declared := canonOptional[baseKey]; declared {
-					unread(fmt.Sprintf(
-						"WARN: tenant=%s: %q cannot be set — its base %q is declared without a platform value (optional_overrides), and the critical tier needs a base VALUE in defaults: resolveCriticalRows drops the row when the base is absent, so this override would be accepted and then emit nothing. Set %q itself instead, or ask the platform to move %q into defaults.",
-						tenant, canonKey, baseKey, baseKey, baseKey))
-					continue
-				}
-				unread(fmt.Sprintf(
-					"WARN: tenant=%s: %q has no base metric %q in defaults — the critical "+
-						"tier is silently DROPPED (not defaulted): resolveCriticalRows only "+
-						"emits a critical row when the base key exists. Add %q to the platform "+
-						"defaults, or remove this override.",
-					tenant, canonKey, baseKey, baseKey))
-				continue
-			}
-
-			// Normal metric key → must be somewhere on the platform surface:
-			// either valued (defaults) or merely declared (optional_overrides).
-			if _, exists := canonDefaults[canonKey]; exists {
-				continue
-			}
-			// The third slot. Before this, a key absent from defaults was
-			// rejected here and gitops/writer.go turned the rejection into
-			// ErrValidation — so "dormant, waiting for the tenant to set it"
-			// was not a state any key could be in: it was dead AND unwritable,
-			// and the tenant could not help themselves. Accepting it is what
-			// lets a tenant calibrate a threshold the platform declines to put
-			// a number on.
-			//
-			// ✅ Accepting now means emitting: resolveDeclaredRows walks this
-			// same set and emits a row whenever the tenant supplied a value
-			// (State 1 only — no platform fallback, since there is no platform
-			// value to fall back to). The signal gap this branch used to carry
-			// — accepted, no row, no log — is closed, and the temporary
-			// tripwire that held it shut is deleted with that loop.
-			if _, declared := canonOptional[canonKey]; declared {
-				continue
-			}
-
-			// Underscore-prefixed but not reserved → likely typo
-			if strings.HasPrefix(canonKey, "_") {
-				unread(fmt.Sprintf(
-					"WARN: tenant=%s: unknown reserved key %q (typo?)", tenant, canonKey))
-				continue
-			}
-
-			// Not in defaults, not reserved → unknown metric key
-			unread(fmt.Sprintf(
-				"WARN: tenant=%s: unknown key %q not in defaults", tenant, canonKey))
 		}
 	}
 

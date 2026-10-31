@@ -176,3 +176,72 @@ def test_a_rule_naming_a_profile_key_no_tenant_gets_does_not_count(tmp_path):
         "_profiles.yaml": "profiles:\n  p1:\n    _namespaces: [x]\n",
         "ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
     assert "_profiles.yaml: notice: unread `_namespaces` (not_read_in_profile) — no tenant" in r["details"], r
+
+
+def test_the_exporters_key_checks_are_printed_as_it_words_them(tmp_path):
+    """ADR-038 §11: a `version` label the exporter refuses and a retired
+    spelling are the exporter's own lines (da-guard served-values'
+    key_checks); this tool judges no key name itself."""
+    r = vc.check_unread_keys(_tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  container_cpu: 80\n  mysql_threads_running: 30\n",
+        "db-a.yaml": "tenants:\n  db-a:\n    mysql_cpu: \"40\"\n"
+                     "    container_cpu{version=\"V2!\"}: \"5\"\n"}))
+    assert r["status"] == vc.WARN, r
+    assert any('version "V2!"' in d and "tenant=db-a" in d for d in r["details"]), r["details"]
+    assert any('"mysql_cpu" was renamed to "mysql_threads_running"' in d for d in r["details"]), r["details"]
+
+
+def test_a_da_guard_without_key_checks_is_said(tmp_path, monkeypatch):
+    """A da-guard older than the field: "not checked", never "no message"."""
+    import _lib_key_verdict as key_verdict
+    verdict = key_verdict.TreeVerdict({}, [], False, key_checks={"db-a": None})
+    monkeypatch.setattr(vc.key_verdict, "judge_tree", lambda *_a, **_k: verdict)
+    monkeypatch.setattr(vc, "_effective_tree", lambda _d: None)
+    r = vc.check_unread_keys(str(tmp_path))
+    assert r["status"] == vc.WARN, r
+    assert any("gives no key checks" in d and "tenants: db-a)" in d for d in r["details"]), r
+
+
+class TestAPlatformDeclaringNothingIsNotAdvisedAway:
+    """⛔ With no platform defaults declared, the verdict reads every tenant
+    threshold key as unread, and the row's generic advice — remove a key
+    nothing reads — would delete a working config. The row says the
+    platform side is missing instead (the hint the `schema` row carried
+    until ADR-038 §11 moved key judgement to this row)."""
+
+    @pytest.mark.parametrize("body", [
+        "_routing_defaults:\n  group_wait: 30s\n",  # no `defaults:` key
+        "defaults: {}\n",
+    ], ids=["no-defaults-key", "empty-defaults"])
+    def test_the_destructive_hint_is_replaced(self, tmp_path, body):
+        r = vc.check_unread_keys(_tree(tmp_path, {
+            "_defaults.yaml": body,
+            "db-a.yaml": "tenants:\n  db-a:\n    mysql_threads_running: \"90\"\n"}))
+        assert r["status"] == vc.WARN, r
+        assert r["hint"] == vc.NO_DECLARED_DEFAULTS_HINT, r
+
+    def test_a_real_typo_keeps_the_normal_advice(self, tmp_path):
+        """Must-still-fire control: a platform that declares defaults gets
+        the generic advice — always returning the hint would pass above."""
+        r = vc.check_unread_keys(_tree(tmp_path, {
+            "_defaults.yaml": _DEFAULTS,
+            "db-a.yaml": "tenants:\n  db-a:\n    mysql_conections: \"70\"\n"}))
+        assert r["status"] == vc.WARN and r["hint"] is None, r
+
+    def test_declared_optional_overrides_count_as_declared(self, tmp_path):
+        """A platform declaring keys without values declares something."""
+        r = vc.check_unread_keys(_tree(tmp_path, {
+            "_defaults.yaml": "optional_overrides:\n  - mysql_threads_running\n",
+            "db-a.yaml": "tenants:\n  db-a:\n    mysql_conections: \"70\"\n"}))
+        assert r["hint"] != vc.NO_DECLARED_DEFAULTS_HINT, r
+
+    def test_the_helper_survives_a_tree_gone_mid_run(self, tmp_path, monkeypatch):
+        """`_parse_config_files` exits the process when the directory is gone
+        (a ConfigMap volume swapped mid-run): the helper degrades to the
+        generic advice, never takes the run with it."""
+        import generate_alertmanager_routes as gen
+
+        def gone(_d):
+            sys.exit(2)
+        monkeypatch.setattr(gen, "_parse_config_files", gone)
+        assert vc._no_declared_defaults_hint(str(tmp_path)) is None

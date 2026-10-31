@@ -158,7 +158,7 @@ A new alert needs all three parts plus a declaration of its threshold key:
 python3 scripts/tools/lint/check_threshold_registry.py --regen
 ```
 
-An undeclared key is not emitted even when a tenant sets it, and validation reports `unknown key … not in defaults`. Before opening the PR, these two checks must be green — "every key an alert reads is declared" and "the registry and every generated block are in sync":
+An undeclared key is not emitted even when a tenant sets it, and validate-config's `unread_keys` row reports `unread … (no_row)`. Before opening the PR, these two checks must be green — "every key an alert reads is declared" and "the registry and every generated block are in sync":
 
 ```bash
 python3 scripts/tools/lint/check_threshold_reachability.py --ci

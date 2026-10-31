@@ -77,13 +77,13 @@ tenants:
 
 ## Common Validation Errors
 
-### "Unknown key" warnings
+### "Unread key" findings
 
-**Error**: `Unknown key "mysql_conections" not in defaults`
+**Finding** (validate-config `unread_keys` row): `db-a.yaml: error: unread … (no_row) — tenant(s) db-a`, naming `mysql_conections`
 
-**Cause**: usually a typo in the metric name (missing 'c' in connections). ⚠️ But if EVERY tenant key is reported, the cause is on the platform side instead — a `conf.d/` with no `_defaults.yaml`, or one whose `defaults:` block is `{}`, makes every legal override look unknown (a bare `defaults:` key with a null value behaves differently again — on the shipped image it raises `AttributeError` and prints nothing). `validate-config` says which case you are in; **do not delete keys before checking**.
+**Cause**: usually a typo in the metric name (missing 'c' in connections): no reader reads the key ([ADR-038](../adr/038-unread-keys-judged-by-readers.en.md)). ⚠️ But if EVERY tenant key is reported, the cause is on the platform side instead — a `conf.d/` whose `_defaults.yaml` declares nothing (no `defaults:`, or `defaults: {}`) makes every legal override read as unread. `validate-config` says which case you are in; **do not delete keys before checking**.
 
-**Resolution**: Check `_defaults.yaml` or run `da-tools diagnose <tenant> --config-dir conf.d/ --show-inheritance` to see valid metric keys — `resolved` lists the keys that already carry a value, `declared` the ones the platform recognises but assigns no value to (⚠️ the shipped v2.9.0 image prints `resolved` but not `declared`) (set one and it takes effect; leave it and the alert stays silent) <!-- image-caveat: v2.9.0 -->
+**Resolution**: run `da-tools explain-keys --config-dir conf.d/ --tenant <tenant>` to see, per key, who reads it and why not, or `da-tools diagnose <tenant> --config-dir conf.d/ --show-inheritance` to see valid metric keys — `resolved` lists the keys that already carry a value, `declared` the ones the platform recognises but assigns no value to (⚠️ the shipped v2.9.0 image prints `resolved` but not `declared`) (set one and it takes effect; leave it and the alert stays silent) <!-- image-caveat: v2.9.0 -->
 
 ### "Invalid time window format"
 

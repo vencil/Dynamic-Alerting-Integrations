@@ -13,8 +13,8 @@ purpose: |
 
   validateConfig(config, packs)
     Lint a parsed tenant config against the validation constants
-    (RECEIVER_TYPES / TIMING_GUARDRAILS / RESERVED_KEYS) + cross-
-    references to Rule Pack metric keys + DOMAIN_POLICIES. Returns
+    (RECEIVER_TYPES / TIMING_GUARDRAILS) + DOMAIN_POLICIES; no key
+    name is judged here (ADR-038 §11). Returns
     {issues: [{level, field, msg}]}.
 
   isFiring(current, threshold, inverted)
@@ -58,10 +58,10 @@ purpose: |
 // before anyone reviewed it. The fix is where it is defined, not another
 // factoring inside one caller (#1344).
 import {
-  RULE_PACK_DATA, getAllMetricKeys, getDeclaredKeys, counterexampleComment,
+  RULE_PACK_DATA, getDeclaredKeys, counterexampleComment,
 } from '../data/rule-packs.js';
 import { ROUTING_DEFAULTS, ROUTING_PROFILES, DOMAIN_POLICIES } from '../data/routing-profiles.js';
-import { RECEIVER_TYPES, RESERVED_KEYS, RESERVED_PREFIXES, TIMING_GUARDRAILS } from '../validation/constants.js';
+import { RECEIVER_TYPES, TIMING_GUARDRAILS } from '../validation/constants.js';
 import { parseDuration } from '../validation/yaml-parser.js';
 
 function generateSampleYaml(selectedPacks, withProfile) {
@@ -142,13 +142,7 @@ function validateConfig(config, selectedPacks) {
 
   const issues = [];
   const info = [];
-  const knownMetrics = new Set(getAllMetricKeys(selectedPacks).map(m => m.key));
-  // Keys the platform recognises but gives no value to. Before they were
-  // carried here, typing one produced "not found in Rule Pack defaults" — the
-  // platform's own tenant docs tell you to set exactly these, so the validator
-  // was arguing with the documentation. They are NOT in knownMetrics because
-  // that set means "has a platform default"; kept apart so the message can say
-  // the true thing instead of the opposite one.
+  // Keys the platform recognises but gives no value to.
   const declaredMetrics = new Set(getDeclaredKeys(selectedPacks).map(m => m.key));
 
   for (const [key, val] of Object.entries(config)) {
@@ -173,34 +167,18 @@ function validateConfig(config, selectedPacks) {
           msg: t(`閾值 ${numVal} < 0，無效`, `Threshold ${numVal} < 0, invalid`) });
       }
     }
-    if (selectedPacks && selectedPacks.length > 0
-        && (knownMetrics.size > 0 || declaredMetrics.size > 0)) {
-      const isCriticalVariant = key.endsWith('_critical');
-      const baseKey = isCriticalVariant ? key.replace(/_critical$/, '') : key;
-      if (isCriticalVariant && declaredMetrics.has(baseKey)) {
-        // ⛔ Do NOT fold this into the branch below by stripping `_critical`.
-        // ValidateTenantKeys (pkg/config/resolve.go) refuses `<declared>_critical`
-        // with a BLOCKING error — its comment there says in as many words that
-        // this is "the one place the two membership sets must NOT be unioned",
-        // because resolveCriticalRows keys off defaults[base] and drops the row
-        // when the base has no value. Telling the tenant "it takes effect once
-        // you set it" would promise a row the resolver never emits, for a write
-        // tenant-api answers with HTTP 400. Mirror the platform's refusal.
-        issues.push({ level: 'warning', field: key,
-          msg: t(`基底 ${baseKey} 是宣告 key（平台不主張值），critical 層需要 defaults 裡有基底值 ⇒ 這個 key 會被寫入端退件；請改設 ${baseKey} 本身`,
-                 `Base ${baseKey} is a declared key (no platform value), and the critical tier needs a base value in defaults — this key is rejected on write. Set ${baseKey} itself instead`) });
-      } else if (declaredMetrics.has(key)) {
-        // Recognised, settable, and deliberately value-less. Say so — and say
-        // that the number has to come from the tenant's own baseline, because
-        // the reference figures shipped alongside these keys have measured
-        // false-alarm cases on benign load (#1176).
-        info.push({ level: 'info', field: key,
-          msg: t(`平台宣告的 key：平台不主張預設值，填了才生效（不填＝靜默）；數值請依自身 baseline 校準`,
-                 `Platform-declared key: no platform default, it takes effect only once you set it (omit = silent). Calibrate the number from your own baseline`) });
-      } else if (!knownMetrics.has(baseKey) && !knownMetrics.has(key)) {
-        issues.push({ level: 'info', field: key,
-          msg: t(`此 metric key 不在已選 Rule Pack 的預設清單中`, `Metric key not found in selected Rule Pack defaults`) });
-      }
+    // ADR-038 §11: whether a key is read is the shared key verdict's (CI's
+    // validate-config, `da-tools explain-keys`, tenant-api's write gate), not
+    // this page's — it judges no key name. A declared key still gets its
+    // calibration note: that is about the value, not about the name.
+    if (declaredMetrics.has(key)) {
+      // Recognised, settable, and deliberately value-less. Say that the
+      // number has to come from the tenant's own baseline, because the
+      // reference figures shipped alongside these keys have measured
+      // false-alarm cases on benign load (#1176).
+      info.push({ level: 'info', field: key,
+        msg: t(`平台宣告的 key：平台不主張預設值，填了才生效（不填＝靜默）；數值請依自身 baseline 校準`,
+               `Platform-declared key: no platform default, it takes effect only once you set it (omit = silent). Calibrate the number from your own baseline`) });
     }
   }
 
@@ -289,15 +267,6 @@ function validateConfig(config, selectedPacks) {
     if (!config._metadata.runbook_url) {
       issues.push({ level: 'info', field: '_metadata.runbook_url',
         msg: t('建議配置 runbook URL', 'Consider adding runbook URL') });
-    }
-  }
-
-  for (const key of Object.keys(config)) {
-    if (key.startsWith('_')) {
-      if (!RESERVED_KEYS.has(key) && !RESERVED_PREFIXES.some(p => key.startsWith(p))) {
-        issues.push({ level: 'warning', field: key,
-          msg: t(`未知的保留字 key: ${key}`, `Unknown reserved key: ${key}`) });
-      }
     }
   }
 
