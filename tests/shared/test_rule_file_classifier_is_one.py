@@ -21,8 +21,13 @@ search matches 7 modules — 6 of them read only the rule loader's results
 (`generate_alert_reference`, `inject_waveform`, `check_metric_dictionary`,
 `check_metric_group_pairs`, `operator_generate`, and `check_admin_config_schema`,
 whose `groups` is the RBAC config's) — so the condition is what makes the
-search mean "classifies from a da-crdecode reading". With it, the matches are
-the three below, each named with why it stays.
+search mean "classifies from a da-crdecode reading". With it, the matches were
+three; `_rule_tree` left the list when its files became the rule-source
+declaration's, read by `rule_files_in` (#3438). The two left are named below,
+each with why it stays. (`lint/_rule_tripwire.py` reads with da-crdecode and
+looks for rule SHAPES, but decides on no `groups` key the way this search
+means, so it is not matched; it is an alarm that feeds no reader — see
+tests/lint/test_rule_tripwire.py.)
 
 ⚠️ A tripwire, not a proof. It is cheap and catches the shapes the replaced
 classifiers were written in; it does not catch a classifier written another
@@ -66,12 +71,6 @@ ALLOWED = {
         "reads Grafana dashboards' ConfigMaps with da-crdecode; its `groups` "
         "test is on rule files `manifest_rule_file_results` / the rule loader "
         "already read",
-    "lint/_rule_tree.py":
-        "NOT a false positive: the reserved-value lints' content-based scan of "
-        "every tracked file (text, with per-document provenance and the "
-        "`_unparsable_body` sentinel) still classifies rule containers itself. "
-        "Moving it onto `rule_files_in` needs an entry that takes texts and "
-        "keeps provenance — open, reported for a decision (#3426 round 2)",
 }
 
 _READINGS = ("kubernetes_documents", "kubernetes_documents_of", "kubernetes_text_documents",

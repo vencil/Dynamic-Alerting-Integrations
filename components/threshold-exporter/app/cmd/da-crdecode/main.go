@@ -39,7 +39,8 @@
 //     of `kubectl get … -o yaml`) is replaced by its items, in order, as kubectl
 //     applies them; each item must be an object with a non-empty string
 //     `kind` and `apiVersion`, and a list inside a list is refused, as kubectl
-//     refuses it (manifest.go). So a caller can rely on every entry of
+//     refuses it. A list with content of its own (a `data`, a `spec` beside
+//     `items`), which kubectl discards without a word, is refused (manifest.go). So a caller can rely on every entry of
 //     `documents` being an object with a non-empty string `kind`, none of
 //     them a list.
 //   - `--any-shape` reads YAML that is not a manifest with the same
