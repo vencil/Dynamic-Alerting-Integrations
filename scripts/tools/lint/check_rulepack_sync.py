@@ -53,7 +53,7 @@ try:
 except Exception:  # pragma: no cover - compat shim optional
     def try_utf8_stdout() -> None:  # type: ignore
         pass
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_compat import find_project_root  # noqa: E402  (#2852)
 
 
@@ -297,7 +297,7 @@ def check_pack(repo: Path, name: str,
     return (len(findings) == 0), findings
 
 
-def main() -> int:
+def main() -> "int | Report":
     try_utf8_stdout()
     parser = argparse.ArgumentParser(description="Rule-pack 3-copy semantic drift guard")
     parser.add_argument("--ci", action="store_true", help="exit 1 on any drift")
@@ -330,9 +330,7 @@ def main() -> int:
         print(f"ERROR: {_consumer_read().error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    if args.json:
-        print(json.dumps(results, ensure_ascii=False, indent=2))
-    else:
+    if not args.json:
         for name, r in results.items():
             mark = "✅" if r["ok"] else "❌"
             print(f"  {mark} {name}")
@@ -347,9 +345,12 @@ def main() -> int:
         print("\n❌ Rule-pack copy drift detected. The 3 copies "
               "(rule-packs/ ↔ configmap ↔ operator) must match semantically.",
               file=sys.stderr)
-        return EXIT_VIOLATION
-    return EXIT_OK
+    status = EXIT_VIOLATION if any_drift and args.ci else EXIT_OK
+    if args.json:
+        return Report(results, status)  # #3216: run() encodes it
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

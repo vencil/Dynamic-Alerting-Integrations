@@ -76,7 +76,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 from _lib_toolcount import count_scope, is_tool_file  # noqa: E402
 from _lib_versions import read_platform_version  # noqa: E402
 
@@ -1218,7 +1218,7 @@ def check_mkdocs_extra_versions(versions: Dict[str, str]) -> List[Issue]:
 # Main
 # ---------------------------------------------------------------------------
 
-def main():
+def main() -> "Report | None":
     """CLI entry point: 文件版號與計數一致性檢查."""
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -1361,7 +1361,8 @@ def main():
                 "repaired": len(repaired),
             },
         }
-        print(json.dumps(result, indent=2, ensure_ascii=False))
+        # #3216: run() encodes it; the exit status travels with it.
+        return Report(result, EXIT_VIOLATION if args.ci and errors else EXIT_OK)
     else:
         if standing:
             if repaired:
@@ -1383,7 +1384,9 @@ def main():
 
     if args.ci and errors:
         sys.exit(EXIT_VIOLATION)
+    return None
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

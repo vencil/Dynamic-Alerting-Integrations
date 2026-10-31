@@ -74,7 +74,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
@@ -217,7 +217,7 @@ def ci_packages(path: Path) -> set[str]:
     )
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> "int | Report":
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description=i18n_text(
@@ -247,25 +247,23 @@ def main(argv: list[str] | None = None) -> int:
         required = ci_packages(Path(args.ci_workflow))
     except ParityError as exc:
         if args.json:
-            print(json.dumps({"status": "error", "error": str(exc)},
-                             ensure_ascii=False))
-        else:
-            print(f"ERROR: {exc}", file=sys.stderr)
+            # #3216: run() encodes it
+            return Report({"status": "error", "error": str(exc)}, EXIT_CALLER_ERROR)
+        print(f"ERROR: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     missing = sorted(required - declared)
 
     if args.json:
-        print(json.dumps(
+        return Report(
             {
                 "status": "drift" if missing else "ok",
                 "missing": missing,
                 "declared": sorted(declared),
                 "required": sorted(required),
             },
-            ensure_ascii=False,
-        ))
-        return EXIT_VIOLATION if missing else EXIT_OK
+            EXIT_VIOLATION if missing else EXIT_OK,
+        )  # #3216: run() encodes it
 
     if missing:
         print(
@@ -297,4 +295,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

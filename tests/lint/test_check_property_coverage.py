@@ -33,6 +33,7 @@ _spec = importlib.util.spec_from_file_location("check_property_coverage", _SCRIP
 mod = importlib.util.module_from_spec(_spec)
 sys.modules["check_property_coverage"] = mod
 _spec.loader.exec_module(mod)
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ============================================================
@@ -392,11 +393,11 @@ class TestMainCLI:
             encoding="utf-8",
         )
         monkeypatch.setattr(mod, "REPO_ROOT", tmp_path)
-        rc = mod.main([
+        rc = emit_result(mod.main([
             "--manifest", str(manifest_path),
             "--test-file", str(tmp_path / "no.py"),
             "--json",
-        ])
+        ]))
         assert rc == 1  # missing source = 1 issue
         payload = json.loads(capsys.readouterr().out)
         assert payload["check"] == "property-coverage"

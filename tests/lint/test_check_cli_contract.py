@@ -35,6 +35,7 @@ def _load():
 
 
 mod = _load()
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 _va_spec = importlib.util.spec_from_file_location(
@@ -1276,7 +1277,7 @@ class TestBlindIsNotClean:
             findings, stats, errors, fatal, {}, {}))
         monkeypatch.setattr(mod, "load_baseline", lambda *a, **k: ledger)
         monkeypatch.setattr(sys, "argv", [str(SCRIPT)] + argv)
-        return mod.main()
+        return emit_result(mod.main())
 
     def test_a_finding_reaches_the_process_exit_code(self, monkeypatch):
         finding = mod.Finding("V1", "docs/x.md", 1, "widget", "--ci", "msg")

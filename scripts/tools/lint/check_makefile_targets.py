@@ -20,7 +20,6 @@ error（對齊 check_lint_toolchain_fit.py 的 stale-allowlist 自檢）。
 """
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -34,7 +33,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -169,14 +168,15 @@ def main():
 
     errors = [i for i in issues if i["severity"] == "error"]
 
+    status = EXIT_VIOLATION if args.ci and errors else EXIT_OK
     if args.json:
-        print(json.dumps({
+        return Report({
             "check": "makefile-targets",
             "dx_tools_count": len(dx_tools),
             "automation_refs_count": len(automation_refs),
             "issues": issues,
             "pass": len(errors) == 0,
-        }, ensure_ascii=False, indent=2))
+        }, status)  # #3216: run() encodes it
     else:
         print(f"DX generate/sync 工具: {len(dx_tools)} 個")
         print(f"Makefile / pre-commit 引用的 DX 工具: {len(automation_refs)} 個")
@@ -191,10 +191,9 @@ def main():
             print()
             print(f"總計: {len(errors)} 個問題")
 
-    if args.ci and errors:
-        sys.exit(EXIT_VIOLATION)
-    sys.exit(EXIT_OK)
+    sys.exit(status)
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

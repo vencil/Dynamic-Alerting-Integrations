@@ -62,7 +62,6 @@ from __future__ import annotations
 
 import argparse
 import ast
-import json
 import os
 import sys
 from dataclasses import dataclass
@@ -72,7 +71,7 @@ from typing import Optional
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_MANIFEST = REPO_ROOT / "tests" / "shared" / "property-coverage.yaml"
@@ -284,7 +283,7 @@ def validate_manifest(
     return issues
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: Optional[list] = None) -> "int | Report":
     parser = argparse.ArgumentParser(
         description="Validate property-pilot coverage manifest vs source + tests.",
     )
@@ -329,13 +328,13 @@ def main(argv: Optional[list] = None) -> int:
 
     if args.json:
         import dataclasses
-        print(json.dumps({
+        return Report({
             "check": "property-coverage",
             "manifest": _safe_relative(manifest_path, REPO_ROOT),
             "modules_scanned": len(manifest.get("modules") or {}),
             "issues": [dataclasses.asdict(i) for i in issues],
             "summary": {"errors": len(issues)},
-        }, indent=2, ensure_ascii=False))
+        }, EXIT_VIOLATION if issues else EXIT_OK)  # #3216: run() encodes it
     else:
         if not issues:
             count = len(manifest.get("modules") or {})
@@ -362,4 +361,5 @@ def main(argv: Optional[list] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

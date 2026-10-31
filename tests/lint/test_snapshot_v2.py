@@ -4,7 +4,7 @@
 驗證:
   1. alert_correlate build_report() 結構穩定性
   2. drift_detect build_summary() 結構穩定性
-  3. check_bilingual_content format_json_report() 結構穩定性
+  3. check_bilingual_content json_document() 結構穩定性
 
 快照更新: UPDATE_SNAPSHOTS=1 python -m pytest tests/test_snapshot_v2.py
 """
@@ -166,15 +166,15 @@ class TestBilingualContentSnapshot:
     """check_bilingual_content 輸出結構快照。"""
 
     def test_json_report_structure(self):
-        """format_json_report() 結構穩定。"""
+        """json_document() 結構穩定。"""
         findings = [
             ("warning", "test.en.md: 50% CJK content", "test.en.md", 0.5),
             ("info", "other.md: only 3% CJK", "other.md", 0.03),
         ]
-        output = json.loads(cbc.format_json_report(findings))
+        output = cbc.json_document(findings)
         _assert_snapshot("bilingual_content_report", output)
 
     def test_empty_report(self):
         """無 findings 的 JSON 結構。"""
-        output = json.loads(cbc.format_json_report([]))
+        output = cbc.json_document([])
         _assert_snapshot("bilingual_content_empty", output)

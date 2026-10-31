@@ -26,7 +26,6 @@ v2.4.0 新增：解決 v2.3.0 release 過程中 jsx-loader.html 語言切換按�
 """
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -40,7 +39,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 JSX_LOADER = REPO_ROOT / "docs" / "assets" / "jsx-loader.html"
@@ -241,13 +240,14 @@ def main():
     errors = [i for i in issues if i["severity"] == "error"]
     warnings = [i for i in issues if i["severity"] == "warning"]
 
+    status = EXIT_VIOLATION if args.ci and errors else EXIT_OK
     if args.json:
-        print(json.dumps({
+        return Report({
             "check": "jsx-i18n",
             "stats": stats,
             "issues": issues,
             "summary": {"errors": len(errors), "warnings": len(warnings)},
-        }, ensure_ascii=False, indent=2))
+        }, status)  # #3216: run() encodes it
     else:
         if stats:
             print(f"CUSTOM_FLOW_MAP: {stats['flow_map_count']} 工具")
@@ -263,10 +263,9 @@ def main():
             print()
             print(f"總計: {len(errors)} 錯誤, {len(warnings)} 警告")
 
-    if args.ci and errors:
-        sys.exit(EXIT_VIOLATION)
-    sys.exit(EXIT_OK)
+    sys.exit(status)
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

@@ -17,7 +17,6 @@ stale 或 undocumented entry 會導致遷移建議不完整。
 """
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -33,7 +32,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 sys.path.insert(0, os.path.join(str(_THIS_DIR), "..", "ops"))
 import _threshold_alerts  # noqa: E402  (rule pack 讀者索引，issue 1196)
@@ -305,15 +304,16 @@ def main():
     errors = [i for i in issues if i["severity"] == "error"]
     warnings = [i for i in issues if i["severity"] == "warning"]
 
+    status = EXIT_VIOLATION if args.ci and errors else EXIT_OK
     if args.json:
-        print(json.dumps({
+        return Report({
             "check": "metric-dictionary",
             "dictionary_entries": len(dict_metrics),
             "rule_pack_metrics": len(all_rp_metrics),
             "rule_packs_scanned": len(rule_pack_metrics),
             "issues": issues,
             "summary": {"errors": len(errors), "warnings": len(warnings)},
-        }, ensure_ascii=False, indent=2))
+        }, status)  # #3216: run() encodes it
     else:
         print(f"Metric Dictionary: {len(dict_metrics)} 條目")
         print(f"Rule Pack metrics: {len(all_rp_metrics)} 個（"
@@ -329,10 +329,9 @@ def main():
             print()
             print(f"總計: {len(errors)} 錯誤, {len(warnings)} 警告")
 
-    if args.ci and errors:
-        sys.exit(EXIT_VIOLATION)
-    sys.exit(EXIT_OK)
+    sys.exit(status)
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

@@ -27,6 +27,7 @@ import check_portal_bundle_size
 import check_trk_index_coverage
 import generate_nav
 import waveform_compile
+from _lib_exitcodes import emit_result  # (#3216: in-process main() → exit status)
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -110,7 +111,7 @@ def test_check_portal_bundle_size_walks_the_real_dist_tree(argv, capsys):
     會通過本格——這是已知且刻意不在此處關閉的缺口，關它要另外接 `--ci` 的閘門測試。
     """
     argv("--json")
-    rc = check_portal_bundle_size.main()
+    rc = emit_result(check_portal_bundle_size.main())  # #3216: run()'s step — the document goes out here
     out = capsys.readouterr().out
     assert isinstance(rc, int) and not isinstance(rc, bool), f"main() 回了 {rc!r}"
 

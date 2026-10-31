@@ -43,7 +43,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 
 # Resolve project root (three levels up: scripts/tools/lint/ -> repo root)
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -722,9 +722,7 @@ def main():
     check_flow_components(tools, errors, warnings)
     check_markdown_tool_links(tools, errors, warnings)
 
-    if args.json:
-        print(json.dumps({"errors": errors, "warnings": warnings}, indent=2))
-    else:
+    if not args.json:
         if errors:
             print(f"ERRORS ({len(errors)}):", file=sys.stderr)
             for e in errors:
@@ -770,16 +768,22 @@ def main():
                 print(f"  → Fix component= path or create the referenced JSX file")
 
     if errors:
-        sys.exit(EXIT_VIOLATION)
+        status = EXIT_VIOLATION
     elif warnings:
         # #452: warnings are (softer) findings → EXIT_VIOLATION. Previously
         # exit 2, which now means caller-error; both already fail the
         # pre-commit hook (non-zero), so this is no behaviour change, just
         # removes the warn/caller-error code collision.
-        sys.exit(EXIT_VIOLATION)
+        status = EXIT_VIOLATION
     else:
-        sys.exit(EXIT_OK)
+        status = EXIT_OK
+    if args.json:
+        # #3216: run() encodes it — after the fix hints, so nothing follows
+        # the document on stdout.
+        return Report({"errors": errors, "warnings": warnings}, status)
+    sys.exit(status)
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

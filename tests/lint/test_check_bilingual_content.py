@@ -19,6 +19,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "scripts" / "tools" / "lint"))
 import check_bilingual_content as cbc  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 _UNTRANSLATED = ("This is all English content without any CJK "
                  "characters whatsoever. " * 15) + "中"
@@ -244,8 +245,7 @@ class TestOutputFormatting:
 
     def test_json_pass(self):
         """無 findings 的 JSON 報告。"""
-        output = cbc.format_json_report([])
-        data = json.loads(output)
+        data = cbc.json_document([])
         assert data["status"] == "pass"
         assert data["warning_count"] == 0
 
@@ -255,8 +255,7 @@ class TestOutputFormatting:
             ("warning", "bad.en.md: 60% CJK", "bad.en.md", 0.6),
             ("info", "maybe.md: 2% CJK", "maybe.md", 0.02),
         ]
-        output = cbc.format_json_report(findings)
-        data = json.loads(output)
+        data = cbc.json_document(findings)
         assert data["status"] == "warn"
         assert data["warning_count"] == 1
         assert data["info_count"] == 1
@@ -287,7 +286,7 @@ class TestCLI:
         cli_argv("check_bilingual_content", "--json")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
-        cbc.main()
+        assert emit_result(cbc.main()) == 0
         out = capsys.readouterr().out
         data = json.loads(out)
         assert "status" in data
@@ -300,9 +299,7 @@ class TestCLI:
         cli_argv("check_bilingual_content", "--ci")
         monkeypatch.setattr(cbc, "DOCS_DIR", tmp_path)
         monkeypatch.setattr(cbc, "PROJECT_ROOT", tmp_path)
-        with pytest.raises(SystemExit) as exc_info:
-            cbc.main()
-        assert exc_info.value.code == 1
+        assert emit_result(cbc.main()) == 1
 
     def test_main_threshold_flag(self, tmp_path, monkeypatch, capsys, cli_argv):
         """--threshold 參數生效。"""

@@ -29,6 +29,7 @@ _spec = importlib.util.spec_from_file_location("check_metric_dictionary", _SCRIP
 mod = importlib.util.module_from_spec(_spec)
 sys.modules["check_metric_dictionary"] = mod
 _spec.loader.exec_module(mod)
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ============================================================
@@ -410,8 +411,7 @@ class TestMainCLI:
         monkeypatch.setattr(mod, "K8S_RULES_DIR", tmp_path / "no-k8s")
         monkeypatch.setattr(sys, "argv", ["check_metric_dictionary", "--json"])
 
-        with pytest.raises(SystemExit):
-            mod.main()
+        assert emit_result(mod.main()) == 0  # #3216: run()'s step — the document goes out here
         payload = json.loads(capsys.readouterr().out)
         assert payload["check"] == "metric-dictionary"
         assert "dictionary_entries" in payload
