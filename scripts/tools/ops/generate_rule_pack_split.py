@@ -811,9 +811,10 @@ def main():
     require_dir(args.rule_packs_dir, lang="zh" if get_lang().startswith("zh") else "en",
                 flag="--rule-packs-dir")
     try:
-        # A directory that stats but cannot be listed: `Path.glob` below
-        # swallows the EACCES and reads it as "no rule pack files" (#3415).
-        os.listdir(args.rule_packs_dir)
+        # A directory that stats but cannot be read (listed): `Path.glob`
+        # below swallows the EACCES and reads it as "no rule pack files"
+        # (#3415). Opened, not listed — the glob stays the one enumeration.
+        os.close(os.open(args.rule_packs_dir, os.O_RDONLY))
     except OSError as exc:
         die_caller_error(f"ERROR: --rule-packs-dir {safe_label(args.rule_packs_dir)}: "
                          f"{exc.strerror}", "dir_not_accessible")
