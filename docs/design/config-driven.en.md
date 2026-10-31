@@ -359,6 +359,8 @@ tenants:
     "redis_connected_clients{instance='redis-orders:6379'}": "500:critical"
 ```
 
+> This shows the syntax only: the shipped Redis Rule Pack reads only rows with `severity="warning"` (`RedisHighConnections` is itself a warning alert); a critical alert needs custom Recording and Alert Rules that read `severity="critical"`.
+
 The severity is the part after the last `:` and may only be `warning` or `critical` (in any letter case). Any other suffix (`500:high`, the empty `500:`) is selected by no Rule Pack rule, so the whole value is unreadable: a base key is served with the platform default (severity warning), and a dimensional key or a key declared in `optional_overrides:` serves no series; da-guard's `value_not_served` reports both ([#3071](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3071)).
 
 **Prometheus output:**
@@ -439,7 +441,7 @@ tenants:
 2. **Recording rule layer**: PromQL uses `label_replace` + `=~` for actual matching at query time
 3. **Design principle**: The exporter remains a pure config→metric converter; matching logic is entirely handled by Prometheus native vector operations
 
-> ⚠️ **The shipped Rule Packs do not judge per dimension yet**: threshold normalization is written `max by(tenant)(user_threshold{…})`, which drops the dimension labels, and the observed series are aggregated by `tenant` only. A dimensional key (exact or regex) therefore changes the **whole tenant's** threshold: the dimension values and the base value are reduced to one value (their maximum; the dimension value itself when there is no base row), never applied per dimension — which loosens an alert that fires on `>` and tightens one that fires on `<` (a hit ratio, for example); and `disable` on a dimensional key equals not writing that row — it does not silence that one dimension. The only label read per value today is `version` in the kubernetes pack ([ADR-024](../adr/024-version-aware-threshold-via-dimensional-label.en.md)). Judging per dimension needs the Rule Packs changed too, tracked in [#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475); the shipped examples carry no dimensional keys for this reason.
+> ⚠️ **The shipped Rule Packs do not judge per dimension yet**: threshold normalization is written `max by(tenant)(user_threshold{…})`, which drops the dimension labels, and the observed series are aggregated by `tenant` only. A dimensional key (exact or regex) therefore changes the **whole tenant's** threshold: the dimension values and the base value are reduced to one value (their maximum; the dimension value itself when there is no base row), never applied per dimension — which loosens an alert that fires on `>` and tightens one that fires on `<` (a hit ratio, for example); and `disable` on a dimensional key only stops that row from being served — it does not silence that one dimension. The only label read per value today is `version` in the kubernetes pack ([ADR-024](../adr/024-version-aware-threshold-via-dimensional-label.en.md)). Judging per dimension needs the Rule Packs changed too, tracked in [#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475); the shipped examples carry no dimensional keys for this reason.
 
 ### 2.6 Scheduled Thresholds
 

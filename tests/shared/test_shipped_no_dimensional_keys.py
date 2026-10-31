@@ -3,7 +3,8 @@
 The shipped rule packs normalise thresholds with `max by(tenant)(user_threshold{…})`:
 the dimension labels are dropped there, so a tenant's `<base>{label="v"}` changes
 the whole tenant's threshold (the maximum of the dimension values and the base),
-and `disable` on it is a no-op. The one dimension read per label is `version`
+and `disable` on it only stops that one row from being served, never silencing
+the one dimension. The one dimension read per label is `version`
 (ADR-024). Until a rule pack judges per dimension (#3475), a shipped example of a
 dimensional key teaches a behaviour the platform does not have — so the shipped
 conf.d trees and the rule-pack headers carry none.
