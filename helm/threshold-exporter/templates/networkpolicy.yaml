@@ -1,7 +1,8 @@
 {{- /*
   The exporter's NetworkPolicies (#1425), in the release namespace. They used
-  to be raw manifests pinned to `monitoring` (k8s/03-monitoring/
-  network-policies.yaml), which a release installed anywhere else never got.
+  to be raw manifests pinned to `monitoring`
+  (k8s/03-monitoring/network-policies.yaml), which a release installed
+  anywhere else never got.
   allowExternal (default true) restricts the port only: the chart cannot know
   the scraper's pod labels, and a wrong guess drops the scrape with nothing
   to say so. With allowExternal=false an empty prometheusPodLabels would

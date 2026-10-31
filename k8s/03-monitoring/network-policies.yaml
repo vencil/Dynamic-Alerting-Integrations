@@ -75,8 +75,9 @@ spec:
           port: 9093
 ---
 # threshold-exporter's ingress and egress policies are rendered by its chart
-# into the release namespace (helm/threshold-exporter/templates/
-# networkpolicy.yaml, #1425), not pinned here to `monitoring`.
+# into the release namespace
+# (helm/threshold-exporter/templates/networkpolicy.yaml, #1425), not pinned
+# here to `monitoring`.
 # Grafana: allow from all within monitoring (for dashboard access)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy

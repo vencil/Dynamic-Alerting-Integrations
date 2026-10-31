@@ -27,7 +27,7 @@ import pytest
 import yaml
 from _helm_gate import helm_required
 
-_REPO_ROOT = Path(__file__).parent.parent.parent
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 _CHART = _REPO_ROOT / "helm" / "threshold-exporter"
 _DEFAULT_CM = "threshold-config"
 
