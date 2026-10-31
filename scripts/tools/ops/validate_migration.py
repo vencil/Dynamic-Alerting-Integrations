@@ -66,6 +66,7 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import ensure_dir_or_die, write_text_or_die, write_json_or_die, add_prometheus_arg, non_negative_seconds  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_paths import require_file  # noqa: E402  (#3415)
 # #3133: a query not answered raises QueryError; a sample is read once, by
 # the lib (#3213).
 from _lib_prometheus import QueryError, prometheus_instant, vector_sample  # noqa: E402
@@ -160,6 +161,8 @@ def load_mapping_pairs(mapping_path):
     改用黃金標準（有 `golden_rule`）的項沒有 migrate 產出的 recording rule，
     舊檔對它們組出的 `tenant:<key>:max` 不存在、只會報新側缺值，所以跳過並說明。
     """
+    # #3415: missing, not a file, or not openable — named, not a traceback.
+    require_file(mapping_path, lang="zh", flag="--mapping")
     with open(mapping_path, 'r', encoding='utf-8') as f:
         mapping = yaml.safe_load(f) or {}
 

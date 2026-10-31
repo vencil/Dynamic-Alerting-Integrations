@@ -47,6 +47,9 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
+# Standard library only, so the PyYAML-less fallback below keeps it (#3415).
+from _lib_paths import require_dir  # noqa: E402
+from _lib_label import safe_label  # noqa: E402
 
 try:
     from _lib_python import (
@@ -78,7 +81,7 @@ except ImportError:
         return _nullcontext()
 
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, die_caller_error,
 )
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
@@ -802,6 +805,19 @@ def main():
             },
         })
 
+    # #3415: judged before anything is written — a missing directory was
+    # "No rule pack files found" (read as empty) after the output tree had
+    # been created.
+    require_dir(args.rule_packs_dir, lang="zh" if get_lang().startswith("zh") else "en",
+                flag="--rule-packs-dir")
+    try:
+        # A directory that stats but cannot be read (listed): `Path.glob`
+        # below swallows the EACCES and reads it as "no rule pack files"
+        # (#3415). Opened, not listed — the glob stays the one enumeration.
+        os.close(os.open(args.rule_packs_dir, os.O_RDONLY))
+    except OSError as exc:
+        die_caller_error(f"ERROR: --rule-packs-dir {safe_label(args.rule_packs_dir)}: "
+                         f"{exc.strerror}", "dir_not_accessible")
     report = process_rule_packs(
         rule_packs_dir=args.rule_packs_dir,
         output_dir=args.output_dir,

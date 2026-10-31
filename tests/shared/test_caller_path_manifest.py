@@ -61,27 +61,20 @@ REASON_PREFIX = {"dir": "dir_", "file": "file_", "any": "path_"}
 #: addition here is a new unjudged input path and needs its own ticket first.
 #: #3392 (missing read as empty) and #3415 (traceback, misworded, silent).
 PENDING: frozenset[tuple[str, str]] = frozenset({
-    ("alert-correlate", "--input"),
     ("blind-spot", "--config-dir"),
-    ("cutover", "--readiness-json"),
     ("generator-service", "--config-subdir"),
     ("generator-service", "--da-guard-binary"),
-    ("generator-service", "--git"),
     ("migrate-to-operator", "--config-dir"),
     ("migrate-to-operator", "--source-dir"),
     ("onboard", "--rule-files"),
     ("operator-check", "--rule-packs-dir"),
     ("operator-generate", "--config-dir"),
     ("operator-generate", "--rule-packs-dir"),
-    ("rule-pack-split", "--rule-packs-dir"),
-    ("runtime-audit", "--runtime-json"),
-    ("scaffold", "--from-onboard"),
     ("shadow-verify", "--mapping"),
     ("shadow-verify", "--readiness-json"),
     ("shadow-verify", "--report-csv"),
     ("state-reconcile", "--manifest-path"),
     ("state-reconcile", "--state-dir"),
-    ("validate", "--mapping"),
 })
 
 

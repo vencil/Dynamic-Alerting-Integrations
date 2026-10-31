@@ -7,7 +7,7 @@ dispatched_to_go: [batch-pr, guard, parser]
 
 commands:
   alert-correlate:
-    "--input": {kind: pending, ticket: 3415}
+    "--input": file
     "--lookback": not_path
     "--min-score": not_path
     "--prometheus": not_path
@@ -85,7 +85,7 @@ commands:
   cutover:
     "--namespace": not_path
     "--prometheus": not_path
-    "--readiness-json": {kind: pending, ticket: 3415}
+    "--readiness-json": file
     "--tenant": not_path
   deprecate:
     "--config-dir": dir
@@ -152,7 +152,7 @@ commands:
     "--config-subdir": {kind: pending, ticket: 3392}
     "--da-guard-binary": {kind: pending, ticket: 3415}
     "--deadline-reserve-seconds": not_path
-    "--git": {kind: pending, ticket: 3415}
+    "--git": {kind: reader, by: "the exec of --git (OSError named with the flag)", pinned_by: "tests/shared/test_caller_paths.py::test_generator_service_names_a_git_it_cannot_run"}
     "--max-body-bytes": not_path
     "--max-cache-transfer-bytes": not_path
     "--max-connections": not_path
@@ -259,14 +259,14 @@ commands:
   rule-pack-split:
     "--namespace": not_path
     "--output-dir": output
-    "--rule-packs-dir": {kind: pending, ticket: 3415}
+    "--rule-packs-dir": dir
   runtime-audit:
     "--prometheus": not_path
     "--rule-packs-dir": dir
-    "--runtime-json": {kind: pending, ticket: 3415}
+    "--runtime-json": file
   scaffold:
     "--db": not_path
-    "--from-onboard": {kind: pending, ticket: 3415}
+    "--from-onboard": file
     "--generate-profile": not_path
     "--mapping-filter": not_path
     "--mapping-instance": not_path
@@ -333,7 +333,7 @@ commands:
   validate:
     "--convergence-output": output
     "--interval": not_path
-    "--mapping": {kind: pending, ticket: 3415}
+    "--mapping": file
     "--new": not_path
     "--old": not_path
     "--output-dir": output

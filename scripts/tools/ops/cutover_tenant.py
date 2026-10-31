@@ -52,6 +52,7 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
 )
 from _lib_python import format_json_report, add_prometheus_arg  # noqa: E402
+from _lib_paths import classify_path  # noqa: E402  (#3415)
 from _lib_prometheus import QueryError, prometheus_instant, vector_count  # noqa: E402
 
 
@@ -232,6 +233,16 @@ def apply_cutover(readiness_json, tenant, prometheus_url,
     }
 
     # ── Check readiness ───────────────────────────────────────────────
+    # #3415: judged before the open — a directory or a path under a parent
+    # the caller cannot enter was an IsADirectoryError / PermissionError
+    # traceback; it is the same caller error as a missing file, named.
+    readiness_problem = classify_path(readiness_json, "file", lang="en",
+                                      flag="--readiness-json")
+    if readiness_problem is not None:
+        report["failed_step"] = "load_readiness"
+        report["message"] = readiness_problem.message
+        report["caller_error"] = True
+        return report
     try:
         readiness = load_cutover_readiness(readiness_json)
     except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:

@@ -346,7 +346,7 @@ class RuntimeAuditor:
         try:
             declared = parse_declared_rules(paths)
         except ValueError as exc:
-            self.caller_error = f"{i18n('err_parse', self.lang)}: {str(exc)[:80]}"
+            self.caller_error = f"{i18n('err_parse', self.lang)}: {exc}"
             return None
         self.declared_count = len(declared)
         self.declared_group_count = len({g for (g, _n) in declared})
@@ -354,10 +354,16 @@ class RuntimeAuditor:
 
     def _load_runtime(self) -> Optional[dict]:
         if self.args.runtime_json:
+            runtime_problem = classify_path(self.args.runtime_json, "file", lang=self.lang,
+                                            flag="--runtime-json")  # #3415
+            if runtime_problem is not None:
+                self.caller_error = f"{i18n('err_runtime_json', self.lang)}: {runtime_problem.message}"
+                return None
             try:
                 raw = json.loads(Path(self.args.runtime_json).read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError) as exc:
-                self.caller_error = f"{i18n('err_runtime_json', self.lang)}: {str(exc)[:60]}"
+                # #3415: never cut — the path is what tells the caller which file.
+                self.caller_error = f"{i18n('err_runtime_json', self.lang)}: {exc}"
                 return None
         elif self.args.prometheus:
             try:
@@ -373,7 +379,7 @@ class RuntimeAuditor:
         try:
             runtime = parse_runtime_rules(raw)
         except ValueError as exc:
-            self.caller_error = f"{i18n('err_parse', self.lang)}: {str(exc)[:80]}"
+            self.caller_error = f"{i18n('err_parse', self.lang)}: {exc}"
             return None
         self.runtime_count = len(runtime)
         return runtime

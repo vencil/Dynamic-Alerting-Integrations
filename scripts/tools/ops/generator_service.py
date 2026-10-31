@@ -87,6 +87,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
+from _lib_label import safe_label  # noqa: E402  (#3415)
 import _gsvc_child  # noqa: E402  (imports the whole generator — see _gsvc_child)
 from _gsvc_child import ChildJob, gar  # noqa: E402
 from _gsvc_proto import (  # noqa: E402
@@ -1185,8 +1186,13 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _object_format(git: str, repo: str) -> str:
-    proc = subprocess.run([git, "-C", repo, "rev-parse", "--show-object-format"],
-                          capture_output=True, check=False, timeout=60)
+    try:
+        proc = subprocess.run([git, "-C", repo, "rev-parse", "--show-object-format"],
+                              capture_output=True, check=False, timeout=60)
+    except OSError as exc:
+        # #3415: the first run of --git — name the flag, not a bare errno.
+        shown = safe_label(git) if git else "''"  # '' is SUPPLIED, as _lib_paths shows it
+        raise RuntimeError(f"--git {shown}: {exc.strerror}") from exc
     fmt = proc.stdout.decode("utf-8", "replace").strip()
     if proc.returncode != 0 or fmt not in ("sha1", "sha256"):
         raise RuntimeError(proc.stderr.decode("utf-8", "replace").strip()

@@ -36,6 +36,7 @@ from _lib_prometheus import QueryError, alertmanager_alerts, prometheus_alerts  
 from _lib_exitcodes import (  # noqa: E402
     EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
 )
+from _lib_paths import require_file  # noqa: E402  (#3415)
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -490,6 +491,7 @@ def main():
 
     # Load alerts
     if args.input:
+        require_file(args.input, lang=detect_cli_lang(), flag="--input")  # #3415
         alerts = load_alerts_from_json(args.input)
     else:
         # `... or "http://localhost:9090"` (not os.environ.get's default): a
