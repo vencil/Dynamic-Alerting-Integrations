@@ -13,7 +13,8 @@
 #
 # 欄位（全部必填，issue 選填）：
 #   benches       完整的 Go benchmark 名稱清單（BenchmarkX），不接受正則。
-#                 名稱不存在的紀錄會被 tests/dx/test_bench_verdict.py 擋下。
+#                 名稱不存在、或同名定義在多處的紀錄，會被
+#                 tests/dx/test_bench_verdict.py 擋下。
 #   metric        "sec/op"、"B/op" 或 "allocs/op" 其中之一。
 #   max_delta_pct 允許的上限（百分比，> 0）。照 PR 上 bench gate 量到的數字
 #                 抓一點餘裕；B/op 與 allocs/op 逐次相同，不需要大餘裕。

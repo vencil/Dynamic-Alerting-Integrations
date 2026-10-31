@@ -428,13 +428,14 @@ def test_ledger_flags_go_together(capsys):
 
 # ── the real ledger ─────────────────────────────────────────────────────────
 
-def _benchmarks_in_tree() -> set[str]:
+def _benchmarks_in_tree() -> dict[str, int]:
     import re
-    names: set[str] = set()
+    from collections import Counter
+    names: Counter[str] = Counter()
     for p in (REPO / "components/threshold-exporter/app").rglob("*_test.go"):
         names.update(re.findall(r"^func (Benchmark\w+)\(", p.read_text(encoding="utf-8"),
                                 re.MULTILINE))
-    return names
+    return dict(names)
 
 
 def test_the_repo_ledger_parses_and_names_only_existing_benchmarks():
@@ -448,5 +449,63 @@ def test_the_repo_ledger_parses_and_names_only_existing_benchmarks():
 
 def test_lint_catches_a_name_no_benchmark_carries():
     entries = bv.parse_ledger(LEDGER_OK)
-    assert bv.lint_ledger(entries, {"BenchmarkOther"}) == [
+    assert bv.lint_ledger(entries, {"BenchmarkOther": 1}) == [
         "accepted entry #1: no benchmark named BenchmarkScan_1000"]
+
+
+def test_lint_catches_a_name_defined_in_two_packages():
+    entries = bv.parse_ledger(LEDGER_OK)
+    assert bv.lint_ledger(entries, {"BenchmarkScan_1000": 2}) == [
+        "accepted entry #1: BenchmarkScan_1000 is defined in 2 places"]
+
+
+def test_rewording_or_reordering_an_entry_is_the_same_entry():
+    a = bv.parse_ledger('[[accepted]]\nbenches=["BenchmarkB","BenchmarkA"]\n'
+                        'metric="B/op"\nmax_delta_pct=5\nreason="one"\n')
+    b = bv.parse_ledger('[[accepted]]\nbenches=["BenchmarkA","BenchmarkB"]\n'
+                        'metric="B/op"\nmax_delta_pct=5\nreason="two"\nissue=12\n')
+    assert a == b
+    wider = bv.parse_ledger('[[accepted]]\nbenches=["BenchmarkA","BenchmarkB"]\n'
+                            'metric="B/op"\nmax_delta_pct=9\nreason="two"\n')
+    assert wider != a  # widening the bound is a new acceptance
+
+
+def test_an_over_bound_timing_row_flagged_again_is_still_a_regression(ledger_repo, tmp_path):
+    # Pass 1: Merge sec/op +8.24% over a +6% bound. Pass 2: +8.46%, flagged
+    # again. With the ledger applied to pass 2 a narrower case (pass 2 inside
+    # the bound) would read as "not replicated"; pass 2 must be judged raw.
+    base, commit = ledger_repo
+    head = commit('[[accepted]]\nbenches=["BenchmarkMerge_1000"]\nmetric="sec/op"\n'
+                  'max_delta_pct=8.3\nreason="r"\n')
+    out = tmp_path / "gh_out"
+    assert bv.main(["verdict", "--benchstat", str(FIX / "timing_only.txt"),
+                    "--replicate", str(FIX / "timing_only_again.txt"),
+                    "--ledger-base", base, "--ledger-head", head,
+                    "--github-output", str(out)]) == 0
+    o = _outputs(out)
+    # +8.24% is within 8.3 → accepted in pass 1; nothing left to replicate.
+    assert (o["regression"], o["regression_basis"]) == ("false", "accepted")
+    # Now the real trap: pass 1 +8.46% is OVER the 8.3 bound, pass 2 +8.24%
+    # is flagged again but INSIDE the bound. Ledger-filtering pass 2 would
+    # drop it and call the over-bound regression "not replicated".
+    out2 = tmp_path / "gh_out2"
+    assert bv.main(["verdict", "--benchstat", str(FIX / "timing_only_again.txt"),
+                    "--replicate", str(FIX / "timing_only.txt"),
+                    "--ledger-base", base, "--ledger-head", head,
+                    "--github-output", str(out2)]) == 0
+    o2 = _outputs(out2)
+    assert (o2["regression"], o2["regression_basis"]) == ("true", "timing-replicated")
+    assert "Merge_1000-4" in o2["over_bound"]
+
+
+def test_over_bound_is_not_reported_when_the_verdict_does_not_count_it(ledger_repo, tmp_path):
+    base, commit = ledger_repo
+    head = commit('[[accepted]]\nbenches=["BenchmarkMerge_1000"]\nmetric="sec/op"\n'
+                  'max_delta_pct=6\nreason="r"\n')
+    out = tmp_path / "gh_out"
+    bv.main(["verdict", "--benchstat", str(FIX / "timing_only.txt"),
+             "--replicate", str(FIX / "clean.txt"),
+             "--ledger-base", base, "--ledger-head", head, "--github-output", str(out)])
+    o = _outputs(out)
+    assert o["regression_basis"] == "timing-not-replicated"
+    assert "over_bound" not in o

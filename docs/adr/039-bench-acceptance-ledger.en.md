@@ -84,7 +84,7 @@ Scan_1000-4    7.000k ± 0%   9.100k ± 0%  +30.00% (p=0.002 n=6)  [declared ≤
 
 ### Which entries count as "added by this change"
 
-The ledger at each end of the compared range is parsed into a set of entries; the entries present at the head and absent at the base are the added ones. Parsed entries are compared, not text lines, so reformatting or reordering fields does not bring an old entry back into effect.
+The ledger at each end of the compared range is parsed into a set of entries; the entries present at the head and absent at the base are the added ones. Parsed entries are compared, not text lines. An entry's identity is three things: the set of benchmarks, the metric and the bound. Reformatting, reordering fields or the names inside `benches`, rewording the reason, or adding an `issue` leaves it the same entry and does not bring an old entry back into effect; widening the bound, changing the metric, or adding or removing a benchmark is a new acceptance, reviewed in that PR.
 
 | Gate | Base | Head |
 |---|---|---|
@@ -97,7 +97,7 @@ Which commit an entry belongs to is decided by git (the commit that added it); t
 ### Guarding the ledger itself
 
 - If the ledger fails to parse, misses a field or has a wrong type, the verdict step fails (exit code 2). A broken ledger is neither read as "no entries" nor as "everything accepted".
-- Every benchmark name in an entry must exist in the current code. When a benchmark is renamed or removed, a leftover entry turns CI's Python tests red, instead of silently matching nothing or later matching a new benchmark that reuses the name.
+- Every benchmark name in an entry must exist in the current code and be defined in exactly one place. When a benchmark is renamed or removed, a leftover entry turns CI's Python tests red instead of silently matching nothing; a name defined in two packages turns them red as well, because benchstat's output rows carry no package.
 - The ledger file is protected by CODEOWNERS; adding an entry needs owner review.
 - A regression from a base of zero (for example, a path that did not allocate and now does) has no percentage in benchstat; the verdict treats it as an unbounded increase that no bound covers.
 
@@ -107,6 +107,7 @@ Which commit an entry belongs to is decided by git (the commit that added it); t
 - **The bound is the loose side.** When the measurement is well below the bound, the remaining margin has no effect on this verdict, and it does not carry over to later commits either: each gate only looks at the entries added by the change it is judging.
 - **Accepting after the fact means closing the issue by hand.** If the decision to accept comes after merging, add the entry in a later PR (the `issue` field is available), then after it merges comment on the issue with a link to the entry and close it. This step is not automated.
 - **For a push of several commits, attribution still measures only the last commit.** The ledger takes in entries added anywhere in the push, but regressions in the commits in between were never measured.
+- **Sub-benchmarks (`BenchmarkX/case`, created by `b.Run`) cannot be declared.** Names must have the form `BenchmarkX`; none of the current benchmarks has sub-benchmarks, and the naming rule must be extended when one appears.
 - **The merge-base and the parent commit can differ.** The Δ measured on the PR and the Δ measured after merging are not always the same; the post-merge measurement decides, so the bound should cover both.
 
 ## Not yet decided

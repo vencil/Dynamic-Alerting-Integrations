@@ -214,11 +214,14 @@ class LedgerError(Exception):
 
 @dataclass(frozen=True)
 class Entry:
-    benches: tuple[str, ...]
+    """Identity = what is accepted: the benchmark SET, the metric, the bound.
+    Reordering names or rewording `reason` / adding `issue` is the same entry
+    and must not re-accept anything; widening the bound is a new acceptance."""
+    benches: tuple[str, ...]  # sorted, so order inside the list is not identity
     metric: str
     max_delta_pct: float
-    reason: str
-    issue: int | None = None
+    reason: str = field(compare=False)
+    issue: int | None = field(default=None, compare=False)
 
 
 def parse_ledger(text: str, where: str = LEDGER_PATH) -> list[Entry]:
@@ -257,7 +260,8 @@ def parse_ledger(text: str, where: str = LEDGER_PATH) -> list[Entry]:
         issue = e.get("issue")
         if issue is not None and (isinstance(issue, bool) or not isinstance(issue, int)):
             raise LedgerError(f"{at}: `issue` must be an issue number")
-        entries.append(Entry(tuple(benches), e["metric"], float(cap), e["reason"].strip(), issue))
+        entries.append(Entry(tuple(sorted(set(benches))), e["metric"], float(cap),
+                             e["reason"].strip(), issue))
     return entries
 
 
@@ -313,14 +317,19 @@ def apply_ledger(reading: Reading, entries: list[Entry]) -> tuple[list[Judged], 
     return accepted, over
 
 
-def lint_ledger(entries: list[Entry], known_benches: set[str]) -> list[str]:
-    """Problems a ledger that parses can still have: names no benchmark carries
-    (renamed or removed — an entry that silently matches nothing)."""
+def lint_ledger(entries: list[Entry], definitions: dict[str, int]) -> list[str]:
+    """Problems a ledger that parses can still have. `definitions` maps each
+    benchmark name to how many places define it. A name defined nowhere was
+    renamed or removed (the entry silently matches nothing); a name defined in
+    more than one package is ambiguous, since benchstat rows carry no package."""
     problems = []
     for i, e in enumerate(entries, 1):
         for b in e.benches:
-            if b not in known_benches:
+            n = definitions.get(b, 0)
+            if n == 0:
                 problems.append(f"accepted entry #{i}: no benchmark named {b}")
+            elif n > 1:
+                problems.append(f"accepted entry #{i}: {b} is defined in {n} places")
     return problems
 
 
@@ -444,9 +453,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "needs-replication":
             print("yes" if needs_replication(first) else "no")
             return 0
+        # The second pass answers only "is it flagged again?". It is NOT
+        # filtered by the ledger: a row over its bound in the first pass that
+        # lands inside the bound in the second was still flagged again, and
+        # hiding it would turn an over-bound regression into "not replicated".
         second = _read(args.replicate) if args.replicate else None
-        if second is not None:
-            apply_ledger(second, entries)
     except ShapeError as exc:
         print(f"::error::benchstat output shape changed — {exc}. The regression "
               "detector may be silently passing; pin benchstat to a known-good "
@@ -457,7 +468,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     v = decide(first, second)
-    v.accepted, v.over_bound = accepted, over
+    counted = set(v.regressions)
+    v.accepted = accepted
+    v.over_bound = [j for j in over if j.row in counted]  # only what the verdict counts
     if v.basis == "clean" and accepted:
         v.basis = "accepted"
     with open(args.github_output, "a", encoding="utf-8", newline="\n") as fh:
