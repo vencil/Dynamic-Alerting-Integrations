@@ -2,9 +2,15 @@
 #   1) FIRES once a sink's buffer has dropped for the 5m hold-down, carrying only
 #      {component_id, severity, alert_source} — the scrape labels (pod, instance,
 #      job) are aggregated away, so N Vector pods give ONE alert per sink.
-#   2) does NOT fire before the hold-down (discriminates `for: 5m`).
+#   2) does NOT fire before the hold-down (catches a SHORTER `for`; a longer
+#      `for` or another window is caught by test_platform_rules_extract_sync,
+#      which compares expr/for with the shipped ConfigMap).
 #   3) does NOT fire for a sink whose counter is flat (`> 0`, not `>= 0`).
 #   4) CLEARS once the drops have left the 5m rate window.
+# ⚠️ The per-pod series below (pod / instance labels) model per-pod targets.
+# Today's `platform-components` job discovers the headless Service with
+# `role: service` and scrapes ONE pod at a time (#3483), so case 1's "N pods ->
+# one alert" pins the aggregation for when that is fixed, not today's topology.
 # Run: promtool test rules tests/rulepacks/platform-vector-buffer-dropped_test.yaml
 rule_files:
   - platform-vector-buffer-dropped.rules.yaml

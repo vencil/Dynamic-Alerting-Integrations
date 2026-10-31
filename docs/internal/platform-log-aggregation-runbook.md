@@ -409,6 +409,8 @@ series 都不存在，告警**恆不開火**，看起來跟「沒有丟 row」�
 （`k8s/03-monitoring/network-policies.yaml`）已放行 9598 與 9599（[#1291](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1291)）；
 自帶 Prometheus NetworkPolicy 的叢集要比照放行，否則一樣零 series。
 `up{job="vector-metrics"}` 有值才代表 scrape 真的接上。
+⚠️ 目前 scrape 每次只連到一個 Vector pod（headless Service 被 `role: service` 發現，
+[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)）：其他節點丟 row 看不到，換 pod 時 counter 跳值也可能讓這條誤觸發。
 
 處置：
 

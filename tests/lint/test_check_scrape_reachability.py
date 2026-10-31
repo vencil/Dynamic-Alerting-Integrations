@@ -720,9 +720,9 @@ _KNOWN_UNRENDERED_UNDER_DEFAULTS = {
     "helm/vector": (
         "both metrics Services are conditional — `-metrics` on metrics.enabled "
         "(default false) and `-projection-gate-metrics` on tenantProjections "
-        "(default []). Tracked by #1291, which found the harder blocker too: "
-        "the Prometheus egress NetworkPolicy admits neither 9598 nor 9599, so "
-        "flipping the chart default alone would still yield zero series."
+        "(default []). #1291 also found the Prometheus egress NetworkPolicy "
+        "admitted neither 9598 nor 9599; that is fixed and pinned by "
+        "tests/k8s/test_prometheus_scrape_egress.py."
     ),
 }
 
