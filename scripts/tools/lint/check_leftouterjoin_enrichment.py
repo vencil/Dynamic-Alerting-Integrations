@@ -40,6 +40,7 @@ except Exception:  # pragma: no cover
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
+import _lib_consumer_read  # noqa: E402  (#3471: which files are rule packs)
 
 ENRICH_MARKER = "* on(tenant) group_left(runbook_url, owner, tier)"
 VOID_BRANCH = "unless on(tenant) tenant_metadata_info"
@@ -67,8 +68,14 @@ def main() -> int:
     # already guaranteed `== source` by generate_rulepack_configmaps.py --check.
     # So source being left-outer-join + configmap == source ⇒ configmap correct.
     repo = _repo_root()
-    targets: List[Path] = sorted((repo / "rule-packs").glob("rule-pack-*.yaml"))
-    targets = [t for t in targets if t.exists()]
+    try:
+        # #3471: the rule packs are the one declaration's (rule-pack-*.yaml|yml;
+        # an undeclared YAML beside them is named).
+        targets: List[Path] = _lib_consumer_read.rule_pack_files(
+            repo / _lib_consumer_read.RULE_PACKS.directory)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     if not targets:
         print("ERROR: no rule-pack files found", file=sys.stderr)
         return EXIT_CALLER_ERROR

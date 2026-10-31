@@ -310,6 +310,9 @@ jobs:
               # workload-closure SSOT to pin bench-workload-record.yaml's
               # literal trigger against it (#1471).
               - ".github/bench-reference.yaml"
+              # tests/shared/test_rule_source_globs_declared_once.py holds
+              # its rule-family globs to the declaration (#3471).
+              - ".github/CODEOWNERS"
               # tests/dx/test_session_start.py copies and runs it (#2761).
               - ".claude/hooks/session-start.sh"
               # tests/ops/test_ci_path_filter_coverage.py derives the `docs`
@@ -432,6 +435,7 @@ jobs:
               - "helm/**"
               # Same test checks each Rule Pack note names a shipped ConfigMap.
               - "k8s/03-monitoring/configmap-rules-*.yaml"
+              - "k8s/03-monitoring/configmap-rules-*.yml"
               # ⛔ Same class as `requirements/**` in `python` above, found by
               # the same mechanical guard: this leg RUNS this script as its
               # bundle-size gate, and no other job executes it against the real

@@ -1188,7 +1188,16 @@ def _count_rule_packs():
     definition). It reads source YAML that exists in every clone, so no
     fallback is needed; an empty count still surfaces as NO-SOURCE.
     """
-    return count_rule_packs()["pack_count"]
+    import _lib_consumer_read  # noqa: PLC0415  (validate_docs_versions already loads it)
+    try:
+        return count_rule_packs()["pack_count"]
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # #3471: an undeclared YAML among the rule packs / rules ConfigMaps,
+        # two files of one pack, or a rule file the loader refuses — named,
+        # never a traceback and never a count taken around it.
+        print(f"ERROR: cannot count the rule packs: {_lib_consumer_read.error_text(exc)}",
+              file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
 
 
 def _count_jsx_tools():

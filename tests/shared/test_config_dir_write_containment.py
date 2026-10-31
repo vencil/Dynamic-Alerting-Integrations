@@ -45,6 +45,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+import _lib_consumer_read as cr  # noqa: E402  (#3471: the rule-source declaration)
+
 pytestmark = pytest.mark.usefixtures("da_guard_env", "da_crdecode_env")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -58,8 +60,8 @@ RECIPES_REL = Path("rule-packs") / "recipes" / "examples" / "conf.d"
 # top: tools read them only there (mapping rules, routing profiles, policy).
 LIFTED = ("_instance_mapping.yaml", "_routing_profiles.yaml",
           "_domain_policy.yaml")
-# ConfigMap-shaped input for migrate_to_operator's --source-dir.
-SOURCE_CM_GLOB = "k8s/03-monitoring/configmap-rules-*.yaml"
+# ConfigMap-shaped input for migrate_to_operator's --source-dir: a rules
+# ConfigMap as the declaration lists them (#3471).
 
 
 def config_dir_tools(root: Path) -> list[str]:
@@ -247,7 +249,7 @@ def test_a_tool_pointed_elsewhere_does_not_write_into_the_repo(
         f"      {subst['metric']}: '1'\n", encoding="utf-8")
     src = named / "src"
     src.mkdir()
-    shutil.copy2(sorted(repo_copy.glob(SOURCE_CM_GLOB))[0], src)
+    shutil.copy2(cr.CONFIGMAP_RULES.files_under(repo_copy)[0], src)
     if name in SOURCE_DIR_TOOLS:
         args = [sys.executable, str(repo_copy / rel), "--source-dir", str(src)]
     else:

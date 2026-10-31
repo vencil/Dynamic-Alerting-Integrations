@@ -97,8 +97,11 @@ EXEMPT_ORPHANS: dict[str, str] = {
 
 # ── rule-tree + dashboard + observed-map collection ─────────────────────────
 
-T1_GLOB = ("rule-packs", "rule-pack-*.yaml")
-T2_GLOB = ("k8s/03-monitoring", "configmap-rules-*.yaml")
+# #3471: the two trees are the rule-source declaration's entries — their
+# directories and which files there are rule files (.yaml|yml; an undeclared
+# YAML there is named, `SourcesUnlisted`) — not globs of this lint's own.
+T1_SOURCE = _lib_consumer_read.RULE_PACKS
+T2_SOURCE = _lib_consumer_read.CONFIGMAP_RULES
 DASHBOARD_DIRS = ("k8s/03-monitoring",)
 EXTRA_DASHBOARDS = ("try-local/grafana/dashboards/trylocal-home.json",)
 GRAFANA_CM_GLOB = ("k8s/03-monitoring", "configmap-grafana-*.yaml")
@@ -167,14 +170,12 @@ def _rule_files(root: Path) -> list:
     ConfigMap's outer layer the way kubectl reads it) — once per root. A
     rule file the loader refuses raises `RuleFilesRefused` naming it."""
     if root not in _RULE_FILES:
-        t1_dir, t1_pat = T1_GLOB
-        t1_files = sorted((root / t1_dir).glob(t1_pat))
+        t1_files = T1_SOURCE.files_under(root)
         t1 = list(zip((f.name for f in t1_files),
                       _lib_consumer_read.prometheus_rule_file_results(t1_files)))
-        t2_dir, t2_pat = T2_GLOB
         t2 = [(f"{Path(rf.manifest).name}#{rf.key}", rf)
               for rf in _lib_consumer_read.manifest_rule_file_results(
-                  sorted((root / t2_dir).glob(t2_pat))) if rf.kind == "ConfigMap"]
+                  T2_SOURCE.files_under(root)) if rf.kind == "ConfigMap"]
         _lib_consumer_read.require_read([rf for _s, rf in t1 + t2])
         _RULE_FILES[root] = t1 + t2
     return _RULE_FILES[root]

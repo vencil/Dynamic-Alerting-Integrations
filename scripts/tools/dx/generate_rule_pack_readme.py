@@ -31,7 +31,7 @@ from validate_docs_versions import count_rule_packs  # noqa: E402
 # repo). The original default used three (→ the non-existent scripts/rule-packs/),
 # which made both `make generate-rule-pack-readme` and the validate_all `--check`
 # drift gate error out (FileNotFoundError → exit 2): a silently dead gate.
-DEFAULT_RULE_PACKS_DIR = Path(__file__).resolve().parents[3] / "rule-packs"
+DEFAULT_RULE_PACKS_DIR = Path(__file__).resolve().parents[3] / _lib_consumer_read.RULE_PACKS.directory
 
 
 def _rule_counts(groups: list) -> Tuple[int, int]:
@@ -58,8 +58,10 @@ def generate_table_rows(rule_packs_dir: Path) -> Tuple[List[Dict], int, int]:
     # platform rule-pack README table / counts (not platform coverage). Shared
     # exclusion set, consistent with generate_rule_pack_stats.py / validate_docs_versions.py.
     _EXCLUDE = {"custom-alerts"}
-    yaml_files = sorted(f for f in rule_packs_dir.glob("rule-pack-*.yaml")
-                        if f.stem.replace("rule-pack-", "") not in _EXCLUDE)
+    # #3471: the rule packs are the one declaration's (rule-pack-*.yaml|yml;
+    # an undeclared YAML beside them raises `SourcesUnlisted`, named).
+    yaml_files = [f for f in _lib_consumer_read.rule_pack_files(rule_packs_dir)
+                  if _lib_consumer_read.RULE_PACKS.member(f) not in _EXCLUDE]
 
     if not yaml_files:
         raise FileNotFoundError(f"No rule pack YAML files found in {rule_packs_dir}")
@@ -75,7 +77,7 @@ def generate_table_rows(rule_packs_dir: Path) -> Tuple[List[Dict], int, int]:
     rule_files = _lib_consumer_read.prometheus_rule_files(yaml_files)
     for yaml_file, rule_file in zip(yaml_files, rule_files):
         # Extract name from filename: rule-pack-mariadb.yaml -> MariaDB
-        pack_name = yaml_file.stem.replace("rule-pack-", "")
+        pack_name = _lib_consumer_read.RULE_PACKS.member(yaml_file)
         display_name = pack_name.replace("-", " ").title()
 
         # Special cases for acronyms
@@ -252,7 +254,7 @@ def count_preloaded_packs(rule_packs_dir: Path) -> int:
     `--rule-packs-dir` pointed at a detached copy): the `platform` pack lives
     only there, so any number from rule-packs/ alone would be wrong.
     """
-    k8s_rules_dir = rule_packs_dir.parent / "k8s" / "03-monitoring"
+    k8s_rules_dir = rule_packs_dir.parent / _lib_consumer_read.CONFIGMAP_RULES.directory
     # #3276: the shared judgement of a path derived from --rule-packs-dir —
     # one under a parent the caller cannot enter is named, not a traceback.
     problem = classify_path(k8s_rules_dir, "dir", lang="en")

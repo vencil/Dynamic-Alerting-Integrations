@@ -12,7 +12,6 @@ Prometheus loads.
 """
 from __future__ import annotations
 
-import glob
 import os
 from pathlib import Path
 
@@ -120,9 +119,10 @@ def test_a_rule_file_run_that_is_not_a_refusal_is_not_input_refused(tmp_path, st
 
 
 def _repo_rule_files(tmp_path: Path) -> "list[str]":
-    files = sorted(glob.glob(str(REPO / "rule-packs" / "rule-pack-*.yaml")))
+    # #3471: the repo's rule files as the declaration lists them.
+    files = [str(p) for p in cr.RULE_PACKS.files_under(REPO)]
     assert len(files) >= 10, files
-    configmaps = sorted(glob.glob(str(REPO / "k8s" / "03-monitoring" / "configmap-rules-*.yaml")))
+    configmaps = [str(p) for p in cr.CONFIGMAP_RULES.files_under(REPO)]
     assert configmaps
     for cm in configmaps:
         for i, doc in enumerate(cr.kubernetes_documents(cm)):

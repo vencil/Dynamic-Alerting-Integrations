@@ -215,6 +215,11 @@ _ROOT_ONLY_BY_DEFINITION: dict[tuple[str, str], str] = {
         "declaration (#3426, #3438), every other top-level YAML there is "
         "refused by name, and a rules file in a subdirectory rings the "
         "coverage tripwire (lint/_rule_tripwire.py) instead of being read",
+    ("_lib_consumer_read.py", "named_in"):
+        "lists the da-tools image's flat layout (every tool and its data in "
+        "one directory) for the files a RULE_SOURCES entry names as rule "
+        "files (#3471) — repo-shipped rule packs copied beside the tools, "
+        "never a tenant conf.d; nothing below that directory is a rule pack",
     ("_lib_key_verdict.py", "root_platform_files"):
         "asks whether the conf.d ROOT holds any platform (`_`) file — the "
         "`undecidable` switch of the key verdict (ADR-038); a `_` file below "
@@ -517,9 +522,6 @@ FLAT_OUTSIDE_POPULATION: dict[str, str] = {
     "lint/check_chart_ship_surface.py":
         "iterdir over the root of each helm/<chart> the release pipeline "
         "packages — a repo-owned tree, never a tenant conf.d (#1755)",
-    "lint/check_metric_dictionary.py":
-        "globs RULE_PACKS_DIR (rule-packs/) for the alert names and threshold "
-        "readers the dictionary contract checks (issue 1196)",
     "lint/check_orphan_lint.py":
         "globs .github/workflows",
     "lint/check_unpinned_deps.py":
@@ -529,8 +531,6 @@ FLAT_OUTSIDE_POPULATION: dict[str, str] = {
         "_lib_consumer_read.rule_pack_files, #3426)",
     "lint/check_workflow_git_push_permissions.py":
         "globs `--workflows-dir` (.github/workflows)",
-    "ops/inject_metadata_join.py":
-        "globs RULE_PACKS_DIR (rule-packs/)",
 }
 
 

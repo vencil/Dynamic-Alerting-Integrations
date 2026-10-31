@@ -74,6 +74,7 @@ components/threshold-exporter/config/conf.d/db-b.yaml       @vencil
 # ============================================================
 rule-packs/                                 @vencil
 k8s/03-monitoring/configmap-rules-*.yaml    @vencil
+k8s/03-monitoring/configmap-rules-*.yml     @vencil
 
 # ============================================================
 # CI / 工具 / 文件（示意歸屬：Platform Team）

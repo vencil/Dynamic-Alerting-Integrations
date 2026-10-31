@@ -1267,6 +1267,89 @@ class RuleSource(NamedTuple):
     rule_files: "tuple[str, ...]"
     not_rule_files: "tuple[str, ...]"
 
+    # ⛔ #3471: every tool that picks, names or writes a file of this family
+    # goes through these — no tool spells `rule-pack-*.yaml`,
+    # `configmap-rules-` or `da-rule-pack-` itself
+    # (tests/shared/test_rule_source_globs_declared_once.py). Each
+    # ``rule_files`` glob has exactly one ``*``, and they share what comes
+    # before it (tests pin both).
+
+    @property
+    def prefix(self) -> str:
+        """What a rule file name of this source starts with, before the
+        ``*`` of its globs (``rule-pack-``)."""
+        return self.rule_files[0].split("*", 1)[0]
+
+    def member(self, name: "str | os.PathLike[str]") -> "str | None":
+        """What the ``*`` stands for in the file name *name* (a path: its
+        last component) — the pack a rule file carries:
+        ``rule-pack-redis.yml`` → ``redis`` — or None when *name* matches
+        none of ``rule_files`` (``fnmatchcase``, as listing does)."""
+        base = os.path.basename(os.fspath(name))
+        for glob in self.rule_files:
+            head, tail = glob.split("*")
+            if fnmatch.fnmatchcase(base, glob):
+                return base[len(head):len(base) - len(tail)]
+        return None
+
+    def file_name(self, member: str) -> str:
+        """The file name this source declares for *member*, by its first
+        ``rule_files`` glob (``redis`` → ``configmap-rules-redis.yaml``):
+        the name a generator gives the copy it writes, derived from the
+        declaration so that it is a declared rule file. Raises
+        :class:`ValueError` for a *member* that would make no file name of
+        this source, or another member's (a path separator in it)."""
+        name = self.rule_files[0].replace("*", member, 1)
+        if "/" in member or os.sep in member or self.member(name) != member:
+            raise ValueError(f"{member!r} makes no {self.directory} rule file name "
+                             f"({self.rule_files[0]})")
+        return name
+
+    def file_stem(self, member: str) -> str:
+        """``file_name(member)`` without its suffix: the object name a
+        generator gives that copy (``da-rule-pack-redis``)."""
+        name = self.file_name(member)
+        return name[:len(name) - len(self.rule_files[0].split("*")[1])]
+
+    def files_in(self, directory: "str | os.PathLike[str]") -> "list[pathlib.Path]":
+        """This declaration applied to *directory* — any directory: the
+        repo's, a fixture, the da-tools image's flat layout — its rule
+        files, sorted. Raises :class:`SourcesUnlisted` naming every
+        top-level YAML file (any case) that is neither a rule file nor
+        declared beside them, every such entry that is not a regular file,
+        and a directory that cannot be listed (a missing one included). An
+        empty list is returned as such; ``repo_rule_files`` is the reading
+        that refuses an empty source."""
+        return _declared_in(directory, self)
+
+    def files_under(self, repo_root: "str | os.PathLike[str]") -> "list[pathlib.Path]":
+        """``files_in`` of this source's ``directory`` under *repo_root*."""
+        return _declared_in(pathlib.Path(repo_root, self.directory), self)
+
+    def named_in(self, directory: "str | os.PathLike[str]") -> "list[pathlib.Path]":
+        """The top-level entries of *directory* whose name is a rule file
+        name of this source, sorted — nothing else there is judged. For a
+        directory that is NOT this source's own and holds other files by
+        design (the da-tools image's flat layout: every tool and its data
+        side by side); where the directory is the source's, ``files_in``
+        names an undeclared YAML instead of passing over it. A directory
+        that is not there holds none (``[]``); one that cannot be listed,
+        and a matching entry that is no regular file (a dangling symlink),
+        raise :class:`SourcesUnlisted`."""
+        root = pathlib.Path(directory)
+        try:
+            entries = sorted(root.iterdir())
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        except OSError as e:
+            raise SourcesUnlisted([(str(root), f"cannot list this directory: {e.strerror}")]) from e
+        named = [f for f in entries if self.member(f.name) is not None]
+        problems = [(str(f), _not_regular(str(f))) for f in named if not f.is_file()]
+        problems += _same_member(named, self)
+        if problems:
+            raise SourcesUnlisted(problems)
+        return named
+
 
 #: rule-packs/: the source rule packs. ⛔ ``rule_pack_files`` is this entry
 #: applied to any directory: `lint --rule-pack-dir`, `silencer-drift-check
@@ -1372,9 +1455,25 @@ def _declared_in(directory: "str | os.PathLike[str]", source: RuleSource) -> "li
                              else "not a regular file"))
         elif is_rule_file:
             found.append(f)
+    problems += _same_member(found, source)
     if problems:
         raise SourcesUnlisted(problems)
     return found
+
+
+def _same_member(files: "list[pathlib.Path]", source: RuleSource) -> "list[tuple[str, str]]":
+    """Every file of *files* whose member (pack) another one shares —
+    ``rule-pack-redis.yaml`` beside ``rule-pack-redis.yml`` — named with
+    the other (#3471). Every caller keys the files by member, so one of the
+    two would silently replace the other."""
+    by_member: "dict[str, list[pathlib.Path]]" = {}
+    for f in files:
+        by_member.setdefault(source.member(f.name), []).append(f)
+    return [(str(f), "another file of the same " + source.directory + " member "
+             f"{m!r} is beside it ({', '.join(o.name for o in group if o != f)}); "
+             "every reader keys rule files by member, so one would replace the "
+             "other — keep one")
+            for m, group in by_member.items() if len(group) > 1 for f in group]
 
 
 def rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathlib.Path]":
@@ -1384,7 +1483,7 @@ def rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathlib.Path]
     declared beside them, every such entry that is not a regular file (a
     dangling symlink), and a directory that cannot be listed — a declaration
     that does not cover the directory is no answer."""
-    return _declared_in(rule_packs, RULE_PACKS)
+    return RULE_PACKS.files_in(rule_packs)
 
 
 class NoDeclaredRuleFiles(Exception):
@@ -1411,7 +1510,7 @@ def repo_rule_files(repo_root: "str | os.PathLike[str]") -> "list[pathlib.Path]"
     empty = []
     for source in RULE_SOURCES:
         try:
-            files = _declared_in(pathlib.Path(repo_root, source.directory), source)
+            files = source.files_under(repo_root)
         except SourcesUnlisted as e:
             problems += e.files
             continue

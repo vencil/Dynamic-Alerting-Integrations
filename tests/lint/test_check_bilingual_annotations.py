@@ -73,12 +73,22 @@ class TestFindRulePacks:
     def test_finds_rule_packs(self, checker):
         _write_rule_pack(checker.rule_pack_dir, "rule-pack-mariadb.yaml", "groups: []")
         _write_rule_pack(checker.rule_pack_dir, "rule-pack-postgresql.yaml", "groups: []")
-        _write_rule_pack(checker.rule_pack_dir, "other-file.yaml", "groups: []")
+        _write_rule_pack(checker.rule_pack_dir, "rule-pack-redis.yml", "groups: []")
+        _write_rule_pack(checker.rule_pack_dir, "threshold-registry.yaml", "entries: []")
         packs = checker.find_rule_packs()
         names = [p.name for p in packs]
-        assert "rule-pack-mariadb.yaml" in names
-        assert "rule-pack-postgresql.yaml" in names
-        assert "other-file.yaml" not in names
+        assert names == ["rule-pack-mariadb.yaml", "rule-pack-postgresql.yaml",
+                         "rule-pack-redis.yml"]
+
+    def test_undeclared_yaml_is_named(self, checker):
+        """#3471: the packs are the declaration's; a YAML beside them that is
+        neither a pack nor declared is named, not passed over."""
+        import _lib_consumer_read
+        _write_rule_pack(checker.rule_pack_dir, "rule-pack-mariadb.yaml", "groups: []")
+        _write_rule_pack(checker.rule_pack_dir, "other-file.yaml", "groups: []")
+        with pytest.raises(_lib_consumer_read.SourcesUnlisted) as exc:
+            checker.find_rule_packs()
+        assert [p.rsplit("/", 1)[-1] for p, _why in exc.value.files] == ["other-file.yaml"]
 
     def test_filter_only(self, checker):
         _write_rule_pack(checker.rule_pack_dir, "rule-pack-mariadb.yaml", "groups: []")

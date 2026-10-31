@@ -60,6 +60,7 @@ from _lint_helpers import (  # noqa: E402
     parse_build_sh_repo_data_files,
     parse_build_sh_tool_paths,
 )
+import _lib_consumer_read as cr  # noqa: E402  (#3471: the rule-source declaration)
 
 # `/opt/da-tools/x.py` -> parents are (/opt/da-tools, /opt, /). Three.
 IMAGE_ANCESTOR_COUNT = 3
@@ -582,7 +583,7 @@ def test_generate_observed_map_refuses_when_no_pack_is_reachable(
 ):
     """⛔ No packs is a loud rc 2 naming where it looked — never an empty map."""
     flat = staged_image_dir
-    for pack in flat.glob("rule-pack-*.yaml"):
+    for pack in cr.RULE_PACKS.named_in(flat):   # #3471: as the tools find them
         pack.unlink()
     map_path = flat / "metric_observed_map.yaml"
     original = map_path.read_bytes()

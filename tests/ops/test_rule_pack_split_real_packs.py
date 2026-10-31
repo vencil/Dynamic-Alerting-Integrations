@@ -37,10 +37,11 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "too
 sys.path.insert(0, _TOOLS_DIR)
 
 import generate_rule_pack_split as grps  # noqa: E402
+import _lib_consumer_read as cr  # noqa: E402  (#3471: the rule-source declaration)
 
 
 def _load_all_packs():
-    for pack in sorted(_RULE_PACKS.glob("rule-pack-*.yaml")):
+    for pack in cr.RULE_PACKS.files_in(_RULE_PACKS):   # #3471: the declaration
         data = grps.load_rule_pack(str(pack))
         yield pack, data.get("groups", [])
 

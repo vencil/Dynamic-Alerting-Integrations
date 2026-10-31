@@ -46,8 +46,10 @@ from _lib_tenant_values import (  # noqa: E402  (#2115 0-B/B4)
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 
-RULE_PACKS_DIR = REPO_ROOT / "rule-packs"
-K8S_RULES_DIR = REPO_ROOT / "k8s" / "03-monitoring"
+# #3471: where the rule packs and the rules ConfigMaps sit, and which files
+# there are rule files, is the one declaration (`_lib_consumer_read.RULE_SOURCES`).
+RULE_PACKS_DIR = REPO_ROOT / _lib_consumer_read.RULE_PACKS.directory
+K8S_RULES_DIR = REPO_ROOT / _lib_consumer_read.CONFIGMAP_RULES.directory
 OUTPUT_PATH = REPO_ROOT / "docs" / "assets" / "platform-data.json"
 
 # ⛔ The portal's OFFLINE fallback, generated from the same build (#1226 §2).
@@ -185,14 +187,14 @@ def gather_rule_counts() -> dict:
     packs = {}
 
     # rule-packs/ directory
-    pack_files = sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml"))
+    pack_files = _lib_consumer_read.RULE_PACKS.files_in(RULE_PACKS_DIR)
     for f, rf in zip(pack_files, _lib_consumer_read.prometheus_rule_files(pack_files)):
-        name = f.stem.replace("rule-pack-", "")
+        name = _lib_consumer_read.RULE_PACKS.member(f)
         rec, alert = _count(rf.groups)
         packs[name] = {"recording": rec, "alert": alert}
 
     # k8s ConfigMaps (may have additional rules, e.g. platform)
-    cm_files = sorted(K8S_RULES_DIR.glob("configmap-rules-*.yaml"))
+    cm_files = _lib_consumer_read.CONFIGMAP_RULES.files_in(K8S_RULES_DIR)
     per_cm: dict = {str(f): [0, 0] for f in cm_files}
     for rf in _lib_consumer_read.require_read(
             _lib_consumer_read.manifest_rule_file_results(cm_files)):
@@ -201,7 +203,7 @@ def gather_rule_counts() -> dict:
             per_cm[rf.manifest][0] += r
             per_cm[rf.manifest][1] += a
     for f in cm_files:
-        name = f.stem.replace("configmap-rules-", "")
+        name = _lib_consumer_read.CONFIGMAP_RULES.member(f)
         rec, alert = per_cm[str(f)]
         if name not in packs:
             packs[name] = {"recording": rec, "alert": alert}

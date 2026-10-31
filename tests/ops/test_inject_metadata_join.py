@@ -168,3 +168,27 @@ class TestMain:
         # operational was skipped (its name should not appear in any
         # process_file output line)
         assert "rule-pack-operational" not in out
+
+    @pytest.mark.parametrize("suffix", [".yaml", ".yml"])
+    def test_operational_pack_is_left_alone_by_member_not_spelling(
+            self, tmp_path, monkeypatch, capsys, cli_argv, suffix):
+        # #3471: the operational pack is skipped as a member of the one
+        # declaration, so its `.yml` spelling is skipped too — and its
+        # content is one that would otherwise be modified.
+        rp_dir = tmp_path / "rule-packs"
+        rp_dir.mkdir()
+        injectable = (
+            "groups:\n"
+            "  - rules:\n"
+            "      - alert: ConnectionsHigh\n"
+            "        expr: |\n"
+            "          mysql_connections * on(tenant) alert_threshold{key=\"connections\"}\n"
+            "        for: 5m\n"
+        )
+        pack = rp_dir / f"rule-pack-operational{suffix}"
+        pack.write_text(injectable, encoding="utf-8")
+        monkeypatch.setattr(imj, "RULE_PACKS_DIR", str(rp_dir))
+        cli_argv("inject_metadata_join.py")
+        imj.main()
+        assert "Modified 0 Rule Pack files" in capsys.readouterr().out
+        assert pack.read_text(encoding="utf-8") == injectable

@@ -1307,6 +1307,9 @@ PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # GAINED by #3156: tests/dx/test_subprocess_coverage_wiring.py builds a
     # Coverage from the real pyproject.toml to pin `patch = ["_exit"]`.
     "pyproject.toml",
+    # GAINED by #3471: tests/shared/test_rule_source_globs_declared_once.py
+    # holds CODEOWNERS' rule-family globs to the rule-source declaration.
+    ".github/CODEOWNERS",
 }
 
 

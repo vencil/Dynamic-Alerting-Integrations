@@ -196,6 +196,23 @@ def test_main_exit_codes(tmp_path, monkeypatch):
     assert sync.main() == 1
 
 
+def test_main_checks_a_yml_pack_and_names_an_undeclared_yaml(tmp_path, monkeypatch, capsys):
+    """#3471: the packs are the declaration's (rule-pack-*.yaml|yml). A `.yml`
+    source pack used to be passed over by this lint's own glob; its copies
+    are now compared. A YAML beside the packs that is neither a pack nor
+    declared is named, rc 2."""
+    monkeypatch.setattr(sync, "_repo_root", lambda: tmp_path)
+    _write_three_copies(tmp_path, "t", src_op="max", op_op="sum")
+    rp = tmp_path / "rule-packs"
+    (rp / "rule-pack-t.yaml").rename(rp / "rule-pack-t.yml")
+    monkeypatch.setattr(sys, "argv", ["check_rulepack_sync.py", "--ci"])
+    assert sync.main() == 1
+    assert "content differs" in capsys.readouterr().out
+    (rp / "stray.yaml").write_text("groups: []\n", encoding="utf-8")
+    assert sync.main() == 2
+    assert "stray.yaml" in capsys.readouterr().err
+
+
 def test_main_outside_a_scripts_tools_tree_is_a_caller_error(monkeypatch, capsys):
     """#2852: no tree root (the recipe-preview image layout) → rc 2, not a crash.
 

@@ -22,7 +22,11 @@ sys.path.insert(0, str(REPO / "scripts" / "tools" / "lint"))
 
 import _threshold_alerts as ta  # noqa: E402
 
-REPO_PACKS = sorted((REPO / "rule-packs").glob("rule-pack-*.yaml"))
+import _lib_consumer_read as cr  # noqa: E402
+
+# #3471: the repo's rule packs as the declaration lists them — `.yml` too, so
+# the image roster below cannot fail open on a pack this glob would not see.
+REPO_PACKS = cr.RULE_PACKS.files_under(REPO)
 
 
 @pytest.fixture
