@@ -474,7 +474,7 @@ func TestManifestRefusesBadListItems(t *testing.T) {
 	cases := []struct {
 		name, in, wantErr string
 	}{
-		{"item-scalar", head + "- x\n", "in this list, items[1] (line 5): it is not a Kubernetes object: the document is string"},
+		{"item-scalar", head + "- x\n", "in this list, items[1] (line 5): it is not a Kubernetes object: the item is a string, not a mapping (kubectl: cannot unmarshal string into Go value of type map[string]interface {}"},
 		{"item-no-kind", head + "- {apiVersion: v1, metadata: {name: b}}\n", "items[1] (line 5): it is not a Kubernetes object: it has no `kind`"},
 		{"item-kind-number", head + "- {apiVersion: v1, kind: 3}\n", "items[1] (line 5): it is not a Kubernetes object: its `kind` is number"},
 		{"item-no-apiversion", head + "- {kind: ConfigMap}\n",
@@ -498,7 +498,7 @@ func TestManifestRefusesBadListItems(t *testing.T) {
 		{"list-text-differs-items-empty", "kind: List\nmetadata: {labels: {010: x}}\nitems: []\n",
 			"a list document whose own text is not read as written (at .metadata.labels)"},
 		{"second-document", "kind: A\n---\n" + head + "- [x]\n",
-			"the document starting at line 3: in this list, items[1] (line 7): it is not a Kubernetes object: the document is array"},
+			"the document starting at line 3: in this list, items[1] (line 7): it is not a Kubernetes object: the item is an array, not a mapping"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

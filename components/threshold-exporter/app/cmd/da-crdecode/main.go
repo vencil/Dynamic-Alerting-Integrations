@@ -37,9 +37,12 @@
 //     named `items[i] (line N)`, the line left out when it cannot be told.
 //     A list (a document with a top-level `items`: `kind: List`, the output
 //     of `kubectl get … -o yaml`) is replaced by its items, in order, as kubectl
-//     applies them; each item must be an object with a non-empty string
-//     `kind` and `apiVersion`, and a list inside a list is refused, as kubectl
-//     refuses it. A list with content of its own (a `data`, a `spec` beside
+//     applies them. An item with neither a string `kind` nor a string
+//     `apiVersion` takes both from the list, as kubectl's decoding gives them
+//     (the list's kind without its trailing "List", the list's apiVersion),
+//     and is given here with them; then each item must have a non-empty
+//     string `kind` and `apiVersion`. A list inside a list is refused, as
+//     kubectl refuses it. A list with content of its own (a `data`, a `spec` beside
 //     `items`), which kubectl discards without a word, is refused
 //     (manifest.go). So a caller can rely on every entry of `documents`
 //     being an object with a non-empty string `kind`, none of them a list.
@@ -89,7 +92,8 @@
 //	   read as written to compare with the conversion, or — without
 //	   `--any-shape` — a document or a list item is no Kubernetes object (not
 //	   a mapping; no string `kind`, or an empty one; an item without a string
-//	   `apiVersion`), a list holds a list, or a list's own text is not read as
+//	   `kind` or `apiVersion`, once it has taken the list's), a list holds a
+//	   list, or a list's own text is not read as
 //	   written (its items' differences could not be told apart)
 package main
 
