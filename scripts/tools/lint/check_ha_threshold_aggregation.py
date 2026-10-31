@@ -75,17 +75,6 @@ def _repo_root() -> Path:
     return require_project_root(_THIS_DIR)
 
 
-def read_rule_files(rule_packs: List[Path], manifests: List[Path]) -> "list":
-    """Every rule file the targets hold, as Prometheus loads it (#3206,
-    ADR-036 §12): a raw rule pack by Prometheus' rule loader (`da-read
-    prometheus-rules`); a ConfigMap's data values and a PrometheusRule's spec
-    the same way after the manifest is read the way kubectl reads it
-    (`manifest_rule_file_results`). Two da-read runs in all. Refused ones
-    are in the list with their `problem`."""
-    return (_lib_consumer_read.prometheus_rule_file_results(rule_packs)
-            + _lib_consumer_read.manifest_rule_file_results(manifests))
-
-
 def nonmax_aggregations(expr: str) -> List[Tuple[str, str]]:
     """Pure core: return [(operator, excerpt)] for each non-`max` aggregation
     applied directly to `user_threshold` in `expr`. Empty list = HA-safe.
@@ -120,19 +109,17 @@ def check_groups(groups: list) -> List[Tuple[str, str, str]]:
     return findings
 
 
-def check_file(path: Path) -> List[Tuple[str, str, str]]:
-    """`check_groups` over one file: a Kubernetes manifest (a ConfigMap or a
-    PrometheusRule, by its kubectl reading) or else a raw rule pack. Raises
-    `RuleFilesRefused` when Prometheus' rule loader refuses a rule file in it."""
-    try:
-        docs = _lib_consumer_read.kubernetes_documents(str(path))
-    except _lib_consumer_read.InputRefused:
-        docs = []
-    manifest = any(isinstance(d, dict) and d.get("kind") in ("ConfigMap", "PrometheusRule")
-                   for d in docs)
-    rule_files = _lib_consumer_read.require_read(
-        read_rule_files([], [path]) if manifest else read_rule_files([path], []))
-    return [f for rf in rule_files for f in check_groups(rf.groups)]
+def findings_by_file(paths: List[Path]) -> "dict[str, list]":
+    """{str(path): `check_groups` findings} over whatever rule files each of
+    *paths* hands to Prometheus — `_lib_consumer_read.rule_files_in` (#3426):
+    a raw rule pack, a ConfigMap's values, a PrometheusRule's spec, decided
+    by the readers, never by the directory a file sits in. Raises
+    `RuleFileSourcesRefused` when no reader reads a file, `RuleFilesRefused`
+    when Prometheus' rule loader refuses a rule file."""
+    found = _lib_consumer_read.rule_files_in(paths, only_declared=False)
+    _lib_consumer_read.require_read([rf for p in paths for rf in found[str(p)]])
+    return {str(p): [f for rf in found[str(p)] for f in check_groups(rf.groups)]
+            for p in paths}
 
 
 def main() -> int:
@@ -144,7 +131,14 @@ def main() -> int:
 
     repo = _repo_root()
     targets: List[Path] = []
-    targets += sorted((repo / "rule-packs").glob("rule-pack-*.yaml"))
+    try:
+        # #3426: which files in rule-packs/ are rule packs has one
+        # declaration (`rule_pack_files`: rule-pack-*.yaml|yml; an
+        # undeclared YAML there is named) — not a glob of this lint's own.
+        targets += _lib_consumer_read.rule_pack_files(repo / "rule-packs")
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     targets += sorted((repo / "operator-manifests").glob("da-rule-pack-*.yaml"))
     targets += sorted((repo / "k8s" / "03-monitoring").glob("configmap-rules-*.yaml"))
     targets = [t for t in targets if t.exists()]
@@ -152,26 +146,20 @@ def main() -> int:
         print("ERROR: no rule-pack files found", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    packs = [t for t in targets if t.parent.name == "rule-packs"]
-    manifests = [t for t in targets if t.parent.name != "rule-packs"]
     try:
-        rule_files = read_rule_files(packs, manifests)
-    except _lib_consumer_read.ConsumerReadError as exc:
-        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
-        return EXIT_CALLER_ERROR
-    refused = [rf for rf in rule_files if rf.problem is not None]
-    if refused:
+        by_file = findings_by_file(targets)
+    except _lib_consumer_read.RuleFilesRefused as exc:
         # A rule file Prometheus would not load is malformed input — the
         # parse-failure exit this lint always had, now naming each file.
-        for rf in refused:
+        for rf in exc.refused:
             print(f"ERROR: Prometheus' rule loader refuses {rf.path}: {rf.problem}",
                   file=sys.stderr)
         return EXIT_CALLER_ERROR
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
 
     total_violations = 0
-    by_file: "dict[str, list]" = {}
-    for rf in rule_files:
-        by_file.setdefault(rf.manifest or rf.path, []).extend(check_groups(rf.groups))
     for path in targets:
         findings = by_file.get(str(path), [])
         if findings:

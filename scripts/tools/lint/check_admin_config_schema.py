@@ -53,7 +53,8 @@ any of them with PyYAML:
 BINARIES (all fail-closed: one that cannot be found or run is exit 2, never a skip):
   tenant-api   --tenant-api-binary, else $TENANT_API_BINARY, else `tenant-api` on $PATH
   da-crdecode  $DA_CRDECODE_BINARY, else `da-crdecode` on $PATH (run through
-               _lib_consumer_read.kubernetes_documents, the tools' one da-crdecode caller)
+               _lib_consumer_read.any_yaml_documents, the tools' one da-crdecode caller:
+               a Helm values file is no Kubernetes manifest, #3426)
   da-guard     $DA_GUARD_BINARY, else `da-guard` on $PATH
   In a checkout, scripts/ops/with_admin_config_tools.sh builds the unset ones
   (`make tenant-api-build`, `da-crdecode-build`, `da-guard-build`). A tenant-api
@@ -94,7 +95,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 import _lib_parse_tree  # noqa: E402  (ADR-036 §12: _domain_policy.yaml is a conf.d file)
 from _lib_consumer_read import (  # noqa: E402  (ADR-036 §12: the one way to run da-crdecode)
     ConsumerReadError,
-    kubernetes_documents,
+    any_yaml_documents,
     resolve_binary,
 )
 
@@ -209,13 +210,14 @@ def _stderr_text(raw: bytes | None) -> str:
 
 def crdecode_documents(path: str) -> list:
     """The documents of *path* as Kubernetes / Helm read them (sigs.k8s.io/yaml),
-    through `_lib_consumer_read.kubernetes_documents` — the one way the tools
+    through `_lib_consumer_read.any_yaml_documents` (a values file is no
+    Kubernetes manifest; no object shape is required, #3426) — the one way the tools
     run `da-crdecode`. Anything it cannot give (the binary missing or failing,
     a file Helm cannot read as plain YAML, output that is not its JSON) is a
     caller error, exit 2: a registered source must be readable the way Helm
     reads it."""
     try:
-        return kubernetes_documents(path)
+        return any_yaml_documents(path)
     except ConsumerReadError as exc:
         reason = "; ".join(exc.stderr_lines)
         raise _CallerError(

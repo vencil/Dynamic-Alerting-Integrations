@@ -284,7 +284,8 @@ def test_lint_file_configmap_wrapper():
         os.unlink(fpath)
 
 def test_lint_file_empty_file():
-    """測試空檔案不應出錯。"""
+    """#3426 F14：空檔沒有任何物件也沒有 `groups`——比照 kubectl 的
+    「no objects passed to apply」點名為 ERROR，不當成沒有 rule 的檔。"""
     with tempfile.NamedTemporaryFile(
         mode='w', suffix='.yaml', delete=False, encoding='utf-8'
     ) as f:
@@ -295,7 +296,8 @@ def test_lint_file_empty_file():
             fpath, lint_custom_rules.DEFAULT_POLICY
         )
         assert count == 0
-        assert len(results) == 0
+        assert [r.severity for r in results] == ["ERROR"], [str(r) for r in results]
+        assert "no objects passed to apply" in results[0].message
     finally:
         os.unlink(fpath)
 
@@ -727,12 +729,14 @@ def test_lint_result_no_rule_name():
     assert str(r) == "ERROR: test.yaml - msg"
 
 
-# ── Which files are rule files (#3206) ─────────────────────────────
-# A plain file and a ConfigMap data value pass the same test before the rule
-# loader sees them: a document of the Kubernetes reading with a `groups` key
-# (`documents_declare_rule_groups`). A file without one — a recipe, the
-# registry beside the packs — is no rule file and is not read (as on main);
-# a file with one that the loader refuses is an ERROR naming it.
+# ── Which files are rule files (#3206, #3426) ──────────────────────
+# Which files are linted is the caller's declaration, by path: a directory's
+# *.yaml / *.yml less `--exclude` (`_lib_consumer_read.files_to_read`). Every
+# file chosen is read by `_lib_consumer_read.rule_files_in`: a file that is
+# no manifest and no rule file — a recipe, the registry beside the packs, a
+# Chart.yaml — is an ERROR naming it with the `--exclude` hint (#3426 round
+# 4: no content test told them apart from a broken rule file); a rule file
+# the loader refuses is an ERROR naming it.
 
 _RECIPE = "recipe: threshold\nparams:\n  metric: {type: string}\n"
 _REGISTRY = "entries:\n- metric: mysql_up\n  default: 1\n"
@@ -752,18 +756,62 @@ def _run_main(argv, monkeypatch):
     return 0
 
 
-def test_yaml_without_groups_is_no_rule_file(tmp_path, monkeypatch, capsys):
-    """(a) 目錄內的非規則 YAML（無 `groups`）→ 不交給規則載入器、不報錯。"""
+_CHART = "apiVersion: v2\nname: c\nversion: 0.1.0\n"
+
+
+def test_yaml_that_is_no_rule_file_is_named_until_excluded(tmp_path, monkeypatch, capsys):
+    """(a) #3426：目錄內不是 rule file 也不是 manifest 的 YAML（recipe、registry、
+    Chart.yaml）→ 逐檔 ERROR、建議 `--exclude`；以 `--exclude` 排除後通過，
+    被排除的檔不讀。"""
     (tmp_path / "recipes").mkdir()
     (tmp_path / "recipes" / "threshold.yaml").write_text(_RECIPE, encoding="utf-8")
     (tmp_path / "threshold-registry.yaml").write_text(_REGISTRY, encoding="utf-8")
+    (tmp_path / "helm").mkdir()
+    (tmp_path / "helm" / "Chart.yaml").write_text(_CHART, encoding="utf-8")
     (tmp_path / "rules.yaml").write_text(_OK_RULE, encoding="utf-8")
-    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 0
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    errors = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("ERROR")]
+    assert len(errors) == 3, errors
+    for name in ("Chart.yaml", "threshold.yaml", "threshold-registry.yaml"):
+        (line,) = [e for e in errors if f"{name} - " in e]
+        assert "no reader reads it" in line and "--exclude" in line, line
+    seen = []
+    real = lint_custom_rules.read_rule_files
+    monkeypatch.setattr(lint_custom_rules, "read_rule_files",
+                        lambda files: seen.extend(files) or real(files))
+    assert _run_main([str(tmp_path), "--ci", "--exclude", "Chart.yaml", "--exclude",
+                      "recipes/*", "--exclude", "threshold-registry.yaml"], monkeypatch) == 0
+    assert "ERROR" not in capsys.readouterr().out
+    assert seen == [str(tmp_path / "rules.yaml")]   # the excluded ones are not read
+
+
+@pytest.mark.parametrize("name,text,why", [
+    # a rule pack whose `groups` is misspelt: no rule file, never "no rules"
+    ("grups.yaml", "grups:\n- name: g\n  rules: []\n", "it has no `kind`"),
+    # a ConfigMap whose data key lost an indent: a top-level unknown field
+    ("cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata:\n"
+                "rules.yml: |\n  groups: []\n", 'unknown field "rules.yml"'),
+])
+def test_a_file_that_reads_as_no_rule_file_is_an_error(tmp_path, monkeypatch, capsys, name,
+                                                       text, why):
+    (tmp_path / name).write_text(text, encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    errors = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("ERROR")]
+    assert len(errors) == 1 and name in errors[0] and why in errors[0], errors
+
+
+def test_a_prometheusrule_is_linted(tmp_path, monkeypatch, capsys):
+    """#3426 F11: a PrometheusRule's `spec` is a rule file the Operator
+    writes; it used to be passed over (ConfigMaps only)."""
+    (tmp_path / "pr.yaml").write_text(
+        "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata: {name: p}\n"
+        "spec:\n  groups:\n  - name: g\n    rules:\n"
+        "    - {alert: Forecast, expr: 'predict_linear(x[1h], 3600) < 0',"
+        " labels: {tenant: t, severity: warning}}\n", encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
     out = capsys.readouterr().out
-    assert "ERROR" not in out, out
-    results, count = lint_custom_rules.lint_file(
-        str(tmp_path / "recipes" / "threshold.yaml"), lint_custom_rules.DEFAULT_POLICY)
-    assert (results, count) == ([], 0)
+    assert "Scanned 1 file(s), 1 rule(s)." in out, out
+    assert "pr.yaml" in out and "predict_linear" in out, out
 
 
 @pytest.mark.parametrize("text,why", [
@@ -784,7 +832,7 @@ def test_broken_plain_rule_file_is_an_error(tmp_path, monkeypatch, capsys, text,
     bad = tmp_path / "broken.yaml"
     bad.write_text(text, encoding="utf-8")
     (tmp_path / "recipe.yaml").write_text(_RECIPE, encoding="utf-8")
-    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    assert _run_main([str(tmp_path), "--ci", "--exclude", "recipe.yaml"], monkeypatch) == 1
     out = capsys.readouterr().out
     errors = [line for line in out.splitlines() if line.startswith("ERROR")]
     assert len(errors) == 1, errors
@@ -811,9 +859,9 @@ def test_rule_file_kubectl_refuses_but_prometheus_loads_is_linted(tmp_path):
 
 
 def test_repo_rule_packs_pass_the_ci_policy(monkeypatch, capsys):
-    """(c) smoke：repo 真實的 rule-packs/（含 recipes/、threshold-registry.yaml）
-    以 CI 的 policy 跑 --ci → rc 0。"""
-    code = _run_main([os.path.join(_REPO_ROOT, "rule-packs"),
+    """(c) smoke：repo 真實的 rule-packs/ 以 CI 的 policy、CI 的呼叫方式
+    （`--rule-pack-dir`：依 rule_pack_files 的宣告取檔）跑 --ci → rc 0。"""
+    code = _run_main(["--rule-pack-dir", os.path.join(_REPO_ROOT, "rule-packs"),
                       "--policy", _REAL_POLICY, "--ci"], monkeypatch)
     out = capsys.readouterr().out
     assert code == 0, [line for line in out.splitlines() if line.startswith("ERROR")]
@@ -832,3 +880,103 @@ def test_configmap_good_and_broken_rule_values(tmp_path, monkeypatch, capsys):
               if line.startswith("ERROR")]
     assert len(errors) == 1, errors
     assert "cm.yaml" in errors[0] and "'bad.yml'" in errors[0], errors
+
+
+def _cm_list(rule_text: str) -> str:
+    """A `kind: List` (`kubectl get cm -o yaml`) holding one ConfigMap whose
+    `r.yml` is *rule_text*."""
+    body = "".join(f"        {ln}\n" for ln in rule_text.splitlines())
+    return ("apiVersion: v1\nkind: List\nitems:\n- apiVersion: v1\n  kind: ConfigMap\n"
+            "  metadata: {name: listed}\n  data:\n    r.yml: |\n" + body)
+
+
+def test_a_configmap_inside_a_list_is_linted(tmp_path, monkeypatch, capsys):
+    """#3426: the rule files a file holds are `rule_files_in`'s answer, which
+    reads a List as its items — a ConfigMap in one used to be passed over
+    (`read_rule_files(['list.yaml']) == {'list.yaml': []}`)."""
+    lst = tmp_path / "list.yaml"
+    lst.write_text(_cm_list("groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n"),
+                   encoding="utf-8")
+    got = lint_custom_rules.read_rule_files([str(lst)])[str(lst)]
+    assert [(rf.kind, rf.key) for rf in got] == [("ConfigMap", "r.yml")]
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    out = capsys.readouterr().out
+    assert "data key 'r.yml'" in out and "parse error" in out, out
+
+
+# ── #3426 round 3: shapes the API server refuses are named, not read as empty ──
+_PR_TOP_GROUPS = ("apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+                  "metadata: {name: p}\ngroups:\n- name: g\n  rules:\n  - {alert: A, expr: up}\n")
+_CM_DATA_LIST = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\n"
+                 "data:\n- groups: []\n")
+_APIVERSION_NO_KIND = "apiVersion: v1\nmetadata: {name: c}\ndata: {r.yml: 'groups: []'}\n"
+
+
+@pytest.mark.parametrize("text,why", [
+    (_CM_DATA_LIST, "its data is list, not a mapping"),
+    (_APIVERSION_NO_KIND, "it has no `kind`"),
+])
+def test_a_manifest_the_api_server_refuses_is_an_error(tmp_path, monkeypatch, capsys, text, why):
+    """A ConfigMap whose `data` is a list used to be a ConfigMap with no
+    rule files; a manifest with an `apiVersion` but no `kind` used to be
+    other YAML. Both are named now."""
+    (tmp_path / "bad.yaml").write_text(text, encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    out = capsys.readouterr().out
+    errors = [ln for ln in out.splitlines() if ln.startswith("ERROR")]
+    assert len(errors) == 1 and "bad.yaml" in errors[0] and why in errors[0], errors
+
+
+# ── #3426 round 5: --rule-pack-dir, exclude-all, no object ─────────
+
+def _rule_packs_tree(tmp_path):
+    rp = tmp_path / "rule-packs"
+    (rp / "recipes").mkdir(parents=True)
+    (rp / "rule-pack-x.yaml").write_text(_OK_RULE, encoding="utf-8")
+    (rp / "threshold-registry.yaml").write_text(_REGISTRY, encoding="utf-8")
+    (rp / "recipes" / "threshold.yaml").write_text(_RECIPE, encoding="utf-8")
+    return rp
+
+
+def test_rule_pack_dir_lints_the_declared_packs_only(tmp_path, monkeypatch, capsys):
+    """F13: `--rule-pack-dir` takes the packs from `rule_pack_files` (the one
+    declaration) — the registry and recipes/ are not read, with no
+    `--exclude` written anywhere."""
+    rp = _rule_packs_tree(tmp_path)
+    assert _run_main(["--rule-pack-dir", str(rp), "--ci"], monkeypatch) == 0
+    out = capsys.readouterr().out
+    assert "Scanned 1 file(s)" in out and "ERROR" not in out, out
+
+
+def test_rule_pack_dir_names_an_undeclared_yaml(tmp_path, monkeypatch, capsys):
+    rp = _rule_packs_tree(tmp_path)
+    (rp / "extra-pack.YAML").write_text(_OK_RULE, encoding="utf-8")
+    assert _run_main(["--rule-pack-dir", str(rp), "--ci"], monkeypatch) == 2
+    assert "extra-pack.YAML" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("argv", [
+    [],                                              # neither
+    ["{rp}", "--rule-pack-dir", "{rp}"],            # both
+    ["--rule-pack-dir", "{rp}", "--exclude", "x"],  # a pattern beside the declaration
+])
+def test_rule_pack_dir_is_exactly_one_way_to_choose(tmp_path, monkeypatch, argv):
+    rp = _rule_packs_tree(tmp_path)
+    assert _run_main([a.replace("{rp}", str(rp)) for a in argv], monkeypatch) == 2
+
+
+def test_an_exclude_that_leaves_nothing_is_a_caller_error(tmp_path, monkeypatch, capsys):
+    """F16: every file found excluded is no clean run."""
+    (tmp_path / "a.yaml").write_text(_OK_RULE, encoding="utf-8")
+    assert _run_main([str(tmp_path), "--exclude", "*.yaml", "--ci"], monkeypatch) == 2
+    assert "every one excluded" in capsys.readouterr().err
+
+
+def test_a_file_with_no_object_is_an_error(tmp_path, monkeypatch, capsys):
+    """F14: an empty file in a scanned directory is named (kubectl: no
+    objects passed to apply)."""
+    (tmp_path / "rules.yaml").write_text(_OK_RULE, encoding="utf-8")
+    (tmp_path / "empty.yml").write_text("# nothing yet\n", encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    errors = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("ERROR")]
+    assert len(errors) == 1 and "empty.yml" in errors[0] and "no objects" in errors[0], errors

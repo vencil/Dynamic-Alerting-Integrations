@@ -2079,7 +2079,7 @@ from _rule_tree import (  # noqa: E402
     _containers_from_text,
     _decode_manifest,
     _expected_rule_files,
-    _kubernetes_reading,
+    _any_yaml_reading,
     _generated_pack_names,
     _is_platform_cm_location,
     _is_rule_groups,
@@ -3771,11 +3771,11 @@ class TestContainerDiscovery:
         read anything.
         """
         import _lib_consumer_read  # noqa: PLC0415
-        docs, why = _kubernetes_reading("a: [unclosed\n")
+        docs, why = _any_yaml_reading("a: [unclosed\n")
         assert docs is None and why
         monkeypatch.setenv("DA_CRDECODE_BINARY", str(tmp_path / "no-such-binary"))
         with pytest.raises(_lib_consumer_read.ConsumerReadError) as exc_info:
-            _kubernetes_reading("irrelevant: true\n")
+            _any_yaml_reading("irrelevant: true\n")
         assert not isinstance(exc_info.value, _lib_consumer_read.InputRefused)
 
     def test_generator_header_does_not_cross_a_document_boundary(self):

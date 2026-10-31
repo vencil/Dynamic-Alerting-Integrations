@@ -318,8 +318,8 @@ def read_limits(chart: str, values: "list[str]") -> dict:
         raise NotMeasured("the rendered chart could not be read the way kubectl reads it: "
                           + e.detail()) from e
     container = None
-    for doc in rendered:
-        if not isinstance(doc, dict) or doc.get("kind") != "Deployment":
+    for doc in rendered:   # a Kubernetes object: the manifest reading's guarantee (#3426)
+        if doc["kind"] != "Deployment":
             continue
         for c in doc["spec"]["template"]["spec"].get("containers", []):
             if (c.get("args") or [None])[0] == "generator-service":

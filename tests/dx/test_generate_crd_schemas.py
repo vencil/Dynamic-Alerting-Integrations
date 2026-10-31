@@ -124,10 +124,12 @@ def test_the_crd_reader_still_accepts_the_value_tag() -> None:
 def test_the_crd_reader_cannot_construct_python_objects() -> None:
     """#3206: the CRD is read the way kubectl reads it (da-crdecode, JSON
     out), so a Python tag constructs nothing — the reading is plain data. The
-    control beside it is `test_the_crd_reader_still_accepts_the_value_tag`."""
-    payload = "!!python/object/apply:os.system ['true']\n"
+    control beside it is `test_the_crd_reader_still_accepts_the_value_tag`.
+    The tag sits in an object: a CRD file is a manifest, whose documents are
+    Kubernetes objects (#3426) — a bare top-level list is refused."""
+    payload = "kind: CustomResourceDefinition\nx: !!python/object/apply:os.system ['true']\n"
     docs = MODULE._load_crd_docs(payload)
-    assert docs == [["true"]]
+    assert docs == [{"kind": "CustomResourceDefinition", "x": ["true"]}]
 
 
 def test_importing_the_tool_leaves_the_global_safe_loader_alone() -> None:

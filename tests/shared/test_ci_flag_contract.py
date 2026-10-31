@@ -386,7 +386,8 @@ RECIPES: list[Recipe] = [
 
     R("silencer_drift_check",
       lambda t, s: ["--silences-file", _jsc._silences_json(t),
-                    "--rule-source", str(RULE_PACKS)],
+                    # #3426: rule-packs/ read as declared (rule_pack_files)
+                    "--rule-pack-dir", str(RULE_PACKS)],
       note="silence matcher on a nonexistent alertname => orphan; 0 -> 1"),
 
     # --ci only gates PENDING work, which exists only under --dry-run

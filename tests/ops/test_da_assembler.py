@@ -346,14 +346,18 @@ class TestRenderCrFile:
                 f"{ns}/{name}\n# DO NOT EDIT\ntenants: {{}}\n")
     _BAD_SPEC = "spec must be a mapping"
 
+    # #3426: a document that is no Kubernetes object is refused by
+    # da-crdecode's manifest reading itself, with kubectl's reason.
+    _NOT_OBJECT = "it is not a Kubernetes object: the document is"
+
     @pytest.mark.parametrize("text, message", [
-        pytest.param("- kind: ThresholdConfig\n", _NOT_TC,
+        pytest.param("- kind: ThresholdConfig\n", _NOT_OBJECT + " array",
                      id="non-empty-list"),
-        pytest.param("just-a-string\n", _NOT_TC, id="scalar"),
-        pytest.param("42\n", _NOT_TC, id="int"),
+        pytest.param("just-a-string\n", _NOT_OBJECT + " string", id="scalar"),
+        pytest.param("42\n", _NOT_OBJECT + " number", id="int"),
         # #3206: kubectl skips a null document, so the file holds none.
         pytest.param("null\n", "the CR file holds 0 documents", id="null-document"),
-        pytest.param("[]\n", _NOT_TC, id="empty-list"),
+        pytest.param("[]\n", _NOT_OBJECT + " array", id="empty-list"),
         pytest.param("kind: Foo\n", _NOT_TC, id="wrong-kind-control"),
         pytest.param(_K + _T, _BAD_NAME, id="metadata-missing"),
         pytest.param(_K + "metadata: [x]\n" + _T, _BAD_NAME,

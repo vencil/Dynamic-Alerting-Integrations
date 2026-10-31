@@ -1722,7 +1722,8 @@ class TestRulePackCountSharedWithChecker:
         k8s.mkdir(parents=True)
         for name in configmaps:
             (k8s / f"configmap-rules-{name}.yaml").write_text(
-                "kind: ConfigMap\ndata: {}\n", encoding="utf-8")
+                f"kind: ConfigMap\nmetadata: {{name: prometheus-rules-{name}}}\ndata: {{}}\n",
+                encoding="utf-8")
         packs = tmp_path / "rule-packs"
         packs.mkdir()
         return packs, k8s

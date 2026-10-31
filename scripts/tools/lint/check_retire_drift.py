@@ -214,8 +214,8 @@ def namespace_declared_targets(namespaces_file: Path) -> Set[str]:
         raise NamespacesFileError(
             f"{namespaces_file}: cannot be read as kubectl reads it: {exc}",
             exc.stderr_lines) from exc
-    for index, doc in enumerate(documents, start=1):
-        if not isinstance(doc, dict) or doc.get("kind") != "Namespace":
+    for index, doc in enumerate(documents, start=1):   # a Kubernetes object: the manifest reading's guarantee (#3426)
+        if doc["kind"] != "Namespace":
             continue
         metadata = doc.get("metadata")
         labels = metadata.get("labels") if isinstance(metadata, dict) else None

@@ -40,6 +40,7 @@ updated_at: 2026-10-30
 - **2026-10-30 再修訂**：§7 的步驟全部完成，狀態標為已實作；§7 與「實作順序」改寫為現況，刪去「進行中」與「下一步」的敘述；步驟 11 寫明文件裡的 yaml 範例改由單一清冊判定、以 fence 屬性宣告讀者；§3「快取的去留」的結果寫明量測時沒有先做串流輸出；決策不變。
 - **2026-10-30 第三次修訂**：「成本」與「已知限制與風險」的體積數字改為以出貨用的建置（`scripts/ops/go_build.sh`）重量的結果，附量測日期、commit 與指令；先前的數字所用的建置旗標與實際出貨的不同。決策不變。
 - **2026-10-30 第四次修訂**：§7 步驟 9 寫明 `batch_diagnose` 現在把 ConfigMap 落成樹、經共用出口讀取，租戶取 `da-guard effective` 的答案；決策不變。
+- **2026-10-30 第五次修訂**：§12 寫明 `da-crdecode` 的兩種讀法（manifest：每份文件是有 `kind` 的物件、list 換成它的 items；`--any-shape`：只轉換）與輸出的 `reading` 欄；Helm values 那列改為 `--any-shape`；決策不變。
 
 ## 摘要
 
@@ -571,9 +572,9 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 
 | 檔案 | 權威讀者 | Python 端怎麼取得 |
 |---|---|---|
-| Kubernetes manifest | kubectl（sigs.k8s.io/yaml，採 YAML 1.1 的規則） | `da-crdecode` 輸出的 `documents`（以 sigs.k8s.io/yaml 解碼後的 JSON）；一個檔可以有多份文件 |
+| Kubernetes manifest | kubectl（sigs.k8s.io/yaml，採 YAML 1.1 的規則） | `da-crdecode` 輸出的 `documents`（以 sigs.k8s.io/yaml 解碼後的 JSON）；一個檔可以有多份文件，每份都是有 `kind` 的物件，list 換成它的 items（見下方「兩種讀法」） |
 | Alertmanager 設定，包括放在 ConfigMap 裡的 `alertmanager.yml` | Alertmanager 自己的設定載入函式（上游 `config.Load`：以 yaml.v2 解碼進有型別的結構、補上預設值、檢查） | `da-read alertmanager` 印出的 JSON：呼叫同一個載入函式，印出 Alertmanager 載入後的設定，只留原文寫了的鍵（`<<` 合併帶進來的鍵算寫了，照 Alertmanager 的展開方式）：值是 Alertmanager 的讀法，沒寫的鍵、它補上的預設值與從 `global` 帶進來的值不印，密鑰照原值印出。載入函式拒收、或原文寫了的鍵在載入結果裡對不上時，以拒收結束碼結束並點名路徑，不默默略過。`da-read` 是獨立的 Go 模組，不進 exporter 與 tenant-api 的模組；它編進的 Alertmanager 版本與 da-tools 映像裡 `amtool` 的版本相同，由版本釘值測試守住。放在 ConfigMap 裡的是兩層：外層照 Kubernetes 的讀法取出字串，內層的字串從標準輸入交給它 |
-| Helm values 檔 | Helm（sigs.k8s.io/yaml，採 YAML 1.1 的規則） | 同 Kubernetes manifest，`da-crdecode` |
+| Helm values 檔 | Helm（sigs.k8s.io/yaml，採 YAML 1.1 的規則） | `da-crdecode --any-shape`：轉換同 Kubernetes manifest，但 values 不是 Kubernetes 物件，不要求形狀 |
 | Prometheus 規則檔 | Prometheus 自己的載入函式（上游 `rulefmt.Parse`）。vmalert 也讀同一批規則檔，但權威讀法以 rulefmt 為準 | `da-read prometheus-rules`，做法與 Alertmanager 那列相同。多份文件也比照 Alertmanager：`rulefmt.Parse` 只讀第一份文件，後面的文件 Prometheus 不載入（只記一行警告），所以第一份之後還有內容的文件，`da-read prometheus-rules` 拒收並點名，不默默略過。`da-read` 模組編進的 Prometheus 版本與部署的 Prometheus 映像（`k8s/03-monitoring/deployment-prometheus.yaml`）相同，由版本釘值測試守住，與 exporter 拿來解析 PromQL 的版本互不牽動。vmalert 讀不讀得了這些檔不由 `da-read` 判，交給 CI 既有的 vmalert-tool 測試（`tests/rulepacks/test_vm_alert_parity.py`；見 [VictoriaMetrics 整合指南](../integration/victoriametrics-integration.md) §3.1）。它涵蓋的是 rule pack 的 promtool 單元測試案例與它們引用的規則檔，以 vmalert 的引擎跑；部署中不在這些案例裡的規則檔不在它的範圍內 |
 | Prometheus 設定（`prometheus.yml`） | Prometheus（上游 `config.Load`） | `da-read prometheus`，做法與 Alertmanager 那列相同：只留原文寫了的鍵，載入函式拒收或原文寫了的鍵對不上時以拒收結束碼結束並點名路徑；放在 ConfigMap 裡的照同樣的兩層讀法。呼叫 `config.Load` 之前，與 Prometheus 本身一樣匯入上游的 `discovery/install`，註冊所有內建的服務探索設定型別，否則 `kubernetes_sd_configs` 這類欄位會被拒收。在同一個 `da-read` 模組裡，版本同規則檔那列，由同一個版本釘值測試守住。代價是 da-tools 映像多帶服務探索的依賴（各家雲端 SDK 與 Kubernetes client，見「已知限制與風險」） |
 | tenant-api 的狀態紀錄（群組、視圖、聯邦白名單與子集合、AccountID 帳本） | tenant-api 每種紀錄的解析函式：先經 `parse-tree` 的判定，再解碼進有型別的結構，最後是該紀錄自己的檢查（§2） | `tenant-api state show` 印出的 JSON（見下） |
@@ -584,6 +585,26 @@ da-guard 新增 `parse-tree`，不再判斷路由與 policy，交給產生器的
 範例：Kubernetes manifest 裡的 `name: no`，kubectl 讀成布林 `false`，`parse-tree` 讀成字串 `"no"`。以 yaml.v3 的讀法判斷這份 manifest，就與真正套用它的 kubectl 意思不同；所以問 sigs.k8s.io/yaml。
 
 範例：Alertmanager 設定裡的 `match: {tenant: 010}`，Alertmanager 的載入函式解碼成字串 `"010"`（欄位是字串，yaml.v2 取原文）；以 Kubernetes 的讀法（`da-crdecode`）會得到數字 `8`（YAML 1.1 把開頭是 0 的數字當八進位）。同一段文字，兩個消費者的讀法不同，所以先看檔案由誰讀。反過來，Namespace 的 label `instance: 010` 在 Kubernetes 的讀法是數字 `8`，而 label 只收字串，kubectl 套用時會拒收；讀它的 lint 把這種值報成錯誤，不取原文。
+
+**`da-crdecode` 的兩種讀法**：同一個轉換（sigs.k8s.io/yaml，照 `kubectl apply -f` 切文件），差在對每份文件的形狀要求什麼。
+
+- **manifest（預設）**：讀 Kubernetes manifest，與 kubectl 套用時一樣要求形狀。每份文件必須是 mapping，且 `kind` 是非空字串；不是就以結束碼 2 拒收，stderr 寫出 kubectl 的理由；檔案有多份文件時另寫出被拒那份的起始行（單一文件的檔不帶行號），被拒的是 list 的 item 時寫成 `items[i] (line N)`。有頂層 `items` 的文件是 list（`kind: List`，也就是 `kubectl get … -o yaml` 的輸出），照 kubectl 換成它的 items、依序輸出，list 本身不輸出；每個 item 必須是 `apiVersion` 與 `kind` 都是非空字串的物件，item 本身又是 list 時拒收（kubectl 也拒收）。所以呼叫端拿到的每份文件都是有 `kind` 的物件、不是 list，不需要、也不應該再以型別判斷略過文件。每份輸出文件各有一份 `differs_from_text`，item 的路徑從 item 算起；list 外層（items 以外）的原文與讀法不同時，差異無法歸給任何 item，整份拒收，不讓差異遺失。
+- **`--any-shape`**：讀不是 manifest 的 YAML：Helm values、`Chart.yaml`、單獨的 rule file、ConfigMap 裡的字串值。只做轉換、切文件與原文比對，不要求文件的形狀。
+
+輸出另帶 `reading` 欄（`manifest` 或 `any-shape`），寫明這份輸出是哪一種讀法。呼叫端依賴 manifest 讀法的形狀保證，舊版的 `da-crdecode` 沒有這個保證也不印這個欄位；Python 端拿到的 `reading` 不是它要的那一種時，當成讀不到，不當成文件。Python 端兩種讀法是兩組函式名稱（`kubernetes_*` 與 `any_yaml_*`），每個呼叫點依它讀的是什麼檔選一組。
+
+範例：
+
+```text
+$ da-crdecode list.yaml          # kind: List，兩個 ConfigMap
+{"documents":[{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"a","labels":{"instance":8}}},{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"b"}}],"differs_from_text":[[],[]],"reading":"manifest"}
+$ da-crdecode bad.yaml           # kind: List，item 沒有 apiVersion
+da-crdecode: bad.yaml: in this list, items[0] (line 4): it is not a Kubernetes object: it has no `apiVersion` (kubectl: Object 'apiVersion' is missing)
+$ da-crdecode values.yaml        # replicaCount: 1
+da-crdecode: values.yaml: it is not a Kubernetes object: it has no `kind` (kubectl: Object 'Kind' is missing)
+$ da-crdecode --any-shape values.yaml
+{"documents":[{"replicaCount":1}],"differs_from_text":[[]],"reading":"any-shape"}
+```
 
 **`tenant-api state show [--from FILE|DIR|-]`**：不帶 `--from` 時讀 server 設定的 state store（以與 server 相同的旗標與環境變數選擇）；帶 `--from` 時讀備份，格式與 `state restore` 收的相同（`kubectl get configmap tenant-api-state -o yaml` 的輸出或 state 目錄，`-` 是標準輸入），這時不需要 store 的設定。它讀 store 裡的位元組，交給 server 用的同一組解析函式，不讀執行中 server 的熱重載快照：熱重載失敗時 server 保留上一版，讀快照會把壞掉的紀錄藏起來。store 以唯讀開啟，state 目錄或 ConfigMap 不存在算讀不到，不當成空的 store。Helm chart 以環境變數（`TA_STATE_STORE`、`TA_STATE_CONFIGMAP`、`TA_IDENTITY_CLAIM_HEADERS` 等）而不是容器參數傳這些設定，以 `kubectl exec` 在 pod 裡跑的子命令才會拿到與 server 相同的設定。輸出是一份 JSON：`schema` 是 `tenant-api.state-show/v1`，`tenant_api_version` 是印出它的 tenant-api 版本，`records` 每筆有 `key`、`record`（解碼結果，欄位名與紀錄的 YAML 相同）與 `problem`（`kind` 與 `message`），`record` 與 `problem` 恰有一個不是 null。`problem.kind` 是 `unreadable`（`parse-tree` 判為讀不了，`message` 是它的說明）或 `rejected`（解碼或該紀錄的檢查拒收）。store 裡沒有的紀錄不列，等於空，與 server 相同。
 

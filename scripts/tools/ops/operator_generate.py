@@ -515,7 +515,10 @@ def discover_rule_packs(rule_packs_dir: Path) -> List[Path]:
                 f"rule-packs directory not found: {rule_packs_dir}",
             )
         )
-    return sorted(rule_packs_dir.glob("rule-pack-*.yaml"))
+    # #3426: the one declaration of what in a rule-packs directory is a rule
+    # pack (rule-pack-*.yaml|yml; an undeclared YAML there raises
+    # `SourcesUnlisted`, a ConsumerReadError: `main` stops at rc 2 naming it).
+    return _lib_consumer_read.rule_pack_files(rule_packs_dir)
 
 
 def validate_tenant_name(name: str) -> bool:

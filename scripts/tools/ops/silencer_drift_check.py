@@ -19,8 +19,11 @@ Design choices (per issue #405 Category B):
     auth-proxy-walled environments without network access.
   - Same shape as `da-parser` / `da-guard`: file-in, structured-out.
   - Matches against a `--rule-source` path (file or directory of YAML).
-    Recursively scans .yaml/.yml; ignores files without a `groups:` root
-    (e.g. tenant `_defaults.yaml` is silently skipped).
+    Recursively scans .yaml/.yml, less the files `--exclude GLOB` names
+    (#3426). Every other file must read as a rule file or a Kubernetes
+    manifest; one that does not (a tenant `_defaults.yaml`, a Chart.yaml,
+    `grups:`) is named and the run exits 2 — nothing is skipped because
+    of its content.
 
 Matcher semantics (Alertmanager / amtool):
     matcher = {name, value, isEqual, isRegex}
@@ -50,20 +53,21 @@ Coverage reporting:
 Usage:
     amtool silence query -o json --alertmanager.url=... > silences.json
     da-tools silencer-drift-check --silences-file silences.json \\
-        --rule-source rule-packs/
+        --rule-pack-dir rule-packs/
 
     # CI gate (exit 1 on orphans)
     da-tools silencer-drift-check --silences-file s.json \\
-        --rule-source rule-packs/ --ci
+        --rule-pack-dir rule-packs/ --ci
 
     # Machine-readable
     da-tools silencer-drift-check --silences-file s.json \\
-        --rule-source rule-packs/ --json
+        --rule-pack-dir rule-packs/ --json
 
 Exit codes:
     0  no orphaned silences (or orphans present but --ci not set)
     1  --ci mode detected orphaned silences
-    2  caller error (file missing, parse failure, bad arg)
+    2  caller error (file missing, parse failure, bad arg, a rule-source
+       file that cannot be read — the report is still printed)
 
 Malformed-silence handling:
     Silences with empty matchers or matchers missing the `name` field
@@ -166,18 +170,11 @@ def load_silences(path: Path) -> list[dict] | None:
     return data
 
 
-def _yaml_files_in(source: Path) -> list[Path]:
-    """Enumerate .yaml/.yml files at source (file or dir, recursive)."""
-    if source.is_file():
-        return [source]
-    if source.is_dir():
-        return sorted(
-            [
-                *source.rglob("*.yaml"),
-                *source.rglob("*.yml"),
-            ]
-        )
-    return []
+def _yaml_files_in(source: Path, exclude: "list[str] | tuple[str, ...]" = ()) -> list[Path]:
+    """The files of the rule source: `_lib_consumer_read.files_to_read`
+    (#3426) — a file as given, a directory's .yaml / .yml recursively, less
+    the ones an `--exclude` pattern matches."""
+    return [Path(f) for f in _lib_consumer_read.files_to_read([source], exclude)]
 
 
 def extract_alerts_from_pack(pack: dict, source_path: str) -> list[dict]:
@@ -221,37 +218,41 @@ def extract_alerts_from_pack(pack: dict, source_path: str) -> list[dict]:
     return alerts
 
 
-def load_alerts(rule_source: Path) -> tuple[list[dict], list[str]]:
-    """Load all alerts from a rule-source path. Returns (alerts, errors).
+def load_alerts(rule_source: Path,
+                exclude: "list[str] | tuple[str, ...]" = (), *,
+                rule_pack_dir: bool = False) -> tuple[list[dict], list[str]]:
+    """Load all alerts from a rule-source path, less the files *exclude*
+    leaves out — or, with *rule_pack_dir*, from the rule packs the
+    directory *rule_source* declares (`_lib_consumer_read.rule_pack_files`,
+    #3426). Returns (alerts, errors).
     Raises ``_lib_consumer_read.ConsumerReadError`` when da-read /
-    da-crdecode cannot be had."""
+    da-crdecode cannot be had, and its ``InputRefused`` when the files
+    cannot be chosen (an undeclared YAML beside the packs, a dangling
+    symlink, an `--exclude` that leaves nothing)."""
     errors: list[str] = []
-    files = _yaml_files_in(rule_source)
+    files = ([Path(f) for f in _lib_consumer_read.rule_pack_files(rule_source)]
+             if rule_pack_dir else _yaml_files_in(rule_source, exclude))
     if not files:
         return [], [f"no YAML files found at {rule_source}"]
 
-    # #3206 (ADR-036 §12): a file is a rule file when its Kubernetes reading
-    # (da-crdecode, a plain YAML reading) is a mapping with `groups:` — other
-    # YAML here (tenant `_defaults.yaml`, inventory lists) is skipped
-    # silently, as before. Each rule file is then read the way Prometheus'
-    # rule loader reads it (`da-read prometheus-rules`, one run for all); a
-    # file the loader refuses is an error naming it, with the loader's reason.
+    # #3206 (ADR-036 §12) / #3426: which rule files a file holds is
+    # `_lib_consumer_read.rule_files_in`'s answer — a plain rule file, a
+    # ConfigMap's or PrometheusRule's rule files (a `kind: List` read as its
+    # items); a manifest of other kinds holds none. Every file not excluded
+    # is meant to be read: one that is neither a manifest nor a rule file
+    # (tenant `_defaults.yaml`, say), and a rule file Prometheus' rule
+    # loader refuses, is an error naming it with the reason.
     alerts: list[dict] = []
-    rule_files: list[Path] = []
+    found = _lib_consumer_read.rule_files_in(files, keep_refusals=True)
     for f in files:
-        try:
-            docs = _lib_consumer_read.kubernetes_documents(str(f))
-        except _lib_consumer_read.InputRefused as exc:
-            errors.append(f"invalid YAML in {f}: {'; '.join(exc.stderr_lines) or exc}")
-            continue
-        if docs and isinstance(docs[0], dict) and "groups" in docs[0]:
-            rule_files.append(f)
-    for f, rule_file in zip(rule_files,
-                            _lib_consumer_read.prometheus_rule_file_results(rule_files)):
-        if rule_file.problem is not None:
-            errors.append(f"Prometheus' rule loader refuses {f}: {rule_file.problem}")
-            continue
-        alerts.extend(extract_alerts_from_pack(rule_file.documents[0], source_path=str(f)))
+        for rf in found[str(f)]:
+            if rf.unread:
+                errors.append(f"{f}: no reader reads it as a manifest or a rule file: "
+                              f"{rf.problem} ({_lib_consumer_read.EXCLUDE_HINT})")
+            elif rf.problem is not None:
+                errors.append(f"Prometheus' rule loader refuses {rf.path}: {rf.problem}")
+            else:
+                alerts.extend(extract_alerts_from_pack(rf.documents[0], source_path=rf.path))
     return alerts, errors
 
 
@@ -633,11 +634,11 @@ def main(argv: list[str] | None = None) -> int:
             "\n"
             "  # Offline drift check\n"
             "  da-tools silencer-drift-check --silences-file silences.json \\\n"
-            "      --rule-source rule-packs/\n"
+            "      --rule-pack-dir rule-packs/\n"
             "\n"
             "  # CI gate (exit 1 on orphans)\n"
             "  da-tools silencer-drift-check --silences-file silences.json \\\n"
-            "      --rule-source rule-packs/ --ci\n"
+            "      --rule-pack-dir rule-packs/ --ci\n"
         ),
     )
     ap.add_argument(
@@ -647,10 +648,35 @@ def main(argv: list[str] | None = None) -> int:
     )
     ap.add_argument(
         "--rule-source",
-        required=True,
+        default=None,
         help=(
             "Path to a rule pack YAML file, or a directory containing "
-            "rule pack YAML files (scanned recursively for .yaml/.yml)."
+            "rule pack YAML files (scanned recursively for .yaml/.yml). "
+            "This or --rule-pack-dir is required."
+        ),
+    )
+    ap.add_argument(
+        "--rule-pack-dir",
+        default=None,
+        metavar="DIR",
+        help=(
+            "Read the rule packs of a rule-packs directory as declared "
+            "(rule-pack-*.yaml|yml at its top level; the registry beside "
+            "them is declared too, any other YAML there exits 2). Instead "
+            "of --rule-source; not with --exclude."
+        ),
+    )
+    ap.add_argument(
+        "--exclude",
+        action="append",
+        default=[],
+        metavar="GLOB",
+        help=(
+            "Leave out rule-source files this glob matches (repeatable; not "
+            "read). A GLOB without '/' matches the file name at any depth; "
+            "one with '/' the path relative to --rule-source (fnmatch, "
+            "case-sensitive, '*' crosses '/'). Every other file must be a "
+            "rule file or a Kubernetes manifest, or the run exits 2."
         ),
     )
     ap.add_argument(
@@ -679,17 +705,31 @@ def main(argv: list[str] | None = None) -> int:
     if args.json:
         arm_crash_envelope()  # #3094: a crash in --json mode still prints one envelope
 
+    if (args.rule_source is None) == (args.rule_pack_dir is None):
+        print("ERROR: give --rule-source or --rule-pack-dir (exactly one of them)",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    if args.rule_pack_dir is not None and args.exclude:
+        print("ERROR: --exclude does not go with --rule-pack-dir: the rule packs are "
+              "declared by _lib_consumer_read.rule_pack_files, not by patterns",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
     silences_path = Path(args.silences_file)
-    rule_source = Path(args.rule_source)
+    by_declaration = args.rule_pack_dir is not None
+    rule_source = Path(args.rule_pack_dir if by_declaration else args.rule_source)
 
     silences = load_silences(silences_path)
     if silences is None:
         return EXIT_CALLER_ERROR
 
-    require_path(rule_source, "any", lang="en", flag="--rule-source")  # #3276
+    if by_declaration:
+        require_path(rule_source, "dir", lang="en", flag="--rule-pack-dir")
+    else:
+        require_path(rule_source, "any", lang="en", flag="--rule-source")  # #3276
 
     try:
-        alerts, errors = load_alerts(rule_source)
+        alerts, errors = load_alerts(rule_source, args.exclude,
+                                     rule_pack_dir=by_declaration)
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
@@ -715,6 +755,13 @@ def main(argv: list[str] | None = None) -> int:
             errors=errors,
         )
 
+    if errors:
+        # #3426: a rule-source file that could not be read is a source left
+        # out of the check — the report above is printed, but the run is no
+        # clean one, with or without --ci (rc 2, each file named above).
+        print(f"ERROR: {len(errors)} rule-source file(s) could not be read; "
+              "the report above leaves them out", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     return compute_exit_code(report, ci=args.ci)
 
 

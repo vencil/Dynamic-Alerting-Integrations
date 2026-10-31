@@ -22,10 +22,19 @@ kube-state-metrics Deployment's allowlist includes `app.kubernetes.io/version`.
 Two layers, complementary: static (this) catches wrong-allowlist before deploy;
 runtime sentinel catches no-allowlist in the live cluster.
 
+Which files: every `*.yaml` under k8s/ is read the way kubectl reads it
+(da-crdecode, one batch; #3426), and a KSM Deployment is a `kind: Deployment`
+of that reading (a `kind: List`'s items included, as kubectl applies them)
+with a container whose `image` names kube-state-metrics. The
+raw text decides nothing: a file that mentions the image only in a comment
+is no KSM Deployment, and a file kubectl's reading refuses is named (rc 2)
+rather than passed over.
+
 Exit codes:
     0  every KSM deployment allowlists app.kubernetes.io/version
     1  a KSM deployment is missing it (--ci)
-    2  error (YAML parse / no KSM deployment found)
+    2  error (a k8s/ file kubectl's reading refuses — each named —, no
+       da-crdecode, or no KSM Deployment in kubectl's reading of k8s/)
 
 Usage:
     python scripts/tools/lint/check_ksm_version_allowlist.py        # report
@@ -61,15 +70,6 @@ def _repo_root() -> Path:
     return require_project_root(_THIS_DIR)
 
 
-def _iter_docs(path: Path):
-    """Yield every document (manifests are often multi-doc), as kubectl reads
-    the file (da-crdecode). Raises ConsumerReadError when that reading cannot
-    be had."""
-    for doc in _lib_consumer_read.kubernetes_documents(str(path)):
-        if isinstance(doc, dict):
-            yield doc
-
-
 def ksm_allowlist_ok(args: List[str]) -> Tuple[bool, str]:
     """Pure core: given a KSM container's args, is app.kubernetes.io/version
     allowlisted for pods? Returns (ok, reason)."""
@@ -85,36 +85,60 @@ def ksm_allowlist_ok(args: List[str]) -> Tuple[bool, str]:
     return True, "ok"
 
 
-def check_file(path: Path) -> List[Tuple[str, str]]:
-    """Return [(deployment_name, reason)] for KSM deployments missing the label.
-    Empty list = no KSM deployment here, or all compliant."""
-    findings: List[Tuple[str, str]] = []
-    for doc in _iter_docs(path):
-        if doc.get("kind") != "Deployment":
+def ksm_containers(docs: list) -> List[Tuple[str, dict]]:
+    """[(deployment_name, container)] for every kube-state-metrics container
+    of a `kind: Deployment` in *docs* — kubectl's reading of one file, every
+    document a Kubernetes object (`kubernetes_documents`' guarantee)."""
+    out: List[Tuple[str, dict]] = []
+    for doc in docs:
+        if doc["kind"] != "Deployment":
             continue
         spec = (((doc.get("spec") or {}).get("template") or {}).get("spec") or {})
-        containers = spec.get("containers") or []
-        for c in containers:
-            if _KSM_IMAGE not in str(c.get("image", "")):
-                continue
-            ok, reason = ksm_allowlist_ok(c.get("args") or [])
-            if not ok:
-                name = (doc.get("metadata") or {}).get("name", "?")
-                findings.append((name, reason))
+        for c in spec.get("containers") or []:
+            if isinstance(c, dict) and _KSM_IMAGE in str(c.get("image", "")):
+                out.append(((doc.get("metadata") or {}).get("name", "?"), c))
+    return out
+
+
+def check_docs(docs: list) -> List[Tuple[str, str]]:
+    """Return [(deployment_name, reason)] for KSM deployments in *docs*
+    missing the label. Empty list = no KSM deployment here, or all
+    compliant."""
+    findings: List[Tuple[str, str]] = []
+    for name, c in ksm_containers(docs):
+        ok, reason = ksm_allowlist_ok(c.get("args") or [])
+        if not ok:
+            findings.append((name, reason))
     return findings
 
 
-def _ksm_deployment_files(repo: Path) -> List[Path]:
-    """Manifests that define a kube-state-metrics Deployment."""
-    out: List[Path] = []
-    for path in sorted((repo / "k8s").rglob("*.yaml")):
-        try:
-            text = path.read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError):
-            continue
-        if _KSM_IMAGE in text and "kind: Deployment" in text:
-            out.append(path)
-    return out
+def check_file(path: Path) -> List[Tuple[str, str]]:
+    """`check_docs` of kubectl's reading of *path*. Raises ConsumerReadError
+    when that reading cannot be had (a refusal included)."""
+    return check_docs(_lib_consumer_read.kubernetes_documents(str(path)))
+
+
+def read_k8s_tree(repo: Path) -> "dict[Path, list]":
+    """kubectl's reading of every `*.yaml` under *repo*/k8s, one batch.
+    Raises :class:`ReadRefused` naming every file that reading refuses, and
+    ConsumerReadError when there is no reading to be had (no da-crdecode)."""
+    paths = sorted((repo / "k8s").rglob("*.yaml"))
+    read = _lib_consumer_read.kubernetes_documents_of(paths, keep_refusals=True)
+    refused = [(p, read[str(p)]) for p in paths
+               if isinstance(read[str(p)], _lib_consumer_read.ConsumerReadError)]
+    if refused:
+        raise ReadRefused(refused)
+    return {p: read[str(p)] for p in paths}
+
+
+class ReadRefused(Exception):
+    """k8s/ files kubectl's reading refuses: ``refused`` is
+    ``[(path, InputRefused)]``. Not one of them is passed over: a KSM
+    Deployment in a file nobody reads is a Deployment this lint never saw."""
+
+    def __init__(self, refused: "list[tuple[Path, Exception]]") -> None:
+        super().__init__(f"{len(refused)} file(s) under k8s/ that kubectl's reading refuses")
+        self.refused = refused
 
 
 def main() -> int:
@@ -125,23 +149,31 @@ def main() -> int:
     args = parser.parse_args()
 
     repo = _repo_root()
-    targets = _ksm_deployment_files(repo)
-    if not targets:
-        print("ERROR: no kube-state-metrics Deployment manifest found under k8s/",
-              file=sys.stderr)
-        return EXIT_CALLER_ERROR
-
-    violations = 0
     try:
-        for path in targets:
-            for name, reason in check_file(path):
-                violations += 1
-                print(f"  ❌ {path.relative_to(repo)} [{name}]: {reason}")
+        tree = read_k8s_tree(repo)
+    except ReadRefused as exc:
+        print(f"ERROR: {exc}; a KSM Deployment in one would never be checked:",
+              file=sys.stderr)
+        for path, err in exc.refused:
+            print(f"  {path.relative_to(repo)}: {err.detail()}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: cannot read a manifest the way kubectl does: {exc}", file=sys.stderr)
         for line in exc.stderr_lines:
             print(f"  {line}", file=sys.stderr)
         return EXIT_CALLER_ERROR
+    targets = [path for path, docs in tree.items() if ksm_containers(docs)]
+    if not targets:
+        print("ERROR: no kube-state-metrics Deployment under k8s/ in kubectl's reading "
+              "(a `kind: Deployment` with a container image naming kube-state-metrics)",
+              file=sys.stderr)
+        return EXIT_CALLER_ERROR
+
+    violations = 0
+    for path in targets:
+        for name, reason in check_docs(tree[path]):
+            violations += 1
+            print(f"  ❌ {path.relative_to(repo)} [{name}]: {reason}")
 
     if violations:
         print(f"\n❌ {violations} kube-state-metrics Deployment(s) do not allowlist "

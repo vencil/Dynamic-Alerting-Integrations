@@ -8,6 +8,8 @@ import os
 import tempfile
 
 import pytest
+
+from _platform_fs import symlink_or_skip  # noqa: E402
 import yaml
 
 from factories import make_am_config, make_am_receiver, write_yaml
@@ -64,6 +66,7 @@ class TestParseAlertmanagerConfig:
             "receivers": [{"name": "default"}],
         })
         path = write_yaml(config_dir, "cm.yaml", yaml.dump({
+            "apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "am"},
             "data": {"alertmanager.yml": inner},
         }))
         result = parse_alertmanager_config(path)
@@ -1095,6 +1098,7 @@ class TestParseScrapeConfigs:
         """ConfigMap 包裝的抓取設定正確解析。"""
         inner = yaml.dump({"scrape_configs": [{"job_name": "kubelet"}]})
         path = write_yaml(config_dir, "cm.yaml", yaml.dump({
+            "apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "prom"},
             "data": {"prometheus.yml": inner},
         }))
         result = parse_scrape_configs(path)
@@ -1415,3 +1419,113 @@ class TestConfdThroughDaGuardWrite:
         err = capsys.readouterr().err
         assert "phase1-routing/tenant-a.yaml" in err and "group_wait" in err, err
         assert not out.exists() or not any(out.rglob("*"))
+
+
+
+def test_read_rule_files_names_a_manifest_without_kind(tmp_path):
+    """#3426 round 3: a file with an `apiVersion` but no `kind` sets out to
+    be a Kubernetes object; kubectl's reason is the error, not "No 'groups'
+    found" (it used to be taken for other YAML)."""
+    from onboard_platform import _read_rule_files
+    p = tmp_path / "cm.yaml"
+    p.write_text("apiVersion: v1\nmetadata: {name: c}\ndata: {r.yml: 'groups: []'}\n",
+                 encoding="utf-8")
+    ((path, groups, error),) = _read_rule_files([str(p)])
+    assert path == str(p) and groups is None
+    assert "it has no `kind`" in error and "No 'groups'" not in error, error
+
+
+_ONBOARD_RULES = ("groups:\n- name: g\n  rules:\n"
+                  "  - {alert: HighConn, expr: 'mysql_connections > 80',"
+                  " labels: {severity: warning}}\n")
+
+
+def _onboard_rules(monkeypatch, argv):
+    import onboard_platform as op
+    monkeypatch.setattr("sys.argv", ["onboard_platform.py", "--dry-run", *argv])
+    with pytest.raises(SystemExit) as exc_info:
+        op.main()
+    return exc_info.value.code
+
+
+def test_rule_files_dir_with_a_chart_is_named_until_excluded(tmp_path, monkeypatch, capsys):
+    """#3426: `--rule-files <dir>` walks *.yaml / *.yml; a Chart.yaml there is
+    no rule file and no manifest — named with the `--exclude` hint, rc 2;
+    `--exclude Chart.yaml` leaves it out and the run passes."""
+    rules = tmp_path / "rules"
+    (rules / "helm").mkdir(parents=True)
+    (rules / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    (rules / "helm" / "Chart.yaml").write_text("apiVersion: v2\nname: c\nversion: 0.1.0\n",
+                                               encoding="utf-8")
+    argv = ["--rule-files", str(rules), "-o", str(tmp_path / "out")]
+    assert _onboard_rules(monkeypatch, argv) == 2
+    err = capsys.readouterr().err
+    assert "Chart.yaml" in err and "--exclude" in err and "it has no `kind`" in err, err
+    assert _onboard_rules(monkeypatch, [*argv, "--exclude", "Chart.yaml"]) == 0
+    err = capsys.readouterr().err
+    assert "Scanned 1 file(s), 1 rule(s)" in err, err
+
+
+def test_rule_files_reads_a_prometheusrule(tmp_path):
+    """#3426 F11: a PrometheusRule's `spec` is read (ConfigMaps only, before)."""
+    from onboard_platform import _read_rule_files
+    p = tmp_path / "pr.yaml"
+    p.write_text("apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+                 "metadata: {name: p}\nspec:\n" + "".join(
+                     f"  {ln}\n" for ln in _ONBOARD_RULES.splitlines()), encoding="utf-8")
+    ((path, groups, error),) = _read_rule_files([str(p)])
+    assert error is None and groups[0]["rules"][0]["alert"] == "HighConn"
+
+
+def test_rule_files_exclude_that_leaves_nothing_exits_2(tmp_path, monkeypatch, capsys):
+    """#3426 F16: an --exclude that leaves none of the files found is rc 2,
+    saying so — it used to be "No rule files found" and rc 1."""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    argv = ["--rule-files", str(rules), "-o", str(tmp_path / "out"), "--exclude", "*.yaml"]
+    assert _onboard_rules(monkeypatch, argv) == 2
+    assert "every one excluded" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("kind", ["empty", "dangling"])
+def test_rule_files_empty_file_or_dangling_symlink_exits_2(tmp_path, monkeypatch, capsys, kind):
+    """#3426 F14 / F15: named, rc 2."""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    if kind == "empty":
+        (rules / "b.yaml").write_text("---\n", encoding="utf-8")
+    else:
+        symlink_or_skip(str(rules / "gone.yaml"), str(rules / "b.yaml"))
+    assert _onboard_rules(monkeypatch, ["--rule-files", str(rules),
+                                        "-o", str(tmp_path / "out")]) == 2
+    assert "b.yaml" in capsys.readouterr().err
+
+
+def test_rule_files_glob_exclude_matches_the_whole_path_as_matched(tmp_path, monkeypatch,
+                                                                    capsys):
+    """#3426 F16: for a file the glob matched, a pattern with `/` is matched
+    against the path as matched — `'*/recipes/*'`, as cli-reference says."""
+    rules = tmp_path / "rules"
+    (rules / "recipes").mkdir(parents=True)
+    (rules / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    (rules / "recipes" / "r.yaml").write_text("recipe: x\n", encoding="utf-8")
+    glob = str(rules) + "/**/*.yaml"
+    assert _onboard_rules(monkeypatch, ["--rule-files", glob, "-o", str(tmp_path / "o1"),
+                                        "--exclude", "*/recipes/*"]) == 0
+    assert _onboard_rules(monkeypatch, ["--rule-files", glob, "-o", str(tmp_path / "o2"),
+                                        "--exclude", "recipes/*"]) == 2
+
+
+def test_rule_files_glob_returning_a_dangling_symlink_exits_2(tmp_path, monkeypatch, capsys):
+    """#3426: glob.glob returns a dangling symlink; it is named, rc 2 — it
+    used to be passed over (neither a file nor a directory)."""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    symlink_or_skip(str(rules / "gone.yaml"), str(rules / "b.yaml"))
+    assert _onboard_rules(monkeypatch, ["--rule-files", str(rules) + "/*.yaml",
+                                        "-o", str(tmp_path / "out")]) == 2
+    err = capsys.readouterr().err
+    assert "b.yaml" in err and "dangling symlink" in err

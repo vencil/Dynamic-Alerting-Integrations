@@ -476,7 +476,7 @@ def _chart_app_version(chart_dir: str) -> str:
     # da-crdecode). An unquoted `appVersion: 1.10` is the number 1.1 there,
     # as it is to Helm; the convention check below sees what Helm sees.
     try:
-        docs = _lib_consumer_read.kubernetes_documents(str(chart))
+        docs = _lib_consumer_read.any_yaml_documents(str(chart))  # no manifest (#3426)
     except _lib_consumer_read.ConsumerReadError as e:
         detail = e.detail()
         raise SystemExit(f"ERROR: cannot read {chart} the way Helm does: {detail}") from e

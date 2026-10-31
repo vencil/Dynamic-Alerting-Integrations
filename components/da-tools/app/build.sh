@@ -313,6 +313,10 @@ REPO_DATA_FILES=(
     # cmd/gen-error-contract): threshold_govern classifies a refused PUT by
     # its code's remedy and fails closed (rc 2 under --apply) without it.
     tools/portal/src/interactive/tools/_common/data/tenant-api-errors.json
+    # #3426 — _lib_consumer_read judges a PrometheusRule's shape against the
+    # vendored CRD schema (unknown top-level fields, `spec`) and fails closed
+    # without it.
+    docs/schemas/crd/monitoring.coreos.com/PrometheusRule_v1.json
     k8s/03-monitoring/configmap-rules-platform.yaml
     rule-packs/rule-pack-clickhouse.yaml
     rule-packs/rule-pack-db2.yaml

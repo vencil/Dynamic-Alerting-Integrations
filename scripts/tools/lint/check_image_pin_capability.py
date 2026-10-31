@@ -298,9 +298,10 @@ def _consumer_read_detail(exc: "_lib_consumer_read.ConsumerReadError") -> str:
 
 
 def read_values(path: Path):
-    """A chart's values file as Helm reads it (da-crdecode): its one document,
-    or None for an empty file. Raises ConsumerReadError."""
-    docs = _lib_consumer_read.kubernetes_documents(str(path))
+    """A chart's values file as Helm reads it (``da-crdecode --any-shape``: a
+    values file is no Kubernetes manifest, #3426): its one document, or None
+    for an empty file. Raises ConsumerReadError."""
+    docs = _lib_consumer_read.any_yaml_documents(str(path))
     return docs[0] if docs else None
 
 

@@ -103,7 +103,7 @@ def _relative_readers(tmp_path: Path, monkeypatch, da_guard: str, da_read: str,
 def _run_all_three(conf_d: Path) -> None:
     """Each reader through its own resolver, from the current directory."""
     assert lpt.load(str(conf_d), None, 60).value("t.yaml") == {"a": 1}
-    assert cr.kubernetes_text_documents("a: 1\n") == [{"a": 1}]
+    assert cr.kubernetes_text_documents("kind: A\n") == [{"kind": "A"}]
     assert cr.alertmanager_config(_ALERTMANAGER)["route"]["receiver"] == "x"
 
 

@@ -208,7 +208,8 @@ def _tree(tmp_path, rule_packs, configmaps, with_k8s=True):
         k8s.mkdir(parents=True)
         for name in configmaps:
             (k8s / f"configmap-rules-{name}.yaml").write_text(
-                "kind: ConfigMap\ndata: {}\n", encoding="utf-8")
+                f"kind: ConfigMap\nmetadata: {{name: prometheus-rules-{name}}}\ndata: {{}}\n",
+                encoding="utf-8")
     return rp
 
 

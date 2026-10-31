@@ -163,16 +163,14 @@ class TestParseConfigMapRules:
         assert total_groups == 2
 
     def test_parse_configmap_rules_invalid_yaml(self, temp_configmap_dir):
-        """Graceful handling of invalid YAML."""
-        # Add an invalid YAML file
-        invalid_yaml = "invalid: yaml: content: ["
-        (temp_configmap_dir / "invalid.yaml").write_text(invalid_yaml)
-
-        # Should not raise, but skip invalid files
-        rules = mto.parse_configmap_rules(temp_configmap_dir)
-        files = {r["file"] for r in rules}
-        assert "invalid.yaml" not in files
-        assert len(rules) == 2  # Still got the 2 valid files
+        """#3426: a file no reader reads stops the run, named with the
+        reader's reason — it used to be a WARNING and a skip."""
+        (temp_configmap_dir / "invalid.yaml").write_text("invalid: yaml: content: [")
+        with pytest.raises(mto.SourceFilesUnreadable) as exc_info:
+            mto.parse_configmap_rules(temp_configmap_dir)
+        (name, why), = exc_info.value.files
+        assert name == "invalid.yaml" and "yaml:" in why, exc_info.value.files
+        assert "invalid.yaml: " in str(exc_info.value)
 
     def test_parse_configmap_rules_directory_not_found(self):
         """FileNotFoundError when directory does not exist."""
@@ -477,7 +475,7 @@ class TestMainJsonEnvelope:
         assert set(doc) == {
             "configmap_files", "rule_groups", "tenants",
             "prometheus_rules", "alertmanager_configs", "total_crds",
-            "status", "checklist",
+            "already_crd", "status", "checklist",
         }
         # checklist-only ⇒ 沒有產生任何 CRD，這三個計數確實是 0
         assert doc["prometheus_rules"] == 0
@@ -539,7 +537,7 @@ class TestMainJsonEnvelope:
 
         doc = json.loads(captured.out)        # 兩份文件的話這裡就炸了
         assert set(doc) == {
-            "metadata", "prometheus_rules", "alertmanager_configs", "errors",
+            "metadata", "prometheus_rules", "alertmanager_configs", "already_crd", "errors",
         }
         assert "checklist" not in doc
         assert "status" not in doc
@@ -603,6 +601,7 @@ _MATRIX_IDS = [
 _SUMMARY_KEYS = {
     "configmap_files", "rule_groups", "tenants",
     "prometheus_rules", "alertmanager_configs", "total_crds",
+    "already_crd",   # #3426: PrometheusRules of --source-dir, named, not converted
 }
 
 
@@ -638,7 +637,7 @@ def _validate_text_checklist_preview(out):
 def _validate_json_crd_preview(out):
     doc = json.loads(out)
     assert set(doc) == {
-        "metadata", "prometheus_rules", "alertmanager_configs", "errors",
+        "metadata", "prometheus_rules", "alertmanager_configs", "already_crd", "errors",
     }
     # 不是 checklist envelope（bug-1 的反向保證：純 dry-run 不長出 checklist）
     assert "checklist" not in doc
@@ -815,7 +814,7 @@ class TestPlanStdout:
             assert len(docs) == 1
             doc = json.loads(docs[0])
             assert set(doc) == {
-                "metadata", "prometheus_rules", "alertmanager_configs", "errors",
+                "metadata", "prometheus_rules", "alertmanager_configs", "already_crd", "errors",
             }
         elif row.payload == "text_checklist":
             assert docs == [self._CHK + "\n"]
@@ -1139,6 +1138,231 @@ class TestSourceDirNamesWhatItDoesNotRead:
         (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
         mto.parse_configmap_rules(src)
         assert "not read" not in capsys.readouterr().err
+
+
+class TestSourceFilesAreWhatTheReadersSay:
+    """#3426: a --source-dir file is a manifest kubectl reads, or else a
+    plain rule file (one object declaring `groups`, read with
+    `da-crdecode --any-shape`); anything else stops the run at rc 2 before a
+    single file is written, every such file named with the reader's reason.
+    Before, a file kubectl's reading refused was a WARNING and a skip, and a
+    document that was no mapping was skipped without a word."""
+
+    _RULES = "groups:\n  - name: g\n    rules:\n      - alert: A\n        expr: up == 0\n"
+
+    @pytest.mark.parametrize("name,text,reason", [
+        ("top-level-list.yaml", "- groups: []\n", "the document is array, not a mapping"),
+        ("scalar.yaml", "just text\n", "the document is string, not a mapping"),
+        # A List is read as its items; one kubectl would not apply is named.
+        ("list.yaml", "apiVersion: v1\nkind: List\nitems:\n- {kind: ConfigMap}\n",
+         "items[0] (line 4): it is not a Kubernetes object: it has no `apiVersion`"),
+        # #3426 round 3: shapes the API server refuses.
+        ("pr.yaml", "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+                    "metadata: {name: p}\ngroups:\n- name: g\n  rules: []\n",
+         'unknown field "groups"'),
+        ("cm-data-list.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\n"
+                              "data:\n- groups: []\n",
+         "its data is list, not a mapping"),
+        # Neither YAML reading reads it, and the rule loader refuses it too.
+        ("broken.yaml", "groups: [\n", "Prometheus' rule loader refuses it"),
+        ("cm-then-junk.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\n---\n- x\n",
+         "the document starting at line 5"),
+    ])
+    def test_unreadable_file_is_named(self, tmp_path, name, text, reason):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / name).write_text(text, encoding="utf-8")
+        with pytest.raises(mto.SourceFilesUnreadable) as exc_info:
+            mto.parse_configmap_rules(src)
+        (got_name, why), = exc_info.value.files
+        assert got_name == name and reason in why, exc_info.value.files
+
+    def test_a_rule_file_the_rule_loader_refuses_stops_the_run(self, tmp_path):
+        """Two documents that each declare `groups`: a rule file, which
+        Prometheus' rule loader refuses (it reads one document) — named with
+        the loader's reason."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "two.yaml").write_text(self._RULES + "---\n" + self._RULES, encoding="utf-8")
+        with pytest.raises(mto._lib_consumer_read.RuleFilesRefused) as exc_info:
+            mto.parse_configmap_rules(src)
+        assert [rf.path for rf in exc_info.value.refused] == [str(src / "two.yaml")]
+
+    def _main(self, src, config_dir, out):
+        with patch("sys.argv", [
+            "migrate_to_operator.py",
+            "--source-dir", str(src),
+            "--config-dir", str(config_dir),
+            "--output-dir", str(out),
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                mto.main()
+        return exc_info.value.code
+
+    @pytest.mark.parametrize("json_mode", [False, True])
+    def test_main_stops_on_a_rule_file_the_loader_refuses(
+            self, tmp_path, temp_config_dir, capsys, json_mode):
+        """#3426 F2: a rule file Prometheus' rule loader refuses used to be an
+        `issues` WARNING beside a CRD set written without it (rc 0)."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "ok.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / "bad.yaml").write_text(
+            "groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n", encoding="utf-8")
+        out = tmp_path / "out"
+        argv_json = ["--json"] if json_mode else []
+        with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src),
+                                "--config-dir", str(temp_config_dir),
+                                "--output-dir", str(out), *argv_json]):
+            with pytest.raises(SystemExit) as exc_info:
+                mto.main()
+        assert exc_info.value.code == 2
+        assert not out.exists(), "nothing may be written when a rule file is refused"
+        captured = capsys.readouterr()
+        assert "bad.yaml" in captured.err + captured.out and "parse error" in captured.err + captured.out
+
+    def test_checklist_only_stops_on_a_refused_rule_file(self, tmp_path, temp_config_dir, capsys):
+        """--checklist-only runs the analysis alone: a refused rule file
+        there is rc 2 too, not an `issues` line beside a plan."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "bad.yaml").write_text(
+            "groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n", encoding="utf-8")
+        with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src),
+                                "--config-dir", str(temp_config_dir), "--checklist-only"]):
+            with pytest.raises(SystemExit) as exc_info:
+                mto.main()
+        assert exc_info.value.code == 2
+        assert "bad.yaml" in capsys.readouterr().err
+
+    def test_main_stops_without_da_read(self, tmp_path, temp_config_dir, capsys, monkeypatch):
+        """#3426 F2: no reader binary is no answer about the sources: rc 2,
+        nothing written (it used to be an `errors` line and rc 0)."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "ok.yaml").write_text(self._RULES, encoding="utf-8")
+        monkeypatch.setenv("DA_READ_BINARY", str(tmp_path / "no-such-da-read"))
+        out = tmp_path / "out"
+        assert self._main(src, temp_config_dir, out) == 2
+        assert not out.exists()
+        assert "da-read" in capsys.readouterr().err
+
+    _PR = ("apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+           "metadata: {name: da-rule-pack-x}\nspec:\n  groups:\n  - name: g\n"
+           "    rules:\n    - {alert: A, expr: up == 0}\n")
+
+    @pytest.mark.parametrize("extra", [[], ["--checklist-only"]], ids=["write", "checklist"])
+    def test_a_prometheusrule_is_named_already_a_crd_not_converted(
+            self, tmp_path, temp_config_dir, capsys, extra):
+        """#3426 F11: a PrometheusRule in --source-dir is already the CRD this
+        tool writes. It is not converted and no error (rc 0), but named on
+        stderr and in the checklist — it used to be passed over by the kind
+        filter without a word."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "ok.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / "pr.yaml").write_text(self._PR, encoding="utf-8")
+        out = tmp_path / "out"
+        with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src),
+                                "--config-dir", str(temp_config_dir),
+                                "--output-dir", str(out), *extra]):
+            try:
+                mto.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code or 0
+        assert code == 0
+        captured = capsys.readouterr()
+        notice = [ln for ln in captured.err.splitlines() if "pr.yaml" in ln]
+        assert len(notice) == 1 and "da-rule-pack-x" in notice[0], captured.err
+        assert "already a PrometheusRule CRD" in notice[0] or "已是 PrometheusRule CRD" in notice[0]
+        checklist = (out / "MIGRATION-CHECKLIST.md").read_text(encoding="utf-8") \
+            if not extra else captured.out
+        assert "`pr.yaml`: PrometheusRule `da-rule-pack-x`" in checklist, checklist
+        if not extra:
+            written = sorted(p.name for p in out.iterdir())
+            assert not any("da-rule-pack-x" in n for n in written), written
+            assert any("rule-pack-ok" in n for n in written), written
+
+    @pytest.mark.parametrize("extra", [["--dry-run"], []], ids=["dry-run", "no-output-dir"])
+    def test_the_json_preview_names_a_prometheusrule_too(self, tmp_path, temp_config_dir,
+                                                         capsys, extra):
+        """#3426 F17: the preview envelope (`--dry-run --json`, or `--json`
+        with no --output-dir) carries `already_crd` as the summary does."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "ok.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / "pr.yaml").write_text(self._PR, encoding="utf-8")
+        argv = ["migrate_to_operator.py", "--source-dir", str(src),
+                "--config-dir", str(temp_config_dir), "--json", *extra]
+        if extra:   # --dry-run with an --output-dir: still nothing written
+            argv += ["--output-dir", str(tmp_path / "out")]
+        with patch("sys.argv", argv):
+            try:
+                mto.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code or 0
+        assert code == 0
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["already_crd"] == [{"file": "pr.yaml", "name": "da-rule-pack-x"}], doc
+        assert not (tmp_path / "out").exists()
+
+    def test_a_list_of_configmaps_migrates(self, tmp_path):
+        """`kubectl get cm -o yaml` writes a List: its ConfigMaps are read
+        as kubectl applies them (they used to be passed over by the kind
+        filter without a word)."""
+        src = tmp_path / "src"
+        src.mkdir()
+        rules = self._RULES.replace("\n", "\n        ")
+        (src / "dump.yaml").write_text(
+            "apiVersion: v1\nkind: List\nitems:\n- apiVersion: v1\n  kind: ConfigMap\n"
+            "  metadata: {name: listed}\n  data:\n    r.yml: |\n      " + rules.rstrip() + "\n",
+            encoding="utf-8")
+        (got,) = mto.parse_configmap_rules(src)
+        assert (got["name"], got["cm_data_key"]) == ("listed", "r.yml")
+        assert [g["name"] for g in got["rule_groups"]] == ["g"]
+
+    def test_a_rule_file_only_the_rule_loader_reads_migrates(self, tmp_path):
+        """An annotation value `.inf` has no JSON: neither da-crdecode
+        reading reads the file. Prometheus' rule loader reads it (the string
+        ".inf"), so it is a rule file (`rule_files_in`)."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "inf.yaml").write_text(
+            self._RULES + "        annotations: {x: .inf}\n", encoding="utf-8")
+        (got,) = mto.parse_configmap_rules(src)
+        assert got["file"] == "inf.yaml" and got["cm_data_key"] is None
+        assert got["rule_groups"][0]["rules"][0]["annotations"] == {"x": ".inf"}
+
+    def test_plain_rule_file_still_migrates(self, tmp_path):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
+        (got,) = mto.parse_configmap_rules(src)
+        assert got["file"] == "rules.yaml" and got["cm_data_key"] is None
+        assert [g["name"] for g in got["rule_groups"]] == ["g"]
+
+    def test_main_stops_and_writes_nothing(self, tmp_path, temp_config_dir, capsys):
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / "bad.yaml").write_text("- groups: []\n", encoding="utf-8")
+        out = tmp_path / "out"
+        with patch("sys.argv", [
+            "migrate_to_operator.py",
+            "--source-dir", str(src),
+            "--config-dir", str(temp_config_dir),
+            "--output-dir", str(out),
+        ]):
+            with pytest.raises(SystemExit) as exc_info:
+                mto.main()
+        assert exc_info.value.code == 2
+        assert not out.exists(), "nothing may be written when a source file is unreadable"
+        err = capsys.readouterr().err
+        assert "bad.yaml: " in err and "the document is array" in err, err
+        assert "WARNING: Failed to parse" not in err
 
 
 class TestConfigMapScanAcceptsBothSpellings:
