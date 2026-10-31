@@ -57,10 +57,20 @@ EXIT CODES
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
+
+# Same two sys.path inserts every sibling dx tool uses: parent for the repo
+# layout where _lib_compat.py sits one directory up, self-dir for the flat
+# Docker layout. Importing the carrier is what hardens stdout — without it
+# `--help` can die on a legacy Windows console (cp950).
+_THIS_DIR = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, _THIS_DIR)
+sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+from _lib_compat import try_utf8_stdout  # noqa: E402
 
 # Gate thresholds. Policy lives here once; bench_gate_compare.sh only orchestrates.
 MAGNITUDE_FLOOR_PCT = 5.0
@@ -254,6 +264,7 @@ def _read(path: str) -> Reading:
 
 
 def main(argv: list[str] | None = None) -> int:
+    try_utf8_stdout()
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
     nr = sub.add_parser("needs-replication",

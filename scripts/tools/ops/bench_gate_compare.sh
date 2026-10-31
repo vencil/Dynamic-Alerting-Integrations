@@ -159,8 +159,10 @@ run_pass() {  # $1 = output dir; writes $1/benchstat.txt
 # ── Verdict ──────────────────────────────────────────────────────────────────
 # All reading of benchstat's text — regression rows per unit, the control
 # canary, CPU headers, the #611 fail-loud shape assertions — lives in ONE
-# place: scripts/tools/dx/bench_verdict.py (stashed with the harness, so both
-# passes are judged by the same version). Its exit 2 (unrecognised shape)
+# place: scripts/tools/dx/bench_verdict.py. It runs from THIS checkout, not a
+# stashed copy: it imports the repo's shared libs, and the checkout never
+# changes between the two passes (only the worktrees are benched), so both
+# passes are judged by the same version. Its exit 2 (unrecognised shape)
 # propagates under `set -e`: a comparison nobody could parse must never read
 # as "no regression".
 #
@@ -169,8 +171,7 @@ run_pass() {  # $1 = output dir; writes $1/benchstat.txt
 # timing-only flag stands only for a benchmark both passes flag. Why, and why
 # deterministic rows never need it, is in bench_verdict.py's header.
 # REPLICATE_TIMING_ONLY=0 skips the second pass and reports the first as-is.
-cp scripts/tools/dx/bench_verdict.py "$HARNESS_DIR/"
-VERDICT="$HARNESS_DIR/bench_verdict.py"
+VERDICT="$PWD/scripts/tools/dx/bench_verdict.py"
 
 run_pass "$OUT_DIR"
 BENCHSTAT_TXT="$OUT_DIR/benchstat.txt"
