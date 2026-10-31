@@ -517,17 +517,136 @@ def test_a_symlinked_directory_is_named_not_followed(tmp_path) -> None:
     assert [Path(f).name for f in cr.files_to_read([str(root)], ["linked"])] == ["a.yaml"]
 
 
-def test_a_configmap_mount_is_walked_without_a_word(tmp_path) -> None:
-    """kubelet's ConfigMap mount: `..data -> ..2024_01_01/` and
-    `r.yaml -> ..data/r.yaml`. `..data` points inside the tree, whose real
-    path is walked anyway: nothing is lost, so nothing is named."""
+def _mount(tmp_path: Path, files: "list[str]") -> Path:
+    """kubelet's ConfigMap mount: the payload under `..2024_01_01/`,
+    `..data -> ..2024_01_01`; the caller adds the user-visible links."""
     mount = tmp_path / "mount"
-    (mount / "..2024_01_01").mkdir(parents=True)
-    (mount / "..2024_01_01" / "r.yaml").write_text(RULES, encoding="utf-8")
+    for f in files:
+        (mount / "..2024_01_01" / f).parent.mkdir(parents=True, exist_ok=True)
+        (mount / "..2024_01_01" / f).write_text(RULES, encoding="utf-8")
     symlink_or_skip("..2024_01_01", str(mount / "..data"))
+    return mount
+
+
+def test_a_configmap_mount_is_read_once_by_the_name_the_user_sees(tmp_path) -> None:
+    """kubelet's ConfigMap mount: `..data -> ..2024_01_01/` and
+    `r.yaml -> ..data/r.yaml`. The payload under `..2024_01_01/` is on a
+    hidden path (Go's conf.d walk rule): not read there, and not named,
+    because `r.yaml` reads the same file — one file, read once, by the
+    path the user sees (#3460)."""
+    mount = _mount(tmp_path, ["r.yaml"])
     symlink_or_skip("..data/r.yaml", str(mount / "r.yaml"))
-    got = cr.files_to_read([str(mount)])
-    assert str(mount / "r.yaml") in got, got
+    assert cr.files_to_read([str(mount)]) == [str(mount / "r.yaml")]
+
+
+def test_an_items_subpath_projection_is_named(tmp_path) -> None:
+    """kubelet's `items[].path` with a sub-directory: `team-a ->
+    ..data/team-a`. The link's target passes a hidden segment, so the walk
+    does not reach it by itself (Go's `dirLinkTargetIsWalked`): named."""
+    mount = _mount(tmp_path, ["team-a/x.yaml"])
+    symlink_or_skip("..data/team-a", str(mount / "team-a"))
+    with pytest.raises(cr.SourcesUnlisted) as exc:
+        cr.files_to_read([str(mount)])
+    got = {p: why for p, why in exc.value.files}
+    assert str(mount / "team-a") in got, got
+    assert "give its target instead" in got[str(mount / "team-a")]
+    assert "under a hidden path" in got[str(mount / "team-a")]
+
+
+def test_a_yaml_file_on_a_hidden_path_is_named_unless_excluded(tmp_path) -> None:
+    """`.hidden/x.yaml` (and a hidden file `.y.yaml`) is not read, and is
+    named — never skipped in silence; `--exclude` lets the run through."""
+    root = _tree(tmp_path / "rules", ["a.yaml", ".hidden/x.yaml", ".y.yaml", ".hidden/notes.md"])
+    with pytest.raises(cr.SourcesUnlisted) as exc:
+        cr.files_to_read([str(root)])
+    assert sorted((Path(p).relative_to(root).as_posix(), "under a hidden path" in why)
+                  for p, why in exc.value.files) == [(".hidden/x.yaml", True), (".y.yaml", True)]
+    assert "--exclude" in exc.value.files[0][1]
+    assert cr.files_to_read([str(root)], [".hidden/*", ".y.yaml"]) == [str(root / "a.yaml")]
+
+
+def test_is_hidden_agrees_with_the_go_name_table() -> None:
+    """`_is_hidden` is a Python copy of Go's `confdname.IsHidden`; the
+    name table Go's matrix test owns pins it, row by row. A table with no
+    hidden row, or no visible row, has no detection power and fails."""
+    from _confd_name_table import rows  # noqa: PLC0415
+    table = rows()
+    assert {r["hidden"] for r in table} == {True, False}, \
+        "the name table needs hidden and visible rows to pin `_is_hidden`"
+    assert [(r["name"], cr._is_hidden(r["name"])) for r in table] == \
+        [(r["name"], r["hidden"]) for r in table]
+    # `_is_yaml_name` is Go's `SplitCarrier` suffix rule (`.yaml` itself included)
+    assert {r["yaml_extension"] for r in table} == {True, False}
+    assert [(r["name"], cr._is_yaml_name(r["name"])) for r in table] == \
+        [(r["name"], r["yaml_extension"]) for r in table]
+
+
+def test_a_non_regular_yaml_entry_on_a_hidden_path_is_named(tmp_path) -> None:
+    """One classification for every entry: a dangling symlink or a FIFO
+    with a YAML name cannot be read on a hidden path either — named as
+    it is on a visible one, never dropped."""
+    root = _tree(tmp_path / "rules", ["a.yaml", ".h/keep.md"])
+    symlink_or_skip(str(root / "gone.yaml"), str(root / ".h" / "dangling.yaml"))
+    symlink_or_skip(str(root / "gone.yaml"), str(root / ".d.yaml"))
+    os.mkfifo(str(root / ".h" / "pipe.yml"))
+    with pytest.raises(cr.SourcesUnlisted) as exc:
+        cr.files_to_read([str(root)])
+    assert sorted((Path(p).relative_to(root).as_posix(), why) for p, why in exc.value.files) == [
+        (".d.yaml", "a dangling symlink"), (".h/dangling.yaml", "a dangling symlink"),
+        (".h/pipe.yml", "not a regular file")]
+
+
+def test_a_file_named_only_by_its_suffix_is_a_yaml_name(tmp_path) -> None:
+    """`.yaml` / `.YML` carry a YAML suffix (Go's `SplitCarrier`); hidden,
+    so not read — and named, not dropped as "no YAML"."""
+    root = _tree(tmp_path / "rules", ["a.yaml", ".yaml", "sub/.YML"])
+    with pytest.raises(cr.SourcesUnlisted) as exc:
+        cr.files_to_read([str(root)])
+    assert sorted(Path(p).relative_to(root).as_posix() for p, _ in exc.value.files) == [
+        ".yaml", "sub/.YML"]
+
+
+def test_overlapping_targets_name_a_hidden_file_once(tmp_path) -> None:
+    """`[t, t/s]` both reach `t/s/.h/x.yaml`: one finding, not two."""
+    t = _tree(tmp_path / "t", ["a.yaml", "s/b.yaml", "s/.h/x.yaml"])
+    with pytest.raises(cr.SourcesUnlisted) as exc:
+        cr.files_to_read([str(t), str(t / "s")])
+    assert exc.value.files == [(str(t / "s" / ".h" / "x.yaml"), cr._UNDER_HIDDEN)]
+
+
+def test_a_file_target_on_a_hidden_path_is_read_as_given(tmp_path) -> None:
+    """The hidden rule judges paths below a directory target, never a
+    target given as a file."""
+    f = _tree(tmp_path, [".github/x.yaml"]) / ".github" / "x.yaml"
+    assert cr.files_to_read([str(f)]) == [str(f)]
+
+
+def test_a_hidden_directory_target_is_walked(tmp_path) -> None:
+    """The target itself is never judged by its name: `..data` given as a
+    target is walked (relative to it, nothing is hidden)."""
+    mount = _mount(tmp_path, ["r.yaml"])
+    assert cr.files_to_read([str(mount / "..data")]) == [str(mount / "..data" / "r.yaml")]
+
+
+def test_two_names_for_one_file_are_each_read(tmp_path) -> None:
+    """Two non-hidden symlinks to one file are two paths, each read — as
+    the exporter reads them."""
+    root = _tree(tmp_path / "rules", ["real.yaml"])
+    symlink_or_skip("real.yaml", str(root / "a.yaml"))
+    symlink_or_skip("real.yaml", str(root / "b.yaml"))
+    assert [Path(f).name for f in cr.files_to_read([str(root)])] == ["a.yaml", "b.yaml", "real.yaml"]
+
+
+def test_a_hidden_directory_symlink_out_of_the_tree_is_named(tmp_path) -> None:
+    """`..data -> <outside>`: Go passes every hidden name over in silence;
+    this walk names it, since nothing behind it would be read."""
+    _tree(tmp_path / "elsewhere", ["x.yaml"])
+    root = _tree(tmp_path / "rules", ["a.yaml"])
+    symlink_or_skip(str(tmp_path / "elsewhere"), str(root / "..data"))
+    with pytest.raises(cr.SourcesUnlisted) as exc:
+        cr.files_to_read([str(root)])
+    ((path, why),) = exc.value.files
+    assert path == str(root / "..data") and "give its target instead" in why
 
 
 def test_a_symlink_back_into_the_tree_is_no_loop_and_no_finding(tmp_path) -> None:

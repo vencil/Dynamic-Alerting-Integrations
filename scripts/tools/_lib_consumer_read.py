@@ -1088,7 +1088,12 @@ YAML_SUFFIXES = (".yaml", ".yml")
 
 
 def _is_yaml_name(name: str) -> bool:
-    return os.path.splitext(name)[1].lower() in YAML_SUFFIXES
+    """Whether *name* ends in a YAML suffix, any case — a name that IS the
+    suffix (``.yaml``) included, as Go's ``pkg/confdname.SplitCarrier``
+    has it (``os.path.splitext`` would call ``.yaml`` a name with no
+    suffix). Pinned to the name table's ``yaml_extension`` column by
+    ``test_is_hidden_agrees_with_the_go_name_table``."""
+    return name.lower().endswith(YAML_SUFFIXES)
 
 
 class SourcesUnlisted(RuleFileSourcesRefused):
@@ -1132,22 +1137,68 @@ def excluded(pattern: str, name: str, relative: str) -> bool:
 #: Why a symlinked directory under a walked target is named, not walked.
 _DIR_SYMLINK = "a symlink to a directory is not followed; give its target instead"
 
+#: Why a YAML file under a hidden path of a walked target is named.
+_UNDER_HIDDEN = ("under a hidden path (a name starting with `.`), not read; to read it "
+                 "give it as a target, else leave it out with --exclude")
 
-def _dir_symlink_problem(link: str, root_real: str) -> "str | None":
+
+def _is_hidden(name: str) -> bool:
+    """Whether the walk passes the base name *name* over: it starts with
+    ``.``. Go's ``pkg/confdname.IsHidden``, the exporter's conf.d walk —
+    rule-file sources are no conf.d, but a directory is walked by the same
+    rule, so a ConfigMap mount reads the same files in both.
+
+    ⛔ The one name rule Python keeps (a second copy of Go's). What keeps it
+    equal to Go is ``tests/shared/test_lib_consumer_read_rule_texts.py``'s
+    ``test_is_hidden_agrees_with_the_go_name_table``: every row of the name
+    table Go's matrix test owns (``tests/_confd_name_table.py``) is asked
+    here and must answer the row's ``hidden``."""
+    return name.startswith(".")
+
+
+def _has_hidden_segment(relative: str) -> bool:
+    """Whether any segment of the POSIX path *relative* (relative to a
+    walked target) is hidden (``_is_hidden``). A ``.`` segment is the
+    target itself, not a hidden name; ``..`` is (a path leaving the target
+    is read by no walk). Go's ``pkg/confdname.HasHiddenSegment``."""
+    return any(seg != "." and _is_hidden(seg) for seg in relative.split("/"))
+
+
+def _dir_symlink_problem(link: str, root_real: str, on_hidden_path: bool) -> "str | None":
     """Why the symlink to a directory *link*, under a walked tree whose
     real path is *root_real*, must be named — or None when nothing behind
-    it can be lost. It is never followed (a loop, a walk out of the tree);
-    a target that resolves INSIDE the tree is walked by its real path
-    anyway (kubelet's ConfigMap mount: ``..data -> ..2024_01_01/``; a
-    ``loop -> .``), so it is passed over. A target outside the tree, or one
-    that does not resolve (a loop of links), is named."""
+    it can be lost. It is never followed (a loop, a walk out of the tree).
+    *on_hidden_path*: the link's own name is hidden, or a directory above
+    it (below the tree) is.
+
+    A link on no hidden path: the rule of Go's
+    ``dirLinkTargetIsWalked`` (``pkg/config/tree_scan.go``). A target that
+    resolves to a directory the walk reaches by itself — inside the tree,
+    no hidden segment on its path relative to the tree (``current ->
+    team-b`` next to a real ``team-b/``; ``loop -> .``) — is passed over:
+    its content is read by its real path. A target outside the tree, one
+    that does not resolve (a loop of links), or one whose path passes a
+    hidden segment (kubelet's ``items[].path`` projection ``team-a ->
+    ..data/team-a``, which resolves into ``..2024_01_01/``) is named.
+
+    A link on a hidden path (kubelet's ``..data -> ..2024_01_01/``): a
+    target inside the tree is passed over — the YAML under it is held to
+    the hidden-path rule of ``_walk_yaml`` by its real path. ⛔ A target
+    outside the tree or one that does not resolve is named. That is
+    stricter than Go on purpose: the exporter passes every hidden name over
+    in silence, but this walk skips no file without a word."""
     try:
         target = os.path.realpath(link, strict=True)
     except (OSError, RuntimeError):
         return f"{_DIR_SYMLINK} (it does not resolve)"
-    if os.path.commonpath([target, root_real]) == root_real:
+    relative = pathlib.Path(os.path.relpath(target, root_real)).as_posix()
+    if relative == ".":
         return None
-    return _DIR_SYMLINK
+    if relative == ".." or relative.startswith("../"):
+        return _DIR_SYMLINK
+    if on_hidden_path or not _has_hidden_segment(relative):
+        return None
+    return f"{_DIR_SYMLINK} (its target is under a hidden path, which is not read)"
 
 
 def _not_regular(path: str) -> str:
@@ -1157,39 +1208,66 @@ def _not_regular(path: str) -> str:
             else "not a regular file")
 
 
-def _walk_yaml(root: str) -> "tuple[list[tuple[str, str]], list[tuple[str, str]]]":
-    """(files, problems) under the directory *root*: every entry with a
-    YAML suffix (any case) as ``(path, path relative to root)``, and every
-    entry that cannot be read as ``(path, why)`` — a directory that cannot
-    be listed, a YAML-suffixed entry that is not a regular file (a dangling
-    symlink, a FIFO), and a symlink to a directory whose target is outside
-    the tree or does not resolve (``_dir_symlink_problem``). A symlinked
-    directory is never followed (a loop, or a walk out of the tree); one
-    whose target is inside the tree is passed over, its content walked by
-    its real path; any other is named, so the caller gives its target
-    instead — nothing behind it is lost in silence."""
-    files, problems = [], []
+class _Walk(NamedTuple):
+    """What ``_walk_yaml`` finds under one directory target. ``files`` and
+    ``hidden`` are ``(path, path relative to the target)``; ``problems`` is
+    ``(path, why)``."""
+    files: "list[tuple[str, str]]"
+    problems: "list[tuple[str, str]]"
+    hidden: "list[tuple[str, str]]"
+
+
+def _walk_yaml(root: str) -> _Walk:
+    """Every entry under the directory *root*, sorted into what is read,
+    what cannot be read, and what is hidden.
+
+    ⛔ Every entry goes through ONE classification — a YAML name
+    (``_is_yaml_name``), then a regular file or not — and whether its path
+    is hidden only decides where the answer goes:
+
+    * ``files``: a regular YAML file (or a link to one) with no hidden
+      segment on its path relative to *root* — ``_has_hidden_segment``, Go's
+      conf.d walk rule. *root* itself is never judged by its name.
+    * ``hidden``: a regular YAML file on a hidden path — a hidden file, or
+      any file under a hidden directory. ``files_to_read`` names each one
+      no chosen file reads by its real path (kubelet's
+      ``..2024_01_01/r.yaml`` is read as ``r.yaml``; a ``.hidden/x.yaml`` is
+      read by nothing).
+    * ``problems``: a YAML entry that is not a regular file (a dangling
+      symlink, a FIFO) — hidden or not, it cannot be read either way; a
+      directory that cannot be listed; a symlink to a directory
+      ``_dir_symlink_problem`` names. A symlinked directory is never
+      followed (a loop, or a walk out of the tree), on a hidden path too."""
+    files: "list[tuple[str, str]]" = []
+    problems: "list[tuple[str, str]]" = []
+    hidden: "list[tuple[str, str]]" = []
     root_real = os.path.realpath(root)
 
     def unlisted(err: OSError) -> None:
         problems.append((err.filename or root, f"cannot list this directory: {err.strerror}"))
 
+    def rel(path: str) -> str:
+        return pathlib.Path(os.path.relpath(path, root)).as_posix()
+
     for d, dirs, names in os.walk(root, onerror=unlisted):
+        in_hidden = d != root and _has_hidden_segment(rel(d))
         for n in dirs:
             f = os.path.join(d, n)
             if os.path.islink(f):
-                why = _dir_symlink_problem(f, root_real)
+                why = _dir_symlink_problem(f, root_real, in_hidden or _has_hidden_segment(n))
                 if why is not None:
                     problems.append((f, why))
         for n in names:
             if not _is_yaml_name(n):
                 continue
             f = os.path.join(d, n)
-            if os.path.isfile(f):
-                files.append((f, pathlib.Path(os.path.relpath(f, root)).as_posix()))
-            else:
+            if not os.path.isfile(f):
                 problems.append((f, _not_regular(f)))
-    return files, problems
+            elif in_hidden or _is_hidden(n):
+                hidden.append((f, rel(f)))
+            else:
+                files.append((f, rel(f)))
+    return _Walk(files, problems, hidden)
 
 
 def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
@@ -1199,30 +1277,61 @@ def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
     --rule-files`` all take their files from here, so their ``--exclude``
     means one thing.
 
-    A target that is a file is read as given, whatever its suffix; a
-    directory is walked, recursively, for files whose suffix is ``.yaml``
-    or ``.yml`` in any case (``YAML_SUFFIXES``). A file any *exclude*
-    pattern matches (``excluded``: relative to the directory target it was
-    found under) is left out and not read. Returns the paths, sorted, each
-    once. A target that is not there at all (``os.path.lexists`` false)
-    adds nothing: callers check their targets first; a target that is
-    there but neither a directory nor a regular file (a dangling symlink a
-    glob returned, a FIFO) is named like an entry of a walked directory.
+    A target that is a file is read as given, whatever its suffix or name
+    (``.github/x.yaml`` too). A directory is walked (``_walk_yaml``),
+    recursively, for files whose suffix is ``.yaml`` or ``.yml`` in any
+    case (``YAML_SUFFIXES``) — ⛔ by the exporter's conf.d walk rule
+    (Go's ``pkg/confdname.IsHidden``): no file or directory with a hidden
+    name (starting with ``.``) below the target is read, judged on the
+    path relative to the target, so the target itself is never judged by
+    its name (a ConfigMap mount's ``..data`` given as such is walked). A
+    kubelet ConfigMap mount (``..2024_01_01/r.yaml``, ``..data ->
+    ..2024_01_01``, ``r.yaml -> ..data/r.yaml``) is therefore read once, as
+    ``r.yaml``: the path reported is the one the user sees. A YAML file on
+    a hidden path that no chosen file reaches by its real path (a
+    ``.hidden/x.yaml``) is named, never skipped in silence: give it as a
+    target to read it, or leave it out with *exclude*. Two non-hidden
+    names for one file (two symlinks) are each read, as the exporter reads
+    them.
+
+    ⚠️ Two cases name a file on purpose (the safe direction): while kubelet
+    swaps a ConfigMap mount, two ``..<timestamp>/`` payloads exist for a
+    moment and the old one's files, which no visible name reads any more,
+    are named (transient; a re-run passes); and an *exclude* that leaves out
+    the visible path reading a hidden file (``r.yaml``) leaves that file
+    (``..2024_01_01/r.yaml``) read by nothing, so it is named — exclude it
+    too (a pattern with no ``/``, ``r.yaml``, takes both).
+
+    A file any *exclude* pattern matches (``excluded``: relative to the
+    directory target it was found under) is left out and not read. Returns
+    the paths, sorted, each once. A target that is not there at all
+    (``os.path.lexists`` false) adds nothing: callers check their targets
+    first; a target that is there but neither a directory nor a regular
+    file (a dangling symlink a glob returned, a FIFO) is named like an
+    entry of a walked directory.
 
     Raises :class:`SourcesUnlisted` naming every entry that would be
     chosen but cannot be read (a dangling symlink, a non-regular file, a
-    symlink to a directory outside the tree — not followed — or a directory
-    that cannot be listed), unless an *exclude* pattern leaves it out;
+    symlink to a directory ``_dir_symlink_problem`` names — not followed —
+    a directory that cannot be listed, a YAML file on a hidden path no
+    chosen file reaches), unless an *exclude* pattern leaves it out;
     :class:`EverythingExcluded` when entries were found — readable or not
     — and *exclude* left none of them."""
     patterns = list(exclude)
     chosen: "set[str]" = set()
     problems: "list[tuple[str, str]]" = []
+    hidden: "list[tuple[str, str]]" = []
     found = 0
+
+    def kept(f: str, relative: str) -> bool:
+        return not any(excluded(pat, os.path.basename(f), relative) for pat in patterns)
+
     for target in targets:
         t = os.fspath(target)
         if os.path.isdir(t):
-            candidates, unread = _walk_yaml(t)
+            walk = _walk_yaml(t)
+            candidates, unread = walk.files, walk.problems
+            hidden.extend(walk.hidden)
         elif os.path.isfile(t):
             candidates, unread = [(t, pathlib.Path(t).as_posix())], []
         elif os.path.lexists(t):
@@ -1231,16 +1340,23 @@ def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
             continue
         for f, relative in candidates:
             found += 1
-            if not any(excluded(pat, os.path.basename(f), relative) for pat in patterns):
+            if kept(f, relative):
                 chosen.add(f)
         for f, why in unread:
             found += 1
             relative = (pathlib.Path(t).as_posix() if f == t
                         else pathlib.Path(os.path.relpath(f, t)).as_posix())
-            if not any(excluded(pat, os.path.basename(f), relative) for pat in patterns):
+            if kept(f, relative):
                 problems.append((f, why))
+    read_real = {os.path.realpath(f) for f in chosen}
+    for f, relative in dict.fromkeys(hidden):  # overlapping targets find one twice
+        if os.path.realpath(f) in read_real:
+            continue
+        found += 1
+        if kept(f, relative):
+            problems.append((f, _UNDER_HIDDEN))
     if problems:
-        raise SourcesUnlisted(sorted(problems))
+        raise SourcesUnlisted(sorted(set(problems)))
     if found and not chosen and patterns:
         raise EverythingExcluded(found, patterns)
     return sorted(chosen)

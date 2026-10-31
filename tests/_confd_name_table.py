@@ -6,6 +6,11 @@ The Python side keeps no copy of the name rule — the former extension
 constant and the name predicates of `_lib_confd` were deleted — so a test that needs "every spelling of a
 config file's extension" derives it from the table's rows here instead of
 typing the set out.
+
+⚠️ One exception: `_lib_consumer_read._is_hidden` (the walk of rule-file
+sources, which are no conf.d) is the one name rule Python still keeps, a
+copy of Go's `confdname.IsHidden`; it is held to this table's `hidden`
+column row by row (`test_is_hidden_agrees_with_the_go_name_table`).
 """
 from __future__ import annotations
 
