@@ -100,14 +100,11 @@ from _lib_compat import find_project_root  # noqa: E402
 from _lib_prometheus import http_get_json  # noqa: E402
 from _lib_tenant_values import exit_on_served_values_error  # noqa: E402  (#2116)
 from _lib_parse_cache import exit_on_parse_tree_error  # noqa: E402  (ADR-036 §2, #2906)
-# Aliased: the local format_json_report() below (domain report builder,
-# exercised directly by tests) delegates its final dump to the shared helper.
-from _lib_python import format_json_report as _dump_json  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_prometheus import _validate_url_scheme  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, arm_crash_envelope,
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report, arm_crash_envelope,
 )
 
 # Reuse the recommendation engine wholesale — threshold_govern is its active
@@ -1182,14 +1179,15 @@ def format_text_report(
     return "\n".join(lines)
 
 
-def format_json_report(
+def json_document(
     plans: list[TenantPlan], outcomes: list[TenantOutcome], applied: bool,
     ungoverned: Optional[list["UngovernedKey"]] = None,
     not_applicable: Optional[list["NotApplicableKey"]] = None,
     force_manual: Optional[list["ForceManualKey"]] = None,
     inherited: Optional[list["InheritedKey"]] = None,
     not_measured: Optional[list["NotMeasuredKey"]] = None,
-) -> str:
+) -> dict:
+    """The --json document (run() encodes it, #3216)."""
     ung = ungoverned or []
     nm = not_measured or []
     na = not_applicable or []
@@ -1231,7 +1229,7 @@ def format_json_report(
     if nm:
         # #3133: as threshold-recommend marks its own report.
         out.update({"status": "partial", "reason": "prometheus_query_error"})
-    return _dump_json(out)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -1372,7 +1370,7 @@ def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
 @exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
 @exit_on_parse_tree_error  # ADR-036 §2: the pre-PUT da-guard write has no da-guard → rc 2
 @recommend.observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
-def main() -> None:
+def main() -> "Report | None":
     parser = argparse.ArgumentParser(
         description=(
             "閾值治理迴路 — 把推薦引擎接成 proposed-PR（Renovate-for-thresholds，#656）"
@@ -1514,12 +1512,7 @@ def main() -> None:
 
     result = run(args)
 
-    if args.json_output:
-        print(format_json_report(
-            result.plans, result.outcomes, args.apply, result.ungoverned,
-            result.not_applicable, result.force_manual, result.inherited,
-            result.not_measured))
-    else:
+    if not args.json_output:
         print(format_text_report(
             result.plans, result.outcomes, args.apply, result.ungoverned,
             result.not_applicable, result.force_manual, result.inherited,
@@ -1532,14 +1525,20 @@ def main() -> None:
         print(f"ERROR: Prometheus query failed for {len(result.not_measured)} threshold(s); "
               f"the report is partial (first: {safe_label(first.tenant)}/"
               f"{safe_label(first.key)}: {safe_label(first.error[:80])})", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-
-    # #656: surface a governance run whose writes overwhelmingly failed as a non-zero
-    # exit (-> Job Failed + a frozen last_successful_time so ThresholdGovernanceStale
-    # can fire). A clean / partly degraded / dry-run run, every threshold
-    # measured (above), stays exit 0. See
-    # _is_systemic_failure for why the dead-man's-switch needs this to be honest.
-    sys.exit(EXIT_VIOLATION if _is_systemic_failure(result.outcomes, args.apply) else EXIT_OK)
+        status = EXIT_CALLER_ERROR
+    else:
+        # #656: surface a governance run whose writes overwhelmingly failed as a
+        # non-zero exit (-> Job Failed + a frozen last_successful_time so
+        # ThresholdGovernanceStale can fire). A clean / partly degraded / dry-run
+        # run, every threshold measured (above), stays exit 0. See
+        # _is_systemic_failure for why the dead-man's-switch needs this to be honest.
+        status = EXIT_VIOLATION if _is_systemic_failure(result.outcomes, args.apply) else EXIT_OK
+    if args.json_output:
+        return Report(json_document(  # #3216: run() encodes it
+            result.plans, result.outcomes, args.apply, result.ungoverned,
+            result.not_applicable, result.force_manual, result.inherited,
+            result.not_measured), status)
+    sys.exit(status)
 
 
 if __name__ == "__main__":

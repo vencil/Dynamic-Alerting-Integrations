@@ -31,6 +31,7 @@ import validate_config as vc
 from test_served_values_readers_matrix import POSITIONS, _tree
 import _lib_parse_cache
 from _go_refusal import assert_refused  # noqa: E402  (#3206)
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 OPS = REPO_ROOT / "scripts" / "tools" / "ops"
@@ -67,7 +68,7 @@ def _policy(tmp_path: Path, body: str = _RULES) -> Path:
 
 
 def _engine(conf_d: Path, pol: Path, capsys, *extra: str) -> tuple[int, dict]:
-    rc = pe.main(["--config-dir", str(conf_d), "--policy", str(pol), "--json", *extra])
+    rc = emit_result(pe.main(["--config-dir", str(conf_d), "--policy", str(pol), "--json", *extra]))
     return rc, json.loads(capsys.readouterr().out)
 
 
@@ -121,7 +122,7 @@ def test_check_policy_dsl_matches_served_values(where, tmp_path):
 def test_opa_input_served_matches_served_values(where, tmp_path, capsys):
     conf_d = _tree(tmp_path, POSITIONS[where])
     served = tv.load_served_values(conf_d)
-    assert pob.main(["--config-dir", str(conf_d), "--dry-run"]) == 0
+    assert emit_result(pob.main(["--config-dir", str(conf_d), "--dry-run"])) == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["served"] == {t: {k: s.values[k] for k in s.severities} for t, s in served.items()}, where
     assert doc["served"]["tenant-a"]["custom_mysql_slow"] == 5.0, where
@@ -165,7 +166,7 @@ def test_retired_spelling_in_tenant_or_rule_is_compared(spelling, tmp_path, caps
     assert rc == 1
     row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path, _ALIAS_RULES)))
     assert row["status"] == vc.FAIL and sum(d.startswith("[ERROR]") for d in row["details"]) == 3, row
-    assert pob.main(["--config-dir", str(conf_d), "--dry-run"]) == 0
+    assert emit_result(pob.main(["--config-dir", str(conf_d), "--dry-run"])) == 0
     served = json.loads(capsys.readouterr().out)["served"]["tenant-a"]
     assert served == {"mysql_threads_running": 500.0, "mysql_threads_running_critical": 900.0}
 
@@ -399,7 +400,7 @@ def test_metadata_written_passes_unwritten_fails_and_when_gates(tmp_path, capsys
     row = vc.check_policy_dsl(str(conf_d), str(_policy(tmp_path, _META_RULES)))
     assert {d.split(" — ")[0] for d in row["details"] if d.startswith("[ERROR] ")} == {
         "[ERROR] tenant-a: gold-slow-lte-3", "[ERROR] tenant-b: owner"}, row
-    assert pob.main(["--config-dir", str(conf_d), "--dry-run"]) == 0
+    assert emit_result(pob.main(["--config-dir", str(conf_d), "--dry-run"])) == 0
     tenants = json.loads(capsys.readouterr().out)["tenants"]
     assert tenants["tenant-a"]["_metadata"] == {"owner": "dba", "tier": "gold"}, tenants
     assert "_metadata" not in tenants["tenant-b"], tenants
@@ -431,9 +432,9 @@ def test_root_only_keys_are_not_the_tenants_reserved_keys(tmp_path, capsys):
         tv.load_effective(conf_d)["tenant-a"].effective_config)   # 前提
     view = pe.load_policy_inputs(str(conf_d)).views["tenant-a"]
     assert "_policies" not in view and "_routing_defaults" not in view, view
-    assert pe.main(["--config-dir", str(conf_d), "--json", "--ci"]) == 0
+    assert emit_result(pe.main(["--config-dir", str(conf_d), "--json", "--ci"])) == 0
     assert json.loads(capsys.readouterr().out)["violations"] == []
-    assert pob.main(["--config-dir", str(conf_d), "--dry-run"]) == 0
+    assert emit_result(pob.main(["--config-dir", str(conf_d), "--dry-run"])) == 0
     tenants = json.loads(capsys.readouterr().out)["tenants"]
     assert set(tenants["tenant-a"]) == {"mysql_connections"}, tenants
 

@@ -42,6 +42,7 @@ for _sub in ("", "ops", "lint"):
         sys.path.insert(0, _p)
 
 import _lib_parse_tree  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -99,7 +100,7 @@ def test_the_closure_guard_fires_on_a_yaml_parse(no_yaml_parse):
 
 def _exit_code(fn, *args) -> int:
     try:
-        rc = fn(*args)
+        rc = emit_result(fn(*args))  # #3216: run()'s step — a Report is written here
     except SystemExit as exc:
         return exc.code if isinstance(exc.code, int) else 1
     return rc if isinstance(rc, int) else 0

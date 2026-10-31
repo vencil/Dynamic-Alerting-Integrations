@@ -30,6 +30,13 @@ for _p in [_TOOLS_DIR, os.path.join(_TOOLS_DIR, "ops")]:
 import threshold_recommend as tr  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from factories import write_yaml, make_tenant_yaml  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _as_run(result):
+    """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
+    document is written and its status is the exit, as SystemExit."""
+    raise SystemExit(emit_result(result))
 
 
 def _ts_pairs(values, step=100.0, start=1_700_000_000.0):
@@ -451,7 +458,7 @@ class TestOutputFormatting:
     def test_json_format(self):
         """JSON 輸出結構正確。"""
         reports = self._make_sample_reports()
-        data = json.loads(tr.format_json_report(reports))
+        data = tr.json_document(reports)
         assert data["tool"] == "threshold-recommend"
         assert data["summary"]["total_keys"] == 2
         assert data["summary"]["recommended_changes"] == 1
@@ -593,7 +600,7 @@ class TestExportPatch:
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"mysql_threads_running": 80}))
         with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
                                  "--export-patch", "--dry-run"]):
-            tr.main()  # must not raise
+            emit_result(tr.main())  # must not raise
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -616,7 +623,7 @@ class TestCLI:
         with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
                                  "--lookback", "invalid"]):
             with pytest.raises(SystemExit) as exc_info:
-                tr.main()
+                _as_run(tr.main())
             assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_missing_observed_map_exits_caller_error(self, tmp_path, monkeypatch, capsys):
@@ -626,7 +633,7 @@ class TestCLI:
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"cpu": 80}))
         with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path), "--dry-run"]):
             with pytest.raises(SystemExit) as exc_info:
-                tr.main()
+                _as_run(tr.main())
         assert exc_info.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "ERROR:" in err and str(missing) in err
@@ -638,7 +645,7 @@ class TestCLI:
         with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
                                  "--dry-run", "--tenant", "no-such-tenant"]):
             with pytest.raises(SystemExit) as exc_info:
-                tr.main()
+                _as_run(tr.main())
         assert exc_info.value.code == EXIT_CALLER_ERROR
 
     @pytest.mark.parametrize("fmt", [[], ["--json"], ["--export-patch"]],
@@ -662,7 +669,7 @@ class TestCLI:
                 patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
                                    "--prometheus", "http://p:9090", *fmt]):
             with pytest.raises(SystemExit) as exc_info:
-                tr.main()
+                _as_run(tr.main())
         assert exc_info.value.code == EXIT_CALLER_ERROR
         out, err = capsys.readouterr()
         assert "ERROR: Prometheus query failed for 1 key(s)" in err, err
@@ -679,14 +686,14 @@ class TestCLI:
         """CLI --dry-run 正常完成。"""
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"cpu": 80}))
         with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path), "--dry-run"]):
-            tr.main()
+            emit_result(tr.main())
 
     def test_json_output_cli(self, tmp_path, capsys):
         """CLI --json 輸出合法 JSON。"""
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"cpu": 80}))
         with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
                                  "--json", "--dry-run"]):
-            tr.main()
+            emit_result(tr.main())
             captured = capsys.readouterr()
             data = json.loads(captured.out)
             assert data["tool"] == "threshold-recommend"
@@ -696,7 +703,7 @@ class TestCLI:
         write_yaml(str(tmp_path), "db-a.yaml", make_tenant_yaml("db-a", keys={"cpu": 80}))
         with patch("sys.argv", ["threshold_recommend.py", "--config-dir", str(tmp_path),
                                  "--markdown", "--dry-run"]):
-            tr.main()
+            emit_result(tr.main())
             captured = capsys.readouterr()
             assert "| Key |" in captured.out
 
@@ -704,7 +711,7 @@ class TestCLI:
         """#719: 無 --config-dir 且非 generate → exit caller error。"""
         with patch("sys.argv", ["threshold_recommend.py"]):
             with pytest.raises(SystemExit) as exc_info:
-                tr.main()
+                _as_run(tr.main())
             assert exc_info.value.code == EXIT_CALLER_ERROR
 
     def test_generate_observed_map_cli(self, tmp_path, capsys, monkeypatch):
@@ -727,7 +734,7 @@ class TestCLI:
 
         monkeypatch.setattr(tr.observed_map_lib, "write_observed_map", fake_write)
         with patch("sys.argv", ["threshold_recommend.py", "--generate-observed-map"]):
-            tr.main()  # must NOT raise (no --config-dir required)
+            emit_result(tr.main())  # must NOT raise (no --config-dir required)
         captured = capsys.readouterr()
         assert called.get("yes") is True
         # #1112: the summary is human-readable prose → stderr (stdout is reserved
@@ -753,7 +760,7 @@ class TestCLI:
         monkeypatch.setattr(tr.observed_map_lib, "write_observed_map", fake_write)
         with patch("sys.argv",
                    ["threshold_recommend.py", "--generate-observed-map", "--json"]):
-            tr.main()
+            emit_result(tr.main())
         doc = json.loads(capsys.readouterr().out)
         assert doc["status"] == "observed_map_written"
         assert doc["observed_map"]["total"] == 3
@@ -1334,7 +1341,7 @@ class TestLowConfidenceNotExported:
 
     def test_json_report_carries_low_confidence_changes(self):
         rep = self._analyze(_ts_pairs(self._BIG_DELTA, step=15.0))
-        doc = json.loads(tr.format_json_report([rep]))
+        doc = tr.json_document([rep])
         assert doc["summary"]["recommended_changes"] == 0
         assert doc["summary"]["low_confidence_changes"] == 1
         assert doc["tenants"][0]["low_confidence_changes"] == 1
@@ -1365,7 +1372,7 @@ class TestPrometheusEnvFallback:
         monkeypatch.setattr(tr, "format_text_report", lambda reports: "")
         monkeypatch.setattr(sys, "argv", [
             "threshold_recommend.py", "--config-dir", str(tmp_path), *extra])
-        tr.main()
+        emit_result(tr.main())
         return captured["url"]
 
     @pytest.mark.parametrize("value", ["99", "0", "-1"])
@@ -1377,7 +1384,7 @@ class TestPrometheusEnvFallback:
             "threshold_recommend.py", "--config-dir", str(tmp_path),
             "--min-samples", value])
         with pytest.raises(SystemExit) as exc:
-            tr.main()
+            _as_run(tr.main())
         assert exc.value.code == EXIT_CALLER_ERROR
         assert "--min-samples" in capsys.readouterr().err
 
@@ -1820,7 +1827,7 @@ class TestUpperBoundFloor2964:
         assert head in ("⚠ 1 threshold(s) need manual review "
                         "(no value proposed — reason per line):",
                         "⚠ 1 個閾值需人工 review（不提供建議值，原因見各行）：")
-        out = json.loads(tg.format_json_report([], [], False, force_manual=fm))
+        out = tg.json_document([], [], False, force_manual=fm)
         assert out["summary"]["force_manual"] == 1
         assert out["force_manual"][0]["delta_pct"] is None
 
@@ -1831,7 +1838,7 @@ class TestUpperBoundFloor2964:
         assert f"| {rec.reason} |" in tr.format_markdown_report([report])
         assert (f"(manual) connections: {rec.guardrail_reason}"
                 in tr.format_export_patch([report]))
-        data = json.loads(tr.format_json_report([report]))
+        data = tr.json_document([report])
         assert set(data["tenants"][0]["keys"][0]) == set(
             tr.asdict(tr.KeyRecommendation(key="k", current_value=1)))
 

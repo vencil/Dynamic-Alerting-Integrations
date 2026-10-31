@@ -24,6 +24,13 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError  # noqa: E402
 import _lib_kubectl  # noqa: E402
 from _kubectl_fake import kubectl_run  # noqa: E402  (#3349)
 from _lib_kubectl import KubectlError  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _as_run(result):
+    """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
+    document is written and its status is the exit, as SystemExit."""
+    raise SystemExit(emit_result(result))
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +262,7 @@ class TestMain:
     def test_no_args_errors_and_exits(self, monkeypatch, cli_argv):
         cli_argv("grafana_import.py")
         with pytest.raises(SystemExit) as exc:
-            gi.main()
+            _as_run(gi.main())
         # parser.error() exits 2.
         assert exc.value.code == 2
 
@@ -264,23 +271,37 @@ class TestMain:
                             lambda ns: [{"check": "x", "status": "pass", "detail": "ok"}])
         cli_argv("grafana_import.py", "--verify", "--namespace", "monitoring")
         with pytest.raises(SystemExit) as exc:
-            gi.main()
+            _as_run(gi.main())
         assert exc.value.code == 0
 
-    def test_verify_fail_exits_one(self, monkeypatch, cli_argv):
+    @pytest.mark.parametrize("extra", [(), ("--json",)])
+    def test_verify_fail_exits_one(self, monkeypatch, cli_argv, extra):
+        """Under --json too: the document's status is the exit (#3216)."""
         monkeypatch.setattr(gi, "verify_dashboards",
                             lambda ns: [{"check": "x", "status": "fail", "detail": "broken"}])
-        cli_argv("grafana_import.py", "--verify")
+        cli_argv("grafana_import.py", "--verify", *extra)
         with pytest.raises(SystemExit) as exc:
-            gi.main()
+            _as_run(gi.main())
         assert exc.value.code == 1
+
+    @pytest.mark.parametrize("extra", [(), ("--json",)])
+    def test_missing_dashboard_file_exits_caller_error(self, tmp_path, capsys, cli_argv, extra):
+        """#452: a dashboard file that is not there is the caller's — rc 2,
+        under --json too, with the document saying `fail` (#3216)."""
+        cli_argv("grafana_import.py", "--dashboard", str(tmp_path / "nope.json"),
+                 "--dry-run", *extra)
+        with pytest.raises(SystemExit) as exc:
+            _as_run(gi.main())
+        assert exc.value.code == 2
+        if extra:
+            assert json.loads(capsys.readouterr().out)["status"] == "fail"
 
     def test_verify_json_output(self, monkeypatch, capsys, cli_argv):
         monkeypatch.setattr(gi, "verify_dashboards",
                             lambda ns: [{"check": "c", "status": "pass", "detail": "d"}])
         cli_argv("grafana_import.py", "--verify", "--json")
         with pytest.raises(SystemExit):
-            gi.main()
+            _as_run(gi.main())
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert payload["tool"] == "grafana-import"
@@ -301,7 +322,7 @@ class TestMain:
         (d / "readme.txt").write_text("x", encoding="utf-8")  # not .json
         cli_argv("grafana_import.py", "--dashboard-dir", str(d))
         with pytest.raises(SystemExit) as exc:
-            gi.main()
+            _as_run(gi.main())
         # #452: empty dir = caller error (2), consistent with dir-not-found
         assert exc.value.code == 2
         err = capsys.readouterr().err
@@ -312,7 +333,7 @@ class TestMain:
         f.write_text(json.dumps({"title": "T"}), encoding="utf-8")
         cli_argv("grafana_import.py", "--dashboard", str(f), "--dry-run")
         with pytest.raises(SystemExit) as exc:
-            gi.main()
+            _as_run(gi.main())
         assert exc.value.code == 0
         out = capsys.readouterr().out
         assert "DRY RUN" in out
@@ -361,3 +382,18 @@ class TestVerifyWithoutAnAnswer:
         doc = json.loads(r.stdout)
         assert doc["reason"] == "kubectl_error", doc
         assert "kubectl is not on PATH" in doc["error"]
+
+
+def test_json_document_is_utf8_not_ascii_escaped(tmp_path):
+    """#3216: the document is run()'s to write — UTF-8 text, as every
+    --json document; this tool's own `json.dumps` escaped a non-ASCII
+    dashboard file name to `\\uXXXX`."""
+    dash = tmp_path / "儀表板.json"
+    dash.write_text('{"title": "t", "panels": []}', encoding="utf-8")
+    p = subprocess.run(
+        [sys.executable, os.path.join(_TOOLS_DIR, "grafana_import.py"),
+         "--dashboard", str(dash), "--dry-run", "--json"],
+        capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert p.returncode == 0, p.stderr
+    assert "from 儀表板.json" in p.stdout, p.stdout
+    assert json.loads(p.stdout)["status"] == "pass"

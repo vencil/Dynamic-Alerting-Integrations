@@ -89,9 +89,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
-    disarm_crash_envelope)
-from _lib_python import format_json_report  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
 
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
@@ -473,7 +471,7 @@ def compute_exit_code(report: dict, *, ci: bool) -> int:
 # ─── Main ─────────────────────────────────────────────────────────────
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> "int | Report":
     try_utf8_stdout()
     ap = argparse.ArgumentParser(
         description="Mechanical diff between two Rule Pack YAML versions.",
@@ -537,17 +535,15 @@ def main(argv: list[str] | None = None) -> int:
     report["from_path"] = str(from_path)
     report["to_path"] = str(to_path)
 
+    status = compute_exit_code(report, ci=args.ci)
     if args.json:
-        # `json.dumps` serialises Python tuples as JSON arrays natively,
-        # so `label_values_changed: {key: (v1, v2)}` round-trips correctly
-        # as `{"key": [v1, v2]}`. `default=str` is the safety net for any
-        # label values that happen to be non-JSON-native (e.g. dates).
-        print(format_json_report(report, default=str))
-        disarm_crash_envelope()  # the document is out; the rc is still to come
-    else:
-        render_text(report, from_path=str(from_path), to_path=str(to_path))
-
-    return compute_exit_code(report, ci=args.ci)
+        # #3216: run() encodes it. A tuple is a JSON array, so
+        # `label_values_changed: {key: (v1, v2)}` reads `{"key": [v1, v2]}`;
+        # a date is ISO 8601, and a value JSON cannot carry is the
+        # `output_not_serializable` exit, not its str().
+        return Report(report, status)
+    render_text(report, from_path=str(from_path), to_path=str(to_path))
+    return status
 
 
 if __name__ == "__main__":

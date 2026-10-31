@@ -101,7 +101,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # ADR-036 step 4 (#2906): the root defaults carrier is parse-tree's choice
 # (`defaults_carriers`) and its content parse-tree's yaml.v3 reading.
@@ -116,13 +116,11 @@ try:
     from _lib_python import (
         detect_cli_lang,
         exit_on_yaml_file_error,
-        format_json_report,
     )
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
         exit_on_yaml_file_error,
-        format_json_report,
     )
 from _lib_tenant_values import (  # noqa: E402  (#2115 0-B)
     ServedValuesError,
@@ -724,8 +722,9 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
 @exit_on_yaml_file_error  # #1654: unreadable tenant / _defaults file → rc 2, named
 @exit_on_served_values_error  # #2115: da-guard missing or failing, a dropped file → rc 2, named
 @_lib_parse_cache.exit_on_parse_tree_error  # #2906: no usable parse-tree → rc 2
-def main(argv: Optional[list[str]] = None) -> int:
-    """CLI entry point."""
+def main(argv: Optional[list[str]] = None) -> "int | Report":
+    """CLI entry point. A JSON document (the OPA input under --dry-run, the
+    report under --json) is handed back for run() to encode (#3216)."""
     try_utf8_stdout()
     lang = detect_cli_lang()
     parser = build_parser(lang)
@@ -752,13 +751,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             # `opa eval`, not read as a report) — so the zero-tenant answer is
             # an OPA input with no tenants, NOT a report envelope. Same schema
             # as the populated dry-run, so the same consumer keeps working.
-            print(format_json_report(build_opa_input(
+            return Report(build_opa_input(
                 args.config_dir, {}, defaults,
                 rule_packs=None, platform_version="v2.3.0",
-            )))
-        elif args.json_output:
+            ))
+        if args.json_output:
             # Report schema, zeroed, with a status/reason discriminator.
-            print(format_json_report({
+            return Report({
                 "status": "no_tenant_configs",
                 "reason": "no_tenant_configs_found",
                 "tenants_evaluated": 0,
@@ -766,7 +765,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "warning_count": 0,
                 "passed": True,
                 "violations": [],
-            }))
+            })
         return EXIT_OK
 
     # Build OPA input
@@ -781,8 +780,7 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # Dry-run mode
     if args.dry_run:
-        print(format_json_report(opa_input))
-        return EXIT_OK
+        return Report(opa_input)
 
     # Evaluate via OPA
     if not args.opa_url and not args.policy_path:
@@ -815,16 +813,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"ERROR: {safe_label(str(e))}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
+    # Exit code
+    status = EXIT_VIOLATION if args.ci and not result.passed else EXIT_OK
+
     # Output
     if args.json_output:
-        print(format_json_report(generate_json_report(result)))
-    else:
-        print(generate_text_report(result, lang))
-
-    # Exit code
-    if args.ci and not result.passed:
-        return EXIT_VIOLATION
-    return EXIT_OK
+        return Report(generate_json_report(result), status)
+    print(generate_text_report(result, lang))
+    return status
 
 
 if __name__ == "__main__":

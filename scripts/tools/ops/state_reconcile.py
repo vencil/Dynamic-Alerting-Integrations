@@ -62,7 +62,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, CallerError, arm_crash_envelope  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, CallerError, Report, arm_crash_envelope  # noqa: E402
 from _lib_paths import classify_path, require_dir, supplied  # noqa: E402  (#3392)
 from _lib_io import (  # noqa: E402  (#1789)
     OutputWriteError,
@@ -447,7 +447,7 @@ def compute_exit_code(report: dict, *, ci: bool, dry_run: bool) -> int:
 
 
 @exit_on_output_write_error
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> "int | Report":
     try_utf8_stdout()
     ap = argparse.ArgumentParser(
         description="Reconcile migration state directory (schema + manifest).",
@@ -508,12 +508,11 @@ def main(argv: list[str] | None = None) -> int:
     report = reconcile(state_dir, manifest_path, dry_run=args.dry_run)
     report["dry_run"] = args.dry_run
 
+    status = compute_exit_code(report, ci=args.ci, dry_run=args.dry_run)
     if args.json:
-        print(format_json_report(report))
-    else:
-        render_text(report, dry_run=args.dry_run)
-
-    return compute_exit_code(report, ci=args.ci, dry_run=args.dry_run)
+        return Report(report, status)  # #3216: run() encodes it
+    render_text(report, dry_run=args.dry_run)
+    return status
 
 
 if __name__ == "__main__":

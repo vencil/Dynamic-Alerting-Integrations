@@ -299,11 +299,30 @@ def test_run_end_to_end_offline(tmp_path, capsys):
     # MISSING gates in --ci; ORPHAN does not (no --strict-orphan).
     assert a.exit_code() == ra.EXIT_VIOLATION
 
-    a.print_json_report()
-    report = json.loads(capsys.readouterr().out)
+    report = a.json_document()
     assert report["summary"]["missing"] == 1
     assert report["summary"]["orphan"] == 1
     assert report["summary"]["declared"] == 2
+
+
+def test_main_json_exit_is_the_verdict(tmp_path, capsys, monkeypatch):
+    """#3216: under --json the document goes out through run() and the
+    run's exit is still the --ci verdict (MISSING gates: rc 1)."""
+    import sys
+    from _lib_exitcodes import emit_result
+    _rule_pack(tmp_path, "k8s", """
+        groups:
+          - name: g
+            rules:
+              - alert: Gone
+                expr: up == 1
+    """)
+    rt_file = tmp_path / "rules.json"
+    rt_file.write_text(json.dumps(_runtime({"group": "g", "name": "Other"})), encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["runtime_audit.py", "--rule-packs-dir", str(tmp_path),
+                                      "--runtime-json", str(rt_file), "--json", "--ci"])
+    assert emit_result(ra.main()) == ra.EXIT_VIOLATION
+    assert json.loads(capsys.readouterr().out)["summary"]["missing"] == 1
 
 
 @pytest.mark.parametrize("answer", [

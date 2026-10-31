@@ -280,7 +280,7 @@ def test_an_inherited_key_reports_no_confidence(tmp_path, stubs):
     """F8: not queried is not "too few samples" — no LOW, in text or JSON."""
     conf_d = _tree(tmp_path, MATRIX["mixed"][0])
     reports = tr.run_analysis(str(conf_d), prometheus_url="http://prom.stub", tenant_filter="tenant-a")
-    [inh] = json.loads(tr.format_json_report(reports))["tenants"][0]["inherited"]
+    [inh] = tr.json_document(reports)["tenants"][0]["inherited"]
     assert (inh["key"], inh["confidence"]) == ("mysql_connections", tr.CONFIDENCE_NOT_QUERIED)
     row = next(ln for ln in tr.format_text_report(reports).splitlines()
                if ln.strip().startswith("mysql_connections"))
@@ -314,7 +314,7 @@ def test_json_summary_counts_nested_as_the_text_does(apply, tmp_path, stubs):
     conf_d = _nested_first_tree(tmp_path, n_nested=2, n_root=1)
     stubs(conf_d)
     res = tg.run(_args(conf_d, apply=apply))
-    summary = json.loads(tg.format_json_report(res.plans, res.outcomes, apply))["summary"]
+    summary = tg.json_document(res.plans, res.outcomes, apply)["summary"]
     assert (summary["tenants_actionable"], summary["changes"], summary["skipped_nested"]) == (1, 1, 2)
     text = tg.format_text_report(res.plans, res.outcomes, apply).splitlines()[-1]
     assert "2 tenant(s) with a file in a sub-directory get no PR" in text, text

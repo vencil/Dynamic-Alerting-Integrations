@@ -18,6 +18,13 @@ sys.path.insert(0, os.path.join(REPO, "scripts", "tools", "ops"))
 
 import _grar_validate as gv  # noqa: E402
 from _grar_merge import IgnoredKeyWarning  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _as_run(result):
+    """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
+    document is written and its status is the exit, as SystemExit."""
+    raise SystemExit(emit_result(result))
 
 GEN = os.path.join(REPO, "scripts", "tools", "ops", "generate_alertmanager_routes.py")
 
@@ -130,7 +137,7 @@ def test_validate_config_schema_row_fails(tmp_path, capsys, cli_argv):
     d = _tree(tmp_path / "d", stray=("T",))
     cli_argv("validate_config", "--config-dir", str(d), "--json")
     with pytest.raises(SystemExit) as exc:
-        vc.main()
+        _as_run(vc.main())
     rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
     assert rows["schema"]["status"] == "fail", rows["schema"]
     assert any("'_routing_profle' is not a key the route generator reads" in x

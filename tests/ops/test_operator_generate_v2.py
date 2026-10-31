@@ -27,6 +27,7 @@ sys.path.insert(0, str(_REPO_ROOT / "scripts" / "tools" / "ops"))
 sys.path.insert(0, str(_REPO_ROOT / "scripts" / "tools"))
 
 import operator_generate as og
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 from operator_generate import (
     _build_inhibit_rules_crd,
     _build_receiver_config,
@@ -441,7 +442,7 @@ class TestMainJsonSingleDocument:
             "--output-dir", str(out),
             "--json", *extra,
         ]):
-            og.main()
+            emit_result(og.main())
         captured = capsys.readouterr()
         assert "---" not in captured.out        # 沒有 YAML 文件分隔線混進來
         return json.loads(captured.out)         # 全文 parse ⇒ 單一文件
@@ -836,7 +837,7 @@ class TestWritingIsOptIn:
             "--rule-packs-dir", str(packs),
             "--config-dir", str(confd),
         ]):
-            og.main()
+            emit_result(og.main())
         after = self._tree(tmp_path)
 
         assert after == before, (
@@ -865,7 +866,7 @@ class TestWritingIsOptIn:
             "--config-dir", str(confd),
             "--output-dir", str(out_dir),
         ]):
-            og.main()
+            emit_result(og.main())
 
         written = sorted(p.name for p in out_dir.glob("*.yaml"))
         assert written, "--output-dir was given: the write path must still write"
@@ -927,7 +928,7 @@ class TestWritingIsOptIn:
             "--config-dir", str(confd),
             "--components", "rules",
         ]):
-            og.main()
+            emit_result(og.main())
         legacy.flush()
         raw = buf.getvalue()
 
@@ -967,7 +968,7 @@ class TestWritingIsOptIn:
                     "--config-dir", str(confd),
                     "--output-dir", bad,
                 ]):
-                    og.main()
+                    emit_result(og.main())
             assert exc.value.code == 2, f"argparse caller error expected for {bad!r}"
             assert self._tree(cwd) == set(), (
                 f"{bad!r} must be rejected, not resolved to the cwd; "
@@ -981,7 +982,7 @@ class TestWritingIsOptIn:
             "--config-dir", str(confd),
             "--output-dir", ".",
         ]):
-            og.main()
+            emit_result(og.main())
         assert list(cwd.glob("*.yaml")), "--output-dir . must still write into the cwd"
 
     def test_gitops_is_not_silently_dropped_on_the_stdout_path(
@@ -998,10 +999,10 @@ class TestWritingIsOptIn:
             "--config-dir", str(confd),
         ]
         with patch("sys.argv", list(argv)):
-            og.main()
+            emit_result(og.main())
         plain = capsys.readouterr().out
         with patch("sys.argv", argv + ["--gitops"]):
-            og.main()
+            emit_result(og.main())
         gitops = capsys.readouterr().out
 
         assert plain and gitops, "both runs must emit YAML to stdout"

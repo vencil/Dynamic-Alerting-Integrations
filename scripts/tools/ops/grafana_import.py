@@ -42,7 +42,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
 from _lib_paths import classify_path, require_dir  # noqa: E402  (#3276)
 from _lib_kubectl import KubectlError, kubectl_list  # noqa: E402  (#3349)
 
@@ -268,25 +268,23 @@ def main():
             c["status"] == "fail" and c.get("caller_error") for c in checks
         )
 
+        status = (EXIT_CALLER_ERROR if caller_error
+                  else EXIT_VIOLATION if has_failure else EXIT_OK)
         if args.json:
-            print(json.dumps({
+            return Report({  # #3216: run() encodes it
                 "tool": "grafana-import",
                 "mode": "verify",
                 "status": "fail" if has_failure else "pass",
                 "checks": checks,
-            }, indent=2))
-        else:
-            print(f"\n{'='*60}")
-            print(f"  GRAFANA DASHBOARD VERIFICATION")
-            print(f"{'='*60}")
-            for c in checks:
-                symbol = {"pass": "✓", "fail": "✗", "warn": "⚠"}.get(c["status"], "?")
-                print(f"  {symbol} {c['check']:40s} {c['detail']}")
-            print(f"\n  Overall: {'FAIL' if has_failure else 'PASS'}\n")
-
-        if caller_error:
-            sys.exit(EXIT_CALLER_ERROR)
-        sys.exit(EXIT_VIOLATION if has_failure else EXIT_OK)
+            }, status)
+        print(f"\n{'='*60}")
+        print(f"  GRAFANA DASHBOARD VERIFICATION")
+        print(f"{'='*60}")
+        for c in checks:
+            symbol = {"pass": "✓", "fail": "✗", "warn": "⚠"}.get(c["status"], "?")
+            print(f"  {symbol} {c['check']:40s} {c['detail']}")
+        print(f"\n  Overall: {'FAIL' if has_failure else 'PASS'}\n")
+        sys.exit(status)
 
     # Collect dashboard files to import
     dashboards = []
@@ -320,27 +318,25 @@ def main():
         if any(r["status"] == "fail" and r.get("caller_error") for r in results):
             caller_error = True
 
+    # #452/#737: file-not-found / invalid-JSON / kubectl env failures are
+    # caller-errors (exit 2); a clean run that merely couldn't apply is still 1.
+    status = (EXIT_CALLER_ERROR if caller_error
+              else EXIT_VIOLATION if has_failure else EXIT_OK)
     if args.json:
-        print(json.dumps({
+        return Report({  # #3216: run() encodes it
             "tool": "grafana-import",
             "mode": "dry-run" if args.dry_run else "import",
             "status": "fail" if has_failure else "pass",
             "actions": all_results,
-        }, indent=2))
-    else:
-        print(f"\n{'='*60}")
-        print(f"  GRAFANA DASHBOARD IMPORT {'(DRY RUN)' if args.dry_run else ''}")
-        print(f"{'='*60}")
-        for r in all_results:
-            symbol = {"pass": "✓", "fail": "✗", "dry-run": "⊘"}.get(r["status"], "?")
-            print(f"  {symbol} {r['action']:30s} {r['detail']}")
-        print(f"\n  Overall: {'FAIL' if has_failure else 'PASS'}\n")
-
-    # #452/#737: file-not-found / invalid-JSON / kubectl env failures are
-    # caller-errors (exit 2); a clean run that merely couldn't apply is still 1.
-    if caller_error:
-        sys.exit(EXIT_CALLER_ERROR)
-    sys.exit(EXIT_VIOLATION if has_failure else EXIT_OK)
+        }, status)
+    print(f"\n{'='*60}")
+    print(f"  GRAFANA DASHBOARD IMPORT {'(DRY RUN)' if args.dry_run else ''}")
+    print(f"{'='*60}")
+    for r in all_results:
+        symbol = {"pass": "✓", "fail": "✗", "dry-run": "⊘"}.get(r["status"], "?")
+        print(f"  {symbol} {r['action']:30s} {r['detail']}")
+    print(f"\n  Overall: {'FAIL' if has_failure else 'PASS'}\n")
+    sys.exit(status)
 
 
 if __name__ == "__main__":

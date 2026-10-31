@@ -670,7 +670,7 @@ da-tools maintenance-scheduler --config-dir <path> [options]
 | `--alertmanager <URL>` | Alertmanager base URL；給了才會真的建立 silence，不給只印報告 | （無） |
 | `--pushgateway <URL>` | 把執行結果推到 Pushgateway（`--dry-run` 時不推） | （無） |
 | `--dry-run` | 只印報告，不建立 silence | false |
-| `--json-output` | 另在 stdout 印一行 `{"created", "skipped", "errors", "mode"}`；`mode` 是 `apply`、`dry-run` 或 `report-only`，後兩者的 `created` 是「會建立」的數量 | false |
+| `--json-output` | 另在 stdout 印一份 JSON 文件 `{"created", "skipped", "errors", "mode"}`（兩格縮排；先前為單行，[#3216](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3216)）；`mode` 是 `apply`、`dry-run` 或 `report-only`，後兩者的 `created` 是「會建立」的數量 | false |
 
 **排程從哪裡讀**：每個租戶的 `_state_maintenance` 取 `da-guard effective`（tenant-api `/effective`）的答案，不再由 Python 重讀 YAML（[#2751](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2751)）：根目錄平台檔 `tenants:` 裡寫的、子目錄租戶檔裡寫的，與根目錄租戶檔一樣算；`_defaults.yaml` 頂層的 `_state_maintenance` 不算（exporter 也不繼承它）。⚠️ 行為變更：根目錄租戶檔若沒有 `tenants:`、把 `_state_maintenance` 寫在頂層，以前會當成以檔名為 id 的租戶排程，現在與 exporter 一樣不讀（stderr 印一行點名該檔的 WARN，結束碼 0）。需要 da-guard（映像內建；repo 內 `make da-guard-build`）；找不到 da-guard、exporter 讀不到某個檔、或 da-guard 失敗（含 `--config-dir` 裡沒有任何 `.yaml`、同一個租戶 id 寫在兩個檔裡的 `duplicate tenant ID`）時，不當成「沒有排程」，結束碼 2 並轉出 da-guard 的 stderr。⚠️ v2.9.0 映像仍以 Python 讀 conf.d，平台檔 `tenants:` 與子目錄裡的排程讀不到。 <!-- image-caveat: v2.9.0 -->
 

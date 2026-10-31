@@ -132,7 +132,7 @@ from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     FlatRead,
@@ -2513,7 +2513,50 @@ def _caveat_applies(row: dict[str, object]) -> bool:
             and not row.get("unusable_files"))
 
 
-def print_report(results: list[dict[str, object]], as_json: bool = False) -> None:
+def json_document(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    """The --json document: the rows with their suggested actions (v2.5.0)
+    — run() encodes it (#3216)."""
+    unusable = _unusable_files(results)
+    # v2.5.0: Inject hints into JSON output for programmatic consumers
+    enriched = []
+    for r in results:
+        entry = dict(r)
+        # ⛔ Internal bookkeeping does not go in the customer's JSON.
+        # These exist so the report can decide where the skipped-file
+        # caveat belongs and which advice line to print; publishing them
+        # turns an implementation detail into something a consumer can
+        # depend on. An earlier version popped only `reads_config_dir`
+        # while its own comment said "it appears on every row of a
+        # perfectly healthy run" — which was equally true of the other
+        # two: measured on a clean `try-local/seed/conf.d`, every one of
+        # the five PASS rows carried `"unusable_files": []` and
+        # `"hint": null`, growing the document 750B -> 970B for nothing.
+        # `hint` is in any case a duplicate of `suggested_action`, which
+        # this same function already emits.
+        # ⚠️ `caller_error` matches that description too and is NOT
+        # popped: it has been in this document since v2.5.0, so removing
+        # it is a contract change rather than a contract not yet made.
+        # The rule is "do not ADD internal fields", not "no internal
+        # field may remain".
+        entry.pop("reads_config_dir", None)
+        entry.pop("hint", None)
+        entry.pop("hint_docs", None)
+        if not entry.get("unusable_files"):
+            entry.pop("unusable_files", None)
+        if unusable and _caveat_applies(r):
+            entry["skipped_unusable_files"] = unusable
+        if r["status"] != PASS:
+            hint, docs = _CHECK_HINTS.get(r["check"], ("", ""))
+            hint = r.get("hint") or hint
+            docs = r.get("hint_docs") or docs
+            if hint:
+                entry["suggested_action"] = hint
+                entry["docs_link"] = _docs_url(docs)
+        enriched.append(entry)
+    return enriched
+
+
+def print_report(results: list[dict[str, object]]) -> None:
     """Print the validation report with suggested actions (v2.5.0)."""
     unusable = _unusable_files(results)
     caveat = ""
@@ -2521,46 +2564,6 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
         listed = ", ".join(unusable[:5]) + (" …" if len(unusable) > 5 else "")
         caveat = UNUSABLE_CAVEAT.format(n=len(unusable),
                                         listed=listed)
-
-    # v2.5.0: Inject hints into JSON output for programmatic consumers
-    if as_json:
-        enriched = []
-        for r in results:
-            entry = dict(r)
-            # ⛔ Internal bookkeeping does not go in the customer's JSON.
-            # These exist so the report can decide where the skipped-file
-            # caveat belongs and which advice line to print; publishing them
-            # turns an implementation detail into something a consumer can
-            # depend on. An earlier version popped only `reads_config_dir`
-            # while its own comment said "it appears on every row of a
-            # perfectly healthy run" — which was equally true of the other
-            # two: measured on a clean `try-local/seed/conf.d`, every one of
-            # the five PASS rows carried `"unusable_files": []` and
-            # `"hint": null`, growing the document 750B -> 970B for nothing.
-            # `hint` is in any case a duplicate of `suggested_action`, which
-            # this same function already emits.
-            # ⚠️ `caller_error` matches that description too and is NOT
-            # popped: it has been in this document since v2.5.0, so removing
-            # it is a contract change rather than a contract not yet made.
-            # The rule is "do not ADD internal fields", not "no internal
-            # field may remain".
-            entry.pop("reads_config_dir", None)
-            entry.pop("hint", None)
-            entry.pop("hint_docs", None)
-            if not entry.get("unusable_files"):
-                entry.pop("unusable_files", None)
-            if unusable and _caveat_applies(r):
-                entry["skipped_unusable_files"] = unusable
-            if r["status"] != PASS:
-                hint, docs = _CHECK_HINTS.get(r["check"], ("", ""))
-                hint = r.get("hint") or hint
-                docs = r.get("hint_docs") or docs
-                if hint:
-                    entry["suggested_action"] = hint
-                    entry["docs_link"] = _docs_url(docs)
-            enriched.append(entry)
-        print(json.dumps(enriched, indent=2))
-        return
 
     print("=" * 60)
     print("  validate-config — Unified Validation Report")
@@ -2574,8 +2577,8 @@ def print_report(results: list[dict[str, object]], as_json: bool = False) -> Non
         for detail in r.get("details", []):
             # #1538: `details` carries tenant-controlled filenames and the
             # exception text derived from them. Escaped HERE, not in the result
-            # dict, because the --json branch above returns before this loop and
-            # its bytes must not change (json.dumps already escapes).
+            # dict, because the --json document (`json_document`) is built from
+            # the same rows and its bytes must not change (JSON escapes C0).
             print(f"       {safe_label(detail)}")
         if caveat and _caveat_applies(r):
             print(f"       {safe_label(caveat)}")
@@ -2937,15 +2940,16 @@ def _run_check(name: str, fn, *args, _config_dir: str | None = None,
 # ============================================================
 # Main
 # ============================================================
-def main() -> None:
+def main() -> "Report | None":
     """CLI entry point: One-stop configuration validation. Every row reads
     one `da-guard parse-tree` document of the tree (ADR-036 step 4). A
-    judge (`judging`, #3206): a path Go names is its finding, exit 1."""
+    judge (`judging`, #3206): a path Go names is its finding, exit 1.
+    Under --json the rows are handed back for run() to encode (#3216)."""
     with _lib_parse_cache.session(), _lib_parse_cache.judging():
-        _main()
+        return _main()
 
 
-def _main() -> None:
+def _main() -> "Report | None":
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description=_h('description'))
@@ -2977,14 +2981,14 @@ def _main() -> None:
         # `validate-config --json | jq` consumer got a parse error instead of
         # a report. It now emits the same document shape as every other run —
         # a list of rows — holding one caller-error row, and still exits 2.
-        # ⚠️ Routed through print_report, not hand-built, so the row carries
+        # ⚠️ Routed through json_document, not hand-built, so the row carries
         # exactly the entry keys the documented contract allows
         # (docs/cli-reference.md, `#### validate-config`).
         if args.json:
-            print_report([_make_result(
+            return Report(json_document([_make_result(
                 "config_dir", FAIL,
                 [config_dir_problem.message],
-                caller_error=True)], as_json=True)
+                caller_error=True)]), EXIT_CALLER_ERROR)
         sys.exit(EXIT_CALLER_ERROR)
 
     # ADR-036 step 4 (#2906): no usable `da-guard parse-tree` — no row can
@@ -2995,7 +2999,7 @@ def _main() -> None:
         row = _parse_tree_failure_row("config_dir", exc, _PARSE_TREE_HINT)
         print(f"ERROR: {safe_label(' '.join(row['details']))}", file=sys.stderr)
         if args.json:
-            print_report([row], as_json=True)
+            return Report(json_document([row]), EXIT_CALLER_ERROR)
         sys.exit(EXIT_CALLER_ERROR)
 
     # Ensure tools dir is in sys.path for imports
@@ -3087,9 +3091,6 @@ def _main() -> None:
 
     _effective_runs = None
 
-    # Report
-    print_report(results, as_json=args.json)
-
     # Exit code
     has_fail = any(r["status"] == FAIL for r in results)
     # #452/#737: a FAIL caused by a missing/timed-out prerequisite tool
@@ -3124,9 +3125,14 @@ def _main() -> None:
         and not (input_unreadable and r.get("reads_config_dir", True))
         for r in results
     )
-    if caller_error:
-        sys.exit(EXIT_CALLER_ERROR)
-    sys.exit(EXIT_VIOLATION if has_fail else EXIT_OK)
+    status = (EXIT_CALLER_ERROR if caller_error
+              else EXIT_VIOLATION if has_fail else EXIT_OK)
+
+    # Report
+    if args.json:
+        return Report(json_document(results), status)  # #3216: run() encodes it
+    print_report(results)
+    sys.exit(status)
 
 
 if __name__ == "__main__":

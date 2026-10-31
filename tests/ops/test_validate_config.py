@@ -20,6 +20,13 @@ import yaml
 
 import validate_config as vc
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import emit_result, encode_json  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _as_run(result):
+    """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
+    document is written and its status is the exit, as SystemExit."""
+    raise SystemExit(emit_result(result))
 
 # #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
 # （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
@@ -147,13 +154,7 @@ class TestReportOutput:
     def test_json_output(self):
         """JSON output should be parseable."""
         results = [vc._make_result("yaml_syntax", vc.PASS, ["ok"])]
-        old_stdout = sys.stdout
-        sys.stdout = captured = io.StringIO()
-        try:
-            vc.print_report(results, as_json=True)
-        finally:
-            sys.stdout = old_stdout
-        parsed = json.loads(captured.getvalue())
+        parsed = json.loads(encode_json(vc.json_document(results)))  # #3216: as run() writes it
         assert len(parsed) == 1
         assert parsed[0]["check"] == "yaml_syntax"
 
@@ -166,7 +167,7 @@ class TestReportOutput:
         old_stdout = sys.stdout
         sys.stdout = captured = io.StringIO()
         try:
-            vc.print_report(results, as_json=False)
+            vc.print_report(results)
         finally:
             sys.stdout = old_stdout
         output = captured.getvalue()
@@ -226,7 +227,7 @@ class TestPolicyCheck:
             policy = self._tree(d, tenant="domain-a", extra={"group_wait": "1s"})
             cli_argv("validate_config", "--config-dir", d, "--policy", policy, "--json")
             with pytest.raises(SystemExit) as exc:
-                vc.main()
+                _as_run(vc.main())
             rows = json.loads(capsys.readouterr().out)
             rows = rows["checks"] if isinstance(rows, dict) else rows
             assert exc.value.code == 0, rows
@@ -693,7 +694,7 @@ class TestPolicyDSLInvalidRules:
             argv += ["--policy-dsl", str(f)]
         cli_argv(*argv)
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
         return exc.value.code, rows["policy_dsl"]
 
@@ -880,7 +881,7 @@ class TestMainCLI:
         config_dir = self._make_config_dir(tmp_path)
         cli_argv("validate_config", "--config-dir", config_dir)
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert "validate-config" in out or "Validation" in out
 
@@ -888,7 +889,7 @@ class TestMainCLI:
         config_dir = self._make_config_dir(tmp_path)
         cli_argv("validate_config", "--config-dir", config_dir, "--json")
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         parsed = json.loads(out)
         assert isinstance(parsed, list)
@@ -897,7 +898,7 @@ class TestMainCLI:
     def test_main_nonexistent_dir(self, monkeypatch, capsys, cli_argv):
         cli_argv("validate_config", "--config-dir", "/nonexistent/path")
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         assert exc.value.code == EXIT_CALLER_ERROR
 
     def test_main_with_policy(self, tmp_path, monkeypatch, capsys, cli_argv):
@@ -908,7 +909,7 @@ class TestMainCLI:
         cli_argv("validate_config", "--config-dir", config_dir,
             "--policy", str(policy))
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert "policy" in out.lower() or "PASS" in out
 
@@ -1086,14 +1087,7 @@ class TestCheckHintsPointSomewhereCustomersCanOpen:
         assert "-> See: docs/" not in out
 
     def test_json_mode_carries_the_url_too(self):
-        captured = io.StringIO()
-        original, sys.stdout = sys.stdout, captured
-        try:
-            vc.print_report([vc._make_result("routes", vc.FAIL, ["boom"])],
-                            as_json=True)
-        finally:
-            sys.stdout = original
-        entry = json.loads(captured.getvalue())[0]
+        entry = vc.json_document([vc._make_result("routes", vc.FAIL, ["boom"])])[0]
         assert entry["docs_link"].startswith("https://vencil.github.io/")
 
 
@@ -1174,7 +1168,7 @@ class TestNoCheckCanKillTheReport:
                  "--policy", str(policy), "--rule-packs", str(packs),
                  "--version-check")
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         return exc.value.code, capsys.readouterr().out
 
     @pytest.mark.parametrize("name", CHECK_NAMES)
@@ -1207,7 +1201,7 @@ class TestNoCheckCanKillTheReport:
         """Must-succeed control: the same fixture with nothing injected."""
         cli_argv("validate_config", "--config-dir", self._conf_d(tmp_path))
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert exc.value.code == 0, out
         assert "[FAIL]" not in out, out
@@ -1553,7 +1547,7 @@ class TestTheCaveatIsActuallyPrinted:
         (d / "db-a.yaml").write_bytes(b"tenants:\n  db_a: [90\n")
         cli_argv("validate_config", "--config-dir", str(d), *kw.get("extra", ()))
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         return exc.value.code, capsys.readouterr().out
 
     def test_rows_that_skipped_a_file_say_so_and_say_it_first(
@@ -1643,7 +1637,7 @@ class TestUnreadableInputIsNeverOurBug:
                                           capsys, cli_argv):
         cli_argv("validate_config", "--config-dir", self._tree(tmp_path, body))
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert exc.value.code == 1, (
             f"{label}: exit {exc.value.code} tells the customer this tool "
@@ -1668,7 +1662,7 @@ class TestUnreadableInputIsNeverOurBug:
         monkeypatch.setattr(vc, "check_routes", boom)
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert exc.value.code == vc.EXIT_CALLER_ERROR, out
         assert "please report it with the traceback" in out, out
@@ -1711,7 +1705,7 @@ class TestExitCodeAttributionIsPerRow:
         cli_argv("validate_config", "--config-dir",
                  self._tree(tmp_path, unreadable), "--version-check")
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         capsys.readouterr()
         return exc.value.code
 
@@ -1842,7 +1836,7 @@ class TestUnwatchedHalvesFoundByMutation:
             (d / f"t{i}.yaml").write_bytes(b"tenants:\n  x: [1\n")
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit):
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert "…" in out, out
         row = _report_row(out, "routes")
@@ -1893,7 +1887,7 @@ class TestTheJsonDocumentCarriesNoInternalBookkeeping:
             (d / "db-b.yaml").write_bytes(b"tenants:\n  db_b: [1\n")
         cli_argv("validate_config", "--config-dir", str(d), "--json")
         with pytest.raises(SystemExit):
-            vc.main()
+            _as_run(vc.main())
         return json.loads(capsys.readouterr().out)
 
     INTERNAL = ("reads_config_dir", "hint")
@@ -2011,7 +2005,7 @@ class TestACheckThatExitsTheProcessStillLeavesAReport:
         monkeypatch.setattr(vc, "check_routes", gone)
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert "Unified Validation Report" in out, (
             f"a check exiting the process took the report with it "
@@ -2055,7 +2049,7 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
                  # a list is still a policy file that cannot be used.
                  self._tree(tmp_path, "domain_policies: [a]\n"), "--strict")
         with pytest.raises(SystemExit):
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert "[FAIL] schema" in out, out
         assert _generic_schema_hint() not in out, (
@@ -2078,7 +2072,7 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
             encoding="utf-8")
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
         assert "[FAIL] schema" in out, out
@@ -2106,7 +2100,7 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
             encoding="utf-8")
         cli_argv("validate_config", "--config-dir", str(d), "--strict")
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
         assert "[FAIL] schema" in out, out
@@ -2132,7 +2126,7 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
             "      repeat_interval: \"1h30m\"\n", encoding="utf-8")
         cli_argv("validate_config", "--config-dir", d)
         with pytest.raises(SystemExit):
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert "[WARN] schema" in out, out
         assert "exceeds max '1h'" in out, out
@@ -2151,7 +2145,7 @@ class TestTheSchemaRowDoesNotAdviseDeletingKeysItNeverReported:
             encoding="utf-8")
         cli_argv("validate_config", "--config-dir", d)
         with pytest.raises(SystemExit):
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert "not in defaults" not in out, out
         assert "[PASS] schema" in out, out
@@ -2294,7 +2288,7 @@ class TestTenantUniqueness:
         d = self._tree(tmp_path, {"same.yaml": self._A, "same.yml": self._B})
         cli_argv("validate_config", "--config-dir", d)
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
         assert "tenant_uniqueness" in out, out
@@ -2533,7 +2527,7 @@ class TestTenantFileName:
         d = self._tree(tmp_path, {"svc-tenant.yaml": self._body("svc-prod")})
         cli_argv("validate_config", "--config-dir", d)
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
         assert "[FAIL] tenant_file_name" in out, out
@@ -2707,7 +2701,7 @@ class TestRootDefaultsRouting:
                        + self._ROUTING)
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
         assert "[FAIL] root_defaults" in out, out
@@ -2824,7 +2818,7 @@ class TestRootDefaultsValues:
         d = self._tree(tmp_path, "defaults:\n  mysql_connections: .nan\n")
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
         assert "[FAIL] guard_errors" in out, out
@@ -2898,7 +2892,7 @@ class TestRootDefaultsValues:
         d = self._tree(tmp_path, "defaults:\n  mysql_connections: disable\n")
         cli_argv("validate_config", "--config-dir", str(d))
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         out = capsys.readouterr().out
         assert exc.value.code == 1, out
         assert "[FAIL] guard_errors" in out, out
@@ -3012,7 +3006,7 @@ class TestJsonSchemaRow:
     def _run(config_dir, capsys, cli_argv):
         cli_argv("validate_config", "--config-dir", config_dir, "--json")
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
         return exc.value.code, rows
 
@@ -3044,7 +3038,7 @@ class TestJsonSchemaRow:
         cli_argv("validate_config", "--config-dir", d, "--policy",
                  str(tmp_path / "missing-policy.yaml"), "--json")
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
         assert rows["routes"]["caller_error"] is True, rows["routes"]
         assert exc.value.code == 2
@@ -3344,7 +3338,7 @@ class TestAnUnselectedDefaultsSpellingIsSkippedNotACrash:
         d = self._tree(tmp_path)
         cli_argv("validate_config", "--config-dir", str(d), "--json")
         with pytest.raises(SystemExit) as exc:
-            vc.main()
+            _as_run(vc.main())
         rows = {r["check"]: r for r in json.loads(capsys.readouterr().out)}
         assert exc.value.code == 1, rows
         assert not any(r.get("caller_error") for r in rows.values()), rows

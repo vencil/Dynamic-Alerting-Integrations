@@ -18,6 +18,13 @@ sys.path.insert(0, _TOOLS_DIR)
 
 import shadow_verify as sv  # noqa: E402
 import _lib_prometheus  # noqa: E402  (#3133: queries are read by the lib)
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _as_run(result):
+    """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
+    document is written and its status is the exit, as SystemExit."""
+    raise SystemExit(emit_result(result))
 
 
 # ---------------------------------------------------------------------------
@@ -389,13 +396,41 @@ class TestMainCLI:
                                             "--readiness-json", rj,
                                             "--json"]):
                         with pytest.raises(SystemExit) as exc_info:
-                            sv.main()
+                            _as_run(sv.main())
 
         # Should exit 0 (all pass) or at least produce JSON
         captured = capsys.readouterr()
         output = json.loads(captured.out)
         assert output["tool"] == "shadow-verify"
         assert len(output["phases"]) == 3
+
+    @pytest.mark.parametrize("caller_error, rc", [(True, 2), (False, 1)])
+    def test_json_caller_error_is_rc_2_not_1(self, capsys, caller_error, rc):
+        """#452/#737 under --json (#3216): a check that could not be made
+        (Prometheus answering 500) is rc 2; a failed finding is rc 1."""
+        check = {"check": "prometheus_reachable", "status": "fail", "detail": "HTTP 500"}
+        if caller_error:
+            check["caller_error"] = True
+        with patch.object(sv, "check_preflight", return_value=[check]):
+            with patch("sys.argv", ["shadow_verify.py", "preflight", "--json"]):
+                with pytest.raises(SystemExit) as exc_info:
+                    _as_run(sv.main())
+        assert json.loads(capsys.readouterr().out)["status"] == "fail"
+        assert exc_info.value.code == rc
+
+    def test_json_exit_is_the_verdict(self, tmp_path, capsys):
+        """#3216: under --json the document goes out through run(), and a
+        failed check is still the exit (rc 1), not the document's rc 0."""
+        rj = _write_readiness(tmp_path, {"ready": False, "convergence_percentage": 50,
+                                         "unconverged_pairs": ["a"]})
+        with patch.object(sv, "query_prometheus", return_value=([], None)):
+            with patch("sys.argv", ["shadow_verify.py", "convergence",
+                                    "--readiness-json", rj, "--json"]):
+                with pytest.raises(SystemExit) as exc_info:
+                    _as_run(sv.main())
+        output = json.loads(capsys.readouterr().out)
+        assert output["status"] == "fail"
+        assert exc_info.value.code == 1
 
 
 # ---------------------------------------------------------------------------

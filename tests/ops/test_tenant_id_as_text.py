@@ -40,6 +40,7 @@ import policy_engine as pe  # noqa: E402
 from _patch_config_fake import FakeCluster  # noqa: E402
 import _lib_parse_cache  # noqa: E402
 from _go_refusal import refuses  # noqa: E402  (#3206)
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 def _tree(root: Path, files: dict[str, str]) -> Path:
@@ -139,7 +140,7 @@ def test_exclude_tenants_from_a_standalone_policy_file(tmp_path, capsys):
     pol.write_text("policies:\n  - name: need-cpu\n    target: cpu\n"
                    "    operator: required\n    exclude_tenants: [010]\n",
                    encoding="utf-8")
-    rc = pe.main(["--config-dir", str(d / "conf.d"), "--policy", str(pol), "--json"])
+    rc = emit_result(pe.main(["--config-dir", str(d / "conf.d"), "--policy", str(pol), "--json"]))
     out = json.loads(capsys.readouterr().out)
     assert rc == 0 and out["violations"] == [], out
 
@@ -218,7 +219,7 @@ def test_a_map_tag_on_a_sequence_keeps_policy_engine_at_rc_2(tmp_path, capsys):
     pol.write_text("policies:\n  - name: need-cpu\n    target: cpu\n"
                    "    operator: required\n", encoding="utf-8")
     with refuses("t.yaml") as err:
-        pe.main(["--config-dir", str(d / "conf.d"), "--policy", str(pol), "--json"])
+        emit_result(pe.main(["--config-dir", str(d / "conf.d"), "--policy", str(pol), "--json"]))
     assert "(tag_not_allowed: " in err.getvalue(), err.getvalue()
 
 

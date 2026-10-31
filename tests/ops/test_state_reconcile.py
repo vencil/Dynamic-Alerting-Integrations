@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 
 import state_reconcile as sr
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ─── Fixtures ────────────────────────────────────────────────────────
@@ -413,14 +414,14 @@ def test_exit_code_applied_changes_not_failing():
 
 def test_main_clean_run(state_dir, manifest_path, capsys):
     _write_state(state_dir, "cluster-a")
-    rc = sr.main(
+    rc = emit_result(sr.main(
         [
             "--state-dir",
             str(state_dir),
             "--manifest-path",
             str(manifest_path),
         ]
-    )
+    ))
     assert rc == 0
     out = capsys.readouterr().out
     assert "Scanned 1 state" in out
@@ -429,7 +430,7 @@ def test_main_clean_run(state_dir, manifest_path, capsys):
 
 def test_main_json_output(state_dir, manifest_path, capsys):
     _write_state(state_dir, "cluster-a")
-    rc = sr.main(
+    rc = emit_result(sr.main(
         [
             "--state-dir",
             str(state_dir),
@@ -437,7 +438,7 @@ def test_main_json_output(state_dir, manifest_path, capsys):
             str(manifest_path),
             "--json",
         ]
-    )
+    ))
     assert rc == 0
     out = capsys.readouterr().out
     report = json.loads(out)
@@ -445,9 +446,11 @@ def test_main_json_output(state_dir, manifest_path, capsys):
     assert report["dry_run"] is False
 
 
-def test_main_ci_dry_run_pending_exits_1(state_dir, manifest_path, capsys):
+@pytest.mark.parametrize("extra", [(), ("--json",)])
+def test_main_ci_dry_run_pending_exits_1(state_dir, manifest_path, capsys, extra):
+    """Under --json too (#3216): the document goes out, the exit is the verdict."""
     _write_state(state_dir, "cluster-a")
-    rc = sr.main(
+    rc = emit_result(sr.main(
         [
             "--state-dir",
             str(state_dir),
@@ -455,8 +458,9 @@ def test_main_ci_dry_run_pending_exits_1(state_dir, manifest_path, capsys):
             str(manifest_path),
             "--dry-run",
             "--ci",
+            *extra,
         ]
-    )
+    ))
     # First run: manifest doesn't exist → manifest_change → CI pending → exit 1
     assert rc == 1
     assert not manifest_path.exists()
@@ -465,14 +469,14 @@ def test_main_ci_dry_run_pending_exits_1(state_dir, manifest_path, capsys):
 def test_main_unresolvable_drift_exits_1(state_dir, manifest_path):
     p = state_dir / "broken.json"
     p.write_text("{}", encoding="utf-8")
-    rc = sr.main(
+    rc = emit_result(sr.main(
         [
             "--state-dir",
             str(state_dir),
             "--manifest-path",
             str(manifest_path),
         ]
-    )
+    ))
     assert rc == 1
 
 
@@ -597,7 +601,7 @@ def test_the_default_state_dir_missing_is_distinct_from_empty(tmp_path, capsys, 
     manifest is written, rc 0 — and an existing empty one says "No state
     files found"."""
     monkeypatch.chdir(tmp_path)
-    rc = sr.main([])
+    rc = emit_result(sr.main([]))
     out_missing = capsys.readouterr().out
     assert "does not exist" in out_missing
     assert rc == 0
@@ -606,7 +610,7 @@ def test_the_default_state_dir_missing_is_distinct_from_empty(tmp_path, capsys, 
     empty = tmp_path / "empty_state"
     empty.mkdir()
     manifest2 = tmp_path / "manifest2.json"
-    rc = sr.main(["--state-dir", str(empty), "--manifest-path", str(manifest2)])
+    rc = emit_result(sr.main(["--state-dir", str(empty), "--manifest-path", str(manifest2)]))
     out_empty = capsys.readouterr().out
     assert "No state files found" in out_empty
     assert "does not exist" not in out_empty
@@ -642,7 +646,7 @@ def test_an_empty_manifest_is_rebuilt(tmp_path, capsys):
     state.mkdir()
     manifest = tmp_path / "manifest.json"
     manifest.write_bytes(b"")
-    assert sr.main(["--state-dir", str(state), "--manifest-path", str(manifest)]) == 0
+    assert emit_result(sr.main(["--state-dir", str(state), "--manifest-path", str(manifest)])) == 0
     assert json.loads(manifest.read_text(encoding="utf-8"))["states"] == []
     assert f"WARNING: --manifest-path {manifest} is empty; taken for no manifest" \
         in capsys.readouterr().err
@@ -655,8 +659,8 @@ def test_an_empty_manifest_is_left_alone_under_dry_run(tmp_path, capsys):
     state.mkdir()
     manifest = tmp_path / "manifest.json"
     manifest.write_bytes(b"")
-    assert sr.main(["--state-dir", str(state), "--manifest-path", str(manifest),
-                    "--dry-run"]) == 0
+    assert emit_result(sr.main(["--state-dir", str(state), "--manifest-path", str(manifest),
+                    "--dry-run"])) == 0
     assert manifest.read_bytes() == b""
     assert "rebuilding" not in capsys.readouterr().err
 
@@ -665,7 +669,7 @@ def test_a_missing_manifest_is_a_first_build(tmp_path):
     state = tmp_path / "state"
     state.mkdir()
     manifest = tmp_path / "sub" / "manifest.json"
-    assert sr.main(["--state-dir", str(state), "--manifest-path", str(manifest)]) == 0
+    assert emit_result(sr.main(["--state-dir", str(state), "--manifest-path", str(manifest)])) == 0
     assert json.loads(manifest.read_text(encoding="utf-8"))["states"] == []
 
 

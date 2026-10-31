@@ -46,7 +46,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import re
@@ -80,12 +79,9 @@ from _lib_tenant_values import (  # noqa: E402
     load_served_tree,
     print_load_warnings,
 )
-# Aliased: the local format_json_report() below (domain report builder,
-# exercised directly by tests) delegates its final dump to the shared helper.
-from _lib_python import format_json_report as _dump_json  # noqa: E402
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1538; #1641; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
-from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError, arm_crash_envelope  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, CallerError, Report, arm_crash_envelope  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -1176,8 +1172,8 @@ def query_error_count(reports: list[TenantRecommendation]) -> int:
     return sum(1 for r in reports for k in r.keys + r.inherited if k.query_error)
 
 
-def format_json_report(reports: list[TenantRecommendation]) -> str:
-    """Format reports as JSON string."""
+def json_document(reports: list[TenantRecommendation]) -> dict:
+    """The --json document (run() encodes it, #3216)."""
     output: dict[str, Any] = {
         "tool": "threshold-recommend",
         "tenants": [asdict(r) for r in reports],
@@ -1193,7 +1189,7 @@ def format_json_report(reports: list[TenantRecommendation]) -> str:
     if output["summary"]["query_errors"]:
         # #3133 (#3059 rule): what was measured is reported; the run is partial.
         output.update({"status": "partial", "reason": "prometheus_query_error"})
-    return _dump_json(output)
+    return output
 
 
 def format_markdown_report(reports: list[TenantRecommendation]) -> str:
@@ -1505,7 +1501,7 @@ def format_export_patch(reports: list[TenantRecommendation]) -> str:
 @exit_on_yaml_file_error  # #1654: unreadable tenant file → rc 2, named
 @exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
 @observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
-def main() -> None:
+def main() -> "Report | None":
     """CLI entry point: threshold recommendation engine."""
     parser = argparse.ArgumentParser(
         description=_HELP['description'][_LANG],
@@ -1580,7 +1576,7 @@ def main() -> None:
     # shape with no tenant. Not when stdout is YAML: below, --export-patch
     # beats --json everywhere except --generate-observed-map, which ignores it.
     if args.json_output and (args.generate_observed_map or not args.export_patch):
-        arm_crash_envelope(build=lambda: json.loads(format_json_report([])))
+        arm_crash_envelope(build=lambda: json_document([]))
 
     # #719: regenerate the observed-map and exit (does not need --config-dir).
     if args.generate_observed_map:
@@ -1624,12 +1620,12 @@ def main() -> None:
             print("  needs_review entries require manual resolution before use.",
                   file=sys.stderr)
         if args.json_output:
-            # NB `format_json_report` here is the tool-local one and takes a
-            # list[TenantRecommendation] — this path has no recommendations, so
-            # the document is assembled directly, keeping the tool's top-level
-            # shape (`tool` / `tenants` / `summary`) so the same consumer parses
-            # both paths, with the write result under `observed_map`.
-            print(json.dumps({
+            # NB `json_document` takes a list[TenantRecommendation] — this
+            # path has no recommendations, so the document is assembled
+            # directly, keeping the tool's top-level shape (`tool` / `tenants`
+            # / `summary`) so the same consumer parses both paths, with the
+            # write result under `observed_map`. run() encodes it (#3216).
+            return Report({
                 "tool": "threshold-recommend",
                 "status": "observed_map_written",
                 "observed_map": summary,
@@ -1640,7 +1636,7 @@ def main() -> None:
                     "recommended_changes": 0,
                     "low_confidence_changes": 0,
                 },
-            }, indent=2, ensure_ascii=False, default=str))
+            })
         return
 
     if not args.config_dir:
@@ -1672,22 +1668,26 @@ def main() -> None:
         dry_run=args.dry_run,
     )
 
+    json_report = args.json_output and not args.export_patch
     if args.export_patch:
         print(format_export_patch(reports))
-    elif args.json_output:
-        print(format_json_report(reports))
-    elif args.markdown:
+    elif args.markdown and not json_report:
         print(format_markdown_report(reports))
-    else:
+    elif not json_report:
         print(format_text_report(reports))
 
     failed = query_error_count(reports)
+    status = EXIT_OK
     if failed:
         # #3133: a key whose query was not answered has no recommendation —
-        # the report above is partial, and so is the exit (rc 2, not 0).
+        # the report is partial, and so is the exit (rc 2, not 0).
         print(f"ERROR: Prometheus query failed for {failed} key(s); the "
               "report is partial", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
+        status = EXIT_CALLER_ERROR
+    if json_report:
+        return Report(json_document(reports), status)  # #3216: run() encodes it
+    if status:
+        sys.exit(status)
 
 
 if __name__ == "__main__":
