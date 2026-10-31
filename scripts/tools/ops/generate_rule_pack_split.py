@@ -552,8 +552,15 @@ def process_rule_packs(
         },
     }
 
-    # Find all rule-pack-*.yaml files
-    rule_files = sorted(rule_packs_path.glob("rule-pack-*.yaml"))
+    # The rule packs: the one declaration of which files in a rule-packs
+    # directory are rule packs (#3426: rule-pack-*.yaml|yml; an undeclared
+    # YAML there is named, never passed over).
+    try:
+        rule_files = _lib_consumer_read.rule_pack_files(rule_packs_path)
+    except _lib_consumer_read.ConsumerReadError as e:
+        report["errors"].append(f"rule packs: {_lib_consumer_read.error_text(e)}")
+        report["status"] = "error"
+        return report
     if not rule_files:
         report["errors"].append(
             t(f"未找到規則包檔案: {rule_packs_dir}", f"No rule pack files found in {rule_packs_dir}")

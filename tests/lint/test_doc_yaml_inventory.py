@@ -239,9 +239,14 @@ def test_undeclared_units_are_judged_by_structure(tmp_path):
 
 @pytest.mark.parametrize("body, needle", [
     # conf.d text with a repeated key, declared .k8s to get past parse-tree:
-    # kubectl keeps the last key, so only the object check stops it
-    ("tenants:\n  t:\n    a: \"1\"\n    a: \"2\"\n", "not Kubernetes objects"),
-    ("apiVersion: v1\nkind: ConfigMap\n---\n- a\n", "document(s) [2]"),
+    # kubectl keeps the last key; kubectl's reading refuses it for its
+    # missing kind (#3426: the manifest reading gives objects only)
+    ("tenants:\n  t:\n    a: \"1\"\n    a: \"2\"\n", "it has no `kind`"),
+    ("apiVersion: v1\nkind: ConfigMap\n---\n- a\n",
+     "it is not a Kubernetes object: the document is array"),
+    # an object with a kind but no apiVersion: kubectl reads it, the
+    # inventory's own object check names it
+    ("kind: ConfigMap\n", "not Kubernetes objects"),
     ("# only a comment\n", "finds no document"),
 ])
 def test_a_k8s_unit_must_hold_kubernetes_objects(tmp_path, body, needle):

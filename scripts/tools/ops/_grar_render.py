@@ -331,7 +331,7 @@ def emitted_alertmanager_yml(cm_yaml: str) -> str:
     (no da-crdecode, or it refuses the text) or is not one ConfigMap holding
     that key as a string: either way there is no text to hand Alertmanager."""
     docs = _lib_consumer_read.kubernetes_text_documents(cm_yaml)
-    if len(docs) != 1 or not isinstance(docs[0], dict):
+    if len(docs) != 1:   # each doc is an object: the reading's guarantee (#3426)
         raise ConsumerReadError(
             f"the assembled ConfigMap is {len(docs)} document(s) in Kubernetes' reading, "
             "expected one object")

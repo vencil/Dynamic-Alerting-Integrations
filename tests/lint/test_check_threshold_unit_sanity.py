@@ -28,6 +28,7 @@ _ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 sys.path.insert(0, os.path.join(_ROOT, "scripts", "tools", "lint"))
 
 import check_threshold_unit_sanity as gate  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 def _registry(**keys) -> dict:
@@ -397,7 +398,7 @@ def test_main_names_every_illustrative_unit(tmp_path, monkeypatch, capsys, as_js
     _write(tmp_path, "docs/x.md",
            '```yaml {.illustrative reason="shown on purpose"}\na: 1\n```\n')
     monkeypatch.setattr(gate, "PROJECT_ROOT", str(tmp_path))
-    assert gate.main(["--ci", "--json"] if as_json else ["--ci"]) == gate.EXIT_OK
+    assert emit_result(gate.main(["--ci", "--json"] if as_json else ["--ci"])) == gate.EXIT_OK
     out = capsys.readouterr()
     assert "Units exempted (.illustrative): 1" in out.err
     assert "docs/x.md:2 — shown on purpose" in out.err

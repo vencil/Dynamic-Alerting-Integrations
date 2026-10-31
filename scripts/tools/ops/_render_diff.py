@@ -237,7 +237,7 @@ def render_routes(conf_d: str | os.PathLike[str], *,
         # any failure here is the tool's, never the configuration's.
         try:
             docs = _lib_consumer_read.kubernetes_documents(str(out))
-            data = docs[0].get("data") if len(docs) == 1 and isinstance(docs[0], dict) else None
+            data = docs[0].get("data") if len(docs) == 1 else None   # objects (#3426)
             inner = data.get("alertmanager.yml") if isinstance(data, dict) else None
             if not isinstance(inner, str):
                 raise ValueError("no string data.alertmanager.yml in one ConfigMap")

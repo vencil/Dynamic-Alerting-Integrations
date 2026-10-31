@@ -405,7 +405,7 @@ amtool silence add \
 amtool silence query -o json --alertmanager.url=http://<am>:9093 > active_silences.json
 
 # Step 2：local / CI 端比對（不需要 AM 連線）—— 一行命令
-da-tools silencer-drift-check --silences-file active_silences.json --rule-source rule-packs/
+da-tools silencer-drift-check --silences-file active_silences.json --rule-pack-dir rule-packs/
 
 # 含完整 matcher 邏輯（isEqual / isRegex 4 combinations，不只 alertname=
 # 還含 severity=、team= 等 label-value 漂移）。CI gate：加 --ci 偵測到 orphan

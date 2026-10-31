@@ -26,6 +26,7 @@ if str(_LINT_DIR) not in sys.path:
     sys.path.insert(0, str(_LINT_DIR))
 
 import check_devcontainer_dep_parity as mod  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 SCRIPT = _LINT_DIR / "check_devcontainer_dep_parity.py"
 
@@ -67,7 +68,7 @@ def _write_pair(tmp_path: Path, ci_packages: str, dev_packages: str):
 
 
 def _run(ci: Path, dev: Path, *extra: str) -> int:
-    return mod.main(["--ci", str(ci), "--devcontainer", str(dev), *extra])
+    return emit_result(mod.main(["--ci", str(ci), "--devcontainer", str(dev), *extra]))
 
 
 # ── 1. Parsing ───────────────────────────────────────────────────────

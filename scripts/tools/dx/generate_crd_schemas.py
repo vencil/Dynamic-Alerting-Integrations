@@ -117,7 +117,7 @@ def _schemas_from(raw: bytes, wanted: List[Dict]) -> Tuple[Dict[Tuple[str, str, 
     want = {(w["group"], w["kind"], w["version"]) for w in wanted}
     found: Dict[Tuple[str, str, str], dict] = {}
     for doc in _load_crd_docs(raw.decode("utf-8")):
-        if not isinstance(doc, dict) or doc.get("kind") != "CustomResourceDefinition":
+        if doc["kind"] != "CustomResourceDefinition":   # every doc an object (#3426)
             continue
         group = doc["spec"]["group"]
         kind = doc["spec"]["names"]["kind"]

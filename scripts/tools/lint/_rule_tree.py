@@ -578,11 +578,17 @@ def _header_provenance(chunk: str):
             return m.group(1)
     return None
 
-def _kubernetes_reading(text: str):
-    """(documents, None) — *text* as kubectl reads it (da-crdecode: documents
-    split as `kubectl apply -f` splits them, each converted by
-    sigs.k8s.io/yaml) — or (None, the reason) when kubectl's reading refuses
-    it. Raises `ConsumerReadError` when da-crdecode cannot be had.
+def _any_yaml_reading(text: str):
+    """(documents, None) — *text* with kubectl's conversion (`da-crdecode
+    --any-shape`: documents split as `kubectl apply -f` splits them, each
+    converted by sigs.k8s.io/yaml, whatever its shape) — or (None, the
+    reason) when that conversion refuses it. Raises `ConsumerReadError` when
+    da-crdecode cannot be had.
+
+    The any-YAML reading, not the manifest one (#3426): discovery is
+    content-based over every tracked file, and a bare `groups:` rule file, a
+    ConfigMap data value and a `kind: List` (unwrapped below) are rules
+    containers the manifest reading refuses by design.
 
     ⛔ The document boundaries are kubectl's, found by the binary. Hand-
     splitting on `line == "---"` missed the legal spellings `--- ` (one
@@ -593,20 +599,20 @@ def _kubernetes_reading(text: str):
     is the one that deploys.
     """
     try:
-        return _lib_consumer_read.kubernetes_text_documents(text), None
+        return _lib_consumer_read.any_yaml_text_documents(text), None
     except _lib_consumer_read.InputRefused as exc:
         return None, "; ".join(exc.stderr_lines) or str(exc)
 
 
 @functools.lru_cache(maxsize=None)
 def _tracked_reading(rel: str):
-    """`_kubernetes_reading` of the tracked file *rel* (decoded as
+    """`_any_yaml_reading` of the tracked file *rel* (decoded as
     `_read_manifest` decodes it), once per run: the container scan and the
     sentinel both ask. (None, None) for a file no encoding decodes."""
     text, _enc = _read_manifest(rel)
     if text is None:
         return None, None
-    return _kubernetes_reading(text)
+    return _any_yaml_reading(text)
 
 
 def _iter_rule_containers():
@@ -659,8 +665,8 @@ def _containers_from_texts(files, reading=None):
     (where, rules_doc, provenance) for every container in *files* (`(rel,
     text)` pairs), in file order.
 
-    #3206: each file is read the way kubectl reads it (*reading*: rel ->
-    `_kubernetes_reading`; computed from the text when not given), and every
+    #3206: each file is read with kubectl's conversion (*reading*: rel ->
+    `_any_yaml_reading`; computed from the text when not given), and every
     rule file found in it — a ConfigMap data value, a PrometheusRule's spec,
     a bare `groups:` file — the way Prometheus' rule loader reads it, all of
     them in ONE `da-read prometheus-rules` run. `rules_doc` is that reading.
@@ -689,7 +695,7 @@ def _containers_from_texts(files, reading=None):
     pending = []
     for rel, text in files:
         docs, _refused = (reading(rel) if reading is not None
-                          else _kubernetes_reading(text))
+                          else _any_yaml_reading(text))
         if docs is None:
             continue          # not a manifest kubectl reads; the sentinel's business
         file_header = _header_provenance(text)
@@ -718,7 +724,7 @@ def _containers_from_texts(files, reading=None):
         # Alertmanager template and dashboards that way), so only a value
         # that visibly sets out to be rules is an offender — judged on its
         # plain reading, which is not what deploys and decides nothing else.
-        inner, why = _kubernetes_reading(text)
+        inner, why = _any_yaml_reading(text)
         if inner is None:
             # ⛔ Not silent — but only when the body was TRYING to be rules.
             # The OUTER file parses, so the whole-file tripwire sees nothing

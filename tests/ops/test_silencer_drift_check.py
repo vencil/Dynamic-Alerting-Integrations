@@ -20,11 +20,14 @@ Usage:
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import dedent
 
 import pytest
+
+from _platform_fs import symlink_or_skip  # noqa: E402
 
 import silencer_drift_check as sdc
 
@@ -244,9 +247,11 @@ def test_load_alerts_directory_recursive(tmp_path):
     assert {a["name"] for a in alerts} == {"A1", "A2"}
 
 
-def test_load_alerts_skips_non_rule_pack_yaml(tmp_path):
-    """tenant _defaults.yaml has no `groups:` root — must be skipped
-    silently, not error out the whole load."""
+def test_load_alerts_names_non_rule_pack_yaml_until_excluded(tmp_path):
+    """#3426: tenant _defaults.yaml has no `groups:` root. It used to be
+    skipped by its content — and so was a pack with `grups:`. Every file of
+    the rule source is read now: it is named (with the `--exclude` hint)
+    until the caller leaves it out by path."""
     _write(tmp_path / "pack.yaml", """
         groups: [{name: g, rules: [{alert: A, expr: up}]}]
     """)
@@ -255,8 +260,43 @@ def test_load_alerts_skips_non_rule_pack_yaml(tmp_path):
           mysql_connections: 80
     """)
     alerts, errors = sdc.load_alerts(tmp_path)
+    assert [a["name"] for a in alerts] == ["A"]
+    assert len(errors) == 1 and "_defaults.yaml" in errors[0] and "--exclude" in errors[0]
+    alerts, errors = sdc.load_alerts(tmp_path, ["_defaults.yaml"])
     assert errors == []
     assert [a["name"] for a in alerts] == ["A"]
+
+
+def test_main_exits_2_on_an_unread_rule_source_file_and_exclude_clears_it(tmp_path, capsys):
+    """#3426: a rule-source file that could not be read is a source left
+    out of the check, so the run is no clean one (rc 2, with or without
+    --ci); `--exclude Chart.yaml` leaves it out by path."""
+    _write(tmp_path / "rules/pack.yaml", """
+        groups: [{name: g, rules: [{alert: A, expr: up}]}]
+    """)
+    (tmp_path / "rules" / "helm").mkdir()
+    (tmp_path / "rules" / "helm" / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: c\nversion: 0.1.0\n", encoding="utf-8")
+    silences = tmp_path / "s.json"
+    silences.write_text("[]", encoding="utf-8")
+    argv = ["--silences-file", str(silences), "--rule-source", str(tmp_path / "rules")]
+    assert sdc.main(argv) == 2
+    out, err = capsys.readouterr()
+    assert "Chart.yaml" in out and "--exclude" in out, out
+    assert "could not be read" in err
+    assert sdc.main([*argv, "--exclude", "Chart.yaml"]) == 0
+
+
+def test_load_alerts_names_a_misspelt_groups_and_a_manifest_without_kind(tmp_path):
+    """#3426: a rule pack with `grups:` and a manifest with no `kind` are
+    named, never taken for files without rule files."""
+    (tmp_path / "grups.yaml").write_text("grups:\n- name: g\n  rules: []\n", encoding="utf-8")
+    (tmp_path / "nokind.yaml").write_text(
+        "apiVersion: v1\nmetadata: {name: c}\ndata: {r.yml: 'groups: []'}\n", encoding="utf-8")
+    alerts, errors = sdc.load_alerts(tmp_path)
+    assert alerts == []
+    assert [e.split(":")[0].rsplit("/", 1)[-1] for e in errors] == ["grups.yaml", "nokind.yaml"]
+    assert all("it has no `kind`" in e for e in errors), errors
 
 
 def test_load_alerts_reports_yaml_parse_error(tmp_path):
@@ -267,8 +307,8 @@ def test_load_alerts_reports_yaml_parse_error(tmp_path):
     alerts, errors = sdc.load_alerts(tmp_path)
     # Good file's alert is still loaded
     assert [a["name"] for a in alerts] == ["A"]
-    # Bad file is captured as an error (caller can decide to bail)
-    assert any("invalid YAML" in e for e in errors)
+    # Bad file is captured as an error naming it (main exits 2 on it)
+    assert any("bad.yaml" in e and "no reader reads it" in e for e in errors), errors
 
 
 def test_load_alerts_empty_dir(tmp_path):
@@ -1173,3 +1213,118 @@ def test_json_output_keeps_alertname_byte_faithful(tmp_path, capsys):
     raw = capsys.readouterr().out
     assert "\x1b" not in raw  # serialized as an escape sequence, never live
     assert json.loads(raw)["coverage"][0]["matched_alertnames"] == [_EVIL]
+
+
+_PACK = "groups:\n- name: g\n  rules:\n  - {alert: InCm, expr: up}\n"
+
+
+def _configmap(name: str, indent: str = "") -> str:
+    body = "".join(f"{indent}    {ln}\n" for ln in _PACK.splitlines())
+    return (f"{indent}apiVersion: v1\n{indent}kind: ConfigMap\n{indent}metadata: {{name: {name}}}\n"
+            f"{indent}data:\n{indent}  rules.yml: |\n" + body)
+
+
+@pytest.mark.parametrize("text", [
+    _configmap("cm"),
+    # `kubectl get cm -o yaml`: a List of them
+    "apiVersion: v1\nkind: List\nitems:\n- " + _configmap("cm", "  ").lstrip(),
+])
+def test_load_alerts_reads_rule_packs_held_in_a_configmap(tmp_path, text):
+    """#3426: a ConfigMap holding a rule pack used to be skipped (only a
+    file whose first document declared `groups` was read); the rule files
+    a file holds are `rule_files_in`'s answer."""
+    (tmp_path / "cm.yaml").write_text(text, encoding="utf-8")
+    (tmp_path / "_defaults.yaml").write_text("defaults: {a: 1}\n", encoding="utf-8")
+    alerts, errors = sdc.load_alerts(tmp_path, ["_defaults.yaml"])
+    assert errors == []
+    assert [a["name"] for a in alerts] == ["InCm"]
+
+
+# ── #3426 round 3: shapes the API server refuses are named, not read as empty ──
+_PR_TOP_GROUPS = ("apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+                  "metadata: {name: p}\ngroups:\n- name: g\n  rules:\n  - {alert: A, expr: up}\n")
+_CM_DATA_LIST = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\n"
+                 "data:\n- groups: []\n")
+_APIVERSION_NO_KIND = "apiVersion: v1\nmetadata: {name: c}\ndata: {r.yml: 'groups: []'}\n"
+
+
+def test_load_alerts_names_a_prometheusrule_with_top_level_groups(tmp_path):
+    """The API server refuses it (strict decoding error: unknown field
+    "groups"); it used to be read as a PrometheusRule with no rule file."""
+    (tmp_path / "pr.yaml").write_text(_PR_TOP_GROUPS, encoding="utf-8")
+    alerts, errors = sdc.load_alerts(tmp_path)
+    assert alerts == []
+    assert len(errors) == 1 and 'unknown field "groups"' in errors[0], errors
+
+
+# ── #3426 round 5: --rule-pack-dir, exclude-all, no object, unreadable ──
+
+def _silences_none(tmp_path):
+    s = tmp_path / "s.json"
+    s.write_text("[]", encoding="utf-8")
+    return str(s)
+
+
+def test_rule_pack_dir_reads_the_declared_packs(tmp_path, capsys):
+    """F13: the packs come from `rule_pack_files`; the registry beside them
+    and recipes/ are not read, and no --exclude is written."""
+    rp = tmp_path / "rule-packs"
+    (rp / "recipes").mkdir(parents=True)
+    _write(rp / "rule-pack-x.yaml", """
+        groups: [{name: g, rules: [{alert: A, expr: up}]}]
+    """)
+    (rp / "threshold-registry.yaml").write_text("entries: []\n", encoding="utf-8")
+    (rp / "recipes" / "r.yaml").write_text("recipe: x\n", encoding="utf-8")
+    argv = ["--silences-file", _silences_none(tmp_path), "--rule-pack-dir", str(rp)]
+    assert sdc.main(argv) == 0
+    assert "1 alerts loaded" in capsys.readouterr().out
+    (rp / "stray.yaml").write_text("x: 1\n", encoding="utf-8")
+    assert sdc.main(argv) == 2
+    assert "stray.yaml" in capsys.readouterr().err
+    assert sdc.main([*argv, "--exclude", "x"]) == 2
+    assert sdc.main(["--silences-file", _silences_none(tmp_path)]) == 2
+
+
+def test_an_exclude_that_leaves_nothing_exits_2(tmp_path, capsys):
+    """F16."""
+    _write(tmp_path / "rules/a.yaml", """
+        groups: [{name: g, rules: [{alert: A, expr: up}]}]
+    """)
+    rc = sdc.main(["--silences-file", _silences_none(tmp_path),
+                   "--rule-source", str(tmp_path / "rules"), "--exclude", "*.yaml"])
+    assert rc == 2
+    assert "every one excluded" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("name", ["empty.yaml", "dangling.yaml"])
+def test_an_empty_file_or_a_dangling_symlink_exits_2(tmp_path, capsys, name):
+    """F14 / F15: named, never read as "no rule files"."""
+    rules = tmp_path / "rules"
+    _write(rules / "a.yaml", """
+        groups: [{name: g, rules: [{alert: A, expr: up}]}]
+    """)
+    if name == "empty.yaml":
+        (rules / name).write_text("", encoding="utf-8")
+    else:
+        symlink_or_skip(str(rules / "gone.yaml"), str(rules / name))
+    rc = sdc.main(["--silences-file", _silences_none(tmp_path), "--rule-source", str(rules)])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert name in captured.out + captured.err
+
+
+def test_a_configmap_mount_as_rule_source_exits_0(tmp_path, capsys):
+    """#3426: kubelet's ConfigMap mount (`..data -> ..<ts>/`, `r.yaml ->
+    ..data/r.yaml`) is read; `..data` points inside the tree, so it is not
+    named — the mount used to exit 2 on it."""
+    mount = tmp_path / "mount"
+    _write(mount / "..2024_01_01" / "r.yaml", """
+        groups: [{name: g, rules: [{alert: InMount, expr: up}]}]
+    """)
+    symlink_or_skip("..2024_01_01", str(mount / "..data"))
+    symlink_or_skip("..data/r.yaml", str(mount / "r.yaml"))
+    rc = sdc.main(["--silences-file", _silences_none(tmp_path), "--rule-source", str(mount),
+                   "--json"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["counts"]["alerts"] >= 1 and doc["errors"] == []

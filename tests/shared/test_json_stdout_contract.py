@@ -1394,7 +1394,7 @@ RECIPES: list[Recipe] = [
     # ── silencer_drift_check ───────────────────────────────────────────────
     R("silencer_drift_check", "orphan-found",
       lambda t, s: ["--silences-file", _silences_json(t),
-                    "--rule-source", str(RULE_PACKS), "--json"]),
+                    "--rule-pack-dir", str(RULE_PACKS), "--json"]),
 
     # ── state_reconcile ────────────────────────────────────────────────────
     R("state_reconcile", "dry-run",

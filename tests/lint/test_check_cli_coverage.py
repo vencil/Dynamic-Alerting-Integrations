@@ -17,6 +17,7 @@ sys.path.insert(0, os.path.join(REPO_ROOT, "scripts", "tools", "lint"))
 
 import check_cli_coverage as cc  # noqa: E402
 from _lint_helpers import parse_command_map_keys  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ---------------------------------------------------------------------------
@@ -379,16 +380,14 @@ class TestOutputFormatting:
         assert "1 warning(s)" in report
 
     def test_json_pass(self):
-        report = cc.format_json_report([], {"a", "b"})
-        data = json.loads(report)
+        data = cc.json_document([], {"a", "b"})
         assert data["status"] == "pass"
         assert data["command_count"] == 2
         assert data["error_count"] == 0
 
     def test_json_fail(self):
         errors = [("error", "missing cmd")]
-        report = cc.format_json_report(errors, {"a"})
-        data = json.loads(report)
+        data = cc.json_document(errors, {"a"})
         assert data["status"] == "fail"
         assert data["error_count"] == 1
 
@@ -421,8 +420,7 @@ class TestCLI:
         monkeypatch.setattr(cc, "ENTRYPOINT_PATH",
                             cc.Path("/nonexistent"))
         cli_argv("check_cli_coverage.py", "--json")
-        with pytest.raises(SystemExit):
-            cc.main()
+        assert emit_result(cc.main()) == 0
         captured = capsys.readouterr()
         data = json.loads(captured.out)
         assert data["check"] == "cli_coverage"

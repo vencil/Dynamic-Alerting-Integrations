@@ -105,7 +105,7 @@ try:
 except Exception:  # pragma: no cover - compat shim optional
     def try_utf8_stdout() -> None:  # type: ignore
         pass
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_io import exit_on_yaml_file_error  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
 from _lib_io import YamlFileError, safe_label  # noqa: E402
@@ -214,8 +214,8 @@ def namespace_declared_targets(namespaces_file: Path) -> Set[str]:
         raise NamespacesFileError(
             f"{namespaces_file}: cannot be read as kubectl reads it: {exc}",
             exc.stderr_lines) from exc
-    for index, doc in enumerate(documents, start=1):
-        if not isinstance(doc, dict) or doc.get("kind") != "Namespace":
+    for index, doc in enumerate(documents, start=1):   # a Kubernetes object: the manifest reading's guarantee (#3426)
+        if doc["kind"] != "Namespace":
             continue
         metadata = doc.get("metadata")
         labels = metadata.get("labels") if isinstance(metadata, dict) else None
@@ -275,7 +275,7 @@ def evaluate(config_dir: Path, helm_dir: Path, namespaces_file: Path,
 @exit_on_yaml_file_error  # #1654: a file that does not decode → rc 2, named
 @exit_on_served_values_error  # da-guard missing or failing → rc 2, named
 @_lib_parse_cache.exit_on_parse_tree_error  # #2906: no usable parse-tree → rc 2
-def main() -> int:
+def main() -> "int | Report":
     """CLI entry point: RETIRE-ordering conf.d↔K8s drift gate (#869)."""
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
@@ -315,9 +315,7 @@ def main() -> int:
             print(f"  da-crdecode| {safe_label(line)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    if args.json:
-        print(json.dumps(result, ensure_ascii=False, indent=2))
-    else:
+    if not args.json:
         n_decl = len(result["declared"])
         print(f"RETIRE gate (#869): {n_decl} tenant(s) declare db_type; "
               f"{len(result['k8s_targets'])} K8s target(s).")
@@ -332,9 +330,12 @@ def main() -> int:
         print("\n❌ RETIRE-ordering violation: conf.d _metadata.db_type without a "
               "K8s target. Remove the conf.d entry first (or together).",
               file=sys.stderr)
-        return EXIT_VIOLATION
-    return EXIT_OK
+    status = EXIT_VIOLATION if result["violations"] and args.ci else EXIT_OK
+    if args.json:
+        return Report(result, status)  # #3216: run() encodes it
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

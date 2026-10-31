@@ -166,6 +166,7 @@ def _write_three_copies(root, name, src_op="max", cm_op="max", op_op="max"):
     (root / "k8s" / "03-monitoring" / f"configmap-rules-{name}.yaml").write_text(
         yaml.dump(cm), encoding="utf-8")
     op = {"apiVersion": "monitoring.coreos.com/v1", "kind": "PrometheusRule",
+          "metadata": {"name": f"da-rule-pack-{name}"},
           "spec": {"groups": groups(op_op)}}
     (root / "operator-manifests" / f"da-rule-pack-{name}.yaml").write_text(
         yaml.dump(op), encoding="utf-8")

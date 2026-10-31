@@ -12,7 +12,7 @@ Covers:
   - check_bidirectional: clean / missing-in-build error /
     orphan-in-build warning / mixed
   - format_text_report: clean header, error/warning prefixes, count line
-  - format_json_report: shape + pass-flag semantics
+  - json_document: shape + pass-flag semantics
   - main CLI: missing entrypoint exits 2, missing build.sh exits 2,
     --ci with error exits 1, --ci with warning-only exits 0,
     --json flag, repo-files smoke regression
@@ -43,6 +43,7 @@ _spec = importlib.util.spec_from_file_location("check_build_completeness", _SCRI
 mod = importlib.util.module_from_spec(_spec)
 sys.modules["check_build_completeness"] = mod
 _spec.loader.exec_module(mod)
+from _lib_exitcodes import emit_result, encode_json  # noqa: E402  (#3216)
 
 
 # ============================================================
@@ -200,15 +201,14 @@ class TestFormatTextReport:
 
 
 # ============================================================
-# format_json_report
+# json_document
 # ============================================================
 
 
 class TestFormatJsonReport:
 
     def test_clean_payload_passes(self):
-        s = mod.format_json_report([], {"a": "a.py"}, {"a.py"})
-        payload = json.loads(s)
+        payload = mod.json_document([], {"a": "a.py"}, {"a.py"})
         assert payload["check"] == "build-completeness"
         assert payload["command_map_count"] == 1
         assert payload["build_tools_count"] == 1
@@ -217,8 +217,7 @@ class TestFormatJsonReport:
 
     def test_error_payload_does_not_pass(self):
         errors = [("error", "boom"), ("warning", "noise")]
-        s = mod.format_json_report(errors, {}, set())
-        payload = json.loads(s)
+        payload = mod.json_document(errors, {}, set())
         # `pass` flag tracks errors only, not warnings.
         assert payload["pass"] is False
         assert len(payload["errors"]) == 2
@@ -227,15 +226,14 @@ class TestFormatJsonReport:
     def test_warning_only_payload_passes(self):
         # Property: `pass=True` when there are warnings but no errors.
         errors = [("warning", "noise")]
-        s = mod.format_json_report(errors, {}, {"noise.py"})
-        payload = json.loads(s)
+        payload = mod.json_document(errors, {}, {"noise.py"})
         assert payload["pass"] is True
 
     def test_unicode_preserved(self):
         # Property: `ensure_ascii=False` keeps Chinese characters legible
-        # in CI logs.
+        # in CI logs — run()'s one encoder (#3216).
         errors = [("error", "中文錯誤訊息")]
-        s = mod.format_json_report(errors, {}, set())
+        s = encode_json(mod.json_document(errors, {}, set()))
         assert "中文錯誤訊息" in s
         assert "\\u" not in s
 
@@ -341,8 +339,7 @@ class TestMainCLI:
         monkeypatch.setattr(mod, "ENTRYPOINT_PATH", ep)
         monkeypatch.setattr(mod, "BUILD_SH_PATH", bs)
         monkeypatch.setattr(sys, "argv", ["check_build_completeness", "--json"])
-        with pytest.raises(SystemExit):
-            mod.main()
+        assert emit_result(mod.main()) == 0
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert payload["check"] == "build-completeness"

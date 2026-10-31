@@ -26,6 +26,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "too
 sys.path.insert(0, _TOOLS_DIR)
 
 import check_commit_scope_doc as ccs  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +301,7 @@ class TestMain:
         sot, doc = fake_repo
         self._write_sot(sot, ["exporter", "tools", "extra"])
         self._write_doc(doc, ["exporter", "imaginary"])
-        rc = ccs.main(["--sot", str(sot), "--doc", str(doc), "--json"])
+        rc = emit_result(ccs.main(["--sot", str(sot), "--doc", str(doc), "--json"]))
         assert rc == 1  # imaginary is illegal
         out = capsys.readouterr().out
         payload = json.loads(out)

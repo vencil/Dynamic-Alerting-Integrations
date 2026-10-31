@@ -302,7 +302,7 @@ def _chart_values() -> dict:
     cannot be had (a caller error in `main`)."""
     import _lib_consumer_read  # noqa: PLC0415
 
-    docs = _lib_consumer_read.kubernetes_documents(str(_CHART_VALUES))
+    docs = _lib_consumer_read.any_yaml_documents(str(_CHART_VALUES))  # no manifest (#3426)
     doc = docs[0] if docs else {}
     if not isinstance(doc, dict):
         raise _lib_consumer_read.ConsumerReadError(

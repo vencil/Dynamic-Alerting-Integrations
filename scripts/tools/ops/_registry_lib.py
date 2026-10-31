@@ -2137,7 +2137,7 @@ def plan_surfaces(doc: dict) -> "list[tuple[str, str, bool]]":
     for path, new, confd in changed:
         if not confd and path not in rule_files and path.endswith((".yaml", ".yml")):
             try:
-                _lib_consumer_read.kubernetes_text_documents(new)
+                _lib_consumer_read.any_yaml_text_documents(new)  # Helm values, no manifest (#3426)
             except _lib_consumer_read.InputRefused as exc:
                 raise ValueError(f"spliced {path}: Helm's reading refuses it: "
                                  f"{_lib_consumer_read.error_text(exc)}") from None

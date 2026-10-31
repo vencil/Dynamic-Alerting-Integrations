@@ -79,7 +79,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
@@ -200,7 +200,7 @@ def title_trks(owner: str, repo: str, token: str) -> dict[str, str]:
     return hits
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> "int | Report":
     # ⛔ try_utf8_stdout() 要在 argparse 之前：`--help` 裡的 CJK 在 legacy Windows
     # console（cp950/cp936）會在 argparse 印出來之前就 UnicodeEncodeError。
     try_utf8_stdout()
@@ -286,13 +286,14 @@ def main(argv: list[str] | None = None) -> int:
     # 它自己的引用「在表上」而轉綠（#2106 盲審實測，含補 legacy 區段的洞）。
     past_freeze = sorted((n for n in defined if int(n) not in _FROZEN_SET), key=int)
 
+    status = 1 if (missing or past_freeze) and args.ci else 0
     if args.json:
-        print(json.dumps(
+        return Report(
             {"defined": len(defined), "used": len(used), "surfaces": surfaces,
              "partial": partial,
              "missing": [{"trk": n, "seen_at": used[n]} for n in missing],
              "past_freeze": past_freeze},
-            ensure_ascii=False, indent=2))
+            status)  # #3216: run() encodes it
     else:
         print(f"[trk-index] 表上定義 {len(defined)} 個 TRK；掃描面：{', '.join(surfaces)}")
         if partial:
@@ -309,10 +310,9 @@ def main(argv: list[str] | None = None) -> int:
         else:
             print("[trk-index] ✅ 量了沒事：被引用的 TRK 都在表上")
 
-    if (missing or past_freeze) and args.ci:
-        return 1
-    return 0
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

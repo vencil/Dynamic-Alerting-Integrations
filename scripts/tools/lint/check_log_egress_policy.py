@@ -52,7 +52,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: rendered manifests read kubectl's way)
 from typing import Iterable, Optional
 
@@ -153,7 +153,7 @@ def render_chart(chart_dir: Path, values_files: list[Path], sets: list[str]) -> 
         for line in e.stderr_lines:
             print(f"  {line}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
-    return [d for d in docs if d]
+    return docs   # every doc an object with a kind (#3426)
 
 
 def _iter_sink_endpoints(vector_config: dict):
@@ -242,7 +242,7 @@ def lint_chart(chart_dir: Path, manifests: list[dict], allow_globs: list[str]) -
     return vios
 
 
-def main(argv: Optional[list[str]] = None) -> None:
+def main(argv: Optional[list[str]] = None) -> "Report | None":
     parser = argparse.ArgumentParser(
         description="Egress allowlist + env-override gate for log-aggregation charts (#566 T4)."
     )
@@ -271,8 +271,8 @@ def main(argv: Optional[list[str]] = None) -> None:
         all_vios.extend(lint_chart(chart_dir, manifests, allow_globs))
 
     if args.json:
-        import json
-        print(json.dumps([v.__dict__ for v in all_vios], indent=2))
+        status = EXIT_VIOLATION if any(v.level == "ERROR" for v in all_vios) else EXIT_OK
+        return Report([v.__dict__ for v in all_vios], status)  # #3216: run() encodes it
     else:
         for v in all_vios:
             marker = "❌" if v.level == "ERROR" else "⚠️"
@@ -290,4 +290,5 @@ def main(argv: Optional[list[str]] = None) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

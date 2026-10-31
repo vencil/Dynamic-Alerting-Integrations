@@ -475,11 +475,16 @@ def _read_other(units: "list[Unit]", consumers: "frozenset[str]") -> None:
     for u in units:
         if u.consumer and u.consumer != "confd" and not u.errors and u.consumer in consumers:
             by.setdefault(u.consumer, []).append(u)
-    k8s = by.get("k8s", []) + by.get("helm-values", [])
-    if k8s:
-        readings = _lib_consumer_read.kubernetes_text_documents_each(
-            [u.text for u in k8s], keep_refusals=True)
-        for u, r in zip(k8s, readings):
+    # `.k8s` is a manifest, read as kubectl applies it (every document an
+    # object, #3426); `.helm-values` is no manifest: the same conversion with
+    # no object shape.
+    for group, read_each in ((by.get("k8s", []), _lib_consumer_read.kubernetes_text_documents_each),
+                             (by.get("helm-values", []),
+                              _lib_consumer_read.any_yaml_text_documents_each)):
+        if not group:
+            continue
+        readings = read_each([u.text for u in group], keep_refusals=True)
+        for u, r in zip(group, readings):
             if isinstance(r, _lib_consumer_read.ConsumerReadError):
                 u.refusal = (None, _refusal_detail(r))
             else:

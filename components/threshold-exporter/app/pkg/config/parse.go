@@ -74,6 +74,10 @@ func (sv *ScheduledValue) UnmarshalYAML(value *yaml.Node) error {
 		if err := value.Decode(&raw); err != nil {
 			return err
 		}
+		// #3370: the generic decode types a bare `threshold: 0x1F` as 31;
+		// the text goes back where YAML misstates it, as for every other
+		// threshold leaf (#3250).
+		CustomAlertThresholdTexts(raw, value)
 		out, err := yaml.Marshal(raw)
 		if err != nil {
 			return fmt.Errorf("ScheduledValue: failed to re-serialize sequence: %w", err)

@@ -41,7 +41,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo subdir layout
 import _lib_exitcodes  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 from _lint_helpers import parse_command_map  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -524,7 +524,7 @@ def scan(docs: tuple[Path, ...] = DOCS,
             errors + [f"unscoreable: {u}" for u in unscoreable], by_header)
 
 
-def main() -> int:
+def main() -> "int | Report":
     parser = argparse.ArgumentParser(
         description="cli-reference default column vs argparse defaults (#1556)")
     parser.add_argument("--ci", action="store_true",
@@ -538,23 +538,26 @@ def main() -> int:
             # ⛔ Under --json the consumer is a machine: emitting nothing on
             # stdout hands it a parse error instead of a diagnosis. Measured:
             # deleting cli-reference.en.md gave rc=2 with an empty stdout.
-            if args.json:
-                import json
-                json.dump({"findings": [], "stats": {}, "notes":
-                           [f"missing {doc}"]}, sys.stdout, ensure_ascii=False)
-                sys.stdout.write("\n")
             print(f"ERROR: missing {doc}", file=sys.stderr)
+            if args.json:
+                # #3216: run() encodes it
+                return Report({"findings": [], "stats": {}, "notes":
+                               [f"missing {doc}"]}, EXIT_CALLER_ERROR)
             return EXIT_CALLER_ERROR
 
     findings, stats, notes, _by_header = scan()
     hard_errors = [n for n in notes if not n.startswith("unscoreable:")]
 
+    if hard_errors:
+        status = EXIT_VIOLATION if args.ci else EXIT_OK
+    elif findings and args.ci:
+        status = EXIT_VIOLATION
+    else:
+        status = EXIT_OK
     if args.json:
-        import json
-        json.dump({"findings": [f._asdict() for f in findings],
-                   "stats": stats, "notes": notes},
-                  sys.stdout, ensure_ascii=False, indent=1)
-        sys.stdout.write("\n")
+        return Report({"findings": [f._asdict() for f in findings],
+                       "stats": stats, "notes": notes},
+                      status)  # #3216: run() encodes it
     else:
         for note in hard_errors:
             print(f"[ERROR] {note}", file=sys.stderr)
@@ -577,13 +580,8 @@ def main() -> int:
               "see those rows.")
         if not findings and not hard_errors:
             print("✅ every comparable default matches")
-
-    if hard_errors:
-        return EXIT_VIOLATION if args.ci else EXIT_OK
-    if findings and args.ci:
-        return EXIT_VIOLATION
-    return EXIT_OK
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

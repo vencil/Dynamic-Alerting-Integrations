@@ -26,7 +26,6 @@ v2.4.0 新增：解決 v2.3.0 release 過程中 cli-reference.en.md 缺少整個
 """
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
@@ -40,7 +39,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
@@ -386,8 +385,9 @@ def main():
     errors = [i for i in all_issues if i["severity"] == "error"]
     warnings = [i for i in all_issues if i["severity"] == "warning"]
 
+    status = EXIT_VIOLATION if args.ci and errors else EXIT_OK
     if args.json:
-        print(json.dumps({
+        return Report({
             "pairs_checked": len(pairs),
             "structure_issues": all_issues,
             "nav_issues": nav_issues,
@@ -396,7 +396,7 @@ def main():
                 "warnings": len(warnings),
                 "nav_issues": len(nav_issues),
             },
-        }, ensure_ascii=False, indent=2))
+        }, status)  # #3216: run() encodes it
     else:
         print(f"掃描 {len(pairs)} 對雙語文件\n")
 
@@ -427,10 +427,9 @@ def main():
             print(f"總計: {len(errors)} 錯誤, {len(warnings)} 警告, "
                   f"{len(nav_issues)} 導航問題")
 
-    if args.ci and errors:
-        sys.exit(EXIT_VIOLATION)
-    sys.exit(EXIT_OK)
+    sys.exit(status)
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

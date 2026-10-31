@@ -10,6 +10,14 @@ any depth, read through `da-guard parse-tree` (ADR-036) — not file names. A
 tenant file parse-tree cannot read, a tenant id declared in two files, or no
 usable da-guard exits 2.
 
+The --source-dir files are what their readers say (#3426): a manifest kubectl
+reads (da-crdecode; a `kind: List` is read as its items), or else a plain rule
+file (one mapping declaring `groups`, or — when no YAML reading reads it —
+one Prometheus' rule loader reads `groups` from). Any other file — broken
+YAML, a top-level list, a document with no `kind`, a list item kubectl would
+not apply — exits 2 before anything is written, every such file named with
+its reader's reason.
+
 Usage:
     da-tools migrate-to-operator --source-dir configmaps/ --config-dir conf.d/   # stdout; nothing written
     da-tools migrate-to-operator --source-dir configmaps/ --output-dir migration-output/   # writing is opt-in (#1582)
@@ -163,8 +171,9 @@ def list_source_dir(source_dir: Path) -> "_lib_parse_tree.Listing":
     ⛔ List mode, not a conf.d reader: these are ConfigMap dumps and rule
     files (a multi-document manifest is ordinary here), not files the
     exporter serves, so the exporter's judgement of their content — and the
-    conf.d refusal built on it — does not apply. A file that cannot be
-    parsed is a WARN of `parse_configmap_rules`, as before.
+    conf.d refusal built on it — does not apply. A listed file that is
+    neither a manifest kubectl reads nor a plain rule file stops the run in
+    `parse_configmap_rules` (`SourceFilesUnreadable`, #3426), naming it.
 
     Nothing at the top level is dropped silently: one stderr line names
     each entry this tool will not read, with Go's reason — the names the
@@ -195,6 +204,24 @@ def list_source_dir(source_dir: Path) -> "_lib_parse_tree.Listing":
     return listing
 
 
+class SourceFilesUnreadable(Exception):
+    """Files of --source-dir that are neither a Kubernetes manifest kubectl
+    reads nor a plain rule file (#3426). ``files`` is ``[(name, reason)]``,
+    every such file (the ones the rule loader judged last); ``str()`` names
+    them all. The run
+    stops on it (rc 2) before any file is written: a migration that left a
+    source file out would read as a complete one."""
+
+    def __init__(self, files: "list[tuple[str, str]]") -> None:
+        self.files = list(files)
+        shown = "; ".join(f"{safe_label(n)}: {safe_label(why)}" for n, why in self.files)
+        super().__init__(i18n_text(
+            f"--source-dir 有 {len(self.files)} 個檔既不是 kubectl 讀得了的 manifest、"
+            f"也不是純 rule file，遷移中止、不寫任何檔: {shown}",
+            f"--source-dir: {len(self.files)} file(s) are neither a manifest kubectl "
+            f"reads nor a plain rule file; nothing is written: {shown}"))
+
+
 def parse_configmap_rules(source_dir: Path,
                           listing: "Optional[_lib_parse_tree.Listing]" = None) -> List[dict]:
     """Parse ConfigMap YAML files and extract rule groups.
@@ -207,13 +234,20 @@ def parse_configmap_rules(source_dir: Path,
         listing: its `list_source_dir` (taken here when None)
 
     Returns:
-        List of dicts: {name, file, rule_groups, cm_data_key}
+        List of dicts: {name, file, rule_groups, cm_data_key, already_crd}.
+        ``already_crd`` is True for a PrometheusRule's ``spec`` (#3426): it
+        is already the CRD this tool writes, so it is not converted — the
+        callers name it on stderr and in the checklist (never a silent skip,
+        never an error).
 
     Raises:
         FileNotFoundError: If directory does not exist
+        SourceFilesUnreadable: a file that is neither a manifest kubectl
+            reads nor a plain rule file (every one named, with the reader's
+            reason; #3426)
         _lib_consumer_read.ConsumerReadError: a rule file Prometheus' rule
             loader refuses (RuleFilesRefused, naming each), or no
-            da-read / da-crdecode
+            da-read / da-crdecode — each stops the run at rc 2 in `main`
     """
     if not source_dir.is_dir():
         raise FileNotFoundError(
@@ -223,65 +257,46 @@ def parse_configmap_rules(source_dir: Path,
             )
         )
 
-    # #3206 (ADR-036 §12): each file is read the way kubectl reads it
-    # (da-crdecode); a rule file — a ConfigMap data value whose own Kubernetes
-    # reading declares `groups:`, or a plain file that does — is read the way
-    # Prometheus' rule loader reads it (`da-read prometheus-rules`, all of
-    # them in one run). A file kubectl's reading refuses is a WARN, as an
-    # unparsable file always was; a rule file the rule loader refuses raises
-    # `RuleFilesRefused` — no CRD is generated around it.
+    # #3206 (ADR-036 §12) / #3426: which rule files a file holds is
+    # `_lib_consumer_read.rule_files_in`'s answer — the one classifier: the
+    # manifest kubectl reads (a `kind: List`, which `kubectl get … -o yaml`
+    # writes, is its items; a ConfigMap's data values that set out to be rule
+    # files), else a plain rule file (its YAML reading, or — when none reads
+    # it — Prometheus' rule loader, declares `groups`). Any other file stops
+    # the run (`SourceFilesUnreadable`, every one named with its readers'
+    # reason), and so does a rule file the rule loader refuses
+    # (`RuleFilesRefused`): no CRD set is generated with a source left out.
     # Top level only; `warn_nested` names what that leaves out.
     if listing is None:
         listing = list_source_dir(source_dir)
     warn_nested(source_dir, tool="migrate_to_operator", listing=listing)
-    found: "list[tuple[dict, str | None, str]]" = []   # (entry, cm text | None, path)
-    for yaml_file in [source_dir / e.path for e in listing.config_files() if e.depth == 0]:
-        try:
-            docs = _lib_consumer_read.kubernetes_documents(str(yaml_file))
-        except _lib_consumer_read.InputRefused as exc:
-            print(
-                i18n_text(
-                    f"WARNING: 解析 {safe_label(yaml_file.name)} 失敗: "
-                    f"{safe_label('; '.join(exc.stderr_lines) or exc)}",
-                    f"WARNING: Failed to parse {safe_label(yaml_file.name)}: "
-                    f"{safe_label('; '.join(exc.stderr_lines) or exc)}",
-                ),
-                file=sys.stderr,
-            )
-            continue
-        for data in docs:
-            if not isinstance(data, dict):
-                continue
-            # Check if this is a ConfigMap with rule data
-            if data.get("kind") == "ConfigMap":
-                data_section = data.get("data", {})
-                if isinstance(data_section, dict):
-                    for key, value in data_section.items():
-                        if isinstance(value, str) and \
-                                _lib_consumer_read.configmap_value_is_rule_file(value):
-                            found.append(({
-                                "name": (data.get("metadata") or {}).get("name", yaml_file.stem),
-                                "file": yaml_file.name,
-                                "cm_data_key": key,
-                            }, value, f"{yaml_file}#{key}"))
-            # Also handle direct rule YAML files (not wrapped in ConfigMap)
-            elif data.get("groups"):
-                found.append(({
-                    "name": yaml_file.stem,
-                    "file": yaml_file.name,
-                    "cm_data_key": None,
-                }, None, str(yaml_file)))
-                break   # the file is the rule file, read once
-    plain = [path for _e, text, path in found if text is None]
-    texts = [(path, text) for _e, text, path in found if text is not None]
-    read = {r.path: r for r in _lib_consumer_read.require_read(
-        _lib_consumer_read.prometheus_rule_file_results(plain)
-        + _lib_consumer_read.prometheus_rule_text_results(texts))}
+    paths = [source_dir / e.path for e in listing.config_files() if e.depth == 0]
+    try:
+        found = _lib_consumer_read.rule_files_in(paths)
+    except _lib_consumer_read.RuleFileSourcesRefused as exc:
+        raise SourceFilesUnreadable([(Path(p).name, why) for p, why in exc.files]) from exc
+    rule_files = _lib_consumer_read.require_read(
+        [rf for path in paths for rf in found[str(path)]])
     results = []
-    for entry, _text, path in found:
-        entry["rule_groups"] = read[path].groups
-        results.append(entry)
+    for rf in rule_files:
+        path = Path(rf.manifest)
+        results.append({
+            "name": rf.object_name if rf.kind is not None else path.stem,
+            "file": path.name,
+            "cm_data_key": rf.key if rf.kind == "ConfigMap" else None,
+            "rule_groups": rf.groups,
+            "already_crd": rf.kind == "PrometheusRule",
+        })
     return results
+
+
+def already_crd_notice(item: dict) -> str:
+    """The line that names a PrometheusRule found in --source-dir (#3426):
+    it is already a CRD, so nothing is migrated from it."""
+    return i18n_text(
+        f"{item['file']}: PrometheusRule {item['name']} 已是 PrometheusRule CRD，不需遷移（未轉換）",
+        f"{item['file']}: PrometheusRule {item['name']} is already a PrometheusRule CRD; "
+        "nothing to migrate (not converted)")
 
 
 def convert_rules_to_crd(
@@ -437,6 +452,7 @@ def analyze_migration(source_dir: Path, config_dir: Path,
     """
     analysis = {
         "configmap_files": 0,
+        "already_crd": [],
         "rule_groups": 0,
         "tenants": 0,
         "estimated_crds": 0,
@@ -445,7 +461,10 @@ def analyze_migration(source_dir: Path, config_dir: Path,
     }
 
     try:
-        cm_rules = parse_configmap_rules(source_dir, source_listing)
+        found = parse_configmap_rules(source_dir, source_listing)
+        cm_rules = [item for item in found if not item["already_crd"]]
+        analysis["already_crd"] = [{"file": i["file"], "name": i["name"]}
+                                   for i in found if i["already_crd"]]
         analysis["configmap_files"] = len(cm_rules)
         for item in cm_rules:
             analysis["rule_groups"] += len(item.get("rule_groups", []))
@@ -454,11 +473,9 @@ def analyze_migration(source_dir: Path, config_dir: Path,
             f"來源目錄錯誤: {exc}",
             f"Source directory error: {exc}",
         ))
-    except _lib_consumer_read.ConsumerReadError as exc:
-        analysis["issues"].append(i18n_text(
-            f"規則檔讀取失敗: {_lib_consumer_read.error_text(exc)}",
-            f"Rule files unreadable: {_lib_consumer_read.error_text(exc)}",
-        ))
+    # #3426: a rule file the rule loader refuses, an unreadable source file
+    # and a missing da-read / da-crdecode are no `issues` entry beside a
+    # partial count: they reach `main` (`_tenant_set_or_exit`), rc 2.
 
     try:
         # ⛔ The tenant set is parse-tree's (#2906); an invalid id becomes an
@@ -531,6 +548,17 @@ def build_migration_checklist(
     pr_count = len(result.get("prometheus_rules", []))
     ac_count = len(result.get("alertmanager_configs", []))
     total = pr_count + ac_count
+    # #3426: PrometheusRules found in --source-dir are named here — they are
+    # already the CRD, so nothing was converted from them.
+    already = result.get("already_crd", [])
+    zh_already = en_already = ""
+    if already:
+        rows = "".join(f"- `{a['file']}`: PrometheusRule `{a['name']}`\n" for a in already)
+        zh_already = ("\n## 已是 PrometheusRule CRD（不需遷移）\n\n"
+                      "以下來源已是 PrometheusRule CRD，未轉換、不在輸出 CRD 數內：\n\n" + rows)
+        en_already = ("\n## Already PrometheusRule CRDs (nothing to migrate)\n\n"
+                      "These sources are already PrometheusRule CRDs; they were not "
+                      "converted and are not in the output CRD count:\n\n" + rows)
 
     zh_checklist = f"""# 遷移檢核清單
 
@@ -544,7 +572,7 @@ def build_migration_checklist(
 - **輸出 CRD 數**: {total} ({pr_count} PrometheusRules + {ac_count} AlertmanagerConfigs)
 - **來源目錄**: {source_dir}
 - **輸出目錄**: {output_dir}
-
+{zh_already}
 ## 遷移步驟
 
 ### Phase 1: 前置驗證
@@ -632,7 +660,7 @@ Generated: {timestamp}
 - **Output CRDs**: {total} ({pr_count} PrometheusRules + {ac_count} AlertmanagerConfigs)
 - **Source Directory**: {source_dir}
 - **Output Directory**: {output_dir}
-
+{en_already}
 ## Migration Steps
 
 ### Phase 1: Pre-Migration Validation
@@ -741,6 +769,7 @@ def generate_migration(
         "prometheus_rules": [],
         "alertmanager_configs": [],
         "configmap_files": 0,
+        "already_crd": [],
         "rule_group_count": 0,
         "tenants": 0,
         "errors": [],
@@ -748,7 +777,10 @@ def generate_migration(
 
     # Parse ConfigMap rules
     try:
-        cm_rules = parse_configmap_rules(source_dir, source_listing)
+        found = parse_configmap_rules(source_dir, source_listing)
+        cm_rules = [item for item in found if not item["already_crd"]]
+        result["already_crd"] = [{"file": i["file"], "name": i["name"]}
+                                 for i in found if i["already_crd"]]
         result["configmap_files"] = len(cm_rules)
 
         for cm_item in cm_rules:
@@ -772,8 +804,8 @@ def generate_migration(
                 )
     except FileNotFoundError as exc:
         result["errors"].append(str(exc))
-    except _lib_consumer_read.ConsumerReadError as exc:
-        result["errors"].append(_lib_consumer_read.error_text(exc))
+    # ConsumerReadError (a refused rule file, no da-read / da-crdecode)
+    # reaches `main`: rc 2 before any write (#3426).
 
     # Generate AlertmanagerConfig CRDs for tenants
     try:
@@ -878,6 +910,8 @@ def plan_stdout(
                 },
                 "prometheus_rules": [item["crd"] for item in result.get("prometheus_rules", [])],
                 "alertmanager_configs": [item["crd"] for item in result.get("alertmanager_configs", [])],
+                # #3426: PrometheusRules of --source-dir, named, not converted
+                "already_crd": list(result.get("already_crd", [])),
                 "errors": result.get("errors", []),
             }
             docs.append(format_json_report(output_obj) + "\n")
@@ -918,6 +952,8 @@ def plan_stdout(
             "prometheus_rules": len(result["prometheus_rules"]),
             "alertmanager_configs": len(result["alertmanager_configs"]),
             "total_crds": total_crds,
+            # #3426: PrometheusRules of --source-dir, named, not converted
+            "already_crd": list(result.get("already_crd", [])),
         }
         if checklist_only:
             # #1112: stdout must be exactly ONE JSON document. The checklist
@@ -943,6 +979,16 @@ def _tenant_set_or_exit(fn, *args, **kwargs):
     """
     try:
         return fn(*args, **kwargs)
+    except SourceFilesUnreadable as exc:
+        # #3426: a source file no reader reads stops the run before anything
+        # is written, every such file named.
+        die_caller_error(f"ERROR: {exc}", reason="source_files_unreadable")
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # #3426: a rule file Prometheus' rule loader refuses, or no
+        # da-read / da-crdecode — no answer about the sources, so no CRD set:
+        # the run stops before anything is written.
+        die_caller_error(f"ERROR: --source-dir rule files: {_lib_consumer_read.error_text(exc)}",
+                         reason="rule_files_unreadable")
     except ParseTreeError as exc:
         die_caller_error(_lib_parse_cache.parse_tree_error_line(exc),
                          reason="tenant_set_unknown")
@@ -1056,6 +1102,10 @@ def main():
     if analysis["issues"]:
         for issue in analysis["issues"]:
             print(f"WARNING: {safe_label(issue)}", file=sys.stderr)
+    # #3426: a PrometheusRule in --source-dir is named, never passed over in
+    # silence; it is no error (the rc is not touched).
+    for item in analysis.get("already_crd", []):
+        print(f"NOTE: {safe_label(already_crd_notice(item))}", file=sys.stderr)
 
     # Generate migration if not checklist-only
     if args.checklist_only:

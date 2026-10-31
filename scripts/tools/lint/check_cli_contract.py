@@ -67,7 +67,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # repo subdir layout
 import _lib_exitcodes  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 from _lint_helpers import ENTRYPOINT_PATH, parse_command_map  # noqa: E402
 # Imported, not copied: a second transcription of these pins is a second
 # thing that can drift.
@@ -2258,7 +2258,7 @@ def _not_scored_lines(stats: dict[str, int]) -> list[str]:
     ]
 
 
-def main() -> int:
+def main() -> "int | Report":
     ap = argparse.ArgumentParser(
         description="documented da-tools invocations vs the live argparse contract (#1379)")
     ap.add_argument("--ci", action="store_true", help="Exit non-zero on findings")
@@ -2270,12 +2270,12 @@ def main() -> int:
 
     for doc in CLI_REFERENCE_DOCS:
         if not doc.is_file():
-            if args.json:
-                json.dump({"findings": [], "suppressed": 0, "ignored": 0,
-                           "stats": {}, "errors": [], "fatal": [f"missing {doc}"]},
-                          sys.stdout, ensure_ascii=False)
-                sys.stdout.write("\n")
             print(f"ERROR: missing {doc}", file=sys.stderr)
+            if args.json:
+                # #3216: run() encodes it
+                return Report({"findings": [], "suppressed": 0, "ignored": 0,
+                               "stats": {}, "errors": [], "fatal": [f"missing {doc}"]},
+                              EXIT_CALLER_ERROR)
             return EXIT_CALLER_ERROR
 
     result = scan()
@@ -2299,12 +2299,19 @@ def main() -> int:
     errors = result.errors + baseline_errors
     ignored = [f for f in findings if f.ignored is not None]
 
+    if fatal:
+        # The apparatus did not run to completion: a caller/setup error, never
+        # to be confused with "checked and found N things".
+        status = EXIT_CALLER_ERROR
+    elif errors or open_findings:
+        status = EXIT_VIOLATION if args.ci else EXIT_OK
+    else:
+        status = EXIT_OK
     if args.json:
-        json.dump({"findings": [f._asdict() for f in open_findings],
-                   "suppressed": len(suppressed), "ignored": len(ignored),
-                   "stats": stats, "errors": errors, "fatal": fatal},
-                  sys.stdout, ensure_ascii=False, indent=1)
-        sys.stdout.write("\n")
+        return Report({"findings": [f._asdict() for f in open_findings],
+                       "suppressed": len(suppressed), "ignored": len(ignored),
+                       "stats": stats, "errors": errors, "fatal": fatal},
+                      status)  # #3216: run() encodes it
     else:
         for e in fatal:
             print(f"[FATAL] {e}", file=sys.stderr)
@@ -2321,14 +2328,8 @@ def main() -> int:
             print(line)
         if not open_findings and not errors and not fatal:
             print("✅ every documented da-tools invocation matches the CLI contract")
-    if fatal:
-        # The apparatus did not run to completion: a caller/setup error, never
-        # to be confused with "checked and found N things".
-        return EXIT_CALLER_ERROR
-    if errors or open_findings:
-        return EXIT_VIOLATION if args.ci else EXIT_OK
-    return EXIT_OK
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

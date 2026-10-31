@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_prometheus import QueryError, prometheus_targets  # noqa: E402  (#3133)
 from _lib_kubectl import KubectlError, kubectl_get, kubectl_list  # noqa: E402  (#3207)
+import _lib_consumer_read  # noqa: E402  (#3426: rule_pack_files, the one declaration)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
 
@@ -159,9 +160,14 @@ class OperatorChecker:
         except KubectlError as exc:
             return self._unanswered("check_rules", exc)
 
-        expected = len(list(
-            Path(self.args.rule_packs_dir).glob("rule-pack-*.yaml")
-        )) if Path(self.args.rule_packs_dir).is_dir() else 0
+        # #3426: the one declaration of which files are rule packs; one that
+        # does not cover the directory is no expected count.
+        try:
+            expected = len(_lib_consumer_read.rule_pack_files(self.args.rule_packs_dir)) \
+                if Path(self.args.rule_packs_dir).is_dir() else 0
+        except _lib_consumer_read.ConsumerReadError as exc:
+            return CheckResult(i18n("check_rules", self.lang), "fail",
+                               _lib_consumer_read.error_text(exc), caller_error=True)
 
         status = "pass" if loaded == expected > 0 else ("warn" if loaded > 0 else "fail")
         detail = f"{loaded}/{expected}" if expected > 0 else f"{loaded}"

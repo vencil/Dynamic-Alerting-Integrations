@@ -3373,7 +3373,7 @@ def test_only_the_chart_face_unwraps_thresholdConfig():
     assert gate._defaults_section(doc) == {"pg_conn_critical": 0}
     # chart reading of the same bytes (as Helm reads them, #3206): one level down
     import _lib_consumer_read  # noqa: PLC0415 — on sys.path through the gate
-    as_helm = _lib_consumer_read.kubernetes_text_documents(doc)[0]
+    as_helm = _lib_consumer_read.any_yaml_text_documents(doc)[0]   # values: no manifest (#3426)
     assert gate._defaults_section(as_helm, unwrap_chart=True) == {"chart_key": 0}
     # …and text is never unwrapped: the chart is Helm's to read, not the exporter's
     with pytest.raises(TypeError):

@@ -75,7 +75,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_validation import (  # noqa: E402
     NonFiniteThresholdError, i18n_text, parse_threshold_number, split_threshold_severity)
 # ADR-036 step 4 (#2906): the conf.d trees are read by `da-guard parse-tree`
@@ -407,7 +407,9 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
     # No da-crdecode raises ConsumerReadError; a file its reading refuses is
     # named and raised as ArtifactRefused once every file was read — both
     # caller errors in `main` (exit 2), never a skip (#3206).
-    read = _lib_consumer_read.kubernetes_documents_of(
+    # Values files and a CR example, walked for values: no object shape is
+    # required of them (#3426), so the any-YAML reading.
+    read = _lib_consumer_read.any_yaml_documents_of(
         [path for rel, path in files if rel != _REGISTRY_REL], keep_refusals=True)
     refused = [(rel, " | ".join(read[path].stderr_lines) or str(read[path]))
                for rel, path in files
@@ -586,7 +588,7 @@ def run_check(
     return {"errors": sorted(set(errors)), "exempted": exempted}
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> "int | Report":
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description=i18n_text(
@@ -632,11 +634,12 @@ def main(argv: list[str] | None = None) -> int:
     # `--json` keeps exactly one document on stdout; the JSON carries it too).
     doc_inventory.print_exemptions(exempted, file=sys.stderr)
 
+    status = (EXIT_VIOLATION if args.ci else EXIT_OK) if errors else EXIT_OK
     if args.json:
-        print(json.dumps({"status": "violation" if errors else "ok",
-                          "errors": errors,
-                          "exempted": [{"unit": w, "reason": r} for w, r in exempted]},
-                         ensure_ascii=False, indent=2))
+        return Report({"status": "violation" if errors else "ok",
+                       "errors": errors,
+                       "exempted": [{"unit": w, "reason": r} for w, r in exempted]},
+                      status)  # #3216: run() encodes it
     else:
         for msg in errors:
             print(f"❌ {msg}", file=sys.stderr)
@@ -652,10 +655,9 @@ def main(argv: list[str] | None = None) -> int:
             print("✅ threshold unit sanity OK — declared units agree with the "
                   "registry and every value lies in its dimension.", file=sys.stderr)
 
-    if errors:
-        return EXIT_VIOLATION if args.ci else EXIT_OK
-    return EXIT_OK
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

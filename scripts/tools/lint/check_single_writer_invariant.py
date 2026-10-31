@@ -175,9 +175,10 @@ def check_targets(repo: Path) -> List[str]:
     findings: List[str] = []
 
     # 1. Helm values — replicaCount == 1
-    # ADR-036 §12 (#3206): values.yaml as Helm reads it (da-crdecode).
+    # ADR-036 §12 (#3206): values.yaml as Helm reads it (da-crdecode
+    # --any-shape: a values file is no Kubernetes manifest, #3426).
     vpath = repo / _HELM_VALUES
-    docs = _lib_consumer_read.kubernetes_documents(str(vpath))
+    docs = _lib_consumer_read.any_yaml_documents(str(vpath))
     values = docs[0] if docs else {}
     for v in check_helm_values(values):
         findings.append(f"{_HELM_VALUES}: {v}")

@@ -63,7 +63,6 @@ REASON_PREFIX = {"dir": "dir_", "file": "file_", "any": "path_"}
 PENDING: frozenset[tuple[str, str]] = frozenset({
     ("blind-spot", "--config-dir"),
     ("generator-service", "--config-subdir"),
-    ("generator-service", "--da-guard-binary"),
     ("migrate-to-operator", "--config-dir"),
     ("migrate-to-operator", "--source-dir"),
     ("onboard", "--rule-files"),
@@ -218,7 +217,9 @@ def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
             if key not in pending_ceiling:
                 faults.append(f"{where}: a new pending input path — judge it, or raise "
                               "PENDING in this file with its ticket")
-    for site, claimants in sorted(claims.items()):
+    # A site's flag is None for a positional: sort it before any option
+    # string of the same script (a script may have both, #3426).
+    for site, claimants in sorted(claims.items(), key=lambda kv: (kv[0][0], kv[0][1] or "")):
         if len(claimants) > 1:
             faults.append(f"{' / '.join(claimants)}: one row ({site[0]} {site[1]}) "
                           "cannot answer for more than one declaration")

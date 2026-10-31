@@ -85,6 +85,14 @@ func withThresholdLeaves(block map[string]any, n *yaml.Node) {
 		return
 	}
 	eachPair(n, func(k string, node *yaml.Node) {
+		if k == customAlertsKey {
+			// #3370: a reserved key, but its elements' `threshold:` is a
+			// threshold the exporter reads as written.
+			if vn := resolveAlias(node); vn.Kind == yaml.SequenceNode {
+				CustomAlertThresholdTexts(block[k], vn)
+			}
+			return
+		}
 		if baseRowsSkipKey(k) {
 			return
 		}
@@ -267,4 +275,52 @@ func withTenantThresholdLeaves(block map[string]any, n *yaml.Node) {
 			withThresholdLeaves(body, resolveAlias(node))
 		}
 	})
+}
+
+// CustomAlertThresholdTexts rewrites, in place, the `threshold:` of each
+// element of raw — a `_custom_alerts` list as yaml.v3's generic decode typed
+// it — to thresholdLeaf of the text seq, the list's node, wrote for it
+// (#3370). The list is re-serialized and re-read into CustomAlertSpec, so a
+// bare `0x1F` would otherwise reach parseThresholdNumber as "31" and `017`
+// as "15": the one reading every other threshold leaf takes (#3250) reads
+// the text — 0x1F refused, 017 as 17. Only a leaf YAML misstates changes.
+//
+// ⛔ Every reader of a `_custom_alerts` list decoded generically takes it:
+// the exporter (ScheduledValue's sequence branch), the generic tree behind
+// /effective and merged_hash (withThresholdLeaves), and tenant-api's
+// custom-alerts read and write (customalerts.Extract) — a reader that did
+// not would show, and on a save write back, YAML's number where the
+// exporter serves the text's.
+func CustomAlertThresholdTexts(raw any, seq *yaml.Node) {
+	items, ok := raw.([]any)
+	if !ok {
+		return
+	}
+	for i, item := range seq.Content {
+		if i >= len(items) {
+			return
+		}
+		m, ok := items[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		in := resolveAlias(item)
+		if in.Kind != yaml.MappingNode {
+			continue
+		}
+		eachPair(in, func(k string, node *yaml.Node) {
+			if k != "threshold" {
+				return
+			}
+			vn := resolveAlias(node)
+			if vn.Kind != yaml.ScalarNode {
+				return
+			}
+			if g, has := m[k]; has {
+				if r := thresholdLeaf(g, vn.Value); r != g {
+					m[k] = r
+				}
+			}
+		})
+	}
 }

@@ -703,6 +703,42 @@ def test_da_guard_missing_is_503(tmp_path, world, how):
         assert m["da_generator_judgement_deadline_ratio"] == 0
 
 
+@pytest.mark.parametrize("flag_is", ["missing", "not_executable", "blank", "the_real_one"])
+def test_the_da_guard_flag_is_the_one_that_judges_and_is_reported(tmp_path, world, flag_is):
+    """#3415 (owner ruling A): --da-guard-binary is the first step of the one
+    resolution. Before, it fed only the reported version while every
+    judgement ran $DA_GUARD_BINARY / PATH: a right flag with a wrong env
+    was 503, a wrong flag with a right env reported no version and judged."""
+    real = os.environ["DA_GUARD_BINARY"]
+    bogus = str(tmp_path / "nope")
+    if flag_is == "the_real_one":
+        flag, env = real, {"DA_GUARD_BINARY": bogus}
+    elif flag_is == "blank":
+        # Blank is not given, as a blank $DA_GUARD_BINARY is not set: the env
+        # stays the one that judges (here a wrong one: 503 naming the env).
+        flag, env = "  ", {"DA_GUARD_BINARY": bogus}
+    else:
+        flag, env = str(tmp_path / "flagged-da-guard"), {"DA_GUARD_BINARY": real}
+        if flag_is == "not_executable":
+            Path(flag).write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            Path(flag).chmod(0o644)
+    with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
+                   args=("--da-guard-binary", flag), env=env) as svc:
+        status, doc = svc.validate(world["commits"]["clean"])
+        _s, st = svc.call("GET", "/v1/status")
+        if flag_is == "blank":
+            assert status == 503 and doc["reason"] == "da_guard_missing", doc
+            assert "--da-guard-binary" not in doc["message"], doc
+        elif flag_is != "the_real_one":
+            assert status == 503, doc
+            assert doc["reason"] == "da_guard_missing", doc
+            assert f"--da-guard-binary {flag!r}" in doc["message"], doc
+            assert st["da_guard_available"] is False and st["da_guard_version"] is None
+        else:
+            assert status == 200 and doc["result"] == "pass", doc
+            assert st["da_guard_available"] is True and st["da_guard_version"], st
+
+
 def test_a_hanging_da_guard_is_probed_once(tmp_path, world):
     """The --version probe runs on the event loop: a da-guard that hangs is
     probed once per file (at start, before listening), its failure kept —

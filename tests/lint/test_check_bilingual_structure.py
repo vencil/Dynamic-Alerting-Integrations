@@ -39,6 +39,7 @@ _spec = importlib.util.spec_from_file_location("check_bilingual_structure", _SCR
 mod = importlib.util.module_from_spec(_spec)
 sys.modules["check_bilingual_structure"] = mod
 _spec.loader.exec_module(mod)
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ============================================================
@@ -539,8 +540,7 @@ class TestMainCLI:
             "# Title\n[中文](doc.md)\n\n## Chapter\n"
         )
         monkeypatch.setattr(sys, "argv", ["check_bilingual_structure", "--json"])
-        with pytest.raises(SystemExit):
-            mod.main()
+        assert emit_result(mod.main()) == 0
         payload = json.loads(capsys.readouterr().out)
         assert "pairs_checked" in payload
         assert "structure_issues" in payload

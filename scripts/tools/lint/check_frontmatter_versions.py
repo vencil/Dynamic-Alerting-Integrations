@@ -11,7 +11,6 @@ Usage:
   python3 scripts/tools/lint/check_frontmatter_versions.py --fix
 """
 import argparse
-import json
 import os
 import re
 import sys
@@ -23,7 +22,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import write_text_or_die  # noqa: E402
-from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_versions import (  # noqa: E402
     read_platform_version as _read_shared_platform_version,
 )
@@ -273,7 +272,7 @@ def format_text_report(
     return "\n".join(lines)
 
 
-def format_json_report(
+def json_document(
     items: List[DriftItem],
     expected: str,
     total_scanned: int,
@@ -281,8 +280,8 @@ def format_json_report(
     total_found: Optional[int] = None,
     status: str = "ok",
     reason: Optional[str] = None,
-) -> str:
-    """Format a JSON report.
+) -> dict:
+    """The --json document (run() encodes it, #3216).
 
     ``status``/``reason`` exist for the refused-empty-population path: in
     ``--json`` mode stdout must still be exactly one JSON document
@@ -291,7 +290,7 @@ def format_json_report(
     """
     errors = [i for i in items if i.severity == "error"]
     warnings = [i for i in items if i.severity == "warn"]
-    result = {
+    return {
         "status": status,
         "reason": reason,
         "expected_version": expected,
@@ -304,10 +303,9 @@ def format_json_report(
             "warnings": len(warnings),
         },
     }
-    return json.dumps(result, indent=2, ensure_ascii=False)
 
 
-def main(argv: Optional[List[str]] = None) -> None:
+def main(argv: Optional[List[str]] = None) -> "Report | None":
     """CLI entry point."""
     parser = argparse.ArgumentParser(
         description="Scan frontmatter version: fields across all docs/*.md",
@@ -355,10 +353,10 @@ def main(argv: Optional[List[str]] = None) -> None:
         if args.json:
             # dev-rules §13: --json stdout is exactly one JSON document on
             # every terminal path, early exits included.
-            print(format_json_report([], expected, 0, 0, total_found=total_found,
-                                     status="caller_error", reason=reason))
-        else:
-            print(msg)
+            return Report(json_document([], expected, 0, 0, total_found=total_found,
+                                        status="caller_error", reason=reason),
+                          EXIT_CALLER_ERROR)  # #3216: run() encodes it
+        print(msg)
         sys.exit(EXIT_CALLER_ERROR)
     total_scanned = len(scanned)
     total_with_fm = sum(1 for s in scanned if s.has_frontmatter)
@@ -372,17 +370,18 @@ def main(argv: Optional[List[str]] = None) -> None:
         scanned = scan_docs(docs_dir=DOCS_DIR)
         items = detect_drift(scanned, expected)
 
-    if args.json:
-        print(format_json_report(items, expected, total_scanned, total_with_fm,
-                                 total_found=total_found))
-    else:
-        print(format_text_report(items, expected, total_scanned, total_with_fm,
-                                 total_found=total_found))
-
     errors = [i for i in items if i.severity == "error"]
-    if args.ci and errors:
-        sys.exit(EXIT_VIOLATION)
+    status = EXIT_VIOLATION if args.ci and errors else EXIT_OK
+    if args.json:
+        return Report(json_document(items, expected, total_scanned, total_with_fm,
+                                    total_found=total_found), status)
+    print(format_text_report(items, expected, total_scanned, total_with_fm,
+                             total_found=total_found))
+    if status:
+        sys.exit(status)
+    return None
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

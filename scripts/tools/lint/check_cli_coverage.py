@@ -18,7 +18,6 @@ Exit codes:
 """
 
 import argparse
-import json
 import os
 import re
 import sys
@@ -27,7 +26,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 
 from _lint_helpers import parse_command_map_keys, REPO_ROOT, ENTRYPOINT_PATH  # noqa: E402
 
@@ -263,9 +262,9 @@ def format_text_report(errors: list, command_map: set) -> str:
     return "\n".join(lines)
 
 
-def format_json_report(errors: list, command_map: set) -> str:
-    """Format JSON report."""
-    return json.dumps({
+def json_document(errors: list, command_map: set) -> dict:
+    """The --json document (run() encodes it, #3216)."""
+    return {
         "check": "cli_coverage",
         "command_count": len(command_map),
         "errors": [{"severity": s, "message": m} for s, m in errors],
@@ -273,7 +272,7 @@ def format_json_report(errors: list, command_map: set) -> str:
         "warning_count": sum(1 for s, _ in errors if s == "warning"),
         "status": "pass" if not any(s == "error" for s, _ in errors)
                   else "fail",
-    }, indent=2, ensure_ascii=False)
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -296,16 +295,14 @@ def main():
 
     errors = run_all_checks()
 
-    if args.json:
-        print(format_json_report(errors, command_map))
-    else:
-        print(format_text_report(errors, command_map))
-
     has_errors = any(s == "error" for s, _ in errors)
-    if args.ci and has_errors:
-        sys.exit(EXIT_VIOLATION)
-    sys.exit(EXIT_OK)
+    status = EXIT_VIOLATION if args.ci and has_errors else EXIT_OK
+    if args.json:
+        return Report(json_document(errors, command_map), status)
+    print(format_text_report(errors, command_map))
+    sys.exit(status)
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

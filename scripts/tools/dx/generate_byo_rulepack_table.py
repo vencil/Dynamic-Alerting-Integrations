@@ -81,7 +81,7 @@ def read_projected_packs() -> list:
     """
     # ADR-036 §12 (#3206): the manifest as kubectl reads it (da-crdecode).
     docs = [d for d in _lib_consumer_read.kubernetes_documents(str(DEPLOYMENT))
-            if isinstance(d, dict) and d.get("kind") == "Deployment"]
+            if d["kind"] == "Deployment"]   # every doc an object (#3426)
     if not docs:
         raise ValueError(f"{DEPLOYMENT} 內找不到 kind: Deployment")
     volumes = docs[0]["spec"]["template"]["spec"]["volumes"]
