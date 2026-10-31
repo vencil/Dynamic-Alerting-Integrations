@@ -252,7 +252,7 @@ Hashes are never used as metric labels, to keep the series count from exploding;
 For example, the root's `_routing_defaults` and `state_filters` do not enter the effective config and leave `merged_hash` unchanged, so no tool whose input is the effective config or `merged_hash` sees these changes: `/effective`, `describe_tenant`, `tenant-verify`. This is a cost accepted deliberately so that Decision 7 records changes correctly (see Alternative D for why), but it has two consequences to know:
 
 - **`effect="cosmetic"` does not mean only a comment changed.** A change that only edits the `_routing_defaults` in the root `_defaults.yaml` and one that only adds a comment are both recorded by the exporter as `effect="cosmetic"`.
-- **`da-tools tenant-verify --expect-merged-hash` is not evidence here.** It exits 2 when the hash differs, but after a change to only the root's `_routing_defaults` it exits 0: exit 0 means this face is not covered, not that a rollback was verified.
+- **`da-tools tenant-verify --expect-merged-hash` is not evidence here.** It exits 1 when the hash differs, but after a change to only the root's `_routing_defaults` it exits 0: exit 0 means this face is not covered, not that a rollback was verified.
 
 A separate mechanism that compares such platform top-level keys is tracked in [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516).
 

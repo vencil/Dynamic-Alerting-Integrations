@@ -173,8 +173,8 @@ OPS_SITES = [
 #: (id, script under scripts/tools, argv, the text the message names before
 #: ``: Permission denied``, the exit code). Placeholders as in OPS_SITES,
 #: plus {WF}: the waveform fixtures. No dx tool here answers with a `--json`
-#: envelope. tenant-verify's caller errors are rc 1 (its sanctioned inverted
-#: contract, #3393); the rest rc 2.
+#: envelope. Every one is rc 2 — tenant-verify's too since #3393 (it was
+#: rc 1 under its former inverted contract).
 DX_SITES = [
     ("migrate-conf-d --conf-d", "dx/migrate_conf_d.py", ["--conf-d", "{D}", "--dry-run"],
      "--conf-d {D}", 2),
@@ -202,7 +202,7 @@ DX_SITES = [
      ["--reference", "{F}", "--main", "{BOX}/silences.json", "--reference-tag", "x",
       "--out", "{BOX}/pair.json"], "--reference {F}", 2),
     ("tenant-verify --conf-d", "dx/tenant_verify.py", ["t", "--conf-d", "{D}"],
-     "--conf-d {D}", 1),
+     "--conf-d {D}", 2),
     ("generate-changelog --fragments", "dx/generate_changelog.py", ["--fragments", "{F}"],
      "--fragments {F}", 2),
     ("generate-changelog --lint", "dx/generate_changelog.py", ["--lint", "{F}"], "--lint {F}", 2),

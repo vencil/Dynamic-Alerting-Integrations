@@ -151,8 +151,8 @@ def test_invalid_args_exits_nonzero(tool_path):
 # lists — the one argparse owns — not the contract's boundary: bad values for
 # recognised flags, missing paths, unreachable environments and IO failures
 # are not exercised (see the Scope block in the module docstring, #1642).
-# Tools with a documented richer scheme (diag_pr_ci's 0/1/2/3,
-# tenant_verify's inverted contract) still exit 2 on bad *flags* because
+# Tools with a documented richer scheme (diag_pr_ci's 0/1/2/3) still exit 2
+# on bad *flags* because
 # argparse owns that path — so this holds for all of them.
 
 
@@ -294,15 +294,91 @@ def test_interactive_is_the_interpreters_own_test(monkeypatch, interactive, insp
     assert ec._interactive() is expected
 
 
-def test_importing_tenant_verify_leaves_the_crash_code_alone(tmp_path):
-    """tenant_verify sets its crash code 1 only when it is the program
-    (`__main__`): a module that imports it keeps 2 (#3090 review)."""
+def test_importing_tenant_verify_leaves_both_codes_alone(tmp_path):
+    """Importing tenant_verify (now at module level, #3393) leaves the
+    importing process's crash and caller-error codes at 2 (#3090 review)."""
     proc = _run_crash_script(
         tmp_path,
         f"sys.path.insert(0, {str(TOOLS_DIR / 'dx')!r})\n"
-        "import tenant_verify\nprint(_lib_exitcodes.get_crash_exit_code())\n")
+        "import tenant_verify\n"
+        "print(_lib_exitcodes.get_crash_exit_code(), "
+        "_lib_exitcodes.get_caller_error_code())\n")
     assert proc.returncode == 0, proc.stderr
-    assert proc.stdout.strip() == "2"
+    assert proc.stdout.strip() == "2 2"
+
+
+#: Every channel that moves the process crash / caller-error code, which no
+#: production tool uses since #3393 (tenant_verify was the one tool that
+#: moved its codes, to 1/1): the setters, the module globals they write, and
+#: the per-call `crash_exit_code=` of `@main` / `exit_on_crash`.
+_CODE_SETTERS = ("set_crash_exit_code", "set_caller_error_code")
+_CODE_GLOBALS = ("_crash_exit_code", "_caller_error_code")
+_CODE_KEYWORDS = ("crash_exit_code",)
+
+
+def _setter_calls(tree):
+    """(line, name) of every reach for a code channel in *tree*: a setter or
+    code global named in any way — called, imported (under any alias),
+    assigned, or as a `getattr` string — or a `crash_exit_code=` keyword."""
+    import ast
+    names = set(_CODE_SETTERS) | set(_CODE_GLOBALS)
+    hits = []
+    for node in ast.walk(tree):
+        name = None
+        if isinstance(node, ast.Attribute) and node.attr in names:
+            name = node.attr
+        elif isinstance(node, ast.Name) and node.id in names:
+            name = node.id
+        elif isinstance(node, ast.ImportFrom):
+            name = next((a.name for a in node.names if a.name in names), None)
+        elif isinstance(node, ast.Constant) and node.value in names:
+            name = node.value
+        elif isinstance(node, ast.keyword) and node.arg in _CODE_KEYWORDS:
+            name = node.arg
+        if name is not None:
+            hits.append((getattr(node, "lineno", 0), name))
+    return sorted(set(hits))
+
+
+def test_no_tool_moves_the_crash_or_caller_error_code():
+    """#3393: every tool exits at the shared crash and caller-error code 2.
+    A tool that calls a setter would bring back a second meaning of 1 or 2
+    — the inversion #3393 removed. Read as the AST's calls, not as text:
+    the setters' names also appear in comments and in the lints' save /
+    restore (which call them with the saved value, and are allowed)."""
+    import ast
+    allowed = {TOOLS_DIR / "_lib_exitcodes.py",
+               # save / restore around an in-process tool run
+               TOOLS_DIR / "lint" / "check_cli_contract.py",
+               TOOLS_DIR / "lint" / "check_cli_default_drift.py"}
+    scanned, offenders = 0, []
+    for path in sorted(TOOLS_DIR.rglob("*.py")):
+        if path in allowed:
+            continue
+        scanned += 1
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        offenders += [f"{path.relative_to(TOOLS_DIR)}:{line} {name}"
+                      for line, name in _setter_calls(tree)]
+    assert scanned > 100, scanned  # the walk reached the tools
+    assert offenders == [], offenders
+
+
+def test_the_setter_scan_sees_a_call():
+    """Must-ring control for the scan above: the same predicate flags the
+    call shape tenant_verify used before #3393."""
+    import ast
+    for src, want in [
+        ("import _lib_exitcodes\n_lib_exitcodes.set_crash_exit_code(1)\n", "set_crash_exit_code"),
+        ("from _lib_exitcodes import set_caller_error_code as _s\n_s(1)\n",
+         "set_caller_error_code"),
+        ("import _lib_exitcodes\ngetattr(_lib_exitcodes, 'set_crash_exit_code')(1)\n",
+         "set_crash_exit_code"),
+        ("import _lib_exitcodes\n_lib_exitcodes._caller_error_code = 1\n", "_caller_error_code"),
+        ("import _lib_exitcodes as _ec\n@_ec.main(crash_exit_code=1)\ndef main():\n    pass\n",
+         "crash_exit_code"),
+    ]:
+        names = {name for _line, name in _setter_calls(ast.parse(src))}
+        assert want in names, (src, names)
 
 
 @pytest.mark.real_crash_exit_code

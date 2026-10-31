@@ -52,9 +52,9 @@ code depends on repo state (``verify_diff --check`` gates on every test file bei
 ``expect_exit=None`` and assert JSON purity only — the honest boundary.  The exit
 codes themselves are additionally gated by ``tests/shared/test_tool_exit_codes.py``;
 this file's exit assertions are a secondary cross-check tied to the JSON path.
-NB ``tenant_verify`` INVERTS 1/2 (2 = verify-failed, per a shipped rollback
-runbook); the recipe here uses ``--all`` whose success is a plain 0, so the
-inversion is not exercised and not asserted.
+NB ``tenant_verify`` follows the 0/1/2 contract since #3393 (it inverted
+1/2 until then); the recipe here uses ``--all`` whose success is a plain 0,
+and its 1 / 2 paths are pinned in ``tests/dx/test_tenant_verify.py``.
 
 HOW EXTERNAL DEPENDENCIES ARE HANDLED (stub, don't skip-and-shrug)
 -----------------------------------------------------------------
@@ -461,8 +461,8 @@ RECIPES: list[Recipe] = [
                    "→ path unreachable. Runs wherever the VM harness exists.")),
 
     # ── tenant_verify  (--all on a duplicate-free tree → EXIT_PASS 0; a
-    #    tenant declared in 2+ files makes --all exit 2 (#2093), pinned in
-    #    test_tenant_verify.py; inversion not exercised here; merged_hash
+    #    tenant declared in 2+ files makes --all exit 1 (#2093, #3393),
+    #    pinned in test_tenant_verify.py; merged_hash
     #    is read from da-guard, #1549) ───────────────────────────────────
     R("tenant_verify", "all-json",
       lambda t: ["--all", "--conf-d", str(SEED_CONF_D), "--json"],

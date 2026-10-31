@@ -73,9 +73,12 @@ Overrides:
   ``effective_crash_exit_code()`` is the code a crash ends with, override
   included (for a caller that ends a crash itself); ``get_crash_exit_code()``
   stays the tool's own choice.
-* ``set_crash_exit_code(code)`` — per-process crash code. tenant_verify
-  sets 1, because its 2 means "verification failed" (see below); it sets
-  its caller-error code (``set_caller_error_code``) to 1 for the same reason.
+* ``set_crash_exit_code(code)`` — per-process crash code, for a tool whose
+  own contract gives 2 another meaning. No tool calls it since #3393 (the
+  one that did, tenant_verify, now follows the base contract; gate:
+  ``test_no_tool_moves_the_crash_or_caller_error_code`` in
+  tests/shared/test_tool_exit_codes.py); it stays for the harnesses that
+  save and restore it around an in-process tool run.
 * ``@main`` / ``@main(crash_exit_code=..., on_crash=...)`` — wrap a tool's
   ``main()``: same report + exit, but in-function, so a tool with a
   ``--json`` contract can emit its ``internal_error`` envelope from
@@ -128,8 +131,9 @@ which breaks the contract anyway). Arming notices that by wrapping
 filenos and encodings stay as they were.
 
 The caller-error code is per process like the crash code, and separate from
-it: ``set_caller_error_code(code)`` (default 2; tenant_verify sets 1). A
-caller error and a closed stdout (below) use it; a crash never does.
+it: ``set_caller_error_code(code)`` (default 2; no tool changes it since
+#3393). A caller error and a closed stdout (below) use it; a crash never
+does.
 
 stdout lost or failing (#3124)
 ------------------------------
@@ -266,13 +270,11 @@ extensions today:
   `da-tools generate-routes --config-dir <dir> --validate --strict`.
   Precedence 3 > 1 > 4 > 0. Same contract places as exit 3.
 
-One tool — dx/tenant_verify.py — INVERTS 1/2 (exit 2 = verification
-finding, exit 1 = caller error) as a sanctioned pre-SSOT exception: its
-codes are load-bearing in a shipped customer rollback runbook that keys on
-"exit 2 = mismatch" (see that file's header for the full rationale). It is
-the sole exception; its crash code is set to 1 for the same reason (a
-crash must not read as "hash mismatch"). Do NOT repurpose 1 or 2 anywhere else — new tools MUST
-follow the base violation / caller-error meanings above.
+No tool repurposes 1 or 2: dx/tenant_verify.py, which inverted them
+(exit 2 = verification finding, exit 1 = caller error and crash), follows
+the base meanings since #3393 — a breaking change to its customer rollback
+runbook, migrated with it. Do NOT repurpose 1 or 2 anywhere — new tools
+MUST follow the base violation / caller-error meanings above.
 
 New subcommands MUST follow this contract — see docs/internal/dev-rules.md.
 """
@@ -312,7 +314,7 @@ def set_caller_error_code(code: int) -> None:
     """Set the exit code this process uses for a caller error.
 
     Default EXIT_CALLER_ERROR (2). Only a tool whose own contract gives 2
-    another meaning should change it (tenant_verify: 1). Kept apart from the
+    another meaning should change it (none does since #3393). Kept apart from the
     crash code (``set_crash_exit_code``): "stdout was closed by the reader"
     and a named caller error are not crashes, whatever the crash code is.
     """
@@ -434,7 +436,7 @@ def set_crash_exit_code(code: int) -> None:
     """Set the exit code this process uses for an unexpected crash.
 
     Default EXIT_CALLER_ERROR (2). Only a tool whose own contract gives 2
-    another meaning should change it (tenant_verify: 1). 0 is refused — a
+    another meaning should change it (none does since #3393). 0 is refused — a
     crash must never read as success — as are non-int and out-of-range
     values.
     """

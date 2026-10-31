@@ -278,8 +278,9 @@ def introspect_parsers() -> tuple[dict[str, ParserModel], list[str], list[str],
                 continue
             saved_argv, saved_path = sys.argv[:], sys.path[:]
             # A tool run as __main__ may set this process's crash exit code
-            # (tenant_verify sets 1, #3090) and caller-error code (1 too,
-            # #3124); neither may outlive the run.
+            # (#3090) and caller-error code (#3124) — none does since #3393
+            # (tenant_verify set both to 1 until then); neither may outlive
+            # the run.
             saved_crash = _lib_exitcodes.get_crash_exit_code()
             saved_caller = _lib_exitcodes.get_caller_error_code()
             sys.argv = [str(path)]

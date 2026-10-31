@@ -426,8 +426,8 @@ class TestRunToolExitPassthrough:
 
     @pytest.mark.real_crash_exit_code
     def test_tool_crash_exit_code_is_honoured(self, tmp_path, monkeypatch, capsys):
-        """工具自己 set_crash_exit_code(1)（tenant_verify 的倒置契約）→
-        run_tool 用它，不蓋成 2。"""
+        """工具自己 set_crash_exit_code(1) → run_tool 用它，不蓋成 2（機制測試；
+        tenant_verify 在 #3393 前是這樣用的，現在沒有工具呼叫它）。"""
         monkeypatch.setattr(_lib_exitcodes, "_crash_exit_code",
                             _lib_exitcodes.EXIT_CALLER_ERROR)
         self._fake_tool(tmp_path, monkeypatch,

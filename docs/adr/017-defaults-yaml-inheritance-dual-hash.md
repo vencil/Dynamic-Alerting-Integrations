@@ -257,7 +257,7 @@ $ printf '%s' '{"pg_locks_count":100,"pg_replication_lag_seconds":30,"pg_stat_ac
 例如根目錄的 `_routing_defaults` 與 `state_filters` 不進最終設定，改了之後 `merged_hash` 不動，所以凡是以最終設定或 `merged_hash` 為輸入的工具都看不到這些變更：`/effective`、`describe_tenant`、`tenant-verify`。這是為了決策 7 的歸類正確而刻意接受的代價（理由見替代方案 D），但有兩個後果要知道：
 
 - **`effect="cosmetic"` 不代表只改了註解。** 只改根目錄 `_defaults.yaml` 裡 `_routing_defaults` 的一次變更，與只加一行註解，exporter 都記成 `effect="cosmetic"`。
-- **`da-tools tenant-verify --expect-merged-hash` 在這裡不是證據。** 它在雜湊不符時回 2，但只改根目錄 `_routing_defaults` 之後它回 0：回 0 代表這一面沒被涵蓋，不代表回滾已經驗證。
+- **`da-tools tenant-verify --expect-merged-hash` 在這裡不是證據。** 它在雜湊不符時回 1，但只改根目錄 `_routing_defaults` 之後它回 0：回 0 代表這一面沒被涵蓋，不代表回滾已經驗證。
 
 另建一個比較這類平台頂層鍵的機制，追蹤在 [#1516](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1516)。
 
