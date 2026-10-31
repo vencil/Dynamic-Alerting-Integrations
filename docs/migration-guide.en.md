@@ -259,7 +259,7 @@ tenants:
     "mongodb_replication_lag{rs=\"rs-orders\",member=\"mongo-orders-dr\"}": "60"
 ```
 
-> ⚠️ The shipped Rule Packs normalise thresholds with `max by(tenant)`, which drops the dimension label, so the rows above **do not take effect per instance today**: they and the base merge into one tenant threshold, and `disable` has no effect. Judging per dimension needs the Rule Pack adapted as in "Platform-team PromQL adaptation" below ([#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)).
+> ⚠️ The shipped Rule Packs normalise thresholds with `max by(tenant)`, which drops the dimension label, so the rows above **do not take effect per instance today**: they and the base merge into one tenant threshold, and `disable` equals not writing that row — it does not silence that one instance. Judging per dimension needs the Rule Pack adapted as in "Platform-team PromQL adaptation" below ([#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)).
 
 **Design constraints**:
 
@@ -267,7 +267,7 @@ tenants:
 |------------|------|
 | YAML quoting required | Keys containing `{` must be wrapped in double quotes |
 | No `_critical` suffix | Use `"value:severity"` syntax instead, e.g. `"500:critical"` |
-| Tenant-only | Dimension keys do not inherit from `defaults`; allowed only in tenant config |
+| Defaults | A tenant's dimension key does not inherit its base's scalar default; the root `_defaults.yaml` `defaults:` may write a complete dimension key, the default for every tenant that does not write that key (#2031) |
 | Base must be platform-declared | The base before `{` must be valued in `defaults:` of `_defaults.yaml` or listed in `optional_overrides:`, or the root `defaults:` must write the whole dimensional key; otherwise no metric is served and validate-config reports `unread … (no_row)` (ADR-038 §11) |
 | Three-state still applies | Value=Custom, omitted=Default (basic key only, and only where the key has a value in `defaults:` of `_defaults.yaml`; a key listed under `optional_overrides:` inherits nothing, so omitted=no value=silent), `"disable"`=Disabled |
 
@@ -305,7 +305,7 @@ Yes. New-architecture alerts use different alertname values and don't collide. R
 
 **Q: Can dimension keys be set under defaults?**
 
-No. Dimension keys are a tenant-only feature, because each tenant's queue / index / database differs — a global default has no useful meaning.
+Yes, but only in the root `_defaults.yaml` `defaults:`, and only as a complete dimension key (for example `"redis_queue_length{queue=\"orders\"}": 500`): it is the default for every tenant that does not write that key (#2031). A dimension key a tenant writes does not inherit its base's scalar default. See also the ⚠️ in §9: the shipped Rule Packs do not judge per dimension yet (#3475).
 
 **Q: How do you mark a dimension key as critical?**
 

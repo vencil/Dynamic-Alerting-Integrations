@@ -36,7 +36,7 @@ Revised 2026-10-28: the generator's `--validate` reports the shared verdict too;
 
 Revised 2026-10-30: the verdict joins the generator container's one judgement, with no deadline of its own and no yielding, replacing 2026-10-24's "the verdict has its own share of the deadline"; the rules once tenant-api blocks when judged replace 2026-10-28's "the verdict only goes in `warnings`": a write whose verdict does not complete is refused, with no degraded path. The write check recomputes counterfactually for the written tenants only (decisions 2, 5, 8, 11).
 
-Revised 2026-10-31: reading a tenant's config (GET) no longer reports whether any reader reads a key, and does not judge it on the spot, replacing "GET's key-name messages switch to the shared verdict"; on load the exporter states only which keys it does not read itself, with no severity. The Go, Python and portal key-name judgements are deleted; the `version` label and rename notices reach CI through da-guard, printed as they are; a dimensional key is served only when the platform declares its base (decision 11).
+Revised 2026-10-31: reading a tenant's config (GET) no longer reports whether any reader reads a key, and does not judge it on the spot, replacing "GET's key-name messages switch to the shared verdict"; on load the exporter states only which keys it does not read itself, with no severity. The Go, Python and portal key-name judgements are deleted; the `version` label and rename notices reach CI through da-guard, printed as they are; a dimensional key is served only when the platform declares its base, or the root defaults write the whole key (decision 11).
 
 ## Summary
 

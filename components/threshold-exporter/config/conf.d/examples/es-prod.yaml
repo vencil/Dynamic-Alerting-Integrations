@@ -2,7 +2,7 @@
 # 來源參考: prometheus-community/elasticsearch_exporter
 # ⚠️ 本範例刻意不放維度鍵（`metric{label="value"}`）：出貨的 rule pack 以 `max by(tenant)` 取租戶最大值，
 #    維度 label 在那一步就丟掉了——維度鍵改到的是整個租戶的門檻（各維度值與 base 合成一個值），
-#    對維度鍵寫 "disable" 也沒有作用。要依維度判斷得改 rule pack（#3475）；語法見 docs/design/config-driven.md。
+#    對維度鍵寫 "disable" 等於沒寫這一列，不會只停掉那個維度的告警。要依維度判斷得改 rule pack（#3475）；語法見 docs/design/config-driven.md。
 # 三態（限 _defaults.yaml 的 defaults: 有值的 key）: 數值=Custom, 省略=Default, "disable"=停用
 # ⚠️ 列在 optional_overrides: 的宣告 key 沒有值可繼承 ⇒ 省略＝沒有值＝靜默，只有兩態（#1321）
 tenants:

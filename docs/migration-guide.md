@@ -259,7 +259,7 @@ tenants:
     "mongodb_replication_lag{rs=\"rs-orders\",member=\"mongo-orders-dr\"}": "60"
 ```
 
-> ⚠️ 出貨的 Rule Pack 以 `max by(tenant)` 正規化門檻、維度 label 在那一步就丟掉，所以上面這幾列**目前不會依 instance 分開生效**：它們與 base 合成一個租戶門檻，`disable` 也沒有作用。要依維度判斷，得照下方「平台團隊 PromQL 適配」改 Rule Pack（[#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)）。
+> ⚠️ 出貨的 Rule Pack 以 `max by(tenant)` 正規化門檻、維度 label 在那一步就丟掉，所以上面這幾列**目前不會依 instance 分開生效**：它們與 base 合成一個租戶門檻；`disable` 等於沒寫這一列，不會只停掉那個 instance。要依維度判斷，得照下方「平台團隊 PromQL 適配」改 Rule Pack（[#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)）。
 
 **設計約束**：
 
@@ -267,7 +267,7 @@ tenants:
 |------|------|
 | YAML 需加引號 | 含 `{` 的 key 必須用雙引號包裹 |
 | 不支援 `_critical` 後綴 | 改用 `"value:severity"` 語法，如 `"500:critical"` |
-| Tenant-only | 維度 key 不繼承 `defaults`，僅允許在租戶設定中 |
+| 預設值 | 租戶的維度 key 不繼承 base 的純量預設值；根 `_defaults.yaml` 的 `defaults:` 可以寫完整維度 key，當作每個沒寫這個 key 的租戶的預設（#2031） |
 | base 須由平台宣告 | `{` 之前的 base 必須在 `_defaults.yaml` 的 `defaults:` 有值或列在 `optional_overrides:`，或根 `defaults:` 寫了整個維度鍵；否則不產生 metric，validate-config 報 `unread … (no_row)`（ADR-038 §11） |
 | 三態仍適用 | 數值=Custom, 省略=Default (僅基本 key，且該 key 在 `_defaults.yaml` 的 `defaults:` 有值；列在 `optional_overrides:` 的宣告 key 省略＝無值＝靜默), `"disable"`=停用 |
 
@@ -305,7 +305,7 @@ Exporter 每 30 秒 reload 一次，K8s ConfigMap propagation 約 1-2 分鐘。�
 
 **Q: 維度 key 可以設定在 defaults 裡嗎？**
 
-不行。維度 key 是 tenant-only 功能，因為每個租戶的 queue / index / database 都不同，全域預設沒有意義。
+可以，但只限根 `_defaults.yaml` 的 `defaults:`，而且要寫完整維度 key（例如 `"redis_queue_length{queue=\"orders\"}": 500`）：它是每個沒寫這個 key 的租戶的預設值（#2031）。租戶自己寫的維度 key 不會繼承 base 的純量預設值。另見上方 §9 的 ⚠️：出貨的 Rule Pack 目前不依維度判斷（#3475）。
 
 **Q: 維度 key 怎麼指定 critical？**
 
