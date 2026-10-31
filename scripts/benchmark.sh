@@ -362,9 +362,20 @@ if [[ "${SCALING_CURVE}" == true ]]; then
 
   # --- Restore all Rule Packs ---
   info "Restoring all Rule Pack ConfigMaps..."
-  for f in "${K8S_DIR}"/configmap-rules-*.yaml; do
+  # #3471: which files are the rules ConfigMaps is the one declaration
+  # (_lib_consumer_read.CONFIGMAP_RULES), not a glob of this script's own;
+  # an undeclared YAML there stops the restore, named.
+  RULE_CM_FILES=$(python3 -c '
+import sys
+sys.path.insert(0, sys.argv[1])
+import _lib_consumer_read as c
+for f in c.CONFIGMAP_RULES.files_under(sys.argv[2]):
+    print(f)
+' "${SCRIPT_DIR}/tools" "${SCRIPT_DIR}/..") || { err "cannot list the rules ConfigMaps"; exit 1; }
+  while IFS= read -r f; do
+    [ -n "${f}" ] || continue
     kubectl apply -f "${f}" -n monitoring >/dev/null 2>&1
-  done
+  done <<< "${RULE_CM_FILES}"
   kubectl delete pod -l app=prometheus -n monitoring --wait=false >/dev/null 2>&1 || true
   sleep 30
   log "Rule Packs restored to 9."

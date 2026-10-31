@@ -456,15 +456,34 @@ class TestLoadRulePacks:
         assert set(out.keys()) == {"mariadb", "redis"}
         assert out["mariadb"][0]["name"] == "A1"
 
-    def test_non_rule_pack_files_ignored(self, tmp_path):
+    def test_declared_non_rule_pack_files_ignored(self, tmp_path):
         _write_pack(tmp_path, "rule-pack-mariadb.yaml", {
             "groups": [{"name": "g", "rules": [_alert("A")]}],
         })
-        # Files NOT matching the glob are skipped.
-        (tmp_path / "other-thing.yaml").write_text("groups: []", encoding="utf-8")
+        # The registry is declared beside the packs (RULE_PACKS.not_rule_files).
+        (tmp_path / "threshold-registry.yaml").write_text("entries: []", encoding="utf-8")
         out = gar.load_rule_packs(str(tmp_path))
-        assert "other-thing" not in out
-        assert "mariadb" in out
+        assert set(out) == {"mariadb"}
+
+    def test_undeclared_yaml_beside_the_packs_is_named(self, tmp_path, capsys):
+        """#3471: the packs are the declaration's (`rule_pack_files`). A YAML
+        beside them that is neither a pack nor declared used to be passed
+        over by this generator's own glob; it is named, rc 2."""
+        _write_pack(tmp_path, "rule-pack-mariadb.yaml", {
+            "groups": [{"name": "g", "rules": [_alert("A")]}],
+        })
+        (tmp_path / "other-thing.yaml").write_text("groups: []", encoding="utf-8")
+        with pytest.raises(SystemExit) as exc:
+            gar.load_rule_packs(str(tmp_path))
+        assert exc.value.code == EXIT_CALLER_ERROR
+        assert "other-thing.yaml" in capsys.readouterr().err
+
+    def test_yml_pack_is_read(self, tmp_path):
+        """#3471: a `.yml` pack is a declared rule pack, no longer skipped."""
+        _write_pack(tmp_path, "rule-pack-redis.yml", {
+            "groups": [{"name": "g", "rules": [_alert("R1")]}],
+        })
+        assert set(gar.load_rule_packs(str(tmp_path))) == {"redis"}
 
     def test_empty_yaml_skipped(self, tmp_path):
         # An empty YAML file (yaml.safe_load returns None) should be skipped

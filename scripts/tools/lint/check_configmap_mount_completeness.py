@@ -40,7 +40,7 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E
 # ADR-036 §12 (#3206): every manifest is read the way kubectl reads it.
 import _lib_consumer_read  # noqa: E402
 
-MONITOR_DIR = Path("k8s/03-monitoring")
+MONITOR_DIR = Path(_lib_consumer_read.CONFIGMAP_RULES.directory)
 DEPLOYMENT = MONITOR_DIR / "deployment-prometheus.yaml"
 RULES_VOLUME_NAME = "rules"
 
@@ -50,7 +50,8 @@ RULES_VOLUME_NAME = "rules"
 # the customer or compiled dynamically (see deployment-prometheus.yaml header note:
 # "大型客戶可…改用 migrate_rule.py 轉出的 自訂規則包"). They are out of scope for the
 # "platform forgot to mount a new gold-standard pack" guard this lint enforces.
-CUSTOMER_MANAGED_PREFIX = "configmap-rules-custom-"
+# The pack-name prefix: the file name around it is the declaration's (#3471).
+CUSTOMER_MANAGED_PACK_PREFIX = "custom-"
 
 # Prometheus loads rules via `rule_files: /etc/prometheus/rules/*.yml`
 # (configmap-prometheus.yaml:33). A projected `path:` (or, for whole-ConfigMap
@@ -75,9 +76,13 @@ def configmap_rule_packs(monitor_dir: Path) -> Dict[str, Set[str]]:
     document."""
     bad: List[str] = []
     out: Dict[str, Set[str]] = {}
-    paths = [path for path in sorted(monitor_dir.glob("configmap-rules-*.yaml"))
+    # #3471: which files are rules ConfigMaps is the one declaration
+    # (`CONFIGMAP_RULES`, configmap-rules-*.yaml|yml; an undeclared YAML in
+    # the directory raises `SourcesUnlisted`, named).
+    source = _lib_consumer_read.CONFIGMAP_RULES
+    paths = [path for path in source.files_in(monitor_dir)
              # customer-managed, not in the platform gold-standard mount list
-             if not path.name.startswith(CUSTOMER_MANAGED_PREFIX)]
+             if not source.member(path).startswith(CUSTOMER_MANAGED_PACK_PREFIX)]
     for path, docs in _lib_consumer_read.kubernetes_documents_of(paths).items():
         for i, doc in enumerate(docs, start=1):   # each a Kubernetes object (#3426)
             if doc["kind"] != "ConfigMap":

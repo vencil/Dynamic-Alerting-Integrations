@@ -76,6 +76,7 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_validation import i18n_text  # noqa: E402
 from _lib_io import safe_label  # noqa: E402
 from _lib_parse_tree import ParseTreeError as _ParseTreeError  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3471: which files are rule packs)
 
 _REGEN_HINT = (
     "fix: edit scaffold_tenant.RULE_PACKS (the operative copy until PR-3) "
@@ -171,14 +172,10 @@ def run_check(
 
     # 4. header-prose key membership (F6).
     if prose_files is None:
-        import glob
-
-        prose_files = sorted(
-            p
-            for p in glob.glob(
-                os.path.join(PROJECT_ROOT, "rule-packs", "rule-pack-*.yaml")
-            )
-        )
+        # #3471: the rule packs are the one declaration's (rule-pack-*.yaml|yml;
+        # an undeclared YAML beside them raises `SourcesUnlisted`, named).
+        prose_files = [str(p) for p in
+                       _lib_consumer_read.RULE_PACKS.files_under(PROJECT_ROOT)]
     if extra_allowed is None:
         extra_allowed = _known_unwired_keys() | _state_filter_names()
     universe = registry_lib.membership_universe(doc, extra_allowed)
@@ -251,6 +248,10 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         result = run_check()
+    except _lib_consumer_read.ConsumerReadError as exc:
+        # #3471: an undeclared YAML beside the rule packs, named.
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     except Exception as exc:  # noqa: BLE001 — caller error, not a violation
         print(f"ERROR: registry check crashed: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR

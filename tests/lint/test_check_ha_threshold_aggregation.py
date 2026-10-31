@@ -152,7 +152,8 @@ def test_a_file_prometheus_refuses_is_named_not_skipped(tmp_path):
 
 
 def test_main_names_a_refused_file_rc2(tmp_path, monkeypatch, capsys):
-    (tmp_path / "rule-packs").mkdir()
+    for d in ("rule-packs", "operator-manifests", "k8s/03-monitoring"):
+        (tmp_path / d).mkdir(parents=True)
     (tmp_path / "rule-packs" / "rule-pack-t.yaml").write_text(
         "groups:\n  - name: g\n    rulez: []\n", encoding="utf-8")
     monkeypatch.setattr(lint, "_repo_root", lambda: tmp_path)

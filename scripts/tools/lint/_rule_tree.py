@@ -87,14 +87,12 @@ _PLATFORM_CM_PREFIX = "configmap-rules-platform"
 _RULES_FILE_EXTS = (".yaml", ".yml")
 # The deploy-copy / source naming convention that ties the two trees together:
 # k8s/03-monitoring/configmap-rules-<pack>.yaml is GENERATED from
-# rule-packs/rule-pack-<pack>.yaml. `check_portal_rulepack_claims.py` reads the
-# same pairing (its `path.stem.replace(...)` derivations at :135-142, and the
-# docstring at :33-36 names configmap-rules-platform.yaml as the one with "NO
-# rule-pack counterpart").
-_RULES_CM_PREFIX = "configmap-rules-"
+# rule-packs/rule-pack-<pack>.yaml. Both names are the rule-source
+# declaration's (#3471: `RuleSource.member` / `file_name`);
+# `check_portal_rulepack_claims.py` reads the same pairing through it.
 # The rule-packs source tree, as the rule-source declaration names it.
 _RULE_PACKS_DIR = _lib_consumer_read.RULE_PACKS.directory + "/"
-_RULE_PACK_PREFIX = "rule-pack-"
+_RULE_PACK_PREFIX = _lib_consumer_read.RULE_PACKS.prefix
 
 
 # BOM → codec, longest first: the UTF-32 BOMs BEGIN with the UTF-16 ones
@@ -475,7 +473,8 @@ def _rule_containers() -> tuple:
     return tuple(_iter_rule_containers())
 
 
-gen_re = re.compile(r"GENERATED from rule-packs/rule-pack-([A-Za-z0-9_-]+)\.ya?ml")
+gen_re = re.compile(r"GENERATED from " + re.escape(_RULE_PACKS_DIR + _RULE_PACK_PREFIX)
+                    + r"([A-Za-z0-9_-]+)\.ya?ml")
 
 def _header_provenance(chunk: str):
     """The generator header, read ONLY from a document's leading comments.
@@ -563,8 +562,9 @@ def _containers_of(root: str, rels: "list[str]"):
                 yield f"{rel}:{rf.key}", _rule_doc(rf), first
             elif rf.kind == "PrometheusRule":
                 name = rf.object_name or ""
-                prov = (name[len("da-rule-pack-"):]
-                        if name.startswith("da-rule-pack-") else first)
+                op_prefix = _lib_consumer_read.OPERATOR_RULES.prefix
+                prov = (name[len(op_prefix):]
+                        if name.startswith(op_prefix) else first)
                 yield rel, _rule_doc(rf), prov
             else:
                 # A plain rule file: the file itself is what Prometheus loads.

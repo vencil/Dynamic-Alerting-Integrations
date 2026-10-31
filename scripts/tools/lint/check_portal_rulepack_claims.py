@@ -134,28 +134,27 @@ def collect_shipped_rules(repo: Path) -> Tuple[Dict[str, Dict[str, Any]], Dict[s
     alerts: Dict[str, Dict[str, Any]] = {}
     records: Dict[str, Dict[str, Any]] = {}
 
-    packs = sorted((repo / "rule-packs").glob("rule-pack-*.yaml"))
-    pack_files = _lib_consumer_read.prometheus_rule_file_results(packs)
+    # #3471: the three trees and which files there are rule files are the
+    # one declaration (`RULE_SOURCES`: .yaml|yml; an undeclared YAML there
+    # raises `SourcesUnlisted`, named) — not globs of this lint's own.
+    cr = _lib_consumer_read
+    packs = cr.RULE_PACKS.files_under(repo)
+    pack_files = cr.prometheus_rule_file_results(packs)
     # ConfigMaps wrap one or more rule documents as strings under `data:`;
     # PrometheusRule CRD copies keep groups under `spec:`.
-    op_dir = repo / "operator-manifests"
-    manifests = sorted((repo / "k8s" / "03-monitoring").glob("configmap-rules-*.yaml"))
-    if op_dir.is_dir():
-        manifests += sorted(op_dir.glob("da-rule-pack-*.yaml"))
-    manifest_files = [rf for rf in _lib_consumer_read.manifest_rule_file_results(manifests)
-                      if (rf.kind == "ConfigMap"
-                          and Path(rf.manifest).name.startswith("configmap-rules-"))
-                      or (rf.kind == "PrometheusRule"
-                          and Path(rf.manifest).name.startswith("da-rule-pack-"))]
-    _lib_consumer_read.require_read(pack_files + manifest_files)
+    configmaps = cr.CONFIGMAP_RULES.files_under(repo)
+    operator = ((repo / cr.OPERATOR_RULES.directory).is_dir()
+                and cr.OPERATOR_RULES.files_under(repo)) or []
+    of_kind = {"ConfigMap": ({str(p) for p in configmaps}, cr.CONFIGMAP_RULES),
+               "PrometheusRule": ({str(p) for p in operator}, cr.OPERATOR_RULES)}
+    manifest_files = [rf for rf in cr.manifest_rule_file_results(configmaps + operator)
+                      if rf.kind in of_kind and rf.manifest in of_kind[rf.kind][0]]
+    cr.require_read(pack_files + manifest_files)
 
     for path, rf in zip(packs, pack_files):
-        _rules_from_groups(rf.documents[0], path.stem.replace("rule-pack-", ""),
-                           alerts, records)
+        _rules_from_groups(rf.documents[0], cr.RULE_PACKS.member(path), alerts, records)
     for rf in manifest_files:
-        stem = Path(rf.manifest).stem
-        pack = (stem.replace("configmap-rules-", "") if rf.kind == "ConfigMap"
-                else stem.replace("da-rule-pack-", ""))
+        pack = of_kind[rf.kind][1].member(rf.manifest)
         _rules_from_groups(rf.documents[0], pack, alerts, records)
 
     return alerts, records

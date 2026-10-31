@@ -40,8 +40,10 @@ import _threshold_alerts  # noqa: E402  (rule pack 讀者索引，issue 1196)
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 METRIC_DICT = REPO_ROOT / "scripts" / "tools" / "metric-dictionary.yaml"
-RULE_PACKS_DIR = REPO_ROOT / "rule-packs"
-K8S_RULES_DIR = REPO_ROOT / "k8s" / "03-monitoring"
+# #3471: the directories and which files there are rule files are the one
+# declaration (`_lib_consumer_read.RULE_SOURCES`).
+RULE_PACKS_DIR = REPO_ROOT / _lib_consumer_read.RULE_PACKS.directory
+K8S_RULES_DIR = REPO_ROOT / _lib_consumer_read.CONFIGMAP_RULES.directory
 
 
 def load_dictionary_metrics(path: Path) -> Set[str]:
@@ -118,15 +120,17 @@ def extract_rule_pack_metrics(rule_packs_dir: Path,
 
     results = []
     # rule-packs/ directory
+    packs_src = _lib_consumer_read.RULE_PACKS
     if rule_packs_dir.is_dir():
-        files = sorted(rule_packs_dir.glob("rule-pack-*.yaml"))
-        results += [(f.stem.replace("rule-pack-", ""), rf) for f, rf in zip(
+        files = packs_src.files_in(rule_packs_dir)
+        results += [(packs_src.member(f), rf) for f, rf in zip(
             files, _lib_consumer_read.prometheus_rule_file_results(files))]
 
     # k8s/ ConfigMaps
+    cms_src = _lib_consumer_read.CONFIGMAP_RULES
     if k8s_dir.is_dir():
-        files = sorted(k8s_dir.glob("configmap-rules-*.yaml"))
-        results += [(Path(rf.manifest).stem.replace("configmap-rules-", ""), rf)
+        files = cms_src.files_in(k8s_dir)
+        results += [(cms_src.member(rf.manifest), rf)
                     for rf in _lib_consumer_read.manifest_rule_file_results(files)
                     if rf.kind == "ConfigMap"]
 
@@ -203,7 +207,11 @@ def check_dictionary_coverage(
 def rule_pack_alert_names() -> Set[str]:
     """rule-packs/ 裡所有告警名。"""
     names: Set[str] = set()
-    for path in sorted(RULE_PACKS_DIR.glob("*.yaml")):
+    # #3471: the rule packs are the one declaration's; the registry beside
+    # them is declared no rule file and holds no alert.
+    paths = (_lib_consumer_read.RULE_PACKS.files_in(RULE_PACKS_DIR)
+             if RULE_PACKS_DIR.is_dir() else [])
+    for path in paths:
         names.update(re.findall(r"^\s*-\s*alert:\s*(\S+)",
                                 path.read_text(encoding="utf-8"), re.M))
     return names
@@ -218,7 +226,8 @@ def alerts_reading_key(key: str):
 
     索引對同一組 pack 只建一次：rule pack 經 da-read 讀（#3206），一次讀全部，
     不是每個 key 一個子行程。"""
-    packs = tuple(sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml")))
+    packs = (tuple(_lib_consumer_read.RULE_PACKS.files_in(RULE_PACKS_DIR))
+             if RULE_PACKS_DIR.is_dir() else ())
     if not packs:
         return None
     if packs not in _READERS_INDEX:

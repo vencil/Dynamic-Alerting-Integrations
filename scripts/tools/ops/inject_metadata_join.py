@@ -17,9 +17,10 @@ sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+import _lib_consumer_read  # noqa: E402  (#3471: which files are rule packs)
 
 # Repo root is 4 levels up: scripts/tools/ops/inject_metadata_join.py.
-RULE_PACKS_DIR = str(Path(__file__).resolve().parents[3] / "rule-packs")
+RULE_PACKS_DIR = str(Path(__file__).resolve().parents[3] / _lib_consumer_read.RULE_PACKS.directory)
 
 METADATA_JOIN = """
     * on(tenant) group_left(runbook_url, owner, tier)
@@ -210,8 +211,15 @@ def main():
         print(f"ERROR: Rule packs directory not found: {RULE_PACKS_DIR}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
+    # #3471: the rule packs are the one declaration's (rule-pack-*.yaml|yml) —
+    # the registry beside them is no rule pack; an undeclared YAML is named.
+    try:
+        entries = _lib_consumer_read.rule_pack_files(rule_packs)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     count = 0
-    for entry in sorted(rule_packs.glob("*.yaml")):
+    for entry in entries:
         if entry.name == "rule-pack-operational.yaml":
             continue  # operational alerts don't use threshold joins
         if process_file(str(entry)):

@@ -87,11 +87,11 @@ RECOMMENDED_ACTIONS = {
 
 
 def get_rule_pack_name(yaml_file: str) -> str:
-    """Extract rule pack name from filename (e.g., rule-pack-mariadb.yaml -> mariadb)."""
-    basename = Path(yaml_file).name
-    if basename.startswith("rule-pack-"):
-        return basename.replace("rule-pack-", "").replace(".yaml", "")
-    return basename.replace(".yaml", "")
+    """Extract rule pack name from filename (e.g., rule-pack-mariadb.yaml -> mariadb),
+    by the one declaration (#3471: `RULE_PACKS.member`); a name it does not
+    declare keeps its stem."""
+    member = _lib_consumer_read.RULE_PACKS.member(yaml_file)
+    return member if member is not None else Path(yaml_file).stem
 
 
 def get_display_name(rule_pack: str) -> Dict[str, str]:
@@ -455,13 +455,15 @@ def load_rule_packs(rule_packs_dir: str) -> Dict[str, List[Dict]]:
     # generate_rule_pack_stats.py / validate_docs_versions.py).
     _EXCLUDE = {"custom-alerts"}
 
-    # Find all rule-pack-*.yaml files, and read them the way Prometheus' rule
-    # loader reads them (#3206, ADR-036 §12: `da-read prometheus-rules`, one
-    # run for all). A pack the loader refuses — or a missing da-read — stops
-    # the generator; it does not document around it.
-    yaml_files = [f for f in sorted(Path(rule_packs_dir).glob("rule-pack-*.yaml"))
-                  if f.stem.replace("rule-pack-", "") not in _EXCLUDE]
+    # The rule packs are the one declaration's (#3471: `rule_pack_files`,
+    # rule-pack-*.yaml|yml; an undeclared YAML beside them is named, not
+    # passed over), read the way Prometheus' rule loader reads them (#3206,
+    # ADR-036 §12: `da-read prometheus-rules`, one run for all). A pack the
+    # loader refuses — or a missing da-read — stops the generator; it does
+    # not document around it.
     try:
+        yaml_files = [f for f in _lib_consumer_read.rule_pack_files(rule_packs_dir)
+                      if _lib_consumer_read.RULE_PACKS.member(f) not in _EXCLUDE]
         rule_files = _lib_consumer_read.prometheus_rule_files(yaml_files)
     except _lib_consumer_read.ConsumerReadError as e:
         print(f"Error reading rule packs: {_lib_consumer_read.error_text(e)}", file=sys.stderr)

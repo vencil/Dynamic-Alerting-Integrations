@@ -319,7 +319,9 @@ def convert_rules_to_crd(
         "apiVersion": "monitoring.coreos.com/v1",
         "kind": "PrometheusRule",
         "metadata": {
-            "name": f"da-rule-pack-{pack_name}",
+            # #3471: the shipped PrometheusRule naming, the declaration's
+            # (`OPERATOR_RULES`): the same name operator-generate gives its copy.
+            "name": _lib_consumer_read.OPERATOR_RULES.file_stem(pack_name),
             "namespace": namespace,
             "labels": {
                 "app.kubernetes.io/part-of": "dynamic-alerting",
@@ -788,7 +790,8 @@ def generate_migration(
             try:
                 rule_groups = cm_item.get("rule_groups", [])
                 result["rule_group_count"] += len(rule_groups)
-                rule_pack_name = cm_item["name"].replace("rule-pack-", "").lower()
+                rule_pack_name = cm_item["name"].replace(
+                    _lib_consumer_read.RULE_PACKS.prefix, "").lower()
 
                 crd = convert_rules_to_crd(rule_groups, rule_pack_name, namespace)
                 result["prometheus_rules"].append({
