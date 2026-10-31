@@ -53,6 +53,7 @@ if _TOOLS_DIR not in sys.path:
     sys.path.insert(0, _TOOLS_DIR)
 
 import _lib_toolcount as _toolcount  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 _spec = importlib.util.spec_from_file_location("validate_docs_versions", _SCRIPT)
 mod = importlib.util.module_from_spec(_spec)
@@ -609,7 +610,7 @@ def repo_json_baseline():
     try:
         with contextlib.redirect_stdout(out):
             try:
-                mod.main()
+                code = emit_result(mod.main())  # #3216: run()'s step
             except SystemExit as exc:
                 code = exc.code
     finally:
@@ -819,8 +820,7 @@ class TestPlatformVersionSourceIsLoadBearing:
 
         monkeypatch.setattr(sys, "argv",
                             ["validate_docs_versions", "--json", "--ci"])
-        with pytest.raises(SystemExit) as exc:
-            mod.main()
+        rc = emit_result(mod.main())  # #3216: run()'s step
         payload = json.loads(capsys.readouterr().out)
         raised = {i["check"] for i in payload["issues"]
                   if i["check"].endswith("-version-source")}
@@ -858,7 +858,7 @@ class TestPlatformVersionSourceIsLoadBearing:
         # source also REMOVES whatever its dependants were reporting, so the
         # delta is not a constant. The sibling test below pins the exit-code
         # causation differentially; this one pins the skip-vs-report half.
-        assert exc.value.code != 0, (
+        assert rc != 0, (
             "an unreadable source of truth must not exit 0 under --ci")
 
     @staticmethod
@@ -868,7 +868,7 @@ class TestPlatformVersionSourceIsLoadBearing:
         monkeypatch.setattr(sys, "argv", argv)
         code = None
         try:
-            mod.main()
+            code = emit_result(mod.main())  # #3216: run()'s step
         except SystemExit as exc:
             code = exc.value if not isinstance(exc, SystemExit) else exc.code
         return json.loads(capsys.readouterr().out), code
@@ -1967,7 +1967,8 @@ class TestFixDoesNotSwitchOffJson:
         monkeypatch.setattr(sys, "argv", ["validate_docs_versions", *argv])
         code = 0
         try:
-            mod.main()
+            rc = emit_result(mod.main())  # #3216: run()'s step under --json
+            code = 0 if rc is None else rc
         except SystemExit as exc:
             code = exc.code
         return code, capsys.readouterr().out

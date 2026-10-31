@@ -25,6 +25,7 @@ _TOOLS_DIR = os.path.join(
 sys.path.insert(0, _TOOLS_DIR)
 
 import check_pipestatus_errexit as lint  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 _STRICT_SHORT = "set -euo pipefail\ngo test ./... | tee out.log\nrc=${PIPESTATUS[0]}\n"
 # #1845 hole 7: long flags. bash ground truth: the read never runs.
@@ -364,7 +365,7 @@ def test_rc_2_on_unreadable_tracked_file(tmp_path, capsys):
 def test_json_output_lists_violations(tmp_path, capsys):
     import json
     root = _git_repo(tmp_path, {"run.sh": _STRICT_SHORT})
-    assert lint.main(["--json", "--root", str(root)]) == 0
+    assert emit_result(lint.main(["--json", "--root", str(root)])) == 0
     data = json.loads(capsys.readouterr().out)
     assert data["population"] == 1 and data["violations"][0]["line"] == 3
 

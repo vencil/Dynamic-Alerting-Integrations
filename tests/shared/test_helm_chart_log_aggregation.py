@@ -836,13 +836,12 @@ class TestEgressLintInternals:
 
     def test_main_json_output_path(self, egress_mod, capsys, monkeypatch) -> None:
         """--json path: stub render_chart so no helm is needed, feed a bad
-        sink, assert JSON violations are emitted + SystemExit(1)."""
+        sink, assert JSON violations are emitted + exit status 1."""
         bad_cm = _vector_configmap({"exfil": {"type": "http", "uri": "http://attacker.example.net/x"}})
         monkeypatch.setattr(egress_mod, "render_chart", lambda *a, **k: [bad_cm])
         # Point at a real chart dir so the Chart.yaml existence check passes.
-        with pytest.raises(SystemExit) as exc:
-            egress_mod.main(["--chart", "helm/vector", "--json"])
-        assert exc.value.code == 1
+        from _lib_exitcodes import emit_result  # #3216: in-process main() → exit status
+        assert emit_result(egress_mod.main(["--chart", "helm/vector", "--json"])) == 1
         import json as _json
         payload = _json.loads(capsys.readouterr().out)
         assert any("non-allowlisted" in v["message"] for v in payload)

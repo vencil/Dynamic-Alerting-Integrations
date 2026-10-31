@@ -23,7 +23,6 @@ suggestions are not runnable). Lines with a ``<placeholder>`` or an inline
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
@@ -33,7 +32,7 @@ from typing import Dict, Iterator, List, NamedTuple, Set, Tuple
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 OPS_DIR = REPO_ROOT / "scripts" / "tools" / "ops"
@@ -855,7 +854,7 @@ def run(repo_root: Path = REPO_ROOT) -> List[Issue]:
                 docs + [repo_root / rel for rel in present], repo_root))
 
 
-def main() -> int:
+def main() -> "int | Report":
     for _stream in (sys.stdout, sys.stderr):
         try:
             _stream.reconfigure(encoding="utf-8")
@@ -866,18 +865,20 @@ def main() -> int:
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
     issues = run()
+    status = EXIT_VIOLATION if (issues and args.ci) else EXIT_OK
     if args.json:
-        print(json.dumps({"issues": [i.to_dict() for i in issues],
-                          "count": len(issues)}, ensure_ascii=False, indent=2))
-    elif issues:
+        return Report({"issues": [i.to_dict() for i in issues],
+                       "count": len(issues)}, status)  # #3216: run() encodes it
+    if issues:
         for it in issues:
             print(f"  ❌ [{it.check}] {it.file}:{it.line} — {it.message}",
                   file=sys.stderr)
         print(f"\n❌ {len(issues)} da-tools subcommand issue(s)", file=sys.stderr)
     else:
         print("✅ documented da-tools wrapper subcommands are valid")
-    return EXIT_VIOLATION if (issues and args.ci) else EXIT_OK
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

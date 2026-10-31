@@ -78,7 +78,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import subprocess
@@ -94,7 +93,7 @@ try:
 except Exception:  # pragma: no cover
     def try_utf8_stdout() -> None:  # type: ignore
         pass
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 
 _COMMENT_LINE = re.compile(r"^\s*#")
 _SET_WORD = re.compile(r"(?<![\w$.-])set(?![\w-])")
@@ -250,7 +249,7 @@ def _repo_root() -> Path:
     return p.parent.parent.parent
 
 
-def main(argv: Optional[List[str]] = None) -> int:
+def main(argv: Optional[List[str]] = None) -> "int | Report":
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="PIPESTATUS read in a file that never relaxes errexit (#1845)")
@@ -271,16 +270,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     bad = [r for r in results if r.violations]
     n_viol = sum(len(r.violations) for r in results)
     n_exempt = sum(len(r.exempted) for r in results)
+    status = EXIT_VIOLATION if n_viol and args.ci else EXIT_OK
 
     if args.json:
-        print(json.dumps({
+        return Report({
             "population": len(results),
             "strict_files": len(strict),
             "violations": [{"path": r.path, "line": ln, "reason": why}
                            for r in bad for ln, why in r.violations],
             "exempted": [{"path": r.path, "line": ln}
                          for r in results for ln in r.exempted],
-        }, ensure_ascii=False, indent=2))
+        }, status)  # #3216: run() encodes it
     else:
         print(f"[pipestatus-errexit] population={len(results)} "
               f"strict_files={len(strict)} violations={n_viol} exempted={n_exempt}")
@@ -293,10 +293,9 @@ def main(argv: Optional[List[str]] = None) -> int:
                   "  the pipeline in `set +e` … `set -e`, or, if the read is reachable\n"
                   "  here, add `# pipestatus-ok: <why>` on that line.", file=sys.stderr)
 
-    if n_viol and args.ci:
-        return EXIT_VIOLATION
-    return EXIT_OK
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

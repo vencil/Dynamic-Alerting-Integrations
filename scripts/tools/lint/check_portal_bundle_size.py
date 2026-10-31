@@ -26,7 +26,6 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
-import json
 import sys
 from pathlib import Path
 from typing import Dict, List
@@ -39,7 +38,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 DIST_DIR = REPO_ROOT / "docs" / "assets" / "dist"
@@ -138,7 +137,7 @@ def run_check() -> tuple[List[Dict], Dict]:
     return violations, stats
 
 
-def main() -> int:
+def main() -> "int | Report":
     try_utf8_stdout()
     parser = argparse.ArgumentParser(description="Portal dist bundle size budget")
     parser.add_argument("--ci", action="store_true", help="exit 1 on violation")
@@ -146,9 +145,10 @@ def main() -> int:
     args = parser.parse_args()
 
     violations, stats = run_check()
+    status = EXIT_VIOLATION if args.ci and violations else EXIT_OK
 
     if args.json:
-        print(json.dumps({
+        return Report({
             "stats": stats,
             "violations": violations,
             "limits": {
@@ -157,7 +157,7 @@ def main() -> int:
                 "total": TOTAL_LIMIT,
             },
             "summary": {"errors": len(violations)},
-        }, ensure_ascii=False, indent=2))
+        }, status)  # #3216: run() encodes it
     else:
         print(f"Portal dist budget check ({stats['file_count']} files, "
               f"{fmt_mb(stats['total_bytes'])} total)")
@@ -178,10 +178,9 @@ def main() -> int:
                 print(f"✗ [{v['kind']}] {v['message']}")
             print(f"\nTotal violations: {len(violations)}")
 
-    if args.ci and violations:
-        return EXIT_VIOLATION
-    return EXIT_OK
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

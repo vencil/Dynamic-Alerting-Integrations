@@ -23,7 +23,6 @@ Exit codes:
 """
 
 import argparse
-import json
 import os
 import re
 import sys
@@ -32,7 +31,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = SCRIPT_DIR.parent.parent.parent
@@ -199,9 +198,9 @@ def format_text_report(findings: list) -> str:
     return "\n".join(lines)
 
 
-def format_json_report(findings: list) -> str:
-    """Format JSON report."""
-    return json.dumps({
+def json_document(findings: list) -> dict:
+    """The --json document (run() encodes it, #3216)."""
+    return {
         "check": "bilingual_content",
         "findings": [
             {"severity": s, "message": m, "file": p, "cjk_ratio": r}
@@ -211,7 +210,7 @@ def format_json_report(findings: list) -> str:
         "info_count": sum(1 for s, *_ in findings if s == "info"),
         "status": "pass" if not any(s == "warning" for s, *_ in findings)
                   else "warn",
-    }, indent=2, ensure_ascii=False)
+    }
 
 
 def main():
@@ -241,15 +240,14 @@ def main():
 
     findings = run_all_checks(docs_dir=DOCS_DIR, threshold=args.threshold)
 
-    if args.json:
-        print(format_json_report(findings))
-    else:
-        print(format_text_report(findings))
-
     has_warnings = any(s == "warning" for s, *_ in findings)
-    if args.ci and has_warnings:
-        sys.exit(EXIT_VIOLATION)
+    status = EXIT_VIOLATION if args.ci and has_warnings else EXIT_OK
+    if args.json:
+        return Report(json_document(findings), status)
+    print(format_text_report(findings))
+    return status
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

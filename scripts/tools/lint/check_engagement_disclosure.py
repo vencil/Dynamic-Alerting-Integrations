@@ -22,13 +22,12 @@ Exit codes (scripts/tools/_lib_exitcodes.py): 0 clean / 1 violation / 2 caller e
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -113,7 +112,7 @@ def scan(root: Path) -> list[tuple[str, int, str]]:
     return sorted(findings)
 
 
-def main() -> int:
+def main() -> "int | Report":
     # Bilingual --help is a repo-wide behavioural contract
     # (tests/shared/test_bilingual_help_contract.py): the help text must actually
     # switch on DA_LANG, not merely contain some CJK.
@@ -142,13 +141,7 @@ def main() -> int:
 
     # Already POSIX — scan() normalises via .as_posix() at the source.
     rows = findings
-    if args.json_output:
-        print(json.dumps({
-            "tool": "check-engagement-disclosure",
-            "violations": [{"file": f, "line": n, "text": t} for f, n, t in rows],
-            "count": len(rows),
-        }, ensure_ascii=False, indent=2))
-    else:
+    if not args.json_output:
         for f, n, t in rows:
             print(f"{f}:{n}: {t}", file=sys.stderr)
 
@@ -163,9 +156,16 @@ def main() -> int:
             "in-flight migration is not. Reword to capability framing, e.g.\n"
             "  'an active <X>->VM migration target'  ->  'a cross-engine migration reference pack'"),
             file=sys.stderr)
-        return EXIT_VIOLATION
-    return EXIT_OK
+    status = EXIT_VIOLATION if findings else EXIT_OK
+    if args.json_output:
+        return Report({
+            "tool": "check-engagement-disclosure",
+            "violations": [{"file": f, "line": n, "text": t} for f, n, t in rows],
+            "count": len(rows),
+        }, status)  # #3216: run() encodes it
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

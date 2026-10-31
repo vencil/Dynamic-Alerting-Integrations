@@ -28,7 +28,6 @@ v2.4.0 新增：解決 v2.3.0 release 過程中 opa-evaluate 加入 COMMAND_MAP
 
 import argparse
 import ast
-import json
 import re
 import sys
 from pathlib import Path
@@ -53,7 +52,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 
 # Shipped tools live under scripts/tools/ (build.sh TOOL_FILES paths are
 # relative to this dir; cp flattens them into the image's /app).
@@ -700,15 +699,15 @@ def format_text_report(errors: list, command_map: dict, build_tools: set) -> str
     return "\n".join(lines)
 
 
-def format_json_report(errors: list, command_map: dict, build_tools: set) -> str:
-    """格式化 JSON 報告。"""
-    return json.dumps({
+def json_document(errors: list, command_map: dict, build_tools: set) -> dict:
+    """The --json document (run() encodes it, #3216)."""
+    return {
         "check": "build-completeness",
         "command_map_count": len(command_map),
         "build_tools_count": len(build_tools),
         "errors": [{"severity": s, "message": m} for s, m in errors],
         "pass": not any(s == "error" for s, _ in errors),
-    }, ensure_ascii=False, indent=2)
+    }
 
 
 def main():
@@ -746,16 +745,14 @@ def main():
     errors += check_required_data_files(shipped_basenames)
     errors += check_layout_depth_assumptions(tool_rel_paths)
 
-    if args.json:
-        print(format_json_report(errors, command_map, build_tools))
-    else:
-        print(format_text_report(errors, command_map, build_tools))
-
     has_errors = any(s == "error" for s, _ in errors)
-    if args.ci and has_errors:
-        sys.exit(EXIT_VIOLATION)
-    sys.exit(EXIT_OK)
+    status = EXIT_VIOLATION if args.ci and has_errors else EXIT_OK
+    if args.json:
+        return Report(json_document(errors, command_map, build_tools), status)
+    print(format_text_report(errors, command_map, build_tools))
+    sys.exit(status)
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

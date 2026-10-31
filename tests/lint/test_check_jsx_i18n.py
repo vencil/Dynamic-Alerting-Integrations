@@ -42,6 +42,7 @@ _spec = importlib.util.spec_from_file_location("check_jsx_i18n", _SCRIPT)
 mod = importlib.util.module_from_spec(_spec)
 sys.modules["check_jsx_i18n"] = mod
 _spec.loader.exec_module(mod)
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ============================================================
@@ -405,8 +406,7 @@ class TestMainCLI:
         )
         monkeypatch.setattr(mod, "JSX_LOADER", loader)
         monkeypatch.setattr(sys, "argv", ["check_jsx_i18n", "--json"])
-        with pytest.raises(SystemExit):
-            mod.main()
+        assert emit_result(mod.main()) == 0  # #3216: run()'s step — the document goes out here
         out = capsys.readouterr().out
         payload = json.loads(out)
         assert payload["check"] == "jsx-i18n"

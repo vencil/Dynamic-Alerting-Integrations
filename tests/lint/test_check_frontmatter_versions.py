@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "lint"))
 import check_frontmatter_versions as cfv
-from _lib_exitcodes import EXIT_CALLER_ERROR
+from _lib_exitcodes import EXIT_CALLER_ERROR, emit_result  # (#3216: in-process main() → exit status)
 
 
 # ============================================================
@@ -354,8 +354,7 @@ class TestReportFormatting:
             file="docs/old.md", line=3,
             current_version="1.0.0", expected_version="2.0.0",
         )]
-        text = cfv.format_json_report(items, "2.0.0", 10, 8)
-        data = json.loads(text)
+        data = cfv.json_document(items, "2.0.0", 10, 8)
         assert data["expected_version"] == "2.0.0"
         assert data["total_scanned"] == 10
         assert len(data["items"]) == 1
@@ -382,7 +381,7 @@ class TestCLI:
         claude.write_text("## 專案概覽 (v2.0.0)\n", encoding="utf-8")
         monkeypatch.setattr(cfv, "CLAUDE_MD", claude)
 
-        cfv.main(["--json"])  # Should not exit
+        assert emit_result(cfv.main(["--json"])) == 0  # Should not exit
 
     def test_cli_ci_exit_on_error(self, tmp_path, monkeypatch):
         """--ci 有 error 時 exit 1"""
@@ -530,9 +529,7 @@ class TestCLIUnderADotDirectoryAndOnAnEmptyTree:
         """dev-rules §13: --json stdout is exactly one JSON document on every
         terminal path. Red if the refusal prints prose to stdout instead."""
         self._no_markdown(tmp_path, monkeypatch)
-        with pytest.raises(SystemExit) as exc_info:
-            cfv.main(["--json"])
-        assert exc_info.value.code == EXIT_CALLER_ERROR
+        assert emit_result(cfv.main(["--json"])) == EXIT_CALLER_ERROR
         captured = capsys.readouterr()
         doc = json.loads(captured.out)
         assert doc["status"] == "caller_error"

@@ -52,13 +52,12 @@ Exit codes (scripts/tools/_lib_exitcodes.py): 0 clean / 1 finding /
 from __future__ import annotations
 
 import argparse
-import json
 import re
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -208,7 +207,7 @@ def scan(root: Path, current: tuple[int, int, int]) -> list[dict]:
     return findings
 
 
-def main() -> int:
+def main() -> "int | Report":
     parser = argparse.ArgumentParser(
         description=i18n_text(
             "檢查「已發布的映像還是舊行為」這類註記：標記版號舊於 da-tools VERSION、"
@@ -234,11 +233,7 @@ def main() -> int:
 
     findings = scan(REPO_ROOT, current)
     cur = "v{}.{}.{}".format(*current)
-    if args.json_output:
-        print(json.dumps({"tool": "check-image-caveats", "tools_version": cur,
-                          "findings": findings, "count": len(findings)},
-                         ensure_ascii=False, indent=2))
-    else:
+    if not args.json_output:
         for f in findings:
             print(f"{f['file']}:{f['line']}: [{f['kind']}] {f['text']}",
                   file=sys.stderr)
@@ -254,9 +249,14 @@ def main() -> int:
             "  malformed: write the marker as <!-- image-caveat: vX.Y.Z -->, no newer than VERSION.\n"
             "  unmarked: this block uses the 'vX.Y.Z image / the image you have' phrasing; add a marker."),
             file=sys.stderr)
-        return EXIT_VIOLATION
-    return EXIT_OK
+    status = EXIT_VIOLATION if findings else EXIT_OK
+    if args.json_output:
+        return Report({"tool": "check-image-caveats", "tools_version": cur,
+                       "findings": findings, "count": len(findings)},
+                      status)  # #3216: run() encodes it
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

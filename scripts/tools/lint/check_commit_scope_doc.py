@@ -43,7 +43,6 @@ CLI:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import re
 import sys
@@ -52,7 +51,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 DEFAULT_SOT = REPO_ROOT / ".commitlintrc.yaml"
@@ -189,7 +188,7 @@ def render_report(
     return "\n".join(lines)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> "int | Report":
     parser = argparse.ArgumentParser(
         description="Check that commit-convention.md §Scope doesn't drift "
         "from .commitlintrc.yaml SOT."
@@ -229,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CALLER_ERROR
 
     illegal, unmentioned = compute_drift(doc_scopes, sot_scopes)
+    status = EXIT_VIOLATION if illegal else EXIT_OK
 
     if args.json_output:
         payload = {
@@ -239,14 +239,11 @@ def main(argv: list[str] | None = None) -> int:
             "drift_a_count": len(illegal),
             "drift_b_count": len(unmentioned),
         }
-        print(json.dumps(payload, indent=2, ensure_ascii=False))
-    else:
-        print(render_report(doc_scopes, sot_scopes, illegal, unmentioned, ci_mode=args.ci))
-
-    if illegal:
-        return EXIT_VIOLATION
-    return EXIT_OK
+        return Report(payload, status)  # #3216: run() encodes it
+    print(render_report(doc_scopes, sot_scopes, illegal, unmentioned, ci_mode=args.ci))
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document
