@@ -7,22 +7,26 @@ module answers one question about every OTHER tracked YAML under the shipped
 roots — "does anything in it look like Prometheus rules?" — and a yes is a
 red test whose message asks for the file to be declared (a rule source, or a
 registered chart values key) or declared not to ship rules
-(`NOT_RULE_FILES`, or the `not_rule_files` of its directory's entry).
+(`NOT_RULE_FILES`, with the reason).
 
 ⛔ Its answer is messages, never a list of files, and no module under
 scripts/tools imports it (tests/lint/test_rule_tripwire.py pins both): a
 tripwire whose hits were fed to the readers would be the content-based
 discovery the declaration replaced, back by another door.
 
-"Looks like rules" is the criterion the repo already had, not a new one:
-  * `_rules_shaped_at_any_depth` over the any-YAML reading of each document
-    (a `groups:` holding a real rule at any depth, or a bare list of rules —
-    the shape a chart's values hand to `toYaml`), and
-  * the `- alert:` regex, over the text and over every string the any-YAML
-    reading holds (a ConfigMap data value written as one quoted scalar, which
-    the generated rules ConfigMaps are).
-Known misses: rules in base64 (`binaryData`), a recording-rule-only file
-spelled as a quoted string, rules a template builds from parts. A file no
+"Looks like rules" is `_rules_shaped_at_any_depth` — a `groups:` holding a
+real rule (`alert` or `record`) at any depth, or a bare list of rules with
+`expr` (the shape a chart's values hand to `toYaml`) — asked of:
+  * the any-YAML reading of each document of the file;
+  * the any-YAML reading of every string value in it that contains a `:`
+    (a ConfigMap data value — `|` block, quoted scalar or one-line JSON — is
+    such a string; text without a `:` reads to no mapping, so to no rule),
+    and of every `binaryData` value, base64-decoded;
+and, where a reading refuses the text (a Helm template, a broken value), the
+`- alert:` / `- record:` regex on that text.
+Known misses: a string inside a string (a rule file nested in a value of a
+value), rules a template builds from parts, a binaryData value that is not
+base64 of UTF-8 text (named nowhere: it is no rule file either). A file no
 standard encoding decodes is named (it cannot be judged at all).
 """
 from __future__ import annotations
@@ -43,7 +47,7 @@ from _rule_tree import _decode_manifest  # noqa: E402
 # ⛔ Regex, not a literal. `-  alert:` (two spaces) is the same YAML and
 # evaded the substring, so the tripwire could be stepped around with a
 # whitespace edit.
-_ALERT_LINE = re.compile(r"^\s*-\s+alert\s*:", re.M)
+_ALERT_LINE = re.compile(r"^\s*-\s+(?:alert|record)\s*:", re.M)
 
 
 def _is_rule_groups(value) -> bool:
@@ -97,20 +101,28 @@ def _rules_shaped_at_any_depth(node, _depth: int = 0):
     return None
 
 
-def _strings(node, _depth: int = 0):
-    """Every string *node* holds, keys and values, at any depth."""
+def _texts_inside(node, _depth: int = 0):
+    """The texts *node* holds that a rule file could be written in: every
+    string value with a `:` in it, and every `binaryData` value decoded
+    (base64 of UTF-8; one that is not is skipped — it is no text)."""
     if _depth > 64:
         return
     if isinstance(node, str):
-        yield node
+        if ":" in node:
+            yield node
     elif isinstance(node, dict):
         for k, v in node.items():
-            if isinstance(k, str):
-                yield k
-            yield from _strings(v, _depth + 1)
+            if k == "binaryData" and isinstance(v, dict):
+                for blob in v.values():
+                    try:
+                        yield _lib_consumer_read.binary_data_bytes(blob).decode("utf-8")
+                    except (ValueError, UnicodeDecodeError):
+                        continue
+            else:
+                yield from _texts_inside(v, _depth + 1)
     elif isinstance(node, list):
         for v in node:
-            yield from _strings(v, _depth + 1)
+            yield from _texts_inside(v, _depth + 1)
 
 
 def _without(doc, key_path):
@@ -124,11 +136,11 @@ def _without(doc, key_path):
 
 
 def declared_not_rules() -> "frozenset[str]":
-    """The YAML the declaration says ships no rules: every `RULE_SOURCES`
-    entry's `not_rule_files`, and `NOT_RULE_FILES`."""
-    beside = {f"{s.directory}/{n}" for s in _lib_consumer_read.RULE_SOURCES
-              for n in s.not_rule_files}
-    return frozenset(beside | {p for p, _why in _lib_consumer_read.NOT_RULE_FILES})
+    """The YAML the declaration says looks like rules and ships none:
+    `NOT_RULE_FILES`, each with its reason. (A `RULE_SOURCES` entry's
+    `not_rule_files` only says which YAML beside the rule files is accounted
+    for; the tripwire still judges them.)"""
+    return frozenset(p for p, _why in _lib_consumer_read.NOT_RULE_FILES)
 
 
 def rule_shaped_outside_declaration(repo_root: str, tracked_yaml: "list[str]",
@@ -149,35 +161,44 @@ def rule_shaped_outside_declaration(repo_root: str, tracked_yaml: "list[str]",
         [str(Path(repo_root, rel)) for rel in todo], keep_refusals=True)
     ask = ("declare it in _lib_consumer_read (a RULE_SOURCES entry, or a "
            "CHART_VALUES_RULES registration), or declare that it ships no rules "
-           "(NOT_RULE_FILES, or the not_rule_files of its directory's entry)")
-    alarms = []
+           "(NOT_RULE_FILES, with the reason)")
+    alarms: "dict[str, str]" = {}
+    inner: "list[tuple[str, str]]" = []          # (rel, a text inside it)
     for rel, docs in zip(todo, readings.values()):
         try:
             raw = Path(repo_root, rel).read_bytes()
         except OSError as e:
-            alarms.append(f"{rel}: cannot be read ({e.strerror}), so whether it holds "
-                          f"rules is unknown — {ask}")
+            alarms[rel] = (f"cannot be read ({e.strerror}), so whether it holds "
+                           "rules is unknown")
             continue
         text, enc = _decode_manifest(raw)
         if text is None:
-            alarms.append(f"{rel}: no standard encoding decodes it ({enc}); neither this "
-                          f"tripwire nor kubectl can read it — {ask}")
+            alarms[rel] = (f"no standard encoding decodes it ({enc}); neither this "
+                           "tripwire nor kubectl can read it")
             continue
-        why = None
         if isinstance(docs, _lib_consumer_read.ConsumerReadError):
             if _ALERT_LINE.search(text):
-                why = "spells out `- alert:` (no YAML reading reads the file)"
-        else:
-            for doc in docs:
-                for key_path in registered.get(rel, ()):
-                    doc = _without(doc, key_path)
-                at = _rules_shaped_at_any_depth(doc)
-                if at is not None:
-                    why = f"holds Prometheus rules at `{at or '(root)'}`"
-                    break
-                if any(_ALERT_LINE.search(s) for s in _strings(doc)):
-                    why = "holds a string that spells out `- alert:`"
-                    break
-        if why is not None:
-            alarms.append(f"{rel}: {why}, and no rule contract reads it — {ask}")
-    return tuple(alarms)
+                alarms[rel] = ("spells out `- alert:` / `- record:` (no YAML reading "
+                               "reads the file)")
+            continue
+        for doc in docs:
+            for key_path in registered.get(rel, ()):
+                doc = _without(doc, key_path)
+            at = _rules_shaped_at_any_depth(doc)
+            if at is not None:
+                alarms[rel] = f"holds Prometheus rules at `{at or '(root)'}`"
+                break
+            inner += [(rel, t) for t in _texts_inside(doc)]
+    inner = [(rel, t) for rel, t in inner if rel not in alarms]
+    for (rel, t), docs in zip(inner, _lib_consumer_read.any_yaml_text_documents_each(
+            [t for _r, t in inner], keep_refusals=True)):
+        if rel in alarms:
+            continue
+        if isinstance(docs, _lib_consumer_read.ConsumerReadError):
+            if _ALERT_LINE.search(t):
+                alarms[rel] = ("holds a text that spells out `- alert:` / `- record:` "
+                               "(no YAML reading reads it)")
+        elif any(_rules_shaped_at_any_depth(d) is not None for d in docs):
+            alarms[rel] = "holds a text (a data value, say) that reads as Prometheus rules"
+    return tuple(f"{rel}: {alarms[rel]}, and no rule contract reads it — {ask}"
+                 for rel in todo if rel in alarms)

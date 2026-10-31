@@ -78,8 +78,9 @@ _REPO_ROOT = _find_repo_root()
 
 # ⛔ Read by tests/lint/test_check_pint.py with a REGEX, not an import, so that
 # .pint.hcl's include pattern and this prefix cannot drift apart. It has no
-# in-module caller by design: discovery is content-based and this is only used
-# for HUMAN-READABLE messages. Deleting it as "unused" breaks that lockstep.
+# in-module caller by design: which files are read is the rule-source
+# declaration and whether a rule is platform is decided by provenance, so this
+# is only used for HUMAN-READABLE messages. Deleting it as "unused" breaks that lockstep.
 _PLATFORM_CM_PREFIX = "configmap-rules-platform"
 # Both extensions: a rules ConfigMap named `.yml` was silently skipped by the
 # scanner, which is the same "escapes the gate by being named differently" hole.
@@ -91,6 +92,8 @@ _RULES_FILE_EXTS = (".yaml", ".yml")
 # docstring at :33-36 names configmap-rules-platform.yaml as the one with "NO
 # rule-pack counterpart").
 _RULES_CM_PREFIX = "configmap-rules-"
+# The rule-packs source tree, as the rule-source declaration names it.
+_RULE_PACKS_DIR = _lib_consumer_read.RULE_PACKS.directory + "/"
 _RULE_PACK_PREFIX = "rule-pack-"
 
 
@@ -255,7 +258,7 @@ def _platform_rule_locations() -> frozenset:
     pack_alerts = _source_pack_alerts()
     out = set()
     for where, doc, claimed in _rule_containers():
-        if where.startswith("rule-packs/"):
+        if where.startswith(_RULE_PACKS_DIR):
             continue                       # the source tree is never a deployment
         mine = _alert_names(doc)
         # ⛔ A CLAIM is not provenance; a MATCH is. The header, the object name
@@ -346,7 +349,7 @@ def _source_pack_alerts() -> dict:
         # The FILENAME is the pack's identity; its depth is not.
         name = PurePosixPath(where).name
         expected = {f"{_RULE_PACK_PREFIX}{prov}{ext}" for ext in _RULES_FILE_EXTS}
-        if where.startswith("rule-packs/") and name in expected:
+        if where.startswith(_RULE_PACKS_DIR) and name in expected:
             seen_files.setdefault(prov, set()).add(where)
             out.setdefault(prov, set()).update(_alert_names(doc))
     # ⛔ ONE file per pack name. Recursion is right — a pack moved into a

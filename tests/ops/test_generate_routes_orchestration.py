@@ -2128,8 +2128,9 @@ class TestSentinelLabelContract:
     exact latent gap shipped between v1.2.0 and v2.9.x). Watchdog is the single
     deliberate exception: severity=none but NO component — it rides its own
     index-0 route, never the sentinel sink. Scans every rules container the
-    repo ships — see `_iter_rule_containers`, which finds them by CONTENT, not
-    by name or directory. Do not restate the old filename enumeration here: it
+    repo ships — see `_iter_rule_containers`, which reads the files the
+    rule-source declaration names (`_lib_consumer_read.RULE_SOURCES`, #3438);
+    rules anywhere else ring the coverage tripwire. Do not restate the old filename enumeration here: it
     described a scanner that has been replaced, and it omitted
     operator-manifests/ entirely (16 objects, 122 rules, a third of the tree).
     Historically it read: the SOURCE rule packs plus
@@ -3713,7 +3714,8 @@ class TestContainerDiscovery:
 
     def test_a_key_in_both_data_and_binarydata_is_refused(self):
         """The API server refuses a ConfigMap with one key in both `data` and
-        `binaryData` ("duplicate of key present in data"), so neither body
+        `binaryData` (`data[r.yml]: Invalid value: "r.yml": duplicate of key
+        present in binaryData`, ValidateConfigMap's `data` loop), so neither body
         is served — reading either one would gate rules the cluster never
         gets. Named, as a `_problem`."""
         import base64 as _b64  # noqa: PLC0415
@@ -3722,7 +3724,9 @@ class TestContainerDiscovery:
         got = self._containers(
             self._CM + "data:\n  r.yml: |\n" + self._indented("FromData", 4)
             + f"binaryData:\n  r.yml: {shadow}\n")
-        assert len(got) == 1 and "duplicate of key" in got[0][1].get("_problem", ""), got
+        assert len(got) == 1 and (
+            'data[r.yml]: Invalid value: "r.yml": duplicate of key present in binaryData'
+            in got[0][1].get("_problem", "")), got
 
     def test_a_data_value_that_is_already_a_mapping_is_named(self):
         """A data key written as nested YAML instead of a `|` block.
@@ -3880,6 +3884,29 @@ class TestContainerDiscovery:
             encoding="utf-8")
         rung = _tripwire({"k8s/03-monitoring/redis-alerts.yaml": body})
         assert len(rung) == 1 and "RULE_SOURCES" in rung[0], rung
+
+    def test_every_data_value_form_rings_the_tripwire_outside_the_declaration(self):
+        """F2: a rules ConfigMap moved out of the declaration rings whatever
+        form its data value takes — one-line JSON, recording rules only, or
+        base64 in `binaryData` — because every text inside is read and asked
+        the shape question, not only matched against `- alert:`."""
+        import base64 as _b64  # noqa: PLC0415
+        cm = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: moved}\n"
+        recording = ("groups:\n  - name: g\n    rules:\n"
+                     "      - record: job:up:sum\n        expr: sum(up)\n")
+        forms = {
+            "one-line JSON": cm + "data:\n  r.json: " + json.dumps(json.dumps(
+                {"groups": [{"name": "g", "rules": [{"alert": "J", "expr": "up == 0"}]}]})) + "\n",
+            "recording only": cm + "data:\n  r.yml: |\n" + "".join(
+                "    " + line + "\n" for line in recording.splitlines()),
+            "binaryData": cm + "binaryData:\n  r.yml: "
+                + _b64.b64encode(recording.encode("utf-8")).decode("ascii") + "\n",
+        }
+        for label, text in forms.items():
+            assert [d for _w, d, _p in _containers_from_text(
+                "k8s/03-monitoring/configmap-rules-x.yaml", text) if d.get("groups")], label
+            rung = _tripwire({"k8s/crd/moved.yaml": text})
+            assert len(rung) == 1 and rung[0].startswith("k8s/crd/moved.yaml:"), (label, rung)
 
     def test_rbac_groups_are_not_rule_groups(self):
         """`groups:` is a popular word: RBAC subject groups ring nothing."""
