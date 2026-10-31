@@ -235,6 +235,9 @@ type ConfigManager struct {
 	// valuesNotServed tracks what the values-not-served audit last put in
 	// the log (#2065); see config_values_not_served.go.
 	valuesNotServed valuesNotServedLogState
+	// keysUnread is the same memory for the line naming the keys no row of
+	// this exporter reads (ADR-038 §11); see config_values_not_served.go.
+	keysUnread valuesNotServedLogState
 	// valuesNotServedCache keeps the audit's per-tenant verdicts between
 	// commits (#2065); see config_values_not_served.go.
 	valuesNotServedCache valuesNotServedCache
@@ -1914,7 +1917,10 @@ func logConfigStats(logger *log.Logger, cfg *ThresholdConfig, prefix string) {
 
 	// #1231 c2: Errors (blocking channel — same set the tenant-api write
 	// gate rejects on) first, then Notices (advisory deprecation channel).
-	kv := cfg.ValidateTenantKeys()
+	// Whether any reader reads a key is not judged here (ADR-038 §11): the
+	// shared key verdict does; this exporter states what it reads itself
+	// (auditValuesNotServed's keys-unread line).
+	kv := cfg.ValidateTenantKeys().WithoutUnread()
 	for _, w := range kv.Errors {
 		logger.Printf("%s", w)
 	}

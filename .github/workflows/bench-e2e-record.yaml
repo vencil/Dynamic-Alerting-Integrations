@@ -130,8 +130,8 @@ jobs:
         # The driver's Tier 1 smoke fail-fast (cycle-6 RCA) catches
         # zero-anchor warm_up runs in ~90s and exits with code 2. The
         # diagnostic signal humans need next is the exporter's stderr
-        # — `WARN: skip unparseable file _defaults.yaml`, `WARN: tenant
-        # X: unknown key Y not in defaults`, etc. Dump compose logs into
+        # — `WARN: skip unparseable file _defaults.yaml`, the
+        # `config keys no row of this exporter reads` line, etc. Dump compose logs into
         # the bench-results dir so they ship in the artifact alongside
         # per-run-*.json. `|| true` because compose may already be down
         # (cleanup trap fires in bench_e2e_run.sh).

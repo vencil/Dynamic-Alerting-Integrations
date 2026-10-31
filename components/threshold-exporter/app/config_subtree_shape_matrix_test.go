@@ -37,8 +37,9 @@ package main
 // which is also the state a tree lands in when its root defaults file fails to
 // parse) where a tenant authors a key nothing declares. `resolveBaseRows`
 // walks `cfg.Defaults`, so no row is built; `/effective` renders the authored
-// value; and `ValidateTenantKeys` logs `unknown key … not in defaults` naming
-// both tenant and key. Loud through a different component, exactly like
+// value; and the exporter logs the key in its keys-unread line (reason
+// unconsumed — before ADR-038 §11, `ValidateTenantKeys`' `unknown key … not
+// in defaults` WARN) naming both tenant and key. Loud through a different component, exactly like
 // `_critical` with no base default in the reach matrix. The forbidden outcome
 // is unchanged: disagree AND nothing says so.
 
@@ -151,9 +152,17 @@ func assertPlanesAgreeOrReported(
 	// DIFFERENT tenant's silent disagreement the moment this matrix grows past
 	// nine tenants per level. It does not today, which is exactly why it would
 	// have gone in unnoticed and detonated for whoever widened the matrix.
+	// The keys-unread line carries no severity word (ADR-038 §11: the shared
+	// key verdict judges how severe an unread key is); it is the exporter
+	// saying it reads no row for the key, which is what this channel is.
+	// A keys-unread entry counts only as a whole (tenant and key in ONE
+	// entry): the line lists every tenant's keys.
+	entry := fmt.Sprintf("tenant=%q key=%q reason=", tenant, key)
 	for _, line := range strings.Split(logs, "\n") {
-		if strings.Contains(line, "WARN") &&
-			mentionsExactly(line, tenant) && strings.Contains(line, key) {
+		if strings.HasPrefix(line, keysUnreadLogPrefix) && strings.Contains(line, entry) {
+			return
+		}
+		if strings.Contains(line, "WARN") && mentionsExactly(line, tenant) && strings.Contains(line, key) {
 			return
 		}
 	}

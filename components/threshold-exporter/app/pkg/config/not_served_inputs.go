@@ -89,13 +89,21 @@ func (c *ThresholdConfig) ValuesNotServedGlobalInput() uint64 {
 // TenantValuesNotServed is ValuesNotServed for one tenant of c (its entry of
 // the full table; nil when it records nothing or the tenant is absent).
 func (c *ThresholdConfig) TenantValuesNotServed(tenant string, now time.Time) map[string]string {
+	table, _ := c.TenantValuesNotServedAndDisabled(tenant, now)
+	return table
+}
+
+// TenantValuesNotServedAndDisabled is ValuesNotServedAndDisabled for one
+// tenant (see TenantValuesNotServed).
+func (c *ThresholdConfig) TenantValuesNotServedAndDisabled(tenant string, now time.Time) (map[string]string, []string) {
 	overrides, ok := c.Tenants[tenant]
 	if !ok {
-		return nil
+		return nil, nil
 	}
 	one := *c
 	one.Tenants = map[string]map[string]ScheduledValue{tenant: overrides}
-	return one.ValuesNotServed(now)[tenant]
+	table, disabled := one.ValuesNotServedAndDisabled(now)
+	return table[tenant], disabled[tenant]
 }
 
 // ValuesNotServedExpiryEdge is the earliest `expires:` instant of overrides

@@ -168,9 +168,10 @@ func TestGetTenant_SilentModeValueIsANotice(t *testing.T) {
 		!strings.Contains(strings.Join(detail.Notices, "\n"), smPurple) {
 		t.Errorf("warnings %q notices %q", detail.Warnings, detail.Notices)
 	}
-	// Control: a key error stays a warning.
-	if !strings.Contains(strings.Join(detail.Warnings, "\n"), `"_silent_mod"`) {
-		t.Errorf("warnings %q, want the unknown key", detail.Warnings)
+	// Whether any reader reads `_silent_mod` is the shared key verdict's,
+	// which GET does not ask for (ADR-038 decision 11): it is in neither.
+	if strings.Contains(strings.Join(append(detail.Warnings, detail.Notices...), "\n"), `"_silent_mod"`) {
+		t.Errorf("warnings %q notices %q: the unread key is reported by GET", detail.Warnings, detail.Notices)
 	}
 }
 

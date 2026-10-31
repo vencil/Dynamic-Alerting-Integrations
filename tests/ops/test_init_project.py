@@ -6877,14 +6877,17 @@ class TestOwnershipLedger:
         assert self._cli(out, '--tenants', 't1,t2', '--ci', 'both').returncode == 0
         first = yaml.safe_load((out / '.da-init.yaml').read_text(encoding='utf-8'))['files']
         assert '.gitlab-ci.yml' in first and 'conf.d/t2.yaml' in first
+        # Issue 1462: an UNCHANGED dropped tenant file is now removed, so the
+        # carried-over shape is an edited one (kept, and still init's).
+        t2 = out / 'conf.d' / 't2.yaml'
+        t2.write_text(t2.read_text(encoding='utf-8') + '# HAND-EDIT\n', encoding='utf-8')
         run = self._cli(out, '--ci', 'both', '--force')          # t1 only
         assert run.returncode == 0, run.stderr[-800:]
+        assert t2.is_file()
         second = yaml.safe_load((out / '.da-init.yaml').read_text(encoding='utf-8'))['files']
         for rel in ('.gitlab-ci.yml', 'conf.d/t2.yaml'):
             assert second[rel] == first[rel], rel
 
-        t2 = out / 'conf.d' / 't2.yaml'
-        t2.write_text(t2.read_text(encoding='utf-8') + '# HAND-EDIT\n', encoding='utf-8')
         run = self._cli(out, '--tenants', 't1,t2', '--ci', 'both', '--force')
         assert run.returncode == 0, run.stderr[-800:]
         assert 'conf.d/t2.yaml (overwritten) (edited since init wrote it)' in run.stdout, \
@@ -6937,3 +6940,226 @@ class TestOwnershipLedger:
         n_real = re.search(r'(\d+) of the files above already existed', real.stdout)
         assert n_dry and n_real, (dry.stdout[-600:], real.stdout[-600:])
         assert n_dry.group(1) == n_real.group(1)
+
+
+# ── issue 1462: files init generated before and no longer generates ────────
+class TestStaleFiles:
+    """`--force` with a different configuration used to leave every file the
+    old configuration generated (rc 0, empty stderr, summary listing only
+    "(overwritten)"): a dropped tenant's `acme-c.yaml` kept its thresholds
+    live, a dropped GitLab leg kept its pipeline. The ledger now names them;
+    unchanged ones are removed, edited ones stay and are named."""
+
+    _FIRST = ('--tenants', 'acme-a,acme-c', '--rule-packs', 'mariadb,redis',
+              '--deploy', 'kustomize', '--ci', 'both')
+    _SECOND = ('--tenants', 'acme-a', '--rule-packs', 'postgresql',
+               '--deploy', 'helm', '--ci', 'github', '--force')
+    _DROPPED = {'conf.d/acme-c.yaml', '.gitlab-ci.yml',
+                '.gitlab-ci.d/dynamic-alerting.yml',
+                'kustomize/base/README.md', 'kustomize/base/kustomization.yaml',
+                'kustomize/overlays/dev/kustomization.yaml',
+                'kustomize/overlays/prod/kustomization.yaml'}
+
+    @staticmethod
+    def _cli(out, *argv):
+        import subprocess
+        env = {**os.environ, 'PYTHONUTF8': '1', 'DA_LANG': 'en',
+               'PYTHONDONTWRITEBYTECODE': '1'}
+        return subprocess.run(
+            [sys.executable, _TOOL, '-o', str(out), '--non-interactive', *argv],
+            capture_output=True, text=True, encoding='utf-8',
+            errors='replace', env=env, timeout=300)
+
+    @staticmethod
+    def _files(root):
+        return {p.relative_to(root).as_posix() for p in root.rglob('*')
+                if p.is_file()}
+
+    @staticmethod
+    def _ledger(root):
+        return yaml.safe_load((root / '.da-init.yaml').read_text(
+            encoding='utf-8'))['files']
+
+    def test_dropped_files_are_named_and_removed(self, tmp_path):
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._FIRST).returncode == 0
+        assert self._DROPPED <= self._files(out)
+        run = self._cli(out, *self._SECOND)
+        assert run.returncode == 0, run.stderr[-800:]
+        assert not (self._DROPPED & self._files(out)), self._files(out)
+        assert not (out / 'kustomize').exists(), 'emptied directories stay behind'
+        assert not (self._DROPPED & set(self._ledger(out)))
+        for rel in self._DROPPED:
+            assert f'{rel} (stale: no longer generated; unchanged since init ' \
+                   f'wrote it → removed)' in run.stdout, rel
+        assert (out / 'environments' / 'prod' / 'values.yaml').is_file()
+
+    def test_control_the_same_configuration_has_nothing_stale(self, tmp_path):
+        """Same flags again: nothing stale — including the root .gitlab-ci.yml,
+        which a re-run does not rewrite but the GitLab leg still needs."""
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._FIRST).returncode == 0
+        before = self._files(out)
+        run = self._cli(out, *self._FIRST, '--force')
+        assert run.returncode == 0, run.stderr[-800:]
+        assert 'stale' not in run.stdout
+        assert self._files(out) == before
+        assert '.gitlab-ci.yml' in self._ledger(out)
+
+    def test_an_edited_stale_file_is_kept_and_named_again_next_run(self, tmp_path):
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._FIRST).returncode == 0
+        acme_c = out / 'conf.d' / 'acme-c.yaml'
+        acme_c.write_text(acme_c.read_text(encoding='utf-8') + '# HAND-EDIT\n',
+                          encoding='utf-8')
+        before = acme_c.read_bytes()
+        run = self._cli(out, *self._SECOND)
+        assert run.returncode == 0, run.stderr[-800:]
+        assert acme_c.read_bytes() == before
+        line = 'conf.d/acme-c.yaml (stale: no longer generated) (edited since init wrote it) → kept'
+        assert line in run.stdout, run.stdout[-1200:]
+        assert 'conf.d/acme-c.yaml' in self._ledger(out)
+        again = self._cli(out, *self._SECOND)
+        assert line in again.stdout, again.stdout[-1200:]
+
+    def test_dry_run_names_them_and_removes_nothing(self, tmp_path):
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._FIRST).returncode == 0
+        before = {p: (out / p).read_bytes() for p in self._files(out)}
+        run = self._cli(out, *self._SECOND, '--dry-run')
+        assert run.returncode == 0, run.stderr[-800:]
+        assert {p: (out / p).read_bytes() for p in self._files(out)} == before
+        for rel in self._DROPPED:
+            assert f'{rel} (stale: no longer generated; unchanged since init ' \
+                   f'wrote it → would be removed)' in run.stdout, rel
+
+    def test_a_marker_without_a_ledger_removes_nothing_and_says_why(self, tmp_path):
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._FIRST).returncode == 0
+        (out / '.da-init.yaml').write_text('ci_platform: both\n', encoding='utf-8')
+        run = self._cli(out, *self._SECOND)
+        assert run.returncode == 0, run.stderr[-800:]
+        assert self._DROPPED <= self._files(out)
+        assert 'has no readable file ledger' in run.stdout
+        assert 'none is removed' in run.stdout
+        # …and it must not promise that a later run will find them.
+        assert 'Later runs cannot find them either' in run.stdout
+        assert 'The next run has a ledger' not in run.stdout
+
+    def test_run_init_without_prune_removes_nothing(self, tmp_path):
+        """Only the CLI (with --force) passes `prune`."""
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._FIRST).returncode == 0
+        cfg = {'ci': 'github', 'deploy': 'helm', 'rule_packs': ['postgresql'],
+               'tenants': ['acme-a'], 'namespace': 'monitoring',
+               'da_tools_image': ip.DA_TOOLS_IMAGE or 'ghcr.io/x/y:1'}
+        ip.run_init(cfg, str(out))
+        assert self._DROPPED <= self._files(out)
+
+    # ── adversarial review of the stale handling ──
+    def test_kustomize_stops_listing_a_removed_tenant(self, tmp_path):
+        """The kustomize carriers come from the plan, read before the stale
+        tenant file was deleted; listing it pointed configMapGenerator and
+        the README's ln -s at a file that no longer exists."""
+        out = tmp_path / 'repo'
+        base = ('--deploy', 'kustomize', '--ci', 'github', '--rule-packs', 'mariadb')
+        assert self._cli(out, '--tenants', 'acme-a,acme-c', *base).returncode == 0
+        run = self._cli(out, '--tenants', 'acme-a', *base, '--force')
+        assert run.returncode == 0, run.stderr[-800:]
+        assert not (out / 'conf.d' / 'acme-c.yaml').exists()
+        kbase = out / 'kustomize' / 'base'
+        assert 'acme-c' not in (kbase / 'kustomization.yaml').read_text(encoding='utf-8')
+        assert 'acme-c' not in (kbase / 'README.md').read_text(encoding='utf-8')
+        assert 'acme-a.yaml' in (kbase / 'kustomization.yaml').read_text(encoding='utf-8')
+
+    @pytest.mark.parametrize('key', ['../outside/victim.txt', '/etc/passwd',
+                                     'a/../../outside/victim.txt'])
+    def test_a_ledger_key_outside_the_output_is_not_trusted(self, tmp_path, key):
+        """`.da-init.yaml` is committed to the customer repo: its keys are input."""
+        import hashlib
+        out = tmp_path / 'repo'
+        victim = tmp_path / 'outside' / 'victim.txt'
+        victim.parent.mkdir()
+        victim.write_text('secret\n', encoding='utf-8')
+        assert self._cli(out, *self._FIRST).returncode == 0
+        doc = yaml.safe_load((out / '.da-init.yaml').read_text(encoding='utf-8'))
+        doc['files'][key] = hashlib.sha256(victim.read_bytes()).hexdigest()
+        (out / '.da-init.yaml').write_text(yaml.safe_dump(doc), encoding='utf-8')
+        assert ip._read_ownership(str(out)).state == ip._OWN_UNREADABLE
+        run = self._cli(out, *self._SECOND)
+        assert run.returncode == 0, run.stderr[-800:]
+        assert victim.read_text(encoding='utf-8') == 'secret\n'
+        assert 'none is removed' in run.stdout
+
+    def test_a_symlinked_directory_is_not_followed_out(self, tmp_path):
+        """`kustomize/` replaced by a link to a shared directory: nothing in it
+        is removed, nothing is rmdir'ed through it, no traceback, marker written."""
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._FIRST).returncode == 0
+        shared = tmp_path / 'shared'
+        import shutil
+        shutil.copytree(out / 'kustomize', shared)
+        shutil.rmtree(out / 'kustomize')
+        symlink_or_skip(shared, out / 'kustomize')
+        before = {p.relative_to(shared).as_posix(): p.read_bytes()
+                  for p in shared.rglob('*') if p.is_file()}
+        run = self._cli(out, *self._SECOND)
+        assert run.returncode == 0, run.stderr[-800:]
+        assert 'Traceback' not in run.stderr
+        assert {p.relative_to(shared).as_posix(): p.read_bytes()
+                for p in shared.rglob('*') if p.is_file()} == before
+        assert 'resolves outside --output-dir' in run.stdout
+        assert 'kustomize/base/README.md' in self._ledger(out)
+
+    def test_a_file_that_cannot_be_removed_is_named_and_the_marker_written(
+            self, tmp_path, monkeypatch, capsys):
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._FIRST).returncode == 0
+        stuck = out / '.gitlab-ci.d' / 'dynamic-alerting.yml'
+        real_unlink = ip.Path.unlink
+
+        def unlink(self, *a, **k):
+            if self == stuck:
+                raise PermissionError(1, 'Operation not permitted', str(self))
+            return real_unlink(self, *a, **k)
+        monkeypatch.setattr(ip.Path, 'unlink', unlink)
+        monkeypatch.setattr(ip, '_LANG', 'en')
+        monkeypatch.setattr(sys, 'argv', [
+            'init_project.py', '-o', str(out), '--non-interactive', *self._SECOND])
+        ip.main()
+        printed = capsys.readouterr()
+        assert stuck.is_file()
+        assert 'could not remove .gitlab-ci.d/dynamic-alerting.yml' in printed.err
+        assert ('.gitlab-ci.d/dynamic-alerting.yml (stale: no longer generated) '
+                '(could not be removed) → kept') in printed.out
+        ledger = self._ledger(out)
+        assert '.gitlab-ci.d/dynamic-alerting.yml' in ledger           # still init's
+        assert 'environments/prod/values.yaml' in ledger                # marker rewritten
+        assert '.gitlab-ci.yml' not in ledger                           # the rest removed
+
+    def test_conf_d_removal_goes_through_the_da_guard_batch(self, tmp_path, monkeypatch):
+        """ADR-036 §2: conf.d is written by Go. The stale tenant file is a
+        `delete` entry in the same batch, with its tenant as precondition, and
+        never reaches the Python unlink path."""
+        out = tmp_path / 'repo'
+        assert self._cli(out, *self._FIRST).returncode == 0
+        seen, python_unlinked = [], []
+        real_batch = ip._lib_confedit.write_all_or_exit
+        real_remove = ip._remove_stale_outside_confd
+
+        def batch(conf_dir, entries, **kw):
+            seen.extend(entries)
+            return real_batch(conf_dir, entries, **kw)
+
+        def remove(o, rels, failed=None):
+            python_unlinked.extend(rels)
+            return real_remove(o, rels, failed)
+        monkeypatch.setattr(ip._lib_confedit, 'write_all_or_exit', batch)
+        monkeypatch.setattr(ip, '_remove_stale_outside_confd', remove)
+        cfg = {'ci': 'github', 'deploy': 'helm', 'rule_packs': ['postgresql'],
+               'tenants': ['acme-a'], 'namespace': 'monitoring',
+               'da_tools_image': ip.DA_TOOLS_IMAGE or 'ghcr.io/x/y:1'}
+        ip.run_init(cfg, str(out), prune=['conf.d/acme-c.yaml', '.gitlab-ci.yml'])
+        assert {'path': 'acme-c.yaml', 'delete': True, 'tenants': ['acme-c']} in seen
+        assert python_unlinked == ['.gitlab-ci.yml']
+        assert not (out / 'conf.d' / 'acme-c.yaml').exists()

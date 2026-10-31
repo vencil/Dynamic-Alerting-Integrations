@@ -232,7 +232,7 @@ func TestMergeTenantProfileProblemsAreNoticesNamingFileAndProfile(t *testing.T) 
 	t.Parallel()
 	files := map[string]string{
 		"_defaults.yaml": platformMergeDefaults,
-		"_a.yaml":        "profiles:\n  strict:\n    bogus_key: \"1\"\n",
+		"_a.yaml":        "profiles:\n  strict:\n    bogus_key: \"1\"\n    _silent_mode: purple\n",
 		"_profiles.yaml": "profiles:\n  strict:\n    _silense_mode: warning\n    redis_memory:\n      default: \"50\"\n      expires: not-a-time\n    oracle_wait: \"5\"\n    mysql_connections: abc\n",
 	}
 	body := "tenants:\n  tx:\n    _profile: strict\n"
@@ -240,9 +240,15 @@ func TestMergeTenantProfileProblemsAreNoticesNamingFileAndProfile(t *testing.T) 
 	if len(kv.Errors) != 0 {
 		t.Fatalf("profile problems block the write: %q", kv.Errors)
 	}
+	// An unread key (bogus_key, _silense_mode) is the shared key verdict's
+	// to report (ADR-038 §11, decision 6), not a notice here.
+	for _, n := range kv.Notices {
+		if strings.Contains(n, "bogus_key") || strings.Contains(n, "_silense_mode") {
+			t.Errorf("an unread profile key is still a notice here: %q", n)
+		}
+	}
 	want := []struct{ file, fragment string }{
-		{"_a.yaml", `unknown key "bogus_key" not in defaults`},
-		{"_profiles.yaml", `unknown reserved key "_silense_mode"`},
+		{"_a.yaml", `_silent_mode "purple" is not a value the exporter reads`},
 		{"_profiles.yaml", "invalid `expires:`"},
 		{"_profiles.yaml", `key "oracle_wait" is declared without a platform value`},
 	}
@@ -281,13 +287,13 @@ func TestMergeTenantProfileNoticesOnlyForTheElectedProfile(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{
 		"_defaults.yaml": platformMergeDefaults,
-		"_profiles.yaml": "profiles:\n  strict:\n    bogus_key: \"1\"\n  other:\n    other_bogus: \"1\"\n",
+		"_profiles.yaml": "profiles:\n  strict:\n    _silent_mode: purple\n  other:\n    _silent_mode: blue\n",
 		"_platform.yaml": "tenants:\n  tx:\n    _profile: strict\n",
 	}
 	kv, _ := profileKV(t, files, "tenants:\n  tx:\n    redis_memory: \"60\"\n")
 	if len(kv.Errors) != 0 || len(kv.Notices) != 1 || !strings.Contains(kv.Notices[0], `profile "strict"`) ||
-		!strings.Contains(kv.Notices[0], "bogus_key") {
-		t.Errorf("errors %q notices %q, want one notice for strict's bogus_key", kv.Errors, kv.Notices)
+		!strings.Contains(kv.Notices[0], "purple") {
+		t.Errorf("errors %q notices %q, want one notice for strict's _silent_mode", kv.Errors, kv.Notices)
 	}
 }
 
@@ -375,10 +381,10 @@ func TestMergeTenantProfileNoticeWitnesses(t *testing.T) {
 			name: "M4/M6 exact text, padded _profile",
 			files: map[string]string{
 				"_defaults.yaml": platformMergeDefaults,
-				"_profiles.yaml": "profiles:\n  strict:\n    bogus_key: \"1\"\n",
+				"_profiles.yaml": "profiles:\n  strict:\n    redis_memory:\n      default: \"50\"\n      expires: bad-p\n",
 			},
 			body: "tenants:\n  tx:\n    _profile: \" strict \"\n",
-			want: []string{`NOTICE: platform file _profiles.yaml, profile "strict" (elected by tenant tx via _profile): unknown key "bogus_key" not in defaults` + tail},
+			want: []string{`NOTICE: platform file _profiles.yaml, profile "strict" (elected by tenant tx via _profile): invalid ` + "`expires:`" + ` "bad-p" on "redis_memory" (need RFC3339 e.g. 2026-07-01T00:00:00Z) — override will NOT auto-revert` + tail},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -404,8 +410,10 @@ func TestMergeTenantKeyValidationByTenant(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_cpu: 5\n  mysql_threads_running: 6\n",
-		"_profiles.yaml": "profiles:\n  strict:\n    bogus_profile_key: \"1\"\n",
-		"_platform.yaml": "tenants:\n  ta:\n    bogus_platform_key: \"1\"\n  tb:\n    bogus_platform_key: \"1\"\n",
+		// Value problems: an unread key in a profile or a platform file is
+		// the shared key verdict's (ADR-038 §11), not a notice here.
+		"_profiles.yaml": "profiles:\n  strict:\n    _silent_mode: purple\n",
+		"_platform.yaml": "tenants:\n  ta:\n    mysql_connections:\n      default: \"7\"\n      expires: \"bad\"\n  tb:\n    mysql_connections:\n      default: \"7\"\n      expires: \"bad\"\n",
 	}
 	body := "tenants:\n  ta:\n    _profile: strict\n    bogus_ta: \"1\"\n    mysql_cpu: \"3\"\n" +
 		"  tb:\n    _profile: strict\n    bogus_tb: \"1\"\n    mysql_cpu: \"3\"\n"

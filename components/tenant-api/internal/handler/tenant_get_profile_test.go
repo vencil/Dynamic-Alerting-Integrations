@@ -54,7 +54,9 @@ func TestGetTenantProfileProblemIsANoticeNotAWarning(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-		"_profiles.yaml": "profiles:\n  strict:\n    mysql_conections_typo: \"5\"\n",
+		// A value problem: an unread key is the shared key verdict's, which
+		// GET does not ask for (ADR-038 decision 11).
+		"_profiles.yaml": "profiles:\n  strict:\n    mysql_connections:\n      default: \"5\"\n      expires: bad-profile\n",
 		"tx.yaml":        "tenants:\n  tx:\n    _profile: strict\n",
 	})
 	detail := getTenantDetail(t, &Deps{ConfigDir: configDir}, "tx")
@@ -62,7 +64,7 @@ func TestGetTenantProfileProblemIsANoticeNotAWarning(t *testing.T) {
 		t.Errorf("validation_warnings = %q: a profile problem is not what a write of tx.yaml is rejected on", detail.Warnings)
 	}
 	if len(detail.Notices) != 1 || !strings.Contains(detail.Notices[0], `platform file _profiles.yaml, profile "strict"`) ||
-		!strings.Contains(detail.Notices[0], "mysql_conections_typo") || strings.Contains(detail.Notices[0], configDir) {
+		!strings.Contains(detail.Notices[0], "bad-profile") || strings.Contains(detail.Notices[0], configDir) {
 		t.Errorf("validation_notices = %q, want one naming _profiles.yaml, profile strict and the key (no server path)", detail.Notices)
 	}
 }
