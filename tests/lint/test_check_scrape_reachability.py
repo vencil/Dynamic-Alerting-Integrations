@@ -120,6 +120,8 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
         action: keep
         regex: "platform"
+      - source_labels: [__meta_kubernetes_service_name]
+        target_label: job
   - job_name: "monitoring-components"
     kubernetes_sd_configs:
       - role: service
@@ -551,6 +553,92 @@ def test_a_job_that_keeps_a_platform_service_too_is_an_error(job_name, ns):
 def test_the_label_face_scrapes_each_platform_service_once():
     """Control: the face with both drops reports nothing."""
     assert gate._platform_double_scrape(_face_jobs()) == []
+
+
+_ENDPOINTS_JOB = """
+  - job_name: "endpoints-sweep"
+    kubernetes_sd_configs:
+      - role: endpoints
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+"""
+_ENDPOINTS_DROP = """      - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
+        action: drop
+        regex: "platform"
+"""
+
+
+def test_an_endpoints_role_job_counts_as_keeping_a_platform_service():
+    """#1425 review F4a: the gate models only the `service` role's face; an
+    endpoints / pod job reaches the same pods, so it is taken to keep them
+    unless it drops the platform label — not silently assumed to keep nothing."""
+    jobs = gate.parse_scrape_jobs(_FACE_PROM_YML + _ENDPOINTS_JOB)
+    errors = gate._platform_double_scrape(jobs)
+    assert any("PLATFORM-DOUBLE-SCRAPE" in e and "endpoints-sweep" in e
+               for e in errors), errors
+
+
+def test_an_endpoints_role_job_that_drops_the_label_is_fine():
+    """Control for the F4a test: the same job with the drop reports nothing."""
+    jobs = gate.parse_scrape_jobs(_FACE_PROM_YML + _ENDPOINTS_JOB + _ENDPOINTS_DROP)
+    assert gate._platform_double_scrape(jobs) == []
+
+
+def test_the_probe_namespaces_follow_the_tenant_jobs_regex():
+    """#1425 review F4b: a tenant job keeping `tenant-.+` and not dropping the
+    label double-scrapes a platform chart in `tenant-*`. A fixed probe list
+    (`db-probe`) would never look there."""
+    jobs = _face_jobs()
+    tenant = _face_job(jobs, "tenant-exporters")
+    tenant["ns_keep_regex"] = "tenant-.+"
+    tenant["platform_label"] = None
+    errors = gate._platform_double_scrape(jobs)
+    assert any("PLATFORM-DOUBLE-SCRAPE" in e and "tenant-exporters" in e
+               for e in errors), errors
+
+
+def test_a_namespace_regex_the_gate_cannot_probe_is_an_error():
+    """Fail closed: a regex no example can be derived for is reported, not
+    skipped — a skipped namespace is an unchecked one."""
+    jobs = _face_jobs()
+    _face_job(jobs, "tenant-exporters")["ns_keep_regex"] = "[^/]+-db"
+    errors = gate._platform_double_scrape(jobs)
+    assert any("PLATFORM-PROBE-UNDERIVABLE" in e and "tenant-exporters" in e
+               for e in errors), errors
+
+
+# ── the platform job sets `job` from the Service name (#1425 review F5) ───
+
+def test_real_configmap_sets_the_platform_job_label_from_the_service():
+    assert _face_job(gate.load_repo_jobs(), "platform-components")["job_from_service_name"]
+
+
+@pytest.mark.parametrize("tail", [
+    "",  # the relabel removed
+    # a later step overwriting `job` wins
+    """      - target_label: job
+        replacement: platform-components
+""",
+])
+def test_a_platform_job_without_the_service_name_job_label_is_an_error(tail):
+    """Without it every platform target is job="platform-components" and
+    up{job="threshold-exporter"} & co. select nothing."""
+    yml = _FACE_PROM_YML.replace(
+        """      - source_labels: [__meta_kubernetes_service_name]
+        target_label: job
+""", "" if not tail else """      - source_labels: [__meta_kubernetes_service_name]
+        target_label: job
+""" + tail)
+    result = _check(consumed={}, jobs=gate.parse_scrape_jobs(yml), services=[])
+    assert any("PLATFORM-JOB-LABEL" in e and "platform-components" in e
+               for e in result["errors"]), result["errors"]
+
+
+def test_the_label_face_sets_the_platform_job_label():
+    """Control for the F5 test."""
+    assert _check(consumed={}, jobs=_face_jobs(), services=[])["errors"] == []
 
 
 # ── helm-service chart face (#1286) ───────────────────────────────────────

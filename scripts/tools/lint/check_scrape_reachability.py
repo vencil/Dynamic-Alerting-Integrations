@@ -39,7 +39,13 @@ k8s/**. Each leaf is classified:
                           opens helm/. The chart face is pinned instead by
                           tests/lint/test_check_scrape_reachability.py, which
                           renders each chart and requires such a Service
-                          (#1286).
+                          (#1286). Two job-side faults are errors of their
+                          own: a platform Service kept by more than one job
+                          (PLATFORM-DOUBLE-SCRAPE — endpoints / pod role jobs
+                          count as keeping it unless they drop the label, and
+                          each job's namespace keep regex picks the namespaces
+                          probed), and a label-keeping job whose `job` is not
+                          the Service name (PLATFORM-JOB-LABEL).
   REACHABLE-IF-EXPORTED tenant-exporters face: the job WOULD admit a db-* ns
                         annotated Service, but per-tenant targets only exist at
                         runtime and whether the exporter exposes this exact
@@ -182,6 +188,8 @@ PLATFORM_SCRAPE_VALUE = "platform"
 #: [a-zA-Z0-9_] becomes `_`, under `__meta_kubernetes_service_label_`.
 PLATFORM_SCRAPE_META = ("__meta_kubernetes_service_label_"
                         + re.sub(r"[^a-zA-Z0-9_]", "_", PLATFORM_SCRAPE_LABEL))
+#: The meta label kubernetes_sd sets to the Service's name.
+SERVICE_NAME_META = "__meta_kubernetes_service_name"
 
 # The charts behind the helm-service families. A chart is what the family's
 # target comes from; tests/lint/test_check_scrape_reachability.py renders each
@@ -415,6 +423,9 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
             # "keep" / "drop" when a relabel step keeps or drops Services whose
             # platform scrape label is PLATFORM_SCRAPE_VALUE (#1425), else None
             "platform_label": None,
+            # True when the LAST relabel step writing `job` copies the Service
+            # name verbatim (#1425: platform alerts select up{job="<service>"})
+            "job_from_service_name": False,
             "name_rules": [],   # [(action, regex)] over __name__
             "label_rules": [],  # [(action, source_labels, regex)] other keep/drop
         }
@@ -424,6 +435,12 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
                 ((sd.get("namespaces") or {}).get("names")) or [])
         for rc in sc.get("relabel_configs", []) or []:
             src = rc.get("source_labels", [])
+            if (rc.get("action", "replace") == "replace"
+                    and rc.get("target_label") == "job"):
+                job["job_from_service_name"] = (
+                    src == [SERVICE_NAME_META]
+                    and rc.get("regex", "(.*)") == "(.*)"
+                    and rc.get("replacement", "$1") == "$1")
             if (src == [PLATFORM_SCRAPE_META] and rc.get("action") in ("keep", "drop")
                     and rc.get("regex") == PLATFORM_SCRAPE_VALUE):
                 job["platform_label"] = rc.get("action")
@@ -542,11 +559,106 @@ def _keeps_platform_everywhere(job: dict) -> bool:
             and not job["sd_namespaces"] and job["ns_keep_regex"] is None)
 
 
-#: Namespaces a platform chart's Service is probed in when checking that
-#: exactly one job keeps it: the platform namespace, a tenant-shaped one (the
-#: tenant job's keep regex) and one neither job names. Synthetic strings, not
-#: tenant ids (dev-rule #2).
-_PLATFORM_PROBE_NAMESPACES = ("monitoring", "db-probe", "da-probe")
+#: Kubernetes SD roles whose targets can be a platform chart's pods. The gate
+#: models only the `service` role's selection face; a job of these roles is
+#: taken to keep a platform Service unless its namespace face excludes it or
+#: it drops the platform label (#1425 review F4a) — guessing "no" would hide
+#: exactly the double scrape this check exists for.
+_ROLES_REACHING_PLATFORM_PODS = ("endpoints", "endpointslice", "pod")
+
+#: A namespace no job is expected to name — the "installed anywhere" case.
+#: A synthetic string, not a tenant id (dev-rule #2).
+_UNNAMED_PROBE_NAMESPACE = "da-probe"
+
+
+def _may_keep_platform_service(svc: dict, job: dict) -> bool:
+    """Whether *job* could keep *svc* — exact for the `service` role,
+    conservative for the roles in _ROLES_REACHING_PLATFORM_PODS."""
+    if job["sd_role"] == "service":
+        return _service_admitted(svc, job)
+    if job["sd_role"] not in _ROLES_REACHING_PLATFORM_PODS:
+        return False
+    ns = svc["namespace"]
+    if job["sd_namespaces"] and ns not in job["sd_namespaces"]:
+        return False
+    if job["ns_keep_regex"] is not None and re.fullmatch(job["ns_keep_regex"], ns) is None:
+        return False
+    return job["platform_label"] != "drop"
+
+
+def _regex_example(regex: str) -> str | None:
+    """A string *regex* fully matches, or None when it cannot be derived.
+
+    Walks the parsed pattern taking the first branch / first class member and
+    the minimum repeat (at least once); the caller re-checks with fullmatch,
+    so a construct this does not model yields None, never a wrong string.
+    """
+    try:
+        import re._parser as sre  # Python 3.11+
+        import re._constants as c
+    except ImportError:  # pragma: no cover — older Pythons
+        import sre_parse as sre
+        import sre_constants as c
+
+    def gen(items) -> str:
+        out = []
+        for op, av in items:
+            if op is c.LITERAL:
+                out.append(chr(av))
+            elif op is c.ANY:
+                out.append("probe")
+            elif op in (c.MAX_REPEAT, c.MIN_REPEAT):
+                lo, _hi, sub = av
+                out.append(gen(sub) * max(lo, 1))
+            elif op is c.SUBPATTERN:
+                out.append(gen(av[-1]))
+            elif op is c.BRANCH:
+                out.append(gen(av[1][0]))
+            elif op is c.IN:
+                kind, val = av[0]
+                if kind is c.LITERAL:
+                    out.append(chr(val))
+                elif kind is c.RANGE:
+                    out.append(chr(val[0]))
+                elif kind is c.CATEGORY and val is c.CATEGORY_DIGIT:
+                    out.append("0")
+                elif kind is c.CATEGORY and val is c.CATEGORY_WORD:
+                    out.append("a")
+                else:
+                    raise ValueError(f"unmodelled class member {kind}")
+            elif op is c.AT:
+                continue
+            else:
+                raise ValueError(f"unmodelled regex op {op}")
+        return "".join(out)
+
+    try:
+        example = gen(sre.parse(regex))
+    except (ValueError, re.error, TypeError, IndexError):
+        return None
+    return example if re.fullmatch(regex, example) else None
+
+
+def _platform_probe_namespaces(jobs: list[dict]) -> tuple[list[str], list[str]]:
+    """(namespaces, errors): every namespace a job names or keeps by regex,
+    plus one none names (#1425 review F4b: derived from the jobs, so a tenant
+    job's regex changing does not leave the probe testing a stale namespace)."""
+    names = {_UNNAMED_PROBE_NAMESPACE}
+    errors = []
+    for j in jobs:
+        names.update(j["sd_namespaces"])
+        if j["ns_keep_regex"] is not None:
+            example = _regex_example(j["ns_keep_regex"])
+            if example is None:
+                errors.append(
+                    f"PLATFORM-PROBE-UNDERIVABLE: job '{j['job']}' keeps namespaces "
+                    f"by {j['ns_keep_regex']!r}, which the gate cannot turn into a "
+                    "probe namespace — so it cannot tell whether that job also "
+                    "keeps a platform Service. Simplify the regex or extend "
+                    "_regex_example. (#1425)")
+            else:
+                names.add(example)
+    return sorted(names), errors
 
 
 def _platform_double_scrape(jobs: list[dict]) -> list[str]:
@@ -556,12 +668,12 @@ def _platform_double_scrape(jobs: list[dict]) -> list[str]:
     `job` and `tenant` (#1425: a platform chart in a db-* namespace), so every
     `up{job="threshold-exporter"}`-style platform alert loses its target.
     """
-    errors = []
-    for ns in _PLATFORM_PROBE_NAMESPACES:
+    namespaces, errors = _platform_probe_namespaces(jobs)
+    for ns in namespaces:
         probe = {"name": "platform-probe", "namespace": ns,
                  "annotations": {SCRAPE_ANNOTATION: "true"},
                  "labels": {PLATFORM_SCRAPE_LABEL: PLATFORM_SCRAPE_VALUE}}
-        keeping = sorted(j["job"] for j in jobs if _service_admitted(probe, j))
+        keeping = sorted(j["job"] for j in jobs if _may_keep_platform_service(probe, j))
         if len(keeping) > 1:
             errors.append(
                 f"PLATFORM-DOUBLE-SCRAPE: a Service labelled "
@@ -569,6 +681,23 @@ def _platform_double_scrape(jobs: list[dict]) -> list[str]:
                 f"kept by {len(keeping)} jobs ({', '.join(keeping)}) — drop that "
                 f"label in every job but the platform one. (#1425)")
     return errors
+
+
+def _platform_job_label(jobs: list[dict]) -> list[str]:
+    """Errors for a job keeping platform Services without `job` ← Service name.
+
+    The platform alerts select `up{job="threshold-exporter"}`,
+    `up{job="tenant-api"}` and so on; without the relabel every target is
+    `job="<scrape job name>"` and those selectors match nothing — no error,
+    the alerts just never fire. (#1425 review F5)
+    """
+    return [
+        f"PLATFORM-JOB-LABEL: job '{j['job']}' keeps platform Services but does "
+        f"not end its `job` relabelling with source_labels [{SERVICE_NAME_META}] "
+        "→ target_label job — every up{job=\"<service>\"} platform alert would "
+        "select nothing. (#1425)"
+        for j in jobs
+        if j["platform_label"] == "keep" and not j["job_from_service_name"]]
 
 
 def _tenant_exporter_face_exists(jobs: list[dict]) -> bool:
@@ -762,7 +891,7 @@ def run_check(
     for cls, _reason in classes.values():
         counts[cls] += 1
 
-    errors: list[str] = _platform_double_scrape(jobs)
+    errors: list[str] = _platform_double_scrape(jobs) + _platform_job_label(jobs)
     infos: list[str] = []
 
     for m, (cls, reason) in classes.items():

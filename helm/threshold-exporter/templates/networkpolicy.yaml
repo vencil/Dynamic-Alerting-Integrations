@@ -2,21 +2,26 @@
   The exporter's NetworkPolicies (#1425), in the release namespace. They used
   to be raw manifests pinned to `monitoring` (k8s/03-monitoring/
   network-policies.yaml), which a release installed anywhere else never got.
-  An empty prometheusPodLabels would render `matchLabels: {}` — every pod in
-  prometheusNamespace — so it is refused rather than silently widened.
+  allowExternal (default true) restricts the port only: the chart cannot know
+  the scraper's pod labels, and a wrong guess drops the scrape with nothing
+  to say so. With allowExternal=false an empty prometheusPodLabels would
+  render `matchLabels: {}` — every pod in prometheusNamespace — so it is
+  refused rather than silently widened.
   Named apart from the old raw `allow-threshold-exporter-*` policies on
   purpose: a cluster that applied those has them in `monitoring` without
   Helm's ownership metadata, and a same-named chart object would make the
   install fail. The old ones only duplicate these allows; delete them.
 */ -}}
 {{- if .Values.networkPolicy.enabled }}
+{{- if not .Values.networkPolicy.allowExternal }}
 {{- if not .Values.networkPolicy.prometheusPodLabels }}
-{{- fail "networkPolicy.prometheusPodLabels must be a non-empty label selector: an empty matchLabels admits every pod in networkPolicy.prometheusNamespace to the exporter" }}
+{{- fail "networkPolicy.prometheusPodLabels must be a non-empty label selector when networkPolicy.allowExternal is false: an empty matchLabels admits every pod in networkPolicy.prometheusNamespace to the exporter" }}
 {{- end }}
 {{- if not .Values.networkPolicy.prometheusNamespace }}
-{{- fail "networkPolicy.prometheusNamespace must name the namespace Prometheus runs in" }}
+{{- fail "networkPolicy.prometheusNamespace must name the namespace your scraper runs in when networkPolicy.allowExternal is false" }}
 {{- end }}
-# Only Prometheus may scrape the metrics port.
+{{- end }}
+# The metrics port only; with allowExternal=false, only from the scraper.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -31,6 +36,7 @@ spec:
   policyTypes:
     - Ingress
   ingress:
+    {{- if not .Values.networkPolicy.allowExternal }}
     - from:
         - namespaceSelector:
             matchLabels:
@@ -39,6 +45,9 @@ spec:
             matchLabels:
               {{- toYaml .Values.networkPolicy.prometheusPodLabels | nindent 14 }}
       ports:
+    {{- else }}
+    - ports:
+    {{- end }}
         # The container port by name (deployment.yaml), not service.port: a
         # NetworkPolicy matches the pod's port.
         - protocol: TCP

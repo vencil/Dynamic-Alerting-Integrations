@@ -20,16 +20,24 @@ service:
 # (#1425). Before #1425 these were two raw manifests pinned to `monitoring`
 # (k8s/03-monitoring/network-policies.yaml); a release installed anywhere else
 # got none, so the exporter silently lost its ingress isolation.
-# Ingress: only Prometheus may reach the metrics port. Egress: DNS only — the
-# exporter reads its mounted ConfigMap and talks to nothing else.
+# Ingress: the metrics port only. Egress: DNS only — the exporter reads its
+# mounted ConfigMap and talks to nothing else.
 networkPolicy:
   enabled: true
-  # Namespace Prometheus runs in.
-  prometheusNamespace: monitoring
-  # Labels of the Prometheus pods. Must not be empty: an empty selector
-  # matches EVERY pod in prometheusNamespace, so the chart refuses it.
-  prometheusPodLabels:
-    app: prometheus
+  # true (default): any pod may reach the metrics port; the policy restricts
+  # the port, not the source. The chart cannot know your scraper's labels —
+  # kube-prometheus-stack's pods carry `app.kubernetes.io/name: prometheus`,
+  # not `app: prometheus`, and vmagent / a blackbox probe differ again — so a
+  # guessed default would silently cut the scrape instead.
+  # false: only pods matching prometheusPodLabels in prometheusNamespace; both
+  # must then be set, and the chart refuses to render without them.
+  allowExternal: true
+  # Namespace your scraper runs in. Read only when allowExternal is false.
+  prometheusNamespace: ""
+  # Labels of your scraper's pods. Read only when allowExternal is false.
+  # Must not be empty then: an empty selector matches EVERY pod in
+  # prometheusNamespace, so the chart refuses it.
+  prometheusPodLabels: {}
 
 # Exporter runtime config
 exporter:

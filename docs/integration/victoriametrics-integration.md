@@ -178,6 +178,7 @@ conf.d/ 樹（GitOps merge）
 - [ ] 確認 vmalert 配置可載入 GitHub raw URL 或本地 mount Rule Pack YAML
 - [ ] 部署 threshold-exporter（[helm/threshold-exporter/](https://github.com/vencil/Dynamic-Alerting-Integrations/tree/main/helm/threshold-exporter)）
 - [ ] 確認 vmagent scrape threshold-exporter `/metrics`
+  **NetworkPolicy**：chart 預設替 exporter 建 NetworkPolicy，入站**只限 metrics port、不限來源**（`networkPolicy.allowExternal: true`）——chart 無從得知你的 vmagent 帶什麼 pod label，猜錯會讓 scrape 靜默斷掉。要把入站收到只放 vmagent，設 `networkPolicy.allowExternal: false`，並填 `networkPolicy.prometheusNamespace`（它所在的 namespace）與 `networkPolicy.prometheusPodLabels`（它 pod 上的 label）；兩者都不可為空，否則 chart 拒絕 render。
 - [ ] 觀察 `user_threshold{...}` metric 出現在 VM
 - [ ] vmalert 啟動後檢查 alert 觸發
 

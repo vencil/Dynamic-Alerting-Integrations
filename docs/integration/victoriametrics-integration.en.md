@@ -178,6 +178,7 @@ After finding your path via the §1 decision tree:
 - [ ] Verify that vmalert configuration can load a GitHub raw URL or locally-mounted Rule Pack YAML
 - [ ] Deploy threshold-exporter ([helm/threshold-exporter/](https://github.com/vencil/Dynamic-Alerting-Integrations/tree/main/helm/threshold-exporter))
 - [ ] Confirm vmagent scrapes the threshold-exporter `/metrics`
+  **NetworkPolicy**: the chart creates a NetworkPolicy for the exporter that, by default, restricts ingress to the metrics port **without restricting the source** (`networkPolicy.allowExternal: true`) — the chart cannot know your vmagent's pod labels, and a wrong guess silently cuts the scrape. To admit only your vmagent, set `networkPolicy.allowExternal: false` and fill in `networkPolicy.prometheusNamespace` (the namespace it runs in) and `networkPolicy.prometheusPodLabels` (its pod labels); both must be non-empty, or the chart refuses to render.
 - [ ] Observe `user_threshold{...}` metric appearing in VM
 - [ ] After vmalert starts, check that alerts trigger
 

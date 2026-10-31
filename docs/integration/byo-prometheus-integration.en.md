@@ -189,6 +189,8 @@ scrape_configs:
 
 > **Tip**: `threshold-exporter` is deployed as HA ×2 replicas with Service-level load balancing. Both replicas emit identical metrics (based on the same ConfigMap), so Prometheus obtains the complete threshold set from either Pod.
 
+> **NetworkPolicy**: the chart creates a NetworkPolicy for the exporter that, by default, restricts ingress to the metrics port **without restricting the source** (`networkPolicy.allowExternal: true`) — the chart cannot know your Prometheus's pod labels, and a wrong guess silently cuts the scrape. To admit only your Prometheus, set `networkPolicy.allowExternal: false` and fill in `networkPolicy.prometheusNamespace` (the namespace it runs in) and `networkPolicy.prometheusPodLabels` (its pod labels); both must be non-empty, or the chart refuses to render.
+
 ### Verification
 
 ```bash

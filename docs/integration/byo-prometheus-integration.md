@@ -189,6 +189,8 @@ scrape_configs:
 
 > **提示**：`threshold-exporter` 以 HA ×2 副本部署，Service 會自動負載均衡。兩個副本吐出的指標內容完全一致（基於相同 ConfigMap），Prometheus 不論抓到哪個 Pod 都能取得完整的閾值集合。
 
+> **NetworkPolicy**：chart 預設替 exporter 建 NetworkPolicy，入站**只限 metrics port、不限來源**（`networkPolicy.allowExternal: true`）——chart 無從得知你的 Prometheus 帶什麼 pod label，猜錯會讓 scrape 靜默斷掉。要把入站收到只放 Prometheus，設 `networkPolicy.allowExternal: false`，並填 `networkPolicy.prometheusNamespace`（它所在的 namespace）與 `networkPolicy.prometheusPodLabels`（它 pod 上的 label）；兩者都不可為空，否則 chart 拒絕 render。
+
 ### 驗證
 
 ```bash

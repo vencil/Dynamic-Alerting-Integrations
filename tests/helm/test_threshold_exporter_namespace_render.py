@@ -160,25 +160,58 @@ def test_the_raw_manifests_no_longer_pin_the_exporters_policies():
         "a raw NetworkPolicy still selects the exporter pods")
 
 
+_INGRESS_PORT = [{"protocol": "TCP", "port": "http"}]
+_REPO_OVERLAYS = ["local", "ci"]
+
+
 @_needs_helm
-def test_the_policies_land_in_the_release_namespace_and_admit_only_prometheus():
+def test_by_default_the_policy_restricts_the_port_not_the_source():
+    """allowExternal defaults to true: the chart cannot know the scraper's pod
+    labels (kube-prometheus-stack's are `app.kubernetes.io/name: prometheus`,
+    not `app: prometheus`), and a guessed `from` silently drops its scrape."""
     pols = _policies(_docs("-n", "obs"))
     assert set(pols) == {"threshold-exporter-ingress", "threshold-exporter-egress"}
     assert {p["metadata"]["namespace"] for p in pols.values()} == {"obs"}
     rule = pols["threshold-exporter-ingress"]["spec"]["ingress"]
-    assert rule == [{
-        "from": [{"namespaceSelector": {"matchLabels": {
-                      "kubernetes.io/metadata.name": "monitoring"}},
-                  "podSelector": {"matchLabels": {"app": "prometheus"}}}],
-        "ports": [{"protocol": "TCP", "port": "http"}],
-    }], rule
+    assert rule == [{"ports": _INGRESS_PORT}], rule
     egress = pols["threshold-exporter-egress"]["spec"]["egress"]
     assert [p["port"] for r in egress for p in r["ports"]] == [53, 53], egress
 
 
 @_needs_helm
+@pytest.mark.parametrize("env", _REPO_OVERLAYS)
+def test_the_repo_overlays_admit_only_the_repo_prometheus(env):
+    """The repo's own installs (`-f environments/<env>/...`) know their
+    Prometheus — k8s/03-monitoring/deployment-prometheus.yaml — so they isolate."""
+    overlay = _REPO_ROOT / "environments" / env / "threshold-exporter.yaml"
+    pols = _policies(_docs("-n", "monitoring", "-f", str(overlay)))
+    rule = pols["threshold-exporter-ingress"]["spec"]["ingress"]
+    assert rule == [{
+        "from": [{"namespaceSelector": {"matchLabels": {
+                      "kubernetes.io/metadata.name": "monitoring"}},
+                  "podSelector": {"matchLabels": {"app": "prometheus"}}}],
+        "ports": _INGRESS_PORT,
+    }], rule
+
+
+def test_the_repo_overlays_name_the_repo_prometheus_labels():
+    """The overlays' selector must match the Prometheus the repo deploys, or
+    the repo's own exporter scrape is cut."""
+    dep = yaml.safe_load((_REPO_ROOT / "k8s" / "03-monitoring" /
+                          "deployment-prometheus.yaml").read_text(encoding="utf-8"))
+    pod_labels = dep["spec"]["template"]["metadata"]["labels"]
+    for env in _REPO_OVERLAYS:
+        np = yaml.safe_load((_REPO_ROOT / "environments" / env /
+                             "threshold-exporter.yaml").read_text(encoding="utf-8")
+                            )["networkPolicy"]
+        assert dep["metadata"]["namespace"] == np["prometheusNamespace"], env
+        assert np["prometheusPodLabels"].items() <= pod_labels.items(), env
+
+
+@_needs_helm
 def test_prometheus_location_is_a_value():
-    pols = _policies(_docs("--set", "networkPolicy.prometheusNamespace=obs-mon",
+    pols = _policies(_docs("--set", "networkPolicy.allowExternal=false",
+                           "--set", "networkPolicy.prometheusNamespace=obs-mon",
                            "--set", "networkPolicy.prometheusPodLabels.app=prom"))
     peer = pols["threshold-exporter-ingress"]["spec"]["ingress"][0]["from"][0]
     assert peer["namespaceSelector"]["matchLabels"] == {
@@ -187,11 +220,20 @@ def test_prometheus_location_is_a_value():
 
 
 @_needs_helm
-def test_an_empty_prometheus_selector_is_refused():
+def test_an_empty_prometheus_selector_is_refused_when_isolating():
     """`matchLabels: {}` admits every pod in the namespace — refused, not widened."""
-    proc = _render("--set", "networkPolicy.prometheusPodLabels=null")
+    proc = _render("--set", "networkPolicy.allowExternal=false",
+                   "--set", "networkPolicy.prometheusNamespace=obs-mon")
     assert proc.returncode != 0
     assert "prometheusPodLabels must be a non-empty label selector" in proc.stderr
+
+
+@_needs_helm
+def test_an_empty_prometheus_namespace_is_refused_when_isolating():
+    proc = _render("--set", "networkPolicy.allowExternal=false",
+                   "--set", "networkPolicy.prometheusPodLabels.app=prom")
+    assert proc.returncode != 0
+    assert "prometheusNamespace must name the namespace" in proc.stderr
 
 
 @_needs_helm
