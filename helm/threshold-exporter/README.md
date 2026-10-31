@@ -29,6 +29,8 @@ helm install threshold-exporter ./helm/threshold-exporter \
 
 建立 Deployment (2 replicas + PDB) · Service (含 Prometheus scrape annotations) · ConfigMap (`threshold-config`；設 `thresholdConfig.existingConfigMap` 時不建) · ServiceMonitor (optional)。所有資源都落在 release 的 namespace（`-n`）；平台的 Prometheus SD 清單預設涵蓋 `monitoring`，裝到別的 namespace 要一併把它加進 SD 清單（#1425）。
 
+⚠️ chart 帶 `values.schema.json`：這個 chart 沒有的 key（拼錯、或已移除的舊 key）會讓 `helm install`／`upgrade`／`template` 直接失敗，不再被靜默忽略（#1425）。`thresholdConfig.tenants`／`defaults`／`state_filters`、`service.annotations`、`resources`、各 probe、`rules.operator.serviceMonitor.labels` 是開放欄位，不受此限。
+
 ## 完整文件
 
 - Go 應用 + 三種 config 注入方式（Helm / kubectl / GitOps）：[`components/threshold-exporter/README.md`](../../components/threshold-exporter/README.md)

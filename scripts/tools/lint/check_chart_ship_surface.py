@@ -123,6 +123,12 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
     "helm/threshold-exporter": {
         "Chart.yaml": (SHIP, "chart metadata — helm requires it"),
         "values.yaml": (SHIP, "the chart's default values"),
+        "values.schema.json": (
+            SHIP,
+            "#1425: helm validates the customer's values against it at install "
+            "— a key this chart does not have fails the render instead of "
+            "being silently ignored. Useless unless it ships.",
+        ),
         "README.md": (
             EXCLUDE,
             "⚠️ NOT shipped, despite reading like chart documentation: line 12 "
