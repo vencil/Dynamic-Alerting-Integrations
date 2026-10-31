@@ -3168,7 +3168,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 |---|---|---|
 | `<tenant-id>` | — | 必填，除非用 `--all` |
 | `--all` | false | 對 conf.d/ 內所有 tenant 各印一次 |
-| `--conf-d <PATH>` | `conf.d` | conf.d/ 目錄路徑 |
+| `--conf-d <PATH>` | `conf.d` | conf.d/ 目錄路徑。給 `''`（例如未設定的 shell 變數）⇒ exit 2，不再當成目前目錄（[#3406](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3406)） |
 | `--expect-merged-hash <H>` | 空 | 與實際比對；不一致時 exit 1 |
 | `--json` | false | JSON 輸出（給 pipe 給 jq diff 用） |
 

@@ -1042,6 +1042,7 @@ EMPTY_SITES_3406 = [
     ("add-frontmatter --base-dir", "add_frontmatter.py", ["--base-dir", ""], "--base-dir"),
     ("doc-coverage --repo-root", "doc_coverage.py", ["--repo-root", ""], "--repo-root"),
     ("migrate-conf-d --conf-d", "migrate_conf_d.py", ["--conf-d", "", "--dry-run"], "--conf-d"),
+    ("tenant-verify --conf-d", "tenant_verify.py", ["--all", "--conf-d", ""], "--conf-d"),
 ]
 
 

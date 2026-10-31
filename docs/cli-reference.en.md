@@ -3182,7 +3182,7 @@ da-tools tenant-verify db-fin-a --conf-d conf.d/ \
 |---|---|---|
 | `<tenant-id>` | — | Required unless `--all` is given |
 | `--all` | false | Verify every tenant under conf.d/ |
-| `--conf-d <PATH>` | `conf.d` | Path to the conf.d/ directory |
+| `--conf-d <PATH>` | `conf.d` | Path to the conf.d/ directory. `''` (an unset shell variable, say) ⇒ exit 2, no longer the current directory ([#3406](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3406)) |
 | `--expect-merged-hash <H>` | empty | Compare actual `merged_hash` against this value; exits 1 on mismatch |
 | `--json` | false | Emit JSON (for piping to jq diff) |
 
