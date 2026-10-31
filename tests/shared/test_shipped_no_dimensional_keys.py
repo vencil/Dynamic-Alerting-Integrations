@@ -19,6 +19,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+import _lib_consumer_read as cr
+
 _ROOT = Path(__file__).resolve().parents[2]
 
 # Every conf.d tree the repo ships to operators or readers.
@@ -69,7 +71,7 @@ def test_the_scan_sees_the_shipped_trees():
     """An empty scan is green forever."""
     files = _confd_files()
     assert len(files) >= 5, files
-    packs = sorted((_ROOT / "rule-packs").glob("rule-pack-*.yaml"))
+    packs = cr.RULE_PACKS.files_under(_ROOT)
     assert len(packs) >= 10, packs
 
 
@@ -107,7 +109,7 @@ def test_shipped_confd_has_no_dimensional_key():
 
 def test_rule_pack_headers_show_no_dimensional_key():
     found = []
-    for f in sorted((_ROOT / "rule-packs").glob("rule-pack-*.yaml")):
+    for f in cr.RULE_PACKS.files_under(_ROOT):
         for n, line in enumerate(f.read_text(encoding="utf-8").splitlines(), 1):
             if not line.startswith("#"):
                 break  # the leading comment header only
