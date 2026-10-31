@@ -572,19 +572,37 @@ def test_reconcile_excludes_manifest_from_state_files(tmp_path):
     assert r2["manifest_change"] is None  # already consistent
 
 
-def test_reconcile_state_dir_missing_distinct_from_empty(tmp_path, capsys):
-    """state_dir typo (path doesn't exist) should produce a more pointed
-    message than legitimately-empty state_dir, since the former is
-    almost always a user mistake."""
-    # Case 1: nonexistent path
-    missing = tmp_path / "nope" / "state"
+@pytest.mark.parametrize("kind", ["missing", "file"])
+def test_a_given_state_dir_that_is_not_a_directory_is_a_caller_error(tmp_path, kind):
+    """#3392: a --state-dir the caller gave that is not there (or is a file)
+    was read as an empty state directory and an empty manifest was written,
+    rc 0 (a file was not even reported as missing). Now rc 2, named, and
+    nothing is written."""
+    from _lib_exitcodes import CallerError
+    state = tmp_path / "nope" / "state"
+    if kind == "file":
+        state = tmp_path / "state.json"
+        state.write_text("{}", encoding="utf-8")
     manifest = tmp_path / "manifest.json"
-    rc = sr.main(["--state-dir", str(missing), "--manifest-path", str(manifest)])
+    with pytest.raises(CallerError) as exc:
+        sr.main(["--state-dir", str(state), "--manifest-path", str(manifest)])
+    assert exc.value.reason == "dir_not_found"
+    assert str(exc.value).startswith(f"--state-dir {state}: ")
+    assert not manifest.exists()
+
+
+def test_the_default_state_dir_missing_is_distinct_from_empty(tmp_path, capsys, monkeypatch):
+    """The default --state-dir nobody gave keeps its reading (#3392 judges
+    only a path the caller gave): not there is reported as such, an empty
+    manifest is written, rc 0 — and an existing empty one says "No state
+    files found"."""
+    monkeypatch.chdir(tmp_path)
+    rc = sr.main([])
     out_missing = capsys.readouterr().out
     assert "does not exist" in out_missing
-    assert rc == 0  # nonexistent → empty manifest written → exit 0
+    assert rc == 0
+    assert (tmp_path / ".da" / "manifest.json").exists()
 
-    # Case 2: existing but empty
     empty = tmp_path / "empty_state"
     empty.mkdir()
     manifest2 = tmp_path / "manifest2.json"
@@ -593,6 +611,61 @@ def test_reconcile_state_dir_missing_distinct_from_empty(tmp_path, capsys):
     assert "No state files found" in out_empty
     assert "does not exist" not in out_empty
     assert rc == 0
+
+
+@pytest.mark.parametrize("body", ["{not json", "[1]", "\n", "\udcff\udcfe{}"])
+def test_an_unreadable_manifest_is_not_overwritten(tmp_path, body):
+    """#3392: an existing manifest that cannot be read as one was taken for
+    "no manifest", reported as "no count change" and overwritten at rc 0. Now
+    rc 2 (`manifest_unreadable`), before any state file is migrated, and the
+    file is left as it was."""
+    from _lib_exitcodes import CallerError
+    state = tmp_path / "state"
+    state.mkdir()
+    (state / "c.json").write_text(json.dumps({"schema_version": "1.0"}), encoding="utf-8")
+    manifest = tmp_path / "manifest.json"
+    manifest.write_bytes(body.encode("utf-8", "surrogateescape"))  # the last: not UTF-8
+    with pytest.raises(CallerError) as exc:
+        sr.main(["--state-dir", str(state), "--manifest-path", str(manifest)])
+    assert exc.value.reason == "manifest_unreadable"
+    assert str(exc.value).startswith(f"--manifest-path {manifest}: ")
+    assert manifest.read_bytes() == body.encode("utf-8", "surrogateescape")
+
+
+def test_an_empty_manifest_is_rebuilt(tmp_path, capsys):
+    """#3392 (owner ruling): a 0-byte manifest is never one this tool wrote
+    (its write is atomic) and holds nothing to lose — rebuilt like a missing
+    one, at rc 0, with a warning. Only 0 bytes: a lone newline is
+    `manifest_unreadable` above."""
+    state = tmp_path / "state"
+    state.mkdir()
+    manifest = tmp_path / "manifest.json"
+    manifest.write_bytes(b"")
+    assert sr.main(["--state-dir", str(state), "--manifest-path", str(manifest)]) == 0
+    assert json.loads(manifest.read_text(encoding="utf-8"))["states"] == []
+    assert f"WARNING: --manifest-path {manifest} is empty; taken for no manifest" \
+        in capsys.readouterr().err
+
+
+def test_an_empty_manifest_is_left_alone_under_dry_run(tmp_path, capsys):
+    """--dry-run writes nothing, the empty manifest included; the warning
+    does not claim a rebuild."""
+    state = tmp_path / "state"
+    state.mkdir()
+    manifest = tmp_path / "manifest.json"
+    manifest.write_bytes(b"")
+    assert sr.main(["--state-dir", str(state), "--manifest-path", str(manifest),
+                    "--dry-run"]) == 0
+    assert manifest.read_bytes() == b""
+    assert "rebuilding" not in capsys.readouterr().err
+
+
+def test_a_missing_manifest_is_a_first_build(tmp_path):
+    state = tmp_path / "state"
+    state.mkdir()
+    manifest = tmp_path / "sub" / "manifest.json"
+    assert sr.main(["--state-dir", str(state), "--manifest-path", str(manifest)]) == 0
+    assert json.loads(manifest.read_text(encoding="utf-8"))["states"] == []
 
 
 def test_reconcile_report_includes_state_dir_missing_flag(tmp_path):

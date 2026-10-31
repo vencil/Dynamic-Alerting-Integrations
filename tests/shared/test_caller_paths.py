@@ -48,7 +48,10 @@ BILINGUAL = {"gitops-check", "policy-engine --config-dir", "policy-engine --poli
              "threshold-govern --config-dir", "notification-tester --config-dir",
              "threshold-recommend --config-dir", "runtime-audit --rule-packs-dir",
              "runtime-audit --runtime-json", "alert-correlate --input",
-             "scaffold --from-onboard", "rule-pack-split --rule-packs-dir"}
+             "scaffold --from-onboard", "rule-pack-split --rule-packs-dir",
+             "operator-generate --rule-packs-dir", "operator-generate --config-dir",
+             "migrate-to-operator --source-dir", "migrate-to-operator --config-dir",
+             "operator-check --rule-packs-dir"}
 
 
 def _denied(script: str, lang: str = "en") -> str:
@@ -171,6 +174,36 @@ OPS_SITES = [
      "dir_not_accessible"),
     ("runtime-audit --runtime-json", "runtime_audit.py",
      ["--rule-packs-dir", "{RP}", "--runtime-json", "{F}", "--json"], "--runtime-json", None),
+    # #3392
+    ("operator-generate --rule-packs-dir", "operator_generate.py",
+     ["--rule-packs-dir", "{D}", "--json"], "--rule-packs-dir", "dir_not_accessible"),
+    ("operator-generate --config-dir", "operator_generate.py",
+     ["--config-dir", "{D}", "--json"], "--config-dir", "dir_not_accessible"),
+    ("migrate-to-operator --source-dir", "migrate_to_operator.py",
+     ["--source-dir", "{D}", "--json"], "--source-dir", "dir_not_accessible"),
+    ("migrate-to-operator --config-dir", "migrate_to_operator.py",
+     ["--source-dir", "{CONF}", "--config-dir", "{D}", "--json"], "--config-dir",
+     "dir_not_accessible"),
+    ("blind-spot --config-dir", "blind_spot_discovery.py",
+     ["--config-dir", "{D}", "--json-output", "--prometheus", "http://127.0.0.1:9"],
+     "--config-dir", "dir_not_accessible"),
+    ("shadow-verify --mapping", "shadow_verify.py",
+     ["preflight", "--mapping", "{F}", "--json", "--prometheus", "http://127.0.0.1:9"],
+     "--mapping", "file_not_accessible"),
+    ("shadow-verify --report-csv", "shadow_verify.py",
+     ["runtime", "--report-csv", "{F}", "--json", "--prometheus", "http://127.0.0.1:9"],
+     "--report-csv", "file_not_accessible"),
+    ("shadow-verify --readiness-json", "shadow_verify.py",
+     ["convergence", "--readiness-json", "{F}", "--json"], "--readiness-json",
+     "file_not_accessible"),
+    ("operator-check --rule-packs-dir", "operator_check.py",
+     ["--rule-packs-dir", "{D}", "--json"], "--rule-packs-dir", "dir_not_accessible"),
+    ("onboard --rule-files", "onboard_platform.py",
+     ["--rule-files", "{F}", "--output-dir", "{BOX}/onboard-out", "--json"], "--rule-files",
+     "path_not_accessible"),
+    ("state-reconcile --state-dir", "state_reconcile.py",
+     ["--state-dir", "{D}", "--manifest-path", "{BOX}/sr/manifest.json", "--json"],
+     "--state-dir", "dir_not_accessible"),
     # config-history is not a row: every subcommand creates `.da-history`
     # beside --config-dir first, so a locked parent never reaches its check;
     # test_config_history.py pins that check's message on a missing dir.
@@ -486,8 +519,14 @@ def tree(tmp_path):
     ("any", "d", None, None),
     ("any", "f", None, None),
     ("any", "nope", "path_not_found", True),
+    # ELOOP: `ls` lists the link — not "nothing there" (#3392)
+    ("dir", "loop", "dir_not_accessible", False),
+    ("file", "loop", "file_not_accessible", False),
+    ("any", "loop", "path_not_accessible", False),
 ])
 def test_classify_path(tree, kind, name, reason, missing):
+    if name == "loop":
+        symlink_or_skip(tree / "loop", tree / "loop")
     problem = classify_path(tree / name, kind, lang="en", flag="--x")
     if reason is None:
         assert problem is None
@@ -583,7 +622,7 @@ def test_the_judgement_runs_without_pyyaml_or_the_crash_hook():
 @pytest.mark.parametrize("kind, name, detail", [
     ("dir", "nope", "不存在"),
     ("dir", "f/below", "不存在（ENOTDIR）"),
-    ("any", "loop", "不存在（ELOOP）"),
+    ("any", "loop", "無法存取（ELOOP）"),   # #3392: not "nothing there"
     ("dir", "f", "不是目錄"),
     ("file", "d", "不是一般檔案"),
     ("any", "nope", "不存在"),
@@ -749,3 +788,272 @@ def test_rule_pack_split_names_a_dir_it_cannot_list(box):
     assert f"--rule-packs-dir {noread}: {DENIED}" in out, out[-3000:]
     assert json.loads(proc.stdout)["reason"] == "dir_not_accessible", proc.stdout
     assert not out_dir.exists(), "the output tree was made before the input was judged"
+
+
+# ── #3392: an input that is not there was read as empty ──────────────────
+# Each was a WARNING / skip and a result made from nothing — rc 0 (or rc 1
+# for shadow-verify --mapping and onboard --rule-files). Now rc 2 and named,
+# before anything is written. The locked-parent rows above cover EACCES.
+
+_CONF_3392 = str(REPO / "tests" / "golden" / "fixtures" / "flat" / "conf.d")
+_NO_PROM = "http://127.0.0.1:9"
+
+#: (id, script under ops/, argv with {P} for the path under test and {OUT}
+#: for an output that must not appear, the flag, "file" or "dir").
+INPUT_SITES_3392 = [
+    ("operator-generate --rule-packs-dir", "operator_generate.py",
+     ["--rule-packs-dir", "{P}", "--output-dir", "{OUT}", "--json"], "--rule-packs-dir", "dir"),
+    ("operator-generate --config-dir", "operator_generate.py",
+     ["--config-dir", "{P}", "--output-dir", "{OUT}", "--json"], "--config-dir", "dir"),
+    ("migrate-to-operator --source-dir", "migrate_to_operator.py",
+     ["--source-dir", "{P}", "--output-dir", "{OUT}", "--json"], "--source-dir", "dir"),
+    ("migrate-to-operator --config-dir", "migrate_to_operator.py",
+     ["--source-dir", _CONF_3392, "--config-dir", "{P}", "--output-dir", "{OUT}", "--json"],
+     "--config-dir", "dir"),
+    ("blind-spot --config-dir", "blind_spot_discovery.py",
+     ["--config-dir", "{P}", "--json-output", "--prometheus", _NO_PROM], "--config-dir", "dir"),
+    ("shadow-verify --mapping", "shadow_verify.py",
+     ["preflight", "--mapping", "{P}", "--json", "--prometheus", _NO_PROM], "--mapping", "file"),
+    ("shadow-verify --report-csv", "shadow_verify.py",
+     ["runtime", "--report-csv", "{P}", "--json", "--prometheus", _NO_PROM], "--report-csv",
+     "file"),
+    ("shadow-verify --readiness-json", "shadow_verify.py",
+     ["convergence", "--readiness-json", "{P}", "--json"], "--readiness-json", "file"),
+    ("operator-check --rule-packs-dir", "operator_check.py",
+     ["--rule-packs-dir", "{P}", "--json"], "--rule-packs-dir", "dir"),
+    ("onboard --rule-files", "onboard_platform.py",
+     ["--rule-files", "{P}", "--output-dir", "{OUT}", "--json"], "--rule-files", "any"),
+    ("state-reconcile --state-dir", "state_reconcile.py",
+     ["--state-dir", "{P}", "--manifest-path", "{OUT}/manifest.json", "--json"],
+     "--state-dir", "dir"),
+]
+
+
+#: The `--json` reason noun of each kind (`_lib_paths.classify_path`).
+_NOUN = {"dir": "dir", "file": "file", "any": "path"}
+
+
+@pytest.mark.usefixtures("da_guard_env", "da_read_env")
+@pytest.mark.parametrize("case", ["missing", "wrong_type", "loop"])
+@pytest.mark.parametrize("script, argv, flag, kind",
+                         [c[1:] for c in INPUT_SITES_3392], ids=[c[0] for c in INPUT_SITES_3392])
+def test_a_missing_input_is_named_not_read_as_empty(tmp_path, script, argv, flag, kind, case):
+    if case == "missing":
+        path = tmp_path / "nope"
+        detail, reason = NOT_FOUND, f"{_NOUN[kind]}_not_found"
+    elif case == "wrong_type":
+        if kind == "any":
+            pytest.skip("every type is taken (onboard walks a directory, #3426)")
+        path = tmp_path / "given"
+        if kind == "dir":
+            path.write_text("a: 1\n", encoding="utf-8")
+        else:
+            path.mkdir()
+        detail, reason = _DETAIL_3415[(kind, "en")], f"{_NOUN[kind]}_not_found"
+    else:
+        path = tmp_path / "loop"
+        symlink_or_skip(path, path)
+        detail, reason = os.strerror(errno.ELOOP), f"{_NOUN[kind]}_not_accessible"
+    out_dir = tmp_path / "out"
+    args = [a.replace("{P}", str(path)).replace("{OUT}", str(out_dir)) for a in argv]
+    proc = _run_ops(script, args)
+    out = proc.stdout + proc.stderr
+    assert proc.returncode == 2, out[-3000:]
+    assert "Traceback" not in out, out[-3000:]
+    assert f"{flag} {path}: {detail}" in proc.stderr, out[-3000:]
+    assert json.loads(proc.stdout)["reason"] == reason, proc.stdout
+    assert not out_dir.exists(), "an output was written before the input was judged"
+
+
+@pytest.mark.parametrize("pattern, made", [
+    ("*.yml", []),                 # a glob that matches nothing
+    ("d", ["d/"]),                 # a directory with no *.yaml / *.yml (#3426 walks it)
+    ("*.yml", ["d.yml/"]),         # a glob that matches only such a directory
+])
+@pytest.mark.parametrize("other_phase", [False, True], ids=["alone", "with-phase-1"])
+def test_onboard_rule_files_that_select_no_file_are_a_caller_error(tmp_path, pattern, made,
+                                                                   other_phase):
+    """onboard --rule-files: a value that selects no file was a WARN, an
+    empty output tree and rc 1 — rc 0 with phase 1's output written when
+    another phase was given; rc 2 now either way (`file_not_found`), nothing
+    written (owner ruling on #3392)."""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    for name in made:
+        (rules / name.rstrip("/")).mkdir()
+    out_dir = tmp_path / "out"
+    extra = []
+    if other_phase:
+        am = tmp_path / "am.yml"
+        am.write_text("route:\n  receiver: r\nreceivers:\n- name: r\n", encoding="utf-8")
+        extra = ["--alertmanager-config", str(am)]
+    proc = _run_ops("onboard_platform.py", ["--rule-files", str(rules / pattern), *extra,
+                                            "--output-dir", str(out_dir), "--json"])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"--rule-files {rules / pattern}: selects no file" in proc.stderr
+    assert json.loads(proc.stdout)["reason"] == "file_not_found", proc.stdout
+    assert not out_dir.exists()
+
+
+def test_onboard_an_empty_rule_files_is_a_caller_error(tmp_path):
+    """`--rule-files ''` was taken for no --rule-files: phase 2 skipped
+    without a word, rc 0. It names no file: rc 2 (owner ruling on #3392)."""
+    am = tmp_path / "am.yml"
+    am.write_text("route:\n  receiver: r\nreceivers:\n- name: r\n", encoding="utf-8")
+    out_dir = tmp_path / "out"
+    proc = _run_ops("onboard_platform.py", ["--rule-files", "", "--alertmanager-config", str(am),
+                                            "--output-dir", str(out_dir), "--json"])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "--rule-files '': an empty value names no file" in proc.stderr
+    assert json.loads(proc.stdout)["reason"] == "file_not_found", proc.stdout
+    assert not out_dir.exists()
+
+
+def test_onboard_a_dangling_rule_files_symlink_is_named_by_its_reading(tmp_path):
+    """A dangling symlink is there (ls lists it): the #3426 reading names it
+    as one, rather than `_lib_paths` calling it not there."""
+    link = tmp_path / "rules.yaml"
+    symlink_or_skip(tmp_path / "gone.yaml", link)
+    proc = _run_ops("onboard_platform.py", ["--rule-files", str(link),
+                                            "--output-dir", str(tmp_path / "out")])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "a dangling symlink" in proc.stderr, proc.stderr
+    assert "No such file or directory" not in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize("subdir", ["conf.d/t.yaml", "link", "mod"])
+def test_generator_service_refuses_a_config_subdir_that_is_no_directory(tmp_path, subdir):
+    """#3392: --config-subdir is read with `git ls-tree` (the judgement's own
+    reading). A path that is in the tree at HEAD but is no directory — a file,
+    a symlink, a submodule — was an empty conf.d for every judgement (a duplicate tenant
+    judged `pass`); the service refuses to start."""
+    repo = _gsvc_repo(tmp_path)
+    proc = _run_ops("generator_service.py", _gsvc_args(tmp_path, repo, subdir))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"ERROR: --config-subdir {subdir!r}: not a directory in --repo {repo} at HEAD" \
+        in proc.stderr, proc.stderr
+
+
+@pytest.mark.parametrize("subdir, odd_name", [
+    (":(top)conf.d", None),        # pathspec magic is a literal name: not in the tree
+    (":(glob)*", None),
+    ("conf.d", b"bad\xff.yaml"),  # a name that is no UTF-8 is the judgements' to meet
+], ids=["magic-top", "magic-glob", "non-utf8-name"])
+def test_generator_service_start_reads_the_path_alone(tmp_path, subdir, odd_name):
+    """The start looks up --config-subdir's own entry, as a literal path: a
+    pathspec-shaped value is a name not in the tree (said on stderr, as an
+    empty conf.d), and what a directory holds is not read at start — both
+    started before #3392 and still do (the next check, made to fail here,
+    is the one that stops it)."""
+    repo = _gsvc_repo(tmp_path)
+    if odd_name is not None:
+        (repo / "conf.d").joinpath(os.fsdecode(odd_name)).write_text("a: 1\n", encoding="utf-8")
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+        for args in (["add", "-A"], ["commit", "-q", "-m", "odd"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, env=env, timeout=60)
+    proc = _run_ops("generator_service.py", [*_gsvc_args(tmp_path, repo, subdir),
+                                             "--max-body-bytes", "100",
+                                             "--max-inflight-body-bytes", "10"])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "ERROR: --config-subdir" not in proc.stderr, proc.stderr
+    assert "--max-inflight-body-bytes 10 is below --max-body-bytes 100" in proc.stderr
+
+
+@pytest.mark.parametrize("emptied", [False, True], ids=["never-there", "last-tenant-removed"])
+def test_generator_service_starts_on_a_config_subdir_with_no_entries(tmp_path, emptied):
+    """#3392 (owner ruling): git keeps no empty directory, so a conf.d whose
+    last tenant was removed reads like one never created — and the first
+    write into it has to be judged by this service. Said on stderr; the start
+    goes on (the next check, made to fail here, is the one that stops it)."""
+    repo = _gsvc_repo(tmp_path)
+    subdir = "conf.d" if emptied else "nope"
+    if emptied:
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+        for args in (["rm", "-q", "-r", "conf.d"], ["commit", "-q", "-m", "offboard"]):
+            subprocess.run(["git", "-C", str(repo), *args], check=True, env=env, timeout=60)
+    proc = _run_ops("generator_service.py", [*_gsvc_args(tmp_path, repo, subdir),
+                                             "--max-body-bytes", "100",
+                                             "--max-inflight-body-bytes", "10"])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"--config-subdir {subdir!r}: no entries in --repo {repo} at HEAD" in proc.stderr
+    assert "ERROR: --config-subdir" not in proc.stderr, proc.stderr
+    assert "--max-inflight-body-bytes 10 is below --max-body-bytes 100" in proc.stderr
+
+
+@pytest.mark.parametrize("subdir", ["conf.d", "./conf.d/", "."])
+def test_generator_service_takes_a_config_subdir_in_its_tree(tmp_path, subdir):
+    """Control: a subdirectory with entries passes the start's check — the
+    next check (contradicting limits, made to fail here) is the one that
+    stops it."""
+    repo = _gsvc_repo(tmp_path)
+    proc = _run_ops("generator_service.py", [*_gsvc_args(tmp_path, repo, subdir),
+                                             "--max-body-bytes", "100",
+                                             "--max-inflight-body-bytes", "10"])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "--config-subdir" not in proc.stderr, proc.stderr
+    assert "--max-inflight-body-bytes 10 is below --max-body-bytes 100" in proc.stderr
+
+
+def test_generator_service_with_no_head_commit_is_not_judged(tmp_path):
+    """A repository nothing was committed to has no tree to judge against:
+    said on stderr, and the start goes on (no exit code change there)."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True, timeout=60)
+    proc = _run_ops("generator_service.py", [*_gsvc_args(tmp_path, repo, "nope"),
+                                             "--max-body-bytes", "100",
+                                             "--max-inflight-body-bytes", "10"])
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert "has no HEAD commit; --config-subdir 'nope' is not checked" in proc.stderr
+    assert "--max-inflight-body-bytes 10 is below" in proc.stderr
+
+
+def _gsvc_repo(tmp_path):
+    repo = tmp_path / "repo"
+    (repo / "conf.d").mkdir(parents=True)
+    (repo / "conf.d" / "t.yaml").write_text("tenants:\n  t: {}\n", encoding="utf-8")
+    symlink_or_skip("conf.d", repo / "link")
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.com",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.com"}
+    for args in (["init", "-q"], ["add", "-A"], ["commit", "-q", "-m", "t"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, env=env, timeout=60)
+    head = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+                          capture_output=True, text=True, encoding="ascii",
+                          timeout=60).stdout.strip()
+    for args in (["update-index", "--add", "--cacheinfo", f"160000,{head},mod"],
+                 ["commit", "-q", "-m", "a gitlink"]):
+        subprocess.run(["git", "-C", str(repo), *args], check=True, env=env, timeout=60)
+    return repo
+
+
+def _gsvc_args(tmp_path, repo, subdir):
+    return ["--socket", str(tmp_path / "gs.sock"), "--repo", str(repo),
+            "--config-subdir", subdir, "--work-dir", str(tmp_path / "work")]
+
+
+# ── #3406: '' is supplied, not the current directory ──────────────────────
+
+#: (id, script under dx/, argv, the flag): run in a directory each tool would
+#: otherwise have taken for the one it was given — and changed (add-frontmatter
+#: rewrote its markdown), or reported (doc-coverage), or planned (migrate-conf-d).
+EMPTY_SITES_3406 = [
+    ("add-frontmatter --base-dir", "add_frontmatter.py", ["--base-dir", ""], "--base-dir"),
+    ("doc-coverage --repo-root", "doc_coverage.py", ["--repo-root", ""], "--repo-root"),
+    ("migrate-conf-d --conf-d", "migrate_conf_d.py", ["--conf-d", "", "--dry-run"], "--conf-d"),
+]
+
+
+@pytest.mark.parametrize("script, argv, flag", [c[1:] for c in EMPTY_SITES_3406],
+                         ids=[c[0] for c in EMPTY_SITES_3406])
+def test_an_empty_path_is_refused_not_taken_for_cwd(tmp_path, script, argv, flag):
+    shutil.copytree(REPO / "tests" / "golden" / "fixtures" / "flat" / "conf.d", tmp_path / "cwd")
+    doc = tmp_path / "cwd" / "page.md"
+    doc.write_text("# A page with no front matter\n", encoding="utf-8")
+    before = {p: p.read_bytes() for p in (tmp_path / "cwd").rglob("*") if p.is_file()}
+    proc = _cli(script, *argv, cwd=tmp_path / "cwd")
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert f"{flag} '': {NOT_FOUND}" in proc.stderr, proc.stderr
+    after = {p: p.read_bytes() for p in (tmp_path / "cwd").rglob("*") if p.is_file()}
+    assert after == before, "the current directory was changed"

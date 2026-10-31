@@ -102,6 +102,53 @@ class TestRunCmd:
 
 
 # ---------------------------------------------------------------------------
+# #3392: the input files, judged before any phase runs
+# ---------------------------------------------------------------------------
+class TestInputsAreJudged:
+    """A missing --mapping was the preflight check's "fail" (rc 1, a
+    finding); a missing --report-csv / --readiness-json a "skip" under an
+    Overall PASS (rc 0). Each is a caller error now (rc 2: the CLI rows are
+    in tests/shared/test_caller_paths.py)."""
+
+    @pytest.mark.parametrize("phase, dest, flag", [
+        ("preflight", "mapping", "--mapping"),
+        ("runtime", "report_csv", "--report-csv"),
+        ("convergence", "readiness_json", "--readiness-json"),
+        ("convergence", "report_csv", "--report-csv"),
+    ])
+    @pytest.mark.parametrize("case", ["missing", "directory"])
+    def test_an_unusable_input_is_a_caller_error(self, tmp_path, phase, dest, flag, case):
+        from _lib_exitcodes import CallerError
+        path = tmp_path / "nope" if case == "missing" else tmp_path
+        with pytest.raises(CallerError) as exc:
+            sv.judge_inputs(_args(**{dest: str(path)}), [phase])
+        assert exc.value.reason == "file_not_found"
+        assert str(exc.value).startswith(f"{flag} {path}: ")
+
+    def test_every_unusable_input_is_named_at_once(self, tmp_path):
+        from _lib_exitcodes import CallerError
+        with pytest.raises(CallerError) as exc:
+            sv.judge_inputs(_args(mapping=str(tmp_path / "m"), readiness_json=str(tmp_path / "r")),
+                            ["preflight", "runtime", "convergence"])
+        assert f"--mapping {tmp_path / 'm'}: " in str(exc.value)
+        assert f"--readiness-json {tmp_path / 'r'}: " in str(exc.value)
+
+    def test_a_flag_no_chosen_phase_reads_is_not_judged(self, tmp_path):
+        missing = str(tmp_path / "nope")
+        sv.judge_inputs(_args(mapping=missing), ["runtime", "convergence"])
+        sv.judge_inputs(_args(report_csv=missing, readiness_json=missing), ["preflight"])
+
+    def test_a_flag_not_given_stays_a_skip(self):
+        sv.judge_inputs(_args(mapping="", report_csv=None), ["preflight", "runtime"])
+
+    def test_usable_inputs_pass(self, tmp_path):
+        sv.judge_inputs(_args(mapping=_write_mapping(tmp_path, {}),
+                              report_csv=_write_csv(tmp_path, []),
+                              readiness_json=_write_readiness(tmp_path, {})),
+                        ["preflight", "runtime", "convergence"])
+
+
+# ---------------------------------------------------------------------------
 # check_preflight
 # ---------------------------------------------------------------------------
 class TestCheckPreflight:
@@ -117,15 +164,6 @@ class TestCheckPreflight:
         mapping_check = next(c for c in checks if c["check"] == "mapping_file")
         assert mapping_check["status"] == "pass"
         assert "2 comparison pairs" in mapping_check["detail"]
-
-    def test_mapping_file_missing(self, tmp_path):
-        args = _args(mapping=str(tmp_path / "nonexistent.yaml"))
-        with patch.object(_lib_prometheus, "http_get_json", return_value=(None, "unreachable")):
-            with patch("urllib.request.urlopen", side_effect=OSError("fail")):
-                checks = sv.check_preflight(args)
-
-        mapping_check = next(c for c in checks if c["check"] == "mapping_file")
-        assert mapping_check["status"] == "fail"
 
     def test_no_mapping_provided(self):
         args = _args(mapping=None)
@@ -212,16 +250,6 @@ class TestCheckRuntime:
         assert coverage["status"] == "pass"
         assert "2 tenants" in coverage["detail"]
 
-    def test_csv_file_missing(self, tmp_path):
-        args = _args(report_csv=str(tmp_path / "nonexistent.csv"))
-
-        with patch.object(sv, "query_prometheus", return_value=([], None)):
-            checks = sv.check_runtime(args)
-
-        skip = next((c for c in checks if c["check"] == "csv_report"), None)
-        assert skip is not None
-        assert skip["status"] == "skip"
-
     def test_maintenance_mode_detected(self, tmp_path):
         args = _args(report_csv=None)
         maint_results = [{"metric": {"tenant": "db-a"}, "value": [0, "1"]}]
@@ -276,13 +304,6 @@ class TestCheckConvergence:
         readiness = next(c for c in checks if c["check"] == "cutover_readiness_json")
         assert readiness["status"] == "fail"
         assert "2 pairs" in readiness["detail"]
-
-    def test_readiness_file_missing(self, tmp_path):
-        args = _args(readiness_json=str(tmp_path / "missing.json"), report_csv=None)
-        checks = sv.check_convergence(args)
-
-        readiness = next(c for c in checks if c["check"] == "cutover_readiness_json")
-        assert readiness["status"] == "skip"
 
     def test_seven_day_zero_mismatch(self, tmp_path):
         now = datetime.now(timezone.utc)

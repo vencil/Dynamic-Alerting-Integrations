@@ -406,13 +406,16 @@ def main():
 
     args = parser.parse_args()
 
-    base_dir = str(Path(args.base_dir).resolve())
-    # #3276: the shared judgement of a caller-given path.
-    problem = classify_path(base_dir, "dir", lang="en", flag="--base-dir")
+    # #3276: the shared judgement of a caller-given path — of the string the
+    # caller gave (#3406): `Path('')` is `.`, so `''` (an unset shell
+    # variable) judged after it was the current directory, scanned and
+    # rewritten at rc 0. Judged raw, `''` is named as `''`.
+    problem = classify_path(args.base_dir, "dir", lang="en", flag="--base-dir")
     if problem is not None:
         word = "not found" if problem.missing else "not usable"
         logger.error(f"Base directory {word}: {problem.message}")
         return EXIT_CALLER_ERROR
+    base_dir = str(Path(args.base_dir).resolve())
 
     # Find all markdown files
     md_files = find_markdown_files(base_dir)

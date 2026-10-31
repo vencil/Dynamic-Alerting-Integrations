@@ -129,7 +129,7 @@ class TestLocalDirNotAccessibleIsCallerError:
         (errno.EIO, "dir_not_accessible"),
         (errno.ENOENT, "dir_not_found"),
         (errno.ENOTDIR, "dir_not_found"),
-        (errno.ELOOP, "dir_not_found"),
+        (errno.ELOOP, "dir_not_accessible"),  # #3392: `ls` lists a loop
     ])
     def test_errno_decides_the_reason(self, monkeypatch, err, reason):
         """By errno, not by which errnos this Python's `Path.is_dir` swallows

@@ -92,6 +92,7 @@ modules:
       require_file: "#3276 require_path for a file"
       raise_path_problems: "#3276 raises one CallerError over classify_path results; no value computation"
       _caller_error: "#3276 builds _lib_exitcodes.CallerError, imported only for a refusal (the module stays stdlib-only); no value computation"
+      supplied: "#3392 an identity test of an argparse value against the parser's default; no value computation — pinned through the CLIs by tests/shared/test_caller_paths.py::test_operator_generate_judges_only_what_it_reads and tests/ops/test_state_reconcile.py::test_the_default_state_dir_missing_is_distinct_from_empty"
 
   scripts/tools/_lib_io.py:
     covered:

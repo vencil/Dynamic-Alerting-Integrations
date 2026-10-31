@@ -133,6 +133,7 @@ When rendering fails, one rule decides: **a failure on the PR side, or of the to
 | The PR side has no conf.d, or no `.yaml` file in it | 2 | The renderers are not run; that view says "not computed" |
 | The base side's configuration is broken | 1 | Names the reason; that view is listed as "not compared" **as a whole** |
 | The base side has no conf.d, or no `.yaml` file in it (first import) | 1 | The renderers are not run; the base is taken as empty, and every tenant counts as added |
+| The base side's path is a symlink loop | 2 | Not "no conf.d": `ls` lists the entry, it just cannot be read. The path is named (`dir_not_accessible`), not taken for a first import |
 | The tool fails (on either side) | 2 | Says "not computed" |
 | Both sides fail | 2 | Handled as the PR side |
 

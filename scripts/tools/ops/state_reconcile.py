@@ -39,7 +39,11 @@ Exit codes:
   0  state directory consistent (or all changes applied successfully)
   1  unresolvable schema drift (e.g. missing schema_version field) — or, in
      --ci --dry-run mode, changes are pending and were not applied
-  2  caller error (bad arguments / missing state directory when not --json)
+  2  caller error: bad arguments; a --state-dir given that is not there or
+     not a directory (#3392 — nothing is written); an existing
+     --manifest-path that cannot be read as a manifest (#3392 — it is not
+     overwritten). The default --state-dir missing is still an empty state
+     directory, reported as `state_dir_missing`.
 """
 from __future__ import annotations
 
@@ -58,7 +62,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, arm_crash_envelope  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, CallerError, arm_crash_envelope  # noqa: E402
+from _lib_paths import classify_path, require_dir, supplied  # noqa: E402  (#3392)
 from _lib_io import (  # noqa: E402  (#1789)
     OutputWriteError,
     check_repo_artifact,
@@ -232,13 +237,48 @@ def write_json(path: Path, data: dict, *, flag: str | None = None) -> None:
     write_repo_artifact(path, payload, flag=flag, mode=0o600, atomic_only=True)  # never half a manifest
 
 
+def read_old_manifest(manifest_path: Path) -> dict | None:
+    """The manifest already at *manifest_path*, or None when nothing is
+    there (a first build) or it is empty. One that is there but cannot be read as a
+    manifest — not JSON, not an object, unreadable — raises `CallerError`
+    (rc 2, ``manifest_unreadable``): #3392, it was taken for "no manifest",
+    reported as "no count change" and overwritten at rc 0.
+    """
+    problem = classify_path(manifest_path, "file", lang="en", flag="--manifest-path")
+    if problem is not None and problem.missing:
+        return None
+    if problem is not None:
+        raise CallerError(f"{problem.message}; not overwritten", "manifest_unreadable")
+    if manifest_path.stat().st_size == 0:
+        # Never written that way here (the write is atomic): an empty one
+        # holds nothing to lose and is rebuilt like a missing one.
+        print(f"WARNING: --manifest-path {manifest_path} is empty; taken for no manifest",
+              file=sys.stderr)
+        return None
+    try:
+        data, err = read_state(manifest_path)
+    except UnicodeDecodeError as exc:
+        data, err = None, f"not UTF-8: {exc}"
+    if err is None and not isinstance(data, dict):
+        err = f"not a JSON object ({type(data).__name__})"
+    if err is not None:
+        raise CallerError(f"--manifest-path {manifest_path}: {err}; not overwritten",
+                          "manifest_unreadable")
+    return data
+
+
 def reconcile(
     state_dir: Path,
     manifest_path: Path,
     *,
     dry_run: bool = False,
 ) -> dict:
-    """Core reconciliation logic. Returns a report dict suitable for JSON output."""
+    """Core reconciliation logic. Returns a report dict suitable for JSON output.
+
+    The old manifest is read first (`read_old_manifest`), before any state
+    file is migrated: one that cannot be read stops the run with nothing
+    written."""
+    old_manifest = read_old_manifest(manifest_path)
     report: dict = {
         "state_dir": str(state_dir),
         "manifest_path": str(manifest_path),
@@ -317,11 +357,6 @@ def reconcile(
 
     # 2. Manifest rebuild
     new_manifest = build_manifest(state_files, state_dir)
-    old_manifest: dict | None = None
-    if manifest_path.exists():
-        old_data, old_err = read_state(manifest_path)
-        if old_err is None:
-            old_manifest = old_data
 
     manifest_changed = old_manifest != new_manifest
     if manifest_changed:
@@ -457,6 +492,13 @@ def main(argv: list[str] | None = None) -> int:
 
     state_dir = Path(args.state_dir)
     manifest_path = Path(args.manifest_path)
+    # #3392: a --state-dir the caller gave that is not there or not a
+    # directory is a caller error, before anything is written — it was read
+    # as an empty state directory and an empty manifest written, rc 0 (a file
+    # given here was not even reported as missing). The default nobody gave
+    # keeps that reading (`state_dir_missing`).
+    if supplied(args, ap, "state_dir"):
+        require_dir(args.state_dir, lang="en", flag="--state-dir")
     # #3107 v2: checked BEFORE the read — a FIFO or /dev/stdout would block it.
     check_repo_artifact(manifest_path, flag="--manifest-path")
 
