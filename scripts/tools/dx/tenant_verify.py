@@ -264,11 +264,13 @@ def main() -> int:
         )
         return EXIT_USAGE_ERROR
 
-    conf_d = Path(args.conf_d).resolve()
-    # #3276: the shared judgement of a caller-given path. A CallerError
-    # leaves through `run()` at the caller-error code 2.
+    # #3276: the shared judgement of a caller-given path — of the string the
+    # caller gave (#3406): `Path('')` is `.`, so `''` judged after it was the
+    # current directory, verified at rc 0. A CallerError leaves through
+    # `run()` at the caller-error code 2.
     from _lib_paths import require_dir
-    require_dir(conf_d, lang="en", flag="--conf-d")
+    require_dir(args.conf_d, lang="en", flag="--conf-d")
+    conf_d = Path(args.conf_d).resolve()
 
     describe_mod = _load_describe_module()
     try:

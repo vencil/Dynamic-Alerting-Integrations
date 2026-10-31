@@ -30,19 +30,22 @@ class PathProblem(NamedTuple):
     message: str
     """The stderr line, without ``ERROR:``."""
     missing: bool
-    """True only when nothing is at the path (ENOENT, ENOTDIR, ELOOP)."""
+    """True only when nothing is at the path (ENOENT, ENOTDIR)."""
 
 
 #: #3276: what a stat errno means for a caller-given path. Only "nothing is
 #: there" is not-found; every other errno (EACCES under a parent the caller
 #: cannot enter, EIO, …) is not-accessible — never folded into "not found".
-_STAT_MISSING = frozenset({errno.ENOENT, errno.ENOTDIR, errno.ELOOP})
+#: #3392: a symlink loop (ELOOP) is not "nothing there" either — ``ls`` lists
+#: the link — so it is not-accessible: a tool that reads a missing input as
+#: empty (config-diff's first import) refuses a loop instead of reading it so.
+_STAT_MISSING = frozenset({errno.ENOENT, errno.ENOTDIR})
 
 #: The wording after ``<flag> <path>:``, per language — the one place it is
 #: written. ``en`` keeps the OS's strerror; ``zh`` says the same in Chinese
-#: and keeps the errno's name (``EACCES``) so the cause stays searchable —
-#: for "nothing there" too, unless it is the plain ENOENT: a symlink loop
-#: (ELOOP) or a file used as a directory (ENOTDIR) is listed by ``ls``.
+#: and keeps the errno's name (``EACCES``, ``ELOOP``) so the cause stays
+#: searchable — for "nothing there" too, unless it is the plain ENOENT: a
+#: file used as a directory (ENOTDIR) is listed by ``ls``.
 _DETAIL = {
     "en": {"missing": lambda e: e.strerror, "inaccessible": lambda e: e.strerror,
            "not_dir": "not a directory", "not_regular": "not a regular file"},
@@ -102,6 +105,20 @@ def classify_path(path: Any, kind: str, *, lang: str,
             return PathProblem("file_not_accessible",
                                f"{label}: {detail['inaccessible'](exc)}", False)
     return None
+
+
+def supplied(args: Any, parser: Any, dest: str) -> bool:
+    """True when the caller gave *dest* on the command line, False when it
+    holds *parser*'s default (#3392: a path the caller gave is judged; a
+    default nobody asked for keeps the tool's own reading of it).
+
+    By identity: argparse puts its default object itself in the namespace
+    when the flag is absent, and a fresh value when it is given. That holds
+    for a non-str default (``Path("conf.d")``) and for a str default with no
+    ``type=``; a str default WITH a ``type=`` is converted anew on each
+    parse, so such a flag must not ask this.
+    """
+    return getattr(args, dest) is not parser.get_default(dest)
 
 
 def require_path(path: Any, kind: str, *, lang: str, flag: Optional[str] = None) -> None:

@@ -34,6 +34,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang  # noqa: E402
+from _lib_paths import require_dir, supplied  # noqa: E402  (#3392)
 from _lib_prometheus import QueryError, prometheus_targets  # noqa: E402  (#3133)
 from _lib_kubectl import KubectlError, kubectl_get, kubectl_list  # noqa: E402  (#3207)
 import _lib_consumer_read  # noqa: E402  (#3426: rule_pack_files, the one declaration)
@@ -357,6 +358,13 @@ def main():
     if args.json:
         # #3094: a crash in --json mode still prints one envelope
         arm_crash_envelope()
+    # #3392: a --rule-packs-dir the caller gave that is not there or not a
+    # directory is a caller error, before the cluster is asked — it was an
+    # expected count of 0 and a WARN that never named the path, rc 0. The
+    # default nobody gave keeps that reading. An empty directory is still a
+    # count of 0 (not this ticket).
+    if supplied(args, parser, "rule_packs_dir"):
+        require_dir(args.rule_packs_dir, lang=detect_cli_lang(), flag="--rule-packs-dir")
 
     checker = OperatorChecker(args)
     checker.run_all_checks()

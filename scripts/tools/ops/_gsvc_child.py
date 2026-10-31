@@ -107,11 +107,15 @@ class ChildJob:
 
 # ── git ──────────────────────────────────────────────────────────────────
 
-def _git(job: ChildJob, *args: str, stdin=None) -> bytes:
-    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0")
+def run_git(git: str, repo: str, *args: str, stdin=None) -> bytes:
+    """*git* ``-C`` *repo* *args*: its stdout, or `GitReadError`."""
+    # --config-subdir is a path, not a pathspec: ':(glob)…' and friends are
+    # read as the literal name they spell (#3392).
+    env = dict(os.environ, GIT_OPTIONAL_LOCKS="0", GIT_TERMINAL_PROMPT="0",
+               GIT_LITERAL_PATHSPECS="1")
     # The judgement deadline ends this (killpg on the whole group) long
     # before the timeout; the timeout only bounds a git that outlives it.
-    proc = subprocess.run([job.git, "-C", job.repo, *args], stdin=stdin,
+    proc = subprocess.run([git, "-C", repo, *args], stdin=stdin,
                           capture_output=True, env=env, check=False,
                           timeout=_GIT_TIMEOUT_SECONDS)
     if proc.returncode != 0:
@@ -120,14 +124,16 @@ def _git(job: ChildJob, *args: str, stdin=None) -> bytes:
     return proc.stdout
 
 
-def read_tree(job: ChildJob) -> list[tuple[str, str, str, bytes]]:
-    """``(mode, blob id, path below conf.d, content)`` for every entry of
-    the config subdirectory in the base commit; content is empty for a
-    gitlink. ``config_subdir`` arrives normalised by the service's start
-    (generator_service._normalize_config_subdir): ``""`` is the root."""
-    sub = job.config_subdir
-    out = _git(job, "ls-tree", "-r", "-z", job.request.base_commit, "--",
-               sub or ".")
+def _git(job: ChildJob, *args: str, stdin=None) -> bytes:
+    return run_git(job.git, job.repo, *args, stdin=stdin)
+
+
+def tree_entries(git: str, repo: str, commit: str, sub: str) -> list[tuple[str, str, str]]:
+    """``(mode, object id, path below conf.d)`` for every entry of the config
+    subdirectory *sub* (normalised: ``""`` is the root) in *commit* — the
+    one reading of where conf.d is: the judgement's (`read_tree`) and the
+    service's start (#3392, `generator_service._check_config_subdir`)."""
+    out = run_git(git, repo, "ls-tree", "-r", "-z", commit, "--", sub or ".")
     entries: list[tuple[str, str, str]] = []
     for rec in out.split(b"\0"):
         if not rec:
@@ -143,6 +149,23 @@ def read_tree(job: ChildJob) -> list[tuple[str, str, str, bytes]]:
                 continue
             path = path[len(sub) + 1:]
         entries.append((mode, oid, path))
+    return entries
+
+
+def path_mode(git: str, repo: str, commit: str, path: str) -> str | None:
+    """The tree mode of *path* itself in *commit* (``040000`` for a
+    directory), or None when the tree has no entry there."""
+    out = run_git(git, repo, "ls-tree", "-z", commit, "--", path)
+    rec = out.split(b"\0", 1)[0]
+    return rec.split(b" ", 1)[0].decode("ascii") if rec else None
+
+
+def read_tree(job: ChildJob) -> list[tuple[str, str, str, bytes]]:
+    """``(mode, blob id, path below conf.d, content)`` for every entry of
+    the config subdirectory in the base commit; content is empty for a
+    gitlink. ``config_subdir`` arrives normalised by the service's start
+    (generator_service._normalize_config_subdir): ``""`` is the root."""
+    entries = tree_entries(job.git, job.repo, job.request.base_commit, job.config_subdir)
     blobs = [oid for mode, oid, _p in entries if mode != "160000"]
     contents: dict[str, bytes] = {}
     if blobs:

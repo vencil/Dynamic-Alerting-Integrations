@@ -168,10 +168,17 @@ class TestLoadMonitoredDbTypes:
             # db-b 只有 defaults 的 redis_memory；db-a 關掉了它。
             assert result == {"redis": {"db-b"}}
 
-    def test_missing_dir(self):
-        """缺失目錄返回空字典。"""
-        result = bsd.load_monitored_db_types("/nonexistent")
-        assert result == {}
+    @pytest.mark.parametrize("name, reason", [("nope", "dir_not_found"), ("f", "dir_not_found")])
+    def test_a_config_dir_that_is_not_a_directory_is_a_caller_error(self, tmp_path, name,
+                                                                    reason):
+        """#3392：不存在或不是目錄的 --config-dir 是呼叫端錯誤（rc 2，具名），
+        不再是 WARN 加空字典（每個活著的 DB 都被報成 blind spot、rc 0）。"""
+        from _lib_exitcodes import CallerError
+        (tmp_path / "f").write_text("x", encoding="utf-8")
+        with pytest.raises(CallerError) as exc:
+            bsd.load_monitored_db_types(str(tmp_path / name))
+        assert exc.value.reason == reason
+        assert str(exc.value).startswith(f"--config-dir {tmp_path / name}: ")
 
 
 # ── 4. Find Blind Spots ─────────────────────────────────────────────

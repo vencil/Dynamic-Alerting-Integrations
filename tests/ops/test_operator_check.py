@@ -182,8 +182,11 @@ class TestCheckPrometheusRuleStatus:
         assert oc._CRD_RULES in result.detail and [k for k, _ in calls] == ["crd"]
         assert "prometheusrule" not in [k for k, _ in calls]
 
-    def test_missing_rule_packs_dir_treated_as_zero_expected(self, monkeypatch, tmp_path):
-        # No directory → expected = 0; with loaded > 0 → warn.
+    def test_missing_default_rule_packs_dir_treated_as_zero_expected(self, monkeypatch,
+                                                                     tmp_path):
+        # The default --rule-packs-dir nobody gave, not there → expected = 0;
+        # with loaded > 0 → warn. One the caller GAVE is judged by main()
+        # before the checker runs (#3392, test_a_given_rule_packs_dir_...).
         _stub_cluster(monkeypatch, lists={"prometheusrule": [{"x": 1}]})
         result = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path / "ghost"))).check_prometheus_rule_status()
         assert result.status == "warn"

@@ -49,7 +49,7 @@ commands:
     "--timeout": not_path
     "--workers": not_path
   blind-spot:
-    "--config-dir": {kind: pending, ticket: 3392}
+    "--config-dir": dir
     "--exclude-jobs": not_path
     "--prometheus": not_path
   byo-check:
@@ -149,7 +149,7 @@ commands:
     "--policy": file
   generator-service:
     "--cache-max-bytes": not_path
-    "--config-subdir": {kind: pending, ticket: 3392}
+    "--config-subdir": {kind: reader, by: "git ls-tree of HEAD at start, the judgement's own reading (_gsvc_child.tree_entries): no directory there is refused, no entry at all is an empty conf.d", pinned_by: "tests/shared/test_caller_paths.py::test_generator_service_refuses_a_config_subdir_that_is_no_directory"}
     "--da-guard-binary": {kind: reader, by: "the one da-guard resolution (flag, then $DA_GUARD_BINARY, then PATH); 503 da_guard_missing naming the flag", pinned_by: "tests/ops/test_generator_service.py::test_the_da_guard_flag_is_the_one_that_judges_and_is_reported"}
     "--deadline-reserve-seconds": not_path
     "--git": {kind: reader, by: "the exec of --git (OSError named with the flag)", pinned_by: "tests/shared/test_caller_paths.py::test_generator_service_names_a_git_it_cannot_run"}
@@ -203,13 +203,13 @@ commands:
     "--prefix": not_path
     input_file: {kind: reader, by: "da-read (Prometheus' rule loader)", pinned_by: "tests/ops/test_migrate_rule_outputs.py::test_missing_input_file_exits_caller_error"}
   migrate-to-operator:
-    "--config-dir": {kind: pending, ticket: 3392}
+    "--config-dir": dir
     "--namespace": not_path
     "--output-dir": output
     "--receiver-template": not_path
     "--secret-key": not_path
     "--secret-name": not_path
-    "--source-dir": {kind: pending, ticket: 3392}
+    "--source-dir": dir
   offboard:
     "--config-dir": {kind: reader, by: "da-guard parse-tree", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--state": any
@@ -220,7 +220,7 @@ commands:
     "--da-read-binary": {kind: reader, by: _lib_consumer_read, pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--exclude": not_path
     "--output-dir": output
-    "--rule-files": {kind: pending, ticket: 3392}
+    "--rule-files": any
     "--scrape-config": {kind: reader, by: PrometheusConfigError, pinned_by: "tests/ops/test_onboard_platform.py::test_main_missing_scrape_config_is_a_caller_error"}
     "--tenant-label": not_path
   opa-evaluate:
@@ -233,15 +233,15 @@ commands:
     "--kubeconfig": {kind: reader, by: "kubectl through _lib_kubectl (KubectlError)", pinned_by: "tests/shared/test_caller_path_manifest.py::test_kubectls_refusal_of_a_kubeconfig_is_relayed"}
     "--namespace": not_path
     "--prometheus": not_path
-    "--rule-packs-dir": {kind: pending, ticket: 3392}
+    "--rule-packs-dir": dir
   operator-generate:
     "--api-version": not_path
     "--components": not_path
-    "--config-dir": {kind: pending, ticket: 3392}
+    "--config-dir": dir
     "--namespace": not_path
     "--output-dir": output
     "--receiver-template": not_path
-    "--rule-packs-dir": {kind: pending, ticket: 3392}
+    "--rule-packs-dir": dir
     "--secret-key": not_path
     "--secret-name": not_path
     "--selector-label": not_path
@@ -291,10 +291,10 @@ commands:
     "--topology": not_path
   shadow-verify:
     "--alertmanager": not_path
-    "--mapping": {kind: pending, ticket: 3392}
+    "--mapping": file
     "--prometheus": not_path
-    "--readiness-json": {kind: pending, ticket: 3392}
-    "--report-csv": {kind: pending, ticket: 3392}
+    "--readiness-json": file
+    "--report-csv": file
     phase: not_path
   silencer-drift-check:
     "--exclude": not_path
@@ -302,8 +302,8 @@ commands:
     "--rule-source": any
     "--silences-file": {kind: reader, by: "OSError -> caller error", pinned_by: "tests/ops/test_silencer_drift_check.py::test_main_missing_silences_file"}
   state-reconcile:
-    "--manifest-path": {kind: pending, ticket: 3392}
-    "--state-dir": {kind: pending, ticket: 3392}
+    "--manifest-path": {kind: reader, by: "read_old_manifest: an existing one that is not a manifest is manifest_unreadable, never overwritten", pinned_by: "tests/ops/test_state_reconcile.py::test_an_unreadable_manifest_is_not_overwritten"}
+    "--state-dir": dir
   tenant-verify:
     "--conf-d": dir
     "--expect-merged-hash": not_path

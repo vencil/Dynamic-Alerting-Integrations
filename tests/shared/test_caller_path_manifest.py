@@ -59,22 +59,9 @@ REASON_PREFIX = {"dir": "dir_", "file": "file_", "any": "path_"}
 
 #: ⛔ The ceiling of `pending`: remove an entry when its flag is migrated; an
 #: addition here is a new unjudged input path and needs its own ticket first.
-#: #3392 (missing read as empty) and #3415 (traceback, misworded, silent).
-PENDING: frozenset[tuple[str, str]] = frozenset({
-    ("blind-spot", "--config-dir"),
-    ("generator-service", "--config-subdir"),
-    ("migrate-to-operator", "--config-dir"),
-    ("migrate-to-operator", "--source-dir"),
-    ("onboard", "--rule-files"),
-    ("operator-check", "--rule-packs-dir"),
-    ("operator-generate", "--config-dir"),
-    ("operator-generate", "--rule-packs-dir"),
-    ("shadow-verify", "--mapping"),
-    ("shadow-verify", "--readiness-json"),
-    ("shadow-verify", "--report-csv"),
-    ("state-reconcile", "--manifest-path"),
-    ("state-reconcile", "--state-dir"),
-})
+#: #3392's (missing read as empty) and #3415's (traceback, misworded,
+#: silent) are all judged now: none is pending.
+PENDING: frozenset[tuple[str, str]] = frozenset()
 
 
 def _caller_paths():

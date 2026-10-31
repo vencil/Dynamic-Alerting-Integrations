@@ -415,8 +415,10 @@ def test_a_findings_document_that_disagrees_with_the_exit_is_incomplete(
 
 # ── git ──────────────────────────────────────────────────────────────────
 
+# Armed only once the service is up: its start reads --config-subdir with the
+# same ls-tree (#3392), and that read is not the one under test.
 _FLAKY_GIT = """#!/bin/sh
-if [ "$3" = "ls-tree" ]; then
+if [ "$3" = "ls-tree" ] && [ -e "$GSVC_GIT_ARMED" ]; then
   if [ "$GSVC_GIT_MODE" = always ] || [ ! -e "$GSVC_GIT_STATE" ]; then
     : > "$GSVC_GIT_STATE"
     echo "fatal: injected failure" >&2
@@ -433,7 +435,9 @@ def test_git_read_is_retried_once(tmp_path, world, mode, want):
     with h.Service(tmp_path / "s", world["repo"], bin_dir=world["bin"],
                    args=("--git", str(git)),
                    env={"GSVC_GIT_MODE": mode,
-                        "GSVC_GIT_STATE": str(tmp_path / "failed-once")}) as svc:
+                        "GSVC_GIT_STATE": str(tmp_path / "failed-once"),
+                        "GSVC_GIT_ARMED": str(tmp_path / "armed")}) as svc:
+        (tmp_path / "armed").touch()
         status, doc = svc.validate(world["commits"]["clean"])
         assert status == 200
         got = doc["result"] if doc["result"] != "rejected" else doc["reason"]
