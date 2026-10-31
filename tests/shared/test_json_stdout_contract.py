@@ -1030,13 +1030,18 @@ RECIPES: list[Recipe] = [
       doc_check=_caller_error_doc("output_unwritable")),
 
     # ── batch_diagnose  (⚠ known multi-mode trap) ──────────────────────────
+    # #1525: every mode reads the ConfigMap (the fake kubectl's db-a / db-b).
     R("batch_diagnose", "dry-run",
-      lambda t, s: ["--tenants", "tenant-one,tenant-two", "--dry-run", "--json"]),
+      lambda t, s: ["--tenants", "db-a,db-b", "--dry-run", "--json"], needs_kubectl=True),
     R("batch_diagnose", "run",
-      lambda t, s: ["--tenants", "tenant-one,tenant-two",
-                    "--prometheus", s, "--json"]),
+      lambda t, s: ["--tenants", "db-a,db-b",
+                    "--prometheus", s, "--json"], needs_kubectl=True),
     R("batch_diagnose", "autodiscover",
       lambda t, s: ["--prometheus", s, "--json"], needs_kubectl=True),   # tenants from the ConfigMap
+    R("batch_diagnose", "tenant-not-found",
+      lambda t, s: ["--tenants", "db-a,no-such-tenant", "--prometheus", s, "--json"],
+      needs_kubectl=True, expect_caller_error=True,
+      doc_check=_caller_error_doc("tenant_not_found")),
 
     # ── blind_spot_discovery  (--json-output spelling) ─────────────────────
     R("blind_spot_discovery", "scan",

@@ -79,9 +79,11 @@ SCOPE — HONEST BOUNDARIES
    ``--execute`` / ``--apply`` / ``--update`` / ``--output``）在需要時是
    刻意跟 ``--dry-run`` 同給的：寫入要那個旗標才開的工具，只給 ``--dry-run``
    的話守衛根本擋不到東西，拿掉它也不會紅。
-4. **No recipe needs kubectl or a real network** — the three recipes that
-   talk HTTP get the same local stub server the --json gate uses, so this
-   gate runs fully (no skips) on Windows hosts as well as POSIX CI.
+4. **No recipe needs a real kubectl or network** — the three recipes that
+   talk HTTP get the same local stub server the --json gate uses.
+   batch_diagnose reads its ConfigMap in every mode (#1525), so its recipe
+   puts the --json gate's fake ``kubectl`` first on ``PATH``; like the fake
+   ``gh`` recipes it is POSIX-only, every other recipe runs on Windows too.
 5. **Data-shape coverage is one-deep** (same accepted limit as the --json
    gate): each dry-run path is driven with one upstream payload shape.
    Probed at landing time: even against the empty-stub payloads the
@@ -435,6 +437,24 @@ _BENCH_CANARY = "BenchmarkControlCanaryCPU"   # = analyze_bench_history.CANARY_B
 _BENCH_CPU = "Dry Run Probe CPU @ 1.00GHz"
 
 
+def _with_fake_kubectl(tmp: Path, argv: list[str]) -> list[str]:
+    """The --json gate's fake `kubectl` in `tmp/bin` (its threshold-config
+    declares db-a and db-b); returns *argv*. With `env=_kubectl_env`."""
+    bindir = tmp / "bin"
+    bindir.mkdir(parents=True, exist_ok=True)
+    impl = bindir / "fake_kubectl.py"
+    impl.write_text(_jsc._FAKE_KUBECTL_PY, encoding="utf-8")
+    exe = bindir / "kubectl"
+    exe.write_text(f'#!/bin/sh\nexec "{sys.executable}" "{impl}" "$@"\n',
+                   encoding="utf-8", newline="\n")
+    exe.chmod(0o755)
+    return argv
+
+
+def _kubectl_env(tmp: Path) -> dict[str, str]:
+    return {"PATH": f"{tmp / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}"}
+
+
 def _bench_env(tmp: Path) -> dict[str, str]:
     bindir = tmp / "bin"
     return {
@@ -668,7 +688,8 @@ RECIPES: list[Recipe] = [
 
     # ── argv shapes reused from the --json gate's dry-run recipes ──────────
     R("batch_diagnose",
-      lambda t, s: ["--tenants", "tenant-one,tenant-two", "--dry-run", "--json"]),
+      lambda t, s: _with_fake_kubectl(t, ["--tenants", "db-a,db-b", "--dry-run", "--json"]),
+      env=_kubectl_env, posix_only=True),
 
     R("cutover_tenant",
       lambda t, s: ["--readiness-json", _jsc._readiness_json(t / "fix"),

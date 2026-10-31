@@ -352,8 +352,10 @@ TOOLS: dict[str, Tool] = {
 #: Population files (paths under `scripts/`) with an entry point that are
 #: not in `TOOLS`, and why. ⛔ "It would fail a cell" is not a reason.
 NOT_IN_MATRIX: dict[str, str] = {
-    "tools/ops/batch_diagnose.py": "takes ConfigMap keys (a flat mapping fetched from a cluster), "
-                                   "not a conf.d tree",
+    "tools/ops/batch_diagnose.py": ("reads the threshold-config ConfigMap through kubectl and judges "
+                                    "it as a tree through the shared exit (#1525), but needs a cluster "
+                                    "and a live Prometheus; tests/ops/test_batch_diagnose.py holds "
+                                    "its refusal"),
     "tools/ops/patch_config.py": "reads a ConfigMap through kubectl (flat keys), not a conf.d tree",
     "tools/ops/diagnose.py": ("reads conf.d, but needs a live Prometheus: without one it exits 2 "
                               "whatever the tree (a precondition the sandbox does not provide)"),

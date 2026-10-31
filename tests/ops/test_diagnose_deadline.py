@@ -276,7 +276,7 @@ class TestBatchDeadline:
         around the thread instead of in it would silently never apply."""
         seen = {}
 
-        def check(tenant, prom_url, *, out):
+        def check(tenant, prom_url, *, out, chain=None):
             seen["at"] = diagnose._DEADLINE.get()
             seen["thread"] = threading.current_thread().name
             out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
@@ -293,7 +293,7 @@ class TestBatchDeadline:
         time at all: "not run: the deadline has passed" before anything ran."""
         seen = {}
 
-        def check(tenant, prom_url, *, out):
+        def check(tenant, prom_url, *, out, chain=None):
             seen["at"] = diagnose._DEADLINE.get()
             out.write(json.dumps({"tenant": tenant, "status": "healthy"}))
         monkeypatch.setattr(bd, "diagnose_check", check)
@@ -319,7 +319,12 @@ class TestBatchDeadline:
         assert "not run" not in result["issues"][0], result
         assert _alive(stuck_kubectl) == []
 
-    def test_cli_leaves_no_orphan_and_exits_2(self, stuck_kubectl, cli_argv, capsys):
+    def test_cli_leaves_no_orphan_and_exits_2(self, stuck_kubectl, cli_argv, capsys,
+                                               monkeypatch, da_guard_env):
+        # #1525: the ConfigMap is read first (here, without kubectl).
+        monkeypatch.setattr(bd, "read_configmap_files", lambda **kw: {
+            "_defaults.yaml": b"defaults:\n  cpu: 50\n",
+            "t.yaml": b"tenants:\n  t1: {}\n  t2: {}\n"})
         cli_argv("batch_diagnose", "--tenants", "t1,t2", "--timeout", "1",
                  "--prometheus", "http://prom:9090", "--json")
         assert bd.main() == 2

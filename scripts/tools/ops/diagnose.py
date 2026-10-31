@@ -33,7 +33,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import TextIO
+from typing import NamedTuple, TextIO
 
 # Add script dir to path for lib imports
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -51,6 +51,8 @@ from _lib_kubectl import KubectlError, kubectl_list, kubectl_logs  # noqa: E402 
 # #2526 / #2547: the tenant's resolution is threshold-exporter's own
 # (`da-guard effective`); see resolve_inheritance_chain.
 from _lib_tenant_values import (  # noqa: E402
+    EffectiveTree,
+    ServedTree,
     ServedValuesError,
     canonical_key,
     exit_on_served_values_error,
@@ -369,14 +371,54 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
     require_config_dir(config_dir)
     base = Path(config_dir)
 
+    tree = _load_effective(base)
+    _tenant_entry(tree, tenant, str(base))
+    return chain_for(tenant, ChainSource(base, tree, load_served_tree(base)))
+
+
+class ChainSource(NamedTuple):
+    """One read of a tree for many chains (#1525): `da-guard effective` and
+    `served-values` once, then `chain_for` per tenant."""
+
+    base: Path
+    effective: EffectiveTree
+    served: ServedTree
+    where: str = ""
+    """How a missing tenant names the tree (default: `base`)."""
+
+
+def load_chain_source(config_dir: str | Path, *, where: str = "") -> ChainSource:
+    """`ChainSource` for `config_dir`: the same checks and reads as
+    `resolve_inheritance_chain`, made once — what batch-diagnose resolves
+    every tenant from (#1525). Raises as `resolve_inheritance_chain` does."""
+    require_config_dir(str(config_dir))
+    base = Path(config_dir)
+    tree = _load_effective(base)
+    return ChainSource(base, tree, load_served_tree(base), where)
+
+
+def _load_effective(base: Path) -> EffectiveTree:
     tree = load_effective_tree(base)
     for s in tree.skipped:
         print(f"  WARN: {safe_label(s.file)}: {safe_label(s.reason)}", file=sys.stderr)
+    return tree
+
+
+def _tenant_entry(tree: EffectiveTree, tenant: str, where: str):
     te = tree.tenants.get(tenant)
     if te is None:
         raise TenantNotFoundError(
-            f"no tenant '{safe_label(tenant)}' in {safe_label(str(base))}: "
+            f"no tenant '{safe_label(tenant)}' in {safe_label(where)}: "
             f"threshold-exporter reads {len(tree.tenants)} tenant(s) there")
+    return te
+
+
+def chain_for(tenant: str, source: ChainSource) -> dict[str, object]:
+    """`tenant`'s chain from an already-read tree — the dict
+    `resolve_inheritance_chain` documents; `TenantNotFoundError` when the
+    tree has no such tenant."""
+    base, tree, served_tree = source.base, source.effective, source.served
+    te = _tenant_entry(tree, tenant, source.where or str(base))
     for w in te.warnings:
         print(f"  WARN: {safe_label(w)}", file=sys.stderr)
     # `profile_name` is the profile the exporter binds; a reference that
@@ -389,7 +431,6 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
               f"'{safe_label(written)}' binds no profile for tenant "
               f"'{safe_label(tenant)}' (threshold-exporter applies none)", file=sys.stderr)
 
-    served_tree = load_served_tree(base)
     served = served_tree.tenants.get(tenant)
     if served is None:
         # The two Go answers disagree on which tenants exist: no answer.
@@ -465,8 +506,12 @@ def _format_chain_summary(inheritance):
 
 
 def check(tenant: str, prom_url: str, config_dir: str | None = None,
-          *, out: TextIO | None = None) -> dict:
+          *, out: TextIO | None = None, chain: dict | None = None) -> dict:
     """Emit one JSON health document for `tenant`.
+
+    `chain` is the tenant's chain already resolved (`chain_for`), in place of
+    `config_dir`: batch-diagnose reads its tree once for every tenant (#1525).
+    Giving both is a programming error (`TypeError`).
 
     ⛔ `out` exists because the caller may need the document WITHOUT touching
     process-global state. `contextlib.redirect_stdout` rebinds `sys.stdout` for
@@ -481,6 +526,8 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
 
     Returns the document it printed, so the CLI can derive its exit code.
     """
+    if chain is not None and config_dir is not None:
+        raise TypeError("check(): pass config_dir or chain, not both")
     errors = []
     skipped = []
     if config_dir is not None:
@@ -554,7 +601,7 @@ def check(tenant: str, prom_url: str, config_dir: str | None = None,
     # `profile_name`. #2526: that read is `da-guard effective`; when it
     # cannot be made, this raises (the CLI exits 2) rather than answer
     # without the chain.
-    inheritance = resolve_inheritance_chain(tenant, config_dir)
+    inheritance = chain if chain is not None else resolve_inheritance_chain(tenant, config_dir)
     profile_name = inheritance["profile_name"] if inheritance else None
 
     # 5. 輸出結果 (Token Saving 核心：正常時只回傳極簡 JSON)
