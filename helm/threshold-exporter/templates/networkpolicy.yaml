@@ -1,0 +1,69 @@
+{{- /*
+  The exporter's NetworkPolicies (#1425), in the release namespace. They used
+  to be raw manifests pinned to `monitoring` (k8s/03-monitoring/
+  network-policies.yaml), which a release installed anywhere else never got.
+  An empty prometheusPodLabels would render `matchLabels: {}` — every pod in
+  prometheusNamespace — so it is refused rather than silently widened.
+  Named apart from the old raw `allow-threshold-exporter-*` policies on
+  purpose: a cluster that applied those has them in `monitoring` without
+  Helm's ownership metadata, and a same-named chart object would make the
+  install fail. The old ones only duplicate these allows; delete them.
+*/ -}}
+{{- if .Values.networkPolicy.enabled }}
+{{- if not .Values.networkPolicy.prometheusPodLabels }}
+{{- fail "networkPolicy.prometheusPodLabels must be a non-empty label selector: an empty matchLabels admits every pod in networkPolicy.prometheusNamespace to the exporter" }}
+{{- end }}
+{{- if not .Values.networkPolicy.prometheusNamespace }}
+{{- fail "networkPolicy.prometheusNamespace must name the namespace Prometheus runs in" }}
+{{- end }}
+# Only Prometheus may scrape the metrics port.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: threshold-exporter-ingress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: threshold-exporter
+spec:
+  podSelector:
+    matchLabels:
+      app: threshold-exporter
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace | quote }}
+          podSelector:
+            matchLabels:
+              {{- toYaml .Values.networkPolicy.prometheusPodLabels | nindent 14 }}
+      ports:
+        # The container port by name (deployment.yaml), not service.port: a
+        # NetworkPolicy matches the pod's port.
+        - protocol: TCP
+          port: http
+---
+# Stateless: it serves metrics from its mounted ConfigMap and needs only DNS.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: threshold-exporter-egress
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: threshold-exporter
+spec:
+  podSelector:
+    matchLabels:
+      app: threshold-exporter
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+{{- end }}

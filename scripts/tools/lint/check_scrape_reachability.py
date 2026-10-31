@@ -28,14 +28,18 @@ k8s/**. Each leaf is classified:
                           da_generator_, and the threshold-exporter families
                           below) — no repo manifest
                           pins the target, so only the JOB side is checked: that
-                          some annotation-keep job's SD face covers the pinned
+                          some job keeps annotated Services carrying the
+                          platform scrape label (PLATFORM_SCRAPE_LABEL) in EVERY
                           namespace, and that no __name__ filter rejects the
-                          name. That the chart's Service actually carries
-                          `prometheus.io/scrape` is not verified HERE — this
-                          gate never opens helm/. The chart face is pinned
-                          instead by
-                          tests/lint/test_check_scrape_reachability.py, which renders each chart and requires an
-                          annotated Service in the pinned namespace (#1286).
+                          name. The install namespace is no premise (#1425):
+                          the charts render into Release.Namespace, and the job
+                          selects by label, not by a namespace list. That the
+                          chart's Service actually carries the annotation and
+                          the label is not verified HERE — this gate never
+                          opens helm/. The chart face is pinned instead by
+                          tests/lint/test_check_scrape_reachability.py, which
+                          renders each chart and requires such a Service
+                          (#1286).
   REACHABLE-IF-EXPORTED tenant-exporters face: the job WOULD admit a db-* ns
                         annotated Service, but per-tenant targets only exist at
                         runtime and whether the exporter exposes this exact
@@ -84,12 +88,13 @@ it is narrower than it looks, and measured:
   loud via the 24 other leaves pinned into the same namespace.
 
   DOES NOT BUY, in decreasing order of how easily it is mistaken for covered:
-  (1) chart-side NAMESPACE and ANNOTATION drift — this gate still never opens
+  (1) chart-side ANNOTATION and LABEL drift — this gate still never opens
       helm/, so neither moves a verdict here. Both are tripwired from the TEST
-      SUITE instead (#1286): the namespace by a text pin, the annotation by
-      rendering each chart with `helm template` and requiring an annotated
-      Service in the pinned namespace. Those tests need the helm binary, so
-      they are real gates in CI and skip locally.
+      SUITE instead (#1286): it renders each chart with `helm template` and
+      requires a Service carrying the scrape annotation and the platform
+      scrape label. Those tests need the helm binary, so they are real gates
+      in CI and skip locally. (The install namespace stopped being a premise
+      in #1425: the job no longer lists namespaces for these charts.)
   (2) NETWORK REACHABILITY. This gate models SD + annotations + __name__
       filters — it does NOT model NetworkPolicy. A scrape the egress policy
       denies still reads REACHABLE. That is not hypothetical: #1291 found all
@@ -163,40 +168,36 @@ SCRAPE_ANNOTATION = "prometheus.io/scrape"
 # (#1285 removed a user_*/da_* prefix exclusion that made exactly that mistake).
 INJECTED_EXACT = {"up", "ALERTS"}
 
-# Vector's operational install namespace (#1018 PSS carve-out). The chart's
-# Services render into Release.Namespace, but the platform pins the release to
-# this namespace — the prometheus configmap SD list must carry it for vector_*
-# to be scrapeable (see the monitoring-components job comment).
-VECTOR_NAMESPACE = "vector"
+# The platform scrape label (#1425). The threshold-exporter, Vector and
+# tenant-api charts put it on their scrape Services (helm/*/templates/
+# service*.yaml), and Prometheus' `platform-components` job keeps Services by
+# it in every namespace. The namespace a release is installed into is therefore
+# no premise of this gate. It used to be: three constants (monitoring / vector /
+# tenant-api) that an SD namespace list had to match by hand while the charts
+# render into Release.Namespace — and `da-tools init --namespace` invites any
+# other namespace, which then was silently never scraped.
+PLATFORM_SCRAPE_LABEL = "dynamic-alerting.io/scrape"
+PLATFORM_SCRAPE_VALUE = "platform"
+#: The label as Prometheus' kubernetes SD exposes it: every character outside
+#: [a-zA-Z0-9_] becomes `_`, under `__meta_kubernetes_service_label_`.
+PLATFORM_SCRAPE_META = ("__meta_kubernetes_service_label_"
+                        + re.sub(r"[^a-zA-Z0-9_]", "_", PLATFORM_SCRAPE_LABEL))
 
-# threshold-exporter's install namespace. Pinned operationally, like Vector's
-# and tenant-api's: since #1425 the chart renders every resource into
-# `{{ .Release.Namespace }}` (it used to write `namespace: monitoring`
-# literally, which made a `helm install -n obs` land in monitoring anyway), and
-# the platform installs the release into `monitoring` — the chart README's
-# install command, held equal to this constant by
-# tests/lint/test_check_scrape_reachability.py — a repo-pinned Namespace
-# manifest (k8s/00-namespaces/namespaces.yaml:32). The chart face is pinned by
-# rendering, like every other helm-service family.
-THRESHOLD_EXPORTER_NAMESPACE = "monitoring"
-
-# tenant-api's install namespace (#1004 canonical namespace). Like Vector's it
-# is pinned operationally — the chart's Service renders into
-# Release.Namespace — and the Namespace manifest is repo-pinned
-# (k8s/00-namespaces/namespace-tenant-api.yaml). Until #1594 the family was a
-# `service` row resolved against the raw tenant-api Service under k8s/; those
-# raw manifests are gone (helm/tenant-api is the only deployment source), so the
-# chart face is pinned by rendering, like every other helm-service family.
-TENANT_API_NAMESPACE = "tenant-api"
+# The charts behind the helm-service families. A chart is what the family's
+# target comes from; tests/lint/test_check_scrape_reachability.py renders each
+# one and requires a Service carrying the scrape annotation and the label.
+THRESHOLD_EXPORTER_CHART = "helm/threshold-exporter"
+VECTOR_CHART = "helm/vector"
+TENANT_API_CHART = "helm/tenant-api"
 
 # ── metric-family → expected source (declarative, longest-prefix wins) ──────
 # kind:
 #   static           scraped by a static_configs self-job (value = job name)
 #   service          repo-pinned Service manifest (value = (namespace, name));
 #                    admission is computed from the parsed manifests + jobs
-#   helm-service     helm chart Service whose install ns is operationally
-#                    pinned (value = namespace); admission = ns present in an
-#                    annotation-keep job's SD list
+#   helm-service     helm chart Service in Release.Namespace (value = chart
+#                    path); admission = some annotation-keep job keeps the
+#                    platform scrape label in every namespace
 #   name-filtered    node-role job with a __name__ allowlist (value = job name)
 # Families not listed here fall through to the tenant-exporter face (the
 # is_federated_exporter_metric SSOT) and then UNKNOWN-SOURCE.
@@ -204,25 +205,25 @@ TENANT_API_NAMESPACE = "tenant-api"
 _FAMILY_TABLE: list[tuple[str, str, object]] = [
     ("prometheus_", "static", "prometheus"),
     ("alertmanager_", "service", ("monitoring", "alertmanager")),
-    ("tenant_api_", "helm-service", TENANT_API_NAMESPACE),
+    ("tenant_api_", "helm-service", TENANT_API_CHART),
     # NOTE `kubelet_` before `kube_` is load-bearing — longest-prefix matching
     # protects it, but keep the order human-readable too (substring trap).
     ("kubelet_", "name-filtered", "kubelet-volume-stats"),
     ("kube_", "service", ("monitoring", "kube-state-metrics")),
     ("container_", "name-filtered", "kubelet-cadvisor"),
-    ("vector_", "helm-service", VECTOR_NAMESPACE),
+    ("vector_", "helm-service", VECTOR_CHART),
     # threshold-exporter's two config-driven families (#1285). Their VALUES
     # come from conf.d; their SERIES come from the threshold-exporter target
     # like everything else it registers — see the module docstring.
-    ("da_", "helm-service", THRESHOLD_EXPORTER_NAMESPACE),
-    ("user_", "helm-service", THRESHOLD_EXPORTER_NAMESPACE),
+    ("da_", "helm-service", THRESHOLD_EXPORTER_CHART),
+    ("user_", "helm-service", THRESHOLD_EXPORTER_CHART),
     # NOTE `da_generator_` is NOT threshold-exporter's: it is the generator
     # container's (`da-tools generator-service`, ADR-036 §3), which has only a
     # Unix socket — tenant-api appends its /metrics to its own (#2903), so the
     # series come from the tenant-api target. Longest-prefix matching routes
     # it here before `da_` above; da_generator_build_info is the generator /
     # da-guard version metric (ADR-036 §6).
-    ("da_generator_", "helm-service", TENANT_API_NAMESPACE),
+    ("da_generator_", "helm-service", TENANT_API_CHART),
 ]
 
 # ── EXACT-NAME families (checked before _FAMILY_TABLE) ─────────────────────
@@ -233,13 +234,14 @@ _FAMILY_TABLE: list[tuple[str, str, object]] = [
 # Measured: a `tenant_` prefix also swallows tenant_federation_requests_total
 # (federation-gateway chart) and tenant_log_query_requests_total
 # (tenant-log-query plane) — both correctly ledgered UNKNOWN-SOURCE because
-# their install ns is Release.Namespace. A prefix would reclassify them
+# their charts carry no platform scrape label, so no job here is known to
+# select them wherever they are installed. A prefix would reclassify them
 # REACHABLE off the wrong component's Service and trip the ledger exit-lock.
 # The pin lives in tests/lint/test_check_scrape_reachability.py.
 _FAMILY_EXACT: dict[str, tuple[str, object]] = {
     # Same collector.go / same registry / same /metrics as the da_*+user_* rows.
-    "tenant_metadata_info": ("helm-service", THRESHOLD_EXPORTER_NAMESPACE),
-    "tenant_expected_exporter": ("helm-service", THRESHOLD_EXPORTER_NAMESPACE),
+    "tenant_metadata_info": ("helm-service", THRESHOLD_EXPORTER_CHART),
+    "tenant_expected_exporter": ("helm-service", THRESHOLD_EXPORTER_CHART),
 }
 
 # Helm-only components: install namespace is Release.Namespace, NOT pinned by
@@ -410,6 +412,9 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
             "sd_namespaces": [],
             "annotation_keep": False,
             "ns_keep_regex": None,
+            # "keep" / "drop" when a relabel step keeps or drops Services whose
+            # platform scrape label is PLATFORM_SCRAPE_VALUE (#1425), else None
+            "platform_label": None,
             "name_rules": [],   # [(action, regex)] over __name__
             "label_rules": [],  # [(action, source_labels, regex)] other keep/drop
         }
@@ -418,9 +423,13 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
             job["sd_namespaces"] = list(
                 ((sd.get("namespaces") or {}).get("names")) or [])
         for rc in sc.get("relabel_configs", []) or []:
+            src = rc.get("source_labels", [])
+            if (src == [PLATFORM_SCRAPE_META] and rc.get("action") in ("keep", "drop")
+                    and rc.get("regex") == PLATFORM_SCRAPE_VALUE):
+                job["platform_label"] = rc.get("action")
+                continue
             if rc.get("action") != "keep":
                 continue
-            src = rc.get("source_labels", [])
             if src == ["__meta_kubernetes_service_annotation_prometheus_io_scrape"]:
                 job["annotation_keep"] = rc.get("regex") == "true"
             elif src == ["__meta_kubernetes_namespace"]:
@@ -473,7 +482,7 @@ def name_passes(metric: str, name_rules: list[tuple[str, str]]) -> bool:
 # ── Service manifest parsing (target existence side of the contract) ────────
 
 def parse_services(paths: list[Path]) -> list[dict]:
-    """Every `kind: Service` doc found in *paths* → {name, namespace, annotations},
+    """Every `kind: Service` doc found in *paths* → {name, namespace, annotations, labels},
     each file read the way kubectl reads it (da-crdecode, ADR-036 §12, #3206).
     No da-crdecode raises ConsumerReadError; files kubectl's reading refuses
     raise InputRefused naming every one, with its reason (#3426) — both
@@ -497,6 +506,7 @@ def parse_services(paths: list[Path]) -> list[dict]:
                 "name": meta.get("name"),
                 "namespace": meta.get("namespace"),
                 "annotations": meta.get("annotations") or {},
+                "labels": meta.get("labels") or {},
             })
     return services
 
@@ -517,7 +527,48 @@ def _service_admitted(svc: dict, job: dict) -> bool:
     if job["ns_keep_regex"] is not None:
         if not ns or re.fullmatch(job["ns_keep_regex"], ns) is None:
             return False
+    platform = (svc.get("labels") or {}).get(PLATFORM_SCRAPE_LABEL) == PLATFORM_SCRAPE_VALUE
+    if job["platform_label"] == "keep" and not platform:
+        return False
+    if job["platform_label"] == "drop" and platform:
+        return False
     return True
+
+
+def _keeps_platform_everywhere(job: dict) -> bool:
+    """A job that keeps annotated, platform-labelled Services in EVERY namespace."""
+    return (job["sd_role"] == "service" and job["annotation_keep"]
+            and job["platform_label"] == "keep"
+            and not job["sd_namespaces"] and job["ns_keep_regex"] is None)
+
+
+#: Namespaces a platform chart's Service is probed in when checking that
+#: exactly one job keeps it: the platform namespace, a tenant-shaped one (the
+#: tenant job's keep regex) and one neither job names. Synthetic strings, not
+#: tenant ids (dev-rule #2).
+_PLATFORM_PROBE_NAMESPACES = ("monitoring", "db-probe", "da-probe")
+
+
+def _platform_double_scrape(jobs: list[dict]) -> list[str]:
+    """Errors for a platform Service that more than one job would keep.
+
+    Two jobs keeping one target scrape it twice; worse, the tenant job rewrites
+    `job` and `tenant` (#1425: a platform chart in a db-* namespace), so every
+    `up{job="threshold-exporter"}`-style platform alert loses its target.
+    """
+    errors = []
+    for ns in _PLATFORM_PROBE_NAMESPACES:
+        probe = {"name": "platform-probe", "namespace": ns,
+                 "annotations": {SCRAPE_ANNOTATION: "true"},
+                 "labels": {PLATFORM_SCRAPE_LABEL: PLATFORM_SCRAPE_VALUE}}
+        keeping = sorted(j["job"] for j in jobs if _service_admitted(probe, j))
+        if len(keeping) > 1:
+            errors.append(
+                f"PLATFORM-DOUBLE-SCRAPE: a Service labelled "
+                f"{PLATFORM_SCRAPE_LABEL}={PLATFORM_SCRAPE_VALUE} in ns '{ns}' is "
+                f"kept by {len(keeping)} jobs ({', '.join(keeping)}) — drop that "
+                f"label in every job but the platform one. (#1425)")
+    return errors
 
 
 def _tenant_exporter_face_exists(jobs: list[dict]) -> bool:
@@ -635,24 +686,25 @@ def classify(metric: str, jobs: list[dict], services: list[dict]) -> tuple[str, 
             return DEAD, (f"Service {ns}/{name} is annotated but its namespace is in "
                           "no job's SD/namespace-keep face — no job can select it")
         if kind == "helm-service":
-            ns = spec
-            admitting = [j for j in jobs
-                         if j["sd_role"] == "service" and j["annotation_keep"]
-                         and (not j["sd_namespaces"] or ns in j["sd_namespaces"])
-                         and (j["ns_keep_regex"] is None
-                              or re.fullmatch(j["ns_keep_regex"], ns))
+            chart = spec
+            admitting = [j for j in jobs if _keeps_platform_everywhere(j)
                          and name_passes(metric, j["name_rules"])]
             if admitting:
                 # Say what was actually checked. The federation-plane caveat is
                 # a vector_-specific scope note (see SCOPE BOUNDARY above) and
                 # is meaningless for other helm-service families, so it is not
-                # asserted here; "assumed annotated" states the real gap.
-                return REACHABLE, (f"job '{admitting[0]['job']}' admits ns '{ns}' "
-                                   "(chart face not read here — pinned by "
-                                   "tests/lint/test_check_scrape_reachability.py, "
-                                   "#1286)")
-            return DEAD, (f"pinned ns '{ns}' is in no annotation-keep job's SD face, "
-                          "or a __name__ filter rejects this metric")
+                # asserted here; "chart face not read here" states the real gap.
+                return REACHABLE, (
+                    f"job '{admitting[0]['job']}' keeps "
+                    f"{PLATFORM_SCRAPE_LABEL}={PLATFORM_SCRAPE_VALUE} Services in "
+                    f"every namespace ({chart}'s chart face not read here — "
+                    "pinned by tests/lint/test_check_scrape_reachability.py, "
+                    "#1286)")
+            return DEAD, (f"no annotation-keep job keeps "
+                          f"{PLATFORM_SCRAPE_LABEL}={PLATFORM_SCRAPE_VALUE} Services in "
+                          f"every namespace (the target is {chart}'s Service, installed "
+                          "into Release.Namespace), or a __name__ filter rejects "
+                          "this metric")
         if kind == "name-filtered":
             job = next((j for j in jobs if j["job"] == spec), None)
             if job is None:
@@ -710,7 +762,7 @@ def run_check(
     for cls, _reason in classes.values():
         counts[cls] += 1
 
-    errors: list[str] = []
+    errors: list[str] = _platform_double_scrape(jobs)
     infos: list[str] = []
 
     for m, (cls, reason) in classes.items():
@@ -755,8 +807,9 @@ def main(argv: list[str] | None = None) -> int:
             "be admitted by at least one scrape job (TRK-340)"))
     parser.add_argument(
         "--ci", action="store_true",
-        help=i18n_text("DEAD / 新 UNKNOWN-SOURCE / ledger exit-lock 破口即 exit 1",
-                       "exit 1 on DEAD, NEW unknown-source, or a ledger exit-lock breach"))
+        help=i18n_text("DEAD / 新 UNKNOWN-SOURCE / ledger exit-lock 破口 / 平台 Service 被多個 job 收錄即 exit 1",
+                       "exit 1 on DEAD, NEW unknown-source, a ledger exit-lock breach, "
+                       "or a platform Service kept by more than one job"))
     parser.add_argument(
         "--verbose", action="store_true",
         help=i18n_text("列出每個葉 metric 的分類與理由",

@@ -12,6 +12,10 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "vector.labels" . | nindent 4 }}
+    # Platform scrape discovery (#1425): kept by Prometheus'
+    # `platform-components` job in any namespace (see
+    # helm/threshold-exporter/templates/service.yaml).
+    dynamic-alerting.io/scrape: platform
   annotations:
     prometheus.io/scrape: "true"
     prometheus.io/port: {{ .Values.metrics.port | quote }}

@@ -138,3 +138,70 @@ def test_non_string_existing_configmap_is_refused():
     proc = _render("--set", "thresholdConfig.existingConfigMap=true")
     assert proc.returncode != 0
     assert "existingConfigMap must be a ConfigMap NAME" in proc.stderr
+
+
+# ── the exporter's NetworkPolicy follows the release (#1425) ──────────────
+# It used to be two raw manifests pinned to `monitoring`
+# (k8s/03-monitoring/network-policies.yaml): an exporter installed anywhere else
+# had no ingress isolation at all, and nothing said so.
+
+def _policies(docs: list[dict]) -> dict[str, dict]:
+    return {d["metadata"]["name"]: d for d in docs if d["kind"] == "NetworkPolicy"}
+
+
+def test_the_raw_manifests_no_longer_pin_the_exporters_policies():
+    """One owner: the chart. A raw copy in `monitoring` would be a second."""
+    raw = (_REPO_ROOT / "k8s" / "03-monitoring" / "network-policies.yaml"
+           ).read_text(encoding="utf-8")
+    docs = [d for d in yaml.safe_load_all(raw) if d]
+    selectors = [((d.get("spec") or {}).get("podSelector") or {}).get("matchLabels")
+                 for d in docs]
+    assert {"app": "threshold-exporter"} not in selectors, (
+        "a raw NetworkPolicy still selects the exporter pods")
+
+
+@_needs_helm
+def test_the_policies_land_in_the_release_namespace_and_admit_only_prometheus():
+    pols = _policies(_docs("-n", "obs"))
+    assert set(pols) == {"threshold-exporter-ingress", "threshold-exporter-egress"}
+    assert {p["metadata"]["namespace"] for p in pols.values()} == {"obs"}
+    rule = pols["threshold-exporter-ingress"]["spec"]["ingress"]
+    assert rule == [{
+        "from": [{"namespaceSelector": {"matchLabels": {
+                      "kubernetes.io/metadata.name": "monitoring"}},
+                  "podSelector": {"matchLabels": {"app": "prometheus"}}}],
+        "ports": [{"protocol": "TCP", "port": "http"}],
+    }], rule
+    egress = pols["threshold-exporter-egress"]["spec"]["egress"]
+    assert [p["port"] for r in egress for p in r["ports"]] == [53, 53], egress
+
+
+@_needs_helm
+def test_prometheus_location_is_a_value():
+    pols = _policies(_docs("--set", "networkPolicy.prometheusNamespace=obs-mon",
+                           "--set", "networkPolicy.prometheusPodLabels.app=prom"))
+    peer = pols["threshold-exporter-ingress"]["spec"]["ingress"][0]["from"][0]
+    assert peer["namespaceSelector"]["matchLabels"] == {
+        "kubernetes.io/metadata.name": "obs-mon"}
+    assert peer["podSelector"]["matchLabels"] == {"app": "prom"}
+
+
+@_needs_helm
+def test_an_empty_prometheus_selector_is_refused():
+    """`matchLabels: {}` admits every pod in the namespace — refused, not widened."""
+    proc = _render("--set", "networkPolicy.prometheusPodLabels=null")
+    assert proc.returncode != 0
+    assert "prometheusPodLabels must be a non-empty label selector" in proc.stderr
+
+
+@_needs_helm
+def test_disabled_renders_no_policy():
+    assert not _policies(_docs("--set", "networkPolicy.enabled=false"))
+
+
+@_needs_helm
+def test_the_scrape_service_carries_the_platform_label():
+    """Prometheus' `platform-components` keeps by this label in any namespace;
+    tests/lint/test_check_scrape_reachability.py pins the job side."""
+    svc = next(d for d in _docs("-n", "obs") if d["kind"] == "Service")
+    assert svc["metadata"]["labels"]["dynamic-alerting.io/scrape"] == "platform"

@@ -62,6 +62,14 @@ data:
           - source_labels: [__meta_kubernetes_namespace]
             action: keep
             regex: "db-.+"
+          # Never a platform component (#1425): a platform chart installed into
+          # a db-* namespace is `platform-components`' target. Kept here too,
+          # its own `tenant` label would be renamed exported_tenant and `job`
+          # would read tenant-exporters, so up{job="threshold-exporter"} and
+          # the other platform alerts would lose their target.
+          - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
+            action: drop
+            regex: "platform"
           # Use the annotated port
           - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
             action: replace
@@ -83,33 +91,68 @@ data:
           - target_label: env
             replacement: "test"
 
-      # Platform-component services (monitoring + vector + tenant-api namespaces)
-      # Auto-discovers: kube-state-metrics, threshold-exporter,
-      # and any future component with the annotation.
-      # `vector` was added when the Vector log-agent DaemonSet moved to its
-      # dedicated privileged namespace (#1018 PSS carve-out) — its
-      # vector-metrics + projection-gate-metrics headless Services carry the
-      # same prometheus.io/scrape annotation and would silently drop off
-      # this job without the extra namespace here.
-      # `tenant-api` closes the same declared-but-unwired hole one more time
-      # (#1203/TRK-340): the tenant-api Service carries the full scrape
-      # annotation set AND its NetworkPolicy explicitly admits Prometheus on
-      # 8080, but its namespace was in NO job's SD list — so the 4
-      # TenantApi* platform alerts (tenant_api_* consumers) were
-      # structurally inert. Label face checked: unlike tenant-exporters,
-      # this job stamps NO `tenant` label (only job ← service name), so
-      # scraping tenant-api here cannot pollute the tenant dimension.
-      - job_name: "monitoring-components"
+      # Platform chart Services, in ANY namespace (#1425).
+      # The threshold-exporter, Vector and tenant-api charts render their
+      # Services into the release namespace and label them
+      # `dynamic-alerting.io/scrape: platform`; this job keeps exactly those.
+      # The install namespace is therefore written nowhere: before #1425 this
+      # was a namespace list ("monitoring", "vector", "tenant-api") that the
+      # charts' namespaces had to match by hand, and a release installed
+      # anywhere else was silently never scraped.
+      # The scrape annotation is not enough on its own: it is a community
+      # convention, and customers' own Services (exporters outside db-*, their
+      # own kube-state-metrics) carry it too. Same label face as before: the
+      # job stamps NO `tenant` label (only job ← service name), so scraping
+      # tenant-api here cannot pollute the tenant dimension.
+      - job_name: "platform-components"
         scrape_interval: 15s
         kubernetes_sd_configs:
           - role: service
-            namespaces:
-              names: ["monitoring", "vector", "tenant-api"]
         relabel_configs:
           # Only keep annotated services
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
             action: keep
             regex: "true"
+          # Only keep platform chart Services
+          - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
+            action: keep
+            regex: "platform"
+          # Use the annotated port
+          - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+            action: replace
+            target_label: __address__
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+          # Use annotated metrics path
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          # Set job label from service name — up{job="threshold-exporter"}
+          # and the other platform alerts select on it.
+          - source_labels: [__meta_kubernetes_service_name]
+            target_label: job
+
+      # This repo's raw monitoring manifests (kube-state-metrics, Alertmanager,
+      # k8s/03-monitoring): not charts, and a customer may bring their own, so
+      # they carry no platform label and stay discovered by namespace.
+      # Platform chart Services in this namespace are `platform-components`'
+      # and are dropped here, or each would be scraped twice.
+      - job_name: "monitoring-components"
+        scrape_interval: 15s
+        kubernetes_sd_configs:
+          - role: service
+            namespaces:
+              names: ["monitoring"]
+        relabel_configs:
+          # Only keep annotated services
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+            action: keep
+            regex: "true"
+          # Platform chart Services belong to platform-components
+          - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
+            action: drop
+            regex: "platform"
           # Use the annotated port
           - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
             action: replace
