@@ -489,8 +489,9 @@ class TestMain:
         # 應該正常結束，不 raise
         emit_result(aq.main())
 
-    def test_ci_mode_fails_on_bad(self, monkeypatch):
-        """CI 模式：有 BAD 時 exit code 1。"""
+    @pytest.mark.parametrize("flags", [[], ["--json"]], ids=["text", "json"])
+    def test_ci_mode_fails_on_bad(self, monkeypatch, flags):
+        """CI 模式：有 BAD 時 exit code 1（#3216：--json 也是，status 隨 Report）。"""
         now = time.time()
         # 製造大量震盪 → BAD noise score
         values = []
@@ -503,7 +504,7 @@ class TestMain:
                                                           "values": values,
                                                       }]}}, None))
         monkeypatch.setattr("sys.argv", [
-            "alert_quality", "--prometheus", "http://prom", "--ci",
+            "alert_quality", "--prometheus", "http://prom", "--ci", *flags,
         ])
         assert emit_result(aq.main()) == 1  # #3216: returned, as run() exits with it
 

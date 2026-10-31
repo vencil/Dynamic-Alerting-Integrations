@@ -412,7 +412,8 @@ class TestMainIntegration:
             "--prometheus", "http://prom:9090",
             "--json-output")
         monkeypatch.setattr(bsd, "query_prometheus_targets", lambda url: [])
-        emit_result(bsd.main())
+        # #3216: the --json status rides on the Report; nothing found is 0
+        assert emit_result(bsd.main()) == 0
         out = capsys.readouterr().out
         data = json.loads(out)
         assert isinstance(data, list)

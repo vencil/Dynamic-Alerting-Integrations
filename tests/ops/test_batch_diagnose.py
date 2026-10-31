@@ -555,7 +555,8 @@ class TestMainCLI:
         """
         cli_argv("batch_diagnose", "--tenants", "db-a,db-b",
             "--prometheus", "http://prom:9090", "--dry-run", "--json")
-        emit_result(bd.main())
+        # #3216: the --json status rides on the Report; a dry run is 0
+        assert emit_result(bd.main()) == 0
         captured = capsys.readouterr()
 
         doc = json.loads(captured.out)          # 全文 parse ⇒ stdout 只有 JSON

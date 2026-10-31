@@ -40,6 +40,9 @@ CASES = [
     ("analyze_rule_pack_gaps", ["--config-dir", "{tmp}/conf.d", "--json"], 0),
     ("assemble_config_dir", ["--json"], 2),
     ("assemble_config_dir", ["--sources", "{tmp}/conf.d", "--check", "--json"], 0),
+    ("assemble_config_dir", ["--sources", "{tmp}/empty", "--check", "--json"], 1),  # no_carriers
+    ("assemble_config_dir", ["--sources", "{tmp}/conf.d", "--output", "{tmp}/stale",
+                             "--json"], 1),  # a leftover defaults carrier
     ("byo_check", ["prometheus", "--prometheus", REFUSED, "--json"], 2),
     ("check_alert", ["HighCPU", "db-a", "--prometheus", REFUSED], 2),
     ("config_diff", ["--old-dir", "{tmp}/conf.d", "--new-dir", "{tmp}/conf.d",
@@ -85,6 +88,9 @@ def tree(tmp_path):
          "startsAt": f"2026-03-15T10:0{i}:00Z", "endsAt": f"2026-03-15T10:0{i + 5}:00Z"}
         for i, (n, t) in enumerate([("A", "db-a"), ("B", "db-b")])]), encoding="utf-8")
     (tmp_path / "ready.json").write_text("{not json", encoding="utf-8")
+    (tmp_path / "empty").mkdir()
+    (tmp_path / "stale").mkdir()
+    shutil.copy(CONF_D / "_defaults.yaml", tmp_path / "stale" / "_defaults.yml")
     return tmp_path
 
 
@@ -119,3 +125,68 @@ def test_a_nan_in_the_document_is_the_envelope_not_the_document(tree, tool, argv
     assert (env["status"], env["reason"]) == ("caller_error", "output_not_serializable"), env
     assert "injected: nan is not a JSON number" in p.stderr
     assert "NaN" not in p.stdout
+
+
+# ── the --json status of paths a subprocess cannot reach offline ─────────
+# Before #3216 the text-mode tests pinned these codes for --json too (one
+# exit for both); now the --json one rides on the Report, so it is pinned
+# here, in-process, the step run() takes (`emit_result`).
+
+sys.path.insert(0, str(TOOLS / "ops"))
+from _lib_exitcodes import emit_result  # noqa: E402
+import byo_check  # noqa: E402
+import cutover_tenant  # noqa: E402
+import discover_instance_mappings  # noqa: E402
+import federation_check  # noqa: E402
+
+_FAIL = {"check": "x", "status": "fail", "detail": "d"}
+_PASS = {"check": "x", "status": "pass", "detail": "d"}
+
+
+def _rc(main, *args):
+    try:
+        return emit_result(main(*args))
+    except SystemExit as exc:
+        return exc.code
+
+
+@pytest.mark.parametrize("checks, status", [
+    ([_PASS], 0), ([_FAIL], 1), ([{**_FAIL, "caller_error": True}], 2)],
+    ids=["pass", "fail", "caller-error"])
+def test_byo_check_json_status(monkeypatch, capsys, checks, status):
+    monkeypatch.setattr(byo_check, "check_prometheus", lambda args: checks)
+    monkeypatch.setattr(sys, "argv", ["byo_check", "prometheus", "--json"])
+    assert _rc(byo_check.main) == status
+    assert json.loads(capsys.readouterr().out)["status"] == ("pass" if status == 0 else "fail")
+
+
+@pytest.mark.parametrize("checks, status", [
+    ([_PASS], 0), ([_FAIL], 1), ([{**_FAIL, "caller_error": True}], 2)],
+    ids=["pass", "fail", "caller-error"])
+def test_federation_check_json_status(monkeypatch, capsys, checks, status):
+    monkeypatch.setattr(federation_check, "check_edge", lambda url: checks)
+    monkeypatch.setattr(sys, "argv", ["federation_check", "edge", "--json"])
+    assert _rc(federation_check.main) == status
+    assert json.loads(capsys.readouterr().out)["status"] == ("pass" if status == 0 else "fail")
+
+
+@pytest.mark.parametrize("report, status", [
+    ({"success": True}, 0),
+    ({"success": False, "failed_step": "s", "message": "m"}, 1),
+    ({"success": False, "failed_step": "s", "message": "m", "caller_error": True}, 2)],
+    ids=["success", "step-failed", "caller-error"])
+def test_cutover_json_status(monkeypatch, capsys, report, status):
+    monkeypatch.setattr(cutover_tenant, "apply_cutover", lambda **kw: report)
+    monkeypatch.setattr(sys, "argv", ["cutover_tenant", "--readiness-json", "r.json",
+                                      "--tenant", "t", "--json-output"])
+    assert _rc(cutover_tenant.main) == status
+    assert json.loads(capsys.readouterr().out) == report
+
+
+def test_discover_mappings_json_success_is_0(monkeypatch, capsys):
+    monkeypatch.setattr(discover_instance_mappings, "query_prometheus_label_values",
+                        lambda *a, **kw: {"schema": {"s1", "s2", "s3"}})
+    assert _rc(discover_instance_mappings.main, [
+        "--prometheus", "http://prom:9090", "--instance", "x:1", "--json"]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert len(doc["instance_tenant_mapping"]["x:1"]) == 3
