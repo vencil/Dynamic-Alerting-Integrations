@@ -32,6 +32,18 @@
         }
       }
     },
+    "networkPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {},
+        "allowExternal": {},
+        "prometheusNamespace": {},
+        "prometheusPodLabels": {
+          "description": "Open map: the scraper pods' labels. Read only when allowExternal is false, where templates/networkpolicy.yaml refuses an empty one."
+        }
+      }
+    },
     "exporter": {
       "type": "object",
       "additionalProperties": false,

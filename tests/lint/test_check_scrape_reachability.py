@@ -609,6 +609,38 @@ def test_a_namespace_regex_the_gate_cannot_probe_is_an_error():
                for e in errors), errors
 
 
+@pytest.mark.parametrize("field,value,only_ns", [
+    ("sd_namespaces", ["team-a"], "team-a"),
+    ("ns_keep_regex", "team-.+", "team-probe"),
+])
+def test_an_endpoints_role_job_keeps_only_inside_its_namespace_face(field, value, only_ns):
+    """F4a is conservative, not blanket: an endpoints job whose SD list or
+    namespace-keep regex excludes a namespace keeps no platform Service there,
+    so it double-scrapes only in its own namespaces."""
+    jobs = gate.parse_scrape_jobs(_FACE_PROM_YML + _ENDPOINTS_JOB)
+    _face_job(jobs, "endpoints-sweep")[field] = value
+    errors = gate._platform_double_scrape(jobs)
+    hit = [e for e in errors if "endpoints-sweep" in e]
+    assert hit and all(f"ns '{only_ns}'" in e for e in hit), errors
+
+
+@pytest.mark.parametrize("regex,example", [
+    ("(db|tenant)-.+", "db-probe"),   # group + alternation: first branch
+    ("db-[a-z]+", "db-a"),            # class range
+    ("[xy]z", "xz"),                  # class literal
+    (r"ns\d", "ns0"),                 # digit category
+    (r"ns\w", "nsa"),                 # word category
+    ("^db-x$", "db-x"),               # anchors add nothing
+    ("a{2}", "aa"),                   # minimum repeat
+    (r"ns\s", None),                  # a category it does not model
+    ("[^/]+-db", None),               # negated class
+])
+def test_regex_example_derives_a_match_or_nothing(regex, example):
+    """Every derived example fully matches its regex; what is not modelled
+    yields None (reported as PLATFORM-PROBE-UNDERIVABLE), never a guess."""
+    assert gate._regex_example(regex) == example
+
+
 # ── the platform job sets `job` from the Service name (#1425 review F5) ───
 
 def test_real_configmap_sets_the_platform_job_label_from_the_service():
@@ -967,7 +999,8 @@ def test_a_refused_manifest_is_named_not_skipped(tmp_path):
     lines = exc.value.stderr_lines
     assert any(str(bad) in ln and "the document is array" in ln for ln in lines), lines
     assert any(str(nokind) in ln and "it has no `kind`" in ln for ln in lines), lines
-    assert gate.parse_services([good]) == [{"name": "s", "namespace": None, "annotations": {}}]
+    assert gate.parse_services([good]) == [
+        {"name": "s", "namespace": None, "annotations": {}, "labels": {}}]
 
 
 def test_a_crashed_da_crdecode_is_raised_not_a_skipped_file(tmp_path, monkeypatch):

@@ -14,7 +14,8 @@ collector, but this platform's cluster ships no node-exporter (k8s/03-monitoring
 has kube-state-metrics + Prometheus only), and Vector's own prometheus_exporter
 reads `internal_metrics`, not an external textfile. So this tiny sidecar serves
 the verdict file over HTTP, scraped via a headless Service exactly like the Vector
-self-telemetry Service (Prometheus `role: service` SD, job `monitoring-components`).
+self-telemetry Service (Prometheus `role: service` SD, job `platform-components`,
+which keeps Services labelled `dynamic-alerting.io/scrape: platform` in any namespace).
 
 The exposer is deliberately a SEPARATE, long-lived concern from the validator:
   - It NEVER re-evaluates the gate. The verdict is decided ONCE, at boot, by the

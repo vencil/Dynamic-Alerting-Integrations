@@ -27,9 +27,9 @@ helm install threshold-exporter ./helm/threshold-exporter \
 
 ## Chart 內容
 
-建立 Deployment (2 replicas + PDB) · Service (含 Prometheus scrape annotations) · ConfigMap (`threshold-config`；設 `thresholdConfig.existingConfigMap` 時不建) · ServiceMonitor (optional)。所有資源都落在 release 的 namespace（`-n`）；平台的 Prometheus SD 清單預設涵蓋 `monitoring`，裝到別的 namespace 要一併把它加進 SD 清單（#1425）。
+建立 Deployment (2 replicas + PDB) · Service (含 Prometheus scrape annotation 與 `dynamic-alerting.io/scrape: platform` label) · ConfigMap (`threshold-config`；設 `thresholdConfig.existingConfigMap` 時不建) · ServiceMonitor (optional)。所有資源都落在 release 的 namespace（`-n`）；平台的 Prometheus 依 Service 上的 `dynamic-alerting.io/scrape: platform` label 在任何 namespace 探索它（`platform-components` job），裝到別的 namespace 不必改 SD 清單（#1425）。
 
-⚠️ chart 帶 `values.schema.json`：這個 chart 沒有的 key（拼錯、或已移除的舊 key）會讓 `helm install`／`upgrade`／`template` 直接失敗，不再被靜默忽略（#1425）。`thresholdConfig.tenants`／`defaults`／`state_filters`、`service.annotations`、`resources`、各 probe、`rules.operator.serviceMonitor.labels` 是開放欄位，不受此限。
+⚠️ chart 帶 `values.schema.json`：schema 不允許的 key（拼錯、或已移除的舊 key）會讓 `helm install`／`upgrade`／`template` 直接失敗，不再被靜默忽略（#1425）。`thresholdConfig.tenants`／`defaults`／`state_filters`、`service.annotations`、`resources`、各 probe、`rules.operator.serviceMonitor.labels`、`networkPolicy.prometheusPodLabels` 是開放欄位，不受此限；根層另放行 helm 自己的 `global`，以及 umbrella chart 以 `condition` 帶進來的 `enabled`。
 
 ## 完整文件
 
