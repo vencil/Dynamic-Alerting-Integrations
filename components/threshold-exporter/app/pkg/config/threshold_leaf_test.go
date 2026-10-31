@@ -206,3 +206,40 @@ func servedWarningRow(cfg *ThresholdConfig, tenant, component, metric string, no
 	}
 	return 0, false
 }
+
+// #3370: /effective (ResolveEffective) shows each custom alert's `threshold:`
+// as the exporter reads it — the text where YAML misstates it — and
+// merged_hash moves with that reading: `017` (17) and `0o17` (refused) were
+// both YAML's 15, one hash for two meanings.
+func TestThresholdLeaf_CustomAlertThresholdIsShownAsServed(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 10, 31, 0, 0, 0, 0, time.UTC)
+	tree := func(v string) string {
+		return writeLeafTree(t, map[string]string{
+			"_defaults.yaml": "defaults:\n  mysql_connections: 5\n",
+			"t1.yaml": "x-a: &a {recipe: threshold, name: m_high, metric: qd, op: \">\", window: 5m, threshold: " + v + "}\n" +
+				"tenants:\n  t1:\n    _custom_alerts:\n      - {recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: " + v + "}\n      - *a\n",
+		})
+	}
+	hashes := map[string]string{}
+	for _, v := range []string{"017", "0o17", "0x1F", "70"} {
+		ec, err := ResolveEffective(tree(v), "t1", now)
+		if err != nil {
+			t.Fatalf("ResolveEffective(%s): %v", v, err)
+		}
+		list, _ := ec.EffectiveConfig[customAlertsKey].([]any)
+		if len(list) != 2 {
+			t.Fatalf("%s: _custom_alerts = %#v", v, ec.EffectiveConfig[customAlertsKey])
+		}
+		want := thresholdLeaf(map[string]any{"017": 15, "0o17": 15, "0x1F": 31, "70": 70}[v], v)
+		for i, e := range list {
+			if got := e.(map[string]any)["threshold"]; fmt.Sprint(got) != fmt.Sprint(want) {
+				t.Errorf("%s: element %d threshold = %#v, want %#v", v, i, got, want)
+			}
+		}
+		hashes[v] = ec.MergedHash
+	}
+	if hashes["017"] == hashes["0o17"] {
+		t.Errorf("merged_hash is the same for 017 (served 17) and 0o17 (refused): %s", hashes["017"])
+	}
+}

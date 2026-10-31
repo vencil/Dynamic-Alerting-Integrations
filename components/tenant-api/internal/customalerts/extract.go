@@ -1,6 +1,11 @@
 package customalerts
 
-import "gopkg.in/yaml.v3"
+import (
+	"gopkg.in/yaml.v3"
+
+	"github.com/vencil/threshold-exporter/pkg/confedit"
+	"github.com/vencil/threshold-exporter/pkg/config"
+)
 
 // Extract returns the tenant's `_custom_alerts` list as a slice of generic
 // maps (ADR-024 §S6b-2). The portal RecipeBuilder modal reads this JSON
@@ -11,9 +16,14 @@ import "gopkg.in/yaml.v3"
 // Returns an empty slice (not nil) when the tenant has no `_custom_alerts`.
 // A YAML parse error is returned; a tenant simply absent from the doc yields
 // an empty slice, not an error (GET surfaces presence via the 404 path).
+//
+// #3370: each `threshold:` is the exporter's reading of the text the file
+// wrote (config.CustomAlertThresholdTexts) — a bare `017` is "017", not
+// YAML's 15 — so what the portal shows, and writes back on a save, is what
+// the exporter serves.
 func Extract(rawYAML, tenantID string) ([]map[string]any, error) {
 	var doc struct {
-		Tenants map[string]map[string]any `yaml:"tenants"`
+		Tenants map[string]map[string]yaml.Node `yaml:"tenants"`
 	}
 	if err := yaml.Unmarshal([]byte(rawYAML), &doc); err != nil {
 		return nil, err
@@ -23,14 +33,23 @@ func Extract(rawYAML, tenantID string) ([]map[string]any, error) {
 	if !ok {
 		return out, nil
 	}
-	raw, ok := tenant["_custom_alerts"]
+	node, ok := tenant[confedit.CustomAlertsKey]
 	if !ok {
 		return out, nil
+	}
+	var raw any
+	if err := node.Decode(&raw); err != nil {
+		return nil, err
 	}
 	list, ok := raw.([]any)
 	if !ok {
 		return out, nil
 	}
+	seq := &node
+	for seq.Kind == yaml.AliasNode && seq.Alias != nil {
+		seq = seq.Alias
+	}
+	config.CustomAlertThresholdTexts(list, seq)
 	for _, item := range list {
 		// yaml.v3 decodes nested maps as map[string]any already.
 		if m, ok := item.(map[string]any); ok {

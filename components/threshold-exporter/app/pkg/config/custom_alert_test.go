@@ -895,3 +895,36 @@ func TestCustomAlertEntries_ThresholdRefused(t *testing.T) {
 		})
 	}
 }
+
+// #3370: a custom alert's `threshold:` is read as the text the file wrote,
+// by the one reading every threshold leaf takes (#3250) — not as YAML's
+// typing of it re-serialized (a bare `0x1F` was served as 31, `017` as 15).
+// For every spelling, the custom alert serves exactly what parseThresholdNumber
+// reads from the text, and refuses exactly what it refuses.
+func TestCustomAlert_ThresholdIsReadAsWritten(t *testing.T) {
+	for _, v := range thresholdLeafSpellings {
+		if strings.Contains(v, ":") {
+			continue // value:severity has its own tail; covered elsewhere
+		}
+		t.Run(v, func(t *testing.T) {
+			cfg := customAlertsConfig(t, "t1",
+				"      - {recipe: threshold, name: q_high, metric: qd, op: \">\", window: 5m, threshold: "+v+"}\n")
+			got, _, errs := resolveTenantCustomAlerts("t1", cfg.Tenants["t1"])
+			var node yaml.Node
+			if err := yaml.Unmarshal([]byte("x: "+v+"\n"), &node); err != nil {
+				t.Fatal(err)
+			}
+			text := node.Content[0].Content[1].Value
+			want, ok := parseThresholdNumber(strings.TrimSpace(text))
+			if !ok {
+				if errs != 1 || len(got) != 0 {
+					t.Fatalf("threshold %s: want refused (text %q), got rows=%v errs=%d", v, text, got, errs)
+				}
+				return
+			}
+			if errs != 0 || len(got) != 1 || got[0].Value != want {
+				t.Fatalf("threshold %s: want %v (text %q), got rows=%v errs=%d", v, want, text, got, errs)
+			}
+		})
+	}
+}
