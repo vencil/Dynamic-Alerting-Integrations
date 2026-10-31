@@ -31,8 +31,9 @@ skipped in silence. This module pins:
   entry that no longer matches is red.
 
 ⛔ What the deletion guard cannot see: a prefix split across constants
-(``"rule-" + "pack-*"``), one read from a variable, a file or the
-environment, one spelled in a docstring or a comment (prose), and any
+(``"rule-" + "pack-*"``), a directory glob without the family prefix
+(``Path("rule-packs").glob("*.yaml")``), a bytes literal, a prefix in
+another case, one read from a variable, a file or the environment, one spelled in a docstring or a comment (prose), and any
 language other than Python and shell (Go, CODEOWNERS and the YAML configs
 are held by the parity tests above instead; JS/JSX only by review). The
 real guarantee is the declaration failing closed (``SourcesUnlisted`` names
@@ -359,7 +360,9 @@ def test_go_tests_spell_every_declared_glob_of_a_family_they_glob():
     assert len(go_files) > 50, "Go walk found almost nothing"
     bad, seen = [], 0
     for f in go_files:
-        literals = re.findall(r'"((?:[^"\\]|\\.)*)"', f.read_text(encoding="utf-8"))
+        # interpreted ("…") and raw (`…`) string literals alike
+        literals = [a or b for a, b in re.findall(
+            r'"((?:[^"\\]|\\.)*)"|`([^`]*)`', f.read_text(encoding="utf-8"))]
         globs = [t for lit in literals for t in _FAMILY_TOKEN.findall(lit) if "*" in t]
         seen += bool(_declared_globs_by_family(globs))
         bad += _parity_problems(f.relative_to(REPO).as_posix(), globs)
@@ -438,8 +441,6 @@ ALLOWED: "tuple[tuple[str, str, str], ...]" = (
      "the file this compiler writes, by name"),
     ("scripts/tools/ops/lint_custom_rules.py", r"rule-packs/rule-pack-custom-alerts\.yaml",
      "the custom-alerts pack, by name"),
-    ("scripts/tools/ops/inject_metadata_join.py", r"rule-pack-operational\.yaml",
-     "one named pack this one-time script leaves alone"),
     ("scripts/tools/ops/_grar_validate.py", r"configmap-rules-platform\.yaml",
      "the hand-authored platform rules ConfigMap, by name"),
     ("scripts/tools/lint/check_image_pin_capability.py", r"configmap-rules-platform\.yaml",

@@ -220,7 +220,7 @@ def main():
         sys.exit(EXIT_CALLER_ERROR)
     count = 0
     for entry in entries:
-        if entry.name == "rule-pack-operational.yaml":
+        if _lib_consumer_read.RULE_PACKS.member(entry) == "operational":
             continue  # operational alerts don't use threshold joins
         if process_file(str(entry)):
             count += 1
