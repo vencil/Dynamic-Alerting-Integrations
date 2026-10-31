@@ -71,10 +71,21 @@ def _parent(tmp_path, source=None, data_file=None, parallel=True):
     return cov
 
 
+def _clear_env_keys(monkeypatch) -> None:
+    """清掉 `_ENV_KEYS`，並保證 teardown 時還原成進來前的樣子。
+
+    ⚠️ 只 `delenv(raising=False)` 不夠：key 原本不存在時 monkeypatch 什麼都不記，
+    而受測的 `pytest_configure` 直接寫 `os.environ`，寫進去的值就漏到同一個 worker
+    的後續測試（#3414）。先 `setenv` 讓「原本不存在」被記下來，undo 時才會刪掉。
+    """
+    for key in _ENV_KEYS:
+        monkeypatch.setenv(key, "")
+        monkeypatch.delenv(key)
+
+
 @pytest.fixture
 def clean_env(monkeypatch):
-    for key in _ENV_KEYS:
-        monkeypatch.delenv(key, raising=False)
+    _clear_env_keys(monkeypatch)
     return os.environ
 
 
@@ -297,3 +308,29 @@ def test_a_registered_but_unstarted_plugin_does_not_export(clean_env):
     _conftest().pytest_configure(_FakeConfig(cov=_FakePlugin(None)))
     for key in _ENV_KEYS:
         assert key not in clean_env, f"沒有父 Coverage 卻設了 {key}"
+
+
+
+def test_clean_env_removes_what_the_test_wrote_on_teardown(tmp_path) -> None:
+    """⛔ #3414：`pytest_configure` 直接寫 `os.environ`；`clean_env` 的 teardown 必須連這種
+    寫入一起還原，否則 `COVERAGE_PROCESS_CONFIG` 漏到同一個 worker 後續以 nobody 跑的子行程。
+
+    ⚠️ 走真的 fixture：在另一個 pytest 行程裡先跑本檔一格會寫入的測試，再跑一支探針。
+    只測 helper 的話，fixture 改回不經 helper 時這格照樣綠（#3414 審查）。
+    """
+    probe = tmp_path / "test_probe_3414.py"
+    probe.write_text(
+        "import os\n\n\n"
+        "def test_nothing_leaked():\n"
+        f"    leaked = {{k: os.environ[k] for k in {_ENV_KEYS!r} if k in os.environ}}\n"
+        "    assert not leaked, sorted(leaked)\n",
+        encoding="utf-8")
+    env = {k: v for k, v in os.environ.items()
+           if k not in _ENV_KEYS and not k.startswith("PYTEST_")}
+    writer = f"{Path(__file__).resolve()}::test_the_wiring_exports_a_child_config_when_coverage_is_on"
+    proc = subprocess.run(
+        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist",
+         "-p", "no:cov", "--rootdir", str(_REPO_ROOT), writer, str(probe)],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=300,
+        env=env, cwd=str(_REPO_ROOT))
+    assert proc.returncode == 0 and "2 passed" in proc.stdout, proc.stdout[-3000:]
