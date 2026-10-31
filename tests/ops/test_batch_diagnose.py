@@ -161,6 +161,26 @@ class TestDiscoverTenants:
             {"db-c.yaml": base64.b64encode(b"tenants:\n  db-c: {}\n").decode()})
         assert _discover() == ["db-c"]
 
+    @pytest.mark.parametrize("sep", ["\n", "\r\n"], ids=["lf", "crlf"])
+    def test_binary_data_folded_over_lines_is_read(self, mock_run, sep):
+        """#3461: a value folded with a YAML `|` block is base64 the API
+        server takes (Go's StdEncoding skips \\r and \\n)."""
+        import base64
+        body = b"tenants:\n  db-c: {}\n"
+        flat = base64.b64encode(body).decode()
+        folded = sep.join(flat[i:i + 8] for i in range(0, len(flat), 8)) + sep
+        mock_run.return_value = _cm({"_defaults.yaml": _DEFAULTS}, {"db-c.yaml": folded})
+        assert bd.read_configmap_files()["db-c.yaml"] == body
+        assert _discover() == ["db-c"]
+
+    @pytest.mark.parametrize("value", ["dGVu@YW50", "dGVu YW50", "dGVu\tYW50"],
+                             ids=["at-sign", "space", "tab"])
+    def test_binary_data_with_a_stray_character_is_refused(self, mock_run, value):
+        mock_run.return_value = _cm({"_defaults.yaml": _DEFAULTS}, {"b.yaml": value})
+        with pytest.raises(bd.CallerError, match="binaryData key 'b.yaml' is not base64") as exc:
+            bd.read_configmap_files()
+        assert exc.value.reason == "configmap_unreadable"
+
     @pytest.mark.parametrize("data, binary", [
         ({"../x.yaml": "tenants: {}"}, None),
         ({"..": "tenants: {}"}, None),

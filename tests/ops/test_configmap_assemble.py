@@ -1153,6 +1153,30 @@ class TestTheArtifactIsReconciledAgainstTheTree:
         bad = "kind: ConfigMap\nbinaryData:\n  b.yaml: not-base64!!\n"
         assert mod.measure_artifact(bad, [])[0], "unmeasurable value passed"
 
+    @pytest.mark.parametrize("value", ["AAEC\nAwQ=\n", "AAEC\r\nAwQ=\r\n"], ids=["lf", "crlf"])
+    def test_binary_data_folded_over_lines_is_measured(self, tmp_path, value):
+        """#3461: a `binaryData` value folded over lines is base64 the API
+        server takes (Go's StdEncoding skips \\r and \\n), so its decoded
+        length is measured, not reported as unmeasurable. Fed as JSON (YAML
+        too) so the \\r survives kubectl's reading."""
+        mod = _import_script("cma_folded_probe")
+        carrier = tmp_path / "b.yaml"
+        carrier.write_bytes(b"\x00\x01\x02\x03\x04")
+        manifest = json.dumps({"kind": "ConfigMap", "binaryData": {"b.yaml": value}})
+        assert mod.measure_artifact(manifest, [carrier]) == ([], {"b.yaml": 5})
+
+    @pytest.mark.parametrize("value", ["AAEC@AwQ=", "AAEC AwQ=", "AAEC\tAwQ="],
+                             ids=["at-sign", "space", "tab"])
+    def test_binary_data_with_a_stray_character_cannot_be_measured(self, tmp_path, value):
+        mod = _import_script("cma_stray_probe")
+        carrier = tmp_path / "b.yaml"
+        carrier.write_bytes(b"\x00\x01\x02\x03\x04")
+        manifest = json.dumps({"kind": "ConfigMap", "binaryData": {"b.yaml": value}})
+        problems, measured = mod.measure_artifact(manifest, [carrier])
+        assert measured == {}   # an unmeasured key is not reported as measured
+        assert problems == ["'b.yaml' came back in a form this check cannot "
+                            "measure, so it was not verified"]
+
 
 class TestAConfigNamedEntryNothingCanBeReadFromIsNamed:
     """`is_file()` is a SILENT filter, and this module's own docstring calls
