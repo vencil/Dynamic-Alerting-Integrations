@@ -20,6 +20,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"
 
 import policy_engine as pe  # noqa: E402
 import validate_config as vc  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _as_run(result):
+    """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
+    document is written and its status is the exit, as SystemExit."""
+    raise SystemExit(emit_result(result))
 
 _DEFAULTS = "defaults:\n  container_cpu: 80\n"
 _TENANT = ("tenants:\n  tenant-a:\n    container_cpu: \"70\"\n"
@@ -125,7 +132,7 @@ def _run(path, rule, tmp_path, capsys, cli_argv):
         argv = ["--config-dir", str(tmp_path), "--ci", "--json"]
         if not in_defaults:
             argv += ["--policy", str(side)]
-        rc = pe.main(argv)
+        rc = emit_result(pe.main(argv))
         out = capsys.readouterr()
         doc = json.loads(out.out)
         return rc, doc, out.err
@@ -134,7 +141,7 @@ def _run(path, rule, tmp_path, capsys, cli_argv):
         argv += ["--policy-dsl", str(side)]
     cli_argv(*argv)
     with pytest.raises(SystemExit) as exc:
-        vc.main()
+        _as_run(vc.main())
     row = {r["check"]: r for r in json.loads(capsys.readouterr().out)}["policy_dsl"]
     return exc.value.code, row, "\n".join(row["details"])
 

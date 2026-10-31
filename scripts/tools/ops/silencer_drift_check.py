@@ -138,9 +138,8 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope,
 )
-from _lib_python import format_json_report  # noqa: E402
 from _lib_paths import require_path  # noqa: E402  (#3276)
 
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
@@ -619,7 +618,7 @@ def compute_exit_code(report: dict, *, ci: bool) -> int:
 # ─── Main ─────────────────────────────────────────────────────────────
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> "int | Report":
     try_utf8_stdout()
     ap = argparse.ArgumentParser(
         description=(
@@ -745,9 +744,7 @@ def main(argv: list[str] | None = None) -> int:
     report["rule_source"] = str(rule_source)
     report["errors"] = errors
 
-    if args.json:
-        print(format_json_report(report, default=str))
-    else:
+    if not args.json:
         render_text(
             report,
             silences_path=str(silences_path),
@@ -761,8 +758,12 @@ def main(argv: list[str] | None = None) -> int:
         # clean one, with or without --ci (rc 2, each file named above).
         print(f"ERROR: {len(errors)} rule-source file(s) could not be read; "
               "the report above leaves them out", file=sys.stderr)
-        return EXIT_CALLER_ERROR
-    return compute_exit_code(report, ci=args.ci)
+        status = EXIT_CALLER_ERROR
+    else:
+        status = compute_exit_code(report, ci=args.ci)
+    if args.json:
+        return Report(report, status)  # #3216: run() encodes it
+    return status
 
 
 if __name__ == "__main__":

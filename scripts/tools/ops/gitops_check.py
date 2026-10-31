@@ -26,9 +26,9 @@ from pathlib import Path
 from typing import Any, Optional
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
+from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope,
 )
 # ADR-036 step 4 (#2906): the conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
@@ -158,7 +158,7 @@ def check_local(dir_path: str) -> CheckResult:
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
-def main() -> None:
+def main() -> "Report | None":
     """CLI entry point."""
     parser = argparse.ArgumentParser(
         prog="da-tools gitops-check",
@@ -209,29 +209,29 @@ def main() -> None:
         print(f"ERROR: cannot read {args.dir} through `da-guard parse-tree`: {text}",
               file=sys.stderr)
         if args.json:
-            print(format_json_report(GitOpsReport(
+            return Report(GitOpsReport(  # #3216: run() encodes it
                 overall_status="fail", timestamp=timestamp,
                 checks=[CheckResult(check="local", status="fail", message=text,
                                     details={"directory": args.dir,
                                              "reason": "da_guard_failed"})],
-            ).to_dict()))
+            ).to_dict(), EXIT_CALLER_ERROR)
         sys.exit(EXIT_CALLER_ERROR)
 
     report = GitOpsReport(overall_status=check.status, checks=[check], timestamp=timestamp)
 
+    status = EXIT_OK if check.status == "pass" else EXIT_VIOLATION
     if args.json:
-        print(format_json_report(report.to_dict()))
-    else:
-        status_symbol = "✓" if check.status == "pass" else "✗"
-        print(f"{status_symbol} {check.message}")
-        if check.details:
-            for key, value in check.details.items():
-                if key == "directory":
-                    print(f"  {key}: {value}")
-                elif isinstance(value, (int, str)):
-                    print(f"  {key}: {value}")
+        return Report(report.to_dict(), status)  # #3216: run() encodes it
+    status_symbol = "✓" if check.status == "pass" else "✗"
+    print(f"{status_symbol} {check.message}")
+    if check.details:
+        for key, value in check.details.items():
+            if key == "directory":
+                print(f"  {key}: {value}")
+            elif isinstance(value, (int, str)):
+                print(f"  {key}: {value}")
 
-    sys.exit(EXIT_OK if check.status == "pass" else EXIT_VIOLATION)
+    sys.exit(status)
 
 
 if __name__ == "__main__":

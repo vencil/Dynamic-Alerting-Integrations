@@ -22,6 +22,13 @@ from _platform_fs import require_shebang_scripts
 
 import _lib_tenant_values as tv
 import validate_config as vc
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _as_run(result):
+    """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
+    document is written and its status is the exit, as SystemExit."""
+    raise SystemExit(emit_result(result))
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -52,7 +59,7 @@ def _lines(row) -> list[tuple[str, str, str]]:
 def _run_main(cli_argv, capsys, conf_d: str) -> tuple[int, dict[str, dict]]:
     cli_argv("validate_config", "--config-dir", conf_d, "--json")
     with pytest.raises(SystemExit) as exc:
-        vc.main()
+        _as_run(vc.main())
     return exc.value.code, {r["check"]: r for r in json.loads(capsys.readouterr().out)}
 
 

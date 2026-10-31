@@ -23,6 +23,13 @@ import pytest
 
 import threshold_govern as tg
 import threshold_recommend as recommend
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _as_run(result):
+    """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
+    document is written and its status is the exit, as SystemExit."""
+    raise SystemExit(emit_result(result))
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -508,7 +515,7 @@ def test_missing_contract_is_rc2_before_any_write(monkeypatch, tmp_path, capsys)
     args = _args(apply=True, config_dir=str(tmp_path))
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda self: args)
     with pytest.raises(SystemExit) as exc:
-        tg.main()
+        _as_run(tg.main())
     assert exc.value.code == 2
     assert "tenant-api-errors.json not found" in capsys.readouterr().err
 
@@ -698,7 +705,7 @@ def test_text_report_plans_path_detail_above_summary_count_in_summary():
 
 def test_json_report_includes_ungoverned_count_and_list():
     ung = [tg.UngovernedKey("db-a", "db2_hit_ratio", "skipped: lower-bound (<) ...")]
-    out = json.loads(tg.format_json_report([], [], applied=False, ungoverned=ung))
+    out = tg.json_document([], [], applied=False, ungoverned=ung)
     assert out["summary"]["ungoverned_lower_bound"] == 1
     assert out["ungoverned_lower_bound"][0]["key"] == "db2_hit_ratio"
 
@@ -854,7 +861,7 @@ def test_main_exits_violation_on_total_apply_failure(monkeypatch, tmp_path):
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
                         lambda self: _args(apply=True, config_dir=str(tmp_path)))
     with pytest.raises(SystemExit) as exc:
-        tg.main()
+        _as_run(tg.main())
     assert exc.value.code == tg.EXIT_VIOLATION
 
 
@@ -869,7 +876,7 @@ def test_main_exits_caller_error_on_missing_observed_map(monkeypatch, tmp_path, 
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
                         lambda self: _args(apply=True, config_dir=str(tmp_path)))
     with pytest.raises(SystemExit) as exc:
-        tg.main()
+        _as_run(tg.main())
     assert exc.value.code == tg.EXIT_CALLER_ERROR
     assert str(missing) in capsys.readouterr().err
 
@@ -880,7 +887,7 @@ def test_main_exits_ok_on_successful_apply(monkeypatch, tmp_path):
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
                         lambda self: _args(apply=True, config_dir=str(tmp_path)))
     with pytest.raises(SystemExit) as exc:
-        tg.main()
+        _as_run(tg.main())
     assert exc.value.code == tg.EXIT_OK
 
 
@@ -892,7 +899,7 @@ def _main_rc_with_failing_writes(monkeypatch, tmp_path, rec):
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
                         lambda self: _args(apply=True, config_dir=str(tmp_path)))
     with pytest.raises(SystemExit) as exc:
-        tg.main()
+        _as_run(tg.main())
     return exc.value.code, calls
 
 
@@ -950,7 +957,7 @@ def _two_tenant_main(monkeypatch, tmp_path, put_by_tenant, **over):
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
                         lambda self: _args(apply=True, config_dir=str(tmp_path), **over))
     with pytest.raises(SystemExit) as exc:
-        tg.main()
+        _as_run(tg.main())
     return exc.value.code, put_to
 
 
@@ -1025,7 +1032,7 @@ def _main_rc(monkeypatch, tmp_path, tenants, put_results, **over):
         setattr(args, k, v)
     monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda self: args)
     with pytest.raises(SystemExit) as exc:
-        tg.main()
+        _as_run(tg.main())
     return exc.value.code
 
 
@@ -1103,7 +1110,7 @@ def test_text_report_labels_and_counts_the_breaker_skip():
 
 
 def test_json_summary_counts_both_skips():
-    summary = json.loads(tg.format_json_report([], _mixed_outcomes(), applied=True))["summary"]
+    summary = tg.json_document([], _mixed_outcomes(), applied=True)["summary"]
     assert (summary["errors"], summary["skipped"], summary["skipped_breaker"]) == (5, 3, 2)
 
 
@@ -1351,8 +1358,8 @@ def test_text_report_force_manual_count_folded_into_summary():
 def test_json_report_includes_na_and_force_manual():
     fm = [tg.ForceManualKey("db-a", "db2_bufferpool_hit_ratio", "relax", 40.0)]
     na = [tg.NotApplicableKey("db-b", "kafka_active_controllers", "by-design ...")]
-    out = json.loads(tg.format_json_report([], [], applied=False,
-                                           not_applicable=na, force_manual=fm))
+    out = tg.json_document([], [], applied=False,
+                           not_applicable=na, force_manual=fm)
     assert out["summary"]["force_manual"] == 1
     assert out["summary"]["not_applicable"] == 1
     assert out["force_manual"][0]["key"] == "db2_bufferpool_hit_ratio"
@@ -1409,7 +1416,7 @@ class TestPrometheusEnvFallback:
         monkeypatch.setattr(sys, "argv", [
             "threshold_govern.py", "--config-dir", str(tmp_path), *extra])
         with pytest.raises(SystemExit) as exc_info:
-            tg.main()
+            _as_run(tg.main())
         assert exc_info.value.code == 0     # 空 outcomes → EXIT_OK
         return captured["url"]
 
@@ -1487,7 +1494,7 @@ class TestMaxPrsCli:
         monkeypatch.setattr(sys, "argv", [
             "threshold_govern.py", "--config-dir", str(tmp_path), *extra])
         with pytest.raises(SystemExit) as exc:
-            tg.main()
+            _as_run(tg.main())
         captured = capsys.readouterr()
         return exc.value.code, ran, captured
 
@@ -1524,7 +1531,7 @@ class TestTimeoutCli:
         monkeypatch.setattr(sys, "argv", [
             "threshold_govern.py", "--config-dir", str(tmp_path), *extra])
         with pytest.raises(SystemExit) as exc:
-            tg.main()
+            _as_run(tg.main())
         return exc.value.code, ran, capsys.readouterr()
 
     @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
@@ -1560,7 +1567,7 @@ class TestThrottleCli:
         monkeypatch.setattr(sys, "argv", [
             "threshold_govern.py", "--config-dir", str(tmp_path), *extra])
         with pytest.raises(SystemExit) as exc:
-            tg.main()
+            _as_run(tg.main())
         return exc.value.code, ran, capsys.readouterr()
 
     @pytest.mark.parametrize("value", ["-1", "nan", "inf"])
@@ -1592,7 +1599,7 @@ def test_min_samples_below_100_is_caller_error(monkeypatch, tmp_path, capsys, va
     monkeypatch.setattr(sys, "argv", [
         "threshold_govern.py", "--config-dir", str(tmp_path), "--min-samples", value])
     with pytest.raises(SystemExit) as exc:
-        tg.main()
+        _as_run(tg.main())
     assert exc.value.code == tg.EXIT_CALLER_ERROR
     assert "--min-samples" in capsys.readouterr().err
 
@@ -1618,14 +1625,14 @@ class TestNotMeasured:
 
     def test_json_is_partial_and_lists_them(self):
         nm = tg.collect_not_measured(self._reports())
-        out = json.loads(tg.format_json_report([], [], False, not_measured=nm))
+        out = tg.json_document([], [], False, not_measured=nm)
         assert (out["status"], out["reason"]) == ("partial", "prometheus_query_error")
         assert out["summary"]["not_measured"] == 2
         assert out["not_measured"][0] == {"tenant": "db-a", "key": "mysql_connections",
                                           "error": "connection refused"}
 
     def test_json_without_them_has_no_status(self):
-        out = json.loads(tg.format_json_report([], [], False))
+        out = tg.json_document([], [], False)
         assert "status" not in out and out["summary"]["not_measured"] == 0
 
     def test_text_never_says_all_within_margin(self):
@@ -1643,7 +1650,7 @@ class TestNotMeasured:
         monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path),
                                           *(["--json"] if json_output else [])])
         with pytest.raises(SystemExit) as exc:
-            tg.main()
+            _as_run(tg.main())
         assert exc.value.code == tg.EXIT_CALLER_ERROR
         captured = capsys.readouterr()
         err = captured.err.strip().splitlines()
@@ -1671,7 +1678,7 @@ class TestNotMeasured:
         assert tg._is_systemic_failure(
             [tg.TenantOutcome("db-a", "error", ["redis_memory"])], True)
         with pytest.raises(SystemExit) as exc:
-            tg.main()
+            _as_run(tg.main())
         assert written == [("db-a", ["redis_memory"])]
         assert exc.value.code == tg.EXIT_CALLER_ERROR
         out = json.loads(capsys.readouterr().out)

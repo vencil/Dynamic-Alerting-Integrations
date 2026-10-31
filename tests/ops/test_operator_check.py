@@ -20,6 +20,7 @@ sys.path.insert(0, _TOOLS_DIR)
 
 import operator_check as oc  # noqa: E402
 import _lib_prometheus  # noqa: E402  (#3133: the targets are read by the lib)
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 def _make_args(**overrides) -> SimpleNamespace:
@@ -361,8 +362,7 @@ class TestReports:
             assert sym in out
 
     def test_json_report_has_summary_counts(self, capsys):
-        self._make_filled().print_json_report()
-        payload = json.loads(capsys.readouterr().out)
+        payload = self._make_filled().json_document()
         assert payload["summary"]["pass"] == 1
         assert payload["summary"]["warn"] == 1
         assert payload["summary"]["fail"] == 1
@@ -401,21 +401,21 @@ class TestMain:
             oc.main()
         assert exc.value.code == 0
 
-    def test_json_flag_picks_json_reporter(self, monkeypatch, cli_argv):
+    @pytest.mark.parametrize("code", [0, 1, 2])
+    def test_json_flag_picks_json_reporter(self, monkeypatch, cli_argv, code):
         called = {"json": False, "human": False}
         monkeypatch.setattr(oc.OperatorChecker, "run_all_checks", lambda self: None)
         monkeypatch.setattr(
-            oc.OperatorChecker, "print_json_report",
-            lambda self: called.__setitem__("json", True),
+            oc.OperatorChecker, "json_document",
+            lambda self: called.__setitem__("json", True) or {},
         )
         monkeypatch.setattr(
             oc.OperatorChecker, "print_human_report",
             lambda self: called.__setitem__("human", True),
         )
-        monkeypatch.setattr(oc.OperatorChecker, "exit_code", lambda self: 0)
+        monkeypatch.setattr(oc.OperatorChecker, "exit_code", lambda self: code)
         cli_argv("operator_check.py", "--json")
-        with pytest.raises(SystemExit):
-            oc.main()
+        assert emit_result(oc.main()) == code  # #3216: run()'s step — the rc is the verdict
         assert called["json"] is True
         assert called["human"] is False
 

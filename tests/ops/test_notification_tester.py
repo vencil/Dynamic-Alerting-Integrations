@@ -40,6 +40,13 @@ for _p in [_TOOLS_DIR, os.path.join(_TOOLS_DIR, "ops")]:
 import notification_tester as nt  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from factories import make_receiver, make_routing_config, make_tenant_yaml, write_yaml  # noqa: E402
+from _lib_exitcodes import emit_result, encode_json  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _as_run(result):
+    """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
+    document is written and its status is the exit, as SystemExit."""
+    raise SystemExit(emit_result(result))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -973,7 +980,7 @@ class TestRunAllTests:
         assert len(bad) == 1 and "receiver type must be a string" in bad[0].detail
         assert by_tenant["db-bad"].failed == 1
         nt.format_text_report(reports)
-        nt.format_json_report(reports)
+        encode_json(nt.json_document(reports))  # #3216: the document run() writes encodes
 
     def test_refused_tree_raises(self, tmp_path):
         """#2752：路由產生器拒收的樹（同一租戶宣告於兩檔）不得回空清單。"""
@@ -1021,7 +1028,7 @@ class TestOutputFormatting:
     def test_json_format_structure(self):
         """JSON 輸出應包含正確結構。"""
         reports = self._make_sample_reports()
-        raw = nt.format_json_report(reports)
+        raw = encode_json(nt.json_document(reports))  # #3216: as run() writes it
         data = json.loads(raw)
         assert data["tool"] == "test-notification"
         assert data["status"] == "fail"  # because one receiver failed
@@ -1038,7 +1045,7 @@ class TestOutputFormatting:
                 passed=1, failed=0, skipped=0,
             ),
         ]
-        data = json.loads(nt.format_json_report(reports))
+        data = nt.json_document(reports)
         assert data["status"] == "pass"
 
 
@@ -1068,7 +1075,7 @@ class TestCLI:
             with patch("notification_tester.urllib.request.urlopen") as mock_urlopen:
                 mock_urlopen.side_effect = urllib.error.URLError(reason="Connection refused")
                 with pytest.raises(SystemExit) as exc_info:
-                    nt.main()
+                    _as_run(nt.main())
                 assert exc_info.value.code == 1
 
     def test_ci_mode_exit_code_on_success(self, tmp_path):
@@ -1090,7 +1097,7 @@ class TestCLI:
             with patch("notification_tester.urllib.request.urlopen", return_value=resp):
                 # Should not raise SystemExit (or exit with 0)
                 try:
-                    nt.main()
+                    emit_result(nt.main())
                 except SystemExit as e:
                     assert e.code == 0 or e.code is None
 
@@ -1105,7 +1112,7 @@ class TestCLI:
                                  "--timeout", value]):
             with patch("notification_tester.urllib.request.urlopen") as mock_urlopen:
                 with pytest.raises(SystemExit) as exc_info:
-                    nt.main()
+                    _as_run(nt.main())
         assert exc_info.value.code == EXIT_CALLER_ERROR
         assert "--timeout" in capsys.readouterr().err
         mock_urlopen.assert_not_called()
@@ -1122,7 +1129,7 @@ class TestCLI:
                                  "--rate-limit", value]):
             with patch("notification_tester.urllib.request.urlopen") as mock_urlopen:
                 with pytest.raises(SystemExit) as exc_info:
-                    nt.main()
+                    _as_run(nt.main())
         assert exc_info.value.code == EXIT_CALLER_ERROR
         assert "--rate-limit" in capsys.readouterr().err
         mock_urlopen.assert_not_called()
@@ -1138,7 +1145,7 @@ class TestCLI:
             with patch("notification_tester.run_all_tests",
                        return_value=[]) as mock_all:
                 try:
-                    nt.main()
+                    emit_result(nt.main())
                 except SystemExit as e:
                     assert e.code in (0, None)
         assert mock_all.call_args.kwargs["rate_limit"] == expected
@@ -1158,7 +1165,7 @@ class TestCLI:
             with patch("notification_tester.urllib.request.urlopen",
                        return_value=resp) as mock_urlopen:
                 try:
-                    nt.main()
+                    emit_result(nt.main())
                 except SystemExit as e:
                     assert e.code in (0, None)
         assert mock_urlopen.call_args.kwargs["timeout"] == 0.5
@@ -1173,7 +1180,7 @@ class TestCLI:
 
         with patch("sys.argv", ["notification_tester.py", "--config-dir", str(tmp_path), "--dry-run"]):
             # Should not raise
-            nt.main()
+            emit_result(nt.main())
 
     def test_json_output_cli(self, tmp_path, capsys):
         """CLI --json 應輸出合法 JSON。"""
@@ -1185,7 +1192,7 @@ class TestCLI:
 
         with patch("sys.argv", ["notification_tester.py", "--config-dir", str(tmp_path),
                                  "--json", "--dry-run"]):
-            nt.main()
+            emit_result(nt.main())
             captured = capsys.readouterr()
             data = json.loads(captured.out)
             assert data["tool"] == "test-notification"
@@ -1198,7 +1205,7 @@ class TestCLI:
         with patch("sys.argv", ["notification_tester.py", "--config-dir", str(tmp_path),
                                  "--json", "--dry-run"]):
             with pytest.raises(SystemExit) as exc_info:
-                nt.main()
+                _as_run(nt.main())
         assert exc_info.value.code == EXIT_CALLER_ERROR
         captured = capsys.readouterr()
         data = json.loads(captured.out)
@@ -1213,7 +1220,7 @@ class TestCLI:
             with patch.object(nt, "run_all_tests",
                               side_effect=nt.RoutingTreeRefused(["FAIL: tenant \x1b[31mred"])):
                 with pytest.raises(SystemExit) as exc_info:
-                    nt.main()
+                    _as_run(nt.main())
         assert exc_info.value.code == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "\x1b" not in err

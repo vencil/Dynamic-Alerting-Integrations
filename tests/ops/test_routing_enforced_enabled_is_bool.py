@@ -24,6 +24,13 @@ import pytest
 
 import validate_config as vc
 from generate_alertmanager_routes import load_tenant_tree
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _as_run(result):
+    """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
+    document is written and its status is the exit, as SystemExit."""
+    raise SystemExit(emit_result(result))
 
 # #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
 # （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
@@ -106,7 +113,7 @@ def test_a_boolean_enabled_is_unchanged(enabled, on, tmp_path):
 def _vc_rows(config_dir, cli_argv, capsys):
     cli_argv("validate_config", "--config-dir", config_dir, "--json")
     with pytest.raises(SystemExit) as exc:
-        vc.main()
+        _as_run(vc.main())
     return exc.value.code, {r["check"]: r for r in json.loads(capsys.readouterr().out)}
 
 

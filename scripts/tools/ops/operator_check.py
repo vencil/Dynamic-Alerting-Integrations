@@ -18,7 +18,6 @@ needs only `get` on customresourcedefinitions).
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -39,7 +38,7 @@ from _lib_prometheus import QueryError, prometheus_targets  # noqa: E402  (#3133
 from _lib_kubectl import KubectlError, kubectl_get, kubectl_list  # noqa: E402  (#3207)
 import _lib_consumer_read  # noqa: E402  (#3426: rule_pack_files, the one declaration)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
 
 # The CRDs of the kinds the checks list (#3207): whether each is installed
 # is a `kubectl_get` of the CRD by name — an answer, unlike a `kubectl get`
@@ -281,8 +280,8 @@ class OperatorChecker:
         print(line)
         print(f"╚══════════════════════════════════════════════════╝\n")
 
-    def print_json_report(self) -> None:
-        """Print JSON report."""
+    def json_document(self) -> dict:
+        """The --json document (run() encodes it, #3216)."""
         pass_count = sum(1 for c in self.checks if c.status == "pass")
         warn_count = sum(1 for c in self.checks if c.status == "warn")
         fail_count = sum(1 for c in self.checks if c.status == "fail")
@@ -296,7 +295,7 @@ class OperatorChecker:
                 "total": len(self.checks),
             },
         }
-        print(json.dumps(report, indent=2))
+        return report
 
     def exit_code(self) -> int:
         """Return exit code based on checks.
@@ -370,9 +369,8 @@ def main():
     checker.run_all_checks()
 
     if args.json:
-        checker.print_json_report()
-    else:
-        checker.print_human_report()
+        return Report(checker.json_document(), checker.exit_code())  # #3216: run() encodes it
+    checker.print_human_report()
 
     sys.exit(checker.exit_code())
 

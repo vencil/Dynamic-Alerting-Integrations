@@ -21,6 +21,13 @@ sys.path.insert(0, _TOOLS_DIR)
 
 import policy_opa_bridge as pob  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _as_run(result):
+    """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
+    document is written and its status is the exit, as SystemExit."""
+    raise SystemExit(emit_result(result))
 
 
 # ---------------------------------------------------------------------------
@@ -544,7 +551,7 @@ class TestMain:
         現在照 da-guard 的判定 rc 2、一行 ERROR、沒有 traceback。"""
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         with pytest.raises(SystemExit) as exc:
-            pob.main(["--config-dir", str(tmp_path), "--dry-run"])
+            _as_run(pob.main(["--config-dir", str(tmp_path), "--dry-run"]))
         assert exc.value.code == EXIT_CALLER_ERROR
         captured = capsys.readouterr()
         assert captured.err.startswith("ERROR: da-guard served-values exited 2"), captured.err
@@ -556,7 +563,7 @@ class TestMain:
         # document (see the two envelope tests below).
         _no_tenant_tree(tmp_path)
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        rc = pob.main(["--config-dir", str(tmp_path)])
+        rc = emit_result(pob.main(["--config-dir", str(tmp_path)]))
         assert rc == 0
         captured = capsys.readouterr()
         assert "No tenant configs found" in captured.err
@@ -566,7 +573,7 @@ class TestMain:
         """#1112: --json + 空 config-dir → 一份歸零的 report（可被同一 consumer 消費）。"""
         _no_tenant_tree(tmp_path)
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        rc = pob.main(["--config-dir", str(tmp_path), "--json"])
+        rc = emit_result(pob.main(["--config-dir", str(tmp_path), "--json"]))
         assert rc == 0
         doc = json.loads(capsys.readouterr().out)
         assert doc["status"] == "no_tenant_configs"
@@ -582,7 +589,7 @@ class TestMain:
         """
         _no_tenant_tree(tmp_path)
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        rc = pob.main(["--config-dir", str(tmp_path), "--dry-run", "--json"])
+        rc = emit_result(pob.main(["--config-dir", str(tmp_path), "--dry-run", "--json"]))
         assert rc == 0
         doc = json.loads(capsys.readouterr().out)
         assert doc["tenants"] == {}
@@ -595,7 +602,7 @@ class TestMain:
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {"y": 2})
-        rc = pob.main(["--config-dir", str(tmp_path), "--dry-run"])
+        rc = emit_result(pob.main(["--config-dir", str(tmp_path), "--dry-run"]))
         assert rc == 0
         out = capsys.readouterr().out
         payload = json.loads(out)
@@ -608,7 +615,7 @@ class TestMain:
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
-        rc = pob.main(["--config-dir", str(tmp_path)])
+        rc = emit_result(pob.main(["--config-dir", str(tmp_path)]))
         assert rc == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "Must specify" in err
@@ -632,10 +639,10 @@ class TestMain:
             pob, "call_opa_binary",
             lambda *a, **kw: pytest.fail("binary should not be called"),
         )
-        rc = pob.main([
+        rc = emit_result(pob.main([
             "--config-dir", str(tmp_path),
             "--opa-url", "http://localhost:8181",
-        ])
+        ]))
         assert rc == 0
         assert called["url"] == "http://localhost:8181"
 
@@ -656,14 +663,16 @@ class TestMain:
             pob, "call_opa_rest",
             lambda *a, **kw: pytest.fail("rest should not be called"),
         )
-        rc = pob.main([
+        rc = emit_result(pob.main([
             "--config-dir", str(tmp_path),
             "--policy-path", "/path/to/policy.rego",
-        ])
+        ]))
         assert rc == 0
         assert called["policy_path"] == "/path/to/policy.rego"
 
-    def test_ci_with_errors_returns_one(self, monkeypatch, tmp_path):
+    @pytest.mark.parametrize("extra", [(), ("--json",)])
+    def test_ci_with_errors_returns_one(self, monkeypatch, tmp_path, capsys, extra):
+        """Under --json too: the document's status is the exit (#3216)."""
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
@@ -672,12 +681,14 @@ class TestMain:
             "msg": "bad", "severity": "error",
             "tenant": "tenant-a", "field": "x",
         }])
-        rc = pob.main([
+        rc = emit_result(pob.main([
             "--config-dir", str(tmp_path),
             "--opa-url", "http://x",
-            "--ci",
-        ])
+            "--ci", *extra,
+        ]))
         assert rc == 1
+        if extra:
+            assert json.loads(capsys.readouterr().out)["passed"] is False
 
     def test_ci_with_only_warnings_returns_zero(self, monkeypatch, tmp_path):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
@@ -688,11 +699,11 @@ class TestMain:
             "msg": "soft", "severity": "warning",
             "tenant": "tenant-a", "field": "x",
         }])
-        rc = pob.main([
+        rc = emit_result(pob.main([
             "--config-dir", str(tmp_path),
             "--opa-url", "http://x",
             "--ci",
-        ])
+        ]))
         assert rc == 0  # warnings don't fail in CI mode
 
     def test_json_output_emits_json(self, monkeypatch, tmp_path, capsys):
@@ -701,11 +712,11 @@ class TestMain:
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
         monkeypatch.setattr(pob, "call_opa_rest", lambda *a, **kw: [])
-        rc = pob.main([
+        rc = emit_result(pob.main([
             "--config-dir", str(tmp_path),
             "--opa-url", "http://x",
             "--json",
-        ])
+        ]))
         assert rc == 0
         payload = json.loads(capsys.readouterr().out)
         assert payload["tenants_evaluated"] == 1
@@ -715,7 +726,7 @@ class TestMain:
         # #1112: prose → stderr (see TestMain::test_no_tenant_configs_returns_zero).
         _no_tenant_tree(tmp_path)
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "zh")
-        rc = pob.main(["--config-dir", str(tmp_path)])
+        rc = emit_result(pob.main(["--config-dir", str(tmp_path)]))
         assert rc == 0
         assert "未找到 tenant 配置" in capsys.readouterr().err
 
@@ -724,7 +735,7 @@ class TestMain:
         monkeypatch.setattr(pob, "load_tenant_inputs",
                             lambda d: ({"tenant-a": {"x": 1}}, {}))
         monkeypatch.setattr(pob, "load_defaults", lambda d: {})
-        rc = pob.main(["--config-dir", str(tmp_path)])
+        rc = emit_result(pob.main(["--config-dir", str(tmp_path)]))
         assert rc == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "必須指定" in err
@@ -861,7 +872,7 @@ class TestOpaNotEvaluatedIsCallerError:
 
     def _run(self, monkeypatch, capsys, argv):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        rc = pob.main(argv)
+        rc = emit_result(pob.main(argv))
         cap = capsys.readouterr()
         return rc, cap.out, cap.err
 
@@ -1106,7 +1117,7 @@ def opa_server(real_opa, rego_file):
 class TestRealOpa:
     def _run(self, monkeypatch, capsys, argv):
         monkeypatch.setattr(pob, "detect_cli_lang", lambda: "en")
-        rc = pob.main(argv)
+        rc = emit_result(pob.main(argv))
         cap = capsys.readouterr()
         return rc, cap.out, cap.err
 

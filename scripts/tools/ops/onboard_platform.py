@@ -38,7 +38,6 @@ import csv
 import io
 from collections import Counter
 import glob
-import json
 import math
 import os
 import re
@@ -76,8 +75,7 @@ from _lib_python import (  # noqa: E402
     METRIC_PREFIX_DB_MAP,
 )
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope,
-    disarm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: the Alertmanager config as its consumers read it)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
@@ -1752,9 +1750,9 @@ def main():
         print(f"ERROR: {exc}", file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
+    # Under --json the document is run()'s to write, with the rc below (#3216).
     if args.json:
-        print(json.dumps(report, indent=2, default=str))
-        disarm_crash_envelope()  # the document is out; the rc is still to come
+        pass  # nothing printed here
     elif args.dry_run:
         print("\n--- DRY RUN SUMMARY ---")
         for phase, info in report["phases"].items():
@@ -1774,17 +1772,20 @@ def main():
     # Measured before this: an all-bad rule set exited 0 and wrote a
     # header-only migration-plan.csv. Outputs are written first (above) so
     # the operator keeps what the readable files yielded; the rc comes last.
-    # Under --json the envelope above already carries
+    # Under --json the document already carries
     # `phases.phase2.summary.errors[]`.
     rule_errors = phase2_results[2]["errors"] if phase2_results else []
     if rule_errors:
         print(f"ERROR: {len(rule_errors)} rule file(s) could not be read: "
               + "; ".join(safe_label(e) for e in rule_errors), file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-
-    # Exit code: 0 if at least one phase produced results
-    has_results = any(report["phases"].values())
-    sys.exit(EXIT_OK if has_results else EXIT_VIOLATION)
+        status = EXIT_CALLER_ERROR
+    else:
+        # Exit code: 0 if at least one phase produced results
+        has_results = any(report["phases"].values())
+        status = EXIT_OK if has_results else EXIT_VIOLATION
+    if args.json:
+        return Report(report, status)  # #3216: run() encodes it
+    sys.exit(status)
 
 
 if __name__ == "__main__":

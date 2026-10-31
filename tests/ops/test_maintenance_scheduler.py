@@ -842,6 +842,9 @@ def test_summary_does_not_claim_silences_were_created(tmp_path, extra, mode, phr
     assert len(summary) == 1 and phrase in summary[0], proc.stderr
     assert "created," not in summary[0]
     assert json.loads(proc.stdout)["mode"] == mode
+    # #3216: the document is run()'s to write, in the one format — two-space
+    # indent, no longer the single line this tool printed itself
+    assert proc.stdout.startswith('{\n  "created": '), proc.stdout
 
 
 @requires_croniter
@@ -853,3 +856,15 @@ def test_unreadable_silences_exit_2_with_one_envelope(tmp_path):
     doc = json.loads(proc.stdout)
     assert (doc["status"], doc["reason"]) == ("caller_error", "alertmanager_query_error")
     assert "Summary:" not in proc.stderr
+
+
+@pytest.mark.parametrize("errors, rc", [(0, 0), (2, 1)])
+def test_json_output_exit_is_the_error_verdict(tmp_path, monkeypatch, capsys, errors, rc):
+    """#3216: the --json-output document goes out through run(); a run with
+    errors still exits 1 under it."""
+    from _lib_exitcodes import emit_result
+    monkeypatch.setattr(ms, "evaluate_and_apply", lambda *a, **kw: (1, 0, errors))
+    monkeypatch.setattr(sys, "argv", ["maintenance_scheduler.py", "--config-dir", str(tmp_path),
+                                      "--json-output"])
+    assert emit_result(ms.main()) == rc
+    assert json.loads(capsys.readouterr().out)["errors"] == errors

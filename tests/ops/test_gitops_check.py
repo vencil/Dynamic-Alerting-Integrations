@@ -30,19 +30,26 @@ import gitops_check as gc
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 from _platform_fs import symlink_or_skip, unprivileged_sandbox  # noqa: E402
 from _go_refusal import refuses  # noqa: E402  (#3206)
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _as_run(result):
+    """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
+    document is written and its status is the exit, as SystemExit."""
+    raise SystemExit(emit_result(result))
 
 _REPO = Path(__file__).resolve().parents[2]
 
 
 def run_main(argv):
-    """Run gc.main() under the given sys.argv and return the pytest
+    """Run emit_result(gc.main()) under the given sys.argv and return the pytest
     ExceptionInfo for the expected SystemExit. Callers assert on
     exc_info.value.code and read capsys themselves, so assertion order
     (code-first vs output-first) stays explicit at the call site.
     """
     with patch("sys.argv", argv):
         with pytest.raises(SystemExit) as exc_info:
-            gc.main()
+            _as_run(gc.main())
     return exc_info
 
 
@@ -749,8 +756,9 @@ class TestMainLocal:
         data = json.loads(captured.out)
         assert data["checks"][0]["check"] == "local"
 
+    @pytest.mark.parametrize("extra", [(), ("--json",)])
     @patch("gitops_check.check_local")
-    def test_local_fail_with_parse_errors(self, mock_check_local, capsys):
+    def test_local_fail_with_parse_errors(self, mock_check_local, capsys, extra):
         """local subcommand with parse errors."""
         mock_check_local.return_value = gc.CheckResult(
             check="local",
@@ -765,11 +773,24 @@ class TestMainLocal:
             }
         )
 
-        exc_info = run_main(["gitops-check", "local", "--dir", "/tmp/config"])
+        exc_info = run_main(["gitops-check", "local", "--dir", "/tmp/config", *extra])
 
         assert exc_info.value.code == 1
         captured = capsys.readouterr()
-        assert "✗" in captured.out
+        if extra:  # #3216: the document goes out and the exit is still the verdict
+            assert json.loads(captured.out)["overall_status"] == "fail"
+        else:
+            assert "✗" in captured.out
+
+    @patch("gitops_check.check_local")
+    def test_no_parse_tree_under_json_is_rc_2_with_the_report(self, mock_check_local, capsys):
+        """ADR-036 step 4: no usable parse-tree is a caller error — under
+        --json the report saying so goes out and the exit is 2 (#3216)."""
+        mock_check_local.side_effect = gc.ParseTreeError("no da-guard")
+        exc_info = run_main(["gitops-check", "local", "--dir", "/tmp/config", "--json"])
+        assert exc_info.value.code == EXIT_CALLER_ERROR
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["checks"][0]["details"]["reason"] == "da_guard_failed"
 
 
 class TestMainEdgeCases:

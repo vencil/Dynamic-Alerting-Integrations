@@ -60,7 +60,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, arm_crash_envelope,
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report, arm_crash_envelope,
 )
 
 # ---------------------------------------------------------------------------
@@ -73,7 +73,6 @@ try:
     from _lib_python import (
         YamlFileError,
         detect_cli_lang,
-        format_json_report,
         parse_duration_seconds,
         safe_label,
     )
@@ -81,7 +80,6 @@ except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         YamlFileError,
         detect_cli_lang,
-        format_json_report,
         parse_duration_seconds,
         safe_label,
     )
@@ -1173,7 +1171,24 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
     return parser
 
 
-def _unreadable_yaml_exit(exc: YamlFileError, args, lang: str) -> int:
+def _caller_error_exit(args, reason: str, rules_evaluated: int = 0) -> "int | Report":
+    """A caller-error terminal path: rc 2 and, under ``--json``, the report
+    schema zeroed with its status / reason (run() encodes it, #3216)."""
+    if not args.json_output:
+        return EXIT_CALLER_ERROR
+    return Report({
+        "status": "caller_error",
+        "reason": reason,
+        "tenants_evaluated": 0,
+        "rules_evaluated": rules_evaluated,
+        "error_count": 0,
+        "warning_count": 0,
+        "passed": False,
+        "violations": [],
+    }, EXIT_CALLER_ERROR)
+
+
+def _unreadable_yaml_exit(exc: YamlFileError, args, lang: str) -> "int | Report":
     """#1654: a conf.d file whose CONTENT cannot be read → rc 2, file named.
 
     ``_defaults.yaml`` and every tenant file reach ``_lib_io.load_yaml_file``
@@ -1186,18 +1201,7 @@ def _unreadable_yaml_exit(exc: YamlFileError, args, lang: str) -> int:
     label = safe_label(exc)   # untrusted filename in the message (#1538)
     print(f"無法讀取 {label}" if lang == "zh" else f"ERROR: cannot read {label}",
           file=sys.stderr)
-    if args.json_output:
-        print(format_json_report({
-            "status": "caller_error",
-            "reason": "yaml_file_unreadable",
-            "tenants_evaluated": 0,
-            "rules_evaluated": 0,
-            "error_count": 0,
-            "warning_count": 0,
-            "passed": False,
-            "violations": [],
-        }))
-    return EXIT_CALLER_ERROR
+    return _caller_error_exit(args, "yaml_file_unreadable")
 
 
 #: The top-level keys a standalone `--policy` file is read for (#2961): any
@@ -1205,7 +1209,7 @@ def _unreadable_yaml_exit(exc: YamlFileError, args, lang: str) -> int:
 POLICY_FILE_KEYS = frozenset({"policies", "_policies"})
 
 
-def _invalid_rules_exit(exc: InvalidPolicyRules, args, lang: str) -> int:
+def _invalid_rules_exit(exc: InvalidPolicyRules, args, lang: str) -> "int | Report":
     """#2961: rules the engine cannot read as written → rc 2, nothing
     evaluated (a skipped rule is a rule that passes). Each bad rule named."""
     head = (f"{safe_label(exc.source)}: 無法照原文讀取的策略規則（不評估任何規則）："
@@ -1215,21 +1219,10 @@ def _invalid_rules_exit(exc: InvalidPolicyRules, args, lang: str) -> int:
     print(head, file=sys.stderr)
     for line in exc.problems:
         print(f"  - {safe_label(line)}", file=sys.stderr)
-    if args.json_output:
-        print(format_json_report({
-            "status": "caller_error",
-            "reason": "policy_rule_invalid",
-            "tenants_evaluated": 0,
-            "rules_evaluated": 0,
-            "error_count": 0,
-            "warning_count": 0,
-            "passed": False,
-            "violations": [],
-        }))
-    return EXIT_CALLER_ERROR
+    return _caller_error_exit(args, "policy_rule_invalid")
 
 
-def _load_error_exit(exc: Exception, args, rules_evaluated: int) -> int:
+def _load_error_exit(exc: Exception, args, rules_evaluated: int) -> "int | Report":
     """#2115: the tenants could not be read the way the exporter reads them
     → rc 2, nothing evaluated. da-guard missing or failing, a file the
     exporter drops or cannot read (named, with da-guard's stderr below), a
@@ -1251,21 +1244,10 @@ def _load_error_exit(exc: Exception, args, rules_evaluated: int) -> int:
         print_load_error(exc)
         reason = ("yaml_file_unreadable" if isinstance(exc, ParseFailedError)
                   else "da_guard_failed")
-    if args.json_output:
-        print(format_json_report({
-            "status": "caller_error",
-            "reason": reason,
-            "tenants_evaluated": 0,
-            "rules_evaluated": rules_evaluated,
-            "error_count": 0,
-            "warning_count": 0,
-            "passed": False,
-            "violations": [],
-        }))
-    return EXIT_CALLER_ERROR
+    return _caller_error_exit(args, reason, rules_evaluated)
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> "int | Report":
     """CLI 進入點。One parse-tree reading of the conf.d per run (ADR-036
     step 4): `_defaults.yaml` here and the route generator's read below
     share it."""
@@ -1273,7 +1255,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         return _main(argv)
 
 
-def _main(argv: Optional[list[str]] = None) -> int:
+def _main(argv: Optional[list[str]] = None) -> "int | Report":
     try_utf8_stdout()
     lang = detect_cli_lang()
     parser = build_parser(lang)
@@ -1414,18 +1396,7 @@ def _main(argv: Optional[list[str]] = None) -> int:
             else:
                 print("  ⛔ Do not drop the flag to clear this — that evaluates "
                       "without your policy file.", file=sys.stderr)
-            if args.json_output:
-                print(format_json_report({
-                    "status": "caller_error",
-                    "reason": reason,
-                    "tenants_evaluated": 0,
-                    "rules_evaluated": 0,
-                    "error_count": 0,
-                    "warning_count": 0,
-                    "passed": False,
-                    "violations": [],
-                }))
-            return EXIT_CALLER_ERROR
+            return _caller_error_exit(args, reason)
         try:
             rules.extend(rules_from_policy_data(policy_data, source=str(args.policy)))
         except InvalidPolicyRules as exc:
@@ -1475,7 +1446,7 @@ def _main(argv: Optional[list[str]] = None) -> int:
                       f"and --policy {args.policy!r} has no policies: list.",
                       file=sys.stderr)
         if args.json_output:
-            print(format_json_report(_empty_report("no_policies", "no_policy_rules_found")))
+            return Report(_empty_report("no_policies", "no_policy_rules_found"))  # #3216
         return EXIT_OK
 
     # Load tenants as the exporter (and, for `_routing`, the route
@@ -1492,24 +1463,22 @@ def _main(argv: Optional[list[str]] = None) -> int:
         else:
             print(f"No tenant configs found in {args.config_dir}", file=sys.stderr)
         if args.json_output:
-            print(format_json_report(_empty_report(
+            return Report(_empty_report(  # #3216: run() encodes it
                 "no_tenant_configs", "no_tenant_configs_found",
-                rules_evaluated=len(rules))))
+                rules_evaluated=len(rules)))
         return EXIT_OK
 
     # Evaluate
     result = evaluate_policies(rules, tenant_configs, inputs.aliases)
 
+    # Exit code
+    status = EXIT_VIOLATION if args.ci and not result.passed else EXIT_OK
+
     # Output
     if args.json_output:
-        print(format_json_report(generate_json_report(result)))
-    else:
-        print(generate_text_report(result, lang))
-
-    # Exit code
-    if args.ci and not result.passed:
-        return EXIT_VIOLATION
-    return EXIT_OK
+        return Report(generate_json_report(result), status)  # #3216: run() encodes it
+    print(generate_text_report(result, lang))
+    return status
 
 
 if __name__ == "__main__":

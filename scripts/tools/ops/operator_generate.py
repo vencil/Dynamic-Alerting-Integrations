@@ -40,8 +40,8 @@ try:
 except ImportError:
     yaml = None
 
-from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
-from _lib_exitcodes import arm_crash_envelope, die_caller_error  # noqa: E402
+from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
+from _lib_exitcodes import Report, arm_crash_envelope, die_caller_error  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
@@ -1003,17 +1003,18 @@ def build_summary(result: Dict[str, Any], kustomize: bool) -> Dict[str, int]:
     }
 
 
-def render_json_envelope(
+def json_envelope(
     json_crds: list,
     json_kustomization,
     summary: Dict[str, int],
-) -> str:
-    """#1112 single-document envelope: ``{"crds", "kustomization", "summary"}``."""
-    return format_json_report({
+) -> dict:
+    """#1112 single-document envelope: ``{"crds", "kustomization", "summary"}``
+    (run() encodes it, #3216)."""
+    return {
         "crds": json_crds,
         "kustomization": json_kustomization,
         "summary": summary,
-    })
+    }
 
 
 def _summary_message(summary: Dict[str, int], kustomize: bool) -> str:
@@ -1152,9 +1153,8 @@ def main():
         # dry-run *report* flag (cli-reference §operator-generate) — the
         # applyable artefacts are the YAML/`--output-dir` paths, which are
         # untouched.
-        print(render_json_envelope(json_crds, json_kustomization, summary))
-    else:
-        print(_summary_message(summary, args.kustomize), file=sys.stderr)
+        return Report(json_envelope(json_crds, json_kustomization, summary))  # #3216
+    print(_summary_message(summary, args.kustomize), file=sys.stderr)
 
 
 if __name__ == "__main__":

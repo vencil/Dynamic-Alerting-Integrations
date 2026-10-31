@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "ops"))
 
 import policy_engine as pe
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -730,7 +731,7 @@ class TestCLI:
     def test_main_no_policies(self, tmp_path, capsys):
         """無策略規則（目錄存在但空）→ 正常退出（訊息走 stderr，#1112）。"""
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(tmp_path)])
+        exit_code = emit_result(pe.main(["--config-dir", str(tmp_path)]))
         assert exit_code == 0
         assert "No policy rules found" in capsys.readouterr().err
 
@@ -813,7 +814,7 @@ class TestCLI:
         cfg = self._tenant_dir(tmp_path)
         pol = tmp_path / "broken.yaml"
         pol.write_text("policies: [\n", encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol)])
+        exit_code = emit_result(pe.main(["--config-dir", str(cfg), "--policy", str(pol)]))
         assert exit_code == 2
         captured = capsys.readouterr()
         assert captured.out == ""
@@ -830,7 +831,7 @@ class TestCLI:
         cfg = self._tenant_dir(tmp_path)
         pol = tmp_path / "cp950.yaml"
         pol.write_bytes("測試: 1\n".encode("cp950"))
-        exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol)])
+        exit_code = emit_result(pe.main(["--config-dir", str(cfg), "--policy", str(pol)]))
         assert exit_code == 2
         captured = capsys.readouterr()
         assert repr(str(pol)) in captured.err
@@ -851,7 +852,7 @@ class TestCLI:
         cfg = self._tenant_dir(tmp_path)
         pol = tmp_path / "shape.yaml"
         pol.write_text(body, encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol)])
+        exit_code = emit_result(pe.main(["--config-dir", str(cfg), "--policy", str(pol)]))
         assert exit_code == 2
         err = capsys.readouterr().err
         assert repr(str(pol)) in err
@@ -878,7 +879,7 @@ class TestCLI:
             pol.write_bytes(body)
         else:
             pol.write_text(body, encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol), "--json"])
+        exit_code = emit_result(pe.main(["--config-dir", str(cfg), "--policy", str(pol), "--json"]))
         assert exit_code == 2
         captured = capsys.readouterr()
         doc = json.loads(captured.out)          # exactly one document
@@ -900,7 +901,7 @@ class TestCLI:
             "    target: mysql_threads_running\n"
             "    operator: required\n",
             encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol), "--json"])
+        exit_code = emit_result(pe.main(["--config-dir", str(cfg), "--policy", str(pol), "--json"]))
         assert exit_code == 0
         doc = json.loads(capsys.readouterr().out)
         assert doc["rules_evaluated"] == 1
@@ -914,7 +915,7 @@ class TestCLI:
         cfg = self._tenant_dir(tmp_path)
         pol = tmp_path / "empty.yaml"
         pol.write_text("", encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(cfg), "--policy", str(pol)])
+        exit_code = emit_result(pe.main(["--config-dir", str(cfg), "--policy", str(pol)]))
         assert exit_code == 0
         err = capsys.readouterr().err
         assert "No policy rules found" in err or "未找到策略規則" in err
@@ -922,7 +923,7 @@ class TestCLI:
     def test_main_policy_omitted_says_specify_policy(self, tmp_path, capsys):
         """control：省略 --policy、目錄存在但無 _defaults.yaml → 0，訊息建議 --policy。"""
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(tmp_path)])
+        exit_code = emit_result(pe.main(["--config-dir", str(tmp_path)]))
         assert exit_code == 0
         err = capsys.readouterr().err
         assert "specify --policy" in err or "指定 --policy" in err
@@ -933,7 +934,7 @@ class TestCLI:
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         pol = tmp_path / "empty-policy.yaml"
         pol.write_text("policies: []\n", encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(tmp_path), "--policy", str(pol)])
+        exit_code = emit_result(pe.main(["--config-dir", str(tmp_path), "--policy", str(pol)]))
         assert exit_code == 0
         err = capsys.readouterr().err
         assert "No policy rules found" in err or "未找到策略規則" in err
@@ -944,7 +945,7 @@ class TestCLI:
     def test_main_no_policies_json_envelope(self, tmp_path, capsys):
         """#1112: 無策略規則 + --json → stdout 仍是恰好一份 JSON（report schema 歸零）。"""
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(tmp_path), "--json"])
+        exit_code = emit_result(pe.main(["--config-dir", str(tmp_path), "--json"]))
         assert exit_code == 0
         doc = json.loads(capsys.readouterr().out)
         assert doc["status"] == "no_policies"
@@ -962,7 +963,7 @@ _policies:
     operator: required
 """, encoding="utf-8")
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(tmp_path)])
+        exit_code = emit_result(pe.main(["--config-dir", str(tmp_path)]))
         assert exit_code == 0
 
     def test_main_ci_fail(self, tmp_path, capsys):
@@ -976,7 +977,7 @@ _policies:
     severity: error
 """, encoding="utf-8")
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(tmp_path), "--ci"])
+        exit_code = emit_result(pe.main(["--config-dir", str(tmp_path), "--ci"]))
         assert exit_code == 1
 
     def test_main_ci_warning_only_pass(self, tmp_path, capsys):
@@ -990,7 +991,7 @@ _policies:
     severity: warning
 """, encoding="utf-8")
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(tmp_path), "--ci"])
+        exit_code = emit_result(pe.main(["--config-dir", str(tmp_path), "--ci"]))
         assert exit_code == 0
 
     def test_main_json_output(self, tmp_path, capsys):
@@ -1003,7 +1004,7 @@ _policies:
     operator: required
 """, encoding="utf-8")
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(tmp_path), "--json"])
+        exit_code = emit_result(pe.main(["--config-dir", str(tmp_path), "--json"]))
         assert exit_code == 0
         output = capsys.readouterr().out
         data = json.loads(output)
@@ -1024,10 +1025,10 @@ policies:
             "_routing:\n  receiver:\n    url: https://safe.com\n",
             encoding="utf-8",
         )
-        exit_code = pe.main([
+        exit_code = emit_result(pe.main([
             "--config-dir", str(tmp_path),
             "--policy", str(policy),
-        ])
+        ]))
         assert exit_code == 0
 
     def test_main_no_tenants(self, tmp_path, capsys):
@@ -1039,7 +1040,7 @@ _policies:
     target: x
     operator: required
 """, encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(tmp_path)])
+        exit_code = emit_result(pe.main(["--config-dir", str(tmp_path)]))
         assert exit_code == 0
 
 
@@ -1134,7 +1135,7 @@ class TestInvalidRules:
             pol = tmp_path.parent / f"{tmp_path.name}-policy.yaml"
             pol.write_text("policies:\n" + _RULE_OK + rule, encoding="utf-8")
             argv += ["--policy", str(pol)]
-        assert pe.main(argv) == 2
+        assert emit_result(pe.main(argv)) == 2
         out = capsys.readouterr()
         doc = json.loads(out.out)
         assert (doc["status"], doc["reason"], doc["passed"]) == ("caller_error", "policy_rule_invalid", False)
@@ -1144,21 +1145,21 @@ class TestInvalidRules:
     def test_policies_not_a_list(self, tmp_path, capsys):
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         (tmp_path / "_defaults.yaml").write_text("_policies:\n  cap: {target: x}\n", encoding="utf-8")
-        assert pe.main(["--config-dir", str(tmp_path), "--ci"]) == 2
+        assert emit_result(pe.main(["--config-dir", str(tmp_path), "--ci"])) == 2
         assert "`_policies` is dict, expected a list of rules" in capsys.readouterr().err
 
     def test_empty_policies_is_still_no_rules(self, tmp_path, capsys):
         """`_policies:` with no value is no rules, rc 0 (#1649 content axis)."""
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         (tmp_path / "_defaults.yaml").write_text("_policies:\n", encoding="utf-8")
-        assert pe.main(["--config-dir", str(tmp_path), "--ci"]) == 0
+        assert emit_result(pe.main(["--config-dir", str(tmp_path), "--ci"])) == 0
 
     def test_policy_file_unknown_top_level_key(self, tmp_path, capsys):
         """`polices:` used to read as "no rules" at rc 0."""
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         pol = tmp_path.parent / f"{tmp_path.name}-policy.yaml"
         pol.write_text("polices:\n" + _RULE_OK, encoding="utf-8")
-        assert pe.main(["--config-dir", str(tmp_path), "--ci", "--json", "--policy", str(pol)]) == 2
+        assert emit_result(pe.main(["--config-dir", str(tmp_path), "--ci", "--json", "--policy", str(pol)])) == 2
         out = capsys.readouterr()
         assert json.loads(out.out)["reason"] == "policy_file_invalid"
         assert "unknown top-level key(s) ['polices']" in out.err
@@ -1171,14 +1172,14 @@ class TestInvalidRules:
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         pol = tmp_path.parent / f"{tmp_path.name}-policy.yaml"
         pol.write_text(body, encoding="utf-8")
-        assert pe.main(["--config-dir", str(tmp_path), "--ci", "--policy", str(pol)]) == 2
+        assert emit_result(pe.main(["--config-dir", str(tmp_path), "--ci", "--policy", str(pol)])) == 2
         assert "both `policies:` and `_policies:`" in capsys.readouterr().err
 
     def test_valid_rules_still_evaluate(self, tmp_path, capsys):
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         (tmp_path / "_defaults.yaml").write_text(
             "defaults:\n  mysql_threads_running: 30\n_policies:\n" + _RULE_OK, encoding="utf-8")
-        assert pe.main(["--config-dir", str(tmp_path), "--ci"]) == 1   # tenant-a serves 80 > 50
+        assert emit_result(pe.main(["--config-dir", str(tmp_path), "--ci"])) == 1   # tenant-a serves 80 > 50
 # TestDocsPolicyExample (#2961)
 # ═══════════════════════════════════════════════════════════════════
 
@@ -1234,7 +1235,7 @@ class TestDocsPolicyExample:
             encoding="utf-8")
         (tmp_path / "t-bare.yaml").write_text(
             "tenants:\n  t-bare:\n    mysql_connections: '100'\n", encoding="utf-8")
-        exit_code = pe.main(["--config-dir", str(tmp_path), "--ci", "--json"])
+        exit_code = emit_result(pe.main(["--config-dir", str(tmp_path), "--ci", "--json"]))
         doc = json.loads(capsys.readouterr().out)
         fired = sorted((v["tenant"], v["rule_name"], v["severity"]) for v in doc["violations"])
         assert fired == [("t-bare", "require-routing", "error"),

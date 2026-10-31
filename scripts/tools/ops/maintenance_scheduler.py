@@ -17,7 +17,6 @@ Usage:
 """
 import argparse
 import http.client
-import json
 import os
 import re
 import sys
@@ -54,8 +53,8 @@ from _lib_tenant_values import (  # noqa: E402
     load_served_tree,
 )
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
-    arm_crash_envelope, disarm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report,
+    arm_crash_envelope,
 )
 
 # Creator label for idempotency checks
@@ -553,16 +552,6 @@ def main():
         mode = "apply"
         counted = f"{created} created"
 
-    if args.json_output:
-        print(json.dumps({
-            "created": created,
-            "skipped": skipped,
-            "errors": errors,
-            "mode": mode,
-        }))
-        # #3094: the document is out; a later push_metrics crash must not add a second
-        disarm_crash_envelope()
-
     print(f"\nSummary: {counted}, {skipped} skipped, {errors} errors",
           file=sys.stderr)
 
@@ -570,7 +559,17 @@ def main():
     if args.pushgateway and not args.dry_run:
         push_metrics(args.pushgateway, created, skipped, errors, duration_s)
 
-    sys.exit(EXIT_VIOLATION if errors else EXIT_OK)
+    status = EXIT_VIOLATION if errors else EXIT_OK
+    if args.json_output:
+        # #3216: run() encodes it — after push_metrics, so a crash there is
+        # the envelope alone, never this document next to rc 2
+        return Report({
+            "created": created,
+            "skipped": skipped,
+            "errors": errors,
+            "mode": mode,
+        }, status)
+    sys.exit(status)
 
 
 if __name__ == "__main__":

@@ -30,6 +30,7 @@ import pytest
 from _platform_fs import symlink_or_skip  # noqa: E402
 
 import silencer_drift_check as sdc
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ─── Helpers + fixtures ───────────────────────────────────────────────
@@ -280,11 +281,15 @@ def test_main_exits_2_on_an_unread_rule_source_file_and_exclude_clears_it(tmp_pa
     silences = tmp_path / "s.json"
     silences.write_text("[]", encoding="utf-8")
     argv = ["--silences-file", str(silences), "--rule-source", str(tmp_path / "rules")]
-    assert sdc.main(argv) == 2
+    assert emit_result(sdc.main(argv)) == 2
     out, err = capsys.readouterr()
     assert "Chart.yaml" in out and "--exclude" in out, out
     assert "could not be read" in err
-    assert sdc.main([*argv, "--exclude", "Chart.yaml"]) == 0
+    assert emit_result(sdc.main([*argv, "--exclude", "Chart.yaml"])) == 0
+    capsys.readouterr()
+    # #3216: under --json the report is the document and the exit is still 2
+    assert emit_result(sdc.main([*argv, "--json"])) == 2
+    assert json.loads(capsys.readouterr().out)["errors"]
 
 
 def test_load_alerts_names_a_misspelt_groups_and_a_manifest_without_kind(tmp_path):
@@ -798,9 +803,9 @@ def test_exit_code_ci_clean_exits_0():
 
 
 def test_main_clean_run(silences_file, rule_pack_file, capsys):
-    rc = sdc.main(
+    rc = emit_result(sdc.main(
         ["--silences-file", str(silences_file), "--rule-source", str(rule_pack_file)]
-    )
+    ))
     assert rc == 0
     out = capsys.readouterr().out
     assert "No orphaned silences detected" in out
@@ -829,7 +834,7 @@ def test_main_orphan_text_output(tmp_path, capsys):
     rules = _write(tmp_path / "p.yaml", """
         groups: [{name: g, rules: [{alert: OtherAlert, expr: up}]}]
     """)
-    rc = sdc.main(["--silences-file", str(silences), "--rule-source", str(rules)])
+    rc = emit_result(sdc.main(["--silences-file", str(silences), "--rule-source", str(rules)]))
     out = capsys.readouterr().out
     assert "Orphaned silences" in out
     assert "orph" in out
@@ -837,7 +842,8 @@ def test_main_orphan_text_output(tmp_path, capsys):
     assert rc == 0  # no --ci
 
 
-def test_main_ci_exits_1_on_orphans(tmp_path):
+@pytest.mark.parametrize("extra", [(), ("--json",)])
+def test_main_ci_exits_1_on_orphans(tmp_path, capsys, extra):
     silences = tmp_path / "s.json"
     silences.write_text(
         json.dumps(
@@ -859,14 +865,16 @@ def test_main_ci_exits_1_on_orphans(tmp_path):
     rules = _write(tmp_path / "p.yaml", """
         groups: [{name: g, rules: [{alert: OtherAlert, expr: up}]}]
     """)
-    rc = sdc.main(
-        ["--silences-file", str(silences), "--rule-source", str(rules), "--ci"]
-    )
+    rc = emit_result(sdc.main(
+        ["--silences-file", str(silences), "--rule-source", str(rules), "--ci", *extra]
+    ))
     assert rc == 1
+    if extra:  # #3216: the document goes out, and the exit is still the verdict
+        assert json.loads(capsys.readouterr().out)["counts"]["orphans"] == 1
 
 
 def test_main_json_output(silences_file, rule_pack_file, capsys):
-    rc = sdc.main(
+    rc = emit_result(sdc.main(
         [
             "--silences-file",
             str(silences_file),
@@ -874,7 +882,7 @@ def test_main_json_output(silences_file, rule_pack_file, capsys):
             str(rule_pack_file),
             "--json",
         ]
-    )
+    ))
     assert rc == 0
     report = json.loads(capsys.readouterr().out)
     assert report["counts"]["orphans"] == 0
@@ -914,7 +922,7 @@ def test_main_text_output_shows_match_coverage(tmp_path, capsys):
                 expr: up
                 labels: {severity: critical}
     """)
-    rc = sdc.main(["--silences-file", str(silences), "--rule-source", str(rules)])
+    rc = emit_result(sdc.main(["--silences-file", str(silences), "--rule-source", str(rules)]))
     out = capsys.readouterr().out
     assert rc == 0
     assert "Match coverage" in out
@@ -951,9 +959,9 @@ def test_main_json_coverage_name_list_is_not_truncated(tmp_path, capsys):
     rules.write_text(
         "groups:\n  - name: g\n    rules:\n" + rule_lines + "\n", encoding="utf-8"
     )
-    rc = sdc.main(
+    rc = emit_result(sdc.main(
         ["--silences-file", str(silences), "--rule-source", str(rules), "--json"]
-    )
+    ))
     assert rc == 0
     report = json.loads(capsys.readouterr().out)
     entry = report["coverage"][0]
@@ -962,14 +970,14 @@ def test_main_json_coverage_name_list_is_not_truncated(tmp_path, capsys):
 
 
 def test_main_missing_silences_file(rule_pack_file, tmp_path):
-    rc = sdc.main(
+    rc = emit_result(sdc.main(
         [
             "--silences-file",
             str(tmp_path / "nope.json"),
             "--rule-source",
             str(rule_pack_file),
         ]
-    )
+    ))
     assert rc == 2
 
 
@@ -994,9 +1002,9 @@ def test_main_empty_rule_source(silences_file, tmp_path, capsys):
     orphaned'."""
     empty_dir = tmp_path / "empty"
     empty_dir.mkdir()
-    rc = sdc.main(
+    rc = emit_result(sdc.main(
         ["--silences-file", str(silences_file), "--rule-source", str(empty_dir)]
-    )
+    ))
     assert rc == 2
     err = capsys.readouterr().err
     assert "no YAML files found" in err
@@ -1006,9 +1014,9 @@ def test_main_empty_silences_clean(rule_pack_file, tmp_path, capsys):
     """Empty silences list (no silences) → 0 orphans, clean exit."""
     empty = tmp_path / "empty.json"
     empty.write_text("[]", encoding="utf-8")
-    rc = sdc.main(
+    rc = emit_result(sdc.main(
         ["--silences-file", str(empty), "--rule-source", str(rule_pack_file)]
-    )
+    ))
     assert rc == 0
     out = capsys.readouterr().out
     assert "No orphaned silences" in out
@@ -1206,9 +1214,9 @@ def test_json_output_keeps_alertname_byte_faithful(tmp_path, capsys):
         ),
         encoding="utf-8",
     )
-    rc = sdc.main(
+    rc = emit_result(sdc.main(
         ["--silences-file", str(silences), "--rule-source", str(pack), "--json"]
-    )
+    ))
     assert rc == 0
     raw = capsys.readouterr().out
     assert "\x1b" not in raw  # serialized as an escape sequence, never live
@@ -1276,13 +1284,13 @@ def test_rule_pack_dir_reads_the_declared_packs(tmp_path, capsys):
     (rp / "threshold-registry.yaml").write_text("entries: []\n", encoding="utf-8")
     (rp / "recipes" / "r.yaml").write_text("recipe: x\n", encoding="utf-8")
     argv = ["--silences-file", _silences_none(tmp_path), "--rule-pack-dir", str(rp)]
-    assert sdc.main(argv) == 0
+    assert emit_result(sdc.main(argv)) == 0
     assert "1 alerts loaded" in capsys.readouterr().out
     (rp / "stray.yaml").write_text("x: 1\n", encoding="utf-8")
-    assert sdc.main(argv) == 2
+    assert emit_result(sdc.main(argv)) == 2
     assert "stray.yaml" in capsys.readouterr().err
-    assert sdc.main([*argv, "--exclude", "x"]) == 2
-    assert sdc.main(["--silences-file", _silences_none(tmp_path)]) == 2
+    assert emit_result(sdc.main([*argv, "--exclude", "x"])) == 2
+    assert emit_result(sdc.main(["--silences-file", _silences_none(tmp_path)])) == 2
 
 
 def test_an_exclude_that_leaves_nothing_exits_2(tmp_path, capsys):
@@ -1290,8 +1298,8 @@ def test_an_exclude_that_leaves_nothing_exits_2(tmp_path, capsys):
     _write(tmp_path / "rules/a.yaml", """
         groups: [{name: g, rules: [{alert: A, expr: up}]}]
     """)
-    rc = sdc.main(["--silences-file", _silences_none(tmp_path),
-                   "--rule-source", str(tmp_path / "rules"), "--exclude", "*.yaml"])
+    rc = emit_result(sdc.main(["--silences-file", _silences_none(tmp_path),
+                   "--rule-source", str(tmp_path / "rules"), "--exclude", "*.yaml"]))
     assert rc == 2
     assert "every one excluded" in capsys.readouterr().err
 
@@ -1307,7 +1315,7 @@ def test_an_empty_file_or_a_dangling_symlink_exits_2(tmp_path, capsys, name):
         (rules / name).write_text("", encoding="utf-8")
     else:
         symlink_or_skip(str(rules / "gone.yaml"), str(rules / name))
-    rc = sdc.main(["--silences-file", _silences_none(tmp_path), "--rule-source", str(rules)])
+    rc = emit_result(sdc.main(["--silences-file", _silences_none(tmp_path), "--rule-source", str(rules)]))
     assert rc == 2
     captured = capsys.readouterr()
     assert name in captured.out + captured.err
@@ -1323,8 +1331,33 @@ def test_a_configmap_mount_as_rule_source_exits_0(tmp_path, capsys):
     """)
     symlink_or_skip("..2024_01_01", str(mount / "..data"))
     symlink_or_skip("..data/r.yaml", str(mount / "r.yaml"))
-    rc = sdc.main(["--silences-file", _silences_none(tmp_path), "--rule-source", str(mount),
-                   "--json"])
+    rc = emit_result(sdc.main(["--silences-file", _silences_none(tmp_path), "--rule-source", str(mount),
+                   "--json"]))
     assert rc == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["counts"]["alerts"] >= 1 and doc["errors"] == []
+
+
+@pytest.mark.real_crash_exit_code
+def test_json_a_nan_in_the_silences_is_the_named_crash_not_invalid_json(tmp_path):
+    """#3216: `json.load` reads a bare `NaN` in the silences dump, and the
+    report echoes the silence back. It was printed as `NaN` (not JSON) with
+    rc 1; run() refuses it now — the crash code, the named envelope."""
+    import subprocess
+    import sys
+    silences = tmp_path / "s.json"
+    silence = _silence()
+    silence["comment"] = float("nan")  # json.dumps writes it as a bare NaN
+    silences.write_text(json.dumps([silence]), encoding="utf-8")
+    rules = _write(tmp_path / "r.yaml", """
+        groups: [{name: g, rules: [{alert: OtherAlert, expr: up}]}]
+    """)
+    script = Path(__file__).resolve().parents[2] / "scripts/tools/ops/silencer_drift_check.py"
+    p = subprocess.run([sys.executable, str(script), "--silences-file", str(silences),
+                        "--rule-source", str(rules), "--json"],
+                       capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert p.returncode == 2, p.stderr
+    doc = json.loads(p.stdout)  # one valid document: the envelope, not the report
+    assert doc["reason"] == "output_not_serializable"
+    assert "NaN" not in p.stdout
+    assert "nan is not a JSON number" in p.stderr

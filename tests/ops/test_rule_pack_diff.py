@@ -26,6 +26,7 @@ from textwrap import dedent
 import pytest
 
 import rule_pack_diff as rpd
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ─── Fixtures: minimal valid rule pack snippets ───────────────────────
@@ -485,7 +486,7 @@ def test_main_text_output_lists_removed_records(tmp_path, capsys):
           - name: g
             rules: []
     """)
-    rc = rpd.main(["--from", str(v1), "--to", str(v2)])
+    rc = emit_result(rpd.main(["--from", str(v1), "--to", str(v2)]))
     out = capsys.readouterr().out
     assert "Removed recording rules" in out
     assert "tenant:dropped:rate5m" in out
@@ -573,7 +574,7 @@ def v2_path(tmp_path):
 
 
 def test_main_text_output(v1_path, v2_path, capsys):
-    rc = rpd.main(["--from", str(v1_path), "--to", str(v2_path)])
+    rc = emit_result(rpd.main(["--from", str(v1_path), "--to", str(v2_path)]))
     out = capsys.readouterr().out
     assert "Breaking modifications" in out
     assert "A1" in out
@@ -581,28 +582,32 @@ def test_main_text_output(v1_path, v2_path, capsys):
 
 
 def test_main_json_output_includes_breaking(v1_path, v2_path, capsys):
-    rc = rpd.main(["--from", str(v1_path), "--to", str(v2_path), "--json"])
+    rc = emit_result(rpd.main(["--from", str(v1_path), "--to", str(v2_path), "--json"]))
     report = json.loads(capsys.readouterr().out)
     assert report["counts"]["breaking"] == 1
     assert len(report["breaking_modifications"]) == 1
     assert rc == 0
 
 
-def test_main_ci_exits_1_on_breaking(v1_path, v2_path):
-    rc = rpd.main(["--from", str(v1_path), "--to", str(v2_path), "--ci"])
+@pytest.mark.parametrize("extra", [(), ("--json",)])
+def test_main_ci_exits_1_on_breaking(v1_path, v2_path, capsys, extra):
+    """Under --json too: the document goes out and the exit is the --ci verdict (#3216)."""
+    rc = emit_result(rpd.main(["--from", str(v1_path), "--to", str(v2_path), "--ci", *extra]))
     assert rc == 1
+    if extra:
+        assert json.loads(capsys.readouterr().out)["counts"]["breaking"] == 1
 
 
 def test_main_missing_input_exits_2(tmp_path):
-    rc = rpd.main(
+    rc = emit_result(rpd.main(
         ["--from", str(tmp_path / "nope.yaml"), "--to", str(tmp_path / "also.yaml")]
-    )
+    ))
     assert rc == 2
 
 
 def test_main_clean_diff_text(v1_path, capsys):
     """Same file vs itself → 'No differences detected'."""
-    rc = rpd.main(["--from", str(v1_path), "--to", str(v1_path)])
+    rc = emit_result(rpd.main(["--from", str(v1_path), "--to", str(v1_path)]))
     out = capsys.readouterr().out
     assert "No differences detected" in out
     assert rc == 0
@@ -647,7 +652,7 @@ def test_diff_same_name_count_mismatch_recorded(tmp_path):
 def test_main_json_includes_input_paths(v1_path, v2_path, capsys):
     """JSON output must include from_path / to_path so automation can
     correlate diff reports with the inputs that produced them."""
-    rc = rpd.main(["--from", str(v1_path), "--to", str(v2_path), "--json"])
+    rc = emit_result(rpd.main(["--from", str(v1_path), "--to", str(v2_path), "--json"]))
     assert rc == 0
     report = json.loads(capsys.readouterr().out)
     assert report["from_path"] == str(v1_path)
@@ -665,7 +670,7 @@ def test_main_json_roundtrip_for_label_value_tuple(tmp_path, capsys):
         groups:
           - {name: g, rules: [{alert: A1, expr: up, labels: {severity: critical}}]}
     """)
-    rc = rpd.main(["--from", str(v1), "--to", str(v2), "--json"])
+    rc = emit_result(rpd.main(["--from", str(v1), "--to", str(v2), "--json"]))
     assert rc == 0
     report = json.loads(capsys.readouterr().out)
     breaking = report["breaking_modifications"][0]["change"]["label_values_changed"]

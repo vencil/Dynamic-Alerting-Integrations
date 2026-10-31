@@ -90,17 +90,13 @@ from _lib_python import (  # noqa: E402
     non_negative_seconds,
     positive_seconds,
 )
-# Aliased: the local format_json_report() below (domain report builder,
-# exercised directly by tests) delegates its final dump to the shared helper.
-from _lib_python import format_json_report as _dump_json  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _grar_merge import receiver_type  # noqa: E402  (#2839 the one type read)
 from _grar_merge import build_receiver_config  # noqa: E402  (#3048 the generator's verdict)
 from _grar_merge import Finding  # noqa: E402  (#3076 a slot verdict's reason)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, arm_crash_envelope,
-    disarm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope,
 )
 
 _LANG = detect_cli_lang()
@@ -983,16 +979,16 @@ def format_text_report(reports: list[TenantTestReport]) -> str:
     return "\n".join(lines)
 
 
-def format_json_report(reports: list[TenantTestReport], *,
-                       policy_applied: bool = False) -> str:
-    """Format reports as JSON string.
+def json_document(reports: list[TenantTestReport], *,
+                  policy_applied: bool = False) -> dict:
+    """The --json document (run() encodes it, #3216).
 
     Args:
         reports: List of TenantTestReport.
         policy_applied: whether a --policy was applied (#3142).
 
     Returns:
-        JSON string with tool metadata and all results.
+        The document: tool metadata and all results.
     """
     has_failure = any(r.failed > 0 for r in reports)
     output = {
@@ -1007,7 +1003,7 @@ def format_json_report(reports: list[TenantTestReport], *,
             "skipped": sum(r.skipped for r in reports),
         },
     }
-    return _dump_json(output)
+    return output
 
 
 # ---------------------------------------------------------------------------
@@ -1099,7 +1095,7 @@ def main() -> None:
         for line in exc.lines:
             print(safe_label(line), file=sys.stderr)
         if args.json_output:
-            print(_dump_json({
+            return Report({  # #3216: run() encodes it
                 "tool": "test-notification",
                 "status": "caller_error",
                 "reason": "routing_tree_refused",
@@ -1107,18 +1103,17 @@ def main() -> None:
                 "tenants": [],
                 "summary": {"total_receivers": 0, "passed": 0,
                             "failed": 0, "skipped": 0},
-            }))
+            }, EXIT_CALLER_ERROR)
         sys.exit(EXIT_CALLER_ERROR)
 
-    if args.json_output:
-        print(format_json_report(reports, policy_applied=policy.applied))
-        disarm_crash_envelope()  # the document is out; a late crash must not add a second
-    else:
-        print(format_text_report(reports))
-
     has_failure = any(r.failed > 0 for r in reports)
-    if args.ci and has_failure:
-        sys.exit(EXIT_VIOLATION)
+    status = EXIT_VIOLATION if args.ci and has_failure else EXIT_OK
+    if args.json_output:
+        # #3216: run() encodes it
+        return Report(json_document(reports, policy_applied=policy.applied), status)
+    print(format_text_report(reports))
+    if status:
+        sys.exit(status)
 
 
 if __name__ == "__main__":

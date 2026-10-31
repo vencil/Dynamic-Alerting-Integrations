@@ -95,15 +95,15 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
+from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_prometheus import QueryError, prometheus_rules, rules_groups  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK,
     EXIT_VIOLATION,
     EXIT_CALLER_ERROR,
+    Report,
     arm_crash_envelope,
-    disarm_crash_envelope,
 )
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 
@@ -441,10 +441,10 @@ class RuntimeAuditor:
             g=self.declared_group_count,
         ))
 
-    def print_json_report(self) -> None:
+    def json_document(self) -> dict:
+        """The --json document (run() encodes it, #3216)."""
         if self.caller_error:
-            print(format_json_report({"error": self.caller_error}))
-            return
+            return {"error": self.caller_error}
         m, u, o = self._counts()
         report = {
             "findings": [f.to_dict() for f in self.findings],
@@ -455,7 +455,7 @@ class RuntimeAuditor:
                 "declared_groups": self.declared_group_count,
             },
         }
-        print(format_json_report(report))
+        return report
 
     def exit_code(self) -> int:
         if self.caller_error:
@@ -500,10 +500,8 @@ def main():
     auditor.run()
 
     if args.json:
-        auditor.print_json_report()
-        disarm_crash_envelope()  # the document is out; the rc is still to come
-    else:
-        auditor.print_human_report()
+        return Report(auditor.json_document(), auditor.exit_code())  # #3216: run() encodes it
+    auditor.print_human_report()
 
     sys.exit(auditor.exit_code())
 
