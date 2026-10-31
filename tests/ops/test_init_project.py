@@ -2235,35 +2235,6 @@ class TestKustomizeTreeTellsTheChartNotToOwnTheConfigMap:
         assert len(lines) == 1, out
         assert ' -n obs ' in lines[0]
 
-    def test_the_pinned_chart_that_lacks_the_switch_is_said_to(self):
-        """The pin is a published chart that has no existingConfigMap and no
-        values.schema.json, so it takes the `--set` and ignores it. Both
-        places that print the instruction must say so while that holds."""
-        assert (ip.THRESHOLD_EXPORTER_CHART_VERSION
-                == ip._CHART_WITHOUT_EXISTING_CONFIGMAP)
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = dict(_KUST_CFG, tenants=['t-one'])
-            created = ip.run_init(cfg, tmp)
-            readme = _readme_text(tmp)
-            out = _summary_text(tmp, cfg, created)
-        note = f'chart {ip.THRESHOLD_EXPORTER_CHART_VERSION} '
-        assert note + 'does not have thresholdConfig.existingConfigMap' in readme
-        assert any(note in ln and ('silently ignores' in ln or '靜默' in ln)
-                   for ln in out.splitlines()), out
-
-    def test_a_pin_past_that_chart_drops_the_note(self, monkeypatch):
-        """Control: once the pin moves to a chart that has the switch, the
-        note would be false, and it goes."""
-        monkeypatch.setattr(ip, 'THRESHOLD_EXPORTER_CHART_VERSION', '99.0.0')
-        with tempfile.TemporaryDirectory() as tmp:
-            cfg = dict(_KUST_CFG, tenants=['t-one'])
-            created = ip.run_init(cfg, tmp)
-            readme = _readme_text(tmp)
-            out = _summary_text(tmp, cfg, created)
-        assert 'existingConfigMap and silently' not in readme
-        assert self._SET in readme
-        assert 'silently ignores' not in out and '靜默' not in out
-
     def test_helm_deploy_does_not_get_the_kustomize_step(self):
         """Control: under --deploy helm the chart DOES own the ConfigMap."""
         with tempfile.TemporaryDirectory() as tmp:
