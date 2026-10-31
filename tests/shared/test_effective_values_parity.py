@@ -25,7 +25,7 @@ import pytest
 #: #3206). A tool run refuses such a tree first (the behaviour matrix).
 pytestmark = pytest.mark.usefixtures("judging_run")
 
-from _da_guard_build import go_build_env  # #3174: 與出貨同形，CGO_ENABLED=0
+from _go_build import go_build_argv  # #3425: 建置旗標的單一來源，與出貨同形
 import _lib_tenant_values as tv
 from _lib_io import YamlFileError
 from _platform_fs import (  # noqa: E402
@@ -52,9 +52,8 @@ def da_guard(tmp_path_factory) -> str:
         pytest.fail("`go` is not on PATH: da-guard cannot be built, so nothing here can be measured")
     out = tmp_path_factory.mktemp("da-guard") / "da-guard"
     proc = subprocess.run(
-        [go, "build", "-buildvcs=false", "-o", str(out), "./cmd/da-guard"],
-        cwd=APP, capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=600,
-        env=go_build_env())
+        go_build_argv(APP, "./cmd/da-guard", out),
+        capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=600)
     if proc.returncode != 0:
         pytest.fail(f"go build da-guard failed (rc={proc.returncode}):\n{proc.stderr}")
     return str(out)

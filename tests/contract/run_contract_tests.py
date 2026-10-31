@@ -109,14 +109,15 @@ SWAGGER_JSON = TENANT_API_DIR / "docs" / "swagger.json"
 GENERATOR_SERVICE = REPO_ROOT / "scripts" / "tools" / "ops" / "generator_service.py"
 
 
-def _da_guard_go_build_env() -> dict:
-    """#3174: the shipped shape (CGO_ENABLED=0) — tests/_da_guard_build.py says why."""
+def _go_build_argv(module_dir: Path, package: str, output: Path) -> list:
+    """#3425: the shipped shape — the build flags live only in
+    scripts/ops/go_build.sh, and tests/_go_build.py builds the argv for it."""
     sys.path.insert(0, str(REPO_ROOT / "tests"))
     try:
-        from _da_guard_build import go_build_env
+        from _go_build import go_build_argv
     finally:
         sys.path.pop(0)
-    return go_build_env()
+    return go_build_argv(module_dir, package, output)
 
 
 def find_free_port() -> int:
@@ -352,11 +353,9 @@ def build_da_guard(workdir: Path) -> str:
     binary = workdir / "da-guard"
     print(f"[contract] building da-guard → {binary}")
     subprocess.run(
-        ["go", "build", "-buildvcs=false", "-o", str(binary), "./cmd/da-guard"],
-        cwd=DA_GUARD_DIR,
+        _go_build_argv(DA_GUARD_DIR, "./cmd/da-guard", binary),
         check=True,
         timeout=180,
-        env=_da_guard_go_build_env(),
     )
     return str(binary)
 
@@ -411,13 +410,11 @@ def build_tenant_api(workdir: Path) -> Path:
     """Build the tenant-api binary into workdir/tenant-api. Returns path."""
     binary = workdir / "tenant-api"
     print(f"[contract] building tenant-api → {binary}")
-    # -buildvcs=false: needed when running inside dev container against a
-    # worktree where .git is a file pointing to a Windows path the
-    # container can't read. CI (real checkout) doesn't need it but
-    # passing it is harmless.
+    # go_build.sh passes -buildvcs=false: needed when running inside dev
+    # container against a worktree where .git is a file pointing to a
+    # Windows path the container can't read.
     subprocess.run(
-        ["go", "build", "-buildvcs=false", "-o", str(binary), "./cmd/server"],
-        cwd=TENANT_API_DIR,
+        _go_build_argv(TENANT_API_DIR, "./cmd/server", binary),
         check=True,
         timeout=180,  # cold cache go build is ~60s; 3min is generous
     )

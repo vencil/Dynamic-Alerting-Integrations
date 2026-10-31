@@ -118,6 +118,10 @@ jobs:
               #     child process go_test_reads.py cannot see.
               - "scripts/tools/ops/*.py"
               - "scripts/tools/*.py"
+              # The tenant-api handler and exporter pkg/config tests build their
+              # da-guard by running this script (#3425) — a child process, which
+              # go_test_reads.py does not see.
+              - "scripts/ops/go_build.sh"
               - "tests/shared/**"
               #   - tests/golden/**, tests/rulepacks/** and tests/dx/fixtures/**
               #     — same asymmetry as tests/shared/** above, in three sibling

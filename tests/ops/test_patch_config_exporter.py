@@ -23,6 +23,7 @@ from pathlib import Path
 
 import pytest
 from _platform_fs import require_shebang_scripts  # noqa: E402
+from _go_build import go_build_argv  # noqa: E402  #3425: 建置旗標的單一來源，與出貨同形
 
 REPO = Path(__file__).resolve().parents[2]
 APP = REPO / "components" / "threshold-exporter" / "app"
@@ -90,8 +91,7 @@ def test_go_present_when_required():
 @pytest.fixture(scope="module")
 def exporter_bin(tmp_path_factory):
     out = tmp_path_factory.mktemp("exporter") / "threshold-exporter"
-    subprocess.run(["go", "build", "-buildvcs=false", "-o", str(out), "."],
-                   cwd=APP, check=True, timeout=600)
+    subprocess.run(go_build_argv(APP, ".", out), check=True, timeout=600)
     return out
 
 

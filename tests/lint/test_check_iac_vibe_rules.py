@@ -209,6 +209,32 @@ class TestCollectFindings:
         f = iac.collect_findings(["components/da-tools/app/Dockerfile"])
         assert "__engine_error__" in f
 
+    def test_v3_checks_the_per_dockerfile_ignore_file(self, monkeypatch, tmp_path):
+        """#3425: BuildKit reads `<Dockerfile>.dockerignore` in place of the
+        context root's file, so V3 must judge that one — a gap there blocks
+        even though the root .dockerignore is complete."""
+        df = "app/Dockerfile"
+        (tmp_path / "app").mkdir()
+        (tmp_path / df).write_text("FROM gcr.io/distroless/static\n", encoding="utf-8")
+        (tmp_path / ".dockerignore").write_text(
+            "/.git/\n/tests/\n/scripts/\n/docs/\n*.md\n/.github/\n*.log\n.env*\n",
+            encoding="utf-8")
+        own = tmp_path / f"{df}.dockerignore"
+        own.write_text("!scripts/ops/go_build.sh\n", encoding="utf-8")
+        monkeypatch.setattr(iac, "REPO_ROOT", tmp_path)
+        monkeypatch.setattr(iac, "DOCKERFILE_CONTEXTS", {df: "."})
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: [])
+        blocks = iac.collect_findings([df])["BLOCK"]
+        assert any("app/Dockerfile.dockerignore" in b and "V3" in b for b in blocks), blocks
+        own.write_text("*\n!scripts/ops/go_build.sh\n", encoding="utf-8")
+        assert not [b for b in iac.collect_findings([df])["BLOCK"] if "V3" in b]
+
+
+def test_per_dockerfile_ignore_files_are_not_discovered_as_dockerfiles():
+    found = iac.find_dockerfiles()
+    assert "components/threshold-exporter/app/Dockerfile" in found
+    assert not [d for d in found if d.endswith(".dockerignore")], found
+
 
 # ---------------------------------------------------------------------------
 # main() exit codes (run_hadolint stubbed; real repo files are clean)

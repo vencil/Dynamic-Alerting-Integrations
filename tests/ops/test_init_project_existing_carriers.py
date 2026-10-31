@@ -493,7 +493,7 @@ def test_the_notices_follow_the_cli_language(tmp_path):
 
 import re  # noqa: E402
 import shutil  # noqa: E402
-from _da_guard_build import go_build_env  # noqa: E402  (#3174: CGO_ENABLED=0)
+from _go_build import go_build_argv  # noqa: E402  (#3425: 建置旗標的單一來源)
 
 _APP = Path(REPO_ROOT) / "components" / "threshold-exporter" / "app"
 _DISPATCH = Path(REPO_ROOT) / "scripts" / "tools" / "ops" / "guard_dispatch.py"
@@ -514,8 +514,7 @@ def da_guard(tmp_path_factory):
         pytest.skip("go not on PATH: cannot build da-guard (VIBE_REQUIRE_GO=1 "
                     "turns this into a failure)")
     out = tmp_path_factory.mktemp("da-guard") / "da-guard"
-    subprocess.run(["go", "build", "-buildvcs=false", "-o", str(out), "./cmd/da-guard"],
-                   cwd=_APP, check=True, timeout=600, env=go_build_env())
+    subprocess.run(go_build_argv(_APP, "./cmd/da-guard", out), check=True, timeout=600)
     return out
 
 

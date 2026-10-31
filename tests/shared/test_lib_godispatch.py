@@ -247,7 +247,8 @@ class TestBinaryResolutionPath:
         assert rc == 2
         assert "fake-binary" in captured.err
         # Friendly install hints surface
-        assert "go build" in captured.err or "release" in captured.err
+        assert "scripts/ops/go_build.sh" in captured.err
+        assert "release" in captured.err
         # All three resolution tiers documented
         assert "--fake-binary-path" in captured.err
         assert "FAKE_BINARY" in captured.err

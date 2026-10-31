@@ -131,7 +131,7 @@ def test_missing_binary_raises_with_install_hint(tmp_path, monkeypatch):
         tv.load_served_values(tmp_path)
     msg = str(ei.value)
     assert "da-guard binary not found" in msg
-    assert "DA_GUARD_BINARY" in msg and "go build" in msg
+    assert "DA_GUARD_BINARY" in msg and "scripts/ops/go_build.sh" in msg
 
     with pytest.raises(tv.DaGuardNotFoundError) as ei:
         tv.load_served_values(tmp_path, binary=str(tmp_path / "nope"))

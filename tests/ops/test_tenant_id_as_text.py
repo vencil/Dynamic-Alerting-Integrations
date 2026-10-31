@@ -22,6 +22,7 @@ from pathlib import Path
 from unittest import mock
 
 import pytest
+from _go_build import go_build_argv  # #3425: 建置旗標的單一來源，與出貨同形
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS = REPO_ROOT / "scripts" / "tools"
@@ -332,9 +333,8 @@ def da_guard(tmp_path_factory):
     out = tmp_path_factory.mktemp("da-guard") / "da-guard"
     env = {**os.environ}
     env.setdefault("GOTOOLCHAIN", "auto")
-    subprocess.run(["go", "build", "-buildvcs=false", "-o", str(out),
-                    "./cmd/da-guard"],
-                   cwd=REPO_ROOT / "components" / "threshold-exporter" / "app",
+    subprocess.run(go_build_argv(REPO_ROOT / "components" / "threshold-exporter" / "app",
+                                 "./cmd/da-guard", out),
                    env=env, check=True, timeout=600)
     return str(out)
 

@@ -226,9 +226,10 @@ class GoBinaryDispatcher:
             "  - Download from "
             "https://github.com/vencil/Dynamic-Alerting-Integrations/releases\n"
             "    (look for tools/v* release assets when v2.8.0 ships)\n"
-            "  - Build from source:\n"
-            "      cd components/threshold-exporter/app && \\\n"
-            f"          CGO_ENABLED=0 go build -o /usr/local/bin/{bn} ./cmd/{bn}\n",
+            "  - Build from source (from a checkout of the repository root;\n"
+            "    the script holds the shipped build flags):\n"
+            "      sh scripts/ops/go_build.sh components/threshold-exporter/app \\\n"
+            f"          ./cmd/{bn} /usr/local/bin/{bn}\n",
             f"錯誤: 找不到 {bn} 執行檔。\n"
             "解析順序:\n"
             f"  1. {self.binary_flag} <path>\n"
@@ -240,9 +241,9 @@ class GoBinaryDispatcher:
             "https://github.com/vencil/Dynamic-Alerting-Integrations/releases"
             " 下載\n"
             "    (v2.8.0 釋出後請看 tools/v* release assets)\n"
-            "  - 從原始碼編譯:\n"
-            "      cd components/threshold-exporter/app && \\\n"
-            f"          CGO_ENABLED=0 go build -o /usr/local/bin/{bn} ./cmd/{bn}\n"
+            "  - 從原始碼編譯（在 repo 根目錄的 checkout 執行；腳本帶出貨用的建置旗標）:\n"
+            "      sh scripts/ops/go_build.sh components/threshold-exporter/app \\\n"
+            f"          ./cmd/{bn} /usr/local/bin/{bn}\n"
         )
 
     # ------------------------------------------------------------------

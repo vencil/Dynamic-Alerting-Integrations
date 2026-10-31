@@ -33,7 +33,6 @@ TOOLS = REPO / "scripts" / "tools"
 if str(TOOLS) not in sys.path:
     sys.path.insert(0, str(TOOLS))
 import _lib_doc_yaml_inventory as inv  # noqa: E402
-from _da_guard_build import go_build_env  # noqa: E402
 
 DRIFT = REPO / "scripts" / "tools" / "lint" / "check_md_yaml_drift.py"
 
@@ -335,7 +334,7 @@ def test_go_loader_test_agrees_with_the_inventory():
     go = shutil.which("go")
     if go is None:
         pytest.fail("`go` is not on PATH: the Go half of the inventory parity cannot run")
-    env = {**go_build_env(), "CI": "1"}
+    env = {**os.environ, "CI": "1"}  # 測試自建的 da-guard 經 go_build.sh（#3425）
     if os.environ.get("DA_GUARD_BINARY"):
         env["DA_GUARD_BINARY"] = os.path.abspath(os.environ["DA_GUARD_BINARY"])
     proc = subprocess.run(  # noqa: S603
