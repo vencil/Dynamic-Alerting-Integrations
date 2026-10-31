@@ -92,11 +92,13 @@ class RulePacksRefused(Exception):
 
 
 def _rule_pack_files() -> list[Path]:
-    """Rule-pack YAML files — matches BOTH ``.yaml`` and ``.yml`` so a ``.yml``-suffixed pack
-    cannot silently escape the gate. A bare ``glob("*.yaml")`` would ignore it, letting all its
-    alerts bypass the coverage check (no test, not baselined) — a fail-OPEN hole (Gemini #969)."""
-    return sorted(f for f in _RULE_PACKS.iterdir()
-                  if f.is_file() and f.suffix in (".yaml", ".yml"))
+    """The rule packs, declared by path: ``_lib_consumer_read.rule_pack_files`` (#3426) —
+    ``rule-pack-*.yaml`` and ``rule-pack-*.yml``, so a ``.yml``-suffixed pack cannot silently
+    escape the gate (Gemini #969: a bare ``glob("*.yaml")`` would let all its alerts bypass the
+    coverage check). Any other top-level YAML there that is not declared beside the packs
+    (the registry) raises ``RuleFileSourcesRefused`` naming it, so a pack named another way
+    cannot escape either."""
+    return _lib_consumer_read.rule_pack_files(_RULE_PACKS)
 
 
 def _fixture_files() -> list[Path]:
@@ -114,15 +116,14 @@ def declared_alerts() -> dict[str, str]:
     (b) let a test in one pack falsely "cover" a same-named untested alert in another. Rather
     than mask that, a collision is detected and FAILS loudly (CodeRabbit #969).
 
-    #3206 (ADR-036 §12) / #3426: the rule files under rule-packs/ are
-    `_lib_consumer_read.rule_files_in`'s answer (other YAML there, the
-    registry, holds none), each read the way Prometheus' rule loader reads
-    it. A file no reader reads, or a pack the loader refuses, raises
-    RulePacksRefused naming it."""
+    #3206 (ADR-036 §12) / #3426: the rule packs are declared by path
+    (`_rule_pack_files`) and their rule files are `_lib_consumer_read.rule_files_in`'s
+    answer, each read the way Prometheus' rule loader reads it. A pack no reader reads,
+    or one the loader refuses, raises RulePacksRefused naming it."""
     out: dict[str, str] = {}
     dupes: dict[str, list[str]] = {}
     found = _lib_consumer_read.rule_files_in(
-        _rule_pack_files(), other_yaml=_lib_consumer_read.NO_RULE_FILES, keep_refusals=True)
+        _rule_pack_files(), keep_refusals=True)
     rule_files = [rf for rfs in found.values() for rf in rfs]
     refused = [f"{Path(rf.path).name}: {rf.problem}" for rf in rule_files
                if rf.problem is not None]

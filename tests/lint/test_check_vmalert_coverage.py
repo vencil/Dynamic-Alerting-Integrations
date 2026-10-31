@@ -176,6 +176,19 @@ def test_yaml_without_groups_is_not_a_pack(tree):
     assert cov.check() == 0
 
 
+def test_an_undeclared_yaml_beside_the_packs_fails_naming_it(tree, monkeypatch, capsys):
+    """#3426: the packs are declared by path (rule-pack-*.yaml|yml, and the
+    registry beside them); a pack named another way is named, rc 2 — it
+    cannot escape the gate (Gemini #969), and it is not judged by content."""
+    rp, tr = tree
+    (rp / "rule-pack-x.yaml").write_text(_pack(["A"]), encoding="utf-8")
+    (rp / "extra-pack.yaml").write_text(_pack(["Hidden"]), encoding="utf-8")
+    _write_baseline(tr, {"rule-pack-x.yaml": ["A"]})
+    monkeypatch.setattr(sys, "argv", ["check_vmalert_coverage.py", "--ci"])
+    assert cov.main() == 2
+    assert "extra-pack.yaml" in capsys.readouterr().err
+
+
 def test_repo_rule_packs_pass(monkeypatch):
     """smoke：repo 真實的 rule-packs/ → rc 0。"""
     monkeypatch.setattr(sys, "argv", ["check_vmalert_coverage.py", "--ci"])

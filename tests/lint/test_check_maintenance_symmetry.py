@@ -251,6 +251,15 @@ def test_yaml_without_groups_is_not_a_pack(tree):
     assert sym.check() == 0
 
 
+def test_an_undeclared_yaml_beside_the_packs_fails_naming_it(tree, capsys):
+    """#3426: rule packs are declared by path; a YAML file in rule-packs/
+    that is neither a pack nor declared beside them is named, rc 2."""
+    (tree / "rule-pack-x.yaml").write_text(_pack({"A": _two_arm()}), encoding="utf-8")
+    (tree / "extra-pack.yaml").write_text(_pack({"B": _two_arm()}), encoding="utf-8")
+    assert sym.check() == 2
+    assert "extra-pack.yaml" in capsys.readouterr().err
+
+
 def test_repo_rule_packs_pass(monkeypatch):
     """smoke：repo 真實的 rule-packs/ → rc 0。"""
     monkeypatch.setattr(sys, "argv", ["check_maintenance_symmetry.py", "--ci"])

@@ -190,6 +190,7 @@ commands:
     "--rule-packs": not_path
     "--tenants": not_path
   lint:
+    "--exclude": not_path
     "--policy": {kind: reader, by: "load_policy: die_caller_error", pinned_by: "tests/ops/test_lint_custom_rules.py::test_load_policy_unreadable_policy_is_caller_error"}
     paths: any
   maintenance-scheduler:
@@ -216,6 +217,7 @@ commands:
     "--alertmanager-config": {kind: reader, by: AlertmanagerConfigError, pinned_by: "tests/ops/test_onboard_platform.py::test_nonexistent_file"}
     "--da-crdecode-binary": {kind: reader, by: _lib_consumer_read, pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--da-read-binary": {kind: reader, by: _lib_consumer_read, pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
+    "--exclude": not_path
     "--output-dir": output
     "--rule-files": {kind: pending, ticket: 3392}
     "--scrape-config": {kind: reader, by: PrometheusConfigError, pinned_by: "tests/ops/test_onboard_platform.py::test_main_missing_scrape_config_is_a_caller_error"}
@@ -294,6 +296,7 @@ commands:
     "--report-csv": {kind: pending, ticket: 3392}
     phase: not_path
   silencer-drift-check:
+    "--exclude": not_path
     "--rule-source": any
     "--silences-file": {kind: reader, by: "OSError -> caller error", pinned_by: "tests/ops/test_silencer_drift_check.py::test_main_missing_silences_file"}
   state-reconcile:

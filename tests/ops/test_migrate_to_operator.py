@@ -475,7 +475,7 @@ class TestMainJsonEnvelope:
         assert set(doc) == {
             "configmap_files", "rule_groups", "tenants",
             "prometheus_rules", "alertmanager_configs", "total_crds",
-            "status", "checklist",
+            "already_crd", "status", "checklist",
         }
         # checklist-only ⇒ 沒有產生任何 CRD，這三個計數確實是 0
         assert doc["prometheus_rules"] == 0
@@ -601,6 +601,7 @@ _MATRIX_IDS = [
 _SUMMARY_KEYS = {
     "configmap_files", "rule_groups", "tenants",
     "prometheus_rules", "alertmanager_configs", "total_crds",
+    "already_crd",   # #3426: PrometheusRules of --source-dir, named, not converted
 }
 
 
@@ -1246,6 +1247,43 @@ class TestSourceFilesAreWhatTheReadersSay:
         assert self._main(src, temp_config_dir, out) == 2
         assert not out.exists()
         assert "da-read" in capsys.readouterr().err
+
+    _PR = ("apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+           "metadata: {name: da-rule-pack-x}\nspec:\n  groups:\n  - name: g\n"
+           "    rules:\n    - {alert: A, expr: up == 0}\n")
+
+    @pytest.mark.parametrize("extra", [[], ["--checklist-only"]], ids=["write", "checklist"])
+    def test_a_prometheusrule_is_named_already_a_crd_not_converted(
+            self, tmp_path, temp_config_dir, capsys, extra):
+        """#3426 F11: a PrometheusRule in --source-dir is already the CRD this
+        tool writes. It is not converted and no error (rc 0), but named on
+        stderr and in the checklist — it used to be passed over by the kind
+        filter without a word."""
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "ok.yaml").write_text(self._RULES, encoding="utf-8")
+        (src / "pr.yaml").write_text(self._PR, encoding="utf-8")
+        out = tmp_path / "out"
+        with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src),
+                                "--config-dir", str(temp_config_dir),
+                                "--output-dir", str(out), *extra]):
+            try:
+                mto.main()
+                code = 0
+            except SystemExit as exc:
+                code = exc.code or 0
+        assert code == 0
+        captured = capsys.readouterr()
+        notice = [ln for ln in captured.err.splitlines() if "pr.yaml" in ln]
+        assert len(notice) == 1 and "da-rule-pack-x" in notice[0], captured.err
+        assert "already a PrometheusRule CRD" in notice[0] or "已是 PrometheusRule CRD" in notice[0]
+        checklist = (out / "MIGRATION-CHECKLIST.md").read_text(encoding="utf-8") \
+            if not extra else captured.out
+        assert "`pr.yaml`: PrometheusRule `da-rule-pack-x`" in checklist, checklist
+        if not extra:
+            written = sorted(p.name for p in out.iterdir())
+            assert not any("da-rule-pack-x" in n for n in written), written
+            assert any("rule-pack-ok" in n for n in written), written
 
     def test_a_list_of_configmaps_migrates(self, tmp_path):
         """`kubectl get cm -o yaml` writes a List: its ConfigMaps are read

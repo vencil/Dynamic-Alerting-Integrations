@@ -234,7 +234,11 @@ def parse_configmap_rules(source_dir: Path,
         listing: its `list_source_dir` (taken here when None)
 
     Returns:
-        List of dicts: {name, file, rule_groups, cm_data_key}
+        List of dicts: {name, file, rule_groups, cm_data_key, already_crd}.
+        ``already_crd`` is True for a PrometheusRule's ``spec`` (#3426): it
+        is already the CRD this tool writes, so it is not converted — the
+        callers name it on stderr and in the checklist (never a silent skip,
+        never an error).
 
     Raises:
         FileNotFoundError: If directory does not exist
@@ -268,7 +272,7 @@ def parse_configmap_rules(source_dir: Path,
     warn_nested(source_dir, tool="migrate_to_operator", listing=listing)
     paths = [source_dir / e.path for e in listing.config_files() if e.depth == 0]
     try:
-        found = _lib_consumer_read.rule_files_in(paths, kinds=("ConfigMap",))
+        found = _lib_consumer_read.rule_files_in(paths)
     except _lib_consumer_read.RuleFileSourcesRefused as exc:
         raise SourceFilesUnreadable([(Path(p).name, why) for p, why in exc.files]) from exc
     rule_files = _lib_consumer_read.require_read(
@@ -277,12 +281,22 @@ def parse_configmap_rules(source_dir: Path,
     for rf in rule_files:
         path = Path(rf.manifest)
         results.append({
-            "name": (rf.object_name or path.stem) if rf.kind == "ConfigMap" else path.stem,
+            "name": rf.object_name if rf.kind is not None else path.stem,
             "file": path.name,
-            "cm_data_key": rf.key,
+            "cm_data_key": rf.key if rf.kind == "ConfigMap" else None,
             "rule_groups": rf.groups,
+            "already_crd": rf.kind == "PrometheusRule",
         })
     return results
+
+
+def already_crd_notice(item: dict) -> str:
+    """The line that names a PrometheusRule found in --source-dir (#3426):
+    it is already a CRD, so nothing is migrated from it."""
+    return i18n_text(
+        f"{item['file']}: PrometheusRule {item['name']} 已是 PrometheusRule CRD，不需遷移（未轉換）",
+        f"{item['file']}: PrometheusRule {item['name']} is already a PrometheusRule CRD; "
+        "nothing to migrate (not converted)")
 
 
 def convert_rules_to_crd(
@@ -438,6 +452,7 @@ def analyze_migration(source_dir: Path, config_dir: Path,
     """
     analysis = {
         "configmap_files": 0,
+        "already_crd": [],
         "rule_groups": 0,
         "tenants": 0,
         "estimated_crds": 0,
@@ -446,7 +461,10 @@ def analyze_migration(source_dir: Path, config_dir: Path,
     }
 
     try:
-        cm_rules = parse_configmap_rules(source_dir, source_listing)
+        found = parse_configmap_rules(source_dir, source_listing)
+        cm_rules = [item for item in found if not item["already_crd"]]
+        analysis["already_crd"] = [{"file": i["file"], "name": i["name"]}
+                                   for i in found if i["already_crd"]]
         analysis["configmap_files"] = len(cm_rules)
         for item in cm_rules:
             analysis["rule_groups"] += len(item.get("rule_groups", []))
@@ -530,6 +548,17 @@ def build_migration_checklist(
     pr_count = len(result.get("prometheus_rules", []))
     ac_count = len(result.get("alertmanager_configs", []))
     total = pr_count + ac_count
+    # #3426: PrometheusRules found in --source-dir are named here — they are
+    # already the CRD, so nothing was converted from them.
+    already = result.get("already_crd", [])
+    zh_already = en_already = ""
+    if already:
+        rows = "".join(f"- `{a['file']}`: PrometheusRule `{a['name']}`\n" for a in already)
+        zh_already = ("\n## 已是 PrometheusRule CRD（不需遷移）\n\n"
+                      "以下來源已是 PrometheusRule CRD，未轉換、不在輸出 CRD 數內：\n\n" + rows)
+        en_already = ("\n## Already PrometheusRule CRDs (nothing to migrate)\n\n"
+                      "These sources are already PrometheusRule CRDs; they were not "
+                      "converted and are not in the output CRD count:\n\n" + rows)
 
     zh_checklist = f"""# 遷移檢核清單
 
@@ -543,7 +572,7 @@ def build_migration_checklist(
 - **輸出 CRD 數**: {total} ({pr_count} PrometheusRules + {ac_count} AlertmanagerConfigs)
 - **來源目錄**: {source_dir}
 - **輸出目錄**: {output_dir}
-
+{zh_already}
 ## 遷移步驟
 
 ### Phase 1: 前置驗證
@@ -631,7 +660,7 @@ Generated: {timestamp}
 - **Output CRDs**: {total} ({pr_count} PrometheusRules + {ac_count} AlertmanagerConfigs)
 - **Source Directory**: {source_dir}
 - **Output Directory**: {output_dir}
-
+{en_already}
 ## Migration Steps
 
 ### Phase 1: Pre-Migration Validation
@@ -740,6 +769,7 @@ def generate_migration(
         "prometheus_rules": [],
         "alertmanager_configs": [],
         "configmap_files": 0,
+        "already_crd": [],
         "rule_group_count": 0,
         "tenants": 0,
         "errors": [],
@@ -747,7 +777,10 @@ def generate_migration(
 
     # Parse ConfigMap rules
     try:
-        cm_rules = parse_configmap_rules(source_dir, source_listing)
+        found = parse_configmap_rules(source_dir, source_listing)
+        cm_rules = [item for item in found if not item["already_crd"]]
+        result["already_crd"] = [{"file": i["file"], "name": i["name"]}
+                                 for i in found if i["already_crd"]]
         result["configmap_files"] = len(cm_rules)
 
         for cm_item in cm_rules:
@@ -917,6 +950,8 @@ def plan_stdout(
             "prometheus_rules": len(result["prometheus_rules"]),
             "alertmanager_configs": len(result["alertmanager_configs"]),
             "total_crds": total_crds,
+            # #3426: PrometheusRules of --source-dir, named, not converted
+            "already_crd": list(result.get("already_crd", [])),
         }
         if checklist_only:
             # #1112: stdout must be exactly ONE JSON document. The checklist
@@ -1065,6 +1100,10 @@ def main():
     if analysis["issues"]:
         for issue in analysis["issues"]:
             print(f"WARNING: {safe_label(issue)}", file=sys.stderr)
+    # #3426: a PrometheusRule in --source-dir is named, never passed over in
+    # silence; it is no error (the rc is not touched).
+    for item in analysis.get("already_crd", []):
+        print(f"NOTE: {safe_label(already_crd_notice(item))}", file=sys.stderr)
 
     # Generate migration if not checklist-only
     if args.checklist_only:

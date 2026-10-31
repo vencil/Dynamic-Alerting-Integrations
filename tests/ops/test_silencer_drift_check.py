@@ -244,9 +244,11 @@ def test_load_alerts_directory_recursive(tmp_path):
     assert {a["name"] for a in alerts} == {"A1", "A2"}
 
 
-def test_load_alerts_skips_non_rule_pack_yaml(tmp_path):
-    """tenant _defaults.yaml has no `groups:` root — must be skipped
-    silently, not error out the whole load."""
+def test_load_alerts_names_non_rule_pack_yaml_until_excluded(tmp_path):
+    """#3426: tenant _defaults.yaml has no `groups:` root. It used to be
+    skipped by its content — and so was a pack with `grups:`. Every file of
+    the rule source is read now: it is named (with the `--exclude` hint)
+    until the caller leaves it out by path."""
     _write(tmp_path / "pack.yaml", """
         groups: [{name: g, rules: [{alert: A, expr: up}]}]
     """)
@@ -255,8 +257,43 @@ def test_load_alerts_skips_non_rule_pack_yaml(tmp_path):
           mysql_connections: 80
     """)
     alerts, errors = sdc.load_alerts(tmp_path)
+    assert [a["name"] for a in alerts] == ["A"]
+    assert len(errors) == 1 and "_defaults.yaml" in errors[0] and "--exclude" in errors[0]
+    alerts, errors = sdc.load_alerts(tmp_path, ["_defaults.yaml"])
     assert errors == []
     assert [a["name"] for a in alerts] == ["A"]
+
+
+def test_main_exits_2_on_an_unread_rule_source_file_and_exclude_clears_it(tmp_path, capsys):
+    """#3426: a rule-source file that could not be read is a source left
+    out of the check, so the run is no clean one (rc 2, with or without
+    --ci); `--exclude Chart.yaml` leaves it out by path."""
+    _write(tmp_path / "rules/pack.yaml", """
+        groups: [{name: g, rules: [{alert: A, expr: up}]}]
+    """)
+    (tmp_path / "rules" / "helm").mkdir()
+    (tmp_path / "rules" / "helm" / "Chart.yaml").write_text(
+        "apiVersion: v2\nname: c\nversion: 0.1.0\n", encoding="utf-8")
+    silences = tmp_path / "s.json"
+    silences.write_text("[]", encoding="utf-8")
+    argv = ["--silences-file", str(silences), "--rule-source", str(tmp_path / "rules")]
+    assert sdc.main(argv) == 2
+    out, err = capsys.readouterr()
+    assert "Chart.yaml" in out and "--exclude" in out, out
+    assert "could not be read" in err
+    assert sdc.main([*argv, "--exclude", "Chart.yaml"]) == 0
+
+
+def test_load_alerts_names_a_misspelt_groups_and_a_manifest_without_kind(tmp_path):
+    """#3426: a rule pack with `grups:` and a manifest with no `kind` are
+    named, never taken for files without rule files."""
+    (tmp_path / "grups.yaml").write_text("grups:\n- name: g\n  rules: []\n", encoding="utf-8")
+    (tmp_path / "nokind.yaml").write_text(
+        "apiVersion: v1\nmetadata: {name: c}\ndata: {r.yml: 'groups: []'}\n", encoding="utf-8")
+    alerts, errors = sdc.load_alerts(tmp_path)
+    assert alerts == []
+    assert [e.split(":")[0].rsplit("/", 1)[-1] for e in errors] == ["grups.yaml", "nokind.yaml"]
+    assert all("it has no `kind`" in e for e in errors), errors
 
 
 def test_load_alerts_reports_yaml_parse_error(tmp_path):
@@ -267,8 +304,8 @@ def test_load_alerts_reports_yaml_parse_error(tmp_path):
     alerts, errors = sdc.load_alerts(tmp_path)
     # Good file's alert is still loaded
     assert [a["name"] for a in alerts] == ["A"]
-    # Bad file is captured as an error (caller can decide to bail)
-    assert any("invalid YAML" in e for e in errors)
+    # Bad file is captured as an error naming it (main exits 2 on it)
+    assert any("bad.yaml" in e and "no reader reads it" in e for e in errors), errors
 
 
 def test_load_alerts_empty_dir(tmp_path):
@@ -1195,7 +1232,7 @@ def test_load_alerts_reads_rule_packs_held_in_a_configmap(tmp_path, text):
     a file holds are `rule_files_in`'s answer."""
     (tmp_path / "cm.yaml").write_text(text, encoding="utf-8")
     (tmp_path / "_defaults.yaml").write_text("defaults: {a: 1}\n", encoding="utf-8")
-    alerts, errors = sdc.load_alerts(tmp_path)
+    alerts, errors = sdc.load_alerts(tmp_path, ["_defaults.yaml"])
     assert errors == []
     assert [a["name"] for a in alerts] == ["InCm"]
 

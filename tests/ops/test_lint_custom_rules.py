@@ -727,12 +727,14 @@ def test_lint_result_no_rule_name():
     assert str(r) == "ERROR: test.yaml - msg"
 
 
-# ── Which files are rule files (#3206) ─────────────────────────────
-# A plain file and a ConfigMap data value pass the same test before the rule
-# loader sees them: a document of the Kubernetes reading with a `groups` key
-# (`_lib_consumer_read.rule_files_in`, #3426). A file without one — a recipe, the
-# registry beside the packs — is no rule file and is not read (as on main);
-# a file with one that the loader refuses is an ERROR naming it.
+# ── Which files are rule files (#3206, #3426) ──────────────────────
+# Which files are linted is the caller's declaration, by path: a directory's
+# *.yaml / *.yml less `--exclude` (`_lib_consumer_read.files_to_read`). Every
+# file chosen is read by `_lib_consumer_read.rule_files_in`: a file that is
+# no manifest and no rule file — a recipe, the registry beside the packs, a
+# Chart.yaml — is an ERROR naming it with the `--exclude` hint (#3426 round
+# 4: no content test told them apart from a broken rule file); a rule file
+# the loader refuses is an ERROR naming it.
 
 _RECIPE = "recipe: threshold\nparams:\n  metric: {type: string}\n"
 _REGISTRY = "entries:\n- metric: mysql_up\n  default: 1\n"
@@ -752,18 +754,62 @@ def _run_main(argv, monkeypatch):
     return 0
 
 
-def test_yaml_without_groups_is_no_rule_file(tmp_path, monkeypatch, capsys):
-    """(a) 目錄內的非規則 YAML（無 `groups`）→ 不交給規則載入器、不報錯。"""
+_CHART = "apiVersion: v2\nname: c\nversion: 0.1.0\n"
+
+
+def test_yaml_that_is_no_rule_file_is_named_until_excluded(tmp_path, monkeypatch, capsys):
+    """(a) #3426：目錄內不是 rule file 也不是 manifest 的 YAML（recipe、registry、
+    Chart.yaml）→ 逐檔 ERROR、建議 `--exclude`；以 `--exclude` 排除後通過，
+    被排除的檔不讀。"""
     (tmp_path / "recipes").mkdir()
     (tmp_path / "recipes" / "threshold.yaml").write_text(_RECIPE, encoding="utf-8")
     (tmp_path / "threshold-registry.yaml").write_text(_REGISTRY, encoding="utf-8")
+    (tmp_path / "helm").mkdir()
+    (tmp_path / "helm" / "Chart.yaml").write_text(_CHART, encoding="utf-8")
     (tmp_path / "rules.yaml").write_text(_OK_RULE, encoding="utf-8")
-    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 0
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    errors = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("ERROR")]
+    assert len(errors) == 3, errors
+    for name in ("Chart.yaml", "threshold.yaml", "threshold-registry.yaml"):
+        (line,) = [e for e in errors if f"{name} - " in e]
+        assert "no reader reads it" in line and "--exclude" in line, line
+    seen = []
+    real = lint_custom_rules.read_rule_files
+    monkeypatch.setattr(lint_custom_rules, "read_rule_files",
+                        lambda files: seen.extend(files) or real(files))
+    assert _run_main([str(tmp_path), "--ci", "--exclude", "Chart.yaml", "--exclude",
+                      "recipes/*", "--exclude", "threshold-registry.yaml"], monkeypatch) == 0
+    assert "ERROR" not in capsys.readouterr().out
+    assert seen == [str(tmp_path / "rules.yaml")]   # the excluded ones are not read
+
+
+@pytest.mark.parametrize("name,text,why", [
+    # a rule pack whose `groups` is misspelt: no rule file, never "no rules"
+    ("grups.yaml", "grups:\n- name: g\n  rules: []\n", "it has no `kind`"),
+    # a ConfigMap whose data key lost an indent: a top-level unknown field
+    ("cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\ndata:\n"
+                "rules.yml: |\n  groups: []\n", 'unknown field "rules.yml"'),
+])
+def test_a_file_that_reads_as_no_rule_file_is_an_error(tmp_path, monkeypatch, capsys, name,
+                                                       text, why):
+    (tmp_path / name).write_text(text, encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    errors = [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("ERROR")]
+    assert len(errors) == 1 and name in errors[0] and why in errors[0], errors
+
+
+def test_a_prometheusrule_is_linted(tmp_path, monkeypatch, capsys):
+    """#3426 F11: a PrometheusRule's `spec` is a rule file the Operator
+    writes; it used to be passed over (ConfigMaps only)."""
+    (tmp_path / "pr.yaml").write_text(
+        "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata: {name: p}\n"
+        "spec:\n  groups:\n  - name: g\n    rules:\n"
+        "    - {alert: Forecast, expr: 'predict_linear(x[1h], 3600) < 0',"
+        " labels: {tenant: t, severity: warning}}\n", encoding="utf-8")
+    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
     out = capsys.readouterr().out
-    assert "ERROR" not in out, out
-    results, count = lint_custom_rules.lint_file(
-        str(tmp_path / "recipes" / "threshold.yaml"), lint_custom_rules.DEFAULT_POLICY)
-    assert (results, count) == ([], 0)
+    assert "Scanned 1 file(s), 1 rule(s)." in out, out
+    assert "pr.yaml" in out and "predict_linear" in out, out
 
 
 @pytest.mark.parametrize("text,why", [
@@ -784,7 +830,7 @@ def test_broken_plain_rule_file_is_an_error(tmp_path, monkeypatch, capsys, text,
     bad = tmp_path / "broken.yaml"
     bad.write_text(text, encoding="utf-8")
     (tmp_path / "recipe.yaml").write_text(_RECIPE, encoding="utf-8")
-    assert _run_main([str(tmp_path), "--ci"], monkeypatch) == 1
+    assert _run_main([str(tmp_path), "--ci", "--exclude", "recipe.yaml"], monkeypatch) == 1
     out = capsys.readouterr().out
     errors = [line for line in out.splitlines() if line.startswith("ERROR")]
     assert len(errors) == 1, errors
@@ -811,9 +857,10 @@ def test_rule_file_kubectl_refuses_but_prometheus_loads_is_linted(tmp_path):
 
 
 def test_repo_rule_packs_pass_the_ci_policy(monkeypatch, capsys):
-    """(c) smoke：repo 真實的 rule-packs/（含 recipes/、threshold-registry.yaml）
-    以 CI 的 policy 跑 --ci → rc 0。"""
+    """(c) smoke：repo 真實的 rule-packs/ 以 CI 的 policy 與 CI 的 `--exclude`
+    （recipes/、threshold-registry.yaml 不是 rule file）跑 --ci → rc 0。"""
     code = _run_main([os.path.join(_REPO_ROOT, "rule-packs"),
+                      "--exclude", "threshold-registry.yaml", "--exclude", "recipes/*",
                       "--policy", _REAL_POLICY, "--ci"], monkeypatch)
     out = capsys.readouterr().out
     assert code == 0, [line for line in out.splitlines() if line.startswith("ERROR")]

@@ -57,11 +57,13 @@ Alertmanager's. They ask the Go binary that runs the consumer's own reading:
   rule loader (``RuleFile.manifest`` / ``.kind`` / ``.key`` say where it came
   from), for files known to be manifests.
 * ``rule_files_in(paths)`` — ⛔ the one answer to "which rule files does each
-  file hand to Prometheus" for a file that may be a manifest, a plain rule
-  file or other YAML (#3426): the manifest reading first, then the any-YAML
-  reading, then the rule loader; a file none of them reads as either is
-  refused, named. No tool classifies files from a reading of its own
-  (``tests/shared/test_rule_file_classifier_is_one.py``).
+  file hand to Prometheus" for a file that may be a manifest or a plain rule
+  file (#3426): the manifest reading first, then the any-YAML reading, then
+  the rule loader; a file none of them reads as either is refused, named —
+  which files are read is the caller's declaration by path
+  (``files_to_read`` with ``--exclude``, ``rule_pack_files``), never a
+  judgement of a file's content. No tool classifies files from a reading
+  of its own (``tests/shared/test_rule_file_classifier_is_one.py``).
 
 Each raises :class:`ConsumerReadError` when the binary is missing, cannot
 be run, does not finish, refuses the input (its reason is in
@@ -82,8 +84,10 @@ from __future__ import annotations
 
 import base64
 import binascii
+import fnmatch
 import json
 import os
+import pathlib
 import shutil
 import subprocess
 import tempfile
@@ -749,6 +753,25 @@ def _prometheusrule_schema() -> dict:
 
 _JSON_TYPES = {"object": dict, "array": list, "string": str, "boolean": bool}
 
+#: A ConfigMap's top-level fields (k8s.io/api core/v1 ConfigMap: TypeMeta,
+#: ObjectMeta, Immutable, Data, BinaryData). Any other top-level key is an
+#: unknown field, which ``kubectl apply`` (``--validate=strict``, the
+#: default) refuses: ``strict decoding error: unknown field "<name>"``.
+CONFIGMAP_FIELDS = ("apiVersion", "kind", "metadata", "data", "binaryData", "immutable")
+
+
+def binary_data_bytes(value: Any) -> bytes:
+    """A ConfigMap ``binaryData`` value's bytes, decoded as the API server
+    decodes a ``[]byte`` field: Go's ``encoding/json`` uses
+    ``base64.StdEncoding``, whose decoder skips ``\\r`` and ``\\n`` (a value
+    folded over lines is read) and refuses every other character outside the
+    standard alphabet and its ``=`` padding. Raises ``binascii.Error`` /
+    ``ValueError`` for a value it refuses (and for a value that is not a
+    string)."""
+    if not isinstance(value, str):
+        raise ValueError(f"a binaryData value is {type(value).__name__}, not a string")
+    return base64.b64decode(value.replace("\r", "").replace("\n", ""), validate=True)
+
 
 def rule_object_problem(doc: "dict[str, Any]") -> "str | None":
     """Why the API server would refuse the ConfigMap or PrometheusRule *doc*
@@ -757,8 +780,12 @@ def rule_object_problem(doc: "dict[str, Any]") -> "str | None":
 
     * Both: ``metadata.name`` must be a non-empty string (kubectl: "resource
       name may not be empty").
-    * ConfigMap (its Go type, k8s.io/api core/v1): ``data`` is a
-      ``map[string]string`` and ``binaryData`` a ``map[string][]byte``, so
+    * ConfigMap (its Go type, k8s.io/api core/v1): a top-level key that is
+      not one of its fields (``CONFIGMAP_FIELDS``) is an unknown field, which
+      the API server's strict field validation refuses with ``strict
+      decoding error: unknown field "<name>"`` — a data key written one
+      indent short (``rules.yml: |`` beside ``data:``) is one. ``data`` is
+      a ``map[string]string`` and ``binaryData`` a ``map[string][]byte``, so
       either, when present and not null, must be a mapping. (A value of the
       wrong type is a per-key problem of its rule file.)
     * PrometheusRule (the vendored CRD schema, ``PROMETHEUSRULE_SCHEMA``):
@@ -779,6 +806,12 @@ def rule_object_problem(doc: "dict[str, Any]") -> "str | None":
     if not isinstance(name, str) or not name:
         return f"a {kind} with no string metadata.name (kubectl: resource name may not be empty)"
     if kind == "ConfigMap":
+        unknown = sorted(k for k in doc if k not in CONFIGMAP_FIELDS)
+        if unknown:
+            fields = ", ".join(f'unknown field "{k}"' for k in unknown)
+            return (f"ConfigMap {name}: the API server refuses it (strict decoding error: "
+                    f"{fields}; a ConfigMap has no such top-level field — a data key goes "
+                    "under data, indented)")
         for field in ("data", "binaryData"):
             value = doc.get(field)
             if value is not None and not isinstance(value, dict):
@@ -812,20 +845,19 @@ class _ObjectRefused(Exception):
 
 
 def _manifest_keyed(path: str, docs: "list[Any]", only_declared: bool,
-                    crdecode_binary: str | None, binary: str | None,
-                    kinds: "tuple[str, ...]" = RULE_FILE_KINDS) -> "list[Any]":
+                    crdecode_binary: str | None, binary: str | None) -> "list[Any]":
     """The rule files the documents *docs* of the manifest *path* (kubectl's
     reading, every one an object) deliver, before the rule loader reads them
     (see ``manifest_rule_file_results``)."""
     keyed: "list[Any]" = []
     for i, doc in enumerate(docs, start=1):   # each a Kubernetes object
         kind = doc["kind"]
-        # Judged whatever *kinds* asks for: an object the API server would
-        # refuse makes the file unreadable, not one without rule files.
+        # An object the API server would refuse makes the file unreadable,
+        # not one without rule files.
         problem = rule_object_problem(doc)
         if problem is not None:
             raise _ObjectRefused(f"object {i} of kubectl's reading: {problem}")
-        if kind not in kinds:
+        if kind not in RULE_FILE_KINDS:
             continue
         name = doc["metadata"]["name"]
         if kind == "PrometheusRule":
@@ -844,7 +876,7 @@ def _manifest_keyed(path: str, docs: "list[Any]", only_declared: bool,
             bdata = doc.get("binaryData") or {}
             for key, value in bdata.items():
                 try:
-                    text = base64.b64decode(str(value), validate=True).decode("utf-8")
+                    text = binary_data_bytes(value).decode("utf-8")
                 except (ValueError, UnicodeDecodeError, binascii.Error):
                     keyed.append((path, kind, key, None,
                                   "binaryData value is not base64 of UTF-8 text", name))
@@ -929,17 +961,13 @@ class RuleFileSourcesRefused(InputRefused):
         self.files = list(files)
 
 
-#: ``rule_files_in``'s *other_yaml*: a file that reads as YAML but is neither
-#: a manifest nor a rule file is refused (``REFUSE``) or holds no rule file
-#: (``NO_RULE_FILES`` — a directory that also holds other YAML: a recipe, a
-#: tenant ``_defaults.yaml``, the registry beside the packs).
-REFUSE = "refuse"
-NO_RULE_FILES = "no-rule-files"
+#: What a tool whose files are chosen by its caller (a CLI taking files and
+#: directories) adds to the reason a file is refused: the file was chosen by
+#: path, so leaving it out is the caller's call, by path (#3426).
+EXCLUDE_HINT = "if it is no rule file, leave it out with --exclude"
 
 
 def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
-                  other_yaml: str = REFUSE,
-                  kinds: "tuple[str, ...]" = RULE_FILE_KINDS,
                   only_declared: bool = True,
                   keep_refusals: bool = False,
                   crdecode_binary: str | None = None,
@@ -947,25 +975,30 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
     """⛔ THE one answer to "which rule files does each file hand to
     Prometheus" (#3426). No tool decides it from a reading of its own.
 
+    ⛔ Which files are read is the CALLER's declaration, by path
+    (``files_to_read``'s ``--exclude``, a lint's glob list): every path given
+    here is taken to be a rule file source, and one that turns out to be
+    neither a manifest nor a rule file is refused, named — never taken for a
+    file "with no rule files". Nothing here judges from a file's content that
+    it is not meant to be read (#3426: no content test told a manifest with
+    no ``kind`` or a rule pack with ``grups:`` from a Chart.yaml).
+
     Each path (keyed ``os.fspath(path)``, in the order given) is read:
 
     1. as the Kubernetes manifest kubectl reads (``da-crdecode``; a
        ``kind: List`` is its items): its rule files are its ConfigMaps'
        ``data`` / ``binaryData`` values and its PrometheusRules' ``spec``
-       (``manifest_rule_file_results``, *only_declared* as there; *kinds*
-       narrows it, e.g. to ConfigMaps alone). A manifest with none holds no
-       rule file (``[]``). A ConfigMap or PrometheusRule the API server would
-       refuse (``rule_object_problem``) makes the file refused, never one
-       with no rule files.
+       (``manifest_rule_file_results``, *only_declared* as there). A manifest
+       kubectl reads whose objects are of other kinds (a Deployment) hands
+       Prometheus no rule file (``[]``): it is read, as kubectl reads it,
+       and holds none. A ConfigMap or PrometheusRule the API server would
+       refuse (``rule_object_problem``) makes the file refused.
     2. When that reading refuses it: with the any-YAML reading
        (``da-crdecode --any-shape``). A file with a document that is a
-       mapping declaring ``groups`` is a plain rule file (one
+       mapping with a ``groups`` key is a plain rule file (one
        :class:`RuleFile`, ``kind`` / ``key`` None, ``manifest`` the path);
        the rule loader gives the verdict on its content (a second document,
-       say). Any other YAML is refused, or with ``other_yaml=NO_RULE_FILES``
-       holds no rule file — unless a document of it is a mapping with an
-       ``apiVersion`` or a ``kind``: a manifest kubectl refuses is refused,
-       with kubectl's reason, in either mode.
+       say). Any other file is refused, with kubectl's reason.
     3. When that reading refuses it too (sigs.k8s.io/yaml has no JSON for an
        annotation value ``.inf``, say): Prometheus' rule loader decides. A
        file it reads ``groups`` from is a rule file; any other is refused.
@@ -986,27 +1019,20 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
     as_yaml = any_yaml_documents_of(not_manifests, crdecode_binary, keep_refusals=True)
     plain, undecided, refused = [], [], {}
     for p in not_manifests:
-        why = _reason(manifests[p])
         docs = as_yaml[p]
         if isinstance(docs, ConsumerReadError):
             undecided.append(p)
         elif _documents_declare_rule_groups(docs):
             plain.append(p)
-        elif other_yaml != NO_RULE_FILES or any(
-                isinstance(d, dict) and ("apiVersion" in d or "kind" in d) for d in docs):
-            # A document with an `apiVersion` or a `kind` sets out to be a
-            # Kubernetes object: a manifest kubectl refuses is named even
-            # where other YAML is allowed, never taken for a file without
-            # rule files.
-            refused[p] = (f"kubectl's reading refuses it ({why}), and it is no rule file "
-                          "(no document declares `groups`)")
+        else:
+            refused[p] = (f"kubectl's reading refuses it ({_reason(manifests[p])}), and it is "
+                          "no rule file (no document is a mapping with a `groups` key)")
     keyed: "list[Any]" = []
     for p in keys:
         if p not in manifests or isinstance(manifests[p], ConsumerReadError):
             continue
         try:
-            keyed += _manifest_keyed(p, manifests[p], only_declared, crdecode_binary, binary,
-                                     kinds)
+            keyed += _manifest_keyed(p, manifests[p], only_declared, crdecode_binary, binary)
         except _ObjectRefused as e:
             refused[p] = f"the API server would refuse it: {e}"
     for rf in _read_keyed(keyed, binary):
@@ -1021,8 +1047,6 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
             continue
         loader = (f"Prometheus' rule loader refuses it: {rf.problem}" if rf.problem is not None
                   else "Prometheus' rule loader finds no `groups` in it")
-        if rf.problem is None and other_yaml == NO_RULE_FILES:
-            continue
         refused[p] = (f"neither kubectl's reading ({_reason(manifests[p])}) nor the "
                       f"any-YAML reading ({_reason(as_yaml[p])}) reads it; {loader}")
     if refused and not keep_refusals:
@@ -1032,6 +1056,86 @@ def rule_files_in(paths: "Iterable[str | os.PathLike[str]]", *,
         rf.manifest, rf.unread = p, True
         out[p] = [rf]
     return out
+
+
+#: The suffixes a directory given to ``files_to_read`` is walked for.
+YAML_SUFFIXES = (".yaml", ".yml")
+
+
+def excluded(pattern: str, name: str, relative: str) -> bool:
+    """Whether the ``--exclude`` *pattern* leaves out a file whose file name
+    is *name* and whose path relative to the directory it was found under
+    (or, for a file given as such, its path as given) is *relative*, POSIX
+    separators. A pattern with no ``/`` is matched against the file name
+    (``Chart.yaml``, ``*-values.yaml``: at any depth); a pattern with a ``/``
+    against the relative path (``recipes/*``). ``fnmatch.fnmatchcase``:
+    case-sensitive, and ``*`` also matches ``/`` (``recipes/*`` takes
+    ``recipes/a/b.yaml`` too)."""
+    if "/" in pattern:
+        return fnmatch.fnmatchcase(relative, pattern)
+    return fnmatch.fnmatchcase(name, pattern)
+
+
+def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
+                  exclude: "Iterable[str]" = ()) -> "list[str]":
+    """⛔ The one answer to "which files does a rule-file CLI read" (#3426):
+    ``lint``, ``silencer-drift-check --rule-source`` and ``onboard
+    --rule-files`` all take their files from here, so their ``--exclude``
+    means one thing.
+
+    A target that is a file is read as given, whatever its suffix; a
+    directory is walked, recursively, for files whose suffix is ``.yaml``
+    or ``.yml`` (``YAML_SUFFIXES``). A file any *exclude* pattern matches
+    (``excluded``: relative to the directory target it was found under) is
+    left out and not read. Returns the paths, sorted, each once. A target
+    that is neither (it does not exist) adds nothing: callers check their
+    targets first."""
+    patterns = list(exclude)
+    chosen: "set[str]" = set()
+    for target in targets:
+        root = pathlib.Path(target)
+        if root.is_file():
+            candidates = [(root, root.as_posix())]
+        elif root.is_dir():
+            candidates = [(f, f.relative_to(root).as_posix())
+                          for f in root.rglob("*")
+                          if f.suffix in YAML_SUFFIXES and f.is_file()]
+        else:
+            continue
+        for f, relative in candidates:
+            if not any(excluded(pat, f.name, relative) for pat in patterns):
+                chosen.add(str(f))
+    return sorted(chosen)
+
+
+#: rule-packs/, declared by path (#3426): the rule packs are the files these
+#: globs take; the other YAML that sits beside them is named here, not
+#: judged by its content. A YAML file in rule-packs/ (top level) that is
+#: neither is refused, so a pack named another way cannot slip past.
+RULE_PACK_GLOBS = ("rule-pack-*.yaml", "rule-pack-*.yml")
+RULE_PACKS_OTHER_YAML = ("threshold-registry.yaml",)
+
+
+def rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathlib.Path]":
+    """The rule packs of the directory *rule_packs* (``RULE_PACK_GLOBS``,
+    top level), sorted. Raises :class:`RuleFileSourcesRefused` naming every
+    top-level ``.yaml`` / ``.yml`` file that is neither a rule pack nor
+    one of ``RULE_PACKS_OTHER_YAML`` — a declaration that does not cover
+    the directory is no answer."""
+    root = pathlib.Path(rule_packs)
+    packs = sorted({f for g in RULE_PACK_GLOBS for f in root.glob(g) if f.is_file()})
+    undeclared = sorted(
+        f for f in root.iterdir()
+        if f.is_file() and f.suffix in YAML_SUFFIXES and f not in packs
+        and f.name not in RULE_PACKS_OTHER_YAML)
+    if undeclared:
+        raise RuleFileSourcesRefused([
+            (str(f), "a YAML file in rule-packs/ that is neither a rule pack ("
+             + " / ".join(RULE_PACK_GLOBS) + ") nor declared beside them ("
+             + ", ".join(RULE_PACKS_OTHER_YAML) + "); name a rule pack rule-pack-*.yaml, "
+             "or declare the file in _lib_consumer_read.RULE_PACKS_OTHER_YAML")
+            for f in undeclared])
+    return packs
 
 
 def _reason(e: ConsumerReadError) -> str:

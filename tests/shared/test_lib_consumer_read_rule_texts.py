@@ -223,9 +223,8 @@ def test_rule_files_in_reads_every_shape_a_file_comes_in(tmp_path) -> None:
     assert inf[0].problem is None
     assert inf[0].groups[0]["rules"][0]["annotations"] == {"x": ".inf"}
     assert [rf.kind for rf in pr] == ["PrometheusRule"]
+    # a manifest kubectl reads, of no rule-file kind: read, and holds none
     assert deploy == []
-    # *kinds* narrows a manifest's rule files
-    assert cr.rule_files_in([paths[3]], kinds=("ConfigMap",))[paths[3]] == []
 
 
 def test_rule_files_in_names_every_file_no_reader_reads(tmp_path) -> None:
@@ -239,13 +238,69 @@ def test_rule_files_in_names_every_file_no_reader_reads(tmp_path) -> None:
     assert "it is no rule file" in why[recipe]
     assert "Prometheus' rule loader refuses it" in why[broken]
     assert "the document is array" in why[bad_cm]
-    # Other YAML may hold no rule file; a manifest kubectl refuses never does;
-    # with keep_refusals a file no reader reads is kept, named.
-    got = cr.rule_files_in([recipe, broken, bad_cm], other_yaml=cr.NO_RULE_FILES,
-                           keep_refusals=True)
-    assert got[recipe] == []
+    # With keep_refusals every file no reader reads is kept, named — the
+    # recipe too: no content test lets a file given here go unread (#3426).
+    got = cr.rule_files_in([recipe, broken, bad_cm], keep_refusals=True)
+    assert [(rf.unread, rf.problem is not None) for rf in got[recipe]] == [(True, True)]
     assert [(rf.unread, rf.problem is not None) for rf in got[broken]] == [(True, True)]
     assert [rf.unread for rf in got[bad_cm]] == [True]
+
+
+@pytest.mark.parametrize("name,text,why", [
+    # #3426 round 4: what no content test told apart. Each is refused,
+    # named with kubectl's reason, never taken for a file without rule files.
+    ("Chart.yaml", "apiVersion: v2\nname: c\nversion: 0.1.0\n", "it has no `kind`"),
+    ("grups.yaml", "grups:\n- name: g\n  rules: []\n", "it has no `kind`"),
+    ("no-kind.yaml", "apiVersion: v1\nmetadata: {name: r}\ndata:\n" + _block("a.yml", RULES),
+     "it has no `kind`"),
+])
+def test_rule_files_in_refuses_what_is_no_manifest_and_no_rule_file(tmp_path, name, text,
+                                                                   why) -> None:
+    path = _write(tmp_path, name, text)
+    with pytest.raises(cr.RuleFileSourcesRefused) as exc:
+        cr.rule_files_in([path])
+    ((got, reason),) = exc.value.files
+    assert got == path and why in reason and "it is no rule file" in reason, reason
+
+
+# ── files_to_read / rule_pack_files: which files are read, by path (#3426) ──
+
+def _tree(tmp_path: Path, names: "list[str]") -> Path:
+    for n in names:
+        (tmp_path / n).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / n).write_text("x: 1\n", encoding="utf-8")
+    return tmp_path
+
+
+def test_files_to_read_walks_yaml_and_leaves_out_what_exclude_names(tmp_path) -> None:
+    root = _tree(tmp_path, ["a.yaml", "b.yml", "notes.md", "helm/c/Chart.yaml",
+                            "recipes/r.yaml", "recipes/deep/s.yaml", "x/recipes/t.yaml"])
+    rel = lambda got: sorted(Path(g).relative_to(root).as_posix() for g in got)  # noqa: E731
+    assert rel(cr.files_to_read([root])) == [
+        "a.yaml", "b.yml", "helm/c/Chart.yaml", "recipes/deep/s.yaml", "recipes/r.yaml",
+        "x/recipes/t.yaml"]
+    # no `/`: the file name, at any depth
+    assert "helm/c/Chart.yaml" not in rel(cr.files_to_read([root], ["Chart.yaml"]))
+    # a `/`: the path relative to the directory given; `*` crosses `/`
+    assert rel(cr.files_to_read([root], ["recipes/*"])) == [
+        "a.yaml", "b.yml", "helm/c/Chart.yaml", "x/recipes/t.yaml"]
+    # case-sensitive
+    assert "helm/c/Chart.yaml" in rel(cr.files_to_read([root], ["chart.yaml"]))
+    # a file given as such is read whatever its suffix, unless excluded
+    md = str(root / "notes.md")
+    assert cr.files_to_read([md]) == [md]
+    assert cr.files_to_read([md], ["*.md"]) == []
+
+
+def test_rule_pack_files_is_a_declaration_that_covers_the_directory(tmp_path) -> None:
+    _tree(tmp_path, ["rule-pack-a.yaml", "rule-pack-b.yml", "threshold-registry.yaml",
+                     "README.md", "recipes/r.yaml"])
+    assert [p.name for p in cr.rule_pack_files(tmp_path)] == [
+        "rule-pack-a.yaml", "rule-pack-b.yml"]
+    (tmp_path / "pack-c.yaml").write_text("groups: []\n", encoding="utf-8")
+    with pytest.raises(cr.RuleFileSourcesRefused) as exc:
+        cr.rule_pack_files(tmp_path)
+    assert [Path(p).name for p, _why in exc.value.files] == ["pack-c.yaml"]
 
 
 # ── what the reading changed (PyYAML YAML 1.1 → rulefmt) ─────────────
@@ -309,6 +364,12 @@ _PR = "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata: {na
     ({"kind": "ConfigMap", "metadata": {"name": "c"}, "data": ["x"]}, "its data is list"),
     ({"kind": "ConfigMap", "metadata": {"name": "c"}, "binaryData": "x"}, "its binaryData is str"),
     ({"kind": "ConfigMap", "data": {}}, "no string metadata.name"),
+    # #3426 F10: core/v1 ConfigMap's fields only — a data key one indent
+    # short is a top-level key, which the API server refuses.
+    ({"apiVersion": "v1", "kind": "ConfigMap", "metadata": {"name": "c"}, "immutable": True,
+      "data": {}, "binaryData": {}}, None),
+    ({"kind": "ConfigMap", "metadata": {"name": "c"}, "data": None, "rules.yml": "groups: []"},
+     'ConfigMap c: the API server refuses it (strict decoding error: unknown field "rules.yml"'),
     ({"kind": "Secret", "data": ["x"]}, None),
 ])
 def test_rule_object_problem(doc, problem) -> None:
@@ -331,3 +392,42 @@ def test_no_schema_is_no_answer(monkeypatch) -> None:
     monkeypatch.setattr(cr, "_PROMETHEUSRULE_SCHEMA_IN_REPO", ("no", "such", "schema.json"))
     with pytest.raises(cr.ConsumerReadError, match="schema"):
         cr.rule_object_problem({"kind": "PrometheusRule", "metadata": {"name": "p"}})
+
+
+def test_a_data_key_one_indent_short_is_named_not_skipped(tmp_path) -> None:
+    """#3426 F10: `rules.yml: |` beside `data:` (an empty data) used to be a
+    ConfigMap with no rule files."""
+    path = _write(tmp_path, "cm.yaml", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: c}\n"
+                  "data:\nrules.yml: |\n" + "".join(f"  {ln}\n" for ln in RULES.splitlines()))
+    with pytest.raises(cr.RuleFileSourcesRefused) as exc:
+        cr.rule_files_in([path])
+    assert 'unknown field "rules.yml"' in exc.value.files[0][1]
+
+
+# ── binaryData: Go's base64.StdEncoding (#3426 F12) ──────────────────
+
+def test_binary_data_folded_over_lines_is_read(tmp_path) -> None:
+    """Go's encoding/json decodes a []byte with base64.StdEncoding, which
+    skips \\r and \\n: a value folded over lines is what the API server
+    stores."""
+    b64 = base64.b64encode(RULES.encode()).decode()
+    folded = "\r\n".join(b64[i:i + 16] for i in range(0, len(b64), 16))
+    assert cr.binary_data_bytes(folded) == RULES.encode()
+    block = "".join(f"    {b64[i:i + 16]}\n" for i in range(0, len(b64), 16))
+    path = _write(tmp_path, "cm.yaml", _cm(binary_data="  r.yml: |\n" + block))
+    (rf,) = cr.manifest_rule_file_results([path])
+    assert rf.problem is None and rf.groups[0]["name"] == "g"
+
+
+@pytest.mark.parametrize("value", [
+    "Z3JvdXBzOiBbXQo= ",      # a space
+    "Z3JvdXBz\tOiBbXQo=",     # a tab
+    "Z3JvdXBz-OiBbXQo=",      # URL-safe alphabet
+    "Z3JvdXBzOiBbXQo",        # padding missing
+])
+def test_binary_data_refuses_every_other_character(tmp_path, value) -> None:
+    with pytest.raises((ValueError, base64.binascii.Error)):
+        cr.binary_data_bytes(value)
+    path = _write(tmp_path, "cm.yaml", _cm(binary_data=f"  r.yml: {value!r}\n".replace("'", '"')))
+    (rf,) = cr.manifest_rule_file_results([path])
+    assert "not base64" in (rf.problem or ""), rf

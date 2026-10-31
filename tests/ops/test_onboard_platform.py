@@ -1431,3 +1431,45 @@ def test_read_rule_files_names_a_manifest_without_kind(tmp_path):
     ((path, groups, error),) = _read_rule_files([str(p)])
     assert path == str(p) and groups is None
     assert "it has no `kind`" in error and "No 'groups'" not in error, error
+
+
+_ONBOARD_RULES = ("groups:\n- name: g\n  rules:\n"
+                  "  - {alert: HighConn, expr: 'mysql_connections > 80',"
+                  " labels: {severity: warning}}\n")
+
+
+def _onboard_rules(monkeypatch, argv):
+    import onboard_platform as op
+    monkeypatch.setattr("sys.argv", ["onboard_platform.py", "--dry-run", *argv])
+    with pytest.raises(SystemExit) as exc_info:
+        op.main()
+    return exc_info.value.code
+
+
+def test_rule_files_dir_with_a_chart_is_named_until_excluded(tmp_path, monkeypatch, capsys):
+    """#3426: `--rule-files <dir>` walks *.yaml / *.yml; a Chart.yaml there is
+    no rule file and no manifest — named with the `--exclude` hint, rc 2;
+    `--exclude Chart.yaml` leaves it out and the run passes."""
+    rules = tmp_path / "rules"
+    (rules / "helm").mkdir(parents=True)
+    (rules / "a.yaml").write_text(_ONBOARD_RULES, encoding="utf-8")
+    (rules / "helm" / "Chart.yaml").write_text("apiVersion: v2\nname: c\nversion: 0.1.0\n",
+                                               encoding="utf-8")
+    argv = ["--rule-files", str(rules), "-o", str(tmp_path / "out")]
+    assert _onboard_rules(monkeypatch, argv) == 2
+    err = capsys.readouterr().err
+    assert "Chart.yaml" in err and "--exclude" in err and "it has no `kind`" in err, err
+    assert _onboard_rules(monkeypatch, [*argv, "--exclude", "Chart.yaml"]) == 0
+    err = capsys.readouterr().err
+    assert "Scanned 1 file(s), 1 rule(s)" in err, err
+
+
+def test_rule_files_reads_a_prometheusrule(tmp_path):
+    """#3426 F11: a PrometheusRule's `spec` is read (ConfigMaps only, before)."""
+    from onboard_platform import _read_rule_files
+    p = tmp_path / "pr.yaml"
+    p.write_text("apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\n"
+                 "metadata: {name: p}\nspec:\n" + "".join(
+                     f"  {ln}\n" for ln in _ONBOARD_RULES.splitlines()), encoding="utf-8")
+    ((path, groups, error),) = _read_rule_files([str(p)])
+    assert error is None and groups[0]["rules"][0]["alert"] == "HighConn"

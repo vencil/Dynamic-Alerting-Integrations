@@ -74,11 +74,6 @@ func nonEmptyString(obj map[string]json.RawMessage, key, kubectl string) error {
 	return nil
 }
 
-// isNull reports whether *raw* is the JSON null.
-func isNull(raw json.RawMessage) bool {
-	return bytes.Equal(bytes.TrimSpace(raw), []byte("null"))
-}
-
 // manifestDocuments is what kubectl applies of the converted document *doc*
 // (its source *source*, at the file's line numbers, and its differences
 // *differs*): the document itself, or a list's items. See the comment at
@@ -93,9 +88,9 @@ func manifestDocuments(source []byte, doc json.RawMessage, differs []difference)
 	if !isList {
 		return []json.RawMessage{doc}, [][]difference{differs}, nil
 	}
-	if isNull(rawItems) {
-		return nil, nil, nil
-	}
+	// `items: null` decodes to no items (json.Unmarshal leaves the slice
+	// nil) and goes the way of `items: []`: the list's own differences are
+	// still checked below, so one is never lost because there is no item.
 	var items []json.RawMessage
 	if err := json.Unmarshal(rawItems, &items); err != nil {
 		return nil, nil, fmt.Errorf("a list document's `items` is %s, not a list "+

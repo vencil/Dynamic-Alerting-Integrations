@@ -580,6 +580,31 @@ def _orphan_ids(proc: subprocess.CompletedProcess) -> object:
         return UNPARSABLE
 
 
+_EXCLUDE_PACK = ("groups:\n- name: g\n  rules:\n  - alert: {name}\n"
+                 "    expr: up{{tenant=\"t\"}} == 0\n"
+                 "    labels: {{tenant: t, severity: warning, owner: o, expiry: '2030-01-01'}}\n")
+
+
+def _exclude_tree(tmp: Path) -> str:
+    """Two rule files under one directory (#3426 `--exclude`): `keep.yaml`
+    declares KeptAlert, `drop.yaml` declares DroppedAlert and calls
+    predict_linear, which the built-in lint policy forbids (an ERROR)."""
+    d = tmp / "exclude-tree"
+    _write(d / "keep.yaml", _EXCLUDE_PACK.format(name="KeptAlert"))
+    _write(d / "drop.yaml", _EXCLUDE_PACK.format(name="DroppedAlert").replace(
+        'up{tenant="t"} == 0', 'predict_linear(x{tenant="t"}[1h], 3600) < 0'))
+    return str(d)
+
+
+def _silence_on(tmp: Path, alertname: str) -> str:
+    return _write_str(tmp / "silence-on.json", json.dumps([{
+        "id": "on-dropped", "createdBy": "gate", "comment": "exclude probe",
+        "status": {"state": "active"},
+        "matchers": [{"name": "alertname", "value": alertname,
+                      "isRegex": False, "isEqual": True}],
+        "startsAt": "2026-01-01T00:00:00Z", "endsAt": "2030-01-01T00:00:00Z"}]))
+
+
 def _a_shipped_alertname() -> str:
     """An alert a shipped rule pack really declares (read, not hardcoded)."""
     m = re.search(r"^\s*-?\s*alert:\s*([A-Za-z0-9_]+)",
@@ -819,16 +844,39 @@ RECIPES: list[Recipe] = [
            "file: default and the reversed pair ignore both (0); _cluster_ "
            "alone reports the _local_ file (1)"),
 
+    # #3426: `--exclude` leaves files out by path, unread. Each tool, one
+    # rule file excluded: what it held is gone from the verdict; a pattern
+    # that matches nothing changes nothing.
+    R("lint_custom_rules", "--exclude",
+      lambda t, s: [_exclude_tree(t), "--ci"],
+      flip=("--exclude", "drop.yaml"), boundary=("--exclude", "nothing-*.yaml"),
+      note="drop.yaml's predict_linear is an ERROR (1); excluding it by name "
+           "leaves keep.yaml alone (0); a pattern matching no file keeps the "
+           "ERROR (1)",
+      without=EXIT_VIOLATION, with_=EXIT_OK),
+    R("silencer_drift_check", "--exclude",
+      lambda t, s: ["--silences-file", _silence_on(t, "DroppedAlert"),
+                    "--rule-source", _exclude_tree(t), "--ci"],
+      flip=("--exclude", "drop.yaml"), boundary=("--exclude", "nothing-*.yaml"),
+      note="the silence matches DroppedAlert (0); excluding drop.yaml makes it "
+           "an orphan (1); a pattern matching no file keeps it matched (0)"),
+    R("onboard_platform", "--exclude",
+      lambda t, s: ["--rule-files", _exclude_tree(t), "-o", str(t / "onboard-out"),
+                    "--dry-run"],
+      flip=("--exclude", "*.yaml"), boundary=("--exclude", "nothing-*.yaml"),
+      note="both rule files analysed (0); excluding every file leaves Phase 2 "
+           "nothing and no phase a result (1); a pattern matching no file "
+           "changes nothing (0)"),
     R("silencer_drift_check", "--include-inactive",
       lambda t, s: ["--silences-file",
                     _silences(t, "gone", lambda sid: f"GoneAlert_{sid.replace('-', '_')}"),
-                    "--rule-source", str(RULE_PACKS), "--json"],
+                    "--rule-source", str(RULE_PACKS), "--exclude", "threshold-registry.yaml", "--exclude", "recipes/*", "--json"],
       flip=("--include-inactive",), boundary=("--include-inactive",),
       boundary_base=lambda t, s: [
           "--silences-file",
           _silences(t, "inactive-live", lambda sid: "GoneAlert_active" if sid == "active"
                     else _a_shipped_alertname()),
-          "--rule-source", str(RULE_PACKS), "--json"],
+          "--rule-source", str(RULE_PACKS), "--exclude", "threshold-registry.yaml", "--exclude", "recipes/*", "--json"],
       without=["active"],
       with_=["active", "ended-by-timestamp", "expired", "pending"],
       observe=_orphan_ids,

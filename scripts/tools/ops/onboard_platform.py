@@ -568,13 +568,17 @@ def _tenant_routing_docs(tenant_routings, dedup_info=None):
 # Phase 2: Prometheus Rule File Analysis
 # ============================================================
 
-def scan_rule_files(pattern):
-    """Scan for Prometheus rule files matching a glob pattern.
+def scan_rule_files(pattern, exclude=()):
+    """The rule files `--rule-files` names: every path the glob *pattern*
+    matches, taken by `_lib_consumer_read.files_to_read` (#3426) — a file as
+    given, a directory's *.yaml / *.yml recursively — less the ones an
+    *exclude* pattern matches (`--exclude`, the same meaning as in `lint`
+    and `silencer-drift-check`).
 
     Returns list of file paths.
     """
-    files = glob.glob(pattern, recursive=True)
-    return sorted(f for f in files if Path(f).is_file())
+    return _lib_consumer_read.files_to_read(sorted(glob.glob(pattern, recursive=True)),
+                                            exclude)
 
 
 def classify_rule(rule):
@@ -692,22 +696,26 @@ def _read_rule_files(file_paths):
     read the way Prometheus loads it (#3206, ADR-036 §12).
 
     Which rule files a file holds is `_lib_consumer_read.rule_files_in`'s
-    answer (#3426), ConfigMaps only: a manifest's ConfigMap data values that
-    set out to be rule files (a `kind: List` read as its items), else the
-    file itself when it is a plain rule file. A ConfigMap value no reading
-    reads as a rule file (an alertmanager.yml, a markdown template) is not
-    read and not reported. A file that holds no rule file is an error naming
-    it ("No 'groups' found"); so is one no reader reads (its readers'
-    reason) and a rule file the loader refuses (the loader's reason). Raises
-    `_lib_consumer_read.ConsumerReadError` when a binary cannot be had."""
-    found = _lib_consumer_read.rule_files_in(
-        file_paths, kinds=("ConfigMap",), other_yaml=_lib_consumer_read.NO_RULE_FILES,
-        keep_refusals=True)
+    answer (#3426): a manifest's ConfigMap data values that set out to be
+    rule files and its PrometheusRules' `spec` (a `kind: List` read as its
+    items), else the file itself when it is a plain rule file. A ConfigMap
+    value no reading reads as a rule file (an alertmanager.yml, a markdown
+    template) is not read and not reported. A file that holds no rule file
+    is an error naming it ("No 'groups' found"); so is one no reader reads
+    (its readers' reason, and the `--exclude` hint: which files are read is
+    the caller's choice by path) and a rule file the loader refuses (the
+    loader's reason). Raises `_lib_consumer_read.ConsumerReadError` when a
+    binary cannot be had."""
+    found = _lib_consumer_read.rule_files_in(file_paths, keep_refusals=True)
     out = []
     for fpath in file_paths:
         groups, failed = [], False
         for rf in found[os.fspath(fpath)]:
-            if rf.problem is not None:
+            if rf.unread:
+                out.append((fpath, None, f"Failed to load: {fpath}: {rf.problem} "
+                                         f"({_lib_consumer_read.EXCLUDE_HINT})"))
+                failed = True
+            elif rf.problem is not None:
                 where = rf.path if rf.kind is not None else fpath
                 out.append((fpath, None, f"Failed to load: {where}: {rf.problem}"))
                 failed = True
@@ -1538,7 +1546,15 @@ def main():
     parser.add_argument("--alertmanager-config",
                         help="Phase 1: Alertmanager config file (YAML or ConfigMap)")
     parser.add_argument("--rule-files",
-                        help="Phase 2: Prometheus rule files glob pattern")
+                        help="Phase 2: Prometheus rule files glob pattern; a directory it "
+                             "matches is walked for *.yaml / *.yml")
+    parser.add_argument("--exclude", action="append", default=[], metavar="GLOB",
+                        help="Phase 2: leave out rule files this glob matches (repeatable; "
+                             "not read). A GLOB without '/' matches the file name at any "
+                             "depth; one with '/' the path relative to the directory "
+                             "--rule-files matched, or a file's path as matched (fnmatch, "
+                             "case-sensitive, '*' crosses '/'). Every other file must be a "
+                             "rule file or a Kubernetes manifest, or the run exits 2")
     parser.add_argument("--scrape-config",
                         help="Phase 3: Prometheus scrape config file")
     parser.add_argument("--da-crdecode-binary", default=None,
@@ -1624,7 +1640,7 @@ def main():
             print("  WARN: migrate_rule.py not available, Phase 2 will have limited analysis",
                   file=sys.stderr)
 
-        rule_files = scan_rule_files(args.rule_files)
+        rule_files = scan_rule_files(args.rule_files, args.exclude)
         if not rule_files:
             print(f"  WARN: No rule files found matching: {args.rule_files}",
                   file=sys.stderr)

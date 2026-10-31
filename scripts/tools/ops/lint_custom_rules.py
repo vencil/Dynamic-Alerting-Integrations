@@ -25,6 +25,14 @@ policy 的 `file_overrides` 取得逐檔豁免（例如 forecast recipe 的 pred
   # CI 模式 (非零退出碼)
   python3 scripts/tools/ops/lint_custom_rules.py rule-packs/custom/ --ci
 
+  # 目錄裡混有不是 rule file 的 YAML：以 --exclude 排除（可重複）
+  python3 scripts/tools/ops/lint_custom_rules.py rule-packs/ \
+      --exclude threshold-registry.yaml --exclude 'recipes/*'
+
+讀哪些檔由路徑決定（#3426）：檔案照給的讀，目錄遞迴取 *.yaml／*.yml，減去
+--exclude 符合的。選到的每個檔都必須是 rule file 或 ConfigMap／PrometheusRule
+manifest，否則以讀者理由回報 ERROR，不會當成「沒有 rule」略過。
+
 參考: docs/custom-rule-governance.md §4
 """
 
@@ -253,15 +261,15 @@ def check_owner_label(labels, filepath, rule_name):
 def read_rule_files(files):
     """{path: [RuleFile, ...]} — the rule files each of *files* hands to
     Prometheus, as Prometheus loads them: `_lib_consumer_read.rule_files_in`
-    (#3426), ConfigMaps' values and plain rule files, other YAML (a recipe,
-    the registry beside the packs) holding none (``[]``). A file no reader
-    reads is a RuleFile with ``unread`` set and its readers' reason; a rule
-    file the loader refuses one with the loader's reason — both ERRORs in
-    `lint_file`, never skipped. Raises
-    ``_lib_consumer_read.ConsumerReadError`` when a binary cannot be had."""
-    return _lib_consumer_read.rule_files_in(
-        files, kinds=("ConfigMap",), other_yaml=_lib_consumer_read.NO_RULE_FILES,
-        keep_refusals=True)
+    (#3426) — plain rule files, ConfigMaps' values and PrometheusRules'
+    `spec`. Every file given is one the caller chose to lint (`--exclude`
+    leaves the others out): a file that is neither a manifest nor a rule
+    file (a recipe, the registry beside the packs) is a RuleFile with
+    ``unread`` set and its readers' reason; a rule file the loader refuses
+    one with the loader's reason — both ERRORs in `lint_file`, never
+    skipped. Raises ``_lib_consumer_read.ConsumerReadError`` when a binary
+    cannot be had."""
+    return _lib_consumer_read.rule_files_in(files, keep_refusals=True)
 
 
 def lint_file(filepath, policy, rule_files=None):
@@ -288,21 +296,25 @@ def lint_file(filepath, policy, rule_files=None):
     results.extend(override_results)
 
     # #3206: the file is read the way Prometheus loads it — a plain rule file
-    # by its rule loader, a ConfigMap (data: key: |) the way kubectl reads it
-    # and each data value by the rule loader. A file or data value the loader
-    # refuses is an ERROR naming it, with the loader's reason; it is never
-    # skipped (a ConfigMap value with a `groups:` key that did not parse used
-    # to be dropped silently). A file or value that is no rule file at all
-    # (no `groups:` key) is not read, as before — the same test for both.
+    # by its rule loader, a ConfigMap (data: key: |) or PrometheusRule the
+    # way kubectl reads it and each data value / its `spec` by the rule
+    # loader. A file or data value the loader refuses is an ERROR naming it,
+    # with the loader's reason; it is never skipped (a ConfigMap value with
+    # a `groups:` key that did not parse used to be dropped silently). #3426:
+    # a file that is no manifest and no rule file is an ERROR too — which
+    # files are linted is the caller's choice, by path (`--exclude`).
     if rule_files is None:
         rule_files = read_rule_files([filepath])[filepath]
     groups = []
     for rf in rule_files:
         if rf.problem is not None:
             where = f" (data key {rf.key!r})" if rf.key is not None else ""
-            what = ("no reader reads it as a manifest or a rule file" if rf.unread
-                    else f"Prometheus' rule loader refuses it{where}")
-            results.append(LintResult(filepath, None, None, "ERROR", f"{what}: {rf.problem}"))
+            if rf.unread:
+                msg = (f"no reader reads it as a manifest or a rule file: {rf.problem} "
+                       f"({_lib_consumer_read.EXCLUDE_HINT})")
+            else:
+                msg = f"Prometheus' rule loader refuses it{where}: {rf.problem}"
+            results.append(LintResult(filepath, None, None, "ERROR", msg))
             continue
         groups.extend(rf.groups)
 
@@ -465,17 +477,11 @@ def load_policy(policy_path):
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
-def collect_files(paths):
-    """Expand paths to list of YAML files."""
-    files = []
-    for p in paths:
-        path = Path(p)
-        if path.is_file() and path.suffix in (".yaml", ".yml"):
-            files.append(str(path))
-        elif path.is_dir():
-            for ext in ("*.yaml", "*.yml"):
-                files.extend(str(f) for f in path.rglob(ext))
-    return sorted(set(files))
+def collect_files(paths, exclude=()):
+    """The files to lint: `_lib_consumer_read.files_to_read` (#3426) — a
+    file as given, a directory's *.yaml / *.yml recursively, less the ones
+    an *exclude* pattern matches."""
+    return _lib_consumer_read.files_to_read(paths, exclude)
 
 
 def main():
@@ -495,6 +501,14 @@ def main():
     parser.add_argument(
         "--ci", action="store_true",
         help="CI mode: exit with non-zero code on any ERROR"
+    )
+    parser.add_argument(
+        "--exclude", action="append", default=[], metavar="GLOB",
+        help="Leave out files this glob matches (repeatable; not read). A GLOB "
+             "without '/' matches the file name at any depth; one with '/' the "
+             "path relative to the directory given (fnmatch, case-sensitive, '*' "
+             "crosses '/'). Every file that is not excluded must be a rule file or "
+             "a ConfigMap / PrometheusRule manifest, or it is an ERROR"
     )
     args = parser.parse_args()
 
@@ -525,7 +539,7 @@ def main():
             + "  ⛔ Do not drop the path to clear this — an absent target "
               "is not a clean one.", problems[0].reason)
 
-    files = collect_files(args.paths)
+    files = collect_files(args.paths, args.exclude)
 
     if not files:
         print("No YAML files found under: " + ", ".join(repr(p) for p in args.paths))

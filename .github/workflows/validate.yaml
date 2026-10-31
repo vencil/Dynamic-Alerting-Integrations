@@ -606,6 +606,7 @@ jobs:
         run: |
           python scripts/tools/ops/lint_custom_rules.py \
             rule-packs/ \
+            --exclude threshold-registry.yaml --exclude 'recipes/*' \
             --policy .github/custom-rule-policy.yaml \
             --ci
 

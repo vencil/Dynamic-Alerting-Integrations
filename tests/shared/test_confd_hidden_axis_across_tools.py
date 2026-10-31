@@ -312,6 +312,11 @@ KNOWN_OPEN: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {}
 
 # Population files that list a directory themselves but get no cell here.
 NOT_A_CELL: dict[str, str] = {
+    "_lib_consumer_read.py":
+        "lists rule-file SOURCES — the files and directories a rule-file CLI is "
+        "given (`files_to_read`) and rule-packs/ (`rule_pack_files`) — never a "
+        "conf.d; in the population only through its docstring's \"outside "
+        "conf.d\" (#3426)",
     "dx/generate_tenant_fixture.py":
         "lists its own OUTPUT directory (what it just generated), not a "
         "conf.d it reads",

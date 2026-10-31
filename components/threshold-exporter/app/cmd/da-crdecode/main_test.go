@@ -487,6 +487,11 @@ func TestManifestRefusesBadListItems(t *testing.T) {
 		{"list-without-kind", "items:\n- {apiVersion: v1, kind: A}\n", "it has no `kind`"},
 		{"list-text-differs", "kind: List\nmetadata: {labels: {010: x}}\nitems:\n- {apiVersion: v1, kind: A}\n",
 			"a list document whose own text is not read as written (at .metadata.labels)"},
+		// `items: null` is no item to give a difference to, as `items: []`.
+		{"list-text-differs-items-null", "kind: List\nmetadata: {labels: {010: x}}\nitems: null\n",
+			"a list document whose own text is not read as written (at .metadata.labels)"},
+		{"list-text-differs-items-empty", "kind: List\nmetadata: {labels: {010: x}}\nitems: []\n",
+			"a list document whose own text is not read as written (at .metadata.labels)"},
 		{"second-document", "kind: A\n---\n" + head + "- [x]\n",
 			"the document starting at line 3: in this list, items[1] (line 7): it is not a Kubernetes object: the document is array"},
 	}

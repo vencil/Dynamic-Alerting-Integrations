@@ -107,9 +107,10 @@ _TMI_TOKEN = re.compile(r'tenant_metadata_info')
 
 
 def _rule_pack_files() -> list[Path]:
-    """Both ``.yaml`` and ``.yml`` so a ``.yml`` pack cannot escape (fail-open; Gemini #969)."""
-    return sorted(f for f in _RULE_PACKS.iterdir()
-                  if f.is_file() and f.suffix in (".yaml", ".yml"))
+    """The rule packs, declared by path: ``_lib_consumer_read.rule_pack_files`` (#3426) —
+    ``rule-pack-*.yaml`` and ``.yml`` so a ``.yml`` pack cannot escape (fail-open; Gemini
+    #969); an undeclared top-level YAML there raises ``RuleFileSourcesRefused``."""
+    return _lib_consumer_read.rule_pack_files(_RULE_PACKS)
 
 
 def _mask_quotes(expr: str) -> str:
@@ -272,12 +273,11 @@ def _check_expr(expr: str) -> tuple[str, str | None]:
 
 def read_rule_packs() -> "list[_lib_consumer_read.RuleFile]":
     """The rule files under rule-packs/, as Prometheus' rule loader reads them
-    (#3206, ADR-036 §12). Which files hold rule files is
-    `_lib_consumer_read.rule_files_in`'s answer (#3426); the registry beside
-    the packs holds none. Refused ones — a file no reader reads included —
-    are in the list with their `problem`."""
-    found = _lib_consumer_read.rule_files_in(
-        _rule_pack_files(), other_yaml=_lib_consumer_read.NO_RULE_FILES, keep_refusals=True)
+    (#3206, ADR-036 §12). Which files are rule packs is declared by path
+    (`_rule_pack_files`, #3426); their rule files are
+    `_lib_consumer_read.rule_files_in`'s answer. Refused ones — a pack no
+    reader reads included — are in the list with their `problem`."""
+    found = _lib_consumer_read.rule_files_in(_rule_pack_files(), keep_refusals=True)
     return [rf for rfs in found.values() for rf in rfs]
 
 
@@ -299,7 +299,9 @@ def classify_all() -> tuple[dict[str, int], list[str], int]:
     violations: list[str] = []
     scanned = 0
     rule_files = read_rule_packs()
-    refused = [f"    {Path(rf.path).name}: Prometheus' rule loader refuses it: {rf.problem}"
+    refused = [f"    {Path(rf.path).name}: "
+               + ("no reader reads it as a rule file" if rf.unread
+                  else "Prometheus' rule loader refuses it") + f": {rf.problem}"
                for rf in rule_files if rf.problem is not None]
     if refused:
         raise RulePacksRefused(refused)

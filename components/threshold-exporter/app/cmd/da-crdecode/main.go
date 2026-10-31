@@ -29,11 +29,14 @@
 //     (k8s.io/apimachinery's unstructured.UnstructuredJSONScheme), which
 //     refuses a document that is not a mapping ("cannot unmarshal array into
 //     Go value of type unstructured.detector") and one with no kind ("Object
-//     'Kind' is missing"). Here each such document is refused too, naming the
-//     line it starts on: a document that is no object — an array, a string, a
-//     number — or one whose `kind` is missing, not a string, or empty. A list
-//     (a document with a top-level `items`: `kind: List`, the output of
-//     `kubectl get … -o yaml`) is replaced by its items, in order, as kubectl
+//     'Kind' is missing"). Here each such document is refused too: a
+//     document that is no object — an array, a string, a number — or one
+//     whose `kind` is missing, not a string, or empty. The refusal names the
+//     line the document starts on only when the file holds several documents
+//     (a one-document file gets no line number); a refused list item is
+//     named `items[i] (line N)`, the line left out when it cannot be told.
+//     A list (a document with a top-level `items`: `kind: List`, the output
+//     of `kubectl get … -o yaml`) is replaced by its items, in order, as kubectl
 //     applies them; each item must be an object with a non-empty string
 //     `kind` and `apiVersion`, and a list inside a list is refused, as kubectl
 //     refuses it (manifest.go). So a caller can rely on every entry of
@@ -79,7 +82,8 @@
 //	0  decoded; JSON on stdout
 //	2  caller error: bad arguments, the file cannot be read, a `---` line
 //	   carries content, the conversion refuses a document (the reason is on
-//	   stderr, with the line the document starts on), a piece between two
+//	   stderr, with the line the document starts on when the file holds
+//	   several), a piece between two
 //	   `---` lines holds more than one YAML document, a document cannot be
 //	   read as written to compare with the conversion, or — without
 //	   `--any-shape` — a document or a list item is no Kubernetes object (not
