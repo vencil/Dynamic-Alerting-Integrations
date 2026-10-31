@@ -1,0 +1,30 @@
+# 效能退化的接受帳本（ADR-039）
+#
+# 一個 PR 刻意付出效能成本時，在「同一個 PR」裡於本檔新增一筆紀錄。
+# bench gate（PR 上）與 post-merge 歸因（main 上）只看「這次變更新增的紀錄」：
+#
+#   - 被標的列，bench 名稱、指標都吻合某筆新增紀錄，且實測不超過 max_delta_pct
+#     → 列為「已接受」：不貼 perf-regression label、不開票，只在 summary 列出。
+#   - 吻合但超過上限 → 仍是退化，票與留言會同時寫出宣告值與實測值。
+#   - 沒有吻合的紀錄 → 照舊是退化。
+#
+# 紀錄屬於哪個 commit，由 git 決定（新增這筆紀錄的那個 commit），本檔不寫 SHA。
+# revert 引入成本的 PR 時，這筆紀錄會跟著程式碼一起被移除。
+#
+# 欄位（全部必填，issue 選填）：
+#   benches       完整的 Go benchmark 名稱清單（BenchmarkX），不接受正則。
+#                 名稱不存在的紀錄會被 tests/dx/test_bench_verdict.py 擋下。
+#   metric        "sec/op"、"B/op" 或 "allocs/op" 其中之一。
+#   max_delta_pct 允許的上限（百分比，> 0）。照 PR 上 bench gate 量到的數字
+#                 抓一點餘裕；B/op 與 allocs/op 逐次相同，不需要大餘裕。
+#   reason        一句話：換到什麼、為什麼不省。
+#   issue         選填。事後補宣告時填那張 perf-regression 票的號碼；
+#                 合併後在票上留言附這筆紀錄的連結並關票。
+#
+# 範例（不生效，僅示範格式）：
+#
+# [[accepted]]
+# benches = ["BenchmarkMergePartialConfigs_1000"]
+# metric = "B/op"
+# max_delta_pct = 10
+# reason = "ScheduledValue 新增 deleted 標記（48→56 B），租戶層 null 需要它；省掉會讓 ApplyProfiles 把值填回去"

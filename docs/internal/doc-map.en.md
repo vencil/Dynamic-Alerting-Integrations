@@ -49,6 +49,7 @@ lang: en
 | `docs/adr/036-single-parser-effective-config.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-036: conf.d Is Parsed Once — Go Reads the YAML, the Generator Judges Routing and Policy |
 | `docs/adr/037-config-diff-compares-rendered-output.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-037: config-diff Compares Rendered Output |
 | `docs/adr/038-unread-keys-judged-by-readers.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-038: Keys No Reader Reads Are Judged by Measurement; Reserved Keys Are Declared in One Registry |
+| `docs/adr/039-bench-acceptance-ledger.md` (.en.md) | Platform Engineers, contributors | ADR-039: Deliberate performance costs go into an in-repo acceptance ledger that the bench gates check against measurements |
 | `docs/alerting-best-practices.md` (.en.md) | SREs, Platform Engineers | Beyond Actionable: From Alert Decisions to the Idempotency Spectrum of Automated Actions |
 | `docs/alerting-design-fundamentals.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | Before the Alert Fires: From Resource Saturation to Symptom-Based Alerting |
 | `docs/alerting-slo-error-budget.md` (.en.md) | SREs, Domain Experts (DBA), Tenants | How Strict Is Strict Enough: Setting Alert Thresholds with SLOs and Error Budgets |

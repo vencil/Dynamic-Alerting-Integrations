@@ -28,7 +28,7 @@ lang: zh
 | `TRK-336` | dx | TRK-336: 補齊本地 gate 覆蓋（CI-only / 單邊 gate 執行點判準） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-3180` | tech-debt | TRK-3180: da-guard 窮舉矩陣測試在 -race 下太貴，讓矩陣本身變便宜 | exporter | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
-### accepted (36)
+### accepted (38)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
@@ -68,6 +68,8 @@ lang: zh
 | `ADR-036` | adr | ADR-036: conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判 | platform | — | [docs/adr/036-single-parser-effective-config.md](../adr/036-single-parser-effective-config.md) |
 | `ADR-037` | adr | ADR-037: config-diff 改為比較渲染結果 | platform | — | [docs/adr/037-config-diff-compares-rendered-output.md](../adr/037-config-diff-compares-rendered-output.md) |
 | `ADR-038` | adr | ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告 | platform | — | [docs/adr/038-unread-keys-judged-by-readers.md](../adr/038-unread-keys-judged-by-readers.md) |
+| `ADR-039` | adr | ADR-039: Deliberate performance costs go into an in-repo acceptance ledger that the bench gates check against measurements | dx | — | [docs/adr/039-bench-acceptance-ledger.en.md](../adr/039-bench-acceptance-ledger.en.md) |
+| `ADR-039` | adr | ADR-039: 刻意付出的效能成本寫進 repo 裡的接受帳本，由 bench 閘門核對實測 | dx | — | [docs/adr/039-bench-acceptance-ledger.md](../adr/039-bench-acceptance-ledger.md) |
 
 ### proposed (16)
 

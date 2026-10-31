@@ -135,9 +135,17 @@ jobs:
              && [ "$EVENT_BEFORE" != "0000000000000000000000000000000000000000" ] \
              && [ "$EVENT_BEFORE" != "$parent" ]; then
             echo "::warning::push contained more than one commit (before=$EVENT_BEFORE != HEAD^=$parent) — only the tip commit is attributed this run."
+            # Acceptance-ledger entries added ANYWHERE in the push apply to
+            # the tip's verdict (ADR-039): a ledger line committed one commit
+            # before the code it accepts must not be invisible. Only when
+            # `before` is a real commit here; otherwise fall back to HEAD^.
+            if git rev-parse --verify -q "$EVENT_BEFORE^{commit}" >/dev/null; then
+              ledger_base="$EVENT_BEFORE"
+            fi
           fi
           echo "skip=false" >> "$GITHUB_OUTPUT"
           echo "sha=$parent" >> "$GITHUB_OUTPUT"
+          echo "ledger_base=${ledger_base:-$parent}" >> "$GITHUB_OUTPUT"
 
       - name: Run interleaved bench + verdict (shared core)
         if: steps.parent.outputs.skip != 'true'
@@ -148,6 +156,7 @@ jobs:
         env:
           BASE_SHA: ${{ steps.parent.outputs.sha }}
           HEAD_SHA: ${{ github.sha }}
+          LEDGER_BASE_SHA: ${{ steps.parent.outputs.ledger_base }}
           ROUNDS: "6"
           BENCHTIME: "1s"
         run: bash scripts/tools/ops/bench_gate_compare.sh
@@ -162,6 +171,8 @@ jobs:
           INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
           INCONCLUSIVE_CANARY: ${{ steps.compare.outputs.inconclusive_canary }}
           UNREPLICATED: ${{ steps.compare.outputs.unreplicated }}
+          ACCEPTED: ${{ steps.compare.outputs.accepted }}
+          OVER_BOUND: ${{ steps.compare.outputs.over_bound }}
           REGRESSION_BASIS: ${{ steps.compare.outputs.regression_basis }}
           BENCHSTAT_TXT: ${{ steps.compare.outputs.benchstat_txt }}
           COMPARE_DESC: |
@@ -189,6 +200,8 @@ jobs:
           REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
           REGRESSION_BASIS: ${{ steps.compare.outputs.regression_basis }}
           UNREPLICATED: ${{ steps.compare.outputs.unreplicated }}
+          ACCEPTED: ${{ steps.compare.outputs.accepted }}
+          OVER_BOUND: ${{ steps.compare.outputs.over_bound }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SERVER_URL: ${{ github.server_url }}
         run: |
@@ -256,6 +269,15 @@ jobs:
               echo "$REGRESSIONS_LIST"
               echo '```'
               echo ""
+              if [ -n "$OVER_BOUND" ]; then
+                echo "Declared in \`.github/bench-accepted.toml\` by this change, but measured beyond the declared bound:"
+                echo '```'
+                echo "$OVER_BOUND"
+                echo '```'
+                echo ""
+              fi
+              echo "If this cost is deliberate, declare it in \`.github/bench-accepted.toml\` (see ADR-039) and close this issue with a link to the entry."
+              echo ""
               echo "Run: $RUN_URL"
               echo ""
               echo "_Auto-filed by \`bench-attrib-main.yaml\` (HEAD vs HEAD^). A clean re-run of"
@@ -284,13 +306,21 @@ jobs:
             # if a previous run of this same commit filed an issue (noise that
             # a re-run cleared), auto-close it. Other commits' issues untouched.
             if [ -n "$existing" ]; then
+              if [ -n "$ACCEPTED" ]; then
+                close_why="every flagged row is within a bound declared in \`.github/bench-accepted.toml\`"
+              else
+                close_why="no significant ≥5% regression, control canary stable"
+              fi
               gh issue comment "$existing" --repo "$REPO" \
-                --body "Re-run of \`$HEAD_SHA\` came back clean (no significant ≥5% regression, control canary stable) — auto-closing. Run: $RUN_URL"
+                --body "Re-run of \`$HEAD_SHA\` came back clean ($close_why) — auto-closing. Run: $RUN_URL"
               gh issue close "$existing" --repo "$REPO" --reason completed
               echo "::notice::closed attribution issue #$existing (clean re-run of $short)."
             fi
             if [ -n "$UNREPLICATED" ]; then
               echo "::notice::sec/op-only flag(s) on $short did not replicate in a second interleaved pass — not counted (B/op and allocs/op unchanged)."
+            fi
+            if [ -n "$ACCEPTED" ]; then
+              echo "::notice::$short regressed within bound(s) declared in .github/bench-accepted.toml — accepted, no issue filed."
             fi
             echo "No regression attributed to $short."
           fi

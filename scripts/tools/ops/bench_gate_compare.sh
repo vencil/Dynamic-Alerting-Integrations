@@ -31,6 +31,8 @@
 #   BENCH_RE       default '_1000(_|$)|MixedMode|Simulate_DeepChain'
 #   BENCH_OUT_DIR  default "$RUNNER_TEMP/bench-out" (mktemp -d fallback locally)
 #   GITHUB_OUTPUT  step-output sink; falls back to "$BENCH_OUT_DIR/step-outputs.txt"
+#   LEDGER_BASE_SHA / LEDGER_HEAD_SHA  default BASE_SHA / HEAD_SHA. The range
+#                  whose ADDED .github/bench-accepted.toml entries apply.
 #   REPLICATE_TIMING_ONLY  default 1. A run whose only flagged rows are sec/op
 #                  gets a second interleaved pass (see the Verdict section);
 #                  0 reports the first pass as-is. Budget the caller's
@@ -43,9 +45,11 @@
 # Outputs ($GITHUB_OUTPUT keys, written by scripts/tools/dx/bench_verdict.py)
 #   regression=true|false      regressions        (multiline benchstat rows)
 #   regression_basis=deterministic|timing-replicated|timing-not-replicated|
-#                    timing-unreplicated|clean|inconclusive
+#                    timing-unreplicated|accepted|clean|inconclusive
 #   unreplicated               (multiline; timing-only rows the second pass
 #                              did not flag — reported, not counted)
+#   accepted / over_bound      (multiline; rows inside / beyond a bound declared
+#                              in .github/bench-accepted.toml by this range)
 #   inconclusive=true|false    inconclusive_reason
 #   inconclusive_cpus / inconclusive_canary       (multiline, may be absent)
 #   benchstat_txt=<path>       first-pass benchstat output, for summary rendering
@@ -172,16 +176,22 @@ run_pass() {  # $1 = output dir; writes $1/benchstat.txt
 # deterministic rows never need it, is in bench_verdict.py's header.
 # REPLICATE_TIMING_ONLY=0 skips the second pass and reports the first as-is.
 VERDICT="$PWD/scripts/tools/dx/bench_verdict.py"
+# ACCEPTANCE LEDGER (.github/bench-accepted.toml, ADR-039): entries ADDED
+# between LEDGER_BASE_SHA and LEDGER_HEAD_SHA turn a flagged row within its
+# declared bound into "accepted". Defaults to this comparison's own range; the
+# post-merge workflow widens the base to the push's `before` for a
+# multi-commit push, so an entry added in an earlier commit of it still counts.
+ledger_args=(--ledger-base "${LEDGER_BASE_SHA:-$BASE_SHA}" --ledger-head "${LEDGER_HEAD_SHA:-$HEAD_SHA}")
 
 run_pass "$OUT_DIR"
 BENCHSTAT_TXT="$OUT_DIR/benchstat.txt"
 replicate_args=()
 if [ "${REPLICATE_TIMING_ONLY:-1}" = "1" ] \
-   && [ "$(python3 "$VERDICT" needs-replication --benchstat "$BENCHSTAT_TXT")" = "yes" ]; then
+   && [ "$(python3 "$VERDICT" needs-replication --benchstat "$BENCHSTAT_TXT" "${ledger_args[@]}")" = "yes" ]; then
   echo "[bench_gate_compare] only sec/op rows were flagged — running a replication pass"
   run_pass "$OUT_DIR/replicate"
   replicate_args=(--replicate "$OUT_DIR/replicate/benchstat.txt")
 fi
-python3 "$VERDICT" verdict --benchstat "$BENCHSTAT_TXT" \
+python3 "$VERDICT" verdict --benchstat "$BENCHSTAT_TXT" "${ledger_args[@]}" \
   ${replicate_args[@]+"${replicate_args[@]}"} \
   --github-output "$STEP_OUT"

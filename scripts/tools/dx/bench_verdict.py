@@ -59,7 +59,9 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import subprocess
 import sys
+import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -191,6 +193,137 @@ def parse(text: str) -> Reading:
     return reading
 
 
+# ── Acceptance ledger ───────────────────────────────────────────────────────
+# A regression someone decided to pay for is declared in the SAME PR that
+# introduces it, in LEDGER_PATH. The gate reads the entries that PR (or push)
+# ADDED — the set difference between the ledger at the base and at the head,
+# compared entry by entry, so reformatting the file re-accepts nothing — and a
+# flagged row is "accepted" only when an added entry names that benchmark,
+# that unit, and a bound the measurement does not exceed. Over the bound it is
+# still a regression, reported with both numbers. Decision record: ADR-039.
+LEDGER_PATH = ".github/bench-accepted.toml"
+_ENTRY_KEYS = {"benches", "metric", "max_delta_pct", "reason", "issue"}
+_REQUIRED_KEYS = _ENTRY_KEYS - {"issue"}
+_GO_BENCH_NAME = re.compile(r"^Benchmark[A-Za-z0-9_]+$")
+
+
+class LedgerError(Exception):
+    """A ledger this gate cannot apply. Fail loud: ignoring it would turn a
+    declared acceptance into a ticket, or worse, an invalid entry into a pass."""
+
+
+@dataclass(frozen=True)
+class Entry:
+    benches: tuple[str, ...]
+    metric: str
+    max_delta_pct: float
+    reason: str
+    issue: int | None = None
+
+
+def parse_ledger(text: str, where: str = LEDGER_PATH) -> list[Entry]:
+    """Parse and validate the ledger. Raises LedgerError on any malformed entry."""
+    try:
+        doc = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as exc:
+        raise LedgerError(f"{where}: not valid TOML: {exc}") from exc
+    extra = set(doc) - {"accepted"}
+    if extra:
+        raise LedgerError(f"{where}: unknown top-level key(s) {sorted(extra)}")
+    raw = doc.get("accepted", [])
+    if not isinstance(raw, list):
+        raise LedgerError(f"{where}: `accepted` must be an array of tables")
+    entries: list[Entry] = []
+    for i, e in enumerate(raw, 1):
+        at = f"{where}: accepted entry #{i}"
+        if not isinstance(e, dict):
+            raise LedgerError(f"{at}: not a table")
+        unknown = set(e) - _ENTRY_KEYS
+        missing = _REQUIRED_KEYS - set(e)
+        if unknown or missing:
+            raise LedgerError(f"{at}: unknown {sorted(unknown)} / missing {sorted(missing)}")
+        benches = e["benches"]
+        if (not isinstance(benches, list) or not benches
+                or not all(isinstance(b, str) and _GO_BENCH_NAME.match(b) for b in benches)):
+            raise LedgerError(f"{at}: `benches` must be a non-empty list of full Go "
+                              "benchmark names (BenchmarkX), not patterns")
+        if e["metric"] not in UNITS:
+            raise LedgerError(f"{at}: `metric` must be one of {sorted(UNITS)}")
+        cap = e["max_delta_pct"]
+        if isinstance(cap, bool) or not isinstance(cap, (int, float)) or not cap > 0:
+            raise LedgerError(f"{at}: `max_delta_pct` must be a number > 0")
+        if not isinstance(e["reason"], str) or not e["reason"].strip():
+            raise LedgerError(f"{at}: `reason` must be a non-empty string")
+        issue = e.get("issue")
+        if issue is not None and (isinstance(issue, bool) or not isinstance(issue, int)):
+            raise LedgerError(f"{at}: `issue` must be an issue number")
+        entries.append(Entry(tuple(benches), e["metric"], float(cap), e["reason"].strip(), issue))
+    return entries
+
+
+def ledger_at(sha: str) -> str | None:
+    """The ledger's text at a commit; None when the file does not exist there."""
+    if subprocess.run(["git", "rev-parse", "--verify", "-q", f"{sha}^{{commit}}"],
+                      capture_output=True, timeout=30).returncode != 0:
+        raise LedgerError(f"ledger commit does not resolve: {sha}")
+    if subprocess.run(["git", "cat-file", "-e", f"{sha}:{LEDGER_PATH}"],
+                      capture_output=True, timeout=30).returncode != 0:
+        return None
+    return subprocess.run(["git", "show", f"{sha}:{LEDGER_PATH}"], capture_output=True,
+                          text=True, encoding="utf-8", timeout=30, check=True).stdout
+
+
+def added_entries(base_sha: str, head_sha: str) -> list[Entry]:
+    """Entries present at head and not at base."""
+    def at(sha: str) -> list[Entry]:
+        text = ledger_at(sha)
+        return parse_ledger(text, f"{LEDGER_PATH}@{sha[:12]}") if text is not None else []
+    before = set(at(base_sha))
+    return [e for e in at(head_sha) if e not in before]
+
+
+def go_name(row_bench: str) -> str:
+    """benchstat row name ("MergePartialConfigs_1000-4") → Go name."""
+    return "Benchmark" + re.sub(r"-\d+$", "", row_bench)
+
+
+@dataclass(frozen=True)
+class Judged:
+    row: Row
+    entry: Entry
+
+
+def apply_ledger(reading: Reading, entries: list[Entry]) -> tuple[list[Judged], list[Judged]]:
+    """Remove covered rows from `reading.regressions`; return (accepted, over_bound)."""
+    accepted: list[Judged] = []
+    over: list[Judged] = []
+    remaining: list[Row] = []
+    for row in reading.regressions:
+        matches = [e for e in entries if e.metric == row.unit and go_name(row.bench) in e.benches]
+        if not matches:
+            remaining.append(row)
+            continue
+        widest = max(matches, key=lambda e: e.max_delta_pct)
+        if row.delta_pct <= widest.max_delta_pct:
+            accepted.append(Judged(row, widest))
+        else:
+            remaining.append(row)
+            over.append(Judged(row, widest))
+    reading.regressions = remaining
+    return accepted, over
+
+
+def lint_ledger(entries: list[Entry], known_benches: set[str]) -> list[str]:
+    """Problems a ledger that parses can still have: names no benchmark carries
+    (renamed or removed — an entry that silently matches nothing)."""
+    problems = []
+    for i, e in enumerate(entries, 1):
+        for b in e.benches:
+            if b not in known_benches:
+                problems.append(f"accepted entry #{i}: no benchmark named {b}")
+    return problems
+
+
 def needs_replication(first: Reading) -> bool:
     """True when the only evidence is timing rows from a stable run."""
     return (not first.inconclusive_reason()
@@ -207,6 +340,8 @@ class Verdict:
     unreplicated: list[Row] = field(default_factory=list)
     canary_rows: list[str] = field(default_factory=list)
     cpus: list[str] = field(default_factory=list)
+    accepted: list[Judged] = field(default_factory=list)
+    over_bound: list[Judged] = field(default_factory=list)
 
 
 def decide(first: Reading, second: Reading | None) -> Verdict:
@@ -259,6 +394,14 @@ def render_outputs(v: Verdict, benchstat_path: str) -> str:
     if v.unreplicated:
         out.append(_multiline("unreplicated", "\n".join(r.line for r in v.unreplicated),
                               "__UNREPEOF__"))
+    if v.accepted:
+        out.append(_multiline("accepted", "\n".join(
+            f"{j.row.line}  [declared ≤ +{j.entry.max_delta_pct:g}%: {j.entry.reason}]"
+            for j in v.accepted), "__ACCEOF__"))
+    if v.over_bound:
+        out.append(_multiline("over_bound", "\n".join(
+            f"{j.row.line}  [declared ≤ +{j.entry.max_delta_pct:g}% in {LEDGER_PATH}]"
+            for j in v.over_bound), "__OVEREOF__"))
     if v.inconclusive_reason and v.canary_rows:
         out.append(_multiline("inconclusive_canary", "\n".join(v.canary_rows), "__CANEOF__"))
     if len(v.cpus) > 1:
@@ -285,21 +428,38 @@ def main(argv: list[str] | None = None) -> int:
     vd.add_argument("--replicate", help="benchstat output of the replication pass")
     vd.add_argument("--github-output", required=True,
                     help="file to append GitHub step outputs to")
+    for p in (nr, vd):
+        p.add_argument("--ledger-base", help=f"commit whose {LEDGER_PATH} is the 'before' set")
+        p.add_argument("--ledger-head", help=f"commit whose {LEDGER_PATH} is the 'after' set")
     args = ap.parse_args(argv)
+    if bool(args.ledger_base) != bool(args.ledger_head):
+        print("::error::--ledger-base and --ledger-head go together", file=sys.stderr)
+        return 2
 
     try:
+        entries = (added_entries(args.ledger_base, args.ledger_head)
+                   if args.ledger_base else [])
         first = _read(args.benchstat)
+        accepted, over = apply_ledger(first, entries)
         if args.cmd == "needs-replication":
             print("yes" if needs_replication(first) else "no")
             return 0
         second = _read(args.replicate) if args.replicate else None
+        if second is not None:
+            apply_ledger(second, entries)
     except ShapeError as exc:
         print(f"::error::benchstat output shape changed — {exc}. The regression "
               "detector may be silently passing; pin benchstat to a known-good "
               "version (see the install note in bench_gate_compare.sh).", file=sys.stderr)
         return 2
+    except (LedgerError, subprocess.SubprocessError) as exc:
+        print(f"::error::cannot apply {LEDGER_PATH}: {exc}", file=sys.stderr)
+        return 2
 
     v = decide(first, second)
+    v.accepted, v.over_bound = accepted, over
+    if v.basis == "clean" and accepted:
+        v.basis = "accepted"
     with open(args.github_output, "a", encoding="utf-8", newline="\n") as fh:
         fh.write(render_outputs(v, args.benchstat))
     if v.inconclusive_reason:

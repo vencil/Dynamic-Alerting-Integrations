@@ -389,6 +389,7 @@ spec:
 | ADR-036 | [conf.d 只解析一次：YAML 由 Go 讀，路由與 policy 由產生器判](adr/036-single-parser-effective-config.md) | ✅ Accepted | — |
 | ADR-037 | [config-diff 改為比較渲染結果](adr/037-config-diff-compares-rendered-output.md) | ✅ Accepted | — |
 | ADR-038 | [沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告](adr/038-unread-keys-judged-by-readers.md) | ✅ Accepted | — |
+| ADR-039 | [刻意付出的效能成本寫進 repo 裡的接受帳本，由 bench 閘門核對實測](adr/039-bench-acceptance-ledger.md) | ✅ Accepted | — |
 
 <!-- ADR_INDEX_END -->
 

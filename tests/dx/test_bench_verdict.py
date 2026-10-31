@@ -259,3 +259,194 @@ def test_the_shell_core_does_not_parse_benchstat_itself():
     assert "bench_verdict.py\" verdict" in code or "$VERDICT\" verdict" in code
     for parser_shape in ("awk", "ControlCanaryCPU", "(p="):
         assert parser_shape not in code, parser_shape
+
+
+# ── acceptance ledger (ADR-039) ─────────────────────────────────────────────
+
+LEDGER_OK = '''
+[[accepted]]
+benches = ["BenchmarkScan_1000"]
+metric = "allocs/op"
+max_delta_pct = 35
+reason = "deliberate"
+'''
+
+
+def test_ledger_parses_a_valid_entry():
+    (e,) = bv.parse_ledger(LEDGER_OK)
+    assert (e.benches, e.metric, e.max_delta_pct, e.issue) == (
+        ("BenchmarkScan_1000",), "allocs/op", 35.0, None)
+
+
+def test_an_empty_ledger_is_valid():
+    assert bv.parse_ledger("# only comments\n") == []
+
+
+@pytest.mark.parametrize("body, needle", [
+    ('[[accepted]]\nbenches=["Scan.*"]\nmetric="B/op"\nmax_delta_pct=5\nreason="r"\n', "not patterns"),
+    ('[[accepted]]\nbenches=[]\nmetric="B/op"\nmax_delta_pct=5\nreason="r"\n', "non-empty list"),
+    ('[[accepted]]\nbenches=["BenchmarkA"]\nmetric="ns/op"\nmax_delta_pct=5\nreason="r"\n', "metric"),
+    ('[[accepted]]\nbenches=["BenchmarkA"]\nmetric="B/op"\nmax_delta_pct=0\nreason="r"\n', "> 0"),
+    ('[[accepted]]\nbenches=["BenchmarkA"]\nmetric="B/op"\nmax_delta_pct=true\nreason="r"\n', "> 0"),
+    ('[[accepted]]\nbenches=["BenchmarkA"]\nmetric="B/op"\nmax_delta_pct=5\nreason=" "\n', "reason"),
+    ('[[accepted]]\nbenches=["BenchmarkA"]\nmetric="B/op"\nmax_delta_pct=5\n', "missing"),
+    ('[[accepted]]\nbenches=["BenchmarkA"]\nmetric="B/op"\nmax_delta_pct=5\nreason="r"\nsha="x"\n', "unknown"),
+    ('accepted = 1\n', "array of tables"),
+    ('[other]\n', "top-level"),
+    ('[[accepted]\n', "TOML"),
+])
+def test_ledger_rejects_malformed_entries(body, needle):
+    with pytest.raises(bv.LedgerError, match=needle):
+        bv.parse_ledger(body)
+
+
+def test_a_covered_deterministic_row_is_accepted_not_counted():
+    r = reading("deterministic.txt")  # Scan allocs +30%, Merge sec/op +7.10%
+    accepted, over = bv.apply_ledger(r, bv.parse_ledger(LEDGER_OK))
+    assert [j.row.bench for j in accepted] == ["Scan_1000-4"]
+    assert over == []
+    # Only the timing row remains → it now needs replication, like any other.
+    assert [row.bench for row in r.regressions] == ["Merge_1000-4"]
+    assert bv.needs_replication(r) is True
+
+
+def test_beyond_the_declared_bound_is_still_a_regression():
+    tight = LEDGER_OK.replace("max_delta_pct = 35", "max_delta_pct = 10")
+    r = reading("deterministic.txt")
+    accepted, over = bv.apply_ledger(r, bv.parse_ledger(tight))
+    assert accepted == []
+    assert [j.row.bench for j in over] == ["Scan_1000-4"]
+    assert bv.decide(r, None).basis == "deterministic"
+
+
+def test_the_metric_must_match_not_just_the_name():
+    wrong_unit = LEDGER_OK.replace('"allocs/op"', '"B/op"')
+    r = reading("deterministic.txt")
+    accepted, _ = bv.apply_ledger(r, bv.parse_ledger(wrong_unit))
+    assert accepted == []
+
+
+def test_an_unbounded_from_zero_row_is_never_accepted():
+    body = ('[[accepted]]\nbenches=["BenchmarkHot"]\nmetric="B/op"\n'
+            'max_delta_pct=1000000\nreason="r"\n')
+    r = reading("from_zero.txt")
+    accepted, over = bv.apply_ledger(r, bv.parse_ledger(body))
+    assert accepted == [] and [j.row.unit for j in over] == ["B/op"]
+
+
+def _git(repo: Path, *args: str) -> str:
+    import subprocess
+    return subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
+                          text=True, encoding="utf-8", timeout=30).stdout.strip()
+
+
+@pytest.fixture
+def ledger_repo(tmp_path, monkeypatch):
+    repo = tmp_path / "r"
+    (repo / ".github").mkdir(parents=True)
+    _git(repo, "init", "-q")
+    _git(repo, "config", "user.email", "t@example.invalid")
+    _git(repo, "config", "user.name", "t")
+    _git(repo, "config", "commit.gpgsign", "false")
+    (repo / "README").write_text("x\n", encoding="utf-8")
+    _git(repo, "add", "."), _git(repo, "commit", "-qm", "base")
+    monkeypatch.chdir(repo)
+
+    def commit(ledger: str | None) -> str:
+        path = repo / bv.LEDGER_PATH
+        if ledger is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_text(ledger, encoding="utf-8")
+        _git(repo, "add", "-A"), _git(repo, "commit", "-qm", "c", "--allow-empty")
+        return _git(repo, "rev-parse", "HEAD")
+
+    return _git(repo, "rev-parse", "HEAD"), commit
+
+
+def test_cli_applies_entries_added_in_the_range(ledger_repo, tmp_path):
+    base, commit = ledger_repo
+    head = commit(LEDGER_OK)
+    out = tmp_path / "gh_out"
+    assert bv.main(["verdict", "--benchstat", str(FIX / "deterministic.txt"),
+                    "--replicate", str(FIX / "clean.txt"),
+                    "--ledger-base", base, "--ledger-head", head,
+                    "--github-output", str(out)]) == 0
+    o = _outputs(out)
+    # Scan's allocs are accepted; Merge's sec/op flag did not replicate.
+    assert o["regression"] == "false"
+    assert o["regression_basis"] == "timing-not-replicated"
+    assert "Scan_1000-4" in o["accepted"] and "declared ≤ +35%" in o["accepted"]
+
+
+def test_cli_reports_accepted_basis_when_nothing_else_remains(ledger_repo, tmp_path):
+    base, commit = ledger_repo
+    both = LEDGER_OK + LEDGER_OK.replace("BenchmarkScan_1000", "BenchmarkMerge_1000").replace(
+        '"allocs/op"', '"sec/op"')
+    head = commit(both)
+    out = tmp_path / "gh_out"
+    assert bv.main(["verdict", "--benchstat", str(FIX / "deterministic.txt"),
+                    "--ledger-base", base, "--ledger-head", head,
+                    "--github-output", str(out)]) == 0
+    o = _outputs(out)
+    assert (o["regression"], o["regression_basis"]) == ("false", "accepted")
+
+
+def test_an_entry_already_on_the_base_does_not_apply(ledger_repo, tmp_path):
+    _, commit = ledger_repo
+    base = commit(LEDGER_OK)
+    # Reformat + reorder keys: same entry, different text. Must not re-accept.
+    head = commit('[[accepted]]\nreason = "deliberate"\nmax_delta_pct = 35.0\n'
+                  'metric = "allocs/op"\nbenches = [ "BenchmarkScan_1000" ]\n')
+    assert bv.added_entries(base, head) == []
+    out = tmp_path / "gh_out"
+    bv.main(["verdict", "--benchstat", str(FIX / "deterministic.txt"),
+             "--ledger-base", base, "--ledger-head", head, "--github-output", str(out)])
+    assert _outputs(out)["regression_basis"] == "deterministic"
+
+
+def test_a_missing_ledger_file_means_no_entries(ledger_repo):
+    base, commit = ledger_repo
+    head = commit(None)
+    assert bv.added_entries(base, head) == []
+
+
+def test_a_broken_ledger_fails_loud(ledger_repo, tmp_path, capsys):
+    base, commit = ledger_repo
+    head = commit('[[accepted]]\nbenches=["Scan.*"]\n')
+    out = tmp_path / "gh_out"
+    rc = bv.main(["verdict", "--benchstat", str(FIX / "clean.txt"),
+                  "--ledger-base", base, "--ledger-head", head, "--github-output", str(out)])
+    assert rc == 2 and not out.exists()
+    assert "::error::cannot apply" in capsys.readouterr().err
+
+
+def test_ledger_flags_go_together(capsys):
+    assert bv.main(["needs-replication", "--benchstat", str(FIX / "clean.txt"),
+                    "--ledger-base", "HEAD"]) == 2
+
+
+# ── the real ledger ─────────────────────────────────────────────────────────
+
+def _benchmarks_in_tree() -> set[str]:
+    import re
+    names: set[str] = set()
+    for p in (REPO / "components/threshold-exporter/app").rglob("*_test.go"):
+        names.update(re.findall(r"^func (Benchmark\w+)\(", p.read_text(encoding="utf-8"),
+                                re.MULTILINE))
+    return names
+
+
+def test_the_repo_ledger_parses_and_names_only_existing_benchmarks():
+    """A renamed or removed benchmark must not leave an entry that silently
+    matches nothing — or matches a future benchmark that reuses the name."""
+    known = _benchmarks_in_tree()
+    assert len(known) > 20, "benchmark scan found almost nothing — scanner broken"
+    entries = bv.parse_ledger((REPO / bv.LEDGER_PATH).read_text(encoding="utf-8"))
+    assert bv.lint_ledger(entries, known) == []
+
+
+def test_lint_catches_a_name_no_benchmark_carries():
+    entries = bv.parse_ledger(LEDGER_OK)
+    assert bv.lint_ledger(entries, {"BenchmarkOther"}) == [
+        "accepted entry #1: no benchmark named BenchmarkScan_1000"]

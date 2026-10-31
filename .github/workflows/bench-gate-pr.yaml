@@ -312,6 +312,8 @@ jobs:
           INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
           INCONCLUSIVE_CANARY: ${{ steps.compare.outputs.inconclusive_canary }}
           UNREPLICATED: ${{ steps.compare.outputs.unreplicated }}
+          ACCEPTED: ${{ steps.compare.outputs.accepted }}
+          OVER_BOUND: ${{ steps.compare.outputs.over_bound }}
           REGRESSION_BASIS: ${{ steps.compare.outputs.regression_basis }}
           BENCHSTAT_TXT: ${{ steps.compare.outputs.benchstat_txt }}
           # PR head SHA bound via env (#1021 class house rule).
@@ -338,4 +340,5 @@ jobs:
           REGRESSION: ${{ steps.compare.outputs.regression }}
           INCONCLUSIVE: ${{ steps.compare.outputs.inconclusive }}
           REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
+          OVER_BOUND: ${{ steps.compare.outputs.over_bound }}
         run: bash scripts/tools/ops/bench_report_pr.sh

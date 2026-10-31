@@ -223,7 +223,7 @@ This run is not counted as a regression — push again or re-run the job.
 2. **這是真的 regression 嗎？**
    - **是真的** — 你的 diff 引入了 perf 問題：fix code（O(n²) 改 O(n log n)、減少 allocations、加 cache 等）後重 push
    - **看起來像 noise** — 只有 `sec/op` 的旗標已經由 gate 自己重現過一次（見上表「指標分級」），還留著的是兩輪都標到的。仍懷疑時：同 benchmark 在 nightly `bench-record.yaml` 沒這個趨勢？到 GitHub Actions UI 的 Checks panel 右上點 **"Re-run failed jobs"** 重跑。GH-hosted runner ~10% FP rate per design（hardware floor）。**不要**用 `git commit --allow-empty` 或 close+reopen PR 重跑 — 那會污染 git history + 觸發無關的 webhook noise（Slack / Jira / labels）
-   - **是 deliberate trade-off**（正確性修補 / 安全 patch / 演算法本質約束）→ Phase 2 起 gate 是 informational，**直接 merge**，在 PR 寫明 trade-off rationale 即可（無需 override）。`perf-regression` label 留作標記，待後續 perf 回收
+   - **是 deliberate trade-off**（正確性修補 / 安全 patch / 演算法本質約束）→ 在**同一個 PR** 於 `.github/bench-accepted.toml` 新增一筆紀錄（benchmark 完整名稱、指標、上限、理由；見 [ADR-039](../adr/039-bench-acceptance-ledger.md)）。實測在上限內時 gate 判為「已接受」，不貼 label，合併後也不開票；超出上限仍是退化。只寫在 PR 說明裡的取捨，合併後的歸因讀不到，會照樣開票
 
 3. **重跑後仍 flag** → 多半是真的 regression；不擋 merge，但請當作待辦處理
 
@@ -235,7 +235,7 @@ Phase 2 起 PR bench gate **不阻擋 merge**。真 regression（主 bench ≥5%
 2. 上 `perf-regression` label。
 3. job 仍 **exit 0**（綠燈）——merge 不被擋。
 
-regression 清掉後（下次 push 不再 flag）label 自動移除。**沒有 override 流程**——沒有 gate 要 override。若是 deliberate trade-off，在 PR description 寫明即可；若需回收 perf，留著 label 當追蹤。
+regression 清掉後（下次 push 不再 flag）label 自動移除。**沒有 override 流程**——沒有 gate 要 override。若是 deliberate trade-off，在同一個 PR 寫進 `.github/bench-accepted.toml`（[ADR-039](../adr/039-bench-acceptance-ledger.md)），label 會因為沒有未涵蓋的退化而清掉；若需回收 perf，留著 label 當追蹤。
 
 > **Fork PR 限制**：`pull_request` event 對 fork 給 read-only token，comment/label 會失敗 → 降級成 `::warning::` + step summary（**不**用 `pull_request_target`，避免 pwn-request 洩 token）。
 
@@ -414,7 +414,7 @@ residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summar
 |---|---|---|
 | `⚠️ INCONCLUSIVE (runner drift)` — CPU canary 漂移 ≥4% | 這次 run 的 runner 真的在漂移（thermal/頻率/鄰居）；交錯已盡力抵銷但殘餘超標 | **正常防線**，綠燈非紅燈：push 再一次或 "Re-run failed jobs" 拿乾淨比較。連續多次才需查 runner |
 | `::warning::Control canary absent` | canary 沒 emit（harness / 編譯 / benchstat 格式變動）| 判 INCONCLUSIVE re-run；若持續，查 `bench_interleave.sh` 編譯 log 與 benchstat 版本 |
-| `perf-regression` label 上了但想 merge | Phase 2 informational — label 不擋 merge | 直接 merge；deliberate 就在 PR 寫明，否則排進 perf 回收 |
+| `perf-regression` label 上了但想 merge | Phase 2 informational — label 不擋 merge | 直接 merge；deliberate 就在同一個 PR 寫進 `.github/bench-accepted.toml`，否則排進 perf 回收 |
 | `perf-trend` issue 一直開著 | main 持續退化未修 | 修 perf 後 watchdog 下晚自動關；或人工確認後手動關 |
 | `perf-trend` **自己關掉了但 regression 還在** | ⛔ 已知未修（見上節最後一條）：關票用的是會漂的滑動 anchor，永久 regression 滑進 settled window 後 anchor 漲上去迎合它 | 別把自動關票當成「已修復」的證據。對照 bench 絕對數值；仍高就手動 reopen 或等它重新開票。⚠️ **reopen 的票沒有 per-bench 守衛**（關票時帳本清空,見已知限制 7）——它會在下一個 CLEAR 夜再關一次,所以 reopen 只適合當「人工待辦」用,別指望它自己撐開 |
 | body 顯示 `stratification: OFF (NOT stratified)` | 該夜 artifact 沒有 `cpu:` 表頭（舊 artifact / 解析失敗） | 該夜的 finding **可能是 runner 換機造成**,不是 regression;查 run log 的 `cpu:` 行再決定 |
