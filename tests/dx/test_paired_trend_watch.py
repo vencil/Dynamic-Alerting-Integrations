@@ -275,9 +275,21 @@ def test_render_never_labels_an_unknown_transition_as_unchanged():
 # ── 2. THE INPUT BOUNDARY ─────────────────────────────────────────────────
 
 def test_guard_unknown_schema_is_unreadable_not_clean():
-    night = _night(schema="bench-paired/v3")
+    # v3 became real with ADR-039's deterministic block; the unknown version
+    # this guard is about is whichever one comes next.
+    night = _night(schema="bench-paired/v4")
     assert night.outcome == ptw.NIGHT_UNREADABLE
-    assert "bench-paired/v3" in night.reason
+    assert "bench-paired/v4" in night.reason
+
+
+def test_schema_v3_is_read_and_its_deterministic_block_changes_nothing():
+    """v3 only adds `deterministic`. A v3 night must be judged exactly as the
+    same night written as v2 — this tool does not read the new block."""
+    v2 = _night()
+    v3 = _night(schema="bench-paired/v3",
+                deterministic={"BenchmarkA": {"B/op": {"reference": 1.0, "main": 9.0,
+                                                       "ratio": 9.0}}})
+    assert (v3.outcome, v3.reason) == (v2.outcome, v2.reason)
 
 
 def test_guard_schema_v1_after_the_status_commit_is_counted_and_has_no_digest():
