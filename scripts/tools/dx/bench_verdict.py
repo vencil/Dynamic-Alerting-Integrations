@@ -87,6 +87,12 @@ _UNIT_HEADER = re.compile(r"│\s*(sec/op|B/op|allocs/op)\b")
 # benchstat prints a significant delta as "+5.35% (p=0.004 n=6)" and an
 # insignificant one as "~ (p=0.485 n=6)". Only the signed form is a finding.
 _DELTA = re.compile(r"(?<![\w.])([+-]\d+\.\d+)%\s*\(p=")
+# A significant change FROM ZERO has no percentage, so benchstat prints
+# "? (p=0.002 n=6)" — e.g. a path that did not allocate and now does
+# (0 → 48 B/op). Read it as an unbounded increase: it is the clearest
+# deterministic regression there is, and the old shell grep missed it too.
+# (Going TO zero prints "-100.00%", an ordinary improvement.)
+_FROM_ZERO = re.compile(r"(?<![\w.])\?\s*\(p=")
 _RESULT_ROW = re.compile(r"±\s*\d+%")
 
 
@@ -165,11 +171,15 @@ def parse(text: str) -> Reading:
             if name.startswith(CANARY_GATING):
                 reading.canary_seen = True
         delta = _DELTA.search(line)
-        if not delta:
+        if delta:
+            pct = float(delta.group(1))
+        elif _FROM_ZERO.search(line):
+            pct = float("inf")
+        else:
             continue
         if unit is None:
             raise ShapeError(f"a result row sits outside any unit section: {line!r}")
-        row = Row(bench=name, unit=unit, delta_pct=float(delta.group(1)), line=line)
+        row = Row(bench=name, unit=unit, delta_pct=pct, line=line)
         if name.startswith(CANARY_PREFIX):
             # Sign-agnostic: head unfairly favoured disqualifies the run too.
             # The Sleep canary is informational only (µs scheduler jitter).

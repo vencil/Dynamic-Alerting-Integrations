@@ -61,6 +61,23 @@ def test_canaries_are_never_product_regressions():
     assert all(not row.bench.startswith("ControlCanary") for row in r.regressions)
 
 
+def test_a_change_from_zero_is_a_deterministic_regression():
+    # benchstat prints "? (p=…)" when the base is 0 (no percentage exists).
+    # A path that did not allocate and now does is the clearest deterministic
+    # regression there is; reading "?" as "no finding" would call it clean.
+    r = reading("from_zero.txt")
+    assert [(row.bench, row.unit) for row in r.regressions] == [
+        ("Hot-4", "B/op"), ("Hot-4", "allocs/op")]
+    assert all(row.delta_pct == float("inf") for row in r.regressions)
+    v = bv.decide(r, None)
+    assert (v.regression, v.basis) == (True, "deterministic")
+
+
+def test_a_change_to_zero_is_an_improvement():
+    r = reading("from_zero.txt")
+    assert "Drop-4" not in {row.bench for row in r.regressions}
+
+
 def test_a_new_package_resets_the_unit():
     # A row after `pkg:` but before that package's unit header has no unit.
     broken = "pkg: x\nFoo-4   1.0m ± 1%   2.0m ± 1%  +100.00% (p=0.002 n=6)\n"

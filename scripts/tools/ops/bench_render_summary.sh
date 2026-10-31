@@ -68,7 +68,15 @@ SUMMARY="${GITHUB_STEP_SUMMARY:-/dev/stdout}"
       echo "Evidence: **sec/op only, confirmed** — a second independent interleaved pass flagged the same benchmark(s)."
       echo "" ;;
   esac
-  if [ -n "${UNREPLICATED:-}" ]; then
+  if [ -n "${UNREPLICATED:-}" ] && [ "${REGRESSION_BASIS:-}" = "inconclusive" ]; then
+    echo "### sec/op flags the replication pass could not judge"
+    echo ""
+    echo "The first pass flagged these on wall-clock time alone (B/op and allocs/op unchanged). The second pass was itself unstable, so they are neither confirmed nor dismissed — re-run."
+    echo '```'
+    echo "$UNREPLICATED"
+    echo '```'
+    echo ""
+  elif [ -n "${UNREPLICATED:-}" ]; then
     echo "### sec/op flags that did not replicate (not counted)"
     echo ""
     echo "The first pass flagged these on wall-clock time alone (B/op and allocs/op unchanged); a second independent interleaved pass did not. They are shown, not counted."
