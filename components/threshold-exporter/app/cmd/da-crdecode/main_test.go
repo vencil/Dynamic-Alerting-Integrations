@@ -484,6 +484,11 @@ func TestManifestRefusesBadListItems(t *testing.T) {
 		// An empty array is a list to kubectl too.
 		{"item-with-empty-items", head + "- {apiVersion: v1, kind: ConfigMap, items: []}\n", "items[1] (line 5): a list inside a list is not read"},
 		{"items-not-a-list", "kind: List\nitems: {a: 1}\n", "a list document's `items` is object, not a list"},
+		// #3438: kubectl discards a list's own content without a word; named here.
+		{"list-own-data", "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\nitems: []\ndata: {r.yml: x}\n",
+			"a list document (it has `items`) with content of its own: `data`"},
+		{"list-own-spec-and-data", "kind: List\nspec: {}\ndata: {}\nitems:\n- {apiVersion: v1, kind: A}\n",
+			"with content of its own: `data`, `spec`"},
 		{"list-without-kind", "items:\n- {apiVersion: v1, kind: A}\n", "it has no `kind`"},
 		{"list-text-differs", "kind: List\nmetadata: {labels: {010: x}}\nitems:\n- {apiVersion: v1, kind: A}\n",
 			"a list document whose own text is not read as written (at .metadata.labels)"},

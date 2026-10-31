@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -24,6 +26,12 @@ import (
 //     kubectl applies its items, in order, and nothing of the list itself;
 //     an empty or null `items` applies nothing. `items` that is not a list is
 //     refused ("cannot unmarshal … into Go struct field decodeList.items").
+//   - A list's own content — any top-level key besides `apiVersion`, `kind`,
+//     `metadata` and `items` (a ConfigMap's `data`, a PrometheusRule's
+//     `spec`) — is discarded by kubectl without a word. That is no reading
+//     of the file a caller can stand on (rules written there never deploy),
+//     so here the document is refused, naming the keys (#3438). This is the
+//     one place this reading is stricter than kubectl.
 //   - Each item must be an object with a non-empty string `kind` AND a
 //     non-empty string `apiVersion` (kubectl asks every item for its type:
 //     "Object 'apiVersion' is missing", which it does not ask of a document).
@@ -88,6 +96,11 @@ func manifestDocuments(source []byte, doc json.RawMessage, differs []difference)
 	if !isList {
 		return []json.RawMessage{doc}, [][]difference{differs}, nil
 	}
+	if own := listOwnContent(obj); len(own) > 0 {
+		return nil, nil, fmt.Errorf("a list document (it has `items`) with content of its "+
+			"own: `%s` — kubectl applies only a list's items and discards the rest without "+
+			"a word; move it into an item, or drop `items`", strings.Join(own, "`, `"))
+	}
 	// `items: null` decodes to no items (json.Unmarshal leaves the slice
 	// nil) and goes the way of `items: []`: the list's own differences are
 	// still checked below, so one is never lost because there is no item.
@@ -112,6 +125,23 @@ func manifestDocuments(source []byte, doc json.RawMessage, differs []difference)
 		}
 	}
 	return items, perItem, nil
+}
+
+// listOwnKeys are the keys a list document carries that are no content:
+// what `kubectl get … -o yaml` prints beside `items`.
+var listOwnKeys = map[string]bool{"apiVersion": true, "kind": true, "metadata": true, "items": true}
+
+// listOwnContent is the sorted top-level keys of the list document *obj*
+// that kubectl discards (anything but listOwnKeys).
+func listOwnContent(obj map[string]json.RawMessage) []string {
+	var own []string
+	for k := range obj {
+		if !listOwnKeys[k] {
+			own = append(own, k)
+		}
+	}
+	sort.Strings(own)
+	return own
 }
 
 // listItem refuses an item of a list that kubectl would not apply.

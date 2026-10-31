@@ -3,9 +3,9 @@
 # tenantProjections is set — the gate's degrade/ghost-race observability must NOT
 # depend on Vector's own metrics.enabled (a degrade can happen with self-telemetry
 # off). Exposes the metrics-exposer sidecar (serve_metrics.py) so Prometheus's
-# annotation-based `monitoring-components` job (role: service, namespaces
-# monitoring + vector — the #1018 PSS carve-out ns is in the SD list)
-# discovers + scrapes the verdict.
+# `platform-components` job (role: service, any namespace, kept by the platform
+# scrape label below plus the scrape annotation, #1425) discovers + scrapes the
+# verdict.
 #
 # Headless (clusterIP: None) for the SAME reason as the Vector self-telemetry
 # Service: each Vector DaemonSet pod is independent, so a ClusterIP would collapse
@@ -20,6 +20,7 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "vector.labels" . | nindent 4 }}
+    dynamic-alerting.io/scrape: platform
   annotations:
     prometheus.io/scrape: "true"
     prometheus.io/port: {{ .Values.projectionGate.metrics.port | quote }}

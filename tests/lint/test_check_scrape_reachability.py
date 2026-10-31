@@ -88,21 +88,67 @@ def _pre_fix_jobs():
     return gate.parse_scrape_jobs(_PRE_FIX_PROM_YML)
 
 
+# The scrape face since #1425: platform chart Services are kept by LABEL in any
+# namespace (`platform-components`), and every other job drops that label so a
+# platform Service has exactly one scraping job. monitoring-components keeps only
+# the raw `monitoring` manifests (alertmanager, kube-state-metrics).
+_FACE_PROM_YML = """
+scrape_configs:
+  - job_name: "prometheus"
+    static_configs:
+      - targets: ["localhost:9090"]
+  - job_name: "tenant-exporters"
+    kubernetes_sd_configs:
+      - role: service
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_namespace]
+        action: keep
+        regex: "db-.+"
+      - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
+        action: drop
+        regex: "platform"
+  - job_name: "platform-components"
+    kubernetes_sd_configs:
+      - role: service
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
+        action: keep
+        regex: "platform"
+      - source_labels: [__meta_kubernetes_service_name]
+        target_label: job
+  - job_name: "monitoring-components"
+    kubernetes_sd_configs:
+      - role: service
+        namespaces:
+          names: ["monitoring"]
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+      - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
+        action: drop
+        regex: "platform"
+"""
+
+
+def _face_jobs():
+    return gate.parse_scrape_jobs(_FACE_PROM_YML)
+
+
+def _face_job(jobs, name):
+    return next(j for j in jobs if j["job"] == name)
+
+
 def _check(consumed, jobs, services, known_unknown=None):
     return gate.run_check(
         consumed=consumed, outputs=set(), jobs=jobs, services=services,
         known_unknown=known_unknown or {})
-
-
-def _jobs_without_monitoring_ns():
-    """The pre-fix face with `monitoring` dropped from the monitoring-components
-    SD namespace list — the drift the threshold-exporter family exists to catch.
-    Mutates the parsed job model, so no repo YAML is touched."""
-    jobs = _pre_fix_jobs()
-    for j in jobs:
-        if j["job"] == "monitoring-components":
-            j["sd_namespaces"] = [n for n in j["sd_namespaces"] if n != "monitoring"]
-    return jobs
 
 
 # The 17 threshold-exporter series both rule trees consume (#1285;
@@ -209,10 +255,12 @@ def test_cadvisor_three_filter_layers_parse_from_real_configmap():
 # ── sanity anchor: the pre-#1203 face classifies the victims DEAD ─────────
 
 def test_pre_fix_tenant_api_is_dead():
-    """Injected pre-fix scrape face: tenant-api's ns is in no SD list → DEAD.
+    """Injected pre-fix scrape face: no job keeps tenant-api's Service → DEAD.
     This is the regression pin for the #1203 bug. (Since #1594 the family is
     helm-service, so the injected Service is not consulted — the verdict rests
-    on the SD face alone; the chart's annotation is pinned by the render test.)"""
+    on the job face alone, which since #1425 means a job keeping the platform
+    scrape label in every namespace; the chart's annotation and label are
+    pinned by the render test.)"""
     result = _check(
         consumed={"tenant_api_sse_clients": {"platform::TenantApiReadHANeeded"}},
         jobs=_pre_fix_jobs(),
@@ -362,11 +410,11 @@ def test_threshold_exporter_series_all_route_to_one_family():
         fam = gate._resolve_family(m)
         assert fam is not None, m
         _key, kind, spec = fam
-        # Assert the LITERAL namespace, not gate.THRESHOLD_EXPORTER_NAMESPACE —
+        # Assert the LITERAL chart, not gate.THRESHOLD_EXPORTER_CHART —
         # comparing the constant against itself passes even if someone retargets
-        # the family at the wrong namespace (measured: that mutation left this
-        # test green).
-        assert (kind, spec) == ("helm-service", "monitoring"), (m, fam)
+        # the family at the wrong chart (measured: that mutation left this test
+        # green when the spec was a namespace).
+        assert (kind, spec) == ("helm-service", "helm/threshold-exporter"), (m, fam)
 
 
 def test_threshold_exporter_series_are_leaves_and_reachable_on_real_repo():
@@ -385,8 +433,8 @@ def test_threshold_exporter_family_is_exhaustive_on_the_real_repo():
     That claim is only safe while threshold-exporter is the only emitter. If
     another component (say the federation-gateway chart, helm-only and correctly
     ledgered UNKNOWN-SOURCE for its other metrics) grows a `da_`/`user_`-named
-    series, the prefix would hand it a POSITIVELY FALSE provenance — "Service in
-    pinned ns 'monitoring'" — and route it around the NEW-UNKNOWN-SOURCE
+    series, the prefix would hand it a POSITIVELY FALSE provenance — "the
+    threshold-exporter chart's Service" — and route it around the NEW-UNKNOWN-SOURCE
     exit-lock that exists to force exactly that classification decision.
 
     Nothing in the gate can detect that, so pin the set instead: a 14th
@@ -415,9 +463,9 @@ def test_generator_family_is_tenant_apis_not_threshold_exporters():
     never through `da_` to threshold-exporter — and the rules that read it
     (GeneratorJudgementMemoryNearLimit) must find it reachable."""
     key, kind, spec = gate._resolve_family("da_generator_judgement_peak_rss_bytes")
-    # Literal namespace, not gate.TENANT_API_NAMESPACE: the row and the
-    # constant must not be able to drift together.
-    assert (key, kind, spec) == ("da_generator_", "helm-service", "tenant-api")
+    # Literal chart, not gate.TENANT_API_CHART: the row and the constant must
+    # not be able to drift together.
+    assert (key, kind, spec) == ("da_generator_", "helm-service", "helm/tenant-api")
     classes = gate.run_check()["classes"]
     gen = {m for m in classes if m.startswith("da_generator_")}
     assert gen >= {"da_generator_judgement_peak_rss_bytes", "da_generator_judgement_memory_limit_bytes"}, gen
@@ -426,18 +474,13 @@ def test_generator_family_is_tenant_apis_not_threshold_exporters():
 def test_threshold_exporter_series_die_if_a_name_filter_rejects_them():
     """The detection this change ACTUALLY adds, and the only one.
 
-    ⚠️ Do not confuse this with the SD-list drift below: dropping `monitoring`
-    from the SD list was ALREADY loud before this change (measured: 24 other
-    leaves — alertmanager_* and 22 kube_* — are pinned into the same namespace
-    and go DEAD on it, so the gate was never silent about that). The genuinely
-    new capability is per-metric: a `__name__` keep/drop in the scraping job
+    The capability is per-metric: a `__name__` keep/drop in the scraping job
     that rejects THESE families specifically hits nothing else in the repo
     (measured: 13 DEAD, 0 collateral), so before #1285 it was invisible.
     """
-    jobs = _pre_fix_jobs()
-    for j in jobs:
-        if j["job"] == "monitoring-components":
-            j["name_rules"].append(("drop", "(da_|user_|tenant_metadata_info).*"))
+    jobs = _face_jobs()
+    _face_job(jobs, "platform-components")["name_rules"].append(
+        ("drop", "(da_|user_|tenant_metadata_info).*"))
     consumed = {m: {f"platform::Consumer_{m}"} for m in _THRESHOLD_EXPORTER_METRICS}
     result = _check(consumed=consumed, jobs=jobs, services=[])
     for m in _THRESHOLD_EXPORTER_METRICS:
@@ -449,59 +492,192 @@ def test_threshold_exporter_series_die_if_a_name_filter_rejects_them():
     assert result["classes"]["tenant_expected_exporter"][0] == gate.REACHABLE
 
 
-def test_threshold_exporter_series_are_dead_if_monitoring_ns_leaves_sd_list():
-    """Namespace/SD-face drift also reaches these 15 now that they are judged.
-
-    Weaker evidence than the test above — this drift was already caught via
-    other families in the same namespace — but it pins that the 15 participate
-    rather than being silently skipped.
+@pytest.mark.parametrize("drift", ["namespace-listed", "label-keep-lost"])
+def test_threshold_exporter_series_are_dead_if_the_platform_job_drifts(drift):
+    """#1425: the family's premise is a job keeping the platform label in EVERY
+    namespace — not any particular namespace. Both ways that premise can break
+    must turn all 15 DEAD: the job growing a namespace list again (the release
+    is installed into Release.Namespace, which no list can name), and the job
+    losing its label keep (it would then select nothing of the charts').
     """
+    jobs = _face_jobs()
+    job = _face_job(jobs, "platform-components")
+    if drift == "namespace-listed":
+        job["sd_namespaces"] = ["monitoring"]
+    else:
+        job["platform_label"] = None
     consumed = {m: {f"platform::Consumer_{m}"} for m in _THRESHOLD_EXPORTER_METRICS}
-    result = _check(consumed=consumed, jobs=_jobs_without_monitoring_ns(),
-                    services=[])
+    result = _check(consumed=consumed, jobs=jobs, services=[])
     for m in _THRESHOLD_EXPORTER_METRICS:
         cls, reason = result["classes"][m]
         assert cls == gate.DEAD, (m, cls, reason)
-        assert "monitoring" in reason
+        assert gate.PLATFORM_SCRAPE_LABEL in reason
     assert len([e for e in result["errors"] if "DEAD" in e]) == len(
         _THRESHOLD_EXPORTER_METRICS), result["errors"]
 
 
-def test_threshold_exporter_install_namespace_is_the_pinned_namespace():
-    """⛔ Pin the EXTERNAL premise the whole family entry rests on.
+def test_threshold_exporter_series_are_reachable_on_the_label_face():
+    """Control for the drift test: the unmodified face keeps them REACHABLE."""
+    consumed = {m: {f"platform::Consumer_{m}"} for m in _THRESHOLD_EXPORTER_METRICS}
+    result = _check(consumed=consumed, jobs=_face_jobs(), services=[])
+    for m in _THRESHOLD_EXPORTER_METRICS:
+        assert result["classes"][m][0] == gate.REACHABLE, (m, result["classes"][m])
+    assert result["errors"] == [], result["errors"]
 
-    THRESHOLD_EXPORTER_NAMESPACE is an ASSERTION, not a check: the gate reads
-    only k8s/**, rule-packs/ and the prometheus ConfigMap — never helm/. Until
-    #1425 it rested on the chart writing `namespace: monitoring` literally; the
-    chart now renders into `{{ .Release.Namespace }}`, so the premise moved to
-    the namespace the release is INSTALLED into — the same operational tier
-    vector_ and tenant_api_ already sit on. The documented install command in
-    the chart README is that pin: change it without moving the constant (or the
-    other way round) and the 15 REACHABLE verdicts describe a namespace the
-    exporter is not in.
 
-    What this does NOT buy: an operator who installs with another `-n` gets a
-    target this single-cluster gate cannot see, exactly as for vector_ and
-    tenant_api_. The render half is
-    test_helm_service_charts_render_an_annotated_service_under_defaults.
-    """
-    readme = (REPO_ROOT / "helm" / "threshold-exporter" / "README.md"
-              ).read_text(encoding="utf-8")
-    installs = re.findall(r"helm install threshold-exporter\b[^`]*?-n (\S+)",
-                          readme, flags=re.S)
-    assert installs, "chart README no longer shows a `helm install … -n <ns>` line"
-    assert set(installs) == {gate.THRESHOLD_EXPORTER_NAMESPACE}, (
-        f"chart README installs into {sorted(set(installs))}, but the gate "
-        f"assumes {gate.THRESHOLD_EXPORTER_NAMESPACE!r} for every "
-        "threshold-exporter family. Move both together, and the Prometheus SD "
-        "namespace list with them.")
+# ── one scraping job per platform Service (#1425) ─────────────────────────
 
+def test_real_configmap_parses_the_label_face():
+    """The repo Prometheus config: platform-components keeps the label in every
+    namespace; monitoring-components and tenant-exporters drop it."""
+    jobs = gate.load_repo_jobs()
+    plat = _face_job(jobs, "platform-components")
+    assert gate._keeps_platform_everywhere(plat), plat
+    for name in ("monitoring-components", "tenant-exporters"):
+        assert _face_job(jobs, name)["platform_label"] == "drop", name
+
+
+@pytest.mark.parametrize("job_name,ns", [("monitoring-components", "monitoring"),
+                                         ("tenant-exporters", "db-probe")])
+def test_a_job_that_keeps_a_platform_service_too_is_an_error(job_name, ns):
+    """Without its drop, a platform Service is kept by two jobs. In a db-*
+    namespace the tenant job also rewrites `job` and `tenant`, so
+    up{job="threshold-exporter"} loses its target."""
+    jobs = _face_jobs()
+    _face_job(jobs, job_name)["platform_label"] = None
+    errors = gate._platform_double_scrape(jobs)
+    assert any("PLATFORM-DOUBLE-SCRAPE" in e and f"ns '{ns}'" in e
+               and job_name in e for e in errors), errors
+
+
+def test_the_label_face_scrapes_each_platform_service_once():
+    """Control: the face with both drops reports nothing."""
+    assert gate._platform_double_scrape(_face_jobs()) == []
+
+
+_ENDPOINTS_JOB = """
+  - job_name: "endpoints-sweep"
+    kubernetes_sd_configs:
+      - role: endpoints
+    relabel_configs:
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
+        action: keep
+        regex: "true"
+"""
+_ENDPOINTS_DROP = """      - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
+        action: drop
+        regex: "platform"
+"""
+
+
+def test_an_endpoints_role_job_counts_as_keeping_a_platform_service():
+    """#1425 review F4a: the gate models only the `service` role's face; an
+    endpoints / pod job reaches the same pods, so it is taken to keep them
+    unless it drops the platform label — not silently assumed to keep nothing."""
+    jobs = gate.parse_scrape_jobs(_FACE_PROM_YML + _ENDPOINTS_JOB)
+    errors = gate._platform_double_scrape(jobs)
+    assert any("PLATFORM-DOUBLE-SCRAPE" in e and "endpoints-sweep" in e
+               for e in errors), errors
+
+
+def test_an_endpoints_role_job_that_drops_the_label_is_fine():
+    """Control for the F4a test: the same job with the drop reports nothing."""
+    jobs = gate.parse_scrape_jobs(_FACE_PROM_YML + _ENDPOINTS_JOB + _ENDPOINTS_DROP)
+    assert gate._platform_double_scrape(jobs) == []
+
+
+def test_the_probe_namespaces_follow_the_tenant_jobs_regex():
+    """#1425 review F4b: a tenant job keeping `tenant-.+` and not dropping the
+    label double-scrapes a platform chart in `tenant-*`. A fixed probe list
+    (`db-probe`) would never look there."""
+    jobs = _face_jobs()
+    tenant = _face_job(jobs, "tenant-exporters")
+    tenant["ns_keep_regex"] = "tenant-.+"
+    tenant["platform_label"] = None
+    errors = gate._platform_double_scrape(jobs)
+    assert any("PLATFORM-DOUBLE-SCRAPE" in e and "tenant-exporters" in e
+               for e in errors), errors
+
+
+def test_a_namespace_regex_the_gate_cannot_probe_is_an_error():
+    """Fail closed: a regex no example can be derived for is reported, not
+    skipped — a skipped namespace is an unchecked one."""
+    jobs = _face_jobs()
+    _face_job(jobs, "tenant-exporters")["ns_keep_regex"] = "[^/]+-db"
+    errors = gate._platform_double_scrape(jobs)
+    assert any("PLATFORM-PROBE-UNDERIVABLE" in e and "tenant-exporters" in e
+               for e in errors), errors
+
+
+@pytest.mark.parametrize("field,value,only_ns", [
+    ("sd_namespaces", ["team-a"], "team-a"),
+    ("ns_keep_regex", "team-.+", "team-probe"),
+])
+def test_an_endpoints_role_job_keeps_only_inside_its_namespace_face(field, value, only_ns):
+    """F4a is conservative, not blanket: an endpoints job whose SD list or
+    namespace-keep regex excludes a namespace keeps no platform Service there,
+    so it double-scrapes only in its own namespaces."""
+    jobs = gate.parse_scrape_jobs(_FACE_PROM_YML + _ENDPOINTS_JOB)
+    _face_job(jobs, "endpoints-sweep")[field] = value
+    errors = gate._platform_double_scrape(jobs)
+    hit = [e for e in errors if "endpoints-sweep" in e]
+    assert hit and all(f"ns '{only_ns}'" in e for e in hit), errors
+
+
+@pytest.mark.parametrize("regex,example", [
+    ("(db|tenant)-.+", "db-probe"),   # group + alternation: first branch
+    ("db-[a-z]+", "db-a"),            # class range
+    ("[xy]z", "xz"),                  # class literal
+    (r"ns\d", "ns0"),                 # digit category
+    (r"ns\w", "nsa"),                 # word category
+    ("^db-x$", "db-x"),               # anchors add nothing
+    ("a{2}", "aa"),                   # minimum repeat
+    (r"ns\s", None),                  # a category it does not model
+    ("[^/]+-db", None),               # negated class
+])
+def test_regex_example_derives_a_match_or_nothing(regex, example):
+    """Every derived example fully matches its regex; what is not modelled
+    yields None (reported as PLATFORM-PROBE-UNDERIVABLE), never a guess."""
+    assert gate._regex_example(regex) == example
+
+
+# ── the platform job sets `job` from the Service name (#1425 review F5) ───
+
+def test_real_configmap_sets_the_platform_job_label_from_the_service():
+    assert _face_job(gate.load_repo_jobs(), "platform-components")["job_from_service_name"]
+
+
+@pytest.mark.parametrize("tail", [
+    "",  # the relabel removed
+    # a later step overwriting `job` wins
+    """      - target_label: job
+        replacement: platform-components
+""",
+])
+def test_a_platform_job_without_the_service_name_job_label_is_an_error(tail):
+    """Without it every platform target is job="platform-components" and
+    up{job="threshold-exporter"} & co. select nothing."""
+    yml = _FACE_PROM_YML.replace(
+        """      - source_labels: [__meta_kubernetes_service_name]
+        target_label: job
+""", "" if not tail else """      - source_labels: [__meta_kubernetes_service_name]
+        target_label: job
+""" + tail)
+    result = _check(consumed={}, jobs=gate.parse_scrape_jobs(yml), services=[])
+    assert any("PLATFORM-JOB-LABEL" in e and "platform-components" in e
+               for e in result["errors"]), result["errors"]
+
+
+def test_the_label_face_sets_the_platform_job_label():
+    """Control for the F5 test."""
+    assert _check(consumed={}, jobs=_face_jobs(), services=[])["errors"] == []
 
 
 # ── helm-service chart face (#1286) ───────────────────────────────────────
 # The `helm-service` kind asserts only the JOB side: that some annotation-keep
-# job's SD face covers the pinned namespace. That the chart actually RENDERS an
-# annotated Service into that namespace is ASSUMED — the gate never opens helm/.
+# job keeps the platform scrape label in every namespace. That the chart
+# actually RENDERS a Service carrying the annotation AND the label is ASSUMED —
+# the gate never opens helm/.
 #
 # That blindness is deliberate, not laziness: pre-commit has no helm binary (the
 # one helm-rendering hook is `stages: [manual]` because rendering the charts
@@ -518,12 +694,13 @@ def test_threshold_exporter_install_namespace_is_the_pinned_namespace():
 _HAS_HELM = shutil.which("helm") is not None
 _needs_helm = pytest.mark.skipif(not _HAS_HELM, reason="helm binary not on PATH")
 
-# pinned namespace (the helm-service family's spec) -> chart directory
-_HELM_SERVICE_CHART_FACE = {
-    "monitoring": "helm/threshold-exporter",
-    "vector": "helm/vector",
-    "tenant-api": "helm/tenant-api",
-}
+# The helm-service families' specs: the charts their targets come from.
+_HELM_SERVICE_CHARTS = {"helm/threshold-exporter", "helm/vector", "helm/tenant-api"}
+
+# Rendered into a namespace no Prometheus job names, on purpose: since #1425 the
+# install namespace is no premise, so a chart face that only held in one
+# namespace would be the drift this catches.
+_RENDER_NAMESPACE = "da-render-probe"
 
 # Charts that refuse to render under bare defaults by design: each needs one
 # operator choice that has nothing to do with its scrape Service. Rendered with
@@ -540,7 +717,7 @@ _RENDER_MINIMUM = {
 # opting in. EXIT-LOCKED: an entry that starts rendering must be deleted (the
 # test below fails on it), so this map can only shrink.
 _KNOWN_UNRENDERED_UNDER_DEFAULTS = {
-    "vector": (
+    "helm/vector": (
         "both metrics Services are conditional — `-metrics` on metrics.enabled "
         "(default false) and `-projection-gate-metrics` on tenantProjections "
         "(default []). Tracked by #1291, which found the harder blocker too: "
@@ -550,27 +727,26 @@ _KNOWN_UNRENDERED_UNDER_DEFAULTS = {
 }
 
 
-def _helm_template(chart_rel: str, namespace: str) -> list[dict]:
-    """Render a chart with its DEFAULT values (plus _RENDER_MINIMUM) into *namespace*."""
+def _helm_template(chart_rel: str, *extra: str) -> list[dict]:
+    """Render a chart with its DEFAULT values (plus _RENDER_MINIMUM and *extra*)."""
     out = subprocess.run(
-        ["helm", "template", "t", str(REPO_ROOT / chart_rel), "-n", namespace,
-         *_RENDER_MINIMUM.get(chart_rel, [])],
+        ["helm", "template", "t", str(REPO_ROOT / chart_rel), "-n", _RENDER_NAMESPACE,
+         *_RENDER_MINIMUM.get(chart_rel, []), *extra],
         capture_output=True, text=True, encoding="utf-8", check=True, timeout=120)
     return [d for d in yaml.safe_load_all(out.stdout) if d]
 
 
-def _scrape_services(docs: list[dict], namespace: str) -> list[dict]:
-    """Rendered Services in *namespace* carrying prometheus.io/scrape=true."""
+def _scrape_services(docs: list[dict]) -> list[dict]:
+    """Rendered Services carrying prometheus.io/scrape=true AND the platform
+    scrape label — what `platform-components` keeps (#1425)."""
     hits = []
     for d in docs:
         if d.get("kind") != "Service":
             continue
         meta = d.get("metadata") or {}
-        # a chart may omit metadata.namespace, in which case it lands in the
-        # release namespace we rendered with
-        if (meta.get("namespace") or namespace) != namespace:
-            continue
-        if (meta.get("annotations") or {}).get(gate.SCRAPE_ANNOTATION) == "true":
+        if ((meta.get("annotations") or {}).get(gate.SCRAPE_ANNOTATION) == "true"
+                and (meta.get("labels") or {}).get(gate.PLATFORM_SCRAPE_LABEL)
+                == gate.PLATFORM_SCRAPE_VALUE):
             hits.append(d)
     return hits
 
@@ -578,37 +754,39 @@ def _scrape_services(docs: list[dict], namespace: str) -> list[dict]:
 def test_every_helm_service_family_has_a_pinned_chart():
     """Exhaustiveness: adding a helm-service family forces a chart-face decision.
 
-    Without this, a new `("foo_", "helm-service", "some-ns")` row would inherit
+    Without this, a new `("foo_", "helm-service", "helm/foo")` row would inherit
     the REACHABLE-by-assumption verdict with nothing anywhere verifying that
-    "some-ns" ever receives an annotated Service. Runs without helm.
+    helm/foo ever renders a labelled, annotated Service. Runs without helm.
     """
     specs = {spec for _p, kind, spec in gate._FAMILY_TABLE if kind == "helm-service"}
     specs |= {spec for kind, spec in gate._FAMILY_EXACT.values()
               if kind == "helm-service"}
-    assert specs == set(_HELM_SERVICE_CHART_FACE), (
-        "helm-service family namespaces and the pinned chart faces disagree — "
-        "add the new namespace to _HELM_SERVICE_CHART_FACE (and, if its chart "
-        f"does not render a Service under default values, to the ledger). Diff: "
-        f"{specs ^ set(_HELM_SERVICE_CHART_FACE)}")
+    assert specs == _HELM_SERVICE_CHARTS, (
+        "helm-service family charts and the rendered chart faces disagree — "
+        "add the new chart to _HELM_SERVICE_CHARTS (and, if it does not render a "
+        f"Service under default values, to the ledger). Diff: "
+        f"{specs ^ _HELM_SERVICE_CHARTS}")
 
 
 @_needs_helm
 def test_helm_service_charts_render_an_annotated_service_under_defaults():
     """#1286: the assumption the REACHABLE verdict rests on, actually checked.
 
-    Renders each pinned chart with DEFAULT values and requires a Service in the
-    pinned namespace carrying prometheus.io/scrape=true. Deleting that
-    annotation from the chart — the drift the gate cannot see — turns this red.
+    Renders each chart with DEFAULT values, into a namespace no job names, and
+    requires a Service carrying prometheus.io/scrape=true AND the platform
+    scrape label. Deleting either from the chart — the drift the gate cannot
+    see — turns this red.
     """
-    for ns, chart in sorted(_HELM_SERVICE_CHART_FACE.items()):
-        if ns in _KNOWN_UNRENDERED_UNDER_DEFAULTS:
+    for chart in sorted(_HELM_SERVICE_CHARTS):
+        if chart in _KNOWN_UNRENDERED_UNDER_DEFAULTS:
             continue
-        hits = _scrape_services(_helm_template(chart, ns), ns)
+        hits = _scrape_services(_helm_template(chart))
         assert hits, (
-            f"{chart} renders no {gate.SCRAPE_ANNOTATION}=true Service into ns "
-            f"'{ns}' under default values, but the gate classifies that family "
-            "REACHABLE on the assumption that it does. Either restore the "
-            "chart's scrape annotation, or — when default-off rendering is "
+            f"{chart} renders no Service carrying {gate.SCRAPE_ANNOTATION}=true and "
+            f"{gate.PLATFORM_SCRAPE_LABEL}={gate.PLATFORM_SCRAPE_VALUE} under "
+            "default values, but the gate classifies that family REACHABLE on "
+            "the assumption that it does. Either restore the chart's scrape "
+            "annotation and label, or — when default-off rendering is "
             "deliberate — add the namespace to _KNOWN_UNRENDERED_UNDER_DEFAULTS "
             "with a reason. ⛔ Do NOT reach for KNOWN_UNKNOWN_SOURCE while the "
             "family is still in _FAMILY_TABLE: classify() resolves the family "
@@ -622,14 +800,28 @@ def test_helm_service_charts_render_an_annotated_service_under_defaults():
 def test_known_unrendered_charts_are_exit_locked():
     """The ledger may only shrink: a chart listed as not-rendering that starts
     rendering must be removed, so the exemption cannot outlive its reason."""
-    for ns, reason in sorted(_KNOWN_UNRENDERED_UNDER_DEFAULTS.items()):
-        chart = _HELM_SERVICE_CHART_FACE[ns]
-        hits = _scrape_services(_helm_template(chart, ns), ns)
+    for chart, reason in sorted(_KNOWN_UNRENDERED_UNDER_DEFAULTS.items()):
+        hits = _scrape_services(_helm_template(chart))
         assert not hits, (
-            f"{chart} NOW renders a scrape-annotated Service into ns '{ns}' "
-            f"under default values — delete the '{ns}' row from "
+            f"{chart} NOW renders a labelled, scrape-annotated Service under "
+            f"default values — delete the '{chart}' row from "
             f"_KNOWN_UNRENDERED_UNDER_DEFAULTS so the chart face is enforced "
             f"instead of exempted. Recorded reason was: {reason}")
+
+
+@_needs_helm
+def test_vectors_opt_in_services_carry_the_label_when_rendered():
+    """The exemption above covers only "not rendered under DEFAULTS". Once an
+    operator opts in, both Vector Services must be ones `platform-components`
+    keeps — otherwise opting in would still yield zero series, by label this
+    time rather than by namespace (#1425)."""
+    docs = _helm_template(
+        "helm/vector", "--set", "metrics.enabled=true",
+        "--set", "tenantProjections[0].tenantId=tenant-alpha",
+        "--set", "tenantProjections[0].accountId=1000",
+        "--set", "projectionGate.registry.configMapName=test-registry")
+    names = sorted(d["metadata"]["name"] for d in _scrape_services(docs))
+    assert names == ["vector-metrics", "vector-projection-gate-metrics"], names
 
 
 def test_exact_family_does_not_swallow_other_charts_tenant_metrics():
@@ -658,17 +850,17 @@ def test_exact_family_beats_prefix_family(monkeypatch):
     """Exact-name routing must win over prefix routing — an exact row exists
     precisely because the name's prefix belongs to a different component."""
     assert gate._resolve_family("vector_probe_series") == (
-        "vector_", "helm-service", gate.VECTOR_NAMESPACE)
+        "vector_", "helm-service", gate.VECTOR_CHART)
     monkeypatch.setitem(gate._FAMILY_EXACT, "vector_probe_series",
                         ("static", "prometheus"))
     assert gate._resolve_family("vector_probe_series") == (
         "vector_probe_series", "static", "prometheus")
 
 
-def test_vector_family_reachable_via_pinned_ns():
+def test_vector_family_reachable_via_the_platform_label():
     result = _check(
         consumed={"vector_buffer_discarded_events_total": {"p::VectorBufferEventsDropped"}},
-        jobs=_pre_fix_jobs(), services=[])
+        jobs=_face_jobs(), services=[])
     cls, reason = result["classes"]["vector_buffer_discarded_events_total"]
     assert cls == gate.REACHABLE
     # The helm-service reason must disclose that only the JOB side was checked,
@@ -679,7 +871,7 @@ def test_vector_family_reachable_via_pinned_ns():
     # every helm-service family misattributed it to all of them.
     assert "chart face not read here" in reason, reason
     assert "test_check_scrape_reachability" in reason, reason
-    assert gate.VECTOR_NAMESPACE in reason, reason
+    assert gate.VECTOR_CHART in reason and "every namespace" in reason, reason
 
 
 # ── UNKNOWN-SOURCE + exit-lock ────────────────────────────────────────────
@@ -807,7 +999,8 @@ def test_a_refused_manifest_is_named_not_skipped(tmp_path):
     lines = exc.value.stderr_lines
     assert any(str(bad) in ln and "the document is array" in ln for ln in lines), lines
     assert any(str(nokind) in ln and "it has no `kind`" in ln for ln in lines), lines
-    assert gate.parse_services([good]) == [{"name": "s", "namespace": None, "annotations": {}}]
+    assert gate.parse_services([good]) == [
+        {"name": "s", "namespace": None, "annotations": {}, "labels": {}}]
 
 
 def test_a_crashed_da_crdecode_is_raised_not_a_skipped_file(tmp_path, monkeypatch):

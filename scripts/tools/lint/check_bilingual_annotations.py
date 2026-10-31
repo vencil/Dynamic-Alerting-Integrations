@@ -42,8 +42,10 @@ class BilingualAnnotationChecker:
         self._read: Dict[Path, "_lib_consumer_read.RuleFile"] = {}
 
     def find_rule_packs(self, only_packs: List[str] = None) -> List[Path]:
-        """Find all rule pack YAML files."""
-        packs = list(self.rule_pack_dir.glob("rule-pack-*.yaml"))
+        """Find all rule pack YAML files: the one declaration's (#3471:
+        `rule_pack_files`, rule-pack-*.yaml|yml; an undeclared YAML beside
+        them raises `SourcesUnlisted`, named)."""
+        packs = _lib_consumer_read.rule_pack_files(self.rule_pack_dir)
 
         if only_packs:
             # Filter by specified pack names

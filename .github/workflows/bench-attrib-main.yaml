@@ -48,6 +48,7 @@ on:
       - 'components/threshold-exporter/app/go.sum'
       - 'scripts/tools/ops/bench_interleave.sh'
       - 'scripts/tools/ops/bench_gate_compare.sh'
+      - 'scripts/tools/dx/bench_verdict.py'
       - 'scripts/tools/ops/bench_render_summary.sh'
       - 'scripts/tools/ops/bench_report_pr.sh'
       - 'scripts/tools/ops/bench-canary/**'
@@ -70,9 +71,11 @@ jobs:
   attrib:
     name: Bench + attribute (HEAD vs HEAD^)
     runs-on: ubuntu-24.04
-    # Same budget as bench-gate-pr (identical workload: 6 rounds @1s ≈
-    # ~8-10 min nominal, ~2× headroom).
-    timeout-minutes: 20
+    # Same budget as bench-gate-pr (identical workload). One pass is 6 rounds
+    # @1s ≈ 8-10 min; a run whose only flagged rows are sec/op gets a second
+    # pass (bench_gate_compare.sh REPLICATE_TIMING_ONLY), so the cap covers
+    # two passes with headroom.
+    timeout-minutes: 35
     steps:
       # persist-credentials: false — weaker threat model than the PR gate
       # (the test binaries executed here are built from commits already
@@ -158,6 +161,8 @@ jobs:
           INCONCLUSIVE_REASON: ${{ steps.compare.outputs.inconclusive_reason }}
           INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
           INCONCLUSIVE_CANARY: ${{ steps.compare.outputs.inconclusive_canary }}
+          UNREPLICATED: ${{ steps.compare.outputs.unreplicated }}
+          REGRESSION_BASIS: ${{ steps.compare.outputs.regression_basis }}
           BENCHSTAT_TXT: ${{ steps.compare.outputs.benchstat_txt }}
           COMPARE_DESC: |
             Post-merge attribution: compared main HEAD (`${{ github.sha }}`)
@@ -182,6 +187,8 @@ jobs:
           INCONCLUSIVE: ${{ steps.compare.outputs.inconclusive }}
           INCONCLUSIVE_REASON: ${{ steps.compare.outputs.inconclusive_reason }}
           REGRESSIONS_LIST: ${{ steps.compare.outputs.regressions }}
+          REGRESSION_BASIS: ${{ steps.compare.outputs.regression_basis }}
+          UNREPLICATED: ${{ steps.compare.outputs.unreplicated }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           SERVER_URL: ${{ github.server_url }}
         run: |
@@ -237,6 +244,13 @@ jobs:
               echo ""
               echo "$pr_line"
               echo ""
+              case "$REGRESSION_BASIS" in
+                deterministic) evidence="B/op or allocs/op moved (deterministic — counts work)" ;;
+                timing-replicated) evidence="sec/op only, confirmed by a second independent interleaved pass" ;;
+                *) evidence="$REGRESSION_BASIS" ;;
+              esac
+              echo "Evidence: $evidence"
+              echo ""
               echo "benchstat rows (p<0.01 AND |Δ|≥5%, control canary stable):"
               echo '```'
               echo "$REGRESSIONS_LIST"
@@ -274,6 +288,9 @@ jobs:
                 --body "Re-run of \`$HEAD_SHA\` came back clean (no significant ≥5% regression, control canary stable) — auto-closing. Run: $RUN_URL"
               gh issue close "$existing" --repo "$REPO" --reason completed
               echo "::notice::closed attribution issue #$existing (clean re-run of $short)."
+            fi
+            if [ -n "$UNREPLICATED" ]; then
+              echo "::notice::sec/op-only flag(s) on $short did not replicate in a second interleaved pass — not counted (B/op and allocs/op unchanged)."
             fi
             echo "No regression attributed to $short."
           fi

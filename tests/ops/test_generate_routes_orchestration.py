@@ -2076,21 +2076,46 @@ from _rule_tree import (  # noqa: E402
     _PLATFORM_CM_PREFIX,
     _SCAN_SKIP_PARTS,
     _alert_names,
-    _containers_from_text,
     _decode_manifest,
     _expected_rule_files,
-    _any_yaml_reading,
     _generated_pack_names,
     _is_platform_cm_location,
-    _is_rule_groups,
     _iter_repo_alert_rules,
     _platform_rule_locations,
     _rule_containers,
     _rule_shaped_but_unparsed,
-    _rules_shaped_at_any_depth,
     _source_pack_alerts,
     _tracked_yaml_paths,
 )
+from _rule_tripwire import (  # noqa: E402
+    _is_rule_groups,
+    _rules_shaped_at_any_depth,
+    rule_shaped_outside_declaration,
+)
+
+
+def _containers_from_text(rel, text):
+    """The containers `_rule_tree` reads from one file *rel* holding *text*:
+    the file is written under a scratch root and read the way the repo's
+    declared files are (`_rule_tree._containers_of` → `rule_files_in`), so a
+    fixture exercises the one reading, not a second one (#3438)."""
+    import _rule_tree  # noqa: PLC0415
+    with tempfile.TemporaryDirectory() as root:
+        dest = Path(root, rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(text.encode("utf-8") if isinstance(text, str) else text)
+        return list(_rule_tree._containers_of(root, [rel]))
+
+
+def _tripwire(files):
+    """`rule_shaped_outside_declaration` over a scratch tree of *files*
+    ({rel: text}), none of them declared."""
+    with tempfile.TemporaryDirectory() as root:
+        for rel, text in files.items():
+            dest = Path(root, rel)
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(text.encode("utf-8") if isinstance(text, str) else text)
+        return rule_shaped_outside_declaration(root, sorted(files), frozenset())
 
 # ============================================================
 # #1095: sentinel label contract (fail-open guard)
@@ -2103,8 +2128,9 @@ class TestSentinelLabelContract:
     exact latent gap shipped between v1.2.0 and v2.9.x). Watchdog is the single
     deliberate exception: severity=none but NO component — it rides its own
     index-0 route, never the sentinel sink. Scans every rules container the
-    repo ships — see `_iter_rule_containers`, which finds them by CONTENT, not
-    by name or directory. Do not restate the old filename enumeration here: it
+    repo ships — see `_iter_rule_containers`, which reads the files the
+    rule-source declaration names (`_lib_consumer_read.RULE_SOURCES`, #3438);
+    rules anywhere else ring the coverage tripwire. Do not restate the old filename enumeration here: it
     described a scanner that has been replaced, and it omitted
     operator-manifests/ entirely (16 objects, 122 rules, a third of the tree).
     Historically it read: the SOURCE rule packs plus
@@ -2257,44 +2283,34 @@ class TestPlatformAlertSourceContract:
                 if _is_platform_cm_location(where)]
 
     def test_platform_cm_discovery_is_content_based(self):
-        """The scope seam. Membership is decided by CONTENT and PROVENANCE only.
+        """The scope seam. WHICH files are read is the declaration's (#3438);
+        whether a rule in them is platform is decided by CONTENT and
+        PROVENANCE only.
 
         Asserted on the live tree rather than on synthetic path strings: the
         previous version of this test pinned hand-written `where` values, which
         is exactly the thing that let a filename-shaped criterion look verified.
         """
         containers = list(_rule_containers())
-        # ⛔ EVERY shipped rules file must still produce rules. This replaces a
-        # `>= 30` container floor that had 33 of slack — enough for an entire
-        # tree to vanish silently — with an exact, self-updating statement.
+        # ⛔ Forward: EVERY declared rules file must still produce rules — an
+        # exact, self-updating statement instead of a slack-heavy count floor.
+        # The declaration is fail-closed itself (an empty source raises), so
+        # this cannot be satisfied by an empty anchor.
         produced = {w.split(":", 1)[0] for w, _d, _p in containers}
         expected = _expected_rule_files()
         missing = sorted(expected - produced)
         assert not missing, (
-            f"{len(missing)} shipped rules file(s) yielded no container: "
-            f"{missing[:10]}. Either the scanner stopped understanding a shape "
+            f"{len(missing)} declared rules file(s) yielded no container: "
+            f"{missing[:10]}. Either the reader stopped understanding a shape "
             "the repo uses, or those files stopped shipping rules — both are "
             "changes that must be seen, not absorbed by a slack-heavy floor.")
-        # ⛔ …and the SAME assertion in reverse, which is what makes the anchor
-        # an anchor. `expected ⊆ produced` alone is satisfied by an empty
-        # expected set — measured: `_expected_rule_files` returning
-        # `frozenset()`, or losing any one of its five globs, kept the whole
-        # suite green. A floor that can be zeroed is not a floor.
-        #
-        # Equality also makes the glob list keep up with the SCANNER instead of
-        # with a maintainer's memory. Every discovery shape this module has
-        # learned (bare `groups:` documents outside rule-packs/, `k8s/` subtrees
-        # other than 03-monitoring, `helm/`, `.yml` operator manifests, a
-        # PrometheusRule not named `da-rule-pack-*`) is reachable by the scanner
-        # and was named by NONE of the globs, so each was a file the coverage
-        # floor could not see going dark. Whichever side moves first, this is red
-        # until both agree.
-        unanchored = sorted(produced - expected)
-        assert not unanchored, (
-            f"{len(unanchored)} file(s) ship rules that the scanner finds but "
-            f"`_expected_rule_files()`'s globs do not name: {unanchored[:10]}. "
-            "They are outside the per-file coverage floor, so the day one stops "
-            "producing rules nothing goes red. Add the glob.")
+        # ⛔ Reverse: rules OUTSIDE the declaration. They are not read (the
+        # declaration says what is read), so the question is asked by the
+        # coverage tripwire, which reads nothing into the contracts: every
+        # tracked YAML under the shipped roots that is not declared and looks
+        # like rules is named, with what to declare.
+        rung = rule_shaped_outside_declaration(_REPO_ROOT, _tracked_yaml_paths(), expected)
+        assert rung == (), "\n".join(rung)
 
         by_where = {w: prov for w, _doc, prov in containers}
         platform = sorted(_platform_rule_locations())
@@ -2333,9 +2349,7 @@ class TestPlatformAlertSourceContract:
         assert not any(w in platform for w in prom), (
             f"operator manifest(s) classified platform-scope: "
             f"{[w for w in prom if w in platform]}")
-        # 4. `groups:` alone is not enough: RBAC subject groups are not rules.
-        assert not any("configmap-rbac" in w for w in by_where), sorted(by_where)
-        # 5. Nothing rule-shaped may yield zero rules (the silent-zero).
+        # 4. Nothing declared may yield zero rules (the silent-zero).
         assert _rule_shaped_but_unparsed() == (), _rule_shaped_but_unparsed()
 
     def test_unknown_provenance_defaults_to_platform(self, tmp_path):
@@ -3002,7 +3016,7 @@ class TestPlatformRunbookCoverageContract:
 from check_scrape_reachability import (  # noqa: E402
     KNOWN_UNKNOWN_SOURCE,
     PLANE_OF_UNPINNED_SOURCE,
-    VECTOR_NAMESPACE,
+    VECTOR_CHART,
     extract_metrics,
 )
 
@@ -3036,7 +3050,7 @@ _EDGE_LOCAL_BY_SELECTOR: dict[str, str] = {
     "VectorProjectionGateStuck":
         'reads kube_pod_init_container_status_waiting_reason with NO namespace '
         'selector; container="projection-gate" exists only in the Vector '
-        f'DaemonSet ({VECTOR_NAMESPACE} ns), so the KSM that sees it is the '
+        f'DaemonSet ({VECTOR_CHART}), so the KSM that sees it is the '
         "EDGE cluster's, not central's (helm/vector/templates/daemonset.yaml)",
 }
 
@@ -3065,7 +3079,7 @@ def _alert_plane(alert: str, expr: str) -> tuple[str, list[str]]:
     for metric in sorted(extract_metrics(expr)):
         if metric.startswith("vector_"):
             verdicts.add(EDGE_LOCAL)
-            why.append(f"{metric}: vector_ family -> {VECTOR_NAMESPACE} ns (edge)")
+            why.append(f"{metric}: vector_ family -> {VECTOR_CHART} (edge)")
         elif metric in PLANE_OF_UNPINNED_SOURCE:
             verdicts.add(PLANE_OF_UNPINNED_SOURCE[metric])
             why.append(f"{metric}: unpinned-ns ledger -> "
@@ -3458,7 +3472,12 @@ class TestParseConfigFilesEdge:
 
 
 class TestContainerDiscovery:
-    """Every guard in `_containers_from_text`, pinned by the shape that motivated it.
+    """Every guard of the rule-file reading, pinned by the shape that motivated it.
+
+    #3438: the reading is `rule_files_in` over the declared files
+    (`_rule_tree._containers_of`; `_containers_from_text` writes one fixture
+    file and reads it that way). A shape the old per-shape markers named now
+    arrives as the readers' own refusal — `_problem`, with their reason.
 
     ⛔ These exist because a counterfactual sweep found that reverting eight of
     the nine guards in this file left the whole suite green. Every assertion
@@ -3492,12 +3511,14 @@ class TestContainerDiscovery:
         # `--- `, `--- # note` and `---   ` are all legal document starts. When
         # they failed to split, safe_load raised on the merged text and the
         # whole file was swallowed — silently, with every count unchanged.
-        second = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: y}\n"
+        # ⛔ Not `name: y` / `name: n`: kubectl's YAML is 1.1, where both are
+        # booleans — a ConfigMap so named has no string name and is refused.
+        second = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: second}\n"
                   "data:\n  r.yml: |\n    groups:\n      - name: g\n"
                   "        rules:\n          - alert: AfterSeparator\n"
                   "            expr: up == 0\n")
         for sep in ("---", "--- ", "--- # a note", "---   "):
-            text = "apiVersion: v1\nkind: Namespace\nmetadata: {name: n}\n" + sep + "\n" + second
+            text = "apiVersion: v1\nkind: Namespace\nmetadata: {name: ns}\n" + sep + "\n" + second
             assert "AfterSeparator" in self._alerts(text), repr(sep)
 
     def test_list_wrappers_are_unwrapped(self):
@@ -3511,12 +3532,10 @@ class TestContainerDiscovery:
         """⛔ `kind: List` is the weakest spelling of the case above.
 
         kubectl's `Unstructured.IsList()` checks for an `items` ARRAY and never
-        looks at the kind name — `decodeToList` then back-fills each item's own
-        kind. So `ConfigMapList`, `PrometheusRuleList` and a bare `items:` with
-        no kind at all are equally applyable, and the test above happens to use
-        the one spelling a kind-name check would also catch. Measured: narrowing
-        the unwrap to `kind == "List"`, or to a three-name enum, leaves the whole
-        suite green.
+        looks at the kind name, so `ConfigMapList` and a kind nobody
+        enumerated are equally applyable. A document with no `kind` at all is
+        refused before that ("Object 'Kind' is missing", da-crdecode's
+        manifest reading, #3426) — named, never dropped.
         """
         inner = ("  - apiVersion: v1\n    kind: ConfigMap\n"
                  "    metadata: {name: x}\n    data:\n      r.yml: |\n"
@@ -3524,34 +3543,50 @@ class TestContainerDiscovery:
                  "              - alert: %s\n                expr: up == 0\n")
         for header, alert in (
                 ("kind: ConfigMapList\nitems:\n", "InsideConfigMapList"),
-                ("apiVersion: v1\nitems:\n", "InsideKindlessList"),
                 ("kind: SomethingNobodyEnumerated\nitems:\n", "InsideUnknownList")):
             assert alert in self._alerts(header + inner % alert), (
                 f"{header.splitlines()[0]!r} was not unwrapped; kubectl applies "
                 "it identically to `kind: List`")
+        got = self._containers("apiVersion: v1\nitems:\n" + inner % "InsideKindlessList")
+        assert [d for _w, d, _p in got] and all("_problem" in d for _w, d, _p in got), got
+        assert "kind" in got[0][1]["_problem"], got
+
+    def test_a_rule_pack_inside_a_list_is_found_with_its_provenance(self):
+        """#3438: a `kind: List` of rule-pack copies (what `kubectl get
+        prometheusrules -o yaml` prints) is read as its items — rules and
+        provenance both. Each item's object name gives its pack; the
+        generator header gives only the first object's."""
+        text = ("# GENERATED from rule-packs/rule-pack-redis.yaml by x — DO NOT EDIT.\n"
+                "apiVersion: v1\nkind: List\nitems:\n"
+                "  - apiVersion: monitoring.coreos.com/v1\n    kind: PrometheusRule\n"
+                "    metadata: {name: da-rule-pack-mariadb}\n    spec:\n"
+                "      groups:\n        - name: g\n          rules:\n"
+                "            - alert: InListPack\n              expr: up == 0\n"
+                "  - apiVersion: v1\n    kind: ConfigMap\n    metadata: {name: c}\n"
+                "    data:\n      r.yml: |\n        groups:\n          - name: g\n"
+                "            rules:\n              - alert: InListCM\n"
+                "                expr: up == 0\n")
+        got = {a: p for _w, d, p in self._containers(
+            text, "k8s/03-monitoring/configmap-rules-list.yaml")
+            for a, *_ in _alert_names(d)}
+        assert got == {"InListPack": "mariadb", "InListCM": None}, got
 
     def test_an_items_key_shadowing_a_documents_own_rules_is_reported(self):
         """⛔ Not a bypass — a SILENT ZERO, and the distinction is the finding.
 
-        The reviewer who raised this called it a deployable bypass: `items: []`
-        on a `kind: ConfigMap` makes the scanner skip the document while its
-        `data` still ships. That is not what happens. Verified against the real
-        decoder `kubectl apply` uses (`unstructured.UnstructuredJSONScheme`,
-        apimachinery 1.36):
+        `items` makes the document a LIST, and kubectl discards a list's own
+        `data` / `spec` without a word (apimachinery 1.36's
+        `UnstructuredJSONScheme`):
 
             ConfigMap + data                -> 1 object, data kept
             ConfigMap + `items: []` + data  -> 0 objects
             items non-empty + own data      -> only the items
 
-        `items` makes the document a LIST, and a list's own `data` is discarded.
-        So the scanner agrees with the cluster, and there is nothing to close on
-        the discovery side.
-
-        What is left is worse in one respect and cheaper to hit: the rules do
-        not deploy, the maintainer believes they do, and no counter anywhere
-        moves. Pasting the `items:` key out of a `kubectl get -o yaml` dump, or
-        deleting the wrapped objects and leaving `items: []` behind, is an
-        ordinary accident. That is the silent zero the sentinel exists for.
+        The rules do not deploy and the maintainer believes they do. Pasting the
+        `items:` key out of a `kubectl get -o yaml` dump is an ordinary
+        accident. #3438: da-crdecode's manifest reading refuses such a list,
+        naming its own keys, so the file is a `_problem` — never read as "no
+        rules" or as only its decoy items.
         """
         rules = ("data:\n  r.yml: |\n    groups:\n      - name: g\n"
                  "        rules:\n          - alert: NeverDeployed\n"
@@ -3561,35 +3596,30 @@ class TestContainerDiscovery:
         # The control: without `items`, this is an ordinary rules ConfigMap.
         assert self._alerts(head + rules) == {"NeverDeployed"}
 
-        # All three shapes the outer content can take. binaryData is a real
-        # delivery path in this repo (kubelet's MakePayload fallback) and `spec`
-        # is the PrometheusRule face, so a condition that only looked at `data`
-        # would leave two thirds of the shape silently dropped again.
+        # All three shapes the outer content can take: data, binaryData (a real
+        # delivery path in this repo) and a PrometheusRule's `spec`.
         import base64 as _b64  # noqa: PLC0415
         b64 = _b64.b64encode(
             yaml.safe_dump({"groups": [{"name": "g", "rules": [
                 {"alert": "NeverDeployed", "expr": "up == 0"}]}]}
                            ).encode("utf-8")).decode("ascii")
-        for label, text in (
-                ("empty items", head + "items: []\n" + rules),
+        for label, text, key in (
+                ("empty items", head + "items: []\n" + rules, "data"),
                 ("items with a decoy", head + rules +
                  "items:\n  - {apiVersion: v1, kind: ConfigMap, "
-                 "metadata: {name: decoy}, data: {d.yml: \"groups: []\"}}\n"),
+                 "metadata: {name: decoy}, data: {d.yml: \"groups: []\"}}\n", "data"),
                 ("binaryData", head + "items: []\n"
-                 f"binaryData:\n  r.yml: {b64}\n"),
+                 f"binaryData:\n  r.yml: {b64}\n", "binaryData"),
                 ("PrometheusRule spec", "apiVersion: monitoring.coreos.com/v1\n"
                  "kind: PrometheusRule\nmetadata: {name: shadowed}\n"
                  "items: []\nspec:\n  groups:\n    - name: g\n      rules:\n"
-                 "        - alert: NeverDeployed\n          expr: up == 0\n")):
+                 "        - alert: NeverDeployed\n          expr: up == 0\n", "spec")):
             rel = "k8s/03-monitoring/configmap-rules-shadowed.yaml"
             got = list(_containers_from_text(rel, text))
-            assert {a for _w, d, _p in got for a, *_ in _alert_names(d)} == set(), (
-                f"{label}: the scanner reported rules that kubectl discards")
-            flagged = [w for w, d, _p in got
-                       if "_own_content_shadowed_by_items" in d]
-            assert flagged, (
+            assert [d for _w, d, _p in got] == [got[0][1]] and "_problem" in got[0][1], (
                 f"{label}: the document's own rules are silently dropped by both "
-                f"the cluster and this scanner, and nothing flagged it: {got}")
+                f"the cluster and this reader, and nothing named it: {got}")
+            assert f"content of its own: `{key}`" in got[0][1]["_problem"], got
 
     # ── the parsing layer, one fixture per guard ──────────────────────────
     #
@@ -3614,57 +3644,43 @@ class TestContainerDiscovery:
         return "".join(pad + line if line.strip() else line
                        for line in (self._GROUPS % alert).splitlines(True))
 
-    def test_an_unparsable_yaml_data_key_is_reported_case_insensitively(self):
+    def test_every_data_value_of_a_declared_rules_configmap_is_a_rule_file(self):
         """A `|` block with broken indentation deletes a block of alerts silently.
 
-        The OUTER file still parses, so the whole-file tripwire sees nothing;
-        only this branch notices. The key's EXTENSION is the declaration of
-        intent — and it is matched case-insensitively because `.YML` is a legal
-        spelling and the same "escapes by being named differently" hole the
-        scanner exists to close.
+        #3438: the path declared the ConfigMap a rules ConfigMap, so every data
+        value is a rule file (`rule_files_in(only_declared=False)`) and one
+        the rule loader refuses is named — whatever its key's extension; no
+        content test decides that a value was "not meant to be rules".
         """
-        for key in ("r.yml", "r.YML", "r.YAML"):
+        for key in ("r.yml", "r.YML", "r.YAML", "notes.md"):
             got = self._containers(self._CM + f"data:\n  {key}: |\n    groups: [\n")
-            assert [d for _w, d, _p in got if "_unparsable_body" in d], (
-                f"a data key named {key!r} declared YAML, failed to parse, and "
-                f"contributed nothing without a word: {got}")
-        # …and a key that promises no YAML is left alone: this repo ships a
-        # markdown Alertmanager template as a data key, and it contains the
-        # string `- alert:` as documentation.
-        assert self._containers(
-            self._CM + "data:\n  notes.md: |\n    - alert: example\n     [\n") == []
+            assert [d for _w, d, _p in got if "_problem" in d], (
+                f"a data value under {key!r} failed to load and contributed "
+                f"nothing without a word: {got}")
 
-    def test_a_data_key_nesting_rules_under_spec_is_still_a_container(self):
+    def test_a_data_key_nesting_rules_under_spec_is_named(self):
         """The silent-zero's own entry point.
 
         Rules pasted under `spec.groups` inside a ConfigMap data key (the
-        PrometheusRule shape, the commonest paste error) parse fine and
-        contribute zero rules. Admitting the container is what lets
-        `_rule_shaped_but_unparsed` say so; drop the `spec` arm and the
-        detection is gone with it, silently.
+        PrometheusRule shape, the commonest paste error) contribute zero rules.
+        The rule loader refuses the unknown `spec` field, so the value is a
+        `_problem` the sentinel names.
         """
         got = self._containers(
             self._CM + "data:\n  r.yml: |\n    spec:\n" + self._indented("A", 6))
-        assert [d for _w, d, _p in got if "spec" in d], got
+        assert [d for _w, d, _p in got if "_problem" in d], got
 
-    def test_a_prometheusrule_with_top_level_groups_is_normalised(self):
-        """Both directions, because each is a different failure.
-
-        `groups:` at the top level of a PrometheusRule deploys nothing — and the
-        tripwire cannot see it, because that check is handed `doc["spec"]` and
-        the misplaced key is outside what it receives. But a manifest carrying
-        BOTH keys has real `spec.groups`; reporting that one as misplaced is a
-        false positive on a working file.
+    def test_a_prometheusrule_with_top_level_groups_is_refused(self):
+        """`groups:` at the top level of a PrometheusRule deploys nothing:
+        the API server's strict field validation refuses the unknown field
+        (`rule_object_problem`, the vendored CRD schema) — with or without
+        a real `spec.groups` beside it, since the object is refused whole.
         """
-        misplaced = self._containers(self._PR % "p" + self._GROUPS % "Orphan")
-        assert [d for _w, d, _p in misplaced if "_misplaced_groups" in d], misplaced
-
-        both = self._containers(self._PR % "p" + self._GROUPS % "Stray"
-                                + "spec:\n" + self._indented("Real", 2))
-        assert not [d for _w, d, _p in both if "_misplaced_groups" in d], (
-            f"a PrometheusRule with real spec.groups was reported as misplaced "
-            f"because it ALSO has a top-level key: {both}")
-        assert {a for _w, d, _p in both for a, *_ in _alert_names(d)} == {"Real"}
+        for text in (self._PR % "p" + self._GROUPS % "Orphan",
+                     self._PR % "p" + self._GROUPS % "Stray"
+                     + "spec:\n" + self._indented("Real", 2)):
+            got = self._containers(text)
+            assert len(got) == 1 and 'unknown field "groups"' in got[0][1].get("_problem", ""), got
 
     def test_prometheusrule_provenance_is_the_name_then_the_header(self):
         """Two sources, and dropping either one is silent.
@@ -3696,32 +3712,31 @@ class TestContainerDiscovery:
                 + self._CM + "data:\n  r.yml: |\n" + self._indented("A", 4))
         assert {p for _w, _d, p in self._containers(text)} == {"redis"}
 
-    def test_data_wins_over_binarydata_for_the_same_key(self):
-        """kubelet's precedence, not ours.
-
-        `MakePayload` reads `BinaryData` only for keys ABSENT from `Data`. Let
-        binaryData overwrite and the scanner gates a body the cluster never
-        serves — while the body it DOES serve goes unexamined.
-        """
+    def test_a_key_in_both_data_and_binarydata_is_refused(self):
+        """The API server refuses a ConfigMap with one key in both `data` and
+        `binaryData` (`data[r.yml]: Invalid value: "r.yml": duplicate of key
+        present in binaryData`, ValidateConfigMap's `data` loop), so neither body
+        is served — reading either one would gate rules the cluster never
+        gets. Named, as a `_problem`."""
         import base64 as _b64  # noqa: PLC0415
         shadow = _b64.b64encode(
             (self._GROUPS % "FromBinary").encode("utf-8")).decode("ascii")
         got = self._containers(
             self._CM + "data:\n  r.yml: |\n" + self._indented("FromData", 4)
             + f"binaryData:\n  r.yml: {shadow}\n")
-        assert {a for _w, d, _p in got for a, *_ in _alert_names(d)} == {"FromData"}
+        assert len(got) == 1 and (
+            'data[r.yml]: Invalid value: "r.yml": duplicate of key present in binaryData'
+            in got[0][1].get("_problem", "")), got
 
     def test_a_data_value_that_is_already_a_mapping_is_named(self):
         """A data key written as nested YAML instead of a `|` block.
 
-        Discarding non-strings would drop the whole container with nothing
-        said. #3206: it is not read as rules either — the API server takes only
-        string values, so that ConfigMap does not deploy; the container is a
-        marker the sentinel names.
+        The API server takes only string values, so that ConfigMap does not
+        deploy; the container is a `_problem` the sentinel names.
         """
         got = self._containers(
             self._CM + "data:\n  r.yml:\n" + self._indented("FromMapping", 4))
-        assert [d for _w, d, _p in got] == [{"_data_value_not_a_string": "dict"}]
+        assert len(got) == 1 and "must be a string" in got[0][1].get("_problem", ""), got
 
     def test_rule_group_shape_boundaries(self):
         """`groups:` is a popular word; the shape test is what makes it a criterion."""
@@ -3760,23 +3775,22 @@ class TestContainerDiscovery:
             _rule_tree._reset_caches()
         assert got == {"Survivor"}, got
 
-    def test_document_splitting_swallows_only_a_refusal(self, monkeypatch, tmp_path):
-        """The `except` is scoped on purpose (#3206: the documents are
-        kubectl's reading, from da-crdecode).
-
-        A manifest kubectl's reading refuses is expected: it is reported as
-        (None, reason) for the sentinel. Anything else — no da-crdecode to ask,
-        a binary that cannot run — must escape, because folding it into "that
-        file has no rules" keeps every contract green over a scan that never
-        read anything.
+    def test_only_a_refusal_is_a_finding(self, monkeypatch, tmp_path):
+        """The readers' refusal of a file is expected: it is a `_problem` for
+        the sentinel. Anything else — no da-crdecode to ask, a binary that
+        cannot run — must escape, because folding it into "that file has no
+        rules" keeps every contract green over a read that never happened.
+        The tripwire likewise.
         """
         import _lib_consumer_read  # noqa: PLC0415
-        docs, why = _any_yaml_reading("a: [unclosed\n")
-        assert docs is None and why
+        got = self._containers("a: [unclosed\n")
+        assert len(got) == 1 and "_problem" in got[0][1], got
         monkeypatch.setenv("DA_CRDECODE_BINARY", str(tmp_path / "no-such-binary"))
-        with pytest.raises(_lib_consumer_read.ConsumerReadError) as exc_info:
-            _any_yaml_reading("irrelevant: true\n")
-        assert not isinstance(exc_info.value, _lib_consumer_read.InputRefused)
+        for run in (lambda: self._containers("irrelevant: true\n"),
+                    lambda: _tripwire({"k8s/x.yaml": "irrelevant: true\n"})):
+            with pytest.raises(_lib_consumer_read.ConsumerReadError) as exc_info:
+                run()
+            assert not isinstance(exc_info.value, _lib_consumer_read.InputRefused)
 
     def test_generator_header_does_not_cross_a_document_boundary(self):
         # A hand-authored document appended after `---` must not inherit the
@@ -3846,30 +3860,60 @@ class TestContainerDiscovery:
         assert pair("redis_up == 0") != pair("mysql_up == 0")
         assert pair("sum by (tenant) (x)") == pair("sum by(tenant)(x)")
 
-    def test_bare_groups_documents_are_found_outside_rule_packs(self):
-        # ⛔ The bare `groups:` shape is a rules file wherever it ships. It used
-        # to be recognised only under rule-packs/ — a path test kept to avoid
-        # colliding with tests/rulepacks/ extracts, long after the scan stopped
-        # reading tests/ at all. A hand-authored extra-platform-rules.yaml under
-        # k8s/ was invisible for as long as that outlived its reason.
+    def test_a_plain_rule_file_is_read_where_declared_and_rings_elsewhere(self):
+        """⛔ #3438: a wrapper-less `groups:` file is a rule file where the
+        declaration puts one, and ANYWHERE ELSE under the shipped roots it
+        rings the tripwire — never silently unread. The hand-authored
+        `extra-platform-rules.yaml` under k8s/ that used to be invisible is
+        now named, with what to do about it."""
         text = ("groups:\n  - name: g\n    rules:\n"
                 "      - alert: BareGroups\n        expr: up == 0\n")
+        assert "BareGroups" in self._alerts(text, "rule-packs/rule-pack-x.yaml")
         for rel in ("k8s/03-monitoring/extra-platform-rules.yaml",
                     "operator-manifests/extra.yaml",
-                    "rule-packs/rule-pack-x.yaml"):
-            assert "BareGroups" in self._alerts(text, rel), rel
+                    "rule-packs/sub/rule-pack-x.yaml"):
+            rung = _tripwire({rel: text})
+            assert len(rung) == 1 and rung[0].startswith(rel + ":"), (rel, rung)
+
+    def test_a_renamed_rules_configmap_rings_the_tripwire(self):
+        """The mutation the declaration invites: a real rules ConfigMap moved
+        out of `configmap-rules-*`. Its rules sit in one quoted scalar (the
+        generated form), so the `- alert:` regex has to look inside the
+        reading's strings, not only at the raw text."""
+        body = (Path(_REPO_ROOT) / "k8s/03-monitoring/configmap-rules-redis.yaml").read_text(
+            encoding="utf-8")
+        rung = _tripwire({"k8s/03-monitoring/redis-alerts.yaml": body})
+        assert len(rung) == 1 and "RULE_SOURCES" in rung[0], rung
+
+    def test_every_data_value_form_rings_the_tripwire_outside_the_declaration(self):
+        """F2: a rules ConfigMap moved out of the declaration rings whatever
+        form its data value takes — one-line JSON, recording rules only, or
+        base64 in `binaryData` — because every text inside is read and asked
+        the shape question, not only matched against `- alert:`."""
+        import base64 as _b64  # noqa: PLC0415
+        cm = "apiVersion: v1\nkind: ConfigMap\nmetadata: {name: moved}\n"
+        recording = ("groups:\n  - name: g\n    rules:\n"
+                     "      - record: job:up:sum\n        expr: sum(up)\n")
+        forms = {
+            "one-line JSON": cm + "data:\n  r.json: " + json.dumps(json.dumps(
+                {"groups": [{"name": "g", "rules": [{"alert": "J", "expr": "up == 0"}]}]})) + "\n",
+            "recording only": cm + "data:\n  r.yml: |\n" + "".join(
+                "    " + line + "\n" for line in recording.splitlines()),
+            "binaryData": cm + "binaryData:\n  r.yml: "
+                + _b64.b64encode(recording.encode("utf-8")).decode("ascii") + "\n",
+        }
+        for label, text in forms.items():
+            assert [d for _w, d, _p in _containers_from_text(
+                "k8s/03-monitoring/configmap-rules-x.yaml", text) if d.get("groups")], label
+            rung = _tripwire({"k8s/crd/moved.yaml": text})
+            assert len(rung) == 1 and rung[0].startswith("k8s/crd/moved.yaml:"), (label, rung)
 
     def test_rbac_groups_are_not_rule_groups(self):
+        """`groups:` is a popular word: RBAC subject groups ring nothing."""
         text = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: rbac}\n"
                 "data:\n  _rbac.yaml: |\n    groups:\n"
                 "      - name: platform-admins\n        tenants: [\"*\"]\n")
-        # ⛔ Assert on CONTAINERS, not alerts. RBAC groups yield no alerts
-        # whether or not the shape guard exists, so the obvious assertion was
-        # true in both worlds: replacing `_is_rule_groups` with `value is not
-        # None` left it green while the RBAC ConfigMap became a platform
-        # container again. The observable difference is the container.
-        rel = "k8s/04-tenant-api/configmap-rbac.yaml"
-        assert list(_containers_from_text(rel, text)) == []
+        assert _tripwire({"k8s/04-tenant-api/configmap-rbac.yaml": text}) == ()
 
 
 class TestProvenanceIsAMatchNotAClaim:
@@ -4061,90 +4105,75 @@ class TestSilentZeroSentinel:
 
     def _offenders_for(self, fake):
         import _rule_tree  # noqa: PLC0415
-        original = _rule_tree._rule_containers
+        saved = (_rule_tree._rule_containers, _rule_tree._expected_rule_files)
         try:
             _rule_tree._reset_caches()
             _rule_tree._rule_containers = lambda: fake
+            _rule_tree._expected_rule_files = frozenset
             _rule_shaped_but_unparsed.cache_clear()
             return dict(_rule_shaped_but_unparsed())
         finally:
-            _rule_tree._rule_containers = original
+            _rule_tree._rule_containers, _rule_tree._expected_rule_files = saved
             _rule_tree._reset_caches()
 
     def test_every_offender_shape_is_reported(self):
-        # (container, which BRANCH of the sentinel should claim it). Two rows
-        # share a branch on purpose — see the last one.
+        """#3438: the containers are `rule_files_in`'s answer over the
+        declared files, so every defect the old per-shape markers named (a
+        data key that does not parse, rules nested under `spec`, `groups` at
+        the top of a PrometheusRule, a list shadowing its own content, a
+        data value that is no string) now arrives as the reader's refusal,
+        `_problem` with the reader's reason. What is left to the sentinel is
+        that marker and the empty container."""
         cases = {
-            "cm.yaml:wont-parse": ({"_unparsable_body": True}, "unparsable"),
-            "pr.yaml:groups-at-top": ({"_misplaced_groups": True}, "misplaced"),
-            "cm.yaml:spec-nested": ({"spec": self.HEALTHY}, "spec-nested"),
-            "cm.yaml:groups-forgotten": ({"rules": [
-                {"alert": "Orphan", "expr": "up == 0"}]}, "no-groups"),
-            "cm.yaml:shadowed-by-items": (
-                {"_own_content_shadowed_by_items": True}, "items"),
-            # ⛔ `groups: []` PRESENT but empty, beside real rules under `spec`.
-            # The short-circuit must test the VALUE, not the key: on
-            # `"groups" in doc` this container is skipped entirely, and it
-            # contributes zero rules while `spec.groups` holds the real ones.
-            # Same branch as spec-nested, reached the other way round.
-            "cm.yaml:empty-groups-beside-spec": (
-                {"groups": [], "spec": self.HEALTHY}, "spec-nested"),
+            "cm.yaml:wont-load": ({"_problem": "refused by the rule loader"}, "problem"),
             # ⛔ The empty container. A PrometheusRule with no `spec.groups`
-            # arrives as `{}` — no groups, no marker, no spec, no rules — and
-            # matched none of the branches above. The misplaced-`groups`
-            # normalisation's comment CLAIMED this tripwire would flag it; it
-            # did not, until CodeRabbit pointed at the gap on PR #1370.
+            # arrives as `{}` — the rule loader reads it, zero rules.
             "pr.yaml:empty-spec": ({}, "empty"),
         }
         got = self._offenders_for(
             tuple((w, d, None) for w, (d, _b) in cases.items())
-            + (("cm.yaml:healthy", self.HEALTHY, None),))
+            + (("cm.yaml:healthy", self.HEALTHY, None),
+               # `groups: []` is a LEGITIMATE generator output (the custom-alerts
+               # pack with no `_custom_alerts` declared), not an empty container.
+               ("cm.yaml:generated-empty", {"groups": []}, None)))
         missed = sorted(set(cases) - set(got))
         assert not missed, (
-            "these visibly rule-shaped containers yield zero rules and the "
-            f"silent-zero sentinel stayed quiet about them: {missed}")
-        assert "cm.yaml:healthy" not in got, (
-            f"a container that DOES yield rules was reported: {got}")
-        # ⛔ One message per BRANCH. Branches collapsing onto a shared message
-        # would satisfy the membership test above while telling the maintainer
-        # nothing about which mistake they actually made.
-        branches = {b for _d, b in cases.values()}
-        assert len(set(got.values())) == len(branches), (
-            f"{len(branches)} distinct defects produced "
+            "these rule files yield zero rules and the silent-zero sentinel "
+            f"stayed quiet about them: {missed}")
+        assert "cm.yaml:healthy" not in got and "cm.yaml:generated-empty" not in got, (
+            f"a container that is fine was reported: {got}")
+        assert "refused by the rule loader" in got["cm.yaml:wont-load"], got
+        assert len(set(got.values())) == len(cases), (
+            f"{len(cases)} distinct defects produced "
             f"{len(set(got.values()))} distinct messages: {got}")
 
     def test_a_container_with_rules_is_not_judged_by_its_spec_key(self):
-        """The short-circuit is load-bearing, not an optimisation.
-
-        A PrometheusRule normalised into `{groups, spec.groups}` carries both
-        keys legitimately. Without `if doc.get("groups"): continue` it is
-        reported as "rules nested under spec.groups" — a false positive on a
-        healthy container, which is the failure mode that gets a sentinel
-        muted rather than fixed.
-        """
+        """A container with `groups` is not judged by any other key it has."""
         got = self._offenders_for(
             (("pr.yaml:both-keys",
               {**self.HEALTHY, "spec": self.HEALTHY}, None),))
         assert got == {}, got
 
     def _sentinel_over(self, tmp_path, files):
-        """Run the REAL sentinel over a synthetic tree of {relpath: bytes}."""
+        """Run the REAL sentinel over a synthetic tree of {relpath: bytes},
+        every file declared, read the way the repo's declared files are."""
         import _rule_tree  # noqa: PLC0415
         for rel, raw in files.items():
             dest = tmp_path / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(raw)
-        saved = (_rule_tree._REPO_ROOT, _rule_tree._tracked_yaml_paths,
+        saved = (_rule_tree._REPO_ROOT, _rule_tree._expected_rule_files,
                  _rule_tree._rule_containers)
         try:
             _rule_tree._reset_caches()
             _rule_tree._REPO_ROOT = str(tmp_path)
-            _rule_tree._tracked_yaml_paths = lambda: sorted(files)
-            _rule_tree._rule_containers = tuple
+            _rule_tree._expected_rule_files = lambda: frozenset(files)
+            containers = tuple(_rule_tree._containers_of(str(tmp_path), sorted(files)))
+            _rule_tree._rule_containers = lambda: containers
             _rule_shaped_but_unparsed.cache_clear()
             return dict(_rule_shaped_but_unparsed())
         finally:
-            (_rule_tree._REPO_ROOT, _rule_tree._tracked_yaml_paths,
+            (_rule_tree._REPO_ROOT, _rule_tree._expected_rule_files,
              _rule_tree._rule_containers) = saved
             _rule_tree._reset_caches()
 
@@ -4155,25 +4184,14 @@ class TestSilentZeroSentinel:
                  "          - alert: EncodedAlert\n            expr: up == 0\n")
 
     def test_a_utf16_rules_manifest_is_scanned_and_objected_to(self, tmp_path):
-        """⛔ The one encoding the cluster accepts and this scanner could not read.
+        """⛔ The encoding the cluster may accept and a UTF-8-only reader could not read.
 
-        Both readers here opened manifests with `read_text(encoding="utf-8")`
-        and swallowed `UnicodeDecodeError` with a bare `continue`. Measured
-        against the decoder `kubectl apply` actually uses
-        (`apimachinery/pkg/util/yaml.NewYAMLOrJSONDecoder`, 1.36):
-
-            UTF-16 BE + BOM  -> kubectl APPLIES it   (fail-open: rules shipped
-                                                      that no contract gated)
-            UTF-16 LE + BOM  -> kubectl errors       (silent zero: the author
-                                                      believes they shipped)
-
-        Both were invisible AND left no offender, which is the combination that
-        makes a gate worse than useless — it reports green over the gap.
-
-        Two properties, and the test needs both: the scanner must now SEE the
-        rules (so every contract applies to them), and the sentinel must still
-        OBJECT to the encoding (because which of the two outcomes above you get
-        depends on byte order, and that is not a state to ship).
+        Measured against the decoder `kubectl apply` uses
+        (`apimachinery/pkg/util/yaml.NewYAMLOrJSONDecoder`, 1.36): UTF-16 BE +
+        BOM is applied, UTF-16 LE + BOM errors. Two properties, and the test
+        needs both: the readers must SEE the rules (so every contract applies
+        to them), and the sentinel must still OBJECT to the encoding of a
+        declared rule file (which outcome you get depends on byte order).
         """
         for label, enc in (("UTF-16 BE", "utf-16-be"), ("UTF-16 LE", "utf-16-le")):
             raw = (codecs.BOM_UTF16_BE if enc.endswith("be")
@@ -4183,10 +4201,10 @@ class TestSilentZeroSentinel:
             text, got_enc = _decode_manifest(raw)
             assert text is not None and got_enc == enc, (
                 f"{label}: the decoder did not recognise the BOM ({got_enc})")
-            alerts = {a for _w, d, _p in _containers_from_text(rel, text)
+            alerts = {a for _w, d, _p in _containers_from_text(rel, raw)
                       for a, *_ in _alert_names(d)}
             assert alerts == {"EncodedAlert"}, (
-                f"{label}: kubectl can read these rules and the scanner still "
+                f"{label}: these rules can be read and the readers still "
                 f"cannot — every contract is blind to them. Got {alerts}")
 
             got = self._sentinel_over(tmp_path / enc, {rel: raw})
@@ -4200,9 +4218,7 @@ class TestSilentZeroSentinel:
 
         The UTF-32 BOMs BEGIN with the UTF-16 ones — `ff fe 00 00` starts with
         `ff fe` — so a UTF-16-first table decodes a UTF-32 file as UTF-16 and
-        hands the scanner plausible-looking garbage instead of rules. Nothing
-        raises; the file just stops containing alerts. Measured: reordering the
-        table left the whole suite green until this case existed.
+        hands the header scan plausible-looking garbage. Nothing raises.
         """
         for bom, enc, payload_enc in (
                 (codecs.BOM_UTF8, "utf-8-sig", "utf-8"),
@@ -4213,27 +4229,21 @@ class TestSilentZeroSentinel:
             text, got = _decode_manifest(bom + self.RULES_DOC.encode(payload_enc))
             assert got == enc, f"BOM for {enc} was read as {got}"
             assert text == self.RULES_DOC, (
-                f"{enc} decoded to something other than the original text — a "
-                "misread encoding does not raise, it just stops containing "
-                f"alerts: {text[:60]!r}")
+                f"{enc} decoded to something other than the original text: "
+                f"{text[:60]!r}")
         # …and with no BOM at all it is plain UTF-8, BOM-free.
         assert _decode_manifest(self.RULES_DOC.encode("utf-8")) == (
             self.RULES_DOC, "utf-8")
 
-    def test_rules_declared_in_a_helm_chart_are_refused(self, tmp_path):
-        """⛔ helm/ is in the scan surface and its content mostly is not.
+    def test_rules_in_chart_values_ring_the_tripwire(self):
+        """⛔ The repo does not render charts, and nothing reads chart values
+        as rules unless they are registered (`CHART_VALUES_RULES`, #3438).
 
-        67 of the 95 tracked helm YAML carry Go template actions and do not
-        parse, so `_containers_from_text` never sees inside them. The
-        `- alert:` tripwire covers a template that spells rules out — but not
-        the shape this exists for, where the template says
-        `{{ toYaml .Values.extraRules | nindent 4 }}` and the RULES LIVE IN
-        VALUES. That file parses perfectly, nests its rules under an arbitrary
-        key, matches none of the three container shapes, and deploys real
-        alerts every contract here is blind to.
-
-        This gate does not render charts. Refusing the shape is the honest
-        option; pretending to follow it is not.
+        The shape this exists for: the template says `{{ toYaml
+        .Values.extraRules | nindent 4 }}` and the RULES LIVE IN VALUES. That
+        file parses, nests its rules under an arbitrary key, and deploys real
+        alerts every contract is blind to — so an unregistered one rings the
+        tripwire, and its message asks for the registration.
         """
         rules = {"groups": [{"name": "g", "rules": [
             {"alert": "InjectedByChart", "expr": "up == 0"}]}]}
@@ -4245,21 +4255,17 @@ class TestSilentZeroSentinel:
                     {"alert": "InjectedByChart", "expr": "up == 0"}]}),
                 ("at the document root", rules)):
             rel = "helm/some-chart/values.yaml"
-            got = self._sentinel_over(
-                tmp_path / label.replace(" ", "-"),
-                {rel: yaml.safe_dump(values).encode("utf-8")})
-            assert rel in got, (
-                f"{label}: a chart declaring Prometheus rules drew no "
-                f"objection, and this gate cannot see what it deploys: {got}")
-            assert "render charts" in got[rel]
+            got = _tripwire({rel: yaml.safe_dump(values)})
+            assert len(got) == 1 and got[0].startswith(rel + ":"), (
+                f"{label}: a chart declaring Prometheus rules rang nothing: {got}")
+            assert "CHART_VALUES_RULES" in got[0], got[0]
 
     def test_the_helm_tripwire_does_not_fire_on_ordinary_chart_values(self):
         """The counterweight, and it is what keeps the tripwire alive.
 
         A tripwire that fires on `resources:` or on an empty generator artifact
-        gets switched off, and then it is not a tripwire. `_is_rule_groups`
-        alone is too loose here — it accepts `[]` on purpose — so the shape test
-        demands at least one real rule.
+        gets switched off. `_is_rule_groups` alone is too loose here — it
+        accepts `[]` on purpose — so the shape test demands a real rule.
         """
         for label, values in (
                 ("resources", {"resources": {"limits": {"cpu": "1"}}}),
@@ -4270,19 +4276,17 @@ class TestSilentZeroSentinel:
                 ("rule-shaped but no expr", {"x": [{"alert": "X"}]})):
             assert _rules_shaped_at_any_depth(values) is None, (
                 f"{label} was mistaken for a Prometheus rule set: {values}")
+            assert _tripwire({"helm/c/values.yaml": yaml.safe_dump(values)}) == (), label
 
-    def test_binarydata_decoding_is_strict_like_the_production_reader(self, tmp_path):
+    def test_binarydata_decoding_is_strict_like_the_production_reader(self):
         """⛔ Both readers of the same keys must agree on which ones decode.
 
-        `base64.b64decode` without `validate=True` silently DROPS every
-        character outside the alphabet, so a corrupt value decodes to arbitrary
-        bytes instead of raising. `_grar_validate` decodes the same `binaryData`
-        strictly; this one did not, so the two could disagree about which keys
-        exist — exactly the drift TestPlatformReaderParity exists to detect,
-        introduced inside the thing being cross-checked.
+        One reading now (`rule_files_in` over `manifest_rule_file_results`'s
+        keying, #3438): a corrupt binaryData value is a rule file with a
+        problem — named, never decoded leniently into plausible bytes and
+        never dropped.
         """
         import base64 as _b64  # noqa: PLC0415
-        import _lib_consumer_read  # noqa: PLC0415
 
         body = ("groups:\n  - name: g\n    rules:\n      - alert: A\n"
                 "        expr: up == 0\n")
@@ -4292,30 +4296,18 @@ class TestSilentZeroSentinel:
         corrupt = good[:8] + "!!!!" + good[8:]
         cm = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"
               f"binaryData:\n  good.yml: {good}\n  bad.yml: {corrupt}\n")
-
-        scanner_keys = {w.split(":", 1)[1]
-                        for w, _d, _p in _containers_from_text("k8s/x.yaml", cm)}
-        # The production reader (`_grar_validate.platform_alert_identities`)
-        # takes the same keys from `manifest_rule_file_results` (#3206).
-        cm_path = tmp_path / "x.yaml"
-        cm_path.write_text(cm, encoding="utf-8")
-        production = {rf.key for rf in _lib_consumer_read.manifest_rule_file_results([cm_path])
-                      if rf.problem is None}
-        assert scanner_keys == {"good.yml"}, (
-            f"the scanner accepted a corrupt binaryData key: {scanner_keys}")
-        assert production == scanner_keys, (
-            "the two readers disagree about which binaryData keys decode: "
-            f"scanner={sorted(scanner_keys)} production={sorted(production)}")
+        got = {w.split(":", 1)[1]: d for w, d, _p in _containers_from_text("k8s/x.yaml", cm)}
+        assert set(got) == {"good.yml", "bad.yml"}, got
+        assert "groups" in got["good.yml"]
+        assert "base64" in got["bad.yml"]["_problem"], got["bad.yml"]
 
     def test_helm_is_actually_in_the_scan_surface(self):
-        """⛔ The tripwire above only runs on files the scan surface reaches.
+        """⛔ The coverage tripwire only runs on files the scan surface reaches.
 
-        `helm/` yields no containers today, so dropping it from
-        `_SHIPPED_ROOTS` changes no count and no contract — measured, that
-        mutation survived everything. It would also silently switch off the
-        refusal, because `_rule_shaped_but_unparsed` iterates
-        `_tracked_yaml_paths()`. A guard reachable only through its own unit
-        test is not deployed.
+        `helm/` yields no rule containers, so dropping it from
+        `_SHIPPED_ROOTS` changes no count and no contract — and silently
+        switches off the chart-values tripwire, which iterates
+        `_tracked_yaml_paths()`.
         """
         helm = [p for p in _tracked_yaml_paths() if p.startswith("helm/")]
         assert len(helm) >= 50, (
@@ -4326,81 +4318,59 @@ class TestSilentZeroSentinel:
         """The residual: bytes that are not any standard Unicode encoding.
 
         Nothing can tell whether it holds rules — that is exactly why it cannot
-        be skipped. kubectl's YAML parser takes UTF-8/16/32 and nothing else, so
-        such a file is a defect however it got there, and the sentinel is the
-        only thing in the repo that would ever mention it.
+        be skipped: declared, the sentinel names it; undeclared, the tripwire.
         """
         rel = "k8s/03-monitoring/configmap-rules-broken.yaml"
         raw = b"\xff\xfe\x41" + self.RULES_DOC.encode("latin-1")[:40] + b"\xc0\xc1"
         got = self._sentinel_over(tmp_path, {rel: raw})
-        assert rel in got, f"an undecodable shipped manifest was skipped: {got}"
-        assert "encoding" in got[rel]
+        assert rel in got, f"an undecodable declared rule file was skipped: {got}"
+        assert any("encoding" in why for why in [got[rel]]), got
+        rung = _tripwire({"k8s/elsewhere.yaml": raw})
+        assert len(rung) == 1 and "encoding" in rung[0], rung
 
     def test_a_utf8_bom_does_not_cost_a_file_its_provenance(self, tmp_path):
         """A BOM is invisible to a human and fatal to the header scan.
 
-        `read_text("utf-8")` keeps the `\ufeff`, so the first line of a
+        `read_text("utf-8")` keeps the `\\ufeff`, so the first line of a
         generated file fails `startswith("#")`, `_header_provenance` returns
-        None, and the file is reclassified as hand-authored platform — the gate
-        then demands the RESERVED `alert_source: platform` on tenant alerts.
+        None, and the file is reclassified as hand-authored platform.
         `utf-8-sig` is what makes the BOM cost nothing.
         """
         header = ("# GENERATED from rule-packs/rule-pack-redis.yaml by\n"
                   "# scripts/x.py — DO NOT EDIT.\n")
         raw = codecs.BOM_UTF8 + (header + self.RULES_DOC).encode("utf-8")
         text, enc = _decode_manifest(raw)
-        assert enc == "utf-8-sig" and not text.startswith("\ufeff"), enc
-        provs = {p for _w, _d, p in _containers_from_text("k8s/x.yaml", text)}
+        assert enc == "utf-8-sig" and not text.startswith("﻿"), enc
+        provs = {p for _w, _d, p in _containers_from_text("k8s/x.yaml", raw)}
         assert provs == {"redis"}, (
             f"a byte-order mark cost this file its generator provenance: {provs}")
-        # ⛔ …and it is NOT an offender. kubectl applies a BOM-prefixed UTF-8
-        # manifest (measured), and the BOM no longer costs anything here, so
-        # this configuration WORKS — flagging it would be a false positive, and
-        # the message ("depends on the byte order") would be untrue of UTF-8.
-        # Without this, tightening the check to `enc != "utf-8"` stays green.
+        # ⛔ …and it is NOT an offender: kubectl applies a BOM-prefixed UTF-8
+        # manifest (measured). Without this, tightening the check to
+        # `enc != "utf-8"` stays green.
         rel = "k8s/03-monitoring/configmap-rules-bom.yaml"
         assert self._sentinel_over(tmp_path, {rel: raw}) == {}, (
             "a working UTF-8-with-BOM manifest was reported as broken")
 
     def test_a_file_that_declares_alerts_and_will_not_parse_is_reported(
             self, tmp_path):
-        """…and the tripwire must not be steppable with a whitespace edit.
-
-        `-  alert:` (two spaces) is the same YAML as `- alert:`; the substring
-        test this replaced saw only the second, so a file could declare alerts,
-        fail to parse, contribute nothing, and be waved through by an extra
-        space.
-        """
-        import _rule_tree  # noqa: PLC0415
+        """Declared, it is a rule file no reader reads: the sentinel names it
+        with the readers' reasons. Undeclared, the tripwire's `- alert:`
+        regex rings — and it must not be steppable with a whitespace edit:
+        `-  alert:` (two spaces) is the same YAML as `- alert:`."""
         broken = "groups:\n  - name: g\n    rules:\n      -  alert: X\n     expr: ["
-        (tmp_path / "rule-packs").mkdir()
-        (tmp_path / "rule-packs" / "rule-pack-broken.yaml").write_text(
-            broken, encoding="utf-8")
-        original_root, original_paths, original_cm = (
-            _rule_tree._REPO_ROOT, _rule_tree._tracked_yaml_paths,
-            _rule_tree._rule_containers)
-        try:
-            _rule_tree._reset_caches()
-            _rule_tree._REPO_ROOT = str(tmp_path)
-            _rule_tree._tracked_yaml_paths = lambda: [
-                "rule-packs/rule-pack-broken.yaml"]
-            _rule_tree._rule_containers = tuple
-            _rule_shaped_but_unparsed.cache_clear()
-            got = dict(_rule_shaped_but_unparsed())
-        finally:
-            (_rule_tree._REPO_ROOT, _rule_tree._tracked_yaml_paths,
-             _rule_tree._rule_containers) = (
-                original_root, original_paths, original_cm)
-            _rule_tree._reset_caches()
-        assert "rule-packs/rule-pack-broken.yaml" in got, (
+        rel = "rule-packs/rule-pack-broken.yaml"
+        got = self._sentinel_over(tmp_path, {rel: broken.encode("utf-8")})
+        assert rel in got, (
             "a file that declares alerts and then fails to parse is the "
             f"loudest silent-zero there is, and it went unreported: {got}")
-        # #3206: "will not parse" is kubectl's reading (da-crdecode) refusing it
-        assert "kubectl's reading refuses it" in got["rule-packs/rule-pack-broken.yaml"]
+        assert "kubectl's reading" in got[rel], got[rel]
+        rung = _tripwire({"k8s/elsewhere.yaml": broken})
+        assert len(rung) == 1 and "rule key" in rung[0], rung
 
 
 class TestScannerAnchorsAreFailClosed:
-    """The two `git ls-files` anchors, and the oracle the discovery tests read.
+    """The two anchors (the tripwire's `git ls-files` scope and the rule-source
+    declaration), and the oracle the discovery tests read.
 
     ⛔ Everything here was a surviving mutant. These are not deep invariants —
     they are the small, load-bearing statements each function's own comment
@@ -4449,37 +4419,55 @@ class TestScannerAnchorsAreFailClosed:
         listed = self._with_root(repo, _tracked_yaml_paths)
         assert "k8s/03-monitoring/configmap-rules-a.YAML" in listed, listed
 
-    def test_the_coverage_anchor_also_sees_an_uppercase_extension(self, tmp_path):
-        """⛔ git matches a pathspec CASE-SENSITIVELY.
+    @staticmethod
+    def _declared_tree(root, extra=None, drop=None):
+        """A tree with one file in each `RULE_SOURCES` directory (#3438),
+        plus *extra* ({rel: text}); *drop* names a source directory left
+        empty of rule files."""
+        import _lib_consumer_read  # noqa: PLC0415
+        body = "groups: []\n"
+        for src in _lib_consumer_read.RULE_SOURCES:
+            d = root / src.directory
+            d.mkdir(parents=True, exist_ok=True)
+            if src.directory != drop:
+                (d / src.rule_files[0].replace("*", "a")).write_text(body, encoding="utf-8")
+        for rel, text in (extra or {}).items():
+            (root / rel).write_text(text, encoding="utf-8")
+        return root
 
-        `_tracked_yaml_paths` filters suffixes in Python for exactly this
-        reason; `_expected_rule_files` kept the pathspec form, so
-        `configmap-rules-extra.YAML` was discovered by the scanner and absent
-        from the per-file coverage anchor. The two-way equality assertion turns
-        that into a red test — but one that blames the scanner for finding a
-        file that really does ship.
-        """
-        body = ("apiVersion: v1\nkind: ConfigMap\nmetadata: {name: x}\n"
-                "data:\n  r.yml: |\n    groups:\n      - name: g\n"
-                "        rules:\n          - alert: A\n            expr: up == 0\n")
-        repo = self._temp_repo(tmp_path, {
-            "k8s/03-monitoring/configmap-rules-a.YAML": body,
-            "k8s/03-monitoring/configmap-rules-b.yaml": body})
-        expected = self._with_root(repo, _expected_rule_files)
-        assert "k8s/03-monitoring/configmap-rules-a.YAML" in expected, sorted(expected)
+    def test_an_uppercase_extension_beside_rule_files_is_named(self, tmp_path):
+        """⛔ The declaration matches file names case-sensitively, so
+        `configmap-rules-extra.YAML` is no declared rule file — and it must not
+        therefore go unread in silence: every YAML (any case of suffix) beside
+        the rule files is a rule file or declared beside them, else named."""
+        import _lib_consumer_read  # noqa: PLC0415
+        root = self._declared_tree(tmp_path, {
+            "k8s/03-monitoring/configmap-rules-extra.YAML": "groups: []\n"})
+        with pytest.raises(_lib_consumer_read.SourcesUnlisted) as exc:
+            self._with_root(root, _expected_rule_files)
+        assert [Path(p).name for p, _w in exc.value.files] == ["configmap-rules-extra.YAML"]
 
     def test_an_empty_anchor_raises_instead_of_passing_everything(self, tmp_path):
-        """Both `git ls-files` anchors are fail-CLOSED.
+        """Both anchors are fail-CLOSED.
 
         An empty scan is indistinguishable from a clean one: every contract
         downstream iterates these lists, so `[]` makes all of them pass by
-        examining nothing. `check_scrape_reachability --ci` would print
-        "0 DEAD" over a tree it never opened.
+        examining nothing. The tracked-YAML listing (the tripwire's scope)
+        raises on an empty repo; the declaration raises when ANY one source
+        matches no file (Bazel's `glob(allow_empty = False)`) — emptying one
+        directory must not leave the other two reading as a clean answer.
         """
-        empty = self._temp_repo(tmp_path, {"README.md": "no rules here\n"})
-        for fn in (_tracked_yaml_paths, _expected_rule_files):
-            with pytest.raises(AssertionError, match="git ls-files|repo layout"):
-                self._with_root(empty, fn)
+        import _lib_consumer_read  # noqa: PLC0415
+        empty = self._temp_repo(tmp_path / "git", {"README.md": "no rules here\n"})
+        with pytest.raises(AssertionError, match="git ls-files|repo layout"):
+            self._with_root(empty, _tracked_yaml_paths)
+        assert len(self._with_root(self._declared_tree(tmp_path / "full"),
+                                   _expected_rule_files)) == 3
+        for src in _lib_consumer_read.RULE_SOURCES:
+            root = self._declared_tree(tmp_path / src.directory.replace("/", "-"),
+                                       drop=src.directory)
+            with pytest.raises(_lib_consumer_read.NoDeclaredRuleFiles, match=src.directory):
+                self._with_root(root, _expected_rule_files)
 
     def test_the_skip_list_is_empty_and_stays_empty(self):
         """`_SCAN_SKIP_PARTS`'s own comment calls it "deliberately EMPTY".
@@ -4502,14 +4490,14 @@ class TestScannerAnchorsAreFailClosed:
         but an oracle that answers loosely makes every assertion reading it
         loose in the same direction.
 
-        Four guards, each its own surviving mutant: the name must end in a
-        rules extension, it must be a FILE, it must be named `rule-pack-*`,
-        and it must actually declare `groups:` — otherwise
-        `touch rule-packs/rule-pack-x.yaml` (zero bytes) mints a pack.
+        The packs are the declaration's (`rule_pack_files`, #3438: top level,
+        `rule-pack-*.yaml|yml`), and a name alone does not make one: it must
+        load and actually have `groups:` — otherwise `touch
+        rule-packs/rule-pack-x.yaml` (zero bytes) mints a pack.
         """
         import _rule_tree  # noqa: PLC0415
         packs = tmp_path / "rule-packs"
-        (packs / "rule-pack-a-directory.yaml").mkdir(parents=True)
+        packs.mkdir(parents=True)
         (packs / "rule-pack-real.yaml").write_text(
             "groups:\n  - name: g\n    rules:\n      - alert: A\n"
             "        expr: up == 0\n", encoding="utf-8")
@@ -4519,15 +4507,14 @@ class TestScannerAnchorsAreFailClosed:
         (packs / "rule-pack-empty.yaml").write_text("groups: []\n", encoding="utf-8")
         (packs / "rule-pack-decoy.yaml").write_text("", encoding="utf-8")
         (packs / "rule-pack-no-groups.yaml").write_text("other: 1\n", encoding="utf-8")
-        (packs / "not-a-pack.yaml").write_text("groups: []\n", encoding="utf-8")
         (packs / "rule-pack-wrong-ext.txt").write_text("groups: []\n", encoding="utf-8")
-        # RECURSIVE: a pack moved into a subdirectory is still that pack.
+        # Not declared: a subdirectory is not read (the tripwire names rules there).
         (packs / "sub").mkdir()
         (packs / "sub" / "rule-pack-nested.yaml").write_text(
             "groups: []\n", encoding="utf-8")
 
         got = self._with_root(tmp_path, _rule_tree._generated_pack_names)
-        assert got == {"real", "empty", "nested"}, got
+        assert got == {"real", "empty"}, got
 
     def test_pack_name_uniqueness_survives_python_dash_O(self, tmp_path):
         """⛔ `raise`, not `assert` — and only `python -O` can tell them apart.

@@ -239,25 +239,37 @@ def _diff_maps(canonical: Dict[str, str], other: Dict[str, str]) -> List[str]:
     return findings
 
 
-def read_copies(repo: Path, names: List[str]) -> Dict[str, Tuple[List[dict], List[dict], List[dict]]]:
-    """{pack: (rule-pack groups, configmap groups, operator groups)} for every
-    pack of *names* whose two copies exist, read the way their consumers read
-    them (#3206) in two da-read runs for the whole set — not three per pack.
-    Raises `RuleFilesRefused` naming any copy Prometheus' rule loader refuses."""
+def copy_paths(repo: Path, name: str) -> Tuple[Path, Path]:
+    """(ConfigMap copy, PrometheusRule copy) of pack *name* under *repo*: the
+    file names their generators write, both derived from the one declaration
+    (#3471: `CONFIGMAP_RULES.file_name`, `OPERATOR_RULES.file_name`)."""
     cr = _consumer_read()
-    present = [n for n in names
-               if (repo / "k8s" / "03-monitoring" / f"configmap-rules-{n}.yaml").exists()
-               and (repo / "operator-manifests" / f"da-rule-pack-{n}.yaml").exists()]
-    packs = cr.prometheus_rule_files(
-        [repo / "rule-packs" / f"rule-pack-{n}.yaml" for n in present])
+    return (repo / cr.CONFIGMAP_RULES.directory / cr.CONFIGMAP_RULES.file_name(name),
+            repo / cr.OPERATOR_RULES.directory / cr.OPERATOR_RULES.file_name(name))
+
+
+def source_path(repo: Path, name: str) -> Path:
+    """The rule pack *name* under *repo* by its declared name (``.yaml``) —
+    for a caller that has only the name; `main` passes the file it listed."""
+    cr = _consumer_read()
+    return repo / cr.RULE_PACKS.directory / cr.RULE_PACKS.file_name(name)
+
+
+def read_copies(repo: Path, packs: List[Path]) -> Dict[str, Tuple[List[dict], List[dict], List[dict]]]:
+    """{pack: (rule-pack groups, configmap groups, operator groups)} for every
+    rule pack file of *packs* whose two copies exist, read the way their
+    consumers read them (#3206) in two da-read runs for the whole set — not
+    three per pack. Raises `RuleFilesRefused` naming any copy Prometheus' rule
+    loader refuses."""
+    cr = _consumer_read()
+    present = [(cr.RULE_PACKS.member(p), p) for p in packs
+               if all(c.exists() for c in copy_paths(repo, cr.RULE_PACKS.member(p)))]
+    rule_packs = cr.prometheus_rule_files([p for _, p in present])
     manifests = cr.require_read(cr.manifest_rule_file_results(
-        [p for n in present for p in (
-            repo / "k8s" / "03-monitoring" / f"configmap-rules-{n}.yaml",
-            repo / "operator-manifests" / f"da-rule-pack-{n}.yaml")]))
+        [c for n, _ in present for c in copy_paths(repo, n)]))
     out = {}
-    for n, rf in zip(present, packs):
-        cm = str(repo / "k8s" / "03-monitoring" / f"configmap-rules-{n}.yaml")
-        op = str(repo / "operator-manifests" / f"da-rule-pack-{n}.yaml")
+    for (n, _), rf in zip(present, rule_packs):
+        cm, op = (str(c) for c in copy_paths(repo, n))
         out[n] = (rf.groups,
                   [g for m in manifests if m.manifest == cm and m.kind == "ConfigMap"
                    for g in m.groups],
@@ -267,13 +279,14 @@ def read_copies(repo: Path, names: List[str]) -> Dict[str, Tuple[List[dict], Lis
 
 
 def check_pack(repo: Path, name: str,
-               copies: "Tuple[List[dict], List[dict], List[dict]] | None" = None
+               copies: "Tuple[List[dict], List[dict], List[dict]] | None" = None,
+               source: "Path | None" = None,
                ) -> Tuple[bool, List[str]]:
     """Compare the three copies of one pack (*copies* from `read_copies`;
-    read here when not given). Returns (ok, findings)."""
-    rp = repo / "rule-packs" / f"rule-pack-{name}.yaml"
-    cm = repo / "k8s" / "03-monitoring" / f"configmap-rules-{name}.yaml"
-    op = repo / "operator-manifests" / f"da-rule-pack-{name}.yaml"
+    read here when not given, the source from *source*, by default the
+    declared ``.yaml`` name). Returns (ok, findings)."""
+    rp = source if source is not None else source_path(repo, name)
+    cm, op = copy_paths(repo, name)
 
     findings: List[str] = []
     if not cm.exists():
@@ -309,25 +322,31 @@ def main() -> "int | Report":
         print(f"ERROR: {_THIS_DIR} is not inside a scripts/tools tree, so there "
               f"is no repo whose rule-packs/ to check", file=sys.stderr)
         return EXIT_CALLER_ERROR
-    pack_files = sorted((repo / "rule-packs").glob("rule-pack-*.yaml"))
-    if not pack_files:
-        print("ERROR: no rule packs found under rule-packs/", file=sys.stderr)
-        return EXIT_CALLER_ERROR
-
+    cr = _consumer_read()
     results = {}
     any_drift = False
     try:
-        copies = read_copies(repo, [pf.stem.replace("rule-pack-", "") for pf in pack_files])
+        # #3471: the rule packs are the one declaration's (rule-pack-*.yaml|yml;
+        # an undeclared YAML beside them is named) — a `.yml` pack is checked
+        # too, no longer passed over.
+        packs_dir = repo / cr.RULE_PACKS.directory
+        pack_files = cr.rule_pack_files(packs_dir) if packs_dir.is_dir() else []
+        if not pack_files:
+            print(f"ERROR: no rule packs found under {cr.RULE_PACKS.directory}/",
+                  file=sys.stderr)
+            return EXIT_CALLER_ERROR
+        copies = read_copies(repo, pack_files)
         for pf in pack_files:
-            name = pf.stem.replace("rule-pack-", "")
-            ok, findings = check_pack(repo, name, copies.get(name))
+            name = cr.RULE_PACKS.member(pf)
+            ok, findings = check_pack(repo, name, copies.get(name), source=pf)
             results[name] = {"ok": ok, "findings": findings}
             if not ok:
                 any_drift = True
-    except _consumer_read().ConsumerReadError as exc:
+    except cr.ConsumerReadError as exc:
         # #3206: a copy Prometheus' rule loader refuses (named, with the
-        # loader's reason), or no da-read — the parse-failure exit as before.
-        print(f"ERROR: {_consumer_read().error_text(exc)}", file=sys.stderr)
+        # loader's reason), or no da-read — the parse-failure exit as before;
+        # #3471: an undeclared YAML in rule-packs/ too.
+        print(f"ERROR: {cr.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     if not args.json:

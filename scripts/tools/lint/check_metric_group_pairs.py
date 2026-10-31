@@ -74,8 +74,11 @@ KNOWN_UNGROUPED: dict[str, str] = {
     "ContainerOOMKilled": "MISSING_BOTH — severity-dedup inert, double notification (#1199 / TRK-338)",
 }
 
-T1_GLOB = ("rule-packs", "rule-pack-*.yaml")
-T2_GLOB = ("k8s/03-monitoring", "configmap-rules-*.yaml")
+# #3471: the two trees are the rule-source declaration's entries — their
+# directories and which files there are rule files (.yaml|yml; an undeclared
+# YAML there is named, `SourcesUnlisted`) — not globs of this lint's own.
+T1_SOURCE = _lib_consumer_read.RULE_PACKS
+T2_SOURCE = _lib_consumer_read.CONFIGMAP_RULES
 
 # The base side of an upgrade pair may be informational; the escalated side
 # must be labelled critical for the name match to count as an upgrade pair.
@@ -107,12 +110,9 @@ def collect_alerts(root: Path = PROJECT_ROOT) -> dict[str, dict]:
                 if name not in alerts or prefer:
                     alerts[name] = labels
 
-    t1_dir, t1_pat = T1_GLOB
-    t1 = _lib_consumer_read.prometheus_rule_file_results(
-        sorted((root / t1_dir).glob(t1_pat)))
-    t2_dir, t2_pat = T2_GLOB
+    t1 = _lib_consumer_read.prometheus_rule_file_results(T1_SOURCE.files_under(root))
     t2 = [rf for rf in _lib_consumer_read.manifest_rule_file_results(
-        sorted((root / t2_dir).glob(t2_pat))) if rf.kind == "ConfigMap"]
+        T2_SOURCE.files_under(root)) if rf.kind == "ConfigMap"]
     _lib_consumer_read.require_read(t1 + t2)
     for rf in t1:
         eat(rf.documents[0], prefer=True)

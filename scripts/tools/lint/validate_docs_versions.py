@@ -194,15 +194,23 @@ def count_rule_packs(rule_packs_dir: Path = None,
     # ConfigMaps. A file the loader refuses raises `RuleFilesRefused`: the
     # count is never taken around it.
     # rule-packs/ directory (recording rules + operational alerts)
-    pack_files = [f for f in sorted(rule_packs_dir.glob("rule-pack-*.yaml"))
-                  if f.stem.replace("rule-pack-", "") not in _EXCLUDE]
+    # #3471: which files are rule packs / rules ConfigMaps is the one
+    # declaration (`RULE_SOURCES`); an undeclared YAML there is named. A
+    # directory that is not there counts nothing — `bump_docs` reports that
+    # empty count as NO-SOURCE, as before.
+    packs_src = _lib_consumer_read.RULE_PACKS
+    pack_files = [f for f in (packs_src.files_in(rule_packs_dir)
+                              if Path(rule_packs_dir).is_dir() else [])
+                  if packs_src.member(f) not in _EXCLUDE]
     for f, rf in zip(pack_files, _lib_consumer_read.prometheus_rule_files(pack_files)):
         rec, alert = _count(rf.groups)
-        packs[f.stem.replace("rule-pack-", "")] = {"recording": rec, "alert": alert}
+        packs[packs_src.member(f)] = {"recording": rec, "alert": alert}
 
     # k8s ConfigMaps (may have alert rules not in rule-packs/ source)
-    cm_files = [f for f in sorted(k8s_rules_dir.glob("configmap-rules-*.yaml"))
-                if f.stem.replace("configmap-rules-", "") not in _EXCLUDE]
+    cms_src = _lib_consumer_read.CONFIGMAP_RULES
+    cm_files = [f for f in (cms_src.files_in(k8s_rules_dir)
+                            if Path(k8s_rules_dir).is_dir() else [])
+                if cms_src.member(f) not in _EXCLUDE]
     per_cm: "dict[str, list[int]]" = {str(f): [0, 0] for f in cm_files}
     for rf in _lib_consumer_read.require_read(
             _lib_consumer_read.manifest_rule_file_results(cm_files)):
@@ -211,7 +219,7 @@ def count_rule_packs(rule_packs_dir: Path = None,
             per_cm[rf.manifest][0] += r
             per_cm[rf.manifest][1] += a
     for f in cm_files:
-        name = f.stem.replace("configmap-rules-", "")
+        name = cms_src.member(f)
         rec, alert = per_cm[str(f)]
         if name not in packs:
             packs[name] = {"recording": rec, "alert": alert}

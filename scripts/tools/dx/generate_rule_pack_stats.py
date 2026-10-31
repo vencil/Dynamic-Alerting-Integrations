@@ -37,8 +37,10 @@ from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION, Report  # noqa: E4
 SCRIPT_DIR = Path(__file__).resolve().parent
 REPO_ROOT = SCRIPT_DIR.parent.parent.parent
 
-RULE_PACKS_DIR = REPO_ROOT / "rule-packs"
-K8S_RULES_DIR = REPO_ROOT / "k8s" / "03-monitoring"
+# #3471: the directories and which files there are rule files are the one
+# declaration (`_lib_consumer_read.RULE_SOURCES`).
+RULE_PACKS_DIR = REPO_ROOT / _lib_consumer_read.RULE_PACKS.directory
+K8S_RULES_DIR = REPO_ROOT / _lib_consumer_read.CONFIGMAP_RULES.directory
 INCLUDE_DIR = REPO_ROOT / "docs" / "includes"
 
 # Exporter name mapping (pack name → display name + exporter)
@@ -261,15 +263,17 @@ def gather_stats() -> dict:
     _EXCLUDE = {"custom-alerts"}
 
     # rule-packs/ directory
-    pack_files = [f for f in sorted(RULE_PACKS_DIR.glob("rule-pack-*.yaml"))
-                  if f.stem.replace("rule-pack-", "") not in _EXCLUDE]
+    packs_src = _lib_consumer_read.RULE_PACKS
+    pack_files = [f for f in packs_src.files_in(RULE_PACKS_DIR)
+                  if packs_src.member(f) not in _EXCLUDE]
     for f, rf in zip(pack_files, _lib_consumer_read.prometheus_rule_files(pack_files)):
         rec, alert = _count(rf.groups)
-        packs[f.stem.replace("rule-pack-", "")] = {"recording": rec, "alert": alert}
+        packs[packs_src.member(f)] = {"recording": rec, "alert": alert}
 
     # k8s ConfigMaps (may have additional alert rules)
-    cm_files = [f for f in sorted(K8S_RULES_DIR.glob("configmap-rules-*.yaml"))
-                if f.stem.replace("configmap-rules-", "") not in _EXCLUDE]
+    cms_src = _lib_consumer_read.CONFIGMAP_RULES
+    cm_files = [f for f in cms_src.files_in(K8S_RULES_DIR)
+                if cms_src.member(f) not in _EXCLUDE]
     per_cm: dict = {str(f): [0, 0] for f in cm_files}
     for rf in _lib_consumer_read.require_read(
             _lib_consumer_read.manifest_rule_file_results(cm_files)):
@@ -278,7 +282,7 @@ def gather_stats() -> dict:
             per_cm[rf.manifest][0] += r
             per_cm[rf.manifest][1] += a
     for f in cm_files:
-        name = f.stem.replace("configmap-rules-", "")
+        name = cms_src.member(f)
         rec, alert = per_cm[str(f)]
         if name not in packs:
             packs[name] = {"recording": rec, "alert": alert}

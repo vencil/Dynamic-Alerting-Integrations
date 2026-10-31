@@ -140,6 +140,7 @@ on:
       # this list in sync with bench-attrib-main.yaml's paths.
       - 'scripts/tools/ops/bench_interleave.sh'
       - 'scripts/tools/ops/bench_gate_compare.sh'
+      - 'scripts/tools/dx/bench_verdict.py'
       - 'scripts/tools/ops/bench_render_summary.sh'
       - 'scripts/tools/ops/bench_report_pr.sh'
       - 'scripts/tools/ops/bench-canary/**'
@@ -232,7 +233,10 @@ jobs:
     # summary + fail-gate steps to actually render before a hard-kill — a cap
     # that hard-kills mid-output leaves the dev with a red check and no
     # diagnostic. [Gemini round-12 timeout-tightrope catch.]
-    timeout-minutes: 20
+    # 20→35: a run whose only flagged rows are sec/op now gets a SECOND
+    # interleaved pass before it is judged (bench_gate_compare.sh
+    # REPLICATE_TIMING_ONLY), so the worst case is two passes.
+    timeout-minutes: 35
     steps:
       # persist-credentials: false (same hardening bench-on-demand.yaml
       # carries): this job EXECUTES the PR's test binaries (a malicious
@@ -307,6 +311,8 @@ jobs:
           INCONCLUSIVE_REASON: ${{ steps.compare.outputs.inconclusive_reason }}
           INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
           INCONCLUSIVE_CANARY: ${{ steps.compare.outputs.inconclusive_canary }}
+          UNREPLICATED: ${{ steps.compare.outputs.unreplicated }}
+          REGRESSION_BASIS: ${{ steps.compare.outputs.regression_basis }}
           BENCHSTAT_TXT: ${{ steps.compare.outputs.benchstat_txt }}
           # PR head SHA bound via env (#1021 class house rule).
           COMPARE_DESC: |

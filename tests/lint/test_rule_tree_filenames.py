@@ -1,4 +1,4 @@
-"""_rule_tree's git listings keep a non-UTF-8 file name's identity (#1374).
+"""_rule_tree's listings keep a non-UTF-8 file name's identity (#1374).
 
 `git ls-files -z` hands back raw path bytes. Decoded with ``errors="replace"``
 a name that is not valid UTF-8 becomes a different name — one that opens
@@ -11,6 +11,7 @@ on Windows too, where a file system cannot hold such a name.
 """
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -55,6 +56,27 @@ def test_tracked_yaml_paths_keeps_the_raw_name(scratch_repo):
     assert [p.encode("utf-8", "surrogateescape") for p in paths if p.startswith("k8s/")] == [_RAW]
 
 
-def test_expected_rule_files_keeps_the_raw_name(scratch_repo):
-    files = _rule_tree._expected_rule_files()
-    assert {p.encode("utf-8", "surrogateescape") for p in files} == {_RULES_RAW}
+def test_expected_rule_files_keeps_the_raw_name(tmp_path, monkeypatch):
+    """The declaration lists the file system (#3438), not git: a rule pack
+    whose name is not valid UTF-8 keeps its identity there too
+    (``os.fsdecode`` is ``surrogateescape`` on POSIX)."""
+    import _lib_consumer_read  # noqa: PLC0415
+    root = bytes(tmp_path)
+    for src in _lib_consumer_read.RULE_SOURCES:
+        os.makedirs(os.path.join(root, os.fsencode(src.directory)), exist_ok=True)
+    try:
+        with open(os.path.join(root, _RULES_RAW), "wb") as fh:
+            fh.write(b"groups: []\n")
+    except OSError:
+        pytest.skip("this file system cannot hold a name that is not UTF-8")
+    for name in (b"operator-manifests/da-rule-pack-a.yaml",
+                 b"k8s/03-monitoring/configmap-rules-a.yaml"):
+        with open(os.path.join(root, name), "wb") as fh:
+            fh.write(b"groups: []\n")
+    monkeypatch.setattr(_rule_tree, "_REPO_ROOT", str(tmp_path))
+    _rule_tree._expected_rule_files.cache_clear()
+    try:
+        files = _rule_tree._expected_rule_files()
+    finally:
+        _rule_tree._expected_rule_files.cache_clear()
+    assert _RULES_RAW in {p.encode("utf-8", "surrogateescape") for p in files}

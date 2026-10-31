@@ -13,6 +13,16 @@ service:
     prometheus.io/port: "8080"
     prometheus.io/path: "/metrics"
 
+# 本 repo 自帶的 Prometheus（k8s/03-monitoring/deployment-prometheus.yaml）在
+# `monitoring`、pod label 是 `app: prometheus`，所以這裡把 exporter 的 ingress
+# 收到只放它進來。chart 預設 allowExternal: true（只限 port、不限來源），因為
+# chart 無從得知客戶的 scraper label（#1425）。
+networkPolicy:
+  allowExternal: false
+  prometheusNamespace: monitoring
+  prometheusPodLabels:
+    app: prometheus
+
 exporter:
   listenAddr: ":8080"
   reloadInterval: "60s"    # Less frequent in CI

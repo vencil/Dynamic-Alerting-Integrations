@@ -43,7 +43,9 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_compat import find_project_root  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
-PACK_GLOB = "rule-pack-*.yaml"
+# #3471: which file names are rule packs is the one declaration
+# (`_lib_consumer_read.RULE_PACKS`), in both layouts.
+_PACKS = _lib_consumer_read.RULE_PACKS
 
 _THRESHOLD_RE = re.compile(r"tenant(?:_version)?:alert_threshold:([A-Za-z0-9_]+)")
 _TOKEN_RE = re.compile(r"[A-Za-z_:][A-Za-z0-9_:]*")
@@ -54,16 +56,21 @@ _WARNED = False
 
 
 def find_rule_pack_paths(here: "Path | None" = None) -> "list[Path]":
-    """The rule packs this layout carries, flat-first; [] when there are none."""
+    """The rule packs this layout carries, flat-first; [] when there are none.
+
+    Flat: the files beside this module named as rule packs
+    (``RULE_PACKS.named_in`` — the image puts every tool and its data in one
+    directory). Repo: ``rule_pack_files`` of ``rule-packs/``, which names an
+    undeclared YAML there (``SourcesUnlisted``) instead of passing over it."""
     here = Path(_THIS_DIR).resolve() if here is None else here
-    flat = sorted(here.glob(PACK_GLOB))
+    flat = _PACKS.named_in(here)
     if flat:
         return flat
     # This tree's root, never an enclosing project's (#2845).
     root = find_project_root(here)
-    if root is None:
+    if root is None or not (root / _PACKS.directory).is_dir():
         return []
-    return sorted((root / "rule-packs").glob(PACK_GLOB))
+    return _PACKS.files_under(root)
 
 
 def build_index(pack_paths) -> "dict[str, tuple[str, ...]]":
@@ -112,15 +119,15 @@ def _index() -> "dict[str, tuple[str, ...]] | None":
     global _INDEX_CACHE, _INDEX_LOADED
     if not _INDEX_LOADED:
         _INDEX_LOADED = True
-        paths = find_rule_pack_paths()
-        if not paths:
-            _warn_once(f"no {PACK_GLOB} beside {_THIS_DIR} or under the "
-                       "project's rule-packs/")
-        else:
-            try:
+        try:
+            paths = find_rule_pack_paths()
+            if not paths:
+                _warn_once(f"no {' / '.join(_PACKS.rule_files)} beside {_THIS_DIR} "
+                           f"or under the project's {_PACKS.directory}/")
+            else:
                 _INDEX_CACHE = build_index(paths)
-            except _lib_consumer_read.ConsumerReadError as exc:
-                _warn_once(f"rule packs unreadable: {exc.detail()}")
+        except _lib_consumer_read.ConsumerReadError as exc:
+            _warn_once(f"rule packs unreadable: {exc.detail()}")
     return _INDEX_CACHE
 
 

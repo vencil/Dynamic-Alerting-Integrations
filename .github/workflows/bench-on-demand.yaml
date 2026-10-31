@@ -154,8 +154,9 @@ jobs:
     name: Interleaved bench vs merge-base (unprivileged, runs PR code)
     needs: gate
     runs-on: ubuntu-24.04
-    # Same budget as bench-gate-pr (identical workload; ~8-10 min nominal).
-    timeout-minutes: 20
+    # Same budget as bench-gate-pr (identical workload; up to two passes of
+    # ~8-10 min each — see the replication note in bench_gate_compare.sh).
+    timeout-minutes: 35
     permissions:
       contents: read
     outputs:
@@ -231,6 +232,8 @@ jobs:
           INCONCLUSIVE_REASON: ${{ steps.compare.outputs.inconclusive_reason }}
           INCONCLUSIVE_CPUS: ${{ steps.compare.outputs.inconclusive_cpus }}
           INCONCLUSIVE_CANARY: ${{ steps.compare.outputs.inconclusive_canary }}
+          UNREPLICATED: ${{ steps.compare.outputs.unreplicated }}
+          REGRESSION_BASIS: ${{ steps.compare.outputs.regression_basis }}
           BENCHSTAT_TXT: ${{ steps.compare.outputs.benchstat_txt }}
           COMPARE_DESC: |
             `/bench` on-demand run: compared PR HEAD (`${{ needs.gate.outputs.head_sha }}`)

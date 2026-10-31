@@ -353,7 +353,6 @@ def all_threshold_keys(pack_paths: list[str]) -> set[str]:
 # Shared paths / loading / known-deferred (used by recommend + drift-guard)
 # ---------------------------------------------------------------------------
 import functools  # noqa: E402
-import glob  # noqa: E402
 import os  # noqa: E402
 import sys  # noqa: E402
 
@@ -365,7 +364,10 @@ import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads 
 
 DEFAULT_MAP_PATH = os.path.join(_THIS_DIR, "metric_observed_map.yaml")
 
-_PACK_GLOB = "rule-pack-*.yaml"
+# #3471: which file names are rule packs is the one declaration
+# (`_lib_consumer_read.RULE_PACKS`), in both layouts.
+_PACKS = _lib_consumer_read.RULE_PACKS
+_PACK_NAMES = " / ".join(_PACKS.rule_files)
 
 
 class RulePacksNotFoundError(FileNotFoundError):
@@ -389,11 +391,11 @@ def _find_rule_packs_dir() -> Optional[str]:
     (``find_project_root``, #2845) — same shape as
     ``_threshold_alerts.find_rule_pack_paths``.
     """
-    if glob.glob(os.path.join(_THIS_DIR, _PACK_GLOB)):
+    if _PACKS.named_in(_THIS_DIR):
         return _THIS_DIR
     root = find_project_root(_THIS_DIR)
-    if root is not None and (root / "rule-packs").is_dir():
-        return str(root / "rule-packs")
+    if root is not None and (root / _PACKS.directory).is_dir():
+        return str(root / _PACKS.directory)
     return None
 
 
@@ -423,13 +425,20 @@ def default_pack_paths() -> list[str]:
     if DEFAULT_RULE_PACKS_DIR is None:
         raise RulePacksNotFoundError(
             f"no rule packs reachable from {_THIS_DIR}: none beside this "
-            f"module ({_PACK_GLOB}), and no rule-packs/ directory at the root "
-            f"of the scripts/tools tree this module sits in"
+            f"module ({_PACK_NAMES}), and no {_PACKS.directory}/ directory at "
+            f"the root of the scripts/tools tree this module sits in"
         )
-    paths = sorted(glob.glob(os.path.join(DEFAULT_RULE_PACKS_DIR, _PACK_GLOB)))
+    # Flat layout (the image): the files beside this module named as rule
+    # packs. Repo: `rule_pack_files`, which names an undeclared YAML in
+    # rule-packs/ (`SourcesUnlisted`) instead of passing over it.
+    if os.path.realpath(DEFAULT_RULE_PACKS_DIR) == os.path.realpath(_THIS_DIR):
+        found = _PACKS.named_in(DEFAULT_RULE_PACKS_DIR)
+    else:
+        found = _PACKS.files_in(DEFAULT_RULE_PACKS_DIR)
+    paths = [str(p) for p in found]
     if not paths:
         raise RulePacksNotFoundError(
-            f"{DEFAULT_RULE_PACKS_DIR} holds no {_PACK_GLOB}"
+            f"{DEFAULT_RULE_PACKS_DIR} holds no {_PACK_NAMES}"
         )
     return paths
 

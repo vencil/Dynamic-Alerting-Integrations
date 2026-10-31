@@ -238,6 +238,47 @@ class TestExtractRulePackMetrics:
         assert "db" in result
         assert "db_metric_from_configmap_total" in result["db"]
 
+    def test_yml_files_are_read_and_an_undeclared_yaml_is_named(self, tmp_path):
+        """#3471: both trees are the declaration's. A `.yml` pack and a
+        `.yml` rules ConfigMap are read (the lint's own `*.yaml` globs
+        passed them over); a YAML beside them that is neither is named."""
+        import _lib_consumer_read
+        rule_packs = tmp_path / "rule-packs"
+        rule_packs.mkdir()
+        _write(rule_packs / "rule-pack-db.yml",
+            "groups:\n  - name: g\n    rules:\n"
+            "      - alert: A\n        expr: db_yml_pack_metric_total > 0\n")
+        k8s = tmp_path / "k8s"
+        k8s.mkdir()
+        _write(k8s / "configmap-rules-cm.yml",
+            "apiVersion: v1\nkind: ConfigMap\nmetadata:\n  name: rules-cm\ndata:\n"
+            "  rules.yml: |\n    groups:\n      - name: g\n        rules:\n"
+            "          - alert: B\n            expr: cm_yml_metric_total > 0\n")
+        result = mod.extract_rule_pack_metrics(rule_packs, k8s)
+        assert "db_yml_pack_metric_total" in result["db"]
+        assert "cm_yml_metric_total" in result["cm"]
+        _write(rule_packs / "stray.yaml", "groups: []\n")
+        with pytest.raises(_lib_consumer_read.SourcesUnlisted) as exc:
+            mod.extract_rule_pack_metrics(rule_packs, k8s)
+        assert [Path(p).name for p, _ in exc.value.files] == ["stray.yaml"]
+
+    def test_alert_names_read_the_declared_packs_only(self, tmp_path, monkeypatch):
+        """#3471: `rule_pack_alert_names` used `glob("*.yaml")` — every YAML
+        in rule-packs/, a `.yml` pack not among them. It reads the declared
+        packs: `.yml` included, the registry beside them declared no pack,
+        anything else named."""
+        import _lib_consumer_read
+        rule_packs = tmp_path / "rule-packs"
+        rule_packs.mkdir()
+        _write(rule_packs / "rule-pack-db.yml",
+            "groups:\n  - name: g\n    rules:\n      - alert: FromYml\n        expr: x > 0\n")
+        _write(rule_packs / "threshold-registry.yaml", "notes: |\n  - alert: NotARule\n")
+        monkeypatch.setattr(mod, "RULE_PACKS_DIR", rule_packs)
+        assert mod.rule_pack_alert_names() == {"FromYml"}
+        _write(rule_packs / "stray.yaml", "groups: []\n")
+        with pytest.raises(_lib_consumer_read.SourcesUnlisted):
+            mod.rule_pack_alert_names()
+
     def test_k8s_non_configmap_yaml_skipped(self, tmp_path):
         # Property: a configmap-rules-*.yaml that isn't kind=ConfigMap is skipped.
         k8s = tmp_path / "k8s"

@@ -82,6 +82,7 @@ lang: zh
 | `analyze_bench_history.py` | Aggregate bench-record nightly history into per-benchmark stats. |
 | `analyze_probe.py` | Summarise BenchmarkProbeWriteLatency PROBE records - write vs load attribution. |
 | `axe_lite_static.py` | Axe-lite: static WCAG heuristics for JSX files (Phase .a0 Day 5 verification). |
+| `bench_verdict.py` | Turn a benchstat comparison into the bench gate's verdict (shared core). |
 | `bump_docs.py` | 版號一致性管理工具 |
 | `bump_playbook_versions.py` | Bump `verified-at-version:` front-matter across the 4 operational playbooks. |
 | `check_aria_references.py` | Static JSX ARIA reference closure validator (Phase .a0 Day 5 verification). |
@@ -286,6 +287,7 @@ lang: zh
 - `scripts/tools/dx/_recipe_preview.py`：recipe would-fire preview core (#657 P2).
 - `scripts/tools/dx/_waveform_lib.py`：fault-waveform pack 合成核心（ADR-030 決策層驗證 PR-1，純函式庫）
 - `scripts/tools/lint/_lint_helpers.py`：Shared utilities for lint tools.
-- `scripts/tools/lint/_rule_tree.py`：Rule-tree scanner — what alerting rules this repo actually ships.
+- `scripts/tools/lint/_rule_tree.py`：Rule-tree reader — what alerting rules this repo actually ships.
+- `scripts/tools/lint/_rule_tripwire.py`：Coverage tripwire: rule-shaped YAML outside the rule-source declaration (#3438).
 - `scripts/tools/lint/_version_patterns.py`：Version pattern registry for validate_docs_versions.py
 - `scripts/_lib.sh`：Shell scenario/benchmark 共用

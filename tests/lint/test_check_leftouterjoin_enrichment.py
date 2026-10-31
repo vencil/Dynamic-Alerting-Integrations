@@ -20,6 +20,7 @@ _TOOLS_DIR = os.path.join(
 sys.path.insert(0, _TOOLS_DIR)
 
 import check_leftouterjoin_enrichment as lint  # noqa: E402
+import _lib_consumer_read as cr  # noqa: E402  (#3471: the rule-source declaration)
 
 _BARE = (
     "        expr: |\n"
@@ -61,7 +62,7 @@ def test_no_enrichment_compliant():
 
 def test_live_repo_packs_all_paired():
     repo = lint._repo_root()
-    packs = sorted((repo / "rule-packs").glob("rule-pack-*.yaml"))
+    packs = cr.RULE_PACKS.files_under(repo)   # #3471: the declaration
     assert packs, "expected rule packs under rule-packs/"
     for p in packs:
         markers, branches = lint.count_pair(p.read_text(encoding="utf-8"))

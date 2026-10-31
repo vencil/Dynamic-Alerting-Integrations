@@ -132,16 +132,15 @@ def main() -> int:
     repo = _repo_root()
     targets: List[Path] = []
     try:
-        # #3426: which files in rule-packs/ are rule packs has one
-        # declaration (`rule_pack_files`: rule-pack-*.yaml|yml; an
-        # undeclared YAML there is named) — not a glob of this lint's own.
-        targets += _lib_consumer_read.rule_pack_files(repo / "rule-packs")
+        # #3426/#3471: which files are rule packs and their copies has one
+        # declaration (`RULE_SOURCES`: rule-pack-*, da-rule-pack-*,
+        # configmap-rules-*, .yaml|yml; an undeclared YAML there is named) —
+        # not a glob of this lint's own.
+        for source in _lib_consumer_read.RULE_SOURCES:
+            targets += source.files_under(repo)
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
-    targets += sorted((repo / "operator-manifests").glob("da-rule-pack-*.yaml"))
-    targets += sorted((repo / "k8s" / "03-monitoring").glob("configmap-rules-*.yaml"))
-    targets = [t for t in targets if t.exists()]
     if not targets:
         print("ERROR: no rule-pack files found", file=sys.stderr)
         return EXIT_CALLER_ERROR

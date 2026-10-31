@@ -1,0 +1,49 @@
+goos: linux
+goarch: amd64
+pkg: example.com/app
+cpu: AMD EPYC 7763 64-Core Processor
+             │  base3.txt  │            timing3.txt             │
+             │   sec/op    │    sec/op     vs base              │
+Load_1000-4    92.44m ± 1%    93.03m ± 1%       ~ (p=0.065 n=6)
+Merge_1000-4   945.1µ ± 1%   1025.1µ ± 1%  +8.46% (p=0.002 n=6)
+Scan_1000-4    40.02m ± 1%    40.19m ± 1%       ~ (p=1.000 n=6)
+geomean        15.18m         15.65m       +3.11%
+
+             │  base3.txt   │             timing3.txt              │
+             │     B/op     │     B/op      vs base                │
+Load_1000-4    976.6Ki ± 0%   976.6Ki ± 0%       ~ (p=1.000 n=6) ¹
+Merge_1000-4   664.1Ki ± 0%   664.1Ki ± 0%       ~ (p=1.000 n=6) ¹
+Scan_1000-4    878.9Ki ± 0%   878.9Ki ± 0%       ~ (p=1.000 n=6) ¹
+geomean        829.1Ki        829.1Ki       +0.00%
+¹ all samples are equal
+
+             │  base3.txt  │             timing3.txt             │
+             │  allocs/op  │  allocs/op   vs base                │
+Load_1000-4    5.000k ± 0%   5.000k ± 0%       ~ (p=1.000 n=6) ¹
+Merge_1000-4   2.011k ± 0%   2.011k ± 0%       ~ (p=1.000 n=6) ¹
+Scan_1000-4    7.000k ± 0%   7.000k ± 0%       ~ (p=1.000 n=6) ¹
+geomean        4.129k        4.129k       +0.00%
+¹ all samples are equal
+
+pkg: example.com/canary
+                     │  base3.txt   │            timing3.txt             │
+                     │    sec/op    │    sec/op     vs base              │
+ControlCanaryCPU-4     325.7µ ±  0%   325.3µ ±  0%       ~ (p=0.589 n=6)
+ControlCanarySleep-4   1.202µ ± 25%   1.022µ ± 36%       ~ (p=0.310 n=6)
+geomean                19.78µ         18.23µ        -7.84%
+
+                     │  base3.txt   │            timing3.txt             │
+                     │     B/op     │    B/op     vs base                │
+ControlCanaryCPU-4     0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+ControlCanarySleep-4   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                           ²               +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean
+
+                     │  base3.txt   │            timing3.txt             │
+                     │  allocs/op   │ allocs/op   vs base                │
+ControlCanaryCPU-4     0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+ControlCanarySleep-4   0.000 ± 0%     0.000 ± 0%       ~ (p=1.000 n=6) ¹
+geomean                           ²               +0.00%               ²
+¹ all samples are equal
+² summaries must be >0 to compute geomean

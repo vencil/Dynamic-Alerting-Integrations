@@ -28,6 +28,7 @@ _TOOLS_DIR = os.path.join(
 sys.path.insert(0, _TOOLS_DIR)
 
 import check_ha_threshold_aggregation as lint  # noqa: E402
+import _lib_consumer_read as cr  # noqa: E402  (#3471: the rule-source declaration)
 
 
 def _ops(expr: str):
@@ -152,7 +153,8 @@ def test_a_file_prometheus_refuses_is_named_not_skipped(tmp_path):
 
 
 def test_main_names_a_refused_file_rc2(tmp_path, monkeypatch, capsys):
-    (tmp_path / "rule-packs").mkdir()
+    for d in ("rule-packs", "operator-manifests", "k8s/03-monitoring"):
+        (tmp_path / d).mkdir(parents=True)
     (tmp_path / "rule-packs" / "rule-pack-t.yaml").write_text(
         "groups:\n  - name: g\n    rulez: []\n", encoding="utf-8")
     monkeypatch.setattr(lint, "_repo_root", lambda: tmp_path)
@@ -224,11 +226,8 @@ def test_main_names_an_undeclared_yaml_in_rule_packs(tmp_path, monkeypatch, caps
 def test_live_repo_all_max():
     """Dogfood: every committed copy aggregates user_threshold with max."""
     repo = Path(__file__).resolve().parents[2]
-    targets = (
-        sorted((repo / "rule-packs").glob("rule-pack-*.yaml"))
-        + sorted((repo / "operator-manifests").glob("da-rule-pack-*.yaml"))
-        + sorted((repo / "k8s" / "03-monitoring").glob("configmap-rules-*.yaml"))
-    )
+    # #3471: every declared rule file of the three families.
+    targets = [p for s in cr.RULE_SOURCES for p in s.files_under(repo)]
     offenders = {}
     for path in targets:
         findings = _findings(path)

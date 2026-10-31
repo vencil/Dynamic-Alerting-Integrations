@@ -345,7 +345,6 @@ NOT_A_CELL: dict[str, str] = {
     "ops/init_project.py":
         "reads conf.d only through `_lib_confd.iter_config_files`; its "
         "other walks are over the tree it scaffolds",
-    "lint/_rule_tree.py": "walks rule-packs, not a conf.d",
     "lint/check_cli_contract.py": "walks docs/, not a conf.d",
     "lint/check_cli_default_drift.py": "walks scripts/, not a conf.d",
     "lint/check_doc_datools_cmds.py": "walks docs/, not a conf.d",

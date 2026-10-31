@@ -513,8 +513,9 @@ def platform_alert_identities(
     tenant-triggered inhibit that would silence it reads as safe. A ConfigMap
     growing a second data key is ordinary (kubelet projects each key as its own
     file and Prometheus globs the directory), and ``binaryData`` is a real
-    delivery path in this repo, not a curiosity — see ``_rule_tree`` for the
-    kubelet ``MakePayload`` fallback that makes it one.
+    delivery path in this repo, not a curiosity: kubelet's configmap
+    ``MakePayload`` falls back to ``BinaryData`` for a projected key absent
+    from ``Data`` (k8s pkg/volume/configmap/configmap.go).
     """
     global _PLATFORM_IDENTITY_CACHE, _PLATFORM_DEGRADED_REASON
     if configmap_path is None and _PLATFORM_IDENTITY_CACHE is not None:

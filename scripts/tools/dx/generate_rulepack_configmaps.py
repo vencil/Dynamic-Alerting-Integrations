@@ -93,7 +93,15 @@ def render_configmap(name: str, rule_pack_data: dict, namespace: str = "monitori
 
 
 def _pack_name(path: Path) -> str:
-    return path.stem.replace("rule-pack-", "")
+    """The pack a rule pack file carries, by the one declaration (#3471)."""
+    return _lib_consumer_read.RULE_PACKS.member(path)
+
+
+def target_name(pack: str) -> str:
+    """The file name of the ConfigMap copy of *pack*: derived from the
+    declaration of the rules ConfigMaps (`CONFIGMAP_RULES.file_name`), so the
+    file this generator writes is one the declaration lists (#3471)."""
+    return _lib_consumer_read.CONFIGMAP_RULES.file_name(pack)
 
 
 def main() -> int:
@@ -109,8 +117,14 @@ def main() -> int:
     args = parser.parse_args()
 
     repo = _repo_root()
-    out_dir = repo / "k8s" / "03-monitoring"
-    packs = sorted((repo / "rule-packs").glob("rule-pack-*.yaml"))
+    out_dir = repo / _lib_consumer_read.CONFIGMAP_RULES.directory
+    # #3471: the source packs are the one declaration's (rule-pack-*.yaml|yml;
+    # an undeclared YAML beside them is named, rc 2).
+    try:
+        packs = _lib_consumer_read.rule_pack_files(repo / _lib_consumer_read.RULE_PACKS.directory)
+    except _lib_consumer_read.ConsumerReadError as exc:
+        print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
     if not packs:
         print("ERROR: no rule packs found", file=sys.stderr)
         return EXIT_CALLER_ERROR
@@ -127,6 +141,7 @@ def main() -> int:
     # under --check the generated data values and the committed ConfigMaps'
     # (their outer layer the way kubectl reads it) — a few da-read runs for
     # the whole set. A file the loader refuses stops the generator (rc 2).
+    source_of = {_pack_name(p): p for p in packs}
     try:
         sources = _lib_consumer_read.prometheus_rule_files(packs)
         cms = {_pack_name(p): build_configmap(_pack_name(p), rf.documents[0], args.namespace)
@@ -135,7 +150,7 @@ def main() -> int:
             generated = _lib_consumer_read.require_read(
                 _lib_consumer_read.prometheus_rule_text_results(
                     [(name, v) for name, cm in cms.items() for v in cm["data"].values()]))
-            targets = [out_dir / f"configmap-rules-{name}.yaml" for name in cms]
+            targets = [out_dir / target_name(name) for name in cms]
             committed = _lib_consumer_read.require_read(
                 _lib_consumer_read.manifest_rule_file_results([t for t in targets if t.exists()]))
     except _lib_consumer_read.ConsumerReadError as exc:
@@ -145,7 +160,7 @@ def main() -> int:
     drift = []
     wrote = 0
     for name, cm in cms.items():
-        target = out_dir / f"configmap-rules-{name}.yaml"
+        target = out_dir / target_name(name)
 
         if args.check:
             # Semantic compare: regenerated groups vs committed configmap groups.
@@ -162,7 +177,8 @@ def main() -> int:
             header = (
                 f"# ============================================================\n"
                 f"# {name} Rule Pack — Recording & Alert Rules (ConfigMap)\n"
-                f"# GENERATED from rule-packs/rule-pack-{name}.yaml by\n"
+                f"# GENERATED from {_lib_consumer_read.RULE_PACKS.directory}/"
+                f"{source_of[name].name} by\n"
                 f"# scripts/tools/dx/generate_rulepack_configmaps.py — DO NOT EDIT.\n"
                 f"# Run `make rulepack-configmaps` after editing the rule pack.\n"
                 f"# ============================================================\n"
@@ -173,7 +189,7 @@ def main() -> int:
     if args.check:
         if drift:
             for name, findings in drift:
-                print(f"  ❌ configmap-rules-{name}.yaml drifted from source:")
+                print(f"  ❌ {target_name(name)} drifted from source:")
                 for f in findings:
                     print(f"       {f}")
             print(f"\n❌ {len(drift)} configmap(s) out of sync with rule-packs/. "

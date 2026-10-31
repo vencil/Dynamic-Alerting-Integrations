@@ -160,7 +160,9 @@ def build_prometheus_rule(
         "apiVersion": "monitoring.coreos.com/v1",
         "kind": "PrometheusRule",
         "metadata": {
-            "name": f"da-rule-pack-{rule_pack_name}",
+            # #3471: the object name is the stem of the file it is written to
+            # (`<name>.yaml`), both the declaration's (`OPERATOR_RULES`).
+            "name": _lib_consumer_read.OPERATOR_RULES.file_stem(rule_pack_name),
             "namespace": namespace,
             "labels": {**_RULE_SELECTOR_LABELS, **(selector_labels or {}), **_PART_OF},
         },
@@ -637,7 +639,7 @@ def generate_crds(
             for rule_pack_file, rule_file in zip(rule_pack_files, rule_files):
                 rule_pack_data = rule_file.documents[0]
                 if "groups" in rule_pack_data:
-                    rule_pack_name = rule_pack_file.stem.replace("rule-pack-", "")
+                    rule_pack_name = _lib_consumer_read.RULE_PACKS.member(rule_pack_file)
                     crd = build_prometheus_rule(
                         rule_pack_name, rule_pack_data, namespace, selector_labels,
                     )

@@ -128,6 +128,8 @@ spec:
 
 > **Helm 捷徑**：設定 `rules.mode: operator` 時，threshold-exporter chart 會自動產出 ServiceMonitor（見 `values.yaml` 的 `rules.operator.serviceMonitor`）。
 
+> **NetworkPolicy**：chart 預設替 exporter 建 NetworkPolicy，入站**只限 metrics port、不限來源**（`networkPolicy.allowExternal: true`）——chart 無從得知你的 Prometheus 帶什麼 pod label，猜錯會讓 scrape 靜默斷掉。要把入站收到只放 Prometheus，設 `networkPolicy.allowExternal: false`，並填 `networkPolicy.prometheusNamespace`（它所在的 namespace）與 `networkPolicy.prometheusPodLabels`（它 pod 上的 label，kube-prometheus-stack 是 `app.kubernetes.io/name: prometheus`）；兩者都不可為空，否則 chart 拒絕 render。
+
 ### 驗證 ServiceMonitor
 
 ```bash
