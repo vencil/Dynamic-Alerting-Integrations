@@ -439,6 +439,8 @@ tenants:
 2. **Recording rule layer**: PromQL uses `label_replace` + `=~` for actual matching at query time
 3. **Design principle**: The exporter remains a pure config→metric converter; matching logic is entirely handled by Prometheus native vector operations
 
+> ⚠️ **The shipped Rule Packs do not judge per dimension yet**: threshold normalization is written `max by(tenant)(user_threshold{…})`, which drops the dimension labels, and the observed series are aggregated by `tenant` only. A dimensional key (exact or regex) therefore changes the **whole tenant's** threshold: the dimension values and the base value are reduced to one value (their maximum; the dimension value itself when there is no base row), never applied per dimension — which loosens an alert that fires on `>` and tightens one that fires on `<` (a hit ratio, for example); and `disable` on a dimensional key has no effect. The only label read per value today is `version` in the kubernetes pack ([ADR-024](../adr/024-version-aware-threshold-via-dimensional-label.en.md)). Judging per dimension needs the Rule Packs changed too, tracked in [#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475); the shipped examples carry no dimensional keys for this reason.
+
 ### 2.6 Scheduled Thresholds
 
 Since v0.12.0, thresholds support time-window scheduling, allowing automatic threshold switching across different time periods. Typical use cases: relaxed thresholds during nighttime maintenance windows, tightened thresholds during peak hours.

@@ -45,9 +45,8 @@
 #     es-prod:
 #       es_heap_usage_percent: "80"
 #       es_disk_usage_percent: "75"
-#       # 維度標籤 — 不同 index 設定不同延遲閾值（base 須為上方平台宣告的 key）
-#       "es_search_latency_ms{index=\"logs-prod\"}": "2000"
-#       "es_search_latency_ms{index=\"metrics-prod\"}": "500"
+#       # 維度鍵（metric{label="value"}）在本 pack 不依維度判斷：門檻以 max by(tenant) 取租戶最大值，
+#       # 維度鍵只會改到整個租戶的門檻、寫 "disable" 也沒有作用，所以這裡不示範（#3475）。
 # ============================================================
 groups:
   # -------------------------------------------------------

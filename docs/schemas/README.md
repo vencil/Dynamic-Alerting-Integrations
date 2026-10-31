@@ -135,6 +135,9 @@ tenants:
     "mongodb_replication_lag{rs=\"rs-orders\",member=\"mongo-orders-dr\"}": "60"
 ```
 
+The shipped Rule Packs normalise thresholds with `max by(tenant)`, so these rows merge
+into one tenant-wide threshold rather than applying per dimension ([#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)).
+
 ### Scheduled Values (Time-Window Overrides)
 
 Schema validates scheduled thresholds with time-window overrides (UTC-only, supports cross-midnight):

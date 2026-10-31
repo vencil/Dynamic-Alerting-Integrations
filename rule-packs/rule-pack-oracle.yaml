@@ -50,13 +50,8 @@
 #     oracle-prod:
 #       oracle_sessions_active: "150"
 #       oracle_tablespace_used_percent: "80"
-#       # ── Regex 維度閾值 (v0.12.0 B1 feature) ──
-#       # 一次性控管多個 Tablespace 的閾值：
-#       "oracle_tablespace_used_percent{tablespace_name=~\"USERS|DATA.*\"}": "90"
-#       # 單一 Tablespace 精確匹配：
-#       "oracle_tablespace_used_percent{tablespace_name=\"SYSTEM\"}": "95:critical"
-#       # 停用特定 Tablespace 監控：
-#       "oracle_tablespace_used_percent{tablespace_name=\"TEMP\"}": "disable"
+#       # 維度鍵（metric{label="value"}）在本 pack 不依維度判斷：門檻以 max by(tenant) 取租戶最大值，
+#       # 維度鍵只會改到整個租戶的門檻、寫 "disable" 也沒有作用，所以這裡不示範（#3475）。
 # ============================================================
 groups:
   # -------------------------------------------------------

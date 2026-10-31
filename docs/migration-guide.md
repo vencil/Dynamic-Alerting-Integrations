@@ -259,6 +259,8 @@ tenants:
     "mongodb_replication_lag{rs=\"rs-orders\",member=\"mongo-orders-dr\"}": "60"
 ```
 
+> ⚠️ 出貨的 Rule Pack 以 `max by(tenant)` 正規化門檻、維度 label 在那一步就丟掉，所以上面這幾列**目前不會依 instance 分開生效**：它們與 base 合成一個租戶門檻，`disable` 也沒有作用。要依維度判斷，得照下方「平台團隊 PromQL 適配」改 Rule Pack（[#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)）。
+
 **設計約束**：
 
 | 約束 | 說明 |
@@ -269,7 +271,7 @@ tenants:
 | base 須由平台宣告 | `{` 之前的 base 必須在 `_defaults.yaml` 的 `defaults:` 有值或列在 `optional_overrides:`，或根 `defaults:` 寫了整個維度鍵；否則不產生 metric，validate-config 報 `unread … (no_row)`（ADR-038 §11） |
 | 三態仍適用 | 數值=Custom, 省略=Default (僅基本 key，且該 key 在 `_defaults.yaml` 的 `defaults:` 有值；列在 `optional_overrides:` 的宣告 key 省略＝無值＝靜默), `"disable"`=停用 |
 
-**平台團隊 PromQL 適配**：維度 label 必須同時出現在 Recording Rule 的 `by()` 與 Alert Rule 的 `on()` 中。三件套契約與 `tenant:<metric>:<agg>` 命名規範：[design/rule-packs.md](design/rule-packs.md)。Redis / ES / MongoDB 維度範例：`components/threshold-exporter/config/conf.d/examples/`。
+**平台團隊 PromQL 適配**：維度 label 必須同時出現在 Recording Rule 的 `by()` 與 Alert Rule 的 `on()` 中。三件套契約與 `tenant:<metric>:<agg>` 命名規範：[design/rule-packs.md](design/rule-packs.md)。出貨的 `conf.d/examples/` 因此不放維度鍵（#3475）。
 
 ### 10. LLM 輔助手動轉換
 

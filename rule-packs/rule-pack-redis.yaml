@@ -23,11 +23,8 @@
 #     redis-prod:
 #       redis_memory_used_bytes: "6442450944"   # 6 GB
 #       redis_connected_clients: "300"
-#       # 維度標籤 — 不同 instance 設定不同閾值（base 須為上方平台宣告的 key）
-#       "redis_connected_clients{instance=\"redis-orders:6379\"}": "800:critical"
-#       "redis_connected_clients{instance=\"redis-cache:6379\"}": "1000"
-#       "redis_evicted_keys_rate{instance=\"redis-cache:6379\"}": "500"
-#       "redis_evicted_keys_rate{instance=\"redis-session:6379\"}": "disable"
+#       # 維度鍵（metric{label="value"}）在本 pack 不依維度判斷：門檻以 max by(tenant) 取租戶最大值，
+#       # 維度鍵只會改到整個租戶的門檻、寫 "disable" 也沒有作用，所以這裡不示範（#3475）。
 # ============================================================
 groups:
   # -------------------------------------------------------

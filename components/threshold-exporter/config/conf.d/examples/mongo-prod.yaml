@@ -1,9 +1,8 @@
-# mongo-prod.yaml — 範例: MongoDB 租戶閾值設定 (維度標籤)
+# mongo-prod.yaml — 範例: MongoDB 租戶閾值設定
 # 來源參考: percona/mongodb_exporter
-#
-# MongoDB 典型維度: rs (replica set), member (成員節點), database (庫)
-# ⚠️ 維度 key 的 base（去掉 {…} 的部分）必須是平台宣告的 key：在 _defaults.yaml 的 defaults: 有值，
-#    或列在 optional_overrides:；否則不產生 metric，validate-config 報 unread（no_row）（ADR-038 §11）
+# ⚠️ 本範例刻意不放維度鍵（`metric{label="value"}`）：出貨的 rule pack 以 `max by(tenant)` 取租戶最大值，
+#    維度 label 在那一步就丟掉了——維度鍵改到的是整個租戶的門檻（各維度值與 base 合成一個值），
+#    對維度鍵寫 "disable" 也沒有作用。要依維度判斷得改 rule pack（#3475）；語法見 docs/design/config-driven.md。
 # 三態（限 _defaults.yaml 的 defaults: 有值的 key）: 數值=Custom, 省略=Default, "disable"=停用
 # ⚠️ 列在 optional_overrides: 的宣告 key 沒有值可繼承 ⇒ 省略＝沒有值＝靜默，只有兩態（#1321）
 tenants:
@@ -17,16 +16,3 @@ tenants:
     mongodb_connections_current_critical: "800"
     mongodb_replication_lag: "10"                           # #1196 C 由 mongodb_repl_lag_seconds 改名
     mongodb_replication_lag_critical: "30"
-
-    # --- 維度閾值: 按 replica set 分設 ---
-    "mongodb_connections_current{rs=\"rs-orders\"}": "800"
-    "mongodb_connections_current{rs=\"rs-analytics\"}": "1500"
-    "mongodb_connections_current{rs=\"rs-sessions\"}": "300"
-    "mongodb_opcounters_rate{rs=\"rs-orders\"}": "20000"               # 交易尖峰
-
-    # --- 維度閾值: 多重 label (replica set + 成員節點) ---
-    "mongodb_replication_lag{rs=\"rs-orders\",member=\"mongo-orders-dr\"}": "60"   # 異地備援節點容許較大延遲
-    "mongodb_opcounters_rate{rs=\"rs-orders\",member=\"mongo-orders-0\"}": "15000"
-
-    # --- 停用特定維度 ---
-    "mongodb_opcounters_rate{rs=\"rs-test\"}": "disable"

@@ -259,6 +259,8 @@ tenants:
     "mongodb_replication_lag{rs=\"rs-orders\",member=\"mongo-orders-dr\"}": "60"
 ```
 
+> ⚠️ The shipped Rule Packs normalise thresholds with `max by(tenant)`, which drops the dimension label, so the rows above **do not take effect per instance today**: they and the base merge into one tenant threshold, and `disable` has no effect. Judging per dimension needs the Rule Pack adapted as in "Platform-team PromQL adaptation" below ([#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)).
+
 **Design constraints**:
 
 | Constraint | Note |
@@ -269,7 +271,7 @@ tenants:
 | Base must be platform-declared | The base before `{` must be valued in `defaults:` of `_defaults.yaml` or listed in `optional_overrides:`, or the root `defaults:` must write the whole dimensional key; otherwise no metric is served and validate-config reports `unread … (no_row)` (ADR-038 §11) |
 | Three-state still applies | Value=Custom, omitted=Default (basic key only, and only where the key has a value in `defaults:` of `_defaults.yaml`; a key listed under `optional_overrides:` inherits nothing, so omitted=no value=silent), `"disable"`=Disabled |
 
-**Platform-team PromQL adaptation**: the dimension label must appear in both the Recording Rule's `by()` and the Alert Rule's `on()`. Three-piece contract + `tenant:<metric>:<agg>` naming convention: [design/rule-packs.en.md](design/rule-packs.en.md). Redis / ES / MongoDB dimension examples live under `components/threshold-exporter/config/conf.d/examples/`.
+**Platform-team PromQL adaptation**: the dimension label must appear in both the Recording Rule's `by()` and the Alert Rule's `on()`. Three-piece contract + `tenant:<metric>:<agg>` naming convention: [design/rule-packs.en.md](design/rule-packs.en.md). The shipped `conf.d/examples/` carry no dimensional keys for this reason (#3475).
 
 ### 10. LLM-Assisted Manual Conversion
 

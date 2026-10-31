@@ -28,8 +28,8 @@
 #     clickhouse-prod:
 #       clickhouse_queries_rate: "300"
 #       clickhouse_active_connections: "150"
-#       # ── Regex 維度閾值 (v0.12.0 B1 feature) ──
-#       # "clickhouse_max_part_count{database=~\"prod_.*\"}": "200"
+#       # 維度鍵（metric{label="value"}）在本 pack 不依維度判斷：門檻以 max by(tenant) 取租戶最大值，
+#       # 維度鍵只會改到整個租戶的門檻、寫 "disable" 也沒有作用，所以這裡不示範（#3475）。
 # ============================================================
 groups:
   # ─────────────────────────────────────────────
