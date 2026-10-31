@@ -342,6 +342,28 @@ class TestThePortalOfflineFallbackIsGenerated:
         assert "rule-packs-fallback.json" in out
         assert "make platform-data" in out
 
+    def test_check_reads_a_nan_hand_edit_as_outdated_not_a_crash(self, tmp_path,
+                                                                 monkeypatch, capsys):
+        """#3216: `json.loads` reads NaN, the one encoder refuses it; the
+        existing file is then outdated (rc 1), as before the encoder — not a
+        crash (rc 2)."""
+        import json
+
+        mod = _load_module()
+        class _Shown(type(tmp_path)):  # the message names it relative to the repo
+            def relative_to(self, *_a, **_k):
+                return Path(self.name)
+
+        dirty = _Shown(tmp_path / "platform-data.json")
+        doc = mod.build_platform_data()
+        dirty.write_text(json.dumps({**doc, "x_hand_edit": float("nan")}), encoding="utf-8")
+        monkeypatch.setattr(mod, "OUTPUT_PATH", dirty)
+        monkeypatch.setattr(sys, "argv", ["generate_platform_data.py", "--check"])
+        with pytest.raises(SystemExit) as ei:
+            mod.main()
+        assert ei.value.code == 1
+        assert "is outdated" in capsys.readouterr().out
+
     def test_the_hook_that_runs_check_actually_watches_both_files(self):
         """⛔ Found by mutation, not by design.
 

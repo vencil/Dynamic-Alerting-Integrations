@@ -40,7 +40,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR, OutputNotSerializable, Report, encode_json  # noqa: E402
 from _lib_validation import (  # noqa: E402  (#2137 one presence rule)
     FIELD_NOT_STRING,
     FIELD_SET,
@@ -566,13 +566,12 @@ def main():
     if args.check:
         _strip_volatile(data)
 
-    content = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    content = encode_json(data) + "\n"
 
     # Handle output
     if args.dry_run or not args.output:
-        print(content, end="")
         _note_without_state(state)
-        return
+        return Report(data)  # #3216: run() encodes it — the same text as the file
 
     if args.check:
         if not args.output.exists():
@@ -595,7 +594,12 @@ def main():
             )
             sys.exit(EXIT_CALLER_ERROR)
         _strip_volatile(existing)
-        existing_str = json.dumps(existing, indent=2, ensure_ascii=False) + "\n"
+        try:
+            existing_str = encode_json(existing) + "\n"
+        except OutputNotSerializable:
+            # A hand edit JSON reads but cannot carry (NaN / Infinity): the
+            # file is not what the generator writes — outdated, not a crash.
+            existing_str = None
 
         if existing_str != content:
             print(
@@ -644,4 +648,5 @@ def _note_without_state(state: Any) -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

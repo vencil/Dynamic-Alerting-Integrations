@@ -11,7 +11,6 @@
   python3 scripts/tools/dx/generate_rule_pack_stats.py --generate   # 產生 docs/includes/rule-pack-stats.md
 """
 import argparse
-import json
 import os
 import re
 import stat
@@ -30,7 +29,7 @@ import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads 
 from _lib_atomic_write import atomic_write_text  # noqa: E402
 from _lib_io import exit_on_output_write_error, output_write  # noqa: E402  (#2128)
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION, Report  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Repo root detection
@@ -379,8 +378,7 @@ def main():
     langs = ["zh", "en"] if args.lang == "all" else [args.lang]
 
     if args.json:
-        print(json.dumps(stats, indent=2, ensure_ascii=False))
-        return
+        return Report(stats)  # #3216: run() encodes it
 
     if args.output_format == "summary":
         print(format_summary(stats))
@@ -465,6 +463,5 @@ def main():
 
 
 if __name__ == "__main__":
-    # sys.exit(main()) — main() 現在用 return 回 caller-error(2)，
-    # 裸呼叫會把退出碼丟掉（訊息有印、rc 卻是 0）。
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

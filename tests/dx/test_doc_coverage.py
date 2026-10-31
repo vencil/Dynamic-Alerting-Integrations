@@ -25,7 +25,7 @@ import pytest
 import doc_coverage as dc
 import generate_doc_map as gdm
 import _version_patterns as vp
-from _lib_exitcodes import EXIT_CALLER_ERROR
+from _lib_exitcodes import EXIT_CALLER_ERROR, emit_result  # #3216: in-process main() → exit status
 from _platform_fs import symlink_or_skip  # noqa: E402
 
 
@@ -578,7 +578,7 @@ class TestReportShapes:
 class TestMainCLI:
     def test_text_mode_prints_dashboard(self, tmp_path, capsys, cli_argv):
         cli_argv("doc_coverage.py", "--repo-root", str(tmp_path))
-        rc = dc.main()
+        rc = emit_result(dc.main())
         assert rc == 0
         out = capsys.readouterr().out
         assert "DOCUMENTATION COVERAGE DASHBOARD" in out
@@ -586,7 +586,7 @@ class TestMainCLI:
 
     def test_json_mode_emits_json(self, tmp_path, capsys, cli_argv):
         cli_argv("doc_coverage.py", "--json", "--repo-root", str(tmp_path))
-        rc = dc.main()
+        rc = emit_result(dc.main())
         assert rc == 0
         parsed = json.loads(capsys.readouterr().out)
         assert "statistics" in parsed
@@ -594,7 +594,7 @@ class TestMainCLI:
 
     def test_nonexistent_repo_returns_caller_error(self, tmp_path, capsys, cli_argv):
         cli_argv("doc_coverage.py", "--repo-root", str(tmp_path / "ghost"))
-        rc = dc.main()
+        rc = emit_result(dc.main())
         assert rc == EXIT_CALLER_ERROR
         err = capsys.readouterr().err
         assert "not found" in err.lower()
@@ -603,14 +603,22 @@ class TestMainCLI:
         # Empty repo → frontmatter / bilingual coverage are 0%, well below 80.
         cli_argv("doc_coverage.py", "--ci", "--threshold", "80",
                  "--repo-root", str(tmp_path))
-        rc = dc.main()
+        rc = emit_result(dc.main())
         assert rc == 1
         err = capsys.readouterr().err
         assert "below threshold" in err.lower() or "below" in err.lower()
+
+    def test_json_ci_below_threshold_still_returns_one(self, tmp_path, capsys, cli_argv):
+        """#3216: the --json document and the --ci verdict leave together."""
+        cli_argv("doc_coverage.py", "--json", "--ci", "--threshold", "80",
+                 "--repo-root", str(tmp_path))
+        rc = emit_result(dc.main())
+        assert rc == 1
+        assert "statistics" in json.loads(capsys.readouterr().out)
 
     def test_ci_mode_threshold_zero_passes(self, tmp_path, cli_argv):
         # With threshold=0, even an empty repo passes CI.
         cli_argv("doc_coverage.py", "--ci", "--threshold", "0",
                  "--repo-root", str(tmp_path))
-        rc = dc.main()
+        rc = emit_result(dc.main())
         assert rc == 0

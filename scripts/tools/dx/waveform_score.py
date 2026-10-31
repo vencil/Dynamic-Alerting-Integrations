@@ -82,7 +82,7 @@ import yaml
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, encode_json  # noqa: E402
 from _lib_python import write_text_secure  # noqa: E402
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1789)
 from _lib_io import DuplicateKeyError, strict_safe_load  # noqa: E402  (#2123)
@@ -761,7 +761,7 @@ class _RedactAwareParser(argparse.ArgumentParser):
         super().error(message)
 
 
-def main() -> int:
+def main() -> "int | Report":
     try_utf8_stdout()
     parser = _RedactAwareParser(
         description="waveform catch-rate 計分器（ADR-030 PR-3）：inject JSON 報告 + "
@@ -852,11 +852,12 @@ def main() -> int:
 
     emit = redact_report(result) if args.redact else result
     try:
-        report_json = json.dumps(emit, ensure_ascii=False, indent=2, sort_keys=True)
+        # #3216: the one encoder, for --out and for the --json document
+        # run() prints — the two cannot differ.
         if args.out:
-            write_text_secure(args.out, report_json + "\n", flag="--out")
+            write_text_secure(args.out, encode_json(emit) + "\n", flag="--out")
         if args.json_output:
-            print(report_json)
+            pass  # run() prints the document (returned below)
         elif args.redact:
             _print_redacted_human(emit)
         else:
@@ -888,8 +889,10 @@ def main() -> int:
         _emit_error("ERR_OUTPUT", f"報告輸出失敗: {exc}", args.redact)  # exc 可能含 --out 路徑
         return EXIT_CALLER_ERROR
 
-    return EXIT_OK if result["verdict"] == "PASS" else EXIT_VIOLATION
+    status = EXIT_OK if result["verdict"] == "PASS" else EXIT_VIOLATION
+    return Report(emit, status) if args.json_output else status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

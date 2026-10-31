@@ -62,7 +62,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, Report  # noqa: E402
 
 
 # Exit codes — documented in module docstring, kept as module constants so
@@ -547,9 +547,10 @@ def _drill_failed_check(
 # ─── Formatters ────────────────────────────────────────────────────────
 
 
-def format_json(diag: PrDiag) -> str:
-    """Stable JSON for machine consumers — no truncation."""
-    return json.dumps(asdict(diag), indent=2, ensure_ascii=False)
+def json_document(diag: PrDiag) -> dict:
+    """The --json document for machine consumers — no truncation (run()
+    encodes it, #3216)."""
+    return asdict(diag)
 
 
 def format_markdown(diag: PrDiag, max_annotations_per_check: int = 5) -> str:
@@ -632,7 +633,7 @@ def format_markdown(diag: PrDiag, max_annotations_per_check: int = 5) -> str:
 # ─── Main ──────────────────────────────────────────────────────────────
 
 
-def main() -> int:
+def main() -> "int | Report":
     # First line: reconfigure stdout for legacy Windows consoles before any
     # emoji-print might happen. Idempotent + defensive (try/except inside
     # the helper); see _lib_compat docstring for rationale.
@@ -699,14 +700,14 @@ Example:
         return EXIT_INTERNAL_ERROR
 
     if args.format == "json":
-        print(format_json(diag))
-    else:
-        print(format_markdown(
-            diag, max_annotations_per_check=args.max_annotations_per_check,
-        ))
+        return Report(json_document(diag))
+    print(format_markdown(
+        diag, max_annotations_per_check=args.max_annotations_per_check,
+    ))
 
     return EXIT_OK
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

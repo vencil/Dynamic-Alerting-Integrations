@@ -921,6 +921,22 @@ class TestCheckOnDamagedOutput:
         assert "is outdated" in err
         assert "damaged" not in err
 
+    @pytest.mark.parametrize("value", ["NaN", "Infinity"])
+    def test_a_value_json_cannot_carry_is_outdated_rc1_not_a_crash(
+        self, monkeypatch, confd, tmp_path, capsys, value,
+    ):
+        """#3216: `json.loads` reads NaN / Infinity, the one encoder refuses
+        them; a hand edit holding one is a file the generator did not write
+        — outdated (rc 1), as before the encoder, not a crash."""
+        out = tmp_path / "meta.json"
+        assert _run(monkeypatch, confd, out) == 0
+        doc = json.loads(out.read_text(encoding="utf-8"))
+        out.write_text(json.dumps({**doc, "x": float(value.lower().replace("infinity", "inf"))}),
+                       encoding="utf-8")
+        capsys.readouterr()
+        assert _run(monkeypatch, confd, out, "--check") == 1
+        assert "is outdated" in capsys.readouterr().err
+
     @pytest.mark.parametrize("kind", sorted(_DAMAGED) + ["directory"])
     def test_a_damaged_file_is_rc2_damaged_not_outdated(
         self, monkeypatch, confd, tmp_path, capsys, kind,

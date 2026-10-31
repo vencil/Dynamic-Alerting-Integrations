@@ -43,7 +43,7 @@ from typing import Iterator, List, Optional, Sequence, Tuple
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(SCRIPT_DIR.parent))
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, Report  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 DEFAULT_CHANGELOG = "CHANGELOG.md"
@@ -446,13 +446,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _emit(result: dict, as_json: bool) -> None:
+def _emit(result: dict, as_json: bool) -> "int | Report":
+    """The run's end: the --json document for run() to encode (#3216), or
+    the text report and EXIT_OK."""
     if as_json:
-        print(json.dumps(result, ensure_ascii=False))
-    elif result["metric"] == "changelog":
+        return Report(result)
+    if result["metric"] == "changelog":
         _print_changelog(result)
     else:
         _print_pr_bodies(result)
+    return EXIT_OK
 
 
 def _fail(msg: str) -> int:
@@ -460,7 +463,7 @@ def _fail(msg: str) -> int:
     return EXIT_CALLER_ERROR
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Optional[Sequence[str]] = None) -> "int | Report":
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.metric:
@@ -482,8 +485,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if result is None:
             return _fail(f"section '## [{args.section}]' not found in {path}")
         result["path"] = str(path)
-        _emit(result, args.json)
-        return EXIT_OK
+        return _emit(result, args.json)
 
     try:
         raw = _run_gh(args.state, args.limit)
@@ -503,9 +505,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     shape = pr_shape_error(prs)
     if shape:
         return _fail(shape)
-    _emit(measure_pr_bodies(prs, args.state, args.limit), args.json)
-    return EXIT_OK
+    return _emit(measure_pr_bodies(prs, args.state, args.limit), args.json)
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

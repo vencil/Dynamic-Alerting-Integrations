@@ -43,6 +43,7 @@ _CHAINED_RULES = _FIXDIR / "rules" / "selftest_disk_chained.rules.yaml"
 # 共用 #968 harness（同 CLI 的依賴；tests/rulepacks 無 __init__.py → 直接插路徑）
 sys.path.insert(0, str(_REPO / "tests" / "rulepacks"))
 import vm_harness  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 def _run(*args: str, timeout: int = 420) -> subprocess.CompletedProcess:
@@ -493,7 +494,7 @@ def test_out_write_failure_exits_two(tmp_path, monkeypatch, capsys):
         "inject_waveform.py", str(_DISK), "--rules", str(_RULES),
         "--allow-selftest", "--json",
         "--out", str(tmp_path / "no_such_dir" / "report.json")])
-    assert iw.main() == 2
+    assert emit_result(iw.main()) == 2
     # #1789: the wording is the SHARED one-line write-failure message now —
     # it names the path AND `--out`, where "報告輸出失敗: <OSError repr>" named
     # neither the flag nor what to do. rc is unchanged, and `main` still
@@ -532,7 +533,7 @@ def test_pipeline_assertion_failure_exits_two(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", [
         "inject_waveform.py", str(_DISK), "--rules", str(_RULES),
         "--allow-selftest"])
-    assert iw.main() == 2
+    assert emit_result(iw.main()) == 2
     assert "ERROR" in capsys.readouterr().err
 
 
@@ -543,7 +544,7 @@ def test_unattributed_alerts_emit_stderr_warning(monkeypatch, capsys):
     monkeypatch.setattr(sys, "argv", [
         "inject_waveform.py", str(_DISK), "--rules", str(_RULES),
         "--allow-selftest", "--json"])
-    assert iw.main() == 0
+    assert emit_result(iw.main()) == 0
     captured = capsys.readouterr()
     assert "無法自動歸因" in captured.err and "indeterminate" in captured.err
 

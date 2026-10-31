@@ -64,7 +64,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_compat import try_utf8_stdout  # noqa: E402
 # `../lint` 取 decode_python_source——依直譯器方式解碼（BOM / PEP 263
@@ -766,7 +766,7 @@ def _read_changed_files(args, repo_root: Path) -> list:
     return list(args.files)
 
 
-def main() -> None:
+def main() -> "int | Report":
     """CLI entry point: diff-scoped Python 測試選擇器（W6-E）。"""
     try_utf8_stdout()  # 舊式 Windows console（cp950 等）防 UnicodeEncodeError
     parser = argparse.ArgumentParser(
@@ -811,17 +811,17 @@ def main() -> None:
         problems, fresh = check_map(repo_root, rules)
         payload = {"ok": not problems, "problems": problems,
                    "tests_scanned": len(fresh["tests_scanned"])}
+        status = EXIT_VIOLATION if problems else EXIT_OK
         if args.json:
-            print(json.dumps(payload, indent=2, ensure_ascii=False))
+            return Report(payload, status)  # #3216: run() encodes it
+        if problems:
+            print(f"✗ verify-diff --check 失敗（{len(problems)} 個問題）:")
+            for p in problems:
+                print(f"  - {p}")
         else:
-            if problems:
-                print(f"✗ verify-diff --check 失敗（{len(problems)} 個問題）:")
-                for p in problems:
-                    print(f"  - {p}")
-            else:
-                print(f"✓ {len(fresh['tests_scanned'])} 個 test 檔全數"
-                      "可達（import/text/dir-rule/always-run/例外表）")
-        sys.exit(EXIT_VIOLATION if problems else EXIT_OK)
+            print(f"✓ {len(fresh['tests_scanned'])} 個 test 檔全數"
+                  "可達（import/text/dir-rule/always-run/例外表）")
+        return status
 
     changed = _read_changed_files(args, repo_root)
     if not changed:
@@ -832,9 +832,7 @@ def main() -> None:
     vmap = build_map(repo_root)
     result = select_tests(changed, vmap, rules, repo_root)
 
-    if args.json:
-        print(json.dumps(result, indent=2, ensure_ascii=False))
-    else:
+    if not args.json:
         print(format_text_report(result))
 
     # F4 fail-closed：外部套件未跑且未顯式確認 → exit 1（--run 與列表模式
@@ -848,14 +846,17 @@ def main() -> None:
             _warn(f"{len(result['unrun_external'])} 個外部套件未跑且未 "
                   "--ack-external → exit 1")
             rc = EXIT_VIOLATION
-        sys.exit(rc)
-
-    if unacked_external:
-        _warn(f"{len(result['unrun_external'])} 個外部套件未跑且未 "
-              "--ack-external → exit 1")
-        sys.exit(EXIT_VIOLATION)
-    sys.exit(EXIT_OK)
+    else:
+        rc = EXIT_OK
+        if unacked_external:
+            _warn(f"{len(result['unrun_external'])} 個外部套件未跑且未 "
+                  "--ack-external → exit 1")
+            rc = EXIT_VIOLATION
+    # #3216: run() encodes the document — after the pytest run under --run,
+    # so the selection and the verdict leave together.
+    return Report(result, rc) if args.json else rc
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

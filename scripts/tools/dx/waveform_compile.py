@@ -43,7 +43,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 import _waveform_lib as wf  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_python import ensure_dir_or_die, write_text_or_die  # noqa: E402
 
 try:
@@ -93,7 +93,7 @@ def _compile_one(pack: dict, out_dir: str, seed: int, fanout: int) -> list[str]:
     return written
 
 
-def main() -> int:
+def main() -> "int | Report":
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="fault-waveform pack 驗證/回讀/物化編譯器（ADR-030 PR-1；"
@@ -168,14 +168,14 @@ def main() -> int:
             outputs.extend(written)
 
     if args.json_output:
-        print(json.dumps({
+        return Report({  # #3216: run() encodes it
             "check": "waveform-pack",
             "packs": args.packs,
             "seed": args.seed,
             "issues": all_issues,
             "outputs": [p.replace(os.sep, "/") for p in outputs],
             "pass": not all_issues,
-        }, ensure_ascii=False, indent=2))
+        }, EXIT_VIOLATION if all_issues else EXIT_OK)
     else:
         for issue in all_issues:
             print(f"{issue['pack']}: {issue['message']}", file=sys.stderr)
@@ -193,4 +193,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

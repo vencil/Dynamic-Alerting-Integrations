@@ -76,7 +76,6 @@ Exit codes
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 import xml.etree.ElementTree as ET
@@ -87,7 +86,7 @@ from typing import Optional
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276: stdlib only)
 
 
@@ -428,7 +427,7 @@ def evaluate_thresholds(
 # ── CLI ──────────────────────────────────────────────────────────────
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: Optional[list] = None) -> "int | Report":
     parser = argparse.ArgumentParser(
         description=(
             "Compute per-file + total coverage delta between two "
@@ -473,11 +472,9 @@ def main(argv: Optional[list] = None) -> int:
               file=sys.stderr)
         return EXIT_CALLER_ERROR
 
-    if args.json:
-        print(json.dumps(report.to_dict(), indent=2))
-    elif args.markdown:
+    if args.markdown:
         print(format_markdown_report(report, top_n=args.top))
-    else:
+    elif not args.json:
         print(format_text_report(report, top_n=args.top))
 
     violations = evaluate_thresholds(
@@ -489,9 +486,12 @@ def main(argv: Optional[list] = None) -> int:
         print("Threshold violations:", file=sys.stderr)
         for v in violations:
             print(f"  - {v}", file=sys.stderr)
-        return EXIT_VIOLATION
-    return EXIT_OK
+    status = EXIT_VIOLATION if violations else EXIT_OK
+    if args.json:
+        return Report(report.to_dict(), status)  # #3216: run() encodes it
+    return status
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes  # noqa: E402
+    _lib_exitcodes.run(main)  # #3216: run() encodes the --json document

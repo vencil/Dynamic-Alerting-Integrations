@@ -7,7 +7,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "dx"))
 import coverage_gap_analysis as cga
-from _lib_exitcodes import EXIT_CALLER_ERROR
+from _lib_exitcodes import EXIT_CALLER_ERROR, emit_result
 
 
 # ============================================================
@@ -137,7 +137,7 @@ class TestFormatTextReport:
 
 
 # ============================================================
-# Unit Tests — format_json_report
+# Unit Tests — json_document
 # ============================================================
 
 class TestFormatJsonReport:
@@ -147,8 +147,7 @@ class TestFormatJsonReport:
         """JSON 報告結構"""
         files = cga.parse_coverage_output(SAMPLE_COV_OUTPUT)
         report = cga.build_report(files, 70.0)
-        text = cga.format_json_report(report)
-        data = json.loads(text)
+        data = cga.json_document(report)
         assert data["target_pct"] == 70.0
         assert data["overall_pct"] == 82.2
         assert data["files_total"] == 4
@@ -159,16 +158,14 @@ class TestFormatJsonReport:
         """JSON 報告按覆蓋率升序排列"""
         files = cga.parse_coverage_output(SAMPLE_COV_OUTPUT)
         report = cga.build_report(files, 70.0)
-        text = cga.format_json_report(report)
-        data = json.loads(text)
+        data = cga.json_document(report)
         coverages = [f["coverage_pct"] for f in data["files"]]
         assert coverages == sorted(coverages)
 
     def test_json_empty(self):
         """空報告 JSON"""
         report = cga.build_report([], 70.0)
-        text = cga.format_json_report(report)
-        data = json.loads(text)
+        data = cga.json_document(report)
         assert data["files_total"] == 0
 
 
@@ -207,7 +204,7 @@ class TestCLI:
         """--json 輸出 JSON"""
         cov_file = tmp_path / "coverage.txt"
         cov_file.write_text(SAMPLE_COV_OUTPUT, encoding="utf-8")
-        cga.main(["--coverage-text", str(cov_file), "--json"])
+        assert emit_result(cga.main(["--coverage-text", str(cov_file), "--json"])) == 0
         captured = capsys.readouterr()
         data = json.loads(captured.out)
         assert "target_pct" in data
@@ -216,22 +213,29 @@ class TestCLI:
         """--ci 有 gap 時 exit 1"""
         cov_file = tmp_path / "coverage.txt"
         cov_file.write_text(SAMPLE_COV_OUTPUT, encoding="utf-8")
-        with pytest.raises(SystemExit) as exc_info:
-            cga.main(["--coverage-text", str(cov_file), "--ci", "--target", "70"])
-        assert exc_info.value.code == 1
+        assert emit_result(cga.main(["--coverage-text", str(cov_file), "--ci", "--target", "70"])) == 1
+
+    def test_cli_json_ci_exit_on_gap(self, tmp_path, capsys):
+        """#3216: --json --ci with a gap: the document and exit 1 together."""
+        cov_file = tmp_path / "coverage.txt"
+        cov_file.write_text(SAMPLE_COV_OUTPUT, encoding="utf-8")
+        rc = emit_result(cga.main(["--coverage-text", str(cov_file), "--json", "--ci",
+                                   "--target", "70"]))
+        assert rc == 1
+        assert json.loads(capsys.readouterr().out)["files_below_target"] == 1
 
     def test_cli_ci_pass(self, tmp_path):
         """--ci 全通過時 exit 0"""
         text = "a.py  50  5  90%\nb.py  40  2  95%\n"
         cov_file = tmp_path / "coverage.txt"
         cov_file.write_text(text, encoding="utf-8")
-        cga.main(["--coverage-text", str(cov_file), "--ci", "--target", "70"])
+        assert emit_result(cga.main(["--coverage-text", str(cov_file), "--ci", "--target", "70"])) == 0
 
     def test_cli_custom_target(self, tmp_path, capsys):
         """--target 自定義目標"""
         cov_file = tmp_path / "coverage.txt"
         cov_file.write_text(SAMPLE_COV_OUTPUT, encoding="utf-8")
-        cga.main(["--coverage-text", str(cov_file), "--json", "--target", "50"])
+        emit_result(cga.main(["--coverage-text", str(cov_file), "--json", "--target", "50"]))
         captured = capsys.readouterr()
         data = json.loads(captured.out)
         assert data["target_pct"] == 50.0

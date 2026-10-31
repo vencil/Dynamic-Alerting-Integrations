@@ -23,6 +23,7 @@ _TOOLS_DIR = os.path.join(os.path.dirname(__file__), '..', '..', 'scripts', 'too
 sys.path.insert(0, _TOOLS_DIR)
 
 import diag_pr_ci as dpc  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 FIXTURE_DIR = Path(__file__).parent / "fixtures" / "diag_pr_ci"
@@ -600,8 +601,7 @@ class TestFormatJson:
                 )
             ],
         )
-        out = dpc.format_json(diag)
-        parsed = json.loads(out)
+        parsed = dpc.json_document(diag)
         assert parsed["pr_number"] == 446
         assert len(parsed["failed_checks"]) == 1
         assert parsed["failed_checks"][0]["check_run_id"] == 1
@@ -620,7 +620,7 @@ class TestFormatJson:
                 details_url="", annotations=annotations,
             )],
         )
-        parsed = json.loads(dpc.format_json(diag))
+        parsed = dpc.json_document(diag)
         assert len(parsed["failed_checks"][0]["annotations"]) == 50
 
 
@@ -647,7 +647,7 @@ class TestMainDispatch:
 
         monkeypatch.setattr(dpc.subprocess, "run", fake_run)
         cli_argv("diag_pr_ci.py", "99999")
-        rc = dpc.main()
+        rc = emit_result(dpc.main())
         assert rc == dpc.EXIT_INTERNAL_ERROR
         err = capsys.readouterr().err
         assert "PR #99999 not found" in err
@@ -667,7 +667,7 @@ class TestMainDispatch:
 
         monkeypatch.setattr(dpc.subprocess, "run", fake_run)
         cli_argv("diag_pr_ci.py", "446", "--json")
-        rc = dpc.main()
+        rc = emit_result(dpc.main())
         assert rc == dpc.EXIT_OK
         out = capsys.readouterr().out
         parsed = json.loads(out)  # must be valid JSON

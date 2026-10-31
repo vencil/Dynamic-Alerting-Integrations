@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.join(
     os.path.dirname(__file__), "..", "..", "scripts", "tools", "dx",
 ))
 import verify_diff as vd  # noqa: E402
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ============================================================
@@ -422,9 +423,12 @@ def synth_cli(synth_repo, tmp_path):
 class TestCli:
     def _run_main(self, cli_argv, args):
         cli_argv("verify_diff.py", *args)
-        with pytest.raises(SystemExit) as e:
-            vd.main()
-        return e.value.code
+        # #3216: a run that ends with a document returns it (run() encodes
+        # it); the others still exit — either way, the status run() would end at.
+        try:
+            return emit_result(vd.main())
+        except SystemExit as e:
+            return e.code
 
     def test_no_input_is_caller_error(self, cli_argv, synth_cli):
         assert self._run_main(cli_argv, synth_cli) == 2
