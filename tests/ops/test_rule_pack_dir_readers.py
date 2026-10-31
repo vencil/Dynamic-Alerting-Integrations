@@ -71,6 +71,24 @@ def test_runtime_audit(tmp_path):
     auditor = ra.RuntimeAuditor(_audit_args(rp))
     assert auditor._load_declared() is None
     assert "extra.yaml" in auditor.caller_error
+    # the directory is there and not empty: the message says what it holds
+    assert "not found or empty" not in auditor.caller_error
+    assert "declaration does not cover" in auditor.caller_error
+
+
+def test_operator_generate_main_exits_2_on_an_undeclared_yaml(tmp_path, monkeypatch, capsys):
+    """`main` turns `SourcesUnlisted` into rc 2 naming the file
+    (`rule_packs_unreadable`), never a CRD set without it."""
+    rp = _rule_packs(tmp_path, extra=True)
+    conf = tmp_path / "conf.d"
+    conf.mkdir()
+    monkeypatch.setattr("sys.argv", ["operator_generate.py", "--rule-packs-dir", str(rp),
+                                     "--config-dir", str(conf), "--dry-run"])
+    with pytest.raises(SystemExit) as exc:
+        og.main()
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "extra.yaml" in err and "rule packs" in err
 
 
 def test_rule_pack_split(tmp_path):

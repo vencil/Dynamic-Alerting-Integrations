@@ -1589,7 +1589,7 @@ da-tools operator-generate [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--rule-packs-dir <DIR>` | Rule Pack directory path | `rule-packs/` |
+| `--rule-packs-dir <DIR>` | Rule Pack directory; the packs are taken from the one declaration, `rule_pack_files` (top-level `rule-pack-*.yaml` / `.yml`; the `threshold-registry.yaml` beside them is declared too); any other top-level YAML (suffix in any case) or a dangling symlink there is named, exit 2 ([#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)) | `rule-packs/` |
 | `--config-dir <DIR>` | Tenant configuration directory path. One AlertmanagerConfig per tenant; the tenants are the keys of each tenant file's `tenants:` across the whole tree (subdirectories included), read through `da-guard parse-tree` — **not file names**: the tenant in `team-a.yaml` holding `tenants: {db-a: …}` is `db-a`, and a flat-format file with no `tenants:` yields no tenant. ⚠️ A tenant file parse-tree cannot read (each named with its kind), one tenant declared in two files, or no usable da-guard ⇒ exit `2` and no CRD at all (`--json` envelope `reason`: `tenant_set_unknown`). A tenant id that is not RFC 1123 is warned about and skipped | `conf.d/` |
 | `--output-dir <DIR>` | Write CRDs into this directory. ⚠️ **Writing requires both: this flag set _and_ no `--dry-run`**; if either fails, everything goes to **stdout** and no file is written | none |
 | `--namespace <NS>` | Target K8s namespace | `monitoring` |
@@ -1749,7 +1749,7 @@ da-tools operator-check [options]
 |--------|-------------|---------|
 | `--namespace <NS>` | The namespace the PrometheusRule / ServiceMonitor / AlertmanagerConfig checks list (no auto-discovery) | `monitoring` |
 | `--json` | JSON format output | false |
-| `--rule-packs-dir <DIR>` | Rule Pack YAML directory; the PrometheusRule check compares the number loaded in the cluster with the `rule-pack-*.yaml` files here | `rule-packs/` |
+| `--rule-packs-dir <DIR>` | Rule Pack directory; the packs are taken from the one declaration, `rule_pack_files` (top-level `rule-pack-*.yaml` / `.yml`; the `threshold-registry.yaml` beside them is declared too); any other top-level YAML (suffix in any case) or a dangling symlink there is named, exit 2 ([#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)); the PrometheusRule check compares the number loaded in the cluster with the packs here; a declaration that does not cover the directory fails that row (caller error) | `rule-packs/` |
 | `--prometheus <URL>` | Prometheus API URL; the exporter target health check runs only when it is given, and is skipped otherwise. Given and its targets not read (unreachable, errored or answered in the wrong shape), that check FAILs and the exit code is 2 — it used to be a warn ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) | (none) |
 | `--kubeconfig <FILE>` | kubeconfig path | (none) |
 | `--ci` | Exit 1 when any check fails (without it a failure exits 0; kubectl not answering, or `--prometheus` given and its targets not read, is always 2 — see below and [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)) | false |
@@ -1757,7 +1757,7 @@ da-tools operator-check [options]
 **Checks Performed**
 
 1. Operator detection: `get` the CRD `prometheusrules.monitoring.coreos.com` by name; fail if the cluster has no such CRD.
-2. PrometheusRule: how many in `--namespace` carry `app.kubernetes.io/part-of=dynamic-alerting`, against the number of `rule-pack-*.yaml` in `--rule-packs-dir` (equal passes, fewer but more than 0 warns, 0 fails); with the CRD not installed it is 0, a fail saying so.
+2. PrometheusRule: how many in `--namespace` carry `app.kubernetes.io/part-of=dynamic-alerting`, against the number of packs (`rule-pack-*.yaml` / `.yml`, the same declaration) in `--rule-packs-dir` (equal passes, fewer but more than 0 warns, 0 fails); with the CRD not installed it is 0, a fail saying so.
 3. ServiceMonitor: at least one in that namespace with that label (else fail; says so when the CRD is not installed).
 4. AlertmanagerConfig: how many in that namespace with that label (0 warns; with the CRD not installed it warns and says so).
 5. Target health (only with `--prometheus`): whether every target whose job contains `threshold` or `exporter` is `up`.
@@ -1779,7 +1779,7 @@ da-tools operator-check --json
 #### runtime-audit
 
 A **read-only** hard comparison between the rules DECLARED in Git
-(`rule-packs/rule-pack-*.yaml`) and the rules Prometheus has actually LOADED
+(`rule-packs/rule-pack-*.yaml` / `.yml`, from the `rule_pack_files` declaration) and the rules Prometheus has actually LOADED
 (`GET /api/v1/rules`). Covers the **runtime leg** that the #711/#714 PR-time
 drift gates do not.
 
@@ -1805,7 +1805,7 @@ da-tools runtime-audit (--prometheus <url> | --runtime-json <file>) [options]
 |--------|-------------|---------|
 | `--prometheus <URL>` | Prometheus API URL, e.g. `http://localhost:9090` | (none) |
 | `--runtime-json <FILE>` | Saved `/api/v1/rules` JSON (offline / fixture) | (none) |
-| `--rule-packs-dir <DIR>` | Rule pack YAML directory | `rule-packs/` |
+| `--rule-packs-dir <DIR>` | Rule Pack directory; the packs are taken from the one declaration, `rule_pack_files` (top-level `rule-pack-*.yaml` / `.yml`; the `threshold-registry.yaml` beside them is declared too); any other top-level YAML (suffix in any case) or a dangling symlink there is named, exit 2 ([#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)) | `rule-packs/` |
 | `--strict-orphan` | Promote ORPHAN (stale loaded rule) to a `--ci` gate failure too | false |
 | `--json` | JSON output | false |
 | `--ci` | Exit 1 on drift (MISSING/UNHEALTHY; ORPHAN with `--strict-orphan`) | false |
@@ -1818,7 +1818,7 @@ da-tools runtime-audit (--prometheus <url> | --runtime-json <file>) [options]
 2. **UNHEALTHY** — loaded but `health != ok` (carries `lastError`; series-observation cannot tell this apart from "metric legitimately absent")
 3. **ORPHAN** — still loaded but no longer declared in Git (stale; scoped to DECLARED groups so unrelated infra rules are not flagged)
 
-> **⚠️ Limitation (avoiding false positives)**: `declared` = **every** `rule-pack-*.yaml` in `--rule-packs-dir`. Platform packs can be selectively enabled (projected-volume `optional`); if a deployment loads only a subset, **the disabled packs are reported as MISSING**. Lever: point `--rule-packs-dir` at a directory holding only the enabled packs (the ORPHAN direction is unaffected — it is scoped to declared groups). Also: `unknown` health (the transient post-reload, not-yet-evaluated state) is **not** flagged UNHEALTHY — only a confirmed `err` is.
+> **⚠️ Limitation (avoiding false positives)**: `declared` = **every** `rule-pack-*.yaml` / `.yml` in `--rule-packs-dir` (any other YAML is named, exit 2). Platform packs can be selectively enabled (projected-volume `optional`); if a deployment loads only a subset, **the disabled packs are reported as MISSING**. Lever: point `--rule-packs-dir` at a directory holding only the enabled packs (the ORPHAN direction is unaffected — it is scoped to declared groups). Also: `unknown` health (the transient post-reload, not-yet-evaluated state) is **not** flagged UNHEALTHY — only a confirmed `err` is.
 
 **Examples**
 
@@ -1851,7 +1851,7 @@ da-tools rule-pack-split [--rule-packs-dir <dir>] [options]
 
 | Option | Description | Default |
 |--------|-------------|---------|
-| `--rule-packs-dir <DIR>` | Rule Pack directory path | `rule-packs/` |
+| `--rule-packs-dir <DIR>` | Rule Pack directory; the packs are taken from the one declaration, `rule_pack_files` (top-level `rule-pack-*.yaml` / `.yml`; the `threshold-registry.yaml` beside them is declared too); any other top-level YAML (suffix in any case) or a dangling symlink there is named, exit 2 ([#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)) | `rule-packs/` |
 | `--output-dir <DIR>` | Output directory | `split-output/` |
 | `--operator` | Output PrometheusRule CRD YAML instead | false |
 | `--namespace <NS>` | Namespace for the CRDs | `monitoring` |
@@ -2489,7 +2489,7 @@ da-tools lint --rule-pack-dir <DIR> [options]
 
 WARNs are never escalated to ERRORs, and JSON output is not implemented yet; in CI use `--ci`, the output is one `ERROR:` / `WARN:` line per finding.
 
-**Which files are read, and which rule files they hold** ([#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)): which files are read is decided by path — a file given is read as given (whatever its suffix), a directory given is walked recursively for `*.yaml` / `*.yml`, less the files `--exclude` matches. Every file chosen must read as a rule file or a Kubernetes manifest; nothing is judged "not a rule file, never mind" by its content: a plain rule file (a mapping with `groups`), the data values a ConfigMap (one in a `kind: List` included) declares as rule files, and a PrometheusRule's `spec` are all linted; a manifest kubectl reads that holds neither kind (a Deployment, say) holds no rule file. A file that is neither a manifest nor a rule file (a recipe, the registry, a `Chart.yaml`, a rule pack with `groups` misspelt, a manifest with no `kind`), a ConfigMap or PrometheusRule the API server would refuse (a `data` that is not a mapping, a `rules.yml:` one indent short under `data:` and so a top-level key, a PrometheusRule with a top-level `groups`), and a rule file the rule loader refuses are each a named `ERROR`; the first kind's message adds "if it is no rule file, leave it out with --exclude". A directory is walked with the suffix compared in any case (`.YAML`, `.Yml` count); a chosen entry that cannot be read (a dangling symlink, a non-regular file, a directory that cannot be listed; a dangling symlink given as a target or matched by a glob too) is named, exit 2, never skipped; a symlink to a directory inside a walked directory is not followed (no loop, no walk out of the tree) and not skipped either: it is named, asking for its target to be given instead, unless `--exclude` leaves it out; an `--exclude` that leaves none of the files found is exit 2 too, its message saying the exclusions removed them all; a file with no Kubernetes object and no `groups` (empty, comments only, `---` only, a List with no items) is refused as kubectl refuses it (`no objects passed to apply`). ⚠️ Breaking: a directory that also holds YAML that is no rule file needs `--exclude` (e.g. `da-tools lint my-rules/ --exclude 'templates/*'`); this repo's `rule-packs/` is linted with `--rule-pack-dir rule-packs/`. ⚠️ Known exception: a ConfigMap data value that neither reading reads (Kubernetes' YAML reading nor Prometheus' rule loader) is taken for a file that is no rule file (an Alertmanager markdown template, say), and is neither read nor reported; so a rule value broken so badly that neither reads it (a tab in its indentation, say) is not linted and not reported when it sits in a ConfigMap (a whole file that is a rule file is not judged this way: it is named).
+**Which files are read, and which rule files they hold** ([#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)): which files are read is decided by path — a file given is read as given (whatever its suffix), a directory given is walked recursively for `*.yaml` / `*.yml`, less the files `--exclude` matches. Every file chosen must read as a rule file or a Kubernetes manifest; nothing is judged "not a rule file, never mind" by its content: a plain rule file (a mapping with `groups`), the data values a ConfigMap (one in a `kind: List` included) declares as rule files, and a PrometheusRule's `spec` are all linted; a manifest kubectl reads that holds neither kind (a Deployment, say) holds no rule file. A file that is neither a manifest nor a rule file (a recipe, the registry, a `Chart.yaml`, a rule pack with `groups` misspelt, a manifest with no `kind`), a ConfigMap or PrometheusRule the API server would refuse (a `data` that is not a mapping, a `rules.yml:` one indent short under `data:` and so a top-level key, a PrometheusRule with a top-level `groups`), and a rule file the rule loader refuses are each a named `ERROR`; the first kind's message adds "if it is no rule file, leave it out with --exclude". A directory is walked with the suffix compared in any case (`.YAML`, `.Yml` count); a chosen entry that cannot be read (a dangling symlink, a non-regular file, a directory that cannot be listed; a dangling symlink given as a target or matched by a glob too) is named, exit 2, never skipped; a symlink to a directory inside a walked directory is never followed (no loop, no walk out of the tree): one whose target is inside the walked tree (a Kubernetes ConfigMap mount's `..data -> ..2024_01_01/`, a `loop -> .`) has its content read by the real path and is not named; one whose target is outside the tree or does not resolve is named, asking for its target to be given instead, unless `--exclude` leaves it out; an `--exclude` that leaves none of the files found is exit 2 too, its message saying the exclusions removed them all; a file with no Kubernetes object and no `groups` (empty, comments only, `---` only, a List with no items) is refused as kubectl refuses it (`no objects passed to apply`). ⚠️ Breaking: a directory that also holds YAML that is no rule file needs `--exclude` (e.g. `da-tools lint my-rules/ --exclude 'templates/*'`); this repo's `rule-packs/` is linted with `--rule-pack-dir rule-packs/`. ⚠️ Known exception: a ConfigMap data value that neither reading reads (Kubernetes' YAML reading nor Prometheus' rule loader) is taken for a file that is no rule file (an Alertmanager markdown template, say), and is neither read nor reported; so a rule value broken so badly that neither reads it (a tab in its indentation, say) is not linted and not reported when it sits in a ConfigMap (a whole file that is a rule file is not judged this way: it is named).
 
 **Checks Performed** (built-in policy defaults; override with `--policy`)
 

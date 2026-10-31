@@ -1311,3 +1311,20 @@ def test_an_empty_file_or_a_dangling_symlink_exits_2(tmp_path, capsys, name):
     assert rc == 2
     captured = capsys.readouterr()
     assert name in captured.out + captured.err
+
+
+def test_a_configmap_mount_as_rule_source_exits_0(tmp_path, capsys):
+    """#3426: kubelet's ConfigMap mount (`..data -> ..<ts>/`, `r.yaml ->
+    ..data/r.yaml`) is read; `..data` points inside the tree, so it is not
+    named — the mount used to exit 2 on it."""
+    mount = tmp_path / "mount"
+    _write(mount / "..2024_01_01" / "r.yaml", """
+        groups: [{name: g, rules: [{alert: InMount, expr: up}]}]
+    """)
+    symlink_or_skip("..2024_01_01", str(mount / "..data"))
+    symlink_or_skip("..data/r.yaml", str(mount / "r.yaml"))
+    rc = sdc.main(["--silences-file", _silences_none(tmp_path), "--rule-source", str(mount),
+                   "--json"])
+    assert rc == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["counts"]["alerts"] >= 1 and doc["errors"] == []

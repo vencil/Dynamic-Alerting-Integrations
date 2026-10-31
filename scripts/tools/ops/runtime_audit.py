@@ -128,6 +128,8 @@ STRINGS = {
         "err_prom": "Prometheus query failed",
         "err_runtime_json": "cannot read --runtime-json file",
         "err_rule_packs": "rule-packs dir not found or empty",
+        "err_rule_packs_unlisted": ("rule-packs dir holds entries the rule-pack declaration "
+                                    "does not cover, or that cannot be read"),
         "err_parse": "malformed input",
         "cli_desc": "Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747)",
         "cli_src_group": "runtime source (one required)",
@@ -152,6 +154,7 @@ STRINGS = {
         "err_prom": "Prometheus 查詢失敗",
         "err_runtime_json": "無法讀取 --runtime-json 檔",
         "err_rule_packs": "rule-packs 目錄不存在或為空",
+        "err_rule_packs_unlisted": "rule-packs 目錄有 rule pack 宣告蓋不住、或讀不了的項目",
         "err_parse": "輸入格式錯誤",
         "cli_desc": "唯讀 Git rule-packs ↔ Prometheus runtime 對帳 (#747)",
         "cli_src_group": "runtime 來源（擇一必填）",
@@ -343,7 +346,9 @@ class RuntimeAuditor:
         try:
             paths = _lib_consumer_read.rule_pack_files(rule_dir)
         except _lib_consumer_read.ConsumerReadError as exc:
-            self.caller_error = (f"{i18n('err_rule_packs', self.lang)}: "
+            # Not "not found or empty": the directory is there, and holds
+            # an undeclared YAML or an entry that cannot be read.
+            self.caller_error = (f"{i18n('err_rule_packs_unlisted', self.lang)}: "
                                  f"{_lib_consumer_read.error_text(exc)}")
             return None
         if not paths:

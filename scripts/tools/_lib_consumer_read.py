@@ -1117,6 +1117,23 @@ def excluded(pattern: str, name: str, relative: str) -> bool:
 _DIR_SYMLINK = "a symlink to a directory is not followed; give its target instead"
 
 
+def _dir_symlink_problem(link: str, root_real: str) -> "str | None":
+    """Why the symlink to a directory *link*, under a walked tree whose
+    real path is *root_real*, must be named — or None when nothing behind
+    it can be lost. It is never followed (a loop, a walk out of the tree);
+    a target that resolves INSIDE the tree is walked by its real path
+    anyway (kubelet's ConfigMap mount: ``..data -> ..2024_01_01/``; a
+    ``loop -> .``), so it is passed over. A target outside the tree, or one
+    that does not resolve (a loop of links), is named."""
+    try:
+        target = os.path.realpath(link, strict=True)
+    except (OSError, RuntimeError):
+        return f"{_DIR_SYMLINK} (it does not resolve)"
+    if os.path.commonpath([target, root_real]) == root_real:
+        return None
+    return _DIR_SYMLINK
+
+
 def _not_regular(path: str) -> str:
     """Why *path* — an entry that exists as a link or a node but is no
     regular file or directory — cannot be read."""
@@ -1129,10 +1146,14 @@ def _walk_yaml(root: str) -> "tuple[list[tuple[str, str]], list[tuple[str, str]]
     YAML suffix (any case) as ``(path, path relative to root)``, and every
     entry that cannot be read as ``(path, why)`` — a directory that cannot
     be listed, a YAML-suffixed entry that is not a regular file (a dangling
-    symlink, a FIFO), and a symlink to a directory. A symlinked directory
-    is not followed (a loop, or a walk out of the tree) and not passed over
-    in silence: it is named, so the caller gives its target instead."""
+    symlink, a FIFO), and a symlink to a directory whose target is outside
+    the tree or does not resolve (``_dir_symlink_problem``). A symlinked
+    directory is never followed (a loop, or a walk out of the tree); one
+    whose target is inside the tree is passed over, its content walked by
+    its real path; any other is named, so the caller gives its target
+    instead — nothing behind it is lost in silence."""
     files, problems = [], []
+    root_real = os.path.realpath(root)
 
     def unlisted(err: OSError) -> None:
         problems.append((err.filename or root, f"cannot list this directory: {err.strerror}"))
@@ -1141,7 +1162,9 @@ def _walk_yaml(root: str) -> "tuple[list[tuple[str, str]], list[tuple[str, str]]
         for n in dirs:
             f = os.path.join(d, n)
             if os.path.islink(f):
-                problems.append((f, _DIR_SYMLINK))
+                why = _dir_symlink_problem(f, root_real)
+                if why is not None:
+                    problems.append((f, why))
         for n in names:
             if not _is_yaml_name(n):
                 continue
@@ -1172,8 +1195,8 @@ def files_to_read(targets: "Iterable[str | os.PathLike[str]]",
 
     Raises :class:`SourcesUnlisted` naming every entry that would be
     chosen but cannot be read (a dangling symlink, a non-regular file, a
-    symlink to a directory — not followed — or a directory that cannot be
-    listed), unless an *exclude* pattern leaves it out;
+    symlink to a directory outside the tree — not followed — or a directory
+    that cannot be listed), unless an *exclude* pattern leaves it out;
     :class:`EverythingExcluded` when entries were found — readable or not
     — and *exclude* left none of them."""
     patterns = list(exclude)

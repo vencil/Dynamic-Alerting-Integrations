@@ -515,3 +515,25 @@ def test_a_symlinked_directory_is_named_not_followed(tmp_path) -> None:
     ((path, why),) = exc.value.files
     assert path.endswith("linked") and "give its target instead" in why
     assert [Path(f).name for f in cr.files_to_read([str(root)], ["linked"])] == ["a.yaml"]
+
+
+def test_a_configmap_mount_is_walked_without_a_word(tmp_path) -> None:
+    """kubelet's ConfigMap mount: `..data -> ..2024_01_01/` and
+    `r.yaml -> ..data/r.yaml`. `..data` points inside the tree, whose real
+    path is walked anyway: nothing is lost, so nothing is named."""
+    mount = tmp_path / "mount"
+    (mount / "..2024_01_01").mkdir(parents=True)
+    (mount / "..2024_01_01" / "r.yaml").write_text(RULES, encoding="utf-8")
+    symlink_or_skip("..2024_01_01", str(mount / "..data"))
+    symlink_or_skip("..data/r.yaml", str(mount / "r.yaml"))
+    got = cr.files_to_read([str(mount)])
+    assert str(mount / "r.yaml") in got, got
+
+
+def test_a_symlink_back_into_the_tree_is_no_loop_and_no_finding(tmp_path) -> None:
+    """`loop -> .`: not followed (no endless walk), not named (in the tree)."""
+    root = tmp_path / "rules"
+    root.mkdir()
+    (root / "a.yaml").write_text(RULES, encoding="utf-8")
+    symlink_or_skip(".", str(root / "loop"))
+    assert [Path(f).name for f in cr.files_to_read([str(root)])] == ["a.yaml"]
