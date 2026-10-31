@@ -26,6 +26,7 @@ label) are not covered here.
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -76,12 +77,28 @@ def test_helm_present_when_required() -> None:
         assert HAS_HELM, f"{reason}: but `helm` is not on PATH"
 
 
+_SOURCE = re.compile(r"^# Source: [^/]+/(.+)$", re.MULTILINE)
+
+
 def _render(chart: str, extra: list[str]) -> list[dict]:
+    """Rendered objects, each with `_template` = the repo path of its template.
+
+    Taken from the `# Source:` comment helm writes above every document (the
+    first path segment is the chart NAME, so it is swapped for the chart dir).
+    """
     out = subprocess.run(
         ["helm", "template", "t", str(_REPO_ROOT / chart), "-n", "some-ns", *extra],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         check=True, timeout=60)
-    return [d for d in yaml.safe_load_all(out.stdout) if d]
+    docs = []
+    for chunk in re.split(r"^---\s*$", out.stdout, flags=re.MULTILINE):
+        d = yaml.safe_load(chunk)
+        if not d:
+            continue
+        m = _SOURCE.search(chunk)
+        d["_template"] = f"{chart}/{m.group(1)}" if m else None
+        docs.append(d)
+    return docs
 
 
 def _container_ports(docs: list[dict], selector: dict) -> dict[str, int]:
@@ -101,8 +118,11 @@ def _container_ports(docs: list[dict], selector: dict) -> dict[str, int]:
     return ports
 
 
-def _scrape_targets() -> set[tuple[str, str, int, int]]:
-    """(chart, service, annotated port, pod port) for every platform-labelled Service."""
+def _scrape_targets(templates: set[str] | None = None) -> set[tuple[str, str, int, int]]:
+    """(chart, service, annotated port, pod port) for every platform-labelled Service.
+
+    *templates*, when given, collects the template file each one rendered from.
+    """
     found = set()
     for chart, extra in _CHARTS.items():
         docs = _render(chart, extra)
@@ -124,6 +144,8 @@ def _scrape_targets() -> set[tuple[str, str, int, int]]:
                     f"{chart} Service {md['name']}: targetPort {target!r} names no container port")
                 target = named[target]
             found.add((chart, md["name"], port, int(target)))
+            if templates is not None:
+                templates.add(d["_template"])
     return found
 
 
@@ -165,12 +187,20 @@ def test_prometheus_egress_admits_every_platform_scrape_port() -> None:
         f"them can never fire (#1291). Admitted any-namespace TCP ports: {sorted(allowed)}")
 
 
+@_needs_helm
 def test_every_platform_label_template_is_rendered() -> None:
-    """A new chart labelling a Service for the platform job must join _CHARTS."""
-    labelled = {f"helm/{p.relative_to(_REPO_ROOT / 'helm').parts[0]}"
-                for p in (_REPO_ROOT / "helm").glob("*/templates/*.yaml")
+    """Every template that labels a Service for the platform job is rendered here.
+
+    Per TEMPLATE, not per chart: a chart already in _CHARTS that adds a Service
+    switched off by default would otherwise pass while its port is never checked.
+    Its fix is render args in _CHARTS that turn it on.
+    """
+    labelled = {str(p.relative_to(_REPO_ROOT)).replace("\\", "/")
+                for p in (_REPO_ROOT / "helm").glob("*/templates/**/*.yaml")
                 if f"{_PLATFORM_LABEL}: platform" in p.read_text(encoding="utf-8")}
     assert labelled, "no chart template carries the platform scrape label — glob broke"
-    assert labelled == set(_CHARTS), (
-        f"charts labelling Services for the platform job {sorted(labelled)} "
-        f"!= charts this test renders {sorted(_CHARTS)}")
+    rendered: set[str] = set()
+    _scrape_targets(rendered)
+    assert labelled == rendered, (
+        f"templates labelling Services for the platform job {sorted(labelled)} "
+        f"!= templates this test renders a scrape Service from {sorted(rendered)}")
