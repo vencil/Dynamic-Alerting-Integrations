@@ -445,7 +445,8 @@ def _written_faces() -> dict[str, set[str]]:
 # source: `TestDocsDefaultsSamplesHaveNoTenantOnlyKeys` pins BOTH, and
 # `_registry_lib.is_shipped_optional_key` treats them as one pair. A
 # `metric{label="v"}` key under `defaults:` is equally inert —
-# `resolveDimensionalRows` is tenant-only and never consults the defaults map,
+# `resolveDimensionalRows` takes the value from the tenant's map alone (the
+# defaults map only names the base, ADR-038 §11),
 # and `parseMetricKey` bakes the label segment into the metric NAME. Covering
 # only the half this issue was reported about is how the other half survives.
 #

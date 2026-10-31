@@ -625,8 +625,8 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 		if _, valued := defaults[metricKey]; valued {
 			continue
 		}
-		// resolveDimensionalRows is tenant-only and ALREADY emits declared
-		// bases today (that is why ValidateTenantKeys accepts the shape).
+		// resolveDimensionalRows owns dimensional keys: it serves one whose
+		// base is declared (dimensionalBaseNamed, ADR-038 §11).
 		if strings.Contains(metricKey, "{") {
 			continue
 		}
@@ -794,8 +794,9 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 }
 
 // resolveDimensionalRows resolves a tenant's dimensional overrides using the
-// `metric{label="v"}` / `{label=~"re"}` syntax. These are tenant-only (no
-// default inheritance) and use the "value:severity" suffix for severity.
+// `metric{label="v"}` / `{label=~"re"}` syntax. Their values are tenant-only
+// (no default inheritance; their base must be named, see below) and use the
+// "value:severity" suffix for severity.
 // Extracted verbatim from the ResolveAtWithStats per-tenant loop
 // (Phase 2B / Phase 11 B1).
 //
