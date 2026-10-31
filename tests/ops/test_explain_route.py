@@ -316,8 +316,41 @@ class TestCLI:
             main(["--config-dir", "/nonexistent/path"])
         assert exc.value.reason == "dir_not_found"
 
-    def test_unknown_tenant_warns(self, full_config, capsys):
-        rc = main(["--config-dir", full_config, "--tenant", "ghost"])
+    @pytest.mark.parametrize("extra", [[], ["--trace"]], ids=["explain", "trace"])
+    def test_an_undeclared_tenant_is_refused(self, full_config, extra):
+        """#3431: was a WARN, an empty answer and rc 0 — read as "this tenant
+        has no routing to explain". Every absent one is named; the declared
+        one beside it does not turn the run into a partial answer."""
+        from _lib_exitcodes import CallerError  # noqa: PLC0415
+        with pytest.raises(CallerError, match="no tenant 'ghost', 'spook' in ") as exc:
+            main(["--config-dir", full_config, *extra,
+                  "--tenant", "db-a", "--tenant", "ghost", "--tenant", "spook"])
+        assert exc.value.reason == "tenant_not_found"
+
+    @pytest.mark.parametrize("extra", [[], ["--trace"]], ids=["explain", "trace"])
+    def test_must_fire_control_a_declared_tenant_is_answered(self, full_config, capsys,
+                                                             extra):
+        rc = main(["--config-dir", full_config, *extra, "--tenant", "db-b", "--json"])
         assert rc == 0
-        err = capsys.readouterr().err
-        assert "ghost" in err
+        cap = capsys.readouterr()
+        assert json.loads(cap.out)[0]["tenant"] == "db-b", cap.out
+        assert "tenant 'db-b'" not in cap.err
+
+    def test_profile_expansion_reads_no_tenant(self, full_config, capsys):
+        """--show-profile-expansion does not use --tenant: nothing to refuse."""
+        rc = main(["--config-dir", full_config, "--show-profile-expansion",
+                   "--tenant", "ghost", "--json"])
+        assert rc == 0
+        assert "team-sre" in json.loads(capsys.readouterr().out)
+
+    def test_a_declared_but_invalid_id_is_not_called_absent(self, full_config, capsys):
+        """It is declared, so not `tenant_not_found`; the generator renders
+        nothing for it, which the run says (the tree warning names it too)."""
+        _write(full_config, "bad.yaml", {"tenants": {"Bad Id": {"cpu_usage": "1"}}})
+        rc = main(["--config-dir", full_config, "--tenant", "Bad Id", "--json"])
+        assert rc == 0
+        cap = capsys.readouterr()
+        assert json.loads(cap.out) == []
+        err = cap.err
+        assert "'Bad Id': generate-routes renders no route for an invalid tenant id" in err
+        assert "'Bad Id' not found" not in err

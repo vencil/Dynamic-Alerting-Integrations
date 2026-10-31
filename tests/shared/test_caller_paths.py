@@ -82,7 +82,8 @@ OPS_SITES = [
     ("explain-route --policy", "explain_route.py",
      ["--config-dir", "{CONF}", "--policy", "{F}", "--json"], "--policy", "policy_unusable"),
     ("explain-route --base-config", "explain_route.py",
-     ["--config-dir", "{CONF}", "--trace", "--tenant", "db-a", "--base-config", "{F}", "--json"],
+     # tenant-a: the tenant {CONF} declares (#3431: an undeclared one is refused first)
+     ["--config-dir", "{CONF}", "--trace", "--tenant", "tenant-a", "--base-config", "{F}", "--json"],
      "--base-config", None),
     ("generate-routes --config-dir", "generate_alertmanager_routes.py",
      ["--config-dir", "{D}", "--dry-run"], "--config-dir", None),

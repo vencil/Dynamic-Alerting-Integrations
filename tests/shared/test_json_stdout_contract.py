@@ -1130,6 +1130,10 @@ RECIPES: list[Recipe] = [
     # ── explain_route ──────────────────────────────────────────────────────
     R("explain_route", "all-tenants",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--json"]),
+    # #3431: a --tenant the tree does not declare — once `[]` and rc 0.
+    R("explain_route", "tenant-not-found",
+      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--tenant", "no-such-tenant", "--json"],
+      expect_caller_error=True, doc_check=_caller_error_doc("tenant_not_found")),
     R("explain_route", "trace",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--tenant", "db-demo",
                     "--trace", "--alertname", "HighConnectionCount",
@@ -1775,7 +1779,11 @@ def test_crash_in_json_mode_emits_one_envelope(
         own_tmp.mkdir()
         own = json.loads(_run(rejecting, own_tmp, stub_url, sandbox_repo,
                               fake_kubectl_dir).stdout)
-        if recipe.tool in CRASH_ENVELOPE_TYPE_DIFFERS:
+        # A listed tool's DOCUMENT is an array; its own refusal may still be
+        # the shared caller_error envelope (explain_route's `CallerError`s,
+        # #3431) — that one is held to the object rules below, as any tool's.
+        shared_envelope = isinstance(own, dict) and own.get("status") == "caller_error"
+        if recipe.tool in CRASH_ENVELOPE_TYPE_DIFFERS and not shared_envelope:
             assert isinstance(own, list), (
                 f"{recipe.tool} is listed as array-shaped but its document is "
                 f"{type(own).__name__}; drop it from CRASH_ENVELOPE_TYPE_DIFFERS")

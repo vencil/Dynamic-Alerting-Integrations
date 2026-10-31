@@ -3416,7 +3416,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | Parameter | Description | Default |
 |-----------|-------------|---------|
 | `--config-dir` | Config directory path | (required) |
-| `--tenant` | Show only specified tenant(s) (repeatable) | (all) |
+| `--tenant` | Show only specified tenant(s) (repeatable). Any one the tree does not declare exits `2` (`reason: tenant_not_found`, each one named, no partial result; [#3431](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3431); it used to print a WARN, an empty list and exit `0`). A declared tenant with an invalid id is not absent: the generator renders no route for it, so it is skipped with a line on stderr. `--show-profile-expansion` does not read this flag | (all) |
 | `--show-profile-expansion` | Show all routing profile expansions and references | `false` |
 | `--trace` | Trace mode: one alert's routing path as Alertmanager (`amtool`) decides it (requires `--tenant`; needs `amtool` on PATH) | `false` |
 | `--alertname` | Alert name to trace (read only with `--trace`) | `GenericAlert` |

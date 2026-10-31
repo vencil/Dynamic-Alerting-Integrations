@@ -1463,6 +1463,21 @@ def main(argv: list[str] | None = None) -> int | Report:
             print(f"  WARN: {safe_label(err.message)} — generate-routes "
                   f"refuses this tree", file=sys.stderr)
 
+    # #3431: a --tenant the tree does not declare is a question about
+    # something that is not there — refused (rc 2, every one named), as
+    # diagnose and batch-diagnose refuse it, not a WARN and an empty answer
+    # at rc 0. A declared id the generator renders nothing for
+    # (`invalid_tenant_ids`) is not "not found": it is named above.
+    if args.tenants and (args.trace or not args.show_profile_expansion):
+        declared = set(parsed["all_tenants"]) | set(parsed.get("invalid_tenant_ids", []))
+        absent = [t for t in dict.fromkeys(args.tenants) if t not in declared]
+        if absent:
+            raise CallerError(
+                f"no tenant {', '.join(repr(safe_label(t)) for t in absent)} in "
+                f"{safe_label(args.config_dir)}: generate-routes reads "
+                f"{len(set(parsed['all_tenants']))} tenant(s) there",
+                reason="tenant_not_found")
+
     # --trace mode: simulate alert routing path
     if args.trace:
         if not args.tenants:
@@ -1477,7 +1492,10 @@ def main(argv: list[str] | None = None) -> int | Report:
         traces = []
         for t in args.tenants:
             if t not in all_tenants:
-                print(f"  WARN: tenant '{safe_label(t)}' not found", file=sys.stderr)
+                # Declared, but an id the generator renders nothing for
+                # (`invalid_tenant_ids`; an undeclared one was refused above).
+                print(f"  WARN: tenant '{safe_label(t)}': generate-routes renders no "
+                      f"route for an invalid tenant id — not traced", file=sys.stderr)
                 continue
             trace = trace_alert_routing(
                 parsed, t, args.alertname, args.severity,
@@ -1508,8 +1526,10 @@ def main(argv: list[str] | None = None) -> int | Report:
     results = []
     for t in target_tenants:
         if t not in all_tenants:
-            print(f"  WARN: tenant '{safe_label(t)}' not found in config-dir",
-                  file=sys.stderr)
+            # Declared, but an id the generator renders nothing for
+            # (`invalid_tenant_ids`; an undeclared one was refused above).
+            print(f"  WARN: tenant '{safe_label(t)}': generate-routes renders no "
+                  f"route for an invalid tenant id — not explained", file=sys.stderr)
             continue
         if t in disabled:
             print(f"  INFO: tenant '{safe_label(t)}' has routing disabled, skipping",

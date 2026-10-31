@@ -3402,7 +3402,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | 參數 | 說明 | 預設值 |
 |------|------|--------|
 | `--config-dir` | 設定目錄路徑 | (必填) |
-| `--tenant` | 只顯示指定 tenant（可多次指定） | (全部) |
+| `--tenant` | 只顯示指定 tenant（可多次指定）。任一個是樹裡沒宣告的租戶時結束碼 `2`（`reason: tenant_not_found`，逐一點名、不產出部分結果；[#3431](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3431)，先前只印 WARN、輸出空清單、結束碼 `0`）。有宣告但 id 不合法的租戶不算不存在：產生器不為它產出路由，stderr 說明後略過。`--show-profile-expansion` 不讀這個旗標 | (全部) |
 | `--show-profile-expansion` | 顯示所有路由設定檔的展開與引用關係 | `false` |
 | `--trace` | 追蹤模式：由 Alertmanager（`amtool`）判定一則 alert 的路由路徑（需搭配 `--tenant`；需 PATH 上有 `amtool`） | `false` |
 | `--alertname` | 追蹤的 alert 名稱（只在 `--trace` 下讀取） | `GenericAlert` |
