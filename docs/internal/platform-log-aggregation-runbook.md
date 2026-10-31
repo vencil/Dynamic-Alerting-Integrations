@@ -405,6 +405,10 @@ window。第二步才考慮 strict mode（disable VictoriaLogs）—— 那是
 `metrics.enabled: false`（`helm/vector/values.yaml`）——關著的時候 `vector_*` 連
 series 都不存在，告警**恆不開火**，看起來跟「沒有丟 row」完全一樣。
 `helm get values vector | grep -A2 '^metrics:'` 先驗這件事。
+開了之後 Prometheus 還要連得到 Vector 的 9598：repo 的 `allow-prometheus-egress`
+（`k8s/03-monitoring/network-policies.yaml`）已放行 9598 與 9599（[#1291](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1291)）；
+自帶 Prometheus NetworkPolicy 的叢集要比照放行，否則一樣零 series。
+`up{job="vector-metrics"}` 有值才代表 scrape 真的接上。
 
 處置：
 
