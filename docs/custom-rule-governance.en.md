@@ -56,7 +56,7 @@ mysql_threads_running: ""       # Default: use platform default (omit or empty s
 mysql_replication_lag: "disable" # Disable: turn off this alert
 ```
 
-Each metric supports Warning / Critical severity levels (`_critical` suffix) and dimension label filtering.
+Each metric supports Warning / Critical severity levels (`_critical` suffix) and dimension label filtering. A dimension-filter key such as `"mysql_connections{instance='db-primary:3306'}"` is served only when its base (the part before `{`) is a key the platform declares — valued in `defaults:` or listed in `optional_overrides:` — or the root `defaults:` writes the whole key (ADR-038 §11).
 
 The `_routing` channel now also delivers custom alerts (`component="custom"`): page-mode recipes are split by the tenant's `_routing` (including `routes` and per-rule overrides) but keep the custom isolation subtree's debounce (`group_wait` 30s / `group_interval` 5m, `group_by [tenant, alertname]`); the tenant's top-level `_routing` timing is not applied (timing and `group_by` a sub-route declares itself still are). Tenants without an **effective** `_routing` (no explicit `_routing` and no applicable `_routing_defaults` / profile inheritance) keep their custom alerts on the platform firehose (visible in the AM UI, no notification); to fully opt a tenant out of custom-alert notifications, use `_routing: disable` — tenants that merely inherit the defaults do receive delivery.
 

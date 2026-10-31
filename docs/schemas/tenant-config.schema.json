@@ -127,7 +127,7 @@
             { "$ref": "#/definitions/scheduledValue" }
           ],
           "title": "Dimensional Threshold",
-          "description": "Metric with dimensional labels: metric{label=\"value\"} or metric{label=~\"regex\"}. Labels can be literal (=) or regex (=~). The base (before {) must be a key the platform declares (valued in defaults: or listed in optional_overrides:), or the key serves no row. Examples: redis_connected_clients{instance=\"redis-orders:6379\"}, mysql_connections{schema=~\"temp.*\"}"
+          "description": "Metric with dimensional labels: metric{label=\"value\"} or metric{label=~\"regex\"}. Labels can be literal (=) or regex (=~). The base (before {) must be a key the platform declares (valued in defaults: or listed in optional_overrides:), or the root defaults: must write the whole key; otherwise the key serves no row. Examples: redis_connected_clients{instance=\"redis-orders:6379\"}, mysql_connections{schema=~\"temp.*\"}"
         }
       }
     },

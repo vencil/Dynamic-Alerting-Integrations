@@ -83,9 +83,9 @@ tenants:
     container_cpu: "70"              # Override default 80
     mysql_replication_lag: "disable" # No replica, disable
     # mysql_threads_running not specified → use default value 30
-    # Dimensional labels (the base must be a key the platform declares, or no metric is served)
-    "redis_connected_clients{instance='redis-orders:6379'}": "500"
-    "redis_connected_clients{instance='redis-cache:6379', role='master'}": "1000:critical"
+    # Dimensional labels (the base must be a key the platform declares — here mysql_connections from the defaults above — or the root defaults must write the whole key; otherwise no metric is served)
+    "mysql_connections{instance='db-primary:3306'}": "500"
+    "mysql_connections{instance='db-replica:3306', role='replica'}": "1000:critical"
 ```
 
 #### Boundary Enforcement Rules

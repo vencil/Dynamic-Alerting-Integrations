@@ -85,9 +85,9 @@ tenants:
     container_cpu: "70"              # 覆蓋預設值 80
     mysql_replication_lag: "disable" # 無 replica，停用
     # mysql_threads_running 未指定 → 使用預設值 30
-    # 維度標籤（base 須是平台宣告的 key，否則不產生 metric）
-    "redis_connected_clients{instance='redis-orders:6379'}": "500"
-    "redis_connected_clients{instance='redis-cache:6379', role='master'}": "1000:critical"
+    # 維度標籤（base 須是平台宣告的 key——這裡是上方 defaults 的 mysql_connections——或根 defaults 寫了整個鍵，否則不產生 metric）
+    "mysql_connections{instance='db-primary:3306'}": "500"
+    "mysql_connections{instance='db-replica:3306', role='replica'}": "1000:critical"
 ```
 
 #### 邊界強制規則 (Boundary Enforcement)
