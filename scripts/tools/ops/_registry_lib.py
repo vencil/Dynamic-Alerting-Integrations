@@ -1078,7 +1078,9 @@ def shipped_dimensions_for_packs(
         for tier in ("defaults", "optional_overrides"):
             for key, info in ((meta or {}).get(tier) or {}).items():
                 if (info or {}).get("dimensions"):
-                    out[key] = list(info["dimensions"])
+                    # sorted, as build_registry_doc stores it: the generated
+                    # file must match the registry surfaces label for label.
+                    out[key] = sorted(info["dimensions"])
     return out
 
 

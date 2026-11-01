@@ -54,3 +54,10 @@ def test_a_full_selection_is_the_registrys_declaration():
     packs = list(st.RULE_PACKS)
     assert lib.shipped_dimensions_for_packs(packs) == dict(lib.dimension_entries(doc))
     assert lib.shipped_dimensions_for_packs(["mariadb"]) == {}
+
+
+def test_labels_come_out_sorted_as_the_registry_stores_them():
+    """A key declaring several labels out of order gets them in the order the
+    registry (and so every generated registry surface) carries them."""
+    packs = {"p": {"defaults": {"x_m": {"value": 1, "dimensions": ["version", "pod"]}}}}
+    assert lib.shipped_dimensions_for_packs(["p"], packs) == {"x_m": ["pod", "version"]}

@@ -44,7 +44,8 @@ _KEPT_BUT_NOT_SERVED = {
     ("container_cpu_throttle", "version"):
         "ADR-024 OQ-6 scopes version-aware thresholds to container cpu/memory; "
         "the throttle rule keeps the Route-2 shape so a later expansion is a "
-        "registry edit, not a rule rewrite (rule-pack-kubernetes.yaml)",
+        "RULE_PACKS `dimensions` edit + --regen + dropping this entry, not a "
+        "rule rewrite (rule-pack-kubernetes.yaml, ADR-024)",
 }
 
 _AGG = re.compile(

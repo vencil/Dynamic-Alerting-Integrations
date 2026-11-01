@@ -50,7 +50,7 @@ cutover 不是你按一個鈕，而是 **emergent**：pod 升到 v2 後，它的
 哪些 metric 吃 `version` label，由平台在根 `_defaults.yaml` 的 `dimensions:` 宣告（Helm：`thresholdConfig.dimensions`；清單由門檻登錄表生成，測試對照 rule pack 是否真的依 `version` 分組）。出貨時**只有兩個**：
 
 - ✅ `container_cpu`、`container_memory`
-- ❌ 其他任何 metric（`redis_*`、`pg_*`、`mysql_*`…）寫 `{version="..."}` **不會送出**：它的 rule 不依 `version` 分組，寫了也不會依版本生效。共用判決把它讀成 `unread`（`no_row`），tenant-api 寫入時擋下。
+- ❌ 其他任何 metric 寫 `{version="..."}` **不會送出**。多數（`redis_*`、`pg_*`、`mysql_*`…）的 rule 不依 `version` 分組，寫了也不會依版本生效；`container_cpu_throttle` 的 rule 雖然依 `version` 分組與比對，但它沒有宣告 `version` 維度，所以同樣不送出版本列，一律走 `version="default"` 的門檻。共用判決把它讀成 `unread`（`no_row`），tenant-api 寫入時擋下；例外是值寫 `disable` 的報 `disable_noop`（警告），Policy-as-Code 規則指名的讀成 `read`，兩者同樣不送出。
 
 > **silent-inert 風險（務必知道）**：版本感知靠 kube-state-metrics 暴露 pod 的版號 label。**若平台的 KSM 沒開對應 allowlist，你宣告的版本閾值會靜默失效**（所有 pod 被當成 `default`、你的 v2 嚴閾值不生效），而**你這端不會收到直接回饋**。所以：
 >

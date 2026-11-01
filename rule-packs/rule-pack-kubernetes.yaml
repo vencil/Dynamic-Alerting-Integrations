@@ -354,7 +354,7 @@ groups:
       # serves no per-version throttle threshold; the exact-match branch below is
       # therefore inert by design and every versioned metric takes the version="default"
       # FALLBACK branch. Kept in the Route-2 shape anyway so the pack stays uniform and
-      # a future expansion is a registry `dimensions` edit, not a rule rewrite.
+      # a future expansion is a RULE_PACKS `dimensions` edit + --regen (ADR-024), not a rule rewrite.
       - record: tenant_version:alert_threshold:container_cpu_throttle
         expr: |
           label_replace(

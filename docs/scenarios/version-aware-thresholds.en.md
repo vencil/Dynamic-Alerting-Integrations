@@ -50,7 +50,7 @@ If a running version (say v3) has **no** version-specific threshold declared, it
 Which metrics accept a `version` label is declared by the platform under `dimensions:` in the root `_defaults.yaml` (Helm: `thresholdConfig.dimensions`; the list is generated from the threshold registry, and a test checks the rule packs really group by `version`). As shipped, **only two do**:
 
 - ✅ `container_cpu`, `container_memory`
-- ❌ any other metric (`redis_*`, `pg_*`, `mysql_*`, …) with `{version="..."}` is **not served**: its rule does not group by `version`, so the value would never apply per version. The shared verdict reads it as `unread` (`no_row`), and the tenant-api refuses the write.
+- ❌ any other metric with `{version="..."}` is **not served**. Most (`redis_*`, `pg_*`, `mysql_*`, …) have rules that do not group by `version`, so the value would never apply per version; `container_cpu_throttle`'s rules do group and match by `version`, but it declares no `version` dimension, so it serves no version rows either and always takes the `version="default"` threshold. The shared verdict reads it as `unread` (`no_row`), and the tenant-api refuses the write — except a key written `disable`, reported `disable_noop` (a warning), and a key a Policy-as-Code rule names, which reads `read`; neither is served either.
 
 > **Silent-inert risk (you must know this)**: version-awareness relies on kube-state-metrics exposing the pod's version label. **If the platform's KSM does not enable the matching allowlist, the version thresholds you declare silently do nothing** (every pod is treated as `default`, your tightened v2 threshold never applies), and **you get no direct feedback on your side**. So:
 >
