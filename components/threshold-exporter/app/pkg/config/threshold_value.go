@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"sort"
@@ -39,7 +40,8 @@ func ThresholdSeverities() []string {
 // (resolveBaseRows / resolveDeclaredRows / appendDimensionalRow), the subtree
 // overlay's thresholdScalar, and custom alerts (parseCustomAlertThreshold).
 // The value half is returned trimmed and otherwise as written; whether it
-// is a number is the caller's question. The Python mirrors are held to it by
+// is a number is the caller's question. Python has no copy of it: a Python
+// reader asks da-guard threshold-values (ReadThresholdText, #3267), held to
 // tests/shared/threshold_value_matrix.json (threshold_value_parity_test.go).
 func splitThresholdSeverity(raw string) (value, severity string, err error) {
 	raw = strings.TrimSpace(raw)
@@ -89,8 +91,8 @@ func parseThresholdValue(raw string) (v float64, severity string, ok bool) {
 // dimensional rows, the subtree overlay's thresholdScalar),
 // resolveCriticalRows, custom alerts (resolveOneCustomAlert) and the root
 // `defaults:` decode (readRootDefault, #3250).
-// tests/shared/threshold_value_matrix.json's `float_ok` column is it, and
-// carries it to the Python mirror (_lib_validation.parse_threshold_number).
+// tests/shared/threshold_value_matrix.json's `float_ok` column is it; a
+// Python reader asks da-guard threshold-values (ReadThresholdText, #3267).
 func parseThresholdNumber(s string) (float64, bool) {
 	v, err := strconv.ParseFloat(s, 64)
 	if err != nil || !finiteThreshold(v) {
@@ -193,6 +195,61 @@ func RefusedValueAt(key string, sv ScheduledValue, now time.Time) string {
 		return RefusedNonFinite
 	}
 	return RefusedUnparsed
+}
+
+// ThresholdText is one threshold value's text as the exporter reads it, for
+// a caller that holds the text alone — no tenant, no tree: da-guard
+// threshold-values (#3267), which the unit-sanity lint reads every value it
+// judges through, so that lint has no reading of its own.
+//
+// ⛔ NO READING OF ITS OWN. Every field is one of this file's readers:
+// Severity is splitThresholdSeverity's, Number parseThresholdValue's,
+// Refused RefusedValueAt's; NonFinite is strconv.ParseFloat's result on the
+// value half — the call parseThresholdNumber makes — when that result is
+// what parseThresholdNumber refuses for being non-finite.
+type ThresholdText struct {
+	// Severity is the `:severity` suffix as splitThresholdSeverity reads it
+	// ("warning" with no suffix), or "" when it refuses the suffix (`70:high`,
+	// `70:`): then neither Number nor NonFinite is read.
+	Severity string
+	// Number is the value parseThresholdValue reads (the shared grammar,
+	// finite only); HasNumber is false when it reads none.
+	Number    float64
+	HasNumber bool
+	// NonFinite is NaN or ±Inf when strconv.ParseFloat reads the value half
+	// as one — `NaN`, `-Inf`, `infinity`, and an overflow (`1e999`,
+	// `0x1p1024`: ErrRange, ±Inf); HasNonFinite is false otherwise. The
+	// exporter refuses every such value; a caller that judges a non-finite
+	// value as written (the unit-sanity lint, #3140 ruling D) reads it here.
+	NonFinite    float64
+	HasNonFinite bool
+	// Refused is RefusedValueAt for key, the text being the whole value:
+	// "", RefusedNonFinite or RefusedUnparsed. It is the one field that
+	// depends on key: a `<key>_critical` value is read whole
+	// (resolveCriticalRows), so `70:critical` is refused there although
+	// Number, the shared grammar's reading, is 70.
+	Refused string
+}
+
+// ReadThresholdText is raw (a threshold value's text, as written for
+// threshold key key in canonical spelling) as ThresholdText reads it.
+func ReadThresholdText(key, raw string) ThresholdText {
+	// A value with no schedule: RefusedValueAt resolves it at any instant.
+	out := ThresholdText{Refused: RefusedValueAt(key, ScheduledValue{Default: raw}, time.Time{})}
+	value, severity, err := splitThresholdSeverity(raw)
+	if err != nil {
+		return out
+	}
+	out.Severity = severity
+	if v, _, ok := parseThresholdValue(raw); ok {
+		out.Number, out.HasNumber = v, true
+		return out
+	}
+	v, perr := strconv.ParseFloat(value, 64)
+	if (perr == nil || errors.Is(perr, strconv.ErrRange)) && !finiteThreshold(v) {
+		out.NonFinite, out.HasNonFinite = v, true
+	}
+	return out
 }
 
 // thresholdRowDisabled reads whether a threshold row's value switches its key

@@ -13,10 +13,11 @@
     "`DA_REGEN_THRESHOLD_VALUE_MATRIX=1 go test ./pkg/config -run TestThresholdValueMatrix`",
     "in components/threshold-exporter/app, which writes them from Go.",
     "Go half: pkg/config/threshold_value_parity_test.go (the file says what Go says; the",
-    "row resolvers, custom alerts and the subtree overlay agree). Python half:",
-    "tests/shared/test_threshold_value_parity.py (_lib_validation.split_threshold_severity,",
-    "parse_threshold_number, backtest --tenant's reading of served-values,",
-    "the unit-sanity lint, the severity sets and the schema's",
+    "row resolvers, custom alerts and the subtree overlay agree); cmd/da-guard",
+    "threshold_values_test.go holds `da-guard threshold-values` to it. Python half:",
+    "tests/shared/test_threshold_value_parity.py (the reading the unit-sanity lint gets",
+    "from `da-guard threshold-values` (#3267; Python has no reader of its own),",
+    "backtest --tenant's reading of served-values, the severity sets and the schema's",
     "thresholdScalar pattern agree)."
   ],
   "severities": [
