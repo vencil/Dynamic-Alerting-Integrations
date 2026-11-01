@@ -3,9 +3,9 @@ package main
 // The ERROR layer of the shared key verdict (key_verdict.go, #3489 step 1)
 // over real trees, and `da-guard write` refusing a batch that adds such an
 // error (worsens_tree, kind unread). The Python verdict's own trees pin the
-// same answers on the Python side, and tests/shared/
-// test_key_verdict_go_parity.py pins the two to each other. Tenant ids are
-// fixture names (CLAUDE.md #9).
+// same answers on the Python side, and
+// tests/shared/test_key_verdict_go_parity.py pins the two to each other.
+// Tenant ids are fixture names (CLAUDE.md #9).
 
 import (
 	"bytes"
