@@ -129,7 +129,8 @@ def test_main_happy_path_returns_0(mod, tmp_path):
 # is numeric, it is a valid YAML key, the file still parses — and under
 # `defaults:` the exporter never looks at it (`resolveCriticalRows` reads the
 # critical tier from tenant overrides keyed on `defaults[<base>]`;
-# `resolveDimensionalRows` is tenant-only). No parse error, no WARN, no series.
+# a dimensional key needs a `dimensions:` declaration this tool does not
+# write, #3475). No parse error, no WARN, no series.
 #
 # This tool is also why the refusal lives HERE rather than in a downstream gate:
 # it writes into fixture trees that no `check_threshold_reachability` face reads,

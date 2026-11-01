@@ -328,7 +328,8 @@ def test_the_default_output_dir_names_no_flag(fixture_module, tmp_path):
 # gap between them is the whole finding: `mysql_connections_critical=90` is
 # numeric, parses, and lands in `defaults:` — where the exporter never looks at
 # it (`resolveCriticalRows` keys off `defaults[<base>]` from TENANT overrides;
-# `resolveDimensionalRows` is tenant-only). No parse error, no WARN, no series,
+# a dimensional key needs a `dimensions:` declaration this tool does not
+# write, #3475). No parse error, no WARN, no series,
 # which is #1218's silent failure reached through a caller-supplied name.
 #
 # ⚠️ Why the refusal is here rather than in `check_threshold_reachability`: this

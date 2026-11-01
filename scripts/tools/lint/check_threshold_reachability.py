@@ -3338,7 +3338,7 @@ _DEFAULTS_FACE_MODULES = frozenset({
 # names the MECHANISM that makes it safe, so a reader can check the claim.
 _DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
     "scripts/tools/dx/generate_tenant_fixture.py":
-        "refuses a key that would be inert under `defaults:` where "
+        "refuses a `_critical` or dimensional key under `defaults:` where "
         "`--extra-defaults` enters `_gen_defaults_yaml`, using the same "
         "`_registry_lib.is_shipped_optional_key` predicate this gate polices, so "
         "it cannot emit the #1218 shape whatever a caller passes; pinned by "
@@ -3471,8 +3471,8 @@ def _report_defaults_writer_census(errors: list[str],
             f"UNCOVERED-DEFAULTS-WRITER: {module} writes a `defaults:` mapping "
             f"({', '.join(sorted(census[module]))}) and is neither a face of "
             "this gate nor exempt. A producer this gate cannot see may ship a "
-            "`<base>_critical` or dimensional key under `defaults:`, where the "
-            "resolver never looks — #1218's silent failure, one producer over. "
+            "`<base>_critical` key under `defaults:`, where the resolver never "
+            "looks — #1218's silent failure, one producer over. "
             "Either add it as a generator face (feed it a probe, as "
             "`migration/onboard` does), or make the shape impossible at its "
             "input boundary and exempt it here with that mechanism named. "
