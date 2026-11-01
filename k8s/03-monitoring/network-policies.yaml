@@ -147,6 +147,21 @@ spec:
           port: 9104
         - protocol: TCP
           port: 8080
+    # Vector self-telemetry (9598, helm/vector `metrics.port`) and the
+    # projection-gate verdict exposer (9599, `projectionGate.metrics.port`).
+    # Both Services carry `dynamic-alerting.io/scrape: platform`, so the
+    # `platform-components` job scrapes them in WHATEVER namespace the chart is
+    # installed into (#1425) — hence `namespaceSelector: {}`, same as above.
+    # Without this the four Vector platform alerts had zero series and could
+    # never fire (#1291). Every scrape port a platform chart annotates must be
+    # listed here: tests/k8s/test_prometheus_scrape_egress.py.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 9598
+        - protocol: TCP
+          port: 9599
     # Alertmanager
     - to:
         - podSelector:

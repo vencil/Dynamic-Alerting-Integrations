@@ -1,0 +1,50 @@
+# promtool behavioural test for VectorBufferEventsDropped (#1291):
+#   1) FIRES once a sink's buffer has dropped for the 5m hold-down, carrying only
+#      {component_id, severity, alert_source} — the scrape labels (pod, instance,
+#      job) are aggregated away, so N Vector pods give ONE alert per sink.
+#   2) does NOT fire before the hold-down (catches a SHORTER `for`; a longer
+#      `for` or another window is caught by test_platform_rules_extract_sync,
+#      which compares expr/for with the shipped ConfigMap).
+#   3) does NOT fire for a sink whose counter is flat (`> 0`, not `>= 0`).
+#   4) CLEARS once the drops have left the 5m rate window.
+# ⚠️ The per-pod series below (pod / instance labels) model per-pod targets.
+# Today's `platform-components` job discovers the headless Service with
+# `role: service` and scrapes ONE pod at a time (#3483), so case 1's "N pods ->
+# one alert" pins the aggregation for when that is fixed, not today's topology.
+# Run: promtool test rules tests/rulepacks/platform-vector-buffer-dropped_test.yaml
+rule_files:
+  - platform-vector-buffer-dropped.rules.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # siem_sink drops on two pods from t=0 to t=10m, then stops. The condition is
+  # true from 1m (two samples in the window), so it fires from 6m. 5m is the
+  # `for: 5m` discriminator (a `for: 0s` rule fires there). After 10m the
+  # counters are flat: at 16m the window (11m, 16m] holds no increase.
+  # vl_sink never drops: no alert carries it.
+  - interval: 1m
+    name: sink-dropping-fires-once-per-sink-then-clears
+    input_series:
+      - series: 'vector_buffer_discarded_events_total{component_id="siem_sink", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '0+10x10 100x20'
+      - series: 'vector_buffer_discarded_events_total{component_id="siem_sink", pod="vector-b", instance="10.0.0.2:9598", job="vector-metrics"}'
+        values: '0+5x10 50x20'
+      - series: 'vector_buffer_discarded_events_total{component_id="vl_sink", pod="vector-a", instance="10.0.0.1:9598", job="vector-metrics"}'
+        values: '0x30'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: VectorBufferEventsDropped
+        exp_alerts: []
+      - eval_time: 8m
+        alertname: VectorBufferEventsDropped
+        exp_alerts:
+          - exp_labels:
+              component_id: siem_sink
+              severity: warning
+              alert_source: platform
+            exp_annotations:
+              summary: "Vector sink siem_sink dropping events for 5m"
+      - eval_time: 16m
+        alertname: VectorBufferEventsDropped
+        exp_alerts: []

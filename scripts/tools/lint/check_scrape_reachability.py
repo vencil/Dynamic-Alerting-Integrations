@@ -104,8 +104,9 @@ it is narrower than it looks, and measured:
   (2) NETWORK REACHABILITY. This gate models SD + annotations + __name__
       filters — it does NOT model NetworkPolicy. A scrape the egress policy
       denies still reads REACHABLE. That is not hypothetical: #1291 found all
-      four vector_* consumers inert because `allow-prometheus-egress` admits
-      neither 9598 nor 9599.
+      four vector_* consumers inert because `allow-prometheus-egress` admitted
+      neither 9598 nor 9599. The egress half is now pinned from the test suite
+      (tests/k8s/test_prometheus_scrape_egress.py), not by this gate.
   (3) that any individual NAME is really emitted. The prefixes are unbounded:
       a typo'd `da_config_evnet` reads REACHABLE. That stays TRK-337's half of
       the contract for user_*, and remains uncovered for da_* — the test suite
