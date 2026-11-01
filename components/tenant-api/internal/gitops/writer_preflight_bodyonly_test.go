@@ -50,7 +50,7 @@ func TestValidateBodyOnlyIsTheBodyHalfOfValidate(t *testing.T) {
 		// body is API-shaped or refused), no longer a tree-derived one.
 		{"a second tenant section (#3064)", smuggled},
 		// #3140: a non-finite threshold number — the exporter's predicate
-		// (cfg.RefusedThresholdWrites), body-shaped.
+		// (cfg.NonFiniteThresholdWrites), body-shaped.
 		{"non-finite threshold (#3140)", "tenants:\n  db-a:\n    mysql_connections: \"-Inf\"\n"},
 		// ⚠️ Not #3267's other refused values (`abc`, `1e999`): whether one
 		// blocks depends on the file the write replaces (refusedThresholdValues,

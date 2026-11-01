@@ -203,7 +203,7 @@ func TestNonFiniteThresholdWrites(t *testing.T) {
 // #3267: every other value RefusedValueAt refuses.
 func TestRefusedThresholdWrites(t *testing.T) {
 	t.Parallel()
-	got := RefusedThresholdWrites(map[string]ScheduledValue{
+	got := refusedThresholdWrites(nil, map[string]ScheduledValue{
 		"mysql_connections":          {Default: "NaN"},
 		"mysql_connections_critical": {Default: "+Inf"},
 		"container_cpu":              {Default: "70"},
@@ -244,7 +244,7 @@ func TestRefusedThresholdWrites_IsRefusedValueAt(t *testing.T) {
 			sv := ScheduledValue{Default: v}
 			refused := RefusedValueAt(key, sv, fixedNow) != ""
 			nf := len(NonFiniteThresholdWrites(map[string]ScheduledValue{key: sv})) > 0
-			other := len(RefusedThresholdWrites(map[string]ScheduledValue{key: sv})) > 0
+			other := len(refusedThresholdWrites(nil, map[string]ScheduledValue{key: sv})) > 0
 			if nf && other {
 				t.Errorf("%s=%q: both predicates report it", key, v)
 			}
@@ -272,7 +272,7 @@ func TestThresholdReadAlike(t *testing.T) {
 		{"k_critical", ScheduledValue{Default: "90:critical"}, ScheduledValue{Default: " 90:critical"}},
 	}
 	for _, c := range alike {
-		if !ThresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
+		if !thresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
 			t.Errorf("%s: %+v and %+v should read alike", c[0], c[1], c[2])
 		}
 	}
@@ -290,7 +290,7 @@ func TestThresholdReadAlike(t *testing.T) {
 			ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2031-01-01T00:00:00Z"}}},
 	}
 	for _, c := range differ {
-		if ThresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
+		if thresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
 			t.Errorf("%s: %+v and %+v should not read alike", c[0], c[1], c[2])
 		}
 	}
@@ -392,7 +392,7 @@ func TestValidateTenantKeys_ThresholdValueFinding(t *testing.T) {
 	}
 	kv := c.ValidateTenantKeysByTenant()
 	v := kv.Tenants["t"]
-	if len(v.Values) != 1 || !v.Values[0].IsThreshold() || v.Values[0].Key != "mysql_connections" {
+	if len(v.Values) != 1 || !v.Values[0].threshold || v.Values[0].Key != "mysql_connections" {
 		t.Fatalf("values %+v, want the one threshold finding", v.Values)
 	}
 	if len(v.Errors) != 1 || !strings.HasPrefix(v.Errors[0], `WARN: tenant=t: mysql_connections: "abc" is not a threshold`) {
@@ -410,9 +410,6 @@ func TestValidateTenantKeys_ThresholdValueFinding(t *testing.T) {
 		!strings.HasPrefix(s.Notices[0], `NOTICE: tenant=t: mysql_connections "abc" is not a threshold`) {
 		t.Errorf("self-ratchet: errors %q notices %q", s.Errors, s.Notices)
 	}
-	if w := kv.Without(func(f ValueFinding) bool { return f.IsThreshold() }).Tenants["t"]; len(w.Errors) != 0 || len(w.Values) != 0 {
-		t.Errorf("Without: errors %q values %+v", w.Errors, w.Values)
-	}
 }
 
 // #3267: the flat-KV fallback (MergeTenantOverRootPlatform, a tenant file
@@ -424,7 +421,7 @@ func TestTenantMerge_FlatFallbackHasNoThresholdFinding(t *testing.T) {
 	var root RootPlatform
 	thresholdFindings := func(v KeyValidation) (n int, reserved int) {
 		for _, f := range v.Values {
-			if f.IsThreshold() {
+			if f.threshold {
 				n++
 			} else {
 				reserved++
@@ -456,5 +453,47 @@ func TestTenantMerge_FlatFallbackHasNoThresholdFinding(t *testing.T) {
 	m = MergeTenantOverRootPlatform(root, "tx", []byte("tenants:\n  tx:\n    mysql_connections: abc\n"))
 	if n, _ := thresholdFindings(m.ValidateTenantKeysByTenant().Tenants["tx"]); n != 1 {
 		t.Errorf("control: a declared tenant's refused threshold is not judged")
+	}
+}
+
+// #3267 review: the write gate's threshold value finding and the exporter
+// agree on one tree — the finding is there exactly when the row resolvers
+// that read the key refuse the value (ValuesNotServed: value_unparsed /
+// value_unparsed_dropped). A key no resolver reads (unconsumed) is the
+// shared key verdict's, not this check's, and is left out. A root
+// `defaults:` that values `foo_critical` itself makes resolveBaseRows read
+// it by the shared grammar, so `90:critical` is served there.
+func TestThresholdFinding_IsExporterRefusal(t *testing.T) {
+	t.Parallel()
+	trees := map[string]ThresholdConfig{
+		"critical key valued":        {Defaults: map[string]float64{"foo_critical": 100}},
+		"base valued":                {Defaults: map[string]float64{"foo": 80}},
+		"both valued":                {Defaults: map[string]float64{"foo": 80, "foo_critical": 100}},
+		"critical key declared":      {Defaults: map[string]float64{"bar": 1}, OptionalOverrides: []string{"foo_critical"}},
+		"base declared, crit valued": {Defaults: map[string]float64{"foo_critical": 100}, OptionalOverrides: []string{"foo"}},
+	}
+	values := []string{"90", "90:critical", "90:warning", "90:high", "abc", "1e999", "disable", " 90 ", "disable:critical"}
+	checked := 0
+	for name, tree := range trees {
+		for _, v := range values {
+			c := tree
+			c.Tenants = map[string]map[string]ScheduledValue{"t": {"foo_critical": {Default: v}}}
+			reason := c.ValuesNotServed(fixedNow)["t"]["foo_critical"]
+			if reason == NotServedUnconsumed {
+				continue
+			}
+			checked++
+			refused := reason == NotServedValueUnparsed || reason == NotServedValueUnparsedDropped
+			finding := false
+			for _, f := range c.ValidateTenantKeysByTenant().Tenants["t"].Values {
+				finding = finding || (f.threshold && f.Key == "foo_critical")
+			}
+			if finding != refused {
+				t.Errorf("%s, foo_critical=%q: gate finding %v, exporter refuses %v (not served: %q)", name, v, finding, refused, reason)
+			}
+		}
+	}
+	if checked < 20 {
+		t.Fatalf("only %d tree×value cases are read by a resolver", checked)
 	}
 }

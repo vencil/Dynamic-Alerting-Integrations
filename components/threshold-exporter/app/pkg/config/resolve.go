@@ -1394,7 +1394,7 @@ func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf f
 // Values repeats, one finding each, the Errors entries that are about a
 // reserved key's VALUE (CheckReservedValue), a reserved key's schedule
 // (#3269) or a threshold key's value the row resolvers refuse
-// (RefusedThresholdWrites, #3267). They are in Errors too, so a
+// (thresholdRefusalIn, #3267). They are in Errors too, so a
 // caller that does not Ratchet stays strict; Ratchet is how a write gate
 // lets a value already on disk through when the write leaves it as the
 // exporter reads it.
@@ -1666,14 +1666,17 @@ func (c *ThresholdConfig) validateOverrideKeysOf(thresholdValues bool) KeyValida
 			}
 
 			// #3267: a threshold value the row resolvers refuse (`abc`,
-			// `70:high`, `1e999`; RefusedThresholdWrites — not a non-finite
+			// `70:high`, `1e999`; thresholdRefusalIn, in this tree's root
+			// `defaults:` — not a non-finite
 			// number, which #3140 refuses strictly elsewhere) is refused
 			// where it is written. Errors AND Values, as a reserved value:
 			// an unchanged one already on disk is a notice (Ratchet, by the
 			// resolver's reading — readAlike).
-			if f, ok := newThresholdFinding(tenant, canonKey, sv); ok && thresholdValues {
-				v.Errors = append(v.Errors, f.Message)
-				v.Values = append(v.Values, f)
+			if thresholdValues {
+				if f, ok := newThresholdFinding(tenant, canonDefaults, canonKey, sv); ok {
+					v.Errors = append(v.Errors, f.Message)
+					v.Values = append(v.Values, f)
+				}
 			}
 
 			// ADR-024 OQ-6: a dimensional key's `version` label is a value

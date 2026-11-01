@@ -5,7 +5,7 @@ package gitops
 // non-finite predicate on what the merge WRITES — a value the file already
 // holds is carried over, not written, and does not refuse the write.
 // #3267: the predicate is every value the exporter refuses
-// (cfg.RefusedThresholdWrites, RefusedValueAt's classifier), not only a
+// (the #3267 threshold value finding, RefusedValueAt's classifier), not only a
 // non-finite one.
 
 import (

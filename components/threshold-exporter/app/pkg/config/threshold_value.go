@@ -115,9 +115,9 @@ func finiteThreshold(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0
 // (its body pre-flight), so the three answer with one predicate.
 //
 // ⚠️ Strict: tenant-api refuses these whether or not the file already held
-// them (#3140). Every OTHER value the resolvers refuse is
-// RefusedThresholdWrites', which tenant-api ratchets (#3267, ADR-038
-// decision 12).
+// them (#3140). Every OTHER value the resolvers refuse is a threshold value
+// finding of ValidateTenantKeys (thresholdRefusalIn), which tenant-api
+// ratchets (#3267, ADR-038 decision 12).
 func NonFiniteThresholdWrites(overrides map[string]ScheduledValue) []string {
 	var out []string
 	for key, sv := range overrides {
@@ -147,56 +147,78 @@ func scheduledTexts(sv ScheduledValue) []string {
 	return values
 }
 
-// ThresholdRefusal is one threshold key whose value — its `default` or a
-// window's — the row resolver of the key refuses, and NonFiniteThresholdWrites
-// does not (#3267): `abc`, `70:high`, `disable:critical`, a number ParseFloat
-// reads only out of range (`1e999`, `0x1p1024`), "" and, on a
-// `<key>_critical`, any severity suffix. Judged by refusedThresholdText, the
-// classifier RefusedValueAt (da-guard's value_not_served) is.
-type ThresholdRefusal struct {
-	// Key is the key as written; Value the first refused value as written.
+// thresholdRefusal is one threshold key whose value — its `default` or a
+// window's — the row resolvers of the tree refuse, and
+// NonFiniteThresholdWrites does not (#3267): `abc`, `70:high`,
+// `disable:critical`, a number ParseFloat reads only out of range (`1e999`,
+// `0x1p1024`), "" and, on a `<key>_critical` that resolveCriticalRows reads,
+// any severity suffix. Judged by refusedThresholdTextIn, the classifier
+// RefusedValueAt (da-guard's value_not_served) is.
+type thresholdRefusal struct {
+	// Key is the key; Value the first refused value as written.
 	Key, Value string
 	// Message is the refusal, "<key>: <why>".
 	Message string
 }
 
-// Notice is the advisory a write gate puts in r's place when tenant's file
+// notice is the advisory a write gate puts in r's place when tenant's file
 // already holds the value and the write leaves it as the exporter reads it
-// (ThresholdReadAlike; ADR-038 decision 12).
-func (r ThresholdRefusal) Notice(tenant string) string {
+// (readAlike; ADR-038 decision 12).
+func (r thresholdRefusal) notice(tenant string) string {
 	return fmt.Sprintf("NOTICE: tenant=%s: %s %q is not a threshold the exporter reads, so it does not serve it. "+
 		"It is already in the tenant file, so it does not block a write that leaves it as the exporter reads it; "+
 		"fix it the next time %s is changed", tenant, r.Key, r.Value, r.Key)
 }
 
-// RefusedThresholdWrites is, sorted by key, the ThresholdRefusal of every
-// threshold key of a tenant's map (not `_`-prefixed) that has one. A value
-// NonFiniteThresholdWrites reports is not one: the two never report the
-// same value, and a value either reports is exactly a value RefusedValueAt
-// refuses (TestRefusedThresholdWrites_IsRefusedValueAt).
-func RefusedThresholdWrites(overrides map[string]ScheduledValue) []ThresholdRefusal {
-	var out []ThresholdRefusal
+// thresholdRefusalIn is the thresholdRefusal of sv, the value of threshold
+// key key (canonical spelling), in a tree whose root `defaults:` (canonical)
+// is defaults — or false. A value NonFiniteThresholdWrites reports is not
+// one: the two never report the same value. One value at a time, no
+// allocation for a value the resolvers read: it runs for every threshold key
+// of every tenant ValidateTenantKeys judges.
+func thresholdRefusalIn(defaults map[string]float64, key string, sv ScheduledValue) (thresholdRefusal, bool) {
+	if r, ok := thresholdValueRefusal(defaults, key, sv.Default); ok {
+		return r, true
+	}
+	for _, o := range sv.Overrides {
+		if r, ok := thresholdValueRefusal(defaults, key, o.Value); ok {
+			return r, true
+		}
+	}
+	return thresholdRefusal{}, false
+}
+
+func thresholdValueRefusal(defaults map[string]float64, key, raw string) (thresholdRefusal, bool) {
+	refused, whole := refusedThresholdTextIn(defaults, key, raw)
+	if refused == "" || nonFiniteThresholdText(raw) {
+		return thresholdRefusal{}, false
+	}
+	return thresholdRefusal{Key: key, Value: raw, Message: refusedThresholdWriteMessage(key, raw, whole)}, true
+}
+
+// refusedThresholdWrites is, sorted by key, the thresholdRefusal of every
+// threshold key of overrides (not `_`-prefixed) that has one, in a tree whose
+// root `defaults:` is defaults (nil: none). For tests: ValidateTenantKeys
+// asks thresholdRefusalIn key by key.
+func refusedThresholdWrites(defaults map[string]float64, overrides map[string]ScheduledValue) []thresholdRefusal {
+	var out []thresholdRefusal
 	for key, sv := range overrides {
 		if baseRowsSkipKey(key) {
 			continue
 		}
 		canon, _ := CanonicalKeyFor(key)
-		for _, raw := range scheduledTexts(sv) {
-			if nonFiniteThresholdText(raw) || refusedThresholdText(canon, raw) == "" {
-				continue
-			}
-			out = append(out, ThresholdRefusal{Key: key, Value: raw, Message: refusedThresholdWriteMessage(key, canon, raw)})
-			break
+		if r, ok := thresholdRefusalIn(defaults, canon, sv); ok {
+			out = append(out, r)
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
 	return out
 }
 
-// refusedThresholdWriteMessage is the ThresholdRefusal message for raw,
-// written on key (canon its canonical spelling).
-func refusedThresholdWriteMessage(key, canon, raw string) string {
-	if _, critical := criticalRowBase(canon); critical {
+// refusedThresholdWriteMessage is the thresholdRefusal message for raw on
+// key; whole: resolveCriticalRows' whole-value reading refused it.
+func refusedThresholdWriteMessage(key, raw string, whole bool) string {
+	if whole {
 		return fmt.Sprintf("%s: %q is not a threshold the exporter reads — a `_critical` key's value is "+
 			"the critical threshold itself: write a finite number with no `:<severity>` suffix, or `disable`", key, raw)
 	}
@@ -205,17 +227,14 @@ func refusedThresholdWriteMessage(key, canon, raw string) string {
 		"finite number (optionally with `:warning` or `:critical`) or `disable`%s", key, raw, suffixedHint(suffixed, key))
 }
 
-// ThresholdReadAlike reports whether the row resolver of threshold key key
+// thresholdReadAlike reports whether the row resolver of threshold key key
 // (canonical spelling) reads a and b the same way (#3267, ADR-038 decision
 // 12): each value — `default` and every window's, in order — by its
 // thresholdValueReading, each window by its parsed span, and the same
 // expiry. Quoting, surrounding space, a severity suffix's case, `1_000`
 // against `1000`, or `abc:warning` against `abc` are read alike; `abc`
-// against `xyz`, or a moved window, are not.
-func ThresholdReadAlike(key string, a, b ScheduledValue) bool { return readAlike(key, a, b) }
-
-// thresholdReadAlike is ThresholdReadAlike's body; readAlike, the one "read
-// the same way" of a value finding, dispatches a threshold key to it.
+// against `xyz`, or a moved window, are not. readAlike, the one "read the
+// same way" of a value finding, dispatches a threshold key to it.
 func thresholdReadAlike(key string, a, b ScheduledValue) bool {
 	if len(a.Overrides) != len(b.Overrides) || thresholdValueReading(key, a.Default) != thresholdValueReading(key, b.Default) {
 		return false
@@ -308,30 +327,62 @@ func RefusedValueAt(key string, sv ScheduledValue, now time.Time) string {
 }
 
 // refusedThresholdText is RefusedValueAt on one value as written, raw, with
-// no schedule to resolve: the one classifier of a threshold key's value, which
-// RefusedValueAt (da-guard) and RefusedThresholdWrites (tenant-api's
-// ratcheted write check) both are (#3267).
+// no schedule to resolve and no tree: refusedThresholdTextIn with no root
+// `defaults:`, which reads a `<key>_critical` by resolveCriticalRows' whole
+// value. da-guard asks it only of a key the resolver recorded refusing.
 func refusedThresholdText(key, raw string) string {
+	r, _ := refusedThresholdTextIn(nil, key, raw)
+	return r
+}
+
+// refusedThresholdTextIn is why the row resolvers of a tree whose root
+// `defaults:` (canonical) is defaults refuse raw, the value of threshold key
+// key (canonical): RefusedNonFinite, RefusedUnparsed or "" — the one
+// classifier of a threshold key's value, which RefusedValueAt (da-guard)
+// and the write gate's threshold value finding (ValidateTenantKeys, #3267)
+// both are. whole reports that resolveCriticalRows' whole-value reading is
+// the one that refused it.
+//
+// A `<key>_critical` is read by whichever resolvers read it in the tree:
+// resolveCriticalRows (the whole value is the number) when the tree values
+// its base, or when it values neither — the key's own reading, as da-guard
+// asks it; resolveBaseRows (the shared `value[:severity]` grammar) when the
+// root `defaults:` values the `_critical` key itself (#3267 review: `90:
+// critical` is then served). Refused when any of them refuses it. Every
+// other key is read by the shared grammar.
+func refusedThresholdTextIn(defaults map[string]float64, key, raw string) (refused string, whole bool) {
+	base, critical := criticalRowBase(key)
+	wholeReads, sharedReads := false, true
+	if critical {
+		_, valued := defaults[key]
+		_, baseValued := defaults[base]
+		wholeReads, sharedReads = !valued || baseValued, valued
+	}
+	// The common case first, with no allocation: a number every resolver
+	// reading the key reads. A number is never a disable.
+	wholeOK, sharedOK := !wholeReads, !sharedReads
+	if wholeReads {
+		_, wholeOK = parseThresholdNumber(strings.TrimSpace(raw))
+	}
+	if sharedReads {
+		_, _, sharedOK = parseThresholdValue(raw)
+	}
+	if wholeOK && sharedOK {
+		return "", false
+	}
 	if off, _ := thresholdRowDisabled(raw); off {
-		return ""
+		return "", false
 	}
-	if _, critical := criticalRowBase(key); critical {
-		v := strings.TrimSpace(raw)
-		if _, ok := parseThresholdNumber(v); ok {
-			return ""
+	if !wholeOK {
+		if _, err := strconv.ParseFloat(strings.TrimSpace(raw), 64); err == nil {
+			return RefusedNonFinite, true
 		}
-		if _, err := strconv.ParseFloat(v, 64); err == nil {
-			return RefusedNonFinite
-		}
-		return RefusedUnparsed
-	}
-	if _, _, ok := parseThresholdValue(raw); ok {
-		return ""
+		return RefusedUnparsed, true
 	}
 	if nonFiniteThresholdText(raw) {
-		return RefusedNonFinite
+		return RefusedNonFinite, false
 	}
-	return RefusedUnparsed
+	return RefusedUnparsed, false
 }
 
 // ThresholdText is one threshold value's text as the exporter reads it, for

@@ -155,3 +155,32 @@ func TestValidate_RefusedThresholdRatchet(t *testing.T) {
 		t.Errorf("unchanged NaN: errs %q, want the #3140 refusal", errs)
 	}
 }
+
+// #3267 review: a `<key>_critical` is judged as the tree's resolvers read it.
+// A root `defaults:` valuing `foo_critical` itself has resolveBaseRows read
+// it by the shared grammar — `90:critical` is served, the write taken; one
+// valuing the base `foo` has resolveCriticalRows read the whole value —
+// `90:critical` is dropped, the write refused.
+func TestValidate_CriticalKeyReadAsTheTreeReadsIt(t *testing.T) {
+	for _, c := range []struct {
+		defaults string
+		refused  bool
+	}{
+		{"defaults:\n  foo_critical: 100\n  mysql_slow_queries: 5\n", false},
+		{"defaults:\n  foo: 80\n  mysql_slow_queries: 5\n", true},
+		{"defaults:\n  foo: 80\n  foo_critical: 100\n  mysql_slow_queries: 5\n", true},
+	} {
+		dir := seedTreeRepo(t, map[string]string{
+			"_defaults.yaml": c.defaults,
+			"tx.yaml":        "tenants:\n  tx:\n    mysql_slow_queries: \"5\"\n",
+		})
+		errs, _, err := previewDryRun(context.Background(), newTestWriter(dir, dir), "tx",
+			"tenants:\n  tx:\n    mysql_slow_queries: \"5\"\n    foo_critical: \"90:critical\"\n")
+		if err != nil {
+			t.Fatalf("DryRunValidate: %v", err)
+		}
+		if got := strings.Contains(strings.Join(errs, "\n"), refusedText); got != c.refused {
+			t.Errorf("%q: refused %v, want %v (errs %q)", c.defaults, got, c.refused, errs)
+		}
+	}
+}
