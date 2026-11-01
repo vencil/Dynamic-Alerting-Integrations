@@ -1563,7 +1563,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/vibe-ci-downloads
-          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.57.0-actionlint-1.7.12
+          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.61.0-actionlint-1.7.12
 
       # ⛔ VECTOR_VERSION must equal the version the chart actually DEPLOYS
       # (helm/vector values.yaml `image.tag` + Chart.yaml `appVersion`) and the
@@ -1575,9 +1575,9 @@ jobs:
       # bump them together (version + SHA-256 + the cache key above).
       - name: Install Vector
         run: |
-          VECTOR_VERSION=0.57.0
-          # Pinned SHA-256 of vector-0.57.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
-          VECTOR_SHA256=4d156e6859e235b366f5b77121ae59d5440c93acab215c45f30f3fc839d20f65
+          VECTOR_VERSION=0.61.0
+          # Pinned SHA-256 of vector-0.61.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
+          VECTOR_SHA256=84a27c3ad6b772fdb05bb76ea01a31498bfc8f5e71f32cc78a0d96841f1aa827
           DL="$HOME/.cache/vibe-ci-downloads"
           mkdir -p "$DL"
           if [ ! -f "$DL/vector-${VECTOR_VERSION}.tgz" ]; then
@@ -1950,7 +1950,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/vibe-ci-downloads
-          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.57.0-actionlint-1.7.12
+          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.61.0-actionlint-1.7.12
 
       # ⛔ VECTOR_VERSION must equal the version the chart actually DEPLOYS
       # (helm/vector values.yaml `image.tag` + Chart.yaml `appVersion`) and the
@@ -1962,9 +1962,9 @@ jobs:
       # bump them together (version + SHA-256 + the cache key above).
       - name: Install Vector
         run: |
-          VECTOR_VERSION=0.57.0
-          # Pinned SHA-256 of vector-0.57.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
-          VECTOR_SHA256=4d156e6859e235b366f5b77121ae59d5440c93acab215c45f30f3fc839d20f65
+          VECTOR_VERSION=0.61.0
+          # Pinned SHA-256 of vector-0.61.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
+          VECTOR_SHA256=84a27c3ad6b772fdb05bb76ea01a31498bfc8f5e71f32cc78a0d96841f1aa827
           DL="$HOME/.cache/vibe-ci-downloads"
           mkdir -p "$DL"
           if [ ! -f "$DL/vector-${VECTOR_VERSION}.tgz" ]; then

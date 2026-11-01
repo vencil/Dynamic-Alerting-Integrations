@@ -126,7 +126,7 @@ services:
   # files/audit-metrics.vector.yaml, rendered by federation_e2e_run.sh).
   # Replaced the mtail sidecar in #1278 D1.
   audit-metrics:
-    image: timberio/vector:0.57.0-distroless-libc
+    image: timberio/vector:0.61.0-distroless-libc
     command: ["--config", "/etc/audit-metrics/audit-metrics.yaml"]
     environment:
       # Vector 0.5x only expands env vars in its config with this set; the

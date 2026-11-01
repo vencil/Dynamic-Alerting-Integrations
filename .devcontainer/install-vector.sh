@@ -21,9 +21,9 @@
 # production will not honour. Bump every pin together.
 set -euo pipefail
 
-VECTOR_VERSION=0.57.0
+VECTOR_VERSION=0.61.0
 # SHA-256 of vector-${VECTOR_VERSION}-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
-VECTOR_SHA256=4d156e6859e235b366f5b77121ae59d5440c93acab215c45f30f3fc839d20f65
+VECTOR_SHA256=84a27c3ad6b772fdb05bb76ea01a31498bfc8f5e71f32cc78a0d96841f1aa827
 
 if [ "$(uname -m)" != "x86_64" ]; then
     # Only the amd64 tarball digest is pinned here. Refuse to install an
