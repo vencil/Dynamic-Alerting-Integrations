@@ -506,6 +506,9 @@ class TestCli:
         修正前相同（0），pytest 的輸出不進 stdout。（工具自己的 stderr 行在
         sys.stderr 為 None 時會被 print 送到 stdout——所有工具共通、修正前
         就如此，追蹤於 #3518。）"""
+        import shutil
+        if shutil.which("sh") is None:
+            pytest.skip("needs a POSIX sh to start the tool with fd 2 closed")
         script = tmp_path / "drive.py"
         script.write_text(
             "import sys\n"
