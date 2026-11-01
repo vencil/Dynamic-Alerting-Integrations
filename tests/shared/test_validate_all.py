@@ -31,6 +31,16 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 import validate_all as va
+from _lib_exitcodes import emit_result
+
+
+def _run_main():
+    """``va.main()`` the way ``run()`` takes it (#3216): under --json it
+    hands back a Report, which is written here and exits with its status;
+    an exit of its own (``sys.exit``) passes through unchanged."""
+    result = va.main()
+    if result is not None:
+        raise SystemExit(emit_result(result))
 from validate_all import (
     _extract_detail,
     _run_one,
@@ -824,7 +834,7 @@ class TestListMode:
     def test_list_mode(self, capsys, monkeypatch, cli_argv):
         """--list 模式列出所有檢查並正常結束。"""
         cli_argv('validate_all', '--list')
-        va.main()
+        _run_main()
         out = capsys.readouterr().out
         # 應包含至少一個 TOOLS 名稱
         assert "links" in out
@@ -833,7 +843,7 @@ class TestListMode:
     def test_list_mode_shows_all_tools(self, capsys, monkeypatch, cli_argv):
         """--list 模式列出全部 TOOLS。"""
         cli_argv('validate_all', '--list')
-        va.main()
+        _run_main()
         out = capsys.readouterr().out
         for name, _, _, _ in TOOLS:
             assert name in out, f"--list 未顯示 '{name}'"
@@ -1075,7 +1085,7 @@ class TestMainCLI:
     def test_list_flag(self, monkeypatch, capsys, cli_argv):
         """--list 列出所有 checks。"""
         cli_argv('validate_all', '--list')
-        va.main()
+        _run_main()
         out = capsys.readouterr().out
         assert "versions" in out or "links" in out
 
@@ -1084,7 +1094,7 @@ class TestMainCLI:
         cli_argv('validate_all', '--json', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one)
         with pytest.raises(SystemExit) as exc_info:
-            va.main()
+            _run_main()
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         data = json.loads(out)
@@ -1096,7 +1106,7 @@ class TestMainCLI:
         cli_argv('validate_all', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one)
         with pytest.raises(SystemExit) as exc_info:
-            va.main()
+            _run_main()
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "Validation Report" in out
@@ -1118,7 +1128,7 @@ class TestMainCLI:
         cli_argv('validate_all', '--skip', 'versions,links', '--only', 'mermaid')
         monkeypatch.setattr(va, "_run_one", recording)
         with pytest.raises(SystemExit) as exc_info:
-            va.main()
+            _run_main()
         assert exc_info.value.code == 0
         assert calls == ["mermaid"], (
             "--only picks mermaid and --skip subtracts two names that were "
@@ -1136,7 +1146,7 @@ class TestMainCLI:
         cli_argv('validate_all', '--ci', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_fail)
         with pytest.raises(SystemExit) as exc_info:
-            va.main()
+            _run_main()
         assert exc_info.value.code == 1
         out = capsys.readouterr().out
         assert "Stopping after failure (versions)" in out
@@ -1147,7 +1157,7 @@ class TestMainCLI:
         cli_argv('validate_all', '--verbose', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one)
         with pytest.raises(SystemExit) as exc_info:
-            va.main()
+            _run_main()
         assert exc_info.value.code == 0
         out = capsys.readouterr().out
         assert "output" in out or "VERSIONS" in out
@@ -1342,7 +1352,7 @@ class TestMainExtended:
         cli_argv('validate_all', '--parallel', '--json', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         out = capsys.readouterr().out
         data = json.loads(out)
@@ -1353,7 +1363,7 @@ class TestMainExtended:
         cli_argv('validate_all', '--parallel', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         out = capsys.readouterr().out
         assert "PARALLEL" in out
@@ -1363,7 +1373,7 @@ class TestMainExtended:
         cli_argv('validate_all', '--parallel', '--verbose', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         out = capsys.readouterr().out
         assert "output text" in out or "VERSIONS" in out
@@ -1375,11 +1385,17 @@ class TestMainExtended:
         cli_argv('validate_all', '--baseline', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         assert bf.exists()
-        data = json.loads(bf.read_text(encoding="utf-8"))
+        text = bf.read_text(encoding="utf-8")
+        data = json.loads(text)
         assert "passed" in data
+        # #3216: the baseline is the --json document, written by the one
+        # encoder — the same bytes stdout carries.
+        from _lib_exitcodes import encode_json
+        assert text == encode_json(data) + "\n", text[:300]
+        assert capsys.readouterr().out == text
 
     def test_compare_mode(self, monkeypatch, capsys, tmp_path, cli_argv):
         """--compare against baseline."""
@@ -1393,7 +1409,7 @@ class TestMainExtended:
         cli_argv('validate_all', '--compare', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
 
     def test_profile_mode(self, monkeypatch, capsys, tmp_path, cli_argv):
@@ -1403,7 +1419,7 @@ class TestMainExtended:
         cli_argv('validate_all', '--profile', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         assert csv_file.exists()
         content = csv_file.read_text(encoding="utf-8")
@@ -1419,7 +1435,7 @@ class TestMainExtended:
             cli_argv('validate_all', '--profile', '--only', 'versions')
             monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
             with pytest.raises(SystemExit):
-                va.main()
+                _run_main()
 
         lines = csv_file.read_text(encoding="utf-8").strip().split("\n")
         assert len(lines) == 3  # header + 2 data rows
@@ -1448,7 +1464,7 @@ class TestMainExtended:
         cli_argv('validate_all', '--profile', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         lines = csv_file.read_text(encoding="utf-8").split("\n")
         assert lines[0] == self._derived_header(), "the new file starts with the derived header"
@@ -1474,7 +1490,7 @@ class TestMainExtended:
         cli_argv('validate_all', '--profile', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit):
-            va.main()
+            _run_main()
         assert not list(tmp_path.glob(".validation-profile.csv.bak-*"))
         lines = csv_file.read_text(encoding="utf-8").strip().split("\n")
         assert len(lines) == 2, "header + the appended row"
@@ -1512,7 +1528,7 @@ class TestMainExtended:
                  '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         assert json.loads(capsys.readouterr().out)["mode"] == want
         row = csv_file.read_text(encoding="utf-8").strip().split("\n")[1]
@@ -1526,7 +1542,7 @@ class TestMainExtended:
         cli_argv('validate_all', '--notify', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         assert len(calls) == 1
         assert "Passed" in calls[0][0]
@@ -1539,7 +1555,7 @@ class TestMainExtended:
         cli_argv('validate_all', '--notify', '--only', 'versions')
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_fail)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 1
         assert len(calls) == 1
         assert "Failed" in calls[0][0]
@@ -1565,7 +1581,7 @@ class TestMainExtended:
         fix_name = next(iter(FIX_COMMANDS.keys()))
         cli_argv("validate_all", "--fix", "--only", fix_name)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 1
         out = capsys.readouterr().out
         assert "Auto-fixing" in out
@@ -1582,7 +1598,7 @@ class TestMainExtended:
         no_fix = next(n for n in tool_names if n not in FIX_COMMANDS)
         cli_argv("validate_all", "--fix", "--only", no_fix)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 1
         out = capsys.readouterr().out
         assert "no auto-fix" in out
@@ -1595,7 +1611,7 @@ class TestMainExtended:
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         cli_argv('validate_all', '--smart')
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         out = capsys.readouterr().out
         assert "Smart mode" in out
@@ -1625,7 +1641,7 @@ class TestMainExtended:
         monkeypatch.setattr(va, "_run_one", rec)
         cli_argv('validate_all', '--smart')
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         assert len(calls) == 1, "the detector was never consulted"
         assert len(ran) == len(va.TOOLS), (
@@ -1662,7 +1678,7 @@ class TestMainExtended:
         monkeypatch.setattr(va, "_run_one", rec)
         cli_argv('validate_all', '--smart', '--skip', 'versions')
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         raw = capsys.readouterr().out
         out = " ".join(raw.split())
@@ -1716,7 +1732,7 @@ class TestMainExtended:
         monkeypatch.setattr(va, "_run_one", rec)
         cli_argv('validate_all', '--smart')
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         out = " ".join(capsys.readouterr().out.split())
         assert ran == [], "an empty selection ran %d check(s)" % len(ran)
@@ -1741,7 +1757,7 @@ class TestMainExtended:
         fix_name = next(iter(FIX_COMMANDS.keys()))
         cli_argv("validate_all", "--diff-report", "--only", fix_name)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 1
         out = capsys.readouterr().out
         assert "DIFF REPORT" in out
@@ -1765,7 +1781,7 @@ class TestMainExtended:
         cli_argv('validate_all', '--skip', every_name)
         monkeypatch.setattr(va, "_run_one", self._mock_run_one_pass)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         out = capsys.readouterr().out
         assert "All tools skipped" in out
@@ -1784,7 +1800,7 @@ class TestMainExtended:
         fix_name = next(iter(FIX_COMMANDS.keys()))
         cli_argv("validate_all", "--fix", "--only", fix_name)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 1
         out = capsys.readouterr().out
         assert "fix error" in out or "Auto-fixing" in out
@@ -1833,7 +1849,7 @@ class TestSmartModeThreeOutcomes:
     def _run(self, capsys, cli_argv, *argv):
         cli_argv('validate_all', '--smart', *argv)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         captured = capsys.readouterr()
         return exc.value.code, captured.out, captured.err
 
@@ -1975,7 +1991,7 @@ class TestCiStopFallsThroughToTheTail:
     def _main(self, cli_argv, capsys, *argv):
         cli_argv('validate_all', *argv)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         captured = capsys.readouterr()
         return exc.value.code, captured.out, captured.err
 
@@ -2408,7 +2424,7 @@ class TestJsonStdoutIsOneDocument:
     def _main(self, cli_argv, capsys, *argv):
         cli_argv('validate_all', *argv)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         captured = capsys.readouterr()
         return exc.value.code, captured.out, captured.err
 
@@ -2638,7 +2654,7 @@ class TestUnknownCheckNames:
         cli_argv('validate_all', *mode,
                  '--only', 'versions,cli_default_drift_typo')
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == self._CALLER_ERROR, (
             f"{mode or ['(no mode flag)']} must not carry the guard past the "
             f"unknown name")
@@ -2733,7 +2749,7 @@ class TestUnknownCheckNames:
         """
         cli_argv('validate_all', *(extra + ['--skip', 'glosary']))
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 2
         err = capsys.readouterr().err
         assert err == va._unknown_check_names_message(
@@ -2796,7 +2812,7 @@ class TestUnknownCheckNames:
         cli_argv('validate_all', '--skip', 'nonexistent_check',
                  '--only', 'versions')
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == self._CALLER_ERROR
         assert calls == []
         assert "nonexistent_check" in capsys.readouterr().err
@@ -2818,7 +2834,7 @@ class TestUnknownCheckNames:
         monkeypatch.setattr(va, "_run_one", self._recording_run_one(calls))
         cli_argv('validate_all', '--only', ",".join(picked))
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0, (
             f"{picked} are registered checks; this invocation must be accepted "
             f"(stderr: {capsys.readouterr().err.strip()[:200]!r})")
@@ -2833,7 +2849,7 @@ class TestUnknownCheckNames:
         mode dispatch") otherwise reads as if it should cover this one too.
         """
         cli_argv('validate_all', '--list', '--only', 'zz_not_a_check')
-        assert va.main() is None
+        assert _run_main() is None
         out = capsys.readouterr().out
         for name, _, _, _ in TOOLS:
             assert name in out, f"--list must still show {name}"
@@ -2855,7 +2871,7 @@ class TestUnknownCheckNames:
                             lambda *a, **k: entered.append("started"))
         cli_argv('validate_all', '--watch', '--skip', 'zz_not_a_check')
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == self._CALLER_ERROR
         assert entered == []
 
@@ -2867,7 +2883,7 @@ class TestUnknownCheckNames:
         monkeypatch.setattr(va, "_run_watch",
                             lambda *a, **k: entered.append("started"))
         cli_argv('validate_all', '--watch', '--skip', 'versions')
-        assert va.main() is None
+        assert _run_main() is None
         assert entered == ["started"]
 
     # ---- symptom 3: --skip subtracts from --only ------------------------
@@ -2885,7 +2901,7 @@ class TestUnknownCheckNames:
         monkeypatch.setattr(va, "_run_one", self._recording_run_one(calls))
         cli_argv('validate_all', '--only', f"{drop},{keep}", '--skip', drop)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0, (
             f"both {drop!r} and {keep!r} are registered; only the subtraction "
             f"should change what runs "
@@ -2909,7 +2925,7 @@ class TestUnknownCheckNames:
         monkeypatch.setattr(va, "_run_one", self._recording_run_one(calls))
         cli_argv('validate_all', '--only', one, '--skip', one)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         assert calls == []
         out = capsys.readouterr().out
@@ -2940,7 +2956,7 @@ class TestUnknownCheckNames:
         monkeypatch.setattr(va, "_run_one", self._recording_run_one(calls))
         cli_argv('validate_all', flag, value)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0, (
             f"{flag} {value!r} names no check at all, so there is nothing for "
             f"the guard to reject "
@@ -2964,7 +2980,7 @@ class TestUnknownCheckNames:
         monkeypatch.setattr(va, "_run_one", self._recording_run_one(calls))
         cli_argv('validate_all', '--only', f" {first},  {second} ")
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0, (
             f"padded names must be accepted "
             f"(stderr: {capsys.readouterr().err.strip()[:200]!r})")
@@ -3047,7 +3063,7 @@ class TestConflictingFlags:
         calls, entered = self._quiet(monkeypatch, tmp_path)
         cli_argv('validate_all', *argv)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == self._CALLER_ERROR, (
             f"{argv} was accepted; before #1695 it ran at rc 0 with one "
             f"flag silently dropped")
@@ -3071,10 +3087,10 @@ class TestConflictingFlags:
         self._quiet(monkeypatch, tmp_path)
         cli_argv('validate_all', *argv)
         if "--watch" in argv:
-            assert va.main() is None
+            assert _run_main() is None
         else:
             with pytest.raises(SystemExit) as exc:
-                va.main()
+                _run_main()
             assert exc.value.code == 0, (
                 f"{argv} alone must be accepted "
                 f"(stderr: {capsys.readouterr().err.strip()[:200]!r})")
@@ -3089,7 +3105,7 @@ class TestConflictingFlags:
         calls, _ = self._quiet(monkeypatch, tmp_path)
         cli_argv('validate_all', '--smart', '--only', '')
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == 0
         assert calls == ["versions"], "the --smart selection was used"
 
@@ -3152,7 +3168,7 @@ class TestConflictingFlags:
         calls, entered = self._quiet(monkeypatch, tmp_path)
         cli_argv('validate_all', '--watch', flag)
         with pytest.raises(SystemExit) as exc:
-            va.main()
+            _run_main()
         assert exc.value.code == self._CALLER_ERROR
         assert calls == [] and entered == []
         err = capsys.readouterr().err
@@ -3173,7 +3189,7 @@ class TestConflictingFlags:
         assert "verbose" in _args_attrs_read_by_run_watch()
         _, entered = self._quiet(monkeypatch, tmp_path)
         cli_argv('validate_all', *argv)
-        assert va.main() is None
+        assert _run_main() is None
         assert entered == ["watch"]
         assert "would be ignored" not in capsys.readouterr().err
 
