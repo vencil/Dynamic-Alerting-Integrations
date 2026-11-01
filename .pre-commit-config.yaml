@@ -1934,9 +1934,9 @@ repos:
         # Fires when either rule tree or the lint changes. A detected X/XCritical
         # pair (exact name + severity corroboration) missing `labels.metric_group`
         # on either side — or with mismatched values — double-notifies (ADR-001
-        # severity-dedup inert). FAIL only on NEW violating pairs or a
-        # KNOWN_UNGROUPED exit-lock breach; the 4 kubernetes pairs are INFO
-        # (#1199). Differently-named conceptual pairs and single alerts are out
+        # severity-dedup inert). FAIL on any violating pair not in the
+        # (exit-locked, now empty — #1199 fixed the 4 kubernetes pairs)
+        # KNOWN_UNGROUPED. Differently-named conceptual pairs and single alerts are out
         # of detection scope by design (see the lint docstring).
         files: (?:^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml|scripts/tools/lint/check_metric_group_pairs\.py)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
 
