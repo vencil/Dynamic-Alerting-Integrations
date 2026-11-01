@@ -166,6 +166,11 @@ def cmd_snapshot(config_dir, message=None):
         'changes': changes,
     }
 
+    # #3216: encoded before anything is written — a history.json holding a
+    # value JSON cannot carry (NaN read back by json.loads) refuses the run
+    # with no snap-N/ left behind and history.json as it was.
+    encode_json([*history, entry])
+
     # Save snapshot content
     hdir = _history_dir(config_dir)
     snap_dir = hdir / f"snap-{entry['id']}"

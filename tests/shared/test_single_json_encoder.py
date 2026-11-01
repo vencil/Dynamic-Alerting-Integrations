@@ -6,12 +6,14 @@ encodes it with `encode_json` — two-space indent, no NaN / Infinity, `date` /
 the encoder cannot carry is the `output_not_serializable` envelope at the
 crash exit code, never a document with `Infinity` in it, never part of one.
 
-The gate below holds it: no file under scripts/tools other than
-`_lib_exitcodes` prints JSON text itself. It was a ratchet (`OWN_JSON`, each
-file's count could only go down) until the last site moved; at zero it is a
-plain refusal. `encode_json` is one of the formatters it follows, so a tool
-that encodes with the one encoder and prints the text itself is caught too:
-the encoder is shared, the writer is `run()`.
+The gate below refuses every shape it can see of a tool printing JSON text
+itself; there are none left, so it is a plain refusal, no longer a ratchet
+(`OWN_JSON`). `encode_json` is one of the formatters it follows, so encoding
+with the one encoder and printing the text yourself is caught too.
+
+⚠️ It does not prove that no tool prints its own JSON: the shapes it does not
+see are listed at `LIB` below, and tools that still do it through them are
+tracked on #3216.
 """
 from __future__ import annotations
 
@@ -202,11 +204,13 @@ LIB = "_lib_exitcodes.py"
 
 #: What counts as printing its own JSON: `print` / `sys.stdout.write` /
 #: `click.echo` of JSON text (see `_JsonText`: under any import alias, through
-#: a formatter found by `json_formatters` — `encode_json` among them — a local
-#: holding it, `+` or an f-string), or `json.dump(..., sys.stdout)`. Blind
-#: spots, by choice: a method returning JSON text, and a value passed through
-#: a call or an attribute before it is printed (patch_config's `_emit`, which
-#: answers apply with SIGINT / SIGTERM ignored first, is one such writer).
+#: a module-level formatter found by `json_formatters` — `encode_json` among
+#: them — a local holding it, `+` or an f-string), or `json.dump(...,
+#: sys.stdout)`. Not seen: a method or a nested function returning JSON
+#: text; a conditional expression (`a if c else b`); a stream held in a name
+#: (`sink = sys.stdout`); a value passed through a call, a container or an
+#: attribute before it is printed (patch_config's `_emit`, which answers with
+#: SIGINT / SIGTERM ignored first, is one); a write entry given `-`.
 
 
 _FUNCS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)

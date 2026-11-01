@@ -1312,8 +1312,8 @@ if __name__ == '__main__':
 def test_a_history_holding_nan_is_refused_not_written_back(tmp_path):
     """#3216 (owner-approved 0→2): `json.loads` takes `NaN`, which is not
     JSON; the old formatter wrote it back and the snapshot was rc 0. Through
-    `encode_json` the write is refused at rc 2, naming where the value sits,
-    and history.json is left as it was."""
+    `encode_json` the run is refused at rc 2, naming where the value sits,
+    before anything is written: history.json as it was, no snap-2/."""
     script = Path(__file__).resolve().parents[2] / 'scripts' / 'tools' / 'ops' / 'config_history.py'
     confd = tmp_path / 'conf.d'
     confd.mkdir()
@@ -1337,3 +1337,4 @@ def test_a_history_holding_nan_is_refused_not_written_back(tmp_path):
     assert second.returncode == 2, (second.stdout, second.stderr)
     assert '[0].file_count: nan is not a JSON number' in second.stderr
     assert history.read_bytes() == before
+    assert sorted(p.name for p in history.parent.iterdir()) == ['history.json', 'snap-1']

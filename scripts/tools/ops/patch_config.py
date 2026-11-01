@@ -71,7 +71,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report, arm_crash_envelope, encode_json)
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, encode_json)
 from _lib_python import positive_seconds  # noqa: E402
 import _lib_confedit  # noqa: E402  (ADR-036 §2, #3206: Go writes the key's text)
 from _lib_consumer_read import binary_data_bytes  # noqa: E402  (#3461: the one binaryData decode)
@@ -1164,10 +1164,9 @@ def _seal_std_streams():
 
 
 def _emit(document=None):
-    """The one way apply and a refusal answer: SIGINT / SIGTERM to SIG_IGN
-    first, so no signal can end the process with an exit code other than the
-    one the answer states, then the --json document (if any) on stdout.
-    (--diff writes nothing, so its document is a Report run() prints.)"""
+    """The one way main answers: SIGINT / SIGTERM to SIG_IGN first, so no
+    signal can end the process with an exit code other than the one the
+    answer states, then the --json document (if any) on stdout."""
     _guarded(SIGNALS.ignore)
     if document is not None:
         _say(document, out=True)
@@ -1693,7 +1692,7 @@ def _status_exit_code(status):
 def main():
     """CLI entry point: Patch threshold-config ConfigMap for a specific tenant."""
     try:
-        return _main()  # a Report (--diff --json) is run()'s to write
+        _main()
     finally:
         _seal_std_streams()
 
@@ -1733,10 +1732,12 @@ def _main():
             diff = diff_preview(cm_data, mode, args.tenant, args.metric_key,
                                 args.value)
             if args.json:
-                # #3216: a document with nothing written behind it goes out
-                # through run(); apply's answer stays on _emit (signals first).
-                return Report(diff)
-            print_diff(diff)
+                # #3216: the one encoder; the one writer of this tool's
+                # answers stays _emit (signals ignored first, a failed write
+                # swallowed — rc is the answer's, not the stream's).
+                _emit(encode_json(diff))
+            else:
+                print_diff(diff)
             return
         with contextlib.redirect_stdout(sys.stderr if args.json else sys.stdout):
             _say(f"Detected ConfigMap mode: {mode}", out=True)
