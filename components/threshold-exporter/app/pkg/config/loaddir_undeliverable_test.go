@@ -356,31 +356,32 @@ func TestLoadDirReport_UndeliverableValueShape(t *testing.T) {
 	}
 }
 
-// ADR-038 §11: a dimensional key a subtree `_defaults.yaml` writes reaches
-// the output plane only when the platform names its base, as the resolver
-// asks (dimensionalBaseNamed) — else it is undeliverable like a flat key,
-// not overlaid into a map whose resolver then serves it no row.
-func TestLoadDirReport_SubtreeDimensionalKeyNeedsItsBaseNamed(t *testing.T) {
+// ADR-038 §11 (#3475): a dimensional key a subtree `_defaults.yaml` writes
+// reaches the output plane only when its label is declared under
+// `dimensions:` for its base, as the resolver asks (dimensionDeclared) —
+// else it is undeliverable like a flat key, not overlaid into a map whose
+// resolver then serves it no row.
+func TestLoadDirReport_SubtreeDimensionalKeyNeedsADeclaredLabel(t *testing.T) {
 	t.Parallel()
 	for name, tc := range map[string]struct {
 		root        string
 		deliverable bool
 	}{
-		"base not named": {"defaults:\n  mysql_connections: 80\n", false},
-		"base valued":    {"defaults:\n  mysql_connections: 80\n  redis_mem: 70\n", true},
-		"base declared":  {"defaults:\n  mysql_connections: 80\noptional_overrides:\n  - redis_mem\n", true},
-		"retired spelling of the base valued": {
-			"defaults:\n  mysql_cpu: 30\n", true},
+		"label not declared":   {"dimensions:\n  mysql_threads_running: [db]\ndefaults:\n  mysql_connections: 80\n  redis_mem: 70\n", false},
+		"other label declared": {"dimensions:\n  mysql_threads_running: [db]\n  redis_mem: [env]\ndefaults:\n  mysql_connections: 80\n", false},
+		"label declared":       {"dimensions:\n  mysql_threads_running: [db]\n  redis_mem: [db]\ndefaults:\n  mysql_connections: 80\n", true},
+		"retired spelling of the base, label declared": {
+			"dimensions:\n  mysql_cpu: [db]\ndefaults:\n  mysql_connections: 80\n", true},
 	} {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			key := `redis_mem{db="0"}`
-			if name == "retired spelling of the base valued" {
+			if name == "retired spelling of the base, label declared" {
 				key = `mysql_threads_running{db="0"}`
 			}
 			cfg, rep, err := LoadDirReport(writeUndeliverableTree(t, map[string]string{
 				"_defaults.yaml":      tc.root,
-				"team/_defaults.yaml": "defaults:\n  '" + key + "': 60\n",
+				"team/_defaults.yaml": "dimensions:\n  mysql_threads_running: [db]\n  redis_mem: [db]\ndefaults:\n  '" + key + "': 60\n",
 				"team/t1.yaml":        "tenants:\n  t1: {}\n",
 			}), nil)
 			if err != nil {

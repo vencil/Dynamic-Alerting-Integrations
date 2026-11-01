@@ -349,7 +349,7 @@ v2.9.0 曾隨範例附過一條磁碟預測告警，引用的正是當時沒人�
 
 > 本節記錄 accepted 之後由後續 ADR／PR 帶入、尚未併進上文的變化。
 
-- **Version pilot 第三族 `cpu_throttle` 機械已鋪、exact branch 依 pilot allowlist 暫 inert**——§2 的 pilot 範圍（`container_cpu` + `container_memory`）不變，但 [#944](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/944) 已為 `cpu_throttle` 鋪好同款 version 機械（`rule-packs/rule-pack-kubernetes.yaml` 的 normalize pair + Route-2 exact-or-fallback per-severity cores）。`cpu_throttle` 尚不在 version pilot allowlist（`resolve.go` 的 `pilotVersionMetrics` 僅 container/cpu + container/memory），租戶無法宣告 per-version throttle 閾值，exact-match branch **依設計暫 inert**、一律走 `version="default"` fallback；未來納入 pilot 是一行 allowlist 變更、非規則重寫。
+- **Version pilot 第三族 `cpu_throttle` 機械已鋪、exact branch 依 pilot allowlist 暫 inert**——§2 的 pilot 範圍（`container_cpu` + `container_memory`）不變，但 [#944](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/944) 已為 `cpu_throttle` 鋪好同款 version 機械（`rule-packs/rule-pack-kubernetes.yaml` 的 normalize pair + Route-2 exact-or-fallback per-severity cores）。`cpu_throttle` 沒有宣告 `version` 維度（門檻登錄表的 `dimensions` 只有 `container_cpu`、`container_memory`，生成到根 `_defaults.yaml` 的 `dimensions:`；ADR-038 決定 11），exporter 不送出 per-version throttle 閾值，exact-match branch **依設計暫 inert**、一律走 `version="default"` fallback；未來納入是登錄表一行 `dimensions` 變更、非規則重寫。
 
 ## Cross-Reference
 

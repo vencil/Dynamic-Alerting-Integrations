@@ -70,15 +70,6 @@ func TestValidateVersionLabel_BadCharset_Warns(t *testing.T) {
 	}
 }
 
-func TestValidateVersionLabel_NonPilotMetric_Warns(t *testing.T) {
-	t.Parallel()
-	// redis_memory → component=redis, not in pilotVersionMetrics.
-	got := warningsJoined(cfgWithVersionKey(`redis_memory{version="v2"}`))
-	if !strings.Contains(got, "non-pilot") {
-		t.Errorf("expected non-pilot warning, got: %q", got)
-	}
-}
-
 func TestValidateVersionLabel_RegexMatcher_Warns(t *testing.T) {
 	t.Parallel()
 	got := warningsJoined(cfgWithVersionKey(`container_cpu{version=~"v.*"}`))
@@ -105,7 +96,7 @@ func TestValidateVersionLabel_NonVersionDimensional_Unaffected(t *testing.T) {
 // Direct unit coverage of the helper for the no-version fast path.
 func TestValidateVersionLabel_Helper_NoVersionLabel_Nil(t *testing.T) {
 	t.Parallel()
-	if got := validateVersionLabel("t", `container_cpu{env="prod"}`, "container_cpu",
+	if got := validateVersionLabel("t", `container_cpu{env="prod"}`,
 		map[string]string{"env": "prod"}, nil); got != nil {
 		t.Errorf("no version label must return nil, got: %v", got)
 	}

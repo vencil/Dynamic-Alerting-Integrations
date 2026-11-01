@@ -30,7 +30,7 @@ func TestNotServed_Table(t *testing.T) {
 		chain []string                // tenant tx's ChainParseFailed
 	}{
 		{name: "control", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  " + retiredCPU + ": 5\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 80\n  " + retiredCPU + ": 5\n",
 			"tx.yaml":        "tenants:\n  tx: {}\n",
 		}},
 		// #3250: a root value that is not a number no longer drops the file;
@@ -39,13 +39,13 @@ func TestNotServed_Table(t *testing.T) {
 		// root `.nan` since #3140), and the file's other keys are served.
 		// /effective shows the text and names it root_default_refused.
 		{name: "L0 root value not a number", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: abc\n  " + retiredCPU + ": 5\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: abc\n  " + retiredCPU + ": 5\n",
 			"tx.yaml":        "tenants:\n  tx: {}\n",
 		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedRootDefaultRefused, "_defaults.yaml")}},
 		// #3250: a registered `_` key under the root `defaults:` reaches no
 		// tenant; an unregistered one is `unregistered` in every layer.
 		{name: "L0 root reserved key", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _silent_mode: warning\n  _myth: 1\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 80\n  _silent_mode: warning\n  _myth: 1\n",
 			"tx.yaml":        "tenants:\n  tx: {}\n",
 		}, want: map[string]NotServedKey{"_silent_mode": ns(NotServedRootDefaultsReserved, "_defaults.yaml"),
 			"_myth": ns(NotServedUnregistered, "_defaults.yaml")}},
@@ -54,18 +54,18 @@ func TestNotServed_Table(t *testing.T) {
 			"tx.yaml":        "tenants:\n  tx: {}\n",
 		}, want: map[string]NotServedKey{"defaults": ns(NotServedParseFailed, "_defaults.yaml")}},
 		{name: "L1 subtree value rejected", files: map[string]string{
-			"_defaults.yaml":     "defaults:\n  mysql_connections: 80\n",
+			"_defaults.yaml":     "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 80\n",
 			"sub/_defaults.yaml": "defaults: {mysql_connections: abc}\n",
 			"sub/tx.yaml":        "tenants:\n  tx: {}\n",
 		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedValueRejected, "sub/_defaults.yaml")}},
 		{name: "L1 syntax error", files: map[string]string{
-			"_defaults.yaml":     "defaults:\n  mysql_connections: 80\n",
+			"_defaults.yaml":     "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 80\n",
 			"sub/_defaults.yaml": "defaults: [\n",
 			"sub/tx.yaml":        "tenants:\n  tx: {}\n",
 		}, chain: []string{"sub/_defaults.yaml"}},
 		{name: "root syntax error", files: map[string]string{
 			"_defaults.yaml":     "defaults: [\n",
-			"sub/_defaults.yaml": "defaults:\n  mysql_connections: 40\n",
+			"sub/_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 40\n",
 			"sub/tx.yaml":        "tenants:\n  tx: {}\n",
 		}, chain: []string{"_defaults.yaml"}, want: map[string]NotServedKey{
 			// The root no longer declares it, so the subtree value is the
@@ -73,104 +73,104 @@ func TestNotServed_Table(t *testing.T) {
 			"mysql_connections": ns(NotServedUndeliverable, "sub/_defaults.yaml"),
 		}},
 		{name: "inline merge string", files: map[string]string{
-			"_defaults.yaml":     "defaults:\n  mysql_connections: 30\n",
-			"sub/_defaults.yaml": "defaults:\n  mysql_connections: 40\n",
+			"_defaults.yaml":     "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
+			"sub/_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 40\n",
 			"sub/tx.yaml":        "tenants:\n  tx:\n    mysql_connections:\n      <<: {default: \"55\"}\n",
 		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedValueUnparsed, "sub/tx.yaml")}},
 		{name: "inline merge null", files: map[string]string{
-			"_defaults.yaml":     "defaults:\n  mysql_connections: 30\n",
-			"sub/_defaults.yaml": "defaults:\n  mysql_connections: 40\n",
+			"_defaults.yaml":     "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
+			"sub/_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 40\n",
 			"sub/tx.yaml":        "tenants:\n  tx:\n    mysql_connections:\n      <<: {default: null}\n",
 		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedValueUnparsed, "sub/_defaults.yaml")}},
 		{name: "inline merge null, no subtree level", files: map[string]string{
 			// /metrics falls back to the root's 30, which is the value shown.
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
 			"tx.yaml":        "tenants:\n  tx:\n    mysql_connections:\n      <<: {default: null}\n",
 		}},
 		{name: "unparseable in one window only", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
 			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"60\"\n" +
 				"      overrides:\n        - window: \"00:00-00:01\"\n          value: \"abc\"\n",
 		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedValueUnparsed, "tx.yaml")}},
 		// #2065: a window parseTimeWindow refuses never applies.
 		{name: "window separator not a dash", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
 			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"60\"\n" +
 				"      overrides:\n        - window: \"01:00~09:00\"\n          value: \"1000\"\n",
 		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedWindowInvalid, "tx.yaml")}},
 		{name: "window hour 24", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
 			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"60\"\n" +
 				"      overrides:\n        - window: \"01:00-24:00\"\n          value: \"1000\"\n",
 		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedWindowInvalid, "tx.yaml")}},
 		{name: "window missing", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
 			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"60\"\n" +
 				"      overrides:\n        - value: \"1000\"\n",
 		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedWindowInvalid, "tx.yaml")}},
 		{name: "window start equals end", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
 			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"60\"\n" +
 				"      overrides:\n        - window: \"05:00-05:00\"\n          value: \"1000\"\n",
 		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedWindowInvalid, "tx.yaml")}},
 		{name: "window valid", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
 			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"60\"\n" +
 				"      overrides:\n        - window: \"22:00-06:00\"\n          value: \"1000\"\n",
 		}},
 		{name: "bad window in a subtree schedule", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
-			"sub/_defaults.yaml": "defaults:\n  mysql_connections:\n    default: \"60\"\n" +
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
+			"sub/_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections:\n    default: \"60\"\n" +
 				"    overrides:\n      - window: \"01:00~09:00\"\n        value: \"1000\"\n",
 			"sub/tx.yaml": "tenants:\n  tx: {}\n",
 		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedWindowInvalid, "sub/_defaults.yaml")}},
 		{name: "bad window and an unparseable value", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
 			"tx.yaml": "tenants:\n  tx:\n    mysql_connections:\n      default: \"abc\"\n" +
 				"      overrides:\n        - window: \"05:00-05:00\"\n          value: \"1000\"\n",
 		}, want: map[string]NotServedKey{"mysql_connections": ns(NotServedValueUnparsed, "tx.yaml")}},
 		{name: "critical row dropped", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
 			"tx.yaml":        "tenants:\n  tx:\n    mysql_connections_critical: \"abc\"\n",
 		}, want: map[string]NotServedKey{"mysql_connections_critical": ns(NotServedValueUnparsedDropped, "tx.yaml")}},
 		{name: "dimensional row dropped", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
 			"tx.yaml":        "tenants:\n  tx:\n    'mysql_connections{db=\"x\"}': \"abc\"\n",
 		}, want: map[string]NotServedKey{`mysql_connections{db="x"}`: ns(NotServedValueUnparsedDropped, "tx.yaml")}},
 		{name: "declared row dropped", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\noptional_overrides:\n  - redis_memory\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\noptional_overrides:\n  - redis_memory\n",
 			"tx.yaml":        "tenants:\n  tx:\n    redis_memory: \"abc\"\n",
 		}, want: map[string]NotServedKey{"redis_memory": ns(NotServedValueUnparsedDropped, "tx.yaml")}},
 		{name: "value with severity", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
 			"tx.yaml":        "tenants:\n  tx:\n    mysql_connections: \"60:critical\"\n",
 		}},
 		{name: "subtree key undeliverable", files: map[string]string{
-			"_defaults.yaml":     "defaults:\n  mysql_connections: 30\n",
-			"sub/_defaults.yaml": "defaults:\n  redis_memory: 50\n",
+			"_defaults.yaml":     "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n",
+			"sub/_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  redis_memory: 50\n",
 			"sub/tx.yaml":        "tenants:\n  tx: {}\n",
 		}, want: map[string]NotServedKey{"redis_memory": ns(NotServedUndeliverable, "sub/_defaults.yaml")}},
 		{name: "root null undeclared", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 30\n  redis_memory: null\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 30\n  redis_memory: null\n",
 			"tx.yaml":        "tenants:\n  tx:\n    redis_memory: 60\n",
 		}, want: map[string]NotServedKey{"redis_memory": ns(NotServedRootNullUndeclared, "tx.yaml")}},
 		{name: "A0 canonical spelling deeper", files: map[string]string{
-			"_defaults.yaml":      "defaults:\n  mysql_threads_running: 80\n",
-			"team/_defaults.yaml": "defaults:\n  mysql_threads_running: 50\n",
+			"_defaults.yaml":      "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_threads_running: 80\n",
+			"team/_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_threads_running: 50\n",
 			"team/tx.yaml":        "tenants:\n  tx: {}\n",
 		}},
 		{name: "A1 retired spelling deeper", files: map[string]string{
-			"_defaults.yaml":      "defaults:\n  mysql_threads_running: 80\n",
-			"team/_defaults.yaml": "defaults:\n  " + retiredCPU + ": 50\n",
+			"_defaults.yaml":      "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_threads_running: 80\n",
+			"team/_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  " + retiredCPU + ": 50\n",
 			"team/tx.yaml":        "tenants:\n  tx: {}\n",
 		}},
 		// #2065: tx sets the threshold under the other spelling (platform
 		// layer), so the build refuses the subtree value for tw only; tw's
 		// file must not make tx's verdict value_rejected.
 		{name: "subtree value rejected for a neighbour, tenant sets the alias", files: map[string]string{
-			"_defaults.yaml":     "defaults:\n  mysql_connections: 80\n",
+			"_defaults.yaml":     "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 80\n",
 			"_platform.yaml":     "tenants:\n  tx:\n    mysql_threads_running: {default: \"abc\", expires: \"2099-07-01T06:00:00Z\", reason: r}\n",
-			"sub/_defaults.yaml": "defaults:\n  " + retiredCPU + ":\n    default: \"33\"\n    overrides: \"01:00-09:00\"\n",
+			"sub/_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  " + retiredCPU + ":\n    default: \"33\"\n    overrides: \"01:00-09:00\"\n",
 			"sub/tx.yaml":        "tenants:\n  tx:\n    mysql_connections: \"70\"\n",
 			"sub/tw.yaml":        "tenants:\n  tw:\n    mysql_connections: \"70\"\n",
 			// #3378: the root declares no spelling of mysql_threads_running,
@@ -181,11 +181,11 @@ func TestNotServed_Table(t *testing.T) {
 			retiredCPU:              ns(NotServedUnconsumed, "sub/_defaults.yaml"),
 		}},
 		{name: "F3 retired spelling in the tenant", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_threads_running: 80\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_threads_running: 80\n",
 			"tx.yaml":        "tenants:\n  tx:\n    " + retiredCPU + ": \"60\"\n",
 		}},
 		{name: "F2c root wrapped", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  pg_connections: 100\n",
+			"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  pg_connections: 100\n",
 			"tx.yaml":        "tenants:\n  tx: {}\n",
 		}},
 		{name: "F2 root unwrapped", files: map[string]string{

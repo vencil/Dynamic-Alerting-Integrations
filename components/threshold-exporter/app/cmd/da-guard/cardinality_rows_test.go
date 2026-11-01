@@ -117,40 +117,40 @@ func TestCardinality_PredictionIsWhatMetricsServes(t *testing.T) {
 	}{
 		{name: "fixture A", files: cardinalityFixtureA, tenant: "t1", want: 1},
 		{name: "critical key", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_connections: 80\n",
 			"tx.yaml":        "tenants:\n  tx:\n    mysql_connections_critical: \"90\"\n",
 		}, tenant: "tx", want: 2},
 		{name: "dimensional keys, exact and regex", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  redis_keys: 5\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  redis_keys: 5\n",
 			"tx.yaml": "tenants:\n  tx:\n    redis_keys{db=\"db0\"}: \"10\"\n" +
 				"    redis_keys{db=~\"db[0-9]+\"}: \"20\"\n",
 		}, tenant: "tx", want: 3},
 		// #1231: the twin is a series of its own on /metrics, so it counts.
 		{name: "legacy twin", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_threads_running: 30\n",
 			"tx.yaml":        "tenants:\n  tx:\n    " + retired + "_critical: \"90\"\n",
 		}, tenant: "tx", want: 4},
 		{name: "custom alerts", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_connections: 80\n",
 			"tx.yaml": "tenants:\n  tx:\n    _custom_alerts:\n" +
 				"      - {recipe: threshold, name: a, metric: m1, op: \">\", window: 5m, threshold: \"80\"}\n" +
 				"      - {recipe: threshold, name: b, metric: m2, op: \">\", window: 5m, threshold: disable}\n" +
 				"      - {recipe: threshold, name: c, metric: m3, op: \">\", window: 5m, threshold: \"1\"}\n",
 		}, tenant: "tx", want: 3},
 		{name: "disable", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
 			"tx.yaml":        "tenants:\n  tx:\n    redis_keys: disable\n",
 		}, tenant: "tx", want: 1},
 		// fixedNow is 10:00, outside the window: the row the window adds
 		// is still counted (the cut truncates at the busiest minute).
 		{name: "schedule adds a row 02:00-04:00", files: map[string]string{
-			"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
 			"tx.yaml": "tenants:\n  tx:\n    redis_keys:\n      default: disable\n" +
 				"      overrides:\n        - window: \"02:00-04:00\"\n          value: \"7\"\n",
 		}, tenant: "tx", want: 2},
 		// Over the exporter's own cap: predicted before the cut.
 		{name: "over max_metrics_per_tenant", files: map[string]string{
-			"_defaults.yaml": "max_metrics_per_tenant: 2\ndefaults:\n  m1: 1\n  m2: 2\n  m3: 3\n  m4: 4\n",
+			"_defaults.yaml": "max_metrics_per_tenant: 2\ndimensions:\n  redis_keys: [db]\ndefaults:\n  m1: 1\n  m2: 2\n  m3: 3\n  m4: 4\n",
 			"tx.yaml":        "tenants:\n  tx:\n    m1_critical: \"9\"\n",
 		}, tenant: "tx", want: 5},
 	} {
@@ -264,7 +264,7 @@ func TestCardinality_DeclaredSubtreeKey_ExitsZero(t *testing.T) {
 func TestCardinality_ScopedRunPredictsInScopeTenantsAsTheWholeTree(t *testing.T) {
 	t.Parallel()
 	dir := writeTree(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
+		"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
 		"a/ta.yaml": "tenants:\n  ta:\n    redis_keys:\n      default: disable\n" +
 			"      overrides:\n        - window: \"02:00-04:00\"\n          value: \"7\"\n",
 		"a/tb.yaml": "tenants:\n  tb:\n    mysql_connections_critical: \"90\"\n",

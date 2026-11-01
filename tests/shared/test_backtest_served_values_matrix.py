@@ -45,6 +45,8 @@ pytestmark = pytest.mark.usefixtures("da_guard_env")
 AT = "2026-10-08T12:00:00Z"
 
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n  mysql_slow: 90\n"
+# A dimensional key is served only with its label declared (#3475).
+_DB_DEFAULTS = "dimensions:\n  mysql_connections: [db]\n" + _DEFAULTS
 _K = {"keys": ["mysql_connections"]}
 _TX_EMPTY = "tenants:\n  tx: {}\n"
 
@@ -525,7 +527,7 @@ def test_dimensioned_keys_are_listed_not_backtested(
     for the key."""
     _map_with(monkeypatch, other_critical=_upper("tenant:other_critical:max"))
     def files(v: int) -> dict[str, str]:
-        return {"_defaults.yaml": _DEFAULTS + "  other_critical: 80\n",
+        return {"_defaults.yaml": _DB_DEFAULTS + "  other_critical: 80\n",
                 "tx.yaml": ("tenants:\n  tx:\n    mysql_connections: 50\n"
                             f"    other_critical: {v}\n"
                             f"    'mysql_connections{{db=\"a\"}}': {v}\n")}
@@ -608,7 +610,7 @@ def test_a_sibling_in_one_tree_only_shares_the_threshold(
     side, so the base change is not what the alert compares there."""
     def files(v: str, dim: bool) -> dict[str, str]:
         extra = "    'mysql_connections{db=\"a\"}': \"200\"\n" if dim else ""
-        return {"_defaults.yaml": _DEFAULTS,
+        return {"_defaults.yaml": _DB_DEFAULTS,
                 "tx.yaml": f"tenants:\n  tx:\n    mysql_connections: \"{v}\"\n" + extra}
     b = _tree(tmp_path / "base", files("70", side == "baseline"))
     c = _tree(tmp_path / "cur", files("85", side == "current"))
@@ -630,7 +632,7 @@ def test_dimensioned_siblings_share_the_threshold(
     backtested (#3017 review). A dimensioned row of the OTHER severity does
     not share it (control: the base change is analyzed)."""
     def files(v: str, dim: str) -> dict[str, str]:
-        return {"_defaults.yaml": _DEFAULTS,
+        return {"_defaults.yaml": _DB_DEFAULTS,
                 "tx.yaml": (f"tenants:\n  tx:\n    mysql_connections: \"{v}\"\n"
                             f"    'mysql_connections{{db=\"a\"}}': \"{dim}\"\n")}
     b, c = _tree(tmp_path / "base", files("70", "200")), _tree(tmp_path / "cur", files("85", "200"))
@@ -853,7 +855,7 @@ def test_a_metric_cell_from_the_tree_is_escaped(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
     """#3111 review: a dimensioned key holding `|` broke its Markdown row."""
     def files(v: str) -> dict[str, str]:
-        return {"_defaults.yaml": _DEFAULTS,
+        return {"_defaults.yaml": _DB_DEFAULTS,
                 "tx.yaml": f"tenants:\n  tx:\n    'mysql_connections{{db=~\"a|b\"}}': \"{v}\"\n"}
     b, c = _tree(tmp_path / "base", files("70")), _tree(tmp_path / "cur", files("85"))
     md = tmp_path / "r.md"

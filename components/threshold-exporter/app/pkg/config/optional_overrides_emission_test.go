@@ -223,6 +223,7 @@ func TestDeclaredEmission_DoesNotDoubleEmitShapesOtherPhasesOwn(t *testing.T) {
 		t.Parallel()
 		cfg := declaredEmissionCfg(nil, []string{"oracle_wait_time_rate"},
 			map[string]ScheduledValue{`oracle_wait_time_rate{db="ORCL"}`: {Default: "50"}})
+		cfg.Dimensions = map[string][]string{"oracle_wait_time_rate": {"db"}}
 		// resolveDimensionalRows has emitted this since PR-B; the declared loop
 		// must not add a second one.
 		got := rowsFor(cfg.ResolveAt(fixedNow), "oracle_wait_time_rate")
@@ -422,6 +423,7 @@ func TestApplyProfiles_StillFillsCriticalTierEvenWhenDeclared(t *testing.T) {
 func TestApplyProfiles_BlocksDimensionalSpellingOfDeclaredBase(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
+		Dimensions:        map[string][]string{"oracle_wait_time_rate": {"db"}},
 		OptionalOverrides: []string{"oracle_wait_time_rate"},
 		Profiles: map[string]map[string]ScheduledValue{
 			"standard": {`oracle_wait_time_rate{db="ORCL"}`: {Default: "50"}},

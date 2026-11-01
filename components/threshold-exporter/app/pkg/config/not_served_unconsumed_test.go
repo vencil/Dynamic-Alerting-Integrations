@@ -58,18 +58,20 @@ var unconsumedCases = []struct {
 		"_defaults.yaml": "defaults:\n  redis_queue_length_critical: 9\n",
 		"tx.yaml":        "tenants:\n  tx:\n    redis_queue_length_critical: \"5\"\n",
 	}},
-	// ADR-038 §11: a dimensional key needs its base named, as a flat key does.
-	{name: "dimensional key, base undeclared: unconsumed", files: map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
-		"tx.yaml":        "tenants:\n  tx:\n    'redis_evicted_keys{env=\"prod\"}': \"7\"\n",
-	}, want: map[string]NotServedKey{`redis_evicted_keys{env="prod"}`: {Reason: NotServedUnconsumed, File: "tx.yaml"}}},
-	{name: "dimensional key, base declared: served", files: map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\noptional_overrides:\n  - redis_evicted_keys\n",
-		"tx.yaml":        "tenants:\n  tx:\n    'redis_evicted_keys{env=\"prod\"}': \"7\"\n",
-	}},
-	{name: "dimensional key, base valued: served", files: map[string]string{
+	// ADR-038 §11 (#3475): a dimensional key is served only when its label is
+	// declared under `dimensions:` for its base; valuing or declaring the base
+	// is not enough.
+	{name: "dimensional key, base valued, label undeclared: unconsumed", files: map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
 		"tx.yaml":        "tenants:\n  tx:\n    'mysql_connections{db=\"a\"}': \"7\"\n",
+	}, want: map[string]NotServedKey{`mysql_connections{db="a"}`: {Reason: NotServedUnconsumed, File: "tx.yaml"}}},
+	{name: "dimensional key, base declared, label undeclared: unconsumed", files: map[string]string{
+		"_defaults.yaml": "defaults:\n  mysql_connections: 80\noptional_overrides:\n  - redis_evicted_keys\n",
+		"tx.yaml":        "tenants:\n  tx:\n    'redis_evicted_keys{env=\"prod\"}': \"7\"\n",
+	}, want: map[string]NotServedKey{`redis_evicted_keys{env="prod"}`: {Reason: NotServedUnconsumed, File: "tx.yaml"}}},
+	{name: "dimensional key, label declared: served", files: map[string]string{
+		"_defaults.yaml": "dimensions:\n  redis_evicted_keys: [env]\ndefaults:\n  mysql_connections: 80\n",
+		"tx.yaml":        "tenants:\n  tx:\n    'redis_evicted_keys{env=\"prod\"}': \"7\"\n",
 	}},
 	{name: "undeclared key switched off", files: map[string]string{
 		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
@@ -301,14 +303,16 @@ func TestValueNotServedAsWritten_NotUnconsumed(t *testing.T) {
 	}
 }
 
-// ADR-038 §11: the root `defaults:` writing a dimensional key names it, even
-// when its base is neither valued nor declared — a tenant's override of that
-// key is served (it replaces the root's row), not unconsumed.
+// ADR-038 §11 (#3475): a root dimensional default whose label `dimensions:`
+// declares is served to every tenant, though its base is neither valued nor
+// in optional_overrides — and a tenant's override of that key replaces the
+// root's row, not unconsumed.
 func TestDimensionalKey_RootDefaultNamesIt(t *testing.T) {
 	t.Parallel()
 	const key = `redis_x{env="a"}`
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{key: 5},
+		Dimensions: map[string][]string{"redis_x": {"env"}},
+		Defaults:   map[string]float64{key: 5},
 		Tenants: map[string]map[string]ScheduledValue{
 			"tx": {key: {Default: "7"}},
 			"ty": {},

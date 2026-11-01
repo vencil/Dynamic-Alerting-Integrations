@@ -54,9 +54,9 @@ var thresholdRecordRe = regexp.MustCompile(`^tenant(?:_version)?:alert_threshold
 // `{severity="warning"}` are stripped by stopping at a non-identifier char).
 var alertThresholdRefRe = regexp.MustCompile(`tenant(?:_version)?:alert_threshold:[A-Za-z0-9_]+`)
 
-// versionAwareAllowlist is the ADR-024 Phase-1 set of (component/metric)
-// identities permitted to carry a dimensional version (mirrors
-// pkg/config/resolve.go pilotVersionMetrics). Only these may legitimately have a
+// versionAwareAllowlist is the ADR-024 set of (component/metric) identities
+// that carry a dimensional version (the threshold registry's `dimensions`,
+// rule-packs/threshold-registry.yaml, #3475). Only these may legitimately have a
 // digit-leading or otherwise version-shaped metric in the future; everything
 // else must keep version in a `version=` label, never baked into the conf.d key.
 var versionAwareAllowlist = map[string]bool{

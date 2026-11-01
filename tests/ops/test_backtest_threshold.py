@@ -2116,6 +2116,9 @@ def _dirs(tmp_path, before, after):
 
 
 _D = {"_defaults.yaml": _CRIT_DEFAULTS}
+# The dimensional key below is served only with its label declared (#3475);
+# undeclared, the trees serve no row while `--tenant` cannot tell.
+_DD = {"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\n" + _CRIT_DEFAULTS}
 
 
 def _tenant_file(tenant, body):
@@ -2140,8 +2143,8 @@ class TestTenantAndTreesAgree:
                              "--old-value", old, "--new-value", new,
                              "--prometheus", p.url, "--json")
         tenant = self._rows(out, *fields)
-        cur, base = _dirs(tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{old}\"\n")},
-                          {**_D, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{new}\"\n")})
+        cur, base = _dirs(tmp_path, {**_DD, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{old}\"\n")},
+                          {**_DD, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{new}\"\n")})
         _rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
                              "--prometheus", p.url, "--json")
         assert tenant == self._rows(out, *fields) and tenant, (tenant, out.out)

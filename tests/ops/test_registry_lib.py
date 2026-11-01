@@ -685,11 +685,13 @@ def test_surface_specs_cover_helm_dev_and_threshold_packs():
     # PARSED list, so it never saw the per-key counter-example comments).
     # `dev-example-defaults` (#3014) is the dev template's second `defaults`
     # block — the example tenants' packs — on the same file as `dev-defaults`.
-    assert ids[:6] == [
+    # The `dimensions:` blocks (#3475) follow, one per runtime carrier.
+    assert ids[:9] == [
         "helm-defaults", "dev-defaults", "dev-example-defaults", "helm-optional",
-        "dev-optional", "try-local-optional"]
+        "dev-optional", "try-local-optional",
+        "helm-dimensions", "dev-dimensions", "try-local-dimensions"]
     assert "pack-mariadb" in ids and "pack-kubernetes" in ids
-    assert len(ids) == 6 + 13  # 13 threshold packs, non-threshold packs none
+    assert len(ids) == 9 + 13  # 13 threshold packs, non-threshold packs none
     # the two surfaces per file must target the same path but distinct blocks
     by_id = {s["id"]: s for s in specs}
     assert by_id["helm-defaults"]["path"] == by_id["helm-optional"]["path"]
@@ -697,6 +699,8 @@ def test_surface_specs_cover_helm_dev_and_threshold_packs():
     assert by_id["dev-example-defaults"]["path"] == by_id["dev-defaults"]["path"]
     assert by_id["try-local-optional"]["path"] not in {
         by_id["helm-optional"]["path"], by_id["dev-optional"]["path"]}
+    for carrier in ("helm", "dev", "try-local"):
+        assert by_id[f"{carrier}-dimensions"]["path"] == by_id[f"{carrier}-optional"]["path"]
     assert len({s["id"] for s in specs}) == len(specs)
 
 

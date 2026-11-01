@@ -46,10 +46,9 @@ Dimensional metrics (Phase 2B):
   - patch_config.py db-a 'redis_connected_clients{instance="redis-orders:6379"}' 500
   - patch_config.py db-a 'redis_evicted_keys_rate{instance="redis-cache:6379"}' disable
   Note: Shell quoting is important — wrap the metric key in single quotes.
-  The base (the part before `{`) must be a key the platform declares —
-  valued in the root _defaults.yaml `defaults:` or listed in
-  `optional_overrides:` — or the root `defaults:` writes the whole key;
-  otherwise the key serves no row (ADR-038 §11).
+  Every label must be declared for its base (the part before `{`) under
+  the root _defaults.yaml `dimensions:`; otherwise the key serves no row
+  (ADR-038 §11).
 
 Apply is verified by the running exporter pods, then rolled back if it does
 not hold (#1950 route E). The details, the exit codes and what this cannot

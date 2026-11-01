@@ -85,6 +85,13 @@
               "minLength": 1,
               "$comment": "DERIVED, never authored: present iff the key ends in _critical and its base key exists in the same pack. Names the base key."
             },
+            "dimensions": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": { "type": "string", "pattern": "^[a-z_][a-z0-9_]*$" },
+              "$comment": "AUTHORED (#3475, ADR-038 §11): the labels this key's rule pack reads per value — its threshold normalisation keeps them through `max by(...)`. Rendered into the runtime `dimensions:` declaration (helm values, dev template, try-local seed); the exporter serves a dimensional key only when every label of its selector is declared there. tests/shared/test_dimension_registry.py pins it both ways to the packs."
+            },
             "value_counterexample": {
               "type": "object",
               "additionalProperties": false,

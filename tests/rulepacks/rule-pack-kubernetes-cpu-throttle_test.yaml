@@ -28,8 +28,8 @@
 #        NaN/Inf poison max() (verified promtool 2.53.2). NaN cannot be asserted via
 #        exp_samples (NaN≠NaN) → asserted via count() emptiness.
 #   I) db-j   version fallback: v2-labelled pod + version-less threshold → fires with
-#        version="v2" via the FALLBACK branch. (cpu_throttle is NOT in the ADR-024
-#        version pilot allowlist — per-version overrides are out-of-scope; this tests
+#        version="v2" via the FALLBACK branch. (cpu_throttle declares no `version`
+#        dimension (ADR-024, #3475) — per-version overrides are not served; this tests
 #        the branch tenants actually exercise, not the inert exact-match branch.)
 #
 # Timing (dual-engine safety, #973 rule): the RATIO is cold-start exact on both engines
@@ -320,8 +320,8 @@ tests:
         exp_alerts: []
 
   # ── I) version FALLBACK: v2-labelled pod, version-less threshold → fires with the
-  #      metric's REAL version via the fallback branch (cpu_throttle is not in the
-  #      ADR-024 version pilot allowlist, so this is the branch tenants actually get). ──
+  #      metric's REAL version via the fallback branch (cpu_throttle declares no
+  #      `version` dimension, so this is the branch tenants actually get). ──
   - interval: 15s
     input_series:
       - series: 'container_cpu_cfs_throttled_periods_total{namespace="db-j", pod="app-v2", container="mysqld"}'

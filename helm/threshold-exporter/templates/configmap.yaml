@@ -68,6 +68,16 @@ data:
     optional_overrides:
       {{- .Values.thresholdConfig.optional_overrides | toYaml | nindent 6 }}
     {{- end }}
+    {{- /* #3475: which labels a dimensional key of each base may carry and
+           still be served (ADR-038 §11). A MAP of base -> list of labels;
+           anything else fails here, not silently in the exporter's decode. */}}
+    {{- if not (or (kindIs "invalid" .Values.thresholdConfig.dimensions) (kindIs "map" .Values.thresholdConfig.dimensions)) }}
+    {{- fail (printf "thresholdConfig.dimensions must be a MAP of base key -> list of labels, got %s" (kindOf .Values.thresholdConfig.dimensions)) }}
+    {{- end }}
+    {{- if .Values.thresholdConfig.dimensions }}
+    dimensions:
+      {{- .Values.thresholdConfig.dimensions | toYaml | nindent 6 }}
+    {{- end }}
     {{- if .Values.thresholdConfig.state_filters }}
     state_filters:
       {{- .Values.thresholdConfig.state_filters | toYaml | nindent 6 }}

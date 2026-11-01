@@ -70,6 +70,9 @@
         "optional_overrides": {
           "description": "Typed by the guard in templates/configmap.yaml (a list of key names)."
         },
+        "dimensions": {
+          "description": "Typed by the guard in templates/configmap.yaml (a map of base key -> list of labels, #3475)."
+        },
         "max_metrics_per_tenant": {
           "description": "Typed by the guard in templates/configmap.yaml (integer, or null for the built-in 500)."
         },

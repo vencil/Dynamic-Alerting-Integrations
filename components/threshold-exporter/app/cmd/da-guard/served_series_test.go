@@ -265,7 +265,11 @@ func minuteOf(t *testing.T, s string) int {
 
 // seriesTree has one key of each shape the identity must tell apart.
 var seriesTree = map[string]string{
-	"_defaults.yaml": `defaults:
+	"_defaults.yaml": `dimensions:
+  mysql_connections: [schema]
+  mysql_threads_running: [db]
+  oracle_tablespace: [tablespace]
+defaults:
   mysql_connections: 80
   mysql_slow: 90
   mysql_threads_running: 30

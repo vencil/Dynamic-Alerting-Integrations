@@ -102,7 +102,9 @@ func TestValidateVersionThreshold(t *testing.T) {
 		{"uppercase violates charset", `container_cpu{version="V2"}`, false, "violates"},
 		{"regex matcher rejected", `container_cpu{version=~"v.*"}`, false, "regex version matcher"},
 		{"regex matcher rejected (memory)", `container_memory{version=~"v.*"}`, false, "regex version matcher"},
-		{"non-pilot metric rejected", `mysql_threads_running{version="v2"}`, false, "non-pilot metric"},
+		// Which bases a version label is served on is `dimensions:`'s and the
+		// shared key verdict's (#3475), not a value check: no error here.
+		{"version on an undeclared base is no value error", `mysql_threads_running{version="v2"}`, true, ""},
 		{"empty version rejected", `container_cpu{version=""}`, false, "empty version label"},
 		{"literal default reserved", `container_cpu{version="default"}`, false, "reserved"},
 	}

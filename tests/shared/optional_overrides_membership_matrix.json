@@ -8,7 +8,8 @@
     "names any more: whether a key is read is the shared verdict's (da-guard's",
     "readings of the exporter), and a `version` label is the exporter's own",
     "check (served-values' key_checks). Each case is one tenant key over a",
-    "platform that values `defaults` and declares `declared`.",
+    "platform that values `defaults` and declares `declared`; a case's",
+    "`dimensions` (default none) is the root `dimensions:` it runs under (#3475).",
     "",
     "verdict semantics: 'refuse' = what the tenant-api write gate refuses: the",
     "verdict reads the key as unread (an error), or the exporter refuses its",
@@ -97,20 +98,45 @@
       "why": "still no base VALUE to emit against"
     },
     {
-      "name": "dimensional on a declared base",
+      "name": "dimensional on a declared base with its label declared",
+      "declared": [
+        "oracle_wait_time_rate"
+      ],
+      "dimensions": {
+        "oracle_wait_time_rate": ["db"]
+      },
+      "key": "oracle_wait_time_rate{db=\"ORCL\"}",
+      "verdict": "accept",
+      "why": "every label of the key is declared for its base under `dimensions:` (ADR-038 §11, #3475)"
+    },
+    {
+      "name": "dimensional on a declared base, label undeclared",
       "declared": [
         "oracle_wait_time_rate"
       ],
       "key": "oracle_wait_time_rate{db=\"ORCL\"}",
-      "verdict": "accept",
-      "why": "resolveDimensionalRows is tenant-only and never consults defaults, so it emits"
+      "verdict": "refuse",
+      "why": "a declared base no longer suffices: no rule keeps an undeclared label, so the exporter serves no row (#3475)"
     },
     {
-      "name": "dimensional on a valued base",
+      "name": "dimensional on a valued base with its label declared",
       "declared": [],
+      "dimensions": {
+        "mysql_connections": ["db"]
+      },
       "key": "mysql_connections{db=\"shard1\"}",
       "verdict": "accept",
-      "why": "unchanged pre-existing behaviour"
+      "why": "every label of the key is declared for its base under `dimensions:` (#3475)"
+    },
+    {
+      "name": "dimensional on a valued base, label undeclared",
+      "declared": [],
+      "dimensions": {
+        "mysql_connections": ["instance"]
+      },
+      "key": "mysql_connections{db=\"shard1\"}",
+      "verdict": "refuse",
+      "why": "a valued base no longer suffices, nor a declaration of another label (#3475)"
     },
     {
       "name": "dimensional key on a base the platform does not name",
@@ -135,6 +161,9 @@
       "declared": [
         "oracle_wait_time_rate"
       ],
+      "dimensions": {
+        "oracle_wait_time_rate": ["version"]
+      },
       "key": "oracle_wait_time_rate{version=\"bad!!\"}",
       "verdict": "refuse",
       "why": "the base must be declared-and-not-valued so this actually exercises the new dimensional branch; ADR-024 OQ-6 validation has to run there too, or the branch becomes a way to smuggle version labels past the guard"
@@ -142,6 +171,9 @@
     {
       "name": "bad version label on a valued base",
       "declared": [],
+      "dimensions": {
+        "container_cpu": ["version"]
+      },
       "key": "container_cpu{version=\"bad!!\"}",
       "verdict": "refuse",
       "why": "unchanged pre-existing behaviour, kept as the control for the row above"

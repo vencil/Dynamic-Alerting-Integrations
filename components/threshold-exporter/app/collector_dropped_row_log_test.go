@@ -28,7 +28,8 @@ func TestCollect_LogsADroppedUserThresholdRow(t *testing.T) {
 	// `__` is reserved for Prometheus-internal labels: client_golang refuses
 	// the series, and the collector drops the row.
 	c := NewThresholdCollector(newTestManager(&ThresholdConfig{
-		Defaults: map[string]float64{"mysql_connections": 80},
+		Dimensions: map[string][]string{"mysql_connections": {"__x"}},
+		Defaults:   map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"tenant-a": {`mysql_connections{__x="y"}`: {Default: "5"}},
 		},

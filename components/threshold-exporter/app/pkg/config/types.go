@@ -245,7 +245,20 @@ type ThresholdConfig struct {
 	// tenant-owned files for the same reason it strips Defaults: a tenant that
 	// could name its own keys here would be self-authorising past the write
 	// gate via a direct GitOps push.
-	OptionalOverrides   []string                             `yaml:"optional_overrides"`
+	OptionalOverrides []string `yaml:"optional_overrides"`
+	// Dimensions names, per base threshold key, the labels a dimensional key
+	// of that base may carry (ADR-038 §11, #3475): `container_cpu: [version]`
+	// lets `container_cpu{version="v2"}` be served. A dimensional key is
+	// served only when EVERY label of its selector is listed under its
+	// canonical base (dimensionDeclared) — whichever layer writes it, the
+	// root `defaults:` included. The shipped list is generated from the
+	// threshold registry, which a test pins to the labels the rule packs
+	// keep through their normalisation; a platform adds a base and label
+	// here when its own rules read that dimension.
+	//
+	// ⛔ PLATFORM-scoped, as OptionalOverrides: applyBoundaryRules strips it
+	// from every file that is not a defaults carrier.
+	Dimensions          map[string][]string                  `yaml:"dimensions"`
 	StateFilters        map[string]StateFilter               `yaml:"state_filters"`
 	Tenants             map[string]map[string]ScheduledValue `yaml:"tenants"`
 	Profiles            map[string]map[string]ScheduledValue `yaml:"profiles"`

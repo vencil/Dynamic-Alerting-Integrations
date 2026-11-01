@@ -49,6 +49,7 @@ func TestResolveAtWithStats_DeterministicTruncation(t *testing.T) {
 
 	newCfg := func() *ThresholdConfig {
 		return &ThresholdConfig{
+			Dimensions: map[string][]string{"container_cpu": {"version"}},
 			Defaults: map[string]float64{
 				"redis_memory":  80, // unversioned → tier 0, protected
 				"redis_cpu":     70,
@@ -116,6 +117,7 @@ func TestResolveAtWithStats_ExplicitDefaultVersionProtected(t *testing.T) {
 	t.Parallel()
 
 	cfg := &ThresholdConfig{
+		Dimensions:        map[string][]string{"container_cpu": {"version"}},
 		OptionalOverrides: []string{"container_cpu"}, // the base named: ADR-038 §11
 		Tenants: map[string]map[string]ScheduledValue{
 			"t": {

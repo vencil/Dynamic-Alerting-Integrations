@@ -203,9 +203,9 @@ RULE_PACKS = {
         "default_on": True,
         "rule_pack_file": "rule-packs/rule-pack-kubernetes.yaml",
         "defaults": {
-            "container_cpu": {"value": 80, "unit": "%", "desc": "Container CPU % of limit (weakest link)", "metric_class": "saturation"},
+            "container_cpu": {"value": 80, "unit": "%", "desc": "Container CPU % of limit (weakest link)", "metric_class": "saturation", "dimensions": ["version"]},
             "container_cpu_throttle": {"value": 25, "unit": "%", "desc": "Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost (critical tier opt-in via container_cpu_throttle_critical, suggest 50; #944)", "metric_class": "saturation"},
-            "container_memory": {"value": 85, "unit": "%", "desc": "Container memory % of limit (weakest link)", "metric_class": "saturation"},
+            "container_memory": {"value": 85, "unit": "%", "desc": "Container memory % of limit (weakest link)", "metric_class": "saturation", "dimensions": ["version"]},
         },
         "state_filters": {
             "container_crashloop": {

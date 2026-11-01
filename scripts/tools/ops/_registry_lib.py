@@ -251,7 +251,7 @@ METRIC_CLASS_BACKFILL: dict[str, str] = {
 # Canonical per-key field order for the emitted registry document.
 _FIELD_ORDER = (
     "pack", "tier", "value", "unit", "desc", "metric_class", "chart_default",
-    "critical_of", "value_counterexample",
+    "critical_of", "value_counterexample", "dimensions",
 )
 
 _REGISTRY_HEADER = (
@@ -395,6 +395,12 @@ def build_registry_doc(
             }
             if "metric_class" in info:
                 entry["metric_class"] = info["metric_class"]
+            if "dimensions" in info:
+                # #3475: the labels a rule pack reads this key per value of
+                # (ADR-024's `version`). Authored, never derived; a test pins
+                # it both ways to the packs' normalisation grouping, and it is
+                # rendered into the runtime `dimensions:` declaration.
+                entry["dimensions"] = sorted(info["dimensions"])
             if "value_counterexample" in info:
                 # Passed through verbatim, never derived: it records that the
                 # ADR-030 reference library produced a case THIS value gets
@@ -1797,6 +1803,28 @@ def _confd_sequence(doc: dict) -> dict:
             "keys": list(optional_override_list_keys(doc))}
 
 
+def dimension_entries(doc: dict) -> "list[tuple[str, list[str]]]":
+    """(key, labels) of every registry key that declares ``dimensions``, in
+    registry key order — the runtime ``dimensions:`` declaration (#3475)."""
+    return [(k, list(e["dimensions"])) for k, e in (doc.get("keys") or {}).items()
+            if e.get("dimensions")]
+
+
+def render_dimensions_lines(doc: dict, indent: int) -> list[str]:
+    """The shipped ``dimensions:`` MAPPING body: one ``<base>: [labels]`` per
+    registry key that declares ``dimensions`` (#3475, ADR-038 §11). The
+    exporter serves a dimensional key only when every label of its selector
+    is listed here for its base."""
+    ind = " " * indent
+    return [f"{ind}{k}: [{', '.join(labels)}]" for k, labels in dimension_entries(doc)]
+
+
+def _confd_dimensions(doc: dict) -> dict:
+    """``confd`` of a ``dimensions`` block: the bases it declares."""
+    return {"carrier": "dimensions", "shape": "mapping",
+            "keys": [k for k, _l in dimension_entries(doc)]}
+
+
 def render_block(surface_id: str, body_lines: list[str], indent: str = "") -> str:
     """Full generated block text (markers + body), newline-joined."""
     return "\n".join(
@@ -1872,6 +1900,28 @@ def surface_specs(doc: dict) -> list[dict]:
             "indent": " " * 2,
             "body": render_optional_overrides_lines(doc, 2),
             "confd": _confd_sequence(doc),
+        },
+        # #3475: the labels a dimensional key may carry, per base — the same
+        # three runtime surfaces as the optional_overrides list.
+        {
+            "id": "helm-dimensions",
+            "path": HELM_VALUES_PATH,
+            "indent": " " * 4,
+            "body": render_dimensions_lines(doc, 4),
+        },
+        {
+            "id": "dev-dimensions",
+            "path": DEV_DEFAULTS_PATH,
+            "indent": " " * 2,
+            "body": render_dimensions_lines(doc, 2),
+            "confd": _confd_dimensions(doc),
+        },
+        {
+            "id": "try-local-dimensions",
+            "path": TRY_LOCAL_DEFAULTS_PATH,
+            "indent": " " * 2,
+            "body": render_dimensions_lines(doc, 2),
+            "confd": _confd_dimensions(doc),
         },
     ]
     grouped = keys_by_pack(doc)

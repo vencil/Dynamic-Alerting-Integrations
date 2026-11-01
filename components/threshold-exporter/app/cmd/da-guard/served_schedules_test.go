@@ -24,7 +24,7 @@ import (
 // `expires:` the exporter does not honour (`_critical`), a dimensional key, a
 // retired spelling, and keys with no schedule at all.
 var scheduleTree = map[string]string{
-	"_defaults.yaml": `defaults:
+	"_defaults.yaml": fixtureDims + `defaults:
   mysql_connections: 80
   mysql_threads_running: 30
   redis_memory: 70
@@ -527,7 +527,7 @@ func TestServedValues_SchedulesAreOptIn(t *testing.T) {
 func TestServedSchedules_NullReasonUnderARetiredSpelling(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_threads_running: 30\n",
+		"_defaults.yaml": fixtureDims + "defaults:\n  mysql_threads_running: 30\n",
 		"tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_cpu:\n      default: \"40\"\n      overrides:\n" +
 			"        - window: \"01:00-02:00\"\n          value: disable\n" +
 			"    mysql_cpu_critical:\n      default: \"90\"\n      overrides:\n" +

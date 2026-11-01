@@ -19,7 +19,7 @@ import (
 
 func scrapeTree(t *testing.T, tenantYAML string) (int, string) {
 	t.Helper()
-	return scrapeTreeWith(t, "defaults:\n  mysql_connections: 80\noptional_overrides:\n  - redis_queue_length\n", tenantYAML)
+	return scrapeTreeWith(t, "dimensions:\n  redis_queue_length: [q, q_re]\ndefaults:\n  mysql_connections: 80\noptional_overrides:\n  - redis_queue_length\n", tenantYAML)
 }
 
 func scrapeTreeWith(t *testing.T, defaultsYAML, tenantYAML string) (int, string) {
@@ -110,14 +110,14 @@ func TestMetrics_DimensionalKeySpellings_OneSeries(t *testing.T) {
 		defaults, tenant string
 		want             string
 	}{
-		"label order, one file": {"defaults:\n  redis_queue_length: 10\n",
+		"label order, one file": {"dimensions:\n  pg_connections: [env, r]\n  redis_queue_length: [priority, queue]\ndefaults:\n  redis_queue_length: 10\n",
 			"tenants:\n  tenant-a:\n    'redis_queue_length{queue=\"a\", priority=\"high\"}': 5\n" +
 				"    'redis_queue_length{priority=\"high\", queue=\"a\"}': 6\n",
 			`user_threshold{component="redis",metric="queue_length",priority="high",queue="a",severity="warning",tenant="tenant-a"} 6`},
-		"quotes, one file": {"defaults:\n  redis_queue_length: 10\n",
+		"quotes, one file": {"dimensions:\n  pg_connections: [env, r]\n  redis_queue_length: [priority, queue]\ndefaults:\n  redis_queue_length: 10\n",
 			"tenants:\n  tenant-a:\n    'redis_queue_length{queue=\"a\"}': 5\n    \"redis_queue_length{queue='a'}\": 6\n",
 			`user_threshold{component="redis",metric="queue_length",queue="a",severity="warning",tenant="tenant-a"} 5`},
-		"label order, profile and tenant": {"defaults:\n  pg_connections: 100\nprofiles:\n  std:\n    'pg_connections{r=\"x\",env=\"prod\"}': 30\n",
+		"label order, profile and tenant": {"dimensions:\n  pg_connections: [env, r]\n  redis_queue_length: [priority, queue]\ndefaults:\n  pg_connections: 100\nprofiles:\n  std:\n    'pg_connections{r=\"x\",env=\"prod\"}': 30\n",
 			"tenants:\n  tenant-a:\n    _profile: std\n    'pg_connections{env=\"prod\",r=\"x\"}': 31\n",
 			`user_threshold{component="pg",env="prod",metric="connections",r="x",severity="warning",tenant="tenant-a"} 31`},
 	} {

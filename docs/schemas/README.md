@@ -116,11 +116,11 @@ tenants:
 ### Dimensional Thresholds
 
 Schema supports dimensional (labeled) thresholds with literal or regex matching.
-The base (the part before `{`) must be a key the platform declares — valued in the
-root `_defaults.yaml` `defaults:` or listed in `optional_overrides:` — or the root
-`defaults:` writes the whole dimensional key; otherwise the
-key passes the schema but serves no row and is reported `unread … (no_row)`
-(ADR-038 §11):
+Every label of the key must be declared for its base (the part before `{`) under
+the root `_defaults.yaml` `dimensions:` (`dimensions: {redis_connected_clients:
+[instance]}`); otherwise the key passes the schema but serves no row and is
+reported `unread … (no_row)` (ADR-038 §11). The shipped `dimensions:` lists only
+the labels the rule packs keep (today `version` on container cpu/memory):
 
 ```yaml
 tenants:

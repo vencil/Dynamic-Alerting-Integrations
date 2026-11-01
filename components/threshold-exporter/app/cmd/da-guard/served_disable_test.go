@@ -21,7 +21,7 @@ func disableOf(t *testing.T, doc servedOut, tenant, key string) (string, []strin
 func TestServedValues_DisableEffects(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := servedWith(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n" +
+		"_defaults.yaml": "dimensions:\n  redis_hits: [db]\n  redis_queue_length: [queue]\ndefaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n" +
 			"  redis_queue_length: 5\n  container_cpu: 75\n  container_memory: 60\n" +
 			"state_filters:\n  maint: {reasons: [X], severity: critical}\n",
 		"a.yaml": "tenants:\n  a:\n" +
@@ -94,7 +94,7 @@ func TestServedValues_DisableEffectsOnlyWhenAsked(t *testing.T) {
 func TestServedValues_DisableEffectsAcrossRounds(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := servedWith(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  k1: 1\n  k3: 3\n  k5: 5\n",
+		"_defaults.yaml": fixtureDims + "defaults:\n  k1: 1\n  k3: 3\n  k5: 5\n",
 		"a.yaml":         "tenants:\n  a:\n    k1: disable\n    k2: disable\n    k3: disable\n    k4: disable\n    k5: disable\n",
 		"b.yaml":         "tenants:\n  b:\n    k2: disable\n    k3: disable\n",
 	}, "", "--disable-effects")
@@ -138,7 +138,7 @@ func TestServedValues_DisableEffectsSplitsARoundThatBreaksTheGather(t *testing.T
 func TestServedValues_DisableEffectsSplitsAPartOfTheDayTheBaselineCannotGather(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := servedWith(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  container_cpu: 75\n",
+		"_defaults.yaml": fixtureDims + "defaults:\n  mysql_connections: 80\n  container_cpu: 75\n",
 		"a.yaml": "tenants:\n  a:\n    mysql_connections:\n      default: \"70\"\n      overrides:\n" +
 			"        - {window: \"01:00-02:00\", value: \"70:critical\"}\n" +
 			"    mysql_connections_critical: 95\n" +
