@@ -96,6 +96,8 @@ tenants:
 
 `_routing` 通道現在同時遞送 custom alerts（`component="custom"`）：page-mode recipe 照租戶的 `_routing`（含 `routes` 與 per-rule overrides）分流，但沿用 custom 隔離子樹的 debounce（`group_wait` 30s／`group_interval` 5m、`group_by [tenant, alertname]`），不套用 tenant `_routing` 主層的 timing（子路由自己宣告的 timing 與 `group_by` 照樣生效）。無**有效** `_routing` 的租戶（既無顯式 `_routing`、也無適用的 `_routing_defaults`／profile 繼承），其 custom alerts 留在平台 firehose（AM UI 可見、不發通知）；要讓租戶完全不收 custom 通知，正解是 `_routing: disable`——純繼承 defaults 的租戶同樣會收到投遞。
 
+⚠️ 出貨的 base（`k8s/03-monitoring/configmap-alertmanager.yaml`）裡 `custom-alerts-firehose` **沒有 integration**，所以落到那裡的 page-mode custom alert 實際上**不會通知任何人**。`generate-routes` 會對這種租戶報出（#1211）：租戶有 exporter 實際 serve 的 page-mode custom alert（`mode` 未寫或 `page`）、卻沒有投遞子路由時，每個租戶一行 WARN，`--findings-json` 裡是 `custom_alert_undelivered`。`--output-configmap`／`--apply` 看得到要寫出的 firehose：有 integration 就不報；沒有時 `--strict` 升為 ERROR、結束碼 1、不寫檔。租戶自己寫 `_routing: disable` 是刻意退出，照報但 `--strict` 不升級；render、`--validate` 看不到 firehose，照報 WARN 並註明沒檢查到。修法三選一：替租戶加 `_routing`、把告警設成 `mode: silent`，或替 firehose 接上 integration（接法與 IM 限流的注意事項見該 receiver 在 base 裡的註解）。細節見 [CLI 參考](cli-reference.md)。
+
 > **工具支援**：`da-tools scaffold --tenant <name> --db <types>` 提供互動式引導，產出完整的 tenant.yaml（含 routing、silent mode、severity dedup 選項）。
 
 **Rule 複雜度**: O(M)，不隨 Tenant 數成長。

@@ -51,6 +51,7 @@ import sys
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable, NamedTuple
 
 import yaml
 
@@ -63,6 +64,8 @@ from _grar_routes import (  # noqa: E402
     _build_sentinel_sinkhole_route, pin_root_fallthrough_receiver)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#3276)
+from _lib_confd import WARN_LIMIT  # noqa: E402  (#1211: the alert names a line lists)
+from _grar_merge import Finding  # noqa: E402  (#1211: the undelivered-custom-alert finding)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: Alertmanager / Kubernetes readings)
 from _lib_consumer_read import ConsumerReadError, InputRefused  # noqa: E402, F401  (re-exported)
@@ -284,6 +287,96 @@ def warn_if_root_receiver_without_integration(am: object) -> None:
     warning = root_receiver_without_integration_warning(am)
     if warning:
         print(warning, file=sys.stderr)
+
+
+# ── Page-mode custom alerts that reach no one (#1211) ──────────────
+
+#: The custom isolation route's fallback receiver, as its builder names it.
+CUSTOM_FIREHOSE_RECEIVER = _build_custom_alert_routes([])[1][0]["name"]
+
+
+class UndeliveredCustomAlerts(NamedTuple):
+    """A tenant whose served page-mode custom alerts get no delivery child
+    under the ``component="custom"`` route (#1211)."""
+    tenant: str
+    alerts: tuple[str, ...]   # the served page-mode alerts' names, declaration order
+    routing_disabled: bool    # the tenant's own `_routing: disable` (explicit opt-out)
+
+
+def custom_firehose_has_integration(am: object) -> bool:
+    """Whether *am*'s ``custom-alerts-firehose`` receiver delivers anywhere
+    — by :func:`receiver_integration_kinds`, the root-receiver WARN's rule;
+    a config that defines no such receiver has none (#1211)."""
+    receivers = am.get("receivers") if isinstance(am, dict) else None
+    entry = next((r for r in (receivers if isinstance(receivers, list) else [])
+                  if isinstance(r, dict) and r.get("name") == CUSTOM_FIREHOSE_RECEIVER),
+                 None)
+    return bool(receiver_integration_kinds(entry))
+
+
+def undelivered_custom_alert_tenants(page_alerts: dict[str, tuple[str, ...]],
+                                     routes: list[dict],
+                                     routing_disabled: "set[str] | frozenset[str]",
+                                     ) -> list[UndeliveredCustomAlerts]:
+    """The tenants of *page_alerts* (tenant -> its served page-mode custom
+    alerts) that get no child under the custom route, sorted (#1211).
+
+    A tenant gets a child exactly when it owns a main tenant route in
+    *routes* — the predicate ``_inject_custom_alert_isolation`` builds the
+    children from (``_main_tenant_routes``), so the two cannot disagree.
+    """
+    mains = _main_tenant_routes(routes)
+    return [UndeliveredCustomAlerts(t, tuple(names), t in routing_disabled)
+            for t, names in sorted(page_alerts.items())
+            if names and t not in mains]
+
+
+def custom_firehose_findings(undelivered: list[UndeliveredCustomAlerts],
+                             firehose_has_integration: bool | None, *,
+                             strict: bool) -> list[Finding]:
+    """One finding per tenant of *undelivered* (#1211).
+
+    *firehose_has_integration*: None when this run has no assembled config
+    to read the receiver from (render / ``--validate``); then every line is a
+    WARN that says so. True: the alerts are delivered there — no finding.
+    False: the alerts notify no one; an implicit absence of ``_routing`` is
+    ``blocks: strict`` (ERROR under ``--strict``), an explicit
+    ``_routing: disable`` is a deliberate opt-out and stays a WARN.
+    """
+    if firehose_has_integration:
+        return []
+    out = []
+    for u in undelivered:
+        names = ", ".join(safe_label(n) for n in u.alerts[:WARN_LIMIT])
+        if len(u.alerts) > WARN_LIMIT:
+            names += f", … {len(u.alerts) - WARN_LIMIT} more"
+        why = ("its _routing is 'disable'" if u.routing_disabled
+               else "it has no effective _routing")
+        head = (f"tenant {safe_label(u.tenant)!r}: {len(u.alerts)} served page-mode "
+                f"custom alert(s) ({names}) get no delivery route under the "
+                f'component="custom" route ({why}), so they fall to the '
+                f"{CUSTOM_FIREHOSE_RECEIVER!r} receiver")
+        remedy = "add a _routing for the tenant, or set `mode: silent` on the alert"
+        if firehose_has_integration is None:
+            out.append(Finding(
+                f"WARN: {head}, which this mode cannot check (no Alertmanager "
+                "config is assembled here; --output-configmap with your "
+                "--base-config, or --apply, checks it). If that receiver has no "
+                f"integration they notify no one: {remedy}.",
+                kind="custom_alert_undelivered", blocks="never", tenant=u.tenant,
+                field="_routing"))
+            continue
+        blocking = not u.routing_disabled
+        level = "ERROR" if (strict and blocking) else "WARN"
+        tail = (" An explicit `_routing: disable` is a deliberate opt-out: "
+                "--strict does not escalate it." if u.routing_disabled else "")
+        out.append(Finding(
+            f"{level}: {head}, which has no integration (no non-empty "
+            f"*_configs) — they notify no one: {remedy}.{tail}",
+            kind="custom_alert_undelivered",
+            blocks="strict" if blocking else "never", tenant=u.tenant,
+            field="_routing"))
+    return out
 
 
 # ── §11.3 AM GitOps: --output-configmap ────────────────────────────
@@ -1179,7 +1272,8 @@ def _reload_alertmanager(namespace: str) -> bool:
     return True
 
 
-def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict], namespace: str, configmap_name: str, strict: bool = False) -> bool:
+def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict], namespace: str, configmap_name: str, strict: bool = False,
+                       judge_merged: Callable[[dict], bool] | None = None) -> bool:
     """Merge generated routing config into existing Alertmanager ConfigMap and reload.
 
     Applies tenant routing configuration directly to a running Alertmanager cluster.
@@ -1203,6 +1297,8 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         inhibit_rules: generated inhibit_rules for severity dedup
         namespace: K8s namespace where ConfigMap is located
         configmap_name: ConfigMap name (typically alertmanager-config)
+        judge_merged: #1211 — called with the merged config as Alertmanager
+            reads it, before anything is applied; True refuses it (rc 1).
 
     Returns:
         True if merge, apply and reload all succeeded, False otherwise.
@@ -1261,6 +1357,14 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
               f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
         raise AlertmanagerConfigRejected(EXIT_VIOLATION) from exc
     warn_if_root_receiver_without_integration(merged)
+    # #1211: on the same reading — the cluster's own firehose receiver is
+    # what decides whether undelivered page-mode custom alerts notify anyone.
+    if judge_merged is not None and judge_merged(merged):
+        print(f"FAIL: page-mode custom alerts would notify no one (the ERROR "
+              f"line(s) above, --strict) — refusing to apply the merged "
+              f"alertmanager.yml to {namespace}/{configmap_name} (nothing was "
+              f"applied)", file=sys.stderr)
+        raise AlertmanagerConfigRejected(EXIT_VIOLATION)
 
     # 4. Apply updated ConfigMap
     if not _apply_merged_configmap(merged_yml, namespace, configmap_name):
