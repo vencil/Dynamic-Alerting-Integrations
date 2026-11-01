@@ -1299,17 +1299,43 @@ class TestWrittenValues:
         with pytest.raises(bt._NotRead, match="this backtest cannot read it the way the exporter does"):
             bt._served_written(key, (raw,))
 
-    @pytest.mark.parametrize("raw,served", [("1_000", 1000.0), ("0x1p4", 16.0)])
-    def test_a_spelling_the_exporter_reads_but_this_backtest_does_not(
-            self, tmp_path, raw, served):
-        """`1_000`、`0x1p4`：exporter 讀得懂（served-values 送 1000／16），但 `--tenant`
-        照 PR2 之前不回測（`_SPELLINGS_NOT_BACKTESTED`），不在本 PR 改結束碼。"""
-        import _lib_tenant_values as tvlib
-        bt._written_tree(str(tmp_path), "mysql_connections", (raw,))
-        got = tvlib.load_served_tree(str(tmp_path)).tenants[bt._WRITTEN_TENANTS[0]]
-        assert got.values["mysql_connections"] == served
-        with pytest.raises(bt._NotRead):
-            bt._served_written("mysql_connections", (raw,))
+    @pytest.mark.parametrize("raw,served", [
+        ("1_000", 1000.0), ("0x1p4", 16.0), ("0x1p6", 64.0), ("0x_1p4", 16.0), ("-1_0", -10.0)])
+    def test_a_spelling_the_exporter_reads_is_backtested_at_its_number(self, raw, served):
+        """#3267：`1_000`、`0x1p4` 這類寫法的數字由 exporter 讀（Go 的
+        `parseThresholdNumber`，經 served-values），讀得懂就照它送的數字回測，
+        Python 不另留一份拼法表。"""
+        assert bt._served_written("mysql_connections", (raw,)) == [(served, "warning")]
+
+    @pytest.mark.parametrize("raw,served,risk,rc,new_breaches", [
+        ("1_000", "1000", "HIGH", 1, 0),  # 3 點 → 0 點（-100%）
+        ("0x1p4", "16", "MEDIUM", 0, 4),  # 3 點 → 4 點（+33.3%）
+        ("0x1p6", "64", "LOW", 0, 3),     # 3 點 → 3 點
+    ])
+    def test_a_spelling_the_exporter_reads_changes_the_exit_code(
+            self, monkeypatch, capsys, cli_argv, raw, served, risk, rc, new_breaches):
+        """#3267（owner 裁決）：以前 `_SPELLINGS_NOT_BACKTESTED` 讓這些值不回測
+        （UNKNOWN、rc 0）；現在照 exporter 送的數字回測（`new_value` 是送出的數字），
+        rc 依回測結果。"""
+        got_rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                           "mysql_connections", "70", raw)
+        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+        assert [(r["status"], r["risk"], r["new_value"], r["old_breach_count"],
+                 r["new_breach_count"]) for r in rows] == [
+            ("analyzed", risk, served, 3, new_breaches)]
+        assert got_rc == rc
+
+    @pytest.mark.parametrize("raw", ["1__0", "0x10", "_1", "1_", "0x1p_4"])
+    def test_a_spelling_the_exporter_refuses_stays_not_backtested(
+            self, monkeypatch, capsys, cli_argv, raw):
+        """對照組：exporter 也拒收的拼法（served-values `refused: unparsed`）維持原本
+        的不回測、UNKNOWN、rc 0，不因拿掉拼法表而改送平台預設值回測。"""
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mysql_connections", "70", raw)
+        assert (rc, asked) == (0, [])
+        assert [(r["status"], r["risk"]) for r in rows] == [("not_backtested", "UNKNOWN")]
+        assert rows[0]["backtest"] == (
+            f"skipped: value {raw!r}: this backtest cannot read it the way the exporter does")
 
     def test_a_severity_change_is_two_rows(self, monkeypatch, capsys, cli_argv):
         """#3111：70 → 95:critical 是兩條 /metrics row（同目錄比對）：warning 告警
