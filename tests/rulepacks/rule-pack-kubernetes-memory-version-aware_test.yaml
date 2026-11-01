@@ -53,6 +53,7 @@ tests:
         exp_alerts:
           # db-a v1 → exact match vs v1 threshold (85), value 90.
           - exp_labels:
+              metric_group: container_memory
               severity: warning
               tenant: db-a
               version: v1
@@ -71,6 +72,7 @@ tests:
               tier: gold
           # db-a v2 → exact match vs tightened v2 threshold (60), value 70.
           - exp_labels:
+              metric_group: container_memory
               severity: warning
               tenant: db-a
               version: v2
@@ -89,6 +91,7 @@ tests:
               tier: gold
           # db-b v3 → FALLBACK to default threshold (85), real version=v3 preserved.
           - exp_labels:
+              metric_group: container_memory
               severity: warning
               tenant: db-b
               version: v3
@@ -154,6 +157,7 @@ tests:
         exp_alerts:
           # db-c: enriched, version normalized to "default".
           - exp_labels:
+              metric_group: container_memory
               severity: warning
               tenant: db-c
               version: default
@@ -172,6 +176,7 @@ tests:
               tier: gold
           # db-d: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
           - exp_labels:
+              metric_group: container_memory
               severity: warning
               tenant: db-d
               version: default
