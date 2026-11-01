@@ -60,7 +60,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 # scripts/tools/ is enumerated too and this file IS under that contract
 # (--help → 0, unknown flag → 2).
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, arm_crash_envelope, disarm_crash_envelope,
+    EXIT_CALLER_ERROR, Report, arm_crash_envelope, encode_json,
 )
 from _lib_consumer_read import absolute_reader_binaries  # noqa: E402  (#3424)
 
@@ -1453,25 +1453,19 @@ def main():
 
         if args.baseline:
             import stat
+            # #3216: the baseline is the document, encoded the one way.
             BASELINE_FILE.write_text(
-                json_mod.dumps(out, indent=2, ensure_ascii=False) + "\n",
+                encode_json(out) + "\n",
                 encoding="utf-8",
                 newline="\n",
             )
             os.chmod(BASELINE_FILE,
                      stat.S_IRUSR | stat.S_IWUSR | stat.S_IRGRP
                      | stat.S_IROTH)
-            print(json_mod.dumps(out, indent=2, ensure_ascii=False))
-            disarm_crash_envelope()  # #3094: the tail below must not add a second document
             print(f"\n📊 Baseline saved to {BASELINE_FILE.name}",
                   file=sys.stderr)
         elif args.compare:
-            print(json_mod.dumps(out, indent=2, ensure_ascii=False))
-            disarm_crash_envelope()  # #3094: the tail below must not add a second document
             _compare_baseline(out)
-        else:
-            print(json_mod.dumps(out, indent=2, ensure_ascii=False))
-            disarm_crash_envelope()  # #3094: the tail below must not add a second document
     else:
         print()
         print("=" * 60)
@@ -1604,7 +1598,12 @@ def main():
                 bell_to=say,
             )
 
-    sys.exit(0 if failed == 0 else 1)
+    rc = 0 if failed == 0 else 1
+    if args.json:
+        # #3216: run() writes the document once the tail above is done
+        # (its lines all go to stderr under --json).
+        return Report(out, rc)
+    sys.exit(rc)
 
 
 if __name__ == "__main__":

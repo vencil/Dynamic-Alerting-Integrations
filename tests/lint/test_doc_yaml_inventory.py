@@ -350,3 +350,20 @@ def test_go_loader_test_agrees_with_the_inventory():
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=900, env=env, check=False)
     assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-2000:]
+
+
+def test_the_json_document_is_the_one_encoders_text(tmp_path):
+    """#3216: `--json` hands its document to `run()`, which writes it with
+    the one encoder (two-space indent, UTF-8): byte for byte what
+    `encode_json` makes of it. The tool used to `json.dump` it with indent 1."""
+    import json
+    from _lib_exitcodes import encode_json
+    docs = tmp_path / "docs"
+    docs.mkdir()
+    (docs / "a.md").write_text("# 範例\n\n```yaml\ntenants: {}\n```\n", encoding="utf-8")
+    proc = subprocess.run(  # noqa: S603
+        [sys.executable, str(TOOLS / "_lib_doc_yaml_inventory.py"),
+         "--repo-root", str(tmp_path), "--json", "--read", ""],
+        capture_output=True, text=True, encoding="utf-8", timeout=300, check=False)
+    assert proc.returncode == 0, proc.stdout + proc.stderr
+    assert proc.stdout == encode_json(json.loads(proc.stdout)) + "\n", proc.stdout[:500]
