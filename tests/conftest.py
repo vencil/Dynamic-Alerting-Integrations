@@ -194,7 +194,14 @@ def _no_cwd_change_outlives_its_test():
     cwd is the worker's, and every later test that reads a default relative
     path (`rule-packs/`, `conf.d/`) fails there instead, in an order xdist
     decides. Put back either way, so the leak is reported once, where it
-    happened. `monkeypatch.chdir` is undone before this check runs."""
+    happened. `monkeypatch.chdir` is undone before this check runs — because
+    pytest sets autouse fixtures of one conftest up in name order, and every
+    one above this name leaves `monkeypatch` alone. An autouse fixture named
+    before it that takes `monkeypatch` would turn that around (every test
+    that only `monkeypatch.chdir`s, test_validate_all's 304 among them, then
+    errors at teardown — loud, not silent). Not seen either: a module-scope
+    fixture that chdirs, fetched mid-test with `request.getfixturevalue`
+    (none in tests/)."""
     before = os.getcwd()
     yield
     leak = _cwd_put_back(before)
