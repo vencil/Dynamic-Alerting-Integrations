@@ -149,6 +149,11 @@ from _grar_render import (  # noqa: E402
 # #2660: the root-receiver-has-no-integration WARN (--output-configmap here;
 # --apply emits it inside apply_to_configmap). Used, so no F401 marker.
 from _grar_render import warn_if_root_receiver_without_integration  # noqa: E402
+# #1211: served page-mode custom alerts that fall to the firehose receiver.
+from _grar_render import (  # noqa: E402
+    UndeliveredCustomAlerts, custom_firehose_findings, custom_firehose_has_integration,
+    undelivered_custom_alert_tenants,
+)
 # #3206 (ADR-036 §12): the emitted ConfigMap read back the consumers' way.
 from _grar_render import (  # noqa: E402
     ConsumerReadError, InputRefused, alertmanager_reading, consumer_read_message,
@@ -190,6 +195,7 @@ from _grar_validate import generator_version_problem, load_policy_document  # no
 import _lib_parse_cache  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: the platform rules as Prometheus reads them)
 import _lib_key_verdict  # noqa: E402  (ADR-038 §5: the shared key verdict)
+import _lib_tenant_values  # noqa: E402  (#1211: the custom alerts the exporter serves)
 from _lib_confd import WARN_LIMIT  # noqa: E402
 
 
@@ -347,8 +353,10 @@ def _write_output_or_die(output: str, content: str) -> None:
 
 
 def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
-                namespace: str, configmap_name: str, yes_flag: bool, strict: bool = False) -> None:
-    """Handle --apply mode: merge into ConfigMap and reload."""
+                namespace: str, configmap_name: str, yes_flag: bool, strict: bool = False,
+                judge_merged=None) -> None:
+    """Handle --apply mode: merge into ConfigMap and reload. *judge_merged*:
+    ``apply_to_configmap``'s (#1211)."""
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)
     print(f"\nApply: {route_count} route(s), {len(receivers)} receiver(s), "
@@ -388,7 +396,8 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
             sys.exit(EXIT_OK)
     try:
         success = apply_to_configmap(routes, receivers, inhibit_rules, namespace,
-                                     configmap_name, strict=strict)
+                                     configmap_name, strict=strict,
+                                     judge_merged=judge_merged)
     except AlertmanagerConfigRejected as exc:
         # #2219: amtool refused the merged config BEFORE kubectl was called.
         sys.exit(exc.exit_code)
@@ -418,8 +427,12 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
 
 def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                            base: dict, namespace: str, configmap_name: str,
-                           dry_run: bool, output: str | None, strict: bool = False) -> None:
+                           dry_run: bool, output: str | None, strict: bool = False,
+                           judge_emitted=None) -> None:
     """Handle --output-configmap mode: produce complete ConfigMap YAML.
+
+    *judge_emitted* (#1211): called with the emitted config as Alertmanager
+    reads it, before anything is written; True refuses it (rc 1).
 
     Takes the ALREADY-LOADED base config, not a path: #1616 requires the
     supplied-but-unusable check to happen before the tenant scan, and a
@@ -473,6 +486,13 @@ def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_ru
               f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
     warn_if_root_receiver_without_integration(emitted)
+    # #1211: the emitted firehose receiver — a --base-config's own, else the
+    # name-only placeholder — decides whether those alerts notify anyone.
+    if judge_emitted is not None and judge_emitted(emitted):
+        print(f"FAIL: page-mode custom alerts would notify no one (the ERROR "
+              f"line(s) above, --strict) — refusing to write the ConfigMap to "
+              f"{target} (nothing was written)", file=sys.stderr)
+        sys.exit(EXIT_VIOLATION)
 
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)
@@ -1019,7 +1039,11 @@ def _build_parser() -> argparse.ArgumentParser:
                              "a mapping (#2341) "
                              "and, on the --apply/--output-configmap "
                              "merge, any inhibit rule with an ungated `equal:` label "
-                             "(#1132). Without --strict these surface as WARN (an "
+                             "(#1132) and a tenant (no _routing; an explicit "
+                             "`_routing: disable` stays WARN) whose served page-mode "
+                             "custom alerts fall to a custom-alerts-firehose receiver "
+                             "with no integration (#1211). Without --strict these "
+                             "surface as WARN (an "
                              "unquoted override value is rendered via str() "
                              "instead; a bad group_by entry is dropped). CI runs "
                              "--strict.")
@@ -1266,7 +1290,9 @@ _KEY_CHECK_KINDS = {
 }
 
 
-def _report_key_verdict(config_dir: str, findings: list[str]) -> None:
+def _report_key_verdict(config_dir: str, findings: list[str],
+                        served: "_lib_tenant_values.ServedTree | BaseException | None" = None,
+                        ) -> None:
     """The shared verdict on keys no reader reads (``_lib_key_verdict``,
     ADR-038 §5), under ``--validate``: the same lines validate-config's
     ``unread_keys`` row prints, on stderr, each a ``blocks: never`` finding.
@@ -1274,9 +1300,16 @@ def _report_key_verdict(config_dir: str, findings: list[str]) -> None:
     Reported only until the gates block (#3016): the exit code does not
     change. A verdict that cannot be given — da-guard failing, anything the
     verdict raises — is one NOTICE, never a refusal (decision 5: a broken
-    da-guard must not fail a run the generator passed)."""
+    da-guard must not fail a run the generator passed).
+
+    *served*: the run's one served-values reading (``_load_served_tree``,
+    read with ``disable_effects``), shared with the custom-alert delivery
+    check (#1211); an exception in its place is the reading having failed,
+    reported here as it would have been raised by the verdict."""
     try:
-        verdict = _lib_key_verdict.judge_tree(config_dir)
+        if isinstance(served, BaseException):
+            raise served
+        verdict = _lib_key_verdict.judge_tree(config_dir, served_tree=served)
     except (Exception, SystemExit) as exc:  # noqa: BLE001 — "not judged", never a refusal
         line = Finding(
             "  NOTICE: key verdict incomplete: the keys no reader reads were not "
@@ -1313,6 +1346,83 @@ def _report_key_verdict(config_dir: str, findings: list[str]) -> None:
     for line in lines:
         print(safe_label(line), file=sys.stderr)
     findings.extend(lines)
+
+
+# ── #1211: served page-mode custom alerts that reach no one ─────────
+
+def _load_served_tree(config_dir: str, *, disable_effects: bool,
+                      ) -> "_lib_tenant_values.ServedTree | BaseException":
+    """The run's ONE da-guard served-values reading of *config_dir*, or the
+    exception that stopped it (each reader reports that its own way: never a
+    refusal — a broken da-guard must not fail a run the generator passed)."""
+    try:
+        return _lib_tenant_values.load_served_tree(config_dir,
+                                                   disable_effects=disable_effects)
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — "not checked", never a refusal
+        return exc
+
+
+def _served_page_custom_alerts(served: "_lib_tenant_values.ServedTree",
+                               ) -> dict[str, tuple[str, ...]]:
+    """tenant -> the names of its custom alerts the exporter SERVES in page
+    mode (``mode`` unset or ``page``), declaration order. The exporter is the
+    authority on which custom alerts a tenant has (#3042): a rejected,
+    duplicate or switched-off entry is not one."""
+    out = {}
+    for tenant, values in served.tenants.items():
+        names = tuple(str(e.spec.get("name") or f"_custom_alerts[{e.index}]")
+                      for e in values.custom_alerts or ()
+                      if e.status == "served" and e.spec.get("mode") != "silent")
+        if names:
+            out[tenant] = names
+    return out
+
+
+def _undelivered_custom_alerts(served: "_lib_tenant_values.ServedTree | BaseException",
+                               routes: list[dict], tree: TenantTree,
+                               findings: list[str]) -> list[UndeliveredCustomAlerts]:
+    """The tenants whose served page-mode custom alerts get no delivery child
+    under the custom route. A served-values reading that failed is one
+    NOTICE (``blocks: never``) and no tenant."""
+    if isinstance(served, BaseException):
+        line = Finding(
+            "NOTICE: custom-alert delivery not checked: the tenants' served custom "
+            f"alerts could not be read ({type(served).__name__}: "
+            f"{' '.join(str(served).split())})",
+            kind="custom_alert_delivery_unchecked", blocks="never")
+        print(safe_label(line), file=sys.stderr)
+        findings.append(line)
+        return []
+    return undelivered_custom_alert_tenants(_served_page_custom_alerts(served),
+                                            routes, tree.routing_disabled)
+
+
+def _emit_custom_firehose_findings(undelivered: list[UndeliveredCustomAlerts],
+                                   firehose_has_integration: bool | None, *,
+                                   strict: bool, findings: list[str]) -> bool:
+    """Print and record the #1211 findings; True when one blocks under
+    *strict* (an ERROR line was printed)."""
+    lines = custom_firehose_findings(undelivered, firehose_has_integration,
+                                     strict=strict)
+    for line in lines:
+        print(safe_label(line), file=sys.stderr)
+    findings.extend(lines)
+    return strict and any(f.blocks == "strict" for f in lines)
+
+
+def _firehose_judge(undelivered: list[UndeliveredCustomAlerts], *, strict: bool,
+                    findings: list[str]):
+    """The check ``--output-configmap`` / ``--apply`` run on the config they
+    are about to write / apply, as Alertmanager reads it: only there is the
+    firehose receiver known. None when no tenant is affected."""
+    if not undelivered:
+        return None
+
+    def judge(am: dict) -> bool:
+        return _emit_custom_firehose_findings(
+            undelivered, custom_firehose_has_integration(am), strict=strict,
+            findings=findings)
+    return judge
 
 
 def _write_findings_if_asked(early: argparse.Namespace,
@@ -1504,8 +1614,12 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # else), before the exits below that end the run short of
     # `_validate_mode` ("No tenants found", "No valid routes …"): a tree with
     # nothing to render is judged too.
+    # #1211: ONE served-values run per invocation — read here when the key
+    # verdict needs it (with disable_effects, which it judges), else below.
+    served = None
     if args.validate and key_verdict:
-        _report_key_verdict(args.config_dir, findings)
+        served = _load_served_tree(args.config_dir, disable_effects=True)
+        _report_key_verdict(args.config_dir, findings, served=served)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)
@@ -1550,6 +1664,20 @@ def _run(args: argparse.Namespace, findings: list[str], *,
         print("No valid routes or inhibit rules generated.")
         sys.exit(EXIT_VIOLATION)
 
+    # #1211: a tenant's served page-mode custom alerts with no delivery child
+    # under the custom route fall to the firehose receiver. Only a mode that
+    # assembles the config it writes (--output-configmap, --apply) knows that
+    # receiver — it judges there; every other mode says it could not check.
+    if served is None:
+        served = _load_served_tree(args.config_dir, disable_effects=False)
+    undelivered = _undelivered_custom_alerts(served, routes, tree, findings)
+    assembles = (args.output_configmap or args.apply) and not args.validate
+    if undelivered and not assembles:
+        _emit_custom_firehose_findings(undelivered, None, strict=args.strict,
+                                       findings=findings)
+    firehose_judge = (_firehose_judge(undelivered, strict=args.strict,
+                                      findings=findings) if assembles else None)
+
     # Validate mode
     if args.validate:
         _validate_mode(routes, receivers, inhibit_rules, all_warnings, findings)
@@ -1584,13 +1712,14 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # Apply mode
     if args.apply:
         _apply_mode(routes, receivers, inhibit_rules, namespace,
-                    configmap_name, args.yes, strict=args.strict)
+                    configmap_name, args.yes, strict=args.strict,
+                    judge_merged=firehose_judge)
 
     # Output-configmap mode
     if args.output_configmap:
         _output_configmap_mode(routes, receivers, inhibit_rules, base_config,
                               namespace, configmap_name, args.dry_run, args.output,
-                              strict=args.strict)
+                              strict=args.strict, judge_emitted=firehose_judge)
         return
 
     # Default render mode
