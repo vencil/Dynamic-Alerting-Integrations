@@ -11,10 +11,13 @@ name: Nightly Race Detector
 #
 # Failure handling: the matrix legs only PRODUCE evidence (a parsed fragment +
 # the raw `go test -json` stream as an artifact). A single fan-in `report` job
-# refreshes ONE tracking issue per module, labelled `test-isolation`, whose body
-# lists the deduped failing test names, the first-seen date, and the latest run.
-# It EDITS in place rather than creating — GitHub does not notify on a title or
-# body edit, so a standing failure stays visible without mailing anyone nightly.
+# splits each module's result into incidents (build / package timeout / data
+# race / failing test / unattributed) and keeps ONE tracking issue per failure
+# fingerprint (`module|kind|subject`, the first line of the body), labelled
+# `test-isolation`, with that fingerprint's own first-seen date and latest run.
+# One issue per module used to merge unrelated failures (#2977). It EDITS in
+# place rather than creating — GitHub does not notify on a title or body edit,
+# so a standing failure stays visible without mailing anyone nightly.
 #
 # Two things this deliberately does NOT do, both learned the hard way:
 #   * It does not call itself a race unless the race detector actually fired.
@@ -23,8 +26,8 @@ name: Nightly Race Detector
 #     evidence, not this workflow's name.
 #   * It does not auto-close or comment nightly. One green night does not prove a
 #     repeat-run failure fixed, and a daily comment on standing debt is muted
-#     within a week — that is how #1228 stayed invisible for 33 nights. A green
-#     night is recorded as `last green:` in the body instead.
+#     within a week — that is how #1228 stayed invisible for 33 nights. A night
+#     a fingerprint does not recur is recorded as `not seen on <date>` instead.
 #
 # Before this rework the issue step ran INSIDE the matrix (2 legs, fail-fast:
 # false) and called issues.create() unconditionally with a date-stamped title, so

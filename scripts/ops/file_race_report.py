@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""file_race_report.py — dedup + refresh ONE tracking issue per nightly-race module.
+"""file_race_report.py — dedup + refresh ONE tracking issue per nightly-race failure fingerprint.
 
 Why this exists
 ===============
@@ -10,29 +10,61 @@ therefore minted a fresh P2 issue every night: #1213 (2026-07-24), #1230, #1258,
 duplication was not obvious to a reader.
 
 Three defects, three fixes:
-  * blind create              -> look up an existing open issue first (label,
-                                 then per-module title PREFIX), EDIT in place.
+  * blind create              -> look up the existing open issues first (label,
+                                 then unlabelled), match by fingerprint marker,
+                                 EDIT in place.
   * matrix write race         -> this script runs in a single fan-in `report`
                                  job. Two legs can no longer both find "none"
                                  and both create; the topology, not a lock,
                                  is what makes it impossible.
-  * body without evidence     -> the deduped failing-test list, first-seen date,
-                                 and the raw-stream artifact pointer go in.
+  * body without evidence     -> the failing tests, first-seen date, and the
+                                 raw-stream artifact pointer go in.
 
-EXPECTED first-run behaviour (read this before filing a bug about it)
-----------------------------------------------------------------------
-Dedup matches on the title prefix `Nightly go test -race — <module>`. The four
-issues already open use the OLD title shape ("Nightly race detector flake — …"),
-so they do not match, and the first scheduled run after this lands will file a
-FIFTH issue. That is by design, not a regression of the bug fixed here.
+Identity = failure fingerprint, not module
+------------------------------------------
+The first version of this script kept ONE issue per module. That merged
+unrelated incidents: #2977 (threshold-exporter) carried a cmd/da-guard package
+timeout, a one-night assertion bug in
+TestMetrics_CustomAlertDuplicateSeries_DropsTheLaterEntry, and repeated
+pkg/parsetree timeouts — one first-seen date (never reset) and a test list
+carried over from whichever night last had one. Nothing in that body could say
+which of the three was still happening.
 
-Post-merge sequence the owner runs ONCE to collapse them:
-  1. Retitle #1213 (the earliest/canonical one) to
-     `Nightly go test -race — <module> — repeat-run failure in N test(s)`.
-  2. Apply the `test-isolation` label to it.
-  3. Close #1230 / #1258 / #1263 as duplicates of #1213.
-After that the nightly finds #1213 by prefix and refreshes it in place forever.
-Doing this BEFORE the first scheduled run avoids the fifth issue entirely.
+Each night's fragment is now split into INCIDENTS (`derive_incidents`), and each
+incident has a fingerprint `{module}|{kind}|{subject}`:
+  * build_failed            -> `build` (subject: module), and NOTHING else for
+                               that module — no test ran, so no other claim holds.
+  * each timed-out package  -> `timeout` (subject: the package).
+  * a race banner           -> `data-race` (subject: module), listing race_tests.
+  * failing tests that are neither race tests nor merely running at a timeout,
+    grouped by top-level test -> one `test` incident each (subject: the test)
+    when there are at most MAX_TEST_INCIDENTS; more than that -> ONE `tests`
+    incident (subject: module) listing them, so a broken shared fixture does not
+    open 900 issues.
+  * failing, none of the above -> `unattributed` (subject: module).
+  * fragment missing/unreadable -> `no-result` (subject: module). Kept separate
+    from `unattributed`: "the leg never reported" and "the leg reported a
+    failure nobody could attribute" are different problems.
+The fingerprint is the FIRST line of the issue body as
+`<!-- race-fingerprint: … -->` and an existing issue matches only when its body
+STARTS with that marker (same rule as bench-attrib-main.yaml): a marker quoted
+further down a body — in a pasted log, a comment-turned-edit — cannot capture
+another fingerprint's refreshes. The `<!-- race-state: … -->` block (first seen,
+streak, last green …) is per issue, i.e. per fingerprint, so first-seen resets
+naturally when a different failure starts.
+
+Every night, per module: list the open issues ONCE, map them by fingerprint,
+refresh or create one issue per incident, and silently refresh every open
+fingerprint issue of that module that did NOT recur ("not seen on <date>",
+streak 0). An issue for this module that carries no marker (a legacy per-module
+issue such as #2977 / #3343) is never edited: the step summary names it so the
+owner can close it by hand. When the night could not measure the other
+fingerprints at all (build failure, missing fragment, unattributed failure)
+those issues are left untouched instead of being told "not seen".
+
+The label is still called `test-isolation` although it now also covers build,
+race and timeout issues: it is the lookup key of every issue already filed, and
+renaming it would orphan them.
 
 Notification model (borrowed from scripts/ops/file_cve_report.sh)
 ------------------------------------------------------------------
@@ -41,40 +73,47 @@ verdict — GitHub does not notify on a title or body edit. There is deliberatel
 NO nightly comment and NO auto-close:
   * a comment every morning on a known-failing test is muted within a week
     (that is literally how the 33-night CVE outage stayed invisible), and
-  * one green night does not mean fixed — this is a REPEAT-RUN detector, so
+  * one quiet night does not mean fixed — this is a REPEAT-RUN detector, so
     close/reopen churn would notify twice per flap and teach the reader nothing.
-A green night is recorded as `last green: <date>` in the body instead.
-Streak gating and delta-triggered comments are Tier 2 and deliberately out of
-scope here; the state block below already carries `streak=` and `last_green=`
+A night without the fingerprint is recorded as `not seen on <date>` in the body
+instead. Streak gating and delta-triggered comments are Tier 2 and deliberately
+out of scope here; the state block already carries `streak=` and `last_green=`
 so Tier 2 needs no format change.
 
 Wording is driven by EVIDENCE, not by this workflow's name
 ----------------------------------------------------------
 The workflow is called "Nightly Race Detector" and its old body called every
-failure a "race detector flake". The current failure is neither a race
+failure a "race detector flake". The failure behind #1213 was neither a race
 (`grep -c "DATA RACE"` is 0 across all four nights) nor a flake (9/10, never
-10/10). So the title says DATA RACE only when the parser actually saw the race
-banner; otherwise it uses repeat-run / test-isolation vocabulary. This is the
-follow-up the owner asked for in #932 triage and it was never done.
+10/10). So a title says DATA RACE only when the parser actually saw the race
+banner. This is the follow-up the owner asked for in #932 triage.
 
-The same rule applies one level down, to the "What this is" prose and the
-Triage steps (#3177). Isolation vocabulary — and the advice to bisect `-count`
-— appears ONLY when tests actually failed. A `-timeout` expiry gets its own
-verdict ("package timeout") and its own triage (where did the time go), and a
-failure nothing could be attributed to says exactly that, matching the warning
-above it. Before this, both of those shapes were narrated as leaked state
-between repetitions, and #2977 sent its reader hunting for state that did not
-exist while the real cause was a package running into its 30-minute deadline.
+The same rule applies to test failures. The parser records per-test fail/pass
+counts (`test_runs`). A test that failed in EVERY repetition it ran is a plain
+failure — a regression or an environment problem — and is described as such;
+only a test that failed in SOME repetitions (k of n, k < n) gets isolation
+vocabulary and the advice to bisect `-count`. #3343 was titled "repeat-run
+failure" for a test that failed all ten repetitions because a binary was
+missing. Without counts (an older fragment) the body says the count is unknown.
+
+And one level further down, to the prose and the Triage steps (#3177): a
+`-timeout` expiry gets its own verdict ("package timeout") and its own triage
+(where did the time go), and a failure nothing could be attributed to says
+exactly that. Before this, both shapes were narrated as leaked state between
+repetitions, and #2977 sent its reader hunting for state that did not exist.
 
 Fail-closed direction
 ---------------------
 Every unknown resolves toward "worse", never toward "clean":
-  * a MISSING or unparseable fragment is treated as a failing module (a leg that
-    died before uploading has not proven anything green) AND exits non-zero,
+  * a MISSING or unparseable fragment is a failing module (a leg that died
+    before uploading has not proven anything green) AND exits non-zero,
   * an unreadable state block yields no baseline: first-seen is re-stamped but
     explicitly flagged in the body as possibly-earlier, never silently reset,
-  * a label that cannot be created degrades to title-only dedup, still files the
-    alert, and exits non-zero so the degradation cannot persist unnoticed.
+  * a failed issue lookup is never read as "no existing issue": the alert is
+    still filed (a duplicate is visible, a skipped night is silence), the body
+    says dedup was unavailable, and the run goes red,
+  * a label that cannot be created degrades to unlabelled lookup, still files
+    the alert, and exits non-zero so the degradation cannot persist unnoticed.
 
 Usage:
   file_race_report.py --frags-dir DIR --expected-modules a,b --run-url URL
@@ -84,8 +123,10 @@ Env:
   DRY_RUN  (default 0)      "1" to echo gh argv instead of executing (offline tests)
   GITHUB_STEP_SUMMARY       appended to when set
 Test seams (DRY_RUN=1 only; unset in CI, where they are inert):
-  DRY_RUN_ISSUE_NUM         pretend this issue number already exists
-  DRY_RUN_PREV_BODY         file standing in for that issue's current body
+  DRY_RUN_ISSUE_NUM         pretend an open issue with this number exists
+  DRY_RUN_PREV_BODY         file holding that issue's current body (its first
+                            line decides which fingerprint it is; no marker =
+                            a legacy issue)
 (There is deliberately no label/delivery failure seam: those paths are driven
 by injecting a failing `gh` runner, so the real branches actually execute.)
 """
@@ -123,12 +164,15 @@ MAX_STATE_TESTS = 300
 # the body cap even though the count was under the limit. Caught by the
 # boundary test, not by reasoning.
 STATE_TESTS_CHARS = 8192
+# Up to this many failing top-level tests get one issue each; more collapse into
+# a single `tests` issue. A whole package breaking must not open 900 issues.
+MAX_TEST_INCIDENTS = 5
 
-# The dedup key. Verified against the repo's existing labels: no collision, and
+# The lookup key. Verified against the repo's existing labels: no collision, and
 # `race-flake` (which the old header comment claimed) never existed at all.
 LABEL = "test-isolation"
 LABEL_COLOR = "D93F0B"
-LABEL_DESC = "Nightly -race repeat-run / test-isolation failure (auto-filed, refreshed in place)"
+LABEL_DESC = "Nightly go test -race failure, one issue per fingerprint (auto-filed, refreshed in place)"
 
 # Machine-readable state carried inside the issue body. An HTML comment is
 # invisible in rendered markdown but survives a body round-trip.
@@ -136,7 +180,14 @@ STATE_OPEN = "<!-- race-state:"
 STATE_CLOSE = "-->"
 STATE_RE = re.compile(re.escape(STATE_OPEN) + r"(.*?)" + re.escape(STATE_CLOSE), re.S)
 
+# Identity marker. ALWAYS the first line of the body, matched at position 0.
+FINGERPRINT_OPEN = "<!-- race-fingerprint: "
+FINGERPRINT_CLOSE = " -->"
+FINGERPRINT_LINE_RE = re.compile(r"^<!-- race-fingerprint: (\S+) -->$")
+
 TITLE_PREFIX_TMPL = "Nightly go test -race — {module}"
+
+INCIDENT_KINDS = ("build", "timeout", "data-race", "test", "tests", "unattributed", "no-result")
 
 
 def today() -> str:
@@ -224,9 +275,9 @@ class Gh:
 
 
 def ensure_label(gh: Gh, repo: str) -> bool:
-    """Create/refresh the dedup label. Returns False when it is UNUSABLE.
+    """Create/refresh the lookup label. Returns False when it is UNUSABLE.
 
-    Never swallowed with `|| true`: the label is the dedup key, and discarding
+    Never swallowed with `|| true`: the label is the lookup key, and discarding
     its failure is exactly what produced 33 nights of silence in the CVE path.
     `--force` also EDITS an existing label, so a non-zero exit is ambiguous —
     the label may exist and be perfectly usable and only the edit was rejected.
@@ -263,79 +314,118 @@ def ensure_label(gh: Gh, repo: str) -> bool:
         return True
     print(
         f"::error title=Race report::label '{LABEL}' is missing and could not be "
-        "created. Falling back to title-based dedup so the alert still lands; fix "
-        "the label so filtering works again."
+        "created. Falling back to the unlabelled lookup so the alert still lands; "
+        "fix the label so filtering works again."
     )
     return False
 
 
-def find_issue(gh: Gh, repo: str, prefix: str, label_ok: bool) -> tuple[str, bool]:
-    """Returns (issue number or "", lookup_ok).
+# ── fingerprints ─────────────────────────────────────────────────────────────
+
+
+def fingerprint(module: str, kind: str, subject: str) -> str:
+    # Whitespace and `--` would make the marker unmatchable (the first-line regex
+    # wants one token) or end the HTML comment early, and an unmatchable marker
+    # means a fresh duplicate every night. Go test names and import paths never
+    # contain either; this only defends against an odd fragment.
+    subject = re.sub(r"\s+", "_", subject).replace("--", "-_")
+    return f"{module}|{kind}|{subject}"
+
+
+def fingerprint_marker(fp: str) -> str:
+    return f"{FINGERPRINT_OPEN}{fp}{FINGERPRINT_CLOSE}"
+
+
+def body_fingerprint(body: str) -> str | None:
+    """The fingerprint an issue body DECLARES — read from its first line only.
+
+    Position 0, not a search: a marker quoted later in a body (a pasted log, an
+    earlier body copied into a comment that got edited in) must not let that
+    issue capture another fingerprint's nightly refreshes. GitHub may hand the
+    body back with CRLF line endings, hence the rstrip.
+    """
+    first = (body or "").split("\n", 1)[0].rstrip("\r")
+    m = FINGERPRINT_LINE_RE.match(first)
+    return m.group(1) if m else None
+
+
+def body_matches(body: str, fp: str) -> bool:
+    """True when `body` is the issue for `fp` (marker at position 0)."""
+    return body_fingerprint(body) == fp
+
+
+def split_fingerprint(fp: str) -> tuple[str, str, str]:
+    module, _, rest = fp.partition("|")
+    kind, _, subject = rest.partition("|")
+    return module, kind, subject
+
+
+def list_open_issues(gh: Gh, repo: str, label_ok: bool, want: set[str]) -> tuple[list[dict], bool]:
+    """Open issues that might belong to this module, plus lookup_ok.
 
     Deliberately NOT `--search`: the search index lags, and a lagging index would
     silently create a duplicate issue every night — the bug being fixed here.
-    The label narrows the list; the per-module title PREFIX is what selects
-    between the two modules sharing that one label. The unlabelled fallback runs
-    whenever the labelled lookup came up empty, not only when the label is
-    broken: a night that filed an UNLABELLED issue (label outage) would otherwise
-    be invisible to the next night and get a duplicate.
+    The label narrows the list; the fingerprint marker selects. The unlabelled
+    fallback runs whenever the labelled list did not contain every fingerprint
+    seen tonight, not only when the label is broken: a night that filed an
+    UNLABELLED issue (label outage) would otherwise be invisible to the next
+    night and get a duplicate.
 
-    `lookup_ok=False` means the API call FAILED — which is NOT the same as "no
-    matching issue exists", though the two used to collapse into the same empty
-    string. A single 502 then fell through to the create branch and re-minted the
-    duplicate this whole change removes, silently, at exit 0.
-
-    On first run against the CURRENT repo state this legitimately returns
-    ("", True): the four existing open issues are titled "Nightly race detector
-    flake — …", which does not `startswith` the new prefix, so a fifth issue is
-    filed by design. See the post-merge sequence in the module docstring.
+    `lookup_ok=False` means an API call FAILED — which is NOT the same as "no
+    matching issue exists". Rows obtained before the failure are still returned
+    and used; everything else is treated as unverified by the caller.
     """
     if gh.dry_run:
-        return os.environ.get("DRY_RUN_ISSUE_NUM", ""), True
+        num = os.environ.get("DRY_RUN_ISSUE_NUM", "")
+        if not num:
+            return [], True
+        path = os.environ.get("DRY_RUN_PREV_BODY")
+        body = Path(path).read_text(encoding="utf-8") if path and Path(path).is_file() else ""
+        return [{"number": int(num) if num.isdigit() else num,
+                 "title": "(dry run) Nightly go test -race", "body": body}], True
 
-    def _scan(args: list[str]) -> tuple[str, bool]:
+    def _list(args: list[str]) -> list[dict] | None:
         proc = gh.run(args)
         if proc.returncode != 0:
-            gh.degradations.append(f"issue lookup for {prefix!r} (gh exited {proc.returncode})")
+            gh.degradations.append(f"issue lookup (gh exited {proc.returncode})")
             print(
                 f"::error title=Race report::issue lookup failed (gh exited "
                 f"{proc.returncode}). Cannot tell 'no existing issue' from 'the "
                 "API is down', so dedup is NOT trustworthy this run."
             )
-            return "", False
+            return None
         try:
             rows = json.loads(proc.stdout or "[]")
+            if not isinstance(rows, list):
+                raise ValueError("not a list")
         except ValueError:
-            gh.degradations.append(f"issue lookup for {prefix!r} (unparseable JSON)")
+            gh.degradations.append("issue lookup (unparseable JSON)")
             print(
                 "::error title=Race report::issue lookup returned unparseable JSON "
                 "— treating dedup as unavailable rather than as 'nothing found'."
             )
-            return "", False
-        for row in rows:
-            if str(row.get("title", "")).startswith(prefix):
-                return str(row.get("number")), True
-        return "", True
+            return None
+        return [r for r in rows if isinstance(r, dict)]
 
     base = ["issue", "list", "--repo", repo, "--state", "open",
-            "--limit", "200", "--json", "number,title"]
+            "--limit", "200", "--json", "number,title,body"]
+    rows: list[dict] = []
     if label_ok:
-        num, ok = _scan([*base, "--label", LABEL])
-        if num or not ok:
-            return num, ok
+        labelled = _list([*base, "--label", LABEL])
+        if labelled is None:
+            return [], False
+        rows = labelled
+        found = {body_fingerprint(str(r.get("body") or "")) for r in rows}
+        if want <= found:
+            return rows, True
     # Unlabelled fallback. A failure HERE is what makes dedup untrustworthy,
     # because this is the query that would have found an unlabelled issue.
-    return _scan(base)
-
-
-def read_body(gh: Gh, repo: str, num: str) -> str:
-    if gh.dry_run:
-        path = os.environ.get("DRY_RUN_PREV_BODY")
-        if path and Path(path).is_file():
-            return Path(path).read_text(encoding="utf-8")
-        return ""
-    proc = gh.run(["issue", "view", num, "--repo", repo, "--json", "body", "--jq", ".body"])
-    return proc.stdout if proc.returncode == 0 else ""
+    unlabelled = _list(base)
+    if unlabelled is None:
+        return rows, False
+    seen = {str(r.get("number")) for r in rows}
+    rows += [r for r in unlabelled if str(r.get("number")) not in seen]
+    return rows, True
 
 
 # ── state block ──────────────────────────────────────────────────────────────
@@ -437,38 +527,184 @@ def load_fragment(frags_dir: Path, module: str) -> tuple[dict, str]:
     return frag, ""
 
 
+# ── incidents ────────────────────────────────────────────────────────────────
+
+
+def _root(name: str) -> str:
+    """Top-level test of a (sub)test name: `TestA/b/c` -> `TestA`."""
+    return name.split("/", 1)[0]
+
+
+def _str_list(value) -> list[str]:
+    return [v.strip() for v in (value or []) if isinstance(v, str) and v.strip()]
+
+
+def derive_incidents(frag: dict) -> list[dict]:
+    """Split one module's fragment into independently tracked incidents.
+
+    Rules (the module docstring explains why each exists):
+      build subsumes everything; one `timeout` per package; one `data-race` per
+      module; failing top-level tests that are not race tests and not merely
+      running at a timeout -> `test` each, or one `tests` above
+      MAX_TEST_INCIDENTS; nothing attributable -> `unattributed`; no fragment ->
+      `no-result`. A green fragment yields [].
+    """
+    module = frag["module"]
+
+    def inc(kind: str, subject: str, **extra) -> dict:
+        return {"module": module, "kind": kind, "subject": subject,
+                "fingerprint": fingerprint(module, kind, subject), **extra}
+
+    if frag.get("fragment_missing"):
+        return [inc("no-result", module)]
+    if frag.get("build_failed"):
+        return [inc("build", module)]
+
+    out: list[dict] = []
+    timeouts = [tp for tp in (frag.get("timeout_packages") or []) if isinstance(tp, dict)]
+    running: set[str] = set(_str_list(frag.get("timeout_running_tests")))
+    for tp in timeouts:
+        running |= set(_str_list(tp.get("running_tests")))
+        pkg = str(tp.get("package") or "").strip() or "unknown-package"
+        out.append(inc("timeout", pkg, timeout=tp, tests=sorted(_str_list(tp.get("running_tests")))))
+    if frag.get("timed_out") and not timeouts:
+        # An older or partial fragment: the timeout is known, the package is not.
+        out.append(inc("timeout", "unknown-package", timeout={}, tests=[]))
+
+    race_tests = sorted(set(_str_list(frag.get("race_tests"))))
+    if frag.get("had_data_race"):
+        out.append(inc("data-race", module, tests=race_tests))
+    race_roots = {_root(t) for t in race_tests}
+    running_roots = {_root(t) for t in running}
+
+    groups: dict[str, list[str]] = {}
+    for name in _str_list(frag.get("failed_tests")):
+        groups.setdefault(_root(name), []).append(name)
+    test_groups: dict[str, list[str]] = {}
+    for root, names in groups.items():
+        if root in race_roots:
+            continue  # tracked by the data-race incident
+        # "Merely running at the timeout": every failing name of this test is
+        # one the panic listed as running (or the parent of one). A test that
+        # ALSO failed on its own keeps its own incident.
+        if root in running_roots and all(n in running or n == root for n in names):
+            continue
+        test_groups[root] = sorted(set(names))
+
+    runs = frag.get("test_runs") if isinstance(frag.get("test_runs"), dict) else None
+    if len(test_groups) > MAX_TEST_INCIDENTS:
+        out.append(inc("tests", module, tests=sorted(test_groups), groups=test_groups, runs=runs))
+    else:
+        for root in sorted(test_groups):
+            out.append(inc("test", root, tests=test_groups[root], runs=runs))
+
+    if not out and frag.get("failed"):
+        out.append(inc("unattributed", module))
+    return out
+
+
+def repetitions(runs: dict | None, test: str) -> tuple[str, int, int]:
+    """("every" | "some" | "unknown", failed, ran) for one top-level test.
+
+    "unknown" whenever the parser did not record counts for this name — the
+    report then says so instead of picking a vocabulary.
+    """
+    entry = (runs or {}).get(test) if isinstance(runs, dict) else None
+    if not isinstance(entry, dict):
+        return "unknown", 0, 0
+    try:
+        k, ok = int(entry.get("fail", 0)), int(entry.get("pass", 0))
+    except (TypeError, ValueError):
+        return "unknown", 0, 0
+    if k <= 0:
+        return "unknown", 0, 0
+    return ("every" if ok == 0 else "some"), k, k + ok
+
+
+def _rep_note(shape: str, k: int, n: int) -> str:
+    if shape == "every":
+        return f"failed every repetition ({k}/{n})"
+    if shape == "some":
+        return f"failed {k} of {n} repetitions"
+    return "repetition count not recorded"
+
+
 # ── composition ──────────────────────────────────────────────────────────────
 
 
-def verdict_suffix(frag: dict, green: bool, date: str) -> str:
-    if green:
-        return f"last run GREEN ({date})"
-    if frag.get("fragment_missing"):
+def incident_verdict(inc: dict) -> str:
+    kind = inc["kind"]
+    if kind == "no-result":
         return "NO RESULT — leg produced no fragment"
-    if frag.get("build_failed"):
+    if kind == "build":
         return "build failure"
-    if frag.get("had_data_race"):
-        n = len(frag.get("race_tests") or []) or len(frag.get("failed_tests") or [])
+    if kind == "data-race":
+        n = len(inc.get("tests") or [])
         return f"DATA RACE ({n} test(s))" if n else "DATA RACE"
-    if frag.get("timed_out"):
-        # Kept inside TITLE_SUFFIX_BUDGET (64): the combined form drops the
-        # package count, which the body's "Package timeout" section carries.
-        if frag.get("failed_tests"):
-            return f"package timeout + repeat-run failure in {len(frag['failed_tests'])} test(s)"
-        n_pkg = len(frag.get("timeout_packages") or []) or 1
-        return f"package timeout in {n_pkg} package(s)"
-    if frag.get("failed_tests"):
-        return f"repeat-run failure in {len(frag['failed_tests'])} test(s)"
-    if frag.get("unattributed_failure"):
+    if kind == "timeout":
+        after = (inc.get("timeout") or {}).get("after")
+        return f"package timeout after {after}" if after else "package timeout"
+    if kind == "test":
+        shape, k, n = repetitions(inc.get("runs"), inc["subject"])
+        if shape == "every":
+            return f"fails every repetition ({k}/{n})"
+        if shape == "some":
+            return f"isolation-shaped — failed {k} of {n} repetitions"
+        return "failing (repetition count not recorded)"
+    if kind == "tests":
+        names = inc.get("tests") or []
+        shapes = [repetitions(inc.get("runs"), t)[0] for t in names]
+        if shapes and all(s == "every" for s in shapes):
+            return f"{len(names)} tests fail every repetition"
+        if shapes and all(s == "some" for s in shapes):
+            return f"{len(names)} tests failing, isolation-shaped"
+        return f"{len(names)} tests failing"
+    if kind == "unattributed":
         return "failing, cause NOT attributed"
     return "failing"
 
 
-def compose_body(frag: dict, state: dict, run_url: str, date: str,
-                 baseline_readable: bool, degraded: str, green: bool,
-                 lookup_ok: bool = True) -> str:
-    module = frag["module"]
-    tests = frag.get("failed_tests") or []
+def make_title(module: str, kind: str, subject: str, verdict: str) -> str:
+    """`… — {module} — {kind}: {subject} — {verdict}`, clamped to GitHub's cap.
+
+    The SUBJECT is what gets shortened, never the verdict: the title is where
+    the live state is read, and a package path is the one part that can be long.
+    """
+    prefix = TITLE_PREFIX_TMPL.format(module=module)
+    head, tail = f"{prefix} — {kind}: ", f" — {verdict}"
+    room = ISSUE_TITLE_MAX - len(head) - len(tail)
+    if len(subject) > room:
+        subject = subject[:max(0, room - 1)] + "…"
+    return clamp_title(f"{head}{subject}{tail}")
+
+
+ISOLATION_CLAIM_TEXT = (
+    "This is a repeat-run / test-isolation failure: the test passes in some "
+    "repetitions and fails in others when the suite runs 10x in one process, which "
+    "usually means leaked state between repetitions (package-level vars, shared temp "
+    "dirs, a singleton, an unclosed goroutine) rather than a concurrency bug. Do not "
+    "describe it as a race in the fix."
+)
+ISOLATION_STEP_TEXT = ("Bisect the repetition count (`-count=2`, `-count=5`) to find where "
+                       "isolation breaks.")
+
+
+def _test_lines(inc: dict, names: list[str]) -> list[str]:
+    runs = inc.get("runs")
+    lines = []
+    for t in names[:MAX_RENDERED_TESTS]:
+        note = _rep_note(*repetitions(runs, _root(t))) if t == _root(t) else "subtest"
+        lines.append(f"- `{t}` — {note}")
+    return lines
+
+
+def compose_body(inc: dict, frag: dict, state: dict, run_url: str, date: str,
+                 baseline_readable: bool, degraded: str, lookup_ok: bool = True,
+                 seen: bool = True, caveat: str = "") -> str:
+    """Body for one fingerprint issue. `seen=False` is the not-seen-tonight refresh."""
+    module, kind, subject = inc["module"], inc["kind"], inc["subject"]
+    fp = inc["fingerprint"]
+    verdict = incident_verdict(inc) if seen else f"not seen on {date}"
     warn = []
     if degraded:
         warn.append(f"🚨 **Degraded report** — {degraded}. Treat this module as UNVERIFIED, not clean.")
@@ -476,80 +712,138 @@ def compose_body(frag: dict, state: dict, run_url: str, date: str,
         warn.append(
             "🚨 **Dedup was unavailable** — the existing-issue lookup failed, so this "
             "issue was filed WITHOUT being able to confirm no duplicate exists. "
-            "Check for an older open issue for this module and close whichever is "
-            "redundant. The alert is delivered loudly rather than skipped: a missed "
-            "first night is worse than a duplicate you can see."
+            "Check for an older open issue with the same fingerprint and close "
+            "whichever is redundant. The alert is delivered loudly rather than "
+            "skipped: a missed first night is worse than a duplicate you can see."
         )
     if not baseline_readable and state.get("_had_issue"):
         warn.append(
             "⚠️ The previous state block was unreadable, so **first-seen was re-stamped** "
             "— the real first occurrence may be earlier than shown below."
         )
-    if frag.get("unattributed_failure") and not frag.get("fragment_missing"):
+    if seen and kind == "unattributed":
         warn.append(
             "⚠️ `go test` exited non-zero but no failing test, build failure, race "
             "banner, or test-timeout panic could be attributed. Read the raw stream "
             "artifact before assuming anything — this is the state the old workflow reported as if it were informative."
         )
-    if frag.get("non_json_lines"):
-        warn.append(
-            f"ℹ️ {frag['non_json_lines']} non-JSON line(s) in the stream were skipped."
-        )
+    if seen and frag.get("non_json_lines"):
+        warn.append(f"ℹ️ {frag['non_json_lines']} non-JSON line(s) in the stream were skipped.")
 
+    run_filter = f" -run '^{subject}$'" if kind == "test" else ""
     reproduce = (
         f"cd {frag.get('workdir') or '<workdir>'} && "
-        f"go test {frag.get('packages') or './...'} -race -count=10"
+        f"go test {frag.get('packages') or './...'} -race -count=10{run_filter}"
     )
     first_run = state.get("first_run") or run_url
     rows = [
         "| | |", "|---|---|",
-        f"| Verdict | {verdict_suffix(frag, green, date)} |",
-        f"| Data race detected | {'**yes**' if frag.get('had_data_race') else 'no'} |",
-        f"| Build failed | {'**yes**' if frag.get('build_failed') else 'no'} |",
-        f"| Package timed out | {'**yes**' if frag.get('timed_out') else 'no'} |",
+        f"| Verdict | {verdict} |",
+        f"| Kind | `{kind}` |",
+        f"| Subject | `{subject}` |",
         f"| First seen | {state.get('first_seen') or date} ([run]({first_run})) |",
         f"| Latest run | {date} ([run]({run_url})) |",
-        f"| Last green | {state.get('last_green') or 'never recorded'} |",
+        f"| Last night not seen | {state.get('last_green') or 'never recorded'} |",
         f"| Consecutive failing nights | {state.get('streak', 0)} |",
     ]
 
-    out = [f"Nightly `go test -race -count=10` tracking issue for **{module}** on `main`.", ""]
+    out = [
+        fingerprint_marker(fp),
+        f"Nightly `go test -race -count=10` tracking issue for **{module}** on `main`, "
+        f"one issue per failure fingerprint: `{fp}`.",
+        "",
+    ]
     if warn:
         out += warn + [""]
     out += rows + [""]
 
-    if tests:
+    nature: list[str] = []
+    steps: list[str] = []
+    tests = list(inc.get("tests") or [])
+
+    if not seen:
+        out += [f"## Not seen on {date}", "",
+                "The latest run did **not** reproduce this fingerprint. That is not proof "
+                "it is fixed — this is a repeat-run detector, and one quiet night is one "
+                "sample. Close the issue by hand once the fix has landed."
+                + (f" {caveat}" if caveat else ""), ""]
+        if tests:
+            out += ["Last recorded evidence (from the state block):", ""]
+            out += [f"- `{t}`" for t in tests[:MAX_RENDERED_TESTS]] + [""]
+        steps.append("If a fix landed, link it here and close this issue; if not, keep it "
+                     "open — the next failing night refreshes it in place.")
+    elif kind == "test":
+        shape, k, n = repetitions(inc.get("runs"), subject)
+        out += [f"## Failing test `{subject}`", ""] + _test_lines(inc, tests) + [""]
+        if shape == "every":
+            nature.append(
+                f"**Fails in every repetition it ran ({k} of {n}).** This is a plain "
+                "failure — a regression, or an environment problem such as a missing "
+                "binary, tool, file or network dependency — NOT leaked state between "
+                "repetitions. Do not bisect `-count` to look for an isolation bug."
+            )
+            steps.append(
+                f"Run it once (`-count=1 -run '^{subject}$'`): a test that fails every "
+                "repetition fails on the first one too. Read its first failure message in "
+                "the artifact."
+            )
+            steps.append("Check the environment first (binaries and tools the test shells "
+                         "out to), then the most recent change to the code under test.")
+        elif shape == "some":
+            nature.append(f"**Failed in {k} of {n} repetitions; no data race was attributed "
+                          f"to it.** {ISOLATION_CLAIM_TEXT}")
+            steps.append(ISOLATION_STEP_TEXT)
+        else:
+            nature.append(
+                "**Repetition counts were not recorded for this test**, so this report "
+                "cannot tell a plain failure (fails every repetition) from an "
+                "isolation-shaped one (fails in some). No data race was attributed to it."
+            )
+            steps.append(f"Count this test's `pass` and `fail` events in the `race-raw-{module}` "
+                         "artifact: failing every repetition means a plain failure, failing in "
+                         "some means isolation.")
+    elif kind == "tests":
+        groups = inc.get("groups") or {}
         shown = tests[:MAX_RENDERED_TESTS]
         out += [
-            f"## Failing tests ({len(tests)} distinct, deduped from "
+            f"## Failing tests ({len(tests)} distinct top-level tests, from "
             f"{frag.get('fail_events', 0)} fail events across 10 repetitions)",
             "",
-        ] + [f"- `{t}`" for t in shown]
+        ] + _test_lines(inc, shown)
         if len(tests) > len(shown):
             out += [
                 "",
                 f"_… and {len(tests) - len(shown)} more (list capped at "
                 f"{MAX_RENDERED_TESTS} to stay inside GitHub's {ISSUE_BODY_MAX}-char "
-                f"body limit). A failure count this large usually means one shared "
-                f"fixture broke the whole package, not {len(tests)} separate bugs — "
-                f"the complete list is in the `race-raw-{module}` artifact._",
+                f"body limit) — the complete list is in the `race-raw-{module}` artifact._",
             ]
         out += [""]
-    elif not green and frag.get("timed_out"):
-        out += ["## Failing tests", "",
-                "_None reported — the package hit its `-timeout` before any test "
-                "reported a failure. See **Package timeout** below._", ""]
-    elif not green:
-        out += ["## Failing tests", "", "_None could be attributed — see the warnings above._", ""]
-
-    timeout_pkgs = frag.get("timeout_packages") or []
-    if frag.get("timed_out"):
+        shapes = [repetitions(inc.get("runs"), t)[0] for t in tests]
+        every, some = shapes.count("every"), shapes.count("some")
+        nature.append(
+            f"**{len(tests)} top-level tests failed** — more than {MAX_TEST_INCIDENTS}, so "
+            "they share this one issue instead of one each. A count this large usually "
+            f"means one shared fixture or setup step broke many tests, not {len(tests)} "
+            "separate bugs."
+        )
+        nature.append(
+            f"{every} failed in every repetition they ran (plain failures, not leaked "
+            f"state); {some} failed in only some repetitions (isolation-shaped); "
+            f"{len(tests) - every - some} without recorded counts."
+        )
+        steps.append("Find the FIRST failure in the artifact: a broken shared fixture "
+                     "usually fails every test after it.")
+        if sum(len(v) for v in groups.values()) > len(tests):
+            steps.append("Failing subtests are listed in the artifact; this body lists "
+                         "top-level tests only.")
+    elif kind == "timeout":
+        tp = inc.get("timeout") or {}
+        running = list(tp.get("running_tests") or [])
         out += ["## Package timeout", ""]
-        if not timeout_pkgs:
+        if not tp:
             out += ["_The timed-out package could not be identified — read the raw "
                     "stream artifact._", ""]
-        for tp in timeout_pkgs:
-            running = list(tp.get("running_tests") or [])
+        else:
             out += [f"`{tp.get('package') or '<unknown package>'}` hit "
                     f"`-timeout {tp.get('after') or '?'}`. Tests still running at the "
                     f"deadline ({len(running)}):", ""]
@@ -562,45 +856,20 @@ def compose_body(frag: dict, state: dict, run_url: str, date: str,
         out += ["_Running at the deadline is not the same as failing: these tests were "
                 "in flight when the clock ran out, which makes them the first ones to "
                 "measure, not necessarily the slow ones._", ""]
-
-    if frag.get("race_tests"):
-        out += ["**Race banner attributed to:** "
-                + ", ".join(f"`{t}`" for t in frag["race_tests"]), ""]
-
-    # Each paragraph is gated on its OWN evidence (#3177). The isolation
-    # narrative used to be the unconditional `else`, so a timeout and an
-    # unattributed failure were both confidently described as leaked state.
-    nature: list[str] = []
-    steps: list[str] = []
-    if green:
-        nature.append(
-            "The latest run **passed**. This body does not re-diagnose the earlier "
-            "failure — see the run linked under *First seen*. One green night does not "
-            "prove it fixed."
-        )
-    if frag.get("had_data_race"):
-        nature.append("A real data race was detected. This is a concurrency bug, not a flake — "
-                      "the report below is reproducible evidence, not a sampling artifact.")
-        steps.append("Read the race report in the artifact: its two stacks name the "
-                     "conflicting accesses.")
-    if frag.get("build_failed"):
-        nature.append("The package failed to BUILD under `-race`. No test result exists for "
-                      "this run.")
-        steps.append("Read the build error in the artifact; no test ran.")
-    if frag.get("timed_out"):
-        pkgs = ", ".join(f"`{tp.get('package')}`" for tp in timeout_pkgs) or "a package"
         para = (
-            f"**Package timeout.** {pkgs} ran past `go test`'s `-timeout` and the test "
-            "binary was killed with `panic: test timed out`. The timeout itself is a time "
-            "budget being exceeded, not a failing assertion."
+            f"**Package timeout.** `{subject}` ran past `go test`'s `-timeout` and the "
+            "test binary was killed with `panic: test timed out`. The timeout itself is a "
+            "time budget being exceeded, not a failing assertion."
         )
-        # Only when nothing else failed: a run can time out in one package while a
-        # test fails in another (or in an earlier repetition), and then the
-        # isolation paragraph below applies — this one must not contradict it.
-        if not frag.get("failed_tests"):
+        # Only when no test failed anywhere in the module tonight: otherwise this
+        # sentence would contradict the test issues filed alongside it.
+        if not _str_list(frag.get("failed_tests")):
             para += (" No test reported a failure, so it is NOT evidence of leaked state "
                      "between repetitions. Do not bisect `-count` to look for an "
                      "isolation bug.")
+        else:
+            para += (" Tests that did fail tonight are tracked in their own fingerprint "
+                     "issues.")
         nature.append(para)
         steps.append(
             f"Find where the time went: in the `race-raw-{module}` artifact, compare "
@@ -608,19 +877,18 @@ def compose_body(frag: dict, state: dict, run_url: str, date: str,
             "`pass`/`fail` events by `Elapsed`. Start with the tests listed as running "
             "at the deadline."
         )
-    if frag.get("failed_tests") and not frag.get("had_data_race"):
-        nature.append(
-            "**No data race was detected.** This is a repeat-run / test-isolation failure: "
-            "the test fails when the suite runs 10x in one process, which usually means "
-            "leaked state between repetitions (package-level vars, shared temp dirs, a "
-            "singleton, an unclosed goroutine) rather than a concurrency bug. Do not "
-            "describe it as a race in the fix."
-        )
-        steps.append("Bisect the repetition count (`-count=2`, `-count=5`) to find where "
-                     "isolation breaks.")
-    if not green and not nature:
-        # Unattributed (or a missing fragment): say what the warning says, and
-        # nothing more. Any specific diagnosis here would be a guess.
+    elif kind == "data-race":
+        if tests:
+            out += ["**Race banner attributed to:** " + ", ".join(f"`{t}`" for t in tests), ""]
+        nature.append("A real data race was detected. This is a concurrency bug, not a flake — "
+                      "the report below is reproducible evidence, not a sampling artifact.")
+        steps.append("Read the race report in the artifact: its two stacks name the "
+                     "conflicting accesses.")
+    elif kind == "build":
+        nature.append("The package failed to BUILD under `-race`. No test result exists for "
+                      "this run, so no other fingerprint of this module was evaluated tonight.")
+        steps.append("Read the build error in the artifact; no test ran.")
+    else:  # unattributed / no-result: say what the warning says, nothing more.
         nature.append(
             "**Cause NOT attributed.** `go test` failed, but nothing in the stream "
             "identified why — no failing test, build failure, race banner, or timeout "
@@ -629,9 +897,11 @@ def compose_body(frag: dict, state: dict, run_url: str, date: str,
         )
         steps.append("Read the raw stream artifact for a `panic:`, a signal, or a `FAIL` "
                      "line, and attribute the cause before choosing a fix.")
-    out += ["## What this is", ""]
-    for para in nature:
-        out += [para, ""]
+
+    if nature:
+        out += ["## What this is", ""]
+        for para in nature:
+            out += [para, ""]
 
     triage = [f"Reproduce: `{reproduce}`", *steps,
               f"Full evidence — race report / panic / build error — is in the "
@@ -640,10 +910,11 @@ def compose_body(frag: dict, state: dict, run_url: str, date: str,
     out += [f"{i}. {step}" for i, step in enumerate(triage, 1)]
     out += [
         "",
-        "This issue is **refreshed in place** every night (silent body edit — GitHub does "
-        "not notify on title/body edits). It is deliberately NOT auto-closed: one green "
-        "night does not prove a nightly failure is fixed. Close it by hand once the "
-        "fix lands.",
+        "This issue tracks ONE failure fingerprint; other failures of this module are "
+        "tracked in their own issues. It is **refreshed in place** every night (silent "
+        "body edit — GitHub does not notify on title/body edits), including nights it "
+        "does not recur. It is deliberately NOT auto-closed: one quiet night does not "
+        "prove a nightly failure is fixed. Close it by hand once the fix lands.",
         "",
         "Auto-filed by [`.github/workflows/nightly-race.yaml`]"
         "(https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/.github/workflows/nightly-race.yaml).",
@@ -652,7 +923,8 @@ def compose_body(frag: dict, state: dict, run_url: str, date: str,
     # The state block is appended AFTER clamping, never clamped itself: a
     # half-truncated `<!-- race-state: ... ` would be unparseable, and an
     # unparseable baseline makes the next night re-stamp first-seen and lose the
-    # evidence of when this started. Prose is what gets cut; state survives.
+    # evidence of when this started. Prose is what gets cut; state survives —
+    # and so does the fingerprint marker, because truncation cuts from the END.
     return _clamp_body("\n".join(out), render_state(state))
 
 
@@ -684,95 +956,173 @@ def clamp_title(title: str) -> str:
 # ── per-module driver ────────────────────────────────────────────────────────
 
 
-def handle_module(gh: Gh, repo: str, module: str, frag: dict, degraded: str,
-                  run_url: str, do_file: bool, label_ok: bool) -> str:
-    """Files/refreshes this module's issue; returns its step-summary markdown."""
-    date = today()
+def _is_legacy_for(row: dict, module: str) -> bool:
+    """A pre-fingerprint per-module issue: right title prefix, no marker."""
     prefix = TITLE_PREFIX_TMPL.format(module=module)
-    green = not frag.get("failed")
+    title = str(row.get("title") or "")
+    if not (title == prefix or title.startswith(prefix + " —")):
+        return False
+    return body_fingerprint(str(row.get("body") or "")) is None
 
-    # On the FIRST scheduled run after this lands, `num` is legitimately empty:
-    # the four existing open issues (#1213/#1230/#1258/#1263) are titled
-    # "Nightly race detector flake — …" and do not match the new prefix, so a
-    # fifth issue is filed BY DESIGN. The post-merge sequence that collapses
-    # them is in the module docstring — a reader seeing issue #5 appear should
-    # know it is planned, not a regression of the very bug this fixes.
-    num, lookup_ok = find_issue(gh, repo, prefix, label_ok) if do_file else ("", True)
-    prev_body = read_body(gh, repo, num) if num else ""
-    prev = parse_state(prev_body)
-    baseline_readable = prev is not None
-    prev = prev or {}
 
-    state = {
-        "module": module,
-        "first_seen": prev.get("first_seen") or ("" if green else date),
+def _incident_state(inc: dict, prev: dict, run_url: str, date: str, had_issue: bool) -> dict:
+    kind = inc["kind"]
+    return {
+        "module": inc["module"],
+        "first_seen": prev.get("first_seen") or date,
         # PRESERVE the first-seen run URL across refreshes: it is the only record
-        # of when this started, and overwriting it nightly is how "four identical
-        # issues" became indistinguishable from "one long-running failure".
-        "first_run": prev.get("first_run") or ("" if green else run_url),
+        # of when this started. Per fingerprint, so a DIFFERENT failure gets its
+        # own first-seen instead of inheriting an unrelated one (#2977).
+        "first_run": prev.get("first_run") or run_url,
         "last_run": run_url,
-        "last_green": date if green else prev.get("last_green", ""),
-        "streak": 0 if green else int(prev.get("streak", 0)) + 1,
-        "had_data_race": frag.get("had_data_race"),
-        "build_failed": frag.get("build_failed"),
-        "unattributed": frag.get("unattributed_failure"),
-        "timed_out": frag.get("timed_out"),
-        "tests": frag.get("failed_tests") or prev.get("tests", []),
-        "_had_issue": bool(num),
+        "last_green": prev.get("last_green", ""),
+        "streak": int(prev.get("streak", 0)) + 1,
+        "had_data_race": kind == "data-race",
+        "build_failed": kind == "build",
+        "unattributed": kind in ("unattributed", "no-result"),
+        "timed_out": kind == "timeout",
+        # Tonight's evidence only — never carried over from another night.
+        "tests": list(inc.get("tests") or []),
+        "_had_issue": had_issue,
     }
 
-    title = clamp_title(f"{prefix} — {verdict_suffix(frag, green, date)}")
-    body = compose_body(frag, state, run_url, date, baseline_readable, degraded,
-                        green, lookup_ok)
 
-    summary = [f"### {module} — {verdict_suffix(frag, green, date)}"]
+def handle_module(gh: Gh, repo: str, module: str, frag: dict, degraded: str,
+                  run_url: str, do_file: bool, label_ok: bool) -> str:
+    """Files/refreshes this module's fingerprint issues; returns step-summary markdown."""
+    date = today()
+    incidents = derive_incidents(frag)
+    tonight = {i["fingerprint"] for i in incidents}
+    # Nights that could not measure the OTHER fingerprints at all. Telling their
+    # issues "not seen" would be the silent-clean direction.
+    inconclusive = bool(frag.get("fragment_missing") or frag.get("build_failed")
+                        or any(i["kind"] == "unattributed" for i in incidents))
+
+    head = (f"### {module} — {len(incidents)} incident(s)" if incidents
+            else f"### {module} — GREEN ({date})")
+    summary = [head]
     if degraded:
         summary.append(f"🚨 {degraded}")
-    if frag.get("failed_tests"):
-        summary.append("Failing: " + ", ".join(f"`{t}`" for t in frag["failed_tests"]))
-    for tp in frag.get("timeout_packages") or []:
-        summary.append(f"Timed out: `{tp.get('package')}` after `{tp.get('after')}`")
+    for inc in incidents:
+        summary.append(f"- `{inc['kind']}: {inc['subject']}` — {incident_verdict(inc)}")
 
     if not do_file:
         summary.append("_(summary only — DO_FILE!=true, issues untouched)_")
         return "\n".join(summary)
 
-    if green and not num and lookup_ok:
-        summary.append("_(green, no open issue — nothing to do)_")
-        return "\n".join(summary)
-    if green and not lookup_ok:
-        # Nothing to deliver on a green night, but the failed lookup still means
-        # dedup is broken; main() reds the run off gh.failures.
-        summary.append("_(green, but the issue lookup failed — dedup unverified)_")
-        return "\n".join(summary)
+    rows, lookup_ok = list_open_issues(gh, repo, label_ok, tonight)
+    by_fp: dict[str, dict] = {}
+    duplicates: list[str] = []
+    legacy: list[str] = []
+    for row in sorted(rows, key=lambda r: int(r["number"]) if str(r.get("number")).isdigit() else 0):
+        fp = body_fingerprint(str(row.get("body") or ""))
+        if fp is None:
+            if _is_legacy_for(row, module):
+                legacy.append(f"#{row.get('number')}")
+            continue
+        if split_fingerprint(fp)[0] != module:
+            continue
+        if fp in by_fp:
+            duplicates.append(f"#{row.get('number')} (same fingerprint as #{by_fp[fp].get('number')})")
+            continue
+        by_fp[fp] = row  # the OLDEST open issue for a fingerprint is canonical
 
     labels = ["bug", "ci", "P2"] + ([LABEL] if label_ok else [])
-    if num:
-        # EDIT, never comment: a nightly comment on a known-failing test is muted
-        # within a week, and a muted alert is the same as no alert.
-        print(f"refreshing #{num} for {module} (silent body edit)")
-        ok = gh.must(
-            ["issue", "edit", num, "--repo", repo, "--title", title, "--body", body],
-            f"refreshing issue #{num} for {module}",
-        )
+    for inc in incidents:
+        fp = inc["fingerprint"]
+        row = by_fp.get(fp)
+        num = str(row.get("number")) if row else ""
+        prev = parse_state(str(row.get("body") or "")) if row else None
+        baseline_readable = prev is not None
+        state = _incident_state(inc, prev or {}, run_url, date, bool(num))
+        verdict = incident_verdict(inc)
+        title = make_title(module, inc["kind"], inc["subject"], verdict)
+        body = compose_body(inc, frag, state, run_url, date, baseline_readable, degraded,
+                            lookup_ok=lookup_ok or bool(num))
+        if num:
+            # EDIT, never comment: a nightly comment on a known-failing test is
+            # muted within a week, and a muted alert is the same as no alert.
+            print(f"refreshing #{num} for {fp} (silent body edit)")
+            ok = gh.must(
+                ["issue", "edit", num, "--repo", repo, "--title", title, "--body", body],
+                f"refreshing issue #{num} for {fp}",
+            )
+            summary.append(
+                f"  - Refreshed issue #{num} (silent)." if ok
+                else f"  - ❌ FAILED to refresh issue #{num} — the alert did NOT land."
+            )
+        else:
+            # Dedup could not be confirmed -> file anyway. A duplicate is visible
+            # and closable; a skipped first night is silence, which is the failure
+            # mode this workflow exists to remove. The run still goes red.
+            print(f"filing new tracking issue for {fp}"
+                  + ("" if lookup_ok else " (WITHOUT a trustworthy dedup lookup)"))
+            args = ["issue", "create", "--repo", repo, "--title", title,
+                    "--assignee", "vencil", "--body", body]
+            for lab in labels:
+                args += ["--label", lab]
+            ok = gh.must(args, f"filing the tracking issue for {fp}")
+            summary.append(
+                "  - Filed a new tracking issue." if ok
+                else "  - ❌ FAILED to file the tracking issue — the alert did NOT land."
+            )
+
+    unseen = [(fp, row) for fp, row in by_fp.items() if fp not in tonight]
+    if unseen and inconclusive:
         summary.append(
-            f"Refreshed issue #{num} (silent)." if ok
-            else f"❌ FAILED to refresh issue #{num} — the alert did NOT land."
+            "Not re-evaluated tonight (this run could not measure them): "
+            + ", ".join(f"#{row.get('number')}" for _, row in unseen)
         )
-    else:
-        # Dedup could not be confirmed -> file anyway. A duplicate is visible and
-        # closable; a skipped first night is silence, which is the failure mode
-        # this workflow exists to remove. The run still goes red.
-        print(f"filing new tracking issue for {module}"
-              + ("" if lookup_ok else " (WITHOUT a trustworthy dedup lookup)"))
-        args = ["issue", "create", "--repo", repo, "--title", title,
-                "--assignee", "vencil", "--body", body]
-        for lab in labels:
-            args += ["--label", lab]
-        ok = gh.must(args, f"filing the tracking issue for {module}")
+    elif unseen:
+        caveat = ""
+        if any(i["kind"] == "timeout" for i in incidents):
+            caveat = ("Tonight's run also hit a package timeout, so tests scheduled after "
+                      "the deadline did not run — absence is weaker evidence than usual.")
+        for fp, row in unseen:
+            num = str(row.get("number"))
+            prev = parse_state(str(row.get("body") or ""))
+            p = prev or {}
+            _, kind, subject = split_fingerprint(fp)
+            inc = {"module": module, "kind": kind, "subject": subject, "fingerprint": fp,
+                   "tests": p.get("tests", [])}
+            state = {
+                "module": module,
+                "first_seen": p.get("first_seen", ""),
+                "first_run": p.get("first_run", ""),
+                "last_run": run_url,
+                "last_green": date,
+                "streak": 0,
+                "had_data_race": p.get("had_data_race", 0),
+                "build_failed": p.get("build_failed", 0),
+                "unattributed": p.get("unattributed", 0),
+                "timed_out": p.get("timed_out", 0),
+                "tests": p.get("tests", []),
+                "tests_truncated": p.get("tests_truncated", 0),
+                "_had_issue": True,
+            }
+            title = make_title(module, kind, subject, f"not seen on {date}")
+            body = compose_body(inc, frag, state, run_url, date, prev is not None, "",
+                                seen=False, caveat=caveat)
+            print(f"refreshing #{num} for {fp} (not seen tonight, silent body edit)")
+            ok = gh.must(
+                ["issue", "edit", num, "--repo", repo, "--title", title, "--body", body],
+                f"refreshing issue #{num} for {fp} (not seen)",
+            )
+            summary.append(
+                f"- `{kind}: {subject}` — not seen tonight → Refreshed issue #{num} (silent)."
+                if ok else f"- ❌ FAILED to refresh issue #{num} (not seen) — the alert did NOT land."
+            )
+
+    if not incidents and not by_fp and lookup_ok:
+        summary.append("_(green, no open issue — nothing to do)_")
+    if not lookup_ok:
+        summary.append("_(the issue lookup failed — dedup unverified this run)_")
+    if duplicates:
+        summary.append("Duplicate fingerprint issues (close by hand): " + ", ".join(duplicates))
+    if legacy:
         summary.append(
-            "Filed a new tracking issue." if ok
-            else "❌ FAILED to file the tracking issue — the alert did NOT land."
+            "Legacy per-module issue(s) with no fingerprint marker, left untouched — "
+            "close by hand once the fingerprint issues cover them: " + ", ".join(legacy)
         )
     return "\n".join(summary)
 
@@ -827,7 +1177,7 @@ def main(argv: list[str] | None = None, runner=None) -> int:
         print(
             "::error title=Race report::"
             f"{len(gh.failures)} issue write(s) FAILED: {'; '.join(gh.failures)}. "
-            "The tracking issue does NOT reflect this run."
+            "The tracking issues do NOT reflect this run."
         )
         ok = False
     if gh.degradations:
@@ -839,7 +1189,7 @@ def main(argv: list[str] | None = None, runner=None) -> int:
     if not label_ok:
         print(
             f"::error title=Race report::alert delivered WITHOUT the '{LABEL}' label — "
-            "dedup is degraded and WILL duplicate issues until the label is fixed."
+            "lookup is degraded and WILL duplicate issues until the label is fixed."
         )
         ok = False
     return 0 if ok else 1
