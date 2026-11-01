@@ -50,6 +50,7 @@ func TestResolve_SeveritySuffixGrammar(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cfg := &ThresholdConfig{
+				Dimensions:        map[string][]string{"mysql_connections": {"db"}},
 				Defaults:          map[string]float64{"mysql_connections": 80},
 				OptionalOverrides: []string{"oracle_wait_time_rate"},
 				Tenants: map[string]map[string]ScheduledValue{

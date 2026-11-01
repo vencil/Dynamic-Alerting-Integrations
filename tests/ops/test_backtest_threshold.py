@@ -2125,6 +2125,9 @@ def _dirs(tmp_path, before, after):
 
 
 _D = {"_defaults.yaml": _CRIT_DEFAULTS}
+# The dimensional key below is served only with its label declared (#3475);
+# undeclared, the trees serve no row while `--tenant` cannot tell.
+_DD = {"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\n" + _CRIT_DEFAULTS}
 
 
 def _tenant_file(tenant, body):
@@ -2149,8 +2152,8 @@ class TestTenantAndTreesAgree:
                              "--old-value", old, "--new-value", new,
                              "--prometheus", p.url, "--json")
         tenant = self._rows(out, *fields)
-        cur, base = _dirs(tmp_path, {**_D, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{old}\"\n")},
-                          {**_D, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{new}\"\n")})
+        cur, base = _dirs(tmp_path, {**_DD, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{old}\"\n")},
+                          {**_DD, "db-a.yaml": _tenant_file("db-a", f"    '{key}': \"{new}\"\n")})
         _rc, out = _run_main(cli_argv, capsys, "--config-dir", cur, "--baseline", base,
                              "--prometheus", p.url, "--json")
         assert tenant == self._rows(out, *fields) and tenant, (tenant, out.out)
@@ -2721,6 +2724,21 @@ class TestBacktestWorkflow:
         assert (res.returncode == 0) is has_confd, res.stderr
         got, _ = self._check(tmp_path)
         assert (got == "has_confd=true\n") is has_confd
+
+
+@pytest.mark.parametrize("key,want", [
+    ('mysql_connections{db="a"}', ["db"]),
+    ('mysql_connections{db=~"a|b"}', ["db_re"]),  # a regex matcher serves `<label>_re`
+    ("mysql_connections{env='p', db=~\"a=b,c\"}", ["db_re", "env"]),
+])
+def test_written_tree_declares_the_served_label_names(tmp_path, key, want):
+    """#3475: `--tenant` declares the dimensional key's labels as the row
+    serves them, so the exporter serves the value it backtests."""
+    import yaml
+    bt._written_tree(str(tmp_path), key, ("70",))
+    root = yaml.safe_load((tmp_path / "_defaults.yaml").read_text(encoding="utf-8"))
+    assert root["dimensions"]["mysql_connections"] == want
+    assert root["dimensions"]["container_cpu"] == ["version"]  # the shipped declaration rides along
 
 
 # ── #3159: impact_pct / impact_kind ───────────────────────────────────────

@@ -4,13 +4,13 @@ The shipped rule packs normalise thresholds with `max by(tenant)(user_threshold{
 the dimension labels are dropped there, so a tenant's `<base>{label="v"}` changes
 the whole tenant's threshold (the maximum of the dimension values and the base),
 and `disable` on it only stops that one row from being served, never silencing
-the one dimension. The one dimension read per label is `version`
-(ADR-024). Until a rule pack judges per dimension (#3475), a shipped example of a
-dimensional key teaches a behaviour the platform does not have — so the shipped
-conf.d trees and the rule-pack headers carry none.
-
-When #3475 makes a pack read a dimension per label, allow that `(base, label)`
-here rather than deleting the test.
+the one dimension. Which (base, label) pairs a pack does read per label is
+the threshold registry's `dimensions` (pinned to the packs by
+test_dimension_registry.py, #3475) — today `version` on container cpu/memory
+(ADR-024). A shipped example of any other dimensional key teaches a behaviour
+the platform does not have, so the shipped conf.d trees and the rule-pack
+headers carry none. When a pack starts reading a dimension, the registry
+declares it and this test follows — nothing to edit here.
 """
 from __future__ import annotations
 
@@ -31,17 +31,30 @@ _SHIPPED_CONFD = (
     "rule-packs/recipes/examples/conf.d",
 )
 
-# Labels a shipped rule pack reads per value (ADR-024's `version`).
-_READ_PER_LABEL = frozenset({"version"})
+_REGISTRY = _ROOT / "rule-packs" / "threshold-registry.yaml"
+
+
+def _read_per_label() -> "dict[str, frozenset[str]]":
+    """base -> labels a shipped rule pack reads per value: the registry's
+    `dimensions` (the SSOT, #3475)."""
+    doc = yaml.safe_load(_REGISTRY.read_text(encoding="utf-8")) or {}
+    return {k: frozenset(e["dimensions"]) for k, e in (doc.get("keys") or {}).items()
+            if e.get("dimensions")}
+
+
+_READ_PER_LABEL = _read_per_label()
 
 _DIM_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\{(.*)\}$")
-_LABEL = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=~?")
+_LABEL = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*(=~?)")
 # A dimensional key written in a rule-pack header comment as a YAML key, quoted or not.
 _HEADER_DIM = re.compile(r"""^#.*?["']?([A-Za-z_][A-Za-z0-9_]*)\{([^}]*)\}["']?\s*:""")
 
 
 def _labels(selector: str) -> set[str]:
-    return set(_LABEL.findall(selector))
+    """The label names the key's row SERVES: a regex matcher `l=~"…"` is
+    served as `l_re` (the exporter's RegexLabelSuffix), so declaring `l`
+    does not cover it."""
+    return {name + ("_re" if op == "=~" else "") for name, op in _LABEL.findall(selector)}
 
 
 def _keys(node, path=()):
@@ -65,7 +78,7 @@ def _confd_files() -> list[Path]:
 
 def _offending(key: str) -> bool:
     m = _DIM_KEY.match(key)
-    return bool(m) and not _labels(m.group(2)) <= _READ_PER_LABEL
+    return bool(m) and not _labels(m.group(2)) <= _READ_PER_LABEL.get(m.group(1), frozenset())
 
 
 def test_the_scan_sees_the_shipped_trees():
@@ -89,7 +102,9 @@ def test_the_header_pattern(line, hit):
     ('redis_connected_clients{instance="redis-orders:6379"}', True),
     ("oracle_tablespace_used_percent{tablespace_name=~'SYS.*'}", True),
     ('container_cpu{version="v2"}', False),
+    ('container_cpu{version=~"v.*"}', True),  # served as version_re
     ('container_cpu{version="v2", pod="a"}', True),
+    ('mysql_connections{version="v2"}', True),  # version is read on container cpu/memory only
     ("container_cpu", False),
 ])
 def test_the_predicate(key, offends):
@@ -115,7 +130,7 @@ def test_rule_pack_headers_show_no_dimensional_key():
             if not line.startswith("#"):
                 break  # the leading comment header only
             m = _HEADER_DIM.match(line)
-            if m and not _labels(m.group(2)) <= _READ_PER_LABEL:
+            if m and not _labels(m.group(2)) <= _READ_PER_LABEL.get(m.group(1), frozenset()):
                 found.append(f"{f.relative_to(_ROOT)}:{n}: {line.strip()}")
     assert not found, (
         "a rule-pack header shows a dimensional key the pack does not read per "

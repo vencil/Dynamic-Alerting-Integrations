@@ -22,7 +22,10 @@ import (
 // a legacy twin), custom alerts, a schedule — with tenant-a over the
 // cardinality cap, so the sorted-and-cut path runs with keys too.
 var keyedTree = map[string]string{
-	"conf.d/_defaults.yaml": `defaults:
+	"conf.d/_defaults.yaml": `dimensions:
+  mysql_threads_running: [version]
+  redis_queue_length: [queue]
+defaults:
   mysql_connections: 80
   mysql_threads_running: 30
   redis_memory: 70
@@ -178,6 +181,7 @@ func nilIfEmpty(m map[string]string) map[string]string {
 func TestResolveAtWithKeys_ReportsTheServedKey(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
+		Dimensions:          map[string][]string{"redis_queue_length": {"queue"}},
 		Defaults:            map[string]float64{"mysql_connections": 80, "mysql_threads_running": 30},
 		OptionalOverrides:   []string{"kafka_lag", "redis_queue_length"}, // a dimensional key's base is named (ADR-038 §11)
 		MaxMetricsPerTenant: -1,

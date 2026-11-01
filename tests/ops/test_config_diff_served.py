@@ -469,9 +469,11 @@ def test_a_row_lost_to_a_non_finite_root_default_is_marked_not_served(tmp_path, 
 
 def test_a_disabled_key_still_reads_as_written(tmp_path, da_guard):
     """值為 disable 的維度鍵不標 not served，toggled 的判斷不變。"""
+    dims = "dimensions:\n  mysql_connections: [schema]\n" + _DEFAULTS  # #3475
     b, p = _served(tmp_path, da_guard,
                    {"t": {'mysql_connections{schema="x"}': "disable"}},
-                   {"t": {'mysql_connections{schema="x"}': "70"}})
+                   {"t": {'mysql_connections{schema="x"}': "70"}},
+                   base_defaults=dims, pr_defaults=dims)
     got = _by_key(_served_metric(b, p)["t"])['mysql_connections{schema="x"}']
     assert (got["old"], got["change"]) == ("disable", "toggled")
     assert "not_served" not in got

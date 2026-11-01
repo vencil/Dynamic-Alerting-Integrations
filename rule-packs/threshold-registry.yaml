@@ -107,6 +107,8 @@ keys:
     desc: Container CPU % of limit (weakest link)
     metric_class: saturation
     chart_default: true
+    dimensions:
+    - version
   container_cpu_throttle:
     pack: kubernetes
     tier: defaults
@@ -124,6 +126,8 @@ keys:
     desc: Container memory % of limit (weakest link)
     metric_class: saturation
     chart_default: true
+    dimensions:
+    - version
   pg_connections:
     pack: postgresql
     tier: defaults

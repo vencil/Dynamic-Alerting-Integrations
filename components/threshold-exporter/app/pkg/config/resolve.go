@@ -25,17 +25,6 @@ const versionLabelPattern = `^[a-z0-9][a-z0-9._-]*$`
 
 var versionLabelRe = regexp.MustCompile(versionLabelPattern)
 
-// pilotVersionMetrics is the Phase-1 allow-list of "<component>/<metric>"
-// identities on which a `version` dimensional label is in scope (ADR-024
-// OQ-6 component scoping = rule-pack-kubernetes container cpu/memory). A
-// version label on any other metric risks cross-pack double-count
-// (a non-pilot pack's `sum by(tenant)` would fan across versions) and is
-// flagged so the guard can reject it before it reaches a shared series.
-var pilotVersionMetrics = map[string]bool{
-	"container/cpu":    true,
-	"container/memory": true,
-}
-
 // ResolveStats carries side-channel observability data for ResolveAtWithStats
 // (issue #652). The runtime per-tenant cardinality cap at resolve.go silently
 // truncates the result slice when a tenant exceeds max_metrics_per_tenant;
@@ -215,7 +204,7 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 		// and the cardinality sort below.
 		result = append(result, c.resolveBaseRows(tenant, canonDefaults, canonOverrides, now, collect, logf, rec)...)
 		result = append(result, c.resolveCriticalRows(tenant, canonDefaults, canonOverrides, now, collect, logf, rec)...)
-		result = append(result, c.resolveDimensionalRows(tenant, canonDefaults, canonOptional, canonOverrides, now, collect, logf, rec)...)
+		result = append(result, c.resolveDimensionalRows(tenant, canonDefaults, canonOverrides, now, collect, logf, rec)...)
 		// Phase 2C (#1189): declared-without-value keys — emitted ONLY when the
 		// tenant supplied a value. Must stay inside this segment: the
 		// cardinality guard below measures result[startIdx:] exactly once, so a
@@ -816,17 +805,16 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 // its metric label. With that default to fall back to, a lapsed `expires:`
 // override of the key is treated as absent, as resolveBaseRows does.
 //
-// ADR-038 §11: a tenant's dimensional key is served only when the platform
-// names its base — valued in defaults, declared in optional_overrides — or
-// the root `defaults:` writes the key itself, the same membership a flat key
-// needs. A key whose base the platform does not name (a misspelt base) has
-// no row and is not claimed, so it is unconsumed: the shared key verdict
-// reads it as unread, as it does a misspelt flat key.
-func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[string]float64, declared map[string]struct{}, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
+// ADR-038 §11 (#3475): a dimensional key — the tenant's or a root default —
+// is served only when every label of its selector is declared under
+// `dimensions:` for its base (dimensionDeclared). Any other (a misspelt base,
+// a label no rule pack keeps) has no row and is not claimed, so it is
+// unconsumed: the shared key verdict reads it as unread.
+func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for key, v := range defaults {
 		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !isDimensionalKey(key) ||
-			baseRowsSkipKey(key) {
+			baseRowsSkipKey(key) || !dimensionDeclared(key, c.Dimensions) {
 			continue
 		}
 		// Its parse failure is warnUnparsedRootDims' line, once per resolve.
@@ -839,8 +827,8 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		if baseRowsSkipKey(key) { // every `_` key (#3045)
 			continue
 		}
-		if !dimensionalBaseNamed(key, defaults, declared) {
-			continue // ADR-038 §11: unconsumed, as a flat key the platform does not name
+		if !dimensionDeclared(key, c.Dimensions) {
+			continue // ADR-038 §11 (#3475): a label `dimensions:` does not name — unconsumed
 		}
 		if rec != nil {
 			rec.claim(key) // #3378
@@ -851,21 +839,6 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		rows = c.appendDimensionalRow(rows, tenant, key, sv, now, sink, logf, rec)
 	}
 	return rows
-}
-
-// dimensionalBaseNamed reports whether the platform names dimensional key's
-// base (canonical spelling): valued in defaults, declared, or the root
-// `defaults:` writing the key itself.
-func dimensionalBaseNamed(key string, defaults map[string]float64, declared map[string]struct{}) bool {
-	if _, own := defaults[key]; own {
-		return true
-	}
-	base := key[:strings.Index(key, "{")]
-	if _, valued := defaults[base]; valued {
-		return true
-	}
-	_, ok := declared[base]
-	return ok
 }
 
 func discardLogf(string, ...any) {}
@@ -1657,7 +1630,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			// `_routing` key the generator does not read, a `_critical` or
 			// dimensional key whose base has no platform value — is the shared
 			// key verdict's; only the value checks are judged here.
-			shape, baseKey := overrideKeyShape(canonKey)
+			shape, _ := overrideKeyShape(canonKey)
 			if shape == shapeReserved {
 				// #3227: a value the exporter's reader ignores (`_silent_mode:
 				// purple`) is refused where it is written, by that reader's own
@@ -1684,7 +1657,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 			// check, judged whatever the base.
 			if shape == shapeDimensional {
 				_, customLabels, regexLabels := parseKeyWithLabels(canonKey)
-				versionLabels(validateVersionLabel(tenant, canonKey, baseKey, customLabels, regexLabels))
+				versionLabels(validateVersionLabel(tenant, canonKey, customLabels, regexLabels))
 			}
 		}
 	}
@@ -1706,7 +1679,7 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 //
 // The Go side is intentionally observability-grade: the exporter logs these
 // at config load so operators see violations even if a tenant bypasses CI.
-func validateVersionLabel(tenant, key, baseKey string, custom, regex map[string]string) []string {
+func validateVersionLabel(tenant, key string, custom, regex map[string]string) []string {
 	exact, hasExact := custom["version"]
 	pattern, hasRegex := regex["version"]
 	if !hasExact && !hasRegex {
@@ -1715,14 +1688,9 @@ func validateVersionLabel(tenant, key, baseKey string, custom, regex map[string]
 
 	var w []string
 
-	// Component scope: a version label is only in scope for piloted metrics.
-	component, metric := parseMetricKey(baseKey)
-	if !pilotVersionMetrics[component+"/"+metric] {
-		w = append(w, fmt.Sprintf(
-			"WARN: tenant=%s: version label on non-pilot metric %q in key %q — "+
-				"ADR-024 Phase 1 only permits %s; a version label here risks "+
-				"cross-pack double-count", tenant, baseKey, key, pilotVersionMetricList()))
-	}
+	// Which bases a version label is served on is `dimensions:`'s (#3475):
+	// a version label on an undeclared base is not served (unconsumed), so
+	// the hand-written pilot list that used to warn here is gone.
 
 	if hasRegex {
 		// Phase 1 expects exact version="..." selectors; a regex matcher on
@@ -1750,17 +1718,6 @@ func validateVersionLabel(tenant, key, baseKey string, custom, regex map[string]
 	}
 
 	return w
-}
-
-// pilotVersionMetricList renders the Phase-1 allow-list deterministically for
-// warning messages.
-func pilotVersionMetricList() string {
-	keys := make([]string, 0, len(pilotVersionMetrics))
-	for k := range pilotVersionMetrics {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return strings.Join(keys, ", ")
 }
 
 // ApplyProfiles expands profile values into tenant overrides (fill-in, not overwrite).

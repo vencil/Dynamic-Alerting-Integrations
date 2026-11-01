@@ -525,18 +525,9 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 		return criticalBaseValued(cfg, base) || rootDefaultsHold(cfg, key)
 	}
 	if isDimensionalKey(key) {
-		// resolveDimensionalRows' entry condition (dimensionalBaseNamed,
-		// ADR-038 §11): the root `defaults:` writes the key itself, or the
-		// platform names its base — either #1231 spelling.
-		if rootDefaultsHold(cfg, key) {
-			return true
-		}
-		base := key[:strings.Index(key, "{")]
-		if declaredAnywhere(cfg, base) {
-			return true
-		}
-		canon, _ := canonicalKeyFor(base)
-		return declaredAnywhere(cfg, canon)
+		// resolveDimensionalRows' entry condition (ADR-038 §11, #3475):
+		// every label of the key declared under `dimensions:` for its base.
+		return dimensionDeclared(key, cfg.Dimensions)
 	}
 	if declaredAnywhere(cfg, key) {
 		return true

@@ -638,6 +638,12 @@ func mergeTenantConfig(root rootPlatform, tenantCfg ThresholdConfig) TenantMerge
 			// still be refused at write time, so the runtime slot would exist
 			// while remaining unusable through the only supported writer.
 			merged.OptionalOverrides = append(merged.OptionalOverrides, defaults.OptionalOverrides...)
+			for base, labels := range defaults.Dimensions {
+				if merged.Dimensions == nil {
+					merged.Dimensions = make(map[string][]string)
+				}
+				merged.Dimensions[base] = unionLabels(merged.Dimensions[base], labels)
+			}
 			for k, v := range defaults.StateFilters {
 				merged.StateFilters[k] = v
 			}

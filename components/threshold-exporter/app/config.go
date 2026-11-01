@@ -1354,6 +1354,7 @@ func patchTenants(prev *ThresholdConfig, newConfigs, oldConfigs map[string]Thres
 		// reload — exactly the full-vs-incremental drift this function's
 		// header warns about.
 		OptionalOverrides: prev.OptionalOverrides,
+		Dimensions:        prev.Dimensions,   // shared, platform-scoped (#3475)
 		StateFilters:      prev.StateFilters, // shared
 		Profiles:          prev.Profiles,     // shared
 		// #2028: same obligation — without it the cap set in the root

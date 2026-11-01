@@ -153,6 +153,16 @@ thresholdConfig:
     - clickhouse_memory_tracking_bytes   # bytes (8GB) — Memory tracking warning
     # <<< GENERATED:threshold-registry:helm-optional
 
+  # dimensions 為生成段（#3475，ADR-038 §11）：每個 base 的維度鍵可帶哪些 label 才會送出。
+  # 出貨清單 = threshold registry 宣告、且 rule pack 依該 label 聚合的組合；自訂規則若依某個
+  # 維度讀，就在這裡加上 base 與 label（regex 選擇器送出 <label>_re，要宣告的是那個名稱）。
+  # 改出貨內容走 scaffold_tenant.RULE_PACKS ＋ --regen。
+  dimensions:
+    # >>> GENERATED:threshold-registry:helm-dimensions — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
+    container_cpu: [version]
+    container_memory: [version]
+    # <<< GENERATED:threshold-registry:helm-dimensions
+
   # 每租戶指標上限（#2028）：一個租戶最多發射幾條 threshold series，超過的會被截斷，
   # 並由 da_tenant_metrics_over_limit{tenant} > 0 回報。留空（null）或 0 ＝內建 500；
   # ⚠️ 負值＝完全不截斷（關掉這道防線），只在確定需要時使用。

@@ -349,7 +349,8 @@ func TestAliasAdversarialPins(t *testing.T) {
 	t.Run("typo mysql_cpu_util is not a deprecated alias", func(t *testing.T) {
 		t.Parallel()
 		cfg := &ThresholdConfig{
-			Defaults: map[string]float64{"mysql_threads_running": 72},
+			Dimensions: map[string][]string{"mysql_cpu": {"version"}},
+			Defaults:   map[string]float64{"mysql_threads_running": 72},
 			Tenants: map[string]map[string]ScheduledValue{
 				"tenant-t": {"mysql_cpu_util": {Default: "90"}},
 			},
@@ -368,7 +369,8 @@ func TestAliasAdversarialPins(t *testing.T) {
 	t.Run("mysql_cpu{version=\"\"} still rejected", func(t *testing.T) {
 		t.Parallel()
 		cfg := &ThresholdConfig{
-			Defaults: map[string]float64{"mysql_cpu": 70},
+			Dimensions: map[string][]string{"mysql_cpu": {"version"}},
+			Defaults:   map[string]float64{"mysql_cpu": 70},
 			Tenants: map[string]map[string]ScheduledValue{
 				"tenant-t": {`mysql_cpu{version=""}`: {Default: "60"}},
 			},
@@ -383,7 +385,8 @@ func TestAliasAdversarialPins(t *testing.T) {
 	t.Run("dangling mysql_cpu_critical gets its rename notice only", func(t *testing.T) {
 		t.Parallel()
 		cfg := &ThresholdConfig{
-			Defaults: map[string]float64{},
+			Dimensions: map[string][]string{"mysql_cpu": {"version"}},
+			Defaults:   map[string]float64{},
 			Tenants: map[string]map[string]ScheduledValue{
 				"tenant-t": {"mysql_cpu_critical": {Default: "90"}},
 			},
@@ -529,6 +532,7 @@ func TestDualEmitContract_Dimensional(t *testing.T) {
 		t.Run(tt.key+"="+tt.value, func(t *testing.T) {
 			t.Parallel()
 			cfg := &ThresholdConfig{
+				Dimensions: map[string][]string{"mysql_connections": {"env"}, "mysql_cpu": {"env"}, "mysql_threads_running": {"env"}, "mysql_threads_running_extra": {"env"}},
 				// ADR-038 §11: a dimensional key is served only with its base
 				// named; declared, so the base adds no row of its own.
 				OptionalOverrides: []string{"mysql_threads_running", "mysql_connections", "mysql_threads_running_extra"},

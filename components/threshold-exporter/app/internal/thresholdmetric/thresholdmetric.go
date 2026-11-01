@@ -52,7 +52,7 @@ func Emit(ch chan<- prometheus.Metric, resolved []config.ResolvedThreshold, repo
 			}
 			sort.Strings(keys)
 			for _, k := range keys {
-				labelNames = append(labelNames, k+"_re")
+				labelNames = append(labelNames, k+config.RegexLabelSuffix)
 				labelValues = append(labelValues, t.RegexLabels[k])
 			}
 		}

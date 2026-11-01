@@ -786,9 +786,9 @@ func TestKeysServedByTheirOwnResolverAreNeverRefused(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "defaults:\n"+tc.rootDefaults)
+			writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"), "dimensions:\n  mysql_connections: [env]\ndefaults:\n"+tc.rootDefaults)
 			mkSub(t, dir, "finance")
-			writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"), "defaults:\n"+tc.subtreeKey)
+			writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"), "dimensions:\n  mysql_connections: [env]\ndefaults:\n"+tc.subtreeKey)
 			writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"), "tenants:\n  t1: {}\n")
 
 			m, fresh, logBuf := newAuditedManager(t, dir)
@@ -816,11 +816,11 @@ func TestKeysServedByTheirOwnResolverAreNeverRefused(t *testing.T) {
 	t.Run("state-filter-disable-is-not-carried", func(t *testing.T) {
 		dir := t.TempDir()
 		writeTestYAML(t, filepath.Join(dir, "_defaults.yaml"),
-			"defaults:\n  mysql_connections: 80\n"+
+			"dimensions:\n  mysql_connections: [env]\ndefaults:\n  mysql_connections: 80\n"+
 				"state_filters:\n  maintenance:\n    severity: warning\n    default_state: enable\n")
 		mkSub(t, dir, "finance")
 		writeTestYAML(t, filepath.Join(dir, "finance", "_defaults.yaml"),
-			"defaults:\n  _state_maintenance: \"disable\"\n")
+			"dimensions:\n  mysql_connections: [env]\ndefaults:\n  _state_maintenance: \"disable\"\n")
 		writeTestYAML(t, filepath.Join(dir, "finance", "t1.yaml"), "tenants:\n  t1: {}\n")
 
 		m, fresh, _ := newAuditedManager(t, dir)

@@ -44,7 +44,7 @@ var platformLayerCases = []struct {
 	{"invalid expires", "    mysql_threads_running:\n      default: \"75\"\n      expires: \"not-a-date\"\n", "not-a-date", true, false},
 	{"dangling _critical", "    nosuch_critical: \"9\"\n", "nosuch_critical", false, true},
 	{"unknown _profile", "    _profile: nope\n", "nope", true, false},
-	{"bad version label", "    mysql_connections{version=\"v2\"}: \"3\"\n", "version", true, false},
+	{"bad version label", "    container_cpu{version=\"V2\"}: \"3\"\n", "version", true, false},
 	{"deprecated alias", "    mysql_cpu: \"7\"\n", "mysql_cpu", false, false},
 }
 

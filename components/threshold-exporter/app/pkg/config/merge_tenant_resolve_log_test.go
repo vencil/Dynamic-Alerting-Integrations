@@ -26,6 +26,7 @@ import (
 // after the phase, so each phase's window WARN is its own line.
 var resolveLogTree = map[string]string{
 	"_defaults.yaml": "max_metrics_per_tenant: 2\n" +
+		"dimensions:\n  m4_x: [q]\n" +
 		"defaults:\n  m1_x: 1\n  m2_x: 1\n  m3_x: 1\n  m4_x: 1\n" +
 		"optional_overrides: [m9_x]\n",
 	"tx.yaml": "tenants:\n  tx:\n" +
@@ -35,7 +36,6 @@ var resolveLogTree = map[string]string{
 		"    nosuch_critical: \"5\"\n" +
 		"    m3_x:\n      default: \"3\"\n      overrides:\n        - window: \"badbase\"\n          value: \"5\"\n" +
 		"    \"m4_x{q=\\\"a\\\"}\":\n      default: \"zz\"\n      overrides:\n        - window: \"baddim\"\n          value: \"5\"\n" +
-		"    \"m4_x{}\": \"7\"\n" +
 		"    m9_x:\n      default: \"zz\"\n      overrides:\n        - window: \"baddecl\"\n          value: \"5\"\n" +
 		"    _custom_alerts: \"not a list\"\n",
 	// A second tenant for the one-spec rejection: a `_custom_alerts` that is
@@ -57,7 +57,6 @@ var resolveLogLines = []string{
 	`WARN: _critical key "nosuch_critical" has no matching default "nosuch", skipping`,
 	`WARN: invalid time window format "baddim"`,
 	`WARN: invalid dimensional threshold "zz" for tenant=tx key=m4_x{q="a"}, skipping`,
-	`WARN: failed to parse dimensional key "m4_x{}" for tenant=tx, skipping`,
 	`WARN: invalid time window format "baddecl"`,
 	`WARN: invalid declared threshold "zz" for tenant=tx key=m9_x, skipping`,
 	`ERROR: tenant=tx: custom alert "<block>" rejected`,

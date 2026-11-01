@@ -60,6 +60,9 @@ conf.d/
 
 **`_defaults.yaml` 內容（Platform 管理）：**
 ```yaml
+# 維度鍵可帶的 label（#3475）：沒宣告的 label 不送出。出貨清單只有 container cpu/memory 的 version，這裡示範自訂
+dimensions:
+  mysql_connections: [instance, role]
 defaults:
   mysql_connections: 80
   mysql_threads_running: 30
@@ -85,7 +88,7 @@ tenants:
     container_cpu: "70"              # 覆蓋預設值 80
     mysql_replication_lag: "disable" # 無 replica，停用
     # mysql_threads_running 未指定 → 使用預設值 30
-    # 維度標籤（base 須是平台宣告的 key——這裡是上方 defaults 的 mysql_connections——或根 defaults 寫了整個鍵，否則不產生 metric）
+    # 維度標籤（每個 label 都要在上方 _defaults.yaml 的 dimensions: 為該 base 宣告，否則不產生 metric；見 §2.5 的 ⚠️）
     "mysql_connections{instance='db-primary:3306'}": "500"
     "mysql_connections{instance='db-replica:3306', role='replica'}": "1000:critical"
 ```
@@ -420,7 +423,7 @@ tenants:
 2. **Recording Rule 層**：PromQL 使用 `label_replace` + `=~` 在查詢時完成實際匹配
 3. **設計原則**：Exporter 保持為純 config→metric 轉換器，匹配邏輯完全由 Prometheus 原生向量運算執行
 
-> ⚠️ **出貨的 Rule Pack 目前不依維度判斷**：門檻正規化寫的是 `max by(tenant)(user_threshold{…})`，維度 label 在這一步就丟掉了，觀測序列也只依 `tenant` 聚合。所以維度鍵（精確或 regex）改到的是**整個租戶**的門檻：各維度值與 base 值合成單一個值（取最大；沒有 base 列時就是維度值本身），不會依維度分開生效——告警方向是 `>` 的指標因此被放寬，方向是 `<` 的（例如 hit ratio）反而變嚴；對維度鍵寫 `disable` 只是不送出這一列，不會只停掉那個維度的告警。目前依 label 值分開讀的只有 kubernetes pack 的 `version` 標籤（[ADR-024](../adr/024-version-aware-threshold-via-dimensional-label.md)）。要依維度判斷得連同 Rule Pack 一起改，追蹤於 [#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)；出貨範例因此不放維度鍵。
+> ⚠️ **出貨的 Rule Pack 大多不依維度判斷**：多數門檻正規化寫的是 `max by(tenant)(user_threshold{…})`，維度 label 在這一步就丟掉了，觀測序列也只依 `tenant` 聚合。這類規則若讀到維度鍵（精確或 regex），改到的是**整個租戶**的門檻：各維度值與 base 值合成單一個值（取最大；沒有 base 列時就是維度值本身），不會依維度分開生效——告警方向是 `>` 的指標因此被放寬，方向是 `<` 的（例如 hit ratio）反而變嚴。例外是規則包依該 label 分組、且 `dimensions:` 宣告了的維度：目前只有 kubernetes pack 的 `version`（`container_cpu`、`container_memory`；[ADR-024](../adr/024-version-aware-threshold-via-dimensional-label.md)），它的值依版本分開生效。因此維度鍵只有在它送出的每個 label 都在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告過時才送出（[ADR-038](../adr/038-unread-keys-judged-by-readers.md) 決定 11）。其餘不送出列，判決通常讀成 `unread`（`no_row`）；兩個例外同樣沒有列：值寫 `disable` 的報 `disable_noop`（警告），Policy-as-Code 規則指名的鍵讀成 `read`。regex 選擇器送出的 label 名稱帶 `_re` 後綴（`version=~"v3.*"` 送出 `version_re`），所以要宣告的是 `version_re`；只宣告 `version` 不涵蓋它。出貨的 `dimensions:` 只有精確比對的 `version`，`container_cpu{version=~"v3.*"}` 因此不送出。出貨的 `dimensions:` 由門檻登錄表生成，只列規則包真的保留的 label；自訂規則依某個 label 讀時，平台自行在 `dimensions:` 加上該 base 與 label。出貨範例因此不放維度鍵。
 
 ### 2.6 排程式閾值 (Scheduled Thresholds)
 

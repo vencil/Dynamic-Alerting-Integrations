@@ -164,7 +164,7 @@ _ATTR_TOKEN_RE = re.compile(
 #: permits `tenants:`, so a doc that stacks L0 + a tenant block in one file
 #: still routes correctly.
 PLATFORM_KEYS = frozenset({
-    "defaults", "state_filters", "optional_overrides", "profiles",
+    "defaults", "state_filters", "optional_overrides", "dimensions", "profiles",
     "max_metrics_per_tenant", "_routing_defaults", "_routing_enforced",
 })
 

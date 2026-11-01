@@ -647,14 +647,28 @@ def _registry_tiers():
             {k: e.get("value") for k, e in keys.items() if e.get("tier") == "defaults"})
 
 
+@functools.lru_cache(maxsize=1)
+def _registry_dimensions():
+    """The shipped `dimensions:` (#3475): `{base: [labels]}` from the
+    threshold registry, as `_registry_tiers` reads it."""
+    return dict(registry_lib.dimension_entries(registry_lib.build_registry_doc()))
+
+
+# A label name of a dimensional key's selector and its operator (`db`, `=`
+# in `x{db="a"}`), the value skipped whole so a quoted `=` in it is not read
+# as a label.
+_SELECTOR_LABEL = re.compile(r"""([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!=|!~|=)\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')""")
+
+
 def _written_tree(conf_d, key, raws):
     """Write the conf.d `_served_written` hands to da-guard: a root
     `_defaults.yaml` with the shipped platform defaults (`_registry_tiers`:
     the `defaults:` tier with its values, the `optional_overrides:` tier
-    declared without one) and one tenant per side writing `key` as given.
-    A key the registry does not know is declared without a default (and,
-    for `<base>_critical`, its base too), so the exporter reads the value
-    rather than dropping an undeclared key."""
+    declared without one, the shipped `dimensions:`) and one tenant per side
+    writing `key` as given. A key the registry does not know is declared
+    without a default (and, for `<base>_critical`, its base too), and the
+    labels of a dimensional key are declared for its base (#3475), so the
+    exporter reads the value rather than dropping an undeclared key."""
     import yaml  # lazy: only `--tenant` writes a tree
     tiers, defaults = _registry_tiers()
     optional = [k for k, t in tiers.items() if t == "optional_overrides"]
@@ -663,6 +677,13 @@ def _written_tree(conf_d, key, raws):
         if k not in tiers and k not in optional:
             optional.append(k)
     root = {"defaults": dict(defaults), "optional_overrides": optional}
+    dims = {b: list(ls) for b, ls in _registry_dimensions().items()}
+    if "{" in key:
+        # the name the row serves: a regex matcher's is `<label>_re` (#3475)
+        own = [n + ("_re" if op == "=~" else "") for n, op in _SELECTOR_LABEL.findall(key[len(bare) + 1:])]
+        dims[bare] = sorted(set(dims.get(bare, [])) | set(own))
+    if dims:
+        root["dimensions"] = dims
     tenants = {tid: {key: str(raw)} for tid, raw in zip(_WRITTEN_TENANTS, raws) if raw is not None}
     for name, doc in (("_defaults.yaml", root), ("backtest.yaml", {"tenants": tenants})):
         path = os.path.join(conf_d, name)

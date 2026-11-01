@@ -79,6 +79,7 @@ func TestCollector_AliasWorstCaseCollision_GatherCleanAndExactSeries(t *testing.
 func TestCollector_AliasDimensionalWorstCase_GatherClean(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
+		Dimensions:        map[string][]string{"mysql_cpu": {"env"}, "mysql_threads_running": {"env"}},
 		OptionalOverrides: []string{"mysql_threads_running"},
 		Tenants: map[string]map[string]ScheduledValue{
 			"tenant-dim": {

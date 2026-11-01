@@ -78,6 +78,7 @@ func TestGather_DeclaredKeyAlsoInDefaults_DoesNotBreakScrape(t *testing.T) {
 func TestGather_DimensionalOnDeclaredBase_DoesNotBreakScrape(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
+		Dimensions:        map[string][]string{"oracle_wait_time_rate": {"db"}},
 		OptionalOverrides: []string{"oracle_wait_time_rate"},
 		Tenants: map[string]map[string]ScheduledValue{
 			"t-1": {`oracle_wait_time_rate{db="ORCL"}`: SV("50")},

@@ -349,12 +349,12 @@ groups:
           )
 
       # CFS throttle (#944 PR-2c): same normalize pair as cpu/memory above. NB
-      # `cpu_throttle` is NOT in the version pilot allowlist (resolve.go
-      # pilotVersionMetrics = container/cpu + container/memory only) — tenants cannot
-      # legally set per-version throttle thresholds; the exact-match branch below is
+      # `cpu_throttle` declares no `version` dimension (threshold-registry.yaml
+      # `dimensions`: container_cpu + container_memory only, #3475) — the exporter
+      # serves no per-version throttle threshold; the exact-match branch below is
       # therefore inert by design and every versioned metric takes the version="default"
       # FALLBACK branch. Kept in the Route-2 shape anyway so the pack stays uniform and
-      # a future pilot expansion is a one-line allowlist change, not a rule rewrite.
+      # a future expansion is a RULE_PACKS `dimensions` edit + --regen (ADR-024), not a rule rewrite.
       - record: tenant_version:alert_threshold:container_cpu_throttle
         expr: |
           label_replace(
@@ -476,7 +476,7 @@ groups:
 
       # CFS throttle cores (#944 PR-2c) — same Route-2 shape (exact-or-fallback per
       # severity + maintenance unless); see the cpu_throttle threshold record above
-      # for why the exact branch is currently inert (version pilot allowlist).
+      # for why the exact branch is currently inert (no declared `version` dimension).
       - record: rule_pack_kubernetes:pod_cpu_throttled_warning:core
         expr: |
           (

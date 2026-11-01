@@ -40,6 +40,9 @@ def _tree(root: Path, files: dict[str, str]) -> Path:
 
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
 _CONTROL = "tenants:\n  tenant-b:\n    _silent_mode: disable\n"
+# 維度鍵要它的 label 在 `dimensions:` 宣告過才送出（#3475）；下面兩支要的是
+# exporter 建 series 時才丟的列，所以先宣告。
+_DEFAULTS_DROP_DIMS = "dimensions:\n  mysql_connections: [__name__, __x, q]\n" + _DEFAULTS
 
 # 同一個值（55）分別只寫在三個地方；tenant-b 是對照組，永遠吃 defaults 的 80。
 _WHERE = {
@@ -214,7 +217,7 @@ def test_subprocess_gets_a_timeout(tmp_path, monkeypatch, da_guard):
 def test_dropped_rows_are_reported_apart(tmp_path, da_guard):
     """exporter 建不出 series 的列（例如 `__` 開頭的 label）不在 values，列在 dropped。"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": _DEFAULTS,
+        "_defaults.yaml": _DEFAULTS_DROP_DIMS,
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections{__x=\"x\"}: 5\n",
     })
     got = tv.load_served_values(conf_d, binary=da_guard)["tenant-a"]
@@ -228,7 +231,7 @@ def test_dropped_rows_are_reported_apart(tmp_path, da_guard):
 def test_dropped_rows_do_not_log_warn_on_stderr(tmp_path, da_guard):
     """被丟的列只進 JSON 的 dropped，不該在 da-guard 的 stderr 印出 WARN。"""
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": _DEFAULTS,
+        "_defaults.yaml": _DEFAULTS_DROP_DIMS,
         "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections{__name__=\"x\"}: 5\n"
                          "    mysql_connections{__x=\"y\"}: 4\n    mysql_connections{q=\"ok\"}: 6\n",
     })

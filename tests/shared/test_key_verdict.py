@@ -66,7 +66,8 @@ def test_disable_partial_names_the_inherited_siblings_and_their_files(tmp_path):
     """#3046：base 寫 `disable` 之後仍送出的同族鍵，只有不是租戶檔自己寫的才報，
     並指名它來自哪個檔。"""
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  redis_memory: 70\n  mysql_connections: 80\n"
+        "_defaults.yaml": "dimensions:\n  mysql_connections: [db]\n"
+                          "defaults:\n  redis_memory: 70\n  mysql_connections: 80\n"
                           "  mysql_connections{db=\"x\"}: 12\n  pg_conn: 50\n",
         "team/_defaults.yaml": "defaults:\n  redis_memory_critical: 95\n",
         "_profiles.yaml": "profiles:\n  p1:\n    pg_conn_critical: 96\n",
@@ -104,7 +105,8 @@ def test_disable_partial_sources_cover_platform_tenants_and_old_spellings(tmp_pa
 def test_disable_partial_old_spelling_dimensional_siblings(tmp_path):
     """維度鍵的舊拼法：根 defaults 給的算繼承（tdim 報），租戶自己寫的不報（tdown）。"""
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_threads_running: 50\n",
+        "_defaults.yaml": "dimensions:\n  mysql_threads_running: [db]\n"
+                          "defaults:\n  mysql_threads_running: 50\n",
         "tdim.yaml": "tenants:\n  tdim:\n    mysql_cpu: disable\n",
         "tdown.yaml": "tenants:\n  tdown:\n    mysql_cpu: disable\n    mysql_cpu{db=\"y\"}: \"4\"\n",
         "dims/_defaults.yaml": "defaults:\n  mysql_cpu{db=\"x\"}: 3\n",

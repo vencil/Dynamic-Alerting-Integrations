@@ -33,7 +33,7 @@ tenants:
     container_memory{version="v2"}: "50:critical"   # value:severity also supported
 ```
 
-- When written through the tenant-api, an invalid `version` (uppercase, regex, empty, the reserved literal `default`, or a non-pilot metric) is **rejected at write time with an error** — not silently discovered later.
+- When written through the tenant-api, an invalid `version` (uppercase, regex, empty, the reserved literal `default`), or one on a metric the platform has not declared a `version` dimension for, is **rejected at write time with an error** — not silently discovered later.
 - Charset: `^[a-z0-9][a-z0-9._-]*$` (aligned with real `app.kubernetes.io/version` values).
 - **How to know it works**: when a v2 pod breaches, the alert carries the `version="v2"` label you declared, so on-call sees the version at a glance. ⚠ This requires the platform to have configured KSM correctly (see §4 and the platform section) — otherwise the threshold is silently inert.
 
@@ -47,10 +47,10 @@ If a running version (say v3) has **no** version-specific threshold declared, it
 
 ## 4. ⛔ Scope (Phase 1 Pilot — read this first)
 
-Version-awareness is currently a **Kubernetes pilot**, and **only two metrics accept a `version` label**:
+Which metrics accept a `version` label is declared by the platform under `dimensions:` in the root `_defaults.yaml` (Helm: `thresholdConfig.dimensions`; the list is generated from the threshold registry, and a test checks the rule packs really group by `version`). As shipped, **only two do**:
 
 - ✅ `container_cpu`, `container_memory`
-- ❌ any other metric (`redis_*`, `pg_*`, `mysql_*`, …) with `{version="..."}` is **rejected outright by da-guard** (non-pilot metric — prevents cross-pack cardinality contamination).
+- ❌ any other metric with `{version="..."}` is **not served**. Most (`redis_*`, `pg_*`, `mysql_*`, …) have rules that do not group by `version`, so the value would never apply per version; `container_cpu_throttle`'s rules do group and match by `version`, but it declares no `version` dimension, so it serves no version rows either and always takes the `version="default"` threshold. The shared verdict reads it as `unread` (`no_row`), and the tenant-api refuses the write — except a key written `disable`, reported `disable_noop` (a warning), and a key a Policy-as-Code rule names, which reads `read`; neither is served either.
 
 > **Silent-inert risk (you must know this)**: version-awareness relies on kube-state-metrics exposing the pod's version label. **If the platform's KSM does not enable the matching allowlist, the version thresholds you declare silently do nothing** (every pod is treated as `default`, your tightened v2 threshold never applies), and **you get no direct feedback on your side**. So:
 >

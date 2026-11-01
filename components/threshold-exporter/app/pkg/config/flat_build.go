@@ -460,6 +460,12 @@ func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics S
 			if _, set := top["max_metrics_per_tenant"]; set {
 				logger.Printf("WARN: max_metrics_per_tenant found in %s — only the ROOT _defaults.yaml may set it (one global cap, not inherited per subtree), ignoring", fullPath)
 			}
+			// #3475: same shape — `dimensions:` is read from the root
+			// carrier alone (one declaration for the whole tree), so a
+			// subtree one is ignored and says so.
+			if _, set := top["dimensions"]; set {
+				logger.Printf("WARN: dimensions found in %s — only the ROOT _defaults.yaml may declare it (one declaration for the whole tree, not inherited per subtree), ignoring", fullPath)
+			}
 		}
 		return probe, true
 	}
@@ -498,7 +504,7 @@ func parsePartialConfig(name, path string, data []byte, metrics ScanObserver, lo
 }
 
 // applyBoundaryRules enforces the boundary convention: state_filters,
-// optional_overrides and defaults only in a defaults CARRIER, profiles only
+// optional_overrides, dimensions and defaults only in a defaults CARRIER, profiles only
 // in a platform (`_`-prefixed) file. logger may be nil → falls back to
 // log.Default() (production safety).
 //
@@ -545,6 +551,10 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 			logger.Printf("WARN: optional_overrides found in %s — platform-scoped, not a defaults carrier (only _defaults.yaml / _defaults.yml is), ignoring", name)
 			partial.OptionalOverrides = nil
 		}
+		if len(partial.Dimensions) > 0 {
+			logger.Printf("WARN: dimensions found in %s — platform-scoped, not a defaults carrier (only _defaults.yaml / _defaults.yml is), ignoring", name)
+			partial.Dimensions = nil
+		}
 		if partial.MaxMetricsPerTenant != 0 {
 			logger.Printf("WARN: max_metrics_per_tenant found in %s — not a defaults carrier (only the ROOT _defaults.yaml / _defaults.yml is), ignoring", name)
 			partial.MaxMetricsPerTenant = 0
@@ -565,6 +575,12 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 		if len(partial.OptionalOverrides) > 0 {
 			logger.Printf("WARN: optional_overrides found in %s — platform-scoped, should only be in _defaults.yaml, ignoring", name)
 			partial.OptionalOverrides = nil
+		}
+		// ⛔ SECURITY: same boundary, same reason — a tenant file that could
+		// declare its own dimensions would extend the served surface itself.
+		if len(partial.Dimensions) > 0 {
+			logger.Printf("WARN: dimensions found in %s — platform-scoped, should only be in _defaults.yaml, ignoring", name)
+			partial.Dimensions = nil
 		}
 		if len(partial.Defaults) > 0 {
 			logger.Printf("WARN: defaults found in %s — should only be in _defaults.yaml, ignoring", name)
@@ -913,6 +929,13 @@ func mergePartialInto(merged *ThresholdConfig, partial ThresholdConfig) {
 			seen[k] = struct{}{}
 			merged.OptionalOverrides = append(merged.OptionalOverrides, k)
 		}
+	}
+	// Union per base, as OptionalOverrides: each carrier adds labels.
+	for base, labels := range partial.Dimensions {
+		if merged.Dimensions == nil {
+			merged.Dimensions = make(map[string][]string)
+		}
+		merged.Dimensions[base] = unionLabels(merged.Dimensions[base], labels)
 	}
 	// #2028: this field was never copied, so in directory mode (the mode the
 	// Helm chart runs) the cap was always the built-in DefaultMaxMetricsPerTenant

@@ -184,7 +184,9 @@ func TestWrittenKey(t *testing.T) {
 // tenant override of it with a lapsed `expires:` falls back to it, and
 // emits its expiry event, as a base key's does.
 func TestRootDimensionalDefault_IsTheLabelledSeries(t *testing.T) {
-	cfg, err := ParseConfigFile([]byte(`defaults:
+	cfg, err := ParseConfigFile([]byte(`dimensions:
+  pg_connections: [env, r]
+defaults:
   pg_connections: 100
   'pg_connections{r="x",env="prod"}': 30
 tenants:
