@@ -56,15 +56,9 @@ func TestWriteGate_RefusedEmptyIsNotNull(t *testing.T) {
 		if errs := nullGateErrs(t, root, body); len(errs) != 0 {
 			t.Errorf("%q: errs = %q, want none: a null writes nothing", body, errs)
 		}
-		if errs := validateBodyOnly("tx", body); len(errs) != 0 {
-			t.Errorf("%q: body-only errs = %q, want none", body, errs)
-		}
 	}
 	empty := "tenants:\n  tx:\n    mysql_connections: \"\"\n"
 	if errs := nullGateErrs(t, root, empty); len(errs) == 0 || !strings.Contains(strings.Join(errs, "; "), "is not a threshold the exporter reads") {
 		t.Errorf("written \"\": errs = %q, want the refusal", errs)
-	}
-	if errs := validateBodyOnly("tx", empty); len(errs) == 0 {
-		t.Error("written \"\": body-only pre-flight took it")
 	}
 }

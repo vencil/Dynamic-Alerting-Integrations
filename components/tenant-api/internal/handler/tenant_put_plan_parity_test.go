@@ -100,8 +100,10 @@ func parityCases() []parityCase {
 
 // refusedThresholdCases are #3267's rows: a threshold written as any value
 // the exporter refuses (config.RefusedValueAt), not only a non-finite one,
-// is refused by the body-only pre-flight like non_finite_threshold above —
-// these were all 200. Every value the exporter reads is still 200.
+// is refused — these were all 200. Unlike non_finite_threshold they are
+// judged against the file the write replaces (ADR-038 decision 12, the
+// ratchet), so not by the body-only pre-flight: in PR mode on the fresh base
+// (tree). Every value the exporter reads is still 200.
 func refusedThresholdCases(parityOwn string) []parityCase {
 	var out []parityCase
 	put := func(key, value string) string {
@@ -110,17 +112,17 @@ func refusedThresholdCases(parityOwn string) []parityCase {
 	for _, v := range refusedThresholdValues {
 		out = append(out, parityCase{name: "refused_threshold_" + v, file: parityOwn, groups: "in-team",
 			extra: parityThresholdDefaults, body: put("mysql_connections", v), want: http.StatusBadRequest,
-			wantText: "is not a threshold the exporter reads"})
+			wantText: "is not a threshold the exporter reads", tree: true})
 	}
 	out = append(out,
 		parityCase{name: "refused_threshold_in_a_window", file: parityOwn, groups: "in-team", extra: parityThresholdDefaults,
 			body: "tenants:\n  " + parityIn + ":\n    mysql_connections:\n      default: \"70\"\n" +
 				"      overrides:\n        - window: \"01:00-02:00\"\n          value: \"1e999\"\n",
-			want: http.StatusBadRequest, wantText: "is not a threshold the exporter reads"},
+			want: http.StatusBadRequest, wantText: "is not a threshold the exporter reads", tree: true},
 		// A `_critical` key's value is the number alone (resolveCriticalRows).
 		parityCase{name: "refused_severity_on_a_critical_key", file: parityOwn, groups: "in-team", extra: parityThresholdDefaults,
 			body: put("mysql_connections_critical", "90:critical"), want: http.StatusBadRequest,
-			wantText: "a `_critical` key's value is the critical threshold itself"},
+			wantText: "a `_critical` key's value is the critical threshold itself", tree: true},
 	)
 	for _, v := range acceptedThresholdValues {
 		out = append(out, parityCase{name: "accepted_threshold_" + v, file: parityOwn, groups: "in-team",

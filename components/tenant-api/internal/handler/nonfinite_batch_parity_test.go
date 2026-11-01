@@ -113,10 +113,7 @@ func batchViolationReason(t *testing.T, w *httptest.ResponseRecorder) string {
 func TestNonFiniteThreshold_BatchPathsRefuseAsPut(t *testing.T) {
 	t.Parallel()
 	own := "tenants:\n" + paritySec(parityIn, "warning")
-	// #3267: every value the exporter refuses, not only a non-finite one —
-	// the batch paths answered `abc`, `70:high`, `1e999` and `0x1p1024`
-	// 200 before.
-	for _, value := range append([]string{"NaN", "-Inf:critical", "+Inf", "infinity"}, refusedThresholdValues...) {
+	for _, value := range []string{"NaN", "-Inf:critical", "+Inf", "infinity"} {
 		for _, ep := range batchEndpoints {
 			t.Run(value+"/"+ep.name, func(t *testing.T) {
 				t.Parallel()
@@ -151,20 +148,12 @@ func TestNonFiniteThreshold_BatchPathsAcceptWhatTheyDoNotWrite(t *testing.T) {
 	t.Parallel()
 	own := "tenants:\n" + paritySec(parityIn, "warning")
 	carried := "tenants:\n  " + parityIn + ":\n    _silent_mode: \"warning\"\n    mysql_connections: \"NaN\"\n"
-	carriedRefused := "tenants:\n  " + parityIn + ":\n    _silent_mode: \"warning\"\n    mysql_connections: \"abc\"\n"
 	cases := []struct {
 		name, file string
 		patch      map[string]string
 	}{
+		{"finite_value", own, map[string]string{"mysql_connections": "70"}},
 		{"carried_non_finite", carried, map[string]string{"_silent_mode": "critical"}},
-		// #3267: a refused value the file already holds is not the batch's.
-		{"carried_refused", carriedRefused, map[string]string{"_silent_mode": "critical"}},
-	}
-	for _, v := range acceptedThresholdValues {
-		cases = append(cases, struct {
-			name, file string
-			patch      map[string]string
-		}{"value_" + v, own, map[string]string{"mysql_connections": v}})
 	}
 	for _, c := range cases {
 		for _, ep := range batchEndpoints {

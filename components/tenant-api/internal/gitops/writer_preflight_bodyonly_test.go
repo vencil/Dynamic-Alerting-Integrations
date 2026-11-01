@@ -52,9 +52,9 @@ func TestValidateBodyOnlyIsTheBodyHalfOfValidate(t *testing.T) {
 		// #3140: a non-finite threshold number — the exporter's predicate
 		// (cfg.RefusedThresholdWrites), body-shaped.
 		{"non-finite threshold (#3140)", "tenants:\n  db-a:\n    mysql_connections: \"-Inf\"\n"},
-		// #3267: and any other value the exporter refuses.
-		{"out-of-range threshold (#3267)", "tenants:\n  db-a:\n    mysql_connections: \"1e999\"\n"},
-		{"unreadable threshold (#3267)", "tenants:\n  db-a:\n    mysql_connections: \"70:high\"\n"},
+		// ⚠️ Not #3267's other refused values (`abc`, `1e999`): whether one
+		// blocks depends on the file the write replaces (refusedThresholdValues,
+		// the ADR-038 decision 12 ratchet), so validate alone judges them.
 		// ⛔ THE ONE THAT ACTUALLY GUARDS THE DUPLICATION. The two validators each
 		// call cfg.ValidateTenantCustomAlerts on their own line; every other row
 		// here rides on the shared validateShape and so cannot drift. Without this

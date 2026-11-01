@@ -49,9 +49,13 @@ func TestMergePaths_RefuseANonFiniteThresholdTheyWrite(t *testing.T) {
 			if got := gitOut(t, dir, "rev-parse", "HEAD"); got != head {
 				t.Errorf("WriteMerged %q committed %s", value, got)
 			}
+			// The pre-flight refuses a non-finite number (#3140, strict); the
+			// other refused values are judged against the file the write
+			// replaces (#3267's ratchet), which the pre-flight does not read.
 			path := filepath.Join(dir, "db-a.yaml")
-			if err := w.readMergeBodyOnly("db-a", path, setKey(value)); !errors.Is(err, ErrValidation) {
-				t.Errorf("readMergeBodyOnly %q: err = %v, want ErrValidation", value, err)
+			err = w.readMergeBodyOnly("db-a", path, setKey(value))
+			if strict := want == "is not a finite number"; errors.Is(err, ErrValidation) != strict {
+				t.Errorf("readMergeBodyOnly %q: err = %v, want ErrValidation = %v", value, err, strict)
 			}
 		})
 	}

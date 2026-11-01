@@ -178,13 +178,33 @@ func TestNonFiniteThreshold_CustomAlertRefused(t *testing.T) {
 	}
 }
 
-// tenant-api's body pre-flight message set (the same predicate): every value
-// RefusedValueAt refuses (#3267), not only a non-finite one (#3140).
+// tenant-api's body pre-flight message set (the same predicate).
+func TestNonFiniteThresholdWrites(t *testing.T) {
+	t.Parallel()
+	got := NonFiniteThresholdWrites(map[string]ScheduledValue{
+		"mysql_connections":          {Default: "NaN"},
+		"redis_memory":               {Default: "70", Overrides: []TimeWindowOverride{{Window: "01:00-02:00", Value: "-Inf:critical"}}},
+		"mysql_connections_critical": {Default: "+Inf"},
+		"container_cpu":              {Default: "70"},
+		"pg_x":                       {Default: "abc"},
+		"_silent_mode":               {Default: "NaN"},
+		"x{db=\"a\"}":                {Default: "inf"},
+	})
+	var keys []string
+	for _, m := range got {
+		keys = append(keys, m[:strings.Index(m, ":")])
+	}
+	want := []string{"mysql_connections", "mysql_connections_critical", "redis_memory", "x{db=\"a\"}"}
+	if !reflect.DeepEqual(keys, want) {
+		t.Errorf("keys = %v, want %v (%q)", keys, want, got)
+	}
+}
+
+// #3267: every other value RefusedValueAt refuses.
 func TestRefusedThresholdWrites(t *testing.T) {
 	t.Parallel()
 	got := RefusedThresholdWrites(map[string]ScheduledValue{
 		"mysql_connections":          {Default: "NaN"},
-		"redis_memory":               {Default: "70", Overrides: []TimeWindowOverride{{Window: "01:00-02:00", Value: "-Inf:critical"}}},
 		"mysql_connections_critical": {Default: "+Inf"},
 		"container_cpu":              {Default: "70"},
 		"pg_x":                       {Default: "abc"},
@@ -198,23 +218,23 @@ func TestRefusedThresholdWrites(t *testing.T) {
 		"ok_hex":                     {Default: "0x1p4"},
 		"ok_sev":                     {Default: "70:critical"},
 		"ok_off":                     {Default: "disable"},
-		"ok_off_critical":            {Default: "disable"},
-		"_silent_mode":               {Default: "NaN"},
-		"x{db=\"a\"}":                {Default: "inf"},
+		"_silent_mode":               {Default: "abc"},
 	})
 	var keys []string
-	for _, m := range got {
-		keys = append(keys, m[:strings.Index(m, ":")])
+	for _, r := range got {
+		keys = append(keys, r.Key)
+		if !strings.HasPrefix(r.Message, r.Key+": ") {
+			t.Errorf("%s: message %q does not name the key", r.Key, r.Message)
+		}
 	}
-	want := []string{"mysql_connections", "mysql_connections_critical", "pg_crit_critical", "pg_hexrange",
-		"pg_high", "pg_off_sev", "pg_range", "pg_window", "pg_x", "redis_memory", "x{db=\"a\"}"}
+	want := []string{"pg_crit_critical", "pg_hexrange", "pg_high", "pg_off_sev", "pg_range", "pg_window", "pg_x"}
 	if !reflect.DeepEqual(keys, want) {
-		t.Errorf("keys = %v, want %v (%q)", keys, want, got)
+		t.Errorf("keys = %v, want %v (%+v)", keys, want, got)
 	}
 }
 
-// RefusedThresholdWrites and RefusedValueAt are one classifier: for every
-// value, the write is refused exactly when RefusedValueAt refuses it.
+// The write gate's two predicates are RefusedValueAt, split: a value is
+// refused by exactly one of them exactly when RefusedValueAt refuses it.
 func TestRefusedThresholdWrites_IsRefusedValueAt(t *testing.T) {
 	t.Parallel()
 	values := []string{"70", "1_000", "0x1p4", "70:critical", " 70 : Warning ", "disable", "off", "017",
@@ -223,9 +243,52 @@ func TestRefusedThresholdWrites_IsRefusedValueAt(t *testing.T) {
 		for _, v := range values {
 			sv := ScheduledValue{Default: v}
 			refused := RefusedValueAt(key, sv, fixedNow) != ""
-			if wrote := len(RefusedThresholdWrites(map[string]ScheduledValue{key: sv})) > 0; wrote != refused {
-				t.Errorf("%s=%q: RefusedThresholdWrites refuses %v, RefusedValueAt %v", key, v, wrote, refused)
+			nf := len(NonFiniteThresholdWrites(map[string]ScheduledValue{key: sv})) > 0
+			other := len(RefusedThresholdWrites(map[string]ScheduledValue{key: sv})) > 0
+			if nf && other {
+				t.Errorf("%s=%q: both predicates report it", key, v)
 			}
+			if (nf || other) != refused {
+				t.Errorf("%s=%q: write predicates refuse %v, RefusedValueAt %v", key, v, nf || other, refused)
+			}
+		}
+	}
+}
+
+// ADR-038 decision 12: "unchanged" is the resolver's reading, not the text.
+func TestThresholdReadAlike(t *testing.T) {
+	t.Parallel()
+	w := func(d, win, v string) ScheduledValue {
+		return ScheduledValue{Default: d, Overrides: []TimeWindowOverride{{Window: win, Value: v}}}
+	}
+	alike := [][3]any{
+		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: " abc "}},
+		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: "abc:warning"}},
+		{"k", ScheduledValue{Default: "70:high"}, ScheduledValue{Default: "70 : HIGH"}},
+		{"k", ScheduledValue{Default: "1_000"}, ScheduledValue{Default: "1000"}},
+		{"k", ScheduledValue{Default: "70:Critical"}, ScheduledValue{Default: "70.0:critical"}},
+		{"k", ScheduledValue{Default: "disable"}, ScheduledValue{Default: "OFF"}},
+		{"k", w("70", "01:00-02:00", "abc"), w("70", " 01:00-02:00 ", " abc")},
+		{"k_critical", ScheduledValue{Default: "90:critical"}, ScheduledValue{Default: " 90:critical"}},
+	}
+	for _, c := range alike {
+		if !ThresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
+			t.Errorf("%s: %+v and %+v should read alike", c[0], c[1], c[2])
+		}
+	}
+	differ := [][3]any{
+		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: "xyz"}},
+		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: "abc:critical"}},
+		{"k", ScheduledValue{Default: "1e999"}, ScheduledValue{Default: "1e998"}},
+		{"k", ScheduledValue{Default: "70"}, ScheduledValue{Default: "71"}},
+		{"k", w("70", "01:00-02:00", "abc"), w("70", "03:00-04:00", "abc")},
+		{"k", w("70", "01:00-02:00", "abc"), ScheduledValue{Default: "70"}},
+		{"k_critical", ScheduledValue{Default: "90:critical"}, ScheduledValue{Default: "90:warning"}},
+		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2030-01-01T00:00:00Z"}}},
+	}
+	for _, c := range differ {
+		if ThresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
+			t.Errorf("%s: %+v and %+v should not read alike", c[0], c[1], c[2])
 		}
 	}
 }
