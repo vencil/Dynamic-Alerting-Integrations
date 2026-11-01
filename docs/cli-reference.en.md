@@ -1739,7 +1739,7 @@ da-tools drift-detect --dirs conf.d --mode configmap
 promtool query instant 'count(ALERTS{alertstate="firing"})'
 ```
 
-> ⚠️ Rollback does not delete the CRD files you wrote earlier with `--output-dir`; they can be re-applied at any time. If you kept none, run `da-tools operator-generate --output-dir <dir>` again to regenerate them (the repo commits no generated copy).
+> ⚠️ Rollback does not delete the CRD files you wrote earlier with `--output-dir`; they can be re-applied at any time. If you kept none, re-run the command that produced them (the repo commits no generated copy): `da-tools migrate-to-operator` with the original `--source-dir` / `--config-dir` plus `--output-dir <dir>` for migration output, `da-tools operator-generate --output-dir <dir>` for CRDs it generated from the rule packs.
 
 ---
 

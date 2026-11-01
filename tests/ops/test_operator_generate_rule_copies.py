@@ -118,7 +118,7 @@ def test_other_prometheus_rule_emitters_carry_the_same_selector_labels(emit):
 
 # --- 提交的副本不能回來 -------------------------------------------------------
 
-_TOP_LEVEL_PROMETHEUS_RULE = re.compile(r"""^kind:[ \t]*["']?PrometheusRule["']?[ \t]*(#.*)?$""",
+_TOP_LEVEL_PROMETHEUS_RULE = re.compile(r"""^kind[ \t]*:[ \t]*["']?PrometheusRule["']?[ \t]*(#.*)?$""",
                                         re.M)
 _FIXTURE_PARTS = frozenset({"testdata", "tests"})
 
@@ -163,6 +163,8 @@ def test_the_guard_sees_a_committed_copy_and_passes_over_fixtures():
     doc = "apiVersion: monitoring.coreos.com/v1\nkind: PrometheusRule\nmetadata: {}\n"
     assert committed_prometheus_rules([("operator-manifests/da-rule-pack-a.yaml", doc)])
     assert committed_prometheus_rules([("x.yml", "---\nkind: 'PrometheusRule'  # c\n")])
+    # Whitespace before the colon is still the top-level `kind` key to YAML.
+    assert committed_prometheus_rules([("z.yaml", "kind : PrometheusRule\n")])
     assert not committed_prometheus_rules([("a/testdata/p.yaml", doc), ("tests/p.yaml", doc)])
     assert not committed_prometheus_rules([("k8s/x.yaml", "kind: ConfigMap\n"),
                                            ("k8s/y.yaml", "  - kind: PrometheusRule\n")])

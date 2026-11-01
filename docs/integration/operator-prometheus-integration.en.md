@@ -242,7 +242,7 @@ metadata:
 
 **Why two labels?** Depending on how `kube-prometheus-stack` was installed, the Prometheus CRD's `spec.ruleSelector.matchLabels` may use `release`, `prometheus`, or both. Including both labels ensures PrometheusRules are picked up across all common installation configurations.
 
-PrometheusRules emitted by `migrate-to-operator` and `rule-pack-split` carry the same labels (one shared definition). The repo commits no pre-generated PrometheusRules — generate them into your own directory with `da-tools operator-generate --components rules --output-dir <your-dir>` ([#3427](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3427)).
+PrometheusRules emitted by `migrate-to-operator` and `rule-pack-split` carry the same labels (one shared definition). The repo commits no pre-generated PrometheusRules — to generate them from the rule packs, write them into your own directory with `da-tools operator-generate --components rules --output-dir <your-dir>` ([#3427](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3427)).
 
 **Diagnostic steps**:
 
