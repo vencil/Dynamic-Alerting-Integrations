@@ -1,7 +1,8 @@
-# es-prod.yaml — 範例: Elasticsearch 租戶閾值設定 (維度標籤)
+# es-prod.yaml — 範例: Elasticsearch 租戶閾值設定
 # 來源參考: prometheus-community/elasticsearch_exporter
-#
-# ES 典型維度: index (索引), node (節點)
+# ⚠️ 本範例刻意不放維度鍵（`metric{label="value"}`）：出貨的 rule pack 以 `max by(tenant)` 取租戶最大值，
+#    維度 label 在那一步就丟掉了——維度鍵改到的是整個租戶的門檻（各維度值與 base 合成一個值），
+#    對維度鍵寫 "disable" 只是不送出這一列，不會只停掉那個維度的告警。要依維度判斷得改 rule pack（#3475）；語法見 docs/design/config-driven.md。
 # 三態（限 _defaults.yaml 的 defaults: 有值的 key）: 數值=Custom, 省略=Default, "disable"=停用
 # ⚠️ 列在 optional_overrides: 的宣告 key 沒有值可繼承 ⇒ 省略＝沒有值＝靜默，只有兩態（#1321）
 tenants:
@@ -11,13 +12,3 @@ tenants:
     es_heap_usage_percent: "85"                             # #1196 C 由 es_jvm_memory_used_percent 改名
     es_disk_usage_percent: "85"                             # 已用率超過 85% 警告（#1196 C 語意反向：原 free% 15）
     es_pending_tasks: "50"
-
-    # --- 維度閾值: 按 index 分設 ---
-    "es_index_doc_count{index=\"logs-prod\"}": "100000000"             # 1 億文件
-    "es_index_store_size_bytes{index=\"logs-prod\"}": "107374182400"   # 100GB
-    "es_index_doc_count{index=\"metrics-prod\"}": "500000000"          # 5 億文件
-    "es_index_store_size_bytes{index=\"audit-trail\"}": "53687091200"  # 50GB
-
-    # --- 維度閾值: 按 node 分設 (特定節點可能硬體不同) ---
-    "es_heap_usage_percent{node=\"es-hot-01\"}": "90"
-    "es_heap_usage_percent{node=\"es-warm-01\"}": "80"

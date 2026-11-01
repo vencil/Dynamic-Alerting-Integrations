@@ -45,9 +45,8 @@
 #     es-prod:
 #       es_heap_usage_percent: "80"
 #       es_disk_usage_percent: "75"
-#       # 維度標籤 — 不同 index 設定不同大小閾值
-#       "es_index_store_size_bytes{index=\"logs-prod\"}": "107374182400"
-#       "es_index_store_size_bytes{index=\"metrics\"}": "53687091200"
+#       # 維度鍵（metric{label="value"}）在本 pack 不依維度判斷：門檻以 max by(tenant) 取租戶最大值，
+#       # 維度鍵只會改到整個租戶的門檻、寫 "disable" 只是不送出這一列、不會只停掉那個維度，所以這裡不示範（#3475）。
 # ============================================================
 groups:
   # -------------------------------------------------------

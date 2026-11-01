@@ -577,6 +577,7 @@ var consistencyTree = map[string]string{
   container_memory: 85
 optional_overrides:
   - kafka_lag
+  - redis_queue_length
 state_filters:
   maintenance:
     reasons: []
@@ -852,7 +853,7 @@ func TestServedValues_TwoKeysOneSeries_ExitsTwoNamingBothKeys(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			code, doc, _, stderr := served(t, map[string]string{
-				"_defaults.yaml": defaultsOnly + "max_metrics_per_tenant: 5\n",
+				"_defaults.yaml": defaultsOnly + "max_metrics_per_tenant: 5\noptional_overrides:\n  - redis_queue_length\n",
 				"tenant-a.yaml":  "tenants:\n  tenant-a:\n" + tenant,
 			}, "")
 			if code != exitCallerErr {
@@ -1076,7 +1077,7 @@ func TestServedValues_UnservedScheduleKeepsItsWindows(t *testing.T) {
 func servedTree(t *testing.T, tenant string) (int, servedOut, string) {
 	t.Helper()
 	code, doc, _, stderr := served(t, map[string]string{
-		"_defaults.yaml": defaultsOnly,
+		"_defaults.yaml": defaultsOnly + "optional_overrides:\n  - redis_queue_length\n  - mysql_threads_running\n",
 		"tenant-a.yaml":  "tenants:\n  tenant-a:\n" + tenant,
 	}, "")
 	return code, doc, stderr

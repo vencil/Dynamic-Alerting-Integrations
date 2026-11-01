@@ -54,6 +54,9 @@ func TestResolveAtWithStats_DeterministicTruncation(t *testing.T) {
 				"redis_cpu":     70,
 				"redis_latency": 60,
 			},
+			// ADR-038 §11: a dimensional key is served only with its base named;
+			// declared (no value), so the base adds no row of its own.
+			OptionalOverrides: []string{"container_cpu"},
 			Tenants: map[string]map[string]ScheduledValue{
 				"t": {
 					`container_cpu{version="v1"}`: {Default: "81"},
@@ -113,6 +116,7 @@ func TestResolveAtWithStats_ExplicitDefaultVersionProtected(t *testing.T) {
 	t.Parallel()
 
 	cfg := &ThresholdConfig{
+		OptionalOverrides: []string{"container_cpu"}, // the base named: ADR-038 §11
 		Tenants: map[string]map[string]ScheduledValue{
 			"t": {
 				`container_cpu{version="default"}`: {Default: "50"}, // tier 0, protected

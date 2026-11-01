@@ -179,7 +179,7 @@ func TestResolveAtWithKeys_ReportsTheServedKey(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
 		Defaults:            map[string]float64{"mysql_connections": 80, "mysql_threads_running": 30},
-		OptionalOverrides:   []string{"kafka_lag"},
+		OptionalOverrides:   []string{"kafka_lag", "redis_queue_length"}, // a dimensional key's base is named (ADR-038 §11)
 		MaxMetricsPerTenant: -1,
 		Tenants: map[string]map[string]ScheduledValue{
 			"tenant-a": {

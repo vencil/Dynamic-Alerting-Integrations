@@ -355,3 +355,43 @@ func TestLoadDirReport_UndeliverableValueShape(t *testing.T) {
 		t.Errorf("redis_x = %q, want the normalised \"1e+06\" (the file says 1e6)", v)
 	}
 }
+
+// ADR-038 §11: a dimensional key a subtree `_defaults.yaml` writes reaches
+// the output plane only when the platform names its base, as the resolver
+// asks (dimensionalBaseNamed) — else it is undeliverable like a flat key,
+// not overlaid into a map whose resolver then serves it no row.
+func TestLoadDirReport_SubtreeDimensionalKeyNeedsItsBaseNamed(t *testing.T) {
+	t.Parallel()
+	for name, tc := range map[string]struct {
+		root        string
+		deliverable bool
+	}{
+		"base not named": {"defaults:\n  mysql_connections: 80\n", false},
+		"base valued":    {"defaults:\n  mysql_connections: 80\n  redis_mem: 70\n", true},
+		"base declared":  {"defaults:\n  mysql_connections: 80\noptional_overrides:\n  - redis_mem\n", true},
+		"retired spelling of the base valued": {
+			"defaults:\n  mysql_cpu: 30\n", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			key := `redis_mem{db="0"}`
+			if name == "retired spelling of the base valued" {
+				key = `mysql_threads_running{db="0"}`
+			}
+			cfg, rep, err := LoadDirReport(writeUndeliverableTree(t, map[string]string{
+				"_defaults.yaml":      tc.root,
+				"team/_defaults.yaml": "defaults:\n  '" + key + "': 60\n",
+				"team/t1.yaml":        "tenants:\n  t1: {}\n",
+			}), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, undeliverable := rep.Undeliverable["t1"][key]
+			_, overlaid := cfg.Tenants["t1"][key]
+			if undeliverable == tc.deliverable || overlaid != tc.deliverable {
+				t.Errorf("undeliverable=%v overlaid=%v, want deliverable=%v (report %v)",
+					undeliverable, overlaid, tc.deliverable, rep.Undeliverable)
+			}
+		})
+	}
+}

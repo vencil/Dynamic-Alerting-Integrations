@@ -246,14 +246,12 @@ func TestDeclaredEmission_DoesNotDoubleEmitShapesOtherPhasesOwn(t *testing.T) {
 
 		rows := cfg.ResolveAt(fixedNow)
 
-		// resolveDimensionalRows owns it and emits exactly one row, keyed on
-		// the parsed BASE. The declared loop would key on the whole string,
-		// producing a second series with braces inside the metric label.
-		if len(rows) != 1 {
-			t.Fatalf("want exactly 1 row from resolveDimensionalRows, got %d: %+v", len(rows), rows)
-		}
-		if strings.ContainsAny(rows[0].Metric, "{}") {
-			t.Errorf("metric label must be the parsed base, not the raw dimensional key: %+v", rows[0])
+		// Neither phase emits it: resolveDimensionalRows serves a dimensional
+		// key only when the platform names its BASE (ADR-038 §11), and the
+		// declared loop must skip the `{` shape — keyed on the whole string it
+		// would produce a series with braces inside the metric label.
+		if len(rows) != 0 {
+			t.Fatalf("want no row (base not named; declared loop skips `{`), got %d: %+v", len(rows), rows)
 		}
 	})
 

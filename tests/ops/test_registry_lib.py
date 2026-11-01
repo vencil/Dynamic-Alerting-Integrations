@@ -556,8 +556,10 @@ def _resolve_critical_rows_body() -> str:
         "claim below is derived from that function's entry condition, so a "
         "rename/removal must be repaired here (repoint this reader) before "
         "those claims mean anything")
-    end = src.find("\nfunc ", start + 1)
-    if end == -1:  # last function in the file — body runs to EOF
+    # The body ends at the function's closing brace (a `}` in column 0), not
+    # at the next `func`: the next function's doc comment is not this body.
+    end = src.find("\n}\n", start + 1)
+    if end == -1:  # unterminated: run to EOF
         end = len(src)
     return src[start:end]
 

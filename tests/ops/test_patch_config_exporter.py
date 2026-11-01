@@ -194,12 +194,12 @@ def test_anchor_shared_block_is_refused_before_the_write(cluster):
     # ADR-036 §2 起寫入前就拒寫（rc 2，一個位元組都不送）：da-guard write（#3206）
     # 判定重新輸出會連帶改到 t-b（not_round_trippable）；先前要寫入後由 exporter
     # 驗收、再回滾。
-    # dimensional key：-config-dir 會剝掉 legacy defaults（列 6），base row 不發。
+    # -config-dir 會剝掉 legacy defaults（列 6），平台沒有地方宣告 base，所以這個
+    # 維度鍵不送出（ADR-038 §11，與一般鍵相同）；拒寫看的是檔案，與送不送無關。
     old = ('tenants:\n  t-a: &shared\n    mysql_connections{db="x"}: "50"\n'
            '  t-b: *shared\n')
     c = cluster({"config.yaml": old})
     before = c.user_series()
-    assert any('tenant="t-b"' in s and s.endswith(" 50") for s in before), before
 
     r = c.run("t-a", 'mysql_connections{db="x"}', "60")
     assert r.returncode == 2, r.stdout + r.stderr

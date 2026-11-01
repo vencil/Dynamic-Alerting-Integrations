@@ -58,7 +58,7 @@ tenants:
     mysql_threads_running: ""          # Default: 採用平台預設值
     mysql_replication_lag: "disable"   # Disable: 關閉此告警
     mysql_connections_critical: "1000"  # 多層嚴重度（_critical suffix）
-    "redis_queue_length{queue='tasks'}": "500"  # 維度標籤篩選
+    "mysql_connections{instance='db-primary:3306'}": "500"  # 維度標籤篩選（base 須為平台宣告的 key，或根 defaults 寫了整個鍵；出貨的 Rule Pack 以 max by(tenant) 合成單一租戶門檻，#3475）
 ```
 
 **運營模式控制**：

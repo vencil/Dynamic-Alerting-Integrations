@@ -290,7 +290,8 @@ def _gen_defaults_yaml(
             # perfectly numeric value is the failure this refuses. Under
             # `defaults:` the exporter's resolver never looks at either —
             # `resolveCriticalRows` keys off `defaults[<base>]` and
-            # `resolveDimensionalRows` is tenant-only — so the key is inert and
+            # `resolveDimensionalRows` takes the value from the tenant's map
+            # alone — so the key is inert and
             # NOTHING says so: no parse error, no WARN, no series. #1218 is that
             # failure in a customer-facing producer; #1412 is this path, which
             # copies caller-supplied names straight through and was invisible to

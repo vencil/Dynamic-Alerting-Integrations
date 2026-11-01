@@ -1,7 +1,8 @@
-# mongo-prod.yaml — 範例: MongoDB 租戶閾值設定 (維度標籤)
+# mongo-prod.yaml — 範例: MongoDB 租戶閾值設定
 # 來源參考: percona/mongodb_exporter
-#
-# MongoDB 典型維度: database (庫), collection (集合), rs (replica set)
+# ⚠️ 本範例刻意不放維度鍵（`metric{label="value"}`）：出貨的 rule pack 以 `max by(tenant)` 取租戶最大值，
+#    維度 label 在那一步就丟掉了——維度鍵改到的是整個租戶的門檻（各維度值與 base 合成一個值），
+#    對維度鍵寫 "disable" 只是不送出這一列，不會只停掉那個維度的告警。要依維度判斷得改 rule pack（#3475）；語法見 docs/design/config-driven.md。
 # 三態（限 _defaults.yaml 的 defaults: 有值的 key）: 數值=Custom, 省略=Default, "disable"=停用
 # ⚠️ 列在 optional_overrides: 的宣告 key 沒有值可繼承 ⇒ 省略＝沒有值＝靜默，只有兩態（#1321）
 tenants:
@@ -15,16 +16,3 @@ tenants:
     mongodb_connections_current_critical: "800"
     mongodb_replication_lag: "10"                           # #1196 C 由 mongodb_repl_lag_seconds 改名
     mongodb_replication_lag_critical: "30"
-
-    # --- 維度閾值: 按 database 分設 ---
-    "mongodb_dbstats_storage_size{database=\"orders\"}": "53687091200"    # 50GB
-    "mongodb_dbstats_storage_size{database=\"analytics\"}": "214748364800" # 200GB
-    "mongodb_dbstats_storage_size{database=\"sessions\"}": "10737418240"   # 10GB
-    "mongodb_dbstats_objects{database=\"orders\"}": "50000000"             # 5 千萬文件
-
-    # --- 維度閾值: 按 collection 分設 ---
-    "mongodb_collection_count{database=\"orders\",collection=\"transactions\"}": "10000000"
-    "mongodb_collection_avg_obj_size{database=\"orders\",collection=\"transactions\"}": "4096"
-
-    # --- 停用特定維度 ---
-    "mongodb_dbstats_storage_size{database=\"test\"}": "disable"

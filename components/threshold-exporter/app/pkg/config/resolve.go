@@ -215,7 +215,7 @@ func (c *ThresholdConfig) resolveAtWithStats(now time.Time, keyed *[]KeyedThresh
 		// and the cardinality sort below.
 		result = append(result, c.resolveBaseRows(tenant, canonDefaults, canonOverrides, now, collect, logf, rec)...)
 		result = append(result, c.resolveCriticalRows(tenant, canonDefaults, canonOverrides, now, collect, logf, rec)...)
-		result = append(result, c.resolveDimensionalRows(tenant, canonDefaults, canonOverrides, now, collect, logf, rec)...)
+		result = append(result, c.resolveDimensionalRows(tenant, canonDefaults, canonOptional, canonOverrides, now, collect, logf, rec)...)
 		// Phase 2C (#1189): declared-without-value keys — emitted ONLY when the
 		// tenant supplied a value. Must stay inside this segment: the
 		// cardinality guard below measures result[startIdx:] exactly once, so a
@@ -625,8 +625,8 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 		if _, valued := defaults[metricKey]; valued {
 			continue
 		}
-		// resolveDimensionalRows is tenant-only and ALREADY emits declared
-		// bases today (that is why ValidateTenantKeys accepts the shape).
+		// resolveDimensionalRows owns dimensional keys: it serves one whose
+		// base is declared (dimensionalBaseNamed, ADR-038 §11).
 		if strings.Contains(metricKey, "{") {
 			continue
 		}
@@ -794,8 +794,9 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 }
 
 // resolveDimensionalRows resolves a tenant's dimensional overrides using the
-// `metric{label="v"}` / `{label=~"re"}` syntax. These are tenant-only (no
-// default inheritance) and use the "value:severity" suffix for severity.
+// `metric{label="v"}` / `{label=~"re"}` syntax. Their values are tenant-only
+// (no default inheritance; their base must be named, see below) and use the
+// "value:severity" suffix for severity.
 // Extracted verbatim from the ResolveAtWithStats per-tenant loop
 // (Phase 2B / Phase 11 B1).
 //
@@ -814,7 +815,14 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 // used to be served by resolveBaseRows as a row of its own, the whole key as
 // its metric label. With that default to fall back to, a lapsed `expires:`
 // override of the key is treated as absent, as resolveBaseRows does.
-func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
+//
+// ADR-038 §11: a tenant's dimensional key is served only when the platform
+// names its base — valued in defaults, declared in optional_overrides — or
+// the root `defaults:` writes the key itself, the same membership a flat key
+// needs. A key whose base the platform does not name (a misspelt base) has
+// no row and is not claimed, so it is unconsumed: the shared key verdict
+// reads it as unread, as it does a misspelt flat key.
+func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[string]float64, declared map[string]struct{}, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for key, v := range defaults {
 		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !isDimensionalKey(key) ||
@@ -831,8 +839,11 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		if baseRowsSkipKey(key) { // every `_` key (#3045)
 			continue
 		}
+		if !dimensionalBaseNamed(key, defaults, declared) {
+			continue // ADR-038 §11: unconsumed, as a flat key the platform does not name
+		}
 		if rec != nil {
-			rec.claim(key) // #3378: whether or not the root declares its base
+			rec.claim(key) // #3378
 		}
 		if _, hasDefault := defaults[key]; hasDefault && isThresholdExpired(sv, now) {
 			continue // the default above is served
@@ -840,6 +851,21 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		rows = c.appendDimensionalRow(rows, tenant, key, sv, now, sink, logf, rec)
 	}
 	return rows
+}
+
+// dimensionalBaseNamed reports whether the platform names dimensional key's
+// base (canonical spelling): valued in defaults, declared, or the root
+// `defaults:` writing the key itself.
+func dimensionalBaseNamed(key string, defaults map[string]float64, declared map[string]struct{}) bool {
+	if _, own := defaults[key]; own {
+		return true
+	}
+	base := key[:strings.Index(key, "{")]
+	if _, valued := defaults[base]; valued {
+		return true
+	}
+	_, ok := declared[base]
+	return ok
 }
 
 func discardLogf(string, ...any) {}
