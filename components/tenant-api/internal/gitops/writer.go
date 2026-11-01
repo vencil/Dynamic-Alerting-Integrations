@@ -2238,21 +2238,7 @@ func validateReplacingOver(configDir, tenantID, tenantFilePath, yamlContent stri
 	// #1231 c2: the write gate consumes KeyValidation.Errors ONLY — Notices
 	// (deprecated-key alias advisories) must never block a write; they ride
 	// the second return value instead (1b author-facing wiring).
-	var kv cfg.KeyValidationByTenant
-	if configDir == "" {
-		kv = tcfg.ValidateTenantKeysByTenant()
-	} else {
-		// Reuse the body we already decoded into tcfg above instead of handing
-		// raw bytes to MergeTenantWithRootDefaults, which would Unmarshal the
-		// same yamlContent a third time (#708). tcfg.Tenants[tenantID] is proven
-		// present by the check above, so the byte variant's flat-KV fallback —
-		// the only behavior the parsed sibling omits — is unreachable here.
-		merged := cfg.MergeParsedTenantWithRootDefaults(configDir, tcfg)
-		kv = merged.ValidateTenantKeysByTenant()
-	}
-	// #3267: a threshold written as null is no write (#2518) — not a value
-	// finding, though the plain decode holds it as "".
-	kv = withoutNullThresholds(kv, yamlContent, tcfg)
+	kv := keyChecks(configDir, yamlContent, tcfg)
 	// #3227: a reserved value the exporter ignores blocks the write only when
 	// this write puts it there; one the file already holds, read alike, is a
 	// notice — and so, #3267, a threshold value the row resolvers refuse.
@@ -2366,4 +2352,33 @@ func eolGuardErrs(baseRaw []byte, baseErr error, yamlContent, tenantID string, r
 		return []string{"internal error: cannot read requested custom alerts: " + err.Error()}
 	}
 	return violations(oldAlerts, newAlerts)
+}
+
+// keyChecks is validate's key checks (ValidateTenantKeys) on the body
+// yamlContent, whose plain decode is tcfg, merged over configDir's root
+// platform surface ("" — none).
+//
+// #3267 (ADR-038 decision 12: values are judged as the reader parses them):
+// the body is judged as the exporter decodes it (cfg.DecodeTenantBody, GET's
+// tenant-layer decode too) — a threshold written as null is no write
+// (#2518), a dimensional key takes the exporter's canonical spelling
+// (#2031) — not as the plain yaml.Unmarshal tcfg is. The base the ratchet
+// compares with is decoded the same way (ratchetValues), so "what this write
+// puts there" and "what was there" are two readings by one decoder.
+// parse-tree accepted the body before this, so the decode does not fail; if
+// it did, tcfg is judged.
+func keyChecks(configDir, yamlContent string, tcfg cfg.ThresholdConfig) cfg.KeyValidationByTenant {
+	kvCfg := tcfg
+	if decoded, err := cfg.DecodeTenantBody([]byte(yamlContent)); err == nil {
+		kvCfg = decoded
+	}
+	if configDir == "" {
+		return kvCfg.ValidateTenantKeysByTenant()
+	}
+	// The parsed variant of MergeTenantWithRootDefaults (#708): the body is
+	// decoded above. The caller proved kvCfg.Tenants[tenantID] present, so
+	// the byte variant's flat-KV fallback — the only behavior the parsed
+	// sibling omits — is unreachable here.
+	merged := cfg.MergeParsedTenantWithRootDefaults(configDir, kvCfg)
+	return merged.ValidateTenantKeysByTenant()
 }

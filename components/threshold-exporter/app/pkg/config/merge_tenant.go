@@ -444,6 +444,22 @@ func LoadRootPlatform(configDir string) RootPlatform {
 	return RootPlatform{r: loadRootPlatform(configDir)}
 }
 
+// DecodeTenantBody is the exporter's decode of a tenant file or body as its
+// key checks (ValidateTenantKeys) judge it: parse-tree's verdict, then
+// ParseConfigFile but for its last step (decodeConfigFile) — a threshold
+// written as null is no write (#2518), dimensional keys take the canonical
+// spelling (#2031), and a reserved key keeps its schedule as written for
+// the #3269 finding. The one decode both GET's tenant layer
+// (MergeTenantOverRootPlatform) and tenant-api's write gate — body and the
+// file it replaces alike, the ADR-038 decision 12 ratchet's two sides — judge
+// a tenant's values on (#3267).
+func DecodeTenantBody(data []byte) (ThresholdConfig, error) {
+	if err := judgeConfFile(data); err != nil {
+		return ThresholdConfig{}, err
+	}
+	return decodeConfigFile(data, false)
+}
+
 // MergeTenantOverRootPlatform is MergeTenantWithRootDefaults over a root
 // surface already read by LoadRootPlatform. It reads no file.
 func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData []byte) TenantMerge {
@@ -459,10 +475,7 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 	// the tenant layer keeps a reserved key's schedule as written: the GET's
 	// ValidateTenantKeys reports it (a notice, SelfRatchet) as the write
 	// gate's does. The display merge takes servedValue (mergeTenantConfig).
-	tenantCfg, err := ThresholdConfig{}, judgeConfFile(tenantData)
-	if err == nil {
-		tenantCfg, err = decodeConfigFile(tenantData, false)
-	}
+	tenantCfg, err := DecodeTenantBody(tenantData)
 	if err != nil {
 		tenantCfg = ThresholdConfig{}
 	}

@@ -20,19 +20,28 @@ import (
 const refusedText = "is not a threshold the exporter reads"
 
 // thresholdGate is the write gate's key-check half for body over base, as
-// validateReplacingOver runs it: ValidateTenantKeys on the plain decode,
-// the null filter, then ratchetValues.
+// validateReplacingOver runs it: keyChecks (the exporter's decode of the
+// body), then ratchetValues (the same decode of the base).
 func thresholdGate(t *testing.T, body, base string, baseErr error) (errs, notices []string) {
 	t.Helper()
 	var tcfg cfg.ThresholdConfig
 	if err := yaml.Unmarshal([]byte(body), &tcfg); err != nil {
 		t.Fatalf("decode %q: %v", body, err)
 	}
-	kv := withoutNullThresholds(tcfg.ValidateTenantKeysByTenant(), body, tcfg)
-	kv = ratchetValues(kv, []byte(base), baseErr)
+	kv := ratchetValues(keyChecks("", body, tcfg), []byte(base), baseErr)
+	// Only this check's messages: a fixture key outside any defaults also
+	// draws other key checks (an `expires:` on it, say).
 	for _, v := range kv.Tenants {
-		errs = append(errs, v.Errors...)
-		notices = append(notices, v.Notices...)
+		for _, e := range v.Errors {
+			if strings.Contains(e, refusedText) {
+				errs = append(errs, e)
+			}
+		}
+		for _, n := range v.Notices {
+			if strings.Contains(n, refusedText) {
+				notices = append(notices, n)
+			}
+		}
 	}
 	return errs, notices
 }
@@ -69,6 +78,31 @@ func TestThresholdValueRatchet(t *testing.T) {
 		{name: "null", base: "", body: doc(sec("t1", `k: null`))},
 		{name: "null schedule", base: "", body: doc(sec("t1", "k:\n      default: null"))},
 		{name: "written empty", base: "", body: doc(sec("t1", `k: ""`)), wantErrs: 1},
+		// A null on disk is no value (#2518): writing "" or a suffix over it
+		// is a new value, not an unchanged one.
+		{name: "base null, write empty", base: doc(sec("t1", `k: null`)), body: doc(sec("t1", `k: ""`)), wantErrs: 1},
+		{name: "base null, write suffix", base: doc(sec("t1", `k: null`)), body: doc(sec("t1", `k: ":warning"`)), wantErrs: 1},
+		{name: "base tilde, write empty", base: doc(sec("t1", `k: ~`)), body: doc(sec("t1", `k: ""`)), wantErrs: 1},
+		{name: "base tilde, write suffix", base: doc(sec("t1", `k: ~`)), body: doc(sec("t1", `k: ":warning"`)), wantErrs: 1},
+		{name: "base null schedule, write empty", base: doc(sec("t1", "k:\n      default: null")), body: doc(sec("t1", `k: ""`)), wantErrs: 1},
+		{name: "base null schedule, write suffix", base: doc(sec("t1", "k:\n      default: null")), body: doc(sec("t1", `k: ":warning"`)), wantErrs: 1},
+		// Dimensional keys are read in the exporter's canonical spelling: a
+		// new value under any spelling is refused, the same row re-spelled is
+		// unchanged.
+		{name: "dimensional new, two labels", base: doc(sec("t1", `j: "70"`)), body: doc(sec("t1", `k{a="1",b="2"}: "abc"`)), wantErrs: 1},
+		{name: "dimensional new, labels reordered", base: doc(sec("t1", `j: "70"`)), body: doc(sec("t1", `k{b="2",a="1"}: "70:high"`)), wantErrs: 1},
+		{name: "dimensional new, spaced", base: doc(sec("t1", `j: "70"`)), body: doc(sec("t1", `k{ a="1" }: "abc"`)), wantErrs: 1},
+		{name: "dimensional re-spelled is unchanged", base: doc(sec("t1", `k{b="2",a="1"}: "abc"`)),
+			body: doc(sec("t1", `k{a="1", b="2"}: "abc"`)), wantNote: 1},
+		{name: "dimensional spaced re-spelled is unchanged", base: doc(sec("t1", `k{ a="1" }: "abc"`)),
+			body: doc(sec("t1", `k{a="1"}: "abc"`)), wantNote: 1},
+		// A schedule is compared value by value and expiry by expiry.
+		{name: "same window, other value", base: doc(sec("t1", "k:\n      default: \"abc\"\n      overrides:\n        - window: \"01:00-02:00\"\n          value: \"70\"")),
+			body: doc(sec("t1", "k:\n      default: \"abc\"\n      overrides:\n        - window: \"01:00-02:00\"\n          value: \"71\"")), wantErrs: 1},
+		{name: "other expires", base: doc(sec("t1", "k:\n      default: \"abc\"\n      expires: \"2030-01-01T00:00:00Z\"")),
+			body: doc(sec("t1", "k:\n      default: \"abc\"\n      expires: \"2031-01-01T00:00:00Z\"")), wantErrs: 1},
+		{name: "same expires", base: doc(sec("t1", "k:\n      default: \"abc\"\n      expires: \"2030-01-01T00:00:00Z\"")),
+			body: doc(sec("t1", "k:\n      default: \"abc\"\n      expires: \"2030-01-01T00:00:00Z\"")), wantNote: 1},
 		// #3140 stays out of the ratchet: not a value finding at all.
 		{name: "non-finite is not this check's", base: doc(sec("t1", `k: "NaN"`)), body: doc(sec("t1", `k: "NaN"`))},
 	}
@@ -84,7 +118,7 @@ func TestThresholdValueRatchet(t *testing.T) {
 				}
 			}
 			for _, n := range notices {
-				if !strings.Contains(n, ": k \"") || !strings.Contains(n, "does not block a write") {
+				if !strings.Contains(n, refusedText) || !strings.Contains(n, "does not block a write") {
 					t.Errorf("notice %q", n)
 				}
 			}

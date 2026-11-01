@@ -6,6 +6,7 @@ package handler
 // exporter reads it, on every write path: PUT, the batches and custom-alerts.
 
 import (
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -199,5 +200,55 @@ func TestGetTenant_OtherTenantsThresholdFindingIsWithheld(t *testing.T) {
 				t.Errorf("%d %s", w.Code, w.Body.String())
 			}
 		})
+	}
+}
+
+// #3267 review: the write gate reads both sides as the exporter decodes them
+// (cfg.DecodeTenantBody) — a dimensional key in any spelling is the row the
+// exporter serves, and a null on disk is no value.
+func TestRefusedThreshold_ExporterDecodeBothSides(t *testing.T) {
+	t.Parallel()
+	spellings := []string{`mysql_connections{a="1",b="2"}`, `mysql_connections{b="2",a="1"}`, `mysql_connections{ a="1" }`}
+	for _, k := range spellings {
+		for _, v := range []string{"abc", "70:high"} {
+			t.Run("PUT new/"+k+"/"+v, func(t *testing.T) {
+				t.Parallel()
+				f := newSilentModeFixture(t, "tenants:\n  t-a:\n    mysql_connections: \"70\"\n")
+				w := putTenantIn(t, f, "t-a", "tenants:\n  t-a:\n    mysql_connections: \"70\"\n    '"+k+"': \""+v+"\"\n")
+				if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), rtRefusal) {
+					t.Errorf("%d %s", w.Code, w.Body.String())
+				}
+			})
+			t.Run("batch new/"+k+"/"+v, func(t *testing.T) {
+				t.Parallel()
+				f := newSilentModeFixture(t, "tenants:\n  t-a:\n    mysql_connections: \"70\"\n")
+				patch, _ := json.Marshal(map[string]string{k: v})
+				code, results, _ := f.run(t, "", `{"operations":[{"tenant_id":"t-a","patch":`+string(patch)+`}]}`, false)
+				if code != http.StatusUnprocessableEntity || len(results) != 1 || results[0].Code != "BAD_REQUEST" ||
+					!strings.Contains(results[0].Message, rtRefusal) {
+					t.Errorf("%d %+v %s", code, results, f.lastBody)
+				}
+			})
+		}
+	}
+	t.Run("PUT re-spelled is unchanged", func(t *testing.T) {
+		t.Parallel()
+		f := newSilentModeFixture(t, "tenants:\n  t-a:\n    'mysql_connections{b=\"2\",a=\"1\"}': \"abc\"\n")
+		w := putTenantIn(t, f, "t-a", "tenants:\n  t-a:\n    'mysql_connections{a=\"1\", b=\"2\"}': \"abc\"\n    _silent_mode: warning\n")
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), "NOTICE: tenant=t-a: mysql_connections{") {
+			t.Errorf("%d %s", w.Code, w.Body.String())
+		}
+	})
+	for _, base := range []string{"mysql_connections: null", "mysql_connections: ~", "mysql_connections:\n      default: null"} {
+		for _, v := range []string{"", ":warning"} {
+			t.Run("PUT over a null/"+base+"/"+v, func(t *testing.T) {
+				t.Parallel()
+				f := newSilentModeFixture(t, "tenants:\n  t-a:\n    "+base+"\n")
+				w := putTenantIn(t, f, "t-a", "tenants:\n  t-a:\n    mysql_connections: \""+v+"\"\n")
+				if w.Code != http.StatusBadRequest || !strings.Contains(w.Body.String(), rtRefusal) {
+					t.Errorf("%d %s", w.Code, w.Body.String())
+				}
+			})
+		}
 	}
 }

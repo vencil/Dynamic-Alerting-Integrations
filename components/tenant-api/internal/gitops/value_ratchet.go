@@ -9,16 +9,16 @@ package gitops
 import (
 	"github.com/vencil/tenant-api/internal/confd"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
-	"gopkg.in/yaml.v3"
 )
 
 // ratchetValues is validateReplacing's value ratchet: kv judged against the
 // file the write replaces (baseRaw, baseErr: readTenantFile's result).
 //
 // ⛔ STRICT WHENEVER THE BASE IS NOT KNOWN. A missing file (ENOENT — a new
-// tenant), a read error, a file parse-tree refuses (confd.Judge) or one that
-// does not decode all mean "nothing was there that this write leaves as it
-// is", and every value finding stays an error. The opposite reading ("cannot
+// tenant), a read error, a file parse-tree refuses (confd.Judge) or one the
+// exporter's decode (cfg.DecodeTenantBody) refuses all mean "nothing was
+// there that this write leaves as it is", and every value finding stays an
+// error. The opposite reading ("cannot
 // tell, so let it through") would let a write introduce a value the exporter
 // ignores by pairing it with a broken base. Same direction as eolGuardErrs.
 //
@@ -32,8 +32,11 @@ func ratchetValues(kv cfg.KeyValidationByTenant, baseRaw []byte, baseErr error) 
 	if confd.Judge(baseRaw) != nil {
 		return kv
 	}
-	var base cfg.ThresholdConfig
-	if err := yaml.Unmarshal(baseRaw, &base); err != nil {
+	// The exporter's decode (cfg.DecodeTenantBody), as the body's (#3267):
+	// a null on disk is no value, and a dimensional key is looked up in the
+	// exporter's canonical spelling, whichever way either side wrote it.
+	base, err := cfg.DecodeTenantBody(baseRaw)
+	if err != nil {
 		return kv
 	}
 	return kv.Ratchet(cfg.PriorValues(base.Tenants))
@@ -46,38 +49,4 @@ func ratchetValues(kv cfg.KeyValidationByTenant, baseRaw []byte, baseErr error) 
 // validation warnings, which say what blocks a write.
 func SelfRatchetValues(kv cfg.KeyValidationByTenant) cfg.KeyValidationByTenant {
 	return kv.SelfRatchet()
-}
-
-// withoutNullThresholds is kv less its threshold value findings (#3267) on a
-// key the body writes as null. The write gate's plain yaml.Unmarshal (tcfg)
-// holds `k: null` as "", which the threshold kind refuses like a written
-// `k: ""`; the exporter decodes the body through cfg.ParseConfigFile, which
-// takes the null out (#2518: no write). A key tcfg has and that decode does
-// not is such a null. The second decode runs only when there is a threshold
-// finding to judge, so the common write pays nothing for it.
-func withoutNullThresholds(kv cfg.KeyValidationByTenant, yamlContent string, tcfg cfg.ThresholdConfig) cfg.KeyValidationByTenant {
-	found := false
-	for _, v := range kv.Tenants {
-		for _, f := range v.Values {
-			found = found || f.IsThreshold()
-		}
-	}
-	if !found {
-		return kv
-	}
-	served, err := cfg.ParseConfigFile([]byte(yamlContent))
-	if err != nil {
-		return kv
-	}
-	has := func(keys map[string]cfg.ScheduledValue, canon string) bool {
-		for k := range keys {
-			if c, _ := cfg.CanonicalKeyFor(k); c == canon {
-				return true
-			}
-		}
-		return false
-	}
-	return kv.Without(func(f cfg.ValueFinding) bool {
-		return f.IsThreshold() && has(tcfg.Tenants[f.Tenant], f.Key) && !has(served.Tenants[f.Tenant], f.Key)
-	})
 }

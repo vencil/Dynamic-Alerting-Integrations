@@ -285,6 +285,9 @@ func TestThresholdReadAlike(t *testing.T) {
 		{"k", w("70", "01:00-02:00", "abc"), ScheduledValue{Default: "70"}},
 		{"k_critical", ScheduledValue{Default: "90:critical"}, ScheduledValue{Default: "90:warning"}},
 		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2030-01-01T00:00:00Z"}}},
+		{"k", w("70", "01:00-02:00", "abc"), w("70", "01:00-02:00", "xyz")},
+		{"k", ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2030-01-01T00:00:00Z"}},
+			ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2031-01-01T00:00:00Z"}}},
 	}
 	for _, c := range differ {
 		if ThresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
