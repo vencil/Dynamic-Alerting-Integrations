@@ -15,9 +15,9 @@
 # pin with its own purpose (#1949).
 set -euo pipefail
 
-PROM_VERSION=3.15.0
+PROM_VERSION=3.15.1
 # SHA-256 of prometheus-${PROM_VERSION}.linux-amd64.tar.gz (upstream sha256sums.txt).
-PROM_SHA256=2a542df32eac02ee17b9d844fb2aa1de00dafa5476579ba8a3ba862e9d572ea0
+PROM_SHA256=6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84
 
 if [ "$(uname -m)" != "x86_64" ]; then
     # Only the amd64 tarball digest is pinned here. Refuse to install an
