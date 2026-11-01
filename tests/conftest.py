@@ -689,11 +689,17 @@ def _provide_session_da_guard() -> None:
 #: 經 da-crdecode、Alertmanager 設定經 da-read。讀它們的工具（onboard_platform、
 #: check_retire_drift）同樣遍布各處的測試在呼叫，理由與做法同 da-guard：
 #: (binary 名, 環境變數, 給 xdist worker 的 session 變數, 模組目錄, go build 的套件)。
-_SESSION_CONSUMER_BINARIES = (
-    ("da-crdecode", "DA_CRDECODE_BINARY", "VIBE_TEST_DA_CRDECODE_BINARY",
-     ("components", "threshold-exporter", "app"), "./cmd/da-crdecode"),
-    ("da-read", "DA_READ_BINARY", "VIBE_TEST_DA_READ_BINARY", ("components", "da-read"), "."),
-)
+#: 清單與來源取自 `_lib_consumer_read.READER_BUILD_SOURCES`（唯一一份；da-guard
+#: 由上面的 `_provide_session_da_guard` 另外處理），不在這裡另寫（#3343）。
+def _consumer_binaries() -> "tuple[tuple[str, str, str, tuple[str, ...], str], ...]":
+    from _lib_consumer_read import DA_GUARD_ENV, READER_BUILD_SOURCES
+    return tuple(
+        (name, env, "VIBE_TEST_" + env, tuple(module.split("/")), pkg)
+        for env, (module, pkg, name) in READER_BUILD_SOURCES.items()
+        if env != DA_GUARD_ENV)
+
+
+_SESSION_CONSUMER_BINARIES = _consumer_binaries()
 _SESSION_CONSUMER_DIRS: "list[str]" = []
 
 

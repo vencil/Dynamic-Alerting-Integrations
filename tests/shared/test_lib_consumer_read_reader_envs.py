@@ -68,8 +68,26 @@ def test_the_go_real_generator_tests_build_every_registered_reader() -> None:
            "generator_real_test.go").read_text(encoding="utf-8")
     block = re.search(r"var generatorTools = \[\]\*generatorTool\{(.*?)\n\}", src, re.S)
     assert block, "generatorTools list not found — the Go test was restructured"
-    go_envs = re.findall(r'env:\s*"([A-Z_]+)"', block.group(1))
-    assert sorted(go_envs) == sorted(cr.READER_BINARY_ENVS)
+    go_tools = re.findall(r'env:\s*"([A-Z_]+)",\s*name:\s*"([^"]+)",\s*'
+                          r'module:\s*"([^"]+)",\s*pkg:\s*"([^"]+)"', block.group(1))
+    assert {env: (module, pkg, name) for env, name, module, pkg in go_tools} == \
+        cr.READER_BUILD_SOURCES
+
+
+def test_the_build_sources_cover_exactly_the_registered_readers() -> None:
+    assert set(cr.READER_BUILD_SOURCES) == set(cr.READER_BINARY_ENVS)
+    for module, package, _ in cr.READER_BUILD_SOURCES.values():
+        assert (REPO_ROOT / module / "go.mod").is_file(), module
+        assert (REPO_ROOT / module / package).is_dir(), (module, package)
+
+
+def test_the_contract_runner_builds_from_the_register() -> None:
+    """The contract runner starts the real generator too; it must not keep a
+    list of its own (it built da-guard only, and the policy smoke broke)."""
+    src = (REPO_ROOT / "tests/contract/run_contract_tests.py").read_text(encoding="utf-8")
+    assert "READER_BUILD_SOURCES" in src
+    for literal in ('"DA_GUARD_BINARY"', '"DA_CRDECODE_BINARY"', '"DA_READ_BINARY"'):
+        assert literal not in src, literal
 
 
 def test_every_relative_value_becomes_absolute_against_the_cwd(tmp_path, monkeypatch) -> None:
