@@ -8,7 +8,7 @@
 #   3) does NOT fire for a sink whose counter is flat (`> 0`, not `>= 0`).
 #   4) CLEARS once the drops have left the 5m rate window.
 # The per-pod series below (pod / instance labels) model per-pod targets: the
-# `platform-components` job discovers endpoints and scrapes every Vector pod,
+# `platform-components` job discovers endpoint slices and scrapes every Vector pod,
 # stamping `pod` (#3483), so case 1's "N pods -> one alert" is today's topology.
 # Run: promtool test rules tests/rulepacks/platform-vector-buffer-dropped_test.yaml
 rule_files:

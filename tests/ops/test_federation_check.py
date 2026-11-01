@@ -432,13 +432,13 @@ class TestQueryNotAnsweredIsACheck:
     @pytest.mark.parametrize("value", ["NaN", "+Inf"])
     def test_a_count_that_is_not_finite_is_a_caller_error(self, value):
         """It used to crash on int(float('nan'))."""
-        c = _central(lambda q: _vector(value) if q == "count(user_threshold)"
+        c = _central(lambda q: _vector(value) if q == fc.THRESHOLD_ROWS_QUERY
                      else _vector("1"))["central_threshold_exporter"]
         assert (c["status"], c.get("caller_error")) == ("fail", True)
 
     def test_a_malformed_answer_is_a_caller_error(self):
         bad = ({"status": "success", "data": {"resultType": "matrix", "result": []}}, None)
-        c = _central(lambda q: bad if q == "count(user_threshold)"
+        c = _central(lambda q: bad if q == fc.THRESHOLD_ROWS_QUERY
                      else _vector("1"))["central_threshold_exporter"]
         assert (c["status"], c.get("caller_error")) == ("fail", True)
         assert "resultType is 'matrix'" in c["detail"]
@@ -463,7 +463,7 @@ class TestQueryNotAnsweredIsACheck:
 
 
 @pytest.mark.parametrize("query,check", [
-    ("count(user_threshold)", "central_threshold_exporter"),
+    (fc.THRESHOLD_ROWS_QUERY, "central_threshold_exporter"),
     ('count(count by(__name__) ({__name__=~"tenant:.*"}))', "central_recording_rules"),
     ('count(up{tenant!=""})', "central_edge_metrics"),
 ], ids=["threshold-exporter", "recording-rules", "fallback"])

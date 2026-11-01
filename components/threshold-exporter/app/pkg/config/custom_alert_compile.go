@@ -328,9 +328,23 @@ func record(name, expr string) orderedMap {
 	return orderedMap{{"record", name}, {"expr", expr}}
 }
 
+// thresholdJoinKey is what every core rule joins custom:threshold:{id} on
+// (`on(tenant, version)`, with severity fixed by the selector): the exporter
+// serves ONE row per (tenant, recipe_id, severity) (customSeriesID), so this
+// key picks at most one series of a consistent exporter.
+const thresholdJoinKey = "tenant, version, severity"
+
+// thresholdRecord is the per-tenant threshold the core rules join with
+// group_left(name, mode). `max by(…, name, mode)` collapses replicas serving
+// the same row; the outer `topk by(thresholdJoinKey) (1, …)` keeps one series
+// per join key while the replicas briefly disagree on a row's name or mode
+// during a config reload (#3483) — without it that tenant has two series on
+// the joined side and the shape's rule fails ("many-to-many matching not
+// allowed") for EVERY tenant, the #3112 failure reached through the replicas.
 func thresholdRecord(id, metric string) orderedMap {
-	inner := `max by(tenant, version, severity, name, mode) ` +
-		`(user_threshold{component="custom", metric="` + metric + `", recipe_id="` + id + `"})`
+	inner := `topk by(` + thresholdJoinKey + `) (1, ` +
+		`max by(` + thresholdJoinKey + `, name, mode) ` +
+		`(user_threshold{component="custom", metric="` + metric + `", recipe_id="` + id + `"}))`
 	return record("custom:threshold:"+id, normVersion(inner))
 }
 

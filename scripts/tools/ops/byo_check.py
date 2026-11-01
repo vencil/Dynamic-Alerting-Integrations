@@ -37,7 +37,7 @@ from _lib_python import probe_health, add_prometheus_arg  # noqa: E402
 # a missing one or an advisory.
 from _lib_prometheus import (  # noqa: E402
     QueryError, alertmanager_alerts, alertmanager_silences, alertmanager_status,
-    instant_or_error, prometheus_rules, vector_count, vector_sample)
+    collapse_replicas, instant_or_error, prometheus_rules, vector_count, vector_sample)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
 # #1132 structural check is the SINGLE implementation in _grar_validate.py (the
@@ -49,6 +49,9 @@ import _lib_consumer_read  # noqa: E402
 
 # The orchestrator's one query call: (rows, None) or (None, why).
 query_prometheus = instant_or_error
+
+#: Step 2b: how many user_threshold rows the exporter serves, replica-independent.
+THRESHOLD_ROWS_QUERY = f"count({collapse_replicas('user_threshold')})"
 
 
 # ---------------------------------------------------------------------------
@@ -440,7 +443,8 @@ def check_prometheus(args):
     checks.append(_judge_step2_threshold_exporter_scrape(results, err))
 
     # Step 2b: user_threshold metrics present
-    results, err = query_prometheus(prom_url, "count(user_threshold)")
+    # Distinct rows, not samples: each replica serves every row (#3483).
+    results, err = query_prometheus(prom_url, THRESHOLD_ROWS_QUERY)
     checks.append(_judge_step2_user_threshold_metrics(results, err))
 
     # Step 3: Rule Packs loaded

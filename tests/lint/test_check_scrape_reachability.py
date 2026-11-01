@@ -92,8 +92,8 @@ def _pre_fix_jobs():
 # namespace (`platform-components`), and every other job drops that label so a
 # platform Service has exactly one scraping job. monitoring-components keeps only
 # the raw `monitoring` manifests (alertmanager, kube-state-metrics). Since #3483
-# the platform job discovers endpoints (every pod a target) and keeps only the
-# target on the annotated port (each pod once).
+# the platform job discovers endpoint slices (every pod a target) and keeps only
+# the target on the annotated port (each pod once).
 _FACE_PROM_YML = """
 scrape_configs:
   - job_name: "prometheus"
@@ -114,7 +114,7 @@ scrape_configs:
         regex: "platform"
   - job_name: "platform-components"
     kubernetes_sd_configs:
-      - role: endpoints
+      - role: endpointslice
     relabel_configs:
       - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
         action: keep
@@ -122,13 +122,9 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
         action: keep
         regex: "platform"
-      - source_labels: [__address__]
-        target_label: __tmp_scrape_port
-        regex: .+:(\\d+)
-        replacement: $1
       - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
         action: keepequal
-        target_label: __tmp_scrape_port
+        target_label: __meta_kubernetes_endpointslice_port
       - source_labels: [__meta_kubernetes_service_name]
         target_label: job
   - job_name: "monitoring-components"
@@ -684,7 +680,13 @@ def test_the_label_face_sets_the_platform_job_label():
 
 # ── the platform job scrapes every pod exactly once (#3483) ──────────────
 
-_PORT_SELECT = """      - source_labels: [__address__]
+_SLICE_KEEP = """      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __meta_kubernetes_endpointslice_port
+"""
+# The same selection for a role without a port meta label (v1 endpoints):
+# capture __address__'s port first, then compare.
+_ADDRESS_KEEP = """      - source_labels: [__address__]
         target_label: __tmp_scrape_port
         regex: .+:(\\d+)
         replacement: $1
@@ -692,6 +694,15 @@ _PORT_SELECT = """      - source_labels: [__address__]
         action: keepequal
         target_label: __tmp_scrape_port
 """
+_SLICE_ROLE = """  - job_name: "platform-components"
+    kubernetes_sd_configs:
+      - role: endpointslice
+"""
+
+
+def _with_role(role, yml=None):
+    return (yml or _FACE_PROM_YML).replace(_SLICE_ROLE, _SLICE_ROLE.replace(
+        "role: endpointslice", f"role: {role}"))
 
 
 def _per_pod_errors(yml):
@@ -701,7 +712,7 @@ def _per_pod_errors(yml):
 
 def test_real_configmap_scrapes_every_platform_pod_once():
     job = _face_job(gate.load_repo_jobs(), "platform-components")
-    assert job["sd_role"] == "endpoints"
+    assert job["sd_roles"] == ["endpointslice"]
     assert job["port_select"]
     assert gate._platform_per_pod(gate.load_repo_jobs()) == []
 
@@ -712,39 +723,99 @@ def test_the_label_face_scrapes_every_pod_once():
     assert _face_job(_face_jobs(), "platform-components")["port_select"]
 
 
+@pytest.mark.parametrize("role", ["endpoints", "endpointslice"])
+def test_the_address_capture_form_also_selects_one_port(role):
+    yml = _with_role(role, _FACE_PROM_YML.replace(_SLICE_KEEP, _ADDRESS_KEEP))
+    assert _per_pod_errors(yml) == []
+
+
+def test_the_slice_port_meta_is_not_a_port_label_for_the_endpoints_role():
+    """v1 endpoints has no __meta_kubernetes_endpointslice_port: comparing the
+    annotation with it keeps nothing."""
+    errors = _per_pod_errors(_with_role("endpoints"))
+    assert len(errors) == 1 and "keepequal" in errors[0], errors
+
+
 def test_a_service_role_platform_job_is_an_error():
     """`role: service` scrapes the Service address: one replica per scrape, a
     dead replica never reads up 0 (#3483)."""
-    yml = _FACE_PROM_YML.replace(
-        """  - job_name: "platform-components"
-    kubernetes_sd_configs:
-      - role: endpoints
-""", """  - job_name: "platform-components"
-    kubernetes_sd_configs:
-      - role: service
-""")
-    errors = _per_pod_errors(yml)
+    errors = _per_pod_errors(_with_role("service"))
     assert len(errors) == 1 and "role: service" in errors[0], errors
 
 
-@pytest.mark.parametrize("breakage", [
-    "no_keepequal",          # the keep removed: one target per Service port
-    "address_rewritten",     # __address__ forced to the annotated port first
-    "keepequal_on_other",    # keepequal against a label that is not the port
-])
-def test_an_endpoints_platform_job_without_the_port_keep_is_an_error(breakage):
-    if breakage == "no_keepequal":
-        yml = _FACE_PROM_YML.replace(_PORT_SELECT, "")
-    elif breakage == "address_rewritten":
-        yml = _FACE_PROM_YML.replace(_PORT_SELECT, """      - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+@pytest.mark.parametrize("second", ["service", "endpointslice", "endpoints"])
+def test_a_platform_job_with_two_sd_configs_is_an_error(second):
+    """sd_role keeps only the last entry; a second discovery (a `role: service`
+    beside the slices, say) scrapes the pods again or one replica per scrape."""
+    yml = _FACE_PROM_YML.replace(_SLICE_ROLE, _SLICE_ROLE + f"      - role: {second}\n")
+    assert yml != _FACE_PROM_YML
+    errors = _per_pod_errors(yml)
+    assert len(errors) == 1 and "kubernetes_sd_configs" in errors[0], errors
+
+
+def test_the_keepequal_operands_may_be_swapped():
+    yml = _FACE_PROM_YML.replace(_SLICE_KEEP, """      - source_labels: [__meta_kubernetes_endpointslice_port]
+        action: keepequal
+        target_label: __meta_kubernetes_service_annotation_prometheus_io_port
+""")
+    assert _per_pod_errors(yml) == []
+    yml = _FACE_PROM_YML.replace(_SLICE_KEEP, _ADDRESS_KEEP.replace(
+        """      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __tmp_scrape_port
+""", """      - source_labels: [__tmp_scrape_port]
+        action: keepequal
+        target_label: __meta_kubernetes_service_annotation_prometheus_io_port
+"""))
+    assert _per_pod_errors(yml) == []
+
+
+_OVERWRITE_TMP = """      - source_labels: [__meta_kubernetes_pod_name]
+        target_label: __tmp_scrape_port
+"""
+_OVERWRITE_SLICE_PORT = """      - target_label: __meta_kubernetes_endpointslice_port
+        replacement: "8080"
+"""
+_REWRITE_ADDRESS = """      - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
         target_label: __address__
         regex: ([^:]+)(?::\\d+)?;(\\d+)
         replacement: $1:$2
-""" + _PORT_SELECT)
-    else:
-        yml = _FACE_PROM_YML.replace(_PORT_SELECT, _PORT_SELECT.replace(
+"""
+
+
+@pytest.mark.parametrize("breakage", [
+    "no_keepequal",              # the keep removed: one target per Service port
+    "address_rewritten_before",  # __address__ forced to the annotated port first
+    "address_rewritten_after",   # the kept target then scrapes another port
+    "keepequal_on_other",        # keepequal against a label that is not the port
+    "captured_label_overwritten",  # the captured port overwritten before the keep
+    "slice_port_overwritten",    # the slice port meta overwritten before the keep
+    "captured_label_dropped",    # labeldrop removes the captured port
+])
+def test_a_per_pod_platform_job_without_the_port_keep_is_an_error(breakage):
+    face = _FACE_PROM_YML
+    if breakage == "no_keepequal":
+        yml = face.replace(_SLICE_KEEP, "")
+    elif breakage == "address_rewritten_before":
+        yml = face.replace(_SLICE_KEEP, _REWRITE_ADDRESS + _ADDRESS_KEEP)
+    elif breakage == "address_rewritten_after":
+        yml = face.replace(_SLICE_KEEP, _SLICE_KEEP + _REWRITE_ADDRESS)
+    elif breakage == "keepequal_on_other":
+        yml = face.replace(_SLICE_KEEP, _ADDRESS_KEEP.replace(
             "source_labels: [__address__]", "source_labels: [__meta_kubernetes_pod_name]"))
-    assert _FACE_PROM_YML != yml
+    elif breakage == "captured_label_overwritten":
+        yml = face.replace(_SLICE_KEEP, _ADDRESS_KEEP.replace(
+            """      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]""",
+            _OVERWRITE_TMP + """      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]"""))
+    elif breakage == "slice_port_overwritten":
+        yml = face.replace(_SLICE_KEEP, _OVERWRITE_SLICE_PORT + _SLICE_KEEP)
+    else:
+        yml = face.replace(_SLICE_KEEP, _ADDRESS_KEEP.replace(
+            """      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]""",
+            """      - action: labeldrop
+        regex: __tmp_.*
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]"""))
+    assert face != yml
     errors = _per_pod_errors(yml)
     assert len(errors) == 1 and "keepequal" in errors[0], errors
 

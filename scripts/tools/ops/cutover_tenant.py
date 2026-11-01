@@ -53,7 +53,16 @@ from _lib_exitcodes import (  # noqa: E402
 )
 from _lib_python import add_prometheus_arg  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3415)
-from _lib_prometheus import QueryError, prometheus_instant, vector_count  # noqa: E402
+from _lib_prometheus import (  # noqa: E402
+    QueryError, collapse_replicas, prometheus_instant, vector_count,
+)
+
+
+def threshold_rows_query(tenant: str) -> str:
+    """How many user_threshold rows the exporter serves for *tenant*, counted
+    once however many exporter replicas serve them (#3483)."""
+    selector = 'user_threshold{tenant="' + tenant + '"}'
+    return f"count({collapse_replicas(selector)})"
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +205,8 @@ def verify_health(tenant, prometheus_url, dry_run=False):
         return True, "(dry-run)"
 
     # Check threshold metrics exist for tenant
-    query = f'count(user_threshold{{tenant="{tenant}"}})'
+    # Distinct rows, not samples: each exporter replica serves every row (#3483).
+    query = threshold_rows_query(tenant)
     try:
         count = vector_count(prometheus_instant(prometheus_url, query))
     except QueryError as exc:

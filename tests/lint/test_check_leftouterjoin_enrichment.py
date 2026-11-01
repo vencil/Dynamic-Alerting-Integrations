@@ -225,3 +225,48 @@ def test_max_only_form_rejected_with_line_number():
     text = _LEFT_OUTER.replace(lint.ENRICH_RHS, _MAX_ONLY)
     assert lint.ENRICH_RHS not in text
     assert lint.noncanonical_joins(text) == [(4, _MAX_ONLY)]
+
+
+# --- any label list: the right-hand operand decides (#3483 review) ---------
+# These missed ENRICH_MARKER (another or no label list) and were let through
+# while their right-hand side was a `max by(...)`-only collapse.
+_ANY_LABEL_LIST_ESCAPES = {
+    "partial_list_max_only": ("x * on(tenant) group_left(runbook_url) "
+                              "max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)"),
+    "bare_group_left_max_only": ("x * on(tenant) group_left "
+                                 "max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)"),
+    "owner_only": "x * on(tenant) group_left(owner) max by(tenant, owner) (tenant_metadata_info)",
+    "group_right_max_only": ("x * on(tenant) group_right(runbook_url, owner, tier)\n"
+                             "  max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)"),
+    "ignoring_one_to_one": "x / ignoring(job) max by(tenant) (tenant_metadata_info)",
+    "parenthesised_raw": "x * on(tenant) group_left(owner) (tenant_metadata_info)",
+    "comparison_bool": "x > bool on(tenant) max by(tenant) (tenant_metadata_info)",
+}
+
+
+def test_any_label_list_onto_a_non_canonical_rhs_is_flagged():
+    for name, text in _ANY_LABEL_LIST_ESCAPES.items():
+        assert lint.noncanonical_joins(text), name
+
+
+def test_any_label_list_onto_the_canonical_rhs_passes():
+    """The rule is about the right-hand operand only."""
+    for mod in ("group_left(runbook_url)", "group_left", "GROUP_LEFT (owner, tier)"):
+        text = f"x * on(tenant) {mod} {lint.ENRICH_RHS}"
+        assert lint.noncanonical_joins(text) == [], mod
+
+
+def test_an_unrelated_vector_match_is_not_flagged():
+    assert lint.noncanonical_joins(
+        "x > on(tenant) group_left tenant:alert_threshold:x") == []
+    assert lint.noncanonical_joins(
+        "x * on(tenant) group_left max by(tenant) (user_state_filter{filter=\"a\"})") == []
+
+
+def test_an_apostrophe_in_a_comment_does_not_swallow_the_file():
+    text = ("x * on(tenant) group_left(owner) (\n"
+            "  # the tenant's metadata\n"
+            "  y\n"
+            ")\n"
+            f"z * on(tenant) group_left(runbook_url, owner, tier) {lint.ENRICH_RHS}\n")
+    assert lint.noncanonical_joins(text) == []

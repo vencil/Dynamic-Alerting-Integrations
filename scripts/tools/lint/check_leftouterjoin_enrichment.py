@@ -23,15 +23,18 @@ pod (a ServiceMonitor, or any pod/endpoints discovery), the same tenant arrives
 once per replica, differing only in scrape-identity labels (instance, pod, …),
 and `* on(tenant) group_left(...) tenant_metadata_info` then fails at evaluation
 with "many-to-many matching not allowed" — the whole alert stops evaluating.
-So the right-hand side of every enrichment must be exactly `ENRICH_RHS`, which
+So the right-hand side of every enrichment — every `on(...)`/`ignoring(...)`
+vector match whose right-hand operand involves tenant_metadata_info, whatever
+its group_left label list — must be exactly `ENRICH_RHS`, which
 collapses the replicas by the label set the exporter serves, then keeps a single
 series per tenant. The outer `topk by(tenant) (1, …)` covers the reload window:
-the replicas reload their config independently, so for a few seconds one can
-serve a tenant's new runbook_url/owner/tier while the other still serves the old
-one. `max by` keeps both (they differ in a metadata label), the tenant has two
+the replicas reload their config independently (each polls every reloadInterval,
+and the ConfigMap reaches each through its own node's kubelet), so for up to a
+minute or two one can serve a tenant's new runbook_url/owner/tier while the
+other still serves the old one. `max by` keeps both (they differ in a metadata label), the tenant has two
 right-hand series, and the join fails with many-to-many for EVERY tenant of the
 rule — one tenant's reload silences everyone's alert. `topk` keeps the first
-series it sees on a tie (all values are 1), so that tenant briefly carries one
+series it sees on a tie (all values are 1), so that tenant meanwhile carries one
 replica's — possibly stale — metadata instead. `by` (not
 `without`) is deliberate: `without` would have to list every per-replica label
 a scrape config could add (a relabelled `node`, say), and any it missed brings
@@ -81,19 +84,71 @@ _DEDUP_RHS = f"max by(tenant, {', '.join(METADATA_LABELS)}) (tenant_metadata_inf
 ENRICH_RHS = f"topk by(tenant) (1, {_DEDUP_RHS})"
 VOID_BRANCH = "unless on(tenant) tenant_metadata_info"
 
-# Any vector match onto the raw metric, whatever its case, spacing, label list or
-# cardinality modifier (group_left, group_right, or none = one-to-one) — every
-# arithmetic/comparison match on it breaks under per-pod scraping. The set
-# operators (`and`, `or`, `unless`) match on presence and are exempt.
-_RAW_JOIN = re.compile(
+# Every vector match (`on(...)` / `ignoring(...)`, with or without a
+# group_left / group_right label list, whatever its case or spacing) whose
+# right-hand operand involves tenant_metadata_info: that operand must be exactly
+# ENRICH_RHS (whitespace- and case-insensitive). The label list does not matter
+# — `group_left(runbook_url)` or a bare `group_left` onto a `max by(...)`-only
+# collapse fails under replica skew just the same. The set operators (`and`,
+# `or`, `unless`) match on presence and are exempt.
+_VECTOR_MATCH = re.compile(
     r"(\b[a-z_]+\b|[-+*/%^]|[<>=!]=?)\s*(?:on|ignoring)\s*\([^)]*\)\s*"
-    r"(?:group_(?:left|right)\s*(?:\([^)]*\))?\s*)?\(?\s*tenant_metadata_info\b",
+    r"(?:group_(?:left|right)\b\s*(?:\([^)]*\))?)?",
     re.IGNORECASE)
 _SET_OPERATORS = {"and", "or", "unless"}
-# A group_left/group_right carrying exactly the metadata labels, in any case or
-# spacing: its right-hand side must be ENRICH_RHS (whitespace-insensitive), or a
-# spelling that misses ENRICH_MARKER would escape both checks above.
-_METADATA_GROUP = re.compile(r"group_(?:left|right)\s*\(([^)]*)\)", re.IGNORECASE)
+_IDENT = re.compile(r"[A-Za-z_:][A-Za-z0-9_:]*")
+_GROUPING = re.compile(r"(?:by|without)\s*\(", re.IGNORECASE)
+
+
+def _skip_ws(text: str, i: int) -> int:
+    while i < len(text) and text[i].isspace():
+        i += 1
+    return i
+
+
+def _balanced(text: str, i: int) -> int:
+    """Index just past the parenthesis group opening at text[i] (quotes skipped)."""
+    depth, quote = 0, None
+    for j in range(i, len(text)):
+        c = text[j]
+        if quote:
+            # A "..." or '...' literal cannot span lines; ending it at the
+            # newline keeps an apostrophe in a `#` comment from eating the file.
+            if (c == quote and text[j - 1] != "\\") or (c == "\n" and quote != "`"):
+                quote = None
+        elif c in "\"'`":
+            quote = c
+        elif c == "(":
+            depth += 1
+        elif c == ")":
+            depth -= 1
+            if depth == 0:
+                return j + 1
+    return len(text)
+
+
+def _operand(text: str, i: int) -> str:
+    """The right-hand operand of a vector match whose modifiers end at *i*: a
+    parenthesised group, or a name (selector / function / aggregation) with its
+    optional `by|without (...)`, `{...}` and argument group."""
+    i = start = _skip_ws(text, i)
+    if i < len(text) and text[i] == "(":
+        return text[start:_balanced(text, i)]
+    m = _IDENT.match(text, i)
+    if not m:
+        return ""
+    i = m.end()
+    g = _GROUPING.match(text, _skip_ws(text, i))
+    if g:
+        i = _balanced(text, g.end() - 1)
+    j = _skip_ws(text, i)
+    if j < len(text) and text[j] == "{":
+        k = text.find("}", j)
+        i = len(text) if k < 0 else k + 1
+        j = _skip_ws(text, i)
+    if j < len(text) and text[j] == "(":
+        i = _balanced(text, j)
+    return text[start:i]
 
 
 def _squash(s: str) -> str:
@@ -112,26 +167,24 @@ def count_pair(text: str) -> Tuple[int, int]:
 
 def noncanonical_joins(text: str) -> List[Tuple[int, str]]:
     """Pure core: (line number, offending text) for every enrichment join whose
-    right-hand side is not ENRICH_RHS, plus every group_left onto the raw metric."""
+    right-hand side is not ENRICH_RHS: the exact marker followed by anything
+    else, and any other vector match whose right-hand operand involves
+    tenant_metadata_info but is not ENRICH_RHS."""
     found = {}
     for m in re.finditer(re.escape(ENRICH_MARKER) + r"\s*", text):
         if not text.startswith(ENRICH_RHS, m.end()):
             line = text.count("\n", 0, m.start()) + 1
             rest = text[m.end():].split("\n", 1)[0].strip()
             found[line] = rest
-    for m in _RAW_JOIN.finditer(text):
+    want = _squash(ENRICH_RHS)
+    for m in _VECTOR_MATCH.finditer(text):
         if m.group(1).lower() in _SET_OPERATORS:
             continue
-        line = text.count("\n", 0, m.start()) + 1
-        found.setdefault(line, " ".join(m.group(0).split()))
-    want = _squash(ENRICH_RHS)
-    for m in _METADATA_GROUP.finditer(text):
-        labels = {x.strip() for x in m.group(1).split(",") if x.strip()}
-        if labels != set(METADATA_LABELS):
+        operand = _operand(text, m.end())
+        if "tenant_metadata_info" not in operand or _squash(operand) == want:
             continue
-        if not _squash(text[m.end():m.end() + 4 * len(ENRICH_RHS)]).startswith(want):
-            line = text.count("\n", 0, m.start()) + 1
-            found.setdefault(line, " ".join(text[m.start():].split("\n", 1)[0].split()))
+        line = text.count("\n", 0, m.start()) + 1
+        found.setdefault(line, " ".join(f"{m.group(0)} {operand}".split()))
     return sorted(found.items())
 
 

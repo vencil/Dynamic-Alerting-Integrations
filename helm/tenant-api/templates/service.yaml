@@ -11,7 +11,8 @@ metadata:
     dynamic-alerting.io/scrape: platform
   annotations:
     prometheus.io/scrape: "true"
-    prometheus.io/port: "{{ .Values.service.internalPort }}"
+    # The POD port, not service.internalPort (#3483): see tenant-api.apiPort.
+    prometheus.io/port: "{{ include "tenant-api.apiPort" . }}"
     prometheus.io/path: "/metrics"
 spec:
   type: {{ .Values.service.type }}
@@ -24,5 +25,5 @@ spec:
       protocol: TCP
     - name: api-internal
       port: {{ .Values.service.internalPort }}
-      targetPort: 8080
+      targetPort: {{ include "tenant-api.apiPort" . }}
       protocol: TCP

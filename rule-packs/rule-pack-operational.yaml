@@ -50,6 +50,13 @@
 # platform-static sentinel-sinkhole route（continue:false，在 enforced/tenant
 # route 之前）接走；inhibit 語意不受影響（inhibit source 比對所有 active
 # alerts，與路由無關）。新增 sentinel 時必帶此 label（guard 測試釘死）。
+#
+# === 副本（#3483）===
+# 這些指標都由 threshold-exporter 送出；它跑多個副本、平台的 Prometheus 逐 pod
+# 抓取，每個序列各有一份 per 副本、只差 instance／pod。規則一律先
+# `max without(instance, pod)` 收掉副本，每個租戶每個事件只發一則告警；其他 label
+# （tenant、target_severity、mode、event、reason）原樣保留，路由與 inhibit 不受影響。
+# 驗證：tests/rulepacks/rule-pack-operational-replicas_test.yaml。
 # ============================================================
 groups:
   - name: operational-mode-sentinel
@@ -57,7 +64,7 @@ groups:
       # Sentinel alert: fires when a tenant has silent mode active for warning.
       # Used as inhibit_rules source to suppress warning notifications.
       - alert: TenantSilentWarning
-        expr: user_silent_mode{target_severity="warning"} == 1
+        expr: max without(instance, pod) (user_silent_mode{target_severity="warning"}) == 1
         labels:
           severity: none
           component: sentinel
@@ -71,7 +78,7 @@ groups:
       # Sentinel alert: fires when a tenant has silent mode active for critical.
       # Used as inhibit_rules source to suppress critical notifications.
       - alert: TenantSilentCritical
-        expr: user_silent_mode{target_severity="critical"} == 1
+        expr: max without(instance, pod) (user_silent_mode{target_severity="critical"}) == 1
         labels:
           severity: none
           component: sentinel
@@ -87,7 +94,7 @@ groups:
       # when critical fires for the same tenant+metric_group.
       # Tenants with _severity_dedup: "disable" won't trigger this → both notifications sent.
       - alert: TenantSeverityDedupEnabled
-        expr: user_severity_dedup{mode="enable"} == 1
+        expr: max without(instance, pod) (user_severity_dedup{mode="enable"}) == 1
         labels:
           severity: none
           component: sentinel
@@ -104,7 +111,7 @@ groups:
       # YAML config remains — once tenant updates/removes the config, the metric disappears.
       # This alert notifies operators to clean up stale configs.
       - alert: TenantConfigEvent
-        expr: da_config_event == 1
+        expr: max without(instance, pod) (da_config_event) == 1
         for: 0s
         labels:
           severity: warning

@@ -81,8 +81,10 @@ groups:
       # pod reschedule (< 3m 重新上線不 fire，promtool S1/S3)。可後調。
       # Scope: 只抓「乾淨死透/缺席」; 詐屍 CrashLoop flap 由 ContainerCrashLoop
       # (kubelet waiting-reason) 覆蓋，刻意不在此疊邏輯 — 見檔頭「Scope 邊界」段 (#880)。
+      # tenant_expected_exporter 由 threshold-exporter 的每個副本各送一份（逐 pod
+      # 抓取，#3483）：先 max without(instance, pod) 收掉，每個租戶只發一則。
       - alert: TenantExporterAbsent
-        expr: tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)
+        expr: max without(instance, pod) (tenant_expected_exporter) unless on(tenant) (up{job="tenant-exporters"} == 1)
         for: 3m
         labels:
           severity: critical

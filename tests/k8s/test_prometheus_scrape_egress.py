@@ -13,15 +13,17 @@ A blocked scrape looks exactly like a healthy one with nothing to report.
 
 WHAT IS CHECKED: render each chart that labels a Service for the platform job
 (with the values that turn those Services on), take each such Service's scrape
-port and the pod port it lands on, and require both in a rule of
+port (a pod port, see below), and require it in a rule of
 `allow-prometheus-egress` whose peer is `namespaceSelector: {}` — the chart's
 namespace is not known here, so only an any-namespace rule admits it.
 
 SECOND CHECK (#3483): the annotated port IS the pod port. The job discovers
-endpoints (every pod a target, one per pod address × Service port) and keeps
-the target whose port equals the annotation — the target's port is the POD's,
-so an annotation naming a Service port that maps elsewhere would keep nothing
-and the Service would silently stop being scraped.
+endpoint slices (every pod a target, one per pod address × slice port) and
+keeps the target whose port equals the annotation — the target's port is the
+POD's, so an annotation naming a Service port that maps elsewhere would keep
+nothing and the Service would silently stop being scraped. Checked under the
+default values and with the Service ports moved (an operator setting
+service.internalPort must not lose the target).
 
 SCOPE BOUNDARY: the egress end only. The ingress end is each chart's own
 NetworkPolicy; measured 2026-10-31, threshold-exporter and tenant-api admit
@@ -124,13 +126,17 @@ def _container_ports(docs: list[dict], selector: dict) -> dict[str, int]:
     return ports
 
 
-def _scrape_targets(templates: set[str] | None = None) -> set[tuple[str, str, int, int]]:
+def _scrape_targets(templates: set[str] | None = None,
+                    charts: dict[str, list[str]] | None = None) -> set[tuple[str, str, int, int]]:
     """(chart, service, annotated port, pod port) for every platform-labelled Service.
 
+    The pod port is the annotated port when the Service routes to it, else None.
+
     *templates*, when given, collects the template file each one rendered from.
+    *charts* replaces _CHARTS (chart -> extra `helm template` args).
     """
     found = set()
-    for chart, extra in _CHARTS.items():
+    for chart, extra in (_CHARTS if charts is None else charts).items():
         docs = _render(chart, extra)
         for d in docs:
             md = d.get("metadata") or {}
@@ -140,16 +146,21 @@ def _scrape_targets(templates: set[str] | None = None) -> set[tuple[str, str, in
             if ann.get("prometheus.io/scrape") != "true":
                 continue
             port = int(ann["prometheus.io/port"])
-            svc_port = next((p for p in d["spec"]["ports"] if int(p["port"]) == port), None)
-            assert svc_port is not None, (
-                f"{chart} Service {md['name']} annotates scrape port {port} but exposes no such port")
-            target = svc_port.get("targetPort", port)
-            if isinstance(target, str):
-                named = _container_ports(docs, d["spec"]["selector"])
-                assert target in named, (
-                    f"{chart} Service {md['name']}: targetPort {target!r} names no container port")
-                target = named[target]
-            found.add((chart, md["name"], port, int(target)))
+            # The pod ports this Service routes to (its targetPorts, names
+            # resolved against the selected pods' container ports).
+            named = _container_ports(docs, d["spec"]["selector"])
+            pod_ports = []
+            for sp in d["spec"]["ports"]:
+                target = sp.get("targetPort", sp["port"])
+                if isinstance(target, str):
+                    assert target in named, (
+                        f"{chart} Service {md['name']}: targetPort {target!r} names no container port")
+                    target = named[target]
+                pod_ports.append(int(target))
+            # Since #3483 the platform job scrapes pods (role: endpointslice) and
+            # keeps the target on the annotated port, so the annotation names a
+            # POD port. None = it names no port this Service routes to: never scraped.
+            found.add((chart, md["name"], port, port if port in pod_ports else None))
             if templates is not None:
                 templates.add(d["_template"])
     return found
@@ -185,7 +196,7 @@ def test_rendered_targets_cover_the_literal_anchor() -> None:
 def test_prometheus_egress_admits_every_platform_scrape_port() -> None:
     allowed = _any_namespace_egress_ports()
     blocked = sorted((c, s, p, t) for c, s, p, t in _scrape_targets()
-                     if p not in allowed or t not in allowed)
+                     if p not in allowed)
     assert not blocked, (
         f"{_POLICY} (k8s/03-monitoring/network-policies.yaml) does not admit, to any "
         f"namespace, these platform scrape targets (chart, service, port, pod port): "
@@ -212,11 +223,26 @@ def test_every_platform_label_template_is_rendered() -> None:
         f"!= templates this test renders a scrape Service from {sorted(rendered)}")
 
 
+# Non-default Service ports: the annotation must still name the pod port. A
+# chart that annotates its Service port passes under defaults (where the two
+# coincide) and silently loses its target as soon as an operator moves the
+# Service port — tenant-api's annotation once read service.internalPort.
+_MOVED_SERVICE_PORTS = {
+    "helm/threshold-exporter": [],   # its Service port IS the container port value
+    "helm/tenant-api": _CHARTS["helm/tenant-api"] + ["--set", "service.internalPort=9090"],
+    "helm/vector": _CHARTS["helm/vector"],
+}
+
+
 @_needs_helm
-def test_every_platform_scrape_annotation_names_the_pod_port() -> None:
-    """`platform-components` (role: endpoints) keeps the target whose port equals
-    `prometheus.io/port`; a target's port is the pod's, not the Service's (#3483)."""
-    mismatched = sorted((c, s, p, t) for c, s, p, t in _scrape_targets() if p != t)
+@pytest.mark.parametrize("charts", [None, _MOVED_SERVICE_PORTS],
+                         ids=["defaults", "moved-service-ports"])
+def test_every_platform_scrape_annotation_names_the_pod_port(charts) -> None:
+    """`platform-components` (role: endpointslice) keeps the target whose port
+    equals `prometheus.io/port`; a target's port is the pod's, not the
+    Service's (#3483)."""
+    mismatched = sorted((c, s, p, t) for c, s, p, t in _scrape_targets(charts=charts)
+                        if p != t)
     assert not mismatched, (
         f"these platform Services annotate a scrape port that is not the pod port "
         f"(chart, service, annotated port, pod port): {mismatched}. The "

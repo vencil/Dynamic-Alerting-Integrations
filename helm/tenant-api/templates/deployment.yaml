@@ -381,7 +381,7 @@ spec:
             {{- end }}
           ports:
             - name: api
-              containerPort: 8080
+              containerPort: {{ include "tenant-api.apiPort" . }}
               protocol: TCP
           volumeMounts:
             - name: conf-dir
@@ -420,14 +420,14 @@ spec:
           readinessProbe:
             httpGet:
               path: /ready
-              port: 8080
+              port: {{ include "tenant-api.apiPort" . }}
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
-              port: 8080
+              port: {{ include "tenant-api.apiPort" . }}
             initialDelaySeconds: 10
             periodSeconds: 15
             failureThreshold: 3

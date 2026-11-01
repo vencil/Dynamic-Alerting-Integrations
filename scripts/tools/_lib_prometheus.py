@@ -51,6 +51,22 @@ class QueryError(CallerError):
         return f"ERROR: {self.source} query failed: {self}"
 
 
+#: The labels a scrape adds per replica of a multi-replica exporter: the
+#: platform job scrapes every threshold-exporter pod (#3483), so each of its
+#: series arrives once per replica, differing only in these.
+REPLICA_LABELS = ("instance", "pod")
+
+
+def collapse_replicas(selector: str) -> str:
+    """*selector* with the per-replica copies of each series collapsed to one.
+
+    Wrap any query that counts or lists threshold-exporter series
+    (user_threshold, user_state_filter, ...) in this, or the answer is
+    multiplied by the replica count: `count(collapse_replicas("user_threshold"))`.
+    """
+    return f"max without({', '.join(REPLICA_LABELS)}) ({selector})"
+
+
 def _validate_url_scheme(url: str) -> Optional[str]:
     """Validate URL scheme for SSRF prevention.
 

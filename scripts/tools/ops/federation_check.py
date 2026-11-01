@@ -36,12 +36,16 @@ from _lib_python import probe_health, add_prometheus_arg  # noqa: E402
 # #3133: every answer is checked by the lib; a query not answered is a failed
 # check, never a missing one.
 from _lib_prometheus import (  # noqa: E402
-    QueryError, instant_or_error, prometheus_rules, prometheus_status_config, vector_count)
+    QueryError, collapse_replicas, instant_or_error, prometheus_rules,
+    prometheus_status_config, vector_count)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
 
 # The module's one query call: (rows, None) or (None, why).
 query_prometheus = instant_or_error
+
+#: How many user_threshold rows central sees, replica-independent (#3483).
+THRESHOLD_ROWS_QUERY = f"count({collapse_replicas('user_threshold')})"
 
 
 def _query_failed(check, err):
@@ -212,7 +216,8 @@ def check_central(prom_url):
             })
 
     # 3. threshold-exporter scrape
-    results, err = query_prometheus(prom_url, "count(user_threshold)")
+    # Distinct rows, not samples: each replica serves every row (#3483).
+    results, err = query_prometheus(prom_url, THRESHOLD_ROWS_QUERY)
     if err:
         checks.append(_query_failed("central_threshold_exporter", err))
     elif results:

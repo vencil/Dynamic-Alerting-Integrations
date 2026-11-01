@@ -116,7 +116,7 @@ groups:
 
 Alert Rules 透過 `* on(tenant) group_left(runbook_url, owner, tier) topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))` 將租戶 metadata 注入 alert labels，再由 annotations 引用。`tenant_metadata_info` 由 threshold-exporter 根據租戶 `_metadata` 配置自動輸出（值永遠為 1），保證 `group_left` join 不會漏掉任何 tenant。
 
-右側一定要照上面的寫法收斂，不能直接 join 原始的 `tenant_metadata_info`：threshold-exporter 跑多個副本，每個副本都會送出這個指標，平台的 Prometheus 以 pod 為單位抓取（Prometheus Operator 的 ServiceMonitor 也是），同一個租戶會有一份 per 副本、只差 `instance`／`pod` 的序列，原始 join 會因 many-to-many 而整條告警評估失敗。`max by(...)` 收掉相同的副本；外層 `topk by(tenant) (1, …)` 處理換版空窗：兩個副本各自 reload，幾秒內可能送出不同的 metadata，少了它，一個租戶改 metadata 就會讓整條規則對所有租戶評估失敗。`check_leftouterjoin_enrichment.py` 會擋下右側不是上述寫法的 join。
+右側一定要照上面的寫法收斂，不能直接 join 原始的 `tenant_metadata_info`：threshold-exporter 跑多個副本，每個副本都會送出這個指標，平台的 Prometheus 以 pod 為單位抓取（Prometheus Operator 的 ServiceMonitor 也是），同一個租戶會有一份 per 副本、只差 `instance`／`pod` 的序列，原始 join 會因 many-to-many 而整條告警評估失敗。`max by(...)` 收掉相同的副本；外層 `topk by(tenant) (1, …)` 處理換版空窗：兩個副本各自 reload（每隔 reloadInterval 檢查、ConfigMap 由各節點 kubelet 各自同步），一兩分鐘內可能送出不同的 metadata，少了它，一個租戶改 metadata 就會讓整條規則對所有租戶評估失敗。`check_leftouterjoin_enrichment.py` 會擋下右側不是上述寫法的 join。
 
 `or (… unless on(tenant) tenant_metadata_info)` 那一半讓沒有 metadata 的租戶照樣告警（只是不帶 runbook／owner／tier）；`unless` 只看有沒有，副本重複不會出錯，所以維持原始指標。
 

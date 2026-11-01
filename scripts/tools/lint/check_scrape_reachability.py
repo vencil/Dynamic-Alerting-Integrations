@@ -49,7 +49,7 @@ k8s/**. Each leaf is classified:
                           label-keeping job that does not scrape every pod
                           exactly once (PLATFORM-PER-POD, #3483: `role:
                           service` reaches one replica per scrape; an
-                          endpoints role without the annotated-port keep
+                          endpointslice role without the annotated-port keep
                           scrapes a pod once per Service port).
   REACHABLE-IF-EXPORTED tenant-exporters face: the job WOULD admit a db-* ns
                         annotated Service, but per-tenant targets only exist at
@@ -198,11 +198,14 @@ PLATFORM_SCRAPE_META = ("__meta_kubernetes_service_label_"
 SERVICE_NAME_META = "__meta_kubernetes_service_name"
 #: The meta label of the Service's `prometheus.io/port` annotation.
 SCRAPE_PORT_META = "__meta_kubernetes_service_annotation_prometheus_io_port"
+#: The endpointslice role's port of the referenced endpoint — the pod port the
+#: target reaches (absent on the extra container-port targets).
+ENDPOINTSLICE_PORT_META = "__meta_kubernetes_endpointslice_port"
 
 #: Kubernetes SD roles whose targets carry the Service's
 #: __meta_kubernetes_service_* labels, so the gate's model of the Service
 #: selection face (annotation keep, platform label, namespace) applies to them.
-#: `endpoints` / `endpointslice` yield one target per pod address × port; the
+#: `endpointslice` / `endpoints` yield one target per pod address × port; the
 #: `service` role yields one per Service port — its scrape lands on whichever
 #: replica the Service address routes to (#3483).
 _SERVICE_FACE_ROLES = ("service", "endpoints", "endpointslice")
@@ -435,6 +438,9 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
             "job": sc.get("job_name"),
             "static": bool(sc.get("static_configs")),
             "sd_role": None,
+            # every kubernetes_sd_configs entry's role, in order (sd_role is the
+            # last one; a platform job with more than one is an error, #3483)
+            "sd_roles": [],
             "sd_namespaces": [],
             "annotation_keep": False,
             "ns_keep_regex": None,
@@ -453,27 +459,43 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
         }
         for sd in sc.get("kubernetes_sd_configs", []) or []:
             job["sd_role"] = sd.get("role")
+            job["sd_roles"].append(sd.get("role"))
             job["sd_namespaces"] = list(
                 ((sd.get("namespaces") or {}).get("names")) or [])
-        port_labels: set[str] = set()   # labels holding the endpoint's port
+        # labels holding the endpoint's port: the endpointslice role supplies
+        # one; a `replace` capturing __address__'s port adds others
+        port_labels: set[str] = (
+            {ENDPOINTSLICE_PORT_META} if job["sd_roles"] == ["endpointslice"] else set())
         address_rewritten = False
         for rc in sc.get("relabel_configs", []) or []:
             src = rc.get("source_labels", [])
             action = rc.get("action", "replace")
             target = rc.get("target_label")
             if action == "keepequal":
-                if src == [SCRAPE_PORT_META] and target in port_labels:
+                # Either operand order: keepequal compares the joined
+                # source_labels with the value of target_label.
+                if ((src == [SCRAPE_PORT_META] and target in port_labels)
+                        or (len(src) == 1 and src[0] in port_labels
+                            and target == SCRAPE_PORT_META)):
                     job["port_select"] = True
                 continue
-            if action == "replace" and target is not None:
+            if action in ("labeldrop", "labelkeep"):
+                regex = rc.get("regex", "(.*)")
+                port_labels = {lbl for lbl in port_labels
+                               if (re.fullmatch(regex, lbl) is None) == (action == "labeldrop")}
+            elif action == "labelmap":
+                port_labels.clear()   # may write any label: assume the worst
+            elif target is not None:
                 if target == "__address__":
                     # From here __address__'s port is no longer the endpoint's
                     # (e.g. forced to the annotated port), so comparing it with
-                    # the annotation selects nothing.
+                    # the annotation selects nothing — and a rewrite AFTER the
+                    # keep sends the scrape to another port than the one kept.
                     port_labels.clear()
                     address_rewritten = True
-                elif (src == ["__address__"] and not address_rewritten
-                      and _captures_port(rc)):
+                    job["port_select"] = False
+                elif (action == "replace" and src == ["__address__"]
+                      and not address_rewritten and _captures_port(rc)):
                     port_labels.add(target)
                 else:
                     port_labels.discard(target)
@@ -623,7 +645,7 @@ def _keeps_platform_everywhere(job: dict) -> bool:
 #: __meta_kubernetes_service_* labels); a job of these roles is taken to keep
 #: a platform Service unless its namespace face excludes it or it drops the
 #: platform label (#1425 review F4a) — guessing "no" would hide exactly the
-#: double scrape this check exists for. The endpoints roles are modelled
+#: double scrape this check exists for. The endpointslice / endpoints roles are modelled
 #: through the Service face (_SERVICE_FACE_ROLES) since #3483.
 _ROLES_REACHING_PLATFORM_PODS = ("pod",)
 
@@ -767,7 +789,7 @@ def _platform_per_pod(jobs: list[dict]) -> list[str]:
 
     threshold-exporter runs several replicas. `role: service` scrapes the
     Service address, so each scrape reaches one replica: a dead replica never
-    reads up 0 and the per-replica series do not exist. The endpoints roles
+    reads up 0 and the per-replica series do not exist. The endpointslice roles
     reach every pod, but one target per pod address × Service port (plus the
     container ports the Service does not expose) — without a keep on the
     annotated port, a pod with two Service ports (tenant-api) is scraped twice.
@@ -776,17 +798,24 @@ def _platform_per_pod(jobs: list[dict]) -> list[str]:
     for j in jobs:
         if j["platform_label"] != "keep":
             continue
-        if j["sd_role"] not in _PER_POD_ROLES:
+        if len(j["sd_roles"]) != 1:
+            errors.append(
+                f"PLATFORM-PER-POD: job '{j['job']}' keeps platform Services with "
+                f"{len(j['sd_roles'])} kubernetes_sd_configs ({j['sd_roles']}) — the "
+                "gate models exactly one, and a second discovery scrapes the same "
+                "pods again (or one replica per scrape). Use one "
+                "`role: endpointslice`. (#3483)")
+        elif j["sd_role"] not in _PER_POD_ROLES:
             errors.append(
                 f"PLATFORM-PER-POD: job '{j['job']}' keeps platform Services with "
                 f"`role: {j['sd_role']}`, which scrapes one replica per scrape — a "
-                "dead replica is invisible. Use `role: endpoints`. (#3483)")
+                "dead replica is invisible. Use `role: endpointslice`. (#3483)")
         elif not j["port_select"]:
             errors.append(
                 f"PLATFORM-PER-POD: job '{j['job']}' (role: {j['sd_role']}) has no "
                 f"`keepequal` of [{SCRAPE_PORT_META}] against a label holding "
-                "__address__'s port — every pod is scraped once per Service port. "
-                "(#3483)")
+                "__address__'s port (with __address__ not rewritten afterwards) — "
+                "every pod is scraped once per Service port. (#3483)")
     return errors
 
 

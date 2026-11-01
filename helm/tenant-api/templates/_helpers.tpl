@@ -348,3 +348,15 @@ exec:
       s.sendall(b"GET /v1/status HTTP/1.1\r\nHost: probe\r\n\r\n")
       sys.exit(0 if s.recv(64).startswith(b"HTTP/1.1 200 ") else 1)
 {{- end }}
+
+{{/*
+The port the tenant-api container listens on (the binary's own listener). One
+definition for the container port, its probes, the Service's targetPort, the
+NetworkPolicy and the Prometheus scrape annotation: Prometheus'
+platform-components job discovers endpoint slices and keeps only the target
+whose port equals `prometheus.io/port`, so the annotation must name THIS port,
+not a Service port (#3483).
+*/}}
+{{- define "tenant-api.apiPort" -}}
+8080
+{{- end }}

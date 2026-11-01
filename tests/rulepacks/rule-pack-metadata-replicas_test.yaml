@@ -3,7 +3,7 @@
 #
 # threshold-exporter 預設 2 個副本（helm/threshold-exporter/values.yaml replicaCount），
 # 每個副本都送出 tenant_metadata_info。以 pod 為單位抓取時（raw Prometheus 的
-# platform-components job 走 endpoints、Prometheus Operator 的 ServiceMonitor 也是，
+# platform-components job 走 endpointslice、Prometheus Operator 的 ServiceMonitor 也以 endpoints 探索，
 # 一個 pod 一個 target），同一個租戶會有一份 per 副本、只差 instance／pod 的序列。
 # user_threshold 只給一份、不帶 scrape label：threshold 那一側本來就先 max by 收斂，
 # 而 rulepack_contract_test.go 規定 fixture 的 user_threshold 只能帶 exporter 自己送的
