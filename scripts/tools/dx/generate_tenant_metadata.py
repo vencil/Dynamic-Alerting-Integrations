@@ -549,7 +549,7 @@ def main():
     state = None
     if args.state:
         try:
-            state = load_state(args.state)
+            state = load_state(args.state, lang="en")  # #3512: this tool's language
         except StateInputError as exc:
             print(f"ERROR: {safe_label(exc)}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)

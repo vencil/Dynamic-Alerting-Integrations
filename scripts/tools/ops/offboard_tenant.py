@@ -566,7 +566,7 @@ def main():
     state = None
     if args.state:
         try:
-            state = load_state(args.state)
+            state = load_state(args.state, lang="zh")  # #3512: this tool's language
         except StateInputError as e:
             hint = ("（state store 若確實是空的，不給 --state、改加 --skip-state-check）"
                     if e.empty else "")

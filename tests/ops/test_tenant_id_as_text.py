@@ -1060,7 +1060,7 @@ def _ids_custom_groups(d, spell):
     # the state store's record.
     import generate_tenant_metadata as m
     import _lib_tenant_state as lts
-    st = lts.load_state(_state_show_json(d, {"_groups.yaml": f"groups:\n  g1:\n    members: [{spell}]\n"}))
+    st = lts.load_state(_state_show_json(d, {"_groups.yaml": f"groups:\n  g1:\n    members: [{spell}]\n"}), lang="en")
     return set(m._load_custom_groups(st, d / "conf.d")["g1"]["members"])
 
 
@@ -1131,7 +1131,7 @@ def test_offboard_finds_a_group_member_written_as_a_list_value(tmp_path, capsys,
     import offboard_tenant as ot
     import _lib_tenant_state as lts
     st = lts.load_state(_state_show_json(tmp_path, {"_groups.yaml": "groups:\n  g1:\n    members: [{id}]\n".format(
-        id=_ID_SPELLINGS[variant])}))
+        id=_ID_SPELLINGS[variant])}), lang="en")
     refs, _ = ot.check_state_references("010", st)
     assert [what for what, _ in refs] == ["群組 g1 的成員"]
 
