@@ -1,4 +1,4 @@
-import{a as J}from"./chunk-H2MRGI5I.js";import{a as U}from"./chunk-ZHLICTNA.js";import{a as y,b as M,c as G,d as _,e as E}from"./chunk-6CZKKW3I.js";var C=y(M(),1),H=y(G(),1);var h=y(M(),1);var e=window.__t||((c,o)=>o),g={"check-alert":{label:"check-alert",description:e("\u67E5\u8A62\u7279\u5B9A\u79DF\u6236\u7684\u544A\u8B66\u72C0\u614B","Query alert status for a specific tenant"),category:e("Prometheus API \u5DE5\u5177","Prometheus API Tools"),popular:!0,preview:`$ da-tools check-alert HighMemoryUsage db-a
+import{a as J}from"./chunk-H2MRGI5I.js";import{a as U}from"./chunk-DNRKVMP3.js";import{a as y,b as M,c as G,d as _,e as E}from"./chunk-O6ZQ332T.js";var C=y(M(),1),H=y(G(),1);var h=y(M(),1);var e=window.__t||((c,o)=>o),g={"check-alert":{label:"check-alert",description:e("\u67E5\u8A62\u7279\u5B9A\u79DF\u6236\u7684\u544A\u8B66\u72C0\u614B","Query alert status for a specific tenant"),category:e("Prometheus API \u5DE5\u5177","Prometheus API Tools"),popular:!0,preview:`$ da-tools check-alert HighMemoryUsage db-a
 
 Alert:    HighMemoryUsage
 Tenant:   db-a

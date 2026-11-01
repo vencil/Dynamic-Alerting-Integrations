@@ -2796,7 +2796,7 @@ jobs:
         # silently never reaches prod. build.mjs cleans + re-emits the dir, so
         # any drift (modified bundle, renamed chunk, orphan) shows as a staged
         # diff here. Build is byte-reproducible across the dev container and CI
-        # (esbuild 0.24.2 linux-x64, pinned via package-lock) because both run
+        # (esbuild 0.28.2 linux-x64, pinned via package-lock) because both run
         # the SAME Node major (24) — so this gate does not false-red.
         run: |
           git add -A docs/assets/dist
