@@ -578,3 +578,26 @@ class TestDownloadCache:
         assert got is not None, "a cache-file failure must not lose the artifact"
         assert not (tmp_path / f"run-{run_id}" / ab.DOWNLOAD_SENTINEL).exists()
         assert "could not write" in capsys.readouterr().err
+
+
+class TestRetiredWatchdogStaysRetired:
+    """The nightly no longer runs the absolute-ns/op watchdog or ships the
+    completeness marker only it read (ADR-032 §待決 6 withdrawn). A job or an
+    upload path that comes back would be a reader-less leftover, or a watchdog
+    reintroduced without the decision being revisited."""
+
+    @staticmethod
+    def _workflow():
+        yaml = pytest.importorskip("yaml")
+        path = (Path(__file__).resolve().parents[2]
+                / ".github" / "workflows" / "bench-record.yaml")
+        return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+    def test_no_trend_watch_job(self):
+        assert "trend-watch" not in self._workflow()["jobs"]
+
+    def test_the_marker_is_neither_written_nor_uploaded(self):
+        steps = self._workflow()["jobs"]["bench-record"]["steps"]
+        text = "\n".join(str(s.get("run", "")) + str(s.get("with", "")) for s in steps)
+        assert "bench-baseline.rows" not in text
+        assert "write_baseline_marker" not in text
