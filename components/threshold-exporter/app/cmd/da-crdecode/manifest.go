@@ -105,13 +105,17 @@ import (
 //     must pass the same metadataOnlyObject check as a document. kubectl
 //     does not make it of an item when it reads the file (an item with
 //     `name: 5` or `metadata: 5` is visited), but applying such an item does
-//     not apply it as written: a `name` that is not a string is refused by
-//     the client ("resource name may not be empty"), a label or other
-//     metadata of the wrong type by the API server, an annotation value
-//     that is not a string makes client-side apply replace all of the
-//     item's annotations, and a `namespace` that is not a string is replaced
-//     by the default namespace. Refusing the item here is stricter than
-//     kubectl's reading of the file and agrees with what applying it does.
+//     not apply it as written: it is refused or changed. Refused, for
+//     example: a `name` that is not a string by the client ("resource name
+//     may not be empty"), most metadata of the wrong type (a label value,
+//     for one) by the API server. Changed, for example: an annotation value
+//     that is not a string makes client-side apply (`kubectl apply`) empty
+//     all of the item's annotations and report success; a `namespace` that
+//     is not a string is replaced by the one kubectl runs with (`-n`, or the
+//     context's default); server-side apply (`--server-side`) of a custom
+//     resource drops a time field written wrong (`creationTimestamp`, …).
+//     Refusing every such item here is stricter than kubectl's reading of
+//     the file.
 //
 // The as-written comparison (aswritten.go) is made on the whole list
 // document; each of its differences is given to the item its path starts
@@ -345,8 +349,10 @@ func itemMetadataError(err error) error {
 	return fmt.Errorf(notObject+"its `apiVersion` or `metadata` does not decode into the types "+
 		"kubectl reads a document's as, metav1.TypeMeta and metav1.ObjectMeta (%v); kubectl does "+
 		"not check this of an item when it reads the file, but applying the item would not apply "+
-		"it as written: it is refused (a `name` that is not a string, metadata of the wrong type) "+
-		"or changed (annotations replaced, the namespace defaulted)%s", err, quoteHint(err))
+		"it as written: it is refused (a `name` that is not a string, most metadata of the wrong "+
+		"type) or changed (annotations emptied by client-side apply, the namespace replaced by the "+
+		"one kubectl uses, a time field dropped by server-side apply of a custom resource)%s",
+		err, quoteHint(err))
 }
 
 // listOwnKeys are the keys a list document carries that are no content:
