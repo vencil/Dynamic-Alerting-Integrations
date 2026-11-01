@@ -263,6 +263,67 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 			t.Fatalf("exit %d worsened %v %+v", code, worsenedOf(res), res.Worsened)
 		}
 	})
+	t.Run("a tenant declared twice elsewhere does not turn the check off", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"a.yaml": "tenants:\n  tz: {}\n", "b.yaml": "tenants:\n  tz: {}\n",
+			"sub/t.yaml": "tenants:\n  t1:\n    mysql_connections: \"70\"\n"})
+		in := `{"files":[{"path":"sub/t.yaml","ops":[{"op":"set","path":["tenants","t1","mysql_conections"],"value":{"str":"1"}}]}]}`
+		code, res := runBatch(t, writeCmd, in, "--config-dir", root, "--dry-run")
+		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread sub/t.yaml t1"}) {
+			t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
+		}
+	})
+	t.Run("removing a duplicate copy: the tenant had no baseline, its old error is not new", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"a.yaml": "tenants:\n  tz:\n    mysql_conections: \"1\"\n", "b.yaml": "tenants:\n  tz: {}\n"})
+		in := `{"files":[{"path":"b.yaml","delete":true},
+			{"path":"a.yaml","ops":[{"op":"set","path":["tenants","tz","mysql_connections"],"value":{"str":"5"}}]}]}`
+		if code, res := runBatch(t, writeCmd, in, "--config-dir", root, "--dry-run"); code != exitOK {
+			t.Fatalf("exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
+		}
+	})
+	t.Run("an empty tree is an empty baseline", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"README": "no config yet\n"})
+		in := `{"files":[{"path":"_defaults.yaml","create":{"map":[["defaults",{"map":[["mysql_connections",{"int":"80"}]]}]]}},
+			{"path":"t.yaml","create":{"map":[["tenants",{"map":[["t1",{"map":[["_routng",{"str":"x"}],["mysql_conections",{"str":"1"}]]}]]}]]}}]}`
+		code, res := runBatch(t, writeCmd, in, "--config-dir", root, "--dry-run")
+		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread t.yaml t1", "unread t.yaml t1"}) {
+			t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
+		}
+	})
+	t.Run("a new threshold key beside the root carrier the batch adds is judged", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"u.yaml": "tenants:\n  t9:\n    mysql_conections: \"1\"\n"})
+		in := `{"files":[{"path":"_defaults.yaml","create":{"map":[["defaults",{"map":[["mysql_connections",{"int":"80"}]]}]]}},
+			{"path":"t.yaml","create":{"map":[["tenants",{"map":[["t1",{"map":[["mysql_conections",{"str":"1"}]]}]]}]]}}]}`
+		code, res := runBatch(t, writeCmd, in, "--config-dir", root, "--dry-run")
+		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread t.yaml t1"}) {
+			t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
+		}
+	})
+	t.Run("a before-tree the verdict cannot judge is a note, not a silent pass", func(t *testing.T) {
+		t.Parallel()
+		// tx's /metrics cannot be gathered (two keys, one series) before the
+		// call; the batch repairs that and writes a typo beside it.
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"a.yaml": "tenants:\n  tx:\n    mysql_connections: \"70:critical\"\n    mysql_connections_critical: 95\n"})
+		in := `{"files":[{"path":"a.yaml","ops":[{"op":"unset","path":["tenants","tx","mysql_connections_critical"]},
+			{"op":"set","path":["tenants","tx","mysql_conections"],"value":{"str":"1"}}]}]}`
+		var out, errOut bytes.Buffer
+		runWrite(writeCmd, []string{"--config-dir", root, "--dry-run", "--json", "--input", "-"}, strings.NewReader(in), &out, &errOut)
+		notes := 0
+		for _, line := range strings.Split(errOut.String(), "\n") {
+			if strings.Contains(line, ": note: the unread-key check judged no before-call tree") {
+				notes++
+			}
+		}
+		if notes != 1 {
+			t.Fatalf("stderr carries %d notes, want 1:\n%s", notes, errOut.String())
+		}
+	})
 	t.Run("adding the root carrier is not charged with the threshold keys it makes judgeable", func(t *testing.T) {
 		t.Parallel()
 		root := writeTree(t, map[string]string{"a.yaml": "tenants:\n  t1:\n    mysql_conections: \"70\"\n"})

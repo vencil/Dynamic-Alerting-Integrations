@@ -693,7 +693,9 @@ func (w *writer) run(args []string, stdin io.Reader) int {
 				batch[wf.from] = true
 			}
 		}
-		worse, err := worsening(scan, after, afterDoc, overlays, true, batch)
+		worse, err := worsening(scan, after, afterDoc, overlays, true, batch, func(msg string) {
+			fmt.Fprintf(w.errOut, "%s %s: note: %s\n", programName, w.cmd, msg)
+		})
 		if err != nil {
 			return w.callerError(writeReasonBadPath, "%v", err)
 		}

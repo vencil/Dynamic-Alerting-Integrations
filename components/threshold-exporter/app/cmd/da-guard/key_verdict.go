@@ -31,6 +31,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -80,6 +82,14 @@ type keyVerdictResult struct {
 	// a tree that lacks them is one Python does not give.
 	parseFailed []string
 	unreadable  []skippedFile
+	// noConfig: the tree holds no config file at all — judged, no tenant,
+	// no error (a `da-guard write` that starts the tree has an empty
+	// baseline). served-values refuses such a tree; `key-verdict` does too.
+	noConfig bool
+	// setAside: with ScanOptions.SkipDuplicated, every tenant left out of
+	// the judgment because a file declaring it also declares a tenant
+	// another file declares (setAsideDuplicates).
+	setAside map[string]bool
 }
 
 // Registry layers of KeySource.Layer (Python `_LAYERS`). The root
@@ -103,22 +113,46 @@ type policyHead struct {
 // file at depth 0 (hasRootPlatformFile); without one the threshold keys are
 // undecidable (decision 7). dir names the tree in the load (LoadDirReport's
 // argument).
+//
+// opts.SkipDuplicated: a tenant declared in two files does not stop the
+// judgment (the exporter's load refuses the whole tree) — every file that
+// declares such a tenant is set aside with every tenant it declares
+// (setAsideDuplicates), and the rest of the tree is judged as usual. Without
+// it such a tree is not judged (`key-verdict`, as served-values refuses it).
 func keyVerdictOf(dir string, opts config.ScanOptions, rootPlatform bool, at time.Time) (keyVerdictResult, error) {
 	discard := log.New(io.Discard, "", 0)
+	overlays := opts.Overlays
 	scan, err := config.ScanDirTreeWith(dir, nil, nil, discard, config.ScanOptions{
-		Overlays: opts.Overlays, OverlayMakesDirs: opts.OverlayMakesDirs})
+		Overlays: overlays, OverlayMakesDirs: opts.OverlayMakesDirs})
 	if err != nil {
 		return keyVerdictResult{}, err
 	}
+	var setAside map[string]bool
+	if scan.Conflict != nil && opts.SkipDuplicated {
+		var files map[string]bool
+		files, setAside = duplicateDeclarers(scan)
+		if overlays, err = setAsideOverlays(scan.AbsRoot, overlays, files); err != nil {
+			return keyVerdictResult{}, err
+		}
+		if scan, err = config.ScanDirTreeWith(dir, nil, nil, discard, config.ScanOptions{
+			Overlays: overlays, OverlayMakesDirs: opts.OverlayMakesDirs}); err != nil {
+			return keyVerdictResult{}, err
+		}
+	}
 	unjudged := func(err error) (keyVerdictResult, error) {
-		return keyVerdictResult{why: err}, nil
+		return keyVerdictResult{why: err, setAside: setAside}, nil
 	}
 	cfg, rep, written, err := config.LoadDirFromScan(scan, dir, discard)
+	if errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) == 0 && rep.RootListErr == nil {
+		// No config file at all: no tenant, so no error.
+		return keyVerdictResult{judged: true, why: err, undecidable: !rootPlatform, errors: []keyError{},
+			noConfig: true, setAside: setAside}, nil
+	}
 	if errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) > 0 {
 		// Every config file unreadable: no tenant, the files named
 		// (loadJSONTree's allUnreadable).
 		return keyVerdictResult{judged: true, undecidable: !rootPlatform, errors: []keyError{},
-			unreadable: unreadableEntries(rep.Unreadable)}, nil
+			unreadable: unreadableEntries(rep.Unreadable), setAside: setAside}, nil
 	}
 	if err != nil {
 		return unjudged(err)
@@ -138,7 +172,7 @@ func keyVerdictOf(dir string, opts config.ScanOptions, rootPlatform bool, at tim
 	}
 	spellAsWritten(served, written)
 	tree, err := config.EffectiveTreeWith(dir, discard, config.ScanOptions{
-		Overlays: opts.Overlays, OverlayMakesDirs: opts.OverlayMakesDirs, QuietBuild: true}, at)
+		Overlays: overlays, OverlayMakesDirs: opts.OverlayMakesDirs, QuietBuild: true}, at)
 	if err != nil {
 		return unjudged(err)
 	}
@@ -152,7 +186,65 @@ func keyVerdictOf(dir string, opts config.ScanOptions, rootPlatform bool, at tim
 	}
 	return keyVerdictResult{judged: true, undecidable: !rootPlatform,
 		errors:      keyVerdictErrors(served, effective, heads, !rootPlatform),
-		parseFailed: rep.ParseFailed, unreadable: unreadableEntries(rep.Unreadable)}, nil
+		parseFailed: rep.ParseFailed, unreadable: unreadableEntries(rep.Unreadable), setAside: setAside}, nil
+}
+
+// duplicateDeclarers is, for a scan whose walk recorded a tenant declared in
+// two or more files (TreeScan.Locate's DuplicateTenantError), every tenant
+// file declaring such a tenant (root-relative paths) and every tenant those
+// files declare. Read off TreeScan.Files, as ScopeEffective's in-scope set
+// is: TreeScan.Tenants is nil under a duplicate.
+func duplicateDeclarers(scan *config.TreeScan) (files, tenants map[string]bool) {
+	files, tenants = map[string]bool{}, map[string]bool{}
+	dup := map[string]bool{}
+	for _, f := range scan.Files {
+		for _, id := range f.TenantIDs {
+			if _, done := dup[id]; done {
+				continue
+			}
+			var de *config.DuplicateTenantError
+			_, lerr := scan.Locate(id)
+			dup[id] = errors.As(lerr, &de)
+		}
+	}
+	for rel, f := range scan.Files {
+		for _, id := range f.TenantIDs {
+			if dup[id] {
+				files[rel] = true
+				for _, other := range f.TenantIDs {
+					tenants[other] = true
+				}
+				break
+			}
+		}
+	}
+	return files, tenants
+}
+
+// setAsideOverlays is overlays with every file of aside out of the walk: a
+// file on disk the batch leaves or writes is removed (FileOverlay.Remove), a
+// file only the batch creates is not created.
+func setAsideOverlays(root string, overlays []config.FileOverlay, aside map[string]bool) ([]config.FileOverlay, error) {
+	out := make([]config.FileOverlay, 0, len(overlays)+len(aside))
+	named := map[string]bool{}
+	for _, o := range overlays {
+		named[o.Rel] = true
+		if !aside[o.Rel] || o.Remove {
+			out = append(out, o)
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(o.Rel))); err == nil {
+			out = append(out, config.FileOverlay{Rel: o.Rel, Remove: true})
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+	}
+	for _, rel := range sortedKeys(aside) {
+		if !named[rel] {
+			out = append(out, config.FileOverlay{Rel: rel, Remove: true})
+		}
+	}
+	return out, nil
 }
 
 // hasRootPlatformFile is Python's `root_platform_files(...) != []`: a
@@ -518,7 +610,7 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 	if err != nil {
 		return fail(err)
 	}
-	if !res.judged {
+	if !res.judged || res.noConfig {
 		return fail(res.why)
 	}
 	b, err := json.MarshalIndent(keyVerdictDoc{Schema: keyVerdictSchema, Errors: res.errors}, "", "  ")

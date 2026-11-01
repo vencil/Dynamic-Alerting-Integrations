@@ -78,8 +78,9 @@ type writeWorsened struct {
 
 // worsening is everything the after-tree (after, its document afterDoc) has
 // that the disk tree (disk) does not, sorted; batch is the call's paths.
+// note takes the one line saying a check could not run (newlyUnread).
 func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []config.FileOverlay, mkdirs bool,
-	batch map[string]bool) ([]writeWorsened, error) {
+	batch map[string]bool, note func(string)) ([]writeWorsened, error) {
 	beforeDoc, err := parseTreeOf(disk)
 	if err == nil {
 		err = setVerdicts(beforeDoc.Entries, treeDropped(disk))
@@ -136,7 +137,7 @@ func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []
 	for _, k := range keys {
 		out = append(out, now[k])
 	}
-	unread, err := newlyUnread(disk.AbsRoot, beforeDoc, afterDoc, overlays, mkdirs, at)
+	unread, err := newlyUnread(disk.AbsRoot, afterDoc, overlays, mkdirs, at, note)
 	if err != nil {
 		return nil, err
 	}
@@ -166,27 +167,37 @@ func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []
 // had (same tenant, same key) is not new, whichever file now holds it; one
 // the move or its edit adds is.
 //
-// No baseline, nothing new: a before-tree the verdict cannot judge (a tenant
-// declared twice, a file the merge cannot decode — validation names those)
-// gives none, and a before-tree with no root platform file judged no
-// threshold key (undecidable, decision 7), so a batch that adds the root
-// carrier is not charged with every unread threshold key already there. An
-// after-tree the verdict cannot judge adds nothing here: what stops it is
-// already a validation error above.
-func newlyUnread(root string, beforeDoc, afterDoc *parseTreeDoc, overlays []config.FileOverlay, mkdirs bool,
-	at time.Time) ([]writeWorsened, error) {
-	was, err := keyVerdictOf(root, config.ScanOptions{}, hasRootPlatformFile(beforeDoc), at)
-	if err != nil || !was.judged {
+// The baseline is the before-tree judged as decidable even when it has no
+// root platform file (decision 7's undecidable is a report's caution, not a
+// write's): its threshold keys enter the baseline, so a batch that adds the
+// root carrier is not charged with the keys already there, and a new key it
+// writes beside them is judged.
+//
+// A tenant declared in two files is set aside on both sides
+// (keyVerdictOf's SkipDuplicated), with every tenant its files declare; the
+// rest of the tree is judged. A tenant set aside before the call has no
+// baseline, so its errors after it are not new — removing a copy repairs
+// the tree (treeValidation's rule). An empty before-tree is judged: no
+// tenant, no error. A tree the verdict still cannot judge (a /metrics that
+// cannot be gathered, a file the merge cannot decode) is no silent pass:
+// note gets one line saying the check had no tree to judge and why.
+//
+// The after-tree is judged first: when no key of a written file is unread
+// at ERROR there, nothing can be new and the before-tree is not read.
+func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOverlay, mkdirs bool,
+	at time.Time, note func(string)) ([]writeWorsened, error) {
+	noBaseline := func(which string, why error) {
+		note(fmt.Sprintf("the unread-key check judged no %s tree (%s); the keys this call writes "+
+			"were not checked for a reader", which, strings.ReplaceAll(fmt.Sprint(why), "\n", " ")))
+	}
+	now, err := keyVerdictOf(root, config.ScanOptions{Overlays: overlays, OverlayMakesDirs: mkdirs,
+		SkipDuplicated: true}, hasRootPlatformFile(afterDoc), at)
+	if err != nil {
 		return nil, err
 	}
-	now, err := keyVerdictOf(root, config.ScanOptions{Overlays: overlays, OverlayMakesDirs: mkdirs},
-		hasRootPlatformFile(afterDoc), at)
-	if err != nil || !now.judged {
-		return nil, err
-	}
-	before := make(map[[2]string]bool, len(was.errors))
-	for _, e := range was.errors {
-		before[[2]string{e.Tenant, e.Key}] = true
+	if !now.judged {
+		noBaseline("after-call", now.why)
+		return nil, nil
 	}
 	written := map[string]bool{}
 	for _, o := range overlays {
@@ -194,10 +205,30 @@ func newlyUnread(root string, beforeDoc, afterDoc *parseTreeDoc, overlays []conf
 			written[o.Rel] = true
 		}
 	}
+	var candidates []keyError
+	for _, e := range now.errors {
+		if written[e.File] {
+			candidates = append(candidates, e)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	was, err := keyVerdictOf(root, config.ScanOptions{SkipDuplicated: true}, true, at)
+	if err != nil {
+		return nil, err
+	}
+	if !was.judged {
+		noBaseline("before-call", was.why)
+		return nil, nil
+	}
+	before := make(map[[2]string]bool, len(was.errors))
+	for _, e := range was.errors {
+		before[[2]string{e.Tenant, e.Key}] = true
+	}
 	var out []writeWorsened
-	for _, e := range now.errors { // sorted by tenant, key
-		if !written[e.File] || before[[2]string{e.Tenant, e.Key}] ||
-			(was.undecidable && !strings.HasPrefix(e.Key, "_")) {
+	for _, e := range candidates { // sorted by tenant, key
+		if before[[2]string{e.Tenant, e.Key}] || was.setAside[e.Tenant] {
 			continue
 		}
 		why := ""
