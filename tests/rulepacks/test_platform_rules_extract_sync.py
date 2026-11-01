@@ -8,7 +8,7 @@ WHY this exists:
   "⚠️ KEEP IN SYNC" comment.
 
   Nothing enforced that. `scripts/tools/lint/check_rulepack_sync.py` globs only
-  `rule-packs/rule-pack-*.yaml` and derives its configmap/operator copies from
+  `rule-packs/rule-pack-*.yaml` and derives its configmap copies from
   those names; there is no `rule-packs/rule-pack-platform.yaml`, so
   `k8s/03-monitoring/configmap-rules-platform.yaml` and its extracts were never
   compared. Failure mode: someone tightens or renames an alert in the ConfigMap
