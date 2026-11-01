@@ -58,6 +58,9 @@ conf.d/
 
 **`_defaults.yaml` content (Platform managed):**
 ```yaml
+# Labels a dimensional key may carry (#3475): an undeclared label is not served. The shipped list is only version on container cpu/memory; this declares a custom one
+dimensions:
+  mysql_connections: [instance, role]
 defaults:
   mysql_connections: 80
   mysql_threads_running: 30
@@ -83,7 +86,7 @@ tenants:
     container_cpu: "70"              # Override default 80
     mysql_replication_lag: "disable" # No replica, disable
     # mysql_threads_running not specified → use default value 30
-    # Dimensional labels (the base must be a key the platform declares — here mysql_connections from the defaults above — or the root defaults must write the whole key; otherwise no metric is served)
+    # Dimensional labels (every label must be declared for its base under dimensions: in _defaults.yaml above, or no metric is served; see the ⚠️ in §2.5)
     "mysql_connections{instance='db-primary:3306'}": "500"
     "mysql_connections{instance='db-replica:3306', role='replica'}": "1000:critical"
 ```
@@ -441,7 +444,7 @@ tenants:
 2. **Recording rule layer**: PromQL uses `label_replace` + `=~` for actual matching at query time
 3. **Design principle**: The exporter remains a pure config→metric converter; matching logic is entirely handled by Prometheus native vector operations
 
-> ⚠️ **The shipped Rule Packs do not judge per dimension yet**: threshold normalization is written `max by(tenant)(user_threshold{…})`, which drops the dimension labels, and the observed series are aggregated by `tenant` only. A dimensional key (exact or regex) therefore changes the **whole tenant's** threshold: the dimension values and the base value are reduced to one value (their maximum; the dimension value itself when there is no base row), never applied per dimension — which loosens an alert that fires on `>` and tightens one that fires on `<` (a hit ratio, for example); and `disable` on a dimensional key only stops that row from being served — it does not silence that one dimension. The only label read per value today is `version` in the kubernetes pack ([ADR-024](../adr/024-version-aware-threshold-via-dimensional-label.en.md)). Judging per dimension needs the Rule Packs changed too, tracked in [#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475); the shipped examples carry no dimensional keys for this reason.
+> ⚠️ **Most shipped Rule Packs do not judge per dimension**: most threshold normalization is written `max by(tenant)(user_threshold{…})`, which drops the dimension labels, and the observed series are aggregated by `tenant` only. Read by such a rule, a dimensional key (exact or regex) changes the **whole tenant's** threshold: the dimension values and the base value are reduced to one value (their maximum; the dimension value itself when there is no base row), never applied per dimension — which loosens an alert that fires on `>` and tightens one that fires on `<` (a hit ratio, for example). The exception is a dimension the rule pack groups by and `dimensions:` declares: today only `version` in the kubernetes pack (`container_cpu`, `container_memory`; [ADR-024](../adr/024-version-aware-threshold-via-dimensional-label.en.md)), whose values apply per version. So a dimensional key is served only when every label its row serves is declared for its base under the root `_defaults.yaml` `dimensions:` ([ADR-038](../adr/038-unread-keys-judged-by-readers.en.md) decision 11). Any other has no row, and the verdict usually reads it as `unread` (`no_row`); two exceptions have no row either: a key written `disable` is reported `disable_noop` (a warning), and a key a Policy-as-Code rule names reads `read`. A regex selector serves its label with an `_re` suffix (`version=~"v3.*"` serves `version_re`), so the name to declare is `version_re`; declaring `version` does not cover it. The shipped `dimensions:` holds only the exact-match `version`, so `container_cpu{version=~"v3.*"}` is not served. The shipped `dimensions:` is generated from the threshold registry and lists only the labels the rule packs actually keep; when your own rules read a label, add that base and label to `dimensions:`. The shipped examples carry no dimensional keys for this reason.
 
 ### 2.6 Scheduled Thresholds
 

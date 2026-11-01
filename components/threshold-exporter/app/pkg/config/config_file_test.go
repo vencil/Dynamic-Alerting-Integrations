@@ -202,6 +202,7 @@ func oracleDecode(name string, data []byte) (ThresholdConfig, error) {
 type oracleShape struct {
 	Defaults            yaml.Node                            `yaml:"defaults"`
 	OptionalOverrides   []string                             `yaml:"optional_overrides"`
+	Dimensions          map[string][]string                  `yaml:"dimensions"`
 	StateFilters        map[string]StateFilter               `yaml:"state_filters"`
 	Tenants             map[string]map[string]ScheduledValue `yaml:"tenants"`
 	Profiles            map[string]map[string]ScheduledValue `yaml:"profiles"`

@@ -61,7 +61,7 @@ func rowsAndNotServed(t *testing.T, files map[string]string) ([]string, map[stri
 	return rows, cfg.ValuesNotServed(now)["tx"]
 }
 
-const nfDefaults = "defaults:\n  mysql_connections: 80\noptional_overrides:\n  - oracle_process_count\n"
+const nfDefaults = "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 80\noptional_overrides:\n  - oracle_process_count\n"
 
 // Every tenant-side reader refuses a quoted non-finite value: the base key
 // serves the platform default (value_unparsed), the others no row

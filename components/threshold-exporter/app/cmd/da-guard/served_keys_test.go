@@ -27,7 +27,7 @@ const retiredCPU = "mysql_" + "cpu"
 func TestServedValues_KeysSayWhetherTheExporterReadsEachKey(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n" +
+		"_defaults.yaml": fixtureDims + "defaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n" +
 			"  mysql_threads_running: 30\n  _myth: 5\n" +
 			"state_filters:\n  maint: {reasons: [X], severity: critical}\n",
 		"_profiles.yaml":      "profiles:\n  p1:\n    _silent_mode: warning\n",

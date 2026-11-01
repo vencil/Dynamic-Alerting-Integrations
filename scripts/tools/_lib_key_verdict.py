@@ -252,7 +252,8 @@ def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary:
                timeout: float = tv.DEFAULT_TIMEOUT,
                effective_tree: tv.EffectiveTree | None = None,
                reader: Any = None,
-               tenants: Iterable[str] | None = None) -> TreeVerdict:
+               tenants: Iterable[str] | None = None,
+               served_tree: tv.ServedTree | None = None) -> TreeVerdict:
     """The verdict on every key of every tenant of the tree at `conf_d`.
     `effective_tree`, given, is a `load_effective_tree` of the same tree the
     caller already has (validate-config shares one run among its rows);
@@ -270,10 +271,17 @@ def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary:
     on a profile's key is not one tenant's: it is judged over the requested
     tenants — the tenants it names, and whether some tenant's reader reads
     the key, so that no notice is given (the reader of an unrequested tenant
-    bound to the profile is not seen)."""
+    bound to the profile is not seen).
+
+    `served_tree`, given, is a whole-tree `load_served_tree` of the same
+    tree read with `disable_effects` (the route generator shares one
+    served-values run with its custom-alert delivery check, #1211); it
+    cannot be combined with `tenants` (ValueError)."""
     tenants = tv.requested_tenants(tenants)  # read three times below
-    tree = tv.load_served_tree(conf_d, at=at, binary=binary, timeout=timeout,
-                               disable_effects=disable_effects, tenants=tenants)
+    if served_tree is not None and tenants is not None:
+        raise ValueError("served_tree is a whole-tree reading; it cannot answer a tenants subset")
+    tree = served_tree or tv.load_served_tree(conf_d, at=at, binary=binary, timeout=timeout,
+                                              disable_effects=disable_effects, tenants=tenants)
     effective = (effective_tree or tv.load_effective_tree(conf_d, binary=binary, timeout=timeout,
                                                           tenants=tenants)).tenants
     if tenants is not None:

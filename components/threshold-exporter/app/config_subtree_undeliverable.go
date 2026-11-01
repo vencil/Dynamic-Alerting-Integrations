@@ -129,7 +129,8 @@ func formatUndeliverableLog(
 			"ONLY in a subtree `_defaults.yaml`. /effective reports its value, but the collector cannot emit it "+
 			"(it walks the ROOT defaults and the declared surface, and a nested `_` file feeds neither), so "+
 			"those alerts can never fire. Fix: declare the key in the conf.d ROOT `_defaults.yaml` or in "+
-			"`optional_overrides:`. See %s. Affected:",
+			"`optional_overrides:`; for a dimensional key (`<base>{…}`), declare its labels for its base under "+
+			"the ROOT `dimensions:` instead (a regex matcher serves `<label>_re`). See %s. Affected:",
 		context, len(affected), root, undeliverableDocPointer)
 
 	shown := affected

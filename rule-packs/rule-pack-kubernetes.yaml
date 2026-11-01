@@ -349,12 +349,12 @@ groups:
           )
 
       # CFS throttle (#944 PR-2c): same normalize pair as cpu/memory above. NB
-      # `cpu_throttle` is NOT in the version pilot allowlist (resolve.go
-      # pilotVersionMetrics = container/cpu + container/memory only) — tenants cannot
-      # legally set per-version throttle thresholds; the exact-match branch below is
+      # `cpu_throttle` declares no `version` dimension (threshold-registry.yaml
+      # `dimensions`: container_cpu + container_memory only, #3475) — the exporter
+      # serves no per-version throttle threshold; the exact-match branch below is
       # therefore inert by design and every versioned metric takes the version="default"
       # FALLBACK branch. Kept in the Route-2 shape anyway so the pack stays uniform and
-      # a future pilot expansion is a one-line allowlist change, not a rule rewrite.
+      # a future expansion is a RULE_PACKS `dimensions` edit + --regen (ADR-024), not a rule rewrite.
       - record: tenant_version:alert_threshold:container_cpu_throttle
         expr: |
           label_replace(
@@ -476,7 +476,7 @@ groups:
 
       # CFS throttle cores (#944 PR-2c) — same Route-2 shape (exact-or-fallback per
       # severity + maintenance unless); see the cpu_throttle threshold record above
-      # for why the exact branch is currently inert (version pilot allowlist).
+      # for why the exact branch is currently inert (no declared `version` dimension).
       - record: rule_pack_kubernetes:pod_cpu_throttled_warning:core
         expr: |
           (
@@ -581,6 +581,16 @@ groups:
         for: 60s
         labels:
           severity: warning
+          # Severity-dedup key (ADR-001; #1199). The pair aggregates to {tenant, version}
+          # (OOM: {tenant}) — no pod label survives — so one static group per pair is
+          # the whole contract: both alerts of the pair carry the SAME value, unique
+          # across packs (the inhibit rule's `equal` is metric_group alone, the tenant
+          # is pinned in its matchers). Accepted residual: a tenant running two
+          # `version`s at once sees a critical on one version inhibit the warning on
+          # the other. Adding `version` to `equal` would need a `version=~".+"`
+          # presence gate (#1132 invariant, scripts/tools/ops/_grar_validate.py),
+          # which would drop every pack whose alerts carry no `version` out of dedup.
+          metric_group: "container_cpu"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High container CPU in {{ $labels.tenant }}"
@@ -610,6 +620,8 @@ groups:
         for: 60s
         labels:
           severity: critical
+          # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
+          metric_group: "container_cpu"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "CRITICAL container CPU in {{ $labels.tenant }}"
@@ -640,6 +652,8 @@ groups:
         for: 60s
         labels:
           severity: warning
+          # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
+          metric_group: "container_memory"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High container memory in {{ $labels.tenant }}"
@@ -668,6 +682,8 @@ groups:
         for: 60s
         labels:
           severity: critical
+          # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
+          metric_group: "container_memory"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "CRITICAL container memory in {{ $labels.tenant }}"
@@ -705,6 +721,8 @@ groups:
         for: 15m
         labels:
           severity: warning
+          # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
+          metric_group: "container_cpu_throttle"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Chronic CPU throttling in {{ $labels.tenant }}"
@@ -735,6 +753,8 @@ groups:
         for: 15m
         labels:
           severity: critical
+          # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
+          metric_group: "container_cpu_throttle"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "CRITICAL CPU throttling in {{ $labels.tenant }}"
@@ -772,6 +792,8 @@ groups:
         for: 30s
         labels:
           severity: warning
+          # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
+          metric_group: "container_oom_killed"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Container OOM-killed in {{ $labels.tenant }}"
@@ -801,6 +823,8 @@ groups:
         for: 30s
         labels:
           severity: critical
+          # Severity-dedup key — see PodContainerHighCPU (#1199; same version residual).
+          metric_group: "container_oom_killed"
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "CRITICAL repeated OOM kills in {{ $labels.tenant }}"

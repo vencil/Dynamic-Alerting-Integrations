@@ -18,7 +18,7 @@ import (
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
-const spellingRoot = "defaults:\n  pg_connections: 100\n  redis_queue_length: 10\n"
+const spellingRoot = fixtureDims + "defaults:\n  pg_connections: 100\n  redis_queue_length: 10\n"
 
 // effectiveTenantOf runs `da-guard effective` over files and returns the
 // entry of tenant tx.
@@ -67,7 +67,7 @@ func TestSpelling_AcrossLayers_OneThresholdAsWritten(t *testing.T) {
 	tenant := "tenants:\n  tx:\n    '" + tenantKey + "': 31\n"
 	for name, files := range map[string]map[string]string{
 		"subtree _defaults": {"_defaults.yaml": spellingRoot,
-			"sub/_defaults.yaml": "defaults:\n  '" + otherKey + "': 30\n", "sub/tx.yaml": tenant},
+			"sub/_defaults.yaml": "dimensions:\n  pg_connections: [env, r]\ndefaults:\n  '" + otherKey + "': 30\n", "sub/tx.yaml": tenant},
 		"platform tenants:": {"_defaults.yaml": spellingRoot + "tenants:\n  tx:\n    '" + otherKey + "': 30\n",
 			"tx.yaml": tenant},
 		"profile": {"_defaults.yaml": spellingRoot, "_profiles.yaml": "profiles:\n  std:\n    '" + otherKey + "': 30\n",

@@ -1094,14 +1094,17 @@ def test_retire_drift_reads_a_quoted_namespace_label_as_its_text(tmp_path):
 def test_retire_drift_refuses_an_unquoted_numeric_namespace_label(tmp_path):
     """#3206: `instance: 010` is the number 8 to kubectl, and a label takes
     only strings, so kubectl refuses the Namespace. Until #3206 the lint took
-    the text ("010", #2216); now it names the file and the document and says
-    to quote it — neither the text nor 8 is taken, and it is not skipped."""
+    the text ("010", #2216); now da-crdecode's manifest reading refuses the
+    file with kubectl's reason and says to quote it (#3490) — neither the
+    text nor 8 is taken, and it is not skipped."""
     import check_retire_drift as m
     with pytest.raises(m.NamespacesFileError) as exc_info:
         _retire_namespaces(tmp_path, _ID_SPELLINGS["UNQ"])
-    msg = str(exc_info.value)
-    assert "ns.yaml: document 1 (Namespace 'db-x'): label `instance` is 8" in msg, msg
-    assert "kubectl refuses" in msg and 'instance: "010"' in msg, msg
+    assert "ns.yaml: cannot be read as kubectl reads it" in str(exc_info.value)
+    detail = "\n".join(exc_info.value.detail_lines)
+    assert ("cannot unmarshal number into Go struct field "
+            "ObjectMeta.metadata.labels of type string") in detail, detail
+    assert "quote it if text is meant" in detail, detail
 
 
 @pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))

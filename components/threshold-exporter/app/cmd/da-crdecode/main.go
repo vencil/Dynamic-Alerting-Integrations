@@ -31,7 +31,15 @@
 //     Go value of type unstructured.detector") and one with no kind ("Object
 //     'Kind' is missing"). Here each such document is refused too: a
 //     document that is no object — an array, a string, a number — or one
-//     whose `kind` is missing, not a string, or empty. The refusal names the
+//     whose `kind` is missing, not a string, or empty. kubectl then decodes
+//     each document's `apiVersion` and `metadata` into the types it reads
+//     them as (metav1.TypeMeta and metav1.ObjectMeta, cli-runtime's metadata
+//     decoder) and refuses the document when they do not decode: an
+//     `apiVersion` that is not a string, a `metadata` that is not a mapping,
+//     a name, namespace, label or annotation value that is not a string, a
+//     `creationTimestamp` that is no RFC 3339 time. Here the same check is
+//     made with the same library (k8s.io/apimachinery), so it refuses what
+//     kubectl refuses, in kubectl's words. The refusal names the
 //     line the document starts on only when the file holds several documents
 //     (a one-document file gets no line number); a refused list item is
 //     named `items[i] (line N)`, the line left out when it cannot be told.
@@ -44,8 +52,16 @@
 //     string `kind` and `apiVersion`. A list inside a list is refused, as
 //     kubectl refuses it. A list with content of its own (a `data`, a `spec` beside
 //     `items`), which kubectl discards without a word, is refused
-//     (manifest.go). So a caller can rely on every entry of `documents`
-//     being an object with a non-empty string `kind`, none of them a list.
+//     (manifest.go). A list's own `apiVersion` and `metadata` are checked as
+//     a document's are, and so is each item's, as it is given: kubectl does
+//     not check an item's when it reads the file, but applying an item whose
+//     do not decode does not apply it as written (it is refused, or its
+//     annotations or namespace are replaced), so it is refused here. So a
+//     caller can rely on every entry of `documents` being an object with a
+//     non-empty string `kind`, none of them a list, whose `apiVersion` and
+//     `metadata` decode as kubectl reads them: an `apiVersion` it has is a
+//     string or null, a `metadata` it has is a mapping or null whose name,
+//     namespace, label values and annotation values are strings or null.
 //   - `--any-shape` reads YAML that is not a manifest with the same
 //     conversion: a ConfigMap data value (a rule file, an Alertmanager
 //     config), a plain rule file, a Helm values file. Nothing is checked about
@@ -92,8 +108,10 @@
 //	   read as written to compare with the conversion, or — without
 //	   `--any-shape` — a document or a list item is no Kubernetes object (not
 //	   a mapping; no string `kind`, or an empty one; an item without a string
-//	   `kind` or `apiVersion`, once it has taken the list's), a list holds a
-//	   list, or a list's own text is not read as
+//	   `kind` or `apiVersion`, once it has taken the list's; an `apiVersion`
+//	   or `metadata` that does not decode into metav1.TypeMeta and
+//	   metav1.ObjectMeta), a list holds a list, or a list's own text is not
+//	   read as
 //	   written (its items' differences could not be told apart)
 package main
 
@@ -152,7 +170,8 @@ func run(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 			"(sigs.k8s.io/yaml.YAMLToJSON, one document after another as `kubectl apply -f` "+
 			"splits them) and prints {\"documents\": [...], \"differs_from_text\": [...]} as JSON. "+
 			"`-` reads standard input. Every document must be a Kubernetes object (a mapping "+
-			"with a non-empty string `kind`; a list is replaced by its items) unless %s is given, which reads YAML "+
+			"with a non-empty string `kind`, whose `apiVersion` and `metadata` decode as kubectl reads them; "+
+			"a list is replaced by its items) unless %s is given, which reads YAML "+
 			"that is not a manifest (a ConfigMap data value, a rule file, Helm values).\n", anyShapeFlag)
 		return exitCallerErr
 	}

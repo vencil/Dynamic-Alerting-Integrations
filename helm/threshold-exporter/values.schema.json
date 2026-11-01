@@ -70,6 +70,14 @@
         "optional_overrides": {
           "description": "Typed by the guard in templates/configmap.yaml (a list of key names)."
         },
+        "dimensions": {
+          "description": "Per base key, the labels a dimensional key may carry and still be served (#3475). Also typed by the guard in templates/configmap.yaml.",
+          "type": ["object", "null"],
+          "additionalProperties": {
+            "type": "array",
+            "items": { "type": "string" }
+          }
+        },
         "max_metrics_per_tenant": {
           "description": "Typed by the guard in templates/configmap.yaml (integer, or null for the built-in 500)."
         },

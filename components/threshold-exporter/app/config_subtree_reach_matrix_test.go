@@ -97,7 +97,7 @@ func (v reachVerdict) String() string {
 // Their fixtures need the RETIRED spelling as a live value, and the #1231
 // pre-commit hook forbids that outside one named file — keeping the exemption
 // to one file is worth more than keeping the table in one place.
-const reachMatrixRoot = "defaults:\n  mysql_connections: 80\n  redis_evicted_keys: 10\n" +
+const reachMatrixRoot = "dimensions:\n  redis_evicted_keys: [db]\ndefaults:\n  mysql_connections: 80\n  redis_evicted_keys: 10\n" +
 	"state_filters:\n  maintenance:\n    severity: warning\n"
 
 func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
@@ -120,15 +120,17 @@ func TestEveryInheritedKeyShapeIsDeliveredOrNamed(t *testing.T) {
 		{"a key no plane declares", "  no_such_metric: 60\n", "no_such_metric", verdictRefused, "",
 			"in neither cfg.Defaults nor cfg.OptionalOverrides — nothing iterates it"},
 		{"a dimensional override", "  redis_evicted_keys{db=\"1\"}: 5\n", "redis_evicted_keys{db=\"1\"}", verdictDelivered, "",
-			"resolveDimensionalRows is tenant-only and needs no declaration"},
-		{"a dimensional key that cannot be parsed", "  redis_evicted_keys{oops: 5\n", "redis_evicted_keys{oops", verdictWarned, "",
-			"resolveDimensionalRows logs `failed to parse dimensional key` itself"},
+			"resolveDimensionalRows serves it: the root declares `db` for its base (#3475)"},
+		{"a dimensional key that cannot be parsed", "  redis_evicted_keys{oops: 5\n", "redis_evicted_keys{oops", verdictRefused, "",
+			"no label of it is declared under `dimensions:` (it has none), so resolveDimensionalRows does not take it and the overlay asks that same condition (#3475)"},
+		{"a dimensional override on an undeclared label", "  redis_evicted_keys{env=\"a\"}: 5\n", "redis_evicted_keys{env=\"a\"}", verdictRefused, "",
+			"the root declares only `db` for its base: resolveDimensionalRows does not serve it, and the overlay asks the same (#3475)"},
 		{"a critical tier over a root default", "  mysql_connections_critical: 200\n", "mysql_connections_critical", verdictDelivered, "",
 			"resolveCriticalRows finds mysql_connections in defaults"},
 		{"a critical tier with no base", "  postgres_locks_critical: 200\n", "postgres_locks_critical", verdictRefused, "",
 			"resolveCriticalRows serves a critical row only over a base cfg.Defaults values; the overlay asks that same condition (criticalBaseValued, #3378) — before, it handed the key down and the row was dropped with a WARN no report named"},
 		{"a critical tier over a declared-only base", "  postgres_locks_critical: 200\n", "postgres_locks_critical", verdictRefused,
-			"defaults:\n  mysql_connections: 80\noptional_overrides: [postgres_locks]\nstate_filters:\n  maintenance:\n    severity: warning\n",
+			"dimensions:\n  redis_evicted_keys: [db]\ndefaults:\n  mysql_connections: 80\noptional_overrides: [postgres_locks]\nstate_filters:\n  maintenance:\n    severity: warning\n",
 			"`optional_overrides:` declares the base without a value, and resolveCriticalRows needs the value (#3378)"},
 		// #3341: until then these were delivered (`_state_maintenance`,
 		// `_severity_dedup`), inert (`_silent_mode`) or refused as

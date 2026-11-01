@@ -229,18 +229,28 @@ def test_every_namespace_document_is_read(tmp_path: Path) -> None:
     assert crd.namespace_declared_targets(f) == {"db-a", "010"}
 
 
-@pytest.mark.parametrize("value,read", [("010", "8"), ("yes", "true"), ("1e3", "1000")])
-def test_a_label_kubectl_refuses_is_an_error_naming_the_document(
-        tmp_path: Path, value: str, read: str) -> None:
+# kubectl's error for a label value that is no string, and the sentence
+# da-crdecode adds to it (#3490).
+_LABEL_NOT_TEXT = "cannot unmarshal {} into Go struct field ObjectMeta.metadata.labels of type string"
+_QUOTE_HINT = "quote it if text is meant"
+
+
+@pytest.mark.parametrize("value,json_type", [("010", "number"), ("yes", "bool"), ("1e3", "number")])
+def test_a_label_kubectl_refuses_is_an_error(
+        tmp_path: Path, value: str, json_type: str) -> None:
     """`instance: 010` is the number 8 to kubectl, which refuses a label that
-    is not a string: the Namespace is never created. Reported with the file
-    and the document's position; neither the text nor the number is taken."""
+    is not a string: the Namespace is never created. da-crdecode's manifest
+    reading refuses the file with kubectl's reason (#3490), which is passed
+    on with the file; neither the text nor the number is taken."""
     f = tmp_path / "ns.yaml"
     f.write_text(_ns("db-a", "db-a") + "---\n" + _ns("db-b", value), encoding="utf-8")
     with pytest.raises(crd.NamespacesFileError) as exc_info:
         crd.namespace_declared_targets(f)
-    msg = str(exc_info.value)
-    assert f"ns.yaml: document 2 (Namespace 'db-b'): label `instance` is {read} " in msg, msg
+    assert "ns.yaml: cannot be read as kubectl reads it" in str(exc_info.value)
+    detail = "\n".join(exc_info.value.detail_lines)
+    assert "the document starting at line 8" in detail, detail
+    assert _LABEL_NOT_TEXT.format(json_type) in detail, detail
+    assert _QUOTE_HINT in detail, detail
 
 
 def test_main_exits_2_on_a_label_kubectl_refuses(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -254,7 +264,8 @@ def test_main_exits_2_on_a_label_kubectl_refuses(tmp_path: Path, monkeypatch, ca
                                       "--helm-dir", str(helm), "--namespaces-file", str(ns)])
     assert crd.main() == 2
     err = capsys.readouterr().err
-    assert "document 1 (Namespace 'db-x'): label `instance` is 8" in err, err
+    assert "ns.yaml: cannot be read as kubectl reads it" in err, err
+    assert _LABEL_NOT_TEXT.format("number") in err and _QUOTE_HINT in err, err
 
 
 def test_a_manifest_kubectl_cannot_read_is_an_error(tmp_path: Path) -> None:

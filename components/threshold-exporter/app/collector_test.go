@@ -56,6 +56,7 @@ func TestCollector_Collect_NilConfig(t *testing.T) {
 func TestCollector_Collect_CustomLabels(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
+		Dimensions:        map[string][]string{"mysql_connections": {"env"}},
 		Defaults:          map[string]float64{},
 		OptionalOverrides: []string{"mysql_connections"},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -299,6 +300,7 @@ func TestCollector_FullConfig(t *testing.T) {
 func TestCollector_MultipleRegexLabels(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
+		Dimensions:        map[string][]string{"oracle_ts": {"dc_re", "env_re"}},
 		Defaults:          map[string]float64{},
 		OptionalOverrides: []string{"oracle_ts"},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -554,6 +556,7 @@ func TestCollector_Collect_OverLimitGaugeEvictsVanishedTenant(t *testing.T) {
 func TestCollector_RegexLabelOutput(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
+		Dimensions:        map[string][]string{"oracle_tablespace": {"tablespace_re"}},
 		Defaults:          map[string]float64{},
 		OptionalOverrides: []string{"oracle_tablespace"},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -580,6 +583,7 @@ func TestCollector_RegexLabelOutput(t *testing.T) {
 func TestCollector_MixedExactAndRegexLabels(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
+		Dimensions:        map[string][]string{"oracle_ts": {"env", "tablespace_re"}},
 		Defaults:          map[string]float64{},
 		OptionalOverrides: []string{"oracle_ts"},
 		Tenants: map[string]map[string]ScheduledValue{
@@ -616,7 +620,8 @@ func TestCollector_MixedExactAndRegexLabels(t *testing.T) {
 func TestCollector_SilentMode_Warning(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{},
+		Dimensions: map[string][]string{"user_silent_mode": {"target_severity"}},
+		Defaults:   map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
 				"_silent_mode": SV("warning"),
@@ -708,7 +713,8 @@ func TestCollector_SilentMode_NoLeakToThreshold(t *testing.T) {
 func TestCollector_SeverityDedup(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{"mysql_connections": 80},
+		Dimensions: map[string][]string{"user_severity_dedup": {"mode"}},
+		Defaults:   map[string]float64{"mysql_connections": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {},
 		},
@@ -851,7 +857,8 @@ func TestCollector_SilentMode_PlainScalar_NoConfigEvent(t *testing.T) {
 func TestCollector_StateFilter(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{},
+		Dimensions: map[string][]string{"user_state_filter": {"filter"}},
+		Defaults:   map[string]float64{},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {},
 		},
@@ -883,8 +890,9 @@ func TestCollector_StateFilter(t *testing.T) {
 func TestCollector_ConfigInfo_Configmap(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{},
-		Tenants:  map[string]map[string]ScheduledValue{},
+		Dimensions: map[string][]string{"threshold_exporter_config_info": {"config_source", "git_commit"}},
+		Defaults:   map[string]float64{},
+		Tenants:    map[string]map[string]ScheduledValue{},
 	}
 
 	manager := newTestManager(cfg)
@@ -907,8 +915,9 @@ func TestCollector_ConfigInfo_Configmap(t *testing.T) {
 func TestCollector_ConfigInfo_GitSync(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{},
-		Tenants:  map[string]map[string]ScheduledValue{},
+		Dimensions: map[string][]string{"threshold_exporter_config_info": {"config_source", "git_commit"}},
+		Defaults:   map[string]float64{},
+		Tenants:    map[string]map[string]ScheduledValue{},
 	}
 
 	manager := newTestManager(cfg)
@@ -931,8 +940,9 @@ func TestCollector_ConfigInfo_GitSync(t *testing.T) {
 func TestCollector_ConfigInfo_Operator(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{},
-		Tenants:  map[string]map[string]ScheduledValue{},
+		Dimensions: map[string][]string{"threshold_exporter_config_info": {"config_source", "git_commit"}},
+		Defaults:   map[string]float64{},
+		Tenants:    map[string]map[string]ScheduledValue{},
 	}
 
 	manager := newTestManager(cfg)

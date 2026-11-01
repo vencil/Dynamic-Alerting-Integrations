@@ -112,6 +112,32 @@ func TestNestedPlatformFileProbe_OnlyTheCarrierIsJudgedByItsDecode(t *testing.T)
 	}
 }
 
+// #3475: `dimensions:` in a subtree `_defaults.yaml` is not read (the root
+// carrier's alone is), and the exporter says so rather than ignoring it.
+func TestNestedDefaults_DimensionsIsWarnedAndIgnored(t *testing.T) {
+	t.Parallel()
+	root := writeColdMergeFixture(t, map[string]string{
+		"_defaults.yaml":      "defaults:\n  container_cpu: 80\n",
+		"team/_defaults.yaml": "dimensions:\n  container_cpu: [version]\ndefaults:\n  container_cpu: 70\n",
+		"team/t-team.yaml":    "tenants:\n  t-team:\n    container_cpu{version=\"v2\"}: \"60\"\n",
+	})
+	fresh, _ := freshMetrics(t)
+	logger, buf := newTestLogger()
+	mgr := NewConfigManager(root)
+	defer mgr.Close()
+	mgr.SetMetrics(fresh)
+	mgr.SetLogger(logger)
+	if err := mgr.Load(); err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !strings.Contains(buf.String(), "WARN: dimensions found in") {
+		t.Errorf("a subtree `dimensions:` must be WARNed; log:\n%s", buf.String())
+	}
+	if d := mgr.GetConfig().Dimensions; len(d) != 0 {
+		t.Errorf("a subtree `dimensions:` must not reach the merged config, got %v", d)
+	}
+}
+
 // TestNestedPlatformFileProbe_ReadableFileKeepsItsWarnings (#2439 review
 // F2): the two WARNs that read a nested non-carrier's top-level keys fire for
 // a file parse-tree reads. One it refuses (here a `!!null x` beside them) is

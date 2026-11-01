@@ -130,7 +130,7 @@ func TestGuard_ValueNotServedControls(t *testing.T) {
 func TestGuard_UnselectedSeveritySuffixIsValueNotServed(t *testing.T) {
 	t.Parallel()
 	files := map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: 80\n  mysql_threads_running: 80\n" +
+		"_defaults.yaml": "dimensions:\n  mysql_connections: [db]\ndefaults:\n  mysql_connections: 80\n  mysql_threads_running: 80\n" +
 			"  mysql_slow_queries: 80\n",
 		"tx.yaml": "tenants:\n  tx:\n    mysql_connections: \"70:high\"\n" +
 			"    mysql_threads_running: \"70:\"\n    mysql_slow_queries: \"70:Critical\"\n" +

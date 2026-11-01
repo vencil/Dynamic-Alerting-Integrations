@@ -27,6 +27,7 @@ package guard
 import (
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
 )
@@ -55,14 +56,13 @@ func checkSubtreeUndeliverable(input CheckInput) []Finding {
 				Kind:     findingkind.FindingSubtreeDefaultUndeliverable,
 				TenantID: id,
 				Field:    k,
-				Message: fmt.Sprintf("Threshold `%s` is inherited from a subtree `_defaults.yaml`, but neither the conf.d root "+
-					"`_defaults.yaml` nor `optional_overrides:` declares it, so the exporter serves no series for it "+
+				Message: fmt.Sprintf("Threshold `%s` is inherited from a subtree `_defaults.yaml`, but %s, so the exporter serves no series for it "+
 					"and that alert can never fire (the tenant's effective config still shows a value for it; the "+
 					"exporter logs an ERROR and counts the tenant on da_config_subtree_undeliverable_tenants). %s "+
 					"Not reported here: reserved keys and keys the exporter "+
 					"never serves as a threshold row (`_silent_*`, `_state_*`, …; reported as subtree_default_reserved_key, #2388), "+
 					"and keys the subtree "+
-					"switches off.", k, undeliverableFix(k)),
+					"switches off.", k, undeliverableWhy(k), undeliverableFix(k)),
 			})
 		}
 	}
@@ -72,6 +72,23 @@ func checkSubtreeUndeliverable(input CheckInput) []Finding {
 // undeliverableFix is the finding's fix sentence for key k. No `_` key
 // reaches it: the row generator skips every one (baseRowsSkipKey, #3045),
 // so undeliverableThresholds leaves them to subtree_default_reserved_key.
+//
+// A dimensional key (`<base>{…}`) is served only when every label its row
+// serves is declared for its base under the root `dimensions:` (ADR-038
+// §11, #3475): declaring the key or its base fixes nothing, so its sentence
+// names `dimensions:` instead.
 func undeliverableFix(k string) string {
+	if base, _, ok := strings.Cut(k, "{"); ok {
+		return fmt.Sprintf("Declare every label `%s` serves for its base `%s` under `dimensions:` in the conf.d root "+
+			"`_defaults.yaml` (a regex matcher serves `<label>_re`); declaring the key itself or its base does not serve it.", k, base)
+	}
 	return fmt.Sprintf("Declare `%s` in the conf.d root `_defaults.yaml` or in `optional_overrides:`.", k)
+}
+
+// undeliverableWhy is why key k is not served, in the finding's words.
+func undeliverableWhy(k string) string {
+	if strings.Contains(k, "{") {
+		return "the conf.d root `_defaults.yaml` `dimensions:` does not declare its labels for its base"
+	}
+	return "neither the conf.d root `_defaults.yaml` nor `optional_overrides:` declares it"
 }

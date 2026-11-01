@@ -36,7 +36,9 @@ Revised 2026-10-28: the generator's `--validate` reports the shared verdict too;
 
 Revised 2026-10-30: the verdict joins the generator container's one judgement, with no deadline of its own and no yielding, replacing 2026-10-24's "the verdict has its own share of the deadline"; the rules once tenant-api blocks when judged replace 2026-10-28's "the verdict only goes in `warnings`": a write whose verdict does not complete is refused, with no degraded path. The write check recomputes counterfactually for the written tenants only (decisions 2, 5, 8, 11).
 
-Revised 2026-10-31: reading a tenant's config (GET) no longer reports whether any reader reads a key, and does not judge it on the spot, replacing "GET's key-name messages switch to the shared verdict"; on load the exporter states only which keys it does not read itself, with no severity. The Go, Python and portal key-name judgements are deleted; the `version` label and rename notices reach CI through da-guard, printed as they are; a dimensional key is served only when the platform declares its base, or the root defaults write the whole key (decision 11).
+Revised 2026-10-31: reading a tenant's config (GET) no longer reports whether any reader reads a key, and does not judge it on the spot, replacing "GET's key-name messages switch to the shared verdict"; on load the exporter states only which keys it does not read itself, with no severity. The Go, Python and portal key-name judgements are deleted; the `version` label and rename notices reach CI through da-guard, printed as they are; a dimensional key is served only when every label of it is declared for its base under the root `_defaults.yaml` `dimensions:` (decision 11).
+
+Revised 2026-11-01: whether a dimensional key is served is decided by the labels `dimensions:` declares, replacing "served once its base is declared"; the shipped list is generated from the threshold registry (decision 11).
 
 ## Summary
 
@@ -313,7 +315,22 @@ Changing the gates to "block when judged" is not part of this ADR and is driven 
 - Reading a tenant's config (GET) no longer reports whether any reader reads a key, and does not judge it on the spot: judging there would take the generator container's judgement queue, and a caller with read permission could trigger it. `da-tools explain-keys` or CI's validate-config show it, and the verdict refuses it on a write — as Kubernetes returns warnings in a write's response only. A git-managed tenant, never written through the API, has such problems reported by CI only.
 - On load the exporter states the keys it does not read itself (a key no row reads, a `disable` written for such a key, a `_` key the registry lists no reader for), with no severity: a reader's fact where it reads, the severity being the verdict's (decision 4). A deployment without CI keeps this signal. The exporter's two other messages about what it reads stay as they are: routing-layer keys in a profile are not applied, and a `_critical` with no base default.
 - The generator's own key-name warnings and the Go and Python key-name judgements are deleted once only the shared verdict is used; value checks such as the `version` label and the rename notice are judged in Go alone, and handed through each tenant's `key_checks` in da-guard served-values to validate-config and the generator's `--validate`, which print them in Go's words. The portal's key-name check is deleted at the same time. The membership matrix that compared the two hand-written judgements stays, now asserted on the shared verdict.
-- A dimensional key (`<base>{…}`) is served by the exporter only when the platform names its base (valued in `defaults:` or listed in `optional_overrides:`) or the root `defaults:` writes the whole key — the same membership a flat key needs. A dimensional key on a misspelt or undeclared base has no row, and the verdict reads it as `unread` (`no_row`). Before, the exporter served it whatever the base, so the verdict read a misspelt base as read and accepted it, while no alert read it.
+- A dimensional key (`<base>{…}`) is served by the exporter only when every label of it is declared for its base under the root `_defaults.yaml` `dimensions:` — whether a tenant file, a profile, a subtree or the root `defaults:` writes it. What is compared is the label name the row serves: a regex selector serves `<label>_re` (`version=~"v3.*"` serves `version_re`), so the name to declare is `version_re`; declaring `version` does not cover it. Any other dimensional key has no row, and the verdict reads it as `unread` (`no_row`); two exceptions have no row either: a key written `disable` is reported `disable_noop` (decision 8), and a key a Policy-as-Code rule names reads `read` (`policy_engine` reads it). The reason: the shipped rule packs merge thresholds with `max by(…)` and keep only the labels they group by (for most, only `tenant`); a label outside the grouping cannot form its own dimension — its value is merged into that group's threshold and never applies per dimension. The shipped `dimensions:` comes from each key's `dimensions` in `scaffold_tenant.RULE_PACKS`: `--regen` regenerates the threshold registry (`rule-packs/threshold-registry.yaml`) and the shipped declarations from it, and `da-tools init` and `scaffold_tenant` read it directly; a test checks the registry against the rule packs' grouping in both directions; today it is `version` on `container_cpu` and `container_memory`. When its own rules read a label, a platform adds the base and label to `dimensions:`. Example:
+
+  ```yaml
+  # root _defaults.yaml
+  dimensions:
+    container_cpu: [version]
+  ```
+
+  ```yaml
+  # tenant file
+  tenants:
+    t-a:
+      container_cpu{version="v2"}: "60"     # served
+      container_cpu{pod="a"}: "70"          # not served: pod is not declared, verdict unread
+      container_cpu{version=~"v3.*"}: "95"  # not served: it serves version_re, which is not declared
+  ```
 - Platform-file and profile notices no longer carry keys no reader reads; the verdict reports them (decision 6).
 
 ### 12. Bad values already on disk

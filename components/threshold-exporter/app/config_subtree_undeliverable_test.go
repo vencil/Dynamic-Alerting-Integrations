@@ -338,6 +338,17 @@ func TestFormatUndeliverableLog_CapsTheSample(t *testing.T) {
 	}
 }
 
+// #3475: the fix names the root `dimensions:` for a dimensional key, which
+// declaring the key or its base never serves.
+func TestFormatUndeliverableLog_NamesDimensionsForADimensionalKey(t *testing.T) {
+	t.Parallel()
+	sources := map[string]string{"ta": "/conf.d/db/ta.yaml"}
+	line := formatUndeliverableLog([]string{"ta"}, sources, refusedFor(sources), "/conf.d", "Config loaded (directory)")
+	if !strings.Contains(line, "declare its labels for its base under the ROOT `dimensions:`") {
+		t.Errorf("log must name the root `dimensions:` for a dimensional key, got:\n%s", line)
+	}
+}
+
 // TestUndeliverableAudit_PairsOneInstant pins that the audit judges the
 // snapshot it was HANDED, never a hierarchy it re-reads for itself.
 // Reloads are not serialised (see auditSubtreeUndeliverable), so a self-read

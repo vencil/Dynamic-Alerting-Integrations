@@ -52,6 +52,8 @@ def _refused(tmp_path: Path, case: dict) -> list[str]:
     on it, and the exporter's `version` label messages; [] = accepted."""
     m = _matrix()
     root = {"defaults": {k: 80 for k in m["defaults"]}, "optional_overrides": case["declared"]}
+    if case.get("dimensions"):
+        root["dimensions"] = case["dimensions"]
     (tmp_path / "_defaults.yaml").write_text(yaml.safe_dump(root), encoding="utf-8")
     (tmp_path / "t-a.yaml").write_text(
         yaml.safe_dump({"tenants": {"t-a": {case["key"]: "5"}}}), encoding="utf-8")

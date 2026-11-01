@@ -17,7 +17,7 @@ import (
 
 func TestGuard_MetricsNotGatherable(t *testing.T) {
 	t.Parallel()
-	const root = "defaults:\n  mysql_connections: 80\n  redis_queue_length: 10\n"
+	const root = "dimensions:\n  redis_queue_length: [q, q_re]\ndefaults:\n  mysql_connections: 80\n  redis_queue_length: 10\n"
 	for name, tc := range map[string]struct {
 		tenant string
 		want   bool
@@ -82,7 +82,7 @@ func TestGatherVerdict_EveryCutOfTheDay(t *testing.T) {
 	for v, want := range map[string]bool{"a": true, "b": false} {
 		dir := t.TempDir()
 		testutil.WriteTree(t, dir, map[string]string{
-			"_defaults.yaml": "defaults:\n  redis_queue_length: 10\n",
+			"_defaults.yaml": "dimensions:\n  redis_queue_length: [q, q_re]\ndefaults:\n  redis_queue_length: 10\n",
 			"tx.yaml":        "tenants:\n  tx:\n    'redis_queue_length{q=~\"a\"}': 2\n" + windowedQRe(v),
 		})
 		cfg, _, err := config.LoadDir(dir, nil)

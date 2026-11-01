@@ -133,7 +133,7 @@ func keysOf[V any](m map[string]V) []string {
 	return out
 }
 
-const defaultsOnly = "defaults:\n  mysql_connections: 80\n"
+const defaultsOnly = fixtureDims + "defaults:\n  mysql_connections: 80\n"
 
 // --- where the value is written -------------------------------------------
 
@@ -569,7 +569,9 @@ func TestServedValues_CallerErrors(t *testing.T) {
 // out of their window, expiry, `_critical`, `:severity`, dimensional keys,
 // declared keys, a #1231 alias, custom alerts, and a disable.
 var consistencyTree = map[string]string{
-	"_defaults.yaml": `defaults:
+	"_defaults.yaml": `dimensions:
+  redis_queue_length: [queue]
+defaults:
   mysql_connections: 80
   mysql_threads_running: 30
   redis_memory: 70
@@ -627,7 +629,7 @@ tenants:
     _state_maintenance: {target: enable, expires: "2027-01-01T00:00:00Z"}
     mysql_connections_critical: 95
 `,
-	"sub/_defaults.yaml": "defaults:\n  mysql_connections: 60\n",
+	"sub/_defaults.yaml": "dimensions:\n  redis_queue_length: [queue]\ndefaults:\n  mysql_connections: 60\n",
 	"sub/tenant-c.yaml":  "tenants:\n  tenant-c:\n    container_memory: 50\n",
 }
 
@@ -984,7 +986,7 @@ func TestServedValues_RootNonFiniteAliasIsNamedCanonically(t *testing.T) {
 func TestServedValues_RootRefusedDefaultsAreNamed(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  mysql_connections: \"70\"\n  redis_memory: 0x1p4\n  pg_connections: abc\n" +
+		"_defaults.yaml": fixtureDims + "defaults:\n  mysql_connections: \"70\"\n  redis_memory: 0x1p4\n  pg_connections: abc\n" +
 			"  container_cpu: 0x1F\n  _zz_unknown: .nan\n",
 		"tenant-a.yaml": "tenants:\n  tenant-a:\n    _silent_mode: \"false\"\n",
 	}, "")
@@ -1370,7 +1372,7 @@ func TestServedValues_StateFilterSeverityChangeIsVisible(t *testing.T) {
 	t.Parallel()
 	tree := func(sev string) map[string]string {
 		return map[string]string{
-			"_defaults.yaml": "defaults:\n  x: 1\nstate_filters:\n  crashloop:\n    reasons: [\"CrashLoopBackOff\"]\n    severity: " + sev + "\n",
+			"_defaults.yaml": fixtureDims + "defaults:\n  x: 1\nstate_filters:\n  crashloop:\n    reasons: [\"CrashLoopBackOff\"]\n    severity: " + sev + "\n",
 			"a.yaml":         "tenants:\n  a:\n    x: 2\n",
 			"b.yaml":         "tenants:\n  b:\n    _state_crashloop: disable\n",
 		}
@@ -1453,7 +1455,7 @@ func TestServedValues_TimeBoxChangeIsVisible(t *testing.T) {
 func TestServedValues_UndeclaredMaintenanceHasNoTimeBox(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := served(t, map[string]string{
-		"_defaults.yaml": "defaults:\n  x: 1\n",
+		"_defaults.yaml": fixtureDims + "defaults:\n  x: 1\n",
 		"t.yaml":         "tenants:\n  t:\n    _state_maintenance: {target: enable, expires: \"2027-01-01T00:00:00Z\"}\n",
 	}, "2026-07-01T03:00:00Z")
 	mustOK(t, code, stderr)

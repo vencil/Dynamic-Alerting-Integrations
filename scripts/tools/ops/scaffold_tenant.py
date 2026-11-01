@@ -58,6 +58,7 @@ from _registry_lib import (  # noqa: E402
     is_shipped_optional_key,
     render_tenant_critical_note_lines,
     render_tenant_declared_note_lines,
+    shipped_dimensions_for_packs,
     shipped_optional_keys_for_packs,
     tenant_declared_foot,
 )
@@ -203,9 +204,9 @@ RULE_PACKS = {
         "default_on": True,
         "rule_pack_file": "rule-packs/rule-pack-kubernetes.yaml",
         "defaults": {
-            "container_cpu": {"value": 80, "unit": "%", "desc": "Container CPU % of limit (weakest link)", "metric_class": "saturation"},
+            "container_cpu": {"value": 80, "unit": "%", "desc": "Container CPU % of limit (weakest link)", "metric_class": "saturation", "dimensions": ["version"]},
             "container_cpu_throttle": {"value": 25, "unit": "%", "desc": "Chronic CFS throttle: % of ACTIVE 100ms periods throttled, NOT % CPU lost (critical tier opt-in via container_cpu_throttle_critical, suggest 50; #944)", "metric_class": "saturation"},
-            "container_memory": {"value": 85, "unit": "%", "desc": "Container memory % of limit (weakest link)", "metric_class": "saturation"},
+            "container_memory": {"value": 85, "unit": "%", "desc": "Container memory % of limit (weakest link)", "metric_class": "saturation", "dimensions": ["version"]},
         },
         "state_filters": {
             "container_crashloop": {
@@ -723,6 +724,11 @@ def generate_defaults(selected_dbs: list[str]) -> dict:
         # Emitted between the two existing sections so the file reads in the
         # same order as the chart values and the dev conf.d template.
         out["optional_overrides"] = optional_overrides
+    # #3475: the labels a dimensional key may carry and still be served —
+    # this file is the only declaration a GitOps deployment has.
+    dimensions = shipped_dimensions_for_packs(["kubernetes", *selected_dbs], RULE_PACKS)
+    if dimensions:
+        out["dimensions"] = dimensions
     out["state_filters"] = state_filters
     return out
 

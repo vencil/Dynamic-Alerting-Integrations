@@ -259,7 +259,7 @@ tenants:
     "mongodb_replication_lag{rs=\"rs-orders\",member=\"mongo-orders-dr\"}": "60"
 ```
 
-> ⚠️ 出貨的 Rule Pack 以 `max by(tenant)` 正規化門檻、維度 label 在那一步就丟掉，所以上面這幾列**目前不會依 instance 分開生效**：它們與 base 合成一個租戶門檻；`disable` 只是不送出這一列，不會只停掉那個 instance。要依維度判斷，得照下方「平台團隊 PromQL 適配」改 Rule Pack（[#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)）。
+> ⚠️ 出貨的 Rule Pack 以 `max by(tenant)` 正規化門檻、維度 label 在那一步就丟掉，所以上面這幾列**目前不會依 instance 分開生效**：它們與 base 合成一個租戶門檻；`disable` 只是不送出這一列，不會只停掉那個 instance。而且這幾列要送出，得先在根 `_defaults.yaml` 的 `dimensions:` 為 `redis_connected_clients` 宣告 `instance`（見下表）。要依維度判斷，得照下方「平台團隊 PromQL 適配」改 Rule Pack，再宣告該 label（[#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)）。
 
 **設計約束**：
 
@@ -267,11 +267,11 @@ tenants:
 |------|------|
 | YAML 需加引號 | 含 `{` 的 key 必須用雙引號包裹 |
 | 不支援 `_critical` 後綴 | 改用 `"value:severity"` 語法，如 `"500:critical"` |
-| 預設值 | 租戶的維度 key 不繼承 base 的純量預設值。根 `defaults:` 寫的完整維度 key，exporter 會當作每個沒寫它的租戶的預設送出（#2031），但 threshold-reachability 檢查（`DIMENSIONAL-IN-DEFAULTS`）仍會擋下，兩者的矛盾追蹤於 #3478；請寫在租戶檔 |
-| base 須由平台宣告 | `{` 之前的 base 必須在 `_defaults.yaml` 的 `defaults:` 有值或列在 `optional_overrides:`，或根 `defaults:` 寫了整個維度鍵；否則不產生 metric，validate-config 報 `unread … (no_row)`（ADR-038 §11） |
+| 預設值 | 租戶的維度 key 不繼承 base 的純量預設值。根 `defaults:` 寫的完整維度 key，label 在 `dimensions:` 宣告過時，exporter 會當作每個沒寫它的租戶的預設送出（#2031），但 threshold-reachability 檢查（`DIMENSIONAL-IN-DEFAULTS`）仍會擋下，兩者的矛盾追蹤於 #3478；請寫在租戶檔 |
+| label 須宣告 | 維度 key 送出的每個 label 都要在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告（例如 `dimensions: {redis_connected_clients: [instance]}`；regex 選擇器送出 `<label>_re`，要宣告的是 `instance_re`），不論寫在哪一層；否則不產生 metric，validate-config 報 `unread … (no_row)`（值寫 `disable` 的報 `disable_noop`；Policy-as-Code 規則指名的讀成 `read`，同樣不產生 metric；ADR-038 §11）。出貨的 `dimensions:` 只列規則包真的保留的 label（目前是 container cpu/memory 的 `version`） |
 | 三態仍適用 | 數值=Custom, 省略=Default (基本 key 在 `_defaults.yaml` 的 `defaults:` 有值時；根 `defaults:` 寫了完整維度 key 時也取那個值，見上一列；列在 `optional_overrides:` 的宣告 key 省略＝無值＝靜默), `"disable"`=停用 |
 
-**平台團隊 PromQL 適配**：維度 label 必須同時出現在 Recording Rule 的 `by()` 與 Alert Rule 的 `on()` 中。三件套契約與 `tenant:<metric>:<agg>` 命名規範：[design/rule-packs.md](design/rule-packs.md)。出貨的 `conf.d/examples/` 因此不放維度鍵（#3475）。
+**平台團隊 PromQL 適配**：維度 label 必須同時出現在 Recording Rule 的 `by()` 與 Alert Rule 的 `on()` 中。改好之後，在根 `_defaults.yaml` 的 `dimensions:` 宣告該 base 與 label，維度 key 才會送出。三件套契約與 `tenant:<metric>:<agg>` 命名規範：[design/rule-packs.md](design/rule-packs.md)。出貨的 `conf.d/examples/` 因此不放維度鍵（#3475）。
 
 ### 10. LLM 輔助手動轉換
 
@@ -305,7 +305,7 @@ Exporter 每 30 秒 reload 一次，K8s ConfigMap propagation 約 1-2 分鐘。�
 
 **Q: 維度 key 可以設定在 defaults 裡嗎？**
 
-建議不要。根 `defaults:` 寫的完整維度 key（例如 `"redis_queue_length{queue=\"orders\"}": 500`），exporter 會當作每個沒寫它的租戶的預設送出（#2031），但 threshold-reachability 檢查（`DIMENSIONAL-IN-DEFAULTS`）仍會擋下，兩者的矛盾追蹤於 #3478；請寫在租戶檔。租戶自己寫的維度 key 不會繼承 base 的純量預設值。另見上方 §9 的 ⚠️：出貨的 Rule Pack 目前不依維度判斷（#3475）。
+建議不要。根 `defaults:` 寫的完整維度 key（例如 `"redis_queue_length{queue=\"orders\"}": 500`），label 在 `dimensions:` 宣告過時，exporter 會當作每個沒寫它的租戶的預設送出（#2031），但 threshold-reachability 檢查（`DIMENSIONAL-IN-DEFAULTS`）仍會擋下，兩者的矛盾追蹤於 #3478；請寫在租戶檔。租戶自己寫的維度 key 不會繼承 base 的純量預設值。另見上方 §9 的 ⚠️：出貨的 Rule Pack 目前不依維度判斷（#3475）。
 
 **Q: 維度 key 怎麼指定 critical？**
 

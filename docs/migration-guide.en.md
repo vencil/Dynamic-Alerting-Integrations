@@ -259,7 +259,7 @@ tenants:
     "mongodb_replication_lag{rs=\"rs-orders\",member=\"mongo-orders-dr\"}": "60"
 ```
 
-> ⚠️ The shipped Rule Packs normalise thresholds with `max by(tenant)`, which drops the dimension label, so the rows above **do not take effect per instance today**: they and the base merge into one tenant threshold, and `disable` only stops that row from being served — it does not silence that one instance. Judging per dimension needs the Rule Pack adapted as in "Platform-team PromQL adaptation" below ([#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)).
+> ⚠️ The shipped Rule Packs normalise thresholds with `max by(tenant)`, which drops the dimension label, so the rows above **do not take effect per instance today**: they and the base merge into one tenant threshold, and `disable` only stops that row from being served — it does not silence that one instance. And these rows are served only once the root `_defaults.yaml` `dimensions:` declares `instance` for `redis_connected_clients` (see the table below). Judging per dimension needs the Rule Pack adapted as in "Platform-team PromQL adaptation" below, then the label declared ([#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)).
 
 **Design constraints**:
 
@@ -267,11 +267,11 @@ tenants:
 |------------|------|
 | YAML quoting required | Keys containing `{` must be wrapped in double quotes |
 | No `_critical` suffix | Use `"value:severity"` syntax instead, e.g. `"500:critical"` |
-| Defaults | A tenant's dimension key does not inherit its base's scalar default. A complete dimension key in the root `defaults:` is served by the exporter as the default for every tenant that does not write it (#2031), but the threshold-reachability check (`DIMENSIONAL-IN-DEFAULTS`) still rejects it — the mismatch is tracked in #3478; write it in the tenant file |
-| Base must be platform-declared | The base before `{` must be valued in `defaults:` of `_defaults.yaml` or listed in `optional_overrides:`, or the root `defaults:` must write the whole dimensional key; otherwise no metric is served and validate-config reports `unread … (no_row)` (ADR-038 §11) |
+| Defaults | A tenant's dimension key does not inherit its base's scalar default. A complete dimension key in the root `defaults:` whose labels `dimensions:` declares is served by the exporter as the default for every tenant that does not write it (#2031), but the threshold-reachability check (`DIMENSIONAL-IN-DEFAULTS`) still rejects it — the mismatch is tracked in #3478; write it in the tenant file |
+| Labels must be declared | Every label a dimension key serves must be declared for its base under the root `_defaults.yaml` `dimensions:` (for example `dimensions: {redis_connected_clients: [instance]}`; a regex selector serves `<label>_re`, so declare `instance_re`), whichever layer writes the key; otherwise no metric is served and validate-config reports `unread … (no_row)` (`disable_noop` for a key written `disable`; a key a Policy-as-Code rule names reads `read` and serves no metric either; ADR-038 §11). The shipped `dimensions:` lists only the labels the rule packs actually keep (today `version` on container cpu/memory) |
 | Three-state still applies | Value=Custom, omitted=Default (for a basic key with a value in `defaults:` of `_defaults.yaml`, and for a complete dimension key the root `defaults:` writes — see the row above; a key listed under `optional_overrides:` inherits nothing, so omitted=no value=silent), `"disable"`=Disabled |
 
-**Platform-team PromQL adaptation**: the dimension label must appear in both the Recording Rule's `by()` and the Alert Rule's `on()`. Three-piece contract + `tenant:<metric>:<agg>` naming convention: [design/rule-packs.en.md](design/rule-packs.en.md). The shipped `conf.d/examples/` carry no dimensional keys for this reason (#3475).
+**Platform-team PromQL adaptation**: the dimension label must appear in both the Recording Rule's `by()` and the Alert Rule's `on()`. Once that is in place, declare the base and label under the root `_defaults.yaml` `dimensions:` so the dimension key is served. Three-piece contract + `tenant:<metric>:<agg>` naming convention: [design/rule-packs.en.md](design/rule-packs.en.md). The shipped `conf.d/examples/` carry no dimensional keys for this reason (#3475).
 
 ### 10. LLM-Assisted Manual Conversion
 
@@ -305,7 +305,7 @@ Yes. New-architecture alerts use different alertname values and don't collide. R
 
 **Q: Can dimension keys be set under defaults?**
 
-Not recommended. A complete dimension key in the root `defaults:` (for example `"redis_queue_length{queue=\"orders\"}": 500`) is served by the exporter as the default for every tenant that does not write it (#2031), but the threshold-reachability check (`DIMENSIONAL-IN-DEFAULTS`) still rejects it — the mismatch is tracked in #3478; write it in the tenant file. A dimension key a tenant writes does not inherit its base's scalar default. See also the ⚠️ in §9: the shipped Rule Packs do not judge per dimension yet (#3475).
+Not recommended. A complete dimension key in the root `defaults:` (for example `"redis_queue_length{queue=\"orders\"}": 500`) whose labels `dimensions:` declares is served by the exporter as the default for every tenant that does not write it (#2031), but the threshold-reachability check (`DIMENSIONAL-IN-DEFAULTS`) still rejects it — the mismatch is tracked in #3478; write it in the tenant file. A dimension key a tenant writes does not inherit its base's scalar default. See also the ⚠️ in §9: the shipped Rule Packs do not judge per dimension yet (#3475).
 
 **Q: How do you mark a dimension key as critical?**
 
