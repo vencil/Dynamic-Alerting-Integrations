@@ -16,15 +16,15 @@ name: Bench Attribution (post-merge, main)
 # scope, control-canary INCONCLUSIVE). Differences are policy only:
 #
 #   - REGRESSION → open a `perf-regression` issue (label pre-exists; shared
-#     with the PR gate) naming the commit + PR. Issue management mirrors the
-#     nightly trend watchdog's open/update/auto-close closed loop
-#     (analyze_bench_history.py --trend-watch, wired in bench-record.yaml):
-#     label-scoped open-issue query for dedupe, a body marker as the identity
-#     key, auto-close when a re-run of the SAME commit comes back clean.
-#     Unlike the watchdog's single rolling issue, the dedupe key here is the
-#     COMMIT — one issue per offending commit; a later commit's clean run
-#     does NOT close an earlier commit's issue (its regression is still
-#     attributed there; sustained drift on main stays the watchdog's job).
+#     with the PR gate) naming the commit + PR. Issue management is an
+#     open/update/auto-close closed loop: label-scoped open-issue query for
+#     dedupe, a body marker as the identity key, auto-close when a re-run of
+#     the SAME commit comes back clean. The dedupe key is the COMMIT — one
+#     issue per offending commit; a later commit's clean run does NOT close an
+#     earlier commit's issue (its regression is still attributed there).
+#     Drift that stays below the per-commit threshold is NOT caught here; the
+#     nightly absolute watchdog that used to claim it was retired, and its
+#     replacement (a deterministic cumulative budget) is pending in ADR-039.
 #   - INCONCLUSIVE (canary drift) → log + step summary only, NO issue —
 #     aligned with the PR gate: canary drift means "re-run", never a verdict.
 #
@@ -212,10 +212,9 @@ jobs:
           short="${HEAD_SHA:0:12}"
           marker="<!-- bench-attrib-commit: $HEAD_SHA -->"
 
-          # Dedupe (trend-watchdog pattern, keyed per commit): label-scoped
-          # open-issue query + body marker as identity key. Guards the "same
-          # regression re-filed on every re-run" class problem the watchdog
-          # solved for its nightly issue.
+          # Dedupe, keyed per commit: label-scoped open-issue query + body
+          # marker as identity key. Guards the "same regression re-filed on
+          # every re-run" class problem.
           # startswith(), NOT contains(): the squash subject (PR title —
           # AUTHOR-CONTROLLED text) is quoted verbatim later in the body, so a
           # fake marker planted in a PR title could contains()-match another

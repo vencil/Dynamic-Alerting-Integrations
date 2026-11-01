@@ -186,7 +186,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "sync_schema.py": _R_DX,
     "sync_tool_registry.py": _R_DX,
     "tenant_verify.py": _R_DX,
-    "write_baseline_marker.py": _R_DX,
     # ── scripts/tools/lint ─────────────────────────────────────────────
     "check_account_registry_monotonic.py": _R_LINT,
     "check_ad_hoc_git_scripts.py": _R_LINT,
@@ -553,8 +552,11 @@ def test_allowlists_shrink_only_count_pin():
     # its output is GitHub step outputs and ::notice:: lines, which the three
     # bench workflows render in English. ⚠️ Found the same way as
     # check_pipestatus_errexit.py: this gate turned the PR red.
-    assert len(ENGLISH_ONLY) <= 152, (
-        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=152). Adding an "
+    # pin 151: lowered from 152 when write_baseline_marker.py was deleted
+    # together with the absolute-ns/op trend watchdog it fed (ADR-032 §6
+    # withdrawn). The ratchet follows the corpus down as well as up.
+    assert len(ENGLISH_ONLY) <= 151, (
+        f"ENGLISH_ONLY grew to {len(ENGLISH_ONLY)} (pin=151). Adding an "
         "English-only tool is allowed but must be an explicit, reviewed "
         "decision — bump this pin in the same commit and justify it."
     )

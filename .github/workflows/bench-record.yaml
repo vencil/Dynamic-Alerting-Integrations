@@ -163,7 +163,7 @@ jobs:
       # step state, which is what sank the frozen-anchor prototype. No
       # `::error::`/`::warning::` either — drift is constant by construction over
       # a reference's life, and an annotation that fires every single night is
-      # wallpaper. It goes in the JSON (which the watchdog will read) and the
+      # wallpaper. It goes in the JSON (which the paired verdict reads) and the
       # step summary (which a human reads).
       - name: Record workload drift between the two sides
         id: drift
@@ -270,7 +270,7 @@ jobs:
       # runner, so the machine's speed divides out of the ratio. Same harness
       # the PR gate uses. ROUNDS=6/BENCHTIME=3s keeps the main side's sample
       # count and benchtime identical to what `make benchmark-report` produced,
-      # which is what lets the existing watchdog keep reading it unchanged.
+      # which is what lets the release baseline keep its shape unchanged.
       #
       # ⛔ Never fails the job. A reference that will not build is a real and
       # expected failure mode (the tag ages while main is refactored), and the
@@ -307,25 +307,10 @@ jobs:
           # The main side IS the nightly baseline: same benches, same benchtime,
           # same sample count, and it already carries the control canary rows
           # (bench_interleave.sh runs one canary binary into BOTH sides). So the
-          # existing watchdog and the release-asset workflow keep working with
-          # no change, and running the paired night costs 2x rather than 3x.
+          # release-asset workflow keeps working with no change, and running the
+          # paired night costs 2x rather than 3x.
           cp .build/paired/bench-pr.txt .build/bench-baseline.txt
           cp .build/paired/bench.err.log .build/bench.err.log || true
-          # ⛔ LAST ACTION OF THE STEP, and that placement is the whole design
-          # (TRK-371 / #1635). The marker's ABSENCE is the signal: a step that
-          # died mid-benchmark never reaches this line, so the artifact ships
-          # without a claim that it is whole. `upload-artifact` runs
-          # `if: always()`, so the half-written .txt still ships — it just no
-          # longer gets to look identical to a complete one.
-          # ⚠️ This REPLACES the old `grep -c '^Benchmark'` echo rather than
-          # joining it: that grep counts every line starting with "Benchmark",
-          # while the consumer additionally requires the `-<cpus>` suffix, the
-          # iteration count and `ns/op`. The two disagree on exactly the input
-          # the marker exists to catch, so printing both would publish two
-          # different "row counts" for one file.
-          python3 scripts/tools/dx/write_baseline_marker.py \
-            --baseline .build/bench-baseline.txt \
-            --out .build/bench-baseline.rows
 
       # Only reached when the reference side is unusable. Reproduces exactly what
       # this job did before ADR-032, so a bad reference never costs us a night.
@@ -337,17 +322,7 @@ jobs:
           ( cd scripts/tools/ops/bench-canary && \
             go test -bench='ControlCanary' -benchmem -run='^$' -count=6 -benchtime=1s . ) \
             >> .build/bench-baseline.txt 2>>.build/bench.err.log || \
-            echo "::warning::canary append failed — trend watchdog will fall back to the fixed floor"
-          # Same marker, same producer, same last-action placement as the main
-          # path above. ⚠️ A FAILED CANARY APPEND STILL GETS A MARKER, and that
-          # is correct: the marker vouches that the file the consumer reads is
-          # the file this step wrote, not that the canary rows are present. A
-          # missing canary is a documented, handled degradation (the watchdog
-          # falls back to the fixed floor, per the warning above); truncation is
-          # not. Conflating them would make the marker mean two things.
-          python3 scripts/tools/dx/write_baseline_marker.py \
-            --baseline .build/bench-baseline.txt \
-            --out .build/bench-baseline.rows
+            echo "::warning::canary append failed — the baseline has no control canary rows tonight"
 
       # ⛔ Must not abort the job. `pair_bench_ratio.py` exits 2 on inputs that
       # are not a valid pair (no `cpu:` header, mismatched CPUs, an empty side)
@@ -389,8 +364,7 @@ jobs:
           # Three distinct causes reach this step and they need different fixes:
           # a pin file nobody can parse, a reference version that no longer
           # builds, and inputs the ratio tool refused. Reporting them all as one
-          # sends the reader to the wrong place — the same misdiagnosis class as
-          # `thin-anchor` in the watchdog.
+          # sends the reader to the wrong place.
           REASON: >-
             ${{ steps.ref.outputs.reason
                 || (steps.paired.outputs.status != 'ok' && 'reference-build-or-run-failed')
@@ -461,7 +435,6 @@ jobs:
           name: bench-baseline-${{ github.run_id }}
           path: |
             .build/bench-baseline.txt
-            .build/bench-baseline.rows
             .build/bench.raw.jsonl
             .build/bench.err.log
             .build/bench-paired.json
@@ -473,113 +446,35 @@ jobs:
           retention-days: 90
           if-no-files-found: warn
 
-  # Sustained-trend watchdog (Phase 2 of the bench-gate redesign). Runs AFTER
-  # the nightly baseline is recorded + uploaded, pulls the last N nights'
-  # artifacts, and opens / updates / auto-closes a `perf-trend` issue when main
-  # shows a SUSTAINED regression (not a single-night blip). Detection +
-  # closed-loop logic live in analyze_bench_history.py --trend-watch:
-  #   * R1 sustained — all K most-recent nights above an ANCHORED baseline (the
-  #     settled-window MEDIAN), and R2 creep — the recent window's MEDIAN above
-  #     that SAME anchor. Both floored by the control canary's own night-to-night
-  #     CV. (creep was "vs the best night in the window" before #754; a single
-  #     anomalously-fast night pinned that low-watermark forever, which is how
-  #     #702 flagged all 20 benches at once. It has anchored to the settled
-  #     median ever since — do not re-describe it as vs-best-night.)
-  #   * Host-class stratification (#1396) — the hosted runner pool is
-  #     heterogeneous, so both windows are drawn from tonight's `cpu:` class
-  #     only; a mixed-host anchor compares CPUs, not commits.
-  #   * Three states, not two — FINDINGS / CLEAR / INCONCLUSIVE. Only a night
-  #     that actually evaluated a benchmark may close its issue, and only for the
-  #     benchmarks it measured; "no findings" is never by itself a recovery.
-  # This run's own artifact isn't "success" yet so it isn't in the window — a
-  # one-night lag, which is fine for a multi-night trend detector.
-  trend-watch:
-    name: Nightly sustained-trend watchdog
-    needs: bench-record
-    if: github.ref == 'refs/heads/main'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    permissions:
-      contents: read
-      actions: read   # gh run list / gh run download (prior nights' artifacts)
-      issues: write   # open / comment / close the perf-trend issue
-    steps:
-      # persist-credentials: false — the watchdog script talks to GitHub via
-      # gh with its own explicit GH_TOKEN env, never via persisted git creds.
-      - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.13"
-
-      - name: Run trend watchdog (open/update/close perf-trend issue)
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python3 scripts/tools/dx/analyze_bench_history.py --trend-watch --trend-limit 14
-
-  # ── ADR-032 phase 2 (PR-B1): the PAIRED verdict, running BESIDE the old one ──
+  # ── ADR-032: the PAIRED verdict — summary only ──────────────────────────────
   #
-  # ADR-032 §待決 6 pinned "新舊並行，不直接切換": accumulate two-to-four weeks of
-  # paired verdicts next to the absolute-series watchdog above, compare the two,
-  # and only then cut over. So this job reports and does nothing else.
+  # The absolute-ns/op watchdog that used to run beside this job was retired
+  # (ADR-032 §6 withdrawn; see ADR-039 §Not yet decided for what replaces it as
+  # the trend detector). Paired ns/op stays INFORMATIONAL: it reports and does
+  # nothing else.
   #
   # ⛔ NOTE THE PERMISSIONS. `issues: write` is deliberately ABSENT. The
   # summary-only property is asserted three ways, weakest to strongest: a
   # comment in the module, a test that walks its AST for issue-mutating names
   # and network imports, and this token scope — which holds even if both of the
-  # other two are wrong. During a parallel-run period whose entire purpose is
-  # that nobody trusts the new verdict yet, the token is the one that matters.
+  # other two are wrong.
   #
-  # Why a separate job rather than a step in `trend-watch`: a crash in an
-  # unproven reporter must not entangle with the status of the watchdog that
-  # currently owns the `perf-trend` issue. Cost is one runner and a checkout.
-  #
-  # ⚠️ One-night lag, same as the watchdog above: this run's own artifact is not
-  # `success` yet while the job is running, so tonight's numbers land in
-  # tomorrow's verdict. Fine for a K-night rule; stated so nobody reads the
-  # newest row as tonight.
+  # ⚠️ One-night lag: this run's own artifact is not complete yet while the job
+  # is running, so tonight's numbers land in tomorrow's verdict. Fine for a
+  # K-night rule; stated so nobody reads the newest row as tonight.
   paired-trend-watch:
     name: Paired trend verdict (summary only — opens/closes nothing)
     needs: bench-record
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
-    # ⛔ THE JOB MUST NOT BE ABLE TO FAIL THE RUN, and this is not tidiness.
-    # A watchdog finds prior nights with `gh run list --status <s>`, and
-    # `--status success` keys on the WORKFLOW RUN's conclusion — one failed job
-    # fails the run. So without this, an exit-2 here (the tool's documented
-    # "could not do the job" path: `gh` unauthenticated, a rate limit, a renamed
-    # workflow) would delete that night's artifacts from a future window. A
-    # K-of-N rule over a window the operator believes is 14 nights but is
-    # quietly 13 fires later than advertised — the same silent-window-shortening
-    # this module's own loader refuses to do, arriving instead through the
-    # workflow graph.
-    #
-    # ⛔ CORRECTION, and the scope is now NARROWER than this comment used to
-    # claim. It said "BOTH watchdogs" and named `bench-paired.json` alongside
-    # `bench-baseline.txt`. That is no longer true: `paired_trend_watch.py` asks
-    # for `--status completed` and judges the artifact itself, so its window
-    # survives a red run. The line is still load-bearing for the OTHER one —
-    # `analyze_bench_history.py` still asks `--status success`, because
-    # `bench-baseline.txt` carries no completeness marker and its loader applies
-    # no sample floor. So a crash here would still cost the old watchdog, the
-    # one that owns the `perf-trend` issue, that night.
-    #
-    # This also makes true a claim the comment above already made: that a crash
-    # in an unproven reporter does not entangle with the watchdog that owns the
-    # `perf-trend` issue. It was not true until this line existed — found by
-    # review, which flagged it as an unverified hypothesis; the `--status
-    # success` half is verified in `analyze_bench_history.py`, and the
-    # run-conclusion half is documented GitHub behaviour.
-    #
-    # The failure is still visible: the job shows as failed in the run's job
-    # list and its step summary is absent. What it cannot do is take the night's
-    # data with it.
+    # ⛔ The job must not be able to fail the run. `gh run list --status
+    # success` keys on the WORKFLOW RUN's conclusion — one failed job fails the
+    # run — and `release-attach-bench-baseline.yaml` and
+    # `analyze_bench_history.py`'s variance table still pick nights that way.
+    # `paired_trend_watch.py` itself asks `--status completed` and judges the
+    # artifact, so its own window survives a red run. The failure stays
+    # visible: the job shows as failed and its step summary is absent.
     continue-on-error: true
     permissions:
       contents: read
