@@ -1902,7 +1902,7 @@ repos:
         # during its maintenance window. Requires 0 copies (:core-factored upstream),
         # 1 factored top-level copy (union parenthesised — `or` binds looser than
         # `unless`), or 2 copies one-per-arm and byte-canonical.
-        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|scripts/tools/lint/check_maintenance_symmetry\.py)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|scripts/tools/lint/check_maintenance_symmetry\.py|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
 
       - id: orphan-recordings-check
         name: "orphan recording rules — every record must have a consumer across trees/dashboards/observed-map (TRK-339 WS2a / #1200)"

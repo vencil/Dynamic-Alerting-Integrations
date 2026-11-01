@@ -69,9 +69,23 @@ ENRICH_RHS = (f"max by(tenant, {', '.join(METADATA_LABELS)}) "
               f"(tenant_metadata_info)")
 VOID_BRANCH = "unless on(tenant) tenant_metadata_info"
 
-# Any group_left whose right-hand side is the raw metric, whatever its label list
-# or spacing — the shape that breaks under per-pod scraping.
-_RAW_JOIN = re.compile(r"group_left\s*(?:\([^)]*\))?\s*tenant_metadata_info\b")
+# Any vector match onto the raw metric, whatever its case, spacing, label list or
+# cardinality modifier (group_left, group_right, or none = one-to-one) — every
+# arithmetic/comparison match on it breaks under per-pod scraping. The set
+# operators (`and`, `or`, `unless`) match on presence and are exempt.
+_RAW_JOIN = re.compile(
+    r"(\b[a-z_]+\b|[-+*/%^]|[<>=!]=?)\s*(?:on|ignoring)\s*\([^)]*\)\s*"
+    r"(?:group_(?:left|right)\s*(?:\([^)]*\))?\s*)?\(?\s*tenant_metadata_info\b",
+    re.IGNORECASE)
+_SET_OPERATORS = {"and", "or", "unless"}
+# A group_left/group_right carrying exactly the metadata labels, in any case or
+# spacing: its right-hand side must be ENRICH_RHS (whitespace-insensitive), or a
+# spelling that misses ENRICH_MARKER would escape both checks above.
+_METADATA_GROUP = re.compile(r"group_(?:left|right)\s*\(([^)]*)\)", re.IGNORECASE)
+
+
+def _squash(s: str) -> str:
+    return re.sub(r"\s+", "", s).lower()
 
 
 def _repo_root() -> Path:
@@ -94,8 +108,18 @@ def noncanonical_joins(text: str) -> List[Tuple[int, str]]:
             rest = text[m.end():].split("\n", 1)[0].strip()
             found[line] = rest
     for m in _RAW_JOIN.finditer(text):
+        if m.group(1).lower() in _SET_OPERATORS:
+            continue
         line = text.count("\n", 0, m.start()) + 1
         found.setdefault(line, " ".join(m.group(0).split()))
+    want = _squash(ENRICH_RHS)
+    for m in _METADATA_GROUP.finditer(text):
+        labels = {x.strip() for x in m.group(1).split(",") if x.strip()}
+        if labels != set(METADATA_LABELS):
+            continue
+        if not _squash(text[m.end():m.end() + 4 * len(ENRICH_RHS)]).startswith(want):
+            line = text.count("\n", 0, m.start()) + 1
+            found.setdefault(line, " ".join(text[m.start():].split("\n", 1)[0].split()))
     return sorted(found.items())
 
 

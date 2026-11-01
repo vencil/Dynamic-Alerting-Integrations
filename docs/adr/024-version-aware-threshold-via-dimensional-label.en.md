@@ -88,7 +88,8 @@ The alert rule uses an **exact-or-degrade** structure:
         threshold_vlabeled{version="default", severity="warning"}
     )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
-    * on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info
+    * on(tenant) group_left(runbook_url, owner, tier)
+      max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
   labels:
     severity: warning   # fixed on the alert label; the Critical rule is a mirror copy
 ```
@@ -97,7 +98,7 @@ Three deliberate designs:
 
 - **Dynamic degradation** — a tenant declares `{version="v2"}` only when "a specific major version needs a special threshold"; routine small bumps (multiple deploys a day) don't require touching the alert YAML, and a missing version automatically falls back to `default` without dropping the series. This upgrades the highest risk — "observed-but-not-declared = silent gap" — from "fix it after the fact" to "built into the architecture".
 - **Split per-severity rules** — you **cannot** use `group_left(severity)`: the `version × severity` cross-product forms a cardinality deadlock in the join (the exact branch crashes one-to-many, the fallback branch crashes many-to-many) → the whole alerting engine seizes. Fixing severity collapses the RHS to a singleton, so all joins become clean one-to-one / many-to-one.
-- **The asymmetric join key is safe** — threshold comparison uses `on(tenant, version)`, but `user_state_filter` (maintenance) and `tenant_metadata_info` are version-less per-tenant singletons, so `unless on(tenant)` / `group_left` directions are legal and undisturbed by version.
+- **The asymmetric join key is safe** — threshold comparison uses `on(tenant, version)`, but `user_state_filter` (maintenance) and `tenant_metadata_info` are version-less, so `unless on(tenant)` / `group_left` directions are legal and undisturbed by version. `tenant_metadata_info` is a per-tenant singleton only with one exporter replica; scraped per pod with several replicas it has one series per replica, so the `group_left` right-hand side is always collapsed with `max by(tenant, runbook_url, owner, tier)` first ([#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483), see [HA design §4.3](../design/high-availability.en.md)).
 
 ⛔ **Deployment prerequisite (HARD)**: kube-state-metrics MUST set `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`, or `kube_pod_labels` carries no version, the injection join matches an empty set, and versioned thresholds go **silently inert**. Three defense layers guard this: a runtime sentinel (`VersionAwareThresholdInert`) + a CI static lint (`check_ksm_version_allowlist.py`) + the operator-manifest allowlist. Before metric-side injection ships, the whole mechanism is inert and 100% backward-compatible (missing version → fill default → align to the un-versioned threshold).
 

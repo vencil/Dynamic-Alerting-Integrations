@@ -94,7 +94,8 @@ user_threshold{tenant="db-a", component="container", metric="cpu", severity="war
         threshold_vlabeled{version="default", severity="warning"}
     )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
-    * on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info
+    * on(tenant) group_left(runbook_url, owner, tier)
+      max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
   labels:
     severity: warning   # 固定於 alert label；Critical 規則鏡像複製
 ```
@@ -103,7 +104,7 @@ user_threshold{tenant="db-a", component="container", metric="cpu", severity="war
 
 - **動態降級**——租戶只在「特定大版號要特殊閾值」時才宣告 `{version="v2"}`，日常小改版（每天多次 deploy）不需同步改告警 YAML，缺對應版號時自動沿用 `default`、不丟 series。這把「observed-but-not-declared = silent gap」這個最高風險從「事後補救」升級為「架構內建」。
 - **拆 per-severity 規則**——**不可**用 `group_left(severity)`：`version × severity` 維度交織會在 join 形成 cardinality 死鎖（精確分支 one-to-many 崩、fallback 分支 many-to-many 崩）→ 整個告警引擎癱瘓。固定 severity 後 RHS 退化為 singleton，所有 join 變乾淨的 one-to-one / many-to-one。
-- **非對稱 join key 是安全的**——閾值比較用 `on(tenant, version)`，但 `user_state_filter`（維護）與 `tenant_metadata_info` 是不帶 version 的 per-tenant singleton，`unless on(tenant)` / `group_left` 方向合法、不被 version 破壞。
+- **非對稱 join key 是安全的**——閾值比較用 `on(tenant, version)`，但 `user_state_filter`（維護）與 `tenant_metadata_info` 不帶 version，`unless on(tenant)` / `group_left` 方向合法、不被 version 破壞。`tenant_metadata_info` 只在單一 exporter 副本時是 per-tenant singleton；多副本逐 pod 抓取時每個租戶有一筆 per replica，所以 `group_left` 的右側一律先 `max by(tenant, runbook_url, owner, tier)` 收斂（[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)，見 [HA 設計 §4.3](../design/high-availability.md)）。
 
 ⛔ **部署前提（HARD）**：kube-state-metrics 必須設 `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`，否則 `kube_pod_labels` 不帶 version、注入 join 匹配空集、版本閾值**靜默 inert**。三層防禦守此前提：runtime sentinel（`VersionAwareThresholdInert`）+ CI static lint（`check_ksm_version_allowlist.py`）+ operator manifest allowlist。在 metric-side 注入上線前，整套機制 inert 且 100% 向下相容（缺 version → 補 default → 對齊未版本化閾值）。
 

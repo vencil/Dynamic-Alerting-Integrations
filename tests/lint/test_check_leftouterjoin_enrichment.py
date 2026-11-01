@@ -144,3 +144,27 @@ def test_go_compiler_emits_the_same_rhs():
     # ...and the compiler joins through it, not through a raw string literal.
     assert "group_left(runbook_url, owner, tier)" in src
     assert not re.search(r'"\s*tenant_metadata_info\\n"', src)
+
+
+# Spellings that miss ENRICH_MARKER but still join the raw metric (or drop
+# metadata labels): case, group_right, one-to-one, no space after commas.
+_ESCAPES = {
+    "upper_group_left": "x * on(tenant) GROUP_LEFT(runbook_url, owner, tier) tenant_metadata_info",
+    "group_right": "x * on(tenant) group_right(runbook_url, owner, tier) tenant_metadata_info",
+    "one_to_one": "x * on(tenant) tenant_metadata_info",
+    "no_space_partial_max": ("x * on(tenant) group_left(runbook_url,owner,tier) "
+                             "max by(tenant) (tenant_metadata_info)"),
+}
+
+
+def test_marker_escaping_spellings_flagged():
+    for name, text in _ESCAPES.items():
+        assert lint.noncanonical_joins(text), name
+
+
+def test_canonical_rhs_spacing_and_set_operators_pass():
+    ok = ("x * on(tenant) group_left(runbook_url,owner,tier)\n"
+          "  max by (tenant, runbook_url, owner, tier) (tenant_metadata_info)")
+    assert lint.noncanonical_joins(ok) == []
+    assert lint.noncanonical_joins("x and on (tenant) tenant_metadata_info") == []
+    assert lint.noncanonical_joins("x or on(tenant) tenant_metadata_info") == []
