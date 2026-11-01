@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts"
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "scripts", "tools", "ops"))
 
 import cardinality_forecasting as cf
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -453,7 +454,7 @@ class TestCLI:
     def test_main_text_output(self, mock_get, capsys):
         """文字輸出。"""
         mock_get.return_value = self._make_mock_data()
-        exit_code = cf.main(["--prometheus", "http://prom:9090"])
+        exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090"]))
         assert exit_code == 0
         output = capsys.readouterr().out
         assert "db-a" in output
@@ -462,7 +463,7 @@ class TestCLI:
     def test_main_json_output(self, mock_get, capsys):
         """JSON 輸出。"""
         mock_get.return_value = self._make_mock_data()
-        exit_code = cf.main(["--prometheus", "http://prom:9090", "--json"])
+        exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090", "--json"]))
         assert exit_code == 0
         data = json.loads(capsys.readouterr().out)
         assert "tenants" in data
@@ -472,7 +473,7 @@ class TestCLI:
     def test_main_markdown_output(self, mock_get, capsys):
         """Markdown 輸出。"""
         mock_get.return_value = self._make_mock_data()
-        exit_code = cf.main(["--prometheus", "http://prom:9090", "--markdown"])
+        exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090", "--markdown"]))
         assert exit_code == 0
         output = capsys.readouterr().out
         assert "# Cardinality Forecast Report" in output
@@ -481,7 +482,7 @@ class TestCLI:
     def test_main_ci_safe(self, mock_get, capsys):
         """CI 模式 — 安全 → exit 0。"""
         mock_get.return_value = self._make_mock_data()
-        exit_code = cf.main(["--prometheus", "http://prom:9090", "--ci"])
+        exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090", "--ci"]))
         assert exit_code == 0
 
     @patch("_lib_prometheus.http_get_json")
@@ -504,15 +505,21 @@ class TestCLI:
                 ]
             },
         }, None)
-        exit_code = cf.main(["--prometheus", "http://prom:9090", "--ci",
-                            "--warn-days", "30"])
+        exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090", "--ci",
+                            "--warn-days", "30"]))
         assert exit_code == 1
+        # #3216: the --json Report carries the same status, with the document
+        capsys.readouterr()
+        exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090", "--ci",
+                                         "--warn-days", "30", "--json"]))
+        assert exit_code == 1
+        assert json.loads(capsys.readouterr().out)["summary"]["critical"] == 1
 
     @patch("_lib_prometheus.http_get_json")
     def test_main_no_data(self, mock_get, capsys):
         """連線失敗 → exit 2 (caller error, #452)。"""
         mock_get.return_value = (None, "connection error")
-        exit_code = cf.main(["--prometheus", "http://prom:9090"])
+        exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090"]))
         assert exit_code == 2  # EXIT_CALLER_ERROR (#452: cannot reach Prometheus)
 
     @pytest.mark.parametrize("bad", ["banana", "", "0s"], ids=["banana", "empty", "zero"])
@@ -533,7 +540,7 @@ class TestCLI:
     def test_main_valid_lookback_still_accepted(self, mock_get, capsys):
         """control：`--lookback 30d` 通過 argparse（後續因無資料 exit 2，非 usage error）。"""
         mock_get.return_value = ({"status": "success", "data": {"resultType": "matrix", "result": []}}, None)
-        exit_code = cf.main(["--prometheus", "http://prom:9090", "--lookback", "30d", "--json"])
+        exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090", "--lookback", "30d", "--json"]))
         assert exit_code == 2
         doc = json.loads(capsys.readouterr().out)   # 走到了 no_data envelope，不是 usage error
         assert doc["reason"] == "no_cardinality_data"
@@ -549,9 +556,9 @@ class TestCLI:
         欄位、no-data envelope 沒跟上」直接紅。
         """
         mock_get.return_value = ({"status": "success", "data": {"resultType": "matrix", "result": []}}, None)
-        exit_code = cf.main(["--prometheus", "http://prom:9090", "--json",
+        exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090", "--json",
                              "--limit", "1000", "--warn-days", "14",
-                             "--lookback", "30d"])
+                             "--lookback", "30d"]))
 
         assert exit_code == 2                    # EXIT_CALLER_ERROR — 形狀變、exit 語意不變
         captured = capsys.readouterr()
@@ -581,9 +588,9 @@ class TestCLI:
     def test_main_query_error_json_envelope(self, mock_get, capsys):
         """#3065: 查詢失敗 + --json → caller_error envelope，key set 對齊 happy path。"""
         mock_get.return_value = (None, "connection error")
-        exit_code = cf.main(["--prometheus", "http://prom:9090", "--json",
+        exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090", "--json",
                              "--limit", "1000", "--warn-days", "14",
-                             "--lookback", "30d"])
+                             "--lookback", "30d"]))
         assert exit_code == 2
         captured = capsys.readouterr()
         doc = json.loads(captured.out)
@@ -621,8 +628,8 @@ class TestCLI:
                 ]
             },
         }, None)
-        exit_code = cf.main(["--prometheus", "http://prom:9090",
-                            "--tenant", "db-a", "--json"])
+        exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090",
+                            "--tenant", "db-a", "--json"]))
         assert exit_code == 0
         data = json.loads(capsys.readouterr().out)
         assert len(data["tenants"]) == 1
@@ -632,8 +639,8 @@ class TestCLI:
     def test_main_custom_limit(self, mock_get, capsys):
         """自訂基數上限。"""
         mock_get.return_value = self._make_mock_data()
-        exit_code = cf.main(["--prometheus", "http://prom:9090",
-                            "--limit", "1000", "--json"])
+        exit_code = emit_result(cf.main(["--prometheus", "http://prom:9090",
+                            "--limit", "1000", "--json"]))
         assert exit_code == 0
         data = json.loads(capsys.readouterr().out)
         assert data["cardinality_limit"] == 1000
@@ -777,3 +784,66 @@ class TestQueryErrorVsNoData:
         assert doc["status"] == "no_data"
         assert doc["reason"] == "no_cardinality_data"
         assert "error" not in doc
+
+
+# ---------------------------------------------------------------------------
+# #3159: non-finite samples are dropped before the regression
+# ---------------------------------------------------------------------------
+def _strict_json(text):
+    """`json.loads` that refuses `NaN` / `Infinity` (not JSON)."""
+    def refuse(token):
+        raise ValueError(f"non-JSON token {token}")
+    return json.loads(text, parse_constant=refuse)
+
+
+class TestNonFiniteSamples:
+    """#3159: a sample whose timestamp (a JSON number: Python's reader takes
+    `Infinity` / `NaN` there) or value is not finite is dropped before the
+    regression and counted in `non_finite_samples_dropped`. It used to make
+    slope, R² and days-to-limit NaN: `nan` in the text report at rc 0, and a
+    document JSON cannot carry under `--json` (rc 2 since #3216) — the two
+    formats now agree, rc 0."""
+
+    def test_finite_samples(self):
+        inf, nan = float("inf"), float("nan")
+        kept, dropped = cf.finite_samples([(1.0, 2.0), (inf, 3.0), (nan, 3.0),
+                                           (4.0, inf), (5.0, nan), (6.0, 7.0)])
+        assert (kept, dropped) == ([(1.0, 2.0), (6.0, 7.0)], 4)
+
+    def test_analyze_tenant_drops_them_before_the_regression(self):
+        day = cf.SECONDS_PER_DAY
+        ts = [(i * day, 100.0 + i * 10) for i in range(6)]
+        clean = cf.analyze_tenant("db-a", ts, limit=500, warn_days=7)
+        dirty = cf.analyze_tenant("db-a", ts + [(float("inf"), 160.0), (7 * day, float("nan"))],
+                                  limit=500, warn_days=7)
+        assert dirty == clean
+        assert dirty.data_points == 6
+
+    def test_only_non_finite_is_no_data(self):
+        f = cf.analyze_tenant("db-a", [(float("nan"), 1.0)], limit=500, warn_days=7)
+        assert (f.data_points, f.slope_per_day, f.risk_level) == (0, 0, "safe")
+
+    def _body(self, extra):
+        now = time.time()
+        day = cf.SECONDS_PER_DAY
+        return ('{"status":"success","data":{"resultType":"matrix","result":[{"metric":'
+                '{"tenant":"db-a"},"values":[%s]}]}}' % ",".join(
+                    [f'[{now - 5 * day + i * day},"{100 + i * 10}"]' for i in range(6)] + extra))
+
+    @pytest.mark.parametrize("token", ["Infinity", "NaN", "-Infinity"])
+    @pytest.mark.parametrize("json_mode", [True, False])
+    def test_a_non_finite_timestamp_is_dropped_and_counted(self, capsys, token, json_mode):
+        body = json.loads(self._body([f'[{token},"170"]']))   # Python reads the token
+        with patch("_lib_prometheus.http_get_json", return_value=(body, None)):
+            rc = emit_result(cf.main(["--prometheus", "http://prom:9090",
+                                      *(["--json"] if json_mode else [])]))
+        out = capsys.readouterr().out
+        assert rc == 0
+        if json_mode:
+            doc = _strict_json(out)
+            t = doc["tenants"][0]
+            assert doc["summary"]["non_finite_samples_dropped"] == 1
+            assert t["data_points"] == 6 and t["slope_per_day"] == 10.0
+        else:
+            assert "nan/day" not in out and "R²: nan" not in out, out
+            assert "Points: 6" in out and "left out of the regression" in out

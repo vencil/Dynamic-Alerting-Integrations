@@ -200,10 +200,7 @@ def test_in_process_callers_take_the_same_step(capsys):
 #: site to `return Report(doc)` and lower its count here; a file not listed
 #: may not do it at all. Blind spots, by choice: a method returning JSON text,
 #: and a value passed through a call or an attribute before it is printed.
-OWN_JSON = {
-    "ops/backtest_threshold.py": 8,
-    "ops/cardinality_forecasting.py": 3,
-}
+OWN_JSON: dict[str, int] = {}
 
 
 _FUNCS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
