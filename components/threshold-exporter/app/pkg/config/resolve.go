@@ -783,9 +783,10 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 }
 
 // resolveDimensionalRows resolves a tenant's dimensional overrides using the
-// `metric{label="v"}` / `{label=~"re"}` syntax. Their values are tenant-only
-// (no default inheritance; their base must be named, see below) and use the
-// "value:severity" suffix for severity.
+// `metric{label="v"}` / `{label=~"re"}` syntax. A tenant's dimensional key
+// does not inherit its base's scalar default (its base must be named, see
+// below); a complete root `defaults:` dimensional key is the tenant's default
+// for that series (#2031, below). Values use the "value:severity" suffix.
 // Extracted verbatim from the ResolveAtWithStats per-tenant loop
 // (Phase 2B / Phase 11 B1).
 //

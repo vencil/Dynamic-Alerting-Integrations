@@ -59,18 +59,21 @@ def _is_numeric_str(s: str) -> bool:
 def inject(path: Path, key: str, value: str) -> int:
     """Inject `key: value` under `defaults:` in `path`. Returns exit code."""
     # ⛔ Shape before value, and the two refusals answer different questions. A
-    # `<base>_critical` or dimensional `key{…}` name is inert under `defaults:`
-    # however numeric its value: the exporter resolves the critical tier from
-    # tenant overrides keyed on `defaults[<base>]`, and dimensional thresholds
-    # have no default path at all. Nothing reports it — no parse error, no WARN,
-    # no series — which is why this is refused at the boundary rather than
-    # watched for downstream (#1218 / #1412).
+    # `<base>_critical` name is inert under `defaults:` however numeric its
+    # value: the exporter resolves the critical tier from tenant overrides keyed
+    # on `defaults[<base>]`, and nothing reports it — no parse error, no WARN,
+    # no series (#1218 / #1412). A dimensional `key{…}` CAN be a root default
+    # (#2031), but only once `dimensions:` declares its labels (#3475), which
+    # this tool does not write — so it is refused too (#3478).
     if not is_shipped_optional_key(key):
         print(
             f"[inject_default_key] ERROR: key {key!r} cannot live under "
-            f"`defaults:`: a `_critical` suffix or a `key{{label=...}}` token is "
-            f"inert there and fails SILENTLY. Inject the base key here and put "
-            f"the tier in a `<tenant>.yaml` override (#1218 / #1412)",
+            f"`defaults:` via this tool: a `_critical` suffix is inert there and "
+            f"fails SILENTLY, and a `key{{label=...}}` key is served only when the "
+            f"root `dimensions:` declares its labels, which this tool does not "
+            f"write. Inject the base key here and put the tier in a "
+            f"`<tenant>.yaml` override, or write the dimensional key and its "
+            f"`dimensions:` declaration by hand (#1218 / #1412 / #3478)",
             file=sys.stderr,
         )
         return 1

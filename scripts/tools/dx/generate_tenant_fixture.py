@@ -288,24 +288,26 @@ def _gen_defaults_yaml(
             # ⛔ The SHAPE check, and it is separate from the numeric one below
             # on purpose: a `<base>_critical` or dimensional `key{…}` name with a
             # perfectly numeric value is the failure this refuses. Under
-            # `defaults:` the exporter's resolver never looks at either —
-            # `resolveCriticalRows` keys off `defaults[<base>]` and
-            # `resolveDimensionalRows` takes the value from the tenant's map
-            # alone — so the key is inert and
-            # NOTHING says so: no parse error, no WARN, no series. #1218 is that
+            # `defaults:` the resolver never looks at `<base>_critical`
+            # (`resolveCriticalRows` keys off `defaults[<base>]`), and a
+            # dimensional key is served only once `dimensions:` declares its
+            # labels (#2031 / #3475), which this tool does not write — so either
+            # key is not served and NOTHING says so here: no parse error, no
+            # series. #1218 is that
             # failure in a customer-facing producer; #1412 is this path, which
             # copies caller-supplied names straight through and was invisible to
             # the reachability gate that exists to catch it.
             if not is_shipped_optional_key(k):
                 raise ValueError(
                     f"--extra-defaults key {k!r} cannot live under `defaults:`: "
-                    f"a `_critical` suffix or a `key{{label=…}}` token is inert "
-                    f"there (the resolver reads the critical tier from tenant "
-                    f"overrides keyed on `defaults[<base>]`, and dimensional "
-                    f"thresholds have no default path at all), and it fails "
-                    f"silently — no parse error and no series. Put the base key "
-                    f"in `defaults:` and the tier in a `<tenant>.yaml` override. "
-                    f"(#1218 / #1412)"
+                    f"a `_critical` suffix is inert there (the resolver reads "
+                    f"the critical tier from tenant overrides keyed on "
+                    f"`defaults[<base>]`), and a `key{{label=…}}` key is served "
+                    f"only when the root `dimensions:` declares its labels, "
+                    f"which this tool does not write — either way the intended "
+                    f"row is not served. "
+                    f"Put the base key in `defaults:` and the tier in a "
+                    f"`<tenant>.yaml` override. (#1218 / #1412 / #3478)"
                 )
             if not isinstance(v, (int, float)) or isinstance(v, bool):
                 raise ValueError(

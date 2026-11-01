@@ -40,7 +40,7 @@ func TestResolve_SeveritySuffixGrammar(t *testing.T) {
 		{"declared_critical", "oracle_wait_time_rate", "50:Critical", []string{"50/critical"}, ""},
 		{"declared_unknown_suffix", "oracle_wait_time_rate", "50:high", nil, NotServedValueUnparsedDropped},
 		{"declared_empty_suffix", "oracle_wait_time_rate", "50:", nil, NotServedValueUnparsedDropped},
-		// dimensional key (tenant-only: dropped too)
+		// dimensional key (dropped too)
 		{"dimensional_critical", dimKey, "60:critical", []string{"60/critical"}, ""},
 		{"dimensional_unknown_suffix", dimKey, "60:high", nil, NotServedValueUnparsedDropped},
 		{"dimensional_empty_suffix", dimKey, "60:", nil, NotServedValueUnparsedDropped},

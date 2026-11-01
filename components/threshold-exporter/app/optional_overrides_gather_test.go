@@ -74,7 +74,8 @@ func TestGather_DeclaredKeyAlsoInDefaults_DoesNotBreakScrape(t *testing.T) {
 }
 
 // Same hazard, second shape: a dimensional override on a declared base has
-// been emitting since PR-B (resolveDimensionalRows never consults defaults).
+// been emitting since PR-B (resolveDimensionalRows does not need
+// defaults[base]; its labels are declared under `dimensions:`, #3475).
 func TestGather_DimensionalOnDeclaredBase_DoesNotBreakScrape(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
