@@ -11,9 +11,10 @@ image:
 service:
   type: ClusterIP
   port: 8080
+  # prometheus.io/port is not set here: the Service template derives it from
+  # service.port (the container port), #3483.
   annotations:
     prometheus.io/scrape: "true"
-    prometheus.io/port: "8080"
     prometheus.io/path: "/metrics"
 
 # NetworkPolicy for the exporter pods, rendered into the release namespace

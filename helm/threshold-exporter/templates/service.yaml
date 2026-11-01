@@ -12,7 +12,19 @@ metadata:
     # matches it against that job.
     dynamic-alerting.io/scrape: platform
   annotations:
-    {{- toYaml .Values.service.annotations | nindent 4 }}
+    # prometheus.io/port is the container port (service.port is both, see
+    # deployment.yaml), never a free value: Prometheus' platform-components job
+    # keeps only the endpoint whose port equals it (#3483), so a stale literal
+    # drops every exporter target. Setting it in service.annotations to
+    # anything else fails the render.
+    {{- $ann := .Values.service.annotations | default dict }}
+    {{- if and (hasKey $ann "prometheus.io/port") (ne (toString (index $ann "prometheus.io/port")) (toString .Values.service.port)) }}
+    {{- fail (printf "service.annotations prometheus.io/port=%v differs from service.port=%v: the platform-components job keeps only the endpoint on the annotated port, so every exporter target would be dropped. Remove the annotation; it is derived from service.port." (index $ann "prometheus.io/port") .Values.service.port) }}
+    {{- end }}
+    prometheus.io/port: {{ .Values.service.port | quote }}
+    {{- with omit $ann "prometheus.io/port" }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
 spec:
   type: {{ .Values.service.type }}
   ports:

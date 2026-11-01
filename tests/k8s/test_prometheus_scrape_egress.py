@@ -228,7 +228,7 @@ def test_every_platform_label_template_is_rendered() -> None:
 # coincide) and silently loses its target as soon as an operator moves the
 # Service port — tenant-api's annotation once read service.internalPort.
 _MOVED_SERVICE_PORTS = {
-    "helm/threshold-exporter": [],   # its Service port IS the container port value
+    "helm/threshold-exporter": ["--set", "service.port=9090"],
     "helm/tenant-api": _CHARTS["helm/tenant-api"] + ["--set", "service.internalPort=9090"],
     "helm/vector": _CHARTS["helm/vector"],
 }

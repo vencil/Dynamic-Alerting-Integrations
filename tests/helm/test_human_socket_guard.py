@@ -89,8 +89,9 @@ def test_deployment_gates_socket_on_flag(repo_root: Path):
     assert "unix://" in directives, (
         "deployment must switch the oauth2-proxy upstream to unix:// when enabled"
     )
-    # the http upstream must survive as the else-branch (off state unchanged).
-    assert "http://localhost:8080" in directives, (
+    # the http upstream must survive as the else-branch (off state unchanged);
+    # its port is tenant-api.apiPort (#3483), the render tests below pin 8080.
+    assert "--upstream=http://localhost:{{ include \"tenant-api.apiPort\" . }}" in directives, (
         "deployment must keep the http upstream for the disabled (default) path"
     )
 

@@ -23,9 +23,11 @@ pod (a ServiceMonitor, or any pod/endpoints discovery), the same tenant arrives
 once per replica, differing only in scrape-identity labels (instance, pod, …),
 and `* on(tenant) group_left(...) tenant_metadata_info` then fails at evaluation
 with "many-to-many matching not allowed" — the whole alert stops evaluating.
-So the right-hand side of every enrichment — every `on(...)`/`ignoring(...)`
-vector match whose right-hand operand involves tenant_metadata_info, whatever
-its group_left label list — must be exactly `ENRICH_RHS`, which
+So every `on(...)`/`ignoring(...)` vector match (not a set operator, whatever
+its group_left/group_right label list) must spell an operand that involves
+tenant_metadata_info exactly as `ENRICH_RHS` (whitespace- and case-
+insensitively): the right operand always, the left one too under group_right
+and for a one-to-one match. `ENRICH_RHS`
 collapses the replicas by the label set the exporter serves, then keeps a single
 series per tenant. The outer `topk by(tenant) (1, …)` covers the reload window:
 the replicas reload their config independently (each polls every reloadInterval,
@@ -85,16 +87,20 @@ ENRICH_RHS = f"topk by(tenant) (1, {_DEDUP_RHS})"
 VOID_BRANCH = "unless on(tenant) tenant_metadata_info"
 
 # Every vector match (`on(...)` / `ignoring(...)`, with or without a
-# group_left / group_right label list, whatever its case or spacing) whose
-# right-hand operand involves tenant_metadata_info: that operand must be exactly
-# ENRICH_RHS (whitespace- and case-insensitive). The label list does not matter
-# — `group_left(runbook_url)` or a bare `group_left` onto a `max by(...)`-only
-# collapse fails under replica skew just the same. The set operators (`and`,
-# `or`, `unless`) match on presence and are exempt.
+# group_left / group_right label list, whatever its case or spacing): an
+# operand that involves tenant_metadata_info must be exactly ENRICH_RHS
+# (whitespace- and case-insensitive) — the right operand always, the left one
+# too under group_right (its "one" side) and one-to-one (duplicates on either
+# side fail). The label list does not matter — `group_left(runbook_url)` or a
+# bare `group_left` onto a `max by(...)`-only collapse fails under replica skew
+# just the same. The set operators (`and`, `or`, `unless`) match on presence and
+# are exempt.
 _VECTOR_MATCH = re.compile(
     r"(\b[a-z_]+\b|[-+*/%^]|[<>=!]=?)\s*(?:on|ignoring)\s*\([^)]*\)\s*"
-    r"(?:group_(?:left|right)\b\s*(?:\([^)]*\))?)?",
+    r"(?:(group_(?:left|right))\b\s*(?:\([^)]*\))?)?",
     re.IGNORECASE)
+# The binary operator a `bool` modifier follows (`x > bool on(...) y`).
+_OPERATOR_BEFORE = re.compile(r"(?:[-+*/%^]|[<>=!]=|[<>])\s*$")
 _SET_OPERATORS = {"and", "or", "unless"}
 _IDENT = re.compile(r"[A-Za-z_:][A-Za-z0-9_:]*")
 _GROUPING = re.compile(r"(?:by|without)\s*\(", re.IGNORECASE)
@@ -125,6 +131,58 @@ def _balanced(text: str, i: int) -> int:
             if depth == 0:
                 return j + 1
     return len(text)
+
+
+def _balanced_back(text: str, j: int) -> int:
+    """Index of the `(` matching the `)` at text[j - 1]."""
+    depth = 0
+    for k in range(j - 1, -1, -1):
+        if text[k] == ")":
+            depth += 1
+        elif text[k] == "(":
+            depth -= 1
+            if depth == 0:
+                return k
+    return 0
+
+
+def _skip_ws_back(text: str, j: int) -> int:
+    while j > 0 and text[j - 1].isspace():
+        j -= 1
+    return j
+
+
+def _ident_back(text: str, j: int) -> int:
+    """Start of the identifier ending at text[j - 1], or j when there is none."""
+    k = j
+    while k > 0 and (text[k - 1].isalnum() or text[k - 1] in "_:"):
+        k -= 1
+    return k
+
+
+def _left_operand(text: str, j: int) -> str:
+    """The left-hand operand of a binary operator starting at *j*: a selector,
+    a parenthesised group, or a function / aggregation call with its
+    `by|without (...)` clause."""
+    end = j = _skip_ws_back(text, j)
+    if j > 0 and text[j - 1] == "}":
+        j = text.rfind("{", 0, j)
+        j = _ident_back(text, max(j, 0))
+    elif j > 0 and text[j - 1] == ")":
+        j = _balanced_back(text, j)
+        k = _skip_ws_back(text, j)
+        if k > 0 and text[k - 1] == ")":                 # `agg by(...) (...)`
+            g = _balanced_back(text, k)
+            word = _ident_back(text, _skip_ws_back(text, g))
+            if text[word:_skip_ws_back(text, g)].lower() in ("by", "without"):
+                j = _ident_back(text, _skip_ws_back(text, word))
+        else:
+            w = _ident_back(text, k)                     # `fn(...)` / `agg(...)`
+            if w < k and text[w:k].lower() not in _SET_OPERATORS | {"on", "ignoring", "bool"}:
+                j = w
+    else:
+        j = _ident_back(text, j)
+    return text[j:end]
 
 
 def _operand(text: str, i: int) -> str:
@@ -166,25 +224,40 @@ def count_pair(text: str) -> Tuple[int, int]:
 
 
 def noncanonical_joins(text: str) -> List[Tuple[int, str]]:
-    """Pure core: (line number, offending text) for every enrichment join whose
-    right-hand side is not ENRICH_RHS: the exact marker followed by anything
-    else, and any other vector match whose right-hand operand involves
-    tenant_metadata_info but is not ENRICH_RHS."""
+    """Pure core: (line number, offending text) for every vector match
+    (`on(...)` / `ignoring(...)`, any label list, not a set operator) whose
+    operand involves tenant_metadata_info but is not ENRICH_RHS, whitespace- and
+    case-insensitively. Checked: the right operand always; the left operand too
+    under group_right (it is the "one" side) and for a one-to-one match (which
+    fails on duplicates on either side) — not under group_left, where the left
+    is the "many" side."""
     found = {}
+    want = _squash(ENRICH_RHS)
     for m in re.finditer(re.escape(ENRICH_MARKER) + r"\s*", text):
-        if not text.startswith(ENRICH_RHS, m.end()):
+        if _squash(_operand(text, m.end())) != want:
             line = text.count("\n", 0, m.start()) + 1
             rest = text[m.end():].split("\n", 1)[0].strip()
             found[line] = rest
-    want = _squash(ENRICH_RHS)
     for m in _VECTOR_MATCH.finditer(text):
-        if m.group(1).lower() in _SET_OPERATORS:
+        op = m.group(1).lower()
+        if op in _SET_OPERATORS:
             continue
-        operand = _operand(text, m.end())
-        if "tenant_metadata_info" not in operand or _squash(operand) == want:
-            continue
-        line = text.count("\n", 0, m.start()) + 1
-        found.setdefault(line, " ".join(f"{m.group(0)} {operand}".split()))
+        modifier = (m.group(2) or "").lower()
+        sides = []
+        if modifier != "group_left":                     # group_right / one-to-one
+            left_end = m.start()
+            if op == "bool":
+                b = _OPERATOR_BEFORE.search(text, 0, m.start())
+                left_end = b.start() if b else m.start()
+            sides.append(_left_operand(text, left_end))
+        # The right operand always: under group_right it is the "many" side,
+        # but metadata there is still not the agreed spelling.
+        sides.append(_operand(text, m.end()))
+        for operand in sides:
+            if "tenant_metadata_info" in operand and _squash(operand) != want:
+                line = text.count("\n", 0, m.start()) + 1
+                found.setdefault(line, " ".join(f"{operand} {m.group(0)}".split()))
+                break
     return sorted(found.items())
 
 

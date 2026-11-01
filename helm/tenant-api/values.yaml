@@ -720,8 +720,8 @@ networkPolicy:
     # Required when egress.enabled=true in a real cluster.
     extraEgress: []
 
-# Prometheus scrape annotations
+# Prometheus scrape annotations. prometheus.io/port is not set here: the
+# deployment template derives it from tenant-api.apiPort (#3483).
 podAnnotations:
   prometheus.io/scrape: "true"
-  prometheus.io/port: "8080"
   prometheus.io/path: "/metrics"

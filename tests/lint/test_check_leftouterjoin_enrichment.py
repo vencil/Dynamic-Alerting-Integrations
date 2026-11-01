@@ -270,3 +270,50 @@ def test_an_apostrophe_in_a_comment_does_not_swallow_the_file():
             ")\n"
             f"z * on(tenant) group_left(runbook_url, owner, tier) {lint.ENRICH_RHS}\n")
     assert lint.noncanonical_joins(text) == []
+
+
+# --- the left operand: group_right and one-to-one (#3483 review round 3) ---
+# Under group_right the "one" side is the LEFT operand; a one-to-one match fails
+# on duplicates on either side. Under group_left the left is the "many" side.
+_LEFT_SIDE_ESCAPES = {
+    "group_right_max_only_left": ("max by(tenant,runbook_url,owner,tier)(tenant_metadata_info) "
+                                  "* on(tenant) group_right(runbook_url) x"),
+    "one_to_one_raw_left": "tenant_metadata_info * on(tenant) x",
+    "one_to_one_selector_left": 'tenant_metadata_info{tier="gold"} / ignoring(job) x',
+    "one_to_one_bool_left": "tenant_metadata_info > bool on(tenant) x",
+    "group_right_paren_left": ("(\n  max by(tenant) (tenant_metadata_info)\n)\n"
+                               "* on(tenant) group_right(owner)\n  x"),
+}
+
+
+def test_a_non_canonical_left_one_side_is_flagged():
+    for name, text in _LEFT_SIDE_ESCAPES.items():
+        assert lint.noncanonical_joins(text), name
+
+
+def test_the_canonical_rhs_as_the_left_one_side_passes():
+    for mod in ("group_right(runbook_url, owner, tier)", ""):
+        text = f"{lint.ENRICH_RHS} * on(tenant) {mod} x"
+        assert lint.noncanonical_joins(text) == [], mod
+
+
+def test_the_left_many_side_of_group_left_is_not_checked():
+    assert lint.noncanonical_joins(
+        "tenant_metadata_info * on(tenant) group_left(foo) x") == []
+
+
+def test_set_operators_exempt_both_sides():
+    assert lint.noncanonical_joins("tenant_metadata_info unless on(tenant) x") == []
+    assert lint.noncanonical_joins("tenant_metadata_info and on(tenant) x") == []
+
+
+# --- the exact marker is whitespace-insensitive too ------------------------
+
+def test_the_exact_marker_onto_a_respaced_canonical_rhs_passes():
+    text = (f"x\n  {lint.ENRICH_MARKER}\n"
+            "    topk by (tenant) (1, max by (tenant, runbook_url, owner, tier) "
+            "(tenant_metadata_info))\n")
+    assert lint.noncanonical_joins(text) == []
+    wrapped = (f"x\n  {lint.ENRICH_MARKER}\n    topk by(tenant) (\n      1,\n"
+               "      max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n    )\n")
+    assert lint.noncanonical_joins(wrapped) == []
