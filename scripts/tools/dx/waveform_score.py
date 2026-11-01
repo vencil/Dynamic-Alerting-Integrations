@@ -740,11 +740,15 @@ def _emit_error(code: str, full: str, redact: bool) -> None:
     訊息＝黑盒客服）。`full`＝含細節（可能夾客戶路徑/pack_id/對帳 key）的完整訊息：under
     --redact **只印 code + 通用抑制語**、不夾 {full}（防識別項出關，air-gap 常把 tenant/
     site 名編進檔名）；本地不加 --redact 才印 {full} 供 debug。"""
+    print(_error_line(code, full, redact), file=sys.stderr)
+
+
+def _error_line(code: str, full: str, redact: bool) -> str:
+    """_emit_error 印的那一行（也是 --json 文件由 run() 寫出、stdout 失敗時的那一行，#3450）。"""
     if redact:
-        print(f"ERROR [{code}]: 處理失敗（--redact 抑制細節以防路徑/識別項出關；"
-              f"本地不加 --redact 重跑看完整訊息）", file=sys.stderr)
-    else:
-        print(f"ERROR [{code}]: {full}", file=sys.stderr)
+        return (f"ERROR [{code}]: 處理失敗（--redact 抑制細節以防路徑/識別項出關；"
+                f"本地不加 --redact 重跑看完整訊息）")
+    return f"ERROR [{code}]: {full}"
 
 
 class _RedactAwareParser(argparse.ArgumentParser):
@@ -890,7 +894,12 @@ def main() -> "int | Report":
         return EXIT_CALLER_ERROR
 
     status = EXIT_OK if result["verdict"] == "PASS" else EXIT_VIOLATION
-    return Report(emit, status) if args.json_output else status
+    if not args.json_output:
+        return status
+    # #3450: stdout failing while run() writes the document is ERR_OUTPUT
+    # too — the code --redact documents, in both modes.
+    return Report(emit, status, on_stdout_failure=lambda detail: _error_line(
+        "ERR_OUTPUT", f"報告輸出失敗: {detail}", args.redact))
 
 
 if __name__ == "__main__":
