@@ -2893,3 +2893,21 @@ class TestUnserializableDocument:
         assert "OutputNotSerializable" in res.stderr and "changes[0].impact_pct" in res.stderr
         assert "{" not in res.stdout
         assert written == "stale\n"
+
+
+class TestRunEndedCarriesTheStatus:
+    """`_end_json` under `--json` ends the run with a `_RunEnded` whose
+    `SystemExit` code is the Report's status — what a caller that does not go
+    through `main` reads; without `--json` it returns, for the caller's exit."""
+
+    @pytest.mark.parametrize("rc", [0, 1, 2])
+    def test_the_code_is_the_status(self, rc):
+        import argparse
+        with pytest.raises(bt._RunEnded) as ei:
+            bt._end_json(argparse.Namespace(json=True), {"d": 1}, rc)
+        assert (ei.value.code, ei.value.report.status, ei.value.report.document) == (
+            rc, rc, {"d": 1})
+
+    def test_without_json_it_returns(self):
+        import argparse
+        assert bt._end_json(argparse.Namespace(json=False), {}, 2) is None

@@ -278,12 +278,20 @@ def query_cardinality_range(
     for series in result:
         tenant = series.get("metric", {}).get("tenant", "unknown")
         values, dropped = finite_row_samples(series)
-        values, dropped_ts = finite_samples(values)  # #3159: the timestamp too
+        if not values:
+            # #3213: every VALUE non-finite — the tenant is not listed.
+            if dropped and non_finite_dropped is not None:
+                non_finite_dropped[tenant] = non_finite_dropped.get(tenant, 0) + dropped
+            continue
+        # #3159: the timestamp too. A tenant left with no sample by THIS
+        # filter stays listed (an empty series: `analyze_tenant`'s
+        # `data_points: 0`), as it was before the filter — dropping it would
+        # turn "every timestamp NaN" into `no_cardinality_data`, rc 0 → 2.
+        values, dropped_ts = finite_samples(values)
         dropped += dropped_ts
         if dropped and non_finite_dropped is not None:
             non_finite_dropped[tenant] = non_finite_dropped.get(tenant, 0) + dropped
-        if values:
-            results[tenant] = values
+        results[tenant] = values
 
     return results
 
@@ -409,9 +417,10 @@ def generate_text_report(report: ForecastReport, lang: str = "en") -> str:
 
     if report.non_finite_samples_dropped:
         n = report.non_finite_samples_dropped
-        lines.append(f"略過 {n} 個非有限樣本值（+Inf／-Inf／NaN），未計入迴歸"
+        lines.append(f"略過 {n} 個值或時間戳非有限（+Inf／-Inf／NaN）的樣本，未計入迴歸"
                      if lang == "zh" else
-                     f"{n} non-finite sample value(s) (+Inf / -Inf / NaN) left out of the regression")
+                     f"{n} sample(s) with a non-finite value or timestamp (+Inf / -Inf / NaN) "
+                     "left out of the regression")
 
     if not report.tenants:
         lines.append("")
@@ -503,8 +512,8 @@ def generate_markdown(report: ForecastReport) -> str:
     lines.append("")
     if report.non_finite_samples_dropped:
         # #3213: disclosed in every format, not only --json / text
-        lines.append(f"> {report.non_finite_samples_dropped} non-finite sample value(s) "
-                     "(+Inf / -Inf / NaN) left out of the regression")
+        lines.append(f"> {report.non_finite_samples_dropped} sample(s) with a non-finite value "
+                     "or timestamp (+Inf / -Inf / NaN) left out of the regression")
         lines.append("")
 
     risk_icons = {"critical": "🔴", "warning": "🟡", "safe": "🟢"}

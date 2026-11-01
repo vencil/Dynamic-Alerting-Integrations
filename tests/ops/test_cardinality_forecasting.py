@@ -847,3 +847,51 @@ class TestNonFiniteSamples:
         else:
             assert "nan/day" not in out and "R²: nan" not in out, out
             assert "Points: 6" in out and "left out of the regression" in out
+
+
+class TestAllTimestampsNonFinite:
+    """#3159 review: a tenant whose finite-valued samples all carry a
+    non-finite timestamp stays in the report as an empty series
+    (`data_points: 0`), counted in `non_finite_samples_dropped` — rc 0 in
+    both formats, as before the filter. Dropping it made a lone such tenant
+    `no_cardinality_data` (rc 2) and shrank `summary.total` beside others."""
+
+    def _body(self, tenants):
+        now = time.time()
+        day = cf.SECONDS_PER_DAY
+        rows = []
+        for t, bad in tenants:
+            vals = (",".join('[NaN,"100"]' for _ in range(4)) if bad else
+                    ",".join(f'[{now - 5 * day + i * day},"{100 + i * 10}"]' for i in range(6)))
+            rows.append('{"metric":{"tenant":"%s"},"values":[%s]}' % (t, vals))
+        return json.loads('{"status":"success","data":{"resultType":"matrix","result":[%s]}}'
+                          % ",".join(rows))   # Python reads the NaN token
+
+    @pytest.mark.parametrize("tenants", [[("db-nan", True)],
+                                         [("db-a", False), ("db-nan", True)]],
+                             ids=["alone", "beside-another"])
+    @pytest.mark.parametrize("json_mode", [True, False])
+    def test_the_tenant_stays_listed_at_rc_0(self, capsys, tenants, json_mode):
+        with patch("_lib_prometheus.http_get_json", return_value=(self._body(tenants), None)):
+            rc = emit_result(cf.main(["--prometheus", "http://prom:9090",
+                                      *(["--json"] if json_mode else [])]))
+        out = capsys.readouterr().out
+        assert rc == 0, out
+        if json_mode:
+            doc = _strict_json(out)
+            assert doc["summary"]["total"] == len(tenants)
+            assert doc["summary"]["non_finite_samples_dropped"] == 4
+            got = {t["tenant"]: t["data_points"] for t in doc["tenants"]}
+            assert got["db-nan"] == 0 and set(got) == {t for t, _ in tenants}
+        else:
+            assert "[db-nan]" in out and "Points: 0" in out, out
+            assert "4 sample(s) with a non-finite value or timestamp" in out, out
+
+    def test_all_values_non_finite_is_still_not_listed(self):
+        """#3213 unchanged: every VALUE non-finite — the tenant is not listed."""
+        body = {"status": "success", "data": {"resultType": "matrix", "result": [
+            {"metric": {"tenant": "db-x"}, "values": [[1, "NaN"], [2, "+Inf"]]}]}}
+        dropped = {}
+        with patch("_lib_prometheus.http_get_json", return_value=(body, None)):
+            got = cf.query_cardinality_range("http://prom:9090", non_finite_dropped=dropped)
+        assert (got, dropped) == ({}, {"db-x": 2})
