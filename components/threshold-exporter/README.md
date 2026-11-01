@@ -274,6 +274,14 @@ da-guard served-values --config-dir conf.d/ --at 2026-07-01T03:00:00Z
 da-guard effective --config-dir conf.d/
 ```
 
+子命令 `threshold-values`（[#3267](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3267)）不讀樹：從 stdin 讀一個 JSON 陣列，每筆 `{"key": "<閾值 key>", "text": "<原文>"}`，在 stdout 依同樣順序印出 exporter 怎麼讀每一筆——`number`（共用的 `value[:severity]` 文法讀到的有限數值，讀不到為 `null`）、`non_finite`（數值那半讀成 NaN／±Inf 時為 `"NaN"`／`"+Inf"`／`"-Inf"`，含 `1e999` 這類溢位，否則 `""`）、`severity`（後綴的 severity；沒有後綴為 `warning`，後綴被拒為 `""`）、`refused`（exporter 對這個 key 拒收的原因 `non_finite`／`unparsed`，讀得到或 `disable` 為 `""`；`<key>_critical` 整個值當數字讀，所以只有這欄與 key 有關）。判定全部來自 `pkg/config` 讀閾值的同一組函式（`ReadThresholdText`），`check_threshold_unit_sanity.py` 每次執行把所有值一次送進來。結束碼：0 正常；2 為多了參數、讀不到 stdin，或 stdin 不是這種陣列。
+
+```bash
+echo '[{"key":"mysql_connections","text":"70:critical"},{"key":"mysql_connections","text":"1e999"}]' | da-guard threshold-values
+# [{"key":"mysql_connections","text":"70:critical","number":70,"non_finite":"","severity":"critical","refused":""},
+#  {"key":"mysql_connections","text":"1e999","number":null,"non_finite":"+Inf","severity":"warning","refused":"unparsed"}]
+```
+
 ### `da-parser` — kube-prometheus 規則 → ParseResult JSON
 
 導入既有 PrometheusRule 的第一步：解析、dialect 分類（標準 PromQL / VictoriaMetrics-only）、可選 portability gate。

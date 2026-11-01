@@ -87,6 +87,13 @@ a second walk that may see another tree. `list_tree` lists afresh on every
 call (no memo); a reader that needs one snapshot for several questions keeps
 the `Listing` and passes it down.
 
+Threshold values (#3267)
+------------------------
+`threshold_values` runs `da-guard threshold-values`: how the exporter reads
+each of a list of threshold value texts (Go's config.ReadThresholdText), in
+one run. It reads no tree; it lives here for the one da-guard resolution
+below. Python has no reader of a threshold value of its own.
+
 Which da-guard (#3206)
 ----------------------
 Every run here — tree, file, list and names mode — resolves its binary and
@@ -1211,3 +1218,76 @@ def _run_names(names: "list[str]", binary: Optional[str],
                              f"{dict(carriers)!r} does not match the entries' not_read; nothing "
                              "of it is used")
     return {e.path: e for e in entries}, chosen
+
+
+#: `da-guard threshold-values` (#3267): how the exporter reads a threshold
+#: value's text. Its stdout is a bare JSON array (no schema field).
+THRESHOLD_VALUES = "threshold-values"
+_THRESHOLD_FIELDS = frozenset({"key", "text", "number", "non_finite", "severity", "refused"})
+_NON_FINITE = {"": None, "NaN": math.nan, "+Inf": math.inf, "-Inf": -math.inf}
+
+
+@dataclass(frozen=True)
+class ThresholdReading:
+    """One answer of `da-guard threshold-values`: how the exporter reads
+    *text*, written for threshold key *key* (Go's config.ReadThresholdText).
+
+    `number` is the finite number the shared `value[:severity]` grammar
+    reads, or None; `non_finite` NaN / ±inf when the number half reads as
+    one (an overflow such as `1e999` included), else None; `severity` the
+    suffix's ("" when refused); `refused` why the exporter refuses the value
+    for *key* ("non_finite", "unparsed"; "" when read or a disable)."""
+
+    key: str
+    text: str
+    number: Optional[float]
+    non_finite: Optional[float]
+    severity: str
+    refused: str
+
+
+def threshold_values(items: "Iterable[tuple[str, str]]", binary: Optional[str] = None,
+                     timeout: Optional[float] = None) -> "list[ThresholdReading]":
+    """*items* ``[(key, text), ...]`` as the exporter reads each text, in
+    order: one `da-guard threshold-values` run for all of them (none for no
+    items). Python reads no threshold value itself (#3267). Raises as `run`
+    does — `BinaryMissing` with no binary, `NotThisDocument` for a da-guard
+    older than this tool — and ParseTreeError for an answer that is not one
+    well-formed reading per item: unusable whole."""
+    items = list(items)
+    if not items:
+        return []
+    what = THRESHOLD_VALUES
+    try:
+        raw = json.dumps([{"key": k, "text": t} for k, t in items],
+                         ensure_ascii=False).encode("utf-8")
+    except (TypeError, UnicodeEncodeError) as e:
+        raise ParseTreeError(f"da-guard {what}: a key or text JSON cannot carry ({e})") from None
+    out = _run_stdout([THRESHOLD_VALUES], binary, timeout, stdin=raw, what=what)
+    try:
+        doc = json.loads(out.decode("utf-8"))
+        if not isinstance(doc, list) or len(doc) != len(items):
+            raise ValueError(f"{len(doc) if isinstance(doc, list) else type(doc).__name__} "
+                             f"answers for {len(items)} values")
+        readings = []
+        for (key, text), a in zip(items, doc):
+            if not isinstance(a, dict) or set(a) != _THRESHOLD_FIELDS:
+                raise ValueError(f"an answer is not {sorted(_THRESHOLD_FIELDS)}: {a!r}")
+            number = a["number"]
+            if a["key"] != key or a["text"] != text:
+                raise ValueError(f"answer for {(a['key'], a['text'])!r}, asked {(key, text)!r}")
+            if number is not None and (isinstance(number, bool)
+                                       or not isinstance(number, (int, float))):
+                raise ValueError(f"number {number!r}")
+            if a["non_finite"] not in _NON_FINITE or not all(
+                    isinstance(a[f], str) for f in ("severity", "refused")):
+                raise ValueError(f"an answer of the wrong shape: {a!r}")
+            readings.append(ThresholdReading(
+                key=key, text=text,
+                number=None if number is None else float(number),
+                non_finite=_NON_FINITE[a["non_finite"]],
+                severity=a["severity"], refused=a["refused"]))
+    except (ValueError, TypeError, KeyError) as e:  # UnicodeDecodeError is a ValueError
+        raise ParseTreeError(f"da-guard {what} wrote no answer this tool can read ({e}); "
+                             "nothing of it is used") from e
+    return readings

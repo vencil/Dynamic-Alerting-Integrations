@@ -195,12 +195,161 @@ def test_an_underscored_number_is_judged_as_the_exporter_reads_it(tmp_path, valu
     assert any("OUT-OF-DOMAIN" in e and f"pct = {shown} " in e for e in errs), errs
 
 
-def test_a_hex_float_is_not_judged(tmp_path):
-    """#3140: the exporter reads `0x1p10` (1024), but this lint never judged
-    a hex float — judging it is a `--ci` 0 → 1 no ruling names
-    (`_as_number`)."""
-    _conf_d(tmp_path, {"tenants": {"t": {"pct": "0x1p10"}}})
+@pytest.mark.parametrize("value, shown", [("0x1p10", "1024"), ("0X1P10:critical", "1024"),
+                                          ("0x1p1024", "inf"), ("-0x1p1024", "-inf")])
+def test_a_hex_float_is_judged_as_the_exporter_reads_it(tmp_path, value, shown):
+    """#3267 (owner-approved, the one intended change): the exporter reads
+    `0x1p10` (1024), and every value is now read by the exporter
+    (`da-guard threshold-values`), so a hex float is judged — it was skipped
+    while the lint read values with a Python copy (`--ci` 0 → 1)."""
+    _conf_d(tmp_path, {"tenants": {"t": {"pct": value}}})
+    errs = _errors(_registry(pct=_spec(80, "%")), tmp_path)
+    assert any("OUT-OF-DOMAIN" in e and f"pct = {shown} " in e for e in errs), errs
+
+
+def test_an_in_domain_hex_float_is_clean(tmp_path):
+    _conf_d(tmp_path, {"tenants": {"t": {"pct": "0x1p4"}}})
     assert _errors(_registry(pct=_spec(80, "%")), tmp_path) == []
+
+
+def test_every_value_is_read_in_one_da_guard_run(tmp_path, monkeypatch):
+    """#3267: one `threshold-values` run per check, every source batched."""
+    import _lib_parse_tree
+    calls = []
+    real = _lib_parse_tree.threshold_values
+
+    def spy(items, *a, **kw):
+        items = list(items)
+        calls.append(items)
+        return real(items, *a, **kw)
+
+    monkeypatch.setattr(_lib_parse_tree, "threshold_values", spy)
+    _conf_d(tmp_path, {"tenants": {"t": {"pct": "300", "other": "1_000"}}})
+    _write(tmp_path, "docs/assets/platform-data.json",
+           '{"rulePacks": {"p": {"defaults": {"pct": {"value": 50, "unit": "%"}}}}}')
+    _errors(_registry(pct=_spec(80, "%"), other=_spec(5, "count")), tmp_path)
+    assert len(calls) == 1, calls
+    assert ("pct", "300") in calls[0] and ("other", "1_000") in calls[0] and ("pct", "50.0") in calls[0]
+
+
+# ------------------------------------------------- exit codes, #3267 rulings
+#
+# Owner rulings on #3267: once the exporter reads every value, these edge
+# cases change exit code on purpose. Each row asserts the new `--ci` rc;
+# the old one is in the comment.
+
+_ENUM = "0=green,1=yellow,2=red"
+_TIERS = dict(conn=_spec(80, "count"), conn_critical=_spec(120, "count", critical_of="conn"))
+
+
+def _main_rc(tmp_path, monkeypatch, registry, argv=("--ci",)):
+    monkeypatch.setattr(gate, "PROJECT_ROOT", str(tmp_path))
+    monkeypatch.setattr(gate.registry_lib, "load_registry", lambda path=None: registry)
+    return emit_result(gate.main(list(argv)))
+
+
+@pytest.mark.parametrize("files, registry, rc", [
+    # hex out of domain (old 0)
+    ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
+      "tenants:\n  t:\n    pct: '0x1p10'\n"}, _registry(pct=_spec(80, "%")), 1),
+    # hex overflow, ±Inf (old 0)
+    ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
+      "tenants:\n  t:\n    pct: '0x1p1024'\n"}, _registry(pct=_spec(80, "%")), 1),
+    # a hex percentile in recommendation-data (old 0)
+    ({"docs/assets/recommendation-data.json":
+      '{"recommendations": {"pct": {"p50": "0x1p10", "unit": "%"}}}'}, _registry(pct=_spec(80, "%")), 1),
+    # a hex value outside an enum (old 0)
+    ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
+      "tenants:\n  t:\n    h: '0x1.8p1'\n"}, _registry(h=_spec(0, _ENUM)), 1),
+    # a signed NaN: Go reads no number, so nothing is judged (old 1: Python read NaN)
+    ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
+      "tenants:\n  t:\n    h: '+nan'\n"}, _registry(h=_spec(0, _ENUM)), 0),
+    ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
+      "tenants:\n  t:\n    h: '-NaN:critical'\n"}, _registry(h=_spec(0, _ENUM)), 0),
+    # an unsigned NaN is still judged (unchanged, 1)
+    ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
+      "tenants:\n  t:\n    h: 'NaN'\n"}, _registry(h=_spec(0, _ENUM)), 1),
+    # an overflow in non-ASCII digits: Go reads none (old 1: Python read inf)
+    ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
+      "tenants:\n  t:\n    pct: '\u0661e999'\n"}, _registry(pct=_spec(80, "%")), 0),
+    # a `+nan` written last no longer hides a tier inversion (old 0)
+    ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
+      "tenants:\n  t1:\n    conn: '100'\n    conn_critical: '50'\n"
+      "  t2:\n    conn_critical: '+nan'\n"}, _registry(**_TIERS), 1),
+    # `<key>_critical: "50:critical"`: the number written is judged (unchanged, 1)
+    ({"components/threshold-exporter/config/conf.d/_defaults.yaml":
+      "tenants:\n  t:\n    conn: '100'\n    conn_critical: '50:critical'\n"}, _registry(**_TIERS), 1),
+    # an int no float holds: the crash it always was (unchanged, 2)
+    ({"docs/assets/platform-data.json":
+      '{"rulePacks": {"p": {"defaults": {"pct": {"value": 1' + "0" * 400 + ', "unit": "%"}}}}}'},
+     _registry(pct=_spec(80, "%")), 2),
+], ids=["hex", "hex-overflow", "hex-percentile", "hex-enum", "plus-nan", "minus-nan-suffix",
+        "nan", "arabic-overflow", "nan-hid-inversion", "critical-suffix", "huge-int"])
+def test_ci_exit_code(tmp_path, monkeypatch, files, registry, rc):
+    for rel, text in files.items():
+        _write(tmp_path, rel, text)
+    assert _main_rc(tmp_path, monkeypatch, registry) == rc
+
+
+@pytest.mark.parametrize("value, rc", [("300", 2), ("50", 2)])
+def test_no_da_guard_is_exit_2_even_without_conf_d(tmp_path, monkeypatch, capsys, value, rc):
+    """#3267 ruling: every value is read through da-guard, so a tree with
+    only docs JSON needs it too (old: 1 / 0 without da-guard)."""
+    _write(tmp_path, "docs/assets/platform-data.json",
+           '{"rulePacks": {"p": {"defaults": {"pct": {"value": %s, "unit": "%%"}}}}}' % value)
+    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-path"))
+    assert _main_rc(tmp_path, monkeypatch, _registry(pct=_spec(80, "%"))) == rc
+    assert "da-guard threshold-values" in capsys.readouterr().err
+
+
+def test_no_values_needs_no_da_guard(tmp_path, monkeypatch):
+    """Nothing to read, no run: an empty tree stays 0 without da-guard."""
+    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-path"))
+    assert _main_rc(tmp_path, monkeypatch, _registry(pct=_spec(80, "%"))) == 0
+
+
+_ANSWER = {"key": "pct", "text": "50.0", "number": 50, "non_finite": "", "severity": "warning", "refused": ""}
+
+
+@pytest.mark.parametrize("answer", [
+    [],                                                   # too few
+    [_ANSWER, _ANSWER],                                   # too many
+    [{**_ANSWER, "text": "60.0"}],                        # not the value asked
+    [{**_ANSWER, "key": "other"}],                        # not the key asked
+    [{**_ANSWER, "number": "50"}],                        # number not a number
+    [{**_ANSWER, "number": True}],
+    [{**_ANSWER, "non_finite": "inf"}],                   # not one of the spellings
+    [{**_ANSWER, "extra": 1}],                            # a field beyond the six
+    {"schema": "x"},                                      # not an array
+], ids=["few", "many", "text", "key", "num-str", "num-bool", "non-finite", "extra", "object"])
+def test_an_answer_that_is_not_one_reading_per_value_is_exit_2(tmp_path, monkeypatch, capsys, answer):
+    """#3267: an answer read wrong anywhere is unusable whole — exit 2,
+    never a partial judgement."""
+    fake = tmp_path / "bin" / "da-guard"
+    fake.parent.mkdir()
+    fake.write_text("#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '" + json.dumps(answer) + "'\n")
+    fake.chmod(0o755)
+    _write(tmp_path, "docs/assets/platform-data.json",
+           '{"rulePacks": {"p": {"defaults": {"pct": {"value": 50, "unit": "%"}}}}}')
+    monkeypatch.setenv("DA_GUARD_BINARY", str(fake))
+    assert _main_rc(tmp_path, monkeypatch, _registry(pct=_spec(80, "%"))) == 2
+    assert "wrote no answer this tool can read" in capsys.readouterr().err
+
+
+def test_a_da_guard_older_than_this_tool_is_exit_2(tmp_path, monkeypatch, capsys):
+    """#3267 ruling: a da-guard that does not know `threshold-values` (it
+    exits 2 on it, `-h` included) is named as older, exit 2 (old: 0)."""
+    fake = tmp_path / "bin" / "da-guard"
+    fake.parent.mkdir()
+    fake.write_text("#!/bin/sh\necho 'da-guard: --config-dir is required' >&2\nexit 2\n")
+    fake.chmod(0o755)
+    _write(tmp_path, "docs/assets/platform-data.json",
+           '{"rulePacks": {"p": {"defaults": {"pct": {"value": 50, "unit": "%"}}}}}')
+    monkeypatch.setenv("DA_GUARD_BINARY", str(fake))
+    assert _main_rc(tmp_path, monkeypatch, _registry(pct=_spec(80, "%"))) == 2
+    assert "older than this tool" in capsys.readouterr().err
 
 
 def test_non_finite_number_in_platform_data_and_a_rule_pack_stays_out_of_domain(tmp_path):

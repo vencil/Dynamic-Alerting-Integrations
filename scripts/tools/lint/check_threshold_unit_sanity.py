@@ -76,8 +76,7 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
-from _lib_validation import (  # noqa: E402
-    NonFiniteThresholdError, i18n_text, parse_threshold_number, split_threshold_severity)
+from _lib_validation import i18n_text  # noqa: E402
 # ADR-036 step 4 (#2906): the conf.d trees are read by `da-guard parse-tree`
 # (the rule-pack registry, chart values and docs are not conf.d: PyYAML).
 import _lib_parse_cache  # noqa: E402
@@ -162,53 +161,68 @@ def _domain_error(dimension: str, unit: str, value: float) -> str | None:
     return None
 
 
-def _as_number(raw) -> float | None:
-    """Coerce a threshold literal to a number, or None if it isn't one.
+def _value_text(raw) -> str | None:
+    """The text of a threshold literal, for the exporter to read, or None
+    when *raw* is no literal at all (a mapping, a list, a bool, null).
 
-    conf.d thresholds are strings, may carry the inline `"70:critical"` severity
-    suffix, and may be the sentinel `"disable"`. Anything non-numeric (dates in
-    an `expires:` block, `type: scheduled`, label lists) is not a threshold.
-    The suffix is read by the exporter's grammar (`split_threshold_severity`,
-    #3071): a value whose severity it refuses (`70:high`, `70:`) is not the
-    number written — the exporter serves the default — so it is None here;
-    so is a number the exporter cannot read (`parse_threshold_number`).
-
-    ⛔ Except a non-finite one (`NaN`, `Inf`, `-Inf`, an overflow such as
-    `1e999` that reads as ±inf; a JSON `-Infinity`, a YAML `.inf`): the
-    exporter refuses it too (#3140), but this lint still returns the float,
-    so ±Inf stays OUT-OF-DOMAIN wherever it is written — a tenant string,
-    platform-data, a rule pack (owner ruling on #3140, D). A NaN compares
-    false with every bound, as before.
-
-    ⚠️ A hex float (`0x1p4`) is None, although the exporter reads it (16):
-    this lint has never judged one (it read numbers with Python's `float`,
-    which has no hex), and judging it now would turn `--ci` from 0 to 1 for
-    a value no owner ruling names. An `_` between digits (`1_000`) is judged:
-    the exporter reads it, and so did this lint before #3140.
-    """
+    conf.d thresholds are text (every scalar's source text, `_as_source_text`)
+    and so are most values elsewhere; a value a JSON or PyYAML reader already
+    made a number (`platform-data.json`'s `value`, the registry's `30`, a
+    JSON `-Infinity`, a YAML `.inf`) is that number as Python spells it
+    (`repr(float(raw))`: `30.0`, `0.8`, `-inf`), which reads as the same
+    number; an int no float holds raises OverflowError, as it always has."""
     if isinstance(raw, bool):
         return None
     if isinstance(raw, (int, float)):
-        return float(raw)
-    if not isinstance(raw, str):
-        return None
+        return repr(float(raw))
+    if isinstance(raw, str):
+        return raw
+    return None
+
+
+class ThresholdReadError(Exception):
+    """`da-guard threshold-values` gave no usable answer (no binary, a
+    failing or older one): the values were not read, so there is no verdict
+    — a caller error (exit 2), like a conf.d parse-tree cannot read."""
+
+
+def _numbers(items: "list[tuple[str, str]]") -> "list[float | None]":
+    """The number this lint judges for each `(key, text)` of *items*, in
+    order, read by the exporter — ONE `da-guard threshold-values` run for
+    the whole list (#3267); Python reads no threshold value itself.
+
+    A text whose severity suffix the exporter refuses (`70:high`, `70:`) is
+    not the number written — the exporter serves the default — so it is
+    None; so is any text that does not read as a number (`disable`, a date,
+    `type: scheduled`, `abc`). Every spelling the exporter reads is judged:
+    `1_000`, and a hex float (`0x1p4` is 16).
+
+    ⛔ Except a non-finite one (`NaN`, `Inf`, `-Inf`, an overflow such as
+    `1e999` or `0x1p1024` that reads as ±Inf; a JSON `-Infinity`, a YAML
+    `.inf`): the exporter refuses it too (#3140), but this lint still judges
+    the value (`non_finite`), so ±Inf stays OUT-OF-DOMAIN wherever it is
+    written — a tenant string, platform-data, a rule pack (owner ruling on
+    #3140, D). A NaN compares false with every bound, as before. A spelling
+    Go reads no number from at all (`+nan`, an overflow in non-ASCII digits)
+    is not judged (owner ruling on #3267)."""
     try:
-        text, _severity = split_threshold_severity(raw)
-    except ValueError:
-        return None
-    if "x" in text.lower():
-        return None  # a hex float: see the docstring
-    try:
-        return parse_threshold_number(text)
-    except NonFiniteThresholdError:
-        return float(text)
-    except ValueError:
-        pass
-    try:
-        other = float(text)  # `1e999`: Go's ErrRange, Python's inf; `+nan`
-    except ValueError:
-        return None
-    return None if math.isfinite(other) else other
+        readings = _lib_parse_tree.threshold_values(items)
+    except ParseTreeError as exc:
+        raise ThresholdReadError(str(exc)) from exc
+    # A refused suffix reads neither a number nor a non-finite value (Go).
+    return [r.number if r.number is not None else r.non_finite for r in readings]
+
+
+def _judged(pending: list) -> list:
+    """*pending* — tuples whose second and third items are a key and a raw
+    literal — with the raw literal replaced by the number `_numbers` reads,
+    in order, the ones it reads no number from (and the non-literals)
+    left out."""
+    texts = [(p[1], _value_text(p[2])) for p in pending]
+    asked = [(i, kt) for i, kt in enumerate(texts) if kt[1] is not None]
+    numbers = dict(zip((i for i, _ in asked), _numbers([kt for _, kt in asked])))
+    return [(*p[:2], numbers[i], *p[3:]) for i, p in enumerate(pending)
+            if numbers.get(i) is not None]
 
 
 # ------------------------------------------------------------------ scanning
@@ -241,15 +255,16 @@ if not _REGISTRY_METADATA_FIELDS or "value" not in registry_lib._FIELD_ORDER:
     )
 
 
-def _walk_values(node, key_of_interest: str | None = None):
-    """Yield (registry_key, number) for every threshold literal reachable in `node`.
+def _walk_literals(node, key_of_interest: str | None = None):
+    """Yield (registry_key, raw literal) for every scalar reachable in `node`
+    beneath a registry key — the candidates `_numbers` reads.
 
     A registry key's value may be a scalar (`mysql_threads_running: "30"`) or a
     nested block (the scheduled form
     `mysql_threads_running: {default: {during_business_hours: "30"}}`).
     #1217 burned on exactly the nested shape: a line-oriented scan is
     structurally blind to it, so once we are inside a known key we collect EVERY
-    numeric leaf beneath it — except the registry's own metadata blocks, whose
+    scalar leaf beneath it — except the registry's own metadata blocks, whose
     numbers describe the key rather than threshold it (`_REGISTRY_METADATA_FIELDS`).
     """
     if isinstance(node, dict):
@@ -257,25 +272,24 @@ def _walk_values(node, key_of_interest: str | None = None):
             if key_of_interest is None and isinstance(k, str):
                 base = k.split("{", 1)[0]  # dimensional key: container_cpu{version="v2"}
                 if base in _REGISTRY_KEYS:
-                    yield from _walk_values(v, base)
+                    yield from _walk_literals(v, base)
                     continue
             if key_of_interest is not None and k in _REGISTRY_METADATA_FIELDS:
                 continue
-            if key_of_interest is not None:
-                num = _as_number(v)
-                if num is not None:
-                    yield key_of_interest, num
-                else:
-                    yield from _walk_values(v, key_of_interest)
-            else:
-                yield from _walk_values(v, None)
+            yield from _walk_literals(v, key_of_interest)
     elif isinstance(node, list):
         for item in node:
-            yield from _walk_values(item, key_of_interest)
+            yield from _walk_literals(item, key_of_interest)
     elif key_of_interest is not None:
-        num = _as_number(node)
-        if num is not None:
-            yield key_of_interest, num
+        yield key_of_interest, node
+
+
+def _walk_values(node):
+    """Yield (registry_key, number) for every threshold literal reachable in
+    `node` (`_walk_literals`), each read by `_numbers` — one da-guard run
+    for the node."""
+    for _, key, num in _judged([(None, k, v) for k, v in _walk_literals(node)]):
+        yield key, num
 
 
 _REGISTRY_KEYS: set[str] = set()
@@ -311,7 +325,7 @@ def _as_source_text(node):
     """A parse-tree node with every scalar as its source text — what the
     exporter reads a threshold from (`_lib_parse_tree.scalar_text`): `70`,
     `"70:critical"` and `0x46` are the texts `70`, `70:critical`, `0x46`,
-    and `_as_number` reads each as the exporter's grammar would."""
+    and `_numbers` has the exporter read each."""
     if _lib_parse_tree.is_scalar(node):
         return _lib_parse_tree.scalar_text(node)
     if isinstance(node, dict):
@@ -396,12 +410,14 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
     as (surface, why); every `.illustrative` docs unit (not read) to
     *exempted* as (where, reason).
     """
-    found: list[tuple[str, str, float, bool]] = []
+    # (surface, key, raw literal, is_threshold), every source in order; one
+    # `da-guard threshold-values` run reads them all at the end (#3267).
+    pending: list[tuple[str, str, object, bool]] = []
     unreadable = [] if unreadable is None else unreadable
 
     for rel, doc in _iter_confd_docs(root):
-        for key, val in _walk_values(doc):
-            found.append((rel, key, val, True))
+        for key, raw in _walk_literals(doc):
+            pending.append((rel, key, raw, True))
 
     files = list(_iter_yaml_files(root))
     # No da-crdecode raises ConsumerReadError; a file its reading refuses is
@@ -426,8 +442,8 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
         else:
             docs = read[path]
         for doc in docs:
-            for key, val in _walk_values(doc):
-                found.append((rel, key, val, True))
+            for key, raw in _walk_literals(doc):
+                pending.append((rel, key, raw, True))
 
     # docs/assets JSON: platform-data (value+unit), recommendation-data
     # (percentiles + recommended + unit), template-data (embedded tenant YAML).
@@ -436,9 +452,7 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
         for pack in (json.loads(_read(pd)).get("rulePacks") or {}).values():
             for key, meta in (pack.get("defaults") or {}).items():
                 if key in _REGISTRY_KEYS and isinstance(meta, dict):
-                    num = _as_number(meta.get("value"))
-                    if num is not None:
-                        found.append(("docs/assets/platform-data.json", key, num, True))
+                    pending.append(("docs/assets/platform-data.json", key, meta.get("value"), True))
 
     rd = os.path.join(root, "docs/assets/recommendation-data.json")
     if os.path.isfile(rd):
@@ -446,14 +460,12 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
             if key not in _REGISTRY_KEYS or not isinstance(meta, dict):
                 continue
             for field in ("p50", "p95", "p99", "recommended"):
-                num = _as_number(meta.get(field))
-                if num is not None:
-                    # Percentiles are OBSERVATIONS of the metric, not thresholds:
-                    # they share the same unit (so the domain check applies) but a
-                    # `_critical` key legitimately carries the same observed
-                    # distribution as its base, so they must not feed tier ordering.
-                    found.append((f"docs/assets/recommendation-data.json[{field}]",
-                                  key, num, field == "recommended"))
+                # Percentiles are OBSERVATIONS of the metric, not thresholds:
+                # they share the same unit (so the domain check applies) but a
+                # `_critical` key legitimately carries the same observed
+                # distribution as its base, so they must not feed tier ordering.
+                pending.append((f"docs/assets/recommendation-data.json[{field}]",
+                                key, meta.get(field), field == "recommended"))
 
     # template-data's `yaml` strings are tenant conf.d text: read as conf.d
     # is read (parse-tree, #3416). One parse-tree refuses is an UNREADABLE
@@ -469,14 +481,14 @@ def _collect(root: str, unreadable: "list[tuple[str, str]] | None" = None,
             if problem is not None:
                 unreadable.append((surface, f"{problem[0]}: {problem[1]}"))
                 continue
-            for key, val in _walk_values(_as_source_text(node)):
-                found.append((surface, key, val, True))
+            for key, raw in _walk_literals(_as_source_text(node)):
+                pending.append((surface, key, raw, True))
 
     for surface, doc in _doc_units(root, exempted):
-        for key, val in _walk_values(doc):
-            found.append((surface, key, val, True))
+        for key, raw in _walk_literals(doc):
+            pending.append((surface, key, raw, True))
 
-    return found
+    return _judged(pending)
 
 
 def _declared_units(root: str) -> list[tuple[str, str, str]]:
@@ -612,6 +624,12 @@ def main(argv: list[str] | None = None) -> "int | Report":
     except ParseTreeError as exc:
         # ADR-036 step 4 (#2906): the conf.d trees are read by da-guard.
         print(_lib_parse_cache.parse_tree_error_line(exc), file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    except ThresholdReadError as exc:
+        # #3267: every value is read by the exporter, through da-guard.
+        from _lib_io import safe_label  # noqa: E402
+        print("ERROR: cannot read the threshold values through `da-guard threshold-values` "
+              f"(#3267): {safe_label(' '.join(str(exc).split()))}", file=sys.stderr)
         return EXIT_CALLER_ERROR
     except ArtifactRefused as exc:
         # #3206: a values file / manifest Helm or kubectl cannot read is an
