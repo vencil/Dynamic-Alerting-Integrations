@@ -320,9 +320,16 @@ _PER_CALL = ("exit_on_crash", "code")
 def _setter_calls(tree):
     """(line, name) of every reach for a code channel in *tree*: a setter or
     code global named in any way — called, imported (under any alias),
-    assigned, or as a `getattr` string — or `exit_on_crash(..., code=)`."""
+    assigned, or as a `getattr` string — or `exit_on_crash(..., code=)`
+    under any name it was imported as. Not seen for the latter: a `getattr`
+    string, `functools.partial`, `**{...}`, a local alias; a same-named
+    function of another module is a false hit (none in scripts/tools)."""
     import ast
     names = set(_CODE_SETTERS) | set(_CODE_GLOBALS)
+    # `exit_on_crash` under any name this tree imported it as
+    per_call = {_PER_CALL[0]} | {
+        a.asname for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+        for a in node.names if a.name == _PER_CALL[0] and a.asname}
     hits = []
     for node in ast.walk(tree):
         name = None
@@ -335,7 +342,7 @@ def _setter_calls(tree):
         elif isinstance(node, ast.Constant) and node.value in names:
             name = node.value
         elif (isinstance(node, ast.Call)
-              and _PER_CALL[0] in (getattr(node.func, "attr", None), getattr(node.func, "id", None))
+              and per_call & {getattr(node.func, "attr", None), getattr(node.func, "id", None)}
               and any(k.arg == _PER_CALL[1] for k in node.keywords)):
             name = "exit_on_crash(code=)"
         if name is not None:
@@ -380,6 +387,8 @@ def test_the_setter_scan_sees_a_call():
         ("import _lib_exitcodes as _ec\n_ec.exit_on_crash(RuntimeError(), code=1)\n",
          "exit_on_crash(code=)"),
         ("from _lib_exitcodes import exit_on_crash\nexit_on_crash(RuntimeError(), code=1)\n",
+         "exit_on_crash(code=)"),
+        ("from _lib_exitcodes import exit_on_crash as eoc\neoc(RuntimeError(), code=1)\n",
          "exit_on_crash(code=)"),
     ]:
         names = {name for _line, name in _setter_calls(ast.parse(src))}
@@ -552,6 +561,24 @@ class TestCrashExitInProcess:
         ec._print_crash_envelope(RuntimeError("b"))
         out = capfd.readouterr().out
         assert json.loads(out)["error"].endswith("(RuntimeError): a")
+
+    @pytest.mark.real_crash_exit_code
+    def test_a_failing_envelope_still_exits_crash_code(self, monkeypatch, capsys):
+        """The envelope writer failing (an armed build() whose document
+        json cannot write) is reported, and the crash still ends at the
+        crash code — not as the envelope's exception."""
+        ec = self._ec(monkeypatch)
+
+        def broken(exc):
+            raise TypeError("envelope writer broke")
+
+        monkeypatch.setattr(ec, "_print_crash_envelope", broken)
+        with pytest.raises(SystemExit) as exc_info:
+            ec.exit_on_crash(ValueError("first"))
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "ERROR: unexpected internal error (ValueError): first" in err
+        assert "ERROR: crash envelope failed:" in err and "envelope writer broke" in err
 
     @pytest.mark.real_crash_exit_code
     def test_exit_on_crash_exits_crash_code(self, monkeypatch, capsys):
