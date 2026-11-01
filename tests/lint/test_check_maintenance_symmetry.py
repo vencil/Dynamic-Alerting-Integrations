@@ -53,7 +53,8 @@ sys.path.insert(0, _TOOLS_DIR)
 import check_maintenance_symmetry as sym  # noqa: E402
 
 MAINT = 'unless on(tenant)\n  (user_state_filter{filter="maintenance"} == 1)'
-ENRICH = '* on(tenant) group_left(runbook_url, owner, tier)\n  tenant_metadata_info'
+ENRICH = ('* on(tenant) group_left(runbook_url, owner, tier)\n  '
+          'max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)')
 BARE = 'unless on(tenant) tenant_metadata_info'
 BREACH = '(tenant:x:avg1m > on(tenant) group_left tenant:alert_threshold:x)'
 

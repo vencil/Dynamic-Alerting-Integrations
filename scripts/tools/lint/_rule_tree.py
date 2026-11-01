@@ -371,9 +371,9 @@ def _source_pack_alerts() -> dict:
 # look at. Everything else under the shipped roots is in its scope — the point
 # is that a real rules artifact cannot escape the declaration by being placed
 # somewhere nobody was told about.
-# ⛔ Deliberately EMPTY. Once the scan narrowed to k8s/ + operator-manifests/
-# + rule-packs/, this list matched zero files in the tree — while remaining a
-# working escape hatch: `mkdir k8s/03-monitoring/fixtures/` hid a rules
+# ⛔ Deliberately EMPTY. Once the scan narrowed to k8s/ + rule-packs/ (and the
+# since-removed operator-manifests/, #3427), this list matched zero files in
+# the tree — while remaining a working escape hatch: `mkdir k8s/03-monitoring/fixtures/` hid a rules
 # ConfigMap from every contract at the cost of one directory name. A filter
 # that protects nothing and hides something is pure attack surface. If a real
 # fixture tree ever lands under a shipped root, exclude it by explicit path
@@ -398,7 +398,7 @@ _SCAN_SKIP_PARTS = frozenset()
 # RECURSIVE, unlike `kubectl apply -f <dir>`: a rules file moved into a
 # subdirectory must not leave every contract unnoticed (CodeRabbit, PR #1270)
 # — since #3438 it is not read there, and the tripwire names it.
-_SHIPPED_ROOTS = ("k8s/", "operator-manifests/", "rule-packs/", "helm/")
+_SHIPPED_ROOTS = ("k8s/", "rule-packs/", "helm/")
 
 
 @functools.lru_cache(maxsize=1)

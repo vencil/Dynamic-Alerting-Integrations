@@ -123,7 +123,6 @@ Rule Pack 涵蓋 MySQL、PostgreSQL、Redis、Kafka 等技術棧，每種一包�
 | [`scripts/`](scripts/) | Shell 進入點 + `scripts/tools/{ops,dx,lint}` 下 216 個 Python 工具 | 跑工具、lint、開發者體驗 |
 | [`tests/`](tests/) | Python pytest（`test_*.py`）、手動 shell 腳本（`scenarios/`）、`e2e/` Playwright、`snapshots/` | 跑測試、加測試 |
 | [`docs/`](docs/) | 公開文件與其中英雙語 pair，逐份對照表見 [doc-map](docs/internal/doc-map.md)；另有 internal playbook/planning 文件不入 catalog | 讀設計/整合/運維文件 |
-| [`operator-manifests/`](operator-manifests/) | `operator_generate.py` 產出的 PrometheusRule 範例（每個 rule-pack 一份） | 參考 operator 模式的輸出樣板 |
 | [`CLAUDE.md`](CLAUDE.md) | AI Agent 起手式與任務分流表 | agent session 開始前必讀 |
 | [`docs/internal/`](docs/internal/) | 內部 playbook（testing / benchmark / windows-mcp / github-release）與 maps | 排錯、release、跑 benchmark |
 

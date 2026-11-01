@@ -69,8 +69,7 @@ def test_expected_rule_files_keeps_the_raw_name(tmp_path, monkeypatch):
             fh.write(b"groups: []\n")
     except OSError:
         pytest.skip("this file system cannot hold a name that is not UTF-8")
-    for name in (b"operator-manifests/da-rule-pack-a.yaml",
-                 b"k8s/03-monitoring/configmap-rules-a.yaml"):
+    for name in (b"k8s/03-monitoring/configmap-rules-a.yaml",):
         with open(os.path.join(root, name), "wb") as fh:
             fh.write(b"groups: []\n")
     monkeypatch.setattr(_rule_tree, "_REPO_ROOT", str(tmp_path))

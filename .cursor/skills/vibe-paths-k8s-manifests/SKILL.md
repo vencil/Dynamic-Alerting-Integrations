@@ -1,9 +1,8 @@
 ---
 name: vibe-paths-k8s-manifests
-description: "Vibe 路徑觸發指引：動到 k8s/**、operator-manifests/** 之前先讀的章節與一句約束。"
+description: "Vibe 路徑觸發指引：動到 k8s/** 之前先讀的章節與一句約束。"
 paths:
   - "k8s/**"
-  - "operator-manifests/**"
 ---
 <!-- 此檔為產生物，來源 .agents/paths-map.json —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 # vibe-paths-k8s-manifests

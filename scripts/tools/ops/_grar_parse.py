@@ -1679,6 +1679,9 @@ class TenantTree:
     # Findings, also in `schema_warnings`) — kept apart for
     # `print_reader_warnings`.
     unselected_carriers: list[Finding] = field(default_factory=list)
+    # #1211: the tenants whose own `_routing` is `disable` (an explicit
+    # opt-out, as opposed to having no `_routing` at all).
+    routing_disabled: frozenset[str] = frozenset()
 
 
 def policy_level_source(parsed: dict, level: str) -> str:
@@ -1883,7 +1886,8 @@ def load_tenant_tree(
         duplicate_tenants=dict(parsed.get("duplicate_tenants", {})),
         invalid_tenant_ids=invalid_ids,
         field_type_errors=field_type_errors,
-        unselected_carriers=list(parsed.get("unselected_carriers", [])))
+        unselected_carriers=list(parsed.get("unselected_carriers", [])),
+        routing_disabled=frozenset(parsed.get("disabled_tenants", ())))
 
 
 def print_reader_warnings(source: "TenantTree | dict") -> None:

@@ -55,9 +55,11 @@
 //     (manifest.go). A list's own `apiVersion` and `metadata` are checked as
 //     a document's are, and so is each item's, as it is given: kubectl does
 //     not check an item's when it reads the file, but applying an item whose
-//     do not decode does not apply it as written (it is refused, or its
-//     annotations or namespace are replaced), so it is refused here. So a
-//     caller can rely on every entry of `documents` being an object with a
+//     do not decode does not apply it as written (it is refused, or it is
+//     changed: its own annotations dropped by client-side apply, its namespace
+//     replaced by the one kubectl uses, a time field dropped by server-side
+//     apply of a custom resource), so it is refused here. So a caller can
+//     rely on every entry of `documents` being an object with a
 //     non-empty string `kind`, none of them a list, whose `apiVersion` and
 //     `metadata` decode as kubectl reads them: an `apiVersion` it has is a
 //     string or null, a `metadata` it has is a mapping or null whose name,

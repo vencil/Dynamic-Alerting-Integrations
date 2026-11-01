@@ -61,7 +61,6 @@ func TestRulePackSeveritySelectorsAreTheThresholdSeverities(t *testing.T) {
 	// globDeclared); a family that matches nothing is fatal.
 	for _, family := range [][]string{
 		{"rule-packs/rule-pack-*.yaml", "rule-packs/rule-pack-*.yml"},
-		{"operator-manifests/da-rule-pack-*.yaml", "operator-manifests/da-rule-pack-*.yml"},
 		{"k8s/03-monitoring/configmap-rules-*.yaml", "k8s/03-monitoring/configmap-rules-*.yml"},
 	} {
 		got := globDeclared(t, root, family...)
@@ -99,7 +98,7 @@ func TestRulePackSeveritySelectorsAreTheThresholdSeverities(t *testing.T) {
 			}
 		}
 	}
-	for _, dir := range []string{"rule-packs", "operator-manifests", "k8s/03-monitoring"} {
+	for _, dir := range []string{"rule-packs", "k8s/03-monitoring"} {
 		if perDir[dir] == 0 {
 			t.Errorf("%s: no user_threshold severity selector found — the scan undershot", dir)
 		}

@@ -91,10 +91,21 @@ groups:
       - alert: <AlertName>
         expr: |
           (
-            tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>
+            (
+              tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            )
+            * on(tenant) group_left(runbook_url, owner, tier)
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
-          * on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info
-          unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+          or
+          (
+            (
+              tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>
+              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+            )
+            unless on(tenant) tenant_metadata_info
+          )
         annotations:
           runbook_url: "{{ $labels.runbook_url }}"
           owner: "{{ $labels.owner }}"
@@ -103,7 +114,11 @@ groups:
 
 ### Dynamic Runbook Injection (v1.11.0)
 
-Alert Rules 透過 `* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info` 將租戶 metadata 注入 alert labels，再由 annotations 引用。`tenant_metadata_info` 由 threshold-exporter 根據租戶 `_metadata` 配置自動輸出（值永遠為 1），保證 `group_left` join 不會漏掉任何 tenant。
+Alert Rules 透過 `* on(tenant) group_left(runbook_url, owner, tier) max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)` 將租戶 metadata 注入 alert labels，再由 annotations 引用。`tenant_metadata_info` 由 threshold-exporter 根據租戶 `_metadata` 配置自動輸出（值永遠為 1），保證 `group_left` join 不會漏掉任何 tenant。
+
+右側一定要先用 `max by(tenant, runbook_url, owner, tier)` 收斂，不能直接 join 原始的 `tenant_metadata_info`：threshold-exporter 跑多個副本，每個副本都會送出這個指標，以 pod 為單位抓取時（例如 Prometheus Operator 的 ServiceMonitor），同一個租戶會有一份 per 副本、只差 `instance`／`pod` 的序列，原始 join 會因 many-to-many 而整條告警評估失敗。`check_leftouterjoin_enrichment.py` 會擋下右側不是上述寫法的 join。
+
+`or (… unless on(tenant) tenant_metadata_info)` 那一半讓沒有 metadata 的租戶照樣告警（只是不帶 runbook／owner／tier）；`unless` 只看有沒有，副本重複不會出錯，所以維持原始指標。
 
 若租戶未設定 `_metadata`，`tenant_metadata_info` 不存在，`group_left` 回傳空向量。因此已內建的 16 個 Rule Pack 均已加入此 join，但 **自訂 Rule Pack 建議同步採用此 pattern** 以確保 runbook URL 與 owner 資訊可自動傳遞至通知。
 

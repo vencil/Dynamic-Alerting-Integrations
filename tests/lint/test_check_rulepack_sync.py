@@ -1,4 +1,4 @@
-"""Tests for check_rulepack_sync.py — rule-pack 3-copy semantic drift guard.
+"""Tests for check_rulepack_sync.py — rule-pack copy semantic drift guard.
 
 Pinned contracts
 ----------------
@@ -8,7 +8,9 @@ Pinned contracts
    and a `#` line comment must not change the normalized expr.
 3. **Drift detection**: a record whose expr genuinely differs is flagged;
    a missing/extra rule is flagged.
-4. **Three formats parse**: raw rule-pack / ConfigMap data-keys / CRD.
+4. **Both committed formats parse**: raw rule-pack / ConfigMap data-keys.
+   (#3427: no committed PrometheusRule copy; what operator-generate writes is
+   pinned by tests/ops/test_operator_generate_rule_copies.py.)
 5. **Live dogfood**: after PR3-pre-1, the HA `sum`/`max` axis is consistent;
    remaining cross-copy differences are the (known, separate) enrichment
    drift — so this test does NOT assert repo-wide sync (that lands with the
@@ -108,7 +110,9 @@ def test_norm_expr_is_unchanged_on_every_shipped_expression():
                 # string-unaware pass fails this the moment a literal contains
                 # any of the characters the passes rewrite.
                 assert sync._norm_expr(normalized) == normalized, expr
-    assert checked >= 900, (
+    # 643 on the tree since #3427 dropped the committed PrometheusRule copy
+    # (a third of it); the floor only has to catch a sweep that went blind.
+    assert checked >= 600, (
         f"only {checked} expressions examined — the sweep is not covering the "
         "tree it claims to")
 
@@ -147,11 +151,10 @@ def test_check_pack_missing_copies(tmp_path):
 import yaml  # noqa: E402
 
 
-def _write_three_copies(root, name, src_op="max", cm_op="max", op_op="max"):
-    """Write rule-pack + configmap + operator copies of one pack."""
+def _write_copies(root, name, src_op="max", cm_op="max"):
+    """Write the rule-pack source + configmap copy of one pack."""
     (root / "rule-packs").mkdir(exist_ok=True)
     (root / "k8s" / "03-monitoring").mkdir(parents=True, exist_ok=True)
-    (root / "operator-manifests").mkdir(exist_ok=True)
 
     def groups(op):
         return [{"name": "g", "interval": "15s", "rules": [
@@ -165,34 +168,29 @@ def _write_three_copies(root, name, src_op="max", cm_op="max", op_op="max"):
           "data": {f"{name}-recording.yml": yaml.dump({"groups": groups(cm_op)})}}
     (root / "k8s" / "03-monitoring" / f"configmap-rules-{name}.yaml").write_text(
         yaml.dump(cm), encoding="utf-8")
-    op = {"apiVersion": "monitoring.coreos.com/v1", "kind": "PrometheusRule",
-          "metadata": {"name": f"da-rule-pack-{name}"},
-          "spec": {"groups": groups(op_op)}}
-    (root / "operator-manifests" / f"da-rule-pack-{name}.yaml").write_text(
-        yaml.dump(op), encoding="utf-8")
 
 
 def test_check_pack_in_sync(tmp_path):
-    """All three copies semantically identical → ok (exercises all 3 parsers)."""
-    _write_three_copies(tmp_path, "t")
+    """Both copies semantically identical → ok (exercises both parsers)."""
+    _write_copies(tmp_path, "t")
     ok, findings = sync.check_pack(tmp_path, "t")
     assert ok and findings == []
 
 
 def test_check_pack_configmap_drift(tmp_path):
     """A configmap whose op differs from source is flagged."""
-    _write_three_copies(tmp_path, "t", src_op="max", cm_op="sum")
+    _write_copies(tmp_path, "t", src_op="max", cm_op="sum")
     ok, findings = sync.check_pack(tmp_path, "t")
     assert not ok and any("configmap" in f and "content differs" in f for f in findings)
 
 
 def test_main_exit_codes(tmp_path, monkeypatch):
     monkeypatch.setattr(sync, "_repo_root", lambda: tmp_path)
-    _write_three_copies(tmp_path, "t")
+    _write_copies(tmp_path, "t")
     monkeypatch.setattr(sys, "argv", ["check_rulepack_sync.py", "--ci"])
     assert sync.main() == 0
-    # introduce drift in the operator copy
-    _write_three_copies(tmp_path, "t", src_op="max", op_op="sum")
+    # introduce drift in the configmap copy
+    _write_copies(tmp_path, "t", src_op="max", cm_op="sum")
     assert sync.main() == 1
 
 
@@ -202,7 +200,7 @@ def test_main_checks_a_yml_pack_and_names_an_undeclared_yaml(tmp_path, monkeypat
     are now compared. A YAML beside the packs that is neither a pack nor
     declared is named, rc 2."""
     monkeypatch.setattr(sync, "_repo_root", lambda: tmp_path)
-    _write_three_copies(tmp_path, "t", src_op="max", op_op="sum")
+    _write_copies(tmp_path, "t", src_op="max", cm_op="sum")
     rp = tmp_path / "rule-packs"
     (rp / "rule-pack-t.yaml").rename(rp / "rule-pack-t.yml")
     monkeypatch.setattr(sys, "argv", ["check_rulepack_sync.py", "--ci"])

@@ -133,8 +133,8 @@ def main() -> int:
     targets: List[Path] = []
     try:
         # #3426/#3471: which files are rule packs and their copies has one
-        # declaration (`RULE_SOURCES`: rule-pack-*, da-rule-pack-*,
-        # configmap-rules-*, .yaml|yml; an undeclared YAML there is named) —
+        # declaration (`RULE_SOURCES`: rule-pack-*, configmap-rules-*,
+        # .yaml|yml; an undeclared YAML there is named) —
         # not a glob of this lint's own.
         for source in _lib_consumer_read.RULE_SOURCES:
             targets += source.files_under(repo)

@@ -226,6 +226,15 @@ FINDING_KINDS: dict[str, str] = {
     "key_verdict_incomplete":
         "The shared key verdict could not be given (da-guard failing); the "
         "keys were not judged and the run's verdict is unchanged.",
+    # #1211: a tenant's served page-mode custom alerts get no delivery child
+    # under the component="custom" route and fall to the firehose receiver.
+    "custom_alert_undelivered":
+        "A tenant's served page-mode custom alerts fall to the custom-alerts "
+        "firehose receiver; the line says whether that receiver has an "
+        "integration or could not be checked.",
+    "custom_alert_delivery_unchecked":
+        "The tenants' served custom alerts could not be read (da-guard "
+        "failing), so their delivery was not checked; the verdict is unchanged.",
 }
 
 

@@ -233,7 +233,7 @@ var metadataCases = []struct {
 	{name: "item-namespace-number-second", hint: true, in: "apiVersion: v1\nkind: List\n" +
 		"items:\n- {apiVersion: v1, kind: ConfigMap, metadata: {name: a}}\n" +
 		"- {apiVersion: v1, kind: ConfigMap, metadata: {name: b, namespace: 5}}\n",
-		kubectl: "ACCEPT, ACCEPT (namespace \"\"); STRICTER: apply puts item 1 in the default namespace",
+		kubectl: "ACCEPT, ACCEPT (namespace \"\"); STRICTER: apply puts item 1 in the namespace kubectl uses",
 		wantErr: "in this list, items[1] (line 5): " + metaItem +
 			"json: cannot unmarshal number into Go struct field ObjectMeta.metadata.namespace of type string)"},
 	// The item is checked as it is given: an `apiVersion` the list's type

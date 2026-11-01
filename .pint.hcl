@@ -55,8 +55,8 @@ parser {
   # TWICE — e.g. the same alerts/for lands on both rule-packs/rule-pack-mariadb.yaml
   # and k8s/03-monitoring/configmap-rules-mariadb.yaml — so half the gate's output
   # would point developers at a generated file they must not edit. Copy-sync is
-  # guarded by check_rulepack_sync.py instead. operator-manifests/ stays out for the
-  # same reason; recipes/ + conf.d are not rule files.
+  # guarded by check_rulepack_sync.py instead. The PrometheusRule copies are not
+  # committed (#3427); recipes/ + conf.d are not rule files.
   #
   # NB: pint AUTO-ANCHORS every regexp here (it parses `X` as `^X$`), so no explicit
   # `^...$` is needed — pint 0.86.0 `-l DEBUG` echoes the list back as

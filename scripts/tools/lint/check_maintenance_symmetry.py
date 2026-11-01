@@ -5,7 +5,7 @@ Problem (#947 / PR #977, Gemini disposition)
 --------------------------------------------
 Most threshold alerts use the ADR-024 two-arm left-outer-join shape:
 
-    ((breach UNLESS maintenance) * group_left(...) tenant_metadata_info)   # enriched arm
+    ((breach UNLESS maintenance) * group_left(...) max by(...) (tenant_metadata_info))   # enriched arm
     or
     ((breach UNLESS maintenance) unless on(tenant) tenant_metadata_info)   # bare arm
 
@@ -14,7 +14,7 @@ introduction). Delete or typo ONE copy and every promtool fixture stays green un
 carries a fifth e-tenant (breach + maintenance + NO metadata, PR #977) — and in
 production an onboarding tenant (no metadata yet) gets paged during its maintenance
 window. This lint kills the "one arm forgets / typo drifts" class mechanically at the
-SOURCE (rule-packs/; the configmap / operator-manifest copies are drift-gated against it).
+SOURCE (rule-packs/; the configmap copies are drift-gated against it).
 
 What this guards (and deliberately does NOT)
 --------------------------------------------
@@ -89,6 +89,10 @@ import _lib_compat  # noqa: E402,F401  (import-time side effect; see _lib_compat
 
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+# The one spelling of the enrichment join's right-hand side (#3483).
+from check_leftouterjoin_enrichment import ENRICH_RHS  # noqa: E402
+
 _HERE = Path(__file__).resolve()
 _REPO = _HERE.parents[3]                         # <repo>/scripts/tools/lint/x.py -> <repo>
 _RULE_PACKS = _REPO / "rule-packs"
@@ -97,7 +101,7 @@ _CANONICAL = 'unless on(tenant) (user_state_filter{filter="maintenance"} == 1)'
 _MAINT = re.compile(
     r'unless\s+on\(tenant\)\s*\(\s*user_state_filter\{filter="maintenance"\}\s*==\s*1\s*\)')
 _BARE = re.compile(r'unless\s+on\(tenant\)\s+tenant_metadata_info')
-_ENRICH = re.compile(r'\*\s+on\(tenant\)\s+group_left\([^)]*\)\s+tenant_metadata_info')
+_ENRICH = re.compile(r'\*\s+on\(tenant\)\s+group_left\([^)]*\)\s+' + re.escape(ENRICH_RHS))
 _OR = re.compile(r'(?<![\w:])or(?![\w:])')
 # Known DELIBERATE non-maintenance user_state_filter joins (kubernetes per-alert
 # opt-ins). A new filter kind must be added here consciously — unknown spellings FAIL.
@@ -198,7 +202,7 @@ def _token_hygiene(expr: str) -> str | None:
     for t in _TMI_TOKEN.finditer(expr):
         if not any(s <= t.start() and t.end() <= e for s, e in covered):
             return ("non-canonical `tenant_metadata_info` reference — expected the "
-                    "enrichment join `* on(tenant) group_left(...) tenant_metadata_info` "
+                    f"enrichment join `* on(tenant) group_left(...) {ENRICH_RHS}` "
                     "or the bare marker `unless on(tenant) tenant_metadata_info` "
                     "(exact spacing)")
     return None

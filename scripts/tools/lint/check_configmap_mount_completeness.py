@@ -11,7 +11,7 @@ unit tests (which point straight at the rule YAML) stay green.
 This burned #869: `prometheus-rules-liveness` shipped but unmounted →
 `TenantExporterAbsent` never loaded in prod. No existing check caught it
 (promtool tests expr semantics; check_doc_k8s_refs validates doc→manifest
-paths; the 3-copy gate compares rule-pack↔configmap↔operator — none verify
+paths; the copy gate compares rule-pack↔configmap — none verify
 configmap→projected-volume mount completeness).
 
 Checks (per configmap-rules-*.yaml):

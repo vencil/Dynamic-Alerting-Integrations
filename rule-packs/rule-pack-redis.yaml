@@ -114,7 +114,7 @@ groups:
               (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -157,7 +157,7 @@ groups:
               (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -200,7 +200,7 @@ groups:
               (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -243,7 +243,7 @@ groups:
               (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -282,7 +282,7 @@ groups:
               (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (

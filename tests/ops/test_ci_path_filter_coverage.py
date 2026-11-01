@@ -140,7 +140,7 @@ CLIMBING_LITERAL = re.compile(r"""['"]((?:\.\./){3,}[^'"]+)['"]""")
 # match arbitrary prose.
 REPO_RELATIVE_LITERAL = re.compile(
     r"""['"]((?:docs|rule-packs|components|scripts|k8s|helm|try-local"""
-    r"""|operator-manifests|environments|tools)/[\w./-]+)['"]"""
+    r"""|environments|tools)/[\w./-]+)['"]"""
 )
 
 # Shape B only EXISTS as an idiom because of a repo-root constant, so require

@@ -29,16 +29,16 @@ Gating only alert names would have let this file pass a green check while 90%
 of its recording claims were still wrong — a false sense of coverage, which is
 the disease this guard exists to cure.
 
-Shipping rule trees (a name found in ANY of the three counts as shipped):
+Shipping rule trees (a name found in EITHER counts as shipped):
   1. rule-packs/rule-pack-<pack>.yaml               (canonical source)
   2. k8s/03-monitoring/configmap-rules-*.yaml       (ConfigMap deploy copy;
      includes configmap-rules-platform.yaml, which has NO rule-pack counterpart
      — platform-scope rules live only here)
-  3. operator-manifests/da-rule-pack-*.yaml         (PrometheusRule CRD copy)
 
-Trees 1-3 are kept in lockstep by check_rulepack_sync.py, so accepting a match
-in any of them cannot silently bless a name that isn't deployed; scanning all
-three just makes this guard independent of which copy a rule lands in first.
+The packs' copies in tree 2 are kept in lockstep by check_rulepack_sync.py, so
+accepting a match in either cannot silently bless a name that isn't deployed.
+The PrometheusRule copies are not committed (#3427): operator-generate writes
+them from tree 1 on demand, so they hold no name tree 1 lacks.
 
 Deliberately NOT checked: the portal's `expr` strings. The shipped exprs carry a
 large metadata-join wrapper (`* on(tenant) group_left(runbook_url, owner, tier)
@@ -124,37 +124,32 @@ def _rules_from_groups(
 
 
 def collect_shipped_rules(repo: Path) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Dict[str, Any]]]:
-    """Index every alert AND recording rule across the three shipping trees.
+    """Index every alert AND recording rule across the two shipping trees.
 
     Every rule file is read the way Prometheus' rule loader reads it (#3206,
     ADR-036 §12: `da-read prometheus-rules`): the packs directly; the
-    ConfigMaps' data values and the PrometheusRule specs after the manifest
-    is read the way kubectl reads it — two da-read runs. A rule file the
-    loader refuses raises `RuleFilesRefused`, naming it."""
+    ConfigMaps' data values after the manifest is read the way kubectl reads
+    it — two da-read runs. A rule file the loader refuses raises
+    `RuleFilesRefused`, naming it."""
     alerts: Dict[str, Dict[str, Any]] = {}
     records: Dict[str, Dict[str, Any]] = {}
 
-    # #3471: the three trees and which files there are rule files are the
+    # #3471: the two trees and which files there are rule files are the
     # one declaration (`RULE_SOURCES`: .yaml|yml; an undeclared YAML there
     # raises `SourcesUnlisted`, named) — not globs of this lint's own.
     cr = _lib_consumer_read
     packs = cr.RULE_PACKS.files_under(repo)
     pack_files = cr.prometheus_rule_file_results(packs)
-    # ConfigMaps wrap one or more rule documents as strings under `data:`;
-    # PrometheusRule CRD copies keep groups under `spec:`.
+    # ConfigMaps wrap one or more rule documents as strings under `data:`.
     configmaps = cr.CONFIGMAP_RULES.files_under(repo)
-    operator = ((repo / cr.OPERATOR_RULES.directory).is_dir()
-                and cr.OPERATOR_RULES.files_under(repo)) or []
-    of_kind = {"ConfigMap": ({str(p) for p in configmaps}, cr.CONFIGMAP_RULES),
-               "PrometheusRule": ({str(p) for p in operator}, cr.OPERATOR_RULES)}
-    manifest_files = [rf for rf in cr.manifest_rule_file_results(configmaps + operator)
-                      if rf.kind in of_kind and rf.manifest in of_kind[rf.kind][0]]
+    manifest_files = [rf for rf in cr.manifest_rule_file_results(configmaps)
+                      if rf.kind == "ConfigMap"]
     cr.require_read(pack_files + manifest_files)
 
     for path, rf in zip(packs, pack_files):
         _rules_from_groups(rf.documents[0], cr.RULE_PACKS.member(path), alerts, records)
     for rf in manifest_files:
-        pack = of_kind[rf.kind][1].member(rf.manifest)
+        pack = cr.CONFIGMAP_RULES.member(rf.manifest)
         _rules_from_groups(rf.documents[0], pack, alerts, records)
 
     return alerts, records
