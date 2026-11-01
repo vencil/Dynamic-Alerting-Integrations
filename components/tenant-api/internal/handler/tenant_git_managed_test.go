@@ -85,6 +85,15 @@ func TestGetTenant_GitManagedSharedFile(t *testing.T) {
 
 // The other git-managed shapes GET reports, with their reasons — the
 // `? !!binary` co-tenant key the decoder reads as In itself among them.
+//
+// For every shape and role: never the file, never its hash
+// (assertGitManagedDetail). Whether the answer may carry Out's content is
+// #3039's rule, the one TestGetTenant_GitManagedSharedFile states: a caller
+// who may not read Out gets none of it; one who may (unrestricted) is shown
+// the validation messages about Out, as for any other tenant it may read
+// (#3267: a threshold value Out writes is such a message — before, no value
+// check quoted `x_note`, so the unrestricted caller saw nothing of Out here
+// by accident, not by a stricter rule).
 func TestGetTenant_GitManagedShapes(t *testing.T) {
 	t.Parallel()
 	in := orgEnfTenantIn
@@ -96,15 +105,17 @@ func TestGetTenant_GitManagedShapes(t *testing.T) {
 		{"merge key at the top level", "base: &b\n  x_note: " + wOutSecret + "\n<<: *b\ntenants:\n  " + in + ":\n    _silent_mode: \"critical\"\n", "yaml_indirection"},
 		{"second document", "tenants:\n  " + in + ":\n    _silent_mode: \"critical\"\n---\ntenants:\n  " + orgEnfTenantOut + ":\n    x_note: " + wOutSecret + "\n", "several_documents"},
 	} {
-		t.Run(c.name, func(t *testing.T) {
-			t.Parallel()
-			f := wFixture(t, "unrestricted", c.file)
-			w := wServe(f, GetTenant(f.deps()), rbac.PermRead, "GET", "", nil)
-			assertGitManagedDetail(t, w, c.reason)
-			if strings.Contains(w.Body.String(), wOutSecret) {
-				t.Errorf("the answer carries the file's content: %s", w.Body.String())
-			}
-		})
+		for _, role := range []string{"reader", "unrestricted"} {
+			t.Run(c.name+"/"+role, func(t *testing.T) {
+				t.Parallel()
+				f := wFixture(t, role, c.file)
+				w := wServe(f, GetTenant(f.deps()), rbac.PermRead, "GET", "", nil)
+				assertGitManagedDetail(t, w, c.reason)
+				if role != "unrestricted" && strings.Contains(w.Body.String(), wOutSecret) {
+					t.Errorf("the answer carries content only a reader of %s may see: %s", orgEnfTenantOut, w.Body.String())
+				}
+			})
+		}
 	}
 }
 

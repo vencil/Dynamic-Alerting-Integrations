@@ -9,16 +9,16 @@ package gitops
 import (
 	"github.com/vencil/tenant-api/internal/confd"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
-	"gopkg.in/yaml.v3"
 )
 
 // ratchetValues is validateReplacing's value ratchet: kv judged against the
 // file the write replaces (baseRaw, baseErr: readTenantFile's result).
 //
 // ⛔ STRICT WHENEVER THE BASE IS NOT KNOWN. A missing file (ENOENT — a new
-// tenant), a read error, a file parse-tree refuses (confd.Judge) or one that
-// does not decode all mean "nothing was there that this write leaves as it
-// is", and every value finding stays an error. The opposite reading ("cannot
+// tenant), a read error, a file parse-tree refuses (confd.Judge) or one the
+// exporter's decode (cfg.DecodeTenantBody) refuses all mean "nothing was
+// there that this write leaves as it is", and every value finding stays an
+// error. The opposite reading ("cannot
 // tell, so let it through") would let a write introduce a value the exporter
 // ignores by pairing it with a broken base. Same direction as eolGuardErrs.
 //
@@ -32,8 +32,11 @@ func ratchetValues(kv cfg.KeyValidationByTenant, baseRaw []byte, baseErr error) 
 	if confd.Judge(baseRaw) != nil {
 		return kv
 	}
-	var base cfg.ThresholdConfig
-	if err := yaml.Unmarshal(baseRaw, &base); err != nil {
+	// The exporter's decode (cfg.DecodeTenantBody), as the body's (#3267):
+	// a null on disk is no value, and a dimensional key is looked up in the
+	// exporter's canonical spelling, whichever way either side wrote it.
+	base, err := cfg.DecodeTenantBody(baseRaw)
+	if err != nil {
 		return kv
 	}
 	return kv.Ratchet(cfg.PriorValues(base.Tenants))

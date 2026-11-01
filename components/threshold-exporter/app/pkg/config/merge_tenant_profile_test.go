@@ -251,6 +251,9 @@ func TestMergeTenantProfileProblemsAreNoticesNamingFileAndProfile(t *testing.T) 
 		{"_a.yaml", `_silent_mode "purple" is not a value the exporter reads`},
 		{"_profiles.yaml", "invalid `expires:`"},
 		{"_profiles.yaml", `key "oracle_wait" is declared without a platform value`},
+		// #3267: a threshold value the resolver refuses is judged, for a
+		// profile as for the tenant.
+		{"_profiles.yaml", `mysql_connections: "abc" is not a threshold the exporter reads`},
 	}
 	for _, w := range want {
 		n := 0
@@ -265,7 +268,7 @@ func TestMergeTenantProfileProblemsAreNoticesNamingFileAndProfile(t *testing.T) 
 		}
 	}
 	if len(kv.Notices) != len(want) {
-		t.Errorf("notices %d, want %d (a non-numeric value is not judged, for a profile as for the tenant): %q", len(kv.Notices), len(want), kv.Notices)
+		t.Errorf("notices %d, want %d: %q", len(kv.Notices), len(want), kv.Notices)
 	}
 
 	// Must-fire control: the same value problem in the tenant's own body is an

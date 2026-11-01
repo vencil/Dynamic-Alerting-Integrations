@@ -4,6 +4,9 @@ package gitops
 // WritePRBatch's pre-flight, readMergeBodyOnly) run the exporter's
 // non-finite predicate on what the merge WRITES — a value the file already
 // holds is carried over, not written, and does not refuse the write.
+// #3267: the predicate is every value the exporter refuses
+// (the #3267 threshold value finding, RefusedValueAt's classifier), not only a
+// non-finite one.
 
 import (
 	"context"
@@ -28,38 +31,70 @@ func addSilentMode(existing []byte) (string, error) {
 }
 
 func TestMergePaths_RefuseANonFiniteThresholdTheyWrite(t *testing.T) {
-	for _, value := range []string{"NaN", "-Inf", "+Inf:critical", "infinity"} {
+	// #3267: and every other value the exporter refuses.
+	refusals := map[string]string{"NaN": "is not a finite number", "-Inf": "is not a finite number",
+		"+Inf:critical": "is not a finite number", "infinity": "is not a finite number",
+		"abc": "is not a threshold the exporter reads", "70:high": "is not a threshold the exporter reads",
+		"1e999": "is not a threshold the exporter reads", "0x1p1024": "is not a threshold the exporter reads",
+		"": "is not a threshold the exporter reads"}
+	for value, want := range refusals {
 		t.Run(value, func(t *testing.T) {
 			dir := seedTenantRepo(t)
 			w := newTestWriter(dir, dir)
 			head := gitOut(t, dir, "rev-parse", "HEAD")
 			_, err := w.WriteMerged(context.Background(), "db-a", "op@example.com", setKey(value))
-			if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "is not a finite number") {
-				t.Fatalf("WriteMerged %q: err = %v, want the non-finite ErrValidation", value, err)
+			if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), want) {
+				t.Fatalf("WriteMerged %q: err = %v, want the ErrValidation %q", value, err, want)
 			}
 			if got := gitOut(t, dir, "rev-parse", "HEAD"); got != head {
 				t.Errorf("WriteMerged %q committed %s", value, got)
 			}
+			// The pre-flight refuses a non-finite number (#3140, strict); the
+			// other refused values are judged against the file the write
+			// replaces (#3267's ratchet), which the pre-flight does not read.
 			path := filepath.Join(dir, "db-a.yaml")
-			if err := w.readMergeBodyOnly("db-a", path, setKey(value)); !errors.Is(err, ErrValidation) {
-				t.Errorf("readMergeBodyOnly %q: err = %v, want ErrValidation", value, err)
+			err = w.readMergeBodyOnly("db-a", path, setKey(value))
+			if strict := want == "is not a finite number"; errors.Is(err, ErrValidation) != strict {
+				t.Errorf("readMergeBodyOnly %q: err = %v, want ErrValidation = %v", value, err, strict)
+			}
+		})
+	}
+}
+
+// The values the exporter reads go through the merge paths.
+func TestMergePaths_TakeAThresholdTheExporterReads(t *testing.T) {
+	for _, value := range []string{"70", "1_000", "0x1p4", "70:critical", "disable"} {
+		t.Run(value, func(t *testing.T) {
+			dir := seedTenantRepo(t)
+			w := newTestWriter(dir, dir)
+			if err := w.readMergeBodyOnly("db-a", filepath.Join(dir, "db-a.yaml"), setKey(value)); err != nil {
+				t.Errorf("readMergeBodyOnly %q: %v", value, err)
+			}
+			if _, err := w.WriteMerged(context.Background(), "db-a", "op@example.com", setKey(value)); err != nil {
+				t.Errorf("WriteMerged %q: %v", value, err)
 			}
 		})
 	}
 }
 
 func TestMergePaths_DoNotRefuseANonFiniteThresholdTheyCarry(t *testing.T) {
+	for _, held := range []string{"NaN", "abc"} {
+		t.Run(held, func(t *testing.T) { mergeCarries(t, held) })
+	}
+}
+
+func mergeCarries(t *testing.T, held string) {
 	dir := seedTenantRepo(t)
 	path := filepath.Join(dir, "db-a.yaml")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	carried := strings.Replace(string(raw), `mysql_connections: "50"`, `mysql_connections: "NaN"`, 1)
+	carried := strings.Replace(string(raw), `mysql_connections: "50"`, `mysql_connections: "`+held+`"`, 1)
 	if err := os.WriteFile(path, []byte(carried), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	gitRun(t, dir, "commit", "-am", "the file already holds NaN")
+	gitRun(t, dir, "commit", "-am", "the file already holds "+held)
 	w := newTestWriter(dir, dir)
 	if err := w.readMergeBodyOnly("db-a", path, addSilentMode); err != nil {
 		t.Errorf("readMergeBodyOnly refused a value the file already holds: %v", err)

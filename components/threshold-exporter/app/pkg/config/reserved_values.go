@@ -106,11 +106,18 @@ func checkReservedValue(k string, sv ScheduledValue, names map[string]string, ch
 	return c.problem(sv)
 }
 
-// readAlike reports whether the exporter reads a and b, two values of
-// reserved key k, the same way — by the reading k's registry `value.check`
-// is bound to. A key with no check is never "alike": with nothing to say
-// how the reader reads it, the caller must treat the value as changed.
+// readAlike reports whether the exporter reads a and b, two values of key k,
+// the same way: for a reserved key by the reading k's registry
+// `value.check` is bound to — a reserved key with no check is never
+// "alike": with nothing to say how the reader reads it, the caller must
+// treat the value as changed; for a threshold key by its row resolver's
+// reading (thresholdReadAlike, #3267). ValueFinding.unchanged's one
+// comparison of a value as read.
 func readAlike(k string, a, b ScheduledValue) bool {
+	if !baseRowsSkipKey(k) {
+		// A threshold key: its row resolver's reading (#3267).
+		return thresholdReadAlike(k, a, b)
+	}
 	c, ok := valueChecks[reservedValueChecks[k]]
 	if !ok || c.reading == nil {
 		return false
