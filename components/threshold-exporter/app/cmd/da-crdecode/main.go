@@ -56,7 +56,7 @@
 //     a document's are, and so is each item's, as it is given: kubectl does
 //     not check an item's when it reads the file, but applying an item whose
 //     do not decode does not apply it as written (it is refused, or it is
-//     changed: its annotations emptied by client-side apply, its namespace
+//     changed: its own annotations dropped by client-side apply, its namespace
 //     replaced by the one kubectl uses, a time field dropped by server-side
 //     apply of a custom resource), so it is refused here. So a caller can
 //     rely on every entry of `documents` being an object with a
