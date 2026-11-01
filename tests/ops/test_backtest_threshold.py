@@ -1299,17 +1299,43 @@ class TestWrittenValues:
         with pytest.raises(bt._NotRead, match="this backtest cannot read it the way the exporter does"):
             bt._served_written(key, (raw,))
 
-    @pytest.mark.parametrize("raw,served", [("1_000", 1000.0), ("0x1p4", 16.0)])
-    def test_a_spelling_the_exporter_reads_but_this_backtest_does_not(
-            self, tmp_path, raw, served):
-        """`1_000`、`0x1p4`：exporter 讀得懂（served-values 送 1000／16），但 `--tenant`
-        照 PR2 之前不回測（`_SPELLINGS_NOT_BACKTESTED`），不在本 PR 改結束碼。"""
-        import _lib_tenant_values as tvlib
-        bt._written_tree(str(tmp_path), "mysql_connections", (raw,))
-        got = tvlib.load_served_tree(str(tmp_path)).tenants[bt._WRITTEN_TENANTS[0]]
-        assert got.values["mysql_connections"] == served
-        with pytest.raises(bt._NotRead):
-            bt._served_written("mysql_connections", (raw,))
+    @pytest.mark.parametrize("raw,served", [
+        ("1_000", 1000.0), ("0x1p4", 16.0), ("0x1p6", 64.0), ("0x_1p4", 16.0), ("-1_0", -10.0)])
+    def test_a_spelling_the_exporter_reads_is_backtested_at_its_number(self, raw, served):
+        """#3267：`1_000`、`0x1p4` 這類寫法的數字由 exporter 讀（Go 的
+        `parseThresholdNumber`，經 served-values），讀得懂就照它送的數字回測，
+        Python 不另留一份拼法表。"""
+        assert bt._served_written("mysql_connections", (raw,)) == [(served, "warning")]
+
+    @pytest.mark.parametrize("raw,served,risk,rc,new_breaches", [
+        ("1_000", "1000", "HIGH", 1, 0),  # 3 點 → 0 點（-100%）
+        ("0x1p4", "16", "MEDIUM", 0, 4),  # 3 點 → 4 點（+33.3%）
+        ("0x1p6", "64", "LOW", 0, 3),     # 3 點 → 3 點
+    ])
+    def test_a_spelling_the_exporter_reads_changes_the_exit_code(
+            self, monkeypatch, capsys, cli_argv, raw, served, risk, rc, new_breaches):
+        """#3267（owner 裁決）：以前 `_SPELLINGS_NOT_BACKTESTED` 讓這些值不回測
+        （UNKNOWN、rc 0）；現在照 exporter 送的數字回測（`new_value` 是送出的數字），
+        rc 依回測結果。"""
+        got_rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                           "mysql_connections", "70", raw)
+        assert asked == ['tenant:mysql_threads_connected:max{tenant="t-x"}']
+        assert [(r["status"], r["risk"], r["new_value"], r["old_breach_count"],
+                 r["new_breach_count"]) for r in rows] == [
+            ("analyzed", risk, served, 3, new_breaches)]
+        assert got_rc == rc
+
+    @pytest.mark.parametrize("raw", ["1__0", "0x10", "_1", "1_", "0x1p_4"])
+    def test_a_spelling_the_exporter_refuses_stays_not_backtested(
+            self, monkeypatch, capsys, cli_argv, raw):
+        """對照組：exporter 也拒收的拼法（served-values `refused: unparsed`）維持原本
+        的不回測、UNKNOWN、rc 0，不因拿掉拼法表而改送平台預設值回測。"""
+        rc, rows, asked = self._tenant(monkeypatch, capsys, cli_argv,
+                                       "mysql_connections", "70", raw)
+        assert (rc, asked) == (0, [])
+        assert [(r["status"], r["risk"]) for r in rows] == [("not_backtested", "UNKNOWN")]
+        assert rows[0]["backtest"] == (
+            f"skipped: value {raw!r}: this backtest cannot read it the way the exporter does")
 
     def test_a_severity_change_is_two_rows(self, monkeypatch, capsys, cli_argv):
         """#3111：70 → 95:critical 是兩條 /metrics row（同目錄比對）：warning 告警
@@ -1385,6 +1411,123 @@ class TestWrittenValues:
         assert ("pg_connections", "70", None) in got
         assert ("pg_connections_critical", None, "95") in got
         assert all("old_severity" not in r for r in rows)
+
+
+class TestSpellingIsTheNumber:
+    """#3267：數字只有 exporter 一種讀法（Go 的 `parseThresholdNumber`，經
+    served-values），所以 exporter 讀得懂的非十進位寫法（`_`、`0x`／`0X`、
+    hex float 的 `p` 指數，可帶 `:critical`，舊值側或新值側）回測出來的整份
+    報告與結束碼，必須和改寫成十進位的同一個值完全相同。期望值不寫死：
+    每組跑兩次比對。"""
+
+    _VALS = [60, 80, 90, 100]
+
+    def _run(self, monkeypatch, capsys, cli_argv, metric, old, new, as_json):
+        vals = self._VALS
+
+        def query_range(url, q, lookback, step=bt.DEFAULT_STEP):
+            return [{"values": [(i, str(v)) for i, v in enumerate(vals)]}]
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        monkeypatch.setattr(bt, "query_range", query_range)
+        argv = ["--tenant", "t-x", "--metric", metric, "--old-value=" + old,
+                "--new-value=" + new, "--prometheus", "http://prom:9090"]
+        cli_argv("backtest_threshold", *argv, *(["--json"] if as_json else []))
+        with pytest.raises(SystemExit) as ei:
+            _main_exit()
+        out = capsys.readouterr().out
+        if not as_json:
+            return ei.value.code, out
+        doc = json.loads(out)
+        doc.pop("timestamp")
+        return ei.value.code, doc
+
+    # (key, old 拼法, new 拼法, old 十進位, new 十進位)
+    _PAIRS = [
+        # 新值側
+        ("mysql_connections", "70", "1_000", "70", "1000"),
+        ("mysql_connections", "70", "0x1p4", "70", "16"),
+        ("mysql_connections", "70", "0X1P4", "70", "16"),
+        ("mysql_connections", "70", "0x1p6", "70", "64"),
+        ("mysql_connections", "70", "0x_1p4", "70", "16"),
+        ("mysql_connections", "70", "0x1.8p5", "70", "48"),
+        ("mysql_connections", "70", "0x2_Bp0", "70", "43"),
+        ("mysql_connections", "70", "1_0e1", "70", "100"),
+        ("mysql_connections", "70", "8_5.5", "70", "85.5"),
+        ("mysql_connections", "70", "0x1p4:critical", "70", "16:critical"),
+        ("mysql_connections", "70", "1_000:critical", "70", "1000:critical"),
+        ("mysql_connections", "70:critical", "0X1P6:critical", "70:critical", "64:critical"),
+        ("mysql_connections_critical", "95", "0x1p6", "95", "64"),
+        # 舊值側
+        ("mysql_connections", "1_000", "70", "1000", "70"),
+        ("mysql_connections", "0x1p4", "70", "16", "70"),
+        ("mysql_connections", "0X1P-2", "70", "0.25", "70"),
+        ("mysql_connections", "0x5_5p0", "70", "85", "70"),
+        ("mysql_connections", "0x1p4:critical", "70", "16:critical", "70"),
+        ("mysql_connections", "9_5:critical", "70:critical", "95:critical", "70:critical"),
+        ("mysql_connections_critical", "0x1.7cp6", "95", "95", "95"),
+        # 兩側都是
+        ("mysql_connections", "1_000", "0x1p6", "1000", "64"),
+        ("mysql_connections", "70", "7_0", "70", "70"),  # 同一個數字：沒有變更
+        ("mysql_connections", "0x1p4:critical", "1_000:critical", "16:critical", "1000:critical"),
+    ]
+
+    @pytest.mark.parametrize("as_json", [True, False], ids=["json", "text"])
+    @pytest.mark.parametrize("key,old,new,old_dec,new_dec", _PAIRS,
+                             ids=[f"{k}:{o}->{n}" for k, o, n, _o, _n in _PAIRS])
+    def test_a_spelling_backtests_as_its_decimal(
+            self, monkeypatch, capsys, cli_argv, key, old, new, old_dec, new_dec, as_json):
+        spelled = self._run(monkeypatch, capsys, cli_argv, key, old, new, as_json)
+        decimal = self._run(monkeypatch, capsys, cli_argv, key, old_dec, new_dec, as_json)
+        assert spelled == decimal
+
+    def test_the_pairs_are_backtested(self, monkeypatch, capsys, cli_argv):
+        """前一個測試的前提：每組的十進位版本真的有被回測（不是兩邊都不回測、
+        相等得毫無意義）。"""
+        for key, _o, _n, old_dec, new_dec in self._PAIRS:
+            _rc, doc = self._run(monkeypatch, capsys, cli_argv, key, old_dec, new_dec, True)
+            if old_dec == new_dec:
+                assert doc["changes"] == [], (key, old_dec, doc)
+            else:
+                assert doc["changes"] and all(
+                    c["status"] == "analyzed" for c in doc["changes"]), (key, old_dec, new_dec, doc)
+
+
+class TestSpellingRiskBoundaries:
+    """#3267：寫成 `_`／hex float 的值照 exporter 讀出的數字落在風險級距上：
+    資料是 1..100（`>` 比較），舊值 50 有 50 個越界點，`RISK_THRESHOLDS` 的
+    界線（變化幅度 >50% HIGH、>20% MEDIUM、其餘 LOW）兩側各一例。"""
+
+    _VALS = list(range(1, 101))
+
+    @pytest.mark.parametrize("new,served,breaches,risk,rc", [
+        ("0x1.94p5", "50.5", 50, "LOW", 0),  # 0%（門檻變了、越界點數不變）
+        ("0x2Dp0", "45", 55, "LOW", 0),      # +10%（0–20% 之間）
+        ("5_5", "55", 45, "LOW", 0),         # -10%
+        ("0x28p0", "40", 60, "LOW", 0),      # +20%：LOW 上界（不大於 20）
+        ("6_0", "60", 40, "LOW", 0),         # -20%：LOW 上界
+        ("0x27p0", "39", 61, "MEDIUM", 0),   # +22%：MEDIUM 下界
+        ("0X3Dp0", "61", 39, "MEDIUM", 0),   # -22%：MEDIUM 下界
+        ("2_5", "25", 75, "MEDIUM", 0),      # +50%：MEDIUM 上界（不大於 50）
+        ("0x4Bp0", "75", 25, "MEDIUM", 0),   # -50%：MEDIUM 上界
+        ("0x18p0", "24", 76, "HIGH", 1),     # +52%：HIGH 下界
+        ("7_6", "76", 24, "HIGH", 1),        # -52%：HIGH 下界
+    ])
+    def test_boundaries(self, monkeypatch, capsys, cli_argv, new, served, breaches, risk, rc):
+        vals = self._VALS
+
+        def query_range(url, q, lookback, step=bt.DEFAULT_STEP):
+            return [{"values": [(i, str(v)) for i, v in enumerate(vals)]}]
+        monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
+        monkeypatch.setattr(bt, "query_range", query_range)
+        cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
+                 "--old-value", "50", "--new-value=" + new,
+                 "--prometheus", "http://prom:9090", "--json")
+        with pytest.raises(SystemExit) as ei:
+            _main_exit()
+        (row,) = json.loads(capsys.readouterr().out)["changes"]
+        assert (row["status"], row["new_value"], row["old_breach_count"],
+                row["new_breach_count"], row["risk"]) == ("analyzed", served, 50, breaches, risk)
+        assert ei.value.code == rc
 
 
 class TestMalformedObservedMap:

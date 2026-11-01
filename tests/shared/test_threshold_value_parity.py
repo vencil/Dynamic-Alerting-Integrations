@@ -151,12 +151,10 @@ def test_backtest_reads_a_base_key_value_as_the_exporter_does(row):
         got = "not read"
     if row["row_disabled"]:
         assert got is None, row
-    elif row["ok"] and row["float_ok"] and bt._SPELLINGS_NOT_BACKTESTED.search(value):
-        # `1_000`, `0x1p4`: read by the exporter, not backtested by
-        # `--tenant` (as before #3140 PR2; `_SPELLINGS_NOT_BACKTESTED`).
-        assert got == "not read", row
     elif row["ok"] and row["float_ok"]:
-        assert got == (float(row["value_part"]), row["severity"]), row
+        # `1_000`, `0x1p4` included: backtested at the number the exporter
+        # serves (#3267), with no spelling table of this tool's own.
+        assert got == (_number(row["value_part"]), row["severity"]), row
     else:
         assert got in ("not read", (80.0, "warning")), (row, got)
 
