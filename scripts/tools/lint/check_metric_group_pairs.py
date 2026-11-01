@@ -29,11 +29,12 @@ coverage than exists):
     deliberately NOT ledgered: the check is "paired but unlabelled", not
     "every alert must have a metric_group".
 
-KNOWN_UNGROUPED: the 4 kubernetes pairs already violating when this gate
-landed (the #1199 bug itself), grandfathered as INFO. The list is
+KNOWN_UNGROUPED: pairs grandfathered as INFO. It held the 4 kubernetes
+pairs that were violating when this gate landed (the #1199 bug itself);
+#1199 gave each a static `metric_group` and emptied it. The list is
 EXIT-LOCKED (same discipline as check_threshold_reachability.KNOWN_UNWIRED):
 a grandfathered pair that gets fixed, or stops being a detected pair, is a
-HARD error — the list can only shrink.
+HARD error — the list can only shrink, so it stays empty.
 
 SCOPE NOTE (deliberate non-gate): the WS2a S2 or-masking scan is NOT gated
 here or anywhere — its same-label-set `or` heuristic needs human judgment
@@ -63,16 +64,10 @@ import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads 
 
 CRITICAL_SUFFIX = "Critical"
 
-# The 4 kubernetes upgrade pairs already missing `metric_group` on both sides
-# when this gate landed — the shipped #1199 (TRK-338) double-notification
-# bug. Grandfathered as INFO; the label fix lands via #1199. EXIT-LOCKED:
-# each entry must be removed in the same PR that fixes its pair.
-KNOWN_UNGROUPED: dict[str, str] = {
-    "PodContainerHighCPU": "MISSING_BOTH — severity-dedup inert, double notification (#1199 / TRK-338)",
-    "PodContainerHighMemory": "MISSING_BOTH — severity-dedup inert, double notification (#1199 / TRK-338)",
-    "PodContainerCPUThrottled": "MISSING_BOTH — severity-dedup inert, double notification (#1199 / TRK-338)",
-    "ContainerOOMKilled": "MISSING_BOTH — severity-dedup inert, double notification (#1199 / TRK-338)",
-}
+# Grandfathered violating pairs (INFO). The 4 kubernetes pairs that seeded it
+# (the #1199 / TRK-338 double-notification bug) were fixed by #1199 and removed.
+# EXIT-LOCKED: entries can only be removed — never add one; fix the pair.
+KNOWN_UNGROUPED: dict[str, str] = {}
 
 # #3471: the two trees are the rule-source declaration's entries — their
 # directories and which files there are rule files (.yaml|yml; an undeclared
@@ -216,9 +211,9 @@ def main(argv: list[str] | None = None) -> int:
             "bug #1199)"))
     parser.add_argument(
         "--ci", action="store_true",
-        help=i18n_text("新缺標對或 KNOWN_UNGROUPED exit-lock 破口即 exit 1（已知 4 對為 INFO）",
+        help=i18n_text("新缺標對或 KNOWN_UNGROUPED exit-lock 破口即 exit 1（已列管者為 INFO）",
                        "exit 1 on NEW ungrouped pairs or a KNOWN_UNGROUPED "
-                       "exit-lock breach (the known 4 are INFO)"))
+                       "exit-lock breach (grandfathered pairs are INFO)"))
     args = parser.parse_args(argv)
 
     try:
@@ -250,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(
         f"✅ metric-group pairs OK — {len(infos)} known-ungrouped "
-        "(grandfathered, #1199), 0 new drift.",
+        "(grandfathered), 0 new drift.",
         file=sys.stderr)
     return EXIT_OK
 

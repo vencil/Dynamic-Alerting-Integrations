@@ -163,6 +163,7 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 1m
       labels:
+        metric_group: container_cpu
         severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
@@ -185,6 +186,7 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 1m
       labels:
+        metric_group: container_cpu
         severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
@@ -207,6 +209,7 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 1m
       labels:
+        metric_group: container_memory
         severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
@@ -229,6 +232,7 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 1m
       labels:
+        metric_group: container_memory
         severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
@@ -251,6 +255,7 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 15m
       labels:
+        metric_group: container_cpu_throttle
         severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
@@ -278,6 +283,7 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 15m
       labels:
+        metric_group: container_cpu_throttle
         severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:
@@ -305,6 +311,7 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
+        metric_group: container_oom_killed
         severity: warning
         tenant: '{{ $labels.tenant }}'
       annotations:
@@ -333,6 +340,7 @@ spec:
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
+        metric_group: container_oom_killed
         severity: critical
         tenant: '{{ $labels.tenant }}'
       annotations:

@@ -780,6 +780,18 @@ python3 scripts/tools/ops/backtest_threshold.py --config-dir conf.d \
 
 Comparison report showing impact of threshold changes on historical data (potential alerts increased/decreased).
 
+**JSON fields `impact_pct` / `impact_kind`** ([#3159](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3159)): every `analyzed` result carries both (`not_backtested` / `no_data` / `query_error` carry neither). `impact_pct` is the change in firing points under the new threshold relative to the old threshold's, in percent, always a float (rounded to one decimal place); it is `null` when there is nothing to be relative to — the old threshold never fired, or the old side has no threshold. `impact_kind` says which case the row is:
+
+| `impact_kind` | Old / new side | `impact_pct` |
+|------|------|------|
+| `relative` | Both sides have a threshold, and the old one fires | The percentage; `-100.0` when the new one no longer fires |
+| `no_firing` | Both sides have a threshold, and neither fires | `null` |
+| `starts_firing` | Both sides have a threshold, and only the new one fires | `null` |
+| `newly_enabled` | The old side has no threshold (no value → value) | `null` |
+| `disabled` | The new side has no threshold (`disable`, or a value the exporter refuses) | `-100.0` when the old threshold fires, else `null` |
+
+⚠️ **Breaking**: a newly enabled row that fires used to carry a bare `Infinity` (not valid JSON: a strict parser refuses the whole document), a row that starts firing the string `"Inf"`, and every other row `0` / `0.0` / `-100.0` — three types in one field, with `-100` meaning both "disabled" and "no longer fires". There was no `impact_kind`. `-o` and `--json` are written by the same encoder, byte for byte the same.
+
 The firing percentage is over every sample in the lookback, NaN included: the alert is silent at a NaN step, so the percentage is the share of the whole lookback. Every `analyzed` / `no_data` result carries `query`, the exact PromQL sent; the text report prints `query: ...` under the message, and the Markdown table has a `Query` column (`—` for a `not_backtested` change, which sends none).
 
 A change with no data at all, or with only NaN samples, is `no_data` (risk `UNKNOWN`, no effect on the exit code); the message is `No historical data found in Prometheus` for the former and `Only NaN samples in lookback window` for the latter ([#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963); all-NaN used to be reported as analyzed). There is one query, so no other query to fall back to. `+Inf` / `-Inf` are real samples and compare as usual.
@@ -1259,7 +1271,7 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 | `1` | CI mode: critical risk found |
 | `2` | Caller error: bad arguments, or no cardinality data obtained. The `--json` `reason` separates the two cases: a failed Prometheus query (unreachable, non-2xx HTTP, `status` other than success, or an unparsable response — HTTP 200 but not JSON or not an object, e.g. a proxy returning HTML; or `success` in a shape that is not a matrix, e.g. no `data` or a row without `values` or `histograms`, [#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074) — no `data` used to be reported as `no_cardinality_data` (rc 2) and a row without `values` or `histograms` skipped (rc 0)) ⇒ `"status": "caller_error"`, `"reason": "prometheus_query_error"`, plus `"error": "<raw>"` (#3065; it used to be `"status": "no_data"`, `no_cardinality_data` like the next case); a successful query with no `tenant_threshold_*` series ⇒ `"status": "no_data"`, `"reason": "no_cardinality_data"`. `da-tools cardinality-forecast --prometheus <URL> --json \| jq -r '.reason // "ok"'` |
 
-**Sample values** ([#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)): every sample is read once, by the lib. A value it cannot read is a malformed answer, exit code `2` (`prometheus_query_error`). `+Inf` / `-Inf` / `NaN` are left out of the regression; how many were dropped is in `summary.non_finite_samples_dropped` of `--json` and in the text report. A tenant whose samples are all non-finite is not listed; when that holds for every tenant the run is `no_cardinality_data` (`2`).
+**Sample values** ([#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)): every sample is read once, by the lib. A value it cannot read is a malformed answer, exit code `2` (`prometheus_query_error`). `+Inf` / `-Inf` / `NaN` are left out of the regression, and so is a sample whose timestamp is not finite (a server writing `Infinity` / `NaN` there; [#3159](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3159), it used to make the slope, R² and days to the limit NaN); how many were dropped is in `summary.non_finite_samples_dropped` of `--json` and in the text report. A tenant whose sample values are all non-finite is not listed; when that holds for every tenant the run is `no_cardinality_data` (`2`). A tenant with finite values whose timestamps are all non-finite is still listed, with `data_points` `0`. Finite values or timestamps so large that the regression itself overflows still give NaN results: the text report prints them, and `--json` exits with the crash code (`output_not_serializable`).
 
 #### config-history
 

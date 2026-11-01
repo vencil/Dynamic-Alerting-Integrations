@@ -387,9 +387,10 @@ def scan_helm_values(path: Path, rel: str, chart: str,
 
 def scan_k8s_manifest(path: Path, rel: str, docs: Optional[list] = None) -> List[Finding]:
     def ctx(doc):   # a Kubernetes object: the manifest reading's guarantee
+        # (#3426), whose `metadata` is a mapping or null and whose
+        # `namespace` is a string or null (#3490)
         meta = doc.get("metadata")
-        ns = meta.get("namespace") if isinstance(meta, dict) else None
-        return ns if isinstance(ns, str) else None
+        return meta.get("namespace") if isinstance(meta, dict) else None
     return _scan_docs(path.read_text(encoding="utf-8"), _manifest_docs(path, docs),
                       rel, ctx, apply_bare=True)
 

@@ -777,6 +777,18 @@ python3 scripts/tools/ops/backtest_threshold.py --config-dir conf.d \
 
 對比報告，顯示各項 threshold 變更在歷史數據上的影響（可能增加/減少的 alert）。
 
+**JSON 欄位 `impact_pct`／`impact_kind`**（[#3159](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3159)）：每筆 `analyzed` 結果都帶這兩個欄位（`not_backtested`／`no_data`／`query_error` 沒有）。`impact_pct` 是新門檻的觸發點數相對舊門檻觸發點數的變化百分比，一律是 float（取到小數一位）；舊門檻沒有觸發點、或舊側沒有門檻，無從相對時為 `null`。`impact_kind` 說明是哪一種情境：
+
+| `impact_kind` | 舊／新兩側 | `impact_pct` |
+|------|------|------|
+| `relative` | 兩側都有門檻，舊門檻有觸發 | 百分比；新門檻不再觸發時為 `-100.0` |
+| `no_firing` | 兩側都有門檻，都沒有觸發 | `null` |
+| `starts_firing` | 兩側都有門檻，只有新門檻觸發 | `null` |
+| `newly_enabled` | 舊側沒有門檻（無值→值） | `null` |
+| `disabled` | 新側沒有門檻（`disable`，或 exporter 拒收的值） | 舊門檻有觸發時為 `-100.0`，否則 `null` |
+
+⚠️ **Breaking**：先前新啟用且會觸發的列寫出裸 `Infinity`（不是合法 JSON，嚴格解析器整份拒收），開始觸發的列寫字串 `"Inf"`，其餘為 `0`／`0.0`／`-100.0`，同一欄混了三種型別，`-100` 也同時代表「停用」與「不再觸發」。沒有 `impact_kind` 這個欄位。`-o` 與 `--json` 由同一個編碼器寫出，內容逐位元組相同。
+
 觸發比例的分母是回看期間的全部樣本點，NaN 也算在內：NaN 那段時間告警不會響，比例代表的是「佔整段回看時間多少」。每筆 `analyzed`／`no_data` 結果帶 `query` 欄位，即實際送出的 PromQL；文字報告在訊息下一行印 `query: ...`，Markdown 表格多一欄 `Query`（`not_backtested` 沒有查詢，該欄為 `—`）。
 
 查不到任何資料，或查到的樣本全是 NaN，該變更都標為 `no_data`（風險 `UNKNOWN`，不影響結束碼），前者訊息為 `No historical data found in Prometheus`，後者為 `Only NaN samples in lookback window`（[#2963](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2963)；先前全 NaN 會被報成已分析）。只查一次，所以沒有別的查詢可換。`+Inf`／`-Inf` 是真實樣本，照常比較。
@@ -1256,7 +1268,7 @@ da-tools cardinality-forecast --prometheus http://prometheus:9090 --ci
 | `1` | CI 模式：有 critical 風險 |
 | `2` | 呼叫端錯誤：參數錯誤；或取不到基數資料。`--json` 的 `reason` 分得開兩種：Prometheus 查詢失敗（連不上、HTTP 非 2xx、`status` 非 success、回應無法解析——HTTP 200 但非 JSON 或非物件，例如 proxy 回 HTML；或回 `success` 但形狀不是 matrix，例如缺 `data`、某一列既沒有 `values` 也沒有 `histograms`，[#3074](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3074)，之前缺 `data` 時報 `no_cardinality_data`（rc 2），某一列既沒有 `values` 也沒有 `histograms` 時略過該列（rc 0））⇒ `"status": "caller_error"`、`"reason": "prometheus_query_error"`，並帶 `"error": "<原文>"`（#3065，之前與下一種同為 `"status": "no_data"`、`no_cardinality_data`）；查詢成功但沒有任何 `tenant_threshold_*` series ⇒ `"status": "no_data"`、`"reason": "no_cardinality_data"`。`da-tools cardinality-forecast --prometheus <URL> --json \| jq -r '.reason // "ok"'` |
 
-**樣本值**（[#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)）：每個樣本值由 lib 讀一次。讀不懂的值是回應格式錯誤，結束碼 `2`（`prometheus_query_error`）。`+Inf`／`-Inf`／`NaN` 不進迴歸，丟掉的數量寫在 `--json` 的 `summary.non_finite_samples_dropped` 與文字報告；樣本全是非有限值的租戶不列入，所有租戶都如此時是 `no_cardinality_data`（`2`）。
+**樣本值**（[#3213](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3213)）：每個樣本值由 lib 讀一次。讀不懂的值是回應格式錯誤，結束碼 `2`（`prometheus_query_error`）。`+Inf`／`-Inf`／`NaN` 不進迴歸；時間戳不是有限數的樣本（伺服器寫成 `Infinity`／`NaN`）同樣不進迴歸（[#3159](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3159)，先前會讓斜率、R² 與觸頂天數成為 NaN）。丟掉的數量寫在 `--json` 的 `summary.non_finite_samples_dropped` 與文字報告；樣本值全是非有限值的租戶不列入，所有租戶都如此時是 `no_cardinality_data`（`2`）；值有限、但時間戳全不是有限數的租戶仍列出，`data_points` 為 `0`。值或時間戳有限、但大到讓迴歸本身溢位時，迴歸結果仍是 NaN：文字報告照印，`--json` 以 crash 碼離開（`output_not_serializable`）。
 
 #### config-history
 

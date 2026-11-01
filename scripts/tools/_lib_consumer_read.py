@@ -811,9 +811,12 @@ def rule_object_problem(doc: "dict[str, Any]") -> "str | None":
     kind = doc.get("kind")
     if kind not in RULE_FILE_KINDS:
         return None
+    # *doc* is one of kubectl's reading (every caller passes
+    # kubernetes_documents' output): `metadata` is a mapping or null, its
+    # `name` a string or null (#3490).
     meta = doc.get("metadata")
     name = meta.get("name") if isinstance(meta, dict) else None
-    if not isinstance(name, str) or not name:
+    if not name:
         return f"a {kind} with no string metadata.name (kubectl: resource name may not be empty)"
     if kind == "ConfigMap":
         unknown = sorted(k for k in doc if k not in CONFIGMAP_FIELDS)

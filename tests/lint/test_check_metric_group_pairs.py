@@ -1,9 +1,10 @@
 """Tests for scripts/tools/lint/check_metric_group_pairs.py (TRK-339 WS2a / #1200; bug #1199).
 
 The gate asserts every X/XCritical alert pair carries a shared `metric_group`
-label (ADR-001 severity-dedup key), grandfathering the 4 kubernetes pairs
-already violating when it landed (#1199 / TRK-338). Each test pins one branch:
-  - the live repo is green (4 grandfathered, 0 new drift; MariaDB pair PASSes)
+label (ADR-001 severity-dedup key). The 4 kubernetes pairs grandfathered
+when it landed were fixed by #1199 (TRK-338). Each test pins one branch:
+  - the live repo is green (0 grandfathered, 0 new drift; the k8s and MariaDB
+    pairs PASS)
   - pairing needs BOTH the exact `Critical`-suffix name match AND severity
     corroboration (no false pairs from name coincidence)
   - MISSING_BOTH / MISSING_ONE / VALUE_MISMATCH all fail --ci when new
@@ -41,20 +42,21 @@ def test_real_repo_has_no_new_drift():
     assert result["errors"] == [], result["errors"]
 
 
-def test_grandfather_list_is_exactly_the_4_k8s_pairs():
+def test_grandfather_list_is_empty():
+    """#1199 fixed the 4 kubernetes pairs; the exit-locked list can only
+    shrink, so it stays empty."""
     result = gate.run_check()
-    assert len(result["infos"]) == len(gate.KNOWN_UNGROUPED) == 4
-    assert not any("STALE-EXEMPTION" in e for e in result["errors"])
+    assert gate.KNOWN_UNGROUPED == {}
+    assert result["infos"] == []
 
 
-def test_sanity_anchor_k8s_pairs_detected_missing_both():
-    """WS2a scan anchor: the four #1199 pairs are detected AND verdicted
-    MISSING_BOTH on the real artifacts (the scanner actually reaches them)."""
+def test_sanity_anchor_k8s_pairs_detected_and_pass():
+    """WS2a scan anchor: the four #1199 pairs are still detected on the real
+    artifacts (the scanner reaches them) and now verdict PASS."""
     verdicts = gate.detect_pairs(gate.collect_alerts())
     for base in ("PodContainerHighCPU", "PodContainerHighMemory",
                  "PodContainerCPUThrottled", "ContainerOOMKilled"):
-        assert verdicts.get(base) == "MISSING_BOTH", (base, verdicts.get(base))
-        assert base in gate.KNOWN_UNGROUPED
+        assert verdicts.get(base) == "PASS", (base, verdicts.get(base))
 
 
 def test_sanity_anchor_mariadb_pair_passes():
