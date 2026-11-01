@@ -794,7 +794,9 @@ class TestPlatformFileSpelling:
         b.mkdir()
         _write_file(a / "_defaults.yaml", "defaults:\n  mysql_connections: 10\n")
         _write_file(b / "_defaults.yml", "defaults:\n  mysql_connections: 20\n")
-        _write_file(b / "tenant-b.yaml", "tenants:\n  t-b:\n    x: '1'\n")
+        # A key the carrier declares: one it does not is read by nothing,
+        # and `da-guard write` refuses to write it (#3489).
+        _write_file(b / "tenant-b.yaml", "tenants:\n  t-b:\n    mysql_connections: '1'\n")
         out = Path(config_dir) / "output"
         cli_argv("assemble", "--sources", f"{a},{b}", "--output", str(out))
         assert main() == 0
@@ -832,7 +834,9 @@ class TestPlatformFileSpelling:
         a = Path(config_dir) / "team-a"
         a.mkdir()
         _write_file(a / "_defaults.yml", "defaults:\n  mysql_connections: 10\n")
-        _write_file(a / "tenant-a.yaml", "tenants:\n  t-a:\n    x: '1'\n")
+        # A key the carrier declares: one it does not is read by nothing,
+        # and `da-guard write` refuses to write it (#3489).
+        _write_file(a / "tenant-a.yaml", "tenants:\n  t-a:\n    mysql_connections: '1'\n")
         out = Path(config_dir) / "output"
         out.mkdir()
         _write_file(out / "_defaults.yml", "defaults:\n  mysql_connections: 99\n")
@@ -906,7 +910,9 @@ class TestTheExporterReadsTheOutputDirNotJustOurCarriers:
     def _sources(self, config_dir, *files):
         s = Path(config_dir) / "team"
         s.mkdir(parents=True, exist_ok=True)
-        _write_file(s / "_defaults.yaml", "defaults:\n  x: 1\n")
+        # Declares the key the tenant files write: one it does not declare
+        # is read by nothing, and `da-guard write` refuses to write it (#3489).
+        _write_file(s / "_defaults.yaml", "defaults:\n  mysql_connections: 1\n")
         for fn, tenant in files:
             _write_file(s / fn, _TENANT_DOC.format(t=tenant, v=1))
         return s

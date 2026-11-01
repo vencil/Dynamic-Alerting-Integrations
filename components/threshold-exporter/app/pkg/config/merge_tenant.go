@@ -973,6 +973,13 @@ func rootDefaultsCarrier(configDir string) (path string, data []byte, ok bool) {
 	return rootCarrierOf(scan)
 }
 
+// RootCarrier is rootCarrierOf for a caller outside the package: the root
+// carrier this scan's chain selects, with the bytes the walk read (an
+// overlay's included). da-guard's key verdict reads Policy-as-Code's
+// `_policies` from it, as policy_engine reads them from parse-tree's
+// selection of the same carrier (#3489).
+func (s *TreeScan) RootCarrier() (path string, data []byte, ok bool) { return rootCarrierOf(s) }
+
 // rootCarrierOf is the root defaults carrier scan's chain selects: its path
 // and bytes, false when the root has none (or its bytes were not kept).
 func rootCarrierOf(scan *TreeScan) (path string, data []byte, ok bool) {

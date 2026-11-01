@@ -230,6 +230,7 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 		fmt.Fprintf(errOut, "Usage: %s [flags]\n", programName)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> [--at <RFC3339>]\n", programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir>\n", programName, effectiveCmd)
+		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> [--at <RFC3339>]\n", programName, keyVerdictCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --metric <key> [--metric <key> ...]\n", programName, keyRefsCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> [--path <rel> --input <file|->]\n", programName, parseTreeCmd)
 		fmt.Fprintf(errOut, "       %s %s --config-dir <dir> --input <file|-> [--dry-run] [--json]\n", programName, writeCmd)
@@ -239,6 +240,8 @@ func parseFlags(args []string, errOut io.Writer) (*flags, error) {
 			"(see '%s %s -h').\n", servedValuesCmd, programName, servedValuesCmd)
 		fmt.Fprintf(errOut, "'%s' prints every tenant's effective config as tenant-api's /effective resolves it, "+
 			"with profile binding and per-key sources, as JSON (see '%s %s -h').\n", effectiveCmd, programName, effectiveCmd)
+		fmt.Fprintf(errOut, "'%s' prints every tenant key the shared key verdict reads as unread at severity ERROR, "+
+			"as JSON (see '%s %s -h').\n", keyVerdictCmd, programName, keyVerdictCmd)
 		fmt.Fprintf(errOut, "'%s' prints every key that belongs to the given metric keys as the exporter judges it "+
 			"(retired alias spellings, _critical, dimensional keys), as JSON (see '%s %s -h').\n",
 			keyRefsCmd, programName, keyRefsCmd)
@@ -288,6 +291,9 @@ func runWith(args []string, stdout, errOut io.Writer, check checkFunc) int {
 	}
 	if len(args) > 0 && args[0] == effectiveCmd {
 		return runEffective(args[1:], stdout, errOut)
+	}
+	if len(args) > 0 && args[0] == keyVerdictCmd {
+		return runKeyVerdict(args[1:], stdout, errOut)
 	}
 	if len(args) > 0 && args[0] == keyRefsCmd {
 		return runKeyRefs(args[1:], stdout, errOut)
