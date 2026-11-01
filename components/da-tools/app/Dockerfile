@@ -102,7 +102,7 @@ RUN chmod +x /usr/local/bin/da-read
 # buildx resolves this ref per TARGETPLATFORM, which relies on the digest
 # being the multi-arch index (the form Renovate pins). Upstream's Dockerfile
 # puts amtool at /bin/amtool; it is a static Go binary, so musl is fine.
-COPY --from=prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a /bin/amtool /usr/local/bin/amtool
+COPY --from=prom/alertmanager:v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b /bin/amtool /usr/local/bin/amtool
 # Apache-2.0 §4: the upstream image carries no LICENSE / NOTICE, so they are
 # vendored verbatim from the same Alertmanager release the COPY --from above pins.
 COPY third_party/alertmanager/LICENSE third_party/alertmanager/NOTICE /usr/share/doc/amtool/

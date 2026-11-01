@@ -18,7 +18,7 @@
 // higher of the two requirements.
 module github.com/vencil/dynamic-alerting/components/da-read
 
-go 1.26.8
+go 1.26.10
 
 // #2295: parse URLs as the prom/alertmanager release binaries do. Go 1.26 made
 // net/url refuse a second colon in an http(s) host (`http://h:80:3128/`) by
@@ -29,7 +29,7 @@ go 1.26.8
 godebug urlstrictcolons=0
 
 require (
-	github.com/prometheus/alertmanager v0.34.1
+	github.com/prometheus/alertmanager v0.34.2
 	github.com/prometheus/common v0.71.0
 	github.com/prometheus/prometheus v0.315.1
 	go.yaml.in/yaml/v2 v2.4.4

@@ -1,8 +1,8 @@
 {
   "@context": "https://openvex.dev/ns/v0.2.0",
-  "@id": "govulncheck/vex:5430eac6c0cd9b1bf9732540c0be453f90b296242ee17426a28a1936ad5c31f8",
+  "@id": "govulncheck/vex:4a8d11c846175ebe182c5bf82443d32551265cccd432604fb2e45e56a0c85b37",
   "author": "Unknown Author",
-  "timestamp": "2026-09-23T12:11:31.3556692Z",
+  "timestamp": "2026-11-01T15:41:43.481812253Z",
   "version": 1,
   "tooling": "https://pkg.go.dev/golang.org/x/vuln/cmd/govulncheck",
   "statements": [
@@ -69,7 +69,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260817133844-d7598b714141+dirty"
+              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20261021132403-bae3eced0a53+dirty"
             }
           ]
         }
@@ -91,7 +91,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260817133844-d7598b714141+dirty"
+              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20261021132403-bae3eced0a53+dirty"
             }
           ]
         }
@@ -113,7 +113,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20260817133844-d7598b714141+dirty"
+              "@id": "pkg:golang/github.com%2Fprometheus%2Fprometheus@v0.0.0-20261021132403-bae3eced0a53+dirty"
             }
           ]
         }
@@ -131,7 +131,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.54.0"
+              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.57.0"
             }
           ]
         }
@@ -142,11 +142,11 @@
     },
     {
       "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-6303",
-        "name": "GO-2026-6303",
-        "description": "Source-address critical option not enforced for non-public-key auth callbacks in golang.org/x/crypto/ssh",
+        "@id": "https://pkg.go.dev/vuln/GO-2026-6860",
+        "name": "GO-2026-6860",
+        "description": "Avoid quadratic complexity when coalescing text nodes in html in golang.org/x/net",
         "aliases": [
-          "CVE-2026-56854"
+          "CVE-2026-78661"
         ]
       },
       "products": [
@@ -154,7 +154,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.54.0"
+              "@id": "pkg:golang/golang.org%2Fx%2Fnet@v0.60.0"
             }
           ]
         }
@@ -165,12 +165,11 @@
     },
     {
       "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-6348",
-        "name": "GO-2026-6348",
-        "description": "Heap Memory Exhaustion (OOM) via HTTP/2 DATA Frame Fragmentation in google.golang.org/grpc",
+        "@id": "https://pkg.go.dev/vuln/GO-2026-6866",
+        "name": "GO-2026-6866",
+        "description": "Check all ancestor namespace transitions when rendering raw text in html in golang.org/x/net",
         "aliases": [
-          "CVE-2026-84304",
-          "GHSA-vp52-pcj8-j9qc"
+          "CVE-2026-97045"
         ]
       },
       "products": [
@@ -178,28 +177,7 @@
           "@id": "Unknown Product",
           "subcomponents": [
             {
-              "@id": "pkg:golang/google.golang.org%2Fgrpc@v1.82.1"
-            }
-          ]
-        }
-      ],
-      "status": "affected"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-6354",
-        "name": "GO-2026-6354",
-        "description": "Prevent DoS on deadlocked undecided channel in golang.org/x/crypto/ssh",
-        "aliases": [
-          "CVE-2026-78662"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.54.0"
+              "@id": "pkg:golang/golang.org%2Fx%2Fnet@v0.60.0"
             }
           ]
         }
@@ -207,75 +185,6 @@
       "status": "not_affected",
       "justification": "vulnerable_code_not_present",
       "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-6355",
-        "name": "GO-2026-6355",
-        "description": "Prevent DoS on deadlocked established channel in golang.org/x/crypto/ssh",
-        "aliases": [
-          "CVE-2026-56855"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/golang.org%2Fx%2Fcrypto@v0.54.0"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-6441",
-        "name": "GO-2026-6441",
-        "description": "Bypass of xDS RBAC HTTP filter header matching in google.golang.org/grpc",
-        "aliases": [
-          "CVE-2026-84303",
-          "GHSA-qc2q-p7wx-3px3"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/google.golang.org%2Fgrpc@v1.82.1"
-            }
-          ]
-        }
-      ],
-      "status": "not_affected",
-      "justification": "vulnerable_code_not_present",
-      "impact_statement": "Govulncheck determined that the vulnerable code isn't called"
-    },
-    {
-      "vulnerability": {
-        "@id": "https://pkg.go.dev/vuln/GO-2026-6443",
-        "name": "GO-2026-6443",
-        "description": "Server panic via missing authority or Host headers in google.golang.org/grpc",
-        "aliases": [
-          "CVE-2026-84445",
-          "GHSA-2v4p-qf9q-27wj"
-        ]
-      },
-      "products": [
-        {
-          "@id": "Unknown Product",
-          "subcomponents": [
-            {
-              "@id": "pkg:golang/google.golang.org%2Fgrpc@v1.82.1"
-            }
-          ]
-        }
-      ],
-      "status": "affected"
     }
   ]
 }

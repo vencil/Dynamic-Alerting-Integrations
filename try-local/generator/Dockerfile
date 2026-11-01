@@ -28,7 +28,7 @@ RUN apk --no-cache upgrade && \
 
 # amtool: without it the service answers every write 503 amtool_missing
 # (ADR-036 §3). The same ref the da-tools image copies it from.
-COPY --from=prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a /bin/amtool /usr/local/bin/amtool
+COPY --from=prom/alertmanager:v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b /bin/amtool /usr/local/bin/amtool
 
 USER nonroot:nonroot
 
