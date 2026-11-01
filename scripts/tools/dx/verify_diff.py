@@ -605,7 +605,8 @@ def run_pytest(result: dict, xdist_threshold: int, timeout_s: int,
     """實跑選中的 pytest 集。回傳 exit code（0 綠、1 有紅）。
 
     *json_mode*（#3448）：stdout 只放 run() 寫出的那份文件，pytest 的輸出
-    （它寫在自己的 stdout）改導到 fd 2。"""
+    （它寫在自己的 stdout）改導到 fd 2；fd 2 在啟動時就關了（sys.stderr
+    為 None）則丟棄，不讓它進 stdout。"""
     if result["mode"] == "empty" and not result["external_suites"]:
         _warn("選集為空——本次 diff 無 Python 測試面，不跑 pytest。")
         return EXIT_OK
@@ -629,9 +630,11 @@ def run_pytest(result: dict, xdist_threshold: int, timeout_s: int,
     env = dict(os.environ)
     env.setdefault("PYTHONIOENCODING", "utf-8")  # zh-TW Windows cp950 防線
     _warn("執行: " + " ".join(argv[2:]))
-    sys.stderr.flush()  # our lines before the child's, on the same fd
+    child_out = None
+    if json_mode:
+        child_out = 2 if sys.stderr is not None else subprocess.DEVNULL
     proc = subprocess.run(argv, cwd=str(repo_root), env=env,
-                          timeout=timeout_s, stdout=2 if json_mode else None)
+                          timeout=timeout_s, stdout=child_out)
     return EXIT_OK if proc.returncode == 0 else EXIT_VIOLATION
 
 
