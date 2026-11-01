@@ -1392,7 +1392,9 @@ func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf f
 // a key's VALUE and spelling are.
 //
 // Values repeats, one finding each, the Errors entries that are about a
-// reserved key's VALUE (CheckReservedValue). They are in Errors too, so a
+// reserved key's VALUE (CheckReservedValue), a reserved key's schedule
+// (#3269) or a threshold key's value the row resolvers refuse
+// (thresholdRefusalIn, #3267). They are in Errors too, so a
 // caller that does not Ratchet stays strict; Ratchet is how a write gate
 // lets a value already on disk through when the write leaves it as the
 // exporter reads it.
@@ -1403,7 +1405,7 @@ func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf f
 type KeyValidation struct {
 	Errors  []string       // blocking channel: bad expires, version-label violations, an unknown _profile, a reserved value the exporter ignores, ...
 	Notices []string       // advisory channel: #1231 deprecation notices, ratcheted reserved values; MUST never block a write
-	Values  []ValueFinding // the Errors entries about a reserved value, for Ratchet (#3227)
+	Values  []ValueFinding // the Errors entries about a reserved or threshold value, for Ratchet (#3227, #3267)
 	// VersionLabels repeats the Errors entries about a dimensional key's
 	// `version` label (ADR-024 OQ-6), and Renames the Notices about a
 	// retired key spelling (#1231): the two key checks da-guard
@@ -1510,6 +1512,15 @@ func (c *ThresholdConfig) ValidateTenantKeysByTenant() KeyValidationByTenant {
 // per-tenant entries on their own and must not repeat the defaults-side
 // notice once per platform file.
 func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
+	return c.validateOverrideKeysOf(true)
+}
+
+// validateOverrideKeysOf is validateOverrideKeys; thresholdValues false
+// leaves out the #3267 threshold value findings — for a tenant layer the
+// exporter does not read (TenantMerge's flat-KV fallback: the exporter
+// declares no tenant from such a file), whose non-`_` keys are not
+// thresholds anyone serves. The reserved-key findings are not affected.
+func (c *ThresholdConfig) validateOverrideKeysOf(thresholdValues bool) KeyValidation {
 	var v KeyValidation
 	// versionLabels / renamed record the entries VersionLabels and Renames
 	// repeat.
@@ -1652,6 +1663,20 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 					v.Values = append(v.Values, f)
 				}
 				continue
+			}
+
+			// #3267: a threshold value the row resolvers refuse (`abc`,
+			// `70:high`, `1e999`; thresholdRefusalIn, in this tree's root
+			// `defaults:` — not a non-finite
+			// number, which #3140 refuses strictly elsewhere) is refused
+			// where it is written. Errors AND Values, as a reserved value:
+			// an unchanged one already on disk is a notice (Ratchet, by the
+			// resolver's reading — readAlike).
+			if thresholdValues {
+				if f, ok := newThresholdFinding(tenant, canonDefaults, canonKey, sv); ok {
+					v.Errors = append(v.Errors, f.Message)
+					v.Values = append(v.Values, f)
+				}
 			}
 
 			// ADR-024 OQ-6: a dimensional key's `version` label is a value
