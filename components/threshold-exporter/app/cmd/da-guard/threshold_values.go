@@ -110,29 +110,84 @@ func runThresholdValues(args []string, stdin io.Reader, stdout, errOut io.Writer
 	return exitOK
 }
 
-// decodeThresholdValues reads raw as exactly one JSON array of {key, text}
-// string pairs: anything else — another JSON value, an element that is not
-// such an object, a field missing, null or unknown, trailing data — is an
-// error, never a partial answer.
+// errNotPairs is every refusal of decodeThresholdValues.
+var errNotPairs = errors.New("not a JSON array of {\"key\": string, \"text\": string}")
+
+// decodeThresholdValues reads raw as exactly one JSON array of objects whose
+// keys are exactly `key` and `text`, each once, each a string. Anything else
+// — another JSON value, an element that is not such an object, a field
+// missing, null, repeated or unknown (encoding/json would take `KEY` or
+// `Key` for `key`, and the last of two; this reader takes neither), trailing
+// data — is an error, never a partial answer.
 func decodeThresholdValues(raw []byte) ([]thresholdValueIn, error) {
 	dec := json.NewDecoder(bytes.NewReader(raw))
-	dec.DisallowUnknownFields()
-	var in []thresholdValueIn
-	if err := dec.Decode(&in); err != nil {
-		return nil, fmt.Errorf("not a JSON array of {key, text}: %v", err)
+	fail := func(format string, a ...any) ([]thresholdValueIn, error) {
+		return nil, fmt.Errorf("%w: "+format, append([]any{errNotPairs}, a...)...)
 	}
-	if in == nil {
-		return nil, errors.New("not a JSON array of {key, text}: got null")
+	if t, err := dec.Token(); err != nil || t != json.Delim('[') {
+		return fail("does not start with [ (%v)", tokenOrErr(t, err))
+	}
+	in := []thresholdValueIn{}
+	for dec.More() {
+		i := len(in)
+		if t, err := dec.Token(); err != nil || t != json.Delim('{') {
+			return fail("element %d is not an object (%v)", i, tokenOrErr(t, err))
+		}
+		var v thresholdValueIn
+		for dec.More() {
+			kt, err := dec.Token()
+			if err != nil {
+				return fail("element %d: %v", i, err)
+			}
+			name, _ := kt.(string)
+			vt, err := dec.Token()
+			if err != nil {
+				return fail("element %d: %v", i, err)
+			}
+			text, ok := vt.(string)
+			if !ok {
+				return fail("element %d: %q is not a string (%v)", i, name, tokenOrErr(vt, nil))
+			}
+			var slot **string
+			switch name {
+			case "key":
+				slot = &v.Key
+			case "text":
+				slot = &v.Text
+			default:
+				return fail("element %d: field %q (only \"key\" and \"text\", exactly so spelt)", i, name)
+			}
+			if *slot != nil {
+				return fail("element %d: field %q given twice", i, name)
+			}
+			*slot = &text
+		}
+		if _, err := dec.Token(); err != nil { // '}'
+			return fail("element %d: %v", i, err)
+		}
+		if v.Key == nil || v.Text == nil {
+			return fail("element %d needs both \"key\" and \"text\"", i)
+		}
+		in = append(in, v)
+	}
+	if _, err := dec.Token(); err != nil { // ']'
+		return fail("%v", err)
 	}
 	if _, err := dec.Token(); !errors.Is(err, io.EOF) {
-		return nil, errors.New("not a JSON array of {key, text}: data after the array")
-	}
-	for i, v := range in {
-		if v.Key == nil || v.Text == nil {
-			return nil, fmt.Errorf("element %d: needs both \"key\" and \"text\", each a string", i)
-		}
+		return fail("data after the array")
 	}
 	return in, nil
+}
+
+// tokenOrErr names what a refused token was, for the message.
+func tokenOrErr(t json.Token, err error) string {
+	if err != nil {
+		return err.Error()
+	}
+	if t == nil {
+		return "null"
+	}
+	return fmt.Sprintf("%v", t)
 }
 
 // thresholdValueOf is config.ReadThresholdText's answer in the output shape.

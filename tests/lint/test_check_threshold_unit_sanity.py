@@ -52,6 +52,12 @@ def _conf_d(root, body: dict):
            yaml.safe_dump(body, allow_unicode=True))
 
 
+def _values(node):
+    """(key, number) for every threshold literal in *node*, read the way
+    `_collect` reads them: `_walk_literals`, then one `_judged` run."""
+    return [(k, n) for _, k, n in gate._judged([(None, k, v) for k, v in gate._walk_literals(node)])]
+
+
 def _errors(registry, root):
     return gate.run_check(registry=registry, root=str(root))["errors"]
 
@@ -338,6 +344,17 @@ def test_an_answer_that_is_not_one_reading_per_value_is_exit_2(tmp_path, monkeyp
     assert "wrote no answer this tool can read" in capsys.readouterr().err
 
 
+def test_a_string_utf8_cannot_carry_is_not_a_value_and_hides_nothing(tmp_path, monkeypatch, capsys):
+    """#3267 review: a lone surrogate (JSON `"\\ud800"`) is no text a
+    reader reads as a number — skipped, as before — so it does not turn the
+    run into exit 2 and hide a real violation beside it (old rc 1)."""
+    _write(tmp_path, "docs/assets/recommendation-data.json",
+           '{"recommendations": {"pct": {"p50": "\\ud800", "p95": "500", "unit": "%"}}}')
+    assert _main_rc(tmp_path, monkeypatch, _registry(pct=_spec(80, "%"))) == 1
+    err = capsys.readouterr().err
+    assert "recommendation-data.json[p95]: pct = 500 " in err, err
+
+
 def test_a_da_guard_older_than_this_tool_is_exit_2(tmp_path, monkeypatch, capsys):
     """#3267 ruling: a da-guard that does not know `threshold-values` (it
     exits 2 on it, `-h` included) is named as older, exit 2 (old: 0)."""
@@ -596,7 +613,7 @@ def test_registry_metadata_numbers_are_not_read_as_thresholds(monkeypatch):
             "issue": 1176, "direction": "over_fire", "observed": "x",
         },
     }
-    found = dict(gate._walk_values({"oracle_pga_allocated_bytes": entry}))
+    found = dict(_values({"oracle_pga_allocated_bytes": entry}))
     assert found == {"oracle_pga_allocated_bytes": 4294967296}, found
 
     # ...and the exclusion is DERIVED from the registry's own field list, so a
@@ -611,7 +628,7 @@ def test_scheduled_nested_thresholds_still_collected(monkeypatch):
     keep being collected. An over-broad skip would silently un-cover it."""
     monkeypatch.setattr(gate, "_REGISTRY_KEYS", {"mysql_threads_running"})
     nested = {"mysql_threads_running": {"default": {"during_business_hours": "30"}}}
-    assert dict(gate._walk_values(nested)) == {"mysql_threads_running": 30}
+    assert dict(_values(nested)) == {"mysql_threads_running": 30}
 
 
 def test_real_repo_is_clean():
@@ -659,7 +676,7 @@ def test_values_out_of_scope_are_the_listed_ones():
         except yaml.YAMLError:
             continue
         for doc in docs:
-            for key, val in gate._walk_values(doc):
+            for key, val in _values(doc):
                 dropped.add((u.path, key, val))
     assert dropped == DROPPED_SINCE_INVENTORY, (
         f"newly out of scope: {sorted(dropped - DROPPED_SINCE_INVENTORY)}; "

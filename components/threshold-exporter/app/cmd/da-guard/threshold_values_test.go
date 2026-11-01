@@ -140,6 +140,11 @@ func TestThresholdValues_RefusesWhatIsNotAnArrayOfPairs(t *testing.T) {
 		"", "null", "{}", `"70"`, `["70"]`, `[null]`, `[{"key":"cpu"}]`, `[{"text":"70"}]`,
 		`[{"key":"cpu","text":70}]`, `[{"key":"cpu","text":null}]`, `[{"key":"cpu","text":"70","x":1}]`,
 		`[] []`, `[{"key":"cpu","text":"70"}`, `not json`,
+		// Field names are exact: encoding/json would fold case and keep the last.
+		`[{"KEY":"cpu","text":"70"}]`, `[{"key":"cpu","Text":"70"}]`, `[{"key":"a","Key":"b","text":"70"}]`,
+		`[{"key":"a","key":"b","text":"70"}]`, `[{"key":"cpu","text":"70","text":"80"}]`,
+		`[{"key":"cpu","text":{}}]`, `[{"key":"cpu","text":["70"]}]`, `[{"key":"cpu","text":"70"},]`,
+		`[[]]`, `{"key":"cpu","text":"70"}`,
 	} {
 		code, out, errOut := thresholdValuesRun(t, stdin)
 		if code != exitCallerErr || out != "" || !strings.Contains(errOut, thresholdValuesCmd) {

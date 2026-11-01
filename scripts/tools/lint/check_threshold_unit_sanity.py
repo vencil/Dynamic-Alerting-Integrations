@@ -170,12 +170,21 @@ def _value_text(raw) -> str | None:
     made a number (`platform-data.json`'s `value`, the registry's `30`, a
     JSON `-Infinity`, a YAML `.inf`) is that number as Python spells it
     (`repr(float(raw))`: `30.0`, `0.8`, `-inf`), which reads as the same
-    number; an int no float holds raises OverflowError, as it always has."""
+    number; an int no float holds raises OverflowError, as it always has.
+
+    A string UTF-8 cannot carry (a lone surrogate from a JSON `"\\ud800"`)
+    is no text any reader reads as a number, and JSON cannot hand it to
+    da-guard: it is None, as it always was — never a reason to read
+    nothing else (#3267 review)."""
     if isinstance(raw, bool):
         return None
     if isinstance(raw, (int, float)):
         return repr(float(raw))
     if isinstance(raw, str):
+        try:
+            raw.encode("utf-8")
+        except UnicodeEncodeError:
+            return None
         return raw
     return None
 
@@ -282,14 +291,6 @@ def _walk_literals(node, key_of_interest: str | None = None):
             yield from _walk_literals(item, key_of_interest)
     elif key_of_interest is not None:
         yield key_of_interest, node
-
-
-def _walk_values(node):
-    """Yield (registry_key, number) for every threshold literal reachable in
-    `node` (`_walk_literals`), each read by `_numbers` — one da-guard run
-    for the node."""
-    for _, key, num in _judged([(None, k, v) for k, v in _walk_literals(node)]):
-        yield key, num
 
 
 _REGISTRY_KEYS: set[str] = set()
