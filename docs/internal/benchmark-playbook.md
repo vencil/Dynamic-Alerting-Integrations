@@ -1068,7 +1068,7 @@ cat /tmp/b1_out/bench.out.txt
 - **Layout 差異微小**：hierarchical 多出 `mkdir -p` 開銷約 5-15%，可忽略
 - **平均檔案大小穩定**：~740 bytes/file，不隨規模變化
 - **Seed 可重現性已驗證**：同一 seed 兩次生成產出 byte-identical 輸出
-- ⚠️ 上表量於 [#3489](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3489) 之前：此後每棵樹都有一份根 `_defaults.yaml`，宣告每個產生的閾值鍵（`optional_overrides:`）與維度標籤（`dimensions:`），synthetic-v2 的 `extra_threshold_NN` 也會送出 row；檔數、大小與 exporter 的 series 數都比表中多，重量前不能直接拿來對照
+- ⚠️ 上表量於 [#3489](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3489) 之前：此後每棵樹都有一份根 `_defaults.yaml`，宣告每個產生的閾值鍵（`optional_overrides:`）與維度標籤（`dimensions:`），synthetic-v2 的 `extra_threshold_NN` 也會送出 row；表中 flat 的 `count + 1` 檔數已含根檔，加 `--with-defaults` 時檔數不變、大小比表中多，不加 `--with-defaults` 的產出則多一個根檔；exporter 的 series 數也比表中多，重量前不能直接拿來對照
 
 Fixture 供 §v2.8.0 1000-Tenant Hierarchical Baseline (上方) 與 §Phase 2 e2e harness 使用。**ADR-016 引用**：[`docs/adr/016-conf-d-directory-hierarchy-mixed-mode.md`](../adr/016-conf-d-directory-hierarchy-mixed-mode.md) flat vs hierarchical 效能對照即此表。
 

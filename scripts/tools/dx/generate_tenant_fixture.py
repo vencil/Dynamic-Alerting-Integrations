@@ -779,21 +779,28 @@ def main() -> None:
         print(f"   Use a different --output or remove it first.")
         sys.exit(EXIT_CALLER_ERROR)
 
-    if args.layout == "flat":
-        generate_flat(
-            args.count, output_dir, args.with_defaults, args.seed,
-            extra_defaults=extra_defaults or None, flag=out_flag,
-        )
-    elif args.layout == "synthetic-v2":
-        generate_synthetic_v2(
-            args.count, output_dir, args.with_defaults, args.seed,
-            extra_defaults=extra_defaults or None, flag=out_flag,
-        )
-    else:
-        generate_hierarchical(
-            args.count, output_dir, args.with_defaults, args.seed,
-            extra_defaults=extra_defaults or None, flag=out_flag,
-        )
+    # `_gen_defaults_yaml` raises ValueError on an `--extra-defaults` key or
+    # value that cannot live under `defaults:`; since #3489 every layout writes
+    # the root `_defaults.yaml`, so every run can reach it — a caller error
+    # (exit 2), not a traceback.
+    try:
+        if args.layout == "flat":
+            generate_flat(
+                args.count, output_dir, args.with_defaults, args.seed,
+                extra_defaults=extra_defaults or None, flag=out_flag,
+            )
+        elif args.layout == "synthetic-v2":
+            generate_synthetic_v2(
+                args.count, output_dir, args.with_defaults, args.seed,
+                extra_defaults=extra_defaults or None, flag=out_flag,
+            )
+        else:
+            generate_hierarchical(
+                args.count, output_dir, args.with_defaults, args.seed,
+                extra_defaults=extra_defaults or None, flag=out_flag,
+            )
+    except ValueError as exc:
+        _die(f"--extra-defaults: {exc}")
 
     # Summary stats
     file_count = sum(1 for _ in output_dir.rglob("*.yaml"))

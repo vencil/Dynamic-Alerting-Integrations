@@ -428,3 +428,27 @@ def test_every_generated_tenant_key_has_a_reader(fixture_module, tmp_path, layou
               if v.verdict == kv.UNREAD and (v.severity == kv.ERROR or not v.key.startswith("_"))
               and v.reason != "disable_noop"]
     assert unread == [], unread[:10]
+
+
+@pytest.mark.parametrize("with_defaults", [False, True])
+def test_cli_extra_defaults_refusal_is_a_caller_error_not_a_traceback(
+    tmp_path, with_defaults,
+):
+    """#3489 review: every layout writes the root `_defaults.yaml` now, so a
+    bad `--extra-defaults` reaches `_gen_defaults_yaml`'s ValueError on every
+    run — `main` must report it as a caller error (exit 2), never a
+    traceback (exit 1), with or without `--with-defaults`."""
+    import os  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    script = (Path(__file__).resolve().parents[2]
+              / "scripts" / "tools" / "dx" / "generate_tenant_fixture.py")
+    out = tmp_path / "conf.d"
+    cmd = [sys.executable, str(script), "--count", "2", "--output", str(out),
+           "--extra-defaults", "mysql_connections_critical=90"]
+    if with_defaults:
+        cmd.append("--with-defaults")
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=120)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+    assert "--extra-defaults" in r.stderr and "mysql_connections_critical" in r.stderr, r.stderr
