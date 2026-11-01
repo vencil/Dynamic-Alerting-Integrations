@@ -175,14 +175,18 @@ type platformSupply struct {
 //     Error, as it always was; a defined one is not (#1385 — before
 //     profiles were read here, every `_profile` was reported unknown).
 func (m *TenantMerge) ValidateTenantKeys() KeyValidation {
-	tenantLayer := ThresholdConfig{
-		Defaults:          m.Defaults,
-		StateFilters:      m.StateFilters,
-		OptionalOverrides: m.OptionalOverrides,
-		Profiles:          m.Profiles,
-		Tenants:           m.own,
+	// The tenant layer: one ownLayerKeys per tenant, the judgement
+	// ValidateTenantKeysByTenant gives each — so the two cannot part (the
+	// flat-KV fallback's threshold rule, #3267, included).
+	v := KeyValidation{Notices: m.defaultsKeyNotices()}
+	for tid := range m.own {
+		o := m.ownLayerKeys(tid)
+		v.Errors = append(v.Errors, o.Errors...)
+		v.Notices = append(v.Notices, o.Notices...)
+		v.Values = append(v.Values, o.Values...)
+		v.VersionLabels = append(v.VersionLabels, o.VersionLabels...)
+		v.Renames = append(v.Renames, o.Renames...)
 	}
-	v := tenantLayer.validateTenantKeys()
 	tenants := make([]string, 0, len(m.platform))
 	for tid := range m.platform {
 		tenants = append(tenants, tid)
@@ -206,19 +210,27 @@ func (m *TenantMerge) ValidateTenantKeysByTenant() KeyValidationByTenant {
 		Tenants:  make(map[string]KeyValidation, len(m.own)),
 	}
 	canonDeclared := canonicalizeOptionalOverrides(m.OptionalOverrides)
-	for tid, keys := range m.own {
-		layer := ThresholdConfig{
-			Defaults:          m.Defaults,
-			OptionalOverrides: m.OptionalOverrides,
-			Profiles:          m.Profiles,
-			Tenants:           map[string]map[string]ScheduledValue{tid: keys},
-		}
-		v := layer.validateOverrideKeysOf(!m.flat[tid])
+	for tid := range m.own {
+		v := m.ownLayerKeys(tid)
 		v.Notices = append(v.Notices, m.platformLayerNotices(tid)...)
 		v.Notices = append(v.Notices, m.profileLayerNoticesFor(tid, canonDeclared)...)
 		out.Tenants[tid] = v
 	}
 	return out
+}
+
+// ownLayerKeys is the key checks on tenant tid's own layer (m.own[tid]),
+// both ValidateTenantKeys and ValidateTenantKeysByTenant take: the
+// flat-KV fallback's tenant (m.flat) gets no threshold value finding —
+// the exporter declares no tenant from such a file (#3267).
+func (m *TenantMerge) ownLayerKeys(tid string) KeyValidation {
+	layer := ThresholdConfig{
+		Defaults:          m.Defaults,
+		OptionalOverrides: m.OptionalOverrides,
+		Profiles:          m.Profiles,
+		Tenants:           map[string]map[string]ScheduledValue{tid: m.own[tid]},
+	}
+	return layer.validateOverrideKeysOf(!m.flat[tid])
 }
 
 // platformLayerNotices is ValidateTenantKeys' notices about the root
