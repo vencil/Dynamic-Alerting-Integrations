@@ -1658,3 +1658,26 @@ def test_on_stdout_failure_must_be_callable():
     import _lib_exitcodes
     with pytest.raises(TypeError):
         _lib_exitcodes.Report({}, on_stdout_failure="ERROR [X]")
+
+
+def test_a_reports_stdout_failure_line_does_not_outlive_its_run(capsys):
+    """#3450: the builder a Report set is cleared by the reset (tests that run
+    tools in-process) and at the start of every run(), so a later run's
+    stdout failure is not worded by an earlier run's tool."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+
+    def own(detail):
+        return "ERROR [X]: " + detail
+
+    ec.emit_result(ec.Report({}, on_stdout_failure=own))
+    assert ec._tools_stdout_failure_line("ERROR: d") == "ERROR [X]: d"
+    ec.reset_exit_state()
+    assert ec._tools_stdout_failure_line("ERROR: d") == "ERROR: d"
+
+    ec.emit_result(ec.Report({}, on_stdout_failure=own))
+    seen = []
+    with pytest.raises(SystemExit):
+        ec.run(lambda: seen.append(ec._tools_stdout_failure_line("ERROR: d")) or 0)
+    assert seen == ["ERROR: d"]
+    capsys.readouterr()

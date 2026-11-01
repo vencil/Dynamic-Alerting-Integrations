@@ -888,8 +888,9 @@ def main() -> "int | Report":
         _emit_error("ERR_OUTPUT", safe_label(str(exc)), args.redact)
         return EXIT_CALLER_ERROR
     except OSError as exc:
-        # The other writes in this block go to stdout (`--json` / human
-        # rendering); a failure there is not an `--out` problem.
+        # The other writes in this block are the human rendering on stdout;
+        # a failure there is not an `--out` problem. (The --json document is
+        # run()'s to write — its stdout failure is the Report's line below.)
         _emit_error("ERR_OUTPUT", f"報告輸出失敗: {exc}", args.redact)  # exc 可能含 --out 路徑
         return EXIT_CALLER_ERROR
 
