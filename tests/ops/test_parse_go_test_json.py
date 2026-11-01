@@ -286,3 +286,38 @@ def test_interleaved_packages_keep_their_own_running_tests() -> None:
         {"package": "b", "after": "30m0s", "running_tests": ["TestB/sub"]},
     ]
     assert res["timeout_running_tests"] == ["TestA1", "TestA2", "TestB/sub"]
+
+
+# ── per-test repetition counts ───────────────────────────────────────────────
+#
+# #3343 was titled "repeat-run failure" although its test failed in all ten
+# repetitions (a missing binary). The report can only tell "every repetition"
+# from "k of n" if the parser counts each top-level test's pass/fail events.
+
+
+def _pass(test: str, pkg: str = "racesample") -> str:
+    return json.dumps({"Action": "pass", "Package": pkg, "Test": test, "Elapsed": 0.01})
+
+
+def test_test_runs_counts_pass_and_fail_per_top_level_test() -> None:
+    lines = [_fail("TestAlways") for _ in range(10)]
+    lines += [_fail("TestSometimes") for _ in range(3)] + [_pass("TestSometimes") for _ in range(7)]
+    # Subtests are not counted: the parent's verdict covers them.
+    lines += [_fail("TestSometimes/child") for _ in range(3)]
+    lines += [_pass("TestClean") for _ in range(10)]
+    # The package-level verdicts carry no Test and must not be counted.
+    lines += [_fail(None), json.dumps({"Action": "pass", "Package": "other"})]
+    res = parse_stream(lines, go_exit_code=1)
+    assert res["test_runs"] == {
+        "TestAlways": {"fail": 10, "pass": 0},
+        "TestSometimes": {"fail": 3, "pass": 7},
+    }, "only tests that failed at least once are recorded, keyed by top-level name"
+
+
+def test_test_runs_is_empty_for_a_clean_run_and_present_in_the_fragment(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.jsonl"
+    raw.write_text(_pass("TestA") + "\n", encoding="utf-8")
+    frag = build_fragment(module="m", input_path=raw, go_exit_code=0,
+                          run_url="u", workdir="w", packages="./...")
+    assert frag["test_runs"] == {}
+    assert frag["failed"] is False

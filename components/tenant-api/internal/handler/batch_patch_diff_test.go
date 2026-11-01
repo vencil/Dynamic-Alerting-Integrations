@@ -286,7 +286,7 @@ func generatorDiff(t *testing.T, in []map[string]any) []struct {
 		t.Fatal(err)
 	}
 	cmd := exec.Command("python3", filepath.Join("testdata", "batch_patch_diff.py"), root)
-	cmd.Env = append(os.Environ(), "DA_GUARD_BINARY="+daGuardBinary(t))
+	cmd.Env = append(os.Environ(), generatorToolEnv(t)...)
 	cmd.Stdin = bytes.NewReader(body)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

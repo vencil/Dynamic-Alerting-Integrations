@@ -8,6 +8,12 @@ failure therefore minted one duplicate P2 issue per night — #1213 / #1230 /
 #1258 / #1263, four issues for one bug — and the body never named the failing
 test, which is precisely why nobody noticed they were duplicates.
 
+The fix then went one step too far the other way: ONE issue per module merged
+unrelated failures (#2977 carried a package timeout, a one-night assertion bug
+and another package's timeouts under one first-seen date), and every non-race
+failure got isolation vocabulary (#3343 failed in all ten repetitions). Identity
+is now a failure fingerprint, one issue each — section (b) below.
+
 Why the guard lives HERE, in Python
 -----------------------------------
 Same reason as tests/ops/test_nightly_scan_matrix_drift.py: this workflow is
@@ -53,18 +59,17 @@ from file_race_report import (  # noqa: E402
     ISSUE_BODY_MAX,
     ISSUE_TITLE_MAX,
     LABEL,
-    MAX_RENDERED_TESTS,
     LABEL_DESC,
     LABEL_DESC_MAX,
+    MAX_RENDERED_TESTS,
+    MAX_TEST_INCIDENTS,
     TITLE_PREFIX_TMPL,
     compose_body,
+    derive_incidents,
+    fingerprint_marker,
     parse_state,
     render_state,
 )
-
-# Widest suffix appended to the stable title prefix at runtime, e.g.
-# " — repeat-run failure in 12 test(s)" / " — NO RESULT — leg produced no fragment".
-TITLE_SUFFIX_BUDGET = 64
 
 # Anything that WRITES an issue. Both spellings: github-script and the gh CLI.
 FILING_RE = re.compile(
@@ -239,12 +244,244 @@ def test_permissions_are_declared_per_job_not_workflow_wide() -> None:
     assert not problems, "least-privilege drift:\n  " + "\n  ".join(problems)
 
 
-# ── (b) dedup: an existing issue must be refreshed, never duplicated ───────────────────────────────────
+# ── (b) identity: one issue per failure fingerprint ──────────────────────────
+#
+# #2977 mixed three unrelated incidents (a cmd/da-guard timeout, a one-night
+# assertion bug, repeated pkg/parsetree timeouts) because identity was the
+# module. These cases pin the incident rules and the position-0 marker.
+
+
+def _kinds(frag: dict) -> list[tuple[str, str]]:
+    return [(i["kind"], i["subject"]) for i in derive_incidents(frag)]
+
+
+def test_each_failure_shape_derives_its_own_incident() -> None:
+    cases = {
+        "build": (_frag(failed_tests=["TestA"], build_failed=True, had_data_race=True,
+                        race_tests=["TestA"]), [("build", "tenant-api")]),
+        "timeout": (_frag(failed_tests=[], timed_out=True, timeout_packages=[
+            {"package": "ex/pkg/parsetree", "after": "30m0s", "running_tests": ["TestP"]},
+            {"package": "ex/cmd/da-guard", "after": "30m0s", "running_tests": []}],
+            timeout_running_tests=["TestP"]),
+            [("timeout", "ex/pkg/parsetree"), ("timeout", "ex/cmd/da-guard")]),
+        "data race": (_frag(failed_tests=["TestR", "TestR/sub", "TestOther"],
+                            had_data_race=True, race_tests=["TestR/sub"]),
+                      [("data-race", "tenant-api"), ("test", "TestOther")]),
+        "tests, subtests grouped": (_frag(failed_tests=["TestA", "TestA/x", "TestB"]),
+                                    [("test", "TestA"), ("test", "TestB")]),
+        "unattributed": (_frag(failed_tests=[], unattributed_failure=True),
+                         [("unattributed", "tenant-api")]),
+        "green": (_frag(failed=False, failed_tests=[], go_exit_code=0), []),
+        "missing fragment": (file_race_report.load_fragment(Path("/nonexistent"),
+                                                           "tenant-api")[0],
+                             [("no-result", "tenant-api")]),
+    }
+    problems = []
+    for name, (frag, want) in cases.items():
+        got = _kinds(frag)
+        if got != want:
+            problems.append(f"{name}: got {got}, expected {want}")
+    assert not problems, "incident derivation drifted:\n  " + "\n  ".join(problems)
+
+
+def test_tests_running_at_the_timeout_are_not_test_incidents() -> None:
+    """Running at the deadline is not failing; a test that ALSO failed is."""
+    tp = {"package": "p", "after": "30m0s", "running_tests": ["TestSlow/case"]}
+    merely = _frag(failed_tests=["TestSlow", "TestSlow/case"], timed_out=True,
+                   timeout_packages=[tp], timeout_running_tests=["TestSlow/case"])
+    also = _frag(failed_tests=["TestSlow", "TestSlow/case", "TestSlow/other"],
+                 timed_out=True, timeout_packages=[tp],
+                 timeout_running_tests=["TestSlow/case"])
+    assert _kinds(merely) == [("timeout", "p")]
+    assert _kinds(also) == [("timeout", "p"), ("test", "TestSlow")]
+
+
+def test_more_than_five_failing_tests_collapse_into_one_issue() -> None:
+    five = _frag(failed_tests=[f"Test{i}" for i in range(MAX_TEST_INCIDENTS)])
+    six = _frag(failed_tests=[f"Test{i}" for i in range(MAX_TEST_INCIDENTS + 1)])
+    problems = []
+    if [k for k, _ in _kinds(five)] != ["test"] * MAX_TEST_INCIDENTS:
+        problems.append(f"{MAX_TEST_INCIDENTS} failing tests did not get one issue each: {_kinds(five)}")
+    if _kinds(six) != [("tests", "tenant-api")]:
+        problems.append(f"{MAX_TEST_INCIDENTS + 1} failing tests did not collapse: {_kinds(six)}")
+    elif len(derive_incidents(six)[0]["tests"]) != MAX_TEST_INCIDENTS + 1:
+        problems.append("the collapsed issue does not list every failing test")
+    assert MAX_TEST_INCIDENTS == 5
+    assert not problems, "issue-flood guard broken:\n  " + "\n  ".join(problems)
+
+
+def test_fingerprint_marker_is_the_first_line_and_a_later_copy_does_not_match() -> None:
+    inc = derive_incidents(_frag())[0]
+    fp = inc["fingerprint"]
+    assert fp == "tenant-api|test|TestConfigManager_HotReload"
+    body = _issue_body(inc, _frag())
+    problems = []
+    if not body.startswith(f"<!-- race-fingerprint: {fp} -->\n"):
+        problems.append(f"the marker is not at position 0: {body[:80]!r}")
+    if file_race_report.body_fingerprint(body) != fp:
+        problems.append("the body does not read back as its own fingerprint")
+    spoof = "Some prose quoting a log:\n" + fingerprint_marker(fp) + "\nmore"
+    if file_race_report.body_matches(spoof, fp):
+        problems.append("a marker quoted LATER in a body matched — that issue would "
+                        "capture another fingerprint's refreshes")
+    if not file_race_report.body_matches("<!-- race-fingerprint: " + fp + " -->\r\nx", fp):
+        problems.append("a CRLF body (as GitHub may return it) no longer matches")
+    if file_race_report.body_matches(fingerprint_marker(fp + "_v2") + "\n", fp):
+        problems.append("a longer fingerprint sharing the prefix matched")
+    assert not problems, "fingerprint identity broken:\n  " + "\n  ".join(problems)
+
+
+def _row(num: int, frag: dict, kind_subject: tuple[str, str] | None = None,
+         state: dict | None = None, title: str = "t") -> dict:
+    """An open issue as `gh issue list --json number,title,body` returns it."""
+    module = frag["module"]
+    kind, subject = kind_subject or ("test", "TestConfigManager_HotReload")
+    inc = {"module": module, "kind": kind, "subject": subject,
+           "fingerprint": file_race_report.fingerprint(module, kind, subject),
+           "tests": [subject]}
+    body = compose_body(inc, frag, state or _state(), "https://gh/runs/1", "2026-10-01",
+                        True, "")
+    return {"number": num, "title": title, "body": body}
+
+
+def _list_script(rows: list[dict], calls: list[list[str]], fail_edit: bool = False):
+    def script(args):
+        calls.append(args)
+        if args[:2] == ["issue", "list"]:
+            return 0, json.dumps(rows)
+        if args[:2] == ["issue", "edit"] and fail_edit:
+            return 1, ""
+        return 0, ""
+    return script
+
+
+def _writes(calls: list[list[str]]) -> list[list[str]]:
+    return [c for c in calls if c[:2] in (["issue", "create"], ["issue", "edit"],
+                                          ["issue", "comment"], ["issue", "close"])]
+
+
+def _arg(call: list[str], flag: str) -> str:
+    return call[call.index(flag) + 1]
+
+
+def test_matching_fingerprint_is_refreshed_and_a_new_one_is_created(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    frag = _frag(failed_tests=["TestConfigManager_HotReload", "TestNewBug"],
+                 test_runs={"TestConfigManager_HotReload": {"fail": 10, "pass": 0},
+                            "TestNewBug": {"fail": 2, "pass": 8}})
+    calls: list[list[str]] = []
+    rows = [_row(3001, frag, state=_state(first_seen="2026-09-01", streak=4))]
+    rc = _run_main(tmp_path, frag, _list_script(rows, calls), monkeypatch)
+    capsys.readouterr()
+    writes = _writes(calls)
+    problems = []
+    edits = [c for c in writes if c[:2] == ["issue", "edit"]]
+    creates = [c for c in writes if c[:2] == ["issue", "create"]]
+    if [c[2] for c in edits] != ["3001"]:
+        problems.append(f"expected exactly one edit of #3001, got {[c[2] for c in edits]}")
+    if len(creates) != 1 or "TestNewBug" not in _arg(creates[0], "--title"):
+        problems.append(f"expected one create for TestNewBug, got {creates}")
+    if any(c[:2] in (["issue", "comment"], ["issue", "close"]) for c in writes):
+        problems.append("commented or closed — both are explicitly out of scope")
+    if edits:
+        state = parse_state(_arg(edits[0], "--body"))
+        if not state or state["first_seen"] != "2026-09-01" or state["streak"] != 5:
+            problems.append(f"the refreshed issue lost its own baseline: {state}")
+    if creates:
+        state = parse_state(_arg(creates[0], "--body"))
+        if not state or state["first_seen"] == "2026-09-01":
+            problems.append("the NEW fingerprint inherited another issue's first-seen (#2977)")
+        if not _arg(creates[0], "--body").startswith(
+                "<!-- race-fingerprint: tenant-api|test|TestNewBug -->"):
+            problems.append("the created body does not start with its fingerprint marker")
+    if rc != 0:
+        problems.append(f"healthy run exited {rc}")
+    assert not problems, "per-fingerprint dedup broken:\n  " + "\n  ".join(problems)
+
+
+def test_a_fingerprint_not_seen_tonight_is_refreshed_silently_never_closed(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    frag = _frag(failed=False, failed_tests=[], go_exit_code=0)
+    calls: list[list[str]] = []
+    rows = [_row(3002, frag, ("timeout", "ex/pkg/parsetree"),
+                 state=_state(streak=6, tests=["TestP"]))]
+    rc = _run_main(tmp_path, frag, _list_script(rows, calls), monkeypatch)
+    out = capsys.readouterr().out
+    writes = _writes(calls)
+    problems = []
+    if [c[:3] for c in writes] != [["issue", "edit", "3002"]]:
+        problems.append(f"expected one silent edit of #3002, got {writes}")
+    else:
+        body = _arg(writes[0], "--body")
+        title = _arg(writes[0], "--title")
+        state = parse_state(body)
+        if "not seen on" not in title or "not seen on" not in body.lower():
+            problems.append(f"the not-seen night is not recorded: {title!r}")
+        if not state or state["streak"] != 0 or not state["last_green"]:
+            problems.append(f"streak/last_green not reset: {state}")
+        if state and state["first_seen"] != "2026-07-24":
+            problems.append("first_seen was lost on a not-seen refresh")
+        if not body.startswith("<!-- race-fingerprint: tenant-api|timeout|ex/pkg/parsetree -->"):
+            problems.append("the not-seen refresh dropped the fingerprint marker")
+    if rc != 0:
+        problems.append(f"exit {rc}")
+    assert not problems, ("not-seen refresh broken:\n  " + "\n  ".join(problems)
+                          + f"\n--- output ---\n{out}")
+
+
+def test_an_inconclusive_night_does_not_tell_other_issues_not_seen(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """A build failure ran no test: 'not seen' would be the silent-clean direction."""
+    frag = _frag(failed_tests=[], build_failed=True)
+    calls: list[list[str]] = []
+    rows = [_row(3003, frag)]
+    _run_main(tmp_path, frag, _list_script(rows, calls), monkeypatch)
+    out = capsys.readouterr().out
+    edits = [c for c in _writes(calls) if c[:2] == ["issue", "edit"]]
+    assert not edits, f"an unmeasured fingerprint issue was edited: {edits}"
+    assert "#3003" in out and "Not re-evaluated" in out
+
+
+def test_legacy_issue_without_a_marker_is_left_untouched_and_named(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    frag = _frag(module="threshold-exporter")
+    calls: list[list[str]] = []
+    legacy = {"number": 2977,
+              "title": TITLE_PREFIX_TMPL.format(module="threshold-exporter")
+              + " — package timeout in 1 package(s)",
+              "body": "Nightly tracking issue …\n<!-- race-state: module=threshold-exporter "
+                      "first_seen=2026-10-01 streak=9 tests=[] -->"}
+    other_module = {"number": 3343,
+                    "title": TITLE_PREFIX_TMPL.format(module="tenant-api") + " — x",
+                    "body": "no marker"}
+    rc = _run_main(tmp_path, frag, _list_script([legacy, other_module], calls), monkeypatch)
+    out = capsys.readouterr().out
+    writes = _writes(calls)
+    problems = []
+    if any(c[:3] == ["issue", "edit", "2977"] for c in writes):
+        problems.append("the legacy issue #2977 was edited")
+    if not any(c[:2] == ["issue", "create"] for c in writes):
+        problems.append("tonight's incident was not filed as a fingerprint issue")
+    if "#2977" not in out or "Legacy" not in out:
+        problems.append("the step summary does not name #2977 as legacy")
+    if "#3343" in out:
+        problems.append("another module's legacy issue was attributed to this module")
+    if rc != 0:
+        problems.append(f"exit {rc}")
+    assert not problems, "legacy handling broken:\n  " + "\n  ".join(problems) + f"\n{out}"
 
 
 def test_existing_issue_is_refreshed_not_duplicated(tmp_path: Path) -> None:
-    """Behavioural: with an issue already open, the run must EDIT, never create."""
-    proc = _run_report(tmp_path, _frag(), {"DRY_RUN_ISSUE_NUM": "1213"})
+    """Behavioural, through the real CLI and its DRY_RUN seams."""
+    frag = _frag()
+    prev = tmp_path / "prev.md"
+    prev.write_text(_row(1213, frag)["body"], encoding="utf-8")
+    proc = _run_report(tmp_path, frag, {"DRY_RUN_ISSUE_NUM": "1213",
+                                        "DRY_RUN_PREV_BODY": str(prev)})
     out = proc.stdout
     problems = []
     if "issue create" in out:
@@ -265,17 +502,18 @@ def test_existing_issue_is_refreshed_not_duplicated(tmp_path: Path) -> None:
 
 
 def test_a_green_night_neither_comments_nor_closes(tmp_path: Path) -> None:
-    proc = _run_report(
-        tmp_path,
-        _frag(failed=False, failed_tests=[], go_exit_code=0, unattributed_failure=False),
-        {"DRY_RUN_ISSUE_NUM": "1213"},
-    )
+    frag = _frag(failed=False, failed_tests=[], go_exit_code=0, unattributed_failure=False)
+    prev = tmp_path / "prev.md"
+    prev.write_text(_row(1213, _frag())["body"], encoding="utf-8")
+    proc = _run_report(tmp_path, frag, {"DRY_RUN_ISSUE_NUM": "1213",
+                                        "DRY_RUN_PREV_BODY": str(prev)})
     problems = [w for w in ("issue close", "issue comment") if w in proc.stdout]
     assert not problems, (
-        "a green night must be recorded as `last green:` in the body, not by "
+        "a green night must be recorded as `not seen` in the body, not by "
         f"closing or commenting (found {problems}). One green night does not prove "
         "a repeat-run failure fixed, and close/reopen churn notifies twice per flap."
     )
+    assert "issue edit 1213" in proc.stdout, "the open issue was not refreshed on a green night"
     assert "last_green=" in proc.stdout, "the green night was not recorded in the state block"
 
 
@@ -298,32 +536,35 @@ def _strip_state_blocks(text: str) -> str:
     return re.sub(r"<!--\s*race-state:.*?-->", "", text, flags=re.S)
 
 
+def _issue_body(inc: dict, frag: dict, **kw) -> str:
+    return compose_body(inc, frag, _state(tests=inc.get("tests") or []),
+                        "https://gh/runs/999", "2026-10-14", True, "", **kw)
+
+
+def _bodies(frag: dict) -> dict[str, str]:
+    """Rendered body per incident kind, state block stripped."""
+    return {i["kind"]: _strip_state_blocks(_issue_body(i, frag)) for i in derive_incidents(frag)}
+
+
 def test_issue_content_carries_the_failing_test_names(tmp_path: Path) -> None:
     """The direct cause of four unnoticed duplicates: a body with no evidence."""
-    frag = _frag(failed_tests=["TestConfigManager_HotReload", "TestWatchLoop/reload"])
-    # Asserted against the RENDERED BODY, not the process output, and with the
-    # state block stripped. Mutation testing caught two ways this went vacuous:
-    # deleting the rendered failing-test list still passed because the names
-    # survived (a) inside `tests=[...]`, a machine-readable comment no reader
-    # sees, and (b) in the job step-summary, which is not the issue at all. The
-    # guard was green on the exact defect it exists to catch.
-    body = _strip_state_blocks(compose_body(
-        frag=frag, state=_state(tests=frag["failed_tests"]), run_url="https://gh/runs/999",
-        date="2026-07-28", baseline_readable=True, degraded="", green=False,
-    ))
+    frag = _frag(failed_tests=["TestConfigManager_HotReload", "TestWatchLoop/reload",
+                               "TestWatchLoop"])
+    # Asserted against the RENDERED BODIES, not the process output, and with the
+    # state block stripped: names surviving only inside `tests=[...]` or in the
+    # step summary made an earlier version of this guard vacuous.
+    rendered = "\n".join(_strip_state_blocks(_issue_body(i, frag))
+                         for i in derive_incidents(frag))
     problems = []
     for name in frag["failed_tests"]:
-        if name not in body:
-            problems.append(
-                f"failing test {name!r} does not appear in the RENDERED issue body"
-            )
-    if "race-raw-tenant-api" not in body:
+        if name not in rendered:
+            problems.append(f"failing test {name!r} does not appear in any RENDERED issue body")
+    if "race-raw-tenant-api" not in rendered:
         problems.append("the raw -json artifact pointer is missing from the body")
-    if "First seen" not in body:
+    if "First seen" not in rendered:
         problems.append("the first-seen date is missing from the body")
     assert not problems, (
-        "issue body lost its evidence — this is the direct reason four duplicate "
-        "issues went unnoticed:\n  " + "\n  ".join(problems) + f"\n--- body ---\n{body}"
+        "issue body lost its evidence:\n  " + "\n  ".join(problems) + f"\n--- body ---\n{rendered}"
     )
     # And the wiring: the CLI must actually put that body on the wire.
     assert "TestConfigManager_HotReload" in _run_report(tmp_path, frag, {}).stdout
@@ -337,14 +578,20 @@ def test_title_says_data_race_only_when_a_race_was_detected(tmp_path: Path) -> N
             "a non-race failure was titled DATA RACE — `grep -c 'DATA RACE'` was 0 on "
             "all four nights of the real failure, and mislabeling it is the #932 defect"
         )
-    if "repeat-run" not in no_race:
-        problems.append("a non-race failure did not use repeat-run/test-isolation wording")
     with_race = _run_report(
         tmp_path / "b", _frag(had_data_race=True, race_tests=["TestX"]), {}
     ).stdout
     if "DATA RACE" not in with_race:
         problems.append("a REAL data race was not titled DATA RACE")
     assert not problems, "verdict wording drifted from the evidence:\n  " + "\n  ".join(problems)
+
+
+def test_title_shape_carries_kind_subject_and_verdict(tmp_path: Path) -> None:
+    out = _run_report(tmp_path, _frag(test_runs={
+        "TestConfigManager_HotReload": {"fail": 10, "pass": 0}}), {}).stdout
+    want = (TITLE_PREFIX_TMPL.format(module="tenant-api")
+            + " — test: TestConfigManager_HotReload — fails every repetition (10/10)")
+    assert want in out, f"title shape drifted; expected {want!r} in:\n{out}"
 
 
 def test_first_seen_run_url_survives_a_refresh() -> None:
@@ -372,14 +619,9 @@ def test_first_seen_run_url_survives_a_refresh() -> None:
 def test_unreadable_state_block_is_not_treated_as_clean() -> None:
     """No baseline must read as 'unknown, possibly older', never as 'new today'."""
     assert parse_state("a body with no marker at all") is None
-    body = compose_body(
-        frag=_frag(), state={
-            "module": "tenant-api", "first_seen": "2026-07-28", "first_run": "u",
-            "last_run": "u", "last_green": "", "streak": 1, "had_data_race": 0,
-            "build_failed": 0, "unattributed": 0, "tests": [], "_had_issue": True,
-        },
-        run_url="u", date="2026-07-28", baseline_readable=False, degraded="", green=False,
-    )
+    inc = derive_incidents(_frag())[0]
+    body = compose_body(inc, _frag(), _state(first_seen="2026-07-28"), "u", "2026-07-28",
+                        False, "")
     assert "re-stamped" in body, (
         "an unreadable baseline silently reset first-seen. That erases the only record "
         "of how long this has been failing — the evidence four duplicate issues lost."
@@ -390,8 +632,9 @@ def test_unreadable_state_block_is_not_treated_as_clean() -> None:
 #
 # #3177: a package `-timeout` expiry on #2977 was narrated as "a repeat-run /
 # test-isolation failure" with "bisect -count" as step 2, directly under a
-# warning that said the cause was NOT attributed. These cases pin each prose
-# block to the evidence that licenses it.
+# warning that said the cause was NOT attributed. #3343: a test that failed in
+# all ten repetitions (a missing binary) was titled "repeat-run failure". These
+# cases pin each prose block to the evidence that licenses it.
 
 # The two phrases that ARE the isolation diagnosis. Asserted as phrases, not
 # as the word "isolation": the timeout prose legitimately says it is NOT one.
@@ -414,20 +657,18 @@ def _section(body: str, heading: str) -> str:
     return m.group(1) if m else ""
 
 
-def _body(frag: dict, green: bool = False) -> str:
-    return _strip_state_blocks(compose_body(
-        frag=frag, state=_state(tests=frag.get("failed_tests") or []),
-        run_url="https://gh/runs/999", date="2026-10-14", baseline_readable=True,
-        degraded="", green=green,
-    ))
-
-
 def test_package_timeout_gets_its_own_verdict_and_triage(tmp_path: Path) -> None:
     frag = _timeout_frag()
-    body = _body(frag)
+    incs = derive_incidents(frag)
     problems = []
-    if "package timeout" not in file_race_report.verdict_suffix(frag, False, "d"):
+    if [i["kind"] for i in incs] != ["timeout"]:
+        problems.append(f"expected one timeout incident, got {[i['kind'] for i in incs]}")
+    inc = incs[0]
+    body = _strip_state_blocks(_issue_body(inc, frag))
+    if "package timeout" not in file_race_report.incident_verdict(inc):
         problems.append("the verdict does not say `package timeout`")
+    if inc["subject"] != "github.com/vencil/threshold-exporter/cmd/da-guard":
+        problems.append(f"the subject is not the timed-out package: {inc['subject']!r}")
     what = _section(body, "What this is")
     if "Package timeout" not in what:
         problems.append("`What this is` does not describe the timeout")
@@ -439,11 +680,9 @@ def test_package_timeout_gets_its_own_verdict_and_triage(tmp_path: Path) -> None
     for name in frag["timeout_running_tests"]:
         if name not in _section(body, "Package timeout"):
             problems.append(f"running-at-deadline test {name!r} is not listed")
-    if "github.com/vencil/threshold-exporter/cmd/da-guard" not in body:
-        problems.append("the timed-out package is not named")
     title_out = _run_report(tmp_path, frag, {}).stdout
-    if "— package timeout" not in title_out:
-        problems.append("the filed title does not carry the timeout verdict")
+    if "timeout: github.com/vencil/threshold-exporter/cmd/da-guard — package timeout" not in title_out:
+        problems.append("the filed title does not carry the timeout fingerprint and verdict")
     assert not problems, (
         "a package timeout is still reported as something else:\n  "
         + "\n  ".join(problems) + f"\n--- body ---\n{body}"
@@ -452,7 +691,7 @@ def test_package_timeout_gets_its_own_verdict_and_triage(tmp_path: Path) -> None
 
 def test_unattributed_failure_does_not_assert_a_cause() -> None:
     """The prose must say what the warning says: we do not know."""
-    body = _body(_frag(failed_tests=[], fail_events=1, unattributed_failure=True))
+    body = _bodies(_frag(failed_tests=[], fail_events=1, unattributed_failure=True))["unattributed"]
     what = _section(body, "What this is")
     problems = []
     if "Cause NOT attributed" not in what:
@@ -463,42 +702,91 @@ def test_unattributed_failure_does_not_assert_a_cause() -> None:
     assert not problems, "\n  ".join(problems) + f"\n--- body ---\n{body}"
 
 
-def test_isolation_narrative_appears_only_with_failed_tests() -> None:
+def test_every_repetition_failure_is_not_called_repeat_run(tmp_path: Path) -> None:
+    """#3343: failed 10 of 10 (a missing binary) is a plain failure, not leaked state."""
+    frag = _frag(test_runs={"TestConfigManager_HotReload": {"fail": 10, "pass": 0}})
+    inc = derive_incidents(frag)[0]
+    body = _strip_state_blocks(_issue_body(inc, frag))
+    out = _run_report(tmp_path, frag, {}).stdout
+    problems = []
+    if "fails every repetition (10/10)" not in file_race_report.incident_verdict(inc):
+        problems.append(f"verdict: {file_race_report.incident_verdict(inc)!r}")
+    for phrase in ("repeat-run", ISOLATION_STEP, "isolation-shaped"):
+        if phrase in body or phrase in out:
+            problems.append(f"an every-repetition failure still says {phrase!r}")
+    if "plain failure" not in _section(body, "What this is"):
+        problems.append("`What this is` does not call it a plain failure")
+    if "NOT leaked state" not in body:
+        problems.append("the body does not rule out leaked state")
+    assert not problems, "\n  ".join(problems) + f"\n--- body ---\n{body}"
+
+
+def test_some_repetitions_failure_is_isolation_shaped() -> None:
+    frag = _frag(test_runs={"TestConfigManager_HotReload": {"fail": 3, "pass": 7}})
+    inc = derive_incidents(frag)[0]
+    body = _strip_state_blocks(_issue_body(inc, frag))
+    problems = []
+    if "failed 3 of 10" not in file_race_report.incident_verdict(inc):
+        problems.append(f"verdict: {file_race_report.incident_verdict(inc)!r}")
+    for phrase in (ISOLATION_CLAIM, ISOLATION_STEP):
+        if phrase not in body:
+            problems.append(f"a k<n failure lost {phrase!r}")
+    assert not problems, "\n  ".join(problems) + f"\n--- body ---\n{body}"
+
+
+def test_unknown_repetition_count_picks_no_vocabulary() -> None:
+    """An older fragment without `test_runs`: say unknown, never guess."""
+    frag = _frag()
+    frag.pop("test_runs", None)
+    inc = derive_incidents(frag)[0]
+    body = _strip_state_blocks(_issue_body(inc, frag))
+    problems = []
+    if "not recorded" not in file_race_report.incident_verdict(inc):
+        problems.append(f"verdict: {file_race_report.incident_verdict(inc)!r}")
+    for phrase in (ISOLATION_CLAIM, ISOLATION_STEP, "plain failure —"):
+        if phrase in body:
+            problems.append(f"an unknown count still asserts {phrase!r}")
+    assert not problems, "\n  ".join(problems) + f"\n--- body ---\n{body}"
+
+
+def test_isolation_narrative_appears_only_for_some_repetition_failures() -> None:
     shapes = {
-        "failed tests": (_frag(), False),
-        "green": (_frag(failed=False, failed_tests=[], go_exit_code=0), True),
-        "build failure": (_frag(failed_tests=[], build_failed=True), False),
-        "data race": (_frag(had_data_race=True, race_tests=["TestR"],
-                            failed_tests=["TestR"]), False),
-        "timeout": (_timeout_frag(), False),
-        "unattributed": (_frag(failed_tests=[], unattributed_failure=True), False),
-        "missing fragment": (file_race_report.load_fragment(Path("/nonexistent"),
-                                                           "tenant-api")[0], False),
+        "k<n test": _frag(test_runs={"TestConfigManager_HotReload": {"fail": 3, "pass": 7}}),
+        "k=n test": _frag(test_runs={"TestConfigManager_HotReload": {"fail": 10, "pass": 0}}),
+        "build failure": _frag(failed_tests=[], build_failed=True),
+        "data race": _frag(had_data_race=True, race_tests=["TestR"], failed_tests=["TestR"]),
+        "timeout": _timeout_frag(),
+        "unattributed": _frag(failed_tests=[], unattributed_failure=True),
+        "missing fragment": file_race_report.load_fragment(Path("/nonexistent"),
+                                                          "tenant-api")[0],
     }
     problems = []
-    for name, (frag, green) in shapes.items():
-        body = _body(frag, green=green)
-        has = ISOLATION_CLAIM in body or ISOLATION_STEP in body
-        want = name == "failed tests"
+    for name, frag in shapes.items():
+        bodies = _bodies(frag)
+        has = any(ISOLATION_CLAIM in b or ISOLATION_STEP in b for b in bodies.values())
+        want = name == "k<n test"
         if has != want:
             problems.append(f"{name}: isolation narrative present={has}, expected {want}")
     assert not problems, (
-        "the isolation diagnosis is not gated on failing tests:\n  " + "\n  ".join(problems)
+        "the isolation diagnosis is not gated on k<n evidence:\n  " + "\n  ".join(problems)
     )
 
 
-def test_timeout_with_failed_tests_does_not_contradict_itself() -> None:
-    """One package can hit `-timeout` while a test fails elsewhere. The body
-    then carries both diagnoses, so the timeout one must not deny the other."""
-    frag = {**_timeout_frag(), "failed_tests": ["TestElsewhere"]}
-    body = _body(frag)
+def test_timeout_with_failed_tests_files_both_without_contradiction() -> None:
+    """One package can hit `-timeout` while a test fails elsewhere: two issues,
+    and the timeout one must not deny the failure the other one reports."""
+    frag = {**_timeout_frag(), "failed_tests": ["TestElsewhere"],
+            "test_runs": {"TestElsewhere": {"fail": 1, "pass": 9}}}
+    bodies = _bodies(frag)
     problems = []
-    if ISOLATION_STEP not in body:
+    if sorted(bodies) != ["test", "timeout"]:
+        problems.append(f"expected a timeout and a test issue, got {sorted(bodies)}")
+    if ISOLATION_STEP not in bodies.get("test", ""):
         problems.append("the failing test lost its isolation triage step")
     for phrase in ("Do not bisect", "No test reported a failure"):
-        if phrase in body:
-            problems.append(f"the timeout paragraph still says {phrase!r}")
-    assert not problems, "\n  ".join(problems) + f"\n--- body ---\n{body}"
+        if phrase in bodies.get("timeout", ""):
+            problems.append(f"the timeout body still says {phrase!r}")
+    assert not problems, "\n  ".join(problems)
 
 
 def test_timed_out_round_trips_and_old_blocks_still_parse() -> None:
@@ -525,6 +813,8 @@ def test_missing_fragment_reads_as_worse_not_clean(tmp_path: Path) -> None:
         problems.append("exit code was 0 — a degraded report must red the run")
     if "issue create" not in proc.stdout:
         problems.append("no alert was filed for the module with no fragment")
+    if "no-result: ghost" not in proc.stdout:
+        problems.append("the missing fragment was not filed as a `no-result` incident")
     if "::error" not in proc.stdout:
         problems.append("no ::error annotation for the missing fragment")
     assert not problems, (
@@ -577,17 +867,14 @@ def test_issue_create_failure_reds_the_run(tmp_path: Path, capsys, monkeypatch) 
 
 def test_issue_edit_failure_reds_the_run(tmp_path: Path, capsys, monkeypatch) -> None:
     """Same for the refresh path (e.g. 410 on a locked/transferred issue)."""
-    def script(args):
-        if args[:2] == ["issue", "list"]:
-            return 0, json.dumps([{"number": 1213, "title": TITLE_PREFIX_TMPL.format(
-                module="tenant-api") + " — repeat-run failure in 1 test(s)"}])
-        if args[:2] == ["issue", "edit"]:
-            return 1, ""
-        return 0, ""
-
-    rc = _run_main(tmp_path, _frag(), script, monkeypatch)
+    calls: list[list[str]] = []
+    frag = _frag()
+    rc = _run_main(tmp_path, frag, _list_script([_row(1213, frag)], calls, fail_edit=True),
+                   monkeypatch)
     out = capsys.readouterr().out
     problems = []
+    if not any(c[:3] == ["issue", "edit", "1213"] for c in calls):
+        problems.append("never attempted the refresh — the test would be vacuous")
     if rc == 0:
         problems.append("exit code 0 despite the issue edit failing")
     if "Refreshed issue #1213 (silent)." in out:
@@ -596,6 +883,17 @@ def test_issue_edit_failure_reds_the_run(tmp_path: Path, capsys, monkeypatch) ->
         "a failed issue refresh was reported as success:\n  " + "\n  ".join(problems)
         + f"\n--- output ---\n{out}"
     )
+
+
+def test_not_seen_refresh_failure_reds_the_run(tmp_path: Path, capsys, monkeypatch) -> None:
+    calls: list[list[str]] = []
+    frag = _frag(failed=False, failed_tests=[], go_exit_code=0)
+    rc = _run_main(tmp_path, frag, _list_script([_row(1214, frag)], calls, fail_edit=True),
+                   monkeypatch)
+    out = capsys.readouterr().out
+    assert any(c[:3] == ["issue", "edit", "1214"] for c in calls)
+    assert rc != 0, "a failed not-seen refresh exited 0"
+    assert "Refreshed issue #1214" not in out
 
 
 def test_lookup_failure_is_not_mistaken_for_no_existing_issue(
@@ -607,18 +905,26 @@ def test_lookup_failure_is_not_mistaken_for_no_existing_issue(
     Chosen behaviour: still FILE (a duplicate is visible and closable; a skipped
     first night is silence), but red the run and say so in the body.
     """
+    calls: list[list[str]] = []
+
     def script(args):
+        calls.append(args)
         if args[:2] == ["issue", "list"]:
             return 1, ""
         return 0, ""
 
     rc = _run_main(tmp_path, _frag(), script, monkeypatch)
     out = capsys.readouterr().out
+    create = next((c for c in calls if c[:2] == ["issue", "create"]), None)
     problems = []
     if rc == 0:
         problems.append("exit code 0 despite the dedup lookup failing")
     if "::error" not in out:
         problems.append("no ::error annotation for the failed lookup")
+    if create is None:
+        problems.append("the alert was skipped instead of filed loudly")
+    elif "Dedup was unavailable" not in _arg(create, "--body"):
+        problems.append("the filed body does not say dedup was unavailable")
     assert not problems, (
         "a failed lookup was treated as 'no existing issue':\n  " + "\n  ".join(problems)
         + f"\n--- output ---\n{out}"
@@ -653,9 +959,33 @@ def test_label_outage_delivers_without_the_label_and_reds_the_run(
         )
     if not any(c[0] == "api" for c in calls):
         problems.append("never probed the API to disambiguate create-failed vs label-absent")
+    if any(c[:2] == ["issue", "list"] and "--label" in c for c in calls):
+        problems.append("queried by a label that does not exist instead of unlabelled")
     if rc == 0:
-        problems.append("exit code 0 — a degraded dedup key must red the run")
+        problems.append("exit code 0 — a degraded lookup key must red the run")
     assert not problems, "the label-outage path regressed:\n  " + "\n  ".join(problems)
+
+
+def test_unlabelled_issue_from_an_outage_night_is_found(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """The labelled list misses an issue filed during a label outage; the
+    unlabelled fallback must find it, or the next night files a duplicate."""
+    frag = _frag()
+    row = _row(1300, frag)
+    calls: list[list[str]] = []
+
+    def script(args):
+        calls.append(args)
+        if args[:2] == ["issue", "list"]:
+            return 0, ("[]" if "--label" in args else json.dumps([row]))
+        return 0, ""
+
+    rc = _run_main(tmp_path, frag, script, monkeypatch)
+    capsys.readouterr()
+    writes = _writes(calls)
+    assert [c[:3] for c in writes] == [["issue", "edit", "1300"]], writes
+    assert rc == 0
 
 
 def test_label_edit_rejected_but_label_exists_is_not_an_outage(
@@ -700,6 +1030,13 @@ def test_healthy_run_exits_zero(tmp_path: Path, capsys, monkeypatch) -> None:
 # ── GitHub API hard caps ─────────────────────────────────────────────────────
 
 
+def _tests_incident(names: list[str], **frag_over) -> tuple[dict, dict]:
+    frag = _frag(failed_tests=names, **frag_over)
+    incs = derive_incidents(frag)
+    assert [i["kind"] for i in incs] == ["tests"]
+    return incs[0], frag
+
+
 def test_body_fits_the_github_cap_at_whole_package_failure_scale() -> None:
     """One broken shared fixture reds the WHOLE package — the realistic worst case.
 
@@ -709,11 +1046,9 @@ def test_body_fits_the_github_cap_at_whole_package_failure_scale() -> None:
     — a 422 on precisely the night the issue matters most.
     """
     names = [f"TestSomeReasonablyLongHandlerName_Subcase{i:04d}" for i in range(933)]
-    body = compose_body(
-        frag=_frag(failed_tests=names, fail_events=9330),
-        state=_state(tests=names), run_url="https://gh/runs/999", date="2026-07-28",
-        baseline_readable=True, degraded="", green=False,
-    )
+    inc, frag = _tests_incident(names, fail_events=9330)
+    body = compose_body(inc, frag, _state(tests=inc["tests"]), "https://gh/runs/999",
+                        "2026-07-28", True, "")
     problems = []
     if len(body) > ISSUE_BODY_MAX:
         problems.append(f"body is {len(body)} chars, over GitHub's {ISSUE_BODY_MAX} cap")
@@ -730,6 +1065,8 @@ def test_body_fits_the_github_cap_at_whole_package_failure_scale() -> None:
         )
     if "and 733 more" not in body:
         problems.append("the rendered list was capped without telling the reader how many")
+    if file_race_report.body_fingerprint(body) != inc["fingerprint"]:
+        problems.append("the fingerprint marker did not survive")
     assert not problems, (
         f"body-size handling is wrong at {len(names)}-test scale (len={len(body)}):\n  "
         + "\n  ".join(problems)
@@ -737,12 +1074,10 @@ def test_body_fits_the_github_cap_at_whole_package_failure_scale() -> None:
 
 
 def test_pathological_body_is_truncated_with_a_visible_marker() -> None:
-    """Backstop: even absurd names must not produce a 422."""
+    """Backstop: even absurd names must not produce a 422 — or lose the marker."""
     names = [f"Test{'X' * 400}{i}" for i in range(MAX_RENDERED_TESTS)]
-    body = compose_body(
-        frag=_frag(failed_tests=names), state=_state(tests=names),
-        run_url="u", date="2026-07-28", baseline_readable=True, degraded="", green=False,
-    )
+    inc, frag = _tests_incident(names)
+    body = compose_body(inc, frag, _state(tests=names), "u", "2026-07-28", True, "")
     problems = []
     if len(body) > ISSUE_BODY_MAX:
         problems.append(f"body is {len(body)} chars, over the {ISSUE_BODY_MAX} cap")
@@ -750,15 +1085,15 @@ def test_pathological_body_is_truncated_with_a_visible_marker() -> None:
         problems.append("truncation happened silently, with no marker for the reader")
     if parse_state(body) is None:
         problems.append("the state block was destroyed by truncation")
+    if file_race_report.body_fingerprint(body) != inc["fingerprint"]:
+        problems.append("the fingerprint marker was destroyed by truncation")
     assert not problems, "pathological-body clamp failed:\n  " + "\n  ".join(problems)
 
 
 def test_normal_body_is_not_truncated() -> None:
     """Discriminability: the clamp must not fire on an ordinary failure."""
-    body = compose_body(
-        frag=_frag(), state=_state(tests=["TestA"]), run_url="u", date="2026-07-28",
-        baseline_readable=True, degraded="", green=False,
-    )
+    inc = derive_incidents(_frag())[0]
+    body = _issue_body(inc, _frag())
     assert "Body truncated" not in body, "the clamp fired on a single-test body"
     assert parse_state(body) is not None
 
@@ -772,6 +1107,8 @@ def test_label_description_fits_the_github_api_cap() -> None:
         )
     if len(LABEL_DESC) > 100:
         problems.append(f"LABEL_DESC is {len(LABEL_DESC)} chars: {LABEL_DESC!r}")
+    if "per module" in LABEL_DESC.lower():
+        problems.append("LABEL_DESC still describes the retired per-module model")
     assert not problems, "label description would 422:\n  " + "\n  ".join(problems)
 
 
@@ -779,11 +1116,16 @@ def test_issue_titles_fit_the_github_api_cap() -> None:
     problems = []
     if ISSUE_TITLE_MAX != 256:
         problems.append(f"ISSUE_TITLE_MAX is {ISSUE_TITLE_MAX}, GitHub's cap is 256")
+    long_subject = "github.com/vencil/threshold-exporter/" + "very/deep/package/" * 20
     for module in _matrix_modules():
-        budgeted = len(TITLE_PREFIX_TMPL.format(module=module)) + TITLE_SUFFIX_BUDGET
-        if budgeted > 256:
-            problems.append(f"{module}: prefix + suffix budget = {budgeted} > 256")
-    assert not problems, "issue title would 422:\n  " + "\n  ".join(problems)
+        for verdict in ("NO RESULT — leg produced no fragment", "not seen on 2026-10-14",
+                        "isolation-shaped — failed 9 of 10 repetitions"):
+            title = file_race_report.make_title(module, "timeout", long_subject, verdict)
+            if len(title) > 256:
+                problems.append(f"{module}: {len(title)} > 256")
+            if not title.endswith(f" — {verdict}"):
+                problems.append(f"{module}: clamping cut the verdict: {title!r}")
+    assert not problems, "issue title would 422 or lose its verdict:\n  " + "\n  ".join(problems)
 
 
 # ── matrix <-> report drift ──────────────────────────────────────────────────

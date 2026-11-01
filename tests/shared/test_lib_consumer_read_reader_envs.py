@@ -56,6 +56,40 @@ def test_the_other_readers_use_the_register() -> None:
     assert da_assembler.CRDECODE_ENV is cr.CRDECODE_ENV
 
 
+def test_the_go_real_generator_tests_build_every_registered_reader() -> None:
+    """tenant-api's real-generator tests exec the Python generator, so they
+    must hand it every reader the register names — built by the tests
+    themselves, not by whichever workflow runs them. The nightly race job
+    turned red for days when a reader was added to ci.yml's tenant-api leg
+    only (#3343). Go cannot import this register, so the Go list is pinned
+    to it here: a reader added on either side without the other is red."""
+    import re
+    go_test = REPO_ROOT / "components/tenant-api/internal/handler/generator_real_test.go"
+    src = go_test.read_text(encoding="utf-8")
+    block = re.search(r"var generatorTools = \[\]\*generatorTool\{(.*?)\n\}", src, re.S)
+    assert block, "generatorTools list not found — the Go test was restructured"
+    go_tools = re.findall(r'env:\s*"([A-Z_]+)",\s*name:\s*"([^"]+)",\s*'
+                          r'module:\s*"([^"]+)",\s*pkg:\s*"([^"]+)"', block.group(1))
+    assert {env: (module, pkg, name) for env, name, module, pkg in go_tools} == \
+        cr.READER_BUILD_SOURCES
+
+
+def test_the_build_sources_cover_exactly_the_registered_readers() -> None:
+    assert set(cr.READER_BUILD_SOURCES) == set(cr.READER_BINARY_ENVS)
+    for module, package, _ in cr.READER_BUILD_SOURCES.values():
+        assert (REPO_ROOT / module / "go.mod").is_file(), module
+        assert (REPO_ROOT / module / package).is_dir(), (module, package)
+
+
+def test_the_contract_runner_builds_from_the_register() -> None:
+    """The contract runner starts the real generator too; it must not keep a
+    list of its own (it built da-guard only, and the policy smoke broke)."""
+    src = (REPO_ROOT / "tests/contract/run_contract_tests.py").read_text(encoding="utf-8")
+    assert "READER_BUILD_SOURCES" in src
+    for literal in ('"DA_GUARD_BINARY"', '"DA_CRDECODE_BINARY"', '"DA_READ_BINARY"'):
+        assert literal not in src, literal
+
+
 def test_every_relative_value_becomes_absolute_against_the_cwd(tmp_path, monkeypatch) -> None:
     monkeypatch.chdir(tmp_path)
     env = {name: f"bin/{name.lower()}" for name in cr.READER_BINARY_ENVS}

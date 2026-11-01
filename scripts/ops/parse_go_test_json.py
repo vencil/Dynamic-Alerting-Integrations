@@ -42,6 +42,14 @@ Contract notes measured against a real Go 1.26 run, not assumed
   followed by the package-level `{"Action":"fail"}` (no `Test`). Without
   reading those lines the run reduces to "exit 1, nothing attributable", and
   the report used to guess a cause for it (#3177).
+* Every repetition of a top-level test ends in its own `pass` or `fail` event
+  (`Test` without a `/`). Counting them per name is what lets the report tell
+  "failed in every repetition" (a plain failure: a regression or a missing
+  binary) from "failed in k of n" (isolation-shaped). Without the counts every
+  non-race failure got isolation vocabulary, and #3343 — a test that failed all
+  ten repetitions because a binary was missing — was titled "repeat-run
+  failure". Subtests are not counted: their parent's verdict already covers
+  them, and the report keys test incidents by the top-level name.
 
 Fail-closed direction
 ---------------------
@@ -92,6 +100,8 @@ def parse_stream(lines, go_exit_code: int) -> dict:
     unit tests exercise the real reduction rather than a re-implementation.
     """
     failed: set[str] = set()
+    # Top-level test name -> {"fail": n, "pass": m} across all repetitions.
+    test_runs: dict[str, dict[str, int]] = {}
     race_tests: set[str] = set()
     had_data_race = False
     build_failed = False
@@ -134,6 +144,12 @@ def parse_stream(lines, go_exit_code: int) -> dict:
         # break; `build-fail` is the build-scoped event. Either alone is proof.
         if action == "build-fail" or ev.get("FailedBuild"):
             build_failed = True
+
+        if action in ("pass", "fail"):
+            name = ev.get("Test")
+            if isinstance(name, str) and name.strip() and "/" not in name.strip():
+                counts = test_runs.setdefault(name.strip(), {"fail": 0, "pass": 0})
+                counts[action] += 1
 
         if action == "fail":
             fail_events += 1
@@ -195,6 +211,10 @@ def parse_stream(lines, go_exit_code: int) -> dict:
             {t for p in timeout_pkgs for t in timeout_running.get(p, ())}
         ),
         "race_tests": sorted(race_tests),
+        # Per top-level test that FAILED at least once: its fail/pass counts
+        # across the repetitions. Tests that only passed are left out so a
+        # 900-test package does not bloat every fragment.
+        "test_runs": {n: dict(c) for n, c in sorted(test_runs.items()) if c["fail"]},
         "had_data_race": had_data_race,
         "build_failed": build_failed,
         "unattributed_failure": unattributed,
@@ -229,10 +249,12 @@ def build_fragment(
 
     result.update(
         {
-            # Still 1: the timeout fields (#3177) are additive, and the only
-            # consumer (file_race_report) reads every field with .get(), so a
-            # fragment without them reads as "did not time out" — which is what
-            # an older parser that could not detect timeouts actually measured.
+            # Still 1: the timeout fields (#3177) and `test_runs` are additive,
+            # and the only consumer (file_race_report) reads every field with
+            # .get(), so a fragment without them reads as "did not time out" —
+            # which is what an older parser that could not detect timeouts
+            # actually measured. A fragment without `test_runs` makes the report
+            # say the repetition count is unknown, never guess one.
             "schema": 1,
             "module": module,
             "workdir": workdir,
