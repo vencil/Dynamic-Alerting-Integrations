@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
 	"gopkg.in/yaml.v3"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	utiljson "k8s.io/apimachinery/pkg/util/json"
 )
 
 // The manifest reading: what `kubectl apply -f` makes of one converted
@@ -21,6 +24,30 @@ import (
 //     `kind` is a non-empty string ("Object 'Kind' is missing" for a missing,
 //     non-string, null or empty kind). The kind is checked first: `{items: []}`
 //     is refused for its kind.
+//   - Then a document's `apiVersion` and `metadata` must decode into the
+//     types kubectl reads them as: cli-runtime's metadata decoder
+//     (pkg/resource/metadata_decoder.go) unmarshals every document, a list
+//     included, into metadataOnlyObject below (metav1.TypeMeta and
+//     metav1.ObjectMeta) with k8s.io/apimachinery/pkg/util/json, and refuses
+//     the document when that fails: an `apiVersion` that is not a string, a
+//     `metadata` that is not a mapping, a `name`, `namespace`, label or
+//     annotation value that is not a string, a `creationTimestamp` that is
+//     not RFC 3339 ("json: cannot unmarshal number into Go struct field
+//     metadataOnlyObject.TypeMeta.apiVersion of type string", `parsing time
+//     "garbage" as …`). Null is accepted wherever it stands, keys are
+//     matched with their case (`Metadata:` is no `metadata`), and fields the
+//     types do not have are ignored. The check here is the same library
+//     call on the same type, so it accepts and refuses what kubectl does,
+//     with kubectl's words; when kubectl's error is a value put into a
+//     field that holds text (an unquoted `010` or `yes` as a name, a label
+//     value; quoteHint), one sentence is added saying that quoting makes it
+//     text. It is made on the document's JSON with its keys
+//     sorted, as kubectl's conversion gives them, so that of two wrong
+//     fields the one kubectl names is the one named here. A list is
+//     checked after its items are decoded (an `items` that is no list, an
+//     item that is no mapping is refused first, as kubectl refuses it) and
+//     before anything is asked of its items, and before its own content
+//     (below), which kubectl does not refuse.
 //   - A document with a top-level `items` key is a list, whatever its kind
 //     (`List`, `ConfigMapList`, even `ConfigMap`), and `items: null` too.
 //     kubectl applies its items, in order, and nothing of the list itself;
@@ -31,7 +58,10 @@ import (
 //     `spec`) — is discarded by kubectl without a word. That is no reading
 //     of the file a caller can stand on (rules written there never deploy),
 //     so here the document is refused, naming the keys (#3438), which is
-//     stricter than kubectl.
+//     stricter than kubectl. It is checked after every refusal kubectl
+//     makes of the list itself (its `items`, an item that is no mapping,
+//     its metadata), so that a list kubectl refuses is refused for
+//     kubectl's reason.
 //   - An item that is itself a list — any item whose `items` is a JSON array,
 //     an empty one and a nested `kind: List` included — is refused by kubectl
 //     ("is not a list: no Items field in this object"), and is refused here.
@@ -71,6 +101,17 @@ import (
 //   - A null item is an empty object to kubectl (decodeToList unmarshals it
 //     into an empty map), and is read here as `{}`: it takes the list's type
 //     like any item with neither, and is given as `{}` with that type.
+//   - Last, each item as it is given (with the type it took from the list)
+//     must pass the same metadataOnlyObject check as a document. kubectl
+//     does not make it of an item when it reads the file (an item with
+//     `name: 5` or `metadata: 5` is visited), but applying such an item does
+//     not apply it as written: a `name` that is not a string is refused by
+//     the client ("resource name may not be empty"), a label or other
+//     metadata of the wrong type by the API server, an annotation value
+//     that is not a string makes client-side apply replace all of the
+//     item's annotations, and a `namespace` that is not a string is replaced
+//     by the default namespace. Refusing the item here is stricter than
+//     kubectl's reading of the file and agrees with what applying it does.
 //
 // The as-written comparison (aswritten.go) is made on the whole list
 // document; each of its differences is given to the item its path starts
@@ -134,12 +175,10 @@ func manifestDocuments(source []byte, doc json.RawMessage, differs []difference)
 	}
 	rawItems, isList := obj["items"]
 	if !isList {
+		if err := metadataTypes(doc); err != nil {
+			return nil, nil, documentMetadataError(err)
+		}
 		return []json.RawMessage{doc}, [][]difference{differs}, nil
-	}
-	if own := listOwnContent(obj); len(own) > 0 {
-		return nil, nil, fmt.Errorf("a list document (it has `items`) with content of its "+
-			"own: `%s` — kubectl applies only a list's items and discards the rest without "+
-			"a word; move it into an item, or drop `items`", strings.Join(own, "`, `"))
 	}
 	// `items: null` decodes to no items (json.Unmarshal leaves the slice
 	// nil) and goes the way of `items: []`: the list's own differences are
@@ -150,20 +189,36 @@ func manifestDocuments(source []byte, doc json.RawMessage, differs []difference)
 			"(kubectl: cannot unmarshal %s into Go struct field decodeList.items)",
 			jsonShape(rawItems), jsonShape(rawItems))
 	}
+	lines := itemLines(source, len(items))
+	// kubectl decodes the whole list before it checks the list's metadata:
+	// an item that is no mapping refuses the list first.
+	for i, item := range items {
+		if _, _, err := itemObject(item); err != nil {
+			return nil, nil, inItem(i, lines, err)
+		}
+	}
+	if err := metadataTypes(doc); err != nil {
+		return nil, nil, documentMetadataError(err)
+	}
+	// The list's own content is refused here, not by kubectl: after every
+	// refusal kubectl makes of the list itself, so that one is the one told.
+	if own := listOwnContent(obj); len(own) > 0 {
+		return nil, nil, fmt.Errorf("a list document (it has `items`) with content of its "+
+			"own: `%s` — kubectl applies only a list's items and discards the rest without "+
+			"a word; move it into an item, or drop `items`", strings.Join(own, "`, `"))
+	}
 	perItem, err := itemDifferences(differs, len(items))
 	if err != nil {
 		return nil, nil, err
 	}
-	lines := itemLines(source, len(items))
 	listKind, listAPIVersion := stringField(obj, "kind"), stringField(obj, "apiVersion")
 	for i, item := range items {
 		typed, took, err := listItem(item, listKind, listAPIVersion)
 		if err != nil {
-			where := fmt.Sprintf("items[%d]", i)
-			if lines[i] > 0 {
-				where += fmt.Sprintf(" (line %d)", lines[i])
-			}
-			return nil, nil, fmt.Errorf("in this list, %s: %w", where, err)
+			return nil, nil, inItem(i, lines, err)
+		}
+		if err := metadataTypes(typed); err != nil {
+			return nil, nil, inItem(i, lines, itemMetadataError(err))
 		}
 		items[i] = typed
 		if took {
@@ -171,6 +226,127 @@ func manifestDocuments(source []byte, doc json.RawMessage, differs []difference)
 		}
 	}
 	return items, perItem, nil
+}
+
+// inItem names the list item *i* (and the line it starts on, from *lines*,
+// when that can be told) in the refusal *err*.
+func inItem(i int, lines []int, err error) error {
+	where := fmt.Sprintf("items[%d]", i)
+	if lines[i] > 0 {
+		where += fmt.Sprintf(" (line %d)", lines[i])
+	}
+	return fmt.Errorf("in this list, %s: %w", where, err)
+}
+
+// metadataOnlyObject is the type cli-runtime's metadata decoder
+// (pkg/resource/metadata_decoder.go) unmarshals every document into, with
+// the same name and tags: its name is in the errors kubectl prints
+// ("Go struct field metadataOnlyObject.TypeMeta.apiVersion").
+type metadataOnlyObject struct {
+	metav1.TypeMeta   `json:""`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+}
+
+// metadataTypes checks the object *raw* the way kubectl's metadata decoder
+// does: utiljson.Unmarshal into a metadataOnlyObject. The object is first
+// written with its keys sorted and its numbers as they stand, as
+// sigs.k8s.io/yaml.YAMLToJSON gives kubectl the document, so that of
+// several fields of the wrong type the first one kubectl meets is the one
+// reported. See the comment at the top of this file.
+func metadataTypes(raw json.RawMessage) error {
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.UseNumber()
+	var v interface{}
+	if err := dec.Decode(&v); err != nil {
+		return err
+	}
+	sorted, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	return utiljson.Unmarshal(sorted, &metadataOnlyObject{})
+}
+
+// documentMetadataError is the refusal of a document whose `apiVersion` or
+// `metadata` kubectl's metadata decoder refuses with *err*.
+func documentMetadataError(err error) error {
+	return fmt.Errorf(notObject+"its `apiVersion` or `metadata` does not decode into the types "+
+		"kubectl reads them as, metav1.TypeMeta and metav1.ObjectMeta (kubectl: %v)%s", err, quoteHint(err))
+}
+
+// quoteHint is a sentence for a metadata refusal *err* that is a value put
+// into a field that holds text, the type error kubectl reports for an
+// unquoted `010`, `1.5` or `yes` the YAML reads as a number or a boolean;
+// "" for any other refusal. The error is told by its type, not its words:
+// a *json.UnmarshalTypeError whose Type is a string kind and whose Field,
+// followed through metadataOnlyObject (fieldType), ends at a string kind
+// too. The second test is what keeps the sentence off a time: kubectl
+// reports `creationTimestamp: 5` with Type string (metav1.Time decodes
+// from a string), but quoting gives a string that is still no time.
+func quoteHint(err error) string {
+	var typeErr *json.UnmarshalTypeError
+	if !errors.As(err, &typeErr) || typeErr.Type == nil || typeErr.Type.Kind() != reflect.String {
+		return ""
+	}
+	t, ok := fieldType(reflect.TypeOf(metadataOnlyObject{}), typeErr.Field)
+	if !ok || t.Kind() != reflect.String {
+		return ""
+	}
+	return "; a value the YAML reads as a number or a boolean (an unquoted 010, 1.5, yes) " +
+		"is not text: quote it if text is meant"
+}
+
+// fieldType is the type of the value at *field* — an UnmarshalTypeError's
+// Field, dot-separated JSON names, with an embedded struct named by its
+// type (`TypeMeta.apiVersion`, `metadata.labels`,
+// `metadata.ownerReferences.uid`) — starting at the struct type *t*:
+// pointers, slices and maps are followed to their elements, at every step
+// and at the end (a label's value, not the labels map). false when a step
+// names no field.
+func fieldType(t reflect.Type, field string) (reflect.Type, bool) {
+	elem := func(t reflect.Type) reflect.Type {
+		for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice ||
+			t.Kind() == reflect.Array || t.Kind() == reflect.Map {
+			t = t.Elem()
+		}
+		return t
+	}
+	for _, name := range strings.Split(field, ".") {
+		t = elem(t)
+		if t.Kind() != reflect.Struct {
+			return nil, false
+		}
+		found := false
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			jsonName, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			if jsonName == "-" {
+				continue
+			}
+			if jsonName == "" {
+				jsonName = f.Name
+			}
+			if jsonName == name || (f.Anonymous && f.Name == name) {
+				t, found = f.Type, true
+				break
+			}
+		}
+		if !found {
+			return nil, false
+		}
+	}
+	return elem(t), true
+}
+
+// itemMetadataError is the refusal of a list item whose `apiVersion` or
+// `metadata` does not decode as a document's must (*err*), which kubectl
+// does not check of an item when it reads the file.
+func itemMetadataError(err error) error {
+	return fmt.Errorf(notObject+"its `apiVersion` or `metadata` does not decode into the types "+
+		"kubectl reads a document's as, metav1.TypeMeta and metav1.ObjectMeta (%v); kubectl does "+
+		"not check this of an item when it reads the file, but applying the item would not apply "+
+		"it as written: it is refused (a `name` that is not a string, metadata of the wrong type) "+
+		"or changed (annotations replaced, the namespace defaulted)%s", err, quoteHint(err))
 }
 
 // listOwnKeys are the keys a list document carries that are no content:
@@ -206,17 +382,10 @@ func stringField(obj map[string]json.RawMessage, key string) string {
 // its type from the list; an error for an item kubectl would not apply. See
 // the comment at the top of this file.
 func listItem(item json.RawMessage, listKind, listAPIVersion string) (json.RawMessage, bool, error) {
-	shape := jsonShape(item)
-	if shape == "null" {
-		item = json.RawMessage("{}") // kubectl's reading of a null item
+	item, obj, err := itemObject(item)
+	if err != nil {
+		return nil, false, err
 	}
-	var obj map[string]json.RawMessage
-	if err := json.Unmarshal(item, &obj); err != nil || obj == nil {
-		return nil, false, fmt.Errorf(notObject+"the item is %s, not a mapping (kubectl: cannot "+
-			"unmarshal %s into Go value of type map[string]interface {}, and reads none of this "+
-			"list's items)", withArticle(shape), shape)
-	}
-	var err error
 	if inner, ok := obj["items"]; ok && jsonShape(inner) == "array" {
 		return nil, false, errors.New("a list inside a list is not read " +
 			"(kubectl: is not a list: no Items field in this object); write its items as items of the outer list")
@@ -237,6 +406,22 @@ func listItem(item json.RawMessage, listKind, listAPIVersion string) (json.RawMe
 			"taken off) and apiVersion %q", err, kind, apiVersion)
 	}
 	return item, true, nil
+}
+
+// itemObject is the list item *item* as kubectl decodes it (a null item is
+// `{}`) and its top-level fields; an error for an item that is no mapping.
+func itemObject(item json.RawMessage) (json.RawMessage, map[string]json.RawMessage, error) {
+	shape := jsonShape(item)
+	if shape == "null" {
+		item = json.RawMessage("{}") // kubectl's reading of a null item
+	}
+	var obj map[string]json.RawMessage
+	if err := json.Unmarshal(item, &obj); err != nil || obj == nil {
+		return nil, nil, fmt.Errorf(notObject+"the item is %s, not a mapping (kubectl: cannot "+
+			"unmarshal %s into Go value of type map[string]interface {}, and reads none of this "+
+			"list's items)", withArticle(shape), shape)
+	}
+	return item, obj, nil
 }
 
 // withArticle is the JSON type name *shape* with its indefinite article.

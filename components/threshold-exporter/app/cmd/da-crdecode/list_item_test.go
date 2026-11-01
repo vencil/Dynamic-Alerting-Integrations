@@ -125,11 +125,13 @@ var listItemCases = []struct {
 	{name: "list-no-apiversion-full-item", in: "kind: ConfigMapList\nitems:\n- apiVersion: v1\n  kind: ConfigMap\n  metadata: {name: a}\n",
 		kubectl: "ACCEPT v1/ConfigMap",
 		want:    `{"documents":[{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"a"}}],"differs_from_text":[[]]}`},
-	// kubectl refuses this list itself for its apiVersion; here the item is
-	// refused for the "" it takes. Both refuse.
+	// kubectl refuses this list itself for its apiVersion, before its items
+	// are asked their type; here too (metadata_test.go).
 	{name: "list-apiversion-number", in: "apiVersion: 5\nkind: ConfigMapList\nitems:\n- metadata: {name: a}\n",
 		kubectl: "cannot unmarshal number into Go struct field metadataOnlyObject.TypeMeta.apiVersion",
-		wantErr: "items[0] (line 4): it is not a Kubernetes object: its `apiVersion` is empty"},
+		wantErr: "it is not a Kubernetes object: its `apiVersion` or `metadata` does not decode into the types " +
+			"kubectl reads them as, metav1.TypeMeta and metav1.ObjectMeta (kubectl: json: cannot unmarshal number " +
+			"into Go struct field metadataOnlyObject.TypeMeta.apiVersion of type string)"},
 	// The list's kind decides the item's, whatever it is.
 	{name: "kind-configmap-with-items", in: "apiVersion: v1\nkind: ConfigMap\nitems:\n- metadata: {name: a}\n",
 		kubectl: "ACCEPT v1/ConfigMap",

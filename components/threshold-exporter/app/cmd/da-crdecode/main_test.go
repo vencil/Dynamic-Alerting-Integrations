@@ -104,9 +104,9 @@ func TestManifestDocumentsMustBeKubernetesObjects(t *testing.T) {
 func TestManifestReadsKubernetesObjects(t *testing.T) {
 	t.Parallel()
 	in := "---\napiVersion: v1\nkind: ConfigMap\nmetadata: {name: a}\ndata: {k: \"010\"}\n" +
-		"---\n# only a comment\n---\nnull\n---\nkind: Namespace\nmetadata: {labels: {i: 010}}\n"
+		"---\n# only a comment\n---\nnull\n---\nkind: Namespace\nmetadata: {name: ns}\nspec: {i: 010}\n"
 	want := `{"documents":[{"apiVersion":"v1","kind":"ConfigMap","metadata":{"name":"a"},"data":{"k":"010"}},` +
-		`{"kind":"Namespace","metadata":{"labels":{"i":8}}}],"differs_from_text":[[],[]]}` + "\n"
+		`{"kind":"Namespace","metadata":{"name":"ns"},"spec":{"i":8}}],"differs_from_text":[[],[]]}` + "\n"
 	for name, run := range map[string]func(*testing.T, string) (int, string, string){
 		"manifest": runManifest, "any-shape": runOn} {
 		if rc, out, errOut := run(t, in); rc != exitOK || out != want || errOut != "" {
@@ -448,9 +448,9 @@ func TestManifestExpandsLists(t *testing.T) {
 			`{"documents":[{"apiVersion":"v1","kind":"ConfigMap","items":{"x":1}}],"differs_from_text":[[]]}`},
 		// The differences of item 1 go to item 1, its path from the item.
 		{"differs-per-item", "kind: List\nitems:\n- {apiVersion: v1, kind: A, x: {b: c}}\n" +
-			"- {apiVersion: v1, kind: B, metadata: {labels: {010: x, yes: y}}}\n",
+			"- {apiVersion: v1, kind: B, metadata: {labels: {010: x, yes: z}}}\n",
 			`{"documents":[{"apiVersion":"v1","kind":"A","x":{"b":"c"}},` +
-				`{"apiVersion":"v1","kind":"B","metadata":{"labels":{"8":"x","true":true}}}],"differs_from_text":[[],` +
+				`{"apiVersion":"v1","kind":"B","metadata":{"labels":{"8":"x","true":"z"}}}],"differs_from_text":[[],` +
 				`[{"kind":"keys","path":["metadata","labels"],"read_keys":["8","true"],"written_keys":["010","yes"]}]]}`},
 	}
 	for _, tc := range cases {
