@@ -107,8 +107,8 @@ func TestFilterKeepsExactlyTheRetainedLines(t *testing.T) {
 		t.Errorf("diag mismatch\n got: %q\nwant: %q", got, want)
 	}
 	if !strings.Contains(out.String(), cpuHeader) {
-		t.Errorf("the cpu: header was dropped; analyze_bench_history.py --trend-watch " +
-			"stratifies by it and would lose the key without any error")
+		t.Errorf("the cpu: header was dropped; it is the only record of which " +
+			"host class produced these numbers, and nothing else would notice")
 	}
 	if got := out.String(); got != want {
 		t.Errorf("output mismatch\n got: %q\nwant: %q", got, want)

@@ -228,3 +228,8 @@ scripts/tools/ops/gitops_check.py
 # pinned it go; only the "shared reader stays pure" half remains — removed,
 # not truncated.
 tests/shared/test_yaml_loader_is_libyaml.py
+# #3223: the absolute-ns/op trend watchdog (`--trend-watch`) is retired, so
+# its ~1800-line implementation and ~4400 lines of tests are removed; the
+# GO/NO-GO variance table and the gh helpers stay — removed, not truncated.
+scripts/tools/dx/analyze_bench_history.py
+tests/dx/test_analyze_bench_history.py

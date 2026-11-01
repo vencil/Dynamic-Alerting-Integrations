@@ -259,8 +259,6 @@ DX_SITES = [
      ["tenant-a", "--config-dir", "{CONF}", "--state", "{F}"], "--state {F}", 2),
     ("agent-output-metrics changelog --path", "dx/agent_output_metrics.py",
      ["changelog", "--path", "{F}"], "--path {F}", 2),
-    ("write-baseline-marker --baseline", "dx/write_baseline_marker.py",
-     ["--baseline", "{F}", "--out", "{BOX}/marker"], "--baseline {F}", 2),
     ("generate-alert-reference --output-dir", "dx/generate_alert_reference.py",
      ["--output-dir", "{D}"], "--output-dir {D}", 2),
     ("generate-rule-pack-readme --rule-packs-dir", "dx/generate_rule_pack_readme.py",
@@ -470,16 +468,6 @@ def test_reword_chain_mapping_not_a_file_is_a_caller_error(tree, name):
     proc = _cli("reword_chain.py", str(tree / name), "--dry-run")
     assert proc.returncode == 2, proc.stderr
     assert f"ERROR: mapping file {tree / name}: " in proc.stderr
-
-
-@pytest.mark.parametrize("name", ["nope", "d"])
-def test_write_baseline_marker_baseline_not_a_file_is_a_caller_error(tree, name):
-    """E2: a --baseline that is missing or not a file was rc 1."""
-    proc = _cli("write_baseline_marker.py", "--baseline", str(tree / name),
-                "--out", str(tree / "marker"))
-    assert proc.returncode == 2, proc.stderr
-    assert f"::error::--baseline {tree / name}: " in proc.stderr
-    assert not (tree / "marker").exists()
 
 
 def test_analyze_probe_from_log_directory_is_a_caller_error(tree):

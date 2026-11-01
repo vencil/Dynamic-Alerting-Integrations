@@ -2643,8 +2643,8 @@ jobs:
     # workflow_dispatch) and, on a night whose paired reference is unusable,
     # in bench-record.yaml's `make benchmark-report` fallback (the paired path
     # appends the test binary's stdout unfiltered). So a change first ran after
-    # merge. On those paths it is what keeps the `cpu:` header that
-    # analyze_bench_history.py stratifies the trend watchdog by, and
+    # merge. On those paths it is what keeps the `cpu:` header — the only
+    # record of which host class produced the numbers — and
     # bench_filter_test.go pins that. Stdlib-only module, single
     # goroutine: no go.sum, no module cache, no -race. `./...` here does not
     # descend into the nested bench-canary module.
