@@ -290,9 +290,9 @@ func TestDocsDefaultsSamplesDecode(t *testing.T) {
 	}
 }
 
-// TestDocsDefaultsSamplesHaveNoTenantOnlyKeys pins the two shapes that decode
-// cleanly and are still wrong — neither is reachable by a YAML or JSON-Schema
-// check, only by knowing what resolve.go does with the key.
+// TestDocsDefaultsSamplesHaveNoTenantOnlyKeys pins a shape that decodes
+// cleanly and is still wrong — not reachable by a YAML or JSON-Schema check,
+// only by knowing what resolve.go does with the key.
 //
 //   - `<metric>_critical` in `defaults:` is NOT the critical tier.
 //     resolveBaseRows iterates the defaults map and does not skip the suffix,
@@ -300,11 +300,11 @@ func TestDocsDefaultsSamplesDecode(t *testing.T) {
 //     series no rule pack consumes — while the tenant still has no critical
 //     tier. The supported shape is a TENANT override, which resolveCriticalRows
 //     turns into {metric="X", severity="critical"}.
-//   - a dimensional key (`metric{label="v"}`) in `defaults:` does not give
-//     dimensional thresholds a default path. resolveDimensionalRows is
-//     tenant-only and never consults the defaults map; put one here and
-//     parseMetricKey bakes the label segment into the metric NAME, emitting
-//     metric="cpu{env=\"prod\"}". ValidateTenantKeys reports nothing.
+//
+// A dimensional key (`metric{label="v"}`) in `defaults:` is NOT pinned here
+// (#3478): since #2031 it is the labelled default of every tenant that does
+// not write it (TestRootDimensionalDefault_IsTheLabelledSeries), served once
+// `dimensions:` declares its labels (#3475).
 func TestDocsDefaultsSamplesHaveNoTenantOnlyKeys(t *testing.T) {
 	for _, s := range collectDocDefaultsSamples(t) {
 		var cfg ThresholdConfig
@@ -319,11 +319,6 @@ func TestDocsDefaultsSamplesHaveNoTenantOnlyKeys(t *testing.T) {
 					"no rule pack consumes — and the tenant still has no critical tier. "+
 					"The critical tier is a TENANT override on the base key %q.",
 					s.file, s.line, key, component, metric, strings.TrimSuffix(key, criticalSuffix))
-			}
-			if strings.Contains(key, "{") {
-				t.Errorf("%s:%d — `defaults:` declares dimensional key %q. Dimensional thresholds are "+
-					"tenant-only (resolveDimensionalRows never reads defaults); here the label segment "+
-					"is baked into the metric NAME instead.", s.file, s.line, key)
 			}
 		}
 	}

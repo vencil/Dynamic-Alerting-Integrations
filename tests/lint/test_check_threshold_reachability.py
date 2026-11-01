@@ -636,25 +636,20 @@ def test_an_empty_defaults_face_is_an_error_not_a_pass():
     assert any("EMPTY-FACE" in e and "probe face" in e for e in result["errors"]), result
 
 
-def test_dimensional_key_in_a_defaults_face_is_an_error():
-    """The other half of the rule `TestDocsDefaultsSamplesHaveNoTenantOnlyKeys`
-    pins. Covering only `_critical` (the half #1218 was reported about) leaves
-    the equally-inert shape unguarded on every surface this face covers.
-
-    ⛔ No producer COUNT here on purpose: "all six" stood in this docstring and
-    in the Go pin, and both went stale the moment the artifact half became
-    derived (4 enumerated generators + however many the predicate finds — 17
-    today). A number restated in three places is a number that will be corrected
-    in one of them.
-    """
+def test_a_flat_dimensional_key_in_a_defaults_face_is_legal():
+    """#3478: since #2031 a FLAT `metric{label="v"}` key under root `defaults:`
+    is served — the labelled default of every tenant that does not write it,
+    once `dimensions:` declares its labels (#3475). Whether it is served is the
+    shared verdict's call, so this gate must not reject the shape; the arm that
+    did ("resolveDimensionalRows is tenant-only") contradicted the exporter.
+    Restoring it turns this red."""
     result = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
         defaults_faces=({"probe": _flat("oracle_tablespace",
                                         'oracle_ts{env="prod"}')}, {}),
     )
-    hits = [e for e in result["errors"] if "DIMENSIONAL-IN-DEFAULTS" in e]
-    assert len(hits) == 1, result
-    assert 'oracle_ts{env="prod"}' in hits[0]
+    assert not [e for e in result["errors"]
+                if "DIMENSIONAL-IN-DEFAULTS" in e], result
 
 
 def test_critical_must_be_a_SUFFIX_not_a_substring():
@@ -1082,7 +1077,11 @@ def test_the_message_never_spells_a_one_segment_metric_label():
     faces = {
         "flat critical": _flat("pg_connections_critical"),
         "nested critical": _nested(threshold={"pg_connections_critical": 1}),
-        "flat dimensional": _flat('pg_conn{env="prod"}'),
+        # A FLAT dimensional key is legal since #3478 (served per #2031), so
+        # the dimensional branches left are the mapping value and the nested
+        # path.
+        "dimensional with a mapping value": gate._walk_defaults_keys(
+            {'pg_conn{env="prod"}': {"inner": 1}}),
         "nested dimensional": _nested(threshold={'pg_conn{env="prod"}': 1}),
         # ⛔ The two shapes the dotted-path split lost entirely: a label VALUE
         # containing a dot. `{tablespace=~"SYS.*"}` is the mainstream dimensional
@@ -1091,8 +1090,10 @@ def test_the_message_never_spells_a_one_segment_metric_label():
         # `*"}` / `1"}` and produced NO message at all — so this test's own
         # `seen == len(faces)` would have counted them as covered while the
         # branch never ran.
-        "flat dimensional, dotted label": _flat('ora_ts{tablespace=~"SYS.*"}'),
-        "flat dimensional, dotted ip": _flat('node_load{instance="10.0.0.1"}'),
+        "nested dimensional, dotted label": _nested(
+            threshold={'ora_ts{tablespace=~"SYS.*"}': 1}),
+        "nested dimensional, dotted ip": _nested(
+            threshold={'node_load{instance="10.0.0.1"}': 1}),
     }
     seen = 0
     for label, face in faces.items():
@@ -2847,13 +2848,12 @@ def test_a_nested_dimensional_key_is_reported_once_with_nested_wording():
     assert len(nested) == 1, nested
     assert "SECOND, independent problem" in nested[0], nested[0]
 
-    # …and a genuinely FLAT one still gets the flat wording
+    # …and a genuinely FLAT one is legal (#3478, served since #2031)
     flat = [e for e in gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
         defaults_faces=({"probe": _flat('redis_q{queue="c"}')}, {}),
     )["errors"] if "DIMENSIONAL-IN-DEFAULTS" in e]
-    assert len(flat) == 1, flat
-    assert "resolveDimensionalRows is tenant-only" in flat[0], flat[0]
+    assert flat == [], flat
 
 
 def test_a_flat_key_containing_a_dot_is_not_diagnosed_as_nested():
@@ -3412,8 +3412,9 @@ def test_placement_runs_on_artifact_faces_too():
     in two is exactly how one class would quietly stop being checked."""
     result = gate.run_check(
         demand=set(), supply=set(), deferred=set(), known_unwired={},
-        defaults_faces=({}, {"artifact (probe)": _flat(
-            "pg_connections_critical", 'oracle_ts{env="prod"}')}),
+        defaults_faces=({}, {"artifact (probe)": {
+            **_flat("pg_connections_critical"),
+            **_nested(a={'oracle_ts{env="prod"}': 1})}}),
     )
     assert [e for e in result["errors"] if "CRITICAL-IN-DEFAULTS" in e], result
     assert [e for e in result["errors"] if "DIMENSIONAL-IN-DEFAULTS" in e], result
