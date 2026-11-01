@@ -53,9 +53,6 @@ def test_flags_flag_form_in_k8s_manifest(tmp_path: Path):
     assert len(guard.find_violations(tmp_path)) == 1
 
 
-def test_flags_in_operator_manifests(tmp_path: Path):
-    _write(tmp_path, "operator-manifests/ta.yaml", "  TA_DEV_BYPASS_AUTH: yes\n")
-    assert len(guard.find_violations(tmp_path)) == 1
 
 
 def test_clean_manifest_passes(tmp_path: Path):

@@ -184,7 +184,7 @@ repos:
         entry: python3 -X utf8 scripts/tools/lint/check_dev_bypass_manifest.py --ci
         language: python
         pass_filenames: false
-        files: '^helm/.*\.ya?ml$|^k8s/.*\.ya?ml$|^operator-manifests/.*\.ya?ml$|^scripts/tools/lint/check_dev_bypass_manifest\.py$'
+        files: '^helm/.*\.ya?ml$|^k8s/.*\.ya?ml$|^scripts/tools/lint/check_dev_bypass_manifest\.py$'
 
       # --- ADR-034 mechanical enforcement: no hand-rolled env-to-bool parsers ---
       # ADR-034 forbids a legal value from doubling as the fallback for an
@@ -1234,7 +1234,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(rule-packs/|operator-manifests/|k8s/03-monitoring/configmap-rules-).*\.ya?ml$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/|k8s/03-monitoring/configmap-rules-).*\.ya?ml$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         # FATAL: a `sum by(...)(user_threshold)` DOUBLES the threshold under the
         # default HA topology (replicaCount=2, no leader-election) → alert never
         # fires. Checks the OPERATOR only (must be max); does NOT constrain by()
@@ -1364,7 +1364,7 @@ repos:
         # CI hard gate does. Fix: `make rulepack-configmaps`, then commit both.
 
       - id: rulepack-3copy-drift
-        name: "ADR-024: operator-manifests/ PrometheusRule CRDs must match rule-packs/ source (PR3-pre hard gate)"
+        name: "ADR-024: rules ConfigMap copies must match rule-packs/ source semantically (PR3-pre hard gate)"
         # #3206 (ADR-036 §12): rule files are read the way Prometheus' rule
         # loader reads them (`da-read prometheus-rules`), a ConfigMap /
         # PrometheusRule the way kubectl reads it (da-crdecode). The wrappers
@@ -1374,15 +1374,14 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml|operator-manifests/da-rule-pack-.*\.ya?ml)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
-        # Semantic 3-copy guard: the operator CRD copy (the 3rd copy, sibling to
-        # the configmap copy above) must never silently drift from source either.
-        # The operator manifests were audit-only while they lagged source; once
-        # regenerated to the left-outer-join source (#709, #711) they became a
-        # hard gate. Edit a rule pack but forget the operator CRD → this fails
-        # locally before the "Lint Rule Packs" CI hard gate does. Fix:
-        # `python scripts/tools/ops/operator_generate.py --components rules
-        # --output-dir operator-manifests/`, then commit all three copies.
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        # Semantic copy guard (the hook id keeps its old "3copy" name for the
+        # ledger). The third copy — committed PrometheusRule CRDs under
+        # operator-manifests/ — is gone (#3427): it drifted on metadata this
+        # gate never compared (the `release` selector label). The CRDs are
+        # generated on demand (`da-tools operator-generate --components rules
+        # --output-dir <dir>`), and what the generator writes is pinned by
+        # tests/ops/test_operator_generate_rule_copies.py.
 
       - id: portal-rulepack-claims
         name: "Portal rule-pack viewer must not advertise alerts we don't ship (name + severity)"
@@ -1395,7 +1394,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(scripts/tools/lint/check_portal_rulepack_claims\.py|tools/portal/src/interactive/tools/rule-pack-detail\.jsx|rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml|operator-manifests/da-rule-pack-.*\.ya?ml)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(scripts/tools/lint/check_portal_rulepack_claims\.py|tools/portal/src/interactive/tools/rule-pack-detail\.jsx|rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         # rule-pack-detail.jsx is HAND-maintained customer-facing copy with no
         # generator behind it. It had drifted to 28 alert names that exist in no
         # rule tree — invented capability claims a prospect can read. Note the
@@ -1555,7 +1554,7 @@ repos:
         name: "#1231: forbid re-introducing user_threshold{component=mysql, metric=cpu} selectors"
         entry: 'component="mysql",\s*metric="cpu"'
         language: pygrep
-        files: ^(rule-packs/|k8s/03-monitoring/|operator-manifests/).*\.ya?ml$
+        files: ^(rule-packs/|k8s/03-monitoring/).*\.ya?ml$
         # Rule-pack side of the same rename: the exporter derives
         # component/metric labels from the conf.d key (first-underscore split,
         # pkg/config/parse.go parseMetricKey), so the retired key's selector

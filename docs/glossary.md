@@ -117,7 +117,7 @@ lang: zh
 :   Open Container Initiative 標準的容器/Helm chart 儲存庫。本平台的 Helm chart 和 Docker images 均發佈至 `ghcr.io/vencil/`。
 
 **Operator CRD**
-:   Prometheus Operator 的 Custom Resource Definition（`ServiceMonitor` / `PrometheusRule` / `AlertmanagerConfig`）。本平台支援以 operator-manifests 形式整合既有 Operator 環境。
+:   Prometheus Operator 的 Custom Resource Definition（`ServiceMonitor` / `PrometheusRule` / `AlertmanagerConfig`）。本平台以 `da-tools operator-generate` 按需產生這些 CRD 來整合既有 Operator 環境（repo 不提交產物）。
 
 ## P
 
@@ -131,7 +131,7 @@ lang: zh
 :   Kubernetes Volume 類型，可將多個 ConfigMap 掛載至同一目錄。本平台用於將所有 Rule Pack ConfigMap 掛載至 Prometheus 的 rules 目錄，每個設定 `optional: true`。
 
 **Prometheus Operator**
-:   CNCF 的 Kubernetes operator，以 CRD 管理 Prometheus / Alertmanager。本平台可與既有 Operator 環境整合（見 Operator CRD、operator-manifests）。
+:   CNCF 的 Kubernetes operator，以 CRD 管理 Prometheus / Alertmanager。本平台可與既有 Operator 環境整合（見 Operator CRD）。
 
 ## R
 

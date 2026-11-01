@@ -323,9 +323,12 @@ def convert_rules_to_crd(
             # (`OPERATOR_RULES`): the same name operator-generate gives its copy.
             "name": _lib_consumer_read.OPERATOR_RULES.file_stem(pack_name),
             "namespace": namespace,
+            # #3427: the selector labels operator-generate puts on its copy,
+            # from the one definition — a Prometheus whose ruleSelector
+            # matches `release` loaded none of the CRDs this used to emit.
             "labels": {
                 "app.kubernetes.io/part-of": "dynamic-alerting",
-                "prometheus": "kube-prometheus",
+                **_lib_consumer_read.PROMETHEUS_RULE_SELECTOR_LABELS,
                 "migrated-from": "configmap",
             },
         },

@@ -208,8 +208,8 @@ def _scope_kinds(scope: ast.AST, calls) -> set[str]:
 #: tree — reviewed one by one, with why nothing below the root bears on it.
 _ROOT_ONLY_BY_DEFINITION: dict[tuple[str, str], str] = {
     ("_lib_consumer_read.py", "_declared_in"):
-        "lists one RULE_SOURCES directory (rule-packs/, operator-manifests/, "
-        "k8s/03-monitoring/ — repo-owned trees, never a tenant conf.d; the "
+        "lists one RULE_SOURCES directory (rule-packs/, k8s/03-monitoring/ "
+        "— repo-owned trees, never a tenant conf.d; the "
         "module is in the population only because its docstring says it reads "
         "files OUTSIDE conf.d): the rule files are its top-level files by "
         "declaration (#3426, #3438), every other top-level YAML there is "

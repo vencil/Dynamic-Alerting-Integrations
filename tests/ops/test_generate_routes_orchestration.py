@@ -2131,8 +2131,9 @@ class TestSentinelLabelContract:
     repo ships — see `_iter_rule_containers`, which reads the files the
     rule-source declaration names (`_lib_consumer_read.RULE_SOURCES`, #3438);
     rules anywhere else ring the coverage tripwire. Do not restate the old filename enumeration here: it
-    described a scanner that has been replaced, and it omitted
-    operator-manifests/ entirely (16 objects, 122 rules, a third of the tree).
+    described a scanner that has been replaced, and it omitted the then-committed
+    operator-manifests/ entirely (16 objects, 122 rules, a third of the tree;
+    no longer committed since #3427).
     Historically it read: the SOURCE rule packs plus
     EVERY k8s/03-monitoring/configmap-rules-*.yaml (the generated copies AND any
     hand-authored rules configmap — Watchdog's platform CM today, plus whatever
@@ -2324,9 +2325,7 @@ class TestPlatformAlertSourceContract:
         assert not any(w in platform for w in redis)
         assert "redis" in _generated_pack_names()
         assert "platform" not in _generated_pack_names()
-        # 3. operator-manifests/ PrometheusRule objects are DISCOVERED — the
-        #    directory-scoped scanner never saw this deployment path at all.
-        # ⛔ Pin EVERY tree, not the two that happened to get one. Dropping
+        # 3. ⛔ Pin EVERY declared tree, not the two that happened to get one. Dropping
         # rule-packs/ — 16 containers, 122 rules, half of what the previous
         # scanner read — was completely silent: the `>= 30` container floor has
         # 33 of slack at today's 63, so losing a whole tree still clears it.
@@ -2339,16 +2338,9 @@ class TestPlatformAlertSourceContract:
         k8s_tree = [w for w in by_where if w.startswith("k8s/03-monitoring/")]
         assert len(k8s_tree) >= 17, (
             f"the deployed ConfigMap tree yielded {len(k8s_tree)} container(s)")
-        prom = [w for w in by_where if w.startswith("operator-manifests/")]
-        assert len(prom) >= 16, f"PrometheusRule tree not discovered: {prom}"
-        # Classification, not the CLAIM. Provenance may be established by
-        # content (alerts that are actually in a pack) even when the object
-        # name says nothing, so asserting on the claimed string would fail a
-        # correctly-classified manifest and re-create the reserved-label
-        # misdiagnosis this whole criterion exists to avoid.
-        assert not any(w in platform for w in prom), (
-            f"operator manifest(s) classified platform-scope: "
-            f"{[w for w in prom if w in platform]}")
+        # (The committed PrometheusRule tree, operator-manifests/, was pinned
+        # here too until #3427 removed it: the CRDs are generated on demand,
+        # and a PrometheusRule's provenance is pinned on fixtures below.)
         # 4. Nothing declared may yield zero rules (the silent-zero).
         assert _rule_shaped_but_unparsed() == (), _rule_shaped_but_unparsed()
 
@@ -3870,7 +3862,7 @@ class TestContainerDiscovery:
                 "      - alert: BareGroups\n        expr: up == 0\n")
         assert "BareGroups" in self._alerts(text, "rule-packs/rule-pack-x.yaml")
         for rel in ("k8s/03-monitoring/extra-platform-rules.yaml",
-                    "operator-manifests/extra.yaml",
+                    "helm/extra/prometheus-rules.yaml",
                     "rule-packs/sub/rule-pack-x.yaml"):
             rung = _tripwire({rel: text})
             assert len(rung) == 1 and rung[0].startswith(rel + ":"), (rel, rung)
@@ -3987,7 +3979,7 @@ class TestProvenanceIsAMatchNotAClaim:
         # operator manifest being classified correctly and the gate demanding
         # the RESERVED `alert_source: platform` on the tenant alerts inside it.
         # Deleting that branch is fail-CLOSED, so nothing else goes red for it.
-        unnamed = ("operator-manifests/rules-for-forge.yaml:spec",
+        unnamed = ("k8s/03-monitoring/rules-for-forge.yaml:spec",
                    self._doc(self._rule("A"), self._rule("B")), None)
         assert unnamed[0] not in self._classify([unnamed], packs=[pack]), (
             "a deploy copy whose NAME attests to nothing was declared "
@@ -4455,14 +4447,14 @@ class TestScannerAnchorsAreFailClosed:
         examining nothing. The tracked-YAML listing (the tripwire's scope)
         raises on an empty repo; the declaration raises when ANY one source
         matches no file (Bazel's `glob(allow_empty = False)`) — emptying one
-        directory must not leave the other two reading as a clean answer.
+        directory must not leave the others reading as a clean answer.
         """
         import _lib_consumer_read  # noqa: PLC0415
         empty = self._temp_repo(tmp_path / "git", {"README.md": "no rules here\n"})
         with pytest.raises(AssertionError, match="git ls-files|repo layout"):
             self._with_root(empty, _tracked_yaml_paths)
         assert len(self._with_root(self._declared_tree(tmp_path / "full"),
-                                   _expected_rule_files)) == 3
+                                   _expected_rule_files)) == 2
         for src in _lib_consumer_read.RULE_SOURCES:
             root = self._declared_tree(tmp_path / src.directory.replace("/", "-"),
                                        drop=src.directory)

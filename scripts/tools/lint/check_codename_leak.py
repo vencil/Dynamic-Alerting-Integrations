@@ -121,7 +121,6 @@ DEFAULT_SCAN_PATHS = [
     "docs/interactive-tools.en.md",
     "rule-packs/README.md",
     "tools/portal/README.md",
-    "operator-manifests/README.md",
 ]
 
 # Wider set used by --scope full. Adds helm/ + tests/ where some internal

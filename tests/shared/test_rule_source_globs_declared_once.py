@@ -1,9 +1,11 @@
 """Where this repo ships rule files is declared once (#3438), and every tool
 picks, names and writes those files through that declaration (#3471).
 
-``_lib_consumer_read.RULE_SOURCES`` (``RULE_PACKS``, ``OPERATOR_RULES``,
-``CONFIGMAP_RULES``) says which directory holds which family and which file
-names there are rule files. Before #3471 some twenty tools under ``scripts/``
+``_lib_consumer_read.RULE_SOURCES`` (``RULE_PACKS``, ``CONFIGMAP_RULES``)
+says which directory holds which family and which file names there are rule
+files. ``OPERATOR_RULES`` names the PrometheusRule copies operator-generate
+writes; since #3427 the repo commits none, so it is no ``RULE_SOURCES`` entry,
+but its naming helpers and its prefix are held here like the others. Before #3471 some twenty tools under ``scripts/``
 each spelled ``rule-pack-*.yaml`` / ``configmap-rules-*.yaml`` /
 ``da-rule-pack-*.yaml`` themselves: a ``.yml`` file was passed over, and a
 YAML beside the rule files that is neither a rule file nor declared was
@@ -62,6 +64,11 @@ REPO = Path(__file__).resolve().parents[2]
 _LIB = "scripts/tools/_lib_consumer_read.py"
 
 
+#: Every rule-file family whose names the declaration owns: the shipped
+#: sources plus the generated-only PrometheusRule naming (#3427).
+_FAMILIES = (*cr.RULE_SOURCES, cr.OPERATOR_RULES)
+
+
 def _samples(source: cr.RuleSource) -> "list[str]":
     """One repo path per declared rule file glob of *source*."""
     return [f"{source.directory}/{glob.replace('*', 'x')}" for glob in source.rule_files]
@@ -70,14 +77,14 @@ def _samples(source: cr.RuleSource) -> "list[str]":
 # --- the helpers ------------------------------------------------------------
 
 
-@pytest.mark.parametrize("source", cr.RULE_SOURCES, ids=lambda s: s.directory)
+@pytest.mark.parametrize("source", _FAMILIES, ids=lambda s: s.prefix)
 def test_each_glob_has_one_star_after_the_shared_prefix(source):
     for glob in source.rule_files:
         assert glob.count("*") == 1, glob
         assert glob.split("*")[0] == source.prefix, glob
 
 
-@pytest.mark.parametrize("source", cr.RULE_SOURCES, ids=lambda s: s.directory)
+@pytest.mark.parametrize("source", _FAMILIES, ids=lambda s: s.prefix)
 def test_member_and_file_name_round_trip(source):
     for glob in source.rule_files:
         name = glob.replace("*", "redis")
@@ -104,7 +111,7 @@ def test_files_under_is_files_in_the_declared_directory(tmp_path):
     with pytest.raises(cr.SourcesUnlisted):
         cr.CONFIGMAP_RULES.files_under(tmp_path)
     with pytest.raises(cr.SourcesUnlisted):   # a missing directory is named
-        cr.OPERATOR_RULES.files_under(tmp_path)
+        cr.RULE_PACKS.files_under(tmp_path)
 
 
 def test_named_in_takes_only_rule_file_names(tmp_path):
@@ -138,24 +145,22 @@ def test_generated_configmap_names_are_declared_and_present():
         assert name in declared, name
 
 
-def test_generated_prometheusrule_names_are_declared_and_present():
+def test_generated_prometheusrule_names_are_declared():
     """operator-generate writes `<metadata.name>.yaml`; that name is the
-    declaration's and, on this tree, a file it lists."""
-    declared = _declared_names(cr.OPERATOR_RULES)
+    declaration's. (No committed copy to find it in since #3427 — the files it
+    writes are pinned by tests/ops/test_operator_generate_rule_copies.py.)"""
     for pack in cr.RULE_PACKS.files_under(REPO):
         member = cr.RULE_PACKS.member(pack)
         crd = og.build_prometheus_rule(member, {"groups": []}, "monitoring")
         name = crd["metadata"]["name"] + ".yaml"
         assert cr.OPERATOR_RULES.member(name) == member
-        assert name in declared, name
+        assert name == cr.OPERATOR_RULES.file_name(member), name
 
 
-def test_three_copy_paths_are_declared():
+def test_copy_paths_are_declared():
     for pack in cr.RULE_PACKS.files_under(REPO):
         member = cr.RULE_PACKS.member(pack)
-        cm, op = sync.copy_paths(REPO, member)
-        assert cr.CONFIGMAP_RULES.member(cm) == member
-        assert cr.OPERATOR_RULES.member(op) == member
+        assert cr.CONFIGMAP_RULES.member(sync.copy_path(REPO, member)) == member
         assert sync.source_path(REPO, member).name in _declared_names(cr.RULE_PACKS)
 
 
@@ -331,7 +336,7 @@ def test_benchmark_listing_names_an_undeclared_yaml_rc2(tmp_path):
 # --- copies in other languages: Go tests, CODEOWNERS (#3471 F5) --------------
 
 _FAMILY_TOKEN = re.compile(
-    r"[\w./*{}%\[\]|-]*(?:" + "|".join(re.escape(s.prefix) for s in cr.RULE_SOURCES)
+    r"[\w./*{}%\[\]|-]*(?:" + "|".join(re.escape(s.prefix) for s in _FAMILIES)
     + r")[\w./*{}%\[\]|-]*")
 
 

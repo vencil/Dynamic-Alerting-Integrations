@@ -1,5 +1,5 @@
 ---
-applyTo: "k8s/**,operator-manifests/**"
+applyTo: "k8s/**"
 ---
 <!-- 此檔為產生物，來源 .agents/paths-map.json —— 請改那份 SSOT，再跑 `make agent-adapters`；不要直接編輯這份複本。 -->
 # vibe-paths-k8s-manifests

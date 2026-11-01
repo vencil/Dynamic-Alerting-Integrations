@@ -199,8 +199,7 @@ jobs:
             #     tests parse the real manifests/compose files.
             #   - components/** — da-tools app is Python (coverage source),
             #     conf.d + exporter/tenant-api fixtures are read by tests.
-            #   - rule-packs/** + operator-manifests/** — sync/parity
-            #     suites read all three rule copies.
+            #   - rule-packs/** — sync/parity suites read the rule copies.
             #   - Makefile — test_check_makefile_targets reads the real
             #     Makefile; docs/glossary*.md — codename-gate tests read
             #     the real glossary. .pre-commit-config.yaml — hook-
@@ -257,7 +256,6 @@ jobs:
               - "scripts/**"
               - "components/**"
               - "rule-packs/**"
-              - "operator-manifests/**"
               - "helm/**"
               - "k8s/**"
               - "try-local/**"
@@ -803,8 +801,8 @@ jobs:
           # misses the hook's path filter still can't land namespace drift.
           pre-commit run cross-ns-url-check --all-files
           # ADR-022 Layer 4: forbid tenant-api's --dev-bypass-auth /
-          # TA_DEV_BYPASS_AUTH switch from any deploy manifest (helm/k8s/
-          # operator-manifests). Deploy-time complement to the runtime k8s
+          # TA_DEV_BYPASS_AUTH switch from any deploy manifest (helm/k8s).
+          # Deploy-time complement to the runtime k8s
           # poison pill. HARD block.
           pre-commit run dev-bypass-manifest-guard --all-files
           # ADR-021/#609: forbid lowering _account_registry.yaml's
@@ -1208,17 +1206,14 @@ jobs:
       - name: "Rule-pack configmap drift (HARD gate — ADR-024 Commit 4)"
         run: python scripts/tools/dx/generate_rulepack_configmaps.py --check
 
-      # ADR-024 PR3-pre: the 3rd copy (operator-manifests/ PrometheusRule CRDs)
-      # is now a HARD gate too — PR3-pre is fully hard-gated. The operator
-      # manifests were regenerated from the left-outer-join source (#709) and
-      # the ~2-month drift synced, so all three copies (rule-packs/ ↔ configmap
-      # ↔ operator) match semantically. They were previously audit-only because
-      # they lagged the source; that excuse is gone. Edit a rule pack → run
-      # `python scripts/tools/ops/operator_generate.py --components rules
-      # --output-dir operator-manifests/` (CRDs) + `make rulepack-configmaps`
-      # (configmaps) → commit all three. The pre-commit `rulepack-3copy-drift`
-      # hook catches this locally before push.
-      - name: "Rule-pack 3-copy sync incl. operator (HARD gate — ADR-024 PR3-pre)"
+      # ADR-024 PR3-pre: rule-packs/ ↔ configmap copies must match
+      # semantically. The third copy (committed operator-manifests/
+      # PrometheusRule CRDs) is gone (#3427) — it drifted on the `release`
+      # selector label, which this content comparison never saw. The CRDs are
+      # generated on demand; what operator-generate writes is pinned by
+      # tests/ops/test_operator_generate_rule_copies.py (Python Tests). The
+      # pre-commit `rulepack-3copy-drift` hook catches drift locally.
+      - name: "Rule-pack copy sync (HARD gate — ADR-024 PR3-pre)"
         run: python scripts/tools/lint/check_rulepack_sync.py --ci
 
       # #3206 (ADR-036 §12): the manifests are read through da-crdecode

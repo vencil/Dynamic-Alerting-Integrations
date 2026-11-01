@@ -84,7 +84,7 @@ _SKIP_DIR_NAMES = {
 # 文字掃描：test 原始碼中的 repo 路徑字串（頂層目錄白名單起頭、≥2 段）
 _PATH_REF_RE = re.compile(
     r'(?:scripts|components|rule-packs|helm|k8s|try-local|tools|docs|policies|'
-    r'operator-manifests|environments|tests|\.github)'
+    r'environments|tests|\.github)'
     r'/[A-Za-z0-9_\-][A-Za-z0-9_\-./]*'
 )
 

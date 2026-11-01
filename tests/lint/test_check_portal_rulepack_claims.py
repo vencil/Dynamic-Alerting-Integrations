@@ -65,18 +65,19 @@ def test_shipped_index_includes_platform_only_rules(repo: Path):
     assert shipped["PrometheusRuleEvaluationFailing"]["severity"] == "critical"
 
 
-def test_shipped_index_covers_all_three_trees(repo: Path):
+def test_shipped_index_covers_both_trees(repo: Path):
     shipped = guard.collect_shipped_alerts(repo)
     origins = {o for entry in shipped.values() for o in entry["origins"]}
     assert "kubernetes" in origins
     assert "platform" in origins
-    # A rule-pack alert is seen in more than one copy (rule-pack + configmap + CRD).
+    # A rule-pack alert is seen in more than one copy (rule-pack + configmap).
     assert len(shipped["ContainerOOMKilled"]["origins"]) >= 2
 
 
 def _rule_tree(root: Path) -> None:
-    """A three-tree repo: a `.yml` pack, a ConfigMap copy, and an operator
-    copy that alone holds `OnlyInOperator`."""
+    """A two-tree repo: a `.yml` pack and a ConfigMap copy — plus a stray
+    PrometheusRule where the committed operator copy used to live, which
+    alone holds `OnlyInOperator` and is no shipping tree since #3427."""
     for d in ("rule-packs", "operator-manifests", "k8s/03-monitoring"):
         (root / d).mkdir(parents=True)
     rule = "      - alert: {a}\n        expr: up == 0\n        labels: {{severity: warning}}\n"
@@ -93,15 +94,16 @@ def _rule_tree(root: Path) -> None:
 
 
 def test_index_reads_each_declared_tree(tmp_path: Path):
-    """#3471: the three trees are the declaration's. A `.yml` pack is read,
-    the operator copy is read (its alert is indexed under its pack), and a
-    YAML beside the copies that the declaration does not cover is named."""
+    """#3471: the trees are the declaration's. A `.yml` pack is read, and a
+    YAML beside the copies that the declaration does not cover is named.
+    #3427: a PrometheusRule outside the declared trees ships nothing — its
+    alert does not count as shipped."""
     import _lib_consumer_read
     _rule_tree(tmp_path)
     alerts, _records = guard.collect_shipped_rules(tmp_path)
-    assert {"FromYmlPack", "FromConfigMap", "OnlyInOperator"} <= set(alerts)
-    assert alerts["OnlyInOperator"]["origins"] == ["p"]
-    (tmp_path / "operator-manifests" / "stray.yaml").write_text("x: 1\n", encoding="utf-8")
+    assert {"FromYmlPack", "FromConfigMap"} <= set(alerts)
+    assert "OnlyInOperator" not in alerts
+    (tmp_path / "k8s/03-monitoring" / "stray.yaml").write_text("x: 1\n", encoding="utf-8")
     with pytest.raises(_lib_consumer_read.SourcesUnlisted) as exc:
         guard.collect_shipped_rules(tmp_path)
     assert [Path(p).name for p, _ in exc.value.files] == ["stray.yaml"]

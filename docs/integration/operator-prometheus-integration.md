@@ -242,6 +242,8 @@ metadata:
 
 **為什麼需要兩個？** `kube-prometheus-stack` Helm chart 根據安裝方式不同，Prometheus CRD 的 `spec.ruleSelector.matchLabels` 可能使用 `release` 或 `prometheus` 其中一個（或兩者皆有）。同時帶兩個 label 可確保在所有常見安裝配置下都能被正確載入。
 
+`migrate-to-operator` 與 `rule-pack-split` 產出的 PrometheusRule 帶同一組 label（同一份定義）。repo 不提交預先產生的 PrometheusRule——一律用 `da-tools operator-generate --components rules --output-dir <你的目錄>` 產生到自己的目錄（[#3427](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3427)）。
+
 **診斷步驟**：
 
 ```bash

@@ -723,8 +723,9 @@ def collect_rule_trees() -> tuple[dict[str, set], set[str]]:
     only, no PrometheusRule / binaryData / `kind: List` / multi-document
     handling — sitting in the same directory as the scanner, importable at zero
     cost, and outside the cross-check that exists precisely because readers
-    drift. Measured: it opened 33 of the 49 files that ship rules, missing all
-    16 `operator-manifests/` PrometheusRules.
+    drift. Measured: it opened 33 of the 49 files that shipped rules then,
+    missing all 16 PrometheusRules of the committed operator copy (no longer
+    committed since #3427).
 
     Missing a tree here is fail-open for THIS gate too: an unseen rule is an
     unseen consumer, and a metric whose only consumer went unseen stops being
