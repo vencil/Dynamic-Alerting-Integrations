@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"sort"
 	"strings"
 
@@ -37,7 +38,10 @@ import (
 //     matched with their case (`Metadata:` is no `metadata`), and fields the
 //     types do not have are ignored. The check here is the same library
 //     call on the same type, so it accepts and refuses what kubectl does,
-//     with kubectl's words. It is made on the document's JSON with its keys
+//     with kubectl's words; when kubectl's error is a value put into a
+//     string field (a json.UnmarshalTypeError whose type is a string kind:
+//     an unquoted `010` or `yes`), one sentence is added saying that
+//     quoting makes it text. It is made on the document's JSON with its keys
 //     sorted, as kubectl's conversion gives them, so that of two wrong
 //     fields the one kubectl names is the one named here. A list is
 //     checked after its items are decoded (an `items` that is no list, an
@@ -261,7 +265,20 @@ func metadataTypes(raw json.RawMessage) error {
 // `metadata` kubectl's metadata decoder refuses with *err*.
 func documentMetadataError(err error) error {
 	return fmt.Errorf(notObject+"its `apiVersion` or `metadata` does not decode into the types "+
-		"kubectl reads them as, metav1.TypeMeta and metav1.ObjectMeta (kubectl: %v)", err)
+		"kubectl reads them as, metav1.TypeMeta and metav1.ObjectMeta (kubectl: %v)%s", err, quoteHint(err))
+}
+
+// quoteHint is a sentence for a metadata refusal *err* that is a value put
+// into a string field, the type error kubectl reports for an unquoted
+// `010`, `1.5` or `yes` the YAML reads as a number or a boolean; "" for any
+// other refusal. The error is told by its type, not its words.
+func quoteHint(err error) string {
+	var typeErr *json.UnmarshalTypeError
+	if !errors.As(err, &typeErr) || typeErr.Type == nil || typeErr.Type.Kind() != reflect.String {
+		return ""
+	}
+	return "; a value the YAML reads as a number or a boolean (an unquoted 010, 1.5, yes) " +
+		"is not text: quote it if text is meant"
 }
 
 // itemMetadataError is the refusal of a list item whose `apiVersion` or
@@ -272,7 +289,7 @@ func itemMetadataError(err error) error {
 		"kubectl reads a document's as, metav1.TypeMeta and metav1.ObjectMeta (%v); kubectl does "+
 		"not check this of an item when it reads the file, but applying the item would not apply "+
 		"it as written: it is refused (a `name` that is not a string, metadata of the wrong type) "+
-		"or changed (annotations replaced, the namespace defaulted)", err)
+		"or changed (annotations replaced, the namespace defaulted)%s", err, quoteHint(err))
 }
 
 // listOwnKeys are the keys a list document carries that are no content:

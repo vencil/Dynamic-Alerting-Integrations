@@ -53,9 +53,9 @@ The namespaces file is a Kubernetes manifest, so it is read the way kubectl
 reads it (ADR-036 §12, #3206): by `da-crdecode`, every document `kubectl
 apply -f` would apply. A label value Kubernetes does not read as a string —
 `instance: 010` is the number 8, `instance: yes` is true — is refused by
-kubectl (a label takes only strings), so the Namespace never exists: it is
-reported as an error naming the file and the document (exit 2), never taken
-as its text and never skipped.
+kubectl (a label takes only strings), so the Namespace never exists:
+da-crdecode refuses the file with kubectl's reason, and it is reported as an
+error naming the file (exit 2), never taken as its text and never skipped.
 
 Directions
 ----------
@@ -71,8 +71,8 @@ Exit codes (per scripts/tools/_lib_exitcodes.py):
     0  No retire-ordering violations (warnings allowed)
     1  Violation(s) detected (--ci) — conf.d db_type without a K8s target
     2  Caller error (missing path, da-guard or da-crdecode missing or
-       failing, a namespaces file kubectl would refuse — including an
-       `instance` label that is not a string —, or a conf.d file the
+       failing, a namespaces file kubectl would refuse — including a
+       label that is not a string —, or a conf.d file the
        exporter drops)
 
 da-guard: `$DA_GUARD_BINARY`, else `da-guard` on `$PATH`; da-crdecode:
@@ -92,7 +92,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
@@ -200,10 +199,11 @@ def namespace_declared_targets(namespaces_file: Path) -> Set[str]:
     """Tenant ids from db-* Namespace `instance` labels (secondary cross-check).
 
     The file is read as kubectl reads it (`da-crdecode`, every document;
-    ADR-036 §12). Raises :class:`NamespacesFileError` when it cannot be, or
-    when a Namespace's `instance` label is not a string in that reading
-    (`instance: 010` is 8): kubectl refuses such a label, so the value is
-    reported, not taken as its text.
+    ADR-036 §12). Raises :class:`NamespacesFileError` when it cannot be —
+    among others when a label is not a string in that reading (`instance:
+    010` is 8): kubectl refuses such a label, and so does the reading
+    (#3490), whose guarantee is that `metadata` is a mapping or null and
+    its labels a mapping of strings (or nulls), or null.
     """
     targets: Set[str] = set()
     if not namespaces_file.is_file():
@@ -214,22 +214,10 @@ def namespace_declared_targets(namespaces_file: Path) -> Set[str]:
         raise NamespacesFileError(
             f"{namespaces_file}: cannot be read as kubectl reads it: {exc}",
             exc.stderr_lines) from exc
-    for index, doc in enumerate(documents, start=1):   # a Kubernetes object: the manifest reading's guarantee (#3426)
+    for doc in documents:   # a Kubernetes object: the manifest reading's guarantee (#3426, #3490)
         if doc["kind"] != "Namespace":
             continue
-        metadata = doc.get("metadata")
-        labels = metadata.get("labels") if isinstance(metadata, dict) else None
-        if not isinstance(labels, dict) or "instance" not in labels:
-            continue
-        inst = labels["instance"]
-        if not isinstance(inst, str):
-            name = metadata.get("name") if isinstance(metadata, dict) else None
-            raise NamespacesFileError(
-                f"{namespaces_file}: document {index} (Namespace "
-                f"{safe_label(repr(name))}): label `instance` is "
-                f"{safe_label(json.dumps(inst))} as Kubernetes reads it, not a string; "
-                "kubectl refuses a label that is not a string, so this Namespace "
-                "is never created. Quote the value (`instance: \"010\"`).")
+        inst = ((doc.get("metadata") or {}).get("labels") or {}).get("instance")
         if inst:
             targets.add(inst)
     return targets

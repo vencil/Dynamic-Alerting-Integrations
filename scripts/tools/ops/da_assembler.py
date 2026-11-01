@@ -868,18 +868,6 @@ def _log_crdecode_lines(lines: list[str], level: int) -> None:
         log.log(level, "%s%s", CRDECODE_PREFIX, safe_label(line))
 
 
-def _json_kind(value: Any) -> str:
-    """How *value*, decoded from JSON, is described in an error."""
-    if isinstance(value, bool):
-        return f"a boolean ({json.dumps(value)})"
-    if isinstance(value, (int, float)):
-        return f"a number ({json.dumps(value)})"
-    if isinstance(value, list):
-        return "a list"
-    if isinstance(value, dict):
-        return "a mapping"
-    return f"{value!r}"
-
 #: #2396: the formats the API server enforces on a ThresholdConfig, so the
 #: `--render-cr` path accepts the same names the controller path can ever
 #: see. `metadata.name` becomes the output FILE NAME and both land in the
@@ -977,22 +965,22 @@ def _stale_render_hint(config_dir: Path, old_name: str, new_file: str) -> str:
 
 
 def _legacy_name_hint(cr_path: Path, config_dir: Path) -> str:
-    """#2430: the stale-file hint for a refused ``metadata.name``, or ``""``.
+    """#2430: the stale-file hint for a ``metadata.name`` refused for not
+    being a Kubernetes object name (DNS-1123), or ``""``.
 
     Versions before #2371 read the CR with PyYAML and named the output file
-    after the name AS PYYAML TYPED IT (``010`` -> ``8.yaml``, ``yes`` ->
-    ``True.yaml``, ``1:30`` -> ``90.yaml``, an unquoted datetime -> its
-    Python spelling). Rebuilding that file name needs PyYAML's reading of the
-    name, so this — and only this — still reads the file with PyYAML. It
-    decides nothing about the CR: the name was already refused from
-    da-crdecode's output. Best effort: no hint when PyYAML cannot read the
-    file, or the name is not a scalar under ``metadata``.
-
-    The hint is given when the earlier version's file name differs from the
-    name as written, or when the name as written is not a valid name either
-    (the CR has to be renamed, so the old file is stale even when spelled as
-    written). A null name was rendered to ``None.yaml``; that hint is given
-    by the caller.
+    after the name AS PYYAML TYPED IT. A name that reaches this check is a
+    string to Kubernetes (da-crdecode's manifest reading refuses one it reads
+    as a number or a boolean, as kubectl does), so PyYAML retyped it only
+    where the two readings part: a sexagesimal ``1:30`` (PyYAML: ``90.yaml``)
+    or ``1:30.5``, and an unquoted datetime (its Python spelling).
+    Rebuilding that file name needs PyYAML's reading of the name, so this —
+    and only this — still reads the file with PyYAML. It decides nothing
+    about the CR: the name was already refused from da-crdecode's output.
+    Best effort: no hint when PyYAML cannot read the file, or the name is
+    not a scalar under ``metadata``. The CR has to be renamed (its name is
+    no valid name as written either), so the old file is stale. A null name
+    was rendered to ``None.yaml``; that hint is given by the caller.
     """
     try:
         with open(cr_path, encoding="utf-8") as fh:
@@ -1003,27 +991,23 @@ def _legacy_name_hint(cr_path: Path, config_dir: Path) -> str:
         value = yaml.SafeLoader("").construct_object(node, deep=True)
     except Exception:  # noqa: BLE001 — a hint only; any failure means none
         return ""
-    plain = node.style is None
-    if plain and node.tag in _LEGACY_RETYPED_TAGS:
+    if node.style is None and node.tag in _LEGACY_RETYPED_TAGS:
         try:
             legacy = str(value)
         except ValueError:  # an int past Python's str() digit limit
             return ""
-        quotable = _is_dns1123_subdomain(node.value)
-        if legacy == node.value and quotable:
-            return ""  # quoting renders to the same file and overwrites it
-        return _stale_render_hint(
-            config_dir, legacy,
-            "quoted name's" if quotable else "renamed CR's")
+        return _stale_render_hint(config_dir, legacy, "renamed CR's")
     if isinstance(value, datetime):
         return _stale_render_hint(config_dir, str(value), "renamed CR's")
     return ""
 
 
-#: Tags of a plain scalar PyYAML retyped, so the earlier version's file name
-#: was not the name as written (see :func:`_legacy_name_hint`).
+#: Tags of a plain scalar PyYAML retyped although Kubernetes reads a string
+#: (a sexagesimal ``1:30`` / ``1:30.5``), so the earlier version's file name
+#: was not the name as written (see :func:`_legacy_name_hint`). A PyYAML
+#: bool is a bool to Kubernetes too and never reaches the hint.
 _LEGACY_RETYPED_TAGS = frozenset("tag:yaml.org,2002:" + t
-                                 for t in ("int", "float", "bool"))
+                                 for t in ("int", "float"))
 
 
 def _metadata_name_node(root: Any) -> Any:
@@ -1156,19 +1140,16 @@ def render_cr_file(
 
     # #2371: shape checks `reconcile_one` does not make. Its
     # `cr["metadata"]["name"]` sits outside its try (KeyError/TypeError
-    # traceback, rc 1), a non-str/empty name became the filename (`.yaml`,
-    # `42.yaml`), and a non-mapping `spec` failed inside the try and was
-    # swallowed (rc 0, nothing written). An absent `spec` is left alone: it
-    # renders as `spec: {}` did before.
+    # traceback, rc 1), an empty name became the filename (`.yaml`), and a
+    # non-mapping `spec` failed inside the try and was swallowed (rc 0,
+    # nothing written). An absent `spec` is left alone: it renders as
+    # `spec: {}` did before. The types are da-crdecode's guarantee (#3490):
+    # `metadata`, when present, is a mapping or null, and its `name` and
+    # `namespace` are strings or null — one Kubernetes reads as a number or
+    # a boolean is refused there, with kubectl's reason.
     metadata = cr.get("metadata")
     name = metadata.get("name") if isinstance(metadata, dict) else None
-    if isinstance(name, (bool, int, float)):
-        log.error("%s: metadata.name must be a string, but Kubernetes reads "
-                  "it as %s. Quoting makes it a string; it must still be a "
-                  "valid Kubernetes object name (DNS-1123)%s", cr_path,
-                  _json_kind(name), _legacy_name_hint(cr_path, config_dir))
-        return EXIT_CALLER_ERROR
-    if not isinstance(name, str) or not name:
+    if not name:
         extra = ""
         if isinstance(metadata, dict) and "name" in metadata \
                 and name is None:
@@ -1196,12 +1177,6 @@ def render_cr_file(
         metadata.pop("namespace", None)
     if "namespace" in metadata:
         namespace = metadata["namespace"]
-        if not isinstance(namespace, str):
-            log.error("%s: metadata.namespace must be a string, but "
-                      "Kubernetes reads it as %s. Quoting makes a scalar a "
-                      "string; it must still be a valid Kubernetes namespace "
-                      "name (DNS-1123 label)", cr_path, _json_kind(namespace))
-            return EXIT_CALLER_ERROR
         if not _is_dns1123_label(namespace):
             log.error("%s: metadata.namespace %r is not a valid Kubernetes "
                       "namespace name (DNS-1123 label: lowercase a-z, 0-9 "

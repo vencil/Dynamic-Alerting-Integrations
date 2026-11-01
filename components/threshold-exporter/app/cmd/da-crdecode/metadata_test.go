@@ -36,6 +36,9 @@ func TestManifestMetadataDecodesAsKubectlReadsIt(t *testing.T) {
 				t.Fatalf("kubectl: %s\nrc=%d stdout=%q stderr=%q; want rc 2, stderr with %q",
 					tc.kubectl, rc, out, errOut, tc.wantErr)
 			}
+			if strings.Contains(errOut, quoteHintText) != tc.hint {
+				t.Fatalf("stderr=%q; want the quoting hint: %v", errOut, tc.hint)
+			}
 		})
 	}
 }
@@ -58,33 +61,42 @@ const (
 	metadataNumberErr = "json: cannot unmarshal number into Go struct field metadataOnlyObject.metadata of type v1.ObjectMeta"
 )
 
+// quoteHintText is the sentence a refusal carries when kubectl's error is a
+// value put into a string field (*json.UnmarshalTypeError, a string Type):
+// an unquoted 010 or yes. Not for a time that does not parse, a mapping
+// field given a number, an integer field given text.
+const quoteHintText = "; a value the YAML reads as a number or a boolean (an unquoted 010, 1.5, yes) " +
+	"is not text: quote it if text is meant"
+
 // metadataCases are the rows of TestManifestMetadataDecodesAsKubectlReadsIt.
 var metadataCases = []struct {
 	name, in string
 	kubectl  string
 	// wantErr is a part of stderr on a refusal; "" for a success.
 	wantErr string
+	// hint: the refusal carries quoteHintText.
+	hint bool
 }{
 	// A document: refused.
-	{name: "apiversion-number", in: "apiVersion: 5\nkind: ConfigMap\nmetadata: {name: a}\n",
+	{name: "apiversion-number", hint: true, in: "apiVersion: 5\nkind: ConfigMap\nmetadata: {name: a}\n",
 		kubectl: apiVersionErr, wantErr: metaDoc + apiVersionErr + ")"},
-	{name: "name-number", in: cmHead + "metadata: {name: 5}\n",
+	{name: "name-number", hint: true, in: cmHead + "metadata: {name: 5}\n",
 		kubectl: nameErr, wantErr: metaDoc + nameErr + ")"},
 	{name: "metadata-number", in: cmHead + "metadata: 5\n",
 		kubectl: metadataNumberErr, wantErr: metaDoc + metadataNumberErr + ")"},
 	{name: "metadata-array", in: cmHead + "metadata: []\n",
 		kubectl: "json: cannot unmarshal array into Go struct field metadataOnlyObject.metadata of type v1.ObjectMeta",
 		wantErr: "(kubectl: json: cannot unmarshal array into Go struct field metadataOnlyObject.metadata of type v1.ObjectMeta)"},
-	{name: "label-value-number", in: cmHead + "metadata: {name: a, labels: {x: 5}}\n",
+	{name: "label-value-number", hint: true, in: cmHead + "metadata: {name: a, labels: {x: 5}}\n",
 		kubectl: "json: cannot unmarshal number into Go struct field ObjectMeta.metadata.labels of type string",
 		wantErr: "(kubectl: json: cannot unmarshal number into Go struct field ObjectMeta.metadata.labels of type string)"},
-	{name: "namespace-number", in: cmHead + "metadata: {name: a, namespace: 5}\n",
+	{name: "namespace-number", hint: true, in: cmHead + "metadata: {name: a, namespace: 5}\n",
 		kubectl: "json: cannot unmarshal number into Go struct field ObjectMeta.metadata.namespace of type string",
 		wantErr: "(kubectl: json: cannot unmarshal number into Go struct field ObjectMeta.metadata.namespace of type string)"},
 	{name: "creationtimestamp-garbage", in: cmHead + "metadata: {name: a, creationTimestamp: garbage}\n",
 		kubectl: `parsing time "garbage" as "2006-01-02T15:04:05Z07:00": cannot parse "garbage" as "2006"`,
 		wantErr: `(kubectl: parsing time "garbage" as "2006-01-02T15:04:05Z07:00": cannot parse "garbage" as "2006")`},
-	{name: "creationtimestamp-number", in: cmHead + "metadata: {name: a, creationTimestamp: 5}\n",
+	{name: "creationtimestamp-number", hint: true, in: cmHead + "metadata: {name: a, creationTimestamp: 5}\n",
 		kubectl: "json: cannot unmarshal number into Go struct field ObjectMeta.metadata.creationTimestamp of type string",
 		wantErr: "(kubectl: json: cannot unmarshal number into Go struct field ObjectMeta.metadata.creationTimestamp of type string)"},
 	// A date without a time is no RFC 3339 time.
@@ -100,10 +112,10 @@ var metadataCases = []struct {
 	{name: "ownerreferences-number", in: cmHead + "metadata: {name: a, ownerReferences: [5]}\n",
 		kubectl: "json: cannot unmarshal number into Go struct field ObjectMeta.metadata.ownerReferences of type v1.OwnerReference",
 		wantErr: "(kubectl: json: cannot unmarshal number into Go struct field ObjectMeta.metadata.ownerReferences of type v1.OwnerReference)"},
-	{name: "ownerreference-uid-number", in: cmHead + "metadata: {name: a, ownerReferences: [{uid: 5}]}\n",
+	{name: "ownerreference-uid-number", hint: true, in: cmHead + "metadata: {name: a, ownerReferences: [{uid: 5}]}\n",
 		kubectl: "json: cannot unmarshal number into Go struct field OwnerReference.metadata.ownerReferences.uid of type types.UID",
 		wantErr: "(kubectl: json: cannot unmarshal number into Go struct field OwnerReference.metadata.ownerReferences.uid of type types.UID)"},
-	{name: "finalizer-number", in: cmHead + "metadata: {name: a, finalizers: [5]}\n",
+	{name: "finalizer-number", hint: true, in: cmHead + "metadata: {name: a, finalizers: [5]}\n",
 		kubectl: "json: cannot unmarshal number into Go struct field ObjectMeta.metadata.finalizers of type string",
 		wantErr: "(kubectl: json: cannot unmarshal number into Go struct field ObjectMeta.metadata.finalizers of type string)"},
 	{name: "managedfields-time-bad", in: cmHead + "metadata: {name: a, managedFields: [{time: bad}]}\n",
@@ -112,7 +124,7 @@ var metadataCases = []struct {
 	{name: "deletiongraceperiodseconds-string", in: cmHead + "metadata: {name: a, deletionGracePeriodSeconds: x}\n",
 		kubectl: "json: cannot unmarshal string into Go struct field ObjectMeta.metadata.deletionGracePeriodSeconds of type int64",
 		wantErr: "(kubectl: json: cannot unmarshal string into Go struct field ObjectMeta.metadata.deletionGracePeriodSeconds of type int64)"},
-	{name: "annotation-value-bool", in: cmHead + "metadata: {name: a, annotations: {x: true}}\n",
+	{name: "annotation-value-bool", hint: true, in: cmHead + "metadata: {name: a, annotations: {x: true}}\n",
 		kubectl: "json: cannot unmarshal bool into Go struct field ObjectMeta.metadata.annotations of type string",
 		wantErr: "(kubectl: json: cannot unmarshal bool into Go struct field ObjectMeta.metadata.annotations of type string)"},
 
@@ -139,22 +151,22 @@ var metadataCases = []struct {
 	// Two fields of the wrong type: kubectl names the first in its JSON,
 	// whose keys are sorted (apiVersion before metadata, name before
 	// namespace), not the first the file writes.
-	{name: "first-in-sorted-keys-apiversion", in: "metadata: {name: 5}\nkind: ConfigMap\napiVersion: 5\n",
+	{name: "first-in-sorted-keys-apiversion", hint: true, in: "metadata: {name: 5}\nkind: ConfigMap\napiVersion: 5\n",
 		kubectl: apiVersionErr, wantErr: metaDoc + apiVersionErr + ")"},
-	{name: "first-in-sorted-keys-name", in: "metadata: {namespace: 5, name: 5}\nkind: ConfigMap\napiVersion: v1\n",
+	{name: "first-in-sorted-keys-name", hint: true, in: "metadata: {namespace: 5, name: 5}\nkind: ConfigMap\napiVersion: v1\n",
 		kubectl: nameErr, wantErr: metaDoc + nameErr + ")"},
 	// The second document is refused, named by its first line (kubectl
 	// applies the first, then stops at it; here the file is refused).
-	{name: "second-document", in: cmHead + "metadata: {name: a}\n---\n" + cmHead + "metadata: {name: 5}\n",
+	{name: "second-document", hint: true, in: cmHead + "metadata: {name: a}\n---\n" + cmHead + "metadata: {name: 5}\n",
 		kubectl: "ACCEPT the first, then " + nameErr,
 		wantErr: "the document starting at line 5: " + metaDoc + nameErr + ")"},
 
 	// A list's own `apiVersion` and `metadata`: refused, as kubectl
 	// refuses the list.
-	{name: "list-metadata-name-number", in: "apiVersion: v1\nkind: List\nmetadata: {name: 5}\n" +
+	{name: "list-metadata-name-number", hint: true, in: "apiVersion: v1\nkind: List\nmetadata: {name: 5}\n" +
 		"items:\n- {apiVersion: v1, kind: ConfigMap, metadata: {name: a}}\n",
 		kubectl: nameErr, wantErr: metaDoc + nameErr + ")"},
-	{name: "list-apiversion-number", in: "apiVersion: 5\nkind: List\n" +
+	{name: "list-apiversion-number", hint: true, in: "apiVersion: 5\nkind: List\n" +
 		"items:\n- {apiVersion: v1, kind: ConfigMap, metadata: {name: a}}\n",
 		kubectl: apiVersionErr, wantErr: metaDoc + apiVersionErr + ")"},
 	{name: "list-metadata-number", in: "apiVersion: v1\nkind: List\nmetadata: 5\n" +
@@ -180,7 +192,7 @@ var metadataCases = []struct {
 
 	// STRICTER: an item's own `apiVersion` and `metadata`. kubectl reads the
 	// file without checking them; applying the item refuses or rewrites it.
-	{name: "item-name-number", in: "apiVersion: v1\nkind: List\n" +
+	{name: "item-name-number", hint: true, in: "apiVersion: v1\nkind: List\n" +
 		"items:\n- {apiVersion: v1, kind: ConfigMap, metadata: {name: 5}}\n",
 		kubectl: "ACCEPT (name \"\"); STRICTER: apply refuses it (resource name may not be empty)",
 		wantErr: "in this list, items[0] (line 4): " + metaItem + nameErr + "); kubectl does not check this of an " +
@@ -189,7 +201,7 @@ var metadataCases = []struct {
 		"items:\n- {apiVersion: v1, kind: ConfigMap, metadata: 5}\n",
 		kubectl: "ACCEPT (name \"\"); STRICTER: apply refuses it",
 		wantErr: "in this list, items[0] (line 4): " + metaItem + metadataNumberErr + ")"},
-	{name: "item-label-value-number", in: "apiVersion: v1\nkind: List\n" +
+	{name: "item-label-value-number", hint: true, in: "apiVersion: v1\nkind: List\n" +
 		"items:\n- {apiVersion: v1, kind: ConfigMap, metadata: {name: a, labels: {x: 5}}}\n",
 		kubectl: "ACCEPT; STRICTER: the API server refuses it",
 		wantErr: "in this list, items[0] (line 4): " + metaItem +
@@ -199,7 +211,7 @@ var metadataCases = []struct {
 		kubectl: "ACCEPT; STRICTER: the API server refuses it",
 		wantErr: "in this list, items[0] (line 4): " + metaItem +
 			`parsing time "bad" as "2006-01-02T15:04:05Z07:00": cannot parse "bad" as "2006")`},
-	{name: "item-namespace-number-second", in: "apiVersion: v1\nkind: List\n" +
+	{name: "item-namespace-number-second", hint: true, in: "apiVersion: v1\nkind: List\n" +
 		"items:\n- {apiVersion: v1, kind: ConfigMap, metadata: {name: a}}\n" +
 		"- {apiVersion: v1, kind: ConfigMap, metadata: {name: b, namespace: 5}}\n",
 		kubectl: "ACCEPT, ACCEPT (namespace \"\"); STRICTER: apply puts item 1 in the default namespace",
