@@ -410,8 +410,8 @@ series 都不存在，告警**恆不開火**，看起來跟「沒有丟 row」�
 自帶 Prometheus NetworkPolicy 的叢集要比照放行，否則一樣零 series。
 `up{job="vector-metrics"} == 1` 才代表 scrape 真的接上：值是 0 表示 target 找到了但抓不到
 （netpol 擋住也是這樣），完全沒有 series 表示 target 根本沒被發現（Service 沒渲染或 label 不對）。
-⚠️ 目前 scrape 每次只連到一個 Vector pod（headless Service 被 `role: service` 發現，
-[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)）：其他節點丟 row 看不到，換 pod 時 counter 跳值也可能讓這條誤觸發。
+`platform-components` 走 `role: endpoints`，每個 Vector pod 各是一個 target、帶 `pod` label
+（[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)），所以每個節點丟的 row 都看得到；告警依 sink 聚合，N 個 pod 只發一則。
 
 處置：
 
@@ -627,7 +627,7 @@ promtool fire/no-fire 與上述 §8.7 spike alert 同放 `tests/rulepacks/tenant
 
 §8.7 盯「投影被 abort 丟棄」，本節盯**更上游**的「投影 GATE 本身降級/卡死」——`tenantProjections` 與 registry（`_account_registry.yaml`）不符（unique-but-wrong accountId 跨租戶洩漏類）或 boot 時讀不到 registry 時，fail-closed gate 的反應與**復原 SOP**。
 
-**觀測管線（為何不是 node-exporter / 不是 per-node absent）**：gate init-container 把判定寫進 pod-local emptyDir 的 Prometheus textfile（`--metrics-file /gate-metrics/gate.prom`，metric `vector_tenant_projection_gate_info{category,mode}`）；一支長駐 **exposer sidecar**（`serve_metrics.py`，同 image、`command` override）把該檔以 HTTP 重新 serve，經**獨立 headless Service**（`<vector>-projection-gate-metrics`，gated on `tenantProjections`、**不**綁 `metrics.enabled`）被 Prometheus `platform-components`（role:service，依 `dynamic-alerting.io/scrape: platform` label 探索、不限 namespace，#1425）scrape。本叢集**無 node-exporter / textfile collector**，Vector 自身 exporter 又只讀 `internal_metrics`，故走 sidecar——且 sidecar 與 pod 同生死 → pod 死時 series **變 absent 而非殘留 stale-"ok"**（crash 不會假性 resolve 真實 mismatch）。Vector 是 DaemonSet、每 node 掛**相同** registry+projections → 每 node 判定**相同**，故 alert 一律 `max by(...)` **跨 pod 聚合**（per-node absent 非必要，且 role:service scrape 本就不給穩定 per-node series）。⚠️ **enforce 死鎖時 sidecar 不會啟動**（init 非零退出 → pod 卡 Init → Vector 與 sidecar 皆未起 → verdict metric **無人 serve**），故那條 alert 改走 **KSM**（見 §8.9.3）。
+**觀測管線（為何不是 node-exporter / 不是 per-node absent）**：gate init-container 把判定寫進 pod-local emptyDir 的 Prometheus textfile（`--metrics-file /gate-metrics/gate.prom`，metric `vector_tenant_projection_gate_info{category,mode}`）；一支長駐 **exposer sidecar**（`serve_metrics.py`，同 image、`command` override）把該檔以 HTTP 重新 serve，經**獨立 headless Service**（`<vector>-projection-gate-metrics`，gated on `tenantProjections`、**不**綁 `metrics.enabled`）被 Prometheus `platform-components`（role:endpoints、每個 pod 一個 target（#3483），依 `dynamic-alerting.io/scrape: platform` label 探索、不限 namespace，#1425）scrape。本叢集**無 node-exporter / textfile collector**，Vector 自身 exporter 又只讀 `internal_metrics`，故走 sidecar——且 sidecar 與 pod 同生死 → pod 死時 series **變 absent 而非殘留 stale-"ok"**（crash 不會假性 resolve 真實 mismatch）。Vector 是 DaemonSet、每 node 掛**相同** registry+projections → 每 node 判定**相同**，故 alert 一律 `max by(...)` **跨 pod 聚合**（per-node absent 非必要：每個 node 的判定相同）。⚠️ **enforce 死鎖時 sidecar 不會啟動**（init 非零退出 → pod 卡 Init → Vector 與 sidecar 皆未起 → verdict metric **無人 serve**），故那條 alert 改走 **KSM**（見 §8.9.3）。
 
 對應三條 alert（`configmap-rules-platform.yaml` `federation-audit` group，promtool 契約 `tests/rulepacks/platform-projection-gate{.rules,_test}.yaml`）：
 

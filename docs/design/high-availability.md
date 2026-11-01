@@ -85,24 +85,27 @@ spec:
 
 #### 同一條規則也適用 `tenant_metadata_info` 的 join
 
-`tenant_metadata_info` 一樣由每個副本各送一份。以 pod 為單位抓取時（Prometheus Operator 的 ServiceMonitor 走 endpoints，一個 pod 一個 target），同一個租戶會有兩份只差 `instance`／`pod` 的序列。告警把 metadata 接進來的那個 join 若直接用原始指標：
+`tenant_metadata_info` 一樣由每個副本各送一份。平台的 Prometheus 以 pod 為單位抓取（raw 設定的 `platform-components` job 走 `role: endpoints`，Prometheus Operator 的 ServiceMonitor 也走 endpoints，一個 pod 一個 target），同一個租戶會有兩份只差 `instance`／`pod` 的序列。告警把 metadata 接進來的那個 join 若直接用原始指標：
 
 ```promql
 * on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info
 ```
 
-右側每個租戶就有兩筆，Prometheus 報 `many-to-many matching not allowed`，**整條告警停止評估**（不是少幾個 label，而是不觸發）。右側要先收斂：
+右側每個租戶就有兩筆，Prometheus 報 `many-to-many matching not allowed`，**整條告警停止評估**（不是少幾個 label，而是不觸發）。右側要先收斂成每個租戶一筆：
 
 ```promql
 * on(tenant) group_left(runbook_url, owner, tier)
-  max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+  topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
 ```
 
+- 內層 `max by(...)` 收掉兩個副本送出的相同 metadata。
+- 外層 `topk by(tenant) (1, …)` 處理換版空窗：兩個副本各自 hot-reload、有時間差，空窗內某租戶的 `owner`／`runbook_url`／`tier` 若改了，兩個副本會暫時送出不同值，`max by(...)` 收斂後該租戶仍有兩筆。Prometheus 對右側重複 match group 的檢查是整個運算式一起失敗、不分租戶，少了這層，那幾個評估週期內帶這個 join 的規則會對**所有租戶**評估失敗——一個租戶改 metadata，所有租戶的告警一起停。
+
 - 用 `by` 列出 exporter 送出的 label，而不是用 `without` 列抓取加上的 label：抓取設定可能再加上每個副本不同的 label（例如 relabel 出來的 `node`），`without` 漏列一個就又撞 many-to-many。`by` 清單由測試對照 `collector.go` 的 label 清單，exporter 新增 label 時測試會紅，不會悄悄被收掉。
-- `check_leftouterjoin_enrichment.py` 擋下右側不是這個寫法的 join；`tests/rulepacks/rule-pack-metadata-replicas_test.yaml` 以兩份副本序列驗證每個 pack 的代表告警。
+- `check_leftouterjoin_enrichment.py` 擋下右側不是這個寫法的 join（只有 `max by(...)`、沒有外層 `topk` 的寫法也擋）；`tests/rulepacks/rule-pack-metadata-replicas_test.yaml` 以兩份副本序列驗證每個 pack 的代表告警，其中一個租戶的兩個副本送出不同的 `runbook_url`，另一個租戶的告警必須照常觸發。
 - void 分支的 `unless on(tenant) tenant_metadata_info` 維持原始指標：`unless` 只看有沒有，右側重複不會出錯。
 
-**已知限制：換版空窗。** 兩個副本各自 hot-reload，換版有時間差。空窗內若某租戶的 `owner`／`runbook_url`／`tier` 改了，兩個副本會暫時送出不同值，`max by(...)` 收斂後該租戶仍有兩筆。Prometheus 對右側重複 match group 的檢查是整個運算式一起失敗、不分租戶，所以那幾個評估週期內，帶這個 join 的規則對**所有租戶**都評估失敗，void 分支也一樣（`prometheus_rule_evaluation_failures_total` 會增加，這些告警既不會新觸發、也不會重送）。兩個副本都換到新版後自動恢復。目前只有逐 pod 抓取（Prometheus Operator）會遇到；raw 設定每個 Service 只抓一個 target。這裡不處理：用 `topk` 任選一筆會讓 label 在兩個值之間跳動，改變告警身分。raw 設定改成逐 pod 發現之前，必須先定案。
+**已知限制：換版空窗內，該租戶的 metadata 可能是舊的。** 空窗只影響 metadata 改了的那個租戶：幾秒內它的告警帶的是其中一個副本的 metadata，可能還是舊的 `runbook_url`／`owner`／`tier`。所有值都是 1，`topk` 平手時保留先看到的那一筆；兩筆都在的期間序列順序不變，所以不會每次評估來回跳（promtool 在空窗內多個時間點量到同一筆）。兩個副本都換到新版後只剩新值；告警 label 從舊值換到新值時，告警身分跟著換（舊的 resolve、新的重新走 `for`），這和單一副本改 metadata 時一樣。其他租戶不受影響。
 
 ### 4.4 自監控 (Platform Rule Pack)
 

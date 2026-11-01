@@ -2,25 +2,36 @@
 # Run: promtool test rules tests/rulepacks/rule-pack-metadata-replicas_test.yaml
 #
 # threshold-exporter 預設 2 個副本（helm/threshold-exporter/values.yaml replicaCount），
-# 每個副本都送出 tenant_metadata_info。以 pod 為單位抓取時（Prometheus Operator
-# 的 ServiceMonitor 走 endpoints，一個 pod 一個 target），同一個租戶會有兩份只差
-# instance／pod 的序列，下面的 tenant_metadata_info 都照這個形狀給兩份。
+# 每個副本都送出 tenant_metadata_info。以 pod 為單位抓取時（raw Prometheus 的
+# platform-components job 走 endpoints、Prometheus Operator 的 ServiceMonitor 也是，
+# 一個 pod 一個 target），同一個租戶會有一份 per 副本、只差 instance／pod 的序列。
 # user_threshold 只給一份、不帶 scrape label：threshold 那一側本來就先 max by 收斂，
 # 而 rulepack_contract_test.go 規定 fixture 的 user_threshold 只能帶 exporter 自己送的
-# label（#731）。
+# label（#731）。副本 label 只放在 tenant_metadata_info 上。
 #
-# 舊寫法 `* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info`
-# 在這種輸入下整條告警評估失敗（"found duplicate series for the match group …
-# many-to-many matching not allowed"），promtool 直接把 rule 報為 FAILED。新寫法的
-# 右側是 `max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)`，
+# 這裡同時放兩種形狀：
+#   - t1（以及 kubernetes pack 的 db-t1）：兩個副本送出一模一樣的 metadata
+#     ⇒ 原始 join 撞 many-to-many，`max by(tenant, runbook_url, owner, tier)` 收斂得掉。
+#   - t2：設定重載的空窗——一個副本已換上新的 runbook_url、另一個還是舊的
+#     ⇒ `max by(...)` 收不掉（兩筆差在 metadata label 上），t2 在右側有兩筆，
+#       整條規則對「所有」租戶評估失敗：t2 根本沒有任何 breach，t1 的告警也跟著消失。
+#       外層 `topk by(tenant) (1, …)` 讓每個租戶只留一筆。
+# 右側的唯一寫法是
+# `topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))`，
 # 由 check_leftouterjoin_enrichment.py 鎖定。
 #
 # 每個有 enrichment join 的 pack 各挑一條代表告警（14 個 pack），rule_files 指向
-# 真正的 pack 原始檔。斷言用 count by(alertname, runbook_url, owner, tier)：
-#   - 每條告警恰好一筆、而且帶著 metadata labels ⇒ 走的是 enriched 分支；
-#   - 若 metadata 沒接上而改走 void 分支，會多出一筆 owner="" 的樣本 ⇒ 失敗；
+# 真正的 pack 原始檔。斷言：
+#   - t1 每條告警恰好一筆、而且帶著 metadata labels ⇒ 走的是 enriched 分支；
+#     若改走 void 分支會多出一筆不帶 owner 的樣本 ⇒ 失敗；
+#   - t2 的 RedisHighConnections 恰好一筆、帶 owner／tier ⇒ 重載空窗內仍走 enriched
+#     分支、不重複；runbook_url 是兩個副本之一（topk 平手時留先看到的那筆），
+#     所以不斷言它；
 #   - 若有任何一條 rule 撞 many-to-many，promtool 會把它報為 FAILED ⇒ 失敗。
-# 改回 raw join 會讓本檔轉紅（驗證方式見 changelog.d 片段與 commit 訊息）。
+# kubernetes 的 ContainerCrashLoop 另外把 user_state_filter（同樣每個副本一份）當
+# group_left 的右側：右側先 `max by(tenant)` 收斂，否則一樣 many-to-many（下面那組
+# db-t1 的 container_crashloop 給兩份副本序列）。
+# 把任一 pack 的右側改回 `max by(...)`（或原始 join）會讓本檔轉紅。
 rule_files:
   - ../../rule-packs/rule-pack-clickhouse.yaml
   - ../../rule-packs/rule-pack-custom-alerts.yaml
@@ -46,6 +57,11 @@ tests:
       - series: 'tenant_metadata_info{tenant="t1", runbook_url="http://rb/t1", owner="team-t1", tier="gold", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
         values: '1x60'
       - series: 'tenant_metadata_info{tenant="t1", runbook_url="http://rb/t1", owner="team-t1", tier="gold", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+        values: '1x60'
+      # t2 正在重載：副本 0 已是新的 runbook_url，副本 1 還是舊的。
+      - series: 'tenant_metadata_info{tenant="t2", runbook_url="http://rb/t2-new", owner="team-t2", tier="silver", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
+        values: '1x60'
+      - series: 'tenant_metadata_info{tenant="t2", runbook_url="http://rb/t2-old", owner="team-t2", tier="silver", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
         values: '1x60'
 
       # clickhouse — ClickHouseHighConnections
@@ -103,6 +119,13 @@ tests:
         values: '1x60'
       - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning"}'
         values: '80x60'
+      # kubernetes — ContainerCrashLoop：租戶開了 container_crashloop，兩個副本各送一份。
+      - series: 'kube_pod_container_status_waiting_reason{namespace="db-t1", pod="app-2", container="app", reason="CrashLoopBackOff"}'
+        values: '1x60'
+      - series: 'user_state_filter{tenant="db-t1", filter="container_crashloop", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
+        values: '1x60'
+      - series: 'user_state_filter{tenant="db-t1", filter="container_crashloop", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+        values: '1x60'
 
       # mongodb — MongoDBHighConnections
       - series: 'mongodb_connections{tenant="t1", state="current"}'
@@ -139,12 +162,17 @@ tests:
         values: '600x60'
       - series: 'user_threshold{tenant="t1", component="redis", metric="connected_clients", severity="warning"}'
         values: '500x60'
+      # t2 只在 redis 上 breach：證明重載空窗內 t2 自己的告警也照常、只發一筆。
+      - series: 'redis_connected_clients{tenant="t2"}'
+        values: '600x60'
+      - series: 'user_threshold{tenant="t2", component="redis", metric="connected_clients", severity="warning"}'
+        values: '500x60'
 
     promql_expr_test:
       - eval_time: 12m
         expr: |
           count by(alertname, runbook_url, owner, tier) (
-            ALERTS{alertstate="firing", alertname=~"ClickHouseHighConnections|Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m|DB2HighConnections|ElasticsearchPendingTasks|JVMThreadPoolExhaustion|KafkaHighConsumerLag|PodContainerHighCPU|MariaDBHighConnections|MongoDBHighConnections|NginxHighConnections|OracleHighActiveSessions|PostgreSQLHighReplicationLag|RabbitMQHighQueueDepth|RedisHighConnections"}
+            ALERTS{alertstate="firing", tenant=~"t1|db-t1", alertname=~"ClickHouseHighConnections|Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m|DB2HighConnections|ElasticsearchPendingTasks|JVMThreadPoolExhaustion|KafkaHighConsumerLag|PodContainerHighCPU|ContainerCrashLoop|MariaDBHighConnections|MongoDBHighConnections|NginxHighConnections|OracleHighActiveSessions|PostgreSQLHighReplicationLag|RabbitMQHighQueueDepth|RedisHighConnections"}
           )
         exp_samples:
           - labels: '{alertname="ClickHouseHighConnections", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
@@ -161,6 +189,8 @@ tests:
             value: 1
           - labels: '{alertname="PodContainerHighCPU", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
             value: 1
+          - labels: '{alertname="ContainerCrashLoop", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+            value: 1
           - labels: '{alertname="MariaDBHighConnections", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
             value: 1
           - labels: '{alertname="MongoDBHighConnections", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
@@ -174,4 +204,12 @@ tests:
           - labels: '{alertname="RabbitMQHighQueueDepth", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
             value: 1
           - labels: '{alertname="RedisHighConnections", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+            value: 1
+      - eval_time: 12m
+        expr: |
+          count by(alertname, tenant, owner, tier) (
+            ALERTS{alertstate="firing", tenant="t2"}
+          )
+        exp_samples:
+          - labels: '{alertname="RedisHighConnections", tenant="t2", owner="team-t2", tier="silver"}'
             value: 1

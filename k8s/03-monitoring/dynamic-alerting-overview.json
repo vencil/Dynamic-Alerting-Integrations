@@ -34,7 +34,7 @@
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
       "targets": [{
-        "expr": "count(user_threshold)",
+        "expr": "count(max without(instance, pod) (user_threshold))",
         "legendFormat": ""
       }],
       "fieldConfig": {
@@ -57,11 +57,11 @@
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
       "targets": [
         {
-          "expr": "count(user_threshold{severity=\"warning\"})",
+          "expr": "count(max without(instance, pod) (user_threshold{severity=\"warning\"}))",
           "legendFormat": "Warning"
         },
         {
-          "expr": "count(user_threshold{severity=\"critical\"})",
+          "expr": "count(max without(instance, pod) (user_threshold{severity=\"critical\"}))",
           "legendFormat": "Critical"
         }
       ],
@@ -79,7 +79,7 @@
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
       "targets": [{
-        "expr": "count(user_silent_mode) or vector(0)",
+        "expr": "count(max without(instance, pod) (user_silent_mode)) or vector(0)",
         "legendFormat": ""
       }],
       "fieldConfig": {
@@ -102,7 +102,7 @@
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
       "targets": [{
-        "expr": "count(user_state_filter{filter=\"maintenance\"}) or vector(0)",
+        "expr": "count(max without(instance, pod) (user_state_filter{filter=\"maintenance\"})) or vector(0)",
         "legendFormat": ""
       }],
       "fieldConfig": {
@@ -125,7 +125,7 @@
       "type": "stat",
       "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
       "targets": [{
-        "expr": "count(user_severity_dedup{mode=\"disable\"}) or vector(0)",
+        "expr": "count(max without(instance, pod) (user_severity_dedup{mode=\"disable\"})) or vector(0)",
         "legendFormat": ""
       }],
       "fieldConfig": {
@@ -149,28 +149,28 @@
       "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
       "targets": [
         {
-          "expr": "count by(tenant) (user_threshold)",
+          "expr": "count by(tenant) (max without(instance, pod) (user_threshold))",
           "legendFormat": "",
           "format": "table",
           "instant": true,
           "refId": "Thresholds"
         },
         {
-          "expr": "user_silent_mode",
+          "expr": "max without(instance, pod) (user_silent_mode)",
           "legendFormat": "",
           "format": "table",
           "instant": true,
           "refId": "Silent"
         },
         {
-          "expr": "user_state_filter{filter=\"maintenance\"}",
+          "expr": "max without(instance, pod) (user_state_filter{filter=\"maintenance\"})",
           "legendFormat": "",
           "format": "table",
           "instant": true,
           "refId": "Maintenance"
         },
         {
-          "expr": "user_severity_dedup",
+          "expr": "max without(instance, pod) (user_severity_dedup)",
           "legendFormat": "",
           "format": "table",
           "instant": true,
@@ -219,7 +219,7 @@
       "type": "barchart",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
       "targets": [{
-        "expr": "count by(component) (user_threshold)",
+        "expr": "count by(component) (max without(instance, pod) (user_threshold))",
         "legendFormat": "{{ component }}"
       }],
       "fieldConfig": {
@@ -235,7 +235,7 @@
       "type": "barchart",
       "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
       "targets": [{
-        "expr": "count by(tenant) (user_threshold)",
+        "expr": "count by(tenant) (max without(instance, pod) (user_threshold))",
         "legendFormat": "{{ tenant }}"
       }],
       "fieldConfig": {
@@ -260,7 +260,7 @@
       "type": "table",
       "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
       "targets": [{
-        "expr": "user_state_filter",
+        "expr": "max without(instance, pod) (user_state_filter)",
         "legendFormat": "",
         "format": "table",
         "instant": true
@@ -286,7 +286,7 @@
       "type": "timeseries",
       "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
       "targets": [{
-        "expr": "sum by(tenant) (changes(user_threshold[10m]))",
+        "expr": "sum by(tenant) (max without(instance, pod) (changes(user_threshold[10m])))",
         "legendFormat": "{{ tenant }}"
       }],
       "fieldConfig": {

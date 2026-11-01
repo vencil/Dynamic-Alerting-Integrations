@@ -91,7 +91,9 @@ def _pre_fix_jobs():
 # The scrape face since #1425: platform chart Services are kept by LABEL in any
 # namespace (`platform-components`), and every other job drops that label so a
 # platform Service has exactly one scraping job. monitoring-components keeps only
-# the raw `monitoring` manifests (alertmanager, kube-state-metrics).
+# the raw `monitoring` manifests (alertmanager, kube-state-metrics). Since #3483
+# the platform job discovers endpoints (every pod a target) and keeps only the
+# target on the annotated port (each pod once).
 _FACE_PROM_YML = """
 scrape_configs:
   - job_name: "prometheus"
@@ -112,7 +114,7 @@ scrape_configs:
         regex: "platform"
   - job_name: "platform-components"
     kubernetes_sd_configs:
-      - role: service
+      - role: endpoints
     relabel_configs:
       - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
         action: keep
@@ -120,6 +122,13 @@ scrape_configs:
       - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
         action: keep
         regex: "platform"
+      - source_labels: [__address__]
+        target_label: __tmp_scrape_port
+        regex: .+:(\\d+)
+        replacement: $1
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __tmp_scrape_port
       - source_labels: [__meta_kubernetes_service_name]
         target_label: job
   - job_name: "monitoring-components"
@@ -671,6 +680,84 @@ def test_a_platform_job_without_the_service_name_job_label_is_an_error(tail):
 def test_the_label_face_sets_the_platform_job_label():
     """Control for the F5 test."""
     assert _check(consumed={}, jobs=_face_jobs(), services=[])["errors"] == []
+
+
+# ── the platform job scrapes every pod exactly once (#3483) ──────────────
+
+_PORT_SELECT = """      - source_labels: [__address__]
+        target_label: __tmp_scrape_port
+        regex: .+:(\\d+)
+        replacement: $1
+      - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+        action: keepequal
+        target_label: __tmp_scrape_port
+"""
+
+
+def _per_pod_errors(yml):
+    return [e for e in _check(consumed={}, jobs=gate.parse_scrape_jobs(yml),
+                              services=[])["errors"] if "PLATFORM-PER-POD" in e]
+
+
+def test_real_configmap_scrapes_every_platform_pod_once():
+    job = _face_job(gate.load_repo_jobs(), "platform-components")
+    assert job["sd_role"] == "endpoints"
+    assert job["port_select"]
+    assert gate._platform_per_pod(gate.load_repo_jobs()) == []
+
+
+def test_the_label_face_scrapes_every_pod_once():
+    """Control for the PER-POD tests below."""
+    assert _per_pod_errors(_FACE_PROM_YML) == []
+    assert _face_job(_face_jobs(), "platform-components")["port_select"]
+
+
+def test_a_service_role_platform_job_is_an_error():
+    """`role: service` scrapes the Service address: one replica per scrape, a
+    dead replica never reads up 0 (#3483)."""
+    yml = _FACE_PROM_YML.replace(
+        """  - job_name: "platform-components"
+    kubernetes_sd_configs:
+      - role: endpoints
+""", """  - job_name: "platform-components"
+    kubernetes_sd_configs:
+      - role: service
+""")
+    errors = _per_pod_errors(yml)
+    assert len(errors) == 1 and "role: service" in errors[0], errors
+
+
+@pytest.mark.parametrize("breakage", [
+    "no_keepequal",          # the keep removed: one target per Service port
+    "address_rewritten",     # __address__ forced to the annotated port first
+    "keepequal_on_other",    # keepequal against a label that is not the port
+])
+def test_an_endpoints_platform_job_without_the_port_keep_is_an_error(breakage):
+    if breakage == "no_keepequal":
+        yml = _FACE_PROM_YML.replace(_PORT_SELECT, "")
+    elif breakage == "address_rewritten":
+        yml = _FACE_PROM_YML.replace(_PORT_SELECT, """      - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+        target_label: __address__
+        regex: ([^:]+)(?::\\d+)?;(\\d+)
+        replacement: $1:$2
+""" + _PORT_SELECT)
+    else:
+        yml = _FACE_PROM_YML.replace(_PORT_SELECT, _PORT_SELECT.replace(
+            "source_labels: [__address__]", "source_labels: [__meta_kubernetes_pod_name]"))
+    assert _FACE_PROM_YML != yml
+    errors = _per_pod_errors(yml)
+    assert len(errors) == 1 and "keepequal" in errors[0], errors
+
+
+@pytest.mark.parametrize("regex,replacement,ok", [
+    (r".+:(\d+)", "$1", True),
+    (r".*:(\d+)", "${1}", True),
+    (r"([^:]+):(\d+)", "$2", False),     # IPv6 `[fd00::1]:9598` does not match
+    (r"(.+):\d+", "$1", False),          # captures the address, not the port
+    (r"(.*)", "$1", False),
+])
+def test_captures_port(regex, replacement, ok):
+    assert gate._captures_port({"regex": regex, "replacement": replacement}) is ok
 
 
 # ── helm-service chart face (#1286) ───────────────────────────────────────

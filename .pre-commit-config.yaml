@@ -1308,9 +1308,11 @@ repos:
         # (inner join — drops a tenant with metrics but no metadata row) must be
         # paired with an `or (… unless on(tenant) tenant_metadata_info)` void
         # branch. Its right-hand side must be exactly ENRICH_RHS
-        # (`max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)`):
-        # the exporter runs several replicas, and joining the raw metric fails
-        # with many-to-many under per-pod scraping (#3483). Source-only:
+        # (`topk by(tenant) (1, max by(tenant, runbook_url, owner, tier)
+        # (tenant_metadata_info))`): the exporter runs several replicas, and
+        # joining the raw metric — or replicas briefly serving different
+        # metadata during a reload — fails with many-to-many under per-pod
+        # scraping (#3483). Source-only:
         # configmaps are sync-checked against source separately. Semantic
         # proof: tests/rulepacks/*-void_test.yaml, rule-pack-metadata-replicas_test.yaml.
 

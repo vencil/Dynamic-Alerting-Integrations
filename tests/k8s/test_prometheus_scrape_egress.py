@@ -17,6 +17,12 @@ port and the pod port it lands on, and require both in a rule of
 `allow-prometheus-egress` whose peer is `namespaceSelector: {}` — the chart's
 namespace is not known here, so only an any-namespace rule admits it.
 
+SECOND CHECK (#3483): the annotated port IS the pod port. The job discovers
+endpoints (every pod a target, one per pod address × Service port) and keeps
+the target whose port equals the annotation — the target's port is the POD's,
+so an annotation naming a Service port that maps elsewhere would keep nothing
+and the Service would silently stop being scraped.
+
 SCOPE BOUNDARY: the egress end only. The ingress end is each chart's own
 NetworkPolicy; measured 2026-10-31, threshold-exporter and tenant-api admit
 Prometheus on these ports and the vector chart ships no NetworkPolicy. A
@@ -204,3 +210,15 @@ def test_every_platform_label_template_is_rendered() -> None:
     assert labelled == rendered, (
         f"templates labelling Services for the platform job {sorted(labelled)} "
         f"!= templates this test renders a scrape Service from {sorted(rendered)}")
+
+
+@_needs_helm
+def test_every_platform_scrape_annotation_names_the_pod_port() -> None:
+    """`platform-components` (role: endpoints) keeps the target whose port equals
+    `prometheus.io/port`; a target's port is the pod's, not the Service's (#3483)."""
+    mismatched = sorted((c, s, p, t) for c, s, p, t in _scrape_targets() if p != t)
+    assert not mismatched, (
+        f"these platform Services annotate a scrape port that is not the pod port "
+        f"(chart, service, annotated port, pod port): {mismatched}. The "
+        f"platform-components job keeps only the endpoint whose port equals the "
+        f"annotation, so these would never be scraped. Annotate the pod port.")

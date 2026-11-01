@@ -34,7 +34,7 @@ data:
           "description": "Total number of threshold metric series across all tenants",
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
-          "targets": [{ "expr": "count(user_threshold)", "legendFormat": "" }],
+          "targets": [{ "expr": "count(max without(instance, pod) (user_threshold))", "legendFormat": "" }],
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -49,8 +49,8 @@ data:
           "type": "piechart",
           "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
           "targets": [
-            { "expr": "count(user_threshold{severity=\"warning\"})", "legendFormat": "Warning" },
-            { "expr": "count(user_threshold{severity=\"critical\"})", "legendFormat": "Critical" }
+            { "expr": "count(max without(instance, pod) (user_threshold{severity=\"warning\"}))", "legendFormat": "Warning" },
+            { "expr": "count(max without(instance, pod) (user_threshold{severity=\"critical\"}))", "legendFormat": "Critical" }
           ],
           "fieldConfig": {
             "overrides": [
@@ -65,7 +65,7 @@ data:
           "description": "Tenants with notification suppression active (TSDB preserved, notifications inhibited)",
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
-          "targets": [{ "expr": "count(user_silent_mode) or vector(0)", "legendFormat": "" }],
+          "targets": [{ "expr": "count(max without(instance, pod) (user_silent_mode)) or vector(0)", "legendFormat": "" }],
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -79,7 +79,7 @@ data:
           "description": "Tenants with maintenance state filter active (alerts suppressed at PromQL level, no TSDB records)",
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
-          "targets": [{ "expr": "count(user_state_filter{filter=\"maintenance\"}) or vector(0)", "legendFormat": "" }],
+          "targets": [{ "expr": "count(max without(instance, pod) (user_state_filter{filter=\"maintenance\"})) or vector(0)", "legendFormat": "" }],
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -93,7 +93,7 @@ data:
           "description": "Tenants that explicitly disabled severity dedup (both warning + critical notifications sent)",
           "type": "stat",
           "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
-          "targets": [{ "expr": "count(user_severity_dedup{mode=\"disable\"}) or vector(0)", "legendFormat": "" }],
+          "targets": [{ "expr": "count(max without(instance, pod) (user_severity_dedup{mode=\"disable\"})) or vector(0)", "legendFormat": "" }],
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "thresholds" },
@@ -108,10 +108,10 @@ data:
           "type": "table",
           "gridPos": { "h": 8, "w": 24, "x": 0, "y": 4 },
           "targets": [
-            { "expr": "count by(tenant) (user_threshold)", "format": "table", "instant": true, "refId": "Thresholds" },
-            { "expr": "user_silent_mode", "format": "table", "instant": true, "refId": "Silent" },
-            { "expr": "user_state_filter{filter=\"maintenance\"}", "format": "table", "instant": true, "refId": "Maintenance" },
-            { "expr": "user_severity_dedup", "format": "table", "instant": true, "refId": "Dedup" }
+            { "expr": "count by(tenant) (max without(instance, pod) (user_threshold))", "format": "table", "instant": true, "refId": "Thresholds" },
+            { "expr": "max without(instance, pod) (user_silent_mode)", "format": "table", "instant": true, "refId": "Silent" },
+            { "expr": "max without(instance, pod) (user_state_filter{filter=\"maintenance\"})", "format": "table", "instant": true, "refId": "Maintenance" },
+            { "expr": "max without(instance, pod) (user_severity_dedup)", "format": "table", "instant": true, "refId": "Dedup" }
           ],
           "transformations": [
             { "id": "merge", "options": {} },
@@ -124,7 +124,7 @@ data:
           "description": "Distribution of configured thresholds across database/component types",
           "type": "barchart",
           "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
-          "targets": [{ "expr": "count by(component) (user_threshold)", "legendFormat": "{{ component }}" }],
+          "targets": [{ "expr": "count by(component) (max without(instance, pod) (user_threshold))", "legendFormat": "{{ component }}" }],
           "fieldConfig": { "defaults": { "color": { "mode": "palette-classic" } } },
           "options": { "orientation": "horizontal", "showValue": "always", "barWidth": 0.7 }
         },
@@ -133,7 +133,7 @@ data:
           "description": "Number of threshold series per tenant. Cardinality guard limit: 500 per tenant (default).",
           "type": "barchart",
           "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
-          "targets": [{ "expr": "count by(tenant) (user_threshold)", "legendFormat": "{{ tenant }}" }],
+          "targets": [{ "expr": "count by(tenant) (max without(instance, pod) (user_threshold))", "legendFormat": "{{ tenant }}" }],
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "palette-classic" },
@@ -148,7 +148,7 @@ data:
           "description": "State-based monitoring filters currently active across tenants",
           "type": "table",
           "gridPos": { "h": 6, "w": 12, "x": 0, "y": 20 },
-          "targets": [{ "expr": "user_state_filter", "format": "table", "instant": true }],
+          "targets": [{ "expr": "max without(instance, pod) (user_state_filter)", "format": "table", "instant": true }],
           "transformations": [
             { "id": "organize", "options": { "excludeByName": { "Time": true, "__name__": true, "Value": true, "job": true, "instance": true }, "renameByName": { "tenant": "Tenant", "filter": "Filter", "severity": "Severity" } } }
           ],
@@ -159,7 +159,7 @@ data:
           "description": "Configuration reload activity — spikes indicate config updates via SHA-256 hot-reload",
           "type": "timeseries",
           "gridPos": { "h": 6, "w": 12, "x": 12, "y": 20 },
-          "targets": [{ "expr": "sum by(tenant) (changes(user_threshold[10m]))", "legendFormat": "{{ tenant }}" }],
+          "targets": [{ "expr": "sum by(tenant) (max without(instance, pod) (changes(user_threshold[10m])))", "legendFormat": "{{ tenant }}" }],
           "fieldConfig": {
             "defaults": {
               "color": { "mode": "palette-classic" },

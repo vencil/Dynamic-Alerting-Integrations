@@ -10,7 +10,10 @@ Pinned contracts
    branch (gates a regression of the PR3-pre Commit 3 sweep).
 4. The join's right-hand side is exactly ENRICH_RHS (#3483): the raw
    `tenant_metadata_info`, in any spelling, is flagged — it fails with
-   many-to-many once the exporter's replicas are scraped per pod.
+   many-to-many once the exporter's replicas are scraped per pod — and so is
+   the `max by(...)`-only collapse: during a config reload the replicas briefly
+   serve different metadata for one tenant, `max by` keeps both, and the rule
+   fails for every tenant. Only the `topk by(tenant) (1, …)` wrap is accepted.
 5. ENRICH_RHS's label set is the exporter's own (collector.go), and the Go
    custom-alert compiler emits the same string — so neither can drift alone.
 """
@@ -33,14 +36,16 @@ _BARE = (
     "        expr: |\n"
     "          (X)\n"
     "          * on(tenant) group_left(runbook_url, owner, tier)\n"
-    "            max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n"
+    "            topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) "
+    "(tenant_metadata_info))\n"
 )
 _LEFT_OUTER = (
     "        expr: |\n"
     "          (\n"
     "            (X)\n"
     "            * on(tenant) group_left(runbook_url, owner, tier)\n"
-    "              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n"
+    "              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) "
+    "(tenant_metadata_info))\n"
     "          )\n"
     "          or\n"
     "          (\n"
@@ -132,7 +137,8 @@ def test_metadata_labels_match_exporter():
     assert m, "tenant_metadata_info NewDesc not found in collector.go"
     labels = tuple(re.findall(r'"([^"]+)"', m.group(1)))
     assert labels == ("tenant",) + lint.METADATA_LABELS
-    assert lint.ENRICH_RHS == (f"max by({', '.join(labels)}) (tenant_metadata_info)")
+    assert lint.ENRICH_RHS == (f"topk by(tenant) (1, max by({', '.join(labels)}) "
+                               f"(tenant_metadata_info))")
 
 
 def test_go_compiler_emits_the_same_rhs():
@@ -164,7 +170,58 @@ def test_marker_escaping_spellings_flagged():
 
 def test_canonical_rhs_spacing_and_set_operators_pass():
     ok = ("x * on(tenant) group_left(runbook_url,owner,tier)\n"
-          "  max by (tenant, runbook_url, owner, tier) (tenant_metadata_info)")
+          "  topk by (tenant) (1, max by (tenant, runbook_url, owner, tier) "
+          "(tenant_metadata_info))")
     assert lint.noncanonical_joins(ok) == []
     assert lint.noncanonical_joins("x and on (tenant) tenant_metadata_info") == []
     assert lint.noncanonical_joins("x or on(tenant) tenant_metadata_info") == []
+
+
+# --- reload skew: the `max by`-only collapse is no longer canonical ---------
+# During a config reload one replica can serve a tenant's new runbook_url while
+# the other still serves the old one; `max by(tenant, runbook_url, owner, tier)`
+# keeps both and the join fails with many-to-many for every tenant of the rule
+# (tests/rulepacks/rule-pack-metadata-replicas_test.yaml proves it with promtool).
+
+_MAX_ONLY = "max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)"
+
+
+def test_canonical_rhs_wraps_the_max_by_in_topk():
+    assert lint.ENRICH_RHS == f"topk by(tenant) (1, {_MAX_ONLY})"
+
+
+def test_new_form_accepted_in_spacing_variants():
+    variants = [
+        f"x * on(tenant) group_left(runbook_url, owner, tier) {lint.ENRICH_RHS}",
+        ("x\n  * on(tenant) group_left(runbook_url, owner, tier)\n"
+         f"    {lint.ENRICH_RHS}\n"),
+        ("x * on(tenant) group_left(runbook_url,owner,tier) "
+         "topk by(tenant)(1,max by(tenant,runbook_url,owner,tier)(tenant_metadata_info))"),
+        ("x * on(tenant) GROUP_LEFT(runbook_url, owner, tier)\n"
+         "  TOPK BY (tenant) (\n    1,\n    MAX BY (tenant, runbook_url, owner, tier)\n"
+         "      (tenant_metadata_info)\n  )"),
+    ]
+    for text in variants:
+        assert lint.noncanonical_joins(text) == [], text
+
+
+def test_max_only_form_rejected():
+    marker = "x\n  * on(tenant) group_left(runbook_url, owner, tier)\n"
+    rejected = {
+        "exact_marker": f"{marker}    {_MAX_ONLY}\n",
+        "no_space": ("x * on(tenant) group_left(runbook_url,owner,tier) "
+                     "max by(tenant,runbook_url,owner,tier)(tenant_metadata_info)"),
+        "spaced_by": (f"{marker}    max by (tenant, runbook_url, owner, tier) "
+                      "(tenant_metadata_info)\n"),
+        "topk_without_by": f"{marker}    topk(1, {_MAX_ONLY})\n",
+        "topk_without_max": f"{marker}    topk by(tenant) (1, tenant_metadata_info)\n",
+        "topk_k2": f"{marker}    topk by(tenant) (2, {_MAX_ONLY})\n",
+    }
+    for name, text in rejected.items():
+        assert lint.noncanonical_joins(text), name
+
+
+def test_max_only_form_rejected_with_line_number():
+    text = _LEFT_OUTER.replace(lint.ENRICH_RHS, _MAX_ONLY)
+    assert lint.ENRICH_RHS not in text
+    assert lint.noncanonical_joins(text) == [(4, _MAX_ONLY)]

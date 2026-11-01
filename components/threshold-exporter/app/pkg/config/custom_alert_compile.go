@@ -436,10 +436,13 @@ const maintenanceTail = "unless on(tenant)\n(user_state_filter{filter=\"maintena
 // threshold-exporter runs several replicas and each serves tenant_metadata_info,
 // so a per-pod scrape yields one series per replica for the same tenant; joining
 // the raw metric then fails with many-to-many. Collapsing it here (by the exact
-// label set the exporter serves) keeps the join one-to-one. The string is pinned
-// to ENRICH_RHS in scripts/tools/lint/check_leftouterjoin_enrichment.py by
+// label set the exporter serves) dedupes identical replicas; the outer
+// topk by(tenant) (1, ...) keeps one series per tenant while the replicas briefly
+// serve different metadata during a config reload, so one tenant's reload cannot
+// fail the rule for every tenant. The string is pinned to ENRICH_RHS in
+// scripts/tools/lint/check_leftouterjoin_enrichment.py by
 // tests/lint/test_check_leftouterjoin_enrichment.py — change both together.
-const metadataJoinRHS = "max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)"
+const metadataJoinRHS = "topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))"
 
 // sloCoreRecord (ADR-031 §2): the multi-window AND — long and short ratio
 // above the exporter-resolved threshold, and the bad-event floor (min_events ×

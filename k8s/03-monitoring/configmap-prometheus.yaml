@@ -112,10 +112,21 @@ data:
       # platform operators can create Services carrying this label. Where
       # tenants get Service-create rights, enforce it (an admission policy on
       # the label, or RBAC) or narrow this job's namespaces. (#1425)
+      # Every POD behind the Service is a target (#3483): `role: endpoints`, not
+      # `role: service`. The service role scrapes the Service address, so each
+      # scrape lands on whichever replica the VIP picks — a dead replica is
+      # invisible (its up never reads 0) and per-replica series do not exist.
+      # The endpoints role carries the same __meta_kubernetes_service_* labels,
+      # so the keeps below are unchanged. A pod failing readiness stays a target
+      # (Endpoints keeps it under notReadyAddresses), so a crashed replica reads
+      # up 0 rather than vanishing. Series now arrive once per replica:
+      # rules aggregate them away (`max by(tenant)` on user_threshold, the
+      # `topk by(tenant) (1, max by(...) (...))` metadata join) and dashboards
+      # count distinct series, not samples.
       - job_name: "platform-components"
         scrape_interval: 15s
         kubernetes_sd_configs:
-          - role: service
+          - role: endpoints
         relabel_configs:
           # Only keep annotated services
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_scrape]
@@ -125,12 +136,20 @@ data:
           - source_labels: [__meta_kubernetes_service_label_dynamic_alerting_io_scrape]
             action: keep
             regex: "platform"
-          # Use the annotated port
-          - source_labels: [__address__, __meta_kubernetes_service_annotation_prometheus_io_port]
+          # One target per pod. The endpoints role yields a target per pod
+          # address × Service port (tenant-api's Service has two), plus one per
+          # container port the Service does not expose; __address__ is
+          # <pod IP>:<that port>. Keep the one on the annotated port, so the
+          # annotation must name the port the POD listens on — true for every
+          # platform chart (tests/k8s/test_prometheus_scrape_egress.py pins it).
+          - source_labels: [__address__]
             action: replace
-            target_label: __address__
-            regex: ([^:]+)(?::\d+)?;(\d+)
-            replacement: $1:$2
+            target_label: __tmp_scrape_port
+            regex: .+:(\d+)
+            replacement: $1
+          - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_port]
+            action: keepequal
+            target_label: __tmp_scrape_port
           # Use annotated metrics path
           - source_labels: [__meta_kubernetes_service_annotation_prometheus_io_path]
             action: replace
@@ -140,6 +159,9 @@ data:
           # and the other platform alerts select on it.
           - source_labels: [__meta_kubernetes_service_name]
             target_label: job
+          # Which replica a series came from (instance is <pod IP>:<port>).
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
 
       # This repo's raw monitoring manifests (kube-state-metrics, Alertmanager,
       # k8s/03-monitoring): not charts, and a customer may bring their own, so

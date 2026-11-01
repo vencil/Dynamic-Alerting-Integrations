@@ -44,8 +44,13 @@ k8s/**. Each leaf is classified:
                           (PLATFORM-DOUBLE-SCRAPE — endpoints / pod role jobs
                           count as keeping it unless they drop the label, and
                           each job's namespace keep regex picks the namespaces
-                          probed), and a label-keeping job whose `job` is not
-                          the Service name (PLATFORM-JOB-LABEL).
+                          probed), a label-keeping job whose `job` is not
+                          the Service name (PLATFORM-JOB-LABEL), and a
+                          label-keeping job that does not scrape every pod
+                          exactly once (PLATFORM-PER-POD, #3483: `role:
+                          service` reaches one replica per scrape; an
+                          endpoints role without the annotated-port keep
+                          scrapes a pod once per Service port).
   REACHABLE-IF-EXPORTED tenant-exporters face: the job WOULD admit a db-* ns
                         annotated Service, but per-tenant targets only exist at
                         runtime and whether the exporter exposes this exact
@@ -191,6 +196,18 @@ PLATFORM_SCRAPE_META = ("__meta_kubernetes_service_label_"
                         + re.sub(r"[^a-zA-Z0-9_]", "_", PLATFORM_SCRAPE_LABEL))
 #: The meta label kubernetes_sd sets to the Service's name.
 SERVICE_NAME_META = "__meta_kubernetes_service_name"
+#: The meta label of the Service's `prometheus.io/port` annotation.
+SCRAPE_PORT_META = "__meta_kubernetes_service_annotation_prometheus_io_port"
+
+#: Kubernetes SD roles whose targets carry the Service's
+#: __meta_kubernetes_service_* labels, so the gate's model of the Service
+#: selection face (annotation keep, platform label, namespace) applies to them.
+#: `endpoints` / `endpointslice` yield one target per pod address × port; the
+#: `service` role yields one per Service port — its scrape lands on whichever
+#: replica the Service address routes to (#3483).
+_SERVICE_FACE_ROLES = ("service", "endpoints", "endpointslice")
+#: Of those, the roles that make every pod a target (#3483).
+_PER_POD_ROLES = ("endpoints", "endpointslice")
 
 # The charts behind the helm-service families. A chart is what the family's
 # target comes from; tests/lint/test_check_scrape_reachability.py renders each
@@ -427,6 +444,10 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
             # True when the LAST relabel step writing `job` copies the Service
             # name verbatim (#1425: platform alerts select up{job="<service>"})
             "job_from_service_name": False,
+            # True when a `keepequal` keeps only the target whose __address__
+            # port is the annotated scrape port (#3483: an endpoints-role job
+            # otherwise scrapes each pod once per Service port)
+            "port_select": False,
             "name_rules": [],   # [(action, regex)] over __name__
             "label_rules": [],  # [(action, source_labels, regex)] other keep/drop
         }
@@ -434,8 +455,28 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
             job["sd_role"] = sd.get("role")
             job["sd_namespaces"] = list(
                 ((sd.get("namespaces") or {}).get("names")) or [])
+        port_labels: set[str] = set()   # labels holding the endpoint's port
+        address_rewritten = False
         for rc in sc.get("relabel_configs", []) or []:
             src = rc.get("source_labels", [])
+            action = rc.get("action", "replace")
+            target = rc.get("target_label")
+            if action == "keepequal":
+                if src == [SCRAPE_PORT_META] and target in port_labels:
+                    job["port_select"] = True
+                continue
+            if action == "replace" and target is not None:
+                if target == "__address__":
+                    # From here __address__'s port is no longer the endpoint's
+                    # (e.g. forced to the annotated port), so comparing it with
+                    # the annotation selects nothing.
+                    port_labels.clear()
+                    address_rewritten = True
+                elif (src == ["__address__"] and not address_rewritten
+                      and _captures_port(rc)):
+                    port_labels.add(target)
+                else:
+                    port_labels.discard(target)
             if (rc.get("action", "replace") == "replace"
                     and rc.get("target_label") == "job"):
                 job["job_from_service_name"] = (
@@ -463,6 +504,23 @@ def parse_scrape_jobs(prom_yaml_text: str) -> list[dict]:
                 job["label_rules"].append((action, src, mrc.get("regex", "(.*)")))
         jobs.append(job)
     return jobs
+
+
+def _captures_port(rc: dict) -> bool:
+    """Whether a `replace` step writes exactly __address__'s port: its regex,
+    anchored as Prometheus anchors it, turns `<ip>:<port>` (IPv4 and the
+    bracketed IPv6 form) into the bare port through its replacement."""
+    regex = rc.get("regex", "(.*)")
+    replacement = rc.get("replacement", "$1")
+    py_repl = re.sub(r"\$\{?(\d+)\}?", r"\\\1", replacement)
+    for address, port in (("10.0.0.1:8080", "8080"), ("[fd00::1]:9598", "9598")):
+        try:
+            m = re.fullmatch(regex, address)
+            if m is None or m.expand(py_repl) != port:
+                return False
+        except (re.error, IndexError):
+            return False
+    return True
 
 
 #: The ConfigMap key Prometheus' config is mounted from.
@@ -535,7 +593,7 @@ def load_repo_services() -> list[dict]:
 
 def _service_admitted(svc: dict, job: dict) -> bool:
     """True iff *job*'s target-selection face would keep *svc*."""
-    if job["sd_role"] != "service":
+    if job["sd_role"] not in _SERVICE_FACE_ROLES:
         return False
     ns = svc.get("namespace")
     if job["sd_namespaces"] and ns not in job["sd_namespaces"]:
@@ -555,17 +613,19 @@ def _service_admitted(svc: dict, job: dict) -> bool:
 
 def _keeps_platform_everywhere(job: dict) -> bool:
     """A job that keeps annotated, platform-labelled Services in EVERY namespace."""
-    return (job["sd_role"] == "service" and job["annotation_keep"]
+    return (job["sd_role"] in _SERVICE_FACE_ROLES and job["annotation_keep"]
             and job["platform_label"] == "keep"
             and not job["sd_namespaces"] and job["ns_keep_regex"] is None)
 
 
-#: Kubernetes SD roles whose targets can be a platform chart's pods. The gate
-#: models only the `service` role's selection face; a job of these roles is
-#: taken to keep a platform Service unless its namespace face excludes it or
-#: it drops the platform label (#1425 review F4a) — guessing "no" would hide
-#: exactly the double scrape this check exists for.
-_ROLES_REACHING_PLATFORM_PODS = ("endpoints", "endpointslice", "pod")
+#: Kubernetes SD roles whose targets can be a platform chart's pods but carry
+#: no Service selection face the gate models (the `pod` role has no
+#: __meta_kubernetes_service_* labels); a job of these roles is taken to keep
+#: a platform Service unless its namespace face excludes it or it drops the
+#: platform label (#1425 review F4a) — guessing "no" would hide exactly the
+#: double scrape this check exists for. The endpoints roles are modelled
+#: through the Service face (_SERVICE_FACE_ROLES) since #3483.
+_ROLES_REACHING_PLATFORM_PODS = ("pod",)
 
 #: A namespace no job is expected to name — the "installed anywhere" case.
 #: A synthetic string, not a tenant id (dev-rule #2).
@@ -573,9 +633,9 @@ _UNNAMED_PROBE_NAMESPACE = "da-probe"
 
 
 def _may_keep_platform_service(svc: dict, job: dict) -> bool:
-    """Whether *job* could keep *svc* — exact for the `service` role,
-    conservative for the roles in _ROLES_REACHING_PLATFORM_PODS."""
-    if job["sd_role"] == "service":
+    """Whether *job* could keep *svc* — exact for the roles carrying the
+    Service face, conservative for the roles in _ROLES_REACHING_PLATFORM_PODS."""
+    if job["sd_role"] in _SERVICE_FACE_ROLES:
         return _service_admitted(svc, job)
     if job["sd_role"] not in _ROLES_REACHING_PLATFORM_PODS:
         return False
@@ -699,6 +759,35 @@ def _platform_job_label(jobs: list[dict]) -> list[str]:
         "select nothing. (#1425)"
         for j in jobs
         if j["platform_label"] == "keep" and not j["job_from_service_name"]]
+
+
+def _platform_per_pod(jobs: list[dict]) -> list[str]:
+    """Errors for a job keeping platform Services without scraping every pod
+    exactly once (#3483).
+
+    threshold-exporter runs several replicas. `role: service` scrapes the
+    Service address, so each scrape reaches one replica: a dead replica never
+    reads up 0 and the per-replica series do not exist. The endpoints roles
+    reach every pod, but one target per pod address × Service port (plus the
+    container ports the Service does not expose) — without a keep on the
+    annotated port, a pod with two Service ports (tenant-api) is scraped twice.
+    """
+    errors = []
+    for j in jobs:
+        if j["platform_label"] != "keep":
+            continue
+        if j["sd_role"] not in _PER_POD_ROLES:
+            errors.append(
+                f"PLATFORM-PER-POD: job '{j['job']}' keeps platform Services with "
+                f"`role: {j['sd_role']}`, which scrapes one replica per scrape — a "
+                "dead replica is invisible. Use `role: endpoints`. (#3483)")
+        elif not j["port_select"]:
+            errors.append(
+                f"PLATFORM-PER-POD: job '{j['job']}' (role: {j['sd_role']}) has no "
+                f"`keepequal` of [{SCRAPE_PORT_META}] against a label holding "
+                "__address__'s port — every pod is scraped once per Service port. "
+                "(#3483)")
+    return errors
 
 
 def _tenant_exporter_face_exists(jobs: list[dict]) -> bool:
@@ -893,7 +982,8 @@ def run_check(
     for cls, _reason in classes.values():
         counts[cls] += 1
 
-    errors: list[str] = _platform_double_scrape(jobs) + _platform_job_label(jobs)
+    errors: list[str] = (_platform_double_scrape(jobs) + _platform_job_label(jobs)
+                         + _platform_per_pod(jobs))
     infos: list[str] = []
 
     for m, (cls, reason) in classes.items():

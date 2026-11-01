@@ -5,7 +5,7 @@ Problem (#947 / PR #977, Gemini disposition)
 --------------------------------------------
 Most threshold alerts use the ADR-024 two-arm left-outer-join shape:
 
-    ((breach UNLESS maintenance) * group_left(...) max by(...) (tenant_metadata_info))   # enriched arm
+    ((breach UNLESS maintenance) * group_left(...) topk by(tenant) (1, max by(...) (...)))  # enriched
     or
     ((breach UNLESS maintenance) unless on(tenant) tenant_metadata_info)   # bare arm
 

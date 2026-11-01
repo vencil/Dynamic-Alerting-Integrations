@@ -76,7 +76,7 @@ When threshold-exporter emits a tenant threshold, it splits the key at the first
         (user_state_filter{filter="maintenance"} == 1)
       )
       * on(tenant) group_left(runbook_url, owner, tier)
-        max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+        topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
     )
     or
     (
@@ -105,7 +105,7 @@ When threshold-exporter emits a tenant threshold, it splits the key at the first
 
 - `> on(tenant) group_left tenant:alert_threshold:<key>`: each tenant is compared with its own threshold. When a tenant sets the key to `"disable"`, the threshold series does not exist and this alert cannot fire.
 - `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`: tenants in maintenance mode do not alert.
-- `* on(tenant) group_left(runbook_url, owner, tier) max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)`: carries the runbook, owner and tier from the tenant's `_metadata` into the alert. Keep the `max by(...)`: threshold-exporter runs several replicas, so a per-pod scrape gives one `tenant_metadata_info` series per replica for the same tenant, and joining the raw metric fails the whole alert with many-to-many matching. The `or … unless on(tenant) tenant_metadata_info` half keeps tenants without `_metadata` alerting.
+- `* on(tenant) group_left(runbook_url, owner, tier) topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))`: carries the runbook, owner and tier from the tenant's `_metadata` into the alert. Keep the whole right-hand side: threshold-exporter runs several replicas, so a per-pod scrape gives one `tenant_metadata_info` series per replica for the same tenant (for a few seconds during a reload their contents can even differ), and joining the raw metric fails the whole alert with many-to-many matching. The `or … unless on(tenant) tenant_metadata_info` half keeps tenants without `_metadata` alerting.
 - `summary` / `summary_zh` are for the tenant; `platform_summary` / `platform_summary_zh` are the NOC-facing summary, used by notifications sent through platform-enforced routing (`_routing_enforced`). Annotations without a `*_zh` variant fall back to English.
 
 ### Where thresholds come from

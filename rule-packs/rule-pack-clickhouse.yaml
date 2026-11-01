@@ -151,7 +151,7 @@ groups:
               unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -193,7 +193,7 @@ groups:
               unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -235,7 +235,7 @@ groups:
               unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -277,7 +277,7 @@ groups:
               unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -319,7 +319,7 @@ groups:
               unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (

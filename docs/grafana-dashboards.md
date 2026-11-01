@@ -64,28 +64,31 @@ Sidecar 會自動偵測 `grafana_dashboard=1` label，將 ConfigMap 掛載至 Gr
 
 ### Panel 快速參考（Stat Panels）
 
+threshold-exporter 跑多個副本，平台的 Prometheus 逐 pod 抓取（[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)），每個 `user_*` 序列各有一份 per 副本、只差 `instance`／`pod`。面板一律先 `max without(instance, pod)` 收掉副本再計數，數字才是租戶的設定數、而不是乘上副本數。
+
+
 | # | Panel | PromQL | 正常 | 異常排查 |
 |---|-------|--------|------|----------|
 | 1 | Active Tenants | `count(count by(tenant) (user_threshold))` | 非零 | 突降→檢查配置或 reload |
-| 2 | Total Thresholds | `count(user_threshold)` | 穩定非零 | 下降>10%→檢查 exporter/scrape |
-| 3 | Warning/Critical | `count(user_threshold{severity="warning\|critical"})` | Critical 20-40% | Critical>50%→檢查 Rule Pack |
-| 4 | Silent Mode | `count(user_silent_mode) or vector(0)` | 0 或計畫維護 | 非預期>0→檢查 `_silent_mode` |
-| 5 | Maintenance Mode | `count(user_state_filter{filter="maintenance"})` | 0 或計畫維護 | 非預期>0→檢查 `_state_maintenance` |
-| 6 | Dedup Disabled | `count(user_severity_dedup{mode="disable"})` | 0 或小部分 | 非預期>0→檢查 `_severity_dedup` |
+| 2 | Total Thresholds | `count(max without(instance, pod) (user_threshold))` | 穩定非零 | 下降>10%→檢查 exporter/scrape |
+| 3 | Warning/Critical | `count(max without(instance, pod) (user_threshold{severity="warning\|critical"}))` | Critical 20-40% | Critical>50%→檢查 Rule Pack |
+| 4 | Silent Mode | `count(max without(instance, pod) (user_silent_mode)) or vector(0)` | 0 或計畫維護 | 非預期>0→檢查 `_silent_mode` |
+| 5 | Maintenance Mode | `count(max without(instance, pod) (user_state_filter{filter="maintenance"}))` | 0 或計畫維護 | 非預期>0→檢查 `_state_maintenance` |
+| 6 | Dedup Disabled | `count(max without(instance, pod) (user_severity_dedup{mode="disable"}))` | 0 或小部分 | 非預期>0→檢查 `_severity_dedup` |
 
 ---
 
 #### 7-8. Tenant State Overview (Table) + Thresholds by Component (BarChart)
 
 - **Tenant State Overview**: 按 Tenant 聚合顯示 Thresholds 數量、Silent/Maintenance/Dedup 運營狀態。點擊列排序可快速定位異常。
-- **Thresholds by Component**: `count by(component) (user_threshold)` — 按 DB 類型分佈 Threshold 數量，反映基礎設施構成。
+- **Thresholds by Component**: `count by(component) (max without(instance, pod) (user_threshold))` — 按 DB 類型分佈 Threshold 數量，反映基礎設施構成。
 
 ---
 
 #### 9-10. Thresholds per Tenant (BarChart) + Active State Filters (Table)
 
-- **Thresholds per Tenant**: `count by(tenant) (user_threshold)` — 各 Tenant 的 Threshold 序列數。接近 500 上限時變紅（Cardinality Guard）。詳見 [Architecture §2](./architecture-and-design.md#2-核心設計config-driven-架構)。
-- **Active State Filters**: `user_state_filter` — 目前啟用的 State Filter 詳細列表（maintenance、crashloop 等），通常為空或計畫維護。
+- **Thresholds per Tenant**: `count by(tenant) (max without(instance, pod) (user_threshold))` — 各 Tenant 的 Threshold 序列數。接近 500 上限時變紅（Cardinality Guard）。詳見 [Architecture §2](./architecture-and-design.md#2-核心設計config-driven-架構)。
+- **Active State Filters**: `max without(instance, pod) (user_state_filter)` — 目前啟用的 State Filter 詳細列表（maintenance、crashloop 等），通常為空或計畫維護。
 
 ---
 

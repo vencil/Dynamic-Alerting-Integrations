@@ -24,7 +24,15 @@ once per replica, differing only in scrape-identity labels (instance, pod, …),
 and `* on(tenant) group_left(...) tenant_metadata_info` then fails at evaluation
 with "many-to-many matching not allowed" — the whole alert stops evaluating.
 So the right-hand side of every enrichment must be exactly `ENRICH_RHS`, which
-collapses the replicas by the label set the exporter serves. `by` (not
+collapses the replicas by the label set the exporter serves, then keeps a single
+series per tenant. The outer `topk by(tenant) (1, …)` covers the reload window:
+the replicas reload their config independently, so for a few seconds one can
+serve a tenant's new runbook_url/owner/tier while the other still serves the old
+one. `max by` keeps both (they differ in a metadata label), the tenant has two
+right-hand series, and the join fails with many-to-many for EVERY tenant of the
+rule — one tenant's reload silences everyone's alert. `topk` keeps the first
+series it sees on a tie (all values are 1), so that tenant briefly carries one
+replica's — possibly stale — metadata instead. `by` (not
 `without`) is deliberate: `without` would have to list every per-replica label
 a scrape config could add (a relabelled `node`, say), and any it missed brings
 the error back. `by` cannot silently drop a metadata label either, because
@@ -65,8 +73,12 @@ METADATA_LABELS = ("runbook_url", "owner", "tier")
 ENRICH_MARKER = f"* on(tenant) group_left({', '.join(METADATA_LABELS)})"
 # The only accepted right-hand side of an enrichment join. The Go compiler
 # (custom_alert_compile.go: metadataJoinRHS) emits the same string; a test pins it.
-ENRICH_RHS = (f"max by(tenant, {', '.join(METADATA_LABELS)}) "
-              f"(tenant_metadata_info)")
+# `max by` collapses replicas that serve identical metadata; `topk by(tenant) (1, …)`
+# then keeps one series per tenant when replicas briefly disagree (a config reload
+# lands on one replica before the other) — without it that tenant has two
+# right-hand series and the whole rule fails for every tenant.
+_DEDUP_RHS = f"max by(tenant, {', '.join(METADATA_LABELS)}) (tenant_metadata_info)"
+ENRICH_RHS = f"topk by(tenant) (1, {_DEDUP_RHS})"
 VOID_BRANCH = "unless on(tenant) tenant_metadata_info"
 
 # Any vector match onto the raw metric, whatever its case, spacing, label list or

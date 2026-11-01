@@ -571,7 +571,7 @@ groups:
           (
             rule_pack_kubernetes:pod_container_high_cpu_warning:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -610,7 +610,7 @@ groups:
           (
             rule_pack_kubernetes:pod_container_high_cpu_critical:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -642,7 +642,7 @@ groups:
           (
             rule_pack_kubernetes:pod_container_high_memory_warning:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -672,7 +672,7 @@ groups:
           (
             rule_pack_kubernetes:pod_container_high_memory_critical:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -711,7 +711,7 @@ groups:
           (
             rule_pack_kubernetes:pod_cpu_throttled_warning:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -743,7 +743,7 @@ groups:
           (
             rule_pack_kubernetes:pod_cpu_throttled_critical:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -782,7 +782,7 @@ groups:
           (
             rule_pack_kubernetes:container_oom_killed_warning:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -813,7 +813,7 @@ groups:
           (
             rule_pack_kubernetes:container_oom_killed_critical:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -850,14 +850,14 @@ groups:
                 (
                   tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
                   * on(tenant) group_left
-                  user_state_filter{filter="container_crashloop"}
+                  max by(tenant) (user_state_filter{filter="container_crashloop"})
                 ) > 0
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -866,7 +866,7 @@ groups:
                 (
                   tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
                   * on(tenant) group_left
-                  user_state_filter{filter="container_crashloop"}
+                  max by(tenant) (user_state_filter{filter="container_crashloop"})
                 ) > 0
               )
               unless on(tenant)
@@ -897,14 +897,14 @@ groups:
                 (
                   tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
                   * on(tenant) group_left
-                  user_state_filter{filter="container_imagepull"}
+                  max by(tenant) (user_state_filter{filter="container_imagepull"})
                 ) > 0
               )
               unless on(tenant)
               (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -913,7 +913,7 @@ groups:
                 (
                   tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
                   * on(tenant) group_left
-                  user_state_filter{filter="container_imagepull"}
+                  max by(tenant) (user_state_filter{filter="container_imagepull"})
                 ) > 0
               )
               unless on(tenant)
@@ -1212,7 +1212,7 @@ groups:
           (
             rule_pack_kubernetes:node_not_ready:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (
@@ -1340,7 +1340,7 @@ groups:
           (
             rule_pack_kubernetes:ha_replicas_degraded:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
           )
           or
           (

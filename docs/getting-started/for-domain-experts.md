@@ -76,7 +76,7 @@ threshold-exporter 發射租戶閾值時，會在 key 的第一個 `_` 拆開：
         (user_state_filter{filter="maintenance"} == 1)
       )
       * on(tenant) group_left(runbook_url, owner, tier)
-        max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+        topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
     )
     or
     (
@@ -105,7 +105,7 @@ threshold-exporter 發射租戶閾值時，會在 key 的第一個 `_` 拆開：
 
 - `> on(tenant) group_left tenant:alert_threshold:<key>`：每個租戶跟自己的閾值比。租戶把 key 設成 `"disable"` 時，閾值 series 不存在，這條告警就不會觸發。
 - `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`：維護模式中的租戶不告警。
-- `* on(tenant) group_left(runbook_url, owner, tier) max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)`：把租戶 `_metadata` 的 runbook、owner、tier 帶進告警。`max by(...)` 不能省：threshold-exporter 跑多個副本，以 pod 為單位抓取時同一個租戶會有好幾份 `tenant_metadata_info`，直接 join 原始指標會因 many-to-many 而整條告警失敗。`or … unless on(tenant) tenant_metadata_info` 那一半讓沒有設 `_metadata` 的租戶照樣告警。
+- `* on(tenant) group_left(runbook_url, owner, tier) topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))`：把租戶 `_metadata` 的 runbook、owner、tier 帶進告警。右側這一段不能省：threshold-exporter 跑多個副本，以 pod 為單位抓取時同一個租戶會有好幾份 `tenant_metadata_info`（換版的幾秒內內容還可能不同），直接 join 原始指標會因 many-to-many 而整條告警失敗。`or … unless on(tenant) tenant_metadata_info` 那一半讓沒有設 `_metadata` 的租戶照樣告警。
 - `summary`／`summary_zh` 是給租戶看的；`platform_summary`／`platform_summary_zh` 是 NOC 視角的摘要，用在平台強制路由（`_routing_enforced`）送出的通知。沒有 `*_zh` 的 annotation 會退回英文。
 
 ### 閾值從哪裡來

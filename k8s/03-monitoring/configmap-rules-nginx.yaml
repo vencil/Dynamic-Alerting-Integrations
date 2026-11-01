@@ -36,16 +36,16 @@ data:
     \    expr: \"(\\n  (\\n    (\\n      tenant:nginx_connections_active:max\\n  \
     \    > on(tenant) group_left\\n      tenant:alert_threshold:nginx_connections\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    max\
-    \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\\n)\\nor\\n(\\n\
-    \  (\\n    (\\n      tenant:nginx_connections_active:max\\n      > on(tenant)\
-    \ group_left\\n      tenant:alert_threshold:nginx_connections\\n    )\\n    unless\
-    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
-    n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n\
-    \      metric_group: nginx_connections\n      severity: warning\n      tenant:\
-    \ '{{ $labels.tenant }}'\n    annotations:\n      description: Active connections\
-    \ {{ $value }} exceeds threshold\n      description_zh: 活動連線 {{ $value }} 超出閾值\n\
-    \      owner: '{{ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    topk\
+    \ by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:nginx_connections_active:max\\n     \
+    \ > on(tenant) group_left\\n      tenant:alert_threshold:nginx_connections\\n\
+    \    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
+    \ 5m\n    labels:\n      metric_group: nginx_connections\n      severity: warning\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Active\
+    \ connections {{ $value }} exceeds threshold\n      description_zh: 活動連線 {{ $value\
+    \ }} 超出閾值\n      owner: '{{ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier\
     \ }}] {{ $labels.tenant }}: Nginx connection threshold exceeded — upstream review'\n\
     \      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：Nginx 連線閾值已超出\
     \ — upstream 審查'\n      runbook_url: '{{ $labels.runbook_url }}'\n      summary:\
@@ -54,13 +54,13 @@ data:
     \    expr: \"(\\n  (\\n    (\\n      tenant:nginx_connections_active:max\\n  \
     \    > on(tenant) group_left\\n      tenant:alert_threshold:nginx_connections_critical\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    max\
-    \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\\n)\\nor\\n(\\n\
-    \  (\\n    (\\n      tenant:nginx_connections_active:max\\n      > on(tenant)\
-    \ group_left\\n      tenant:alert_threshold:nginx_connections_critical\\n    )\\\
-    n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} ==\
-    \ 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 3m\n\
-    \    labels:\n      metric_group: nginx_connections\n      severity: critical\n\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    topk\
+    \ by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:nginx_connections_active:max\\n     \
+    \ > on(tenant) group_left\\n      tenant:alert_threshold:nginx_connections_critical\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
+    \ 3m\n    labels:\n      metric_group: nginx_connections\n      severity: critical\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Active\
     \ connections {{ $value }} exceeds critical threshold\n      description_zh: 活動連線\
     \ {{ $value }} 超出嚴重閾值\n      owner: '{{ $labels.owner }}'\n      platform_summary:\
@@ -72,30 +72,31 @@ data:
     \ alert: NginxRequestRateSpike\n    expr: \"(\\n  (\\n    (\\n      tenant:nginx_requests:rate5m\\\
     n      > on(tenant) group_left\\n      tenant:alert_threshold:nginx_request_rate\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    max\
-    \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\\n)\\nor\\n(\\n\
-    \  (\\n    (\\n      tenant:nginx_requests:rate5m\\n      > on(tenant) group_left\\\
-    n      tenant:alert_threshold:nginx_request_rate\\n    )\\n    unless on(tenant)\\\
-    n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\n  unless on(tenant)\
-    \ tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n      metric_group:\
-    \ nginx_request_rate\n      severity: warning\n      tenant: '{{ $labels.tenant\
-    \ }}'\n    annotations:\n      description: Request rate {{ $value }} req/s exceeds\
-    \ threshold\n      description_zh: Request 速率 {{ $value }} 請求/秒 超出閾值\n      owner:\
-    \ '{{ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier }}] {{ $labels.tenant\
-    \ }}: request rate spike — traffic pattern review'\n      platform_summary_zh:\
-    \ '[{{ $labels.tier }}] {{ $labels.tenant }}：request 速率尖峰 — 流量模式審查'\n      runbook_url:\
-    \ '{{ $labels.runbook_url }}'\n      summary: NginxRequestRateSpike on {{ $labels.tenant\
-    \ }}\n      summary_zh: '{{ $labels.tenant }} 上 Nginx request 速率尖峰'\n      tier:\
-    \ '{{ $labels.tier }}'\n  - alert: NginxRequestRateSpikeCritical\n    expr: \"\
-    (\\n  (\\n    (\\n      tenant:nginx_requests:rate5m\\n      > on(tenant) group_left\\\
-    n      tenant:alert_threshold:nginx_request_rate_critical\\n    )\\n    unless\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    topk\
+    \ by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:nginx_requests:rate5m\\n      > on(tenant)\
+    \ group_left\\n      tenant:alert_threshold:nginx_request_rate\\n    )\\n    unless\
     \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
-    n  * on(tenant) group_left(runbook_url, owner, tier)\\n    max by(tenant, runbook_url,\
-    \ owner, tier) (tenant_metadata_info)\\n)\\nor\\n(\\n  (\\n    (\\n      tenant:nginx_requests:rate5m\\\
-    n      > on(tenant) group_left\\n      tenant:alert_threshold:nginx_request_rate_critical\\\
+    n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n\
+    \      metric_group: nginx_request_rate\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: Request rate {{\
+    \ $value }} req/s exceeds threshold\n      description_zh: Request 速率 {{ $value\
+    \ }} 請求/秒 超出閾值\n      owner: '{{ $labels.owner }}'\n      platform_summary: '[{{\
+    \ $labels.tier }}] {{ $labels.tenant }}: request rate spike — traffic pattern\
+    \ review'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}：request 速率尖峰 — 流量模式審查'\n      runbook_url: '{{ $labels.runbook_url }}'\n\
+    \      summary: NginxRequestRateSpike on {{ $labels.tenant }}\n      summary_zh:\
+    \ '{{ $labels.tenant }} 上 Nginx request 速率尖峰'\n      tier: '{{ $labels.tier }}'\n\
+    \  - alert: NginxRequestRateSpikeCritical\n    expr: \"(\\n  (\\n    (\\n    \
+    \  tenant:nginx_requests:rate5m\\n      > on(tenant) group_left\\n      tenant:alert_threshold:nginx_request_rate_critical\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
-    \ 3m\n    labels:\n      metric_group: nginx_request_rate\n      severity: critical\n\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    topk\
+    \ by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:nginx_requests:rate5m\\n      > on(tenant)\
+    \ group_left\\n      tenant:alert_threshold:nginx_request_rate_critical\\n   \
+    \ )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"\
+    } == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 3m\n\
+    \    labels:\n      metric_group: nginx_request_rate\n      severity: critical\n\
     \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Request\
     \ rate {{ $value }} req/s exceeds critical threshold\n      description_zh: Request\
     \ 速率 {{ $value }} 請求/秒 超出嚴重閾值\n      owner: '{{ $labels.owner }}'\n      platform_summary:\
@@ -108,32 +109,32 @@ data:
     \    expr: \"(\\n  (\\n    (\\n      tenant:nginx_connections_waiting:max\\n \
     \     > on(tenant) group_left\\n      tenant:alert_threshold:nginx_waiting\\n\
     \    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    max\
-    \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\\n)\\nor\\n(\\n\
-    \  (\\n    (\\n      tenant:nginx_connections_waiting:max\\n      > on(tenant)\
-    \ group_left\\n      tenant:alert_threshold:nginx_waiting\\n    )\\n    unless\
-    \ on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} == 1)\\n  )\\\
-    n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n    labels:\n\
-    \      metric_group: nginx_waiting\n      severity: warning\n      tenant: '{{\
-    \ $labels.tenant }}'\n    annotations:\n      description: Waiting connections\
-    \ {{ $value }} exceeds threshold\n      description_zh: 等待中的連線 {{ $value }} 超出閾值\n\
-    \      owner: '{{ $labels.owner }}'\n      platform_summary: '[{{ $labels.tier\
-    \ }}] {{ $labels.tenant }}: connection backlog building — upstream capacity review'\n\
-    \      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant }}：連線積壓正在累積\
-    \ — upstream 容量審查'\n      runbook_url: '{{ $labels.runbook_url }}'\n      summary:\
-    \ NginxConnectionBacklog on {{ $labels.tenant }}\n      summary_zh: '{{ $labels.tenant\
-    \ }} 上 Nginx 連線積壓'\n      tier: '{{ $labels.tier }}'\n  - alert: NginxConnectionBacklogCritical\n\
-    \    expr: \"(\\n  (\\n    (\\n      tenant:nginx_connections_waiting:max\\n \
-    \     > on(tenant) group_left\\n      tenant:alert_threshold:nginx_waiting_critical\\\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    topk\
+    \ by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:nginx_connections_waiting:max\\n    \
+    \  > on(tenant) group_left\\n      tenant:alert_threshold:nginx_waiting\\n   \
+    \ )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"\
+    } == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 5m\n\
+    \    labels:\n      metric_group: nginx_waiting\n      severity: warning\n   \
+    \   tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Waiting\
+    \ connections {{ $value }} exceeds threshold\n      description_zh: 等待中的連線 {{\
+    \ $value }} 超出閾值\n      owner: '{{ $labels.owner }}'\n      platform_summary:\
+    \ '[{{ $labels.tier }}] {{ $labels.tenant }}: connection backlog building — upstream\
+    \ capacity review'\n      platform_summary_zh: '[{{ $labels.tier }}] {{ $labels.tenant\
+    \ }}：連線積壓正在累積 — upstream 容量審查'\n      runbook_url: '{{ $labels.runbook_url }}'\n\
+    \      summary: NginxConnectionBacklog on {{ $labels.tenant }}\n      summary_zh:\
+    \ '{{ $labels.tenant }} 上 Nginx 連線積壓'\n      tier: '{{ $labels.tier }}'\n  - alert:\
+    \ NginxConnectionBacklogCritical\n    expr: \"(\\n  (\\n    (\\n      tenant:nginx_connections_waiting:max\\\
+    n      > on(tenant) group_left\\n      tenant:alert_threshold:nginx_waiting_critical\\\
     n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
-    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    max\
-    \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\\n)\\nor\\n(\\n\
-    \  (\\n    (\\n      tenant:nginx_connections_waiting:max\\n      > on(tenant)\
-    \ group_left\\n      tenant:alert_threshold:nginx_waiting_critical\\n    )\\n\
-    \    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\"} ==\
-    \ 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for: 3m\n\
-    \    labels:\n      metric_group: nginx_waiting\n      severity: critical\n  \
-    \    tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Waiting\
+    \"} == 1)\\n  )\\n  * on(tenant) group_left(runbook_url, owner, tier)\\n    topk\
+    \ by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))\\\
+    n)\\nor\\n(\\n  (\\n    (\\n      tenant:nginx_connections_waiting:max\\n    \
+    \  > on(tenant) group_left\\n      tenant:alert_threshold:nginx_waiting_critical\\\
+    n    )\\n    unless on(tenant)\\n    (user_state_filter{filter=\\\"maintenance\\\
+    \"} == 1)\\n  )\\n  unless on(tenant) tenant_metadata_info\\n)\\n\"\n    for:\
+    \ 3m\n    labels:\n      metric_group: nginx_waiting\n      severity: critical\n\
+    \      tenant: '{{ $labels.tenant }}'\n    annotations:\n      description: Waiting\
     \ connections {{ $value }} exceeds critical threshold\n      description_zh: 等待中的連線\
     \ {{ $value }} 超出嚴重閾值\n      owner: '{{ $labels.owner }}'\n      platform_summary:\
     \ '[{{ $labels.tier }}] {{ $labels.tenant }}: critical connection backlog — service\
