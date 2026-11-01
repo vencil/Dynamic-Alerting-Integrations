@@ -483,6 +483,30 @@ class TestCli:
                        "tests/contract/run_contract_tests.py"])
         assert code == 0
 
+    def test_json_run_keeps_stdout_one_document(self, cli_argv, synth_cli,
+                                                capfd, monkeypatch):
+        """#3448：--json --run 時 pytest 的輸出不得進 stdout——stdout 全文是
+        run() 寫出的那份文件，pytest 的輸出在 stderr。用 fd 層 capture：子行程
+        寫的是 fd 1／fd 2，不是 sys.stdout。"""
+        monkeypatch.setattr(vd, "build_pytest_argv", lambda result, n: [
+            sys.executable, "-c", "print('PYTEST-NOISE')"])
+        code = self._run_main(
+            cli_argv, [*synth_cli, "--json", "--run", "scripts/tools/dx/mytool.py"])
+        assert code == 0
+        out, err = capfd.readouterr()
+        doc = json.loads(out)  # 全文 parse＝單一文件
+        assert "tests/dx/test_mytool.py" in doc["selected"]
+        assert "PYTEST-NOISE" in err
+
+    def test_text_run_keeps_pytest_on_stdout(self, cli_argv, synth_cli,
+                                             capfd, monkeypatch):
+        """沒有 --json 時不變：pytest 的輸出照舊在 stdout。"""
+        monkeypatch.setattr(vd, "build_pytest_argv", lambda result, n: [
+            sys.executable, "-c", "print('PYTEST-NOISE')"])
+        assert self._run_main(
+            cli_argv, [*synth_cli, "--run", "scripts/tools/dx/mytool.py"]) == 0
+        assert "PYTEST-NOISE" in capfd.readouterr().out
+
     def test_json_carries_unrun_external(self, cli_argv, synth_cli, capsys):
         code = self._run_main(
             cli_argv, [*synth_cli, "--json",
