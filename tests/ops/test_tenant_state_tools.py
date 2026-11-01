@@ -179,10 +179,44 @@ def test_every_language_says_every_refusal():
     refusal one language can say and another cannot is a KeyError in the
     other's tool."""
     import string
-    fields = {lang: {k: sorted(f for _, f, _, _ in string.Formatter().parse(v) if f)
+    fields = {lang: {k: sorted((f, c) for _, f, _, c in string.Formatter().parse(v) if f)
                      for k, v in table.items()}
               for lang, table in lts._MSG.items()}
     assert fields["zh"] == fields["en"]
+
+
+#: Words the Chinese table may keep in ASCII: names of things (formats,
+#: fields, the store), not sentences.
+_ZH_KEEPS = {"JSON", "ConfigMap", "state", "store", "tenant", "api", "records", "record",
+             "problem", "schema", "key", "list", "kind", "message", "unreadable", "rejected",
+             "skip", "check"}
+
+
+@pytest.mark.parametrize("name", sorted(lts._MSG["zh"]))
+def test_the_chinese_table_says_it_in_chinese(name):
+    """#3512: an English sentence left in a zh slot is a mixed line in a
+    Chinese tool. Code spans, fields and <placeholders> are not prose."""
+    import re
+    prose = re.sub(r"`[^`]*`|\{[^}]*\}|<[^>]*>", " ", lts._MSG["zh"][name])
+    words = set(re.findall(r"[A-Za-z]{2,}", prose)) - _ZH_KEEPS
+    assert not words, (name, words)
+
+
+@pytest.mark.parametrize("records", [
+    [{"key": "_groups.yaml", "record": None, "problem": None}],
+    [{"key": "_groups.yaml", "record": None, "problem": {"kind": "other", "message": "x"}}],
+    [{"key": "db-a.yaml", "record": {}, "problem": None}],
+    [{"key": "_groups.yaml", "record": {}, "problem": None}] * 2,
+    [{"key": "_groups.yaml", "record": [], "problem": None}],
+    ["x"],
+])
+def test_every_malformed_entry_is_refused_in_the_callers_language(tmp_path, records):
+    p = tmp_path / "s.json"
+    p.write_text(json.dumps({"schema": lts.STATE_SHOW_SCHEMA, "records": records}), encoding="utf-8")
+    with pytest.raises(lts.StateInputError) as e:
+        lts.load_state(p, lang="zh")
+    assert "records[" in str(e.value) and lts.how_to_get_state("zh") in str(e.value)
+    assert lts._MSG["zh"]["sep"] in str(e.value)
 
 
 def test_the_language_is_the_callers_and_has_no_default(tmp_path):

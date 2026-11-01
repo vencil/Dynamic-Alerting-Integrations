@@ -52,7 +52,7 @@ STATE_SHOW_SCHEMA = "tenant-api.state-show/v1"
 PROBLEM_KINDS = ("unreadable", "rejected")
 
 _GET_ON_CLUSTER = "kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show > state.json"
-_GET_FROM_BACKUP = ("docker run -i --rm <the deployed tenant-api image> state show "
+_GET_FROM_BACKUP = ("docker run -i --rm {image} state show "
                     "--from - < backup.yaml > state.json")
 
 #: Every refusal this module writes, per language — the one place it is
@@ -63,7 +63,10 @@ _MSG: dict[str, dict[str, str]] = {
     "en": {
         "how_to": ("--state takes the JSON `tenant-api state show` prints (a tenant-api "
                    f"that has `state show`): on a cluster `{_GET_ON_CLUSTER}`; from a "
-                   f"backup `{_GET_FROM_BACKUP}`"),
+                   "backup `" + _GET_FROM_BACKUP.format(image="<the deployed tenant-api image>")
+                   + "`"),
+        "sep": ". ",
+        "empty_hint": " (if the state store really is empty, drop --state and add --skip-state-check)",
         "not_json": ("not JSON (a saved ConfigMap or a state directory is not read any "
                      "more: tenant-api reads its own records)"),
         "bad_schema": "not a {schema} document (schema {got!r})",
@@ -83,7 +86,10 @@ _MSG: dict[str, dict[str, str]] = {
     },
     "zh": {
         "how_to": ("--state 要的是 `tenant-api state show` 印出的 JSON（需要有 `state show` "
-                   f"的 tenant-api）：叢集上 `{_GET_ON_CLUSTER}`；從備份 `{_GET_FROM_BACKUP}`"),
+                   f"的 tenant-api）：叢集上 `{_GET_ON_CLUSTER}`；從備份 `"
+                   + _GET_FROM_BACKUP.format(image="<部署中的 tenant-api 映像>") + "`"),
+        "sep": "。",
+        "empty_hint": "（state store 若確實是空的，不給 --state、改加 --skip-state-check）",
         "not_json": "不是 JSON（已不再讀存下來的 ConfigMap 或 state 目錄：tenant-api 讀自己的紀錄）",
         "bad_schema": "不是 {schema} 文件（schema 為 {got!r}）",
         "records_not_list": "`records` 不是 list",
@@ -101,10 +107,23 @@ _MSG: dict[str, dict[str, str]] = {
 LANGS = tuple(_MSG)
 
 
+def _check_lang(lang: str) -> None:
+    if lang not in _MSG:
+        raise ValueError(f"lang must be one of {LANGS}, not {lang!r}")
+
+
 def how_to_get_state(lang: str) -> str:
     """How to get the JSON this module reads, in *lang*; part of every
     refusal of an input."""
+    _check_lang(lang)
     return _MSG[lang]["how_to"]
+
+
+def empty_state_hint(lang: str) -> str:
+    """What offboard-tenant adds to an empty-store refusal (it has
+    --skip-state-check; other callers have no such flag and add nothing)."""
+    _check_lang(lang)
+    return _MSG[lang]["empty_hint"]
 
 
 def subset_key(tenant: str) -> str:
@@ -204,8 +223,8 @@ def _say(lang: str, msg: str, **fields: Any) -> str:
 
 
 def _refuse(source: str, lang: str, msg: str, **fields: Any) -> StateInputError:
-    sep = "。" if lang == "zh" else ". "
-    return StateInputError(f"--state {source}: {_say(lang, msg, **fields)}{sep}{how_to_get_state(lang)}")
+    return StateInputError(f"--state {source}: {_say(lang, msg, **fields)}"
+                           f"{_MSG[lang]['sep']}{how_to_get_state(lang)}")
 
 
 def load_state(path: str | os.PathLike[str], *, lang: str) -> TenantState:
@@ -219,8 +238,7 @@ def load_state(path: str | os.PathLike[str], *, lang: str) -> TenantState:
     let an offboarding go ahead unchecked. The refusal is in *lang* (one of
     ``LANGS``, the caller's own language; no default).
     """
-    if lang not in _MSG:
-        raise ValueError(f"lang must be one of {LANGS}, not {lang!r}")
+    _check_lang(lang)
     source = "<stdin>" if str(path) == "-" else str(path)
     raw = _read(path, source, lang)
     try:
@@ -279,6 +297,7 @@ def _read(path: str | os.PathLike[str], source: str, lang: str) -> bytes:
     try:
         return p.read_bytes()
     except OSError as exc:
-        err = (f"{errno.errorcode.get(exc.errno, exc.errno)}" if lang == "zh"
+        # zh: the errno's name (searchable, as _lib_paths); without one, the text.
+        err = (errno.errorcode.get(exc.errno, str(exc)) if lang == "zh" and exc.errno
                else str(exc))  # en: the text it always printed
         raise StateInputError(f"--state {source}: {_say(lang, 'unreadable', err=err)}") from exc
