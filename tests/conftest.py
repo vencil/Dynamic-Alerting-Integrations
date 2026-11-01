@@ -189,6 +189,34 @@ def _no_ignored_signal_outlives_its_test():
 
 
 @pytest.fixture(autouse=True)
+def _no_cwd_change_outlives_its_test():
+    """A test that leaves the working directory changed fails (#3481): the
+    cwd is the worker's, and every later test that reads a default relative
+    path (`rule-packs/`, `conf.d/`) fails there instead, in an order xdist
+    decides. Put back either way, so the leak is reported once, where it
+    happened. `monkeypatch.chdir` is undone before this check runs."""
+    before = os.getcwd()
+    yield
+    leak = _cwd_put_back(before)
+    if leak:
+        pytest.fail(leak, pytrace=False)
+
+
+def _cwd_put_back(before):
+    """The working directory back at *before*; the failure message when it
+    had moved, else None."""
+    try:
+        now = os.getcwd()
+    except FileNotFoundError:  # the directory it moved to is gone
+        now = None
+    if now == before:
+        return None
+    os.chdir(before)
+    return (f"left the working directory at {now!r}, not {before!r} "
+            "(#3481); use monkeypatch.chdir, or restore it in the test")
+
+
+@pytest.fixture(autouse=True)
 def _disarm_crash_envelope():
     """A tool's ``main([... "--json"])`` called in-process arms the
     process-wide crash envelope (#3094) with whatever ``sys.stdout`` was

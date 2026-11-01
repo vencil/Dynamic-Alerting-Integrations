@@ -1254,7 +1254,10 @@ def main():
     # is cosmetic, the trade try_utf8_stdout documents.
     say = sys.stderr if args.json else sys.stdout
 
-    tools_dir = Path(__file__).parent
+    # SCRIPT_DIR is resolved: imported through `scripts/tools/lint/..` (a
+    # sibling's sys.path entry), the bare `Path(__file__).parent.parent`
+    # was `scripts/tools`, and main chdir'd there (#3481).
+    tools_dir = SCRIPT_DIR
     project_root = tools_dir.parent.parent
     # A relative reader-binary path ($DA_GUARD_BINARY and the others) means
     # "relative to where I ran this": made absolute before the chdir below
