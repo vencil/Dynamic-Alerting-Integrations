@@ -181,6 +181,65 @@ def test_main_in_process_walks_the_full_success_path(tmp_path, monkeypatch, caps
     assert "workload drift" in capsys.readouterr().out
 
 
+# --- deterministic metrics (B/op, allocs/op) — recorded, never judged ------
+
+def mem_side(rows: list[tuple[str, float, float, float]], rounds: int = 1) -> str:
+    """Like `side`, with the -benchmem columns bench_interleave.sh always emits,
+    plus a custom metric that must NOT be read as one of them."""
+    out = []
+    for _ in range(rounds):
+        out += ["goos: linux", "goarch: amd64", "pkg: example/app", f"cpu: {CPU}"]
+        out += [f"{n}-4  \t       5\t {ns:.0f} ns/op\t {b:.0f} B/op\t {a:.0f} allocs/op"
+                f"\t 0.6339 MB-heap-after-gc" for n, ns, b, a in rows]
+        out += ["PASS"]
+    return "\n".join(out) + "\n"
+
+
+def test_deterministic_metrics_are_recorded_with_medians_and_ratios(tmp_path: Path):
+    r = run(tmp_path,
+            mem_side([("BenchmarkA", 100.0, 1000.0, 50.0)], rounds=3),
+            mem_side([("BenchmarkA", 101.0, 1100.0, 60.0)], rounds=3))
+    assert r.returncode == 0, r.stderr
+    det = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["deterministic"]
+    assert det["BenchmarkA"]["B/op"] == {"reference": 1000.0, "main": 1100.0,
+                                         "ratio": pytest.approx(1.1)}
+    assert det["BenchmarkA"]["allocs/op"]["ratio"] == pytest.approx(1.2)
+    assert "MB-heap-after-gc" not in json.dumps(det)
+    assert "deterministic metrics recorded for 1 benchmark" in r.stdout
+
+
+def test_a_change_from_zero_has_no_ratio_but_is_kept(tmp_path: Path):
+    r = run(tmp_path,
+            mem_side([("BenchmarkA", 100.0, 0.0, 0.0)]),
+            mem_side([("BenchmarkA", 100.0, 48.0, 3.0)]))
+    assert r.returncode == 0, r.stderr
+    det = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["deterministic"]
+    assert det["BenchmarkA"]["B/op"] == {"reference": 0.0, "main": 48.0, "ratio": None}
+    assert "0 → 48" in r.stdout
+
+
+def test_rows_without_benchmem_columns_record_nothing(tmp_path: Path):
+    r = run(tmp_path, side([("BenchmarkA", 100.0)]), side([("BenchmarkA", 105.0)]))
+    assert r.returncode == 0, r.stderr
+    assert json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["deterministic"] == {}
+
+
+def test_deterministic_record_only_covers_benchmarks_on_both_sides(tmp_path: Path):
+    r = run(tmp_path,
+            mem_side([("BenchmarkA", 100.0, 10.0, 1.0)]),
+            mem_side([("BenchmarkA", 100.0, 10.0, 1.0), ("BenchmarkNew", 5.0, 8.0, 1.0)]))
+    assert r.returncode == 0, r.stderr
+    det = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))["deterministic"]
+    assert set(det) == {"BenchmarkA"}
+
+
+def test_the_ns_op_path_is_unchanged_by_benchmem_columns(tmp_path: Path):
+    p = tmp_path / "s.txt"
+    p.write_text(mem_side([("BenchmarkA", 100.0, 1000.0, 50.0)]), encoding="utf-8")
+    samples, cpu = pbr.read_side(p)
+    assert samples == {"BenchmarkA": [100.0]} and cpu == CPU
+
+
 # --- main(), through the real CLI -------------------------------------------
 
 def run(tmp_path: Path, ref_text: str, main_text: str,
@@ -202,7 +261,7 @@ def test_happy_path_writes_the_expected_payload(tmp_path: Path):
             side([("BenchmarkA", 105.0), ("BenchmarkNew", 7.0)]))
     assert r.returncode == 0, r.stderr
     payload = json.loads((tmp_path / "out.json").read_text(encoding="utf-8"))
-    assert payload["schema"] == "bench-paired/v2"
+    assert payload["schema"] == "bench-paired/v3"
     assert payload["reference_tag"] == "exporter/v2.9.0"
     assert payload["cpu"] == CPU
     assert payload["evaluated"]["BenchmarkA"]["ratio"] == pytest.approx(1.05)
@@ -682,12 +741,13 @@ _WORKFLOW = _REPO / ".github/workflows/bench-record.yaml"
 _OK_KEYS = frozenset({
     "schema", "status", "reference_tag", "reference_sha",
     "cpu", "evaluated", "inconclusive", "workload_drift", "workload_digest",
+    "deterministic",
 })
 _INCONCLUSIVE_KEYS = frozenset({
     "schema", "status", "reference_tag", "reference_sha",
     "reason", "workload_drift", "workload_digest",
 })
-_SCHEMA = "bench-paired/v2"
+_SCHEMA = "bench-paired/v3"
 
 
 _PRINTF_PAYLOAD = r"printf '(\{\\n.*?\})\\n' \\"
