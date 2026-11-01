@@ -298,7 +298,7 @@ def test_cardinality_drops_and_discloses_non_finite(value):
     assert (t["data_points"], t["current_cardinality"]) == (len(good["values"]) - 1, 10), t
     with _fake(body) as url:
         text = _run("cardinality_forecasting", "--prometheus", url)
-    assert "1 non-finite sample value(s)" in text.stdout, text.stdout
+    assert "1 sample(s) with a non-finite value or timestamp" in text.stdout, text.stdout
 
 
 def test_cardinality_all_non_finite_is_no_data_and_says_how_many():
@@ -366,4 +366,7 @@ def test_markdown_discloses_non_finite(tool):
     with _fake(body) as url:
         proc = _run(tool, "--prometheus", url, "--markdown")
     assert proc.returncode == 0, proc.stderr
-    assert "1 non-finite sample value(s)" in proc.stdout, proc.stdout
+    # #3159: cardinality's count holds a non-finite timestamp too
+    said = ("1 non-finite sample value(s)" if tool == "alert_quality"
+            else "1 sample(s) with a non-finite value or timestamp")
+    assert said in proc.stdout, proc.stdout

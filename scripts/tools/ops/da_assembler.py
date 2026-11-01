@@ -755,12 +755,15 @@ class CrDecodeError(Exception):
     """da-crdecode could not be run, or refused the file.
 
     ``str()`` is one line; ``stderr_lines`` is da-crdecode's stderr, every
-    non-empty line as written.
+    non-empty line as written. ``refused`` is true when da-crdecode ran and
+    exited with an error: its answer about the file, not a failure to ask.
     """
 
-    def __init__(self, message: str, stderr_lines: list[str]) -> None:
+    def __init__(self, message: str, stderr_lines: list[str],
+                 refused: bool = False) -> None:
         super().__init__(message)
         self.stderr_lines = stderr_lines
+        self.refused = refused
 
 
 def _stderr_lines(raw: bytes | None) -> list[str]:
@@ -815,7 +818,8 @@ def decode_cr(cr_path: Path) -> tuple[Any, list, list[str]]:
     lines = _stderr_lines(proc.stderr)
     if proc.returncode != 0:
         raise CrDecodeError(
-            f"{CRDECODE_BINARY_NAME} exited {proc.returncode}", lines)
+            f"{CRDECODE_BINARY_NAME} exited {proc.returncode}", lines,
+            refused=True)
     try:
         out = json.loads(proc.stdout)
     except ValueError as e:  # JSONDecodeError, or stdout that is not UTF-8
@@ -867,18 +871,6 @@ def _log_crdecode_lines(lines: list[str], level: int) -> None:
     for line in lines:
         log.log(level, "%s%s", CRDECODE_PREFIX, safe_label(line))
 
-
-def _json_kind(value: Any) -> str:
-    """How *value*, decoded from JSON, is described in an error."""
-    if isinstance(value, bool):
-        return f"a boolean ({json.dumps(value)})"
-    if isinstance(value, (int, float)):
-        return f"a number ({json.dumps(value)})"
-    if isinstance(value, list):
-        return "a list"
-    if isinstance(value, dict):
-        return "a mapping"
-    return f"{value!r}"
 
 #: #2396: the formats the API server enforces on a ThresholdConfig, so the
 #: `--render-cr` path accepts the same names the controller path can ever
@@ -984,8 +976,11 @@ def _legacy_name_hint(cr_path: Path, config_dir: Path) -> str:
     ``True.yaml``, ``1:30`` -> ``90.yaml``, an unquoted datetime -> its
     Python spelling). Rebuilding that file name needs PyYAML's reading of the
     name, so this — and only this — still reads the file with PyYAML. It
-    decides nothing about the CR: the name was already refused from
-    da-crdecode's output. Best effort: no hint when PyYAML cannot read the
+    decides nothing about the CR. It is asked in two places: when
+    da-crdecode refuses the CR (a name Kubernetes reads as a number or a
+    boolean is refused there, with kubectl's reason, #3490), and when the
+    name, a string to Kubernetes, is no valid object name (a sexagesimal
+    ``1:30``, a datetime). Best effort: no hint when PyYAML cannot read the
     file, or the name is not a scalar under ``metadata``.
 
     The hint is given when the earlier version's file name differs from the
@@ -1003,8 +998,7 @@ def _legacy_name_hint(cr_path: Path, config_dir: Path) -> str:
         value = yaml.SafeLoader("").construct_object(node, deep=True)
     except Exception:  # noqa: BLE001 — a hint only; any failure means none
         return ""
-    plain = node.style is None
-    if plain and node.tag in _LEGACY_RETYPED_TAGS:
+    if node.style is None and node.tag in _LEGACY_RETYPED_TAGS:
         try:
             legacy = str(value)
         except ValueError:  # an int past Python's str() digit limit
@@ -1139,7 +1133,14 @@ def render_cr_file(
     try:
         cr, differs, warn_lines = decode_cr(cr_path)
     except CrDecodeError as e:
-        log.error("Failed to parse %s: %s", cr_path, e)
+        # #2430: a name refused for being read as a number or a boolean
+        # (`010`, `yes`; da-crdecode's manifest reading, #3490) may have an
+        # earlier version's file (`8.yaml`, `True.yaml`) in --config-dir.
+        # The hint rebuilds that file name from the CR's text and names it
+        # only when it exists with this tool's header; da-crdecode's words
+        # are not read.
+        hint = _legacy_name_hint(cr_path, config_dir) if e.refused else ""
+        log.error("Failed to parse %s: %s%s", cr_path, e, hint)
         _log_crdecode_lines(e.stderr_lines, logging.ERROR)
         return EXIT_CALLER_ERROR
     except RecursionError:
@@ -1156,19 +1157,17 @@ def render_cr_file(
 
     # #2371: shape checks `reconcile_one` does not make. Its
     # `cr["metadata"]["name"]` sits outside its try (KeyError/TypeError
-    # traceback, rc 1), a non-str/empty name became the filename (`.yaml`,
-    # `42.yaml`), and a non-mapping `spec` failed inside the try and was
-    # swallowed (rc 0, nothing written). An absent `spec` is left alone: it
-    # renders as `spec: {}` did before.
+    # traceback, rc 1), an empty name became the filename (`.yaml`), and a
+    # non-mapping `spec` failed inside the try and was swallowed (rc 0,
+    # nothing written). An absent `spec` is left alone: it renders as
+    # `spec: {}` did before. The types are da-crdecode's guarantee (#3490):
+    # `metadata`, when present, is a mapping or null, and its `name` and
+    # `namespace` are strings or null — one Kubernetes reads as a number or
+    # a boolean is refused there, with kubectl's reason (and the stale-file
+    # hint for it is given where that refusal is logged).
     metadata = cr.get("metadata")
     name = metadata.get("name") if isinstance(metadata, dict) else None
-    if isinstance(name, (bool, int, float)):
-        log.error("%s: metadata.name must be a string, but Kubernetes reads "
-                  "it as %s. Quoting makes it a string; it must still be a "
-                  "valid Kubernetes object name (DNS-1123)%s", cr_path,
-                  _json_kind(name), _legacy_name_hint(cr_path, config_dir))
-        return EXIT_CALLER_ERROR
-    if not isinstance(name, str) or not name:
+    if not name:
         extra = ""
         if isinstance(metadata, dict) and "name" in metadata \
                 and name is None:
@@ -1196,12 +1195,6 @@ def render_cr_file(
         metadata.pop("namespace", None)
     if "namespace" in metadata:
         namespace = metadata["namespace"]
-        if not isinstance(namespace, str):
-            log.error("%s: metadata.namespace must be a string, but "
-                      "Kubernetes reads it as %s. Quoting makes a scalar a "
-                      "string; it must still be a valid Kubernetes namespace "
-                      "name (DNS-1123 label)", cr_path, _json_kind(namespace))
-            return EXIT_CALLER_ERROR
         if not _is_dns1123_label(namespace):
             log.error("%s: metadata.namespace %r is not a valid Kubernetes "
                       "namespace name (DNS-1123 label: lowercase a-z, 0-9 "

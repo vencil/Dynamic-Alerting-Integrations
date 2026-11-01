@@ -98,6 +98,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 import _lib_consumer_read  # noqa: E402
+import _lib_exitcodes  # noqa: E402  (#3216: the one JSON encoder)
 import _lib_parse_tree  # noqa: E402
 
 # ── vocabulary ──────────────────────────────────────────────────────────────
@@ -688,8 +689,8 @@ def main(argv: "list[str] | None" = None) -> int:
               file=sys.stderr)
         return 2
     if args.json:
-        json.dump(as_json(inv), sys.stdout, ensure_ascii=False, indent=1)
-        sys.stdout.write("\n")
+        # #3216: the document goes out through the one encoder.
+        return _lib_exitcodes.Report(as_json(inv), 0)
     else:
         for path, line, err in inv.errors():
             print(f"{path}:{line}: {err}")
@@ -699,4 +700,4 @@ def main(argv: "list[str] | None" = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    _lib_exitcodes.run(main)

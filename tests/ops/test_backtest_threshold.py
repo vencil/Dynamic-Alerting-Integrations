@@ -25,6 +25,15 @@ from _platform_fs import require_file_name, symlink_or_skip  # noqa: E402
 
 import backtest_threshold as bt  # noqa: E402
 from _go_refusal import assert_refused  # noqa: E402  (#3206)
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
+
+
+def _main_exit():
+    """`bt.main()` in-process, ended the way `run()` ends it (#3216): a
+    `--json` Report's document written by the one encoder, then
+    `SystemExit` with its status — so `pytest.raises(SystemExit)` reads the
+    exit of every path, `--json` or not."""
+    raise SystemExit(emit_result(bt.main()))
 
 
 class TestParseLookback:
@@ -66,7 +75,7 @@ class TestGitDiffRemoved:
             monkeypatch.setattr(bt, name, _boom)
         cli_argv("backtest_threshold", "--git-diff", "--prometheus", "http://prom:9090", *extra)
         with pytest.raises(SystemExit) as exc_info:
-            bt.main()
+            _main_exit()
         assert exc_info.value.code == 2
         captured = capsys.readouterr()
         lines = [ln for ln in captured.err.splitlines() if ln.startswith("ERROR:")]
@@ -77,7 +86,7 @@ class TestGitDiffRemoved:
     def test_json_envelope(self, monkeypatch, capsys, cli_argv):
         cli_argv("backtest_threshold", "--git-diff", "--prometheus", "http://prom:9090", "--json")
         with pytest.raises(SystemExit) as exc_info:
-            bt.main()
+            _main_exit()
         assert exc_info.value.code == 2
         doc = json.loads(capsys.readouterr().out)
         assert (doc["status"], doc["reason"]) == ("caller_error", "git_diff_removed")
@@ -95,7 +104,7 @@ class TestGitDiffRemoved:
         answered first, so the replacement was never named."""
         cli_argv("backtest_threshold", *argv, "--prometheus", "http://prom:9090")
         with pytest.raises(SystemExit) as exc_info:
-            bt.main()
+            _main_exit()
         assert exc_info.value.code == 2
         captured = capsys.readouterr()
         assert bt.GIT_DIFF_REMOVED in captured.err.splitlines()
@@ -106,7 +115,7 @@ class TestGitDiffRemoved:
     def test_hidden_from_help(self, capsys, cli_argv):
         cli_argv("backtest_threshold", "--help")
         with pytest.raises(SystemExit):
-            bt.main()
+            _main_exit()
         assert "--git-diff" not in capsys.readouterr().out
 
 
@@ -131,7 +140,7 @@ class TestLookbackCli:
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
         self._skip_argv(cli_argv, "--lookback", bad)
         with pytest.raises(SystemExit) as exc_info:
-            bt.main()
+            _main_exit()
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
         assert "<number><d|h|m>" in err
@@ -142,7 +151,7 @@ class TestLookbackCli:
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
         self._skip_argv(cli_argv, "--lookback", "30d")
         with pytest.raises(SystemExit) as exc_info:
-            bt.main()
+            _main_exit()
         assert exc_info.value.code == 0
         doc = json.loads(capsys.readouterr().out)
         assert doc["lookback"] == "30d"
@@ -152,7 +161,7 @@ class TestLookbackCli:
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: False)
         self._skip_argv(cli_argv)
         with pytest.raises(SystemExit) as exc_info:
-            bt.main()
+            _main_exit()
         assert exc_info.value.code == 0
         doc = json.loads(capsys.readouterr().out)
         assert doc["lookback"] == "7d"
@@ -639,7 +648,7 @@ class TestJsonEnvelope:
                  "--skip-if-unavailable", "--json")
 
         with pytest.raises(SystemExit) as exc_info:
-            bt.main()
+            _main_exit()
         assert exc_info.value.code == 0          # graceful skip 仍是 EXIT_OK
 
         captured = capsys.readouterr()
@@ -674,7 +683,7 @@ class TestJsonEnvelope:
                  "--prometheus", "http://prom:9090", "--json")
 
         with pytest.raises(SystemExit) as exc_info:
-            bt.main()
+            _main_exit()
         assert exc_info.value.code == 0
 
         captured = capsys.readouterr()
@@ -761,7 +770,7 @@ class TestPrometheusEnvFallback:
         # the bare argv these rows used would exit 2 without asking.
         cli_argv(*argv, "--tenant", "t", "--metric", "mysql_connections", "--new-value", "1")
         with pytest.raises(SystemExit) as ei:
-            bt.main()
+            _main_exit()
         assert ei.value.code == 0
         return captured["url"]
 
@@ -869,7 +878,7 @@ class TestConfdSpellingParityWithTheExporter:
         cli_argv("backtest_threshold", "--config-dir", cur, "--baseline", base,
                  "--prometheus", "http://prom:9090")
         with pytest.raises(SystemExit):
-            bt.main()
+            _main_exit()
         note = [ln for ln in capsys.readouterr().err.splitlines() if ln.startswith("NOTE:")]
         assert len(note) == 1 and note[0].endswith("(_custom_alerts): acme, beta"), note
 
@@ -1050,7 +1059,7 @@ class TestAlertComparisonCli:
                  "--old-value", old, "--new-value", new,
                  "--prometheus", "http://prom:9090", *extra)
         with pytest.raises(SystemExit) as ei:
-            bt.main()
+            _main_exit()
         return ei.value.code, capsys.readouterr()
 
     def test_unmapped_key_is_listed_rc0(self, monkeypatch, capsys, cli_argv):
@@ -1099,7 +1108,7 @@ class TestObservedMapMissing:
         self._missing(monkeypatch, tmp_path)
         self._argv(cli_argv)
         with pytest.raises(SystemExit) as ei:
-            bt.main()
+            _main_exit()
         assert ei.value.code == 2
         err = capsys.readouterr().err
         assert "ERROR:" in err and "observed-map not found" in err and "nope.yaml" in err
@@ -1108,7 +1117,7 @@ class TestObservedMapMissing:
         self._missing(monkeypatch, tmp_path)
         self._argv(cli_argv, "--json")
         with pytest.raises(SystemExit) as ei:
-            bt.main()
+            _main_exit()
         assert ei.value.code == 2
         doc = json.loads(capsys.readouterr().out)
         assert (doc["status"], doc["reason"]) == ("caller_error", "observed_map_unavailable")
@@ -1126,7 +1135,7 @@ class TestObservedMapMissing:
         monkeypatch.setattr(bt, "prometheus_available", lambda url, timeout=5: True)
         self._argv(cli_argv)
         with pytest.raises(SystemExit) as ei:
-            bt.main()
+            _main_exit()
         assert ei.value.code == 2 and "ERROR: gone" in capsys.readouterr().err
 
 
@@ -1152,7 +1161,7 @@ class TestWrittenValues:
         monkeypatch.setattr(bt, "query_range", query_range)
         cli_argv("backtest_threshold", *argv, "--prometheus", "http://prom:9090", "--json")
         with pytest.raises(SystemExit) as ei:
-            bt.main()
+            _main_exit()
         return ei.value.code, json.loads(capsys.readouterr().out)["changes"], asked
 
     def _tenant(self, monkeypatch, capsys, cli_argv, metric, old, new):
@@ -1260,7 +1269,7 @@ class TestWrittenValues:
         cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
                  "--old-value", "70", "--new-value", "50", "--prometheus", "http://prom:9090", "--json")
         with pytest.raises(SystemExit) as ei:
-            bt.main()
+            _main_exit()
         out = capsys.readouterr()
         assert (ei.value.code, json.loads(out.out)["reason"]) == (2, "served_values_unavailable"), out.err
 
@@ -1390,7 +1399,7 @@ class TestMalformedObservedMap:
         cli_argv("backtest_threshold", "--tenant", "t-x", "--metric", "mysql_connections",
                  "--old-value", "70", "--new-value", "85", "--prometheus", "http://prom:9090")
         with pytest.raises(SystemExit) as ei:
-            bt.main()
+            _main_exit()
         assert ei.value.code == 2
         err = capsys.readouterr().err
         assert "ERROR:" in err and "'mysql_connections'" in err and "not a mapping" in err
@@ -1490,7 +1499,7 @@ def _dirs_for(tmp_path, *tenants):
 def _run_main(cli_argv, capsys, *argv):
     cli_argv("backtest_threshold", *argv)
     with pytest.raises(SystemExit) as ei:
-        bt.main()
+        _main_exit()
     return ei.value.code, capsys.readouterr()
 
 
@@ -2063,7 +2072,7 @@ class TestNoAlertSideIsNoThreshold:
                  "--old-value", old, "--new-value", new,
                  "--prometheus", "http://prom:9090", "--json")
         with pytest.raises(SystemExit) as ei:
-            bt.main()
+            _main_exit()
         return ei.value.code, json.loads(capsys.readouterr().out)["changes"], asked
 
     def test_moving_to_a_severity_no_alert_compares_is_silenced(
@@ -2730,3 +2739,193 @@ def test_written_tree_declares_the_served_label_names(tmp_path, key, want):
     root = yaml.safe_load((tmp_path / "_defaults.yaml").read_text(encoding="utf-8"))
     assert root["dimensions"]["mysql_connections"] == want
     assert root["dimensions"]["container_cpu"] == ["version"]  # the shipped declaration rides along
+
+
+# ── #3159: impact_pct / impact_kind ───────────────────────────────────────
+
+def _strict_json(text):
+    """`json.loads` that refuses `NaN` / `Infinity` (not JSON) instead of
+    reading them the way Python's lenient default does."""
+    def refuse(token):
+        raise ValueError(f"non-JSON token {token}")
+    return json.loads(text, parse_constant=refuse)
+
+
+@pytest.mark.usefixtures("cpu_mapped")
+class TestImpactKind:
+    """#3159 (owner ruling A′): an analyzed row's `impact_pct` is a float
+    relative to the old threshold's firing count, and null when there is no
+    such count to be relative to; `impact_kind` says which case it is. It
+    used to be `Infinity` (newly enabled, firing), the string `"Inf"` (starts
+    firing), `0` / `0.0` (no firing, newly enabled not firing) and -100.0 for
+    both "disabled" and "no longer fires"."""
+
+    def _row(self, monkeypatch, vals, old, new, **extra):
+        monkeypatch.setattr(bt, "query_range", lambda *a, **kw: [
+            {"values": [(i, str(v)) for i, v in enumerate(vals)]}])
+        change = {"tenant": "t-x", "metric": "cpu", "old_value": old, "new_value": new, **extra}
+        return bt.backtest_change("http://prom", change, 86400)
+
+    # (vals, old, new, extra, kind, pct, old count, new count, risk)
+    CASES = [
+        ("relative-more", [80] * 5 + [60] * 5, "70", "50", {}, "relative", 100.0, 5, 10, "HIGH"),
+        ("relative-fewer", [80] * 4 + [75] * 4, "70", "78", {}, "relative", -50.0, 8, 4, "MEDIUM"),
+        ("relative-stops", [80] * 5, "70", "90", {}, "relative", -100.0, 5, 0, "HIGH"),
+        ("relative-same", [80] * 5, "70", "75", {}, "relative", 0.0, 5, 5, "LOW"),
+        ("no-firing", [10] * 5, "70", "50", {}, "no_firing", None, 0, 0, "LOW"),
+        ("starts-firing", [60] * 5, "70", "50", {}, "starts_firing", None, 0, 5, "HIGH"),
+        ("newly-enabled-firing", [60] * 5, None, "50", {}, "newly_enabled", None, 0, 5, "HIGH"),
+        ("newly-enabled-silent", [10] * 5, None, "50", {}, "newly_enabled", None, 0, 0, "LOW"),
+        ("disabled-old-fired", [80] * 5, "70", None, {}, "disabled", -100.0, 5, 0, "MEDIUM"),
+        ("disabled-old-silent", [10] * 5, "70", None, {}, "disabled", None, 0, 0, "MEDIUM"),
+        ("refused-old-fired", [80] * 5, "70", None, {"new_refused": "non_finite"},
+         "disabled", -100.0, 5, 0, "HIGH"),
+        ("refused-old-silent", [10] * 5, "70", None, {"new_refused": "non_finite"},
+         "disabled", None, 0, 0, "HIGH"),
+    ]
+
+    @pytest.mark.parametrize("vals,old,new,extra,kind,pct,old_n,new_n,risk",
+                             [c[1:] for c in CASES], ids=[c[0] for c in CASES])
+    def test_each_kind(self, monkeypatch, vals, old, new, extra, kind, pct, old_n, new_n, risk):
+        r = self._row(monkeypatch, vals, old, new, **extra)
+        assert (r["status"], r["impact_kind"], r["impact_pct"]) == ("analyzed", kind, pct)
+        assert (r["old_breach_count"], r["new_breach_count"], r["risk"]) == (old_n, new_n, risk)
+        assert pct is None or type(r["impact_pct"]) is float
+        _strict_json(json.dumps(r))   # nothing JSON cannot carry
+
+    def test_every_kind_is_reached_and_named(self):
+        assert {c[5] for c in self.CASES} == set(bt.IMPACT_KINDS)
+
+    @pytest.mark.parametrize("old_n,new_n,flags,want", [
+        (0, 0, {}, (None, "no_firing")),
+        (0, 3, {}, (None, "starts_firing")),
+        (4, 1, {}, (-75.0, "relative")),
+        (3, 4, {}, (33.3, "relative")),          # rounded to 0.1
+        (1, 2, {}, (100.0, "relative")),         # one old firing point is a count
+        (1, 0, {}, (-100.0, "relative")),
+        (0, 3, {"old_disabled": True}, (None, "newly_enabled")),
+        (0, 0, {"old_disabled": True}, (None, "newly_enabled")),
+        (2, 0, {"new_disabled": True}, (-100.0, "disabled")),
+        (0, 0, {"new_disabled": True}, (None, "disabled")),
+    ])
+    def test_impact(self, old_n, new_n, flags, want):
+        got = bt.impact(old_n, new_n, **flags)
+        assert (got["impact_pct"], got["impact_kind"]) == want
+        assert want[0] is None or type(got["impact_pct"]) is float
+
+
+@pytest.mark.usefixtures("da_guard_env")
+class TestImpactInTheDocument:
+    """#3159 end to end, as the CLI runs (`run(main)`, a subprocess): a newly
+    enabled row that fires and a row that starts firing are strict JSON on
+    stdout — `impact_pct` null beside its `impact_kind` — and `-o` holds the
+    same bytes; the exit code is the one it was (HIGH: 1). Before, stdout
+    carried a bare `Infinity` and the string `"Inf"`."""
+
+    @pytest.mark.parametrize("old,new,kind", [
+        ("disable", "50", "newly_enabled"),
+        ("100", "50", "starts_firing"),
+    ])
+    def test_json_and_o_are_the_same_strict_document(self, fake_prom, tmp_path, old, new, kind):
+        p = fake_prom(values=(90,) * 10)
+        out = tmp_path / "r.json"
+        res = subprocess.run(
+            [sys.executable, bt.__file__, "--tenant", "t-x", "--metric", "mysql_connections",
+             "--old-value", old, "--new-value", new, "--prometheus", p.url,
+             "--json", "-o", str(out)],
+            capture_output=True, text=True, encoding="utf-8", timeout=120,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        assert res.returncode == 1, res.stderr
+        assert out.read_text(encoding="utf-8") == res.stdout   # the same bytes
+        doc = _strict_json(res.stdout)
+        rows = [r for r in doc["changes"] if r["status"] == "analyzed"]
+        assert [(r["impact_pct"], r["impact_kind"], r["risk"]) for r in rows] == [
+            (None, kind, "HIGH")]
+        assert '"impact_pct": null' in res.stdout
+
+
+# Run the CLI with the report carrying a NaN: what `run()` makes of it.
+_NAN_WRAPPER = """
+import os, sys
+script = sys.argv[1]
+sys.argv = sys.argv[1:]
+sys.path.insert(0, os.path.dirname(script))
+sys.path.insert(0, os.path.dirname(os.path.dirname(script)))
+import backtest_threshold as bt
+real = bt.generate_report
+def with_nan(results, lookback):
+    report = real(results, lookback)
+    report["changes"][0]["impact_pct"] = float("nan")
+    return report
+bt.generate_report = with_nan
+bt.prometheus_available = lambda url, timeout=5: True
+bt.written_changes = lambda *a: [{"tenant": "t-x", "metric": "mysql_connections",
+                                  "old_value": "70", "new_value": "50"}]
+bt.backtest_change = lambda *a: {"tenant": "t-x", "metric": "mysql_connections",
+                                 "old_value": "70", "new_value": "50", "status": "no_data",
+                                 "risk": "UNKNOWN", "message": "x"}
+import _lib_exitcodes
+_lib_exitcodes.run(bt.main)
+"""
+
+
+def _crash_code():
+    """The crash exit code a subprocess run ends with (tests set it apart
+    from 2 with DA_TEST_CRASH_EXIT_CODE, #3092)."""
+    import _lib_exitcodes
+    return _lib_exitcodes.crash_exit_code_from_env() or 2
+
+
+class TestUnserializableDocument:
+    """#3216: a document JSON cannot carry (here a NaN slipped into the
+    report) is never printed and never written to `-o`: under `--json` the
+    crash code and the `output_not_serializable` envelope, the value named
+    by its path; without `--json`, the crash it is (a traceback, the crash
+    code). Driven as the CLI runs it: `run(main)` in a subprocess."""
+
+    def _run(self, tmp_path, *argv):
+        wrapper = tmp_path / "wrap.py"
+        wrapper.write_text(_NAN_WRAPPER, encoding="utf-8")
+        out = tmp_path / "r.json"
+        out.write_text("stale\n", encoding="utf-8")
+        res = subprocess.run(
+            [sys.executable, str(wrapper), bt.__file__, "--tenant", "t-x", "--metric",
+             "mysql_connections", "--old-value", "70", "--new-value", "50",
+             "-o", str(out), *argv],
+            capture_output=True, text=True, encoding="utf-8", timeout=120,
+            env={**os.environ, "PYTHONIOENCODING": "utf-8"})
+        return res, out.read_text(encoding="utf-8")
+
+    def test_json_names_it_and_writes_no_o(self, tmp_path):
+        res, written = self._run(tmp_path, "--json")
+        assert res.returncode == _crash_code(), res.stderr
+        doc = _strict_json(res.stdout)
+        assert (doc["status"], doc["reason"]) == ("caller_error", "output_not_serializable")
+        assert doc["changes"] == []
+        assert "changes[0].impact_pct" in res.stderr
+        assert written == "stale\n"
+
+    def test_text_mode_is_a_crash_and_writes_no_o(self, tmp_path):
+        res, written = self._run(tmp_path)
+        assert res.returncode == _crash_code(), res.stderr
+        assert "OutputNotSerializable" in res.stderr and "changes[0].impact_pct" in res.stderr
+        assert "{" not in res.stdout
+        assert written == "stale\n"
+
+
+class TestRunEndedCarriesTheStatus:
+    """`_end_json` under `--json` ends the run with a `_RunEnded` whose
+    `SystemExit` code is the Report's status — what a caller that does not go
+    through `main` reads; without `--json` it returns, for the caller's exit."""
+
+    @pytest.mark.parametrize("rc", [0, 1, 2])
+    def test_the_code_is_the_status(self, rc):
+        import argparse
+        with pytest.raises(bt._RunEnded) as ei:
+            bt._end_json(argparse.Namespace(json=True), {"d": 1}, rc)
+        assert (ei.value.code, ei.value.report.status, ei.value.report.document) == (
+            rc, rc, {"d": 1})
+
+    def test_without_json_it_returns(self):
+        import argparse
+        assert bt._end_json(argparse.Namespace(json=False), {}, 2) is None
