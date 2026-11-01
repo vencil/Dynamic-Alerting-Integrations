@@ -102,7 +102,7 @@ spec:
 - `check_leftouterjoin_enrichment.py` 擋下右側不是這個寫法的 join；`tests/rulepacks/rule-pack-metadata-replicas_test.yaml` 以兩份副本序列驗證每個 pack 的代表告警。
 - void 分支的 `unless on(tenant) tenant_metadata_info` 維持原始指標：`unless` 只看有沒有，右側重複不會出錯。
 
-**已知限制：換版空窗。** 兩個副本各自 hot-reload，換版有時間差。空窗內若某租戶的 `owner`／`runbook_url`／`tier` 改了，兩個副本會暫時送出不同值，`max by(...)` 收斂後仍有兩筆，該租戶相關告警會在那幾個評估週期撞 many-to-many 而評估失敗（`prometheus_rule_evaluation_failures_total` 會增加，那幾個週期內這些告警既不會新觸發、也不會重送）。兩個副本都換到新版後自動恢復。目前不處理：用 `topk` 任選一筆會讓 label 在兩個值之間跳動，改變告警身分。
+**已知限制：換版空窗。** 兩個副本各自 hot-reload，換版有時間差。空窗內若某租戶的 `owner`／`runbook_url`／`tier` 改了，兩個副本會暫時送出不同值，`max by(...)` 收斂後該租戶仍有兩筆。Prometheus 對右側重複 match group 的檢查是整個運算式一起失敗、不分租戶，所以那幾個評估週期內，帶這個 join 的規則對**所有租戶**都評估失敗，void 分支也一樣（`prometheus_rule_evaluation_failures_total` 會增加，這些告警既不會新觸發、也不會重送）。兩個副本都換到新版後自動恢復。目前只有逐 pod 抓取（Prometheus Operator）會遇到；raw 設定每個 Service 只抓一個 target。這裡不處理：用 `topk` 任選一筆會讓 label 在兩個值之間跳動，改變告警身分。raw 設定改成逐 pod 發現之前，必須先定案。
 
 ### 4.4 自監控 (Platform Rule Pack)
 
