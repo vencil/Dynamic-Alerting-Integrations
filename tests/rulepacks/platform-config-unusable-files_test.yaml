@@ -19,7 +19,7 @@
 #      neighbour of a failing target is not alerted.
 # Run: promtool test rules tests/rulepacks/platform-config-unusable-files_test.yaml
 rule_files:
-  - platform-config-unusable-files.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 30s
 
@@ -47,6 +47,19 @@ tests:
               job: threshold-exporter
               instance: 10.0.0.9:8080
             exp_annotations:
+              description: |
+                1 `_defaults.yaml` file(s) under the conf.d tree
+                of 10.0.0.9:8080 have been unusable for more than
+                10 minutes (parse_failure). Per ADR-017 the whole
+                defaults block of such a file is dropped: every tenant below
+                it loses the thresholds it inherits from it (for the ROOT
+                file, every tenant — those user_threshold series are gone).
+                parse_failure = the YAML does not parse (exporter log:
+                "ERROR: skip unparseable defaults/profiles file ...");
+                unreadable = it cannot be statted or read (log: "WARN:
+                cannot read ..." / "WARN: cannot stat ..."). Fix the file;
+                the next tick reloads and the alert resolves.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
               summary: "Threshold-exporter cannot use a _defaults.yaml (parse_failure) — inherited thresholds dropped"
       - eval_time: 20m
         alertname: ConfigDefaultsUnusable
@@ -78,6 +91,19 @@ tests:
               job: threshold-exporter
               instance: 10.0.0.9:8080
             exp_annotations:
+              description: |
+                1 `_defaults.yaml` file(s) under the conf.d tree
+                of 10.0.0.9:8080 have been unusable for more than
+                10 minutes (unreadable). Per ADR-017 the whole
+                defaults block of such a file is dropped: every tenant below
+                it loses the thresholds it inherits from it (for the ROOT
+                file, every tenant — those user_threshold series are gone).
+                parse_failure = the YAML does not parse (exporter log:
+                "ERROR: skip unparseable defaults/profiles file ...");
+                unreadable = it cannot be statted or read (log: "WARN:
+                cannot read ..." / "WARN: cannot stat ..."). Fix the file;
+                the next tick reloads and the alert resolves.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md"
               summary: "Threshold-exporter cannot use a _defaults.yaml (unreadable) — inherited thresholds dropped"
 
   # 4) A subdirectory that cannot be listed from 1m to 20m30s: fires from
@@ -105,6 +131,23 @@ tests:
               job: threshold-exporter
               instance: 10.0.0.9:8080
             exp_annotations:
+              description: |
+                1 config-named entr(ies) under the conf.d tree of
+                10.0.0.9:8080 could not be used for more than 10
+                minutes (walk_error): stat_error = the file (or a
+                symlink's target) cannot be statted, e.g. a dangling link;
+                read_error = it cannot be read, e.g. permission denied;
+                walk_error = a directory cannot be listed, so nothing under
+                it is loaded; special_file = it is not a regular file (a
+                FIFO, a socket or a device, or a symlink to one) and is
+                never opened. Every tenant declared there has no thresholds
+                on /metrics, while every other tenant keeps reloading. The
+                exporter log names each entry ("WARN: cannot read ...",
+                "WARN: cannot stat ...", "WARN: walk error at ...",
+                "WARN: ... is a special file ..."). Fix the file mode /
+                ownership or the link, or replace the special file with a
+                regular one; the next tick picks it up.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
               summary: "Threshold-exporter cannot read conf.d entries (walk_error) — tenants in them are not served"
       - eval_time: 21m
         alertname: ConfigFilesUnreadable
@@ -153,6 +196,23 @@ tests:
               job: threshold-exporter
               instance: 10.0.0.9:8080
             exp_annotations:
+              description: |
+                1 config-named entr(ies) under the conf.d tree of
+                10.0.0.9:8080 could not be used for more than 10
+                minutes (read_error): stat_error = the file (or a
+                symlink's target) cannot be statted, e.g. a dangling link;
+                read_error = it cannot be read, e.g. permission denied;
+                walk_error = a directory cannot be listed, so nothing under
+                it is loaded; special_file = it is not a regular file (a
+                FIFO, a socket or a device, or a symlink to one) and is
+                never opened. Every tenant declared there has no thresholds
+                on /metrics, while every other tenant keeps reloading. The
+                exporter log names each entry ("WARN: cannot read ...",
+                "WARN: cannot stat ...", "WARN: walk error at ...",
+                "WARN: ... is a special file ..."). Fix the file mode /
+                ownership or the link, or replace the special file with a
+                regular one; the next tick picks it up.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md"
               summary: "Threshold-exporter cannot read conf.d entries (read_error) — tenants in them are not served"
       - eval_time: 15m
         alertname: ConfigDefaultsUnusable

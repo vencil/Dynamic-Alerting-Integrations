@@ -10,7 +10,7 @@
 # The {component} label must ride through to the firing alert.
 # Run: promtool test rules tests/rulepacks/platform-config-reload-stale_test.yaml
 rule_files:
-  - platform-config-reload-stale.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -34,6 +34,22 @@ tests:
               job: tenant-api
               instance: 10.0.0.2:8080
             exp_annotations:
+              description: |
+                The tenant-api `groups` config manager's LAST
+                reload FAILED, so it is serving the LAST-GOOD snapshot and the
+                on-disk config is NOT in effect (memory diverged from disk). Check
+                the tenant-api WARN log ("config reload failed") for the root cause,
+                which decides the remedy: a `parse ...` error means the on-disk YAML
+                is broken — fix it; a `read ...` (transient I/O) error means the
+                YAML is fine but a re-read failed — re-apply the config (re-PUT) or
+                restart the pod. Every manager (rbac / policy / tenantorg /
+                federation-policy / groups / views) retries on every WatchLoop
+                tick (--reload-interval, 30s by default) and clears on the first
+                good one; groups, views and federation-policy are read from the
+                tenant-api-state ConfigMap, not conf.d. Unlike
+                TenantApiConfigReloadFailing (a failure-rate alert), this fires
+                however rarely the reload is retried.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
               summary: "tenant-api groups config is stale — last reload failed"
 
   # 2) Healthy: gauge at 1 — must NOT fire.

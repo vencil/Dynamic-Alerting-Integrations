@@ -31,7 +31,7 @@
 #        cost the latch buys rather than a benefit.
 # Run: promtool test rules tests/rulepacks/platform-federation-revocation_test.yaml
 rule_files:
-  - platform-federation-revocation.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -53,6 +53,20 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The revocation reconciler found 1 token(s) that the
+                off-store revocation log says are revoked and NOT yet expired, but
+                that are absent from the live revoked set (tenant-federation-store
+                revoked.txt). This is the ADR-028 un-revoke signal: a write-capable
+                actor (stolen tenant-api SA token / pod RCE) may have dropped a
+                revocation while carrying the legitimate SA identity, which the
+                identity-based controls (#926 audit) cannot see. ACTION: query
+                VictoriaLogs for `event:"federation_token_revoked"` for the opaque
+                token_id(s) (resolve the tenant from the store's records at IR time,
+                ADR-028 D3), diff against the live store, and if malicious restore
+                the revocation from git. Details:
+                docs/adr/028-federation-revocation-tamper-evidence.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
               summary: "Federation token un-revoke suspected — reconciler found a revoked-but-live token absent from the live set (ADR-028)"
 
   # 2) No tamper (0) → never fires.
@@ -91,6 +105,18 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The federation-reconciler has not SUCCESSFULLY reconciled in over 30
+                minutes, or its metrics are absent (pod down / never scraped). A
+                fail-closed pass (a VictoriaLogs query or revoked.txt read failed)
+                deliberately does NOT refresh the last-reconcile timestamp, so a
+                stuck reconciler surfaces here rather than as a false all-clear — but
+                while it is stale the un-revoke tamper-evidence is BLIND. ACTION:
+                check the reconciler Deployment (`kubectl -n monitoring get deploy
+                federation-reconciler`), its recent logs for fail-closed messages,
+                and VictoriaLogs reachability. Details:
+                docs/adr/028-federation-revocation-tamper-evidence.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
               summary: "Federation revocation reconciler stale or down — un-revoke detection is not operational (ADR-028)"
 
   # 5) Reconciler down — metric absent → stale FIRES via absent() after for:10m.
@@ -107,6 +133,18 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The federation-reconciler has not SUCCESSFULLY reconciled in over 30
+                minutes, or its metrics are absent (pod down / never scraped). A
+                fail-closed pass (a VictoriaLogs query or revoked.txt read failed)
+                deliberately does NOT refresh the last-reconcile timestamp, so a
+                stuck reconciler surfaces here rather than as a false all-clear — but
+                while it is stale the un-revoke tamper-evidence is BLIND. ACTION:
+                check the reconciler Deployment (`kubectl -n monitoring get deploy
+                federation-reconciler`), its recent logs for fail-closed messages,
+                and VictoriaLogs reachability. Details:
+                docs/adr/028-federation-revocation-tamper-evidence.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
               summary: "Federation revocation reconciler stale or down — un-revoke detection is not operational (ADR-028)"
 
   # 6) Gateway fail-open sustained → FIRES after for:2m (not before).
@@ -126,6 +164,18 @@ tests:
               severity: warning
               alert_source: platform
             exp_annotations:
+              description: |
+                The federation-gateway is failing to read the revoked-set
+                (revoked.txt) and is failing OPEN by design — revoked federation
+                tokens ARE being accepted until their TTL (≤4h). This is the ADR-028
+                named Risk Acceptance (a deliberate availability trade-off) made
+                visible; the fail-closed hardening is tracked in #996. ACTION: check
+                the gateway's revoked.txt projected-volume mount and the
+                tenant-federation-store ConfigMap; a persistent failure (vs a
+                pod-start / remount blip) may indicate mount tampering (a DoS of the
+                defence). Details:
+                docs/adr/028-federation-revocation-tamper-evidence.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
               summary: "Federation gateway cannot read the revoked-set — fail-open is allowing revoked tokens (ADR-028 §fail-open)"
 
   # 7) Gateway clean (0) → never fires (the debounce rides out transients).
@@ -157,7 +207,7 @@ tests:
   #    load-bearing half: without it, shortening `for:` to 5m — which would page
   #    on a single missed heartbeat plus one skipped reconcile pass — still passes
   #    every remaining case. Proved by mutation: setting `for: 5m` in
-  #    platform-federation-revocation.rules.yaml turns THIS eval red and nothing
+  #    the rule (then an extract; rule-packs/rule-pack-platform.yaml since #1595) turns THIS eval red and nothing
   #    else.
   - interval: 1m
     name: evidence-channel-down-fires-at-for-boundary
@@ -175,6 +225,29 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The reconciler saw NO tenant-api heartbeat canary in its evidence
+                window, on a reachable VictoriaLogs. The revocation evidence path
+                (tenant-api log → Vector origin_split → federation_evidence
+                transform → VictoriaLogs) is severed, so the un-revoke
+                tamper-evidence control is reporting a clean all-clear over an
+                EMPTY feed — TamperSuspected can never fire and ReconcileStale
+                stays green. Treat this as detection-down, not as a log-plumbing
+                nuisance. ACTION: (1) confirm tenant-api is emitting —
+                `kubectl -n tenant-api logs deploy/tenant-api | grep
+                federation_revocation_channel_heartbeat`; if absent, check the
+                pod's log level is <= Info and that federation is enabled
+                (--federation-key set; the canary is gated on it). (2) Confirm
+                Vector still selects the pod: helm/vector
+                `source.extraLabelSelector` must match tenant-api's
+                `app.kubernetes.io/name`, and `evidenceChannel.events` must still
+                list the event names tenant-api actually emits (a producer-side
+                rename presents exactly like this). (3) Query the store directly:
+                `log_type:federation_evidence` — an empty result confirms the
+                channel, a populated one points at the reconciler's query.
+                Details: docs/internal/federation-revocation-reconciler-runbook.md
+                and docs/adr/028-federation-revocation-tamper-evidence.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
               summary: "Federation revocation evidence channel is DEAD — un-revoke detection is silently blind (ADR-028 / #1234)"
 
   # 10) A single missed heartbeat window must NOT page. This is the false-positive
@@ -214,6 +287,28 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The reconciler read 1 line(s) in the mounted revoked.txt
+                that violate the token-id line contract. The gateway applies the
+                SAME contract and discards the WHOLE reload on a violation, keeping
+                the set it had already loaded — so the enforcement plane is frozen
+                on a pre-violation revoked set: every revocation issued after that
+                line appeared is NOT in force, and a gateway worker whose first
+                load hit it has no previous set and is enforcing nothing.
+                This is NOT the fail-open case
+                (FederationGatewayRevocationLoadFailure): the list is readable, it
+                is being refused. FederationRevocationTamperSuspected will NOT
+                cover it either — that compares the audit log against the FILE, and
+                the file does contain the newer revocations. ACTION: ⛔ do NOT
+                auto-remove the offending entry — removing it is what completes the
+                un-revoke this control exists to detect (revoked.txt is regenerated
+                verbatim from the store on every write). Find WHO wrote it: the
+                legitimate path (tenant-api revoke()) validates the id, so the
+                source is a direct ConfigMap edit / automation, an entry predating
+                that guard, or a write-capable attacker — cross-check the #926
+                audit for writes to tenant-federation-store. Details:
+                docs/internal/federation-revocation-reconciler-runbook.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
               summary: "Federation revoked set violates its line contract — the gateway is refusing to load it, so revocations made since are NOT enforced (ADR-028 / #1235)"
 
   # 12) A clean live set (0) → never fires. Held past the window so an inverted
@@ -248,6 +343,27 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The gateway logged 3 reload-refusal warning(s) in the
+                recent window: it read revoked.txt, met a line violating the
+                token-id contract, discarded the whole reload and kept its
+                previously loaded set. This is the ENFORCEMENT PLANE'S OWN ACCOUNT,
+                read back off its log stream — not the reconciler's second reading
+                of the file. That distinction is the point: the two ends read
+                different kubelet projections of the same ConfigMap at different
+                moments, so "the file looks clean from here" does not mean "the
+                gateway loaded it". Posture: nothing extra is being let through
+                from the set still in force, but every revocation issued since is
+                unenforced. ⛔ COLD START: compare the gateway pods' start times
+                against the first of these warnings — a pod whose FIRST load hit
+                the violation has no previous set and is enforcing NOTHING, which
+                is the fail-open posture, not the frozen one. ACTION: fix the
+                offending revoked.txt line at its source, never by deleting the
+                entry (that completes the un-revoke); runbook IR steps 1-4 apply.
+                Read together with FederationRevocationLiveSetRejected — this one
+                is the gateway's account, that one is the file's. Details:
+                docs/internal/federation-revocation-reconciler-runbook.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
               summary: "Federation gateway REFUSED its revoked-set reload — it is enforcing a stale set, so revocations made since are NOT in force (ADR-028 / #1235)"
 
   # 14) No refusals in the window (0) → never fires.
@@ -282,6 +398,24 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The federation-gateway reports that its revoked-set file is
+                ABSENT. Unlike the read-failure and reload-refused alerts, the
+                gateway is NOT holding a previous set here — it has none, so every
+                revoked federation token is being accepted until its TTL (≤4h).
+                This is the ADR-028 §相鄰破口 attack shape (delete / unmount the
+                projected key) and it is also what a namespace misconfiguration
+                looks like (#1313). ACTION: (1) confirm the store ConfigMap exists
+                in the gateway's OWN namespace — a ConfigMap is namespace-scoped
+                and the volume can only resolve one there; tenant-api's
+                `federation.store.namespace` must name that namespace. (2) If it
+                exists, check the projected volume mount on the gateway pods and
+                whether the `revoked.txt` key is still present in the ConfigMap.
+                (3) A key deleted out-of-band is tampering with the defence, not a
+                glitch — treat as an incident and cross-check #926 audit for who
+                wrote the ConfigMap. Details:
+                docs/internal/federation-revocation-reconciler-runbook.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
               summary: "Federation gateway has NO revoked-set — it is enforcing an EMPTY set and honouring every revoked token (ADR-028 §fail-open)"
 
   # 16) File present in the window (0) → never fires.
@@ -330,6 +464,20 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The revocation reconciler found 1 token(s) that the
+                off-store revocation log says are revoked and NOT yet expired, but
+                that are absent from the live revoked set (tenant-federation-store
+                revoked.txt). This is the ADR-028 un-revoke signal: a write-capable
+                actor (stolen tenant-api SA token / pod RCE) may have dropped a
+                revocation while carrying the legitimate SA identity, which the
+                identity-based controls (#926 audit) cannot see. ACTION: query
+                VictoriaLogs for `event:"federation_token_revoked"` for the opaque
+                token_id(s) (resolve the tenant from the store's records at IR time,
+                ADR-028 D3), diff against the live store, and if malicious restore
+                the revocation from git. Details:
+                docs/adr/028-federation-revocation-tamper-evidence.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
               summary: "Federation token un-revoke suspected — reconciler found a revoked-but-live token absent from the live set (ADR-028)"
       # long after the gauge returned to 0, the detection is still pageable
       - eval_time: 30m
@@ -339,6 +487,20 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The revocation reconciler found 1 token(s) that the
+                off-store revocation log says are revoked and NOT yet expired, but
+                that are absent from the live revoked set (tenant-federation-store
+                revoked.txt). This is the ADR-028 un-revoke signal: a write-capable
+                actor (stolen tenant-api SA token / pod RCE) may have dropped a
+                revocation while carrying the legitimate SA identity, which the
+                identity-based controls (#926 audit) cannot see. ACTION: query
+                VictoriaLogs for `event:"federation_token_revoked"` for the opaque
+                token_id(s) (resolve the tenant from the store's records at IR time,
+                ADR-028 D3), diff against the live store, and if malicious restore
+                the revocation from git. Details:
+                docs/adr/028-federation-revocation-tamper-evidence.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
               summary: "Federation token un-revoke suspected — reconciler found a revoked-but-live token absent from the live set (ADR-028)"
       # …and past the 1h window it clears (reset time is bounded, not infinite)
       - eval_time: 66m
@@ -365,6 +527,24 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The federation-gateway reports that its revoked-set file is
+                ABSENT. Unlike the read-failure and reload-refused alerts, the
+                gateway is NOT holding a previous set here — it has none, so every
+                revoked federation token is being accepted until its TTL (≤4h).
+                This is the ADR-028 §相鄰破口 attack shape (delete / unmount the
+                projected key) and it is also what a namespace misconfiguration
+                looks like (#1313). ACTION: (1) confirm the store ConfigMap exists
+                in the gateway's OWN namespace — a ConfigMap is namespace-scoped
+                and the volume can only resolve one there; tenant-api's
+                `federation.store.namespace` must name that namespace. (2) If it
+                exists, check the projected volume mount on the gateway pods and
+                whether the `revoked.txt` key is still present in the ConfigMap.
+                (3) A key deleted out-of-band is tampering with the defence, not a
+                glitch — treat as an incident and cross-check #926 audit for who
+                wrote the ConfigMap. Details:
+                docs/internal/federation-revocation-reconciler-runbook.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
               summary: "Federation gateway has NO revoked-set — it is enforcing an EMPTY set and honouring every revoked token (ADR-028 §fail-open)"
       - eval_time: 30m
         alertname: FederationGatewayRevokedSetMissing
@@ -373,6 +553,24 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The federation-gateway reports that its revoked-set file is
+                ABSENT. Unlike the read-failure and reload-refused alerts, the
+                gateway is NOT holding a previous set here — it has none, so every
+                revoked federation token is being accepted until its TTL (≤4h).
+                This is the ADR-028 §相鄰破口 attack shape (delete / unmount the
+                projected key) and it is also what a namespace misconfiguration
+                looks like (#1313). ACTION: (1) confirm the store ConfigMap exists
+                in the gateway's OWN namespace — a ConfigMap is namespace-scoped
+                and the volume can only resolve one there; tenant-api's
+                `federation.store.namespace` must name that namespace. (2) If it
+                exists, check the projected volume mount on the gateway pods and
+                whether the `revoked.txt` key is still present in the ConfigMap.
+                (3) A key deleted out-of-band is tampering with the defence, not a
+                glitch — treat as an incident and cross-check #926 audit for who
+                wrote the ConfigMap. Details:
+                docs/internal/federation-revocation-reconciler-runbook.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
               summary: "Federation gateway has NO revoked-set — it is enforcing an EMPTY set and honouring every revoked token (ADR-028 §fail-open)"
       - eval_time: 66m
         alertname: FederationGatewayRevokedSetMissing
@@ -399,6 +597,27 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The gateway logged 1 reload-refusal warning(s) in the
+                recent window: it read revoked.txt, met a line violating the
+                token-id contract, discarded the whole reload and kept its
+                previously loaded set. This is the ENFORCEMENT PLANE'S OWN ACCOUNT,
+                read back off its log stream — not the reconciler's second reading
+                of the file. That distinction is the point: the two ends read
+                different kubelet projections of the same ConfigMap at different
+                moments, so "the file looks clean from here" does not mean "the
+                gateway loaded it". Posture: nothing extra is being let through
+                from the set still in force, but every revocation issued since is
+                unenforced. ⛔ COLD START: compare the gateway pods' start times
+                against the first of these warnings — a pod whose FIRST load hit
+                the violation has no previous set and is enforcing NOTHING, which
+                is the fail-open posture, not the frozen one. ACTION: fix the
+                offending revoked.txt line at its source, never by deleting the
+                entry (that completes the un-revoke); runbook IR steps 1-4 apply.
+                Read together with FederationRevocationLiveSetRejected — this one
+                is the gateway's account, that one is the file's. Details:
+                docs/internal/federation-revocation-reconciler-runbook.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
               summary: "Federation gateway REFUSED its revoked-set reload — it is enforcing a stale set, so revocations made since are NOT in force (ADR-028 / #1235)"
       - eval_time: 40m
         alertname: FederationGatewayRevokedSetReloadRejected
@@ -407,6 +626,27 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The gateway logged 1 reload-refusal warning(s) in the
+                recent window: it read revoked.txt, met a line violating the
+                token-id contract, discarded the whole reload and kept its
+                previously loaded set. This is the ENFORCEMENT PLANE'S OWN ACCOUNT,
+                read back off its log stream — not the reconciler's second reading
+                of the file. That distinction is the point: the two ends read
+                different kubelet projections of the same ConfigMap at different
+                moments, so "the file looks clean from here" does not mean "the
+                gateway loaded it". Posture: nothing extra is being let through
+                from the set still in force, but every revocation issued since is
+                unenforced. ⛔ COLD START: compare the gateway pods' start times
+                against the first of these warnings — a pod whose FIRST load hit
+                the violation has no previous set and is enforcing NOTHING, which
+                is the fail-open posture, not the frozen one. ACTION: fix the
+                offending revoked.txt line at its source, never by deleting the
+                entry (that completes the un-revoke); runbook IR steps 1-4 apply.
+                Read together with FederationRevocationLiveSetRejected — this one
+                is the gateway's account, that one is the file's. Details:
+                docs/internal/federation-revocation-reconciler-runbook.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/federation-revocation-reconciler-runbook.md"
               summary: "Federation gateway REFUSED its revoked-set reload — it is enforcing a stale set, so revocations made since are NOT in force (ADR-028 / #1235)"
       - eval_time: 72m
         alertname: FederationGatewayRevokedSetReloadRejected
@@ -434,4 +674,18 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                The revocation reconciler found 1 token(s) that the
+                off-store revocation log says are revoked and NOT yet expired, but
+                that are absent from the live revoked set (tenant-federation-store
+                revoked.txt). This is the ADR-028 un-revoke signal: a write-capable
+                actor (stolen tenant-api SA token / pod RCE) may have dropped a
+                revocation while carrying the legitimate SA identity, which the
+                identity-based controls (#926 audit) cannot see. ACTION: query
+                VictoriaLogs for `event:"federation_token_revoked"` for the opaque
+                token_id(s) (resolve the tenant from the store's records at IR time,
+                ADR-028 D3), diff against the live store, and if malicious restore
+                the revocation from git. Details:
+                docs/adr/028-federation-revocation-tamper-evidence.md.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
               summary: "Federation token un-revoke suspected — reconciler found a revoked-but-live token absent from the live set (ADR-028)"

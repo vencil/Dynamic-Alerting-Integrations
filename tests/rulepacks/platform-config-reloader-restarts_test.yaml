@@ -24,7 +24,7 @@
 # rule regresses to `> 3`.
 # Run: promtool test rules tests/rulepacks/platform-config-reloader-restarts_test.yaml
 rule_files:
-  - platform-config-reloader-restarts.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -48,6 +48,18 @@ tests:
               namespace: monitoring
               pod: prometheus-7c9d-abcde
             exp_annotations:
+              description: |
+                4 restarts in the last hour. While this
+                sidecar is down, hot reload silently stops: the ConfigMap still syncs
+                into the pod, but nothing POSTs /-/reload, so edits do not take
+                effect and NO other alert fires (PrometheusConfigReloadFailed only
+                catches reloads that were attempted and rejected). Check the
+                config-reloader container's logs and last-state reason —
+                OOMKilled means the memory limit is too tight for the watched-dir
+                size. Which component lost hot reload depends on the `pod` label:
+                the Prometheus pod's sidecar watches the Rule Packs, the
+                Alertmanager pod's watches the routing config.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md"
               summary: "config-reloader sidecar in prometheus-7c9d-abcde is restarting frequently"
 
   # 2) DISCRIMINATOR for the threshold: 3 restarts must stay silent. Loosening the
@@ -96,6 +108,18 @@ tests:
               namespace: monitoring
               pod: alertmanager-6b4f-fghij
             exp_annotations:
+              description: |
+                4 restarts in the last hour. While this
+                sidecar is down, hot reload silently stops: the ConfigMap still syncs
+                into the pod, but nothing POSTs /-/reload, so edits do not take
+                effect and NO other alert fires (PrometheusConfigReloadFailed only
+                catches reloads that were attempted and rejected). Check the
+                config-reloader container's logs and last-state reason —
+                OOMKilled means the memory limit is too tight for the watched-dir
+                size. Which component lost hot reload depends on the `pod` label:
+                the Prometheus pod's sidecar watches the Rule Packs, the
+                Alertmanager pod's watches the routing config.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md"
               summary: "config-reloader sidecar in alertmanager-6b4f-fghij is restarting frequently"
 
   # 5) DISCRIMINATOR for the container selector: a DIFFERENT container in the same
@@ -148,6 +172,18 @@ tests:
               namespace: monitoring
               pod: alertmanager-6b4f-fghij
             exp_annotations:
+              description: |
+                5 restarts in the last hour. While this
+                sidecar is down, hot reload silently stops: the ConfigMap still syncs
+                into the pod, but nothing POSTs /-/reload, so edits do not take
+                effect and NO other alert fires (PrometheusConfigReloadFailed only
+                catches reloads that were attempted and rejected). Check the
+                config-reloader container's logs and last-state reason —
+                OOMKilled means the memory limit is too tight for the watched-dir
+                size. Which component lost hot reload depends on the `pod` label:
+                the Prometheus pod's sidecar watches the Rule Packs, the
+                Alertmanager pod's watches the routing config.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md"
               summary: "config-reloader sidecar in alertmanager-6b4f-fghij is restarting frequently"
           - exp_labels:
               severity: warning
@@ -156,4 +192,16 @@ tests:
               namespace: monitoring
               pod: prometheus-7c9d-abcde
             exp_annotations:
+              description: |
+                4 restarts in the last hour. While this
+                sidecar is down, hot reload silently stops: the ConfigMap still syncs
+                into the pod, but nothing POSTs /-/reload, so edits do not take
+                effect and NO other alert fires (PrometheusConfigReloadFailed only
+                catches reloads that were attempted and rejected). Check the
+                config-reloader container's logs and last-state reason —
+                OOMKilled means the memory limit is too tight for the watched-dir
+                size. Which component lost hot reload depends on the `pod` label:
+                the Prometheus pod's sidecar watches the Rule Packs, the
+                Alertmanager pod's watches the routing config.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md"
               summary: "config-reloader sidecar in prometheus-7c9d-abcde is restarting frequently"

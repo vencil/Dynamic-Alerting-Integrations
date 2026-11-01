@@ -503,7 +503,7 @@ da-tools maintenance-scheduler --config-dir conf.d/ --alertmanager http://alertm
 
 ## 11. 平台自監控告警的投遞
 
-平台自己也有一份自監控 rule pack（`k8s/03-monitoring/configmap-rules-platform.yaml`），監看 Prometheus / Alertmanager / threshold-exporter / tenant-api / 聯邦與投影管線的健康。**出貨預設它們不通知任何人**：`Watchdog` 走 [自我存活性](alerting-plane-self-liveness.md)的 index-0 心跳專線，其餘全部落在 root 的 `default` receiver（無 notifier）。這是刻意的出貨姿態（不預設把告警送到我們不知道的地方），**不是無解**——本節說明怎麼接上。
+平台自己也有一份自監控 rule pack（來源 `rule-packs/rule-pack-platform.yaml`，部署為生成的 `k8s/03-monitoring/configmap-rules-platform.yaml`），監看 Prometheus / Alertmanager / threshold-exporter / tenant-api / 聯邦與投影管線的健康。**出貨預設它們不通知任何人**：`Watchdog` 走 [自我存活性](alerting-plane-self-liveness.md)的 index-0 心跳專線，其餘全部落在 root 的 `default` receiver（無 notifier）。這是刻意的出貨姿態（不預設把告警送到我們不知道的地方），**不是無解**——本節說明怎麼接上。
 
 接的機制就是 §8 的 `_routing_enforced`，差別只在 matcher 該寫什麼。
 

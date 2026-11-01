@@ -11,9 +11,9 @@ can drift APART while CI stays green:
 2. `.pint.hcl`'s `parser.include` must be reachable from `_PINT_ARGS` — pint only
    walks the directories it is handed on the CLI, so an include path with no CLI
    root above it is dead config that lints nothing;
-3. the platform ConfigMap must be matched by PREFIX + both YAML extensions, the
-   same judgment the pytest-side platform-pack scanners make, so a split pack
-   cannot end up visible to one side and invisible to the other; and
+3. the declared platform packs (`_lib_consumer_read.PLATFORM_PACKS`) must be
+   linted at their rule-pack source and no generated ConfigMap copy may be
+   (#1595 D1a: the platform ConfigMap is generated now); and
 4. the `entries=N` non-vacuity floor must survive pint's ANSI-coloured output —
    the earlier `entries == 0` guard did not, and was inert in CI as a result.
 """
@@ -56,11 +56,9 @@ def test_pint_version_sync_between_wrapper_and_ci():
 def test_pint_config_scopes_to_rule_pack_sources():
     """The gate must scope to the canonical rule-pack sources.
 
-    The 16 GENERATED `configmap-rules-*.yaml` copies stay out (they carry
-    `DO NOT EDIT` and are synced by check_rulepack_sync.py); the
-    hand-maintained `configmap-rules-platform*.y(a)ml` is IN — pint reads its
-    ConfigMap-embedded rules via `parser.relaxed`, so the older "ConfigMap-wrapped →
-    unparseable" framing no longer applies to it.
+    The GENERATED `configmap-rules-*.yaml` copies stay out (they carry
+    `DO NOT EDIT` and are synced by check_rulepack_sync.py) — the platform one
+    included since #1595 D1a.
     """
     hcl = _read(".pint.hcl")
     assert re.search(r'include\s*=\s*\[[^\]]*rule-packs/rule-pack-', hcl, re.S), (
@@ -102,68 +100,44 @@ def _hcl_list(hcl: str, key: str) -> list[str]:
     return re.findall(r'"((?:[^"\\]|\\.)*)"', m.group(1))
 
 
-def test_platform_configmap_is_in_scope_by_prefix_and_both_extensions():
-    """The platform pack's DEPLOYED ConfigMap must be linted, matched like pytest.
+def _include_matches(include: "list[str]", path: str) -> bool:
+    """Whether pint's include list admits *path* (pint auto-anchors: `^X$`)."""
+    return any(re.match("^" + p.replace("\\\\", "\\") + "$", path) for p in include)
+
+
+def test_platform_pack_is_linted_in_its_source_form_and_no_copy_is():
+    """#1595 D1a: the platform rules are a rule pack — linted at the source.
 
     Two failure modes this pins down, both silently GREEN:
 
-    * dropping the ConfigMap from `parser.include` reverts 16 platform alerts to
-      being invisible to pint (6 of them with real alerts/template label-flow risk);
-    * matching it by EXACT filename instead of prefix makes a future
-      `configmap-rules-platform-federation.yaml` invisible to pint while the
-      pytest-side scanners — which key off a PREFIX plus `(".yaml", ".yml")` — keep
-      counting it, so the two sides disagree about what "the platform pack" is.
+    * the platform pack falling out of `parser.include` (a narrower rule-pack
+      pattern) takes every platform alert out of pint; and
+    * a generated `configmap-rules-*` copy back in scope reports every finding
+      twice, half of them on a `DO NOT EDIT` file — the platform ConfigMap was
+      the one hand-maintained copy, read through `parser.relaxed`, and is now
+      generated like the rest, so neither it nor `relaxed` belongs here.
 
-    The prefix/extension judgment is read back out of the rule-tree module rather
-    than restated here, so the two cannot drift.
+    Which packs are platform packs, and what their files and copies are named,
+    is read from the declaration (`_lib_consumer_read`), not restated here.
     """
+    import _lib_consumer_read as cr
+
     hcl = _read(".pint.hcl")
     include = _hcl_list(hcl, "include")
-    relaxed = _hcl_list(hcl, "relaxed")
-
-    # The scanner moved out of the pytest module into an importable one; read
-    # the prefix/extension judgment from wherever it actually lives so this
-    # lockstep keeps pointing at the definition rather than at a stale copy.
-    ops = _read("scripts/tools/lint/_rule_tree.py")
-    m_prefix = re.search(r'_PLATFORM_CM_PREFIX\s*=\s*"([^"]+)"', ops)
-    assert m_prefix, "_PLATFORM_CM_PREFIX not found in the platform-pack scanner"
-    prefix = m_prefix.group(1)
-    m_exts = re.search(r'_RULES_FILE_EXTS\s*=\s*\(([^)]*)\)', ops)
-    assert m_exts, "_RULES_FILE_EXTS not found in the platform-pack scanner"
-    exts = re.findall(r'"\.(\w+)"', m_exts.group(1))
-    assert sorted(exts) == ["yaml", "yml"], exts
-
-    cm_patterns = [p for p in include if prefix in p]
-    assert cm_patterns, (
-        f"parser.include must cover the platform ConfigMap ({prefix}*) — without it "
-        f"pint cannot see the 16 platform alerts that have no tests/rulepacks extract"
-    )
-    assert cm_patterns == [p for p in relaxed if prefix in p], (
-        "the platform ConfigMap must appear in BOTH parser.include and parser.relaxed "
-        "with the same pattern: include-without-relaxed makes pint treat the ConfigMap "
-        "as a malformed rule document and emit a Fatal parse problem (CI red), because "
-        "`relaxed` is the per-path opt-in for rules embedded in a `data:` block"
-    )
-
-    # pint auto-anchors these regexps (`X` is compiled as `^X$`), so the pattern must
-    # itself allow a suffix after the prefix and either extension.
-    for pat in cm_patterns:
-        compiled = re.compile("^" + pat.replace("\\\\", "\\") + "$")
-        for suffix in ("", "-federation"):
-            for ext in exts:
-                candidate = f"k8s/03-monitoring/{prefix}{suffix}.{ext}"
-                assert compiled.match(candidate), (
-                    f"{pat!r} does not match {candidate!r} — use a PREFIX + both "
-                    f"extensions, not an exact filename, to stay aligned with "
-                    f"_PLATFORM_CM_PREFIX / _RULES_FILE_EXTS"
-                )
-        # …but must NOT swallow the 16 GENERATED `DO NOT EDIT` sibling ConfigMaps:
-        # linting those double-reports every rule-pack finding onto a file developers
-        # are told not to edit (measured 689 entries vs 393, findings duplicated).
-        for generated in ("configmap-rules-mariadb", "configmap-rules-kubernetes"):
-            assert not compiled.match(f"k8s/03-monitoring/{generated}.yaml"), (
-                f"{pat!r} must not match the generated copy {generated}.yaml"
-            )
+    assert cr.PLATFORM_PACKS, "no platform pack declared — nothing to pin"
+    for pack in sorted(cr.PLATFORM_PACKS):
+        source = f"{cr.RULE_PACKS.directory}/{cr.RULE_PACKS.file_name(pack)}"
+        assert _include_matches(include, source), (
+            f"parser.include does not admit the platform pack source {source}")
+    for pack in sorted(cr.PLATFORM_PACKS) + ["mariadb", "kubernetes"]:
+        copy = f"{cr.CONFIGMAP_RULES.directory}/{cr.CONFIGMAP_RULES.file_name(pack)}"
+        assert not _include_matches(include, copy), (
+            f"parser.include admits the generated copy {copy}: every finding would "
+            f"be reported twice, once on a file developers must not edit")
+    stripped = re.sub(r'^[ \t]*(?:#|//).*$', '', hcl, flags=re.M)
+    assert not re.search(r'^\s*relaxed\s*=', stripped, re.M), (
+        "parser.relaxed existed only for the hand-maintained platform ConfigMap; "
+        "no rule file in scope is ConfigMap-wrapped any more")
 
 
 def test_cli_roots_cover_every_parser_include_path():
@@ -228,7 +202,7 @@ def test_entries_floor_survives_pints_ansi_coloured_output():
     # the comment asserted the sibling value was read back "so the two cannot
     # drift". Claiming a guard is worse than not having one — it is why nobody
     # adds the guard. pint entries and platform alert count are the same
-    # quantity (the ConfigMap holds only alerting rules, no recording rules).
+    # quantity (the platform pack holds only alerting rules, no recording rules).
     ops = _read("tests/ops/test_generate_routes_orchestration.py")
     m_alerts = re.search(r'_MIN_PLATFORM_ALERTS\s*=\s*(\d+)', ops)
     assert m_alerts, "_MIN_PLATFORM_ALERTS not found in the platform-pack scanner"
@@ -243,7 +217,7 @@ def test_entries_floor_survives_pints_ansi_coloured_output():
     assert 0 < total - floor < pack, (
         f"_MIN_PINT_ENTRIES={floor} is outside the useful window "
         f"({total - pack}, {total}]: at or below it, losing the whole platform "
-        f"ConfigMap ({pack} entries) stays green; above it, the measured total "
+        f"pack ({pack} entries) stays green; above it, the measured total "
         f"itself would fail. Ratchet _MIN_PINT_ENTRIES and _PINT_ENTRIES_AT_MEASURE "
         f"together — check_pint.py's own failure message prints both values."
     )

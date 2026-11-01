@@ -1220,7 +1220,7 @@ kubectl get events -A --sort-by=.lastTimestamp | tail -30
 - (a) Prometheus itself is unhealthy (Pod restarting, starved of resources) → other scrape jobs degrade at the same time; check the Prometheus Pod first
 - (b) many tenants were offboarded at once but their conf.d `_metadata` was not removed → stale config, not an outage; removing it clears the alert
 
-**Cross-ref**: why the thresholds are 5 and 10%, and what `unless on() absent(...)` is for, are explained in the comment above this alert in `k8s/03-monitoring/configmap-rules-platform.yaml`.
+**Cross-ref**: why the thresholds are 5 and 10%, and what `unless on() absent(...)` is for, are explained in the comment above this alert in the platform pack source `rule-packs/rule-pack-platform.yaml` (the deployed `k8s/03-monitoring/configmap-rules-platform.yaml` is generated from it and carries no comments).
 
 ---
 

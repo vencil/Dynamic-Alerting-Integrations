@@ -10,7 +10,7 @@
 #      a lone mid-write read failure must not page.
 # Run: promtool test rules tests/rulepacks/platform-config-reload-failing_test.yaml
 rule_files:
-  - platform-config-reload-failing.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -34,6 +34,20 @@ tests:
               job: tenant-api
               instance: 10.0.0.2:8080
             exp_annotations:
+              description: |
+                The tenant-api `RBAC` config manager has failed
+                to hot-reload its YAML repeatedly over the last 15m. On each failure
+                it keeps serving the LAST-GOOD snapshot, so a just-edited _rbac.yaml
+                / _domain_policy.yaml / _tenant_orgs.yaml in conf.d, or a hand-edited
+                _federation_policy.yaml / _groups.yaml / _views.yaml key of the
+                tenant-api-state ConfigMap, is NOT in effect — rules / policies
+                silently lag the stored YAML. Fix
+                the YAML (see the tenant-api WARN logs: "config reload failed" with
+                the parse error) and the alert clears automatically. The 15m sliding
+                window means it may stay Firing up to ~15m after the fix as old
+                failures age out. Pre-merge schema validation of the admin config
+                is the shift-left complement to this runtime signal.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
               summary: "tenant-api config hot-reload failing for RBAC — serving stale last-good"
 
   # 2) Healthy: no reload failures ever — counter flat at 0. Must NOT fire.

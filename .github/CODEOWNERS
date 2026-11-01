@@ -66,12 +66,11 @@ components/threshold-exporter/config/conf.d/db-b.yaml       @vencil
 # ============================================================
 # Rule Packs（示意歸屬：各 Domain Expert 團隊）
 #
-# 用目錄層級涵蓋**全部 16 個 pack**。16 個之中 15 個有對應的
-# `rule-packs/rule-pack-<name>.yaml`，只有 **platform** 沒有（它由
-# `k8s/03-monitoring/configmap-rules-platform.yaml` 直接管理），所以第二條
-# pattern 是必要的、不是保險。先前這裡是逐 pack 的 glob，其中 7 個 pack
-# 完全沒有 owner，而 `rule-pack-platform*.yaml` 更是一條對不到任何檔案的
-# 死 glob（#1277 實查）。
+# 用目錄層級涵蓋全部 pack：每個 pack 的來源都是
+# `rule-packs/rule-pack-<name>.yaml`（platform 也是，#1595 D1a 起），
+# `k8s/03-monitoring/configmap-rules-*.yaml` 是由它生成的副本，第二條
+# pattern 讓改到副本的 PR 也找得到 owner。先前這裡是逐 pack 的 glob，其中
+# 7 個 pack 完全沒有 owner（#1277 實查）——目錄層級不必隨 pack 增減維護。
 # ============================================================
 rule-packs/                                 @vencil
 k8s/03-monitoring/configmap-rules-*.yaml    @vencil

@@ -228,3 +228,6 @@ scripts/tools/ops/gitops_check.py
 # pinned it go; only the "shared reader stays pure" half remains — removed,
 # not truncated.
 tests/shared/test_yaml_loader_is_libyaml.py
+# #1595 D1a: the platform ConfigMap is GENERATED from rule-packs/rule-pack-platform.yaml
+# now; the generator emits no comments, so the copy shrank — removed comments, not truncated.
+k8s/03-monitoring/configmap-rules-platform.yaml

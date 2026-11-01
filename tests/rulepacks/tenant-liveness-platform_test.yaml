@@ -1,8 +1,8 @@
 # promtool unit test - #869/#880 platform-side tenant-liveness sentinels.
 # Run: promtool test rules tests/rulepacks/tenant-liveness-platform_test.yaml
 #
-# Oracle for tenant-liveness-platform.rules.yaml (the EXTRACT of
-# TenantExporterJobAbsent + MassExporterOutage from configmap-rules-platform.yaml).
+# Oracle for TenantExporterJobAbsent + MassExporterOutage, read from the
+# platform pack source rule-packs/rule-pack-platform.yaml (#1595).
 #
 #   JOB-ABSENT     whole tenant-exporters job gone -> TenantExporterJobAbsent fires.
 #   JOB-PRESENT    at least one up series -> TenantExporterJobAbsent silent.
@@ -32,7 +32,7 @@
 #                     The job-absent dead-man's-switch is the catastrophe signal,
 #                     so the ratio sentinel is never the sole dependency.
 rule_files:
-  - tenant-liveness-platform.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 30s
 
@@ -52,6 +52,15 @@ tests:
               alert_source: platform
               job: tenant-exporters
             exp_annotations:
+              description: |
+                No `up{job="tenant-exporters"}` series exist at all. Either
+                Prometheus lost the scrape job (SD/config regression) or the
+                threshold-exporter that emits tenant_expected_exporter is down —
+                in BOTH cases the per-tenant TenantExporterAbsent rule cannot fire
+                (its anti-join LHS is empty), so this catastrophic fallback is the
+                only signal. Check Prometheus /targets for the tenant-exporters job
+                and the threshold-exporter Deployment.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/federation-integration.md"
               summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
 
   - interval: 30s
@@ -113,6 +122,18 @@ tests:
               severity: critical
               alert_source: platform
             exp_annotations:
+              description: |
+                More than 5 tenants AND over 10% of the expected-exporter fleet
+                simultaneously have no healthy up{job="tenant-exporters"}==1 target.
+                Both conditions together mean this is almost certainly a SHARED
+                failure (node pool drained, network partition, image-pull outage on a
+                rolling restart) rather than N independent exporter deaths or a
+                routine single-node blip. Treat as ONE incident: inspect node health
+                / network / recent cluster-wide changes FIRST — remediating tenants
+                one by one will not address the common cause. Per-tenant detail is in
+                the fanned-out TenantExporterAbsent alerts. If instead the WHOLE
+                tenant-exporters job is gone, TenantExporterJobAbsent fires instead.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage"
               summary: "Mass exporter outage (8 tenants) — shared-dependency failure suspected"
 
   - interval: 30s
@@ -151,6 +172,15 @@ tests:
               alert_source: platform
               job: tenant-exporters
             exp_annotations:
+              description: |
+                No `up{job="tenant-exporters"}` series exist at all. Either
+                Prometheus lost the scrape job (SD/config regression) or the
+                threshold-exporter that emits tenant_expected_exporter is down —
+                in BOTH cases the per-tenant TenantExporterAbsent rule cannot fire
+                (its anti-join LHS is empty), so this catastrophic fallback is the
+                only signal. Check Prometheus /targets for the tenant-exporters job
+                and the threshold-exporter Deployment.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/federation-integration.md"
               summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"
 
   - interval: 30s
@@ -451,4 +481,13 @@ tests:
               alert_source: platform
               job: tenant-exporters
             exp_annotations:
+              description: |
+                No `up{job="tenant-exporters"}` series exist at all. Either
+                Prometheus lost the scrape job (SD/config regression) or the
+                threshold-exporter that emits tenant_expected_exporter is down —
+                in BOTH cases the per-tenant TenantExporterAbsent rule cannot fire
+                (its anti-join LHS is empty), so this catastrophic fallback is the
+                only signal. Check Prometheus /targets for the tenant-exporters job
+                and the threshold-exporter Deployment.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/federation-integration.md"
               summary: "Entire tenant-exporters scrape job is absent — per-tenant liveness is BLIND"

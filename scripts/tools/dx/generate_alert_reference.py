@@ -462,7 +462,9 @@ def load_rule_packs(rule_packs_dir: str) -> Dict[str, List[Dict]]:
     # loader refuses — or a missing da-read — stops the generator; it does
     # not document around it.
     try:
-        yaml_files = [f for f in _lib_consumer_read.rule_pack_files(rule_packs_dir)
+        # #1595 D1a: a tenant-facing reference — the declared platform packs
+        # (`PLATFORM_PACKS`) are left out by the declaration, not by name.
+        yaml_files = [f for f in _lib_consumer_read.tenant_rule_pack_files(rule_packs_dir)
                       if _lib_consumer_read.RULE_PACKS.member(f) not in _EXCLUDE]
         rule_files = _lib_consumer_read.prometheus_rule_files(yaml_files)
     except _lib_consumer_read.ConsumerReadError as e:

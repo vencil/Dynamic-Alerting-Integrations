@@ -113,8 +113,11 @@ _TMI_TOKEN = re.compile(r'tenant_metadata_info')
 def _rule_pack_files() -> list[Path]:
     """The rule packs, declared by path: ``_lib_consumer_read.rule_pack_files`` (#3426) —
     ``rule-pack-*.yaml`` and ``.yml`` so a ``.yml`` pack cannot escape (fail-open; Gemini
-    #969); an undeclared top-level YAML there raises ``RuleFileSourcesRefused``."""
-    return _lib_consumer_read.rule_pack_files(_RULE_PACKS)
+    #969); an undeclared top-level YAML there raises ``RuleFileSourcesRefused``.
+    TENANT packs only (#1595 D1a): the maintenance clause suppresses a tenant's
+    alerts; a declared platform pack (``PLATFORM_PACKS``) has no tenant to put
+    in maintenance."""
+    return _lib_consumer_read.tenant_rule_pack_files(_RULE_PACKS)
 
 
 def _mask_quotes(expr: str) -> str:

@@ -22,7 +22,7 @@ The fix: a **permanently-firing** `Watchdog` alert (`expr: vector(1)`) routed th
 
 | Component | Location |
 |---|---|
-| `Watchdog` rule + `AlertmanagerWebhookNotificationsFailing` internal companion alert | `k8s/03-monitoring/configmap-rules-platform.yaml` |
+| `Watchdog` rule + `AlertmanagerWebhookNotificationsFailing` internal companion alert | `rule-packs/rule-pack-platform.yaml` (source; `make rulepack-configmaps` generates the deployed `k8s/03-monitoring/configmap-rules-platform.yaml`) |
 | Top-priority route (`routes[0]`) + `watchdog-heartbeat` receiver (`url_file`) | `k8s/03-monitoring/configmap-alertmanager.yaml` (the route is re-injected at index 0 by the platform's `generate_alertmanager_routes.py` on every regeneration, surviving the route-REPLACE) |
 | External DMS URL (embeds a token, **secret**) | `k8s/03-monitoring/secret-watchdog-heartbeat.yaml` → mounted at `/etc/alertmanager/secrets/watchdog-heartbeat-url` |
 

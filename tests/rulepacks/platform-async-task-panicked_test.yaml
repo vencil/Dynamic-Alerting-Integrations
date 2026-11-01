@@ -7,7 +7,7 @@
 #   5) a pod restart (counter back to 0, then flat) does NOT fire.
 # Run: promtool test rules tests/rulepacks/platform-async-task-panicked_test.yaml
 rule_files:
-  - platform-async-task-panicked.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -30,6 +30,19 @@ tests:
               job: tenant-api
               instance: 10.0.0.2:8080
             exp_annotations:
+              description: |
+                A tenant-api async batch task (`?async=true`) panicked in the last
+                15m. The worker recovered it: that task is `failed` (its `error`
+                says the work stopped unexpectedly and carries no panic detail) and
+                the worker went on with later tasks. This counter should stay 0, so
+                any increase is a tenant-api bug, not a config or load problem.
+                Find the ERROR log "async task panicked; marked failed" — it has the
+                task_id, the panic value and the stack — and file it. The caller of
+                that task must retry or redo the batch. A panic while a lock was
+                held can leave tenant-api wedged; if writes then hang, restart the
+                pod. The alert clears ~15m after the last panic as it leaves the
+                window.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
               summary: "tenant-api async batch task panicked — task marked failed, tenant-api bug"
 
   # ⚠️ The eval at 13m is the DISCRIMINATOR for `for: 5m`: increase() is already
@@ -60,6 +73,19 @@ tests:
               job: tenant-api
               instance: 10.0.0.2:8080
             exp_annotations:
+              description: |
+                A tenant-api async batch task (`?async=true`) panicked in the last
+                15m. The worker recovered it: that task is `failed` (its `error`
+                says the work stopped unexpectedly and carries no panic detail) and
+                the worker went on with later tasks. This counter should stay 0, so
+                any increase is a tenant-api bug, not a config or load problem.
+                Find the ERROR log "async task panicked; marked failed" — it has the
+                task_id, the panic value and the stack — and file it. The caller of
+                that task must retry or redo the batch. A panic while a lock was
+                held can leave tenant-api wedged; if writes then hang, restart the
+                pod. The alert clears ~15m after the last panic as it leaves the
+                window.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
               summary: "tenant-api async batch task panicked — task marked failed, tenant-api bug"
       - eval_time: 30m
         alertname: TenantApiAsyncTaskPanicked

@@ -17,7 +17,7 @@
 #   6) It does NOT fire at/below the floor — proves it is the `> N` form, NOT the
 #      always-true `> 0` form the runbook §8.7 prose naively implied.
 rule_files:
-  - tenant-log-query-platform.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -41,6 +41,18 @@ tests:
               alert_source: platform
               account_id: "1000"
             exp_annotations:
+              description: |
+                Over 50% of account 1000's tenant
+                log-query requests have been rejected (rate-limited /
+                auth-failed / bad-request) for 15m. Check the
+                tenant-log-query dashboard — likely a REVOKED token (Lua
+                403), a tenant exceeding its rate limit, or a client hitting
+                the victorialogs-mode endpoint allowlist. NOTE: this counts
+                POST-JWT rejections only — an EXPIRED / bad-signature / wrong-
+                audience token 401s at jwt_authn BEFORE account_id is stamped,
+                so it is NOT counted here (attack noise; see jwt_authn stats,
+                per ADR-020).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md"
               summary: "Log-query requests for account 1000 are mostly rejected"
 
   # 2) Mostly-OK account does NOT fire. account 1001: ok 10/min, auth_failed
@@ -94,6 +106,18 @@ tests:
               alert_source: platform
               account_id: "1000"
             exp_annotations:
+              description: |
+                Over 50% of account 1000's tenant
+                log-query requests have been rejected (rate-limited /
+                auth-failed / bad-request) for 15m. Check the
+                tenant-log-query dashboard — likely a REVOKED token (Lua
+                403), a tenant exceeding its rate limit, or a client hitting
+                the victorialogs-mode endpoint allowlist. NOTE: this counts
+                POST-JWT rejections only — an EXPIRED / bad-signature / wrong-
+                audience token 401s at jwt_authn BEFORE account_id is stamped,
+                so it is NOT counted here (attack noise; see jwt_authn stats,
+                per ADR-020).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md"
               summary: "Log-query requests for account 1000 are mostly rejected"
 
   # 5) Fan-out discard spike fires, summed across two DaemonSet pods. Each pod
@@ -118,6 +142,20 @@ tests:
               component_id: tenant_project
               component_kind: transform
             exp_annotations:
+              description: |
+                The (b) tenant-sanitized projection (`tenant_project` remap)
+                is `abort`-dropping events well above the operational-log
+                baseline. The platform 0:0 copy is unaffected (this is the
+                tenant-facing projection only), but tenants whose rows are
+                being dropped will NOT see their own platform-operational
+                logs. Likely causes: (a) a tenant sending federation_audit
+                traffic but missing from helm/vector `tenantProjections`
+                (registry desync — reconcile `_account_registry.yaml` →
+                `tenantProjections`); (b) a malicious / malformed payload
+                flood. This is a COARSE signal — it cannot name the affected
+                account; correlate with the Vector logs and the account
+                registry. See platform-log-aggregation-runbook §8.7.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md"
               summary: "Vector tenant-projection drop rate >5/s for 15m — above baseline (usually rising operational-log volume, NOT registry desync; compare baseline first)"
 
   # 6) Below-floor steady drops do NOT fire — proves `> 5`, not always-true `> 0`.

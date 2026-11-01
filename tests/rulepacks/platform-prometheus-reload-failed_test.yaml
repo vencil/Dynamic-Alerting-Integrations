@@ -11,7 +11,7 @@
 #   3) does NOT fire on a fix-forward that lands inside the 2m hold-down.
 # Run: promtool test rules tests/rulepacks/platform-prometheus-reload-failed_test.yaml
 rule_files:
-  - platform-prometheus-reload-failed.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -38,6 +38,25 @@ tests:
               job: prometheus
               instance: localhost:9090
             exp_annotations:
+              description: |
+                Prometheus's LAST config/rule reload FAILED, so it is still
+                evaluating the PREVIOUS rule set: every Rule Pack ConfigMap edited
+                since then is NOT in effect, and this does NOT self-heal — the
+                process keeps running and keeps serving the old rules. Almost always
+                a broken Rule Pack. In the Prometheus container log, grep
+                `loading groups failed` — that is the line whose `err=` names the
+                offending file under /etc/prometheus/rules and the exact parse
+                position (the neighbouring `Failed to apply configuration` and
+                `Error reloading config` lines confirm the rollback but do NOT name
+                the file; the string "Error loading config" does not appear at all).
+                Then fix that ConfigMap; `promtool check rules` against the pack
+                reproduces the same parse error locally before you re-apply.
+                SCOPE NOTE: the config-reloader sidecar only watches
+                /etc/prometheus/rules. prometheus.yml is mounted with subPath, and
+                Kubernetes does not propagate ConfigMap updates into a subPath
+                mount, so a prometheus.yml change is invisible to both the sidecar
+                and this alert and still requires a pod restart.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md"
               summary: "Prometheus rejected its last reload — Rule Pack edits are NOT in effect"
       - eval_time: 20m
         alertname: PrometheusConfigReloadFailed
@@ -48,6 +67,25 @@ tests:
               job: prometheus
               instance: localhost:9090
             exp_annotations:
+              description: |
+                Prometheus's LAST config/rule reload FAILED, so it is still
+                evaluating the PREVIOUS rule set: every Rule Pack ConfigMap edited
+                since then is NOT in effect, and this does NOT self-heal — the
+                process keeps running and keeps serving the old rules. Almost always
+                a broken Rule Pack. In the Prometheus container log, grep
+                `loading groups failed` — that is the line whose `err=` names the
+                offending file under /etc/prometheus/rules and the exact parse
+                position (the neighbouring `Failed to apply configuration` and
+                `Error reloading config` lines confirm the rollback but do NOT name
+                the file; the string "Error loading config" does not appear at all).
+                Then fix that ConfigMap; `promtool check rules` against the pack
+                reproduces the same parse error locally before you re-apply.
+                SCOPE NOTE: the config-reloader sidecar only watches
+                /etc/prometheus/rules. prometheus.yml is mounted with subPath, and
+                Kubernetes does not propagate ConfigMap updates into a subPath
+                mount, so a prometheus.yml change is invisible to both the sidecar
+                and this alert and still requires a pod restart.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md"
               summary: "Prometheus rejected its last reload — Rule Pack edits are NOT in effect"
 
   # 2) Healthy steady state: reloads succeed, gauge at 1 — must stay silent.
