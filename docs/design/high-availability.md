@@ -83,6 +83,27 @@ spec:
 - 避免雙倍計算
 - HA 下警報閾值準確
 
+#### 同一條規則也適用 `tenant_metadata_info` 的 join
+
+`tenant_metadata_info` 一樣由每個副本各送一份。以 pod 為單位抓取時（Prometheus Operator 的 ServiceMonitor 走 endpoints，一個 pod 一個 target），同一個租戶會有兩份只差 `instance`／`pod` 的序列。告警把 metadata 接進來的那個 join 若直接用原始指標：
+
+```promql
+* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info
+```
+
+右側每個租戶就有兩筆，Prometheus 報 `many-to-many matching not allowed`，**整條告警停止評估**（不是少幾個 label，而是不觸發）。右側要先收斂：
+
+```promql
+* on(tenant) group_left(runbook_url, owner, tier)
+  max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+```
+
+- 用 `by` 列出 exporter 送出的 label，而不是用 `without` 列抓取加上的 label：抓取設定可能再加上每個副本不同的 label（例如 relabel 出來的 `node`），`without` 漏列一個就又撞 many-to-many。`by` 清單由測試對照 `collector.go` 的 label 清單，exporter 新增 label 時測試會紅，不會悄悄被收掉。
+- `check_leftouterjoin_enrichment.py` 擋下右側不是這個寫法的 join；`tests/rulepacks/rule-pack-metadata-replicas_test.yaml` 以兩份副本序列驗證每個 pack 的代表告警。
+- void 分支的 `unless on(tenant) tenant_metadata_info` 維持原始指標：`unless` 只看有沒有，右側重複不會出錯。
+
+**已知限制：換版空窗。** 兩個副本各自 hot-reload，換版有時間差。空窗內若某租戶的 `owner`／`runbook_url`／`tier` 改了，兩個副本會暫時送出不同值，`max by(...)` 收斂後仍有兩筆，該租戶相關告警會在那幾個評估週期撞 many-to-many 而評估失敗（`prometheus_rule_evaluation_failures_total` 會增加，那幾個週期內這些告警既不會新觸發、也不會重送）。兩個副本都換到新版後自動恢復。目前不處理：用 `topk` 任選一筆會讓 label 在兩個值之間跳動，改變告警身分。
+
 ### 4.4 自監控 (Platform Rule Pack)
 
 4 個專用警報監控 threshold-exporter 本身：

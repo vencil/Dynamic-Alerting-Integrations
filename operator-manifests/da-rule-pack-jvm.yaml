@@ -39,11 +39,11 @@ spec:
       expr: "(\n  (\n    (\n      tenant:jvm_gc_pause:rate5m\n      > on(tenant) group_left\n\
         \      tenant:alert_threshold:jvm_gc_pause\n    )\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    (\n      tenant:jvm_gc_pause:rate5m\n      > on(tenant) group_left\n\
-        \      tenant:alert_threshold:jvm_gc_pause\n    )\n    unless on(tenant)\n\
-        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n      tenant:jvm_gc_pause:rate5m\n\
+        \      > on(tenant) group_left\n      tenant:alert_threshold:jvm_gc_pause\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         metric_group: jvm_gc_pause
@@ -65,11 +65,11 @@ spec:
       expr: "(\n  (\n    (\n      tenant:jvm_gc_pause:rate5m\n      > on(tenant) group_left\n\
         \      tenant:alert_threshold:jvm_gc_pause_critical\n    )\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    (\n      tenant:jvm_gc_pause:rate5m\n      > on(tenant) group_left\n\
-        \      tenant:alert_threshold:jvm_gc_pause_critical\n    )\n    unless on(tenant)\n\
-        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n      tenant:jvm_gc_pause:rate5m\n\
+        \      > on(tenant) group_left\n      tenant:alert_threshold:jvm_gc_pause_critical\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 3m
       labels:
         metric_group: jvm_gc_pause
@@ -91,11 +91,11 @@ spec:
       expr: "(\n  (\n    (\n      tenant:jvm_memory_used:percent\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:jvm_memory\n    )\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    (\n      tenant:jvm_memory_used:percent\n      > on(tenant) group_left\n\
-        \      tenant:alert_threshold:jvm_memory\n    )\n    unless on(tenant)\n \
-        \   (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n      tenant:jvm_memory_used:percent\n\
+        \      > on(tenant) group_left\n      tenant:alert_threshold:jvm_memory\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         metric_group: jvm_memory
@@ -117,11 +117,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:jvm_memory_used:percent\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:jvm_memory_critical\n    )\n  \
         \  unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:jvm_memory_used:percent\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:jvm_memory_critical\n    )\n  \
-        \  unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:jvm_memory_used:percent\n      > on(tenant) group_left\n   \
+        \   tenant:alert_threshold:jvm_memory_critical\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 3m
       labels:
         metric_group: jvm_memory
@@ -143,11 +144,11 @@ spec:
       expr: "(\n  (\n    (\n      tenant:jvm_threads:current\n      > on(tenant) group_left\n\
         \      tenant:alert_threshold:jvm_threads\n    )\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    (\n      tenant:jvm_threads:current\n      > on(tenant) group_left\n\
-        \      tenant:alert_threshold:jvm_threads\n    )\n    unless on(tenant)\n\
-        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n      tenant:jvm_threads:current\n\
+        \      > on(tenant) group_left\n      tenant:alert_threshold:jvm_threads\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         metric_group: jvm_threads
@@ -169,11 +170,11 @@ spec:
       expr: "(\n  (\n    (\n      tenant:jvm_threads:current\n      > on(tenant) group_left\n\
         \      tenant:alert_threshold:jvm_threads_critical\n    )\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    (\n      tenant:jvm_threads:current\n      > on(tenant) group_left\n\
-        \      tenant:alert_threshold:jvm_threads_critical\n    )\n    unless on(tenant)\n\
-        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n      tenant:jvm_threads:current\n\
+        \      > on(tenant) group_left\n      tenant:alert_threshold:jvm_threads_critical\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 3m
       labels:
         metric_group: jvm_threads
@@ -196,12 +197,12 @@ spec:
         \ tenant:alert_threshold:jvm_gc_pause\n      and on(tenant)\n      tenant:jvm_memory_used:percent\
         \ > on(tenant) group_left tenant:alert_threshold:jvm_memory\n    )\n    unless\
         \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
-        \  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:jvm_gc_pause:rate5m > on(tenant) group_left\
-        \ tenant:alert_threshold:jvm_gc_pause\n      and on(tenant)\n      tenant:jvm_memory_used:percent\
-        \ > on(tenant) group_left tenant:alert_threshold:jvm_memory\n    )\n    unless\
-        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
-        \  unless on(tenant) tenant_metadata_info\n)\n"
+        \  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url,\
+        \ owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n      tenant:jvm_gc_pause:rate5m\
+        \ > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause\n      and on(tenant)\n\
+        \      tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         metric_group: jvm_performance

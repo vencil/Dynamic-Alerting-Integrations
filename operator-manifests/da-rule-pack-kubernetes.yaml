@@ -158,9 +158,9 @@ spec:
     rules:
     - alert: PodContainerHighCPU
       expr: "(\n  rule_pack_kubernetes:pod_container_high_cpu_warning:core\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  rule_pack_kubernetes:pod_container_high_cpu_warning:core\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  rule_pack_kubernetes:pod_container_high_cpu_warning:core\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 1m
       labels:
         severity: warning
@@ -180,9 +180,9 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: PodContainerHighCPUCritical
       expr: "(\n  rule_pack_kubernetes:pod_container_high_cpu_critical:core\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  rule_pack_kubernetes:pod_container_high_cpu_critical:core\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  rule_pack_kubernetes:pod_container_high_cpu_critical:core\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 1m
       labels:
         severity: critical
@@ -202,8 +202,8 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: PodContainerHighMemory
       expr: "(\n  rule_pack_kubernetes:pod_container_high_memory_warning:core\n  *\
-        \ on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  rule_pack_kubernetes:pod_container_high_memory_warning:core\n\
+        \ on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url,\
+        \ owner, tier) (tenant_metadata_info)\n)\nor\n(\n  rule_pack_kubernetes:pod_container_high_memory_warning:core\n\
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 1m
       labels:
@@ -224,8 +224,8 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: PodContainerHighMemoryCritical
       expr: "(\n  rule_pack_kubernetes:pod_container_high_memory_critical:core\n \
-        \ * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  rule_pack_kubernetes:pod_container_high_memory_critical:core\n\
+        \ * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url,\
+        \ owner, tier) (tenant_metadata_info)\n)\nor\n(\n  rule_pack_kubernetes:pod_container_high_memory_critical:core\n\
         \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 1m
       labels:
@@ -246,9 +246,9 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: PodContainerCPUThrottled
       expr: "(\n  rule_pack_kubernetes:pod_cpu_throttled_warning:core\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  rule_pack_kubernetes:pod_cpu_throttled_warning:core\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  rule_pack_kubernetes:pod_cpu_throttled_warning:core\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 15m
       labels:
         severity: warning
@@ -273,9 +273,9 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: PodContainerCPUThrottledCritical
       expr: "(\n  rule_pack_kubernetes:pod_cpu_throttled_critical:core\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  rule_pack_kubernetes:pod_cpu_throttled_critical:core\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  rule_pack_kubernetes:pod_cpu_throttled_critical:core\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 15m
       labels:
         severity: critical
@@ -300,9 +300,9 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: ContainerOOMKilled
       expr: "(\n  rule_pack_kubernetes:container_oom_killed_warning:core\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  rule_pack_kubernetes:container_oom_killed_warning:core\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  rule_pack_kubernetes:container_oom_killed_warning:core\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: warning
@@ -328,9 +328,9 @@ spec:
         tier: '{{ $labels.tier }}'
     - alert: ContainerOOMKilledCritical
       expr: "(\n  rule_pack_kubernetes:container_oom_killed_critical:core\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  rule_pack_kubernetes:container_oom_killed_critical:core\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  rule_pack_kubernetes:container_oom_killed_critical:core\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         severity: critical
@@ -360,7 +360,8 @@ spec:
         CrashLoopBackOff\"}\n        * on(tenant) group_left\n        user_state_filter{filter=\"\
         container_crashloop\"}\n      ) > 0\n    )\n    unless on(tenant)\n    (user_state_filter{filter=\"\
         maintenance\"} == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n\
-        \    tenant_metadata_info\n)\nor\n(\n  (\n    (\n      (\n        tenant:container_waiting_reason:count{reason=\"\
+        \    max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\n\
+        or\n(\n  (\n    (\n      (\n        tenant:container_waiting_reason:count{reason=\"\
         CrashLoopBackOff\"}\n        * on(tenant) group_left\n        user_state_filter{filter=\"\
         container_crashloop\"}\n      ) > 0\n    )\n    unless on(tenant)\n    (user_state_filter{filter=\"\
         maintenance\"} == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
@@ -385,8 +386,9 @@ spec:
         ImagePullBackOff|InvalidImageName\"}\n        * on(tenant) group_left\n  \
         \      user_state_filter{filter=\"container_imagepull\"}\n      ) > 0\n  \
         \  )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      (\n        tenant:container_waiting_reason:count{reason=~\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      (\n        tenant:container_waiting_reason:count{reason=~\"\
         ImagePullBackOff|InvalidImageName\"}\n        * on(tenant) group_left\n  \
         \      user_state_filter{filter=\"container_imagepull\"}\n      ) > 0\n  \
         \  )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
@@ -500,8 +502,9 @@ spec:
         maintenance\"} == 1)\n"
     - alert: NodeNotReady
       expr: "(\n  rule_pack_kubernetes:node_not_ready:core\n  * on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n    tenant_metadata_info\n)\nor\n(\n  rule_pack_kubernetes:node_not_ready:core\n\
-        \  unless on(tenant) tenant_metadata_info\n)\n"
+        \ owner, tier)\n    max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n\
+        )\nor\n(\n  rule_pack_kubernetes:node_not_ready:core\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 3m
       labels:
         node: '{{ $labels.node }}'
@@ -539,8 +542,9 @@ spec:
         \ 1)\n"
     - alert: TenantHAReplicasDegraded
       expr: "(\n  rule_pack_kubernetes:ha_replicas_degraded:core\n  * on(tenant) group_left(runbook_url,\
-        \ owner, tier)\n    tenant_metadata_info\n)\nor\n(\n  rule_pack_kubernetes:ha_replicas_degraded:core\n\
-        \  unless on(tenant) tenant_metadata_info\n)\n"
+        \ owner, tier)\n    max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n\
+        )\nor\n(\n  rule_pack_kubernetes:ha_replicas_degraded:core\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 15m
       labels:
         severity: warning

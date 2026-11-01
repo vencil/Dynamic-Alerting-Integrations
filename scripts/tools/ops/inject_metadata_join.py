@@ -18,13 +18,16 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3471: which files are rule packs)
+sys.path.insert(0, os.path.join(_THIS_DIR, '..', 'lint'))
+# The join's right-hand side has one spelling (#3483); never the raw metric.
+from check_leftouterjoin_enrichment import ENRICH_RHS  # noqa: E402
 
 # Repo root is 4 levels up: scripts/tools/ops/inject_metadata_join.py.
 RULE_PACKS_DIR = str(Path(__file__).resolve().parents[3] / _lib_consumer_read.RULE_PACKS.directory)
 
-METADATA_JOIN = """
+METADATA_JOIN = f"""
     * on(tenant) group_left(runbook_url, owner, tier)
-      tenant_metadata_info"""
+      {ENRICH_RHS}"""
 
 METADATA_ANNOTATIONS = {
     "runbook_url": '{{ $labels.runbook_url }}',
@@ -135,7 +138,7 @@ def inject_metadata(block, alert_name):
                            f"{'  ' * (expr_indent // 2 + 2)}{expr_content}\n"
                            f"{'  ' * (expr_indent // 2 + 1)})\n"
                            f"{'  ' * (expr_indent // 2 + 1)}* on(tenant) group_left(runbook_url, owner, tier)\n"
-                           f"{'  ' * (expr_indent // 2 + 2)}tenant_metadata_info")
+                           f"{'  ' * (expr_indent // 2 + 2)}{ENRICH_RHS}")
                 result.append(new_expr)
                 in_expr = False
                 continue
@@ -151,7 +154,7 @@ def inject_metadata(block, alert_name):
                     # Find the base indent for expr content
                     base = " " * (expr_indent + 2)
                     result.append(f"{base}* on(tenant) group_left(runbook_url, owner, tier)")
-                    result.append(f"{base}  tenant_metadata_info")
+                    result.append(f"{base}  {ENRICH_RHS}")
                     in_expr = False
                     # Fall through to add this line
 
@@ -164,7 +167,7 @@ def inject_metadata(block, alert_name):
     if in_expr:
         base = " " * (expr_indent + 2)
         result.append(f"{base}* on(tenant) group_left(runbook_url, owner, tier)")
-        result.append(f"{base}  tenant_metadata_info")
+        result.append(f"{base}  {ENRICH_RHS}")
 
     # Add metadata annotations after existing annotations
     if annotations_idx is not None:

@@ -81,6 +81,27 @@ spec:
 - Avoids double-counting
 - Alert threshold accurate under HA
 
+#### The same rule applies to `tenant_metadata_info` joins
+
+Every replica also serves its own copy of `tenant_metadata_info`. Scraped per pod (a Prometheus Operator ServiceMonitor uses endpoints, so each pod is its own target), the same tenant arrives twice, differing only in `instance`/`pod`. If the join that copies metadata into an alert uses the raw metric:
+
+```promql
+* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info
+```
+
+the right-hand side has two series per tenant, Prometheus reports `many-to-many matching not allowed`, and **the whole alert stops evaluating** (it does not just lose labels; it does not fire). Collapse the right-hand side first:
+
+```promql
+* on(tenant) group_left(runbook_url, owner, tier)
+  max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
+```
+
+- `by` lists the labels the exporter serves, rather than `without` listing the labels the scrape adds: a scrape config can add more per-replica labels (a relabelled `node`, say), and any one `without` misses brings the error back. A test compares the `by` list with the label list in `collector.go`, so a label added to the exporter turns it red instead of being collapsed away silently.
+- `check_leftouterjoin_enrichment.py` rejects any join whose right-hand side is not this form; `tests/rulepacks/rule-pack-metadata-replicas_test.yaml` checks a representative alert from every pack against two replica series.
+- The void branch `unless on(tenant) tenant_metadata_info` keeps the raw metric: `unless` only tests presence, and duplicate right-hand series do not make it fail.
+
+**Known limitation: the reload window.** Each replica hot-reloads on its own, so they switch versions at slightly different times. If a tenant's `owner`/`runbook_url`/`tier` changes, the two replicas briefly serve different values, `max by(...)` still leaves two series, and that tenant's alerts hit many-to-many and fail to evaluate for those cycles (`prometheus_rule_evaluation_failures_total` goes up; during those cycles the alerts neither newly fire nor get re-sent). Evaluation recovers once both replicas run the new version. This is not handled for now: picking one series with `topk` would make the labels flip between the two values and change the alert's identity.
+
 ### 4.4 Self-Monitoring (Platform Rule Pack)
 
 4 dedicated alerts monitor threshold-exporter itself:

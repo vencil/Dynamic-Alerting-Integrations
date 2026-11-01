@@ -68,11 +68,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:rabbitmq_queue_messages:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:rabbitmq_queue_messages\n    )\n\
         \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:rabbitmq_queue_messages:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:rabbitmq_queue_messages\n    )\n\
-        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:rabbitmq_queue_messages:max\n      > on(tenant) group_left\n\
+        \      tenant:alert_threshold:rabbitmq_queue_messages\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: rabbitmq_queue_messages
@@ -95,8 +96,9 @@ spec:
       expr: "(\n  (\n    (\n      tenant:rabbitmq_queue_messages:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:rabbitmq_queue_messages_critical\n\
         \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:rabbitmq_queue_messages:max\n      > on(tenant)\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      tenant:rabbitmq_queue_messages:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:rabbitmq_queue_messages_critical\n\
         \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
@@ -122,10 +124,11 @@ spec:
       expr: "(\n  (\n    (\n      tenant:rabbitmq_node_mem_percent:ratio\n      >\
         \ on(tenant) group_left\n      tenant:alert_threshold:rabbitmq_node_mem_percent\n\
         \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:rabbitmq_node_mem_percent:ratio\n     \
-        \ > on(tenant) group_left\n      tenant:alert_threshold:rabbitmq_node_mem_percent\n\
-        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      tenant:rabbitmq_node_mem_percent:ratio\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:rabbitmq_node_mem_percent\n   \
+        \ )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
@@ -149,9 +152,10 @@ spec:
       expr: "(\n  (\n    (\n      tenant:rabbitmq_node_mem_percent:ratio\n      >\
         \ on(tenant) group_left\n      tenant:alert_threshold:rabbitmq_node_mem_percent_critical\n\
         \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:rabbitmq_node_mem_percent:ratio\n     \
-        \ > on(tenant) group_left\n      tenant:alert_threshold:rabbitmq_node_mem_percent_critical\n\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      tenant:rabbitmq_node_mem_percent:ratio\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:rabbitmq_node_mem_percent_critical\n\
         \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
@@ -176,11 +180,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:rabbitmq_connections:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:rabbitmq_connections\n    )\n \
         \   unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:rabbitmq_connections:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:rabbitmq_connections\n    )\n \
-        \   unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:rabbitmq_connections:max\n      > on(tenant) group_left\n  \
+        \    tenant:alert_threshold:rabbitmq_connections\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: rabbitmq_connections
@@ -203,11 +208,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:rabbitmq_consumers:max\n      < on(tenant)\
         \ group_left\n      tenant:alert_threshold:rabbitmq_consumers\n    )\n   \
         \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:rabbitmq_consumers:max\n      < on(tenant)\
-        \ group_left\n      tenant:alert_threshold:rabbitmq_consumers\n    )\n   \
-        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:rabbitmq_consumers:max\n      < on(tenant) group_left\n    \
+        \  tenant:alert_threshold:rabbitmq_consumers\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: rabbitmq_consumers
@@ -230,10 +236,11 @@ spec:
       expr: "(\n  (\n    (\n      tenant:rabbitmq_unacked_messages:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:rabbitmq_unacked_messages\n   \
         \ )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:rabbitmq_unacked_messages:max\n      >\
-        \ on(tenant) group_left\n      tenant:alert_threshold:rabbitmq_unacked_messages\n\
-        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      tenant:rabbitmq_unacked_messages:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:rabbitmq_unacked_messages\n   \
+        \ )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:

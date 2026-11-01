@@ -26,6 +26,10 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from validate_docs_versions import count_rule_packs  # noqa: E402
+# The enrichment join's one spelling (#3483): the example below must match what
+# check_leftouterjoin_enrichment enforces on the real packs.
+from check_leftouterjoin_enrichment import (  # noqa: E402
+    ENRICH_MARKER, ENRICH_RHS, VOID_BRANCH)
 
 # Repo root = FOUR parents up (scripts/tools/dx/<file> → dx → tools → scripts →
 # repo). The original default used three (→ the non-existent scripts/rule-packs/),
@@ -208,10 +212,21 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     lines.append("      - alert: <AlertName>")
     lines.append("        expr: |")
     lines.append("          (")
-    lines.append("            tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>")
+    lines.append("            (")
+    lines.append("              tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>")
+    lines.append("              unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)")
+    lines.append("            )")
+    lines.append(f"            {ENRICH_MARKER}")
+    lines.append(f"              {ENRICH_RHS}")
     lines.append("          )")
-    lines.append("          * on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info")
-    lines.append("          unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)")
+    lines.append("          or")
+    lines.append("          (")
+    lines.append("            (")
+    lines.append("              tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>")
+    lines.append("              unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)")
+    lines.append("            )")
+    lines.append(f"            {VOID_BRANCH}")
+    lines.append("          )")
     lines.append("        annotations:")
     lines.append("          runbook_url: \"{{ $labels.runbook_url }}\"")
     lines.append("          owner: \"{{ $labels.owner }}\"")
@@ -220,7 +235,11 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     lines.append("")
     lines.append("### Dynamic Runbook Injection (v1.11.0)")
     lines.append("")
-    lines.append("Alert Rules 透過 `* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info` 將租戶 metadata 注入 alert labels，再由 annotations 引用。`tenant_metadata_info` 由 threshold-exporter 根據租戶 `_metadata` 配置自動輸出（值永遠為 1），保證 `group_left` join 不會漏掉任何 tenant。")
+    lines.append(f"Alert Rules 透過 `{ENRICH_MARKER} {ENRICH_RHS}` 將租戶 metadata 注入 alert labels，再由 annotations 引用。`tenant_metadata_info` 由 threshold-exporter 根據租戶 `_metadata` 配置自動輸出（值永遠為 1），保證 `group_left` join 不會漏掉任何 tenant。")
+    lines.append("")
+    lines.append("右側一定要先用 `max by(tenant, runbook_url, owner, tier)` 收斂，不能直接 join 原始的 `tenant_metadata_info`：threshold-exporter 跑多個副本，每個副本都會送出這個指標，以 pod 為單位抓取時（例如 Prometheus Operator 的 ServiceMonitor），同一個租戶會有一份 per 副本、只差 `instance`／`pod` 的序列，原始 join 會因 many-to-many 而整條告警評估失敗。`check_leftouterjoin_enrichment.py` 會擋下右側不是上述寫法的 join。")
+    lines.append("")
+    lines.append(f"`or (… {VOID_BRANCH})` 那一半讓沒有 metadata 的租戶照樣告警（只是不帶 runbook／owner／tier）；`unless` 只看有沒有，副本重複不會出錯，所以維持原始指標。")
     lines.append("")
     lines.append(f"若租戶未設定 `_metadata`，`tenant_metadata_info` 不存在，`group_left` 回傳空向量。因此已內建的 {pack_count} 個 Rule Pack 均已加入此 join，但 **自訂 Rule Pack 建議同步採用此 pattern** 以確保 runbook URL 與 owner 資訊可自動傳遞至通知。")
     lines.append("")

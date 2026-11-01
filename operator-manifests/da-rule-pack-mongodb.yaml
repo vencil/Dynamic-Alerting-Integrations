@@ -107,10 +107,11 @@ spec:
       expr: "(\n  (\n    (\n      tenant:mongodb_connections_current:max\n      >\
         \ on(tenant) group_left\n      tenant:alert_threshold:mongodb_connections_current\n\
         \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:mongodb_connections_current:max\n     \
-        \ > on(tenant) group_left\n      tenant:alert_threshold:mongodb_connections_current\n\
-        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      tenant:mongodb_connections_current:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:mongodb_connections_current\n \
+        \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
@@ -132,11 +133,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:mongodb_replication_lag:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:mongodb_replication_lag\n    )\n\
         \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:mongodb_replication_lag:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:mongodb_replication_lag\n    )\n\
-        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:mongodb_replication_lag:max\n      > on(tenant) group_left\n\
+        \      tenant:alert_threshold:mongodb_replication_lag\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 2m
       labels:
         severity: warning
@@ -157,11 +159,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:mongodb_opcounters:rate5m\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:mongodb_opcounters_rate\n    )\n\
         \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:mongodb_opcounters:rate5m\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:mongodb_opcounters_rate\n    )\n\
-        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:mongodb_opcounters:rate5m\n      > on(tenant) group_left\n \
+        \     tenant:alert_threshold:mongodb_opcounters_rate\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
@@ -181,10 +184,10 @@ spec:
     - alert: MongoDBHighPageFaults
       expr: "(\n  (\n    tenant:mongodb_page_faults:rate5m > 100\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    tenant:mongodb_page_faults:rate5m > 100\n    unless on(tenant)\n\
-        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    tenant:mongodb_page_faults:rate5m\
+        \ > 100\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
@@ -204,10 +207,10 @@ spec:
     - alert: MongoDBConnectionSaturation
       expr: "(\n  (\n    tenant:mongodb_connection_usage:ratio > 0.8\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    tenant:mongodb_connection_usage:ratio > 0.8\n    unless on(tenant)\n\
-        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    tenant:mongodb_connection_usage:ratio\
+        \ > 0.8\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
