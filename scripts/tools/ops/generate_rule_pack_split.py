@@ -463,8 +463,10 @@ def to_prometheus_rule_crd(
         "metadata": {
             "name": base_name,
             "namespace": namespace,
+            # #3427: the selector labels from the one definition every
+            # PrometheusRule emitter shares (`_lib_consumer_read`).
             "labels": {
-                "prometheus": "kube-prometheus",
+                **_lib_consumer_read.PROMETHEUS_RULE_SELECTOR_LABELS,
                 "role": "alert-rules",
             },
         },

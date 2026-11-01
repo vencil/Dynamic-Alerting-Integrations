@@ -119,11 +119,9 @@ _LANG = detect_cli_lang()
 # 雙 Label 匹配). The docs promised both labels below on generated
 # PrometheusRules while only `prometheus` was emitted.
 # --selector-label adds / overrides per key, e.g. for a Helm release that is
-# not named kube-prometheus-stack.
-_RULE_SELECTOR_LABELS = {
-    "prometheus": "kube-prometheus",
-    "release": "kube-prometheus-stack",
-}
+# not named kube-prometheus-stack. #3427: the PrometheusRule pair is the one
+# definition every PrometheusRule emitter shares (`_lib_consumer_read`).
+_RULE_SELECTOR_LABELS = _lib_consumer_read.PROMETHEUS_RULE_SELECTOR_LABELS
 _MONITOR_SELECTOR_LABELS = {
     "release": "kube-prometheus-stack",
 }

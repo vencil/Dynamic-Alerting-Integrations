@@ -14,7 +14,7 @@ introduction). Delete or typo ONE copy and every promtool fixture stays green un
 carries a fifth e-tenant (breach + maintenance + NO metadata, PR #977) — and in
 production an onboarding tenant (no metadata yet) gets paged during its maintenance
 window. This lint kills the "one arm forgets / typo drifts" class mechanically at the
-SOURCE (rule-packs/; the configmap / operator-manifest copies are drift-gated against it).
+SOURCE (rule-packs/; the configmap copies are drift-gated against it).
 
 What this guards (and deliberately does NOT)
 --------------------------------------------

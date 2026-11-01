@@ -216,6 +216,8 @@ class TestConvertRulesToCRD:
         assert labels["migrated-from"] == "configmap"
         assert labels["app.kubernetes.io/part-of"] == "dynamic-alerting"
         assert labels["prometheus"] == "kube-prometheus"
+        # #3427: both selector labels operator-generate emits, not only one.
+        assert labels["release"] == "kube-prometheus-stack"
 
 
 # ────────────────────────────────────────────────────────────────────────────

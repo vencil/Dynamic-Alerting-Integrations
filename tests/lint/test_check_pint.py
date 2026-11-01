@@ -56,8 +56,8 @@ def test_pint_version_sync_between_wrapper_and_ci():
 def test_pint_config_scopes_to_rule_pack_sources():
     """The gate must scope to the canonical rule-pack sources.
 
-    The 16 GENERATED `configmap-rules-*.yaml` copies and operator-manifests/ stay
-    out (they carry `DO NOT EDIT` and are synced by check_rulepack_sync.py); the
+    The 16 GENERATED `configmap-rules-*.yaml` copies stay out (they carry
+    `DO NOT EDIT` and are synced by check_rulepack_sync.py); the
     hand-maintained `configmap-rules-platform*.y(a)ml` is IN — pint reads its
     ConfigMap-embedded rules via `parser.relaxed`, so the older "ConfigMap-wrapped →
     unparseable" framing no longer applies to it.

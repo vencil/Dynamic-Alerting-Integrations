@@ -1,33 +1,42 @@
 #!/usr/bin/env python3
 """Rule-pack copy drift guard (ADR-024 PR3-pre).
 
-Every rule pack lives in THREE places that must stay semantically identical:
+Every rule pack lives in TWO committed places that must stay semantically
+identical:
 
   1. rule-packs/rule-pack-<name>.yaml                 (canonical source)
   2. k8s/03-monitoring/configmap-rules-<name>.yaml    (ConfigMap deploy copy)
-  3. operator-manifests/da-rule-pack-<name>.yaml      (PrometheusRule CRD copy)
 
-The three have DIFFERENT serializations (raw `groups:` block scalars vs a
-ConfigMap wrapping rules in `data:` keys vs a CRD with machine-serialized
-single-line `expr` strings), so a raw `diff` / `sha256sum` ALWAYS differs even
-when the rules are identical — a byte comparison is the wrong tool here.
+⛔ There is no committed third copy any more (#3427). The PrometheusRule CRDs
+(`da-rule-pack-<name>.yaml`) used to be committed under `operator-manifests/`
+and compared here by rule content only — so they lost the `release` selector
+label the generator had started to emit, and this guard stayed green. They are
+now generated on demand (`da-tools operator-generate --components rules
+--output-dir <dir>`), and what the generator writes — one PrometheusRule per
+pack, rules equal to the source by this module's normalisation, both selector
+labels — is pinned by tests/ops/test_operator_generate_rule_copies.py.
+
+The two have DIFFERENT serializations (raw `groups:` block scalars vs a
+ConfigMap wrapping rules in `data:` keys), so a raw `diff` / `sha256sum`
+ALWAYS differs even when the rules are identical — a byte comparison is the
+wrong tool here.
 
 This guard instead compares them SEMANTICALLY: each source is parsed, every
 rule is reduced to a canonical identity → content map (expr whitespace
-collapsed; all other fields YAML-normalized), and the three maps are compared.
+collapsed; all other fields YAML-normalized), and the two maps are compared.
 Comparing PARSED structures (not raw text) is what makes the check robust to
 serialization / YAML-emitter differences — the fragility that bites a naive
 text diff simply does not exist once both sides are valid YAML parsed into
 the same shape.
 
 Why this matters: nothing else enforces content parity — the `Rule Pack stats
-drift` hook only counts rules, so a hot-fix that edits one copy but forgets
-another would ship behavior-divergent PromQL to production (a copy firing on
+drift` hook only counts rules, so a hot-fix that edits the source but forgets
+the copy would ship behavior-divergent PromQL to production (a copy firing on
 stale thresholds) and CI would wave it through. This guard makes any such
 divergence a hard CI failure.
 
 Exit codes:
-    0  All packs' three copies are semantically identical
+    0  Every pack's two copies are semantically identical
     1  Drift detected (--ci) — details printed
     2  Error (missing file, YAML parse failure)
 
@@ -110,8 +119,9 @@ def _norm_expr(expr: Any) -> str:
     hand-authored rule as a faithful copy of a pack it merely resembles — which
     is the provenance check that decides whether the platform contracts apply.
 
-    Verified no-op on the tree as it stands: all 930 shipped expressions
-    normalise identically before and after (none currently carries a comment or
+    Verified no-op on the tree as it stood: all 930 shipped expressions (643
+    since #3427 dropped the committed PrometheusRule copy) normalise
+    identically before and after (none currently carries a comment or
     a string literal containing any of the characters above).
 
     An UNTERMINATED quote matches nothing here and stays in the code stream, so
@@ -219,12 +229,6 @@ def _groups_from_configmap(path: Path) -> List[dict]:
     return _manifest_groups(path, "ConfigMap")
 
 
-def _groups_from_operator(path: Path) -> List[dict]:
-    """A PrometheusRule's `spec.groups`, read as the rule file the Prometheus
-    Operator writes from it is read by Prometheus' rule loader (#3206)."""
-    return _manifest_groups(path, "PrometheusRule")
-
-
 def _diff_maps(canonical: Dict[str, str], other: Dict[str, str]) -> List[str]:
     """Return human-readable divergences of `other` vs the canonical source."""
     findings: List[str] = []
@@ -239,13 +243,12 @@ def _diff_maps(canonical: Dict[str, str], other: Dict[str, str]) -> List[str]:
     return findings
 
 
-def copy_paths(repo: Path, name: str) -> Tuple[Path, Path]:
-    """(ConfigMap copy, PrometheusRule copy) of pack *name* under *repo*: the
-    file names their generators write, both derived from the one declaration
-    (#3471: `CONFIGMAP_RULES.file_name`, `OPERATOR_RULES.file_name`)."""
+def copy_path(repo: Path, name: str) -> Path:
+    """The ConfigMap copy of pack *name* under *repo*: the file name its
+    generator writes, derived from the one declaration (#3471:
+    `CONFIGMAP_RULES.file_name`)."""
     cr = _consumer_read()
-    return (repo / cr.CONFIGMAP_RULES.directory / cr.CONFIGMAP_RULES.file_name(name),
-            repo / cr.OPERATOR_RULES.directory / cr.OPERATOR_RULES.file_name(name))
+    return repo / cr.CONFIGMAP_RULES.directory / cr.CONFIGMAP_RULES.file_name(name)
 
 
 def source_path(repo: Path, name: str) -> Path:
@@ -255,64 +258,49 @@ def source_path(repo: Path, name: str) -> Path:
     return repo / cr.RULE_PACKS.directory / cr.RULE_PACKS.file_name(name)
 
 
-def read_copies(repo: Path, packs: List[Path]) -> Dict[str, Tuple[List[dict], List[dict], List[dict]]]:
-    """{pack: (rule-pack groups, configmap groups, operator groups)} for every
-    rule pack file of *packs* whose two copies exist, read the way their
-    consumers read them (#3206) in two da-read runs for the whole set — not
-    three per pack. Raises `RuleFilesRefused` naming any copy Prometheus' rule
-    loader refuses."""
+def read_copies(repo: Path, packs: List[Path]) -> Dict[str, Tuple[List[dict], List[dict]]]:
+    """{pack: (rule-pack groups, configmap groups)} for every rule pack file
+    of *packs* whose copy exists, read the way their consumers read them
+    (#3206) in two da-read runs for the whole set — not two per pack. Raises
+    `RuleFilesRefused` naming any copy Prometheus' rule loader refuses."""
     cr = _consumer_read()
     present = [(cr.RULE_PACKS.member(p), p) for p in packs
-               if all(c.exists() for c in copy_paths(repo, cr.RULE_PACKS.member(p)))]
+               if copy_path(repo, cr.RULE_PACKS.member(p)).exists()]
     rule_packs = cr.prometheus_rule_files([p for _, p in present])
     manifests = cr.require_read(cr.manifest_rule_file_results(
-        [c for n, _ in present for c in copy_paths(repo, n)]))
+        [copy_path(repo, n) for n, _ in present]))
     out = {}
     for (n, _), rf in zip(present, rule_packs):
-        cm, op = (str(c) for c in copy_paths(repo, n))
+        cm = str(copy_path(repo, n))
         out[n] = (rf.groups,
                   [g for m in manifests if m.manifest == cm and m.kind == "ConfigMap"
-                   for g in m.groups],
-                  [g for m in manifests if m.manifest == op and m.kind == "PrometheusRule"
                    for g in m.groups])
     return out
 
 
 def check_pack(repo: Path, name: str,
-               copies: "Tuple[List[dict], List[dict], List[dict]] | None" = None,
+               copies: "Tuple[List[dict], List[dict]] | None" = None,
                source: "Path | None" = None,
                ) -> Tuple[bool, List[str]]:
-    """Compare the three copies of one pack (*copies* from `read_copies`;
+    """Compare the two copies of one pack (*copies* from `read_copies`;
     read here when not given, the source from *source*, by default the
     declared ``.yaml`` name). Returns (ok, findings)."""
     rp = source if source is not None else source_path(repo, name)
-    cm, op = copy_paths(repo, name)
+    cm = copy_path(repo, name)
 
-    findings: List[str] = []
     if not cm.exists():
-        findings.append(f"configmap copy missing: {cm}")
-    if not op.exists():
-        findings.append(f"operator copy missing: {op}")
-    if findings:
-        return False, findings
+        return False, [f"configmap copy missing: {cm}"]
 
     if copies is None:
-        copies = (_groups_from_rulepack(rp), _groups_from_configmap(cm),
-                  _groups_from_operator(op))
-    canonical = _extract(copies[0])
-    cm_map = _extract(copies[1])
-    op_map = _extract(copies[2])
-
-    for label, other in (("configmap", cm_map), ("operator", op_map)):
-        for f in _diff_maps(canonical, other):
-            findings.append(f"[{label}] {f}")
-
+        copies = (_groups_from_rulepack(rp), _groups_from_configmap(cm))
+    findings = [f"[configmap] {f}"
+                for f in _diff_maps(_extract(copies[0]), _extract(copies[1]))]
     return (len(findings) == 0), findings
 
 
 def main() -> "int | Report":
     try_utf8_stdout()
-    parser = argparse.ArgumentParser(description="Rule-pack 3-copy semantic drift guard")
+    parser = argparse.ArgumentParser(description="Rule-pack copy semantic drift guard")
     parser.add_argument("--ci", action="store_true", help="exit 1 on any drift")
     parser.add_argument("--json", action="store_true", help="machine-readable output")
     args = parser.parse_args()
@@ -361,8 +349,8 @@ def main() -> "int | Report":
               + (f" — {bad} with drift" if bad else ""))
 
     if any_drift and args.ci:
-        print("\n❌ Rule-pack copy drift detected. The 3 copies "
-              "(rule-packs/ ↔ configmap ↔ operator) must match semantically.",
+        print("\n❌ Rule-pack copy drift detected. The 2 copies "
+              "(rule-packs/ ↔ configmap) must match semantically.",
               file=sys.stderr)
     status = EXIT_VIOLATION if any_drift and args.ci else EXIT_OK
     if args.json:

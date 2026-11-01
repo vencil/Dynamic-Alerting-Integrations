@@ -117,7 +117,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 :   Open Container Initiative standard container/Helm chart repository. This platform's Helm charts and Docker images are published to `ghcr.io/vencil/`.
 
 **Operator CRD**
-:   Prometheus Operator Custom Resource Definitions (`ServiceMonitor` / `PrometheusRule` / `AlertmanagerConfig`). The platform supports integrating existing Operator environments via operator-manifests.
+:   Prometheus Operator Custom Resource Definitions (`ServiceMonitor` / `PrometheusRule` / `AlertmanagerConfig`). The platform integrates with existing Operator environments by generating these CRDs on demand with `da-tools operator-generate` (the repo commits no generated copy).
 
 ## P
 
@@ -131,7 +131,7 @@ This page lists common terms and abbreviations found throughout the Dynamic Aler
 :   A Kubernetes Volume type that mounts multiple ConfigMaps into a single directory. This platform uses it to mount every Rule Pack ConfigMap into Prometheus's rules directory, each set to `optional: true`.
 
 **Prometheus Operator**
-:   The CNCF Kubernetes operator that manages Prometheus / Alertmanager via CRDs. The platform can integrate with an existing Operator environment (see Operator CRD, operator-manifests).
+:   The CNCF Kubernetes operator that manages Prometheus / Alertmanager via CRDs. The platform can integrate with an existing Operator environment (see Operator CRD).
 
 ## R
 

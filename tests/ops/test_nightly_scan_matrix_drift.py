@@ -2733,7 +2733,7 @@ _SCAN_EXEMPT: dict[str, str] = {
 # Trees whose contents are installed on a cluster or handed to a customer. If an
 # exempt Dockerfile ever becomes reachable from one of these, the exemption's
 # stated premise is false and the test says so.
-_DEPLOYABLE_TREES = ("helm", "k8s", "operator-manifests", "try-local")
+_DEPLOYABLE_TREES = ("helm", "k8s", "try-local")
 
 
 def _dockerfile_contexts() -> dict[str, str]:

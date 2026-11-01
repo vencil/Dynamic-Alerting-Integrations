@@ -1736,7 +1736,7 @@ da-tools drift-detect --dirs conf.d --mode configmap
 promtool query instant 'count(ALERTS{alertstate="firing"})'
 ```
 
-> ⚠️ Rollback 後 Operator 產出的 CRD 檔案仍保留在 `operator-manifests/` 目錄，可隨時重新 apply。
+> ⚠️ Rollback 不會刪除你先前以 `--output-dir` 寫出的 CRD 檔案，可隨時重新 apply；沒留檔時，用當初產生它的指令重跑（repo 不提交這份產物）：migration 的輸出用原本的 `--source-dir`／`--config-dir` 加 `--output-dir <dir>` 重跑 `da-tools migrate-to-operator`；從 rule pack 產生的 CRD 重跑 `da-tools operator-generate --output-dir <dir>`。
 
 ---
 

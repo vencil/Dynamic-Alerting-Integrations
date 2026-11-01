@@ -153,7 +153,7 @@ def test_a_file_prometheus_refuses_is_named_not_skipped(tmp_path):
 
 
 def test_main_names_a_refused_file_rc2(tmp_path, monkeypatch, capsys):
-    for d in ("rule-packs", "operator-manifests", "k8s/03-monitoring"):
+    for d in ("rule-packs", "k8s/03-monitoring"):
         (tmp_path / d).mkdir(parents=True)
     (tmp_path / "rule-packs" / "rule-pack-t.yaml").write_text(
         "groups:\n  - name: g\n    rulez: []\n", encoding="utf-8")
@@ -165,13 +165,12 @@ def test_main_names_a_refused_file_rc2(tmp_path, monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("where", ["rule-packs/rule-pack-t.yaml",
-                                   "operator-manifests/da-rule-pack-t.yaml",
                                    "k8s/03-monitoring/configmap-rules-t.yaml"])
 def test_main_judges_a_file_by_its_readers_not_its_directory(tmp_path, monkeypatch, where):
     """#3426 F7: main reads every target through `rule_files_in`. A
     ConfigMap under rule-packs/ (or a raw pack among the manifests) used to
     go to the wrong reader by its directory: refused, or read as no rules."""
-    for d in ("rule-packs", "operator-manifests", "k8s/03-monitoring"):
+    for d in ("rule-packs", "k8s/03-monitoring"):
         (tmp_path / d).mkdir(parents=True, exist_ok=True)
     (tmp_path / where).write_text(_CM.format(op="sum"), encoding="utf-8")
     monkeypatch.setattr(lint, "_repo_root", lambda: tmp_path)
@@ -184,7 +183,6 @@ def test_main_judges_a_file_by_its_readers_not_its_directory(tmp_path, monkeypat
 def test_main_exit_codes(tmp_path, monkeypatch):
     """main(--ci) returns 1 on a violation, 0 when clean."""
     (tmp_path / "rule-packs").mkdir()
-    (tmp_path / "operator-manifests").mkdir()
     (tmp_path / "k8s" / "03-monitoring").mkdir(parents=True)
     pack = tmp_path / "rule-packs" / "rule-pack-t.yaml"
     monkeypatch.setattr(lint, "_repo_root", lambda: tmp_path)
@@ -198,7 +196,7 @@ def test_main_exit_codes(tmp_path, monkeypatch):
 
 
 def _ha_tree(tmp_path, monkeypatch):
-    for d in ("rule-packs", "operator-manifests", "k8s/03-monitoring"):
+    for d in ("rule-packs", "k8s/03-monitoring"):
         (tmp_path / d).mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(lint, "_repo_root", lambda: tmp_path)
     monkeypatch.setattr(sys, "argv", ["check_ha_threshold_aggregation.py", "--ci"])
@@ -226,7 +224,7 @@ def test_main_names_an_undeclared_yaml_in_rule_packs(tmp_path, monkeypatch, caps
 def test_live_repo_all_max():
     """Dogfood: every committed copy aggregates user_threshold with max."""
     repo = Path(__file__).resolve().parents[2]
-    # #3471: every declared rule file of the three families.
+    # #3471: every declared rule file of the declared families.
     targets = [p for s in cr.RULE_SOURCES for p in s.files_under(repo)]
     offenders = {}
     for path in targets:

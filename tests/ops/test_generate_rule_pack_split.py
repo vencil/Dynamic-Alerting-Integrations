@@ -465,6 +465,7 @@ class TestToPrometheusRuleCrd:
         assert crd["metadata"]["name"] == "rule-pack-clickhouse"
         assert crd["metadata"]["namespace"] == "monitoring"
         assert crd["metadata"]["labels"]["prometheus"] == "kube-prometheus"
+        assert crd["metadata"]["labels"]["release"] == "kube-prometheus-stack"  # #3427
         assert crd["spec"]["groups"] == groups
 
     def test_custom_namespace(self):

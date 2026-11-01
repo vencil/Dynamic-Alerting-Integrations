@@ -19,7 +19,7 @@ purpose: |
 
   isFiring(current, threshold, inverted)
     Canonical threshold-crossing primitive. Strict comparison to mirror
-    the real Prometheus alert rules in operator-manifests/*.yaml (e.g.
+    the real Prometheus alert rules in rule-packs/*.yaml (e.g.
     `... > 0.05`, or `< threshold` for inverted/lower-bound metrics): a
     reading exactly equal to the threshold does NOT fire. Shared by
     simulateAlerts + simulateWithDedup so the two simulator surfaces can
@@ -276,7 +276,7 @@ function validateConfig(config, selectedPacks) {
 // ─────────────────────────────────────────────────────────────────────
 // Threshold-crossing primitive — single source of truth for the operator.
 // Strict `>` (or `<` for inverted/lower-bound) to mirror the real
-// Prometheus rules in operator-manifests/*.yaml (e.g. `... > 0.05`): a
+// Prometheus rules in rule-packs/*.yaml (e.g. `... > 0.05`): a
 // reading exactly at the threshold does NOT fire.
 // ─────────────────────────────────────────────────────────────────────
 function isFiring(current, threshold, inverted) {

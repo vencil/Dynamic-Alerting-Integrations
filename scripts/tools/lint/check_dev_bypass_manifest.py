@@ -15,7 +15,7 @@ NON-k8s manifests the runtime k8s-detection cannot see.
 HARD block: there is no bypass tag. The switch must never be committed to a
 manifest. (Doc/comment lines that merely *mention* it are allowed.)
 
-Scope:   helm/**/*.ya?ml + k8s/**/*.ya?ml + operator-manifests/**/*.ya?ml
+Scope:   helm/**/*.ya?ml + k8s/**/*.ya?ml
 Forbid:  TA_DEV_BYPASS_AUTH | --dev-bypass-auth | dev-bypass-auth: (case-insensitive)
 
 Usage:   python3 scripts/tools/lint/check_dev_bypass_manifest.py [--ci]
@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
-SCAN_DIRS = ("helm", "k8s", "operator-manifests")
+SCAN_DIRS = ("helm", "k8s")
 # tenant-api uses TA_DEV_BYPASS_AUTH / --dev-bypass-auth; recipe-preview (#657) uses
 # PREVIEW_DEV_BYPASS_AUTH. Both are local-dev-only escape hatches that must never
 # appear in a deployable manifest (ADR-022 L4); list every component's token here.

@@ -1477,9 +1477,29 @@ class RuleSource(NamedTuple):
 #: patterns for it, and no second glob exists.
 RULE_PACKS = RuleSource(
     "rule-packs", ("rule-pack-*.yaml", "rule-pack-*.yml"), ("threshold-registry.yaml",))
-#: operator-manifests/: the PrometheusRule copies of the rule packs.
+#: The PrometheusRule copies of the rule packs: how ``operator-generate``
+#: names each one it writes (``da-rule-pack-<pack>.yaml``, object name the
+#: stem) — into whatever ``--output-dir`` its caller gives. ⛔ NOT a place
+#: this repo ships rule files from (#3427): the repo no longer commits a copy
+#: (the committed ``operator-manifests/`` drifted from the generator while
+#: the drift gate compared rule content only), so this entry has no
+#: ``directory`` and is not in ``RULE_SOURCES``. It is a RuleSource for its
+#: naming helpers (``prefix`` / ``member`` / ``file_name`` / ``file_stem``);
+#: ``files_under`` means nothing for it. What the generator writes is pinned
+#: by ``tests/ops/test_operator_generate_rule_copies.py``.
 OPERATOR_RULES = RuleSource(
-    "operator-manifests", ("da-rule-pack-*.yaml", "da-rule-pack-*.yml"), ())
+    "", ("da-rule-pack-*.yaml", "da-rule-pack-*.yml"), ())
+#: The labels a Prometheus Operator's ``ruleSelector`` selects a
+#: PrometheusRule by (#2075; installs differ on which one, so both:
+#: docs/integration/operator-prometheus-integration.md § ruleSelector). ⛔ The
+#: one definition (#3427): every tool that emits a PrometheusRule
+#: (``operator-generate``, ``migrate-to-operator``, ``rule-pack-split``)
+#: labels it from here — a copy that spelled only ``prometheus`` is how one
+#: of them shipped CRDs a ``release``-selecting Prometheus never loads.
+PROMETHEUS_RULE_SELECTOR_LABELS: "dict[str, str]" = {
+    "prometheus": "kube-prometheus",
+    "release": "kube-prometheus-stack",
+}
 #: k8s/03-monitoring/: the rules ConfigMaps Prometheus mounts — the copies of
 #: the rule packs and the hand-authored platform rules.
 CONFIGMAP_RULES = RuleSource(
@@ -1506,7 +1526,7 @@ CONFIGMAP_RULES = RuleSource(
 #: ⛔ Every place this repo ships rule files from. A rule file anywhere else
 #: is not read by the repo's rule contracts (``scripts/tools/lint/_rule_tree.py``);
 #: add it here, or to ``CHART_VALUES_RULES``.
-RULE_SOURCES: "tuple[RuleSource, ...]" = (RULE_PACKS, OPERATOR_RULES, CONFIGMAP_RULES)
+RULE_SOURCES: "tuple[RuleSource, ...]" = (RULE_PACKS, CONFIGMAP_RULES)
 
 
 #: ``ChartValuesRules.shape``: the value at the key path is a whole rule
