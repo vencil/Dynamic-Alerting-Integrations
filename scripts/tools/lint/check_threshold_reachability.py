@@ -1935,7 +1935,12 @@ def _walk_defaults_keys(node: object, prefix: str = "",
             path = f"{prefix}.{k}" if prefix else str(k)
             sub = _walk_defaults_keys(v, path, depth + 1)
             # `str(k)` is the key AS WRITTEN — never re-split out of `path`.
-            keys[path] = KeyInfo(depth, str(k), bool(sub))
+            # ⛔ "has children" means "the value is not a scalar": an EMPTY
+            # mapping or a list of scalars yields no sub-keys but still fails
+            # `map[string]float64` decoding (#3478 — once the flat dimensional
+            # arm went, `'x{l="v"}': {}` passed the gate as if it were a leaf).
+            keys[path] = KeyInfo(depth, str(k),
+                                 bool(sub) or isinstance(v, (dict, list)))
             keys.update(sub)
     elif isinstance(node, list):
         for item in node:
@@ -3151,7 +3156,7 @@ def _report_placement(face: str, keys: dict[str, KeyInfo], errors: list[str]) ->
             # so "no key of that name exists" would be false.
             errors.append(
                 f"CRITICAL-IN-DEFAULTS: {face} puts {k!r} at the top level of "
-                "`defaults:` but gives it a MAPPING value. `Defaults` is "
+                "`defaults:` but gives it a MAPPING value or a list. `Defaults` is "
                 "`map[string]float64`, so this does not decode: the whole file "
                 "is rejected and NO series is emitted — not the critical one, "
                 "and not the warning-tier fallback the flat case would have "
@@ -3261,7 +3266,7 @@ def _report_placement(face: str, keys: dict[str, KeyInfo], errors: list[str]) ->
             # defect had a guard certifying it.
             errors.append(
                 f"DIMENSIONAL-IN-DEFAULTS: {face} puts {k!r} at the top level of "
-                "`defaults:` with a MAPPING value. `Defaults` is "
+                "`defaults:` with a MAPPING value or a list. `Defaults` is "
                 "`map[string]float64`, so the file does not decode and NOTHING "
                 "is emitted. Give the key a scalar value. (#1218 / TRK-344)"
             )

@@ -652,6 +652,21 @@ def test_a_flat_dimensional_key_in_a_defaults_face_is_legal():
                 if "DIMENSIONAL-IN-DEFAULTS" in e], result
 
 
+@pytest.mark.parametrize("value", [{}, [], [1, 2]])
+def test_a_flat_dimensional_key_with_a_non_scalar_value_is_still_an_error(value):
+    """#3478 review: with the flat arm gone, a dimensional key whose value is an
+    EMPTY mapping or a list of scalars walked as a leaf (no sub-keys) and passed.
+    `Defaults` is `map[string]float64`, so it does not decode; the walk now
+    marks any non-scalar value as having children."""
+    walked = gate._walk_defaults_keys({'redis_q{queue="a"}': value})
+    dim = [e for e in gate.run_check(
+        demand=set(), supply=set(), deferred=set(), known_unwired={},
+        defaults_faces=({"probe": walked}, {}))["errors"]
+        if "DIMENSIONAL-IN-DEFAULTS" in e]
+    assert len(dim) == 1, dim
+    assert "MAPPING value" in dim[0], dim[0]
+
+
 def test_critical_must_be_a_SUFFIX_not_a_substring():
     """⛔ The rule is about the SUFFIX, because that is what the resolver keys
     off: `resolveCriticalRows` filters on `strings.HasSuffix(key, "_critical")`

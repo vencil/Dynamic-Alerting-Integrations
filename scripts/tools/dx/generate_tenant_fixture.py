@@ -304,7 +304,8 @@ def _gen_defaults_yaml(
                     f"the critical tier from tenant overrides keyed on "
                     f"`defaults[<base>]`), and a `key{{label=…}}` key is served "
                     f"only when the root `dimensions:` declares its labels, "
-                    f"which this tool does not write — either way no series. "
+                    f"which this tool does not write — either way the intended "
+                    f"row is not served. "
                     f"Put the base key in `defaults:` and the tier in a "
                     f"`<tenant>.yaml` override. (#1218 / #1412 / #3478)"
                 )
