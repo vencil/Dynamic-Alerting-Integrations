@@ -571,7 +571,7 @@ groups:
           (
             rule_pack_kubernetes:pod_container_high_cpu_warning:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -610,7 +610,7 @@ groups:
           (
             rule_pack_kubernetes:pod_container_high_cpu_critical:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -642,7 +642,7 @@ groups:
           (
             rule_pack_kubernetes:pod_container_high_memory_warning:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -672,7 +672,7 @@ groups:
           (
             rule_pack_kubernetes:pod_container_high_memory_critical:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -711,7 +711,7 @@ groups:
           (
             rule_pack_kubernetes:pod_cpu_throttled_warning:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -743,7 +743,7 @@ groups:
           (
             rule_pack_kubernetes:pod_cpu_throttled_critical:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -782,7 +782,7 @@ groups:
           (
             rule_pack_kubernetes:container_oom_killed_warning:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -813,7 +813,7 @@ groups:
           (
             rule_pack_kubernetes:container_oom_killed_critical:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -857,7 +857,7 @@ groups:
               (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -904,7 +904,7 @@ groups:
               (user_state_filter{filter="maintenance"} == 1)
             )
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -1212,7 +1212,7 @@ groups:
           (
             rule_pack_kubernetes:node_not_ready:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
@@ -1340,7 +1340,7 @@ groups:
           (
             rule_pack_kubernetes:ha_replicas_degraded:core
             * on(tenant) group_left(runbook_url, owner, tier)
-              tenant_metadata_info
+              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
           )
           or
           (
