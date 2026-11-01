@@ -64,8 +64,8 @@ def test_the_go_real_generator_tests_build_every_registered_reader() -> None:
     only (#3343). Go cannot import this register, so the Go list is pinned
     to it here: a reader added on either side without the other is red."""
     import re
-    src = (REPO_ROOT / "components/tenant-api/internal/handler/"
-           "generator_real_test.go").read_text(encoding="utf-8")
+    go_test = REPO_ROOT / "components/tenant-api/internal/handler/generator_real_test.go"
+    src = go_test.read_text(encoding="utf-8")
     block = re.search(r"var generatorTools = \[\]\*generatorTool\{(.*?)\n\}", src, re.S)
     assert block, "generatorTools list not found — the Go test was restructured"
     go_tools = re.findall(r'env:\s*"([A-Z_]+)",\s*name:\s*"([^"]+)",\s*'
