@@ -70,6 +70,7 @@ tests:
         alertname: PodContainerCPUThrottled
         exp_alerts:
           - exp_labels:
+              metric_group: container_cpu_throttle
               severity: warning
               tenant: db-a
               version: default
@@ -107,6 +108,7 @@ tests:
         alertname: PodContainerCPUThrottled
         exp_alerts:
           - exp_labels:
+              metric_group: container_cpu_throttle
               severity: warning
               tenant: db-b
               version: default
@@ -216,6 +218,7 @@ tests:
         alertname: PodContainerCPUThrottledCritical
         exp_alerts:
           - exp_labels:
+              metric_group: container_cpu_throttle
               severity: critical
               tenant: db-f
               version: default
@@ -343,6 +346,7 @@ tests:
         alertname: PodContainerCPUThrottled
         exp_alerts:
           - exp_labels:
+              metric_group: container_cpu_throttle
               severity: warning
               tenant: db-j
               version: v2

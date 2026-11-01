@@ -44,6 +44,7 @@ tests:
         alertname: PodContainerHighCPU
         exp_alerts:
           - exp_labels:
+              metric_group: container_cpu
               severity: warning
               tenant: db-x
               version: default
@@ -102,6 +103,7 @@ tests:
         alertname: PodContainerHighCPU
         exp_alerts:
           - exp_labels:
+              metric_group: container_cpu
               severity: warning
               tenant: db-z
               version: default
@@ -139,6 +141,7 @@ tests:
         alertname: PodContainerHighCPU
         exp_alerts:
           - exp_labels:
+              metric_group: container_cpu
               severity: warning
               tenant: db-w
               version: v2
@@ -184,6 +187,7 @@ tests:
         alertname: PodContainerHighCPU
         exp_alerts:
           - exp_labels:
+              metric_group: container_cpu
               severity: warning
               tenant: db-m
               version: default
