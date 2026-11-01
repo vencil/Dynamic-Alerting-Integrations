@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/vencil/tenant-api/internal/rbac"
 	cfg "github.com/vencil/threshold-exporter/pkg/config"
 )
 
@@ -138,6 +139,63 @@ func TestBatchEndpoints_RefusedThresholdRatchet(t *testing.T) {
 			t.Parallel()
 			w, _ := serveBatch(t, nonFiniteTree(held), ep, map[string]string{"_silent_mode": "critical"})
 			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), notice) {
+				t.Errorf("%d %s", w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
+// GET: a refused threshold value on disk is a validation notice (the
+// self-ratchet a reserved value gets, SelfRatchetValues), not a validation
+// warning (which says what blocks a write) — API-managed and git-managed alike.
+func TestGetTenant_RefusedThresholdIsANotice(t *testing.T) {
+	t.Parallel()
+	const want = `mysql_connections "abc" is not a threshold the exporter reads`
+	for name, file := range map[string]string{
+		"api":  "tenants:\n  tx:\n    mysql_connections: \"abc\"\n",
+		"git":  "tenants:\n  tx:\n    mysql_connections: \"abc\"\n  ty:\n    mysql_connections: \"70\"\n",
+		"null": "tenants:\n  tx:\n    mysql_connections: null\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			configDir := setupConfigDir(t, map[string]string{
+				"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+				"tx.yaml":        file,
+			})
+			detail := getTenantDetail(t, &Deps{ConfigDir: configDir}, "tx")
+			all := strings.Join(append(append([]string(nil), detail.Warnings...), detail.Notices...), "\n")
+			if name == "null" {
+				if strings.Contains(all, "is not a threshold the exporter reads") {
+					t.Errorf("a null is reported: warnings %q notices %q", detail.Warnings, detail.Notices)
+				}
+				return
+			}
+			if strings.Contains(strings.Join(detail.Warnings, "\n"), want) ||
+				!strings.Contains(strings.Join(detail.Notices, "\n"), "NOTICE: tenant=tx: "+want) {
+				t.Errorf("warnings %q notices %q", detail.Warnings, detail.Notices)
+			}
+		})
+	}
+}
+
+// A threshold value finding about another tenant of the file goes through
+// the same disclosure as a reserved one (DiscloseKeyValidation, #3039): a
+// caller who may not read that tenant gets neither its value nor its key,
+// only the fixed "another place in the file" notice. Both shapes that put
+// another tenant in the file: a shared file, and a file whose stem is not
+// the id it declares (the flat-KV fallback for the stem's tenant).
+func TestGetTenant_OtherTenantsThresholdFindingIsWithheld(t *testing.T) {
+	t.Parallel()
+	for name, file := range map[string]string{
+		"shared":      "tenants:\n  " + orgEnfTenantIn + ":\n    mysql_connections: \"70\"\n  " + orgEnfTenantOut + ":\n    x_note: " + wOutSecret + "\n",
+		"id_mismatch": "tenants:\n  " + orgEnfTenantOut + ":\n    x_note: " + wOutSecret + "\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			f := wFixture(t, "reader", file)
+			w := wServe(f, GetTenant(f.deps()), rbac.PermRead, "GET", "", nil)
+			if w.Code != http.StatusOK || strings.Contains(w.Body.String(), wOutSecret) || strings.Contains(w.Body.String(), "x_note") ||
+				!strings.Contains(w.Body.String(), "another place in the file has notices") {
 				t.Errorf("%d %s", w.Code, w.Body.String())
 			}
 		})

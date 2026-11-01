@@ -212,7 +212,11 @@ func refusedThresholdWriteMessage(key, canon, raw string) string {
 // expiry. Quoting, surrounding space, a severity suffix's case, `1_000`
 // against `1000`, or `abc:warning` against `abc` are read alike; `abc`
 // against `xyz`, or a moved window, are not.
-func ThresholdReadAlike(key string, a, b ScheduledValue) bool {
+func ThresholdReadAlike(key string, a, b ScheduledValue) bool { return readAlike(key, a, b) }
+
+// thresholdReadAlike is ThresholdReadAlike's body; readAlike, the one "read
+// the same way" of a value finding, dispatches a threshold key to it.
+func thresholdReadAlike(key string, a, b ScheduledValue) bool {
 	if len(a.Overrides) != len(b.Overrides) || thresholdValueReading(key, a.Default) != thresholdValueReading(key, b.Default) {
 		return false
 	}

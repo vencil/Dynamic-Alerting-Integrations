@@ -373,3 +373,85 @@ func TestRefusedValueAt(t *testing.T) {
 		t.Errorf("window: %q", got)
 	}
 }
+
+// #3267: a refused threshold value is a ValidateTenantKeys value finding —
+// in Errors and Values — that Ratchet turns into a notice when the prior
+// value reads alike, by the resolver's reading. A non-finite number is not
+// one (#3140 stays strict on its own path).
+func TestValidateTenantKeys_ThresholdValueFinding(t *testing.T) {
+	t.Parallel()
+	c := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80, "redis_memory": 70},
+		Tenants: map[string]map[string]ScheduledValue{"t": {
+			"mysql_connections": {Default: "abc"},
+			"redis_memory":      {Default: "NaN"},
+		}},
+	}
+	kv := c.ValidateTenantKeysByTenant()
+	v := kv.Tenants["t"]
+	if len(v.Values) != 1 || !v.Values[0].IsThreshold() || v.Values[0].Key != "mysql_connections" {
+		t.Fatalf("values %+v, want the one threshold finding", v.Values)
+	}
+	if len(v.Errors) != 1 || !strings.HasPrefix(v.Errors[0], `WARN: tenant=t: mysql_connections: "abc" is not a threshold`) {
+		t.Fatalf("errors %q", v.Errors)
+	}
+	for prior, want := range map[string]bool{" abc ": true, "abc:WARNING": true, "xyz": false, "abc:critical": false} {
+		r := kv.Ratchet(func(tenant, key string) (ScheduledValue, bool) {
+			return ScheduledValue{Default: prior}, tenant == "t" && key == "mysql_connections"
+		}).Tenants["t"]
+		if got := len(r.Errors) == 0 && len(r.Notices) == 1; got != want {
+			t.Errorf("prior %q: errors %q notices %q, want ratcheted %v", prior, r.Errors, r.Notices, want)
+		}
+	}
+	if s := kv.SelfRatchet().Tenants["t"]; len(s.Errors) != 0 || len(s.Notices) != 1 ||
+		!strings.HasPrefix(s.Notices[0], `NOTICE: tenant=t: mysql_connections "abc" is not a threshold`) {
+		t.Errorf("self-ratchet: errors %q notices %q", s.Errors, s.Notices)
+	}
+	if w := kv.Without(func(f ValueFinding) bool { return f.IsThreshold() }).Tenants["t"]; len(w.Errors) != 0 || len(w.Values) != 0 {
+		t.Errorf("Without: errors %q values %+v", w.Errors, w.Values)
+	}
+}
+
+// #3267: the flat-KV fallback (MergeTenantOverRootPlatform, a tenant file
+// with no `tenants.<id>`) is a display-only rebuild the exporter does not
+// read, so its non-`_` keys get no threshold value finding; its reserved-key
+// findings stay. A tenant the file declares under `tenants:` is judged.
+func TestTenantMerge_FlatFallbackHasNoThresholdFinding(t *testing.T) {
+	t.Parallel()
+	var root RootPlatform
+	thresholdFindings := func(v KeyValidation) (n int, reserved int) {
+		for _, f := range v.Values {
+			if f.IsThreshold() {
+				n++
+			} else {
+				reserved++
+			}
+		}
+		return n, reserved
+	}
+	// The flat form, and a `tenants:` file declaring another tenant only
+	// (the fallback wraps the whole document under tx: key `tenants`).
+	for _, body := range []string{
+		"mysql_connections: abc\n_silent_mode: purple\n",
+		"tenants:\n  other:\n    x_note: SECRET\n",
+	} {
+		m := MergeTenantOverRootPlatform(root, "tx", []byte(body))
+		kv := m.ValidateTenantKeysByTenant()
+		n, _ := thresholdFindings(kv.Tenants["tx"])
+		if n != 0 {
+			t.Errorf("%q: the fallback tenant got threshold findings: %+v", body, kv.Tenants["tx"].Values)
+		}
+		if strings.Contains(strings.Join(kv.Tenants["tx"].Errors, "\n"), "is not a threshold") {
+			t.Errorf("%q: errors %q", body, kv.Tenants["tx"].Errors)
+		}
+	}
+	m := MergeTenantOverRootPlatform(root, "tx", []byte("mysql_connections: abc\n_silent_mode: purple\n"))
+	if _, reserved := thresholdFindings(m.ValidateTenantKeysByTenant().Tenants["tx"]); reserved != 1 {
+		t.Errorf("the fallback tenant's reserved finding is gone")
+	}
+	// Control: the same keys declared under `tenants:` are judged.
+	m = MergeTenantOverRootPlatform(root, "tx", []byte("tenants:\n  tx:\n    mysql_connections: abc\n"))
+	if n, _ := thresholdFindings(m.ValidateTenantKeysByTenant().Tenants["tx"]); n != 1 {
+		t.Errorf("control: a declared tenant's refused threshold is not judged")
+	}
+}

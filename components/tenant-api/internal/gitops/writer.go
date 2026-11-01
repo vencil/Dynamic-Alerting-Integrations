@@ -2250,9 +2250,13 @@ func validateReplacingOver(configDir, tenantID, tenantFilePath, yamlContent stri
 		merged := cfg.MergeParsedTenantWithRootDefaults(configDir, tcfg)
 		kv = merged.ValidateTenantKeysByTenant()
 	}
+	// #3267: a threshold written as null is no write (#2518) — not a value
+	// finding, though the plain decode holds it as "".
+	kv = withoutNullThresholds(kv, yamlContent, tcfg)
 	// #3227: a reserved value the exporter ignores blocks the write only when
 	// this write puts it there; one the file already holds, read alike, is a
-	// notice. configDir == "" has no base and stays strict.
+	// notice — and so, #3267, a threshold value the row resolvers refuse.
+	// configDir == "" has no base and stays strict.
 	if configDir != "" {
 		kv = ratchetValues(kv, baseRaw, baseErr)
 	}
@@ -2273,14 +2277,6 @@ func validateReplacingOver(configDir, tenantID, tenantFilePath, yamlContent stri
 	// — the batch merges (WriteBatch, WritePRBatch's in-lock merge) reach no
 	// other check of it (validateBodyOnly is the full-body paths' pre-flight).
 	errs = append(errs, nonFiniteWrites(tenantID, tcfg, carried)...)
-	// #3267: every other threshold value the exporter refuses (`abc`,
-	// `70:high`, `1e999`), ratcheted against the file the write replaces
-	// (ADR-038 decision 12) — so here, where that file is read, and not in
-	// the body-only pre-flight. configDir == "" reads no base (baseRaw nil)
-	// and stays strict.
-	tErrs, tNotices := refusedThresholdValues(yamlContent, tcfg, baseRaw, baseErr)
-	errs = append(errs, tErrs...)
-	notices = append(notices, tNotices...)
 
 	// B2-wide eol-expansion guard (ADR-024 §8) at the SHARED write choke point, so
 	// PutTenant + batch full-config writes are covered, not just the /custom-alerts

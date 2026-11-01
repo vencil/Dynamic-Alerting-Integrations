@@ -1,7 +1,9 @@
 package config
 
 // #3227 (ADR-038 decision 12): a reserved key's VALUE is judged at the write
-// gate by the exporter's own reading of it (CheckReservedValue), and a value
+// gate by the exporter's own reading of it (CheckReservedValue) — and, #3267,
+// a threshold key's value by its row resolver's (RefusedThresholdWrites) —
+// and a value
 // already on disk that a write leaves as the exporter reads it does not
 // block that write — it is reported as a notice instead (Ratchet).
 
@@ -28,6 +30,31 @@ type ValueFinding struct {
 	// schedule marks the #3269 kind (newScheduleFinding): a reserved key
 	// written with a schedule its readers ignore.
 	schedule bool
+	// threshold marks the #3267 kind (newThresholdFinding): a threshold
+	// key's value the row resolvers refuse. Value is compared by the
+	// resolver's reading (readAlike), like a reserved value.
+	threshold bool
+	// refusal is the threshold kind's ThresholdRefusal.
+	refusal ThresholdRefusal
+}
+
+// newThresholdFinding is the finding for sv, the value of threshold key key
+// (canonical spelling), when RefusedThresholdWrites refuses it.
+func newThresholdFinding(tenant, key string, sv ScheduledValue) (ValueFinding, bool) {
+	rs := RefusedThresholdWrites(map[string]ScheduledValue{key: sv})
+	if len(rs) == 0 {
+		return ValueFinding{}, false
+	}
+	r := rs[0]
+	return ValueFinding{
+		Tenant:    tenant,
+		Key:       key,
+		Value:     sv,
+		Problem:   strings.TrimPrefix(r.Message, key+": "),
+		Message:   "WARN: tenant=" + tenant + ": " + r.Message,
+		threshold: true,
+		refusal:   r,
+	}, true
 }
 
 func newValueFinding(tenant, key string, sv ScheduledValue, problem string) ValueFinding {
@@ -74,6 +101,9 @@ func (f ValueFinding) unchanged(prev ScheduledValue) bool {
 
 // notice is the advisory Ratchet puts in the finding's place.
 func (f ValueFinding) notice() string {
+	if f.threshold {
+		return f.refusal.Notice(f.Tenant)
+	}
 	if f.schedule {
 		return fmt.Sprintf("NOTICE: tenant=%s: %s writes %s (%s) — only its default %q is read, the rest is ignored. "+
 			"It is already in the tenant file, so it does not block a write that leaves it exactly as it is; "+
@@ -172,4 +202,30 @@ func removeFirst(in []string, s string) []string {
 		}
 	}
 	return in
+}
+
+// IsThreshold reports whether f is the #3267 kind: a threshold key's value
+// the row resolvers refuse.
+func (f ValueFinding) IsThreshold() bool { return f.threshold }
+
+// Without is kv less each value finding drop selects — taken out of Values
+// and of Errors alike. For a write gate whose decode holds what the
+// exporter's does not: a threshold written as null is no write (#2518), but a
+// plain yaml.Unmarshal holds it as "", which the threshold kind refuses.
+func (kv KeyValidationByTenant) Without(drop func(ValueFinding) bool) KeyValidationByTenant {
+	out := KeyValidationByTenant{Platform: kv.Platform, Tenants: make(map[string]KeyValidation, len(kv.Tenants))}
+	for tid, v := range kv.Tenants {
+		nv := v
+		nv.Errors = append([]string(nil), v.Errors...)
+		nv.Values = nil
+		for _, f := range v.Values {
+			if drop(f) {
+				nv.Errors = removeFirst(nv.Errors, f.Message)
+				continue
+			}
+			nv.Values = append(nv.Values, f)
+		}
+		out.Tenants[tid] = nv
+	}
+	return out
 }

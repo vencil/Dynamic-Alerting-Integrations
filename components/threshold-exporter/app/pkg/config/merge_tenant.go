@@ -106,6 +106,12 @@ type TenantMerge struct {
 	// notice. profileFileOrder is those files in merge order.
 	profileFiles     map[string]map[string]string
 	profileFileOrder []string
+	// flat marks the tenant whose own layer is the flat-KV fallback
+	// (MergeTenantOverRootPlatform): a display-only rebuild the exporter does
+	// not read — it declares no tenant from such a file — so its non-`_`
+	// keys get no threshold value finding (#3267; ADR-038 decision 12 judges
+	// the values the exporter reads).
+	flat map[string]bool
 }
 
 // ResolveAt is ThresholdConfig.ResolveAt without the resolver's log lines —
@@ -207,7 +213,7 @@ func (m *TenantMerge) ValidateTenantKeysByTenant() KeyValidationByTenant {
 			Profiles:          m.Profiles,
 			Tenants:           map[string]map[string]ScheduledValue{tid: keys},
 		}
-		v := layer.validateOverrideKeys()
+		v := layer.validateOverrideKeysOf(!m.flat[tid])
 		v.Notices = append(v.Notices, m.platformLayerNotices(tid)...)
 		v.Notices = append(v.Notices, m.profileLayerNoticesFor(tid, canonDeclared)...)
 		out.Tenants[tid] = v
@@ -253,10 +259,9 @@ func (m *TenantMerge) platformLayerNotices(tid string) []string {
 // profile's and are not reported.
 //
 // ⚠️ It judges what validateOverrideKeys judges — key names, `expires:`,
-// `_critical` bases, version labels — and nothing else. A value resolve
-// cannot parse (`mysql_connections: abc`) is not reported, for the profile
-// as for the tenant's own file: resolve falls back to the default with a
-// log line on both.
+// `_critical` bases, version labels, a reserved value its reader ignores and
+// (#3267) a threshold value the row resolvers refuse
+// (`mysql_connections: abc`) — and nothing else.
 func (m *TenantMerge) profileLayerNotices() []string {
 	if len(m.Profiles) == 0 || len(m.own) == 0 {
 		return nil
@@ -483,6 +488,7 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 			}
 			merged.Tenants[tenantID] = display
 			merged.own[tenantID] = flatKV
+			merged.flat = map[string]bool{tenantID: true}
 		}
 	}
 

@@ -1,9 +1,11 @@
 package gitops
 
 // #3267 (ADR-038 decision 12): a threshold value the exporter refuses is a
-// refusal when this write puts it there, and a notice when the file already
-// holds it as the exporter reads it — compared by the exporter's reading,
-// not the text; strict whenever the file before the write is not known.
+// value finding (cfg.ValidateTenantKeys) and goes through the same ratchet
+// as a reserved value (ratchetValues): a refusal when this write puts it
+// there, a notice when the file already holds it as the exporter reads it —
+// compared by the exporter's reading, not the text; strict whenever the file
+// before the write is not known.
 
 import (
 	"context"
@@ -17,7 +19,25 @@ import (
 
 const refusedText = "is not a threshold the exporter reads"
 
-func TestRefusedThresholdValues_Ratchet(t *testing.T) {
+// thresholdGate is the write gate's key-check half for body over base, as
+// validateReplacingOver runs it: ValidateTenantKeys on the plain decode,
+// the null filter, then ratchetValues.
+func thresholdGate(t *testing.T, body, base string, baseErr error) (errs, notices []string) {
+	t.Helper()
+	var tcfg cfg.ThresholdConfig
+	if err := yaml.Unmarshal([]byte(body), &tcfg); err != nil {
+		t.Fatalf("decode %q: %v", body, err)
+	}
+	kv := withoutNullThresholds(tcfg.ValidateTenantKeysByTenant(), body, tcfg)
+	kv = ratchetValues(kv, []byte(base), baseErr)
+	for _, v := range kv.Tenants {
+		errs = append(errs, v.Errors...)
+		notices = append(notices, v.Notices...)
+	}
+	return errs, notices
+}
+
+func TestThresholdValueRatchet(t *testing.T) {
 	sec := func(id, kv string) string { return "  " + id + ":\n    " + kv + "\n" }
 	doc := func(secs ...string) string { return "tenants:\n" + strings.Join(secs, "") }
 	cases := []struct {
@@ -45,13 +65,16 @@ func TestRefusedThresholdValues_Ratchet(t *testing.T) {
 			body: doc(sec("t1", `k: "abc"`), sec("t2", `k: "xyz"`)), wantErrs: 1, wantNote: 1},
 		{name: "other tenant's value is not this one's", base: doc(sec("t2", `k: "abc"`)),
 			body: doc(sec("t1", `k: "abc"`)), wantErrs: 1},
-		// A null writes nothing (#2518).
+		// A null writes nothing (#2518); a written "" is refused.
 		{name: "null", base: "", body: doc(sec("t1", `k: null`))},
+		{name: "null schedule", base: "", body: doc(sec("t1", "k:\n      default: null"))},
+		{name: "written empty", base: "", body: doc(sec("t1", `k: ""`)), wantErrs: 1},
+		// #3140 stays out of the ratchet: not a value finding at all.
+		{name: "non-finite is not this check's", base: doc(sec("t1", `k: "NaN"`)), body: doc(sec("t1", `k: "NaN"`))},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			_, tcfg := mustShape(t, c.body)
-			errs, notices := refusedThresholdValues(c.body, tcfg, []byte(c.base), c.baseErr)
+			errs, notices := thresholdGate(t, c.body, c.base, c.baseErr)
 			if len(errs) != c.wantErrs || len(notices) != c.wantNote {
 				t.Fatalf("errs %q notices %q, want %d errs %d notices", errs, notices, c.wantErrs, c.wantNote)
 			}
@@ -61,7 +84,7 @@ func TestRefusedThresholdValues_Ratchet(t *testing.T) {
 				}
 			}
 			for _, n := range notices {
-				if !strings.HasPrefix(n, "NOTICE: tenant=t1: k ") || !strings.Contains(n, "does not block a write") {
+				if !strings.Contains(n, ": k \"") || !strings.Contains(n, "does not block a write") {
 					t.Errorf("notice %q", n)
 				}
 			}
@@ -97,14 +120,4 @@ func TestValidate_RefusedThresholdRatchet(t *testing.T) {
 	if !strings.Contains(strings.Join(errs, "\n"), "is not a finite number") {
 		t.Errorf("unchanged NaN: errs %q, want the #3140 refusal", errs)
 	}
-}
-
-// mustShape is the write gate's plain decode of body.
-func mustShape(t *testing.T, body string) (string, cfg.ThresholdConfig) {
-	t.Helper()
-	var tcfg cfg.ThresholdConfig
-	if err := yaml.Unmarshal([]byte(body), &tcfg); err != nil {
-		t.Fatalf("decode %q: %v", body, err)
-	}
-	return body, tcfg
 }
