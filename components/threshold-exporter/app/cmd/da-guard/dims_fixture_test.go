@@ -8,10 +8,10 @@ package main
 // the reader those fixtures test. Prepend it to a root `_defaults.yaml` text (it is a top-level block).
 const fixtureDims = "dimensions:\n" +
 	"  redis_queue_length: [a, a_re, priority, q, q_re, queue, r, z]\n" +
-	"  mysql_connections: [__x, db, q, schema, severity, tenant]\n" +
+	"  mysql_connections: [__x, db, db_re, q, q_re, schema, severity, tenant]\n" +
 	"  mysql_threads_running: [__x, db]\n" +
 	"  pg_connections: [env, r]\n" +
 	"  xpg_connections: [env, r]\n" +
 	"  redis_hits: [db]\n" +
 	"  redis_memory: [db]\n" +
-	"  oracle_tablespace: [tablespace]\n"
+	"  oracle_tablespace: [tablespace, tablespace_re]\n"

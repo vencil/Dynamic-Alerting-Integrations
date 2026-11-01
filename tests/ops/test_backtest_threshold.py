@@ -2715,3 +2715,18 @@ class TestBacktestWorkflow:
         assert (res.returncode == 0) is has_confd, res.stderr
         got, _ = self._check(tmp_path)
         assert (got == "has_confd=true\n") is has_confd
+
+
+@pytest.mark.parametrize("key,want", [
+    ('mysql_connections{db="a"}', ["db"]),
+    ('mysql_connections{db=~"a|b"}', ["db_re"]),  # a regex matcher serves `<label>_re`
+    ("mysql_connections{env='p', db=~\"a=b,c\"}", ["db_re", "env"]),
+])
+def test_written_tree_declares_the_served_label_names(tmp_path, key, want):
+    """#3475: `--tenant` declares the dimensional key's labels as the row
+    serves them, so the exporter serves the value it backtests."""
+    import yaml
+    bt._written_tree(str(tmp_path), key, ("70",))
+    root = yaml.safe_load((tmp_path / "_defaults.yaml").read_text(encoding="utf-8"))
+    assert root["dimensions"]["mysql_connections"] == want
+    assert root["dimensions"]["container_cpu"] == ["version"]  # the shipped declaration rides along

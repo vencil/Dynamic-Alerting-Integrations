@@ -59,47 +59,47 @@ func TestPeakTenantRowCounts_IsTheResolversRowCount(t *testing.T) {
 		// The #3380 report: a subtree default the root does not declare is
 		// not delivered, so it is no row — the old key count said 2.
 		{name: "undeclared subtree default", files: map[string]string{
-			"_defaults.yaml":         "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_connections: 80\n",
-			"finance/_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  redis_evicted_keys: 100\n",
+			"_defaults.yaml":         "dimensions:\n  redis_keys: [db, db_re]\ndefaults:\n  mysql_connections: 80\n",
+			"finance/_defaults.yaml": "dimensions:\n  redis_keys: [db, db_re]\ndefaults:\n  redis_evicted_keys: 100\n",
 			"finance/tx.yaml":        "tenants:\n  tx: {}\n",
 		}, want: 1},
 		{name: "critical key", files: map[string]string{
-			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_connections: 80\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db, db_re]\ndefaults:\n  mysql_connections: 80\n",
 			"tx.yaml":        "tenants:\n  tx:\n    mysql_connections_critical: \"90\"\n",
 		}, want: 2},
 		// A dimensional key is a row of its own, an exact and a regex one
 		// alike: one row each, beside the base.
 		{name: "dimensional keys", files: map[string]string{
-			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  redis_keys: 5\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db, db_re]\ndefaults:\n  redis_keys: 5\n",
 			"tx.yaml": "tenants:\n  tx:\n    redis_keys{db=\"db0\"}: \"10\"\n" +
 				"    redis_keys{db=~\"db[0-9]+\"}: \"20\"\n",
 		}, want: 3},
 		// #1231: every mysql_threads_running row ships with its legacy twin,
 		// whichever spelling wrote it — two rows per threshold.
 		{name: "legacy twin", files: map[string]string{
-			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_threads_running: 30\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db, db_re]\ndefaults:\n  mysql_threads_running: 30\n",
 			"tx.yaml":        "tenants:\n  tx:\n    " + retiredCPU + "_critical: \"90\"\n",
 		}, want: 4},
 		{name: "custom alerts", files: map[string]string{
-			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_connections: 80\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db, db_re]\ndefaults:\n  mysql_connections: 80\n",
 			"tx.yaml": "tenants:\n  tx:\n    _custom_alerts:\n" +
 				"      - {recipe: threshold, name: a, metric: m1, op: \">\", window: 5m, threshold: \"80\"}\n" +
 				"      - {recipe: threshold, name: b, metric: m2, op: \">\", window: 5m, threshold: disable}\n" +
 				"      - {recipe: threshold, name: c, metric: m3, op: \">\", window: 5m, threshold: \"1\"}\n",
 		}, want: 3},
 		{name: "disable", files: map[string]string{
-			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db, db_re]\ndefaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
 			"tx.yaml":        "tenants:\n  tx:\n    redis_keys: disable\n",
 		}, want: 1},
 		// A row only a window turns on counts: the cut truncates at the
 		// busiest minute, whichever minute the run is at.
 		{name: "schedule adds a row 02:00-04:00", files: map[string]string{
-			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db, db_re]\ndefaults:\n  mysql_connections: 80\n  redis_keys: 5\n",
 			"tx.yaml": "tenants:\n  tx:\n    redis_keys:\n      default: disable\n" +
 				"      overrides:\n        - window: \"02:00-04:00\"\n          value: \"7\"\n",
 		}, want: 2},
 		{name: "schedule adds a critical row 22:00-06:00", files: map[string]string{
-			"_defaults.yaml": "dimensions:\n  redis_keys: [db]\ndefaults:\n  mysql_connections: 80\n",
+			"_defaults.yaml": "dimensions:\n  redis_keys: [db, db_re]\ndefaults:\n  mysql_connections: 80\n",
 			"tx.yaml": "tenants:\n  tx:\n    mysql_connections_critical:\n      default: disable\n" +
 				"      overrides:\n        - window: \"22:00-06:00\"\n          value: \"95\"\n",
 		}, want: 2},

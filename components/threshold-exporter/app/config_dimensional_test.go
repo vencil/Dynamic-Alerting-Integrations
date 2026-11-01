@@ -301,7 +301,7 @@ func TestParseLabelsStringWithOp(t *testing.T) {
 func TestResolve_RegexDimensional(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Dimensions: map[string][]string{"oracle_tablespace": {"env", "tablespace", "ts"}},
+		Dimensions: map[string][]string{"oracle_tablespace": {"env", "tablespace_re", "ts_re"}},
 		Defaults: map[string]float64{
 			"oracle_tablespace": 80,
 		},
@@ -365,7 +365,7 @@ func TestResolve_RegexDimensionalWithYAML(t *testing.T) {
 	t.Parallel()
 	content := `
 dimensions:
-  oracle_tablespace: [tablespace]
+  oracle_tablespace: [tablespace_re]
 defaults:
   oracle_tablespace: 80
 tenants:
@@ -404,7 +404,7 @@ func TestResolve_RegexScheduled(t *testing.T) {
 	t.Parallel()
 	// B1 + B4 combined: regex dimensional with time-window override
 	cfg := &ThresholdConfig{
-		Dimensions: map[string][]string{"oracle_tablespace": {"tablespace"}},
+		Dimensions: map[string][]string{"oracle_tablespace": {"tablespace_re"}},
 		Defaults:   map[string]float64{"oracle_tablespace": 80},
 		Tenants: map[string]map[string]ScheduledValue{
 			"db-a": {
@@ -447,7 +447,7 @@ func TestResolve_RegexScheduled(t *testing.T) {
 func TestResolve_RegexDimensionalCriticalNotSupported(t *testing.T) {
 	t.Parallel()
 	cfg := &ThresholdConfig{
-		Dimensions: map[string][]string{"oracle_tablespace": {"egex", "tablespace"}},
+		Dimensions: map[string][]string{"oracle_tablespace": {"egex", "tablespace_re"}},
 		Defaults: map[string]float64{
 			"oracle_tablespace": 90,
 		},
@@ -492,7 +492,7 @@ func TestResolve_RegexDimensionalCriticalNotSupported(t *testing.T) {
 
 	// Correct approach: use "95:critical" value syntax for regex dimensional
 	cfg2 := &ThresholdConfig{
-		Dimensions:        map[string][]string{"oracle_tablespace": {"egex", "tablespace"}},
+		Dimensions:        map[string][]string{"oracle_tablespace": {"egex", "tablespace_re"}},
 		Defaults:          map[string]float64{},
 		OptionalOverrides: []string{"oracle_tablespace"},
 		Tenants: map[string]map[string]ScheduledValue{

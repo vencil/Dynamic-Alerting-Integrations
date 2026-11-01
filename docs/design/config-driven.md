@@ -423,7 +423,7 @@ tenants:
 2. **Recording Rule 層**：PromQL 使用 `label_replace` + `=~` 在查詢時完成實際匹配
 3. **設計原則**：Exporter 保持為純 config→metric 轉換器，匹配邏輯完全由 Prometheus 原生向量運算執行
 
-> ⚠️ **出貨的 Rule Pack 目前不依維度判斷**：門檻正規化寫的是 `max by(tenant)(user_threshold{…})`，維度 label 在這一步就丟掉了，觀測序列也只依 `tenant` 聚合。所以維度鍵（精確或 regex）改到的是**整個租戶**的門檻：各維度值與 base 值合成單一個值（取最大；沒有 base 列時就是維度值本身），不會依維度分開生效——告警方向是 `>` 的指標因此被放寬，方向是 `<` 的（例如 hit ratio）反而變嚴；對維度鍵寫 `disable` 只是不送出這一列，不會只停掉那個維度的告警。目前依 label 值分開讀的只有 kubernetes pack 的 `version` 標籤（[ADR-024](../adr/024-version-aware-threshold-via-dimensional-label.md)）。因此維度鍵只有在它的每個 label 都在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告過時才送出，其餘不送出、判決讀成 `unread`（[ADR-038](../adr/038-unread-keys-judged-by-readers.md) 決定 11）。出貨的 `dimensions:` 由門檻登錄表生成，只列規則包真的保留的 label；自訂規則依某個 label 讀時，平台自行在 `dimensions:` 加上該 base 與 label。出貨範例因此不放維度鍵。
+> ⚠️ **出貨的 Rule Pack 目前不依維度判斷**：門檻正規化寫的是 `max by(tenant)(user_threshold{…})`，維度 label 在這一步就丟掉了，觀測序列也只依 `tenant` 聚合。所以維度鍵（精確或 regex）改到的是**整個租戶**的門檻：各維度值與 base 值合成單一個值（取最大；沒有 base 列時就是維度值本身），不會依維度分開生效——告警方向是 `>` 的指標因此被放寬，方向是 `<` 的（例如 hit ratio）反而變嚴；對維度鍵寫 `disable` 只是不送出這一列，不會只停掉那個維度的告警。目前依 label 值分開讀的只有 kubernetes pack 的 `version` 標籤（[ADR-024](../adr/024-version-aware-threshold-via-dimensional-label.md)）。因此維度鍵只有在它送出的每個 label 都在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告過時才送出，其餘不送出、判決讀成 `unread`（[ADR-038](../adr/038-unread-keys-judged-by-readers.md) 決定 11）。regex 選擇器送出的 label 名稱帶 `_re` 後綴（`version=~"v3.*"` 送出 `version_re`），所以要宣告的是 `version_re`；只宣告 `version` 不涵蓋它。出貨的 `dimensions:` 只有精確比對的 `version`，`container_cpu{version=~"v3.*"}` 因此不送出。出貨的 `dimensions:` 由門檻登錄表生成，只列規則包真的保留的 label；自訂規則依某個 label 讀時，平台自行在 `dimensions:` 加上該 base 與 label。出貨範例因此不放維度鍵。
 
 ### 2.6 排程式閾值 (Scheduled Thresholds)
 

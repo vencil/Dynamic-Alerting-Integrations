@@ -30,6 +30,32 @@ func TestCheckSubtreeUndeliverable_FixNamesRootAndOptionalOverrides(t *testing.T
 	}
 }
 
+// #3475: a dimensional key is served only when its labels are declared under
+// the root `dimensions:` — declaring the key or its base fixes nothing, so
+// its message names `dimensions:` and not the declared-key places.
+func TestCheckSubtreeUndeliverable_DimensionalKeyNamesDimensions(t *testing.T) {
+	t.Parallel()
+	report, err := CheckDefaultsImpact(CheckInput{
+		EffectiveConfigs:       map[string]map[string]any{"tenant-a": {}},
+		UndeliverableInherited: map[string][]string{"tenant-a": {`redis_x{db="a"}`}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(report.Findings) != 1 {
+		t.Fatalf("findings = %+v; want one", report.Findings)
+	}
+	msg := report.Findings[0].Message
+	for _, want := range []string{"for its base `redis_x` under `dimensions:`", "`dimensions:` does not declare its labels"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("message %q lacks %q", msg, want)
+		}
+	}
+	if strings.Contains(msg, "or in `optional_overrides:`") {
+		t.Errorf("message still tells a dimensional key to use optional_overrides: %q", msg)
+	}
+}
+
 // #1976: one error finding per (tenant, key) of UndeliverableInherited, only for
 // tenants in EffectiveConfigs, sorted; the tenant that has one fails.
 func TestCheckSubtreeUndeliverable(t *testing.T) {

@@ -45,13 +45,16 @@ def _read_per_label() -> "dict[str, frozenset[str]]":
 _READ_PER_LABEL = _read_per_label()
 
 _DIM_KEY = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*)\{(.*)\}$")
-_LABEL = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*=~?")
+_LABEL = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)\s*(=~?)")
 # A dimensional key written in a rule-pack header comment as a YAML key, quoted or not.
 _HEADER_DIM = re.compile(r"""^#.*?["']?([A-Za-z_][A-Za-z0-9_]*)\{([^}]*)\}["']?\s*:""")
 
 
 def _labels(selector: str) -> set[str]:
-    return set(_LABEL.findall(selector))
+    """The label names the key's row SERVES: a regex matcher `l=~"…"` is
+    served as `l_re` (the exporter's RegexLabelSuffix), so declaring `l`
+    does not cover it."""
+    return {name + ("_re" if op == "=~" else "") for name, op in _LABEL.findall(selector)}
 
 
 def _keys(node, path=()):
@@ -99,6 +102,7 @@ def test_the_header_pattern(line, hit):
     ('redis_connected_clients{instance="redis-orders:6379"}', True),
     ("oracle_tablespace_used_percent{tablespace_name=~'SYS.*'}", True),
     ('container_cpu{version="v2"}', False),
+    ('container_cpu{version=~"v.*"}', True),  # served as version_re
     ('container_cpu{version="v2", pod="a"}', True),
     ('mysql_connections{version="v2"}', True),  # version is read on container cpu/memory only
     ("container_cpu", False),

@@ -1052,6 +1052,36 @@ def shipped_optional_keys_for_packs(
     ]
 
 
+def shipped_dimensions_for_packs(
+    pack_names, rule_packs: Optional[dict] = None
+) -> "dict[str, list[str]]":
+    """The ``dimensions:`` declaration for a SELECTION of packs (#3475).
+
+    The same reason as ``shipped_optional_keys_for_packs``: the onboarding
+    generators write the customer-side root ``_defaults.yaml``, and on the
+    GitOps topology (tenant-api reading the customer repo; an
+    ``existingConfigMap`` / kustomize deployment) that file is the only
+    ``dimensions:`` the exporter and the write gate see. Without it a
+    ``container_cpu{version="v2"}`` the chart serves is unread there.
+
+    Derived from each key's ``dimensions`` in ``scaffold_tenant.RULE_PACKS``,
+    the field the registry's (and so the chart's) declaration is generated
+    from; a full selection equals ``dimension_entries`` of the registry.
+    Order is RULE_PACKS order."""
+    if rule_packs is None:
+        rule_packs = _load_scaffold().RULE_PACKS
+    selected = set(pack_names)
+    out: "dict[str, list[str]]" = {}
+    for pack, meta in rule_packs.items():
+        if pack not in selected:
+            continue
+        for tier in ("defaults", "optional_overrides"):
+            for key, info in ((meta or {}).get(tier) or {}).items():
+                if (info or {}).get("dimensions"):
+                    out[key] = list(info["dimensions"])
+    return out
+
+
 def has_shipped_chart_base(doc: dict, key: str) -> bool:
     """Whether an UNSHIPPED optional key's base is itself a shipped chart default.
 

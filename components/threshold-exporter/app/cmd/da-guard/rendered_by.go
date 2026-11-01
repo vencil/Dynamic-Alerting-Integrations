@@ -15,7 +15,7 @@ import (
 // answered here", never "nothing reads it". max_metrics_per_tenant is not
 // in it: no render shows the cap itself.
 var renderedByKeys = []string{
-	"defaults", "state_filters", "optional_overrides", "profiles", "tenants",
+	"defaults", "state_filters", "optional_overrides", "dimensions", "profiles", "tenants",
 	"_routing_defaults", "_routing_enforced", "routing_profiles",
 }
 
@@ -28,8 +28,10 @@ var routingProfilesNames = map[string]bool{"_routing_profiles.yaml": true, "_rou
 // carrier: the file is its directory's selected defaults carrier.
 //
 // The rules (exporter = the served values, generator = the routes):
-//   - root carrier: defaults / state_filters / optional_overrides → exporter
-//     (flat_build applyBoundaryRules: only a carrier's are honoured);
+//   - root carrier: defaults / state_filters / optional_overrides /
+//     dimensions → exporter (flat_build applyBoundaryRules: only a
+//     carrier's are honoured; a subtree carrier's dimensions is WARNed and
+//     ignored, #3475);
 //   - a directory's carrier: defaults → exporter (the chain reads only its
 //     `defaults:` block, hierarchy.ExtractDefaultsBlock);
 //   - root `_` file: profiles → exporter (nested `_` files are dropped from
@@ -63,7 +65,7 @@ func renderedBy(rel string, carrier bool, content parsetree.Content) map[string]
 			if carrier {
 				readers = []string{readerExporter}
 			}
-		case "state_filters", "optional_overrides":
+		case "state_filters", "optional_overrides", "dimensions":
 			if carrier && root {
 				readers = []string{readerExporter}
 			}

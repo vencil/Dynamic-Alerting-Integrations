@@ -25,17 +25,17 @@ func TestRenderedBy_Locations(t *testing.T) {
 		carrier bool
 		want    map[string][]string
 	}{
-		{"_defaults.yaml", true, map[string][]string{"defaults": e, "state_filters": e, "optional_overrides": e,
+		{"_defaults.yaml", true, map[string][]string{"defaults": e, "state_filters": e, "optional_overrides": e, "dimensions": e,
 			"profiles": e, "tenants": both, "_routing_defaults": g, "_routing_enforced": g, "routing_profiles": n}},
-		{"_platform.yaml", false, map[string][]string{"defaults": n, "state_filters": n, "optional_overrides": n,
+		{"_platform.yaml", false, map[string][]string{"defaults": n, "state_filters": n, "optional_overrides": n, "dimensions": n,
 			"profiles": e, "tenants": both, "_routing_defaults": g, "_routing_enforced": g, "routing_profiles": n}},
-		{"_routing_profiles.yaml", false, map[string][]string{"defaults": n, "state_filters": n, "optional_overrides": n,
+		{"_routing_profiles.yaml", false, map[string][]string{"defaults": n, "state_filters": n, "optional_overrides": n, "dimensions": n,
 			"profiles": e, "tenants": both, "_routing_defaults": g, "_routing_enforced": g, "routing_profiles": g}},
-		{"team/_defaults.yaml", true, map[string][]string{"defaults": e, "state_filters": n, "optional_overrides": n,
+		{"team/_defaults.yaml", true, map[string][]string{"defaults": e, "state_filters": n, "optional_overrides": n, "dimensions": n,
 			"profiles": n, "tenants": n, "_routing_defaults": g, "_routing_enforced": n, "routing_profiles": n}},
-		{"team/_routing_profiles.yml", false, map[string][]string{"defaults": n, "state_filters": n, "optional_overrides": n,
+		{"team/_routing_profiles.yml", false, map[string][]string{"defaults": n, "state_filters": n, "optional_overrides": n, "dimensions": n,
 			"profiles": n, "tenants": n, "_routing_defaults": n, "_routing_enforced": n, "routing_profiles": g}},
-		{"team/_notes.yaml", false, map[string][]string{"defaults": n, "state_filters": n, "optional_overrides": n,
+		{"team/_notes.yaml", false, map[string][]string{"defaults": n, "state_filters": n, "optional_overrides": n, "dimensions": n,
 			"profiles": n, "tenants": n, "_routing_defaults": n, "_routing_enforced": n, "routing_profiles": n}},
 	} {
 		if got := renderedBy(tc.rel, tc.carrier, all); !reflect.DeepEqual(got, tc.want) {

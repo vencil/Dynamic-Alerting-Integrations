@@ -116,9 +116,10 @@ tenants:
 ### Dimensional Thresholds
 
 Schema supports dimensional (labeled) thresholds with literal or regex matching.
-Every label of the key must be declared for its base (the part before `{`) under
-the root `_defaults.yaml` `dimensions:` (`dimensions: {redis_connected_clients:
-[instance]}`); otherwise the key passes the schema but serves no row and is
+Every label the key serves must be declared for its base (the part before `{`)
+under the root `_defaults.yaml` `dimensions:` (`dimensions: {redis_connected_clients:
+[instance]}`; a regex selector serves `<label>_re`, so `instance=~"…"` needs
+`instance_re`); otherwise the key passes the schema but serves no row and is
 reported `unread … (no_row)` (ADR-038 §11). The shipped `dimensions:` lists only
 the labels the rule packs keep (today `version` on container cpu/memory):
 

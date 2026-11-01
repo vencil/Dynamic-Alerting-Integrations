@@ -43,9 +43,17 @@ func canonicalDimensionBase(base string) string {
 	return base
 }
 
-// dimensionDeclared reports whether every label of dimensional key's
-// selector is declared under `dimensions:` for its base (either #1231
-// spelling, on both sides). A key with no parsable label is not declared.
+// RegexLabelSuffix is appended to a regex selector's label name on the
+// /metrics series (`x{db=~"a.*"}` serves `db_re="a.*"`): the label a rule
+// would group by, so the one `dimensions:` must name.
+const RegexLabelSuffix = "_re"
+
+// dimensionDeclared reports whether every label the dimensional key's row
+// SERVES is declared under `dimensions:` for its base (either #1231
+// spelling, on both sides): an exact matcher serves its own name, a regex
+// matcher `<label>_re` (RegexLabelSuffix) — `version=~"v3.*"` is served as
+// `version_re`, which a rule grouping by `version` folds into its
+// version-less group. A key with no parsable label is not declared.
 func dimensionDeclared(key string, dims map[string][]string) bool {
 	i := strings.Index(key, "{")
 	if i <= 0 || !strings.HasSuffix(key, "}") {
@@ -65,11 +73,14 @@ func dimensionDeclared(key string, dims map[string][]string) bool {
 	if len(exact)+len(regex) == 0 {
 		return false
 	}
-	for _, m := range []map[string]string{exact, regex} {
-		for l := range m {
-			if _, ok := declared[l]; !ok {
-				return false
-			}
+	for l := range exact {
+		if _, ok := declared[l]; !ok {
+			return false
+		}
+	}
+	for l := range regex {
+		if _, ok := declared[l+RegexLabelSuffix]; !ok {
+			return false
 		}
 	}
 	return true

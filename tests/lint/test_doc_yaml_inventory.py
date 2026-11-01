@@ -350,3 +350,16 @@ def test_go_loader_test_agrees_with_the_inventory():
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=900, env=env, check=False)
     assert proc.returncode == 0, proc.stdout[-4000:] + proc.stderr[-2000:]
+
+
+def test_every_top_level_platform_schema_key_marks_a_platform_file():
+    """A top-level key platform-defaults.schema.json allows (other than
+    `tenants:`, which a tenant snippet carries too, and the `_` keys that a
+    tenant body carries) marks a block as a platform file — `dimensions:`
+    (#3475) went missing here once, so the set is derived from the schema."""
+    import json
+    schema = json.loads((Path(__file__).resolve().parents[2] / "docs/schemas/platform-defaults.schema.json")
+                        .read_text(encoding="utf-8"))
+    want = {k for k in schema["properties"] if k != "tenants" and not k.startswith("_")}
+    assert want <= inv.PLATFORM_KEYS, sorted(want - inv.PLATFORM_KEYS)
+    assert inv.is_confd_example({"dimensions": {"container_cpu": ["version"]}})

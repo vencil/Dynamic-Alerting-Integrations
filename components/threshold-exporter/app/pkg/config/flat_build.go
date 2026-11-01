@@ -460,6 +460,12 @@ func reportUnparseableNestedPlatformFile(fullPath string, data []byte, metrics S
 			if _, set := top["max_metrics_per_tenant"]; set {
 				logger.Printf("WARN: max_metrics_per_tenant found in %s — only the ROOT _defaults.yaml may set it (one global cap, not inherited per subtree), ignoring", fullPath)
 			}
+			// #3475: same shape — `dimensions:` is read from the root
+			// carrier alone (one declaration for the whole tree), so a
+			// subtree one is ignored and says so.
+			if _, set := top["dimensions"]; set {
+				logger.Printf("WARN: dimensions found in %s — only the ROOT _defaults.yaml may declare it (one declaration for the whole tree, not inherited per subtree), ignoring", fullPath)
+			}
 		}
 		return probe, true
 	}

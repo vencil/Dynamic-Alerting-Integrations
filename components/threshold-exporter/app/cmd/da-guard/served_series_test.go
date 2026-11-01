@@ -268,7 +268,7 @@ var seriesTree = map[string]string{
 	"_defaults.yaml": `dimensions:
   mysql_connections: [schema]
   mysql_threads_running: [db]
-  oracle_tablespace: [tablespace]
+  oracle_tablespace: [tablespace_re]
 defaults:
   mysql_connections: 80
   mysql_slow: 90

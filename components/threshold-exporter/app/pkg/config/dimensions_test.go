@@ -16,16 +16,20 @@ func TestDimensionDeclared(t *testing.T) {
 	dims := map[string][]string{
 		"container_cpu":         {"version"},
 		"mysql_threads_running": {"instance"},
+		"container_memory":      {"pod_re"},
 	}
 	cases := []struct {
 		key  string
 		want bool
 	}{
 		{`container_cpu{version="v2"}`, true},
-		{`container_cpu{version=~"v.*"}`, true},
+		{`container_cpu{version=~"v.*"}`, false}, // serves version_re, not version
+		{`container_cpu{version_re="x"}`, false},
+		{`mysql_threads_running{instance=~"a.*"}`, false},
+		{`container_memory{pod=~"a.*"}`, true},         // pod_re declared
 		{`container_cpu{version="v2",pod="a"}`, false}, // one label undeclared
 		{`container_cpu{env="prod"}`, false},           // label not declared for this base
-		{`container_memory{version="v2"}`, false},      // base not declared
+		{`container_memory{version="v2"}`, false},      // label not declared for this base
 		{`mysql_cpu{instance="a"}`, true},              // retired spelling of a declared base (#1231)
 		{`mysql_threads_running{instance="a"}`, true},
 		{`container_cpu{}`, false}, // no label
@@ -62,6 +66,9 @@ func TestResolve_DimensionalKeyNeedsDeclaredLabel(t *testing.T) {
 	tenant := map[string]ScheduledValue{
 		`container_cpu{version="v2"}`: {Default: "60"},
 		`container_cpu{pod="a"}`:      {Default: "70"},
+		// Served as version_re, which `max by(tenant, version, severity)`
+		// folds into the version="default" group: not served.
+		`container_cpu{version=~"v3.*"}`: {Default: "95"},
 	}
 	cfg := &ThresholdConfig{
 		Defaults:   map[string]float64{"container_cpu": 80},

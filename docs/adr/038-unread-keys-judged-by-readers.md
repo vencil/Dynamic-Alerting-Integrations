@@ -321,15 +321,21 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 - 讀取租戶設定（GET）不再回報「這個鍵有沒有人讀」，也不即時判。即時判要佔產生器容器的判定佇列，而讀權限的使用者也能觸發；要看用 `da-tools explain-keys` 或 CI 的 validate-config，寫入時則由判決擋下。這和 Kubernetes 的 warning 只出現在寫入回應裡同型。git 管理的租戶不經 API 寫入，它的這類問題只有 CI 會報。
 - exporter 載入時，改記它自己讀不到的鍵（沒有任何一列讀的鍵、對這種鍵寫的 `disable`、登錄表沒有讀取端的 `_` 鍵），不帶嚴重度：這是讀取端在原地的事實，嚴重度由判決決定（決定 4）。沒有跑 CI 的部署仍有這個訊號。exporter 另外兩則它自己讀取時的訊息照舊：profile 裡的路由層鍵不套用，以及 `_critical` 找不到 base 的預設值。
 - 產生器自己的鍵名警告與 Go、Python 兩份鍵名判斷，改成只用共用判決後刪除；`version` 標籤與改名提示這類值的檢查由 Go 一處判，經 da-guard served-values 每個租戶的 `key_checks` 交給 validate-config 與產生器 `--validate` 照它的措辭印出。portal 的鍵名判斷同時刪除。原本比對兩份手寫判斷的成員矩陣保留，改成驗證共用判決。
-- 維度鍵（`<base>{…}`）只有在它的每個 label 都在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告過時，exporter 才送出；不論它寫在租戶檔、profile、子目錄還是根 `defaults:`。其他維度鍵沒有列，判決讀成 `unread`（`no_row`）。理由是出貨的規則包以 `max by(tenant)` 合成門檻，只保留它分組的 label；沒被保留的 label，值會併成一個租戶門檻，寫了也不會依維度生效。出貨的 `dimensions:` 由門檻登錄表（`rule-packs/threshold-registry.yaml` 每個 key 的 `dimensions`）生成，測試兩個方向對照規則包的分組，目前是 `container_cpu`、`container_memory` 的 `version`。自訂規則若依某個 label 讀，平台在 `dimensions:` 加上該 base 與 label。例：
+- 維度鍵（`<base>{…}`）只有在它的每個 label 都在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告過時，exporter 才送出；不論它寫在租戶檔、profile、子目錄還是根 `defaults:`。比對的是那一列送出的 label 名稱：regex 選擇器送出 `<label>_re`（`version=~"v3.*"` 送出 `version_re`），要宣告的是 `version_re`，宣告 `version` 不涵蓋它。其他維度鍵沒有列，判決讀成 `unread`（`no_row`）。理由是出貨的規則包以 `max by(tenant)` 合成門檻，只保留它分組的 label；沒被保留的 label，值會併成一個租戶門檻，寫了也不會依維度生效。出貨的 `dimensions:` 由門檻登錄表（`rule-packs/threshold-registry.yaml` 每個 key 的 `dimensions`）生成，測試兩個方向對照規則包的分組，目前是 `container_cpu`、`container_memory` 的 `version`。自訂規則若依某個 label 讀，平台在 `dimensions:` 加上該 base 與 label。例：
 
   ```yaml
   # 根 _defaults.yaml
   dimensions:
     container_cpu: [version]
+  ```
+
+  ```yaml
   # 租戶檔
-  container_cpu{version="v2"}: "60"   # 送出
-  container_cpu{pod="a"}: "70"        # 不送出：pod 沒宣告，判決 unread
+  tenants:
+    t-a:
+      container_cpu{version="v2"}: "60"     # 送出
+      container_cpu{pod="a"}: "70"          # 不送出：pod 沒宣告，判決 unread
+      container_cpu{version=~"v3.*"}: "95"  # 不送出：送出的是 version_re，沒宣告
   ```
 - 平台檔與 profile 層的 notice 不再含「沒有人讀」的鍵，由判決報（決定 6）。
 

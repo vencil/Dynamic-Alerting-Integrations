@@ -155,7 +155,8 @@ thresholdConfig:
 
   # dimensions 為生成段（#3475，ADR-038 §11）：每個 base 的維度鍵可帶哪些 label 才會送出。
   # 出貨清單 = threshold registry 宣告、且 rule pack 依該 label 聚合的組合；自訂規則若依某個
-  # 維度讀，就在這裡加上 base 與 label。改出貨內容走 scaffold_tenant.RULE_PACKS ＋ --regen。
+  # 維度讀，就在這裡加上 base 與 label（regex 選擇器送出 <label>_re，要宣告的是那個名稱）。
+  # 改出貨內容走 scaffold_tenant.RULE_PACKS ＋ --regen。
   dimensions:
     # >>> GENERATED:threshold-registry:helm-dimensions — generated block, DO NOT EDIT（改 scaffold_tenant.RULE_PACKS 後跑 check_threshold_registry.py --regen）
     container_cpu: [version]

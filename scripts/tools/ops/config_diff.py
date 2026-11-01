@@ -104,6 +104,7 @@ _VIEW_READER = {rd.VIEW_SERVED: "exporter", rd.VIEW_ROUTES: "generator"}
 RENDERED_CARRIERS = {
     "defaults": ((rd.VIEW_SERVED,), "full"),
     "optional_overrides": ((rd.VIEW_SERVED,), "partial"),  # the list itself is not served
+    "dimensions": ((rd.VIEW_SERVED,), "partial"),  # the declaration itself is not served (#3475)
     "state_filters": ((rd.VIEW_SERVED,), "partial"),        # `reasons` is read by no renderer
     "tenants": ((rd.VIEW_SERVED, rd.VIEW_ROUTES), "full"),
     "profiles": ((rd.VIEW_SERVED,), "full"),

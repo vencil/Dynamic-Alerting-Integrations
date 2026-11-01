@@ -14,6 +14,11 @@ tenant-wide threshold. This pins the two together, both ways:
     which the exporter itself sets) is declared by the registry — or named in
     `_KEPT_BUT_NOT_SERVED` with the reason it is deliberately not offered.
 
+Both sides speak the label name the /metrics series carries: a regex
+selector `x{db=~"a.*"}` is served as `db_re` (the exporter's
+RegexLabelSuffix), so a pack reading it groups by `db_re` and the
+registry declares `db_re` — declaring `db` covers only `db="…"`.
+
 The custom-alerts pack (`component="custom"`) is out of scope: its labels are
 the recipe compiler's, not a tenant's dimensional key.
 """
@@ -57,19 +62,38 @@ def _declared() -> "dict[str, set[str]]":
             if e.get("dimensions")}
 
 
+def _kept_in(text: str, kept: "dict[str, set[str]]") -> None:
+    for by, selector in _AGG.findall(text):
+        m = dict(_MATCHER.findall(selector))
+        if m.get("component") in (None, "custom") or "metric" not in m:
+            continue
+        key = f"{m['component']}_{m['metric']}"
+        labels = {l.strip() for l in by.split(",") if l.strip()} - _EXPORTER_LABELS
+        kept.setdefault(key, set()).update(labels)
+
+
 def _kept_by_packs() -> "dict[str, set[str]]":
     """registry key -> labels some pack keeps when normalising its threshold."""
     kept: "dict[str, set[str]]" = {}
     for pack in cr.RULE_PACKS.files_under(_ROOT):
-        text = pack.read_text(encoding="utf-8")
-        for by, selector in _AGG.findall(text):
-            m = dict(_MATCHER.findall(selector))
-            if m.get("component") in (None, "custom") or "metric" not in m:
-                continue
-            key = f"{m['component']}_{m['metric']}"
-            labels = {l.strip() for l in by.split(",") if l.strip()} - _EXPORTER_LABELS
-            kept.setdefault(key, set()).update(labels)
+        _kept_in(pack.read_text(encoding="utf-8"), kept)
     return kept
+
+
+def test_a_regex_dimension_is_its_served_label():
+    """A pack reading regex selectors groups by `<label>_re`: that, not
+    `<label>`, is what it keeps — and what the registry must declare."""
+    kept: "dict[str, set[str]]" = {}
+    _kept_in('max by(tenant, db_re, severity) (user_threshold{component="mysql", metric="x"})', kept)
+    assert kept == {"mysql_x": {"db_re"}}
+    declared = {"mysql_x": {"db"}}
+    assert [l for l in sorted(kept["mysql_x"]) if l not in declared["mysql_x"]] == ["db_re"]
+
+
+def test_the_exporter_serves_regex_labels_with_the_suffix_the_registry_assumes():
+    """The suffix the docstring above relies on is the exporter's own."""
+    go = (_ROOT / "components/threshold-exporter/app/pkg/config/dimensions.go").read_text(encoding="utf-8")
+    assert re.search(r'const RegexLabelSuffix = "_re"', go), "RegexLabelSuffix moved or changed"
 
 
 def test_the_scan_sees_the_normalisation_rules():

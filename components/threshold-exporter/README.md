@@ -190,7 +190,7 @@ conf.d/
 |------|---------|-----------|------|
 | 純量閾值 | `mysql_connections` | `"70"` | 最常見 |
 | 維度標籤（精確） | `"redis_connected_clients{instance='redis-orders:6379'}"` | `"500:critical"` | YAML key 必加引號；不繼承 defaults；每個 label 都要在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告，否則不產生 metric（ADR-038 §11）。⚠️ 出貨的 Rule Pack 以 `max by(tenant)` 取租戶最大值，維度鍵改到的是整個租戶的門檻（[#3475](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3475)） |
-| 維度標籤（regex） | `"oracle_tablespace_used_percent{tablespace_name=~'SYS.*'}"` | `"95"` | 輸出 `tablespace_name_re` label，交 PromQL `label_replace` 匹配 |
+| 維度標籤（regex） | `"oracle_tablespace_used_percent{tablespace_name=~'SYS.*'}"` | `"95"` | 輸出 `tablespace_name_re` label，交 PromQL `label_replace` 匹配；`dimensions:` 要為該 base 宣告的是 `tablespace_name_re`（送出的名稱），否則不產生 metric |
 | 排程式閾值 | `mysql_connections:` | `default + overrides[]` | UTC `HH:MM-HH:MM` 窗口，多窗口 first-match-wins |
 | 租戶 metadata | `_metadata` | `{runbook_url, owner, tier, …}` | 注入 `tenant_metadata_info` |
 | Silent mode | `_silent_mode` | `"warning"` 或 `{target, expires, reason}` | `expires` 自動失效 |

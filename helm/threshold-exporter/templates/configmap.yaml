@@ -74,6 +74,16 @@ data:
     {{- if not (or (kindIs "invalid" .Values.thresholdConfig.dimensions) (kindIs "map" .Values.thresholdConfig.dimensions)) }}
     {{- fail (printf "thresholdConfig.dimensions must be a MAP of base key -> list of labels, got %s" (kindOf .Values.thresholdConfig.dimensions)) }}
     {{- end }}
+    {{- range $base, $labels := (.Values.thresholdConfig.dimensions | default dict) }}
+    {{- if not (kindIs "slice" $labels) }}
+    {{- fail (printf "thresholdConfig.dimensions.%s must be a LIST of label names, got %s (--set thresholdConfig.dimensions.%s={version})" $base (kindOf $labels) $base) }}
+    {{- end }}
+    {{- range $labels }}
+    {{- if not (kindIs "string" .) }}
+    {{- fail (printf "thresholdConfig.dimensions.%s: every label must be a string, got %s" $base (kindOf .)) }}
+    {{- end }}
+    {{- end }}
+    {{- end }}
     {{- if .Values.thresholdConfig.dimensions }}
     dimensions:
       {{- .Values.thresholdConfig.dimensions | toYaml | nindent 6 }}

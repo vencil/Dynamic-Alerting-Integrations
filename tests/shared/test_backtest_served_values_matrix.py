@@ -855,7 +855,8 @@ def test_a_metric_cell_from_the_tree_is_escaped(
         tmp_path: Path, monkeypatch, capsys, cli_argv) -> None:
     """#3111 review: a dimensioned key holding `|` broke its Markdown row."""
     def files(v: str) -> dict[str, str]:
-        return {"_defaults.yaml": _DB_DEFAULTS,
+        # a regex selector serves `db_re`, the name to declare (#3475)
+        return {"_defaults.yaml": "dimensions:\n  mysql_connections: [db_re]\n" + _DEFAULTS,
                 "tx.yaml": f"tenants:\n  tx:\n    'mysql_connections{{db=~\"a|b\"}}': \"{v}\"\n"}
     b, c = _tree(tmp_path / "base", files("70")), _tree(tmp_path / "cur", files("85"))
     md = tmp_path / "r.md"

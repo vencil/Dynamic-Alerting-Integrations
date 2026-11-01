@@ -655,9 +655,10 @@ def _registry_dimensions():
     return dict(registry_lib.dimension_entries(registry_lib.build_registry_doc()))
 
 
-# A label name of a dimensional key's selector (`db` in `x{db="a"}`), the
-# value skipped whole so a quoted `=` in it is not read as a label.
-_SELECTOR_LABEL = re.compile(r"""([A-Za-z_][A-Za-z0-9_]*)\s*(?:=~|!=|!~|=)\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')""")
+# A label name of a dimensional key's selector and its operator (`db`, `=`
+# in `x{db="a"}`), the value skipped whole so a quoted `=` in it is not read
+# as a label.
+_SELECTOR_LABEL = re.compile(r"""([A-Za-z_][A-Za-z0-9_]*)\s*(=~|!=|!~|=)\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')""")
 
 
 def _written_tree(conf_d, key, raws):
@@ -679,7 +680,8 @@ def _written_tree(conf_d, key, raws):
     root = {"defaults": dict(defaults), "optional_overrides": optional}
     dims = {b: list(ls) for b, ls in _registry_dimensions().items()}
     if "{" in key:
-        own = _SELECTOR_LABEL.findall(key[len(bare) + 1:])
+        # the name the row serves: a regex matcher's is `<label>_re` (#3475)
+        own = [n + ("_re" if op == "=~" else "") for n, op in _SELECTOR_LABEL.findall(key[len(bare) + 1:])]
         dims[bare] = sorted(set(dims.get(bare, [])) | set(own))
     if dims:
         root["dimensions"] = dims
