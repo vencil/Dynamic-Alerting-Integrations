@@ -234,16 +234,21 @@ func TestRefusesWhatAlertmanagerRefuses(t *testing.T) {
 	}
 }
 
-// go.mod's `godebug urlstrictcolons=0`: a proxy_url the released amtool
-// accepts (#2295) is accepted here too.
+// URLs are judged as the deployed Alertmanager judges them (#2295, #3522):
+// v0.34.2 is built without urlstrictcolons=0, so a second colon outside
+// brackets is refused — here too, because go.mod keeps Go's default. A
+// `godebug urlstrictcolons=0` coming back into go.mod turns this red.
 func TestURLsAreJudgedAsTheReleasedAlertmanager(t *testing.T) {
 	t.Parallel()
-	in := "route: {receiver: r}\nreceivers:\n- name: r\n  webhook_configs:\n" +
-		"  - url: 'https://example.com/'\n    http_config: {proxy_url: 'http://h:80:3128/'}\n"
-	want := `{"route":{"receiver":"r"},"receivers":[{"name":"r","webhook_configs":[` +
-		`{"url":"https://example.com/","http_config":{"proxy_url":"http://h:80:3128/"}}]}]}`
-	if got := document(t, in); got != want {
-		t.Fatalf("document %s\nwant     %s", got, want)
+	for _, proxy := range []string{"http://h:80:3128/", "http://::1/"} {
+		in := "route: {receiver: r}\nreceivers:\n- name: r\n  webhook_configs:\n" +
+			"  - url: 'https://example.com/'\n    http_config: {proxy_url: '" + proxy + "'}\n"
+		rc, out, errOut := runOn(t, in)
+		if rc != exitCallerErr || out != "" ||
+			!strings.Contains(errOut, "refused by Alertmanager's config loader") ||
+			!strings.Contains(errOut, proxy) {
+			t.Fatalf("%s: rc=%d stdout=%q stderr=%q; want rc 2 and the loader's refusal", proxy, rc, out, errOut)
+		}
 	}
 }
 
