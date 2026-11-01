@@ -2,9 +2,12 @@
 # Run: promtool test rules tests/rulepacks/rule-pack-metadata-replicas_test.yaml
 #
 # threshold-exporter 預設 2 個副本（helm/threshold-exporter/values.yaml replicaCount），
-# 每個副本都送出 tenant_metadata_info 與 user_threshold。以 pod 為單位抓取時
-# （Prometheus Operator 的 ServiceMonitor 走 endpoints，一個 pod 一個 target），
-# 同一個租戶會有兩份只差 instance／pod 的序列。下面每個輸入都照這個形狀給兩份。
+# 每個副本都送出 tenant_metadata_info。以 pod 為單位抓取時（Prometheus Operator
+# 的 ServiceMonitor 走 endpoints，一個 pod 一個 target），同一個租戶會有兩份只差
+# instance／pod 的序列，下面的 tenant_metadata_info 都照這個形狀給兩份。
+# user_threshold 只給一份、不帶 scrape label：threshold 那一側本來就先 max by 收斂，
+# 而 rulepack_contract_test.go 規定 fixture 的 user_threshold 只能帶 exporter 自己送的
+# label（#731）。
 #
 # 舊寫法 `* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info`
 # 在這種輸入下整條告警評估失敗（"found duplicate series for the match group …
@@ -48,55 +51,41 @@ tests:
       # clickhouse — ClickHouseHighConnections
       - series: 'ClickHouseMetrics_TCPConnection{tenant="t1"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="clickhouse", metric="active_connections", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="clickhouse", metric="active_connections", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="clickhouse", metric="active_connections", severity="warning"}'
         values: '500x60'
 
       # mariadb — MariaDBHighConnections；custom-alerts 的 threshold recipe 也讀同一個指標。
       - series: 'mysql_global_status_threads_connected{tenant="t1"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="mysql", metric="connections", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="mysql", metric="connections", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="mysql", metric="connections", severity="warning"}'
         values: '500x60'
 
       # custom-alerts — Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m
-      - series: 'user_threshold{tenant="t1", component="custom", metric="mysql_global_status_threads_connected", severity="warning", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", name="conns_high", mode="page", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="custom", metric="mysql_global_status_threads_connected", severity="warning", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", name="conns_high", mode="page", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="custom", metric="mysql_global_status_threads_connected", severity="warning", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", name="conns_high", mode="page"}'
         values: '500x60'
 
       # db2 — DB2HighConnections
       - series: 'db2_connections_active{tenant="t1"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="db2", metric="connections_active", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="db2", metric="connections_active", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="db2", metric="connections_active", severity="warning"}'
         values: '500x60'
 
       # elasticsearch — ElasticsearchPendingTasks
       - series: 'elasticsearch_cluster_health_number_of_pending_tasks{tenant="t1"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="es", metric="pending_tasks", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="es", metric="pending_tasks", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="es", metric="pending_tasks", severity="warning"}'
         values: '500x60'
 
       # jvm — JVMThreadPoolExhaustion
       - series: 'jvm_threads_current{tenant="t1"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="jvm", metric="threads", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="jvm", metric="threads", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="jvm", metric="threads", severity="warning"}'
         values: '500x60'
 
       # kafka — KafkaHighConsumerLag
       - series: 'kafka_consumergroup_lag_sum{tenant="t1"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="kafka", metric="consumer_lag", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="kafka", metric="consumer_lag", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="kafka", metric="consumer_lag", severity="warning"}'
         values: '500x60'
 
       # kubernetes — PodContainerHighCPU。這個 pack 只看 namespace=~"db-.+"、租戶取自
@@ -112,57 +101,43 @@ tests:
         values: '1x60'
       - series: 'kube_pod_labels{namespace="db-t1", pod="app-1"}'
         values: '1x60'
-      - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '80x60'
-      - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="db-t1", component="container", metric="cpu", severity="warning"}'
         values: '80x60'
 
       # mongodb — MongoDBHighConnections
       - series: 'mongodb_connections{tenant="t1", state="current"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="mongodb", metric="connections_current", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="mongodb", metric="connections_current", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="mongodb", metric="connections_current", severity="warning"}'
         values: '500x60'
 
       # nginx — NginxHighConnections
       - series: 'nginx_connections_active{tenant="t1"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="nginx", metric="connections", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="nginx", metric="connections", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="nginx", metric="connections", severity="warning"}'
         values: '500x60'
 
       # oracle — OracleHighActiveSessions
       - series: 'oracledb_sessions_active{tenant="t1"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="oracle", metric="sessions_active", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="oracle", metric="sessions_active", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="oracle", metric="sessions_active", severity="warning"}'
         values: '500x60'
 
       # postgresql — PostgreSQLHighReplicationLag
       - series: 'pg_replication_lag{tenant="t1"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="pg", metric="replication_lag", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="pg", metric="replication_lag", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="pg", metric="replication_lag", severity="warning"}'
         values: '500x60'
 
       # rabbitmq — RabbitMQHighQueueDepth
       - series: 'rabbitmq_queue_messages_ready{tenant="t1"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="rabbitmq", metric="queue_messages", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="rabbitmq", metric="queue_messages", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="rabbitmq", metric="queue_messages", severity="warning"}'
         values: '500x60'
 
       # redis — RedisHighConnections
       - series: 'redis_connected_clients{tenant="t1"}'
         values: '600x60'
-      - series: 'user_threshold{tenant="t1", component="redis", metric="connected_clients", severity="warning", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
-        values: '500x60'
-      - series: 'user_threshold{tenant="t1", component="redis", metric="connected_clients", severity="warning", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+      - series: 'user_threshold{tenant="t1", component="redis", metric="connected_clients", severity="warning"}'
         values: '500x60'
 
     promql_expr_test:
