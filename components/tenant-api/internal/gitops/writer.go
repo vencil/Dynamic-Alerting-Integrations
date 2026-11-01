@@ -1395,7 +1395,7 @@ func (w *Writer) readMergeBodyOnly(tenantID, filePath string, merge MergeFunc) e
 	if err != nil {
 		return err
 	}
-	// existing only takes refusals away (nonFiniteWrites): what the file
+	// existing only takes refusals away (refusedWrites): what the file
 	// already holds is not this write's.
 	if errs := validateBodyOnlyOver(tenantID, content, existing); len(errs) > 0 {
 		return fmt.Errorf("%w for %s: %s", ErrValidation, tenantID, strings.Join(errs, "; "))
@@ -2092,7 +2092,7 @@ func validateBodyOnly(tenantID, yamlContent string) []string {
 
 // validateBodyOnlyOver is validateBodyOnly for a document merged onto
 // carried, the file it replaces (nil: nothing is carried — a full body, or
-// a new file): see nonFiniteWrites.
+// a new file): see refusedWrites.
 func validateBodyOnlyOver(tenantID, yamlContent string, carried []byte) []string {
 	tcfg, errs := validateShape(tenantID, yamlContent)
 	if len(errs) > 0 {
@@ -2100,19 +2100,21 @@ func validateBodyOnlyOver(tenantID, yamlContent string, carried []byte) []string
 	}
 	// ADR-024 §S5 recipe validation is per-tenant and reads only the body, so it
 	// belongs on this side of the line. So does a threshold written as a
-	// non-finite number (#3140): the exporter's own predicate, which da-guard's
+	// value the exporter refuses (#3140 non-finite, #3267 any other: `abc`,
+	// `70:high`, `1e999`): the exporter's own predicate, which da-guard's
 	// value_not_served refuses the tree over.
-	errs = nonFiniteWrites(tenantID, tcfg, carried)
+	errs = refusedWrites(tenantID, yamlContent, tcfg, carried)
 	return append(errs, cfg.ValidateTenantCustomAlerts(tenantID, tcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault)...)
 }
 
-// nonFiniteWrites is cfg.NonFiniteThresholdWrites on tenantID's section of
-// tcfg — the one predicate every write path runs (#3140) — less what
+// refusedWrites is cfg.RefusedThresholdWrites on tenantID's section of
+// tcfg — the one predicate every write path runs (#3140, #3267: the
+// classifier da-guard's RefusedValueAt is) — less what
 // carried, the file a merge replaces, already holds: the same key with the
 // same value.
 //
 // ⛔ A MERGE IS JUDGED ON WHAT IT WRITES, NOT ON WHAT IT KEEPS. A batch
-// patch carries every key it did not name over from the file. A non-finite
+// patch carries every key it did not name over from the file. A refused
 // value the file already holds is not this write's: refusing it would turn
 // a write to another key into a refusal it cannot fix (and, in the PR-mode
 // pre-flight, a verdict on a tree the write does not land on, #1718). The
@@ -2120,9 +2122,24 @@ func validateBodyOnlyOver(tenantID, yamlContent string, carried []byte) []string
 // patch check (validatePatchMap), on the same predicate. carried nil (a
 // full-body write, or no file yet) subtracts nothing; a carried file that
 // does not decode subtracts nothing either — nothing of it is known.
-func nonFiniteWrites(tenantID string, tcfg cfg.ThresholdConfig, carried []byte) []string {
+//
+// ⚠️ A THRESHOLD WRITTEN AS NULL IS NO WRITE (#2518). tcfg is the write
+// gate's plain yaml.Unmarshal of yamlContent, where `k: null` is present
+// with the value "" — which the predicate refuses, like a written `k: ""`.
+// The exporter decodes the body through cfg.ParseConfigFile, which takes the
+// null out, so a refusal is re-judged on that decode: the null is not
+// refused, the written "" still is. Only when something is refused, so the
+// common write pays no second decode.
+func refusedWrites(tenantID, yamlContent string, tcfg cfg.ThresholdConfig, carried []byte) []string {
 	section := tcfg.Tenants[tenantID]
-	errs := cfg.NonFiniteThresholdWrites(section)
+	errs := cfg.RefusedThresholdWrites(section)
+	if len(errs) == 0 {
+		return nil
+	}
+	if served, err := cfg.ParseConfigFile([]byte(yamlContent)); err == nil {
+		section = served.Tenants[tenantID]
+		errs = cfg.RefusedThresholdWrites(section)
+	}
 	if len(errs) == 0 || carried == nil {
 		return errs
 	}
@@ -2138,7 +2155,7 @@ func nonFiniteWrites(tenantID string, tcfg cfg.ThresholdConfig, carried []byte) 
 		}
 		written[k] = v
 	}
-	return cfg.NonFiniteThresholdWrites(written)
+	return cfg.RefusedThresholdWrites(written)
 }
 
 // validate checks an incoming tenant YAML body before it is written.
@@ -2211,7 +2228,7 @@ func validateReplacing(configDir, tenantID, tenantFilePath, yamlContent string, 
 // validateReplacingOver is validateReplacing for a document merged onto
 // carried, the file it replaces (the merge paths: readMergeValidateIn); nil
 // for a full body. carried decides only which non-finite thresholds are
-// this write's (nonFiniteWrites).
+// this write's (refusedWrites).
 func validateReplacingOver(configDir, tenantID, tenantFilePath, yamlContent string, replaceUnparseable bool, names TenantNames, carried []byte) (errs, notices []string) {
 	// #3064: validateShape refuses a body that declares any tenant but
 	// tenantID (TenantFileManagement on the body), so the #1681 added-section
@@ -2269,10 +2286,10 @@ func validateReplacingOver(configDir, tenantID, tenantFilePath, yamlContent stri
 	// a full overlay, so it carries the tenant's complete own recipe set.
 	caViol := cfg.ValidateTenantCustomAlerts(tenantID, tcfg.Tenants[tenantID], cfg.MaxCustomRecipesDefault)
 	errs = append(keyErrs, caViol...)
-	// #3140: a threshold written as a non-finite number, on every write path
-	// — the batch merges (WriteBatch, WritePRBatch's in-lock merge) reach no
+	// #3140, #3267: a threshold written as a value the exporter refuses, on
+	// every write path — the batch merges (WriteBatch, WritePRBatch's in-lock merge) reach no
 	// other check of it (validateBodyOnly is the full-body paths' pre-flight).
-	errs = append(errs, nonFiniteWrites(tenantID, tcfg, carried)...)
+	errs = append(errs, refusedWrites(tenantID, yamlContent, tcfg, carried)...)
 
 	// B2-wide eol-expansion guard (ADR-024 §8) at the SHARED write choke point, so
 	// PutTenant + batch full-config writes are covered, not just the /custom-alerts

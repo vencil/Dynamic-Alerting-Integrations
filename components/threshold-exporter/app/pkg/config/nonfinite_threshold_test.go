@@ -178,15 +178,27 @@ func TestNonFiniteThreshold_CustomAlertRefused(t *testing.T) {
 	}
 }
 
-// tenant-api's body pre-flight message set (the same predicate).
-func TestNonFiniteThresholdWrites(t *testing.T) {
+// tenant-api's body pre-flight message set (the same predicate): every value
+// RefusedValueAt refuses (#3267), not only a non-finite one (#3140).
+func TestRefusedThresholdWrites(t *testing.T) {
 	t.Parallel()
-	got := NonFiniteThresholdWrites(map[string]ScheduledValue{
+	got := RefusedThresholdWrites(map[string]ScheduledValue{
 		"mysql_connections":          {Default: "NaN"},
 		"redis_memory":               {Default: "70", Overrides: []TimeWindowOverride{{Window: "01:00-02:00", Value: "-Inf:critical"}}},
 		"mysql_connections_critical": {Default: "+Inf"},
 		"container_cpu":              {Default: "70"},
 		"pg_x":                       {Default: "abc"},
+		"pg_high":                    {Default: "70:high"},
+		"pg_range":                   {Default: "1e999"},
+		"pg_hexrange":                {Default: "0x1p1024"},
+		"pg_off_sev":                 {Default: "disable:critical"},
+		"pg_crit_critical":           {Default: "70:critical"},
+		"pg_window":                  {Default: "70", Overrides: []TimeWindowOverride{{Window: "01:00-02:00", Value: "abc"}}},
+		"ok_underscore":              {Default: "1_000"},
+		"ok_hex":                     {Default: "0x1p4"},
+		"ok_sev":                     {Default: "70:critical"},
+		"ok_off":                     {Default: "disable"},
+		"ok_off_critical":            {Default: "disable"},
 		"_silent_mode":               {Default: "NaN"},
 		"x{db=\"a\"}":                {Default: "inf"},
 	})
@@ -194,9 +206,27 @@ func TestNonFiniteThresholdWrites(t *testing.T) {
 	for _, m := range got {
 		keys = append(keys, m[:strings.Index(m, ":")])
 	}
-	want := []string{"mysql_connections", "mysql_connections_critical", "redis_memory", "x{db=\"a\"}"}
+	want := []string{"mysql_connections", "mysql_connections_critical", "pg_crit_critical", "pg_hexrange",
+		"pg_high", "pg_off_sev", "pg_range", "pg_window", "pg_x", "redis_memory", "x{db=\"a\"}"}
 	if !reflect.DeepEqual(keys, want) {
 		t.Errorf("keys = %v, want %v (%q)", keys, want, got)
+	}
+}
+
+// RefusedThresholdWrites and RefusedValueAt are one classifier: for every
+// value, the write is refused exactly when RefusedValueAt refuses it.
+func TestRefusedThresholdWrites_IsRefusedValueAt(t *testing.T) {
+	t.Parallel()
+	values := []string{"70", "1_000", "0x1p4", "70:critical", " 70 : Warning ", "disable", "off", "017",
+		"abc", "70:high", "70:", "1e999", "0x1p1024", "0x1F", "", "NaN", "-Inf:critical", "disable:critical", "CRİTICAL"}
+	for _, key := range []string{"mysql_connections", "mysql_connections_critical", "x{db=\"a\"}"} {
+		for _, v := range values {
+			sv := ScheduledValue{Default: v}
+			refused := RefusedValueAt(key, sv, fixedNow) != ""
+			if wrote := len(RefusedThresholdWrites(map[string]ScheduledValue{key: sv})) > 0; wrote != refused {
+				t.Errorf("%s=%q: RefusedThresholdWrites refuses %v, RefusedValueAt %v", key, v, wrote, refused)
+			}
+		}
 	}
 }
 

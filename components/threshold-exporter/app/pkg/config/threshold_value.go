@@ -106,34 +106,61 @@ func parseThresholdNumber(s string) (float64, bool) {
 // (refusedDefault).
 func finiteThreshold(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
-// NonFiniteThresholdWrites is, sorted, one message per threshold key of a
+// RefusedThresholdWrites is, sorted, one message per threshold key of a
 // tenant's map (not `_`-prefixed) whose value — its `default` or a window's
-// value — reads as a number parseThresholdNumber refuses for being
-// non-finite: `NaN`, `Inf`, `-inf:critical` (#3140). The exporter serves the
-// platform default or drops the row for each, and da-guard refuses the tree
-// (value_not_served); tenant-api refuses the write with these messages
-// (its body pre-flight), so the three answer with one predicate.
-func NonFiniteThresholdWrites(overrides map[string]ScheduledValue) []string {
+// value — the row resolver of that key refuses: refusedThresholdText, the
+// classifier RefusedValueAt is, on each value as written (#3140, #3267).
+// That is a non-finite number (`NaN`, `-inf:critical`) and every other value
+// the resolvers cannot read: `abc`, `70:high`, `disable:critical`, a number
+// ParseFloat reads only out of range (`1e999`, `0x1p1024`), and on a
+// `<key>_critical` any severity suffix. The exporter serves the platform
+// default or drops the row for each, and da-guard refuses the tree
+// (value_not_served); tenant-api refuses the write with these messages, so
+// the three answer with one predicate.
+//
+// A window's value is judged although only the minutes its window covers
+// read it: whichever minute that is, the exporter refuses it then.
+func RefusedThresholdWrites(overrides map[string]ScheduledValue) []string {
 	var out []string
 	for key, sv := range overrides {
 		if baseRowsSkipKey(key) {
 			continue
 		}
+		canon, _ := CanonicalKeyFor(key)
 		values := []string{sv.Default}
 		for _, o := range sv.Overrides {
 			values = append(values, o.Value)
 		}
 		for _, raw := range values {
-			if nonFiniteThresholdText(raw) {
-				out = append(out, fmt.Sprintf("%s: %q is not a finite number — an alert compared against "+
-					"NaN or ±Inf never fires or always fires, so the exporter does not serve it as a threshold; "+
-					"write a finite number (optionally with `:warning` or `:critical`) or `disable`", key, raw))
+			if msg := refusedThresholdWriteMessage(key, canon, raw); msg != "" {
+				out = append(out, msg)
 				break
 			}
 		}
 	}
 	sort.Strings(out)
 	return out
+}
+
+// refusedThresholdWriteMessage is RefusedThresholdWrites' message for raw,
+// written on key (canon its canonical spelling), or "" when the resolver
+// reads raw.
+func refusedThresholdWriteMessage(key, canon, raw string) string {
+	switch refusedThresholdText(canon, raw) {
+	case "":
+		return ""
+	case RefusedNonFinite:
+		return fmt.Sprintf("%s: %q is not a finite number — an alert compared against "+
+			"NaN or ±Inf never fires or always fires, so the exporter does not serve it as a threshold; "+
+			"write a finite number (optionally with `:warning` or `:critical`) or `disable`", key, raw)
+	}
+	if _, critical := criticalRowBase(canon); critical {
+		return fmt.Sprintf("%s: %q is not a threshold the exporter reads — a `_critical` key's value is "+
+			"the critical threshold itself: write a finite number with no `:<severity>` suffix, or `disable`", key, raw)
+	}
+	_, suffixed := thresholdRowDisabled(raw)
+	return fmt.Sprintf("%s: %q is not a threshold the exporter reads, so it does not serve it — write a "+
+		"finite number (optionally with `:warning` or `:critical`) or `disable`%s", key, raw, suffixedHint(suffixed, key))
 }
 
 // nonFiniteThresholdText reports whether raw's number half (the shared
@@ -174,7 +201,14 @@ const (
 // undeclared key gets no row whatever it holds) is not decided here: the
 // caller asks ValuesNotServed for that.
 func RefusedValueAt(key string, sv ScheduledValue, now time.Time) string {
-	raw := sv.resolveValue(now, nil)
+	return refusedThresholdText(key, sv.resolveValue(now, nil))
+}
+
+// refusedThresholdText is RefusedValueAt on one value as written, raw, with
+// no schedule to resolve: the one classifier of a threshold key's value, which
+// RefusedValueAt (da-guard) and RefusedThresholdWrites (tenant-api's write
+// gate) both are (#3267).
+func refusedThresholdText(key, raw string) string {
 	if off, _ := thresholdRowDisabled(raw); off {
 		return ""
 	}

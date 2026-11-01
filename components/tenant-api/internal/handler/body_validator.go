@@ -218,13 +218,14 @@ func validatePatchMap(patch map[string]string, fieldPrefix string) []Violation {
 			})
 			continue
 		}
-		// #3140: a threshold written as a non-finite number — the
-		// exporter's own predicate, the one PUT's body-only pre-flight runs
+		// #3140, #3267: a threshold written as a value the exporter refuses
+		// (non-finite, `abc`, `70:high`, `1e999`) — the exporter's own
+		// predicate, the one PUT's body-only pre-flight runs
 		// (validateBodyOnly), here on the one value this patch writes.
 		// Refused before anything is written, so every batch path (direct,
 		// PR, /groups/{id}/batch) answers it with this 400; the writer's
 		// merge paths refuse it again on the merged file.
-		if msgs := cfg.NonFiniteThresholdWrites(map[string]cfg.ScheduledValue{k: {Default: v}}); len(msgs) > 0 {
+		if msgs := cfg.RefusedThresholdWrites(map[string]cfg.ScheduledValue{k: {Default: v}}); len(msgs) > 0 {
 			violations = append(violations, Violation{
 				Field:  fmt.Sprintf("%s[%q]", fieldPrefix, k),
 				Reason: strings.TrimPrefix(msgs[0], k+": "),

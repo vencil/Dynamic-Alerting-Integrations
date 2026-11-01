@@ -50,8 +50,11 @@ func TestValidateBodyOnlyIsTheBodyHalfOfValidate(t *testing.T) {
 		// body is API-shaped or refused), no longer a tree-derived one.
 		{"a second tenant section (#3064)", smuggled},
 		// #3140: a non-finite threshold number — the exporter's predicate
-		// (cfg.NonFiniteThresholdWrites), body-shaped.
+		// (cfg.RefusedThresholdWrites), body-shaped.
 		{"non-finite threshold (#3140)", "tenants:\n  db-a:\n    mysql_connections: \"-Inf\"\n"},
+		// #3267: and any other value the exporter refuses.
+		{"out-of-range threshold (#3267)", "tenants:\n  db-a:\n    mysql_connections: \"1e999\"\n"},
+		{"unreadable threshold (#3267)", "tenants:\n  db-a:\n    mysql_connections: \"70:high\"\n"},
 		// ⛔ THE ONE THAT ACTUALLY GUARDS THE DUPLICATION. The two validators each
 		// call cfg.ValidateTenantCustomAlerts on their own line; every other row
 		// here rides on the shared validateShape and so cannot drift. Without this

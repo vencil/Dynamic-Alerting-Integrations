@@ -13,6 +13,7 @@ package gitops
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -39,5 +40,31 @@ func TestWriteGate_NullKeysAreTheKeyVerdicts(t *testing.T) {
 		if errs := nullGateErrs(t, tc.root, tc.body); len(errs) != 0 {
 			t.Errorf("%s: errs = %q, want none: whether it is read is the key verdict's", name, errs)
 		}
+	}
+}
+
+// #3267: the refusal of a value the exporter cannot read is not a refusal of
+// a null. `k: ""` is a written value the exporter refuses ("unknown value");
+// `k: null` writes nothing (#2518) — the write gate's plain decode holds it
+// as "" too, so refusedWrites re-judges on the exporter's decode.
+func TestWriteGate_RefusedEmptyIsNotNull(t *testing.T) {
+	root := "defaults:\n  mysql_connections: 80\n  mysql_slow_queries: 5\n"
+	for _, body := range []string{
+		"tenants:\n  tx:\n    mysql_connections: null\n",
+		"tenants:\n  tx:\n    mysql_connections:\n      default: null\n",
+	} {
+		if errs := nullGateErrs(t, root, body); len(errs) != 0 {
+			t.Errorf("%q: errs = %q, want none: a null writes nothing", body, errs)
+		}
+		if errs := validateBodyOnly("tx", body); len(errs) != 0 {
+			t.Errorf("%q: body-only errs = %q, want none", body, errs)
+		}
+	}
+	empty := "tenants:\n  tx:\n    mysql_connections: \"\"\n"
+	if errs := nullGateErrs(t, root, empty); len(errs) == 0 || !strings.Contains(strings.Join(errs, "; "), "is not a threshold the exporter reads") {
+		t.Errorf("written \"\": errs = %q, want the refusal", errs)
+	}
+	if errs := validateBodyOnly("tx", empty); len(errs) == 0 {
+		t.Error("written \"\": body-only pre-flight took it")
 	}
 }
