@@ -35,7 +35,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility: the repo subdir layout needs the
@@ -46,7 +46,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 try:
     from _lib_python import (
         detect_cli_lang,
-        format_json_report,
         parse_duration_seconds,
         prometheus_range,
         safe_label,
@@ -56,7 +55,6 @@ try:
 except ImportError:
     from scripts.tools._lib_python import (  # type: ignore[no-redef]
         detect_cli_lang,
-        format_json_report,
         parse_duration_seconds,
         prometheus_range,
         safe_label,
@@ -119,6 +117,20 @@ class ForecastReport:
 
 # ---------------------------------------------------------------------------
 # Linear regression (pure Python — no numpy dependency)
+def finite_samples(
+    samples: list[tuple[float, float]],
+) -> tuple[list[tuple[float, float]], int]:
+    """#3159: the ``(timestamp, value)`` samples a regression can use — both
+    finite — and how many were dropped. The lib drops a non-finite VALUE
+    (`finite_row_samples`, #3213); a timestamp is a JSON number, and a
+    server that writes ``Infinity`` / ``NaN`` there (Python's reader takes
+    both) used to make every regression output NaN — printed as ``NaN`` in
+    the text report, and a document JSON cannot carry under ``--json``."""
+    kept = [(ts, v) for ts, v in samples if math.isfinite(ts) and math.isfinite(v)]
+    return kept, len(samples) - len(kept)
+
+
+
 # ---------------------------------------------------------------------------
 def linear_regression(
     xs: list[float], ys: list[float]
@@ -266,10 +278,20 @@ def query_cardinality_range(
     for series in result:
         tenant = series.get("metric", {}).get("tenant", "unknown")
         values, dropped = finite_row_samples(series)
+        if not values:
+            # #3213: every VALUE non-finite — the tenant is not listed.
+            if dropped and non_finite_dropped is not None:
+                non_finite_dropped[tenant] = non_finite_dropped.get(tenant, 0) + dropped
+            continue
+        # #3159: the timestamp too. A tenant left with no sample by THIS
+        # filter stays listed (an empty series: `analyze_tenant`'s
+        # `data_points: 0`), as it was before the filter — dropping it would
+        # turn "every timestamp NaN" into `no_cardinality_data`, rc 0 → 2.
+        values, dropped_ts = finite_samples(values)
+        dropped += dropped_ts
         if dropped and non_finite_dropped is not None:
             non_finite_dropped[tenant] = non_finite_dropped.get(tenant, 0) + dropped
-        if values:
-            results[tenant] = values
+        results[tenant] = values
 
     return results
 
@@ -286,6 +308,8 @@ def analyze_tenant(
     """分析單一 tenant 的基數趨勢。
 
     將 timestamp 轉為「距第一筆資料的天數」做線性回歸。
+    #3159：迴歸前先濾掉時間戳或值非有限的樣本（`finite_samples`）；
+    `data_points` 是留下來的點數。
 
     Args:
         tenant: tenant 名稱。
@@ -296,6 +320,7 @@ def analyze_tenant(
     Returns:
         TenantForecast。
     """
+    time_series, _ = finite_samples(time_series)  # #3159: before the regression
     if not time_series:
         return TenantForecast(
             tenant=tenant, current_cardinality=0, cardinality_limit=limit,
@@ -392,9 +417,10 @@ def generate_text_report(report: ForecastReport, lang: str = "en") -> str:
 
     if report.non_finite_samples_dropped:
         n = report.non_finite_samples_dropped
-        lines.append(f"略過 {n} 個非有限樣本值（+Inf／-Inf／NaN），未計入迴歸"
+        lines.append(f"略過 {n} 個值或時間戳非有限（+Inf／-Inf／NaN）的樣本，未計入迴歸"
                      if lang == "zh" else
-                     f"{n} non-finite sample value(s) (+Inf / -Inf / NaN) left out of the regression")
+                     f"{n} sample(s) with a non-finite value or timestamp (+Inf / -Inf / NaN) "
+                     "left out of the regression")
 
     if not report.tenants:
         lines.append("")
@@ -486,8 +512,8 @@ def generate_markdown(report: ForecastReport) -> str:
     lines.append("")
     if report.non_finite_samples_dropped:
         # #3213: disclosed in every format, not only --json / text
-        lines.append(f"> {report.non_finite_samples_dropped} non-finite sample value(s) "
-                     "(+Inf / -Inf / NaN) left out of the regression")
+        lines.append(f"> {report.non_finite_samples_dropped} sample(s) with a non-finite value "
+                     "or timestamp (+Inf / -Inf / NaN) left out of the regression")
         lines.append("")
 
     risk_icons = {"critical": "🔴", "warning": "🟡", "safe": "🟢"}
@@ -581,7 +607,7 @@ def build_parser(lang: str = "en") -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def main(argv: Optional[list[str]] = None) -> "int | Report":
     """CLI 進入點。"""
     try_utf8_stdout()
     lang = detect_cli_lang()
@@ -620,7 +646,7 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"Error: Prometheus query failed: {safe_label(str(exc))}",
                   file=sys.stderr)
         if args.json_output:
-            print(format_json_report({
+            return Report({  # #3216: run() writes it
                 "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "status": "caller_error",
                 "reason": "prometheus_query_error",
@@ -631,7 +657,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 "summary": {"critical": 0, "warning": 0, "safe": 0, "total": 0,
                             "non_finite_samples_dropped": 0},
                 "tenants": [],
-            }))
+            }, EXIT_CALLER_ERROR)
         return EXIT_CALLER_ERROR
 
     if not cardinality_data:
@@ -645,7 +671,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             # #1112: same schema as generate_json_report(), zero tenants, plus a
             # status/reason discriminator. Exit code stays EXIT_CALLER_ERROR —
             # only the output shape changes, not the exit semantics.
-            print(format_json_report({
+            # #3216: run() writes it.
+            return Report({
                 "generated_at": time.strftime("%Y-%m-%d %H:%M:%S"),
                 "status": "no_data",
                 "reason": "no_cardinality_data",
@@ -659,7 +686,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                                 n for t, n in non_finite_dropped.items()
                                 if not args.tenant or t == args.tenant)},
                 "tenants": [],
-            }))
+            }, EXIT_CALLER_ERROR)
         return EXIT_CALLER_ERROR
 
     # Generate forecast
@@ -674,15 +701,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         n for t, n in non_finite_dropped.items()
         if not args.tenant or t == args.tenant)
 
-    # Output
+    # Output; CI exit code: rc 1 with --ci when a tenant is critical
     if args.json_output:
-        print(format_json_report(generate_json_report(report)))
-    elif args.markdown:
+        return Report(generate_json_report(report),  # #3216: run() writes it
+                      EXIT_VIOLATION if args.ci and report.critical_count > 0 else EXIT_OK)
+    if args.markdown:
         print(generate_markdown(report))
     else:
         print(generate_text_report(report, lang))
-
-    # CI exit code
     if args.ci and report.critical_count > 0:
         return EXIT_VIOLATION
     return EXIT_OK

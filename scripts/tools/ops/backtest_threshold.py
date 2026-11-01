@@ -57,16 +57,15 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 from _lib_prometheus import http_get_json  # noqa: E402  (#3133: the reachability probe; not a query)
-from _lib_python import prometheus_range, QueryError, write_json_or_die, write_text_or_die, add_prometheus_arg  # noqa: E402
+from _lib_python import prometheus_range, QueryError, write_text_or_die, add_prometheus_arg  # noqa: E402
 from _lib_prometheus import sample_value  # noqa: E402  (#3213 the one sample reading)
 from _lib_python import YamlFileError  # noqa: E402
-from _lib_python import format_json_report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import OutputWriteError  # noqa: E402  (#3089 output preflight)
 import _lib_parse_tree  # noqa: E402  (#3206 the shared conf.d refusal)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
-    arm_crash_envelope, disarm_crash_envelope,
+    OutputNotSerializable, Report, arm_crash_envelope, encode_json,
 )
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
 from _lib_validation import THRESHOLD_SEVERITIES  # noqa: E402  (#3071)
@@ -940,6 +939,43 @@ def _not_backtested(change, reason):
 _QUERY_ERROR_MAX = 300
 
 
+#: #3159: what `impact_pct` of an analyzed row is relative to — the
+#: `impact_kind` values. Only `relative` and a `disabled` row whose old
+#: threshold fired carry a number; every other kind has no old firing count
+#: to be relative to, and its `impact_pct` is null.
+IMPACT_KINDS = ("relative", "no_firing", "starts_firing", "newly_enabled", "disabled")
+
+
+def impact(old_breaches, new_breaches, *, old_disabled=False, new_disabled=False):
+    """#3159: ``{"impact_pct": float | None, "impact_kind": str}`` of an
+    analyzed row — the change in firing points relative to the old
+    threshold's, in percent, and which of `IMPACT_KINDS` it is:
+
+    * ``disabled`` — the new side serves no row (``disable``, or a value the
+      exporter refuses): -100.0 when the old threshold fired, else null;
+    * ``newly_enabled`` — the old side served no row: null (no old count);
+    * ``no_firing`` — both thresholds, neither fires: null;
+    * ``starts_firing`` — both thresholds, only the new one fires: null;
+    * ``relative`` — both thresholds, the old one fires: the percentage,
+      rounded to 0.1 (-100.0 when the new one no longer fires).
+
+    A number is always a float. It used to be ``Infinity`` (not JSON) for a
+    newly enabled row that fires, the string ``"Inf"`` for a row that starts
+    firing and ``0`` / ``0.0`` / -100.0 for the rest, so one field held three
+    types and -100 meant both "disabled" and "no longer fires"."""
+    if new_disabled and not old_disabled:
+        kind = "disabled"
+        pct = -100.0 if old_breaches > 0 else None
+    elif old_disabled and not new_disabled:
+        kind, pct = "newly_enabled", None
+    elif old_breaches > 0:
+        kind = "relative"
+        pct = round((new_breaches - old_breaches) / old_breaches * 100, 1)
+    else:
+        kind, pct = ("starts_firing" if new_breaches > 0 else "no_firing"), None
+    return {"impact_pct": None if pct is None else float(pct), "impact_kind": kind}
+
+
 def backtest_change(prom_url, change, lookback_seconds):
     """Backtest a single threshold change against historical data.
 
@@ -1034,6 +1070,7 @@ def backtest_change(prom_url, change, lookback_seconds):
     # `value_non_finite` segment for two trees) — a config error that
     # silences the alert, not an intended `disable`.
     if new_disabled and not old_disabled and change.get("new_refused"):
+        old_breaches = count_threshold_breaches(values, old_t, direction)
         return {
             "tenant": tenant,
             "metric": metric,
@@ -1043,14 +1080,15 @@ def backtest_change(prom_url, change, lookback_seconds):
             "query": query,
             "risk": "HIGH",
             "data_points": total_points,
-            "old_breach_count": count_threshold_breaches(values, old_t, direction),
+            "old_breach_count": old_breaches,
             "new_breach_count": 0,
-            "impact_pct": -100.0,
+            **impact(old_breaches, 0, new_disabled=True),
             "message": (f"Value refused by the exporter ({change['new_refused']}): no row "
                         "is served — all alerts silenced"),
         }
 
     if new_disabled and not old_disabled:
+        old_breaches = count_threshold_breaches(values, old_t, direction)
         return {
             "tenant": tenant,
             "metric": metric,
@@ -1060,9 +1098,9 @@ def backtest_change(prom_url, change, lookback_seconds):
             "query": query,
             "risk": "MEDIUM",
             "data_points": total_points,
-            "old_breach_count": count_threshold_breaches(values, old_t, direction),
+            "old_breach_count": old_breaches,
             "new_breach_count": 0,
-            "impact_pct": -100.0,
+            **impact(old_breaches, 0, new_disabled=True),
             "message": "Metric disabled — all alerts silenced",
         }
 
@@ -1081,7 +1119,7 @@ def backtest_change(prom_url, change, lookback_seconds):
             "data_points": total_points,
             "old_breach_count": 0,
             "new_breach_count": new_breaches,
-            "impact_pct": float("inf") if new_breaches > 0 else 0,
+            **impact(0, new_breaches, old_disabled=True),
             "message": f"Metric newly enabled — {new_breaches}/{total_points} points would fire",
         }
 
@@ -1090,11 +1128,9 @@ def backtest_change(prom_url, change, lookback_seconds):
     new_breaches = count_threshold_breaches(values, new_t, direction)
 
     if old_breaches == 0 and new_breaches == 0:
-        impact_pct = 0.0
         risk = "LOW"
         message = "No firing in lookback window under either threshold"
     elif old_breaches == 0:
-        impact_pct = float("inf")
         risk = "HIGH"
         message = f"New threshold would START firing ({new_breaches} points)"
     else:
@@ -1121,7 +1157,7 @@ def backtest_change(prom_url, change, lookback_seconds):
         "data_points": total_points,
         "old_breach_count": old_breaches,
         "new_breach_count": new_breaches,
-        "impact_pct": round(impact_pct, 1) if impact_pct != float("inf") else "Inf",
+        **impact(old_breaches, new_breaches),
         "message": message,
     }
 
@@ -1423,6 +1459,28 @@ def _unwritable_output(path, flag):
     return OutputWriteError(path, OSError(code, os.strerror(code), path), flag=flag)
 
 
+class _RunEnded(SystemExit):
+    """#3216: a terminal path of a `--json` run, raised from wherever it is
+    met (a helper, the conf.d refusal's handler) with the run's *report* —
+    `main` returns it to `run()`, which encodes and prints the document and
+    exits with its status. A `SystemExit` with that status, so a caller that
+    does not go through `main` still reads the exit it always did."""
+
+    def __init__(self, report):
+        super().__init__(report.status)
+        self.report = report
+
+
+def _end_json(args, document, rc):
+    """Under `--json`, end the run here with *document* and exit status *rc*
+    (`_RunEnded`; #3216: `run()` writes it with the one encoder, the tool
+    prints no JSON). Returns without `--json`: the caller's own
+    `sys.exit(<the same code>)` follows, spelled out so
+    `check_cli_contract` reads the code."""
+    if args.json:
+        raise _RunEnded(Report(document, rc))
+
+
 def _preflight_outputs(args):
     """#3089 (b): `-o` / `--markdown-output` that cannot be written → the
     line `write_*_or_die` prints, the `output_unwritable` envelope, rc 2."""
@@ -1431,9 +1489,8 @@ def _preflight_outputs(args):
         exc = _unwritable_output(value, flag) if value else None
         if exc is not None:
             print(f"ERROR: {safe_label(str(exc))}", file=sys.stderr)  # #1538
-            if args.json:
-                print(format_json_report(empty_report(
-                    args.lookback, "caller_error", "output_unwritable")))
+            _end_json(args, empty_report(args.lookback, "caller_error", "output_unwritable"),
+                      EXIT_CALLER_ERROR)
             sys.exit(EXIT_CALLER_ERROR)
 
 
@@ -1442,9 +1499,23 @@ def _write_outputs(args, report, markdown, recipe_tenants):
     preflight — `-o` is the document `--json` prints, `--markdown-output`
     is *markdown* plus the recipe block when a tenant declares recipes.
     #1641: an unwritable path is rc 2 + one line naming the flag, not a
-    traceback at rc 1 (which here would read as "HIGH risk found")."""
+    traceback at rc 1 (which here would read as "HIGH risk found").
+
+    #3216: `-o` is the one encoder's text, byte for byte what `--json`
+    prints. Under `--json` the files are written before `run()` prints the
+    document, so an unwritable path ends with the envelope, not with a
+    complete-looking document beside rc 2. A document JSON cannot carry
+    writes no `-o`: under `--json` it goes on to `run()`, which names it
+    (`output_not_serializable`, the crash code); without `--json` it is
+    the crash it is."""
     if args.output:
-        write_json_or_die(args.output, report, flag="-o/--output")
+        try:
+            text = encode_json(report) + "\n"
+        except OutputNotSerializable:
+            if not args.json:
+                raise
+            return
+        write_text_or_die(args.output, text, flag="-o/--output")
         if not args.json:
             print(f"  JSON report: {args.output}")
     if args.markdown_output:
@@ -1464,10 +1535,8 @@ def _end_refused(args, bad, lines):
     report = empty_report(args.lookback, "caller_error", _lib_parse_tree.REFUSAL_REASON)
     report["refused_paths"] = _lib_parse_tree.refused_paths(bad)
     report["error"] = lines[-1]
-    if args.json:
-        print(format_json_report(report))
-        disarm_crash_envelope()  # #3094: the document is out
     _write_outputs(args, report, not_run_markdown(report), ())
+    _end_json(args, report, EXIT_CALLER_ERROR)
     sys.exit(EXIT_CALLER_ERROR)
 
 
@@ -1475,10 +1544,8 @@ def _end_not_run(args, status, reason, rc, recipe_tenants=()):
     """A path that ran no backtest: its envelope on stdout under `--json`,
     the same envelope in `-o`, why in `--markdown-output`, then exit *rc*."""
     report = empty_report(args.lookback, status, reason)
-    if args.json:
-        print(format_json_report(report))
-        disarm_crash_envelope()  # #3094: the document is out; the writes below must not add one
     _write_outputs(args, report, not_run_markdown(report), recipe_tenants)
+    _end_json(args, report, rc)
     sys.exit(rc)
 
 
@@ -1495,7 +1562,18 @@ GIT_DIFF_REMOVED = (
 
 @observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
 def main():
-    """CLI entry point: Backtest threshold changes against historical Prometheus data."""
+    """CLI entry point: Backtest threshold changes against historical Prometheus data.
+
+    The exit status, or under `--json` a `Report` — its document and status
+    — that `run()` encodes and prints (#3216); a caller running it
+    in-process takes it through `_lib_exitcodes.emit_result`."""
+    try:
+        return _main()
+    except _RunEnded as end:
+        return end.report
+
+
+def _main():
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Backtest threshold changes against historical Prometheus data",
@@ -1566,32 +1644,32 @@ def main():
     # the `--json` envelope (argparse's own usage errors still print none).
     if args.git_diff is not None:
         print(GIT_DIFF_REMOVED, file=sys.stderr)
-        if args.json:
-            print(format_json_report(empty_report(
-                args.lookback, "caller_error", "git_diff_removed")))
+        if args.json:  # #3216: run() writes it
+            return Report(empty_report(args.lookback, "caller_error", "git_diff_removed"),
+                          EXIT_CALLER_ERROR)
         sys.exit(EXIT_CALLER_ERROR)
     if args.tenant:
         if not args.metric or (args.old_value is None and args.new_value is None):
             print("ERROR: --tenant requires --metric and at least one of --old-value/--new-value",
                   file=sys.stderr)
-            if args.json:
-                print(format_json_report(empty_report(
-                    args.lookback, "caller_error", "tenant_args_missing")))
+            if args.json:  # #3216: run() writes it
+                return Report(empty_report(args.lookback, "caller_error", "tenant_args_missing"),
+                              EXIT_CALLER_ERROR)
             sys.exit(EXIT_CALLER_ERROR)
         # #3066: the id goes into `{tenant="..."}` as written; one the tenant
         # id rule refuses (`a"b`, `a\b`) would make the query invalid PromQL.
         if not is_valid_tenant_id(args.tenant):
             print(f"ERROR: --tenant '{safe_label(args.tenant)}' is not a valid tenant id. "
                   f"{tenant_id_rule()[1]}", file=sys.stderr)
-            if args.json:
-                print(format_json_report(empty_report(
-                    args.lookback, "caller_error", "invalid_tenant_id")))
+            if args.json:  # #3216: run() writes it
+                return Report(empty_report(args.lookback, "caller_error", "invalid_tenant_id"),
+                              EXIT_CALLER_ERROR)
             sys.exit(EXIT_CALLER_ERROR)
     elif not args.config_dir:
         print("ERROR: Specify --config-dir (with --baseline) or --tenant", file=sys.stderr)
-        if args.json:
-            print(format_json_report(empty_report(
-                args.lookback, "caller_error", "no_change_source")))
+        if args.json:  # #3216: run() writes it
+            return Report(empty_report(args.lookback, "caller_error", "no_change_source"),
+                          EXIT_CALLER_ERROR)
         sys.exit(EXIT_CALLER_ERROR)
 
     # #3089 (b): after the argument checks, before any served-values,
@@ -1677,10 +1755,7 @@ def main():
     report = generate_report(results, args.lookback)
 
     # Output
-    if args.json:
-        print(format_json_report(report))
-        disarm_crash_envelope()  # #3094: the document is out; the writes below must not add one
-    else:
+    if not args.json:
         print_text_report(report)
 
     _write_outputs(args, report, generate_markdown(report), recipe_tenants)
@@ -1695,7 +1770,11 @@ def main():
     if report["query_error"] > 0:
         print(f"ERROR: {report['query_error']} change(s) not measured: the Prometheus "
               "query failed (see each change's message)", file=sys.stderr)
+        if args.json:
+            return Report(report, EXIT_CALLER_ERROR)  # #3216: run() writes it
         sys.exit(EXIT_CALLER_ERROR)
+    if args.json:
+        return Report(report, EXIT_VIOLATION if high_count > 0 else EXIT_OK)
     sys.exit(EXIT_VIOLATION if high_count > 0 else EXIT_OK)
 
 

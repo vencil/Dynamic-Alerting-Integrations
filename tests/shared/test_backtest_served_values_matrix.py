@@ -39,6 +39,7 @@ BACKTEST = REPO_ROOT / "scripts" / "tools" / "ops" / "backtest_threshold.py"
 sys.path.insert(0, str(BACKTEST.parent))
 import backtest_threshold as bt  # noqa: E402
 from _go_refusal import assert_refused  # noqa: E402  (#3206)
+from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -482,7 +483,7 @@ def _run_main(monkeypatch, capsys, cli_argv, base: Path, cur: Path, *extra: str,
     cli_argv("backtest_threshold", "--config-dir", str(cur), "--baseline", str(base),
              "--prometheus", "http://prom:9090", *extra)
     with pytest.raises(SystemExit) as ei:
-        bt.main()
+        raise SystemExit(emit_result(bt.main()))  # #3216: a --json Report, as run() writes it
     return ei.value.code, capsys.readouterr(), asked
 
 

@@ -285,10 +285,12 @@ class TestPssLabelRule:
 
     def test_a_label_is_kubectls_reading_of_it(self, tmp_path):
         """#3206: an unquoted `warn: yes` is the boolean true to kubectl (and
-        was to PyYAML), not the level string — still a missing label."""
+        was to PyYAML), not the level string — still a missing label. The
+        name is a plain string: an unquoted `n` would be a boolean, which the
+        reading refuses (#3490) before any label is looked at."""
         ns = tmp_path / "ns.yaml"
         ns.write_text(
-            "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: n\n  labels:\n"
+            "apiVersion: v1\nkind: Namespace\nmetadata:\n  name: ns\n  labels:\n"
             "    pod-security.kubernetes.io/warn: restricted\n"
             "    pod-security.kubernetes.io/audit: restricted\n", encoding="utf-8")
         assert k8s.collect_pss_findings([ns]) == []
