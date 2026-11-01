@@ -16,7 +16,6 @@ Usage:
   maintenance-scheduler --config-dir conf.d/ --dry-run
 """
 import argparse
-import http.client
 import os
 import re
 import sys
@@ -42,7 +41,7 @@ from _lib_python import (  # noqa: E402
     exit_on_yaml_file_error,
     http_request_with_retry,
 )
-from _lib_prometheus import QueryError, silences_list  # noqa: E402
+from _lib_prometheus import TRANSPORT_ERRORS, QueryError, silences_list  # noqa: E402
 # #2751: the tenants and their `_state_maintenance` are threshold-exporter's
 # own resolution (`da-guard effective`), not a Python re-read of the tree.
 from _lib_tenant_values import (  # noqa: E402
@@ -240,8 +239,8 @@ def get_existing_silences(alertmanager_url):
     url = f"{alertmanager_url}/api/v2/silences"
     try:
         data = _api_request(url, method="GET")
-    except (urllib.error.URLError, OSError, ValueError, http.client.HTTPException) as e:
-        # HTTPException: a truncated or garbled answer (IncompleteRead,
+    except TRANSPORT_ERRORS as e:
+        # Includes HTTPException: a truncated or garbled answer (IncompleteRead,
         # BadStatusLine) — neither an OSError nor retried by the helper.
         raise QueryError(str(e) or type(e).__name__, source="Alertmanager") from e
     data = silences_list(data)
@@ -472,8 +471,9 @@ def push_metrics(pushgateway_url, created, skipped, errors, duration_s):
         with urllib.request.urlopen(req, data=data, timeout=5) as resp:  # nosec B310  #see Request line above
             resp.read()
         print(f"  Pushed metrics to {pushgateway_url}", file=sys.stderr)
-    except (urllib.error.URLError, ValueError, OSError) as e:
-        # Non-fatal: observability failure should not fail the CronJob
+    except TRANSPORT_ERRORS as e:
+        # Non-fatal: observability failure should not fail the CronJob —
+        # including a reply that is not HTTP (#3477: it used to crash).
         print(f"  WARN: failed to push metrics to Pushgateway: {e}",
               file=sys.stderr)
 
