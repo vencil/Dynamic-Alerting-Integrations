@@ -144,7 +144,7 @@ grep "ns/op" /tmp/bench.txt   # 僅看結果行
 
 > **Source of truth**：`.github/workflows/bench-gate-pr.yaml`（PR-time）+ `.github/workflows/bench-record.yaml`（nightly baseline + 配對量測，summary only）。本節是 operational 對應文件 — SRE 防線 codification 見 user memory `feedback_github_actions_workflow_gotchas.md`。
 >
-> **Phase 2（informational）**：bench gate **不再阻擋 merge**。真 regression → 自動貼 PR comment + 上 `perf-regression` label（清掉後自動移除）；INCONCLUSIVE → 只標註。`override: bench-regress-ok` label + `bench-override-audit.yaml`（角色驗證 + stale-label strip）**已移除**——沒有 gate 要 override。main 的累積漂移目前沒有自動偵測：舊的 nightly trend watchdog 已退役（見 [§Nightly sustained-trend watchdog（已退役）](#nightly-sustained-trend-watchdog已退役)）。
+> **Phase 2（informational）**：bench gate **不再阻擋 merge**。真 regression → 自動貼 PR comment + 上 `perf-regression` label（清掉後自動移除）；INCONCLUSIVE → 只標註。`override: bench-regress-ok` label + `bench-override-audit.yaml`（角色驗證 + stale-label strip）**已移除**——沒有 gate 要 override。main 的累積漂移目前沒有逐夜的自動偵測（發版時的 Tier 2 比對（`bench-gate-release.yaml`）仍會把相對前一個平台版本 ≥10% 的退化寫進報告）：舊的 nightly trend watchdog 已退役（見 [§Nightly sustained-trend watchdog（已退役）](#nightly-sustained-trend-watchdog已退役)）。
 
 ### 概觀
 
@@ -239,7 +239,7 @@ regression 清掉後（下次 push 不再 flag）label 自動移除。**沒有 o
 
 > **Fork PR 限制**：`pull_request` event 對 fork 給 read-only token，comment/label 會失敗 → 降級成 `::warning::` + step summary（**不**用 `pull_request_target`，避免 pwn-request 洩 token）。
 
-⚠️ 逐 commit 都低於 5%、累積起來很大的漂移，目前**沒有自動偵測**。舊的絕對 ns/op 趨勢監測已退役（見下方「Nightly sustained-trend watchdog（已退役）」）；接手的是確定性指標（`B/op`、`allocs/op`）的累積預算，設計待資料累積後定案（[ADR-039 §尚未決定](../adr/039-bench-acceptance-ledger.md)）。
+⚠️ 逐 commit 都低於 5%、累積起來很大的漂移，目前**沒有逐夜的自動偵測**；只有發版時的 Tier 2 比對（`bench-gate-release.yaml`）仍會把相對前一個平台版本 ≥10% 的退化寫進報告。舊的絕對 ns/op 趨勢監測已退役（見下方「Nightly sustained-trend watchdog（已退役）」）；接手的是確定性指標（`B/op`、`allocs/op`）的累積預算，設計待資料累積後定案（[ADR-039 §尚未決定](../adr/039-bench-acceptance-ledger.md)）。
 
 ### 夜跑成對交錯量測（[ADR-032](../adr/032-paired-interleaved-bench-measurement.md) 實作第一段）
 
@@ -328,7 +328,7 @@ residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summar
 
 退役的理由是實績：它開過 9 張票，8 張被它自己在噪音裡反覆開關後自動關掉，1 張是誤判，沒有一張促成修正。絕對 ns/op 序列混了 runner 換機與時段噪音，分層、三態、帳本守衛修了七輪盲審仍收斂不了。
 
-- **取代者**：確定性指標（`B/op`、`allocs/op`）的累積預算。同一份輸入下逐次相同，不需要噪音地板。資料由 `bench-paired/v3` 的 `deterministic` 欄位每夜累積，至少四週後定預算（[ADR-039 §尚未決定](../adr/039-bench-acceptance-ledger.md)）。在那之前，低於逐 commit 門檻的累積漂移**沒有自動偵測**。
+- **取代者**：確定性指標（`B/op`、`allocs/op`）的累積預算。同一份輸入下逐次相同，不需要噪音地板。資料由 `bench-paired/v3` 的 `deterministic` 欄位每夜累積，至少四週後定預算（[ADR-039 §尚未決定](../adr/039-bench-acceptance-ledger.md)）。在那之前，低於逐 commit 門檻的累積漂移**沒有逐夜的自動偵測**，只有發版時的 Tier 2 比對（`bench-gate-release.yaml`）仍會把相對前一個平台版本 ≥10% 的退化寫進報告。
 - **配對 ns/op**（下節）維持 informational：只寫 step summary，不開票。[ADR-032](../adr/032-paired-interleaved-bench-measurement.md) 原訂的「並行後切換」協議（§待決 6）已撤回。
 - **舊資料與分析**：[`audit-reports/bench-trend-2026-08/`](audit-reports/bench-trend-2026-08/README.md) 存檔保留；它的 harness import 的是已移除的程式碼，要重跑請 checkout 退役之前的 commit。
 - `analyze_bench_history.py` 仍保留 GO/NO-GO 變異表模式（`make bench-history`），以及 `paired_trend_watch.py` 匯入的 `list_recent_runs` / `download_artifact`。
@@ -348,7 +348,7 @@ residue 完整清單留在 artifact 供稽核，但**不整份貼進 step summar
 | `INCONCLUSIVE` | 沒有夜被計數／沒有 bench 有分母／**沒有任何一支湊得出連續 2 夜** ⛔ **不是 CLEAR** |
 
 ⛔ 第三個 `INCONCLUSIVE` 條件是外部 review 抓到的缺陷，而它牴觸 ADR-032 §待決 6 的明文：
-「比值序列從零開始時（新上線，或換參考版本之後），持續判準需要幾夜才能發射——**那幾夜必須回報「無法評估」，不得回報「無發現」。**」
+「比值序列從零開始時，持續判準需要幾夜才能發射——**那幾夜必須回報「無法評估」，不得回報「無發現」。**」
 實測形狀：六夜、某支**每夜都 +42%**、對照測試隔夜擋一次使得沒有兩個計數夜相鄰 ⇒ 規則算術上不可能發射 ⇒ 原本回報 `CLEAR`，而那支的名字與 +42% **整份報告一個字都沒提**。
 ⚠️ **這個 job 自己的頭幾夜就會踩到**：它跑 `--from-gh --limit 14`，而配對管線上線前的夜會載成 `unreadable`，所以一開始只有 1 個計數夜。
 

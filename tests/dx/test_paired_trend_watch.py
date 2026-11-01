@@ -1572,8 +1572,8 @@ def test_rule_that_cannot_complete_reports_inconclusive_not_clear():
     anything, and "nothing fired" rendered as CLEAR with the benchmark's name
     and its +42% appearing NOWHERE on the page.
 
-    ADR-032 §待決 6, verbatim: 比值序列從零開始時（新上線，或換參考版本之後），
-    持續判準需要幾夜才能發射——那幾夜必須回報「無法評估」，不得回報「無發現」。
+    ADR-032 §待決 6, verbatim: 比值序列從零開始時，持續判準需要幾夜才能發射
+    ——那幾夜必須回報「無法評估」，不得回報「無發現」。
     """
     nights = []
     for i in range(6):
