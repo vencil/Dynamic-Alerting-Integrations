@@ -1,6 +1,10 @@
 package main
 
 import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -96,7 +100,7 @@ var metadataCases = []struct {
 	{name: "creationtimestamp-garbage", in: cmHead + "metadata: {name: a, creationTimestamp: garbage}\n",
 		kubectl: `parsing time "garbage" as "2006-01-02T15:04:05Z07:00": cannot parse "garbage" as "2006"`,
 		wantErr: `(kubectl: parsing time "garbage" as "2006-01-02T15:04:05Z07:00": cannot parse "garbage" as "2006")`},
-	{name: "creationtimestamp-number", hint: true, in: cmHead + "metadata: {name: a, creationTimestamp: 5}\n",
+	{name: "creationtimestamp-number", in: cmHead + "metadata: {name: a, creationTimestamp: 5}\n",
 		kubectl: "json: cannot unmarshal number into Go struct field ObjectMeta.metadata.creationTimestamp of type string",
 		wantErr: "(kubectl: json: cannot unmarshal number into Go struct field ObjectMeta.metadata.creationTimestamp of type string)"},
 	// A date without a time is no RFC 3339 time.
@@ -106,6 +110,11 @@ var metadataCases = []struct {
 	{name: "generation-string", in: cmHead + "metadata: {name: a, generation: x}\n",
 		kubectl: "json: cannot unmarshal string into Go struct field ObjectMeta.metadata.generation of type int64",
 		wantErr: "(kubectl: json: cannot unmarshal string into Go struct field ObjectMeta.metadata.generation of type int64)"},
+	// A number past int64 keeps its digits (read with UseNumber), as in
+	// kubectl's error.
+	{name: "generation-past-int64", in: cmHead + "metadata: {name: a, generation: 9223372036854775808}\n",
+		kubectl: "json: cannot unmarshal number 9223372036854775808 into Go struct field ObjectMeta.metadata.generation of type int64",
+		wantErr: "(kubectl: json: cannot unmarshal number 9223372036854775808 into Go struct field ObjectMeta.metadata.generation of type int64)"},
 	{name: "generation-fraction", in: cmHead + "metadata: {name: a, generation: 1.5}\n",
 		kubectl: "json: cannot unmarshal number 1.5 into Go struct field ObjectMeta.metadata.generation of type int64",
 		wantErr: "(kubectl: json: cannot unmarshal number 1.5 into Go struct field ObjectMeta.metadata.generation of type int64)"},
@@ -182,6 +191,16 @@ var metadataCases = []struct {
 		wantErr: "in this list, items[0] (line 5): it is not a Kubernetes object: the item is a number, not a mapping"},
 	{name: "items-null-list-metadata", in: "apiVersion: v1\nkind: List\nmetadata: 5\nitems: null\n",
 		kubectl: metadataNumberErr, wantErr: metaDoc + metadataNumberErr + ")"},
+	// The list's own content is refused here only, after every refusal
+	// kubectl makes of the list: kubectl's reason is the one told.
+	{name: "list-metadata-before-own-content", in: "kind: L\ndata: 1\nmetadata: 5\nitems: []\n",
+		kubectl: metadataNumberErr, wantErr: metaDoc + metadataNumberErr + ")"},
+	{name: "items-number-before-own-content", in: "kind: L\ndata: 1\nitems: 5\n",
+		kubectl: "json: cannot unmarshal number into Go struct field decodeList.items of type []json.RawMessage",
+		wantErr: "a list document's `items` is number, not a list"},
+	{name: "item-number-before-own-content", in: "kind: L\ndata: 1\nmetadata: {}\nitems: [5]\n",
+		kubectl: "json: cannot unmarshal number into Go value of type map[string]interface {}",
+		wantErr: "in this list, items[0] (line 4): it is not a Kubernetes object: the item is a number, not a mapping"},
 	// The list's metadata comes before anything asked of its items: their
 	// type, a list inside a list.
 	{name: "list-metadata-before-item-type", in: "apiVersion: v1\nkind: List\nmetadata: 5\nitems:\n- {metadata: {name: a}}\n",
@@ -222,4 +241,36 @@ var metadataCases = []struct {
 	{name: "item-apiversion-replaced", in: "apiVersion: v1\nkind: ConfigMapList\n" +
 		"items:\n- {apiVersion: 5, metadata: {name: a}}\n",
 		kubectl: "ACCEPT v1/ConfigMap"},
+}
+
+// quoteHint follows kubectl's error to the field it names: the sentence is
+// for a field that holds text, not for one that decodes from a string into
+// something else (a time), nor for an error whose field cannot be followed.
+func TestQuoteHintFollowsTheField(t *testing.T) {
+	t.Parallel()
+	str, other := reflect.TypeOf(""), reflect.TypeOf(int64(0))
+	for _, tc := range []struct {
+		field string
+		typ   reflect.Type
+		want  bool
+	}{
+		{"TypeMeta.apiVersion", str, true},
+		{"metadata.name", str, true},
+		{"metadata.labels", str, true},                // a label's value
+		{"metadata.ownerReferences.uid", str, true},   // types.UID
+		{"metadata.managedFields.manager", str, true}, // through a slice
+		{"metadata.creationTimestamp", str, false},    // metav1.Time
+		{"metadata.managedFields.time", str, false},   // *metav1.Time
+		{"metadata.generation", other, false},         // no string Type
+		{"metadata.nosuch", str, false},               // cannot be followed
+		{"metadata.name.deeper", str, false},          // past a string
+	} {
+		err := fmt.Errorf("wrapped: %w", &json.UnmarshalTypeError{Value: "number", Type: tc.typ, Field: tc.field})
+		if got := quoteHint(err) != ""; got != tc.want {
+			t.Errorf("quoteHint(Field %q, Type %v) given: %v, want %v", tc.field, tc.typ, got, tc.want)
+		}
+	}
+	if quoteHint(errors.New("parsing time")) != "" {
+		t.Error("quoteHint gave a sentence for an error that is no UnmarshalTypeError")
+	}
 }

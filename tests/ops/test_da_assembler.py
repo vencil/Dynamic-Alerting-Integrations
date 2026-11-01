@@ -420,34 +420,53 @@ class TestRenderCrFile:
     # TestRenderCrNameFormat.test_decoder_refusal_names_the_file. A name
     # that stays a string (`1:30`) is refused by the name-format check
     # instead: test_null_and_datetime_name_stale_hint.
-    @pytest.mark.parametrize("name, json_type", [
-        pytest.param("42", "number", id="name-int"),
-        pytest.param("8", "number", id="name-int-8"),
-        pytest.param("010", "number", id="name-int-octal"),
-        pytest.param("0x1F", "number", id="name-int-hex"),
-        pytest.param("-5", "number", id="name-int-negative"),
-        pytest.param("1.5", "number", id="name-float"),
-        pytest.param("1.50", "number", id="name-float-trailing-0"),
-        pytest.param("true", "bool", id="name-bool-true"),
-        pytest.param("TRUE", "bool", id="name-bool-upper"),
-        pytest.param("True", "bool", id="name-bool-title"),
-        pytest.param("yes", "bool", id="name-bool-yes"),
-        pytest.param("off", "bool", id="name-bool-off"),
-        pytest.param("0o17", "number", id="name-0o17"),
-        pytest.param("1e3", "number", id="name-1e3"),
-        pytest.param("08", "number", id="name-08"),
-        pytest.param("y", "bool", id="name-y"),
-        pytest.param("n", "bool", id="name-n"),
+    # `stale`: the file an earlier version (before #2399/#2400) rendered
+    # this name to — measured against tools/v2.9.0, #2430. None where it
+    # is the name as written and quoting saves it: quoting then overwrites
+    # the same file. `fix`: "quote" when the quoted name is DNS-1123;
+    # "rename" when it is not (#2396), and then even a same-spelling file
+    # (`True` -> `True.yaml`, `-5` -> `-5.yaml`) is left behind.
+    @pytest.mark.parametrize("name, json_type, stale, fix", [
+        pytest.param("42", "number", None, "quote", id="name-int"),
+        pytest.param("8", "number", None, "quote", id="name-int-8"),
+        pytest.param("010", "number", "8.yaml", "quote", id="name-int-octal"),
+        pytest.param("0x1F", "number", "31.yaml", "rename", id="name-int-hex"),
+        pytest.param("-5", "number", "-5.yaml", "rename",
+                     id="name-int-negative"),
+        pytest.param("1.5", "number", None, "quote", id="name-float"),
+        pytest.param("1.50", "number", "1.5.yaml", "quote",
+                     id="name-float-trailing-0"),
+        pytest.param("true", "bool", "True.yaml", "quote",
+                     id="name-bool-true"),
+        pytest.param("TRUE", "bool", "True.yaml", "rename",
+                     id="name-bool-upper"),
+        pytest.param("True", "bool", "True.yaml", "rename",
+                     id="name-bool-title"),
+        pytest.param("yes", "bool", "True.yaml", "quote", id="name-bool-yes"),
+        pytest.param("off", "bool", "False.yaml", "quote", id="name-bool-off"),
+        pytest.param("0o17", "number", None, "quote", id="name-0o17"),
+        pytest.param("1e3", "number", None, "quote", id="name-1e3"),
+        pytest.param("08", "number", None, "quote", id="name-08"),
+        pytest.param("y", "bool", None, "quote", id="name-y"),
+        pytest.param("n", "bool", None, "quote", id="name-n"),
     ])
     def test_non_string_name_is_refused_by_the_reading(
-            self, name, json_type, tmp_path, caplog):
+            self, name, json_type, stale, fix, tmp_path, caplog):
         """#2371／#2476／#3490：未加引號、Kubernetes 會解成數字／布林的 name 一律 rc 2。
 
         型別取自 da-crdecode（Kubernetes client 的 YAML→JSON），不是 YAML 1.1；
         拒收也由它的 manifest 讀法做，理由是 kubectl 的錯誤，另附「要文字就
         加引號」一句。`0o17`、`1e3`、`08`、`y`、`n` 先前以 PyYAML 讀成字串而
-        rc 0；會讓這幾列轉紅的改動：改回以 YAML 1.1 判型別。舊版寫下的
-        `8.yaml`、`True.yaml` 這類舊檔不再提示：本工具不讀到這個 name。
+        rc 0；會讓這幾列轉紅的改動：改回以 YAML 1.1 判型別。
+
+        #2430：舊版（#2399／#2400 之前）把這個 name 寫成型別化後的拼法
+        （`010` → `8.yaml`）。加引號重 render 後新檔是 `010.yaml`，舊檔
+        若還在持久輸出目錄裡，同一租戶就有兩份。da-crdecode 拒收時，訊息
+        只在那個舊檔**確實存在**於 --config-dir 時指名它（空目錄不提）；
+        拼法相同（`42`）時加引號會覆寫同一個檔，不該提。本工具不刪檔。
+        加引號仍非 DNS-1123（`TRUE`、`-5`，#2396）就得改名，舊檔即使拼法
+        相同也會留下，要提。會讓本測試轉紅的改動：拒收時不問舊檔提示，
+        或拿掉 `_stale_render_hint` 的存在檢查（空目錄也提）。
         """
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text(
@@ -459,8 +478,38 @@ class TestRenderCrFile:
         assert (f"cannot unmarshal {json_type} "
                 + self._KUBECTL_FIELD.format("name")) in caplog.text, caplog.text
         assert self._QUOTE_HINT in caplog.text
+        # Empty --config-dir: nothing was ever rendered here, no hint.
         assert "earlier version" not in caplog.text
         assert list(out_dir.iterdir()) == []
+        if stale is None:
+            return
+        # The earlier version's file is there: the hint must name it.
+        old = stale[:-len(".yaml")]
+        (out_dir / stale).write_text(self._rendered(old), encoding="utf-8")
+        caplog.clear()
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert (f"{stale} exists in this --config-dir" in caplog.text), \
+            caplog.text
+        assert "confirm it is not the output of another CR" in caplog.text
+        new_file = "quoted name's" if fix == "quote" else "renamed CR's"
+        assert f"it and the {new_file} file both" in caplog.text, \
+            caplog.text
+        assert "do not delete it" not in caplog.text
+        assert [p.name for p in out_dir.iterdir()] == [stale]
+
+    def test_no_stale_hint_when_decoding_cannot_be_asked(
+            self, tmp_path, caplog, monkeypatch):
+        """#2430：da-crdecode 沒跑成（找不到 binary）不是它對這份 CR 的回答，
+        舊檔在也不提示；提示只跟著拒收。"""
+        cr_path = tmp_path / "cr.yaml"
+        cr_path.write_text(self._K + "metadata: {name: 010}\n" + self._T,
+                           encoding="utf-8")
+        out_dir = tmp_path / "out"
+        out_dir.mkdir()
+        (out_dir / "8.yaml").write_text(self._rendered("8"), encoding="utf-8")
+        monkeypatch.setenv("DA_CRDECODE_BINARY", str(tmp_path / "no-such-binary"))
+        assert render_cr_file(cr_path, out_dir) == EXIT_CALLER_ERROR
+        assert "exists in this --config-dir" not in caplog.text, caplog.text
 
     def test_stale_hint_asks_to_rule_out_a_string_named_cr(
             self, tmp_path, caplog):

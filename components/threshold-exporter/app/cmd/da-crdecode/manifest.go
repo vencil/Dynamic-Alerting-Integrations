@@ -39,14 +39,15 @@ import (
 //     types do not have are ignored. The check here is the same library
 //     call on the same type, so it accepts and refuses what kubectl does,
 //     with kubectl's words; when kubectl's error is a value put into a
-//     string field (a json.UnmarshalTypeError whose type is a string kind:
-//     an unquoted `010` or `yes`), one sentence is added saying that
-//     quoting makes it text. It is made on the document's JSON with its keys
+//     field that holds text (an unquoted `010` or `yes` as a name, a label
+//     value; quoteHint), one sentence is added saying that quoting makes it
+//     text. It is made on the document's JSON with its keys
 //     sorted, as kubectl's conversion gives them, so that of two wrong
 //     fields the one kubectl names is the one named here. A list is
 //     checked after its items are decoded (an `items` that is no list, an
 //     item that is no mapping is refused first, as kubectl refuses it) and
-//     before anything is asked of its items.
+//     before anything is asked of its items, and before its own content
+//     (below), which kubectl does not refuse.
 //   - A document with a top-level `items` key is a list, whatever its kind
 //     (`List`, `ConfigMapList`, even `ConfigMap`), and `items: null` too.
 //     kubectl applies its items, in order, and nothing of the list itself;
@@ -57,7 +58,10 @@ import (
 //     `spec`) — is discarded by kubectl without a word. That is no reading
 //     of the file a caller can stand on (rules written there never deploy),
 //     so here the document is refused, naming the keys (#3438), which is
-//     stricter than kubectl.
+//     stricter than kubectl. It is checked after every refusal kubectl
+//     makes of the list itself (its `items`, an item that is no mapping,
+//     its metadata), so that a list kubectl refuses is refused for
+//     kubectl's reason.
 //   - An item that is itself a list — any item whose `items` is a JSON array,
 //     an empty one and a nested `kind: List` included — is refused by kubectl
 //     ("is not a list: no Items field in this object"), and is refused here.
@@ -176,11 +180,6 @@ func manifestDocuments(source []byte, doc json.RawMessage, differs []difference)
 		}
 		return []json.RawMessage{doc}, [][]difference{differs}, nil
 	}
-	if own := listOwnContent(obj); len(own) > 0 {
-		return nil, nil, fmt.Errorf("a list document (it has `items`) with content of its "+
-			"own: `%s` — kubectl applies only a list's items and discards the rest without "+
-			"a word; move it into an item, or drop `items`", strings.Join(own, "`, `"))
-	}
 	// `items: null` decodes to no items (json.Unmarshal leaves the slice
 	// nil) and goes the way of `items: []`: the list's own differences are
 	// still checked below, so one is never lost because there is no item.
@@ -200,6 +199,13 @@ func manifestDocuments(source []byte, doc json.RawMessage, differs []difference)
 	}
 	if err := metadataTypes(doc); err != nil {
 		return nil, nil, documentMetadataError(err)
+	}
+	// The list's own content is refused here, not by kubectl: after every
+	// refusal kubectl makes of the list itself, so that one is the one told.
+	if own := listOwnContent(obj); len(own) > 0 {
+		return nil, nil, fmt.Errorf("a list document (it has `items`) with content of its "+
+			"own: `%s` — kubectl applies only a list's items and discards the rest without "+
+			"a word; move it into an item, or drop `items`", strings.Join(own, "`, `"))
 	}
 	perItem, err := itemDifferences(differs, len(items))
 	if err != nil {
@@ -269,16 +275,67 @@ func documentMetadataError(err error) error {
 }
 
 // quoteHint is a sentence for a metadata refusal *err* that is a value put
-// into a string field, the type error kubectl reports for an unquoted
-// `010`, `1.5` or `yes` the YAML reads as a number or a boolean; "" for any
-// other refusal. The error is told by its type, not its words.
+// into a field that holds text, the type error kubectl reports for an
+// unquoted `010`, `1.5` or `yes` the YAML reads as a number or a boolean;
+// "" for any other refusal. The error is told by its type, not its words:
+// a *json.UnmarshalTypeError whose Type is a string kind and whose Field,
+// followed through metadataOnlyObject (fieldType), ends at a string kind
+// too. The second test is what keeps the sentence off a time: kubectl
+// reports `creationTimestamp: 5` with Type string (metav1.Time decodes
+// from a string), but quoting gives a string that is still no time.
 func quoteHint(err error) string {
 	var typeErr *json.UnmarshalTypeError
 	if !errors.As(err, &typeErr) || typeErr.Type == nil || typeErr.Type.Kind() != reflect.String {
 		return ""
 	}
+	t, ok := fieldType(reflect.TypeOf(metadataOnlyObject{}), typeErr.Field)
+	if !ok || t.Kind() != reflect.String {
+		return ""
+	}
 	return "; a value the YAML reads as a number or a boolean (an unquoted 010, 1.5, yes) " +
 		"is not text: quote it if text is meant"
+}
+
+// fieldType is the type of the value at *field* — an UnmarshalTypeError's
+// Field, dot-separated JSON names, with an embedded struct named by its
+// type (`TypeMeta.apiVersion`, `metadata.labels`,
+// `metadata.ownerReferences.uid`) — starting at the struct type *t*:
+// pointers, slices and maps are followed to their elements, at every step
+// and at the end (a label's value, not the labels map). false when a step
+// names no field.
+func fieldType(t reflect.Type, field string) (reflect.Type, bool) {
+	elem := func(t reflect.Type) reflect.Type {
+		for t.Kind() == reflect.Pointer || t.Kind() == reflect.Slice ||
+			t.Kind() == reflect.Array || t.Kind() == reflect.Map {
+			t = t.Elem()
+		}
+		return t
+	}
+	for _, name := range strings.Split(field, ".") {
+		t = elem(t)
+		if t.Kind() != reflect.Struct {
+			return nil, false
+		}
+		found := false
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			jsonName, _, _ := strings.Cut(f.Tag.Get("json"), ",")
+			if jsonName == "-" {
+				continue
+			}
+			if jsonName == "" {
+				jsonName = f.Name
+			}
+			if jsonName == name || (f.Anonymous && f.Name == name) {
+				t, found = f.Type, true
+				break
+			}
+		}
+		if !found {
+			return nil, false
+		}
+	}
+	return elem(t), true
 }
 
 // itemMetadataError is the refusal of a list item whose `apiVersion` or
