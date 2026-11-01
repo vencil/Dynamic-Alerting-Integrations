@@ -822,8 +822,23 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 	undeliverable map[string]map[string]config.ScheduledValue, withSchedules bool,
 	written map[string]map[string]string, refusedTexts map[string]string,
 ) (map[string]servedTenantValues, error) {
+	return servedValuesWith(cfg, at, undeliverable, withSchedules, written, refusedTexts, false)
+}
+
+// servedValuesWith is servedValues; quiet discards every resolver WARN line
+// (the rows', the collector's reserved keys', _routing's) instead of writing
+// it to the process log — for a reader that resolves a tree only to judge
+// it (`da-guard write`'s key verdict, #3489). The reading is the same.
+func servedValuesWith(cfg *config.ThresholdConfig, at time.Time,
+	undeliverable map[string]map[string]config.ScheduledValue, withSchedules bool,
+	written map[string]map[string]string, refusedTexts map[string]string, quiet bool,
+) (map[string]servedTenantValues, error) {
 	name := func(tenant, key string) string { return config.WrittenKey(written[tenant], key) }
-	ownedBy, droppedBy, seriesBy, res, err := keyedRows(cfg, at, name)
+	resolve, routingLogf := (*config.ThresholdConfig).ResolveAtWithKeys, log.Printf
+	if quiet {
+		resolve, routingLogf = (*config.ThresholdConfig).ResolveAtWithKeysSilent, nil
+	}
+	ownedBy, droppedBy, seriesBy, res, err := keyedRowsWith(cfg, at, resolve, name, quiet)
 	if err != nil {
 		return nil, err
 	}
@@ -842,7 +857,7 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 	// The collector does not read _routing, so its resolver runs only here
 	// (Routing, not Values).
 	routing := map[string]config.RoutingConfig{}
-	for _, r := range cfg.ResolveRouting() {
+	for _, r := range cfg.ResolveRoutingLogf(routingLogf) {
 		routing[r.Tenant] = r
 	}
 	byTenant := res.Ops.ByTenant(cfg)
@@ -1052,8 +1067,15 @@ func servedValues(cfg *config.ThresholdConfig, at time.Time,
 func addDisableEffects(cfg *config.ThresholdConfig, at time.Time,
 	tenants map[string]servedTenantValues, written map[string]map[string]string,
 ) error {
+	return addDisableEffectsWith(cfg, at, tenants, written, false)
+}
+
+// addDisableEffectsWith is addDisableEffects; quiet as for servedValuesWith.
+func addDisableEffectsWith(cfg *config.ThresholdConfig, at time.Time,
+	tenants map[string]servedTenantValues, written map[string]map[string]string, quiet bool,
+) error {
 	name := func(tenant, key string) string { return config.WrittenKey(written[tenant], key) }
-	effects, err := disableEffects(cfg, at, name)
+	effects, err := disableEffects(cfg, at, name, quiet)
 	if err != nil {
 		return err
 	}
@@ -1261,7 +1283,7 @@ func keyedRows(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (
 	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string,
 	series map[string]map[string][]metricsSeries, reserved scrape.Reserved, err error,
 ) {
-	return keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeys, name)
+	return keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeys, name, false)
 }
 
 // keyNamer spells a key of the exporter's config for a message: as written
@@ -1318,7 +1340,7 @@ func gatherVerdict(cfg *config.ThresholdConfig, at time.Time, name keyNamer) str
 		return ""
 	}
 	for _, m := range cfg.ScheduleCuts() {
-		_, _, _, _, err := keyedRowsWith(cfg.AtMinuteOfDay(m), at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name)
+		_, _, _, _, err := keyedRowsWith(cfg.AtMinuteOfDay(m), at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name, false)
 		var ng *notGatherableError
 		if errors.As(err, &ng) {
 			return ng.verdict()
@@ -1327,10 +1349,11 @@ func gatherVerdict(cfg *config.ThresholdConfig, at time.Time, name keyNamer) str
 	return ""
 }
 
-// keyedRowsWith is keyedRows with the user_threshold resolve as a parameter.
+// keyedRowsWith is keyedRows with the user_threshold resolve as a parameter;
+// quiet discards the collector's reserved-key WARN lines (scrape.Hooks.Quiet).
 func keyedRowsWith(cfg *config.ThresholdConfig, at time.Time,
 	resolve func(*config.ThresholdConfig, time.Time) ([]config.KeyedThreshold, config.ResolveStats, error),
-	name keyNamer,
+	name keyNamer, quiet bool,
 ) (
 	served map[string]map[string][]config.ResolvedThreshold, dropped map[string]map[string][]string,
 	series map[string]map[string][]metricsSeries, reserved scrape.Reserved, err error,
@@ -1341,6 +1364,7 @@ func keyedRowsWith(cfg *config.ThresholdConfig, at time.Time,
 	var results []emitResult
 	metrics := scrape.NewConfigMetrics()
 	collector := scrape.NewCollectorWithHooks(staticSource{cfg, at}, scrape.Hooks{
+		Quiet: quiet,
 		Resolve: func(c *config.ThresholdConfig, now time.Time) ([]config.ResolvedThreshold, config.ResolveStats) {
 			var stats config.ResolveStats
 			keyed, stats, keyErr = resolve(c, now)

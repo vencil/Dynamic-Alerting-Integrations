@@ -1,0 +1,346 @@
+package main
+
+// The ERROR layer of the shared key verdict (key_verdict.go, #3489 step 1)
+// over real trees, and `da-guard write` refusing a batch that adds such an
+// error (worsens_tree, kind unread). The Python verdict's own trees pin the
+// same answers on the Python side, and tests/shared/
+// test_key_verdict_go_parity.py pins the two to each other. Tenant ids are
+// fixture names (CLAUDE.md #9).
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"regexp"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/vencil/threshold-exporter/pkg/config"
+)
+
+// verdictErrors is keyVerdictOf of the tree at root on disk, each error as
+// "tenant key reason file".
+func verdictErrors(t *testing.T, root string) []string {
+	t.Helper()
+	list, err := config.ScanDirTreeFiles(root, log.New(io.Discard, "", 0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := parseTreeOf(list)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := keyVerdictOf(root, config.ScanOptions{}, hasRootPlatformFile(doc), time.Now().UTC())
+	if err != nil || !res.judged {
+		t.Fatalf("not judged: %v %v", err, res.why)
+	}
+	out := []string{}
+	for _, e := range res.errors {
+		out = append(out, strings.Join([]string{e.Tenant, e.Key, e.Reason, e.File}, " "))
+	}
+	return out
+}
+
+const kvRoot = "defaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
+
+func TestKeyVerdict_TheErrorLayer(t *testing.T) {
+	t.Parallel()
+	a, b := "t1", "t2" // fixture tenant ids
+	tenant := func(id, body string) string { return "tenants:\n  " + id + ":\n" + body }
+	cases := []struct {
+		name  string
+		files map[string]string
+		want  []string
+	}{
+		{"a misspelt threshold key is no_row",
+			map[string]string{"_defaults.yaml": kvRoot, "a.yaml": tenant(a, "    mysql_conections: \"70\"\n")},
+			[]string{a + " mysql_conections no_row a.yaml"}},
+		{"a dimensional key whose labels the root does not declare",
+			map[string]string{"_defaults.yaml": kvRoot,
+				"a.yaml": tenant(a, "    'redis_memory{queue=\"q\"}': 5\n")},
+			[]string{a + ` redis_memory{queue="q"} no_row a.yaml`}},
+		{"a dimensional key the root declares is read",
+			map[string]string{"_defaults.yaml": "dimensions:\n  redis_queue_length: [queue]\n" + kvRoot,
+				"a.yaml": tenant(a, "    'redis_queue_length{queue=\"q\"}': 5\n")},
+			[]string{}},
+		{"an unregistered reserved key in the tenant's file",
+			map[string]string{"_defaults.yaml": kvRoot, "a.yaml": tenant(a, "    _routng: disable\n")},
+			[]string{a + " _routng unregistered a.yaml"}},
+		{"a disable that switches nothing off is a warning, not an error",
+			map[string]string{"_defaults.yaml": kvRoot, "a.yaml": tenant(a, "    mysql_slave_lagg: disable\n")},
+			[]string{}},
+		{"a key a policy rule names is read; a wildcard names none; an excluded tenant is not credited",
+			map[string]string{
+				"_defaults.yaml": kvRoot + "_policies:\n" +
+					"  - {name: p, target: owner_tag.team, operator: required, exclude_tenants: [" + b + "]}\n" +
+					"  - {name: w, target: 'mysql_*', operator: required}\n",
+				"a.yaml": tenant(a, "    owner_tag: x\n    mysql_conections: \"1\"\n"),
+				"b.yaml": tenant(b, "    owner_tag: y\n")},
+			[]string{a + " mysql_conections no_row a.yaml", b + " owner_tag no_row b.yaml"}},
+		{"a when.target head names its key",
+			map[string]string{
+				"_defaults.yaml": kvRoot + "_policies:\n" +
+					"  - {name: p, target: mysql_connections, operator: lte, value: 100, when: {target: owner_tag, operator: required}}\n",
+				"a.yaml": tenant(a, "    owner_tag: x\n")},
+			[]string{}},
+		{"no root platform file: threshold keys are undecidable, reserved keys judged",
+			map[string]string{"a.yaml": tenant(a, "    mysql_conections: \"70\"\n    _routng: x\n")},
+			[]string{a + " _routng unregistered a.yaml"}},
+		{"a key from a platform file or a profile is the platform's notice",
+			map[string]string{"_defaults.yaml": kvRoot,
+				"_platform.yaml": tenant(a, "    mysql_conections: \"70\"\n    _routng: x\n"),
+				"_profiles.yaml": "profiles:\n  p1:\n    redis_memroy: 5\n",
+				"a.yaml":         tenant(a, "    _profile: p1\n")},
+			[]string{}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := verdictErrors(t, writeTree(t, tc.files)); !reflect.DeepEqual(got, tc.want) {
+				t.Errorf("errors\n got %q\nwant %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPolicyHeads_ReadAsPolicyAsCodeReadsThem(t *testing.T) {
+	t.Parallel()
+	heads := func(doc string) []string {
+		out := []string{}
+		for _, h := range policyHeadsOf([]byte(doc)) {
+			out = append(out, fmt.Sprintf("%s%v", h.head, sortedKeys(h.excluded)))
+		}
+		return out
+	}
+	cases := []struct{ doc, want string }{
+		// `policies` wins over `_policies`, even when it holds no rule.
+		{"policies:\n  - {target: a}\n_policies:\n  - {target: b}\n", "[a[]]"},
+		{"policies:\n_policies:\n  - {target: b}\n", "[]"},
+		// exclude_tenants as source text (#2114): 010 stays "010".
+		{"_policies:\n  - {target: a.b, exclude_tenants: [010, x]}\n", "[a[010 x]]"},
+		// What Python refuses (InvalidPolicyRules) is skipped here.
+		{"_policies:\n  - target: 5\n  - x\n  - {target: c, when: {target: d.e}}\n", "[c[] d[]]"},
+		{"_policies: oops\n", "[]"},
+		{"- not a mapping\n", "[]"},
+	}
+	for _, tc := range cases {
+		if got := fmt.Sprint(heads(tc.doc)); got != tc.want {
+			t.Errorf("%q: heads %s, want %s", tc.doc, got, tc.want)
+		}
+	}
+}
+
+func TestKeyVerdict_Subcommand(t *testing.T) {
+	t.Parallel()
+	root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+		"a.yaml": "tenants:\n  t1:\n    mysql_conections: \"70\"\n"})
+	var out, errOut bytes.Buffer
+	if code := run([]string{keyVerdictCmd, "--config-dir", root, "--at", "2026-07-01T03:00:00Z"}, &out, &errOut); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	var doc keyVerdictDoc
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	want := keyVerdictDoc{Schema: keyVerdictSchema,
+		Errors: []keyError{{Tenant: "t1", Key: "mysql_conections", Reason: "no_row", File: "a.yaml"}}}
+	if !reflect.DeepEqual(doc, want) {
+		t.Fatalf("doc %+v, want %+v", doc, want)
+	}
+	// A tree the verdict cannot judge is no empty answer.
+	dup := writeTree(t, map[string]string{"_defaults.yaml": kvRoot, "a.yaml": "tenants:\n  t1: {}\n",
+		"b.yaml": "tenants:\n  t1: {}\n"})
+	out.Reset()
+	if code := run([]string{keyVerdictCmd, "--config-dir", dup}, &out, &errOut); code != exitCallerErr || out.Len() != 0 {
+		t.Fatalf("a duplicate tenant: exit %d stdout %q", code, out.String())
+	}
+	if code := run([]string{keyVerdictCmd, "--config-dir", root, "--at", "yesterday"}, &out, &errOut); code != exitCallerErr {
+		t.Fatalf("a bad --at: exit %d", code)
+	}
+}
+
+// A batch that writes a key nobody reads into a tenant file is refused, kind
+// unread; one that leaves such a key where it was, or removes it, is not.
+func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
+	t.Parallel()
+	set := func(key, value string) string {
+		return `{"files":[{"path":"a.yaml","ops":[{"op":"set","path":["tenants","t1",` +
+			strconvQuote(key) + `],"value":{"str":` + strconvQuote(value) + `}}]}]}`
+	}
+	t.Run("a misspelt key is refused", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot, "a.yaml": "tenants:\n  t1:\n    mysql_connections: \"70\"\n"})
+		before := snapshot(t, root)
+		code, res := runBatch(t, writeCmd, set("mysql_conections", "60"), "--config-dir", root)
+		if code != exitFindings || callReason(res) != writeReasonWorsensTree {
+			t.Fatalf("exit %d reason %q worsened %v", code, callReason(res), worsenedOf(res))
+		}
+		if got := worsenedOf(res); !reflect.DeepEqual(got, []string{"unread a.yaml t1"}) || res.Worsened[0].Finding != "no_row" ||
+			!strings.Contains(res.Worsened[0].Message, `"mysql_conections"`) {
+			t.Fatalf("worsened %v %+v", got, res.Worsened)
+		}
+		sameTree(t, before, snapshot(t, root))
+	})
+	t.Run("an undeclared dimensional key is refused", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot, "a.yaml": "tenants:\n  t1: {}\n"})
+		code, res := runBatch(t, writeCmd, set(`redis_memory{queue="q"}`, "5"), "--config-dir", root)
+		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread a.yaml t1"}) {
+			t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
+		}
+	})
+	t.Run("an error already there does not block another key, and a fix passes", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"a.yaml": "tenants:\n  t1:\n    mysql_conections: \"70\"\n"})
+		if code, res := runBatch(t, writeCmd, set("mysql_connections", "60"), "--config-dir", root); code != exitOK {
+			t.Fatalf("an unrelated key: exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
+		}
+		unset := `{"files":[{"path":"a.yaml","ops":[{"op":"unset","path":["tenants","t1","mysql_conections"]}]}]}`
+		if code, res := runBatch(t, writeCmd, unset, "--config-dir", root); code != exitOK {
+			t.Fatalf("the fix: exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
+		}
+	})
+	t.Run("a tenant moved between files keeps its baseline", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"a.yaml": "tenants:\n  t1:\n    mysql_conections: \"70\"\n", "b.yaml": "tenants:\n  t2: {}\n"})
+		in := `{"files":[
+			{"path":"a.yaml","ops":[{"op":"unset","path":["tenants","t1"]}]},
+			{"path":"b.yaml","ops":[{"op":"set","path":["tenants","t1"],"value":{"map":[["mysql_conections",{"str":"70"}]]}}]}]}`
+		if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitOK {
+			t.Fatalf("exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
+		}
+	})
+	t.Run("a platform-only batch is not judged on other tenants' keys", func(t *testing.T) {
+		t.Parallel()
+		// Parity with tenant-api's gate (keyVerdictRefusal): dropping a
+		// root default and a `dimensions:` declaration leaves t1's keys in
+		// a.yaml read by nothing, but a.yaml is not written; validate-config
+		// reports them, this write does not refuse on them.
+		root := writeTree(t, map[string]string{
+			"_defaults.yaml": "dimensions:\n  redis_queue_length: [queue]\n" + kvRoot + "  owner_x: 1\n",
+			"a.yaml":         "tenants:\n  t1:\n    owner_x: \"5\"\n    'redis_queue_length{queue=\"q\"}': 5\n"})
+		in := `{"files":[{"path":"_defaults.yaml","ops":[{"op":"unset","path":["dimensions"]},{"op":"unset","path":["defaults","owner_x"]}]}]}`
+		if before := verdictErrors(t, root); len(before) != 0 {
+			t.Fatalf("before: %v", before)
+		}
+		code, res := runBatch(t, writeCmd, in, "--config-dir", root)
+		if code != exitOK {
+			t.Fatalf("exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
+		}
+		if after := verdictErrors(t, root); len(after) != 2 {
+			t.Fatalf("the write did leave t1 two unread keys, which it is not judged on: %v", after)
+		}
+	})
+	t.Run("a tenant file written with a new unread key is refused beside another tenant's errors", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"a.yaml": "tenants:\n  t1:\n    mysql_connections: \"70\"\n",
+			"b.yaml": "tenants:\n  t2:\n    redis_memroy: \"1\"\n"})
+		code, res := runBatch(t, writeCmd, set("mysql_conections", "60"), "--config-dir", root)
+		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread a.yaml t1"}) {
+			t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
+		}
+	})
+	t.Run("a tenant moved into a batch file: its old error is no new one, a new error is", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"a.yaml": "tenants:\n  t1:\n    mysql_conections: \"70\"\n", "b.yaml": "tenants:\n  t2: {}\n"})
+		in := `{"files":[
+			{"path":"a.yaml","ops":[{"op":"unset","path":["tenants","t1"]}]},
+			{"path":"b.yaml","ops":[{"op":"set","path":["tenants","t1"],"value":{"map":[["mysql_conections",{"str":"70"}],["redis_memroy",{"str":"1"}]]}}]}]}`
+		code, res := runBatch(t, writeCmd, in, "--config-dir", root)
+		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread b.yaml t1"}) ||
+			!strings.Contains(res.Worsened[0].Message, "redis_memroy") {
+			t.Fatalf("exit %d worsened %v %+v", code, worsenedOf(res), res.Worsened)
+		}
+	})
+	t.Run("adding the root carrier is not charged with the threshold keys it makes judgeable", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"a.yaml": "tenants:\n  t1:\n    mysql_conections: \"70\"\n"})
+		in := `{"files":[{"path":"_defaults.yaml","create":{"map":[["defaults",{"map":[["mysql_connections",{"int":"80"}]]}]]}}]}`
+		if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitOK {
+			t.Fatalf("exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
+		}
+	})
+}
+
+func strconvQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
+}
+
+// kvWarnTree is a tree whose every reserved-key and row resolver logs a WARN
+// line on the process log when served-values reads it.
+var kvWarnTree = map[string]string{
+	"_defaults.yaml": "state_filters:\n  maintenance: {reasons: [X], severity: critical}\n" + kvRoot,
+	"a.yaml": "tenants:\n  t1:\n    _profile: nope\n    nosuch_critical: \"5\"\n" +
+		"    mysql_connections: {default: \"5\", expires: \"bad\"}\n    _silent_mode: loud\n    _severity_dedup: maybe\n" +
+		"    _routing: {receiver: {type: webhook, url: \"https://a.example\"}, group_wait: \"1x\"}\n    _metadata: 5\n" +
+		"    _state_maintenance: {expires: \"zz\"}\n    _custom_alerts: [{recipe: nope, name: q}]\n",
+}
+
+// childStderr runs da-guard's run(args) in a child process (the binary's own
+// process-global log on its own stderr, as served_values_warn_test.go does)
+// and returns its stderr.
+func childStderr(t *testing.T, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=^TestServedValuesChildProcess$")
+	cmd.Env = append(os.Environ(), servedValuesChildEnv+"="+strings.Join(args, "\n"))
+	var stdout, stderr strings.Builder
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+	_ = cmd.Run() // the exit code is the caller's to judge from the output
+	return stderr.String()
+}
+
+// The key verdict reads the tree quietly (#3489): the two served-values
+// readings and the effective resolve a `da-guard write` now adds write no
+// resolver line to its stderr. The control is served-values over the same
+// tree, which prints them.
+func TestKeyVerdict_ReadsTheTreeQuietly(t *testing.T) {
+	t.Parallel()
+	root := writeTree(t, kvWarnTree)
+	control := childStderr(t, servedValuesCmd, "--config-dir", root, "--disable-effects")
+	for _, w := range []string{`has no matching default`, `unknown silent mode "loud"`, `unknown severity_dedup`,
+		`failed to parse _metadata`, `invalid group_wait`, `in _state_maintenance`, `invalid expires "bad"`} {
+		if !strings.Contains(control, w) {
+			t.Fatalf("control: served-values does not log %q, so the tree proves nothing:\n%s", w, control)
+		}
+	}
+	if got := childStderr(t, keyVerdictCmd, "--config-dir", root); got != "" {
+		t.Errorf("key-verdict stderr is not empty:\n%s", got)
+	}
+	// A write's stderr: each line as often as the same call without the key
+	// verdict's readings would print it — validation's own (treeValidation,
+	// twice: before and after) — never one more.
+	in := filepath.Join(t.TempDir(), "in.json")
+	if err := os.WriteFile(in, []byte(`{"files":[{"path":"a.yaml","ops":[{"op":"set","path":["tenants","t1","mysql_conections"],"value":{"str":"1"}}]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	write := childStderr(t, writeCmd, "--config-dir", root, "--dry-run", "--json", "--input", in)
+	guard := childStderr(t, "--config-dir", root, "--format", "json")
+	stamp := regexp.MustCompile(`^\d{4}/\d{2}/\d{2} \d{2}:\d{2}:\d{2} `)
+	count := func(text string) map[string]int {
+		out := map[string]int{}
+		for _, line := range strings.Split(text, "\n") {
+			if line = stamp.ReplaceAllString(line, ""); strings.HasPrefix(line, "WARN") || strings.HasPrefix(line, "ERROR") {
+				out[line]++
+			}
+		}
+		return out
+	}
+	g := count(guard)
+	for line, n := range count(write) {
+		if n > 2*g[line] {
+			t.Errorf("write logs %q %d times; validation of the two trees logs it %d", line, n, 2*g[line])
+		}
+	}
+}

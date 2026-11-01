@@ -20,7 +20,15 @@ package main
 //     passes. A tenant declared twice is set aside, not a stop, so the rest
 //     of the tree is still validated; a tenant declared twice before the
 //     call has no baseline, and its findings after it are not new — removing
-//     a copy repairs the tree.
+//     a copy repairs the tree;
+//   - a tenant key the shared key verdict (ADR-038; key_verdict.go, its
+//     ERROR layer) reads as unread at ERROR that it did not before the call
+//     (#3489), in a tenant file the batch writes: a misspelt key, a
+//     dimensional key whose labels the root `dimensions:` does not declare,
+//     an unregistered `_` key. Keyed by (tenant, key), so an error already
+//     there does not block an unrelated write and a fix passes; a batch that
+//     writes only platform files is not judged on other tenants' keys, as
+//     tenant-api's gate is not (newlyUnread).
 //
 // ⚠️ Not compared: validation warnings (they do not fail validation), and
 // what only the route generator judges (exit 4's evidence beyond the
@@ -45,6 +53,10 @@ const (
 	worsenProblem         = "problem"
 	worsenDuplicateTenant = "duplicate_tenant"
 	worsenFinding         = "finding" // a validation error; Finding names its kind
+	// worsenUnread (#3489): a tenant key the shared key verdict reads as
+	// unread at ERROR (key_verdict.go); Finding is the verdict's reason
+	// (no_row, unregistered, …), Path the file the tenant's value comes from.
+	worsenUnread = "unread"
 )
 
 // writeReasonWorsensTree is the call's reason (status refused, exit 1) when
@@ -123,6 +135,77 @@ func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []
 	sort.Strings(keys)
 	for _, k := range keys {
 		out = append(out, now[k])
+	}
+	unread, err := newlyUnread(disk.AbsRoot, beforeDoc, afterDoc, overlays, mkdirs, at)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, unread...), nil
+}
+
+// newlyUnread is the key verdict's half of the comparison (#3489): every
+// tenant key the after-tree reads as unread at ERROR (key_verdict.go) in a
+// file the batch writes (an overlay with bytes: an edit, a create, a
+// replace, a move's target, a copy) that the before-tree did not read so,
+// by (tenant, key) — so a batch that writes a misspelt key into a tenant
+// file is refused, one that fixes such a key or touches another key beside
+// it is not.
+//
+// ⛔ Scoped to the tenants whose own file the batch writes, as tenant-api's
+// write gate is (components/tenant-api/internal/gitops/key_verdict.go,
+// keyVerdictRefusal: an error finding in a file the write changes, about a
+// tenant that file is written for; ADR-038 decision 6). A batch that writes
+// only a platform file — a root `_defaults.yaml` dropping a default, a
+// `dimensions:` declaration removed, a rule pack deprecated — and so leaves
+// a key in some other tenant's file read by nothing is not refused for that
+// here: the two writers must not disagree on what one write may do, and
+// validate-config and the route generator's `--validate` (CI) still report
+// the key. A write that also touches that tenant's file is judged on it.
+//
+// A tenant moved into a batch file keeps its baseline: an error it already
+// had (same tenant, same key) is not new, whichever file now holds it; one
+// the move or its edit adds is.
+//
+// No baseline, nothing new: a before-tree the verdict cannot judge (a tenant
+// declared twice, a file the merge cannot decode — validation names those)
+// gives none, and a before-tree with no root platform file judged no
+// threshold key (undecidable, decision 7), so a batch that adds the root
+// carrier is not charged with every unread threshold key already there. An
+// after-tree the verdict cannot judge adds nothing here: what stops it is
+// already a validation error above.
+func newlyUnread(root string, beforeDoc, afterDoc *parseTreeDoc, overlays []config.FileOverlay, mkdirs bool,
+	at time.Time) ([]writeWorsened, error) {
+	was, err := keyVerdictOf(root, config.ScanOptions{}, hasRootPlatformFile(beforeDoc), at)
+	if err != nil || !was.judged {
+		return nil, err
+	}
+	now, err := keyVerdictOf(root, config.ScanOptions{Overlays: overlays, OverlayMakesDirs: mkdirs},
+		hasRootPlatformFile(afterDoc), at)
+	if err != nil || !now.judged {
+		return nil, err
+	}
+	before := make(map[[2]string]bool, len(was.errors))
+	for _, e := range was.errors {
+		before[[2]string{e.Tenant, e.Key}] = true
+	}
+	written := map[string]bool{}
+	for _, o := range overlays {
+		if !o.Remove {
+			written[o.Rel] = true
+		}
+	}
+	var out []writeWorsened
+	for _, e := range now.errors { // sorted by tenant, key
+		if !written[e.File] || before[[2]string{e.Tenant, e.Key}] ||
+			(was.undecidable && !strings.HasPrefix(e.Key, "_")) {
+			continue
+		}
+		why := ""
+		if e.Reason != "" {
+			why = " (" + e.Reason + ")"
+		}
+		out = append(out, writeWorsened{Kind: worsenUnread, Path: e.File, Tenant: e.Tenant, Finding: e.Reason,
+			Message: fmt.Sprintf("tenant %s: key %q would be unread%s — no reader reads it", e.Tenant, e.Key, why)})
 	}
 	return out, nil
 }

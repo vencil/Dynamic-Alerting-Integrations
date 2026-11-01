@@ -832,7 +832,9 @@ class TestPlatformFileSpelling:
         a = Path(config_dir) / "team-a"
         a.mkdir()
         _write_file(a / "_defaults.yml", "defaults:\n  mysql_connections: 10\n")
-        _write_file(a / "tenant-a.yaml", "tenants:\n  t-a:\n    x: '1'\n")
+        # A key the carrier declares: one it does not is read by nothing,
+        # and `da-guard write` refuses to write it (#3489).
+        _write_file(a / "tenant-a.yaml", "tenants:\n  t-a:\n    mysql_connections: '1'\n")
         out = Path(config_dir) / "output"
         out.mkdir()
         _write_file(out / "_defaults.yml", "defaults:\n  mysql_connections: 99\n")

@@ -226,6 +226,12 @@ func ClampDuration(value, param, tenant string) string { return clampDuration(va
 // through. tests/shared/am_duration_matrix.json pins it
 // (am_duration_parity_test.go).
 func clampDuration(value, param, tenant string) string {
+	return clampDurationLogf(value, param, tenant, log.Printf)
+}
+
+// clampDurationLogf is clampDuration with the WARN sink as a parameter
+// (ResolveRoutingLogf's); logf must not be nil.
+func clampDurationLogf(value, param, tenant string, logf func(format string, args ...any)) string {
 	bounds, ok := routingGuardrails[param]
 	if !ok {
 		return value
@@ -233,19 +239,19 @@ func clampDuration(value, param, tenant string) string {
 
 	md, err := model.ParseDuration(value)
 	if err != nil {
-		log.Printf("WARN: invalid %s %q for tenant=%s (not an Alertmanager duration: %v), ignoring", param, value, tenant, err)
+		logf("WARN: invalid %s %q for tenant=%s (not an Alertmanager duration: %v), ignoring", param, value, tenant, err)
 		return ""
 	}
 	d := time.Duration(md)
 
 	if d < bounds[0] {
 		clamped := formatDuration(bounds[0])
-		log.Printf("WARN: %s %q for tenant=%s below minimum %s, clamping to %s", param, value, tenant, formatDuration(bounds[0]), clamped)
+		logf("WARN: %s %q for tenant=%s below minimum %s, clamping to %s", param, value, tenant, formatDuration(bounds[0]), clamped)
 		return clamped
 	}
 	if d > bounds[1] {
 		clamped := formatDuration(bounds[1])
-		log.Printf("WARN: %s %q for tenant=%s above maximum %s, clamping to %s", param, value, tenant, formatDuration(bounds[1]), clamped)
+		logf("WARN: %s %q for tenant=%s above maximum %s, clamping to %s", param, value, tenant, formatDuration(bounds[1]), clamped)
 		return clamped
 	}
 
