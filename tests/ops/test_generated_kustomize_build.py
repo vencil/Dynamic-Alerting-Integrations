@@ -164,7 +164,10 @@ _BUILD_RE = re.compile(r"\b(?:kustomize build|kubectl kustomize)\b[^\n>|]*")
 # kubectl 1.37.1 (GITLAB_KUBECTL_IMAGE) embeds kustomize v5.8.1 (measured with
 # `kubectl version --client` on the checksum-verified upstream binary), which
 # is KUSTOMIZE_PIN. Bumping the image's kubectl minor must re-check this.
-_KUBECTL_KUSTOMIZE = {"1.37.1": "5.8.1"}
+# 1.37.2 (#1401): read from the `sigs.k8s.io/kustomize/kustomize/v5` require
+# in kubernetes' staging/src/k8s.io/kubectl/go.mod at tag v1.37.2 — the same
+# v5.8.1 as at v1.37.1 — not from running the binary.
+_KUBECTL_KUSTOMIZE = {"1.37.1": "5.8.1", "1.37.2": "5.8.1"}
 
 
 def _build_args(argv: list[str]) -> list[str]:

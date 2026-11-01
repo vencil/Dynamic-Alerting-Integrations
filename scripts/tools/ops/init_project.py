@@ -212,7 +212,7 @@ def _h(key: str) -> str:
 # stage is a GitLab `script:` block, which the runner executes through a shell
 # inside this image, so it needs a shell and `kubectl` — and nothing else:
 # the overlay is built with `kubectl kustomize` (kubectl embeds kustomize;
-# 1.37.1 ships kustomize v5.8.1, which takes the same `--load-restrictor`
+# 1.37.1 and 1.37.2 ship kustomize v5.8.1, which takes the same `--load-restrictor`
 # flag), not with a standalone `kustomize` binary.
 # `alpine/kubectl` is that and only that (busybox + kubectl). It replaced
 # `alpine/k8s`, same publisher, whose fixable HIGH/CRITICAL findings (32 on
@@ -220,6 +220,9 @@ def _h(key: str) -> str:
 # eksctl, kubeconform — none of which this job runs. Measured with trivy
 # (`--severity CRITICAL,HIGH --ignore-unfixed`, linux/amd64) at the swap:
 # alpine/k8s:1.34.12 32, alpine/kubectl:1.36.4 9, alpine/kubectl:1.37.1 0.
+# Re-measured 2026-11-01 (#1401, same flags, trivy 0.74.0): 1.37.1 had grown
+# to 8 and 1.37.2 carries 2; alpine/helm 3.22.0 13 -> 3.22.1 5 (counted
+# per package row, so a CVE in two packages counts twice).
 # ⛔ Two images were rejected on measurement, not on preference:
 #   * `bitnami/kubectl` is no longer pinnable at all — Broadcom moved the
 #     versioned catalog behind a subscription and deleted the free version tags
@@ -234,7 +237,7 @@ def _h(key: str) -> str:
 # at 1.34.2, so staying on an older minor would mean an unpatched image. A
 # customer whose control plane sits further back overrides DA_KUBECTL_IMAGE
 # (e.g. alpine/kubectl:1.36.4 covers 1.35–1.37).
-GITLAB_KUBECTL_IMAGE = 'alpine/kubectl:1.37.1'
+GITLAB_KUBECTL_IMAGE = 'alpine/kubectl:1.37.2'
 
 # ⛔ Held on the Helm 3 line ON PURPOSE — pinned by
 # `test_helm_image_stays_on_the_helm_3_line`, because a comment alone did not
@@ -248,7 +251,7 @@ GITLAB_KUBECTL_IMAGE = 'alpine/kubectl:1.37.1'
 # ⓘ Measured: ships a shell, but `ENTRYPOINT ["helm"]` — see the
 # `entrypoint: [""]` override in the emitted job, without which the job dies
 # before its first script line.
-GITLAB_HELM_IMAGE = 'alpine/helm:3.22.0'
+GITLAB_HELM_IMAGE = 'alpine/helm:3.22.1'
 
 # ⛔ There is deliberately no ARGOCD_CLI_IMAGE any more. `--deploy argocd` was
 # retired (#1351): it scaffolded no ArgoCD Application while its apply stage

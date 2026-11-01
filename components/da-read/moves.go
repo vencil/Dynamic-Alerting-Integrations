@@ -17,7 +17,8 @@ import (
 //
 // The table is what upstream does today, found by reading every
 // UnmarshalYAML / Validate of the config types both loaders decode into
-// (prometheus/common v0.71.0, alertmanager v0.34.1, prometheus v0.315.0) for
+// (prometheus/common v0.71.0, alertmanager v0.34.1 — v0.34.2 leaves its
+// config package byte-identical — prometheus v0.315.0) for
 // a field set from another one and the source cleared:
 //
 //   - prometheus/common HTTPClientConfig.Validate (called by its

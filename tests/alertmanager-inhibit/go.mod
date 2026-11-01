@@ -9,7 +9,7 @@
 // test are the semantics that run in production.
 module github.com/vencil/dynamic-alerting/tests/alertmanager-inhibit
 
-go 1.26.8
+go 1.26.10
 
 // #2295: parse URLs as the prom/alertmanager release binaries do. Go 1.26 made
 // net/url refuse a second colon in an http(s) host (`http://h:80:3128/`) by

@@ -50,7 +50,7 @@
     // "1.23" while every module required 1.26.x, so each local build silently
     // relied on GOTOOLCHAIN=auto downloading a different toolchain (#1278).
     "ghcr.io/devcontainers/features/go:1": {
-      "version": "1.26.8",
+      "version": "1.26.10",
       "golangciLintVersion": "2.12.2"
     },
     // 5. Python (確保有 pip)

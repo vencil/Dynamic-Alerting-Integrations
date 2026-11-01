@@ -2,12 +2,16 @@
 # (scripts/ops/federation_e2e_run.sh) installs these FIRST, then runs
 # every Python step — config render-extract, keygen, the pytest driver —
 # inside the venv, so the harness needs nothing on the system python.
-pytest==8.3.4
-requests==2.32.3
+# ⚠️ No scanner and no Renovate manager reads this file (renovate.json
+# ignorePaths covers tests/**): its pins sat for months with 27 distinct
+# advisories until a manual pip-audit found them (#1278). pytest / PyYAML
+# follow requirements/ci-constraints.txt; re-run pip-audit on a bump.
+pytest==9.1.1
+requests==2.34.2
 # RS256 token signing — the driver mints federation JWTs with the same
 # claim shape tenant-api uses (see README, fidelity boundary).
-PyJWT==2.10.1
-cryptography==44.0.0
+PyJWT==2.15.1
+cryptography==50.0.2
 # Used by the runner to extract the rendered config out of the
 # `helm template` ConfigMap output.
-PyYAML==6.0.2
+PyYAML==6.0.3

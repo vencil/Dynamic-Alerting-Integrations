@@ -59,12 +59,12 @@ services:
     # services depend on prometheus which scrapes this one).
 
   pushgateway:
-    image: prom/pushgateway:v1.10.0
+    image: prom/pushgateway:v1.11.5
     expose:
       - "9091"
 
   prometheus:
-    image: prom/prometheus:v3.15.0
+    image: prom/prometheus:v3.15.1
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./alert-rules.yml:/etc/prometheus/alert-rules.yml:ro
@@ -86,7 +86,7 @@ services:
       retries: 30
 
   alertmanager:
-    image: prom/alertmanager:v0.34.1
+    image: prom/alertmanager:v0.34.2
     volumes:
       - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     command:
