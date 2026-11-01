@@ -80,11 +80,11 @@ spec:
       expr: "(\n  (\n    (\n      tenant:pg_connection_usage:ratio\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:pg_connections\n    )\n    unless\
         \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
-        \  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:pg_connection_usage:ratio\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:pg_connections\n    )\n    unless\
-        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
-        \  unless on(tenant) tenant_metadata_info\n)\n"
+        \  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url,\
+        \ owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n      tenant:pg_connection_usage:ratio\n\
+        \      > on(tenant) group_left\n      tenant:alert_threshold:pg_connections\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: pg_connections
@@ -107,11 +107,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:pg_connection_usage:ratio\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:pg_connections_critical\n    )\n\
         \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:pg_connection_usage:ratio\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:pg_connections_critical\n    )\n\
-        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:pg_connection_usage:ratio\n      > on(tenant) group_left\n \
+        \     tenant:alert_threshold:pg_connections_critical\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: pg_connections
@@ -133,11 +134,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:pg_replication_lag:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:pg_replication_lag\n    )\n   \
         \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:pg_replication_lag:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:pg_replication_lag\n    )\n   \
-        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:pg_replication_lag:max\n      > on(tenant) group_left\n    \
+        \  tenant:alert_threshold:pg_replication_lag\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: pg_replication_lag
@@ -159,11 +161,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:pg_replication_lag:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:pg_replication_lag_critical\n \
         \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:pg_replication_lag:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:pg_replication_lag_critical\n \
-        \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      tenant:pg_replication_lag:max\n      > on(tenant) group_left\n\
+        \      tenant:alert_threshold:pg_replication_lag_critical\n    )\n    unless\
+        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: pg_replication_lag
@@ -184,9 +187,10 @@ spec:
     - alert: PostgreSQLHighDeadlocks
       expr: "(\n  (\n    tenant:pg_deadlocks:rate5m > 0.1\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    tenant:pg_deadlocks:rate5m > 0.1\n    unless on(tenant)\n    (user_state_filter{filter=\"\
-        maintenance\"} == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    tenant:pg_deadlocks:rate5m\
+        \ > 0.1\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
@@ -205,10 +209,10 @@ spec:
     - alert: PostgreSQLHighRollbackRatio
       expr: "(\n  (\n    tenant:pg_rollback_ratio:rate5m > 0.05\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    tenant:pg_rollback_ratio:rate5m > 0.05\n    unless on(tenant)\n\
-        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    tenant:pg_rollback_ratio:rate5m\
+        \ > 0.05\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning

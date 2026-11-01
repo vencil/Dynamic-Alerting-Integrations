@@ -61,11 +61,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:redis_memory_used_bytes:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:redis_memory_used_bytes\n    )\n\
         \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:redis_memory_used_bytes:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:redis_memory_used_bytes\n    )\n\
-        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:redis_memory_used_bytes:max\n      > on(tenant) group_left\n\
+        \      tenant:alert_threshold:redis_memory_used_bytes\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
@@ -86,11 +87,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:redis_connected_clients:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:redis_connected_clients\n    )\n\
         \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:redis_connected_clients:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:redis_connected_clients\n    )\n\
-        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:redis_connected_clients:max\n      > on(tenant) group_left\n\
+        \      tenant:alert_threshold:redis_connected_clients\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
@@ -111,11 +113,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:redis_evicted_keys:rate5m\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:redis_evicted_keys_rate\n    )\n\
         \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:redis_evicted_keys:rate5m\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:redis_evicted_keys_rate\n    )\n\
-        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:redis_evicted_keys:rate5m\n      > on(tenant) group_left\n \
+        \     tenant:alert_threshold:redis_evicted_keys_rate\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
@@ -137,11 +140,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:redis_replication_lag:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:redis_replication_lag\n    )\n\
         \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:redis_replication_lag:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:redis_replication_lag\n    )\n\
-        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:redis_replication_lag:max\n      > on(tenant) group_left\n \
+        \     tenant:alert_threshold:redis_replication_lag\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 2m
       labels:
         severity: warning
@@ -161,10 +165,10 @@ spec:
     - alert: RedisLowHitRatio
       expr: "(\n  (\n    tenant:redis_keyspace_hit_ratio:avg < 0.9\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    tenant:redis_keyspace_hit_ratio:avg < 0.9\n    unless on(tenant)\n\
-        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    tenant:redis_keyspace_hit_ratio:avg\
+        \ < 0.9\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 10m
       labels:
         severity: warning

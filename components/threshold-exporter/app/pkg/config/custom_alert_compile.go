@@ -432,6 +432,15 @@ func sloBurnRecords(id string, sh customAlertShape, sel string) []any {
 
 const maintenanceTail = "unless on(tenant)\n(user_state_filter{filter=\"maintenance\"} == 1)"
 
+// metadataJoinRHS is the right-hand side of the metadata enrichment join.
+// threshold-exporter runs several replicas and each serves tenant_metadata_info,
+// so a per-pod scrape yields one series per replica for the same tenant; joining
+// the raw metric then fails with many-to-many. Collapsing it here (by the exact
+// label set the exporter serves) keeps the join one-to-one. The string is pinned
+// to ENRICH_RHS in scripts/tools/lint/check_leftouterjoin_enrichment.py by
+// tests/lint/test_check_leftouterjoin_enrichment.py — change both together.
+const metadataJoinRHS = "max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)"
+
 // sloCoreRecord (ADR-031 §2): the multi-window AND — long and short ratio
 // above the exporter-resolved threshold, and the bad-event floor (min_events ×
 // the tier factor, a compile-time literal). Only the long-window gate carries
@@ -541,7 +550,7 @@ func alertRule(id string, sh customAlertShape, sev, sel, op string) orderedMap {
 	expr := "(\n" +
 		"  " + core + "\n" +
 		"  * on(tenant) group_left(runbook_url, owner, tier)\n" +
-		"    tenant_metadata_info\n" +
+		"    " + metadataJoinRHS + "\n" +
 		")\n" +
 		"or\n" +
 		"(\n" +

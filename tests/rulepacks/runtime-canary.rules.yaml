@@ -74,7 +74,7 @@ groups:
       (
         custom:threshold__canary_pipeline_heartbeat__gt__w5m__for1m:warning:core
         * on(tenant) group_left(runbook_url, owner, tier)
-          tenant_metadata_info
+          max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
       )
       or
       (

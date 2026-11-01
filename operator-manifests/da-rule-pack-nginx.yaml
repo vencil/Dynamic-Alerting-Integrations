@@ -42,11 +42,11 @@ spec:
       expr: "(\n  (\n    (\n      tenant:nginx_connections_active:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:nginx_connections\n    )\n    unless\
         \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
-        \  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:nginx_connections_active:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:nginx_connections\n    )\n    unless\
-        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
-        \  unless on(tenant) tenant_metadata_info\n)\n"
+        \  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url,\
+        \ owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n      tenant:nginx_connections_active:max\n\
+        \      > on(tenant) group_left\n      tenant:alert_threshold:nginx_connections\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         metric_group: nginx_connections
@@ -68,8 +68,9 @@ spec:
       expr: "(\n  (\n    (\n      tenant:nginx_connections_active:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:nginx_connections_critical\n  \
         \  )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:nginx_connections_active:max\n      > on(tenant)\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      tenant:nginx_connections_active:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:nginx_connections_critical\n  \
         \  )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
@@ -94,11 +95,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:nginx_requests:rate5m\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:nginx_request_rate\n    )\n   \
         \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:nginx_requests:rate5m\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:nginx_request_rate\n    )\n   \
-        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:nginx_requests:rate5m\n      > on(tenant) group_left\n     \
+        \ tenant:alert_threshold:nginx_request_rate\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
         metric_group: nginx_request_rate
@@ -120,11 +122,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:nginx_requests:rate5m\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:nginx_request_rate_critical\n \
         \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:nginx_requests:rate5m\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:nginx_request_rate_critical\n \
-        \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      tenant:nginx_requests:rate5m\n      > on(tenant) group_left\n\
+        \      tenant:alert_threshold:nginx_request_rate_critical\n    )\n    unless\
+        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 3m
       labels:
         metric_group: nginx_request_rate
@@ -146,11 +149,11 @@ spec:
       expr: "(\n  (\n    (\n      tenant:nginx_connections_waiting:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:nginx_waiting\n    )\n    unless\
         \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
-        \  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:nginx_connections_waiting:max\n      >\
-        \ on(tenant) group_left\n      tenant:alert_threshold:nginx_waiting\n    )\n\
-        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url,\
+        \ owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n      tenant:nginx_connections_waiting:max\n\
+        \      > on(tenant) group_left\n      tenant:alert_threshold:nginx_waiting\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         metric_group: nginx_waiting
@@ -172,11 +175,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:nginx_connections_waiting:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:nginx_waiting_critical\n    )\n\
         \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:nginx_connections_waiting:max\n      >\
-        \ on(tenant) group_left\n      tenant:alert_threshold:nginx_waiting_critical\n\
-        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:nginx_connections_waiting:max\n      > on(tenant) group_left\n\
+        \      tenant:alert_threshold:nginx_waiting_critical\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 3m
       labels:
         metric_group: nginx_waiting

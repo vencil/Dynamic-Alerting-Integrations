@@ -67,10 +67,10 @@ spec:
     - alert: ElasticsearchClusterYellow
       expr: "(\n  (\n    tenant:es_cluster_health:status == 1\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    tenant:es_cluster_health:status == 1\n    unless on(tenant)\n\
-        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    tenant:es_cluster_health:status\
+        \ == 1\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
@@ -91,11 +91,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:es_heap_usage_percent:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:es_heap_usage_percent\n    )\n\
         \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:es_heap_usage_percent:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:es_heap_usage_percent\n    )\n\
-        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:es_heap_usage_percent:max\n      > on(tenant) group_left\n \
+        \     tenant:alert_threshold:es_heap_usage_percent\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
@@ -116,11 +117,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:es_disk_usage_percent:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:es_disk_usage_percent\n    )\n\
         \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:es_disk_usage_percent:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:es_disk_usage_percent\n    )\n\
-        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:es_disk_usage_percent:max\n      > on(tenant) group_left\n \
+        \     tenant:alert_threshold:es_disk_usage_percent\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
@@ -141,11 +143,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:es_search_latency_ms:avg\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:es_search_latency_ms\n    )\n \
         \   unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:es_search_latency_ms:avg\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:es_search_latency_ms\n    )\n \
-        \   unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:es_search_latency_ms:avg\n      > on(tenant) group_left\n  \
+        \    tenant:alert_threshold:es_search_latency_ms\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning
@@ -165,10 +168,10 @@ spec:
     - alert: ElasticsearchUnassignedShards
       expr: "(\n  (\n    tenant:es_unassigned_shards:count > 0\n    unless on(tenant)\n\
         \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  * on(tenant)\
-        \ group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n)\nor\n\
-        (\n  (\n    tenant:es_unassigned_shards:count > 0\n    unless on(tenant)\n\
-        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
-        \ tenant_metadata_info\n)\n"
+        \ group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url, owner,\
+        \ tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    tenant:es_unassigned_shards:count\
+        \ > 0\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 10m
       labels:
         severity: warning
@@ -189,11 +192,11 @@ spec:
       expr: "(\n  (\n    (\n      tenant:es_pending_tasks:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:es_pending_tasks\n    )\n    unless\
         \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
-        \  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:es_pending_tasks:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:es_pending_tasks\n    )\n    unless\
-        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
-        \  unless on(tenant) tenant_metadata_info\n)\n"
+        \  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant, runbook_url,\
+        \ owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n      tenant:es_pending_tasks:max\n\
+        \      > on(tenant) group_left\n      tenant:alert_threshold:es_pending_tasks\n\
+        \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
+        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 5m
       labels:
         severity: warning

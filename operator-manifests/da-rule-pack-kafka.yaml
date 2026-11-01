@@ -65,11 +65,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:kafka_consumer_lag:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:kafka_consumer_lag\n    )\n   \
         \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:kafka_consumer_lag:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:kafka_consumer_lag\n    )\n   \
-        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:kafka_consumer_lag:max\n      > on(tenant) group_left\n    \
+        \  tenant:alert_threshold:kafka_consumer_lag\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: kafka_consumer_lag
@@ -92,11 +93,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:kafka_consumer_lag:max\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:kafka_consumer_lag_critical\n \
         \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:kafka_consumer_lag:max\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:kafka_consumer_lag_critical\n \
-        \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      tenant:kafka_consumer_lag:max\n      > on(tenant) group_left\n\
+        \      tenant:alert_threshold:kafka_consumer_lag_critical\n    )\n    unless\
+        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: kafka_consumer_lag
@@ -119,9 +121,10 @@ spec:
       expr: "(\n  (\n    (\n      tenant:kafka_under_replicated_partitions:max\n \
         \     > on(tenant) group_left\n      tenant:alert_threshold:kafka_under_replicated_partitions\n\
         \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:kafka_under_replicated_partitions:max\n\
-        \      > on(tenant) group_left\n      tenant:alert_threshold:kafka_under_replicated_partitions\n\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      tenant:kafka_under_replicated_partitions:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_under_replicated_partitions\n\
         \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
@@ -146,9 +149,10 @@ spec:
       expr: "(\n  (\n    (\n      tenant:kafka_under_replicated_partitions:max\n \
         \     > on(tenant) group_left\n      tenant:alert_threshold:kafka_under_replicated_partitions_critical\n\
         \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:kafka_under_replicated_partitions:max\n\
-        \      > on(tenant) group_left\n      tenant:alert_threshold:kafka_under_replicated_partitions_critical\n\
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      tenant:kafka_under_replicated_partitions:max\n      > on(tenant)\
+        \ group_left\n      tenant:alert_threshold:kafka_under_replicated_partitions_critical\n\
         \    )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
         } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
@@ -173,11 +177,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:kafka_active_controllers:max\n      < on(tenant)\
         \ group_left\n      tenant:alert_threshold:kafka_active_controllers\n    )\n\
         \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:kafka_active_controllers:max\n      < on(tenant)\
-        \ group_left\n      tenant:alert_threshold:kafka_active_controllers\n    )\n\
-        \    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} ==\
-        \ 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \ 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:kafka_active_controllers:max\n      < on(tenant) group_left\n\
+        \      tenant:alert_threshold:kafka_active_controllers\n    )\n    unless\
+        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: kafka_active_controllers
@@ -200,11 +205,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:kafka_broker_count:max\n      < on(tenant)\
         \ group_left\n      tenant:alert_threshold:kafka_broker_count\n    )\n   \
         \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:kafka_broker_count:max\n      < on(tenant)\
-        \ group_left\n      tenant:alert_threshold:kafka_broker_count\n    )\n   \
-        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:kafka_broker_count:max\n      < on(tenant) group_left\n    \
+        \  tenant:alert_threshold:kafka_broker_count\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: kafka_broker_count
@@ -227,11 +233,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:kafka_request_rate:sum\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:kafka_request_rate\n    )\n   \
         \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:kafka_request_rate:sum\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:kafka_request_rate\n    )\n   \
-        \ unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n\
-        \  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        \  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max by(tenant,\
+        \ runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n  (\n    (\n\
+        \      tenant:kafka_request_rate:sum\n      > on(tenant) group_left\n    \
+        \  tenant:alert_threshold:kafka_request_rate\n    )\n    unless on(tenant)\n\
+        \    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n  unless on(tenant)\
+        \ tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: kafka_request_rate
@@ -254,11 +261,12 @@ spec:
       expr: "(\n  (\n    (\n      tenant:kafka_request_rate:sum\n      > on(tenant)\
         \ group_left\n      tenant:alert_threshold:kafka_request_rate_critical\n \
         \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    tenant_metadata_info\n\
-        )\nor\n(\n  (\n    (\n      tenant:kafka_request_rate:sum\n      > on(tenant)\
-        \ group_left\n      tenant:alert_threshold:kafka_request_rate_critical\n \
-        \   )\n    unless on(tenant)\n    (user_state_filter{filter=\"maintenance\"\
-        } == 1)\n  )\n  unless on(tenant) tenant_metadata_info\n)\n"
+        } == 1)\n  )\n  * on(tenant) group_left(runbook_url, owner, tier)\n    max\
+        \ by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n)\nor\n(\n\
+        \  (\n    (\n      tenant:kafka_request_rate:sum\n      > on(tenant) group_left\n\
+        \      tenant:alert_threshold:kafka_request_rate_critical\n    )\n    unless\
+        \ on(tenant)\n    (user_state_filter{filter=\"maintenance\"} == 1)\n  )\n\
+        \  unless on(tenant) tenant_metadata_info\n)\n"
       for: 30s
       labels:
         metric_group: kafka_request_rate
