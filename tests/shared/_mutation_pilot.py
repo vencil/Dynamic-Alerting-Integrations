@@ -344,22 +344,22 @@ MUTATIONS: list[Mutation] = [
         old="    return data if data is not None else default",
         new="    return data",
     ),
-    # ── format_json_report (_lib_io) ─────────────────────────────
+    # ── encode_json (_lib_exitcodes; #3216: the one JSON encoder) ──
     Mutation(
-        target_file="scripts/tools/_lib_io.py",
+        target_file="scripts/tools/_lib_exitcodes.py",
         test_file="tests/shared/test_property_tools.py",
-        label="format_json: drop pretty-print default (indent=0 → no newlines)",
-        fn_name="format_json_report",
-        old='    kwargs.setdefault("indent", 2)',
-        new='    kwargs.setdefault("indent", 0)',
+        label="encode_json: drop pretty-print (indent=0 → no newlines)",
+        fn_name="encode_json",
+        old="allow_nan=False, ensure_ascii=False, indent=2)",
+        new="allow_nan=False, ensure_ascii=False, indent=0)",
     ),
     Mutation(
-        target_file="scripts/tools/_lib_io.py",
+        target_file="scripts/tools/_lib_exitcodes.py",
         test_file="tests/shared/test_property_tools.py",
-        label="format_json: drop ensure_ascii default (Unicode gets escaped)",
-        fn_name="format_json_report",
-        old='    kwargs.setdefault("ensure_ascii", False)',
-        new='    kwargs.setdefault("ensure_ascii", True)',
+        label="encode_json: escape Unicode (ensure_ascii=True)",
+        fn_name="encode_json",
+        old="allow_nan=False, ensure_ascii=False, indent=2)",
+        new="allow_nan=False, ensure_ascii=True, indent=2)",
     ),
     # ── _validate_url_scheme (_lib_prometheus) ───────────────────
     Mutation(

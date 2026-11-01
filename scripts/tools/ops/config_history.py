@@ -29,8 +29,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
-from _lib_python import detect_cli_lang, format_json_report  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, encode_json  # noqa: E402
+from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 from _lib_io import exit_on_output_write_error, output_write, write_operator_output  # noqa: E402  (#1789, #3107)
@@ -123,7 +123,7 @@ def _save_history(config_dir, history):
     hdir = _history_dir(config_dir)
     history_file = hdir / 'history.json'
     with output_write(history_file, flag="--config-dir", action="write"):
-        history_file.write_text(format_json_report(history),
+        history_file.write_text(encode_json(history),
                                 encoding='utf-8', newline='\n')
 
 

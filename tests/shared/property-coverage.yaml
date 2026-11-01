@@ -94,7 +94,6 @@ modules:
   scripts/tools/_lib_io.py:
     covered:
       - load_yaml_file
-      - format_json_report
     excluded:
       write_text_secure: "Side-effecting I/O; SAST guard ensures chmod pairing"
       write_json_secure: "Side-effecting I/O; same SAST guarantee as write_text_secure"

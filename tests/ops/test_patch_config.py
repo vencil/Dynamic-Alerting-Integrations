@@ -340,7 +340,12 @@ class TestMainCLI:
         with mock.patch("sys.argv", [
             "patch_config.py", "--diff", "--json", "db-a", "cpu", "90",
         ]):
-            pc.main()
+            result = pc.main()
+        # #3216: --diff writes nothing, so its document is a Report that
+        # run() prints; main() itself prints none of it.
+        assert capsys.readouterr().out == ""
+        import _lib_exitcodes
+        assert _lib_exitcodes.emit_result(result) == 0
         import json
         out = json.loads(capsys.readouterr().out)
         assert out["changed"] is True
