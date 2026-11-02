@@ -9,7 +9,7 @@
 # scripts/ops/go_build.sh — the one place the repo's `go build` flags are
 # written. Dockerfile.dockerignore next to this file narrows the context back
 # to this module plus that script (BuildKit).
-FROM golang:1.26.8-alpine3.23 AS builder
+FROM golang:1.26.10-alpine3.23 AS builder
 WORKDIR /src
 COPY tests/e2e-bench/receiver/go.mod ./
 COPY tests/e2e-bench/receiver/*.go ./

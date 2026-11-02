@@ -499,6 +499,13 @@ type ScanOptions struct {
 	// files and every file's verdict are the whole tree's as always; a
 	// tenant outside it is not resolved. The scan ignores it.
 	Tenants map[string]bool
+	// QuietBuild (ScopeEffectiveWith / EffectiveTreeWith): the build's
+	// profile WARNs (a tenant electing an unknown profile), which otherwise
+	// reach the process log (scopeParseFailed, #2513), are discarded — for a
+	// reader that resolves a tree only to judge it (`da-guard write`'s key
+	// verdict, #3489), whose caller already prints them once. The scan
+	// ignores it.
+	QuietBuild bool
 }
 
 // FileOverlay is "these bytes at this tree path": Rel is root-relative

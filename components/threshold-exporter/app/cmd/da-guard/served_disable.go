@@ -78,7 +78,7 @@ type tenantKey struct{ tenant, key string }
 // disableEffects is the effect of every switched-off key of cfg: tenant →
 // key (as cfg spells it) → its effect and, for partial, the family keys still
 // served (sorted, as cfg spells them).
-func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (
+func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, quiet bool) (
 	map[string]map[string]disableEffect, error,
 ) {
 	perTenant := map[string][]string{}
@@ -118,11 +118,11 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (
 			tenants[i] = tk.tenant
 		}
 		part := onlyTenants(cfg, tenants).AtMinuteOfDay(m)
-		base, err := readCut(part, at, name)
+		base, err := readCut(part, at, name, quiet)
 		if err != nil {
 			return err
 		}
-		cf, err := readCut(withoutDisables(part, set), at, name)
+		cf, err := readCut(withoutDisables(part, set), at, name, quiet)
 		if err != nil {
 			return err
 		}
@@ -253,8 +253,8 @@ func (r *cutReading) fingerprint(tenant string) string {
 
 // readCut reads cfg (one part of the day) through keyedRowsWith, silently.
 // A Gather failure is a reading (failed), not an error.
-func readCut(cfg *config.ThresholdConfig, at time.Time, name keyNamer) (*cutReading, error) {
-	served, _, series, _, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name)
+func readCut(cfg *config.ThresholdConfig, at time.Time, name keyNamer, quiet bool) (*cutReading, error) {
+	served, _, series, _, err := keyedRowsWith(cfg, at, (*config.ThresholdConfig).ResolveAtWithKeysSilent, name, quiet)
 	var ng *notGatherableError
 	if errors.As(err, &ng) {
 		return &cutReading{failed: true}, nil

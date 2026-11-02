@@ -138,8 +138,6 @@ def test_the_shim_never_changes_the_callers_mapping(monkeypatch, pytestconfig):
 
 _OWN_CRASH_CODES = {
     "set_crash_exit_code": "_lib_exitcodes.set_crash_exit_code(1)\nraise RuntimeError('x')\n",
-    "@main(crash_exit_code=)": ("@_lib_exitcodes.main(crash_exit_code=5)\n"
-                                "def main():\n    raise RuntimeError('x')\nmain()\n"),
     "exit_on_crash(code=)": ("try:\n    raise RuntimeError('x')\n"
                              "except RuntimeError as e:\n    _lib_exitcodes.exit_on_crash(e, code=9)\n"),
     "run()": "def main():\n    raise RuntimeError('x')\n_lib_exitcodes.run(main)\n",

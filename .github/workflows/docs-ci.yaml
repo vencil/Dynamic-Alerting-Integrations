@@ -563,8 +563,8 @@ jobs:
             exit 1
           fi
           echo "amtool image (from deployment manifest): $AM_IMAGE"
-          PROMTOOL_VERSION=3.15.0
-          PROMTOOL_SHA256=2a542df32eac02ee17b9d844fb2aa1de00dafa5476579ba8a3ba862e9d572ea0
+          PROMTOOL_VERSION=3.15.1
+          PROMTOOL_SHA256=6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84
           YQ_VERSION=4.53.6
           YQ_SHA256=c5f056448f973ae7d39b5401949648a78f2dc1947d6a8eb65be60d5c504b9385
 

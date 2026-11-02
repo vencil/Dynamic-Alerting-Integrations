@@ -277,8 +277,8 @@ def _print_region(stdout: bytes, stderr: bytes) -> bytes:
 
     ⛔ This is load-bearing, and NOT merely a tidiness rule, because the premise
     "the JSON branch was never vulnerable" is only true for C0. ``json.dumps``
-    escapes control characters below ``\x20``; with ``ensure_ascii=False`` — the
-    repo default via ``format_json_report`` — it passes **C1 through verbatim**
+    escapes control characters below ``\x20``; with ``ensure_ascii=False`` — what
+    ``_lib_exitcodes.encode_json`` uses — it passes **C1 through verbatim**
     (measured: ``json.dumps("a\x85b", ensure_ascii=False)`` -> ``"a\x85b"``). So a
     NEL in a tenant name does reach JSON output unescaped. That is a real,
     PRE-EXISTING property of the machine-readable branch, unchanged by #1538 and

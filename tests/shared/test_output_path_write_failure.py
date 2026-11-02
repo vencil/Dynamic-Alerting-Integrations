@@ -322,20 +322,6 @@ def _trufflehog_ndjson(tmp: Path) -> str:
     return str(p)
 
 
-def _bench_baseline(tmp: Path) -> str:
-    """`--baseline` for `dx/write_baseline_marker`: two countable rows.
-
-    Countable by the CONSUMER's regex (`analyze_bench_history._BENCH_RE`),
-    which the tool imports rather than restates: a line the regex rejects
-    would make the tool refuse with "no parseable benchmark rows" (rc=1)
-    before it ever reaches the write this row is about.
-    """
-    p = tmp / "bench-baseline.txt"
-    p.write_text("BenchmarkFoo-8\t1000\t123 ns/op\n"
-                 "BenchmarkBar-8\t2000\t456 ns/op\n", encoding="utf-8")
-    return str(p)
-
-
 def _soak_config_dir(tmp: Path) -> str:
     """`--config-dir` for `dx/run_chaos_soak`: a throw-away conf.d.
 
@@ -415,10 +401,8 @@ class Row:
     shapes: tuple[str, ...] = ("missing_parent", "parent_is_file")
     # The head the tool prints in front of the shared ``cannot <action> …``
     # message, on the same line. The default is the one the shared emitter
-    # (``_lib_io._die_on_write_error``) writes; two tools replace it with a
-    # head of their own, each a contract that predates this ticket:
-    #   * ``write_baseline_marker`` — a GitHub ``::error::`` annotation, read
-    #     by the nightly's log parser;
+    # (``_lib_io._die_on_write_error``) writes; a tool may replace it with a
+    # head of its own when that head is a contract that predates this ticket:
     #   * ``waveform_score`` — ``ERROR [ERR_OUTPUT]: ``, the de-identified
     #     error code its ``--redact`` mode is documented to print in both
     #     modes (the SME triages by code without a re-run).
@@ -559,30 +543,12 @@ ROWS: list[Row] = [
         shapes=("artifact_is_dir",),
         artifact=_artefact)
       for _artefact in ("metrics-timeseries.csv", "summary.txt", "run-config.json")],
-    # One of the two rows with a non-default `prefix` (the other is
-    # `dx/waveform_score`, for a different reason). This tool writes a GitHub
-    # annotation (`::error::`) in place of the shared `ERROR: ` head because
-    # the nightly's log parser reads annotations — see the comment at its
-    # `except OutputWriteError`, which explains why it does not use the shared
-    # decorator. `target_is_dir` is the shape that reaches the `write_text`;
-    # `parent_is_file` reaches the `mkdir -p` in front of it. `missing_parent`
-    # is a legitimate success (the tool creates the parent).
-    # ⛔ The write moved 1 → 2 here; the three INPUT refusals (`--baseline`
-    # missing / unreadable / no parseable rows) still exit 1 and
-    # tests/dx/test_write_baseline_marker.py pins that split.
-    R("dx/write_baseline_marker.py", "--out", "file",
-      lambda c, out: ["--baseline", _bench_baseline(c.tmp), "--out", str(out)],
-      reach="a two-row synthetic `go test -bench` dump",
-      out_name="bench-baseline.rows",
-      shapes=("parent_is_file", "target_is_dir"),
-      prefix="::error::"),
     R("dx/sync_glossary_abbr.py", "--output", "file",
       lambda c, out: ["--glossary", _glossary(c.tmp), "--output", str(out)],
       reach="tmp glossary.md with two **ABBR (Expansion)** entries",
       out_name="abbreviations.md",
       shapes=("parent_is_file",)),
-    # A non-default `prefix` again, for a different reason than
-    # write_baseline_marker's. This tool funnels every error through
+    # A non-default `prefix`. This tool funnels every error through
     # `_emit_error`, which stamps a de-identified error CODE — a documented
     # `--redact` contract (the SME triages by code without a re-run, and under
     # `--redact` the path must not be printed at all). So the shared message
@@ -1137,7 +1103,7 @@ def _control_row(**kw) -> Row:
 class TestErrorLineMatcher:
     _MSG = "cannot write /x/out.txt: Not a directory (errno 20) — check the value given to -o"
     _STD = f"ERROR: {_MSG}"          # the shared emitter's head
-    _ANNOTATED = f"::error::{_MSG}"  # write_baseline_marker's head
+    _ANNOTATED = f"::error::{_MSG}"  # a synthetic non-default head
 
     def test_the_default_head_matches_the_shared_line(self):
         assert _error_lines(f"[warn] noise\n{self._STD}\n", "ERROR: ") == [self._STD]

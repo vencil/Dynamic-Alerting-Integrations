@@ -430,6 +430,27 @@ def test_a_batch_that_worsens_the_tree_is_tree_worsened(tmp_path):
     assert _bytes(root) == before
 
 
+def test_a_key_no_reader_reads_is_tree_worsened(tmp_path):
+    # #3489: a key the shared key verdict reads as unread at ERROR after the
+    # call (a misspelling, here) refuses the write, kind `unread`; the key
+    # spelled right is written.
+    root = _tree(tmp_path / "conf.d", {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+                                       "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: '70'\n"})
+    before = _bytes(root)
+    typo = [ce.set_op(["tenants", "t-a", "mysql_conections"], ce.cli_value("50"))]
+    with pytest.raises(ce.TreeWorsened) as exc:
+        ce.edit_all(root, [("t-a.yaml", typo)])
+    assert [(w["kind"], w["path"], w["tenant"], w["finding"]) for w in exc.value.worsened] == [
+        ("unread", "t-a.yaml", "t-a", "no_row")]
+    assert "mysql_conections" in exc.value.refusals[0].message
+    # One file's edit raises the one refusal, the same words.
+    with pytest.raises(ce.EditRefused, match="worsens_tree.*unread.*mysql_conections"):
+        ce.edit(root, "t-a.yaml", typo)
+    assert _bytes(root) == before
+    doc = ce.edit(root, "t-a.yaml", [ce.set_op(["tenants", "t-a", "mysql_connections"], ce.cli_value("50"))])
+    assert doc["status"] == ce.WRITTEN
+
+
 # ── write: edit, create and move in one batch ───────────────────────
 
 _KEPT = "# kept as written\ntenants:\n  t-m:\n    x: 010 # an int as written\n"

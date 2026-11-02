@@ -60,6 +60,7 @@ import generate_doc_map as gdm  # noqa: E402
 import generate_changelog as gc  # noqa: E402
 import _lib_validation as lv  # noqa: E402
 import _lib_io as lio  # noqa: E402
+import _lib_exitcodes as lec  # noqa: E402
 import _lib_prometheus as lp  # noqa: E402
 import _lib_godispatch as lgd  # noqa: E402
 import axe_lite_static as axe  # noqa: E402
@@ -851,7 +852,7 @@ class TestSafeLabelProperties:
         assert lio.safe_label(ValueError("bad\nthing")) == "bad?thing"
 
 
-class TestFormatJsonReportProperties:
+class TestEncodeJsonProperties:
 
     @given(st.dictionaries(
         keys=st.text(alphabet=string.ascii_letters, min_size=1, max_size=8),
@@ -864,9 +865,9 @@ class TestFormatJsonReportProperties:
     ))
     @PILOT_SETTINGS
     def test_round_trip_via_json_loads(self, data):
-        # Property: format_json_report output parses back to the same data.
+        # Property: encode_json output parses back to the same data.
         import json
-        s = lio.format_json_report(data)
+        s = lec.encode_json(data)
         assert json.loads(s) == data
 
     @given(st.dictionaries(
@@ -881,7 +882,7 @@ class TestFormatJsonReportProperties:
         # weak (json.dumps with indent=0 ALSO emits newlines, just no
         # spaces) — that mismatch surfaced as a surviving mutation in
         # batch-4 mutation pilot.
-        s = lio.format_json_report(data)
+        s = lec.encode_json(data)
         assert "\n  " in s, (
             f"output {s!r} has no `\\n  ` (newline + 2 spaces); "
             f"indent=2 default not honored?"
@@ -889,15 +890,9 @@ class TestFormatJsonReportProperties:
 
     def test_unicode_not_escaped_default(self):
         # Property: default ensure_ascii=False keeps Unicode bytes in output.
-        s = lio.format_json_report({"k": "中文"})
+        s = lec.encode_json({"k": "中文"})
         assert "中文" in s
         assert "\\u" not in s
-
-    def test_kwargs_override_defaults(self):
-        # ensure_ascii=True can be re-enabled via kwarg.
-        s = lio.format_json_report({"k": "中文"}, ensure_ascii=True)
-        assert "中文" not in s
-        assert "\\u" in s
 
 
 # ---------------------------------------------------------------------------

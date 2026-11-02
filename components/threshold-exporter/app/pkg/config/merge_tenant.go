@@ -106,6 +106,12 @@ type TenantMerge struct {
 	// notice. profileFileOrder is those files in merge order.
 	profileFiles     map[string]map[string]string
 	profileFileOrder []string
+	// flat marks the tenant whose own layer is the flat-KV fallback
+	// (MergeTenantOverRootPlatform): a display-only rebuild the exporter does
+	// not read — it declares no tenant from such a file — so its non-`_`
+	// keys get no threshold value finding (#3267; ADR-038 decision 12 judges
+	// the values the exporter reads).
+	flat map[string]bool
 }
 
 // ResolveAt is ThresholdConfig.ResolveAt without the resolver's log lines —
@@ -169,14 +175,18 @@ type platformSupply struct {
 //     Error, as it always was; a defined one is not (#1385 — before
 //     profiles were read here, every `_profile` was reported unknown).
 func (m *TenantMerge) ValidateTenantKeys() KeyValidation {
-	tenantLayer := ThresholdConfig{
-		Defaults:          m.Defaults,
-		StateFilters:      m.StateFilters,
-		OptionalOverrides: m.OptionalOverrides,
-		Profiles:          m.Profiles,
-		Tenants:           m.own,
+	// The tenant layer: one ownLayerKeys per tenant, the judgement
+	// ValidateTenantKeysByTenant gives each — so the two cannot part (the
+	// flat-KV fallback's threshold rule, #3267, included).
+	v := KeyValidation{Notices: m.defaultsKeyNotices()}
+	for tid := range m.own {
+		o := m.ownLayerKeys(tid)
+		v.Errors = append(v.Errors, o.Errors...)
+		v.Notices = append(v.Notices, o.Notices...)
+		v.Values = append(v.Values, o.Values...)
+		v.VersionLabels = append(v.VersionLabels, o.VersionLabels...)
+		v.Renames = append(v.Renames, o.Renames...)
 	}
-	v := tenantLayer.validateTenantKeys()
 	tenants := make([]string, 0, len(m.platform))
 	for tid := range m.platform {
 		tenants = append(tenants, tid)
@@ -200,19 +210,27 @@ func (m *TenantMerge) ValidateTenantKeysByTenant() KeyValidationByTenant {
 		Tenants:  make(map[string]KeyValidation, len(m.own)),
 	}
 	canonDeclared := canonicalizeOptionalOverrides(m.OptionalOverrides)
-	for tid, keys := range m.own {
-		layer := ThresholdConfig{
-			Defaults:          m.Defaults,
-			OptionalOverrides: m.OptionalOverrides,
-			Profiles:          m.Profiles,
-			Tenants:           map[string]map[string]ScheduledValue{tid: keys},
-		}
-		v := layer.validateOverrideKeys()
+	for tid := range m.own {
+		v := m.ownLayerKeys(tid)
 		v.Notices = append(v.Notices, m.platformLayerNotices(tid)...)
 		v.Notices = append(v.Notices, m.profileLayerNoticesFor(tid, canonDeclared)...)
 		out.Tenants[tid] = v
 	}
 	return out
+}
+
+// ownLayerKeys is the key checks on tenant tid's own layer (m.own[tid]),
+// both ValidateTenantKeys and ValidateTenantKeysByTenant take: the
+// flat-KV fallback's tenant (m.flat) gets no threshold value finding —
+// the exporter declares no tenant from such a file (#3267).
+func (m *TenantMerge) ownLayerKeys(tid string) KeyValidation {
+	layer := ThresholdConfig{
+		Defaults:          m.Defaults,
+		OptionalOverrides: m.OptionalOverrides,
+		Profiles:          m.Profiles,
+		Tenants:           map[string]map[string]ScheduledValue{tid: m.own[tid]},
+	}
+	return layer.validateOverrideKeysOf(!m.flat[tid])
 }
 
 // platformLayerNotices is ValidateTenantKeys' notices about the root
@@ -253,10 +271,9 @@ func (m *TenantMerge) platformLayerNotices(tid string) []string {
 // profile's and are not reported.
 //
 // ⚠️ It judges what validateOverrideKeys judges — key names, `expires:`,
-// `_critical` bases, version labels — and nothing else. A value resolve
-// cannot parse (`mysql_connections: abc`) is not reported, for the profile
-// as for the tenant's own file: resolve falls back to the default with a
-// log line on both.
+// `_critical` bases, version labels, a reserved value its reader ignores and
+// (#3267) a threshold value the row resolvers refuse
+// (`mysql_connections: abc`) — and nothing else.
 func (m *TenantMerge) profileLayerNotices() []string {
 	if len(m.Profiles) == 0 || len(m.own) == 0 {
 		return nil
@@ -439,6 +456,22 @@ func LoadRootPlatform(configDir string) RootPlatform {
 	return RootPlatform{r: loadRootPlatform(configDir)}
 }
 
+// DecodeTenantBody is the exporter's decode of a tenant file or body as its
+// key checks (ValidateTenantKeys) judge it: parse-tree's verdict, then
+// ParseConfigFile but for its last step (decodeConfigFile) — a threshold
+// written as null is no write (#2518), dimensional keys take the canonical
+// spelling (#2031), and a reserved key keeps its schedule as written for
+// the #3269 finding. The one decode both GET's tenant layer
+// (MergeTenantOverRootPlatform) and tenant-api's write gate — body and the
+// file it replaces alike, the ADR-038 decision 12 ratchet's two sides — judge
+// a tenant's values on (#3267).
+func DecodeTenantBody(data []byte) (ThresholdConfig, error) {
+	if err := judgeConfFile(data); err != nil {
+		return ThresholdConfig{}, err
+	}
+	return decodeConfigFile(data, false)
+}
+
 // MergeTenantOverRootPlatform is MergeTenantWithRootDefaults over a root
 // surface already read by LoadRootPlatform. It reads no file.
 func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData []byte) TenantMerge {
@@ -454,10 +487,7 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 	// the tenant layer keeps a reserved key's schedule as written: the GET's
 	// ValidateTenantKeys reports it (a notice, SelfRatchet) as the write
 	// gate's does. The display merge takes servedValue (mergeTenantConfig).
-	tenantCfg, err := ThresholdConfig{}, judgeConfFile(tenantData)
-	if err == nil {
-		tenantCfg, err = decodeConfigFile(tenantData, false)
-	}
+	tenantCfg, err := DecodeTenantBody(tenantData)
 	if err != nil {
 		tenantCfg = ThresholdConfig{}
 	}
@@ -483,6 +513,7 @@ func MergeTenantOverRootPlatform(root RootPlatform, tenantID string, tenantData 
 			}
 			merged.Tenants[tenantID] = display
 			merged.own[tenantID] = flatKV
+			merged.flat = map[string]bool{tenantID: true}
 		}
 	}
 
@@ -941,6 +972,13 @@ func rootDefaultsCarrier(configDir string) (path string, data []byte, ok bool) {
 	}
 	return rootCarrierOf(scan)
 }
+
+// RootCarrier is rootCarrierOf for a caller outside the package: the root
+// carrier this scan's chain selects, with the bytes the walk read (an
+// overlay's included). da-guard's key verdict reads Policy-as-Code's
+// `_policies` from it, as policy_engine reads them from parse-tree's
+// selection of the same carrier (#3489).
+func (s *TreeScan) RootCarrier() (path string, data []byte, ok bool) { return rootCarrierOf(s) }
 
 // rootCarrierOf is the root defaults carrier scan's chain selects: its path
 // and bytes, false when the root has none (or its bytes were not kept).

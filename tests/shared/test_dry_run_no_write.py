@@ -70,7 +70,7 @@ SCOPE — HONEST BOUNDARIES
    signal, because the dry-run *branch* is what's under test, not every
    mode combination around it.  ⚠️ 例外（``MULTI_VARIANT_TOOLS``，附理由）：
    一次呼叫走不到全部寫入守衛的工具，一個守衛分支一個具名 variant——
-   ``analyze_bench_history`` ×5、``bump_docs`` ×2。判準是「拿掉任一個守衛，
+   目前只有 ``bump_docs`` ×2。判準是「拿掉任一個守衛，
    都有一條會紅」，不是「每支都有一條 recipe」。
 3. **Legitimate writes are excluded by recipe design, not by exemption:**
    no recipe passes a report/output-writing flag alongside ``--dry-run``
@@ -82,8 +82,8 @@ SCOPE — HONEST BOUNDARIES
 4. **No recipe needs a real kubectl or network** — the three recipes that
    talk HTTP get the same local stub server the --json gate uses.
    batch_diagnose reads its ConfigMap in every mode (#1525), so its recipe
-   puts the --json gate's fake ``kubectl`` first on ``PATH``; like the fake
-   ``gh`` recipes it is POSIX-only, every other recipe runs on Windows too.
+   puts the --json gate's fake ``kubectl`` first on ``PATH``; that makes it
+   POSIX-only, every other recipe runs on Windows too.
 5. **Data-shape coverage is one-deep** (same accepted limit as the --json
    gate): each dry-run path is driven with one upstream payload shape.
    Probed at landing time: even against the empty-stub payloads the
@@ -96,8 +96,6 @@ SCOPE — HONEST BOUNDARIES
    ``lint/fix_doc_links.py`` 連洞都沒被數到。那些工具的 REPO_ROOT 多半由
    ``__file__`` 推導，所以 recipe 用 ``sandbox``：把 ``scripts/tools/`` 與
    所需輸入複製成 ``tmp/repo``，從副本執行，寫入才會落在快照看得到的地方。
-   ``analyze_bench_history`` 的寫入是 ``gh`` 呼叫而不是檔案：假 ``gh``
-   把寫入記進 tmp tree 的一個檔（POSIX only，同 dx --json gate 的邊界）。
    ⚠️ 仍不在範圍內：``verify_diff --run``（真的跑 pytest）與
    ``migrate_ssot_language --git``（``git mv``）——這兩條路徑不是守衛擋的。
 7. **非空綠的常設證明** — dx/lint 的 recipe 帶 ``write_control``：
@@ -406,37 +404,6 @@ def _git_repo(root: Path, files: dict[str, str]) -> Path:
     return root
 
 
-# ── analyze_bench_history：假 `gh` ─────────────────────────────────────────
-# 這支工具的寫入**不是檔案**，是 `gh issue edit/create/close/comment` 與
-# `gh label create`。假 `gh` 把每一個寫入呼叫記進 tmp tree 裡的
-# `gh-writes.log`——於是「dry-run 呼叫了 gh 寫入」在快照裡就是一個新增的檔案，
-# 跟其他工具用同一個判準。讀取呼叫（run list / issue list）從 fixture 回應。
-# ⚠️ POSIX only：Windows 上 subprocess 解析裸 `gh` 會找 gh.exe、無視 PATHEXT，
-# shebang shim 會被略過而跑到真的 gh（同 tests/dx/test_dx_json_stdout_contract.py
-# 的 fake_gh 邊界）。
-_FAKE_GH = """#!{python}
-import json, os, sys
-a = sys.argv[1:]
-d = os.environ["FAKE_GH_DIR"]
-if a[:2] == ["run", "list"]:
-    sys.stdout.write(open(os.path.join(d, "runs.json"), encoding="utf-8").read())
-    sys.exit(0)
-if a[:2] == ["issue", "list"]:
-    sys.stdout.write(open(os.path.join(d, "issues.json"), encoding="utf-8").read())
-    sys.exit(0)
-if a[:1] in (["issue"], ["label"]):
-    with open(os.environ["FAKE_GH_WRITE_LOG"], "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(a) + "\\n")
-    sys.exit(0)
-sys.stderr.write("fake gh: unhandled call: " + " ".join(a) + "\\n")
-sys.exit(1)
-"""
-
-_BENCH = "BenchmarkDryRunProbe"
-_BENCH_CANARY = "BenchmarkControlCanaryCPU"   # = analyze_bench_history.CANARY_BENCH
-_BENCH_CPU = "Dry Run Probe CPU @ 1.00GHz"
-
-
 def _with_fake_kubectl(tmp: Path, argv: list[str]) -> list[str]:
     """The --json gate's fake `kubectl` in `tmp/bin` (its threshold-config
     declares db-a and db-b); returns *argv*. With `env=_kubectl_env`."""
@@ -453,68 +420,6 @@ def _with_fake_kubectl(tmp: Path, argv: list[str]) -> list[str]:
 
 def _kubectl_env(tmp: Path) -> dict[str, str]:
     return {"PATH": f"{tmp / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}"}
-
-
-def _bench_env(tmp: Path) -> dict[str, str]:
-    bindir = tmp / "bin"
-    return {
-        "PATH": f"{bindir}{os.pathsep}{os.environ.get('PATH', '')}",
-        "FAKE_GH_DIR": str(tmp / "fix" / "gh"),
-        "FAKE_GH_WRITE_LOG": str(tmp / "gh-writes.log"),
-    }
-
-
-def _bench_history(tmp: Path, *, regress: bool, tonight_cpu: bool = True,
-                   issue_body: str | None = None) -> list[str]:
-    """十個 nightly run 的 artifact 快取 + 假 gh 的讀取回應；回傳 argv。
-
-    快取目錄預先放好 `bench-baseline.txt` 與 `.download-complete`，工具走
-    cache hit、不呼叫 `gh run download`（見 `download_artifact`）。
-    `regress=True` ⇒ 最近三晚 +11%（高於 5% floor）⇒ 有 finding。
-    `tonight_cpu=False` ⇒ 今晚沒有 `cpu:` header、其餘有 ⇒ INCONCLUSIVE。
-    `issue_body` 非 None ⇒ 有一張 open 的 perf-trend issue（#7）。
-    """
-    bindir = tmp / "bin"
-    bindir.mkdir(parents=True, exist_ok=True)
-    gh = bindir / "gh"
-    gh.write_text(_FAKE_GH.format(python=sys.executable), encoding="utf-8")
-    gh.chmod(0o755)
-    ghdir = tmp / "fix" / "gh"
-    ghdir.mkdir(parents=True, exist_ok=True)
-    cache = tmp / "fix" / "bench-cache"
-    runs = []
-    for i in range(10):
-        run_id = 5000 + i
-        runs.append({"databaseId": run_id, "createdAt": f"2026-05-{28 - i:02d}T03:00:00Z",
-                     "headSha": f"{i:040x}", "conclusion": "success"})
-        ns = 39_000_000 if (regress and i < 3) else 35_000_000
-        lines = [] if (i == 0 and not tonight_cpu) else [f"cpu: {_BENCH_CPU}"]
-        lines += [f"{_BENCH}-8   \t      30\t  {ns} ns/op",
-                  f"{_BENCH_CANARY}-8   \t    3000\t    360000 ns/op"]
-        d = cache / f"run-{run_id}"
-        d.mkdir(parents=True, exist_ok=True)
-        (d / "bench-baseline.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
-        (d / ".download-complete").write_text("", encoding="utf-8")
-    (ghdir / "runs.json").write_text(json.dumps(runs), encoding="utf-8")
-    issues = [] if issue_body is None else [
-        {"number": 7, "title": "perf-trend", "body": issue_body,
-         "labels": [{"name": "perf-trend"}]}]
-    (ghdir / "issues.json").write_text(json.dumps(issues), encoding="utf-8")
-    return ["--trend-watch", "--cache-dir", str(cache), "--dry-run"]
-
-
-def _bench_state_marker(state: list[list[str]]) -> str:
-    """用工具自己的 renderer 產 state marker，格式不會與工具漂移。"""
-    import importlib.util
-    spec = importlib.util.spec_from_file_location(
-        "_abh_for_dry_run_gate", TOOL_SCRIPTS["analyze_bench_history"])
-    mod = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = mod          # @dataclass looks its module up here
-    try:
-        spec.loader.exec_module(mod)
-    finally:
-        sys.modules.pop(spec.name, None)
-    return "legacy table\n" + mod._render_state_marker(state)
 
 
 # ── 其餘 dx/lint 工具的 fixture ────────────────────────────────────────────
@@ -753,26 +658,6 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--base-dir", _md_without_frontmatter(t), "--dry-run"],
       write_control=True),
 
-    # 五個 gh 寫入守衛各在一條分支上，單一次呼叫只走得到一條 ⇒ 五個 variant。
-    R("analyze_bench_history", variant="open",
-      build=lambda t, s: _bench_history(t, regress=True),
-      env=_bench_env, write_control=True, posix_only=True),
-    R("analyze_bench_history", variant="update",
-      build=lambda t, s: _bench_history(t, regress=True, issue_body=""),
-      env=_bench_env, write_control=True, posix_only=True),
-    R("analyze_bench_history", variant="inconclusive",
-      build=lambda t, s: _bench_history(t, regress=False, tonight_cpu=False,
-                                        issue_body=""),
-      env=_bench_env, write_control=True, posix_only=True),
-    R("analyze_bench_history", variant="held-open",
-      build=lambda t, s: _bench_history(
-          t, regress=False,
-          issue_body=_bench_state_marker([["BenchmarkRetiredProbe", "sustained"]])),
-      env=_bench_env, write_control=True, posix_only=True),
-    R("analyze_bench_history", variant="close",
-      build=lambda t, s: _bench_history(t, regress=False, issue_body=""),
-      env=_bench_env, write_control=True, posix_only=True),
-
     # 版號規則的三種寫法（pattern / pair_anchor / whole_file）各一個守衛；
     # --sync-counts 的第四個守衛在另一條分支、且不接受版號旗標 ⇒ 兩個 variant。
     # ok_exits=(1,)：沙箱只帶了少數目標檔，其餘規則回報 SKIP/DEAD ⇒ exit 1，
@@ -869,7 +754,9 @@ def test_recipe_table_covers_every_dry_run_tool():
 # lint 目錄原本有 1 支（fix_doc_links），dx 原本 15 支；fix_doc_links 與
 # scaffold_jsx_dep 在 issue #1454 退役後，lint 目錄沒有宣告 --dry-run 的工具。
 # dx 再少一支：inject_related_docs 在 #1984 退役。
-EXPECTED_DRY_RUN_TOOLS_PER_DIR = {"ops": 18, "dx": 13}
+# dx 再少一支：analyze_bench_history 的 --trend-watch（唯一用 --dry-run 的路徑）
+# 隨舊的 ns/op 趨勢監測退役。
+EXPECTED_DRY_RUN_TOOLS_PER_DIR = {"ops": 18, "dx": 12}
 
 
 def test_dry_run_tool_count_per_dir_is_pinned():
@@ -978,9 +865,6 @@ def test_tool_names_are_unique_across_dirs():
 
 # 允許多於一條 recipe 的工具，以及理由（見 docstring §2）。
 MULTI_VARIANT_TOOLS: dict[str, str] = {
-    "analyze_bench_history": (
-        "five gh-write guards (open / update / inconclusive / held-open / close), "
-        "each on a different trend-watch branch"),
     "bump_docs": (
         "the version-rule guards and the --sync-counts guard are on branches "
         "that reject each other's flags"),
@@ -1050,8 +934,8 @@ def _params():
 
 def _prepare(recipe: Recipe, tmp_path: Path, stub_url: str) -> list[str]:
     if recipe.posix_only and os.name == "nt":
-        pytest.skip("fake `gh` is a shebang shim; Windows resolves gh.exe and "
-                    "would run the REAL gh (see _FAKE_GH)")
+        pytest.skip("fake `kubectl` is a shebang shim; Windows resolves "
+                    "kubectl.exe and would run the REAL one")
     if recipe.sandbox is not None:
         _make_sandbox(tmp_path, recipe.sandbox)
     argv = recipe.build(tmp_path, stub_url)
@@ -1068,8 +952,8 @@ def _run(recipe: Recipe, tmp_path: Path, argv: list[str]):
     # 沙箱裡跑的是 scripts/tools 的副本：不關 bytecode 快取，import 就會在
     # tmp tree 長出 __pycache__/，被快照算成工具的寫入。
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    # 在 GitHub Actions 裡跑時，這個變數指向**真的** job summary；工具（如
-    # analyze_bench_history）會往裡 append。那是 tmp tree 外、而且是別人的檔案。
+    # 在 GitHub Actions 裡跑時，這個變數指向**真的** job summary；工具會往裡
+    # append。那是 tmp tree 外、而且是別人的檔案。
     env.pop("GITHUB_STEP_SUMMARY", None)
     if recipe.env is not None:
         env.update(recipe.env(tmp_path))

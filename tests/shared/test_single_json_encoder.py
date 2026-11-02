@@ -6,9 +6,14 @@ encodes it with `encode_json` — two-space indent, no NaN / Infinity, `date` /
 the encoder cannot carry is the `output_not_serializable` envelope at the
 crash exit code, never a document with `Infinity` in it, never part of one.
 
-The gate below is the ratchet that moves tools onto it: every file that
-still prints its own JSON is listed with how many times it does, and the
-count may only go down.
+The gate below refuses every shape it can see of a tool printing JSON text
+itself; there are none left, so it is a plain refusal, no longer a ratchet
+(`OWN_JSON`). `encode_json` is one of the formatters it follows, so encoding
+with the one encoder and printing the text yourself is caught too.
+
+⚠️ It does not prove that no tool prints its own JSON: the shapes it does not
+see are listed at `LIB` below, and tools that still do it through them are
+tracked on #3216.
 """
 from __future__ import annotations
 
@@ -191,16 +196,21 @@ def test_in_process_callers_take_the_same_step(capsys):
     assert lib.emit_result(3) == 3
 
 
-# ── the ratchet: tools that still print their own JSON ───────────────────
+# ── the gate: no tool prints its own JSON ────────────────────────────────
 
-#: ⛔ scripts/tools file -> how many times it prints its own JSON: `print` /
-#: `sys.stdout.write` / `click.echo` of JSON text (see `_JsonText`: under any
-#: import alias, through a formatter found by `json_formatters`, a local
-#: holding it, `+` or an f-string), or `json.dump(..., sys.stdout)`. Migrate a
-#: site to `return Report(doc)` and lower its count here; a file not listed
-#: may not do it at all. Blind spots, by choice: a method returning JSON text,
-#: and a value passed through a call or an attribute before it is printed.
-OWN_JSON: dict[str, int] = {}
+#: The one file allowed to print JSON text: it holds the encoder, `run()`'s
+#: writer and the crash envelope.
+LIB = "_lib_exitcodes.py"
+
+#: What counts as printing its own JSON: `print` / `sys.stdout.write` /
+#: `click.echo` of JSON text (see `_JsonText`: under any import alias, through
+#: a module-level formatter found by `json_formatters` — `encode_json` among
+#: them — a local holding it, `+` or an f-string), or `json.dump(...,
+#: sys.stdout)`. Not seen: a method or a nested function returning JSON
+#: text; a conditional expression (`a if c else b`); a stream held in a name
+#: (`sink = sys.stdout`); a value passed through a call, a container or an
+#: attribute before it is printed (patch_config's `_emit`, which answers with
+#: SIGINT / SIGTERM ignored first, is one); a write entry given `-`.
 
 
 _FUNCS = (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)
@@ -306,9 +316,11 @@ class _JsonText:
         return False
 
 
-def _parsed(root: pathlib.Path):
+def _parsed(root: pathlib.Path, *, with_lib: bool = False):
+    """Every module under *root*; the encoder's own (`LIB`) only when
+    *with_lib* — its formatters count, its own prints do not."""
     for path in sorted(root.rglob("*.py")):
-        if path.name != "_lib_exitcodes.py":  # the encoder itself, and the envelope
+        if with_lib or path.name != LIB:
             yield path, ast.parse(path.read_text(encoding="utf-8"))
 
 
@@ -319,7 +331,7 @@ def json_formatters(root: pathlib.Path = TOOLS) -> dict[str, set[str]]:
     the day it is written. Blind spot, by choice: a method returning JSON
     text (``print(obj.to_json())``) — its bare name says nothing of which
     method a call reaches."""
-    trees = [(path.stem, tree) for path, tree in _parsed(root)]
+    trees = [(path.stem, tree) for path, tree in _parsed(root, with_lib=True)]
     found: dict[str, set[str]] = {}
     while True:
         grew = False
@@ -356,13 +368,16 @@ def own_json_counts(root: pathlib.Path = TOOLS) -> dict[str, int]:
     return counts
 
 
-def test_no_tool_prints_more_of_its_own_json_than_listed():
-    now = own_json_counts()
-    grew = {f: (n, OWN_JSON.get(f, 0)) for f, n in now.items() if n > OWN_JSON.get(f, 0)}
-    assert not grew, ("print a --json document by `return Report(doc)` (run() encodes it), "
-                      f"not yourself — (now, allowed): {grew}")
-    shrank = {f: (now.get(f, 0), n) for f, n in OWN_JSON.items() if now.get(f, 0) < n}
-    assert not shrank, f"migrated — lower OWN_JSON to what is left (now, listed): {shrank}"
+def test_no_tool_prints_its_own_json():
+    own = own_json_counts()
+    assert not own, ("print a --json document by `return Report(doc)` (run() encodes it), "
+                     f"not yourself — file: times: {own}")
+
+
+def test_the_encoder_is_a_formatter_the_gate_follows():
+    """Without this, `print(encode_json(doc))` in a tool would be invisible:
+    the one module the gate does not count is the one that defines it."""
+    assert "encode_json" in json_formatters().get(LIB[:-3], set())
 
 
 def test_the_ratchet_sees_each_shape(tmp_path):
@@ -396,12 +411,19 @@ def test_the_ratchet_sees_each_shape(tmp_path):
         "    print(text.upper)\n"                 # not the text itself
         "def other():\n    print(text)\n",        # `text` is main's, not this scope's
         encoding="utf-8")
+    (tmp_path / LIB).write_text(
+        "import json\ndef encode_json(d):\n    return json.dumps(d)\n"
+        "print(encode_json({}))\n",              # the lib's own print: not counted
+        encoding="utf-8")
+    (tmp_path / "v.py").write_text(
+        "import _lib_exitcodes as L\nfrom _lib_exitcodes import encode_json as E\n"
+        "print(L.encode_json({}))\nprint(E({}))\n", encoding="utf-8")
     (tmp_path / "u.py").write_text(
         # a `render` of its own (markdown) is not fmt's; a method is not seen
         "import json\ndef render(r):\n    return '# ' + r\n"
         "class R:\n    def to_json(self):\n        return json.dumps({})\n"
         "print(render('x'))\nprint(R().to_json())\n", encoding="utf-8")
-    assert own_json_counts(tmp_path) == {"t.py": 15}
+    assert own_json_counts(tmp_path) == {"t.py": 15, "v.py": 2}
 
 
 # ── #3144: explain-route on a value YAML reads as a date ─────────────────

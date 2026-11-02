@@ -2182,7 +2182,11 @@ class TestKustomizeBaseEnumeratesConfd:
             os.makedirs(conf)
             with open(os.path.join(conf, '_defaults.yml'), 'w',
                       encoding='utf-8') as fh:
-                fh.write('defaults: {}\n')
+                # The customer's carrier declares the mariadb keys the
+                # tenant file gets: one that declares none leaves them read
+                # by nothing, and `da-guard write` refuses that (#3489).
+                fh.write('defaults:\n  mysql_connections: 80\n'
+                         '  mysql_replication_lag: 30\n  mysql_threads_running: 50\n')
             ip.run_init(dict(_KUST_CFG, tenants=['t-one']), tmp)
             files = _kust_files(tmp)
             assert files[0] == '_defaults.yml'

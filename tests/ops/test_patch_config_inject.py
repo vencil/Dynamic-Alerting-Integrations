@@ -35,12 +35,12 @@ MODULE_FNS = ["_kubectl_patch", "_rv_of", "written_files", "config_hash",
               "_read_key", "_read_cm", "parse_metrics", "verify_pod",
               "_conclude", "_send_rollback",
               "_wait_rolled_back", "_observed_fallback",
-              "_say", "_emit", "_apply_envelope", "format_json_report",
+              "_say", "_emit", "_apply_envelope", "encode_json",
               "_status_exit_code", "_outcome", "_answer"]
 EXPORTER_FNS = ["wait_served", "wait_moved", "snapshot", "consistent", "identity",
                 "probe", "last_reload", "get"]
 SIGNAL_FNS = ["cause", "ignore", "checkpoint"]
-OUTPUT_FNS = {"_say", "_emit", "_apply_envelope", "format_json_report",
+OUTPUT_FNS = {"_say", "_emit", "_apply_envelope", "encode_json",
               "_answer"}
 TARGETS = ([("module", f) for f in MODULE_FNS] + [("Exporter", f) for f in EXPORTER_FNS]
            + [("_Signals", f) for f in SIGNAL_FNS])

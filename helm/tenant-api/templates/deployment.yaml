@@ -74,7 +74,7 @@ spec:
       initContainers:
       {{- if .Values.gitRepoUrl }}
         - name: git-clone
-          image: alpine/git:v2.54.0@sha256:e8ceedc73bd80992ae8d58a7d24c58b8322146c354f1d2e81a97db4452068ec0
+          image: alpine/git:v2.54.0@sha256:ac6c828f15d82775d204d3d75112e1d34af8945da80ccf922713c9891ba68e7a
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false
@@ -118,7 +118,7 @@ spec:
         # da-tools image has no git, and a da-tools container running git is
         # an entry point check_image_pin_capability.py cannot verify.
         - name: git-gc-off
-          image: alpine/git:v2.54.0@sha256:e8ceedc73bd80992ae8d58a7d24c58b8322146c354f1d2e81a97db4452068ec0
+          image: alpine/git:v2.54.0@sha256:ac6c828f15d82775d204d3d75112e1d34af8945da80ccf922713c9891ba68e7a
           imagePullPolicy: IfNotPresent
           securityContext:
             allowPrivilegeEscalation: false

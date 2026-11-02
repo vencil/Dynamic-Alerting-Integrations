@@ -1303,3 +1303,38 @@ class TestScanAcceptsBothSpellings:
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
+
+
+# ── #3216: history.json goes out through the one encoder ─────────────
+
+@pytest.mark.real_crash_exit_code
+@pytest.mark.usefixtures("da_guard_env")
+def test_a_history_holding_nan_is_refused_not_written_back(tmp_path):
+    """#3216 (owner-approved 0→2): `json.loads` takes `NaN`, which is not
+    JSON; the old formatter wrote it back and the snapshot was rc 0. Through
+    `encode_json` the run is refused at rc 2, naming where the value sits,
+    before anything is written: history.json as it was, no snap-2/."""
+    script = Path(__file__).resolve().parents[2] / 'scripts' / 'tools' / 'ops' / 'config_history.py'
+    confd = tmp_path / 'conf.d'
+    confd.mkdir()
+    (confd / '_defaults.yaml').write_text('defaults: {}\n', encoding='utf-8')
+
+    def snapshot():
+        return subprocess.run(
+            [sys.executable, str(script), '--config-dir', str(confd), 'snapshot'],
+            capture_output=True, text=True, encoding='utf-8', timeout=120)
+
+    first = snapshot()
+    assert first.returncode == 0, first.stderr
+    history = tmp_path / '.da-history' / 'history.json'
+    entries = json.loads(history.read_text(encoding='utf-8'))
+    entries[0]['file_count'] = float('nan')
+    history.write_text(json.dumps(entries), encoding='utf-8')  # NaN, as json.dumps spells it
+    before = history.read_bytes()
+    (confd / '_defaults.yaml').write_text('defaults: {cpu: 1}\n', encoding='utf-8')
+
+    second = snapshot()
+    assert second.returncode == 2, (second.stdout, second.stderr)
+    assert '[0].file_count: nan is not a JSON number' in second.stderr
+    assert history.read_bytes() == before
+    assert sorted(p.name for p in history.parent.iterdir()) == ['history.json', 'snap-1']

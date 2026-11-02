@@ -1352,17 +1352,6 @@ def read_onboard_hints(path: Optional[str]) -> Optional[dict[str, Any]]:
         return json.load(f)
 
 
-def format_json_report(data: Any, **kwargs: Any) -> str:
-    """Serialize data as pretty-printed JSON (ensure_ascii=False).
-
-    Thin wrapper to eliminate ``json.dumps(data, indent=2, ensure_ascii=False)``
-    duplication across 20+ tools.  Extra kwargs are forwarded to ``json.dumps``.
-    """
-    kwargs.setdefault("indent", 2)
-    kwargs.setdefault("ensure_ascii", False)
-    return json.dumps(data, **kwargs)
-
-
 # ── Common argparse helpers ─────────────────────────────────────────
 # Extracted in v2.4.0 Phase B to eliminate argparse boilerplate across 20+ tools.
 

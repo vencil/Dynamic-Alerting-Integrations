@@ -310,18 +310,26 @@ def test_importing_tenant_verify_leaves_both_codes_alone(tmp_path):
 #: Every channel that moves the process crash / caller-error code, which no
 #: production tool uses since #3393 (tenant_verify was the one tool that
 #: moved its codes, to 1/1): the setters, the module globals they write, and
-#: the per-call `crash_exit_code=` of `@main` / `exit_on_crash`.
+#: the per-call `code=` of `exit_on_crash` (the `@main(crash_exit_code=)`
+#: decorator it used to sit beside was retired, #3278).
 _CODE_SETTERS = ("set_crash_exit_code", "set_caller_error_code")
 _CODE_GLOBALS = ("_crash_exit_code", "_caller_error_code")
-_CODE_KEYWORDS = ("crash_exit_code",)
+_PER_CALL = ("exit_on_crash", "code")
 
 
 def _setter_calls(tree):
     """(line, name) of every reach for a code channel in *tree*: a setter or
     code global named in any way — called, imported (under any alias),
-    assigned, or as a `getattr` string — or a `crash_exit_code=` keyword."""
+    assigned, or as a `getattr` string — or `exit_on_crash(..., code=)`
+    under any name it was imported as. Not seen for the latter: a `getattr`
+    string, `functools.partial`, `**{...}`, a local alias; a same-named
+    function of another module is a false hit (none in scripts/tools)."""
     import ast
     names = set(_CODE_SETTERS) | set(_CODE_GLOBALS)
+    # `exit_on_crash` under any name this tree imported it as
+    per_call = {_PER_CALL[0]} | {
+        a.asname for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+        for a in node.names if a.name == _PER_CALL[0] and a.asname}
     hits = []
     for node in ast.walk(tree):
         name = None
@@ -333,8 +341,10 @@ def _setter_calls(tree):
             name = next((a.name for a in node.names if a.name in names), None)
         elif isinstance(node, ast.Constant) and node.value in names:
             name = node.value
-        elif isinstance(node, ast.keyword) and node.arg in _CODE_KEYWORDS:
-            name = node.arg
+        elif (isinstance(node, ast.Call)
+              and per_call & {getattr(node.func, "attr", None), getattr(node.func, "id", None)}
+              and any(k.arg == _PER_CALL[1] for k in node.keywords)):
+            name = "exit_on_crash(code=)"
         if name is not None:
             hits.append((getattr(node, "lineno", 0), name))
     return sorted(set(hits))
@@ -374,8 +384,12 @@ def test_the_setter_scan_sees_a_call():
         ("import _lib_exitcodes\ngetattr(_lib_exitcodes, 'set_crash_exit_code')(1)\n",
          "set_crash_exit_code"),
         ("import _lib_exitcodes\n_lib_exitcodes._caller_error_code = 1\n", "_caller_error_code"),
-        ("import _lib_exitcodes as _ec\n@_ec.main(crash_exit_code=1)\ndef main():\n    pass\n",
-         "crash_exit_code"),
+        ("import _lib_exitcodes as _ec\n_ec.exit_on_crash(RuntimeError(), code=1)\n",
+         "exit_on_crash(code=)"),
+        ("from _lib_exitcodes import exit_on_crash\nexit_on_crash(RuntimeError(), code=1)\n",
+         "exit_on_crash(code=)"),
+        ("from _lib_exitcodes import exit_on_crash as eoc\neoc(RuntimeError(), code=1)\n",
+         "exit_on_crash(code=)"),
     ]:
         names = {name for _line, name in _setter_calls(ast.parse(src))}
         assert want in names, (src, names)
@@ -434,25 +448,6 @@ def test_existing_custom_excepthook_is_not_clobbered(tmp_path):
     assert proc.returncode == 7, proc.stderr
     assert "CUSTOM-HOOK" in proc.stderr
     assert "ERROR: unexpected internal error" not in proc.stderr
-
-
-@pytest.mark.real_crash_exit_code
-def test_main_decorator_calls_on_crash_and_exits_with_crash_code(tmp_path):
-    """@_lib_exitcodes.main(on_crash=...) — the hook for tools with a --json
-    contract to emit their envelope before the process ends."""
-    proc = _run_crash_script(
-        tmp_path,
-        "import json\n"
-        "def envelope(exc):\n"
-        "    print(json.dumps({'status': 'internal_error', 'type': type(exc).__name__}))\n"
-        "@_lib_exitcodes.main(on_crash=envelope)\n"
-        "def main():\n    raise OSError('disk gone')\n"
-        "main()\n")
-    assert proc.returncode == 2, proc.stderr
-    assert proc.stdout.strip() == '{"status": "internal_error", "type": "OSError"}'
-    assert "Traceback" in proc.stderr
-    assert "ERROR: unexpected internal error (OSError): disk gone" in _stderr_lines(proc)
-    assert "ATEXIT-RAN" in proc.stderr
 
 
 @pytest.mark.real_crash_exit_code
@@ -535,33 +530,19 @@ def test_disarmed_crash_envelope_prints_nothing(tmp_path):
 
 
 @pytest.mark.real_crash_exit_code
-def test_main_decorator_on_crash_wins_over_the_armed_envelope(tmp_path):
-    """An explicit on_crash is the tool's own envelope: the armed default is
-    not printed beside it."""
+def test_run_prints_the_armed_envelope_on_a_crash(tmp_path):
     proc = _run_crash_script(
         tmp_path,
-        "_lib_exitcodes.arm_crash_envelope()\n"
-        "@_lib_exitcodes.main(on_crash=lambda exc: print('OWN'))\n"
-        "def main():\n    raise RuntimeError('x')\n"
-        "main()\n")
-    assert proc.returncode == 2, proc.stderr
-    assert proc.stdout == "OWN\n"
-
-
-@pytest.mark.real_crash_exit_code
-def test_bare_main_decorator_prints_the_armed_envelope(tmp_path):
-    proc = _run_crash_script(
-        tmp_path,
-        "_lib_exitcodes.arm_crash_envelope()\n"
-        "@_lib_exitcodes.main\n"
-        "def main():\n    raise RuntimeError('x')\n"
-        "main()\n")
+        "def main():\n"
+        "    _lib_exitcodes.arm_crash_envelope()\n"
+        "    raise RuntimeError('x')\n"
+        "_lib_exitcodes.run(main)\n")
     assert proc.returncode == 2, proc.stderr
     assert json.loads(proc.stdout)["reason"] == "internal_error"
 
 
-class TestMainDecoratorInProcess:
-    """The decorator's own contract, without a subprocess."""
+class TestCrashExitInProcess:
+    """`exit_on_crash` and the crash code, without a subprocess."""
 
     @staticmethod
     def _ec(monkeypatch):
@@ -582,15 +563,31 @@ class TestMainDecoratorInProcess:
         assert json.loads(out)["error"].endswith("(RuntimeError): a")
 
     @pytest.mark.real_crash_exit_code
-    def test_bare_decorator_exits_crash_code(self, monkeypatch, capsys):
+    def test_a_failing_envelope_still_exits_crash_code(self, monkeypatch, capsys):
+        """The envelope writer failing (an armed build() whose document
+        json cannot write) is reported, and the crash still ends at the
+        crash code — not as the envelope's exception."""
         ec = self._ec(monkeypatch)
 
-        @ec.main
-        def tool():
-            raise RuntimeError("boom")
+        def broken(exc):
+            raise TypeError("envelope writer broke")
 
+        monkeypatch.setattr(ec, "_print_crash_envelope", broken)
         with pytest.raises(SystemExit) as exc_info:
-            tool()
+            ec.exit_on_crash(ValueError("first"))
+        assert exc_info.value.code == 2
+        err = capsys.readouterr().err
+        assert "ERROR: unexpected internal error (ValueError): first" in err
+        assert "ERROR: crash envelope failed:" in err and "envelope writer broke" in err
+
+    @pytest.mark.real_crash_exit_code
+    def test_exit_on_crash_exits_crash_code(self, monkeypatch, capsys):
+        ec = self._ec(monkeypatch)
+        try:
+            raise RuntimeError("boom")
+        except RuntimeError as exc:
+            with pytest.raises(SystemExit) as exc_info:
+                ec.exit_on_crash(exc)
         assert exc_info.value.code == 2
         err = capsys.readouterr().err
         assert "Traceback" in err
@@ -598,95 +595,19 @@ class TestMainDecoratorInProcess:
             "ERROR: unexpected internal error (RuntimeError): boom"
 
     @pytest.mark.real_crash_exit_code
-    def test_on_crash_receives_the_exception(self, monkeypatch, capsys):
+    def test_per_call_code_overrides_module_setting(self, monkeypatch):
         ec = self._ec(monkeypatch)
-        seen = []
-
-        @ec.main(on_crash=seen.append)
-        def tool():
-            raise ValueError("bad shape")
-
         with pytest.raises(SystemExit) as exc_info:
-            tool()
-        assert exc_info.value.code == 2
-        assert len(seen) == 1 and isinstance(seen[0], ValueError)
-
-    @pytest.mark.real_crash_exit_code
-    def test_failing_on_crash_still_exits_crash_code(self, monkeypatch, capsys):
-        ec = self._ec(monkeypatch)
-
-        def broken(exc):
-            raise TypeError("envelope writer broke")
-
-        @ec.main(on_crash=broken)
-        def tool():
-            raise ValueError("first")
-
-        with pytest.raises(SystemExit) as exc_info:
-            tool()
-        assert exc_info.value.code == 2
-        err = capsys.readouterr().err
-        assert "ERROR: unexpected internal error (ValueError): first" in err
-        assert "envelope writer broke" in err
-
-    @pytest.mark.real_crash_exit_code
-    def test_decorator_crash_exit_code_overrides_module_setting(self, monkeypatch):
-        ec = self._ec(monkeypatch)
-
-        @ec.main(crash_exit_code=1)
-        def tool():
-            raise RuntimeError("x")
-
-        with pytest.raises(SystemExit) as exc_info:
-            tool()
+            ec.exit_on_crash(RuntimeError("x"), code=1)
         assert exc_info.value.code == 1
 
     @pytest.mark.real_crash_exit_code
-    def test_decorator_uses_set_crash_exit_code(self, monkeypatch):
+    def test_exit_on_crash_uses_set_crash_exit_code(self, monkeypatch):
         ec = self._ec(monkeypatch)
         ec.set_crash_exit_code(1)
-
-        @ec.main
-        def tool():
-            raise RuntimeError("x")
-
         with pytest.raises(SystemExit) as exc_info:
-            tool()
+            ec.exit_on_crash(RuntimeError("x"))
         assert exc_info.value.code == 1
-
-    @pytest.mark.parametrize("code", [0, 1, 2, None])
-    def test_decorator_passes_system_exit_through(self, monkeypatch, code):
-        ec = self._ec(monkeypatch)
-        called = []
-
-        @ec.main(on_crash=called.append)
-        def tool():
-            sys.exit(code)
-
-        with pytest.raises(SystemExit) as exc_info:
-            tool()
-        assert exc_info.value.code == code
-        assert called == []
-
-    def test_decorator_passes_keyboard_interrupt_through(self, monkeypatch):
-        ec = self._ec(monkeypatch)
-
-        @ec.main
-        def tool():
-            raise KeyboardInterrupt
-
-        with pytest.raises(KeyboardInterrupt):
-            tool()
-
-    def test_decorator_returns_the_wrapped_value(self, monkeypatch):
-        ec = self._ec(monkeypatch)
-
-        @ec.main
-        def tool(a, *, b):
-            return a + b
-
-        assert tool(1, b=2) == 3
-        assert tool.__name__ == "tool"
 
     @pytest.mark.parametrize("bad", [0, -1, 256, True, "1", None])
     def test_set_crash_exit_code_rejects_unusable_codes(self, monkeypatch, bad):

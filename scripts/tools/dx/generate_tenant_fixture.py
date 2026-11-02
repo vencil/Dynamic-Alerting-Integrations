@@ -13,9 +13,22 @@ Layout modes:
     flat         — All tenant YAML files in a single conf.d/ directory (legacy pattern)
     hierarchical — Grouped by domain/region/env subdirectories with _defaults.yaml at each level
 
-The --with-defaults flag injects _defaults.yaml files with platform-wide threshold defaults.
-In hierarchical mode, _defaults.yaml is placed at domain and env levels.
-In flat mode, a single _defaults.yaml is placed at the conf.d/ root.
+Every tree has a root _defaults.yaml that DECLARES every threshold key a
+generated tenant can write (#3489): `optional_overrides:` lists every metric
+of METRIC_TEMPLATES and the synthetic-v2 `extra_threshold_NN` keys, and
+`dimensions:` declares, for each of those metrics, every label a generated
+dimensional key uses (`db`, `queue`, …, and `<label>_re` for a regex
+matcher). A declaration is not a default: it makes the exporter read a key
+a tenant writes (the shared key verdict, ADR-038) and serves no row for a
+tenant that does not. Without it every generated threshold key is read by
+nothing — and `da-guard write` refuses to write a tenant file that adds such
+a key, whatever tool asks.
+
+The --with-defaults flag still means what it did: platform-wide threshold
+VALUES — a `defaults:` block in the root _defaults.yaml and, in the
+hierarchical layouts, a _defaults.yaml at each domain level. `--extra-defaults`
+keys go to the root `defaults:` with or without it (they used to be dropped
+without it: there was no root file to carry them).
 
 The files are written by Go (ADR-036 §2, #3206): the generated data goes to
 ONE `da-guard write` batch, which writes the YAML text, judges the whole tree
@@ -63,6 +76,17 @@ OWNERS = [
     "app-team-bravo", "data-engineering", "ml-platform", "security-ops",
 ]
 RECEIVER_TYPES = ["webhook", "slack", "email", "teams", "pagerduty"]
+
+#: The labels a generated dimensional key uses (`_gen_dimensional_key`); the
+#: root `dimensions:` declares each, and `<label>_re` for a regex matcher,
+#: for every metric a tenant can write (`_root_declarations`).
+DIMENSION_LABELS = ["db", "queue", "table", "schema", "cluster"]
+
+#: synthetic-v2's size padding: plain threshold keys, declared in the root
+#: `optional_overrides:` like the templates (#3489). They were
+#: `_extra_threshold_NN`, a `_` key the reserved-key registry does not list —
+#: read by no reader in any layer.
+EXTRA_THRESHOLD_KEYS = [f"extra_threshold_{i:02d}" for i in range(5)]
 
 # Metric templates for threshold generation
 METRIC_TEMPLATES = {
@@ -138,8 +162,7 @@ def _gen_scheduled_threshold(rng: random.Random) -> dict:
 
 def _gen_dimensional_key(rng: random.Random, metric: str) -> str:
     """Generate a dimensional threshold key like metric{label='value'}."""
-    labels = ["db", "queue", "table", "schema", "cluster"]
-    label = rng.choice(labels)
+    label = rng.choice(DIMENSION_LABELS)
     if rng.random() < 0.3:
         return f'{metric}{{{label}=~"temp.*"}}'
     else:
@@ -251,10 +274,41 @@ def _gen_tenant_config(rng: random.Random, tenant_id: str, db_type: str) -> dict
     return config
 
 
+def _root_declarations() -> dict:
+    """What the root `_defaults.yaml` declares for every tree (#3489): each
+    threshold key a generated tenant can write in `optional_overrides:`, and
+    each dimensional label it can use under `dimensions:` — so the exporter
+    reads every key the generator writes. No value: values are
+    --with-defaults' (`_gen_defaults_yaml`). Draws nothing from the RNG, so
+    a seed gives the tenants it always gave."""
+    metrics = [m for dbt in DB_TYPES for m in METRIC_TEMPLATES[dbt]]
+    labels = DIMENSION_LABELS + [f"{label}_re" for label in DIMENSION_LABELS]
+    return {"optional_overrides": metrics + EXTRA_THRESHOLD_KEYS,
+            "dimensions": {m: list(labels) for m in metrics}}
+
+
+def _root_defaults_file(rng: random.Random, with_defaults: bool,
+                        extra_defaults: dict[str, int | float] | None) -> dict:
+    """The root `_defaults.yaml`: the platform `defaults:` block when
+    --with-defaults is given (`_gen_defaults_yaml`, drawn from rng as it
+    always was) or only the --extra-defaults keys otherwise, then the
+    declarations every tree carries (`_root_declarations`)."""
+    if with_defaults:
+        out = _gen_defaults_yaml(rng, extra_defaults=extra_defaults)
+    elif extra_defaults:
+        out = _gen_defaults_yaml(rng, extra_defaults=extra_defaults, thresholds=False)
+    else:
+        out = {}
+    out.update(_root_declarations())
+    return out
+
+
 def _gen_defaults_yaml(
     rng: random.Random,
     db_types: list[str] | None = None,
     extra_defaults: dict[str, int | float] | None = None,
+    *,
+    thresholds: bool = True,
 ) -> dict:
     """Generate a _defaults.yaml content.
 
@@ -275,9 +329,12 @@ def _gen_defaults_yaml(
     replaces the inline-Python YAML rewrite that bench_e2e_run.sh
     previously did post-staging (which surfaced the cycle-3 bug). All
     values must be numeric (same contract as the rest of the block).
+
+    `thresholds=False`: the block holds the `extra_defaults` only, nothing
+    drawn from rng (the root file without --with-defaults).
     """
     defaults: dict[str, Any] = {"defaults": {}}
-    all_db_types = db_types or DB_TYPES
+    all_db_types = (db_types or DB_TYPES) if thresholds else []
     for dbt in all_db_types:
         metrics = METRIC_TEMPLATES.get(dbt, [])
         for m in metrics[:3]:  # top 3 metrics per db type as defaults
@@ -304,8 +361,8 @@ def _gen_defaults_yaml(
                     f"the critical tier from tenant overrides keyed on "
                     f"`defaults[<base>]`), and a `key{{label=…}}` key is served "
                     f"only when the root `dimensions:` declares its labels, "
-                    f"which this tool does not write — either way the intended "
-                    f"row is not served. "
+                    f"which this tool writes for its own metric templates "
+                    f"only — either way the intended row is not served. "
                     f"Put the base key in `defaults:` and the tier in a "
                     f"`<tenant>.yaml` override. (#1218 / #1412 / #3478)"
                 )
@@ -341,10 +398,8 @@ def generate_flat(
     with output_write(output_dir, flag=flag, action="create directory"):
         output_dir.mkdir(parents=True, exist_ok=True)
 
-    files: list[tuple[str, dict]] = []
-    if with_defaults:
-        files.append(("_defaults.yaml",
-                      _gen_defaults_yaml(rng, extra_defaults=extra_defaults)))
+    files: list[tuple[str, dict]] = [
+        ("_defaults.yaml", _root_defaults_file(rng, with_defaults, extra_defaults))]
 
     for i in range(count):
         db_type = DB_TYPES[i % len(DB_TYPES)]
@@ -407,10 +462,10 @@ def generate_hierarchical(
             domain_db_types.setdefault(domain, []).append(db_type)
             idx += 1
 
-    # Inject _defaults.yaml at domain and env levels
+    # The root declarations always; the platform values (root and domain
+    # levels) with --with-defaults.
+    files.append(("_defaults.yaml", _root_defaults_file(rng, with_defaults, extra_defaults)))
     if with_defaults:
-        files.append(("_defaults.yaml",
-                      _gen_defaults_yaml(rng, extra_defaults=extra_defaults)))
         files.extend(_domain_defaults(rng, domain_db_types))
 
     _confirm_and_write(output_dir, files)
@@ -548,10 +603,11 @@ def generate_synthetic_v2(
 
             # Zipfian: replicate threshold dict to grow YAML body.
             # _gen_tenant_config produces a base set of threshold keys; we
-            # add `_extra_threshold_NN` keys to reach the desired multiplier.
+            # add `extra_threshold_NN` keys (declared at the root) to reach
+            # the desired multiplier.
             size_mult = sizes[idx]
             for extra_i in range(size_mult - 1):
-                extra_key = f"_extra_threshold_{extra_i:02d}"
+                extra_key = EXTRA_THRESHOLD_KEYS[extra_i]
                 tenant_config["tenants"][tid][extra_key] = _gen_threshold_value(rng)
 
             # Power-law: deepen _metadata with nested overlay blocks.
@@ -571,9 +627,8 @@ def generate_synthetic_v2(
             domain_db_types.setdefault(domain, []).append(db_type)
             idx += 1
 
+    files.append(("_defaults.yaml", _root_defaults_file(rng, with_defaults, extra_defaults)))
     if with_defaults:
-        files.append(("_defaults.yaml",
-                      _gen_defaults_yaml(rng, extra_defaults=extra_defaults)))
         files.extend(_domain_defaults(rng, domain_db_types))
 
     _confirm_and_write(output_dir, files)
@@ -655,7 +710,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--with-defaults", action="store_true",
-        help="Inject _defaults.yaml files with platform-wide threshold defaults",
+        help="Add platform-wide threshold default values: a `defaults:` block in the root "
+             "_defaults.yaml (always written, declaring every generated key) and, in the "
+             "hierarchical layouts, a _defaults.yaml per domain",
     )
     parser.add_argument(
         "--seed", type=int, default=42,
@@ -667,7 +724,8 @@ def main() -> None:
         default=[],
         metavar="KEY=NUMERIC",
         help=(
-            "Append a numeric default to root _defaults.yaml only. "
+            "Append a numeric default to the root _defaults.yaml's `defaults:` "
+            "(with or without --with-defaults). "
             "Repeat for multiple keys (e.g. --extra-defaults bench_trigger=50). "
             "v2.8.0 Phase B Track A A6: replaces the inline-YAML rewrite "
             "that bench_e2e_run.sh did post-staging (cycle-3 RCA). Values "
@@ -721,21 +779,28 @@ def main() -> None:
         print(f"   Use a different --output or remove it first.")
         sys.exit(EXIT_CALLER_ERROR)
 
-    if args.layout == "flat":
-        generate_flat(
-            args.count, output_dir, args.with_defaults, args.seed,
-            extra_defaults=extra_defaults or None, flag=out_flag,
-        )
-    elif args.layout == "synthetic-v2":
-        generate_synthetic_v2(
-            args.count, output_dir, args.with_defaults, args.seed,
-            extra_defaults=extra_defaults or None, flag=out_flag,
-        )
-    else:
-        generate_hierarchical(
-            args.count, output_dir, args.with_defaults, args.seed,
-            extra_defaults=extra_defaults or None, flag=out_flag,
-        )
+    # `_gen_defaults_yaml` raises ValueError on an `--extra-defaults` key or
+    # value that cannot live under `defaults:`; since #3489 every layout writes
+    # the root `_defaults.yaml`, so every run can reach it — a caller error
+    # (exit 2), not a traceback.
+    try:
+        if args.layout == "flat":
+            generate_flat(
+                args.count, output_dir, args.with_defaults, args.seed,
+                extra_defaults=extra_defaults or None, flag=out_flag,
+            )
+        elif args.layout == "synthetic-v2":
+            generate_synthetic_v2(
+                args.count, output_dir, args.with_defaults, args.seed,
+                extra_defaults=extra_defaults or None, flag=out_flag,
+            )
+        else:
+            generate_hierarchical(
+                args.count, output_dir, args.with_defaults, args.seed,
+                extra_defaults=extra_defaults or None, flag=out_flag,
+            )
+    except ValueError as exc:
+        _die(f"--extra-defaults: {exc}")
 
     # Summary stats
     file_count = sum(1 for _ in output_dir.rglob("*.yaml"))
