@@ -3,10 +3,12 @@
 Pinned contracts
 ----------------
 1. No metadata join: `tenant_metadata_info` in an expr only as the right-hand
-   operand of a set operator; any arithmetic / comparison match onto it (either
-   side, any label list, aggregated or raw) is a violation.
-2. Annotations / labels: no `$labels.runbook_url|owner|tier`, and every
-   template reading `tenant_metadata_info` is exactly METADATA_ANNOTATIONS[label].
+   operand of `and` / `unless`; `or` (it copies the right-hand series and their
+   labels) and any arithmetic / comparison match onto it (either side, any label
+   list, aggregated or raw) is a violation.
+2. Annotations / labels: no `$labels.X`, `.Labels.X` or `index $labels "X"` read
+   of a metadata label outside the canonical templates, and every template
+   reading `tenant_metadata_info` is exactly METADATA_ANNOTATIONS[label].
 3. METADATA_LABELS is the exporter's own label list (collector.go), and the Go
    custom-alert compiler's metadataQuery is METADATA_QUERY.
 4. Live dogfood: every committed rule pack is clean (run through main()).
@@ -45,6 +47,13 @@ _JOINS = {
     "aggregation_alone": "count(tenant_metadata_info) > 0",
     "upper_case": "x * ON(tenant) GROUP_LEFT(owner) tenant_metadata_info",
     "multi_line": "(\n  x\n)\n* on(tenant) group_left(runbook_url, owner, tier)\n  " + _OLD_RHS,
+    # `or` passes right-hand series through with their labels (#3483 review):
+    "or_raw": "x or tenant_metadata_info",
+    "or_on": "x or on(tenant) tenant_metadata_info",
+    "or_inside_joined_operand": "x * on(tenant) group_left(owner) (y or tenant_metadata_info)",
+    "or_inside_joined_operand_no_spaces": "x*on(tenant)group_left(owner)(y or tenant_metadata_info)",
+    "or_inside_joined_operand_nested": ("x * on(tenant) group_left(owner) (\n  (y)\n  or\n"
+                                        "  (tenant_metadata_info)\n)"),
 }
 
 
@@ -56,7 +65,7 @@ def test_every_metadata_join_is_flagged(name):
 @pytest.mark.parametrize("expr", [
     "x unless on(tenant) tenant_metadata_info",
     "x and on (tenant) tenant_metadata_info",
-    "x or tenant_metadata_info",
+    "x and tenant_metadata_info",
     'x unless on(tenant) tenant_metadata_info{tier="gold"}',
     "x > on(tenant) group_left tenant:alert_threshold:x",
     'x * on(tenant) group_left max by(tenant) (user_state_filter{filter="a"})',
@@ -86,6 +95,10 @@ def test_canonical_annotations_pass():
     "{{ $labels.runbook_url }}",
     "[{{ $labels.tier }}] {{ $labels.tenant }}",
     "{{$labels.owner}}",
+    "{{ .Labels.owner }}",
+    "{{ range query `up` }}{{ .Labels.tier }}{{ end }}",
+    '{{ index $labels "owner" }}',
+    '{{ index .Labels "runbook_url" }}',
 ])
 def test_metadata_label_references_are_flagged(value):
     assert lint.template_violations("annotations.x", value)
@@ -103,6 +116,15 @@ def test_metadata_label_references_are_flagged(value):
 ])
 def test_non_canonical_metadata_templates_are_flagged(value):
     assert lint.template_violations("annotations.owner", value)
+
+
+def test_reads_of_other_labels_pass():
+    assert lint.template_violations("annotations.x", "{{ .Labels.instance }} {{ index $labels \"pod\" }}") == []
+
+
+def test_the_runtime_canary_bundle_is_linted_too():
+    assert "tests/rulepacks/runtime-canary.rules.yaml" in lint.EXTRA_RULE_FILES
+    assert (_REPO / lint.EXTRA_RULE_FILES[0]).is_file()
 
 
 def test_labels_are_checked_too():

@@ -96,7 +96,7 @@ annotations:
 
 - `topk(1, …)` 在兩個副本各送一份時只取一筆；租戶沒有 metadata 時查詢結果為空、`with` 不展開，annotation 是空字串，告警照常觸發。
 - 為什麼不 join：join 會讓 metadata 成為告警身分的一部分。原始 join 在多副本下撞 many-to-many、整條規則停止評估；把右側收斂成每個租戶一筆可以解決這件事，但收斂挑到哪一筆在換版空窗內會變（見下方已知限制），告警 label 一變身分就變、`for:` 重新計時。VictoriaMetrics 的 `topk` 遇到同值的序列時每次評估可能挑不同的那筆，該租戶在空窗內就不會觸發。
-- `check_leftouterjoin_enrichment.py` 擋下任何 join `tenant_metadata_info` 的運算式（`tenant_metadata_info` 只能出現在 `and`／`or`／`unless` 的右側），也擋下 `$labels.runbook_url`／`owner`／`tier` 與任何不是這個樣板的 metadata 查詢。`tests/rulepacks/rule-pack-metadata-replicas_test.yaml` 以兩份副本序列、其中一個租戶的兩個副本送出不同的 `runbook_url`，在 promtool 與 vmalert-tool 上都驗證每個租戶的告警恰好一則、不帶 metadata label、annotation 帶出 metadata。
+- `check_leftouterjoin_enrichment.py` 擋下任何 join `tenant_metadata_info` 的運算式（`tenant_metadata_info` 只能出現在 `and`／`unless` 的右側；`or` 會把右側序列連同 label 帶出來，也擋），也擋下 `$labels.runbook_url`／`owner`／`tier` 與任何不是這個樣板的 metadata 查詢。`tests/rulepacks/rule-pack-metadata-replicas_test.yaml` 以兩份副本序列、其中一個租戶的兩個副本送出不同的 `runbook_url`，在 promtool 與 vmalert-tool 上都驗證每個租戶的告警恰好一則、不帶 metadata label、annotation 帶出 metadata。
 
 **已知限制：換版空窗內，annotation 可能顯示任一副本的 metadata。** 空窗可長達一兩分鐘：每個副本每隔 `reloadInterval`（helm/threshold-exporter 預設 30s）才檢查一次設定，而 ConfigMap 掛載內容的更新由各副本所在節點的 kubelet 各自同步（通常數十秒，可到一分鐘以上），兩段延遲疊加，兩個副本換到新版的時間點可能差上這麼久。空窗只影響 metadata 改了的那個租戶：它的通知可能顯示舊的或新的 `runbook_url`／`owner`／`tier`。告警身分與觸發時機不受影響，其他租戶也不受影響。
 

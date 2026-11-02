@@ -162,6 +162,26 @@ func TestAssertTemplateSafe(t *testing.T) {
 			t.Errorf("%q accepted", bad)
 		}
 	}
+	// #3483: exactly the three metadata annotation templates pass (alone or
+	// inside prose); a near variant — another query, a range form, another
+	// label — is template code the compiler did not author, and fails.
+	for _, l := range metadataLabels {
+		for _, ok := range []string{metadataAnnotation(l), "[" + metadataAnnotation(l) + "] {{ $labels.tenant }}"} {
+			if err := assertTemplateSafe(group(ok)); err != nil {
+				t.Errorf("%q refused: %v", ok, err)
+			}
+		}
+	}
+	for _, bad := range []string{
+		"{{ with query (printf `topk(1, up)` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}",
+		"{{ range query (printf `" + metadataQuery + "` $labels.tenant) }}{{ .Labels.owner }}{{ end }}",
+		metadataAnnotation("instance"),
+		metadataAnnotation("owner") + " {{ query `up` }}",
+	} {
+		if err := assertTemplateSafe(group(bad)); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
 }
 
 // Selector values are escaped for a PromQL double-quoted string: backslash

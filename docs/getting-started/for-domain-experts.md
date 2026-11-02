@@ -89,7 +89,7 @@ threshold-exporter 發射租戶閾值時，會在 key 的第一個 `_` 拆開：
 
 - `> on(tenant) group_left tenant:alert_threshold:<key>`：每個租戶跟自己的閾值比。租戶把 key 設成 `"disable"` 時，閾值 series 不存在，這條告警就不會觸發。
 - `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`：維護模式中的租戶不告警。
-- annotation 裡的 `{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` …) }}…{{ end }}`：讀出租戶 `_metadata` 的 runbook、owner、tier（`tenant_metadata_info` 這個指標）。metadata 只放在 annotation、不 join 進告警 label：threshold-exporter 跑多個副本，兩個副本換版的一兩分鐘內內容可能不同，放在 label 會讓告警身分跟著變、`for:` 重來。沒有設 `_metadata` 的租戶照樣告警，這幾個 annotation 是空字串。樣板只有一種寫法，`check_leftouterjoin_enrichment.py` 會擋下其他寫法與 `$labels.tier` 之類的參照。
+- annotation 裡的 `` {{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` …) }}…{{ end }} ``：讀出租戶 `_metadata` 的 runbook、owner、tier（`tenant_metadata_info` 這個指標）。metadata 只放在 annotation、不 join 進告警 label：threshold-exporter 跑多個副本，兩個副本換版的一兩分鐘內內容可能不同，放在 label 會讓告警身分跟著變、`for:` 重來。沒有設 `_metadata` 的租戶照樣告警，這幾個 annotation 是空字串。樣板只有一種寫法，`check_leftouterjoin_enrichment.py` 會擋下其他寫法與 `$labels.tier` 之類的參照。
 - `summary`／`summary_zh` 是給租戶看的；`platform_summary`／`platform_summary_zh` 是 NOC 視角的摘要，用在平台強制路由（`_routing_enforced`）送出的通知。沒有 `*_zh` 的 annotation 會退回英文。
 
 ### 閾值從哪裡來

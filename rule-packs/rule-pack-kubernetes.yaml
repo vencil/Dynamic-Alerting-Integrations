@@ -372,10 +372,10 @@ groups:
           )
 
       # ADR-024 PR3-pre-3: core firing vectors (threshold-cross + maintenance
-      # suppression) WITHOUT metadata enrichment. The alert rules below join
-      # tenant_metadata_info via a left-outer-join (`or`/`unless`) so a tenant
-      # with metrics but no metadata config (onboarding vacuum) still fires —
-      # the inner-join `* tenant_metadata_info` alone would silently drop it.
+      # suppression). The alert rules below fire on these directly; tenant
+      # metadata (runbook_url/owner/tier) is never joined in — their annotations
+      # read it with the canonical query template (#3483), so a tenant without
+      # metadata config fires the same as one with it.
       # ADR-024 Route 2: version-aware exact-or-fallback core, split PER SEVERITY.
       # Fixing severity makes the threshold RHS a per-(tenant,version) singleton →
       # the exact branch is one-to-one and the fallback is many(versions)-to-one;
@@ -563,7 +563,7 @@ groups:
   # -------------------------------------------------------
   - name: kubernetes-container-alerts
     rules:
-      # ADR-024 Route 2 (warning) + PR3-pre-3 left-outer-join enrichment.
+      # ADR-024 Route 2 (warning); metadata in annotations (#3483).
       # The version-aware core carries the metric's REAL `version` label, so the
       # firing alert tells on-call exactly which app version is in trouble.
       - alert: PodContainerHighCPU
@@ -619,7 +619,7 @@ groups:
       # ADR-024 Route 2 (warning) — version-aware memory core carries the metric's
       # REAL version so on-call sees which app version is in trouble.
       - alert: PodContainerHighMemory
-        # Left-outer-join enrichment (ADR-024 PR3-pre-3) — see PodContainerHighCPU.
+        # Metadata in annotations, not joined (#3483) — see PodContainerHighCPU.
         expr: |
           rule_pack_kubernetes:pod_container_high_memory_warning:core
         for: 60s
@@ -1086,8 +1086,8 @@ groups:
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
 
-      # left-outer-join metadata enrichment (onboarding-vacuum safe) — same
-      # two-branch pattern as the container/pod-state alerts. `node` rides
+      # Metadata in annotations, not joined (#3483) — same as the
+      # container/pod-state alerts. `node` rides
       # through so on-call sees which node; Alertmanager groups by
       # [alertname, tenant], so an AZ-wide outage collapses to one notification
       # per tenant. `for: 3m` rides out kubelet↔API-server network blips
@@ -1212,10 +1212,9 @@ groups:
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
 
-      # left-outer-join metadata enrichment (onboarding-vacuum safe) — same
-      # two-branch pattern as node-health and the threshold alerts: a tenant
-      # with NO tenant_metadata_info still fires (the bare `*` inner-join alone
-      # would silently drop it).
+      # Metadata in annotations, not joined (#3483) — same as node-health and
+      # the threshold alerts: a tenant with NO tenant_metadata_info still fires,
+      # its runbook/owner/tier annotations empty.
       - alert: TenantHAReplicasDegraded
         expr: |
           rule_pack_kubernetes:ha_replicas_degraded:core

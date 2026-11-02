@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-04-06
-updated_at: 2026-10-11
+updated_at: 2026-11-02
 ---
 # ADR-010: Multi-Tenant Grouping Architecture
 
@@ -23,11 +23,13 @@ updated_at: 2026-10-11
 
 **2026-10-11**：`_groups.yaml` 移出 conf.d/，改存 tenant-api 的 state store（Kubernetes 上是 `tenant-api-state` ConfigMap 的同名 key，單機是一個目錄），寫入改為對 ConfigMap `resourceVersion` 的 compare-and-swap，不再產生 git commit；群組紀錄因此沒有 git 歷史，改以每次寫入的結構化 `state_write` 日誌稽核（[#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)）。下文的儲存位置、寫入模式與後果已照此更新。
 
+**2026-11-02**：`tenant_metadata_info` 不再 join 進告警，告警的 annotation 改為查詢它（[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)）；「名詞」一節的說明照此更新，本 ADR 的決策不變。
+
 ## 名詞
 
 - **conf.d/**：存放租戶設定 YAML 的目錄。檔名以 `_` 開頭的是平台層級的檔案（例如 `_defaults.yaml`、`_rbac.yaml`），不是某個租戶的設定。
 - **`_metadata`**：租戶設定裡描述租戶本身的區塊（負責人、runbook 連結等），不是閾值。
-- **`tenant_metadata_info`**：threshold-exporter 對每個租戶輸出的資訊指標，值固定為 1，標籤帶 `_metadata` 的部分欄位，讓 PromQL 可以把這些欄位 join 到告警上。
+- **`tenant_metadata_info`**：threshold-exporter 對每個租戶輸出的資訊指標，值固定為 1，標籤帶 `_metadata` 的部分欄位，供告警的 annotation 查詢（不 join 進告警 label，見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §2）。
 - **Cardinality（基數）**：一個指標底下不同標籤組合的數量。每多一個標籤、標籤值越多，Prometheus 要存的時間序列就越多。
 
 ## 背景

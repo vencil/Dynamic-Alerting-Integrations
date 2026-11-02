@@ -35,15 +35,16 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
-# The metadata annotation templates (#3483): shown as a short `{{ <label> }}`
-# placeholder, so a summary still reads `[{{ tier }}] {{ $labels.tenant }}: …`.
+# The metadata annotation templates (#3483): shown as the bare label name, so a
+# summary reads `[tier] {{ $labels.tenant }}: …` — nothing that could pass for a
+# valid Go template (or an HTML tag in the rendered Markdown table).
 from check_leftouterjoin_enrichment import METADATA_ANNOTATIONS  # noqa: E402
 
 
 def readable(text: str) -> str:
-    """*text* with every canonical metadata query template shortened to `{{ <label> }}`."""
+    """*text* with every canonical metadata query template shortened to its label name."""
     for label, tpl in METADATA_ANNOTATIONS.items():
-        text = text.replace(tpl, "{{ " + label + " }}")
+        text = text.replace(tpl, label)
     return text
 
 # Built-in mapping for recommended actions by alert pattern

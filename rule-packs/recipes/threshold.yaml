@@ -25,7 +25,7 @@ params:
 emitted_shape: |
   max by(tenant,version)(<metric><selectors>) {op} on(tenant[,version])
     group_left(name, mode) custom:threshold:<recipe_id>{severity=<sev>}
-  (version graceful-join + per-severity split + maintenance suppress + metadata enrich)
+  (version graceful-join + per-severity split + maintenance suppress + metadata annotations)
 example:
   recipe: threshold
   name: queue_depth_high

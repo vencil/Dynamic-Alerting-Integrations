@@ -9,16 +9,15 @@
 #   * a FIRING case (non-empty exp_alerts — pins labels + rendered annotations),
 #   * a no-fire control (below/above threshold on the safe side / exporter healthy),
 #   * a `for:` debounce case (expr already true, eval BEFORE the for: window ⇒ no alert).
-# Threshold alerts additionally exercise the pack's per-alert branch plumbing
-# (hand-copied per alert), extending the rule-pack-mariadb-threads_test.yaml scaffold
-# to FIVE tenants:
-#   - db-a: breaching, metadata present    → fires ENRICHED (branch A).
-#   - db-b: breaching, NO metadata          → STILL fires BARE (branch B, vacuum).
-#   - db-c: breaching, maintenance active   → suppressed via the ENRICHED arm's clause.
+# Threshold alerts additionally exercise the maintenance opt-out and the metadata
+# annotations, extending the rule-pack-mariadb-threads_test.yaml scaffold to FIVE
+# tenants:
+#   - db-a: breaching, metadata present    → fires, annotations carry runbook/owner/tier.
+#   - db-b: breaching, NO metadata          → still fires, those annotations empty.
+#   - db-c: breaching, maintenance active   → suppressed.
 #   - db-d: healthy value, metadata present → no alert (threshold-driven no-fire).
-#   - db-e: breaching, maintenance, NO meta → suppressed via the BARE arm's clause
-#     (each alert hand-copies the maintenance `unless` once per or-arm; db-c only
-#     exercises the enriched copy — see the oracle fixture twin for the rationale).
+#   - db-e: breaching, maintenance, NO meta → suppressed (maintenance does not
+#     depend on metadata; alerts join no metadata since #3483).
 # db-a's bufferpool and tablespace inputs carry a SECOND, healthy dimension so the
 # worst-dimension-wins aggregation direction is pinned (:min for hit ratio, :max for
 # tablespace usage — a min↔max flip turns the firing assertion red).
@@ -295,7 +294,7 @@ tests:
       - eval_time: 6m
         alertname: DB2HighConnections
         exp_alerts:
-          # db-a: enriched (branch A) — carries runbook_url/owner/tier.
+          # db-a: metadata present — annotations carry runbook_url/owner/tier.
           - exp_labels:
               severity: warning
               tenant: db-a
@@ -309,7 +308,7 @@ tests:
               runbook_url: "http://rb/a"
               owner: team-a
               tier: gold
-          # db-b: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
+          # db-b: no metadata — fires, metadata annotations empty.
           - exp_labels:
               severity: warning
               tenant: db-b
@@ -323,7 +322,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
+        # db-c/db-e (maintenance, with / without metadata) and db-d (below threshold) produce NO alert.
 
       # ── DB2LowBufferpoolHitRatio (for: 10m, inverted comparison) ──
       - eval_time: 6m           # 5m-alerts already fire here, but the 10m one must NOT yet
@@ -358,7 +357,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (0.99 ≥ 0.95, healthy) produce NO alert.
+        # db-c/db-e (maintenance, with / without metadata) and db-d (0.99 ≥ 0.95, healthy) produce NO alert.
 
       # ── DB2HighLogUsage (for: 5m) ──
       - eval_time: 3m
@@ -393,7 +392,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
+        # db-c/db-e (maintenance, with / without metadata) and db-d (below threshold) produce NO alert.
 
       # ── DB2HighDeadlockRate (for: 5m, rate-based — firing eval at 9m, see the
       #    cold-start note on the input series; 3m is inside BOTH engines' pending window) ──
@@ -429,7 +428,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (rate 2.0 < 5) produce NO alert.
+        # db-c/db-e (maintenance, with / without metadata) and db-d (rate 2.0 < 5) produce NO alert.
 
       # ── DB2TablespaceAlmostFull (for: 5m) ──
       - eval_time: 3m
@@ -464,7 +463,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (below threshold) produce NO alert.
+        # db-c/db-e (maintenance, with / without metadata) and db-d (below threshold) produce NO alert.
 
       # ── DB2HighLockWaitTime (for: 5m, rate-based — firing eval at 9m for the same
       #    cold-start reason as the deadlock alert; 3m is inside BOTH engines' pending
@@ -501,7 +500,7 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c/db-e (maintenance, via the enriched/bare arm resp.), db-d (0.2 < 1.0) and
+        # db-c/db-e (maintenance, with / without metadata), db-d (0.2 < 1.0) and
         # db-f (DORMANT — breaching + metadata but no user_threshold) produce NO alert.
 
       # ── DB2HighSortOverflow (for: 10m, hardcoded ratio > 0.05) ──
@@ -537,4 +536,4 @@ tests:
               runbook_url: ""
               owner: ""
               tier: ""
-        # db-c/db-e (maintenance, via the enriched/bare arm resp.) and db-d (0.02 < 0.05) produce NO alert.
+        # db-c/db-e (maintenance, with / without metadata) and db-d (0.02 < 0.05) produce NO alert.

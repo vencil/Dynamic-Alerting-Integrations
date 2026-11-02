@@ -16,22 +16,27 @@ right-hand side then picks, it can flip between the two (MetricsQL's `topk`
 picks a different tied series per evaluation), the alert's labels change, its
 `for:` restarts, and the tenant never fires during the window. So metadata is
 not a label at all: each annotation that shows it reads it with ONE canonical
-query template (METADATA_ANNOTATIONS), evaluated at notification time. The
+query template (METADATA_ANNOTATIONS), expanded when the rule is evaluated. The
 alert's identity no longer depends on mutable metadata; an annotation may show
 either replica's value during a reload, and an absent `tenant_metadata_info`
 renders an empty string.
 
-WHAT THIS CHECKS, per alert/recording rule of every rule pack (read the way
-Prometheus' rule loader reads it, ADR-036 §12):
-  1. expr: `tenant_metadata_info` may appear only as the right-hand operand of a
-     set operator (`and` / `or` / `unless`, which match on presence and never
-     copy labels). Any other use — a group_left / group_right / one-to-one
-     arithmetic or comparison match, on either side, an aggregation of it — is a
-     metadata join and is refused.
-  2. annotations (and labels): no `$labels.runbook_url` / `$labels.owner` /
-     `$labels.tier` (those labels no longer exist on the alert), and every
-     metadata query template is exactly METADATA_ANNOTATIONS[label] — nothing
-     else that reads `tenant_metadata_info`.
+WHAT THIS CHECKS, per alert/recording rule of every rule pack and of the
+runtime canary's rule bundle (tests/rulepacks/runtime-canary.rules.yaml, whose
+custom-alert groups are the compiler's verbatim output) — read the way
+Prometheus' rule loader reads it, ADR-036 §12:
+  1. expr: `tenant_metadata_info` may appear only as the right-hand operand of
+     `and` / `unless`, which match on presence and keep only left-hand labels.
+     `or` is refused like any join: it passes right-hand series through with
+     their labels (`X or tenant_metadata_info` fires one alert per metadata
+     series, carrying runbook_url/owner/tier). Any other use — a group_left /
+     group_right / one-to-one arithmetic or comparison match, on either side,
+     an aggregation of it, an `or` inside a joined operand — is refused.
+  2. annotations (and labels): no read of the metadata labels off the alert —
+     `$labels.runbook_url`, `.Labels.owner`, `index $labels "tier"`, … (those
+     labels no longer exist on the alert) — and every metadata query template
+     is exactly METADATA_ANNOTATIONS[label]: nothing else that reads
+     `tenant_metadata_info`.
 
 METADATA_LABELS is pinned to the exporter's own label list, and
 METADATA_QUERY to the Go custom-alert compiler's `metadataQuery`, by
@@ -85,11 +90,21 @@ def metadata_annotation(label: str) -> str:
 
 METADATA_ANNOTATIONS: Dict[str, str] = {lbl: metadata_annotation(lbl) for lbl in METADATA_LABELS}
 
+# `and` / `unless` only: `or` copies the right-hand series and their labels.
 _SET_OPERAND = re.compile(
-    r"\b(?:and|or|unless)\s*(?:(?:on|ignoring)\s*\([^)]*\)\s*)?\(?\s*"
+    r"\b(?:and|unless)\s*(?:(?:on|ignoring)\s*\([^)]*\)\s*)?\(?\s*"
     r"tenant_metadata_info\b(?:\s*\{[^}]*\})?", re.IGNORECASE)
 _TMI = re.compile(r"\btenant_metadata_info\b")
-_LABEL_REF = re.compile(r"\$labels\.(" + "|".join(METADATA_LABELS) + r")\b")
+_ALT = "|".join(METADATA_LABELS)
+# Reads of a metadata label off the alert (or any sample) outside the canonical
+# templates: `$labels.tier`, `.Labels.tier`, `index $labels "tier"`.
+_LABEL_REFS = (
+    re.compile(r"\$labels\.(" + _ALT + r")\b"),
+    re.compile(r"\.Labels\.(" + _ALT + r")\b"),
+    re.compile(r"\bindex\s+\$?\.?[Ll]abels\s+\"(" + _ALT + r")\""),
+)
+#: Rule files linted besides the rule packs: the runtime canary's bundle.
+EXTRA_RULE_FILES = ("tests/rulepacks/runtime-canary.rules.yaml",)
 
 
 def _repo_root() -> Path:
@@ -114,12 +129,13 @@ def expr_violations(expr: str) -> List[str]:
 def template_violations(field: str, value: str) -> List[str]:
     """Pure core: why one annotation/label value reads metadata non-canonically."""
     out = []
-    for m in _LABEL_REF.finditer(value):
-        out.append(f"{field}: `$labels.{m.group(1)}` — alerts carry no metadata labels; "
-                   f"use the canonical template `{METADATA_ANNOTATIONS[m.group(1)]}`")
     residual = value
     for tpl in METADATA_ANNOTATIONS.values():
         residual = residual.replace(tpl, "")
+    for pattern in _LABEL_REFS:
+        for m in pattern.finditer(residual):
+            out.append(f"{field}: `{m.group(0)}` — alerts carry no metadata labels; use the "
+                       f"canonical template `{METADATA_ANNOTATIONS[m.group(1)]}`")
     if "tenant_metadata_info" in residual:
         out.append(f"{field}: reads `tenant_metadata_info` with a template that is not "
                    f"one of METADATA_ANNOTATIONS")
@@ -154,6 +170,7 @@ def main() -> int:
         # an undeclared YAML beside them is named).
         targets: List[Path] = _lib_consumer_read.rule_pack_files(
             repo / _lib_consumer_read.RULE_PACKS.directory)
+        targets += [repo / f for f in EXTRA_RULE_FILES]
         found = _lib_consumer_read.rule_files_in(targets, keep_refusals=True)
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
@@ -184,7 +201,8 @@ def main() -> int:
               f"flips and `for:` restarts. Read metadata in annotations with "
               f"METADATA_ANNOTATIONS.", file=sys.stderr)
         return EXIT_VIOLATION if args.ci else EXIT_OK
-    print(f"✅ All {len(targets)} rule pack(s): no metadata join; metadata annotations "
+    print(f"✅ All {len(targets)} rule file(s) (rule packs + runtime canary): no metadata "
+          f"join; metadata annotations "
           f"use the canonical query `{METADATA_QUERY}`.")
     return EXIT_OK
 

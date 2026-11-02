@@ -10,7 +10,7 @@ package config
 //	recording  custom:threshold:{id}   normalise the threshold side (version→default)
 //	recording  custom:metric:{id}      the recipe's metric side (not for absence / ==)
 //	recording  custom:{id}:{sev}:core  per-severity exact-or-fallback join + maint suppress
-//	alert      Custom_{id}             metadata-enriched, bilingual, {{ $labels.name }} title
+//	alert      Custom_{id}             metadata annotations, bilingual, {{ $labels.name }} title
 //
 // Invariants:
 //   - vectorised on(tenant[,version]) — no per-tenant fan-out (O(M))

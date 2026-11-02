@@ -123,9 +123,9 @@ data:
       # unchanged. A pod failing readiness stays in the slice (ready=false), so
       # a crashed replica reads up 0 rather than vanishing. Series now arrive
       # once per replica:
-      # rules aggregate them away (`max by(tenant)` on user_threshold, the
-      # `topk by(tenant) (1, max by(...) (...))` metadata join) and dashboards
-      # count distinct series, not samples.
+      # rules aggregate them away (`max by(tenant)` on user_threshold; tenant
+      # metadata is read in annotations with `topk(1, …)`, never joined) and
+      # dashboards count distinct series, not samples.
       - job_name: "platform-components"
         scrape_interval: 15s
         kubernetes_sd_configs:

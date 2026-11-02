@@ -1307,7 +1307,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/runtime-canary\.rules\.yaml|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         # No rule may join tenant_metadata_info (arithmetic / comparison match,
         # either side, any label list): a join made runbook_url/owner/tier part
         # of the alert's identity, and threshold-exporter's replicas briefly

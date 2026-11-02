@@ -384,7 +384,7 @@ groups:
 
       # Threshold-driven lag pair (standard four-layer plumbing — the shape of
       # MariaDBHighConnections above: user_threshold join + maintenance opt-out
-      # + metadata-enrichment dual-arm). Key mysql_replication_lag ENABLED BY
+      # + metadata annotations). Key mysql_replication_lag ENABLED BY
       # DEFAULT (epic #1200 WS5-P0-a Q3 = owner decision C); critical tier is
       # tenant opt-in via mysql_replication_lag_critical (Scenario D, same as
       # mysql_connections_critical).
