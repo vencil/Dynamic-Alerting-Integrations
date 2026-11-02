@@ -29,6 +29,7 @@ the server.
 """
 from __future__ import annotations
 
+import errno
 import json
 import os
 import sys
@@ -50,12 +51,79 @@ STATE_SHOW_SCHEMA = "tenant-api.state-show/v1"
 #: The problem kinds `state show` writes.
 PROBLEM_KINDS = ("unreadable", "rejected")
 
-#: How to get the JSON this module reads; part of every refusal of an input.
-HOW_TO_GET_STATE = (
-    "--state takes the JSON `tenant-api state show` prints (a tenant-api that has "
-    "`state show`): on a cluster `kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show "
-    "> state.json`; from a backup `docker run -i --rm <the deployed tenant-api image> state show "
-    "--from - < backup.yaml > state.json`")
+_GET_ON_CLUSTER = "kubectl exec deploy/tenant-api -c tenant-api -- tenant-api state show > state.json"
+_GET_FROM_BACKUP = ("docker run -i --rm {image} state show "
+                    "--from - < backup.yaml > state.json")
+
+#: Every refusal this module writes, per language — the one place it is
+#: written (#3512). ``lang`` is the line the message lands in, the caller's:
+#: there is no default, so a Chinese tool cannot get English by forgetting
+#: it (the `_lib_paths._DETAIL` rule). Same keys in every language.
+_MSG: dict[str, dict[str, str]] = {
+    "en": {
+        "how_to": ("--state takes the JSON `tenant-api state show` prints (a tenant-api "
+                   f"that has `state show`): on a cluster `{_GET_ON_CLUSTER}`; from a "
+                   "backup `" + _GET_FROM_BACKUP.format(image="<the deployed tenant-api image>")
+                   + "`"),
+        "sep": ". ",
+        "empty_hint": " (if the state store really is empty, drop --state and add --skip-state-check)",
+        "not_json": ("not JSON (a saved ConfigMap or a state directory is not read any "
+                     "more: tenant-api reads its own records)"),
+        "bad_schema": "not a {schema} document (schema {got!r})",
+        "records_not_list": "`records` is not a list",
+        "empty": ("holds no records — the state store is empty, so nothing can be read "
+                  "from it"),
+        "not_object": "records[{i}] is not an object",
+        "bad_key": "records[{i}].key {key!r} is not a tenant-api state record key",
+        "dup_key": "records[{i}]: key {key!r} is listed twice",
+        "one_of": "records[{i}] ({key}): exactly one of `record` and `problem` must be set",
+        "bad_problem": ("records[{i}] ({key}): `problem` is not "
+                        "{{kind: unreadable|rejected, message}}"),
+        "record_not_object": "records[{i}] ({key}): `record` is not an object",
+        "directory": ("a directory (a state directory is not read any more: tenant-api "
+                      "reads its own records)"),
+        "unreadable": "{err}",
+    },
+    "zh": {
+        "how_to": ("--state 要的是 `tenant-api state show` 印出的 JSON（需要有 `state show` "
+                   f"的 tenant-api）：叢集上 `{_GET_ON_CLUSTER}`；從備份 `"
+                   + _GET_FROM_BACKUP.format(image="<部署中的 tenant-api 映像>") + "`"),
+        "sep": "。",
+        "empty_hint": "（state store 若確實是空的，不給 --state、改加 --skip-state-check）",
+        "not_json": "不是 JSON（已不再讀存下來的 ConfigMap 或 state 目錄：tenant-api 讀自己的紀錄）",
+        "bad_schema": "不是 {schema} 文件（schema 為 {got!r}）",
+        "records_not_list": "`records` 不是 list",
+        "empty": "沒有任何紀錄——state store 是空的，讀不到任何東西",
+        "not_object": "records[{i}] 不是物件",
+        "bad_key": "records[{i}].key {key!r} 不是 tenant-api 的 state 紀錄 key",
+        "dup_key": "records[{i}]：key {key!r} 出現兩次",
+        "one_of": "records[{i}]（{key}）：`record` 與 `problem` 必須恰好設一個",
+        "bad_problem": "records[{i}]（{key}）：`problem` 不是 {{kind: unreadable|rejected, message}}",
+        "record_not_object": "records[{i}]（{key}）：`record` 不是物件",
+        "directory": "是目錄（已不再讀 state 目錄：tenant-api 讀自己的紀錄）",
+        "unreadable": "無法讀取（{err}）",
+    },
+}
+LANGS = tuple(_MSG)
+
+
+def _check_lang(lang: str) -> None:
+    if lang not in _MSG:
+        raise ValueError(f"lang must be one of {LANGS}, not {lang!r}")
+
+
+def how_to_get_state(lang: str) -> str:
+    """How to get the JSON this module reads, in *lang*; part of every
+    refusal of an input."""
+    _check_lang(lang)
+    return _MSG[lang]["how_to"]
+
+
+def empty_state_hint(lang: str) -> str:
+    """What offboard-tenant adds to an empty-store refusal (it has
+    --skip-state-check; other callers have no such flag and add nothing)."""
+    _check_lang(lang)
+    return _MSG[lang]["empty_hint"]
 
 
 def subset_key(tenant: str) -> str:
@@ -150,11 +218,16 @@ def is_state_key(key: str) -> bool:
     return bool(tenant) and not any(c in tenant for c in "/\\") and ".." not in tenant
 
 
-def _refuse(source: str, why: str) -> StateInputError:
-    return StateInputError(f"--state {source}: {why}. {HOW_TO_GET_STATE}")
+def _say(lang: str, msg: str, **fields: Any) -> str:
+    return _MSG[lang][msg].format(**fields)
 
 
-def load_state(path: str | os.PathLike[str]) -> TenantState:
+def _refuse(source: str, lang: str, msg: str, **fields: Any) -> StateInputError:
+    return StateInputError(f"--state {source}: {_say(lang, msg, **fields)}"
+                           f"{_MSG[lang]['sep']}{how_to_get_state(lang)}")
+
+
+def load_state(path: str | os.PathLike[str], *, lang: str) -> TenantState:
     """Read a `tenant-api state show` document from *path* (``-``: stdin).
 
     Raises StateInputError for anything else, naming how to get one: the
@@ -162,72 +235,69 @@ def load_state(path: str | os.PathLike[str]) -> TenantState:
     document whose ``schema`` is missing or unknown (a tenant-api without
     `state show`, or a newer one), a malformed entry, and a document with no
     records — read as a state store that would report "no references" and
-    let an offboarding go ahead unchecked.
+    let an offboarding go ahead unchecked. The refusal is in *lang* (one of
+    ``LANGS``, the caller's own language; no default).
     """
+    _check_lang(lang)
     source = "<stdin>" if str(path) == "-" else str(path)
-    raw = _read(path, source)
+    raw = _read(path, source, lang)
     try:
         doc = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        raise _refuse(source, "not JSON (a saved ConfigMap or a state directory is not read "
-                              "any more: tenant-api reads its own records)") from None
+        raise _refuse(source, lang, "not_json") from None
     if not isinstance(doc, dict) or doc.get("schema") != STATE_SHOW_SCHEMA:
         got = doc.get("schema") if isinstance(doc, dict) else None
-        raise _refuse(source, f"not a {STATE_SHOW_SCHEMA} document (schema {got!r})")
+        raise _refuse(source, lang, "bad_schema", schema=STATE_SHOW_SCHEMA, got=got)
     records = doc.get("records")
     if not isinstance(records, list):
-        raise _refuse(source, "`records` is not a list")
+        raise _refuse(source, lang, "records_not_list")
     st = TenantState(source=source, tenant_api_version=str(doc.get("tenant_api_version") or ""))
     for i, r in enumerate(records):
-        _add(st, r, i, source)
+        _add(st, r, i, source, lang)
     if not st.keys:
-        raise StateInputError(
-            f"--state {source}: holds no records — the state store is empty, so nothing "
-            "can be read from it", empty=True)
+        raise StateInputError(f"--state {source}: {_say(lang, 'empty')}", empty=True)
     return st
 
 
-def _add(st: TenantState, r: Any, i: int, source: str) -> None:
+def _add(st: TenantState, r: Any, i: int, source: str, lang: str) -> None:
     if not isinstance(r, dict):
-        raise _refuse(source, f"records[{i}] is not an object")
+        raise _refuse(source, lang, "not_object", i=i)
     key = r.get("key")
     if not isinstance(key, str) or not is_state_key(key):
-        raise _refuse(source, f"records[{i}].key {key!r} is not a tenant-api state record key")
+        raise _refuse(source, lang, "bad_key", i=i, key=key)
     if st.has(key):
-        raise _refuse(source, f"records[{i}]: key {key!r} is listed twice")
+        raise _refuse(source, lang, "dup_key", i=i, key=key)
     rec, prob = r.get("record"), r.get("problem")
     if (rec is None) == (prob is None):
-        raise _refuse(source, f"records[{i}] ({key}): exactly one of `record` and `problem` "
-                              "must be set")
+        raise _refuse(source, lang, "one_of", i=i, key=key)
     if prob is not None:
         if (not isinstance(prob, dict) or prob.get("kind") not in PROBLEM_KINDS
                 or not isinstance(prob.get("message"), str)):
-            raise _refuse(source, f"records[{i}] ({key}): `problem` is not "
-                                  "{kind: unreadable|rejected, message}")
+            raise _refuse(source, lang, "bad_problem", i=i, key=key)
         st.problems[key] = Problem(prob["kind"], prob["message"])
         return
     if not isinstance(rec, dict):
-        raise _refuse(source, f"records[{i}] ({key}): `record` is not an object")
+        raise _refuse(source, lang, "record_not_object", i=i, key=key)
     st.decoded[key] = rec
 
 
-def _read(path: str | os.PathLike[str], source: str) -> bytes:
+def _read(path: str | os.PathLike[str], source: str, lang: str) -> bytes:
     if str(path) == "-":
         return sys.stdin.buffer.read()
     # #3276: the shared judgement of a caller-given path ("any": a FIFO or a
     # process substitution is read as before). `is_dir()` raised on a path
     # under a parent the caller cannot enter (3.13): a traceback.
-    # "en": the line is this module's, and every other --state refusal it
-    # writes is English — a Chinese caller (offboard-tenant) gets one
-    # language per flag rather than one refusal in Chinese among English.
-    problem = classify_path(path, "any", lang="en", flag="--state")
+    # The caller's language, as every other --state refusal here (#3512).
+    problem = classify_path(path, "any", lang=lang, flag="--state")
     if problem is not None:
         raise StateInputError(problem.message)
     p = Path(path)
     if p.is_dir():
-        raise _refuse(source, "a directory (a state directory is not read any more: "
-                              "tenant-api reads its own records)")
+        raise _refuse(source, lang, "directory")
     try:
         return p.read_bytes()
     except OSError as exc:
-        raise StateInputError(f"--state {source}: {exc}") from exc
+        # zh: the errno's name (searchable, as _lib_paths); without one, the text.
+        err = (errno.errorcode.get(exc.errno, str(exc)) if lang == "zh" and exc.errno
+               else str(exc))  # en: the text it always printed
+        raise StateInputError(f"--state {source}: {_say(lang, 'unreadable', err=err)}") from exc
