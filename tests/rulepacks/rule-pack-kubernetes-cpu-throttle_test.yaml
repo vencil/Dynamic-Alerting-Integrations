@@ -74,9 +74,6 @@ tests:
               severity: warning
               tenant: db-a
               version: default
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "Chronic CPU throttling in db-a"
               summary_zh: "db-a 的容器 CPU 遭核心持續掐頸"
@@ -222,9 +219,6 @@ tests:
               severity: critical
               tenant: db-f
               version: default
-              runbook_url: "http://rb/f"
-              owner: team-f
-              tier: gold
             exp_annotations:
               summary: "CRITICAL CPU throttling in db-f"
               summary_zh: "db-f 的容器 CPU 掐頸達臨界"
@@ -350,9 +344,6 @@ tests:
               severity: warning
               tenant: db-j
               version: v2
-              runbook_url: "http://rb/j"
-              owner: team-j
-              tier: gold
             exp_annotations:
               summary: "Chronic CPU throttling in db-j"
               summary_zh: "db-j 的容器 CPU 遭核心持續掐頸"

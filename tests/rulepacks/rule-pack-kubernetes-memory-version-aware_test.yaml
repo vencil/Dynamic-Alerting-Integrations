@@ -57,9 +57,6 @@ tests:
               severity: warning
               tenant: db-a
               version: v1
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "High container memory in db-a"
               summary_zh: "db-a 的容器記憶體使用率過高"
@@ -76,9 +73,6 @@ tests:
               severity: warning
               tenant: db-a
               version: v2
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "High container memory in db-a"
               summary_zh: "db-a 的容器記憶體使用率過高"
@@ -95,9 +89,6 @@ tests:
               severity: warning
               tenant: db-b
               version: v3
-              runbook_url: "http://rb/b"
-              owner: team-b
-              tier: silver
             exp_annotations:
               summary: "High container memory in db-b"
               summary_zh: "db-b 的容器記憶體使用率過高"
@@ -161,9 +152,6 @@ tests:
               severity: warning
               tenant: db-c
               version: default
-              runbook_url: "http://rb/c"
-              owner: team-c
-              tier: gold
             exp_annotations:
               summary: "High container memory in db-c"
               summary_zh: "db-c 的容器記憶體使用率過高"

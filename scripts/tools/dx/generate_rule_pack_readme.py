@@ -26,10 +26,9 @@ from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
 from validate_docs_versions import count_rule_packs  # noqa: E402
-# The enrichment join's one spelling (#3483): the example below must match what
-# check_leftouterjoin_enrichment enforces on the real packs.
-from check_leftouterjoin_enrichment import (  # noqa: E402
-    ENRICH_MARKER, ENRICH_RHS, VOID_BRANCH)
+# The metadata annotation templates' one spelling (#3483): the example below must
+# match what check_leftouterjoin_enrichment enforces on the real packs.
+from check_leftouterjoin_enrichment import METADATA_ANNOTATIONS  # noqa: E402
 
 # Repo root = FOUR parents up (scripts/tools/dx/<file> → dx → tools → scripts →
 # repo). The original default used three (→ the non-existent scripts/rule-packs/),
@@ -206,42 +205,27 @@ def generate_readme_content(rows: List[Dict], total_records: int, total_alerts: 
     lines.append("      - record: tenant:alert_threshold:<metric>")
     lines.append("        expr: max by(tenant) (user_threshold{component=\"<component>\", metric=\"<metric>\", severity=\"warning\"})")
     lines.append("")
-    lines.append("  # 3. Alert Rules (使用 group_left + unless maintenance + runbook injection)")
+    lines.append("  # 3. Alert Rules (使用 group_left + unless maintenance；metadata 只在 annotations)")
     lines.append("  - name: <db>-alerts")
     lines.append("    rules:")
     lines.append("      - alert: <AlertName>")
     lines.append("        expr: |")
     lines.append("          (")
-    lines.append("            (")
-    lines.append("              tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>")
-    lines.append("              unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)")
-    lines.append("            )")
-    lines.append(f"            {ENRICH_MARKER}")
-    lines.append(f"              {ENRICH_RHS}")
+    lines.append("            tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>")
     lines.append("          )")
-    lines.append("          or")
-    lines.append("          (")
-    lines.append("            (")
-    lines.append("              tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>")
-    lines.append("              unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)")
-    lines.append("            )")
-    lines.append(f"            {VOID_BRANCH}")
-    lines.append("          )")
+    lines.append("          unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)")
     lines.append("        annotations:")
-    lines.append("          runbook_url: \"{{ $labels.runbook_url }}\"")
-    lines.append("          owner: \"{{ $labels.owner }}\"")
-    lines.append("          tier: \"{{ $labels.tier }}\"")
+    for label, tpl in METADATA_ANNOTATIONS.items():
+        lines.append(f"          {label}: \"{tpl}\"")
     lines.append("```")
     lines.append("")
-    lines.append("### Dynamic Runbook Injection (v1.11.0)")
+    lines.append("### Dynamic Runbook Injection")
     lines.append("")
-    lines.append(f"Alert Rules 透過 `{ENRICH_MARKER} {ENRICH_RHS}` 將租戶 metadata 注入 alert labels，再由 annotations 引用。`tenant_metadata_info` 由 threshold-exporter 根據租戶 `_metadata` 配置自動輸出（值永遠為 1），保證 `group_left` join 不會漏掉任何 tenant。")
+    lines.append("租戶 metadata（runbook_url、owner、tier）來自 threshold-exporter 依租戶 `_metadata` 輸出的 `tenant_metadata_info`（值永遠為 1）。告警**不 join** 這個指標，而是在 annotations 裡用上面那個查詢樣板讀出來（`check_leftouterjoin_enrichment.py` 鎖定唯一寫法，並擋下任何 metadata join）。租戶沒有 `_metadata` 時樣板輸出空字串，告警照常觸發。")
     lines.append("")
-    lines.append("右側一定要照上面的寫法收斂，不能直接 join 原始的 `tenant_metadata_info`：threshold-exporter 跑多個副本，每個副本都會送出這個指標，平台的 Prometheus 以 pod 為單位抓取（Prometheus Operator 的 ServiceMonitor 也是），同一個租戶會有一份 per 副本、只差 `instance`／`pod` 的序列，原始 join 會因 many-to-many 而整條告警評估失敗。`max by(...)` 收掉相同的副本；外層 `topk by(tenant) (1, …)` 處理換版空窗：兩個副本各自 reload（每隔 reloadInterval 檢查、ConfigMap 由各節點 kubelet 各自同步），一兩分鐘內可能送出不同的 metadata，少了它，一個租戶改 metadata 就會讓整條規則對所有租戶評估失敗。`check_leftouterjoin_enrichment.py` 會擋下右側不是上述寫法的 join。")
+    lines.append("為什麼不 join（[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)）：join 會把 metadata 變成告警 label、也就是告警身分的一部分。threshold-exporter 跑多個副本、各自 reload（每隔 reloadInterval 檢查、ConfigMap 由各節點 kubelet 各自同步），改 metadata 後一兩分鐘內兩個副本會送出不同的值；join 每次評估可能挑到不同的那筆（VictoriaMetrics 的 `topk` 平手時就會），label 一變告警身分就變、`for:` 重來，該租戶在空窗內不觸發。放在 annotation 裡，空窗內頂多顯示其中一個副本的值，告警身分與觸發都不受影響。")
     lines.append("")
-    lines.append(f"`or (… {VOID_BRANCH})` 那一半讓沒有 metadata 的租戶照樣告警（只是不帶 runbook／owner／tier）；`unless` 只看有沒有，副本重複不會出錯，所以維持原始指標。")
-    lines.append("")
-    lines.append(f"若租戶未設定 `_metadata`，`tenant_metadata_info` 不存在，`group_left` 回傳空向量。因此已內建的 {pack_count} 個 Rule Pack 均已加入此 join，但 **自訂 Rule Pack 建議同步採用此 pattern** 以確保 runbook URL 與 owner 資訊可自動傳遞至通知。")
+    lines.append("內建 Rule Pack 帶 metadata 的告警都用這個樣板；**自訂 Rule Pack 也請照用**，不要用 `{{ $labels.runbook_url }}` 之類的 label 參照——告警上已沒有這些 label。依 runbook_url／owner／tier label 路由的 Alertmanager 設定要改成依 tenant 路由。")
     lines.append("")
     lines.append("## Exporter 文件連結")
     lines.append("")

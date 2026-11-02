@@ -3,7 +3,10 @@
 
 Problem (#947 / PR #977, Gemini disposition)
 --------------------------------------------
-Most threshold alerts use the ADR-024 two-arm left-outer-join shape:
+⚠️ Since #3483 no live alert has this shape: metadata reaches alerts through
+annotations, not a join, so every rule-pack alert is single-arm and this lint's
+two-arm checks are dormant (token hygiene still applies to every alert). Until
+#3483 most threshold alerts used the ADR-024 two-arm left-outer-join shape:
 
     ((breach UNLESS maintenance) * group_left(...) topk by(tenant) (1, max by(...) (...)))  # enriched
     or
@@ -91,7 +94,12 @@ import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 # The one spelling of the enrichment join's right-hand side (#3483).
-from check_leftouterjoin_enrichment import ENRICH_RHS  # noqa: E402
+# The two-arm shape's enrichment right-hand side, as it was spelled until #3483
+# retired the shape: rule packs join no metadata any more (alerts read it in
+# annotations; check_leftouterjoin_enrichment.py refuses any join), so every live
+# alert is single-arm. The classifier stays so a reintroduced two-arm expr is
+# still held to one maintenance clause per arm.
+ENRICH_RHS = "topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))"
 
 _HERE = Path(__file__).resolve()
 _REPO = _HERE.parents[3]                         # <repo>/scripts/tools/lint/x.py -> <repo>

@@ -180,9 +180,6 @@ tests:
               severity: warning
               metric_group: replication_lag
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "High replication lag on db-a"
               summary_zh: "db-a 複寫延遲過高"
@@ -236,9 +233,6 @@ tests:
               severity: critical
               metric_group: replication_lag
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "Critical replication lag on db-a"
               summary_zh: "db-a 複寫延遲嚴重過高"

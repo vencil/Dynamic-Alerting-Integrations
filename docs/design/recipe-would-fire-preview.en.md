@@ -112,9 +112,9 @@ A Prometheus rule compares "series" (labelled time series), not a single number.
 |---|---|---|
 | observed metric `@` test value | the user's test value | `scenario.value` |
 | `user_threshold @ threshold` (with the recipe id + severity + name + mode) | the threshold + labels the rule compares against | the id comes straight from the compiler (see 5.3), not re-derived |
-| `tenant_metadata_info @ 1` | for the rule's `group_left` to bring in runbook/owner | a constant |
+| `tenant_metadata_info @ 1` | for the alert's runbook/owner annotations to query (the rule does not join it, #3483) | a constant |
 
-> The preview's synthetic input **always supplies** `tenant_metadata_info`, so the preview shows the full alert with runbook/owner. (In the real environment, if a tenant lacks it the alert still fires, those labels are just empty — handled at runtime, unrelated to preview.)
+> The preview's synthetic input **always supplies** `tenant_metadata_info`, so the preview shows the full alert with runbook/owner. (In the real environment, if a tenant lacks it the alert still fires, those annotations are just empty — handled at runtime, unrelated to preview.)
 
 **The key dividing line — only the series' *shape* depends on the recipe type**:
 

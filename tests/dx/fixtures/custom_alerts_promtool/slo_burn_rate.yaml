@@ -46,9 +46,6 @@ tests:
               version: default
               metric_group: slo_checkout_availability
               slo_burn: "true"
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "CRITICAL Custom alert [checkout_availability] for shop-a"
               summary_zh: "shop-a 的自訂告警 [checkout_availability] 達臨界 觸發"
@@ -66,9 +63,6 @@ tests:
               version: default
               metric_group: slo_checkout_availability
               slo_burn: "true"
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "Custom alert [checkout_availability] for shop-a"
               summary_zh: "shop-a 的自訂告警 [checkout_availability] 觸發"
@@ -141,9 +135,6 @@ tests:
               version: default
               metric_group: slo_checkout_availability
               slo_burn: "true"
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "CRITICAL Custom alert [checkout_availability] for shop-a"
               summary_zh: "shop-a 的自訂告警 [checkout_availability] 達臨界 觸發"
@@ -161,9 +152,6 @@ tests:
               version: default
               metric_group: slo_checkout_availability
               slo_burn: "true"
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "Custom alert [checkout_availability] for shop-a"
               summary_zh: "shop-a 的自訂告警 [checkout_availability] 觸發"
@@ -186,9 +174,6 @@ tests:
               version: default
               metric_group: slo_checkout_availability
               slo_burn: "true"
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "Custom alert [checkout_availability] for shop-a"
               summary_zh: "shop-a 的自訂告警 [checkout_availability] 觸發"
@@ -226,9 +211,6 @@ tests:
               version: default
               metric_group: slo_checkout_availability
               slo_burn: "true"
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "Custom alert [checkout_availability] for shop-a"
               summary_zh: "shop-a 的自訂告警 [checkout_availability] 觸發"

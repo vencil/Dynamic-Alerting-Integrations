@@ -30,9 +30,6 @@ tests:
               name: mariadb_conns_high
               mode: page
               version: default
-              runbook_url: "http://rb/db-b"
-              owner: team-db
-              tier: silver
             exp_annotations:
               summary: "Custom alert [mariadb_conns_high] for db-b"
               summary_zh: "db-b 的自訂告警 [mariadb_conns_high] 觸發"
@@ -64,9 +61,6 @@ tests:
               name: mariadb_slow_query_rate
               mode: silent
               version: default
-              runbook_url: "http://rb/db-b"
-              owner: team-db
-              tier: silver
             exp_annotations:
               summary: "Custom alert [mariadb_slow_query_rate] for db-b"
               summary_zh: "db-b 的自訂告警 [mariadb_slow_query_rate] 觸發"

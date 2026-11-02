@@ -1,37 +1,32 @@
-# promtool unit test — 中繼資料 join 在多副本 threshold-exporter 下不撞 many-to-many（#3483）。
+# promtool / vmalert-tool unit test — 多副本與換版空窗下，每個租戶的告警恰好一則、
+# 身分不變，metadata 只出現在 annotation（#3483）。
 # Run: promtool test rules tests/rulepacks/rule-pack-metadata-replicas_test.yaml
+#      （CI 也以 vmalert-tool 跑同一份：tests/rulepacks/test_vm_alert_parity.py，不列 catalog）
 #
-# threshold-exporter 預設 2 個副本（helm/threshold-exporter/values.yaml replicaCount），
-# 每個副本都送出 tenant_metadata_info。以 pod 為單位抓取時（raw Prometheus 的
-# platform-components job 走 endpointslice、Prometheus Operator 的 ServiceMonitor 也以 endpoints 探索，
-# 一個 pod 一個 target），同一個租戶會有一份 per 副本、只差 instance／pod 的序列。
-# user_threshold 只給一份、不帶 scrape label：threshold 那一側本來就先 max by 收斂，
-# 而 rulepack_contract_test.go 規定 fixture 的 user_threshold 只能帶 exporter 自己送的
-# label（#731）。副本 label 只放在 tenant_metadata_info 上。
+# threshold-exporter 預設 2 個副本，每個副本都送出 tenant_metadata_info；平台的
+# Prometheus 逐 pod 抓取（platform-components 走 endpointslice），同一個租戶有一份
+# per 副本、只差 instance／pod 的序列。user_threshold 只給一份、不帶 scrape label
+# （rulepack_contract_test.go，#731）；副本 label 只放在 tenant_metadata_info 與
+# user_state_filter 上。
 #
-# 這裡同時放兩種形狀：
-#   - t1（以及 kubernetes pack 的 db-t1）：兩個副本送出一模一樣的 metadata
-#     ⇒ 原始 join 撞 many-to-many，`max by(tenant, runbook_url, owner, tier)` 收斂得掉。
-#   - t2：設定重載的空窗——一個副本已換上新的 runbook_url、另一個還是舊的
-#     ⇒ `max by(...)` 收不掉（兩筆差在 metadata label 上），t2 在右側有兩筆，
-#       整條規則對「所有」租戶評估失敗：t2 根本沒有任何 breach，t1 的告警也跟著消失。
-#       外層 `topk by(tenant) (1, …)` 讓每個租戶只留一筆。
-# 右側的唯一寫法是
-# `topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))`，
-# 由 check_leftouterjoin_enrichment.py 鎖定。
+# metadata（runbook_url／owner／tier）過去以 join 帶進告警 label，成了告警身分的一部分：
+# 換版空窗內兩個副本送出不同的 runbook_url，join 右側每次評估可能挑到不同的那筆
+# （MetricsQL 的 topk 平手時就會），label 一變告警身分就變、`for:` 重來，該租戶在
+# 空窗內永遠不觸發。現在規則不 join metadata，annotation 以唯一的查詢樣板
+# （check_leftouterjoin_enrichment.py 的 METADATA_ANNOTATIONS）讀出來。
 #
-# 每個有 enrichment join 的 pack 各挑一條代表告警（14 個 pack），rule_files 指向
-# 真正的 pack 原始檔。斷言：
-#   - t1 每條告警恰好一筆、而且帶著 metadata labels ⇒ 走的是 enriched 分支；
-#     若改走 void 分支會多出一筆不帶 owner 的樣本 ⇒ 失敗；
-#   - t2 的 RedisHighConnections 恰好一筆、帶 owner／tier ⇒ 重載空窗內仍走 enriched
-#     分支、不重複；runbook_url 是兩個副本之一（topk 平手時留先看到的那筆），
-#     所以不斷言它；
-#   - 若有任何一條 rule 撞 many-to-many，promtool 會把它報為 FAILED ⇒ 失敗。
-# kubernetes 的 ContainerCrashLoop 另外把 user_state_filter（同樣每個副本一份）當
-# group_left 的右側：右側先 `max by(tenant)` 收斂，否則一樣 many-to-many（下面那組
-# db-t1 的 container_crashloop 給兩份副本序列）。
-# 把任一 pack 的右側改回 `max by(...)`（或原始 join）會讓本檔轉紅。
+#   - t1（以及 kubernetes pack 的 db-t1）：兩個副本 metadata 相同；
+#   - t2：換版空窗——一個副本已換上新的 runbook_url，另一個還是舊的。
+#
+# 每個 pack 各挑一條代表告警（14 個 pack），rule_files 指向真正的 pack 原始檔。斷言：
+#   - 每條代表告警對 t1／db-t1 恰好一則；t2 的 RedisHighConnections 恰好一則；
+#   - 沒有任何告警帶 runbook_url／owner／tier label；
+#   - ClickHouseHighConnections（只有 t1 觸發）的 annotation 帶出 t1 的 metadata。
+#     t2 的 runbook_url annotation 在空窗內可能是兩個副本之一，不斷言。
+# kubernetes 的 ContainerCrashLoop 把 user_state_filter（每個副本一份）當 group_left
+# 右側，右側先 `max by(tenant)` 收斂，否則撞 many-to-many（db-t1 給兩份副本序列）。
+# 把任一 pack 改回 metadata join，vmalert-tool 上 t2 的告警會因身分翻動而不觸發，
+# promtool 上第二條斷言（不帶 metadata label）失敗。
 rule_files:
   - ../../rule-packs/rule-pack-clickhouse.yaml
   - ../../rule-packs/rule-pack-custom-alerts.yaml
@@ -171,45 +166,69 @@ tests:
     promql_expr_test:
       - eval_time: 12m
         expr: |
-          count by(alertname, runbook_url, owner, tier) (
+          count by(alertname, tenant) (
             ALERTS{alertstate="firing", tenant=~"t1|db-t1", alertname=~"ClickHouseHighConnections|Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m|DB2HighConnections|ElasticsearchPendingTasks|JVMThreadPoolExhaustion|KafkaHighConsumerLag|PodContainerHighCPU|ContainerCrashLoop|MariaDBHighConnections|MongoDBHighConnections|NginxHighConnections|OracleHighActiveSessions|PostgreSQLHighReplicationLag|RabbitMQHighQueueDepth|RedisHighConnections"}
           )
         exp_samples:
-          - labels: '{alertname="ClickHouseHighConnections", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="ClickHouseHighConnections", tenant="t1"}'
             value: 1
-          - labels: '{alertname="Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m", tenant="t1"}'
             value: 1
-          - labels: '{alertname="DB2HighConnections", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="DB2HighConnections", tenant="t1"}'
             value: 1
-          - labels: '{alertname="ElasticsearchPendingTasks", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="ElasticsearchPendingTasks", tenant="t1"}'
             value: 1
-          - labels: '{alertname="JVMThreadPoolExhaustion", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="JVMThreadPoolExhaustion", tenant="t1"}'
             value: 1
-          - labels: '{alertname="KafkaHighConsumerLag", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="KafkaHighConsumerLag", tenant="t1"}'
             value: 1
-          - labels: '{alertname="PodContainerHighCPU", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="PodContainerHighCPU", tenant="db-t1"}'
             value: 1
-          - labels: '{alertname="ContainerCrashLoop", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="ContainerCrashLoop", tenant="db-t1"}'
             value: 1
-          - labels: '{alertname="MariaDBHighConnections", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="MariaDBHighConnections", tenant="t1"}'
             value: 1
-          - labels: '{alertname="MongoDBHighConnections", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="MongoDBHighConnections", tenant="t1"}'
             value: 1
-          - labels: '{alertname="NginxHighConnections", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="NginxHighConnections", tenant="t1"}'
             value: 1
-          - labels: '{alertname="OracleHighActiveSessions", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="OracleHighActiveSessions", tenant="t1"}'
             value: 1
-          - labels: '{alertname="PostgreSQLHighReplicationLag", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="PostgreSQLHighReplicationLag", tenant="t1"}'
             value: 1
-          - labels: '{alertname="RabbitMQHighQueueDepth", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="RabbitMQHighQueueDepth", tenant="t1"}'
             value: 1
-          - labels: '{alertname="RedisHighConnections", runbook_url="http://rb/t1", owner="team-t1", tier="gold"}'
+          - labels: '{alertname="RedisHighConnections", tenant="t1"}'
             value: 1
+      # t2 換版空窗內照常觸發、恰好一則。
       - eval_time: 12m
         expr: |
-          count by(alertname, tenant, owner, tier) (
-            ALERTS{alertstate="firing", tenant="t2"}
-          )
+          count by(alertname, tenant) (ALERTS{alertstate="firing", tenant="t2"})
         exp_samples:
-          - labels: '{alertname="RedisHighConnections", tenant="t2", owner="team-t2", tier="silver"}'
+          - labels: '{alertname="RedisHighConnections", tenant="t2"}'
             value: 1
+      # metadata 不是告警 label。
+      - eval_time: 12m
+        expr: |
+          count(ALERTS{runbook_url!=""} or ALERTS{owner!=""} or ALERTS{tier!=""}) or vector(0)
+        exp_samples:
+          - labels: '{}'
+            value: 0
+    alert_rule_test:
+      # annotation 以查詢樣板帶出 metadata（兩個副本相同的租戶，值是確定的）。
+      - eval_time: 12m
+        alertname: ClickHouseHighConnections
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              tenant: t1
+            exp_annotations:
+              summary: "ClickHouse active connections exceed threshold"
+              summary_zh: "ClickHouse 活動連線超出閾值"
+              platform_summary: "[gold] t1: ClickHouse connections exceeded — client pool review"
+              platform_summary_zh: "[gold] t1：ClickHouse 連線已超出 — client pool 審查"
+              description: "600 active connections"
+              description_zh: "600 個活動連線"
+              runbook_url: "http://rb/t1"
+              owner: team-t1
+              tier: gold

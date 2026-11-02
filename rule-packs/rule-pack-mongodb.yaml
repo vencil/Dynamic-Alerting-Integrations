@@ -188,29 +188,12 @@ groups:
         expr: |
           (
             (
-              (
-                tenant:mongodb_connections_current:max
-                > on(tenant) group_left
-                tenant:alert_threshold:mongodb_connections_current
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:mongodb_connections_current:max
+              > on(tenant) group_left
+              tenant:alert_threshold:mongodb_connections_current
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:mongodb_connections_current:max
-                > on(tenant) group_left
-                tenant:alert_threshold:mongodb_connections_current
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -219,41 +202,24 @@ groups:
         annotations:
           summary: "MongoDB high connection count on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 MongoDB 連線數過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection threshold breached — pool sizing review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 連線閾值超過 — 請檢查連線池大小"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: MongoDB connection threshold breached — pool sizing review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: MongoDB 連線閾值超過 — 請檢查連線池大小"
           description: "{{ $value }} current connections"
           description_zh: "{{ $value }} 個目前連線"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: MongoDBReplicationLag
         expr: |
           (
             (
-              (
-                tenant:mongodb_replication_lag:max
-                > on(tenant) group_left
-                tenant:alert_threshold:mongodb_replication_lag
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:mongodb_replication_lag:max
+              > on(tenant) group_left
+              tenant:alert_threshold:mongodb_replication_lag
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:mongodb_replication_lag:max
-                > on(tenant) group_left
-                tenant:alert_threshold:mongodb_replication_lag
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 2m
         labels:
@@ -262,41 +228,24 @@ groups:
         annotations:
           summary: "MongoDB replication lag on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 MongoDB 複製延遲"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB replication lag — check replica health"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 複製延遲 — 請檢查副本狀態"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: MongoDB replication lag — check replica health"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: MongoDB 複製延遲 — 請檢查副本狀態"
           description: "Replication lag: {{ $value | printf \"%.1f\" }}s behind primary"
           description_zh: "複製延遲: 落後 Primary {{ $value | printf \"%.1f\" }}s"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: MongoDBHighOperations
         expr: |
           (
             (
-              (
-                tenant:mongodb_opcounters:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:mongodb_opcounters_rate
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:mongodb_opcounters:rate5m
+              > on(tenant) group_left
+              tenant:alert_threshold:mongodb_opcounters_rate
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:mongodb_opcounters:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:mongodb_opcounters_rate
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -305,33 +254,20 @@ groups:
         annotations:
           summary: "MongoDB high operation rate on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 MongoDB 作業率過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB operation rate elevated — workload review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 作業率提升 — 請檢查工作負載"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: MongoDB operation rate elevated — workload review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: MongoDB 作業率提升 — 請檢查工作負載"
           description: "{{ $value | printf \"%.0f\" }} ops/sec"
           description_zh: "{{ $value | printf \"%.0f\" }} 作業/秒"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: MongoDBHighPageFaults
         expr: |
           (
-            (
-              tenant:mongodb_page_faults:rate5m > 100
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              tenant:mongodb_page_faults:rate5m > 100
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            tenant:mongodb_page_faults:rate5m > 100
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -340,33 +276,20 @@ groups:
         annotations:
           summary: "MongoDB high page faults on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 MongoDB Page Fault 過多"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB page fault rate high — memory sizing review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB Page Fault 率過高 — 請檢查記憶體大小"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: MongoDB page fault rate high — memory sizing review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: MongoDB Page Fault 率過高 — 請檢查記憶體大小"
           description: "{{ $value | printf \"%.1f\" }} page faults/sec — check memory"
           description_zh: "{{ $value | printf \"%.1f\" }} Page Fault/秒 — 請檢查記憶體"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: MongoDBConnectionSaturation
         expr: |
           (
-            (
-              tenant:mongodb_connection_usage:ratio > 0.8
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              tenant:mongodb_connection_usage:ratio > 0.8
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            tenant:mongodb_connection_usage:ratio > 0.8
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -375,11 +298,11 @@ groups:
         annotations:
           summary: "MongoDB connection pool near saturation on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 MongoDB 連線池接近飽和"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB connection pool near saturation — capacity action needed"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: MongoDB 連線池接近飽和 — 需要容量擴展"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: MongoDB connection pool near saturation — capacity action needed"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: MongoDB 連線池接近飽和 — 需要容量擴展"
           description: "{{ $value | humanizePercentage }} of connections used"
           description_zh: "已使用 {{ $value | humanizePercentage }} 的連線"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

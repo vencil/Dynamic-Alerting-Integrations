@@ -299,9 +299,6 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "DB2 high active connections on db-a"
               summary_zh: "db-a 上 DB2 連線數過高"
@@ -338,9 +335,6 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "DB2 low bufferpool hit ratio on db-a"
               summary_zh: "db-a 上 DB2 bufferpool 命中率偏低"
@@ -376,9 +370,6 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "DB2 high transaction log usage on db-a"
               summary_zh: "db-a 上 DB2 交易日誌使用率過高"
@@ -415,9 +406,6 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "DB2 high deadlock rate on db-a"
               summary_zh: "db-a 上 DB2 死鎖率過高"
@@ -453,9 +441,6 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "DB2 tablespace nearing capacity on db-a"
               summary_zh: "db-a 上 DB2 tablespace 即將滿容"
@@ -493,9 +478,6 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "DB2 high lock wait time on db-a"
               summary_zh: "db-a 上 DB2 鎖等待時間過高"
@@ -532,9 +514,6 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "DB2 high sort overflow ratio on db-a"
               summary_zh: "db-a 上 DB2 sort overflow 比率過高"

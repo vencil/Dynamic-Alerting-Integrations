@@ -35,9 +35,6 @@ tests:
               name: pipeline_heartbeat
               mode: silent
               version: default
-              runbook_url: "https://rb/canary"
-              owner: platform-ops
-              tier: platform
             exp_annotations:
               summary: "Custom alert [pipeline_heartbeat] for platform-canary"
               summary_zh: "platform-canary 的自訂告警 [pipeline_heartbeat] 觸發"
@@ -89,9 +86,6 @@ tests:
               name: pipeline_heartbeat
               mode: silent
               version: default
-              runbook_url: "https://rb/canary"
-              owner: platform-ops
-              tier: platform
             exp_annotations:
               summary: "Custom alert [pipeline_heartbeat] for platform-canary"
               summary_zh: "platform-canary 的自訂告警 [pipeline_heartbeat] 觸發"
@@ -108,9 +102,6 @@ tests:
               name: nn_heartbeat
               mode: silent
               version: default
-              runbook_url: "https://rb/nn"
-              owner: team-nn
-              tier: bronze
             exp_annotations:
               summary: "Custom alert [nn_heartbeat] for noisy-neighbor"
               summary_zh: "noisy-neighbor 的自訂告警 [nn_heartbeat] 觸發"

@@ -34,6 +34,17 @@ sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
+sys.path.insert(0, os.path.join(_THIS_DIR, "..", "lint"))
+# The metadata annotation templates (#3483): shown as a short `{{ <label> }}`
+# placeholder, so a summary still reads `[{{ tier }}] {{ $labels.tenant }}: …`.
+from check_leftouterjoin_enrichment import METADATA_ANNOTATIONS  # noqa: E402
+
+
+def readable(text: str) -> str:
+    """*text* with every canonical metadata query template shortened to `{{ <label> }}`."""
+    for label, tpl in METADATA_ANNOTATIONS.items():
+        text = text.replace(tpl, "{{ " + label + " }}")
+    return text
 
 # Built-in mapping for recommended actions by alert pattern
 RECOMMENDED_ACTIONS = {
@@ -151,11 +162,11 @@ def extract_alerts(yaml_content: Dict[str, Any]) -> List[Dict[str, Any]]:
             annotations = rule.get("annotations", {})
 
             # Extract description from annotations
-            summary = annotations.get("summary", "")
-            description = annotations.get("description", "")
+            summary = readable(annotations.get("summary", ""))
+            description = readable(annotations.get("description", ""))
 
             # Use platform_summary if available (for dual-perspective alerts)
-            platform_summary = annotations.get("platform_summary", "")
+            platform_summary = readable(annotations.get("platform_summary", ""))
 
             # The related metric comes from the rule's PromQL `expr` (the real
             # series the alert evaluates), NOT the prose description.

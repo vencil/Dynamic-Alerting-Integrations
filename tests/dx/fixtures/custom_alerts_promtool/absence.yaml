@@ -36,9 +36,6 @@ tests:
               recipe: absence
               name: heartbeat_gone
               version: default
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "CRITICAL Custom alert [heartbeat_gone] for shop-a"
               summary_zh: "shop-a 的自訂告警 [heartbeat_gone] 達臨界 觸發"

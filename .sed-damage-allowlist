@@ -228,3 +228,8 @@ scripts/tools/ops/gitops_check.py
 # pinned it go; only the "shared reader stays pure" half remains — removed,
 # not truncated.
 tests/shared/test_yaml_loader_is_libyaml.py
+
+# #3483: tenant metadata moved from a join to annotations; the lint's join-shape
+# tests (left-outer pairing, right-hand-side spelling) are replaced by the
+# no-join / canonical-template tests — rewritten, not truncated.
+tests/lint/test_check_leftouterjoin_enrichment.py

@@ -37,9 +37,6 @@ tests:
               recipe: rate
               name: http_5xx_spike
               version: default
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "Custom alert [http_5xx_spike] for shop-a"
               summary_zh: "shop-a 的自訂告警 [http_5xx_spike] 觸發"

@@ -33,9 +33,6 @@ tests:
               recipe: ratio
               name: error_ratio_high
               version: default
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "CRITICAL Custom alert [error_ratio_high] for shop-a"
               summary_zh: "shop-a 的自訂告警 [error_ratio_high] 達臨界 觸發"

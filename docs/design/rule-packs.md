@@ -109,9 +109,11 @@ groups:
           summary_zh: "MariaDB 連線數 {{ $value }} 超過閾值（{{ $labels.tenant }}）"
           description: "Connection count has exceeded the threshold"
           description_zh: "連線數已超過設定的閾值"
-          platform_summary: "[Tier: {{ $labels.tier }}] {{ $labels.tenant }}: Connection pool exhaustion — escalate to DBA"
-          platform_summary_zh: "[Tier: {{ $labels.tier }}] {{ $labels.tenant }}：連線集區耗盡——需升級至 DBA"
+          platform_summary: "[Tier: {{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Connection pool exhaustion — escalate to DBA"
+          platform_summary_zh: "[Tier: {{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：連線集區耗盡——需升級至 DBA"
 ```
+
+tier 不是告警 label：annotation 以固定的查詢樣板讀 `tenant_metadata_info`（[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)，見 [高可用性設計 §4.3](high-availability.md)）。
 
 #### v2.0.0 雙語 Annotation (Bilingual Annotations / i18n) for Alerts
 

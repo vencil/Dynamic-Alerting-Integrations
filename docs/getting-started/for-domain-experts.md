@@ -67,29 +67,12 @@ threshold-exporter 發射租戶閾值時，會在 key 的第一個 `_` 拆開：
   expr: |
     (
       (
-        (
-          tenant:mysql_threads_connected:max
-          > on(tenant) group_left
-          tenant:alert_threshold:mysql_connections
-        )
-        unless on(tenant)
-        (user_state_filter{filter="maintenance"} == 1)
+        tenant:mysql_threads_connected:max
+        > on(tenant) group_left
+        tenant:alert_threshold:mysql_connections
       )
-      * on(tenant) group_left(runbook_url, owner, tier)
-        topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-    )
-    or
-    (
-      (
-        (
-          tenant:mysql_threads_connected:max
-          > on(tenant) group_left
-          tenant:alert_threshold:mysql_connections
-        )
-        unless on(tenant)
-        (user_state_filter{filter="maintenance"} == 1)
-      )
-      unless on(tenant) tenant_metadata_info
+      unless on(tenant)
+      (user_state_filter{filter="maintenance"} == 1)
     )
   for: 30s
   labels:
@@ -99,13 +82,14 @@ threshold-exporter 發射租戶閾值時，會在 key 的第一個 `_` 拆開：
   annotations:
     summary: "High connections on {{ $labels.tenant }}"
     summary_zh: "{{ $labels.tenant }} 連線數過高"
-    platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: connection threshold breached — review connection pool sizing"
-    platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：連線數閾值超出 — 檢查連線集區大小設定"
+    platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: connection threshold breached — review connection pool sizing"
+    platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：連線數閾值超出 — 檢查連線集區大小設定"
+    runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
 ```
 
 - `> on(tenant) group_left tenant:alert_threshold:<key>`：每個租戶跟自己的閾值比。租戶把 key 設成 `"disable"` 時，閾值 series 不存在，這條告警就不會觸發。
 - `unless on(tenant) (user_state_filter{filter="maintenance"} == 1)`：維護模式中的租戶不告警。
-- `* on(tenant) group_left(runbook_url, owner, tier) topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))`：把租戶 `_metadata` 的 runbook、owner、tier 帶進告警。右側這一段不能省：threshold-exporter 跑多個副本，以 pod 為單位抓取時同一個租戶會有好幾份 `tenant_metadata_info`（兩個副本換版的一兩分鐘內，內容還可能不同），直接 join 原始指標會因 many-to-many 而整條告警失敗。`or … unless on(tenant) tenant_metadata_info` 那一半讓沒有設 `_metadata` 的租戶照樣告警。
+- annotation 裡的 `{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` …) }}…{{ end }}`：讀出租戶 `_metadata` 的 runbook、owner、tier（`tenant_metadata_info` 這個指標）。metadata 只放在 annotation、不 join 進告警 label：threshold-exporter 跑多個副本，兩個副本換版的一兩分鐘內內容可能不同，放在 label 會讓告警身分跟著變、`for:` 重來。沒有設 `_metadata` 的租戶照樣告警，這幾個 annotation 是空字串。樣板只有一種寫法，`check_leftouterjoin_enrichment.py` 會擋下其他寫法與 `$labels.tier` 之類的參照。
 - `summary`／`summary_zh` 是給租戶看的；`platform_summary`／`platform_summary_zh` 是 NOC 視角的摘要，用在平台強制路由（`_routing_enforced`）送出的通知。沒有 `*_zh` 的 annotation 會退回英文。
 
 ### 閾值從哪裡來

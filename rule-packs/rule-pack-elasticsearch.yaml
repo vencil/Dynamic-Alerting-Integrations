@@ -136,22 +136,9 @@ groups:
       - alert: ElasticsearchClusterYellow
         expr: |
           (
-            (
-              tenant:es_cluster_health:status == 1
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              tenant:es_cluster_health:status == 1
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            tenant:es_cluster_health:status == 1
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -160,41 +147,24 @@ groups:
         annotations:
           summary: "Elasticsearch cluster YELLOW on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch 叢集狀態為 YELLOW"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ES cluster YELLOW — replica shards unassigned"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch 叢集 YELLOW — 副本分片未分配"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: ES cluster YELLOW — replica shards unassigned"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Elasticsearch 叢集 YELLOW — 副本分片未分配"
           description: "Some replica shards are unassigned"
           description_zh: "部分副本分片未分配"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: ElasticsearchHighHeapUsage
         expr: |
           (
             (
-              (
-                tenant:es_heap_usage_percent:max
-                > on(tenant) group_left
-                tenant:alert_threshold:es_heap_usage_percent
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:es_heap_usage_percent:max
+              > on(tenant) group_left
+              tenant:alert_threshold:es_heap_usage_percent
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:es_heap_usage_percent:max
-                > on(tenant) group_left
-                tenant:alert_threshold:es_heap_usage_percent
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -203,41 +173,24 @@ groups:
         annotations:
           summary: "Elasticsearch high heap usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch JVM heap 使用率過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ES heap usage high — JVM sizing review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch heap 使用率過高 — 請檢查 JVM 大小"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: ES heap usage high — JVM sizing review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Elasticsearch heap 使用率過高 — 請檢查 JVM 大小"
           description: "JVM heap: {{ $value | printf \"%.1f\" }}%"
           description_zh: "JVM heap: {{ $value | printf \"%.1f\" }}%"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: ElasticsearchHighDiskUsage
         expr: |
           (
             (
-              (
-                tenant:es_disk_usage_percent:max
-                > on(tenant) group_left
-                tenant:alert_threshold:es_disk_usage_percent
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:es_disk_usage_percent:max
+              > on(tenant) group_left
+              tenant:alert_threshold:es_disk_usage_percent
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:es_disk_usage_percent:max
-                > on(tenant) group_left
-                tenant:alert_threshold:es_disk_usage_percent
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -246,41 +199,24 @@ groups:
         annotations:
           summary: "Elasticsearch high disk usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch 磁碟使用率過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ES disk usage high — storage capacity review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch 磁碟使用率過高 — 請檢查儲存容量"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: ES disk usage high — storage capacity review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Elasticsearch 磁碟使用率過高 — 請檢查儲存容量"
           description: "Disk usage: {{ $value | printf \"%.1f\" }}%"
           description_zh: "磁碟使用率: {{ $value | printf \"%.1f\" }}%"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: ElasticsearchHighSearchLatency
         expr: |
           (
             (
-              (
-                tenant:es_search_latency_ms:avg
-                > on(tenant) group_left
-                tenant:alert_threshold:es_search_latency_ms
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:es_search_latency_ms:avg
+              > on(tenant) group_left
+              tenant:alert_threshold:es_search_latency_ms
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:es_search_latency_ms:avg
-                > on(tenant) group_left
-                tenant:alert_threshold:es_search_latency_ms
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -289,33 +225,20 @@ groups:
         annotations:
           summary: "Elasticsearch high search latency on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch 搜尋延遲過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ES search latency elevated — query/index optimization review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch 搜尋延遲提升 — 請最佳化查詢和索引"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: ES search latency elevated — query/index optimization review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Elasticsearch 搜尋延遲提升 — 請最佳化查詢和索引"
           description: "Average search latency: {{ $value | printf \"%.0f\" }}ms"
           description_zh: "平均搜尋延遲: {{ $value | printf \"%.0f\" }}ms"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: ElasticsearchUnassignedShards
         expr: |
           (
-            (
-              tenant:es_unassigned_shards:count > 0
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              tenant:es_unassigned_shards:count > 0
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            tenant:es_unassigned_shards:count > 0
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 10m
         labels:
@@ -324,41 +247,24 @@ groups:
         annotations:
           summary: "Elasticsearch has unassigned shards on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch 有未分配的分片"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ES unassigned shards — check node capacity"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch 未分配分片 — 請檢查節點容量"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: ES unassigned shards — check node capacity"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Elasticsearch 未分配分片 — 請檢查節點容量"
           description: "{{ $value }} unassigned shards — check node capacity"
           description_zh: "{{ $value }} 個未分配的分片 — 請檢查節點容量"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: ElasticsearchPendingTasks
         expr: |
           (
             (
-              (
-                tenant:es_pending_tasks:max
-                > on(tenant) group_left
-                tenant:alert_threshold:es_pending_tasks
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:es_pending_tasks:max
+              > on(tenant) group_left
+              tenant:alert_threshold:es_pending_tasks
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:es_pending_tasks:max
-                > on(tenant) group_left
-                tenant:alert_threshold:es_pending_tasks
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -367,11 +273,11 @@ groups:
         annotations:
           summary: "Elasticsearch pending cluster tasks on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Elasticsearch 有待處理的叢集工作"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ES pending cluster tasks — cluster overload review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Elasticsearch 待處理叢集工作 — 請檢查叢集負載"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: ES pending cluster tasks — cluster overload review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Elasticsearch 待處理叢集工作 — 請檢查叢集負載"
           description: "{{ $value }} pending tasks — cluster may be overloaded"
           description_zh: "{{ $value }} 個待處理工作 — 叢集可能負載過高"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

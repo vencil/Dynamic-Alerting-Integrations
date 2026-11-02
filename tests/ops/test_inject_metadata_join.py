@@ -107,7 +107,7 @@ class TestProcessFile:
         assert imj.process_file(str(f)) is False
         out = capsys.readouterr().out
         assert "SKIP" in out
-        assert "no alerts need metadata join" in out
+        assert "no alerts need metadata annotations" in out
 
     def test_modifies_when_alert_threshold_pattern_present(self, tmp_path, capsys):
         # Matches the on(tenant) + alert_threshold pattern → injects metadata.
@@ -129,7 +129,10 @@ class TestProcessFile:
         # Side effect: file now contains the metadata join.
         new_content = f.read_text(encoding="utf-8")
         assert "tenant_metadata_info" in new_content
-        assert "group_left(runbook_url, owner, tier)" in new_content
+        # #3483: annotations only — the expr is never joined.
+        assert "group_left(runbook_url" not in new_content
+        for tpl in imj.METADATA_ANNOTATIONS.values():
+            assert tpl in new_content
 
 
 # ---------------------------------------------------------------------------

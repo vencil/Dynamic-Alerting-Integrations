@@ -85,42 +85,28 @@ groups:
       - record: tenant:alert_threshold:<metric>
         expr: max by(tenant) (user_threshold{component="<component>", metric="<metric>", severity="warning"})
 
-  # 3. Alert Rules (使用 group_left + unless maintenance + runbook injection)
+  # 3. Alert Rules (使用 group_left + unless maintenance；metadata 只在 annotations)
   - name: <db>-alerts
     rules:
       - alert: <AlertName>
         expr: |
           (
-            (
-              tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>
-              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
-            )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
+            tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>
           )
-          or
-          (
-            (
-              tenant:<metric>:<function> > on(tenant) group_left tenant:alert_threshold:<metric>
-              unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
-          )
+          unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
         annotations:
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 ```
 
-### Dynamic Runbook Injection (v1.11.0)
+### Dynamic Runbook Injection
 
-Alert Rules 透過 `* on(tenant) group_left(runbook_url, owner, tier) topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))` 將租戶 metadata 注入 alert labels，再由 annotations 引用。`tenant_metadata_info` 由 threshold-exporter 根據租戶 `_metadata` 配置自動輸出（值永遠為 1），保證 `group_left` join 不會漏掉任何 tenant。
+租戶 metadata（runbook_url、owner、tier）來自 threshold-exporter 依租戶 `_metadata` 輸出的 `tenant_metadata_info`（值永遠為 1）。告警**不 join** 這個指標，而是在 annotations 裡用上面那個查詢樣板讀出來（`check_leftouterjoin_enrichment.py` 鎖定唯一寫法，並擋下任何 metadata join）。租戶沒有 `_metadata` 時樣板輸出空字串，告警照常觸發。
 
-右側一定要照上面的寫法收斂，不能直接 join 原始的 `tenant_metadata_info`：threshold-exporter 跑多個副本，每個副本都會送出這個指標，平台的 Prometheus 以 pod 為單位抓取（Prometheus Operator 的 ServiceMonitor 也是），同一個租戶會有一份 per 副本、只差 `instance`／`pod` 的序列，原始 join 會因 many-to-many 而整條告警評估失敗。`max by(...)` 收掉相同的副本；外層 `topk by(tenant) (1, …)` 處理換版空窗：兩個副本各自 reload（每隔 reloadInterval 檢查、ConfigMap 由各節點 kubelet 各自同步），一兩分鐘內可能送出不同的 metadata，少了它，一個租戶改 metadata 就會讓整條規則對所有租戶評估失敗。`check_leftouterjoin_enrichment.py` 會擋下右側不是上述寫法的 join。
+為什麼不 join（[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)）：join 會把 metadata 變成告警 label、也就是告警身分的一部分。threshold-exporter 跑多個副本、各自 reload（每隔 reloadInterval 檢查、ConfigMap 由各節點 kubelet 各自同步），改 metadata 後一兩分鐘內兩個副本會送出不同的值；join 每次評估可能挑到不同的那筆（VictoriaMetrics 的 `topk` 平手時就會），label 一變告警身分就變、`for:` 重來，該租戶在空窗內不觸發。放在 annotation 裡，空窗內頂多顯示其中一個副本的值，告警身分與觸發都不受影響。
 
-`or (… unless on(tenant) tenant_metadata_info)` 那一半讓沒有 metadata 的租戶照樣告警（只是不帶 runbook／owner／tier）；`unless` 只看有沒有，副本重複不會出錯，所以維持原始指標。
-
-若租戶未設定 `_metadata`，`tenant_metadata_info` 不存在，`group_left` 回傳空向量。因此已內建的 16 個 Rule Pack 均已加入此 join，但 **自訂 Rule Pack 建議同步採用此 pattern** 以確保 runbook URL 與 owner 資訊可自動傳遞至通知。
+內建 Rule Pack 帶 metadata 的告警都用這個樣板；**自訂 Rule Pack 也請照用**，不要用 `{{ $labels.runbook_url }}` 之類的 label 參照——告警上已沒有這些 label。依 runbook_url／owner／tier label 路由的 Alertmanager 設定要改成依 tenant 路由。
 
 ## Exporter 文件連結
 

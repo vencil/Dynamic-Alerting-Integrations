@@ -83,29 +83,22 @@ spec:
 - 避免雙倍計算
 - HA 下警報閾值準確
 
-#### 同一條規則也適用 `tenant_metadata_info` 的 join
+#### `tenant_metadata_info`：不 join，改在 annotation 查詢
 
-`tenant_metadata_info` 一樣由每個副本各送一份。平台的 Prometheus 以 pod 為單位抓取（raw 設定的 `platform-components` job 走 `role: endpointslice`，Prometheus Operator 的 ServiceMonitor 也是以 endpoints 探索，一個 pod 一個 target），同一個租戶會有兩份只差 `instance`／`pod` 的序列。告警把 metadata 接進來的那個 join 若直接用原始指標：
+`tenant_metadata_info{tenant, runbook_url, owner, tier}` 一樣由每個副本各送一份。平台的 Prometheus 以 pod 為單位抓取（raw 設定的 `platform-components` job 走 `role: endpointslice`，Prometheus Operator 的 ServiceMonitor 也是以 endpoints 探索，一個 pod 一個 target），同一個租戶會有兩份只差 `instance`／`pod` 的序列。
 
-```promql
-* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info
+規則**不 join** 這個指標，告警也不帶 runbook_url／owner／tier label。需要顯示 metadata 的 annotation 用同一個查詢樣板讀出來（owner、tier 只換最後的欄位名）：
+
+```yaml
+annotations:
+  runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
 ```
 
-右側每個租戶就有兩筆，Prometheus 報 `many-to-many matching not allowed`，**整條告警停止評估**（不是少幾個 label，而是不觸發）。右側要先收斂成每個租戶一筆：
+- `topk(1, …)` 在兩個副本各送一份時只取一筆；租戶沒有 metadata 時查詢結果為空、`with` 不展開，annotation 是空字串，告警照常觸發。
+- 為什麼不 join：join 會讓 metadata 成為告警身分的一部分。原始 join 在多副本下撞 many-to-many、整條規則停止評估；把右側收斂成每個租戶一筆可以解決這件事，但收斂挑到哪一筆在換版空窗內會變（見下方已知限制），告警 label 一變身分就變、`for:` 重新計時。VictoriaMetrics 的 `topk` 遇到同值的序列時每次評估可能挑不同的那筆，該租戶在空窗內就不會觸發。
+- `check_leftouterjoin_enrichment.py` 擋下任何 join `tenant_metadata_info` 的運算式（`tenant_metadata_info` 只能出現在 `and`／`or`／`unless` 的右側），也擋下 `$labels.runbook_url`／`owner`／`tier` 與任何不是這個樣板的 metadata 查詢。`tests/rulepacks/rule-pack-metadata-replicas_test.yaml` 以兩份副本序列、其中一個租戶的兩個副本送出不同的 `runbook_url`，在 promtool 與 vmalert-tool 上都驗證每個租戶的告警恰好一則、不帶 metadata label、annotation 帶出 metadata。
 
-```promql
-* on(tenant) group_left(runbook_url, owner, tier)
-  topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-```
-
-- 內層 `max by(...)` 收掉兩個副本送出的相同 metadata。
-- 外層 `topk by(tenant) (1, …)` 處理換版空窗：兩個副本各自 hot-reload、有時間差（見下方已知限制），空窗內某租戶的 `owner`／`runbook_url`／`tier` 若改了，兩個副本會暫時送出不同值，`max by(...)` 收斂後該租戶仍有兩筆。Prometheus 對右側重複 match group 的檢查是整個運算式一起失敗、不分租戶，少了這層，那幾個評估週期內帶這個 join 的規則會對**所有租戶**評估失敗——一個租戶改 metadata，所有租戶的告警一起停。
-
-- 用 `by` 列出 exporter 送出的 label，而不是用 `without` 列抓取加上的 label：抓取設定可能再加上每個副本不同的 label（例如 relabel 出來的 `node`），`without` 漏列一個就又撞 many-to-many。`by` 清單由測試對照 `collector.go` 的 label 清單，exporter 新增 label 時測試會紅，不會悄悄被收掉。
-- `check_leftouterjoin_enrichment.py` 檢查每個以 `on(...)`／`ignoring(...)` 比對的運算（不論 `group_left`／`group_right` 列了哪些 label）：用到 `tenant_metadata_info` 的運算元必須就是這個寫法（忽略空白與大小寫）——右側一律檢查，`group_right`（左側是「一」的那邊）與一對一比對（兩邊重複都會失敗）連左側也檢查，`group_left` 的左側是「多」的那邊、不檢查；只有 `max by(...)`、沒有外層 `topk` 的寫法也擋；`and`／`or`／`unless` 只看有沒有，不在此限；`tests/rulepacks/rule-pack-metadata-replicas_test.yaml` 以兩份副本序列驗證每個 pack 的代表告警，其中一個租戶的兩個副本送出不同的 `runbook_url`，另一個租戶的告警必須照常觸發。
-- void 分支的 `unless on(tenant) tenant_metadata_info` 維持原始指標：`unless` 只看有沒有，右側重複不會出錯。
-
-**已知限制：換版空窗內，該租戶的 metadata 可能是舊的。** 空窗可長達一兩分鐘：每個副本每隔 `reloadInterval`（helm/threshold-exporter 預設 30s）才檢查一次設定，而 ConfigMap 掛載內容的更新由各副本所在節點的 kubelet 各自同步（通常數十秒，可到一分鐘以上），兩段延遲疊加，兩個副本換到新版的時間點可能差上這麼久。空窗只影響 metadata 改了的那個租戶：這段期間它的告警帶的是其中一個副本的 metadata，可能還是舊的 `runbook_url`／`owner`／`tier`。所有值都是 1，`topk` 平手時保留先看到的那一筆；兩筆都在的期間序列順序不變，所以不會每次評估來回跳（promtool 在空窗內多個時間點量到同一筆）。兩個副本都換到新版後只剩新值；告警 label 從舊值換到新值時，告警身分跟著換（舊的 resolve、新的重新走 `for`），這和單一副本改 metadata 時一樣。其他租戶不受影響。
+**已知限制：換版空窗內，annotation 可能顯示任一副本的 metadata。** 空窗可長達一兩分鐘：每個副本每隔 `reloadInterval`（helm/threshold-exporter 預設 30s）才檢查一次設定，而 ConfigMap 掛載內容的更新由各副本所在節點的 kubelet 各自同步（通常數十秒，可到一分鐘以上），兩段延遲疊加，兩個副本換到新版的時間點可能差上這麼久。空窗只影響 metadata 改了的那個租戶：它的通知可能顯示舊的或新的 `runbook_url`／`owner`／`tier`。告警身分與觸發時機不受影響，其他租戶也不受影響。
 
 ### 4.4 自監控 (Platform Rule Pack)
 

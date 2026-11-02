@@ -216,20 +216,20 @@ def test_commented_out_clause_does_not_count(tree):
     assert sym.check() == 1
 
 
-def test_live_distribution_floor():
-    """P2-4: the classifier must keep RECOGNISING the two-arm shape. 76 two-arm 2-copy
-    alerts at gate introduction — lower this floor ONLY as part of the #947 factor-out
-    refactor (a conscious update), never because recognition silently collapsed."""
+def test_live_distribution():
+    """#3483 retired the two-arm shape (no metadata join; alerts read metadata in
+    annotations), so every live alert classifies single-arm. A two-arm alert
+    reappearing is a conscious change: it must pass the per-arm checks, and this
+    distribution must be updated with it."""
     counts, violations, scanned = sym.classify_all()
     assert not violations
-    assert counts["two-arm-2copy"] >= 76
-    assert counts["two-arm-other"] == 0
+    assert counts["single-arm"] == scanned > 0
     assert sum(counts.values()) == scanned
 
 
 def test_live_repo_is_compliant():
-    """Integration teeth: the actual rule-packs/ tree passes (76 two-arm alerts symmetric,
-    :core-factored kubernetes alerts at 0 copies, single-arm liveness out of scope)."""
+    """Integration teeth: the actual rule-packs/ tree passes (all single-arm since
+    #3483; token hygiene still applies)."""
     assert sym.check() == 0
 
 

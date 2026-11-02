@@ -191,29 +191,12 @@ groups:
         expr: |
           (
             (
-              (
-                tenant:db2_connections_active:max
-                > on(tenant) group_left
-                tenant:alert_threshold:db2_connections_active
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:db2_connections_active:max
+              > on(tenant) group_left
+              tenant:alert_threshold:db2_connections_active
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:db2_connections_active:max
-                > on(tenant) group_left
-                tenant:alert_threshold:db2_connections_active
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -222,41 +205,24 @@ groups:
         annotations:
           summary: "DB2 high active connections on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 連線數過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 connection usage high — pool sizing review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：DB2 連線使用率過高 — pool 大小調整審查"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 connection usage high — pool sizing review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 連線使用率過高 — pool 大小調整審查"
           description: "{{ $value | printf \"%.0f\" }} active connections"
           description_zh: "{{ $value | printf \"%.0f\" }} 個活動連線"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: DB2LowBufferpoolHitRatio
         expr: |
           (
             (
-              (
-                tenant:db2_bufferpool_hit_ratio:min
-                < on(tenant) group_left
-                tenant:alert_threshold:db2_bufferpool_hit_ratio
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:db2_bufferpool_hit_ratio:min
+              < on(tenant) group_left
+              tenant:alert_threshold:db2_bufferpool_hit_ratio
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:db2_bufferpool_hit_ratio:min
-                < on(tenant) group_left
-                tenant:alert_threshold:db2_bufferpool_hit_ratio
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 10m
         labels:
@@ -265,41 +231,24 @@ groups:
         annotations:
           summary: "DB2 low bufferpool hit ratio on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 bufferpool 命中率偏低"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 bufferpool hit ratio low — memory tuning review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：DB2 bufferpool 命中率偏低 — 記憶體調優審查"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 bufferpool hit ratio low — memory tuning review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 bufferpool 命中率偏低 — 記憶體調優審查"
           description: "Hit ratio: {{ $value | printf \"%.4f\" }} — check bufferpool sizing"
           description_zh: "命中率：{{ $value | printf \"%.4f\" }} — 檢查 bufferpool 大小調整"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: DB2HighLogUsage
         expr: |
           (
             (
-              (
-                tenant:db2_log_usage_percent:max
-                > on(tenant) group_left
-                tenant:alert_threshold:db2_log_usage_percent
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:db2_log_usage_percent:max
+              > on(tenant) group_left
+              tenant:alert_threshold:db2_log_usage_percent
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:db2_log_usage_percent:max
-                > on(tenant) group_left
-                tenant:alert_threshold:db2_log_usage_percent
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -308,41 +257,24 @@ groups:
         annotations:
           summary: "DB2 high transaction log usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 交易日誌使用率過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 transaction log usage high — log space review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：DB2 交易日誌使用率過高 — 日誌空間審查"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 transaction log usage high — log space review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 交易日誌使用率過高 — 日誌空間審查"
           description: "Log usage: {{ $value | printf \"%.1f\" }}%"
           description_zh: "日誌使用率：{{ $value | printf \"%.1f\" }}%"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: DB2HighDeadlockRate
         expr: |
           (
             (
-              (
-                tenant:db2_deadlocks:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:db2_deadlock_rate
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:db2_deadlocks:rate5m
+              > on(tenant) group_left
+              tenant:alert_threshold:db2_deadlock_rate
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:db2_deadlocks:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:db2_deadlock_rate
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -351,41 +283,24 @@ groups:
         annotations:
           summary: "DB2 high deadlock rate on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 死鎖率過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 deadlock rate elevated — application contention review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：DB2 死鎖率升高 — 應用程式爭用審查"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 deadlock rate elevated — application contention review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 死鎖率升高 — 應用程式爭用審查"
           description: "{{ $value | printf \"%.1f\" }} deadlocks/sec"
           description_zh: "{{ $value | printf \"%.1f\" }} 個死鎖/秒"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: DB2TablespaceAlmostFull
         expr: |
           (
             (
-              (
-                tenant:db2_tablespace_used_percent:max
-                > on(tenant) group_left
-                tenant:alert_threshold:db2_tablespace_used_percent
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:db2_tablespace_used_percent:max
+              > on(tenant) group_left
+              tenant:alert_threshold:db2_tablespace_used_percent
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:db2_tablespace_used_percent:max
-                > on(tenant) group_left
-                tenant:alert_threshold:db2_tablespace_used_percent
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -394,14 +309,14 @@ groups:
         annotations:
           summary: "DB2 tablespace nearing capacity on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 tablespace 即將滿容"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 tablespace nearing capacity — storage review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：DB2 tablespace 即將滿容 — 儲存審查"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 tablespace nearing capacity — storage review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 tablespace 即將滿容 — 儲存審查"
           description: "Tablespace usage: {{ $value | printf \"%.1f\" }}%"
           description_zh: "Tablespace 使用率：{{ $value | printf \"%.1f\" }}%"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       # Lock wait contention. The `tenant:db2_lock_wait_time:rate5m` recording rule
       # shipped WITHOUT any consumer — no threshold normalization, no alert — so a real
       # lock-contention incident produced a populated series that paged nobody. Two
@@ -414,29 +329,12 @@ groups:
         expr: |
           (
             (
-              (
-                tenant:db2_lock_wait_time:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:db2_lock_wait_time
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:db2_lock_wait_time:rate5m
+              > on(tenant) group_left
+              tenant:alert_threshold:db2_lock_wait_time
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              (
-                tenant:db2_lock_wait_time:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:db2_lock_wait_time
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -445,33 +343,20 @@ groups:
         annotations:
           summary: "DB2 high lock wait time on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 鎖等待時間過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 lock wait time high — lock contention review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：DB2 鎖等待時間過高 — 鎖爭用審查"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 lock wait time high — lock contention review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 鎖等待時間過高 — 鎖爭用審查"
           description: "{{ $value | printf \"%.1f\" }}s of lock wait accrued per second"
           description_zh: "每秒累積 {{ $value | printf \"%.1f\" }} 秒的鎖等待"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: DB2HighSortOverflow
         expr: |
           (
-            (
-              tenant:db2_sort_overflow_ratio:avg > 0.05
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))
-          )
-          or
-          (
-            (
-              tenant:db2_sort_overflow_ratio:avg > 0.05
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            tenant:db2_sort_overflow_ratio:avg > 0.05
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 10m
         labels:
@@ -480,11 +365,11 @@ groups:
         annotations:
           summary: "DB2 high sort overflow ratio on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 DB2 sort overflow 比率過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: DB2 sort overflow ratio high — SORTHEAP tuning review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：DB2 sort overflow 比率過高 — SORTHEAP 調優審查"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: DB2 sort overflow ratio high — SORTHEAP tuning review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：DB2 sort overflow 比率過高 — SORTHEAP 調優審查"
           description: "Sort overflow ratio: {{ $value | printf \"%.2f\" }} — consider increasing SORTHEAP"
           description_zh: "Sort overflow 比率：{{ $value | printf \"%.2f\" }} — 考慮增加 SORTHEAP"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

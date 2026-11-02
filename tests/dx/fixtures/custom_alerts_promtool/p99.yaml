@@ -36,9 +36,6 @@ tests:
               recipe: p99_latency
               name: api_latency_p99
               version: default
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "Custom alert [api_latency_p99] for shop-a"
               summary_zh: "shop-a 的自訂告警 [api_latency_p99] 觸發"
