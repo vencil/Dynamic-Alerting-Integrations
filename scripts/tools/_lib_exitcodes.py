@@ -64,8 +64,8 @@ Overrides:
 
 * ``DA_TEST_CRASH_EXIT_CODE`` (#3092) — test suites only, never set in
   production: an integer 3..255 in this environment variable is the crash
-  code, over every choice below (``set_crash_exit_code``, ``@main(
-  crash_exit_code=)``, ``exit_on_crash(code=)``); any other value is
+  code, over every choice below (``set_crash_exit_code``,
+  ``exit_on_crash(code=)``); any other value is
   ignored. A crash then cannot pass for a named rc-2 exit in a test that
   only checks ``returncode == 2`` (tests/conftest.py sets it to 70 for the
   whole run). The caller-error code — a named caller error, a closed stdout
@@ -79,18 +79,13 @@ Overrides:
   ``test_no_tool_moves_the_crash_or_caller_error_code`` in
   tests/shared/test_tool_exit_codes.py); it stays for the harnesses that
   save and restore it around an in-process tool run.
-* ``@main`` / ``@main(crash_exit_code=..., on_crash=...)`` — wrap a tool's
-  ``main()``: same report + exit, but in-function, so a tool with a
-  ``--json`` contract can emit its ``internal_error`` envelope from
-  ``on_crash(exc)`` before the process ends ("rc 2 always has an
-  envelope", #3059).
 * ``arm_crash_envelope(build, **fields)`` (#3094) — the way a ``--json``
-  tool keeps that promise without a decorator: called right after the
+  tool keeps "rc 2 always has an envelope" (#3059): called right after the
   arguments are parsed (only when ``--json`` was given), it makes the crash
   path print one JSON document to stdout — the tool's own zeroed report from
   ``build()`` (dev-rules §13) plus ``{"status": "caller_error", "reason":
   "internal_error", "error": <the ERROR line>}``. Every crash path uses it
-  (this hook, ``@main`` without ``on_crash``, and ``da-tools``' last line of
+  (``run``, this hook, ``exit_on_crash``, and ``da-tools``' last line of
   defence). It fires at most once, and not at all once the tool wrote to
   stdout itself (#3115); a tool that can still run code after printing its
   own document may also call ``disarm_crash_envelope()`` there. A crash
@@ -112,7 +107,7 @@ The same armed envelope covers every caller-error exit, so "rc 2 in
   (``served_values_unavailable``), ``exit_on_observed_map_error``
   (``observed_map_unavailable``).
 * ``CallerError(message, reason=None)`` — the raisable form. Wherever it
-  ends up (``run``, ``@main``, the excepthook, ``exit_on_crash``) it is not
+  ends up (``run``, the excepthook, ``exit_on_crash``) it is not
   a crash: one ``ERROR:`` line, no traceback, the caller-error code, the
   envelope. A subclass names its reason on the class.
 * ``run(main)`` — the one process entry: ``if __name__ == "__main__":
@@ -281,11 +276,10 @@ New subcommands MUST follow this contract — see docs/internal/dev-rules.md.
 from __future__ import annotations
 
 import errno
-import functools
 import os
 import sys
 import traceback
-from typing import Any, Callable, Final, NoReturn, Optional, TypeVar, overload
+from typing import Any, Callable, Final, NoReturn, Optional
 
 # Import-time stdout hardening (cp950-class consoles): every da-tools CLI
 # imports at least one of the four root libs (_lib_compat / _lib_python /
@@ -332,8 +326,8 @@ class CallerError(Exception):
     caller-error code with one ``ERROR:`` line on stderr — no traceback — and,
     in ``--json`` mode, one envelope naming ``reason``.
 
-    Raise it from anywhere below ``run()`` (or let the module excepthook /
-    ``@main`` see it); it is never reported as a crash. A subclass names its
+    Raise it from anywhere below ``run()`` (or let the module excepthook
+    see it); it is never reported as a crash. A subclass names its
     reason once, on the class (``reason = "prometheus_query_error"``); the
     constructor's *reason* overrides that for one instance.
     """
@@ -396,8 +390,6 @@ def exit_caller_error(error: str, reason: Optional[str] = None, *,
 
 
 # ── Unexpected crash handling (#3090) ─────────────────────────────────
-
-_F = TypeVar("_F", bound=Callable[..., Any])
 
 _CRASH_MESSAGE_MAX = 500
 _crash_exit_code: int = EXIT_CALLER_ERROR
@@ -871,16 +863,14 @@ def _leave(status: Any, handled: Optional[BaseException] = None) -> NoReturn:
     sys.exit(status)
 
 
-def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
-                  on_crash: Optional[Callable[[BaseException], Any]] = None
-                  ) -> NoReturn:
+def exit_on_crash(exc: BaseException, *, code: Optional[int] = None) -> NoReturn:
     """Report *exc* as an unexpected crash and exit.
 
     Exits with *code*, else the process crash code (``set_crash_exit_code``);
     ``DA_TEST_CRASH_EXIT_CODE`` (tests only, #3092) overrides both.
-    *on_crash* runs after the report; without one, the envelope armed by
-    ``arm_crash_envelope`` (if any) is printed instead. If that raises, it is
-    reported too and the exit code is unchanged. Uses ``sys.exit`` so atexit
+    The envelope armed by ``arm_crash_envelope`` (if any) is printed after
+    the report; if that raises, it is reported too and the exit code is
+    unchanged. Uses ``sys.exit`` so atexit
     handlers run.
 
     Two exceptions are not crashes and leave by their own exit instead: a
@@ -893,48 +883,12 @@ def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
     _exit_if_stdout_lost(exc)
     report_crash(exc)
     try:
-        (on_crash or _print_crash_envelope)(exc)
+        _print_crash_envelope(exc)
     except Exception as hook_exc:  # noqa: BLE001
-        what = "on_crash handler" if on_crash else "crash envelope"
-        print(f"ERROR: {what} failed:", file=sys.stderr)
+        print("ERROR: crash envelope failed:", file=sys.stderr)
         traceback.print_exception(type(hook_exc), hook_exc,
                                   hook_exc.__traceback__, file=sys.stderr)
     _leave(_crash_code(code), exc)
-
-
-@overload
-def main(func: _F) -> _F: ...
-@overload
-def main(*, crash_exit_code: Optional[int] = None,
-         on_crash: Optional[Callable[[BaseException], Any]] = None
-         ) -> Callable[[_F], _F]: ...
-
-
-def main(func: Optional[_F] = None, *, crash_exit_code: Optional[int] = None,
-         on_crash: Optional[Callable[[BaseException], Any]] = None) -> Any:
-    """Decorator for a tool's ``main()``: an ``Exception`` escaping it becomes
-    an unexpected crash (traceback + ERROR line + crash exit code).
-
-    ``@main`` or ``@main(crash_exit_code=1, on_crash=emit_envelope)``.
-    ``crash_exit_code`` overrides ``set_crash_exit_code`` for this function;
-    ``on_crash(exc)`` lets a ``--json`` tool emit its envelope. ``SystemExit``
-    and ``KeyboardInterrupt`` pass through untouched.
-    """
-    if crash_exit_code is not None:
-        _check_code("crash", crash_exit_code)
-
-    def decorate(f: _F) -> _F:
-        @functools.wraps(f)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            try:
-                return f(*args, **kwargs)
-            except Exception as exc:  # noqa: BLE001 — that is the point
-                exit_on_crash(exc, code=crash_exit_code, on_crash=on_crash)
-        return wrapper  # type: ignore[return-value]
-
-    if func is not None:
-        return decorate(func)
-    return decorate
 
 
 _previous_excepthook = sys.excepthook
