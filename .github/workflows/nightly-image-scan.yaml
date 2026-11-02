@@ -240,7 +240,7 @@ jobs:
           - name: victoria-logs # helm/victorialogs/values.yaml
             ref: "victoriametrics/victoria-logs:v1.53.0@sha256:251121fa882af99b95ba0c230a4a2f412ea602d2698c64a96c58dc9842bb755d"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
-            ref: "gcr.io/distroless/python3-debian13:nonroot@sha256:64e54c4b1200da244d80181d98e86fc01d73c8101f107d5baf472152d8e119a2"
+            ref: "gcr.io/distroless/python3-debian13:nonroot@sha256:1c32c3720dc4c7f0c7dbe998737f32c200add6511eca7cec705008be488b87d6"
           - name: envoy # helm/federation-gateway/values.yaml
             ref: "envoyproxy/envoy:distroless-v1.38.0@sha256:a7a56545102f7a682e0cafea2c9b8448af1b09ebb710eab688dfb931e3ec7ff6"
           - name: oauth2-proxy # helm/da-portal + helm/tenant-api values.yaml
@@ -285,7 +285,7 @@ jobs:
           # (e.g. a deliberate `gh label create … || true`) are then reported as
           # offenders by the guards below.
           - name: busybox # helm/federation-{gateway,reconciler}/values.yaml (preflight init)
-            ref: "busybox:1.38@sha256:fd7dc98638c8e305f4dc34e979f1c0fdfdcaeb0fbf8fcff77ae834b6da3d7e6e"
+            ref: "busybox:1.38@sha256:a46257e06c82ad85242d0d38077d0a52d9896389ca60a1a59d3463db586e5fa4"
             # Static binaries only: Trivy finds no OS/language packages and omits
             # `Results`, which the summarizer otherwise treats as schema drift
             # (this was the nightly "1 unscanned" in #1243). Reported as "no
