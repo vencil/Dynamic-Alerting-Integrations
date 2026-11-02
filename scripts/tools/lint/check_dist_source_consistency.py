@@ -31,6 +31,11 @@ match one of:
   - tools/portal/manifest.json             (entry list)
   - tools/portal/shims/*.js                (build-time shims)
   - tools/portal/src/**                    (component sources + bundled assets)
+  - tools/portal/package-lock.json, but only when the esbuild version it
+    resolves changed (HEAD vs index): the compiler itself moved, so every
+    bundle is legitimately re-emitted with no source change (#3521). Any
+    other lockfile change is NOT a signal — a dependency bump that leaves
+    esbuild alone should leave dist alone too.
 
 Otherwise it's "dist drift without source intent" — the exact pattern
 that broke main in PR-E. Block the commit.
@@ -54,6 +59,7 @@ Usage
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -96,6 +102,37 @@ def is_dist(p: str) -> bool:
 
 def is_source(p: str) -> bool:
     return any(pred(p) for pred in SOURCE_PATTERNS)
+
+
+LOCKFILE = "tools/portal/package-lock.json"
+
+
+def esbuild_version(lock_text: str) -> str | None:
+    """The esbuild version an npm v2/v3 lockfile resolves, or None when the
+    text is absent, not JSON, or carries no top-level esbuild package."""
+    try:
+        packages = json.loads(lock_text).get("packages") or {}
+    except (ValueError, AttributeError):
+        return None
+    entry = packages.get("node_modules/esbuild")
+    return entry.get("version") if isinstance(entry, dict) else None
+
+
+def esbuild_bumped(old_lock: str, new_lock: str) -> bool:
+    """True when the resolved esbuild version differs and both sides name one
+    (a lockfile that cannot be read is not evidence of a compiler bump)."""
+    old, new = esbuild_version(old_lock), esbuild_version(new_lock)
+    return old is not None and new is not None and old != new
+
+
+def _git_show(spec: str) -> str:
+    """`git show <spec>` text, or "" when the object does not exist."""
+    try:
+        return subprocess.check_output(
+            ["git", "show", spec], text=True, encoding="utf-8", timeout=10,
+            stderr=subprocess.DEVNULL)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return ""
 
 
 def staged_files() -> List[str]:
@@ -148,6 +185,10 @@ def main() -> int:
         return EXIT_OK
 
     source_changes = [f for f in files if is_source(f)]
+    # Staged mode only: explicit file arguments carry no HEAD/index pair.
+    if (not source_changes and not args.files and LOCKFILE in files
+            and esbuild_bumped(_git_show(f"HEAD:{LOCKFILE}"), _git_show(f":{LOCKFILE}"))):
+        source_changes = [f"{LOCKFILE} (esbuild version changed)"]
     if source_changes:
         print(
             f"dist-source-consistency: ✓ {len(dist_changes)} dist file(s) staged with "
@@ -173,6 +214,7 @@ def main() -> int:
     print("    - tools/portal/manifest.json")
     print("    - tools/portal/shims/*.js")
     print("    - tools/portal/src/**")
+    print(f"    - {LOCKFILE} with a changed esbuild version")
     print()
     print("  Why: PR-E (#269) committed regenerated dist on a chunk reshuffle")
     print("  triggered by ONE source change. Reviewer attention was on the")

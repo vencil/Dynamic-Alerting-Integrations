@@ -1,4 +1,4 @@
-import{a as x}from"./chunk-HXQHCZHR.js";import{a as U}from"./chunk-L43VNPJE.js";import{a as h,b as O,c as W,d as C,e as B}from"./chunk-6CZKKW3I.js";var D=h(O(),1),V=h(W(),1);var s=h(O(),1);var e=h(C(),1),o=window.__t||((n,y)=>y),K="SIMULATE_NOT_PROVIDED",R="example-tenant",Q=`tenants:
+import{a as x}from"./chunk-PSTAJLY2.js";import{a as U}from"./chunk-6SEM7P6W.js";import{a as h,b as O,c as W,d as C,e as B}from"./chunk-O6ZQ332T.js";var D=h(O(),1),V=h(W(),1);var s=h(O(),1);var e=h(C(),1),o=window.__t||((n,y)=>y),K="SIMULATE_NOT_PROVIDED",R="example-tenant",Q=`tenants:
   example-tenant:
     cpu_threshold: 70
     routing_channel: "slack:#tenant-alerts"

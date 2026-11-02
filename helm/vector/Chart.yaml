@@ -24,12 +24,13 @@ type: application
 # 0.10.0 — #1288: the origin split now binds on the producer's NAMESPACE as well as its pod label (evidenceChannel.podNamespace / .gatewayNamespace, "" disables). A pod declares its own labels but cannot choose its namespace, so this is the only self-assignment-proof half of the split; a labelled row from anywhere else lands in the unconsumed `_unmatched` output. ⚠️ BEHAVIOUR CHANGE for installs whose producers live elsewhere — set the two values or that branch goes quiet (evidence: loud, EvidenceChannelDown fires; gateway: SILENT). Also closes the half-guard on evidenceChannel.events/keepFields: they were checked for emptiness only, so an override that merely dropped a member rendered a permanently-green plane carrying no evidence
 # 0.10.1 — #1278: projectionGate.image.tag 0.1.0 -> 0.1.1. The gate's runtime base moved to alpine 3.23.6 (libcrypto3 3.5.8, CVE-2026-14456) but the tag did not, and with no digest set an unchanged tag means no rollout. PATCH: no new value keys. ⚠️ REQUIRES ACTION when tenantProjections is set: rebuild projection-gate/Dockerfile and push it as 0.1.1 BEFORE upgrading, or the gate init-container cannot pull and Vector does not start on that node
 # 0.10.2 — the documented SIEM credential pattern (`${SPLUNK_TOKEN}` in additionalSinks, fed by extraEnv/extraEnvFrom) never worked: Vector 0.57.0 leaves `${VAR}` literal unless VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION is set, so the sink shipped the literal string as its token with no error. The vector container now sets it (rationale in templates/daemonset.yaml). PATCH: no new value keys. ⚠️ BEHAVIOUR CHANGE: a `${VAR}` in additionalSinks whose var is not provided now fails the config load (pod does not start) instead of shipping a literal, and any bare `$NAME` in an additionalSinks string is now substituted
-version: 0.10.2
+# 0.10.3 — #3520: Vector 0.57.0 -> 0.61.0 (image tag + digest, appVersion), clearing libssl3 CVE-2026-84782 (0.58-0.60 still carry it). Checked against the 0.58-0.61 breaking changes and VRL 0.35-0.38: the chart uses none of the removed components/options (http source alias, logdna, azure_monitor_logs, influxdb namespace, boolean vector-sink compression, datadog v1 series) and none of the VRL functions whose typing changed (join & co., to_unix_timestamp nanoseconds); ${VAR} interpolation semantics are unchanged. The removed buffer_events / buffer_byte_size gauges are not read by any rule (rules use *_discarded_events_total). PATCH: no new value keys
+version: 0.10.3
 # appVersion: pinned Vector release — MUST equal values.yaml `image.tag`'s
 # release component (the tag adds a `-distroless-libc` variant suffix) and the
 # CLI pinned in ci.yml / .devcontainer/install-vector.sh. Bound by
 # tests/shared/test_vector_pin_parity.py.
-appVersion: "0.57.0"
+appVersion: "0.61.0"
 keywords:
   - dynamic-alerting
   - log-aggregation

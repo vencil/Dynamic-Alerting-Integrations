@@ -869,7 +869,7 @@ data:
       {{- end }}
       {{- if .Values.metrics.enabled }}
       # Vector self-telemetry — events_in / events_out / dropped /
-      # buffer_events. Each node scrapes its local Vector via the pod
+      # buffer_size_events (the old buffer_events gauge is gone since 0.58). Each node scrapes its local Vector via the pod
       # IP (Prometheus scrape annotations live on the DaemonSet pod).
       prometheus:
         type: prometheus_exporter
