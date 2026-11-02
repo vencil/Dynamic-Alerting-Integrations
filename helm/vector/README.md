@@ -2,7 +2,7 @@
 
 Node-level log shipper for the platform log-aggregation pipeline ([#539](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/539) Phase 1).
 
-Built on **Vector** (`timberio/vector:0.57.0-distroless-libc`) — sink-agnostic, VRL-transformable. The Vector pick over Fluent Bit / Promtail / Alloy is recorded in the source issue §3 (Promtail deprecated; Alloy loses home turf with VictoriaLogs; VRL is the right tool for the demux that matters).
+Built on **Vector** (`timberio/vector:0.61.0-distroless-libc`) — sink-agnostic, VRL-transformable. The Vector pick over Fluent Bit / Promtail / Alloy is recorded in the source issue §3 (Promtail deprecated; Alloy loses home turf with VictoriaLogs; VRL is the right tool for the demux that matters).
 
 ## Pipeline
 
@@ -152,7 +152,7 @@ extraEnv:
     valueFrom: {secretKeyRef: {name: splunk-hec, key: token}}
 ```
 
-**How `${SPLUNK_TOKEN}` gets expanded.** Vector (0.57.0, the pinned release) does **not** expand environment variables in config files by default — `${VAR}` stays literal, with no error, so the sink would authenticate with the string `${SPLUNK_TOKEN}`. The chart therefore sets `VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true` on the `vector` container (rationale in `templates/daemonset.yaml`). What "dangerously" means, and what follows for you:
+**How `${SPLUNK_TOKEN}` gets expanded.** Vector (0.61.0, the pinned release) does **not** expand environment variables in config files by default — `${VAR}` stays literal, with no error, so the sink would authenticate with the string `${SPLUNK_TOKEN}`. The chart therefore sets `VECTOR_DANGEROUSLY_ALLOW_ENV_VAR_INTERPOLATION=true` on the `vector` container (rationale in `templates/daemonset.yaml`). What "dangerously" means, and what follows for you:
 
 - A referenced variable that is not provided **fails the config load** — the pod does not start. Wire the Secret before adding the sink.
 - Substitution is textual and happens before YAML/VRL parsing. A value containing `"` can break out of the string it lands in, and a value containing a newline is rejected: credential values must contain neither. (A `$` inside a *value* is not re-expanded.)

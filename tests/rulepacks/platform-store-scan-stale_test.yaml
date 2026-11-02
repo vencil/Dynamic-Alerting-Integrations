@@ -5,7 +5,7 @@
 #   4) no tenant-api at all (no tenant_api_up, no timestamp) → silent.
 # Run: promtool test rules tests/rulepacks/platform-store-scan-stale_test.yaml
 rule_files:
-  - platform-store-scan-stale.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -29,6 +29,17 @@ tests:
               job: tenant-api
               instance: 10.0.0.2:8080
             exp_annotations:
+              description: |
+                tenant-api's scrape-time walk of its own conf.d copy has not
+                succeeded within the rule's threshold, or never has since the
+                pod started, so tenant_api_store_unreadable_entries is missing or
+                stale and TenantApiStoreUnreadable cannot fire. Writes are judged
+                on their own walks and are not affected by this alert itself.
+                Check the tenant-api log for walk errors and the conf.d volume
+                (a missing directory, a hung mount: the walk has a time limit and
+                then fails fast until the stuck walk returns — restart the pod to
+                clear it). The alert clears once a walk succeeds.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
               summary: "tenant-api cannot measure its conf.d copy — TenantApiStoreUnreadable is blind"
 
   # The last success is at 300s (5m) and never moves again: the age passes
@@ -56,6 +67,17 @@ tests:
               job: tenant-api
               instance: 10.0.0.2:8080
             exp_annotations:
+              description: |
+                tenant-api's scrape-time walk of its own conf.d copy has not
+                succeeded within the rule's threshold, or never has since the
+                pod started, so tenant_api_store_unreadable_entries is missing or
+                stale and TenantApiStoreUnreadable cannot fire. Writes are judged
+                on their own walks and are not affected by this alert itself.
+                Check the tenant-api log for walk errors and the conf.d volume
+                (a missing directory, a hung mount: the walk has a time limit and
+                then fails fast until the stuck walk returns — restart the pod to
+                clear it). The alert clears once a walk succeeds.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
               summary: "tenant-api cannot measure its conf.d copy — TenantApiStoreUnreadable is blind"
 
   # Healthy: the timestamp is refreshed every scrape (it equals the sample

@@ -868,3 +868,39 @@ def test_json_output_exit_is_the_error_verdict(tmp_path, monkeypatch, capsys, er
                                       "--json-output"])
     assert emit_result(ms.main()) == rc
     assert json.loads(capsys.readouterr().out)["errors"] == errors
+
+
+def test_push_to_a_server_that_does_not_answer_http_is_nonfatal(capsys):
+    """#3477: a --pushgateway that replies with something other than HTTP
+    (http.client.BadStatusLine — not an OSError) is a WARN like every other
+    push failure, not a crash after the silences were already created."""
+    import socket
+    import threading
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+
+    def serve():
+        conn, _ = srv.accept()
+        try:
+            conn.recv(65536)
+            conn.sendall(b"GARBAGE NOT HTTP\r\n\r\n")
+        finally:
+            conn.close()
+
+    t = threading.Thread(target=serve, daemon=True)
+    t.start()
+    try:
+        ms.push_metrics(f"http://127.0.0.1:{srv.getsockname()[1]}", 1, 0, 0, 0.1)
+    finally:
+        t.join(5)
+        srv.close()
+    assert "WARN: failed to push metrics" in capsys.readouterr().err
+
+
+def test_transport_errors_cover_a_reply_that_is_not_http():
+    """The one list (#3477) carries what urllib raises past OSError."""
+    import http.client
+    import _lib_prometheus
+    assert issubclass(http.client.BadStatusLine, _lib_prometheus.TRANSPORT_ERRORS)
+    assert issubclass(http.client.IncompleteRead, _lib_prometheus.TRANSPORT_ERRORS)

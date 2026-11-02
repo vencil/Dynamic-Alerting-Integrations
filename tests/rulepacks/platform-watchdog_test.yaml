@@ -11,7 +11,7 @@
 #   4) It does NOT fire on a single transient blip that clears before the 15m hold.
 # Run: promtool test rules tests/rulepacks/platform-watchdog_test.yaml
 rule_files:
-  - platform-watchdog.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -26,6 +26,14 @@ tests:
           - exp_labels:
               severity: none
             exp_annotations:
+              description: |
+                Always-firing alert that certifies the whole alerting pipeline
+                (Prometheus rule evaluation → Alertmanager routing → external
+                egress) is functional. An external dead-man's-switch expects it on
+                a fixed cadence and alarms when it STOPS. Do NOT Silence this
+                alert, and do NOT add an inhibit rule whose target_matchers match
+                alertname="Watchdog" (ADR-025).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/alerting-plane-self-liveness.md"
               summary: "Alerting pipeline heartbeat — if this stops reaching the external monitor, Prometheus/Alertmanager is down"
       - eval_time: 30m
         alertname: Watchdog
@@ -33,6 +41,14 @@ tests:
           - exp_labels:
               severity: none
             exp_annotations:
+              description: |
+                Always-firing alert that certifies the whole alerting pipeline
+                (Prometheus rule evaluation → Alertmanager routing → external
+                egress) is functional. An external dead-man's-switch expects it on
+                a fixed cadence and alarms when it STOPS. Do NOT Silence this
+                alert, and do NOT add an inhibit rule whose target_matchers match
+                alertname="Watchdog" (ADR-025).
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/alerting-plane-self-liveness.md"
               summary: "Alerting pipeline heartbeat — if this stops reaching the external monitor, Prometheus/Alertmanager is down"
 
   # 2) Sustained webhook failure: the failed-notifications counter climbs every
@@ -51,6 +67,15 @@ tests:
               alert_source: platform
               integration: webhook
             exp_annotations:
+              description: |
+                Alertmanager logged webhook notification failures over the last
+                10m. The Watchdog heartbeat (and any other webhook receiver) may
+                not be reaching its external endpoint, so the external
+                dead-man's-switch could false-alarm "platform dead". Check the
+                watchdog-heartbeat url_file Secret (populated? valid URL? token
+                live?) and the egress/firewall path to the heartbeat endpoint. If
+                the url_file is still the deploy placeholder, populate the Secret.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/alerting-plane-self-liveness.md"
               summary: "Alertmanager webhook notifications are failing — Watchdog heartbeat may not be egressing"
 
   # 3) Healthy egress: counter flat (no failures) → increase[10m] == 0 → no fire.
@@ -103,6 +128,25 @@ tests:
               cronjob: threshold-govern
               namespace: monitoring
             exp_annotations:
+              description: |
+                The weekly threshold-governance CronJob (threshold-govern,
+                Mondays 03:00 UTC) has not recorded a successful run for 8
+                days — at least one weekly run was missed or has been
+                failing, so drifted thresholds are no longer being
+                retightened into proposed-PRs.
+                NOT urgent: config rot degrades over weeks, there is no 3am
+                action — triage in business hours. Check (a) the CronJob is
+                not suspended, (b) recent threshold-govern Jobs and their
+                logs (`kubectl get jobs -n monitoring`), (c) tenant-api
+                reachability from the monitoring namespace.
+                did-it-run != did-it-work: a run whose failed tenant-api
+                writes (errors + circuit-breaker skips) reach >= 90% of the
+                attempted writes exits non-zero (Job Failed) even if it opened
+                a PR, and does NOT advance last_successful_time, so this fires
+                on a silent near-total write failure too — not only when the
+                scheduler stops. A CronJob deleted entirely is not caught here
+                (its KSM series vanishes); that surfaces at deploy/review time.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#threshold-govern"
               summary: "Threshold-governance loop has not succeeded in 8 days"
 
   # 6) Recent success: last_successful_time ~now → time() - value small → no fire.

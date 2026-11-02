@@ -556,9 +556,11 @@ def process_rule_packs(
 
     # The rule packs: the one declaration of which files in a rule-packs
     # directory are rule packs (#3426: rule-pack-*.yaml|yml; an undeclared
-    # YAML there is named, never passed over).
+    # YAML there is named, never passed over). #1595 D1a: tenant packs only —
+    # a declared platform pack (`PLATFORM_PACKS`) watches the platform's own
+    # stack, has no edge normalization part, and is not split.
     try:
-        rule_files = _lib_consumer_read.rule_pack_files(rule_packs_path)
+        rule_files = _lib_consumer_read.tenant_rule_pack_files(rule_packs_path)
     except _lib_consumer_read.ConsumerReadError as e:
         report["errors"].append(f"rule packs: {_lib_consumer_read.error_text(e)}")
         report["status"] = "error"

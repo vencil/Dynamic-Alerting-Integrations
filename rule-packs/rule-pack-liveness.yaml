@@ -65,8 +65,9 @@
 # === Scale sentinel / catastrophic fallback ===
 # 整 job 蒸發 (collector 自己掛 → anti-join 左手邊空) 的 catastrophic 兜底
 # 與 page-storm 守門 (MassExporterOutage) 因為帶 `without(tenant)` /
-# 無-tenant-label 會被 lint_custom_rules deny-list 擋在 rule-packs/ 外，
-# 改放手維護的 k8s/03-monitoring/configmap-rules-platform.yaml
+# 無-tenant-label 不屬於 tenant pack（lint_custom_rules deny-list），
+# 改放平台 pack rule-packs/rule-pack-platform.yaml（#1595 D1a 起的來源；
+# 部署副本 k8s/03-monitoring/configmap-rules-platform.yaml 由它生成）
 # (platform-self-monitoring group，與 DefaultsTruncationStorm 同居)。
 #
 # 副本 cascade：編輯本檔後須 `make rulepack-configmaps` 同步

@@ -27,6 +27,7 @@ _DOCKERFILE = _REPO / "components" / "da-tools" / "app" / "Dockerfile"
 _AM_DEPLOYMENT = _REPO / "k8s" / "03-monitoring" / "deployment-alertmanager.yaml"
 _THIRD_PARTY = _REPO / "components" / "da-tools" / "app" / "third_party" / "alertmanager"
 _DA_READ_GOMOD = _REPO / "components" / "da-read" / "go.mod"
+_INHIBIT_GOMOD = _REPO / "tests" / "alertmanager-inhibit" / "go.mod"
 
 # `COPY --from=<ref> ...` where <ref> names the Alertmanager image. Anchored to
 # the instruction (not a free-text search) so a comment quoting a ref cannot
@@ -110,11 +111,11 @@ def test_upstream_license_and_notice_ship_with_amtool() -> None:
         "Dockerfile must COPY the vendored LICENSE and NOTICE into /usr/share/doc/amtool/")
 
 
-def _da_read_alertmanager_version() -> str:
-    """The prometheus/alertmanager version components/da-read/go.mod requires.
+def _gomod_alertmanager_version(gomod: Path) -> str:
+    """The prometheus/alertmanager version a go.mod requires.
     Read from the `require` directive (single-line or block form), not by a
     free-text search, so a comment naming a version cannot satisfy it."""
-    text = _DA_READ_GOMOD.read_text(encoding="utf-8")
+    text = gomod.read_text(encoding="utf-8")
     versions = []
     in_block = False
     for raw in text.splitlines():
@@ -135,8 +136,12 @@ def _da_read_alertmanager_version() -> str:
             versions.append(fields[1])
     assert len(versions) == 1, (
         f"expected exactly one github.com/prometheus/alertmanager requirement in "
-        f"{_DA_READ_GOMOD.relative_to(_REPO).as_posix()}, found {versions}")
+        f"{gomod.relative_to(_REPO).as_posix()}, found {versions}")
     return versions[0]
+
+
+def _da_read_alertmanager_version() -> str:
+    return _gomod_alertmanager_version(_DA_READ_GOMOD)
 
 
 def test_da_read_builds_with_the_amtool_alertmanager_version() -> None:
@@ -154,3 +159,26 @@ def test_da_read_builds_with_the_amtool_alertmanager_version() -> None:
         f"github.com/prometheus/alertmanager {gomod}, but the da-tools image "
         f"ships amtool {tag}. Bump them together (`go get "
         f"github.com/prometheus/alertmanager@{tag} && go mod tidy` in components/da-read).")
+
+
+def test_inhibit_semantics_module_links_the_deployed_alertmanager() -> None:
+    """#3522: tests/alertmanager-inhibit evaluates the checked-in Alertmanager
+    configs with Alertmanager's own parser and matcher, and its go.mod says it
+    is pinned to the version k8s deploys. Nothing held that: it sat at v0.33.1
+    while the deployment moved to v0.34.1 and then v0.34.2 — across the
+    v0.34.1 inhibition fixes this module exists to test, and across v0.34.2's
+    switch to strict URL colons. The deployed tag (the ref the amtool COPY is
+    already bound to above) must equal the module's requirement.
+
+    Who bumps it: a human, in the Renovate PR that moves the image. Renovate
+    cannot — renovate.json's global ignorePaths covers `**/tests/**`, so no
+    custom manager can reach this go.mod — and that is fail-closed by design:
+    this test turns that grouped PR red until the module follows."""
+    deployed = _deployed_alertmanager_image().split(":", 1)[1].split("@", 1)[0]
+    gomod = _gomod_alertmanager_version(_INHIBIT_GOMOD)
+    assert gomod == deployed, (
+        f"{_INHIBIT_GOMOD.relative_to(_REPO).as_posix()} requires "
+        f"github.com/prometheus/alertmanager {gomod}, but "
+        f"{_AM_DEPLOYMENT.relative_to(_REPO).as_posix()} deploys {deployed}. "
+        f"Bump them together (`go get github.com/prometheus/alertmanager@{deployed} "
+        f"&& go mod tidy` in tests/alertmanager-inhibit).")

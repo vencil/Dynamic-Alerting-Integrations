@@ -1490,6 +1490,41 @@ class RuleSource(NamedTuple):
 #: patterns for it, and no second glob exists.
 RULE_PACKS = RuleSource(
     "rule-packs", ("rule-pack-*.yaml", "rule-pack-*.yml"), ("threshold-registry.yaml",))
+#: ⛔ The PLATFORM packs (#1595 D1a): the rule packs whose alerts watch the
+#: platform itself — every alert but the heartbeat carries the RESERVED
+#: ``alert_source: platform`` and none is a tenant's threshold. The one
+#: declaration: the rule-tree contracts (``scripts/tools/lint/_rule_tree.py``
+#: — alert_source RESERVED, heartbeat uniqueness, runbook presence), the
+#: platform-data catalogue, the tenant-pack lints (threshold registry,
+#: maintenance symmetry, vmalert coverage) and ``operator-generate`` all read
+#: it; none of them names a pack itself. Members are ``RULE_PACKS.member``
+#: names. "Required" (always deployed) is a different property: the
+#: operational and liveness packs are required but are tenant packs.
+#: ⛔ Here, not as a key in the pack file: Prometheus' rule loader refuses any
+#: top-level key but ``groups`` (``field kind not found in type
+#: rulefmt.RuleGroups``), and every reader of a pack reads it that way.
+#: ⛔ Not operator-portable (#1595 D1b): their exprs select this repo's own
+#: scrape jobs (``tenant-exporters``, ``prometheus``, ``threshold-govern``),
+#: which a kube-prometheus-stack install does not have, so
+#: ``operator-generate`` emits no PrometheusRule for them.
+PLATFORM_PACKS: "frozenset[str]" = frozenset({"platform"})
+
+
+def is_platform_pack(name: "str | None") -> bool:
+    """Whether the pack *name* (a ``RULE_PACKS.member``) is declared a
+    platform pack (``PLATFORM_PACKS``)."""
+    return name in PLATFORM_PACKS
+
+
+def tenant_rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathlib.Path]":
+    """``rule_pack_files`` less the declared platform packs (``PLATFORM_PACKS``):
+    the packs a TENANT-pack contract judges — the custom-rule policy, the
+    threshold contract, maintenance symmetry, vmalert coverage — and the packs
+    ``operator-generate`` makes portable. Same refusals as ``rule_pack_files``."""
+    return [p for p in rule_pack_files(rule_packs)
+            if not is_platform_pack(RULE_PACKS.member(p))]
+
+
 #: The PrometheusRule copies of the rule packs: how ``operator-generate``
 #: names each one it writes (``da-rule-pack-<pack>.yaml``, object name the
 #: stem) — into whatever ``--output-dir`` its caller gives. ⛔ NOT a place
@@ -1513,8 +1548,8 @@ PROMETHEUS_RULE_SELECTOR_LABELS: "dict[str, str]" = {
     "prometheus": "kube-prometheus",
     "release": "kube-prometheus-stack",
 }
-#: k8s/03-monitoring/: the rules ConfigMaps Prometheus mounts — the copies of
-#: the rule packs and the hand-authored platform rules.
+#: k8s/03-monitoring/: the rules ConfigMaps Prometheus mounts — the generated
+#: copies of the rule packs (the platform pack's included, #1595).
 CONFIGMAP_RULES = RuleSource(
     "k8s/03-monitoring", ("configmap-rules-*.yaml", "configmap-rules-*.yml"), (
         "configmap-alertmanager.yaml",

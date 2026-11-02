@@ -17,7 +17,7 @@
 # time()), so small integers are sufficient and the test does not depend on the
 # evaluation wall clock.
 rule_files:
-  - platform-cronjob-failure.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -53,6 +53,27 @@ tests:
               owner_name: threshold-govern
               namespace: monitoring
             exp_annotations:
+              description: |
+                The most recent Job created by CronJob threshold-govern
+                in namespace monitoring ended in a Failed
+                condition. Unlike ThresholdGovernanceStale — which needs a
+                PREVIOUS success to measure staleness against — this fires the
+                first time a run fails, including for a CronJob that has never
+                succeeded even once.
+                NOT urgent: platform CronJobs are weekly (threshold-govern) or
+                every-5-minutes (maintenance-scheduler); neither carries a 3am
+                action. Triage in business hours.
+                Check: (a) `kubectl get jobs -n monitoring` and the
+                failing pod's logs; (b) whether the CronJob's pinned image
+                actually contains the program it invokes — that failure mode is
+                what motivated this alert and is now also gated at CI time by
+                scripts/tools/lint/check_image_pin_capability.py; (c) whether a
+                dependency the Job talks to (tenant-api, Prometheus) is
+                reachable from this namespace.
+                Self-resolving: a subsequent successful run clears this without
+                anyone deleting the failed Job. Suspending the CronJob also
+                silences it, matching ThresholdGovernanceStale.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#171-cronjoblastrunfailed"
               summary: "CronJob threshold-govern: most recent run failed"
 
   # ── does NOT fire: an older Job failed but the latest one succeeded ─────
@@ -119,6 +140,27 @@ tests:
               owner_name: maintenance-scheduler
               namespace: monitoring
             exp_annotations:
+              description: |
+                The most recent Job created by CronJob maintenance-scheduler
+                in namespace monitoring ended in a Failed
+                condition. Unlike ThresholdGovernanceStale — which needs a
+                PREVIOUS success to measure staleness against — this fires the
+                first time a run fails, including for a CronJob that has never
+                succeeded even once.
+                NOT urgent: platform CronJobs are weekly (threshold-govern) or
+                every-5-minutes (maintenance-scheduler); neither carries a 3am
+                action. Triage in business hours.
+                Check: (a) `kubectl get jobs -n monitoring` and the
+                failing pod's logs; (b) whether the CronJob's pinned image
+                actually contains the program it invokes — that failure mode is
+                what motivated this alert and is now also gated at CI time by
+                scripts/tools/lint/check_image_pin_capability.py; (c) whether a
+                dependency the Job talks to (tenant-api, Prometheus) is
+                reachable from this namespace.
+                Self-resolving: a subsequent successful run clears this without
+                anyone deleting the failed Job. Suspending the CronJob also
+                silences it, matching ThresholdGovernanceStale.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#171-cronjoblastrunfailed"
               summary: "CronJob maintenance-scheduler: most recent run failed"
 
   # ── one alert, not two, when kube-state-metrics runs >1 replica ─────────
@@ -152,6 +194,27 @@ tests:
               owner_name: threshold-govern
               namespace: monitoring
             exp_annotations:
+              description: |
+                The most recent Job created by CronJob threshold-govern
+                in namespace monitoring ended in a Failed
+                condition. Unlike ThresholdGovernanceStale — which needs a
+                PREVIOUS success to measure staleness against — this fires the
+                first time a run fails, including for a CronJob that has never
+                succeeded even once.
+                NOT urgent: platform CronJobs are weekly (threshold-govern) or
+                every-5-minutes (maintenance-scheduler); neither carries a 3am
+                action. Triage in business hours.
+                Check: (a) `kubectl get jobs -n monitoring` and the
+                failing pod's logs; (b) whether the CronJob's pinned image
+                actually contains the program it invokes — that failure mode is
+                what motivated this alert and is now also gated at CI time by
+                scripts/tools/lint/check_image_pin_capability.py; (c) whether a
+                dependency the Job talks to (tenant-api, Prometheus) is
+                reachable from this namespace.
+                Self-resolving: a subsequent successful run clears this without
+                anyone deleting the failed Job. Suspending the CronJob also
+                silences it, matching ThresholdGovernanceStale.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#171-cronjoblastrunfailed"
               summary: "CronJob threshold-govern: most recent run failed"
 
   # ── does NOT fire: never scheduled (cold start) ─────────────────────────

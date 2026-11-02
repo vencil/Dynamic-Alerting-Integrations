@@ -11,7 +11,7 @@
 # selectors. Run:
 #   promtool test rules tests/rulepacks/platform-config-reloader-notstarting_test.yaml
 rule_files:
-  - platform-config-reloader-notstarting.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -34,6 +34,19 @@ tests:
               namespace: monitoring
               pod: prometheus-7c9d-abcde
             exp_annotations:
+              description: |
+                The config-reloader container is stuck waiting (image pull failure,
+                bad image reference, container-config error, or a crash loop) and has
+                never run. Two consequences, the second easy to miss: hot reload is
+                dead for whatever this sidecar watches, AND the pod cannot become
+                Ready while one of its containers is not — so if this is the
+                Prometheus pod, the `prometheus` Service has NO endpoints and every
+                consumer (Grafana datasource, federation-proxy upstream) is down even
+                though the Prometheus process itself is healthy. `kubectl describe
+                pod` gives the reason; an unreachable quay.io on a fresh or
+                air-gapped cluster is the most common cause — mirror the reloader
+                image into your registry and repoint it.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md"
               summary: "config-reloader sidecar in prometheus-7c9d-abcde cannot start — pod held NotReady"
 
   # 2) Healthy start-up: the container is briefly ContainerCreating, a reason that is

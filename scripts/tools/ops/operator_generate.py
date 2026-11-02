@@ -498,7 +498,8 @@ def build_alertmanager_config(
 
 
 def discover_rule_packs(rule_packs_dir: Path) -> List[Path]:
-    """Discover all rule-pack-*.yaml files.
+    """Discover the operator-portable rule packs: every declared rule pack but
+    the platform packs (``_lib_consumer_read.PLATFORM_PACKS``, #1595).
 
     Args:
         rule_packs_dir: Directory containing rule packs
@@ -519,7 +520,12 @@ def discover_rule_packs(rule_packs_dir: Path) -> List[Path]:
     # #3426: the one declaration of what in a rule-packs directory is a rule
     # pack (rule-pack-*.yaml|yml; an undeclared YAML there raises
     # `SourcesUnlisted`, a ConsumerReadError: `main` stops at rc 2 naming it).
-    return _lib_consumer_read.rule_pack_files(rule_packs_dir)
+    # #1595 D1a: the declared platform packs are not operator-portable yet —
+    # their exprs select this repo's own scrape jobs, which a
+    # kube-prometheus-stack install does not have (D1b) — so no PrometheusRule
+    # is generated for them. Which packs those are is the declaration's
+    # (`PLATFORM_PACKS`), not a name spelled here.
+    return _lib_consumer_read.tenant_rule_pack_files(rule_packs_dir)
 
 
 def validate_tenant_name(name: str) -> bool:

@@ -234,6 +234,10 @@ tests/shared/test_yaml_loader_is_libyaml.py
 # no-join / canonical-template tests — rewritten, not truncated.
 tests/lint/test_check_leftouterjoin_enrichment.py
 
+# #1595 D1a: the platform ConfigMap is GENERATED from rule-packs/rule-pack-platform.yaml
+# now; the generator emits no comments, so the copy shrank — removed comments, not truncated.
+k8s/03-monitoring/configmap-rules-platform.yaml
+
 # #3223: the absolute-ns/op trend watchdog (`--trend-watch`) is retired, so
 # its ~1800-line implementation and ~4400 lines of tests are removed; the
 # GO/NO-GO variance table and the gh helpers stay — removed, not truncated.

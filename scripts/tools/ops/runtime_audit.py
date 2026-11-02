@@ -61,6 +61,10 @@ Known limitations (honest boundaries — not claimed away)
   deployment that loads only a subset will see the disabled packs reported as
   MISSING. Lever: point ``--rule-packs-dir`` at only the enabled packs. (The
   ORPHAN direction is unaffected — it is scoped to declared groups.)
+- ``declared`` includes the platform pack (``rule-pack-platform.yaml``, #1595).
+  Under the Prometheus Operator, ``operator-generate`` does not emit it yet, so
+  its alerts are reported MISSING there: they really are not running. Same
+  lever as above if you need a clean run before that lands.
 - Rule identity is ``(group, name)``. A pathological same-group collision
   (a ``record:`` and an ``alert:`` sharing one name in one group) is not
   distinguished; conventional naming (``level:metric:op`` vs ``CamelCase``)

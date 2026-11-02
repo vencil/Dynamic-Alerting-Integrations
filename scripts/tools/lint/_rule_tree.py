@@ -76,11 +76,11 @@ def _find_repo_root() -> str:
 
 _REPO_ROOT = _find_repo_root()
 
-# ⛔ Read by tests/lint/test_check_pint.py with a REGEX, not an import, so that
-# .pint.hcl's include pattern and this prefix cannot drift apart. It has no
-# in-module caller by design: which files are read is the rule-source
-# declaration and whether a rule is platform is decided by provenance, so this
-# is only used for HUMAN-READABLE messages. Deleting it as "unused" breaks that lockstep.
+# Only used for HUMAN-READABLE messages (the contract tests name where the
+# platform rules deploy). It has no in-module caller by design: which files are
+# read is the rule-source declaration, and whether a rule is platform is decided
+# by provenance and `_lib_consumer_read.PLATFORM_PACKS` (#1595 D1a) — never by
+# this name.
 _PLATFORM_CM_PREFIX = "configmap-rules-platform"
 # Both extensions: a rules ConfigMap named `.yml` was silently skipped by the
 # scanner, which is the same "escapes the gate by being named differently" hole.
@@ -210,8 +210,11 @@ def _is_platform_cm_location(where: str) -> bool:
     `where` is "<configmap-path>:<data-key>" on the ConfigMap side and a bare
     rule-pack path on the source side; only the former can be platform.
 
-    THE CRITERION IS "no rule-packs/ source", not "the filename starts with
-    configmap-rules-platform". `_iter_repo_alert_rules`'s own docstring already
+    THE CRITERION IS "not a copy of a TENANT pack" (#1595 D1a: a copy of a
+    pack declared in `_lib_consumer_read.PLATFORM_PACKS` is platform, and so
+    is anything no pack accounts for), not "the filename starts with
+    configmap-rules-platform". Before D1a the platform rules had no
+    rule-packs/ source at all, and the criterion read "no rule-packs/ source". `_iter_repo_alert_rules`'s own docstring already
     states the intent — "any HAND-AUTHORED rules ConfigMap OUTSIDE rule-packs/,
     which is configmap-rules-platform.yaml today AND WHATEVER IS ADDED LATER" —
     and a filename prefix is a proxy for that intent that fails two ways:
@@ -239,9 +242,22 @@ def _is_platform_cm_location(where: str) -> bool:
     return where in _platform_rule_locations()
 
 
+def _is_platform_deployment(where: str) -> bool:
+    """`_is_platform_cm_location` less the rule-packs/ sources: each platform
+    rule ONCE, as it deploys. For the contracts that COLLECT the platform rules
+    (uniqueness, runbook coverage, label sets) — since #1595 D1a the platform
+    pack's source and its generated copy are two readings of one rule, and the
+    copy equals the source (check_rulepack_sync). The contracts that FORBID
+    something outside the platform tree keep `_is_platform_cm_location`, under
+    which the source is platform too."""
+    return _is_platform_cm_location(where) and not where.startswith(_RULE_PACKS_DIR)
+
+
 @functools.lru_cache(maxsize=1)
 def _platform_rule_locations() -> frozenset:
-    """Every container that is NOT a generated copy of a source rule pack.
+    """Every container that is NOT a generated copy of a TENANT rule pack:
+    the copies of the declared platform packs (`PLATFORM_PACKS`, #1595) and
+    everything no pack accounts for.
 
     ⛔ Unknown provenance counts as PLATFORM. That direction is the whole point:
     a hand-authored alerting tree the scanner cannot attribute to a generator is
@@ -257,7 +273,12 @@ def _platform_rule_locations() -> frozenset:
     out = set()
     for where, doc, claimed in _rule_containers():
         if where.startswith(_RULE_PACKS_DIR):
-            continue                       # the source tree is never a deployment
+            # The source tree is never a deployment — but a DECLARED platform
+            # pack's source is the platform tree itself (#1595 D1a), and its
+            # rules are platform rules wherever they are read.
+            if _lib_consumer_read.is_platform_pack(claimed):
+                out.add(where)
+            continue
         mine = _alert_names(doc)
         # ⛔ A CLAIM is not provenance; a MATCH is. The header, the object name
         # and the path are all just strings an author controls, so "generated"
@@ -268,18 +289,25 @@ def _platform_rule_locations() -> frozenset:
         # BE in the pack it names makes forgery cost as much as writing the
         # rules, and makes an empty decoy worthless (an empty pack is a
         # superset of nothing).
+        # ⛔ #1595 D1a: a copy of a pack DECLARED platform
+        # (`_lib_consumer_read.PLATFORM_PACKS`) is platform — its provenance is
+        # real, and so is its scope. Only a copy of a TENANT pack leaves; the
+        # pack's name never decides which kind it is.
         if claimed and mine and mine <= pack_alerts.get(claimed, frozenset()):
-            continue
+            if not _lib_consumer_read.is_platform_pack(claimed):
+                continue
         # …and a copy whose NAME says nothing is still generated if its content
         # says so. Without this, an operator manifest called anything other than
         # `da-rule-pack-<x>` was declared platform-scope and the diagnostic told
         # the maintainer to put `alert_source: platform` on tenant alerts —
         # reserved-label misuse, the exact failure the old prefix criterion was
         # replaced for.
-        if mine and any(mine <= alerts for alerts in pack_alerts.values()):
+        elif mine and any(mine <= alerts for pack, alerts in pack_alerts.items()
+                          if not _lib_consumer_read.is_platform_pack(pack)):
             continue
-        if not mine and claimed and claimed in pack_alerts:
-            continue                       # recording-only key of a real pack
+        elif (not mine and claimed and claimed in pack_alerts
+              and not _lib_consumer_read.is_platform_pack(claimed)):
+            continue                       # recording-only key of a tenant pack
         out.add(where)
     return frozenset(out)
 
@@ -526,7 +554,8 @@ def _iter_rule_containers():
     ("GENERATED from rule-packs/rule-pack-X.yaml … DO NOT EDIT", first object
     only — see `_header_provenance`), from a `da-rule-pack-X` object name, or
     from a plain rule file's own name `rule-pack-X`. None means "nobody
-    generated this", which is what makes it a platform artifact — see
+    generated this", which makes it a platform artifact (fail-closed); so
+    does being a copy of a declared platform pack — see
     _is_platform_cm_location.
     """
     yield from _containers_of(_REPO_ROOT, _declared_rule_files())

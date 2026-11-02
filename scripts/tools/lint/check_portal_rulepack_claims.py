@@ -31,9 +31,8 @@ the disease this guard exists to cure.
 
 Shipping rule trees (a name found in EITHER counts as shipped):
   1. rule-packs/rule-pack-<pack>.yaml               (canonical source)
-  2. k8s/03-monitoring/configmap-rules-*.yaml       (ConfigMap deploy copy;
-     includes configmap-rules-platform.yaml, which has NO rule-pack counterpart
-     — platform-scope rules live only here)
+  2. k8s/03-monitoring/configmap-rules-*.yaml       (ConfigMap deploy copy,
+     generated from tree 1 — the platform pack included since #1595)
 
 The packs' copies in tree 2 are kept in lockstep by check_rulepack_sync.py, so
 accepting a match in either cannot silently bless a name that isn't deployed.
@@ -52,8 +51,8 @@ injected/platform series). Only a NON-empty array with unparseable entries is an
 error — see parse_portal_claims.
 
 Matching is name-scoped, not pack-scoped: a portal pack may legitimately surface
-a rule that ships in a neighbouring tree (the `platform` block lists rules from
-configmap-rules-platform.yaml). Pack-level attribution is reported as INFO only.
+a rule that ships in a neighbouring pack (the `platform` block lists rules from
+rule-pack-platform.yaml). Pack-level attribution is reported as INFO only.
 
 Exit codes:
     0  Every portal alert claim resolves to a shipped rule

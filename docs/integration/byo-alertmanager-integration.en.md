@@ -507,7 +507,7 @@ The tool has built-in idempotency checks (no duplicate silence creation) and aut
 
 ## 11. Delivering Platform Self-Monitoring Alerts
 
-The platform ships a self-monitoring rule pack of its own (`k8s/03-monitoring/configmap-rules-platform.yaml`) watching the health of Prometheus / Alertmanager / threshold-exporter / tenant-api / the federation and projection pipelines. **Out of the box they notify nobody**: `Watchdog` rides the index-0 heartbeat route described in [Alerting-Plane Self-Liveness](alerting-plane-self-liveness.en.md), and all the others land in the root `default` receiver, which has no notifier. That is a deliberate shipping posture (we do not pre-wire alerts to a destination we do not know), **not a dead end** — this section explains how to wire them.
+The platform ships a self-monitoring rule pack of its own (source `rule-packs/rule-pack-platform.yaml`, deployed as the generated `k8s/03-monitoring/configmap-rules-platform.yaml`) watching the health of Prometheus / Alertmanager / threshold-exporter / tenant-api / the federation and projection pipelines. **Out of the box they notify nobody**: `Watchdog` rides the index-0 heartbeat route described in [Alerting-Plane Self-Liveness](alerting-plane-self-liveness.en.md), and all the others land in the root `default` receiver, which has no notifier. That is a deliberate shipping posture (we do not pre-wire alerts to a destination we do not know), **not a dead end** — this section explains how to wire them.
 
 The mechanism is the same `_routing_enforced` from §8; only the matcher differs.
 

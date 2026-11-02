@@ -30,6 +30,8 @@ sys.path.insert(0, os.path.join(
 import verify_diff as vd  # noqa: E402
 from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
+_TOOLS = Path(__file__).resolve().parents[2] / "scripts" / "tools"
+
 
 # ============================================================
 # Synthetic repo fixture
@@ -482,6 +484,56 @@ class TestCli:
             cli_argv, [*synth_cli, "--ack-external",
                        "tests/contract/run_contract_tests.py"])
         assert code == 0
+
+    def test_json_run_keeps_stdout_one_document(self, cli_argv, synth_cli,
+                                                capfd, monkeypatch):
+        """#3448：--json --run 時 pytest 的輸出不得進 stdout——stdout 全文是
+        run() 寫出的那份文件，pytest 的輸出在 stderr。用 fd 層 capture：子行程
+        寫的是 fd 1／fd 2，不是 sys.stdout。"""
+        monkeypatch.setattr(vd, "build_pytest_argv", lambda result, n: [
+            sys.executable, "-c", "print('PYTEST-NOISE')"])
+        code = self._run_main(
+            cli_argv, [*synth_cli, "--json", "--run", "scripts/tools/dx/mytool.py"])
+        assert code == 0
+        out, err = capfd.readouterr()
+        doc = json.loads(out)  # 全文 parse＝單一文件
+        assert "tests/dx/test_mytool.py" in doc["selected"]
+        assert "PYTEST-NOISE" in err
+
+    @pytest.mark.parametrize("json_flag", [[], ["--json"]], ids=["text", "json"])
+    def test_run_with_stderr_closed_at_start(self, synth_cli, tmp_path, json_flag):
+        """#3448 審查：fd 2 在啟動時就關了（sys.stderr 為 None）時，結束碼與
+        修正前相同（0），pytest 的輸出不進 stdout。（工具自己的 stderr 行在
+        sys.stderr 為 None 時會被 print 送到 stdout——所有工具共通、修正前
+        就如此，追蹤於 #3518。）"""
+        import shutil
+        if shutil.which("sh") is None:
+            pytest.skip("needs a POSIX sh to start the tool with fd 2 closed")
+        script = tmp_path / "drive.py"
+        script.write_text(
+            "import sys\n"
+            f"sys.path[:0] = [{str(_TOOLS / 'dx')!r}, {str(_TOOLS)!r}]\n"
+            "import verify_diff as vd, _lib_exitcodes\n"
+            "vd.build_pytest_argv = lambda result, n: [sys.executable, '-c', "
+            "\"print('PYTEST' + '-NOISE')\"]\n"  # argv itself never spells it
+            "_lib_exitcodes.run(vd.main)\n", encoding="utf-8")
+        argv = [sys.executable, str(script), *synth_cli, "--run", *json_flag,
+                "scripts/tools/dx/mytool.py"]
+        proc = subprocess.run(["sh", "-c", '"$@" 2>&-', "sh", *argv],
+                              capture_output=False, stdout=subprocess.PIPE,
+                              text=True, encoding="utf-8", timeout=120)
+        assert proc.returncode == 0, proc.stdout
+        if json_flag:
+            assert "PYTEST-NOISE" not in proc.stdout
+
+    def test_text_run_keeps_pytest_on_stdout(self, cli_argv, synth_cli,
+                                             capfd, monkeypatch):
+        """沒有 --json 時不變：pytest 的輸出照舊在 stdout。"""
+        monkeypatch.setattr(vd, "build_pytest_argv", lambda result, n: [
+            sys.executable, "-c", "print('PYTEST-NOISE')"])
+        assert self._run_main(
+            cli_argv, [*synth_cli, "--run", "scripts/tools/dx/mytool.py"]) == 0
+        assert "PYTEST-NOISE" in capfd.readouterr().out
 
     def test_json_carries_unrun_external(self, cli_argv, synth_cli, capsys):
         code = self._run_main(

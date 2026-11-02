@@ -17,7 +17,7 @@
 # counter's first sample at 0 caps it) and the end needs none. That is what
 # lets tests 1 and 4 sit right on the `>= 3` / `>= 0.5` thresholds.
 rule_files:
-  - platform-write-errors-high.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -48,6 +48,29 @@ tests:
               severity: warning
               alert_source: platform
             exp_annotations:
+              description: |
+                In the last hour at least 3 tenant-api write attempts (PUT
+                /tenants/{id}, custom alerts, tenant and group batches, in every
+                write mode) ended in a server-side error, and they are at least
+                half of all write attempts. Writes are being lost: the caller got
+                a 5xx or 429 — a direct write's git or file failure is a 500 whose
+                detail is withheld (#1535) — or a 403 because the forge refused
+                tenant-api's own token. Usually nothing was written and no PR/MR
+                was opened, but a write answered 503 because it timed out may
+                already be committed: refresh before retrying it. One
+                error is the exception: a batch answered 409 with committed: true
+                IS written — its commit landed but did not finish cleanly (the
+                sync after it). Requests refused as invalid or forbidden, and
+                failures after the client went away, are not counted, so this is
+                the write plane, not the callers. Find
+                the cause in the tenant-api log ("internal error response; detail
+                withheld from the client", "forge PR/MR creation failed", git
+                errors) by request_id; check the sibling alerts that name one cause
+                (TenantApiPolicyUnavailable, TenantApiStoreUnreadable, the forge
+                circuit breaker tenant_api_forge_circuit_state). The alert clears
+                once the failing writes leave the 1h window, or successful writes
+                outweigh them.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
               summary: "tenant-api conf.d writes are failing — at least half of the last hour's write attempts ended in a server-side error"
       - eval_time: 50m
         alertname: TenantApiWriteErrorsHigh
@@ -57,6 +80,29 @@ tests:
               severity: warning
               alert_source: platform
             exp_annotations:
+              description: |
+                In the last hour at least 3 tenant-api write attempts (PUT
+                /tenants/{id}, custom alerts, tenant and group batches, in every
+                write mode) ended in a server-side error, and they are at least
+                half of all write attempts. Writes are being lost: the caller got
+                a 5xx or 429 — a direct write's git or file failure is a 500 whose
+                detail is withheld (#1535) — or a 403 because the forge refused
+                tenant-api's own token. Usually nothing was written and no PR/MR
+                was opened, but a write answered 503 because it timed out may
+                already be committed: refresh before retrying it. One
+                error is the exception: a batch answered 409 with committed: true
+                IS written — its commit landed but did not finish cleanly (the
+                sync after it). Requests refused as invalid or forbidden, and
+                failures after the client went away, are not counted, so this is
+                the write plane, not the callers. Find
+                the cause in the tenant-api log ("internal error response; detail
+                withheld from the client", "forge PR/MR creation failed", git
+                errors) by request_id; check the sibling alerts that name one cause
+                (TenantApiPolicyUnavailable, TenantApiStoreUnreadable, the forge
+                circuit breaker tenant_api_forge_circuit_state). The alert clears
+                once the failing writes leave the 1h window, or successful writes
+                outweigh them.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
               summary: "tenant-api conf.d writes are failing — at least half of the last hour's write attempts ended in a server-side error"
       - eval_time: 80m
         alertname: TenantApiWriteErrorsHigh
@@ -148,4 +194,27 @@ tests:
               severity: warning
               alert_source: platform
             exp_annotations:
+              description: |
+                In the last hour at least 3 tenant-api write attempts (PUT
+                /tenants/{id}, custom alerts, tenant and group batches, in every
+                write mode) ended in a server-side error, and they are at least
+                half of all write attempts. Writes are being lost: the caller got
+                a 5xx or 429 — a direct write's git or file failure is a 500 whose
+                detail is withheld (#1535) — or a 403 because the forge refused
+                tenant-api's own token. Usually nothing was written and no PR/MR
+                was opened, but a write answered 503 because it timed out may
+                already be committed: refresh before retrying it. One
+                error is the exception: a batch answered 409 with committed: true
+                IS written — its commit landed but did not finish cleanly (the
+                sync after it). Requests refused as invalid or forbidden, and
+                failures after the client went away, are not counted, so this is
+                the write plane, not the callers. Find
+                the cause in the tenant-api log ("internal error response; detail
+                withheld from the client", "forge PR/MR creation failed", git
+                errors) by request_id; check the sibling alerts that name one cause
+                (TenantApiPolicyUnavailable, TenantApiStoreUnreadable, the forge
+                circuit breaker tenant_api_forge_circuit_state). The alert clears
+                once the failing writes leave the 1h window, or successful writes
+                outweigh them.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md#metricsmetrics"
               summary: "tenant-api conf.d writes are failing — at least half of the last hour's write attempts ended in a server-side error"

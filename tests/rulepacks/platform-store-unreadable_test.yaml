@@ -7,7 +7,7 @@
 #   5) two reasons at once give ONE alert per pod (`max by (job, instance)`).
 # Run: promtool test rules tests/rulepacks/platform-store-unreadable_test.yaml
 rule_files:
-  - platform-store-unreadable.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -35,6 +35,21 @@ tests:
               job: tenant-api
               instance: 10.0.0.2:8080
             exp_annotations:
+              description: |
+                tenant-api's own copy of conf.d holds 1 or more entries
+                of one kind the server cannot read and git cannot hold
+                (tenant_api_store_unreadable_entries by reason: special_file = a
+                FIFO, socket or device named like a config file; read_error;
+                walk_error = a directory that cannot be listed; stat_error = a
+                failed stat that is not an unresolvable link). Every write through
+                tenant-api answers 500 TENANT_STORE_FAULT until it is gone; reads
+                are unaffected. This is the server's storage, not the
+                configuration: find the entries in the tenant-api log ("conf.d
+                holds unreadable entries" names them), then remove or repair them
+                on the pod's volume, or reset the copy from git. tenant-api
+                re-walks conf.d for the gauge at scrape time, so the alert
+                clears by itself after the repair.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
               summary: "tenant-api's conf.d copy has entries the server cannot read — every write answers 500 TENANT_STORE_FAULT"
       - eval_time: 35m
         alertname: TenantApiStoreUnreadable
@@ -71,4 +86,19 @@ tests:
               job: tenant-api
               instance: 10.0.0.2:8080
             exp_annotations:
+              description: |
+                tenant-api's own copy of conf.d holds 2 or more entries
+                of one kind the server cannot read and git cannot hold
+                (tenant_api_store_unreadable_entries by reason: special_file = a
+                FIFO, socket or device named like a config file; read_error;
+                walk_error = a directory that cannot be listed; stat_error = a
+                failed stat that is not an unresolvable link). Every write through
+                tenant-api answers 500 TENANT_STORE_FAULT until it is gone; reads
+                are unaffected. This is the server's storage, not the
+                configuration: find the entries in the tenant-api log ("conf.d
+                holds unreadable entries" names them), then remove or repair them
+                on the pod's volume, or reset the copy from git. tenant-api
+                re-walks conf.d for the gauge at scrape time, so the alert
+                clears by itself after the repair.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
               summary: "tenant-api's conf.d copy has entries the server cannot read — every write answers 500 TENANT_STORE_FAULT"

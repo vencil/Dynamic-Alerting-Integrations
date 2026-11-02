@@ -6,7 +6,7 @@
 #      container restart or a policy ConfigMap update caught mid-way.
 # Run: promtool test rules tests/rulepacks/platform-policy-unavailable_test.yaml
 rule_files:
-  - platform-policy-unavailable.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -26,6 +26,24 @@ tests:
               job: tenant-api
               instance: 10.0.0.2:8080
             exp_annotations:
+              description: |
+                The generator container in the tenant-api pod cannot judge writes,
+                so tenant-api refuses every write that changes a conf.d file
+                (PUT /tenants/{id}, custom alerts, tenant and group batches, in
+                every write mode) with 503: POLICY_UNAVAILABLE when the deployment
+                policy file (generator.policy.existingConfigMap) cannot be read or
+                parsed, VALIDATOR_UNAVAILABLE when the container does not answer,
+                has no amtool, or is older than the policy's
+                min_generator_version. Reads are unaffected. The 503 body's
+                `reason` and the generator container's log say which; GET
+                /v1/status on its socket (the container's probe) shows the
+                policy error. Repair the policy ConfigMap, or fix the container
+                (image with generator-service, amtool), and the alert clears on
+                the next scrape. There is no escape hatch (ADR-036 §5): the
+                previous --policy-unavailable-open is removed, and this gauge no
+                longer reflects a _domain_policy.yaml in conf.d or "its last good
+                version".
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/governance-security.md"
               summary: "tenant-api writes cannot be judged — the generator container or its deployment policy is unavailable; writes answer 503"
 
   - interval: 1m
