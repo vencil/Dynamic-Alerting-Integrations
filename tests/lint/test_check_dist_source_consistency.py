@@ -70,7 +70,9 @@ def test_explicit_dist_only_files_are_still_blocked(capsys, monkeypatch):
     # never vouch for dist there: the original guard is unchanged.
     hook = _hook()
     monkeypatch.delenv("BYPASS_DIST_CHECK", raising=False)
-    monkeypatch.setattr("sys.argv", ["hook", "docs/assets/dist/wizard.js",
-                                     "tools/portal/package-lock.json"])
+    # hook.LOCKFILE, not a literal: the file is only passed as an argument,
+    # never opened, so it must not read as a pytest input to the CI path
+    # filter guard (test_ci_path_filter_coverage).
+    monkeypatch.setattr("sys.argv", ["hook", "docs/assets/dist/wizard.js", hook.LOCKFILE])
     assert hook.main() == hook.EXIT_VIOLATION
     assert "without any source-of-rebuild signal" in capsys.readouterr().out
