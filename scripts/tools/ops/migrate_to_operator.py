@@ -44,10 +44,10 @@ try:
 except ImportError:
     yaml = None
 
-from _lib_python import detect_cli_lang, format_json_report, i18n_text  # noqa: E402
+from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir, write_text_secure  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
-from _lib_exitcodes import EXIT_CALLER_ERROR, arm_crash_envelope, die_caller_error  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, arm_crash_envelope, die_caller_error, encode_json  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import (  # noqa: E402
@@ -921,7 +921,7 @@ def plan_stdout(
                 "already_crd": list(result.get("already_crd", [])),
                 "errors": result.get("errors", []),
             }
-            docs.append(format_json_report(output_obj) + "\n")
+            docs.append(encode_json(output_obj) + "\n")
         else:
             docs.append("# MIGRATION CHECKLIST\n")
             docs.append(checklist + "\n")
@@ -971,7 +971,7 @@ def plan_stdout(
             # them.
             summary["status"] = "checklist_only"
             summary["checklist"] = checklist
-        docs.append(format_json_report(summary) + "\n")
+        docs.append(encode_json(summary) + "\n")
 
     return docs
 

@@ -71,8 +71,8 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope)
-from _lib_python import format_json_report, positive_seconds  # noqa: E402
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, encode_json)
+from _lib_python import positive_seconds  # noqa: E402
 import _lib_confedit  # noqa: E402  (ADR-036 §2, #3206: Go writes the key's text)
 from _lib_consumer_read import binary_data_bytes  # noqa: E402  (#3461: the one binaryData decode)
 import _lib_parse_cache  # noqa: E402  (ADR-036 §2, #2906: parse-tree's selection)
@@ -1641,7 +1641,7 @@ def build_parser():
 
 def _envelope(status, reason):
     """The diff keys emptied, plus `status`/`reason` (dev-rules §13)."""
-    return format_json_report({
+    return encode_json({
         "tenant": None, "metric_key": None, "configmap_mode": None,
         "before": None, "after": None, "changed": False,
         "affected_alerts": [], "status": status, "reason": reason,
@@ -1661,7 +1661,7 @@ def _apply_envelope(args, mode, report, outcome, code):
     `message` and per-pod `problems` / `warnings` / `target_changes`."""
     if outcome["status"] == "caller_error":
         return _envelope("caller_error", outcome["reason"])
-    return format_json_report({
+    return encode_json({
         "tenant": args.tenant, "metric_key": args.metric_key,
         "configmap_mode": mode, "before": None, "after": None,
         "changed": outcome["changed"], "affected_alerts": [],
@@ -1732,7 +1732,10 @@ def _main():
             diff = diff_preview(cm_data, mode, args.tenant, args.metric_key,
                                 args.value)
             if args.json:
-                _emit(format_json_report(diff))
+                # #3216: the one encoder; the one writer of this tool's
+                # answers stays _emit (signals ignored first, a failed write
+                # swallowed — rc is the answer's, not the stream's).
+                _emit(encode_json(diff))
             else:
                 print_diff(diff)
             return

@@ -325,7 +325,7 @@ class TestReadPlatformVersion:
 
 
 # ============================================================
-# Unit Tests — format_text_report / format_json_report
+# Unit Tests — format_text_report / json_document
 # ============================================================
 
 class TestReportFormatting:

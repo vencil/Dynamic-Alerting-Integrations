@@ -62,7 +62,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, CallerError, Report, arm_crash_envelope  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, CallerError, Report, arm_crash_envelope, encode_json  # noqa: E402
 from _lib_paths import classify_path, require_dir, supplied  # noqa: E402  (#3392)
 from _lib_io import (  # noqa: E402  (#1789)
     OutputWriteError,
@@ -71,7 +71,6 @@ from _lib_io import (  # noqa: E402  (#1789)
     output_write,
     write_repo_artifact,
 )
-from _lib_python import format_json_report  # noqa: E402
 
 # Current schema version — keep aligned with docs/schemas/migration-state.md.
 # Bump when introducing a breaking schema change AND adding a corresponding
@@ -232,7 +231,7 @@ def write_json(path: Path, data: dict, *, flag: str | None = None) -> None:
     universal newlines, producing CRLF files in customer GitOps repos
     that read on Linux CI — causes constant merge noise.
     """
-    payload = format_json_report(data) + "\n"
+    payload = encode_json(data) + "\n"
     # #3107 v2: a committed state file / manifest — a repo artifact.
     write_repo_artifact(path, payload, flag=flag, mode=0o600, atomic_only=True)  # never half a manifest
 
