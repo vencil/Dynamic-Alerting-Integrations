@@ -614,7 +614,7 @@ vector test /tmp/rendered-vector.yaml helm/vector/tests/projection_tests.yaml
 - **Grafana dashboard**：`k8s/03-monitoring/tenant-log-query-dashboard.json`（uid `tenant-log-query`，獨立 dashboard、非塞進 federation-audit）——per-account 查詢量／status 分布／**延遲 heatmap + P95**（platform-wide 與 per-tenant）。⚠️ **PromQL topology-label 陷阱**：所有 `histogram_quantile` 的聚合**保留 `le`**（`sum by(account_id, le)`／`sum by(le)`），缺 `le` 會靜默回 NaN——drift-proof golden（`tests/dx/test_tenant_log_query_dashboard.py`，從 JSON 讀 query、promtool 驗、含 `le`-present shape lint）釘住。檔案部署沿用 sibling（`federation-audit-dashboard.json` 同樣為 standalone、非 configmap-grafana 內聯）。
 - **alert `TenantLogQueryRejectionRateAnomaly`**（`configmap-rules-platform.yaml` `federation-audit` group，warning）：>50% 某 account 的查詢被拒（rate_limited／auth_failed／bad_request）持續 15m + floor ~1 拒/min。key 為 `account_id`（audit line 帶數值 account_id 非 conf.d tenant 名，故**無** `tenant_metadata_info` join，改用 min-rate floor 當 idle 守門）。`sum by(account_id)` 同時套分子分母（ratio 對齊；裸 `sum` 會 strip account_id 致 mis-pair——topology 陷阱）。
 
-promtool fire/no-fire 與上述 §8.7 spike alert 同放 `tests/rulepacks/tenant-log-query-platform{.rules,_test}.yaml`（extracted-copy 模式，比照 `platform-watchdog`；`configmap-rules-platform.yaml` 非由 `rule-packs/` 生成、無 regen）。
+promtool fire/no-fire 與上述 §8.7 spike alert 同放 `tests/rulepacks/tenant-log-query-platform_test.yaml`（直接讀平台 pack 來源 `rule-packs/rule-pack-platform.yaml`；`configmap-rules-platform.yaml` 自 #1595 D1a 起由它生成，改規則後跑 `make rulepack-configmaps`）。
 
 **⚠️ 觀測層的限制與調校（對抗 review #900 + Gemini fold-ins）**：
 
@@ -629,7 +629,7 @@ promtool fire/no-fire 與上述 §8.7 spike alert 同放 `tests/rulepacks/tenant
 
 **觀測管線（為何不是 node-exporter / 不是 per-node absent）**：gate init-container 把判定寫進 pod-local emptyDir 的 Prometheus textfile（`--metrics-file /gate-metrics/gate.prom`，metric `vector_tenant_projection_gate_info{category,mode}`）；一支長駐 **exposer sidecar**（`serve_metrics.py`，同 image、`command` override）把該檔以 HTTP 重新 serve，經**獨立 headless Service**（`<vector>-projection-gate-metrics`，gated on `tenantProjections`、**不**綁 `metrics.enabled`）被 Prometheus `platform-components`（role:service，依 `dynamic-alerting.io/scrape: platform` label 探索、不限 namespace，#1425）scrape。本叢集**無 node-exporter / textfile collector**，Vector 自身 exporter 又只讀 `internal_metrics`，故走 sidecar——且 sidecar 與 pod 同生死 → pod 死時 series **變 absent 而非殘留 stale-"ok"**（crash 不會假性 resolve 真實 mismatch）。Vector 是 DaemonSet、每 node 掛**相同** registry+projections → 每 node 判定**相同**，故 alert 一律 `max by(...)` **跨 pod 聚合**（per-node absent 非必要，且 role:service scrape 本就不給穩定 per-node series）。⚠️ **enforce 死鎖時 sidecar 不會啟動**（init 非零退出 → pod 卡 Init → Vector 與 sidecar 皆未起 → verdict metric **無人 serve**），故那條 alert 改走 **KSM**（見 §8.9.3）。
 
-對應三條 alert（`configmap-rules-platform.yaml` `federation-audit` group，promtool 契約 `tests/rulepacks/platform-projection-gate{.rules,_test}.yaml`）：
+對應三條 alert（`rule-packs/rule-pack-platform.yaml` `federation-audit` group，部署副本 `configmap-rules-platform.yaml`；promtool 契約 `tests/rulepacks/platform-projection-gate_test.yaml`）：
 
 #### 8.9.1 `VectorProjectionGateMismatch`（critical，degrade 模式抄錯號碼）
 

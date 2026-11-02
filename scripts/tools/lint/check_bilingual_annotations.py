@@ -44,8 +44,10 @@ class BilingualAnnotationChecker:
     def find_rule_packs(self, only_packs: List[str] = None) -> List[Path]:
         """Find all rule pack YAML files: the one declaration's (#3471:
         `rule_pack_files`, rule-pack-*.yaml|yml; an undeclared YAML beside
-        them raises `SourcesUnlisted`, named)."""
-        packs = _lib_consumer_read.rule_pack_files(self.rule_pack_dir)
+        them raises `SourcesUnlisted`, named). TENANT packs only (#1595
+        D1a): the zh pair is for tenant-facing notifications; the declared
+        platform packs (`PLATFORM_PACKS`) page the platform team."""
+        packs = _lib_consumer_read.tenant_rule_pack_files(self.rule_pack_dir)
 
         if only_packs:
             # Filter by specified pack names

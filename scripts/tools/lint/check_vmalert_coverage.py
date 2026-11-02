@@ -97,7 +97,8 @@ def _rule_pack_files() -> list[Path]:
     escape the gate (Gemini #969: a bare ``glob("*.yaml")`` would let all its alerts bypass the
     coverage check). Any other top-level YAML there that is not declared beside the packs
     (the registry) raises ``RuleFileSourcesRefused`` naming it, so a pack named another way
-    cannot escape either."""
+    cannot escape either. The platform pack is one of them since #1595 D1a, so
+    its alerts' firing coverage is baselined like any other pack's."""
     return _lib_consumer_read.rule_pack_files(_RULE_PACKS)
 
 

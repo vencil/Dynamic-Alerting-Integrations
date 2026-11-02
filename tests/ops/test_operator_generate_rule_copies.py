@@ -62,9 +62,31 @@ def generated(tmp_path_factory) -> Path:
 
 
 def _packs() -> "list[Path]":
-    packs = cr.RULE_PACKS.files_under(REPO)
+    """宣告的 rule pack 中可移植到 operator 的那些：平台 pack 除外（#1595 D1a）。"""
+    packs = [p for p in cr.RULE_PACKS.files_under(REPO)
+             if cr.RULE_PACKS.member(p) not in cr.PLATFORM_PACKS]
     assert packs, "no rule packs declared — the measurement itself is empty"
     return packs
+
+
+def test_platform_packs_get_no_prometheus_rule(generated):
+    """平台 pack 還不可移植（#1595 D1b）：它的 expr 選的是本 repo 自己的 scrape
+    job（`tenant-exporters`、`prometheus`、`threshold-govern`），kube-prometheus-stack
+    底下不存在——生成出來只會是一份永遠不 fire、也永遠不報錯的 PrometheusRule。
+
+    哪些是平台 pack 讀宣告（`PLATFORM_PACKS`）；宣告非空且每個成員都真的有來源
+    檔，否則這條斷言什麼都沒量。
+    """
+    assert cr.PLATFORM_PACKS, "no platform pack declared — nothing to measure"
+    sources = {cr.RULE_PACKS.member(p) for p in cr.RULE_PACKS.files_under(REPO)}
+    assert cr.PLATFORM_PACKS <= sources, (
+        f"declared platform packs without a source: {sorted(cr.PLATFORM_PACKS - sources)}")
+    written = {p.name for p in generated.iterdir()}
+    leaked = sorted(cr.OPERATOR_RULES.file_name(pack) for pack in cr.PLATFORM_PACKS
+                    if cr.OPERATOR_RULES.file_name(pack) in written)
+    assert not leaked, (
+        f"operator-generate wrote a PrometheusRule for a platform pack: {leaked} — "
+        "its rules select scrape jobs a kube-prometheus-stack install does not have")
 
 
 def test_one_prometheus_rule_per_rule_pack(generated):

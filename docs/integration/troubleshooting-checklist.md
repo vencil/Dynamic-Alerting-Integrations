@@ -1218,7 +1218,7 @@ kubectl get events -A --sort-by=.lastTimestamp | tail -30
 - (a) Prometheus 自己出問題（Pod 重啟中、資源不足）→ 此時其他 scrape job 也會一起異常；先看 Prometheus Pod 狀態
 - (b) 一次退租了很多租戶但 conf.d 的 `_metadata` 沒移除 → 這是殘留組態，不是故障；移除後告警解除
 
-**Cross-ref**：門檻（5 與 10%）的由來與 `unless on() absent(...)` 的用意寫在 `k8s/03-monitoring/configmap-rules-platform.yaml` 本告警上方的註解。
+**Cross-ref**：門檻（5 與 10%）的由來與 `unless on() absent(...)` 的用意寫在平台 pack 來源 `rule-packs/rule-pack-platform.yaml` 本告警上方的註解（部署用的 `k8s/03-monitoring/configmap-rules-platform.yaml` 由它生成，不帶註解）。
 
 ---
 

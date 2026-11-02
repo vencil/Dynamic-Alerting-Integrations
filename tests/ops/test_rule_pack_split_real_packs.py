@@ -41,7 +41,8 @@ import _lib_consumer_read as cr  # noqa: E402  (#3471: the rule-source declarati
 
 
 def _load_all_packs():
-    for pack in cr.RULE_PACKS.files_in(_RULE_PACKS):   # #3471: the declaration
+    # #3471: the declaration; #1595 D1a: the packs the split takes (no platform pack)
+    for pack in cr.tenant_rule_pack_files(_RULE_PACKS):
         data = grps.load_rule_pack(str(pack))
         yield pack, data.get("groups", [])
 

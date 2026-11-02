@@ -26,7 +26,7 @@
 # Evaluated at 1m resolution so the `for: 5m` window is cheap and exact.
 # Run: promtool test rules tests/rulepacks/platform-projection-gate_test.yaml
 rule_files:
-  - platform-projection-gate.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -56,6 +56,21 @@ tests:
               mode: degrade
               namespace: vector
             exp_annotations:
+              description: |
+                A `tenantProjections` entry's accountId does not match the
+                AccountID registry's (`_account_registry.yaml`) allocation — a unique-but-wrong
+                value (the cross-tenant-leak case the render-time uniqueness
+                guard and the integer schema both pass). The gate DEGRADED to
+                platform-only 0:0: the tenant-sanitized projection sinks are
+                omitted, so affected tenants silently get NO own-logs partition
+                (the leak itself is PREVENTED — Vector never wrote to the wrong
+                partition). ACTION: reconcile `tenantProjections` against
+                `_account_registry.yaml` (the SSOT), fix the mismatched
+                accountId, and roll the DaemonSet so the gate re-validates.
+                The exact offending pair is in the projection-gate
+                init-container logs (`kubectl logs <vector-pod> -c
+                projection-gate`). See platform-log-aggregation-runbook §8.9.1.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md"
               summary: "Vector projection gate found a wrong accountId (mode=degrade) — tenant log routing degraded to 0:0"
 
   # 2) the healthy "ok" verdict is present → mismatch alert must NOT fire (the `> 0`
@@ -101,6 +116,22 @@ tests:
               mode: degrade
               namespace: vector
             exp_annotations:
+              description: |
+                The projection-gate init-container could not trust the
+                `_account_registry.yaml` it mounts at boot and DEGRADED Vector to
+                platform-only 0:0. Most likely the fresh-deploy ORDERING RACE
+                (Vector started before the registry ConfigMap synced); the gate
+                validates ONCE at boot, so it STAYS degraded even after the
+                registry appears — tenant log routing is silently off while
+                everything else looks healthy. Could also be a malformed or
+                newer-schema registry (fail-closed refusal). ACTION: confirm the
+                registry ConfigMap (`projectionGate.registry.configMapName`)
+                exists and is well-formed, then
+                `kubectl rollout restart ds/<vector>` to re-run the gate against
+                it. Details in the init-container logs (`kubectl logs
+                <vector-pod> -c projection-gate`). See
+                platform-log-aggregation-runbook §8.9.2.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
               summary: "Vector projection gate could not read the account registry at boot (mode=degrade) — tenant routing silently degraded"
 
   # 5) a mismatch verdict must NOT trip the REGISTRY-UNREADABLE alert (category isolation).
@@ -133,6 +164,24 @@ tests:
               alert_source: platform
               namespace: vector
             exp_annotations:
+              description: |
+                The projection-gate init-container is stuck waiting (crash loop,
+                image-pull failure, or container-config error) — the pod never
+                starts Vector, and on a DaemonSet maxUnavailable then HALTS the
+                rollout cluster-wide (mid-roll nodes lose logging; un-rolled
+                nodes keep the old config — a split brain). The verdict metric
+                is NOT served in this state (Vector + the sidecar never start),
+                so the degrade alerts cannot see it — this KSM signal is the
+                only one. Causes: `tenantProjectionGate: enforce` + a config-bug
+                mismatch (fail-closed working as designed — REVERT the bad
+                `tenantProjections` change); a wrong/garbled gate image or args
+                (any mode — fix `projectionGate.image` / the init spec); a
+                missing staging ConfigMap. Inspect `kubectl describe pod` for
+                the waiting reason and `kubectl logs <vector-pod> -c
+                projection-gate --previous` for crash output. Consider `degrade`
+                mode if a hard rollout stop is worse than fail-available 0:0 for
+                your environment. See platform-log-aggregation-runbook §8.9.3.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
               summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in vector"
 
   # 7) a benign init wait (PodInitializing) must NOT fire the deadlock alert — only
@@ -186,6 +235,24 @@ tests:
               alert_source: platform
               namespace: vector
             exp_annotations:
+              description: |
+                The projection-gate init-container is stuck waiting (crash loop,
+                image-pull failure, or container-config error) — the pod never
+                starts Vector, and on a DaemonSet maxUnavailable then HALTS the
+                rollout cluster-wide (mid-roll nodes lose logging; un-rolled
+                nodes keep the old config — a split brain). The verdict metric
+                is NOT served in this state (Vector + the sidecar never start),
+                so the degrade alerts cannot see it — this KSM signal is the
+                only one. Causes: `tenantProjectionGate: enforce` + a config-bug
+                mismatch (fail-closed working as designed — REVERT the bad
+                `tenantProjections` change); a wrong/garbled gate image or args
+                (any mode — fix `projectionGate.image` / the init spec); a
+                missing staging ConfigMap. Inspect `kubectl describe pod` for
+                the waiting reason and `kubectl logs <vector-pod> -c
+                projection-gate --previous` for crash output. Consider `degrade`
+                mode if a hard rollout stop is worse than fail-available 0:0 for
+                your environment. See platform-log-aggregation-runbook §8.9.3.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
               summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in vector"
 
   # 10) WRONG-IMAGE wedge: a garbled/typo'd gate image never pulls → the init sits in
@@ -211,4 +278,22 @@ tests:
               alert_source: platform
               namespace: vector
             exp_annotations:
+              description: |
+                The projection-gate init-container is stuck waiting (crash loop,
+                image-pull failure, or container-config error) — the pod never
+                starts Vector, and on a DaemonSet maxUnavailable then HALTS the
+                rollout cluster-wide (mid-roll nodes lose logging; un-rolled
+                nodes keep the old config — a split brain). The verdict metric
+                is NOT served in this state (Vector + the sidecar never start),
+                so the degrade alerts cannot see it — this KSM signal is the
+                only one. Causes: `tenantProjectionGate: enforce` + a config-bug
+                mismatch (fail-closed working as designed — REVERT the bad
+                `tenantProjections` change); a wrong/garbled gate image or args
+                (any mode — fix `projectionGate.image` / the init spec); a
+                missing staging ConfigMap. Inspect `kubectl describe pod` for
+                the waiting reason and `kubectl logs <vector-pod> -c
+                projection-gate --previous` for crash output. Consider `degrade`
+                mode if a hard rollout stop is worse than fail-available 0:0 for
+                your environment. See platform-log-aggregation-runbook §8.9.3.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
               summary: "Vector projection-gate init-container is stuck (crash loop / image pull) — DaemonSet rollout wedged in vector"

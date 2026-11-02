@@ -2069,6 +2069,7 @@ class TestEqualLabelGatedInvariant:
 # Shared rule-tree scanner for the static label-contract gates below
 # ============================================================
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+import _lib_consumer_read  # noqa: E402  (#1595: PLATFORM_PACKS, RULE_PACKS)
 # The rule-tree scanner now lives in scripts/tools/lint/_rule_tree.py so that
 # other gates can import it — see that module's docstring for why the three
 # readers had drifted apart while it was stranded in this file.
@@ -2080,6 +2081,7 @@ from _rule_tree import (  # noqa: E402
     _expected_rule_files,
     _generated_pack_names,
     _is_platform_cm_location,
+    _is_platform_deployment,
     _iter_repo_alert_rules,
     _platform_rule_locations,
     _rule_containers,
@@ -2208,8 +2210,20 @@ class TestSentinelLabelContract:
 
         # Whole tree, not the platform subset: the point is that nothing else
         # anywhere may wear the name that buys the exemption.
+        # ⛔ Counted over the DEPLOYED tree (every reading but the rule-packs/
+        # sources). Since #1595 D1a the heartbeat has a source pack AND its
+        # generated copy — one rule, two readings. Every source pack ships a
+        # copy (check_rulepack_sync), so a second `Watchdog` in any pack still
+        # shows up here as a second deployed holder.
+        sources = _lib_consumer_read.RULE_PACKS.directory + "/"
         holders = [(w, r) for w, r in _iter_repo_alert_rules()
-                   if r["alert"] in names]
+                   if r["alert"] in names and not w.startswith(sources)]
+        assert holders, "the heartbeat is deployed nowhere"
+        source_holders = [w for w, r in _iter_repo_alert_rules()
+                          if r["alert"] in names and w.startswith(sources)]
+        assert all(_is_platform_cm_location(w) for w in source_holders), (
+            f"the heartbeat is declared in a source pack that is not a platform "
+            f"pack: {source_holders}")
         assert len(holders) == len(names), (
             f"{len(holders)} rules carry a heartbeat name {sorted(names)}, "
             f"expected {len(names)}: {[w for w, _r in holders]}. A second one "
@@ -2280,8 +2294,9 @@ class TestPlatformAlertSourceContract:
     """
 
     def _platform_rules(self):
+        # Each platform rule once, as deployed (#1595 D1a: source + copy).
         return [(where, rule) for where, rule in _iter_repo_alert_rules()
-                if _is_platform_cm_location(where)]
+                if _is_platform_deployment(where)]
 
     def test_platform_cm_discovery_is_content_based(self):
         """The scope seam. WHICH files are read is the declaration's (#3438);
@@ -2316,15 +2331,20 @@ class TestPlatformAlertSourceContract:
         by_where = {w: prov for w, _doc, prov in containers}
         platform = sorted(_platform_rule_locations())
 
-        # 1. The hand-authored platform tree is in scope, keyed by its real path.
+        # 1. The platform tree is in scope, keyed by its real paths: the
+        # deployed copy AND (#1595 D1a) the platform pack's source.
         assert any(w.endswith("configmap-rules-platform.yaml:platform-alert.yml")
                    for w in platform), platform
-        # 2. Generated copies never are — they name a source pack that exists.
+        assert any(w == "rule-packs/rule-pack-platform.yaml" for w in platform), platform
+        # 2. Generated copies of TENANT packs never are — they name a source
+        # pack that exists and that is not declared a platform pack.
         redis = [w for w in by_where if "configmap-rules-redis" in w]
         assert redis and all(by_where[w] == "redis" for w in redis)
         assert not any(w in platform for w in redis)
         assert "redis" in _generated_pack_names()
-        assert "platform" not in _generated_pack_names()
+        # The platform pack has a source now; it is platform by DECLARATION.
+        assert "platform" in _generated_pack_names()
+        assert _lib_consumer_read.is_platform_pack("platform")
         # 3. ⛔ Pin EVERY declared tree, not the two that happened to get one. Dropping
         # rule-packs/ — 16 containers, 122 rules, half of what the previous
         # scanner read — was completely silent: the `>= 30` container floor has
@@ -2694,8 +2714,9 @@ class TestPlatformRunbookCoverageContract:
     """
 
     def _platform_alerts(self):
+        # Each platform rule once, as deployed (#1595 D1a: source + copy).
         return [(where, rule) for where, rule in _iter_repo_alert_rules()
-                if _is_platform_cm_location(where)]
+                if _is_platform_deployment(where)]
 
     def test_borrowed_anchor_machinery_canary(self, tmp_path):
         """The borrowed `_`-private anchor machinery still works as this gate needs.
@@ -3121,8 +3142,9 @@ class TestPlatformAlertPlaneContract:
     """
 
     def _platform_alerts(self):
+        # Each platform rule once, as deployed (#1595 D1a: source + copy).
         return [(where, rule) for where, rule in _iter_repo_alert_rules()
-                if _is_platform_cm_location(where)]
+                if _is_platform_deployment(where)]
 
     def test_plane_table_covers_exactly_the_unpinned_ledger(self):
         # The two tables answer different questions about the same rows

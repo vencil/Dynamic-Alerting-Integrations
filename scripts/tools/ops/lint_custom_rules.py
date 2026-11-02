@@ -500,8 +500,9 @@ def main():
         "--rule-pack-dir", default=None, metavar="DIR",
         help="Lint the rule packs of a rule-packs directory as declared "
              "(rule-pack-*.yaml|yml at its top level; the registry beside them is "
-             "declared too, any other YAML there is a caller error). Instead of "
-             "paths; not with --exclude"
+             "declared too, any other YAML there is a caller error). The declared "
+             "platform packs are not linted: this policy governs tenant packs. "
+             "Instead of paths; not with --exclude"
     )
     parser.add_argument(
         "--policy", default=None,
@@ -565,7 +566,12 @@ def main():
     # an `--exclude` that leaves nothing, are caller errors, named.
     try:
         if args.rule_pack_dir is not None:
-            files = [str(f) for f in _lib_consumer_read.rule_pack_files(args.rule_pack_dir)]
+            # #1595 D1a: the custom-rule policy (required `tenant` label, the
+            # tenant-isolation deny-list) governs TENANT packs. A declared
+            # platform pack (`PLATFORM_PACKS`) watches the platform and has no
+            # tenant by design, so it is not this policy's to judge.
+            files = [str(f) for f in
+                     _lib_consumer_read.tenant_rule_pack_files(args.rule_pack_dir)]
         else:
             files = collect_files(args.paths, args.exclude)
     except _lib_consumer_read.InputRefused as exc:

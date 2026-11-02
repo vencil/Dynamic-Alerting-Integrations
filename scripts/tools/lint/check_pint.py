@@ -19,21 +19,21 @@ that has burned this repo repeatedly (today guarded only by hand-written comment
 The idiom-noisy default checks are disabled in ``.pint.hcl``; see that file and
 docs/internal/pint-lint-baseline.md for the policy + the sentinel exemptions.
 
-Scope (three roots, kept in lockstep between ``_PINT_ARGS`` below and
+Scope (two roots, kept in lockstep between ``_PINT_ARGS`` below and
 ``parser.include`` in ``.pint.hcl`` — pint only walks directories it is HANDED, so
 widening the include alone is a no-op):
 
-* ``rule-packs/rule-pack-*.yaml`` — component rule-pack sources.
-* ``tests/rulepacks/*.rules.yaml`` — the bare-rules EXTRACTS that put the ADR-025
-  guardian (``Watchdog`` + ``AlertmanagerWebhookNotificationsFailing``) under the gate.
-* ``k8s/03-monitoring/configmap-rules-platform*.y(a)ml`` — the DEPLOYED platform
-  self-monitoring pack. It is ConfigMap-wrapped, which pint reads via
-  ``parser.relaxed`` (supported since pint v0.19.0), so the old "ConfigMap-wrapped →
-  unparseable, the extracts are its only pint-reachable form" note no longer holds.
-  16 of its 42 alerts had no extract and were invisible to pint; 6 of those carry
-  real ``alerts/template`` label-flow risk. Only the *platform* prefix is added —
-  the other 16 ``configmap-rules-*.yaml`` are ``DO NOT EDIT`` copies generated from
-  the rule-packs already linted here; see ``.pint.hcl`` for the measurements.
+* ``rule-packs/rule-pack-*.yaml`` — every rule-pack source, the platform
+  self-monitoring pack (``rule-pack-platform.yaml``, #1595 D1a) included: the
+  ADR-025 guardian (``Watchdog`` + ``AlertmanagerWebhookNotificationsFailing``)
+  is linted in its source form.
+* ``tests/rulepacks/*.rules.yaml`` — the bare-rules promtool targets that are
+  not rule packs.
+
+No ``k8s/03-monitoring/configmap-rules-*.yaml``: every one is a ``DO NOT EDIT``
+copy generated from the rule packs already linted here — the platform one too
+since #1595 (it used to be hand-maintained and read through ``parser.relaxed``);
+see ``.pint.hcl``.
 
 Copies are sync-guarded by ``check_rulepack_sync.py``. Runs ``--offline`` (no
 Prometheus). Baseline = 0 blocking.
@@ -71,61 +71,55 @@ PINT_VERSION = "0.86.0"
 # breaks the amd64 CI fallback (manifest unknown / exec format error). #849 follow-up.
 PINT_DIGEST = "sha256:93d01d7522b8d477c183d938b4263302c6ed980e187aa3af00b4bf810a9697cc"
 PINT_IMAGE = f"ghcr.io/cloudflare/pint:{PINT_VERSION}@{PINT_DIGEST}"
-# Scan the component rule-pack sources, the platform extracts (tests/rulepacks/) AND
-# the deployed platform ConfigMap (k8s/03-monitoring/); the parser.include in
-# .pint.hcl narrows each dir to actual rule documents — of the 41 files in
-# k8s/03-monitoring/, pint's include list admits exactly 1 and rejects 40.
+# Scan the rule-pack sources (the platform pack included, #1595) and the bare-rules
+# promtool targets under tests/rulepacks/; the parser.include in .pint.hcl narrows
+# each dir to actual rule documents.
 #
 # ⚠️ This list and .pint.hcl's parser.include are TWO halves of one decision. pint
 # only walks the paths it is handed on the CLI, so a path added to parser.include but
-# not here is dead config: measured, adding only the ConfigMap include left entries at
-# 351 with exit 0 (i.e. a silently unchanged gate), and adding k8s/03-monitoring/ here
-# took it to 393. _MIN_PINT_ENTRIES below is what makes that half-edit fail loudly.
+# not here is dead config: measured (when the platform rules were a ConfigMap read
+# through parser.relaxed), adding only the ConfigMap include left entries unchanged
+# with exit 0, and adding its directory here moved them. _MIN_PINT_ENTRIES below is
+# what makes that half-edit fail loudly.
 _PINT_ARGS = ["--offline", "-c", ".pint.hcl", "lint",
-              "rule-packs/", "tests/rulepacks/", "k8s/03-monitoring/"]
+              "rule-packs/", "tests/rulepacks/"]
 
 # Non-vacuity FLOOR on the rule entries pint actually parsed. `entries == 0` alone is
 # too weak — every silent-green observed here reported a healthy-looking non-zero
-# count with exit 0:
-#   (a) parser.include gained the platform ConfigMap but _PINT_ARGS did not gain
-#       k8s/03-monitoring/  → entries=351 (should be 393), exit 0;
-#   (b) configmap-rules-platform.yaml renamed / moved out from under the include
-#       → entries=351 again, exit 0.
-# Both hollow out the platform half of the gate behind a green check. So this mirrors
-# `_MIN_PLATFORM_ALERTS` in tests/ops/test_generate_routes_orchestration.py: ONE
-# hand-maintained floor, deliberately not duplicated, that only ever needs RAISING.
+# count with exit 0 (an include path missing from _PINT_ARGS; the platform rules
+# renamed out from under the include). Both hollow out the platform half of the gate
+# behind a green check. So this mirrors `_MIN_PLATFORM_ALERTS` in
+# tests/ops/test_generate_routes_orchestration.py: ONE hand-maintained floor,
+# deliberately not duplicated, that only ever needs RAISING.
 #
-# Sizing (pint 0.86.0, measured 393 = 351 rule-packs + tests/rulepacks, + 42 from
-# configmap-rules-platform.yaml). The floor must sit:
-#   * ABOVE 351 — losing the whole platform pack is exactly the −42 drop this exists
-#     to catch, so anything ≤351 would be blind to it; and
-#   * BELOW 393 — entries only ever GROW when rules are added, so a floor under
+# Sizing (#1595 D1a): 376 = the rules in rule-packs/rule-pack-*.yaml (347, the
+# platform pack's 51 among them) + tests/rulepacks/**/*.rules.yaml (29). Counted the
+# way pint counts — that same count over origin/main gave 412, exactly the
+# `entries=412` CI's pint step logged on main before this change (296 in the tenant
+# packs + 65 in tests/rulepacks, 36 of them in the 23 deleted platform extracts, +
+# the platform ConfigMap's 51). The
+# floor must sit:
+#   * ABOVE 376 - 42 — losing the platform pack must trip it; and
+#   * BELOW 376 — entries only ever GROW when rules are added, so a floor under
 #     today's count means routine rule additions never touch this number.
-# 385 splits that window with ~34 entries of headroom over the 351 failure value and
-# 8 entries of slack for small legitimate deletions. A deletion large enough to trip
-# it (≥9 rules, e.g. retiring a whole rule-pack) SHOULD require a conscious edit here.
-#
-# This floor is also the only MECHANICAL detector for a pint version bump changing
-# parse behaviour. `parser.relaxed` (ConfigMap-embedded rules) is the fragile part: if
-# a future pint stops applying it, the platform pack quietly contributes 0 entries and
-# nothing else in CI notices — every remaining rule still lints clean, so the build
-# stays green while 42 alerts fall out of the gate. The count dropping to 351 is the
-# only signal, and this is what turns it red. Re-measure on every PINT_VERSION bump.
-_MIN_PINT_ENTRIES = 385
+# 368 leaves 8 entries of slack for small legitimate deletions. A deletion large
+# enough to trip it (≥9 rules, e.g. retiring a whole rule-pack) SHOULD require a
+# conscious edit here. Re-measure on every PINT_VERSION bump: a pint that stops
+# parsing a file is only visible as this count dropping.
+_MIN_PINT_ENTRIES = 368
 
-# What configmap-rules-platform.yaml contributes (pint 0.86.0: 393 total, 351
-# without it) and the total measured at the same time. Both are needed: the pair
-# is what keeps the floor's DETECTION WINDOW open as the repo grows, and the
-# test asserts the floor sits inside (total - pack, total].
+# The platform pack's share of the count, and the total measured at the same time.
+# Both are needed: the pair is what keeps the floor's DETECTION WINDOW open as the
+# repo grows, and the test asserts the floor sits inside (total - pack, total].
 #
-# ⛔ 42 is not a free-standing number — it is the platform alert count, already
+# ⛔ 42 is not a free-standing number — it is the platform alert FLOOR, already
 # pinned as `_MIN_PLATFORM_ALERTS` in tests/ops/test_generate_routes_orchestration.py
-# (the ConfigMap holds 42 `- alert:` and 0 `- record:`, so pint entries and alert
-# count are the same quantity). Restating it here is a third hand-copy; the
-# sibling test file's own convention is to read such values back out rather than
-# repeat them, and the lockstep test does exactly that for this constant.
+# (the pack holds only `- alert:`, no `- record:`, so pint entries and alert count
+# are the same quantity). Restating it here is a third hand-copy; the sibling test
+# file's own convention is to read such values back out rather than repeat them, and
+# the lockstep test does exactly that for this constant.
 _PLATFORM_PACK_ENTRIES = 42
-_PINT_ENTRIES_AT_MEASURE = 393
+_PINT_ENTRIES_AT_MEASURE = 376
 
 # pint colours its logs unconditionally — it does NOT check for a TTY — so under
 # `capture_output=True` the entries line arrives as
@@ -212,8 +206,8 @@ def main() -> int:
                   f"out behind a green check. Usual causes: a rule file renamed or "
                   f"moved out from under .pint.hcl's parser.include; a path present "
                   f"in parser.include but missing from _PINT_ARGS (pint only walks "
-                  f"the dirs it is handed); or a pint upgrade that changed how "
-                  f"parser.relaxed parses the ConfigMap-embedded platform rules. "
+                  f"the dirs it is handed); or a pint upgrade that stopped "
+                  f"parsing a rule file. "
                   f"If rules were legitimately REMOVED, lower _MIN_PINT_ENTRIES in "
                   f"{Path(__file__).name} deliberately.", file=sys.stderr)
             return EXIT_VIOLATION
@@ -234,7 +228,7 @@ def main() -> int:
         if slack >= _PLATFORM_PACK_ENTRIES:
             print(f"FAIL: pint checked {entries} entries against a "
                   f"{_MIN_PINT_ENTRIES} floor — {slack} of slack, more than the "
-                  f"{_PLATFORM_PACK_ENTRIES} the platform ConfigMap contributes. "
+                  f"{_PLATFORM_PACK_ENTRIES} the platform pack contributes. "
                   f"The floor can no longer detect that pack dropping out of "
                   f"scope, which is the main thing it is for. Ratchet "
                   f"_MIN_PINT_ENTRIES in {Path(__file__).name} up to "

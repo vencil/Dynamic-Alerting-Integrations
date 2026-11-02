@@ -10,7 +10,7 @@
 # 192Mi = 201326592 bytes; 170Mi = 178257920; 96Mi = 100663296;
 # 153.6Mi (80%) = 161061273.6 → 161061273 is just under, 161061274 just over.
 rule_files:
-  - platform-generator-memory.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1m
 
@@ -32,6 +32,18 @@ tests:
               job: tenant-api
               instance: 10.0.0.2:8080
             exp_annotations:
+              description: |
+                The latest judgement in the generator container (tenant-api's
+                write check) peaked at 88.54% of the
+                judgement process's memory limit (RLIMIT_DATA). The parse cache of
+                the latest base tree counts against that limit and grows with the
+                number of tenants; when cache plus one judgement exceed it, every
+                write is rejected with reason "memory" (422 GENERATOR_REJECTED).
+                Raise the judgement memory limit (`--memory-limit-bytes`) together
+                with the container's memory limit (generator.resources), before
+                writes start failing. da_generator_cache_bytes shows how much of
+                it is the cache.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/036-single-parser-effective-config.md"
               summary: "generator container: a write judgement used over 80% of its memory limit"
 
   - interval: 1m
@@ -68,6 +80,18 @@ tests:
               job: tenant-api
               instance: b
             exp_annotations:
+              description: |
+                The latest judgement in the generator container (tenant-api's
+                write check) peaked at 80% of the
+                judgement process's memory limit (RLIMIT_DATA). The parse cache of
+                the latest base tree counts against that limit and grows with the
+                number of tenants; when cache plus one judgement exceed it, every
+                write is rejected with reason "memory" (422 GENERATOR_REJECTED).
+                Raise the judgement memory limit (`--memory-limit-bytes`) together
+                with the container's memory limit (generator.resources), before
+                writes start failing. da_generator_cache_bytes shows how much of
+                it is the cache.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/036-single-parser-effective-config.md"
               summary: "generator container: a write judgement used over 80% of its memory limit"
 
   # ⚠️ The eval at 6m is the DISCRIMINATOR for `for: 5m`: the ratio IS above

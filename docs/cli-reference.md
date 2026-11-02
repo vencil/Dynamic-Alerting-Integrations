@@ -1598,7 +1598,7 @@ da-tools operator-generate [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--rule-packs-dir <DIR>` | Rule Pack 目錄；pack 清單取自 `rule_pack_files` 這份宣告（頂層 `rule-pack-*.yaml`／`.yml`，旁邊的 `threshold-registry.yaml` 也已宣告），目錄頂層其他 YAML（副檔名不分大小寫）或懸空 symlink 會被點名、結束碼 2（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）。明確給了卻不存在、不是目錄或是 symlink 迴圈 ⇒ exit `2`，任何東西產出之前點名（`--json` 的 `reason` 為 `dir_not_found`／`dir_not_accessible`；先前印 WARNING 後照樣產出、rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）；只判定所選 `--components` 會讀的目錄，沒給時的預設值不判定 | `rule-packs/` |
+| `--rule-packs-dir <DIR>` | Rule Pack 目錄；pack 清單取自 `rule_pack_files` 這份宣告（頂層 `rule-pack-*.yaml`／`.yml`，旁邊的 `threshold-registry.yaml` 也已宣告），目錄頂層其他 YAML（副檔名不分大小寫）或懸空 symlink 會被點名、結束碼 2（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）。明確給了卻不存在、不是目錄或是 symlink 迴圈 ⇒ exit `2`，任何東西產出之前點名（`--json` 的 `reason` 為 `dir_not_found`／`dir_not_accessible`；先前印 WARNING 後照樣產出、rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）；只判定所選 `--components` 會讀的目錄，沒給時的預設值不判定。宣告為平台 pack 的（`_lib_consumer_read.PLATFORM_PACKS`，即 `rule-pack-platform.yaml`）不算在內：它的 expr 依賴本 repo 自己的 scrape job，暫不可移植（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)）。 | `rule-packs/` |
 | `--config-dir <DIR>` | 租戶配置目錄路徑。每個租戶一份 AlertmanagerConfig；租戶是整棵樹（含子目錄）各租戶檔 `tenants:` 的鍵，經 `da-guard parse-tree` 讀，**不是檔名**——`team-a.yaml` 裡寫 `tenants: {db-a: …}` 的租戶是 `db-a`，沒有 `tenants:` 的平面格式檔不產生租戶。⚠️ 有 parse-tree 讀不了的租戶檔（逐一指名檔與 kind）、同一租戶在兩個檔宣告、或沒有可用的 da-guard ⇒ exit `2`，一個 CRD 也不產出（`--json` 的 envelope `reason` 為 `tenant_set_unknown`）。不符合 RFC 1123 的租戶 id 印警告後略過。明確給了卻不存在、不是目錄或是 symlink 迴圈 ⇒ exit `2`，任何東西產出之前點名（`--json` 的 `reason` 為 `dir_not_found`／`dir_not_accessible`；先前印 WARNING 後照樣產出、rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）；只判定所選 `--components` 會讀的目錄，沒給時的預設值不判定 | `conf.d/` |
 | `--output-dir <DIR>` | 把 CRD 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run`**；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
@@ -1758,7 +1758,7 @@ da-tools operator-check [options]
 |------|------|--------|
 | `--namespace <NS>` | 列 PrometheusRule／ServiceMonitor／AlertmanagerConfig 的 namespace（不自動探索） | `monitoring` |
 | `--json` | JSON 格式輸出 | false |
-| `--rule-packs-dir <DIR>` | Rule Pack 目錄；pack 清單取自 `rule_pack_files` 這份宣告（頂層 `rule-pack-*.yaml`／`.yml`，旁邊的 `threshold-registry.yaml` 也已宣告），目錄頂層其他 YAML（副檔名不分大小寫）或懸空 symlink 會被點名、結束碼 2（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）；PrometheusRule 檢查拿叢集裡已載入的數量與這裡的 pack 數比；宣告蓋不住目錄時該列 fail（caller error）。明確給了卻不存在、不是目錄或是 symlink 迴圈 ⇒ 結束碼 `2`，問叢集之前點名（`--json` 的 `reason` 為 `dir_not_found`／`dir_not_accessible`；先前當成 0 個、只報 `⚠ WARN PrometheusRule`、完全沒提到路徑，rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）。沒給時的預設值不存在、或給了空目錄，仍是 0 個 | `rule-packs/` |
+| `--rule-packs-dir <DIR>` | Rule Pack 目錄；pack 清單取自 `rule_pack_files` 這份宣告（頂層 `rule-pack-*.yaml`／`.yml`，旁邊的 `threshold-registry.yaml` 也已宣告），目錄頂層其他 YAML（副檔名不分大小寫）或懸空 symlink 會被點名、結束碼 2（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）；PrometheusRule 檢查拿叢集裡已載入的數量與這裡的 pack 數比；宣告蓋不住目錄時該列 fail（caller error）。明確給了卻不存在、不是目錄或是 symlink 迴圈 ⇒ 結束碼 `2`，問叢集之前點名（`--json` 的 `reason` 為 `dir_not_found`／`dir_not_accessible`；先前當成 0 個、只報 `⚠ WARN PrometheusRule`、完全沒提到路徑，rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）。沒給時的預設值不存在、或給了空目錄，仍是 0 個。宣告為平台 pack 的（`_lib_consumer_read.PLATFORM_PACKS`，即 `rule-pack-platform.yaml`）不算在內：它的 expr 依賴本 repo 自己的 scrape job，暫不可移植（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)）。 | `rule-packs/` |
 | `--prometheus <URL>` | Prometheus API URL；給了才檢查 exporter target 健康，不給則該項略過。給了卻讀不到 targets（連不上、回錯或回應格式不對）時該項 FAIL、結束碼 2，先前只是 warn（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） | （無） |
 | `--kubeconfig <FILE>` | kubeconfig 路徑 | （無） |
 | `--ci` | 任一檢查為 fail 時結束碼 1（不帶時 fail 也是 0；kubectl 沒有回答、或給了 `--prometheus` 卻讀不到 targets，一律 2，見下方與 [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） | false |
@@ -1818,7 +1818,7 @@ da-tools runtime-audit (--prometheus <url> | --runtime-json <file>) [options]
 2. **UNHEALTHY** — 已載入但 `health != ok`（帶 `lastError`；series 觀測無法與「metric 本就不存在」區分）
 3. **ORPHAN** — runtime 仍載入但 Git 不再宣告（孤兒殘留；限**已宣告群組**內，不誤報無關 infra 規則）
 
-> **⚠️ 限制（避免假陽性）**：`declared` = `--rule-packs-dir` 內**所有** `rule-pack-*.yaml`／`.yml`（其他 YAML 被點名、結束碼 2）。平台 pack 可選擇性啟用（Projected Volume `optional`）；若部署只載入子集，**停用的 pack 會被報成 MISSING**。對策：把 `--rule-packs-dir` 指向只含已啟用 pack 的目錄（ORPHAN 方向不受影響——它限已宣告群組）。另：`unknown` health（reload 後尚未首次評估的暫態）**不**列 UNHEALTHY，只有確認的 `err` 才列。
+> **⚠️ 限制（避免假陽性）**：`declared` = `--rule-packs-dir` 內**所有** `rule-pack-*.yaml`／`.yml`（其他 YAML 被點名、結束碼 2）。平台 pack 可選擇性啟用（Projected Volume `optional`）；若部署只載入子集，**停用的 pack 會被報成 MISSING**。對策：把 `--rule-packs-dir` 指向只含已啟用 pack 的目錄（ORPHAN 方向不受影響——它限已宣告群組）。`declared` 也包含平台 pack（`rule-pack-platform.yaml`，[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)）：Prometheus Operator 模式下 `operator-generate` 目前不產生它，所以它的告警會報成 MISSING——這些告警確實沒在跑。另：`unknown` health（reload 後尚未首次評估的暫態）**不**列 UNHEALTHY，只有確認的 `err` 才列。
 
 **範例**
 
@@ -1851,7 +1851,7 @@ da-tools rule-pack-split [--rule-packs-dir <dir>] [options]
 
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
-| `--rule-packs-dir <DIR>` | Rule Pack 目錄；pack 清單取自 `rule_pack_files` 這份宣告（頂層 `rule-pack-*.yaml`／`.yml`，旁邊的 `threshold-registry.yaml` 也已宣告），目錄頂層其他 YAML（副檔名不分大小寫）或懸空 symlink 會被點名、結束碼 2（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)） | `rule-packs/` |
+| `--rule-packs-dir <DIR>` | Rule Pack 目錄；pack 清單取自 `rule_pack_files` 這份宣告（頂層 `rule-pack-*.yaml`／`.yml`，旁邊的 `threshold-registry.yaml` 也已宣告），目錄頂層其他 YAML（副檔名不分大小寫）或懸空 symlink 會被點名、結束碼 2（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）。宣告為平台 pack 的（`_lib_consumer_read.PLATFORM_PACKS`，即 `rule-pack-platform.yaml`）不算在內：它的 expr 依賴本 repo 自己的 scrape job，暫不可移植（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)）。 | `rule-packs/` |
 | `--output-dir <DIR>` | 輸出目錄 | `split-output/` |
 | `--operator` | 改輸出 PrometheusRule CRD YAML | false |
 | `--namespace <NS>` | CRD 的 namespace | `monitoring` |
@@ -2486,7 +2486,7 @@ da-tools lint --rule-pack-dir <DIR> [options]
 |------|------|--------|
 | `--policy <FILE>` | 政策檔（`custom-rule-policy.yaml`） | 內建政策 |
 | `--ci` | 有 ERROR 級違規時以結束碼 1 結束 | false |
-| `--rule-pack-dir <DIR>` | 依宣告取 rule-packs 目錄的 rule pack（`_lib_consumer_read.rule_pack_files`：頂層的 `rule-pack-*.yaml`／`*.yml`；旁邊的 `threshold-registry.yaml` 也列在宣告裡；頂層其他 YAML（副檔名不分大小寫）、懸空 symlink 都點名，結束碼 2）。這是「rule-packs 目錄裡哪些是 rule pack」唯一的宣告，`validate-config --rule-packs`、CI 與 repo 內的 lint 都經它，不手寫 `--exclude`。取代 `<path...>`，不能與 `--exclude` 併用 | — |
+| `--rule-pack-dir <DIR>` | 依宣告取 rule-packs 目錄的 rule pack（`_lib_consumer_read.rule_pack_files`：頂層的 `rule-pack-*.yaml`／`*.yml`；旁邊的 `threshold-registry.yaml` 也列在宣告裡；頂層其他 YAML（副檔名不分大小寫）、懸空 symlink 都點名，結束碼 2）。這是「rule-packs 目錄裡哪些是 rule pack」唯一的宣告，`validate-config --rule-packs`、CI 與 repo 內的 lint 都經它，不手寫 `--exclude`。宣告為平台 pack 的（`_lib_consumer_read.PLATFORM_PACKS`，即 `rule-pack-platform.yaml`）不 lint：這份 policy 管的是租戶 pack，平台告警本來就沒有租戶（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)）。取代 `<path...>`，不能與 `--exclude` 併用 | — |
 | `--exclude <GLOB>` | 排除符合的檔（可重複；被排除的檔不讀）。不含 `/` 的樣式比對檔名、任何深度都算（`Chart.yaml`、`*-values.yaml`）；含 `/` 的樣式比對相對於所給目錄的路徑（`recipes/*`；直接給的檔則比對給的路徑）。以 Python `fnmatch.fnmatchcase` 比對：分大小寫，`*` 也跨 `/`。`lint`、`silencer-drift-check`、`onboard` 三者語意相同（共用 `_lib_consumer_read.files_to_read`） | — |
 
 WARN 不會升級成 ERROR，也沒有 JSON 輸出（尚未實作）；CI 請用 `--ci`，輸出是逐條的 `ERROR:`／`WARN:` 文字。

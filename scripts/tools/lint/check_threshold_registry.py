@@ -174,8 +174,11 @@ def run_check(
     if prose_files is None:
         # #3471: the rule packs are the one declaration's (rule-pack-*.yaml|yml;
         # an undeclared YAML beside them raises `SourcesUnlisted`, named).
-        prose_files = [str(p) for p in
-                       _lib_consumer_read.RULE_PACKS.files_under(PROJECT_ROOT)]
+        # #1595 D1a: TENANT packs only — a declared platform pack
+        # (`PLATFORM_PACKS`) has no tenant threshold, so its prose (which
+        # names alert labels such as `alert_source`) is no conf.d claim.
+        prose_files = [str(p) for p in _lib_consumer_read.tenant_rule_pack_files(
+            os.path.join(PROJECT_ROOT, _lib_consumer_read.RULE_PACKS.directory))]
     if extra_allowed is None:
         extra_allowed = _known_unwired_keys() | _state_filter_names()
     universe = registry_lib.membership_universe(doc, extra_allowed)

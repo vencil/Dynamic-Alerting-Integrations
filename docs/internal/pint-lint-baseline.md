@@ -31,11 +31,9 @@ updated_at: 2026-08-07
 ## Scope / engine
 
 - **掃描物**（`.pint.hcl` 的 `parser.include` 與 `check_pint.py` 的 `_PINT_ARGS` **兩邊都要有**——pint 只走 CLI 交給它的目錄，只加 include 是 dead config，見下方 tripwire）：
-  - `rule-packs/rule-pack-*.yaml` — 元件 rule-pack **canonical source**（含 `rule-pack-kubernetes.yaml`，5 處手寫 topology-trap 註解其中 3 處在此）。
-  - `tests/rulepacks/*.rules.yaml` — 平台自監控 pack 的 **extract**。這把 **ADR-025 guardian**（`Watchdog` + `AlertmanagerWebhookNotificationsFailing`）+ SSE-reconnect sentinel 納入 gate——「守護者不該裸奔在靜態分析網外」。同目錄的 `*_test.yaml` promtool spec 非 rule 檔，被 `parser.include` 略過。
-  - `k8s/03-monitoring/configmap-rules-platform*.y(a)ml` — **實際部署的**平台自監控 pack。**原「ConfigMap-wrapped → pint 無法 parse、extract 是唯一可掃形式」的說法已作廢**：pint 自 **v0.19.0** 起可解析 ConfigMap `data:` 內嵌規則，前提是該路徑列進 `parser.relaxed`（repo pin 0.86.0）。`relaxed` 是 **per-path regex list 不是全域 boolean**，且**不可省**——只加 `include` 不加 `relaxed`，pint 會把整份 ConfigMap 當成畸形 rule 文件而報 **Fatal**（實測 entries=352 + CI 紅）。
-- **只納 platform 前綴**，其餘 16 份 `configmap-rules-*.yaml` 不納。判準是機械的：那 16 份都由 `generate_rulepack_configmaps.py` 從已被掃的 `rule-packs/rule-pack-*.yaml` 生成並帶 `DO NOT EDIT` banner，`configmap-rules-platform.yaml` 是**唯一手寫**的一份（`grep -L "DO NOT EDIT" k8s/03-monitoring/configmap-rules-*.yaml` 正好只回它）。實測全納 17 份 → **689 entries（vs 393，+75%）且每個 finding 報兩次**（同一條 `alerts/for` 同時落在 `rule-packs/rule-pack-mariadb.yaml` 與 `k8s/03-monitoring/configmap-rules-mariadb.yaml`），等於一半輸出把開發者指向「不准編輯」的生成檔。副本一致性照舊由 `check_rulepack_sync.py` 守；PrometheusRule 副本不再提交（[#3427](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3427)，按需由 `operator-generate` 產生），無從納入。
-- **用 prefix + 雙副檔名（`.ya?ml`）不用精確檔名**：與 pytest 側 `_PLATFORM_CM_PREFIX` / `_RULES_FILE_EXTS`（`tests/ops/test_generate_routes_orchestration.py`）同一判準，兩邊的 floor 都寫成「跨所有平台 rules ConfigMap 的**總和**」，所以拆檔仍成立。精確檔名會讓未來的 `configmap-rules-platform-federation.yaml` 對 pint 隱形、pytest 卻照掃（實測：prefix 型 394 entries，精確檔名型 393）。pint 的 regexp **全部 auto-anchored**（`X` 當 `^X$`），無須自己寫 `^...$`。
+  - `rule-packs/rule-pack-*.yaml` — 全部 rule-pack **canonical source**（含 `rule-pack-kubernetes.yaml`，5 處手寫 topology-trap 註解其中 3 處在此）。[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595) D1a 起平台自監控 pack 也在這裡（`rule-pack-platform.yaml`），**ADR-025 guardian**（`Watchdog` + `AlertmanagerWebhookNotificationsFailing`）與其餘平台告警都以來源形式納入 gate——「守護者不該裸奔在靜態分析網外」。
+  - `tests/rulepacks/*.rules.yaml` — 不是 rule pack 的 bare-rules promtool 目標（runtime canary、liveness eq1-vs-bare、ADR-030 reference-validation 候選）。平台告警的 extract 已隨 D1a 刪除（promtool 測試直接讀 pack 來源）。同目錄的 `*_test.yaml` promtool spec 非 rule 檔，被 `parser.include` 略過。
+- **不納任何 `configmap-rules-*.yaml`**。判準是機械的：它們全都由 `generate_rulepack_configmaps.py` 從已被掃的 `rule-packs/rule-pack-*.yaml` 生成並帶 `DO NOT EDIT` banner——平台那份也是（D1a 之前它是唯一手寫的一份，靠 `parser.relaxed` 讀 ConfigMap 內嵌規則；那個特例隨之移除）。當時實測全納 17 份 → **689 entries（vs 393，+75%）且每個 finding 報兩次**（同一條 `alerts/for` 同時落在 `rule-packs/rule-pack-mariadb.yaml` 與 `k8s/03-monitoring/configmap-rules-mariadb.yaml`），等於一半輸出把開發者指向「不准編輯」的生成檔。副本一致性照舊由 `check_rulepack_sync.py` 守；PrometheusRule 副本不再提交（[#3427](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3427)，按需由 `operator-generate` 產生），無從納入。`tests/lint/test_check_pint.py` 從 `_lib_consumer_read.PLATFORM_PACKS` 讀出平台 pack，斷言其來源被納入、副本不被納入。pint 的 regexp **全部 auto-anchored**（`X` 當 `^X$`），無須自己寫 `^...$`。
 - **`--offline`**（CI 無需 Prometheus；跳過 `promql/series` / `promql/cost`）。引擎：CI 裝 pint binary（release tag `v0.86.0`），`check_pint.py` fallback docker tag `0.86.0`；兩者版本一致由 `tests/lint/test_check_pint.py` 守。
 - **供應鏈**：CI 的 pint binary 下載在 install 前先過 `scripts/ops/_verify_download.sh` 比對 pinned SHA-256（與 promtool / hadolint / kube-linter 同一把關），mismatch 即 fail，再落 docker fallback。docker fallback image 亦已 **digest-pin**（`check_pint.py` `PINT_IMAGE` = `…:0.86.0@sha256:…`，multi-arch index digest），與 kube-linter / helm / hadolint fallback 同步 pin（供應鏈 sweep Part 2，#849 follow-up）。
 
@@ -43,13 +41,13 @@ updated_at: 2026-08-07
 
 | 引擎 | scope | Bug/Fatal | Warning | Information |
 |---|---|---:|---:|---:|
-| pint (`alerts/template`) | rule-packs/ + tests/rulepacks/ extracts + platform ConfigMap（**393 entries**；納入 ConfigMap 前為 351） | **0** | **0** | 8（`alerts/for`，非阻擋） |
+| pint (`alerts/template`) | rule-packs/（含平台 pack）+ tests/rulepacks/ bare-rules 目標（D1a 後依 parse 數出 **376 entries**；D1a 前 CI 實記 412） | **0** | **0** | 見 CI（`alerts/for`，非阻擋） |
 
-> 納入平台 ConfigMap 對**既有 351 entries 的影響為 0**：pint 的 problem 輸出 before/after **完全相同**，只有 entries 計數與 log header 變。新增的 2 筆 Information 都來自 ConfigMap 本身（`alerts/for`，低於 `--min-severity=warning` 不顯示、也低於 `--fail-on=bug` 不阻擋）。
+> D1a 對 entries 的影響是機械可算的：平台 ConfigMap 的 51 條換成 `rule-pack-platform.yaml` 的同 51 條，再減去刪掉的 23 份 extract 裡的 36 條（412 − 36 = 376）。同一數法在 D1a 前的 `main` 上得到 412，與 CI pint 步驟記錄的 `entries=412` 相符。
 
-> `check_pint.py` 的 **entry-count tripwire 已從「`entries == 0` 才紅」升級為下界 `_MIN_PINT_ENTRIES`（現值 385）**。理由：實測到的 silent-green **全都是健康的非零值配 exit 0**——(a) `parser.include` 加了 ConfigMap 但 `_PINT_ARGS` 沒加 `k8s/03-monitoring/` → entries=351（應為 393）、exit 0；(b) `configmap-rules-platform.yaml` 被改名/搬走 → 一樣 entries=351、exit 0。下界取值窗口：**必須 >351**（掉整個平台 pack 正是這個守衛要抓的 −42），**必須 <393**（entries 只會隨新增規則變大，低於今值才不會每加一條規則就要改數字）；385 留 34 的餘裕與 8 條刪除的鬆弛。形狀對齊 `tests/ops/test_generate_routes_orchestration.py` 的 `_MIN_PLATFORM_ALERTS`：**單一份**手維護的 floor，只往上調。
+> `check_pint.py` 的 **entry-count tripwire 是下界 `_MIN_PINT_ENTRIES`（現值 368）**，不是「`entries == 0` 才紅」。理由：實測到的 silent-green **全都是健康的非零值配 exit 0**——(a) `parser.include` 加了路徑但 `_PINT_ARGS` 沒加對應目錄 → entries 不變、exit 0；(b) 平台規則被改名/搬出 include → 一樣 exit 0。下界取值窗口：**必須 > 376 − 42**（掉整個平台 pack 正是這個守衛要抓的；42 與 `_MIN_PLATFORM_ALERTS` 綁定），**必須 < 376**（entries 只會隨新增規則變大，低於今值才不會每加一條規則就要改數字）；368 留 8 條刪除的鬆弛。形狀對齊 `tests/ops/test_generate_routes_orchestration.py` 的 `_MIN_PLATFORM_ALERTS`：**單一份**手維護的 floor，只往上調。
 >
-> 這個下界也是 **pint 版本 bump 後偵測解析行為改變的唯一機械手段**——`parser.relaxed` 是脆弱點，若未來版本不再套用它，平台 pack 靜靜貢獻 0 entries、其餘規則照樣掃綠，CI 不會有別的訊號；只有計數掉回 351 會紅。**每次動 `PINT_VERSION` 都要重量一次。**
+> 這個下界也是 **pint 版本 bump 後偵測解析行為改變的唯一機械手段**：若未來版本不再解析某個 rule 檔，其餘規則照樣掃綠，只有計數下降會紅。**每次動 `PINT_VERSION` 都要重量一次。**
 >
 > 同時修掉一個 **dead-code bug**：pint **無條件**上色（不偵測 TTY），wrapper 用 `capture_output=True` 收到的是 `\x1b[2mentries=\x1b[0m\x1b[94m393\x1b[0m`，原本的 `entries=(\d+)` **永遠 match 不到** → 舊的 `entries == 0` 守衛在 CI 其實從未生效。現在先剝 ANSI SGR 再比對，且 `--ci` 下**讀不到 `entries=` 即 fail**（不再靜默跳過守衛）。
 
@@ -77,7 +75,7 @@ updated_at: 2026-08-07
 
 ## 平台 pack 盲區（已關閉）
 
-**原盲區**：平台 pack 只有「有 promtool 測試的」才有 extract，其餘對 pint 隱形。**已由 `parser.relaxed` + 直掃 `configmap-rules-platform*.y(a)ml` 關閉**——現在掃的是**實際部署的那份**，不再依賴 extract 的覆蓋率。
+**原盲區**：平台 pack 只有「有 promtool 測試的」才有 extract，其餘對 pint 隱形。**先由 `parser.relaxed` + 直掃 `configmap-rules-platform*.y(a)ml` 關閉（#1370）**；#1595 D1a 起平台 pack 有了 rule-pack 來源，pint 掃的是來源 `rule-packs/rule-pack-platform.yaml`，部署副本由它生成（`check_rulepack_sync.py` 守一致），`relaxed` 特例與 extract 一併移除。下表是 #1370 當時的歷史量測。
 
 關閉盲區當時（#1370，2026-08-09）的量測（數字用 parse 數出、非 grep）：
 

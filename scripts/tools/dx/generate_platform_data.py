@@ -323,8 +323,11 @@ DEPENDENCIES = {
     "nginx": {"suggests": ["kubernetes"], "reason": {"en": "Ingress/proxy pods benefit from K8s resource alerts", "zh": "Ingress/proxy Pod 受益於 K8s 資源告警"}},
 }
 
-# Required packs (always included, cannot be deselected)
-REQUIRED_PACKS = {"operational", "platform", "liveness"}
+# Required packs (always included, cannot be deselected). Every declared
+# platform pack is required (#1595 D1a: `PLATFORM_PACKS` is the one place that
+# names them); operational and liveness are required TENANT packs — required
+# is not platform.
+REQUIRED_PACKS = {"operational", "liveness"} | _lib_consumer_read.PLATFORM_PACKS
 
 # Default-on packs (selected by default for new tenants)
 DEFAULT_ON_PACKS = {"kubernetes", "mariadb"}

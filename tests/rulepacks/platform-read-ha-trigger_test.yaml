@@ -20,7 +20,7 @@
 # only {severity, job} (no pod/instance/endpoint).
 # Run: promtool test rules tests/rulepacks/platform-read-ha-trigger_test.yaml
 rule_files:
-  - platform-read-ha-trigger.rules.yaml
+  - ../../rule-packs/rule-pack-platform.yaml
 
 evaluation_interval: 1h
 
@@ -45,6 +45,18 @@ tests:
               alert_source: platform
               job: tenant-api
             exp_annotations:
+              description: |
+                The 7-day average of concurrent tenant-api SSE (/api/v1/events)
+                clients has exceeded 2 — the Tenant-Manager read path is now a
+                sustained multi-viewer surface, not the single-operator admin UI
+                ADR-023 assumed when it accepted a brief read outage on every
+                `strategy: Recreate` deploy. This is the codified RE-TRIGGER for the
+                deferred read/write split (#678 / #788, closed deferred; see ADR-023
+                Deferred A4). NOT an outage. Action: reopen the CQRS split, and
+                sequence it WITH the write-plane K8s Lease (#787 / A3) — A4 alone
+                leaves writes (Save) dropping on deploy. Details:
+                docs/api/tenant-api-hardening.md §5.6. Dashboard: tenant_api_sse_clients.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md"
               summary: "tenant-api read load sustained — revisit read/write CQRS split (ADR-023 A4)"
 
   # 2) Sustained but BELOW threshold: a single viewer all week. 7d avg = 1 → no fire.
