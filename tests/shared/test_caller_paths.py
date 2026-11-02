@@ -40,7 +40,8 @@ DENIED_ZH = "無法存取（EACCES）"
 #: The tools whose refusal lines are Chinese (fixed, not by `DA_LANG`); every
 #: other row's tool speaks English unless `DA_LANG=zh` (BILINGUAL below).
 SPEAKS_ZH = {"ops/deprecate_rule.py", "ops/validate_migration.py", "dx/inject_waveform.py",
-             "dx/list_subprocess_only_modules.py", "dx/verify_diff.py"}
+             "dx/list_subprocess_only_modules.py", "dx/verify_diff.py",
+             "ops/offboard_tenant.py"}  # #3512: its --state refusal is the tool's language
 
 #: OPS_SITES rows whose tool follows `DA_LANG` for its refusal line: run
 #: again under `DA_LANG=zh`, the detail is Chinese too.
