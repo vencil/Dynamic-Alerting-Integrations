@@ -45,9 +45,6 @@ tests:
               name: http_5xx_spike
               mode: page
               version: default
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "Custom alert [http_5xx_spike] for shop-a"
               summary_zh: "shop-a 的自訂告警 [http_5xx_spike] 觸發"
@@ -66,9 +63,6 @@ tests:
               name: web_5xx
               mode: silent
               version: default
-              runbook_url: "http://rb/web"
-              owner: team-web
-              tier: silver
             exp_annotations:
               summary: "Custom alert [web_5xx] for web-b"
               summary_zh: "web-b 的自訂告警 [web_5xx] 觸發"

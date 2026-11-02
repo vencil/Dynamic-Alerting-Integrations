@@ -112,9 +112,9 @@ Prometheus 規則比對的是「序列」（series，帶標籤的時間序列）
 |---|---|---|
 | 觀測指標 `@` 測試值 | 使用者填的測試值 | `scenario.value` |
 | `user_threshold @ 閾值`（帶 recipe 識別字 + severity + name + mode） | 規則要比對的閾值與標籤 | 識別字直接取自編譯器（見 5.3），不另外推算 |
-| `tenant_metadata_info @ 1` | 給規則 `group_left` 帶入 runbook／owner 用 | 固定值 |
+| `tenant_metadata_info @ 1` | 給告警的 runbook／owner annotation 查詢用（規則不 join 它，#3483） | 固定值 |
 
-> 預覽的合成輸入**一律附上** `tenant_metadata_info`，所以預覽看到的是帶 runbook／owner 的完整告警。（真實環境若租戶缺這個，告警仍會觸發、只是這些標籤為空，那由執行期處理，與預覽無關。）
+> 預覽的合成輸入**一律附上** `tenant_metadata_info`，所以預覽看到的是帶 runbook／owner 的完整告警。（真實環境若租戶缺這個，告警仍會觸發、只是這些 annotation 為空，那由執行期處理，與預覽無關。）
 
 **關鍵分界——只有序列的「形狀」才跟 recipe 型別有關**：
 

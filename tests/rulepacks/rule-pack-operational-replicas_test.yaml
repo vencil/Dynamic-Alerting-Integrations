@@ -1,0 +1,63 @@
+# promtool unit test — 直接拿 threshold-exporter 序列告警的租戶告警，每個副本不重複（#3483）。
+# Run: promtool test rules tests/rulepacks/rule-pack-operational-replicas_test.yaml
+#
+# threshold-exporter 跑兩個副本，平台的 Prometheus 逐 pod 抓取（platform-components，
+# role: endpointslice），所以 user_silent_mode／user_severity_dedup／da_config_event／
+# tenant_expected_exporter 每個序列各有兩份，只差 instance／pod。下面每個輸入都照這個
+# 形狀給兩份；每條告警對每個租戶必須恰好一則，而且不帶 instance／pod。
+# 把任一條規則的 `max without(instance, pod)` 拿掉，對應的計數變成 2，本檔轉紅。
+rule_files:
+  - ../../rule-packs/rule-pack-operational.yaml
+  - ../../rule-packs/rule-pack-liveness.yaml
+
+evaluation_interval: 15s
+
+tests:
+  - interval: 15s
+    input_series:
+      - series: 'user_silent_mode{tenant="t1", target_severity="warning", job="threshold-exporter", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
+        values: '1x40'
+      - series: 'user_silent_mode{tenant="t1", target_severity="warning", job="threshold-exporter", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+        values: '1x40'
+      - series: 'user_silent_mode{tenant="t1", target_severity="critical", job="threshold-exporter", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
+        values: '1x40'
+      - series: 'user_silent_mode{tenant="t1", target_severity="critical", job="threshold-exporter", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+        values: '1x40'
+      - series: 'user_severity_dedup{tenant="t1", mode="enable", job="threshold-exporter", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
+        values: '1x40'
+      - series: 'user_severity_dedup{tenant="t1", mode="enable", job="threshold-exporter", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+        values: '1x40'
+      - series: 'da_config_event{tenant="t1", event="silence_expired", reason="end_time_passed", job="threshold-exporter", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
+        values: '1x40'
+      - series: 'da_config_event{tenant="t1", event="silence_expired", reason="end_time_passed", job="threshold-exporter", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+        values: '1x40'
+      # t1 宣告了 mariadb exporter，但 tenant-exporters 沒有健康 target。
+      - series: 'tenant_expected_exporter{tenant="t1", db_type="mariadb", job="threshold-exporter", instance="10.0.0.1:8080", pod="threshold-exporter-0"}'
+        values: '1x40'
+      - series: 'tenant_expected_exporter{tenant="t1", db_type="mariadb", job="threshold-exporter", instance="10.0.0.2:8080", pod="threshold-exporter-1"}'
+        values: '1x40'
+    promql_expr_test:
+      - eval_time: 5m
+        expr: |
+          count by(alertname, tenant) (
+            ALERTS{alertstate="firing", alertname=~"TenantSilentWarning|TenantSilentCritical|TenantSeverityDedupEnabled|TenantConfigEvent|TenantExporterAbsent"}
+          )
+        exp_samples:
+          - labels: '{alertname="TenantSilentWarning", tenant="t1"}'
+            value: 1
+          - labels: '{alertname="TenantSilentCritical", tenant="t1"}'
+            value: 1
+          - labels: '{alertname="TenantSeverityDedupEnabled", tenant="t1"}'
+            value: 1
+          - labels: '{alertname="TenantConfigEvent", tenant="t1"}'
+            value: 1
+          - labels: '{alertname="TenantExporterAbsent", tenant="t1"}'
+            value: 1
+      # 告警不帶抓取身分：instance／pod 已收掉。
+      - eval_time: 5m
+        expr: |
+          count(ALERTS{alertname=~"TenantSilentWarning|TenantSilentCritical|TenantSeverityDedupEnabled|TenantConfigEvent|TenantExporterAbsent", pod!=""})
+          or vector(0)
+        exp_samples:
+          - labels: '{}'
+            value: 0

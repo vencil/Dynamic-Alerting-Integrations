@@ -64,28 +64,31 @@ The sidecar will automatically detect the `grafana_dashboard=1` label and mount 
 
 ### Panel Quick Reference (Stat Panels)
 
+threshold-exporter runs several replicas and the platform's Prometheus scrapes every pod ([#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)), so every `user_*` series arrives once per replica, differing only in `instance`/`pod`. Each panel collapses the replicas with `max without(instance, pod)` before counting, so the numbers are tenant configuration counts, not multiplied by the replica count.
+
+
 | # | Panel | PromQL | Normal | Troubleshooting |
 |---|-------|--------|--------|-----------------|
 | 1 | Active Tenants | `count(count by(tenant) (user_threshold))` | Non-zero | Sudden drop→check config or reload |
-| 2 | Total Thresholds | `count(user_threshold)` | Stable non-zero | Drop>10%→check exporter/scrape |
-| 3 | Warning/Critical | `count(user_threshold{severity="warning\|critical"})` | Critical 20-40% | Critical>50%→check Rule Pack |
-| 4 | Silent Mode | `count(user_silent_mode) or vector(0)` | 0 or planned maintenance | Unexpected>0→check `_silent_mode` |
-| 5 | Maintenance Mode | `count(user_state_filter{filter="maintenance"})` | 0 or planned maintenance | Unexpected>0→check `_state_maintenance` |
-| 6 | Dedup Disabled | `count(user_severity_dedup{mode="disable"})` | 0 or few | Unexpected>0→check `_severity_dedup` |
+| 2 | Total Thresholds | `count(max without(instance, pod) (user_threshold))` | Stable non-zero | Drop>10%→check exporter/scrape |
+| 3 | Warning/Critical | `count(max without(instance, pod) (user_threshold{severity="warning\|critical"}))` | Critical 20-40% | Critical>50%→check Rule Pack |
+| 4 | Silent Mode | `count(max without(instance, pod) (user_silent_mode)) or vector(0)` | 0 or planned maintenance | Unexpected>0→check `_silent_mode` |
+| 5 | Maintenance Mode | `count(max without(instance, pod) (user_state_filter{filter="maintenance"}))` | 0 or planned maintenance | Unexpected>0→check `_state_maintenance` |
+| 6 | Dedup Disabled | `count(max without(instance, pod) (user_severity_dedup{mode="disable"}))` | 0 or few | Unexpected>0→check `_severity_dedup` |
 
 ---
 
 #### 7-8. Tenant State Overview (Table) + Thresholds by Component (BarChart)
 
 - **Tenant State Overview**: Aggregated tenant view showing threshold counts and operational states (silent/maintenance/dedup). Click columns to sort and locate anomalies.
-- **Thresholds by Component**: `count by(component) (user_threshold)` — Distribution across component types, reflecting infrastructure composition.
+- **Thresholds by Component**: `count by(component) (max without(instance, pod) (user_threshold))` — Distribution across component types, reflecting infrastructure composition.
 
 ---
 
 #### 9-10. Thresholds per Tenant (BarChart) + Active State Filters (Table)
 
-- **Thresholds per Tenant**: `count by(tenant) (user_threshold)` — Threshold count per tenant. Turns red near 500 limit (Cardinality Guard). See [Architecture §2](./architecture-and-design.en.md#2-core-design-config-driven-architecture).
-- **Active State Filters**: `user_state_filter` — Detailed list of active state filters (maintenance, crashloop, etc.), typically empty except during planned maintenance.
+- **Thresholds per Tenant**: `count by(tenant) (max without(instance, pod) (user_threshold))` — Threshold count per tenant. Turns red near 500 limit (Cardinality Guard). See [Architecture §2](./architecture-and-design.en.md#2-core-design-config-driven-architecture).
+- **Active State Filters**: `max without(instance, pod) (user_state_filter)` — Detailed list of active state filters (maintenance, crashloop, etc.), typically empty except during planned maintenance.
 
 ---
 

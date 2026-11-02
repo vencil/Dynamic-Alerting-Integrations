@@ -348,3 +348,22 @@ exec:
       s.sendall(b"GET /v1/status HTTP/1.1\r\nHost: probe\r\n\r\n")
       sys.exit(0 if s.recv(64).startswith(b"HTTP/1.1 200 ") else 1)
 {{- end }}
+
+{{/*
+The port the tenant-api container listens on: 8080. Every place the chart
+names that port reads it here — the container port, its probes, the Service's
+targetPort, the NetworkPolicy, the oauth2-proxy TCP upstream and both
+prometheus.io/port annotations (Service and pod). The process itself listens on
+tenantApi.listenAddr (TA_ADDR); the render FAILS unless that address ends in
+this port, so the two cannot disagree. Prometheus' platform-components job
+keeps only the endpoint on the annotated port (#3483), so a drift would drop
+every tenant-api target.
+*/}}
+{{- define "tenant-api.apiPort" -}}
+{{- $port := "8080" -}}
+{{- $listen := toString .Values.tenantApi.listenAddr -}}
+{{- if ne (regexFind ":[0-9]+$" $listen) (printf ":%s" $port) -}}
+{{- fail (printf "tenantApi.listenAddr=%q must end in :%s: the chart's container port, probes, Service targetPort, NetworkPolicy, oauth2-proxy upstream and prometheus.io/port all name %s (tenant-api.apiPort)" $listen $port $port) -}}
+{{- end -}}
+{{- $port -}}
+{{- end }}

@@ -32,8 +32,10 @@ annotations:
   summary: "High connections on {{ $labels.tenant }}"
   description: "{{ $value }} threads connected (warning threshold exceeded)"
   # Platform / NOC perspective (new in v1.13.0)
-  platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: connection threshold breached — review connection pool sizing"
+  platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: connection threshold breached — review connection pool sizing"
 ```
+
+The part inside `[…]` is the tenant-metadata query template: tier is not an alert label, the annotation reads it from `tenant_metadata_info` at evaluation time ([#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483); see "Method A" below).
 
 Alertmanager notification templates select which annotation to reference based on the receiver.
 
@@ -47,7 +49,7 @@ Dual-Perspective Annotation puts both wordings in the Prometheus rule's annotati
 
 ### Step 1: Verify Rule Packs include platform_summary
 
-The Rule Packs' built-in threshold alerts all carry `platform_summary`. ⚠️ The `Custom_*` alerts compiled from `_custom_alerts` into `rule-pack-custom-alerts.yaml` do not (they also have the `group_left` join, so the join does not tell them apart); the examples below therefore use `{{ or .Annotations.platform_summary .Annotations.summary }}` inside `range .Alerts`, and keep the title independent of it. Verify with:
+The Rule Packs' built-in threshold alerts all carry `platform_summary`. ⚠️ The `Custom_*` alerts compiled from `_custom_alerts` into `rule-pack-custom-alerts.yaml` do not (they also carry the runbook_url / owner / tier annotations, so those do not tell them apart); the examples below therefore use `{{ or .Annotations.platform_summary .Annotations.summary }}` inside `range .Alerts`, and keep the title independent of it. Verify with:
 
 ```bash
 grep -c platform_summary rule-packs/*.yaml
@@ -119,7 +121,7 @@ The system auto-expands to individual `platform-enforced-<tenant>` receivers per
 
 ### Option A: Via `_metadata` mechanism
 
-`_metadata` sets only three values, `runbook_url`, `owner` and `tier`, carried into alerts via `tenant_metadata_info` + `group_left`; the `tier` that `platform_summary` references comes from here:
+`_metadata` sets only three values, `runbook_url`, `owner` and `tier`, which the exporter serves as `tenant_metadata_info`; alerts carry none of these labels, and annotations read them with the fixed query template (`METADATA_ANNOTATIONS` in `check_leftouterjoin_enrichment.py`). The `tier` in `platform_summary` comes from here:
 
 ```yaml
 tenants:
@@ -142,7 +144,7 @@ Organizations needing fully different semantics can fork Rule Packs:
   # ... existing expr ...
   annotations:
     summary: "High connections: {{ $labels.tenant }}"
-    platform_summary: "NOC: {{ $labels.tenant }} approaching connection limit, tier={{ $labels.tier }}, assess customer notification"
+    platform_summary: "NOC: {{ $labels.tenant }} approaching connection limit, tier={{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}, assess customer notification"
 ```
 
 ## Architecture Diagram

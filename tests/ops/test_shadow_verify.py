@@ -272,6 +272,18 @@ class TestCheckRuntime:
         assert maint["status"] == "warn"
         assert "db-a" in maint["detail"]
 
+    def test_maintenance_tenants_listed_once_per_tenant(self, tmp_path):
+        """#3483: should an answer still carry one row per exporter replica,
+        each tenant is named once (and in a stable order)."""
+        args = _args(report_csv=None)
+        rows = [{"metric": {"tenant": t, "pod": p}, "value": [0, "1"]}
+                for t in ("t2", "t1") for p in ("te-0", "te-1")]
+        with patch.object(sv, "query_prometheus") as mock_qp:
+            mock_qp.side_effect = [(rows, None), ([], None)]
+            checks = sv.check_runtime(args)
+        maint = next(c for c in checks if c["check"] == "maintenance_mode")
+        assert maint["detail"] == "Tenants in maintenance: t1, t2"
+
     def test_no_maintenance_mode(self, tmp_path):
         args = _args(report_csv=None)
 
@@ -464,7 +476,7 @@ def _run(check, answer_for):
 
 class TestQueryNotAnsweredIsACheck:
     @pytest.mark.parametrize("query,check", [
-        ('user_state_filter{filter="maintenance"}', "maintenance_mode"),
+        (sv.MAINTENANCE_QUERY, "maintenance_mode"),
         ("user_silent_mode", "silent_mode"),
     ])
     def test_a_mode_query_error_is_a_caller_error(self, query, check):

@@ -81,26 +81,22 @@ spec:
 - Avoids double-counting
 - Alert threshold accurate under HA
 
-#### The same rule applies to `tenant_metadata_info` joins
+#### `tenant_metadata_info`: not joined, queried in annotations
 
-Every replica also serves its own copy of `tenant_metadata_info`. Scraped per pod (a Prometheus Operator ServiceMonitor uses endpoints, so each pod is its own target), the same tenant arrives twice, differing only in `instance`/`pod`. If the join that copies metadata into an alert uses the raw metric:
+Every replica also serves its own copy of `tenant_metadata_info{tenant, runbook_url, owner, tier}`. The platform's Prometheus scrapes per pod (the raw config's `platform-components` job uses `role: endpointslice`, and a Prometheus Operator ServiceMonitor also discovers endpoints, so each pod is its own target), and the same tenant arrives twice, differing only in `instance`/`pod`.
 
-```promql
-* on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info
+Rules **do not join** this metric, and alerts carry no runbook_url/owner/tier labels. An annotation that shows metadata reads it with one query template (owner and tier change only the final field name):
+
+```yaml
+annotations:
+  runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
 ```
 
-the right-hand side has two series per tenant, Prometheus reports `many-to-many matching not allowed`, and **the whole alert stops evaluating** (it does not just lose labels; it does not fire). Collapse the right-hand side first:
+- `topk(1, …)` takes one series when the two replicas each serve a copy; for a tenant without metadata the query returns nothing, `with` does not expand, the annotation is an empty string and the alert still fires.
+- Why not a join: a join makes metadata part of the alert's identity. A raw join hits many-to-many with several replicas and the whole rule stops evaluating; collapsing the right-hand side to one series per tenant fixes that, but which series the collapse picks changes during the reload window (see the known limitation below), and when the alert's labels change so does its identity and `for:` restarts. VictoriaMetrics' `topk` may pick a different one of several equal-valued series on each evaluation, so that tenant would not fire during the window.
+- `check_leftouterjoin_enrichment.py` refuses any expression that joins `tenant_metadata_info` (it may appear only on the right of `and`/`unless`; `or` is refused too, since it passes right-hand series through with their labels), and refuses `$labels.runbook_url`/`owner`/`tier` and any metadata query other than this template. `tests/rulepacks/rule-pack-metadata-replicas_test.yaml` uses two replica series, with one tenant's replicas serving different `runbook_url` values, and checks on both promtool and vmalert-tool that every tenant's alert fires exactly once, carries no metadata label, and that annotations show the metadata.
 
-```promql
-* on(tenant) group_left(runbook_url, owner, tier)
-  max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-```
-
-- `by` lists the labels the exporter serves, rather than `without` listing the labels the scrape adds: a scrape config can add more per-replica labels (a relabelled `node`, say), and any one `without` misses brings the error back. A test compares the `by` list with the label list in `collector.go`, so a label added to the exporter turns it red instead of being collapsed away silently.
-- `check_leftouterjoin_enrichment.py` rejects any join whose right-hand side is not this form; `tests/rulepacks/rule-pack-metadata-replicas_test.yaml` checks a representative alert from every pack against two replica series.
-- The void branch `unless on(tenant) tenant_metadata_info` keeps the raw metric: `unless` only tests presence, and duplicate right-hand series do not make it fail.
-
-**Known limitation: the reload window.** Each replica hot-reloads on its own, so they switch versions at slightly different times. If a tenant's `owner`/`runbook_url`/`tier` changes, the two replicas briefly serve different values, `max by(...)` still leaves two series for that tenant. Prometheus rejects a duplicate match group on the right-hand side for the whole expression, not per tenant, so every rule with that join fails to evaluate **for all tenants** during those cycles, the void branch included (`prometheus_rule_evaluation_failures_total` goes up; the alerts neither newly fire nor get re-sent). Evaluation recovers once both replicas run the new version. Today this only reaches per-pod scraping (Prometheus Operator); the raw config scrapes one target per Service. It is not handled here: picking one series with `topk` would make the labels flip between the two values and change the alert's identity. The choice has to be made before the raw config moves to per-pod discovery.
+**Known limitation: during the reload window, annotations may show either replica's metadata.** The window can last a minute or two: each replica checks its config only every `reloadInterval` (30s by default in helm/threshold-exporter), and an update to the mounted ConfigMap reaches each replica through its own node's kubelet sync (typically tens of seconds, sometimes over a minute); the two delays add up, so the replicas can switch to the new version that far apart. The window only affects the tenant whose metadata changed: its notifications may show the old or the new `runbook_url`/`owner`/`tier`. The alert's identity and firing are unaffected, and so are other tenants.
 
 ### 4.4 Self-Monitoring (Platform Rule Pack)
 

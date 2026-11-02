@@ -87,9 +87,6 @@ tests:
               severity: warning
               metric_group: threads_running
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "High running-thread saturation on db-a"
               summary_zh: "db-a 執行緒飽和過高"
@@ -131,9 +128,6 @@ tests:
               severity: warning
               metric_group: threads_running
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "High running-thread saturation on db-a"
               summary_zh: "db-a 執行緒飽和過高"
@@ -226,9 +220,6 @@ tests:
               severity: critical
               metric_group: threads_running
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "Critical running-thread saturation on db-a"
               summary_zh: "db-a 執行緒飽和嚴重過高"

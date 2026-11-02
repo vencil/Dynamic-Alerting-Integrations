@@ -46,7 +46,12 @@ spec:
       annotations:
         # Force rolling restart when RBAC config changes
         checksum/rbac: {{ include (print $.Template.BasePath "/configmap-rbac.yaml") . | sha256sum }}
-        {{- with .Values.podAnnotations }}
+        {{- $podAnn := .Values.podAnnotations | default dict }}
+        {{- if and (hasKey $podAnn "prometheus.io/port") (ne (toString (index $podAnn "prometheus.io/port")) (include "tenant-api.apiPort" .)) }}
+        {{- fail (printf "podAnnotations prometheus.io/port=%v is not the container port %s: remove it; the chart derives it from tenant-api.apiPort (#3483)" (index $podAnn "prometheus.io/port") (include "tenant-api.apiPort" .)) }}
+        {{- end }}
+        prometheus.io/port: "{{ include "tenant-api.apiPort" . }}"
+        {{- with omit $podAnn "prometheus.io/port" }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
@@ -381,7 +386,7 @@ spec:
             {{- end }}
           ports:
             - name: api
-              containerPort: 8080
+              containerPort: {{ include "tenant-api.apiPort" . }}
               protocol: TCP
           volumeMounts:
             - name: conf-dir
@@ -420,14 +425,14 @@ spec:
           readinessProbe:
             httpGet:
               path: /ready
-              port: 8080
+              port: {{ include "tenant-api.apiPort" . }}
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
-              port: 8080
+              port: {{ include "tenant-api.apiPort" . }}
             initialDelaySeconds: 10
             periodSeconds: 15
             failureThreshold: 3
@@ -544,7 +549,7 @@ spec:
             # (spike-verified against this exact oauth2-proxy digest).
             - --upstream=unix://{{ .Values.humanSocket.path }}
             {{- else }}
-            - --upstream=http://localhost:8080
+            - --upstream=http://localhost:{{ include "tenant-api.apiPort" . }}
             {{- end }}
             - --http-address=0.0.0.0:4180
             - --redirect-url={{ .Values.oauth2Proxy.redirectUrl }}

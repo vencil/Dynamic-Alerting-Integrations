@@ -99,29 +99,12 @@ groups:
         expr: |
           (
             (
-              (
-                tenant:jvm_gc_pause:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:jvm_gc_pause
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:jvm_gc_pause:rate5m
+              > on(tenant) group_left
+              tenant:alert_threshold:jvm_gc_pause
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                tenant:jvm_gc_pause:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:jvm_gc_pause
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -131,41 +114,24 @@ groups:
         annotations:
           summary: "JVMHighGCPause on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM GC pause 過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: GC pause elevated — JVM tuning review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：GC pause 升高 — JVM 調優審查"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: GC pause elevated — JVM tuning review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：GC pause 升高 — JVM 調優審查"
           description: "GC pause rate {{ $value }}s/5m exceeds threshold"
           description_zh: "GC pause 速率 {{ $value }}秒/5分鐘 超出閾值"
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
       - alert: JVMHighGCPauseCritical
         expr: |
           (
             (
-              (
-                tenant:jvm_gc_pause:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:jvm_gc_pause_critical
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:jvm_gc_pause:rate5m
+              > on(tenant) group_left
+              tenant:alert_threshold:jvm_gc_pause_critical
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                tenant:jvm_gc_pause:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:jvm_gc_pause_critical
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 3m
         labels:
@@ -175,42 +141,25 @@ groups:
         annotations:
           summary: "JVMHighGCPauseCritical on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM GC pause 嚴重過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical GC pause — application performance impacted"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：嚴重 GC pause — 應用程式效能受影響"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: critical GC pause — application performance impacted"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：嚴重 GC pause — 應用程式效能受影響"
           description: "GC pause rate {{ $value }}s/5m exceeds critical threshold"
           description_zh: "GC pause 速率 {{ $value }}秒/5分鐘 超出嚴重閾值"
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
       # ---- Memory Pressure ----
       - alert: JVMMemoryPressure
         expr: |
           (
             (
-              (
-                tenant:jvm_memory_used:percent
-                > on(tenant) group_left
-                tenant:alert_threshold:jvm_memory
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:jvm_memory_used:percent
+              > on(tenant) group_left
+              tenant:alert_threshold:jvm_memory
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                tenant:jvm_memory_used:percent
-                > on(tenant) group_left
-                tenant:alert_threshold:jvm_memory
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -220,41 +169,24 @@ groups:
         annotations:
           summary: "JVMMemoryPressure on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM 記憶體壓力"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: heap memory pressure — JVM sizing review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：heap 記憶體壓力 — JVM 大小調整審查"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: heap memory pressure — JVM sizing review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：heap 記憶體壓力 — JVM 大小調整審查"
           description: "Heap usage {{ $value }}% exceeds threshold"
           description_zh: "Heap 使用率 {{ $value }}% 超出閾值"
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
       - alert: JVMMemoryPressureCritical
         expr: |
           (
             (
-              (
-                tenant:jvm_memory_used:percent
-                > on(tenant) group_left
-                tenant:alert_threshold:jvm_memory_critical
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:jvm_memory_used:percent
+              > on(tenant) group_left
+              tenant:alert_threshold:jvm_memory_critical
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                tenant:jvm_memory_used:percent
-                > on(tenant) group_left
-                tenant:alert_threshold:jvm_memory_critical
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 3m
         labels:
@@ -264,42 +196,25 @@ groups:
         annotations:
           summary: "JVMMemoryPressureCritical on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM 記憶體壓力嚴重"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical heap pressure — OOM risk, escalate"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：嚴重 heap 記憶體壓力 — OOM 風險，需升級處理"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: critical heap pressure — OOM risk, escalate"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：嚴重 heap 記憶體壓力 — OOM 風險，需升級處理"
           description: "Heap usage {{ $value }}% exceeds critical threshold"
           description_zh: "Heap 使用率 {{ $value }}% 超出嚴重閾值"
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
       # ---- Thread Pool ----
       - alert: JVMThreadPoolExhaustion
         expr: |
           (
             (
-              (
-                tenant:jvm_threads:current
-                > on(tenant) group_left
-                tenant:alert_threshold:jvm_threads
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:jvm_threads:current
+              > on(tenant) group_left
+              tenant:alert_threshold:jvm_threads
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                tenant:jvm_threads:current
-                > on(tenant) group_left
-                tenant:alert_threshold:jvm_threads
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -309,41 +224,24 @@ groups:
         annotations:
           summary: "JVMThreadPoolExhaustion on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM thread pool 耗盡"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: thread pool saturation — request backlog risk"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：thread pool 飽和 — request 積壓風險"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: thread pool saturation — request backlog risk"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：thread pool 飽和 — request 積壓風險"
           description: "Active threads {{ $value }} exceeds threshold"
           description_zh: "活動 thread 數 {{ $value }} 超出閾值"
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
       - alert: JVMThreadPoolExhaustionCritical
         expr: |
           (
             (
-              (
-                tenant:jvm_threads:current
-                > on(tenant) group_left
-                tenant:alert_threshold:jvm_threads_critical
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:jvm_threads:current
+              > on(tenant) group_left
+              tenant:alert_threshold:jvm_threads_critical
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                tenant:jvm_threads:current
-                > on(tenant) group_left
-                tenant:alert_threshold:jvm_threads_critical
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 3m
         labels:
@@ -353,42 +251,25 @@ groups:
         annotations:
           summary: "JVMThreadPoolExhaustionCritical on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM thread pool 嚴重耗盡"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: critical thread exhaustion — service degradation likely"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：嚴重 thread 耗盡 — 服務降級可能性高"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: critical thread exhaustion — service degradation likely"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：嚴重 thread 耗盡 — 服務降級可能性高"
           description: "Active threads {{ $value }} exceeds critical threshold"
           description_zh: "活動 thread 數 {{ $value }} 超出嚴重閾值"
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
       # ---- Composite: Performance Degraded ----
       - alert: JVMPerformanceDegraded
         expr: |
           (
             (
-              (
-                tenant:jvm_gc_pause:rate5m > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause
-                and on(tenant)
-                tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:jvm_gc_pause:rate5m > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause
+              and on(tenant)
+              tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                tenant:jvm_gc_pause:rate5m > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause
-                and on(tenant)
-                tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -398,10 +279,10 @@ groups:
         annotations:
           summary: "JVMPerformanceDegraded on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 上 JVM 效能降級"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: multi-signal JVM degradation — escalate"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}：多訊號 JVM 降級 — 需升級處理"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: multi-signal JVM degradation — escalate"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}：多訊號 JVM 降級 — 需升級處理"
           description: "Both GC pause and memory exceed thresholds — JVM performance degraded"
           description_zh: "GC pause 和記憶體皆超出閾值 — JVM 效能降級"
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

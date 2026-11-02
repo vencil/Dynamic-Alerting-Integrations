@@ -49,8 +49,8 @@ THRESHOLD_RE = re.compile(r"tenant(?:_version)?:alert_threshold:([A-Za-z0-9_]+)"
 # (underscore, no colon) — part of the R3 denylist.
 OBSERVED_RE = re.compile(r"tenant(?:_version)?:[A-Za-z0-9_:]+")
 # Numeric scaling adjacent to an operand (e.g. "* 100", "/ 1024", "* (100)").
-# The metadata join "* on(tenant) group_left(...) tenant_metadata_info" is NOT
-# numeric, so it is not matched here. The optional "(" covers parenthesised
+# A vector match such as "* on(tenant) group_left(...) <series>" (rule packs no
+# longer join tenant_metadata_info, #3483) is NOT numeric, so it is not matched here. The optional "(" covers parenthesised
 # scalars like "* (100)".
 SCALING_RE = re.compile(r"[*/]\s*\(?\s*[0-9]")
 

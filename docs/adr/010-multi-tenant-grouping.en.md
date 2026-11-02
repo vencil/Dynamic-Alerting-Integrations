@@ -17,11 +17,13 @@ lang: en
 
 **2026-10-11**: `_groups.yaml` moved out of conf.d/ into tenant-api's state store (a key of the same name in the `tenant-api-state` ConfigMap on Kubernetes, a directory on a single host). Writes are a compare-and-swap on the ConfigMap's `resourceVersion` and no longer produce a git commit, so group records have no git history; each write is audited by a structured `state_write` log event instead ([#2856](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2856)). The storage, write model and consequences below are updated to match.
 
+**2026-11-02**: `tenant_metadata_info` is no longer joined into alerts; alert annotations query it instead ([#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)). The "Terms" entry is updated to match; this ADR's decision is unchanged.
+
 ## Terms
 
 - **conf.d/**: the directory holding tenant config YAML. Files whose names start with `_` are platform-level files (for example `_defaults.yaml`, `_rbac.yaml`), not the config of any one tenant.
 - **`_metadata`**: the block in a tenant's config that describes the tenant itself (owner, runbook link, and so on) rather than thresholds.
-- **`tenant_metadata_info`**: an info metric threshold-exporter emits for every tenant, always valued 1, whose labels carry some of the `_metadata` fields so PromQL can join them onto alerts.
+- **`tenant_metadata_info`**: an info metric threshold-exporter emits for every tenant, always valued 1, whose labels carry some of the `_metadata` fields for alert annotations to query (they are not joined into alert labels; see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md) §2).
 - **Cardinality**: the number of distinct label combinations under a metric. Every extra label, and every extra value of a label, adds time series that Prometheus has to store.
 
 ## Background

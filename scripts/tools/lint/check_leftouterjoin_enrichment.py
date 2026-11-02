@@ -1,39 +1,48 @@
 #!/usr/bin/env python3
-"""Left-outer-join enrichment invariant lint (ADR-024 PR3-pre Commit 3).
+"""Tenant metadata reaches alerts through annotations only, never a join (#3483).
 
-Codifies the onboarding-vacuum fix so it can't silently regress: every metadata
-enrichment in an alert must be a LEFT-outer join, not a bare inner join.
+The file keeps its historical name (ADR-024 PR3-pre Commit 3 introduced it as the
+left-outer-join enrichment lint); its contract changed with #3483.
 
-WHY: `<firing> * on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info`
-is an INNER join — a tenant with metrics but no `tenant_metadata_info` row (an
-onboarding vacuum) is silently DROPPED and never alerts. The fix pairs every
-such enrichment with an `or (<firing> unless on(tenant) tenant_metadata_info)`
-branch so the bare firing vector still fires when metadata is absent.
+WHY: tenant metadata (runbook_url, owner, tier — `tenant_metadata_info`, served
+by every threshold-exporter replica) used to be joined into each alert with
+`* on(tenant) group_left(runbook_url, owner, tier) …`, which made the metadata
+part of the alert's IDENTITY. threshold-exporter runs several replicas and the
+platform scrapes every pod, and the replicas reload their config independently
+(each polls every reloadInterval; the ConfigMap reaches each through its own
+node's kubelet), so for up to a minute or two one replica can serve a tenant's
+new runbook_url while the other still serves the old one. Whatever the join's
+right-hand side then picks, it can flip between the two (MetricsQL's `topk`
+picks a different tied series per evaluation), the alert's labels change, its
+`for:` restarts, and the tenant never fires during the window. So metadata is
+not a label at all: each annotation that shows it reads it with ONE canonical
+query template (METADATA_ANNOTATIONS), expanded when the rule is evaluated. The
+alert's identity no longer depends on mutable metadata; an annotation may show
+either replica's value during a reload, and an absent `tenant_metadata_info`
+renders an empty string.
 
-WHAT THIS CHECKS (a cheap structural proxy, per file): the number of enrichment
-markers `* on(tenant) group_left(runbook_url, owner, tier)` equals the number of
-void branches `unless on(tenant) tenant_metadata_info`. Every enriched alert
-across all 14 packs (kubernetes via :core, the other 12 via inline-duplicate)
-satisfies this 1:1 pairing. A new bare inner-join enrichment → markers > branches
-→ this lint fails. Semantic proof lives in tests/rulepacks/*-void_test.yaml.
+WHAT THIS CHECKS, per alert/recording rule of every rule pack and of the
+runtime canary's rule bundle (tests/rulepacks/runtime-canary.rules.yaml, whose
+custom-alert groups are the compiler's verbatim output) — read the way
+Prometheus' rule loader reads it, ADR-036 §12:
+  1. expr: `tenant_metadata_info` may appear only as the right-hand operand of
+     `and` / `unless`, which match on presence and keep only left-hand labels.
+     `or` is refused like any join: it passes right-hand series through with
+     their labels (`X or tenant_metadata_info` fires one alert per metadata
+     series, carrying runbook_url/owner/tier). Any other use — a group_left /
+     group_right / one-to-one arithmetic or comparison match, on either side,
+     an aggregation of it, an `or` inside a joined operand — is refused.
+  2. annotations (and labels): no read of the metadata labels off the alert —
+     `$labels.runbook_url`, `.Labels.owner`, `index $labels "tier"`, … (those
+     labels no longer exist on the alert) — and every metadata query template
+     is exactly METADATA_ANNOTATIONS[label]: nothing else that reads
+     `tenant_metadata_info`.
 
-SECOND CHECK — the join's right-hand side (#3483). threshold-exporter runs more
-than one replica and every replica serves `tenant_metadata_info`. Scraped per
-pod (a ServiceMonitor, or any pod/endpoints discovery), the same tenant arrives
-once per replica, differing only in scrape-identity labels (instance, pod, …),
-and `* on(tenant) group_left(...) tenant_metadata_info` then fails at evaluation
-with "many-to-many matching not allowed" — the whole alert stops evaluating.
-So the right-hand side of every enrichment must be exactly `ENRICH_RHS`, which
-collapses the replicas by the label set the exporter serves. `by` (not
-`without`) is deliberate: `without` would have to list every per-replica label
-a scrape config could add (a relabelled `node`, say), and any it missed brings
-the error back. `by` cannot silently drop a metadata label either, because
-`METADATA_LABELS` is pinned to the exporter's own label list by
-tests/lint/test_check_leftouterjoin_enrichment.py (it reads collector.go).
-The void branch keeps the raw metric: `unless` matches on presence and does not
-fail on duplicate right-hand series.
+METADATA_LABELS is pinned to the exporter's own label list, and
+METADATA_QUERY to the Go custom-alert compiler's `metadataQuery`, by
+tests/lint/test_check_leftouterjoin_enrichment.py.
 
-Exit codes: 0 ok / 1 unpaired or non-canonical enrichment (--ci) / 2 error.
+Exit codes: 0 ok / 1 violation (--ci) / 2 caller error.
 
 Usage:
     python scripts/tools/lint/check_leftouterjoin_enrichment.py        # report
@@ -46,7 +55,7 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import List, Tuple
+from typing import Dict, List
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
@@ -57,35 +66,45 @@ except Exception:  # pragma: no cover
         pass
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_compat import require_project_root  # noqa: E402  (#2852)
-import _lib_consumer_read  # noqa: E402  (#3471: which files are rule packs)
+import _lib_consumer_read  # noqa: E402  (#3471 / ADR-036 §12: rule packs as Prometheus reads them)
 
 # The labels tenant_metadata_info carries besides `tenant` — the one place they
 # are spelled. Pinned to the exporter's NewDesc label list by the test suite.
 METADATA_LABELS = ("runbook_url", "owner", "tier")
-ENRICH_MARKER = f"* on(tenant) group_left({', '.join(METADATA_LABELS)})"
-# The only accepted right-hand side of an enrichment join. The Go compiler
-# (custom_alert_compile.go: metadataJoinRHS) emits the same string; a test pins it.
-ENRICH_RHS = (f"max by(tenant, {', '.join(METADATA_LABELS)}) "
-              f"(tenant_metadata_info)")
-VOID_BRANCH = "unless on(tenant) tenant_metadata_info"
-
-# Any vector match onto the raw metric, whatever its case, spacing, label list or
-# cardinality modifier (group_left, group_right, or none = one-to-one) — every
-# arithmetic/comparison match on it breaks under per-pod scraping. The set
-# operators (`and`, `or`, `unless`) match on presence and are exempt.
-_RAW_JOIN = re.compile(
-    r"(\b[a-z_]+\b|[-+*/%^]|[<>=!]=?)\s*(?:on|ignoring)\s*\([^)]*\)\s*"
-    r"(?:group_(?:left|right)\s*(?:\([^)]*\))?\s*)?\(?\s*tenant_metadata_info\b",
-    re.IGNORECASE)
-_SET_OPERATORS = {"and", "or", "unless"}
-# A group_left/group_right carrying exactly the metadata labels, in any case or
-# spacing: its right-hand side must be ENRICH_RHS (whitespace-insensitive), or a
-# spelling that misses ENRICH_MARKER would escape both checks above.
-_METADATA_GROUP = re.compile(r"group_(?:left|right)\s*\(([^)]*)\)", re.IGNORECASE)
+# The one query an annotation reads a tenant's metadata with. `topk(1, …)`: the
+# replicas each serve a copy; during a reload the copies may differ and either
+# is acceptable for display. The Go compiler (custom_alert_compile.go:
+# metadataQuery) emits the same string; a test pins it.
+METADATA_QUERY = "topk(1, tenant_metadata_info{tenant=%q})"
 
 
-def _squash(s: str) -> str:
-    return re.sub(r"\s+", "", s).lower()
+def metadata_annotation(label: str) -> str:
+    """The canonical annotation template showing *label* of the alert's tenant.
+
+    Backtick string: no quote escaping in YAML. `with query` skips an empty
+    result, so a tenant without `tenant_metadata_info` renders "" — no template
+    error — on both Prometheus and vmalert."""
+    return ("{{ with query (printf `" + METADATA_QUERY + "` $labels.tenant) }}"
+            "{{ with index . 0 }}{{ .Labels." + label + " }}{{ end }}{{ end }}")
+
+
+METADATA_ANNOTATIONS: Dict[str, str] = {lbl: metadata_annotation(lbl) for lbl in METADATA_LABELS}
+
+# `and` / `unless` only: `or` copies the right-hand series and their labels.
+_SET_OPERAND = re.compile(
+    r"\b(?:and|unless)\s*(?:(?:on|ignoring)\s*\([^)]*\)\s*)?\(?\s*"
+    r"tenant_metadata_info\b(?:\s*\{[^}]*\})?", re.IGNORECASE)
+_TMI = re.compile(r"\btenant_metadata_info\b")
+_ALT = "|".join(METADATA_LABELS)
+# Reads of a metadata label off the alert (or any sample) outside the canonical
+# templates: `$labels.tier`, `.Labels.tier`, `index $labels "tier"`.
+_LABEL_REFS = (
+    re.compile(r"\$labels\.(" + _ALT + r")\b"),
+    re.compile(r"\.Labels\.(" + _ALT + r")\b"),
+    re.compile(r"\bindex\s+\$?\.?[Ll]abels\s+\"(" + _ALT + r")\""),
+)
+#: Rule files linted besides the rule packs: the runtime canary's bundle.
+EXTRA_RULE_FILES = ("tests/rulepacks/runtime-canary.rules.yaml",)
 
 
 def _repo_root() -> Path:
@@ -93,53 +112,66 @@ def _repo_root() -> Path:
     return require_project_root(_THIS_DIR)
 
 
-def count_pair(text: str) -> Tuple[int, int]:
-    """Pure core: (enrichment markers, void branches) in a rule/configmap file."""
-    return text.count(ENRICH_MARKER), text.count(VOID_BRANCH)
+def expr_violations(expr: str) -> List[str]:
+    """Pure core: why *expr* joins tenant metadata (empty list = it does not)."""
+    allowed = [m.span() for m in _SET_OPERAND.finditer(expr)]
+    bad = [m for m in _TMI.finditer(expr)
+           if not any(s <= m.start() and m.end() <= e for s, e in allowed)]
+    if not bad:
+        return []
+    m = bad[0]
+    context = " ".join(expr[max(0, m.start() - 60):m.end() + 20].split())
+    return [f"uses `tenant_metadata_info` outside a set operator (…{context}…) — "
+            f"a metadata join; show metadata through annotations "
+            f"(METADATA_ANNOTATIONS) instead"]
 
 
-def noncanonical_joins(text: str) -> List[Tuple[int, str]]:
-    """Pure core: (line number, offending text) for every enrichment join whose
-    right-hand side is not ENRICH_RHS, plus every group_left onto the raw metric."""
-    found = {}
-    for m in re.finditer(re.escape(ENRICH_MARKER) + r"\s*", text):
-        if not text.startswith(ENRICH_RHS, m.end()):
-            line = text.count("\n", 0, m.start()) + 1
-            rest = text[m.end():].split("\n", 1)[0].strip()
-            found[line] = rest
-    for m in _RAW_JOIN.finditer(text):
-        if m.group(1).lower() in _SET_OPERATORS:
-            continue
-        line = text.count("\n", 0, m.start()) + 1
-        found.setdefault(line, " ".join(m.group(0).split()))
-    want = _squash(ENRICH_RHS)
-    for m in _METADATA_GROUP.finditer(text):
-        labels = {x.strip() for x in m.group(1).split(",") if x.strip()}
-        if labels != set(METADATA_LABELS):
-            continue
-        if not _squash(text[m.end():m.end() + 4 * len(ENRICH_RHS)]).startswith(want):
-            line = text.count("\n", 0, m.start()) + 1
-            found.setdefault(line, " ".join(text[m.start():].split("\n", 1)[0].split()))
-    return sorted(found.items())
+def template_violations(field: str, value: str) -> List[str]:
+    """Pure core: why one annotation/label value reads metadata non-canonically."""
+    out = []
+    residual = value
+    for tpl in METADATA_ANNOTATIONS.values():
+        residual = residual.replace(tpl, "")
+    for pattern in _LABEL_REFS:
+        for m in pattern.finditer(residual):
+            out.append(f"{field}: `{m.group(0)}` — alerts carry no metadata labels; use the "
+                       f"canonical template `{METADATA_ANNOTATIONS[m.group(1)]}`")
+    if "tenant_metadata_info" in residual:
+        out.append(f"{field}: reads `tenant_metadata_info` with a template that is not "
+                   f"one of METADATA_ANNOTATIONS")
+    return out
+
+
+def rule_violations(rule: dict) -> List[str]:
+    """Pure core: every violation of one rule (an alert or a recording rule)."""
+    out = []
+    expr = rule.get("expr")
+    if isinstance(expr, str):
+        out += expr_violations(expr)
+    for section in ("annotations", "labels"):
+        for k, v in (rule.get(section) or {}).items():
+            if isinstance(v, str):
+                out += template_violations(f"{section}.{k}", v)
+    return out
 
 
 def main() -> int:
     try_utf8_stdout()
     parser = argparse.ArgumentParser(
-        description="Left-outer-join enrichment invariant lint (ADR-024)")
+        description="Tenant metadata reaches alerts through annotations only (#3483)")
     parser.add_argument("--ci", action="store_true", help="exit 1 on violation")
     args = parser.parse_args()
 
-    # SOURCE only. The generated configmaps re-serialize the expr (yaml.dump
-    # re-wraps lines), which perturbs the literal-substring count — and they are
-    # already guaranteed `== source` by generate_rulepack_configmaps.py --check.
-    # So source being left-outer-join + configmap == source ⇒ configmap correct.
+    # SOURCE only: the generated configmaps are guaranteed `== source` by
+    # generate_rulepack_configmaps.py --check.
     repo = _repo_root()
     try:
         # #3471: the rule packs are the one declaration's (rule-pack-*.yaml|yml;
         # an undeclared YAML beside them is named).
         targets: List[Path] = _lib_consumer_read.rule_pack_files(
             repo / _lib_consumer_read.RULE_PACKS.directory)
+        targets += [repo / f for f in EXTRA_RULE_FILES]
+        found = _lib_consumer_read.rule_files_in(targets, keep_refusals=True)
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
         return EXIT_CALLER_ERROR
@@ -148,35 +180,30 @@ def main() -> int:
         return EXIT_CALLER_ERROR
 
     violations = 0
-    rhs_violations = 0
-    for path in targets:
-        text = path.read_text(encoding="utf-8")
-        markers, branches = count_pair(text)
-        if markers != branches:
-            violations += 1
-            print(f"  ❌ {path.relative_to(repo)}: {markers} enrichment marker(s) "
-                  f"but {branches} void branch(es) — {markers - branches} bare "
-                  f"inner-join(s) would drop onboarding-vacuum tenants")
-        for line, rest in noncanonical_joins(text):
-            rhs_violations += 1
-            print(f"  ❌ {path.relative_to(repo)}:{line}: enrichment join right-hand "
-                  f"side is `{rest}`, not `{ENRICH_RHS}`")
+    for rfs in found.values():
+        for rf in rfs:
+            rel = Path(rf.path).relative_to(repo) if Path(rf.path).is_absolute() else rf.path
+            if rf.problem is not None:
+                print(f"ERROR: {rel}: Prometheus' rule loader refuses it: {rf.problem}",
+                      file=sys.stderr)
+                return EXIT_CALLER_ERROR
+            for grp in rf.groups:
+                for rule in grp.get("rules") or []:
+                    name = rule.get("alert") or rule.get("record")
+                    for why in rule_violations(rule):
+                        violations += 1
+                        print(f"  ❌ {rel}:{name}: {why}")
 
     if violations:
-        print(f"\n❌ {violations} pack(s) have unpaired metadata enrichment. Every "
-              f"`{ENRICH_MARKER}` must be paired with an `or (… {VOID_BRANCH})` "
-              f"branch (ADR-024 PR3-pre Commit 3). See tests/rulepacks/*-void_test.yaml.",
-              file=sys.stderr)
-    if rhs_violations:
-        print(f"\n❌ {rhs_violations} enrichment join(s) do not use `{ENRICH_RHS}` "
-              f"as the right-hand side. threshold-exporter runs several replicas; "
-              f"scraped per pod, the raw metric has one series per replica and the "
-              f"join fails with many-to-many matching (#3483).",
-              file=sys.stderr)
-    if violations or rhs_violations:
+        print(f"\n❌ {violations} metadata violation(s). Alerts carry no metadata labels "
+              f"(#3483): a join makes runbook_url/owner/tier part of the alert's identity, "
+              f"and the replicas briefly disagree during a config reload — the identity "
+              f"flips and `for:` restarts. Read metadata in annotations with "
+              f"METADATA_ANNOTATIONS.", file=sys.stderr)
         return EXIT_VIOLATION if args.ci else EXIT_OK
-    print(f"✅ All {len(targets)} rule pack(s): metadata enrichment is "
-          f"left-outer-join (no onboarding-vacuum drop) and joins `{ENRICH_RHS}`.")
+    print(f"✅ All {len(targets)} rule file(s) (rule packs + runtime canary): no metadata "
+          f"join; metadata annotations "
+          f"use the canonical query `{METADATA_QUERY}`.")
     return EXIT_OK
 
 

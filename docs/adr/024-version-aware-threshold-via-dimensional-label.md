@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: threshold-exporter
 created_at: 2026-05-30
-updated_at: 2026-10-23
+updated_at: 2026-11-02
 ---
 
 # ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts
@@ -30,6 +30,10 @@ updated_at: 2026-10-23
 📝 **修訂（2026-10-17）**：自訂告警編譯器改照 exporter 送出的編譯（見 §3「宣告位置」）；每租戶上限改由 tenant-api 寫入檢查、da-guard 與 validate-config 擋（見 §4）。
 
 📝 **修訂（2026-10-21）**：自訂告警的逐條判定、recipe_id 與規則產生只有一份 Go 實作，recipe 的列舉、格式與數值界限寫在一份契約檔，其他各處由它產生（見 §3、§5、§9）；`describe_tenant` 只顯示 exporter 送出的清單，「這次變更影響什麼」只由 config-diff 回答（見「後果」）。實作依 [#3229](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3229) 分步進行；編譯器與 recipe-preview 已改用 Go（2026-10-23），`describe_tenant` 的改動還沒做。
+
+📝 **修訂（2026-11-01）**：租戶 metadata（runbook_url、owner、tier）不再 join 進告警 label，改由 annotation 以唯一的查詢樣板讀出（見 §2「metadata 走 annotation」）。告警因此不帶這三個 label，依它們路由的 Alertmanager 設定要改用 `tenant`。
+
+📝 **修訂（2026-11-02）**：自訂告警的 threshold 紀錄改為 exporter 各副本一致時才送出，換版空窗內正在改 mode／name 的那一條告警在 Prometheus 與 VictoriaMetrics 上都暫停（見「Consequences」）。
 
 📎 **Addendum** (v2.10.0) — 磁碟與 PVC 告警（容量逐顆 PVC 評估 + 需 CSI driver + 兩道防線），見下方 §Addendum；epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)。
 
@@ -94,17 +98,21 @@ user_threshold{tenant="db-a", component="container", metric="cpu", severity="war
         threshold_vlabeled{version="default", severity="warning"}
     )
     unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
-    * on(tenant) group_left(runbook_url, owner, tier)
-      max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
   labels:
     severity: warning   # 固定於 alert label；Critical 規則鏡像複製
+  annotations:
+    runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
 ```
 
 三個刻意設計：
 
 - **動態降級**——租戶只在「特定大版號要特殊閾值」時才宣告 `{version="v2"}`，日常小改版（每天多次 deploy）不需同步改告警 YAML，缺對應版號時自動沿用 `default`、不丟 series。這把「observed-but-not-declared = silent gap」這個最高風險從「事後補救」升級為「架構內建」。
 - **拆 per-severity 規則**——**不可**用 `group_left(severity)`：`version × severity` 維度交織會在 join 形成 cardinality 死鎖（精確分支 one-to-many 崩、fallback 分支 many-to-many 崩）→ 整個告警引擎癱瘓。固定 severity 後 RHS 退化為 singleton，所有 join 變乾淨的 one-to-one / many-to-one。
-- **非對稱 join key 是安全的**——閾值比較用 `on(tenant, version)`，但 `user_state_filter`（維護）與 `tenant_metadata_info` 不帶 version，`unless on(tenant)` / `group_left` 方向合法、不被 version 破壞。`tenant_metadata_info` 只在單一 exporter 副本時是 per-tenant singleton；多副本逐 pod 抓取時每個租戶有一筆 per replica，所以 `group_left` 的右側一律先 `max by(tenant, runbook_url, owner, tier)` 收斂（[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)，見 [HA 設計 §4.3](../design/high-availability.md)）。
+- **非對稱 join key 是安全的**——閾值比較用 `on(tenant, version)`，但 `user_state_filter`（維護）不帶 version，`unless on(tenant)` 方向合法、不被 version 破壞。
+
+**metadata 走 annotation，不進告警 label。** 租戶的 runbook_url、owner、tier 由 threshold-exporter 以 `tenant_metadata_info{tenant, runbook_url, owner, tier}`（值恆為 1）送出。規則**不 join** 這個指標；需要顯示 metadata 的 annotation 用同一個查詢樣板在告警評估時讀出（上例的 `runbook_url`；owner、tier 只換最後的欄位名）。樣板裡的 `topk(1, …)` 在多個副本各送一份時只取一筆；租戶沒有 metadata 時查詢結果為空，`with` 不展開，annotation 是空字串，告警照常觸發。以上例的規則、兩個 exporter 副本送出相同 metadata（`runbook_url="http://rb/t1"`）的 t1 為例，promtool 與 vmalert-tool 算出的告警都是 label `{alertname, severity="warning", tenant="t1"}`、annotation `runbook_url="http://rb/t1"`；沒有 metadata 的租戶則是 `runbook_url=""`。
+
+為什麼不 join：join 會讓 metadata 成為告警身分的一部分。threshold-exporter 跑多個副本、各自 reload 設定（每個副本每隔 reloadInterval 檢查，ConfigMap 由各節點的 kubelet 各自同步），租戶改 metadata 後一兩分鐘內兩個副本會送出不同的值。join 的右側在這段期間每次評估可能挑到不同的那筆——VictoriaMetrics 的 `topk` 遇到同值的序列就會這樣——告警 label 一變身分就變、`for:` 重新計時，該租戶在空窗內不觸發。改放 annotation 後，空窗內 annotation 頂多顯示其中一個副本的值，告警身分與觸發時機不受影響（見 [HA 設計 §4.3](../design/high-availability.md)）。查詢樣板由 `check_leftouterjoin_enrichment.py` 鎖定唯一寫法，它也擋下任何 join `tenant_metadata_info` 的運算式。
 
 ⛔ **部署前提（HARD）**：kube-state-metrics 必須設 `--metric-labels-allowlist=pods=[app.kubernetes.io/version]`，否則 `kube_pod_labels` 不帶 version、注入 join 匹配空集、版本閾值**靜默 inert**。三層防禦守此前提：runtime sentinel（`VersionAwareThresholdInert`）+ CI static lint（`check_ksm_version_allowlist.py`）+ operator manifest allowlist。在 metric-side 注入上線前，整套機制 inert 且 100% 向下相容（缺 version → 補 default → 對齊未版本化閾值）。
 
@@ -287,6 +295,7 @@ portal 表單裡手寫的檢查改讀產生物，不再自己寫界限。tenant-
 - **編譯器與 exporter 的來源要一致**——編譯器自己走樹時會為 exporter 不送的 `_custom_alerts` 產生規則（對沒有門檻送出的租戶永遠不會觸發），也會漏掉 exporter 有送的（例如 profile）。來源只由 exporter 判定，編譯器讀的就是 exporter 取得的清單（§3）。診斷工具也只看這一份：`describe_tenant`（列出一個租戶最終設定的 CLI）顯示 exporter 為每個租戶送出的 `custom_alerts` 與每條的狀態，不顯示把子目錄 `_defaults.yaml` 與租戶自己的清單合起來的視圖（exporter 從不送出那種合併結果）；「這次 conf.d 變更影響什麼」只由 config-diff 回答（[ADR-037](037-config-diff-compares-rendered-output.md)），回答同一問題、讀 `describe_tenant` 輸出的 blast_radius 退役。
 - **遷移時規則檔的位元組可能改變**——編譯器改到 Go 時，驗收標準是產生的規則檔以 YAML 解析後內容相同、alert 與 recording rule 名稱及 recipe_id 集合相同、promtool golden 測試通過，不要求逐位元組相同；committed 的規則檔在那次一併重新產生。
 - **recipe-preview 映像多帶一支 da-guard**——預覽要用與部署相同的判定，映像因此變大（da-guard 是單一靜態 Go 執行檔）。
+- **告警不帶 runbook_url／owner／tier label**——metadata 改由 annotation 查詢（§2），依這三個 label 路由或抑制的 Alertmanager 設定要改用 `tenant`；annotation 每次評估多一次查詢（每個顯示 metadata 的 annotation 一次）。自訂告警的 `name`／`mode` 仍是 label（`mode` 決定路由），threshold 紀錄只在兩個副本對同一個 (tenant, version, severity) 送出相同的 name／mode 時才送出（`and on(…) (count by(…) (…) == 1)`，不挑其中一筆）：租戶正在改某條自訂告警的 mode 或 name 時，**那一條告警**在換版空窗（至多約一兩分鐘）內不觸發，Prometheus 與 VictoriaMetrics 都一樣；其他租戶、其他告警不受影響（[VictoriaMetrics 整合 §3.1](../integration/victoriametrics-integration.md)）。
 
 **關鍵不變式**（驗收契約，非 tracking checklist）：(1) 既有未寫 version 的租戶升級後行為 100% 等價（無 series 數變動）；(2) over-cap 截斷跨多次 scrape 截掉的是固定版號（無 flapping）；(3) `mode: silent` recipe 觸發時不進 PagerDuty / Slack、只留 Grafana 痕跡；(4) rolling update 結束、舊版 metric 消失後，正在燒的告警能正常收到 Resolve（不留殭屍告警）；(5) version-aware metric 上的 recipe 自動 graceful-join、label 缺時落 default、不產 NaN / 空集。
 
@@ -302,6 +311,7 @@ portal 表單裡手寫的檢查改讀產生物，不再自己寫界限。tenant-
 - **編譯器另外實作一份與 exporter 相同的來源規則** — 改動最小、不需要在編譯環境放 da-guard，但兩份實作仍會各自演變而分歧。
 - **保留 Python 編譯器，以 Go／Python 比對測試對齊** — 改動最小，但比對只能抽樣，抽不到的差異照樣漂移（§9 裡 `mode` 的例子就不在抽樣範圍內）；每加一條規則就要在兩種語言各寫一次。
 - **契約檔用 JSON Schema 表達，Go 讀 schema** — schema 本來就要給編輯器與 validate-config 用，但 Go module 沒有 JSON Schema 函式庫，要嘛新增依賴、要嘛手抄一份；schema 也是今天被程式碼釘住的一方，改由它驅動程式會把方向倒過來（與 [ADR-038](038-unread-keys-judged-by-readers.md) 否決「讓 schema 當登錄表」同理）。
+- **以 join 把 metadata 帶進告警 label、右側收斂成每個租戶一筆** — 告警可直接依 owner／tier 路由，但換版空窗內收斂挑到的那筆會在副本之間跳動，告警身分跟著變、`for:` 重來；在 Prometheus 上平手時固定留同一筆、看不出問題，在 VictoriaMetrics 上該租戶空窗內不觸發。metadata 是會變的描述資訊，不該是身分。
 - **把 `_custom_alerts` 從 list 改 dict（以名為 key）** — list 形態貫穿整個引擎（Go exporter / tenant-api / portal / 編譯器），改形態的 blast radius 不成比例；每個租戶只取一個來源，也不需要以名稱合併。
 
 ## 與排程式閾值（§2.6）的界線

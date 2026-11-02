@@ -750,7 +750,7 @@ func TestCollector_TenantMetadataInfo(t *testing.T) {
 	collector := NewThresholdCollector(manager)
 
 	expected := `
-		# HELP tenant_metadata_info Tenant metadata labels (info metric, always 1). Unconditional output for group_left joins. v1.11.0+
+		# HELP tenant_metadata_info Tenant metadata labels (info metric, always 1). Unconditional output for alert annotation queries. v1.11.0+
 		# TYPE tenant_metadata_info gauge
 		tenant_metadata_info{owner="dba-team",runbook_url="https://wiki.example.com/db-a",tenant="db-a",tier="gold"} 1
 	`
@@ -773,7 +773,7 @@ func TestCollector_TenantMetadataInfo_NoMetadata(t *testing.T) {
 	collector := NewThresholdCollector(manager)
 
 	expected := `
-		# HELP tenant_metadata_info Tenant metadata labels (info metric, always 1). Unconditional output for group_left joins. v1.11.0+
+		# HELP tenant_metadata_info Tenant metadata labels (info metric, always 1). Unconditional output for alert annotation queries. v1.11.0+
 		# TYPE tenant_metadata_info gauge
 		tenant_metadata_info{owner="",runbook_url="",tenant="db-a",tier=""} 1
 	`

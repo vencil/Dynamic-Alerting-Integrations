@@ -1,0 +1,163 @@
+# promtool / vmalert-tool unit test — 自訂告警在 threshold-exporter 換版空窗內，兩個引擎行為相同（#3483）。
+# Run: promtool test rules tests/rulepacks/rule-pack-custom-alerts-reload-skew_test.yaml
+#      （CI 也以 vmalert-tool 跑同一份：tests/rulepacks/test_vm_alert_parity.py，不列 catalog）
+#
+# 編譯出的 pack 每個 (recipe_id, severity) 只有一條規則，所有租戶共用；core 規則以
+# `on(tenant, version) group_left(name, mode)` 接 custom:threshold:{id}。exporter 跑
+# 兩個副本、各自 hot-reload，租戶改了某條自訂告警的 mode 或 name 時，一兩分鐘內兩個
+# 副本會送出兩筆只差 mode／name 的 user_threshold。threshold 紀錄只在副本一致時才送出
+# 該 (tenant, version, severity)：
+#   max by(tenant, version, severity, name, mode) (user_threshold{…})
+#   and on(tenant, version, severity) (count by(tenant, version, severity) (…) == 1)
+# 不一致的那幾十秒，那個租戶的那一條自訂告警暫停；其他租戶、其他告警不受影響。
+# 不挑其中一筆（topk）：name／mode 是告警身分，VictoriaMetrics 的 topk 平手時每次
+# 評估挑不同的那筆，兩個引擎會不一樣；整筆先不送則兩個引擎一致。
+#
+# 兩筆副本序列本身就差在 mode／name，所以這裡不需要 instance／pod；
+# rulepack_contract_test.go 也不允許 fixture 的 user_threshold 帶 scrape label（#731）。
+#
+# 每個 recipe 兩組：
+#   - t1（一致）＋ t2（整段都不一致）：t1 照常觸發、恰好一則；t2 不觸發。
+#     少了 `== 1` 那道守門，兩筆撞 many-to-many，t1 也一起消失。
+#   - 只有 t2：前 5 分鐘不一致（不觸發），5 分鐘時舊的那筆送出 stale marker、兩個副本
+#     一致（11 分鐘時以新的 mode／name 觸發）。改回 topk，promtool 上前段就會觸發。
+rule_files:
+  - ../../rule-packs/rule-pack-custom-alerts.yaml
+
+evaluation_interval: 15s
+
+tests:
+  # ── threshold recipe：t1 一致、t2 的 mode 兩個副本整段不同 ──
+  - interval: 15s
+    input_series:
+      - series: 'mysql_global_status_threads_connected{tenant="t1"}'
+        values: '200x48'
+      - series: 'user_threshold{component="custom", metric="mysql_global_status_threads_connected", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", tenant="t1", severity="warning", name="conns_high", mode="page"}'
+        values: '150x48'
+      - series: 'mysql_global_status_threads_connected{tenant="t2"}'
+        values: '200x48'
+      - series: 'user_threshold{component="custom", metric="mysql_global_status_threads_connected", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", tenant="t2", severity="warning", name="conns_high", mode="silent"}'
+        values: '150x48'
+      - series: 'user_threshold{component="custom", metric="mysql_global_status_threads_connected", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", tenant="t2", severity="warning", name="conns_high", mode="page"}'
+        values: '150x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: t1
+              recipe: threshold
+              name: conns_high
+              mode: page
+              version: default
+            exp_annotations:
+              summary: "Custom alert [conns_high] for t1"
+              summary_zh: "t1 的自訂告警 [conns_high] 觸發"
+              description: "threshold on mysql_global_status_threads_connected: value 200.00 crossed the configured threshold"
+              description_zh: "mysql_global_status_threads_connected 的 threshold: 值 200.00 已越過設定閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── threshold recipe：只有 t2，5 分鐘時收斂到 silent ──
+  - interval: 15s
+    input_series:
+      - series: 'mysql_global_status_threads_connected{tenant="t2"}'
+        values: '200x48'
+      - series: 'user_threshold{component="custom", metric="mysql_global_status_threads_connected", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", tenant="t2", severity="warning", name="conns_high", mode="silent"}'
+        values: '150x48'
+      # 舊的 page 那筆：5 分鐘後兩個副本都換到 silent，這筆以 stale marker 結束。
+      - series: 'user_threshold{component="custom", metric="mysql_global_status_threads_connected", recipe_id="threshold__mysql_global_status_threads_connected__gt__w5m__for1m", tenant="t2", severity="warning", name="conns_high", mode="page"}'
+        values: '150x19 stale'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: t2
+              recipe: threshold
+              name: conns_high
+              mode: silent
+              version: default
+            exp_annotations:
+              summary: "Custom alert [conns_high] for t2"
+              summary_zh: "t2 的自訂告警 [conns_high] 觸發"
+              description: "threshold on mysql_global_status_threads_connected: value 200.00 crossed the configured threshold"
+              description_zh: "mysql_global_status_threads_connected 的 threshold: 值 200.00 已越過設定閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── rate recipe：t1 一致、t2 的 name 兩個副本整段不同（改名） ──
+  - interval: 15s
+    input_series:
+      - series: 'mysql_global_status_slow_queries{tenant="t1"}'
+        values: '0+30x48'
+      - series: 'user_threshold{component="custom", metric="mysql_global_status_slow_queries", recipe_id="rate__mysql_global_status_slow_queries__gt__w5m__for1m", tenant="t1", severity="warning", name="slow_rate", mode="page"}'
+        values: '1x48'
+      - series: 'mysql_global_status_slow_queries{tenant="t2"}'
+        values: '0+30x48'
+      - series: 'user_threshold{component="custom", metric="mysql_global_status_slow_queries", recipe_id="rate__mysql_global_status_slow_queries__gt__w5m__for1m", tenant="t2", severity="warning", name="slow_rate_old", mode="page"}'
+        values: '1x48'
+      - series: 'user_threshold{component="custom", metric="mysql_global_status_slow_queries", recipe_id="rate__mysql_global_status_slow_queries__gt__w5m__for1m", tenant="t2", severity="warning", name="slow_rate_new", mode="page"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 11m
+        alertname: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: t1
+              recipe: rate
+              name: slow_rate
+              mode: page
+              version: default
+            exp_annotations:
+              summary: "Custom alert [slow_rate] for t1"
+              summary_zh: "t1 的自訂告警 [slow_rate] 觸發"
+              description: "rate on mysql_global_status_slow_queries: value 2.00 crossed the configured threshold"
+              description_zh: "mysql_global_status_slow_queries 的 rate: 值 2.00 已越過設定閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""
+
+  # ── rate recipe：只有 t2，5 分鐘時收斂到新名字 ──
+  - interval: 15s
+    input_series:
+      - series: 'mysql_global_status_slow_queries{tenant="t2"}'
+        values: '0+30x48'
+      - series: 'user_threshold{component="custom", metric="mysql_global_status_slow_queries", recipe_id="rate__mysql_global_status_slow_queries__gt__w5m__for1m", tenant="t2", severity="warning", name="slow_rate_old", mode="page"}'
+        values: '1x19 stale'
+      - series: 'user_threshold{component="custom", metric="mysql_global_status_slow_queries", recipe_id="rate__mysql_global_status_slow_queries__gt__w5m__for1m", tenant="t2", severity="warning", name="slow_rate_new", mode="page"}'
+        values: '1x48'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m
+        exp_alerts: []
+      - eval_time: 11m
+        alertname: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m
+        exp_alerts:
+          - exp_labels:
+              component: custom
+              severity: warning
+              tenant: t2
+              recipe: rate
+              name: slow_rate_new
+              mode: page
+              version: default
+            exp_annotations:
+              summary: "Custom alert [slow_rate_new] for t2"
+              summary_zh: "t2 的自訂告警 [slow_rate_new] 觸發"
+              description: "rate on mysql_global_status_slow_queries: value 2.00 crossed the configured threshold"
+              description_zh: "mysql_global_status_slow_queries 的 rate: 值 2.00 已越過設定閾值"
+              runbook_url: ""
+              owner: ""
+              tier: ""

@@ -32,8 +32,10 @@ annotations:
   summary: "High connections on {{ $labels.tenant }}"
   description: "{{ $value }} threads connected (warning threshold exceeded)"
   # Platform / NOC 視角
-  platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: connection threshold breached — review connection pool sizing"
+  platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: connection threshold breached — review connection pool sizing"
 ```
+
+`[…]` 裡那段是租戶 metadata 的查詢樣板：tier 不是告警 label，annotation 在評估時查 `tenant_metadata_info` 讀出來（[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)，見下方「方法 A」）。
 
 Alertmanager 的通知模板可以根據 receiver 選擇要引用哪個 annotation。
 
@@ -47,7 +49,7 @@ Dual-Perspective Annotation 把兩種措辭都寫在 Prometheus rule 的 annotat
 
 ### 步驟 1：確認 Rule Pack 已有 platform_summary
 
-Rule Pack 內建的閾值告警都帶 `platform_summary`。⚠️ `rule-pack-custom-alerts.yaml` 裡由 `_custom_alerts` 編譯出的 `Custom_*` 告警不帶（它們也有 `group_left` join，不能拿 join 來分辨），所以下面的範例在 `range .Alerts` 裡用 `{{ or .Annotations.platform_summary .Annotations.summary }}` 補上，標題也不依賴它。可以用以下命令確認：
+Rule Pack 內建的閾值告警都帶 `platform_summary`。⚠️ `rule-pack-custom-alerts.yaml` 裡由 `_custom_alerts` 編譯出的 `Custom_*` 告警不帶（它們也有 runbook_url／owner／tier annotation，不能拿這幾個分辨），所以下面的範例在 `range .Alerts` 裡用 `{{ or .Annotations.platform_summary .Annotations.summary }}` 補上，標題也不依賴它。可以用以下命令確認：
 
 ```bash
 grep -c platform_summary rule-packs/*.yaml
@@ -119,7 +121,7 @@ _routing_enforced:
 
 ### 方法 A：透過 `_metadata` 機制
 
-`_metadata` 只設 `runbook_url`、`owner`、`tier` 三個值，經 `tenant_metadata_info` + `group_left` 帶進告警；`platform_summary` 裡引用的 `tier` 就來自這裡：
+`_metadata` 只設 `runbook_url`、`owner`、`tier` 三個值，exporter 以 `tenant_metadata_info` 送出；告警不帶這三個 label，annotation 用固定的查詢樣板讀出（`check_leftouterjoin_enrichment.py` 的 `METADATA_ANNOTATIONS`）。`platform_summary` 裡的 `tier` 就來自這裡：
 
 ```yaml
 tenants:
@@ -143,7 +145,7 @@ tenants:
   # ... existing expr ...
   annotations:
     summary: "高連線數：{{ $labels.tenant }}"
-    platform_summary: "NOC 注意：{{ $labels.tenant }} 連線即將飽和，tier={{ $labels.tier }}，請評估是否需要通知客戶"
+    platform_summary: "NOC 注意：{{ $labels.tenant }} 連線即將飽和，tier={{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}，請評估是否需要通知客戶"
 ```
 
 ## 架構圖

@@ -372,10 +372,10 @@ groups:
           )
 
       # ADR-024 PR3-pre-3: core firing vectors (threshold-cross + maintenance
-      # suppression) WITHOUT metadata enrichment. The alert rules below join
-      # tenant_metadata_info via a left-outer-join (`or`/`unless`) so a tenant
-      # with metrics but no metadata config (onboarding vacuum) still fires —
-      # the inner-join `* tenant_metadata_info` alone would silently drop it.
+      # suppression). The alert rules below fire on these directly; tenant
+      # metadata (runbook_url/owner/tier) is never joined in — their annotations
+      # read it with the canonical query template (#3483), so a tenant without
+      # metadata config fires the same as one with it.
       # ADR-024 Route 2: version-aware exact-or-fallback core, split PER SEVERITY.
       # Fixing severity makes the threshold RHS a per-(tenant,version) singleton →
       # the exact branch is one-to-one and the fallback is many(versions)-to-one;
@@ -563,21 +563,12 @@ groups:
   # -------------------------------------------------------
   - name: kubernetes-container-alerts
     rules:
-      # ADR-024 Route 2 (warning) + PR3-pre-3 left-outer-join enrichment.
+      # ADR-024 Route 2 (warning); metadata in annotations (#3483).
       # The version-aware core carries the metric's REAL `version` label, so the
       # firing alert tells on-call exactly which app version is in trouble.
       - alert: PodContainerHighCPU
         expr: |
-          (
-            rule_pack_kubernetes:pod_container_high_cpu_warning:core
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            rule_pack_kubernetes:pod_container_high_cpu_warning:core
-            unless on(tenant) tenant_metadata_info
-          )
+          rule_pack_kubernetes:pod_container_high_cpu_warning:core
         for: 60s
         labels:
           severity: warning
@@ -595,28 +586,19 @@ groups:
         annotations:
           summary: "High container CPU in {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的容器 CPU 使用率過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: container CPU pressure — evaluate resource limits"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器 CPU 壓力過高 — 請評估資源限制"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: container CPU pressure — evaluate resource limits"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 容器 CPU 壓力過高 — 請評估資源限制"
           description: "Max container CPU usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
           description_zh: "最大容器 CPU 使用率: {{ $value | printf \"%.1f\" }}% (超過閾值)"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       # Critical mirror (ADR-024 Route 2: distinct alertname per severity to
       # match the platform convention; warning's alertname is preserved above).
       - alert: PodContainerHighCPUCritical
         expr: |
-          (
-            rule_pack_kubernetes:pod_container_high_cpu_critical:core
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            rule_pack_kubernetes:pod_container_high_cpu_critical:core
-            unless on(tenant) tenant_metadata_info
-          )
+          rule_pack_kubernetes:pod_container_high_cpu_critical:core
         for: 60s
         labels:
           severity: critical
@@ -626,29 +608,20 @@ groups:
         annotations:
           summary: "CRITICAL container CPU in {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的容器 CPU 使用率達臨界"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: container CPU CRITICAL — evaluate resource limits"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器 CPU 達臨界 — 請評估資源限制"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: container CPU CRITICAL — evaluate resource limits"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 容器 CPU 達臨界 — 請評估資源限制"
           description: "Max container CPU usage: {{ $value | printf \"%.1f\" }}% (critical threshold exceeded)"
           description_zh: "最大容器 CPU 使用率: {{ $value | printf \"%.1f\" }}% (超過臨界閾值)"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       # ADR-024 Route 2 (warning) — version-aware memory core carries the metric's
       # REAL version so on-call sees which app version is in trouble.
       - alert: PodContainerHighMemory
-        # Left-outer-join enrichment (ADR-024 PR3-pre-3) — see PodContainerHighCPU.
+        # Metadata in annotations, not joined (#3483) — see PodContainerHighCPU.
         expr: |
-          (
-            rule_pack_kubernetes:pod_container_high_memory_warning:core
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            rule_pack_kubernetes:pod_container_high_memory_warning:core
-            unless on(tenant) tenant_metadata_info
-          )
+          rule_pack_kubernetes:pod_container_high_memory_warning:core
         for: 60s
         labels:
           severity: warning
@@ -658,27 +631,18 @@ groups:
         annotations:
           summary: "High container memory in {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的容器記憶體使用率過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: container memory pressure — evaluate resource limits"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器記憶體壓力過高 — 請評估資源限制"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: container memory pressure — evaluate resource limits"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 容器記憶體壓力過高 — 請評估資源限制"
           description: "Max container memory usage: {{ $value | printf \"%.1f\" }}% (threshold exceeded)"
           description_zh: "最大容器記憶體使用率: {{ $value | printf \"%.1f\" }}% (超過閾值)"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       # Critical mirror (ADR-024 Route 2: distinct alertname per severity).
       - alert: PodContainerHighMemoryCritical
         expr: |
-          (
-            rule_pack_kubernetes:pod_container_high_memory_critical:core
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            rule_pack_kubernetes:pod_container_high_memory_critical:core
-            unless on(tenant) tenant_metadata_info
-          )
+          rule_pack_kubernetes:pod_container_high_memory_critical:core
         for: 60s
         labels:
           severity: critical
@@ -688,14 +652,14 @@ groups:
         annotations:
           summary: "CRITICAL container memory in {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的容器記憶體使用率達臨界"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: container memory CRITICAL — evaluate resource limits"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 容器記憶體達臨界 — 請評估資源限制"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: container memory CRITICAL — evaluate resource limits"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 容器記憶體達臨界 — 請評估資源限制"
           description: "Max container memory usage: {{ $value | printf \"%.1f\" }}% (critical threshold exceeded)"
           description_zh: "最大容器記憶體使用率: {{ $value | printf \"%.1f\" }}% (超過臨界閾值)"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       # CFS throttle (#944 PR-2c): the CHRONIC-choking sibling of PodContainerHighCPU —
       # different root cause (kernel quota enforcement vs high usage), different
       # remediation (raise the container's cpu limit / spread the burst), hence a
@@ -708,16 +672,7 @@ groups:
       # (duty-cycle invariant; NOT % of CPU time lost).
       - alert: PodContainerCPUThrottled
         expr: |
-          (
-            rule_pack_kubernetes:pod_cpu_throttled_warning:core
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            rule_pack_kubernetes:pod_cpu_throttled_warning:core
-            unless on(tenant) tenant_metadata_info
-          )
+          rule_pack_kubernetes:pod_cpu_throttled_warning:core
         for: 15m
         labels:
           severity: warning
@@ -727,29 +682,20 @@ groups:
         annotations:
           summary: "Chronic CPU throttling in {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的容器 CPU 遭核心持續掐頸"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: sustained CFS throttling — first spread the burst / tune worker concurrency (e.g. GOMAXPROCS); raise the cpu limit only if genuinely under-provisioned; drill down via tenant:container_cpu_throttle_percent:by_container"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: CFS 持續掐頸 — 請先攤平突發負載／調降併發（如 GOMAXPROCS）；確屬容量不足才提高 cpu limit；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: sustained CFS throttling — first spread the burst / tune worker concurrency (e.g. GOMAXPROCS); raise the cpu limit only if genuinely under-provisioned; drill down via tenant:container_cpu_throttle_percent:by_container"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: CFS 持續掐頸 — 請先攤平突發負載／調降併發（如 GOMAXPROCS）；確屬容量不足才提高 cpu limit；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
           description: "{{ $value | printf \"%.1f\" }}% of the container's active CFS periods were throttled (sustained; usage may look fine — this is quota enforcement, see also PodContainerHighCPU)"
           description_zh: "容器活躍 CFS 週期中有 {{ $value | printf \"%.1f\" }}% 被核心限流（持續發生；平均使用率可能看似正常 — 這是配額壓制，另見 PodContainerHighCPU）"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       # Critical mirror (distinct alertname per severity, platform convention). The
       # critical tier is tenant-opt-in: `container_cpu_throttle_critical` in the tenant
       # YAML (no platform default; suggested starting point 50).
       - alert: PodContainerCPUThrottledCritical
         expr: |
-          (
-            rule_pack_kubernetes:pod_cpu_throttled_critical:core
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            rule_pack_kubernetes:pod_cpu_throttled_critical:core
-            unless on(tenant) tenant_metadata_info
-          )
+          rule_pack_kubernetes:pod_cpu_throttled_critical:core
         for: 15m
         labels:
           severity: critical
@@ -759,14 +705,14 @@ groups:
         annotations:
           summary: "CRITICAL CPU throttling in {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的容器 CPU 掐頸達臨界"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: CFS throttling CRITICAL — raise the cpu limit now as emergency mitigation, then right-size and spread the burst (limit inflation erodes node headroom); drill down via tenant:container_cpu_throttle_percent:by_container"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: CFS 掐頸達臨界 — 緊急緩解可先提高 cpu limit，事後請右調容量並攤平突發（limit 膨脹會侵蝕節點餘裕）；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: CFS throttling CRITICAL — raise the cpu limit now as emergency mitigation, then right-size and spread the burst (limit inflation erodes node headroom); drill down via tenant:container_cpu_throttle_percent:by_container"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: CFS 掐頸達臨界 — 緊急緩解可先提高 cpu limit，事後請右調容量並攤平突發（limit 膨脹會侵蝕節點餘裕）；以 tenant:container_cpu_throttle_percent:by_container 定位容器"
           description: "{{ $value | printf \"%.1f\" }}% of the container's active CFS periods were throttled (critical threshold exceeded; quota enforcement, see also PodContainerHighCPU)"
           description_zh: "容器活躍 CFS 週期中有 {{ $value | printf \"%.1f\" }}% 被核心限流（超過臨界閾值；配額壓制，另見 PodContainerHighCPU）"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       # OOM coverage (warning tier). Distinct from PodContainerHighMemory: that one is a
       # PREDICTIVE %-of-limit signal and can be blind to the kill entirely (a working set
       # that spikes and dies between two 15s scrapes never shows a high percentage), while
@@ -779,16 +725,7 @@ groups:
       # value would purely delay paging on something that has already happened.
       - alert: ContainerOOMKilled
         expr: |
-          (
-            rule_pack_kubernetes:container_oom_killed_warning:core
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            rule_pack_kubernetes:container_oom_killed_warning:core
-            unless on(tenant) tenant_metadata_info
-          )
+          rule_pack_kubernetes:container_oom_killed_warning:core
         for: 30s
         labels:
           severity: warning
@@ -798,28 +735,19 @@ groups:
         annotations:
           summary: "Container OOM-killed in {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 有容器遭 OOM 終止"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: kernel OOM-killed a container in the last hour — compare the memory limit against the real working set (PodContainerHighMemory may be clean: a spike-and-die never shows up in a 15s scrape); drill down via tenant:container_oom_events_1h:by_container"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 過去一小時內有容器被核心 OOM 終止 — 請比對記憶體 limit 與實際工作集（PodContainerHighMemory 可能無異常：瞬間暴衝在 15s 取樣間隔中看不到）；以 tenant:container_oom_events_1h:by_container 定位容器"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: kernel OOM-killed a container in the last hour — compare the memory limit against the real working set (PodContainerHighMemory may be clean: a spike-and-die never shows up in a 15s scrape); drill down via tenant:container_oom_events_1h:by_container"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 過去一小時內有容器被核心 OOM 終止 — 請比對記憶體 limit 與實際工作集（PodContainerHighMemory 可能無異常：瞬間暴衝在 15s 取樣間隔中看不到）；以 tenant:container_oom_events_1h:by_container 定位容器"
           description: "{{ $value | printf \"%.0f\" }} OOM kill(s) in the last hour on the worst-affected container. Note this counts cgroup OOM events: if the kernel killed a CHILD process the pod stays Running and kubectl shows no OOMKilled reason."
           description_zh: "過去一小時內受影響最嚴重的容器發生 {{ $value | printf \"%.0f\" }} 次 OOM 終止。此處計的是 cgroup OOM 事件：若核心殺掉的是子行程，Pod 仍為 Running，kubectl 也看不到 OOMKilled。"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       # Critical mirror (distinct alertname per severity, platform convention). Storm =
       # ≥3 kills on one container in the rolling hour; see the :core rule above for why 3.
       - alert: ContainerOOMKilledCritical
         expr: |
-          (
-            rule_pack_kubernetes:container_oom_killed_critical:core
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            rule_pack_kubernetes:container_oom_killed_critical:core
-            unless on(tenant) tenant_metadata_info
-          )
+          rule_pack_kubernetes:container_oom_killed_critical:core
         for: 30s
         labels:
           severity: critical
@@ -829,14 +757,14 @@ groups:
         annotations:
           summary: "CRITICAL repeated OOM kills in {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 反覆遭 OOM 終止達臨界"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: >=3 OOM kills on one container within 1h — it is not converging on its memory limit. Raise the limit as emergency mitigation, then find the real driver (leak / unbounded query / cache sizing); check ContainerCrashLoop too, and drill down via tenant:container_oom_events_1h:by_container"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 單一容器 1 小時內遭 OOM 終止 >=3 次 — 容器無法收斂在現有記憶體 limit 內。緊急緩解可先提高 limit，事後務必找出真因（記憶體洩漏／無界查詢／快取設定）；並一併查看 ContainerCrashLoop，以 tenant:container_oom_events_1h:by_container 定位容器"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: >=3 OOM kills on one container within 1h — it is not converging on its memory limit. Raise the limit as emergency mitigation, then find the real driver (leak / unbounded query / cache sizing); check ContainerCrashLoop too, and drill down via tenant:container_oom_events_1h:by_container"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 單一容器 1 小時內遭 OOM 終止 >=3 次 — 容器無法收斂在現有記憶體 limit 內。緊急緩解可先提高 limit，事後務必找出真因（記憶體洩漏／無界查詢／快取設定）；並一併查看 ContainerCrashLoop，以 tenant:container_oom_events_1h:by_container 定位容器"
           description: "{{ $value | printf \"%.0f\" }} OOM kills in the last hour on a single container — this is a repeating kill/restart loop, not a one-off tuning event."
           description_zh: "過去一小時內單一容器發生 {{ $value | printf \"%.0f\" }} 次 OOM 終止 — 這是反覆的終止／重啟迴圈，並非一次性的調校事件。"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
   # -------------------------------------------------------
   # Alert Rules: Pod state alerts (State/String Matching)
   # -------------------------------------------------------
@@ -847,32 +775,13 @@ groups:
           (
             (
               (
-                (
-                  tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
-                  * on(tenant) group_left
-                  user_state_filter{filter="container_crashloop"}
-                ) > 0
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+                tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
+                * on(tenant) group_left
+                max by(tenant) (user_state_filter{filter="container_crashloop"})
+              ) > 0
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                (
-                  tenant:container_waiting_reason:count{reason="CrashLoopBackOff"}
-                  * on(tenant) group_left
-                  user_state_filter{filter="container_crashloop"}
-                ) > 0
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 30s
         labels:
@@ -881,45 +790,26 @@ groups:
         annotations:
           summary: "Container crash loop detected in {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 偵測到容器崩潰迴圈"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: crash loop detected — check deployment and image health"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: crash loop detected — check deployment and image health"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 偵測到崩潰迴圈 — 請檢查部署和映像檔案狀態"
           description: "{{ $value }} container(s) in CrashLoopBackOff state"
           description_zh: "{{ $value }} 個容器處於 CrashLoopBackOff 狀態"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: ContainerImagePullFailure
         expr: |
           (
             (
               (
-                (
-                  tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
-                  * on(tenant) group_left
-                  user_state_filter{filter="container_imagepull"}
-                ) > 0
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+                tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
+                * on(tenant) group_left
+                max by(tenant) (user_state_filter{filter="container_imagepull"})
+              ) > 0
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                (
-                  tenant:container_waiting_reason:count{reason=~"ImagePullBackOff|InvalidImageName"}
-                  * on(tenant) group_left
-                  user_state_filter{filter="container_imagepull"}
-                ) > 0
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 30s
         labels:
@@ -928,14 +818,14 @@ groups:
         annotations:
           summary: "Image pull failure detected in {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 偵測到映像檔案拉取失敗"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: image pull failing — verify registry and image availability"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 映像檔案拉取失敗 — 請檢查 registry 和映像檔案可用性"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: image pull failing — verify registry and image availability"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 映像檔案拉取失敗 — 請檢查 registry 和映像檔案可用性"
           description: "{{ $value }} container(s) in ImagePullBackOff/InvalidImageName state"
           description_zh: "{{ $value }} 個容器處於 ImagePullBackOff/InvalidImageName 狀態"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
   # ADR-024 silent-failure sentinel — platform-scoped (no tenant label): a KSM
   # misconfiguration is a platform-team concern, not a tenant's. Detects at runtime
@@ -1196,8 +1086,8 @@ groups:
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
 
-      # left-outer-join metadata enrichment (onboarding-vacuum safe) — same
-      # two-branch pattern as the container/pod-state alerts. `node` rides
+      # Metadata in annotations, not joined (#3483) — same as the
+      # container/pod-state alerts. `node` rides
       # through so on-call sees which node; Alertmanager groups by
       # [alertname, tenant], so an AZ-wide outage collapses to one notification
       # per tenant. `for: 3m` rides out kubelet↔API-server network blips
@@ -1209,16 +1099,7 @@ groups:
       # absence-on-`up` recipe's job (#809), NOT this node alert's.
       - alert: NodeNotReady
         expr: |
-          (
-            rule_pack_kubernetes:node_not_ready:core
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            rule_pack_kubernetes:node_not_ready:core
-            unless on(tenant) tenant_metadata_info
-          )
+          rule_pack_kubernetes:node_not_ready:core
         for: 3m
         labels:
           severity: warning
@@ -1227,13 +1108,13 @@ groups:
         annotations:
           summary: "Kubernetes node {{ $labels.node }} NotReady — affects {{ $labels.tenant }}"
           summary_zh: "Kubernetes 節點 {{ $labels.node }} NotReady — 影響 {{ $labels.tenant }}"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: node {{ $labels.node }} NotReady — check node health / pod rescheduling"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 節點 {{ $labels.node }} NotReady — 請檢查節點健康 / Pod 重新調度"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: node {{ $labels.node }} NotReady — check node health / pod rescheduling"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 節點 {{ $labels.node }} NotReady — 請檢查節點健康 / Pod 重新調度"
           description: "A Kubernetes node hosting this tenant's running pod(s) is NotReady; the workload may be rescheduled or unavailable."
           description_zh: "承載此租戶運行中 Pod 的 Kubernetes 節點處於 NotReady 狀態；工作負載可能被重新調度或無法使用。"
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
 
   # ─────────────────────────────────────────────────────────────────────
   # HA replica-readiness (#875 follow-up; Gemini adversarial review). The
@@ -1331,22 +1212,12 @@ groups:
           unless on(tenant)
           (user_state_filter{filter="maintenance"} == 1)
 
-      # left-outer-join metadata enrichment (onboarding-vacuum safe) — same
-      # two-branch pattern as node-health and the threshold alerts: a tenant
-      # with NO tenant_metadata_info still fires (the bare `*` inner-join alone
-      # would silently drop it).
+      # Metadata in annotations, not joined (#3483) — same as node-health and
+      # the threshold alerts: a tenant with NO tenant_metadata_info still fires,
+      # its runbook/owner/tier annotations empty.
       - alert: TenantHAReplicasDegraded
         expr: |
-          (
-            rule_pack_kubernetes:ha_replicas_degraded:core
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            rule_pack_kubernetes:ha_replicas_degraded:core
-            unless on(tenant) tenant_metadata_info
-          )
+          rule_pack_kubernetes:ha_replicas_degraded:core
         for: 15m
         labels:
           severity: warning
@@ -1354,10 +1225,10 @@ groups:
         annotations:
           summary: "HA workload for {{ $labels.tenant }} is running with reduced redundancy"
           summary_zh: "{{ $labels.tenant }} 的 HA 工作負載正以降級（失去備援）狀態運行"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2) — a replica is missing or not-ready. A vanished or stuck-rescheduled pod is invisible to the value-based DB liveness rules (#875), so this is the K8s-layer complement. Check kube_statefulset/deployment status + node health / scheduling."
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: HA 工作負載（≥2）就緒副本數 < 期望數 — 有副本消失或未就緒。消失或重排卡住的 pod 對 value-based DB 存活規則（#875）不可見，故為 K8s 層互補。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: ready replicas < desired on an HA set (≥2) — a replica is missing or not-ready. A vanished or stuck-rescheduled pod is invisible to the value-based DB liveness rules (#875), so this is the K8s-layer complement. Check kube_statefulset/deployment status + node health / scheduling."
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: HA 工作負載（≥2）就緒副本數 < 期望數 — 有副本消失或未就緒。消失或重排卡住的 pod 對 value-based DB 存活規則（#875）不可見，故為 K8s 層互補。請查 kube_statefulset/deployment 狀態 + 節點健康 / 排程。"
           description: "Your HA database has fewer ready replicas than desired — redundancy is reduced or lost (at zero ready the workload is down, with a critical alert also firing). A node/pod failure or a stuck reschedule is the usual cause; one more failure could take the service down."
           description_zh: "您的 HA 資料庫就緒副本數少於期望值 — 備援已降低或失去（就緒數為 0 時工作負載已中斷，並應同時有 critical 告警）。通常成因是節點/Pod 故障或排程卡住；再壞一個就可能導致服務中斷。"
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"

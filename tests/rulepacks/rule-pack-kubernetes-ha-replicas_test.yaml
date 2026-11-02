@@ -76,9 +76,6 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "HA workload for db-a is running with reduced redundancy"
               summary_zh: "db-a 的 HA 工作負載正以降級（失去備援）狀態運行"
@@ -155,9 +152,6 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "HA workload for db-a is running with reduced redundancy"
               summary_zh: "db-a 的 HA 工作負載正以降級（失去備援）狀態運行"
@@ -245,9 +239,6 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-f
-              runbook_url: "http://rb/f"
-              owner: team-f
-              tier: silver
             exp_annotations:
               summary: "HA workload for db-f is running with reduced redundancy"
               summary_zh: "db-f 的 HA 工作負載正以降級（失去備援）狀態運行"
@@ -359,9 +350,6 @@ tests:
           - exp_labels:
               severity: warning
               tenant: db-b
-              runbook_url: "http://rb/b"
-              owner: team-b
-              tier: bronze
             exp_annotations:
               summary: "HA workload for db-b is running with reduced redundancy"
               summary_zh: "db-b 的 HA 工作負載正以降級（失去備援）狀態運行"

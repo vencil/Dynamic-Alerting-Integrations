@@ -214,7 +214,8 @@ def build_preview_test(recipe, tenant, value, judged):
     thr_value = _fmt_value(row["value"])
 
     def _md(n):
-        # constant tenant_metadata_info for the group_left enrichment (both shapes).
+        # constant tenant_metadata_info for the alert's metadata annotations to
+        # query (both shapes; the rule does not join it, #3483).
         # Routed through _labels (not hand-written) so its escaping matches the
         # metric / user_threshold series exactly — one escaping path, no drift.
         md_labels = {

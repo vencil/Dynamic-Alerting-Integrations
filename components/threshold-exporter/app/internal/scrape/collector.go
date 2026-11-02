@@ -455,11 +455,12 @@ func (c *Collector) collectConfigInfo(ch chan<- prometheus.Metric) {
 }
 
 // collectMetadata emits tenant_metadata_info (v1.11.0): unconditional per-tenant
-// runbook_url/owner/tier labels for Alertmanager group_left joins.
+// runbook_url/owner/tier labels, which rule-pack alert annotations query
+// (never joined into alert labels, #3483).
 func (c *Collector) collectMetadata(ch chan<- prometheus.Metric, metadata []config.ResolvedMetadata) {
 	metadataDesc := prometheus.NewDesc(
 		"tenant_metadata_info",
-		"Tenant metadata labels (info metric, always 1). Unconditional output for group_left joins. v1.11.0+",
+		"Tenant metadata labels (info metric, always 1). Unconditional output for alert annotation queries. v1.11.0+",
 		[]string{"tenant", "runbook_url", "owner", "tier"},
 		nil,
 	)
@@ -499,8 +500,9 @@ func (c *Collector) collectMetadata(ch chan<- prometheus.Metric, metadata []conf
 // Deliberately a NEW, SEPARATE metric — db_type is intentionally NOT added to
 // tenant_metadata_info. types.go:102-103 records the v2.5.0 decision that db_type
 // is NOT a Prometheus label (cardinality concern); tenant_metadata_info is also a
-// load-bearing 1-series-per-tenant info metric consumed by ~15 group_left joins,
-// so widening its label set is forbidden. This is a SCOPED reversal of types.go:102
+// load-bearing 1-series-per-tenant info metric that every rule-pack alert's
+// metadata annotations query (#3483; it was joined into alerts before), so
+// widening its label set is forbidden. This is a SCOPED reversal of types.go:102
 // limited to the narrow, low-cardinality (1 series/declaring tenant) liveness need.
 func (c *Collector) collectTenantExpectedExporter(ch chan<- prometheus.Metric, metadata []config.ResolvedMetadata) {
 	expectedDesc := prometheus.NewDesc(

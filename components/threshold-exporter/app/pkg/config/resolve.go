@@ -1355,8 +1355,8 @@ func (c *ThresholdConfig) ResolveSeverityDedupLogf(logf func(format string, args
 }
 
 // ResolveMetadata returns metadata for ALL tenants unconditionally.
-// Tenants without _metadata get empty strings — this guarantees PromQL
-// group_left joins never fail (no False Negatives from missing info metric).
+// Tenants without _metadata get empty strings — every tenant has a
+// tenant_metadata_info series for alert annotations to query (#3483).
 //
 // _metadata is stored as a re-serialized YAML string in ScheduledValue.Default
 // (arbitrary mapping path in UnmarshalYAML). We parse it back into TenantMetadata.

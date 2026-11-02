@@ -63,9 +63,6 @@ tests:
               severity: warning
               tenant: db-a
               version: v1
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "High container CPU in db-a"
               summary_zh: "db-a 的容器 CPU 使用率過高"
@@ -82,9 +79,6 @@ tests:
               severity: warning
               tenant: db-a
               version: v2
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "High container CPU in db-a"
               summary_zh: "db-a 的容器 CPU 使用率過高"
@@ -101,9 +95,6 @@ tests:
               severity: warning
               tenant: db-b
               version: v3
-              runbook_url: "http://rb/b"
-              owner: team-b
-              tier: silver
             exp_annotations:
               summary: "High container CPU in db-b"
               summary_zh: "db-b 的容器 CPU 使用率過高"

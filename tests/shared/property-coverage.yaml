@@ -194,6 +194,7 @@ modules:
       prometheus_targets: "I/O-bound; _api_list over /api/v1/targets, raises QueryError (#3133); pinned in tests/shared/test_query_error.py"
       alertmanager_status: "I/O-bound; http_get_json + status-object shape check, raises QueryError (#3133); pinned in tests/shared/test_query_error.py"
       _api_list: "data.<key> of a success answer as a list of label-checked objects; every defect pinned by example in tests/shared/test_query_error.py"
+      collapse_replicas: "One-line PromQL wrap with no input space to fuzz; its meaning (rows counted once per replica set) is run through promtool in tests/ops/test_replica_independent_queries.py (#3483)"
       _string_labels: "labels must be an object of strings; pinned by example in tests/shared/test_query_error.py"
       sample_value: "float() on a str, refusing non-strings — a JSON number included (#3213, #3304); the accepted / refused spellings pinned by example in tests/shared/test_query_error.py"
       sample_timestamp: "float() on a non-bool int/float, refusing anything else (#3304); pinned by example in tests/shared/test_query_error.py"

@@ -1,9 +1,10 @@
-# promtool unit test — ADR-024 PR3-pre-3 metadata left-outer-join.
+# promtool unit test — kubernetes pack, with and without tenant metadata.
 # Run: promtool test rules tests/rulepacks/rule-pack-kubernetes_test.yaml
 #
-# Proves the onboarding-vacuum fix: a tenant with metrics but NO
-# tenant_metadata_info still fires (branch B / bare), while a configured
-# tenant fires enriched (branch A). Inputs are LEAF series (cAdvisor counter +
+# A tenant with metrics but NO tenant_metadata_info still fires (its runbook /
+# owner / tier annotations are empty), while a configured tenant's annotations
+# carry its metadata. Alerts join no metadata (#3483), so no tenant can be
+# dropped by a join. Inputs are LEAF series (cAdvisor counter +
 # limits + user_threshold + metadata + state_filter) so the full recording-rule
 # chain (percent → weakest → core → alert) is exercised end-to-end. Realistic
 # K8s topology: namespace = tenant via label_replace (#651 lesson).
@@ -73,9 +74,6 @@ tests:
               severity: warning
               tenant: db-a
               version: default
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "High container CPU in db-a"
               summary_zh: "db-a 的容器 CPU 使用率過高"
@@ -177,9 +175,6 @@ tests:
               metric_group: container_oom_killed
               severity: warning
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "Container OOM-killed in db-a"
               summary_zh: "db-a 有容器遭 OOM 終止"
@@ -231,9 +226,6 @@ tests:
               metric_group: container_oom_killed
               severity: critical
               tenant: db-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "CRITICAL repeated OOM kills in db-a"
               summary_zh: "db-a 反覆遭 OOM 終止達臨界"

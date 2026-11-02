@@ -28,7 +28,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
       "targets": [{
-        "expr": "count(count by(tenant) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) or vector(0)",
+        "expr": "count(count by(tenant) (max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))) or vector(0)",
         "legendFormat": ""
       }],
       "fieldConfig": {
@@ -51,7 +51,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
       "targets": [{
-        "expr": "quantile(0.5, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})",
+        "expr": "quantile(0.5, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))",
         "legendFormat": ""
       }],
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "green" } } },
@@ -64,7 +64,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
       "targets": [{
-        "expr": "quantile(0.95, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})",
+        "expr": "quantile(0.95, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))",
         "legendFormat": ""
       }],
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "orange" } } },
@@ -77,7 +77,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
       "targets": [{
-        "expr": "quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})",
+        "expr": "quantile(0.75, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) - quantile(0.25, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))",
         "legendFormat": ""
       }],
       "fieldConfig": { "defaults": { "color": { "mode": "fixed", "fixedColor": "purple" } } },
@@ -91,11 +91,11 @@
       "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
       "targets": [
         {
-          "expr": "quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) + 1.5 * (quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))",
+          "expr": "quantile(0.75, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) + 1.5 * (quantile(0.75, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) - quantile(0.25, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})))",
           "legendFormat": "Upper"
         },
         {
-          "expr": "quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - 1.5 * (quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))",
+          "expr": "quantile(0.25, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) - 1.5 * (quantile(0.75, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) - quantile(0.25, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})))",
           "legendFormat": "Lower"
         }
       ],
@@ -109,7 +109,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
       "targets": [{
-        "expr": "(count((user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"} > scalar(quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) + 1.5 * (quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})))) or (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"} < scalar(quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - 1.5 * (quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})))))) or vector(0)",
+        "expr": "(count((max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) > scalar(quantile(0.75, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) + 1.5 * (quantile(0.75, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) - quantile(0.25, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))))) or (max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) < scalar(quantile(0.25, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) - 1.5 * (quantile(0.75, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) - quantile(0.25, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))))))) or vector(0)",
         "legendFormat": ""
       }],
       "fieldConfig": {
@@ -131,7 +131,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 9, "w": 12, "x": 0, "y": 4 },
       "targets": [{
-        "expr": "user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}",
+        "expr": "max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})",
         "legendFormat": "{{tenant}}",
         "instant": true
       }],
@@ -150,9 +150,9 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 9, "w": 12, "x": 12, "y": 4 },
       "targets": [
-        { "expr": "quantile(0.05, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})", "legendFormat": "P5" },
-        { "expr": "quantile(0.5, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})", "legendFormat": "P50 (median)" },
-        { "expr": "quantile(0.95, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})", "legendFormat": "P95" }
+        { "expr": "quantile(0.05, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))", "legendFormat": "P5" },
+        { "expr": "quantile(0.5, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))", "legendFormat": "P50 (median)" },
+        { "expr": "quantile(0.95, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))", "legendFormat": "P95" }
       ],
       "fieldConfig": {
         "defaults": {
@@ -173,13 +173,13 @@
       "gridPos": { "h": 10, "w": 12, "x": 0, "y": 13 },
       "targets": [
         {
-          "expr": "user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}",
+          "expr": "max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})",
           "format": "table",
           "instant": true,
           "refId": "Val"
         },
         {
-          "expr": "user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"} - scalar(quantile(0.5, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))",
+          "expr": "max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - scalar(quantile(0.5, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})))",
           "format": "table",
           "instant": true,
           "refId": "Dev"
@@ -216,7 +216,7 @@
       "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
       "gridPos": { "h": 10, "w": 12, "x": 12, "y": 13 },
       "targets": [{
-        "expr": "label_replace(user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"} > scalar(quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) + 1.5 * (quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))), \"side\", \"high\", \"tenant\", \".*\") or label_replace(user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"} < scalar(quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - 1.5 * (quantile(0.75, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) - quantile(0.25, user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}))), \"side\", \"low\", \"tenant\", \".*\")",
+        "expr": "label_replace(max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) > scalar(quantile(0.75, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) + 1.5 * (quantile(0.75, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) - quantile(0.25, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})))), \"side\", \"high\", \"tenant\", \".*\") or label_replace(max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"}) < scalar(quantile(0.25, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) - 1.5 * (quantile(0.75, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})) - quantile(0.25, max without(instance, pod) (user_threshold{metric=\"$metric\", severity=\"$severity\", component=~\"$component\"})))), \"side\", \"low\", \"tenant\", \".*\")",
         "format": "table",
         "instant": true,
         "refId": "Outliers"

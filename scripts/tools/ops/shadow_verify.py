@@ -49,7 +49,11 @@ from _lib_python import probe_health, add_prometheus_arg  # noqa: E402
 # #3133: every answer is checked by the lib; a query not answered is a failed
 # check, never a missing one.
 from _lib_prometheus import (  # noqa: E402
-    QueryError, alertmanager_status, instant_or_error, vector_count)
+    QueryError, alertmanager_status, collapse_replicas, instant_or_error, vector_count)
+
+#: The tenants in maintenance, one row each however many exporter replicas
+#: serve the filter (#3483).
+MAINTENANCE_QUERY = collapse_replicas('user_state_filter{filter="maintenance"}')
 
 # --alertmanager when it is not given. Only a URL the caller gave is a source
 # the run must read (#3133, owner 2026-10-23: an optional source).
@@ -234,11 +238,12 @@ def check_runtime(args):
     prom_url = args.prometheus
     # #3133: a mode query not answered is a failed check — it used to append
     # nothing, so the report could not tell "not checked" from "none".
-    results, err = query_prometheus(prom_url, 'user_state_filter{filter="maintenance"}')
+    # One row per tenant, not per exporter replica (#3483); the set dedups too.
+    results, err = query_prometheus(prom_url, MAINTENANCE_QUERY)
     if err:
         checks.append(_query_failed("maintenance_mode", err))
     elif results:
-        maint_tenants = [r.get("metric", {}).get("tenant", "?") for r in results]
+        maint_tenants = sorted({r.get("metric", {}).get("tenant", "?") for r in results})
         checks.append({
             "check": "maintenance_mode",
             "status": "warn",

@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: integration
 created_at: 2026-08-22
-updated_at: 2026-08-29
+updated_at: 2026-11-02
 ---
 
 # ADR-033: 與運維執行平面的協同介面 — MariaDB 計畫性作業
@@ -17,6 +17,8 @@ updated_at: 2026-08-29
 ## 狀態
 
 ✅ **Accepted**（2026-08-22 起草，2026-08-29 由 owner 核可）。
+
+📝 **修訂（2026-11-02）**：租戶 metadata 不再 join 進告警，改由告警的 annotation 查詢 `tenant_metadata_info`（[#3483](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3483)）；決策 2、決策 3 裡描述它如何進到告警的句子照此更新，決策本身不變。
 
 > 依語言政策（自 ADR-019 起預設 ZH-only；ADR-024 / ADR-025 為保留 `.en.md` sibling 的例外），本 ADR 不另製 `.en.md`。
 
@@ -119,7 +121,7 @@ DAI 的租戶是 conf.d 裡一個刻意不透明的 id（dev-rules #2 要求 ten
 
 放在 `TenantMetadata` 既有的**非 label 欄位**類別（`types.go` 記著 v2.5.0 的決定：`environment` / `region` / `db_type` 等「NOT emitted as Prometheus labels (cardinality concern) — consumed by tenant-api and generate_tenant_metadata.py only」）。
 
-⛔ **不得加進 `tenant_metadata_info` 的 label 集**。這不是我的推論，是 `collector.go` 自己寫的：`tenant_metadata_info` 是「load-bearing 1-series-per-tenant info metric consumed by ~15 group_left joins, so widening its label set is forbidden」。同一段也記了唯一一次 scoped reversal 是**開一個新 metric**（`tenant_expected_exporter{tenant, db_type}`），不是加寬既有的——要走那條路就得比照辦理。
+⛔ **不得加進 `tenant_metadata_info` 的 label 集**。這不是我的推論，是 `collector.go` 自己寫的：`tenant_metadata_info` 是每個租戶恰好一筆、每條 rule-pack 告警的 metadata annotation 都會查詢的資訊指標，「widening its label set is forbidden」。同一段也記了唯一一次 scoped reversal 是**開一個新 metric**（`tenant_expected_exporter{tenant, db_type}`），不是加寬既有的——要走那條路就得比照辦理。
 
 **這份對照必須是 advisory-only。** 外審在這點上是對的而草稿是錯的：草稿說「對不上時應該降級成找不到可執行動作」，但**沒指定誰、用什麼、在哪一側做這個判定**，而在宣告式表 + 不建 controller 的前提下，這個判定做不出來——最惡劣的情形是座標被**重用**（實例改名後舊的 `(ns, name)` 仍然存在、仍然解析得到、只是指向別的東西），任何「查得到就算對」的檢查都會回綠，要區分只能靠 DAI 沒有的身分憑證（如 CR uid）。
 
@@ -127,7 +129,7 @@ DAI 的租戶是 conf.d 裡一個刻意不透明的 id（dev-rules #2 要求 ten
 
 ### 決策 3：`runbook_url` 指向唯讀診斷任務（零程式碼，是約定）
 
-`runbook_url` 來自 conf.d `_metadata`，是客戶自填的任意 URL，已 join 進每一條告警。協同產品的任務目錄有一個現成而且刻意維護的性質：**唯讀診斷任務與破壞性任務是分開的**（`status` / `sanity-check` / `connection-usage` / `pods/list` / `blue-green/validate` 對比 `switch-primary` / `logical-restore` / `pods/delete`）。這正好是一條告警可以安全建議的界線——**告警只該指向唯讀那一半**。
+`runbook_url` 來自 conf.d `_metadata`，是客戶自填的任意 URL，每一條告警的 `runbook_url` annotation 都帶著它。協同產品的任務目錄有一個現成而且刻意維護的性質：**唯讀診斷任務與破壞性任務是分開的**（`status` / `sanity-check` / `connection-usage` / `pods/list` / `blue-green/validate` 對比 `switch-primary` / `logical-restore` / `pods/delete`）。這正好是一條告警可以安全建議的界線——**告警只該指向唯讀那一半**。
 
 不需要 DAI 改任何程式碼：欄位已在、值是自由字串。**Trade-off**：零成本也零強制，沒有機制擋住有人指到破壞性任務。加 lint 驗一個自由字串欄位的語意是過度設計（DAI 也看不到對方的任務目錄，驗不了）。維持約定。
 

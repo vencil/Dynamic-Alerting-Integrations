@@ -1,13 +1,12 @@
-# promtool unit test — ADR-024 PR3-pre Commit 3 left-outer-join sweep (redis).
+# promtool unit test — a tenant without metadata still alerts (redis).
 # Run: promtool test rules tests/rulepacks/rule-pack-redis-void_test.yaml
 #
-# Semantic oracle for the ADR-024 PR3-pre Commit 3 left-outer-join sweep: proves
-# the inner-join → left-outer-join conversion is SEMANTICALLY correct on redis
-# (representative of all swept packs — the enrichment suffix is byte-identical
-# everywhere; the conversion is a single uniform structural transform):
-#   - redis-a: metadata present  → fires ENRICHED (branch A, runbook/owner/tier).
-#   - redis-b: NO metadata (onboarding vacuum) → STILL fires BARE (branch B) —
-#     the inner-join would have silently dropped it. This is the fix.
+# Alerts join no metadata (#3483): runbook/owner/tier are annotations read with
+# the canonical query template, so a tenant without tenant_metadata_info (an
+# onboarding tenant) can never be dropped by a join (the ADR-024 "onboarding
+# vacuum" this file was written for). Representative of all packs:
+#   - redis-a: metadata present  → fires, annotations carry runbook/owner/tier.
+#   - redis-b: NO metadata (onboarding) → still fires, those annotations empty.
 #   - redis-c: threshold exceeded but maintenance active → suppressed.
 #   - redis-d: below threshold → no alert.
 #   - redis-e: maintenance + NO metadata → suppressed by the BARE arm's OWN
@@ -72,9 +71,6 @@ tests:
           - exp_labels:
               severity: warning
               tenant: redis-a
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "Redis high connection count on redis-a"
               summary_zh: "redis-a 的 Redis 連線數過高"

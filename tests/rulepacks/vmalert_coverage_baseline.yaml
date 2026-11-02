@@ -15,7 +15,6 @@
 uncovered:
   rule-pack-clickhouse.yaml:
   - ClickHouseDown
-  - ClickHouseHighConnections
   - ClickHouseHighFailedQueryRate
   - ClickHouseHighMemoryUsage
   - ClickHouseHighPartCount

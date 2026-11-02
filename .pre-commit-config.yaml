@@ -1299,20 +1299,25 @@ repos:
         # untracked (the live file is runtime conf.d state, not committed here).
 
       - id: leftouterjoin-enrichment
-        name: "ADR-024: alert metadata enrichment must be left-outer-join (no onboarding-vacuum drop)"
-        entry: python3 -X utf8 scripts/tools/lint/check_leftouterjoin_enrichment.py --ci
+        name: "#3483: tenant metadata reaches alerts through annotations only (no metadata join)"
+        # #3206 (ADR-036 §12): rule files are read the way Prometheus' rule
+        # loader reads them (`da-read prometheus-rules`); the wrappers build the
+        # readers when unset. The reader and the binaries' sources are in `files:`.
+        entry: bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_leftouterjoin_enrichment.py --ci
         language: python
+        additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(rule-packs/rule-pack-.*\.ya?ml|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$
-        # Every `* on(tenant) group_left(runbook_url, owner, tier) …` enrichment
-        # (inner join — drops a tenant with metrics but no metadata row) must be
-        # paired with an `or (… unless on(tenant) tenant_metadata_info)` void
-        # branch. Its right-hand side must be exactly ENRICH_RHS
-        # (`max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)`):
-        # the exporter runs several replicas, and joining the raw metric fails
-        # with many-to-many under per-pod scraping (#3483). Source-only:
-        # configmaps are sync-checked against source separately. Semantic
-        # proof: tests/rulepacks/*-void_test.yaml, rule-pack-metadata-replicas_test.yaml.
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/runtime-canary\.rules\.yaml|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        # No rule may join tenant_metadata_info (arithmetic / comparison match,
+        # either side, any label list): a join made runbook_url/owner/tier part
+        # of the alert's identity, and threshold-exporter's replicas briefly
+        # serve different metadata during a config reload — the identity flipped
+        # and `for:` restarted (#3483). Annotations read metadata with the one
+        # canonical query template (METADATA_ANNOTATIONS); `$labels.runbook_url`
+        # / owner / tier and any other template are refused. Source-only:
+        # configmaps are sync-checked against source separately. Semantic proof:
+        # tests/rulepacks/rule-pack-metadata-replicas_test.yaml (promtool and
+        # vmalert-tool).
 
       - id: pipestatus-errexit
         name: "TRK-382: PIPESTATUS read in a file that never relaxes errexit+pipefail (#1845)"

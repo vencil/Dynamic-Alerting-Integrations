@@ -10,7 +10,7 @@ package config
 //	recording  custom:threshold:{id}   normalise the threshold side (version→default)
 //	recording  custom:metric:{id}      the recipe's metric side (not for absence / ==)
 //	recording  custom:{id}:{sev}:core  per-severity exact-or-fallback join + maint suppress
-//	alert      Custom_{id}             metadata-enriched, bilingual, {{ $labels.name }} title
+//	alert      Custom_{id}             metadata annotations, bilingual, {{ $labels.name }} title
 //
 // Invariants:
 //   - vectorised on(tenant[,version]) — no per-tenant fan-out (O(M))
@@ -224,7 +224,9 @@ func silentSentinel() orderedMap {
 
 // allowedTemplateAction: the platform-authored template actions the compiler
 // itself writes into labels/annotations — `{{ $value | printf "%.Nf" }}` and
-// `{{ $labels.X }}`. Anything else means tenant data became Go-template code.
+// `{{ $labels.X }}`, plus the exact metadata templates (metadataAnnotation,
+// stripped first in assertTemplateSafe). Anything else means tenant data
+// became Go-template code.
 var allowedTemplateAction = regexp.MustCompile(
 	`\{\{\s*(?:\$value\s*\|\s*printf\s+"%\.[0-9]+f"|\$labels\.[a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}`)
 
@@ -241,7 +243,11 @@ func assertTemplateSafe(groups []orderedMap) error {
 				fields, _ := rule.get(section).(orderedMap)
 				for _, kv := range fields {
 					val := fmt.Sprint(kv.Value)
-					residual := allowedTemplateAction.ReplaceAllString(val, "")
+					residual := val
+					for _, l := range metadataLabels {
+						residual = strings.ReplaceAll(residual, metadataAnnotation(l), "")
+					}
+					residual = allowedTemplateAction.ReplaceAllString(residual, "")
 					if strings.Contains(residual, "{{") || strings.Contains(residual, "}}") || strings.Contains(residual, "`") {
 						ident := rule.get("alert")
 						if ident == nil {
@@ -328,9 +334,29 @@ func record(name, expr string) orderedMap {
 	return orderedMap{{"record", name}, {"expr", expr}}
 }
 
+// thresholdJoinKey is what every core rule joins custom:threshold:{id} on
+// (`on(tenant, version)`, with severity fixed by the selector): the exporter
+// serves ONE row per (tenant, recipe_id, severity) (customSeriesID), so this
+// key picks at most one series of a consistent exporter.
+const thresholdJoinKey = "tenant, version, severity"
+
+// thresholdRecord is the per-tenant threshold the core rules join with
+// group_left(name, mode). `max by(…, name, mode)` collapses replicas serving
+// the same row. A join key is emitted ONLY while every replica agrees on its
+// (name, mode): `and on(key) (count by(key) (…) == 1)` drops the key while
+// the replicas briefly serve two rows during a config reload (#3483) — a
+// tenant changing one custom alert's mode or name. Without the guard that
+// tenant has two series on the joined side and the shape's rule fails
+// ("many-to-many matching not allowed") for EVERY tenant, the #3112 failure
+// reached through the replicas. No tie-break (topk) on purpose: name and mode
+// are the alert's identity, and a tie-break picks differently per evaluation
+// on VictoriaMetrics; dropping the key behaves the same on both engines — that
+// one alert of that one tenant pauses for the reload window, nothing else
+// changes.
 func thresholdRecord(id, metric string) orderedMap {
-	inner := `max by(tenant, version, severity, name, mode) ` +
+	rows := `max by(` + thresholdJoinKey + `, name, mode) ` +
 		`(user_threshold{component="custom", metric="` + metric + `", recipe_id="` + id + `"})`
+	inner := rows + ` and on(` + thresholdJoinKey + `) (count by(` + thresholdJoinKey + `) (` + rows + `) == 1)`
 	return record("custom:threshold:"+id, normVersion(inner))
 }
 
@@ -432,14 +458,22 @@ func sloBurnRecords(id string, sh customAlertShape, sel string) []any {
 
 const maintenanceTail = "unless on(tenant)\n(user_state_filter{filter=\"maintenance\"} == 1)"
 
-// metadataJoinRHS is the right-hand side of the metadata enrichment join.
-// threshold-exporter runs several replicas and each serves tenant_metadata_info,
-// so a per-pod scrape yields one series per replica for the same tenant; joining
-// the raw metric then fails with many-to-many. Collapsing it here (by the exact
-// label set the exporter serves) keeps the join one-to-one. The string is pinned
-// to ENRICH_RHS in scripts/tools/lint/check_leftouterjoin_enrichment.py by
+// metadataQuery is the one query an annotation reads a tenant's metadata
+// (runbook_url, owner, tier) with. Metadata is not joined into the alert any
+// more (#3483): a join made it part of the alert's identity, and the
+// threshold-exporter replicas briefly serve different metadata during a config
+// reload, so the identity flipped and `for:` restarted. `topk(1, …)`: any one
+// replica's copy is fine for display. Pinned to METADATA_QUERY in
+// scripts/tools/lint/check_leftouterjoin_enrichment.py by
 // tests/lint/test_check_leftouterjoin_enrichment.py — change both together.
-const metadataJoinRHS = "max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)"
+const metadataQuery = "topk(1, tenant_metadata_info{tenant=%q})"
+
+// metadataAnnotation is the canonical annotation template showing one
+// metadata label of the alert's tenant ("" when the tenant has no metadata).
+func metadataAnnotation(label string) string {
+	return "{{ with query (printf `" + metadataQuery + "` $labels.tenant) }}" +
+		"{{ with index . 0 }}{{ .Labels." + label + " }}{{ end }}{{ end }}"
+}
 
 // sloCoreRecord (ADR-031 §2): the multi-window AND — long and short ratio
 // above the exporter-resolved threshold, and the bad-event floor (min_events ×
@@ -545,18 +579,12 @@ func coreRecord(id string, sh customAlertShape, sev, sel string) orderedMap {
 	return record("custom:"+id+":"+sev+":core", core+"\n"+maintenanceTail)
 }
 
+// metadataLabels are the tenant_metadata_info labels an alert shows as
+// annotations (never as labels, #3483).
+var metadataLabels = []string{"runbook_url", "owner", "tier"}
+
 func alertRule(id string, sh customAlertShape, sev, sel, op string) orderedMap {
-	core := "custom:" + id + ":" + sev + ":core"
-	expr := "(\n" +
-		"  " + core + "\n" +
-		"  * on(tenant) group_left(runbook_url, owner, tier)\n" +
-		"    " + metadataJoinRHS + "\n" +
-		")\n" +
-		"or\n" +
-		"(\n" +
-		"  " + core + "\n" +
-		"  unless on(tenant) tenant_metadata_info\n" +
-		")"
+	expr := "custom:" + id + ":" + sev + ":core"
 	sevEn, sevZh := "", ""
 	if sev == "critical" {
 		sevEn, sevZh = "CRITICAL ", "達臨界 "
@@ -583,9 +611,9 @@ func alertRule(id string, sh customAlertShape, sev, sel, op string) orderedMap {
 			{"summary_zh", "{{ $labels.tenant }} 的自訂告警 [{{ $labels.name }}] " + sevZh + "觸發"},
 			{"description", sh.Recipe + " on " + sh.Metric + sel + ": " + descEn},
 			{"description_zh", sh.Metric + sel + " 的 " + sh.Recipe + ": " + descZh},
-			{"runbook_url", "{{ $labels.runbook_url }}"},
-			{"owner", "{{ $labels.owner }}"},
-			{"tier", "{{ $labels.tier }}"},
+			{"runbook_url", metadataAnnotation("runbook_url")},
+			{"owner", metadataAnnotation("owner")},
+			{"tier", metadataAnnotation("tier")},
 		}},
 	}
 }

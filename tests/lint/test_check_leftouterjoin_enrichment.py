@@ -1,18 +1,17 @@
-"""Tests for check_leftouterjoin_enrichment.py — ADR-024 onboarding-vacuum guard.
+"""Tests for check_leftouterjoin_enrichment.py — metadata through annotations only (#3483).
 
 Pinned contracts
 ----------------
-1. A left-outer-join enrichment (marker paired with a void branch) → markers ==
-   branches (compliant).
-2. A bare inner-join enrichment (marker without a void branch) → markers >
-   branches (flagged).
-3. Live dogfood: every committed rule pack pairs every enrichment with a void
-   branch (gates a regression of the PR3-pre Commit 3 sweep).
-4. The join's right-hand side is exactly ENRICH_RHS (#3483): the raw
-   `tenant_metadata_info`, in any spelling, is flagged — it fails with
-   many-to-many once the exporter's replicas are scraped per pod.
-5. ENRICH_RHS's label set is the exporter's own (collector.go), and the Go
-   custom-alert compiler emits the same string — so neither can drift alone.
+1. No metadata join: `tenant_metadata_info` in an expr only as the right-hand
+   operand of `and` / `unless`; `or` (it copies the right-hand series and their
+   labels) and any arithmetic / comparison match onto it (either side, any label
+   list, aggregated or raw) is a violation.
+2. Annotations / labels: no `$labels.X`, `.Labels.X` or `index $labels "X"` read
+   of a metadata label outside the canonical templates, and every template
+   reading `tenant_metadata_info` is exactly METADATA_ANNOTATIONS[label].
+3. METADATA_LABELS is the exporter's own label list (collector.go), and the Go
+   custom-alert compiler's metadataQuery is METADATA_QUERY.
+4. Live dogfood: every committed rule pack is clean (run through main()).
 """
 from __future__ import annotations
 
@@ -21,110 +20,129 @@ import re
 import sys
 from pathlib import Path
 
+import pytest
+
 _TOOLS_DIR = os.path.join(
     os.path.dirname(__file__), "..", "..", "scripts", "tools", "lint"
 )
 sys.path.insert(0, _TOOLS_DIR)
 
 import check_leftouterjoin_enrichment as lint  # noqa: E402
-import _lib_consumer_read as cr  # noqa: E402  (#3471: the rule-source declaration)
-
-_BARE = (
-    "        expr: |\n"
-    "          (X)\n"
-    "          * on(tenant) group_left(runbook_url, owner, tier)\n"
-    "            max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n"
-)
-_LEFT_OUTER = (
-    "        expr: |\n"
-    "          (\n"
-    "            (X)\n"
-    "            * on(tenant) group_left(runbook_url, owner, tier)\n"
-    "              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)\n"
-    "          )\n"
-    "          or\n"
-    "          (\n"
-    "            (X)\n"
-    "            unless on(tenant) tenant_metadata_info\n"
-    "          )\n"
-)
-
-
-def test_bare_inner_join_flagged():
-    markers, branches = lint.count_pair(_BARE)
-    assert markers == 1 and branches == 0
-    assert markers != branches  # the lint condition
-
-
-def test_left_outer_join_compliant():
-    markers, branches = lint.count_pair(_LEFT_OUTER)
-    assert markers == 1 and branches == 1
-    assert markers == branches
-
-
-def test_no_enrichment_compliant():
-    markers, branches = lint.count_pair("        expr: |\n          up == 0\n")
-    assert markers == 0 and branches == 0
-
-
-def test_live_repo_packs_all_paired():
-    repo = lint._repo_root()
-    packs = cr.RULE_PACKS.files_under(repo)   # #3471: the declaration
-    assert packs, "expected rule packs under rule-packs/"
-    for p in packs:
-        markers, branches = lint.count_pair(p.read_text(encoding="utf-8"))
-        assert markers == branches, (
-            f"{p.name}: {markers} enrichment marker(s) but {branches} void "
-            f"branch(es) — a bare inner-join would drop onboarding-vacuum tenants"
-        )
-
-
-# --- #3483: the join's right-hand side -------------------------------------
 
 _REPO = Path(__file__).resolve().parents[2]
+_OLD_RHS = "topk by(tenant) (1, max by(tenant, runbook_url, owner, tier) (tenant_metadata_info))"
 
 
-def test_canonical_rhs_compliant():
-    assert lint.noncanonical_joins(_LEFT_OUTER) == []
+# --- 1. expressions ---------------------------------------------------------
+
+_JOINS = {
+    "enrichment_topk": f"x * on(tenant) group_left(runbook_url, owner, tier) {_OLD_RHS}",
+    "enrichment_raw": "x * on(tenant) group_left(runbook_url, owner, tier) tenant_metadata_info",
+    "partial_list": "x * on(tenant) group_left(owner) max by(tenant, owner) (tenant_metadata_info)",
+    "bare_group_left": "x * on(tenant) group_left tenant_metadata_info",
+    "group_right_left_side": "tenant_metadata_info * on(tenant) group_right(owner) x",
+    "one_to_one": "x / ignoring(job) tenant_metadata_info",
+    "comparison": "x > bool on(tenant) tenant_metadata_info",
+    "no_on": "x * tenant_metadata_info",
+    "aggregation_alone": "count(tenant_metadata_info) > 0",
+    "upper_case": "x * ON(tenant) GROUP_LEFT(owner) tenant_metadata_info",
+    "multi_line": "(\n  x\n)\n* on(tenant) group_left(runbook_url, owner, tier)\n  " + _OLD_RHS,
+    # `or` passes right-hand series through with their labels (#3483 review):
+    "or_raw": "x or tenant_metadata_info",
+    "or_on": "x or on(tenant) tenant_metadata_info",
+    "or_inside_joined_operand": "x * on(tenant) group_left(owner) (y or tenant_metadata_info)",
+    "or_inside_joined_operand_no_spaces": "x*on(tenant)group_left(owner)(y or tenant_metadata_info)",
+    "or_inside_joined_operand_nested": ("x * on(tenant) group_left(owner) (\n  (y)\n  or\n"
+                                        "  (tenant_metadata_info)\n)"),
+}
 
 
-def test_raw_rhs_flagged():
-    raw = _LEFT_OUTER.replace(lint.ENRICH_RHS, "tenant_metadata_info")
-    assert lint.noncanonical_joins(raw) == [(4, "tenant_metadata_info")]
+@pytest.mark.parametrize("name", sorted(_JOINS))
+def test_every_metadata_join_is_flagged(name):
+    assert lint.expr_violations(_JOINS[name]), name
 
 
-def test_raw_rhs_same_line_flagged():
-    text = ("expr: X * on(tenant) group_left(runbook_url, owner, tier) "
-            "tenant_metadata_info\n")
-    assert [ln for ln, _ in lint.noncanonical_joins(text)] == [1]
+@pytest.mark.parametrize("expr", [
+    "x unless on(tenant) tenant_metadata_info",
+    "x and on (tenant) tenant_metadata_info",
+    "x and tenant_metadata_info",
+    'x unless on(tenant) tenant_metadata_info{tier="gold"}',
+    "x > on(tenant) group_left tenant:alert_threshold:x",
+    'x * on(tenant) group_left max by(tenant) (user_state_filter{filter="a"})',
+])
+def test_set_operators_and_unrelated_matches_pass(expr):
+    assert lint.expr_violations(expr) == []
 
 
-def test_raw_rhs_variant_marker_flagged():
-    # A different label list / spacing escapes the exact marker, but a group_left
-    # onto the raw metric is still caught.
-    text = "X\n  * on(tenant) group_left(owner)\n    tenant_metadata_info\n"
-    assert [ln for ln, _ in lint.noncanonical_joins(text)] == [2]
+def test_a_set_operand_beside_a_join_does_not_excuse_the_join():
+    expr = ("(x * on(tenant) group_left(owner) tenant_metadata_info)\n"
+            "or (x unless on(tenant) tenant_metadata_info)")
+    assert lint.expr_violations(expr)
 
 
-def test_other_rhs_flagged():
-    # `without` (or any other collapse) is not the agreed spelling.
-    text = ("X\n  * on(tenant) group_left(runbook_url, owner, tier)\n"
-            "    max without(instance, pod) (tenant_metadata_info)\n")
-    assert [ln for ln, _ in lint.noncanonical_joins(text)] == [2]
+# --- 2. annotations / labels ------------------------------------------------
+
+def test_canonical_annotations_pass():
+    rule = {"alert": "A", "expr": "x > 1", "annotations": {
+        "runbook_url": lint.METADATA_ANNOTATIONS["runbook_url"],
+        "owner": lint.METADATA_ANNOTATIONS["owner"],
+        "platform_summary": f"[{lint.METADATA_ANNOTATIONS['tier']}] {{{{ $labels.tenant }}}}: x",
+    }}
+    assert lint.rule_violations(rule) == []
 
 
-def test_void_branch_is_not_a_join():
-    assert lint.noncanonical_joins("  unless on(tenant) tenant_metadata_info\n") == []
+@pytest.mark.parametrize("value", [
+    "{{ $labels.runbook_url }}",
+    "[{{ $labels.tier }}] {{ $labels.tenant }}",
+    "{{$labels.owner}}",
+    "{{ .Labels.owner }}",
+    "{{ range query `up` }}{{ .Labels.tier }}{{ end }}",
+    '{{ index $labels "owner" }}',
+    '{{ index .Labels "runbook_url" }}',
+])
+def test_metadata_label_references_are_flagged(value):
+    assert lint.template_violations("annotations.x", value)
 
 
-def test_live_repo_joins_all_canonical():
-    for p in cr.RULE_PACKS.files_under(_REPO):
-        assert lint.noncanonical_joins(p.read_text(encoding="utf-8")) == [], p.name
+@pytest.mark.parametrize("value", [
+    # a different query: no topk, so several replica series render several values
+    "{{ with query (printf `tenant_metadata_info{tenant=%q}` $labels.tenant) }}"
+    "{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}",
+    # the canonical one, respaced
+    lint.METADATA_ANNOTATIONS["owner"].replace("{{ with index", "{{with index"),
+    # range instead of with: concatenates every replica's value
+    "{{ range query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}"
+    "{{ .Labels.owner }}{{ end }}",
+])
+def test_non_canonical_metadata_templates_are_flagged(value):
+    assert lint.template_violations("annotations.owner", value)
 
+
+def test_reads_of_other_labels_pass():
+    assert lint.template_violations("annotations.x", "{{ .Labels.instance }} {{ index $labels \"pod\" }}") == []
+
+
+def test_the_runtime_canary_bundle_is_linted_too():
+    assert "tests/rulepacks/runtime-canary.rules.yaml" in lint.EXTRA_RULE_FILES
+    assert (_REPO / lint.EXTRA_RULE_FILES[0]).is_file()
+
+
+def test_labels_are_checked_too():
+    rule = {"alert": "A", "expr": "x > 1", "labels": {"owner": "{{ $labels.owner }}"}}
+    assert lint.rule_violations(rule)
+
+
+def test_an_absent_tenant_renders_empty_by_construction():
+    """`with query` skips an empty result: no `index` on an empty slice."""
+    for tpl in lint.METADATA_ANNOTATIONS.values():
+        assert tpl.startswith("{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})`")
+        assert "{{ with index . 0 }}" in tpl and tpl.endswith("{{ end }}{{ end }}")
+
+
+# --- 3. pins ------------------------------------------------------------------
 
 def test_metadata_labels_match_exporter():
-    """The `by` list must be exactly what the exporter serves: a label added to
-    tenant_metadata_info in collector.go would otherwise be collapsed away."""
+    """A label added to tenant_metadata_info in collector.go must be decided on."""
     src = (_REPO / "components/threshold-exporter/app/internal/scrape/collector.go"
            ).read_text(encoding="utf-8")
     m = re.search(r'NewDesc\(\s*"tenant_metadata_info",\s*"(?:[^"\\]|\\.)*",\s*'
@@ -132,39 +150,26 @@ def test_metadata_labels_match_exporter():
     assert m, "tenant_metadata_info NewDesc not found in collector.go"
     labels = tuple(re.findall(r'"([^"]+)"', m.group(1)))
     assert labels == ("tenant",) + lint.METADATA_LABELS
-    assert lint.ENRICH_RHS == (f"max by({', '.join(labels)}) (tenant_metadata_info)")
 
 
-def test_go_compiler_emits_the_same_rhs():
+def test_go_compiler_uses_the_same_query_and_no_join():
     src = (_REPO / "components/threshold-exporter/app/pkg/config/custom_alert_compile.go"
            ).read_text(encoding="utf-8")
-    m = re.search(r'const metadataJoinRHS = "([^"]*)"', src)
-    assert m, "metadataJoinRHS const not found in custom_alert_compile.go"
-    assert m.group(1) == lint.ENRICH_RHS
-    # ...and the compiler joins through it, not through a raw string literal.
-    assert "group_left(runbook_url, owner, tier)" in src
-    assert not re.search(r'"\s*tenant_metadata_info\\n"', src)
+    m = re.search(r'const metadataQuery = "((?:[^"\\]|\\.)*)"', src)
+    assert m, "metadataQuery const not found in custom_alert_compile.go"
+    assert m.group(1).replace('\\"', '"') == lint.METADATA_QUERY
+    assert "group_left(runbook_url" not in src
+    assert "metadataJoinRHS" not in src
 
 
-# Spellings that miss ENRICH_MARKER but still join the raw metric (or drop
-# metadata labels): case, group_right, one-to-one, no space after commas.
-_ESCAPES = {
-    "upper_group_left": "x * on(tenant) GROUP_LEFT(runbook_url, owner, tier) tenant_metadata_info",
-    "group_right": "x * on(tenant) group_right(runbook_url, owner, tier) tenant_metadata_info",
-    "one_to_one": "x * on(tenant) tenant_metadata_info",
-    "no_space_partial_max": ("x * on(tenant) group_left(runbook_url,owner,tier) "
-                             "max by(tenant) (tenant_metadata_info)"),
-}
+def test_the_compiled_custom_alert_pack_carries_the_canonical_templates():
+    pack = (_REPO / "rule-packs/rule-pack-custom-alerts.yaml").read_text(encoding="utf-8")
+    for tpl in lint.METADATA_ANNOTATIONS.values():
+        assert tpl in pack
 
 
-def test_marker_escaping_spellings_flagged():
-    for name, text in _ESCAPES.items():
-        assert lint.noncanonical_joins(text), name
+# --- 4. live -----------------------------------------------------------------
 
-
-def test_canonical_rhs_spacing_and_set_operators_pass():
-    ok = ("x * on(tenant) group_left(runbook_url,owner,tier)\n"
-          "  max by (tenant, runbook_url, owner, tier) (tenant_metadata_info)")
-    assert lint.noncanonical_joins(ok) == []
-    assert lint.noncanonical_joins("x and on (tenant) tenant_metadata_info") == []
-    assert lint.noncanonical_joins("x or on(tenant) tenant_metadata_info") == []
+def test_live_repo_rule_packs_are_clean(da_read_env, capsys, monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["check_leftouterjoin_enrichment.py", "--ci"])
+    assert lint.main() == 0, capsys.readouterr()

@@ -80,7 +80,7 @@ spec:
             matchLabels:
               {{- toYaml .Values.networkPolicy.internalPortAllow.daPortal | nindent 14 }}
       ports:
-        - port: 8080
+        - port: {{ include "tenant-api.apiPort" . }}
           protocol: TCP
   {{- if .Values.networkPolicy.egress.enabled }}
   egress:

@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""One-time script: inject tenant_metadata_info group_left join into Rule Pack alert rules.
+"""One-time script: add tenant metadata annotations (runbook_url, owner, tier) to Rule Pack alert rules.
 
-For each alert rule that uses 'on(tenant)' + 'alert_threshold' pattern:
-1. Wraps the entire expr in a group_left join with tenant_metadata_info
-2. Adds runbook_url, owner, tier annotations using $labels
+For each alert rule that uses the 'on(tenant)' + 'alert_threshold' pattern, adds
+runbook_url / owner / tier annotations that read the tenant's metadata with the
+canonical query template (check_leftouterjoin_enrichment.METADATA_ANNOTATIONS).
+The expr is NOT touched: metadata is never joined into an alert (#3483) — a join
+made it part of the alert's identity, which flipped while threshold-exporter's
+replicas reloaded. (Before #3483 this script also injected the join.)
 
 This script is idempotent — it checks for existing tenant_metadata_info before modifying.
 """
@@ -19,21 +22,12 @@ from _lib_python import write_text_or_die  # noqa: E402
 from _lib_exitcodes import EXIT_CALLER_ERROR  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3471: which files are rule packs)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..', 'lint'))
-# The join's right-hand side has one spelling (#3483); never the raw metric.
-from check_leftouterjoin_enrichment import ENRICH_RHS  # noqa: E402
+# The metadata annotation templates have one spelling (#3483).
+from check_leftouterjoin_enrichment import METADATA_ANNOTATIONS  # noqa: E402
 
 # Repo root is 4 levels up: scripts/tools/ops/inject_metadata_join.py.
 RULE_PACKS_DIR = str(Path(__file__).resolve().parents[3] / _lib_consumer_read.RULE_PACKS.directory)
 
-METADATA_JOIN = f"""
-    * on(tenant) group_left(runbook_url, owner, tier)
-      {ENRICH_RHS}"""
-
-METADATA_ANNOTATIONS = {
-    "runbook_url": '{{ $labels.runbook_url }}',
-    "owner": '{{ $labels.owner }}',
-    "tier": '{{ $labels.tier }}',
-}
 
 
 def process_file(filepath):
@@ -64,7 +58,7 @@ def process_file(filepath):
             alert_block, end_i = collect_alert_block(lines, i)
             alert_name = stripped.split(":", 1)[1].strip()
 
-            # Check if this alert needs metadata join
+            # Check if this alert needs metadata annotations
             block_text = "\n".join(alert_block)
             if "on(tenant)" in block_text and "alert_threshold" in block_text:
                 modified_block = inject_metadata(alert_block, alert_name)
@@ -85,7 +79,7 @@ def process_file(filepath):
         print(f"  MODIFIED {Path(filepath).name}")
         return True
 
-    print(f"  SKIP {Path(filepath).name}: no alerts need metadata join")
+    print(f"  SKIP {Path(filepath).name}: no alerts need metadata annotations")
     return False
 
 
@@ -112,62 +106,14 @@ def collect_alert_block(lines, start):
 
 
 def inject_metadata(block, alert_name):
-    """Inject group_left join into an alert block's expr and add annotations."""
+    """Add the canonical metadata annotations to an alert block (expr untouched)."""
     result = []
-    in_expr = False
-    expr_indent = 0
-    expr_lines = []
     annotations_idx = None
 
-    for i, line in enumerate(block):
-        stripped = line.lstrip()
-
-        if stripped.startswith("expr:"):
-            in_expr = True
-            expr_indent = len(line) - len(stripped)
-            if "|" in stripped:
-                # Multi-line block scalar: expr: |
-                result.append(line)
-                continue
-            else:
-                # Single-line expr
-                expr_content = stripped[len("expr:"):].strip()
-                # Wrap in parentheses + metadata join
-                new_expr = (f"{'  ' * (expr_indent // 2)}expr: |\n"
-                           f"{'  ' * (expr_indent // 2 + 1)}(\n"
-                           f"{'  ' * (expr_indent // 2 + 2)}{expr_content}\n"
-                           f"{'  ' * (expr_indent // 2 + 1)})\n"
-                           f"{'  ' * (expr_indent // 2 + 1)}* on(tenant) group_left(runbook_url, owner, tier)\n"
-                           f"{'  ' * (expr_indent // 2 + 2)}{ENRICH_RHS}")
-                result.append(new_expr)
-                in_expr = False
-                continue
-        elif in_expr:
-            # Check if we've left the expr block
-            if stripped and not stripped.startswith("#"):
-                curr_indent = len(line) - len(stripped)
-                if curr_indent <= expr_indent and stripped in ("for:", "labels:", "annotations:") or \
-                   (curr_indent <= expr_indent and any(stripped.startswith(k) for k in
-                    ["for:", "labels:", "annotations:"])):
-                    # End of expr — inject metadata join before this line
-                    # Add wrapping parens + metadata join
-                    # Find the base indent for expr content
-                    base = " " * (expr_indent + 2)
-                    result.append(f"{base}* on(tenant) group_left(runbook_url, owner, tier)")
-                    result.append(f"{base}  {ENRICH_RHS}")
-                    in_expr = False
-                    # Fall through to add this line
-
-        if stripped.startswith("annotations:"):
+    for line in block:
+        if line.lstrip().startswith("annotations:"):
             annotations_idx = len(result)
-
         result.append(line)
-
-    # If expr was still open at end, add metadata join
-    if in_expr:
-        base = " " * (expr_indent + 2)
-        result.append(f"{base}* on(tenant) group_left(runbook_url, owner, tier)")
-        result.append(f"{base}  {ENRICH_RHS}")
 
     # Add metadata annotations after existing annotations
     if annotations_idx is not None:
@@ -194,7 +140,7 @@ def inject_metadata(block, alert_name):
         for key, val in METADATA_ANNOTATIONS.items():
             # Only add if not already present
             if not any(key + ":" in r for r in result):
-                meta_lines.append(f'{entry_indent}{key}: "{val}"')
+                meta_lines.append(f'{entry_indent}{key}: "{val}"')  # backticks: no escaping
 
         for j, ml in enumerate(meta_lines):
             result.insert(insert_at + j, ml)
@@ -203,10 +149,10 @@ def inject_metadata(block, alert_name):
 
 
 def main():
-    """CLI entry point: One-time script: inject tenant_metadata_info group_left join into Rule Pack alert rules."""
+    """CLI entry point: One-time script: add tenant metadata annotations (runbook_url, owner, tier) to Rule Pack alert rules."""
     import argparse
     parser = argparse.ArgumentParser(
-        description="Inject tenant_metadata_info group_left join into Rule Pack alert rules")
+        description="Add tenant metadata annotations (runbook_url, owner, tier) to Rule Pack alert rules")
     parser.parse_args()
 
     rule_packs = Path(RULE_PACKS_DIR)
@@ -224,7 +170,7 @@ def main():
     count = 0
     for entry in entries:
         if _lib_consumer_read.RULE_PACKS.member(entry) == "operational":
-            continue  # operational alerts don't use threshold joins
+            continue  # operational alerts are not threshold alerts
         if process_file(str(entry)):
             count += 1
     print(f"\nModified {count} Rule Pack files.")

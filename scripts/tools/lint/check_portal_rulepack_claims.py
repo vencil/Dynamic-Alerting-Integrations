@@ -39,10 +39,9 @@ accepting a match in either cannot silently bless a name that isn't deployed.
 The PrometheusRule copies are not committed (#3427): operator-generate writes
 them from tree 1 on demand, so they hold no name tree 1 lacks.
 
-Deliberately NOT checked: the portal's `expr` strings. The shipped exprs carry a
-large metadata-join wrapper (`* on(tenant) group_left(runbook_url, owner, tier)
-tenant_metadata_info ...`) that would be unreadable in a customer-facing viewer,
-so the portal shows the semantic CORE. Comparing those mechanically would need a
+Deliberately NOT checked: the portal's `expr` strings. The shipped exprs carry
+wrappers (maintenance `unless`, version fallback, ...) that would be unreadable in
+a customer-facing viewer, so the portal shows the semantic CORE. Comparing those mechanically would need a
 PromQL-subset matcher and would fail on a faithful simplification — out of scope.
 Rule NAMES (+ alert severity) are the load-bearing, exactly-checkable claims.
 

@@ -63,9 +63,6 @@ tests:
               severity: warning
               tenant: db-a
               node: node-1
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "Kubernetes node node-1 NotReady — affects db-a"
               summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-a"
@@ -168,9 +165,6 @@ tests:
               severity: warning
               tenant: db-a
               node: node-1
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "Kubernetes node node-1 NotReady — affects db-a"
               summary_zh: "Kubernetes 節點 node-1 NotReady — 影響 db-a"
@@ -185,9 +179,6 @@ tests:
               severity: warning
               tenant: db-a
               node: node-3
-              runbook_url: "http://rb/a"
-              owner: team-a
-              tier: gold
             exp_annotations:
               summary: "Kubernetes node node-3 NotReady — affects db-a"
               summary_zh: "Kubernetes 節點 node-3 NotReady — 影響 db-a"

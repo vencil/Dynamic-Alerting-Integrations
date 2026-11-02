@@ -1297,7 +1297,7 @@ class TestAnswersReadByTheLib:
     def test_a_count_that_is_not_finite_is_a_caller_error(self, value):
         """It used to crash on int(float('nan'))."""
         checks = self._prometheus(
-            lambda q: _vector(value) if q == "count(user_threshold)" else _vector())
+            lambda q: _vector(value) if q == bc.THRESHOLD_ROWS_QUERY else _vector())
         c = checks["step2_user_threshold_metrics"]
         assert (c["status"], c.get("caller_error")) == ("fail", True)
         assert c["detail"].startswith(
@@ -1367,7 +1367,7 @@ class TestEveryCountIsReadByTheLib:
     a caller_error check, not an internal-error crash (review of 4f7e9dd03)."""
 
     @pytest.mark.parametrize("query,check", [
-        ("count(user_threshold)", "step2_user_threshold_metrics"),
+        (bc.THRESHOLD_ROWS_QUERY, "step2_user_threshold_metrics"),
         ('count(count by(__name__) ({__name__=~"tenant:.*"}))', "step3_recording_rules_output"),
         ("count(tenant:alert_threshold:mysql_connections > 0)", "e2e_vector_matching"),
     ], ids=["step2b", "step3b", "e2e"])

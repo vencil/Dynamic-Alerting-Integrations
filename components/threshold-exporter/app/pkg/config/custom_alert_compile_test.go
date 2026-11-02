@@ -145,6 +145,33 @@ func TestCompileCustomAlertPack_EmptyHasNoGroups(t *testing.T) {
 
 // The emit-time invariant: a template action or backtick the platform did
 // not write fails the compile; the platform's own pass.
+// #3483: the threshold record emits a join key only while the replicas agree
+// on its (name, mode) — no tie-break, so Prometheus and VictoriaMetrics behave
+// the same during a reload. Behaviour is pinned by promtool and vmalert-tool in
+// tests/rulepacks/rule-pack-custom-alerts-reload-skew_test.yaml; this pins the
+// shape and that the join key is spelled once.
+func TestThresholdRecordEmitsAKeyOnlyWhileReplicasAgree(t *testing.T) {
+	rec := thresholdRecord("rid", "m")
+	if got := rec.get("record"); got != "custom:threshold:rid" {
+		t.Fatalf("record = %v", got)
+	}
+	expr, _ := rec.get("expr").(string)
+	rows := `max by(tenant, version, severity, name, mode) ` +
+		`(user_threshold{component="custom", metric="m", recipe_id="rid"})`
+	want := `label_replace(` + rows +
+		` and on(tenant, version, severity) (count by(tenant, version, severity) (` + rows + `) == 1)` +
+		`, "version", "default", "version", "^$")`
+	if expr != want {
+		t.Fatalf("expr =\n%s\nwant\n%s", expr, want)
+	}
+	if strings.Contains(expr, "topk") {
+		t.Errorf("tie-break in the threshold record: %s", expr)
+	}
+	if n := strings.Count(expr, thresholdJoinKey); n != 4 {
+		t.Errorf("join key %q appears %d times, want 4 (both rows, on, count by)", thresholdJoinKey, n)
+	}
+}
+
 func TestAssertTemplateSafe(t *testing.T) {
 	group := func(v string) []orderedMap {
 		return []orderedMap{{{"name", "g"}, {"rules", []any{orderedMap{
@@ -158,6 +185,26 @@ func TestAssertTemplateSafe(t *testing.T) {
 	// Each of the three markers alone fails it: an opening action, a closing
 	// one, a backtick.
 	for _, bad := range []string{`{{ query "up" }}`, "{{ x", "x }}", "a `b`", "{{ $labels.x }} }}", `{{ $value | printf "%d" }}`} {
+		if err := assertTemplateSafe(group(bad)); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	// #3483: exactly the three metadata annotation templates pass (alone or
+	// inside prose); a near variant — another query, a range form, another
+	// label — is template code the compiler did not author, and fails.
+	for _, l := range metadataLabels {
+		for _, ok := range []string{metadataAnnotation(l), "[" + metadataAnnotation(l) + "] {{ $labels.tenant }}"} {
+			if err := assertTemplateSafe(group(ok)); err != nil {
+				t.Errorf("%q refused: %v", ok, err)
+			}
+		}
+	}
+	for _, bad := range []string{
+		"{{ with query (printf `topk(1, up)` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}",
+		"{{ range query (printf `" + metadataQuery + "` $labels.tenant) }}{{ .Labels.owner }}{{ end }}",
+		metadataAnnotation("instance"),
+		metadataAnnotation("owner") + " {{ query `up` }}",
+	} {
 		if err := assertTemplateSafe(group(bad)); err == nil {
 			t.Errorf("%q accepted", bad)
 		}

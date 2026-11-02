@@ -32,9 +32,6 @@ tests:
               recipe: threshold
               name: semisync_errno_1236
               version: default
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "CRITICAL Custom alert [semisync_errno_1236] for shop-a"
               summary_zh: "shop-a 的自訂告警 [semisync_errno_1236] 達臨界 觸發"
@@ -69,9 +66,6 @@ tests:
               recipe: threshold
               name: semisync_errno_1236
               version: default
-              runbook_url: "http://rb/shop"
-              owner: team-shop
-              tier: gold
             exp_annotations:
               summary: "CRITICAL Custom alert [semisync_errno_1236] for shop-a"
               summary_zh: "shop-a 的自訂告警 [semisync_errno_1236] 達臨界 觸發"

@@ -78,7 +78,15 @@ def _input_series() -> list[dict]:
     #   mh: mode-heavy (40 on default + 10 customizers) -> IQR=0 -> flags ALL 10
     rows += [_series(f"mhd{i}", "mh", "db", "warning", 70) for i in range(40)]
     rows += [_series(f"mhc{v}", "mh", "db", "warning", v) for v in [50, 60, 65, 80, 90, 100, 150, 200, 500, 2000]]
-    return rows
+    # Every series arrives once per threshold-exporter replica (#3483: the platform
+    # job scrapes every pod), differing only in instance / pod. The goldens below
+    # are per TENANT, so each query must collapse the replica copies — a raw
+    # `user_threshold{...}` would double every count and table row.
+    return [
+        {**row, "series": row["series"][:-1]
+         + f',instance="10.0.0.{i}:8080",pod="threshold-exporter-{i}"}}'}
+        for row in rows for i in (1, 2)
+    ]
 
 
 # ── Golden expectations, keyed to panels by a stable ASCII title substring ──

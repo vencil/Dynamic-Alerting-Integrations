@@ -105,29 +105,12 @@ groups:
         expr: |
           (
             (
-              (
-                tenant:redis_memory_used_bytes:max
-                > on(tenant) group_left
-                tenant:alert_threshold:redis_memory_used_bytes
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:redis_memory_used_bytes:max
+              > on(tenant) group_left
+              tenant:alert_threshold:redis_memory_used_bytes
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                tenant:redis_memory_used_bytes:max
-                > on(tenant) group_left
-                tenant:alert_threshold:redis_memory_used_bytes
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -136,41 +119,24 @@ groups:
         annotations:
           summary: "Redis high memory usage on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Redis 記憶體使用率過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis memory threshold breached — evaluate maxmemory policy"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis 記憶體閾值超過 — 請評估 maxmemory 政策"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis memory threshold breached — evaluate maxmemory policy"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis 記憶體閾值超過 — 請評估 maxmemory 政策"
           description: "Memory usage: {{ $value | humanize1024 }}B"
           description_zh: "記憶體使用量: {{ $value | humanize1024 }}B"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: RedisHighConnections
         expr: |
           (
             (
-              (
-                tenant:redis_connected_clients:max
-                > on(tenant) group_left
-                tenant:alert_threshold:redis_connected_clients
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:redis_connected_clients:max
+              > on(tenant) group_left
+              tenant:alert_threshold:redis_connected_clients
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                tenant:redis_connected_clients:max
-                > on(tenant) group_left
-                tenant:alert_threshold:redis_connected_clients
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -179,41 +145,24 @@ groups:
         annotations:
           summary: "Redis high connection count on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Redis 連線數過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis connection count high — client pool review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis 連線數過高 — 請檢查客戶端連線池"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis connection count high — client pool review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis 連線數過高 — 請檢查客戶端連線池"
           description: "{{ $value }} connected clients"
           description_zh: "{{ $value }} 個已連線的客戶端"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: RedisHighKeyEvictions
         expr: |
           (
             (
-              (
-                tenant:redis_evicted_keys:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:redis_evicted_keys_rate
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:redis_evicted_keys:rate5m
+              > on(tenant) group_left
+              tenant:alert_threshold:redis_evicted_keys_rate
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                tenant:redis_evicted_keys:rate5m
-                > on(tenant) group_left
-                tenant:alert_threshold:redis_evicted_keys_rate
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 5m
         labels:
@@ -222,41 +171,24 @@ groups:
         annotations:
           summary: "Redis high key eviction rate on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Redis Key 驅逐率過高"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: key eviction rate elevated — capacity review needed"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Key 驅逐率提升 — 需要檢查容量"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: key eviction rate elevated — capacity review needed"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Key 驅逐率提升 — 需要檢查容量"
           description: "{{ $value | printf \"%.1f\" }} evictions/sec — consider increasing maxmemory"
           description_zh: "{{ $value | printf \"%.1f\" }} 驅逐次數/秒 — 請考慮增加 maxmemory"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: RedisReplicationLag
         expr: |
           (
             (
-              (
-                tenant:redis_replication_lag:max
-                > on(tenant) group_left
-                tenant:alert_threshold:redis_replication_lag
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
+              tenant:redis_replication_lag:max
+              > on(tenant) group_left
+              tenant:alert_threshold:redis_replication_lag
             )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              (
-                tenant:redis_replication_lag:max
-                > on(tenant) group_left
-                tenant:alert_threshold:redis_replication_lag
-              )
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 2m
         labels:
@@ -265,33 +197,20 @@ groups:
         annotations:
           summary: "Redis replication lag on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Redis 複製延遲"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis replication lag — check replica health"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: Redis 複製延遲 — 請檢查副本狀態"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis replication lag — check replica health"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: Redis 複製延遲 — 請檢查副本狀態"
           description: "Replication lag: {{ $value | printf \"%.1f\" }}s"
           description_zh: "複製延遲: {{ $value | printf \"%.1f\" }}s"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: RedisLowHitRatio
         expr: |
           (
-            (
-              tenant:redis_keyspace_hit_ratio:avg < 0.9
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            * on(tenant) group_left(runbook_url, owner, tier)
-              max by(tenant, runbook_url, owner, tier) (tenant_metadata_info)
-          )
-          or
-          (
-            (
-              tenant:redis_keyspace_hit_ratio:avg < 0.9
-              unless on(tenant)
-              (user_state_filter{filter="maintenance"} == 1)
-            )
-            unless on(tenant) tenant_metadata_info
+            tenant:redis_keyspace_hit_ratio:avg < 0.9
+            unless on(tenant)
+            (user_state_filter{filter="maintenance"} == 1)
           )
         for: 10m
         labels:
@@ -300,11 +219,11 @@ groups:
         annotations:
           summary: "Redis low hit ratio on {{ $labels.tenant }}"
           summary_zh: "{{ $labels.tenant }} 的 Redis 快取命中率過低"
-          platform_summary: "[{{ $labels.tier }}] {{ $labels.tenant }}: low cache hit ratio — cache strategy review"
-          platform_summary_zh: "[{{ $labels.tier }}] {{ $labels.tenant }}: 快取命中率過低 — 請檢查快取策略"
+          platform_summary: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: low cache hit ratio — cache strategy review"
+          platform_summary_zh: "[{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}] {{ $labels.tenant }}: 快取命中率過低 — 請檢查快取策略"
           description: "Hit ratio: {{ $value | printf \"%.2f\" }} — check cache strategy"
           description_zh: "命中率: {{ $value | printf \"%.2f\" }} — 請檢查快取策略"
 
-          runbook_url: "{{ $labels.runbook_url }}"
-          owner: "{{ $labels.owner }}"
-          tier: "{{ $labels.tier }}"
+          runbook_url: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.runbook_url }}{{ end }}{{ end }}"
+          owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
+          tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
