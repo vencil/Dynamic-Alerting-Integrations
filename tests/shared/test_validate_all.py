@@ -34,6 +34,50 @@ import validate_all as va
 from _lib_exitcodes import emit_result
 
 
+@pytest.fixture(autouse=True)
+def _main_chdirs_to_the_repo(monkeypatch):
+    """``va.main()`` chdirs to the repo root (as the CLI does); in-process
+    that is the worker's cwd, so it is undone after each test (#3481)."""
+    monkeypatch.chdir(os.getcwd())
+
+
+def test_main_finds_the_repo_through_an_unnormalized_import_path(monkeypatch, tmp_path):
+    """#3481: imported as `scripts/tools/lint/../validate_all.py` (a lint
+    tool's `sys.path` entry), main chdir'd to `scripts/tools`."""
+    import importlib.util
+    tools = Path(va.__file__).resolve().parent
+    spec = importlib.util.spec_from_file_location(
+        "validate_all_via_lint", str(tools / "lint" / ".." / "validate_all.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert ".." in mod.__file__
+    went = []
+    monkeypatch.setattr(mod.os, "chdir", lambda p: went.append(Path(p)))
+    monkeypatch.setattr(mod, "_run_watch", lambda *a: None)  # the first step after the chdir
+    monkeypatch.setattr(sys, "argv", ["validate_all.py", "--watch"])
+    mod.main()
+    assert went == [tools.parent.parent], went
+
+
+def test_the_cwd_guard_puts_it_back_and_names_the_leak(tmp_path, pytestconfig):
+    """#3481: tests/conftest.py's guard — what a leaking test is failed with,
+    and the cwd every later test on the worker starts from."""
+    want = Path(__file__).resolve().parents[1] / "conftest.py"
+    [conftest] = [m for m in pytestconfig.pluginmanager.get_plugins()
+                  if getattr(m, "__file__", None) and Path(m.__file__).resolve() == want]
+    before = os.getcwd()
+    assert conftest._cwd_put_back(before) is None
+    os.chdir(tmp_path)
+    msg = conftest._cwd_put_back(before)
+    assert os.getcwd() == before
+    assert msg and str(tmp_path) in msg and "#3481" in msg
+    gone = tmp_path / "gone"
+    gone.mkdir()
+    os.chdir(gone)
+    gone.rmdir()
+    assert conftest._cwd_put_back(before) and os.getcwd() == before
+
+
 def _run_main():
     """``va.main()`` the way ``run()`` takes it (#3216): under --json it
     hands back a Report, which is written here and exits with its status;
