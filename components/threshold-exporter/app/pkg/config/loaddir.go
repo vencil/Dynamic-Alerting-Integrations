@@ -175,20 +175,47 @@ func loadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	if err != nil {
 		return nil, LoadReport{}, nil, nil, err
 	}
+	cfg, rep, built, err = loadDirFromScan(scan, dir, logger, reported)
+	return cfg, rep, scan, built, err
+}
+
+// LoadDirFromScan is LoadDirReportWritten over a full walk the caller
+// already has (ScanDirTree / ScanDirTreeWith — not ScanDirTreeFiles, which
+// decodes no tenant): the very post-walk half of the exporter's load, so a
+// tree read with overlays (`da-guard write` judging the tree its batch
+// leaves, #3489) is built exactly as served-values builds the disk. dir is
+// what names the tree in the build and in errors (LoadDirReport's argument).
+func LoadDirFromScan(scan *TreeScan, dir string, logger *log.Logger) (cfg *ThresholdConfig, rep LoadReport,
+	written map[string]map[string]string, err error) {
+	if logger == nil {
+		logger = discardLogger
+	}
+	cfg, rep, built, err := loadDirFromScan(scan, dir, logger, rootListReported(scan, nil))
+	if err != nil || built == nil {
+		return cfg, rep, nil, err
+	}
+	return cfg, rep, writtenKeys(scan, built), nil
+}
+
+// loadDirFromScan is the one post-walk half of loadDirReport and
+// LoadDirFromScan. reported: the root could not be listed and RootListErr
+// says so (rootListReported).
+func loadDirFromScan(scan *TreeScan, dir string, logger *log.Logger, reported bool) (cfg *ThresholdConfig,
+	rep LoadReport, built *FlatBuild, err error) {
 	if err := RejectDuplicateTenant(scan); err != nil {
-		return nil, LoadReport{}, nil, nil, err
+		return nil, LoadReport{}, nil, err
 	}
 	if reported {
 		listErr := fmt.Errorf("cannot list configDir %q: %w", dir, scan.RootWalkErr)
-		return nil, LoadReport{Unreadable: []UnreadableFile{RootUnreadable}, RootListErr: listErr}, nil, nil,
+		return nil, LoadReport{Unreadable: []UnreadableFile{RootUnreadable}, RootListErr: listErr}, nil,
 			fmt.Errorf("%w: %w", listErr, ErrNoYAMLFiles)
 	}
 	if len(scan.Files) == 0 {
-		return nil, LoadReport{Unreadable: scan.Unreadable}, nil, nil, fmt.Errorf("%w in %s", ErrNoYAMLFiles, dir)
+		return nil, LoadReport{Unreadable: scan.Unreadable}, nil, fmt.Errorf("%w in %s", ErrNoYAMLFiles, dir)
 	}
 	b, err := loadDirBuild(scan, dir, logger, nil)
 	if err != nil {
-		return nil, LoadReport{}, nil, nil, err
+		return nil, LoadReport{}, nil, err
 	}
 	built = &b
 	rep.ParseFailed = built.ParseFailed
@@ -198,7 +225,7 @@ func loadDirReport(dir string, logger *log.Logger) (cfg *ThresholdConfig, rep Lo
 	rep.RootDefaultsRefused = built.RootDefaultsRefused
 	rep.RootDefaultsUnjudged = built.RootDefaultsUnjudged
 	rep.NoTenant = noTenantKeys(scan)
-	return &built.Config, rep, scan, built, nil
+	return &built.Config, rep, built, nil
 }
 
 // noTenantKeys is LoadReport.NoTenant read off a scan: the keys (sorted) of

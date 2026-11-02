@@ -49,6 +49,7 @@ func TestSubcommands_SpecialFileDoesNotBlock(t *testing.T) {
 		"guard":                 {nil, exitParseFailed},
 		"served-values":         {[]string{servedValuesCmd}, exitParseFailed},
 		"effective":             {[]string{effectiveCmd}, exitParseFailed},
+		"key-verdict":           {[]string{keyVerdictCmd}, exitParseFailed},
 		"key-refs":              {[]string{keyRefsCmd, "--metric", "mysql_connections"}, exitParseFailed},
 		"compile-custom-alerts": {[]string{compileCustomAlertsCmd}, exitParseFailed},
 		"parse-tree":            {[]string{parseTreeCmd}, exitOK},

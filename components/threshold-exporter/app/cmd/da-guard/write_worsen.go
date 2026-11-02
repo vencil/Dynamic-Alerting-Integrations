@@ -20,7 +20,15 @@ package main
 //     passes. A tenant declared twice is set aside, not a stop, so the rest
 //     of the tree is still validated; a tenant declared twice before the
 //     call has no baseline, and its findings after it are not new — removing
-//     a copy repairs the tree.
+//     a copy repairs the tree;
+//   - a tenant key the shared key verdict (ADR-038; key_verdict.go, its
+//     ERROR layer) reads as unread at ERROR that it did not before the call
+//     (#3489), in a tenant file the batch writes: a misspelt key, a
+//     dimensional key whose labels the root `dimensions:` does not declare,
+//     an unregistered `_` key. Keyed by (tenant, key), so an error already
+//     there does not block an unrelated write and a fix passes; a batch that
+//     writes only platform files is not judged on other tenants' keys, as
+//     tenant-api's gate is not (newlyUnread).
 //
 // ⚠️ Not compared: validation warnings (they do not fail validation), and
 // what only the route generator judges (exit 4's evidence beyond the
@@ -45,6 +53,10 @@ const (
 	worsenProblem         = "problem"
 	worsenDuplicateTenant = "duplicate_tenant"
 	worsenFinding         = "finding" // a validation error; Finding names its kind
+	// worsenUnread (#3489): a tenant key the shared key verdict reads as
+	// unread at ERROR (key_verdict.go); Finding is the verdict's reason
+	// (no_row, unregistered, …), Path the file the tenant's value comes from.
+	worsenUnread = "unread"
 )
 
 // writeReasonWorsensTree is the call's reason (status refused, exit 1) when
@@ -66,8 +78,9 @@ type writeWorsened struct {
 
 // worsening is everything the after-tree (after, its document afterDoc) has
 // that the disk tree (disk) does not, sorted; batch is the call's paths.
+// note takes the one line saying a check could not run (newlyUnread).
 func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []config.FileOverlay, mkdirs bool,
-	batch map[string]bool) ([]writeWorsened, error) {
+	batch map[string]bool, note func(string)) ([]writeWorsened, error) {
 	beforeDoc, err := parseTreeOf(disk)
 	if err == nil {
 		err = setVerdicts(beforeDoc.Entries, treeDropped(disk))
@@ -123,6 +136,107 @@ func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []
 	sort.Strings(keys)
 	for _, k := range keys {
 		out = append(out, now[k])
+	}
+	unread, err := newlyUnread(disk.AbsRoot, afterDoc, overlays, mkdirs, at, note)
+	if err != nil {
+		return nil, err
+	}
+	return append(out, unread...), nil
+}
+
+// newlyUnread is the key verdict's half of the comparison (#3489): every
+// tenant key the after-tree reads as unread at ERROR (key_verdict.go) in a
+// file the batch writes (an overlay with bytes: an edit, a create, a
+// replace, a move's target, a copy) that the before-tree did not read so,
+// by (tenant, key) — so a batch that writes a misspelt key into a tenant
+// file is refused, one that fixes such a key or touches another key beside
+// it is not.
+//
+// ⛔ Scoped to the tenants whose own file the batch writes, as tenant-api's
+// write gate is (components/tenant-api/internal/gitops/key_verdict.go,
+// keyVerdictRefusal: an error finding in a file the write changes, about a
+// tenant that file is written for; ADR-038 decision 6). A batch that writes
+// only a platform file — a root `_defaults.yaml` dropping a default, a
+// `dimensions:` declaration removed, a rule pack deprecated — and so leaves
+// a key in some other tenant's file read by nothing is not refused for that
+// here: the two writers must not disagree on what one write may do, and
+// validate-config and the route generator's `--validate` (CI) still report
+// the key. A write that also touches that tenant's file is judged on it.
+//
+// A tenant moved into a batch file keeps its baseline: an error it already
+// had (same tenant, same key) is not new, whichever file now holds it; one
+// the move or its edit adds is.
+//
+// The baseline is the before-tree judged as decidable even when it has no
+// root platform file (decision 7's undecidable is a report's caution, not a
+// write's): its threshold keys enter the baseline, so a batch that adds the
+// root carrier is not charged with the keys already there, and a new key it
+// writes beside them is judged.
+//
+// A tenant declared in two files is set aside on both sides
+// (keyVerdictOf's SkipDuplicated), with every tenant its files declare; the
+// rest of the tree is judged. A tenant set aside before the call has no
+// baseline, so its errors after it are not new — removing a copy repairs
+// the tree (treeValidation's rule). An empty before-tree is judged: no
+// tenant, no error. A tree the verdict still cannot judge (a /metrics that
+// cannot be gathered, a file the merge cannot decode) is no silent pass:
+// note gets one line saying the check had no tree to judge and why.
+//
+// The after-tree is judged first: when no key of a written file is unread
+// at ERROR there, nothing can be new and the before-tree is not read.
+func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOverlay, mkdirs bool,
+	at time.Time, note func(string)) ([]writeWorsened, error) {
+	noBaseline := func(which string, why error) {
+		note(fmt.Sprintf("the unread-key check judged no %s tree (%s); the keys this call writes "+
+			"were not checked for a reader", which, strings.ReplaceAll(fmt.Sprint(why), "\n", " ")))
+	}
+	now, err := keyVerdictOf(root, config.ScanOptions{Overlays: overlays, OverlayMakesDirs: mkdirs,
+		SkipDuplicated: true}, hasRootPlatformFile(afterDoc), at)
+	if err != nil {
+		return nil, err
+	}
+	if !now.judged {
+		noBaseline("after-call", now.why)
+		return nil, nil
+	}
+	written := map[string]bool{}
+	for _, o := range overlays {
+		if !o.Remove {
+			written[o.Rel] = true
+		}
+	}
+	var candidates []keyError
+	for _, e := range now.errors {
+		if written[e.File] {
+			candidates = append(candidates, e)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, nil
+	}
+	was, err := keyVerdictOf(root, config.ScanOptions{SkipDuplicated: true}, true, at)
+	if err != nil {
+		return nil, err
+	}
+	if !was.judged {
+		noBaseline("before-call", was.why)
+		return nil, nil
+	}
+	before := make(map[[2]string]bool, len(was.errors))
+	for _, e := range was.errors {
+		before[[2]string{e.Tenant, e.Key}] = true
+	}
+	var out []writeWorsened
+	for _, e := range candidates { // sorted by tenant, key
+		if before[[2]string{e.Tenant, e.Key}] || was.setAside[e.Tenant] {
+			continue
+		}
+		why := ""
+		if e.Reason != "" {
+			why = " (" + e.Reason + ")"
+		}
+		out = append(out, writeWorsened{Kind: worsenUnread, Path: e.File, Tenant: e.Tenant, Finding: e.Reason,
+			Message: fmt.Sprintf("tenant %s: key %q would be unread%s — no reader reads it", e.Tenant, e.Key, why)})
 	}
 	return out, nil
 }

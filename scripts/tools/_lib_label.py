@@ -65,15 +65,15 @@ def safe_label(value: Any) -> str:
 
     This is an OUTPUT-layer helper, not a validator: it must not be used to
     sanitise a value on its way *into* a config, a filename, or a subprocess
-    argument. It lives beside :func:`format_json_report` because they are the two
+    argument. It pairs with ``_lib_exitcodes.encode_json`` because they are the two
     halves of the same decision — ``--json`` carries its own escaping and this is
     the plain-text branch's equivalent. ⛔ Never apply it to data destined for the
     ``--json`` branch: that would corrupt machine-readable output.
 
     ⚠️ **``--json`` is NOT unconditionally safe, and an earlier wording here said
     it was.** ``json.dumps`` is only required to escape ``"``, ``\\`` and
-    ``U+0000``–``U+001F``; under ``ensure_ascii=False`` (this repo's default, see
-    :func:`format_json_report`) the **C1** range passes through verbatim —
+    ``U+0000``–``U+001F``; under ``ensure_ascii=False`` (what the one encoder,
+    ``_lib_exitcodes.encode_json``, uses) the **C1** range passes through verbatim —
     measured, ``json.dumps("a\\x85b", ensure_ascii=False)`` keeps the raw byte
     while ``"a\\x0ab"`` becomes ``\\n``. So a ``--json`` payload piped straight to
     a terminal that interprets C1 is still forgeable. That is EXISTING behaviour,

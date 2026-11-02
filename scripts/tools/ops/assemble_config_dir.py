@@ -51,9 +51,8 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope,
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope, encode_json,
 )
-from _lib_python import format_json_report  # noqa: E402
 from _lib_confd import (  # noqa: E402
     config_listing,
     iter_config_files,
@@ -762,7 +761,7 @@ def main() -> "int | Report":
         # #3107 v2: an operator output — the kernel opens it; `-` is stdout,
         # which the assembly report already uses.
         claim_stdout("the assembly report")
-        write_operator_output(args.manifest, format_json_report(manifest) + "\n",
+        write_operator_output(args.manifest, encode_json(manifest) + "\n",
                               flag="--manifest", mode=0o644)
 
     # Output
