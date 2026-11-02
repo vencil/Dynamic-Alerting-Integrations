@@ -1608,3 +1608,76 @@ def test_a_healthy_stderr_that_cannot_encode_is_not_sealed(tmp_path):
             "def main():\n    raise ValueError('caf\\u00e9 failed')\n_lib_exitcodes.run(main)\n")
     proc = _run(_script(tmp_path, body))
     assert b"atexit note" in proc.stderr, proc.stderr
+
+
+# ── #3450: a Report names its own stdout-failure line ────────────────────
+
+_OWN_LINE = ("def own(detail):\n"
+             "    return 'ERROR [ERR_OUTPUT]: ' + detail\n")
+
+
+def _full_run(tmp_path: Path, report_kwargs: str) -> tuple[int, str]:
+    if not os.path.exists("/dev/full"):
+        pytest.skip("/dev/full does not exist here")
+    body = (_OWN_LINE + "def bad(detail):\n    raise RuntimeError('x')\n"
+            f"_lib_exitcodes.run(lambda: _lib_exitcodes.Report({{'n': 1}}, 1{report_kwargs}))\n")
+    with open("/dev/full", "wb") as full:
+        proc = _run(_script(tmp_path, body), stdout=full.fileno())
+    return proc.returncode, proc.stderr.decode("utf-8", "replace")
+
+
+def test_a_reports_own_line_replaces_the_shared_one(tmp_path):
+    """The tool's line, built from the shared detail; the exit code is the
+    lost-stdout exit's all the same."""
+    rc, err = _full_run(tmp_path, ", on_stdout_failure=own")
+    assert rc == 2, err
+    assert "ERROR [ERR_OUTPUT]: cannot write to stdout: No space left on device" in err, err
+    assert "ERROR: cannot write to stdout" not in err, err
+
+
+def test_a_reader_that_left_gets_the_reports_own_line_too(tmp_path):
+    body = (_OWN_LINE + "_lib_exitcodes.run(lambda: _lib_exitcodes.Report("
+            "{'x': 'y' * 1_000_000}, on_stdout_failure=own))\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone")
+    assert rc == 2, err
+    assert "ERROR [ERR_OUTPUT]: stdout was closed before all output was written" in err, err
+
+
+@pytest.mark.parametrize("builder", ["bad", "lambda d: ''", "lambda d: 3"])
+def test_a_builder_that_fails_leaves_the_shared_line(tmp_path, builder):
+    """An exit path: a builder that raises, or answers with no line, must
+    not cost the run its one stderr line."""
+    rc, err = _full_run(tmp_path, f", on_stdout_failure={builder}")
+    assert rc == 2, err
+    assert "ERROR: cannot write to stdout: No space left on device" in err, err
+    assert "Traceback" not in err, err
+
+
+def test_on_stdout_failure_must_be_callable():
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes
+    with pytest.raises(TypeError):
+        _lib_exitcodes.Report({}, on_stdout_failure="ERROR [X]")
+
+
+def test_a_reports_stdout_failure_line_does_not_outlive_its_run(capsys):
+    """#3450: the builder a Report set is cleared by the reset (tests that run
+    tools in-process) and at the start of every run(), so a later run's
+    stdout failure is not worded by an earlier run's tool."""
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+
+    def own(detail):
+        return "ERROR [X]: " + detail
+
+    ec.emit_result(ec.Report({}, on_stdout_failure=own))
+    assert ec._tools_stdout_failure_line("ERROR: d") == "ERROR [X]: d"
+    ec.reset_exit_state()
+    assert ec._tools_stdout_failure_line("ERROR: d") == "ERROR: d"
+
+    ec.emit_result(ec.Report({}, on_stdout_failure=own))
+    seen = []
+    with pytest.raises(SystemExit):
+        ec.run(lambda: seen.append(ec._tools_stdout_failure_line("ERROR: d")) or 0)
+    assert seen == ["ERROR: d"]
+    capsys.readouterr()

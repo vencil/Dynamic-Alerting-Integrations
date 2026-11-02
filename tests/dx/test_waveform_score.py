@@ -1059,3 +1059,23 @@ def test_redact_summary_whitelist_complete():
     assert r["summary"] == {k: full["summary"][k] for k in ws._REDACT_SUMMARY_KEYS}
     # 且白名單確實涵蓋完整 summary（無遺漏 owner 要的計數）
     assert set(r["summary"]) == set(full["summary"])
+
+
+def test_redact_json_keeps_err_output_when_stdout_fails(tmp_path):
+    """#3450: `--json --redact` with stdout failing while run() writes the
+    document still prints the de-identified ERR_OUTPUT line (the --redact
+    contract, both modes) and no detail; rc stays 2."""
+    if not os.path.exists("/dev/full"):
+        pytest.skip("/dev/full does not exist here")
+    rep = tmp_path / "secret-site-tenant.json"
+    rep.write_text(json.dumps(_report([_record(alerts=[_alert(fire=1000)])], [_meta()])),
+                   encoding="utf-8")
+    with open("/dev/full", "wb") as full:
+        proc = subprocess.run(
+            [sys.executable, str(_SCORE_CLI), str(rep), "--tolerances", str(_TOL),
+             "--json", "--redact"],
+            stdout=full.fileno(), stderr=subprocess.PIPE, timeout=120)
+    err = proc.stderr.decode("utf-8", "replace")
+    assert proc.returncode == 2, err
+    assert "ERROR [ERR_OUTPUT]: 處理失敗（--redact 抑制細節" in err, err
+    assert "cannot write to stdout" not in err and "secret-site" not in err, err

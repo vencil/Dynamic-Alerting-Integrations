@@ -699,6 +699,7 @@ def reset_exit_state() -> None:
     harnesses that run tools in-process (tests/conftest.py calls it after
     every test — an idempotent reset, not save-then-restore)."""
     global _crash_exit_code, _caller_error_code, _stdout_closed_reported, _lost_envelope, _stdout_owner
+    global _stdout_failure_line
     # A recorded failure holds its exception, whose traceback frames can be
     # in a cycle with the failing stream; an armed or tapped stream alone is
     # not (the taps are undone first), and dies by refcount right here.
@@ -709,6 +710,7 @@ def reset_exit_state() -> None:
     _stdout_closed_reported = False
     _lost_envelope = None
     _stdout_owner = None
+    _stdout_failure_line = None
     _crash_exit_code = _IMPORT_CRASH_EXIT_CODE
     _caller_error_code = _IMPORT_CALLER_ERROR_CODE
     if held:
@@ -992,15 +994,28 @@ class Report:
     prints its own document, so a crash can never leave a complete-looking
     one on stdout next to rc 2, and the encoder's rules hold for every tool.
     *status* is an exit code (an int in 0..255); anything else is the
-    tool's defect, refused here rather than read the way ``sys.exit`` would."""
+    tool's defect, refused here rather than read the way ``sys.exit`` would.
 
-    __slots__ = ("document", "status")
+    *on_stdout_failure* (#3450): the tool's own stderr line for stdout
+    failing while ``run`` writes the document. It is given the shared
+    detail (``cannot write to stdout: …`` / ``stdout was closed …``) and
+    returns the whole line — so a tool whose error lines carry a code
+    (waveform-score's ``ERROR [ERR_OUTPUT]: …``, which ``--redact`` prints
+    without the detail) keeps it on this path too. Only the line: the exit
+    code is the lost-stdout exit's either way. A builder that raises, or
+    returns anything but a non-empty str, gets the shared line instead."""
 
-    def __init__(self, document: Any, status: int = 0) -> None:
+    __slots__ = ("document", "status", "on_stdout_failure")
+
+    def __init__(self, document: Any, status: int = 0, *,
+                 on_stdout_failure: Optional[Callable[[str], str]] = None) -> None:
         if status != 0 or isinstance(status, bool):
             _check_code("Report status", status)
+        if on_stdout_failure is not None and not callable(on_stdout_failure):
+            raise TypeError("Report on_stdout_failure must be callable")
         self.document = document
         self.status = status
+        self.on_stdout_failure = on_stdout_failure
 
 
 class OutputNotSerializable(Exception):
@@ -1144,6 +1159,8 @@ def _write_report(report: Report) -> int:
         _to_stderr(line)
         _print_armed_envelope(OutputNotSerializable.reason, line)
         return _crash_code()
+    global _stdout_failure_line
+    _stdout_failure_line = report.on_stdout_failure  # #3450: through the last flush
     print(text)
     disarm_crash_envelope()  # the document is out; a late failure must not add a second
     return report.status
@@ -1186,8 +1203,9 @@ def run(entry: Callable[[], Any]) -> NoReturn:
     Gate: tests/shared/test_single_exit_path.py (every tool that calls
     ``arm_crash_envelope`` enters through here).
     """
-    global _stdout_owner
+    global _stdout_owner, _stdout_failure_line
     _stdout_owner = None  # #3107 v2: each run starts with stdout unclaimed
+    _stdout_failure_line = None  # #3450: set by the Report being written
     try:
         status = emit_result(entry())  # #3216: a Report's document goes out here
     except SystemExit as exc:
@@ -1218,6 +1236,8 @@ def run(entry: Callable[[], Any]) -> NoReturn:
 
 STDOUT_CLOSED_MESSAGE = "ERROR: stdout was closed before all output was written"
 _stdout_closed_reported = False
+# #3450: the Report being written names its own stdout-failure line.
+_stdout_failure_line: Optional[Callable[[str], str]] = None
 # The errnos that mean "the reader left / the fd is gone"; any other stdout
 # failure (ENOSPC, EIO, Windows' EINVAL) is named "cannot write to stdout".
 _STDOUT_LOST_ERRNOS = frozenset((errno.EPIPE, errno.EBADF, errno.ECONNRESET))
@@ -1255,8 +1275,23 @@ def _report_stdout_failed(exc: OSError) -> None:
     _crash_envelope_armed = None  # no stdout to put it on
     if not _stdout_closed_reported:
         _stdout_closed_reported = True
-        _to_stderr(STDOUT_CLOSED_MESSAGE if exc.errno in _STDOUT_LOST_ERRNOS
-                   else f"ERROR: cannot write to stdout: {exc.strerror or exc}")
+        line = (STDOUT_CLOSED_MESSAGE if exc.errno in _STDOUT_LOST_ERRNOS
+                else f"ERROR: cannot write to stdout: {exc.strerror or exc}")
+        _to_stderr(_tools_stdout_failure_line(line))
+
+
+def _tools_stdout_failure_line(line: str) -> str:
+    """*line* as the Report being written words it (#3450), else *line*.
+    Best effort: this is an exit path, so a builder that fails or answers
+    with something that is not a line leaves the shared one."""
+    build = _stdout_failure_line
+    if build is None:
+        return line
+    try:
+        own = build(line[len("ERROR: "):] if line.startswith("ERROR: ") else line)
+    except Exception:  # noqa: BLE001 — the exit must still say why
+        return line
+    return own if isinstance(own, str) and own.strip() else line
 
 
 def _exit_stdout_failed(exc: OSError, stream: Any, *, code: Optional[int] = None,
