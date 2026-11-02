@@ -516,6 +516,8 @@ def main():
       2 — fatal error (bad args, missing deps, a tenant file that cannot be read,
           da-guard missing or failing, Alertmanager's silences that could
           not be read)
+    A failed metrics push (--pushgateway unreachable, not HTTP, or not a
+    usable URL) is a WARN and changes none of these (#3477).
     """
     try_utf8_stdout()
     parser = build_parser()
