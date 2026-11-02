@@ -783,9 +783,10 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 }
 
 // resolveDimensionalRows resolves a tenant's dimensional overrides using the
-// `metric{label="v"}` / `{label=~"re"}` syntax. Their values are tenant-only
-// (no default inheritance; their base must be named, see below) and use the
-// "value:severity" suffix for severity.
+// `metric{label="v"}` / `{label=~"re"}` syntax. A tenant's dimensional key
+// does not inherit its base's scalar default (its base must be named, see
+// below); a complete root `defaults:` dimensional key is the tenant's default
+// for that series (#2031, below). Values use the "value:severity" suffix.
 // Extracted verbatim from the ResolveAtWithStats per-tenant loop
 // (Phase 2B / Phase 11 B1).
 //
@@ -1155,7 +1156,7 @@ func resolveSilentTarget(tenant, target string, expires time.Time, reason string
 // _state_maintenance that have an expires field. Used by the collector to
 // emit da_config_event when maintenance mode expires.
 func (c *ThresholdConfig) ResolveMaintenanceExpiriesAt(now time.Time) []ResolvedMaintenanceExpiry {
-	return c.resolveMaintenanceExpiriesAt(now, true)
+	return c.resolveMaintenanceExpiriesAt(now, true, log.Printf)
 }
 
 // ResolveMaintenanceExpiriesAfterStateFiltersAt is ResolveMaintenanceExpiriesAt
@@ -1169,8 +1170,17 @@ func (c *ThresholdConfig) ResolveMaintenanceExpiriesAt(now time.Time) []Resolved
 // is the one that logs. Either way one scrape prints each such WARN once
 // (#2426). The returned entries are identical to ResolveMaintenanceExpiriesAt's.
 func (c *ThresholdConfig) ResolveMaintenanceExpiriesAfterStateFiltersAt(now time.Time) []ResolvedMaintenanceExpiry {
+	return c.ResolveMaintenanceExpiriesAfterStateFiltersAtLogf(now, log.Printf)
+}
+
+// ResolveMaintenanceExpiriesAfterStateFiltersAtLogf is
+// ResolveMaintenanceExpiriesAfterStateFiltersAt with the WARN sink as a
+// parameter; nil = silent (OperationalStatesAtLogf's rule: a parameter, not
+// a process-global switch). The entries are identical whatever the sink.
+func (c *ThresholdConfig) ResolveMaintenanceExpiriesAfterStateFiltersAtLogf(now time.Time,
+	logf func(format string, args ...any)) []ResolvedMaintenanceExpiry {
 	_, stateFiltersWarned := c.StateFilters[maintenanceFilterName]
-	return c.resolveMaintenanceExpiriesAt(now, !stateFiltersWarned)
+	return c.resolveMaintenanceExpiriesAt(now, !stateFiltersWarned, logf)
 }
 
 // resolveMaintenanceExpiriesAt resolves the expiries; warn=false skips the
@@ -1179,7 +1189,11 @@ func (c *ThresholdConfig) ResolveMaintenanceExpiriesAfterStateFiltersAt(now time
 // _state_maintenance exactly when the maintenance filter is declared and the
 // value contains "expires:" (no such value is one isDisabled accepts), which is
 // the set this function parses.
-func (c *ThresholdConfig) resolveMaintenanceExpiriesAt(now time.Time, warn bool) []ResolvedMaintenanceExpiry {
+func (c *ThresholdConfig) resolveMaintenanceExpiriesAt(now time.Time, warn bool,
+	logf func(format string, args ...any)) []ResolvedMaintenanceExpiry {
+	if logf == nil {
+		warn = false
+	}
 	var result []ResolvedMaintenanceExpiry
 
 	for tenant, overrides := range c.Tenants {
@@ -1198,7 +1212,7 @@ func (c *ThresholdConfig) resolveMaintenanceExpiriesAt(now time.Time, warn bool)
 		parsed := maintenanceModeStructured{}
 		if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
 			if warn {
-				log.Printf("WARN: failed to parse structured _state_maintenance for tenant=%s: %v", tenant, err)
+				logf("WARN: failed to parse structured _state_maintenance for tenant=%s: %v", tenant, err)
 			}
 			continue
 		}
@@ -1212,7 +1226,7 @@ func (c *ThresholdConfig) resolveMaintenanceExpiriesAt(now time.Time, warn bool)
 			// #2000: the setting is ignored as a whole (ResolveStateFiltersAt
 			// drops it too), so there is no window to report as expired.
 			if warn {
-				log.Printf("%s", maintenanceExpiresIgnoredWarn(tenant, parsed.Expires, err))
+				logf("%s", maintenanceExpiresIgnoredWarn(tenant, parsed.Expires, err))
 			}
 			continue
 		}
@@ -1233,6 +1247,16 @@ func (c *ThresholdConfig) resolveMaintenanceExpiriesAt(now time.Time, warn bool)
 // da_config_event when a loosened threshold's TTL lapses. v1: base standard
 // metrics only.
 func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedThresholdExpiry {
+	return c.ResolveThresholdExpiriesAtLogf(now, log.Printf)
+}
+
+// ResolveThresholdExpiriesAtLogf is ResolveThresholdExpiriesAt with the WARN
+// sink as a parameter; nil = silent. The entries are identical whatever the
+// sink.
+func (c *ThresholdConfig) ResolveThresholdExpiriesAtLogf(now time.Time, logf func(format string, args ...any)) []ResolvedThresholdExpiry {
+	if logf == nil {
+		logf = discardLogf
+	}
 	var result []ResolvedThresholdExpiry
 	// #1231: membership goes through the same canonical view as
 	// ResolveAtWithStats — an old-spelled override whose default has already
@@ -1272,7 +1296,7 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedTh
 			}
 			t, err := time.Parse(time.RFC3339, sv.Expiry.Expires)
 			if err != nil {
-				log.Printf("WARN: invalid expires %q in threshold %q for tenant=%s: %v", sv.Expiry.Expires, metricKey, tenant, err)
+				logf("WARN: invalid expires %q in threshold %q for tenant=%s: %v", sv.Expiry.Expires, metricKey, tenant, err)
 				continue
 			}
 			result = append(result, ResolvedThresholdExpiry{
@@ -1294,6 +1318,15 @@ func (c *ThresholdConfig) ResolveThresholdExpiriesAt(now time.Time) []ResolvedTh
 // Returns one ResolvedSeverityDedup per tenant where mode="enable".
 // Tenants with "disable" produce no entry (sentinel alert won't fire → no inhibit).
 func (c *ThresholdConfig) ResolveSeverityDedup() []ResolvedSeverityDedup {
+	return c.ResolveSeverityDedupLogf(log.Printf)
+}
+
+// ResolveSeverityDedupLogf is ResolveSeverityDedup with the WARN sink as a
+// parameter; nil = silent. The entries are identical whatever the sink.
+func (c *ThresholdConfig) ResolveSeverityDedupLogf(logf func(format string, args ...any)) []ResolvedSeverityDedup {
+	if logf == nil {
+		logf = discardLogf
+	}
 	var result []ResolvedSeverityDedup
 
 	for tenant, overrides := range c.Tenants {
@@ -1313,7 +1346,7 @@ func (c *ThresholdConfig) ResolveSeverityDedup() []ResolvedSeverityDedup {
 			// No entry → sentinel won't fire → no inhibit → both notifications sent
 			continue
 		default:
-			log.Printf("WARN: unknown severity_dedup value %q for tenant=%s, defaulting to enable (valid: enable, disable)", val, tenant)
+			logf("WARN: unknown severity_dedup value %q for tenant=%s, defaulting to enable (valid: enable, disable)", val, tenant)
 			result = append(result, ResolvedSeverityDedup{Tenant: tenant, Mode: "enable"})
 		}
 	}
@@ -1330,10 +1363,17 @@ func (c *ThresholdConfig) ResolveSeverityDedup() []ResolvedSeverityDedup {
 // The value is already every layer's merged per key — the root platform
 // files' `tenants:` entries and the tenant file (#2370, overlayTenantLayer).
 func (c *ThresholdConfig) ResolveMetadata() []ResolvedMetadata {
+	return c.ResolveMetadataLogf(log.Printf)
+}
+
+// ResolveMetadataLogf is ResolveMetadata with the WARN sink as a parameter;
+// nil = silent (tenantMetadataOf's own rule). The entries are identical
+// whatever the sink.
+func (c *ThresholdConfig) ResolveMetadataLogf(logf func(format string, args ...any)) []ResolvedMetadata {
 	var result []ResolvedMetadata
 
 	for tenant, overrides := range c.Tenants {
-		meta, _ := tenantMetadataOf(tenant, overrides, log.Printf)
+		meta, _ := tenantMetadataOf(tenant, overrides, logf)
 		result = append(result, meta)
 	}
 
@@ -1391,7 +1431,9 @@ func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf f
 // a key's VALUE and spelling are.
 //
 // Values repeats, one finding each, the Errors entries that are about a
-// reserved key's VALUE (CheckReservedValue). They are in Errors too, so a
+// reserved key's VALUE (CheckReservedValue), a reserved key's schedule
+// (#3269) or a threshold key's value the row resolvers refuse
+// (thresholdRefusalIn, #3267). They are in Errors too, so a
 // caller that does not Ratchet stays strict; Ratchet is how a write gate
 // lets a value already on disk through when the write leaves it as the
 // exporter reads it.
@@ -1402,7 +1444,7 @@ func tenantMetadataOf(tenant string, overrides map[string]ScheduledValue, logf f
 type KeyValidation struct {
 	Errors  []string       // blocking channel: bad expires, version-label violations, an unknown _profile, a reserved value the exporter ignores, ...
 	Notices []string       // advisory channel: #1231 deprecation notices, ratcheted reserved values; MUST never block a write
-	Values  []ValueFinding // the Errors entries about a reserved value, for Ratchet (#3227)
+	Values  []ValueFinding // the Errors entries about a reserved or threshold value, for Ratchet (#3227, #3267)
 	// VersionLabels repeats the Errors entries about a dimensional key's
 	// `version` label (ADR-024 OQ-6), and Renames the Notices about a
 	// retired key spelling (#1231): the two key checks da-guard
@@ -1509,6 +1551,15 @@ func (c *ThresholdConfig) ValidateTenantKeysByTenant() KeyValidationByTenant {
 // per-tenant entries on their own and must not repeat the defaults-side
 // notice once per platform file.
 func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
+	return c.validateOverrideKeysOf(true)
+}
+
+// validateOverrideKeysOf is validateOverrideKeys; thresholdValues false
+// leaves out the #3267 threshold value findings — for a tenant layer the
+// exporter does not read (TenantMerge's flat-KV fallback: the exporter
+// declares no tenant from such a file), whose non-`_` keys are not
+// thresholds anyone serves. The reserved-key findings are not affected.
+func (c *ThresholdConfig) validateOverrideKeysOf(thresholdValues bool) KeyValidation {
 	var v KeyValidation
 	// versionLabels / renamed record the entries VersionLabels and Renames
 	// repeat.
@@ -1651,6 +1702,20 @@ func (c *ThresholdConfig) validateOverrideKeys() KeyValidation {
 					v.Values = append(v.Values, f)
 				}
 				continue
+			}
+
+			// #3267: a threshold value the row resolvers refuse (`abc`,
+			// `70:high`, `1e999`; thresholdRefusalIn, in this tree's root
+			// `defaults:` — not a non-finite
+			// number, which #3140 refuses strictly elsewhere) is refused
+			// where it is written. Errors AND Values, as a reserved value:
+			// an unchanged one already on disk is a notice (Ratchet, by the
+			// resolver's reading — readAlike).
+			if thresholdValues {
+				if f, ok := newThresholdFinding(tenant, canonDefaults, canonKey, sv); ok {
+					v.Errors = append(v.Errors, f.Message)
+					v.Values = append(v.Values, f)
+				}
 			}
 
 			// ADR-024 OQ-6: a dimensional key's `version` label is a value
@@ -1852,6 +1917,15 @@ func (c *ThresholdConfig) applyProfiles(logf func(format string, args ...any)) {
 //   - repeat_interval: 1m–72h (clamped with warning)
 //   - receiver is required; skip tenant if missing
 func (c *ThresholdConfig) ResolveRouting() []RoutingConfig {
+	return c.ResolveRoutingLogf(log.Printf)
+}
+
+// ResolveRoutingLogf is ResolveRouting with the WARN sink as a parameter;
+// nil = silent. The configs are identical whatever the sink.
+func (c *ThresholdConfig) ResolveRoutingLogf(logf func(format string, args ...any)) []RoutingConfig {
+	if logf == nil {
+		logf = discardLogf
+	}
 	var result []RoutingConfig
 
 	for tenant, overrides := range c.Tenants {
@@ -1873,7 +1947,7 @@ func (c *ThresholdConfig) ResolveRouting() []RoutingConfig {
 		var routingMap map[string]interface{}
 		if err := yaml.Unmarshal([]byte(raw), &routingMap); err != nil {
 			// If it's not valid YAML, it might be a simple string — skip
-			log.Printf("WARN: invalid _routing config for tenant=%s: %v", tenant, err)
+			logf("WARN: invalid _routing config for tenant=%s: %v", tenant, err)
 			continue
 		}
 
@@ -1882,7 +1956,7 @@ func (c *ThresholdConfig) ResolveRouting() []RoutingConfig {
 		// Extract receiver (required, must be a map with 'type')
 		recvRaw, hasRecv := routingMap["receiver"]
 		if !hasRecv {
-			log.Printf("WARN: _routing for tenant=%s missing required 'receiver' field, skipping", tenant)
+			logf("WARN: _routing for tenant=%s missing required 'receiver' field, skipping", tenant)
 			continue
 		}
 		recvMap, ok := recvRaw.(map[interface{}]interface{})
@@ -1891,7 +1965,7 @@ func (c *ThresholdConfig) ResolveRouting() []RoutingConfig {
 			if rm, ok2 := recvRaw.(map[string]interface{}); ok2 {
 				rc.ReceiverConfig = rm
 			} else {
-				log.Printf("WARN: _routing for tenant=%s: 'receiver' must be a map with 'type', skipping", tenant)
+				logf("WARN: _routing for tenant=%s: 'receiver' must be a map with 'type', skipping", tenant)
 				continue
 			}
 		} else {
@@ -1905,7 +1979,7 @@ func (c *ThresholdConfig) ResolveRouting() []RoutingConfig {
 		if rtype, ok := rc.ReceiverConfig["type"].(string); ok && receiverspec.Known(rtype) { // #2295: the one Go receiver contract
 			rc.ReceiverType = rtype
 		} else {
-			log.Printf("WARN: _routing for tenant=%s: invalid or missing receiver 'type', skipping", tenant)
+			logf("WARN: _routing for tenant=%s: invalid or missing receiver 'type', skipping", tenant)
 			continue
 		}
 
@@ -1920,13 +1994,13 @@ func (c *ThresholdConfig) ResolveRouting() []RoutingConfig {
 
 		// Extract and validate timing parameters with guardrails
 		if gw, ok := routingMap["group_wait"].(string); ok && gw != "" {
-			rc.GroupWait = clampDuration(gw, "group_wait", tenant)
+			rc.GroupWait = clampDurationLogf(gw, "group_wait", tenant, logf)
 		}
 		if gi, ok := routingMap["group_interval"].(string); ok && gi != "" {
-			rc.GroupInterval = clampDuration(gi, "group_interval", tenant)
+			rc.GroupInterval = clampDurationLogf(gi, "group_interval", tenant, logf)
 		}
 		if ri, ok := routingMap["repeat_interval"].(string); ok && ri != "" {
-			rc.RepeatInterval = clampDuration(ri, "repeat_interval", tenant)
+			rc.RepeatInterval = clampDurationLogf(ri, "repeat_interval", tenant, logf)
 		}
 
 		result = append(result, rc)

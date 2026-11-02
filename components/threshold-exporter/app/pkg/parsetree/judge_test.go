@@ -98,7 +98,17 @@ func TestMarshalLenIsJSONMarshal(t *testing.T) {
 // held on Parse, one byte at a time either side.
 func TestPlainStringByteBoundary(t *testing.T) {
 	t.Parallel()
-	for _, payload := range []string{"<", "&>", `\n<`} {
+	payloads := []string{"<", "&>", `\n<`}
+	if testing.Short() {
+		// Each payload is two binary searches over inputs up to
+		// MaxContentBytes; under -race one full run is minutes, and the
+		// nightly repeats it -count=10 inside a 30-minute package timeout.
+		// -short keeps one payload (the property is still held, Judge and
+		// Parse on the same boundary); the full set runs without -short in
+		// PR CI.
+		payloads = payloads[:1]
+	}
+	for _, payload := range payloads {
 		build := func(k, n int) []byte {
 			return []byte(fmt.Sprintf("k: \"%s\"\ntail: \"%s\"\n", strings.Repeat(payload, k), strings.Repeat("t", n)))
 		}

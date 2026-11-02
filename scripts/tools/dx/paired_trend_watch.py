@@ -23,21 +23,15 @@ This is ADR-032 §待決 5, phase 2 / PR-B1.
 It writes a verdict to stdout and to `$GITHUB_STEP_SUMMARY`, and that is all.
 It holds no issue state, parses no hidden marker, and calls no GitHub write API.
 
-That restraint is the whole point of running it now. ADR-032 §待決 6 pinned
-"新舊並行，不直接切換": the old absolute-series watchdog
-(`analyze_bench_history.py --trend-watch`) keeps running and keeps owning the
-`perf-trend` issue, while this one accumulates two-to-four weeks of verdicts
-beside it so the two can be compared BEFORE anything is cut over. A summary-only
+Paired ns/op is INFORMATIONAL, and that is a decision, not a phase. ADR-032
+originally planned to run this beside the old absolute-series watchdog and cut
+over after a parallel period (§待決 6). That protocol was withdrawn: the old
+watchdog was retired (nine issues, eight auto-closed by flapping, none led to a
+fix), and the trend detector for drift below the per-commit gate is to be the
+deterministic cumulative budget in ADR-039, not this ratio. A summary-only
 engine that turns out to be wrong costs a paragraph in a job summary; the same
 engine wired to the closing path costs an auto-closed regression ticket, which
 is issue #1432, which is why ADR-032 exists.
-
-Why a separate module instead of a `--paired-watch` flag on the old watchdog:
-that file is ~2200 lines whose centre of gravity is the marker state machine and
-the open/update/close lifecycle. A flag would share those helpers, and "must not
-touch the closing path" enforced by a branch is one careless import away from
-being untrue. Physical separation makes it true by construction, and when the
-parallel period ends the old file gets deleted rather than untangled.
 
 THREE STATES, NOT TWO — AND THE SAME RULE ONE LEVEL UP
 ======================================================
@@ -110,8 +104,8 @@ rule, so deriving "the work definition moved on night X" costs it no new state
 at all. `pair_bench_ratio.py`'s own docstring hands the derivation to "whoever
 reads the series"; this is that reader.
 
-Without this, the `workload_digest` field added in PR-A has no consumer at all
-until PR-B2, i.e. it would sit unverified for weeks.
+Without this, the `workload_digest` field added in PR-A would have no
+consumer at all and would sit unverified.
 
 ⛔ A digest that is absent (schema v1), `not-requested`, or `unreadable` yields
 transition state UNKNOWN. It must never yield "did not move" — the digest exists
@@ -951,12 +945,16 @@ def judgeable(nights, benches, threshold_pct, k, gap=GAP_BREAK):
     ⛔ ADR-032 §待決 6 pinned this requirement in as many words, and this
     implementation of that ADR broke it:
 
-        切換當下比值序列從零開始，持續判準需要幾夜才能發射
+        比值序列從零開始時，持續判準需要幾夜才能發射
         ——那幾夜必須回報「無法評估」，不得回報「無發現」。
 
-    ("At cutover the ratio series starts from nothing and the sustained rule
-    needs several nights before it can fire — those nights MUST report
+    ("When the ratio series starts from nothing, the sustained rule needs
+    several nights before it can fire — those nights MUST report
     無法評估 / INCONCLUSIVE, and must NOT report 無發現 / CLEAR.")
+
+    ⚠️ Not yet true across a reference re-pin: `decide()` does not split the
+    window by `reference_sha`, so nights measured against the old and the new
+    reference count together. Deferred with the re-pin question in ADR-039.
     """
     grouped = calendar_nights(nights)
     out = {}
@@ -1350,16 +1348,16 @@ def nights_from_gh(workflow, limit, cache_dir):
 
     # ⛔ `"completed"`, not `"success"`. `--status success` keys the window on
     # the RUN's conclusion, and one failed job fails the run — so a crash in
-    # `trend-watch`, a job this module does not own and whose output it does not
-    # read, used to delete that night's `bench-paired.json` from THIS window.
+    # any other job of the nightly would delete that night's
+    # `bench-paired.json` from THIS window.
     # A K-of-N rule over a window the operator believes is 14 nights but is
     # quietly 13 fires later than advertised: the same silent-window-shortening
     # `load_night` refuses to do, arriving instead through the workflow graph.
     # ⚠️ SAFE HERE FOR A REASON THAT DOES NOT GENERALISE: `bench-paired.json`
     # can say whether it is whole (JSON parse, schema string, required keys),
     # so a truncated or half-written payload comes back `unreadable` and named.
-    # `analyze_bench_history.py`'s own `bench-baseline.txt` cannot say that, and
-    # keeps asking `"success"` — see `list_recent_runs`' docstring.
+    # `bench-baseline.txt` cannot say that, so `analyze_bench_history.py`'s
+    # variance table keeps asking `"success"` — see `list_recent_runs`.
     runs = list_recent_runs(workflow, limit, status="completed")
     pairs = []
     for run in runs:
@@ -1605,10 +1603,9 @@ def render(result):
                  f"**{result['k']}** consecutive counted nights. Baseline is 1.000 "
                  "by construction — no window median, no anchor.")
     lines.append("")
-    lines.append("> ⛔ **This tool opens, updates and closes nothing.** The "
-                 "`perf-trend` issue is still owned by the old absolute-series "
-                 "watchdog. This runs beside it so the two can be compared before "
-                 "any cutover (ADR-032 §待決 6).")
+    lines.append("> ⛔ **This tool opens, updates and closes nothing.** Paired "
+                 "ns/op is informational; drift below the per-commit gate is to "
+                 "be caught by the deterministic cumulative budget (ADR-039).")
     lines.append("")
 
     if result["fired"]:
@@ -1620,14 +1617,15 @@ def render(result):
             lines.append(f"| `{bench}` | {night_utc} |")
         lines.append("")
         # ⛔ No suppression list here, on purpose. A benchmark whose cost was
-        # measured and ACCEPTED (#1474) still shows up as a bare fire, because
-        # the accepted-cost ledger is PR-B2's job and a temporary hand-written
-        # exclusion list is the prototype of the silence this line keeps
-        # removing. It is annotated, not hidden.
-        lines.append("⚠️ A fire here is the RULE's raw output. No accepted-cost "
-                     "ledger is applied yet — that is PR-B2. A benchmark already "
-                     "measured, attributed and accepted (e.g. `#1474`) will still "
-                     "appear above, and that is deliberate: annotate, never suppress.")
+        # measured and ACCEPTED (#1474) still shows up as a bare fire: the
+        # acceptance ledger (ADR-039) is read by the per-PR and per-commit
+        # gates only, and a hand-written exclusion list here would be the
+        # prototype of the silence this line keeps removing.
+        lines.append("⚠️ A fire here is the RULE's raw output. The acceptance "
+                     "ledger (`.github/bench-accepted.toml`, ADR-039) is not "
+                     "applied to this summary. A benchmark already measured, "
+                     "attributed and accepted (e.g. `#1474`) will still appear "
+                     "above, and that is deliberate: annotate, never suppress.")
         lines.append("")
 
     # Night-by-night, including why a night did not count.

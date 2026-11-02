@@ -615,14 +615,6 @@ _COMPARED_SEVERITIES = THRESHOLD_SEVERITIES
 # that default is what is backtested.
 _REFUSED_NO_ROW = "non_finite"
 
-# A `--tenant` value spelled with `_` or as a hex float (`1_000`, `0x1p4`):
-# the exporter reads it (Go's ParseFloat), but `--tenant` does not backtest
-# it, as before served-values answered for `--tenant` (#3140 PR2 keeps every
-# exit code that the owner's rulings do not name). Not a reading of the
-# value — the exporter's reading is served-values' — only a refusal to
-# backtest a spelling; a value the exporter refuses is refused there first.
-_SPELLINGS_NOT_BACKTESTED = re.compile(r"_|0[xX]")
-
 # The tenant ids of the tree `_served_written` builds: one per side.
 _WRITTEN_TENANTS = ("backtest-old", "backtest-new")
 
@@ -729,12 +721,11 @@ def _served_side(tenant_values, key, raw):
 def _served_written(key, raws):
     """`[side, ...]` for `raws` (`_served_side`; a side not given is None),
     read by ONE da-guard served-values run over the tree `_written_tree`
-    writes. Raises `_NotRead` for a spelling `_SPELLINGS_NOT_BACKTESTED`
-    names, and what `load_served_tree` raises."""
+    writes. The number is the exporter's reading (Go's
+    `parseThresholdNumber`, #3267): a spelling it reads (`1_000`, `0x1p4`)
+    is backtested at the number it serves, one it refuses is `_NotRead`.
+    Raises what `_served_side` and `load_served_tree` raise."""
     import tempfile
-    for raw in raws:
-        if raw is not None and _SPELLINGS_NOT_BACKTESTED.search(str(raw)):
-            raise _not_read(raw)
     if all(raw is None for raw in raws):
         return [None for _ in raws]
     with tempfile.TemporaryDirectory(prefix="backtest-tenant-") as conf_d:

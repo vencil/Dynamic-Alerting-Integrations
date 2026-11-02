@@ -3,6 +3,8 @@
 > 產出於 [#1396](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1396) 的誤報根因調查（PR [#1431](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1431)）。
 > 主要消費者是 [#1432](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1432)（關票側滑動 anchor 重新設計）與 [#1430](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1430)（發射側缺絕對參考點）。
 
+⛔ **存檔，不再可在 main 上重跑。** 本報告分析的 `analyze_bench_history.py --trend-watch` 已隨舊的絕對 ns/op 趨勢監測一起退役（[ADR-032](../../../adr/032-paired-interleaved-bench-measurement.md) §待決 6 撤回）；`counterfactual.py` import 的 `run_trend_watch` 等函式已不存在。要重跑，先 checkout 退役前的最後一個 main commit `666f43494`。資料檔本身（每夜 CPU 型號與 median）仍可直接讀。
+
 ⛔ **姊妹資料集：[`bench-paired-2026-08/`](../bench-paired-2026-08/README.md)**（ADR-032 成對量測上線後的比值序列）。
 兩者**單位不同、不可池化**——這份是每夜 median **ns/op**（機器項不相消，且是本序列最大的噪音來源），
 那份是 `main ÷ 釘死參考版本` 的**比值**（機器項在同一台 runner 上相消）。混用等於抹掉 ADR-032 的整個論證。

@@ -966,7 +966,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/vibe-ci-downloads
-          key: ${{ runner.os }}-vibe-dl-promtool-3.15.0
+          key: ${{ runner.os }}-vibe-dl-promtool-3.15.1
 
       - name: Cache pinned binary downloads (vmutils)
         uses: actions/cache@v5
@@ -982,9 +982,9 @@ jobs:
 
       - name: Install promtool
         run: |
-          PROM_VERSION=3.15.0
-          # Pinned SHA-256 of prometheus-3.15.0.linux-amd64.tar.gz (upstream sha256sums.txt).
-          PROM_SHA256=2a542df32eac02ee17b9d844fb2aa1de00dafa5476579ba8a3ba862e9d572ea0
+          PROM_VERSION=3.15.1
+          # Pinned SHA-256 of prometheus-3.15.1.linux-amd64.tar.gz (upstream sha256sums.txt).
+          PROM_SHA256=6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84
           DL="$HOME/.cache/vibe-ci-downloads"
           mkdir -p "$DL"
           if [ ! -f "$DL/prometheus-${PROM_VERSION}.tgz" ]; then
@@ -1563,7 +1563,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/vibe-ci-downloads
-          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.57.0-actionlint-1.7.12
+          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.61.0-actionlint-1.7.12
 
       # ⛔ VECTOR_VERSION must equal the version the chart actually DEPLOYS
       # (helm/vector values.yaml `image.tag` + Chart.yaml `appVersion`) and the
@@ -1575,9 +1575,9 @@ jobs:
       # bump them together (version + SHA-256 + the cache key above).
       - name: Install Vector
         run: |
-          VECTOR_VERSION=0.57.0
-          # Pinned SHA-256 of vector-0.57.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
-          VECTOR_SHA256=4d156e6859e235b366f5b77121ae59d5440c93acab215c45f30f3fc839d20f65
+          VECTOR_VERSION=0.61.0
+          # Pinned SHA-256 of vector-0.61.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
+          VECTOR_SHA256=84a27c3ad6b772fdb05bb76ea01a31498bfc8f5e71f32cc78a0d96841f1aa827
           DL="$HOME/.cache/vibe-ci-downloads"
           mkdir -p "$DL"
           if [ ! -f "$DL/vector-${VECTOR_VERSION}.tgz" ]; then
@@ -1950,7 +1950,7 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/vibe-ci-downloads
-          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.57.0-actionlint-1.7.12
+          key: ${{ runner.os }}-vibe-dl-pytests-vector-0.61.0-actionlint-1.7.12
 
       # ⛔ VECTOR_VERSION must equal the version the chart actually DEPLOYS
       # (helm/vector values.yaml `image.tag` + Chart.yaml `appVersion`) and the
@@ -1962,9 +1962,9 @@ jobs:
       # bump them together (version + SHA-256 + the cache key above).
       - name: Install Vector
         run: |
-          VECTOR_VERSION=0.57.0
-          # Pinned SHA-256 of vector-0.57.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
-          VECTOR_SHA256=4d156e6859e235b366f5b77121ae59d5440c93acab215c45f30f3fc839d20f65
+          VECTOR_VERSION=0.61.0
+          # Pinned SHA-256 of vector-0.61.0-x86_64-unknown-linux-gnu.tar.gz (upstream SHA256SUMS).
+          VECTOR_SHA256=84a27c3ad6b772fdb05bb76ea01a31498bfc8f5e71f32cc78a0d96841f1aa827
           DL="$HOME/.cache/vibe-ci-downloads"
           mkdir -p "$DL"
           if [ ! -f "$DL/vector-${VECTOR_VERSION}.tgz" ]; then
@@ -2394,21 +2394,10 @@ jobs:
             sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
           fi
 
-      # #3206 (ADR-036 §12): generator_real_test.go / batch_patch_diff_test.go
-      # start the REAL Python generator, which reads back the ConfigMap it
-      # emits the way kubectl does (da-crdecode) and the config the way
-      # Alertmanager loads it (da-read alertmanager). The tests build only
-      # da-guard themselves; without these two the generator exits 2 and the
-      # test reports `run_failed`. Absolute paths: `go test` runs in each
-      # package directory. Same Go as above (all three go.mod pin one
-      # version); the actions/cache key above hashes `**/go.sum`, so
-      # da-read's and threshold-exporter's modules are already in it.
-      - name: Build da-crdecode and da-read (the real generator's readers)
-        run: |
-          make da-crdecode-build da-read-build
-          echo "DA_CRDECODE_BINARY=$PWD/.build/da-crdecode" >> "$GITHUB_ENV"
-          echo "DA_READ_BINARY=$PWD/.build/da-read" >> "$GITHUB_ENV"
-
+      # The real-generator tests (generator_real_test.go, batch_patch_diff_test.go)
+      # build da-guard, da-crdecode and da-read themselves (generatorTools,
+      # pinned to _lib_consumer_read.READER_BINARY_ENVS by a Python test), so
+      # no workflow keeps its own copy of that list (#3343).
       - name: Run tenant-api tests with race detector
         working-directory: components/tenant-api
         # Exclude ./docs: swag-generated package that imports github.com/swaggo/swag
@@ -2654,8 +2643,8 @@ jobs:
     # workflow_dispatch) and, on a night whose paired reference is unusable,
     # in bench-record.yaml's `make benchmark-report` fallback (the paired path
     # appends the test binary's stdout unfiltered). So a change first ran after
-    # merge. On those paths it is what keeps the `cpu:` header that
-    # analyze_bench_history.py stratifies the trend watchdog by, and
+    # merge. On those paths it is what keeps the `cpu:` header — the only
+    # record of which host class produced the numbers — and
     # bench_filter_test.go pins that. Stdlib-only module, single
     # goroutine: no go.sum, no module cache, no -race. `./...` here does not
     # descend into the nested bench-canary module.
@@ -2807,7 +2796,7 @@ jobs:
         # silently never reaches prod. build.mjs cleans + re-emits the dir, so
         # any drift (modified bundle, renamed chunk, orphan) shows as a staged
         # diff here. Build is byte-reproducible across the dev container and CI
-        # (esbuild 0.24.2 linux-x64, pinned via package-lock) because both run
+        # (esbuild 0.28.2 linux-x64, pinned via package-lock) because both run
         # the SAME Node major (24) — so this gate does not false-red.
         run: |
           git add -A docs/assets/dist

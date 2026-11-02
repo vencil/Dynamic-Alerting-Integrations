@@ -229,7 +229,6 @@ GUARDED_FILES: tuple[str, ...] = (
     "scripts/tools/dx/render_soak_diff.py",
     "scripts/tools/dx/run_chaos_soak.py",
     "scripts/tools/dx/scan_component_health.py",
-    "scripts/tools/dx/write_baseline_marker.py",
     "scripts/tools/lint/trufflehog_to_sarif.py",
     "scripts/tools/ops/assemble_config_dir.py",
     "scripts/tools/ops/baseline_discovery.py",
@@ -238,7 +237,7 @@ GUARDED_FILES: tuple[str, ...] = (
     "scripts/tools/ops/generate_rule_pack_split.py",
     "scripts/tools/ops/state_reconcile.py",
 )
-_GUARDED_FILES_CEILING = 23  # #3107: adr/planning index and keygen moved to the _lib_io entry points
+_GUARDED_FILES_CEILING = 22  # write_baseline_marker.py removed with the retired ns/op trend watchdog
 
 # Sites inside a GUARDED_FILES file that stay unguarded on purpose, as
 # `"<repo-relative path>:<line>"` → reason. Exit-locked the same way: an

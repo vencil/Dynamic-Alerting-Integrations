@@ -134,7 +134,7 @@ defaults:
   mysql_connections: 80
   container_cpu: 70
   container_memory: 80
-  # Dimensional thresholds don't go here: dimensional keys are tenant-only, never inherited from defaults
+  # A complete dimensional key (metric{label="v"}) may go here too; it is served once top-level dimensions: declares its labels (see migration-guide)
   # To leave a key with no platform default, just omit it. `defaults` has no
   # "disable" state; tri-state "disable" and <key>_critical are tenant-only (see for-tenants.en.md)
 

@@ -772,9 +772,10 @@ def main() -> "int | Report":
         print(f"ERROR: {safe_label(str(exc))}", file=sys.stderr)
         return EXIT_CALLER_ERROR
     except OSError as exc:
-        # Still here for the OTHER writes in the block: `_print_human` and the
-        # `--json` dump go to stdout, and a broken pipe there is not an
-        # `--out` problem and must not be blamed on that flag.
+        # Still here for the OTHER write in the block: `_print_human` goes to
+        # stdout, and a broken pipe there is not an `--out` problem and must
+        # not be blamed on that flag. (The --json document is run()'s to
+        # write, #3216; its stdout failure is run()'s line.)
         print(f"ERROR: 報告輸出失敗: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
     return Report(report) if args.json_output else EXIT_OK

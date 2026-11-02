@@ -342,22 +342,31 @@ def run_policy_gate_smoke(base_url: str) -> bool:
     return ok
 
 
-def build_da_guard(workdir: Path) -> str:
-    """The da-guard the generator service reads conf.d through once #2906
-    (ADR-036 step 4) lands: `$DA_GUARD_BINARY` when set, else built from this
-    checkout — without one the service then fails every write with exit 2
-    (run_failed)."""
-    preset = os.environ.get("DA_GUARD_BINARY", "")
-    if preset.strip():  # a blank value counts as unset, as _lib_parse_tree reads it
-        return preset
-    binary = workdir / "da-guard"
-    print(f"[contract] building da-guard → {binary}")
-    subprocess.run(
-        _go_build_argv(DA_GUARD_DIR, "./cmd/da-guard", binary),
-        check=True,
-        timeout=180,
-    )
-    return str(binary)
+def build_readers(workdir: Path) -> dict:
+    """Every reader the generator service execs, as its environment: da-guard
+    (conf.d, ADR-036 step 4), da-crdecode and da-read (the shipped platform
+    rules). Each is `$<VAR>` when set, else built from this checkout. The list
+    and where each comes from is `_lib_consumer_read.READER_BUILD_SOURCES` —
+    without one reader the service fails every write with exit 2
+    (run_failed), which is how the policy smoke broke when the list lived in
+    a workflow instead (#3343)."""
+    sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
+    try:
+        from _lib_consumer_read import READER_BUILD_SOURCES
+    finally:
+        sys.path.pop(0)
+    env = {}
+    for var, (module, package, name) in READER_BUILD_SOURCES.items():
+        preset = os.environ.get(var, "")
+        if preset.strip():  # a blank value counts as unset, as _lib_parse_tree reads it
+            env[var] = preset
+            continue
+        binary = workdir / name
+        print(f"[contract] building {name} → {binary}")
+        subprocess.run(_go_build_argv(REPO_ROOT / module, package, binary),
+                       check=True, timeout=180)
+        env[var] = str(binary)
+    return env
 
 
 def start_generator(config_dir: Path, workdir: Path, log_fh) -> tuple[subprocess.Popen, str]:
@@ -377,7 +386,7 @@ def start_generator(config_dir: Path, workdir: Path, log_fh) -> tuple[subprocess
     sock_dir = Path(tempfile.mkdtemp(prefix="cg"))
     sock = str(sock_dir / "g.sock")
     env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
-           "DA_GUARD_BINARY": build_da_guard(workdir)}
+           **build_readers(workdir)}
     proc = subprocess.Popen(
         [sys.executable, str(GENERATOR_SERVICE), "--socket", sock, "--repo", str(config_dir),
          "--config-subdir", ".", "--work-dir", str(workdir / "generator-work")],

@@ -303,8 +303,9 @@ func profileFill[V, O any](canonProfile map[string]V, own map[string]O, canonDec
 			continue
 		}
 		// ⛔ The declared check must look at the BASE, not the whole key.
-		// resolveDimensionalRows emits unconditionally — it never consults
-		// defaults — so a profile entry spelled `oracle_wait_time_rate{db="x"}`
+		// resolveDimensionalRows does not need defaults[base] — once
+		// `dimensions:` declares its labels (#3475) it emits — so a profile
+		// entry spelled `oracle_wait_time_rate{db="x"}`
 		// fans out to every tenant on the profile exactly like the flat
 		// spelling would, one label segment away from the blocked shape.
 		// (Measured: two tenants on such a profile got two rows.)

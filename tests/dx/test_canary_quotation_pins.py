@@ -179,11 +179,6 @@ class Cite(NamedTuple):
 
 # ⛔ Derived by enumeration (see the module docstring), not by hand.
 CITATIONS = (
-    Cite("scripts/tools/dx/analyze_bench_history.py",
-         "canary_test.go` says so in as many words",
-         (OPEN, TAIL),
-         "The `CANARY_BENCH` vs `CANARY_BENCHES` comment — the site that "
-         "drifted first in #1439."),
     # The three `CHANGELOG.md` citations (the #1439 entry) left with that
     # entry: the #2102 distill condensed the frozen [Unreleased] into
     # changelog.d/ fragments that do not quote the sentence.
@@ -206,11 +201,6 @@ CITATIONS = (
          (EYES_LC,),
          "The renderer's justification for having a second canary column. "
          "Lowercased `emitted`."),
-    Cite("tests/dx/test_analyze_bench_history.py",
-         "canary_test.go` calls it",
-         (OPEN, TAIL),
-         "`TestCanariesAreNeverJudgedAsProductBenchmarks` — the copy that was "
-         "missed by the first fix in #1439."),
     Cite("tests/dx/test_paired_trend_watch.py",
          "calls the sleep canary",
          ("INFORMATIONAL ONLY", GATE),

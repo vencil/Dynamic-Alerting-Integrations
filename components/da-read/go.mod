@@ -18,18 +18,19 @@
 // higher of the two requirements.
 module github.com/vencil/dynamic-alerting/components/da-read
 
-go 1.26.8
+go 1.26.10
 
-// #2295: parse URLs as the prom/alertmanager release binaries do. Go 1.26 made
-// net/url refuse a second colon in an http(s) host (`http://h:80:3128/`) by
-// default for modules declaring go >= 1.26, which this one does; the released
-// amtool 0.33.1 / 0.34.1 binaries accept it (measured with `amtool
-// check-config`). Without this a proxy_url Alertmanager loads would be
-// refused by this module's toolchain, not by Alertmanager.
-godebug urlstrictcolons=0
+// #2295, #3522: parse URLs as the prom/alertmanager release binaries do. Go
+// 1.26 made net/url refuse a second colon in an http(s) host
+// (`http://h:80:3128/`, `http://::1/`) by default for modules declaring
+// go >= 1.26. amtool 0.34.1 still accepted it (its build info carries
+// DefaultGODEBUG=urlstrictcolons=0); 0.34.2's go.mod moved to `go 1.26.0`
+// and its build info carries no such override, so the deployed Alertmanager
+// now refuses it — read with `go version -m` on the release binaries. This
+// module therefore keeps Go's default and sets no `godebug urlstrictcolons`.
 
 require (
-	github.com/prometheus/alertmanager v0.34.1
+	github.com/prometheus/alertmanager v0.34.2
 	github.com/prometheus/common v0.71.0
 	github.com/prometheus/prometheus v0.315.1
 	go.yaml.in/yaml/v2 v2.4.4

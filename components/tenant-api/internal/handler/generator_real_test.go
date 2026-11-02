@@ -7,12 +7,11 @@ package handler
 // written. The unit tests (generator_gate_test.go) use a fake service; this
 // one proves the two sides agree on the wire.
 //
-// Needs python3 with PyYAML (the CI tenant-api leg installs it) and a
-// da-guard: the generator reads conf.d through `da-guard parse-tree`
-// (ADR-036 step 4) — $DA_GUARD_BINARY, else built once from this checkout's
-// threshold-exporter source (daGuardBinary). Without them the test skips
-// locally and FAILS under CI, so a runner that lost them cannot pass by
-// skipping.
+// Needs python3 with PyYAML (the CI tenant-api leg installs it) and the Go
+// binaries the generator execs (generatorTools: da-guard, da-crdecode,
+// da-read) — each from its env var, else built once from this checkout.
+// Without them the test skips locally and FAILS under CI, so a runner that
+// lost them cannot pass by skipping.
 
 import (
 	"context"
@@ -53,54 +52,80 @@ func realGeneratorScript(t *testing.T) string {
 	}
 }
 
-var (
-	daGuardOnce sync.Once
-	daGuardPath string
-	daGuardErr  string
-)
+// generatorTool is one Go binary the Python generator execs. The generator
+// reads conf.d through `da-guard parse-tree` (ADR-036 step 4) and the shipped
+// platform rules through da-crdecode and `da-read prometheus-rules`; a missing
+// reader is a generator exit 2, which the handler reports as `run_failed` — a
+// misleading assertion failure, not a clear "binary missing".
+type generatorTool struct {
+	env, name, module, pkg string // module and pkg are relative to the repository root
 
-// daGuardBinary is the da-guard the Python generator runs: $DA_GUARD_BINARY
-// when set (a relative path is relative to the repository root — `go test`
-// runs in the package directory, so it cannot mean the shell's directory),
-// else one build of components/threshold-exporter/app's cmd/da-guard per test
-// binary through scripts/ops/go_build.sh (into a directory removed with the
-// process's temp files).
-// requireOrSkip when neither works.
-func daGuardBinary(t *testing.T) string {
+	once sync.Once
+	path string
+	err  string
+}
+
+// The single list of what the real generator needs. Each tool is $<env> when
+// set, else built once per test binary from THIS checkout. No workflow has to
+// know the list: a runner that builds nothing still gets the right binaries,
+// which is the drift that broke the nightly when a reader was added to ci.yml
+// only.
+var generatorTools = []*generatorTool{
+	{env: "DA_GUARD_BINARY", name: "da-guard", module: "components/threshold-exporter/app", pkg: "./cmd/da-guard"},
+	{env: "DA_CRDECODE_BINARY", name: "da-crdecode", module: "components/threshold-exporter/app", pkg: "./cmd/da-crdecode"},
+	{env: "DA_READ_BINARY", name: "da-read", module: "components/da-read", pkg: "."},
+}
+
+// binary returns the tool: $env when set (a relative path is relative to the
+// repository root — `go test` runs in the package directory, so it cannot mean
+// the shell's directory), else one build through scripts/ops/go_build.sh into
+// a directory removed with the process's temp files. requireOrSkip when
+// neither works.
+func (g *generatorTool) binary(t *testing.T) string {
 	t.Helper()
-	daGuardOnce.Do(func() {
+	g.once.Do(func() {
 		root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(realGeneratorScript(t)))))
-		if p := strings.TrimSpace(os.Getenv("DA_GUARD_BINARY")); p != "" {
+		if p := strings.TrimSpace(os.Getenv(g.env)); p != "" {
 			if !filepath.IsAbs(p) {
 				p = filepath.Join(root, p)
 			}
-			daGuardPath = p
+			g.path = p
 			return
 		}
-		dir, err := os.MkdirTemp("", "da-guard-bin")
+		dir, err := os.MkdirTemp("", g.name+"-bin")
 		if err != nil {
-			daGuardErr = err.Error()
+			g.err = err.Error()
 			return
 		}
-		out := filepath.Join(dir, "da-guard")
+		out := filepath.Join(dir, g.name)
 		// #3425: the shipped shape — the build flags live only in
-		// scripts/ops/go_build.sh. Its CGO_ENABLED=0 is load-bearing here
-		// (#3174): a cgo build gives every OS thread an RLIMIT_STACK-sized
-		// pthread stack that counts against the judgement's RLIMIT_DATA, so
-		// the generator's memory limit would measure thread count, not the
-		// judgement.
+		// scripts/ops/go_build.sh. Its CGO_ENABLED=0 is load-bearing for
+		// da-guard (#3174): a cgo build gives every OS thread an
+		// RLIMIT_STACK-sized pthread stack that counts against the
+		// judgement's RLIMIT_DATA, so the generator's memory limit would
+		// measure thread count, not the judgement.
 		cmd := exec.Command("sh", filepath.Join(root, "scripts", "ops", "go_build.sh"),
-			filepath.Join(root, "components", "threshold-exporter", "app"), "./cmd/da-guard", out)
+			filepath.Join(root, g.module), g.pkg, out)
 		if b, err := cmd.CombinedOutput(); err != nil {
-			daGuardErr = "build da-guard: " + err.Error() + ": " + strings.TrimSpace(string(b))
+			g.err = "build " + g.name + ": " + err.Error() + ": " + strings.TrimSpace(string(b))
 			return
 		}
-		daGuardPath = out
+		g.path = out
 	})
-	if daGuardPath == "" {
-		requireOrSkip(t, "no da-guard for the generator's conf.d read: "+daGuardErr)
+	if g.path == "" {
+		requireOrSkip(t, "no "+g.name+" for the real generator: "+g.err)
 	}
-	return daGuardPath
+	return g.path
+}
+
+// generatorToolEnv is every tool as the environment the generator reads.
+func generatorToolEnv(t *testing.T) []string {
+	t.Helper()
+	env := make([]string, 0, len(generatorTools))
+	for _, g := range generatorTools {
+		env = append(env, g.env+"="+g.binary(t))
+	}
+	return env
 }
 
 func requireOrSkip(t *testing.T, why string) {
@@ -132,8 +157,8 @@ func startRealGenerator(t *testing.T, repo, policy string) string {
 	sock := filepath.Join(sockDir, "g.sock")
 	cmd := exec.Command("python3", script, "--socket", sock, "--repo", repo, "--config-subdir", ".",
 		"--work-dir", filepath.Join(t.TempDir(), "work"), "--policy", policy, "--warm-ref", "")
-	cmd.Env = append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH"),
-		"DA_GUARD_BINARY="+daGuardBinary(t))
+	cmd.Env = append(append(os.Environ(), "PATH="+bin+string(os.PathListSeparator)+os.Getenv("PATH")),
+		generatorToolEnv(t)...)
 	var logs strings.Builder
 	cmd.Stdout, cmd.Stderr = &logs, &logs
 	if err := cmd.Start(); err != nil {

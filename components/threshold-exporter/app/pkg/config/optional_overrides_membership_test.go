@@ -11,8 +11,9 @@ package config
 //	flat        accepted   — the point of the change, and since
 //	                         resolveDeclaredRows landed it also EMITS (State 1
 //	                         only: a row exists iff the tenant supplied a value)
-//	dimensional accepted   — resolveDimensionalRows never consults defaults, so
-//	                         the row emits the moment it is written
+//	dimensional accepted   — resolveDimensionalRows does not need defaults[base],
+//	                         so the row emits once root `dimensions:` declares
+//	                         its labels (#3475)
 //	_critical   REFUSED    — resolveCriticalRows keys off defaults[base] and
 //	                         drops the row otherwise; accepting would mean
 //	                         "write succeeds, nothing emits, log-only signal".
@@ -139,8 +140,9 @@ func TestDeclaredKey_TenantUsesRetiredSpellingOfDeclaredKey(t *testing.T) {
 	}
 }
 
-// resolveDimensionalRows is tenant-only — it never looks at defaults — so a
-// dimensional override on a declared base resolves and emits immediately.
+// resolveDimensionalRows does not need defaults[base], so a dimensional
+// override on a declared base resolves and emits once root `dimensions:`
+// declares its labels (#3475).
 // Accepting it promises nothing the resolver won't deliver.
 func TestDeclaredKey_DimensionalOverrideIsAccepted(t *testing.T) {
 	t.Parallel()

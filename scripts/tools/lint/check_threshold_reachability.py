@@ -441,14 +441,11 @@ def _written_faces() -> dict[str, set[str]]:
 # Both directions are measured in
 # `components/threshold-exporter/app/pkg/config/critical_tier_placement_test.go`.
 #
-# The dimensional shape rides along for the same reason and from the same
-# source: `TestDocsDefaultsSamplesHaveNoTenantOnlyKeys` pins BOTH, and
-# `_registry_lib.is_shipped_optional_key` treats them as one pair. A
-# `metric{label="v"}` key under `defaults:` is equally inert —
-# `resolveDimensionalRows` takes the value from the tenant's map alone (the
-# defaults map only names the base, ADR-038 §11),
-# and `parseMetricKey` bakes the label segment into the metric NAME. Covering
-# only the half this issue was reported about is how the other half survives.
+# The dimensional shape is checked for SHAPE only (#3478): a FLAT
+# `metric{label="v"}` key under `defaults:` is served since #2031 — the
+# labelled default of every tenant that does not write it, once its labels are
+# declared under `dimensions:` (#3475) — so only a mapping value or a nested
+# path is an error. Whether a flat one is served is the shared verdict's call.
 #
 # ⛔ Why here and not a new lint: the rule already existed as that Go test —
 # aimed at DOCUMENTATION samples only. `init_project._gen_defaults_yaml` shipped
@@ -1938,7 +1935,12 @@ def _walk_defaults_keys(node: object, prefix: str = "",
             path = f"{prefix}.{k}" if prefix else str(k)
             sub = _walk_defaults_keys(v, path, depth + 1)
             # `str(k)` is the key AS WRITTEN — never re-split out of `path`.
-            keys[path] = KeyInfo(depth, str(k), bool(sub))
+            # ⛔ "has children" means "the value is not a scalar": an EMPTY
+            # mapping or a list of scalars yields no sub-keys but still fails
+            # `map[string]float64` decoding (#3478 — once the flat dimensional
+            # arm went, `'x{l="v"}': {}` passed the gate as if it were a leaf).
+            keys[path] = KeyInfo(depth, str(k),
+                                 bool(sub) or isinstance(v, (dict, list)))
             keys.update(sub)
     elif isinstance(node, list):
         for item in node:
@@ -3154,7 +3156,7 @@ def _report_placement(face: str, keys: dict[str, KeyInfo], errors: list[str]) ->
             # so "no key of that name exists" would be false.
             errors.append(
                 f"CRITICAL-IN-DEFAULTS: {face} puts {k!r} at the top level of "
-                "`defaults:` but gives it a MAPPING value. `Defaults` is "
+                "`defaults:` but gives it a MAPPING value or a list. `Defaults` is "
                 "`map[string]float64`, so this does not decode: the whole file "
                 "is rejected and NO series is emitted — not the critical one, "
                 "and not the warning-tier fallback the flat case would have "
@@ -3236,8 +3238,9 @@ def _report_placement(face: str, keys: dict[str, KeyInfo], errors: list[str]) ->
             "out of the conf.d tree, or do not exempt it. There is no third "
             "table to put it in. (#1218 / TRK-344 / #1434)"
         )
-    # The other half of the same rule (docs_defaults_sample_test.go pins both;
-    # is_shipped_optional_key refuses both).
+    # The dimensional half: SHAPE only since #3478 — a flat dimensional key is
+    # served (#2031, declared under `dimensions:` per #3475); the mapping and
+    # nested shapes below still do not decode or are not keys at any tier.
     #
     # ⛔ Two things this loop got wrong until blind review, BOTH of them the
     # `_critical` half's bugs repeated verbatim one loop down — "fixed the
@@ -3263,35 +3266,31 @@ def _report_placement(face: str, keys: dict[str, KeyInfo], errors: list[str]) ->
             # defect had a guard certifying it.
             errors.append(
                 f"DIMENSIONAL-IN-DEFAULTS: {face} puts {k!r} at the top level of "
-                "`defaults:` with a MAPPING value. `Defaults` is "
+                "`defaults:` with a MAPPING value or a list. `Defaults` is "
                 "`map[string]float64`, so the file does not decode and NOTHING "
-                "is emitted — resolveDimensionalRows is never reached, so its "
-                "tenant-only rule is not why this fails. Two independent "
-                "repairs: give the key a scalar value, and move dimensional "
-                "thresholds to a `<tenant>.yaml` override (they have no default "
-                "path at any tier). (#1218 / TRK-344)"
+                "is emitted. Give the key a scalar value. (#1218 / TRK-344)"
             )
             continue
         if keys[k] == 0:
-            errors.append(
-                f"DIMENSIONAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:`, "
-                "which gives dimensional thresholds no default path: "
-                "resolveDimensionalRows is tenant-only and never consults the "
-                "defaults map, while parseMetricKey bakes the label segment into "
-                "the metric NAME. ValidateTenantKeys reports nothing. Move it to "
-                "a `<tenant>.yaml` override. (#1218 / TRK-344)"
-            )
-        else:
-            errors.append(
-                f"DIMENSIONAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:` at "
-                f"depth {keys[k] + 1}. `Defaults` is a FLAT map, so this path is "
-                "not a key at any tier, and dimensional thresholds have no "
-                "default path in the first place (resolveDimensionalRows is "
-                "tenant-only). ⛔ The nesting is a SECOND, independent problem — "
-                "removing this key does not make the section decodable. Move the "
-                "threshold to a `<tenant>.yaml` override and fix the nesting for "
-                "the file's own reasons. (#1218 / TRK-344)"
-            )
+            # ⛔ A FLAT dimensional key is legal here (#3478): since #2031
+            # resolveDimensionalRows serves a root `defaults:` dimensional key
+            # as the labelled default of every tenant that does not write it,
+            # under the same `dimensions:` declaration a tenant's key needs
+            # (#3475). Whether it is served is the shared verdict's call
+            # (`unread … (no_row)` when undeclared), not a shape rule here.
+            # This arm used to reject it as "tenant-only"; restoring it would
+            # contradict the exporter again.
+            continue
+        errors.append(
+            f"DIMENSIONAL-IN-DEFAULTS: {face} puts {k!r} under `defaults:` at "
+            f"depth {keys[k] + 1}. `Defaults` is a FLAT map, so this path is "
+            "not a key at any tier. Write the dimensional key at the top level "
+            "of `defaults:` (with its labels declared under `dimensions:`) or "
+            "in a `<tenant>.yaml` override. ⛔ The nesting is a SECOND, "
+            "independent problem — removing this key does not make the section "
+            "decodable; fix the nesting for the file's own reasons. "
+            "(#1218 / TRK-344)"
+        )
 
 
 # ── FIFTH FLOOR — who ELSE writes a `defaults:` block (#1412) ────────────────
@@ -3344,7 +3343,7 @@ _DEFAULTS_FACE_MODULES = frozenset({
 # names the MECHANISM that makes it safe, so a reader can check the claim.
 _DEFAULTS_WRITER_EXEMPT: dict[str, str] = {
     "scripts/tools/dx/generate_tenant_fixture.py":
-        "refuses a key that would be inert under `defaults:` where "
+        "refuses a `_critical` or dimensional key under `defaults:` where "
         "`--extra-defaults` enters `_gen_defaults_yaml`, using the same "
         "`_registry_lib.is_shipped_optional_key` predicate this gate polices, so "
         "it cannot emit the #1218 shape whatever a caller passes; pinned by "
@@ -3477,8 +3476,8 @@ def _report_defaults_writer_census(errors: list[str],
             f"UNCOVERED-DEFAULTS-WRITER: {module} writes a `defaults:` mapping "
             f"({', '.join(sorted(census[module]))}) and is neither a face of "
             "this gate nor exempt. A producer this gate cannot see may ship a "
-            "`<base>_critical` or dimensional key under `defaults:`, where the "
-            "resolver never looks — #1218's silent failure, one producer over. "
+            "`<base>_critical` key under `defaults:`, where the resolver never "
+            "looks — #1218's silent failure, one producer over. "
             "Either add it as a generator face (feed it a probe, as "
             "`migration/onboard` does), or make the shape impossible at its "
             "input boundary and exempt it here with that mechanism named. "

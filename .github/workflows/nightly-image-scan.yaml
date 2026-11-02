@@ -236,7 +236,7 @@ jobs:
         # alert (NOT a silent clean) — add a docker/login-action step then.
         include:
           - name: vector # helm/vector/values.yaml
-            ref: "timberio/vector:0.57.0-distroless-libc@sha256:bb5968aa63f3bf7cf77f8cd7548c1442cc91f2a8c20d7ef5c5a03e2a37fbf205"
+            ref: "timberio/vector:0.61.0-distroless-libc@sha256:1a3451978644d5cd4b99a0b28c990791e2f7e1efbea4184122f1c59a56448143"
           - name: victoria-logs # helm/victorialogs/values.yaml
             ref: "victoriametrics/victoria-logs:v1.53.0@sha256:251121fa882af99b95ba0c230a4a2f412ea602d2698c64a96c58dc9842bb755d"
           - name: chargeback-python # helm/chargeback-aggregator/values.yaml
@@ -259,7 +259,7 @@ jobs:
           - name: prometheus # k8s/03-monitoring/deployment-prometheus.yaml
             ref: "prom/prometheus:v3.15.1@sha256:fa3302279710be2f21a8301ec17a8b4f2301fd829bd113839b3b6b02b6f191a2"
           - name: alertmanager # k8s/03-monitoring/deployment-alertmanager.yaml
-            ref: "prom/alertmanager:v0.34.1@sha256:e9733bafb1bdef9b00e25a21f8f99dc26a22224bf16641ad754d1649f4c3357a"
+            ref: "prom/alertmanager:v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b"
           - name: kube-state-metrics # k8s/03-monitoring/deployment-kube-state-metrics.yaml
             ref: "registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.20.0@sha256:42cfe3723a5f058171c627537fb57a3ea0f26e4380fa18555a95cb1a1b4cfc5b"
           # Replaced ghcr.io/jimmidyson/configmap-reload (#1243): its last release is
@@ -292,7 +292,7 @@ jobs:
             # inventory", never as clean.
             no_inventory: true
           - name: alpine-git # helm/tenant-api/templates/deployment.yaml (git-clone / git-gc-off init containers, hardcoded in the template)
-            ref: "alpine/git:v2.54.0@sha256:e8ceedc73bd80992ae8d58a7d24c58b8322146c354f1d2e81a97db4452068ec0"
+            ref: "alpine/git:v2.54.0@sha256:ac6c828f15d82775d204d3d75112e1d34af8945da80ccf922713c9891ba68e7a"
           # try-local demo stack ONLY (#1337 ①) — README points prospective customers
           # at it and try-local-smoke runs it nightly, but nothing under helm/ or k8s/
           # pulls these two, so the extractor cannot see them. The compose file keeps
@@ -302,7 +302,7 @@ jobs:
           - name: pushgateway # try-local/docker-compose.yaml
             ref: "prom/pushgateway:v1.11.5@sha256:bf6442633f6129d3e3f9861fa14c77bc012d74b33a1dd213d7b458b89ce3cc5d"
           - name: curl # try-local/docker-compose.yaml (seed-metrics, mock-reconciler)
-            ref: "curlimages/curl:8.23.0@sha256:11e64e28c5f58c8d93ee95fcf22ac055f48b0bc440e0ce7d8013bbb5ad6aa8ac"
+            ref: "curlimages/curl:8.23.0@sha256:3fb7e13e5d179a845c97d78204f3f1064d1907037f26a3ebf91710571151fd93"
     steps:
       # Authenticated Docker Hub pulls (rate-limit headroom); guarded no-op without creds.
       - name: Docker Hub login (no-op without creds)
@@ -417,9 +417,9 @@ jobs:
         # nothing here and are not free.
         include:
           - name: delivered-kubectl # GITLAB_KUBECTL_IMAGE (init_project.py)
-            ref: "alpine/kubectl:1.37.1"
+            ref: "alpine/kubectl:1.37.2"
           - name: delivered-helm # GITLAB_HELM_IMAGE (init_project.py)
-            ref: "alpine/helm:3.22.0"
+            ref: "alpine/helm:3.22.1"
           # ⛔ The PUBLISHED tool image, and the only delivered ref that reaches
           # 100% of generated projects — measured across all 6 `--ci` x
           # `--deploy` combinations, while no single project carries more than

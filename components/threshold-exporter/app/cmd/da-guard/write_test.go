@@ -181,9 +181,13 @@ func TestEdit_EachOpChangesOnlyTheEdit(t *testing.T) {
 		{"ensure-map", `[{"op":"ensure-map","path":["tenants","t3","_routing"]},{"op":"set","path":["tenants","t3","_routing","receiver"],"value":{"map":[["type",{"str":"webhook"}],["url",{"str":"https://a.example/x"}]]}}]`,
 			strings.Replace(editBase, "# end\n", "  t3:\n    _routing:\n      receiver:\n        type: \"webhook\"\n        url: \"https://a.example/x\"\n# end\n", 1)},
 	}
+	// `n` and `on` are keys no reader of the exporter reads: a policy rule
+	// names them, so the write is not refused as one that leaves the tenant
+	// a key nobody reads (worsens_tree, kind unread; #3489).
+	const defaults = "defaults: {}\n_policies:\n  - {name: n, target: n}\n  - {name: on, target: \"on\"}\n"
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			root := writeTree(t, map[string]string{"t1.yaml": editBase, "_defaults.yaml": "defaults: {}\n"})
+			root := writeTree(t, map[string]string{"t1.yaml": editBase, "_defaults.yaml": defaults})
 			code, res := runW(t, writeCmd, `{"ops":`+tc.ops+`}`, "--config-dir", root, "--path", "t1.yaml")
 			if code != exitOK || res.Status != writeStatusWritten {
 				t.Fatalf("exit %d, %+v (%v)", code, res, res.Message)
@@ -192,7 +196,7 @@ func TestEdit_EachOpChangesOnlyTheEdit(t *testing.T) {
 			if after["t1.yaml"] != tc.want {
 				t.Fatalf("not the file with only the edit:\n--- got\n%s--- want\n%s", after["t1.yaml"], tc.want)
 			}
-			if len(after) != 2 || after["_defaults.yaml"] != "defaults: {}\n" {
+			if len(after) != 2 || after["_defaults.yaml"] != defaults {
 				t.Fatalf("other files touched or left behind: %v", after)
 			}
 		})

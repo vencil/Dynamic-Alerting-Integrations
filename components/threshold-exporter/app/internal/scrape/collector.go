@@ -44,6 +44,10 @@ type Collector struct {
 	resolve func(cfg *config.ThresholdConfig, now time.Time) ([]config.ResolvedThreshold, config.ResolveStats)
 	report  func(i int, m prometheus.Metric, err error)
 	observe func(Reserved)
+	// logf is where the reserved-key resolvers and the collector's own
+	// WARN lines go: log.Printf on the exporter; discarded under
+	// Hooks.Quiet.
+	logf func(format string, args ...any)
 }
 
 // Reserved is what one scrape resolved for the reserved keys the collector
@@ -62,7 +66,7 @@ type Reserved struct {
 
 // NewCollector is the exporter's collector over src.
 func NewCollector(src Source) *Collector {
-	return &Collector{src: src}
+	return &Collector{src: src, logf: log.Printf}
 }
 
 // Hooks are the seams a reader outside the exporter sets. All nil is the
@@ -78,11 +82,23 @@ type Hooks struct {
 	// the resolvers again, which would log each resolver WARN a second
 	// time (#2374).
 	Observe func(Reserved)
+	// Quiet discards the WARN lines of the reserved-key resolvers (silent
+	// modes, state filters, expiries, severity dedup, metadata) and of the
+	// collector itself, instead of writing them to the process log. A
+	// reader that resolves a tree only to judge it (`da-guard write`'s key
+	// verdict, #3489) sets it, so the call's stderr carries no line the
+	// call did not carry before. Per collector, never a process-global
+	// switch: another goroutine's scrape keeps logging (#2397, #2467).
+	Quiet bool
 }
 
 // NewCollectorWithHooks is NewCollector with the Hooks set.
 func NewCollectorWithHooks(src Source, h Hooks) *Collector {
-	return &Collector{src: src, resolve: h.Resolve, report: h.Report, observe: h.Observe}
+	c := &Collector{src: src, resolve: h.Resolve, report: h.Report, observe: h.Observe, logf: log.Printf}
+	if h.Quiet {
+		c.logf = func(string, ...any) {}
+	}
+	return c
 }
 
 // Describe sends no descriptors — opts into unchecked collector mode.
@@ -126,20 +142,20 @@ func (c *Collector) Collect(ch chan<- prometheus.Metric) {
 	c.collectSloObjectives(ch, stats.SloObjectives)
 	// Silent mode + state filters come from ONE reading shared with tenant-api
 	// (config.OperationalStatesAt, #1988), resolved at the scrape's `now`.
-	ops := cfg.OperationalStatesAt(now)
+	ops := cfg.OperationalStatesAtLogf(now, c.logf)
 	c.collectStateFilters(ch, ops.StateFilters)
 	c.collectSilentModes(ch, ops)
 	maintenance := c.collectMaintenanceExpiries(ch, cfg, now)
-	expiries := cfg.ResolveThresholdExpiriesAt(now)
+	expiries := cfg.ResolveThresholdExpiriesAtLogf(now, c.logf)
 	c.collectThresholdExpiries(ch, expiries)
-	dedup := cfg.ResolveSeverityDedup()
+	dedup := cfg.ResolveSeverityDedupLogf(c.logf)
 	c.collectSeverityDedup(ch, dedup)
 	c.collectConfigInfo(ch)
 
 	// ResolveMetadata is a pure per-scrape snapshot (walks + yaml.Unmarshals
 	// every tenant's _metadata once). Resolve it a single time and share the
 	// slice between the two metadata consumers instead of resolving twice.
-	metadata := cfg.ResolveMetadata()
+	metadata := cfg.ResolveMetadataLogf(c.logf)
 	c.collectMetadata(ch, metadata)
 	c.collectTenantExpectedExporter(ch, metadata)
 
@@ -206,7 +222,7 @@ func (c *Collector) collectCustomAlertErrors(ch chan<- prometheus.Metric, caErro
 	for tenant, n := range caErrors {
 		m, err := prometheus.NewConstMetric(caErrDesc, prometheus.GaugeValue, float64(n), tenant)
 		if err != nil {
-			log.Printf("WARN: failed to create da_custom_alert_parse_errors metric for tenant=%s: %v", tenant, err)
+			c.logf("WARN: failed to create da_custom_alert_parse_errors metric for tenant=%s: %v", tenant, err)
 			continue
 		}
 		ch <- m
@@ -236,7 +252,7 @@ func (c *Collector) collectDeprecatedKeys(ch chan<- prometheus.Metric, deprecate
 	for tenant, n := range deprecated {
 		m, err := prometheus.NewConstMetric(depDesc, prometheus.GaugeValue, float64(n), tenant)
 		if err != nil {
-			log.Printf("WARN: failed to create da_config_deprecated_keys metric for tenant=%s: %v", tenant, err)
+			c.logf("WARN: failed to create da_config_deprecated_keys metric for tenant=%s: %v", tenant, err)
 			continue
 		}
 		ch <- m
@@ -260,7 +276,7 @@ func (c *Collector) collectSloObjectives(ch chan<- prometheus.Metric, objectives
 	for _, o := range objectives {
 		m, err := prometheus.NewConstMetric(sloDesc, prometheus.GaugeValue, o.Objective, o.Tenant, o.RecipeID)
 		if err != nil {
-			log.Printf("WARN: failed to create user_slo_objective metric for tenant=%s recipe_id=%s: %v", o.Tenant, o.RecipeID, err)
+			c.logf("WARN: failed to create user_slo_objective metric for tenant=%s recipe_id=%s: %v", o.Tenant, o.RecipeID, err)
 			continue
 		}
 		ch <- m
@@ -278,7 +294,7 @@ func (c *Collector) collectStateFilters(ch chan<- prometheus.Metric, stateFilter
 	for _, sf := range stateFilters {
 		m, err := prometheus.NewConstMetric(stateDesc, prometheus.GaugeValue, 1.0, sf.Tenant, sf.FilterName, sf.Severity)
 		if err != nil {
-			log.Printf("WARN: failed to create user_state_filter metric for tenant=%s filter=%s: %v", sf.Tenant, sf.FilterName, err)
+			c.logf("WARN: failed to create user_state_filter metric for tenant=%s filter=%s: %v", sf.Tenant, sf.FilterName, err)
 			continue
 		}
 		ch <- m
@@ -351,7 +367,7 @@ func (c *Collector) collectSilentModes(ch chan<- prometheus.Metric, ops config.O
 	for _, sm := range ops.Silences {
 		m, err := prometheus.NewConstMetric(silentDesc, prometheus.GaugeValue, 1.0, sm.Tenant, sm.TargetSeverity)
 		if err != nil {
-			log.Printf("WARN: failed to create user_silent_mode metric for tenant=%s: %v", sm.Tenant, err)
+			c.logf("WARN: failed to create user_silent_mode metric for tenant=%s: %v", sm.Tenant, err)
 			continue
 		}
 		ch <- m
@@ -371,7 +387,7 @@ func (c *Collector) collectSilentModes(ch chan<- prometheus.Metric, ops config.O
 //
 // It returns the reading it emitted from, for Hooks.Observe.
 func (c *Collector) collectMaintenanceExpiries(ch chan<- prometheus.Metric, cfg *config.ThresholdConfig, now time.Time) []config.ResolvedMaintenanceExpiry {
-	expiries := cfg.ResolveMaintenanceExpiriesAfterStateFiltersAt(now)
+	expiries := cfg.ResolveMaintenanceExpiriesAfterStateFiltersAtLogf(now, c.logf)
 	for _, me := range expiries {
 		if !me.Expired {
 			continue // Still active, no event needed
@@ -415,7 +431,7 @@ func (c *Collector) collectSeverityDedup(ch chan<- prometheus.Metric, dedup []co
 	for _, sd := range dedup {
 		m, err := prometheus.NewConstMetric(dedupDesc, prometheus.GaugeValue, 1.0, sd.Tenant, sd.Mode)
 		if err != nil {
-			log.Printf("WARN: failed to create user_severity_dedup metric for tenant=%s: %v", sd.Tenant, err)
+			c.logf("WARN: failed to create user_severity_dedup metric for tenant=%s: %v", sd.Tenant, err)
 			continue
 		}
 		ch <- m
@@ -451,7 +467,7 @@ func (c *Collector) collectMetadata(ch chan<- prometheus.Metric, metadata []conf
 		m, err := prometheus.NewConstMetric(metadataDesc, prometheus.GaugeValue, 1.0,
 			md.Tenant, md.RunbookURL, md.Owner, md.Tier)
 		if err != nil {
-			log.Printf("WARN: failed to create tenant_metadata_info metric for tenant=%s: %v", md.Tenant, err)
+			c.logf("WARN: failed to create tenant_metadata_info metric for tenant=%s: %v", md.Tenant, err)
 			continue
 		}
 		ch <- m
@@ -503,7 +519,7 @@ func (c *Collector) collectTenantExpectedExporter(ch chan<- prometheus.Metric, m
 		m, err := prometheus.NewConstMetric(expectedDesc, prometheus.GaugeValue, 1.0,
 			md.Tenant, md.DBType)
 		if err != nil {
-			log.Printf("WARN: failed to create tenant_expected_exporter metric for tenant=%s: %v", md.Tenant, err)
+			c.logf("WARN: failed to create tenant_expected_exporter metric for tenant=%s: %v", md.Tenant, err)
 			continue
 		}
 		ch <- m

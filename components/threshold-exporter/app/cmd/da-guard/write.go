@@ -443,7 +443,8 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"named. The call may repair the tree, never worsen it: it is refused whole (worsens_tree)\n"+
 		"when the tree after it has what the tree before it has not — a path outside the batch\n"+
 		"losing readers, a verdict or problem on any entry, an error of da-guard's own validation\n"+
-		"(a tenant declared twice, ...). An edited file is written in its own directory and renamed\n"+
+		"(a tenant declared twice, ...), a tenant key the shared key verdict newly reads as unread\n"+
+		"at ERROR (unread: a misspelt key, an undeclared dimensional key, #3489). An edited file is written in its own directory and renamed\n"+
 		"into place (a replace of a file too); a created one is linked into place; a move links the\n"+
 		"source at its target and removes the source name; a delete links the file at a hidden name\n"+
 		"beside it, removes the path's name, and removes the hidden link once the call is done.\n\n")
@@ -454,7 +455,7 @@ func writeUsage(cmd string, fs *flag.FlagSet, errOut io.Writer) {
 		"  dry_run|refused|caller_error|not_written|maybe_written, \"reason\", \"message\", \"entry\" (a\n"+
 		"  parse-tree entry), \"problem\": {\"kind\", \"message\"}, \"difference\": {\"path\", \"want\", \"got\"},\n"+
 		"  \"content\" (dry_run; null for a delete), \"warnings\": [<text>]}],\n"+
-		"  \"worsened\": [{\"kind\": readers_lost|verdict|problem|duplicate_tenant|finding, \"path\",\n"+
+		"  \"worsened\": [{\"kind\": readers_lost|verdict|problem|duplicate_tenant|finding|unread, \"path\",\n"+
 		"  \"tenant\", \"finding\", \"message\"}]}; null where it has no value (warnings, worsened: []). The call's\n"+
 		"reason: bad_flags, bad_input, bad_path, write_failed, partial_write, worsens_tree, or null\n"+
 		"when its status is the files'. A path that exists but\n"+
@@ -692,7 +693,9 @@ func (w *writer) run(args []string, stdin io.Reader) int {
 				batch[wf.from] = true
 			}
 		}
-		worse, err := worsening(scan, after, afterDoc, overlays, true, batch)
+		worse, err := worsening(scan, after, afterDoc, overlays, true, batch, func(msg string) {
+			fmt.Fprintf(w.errOut, "%s %s: note: %s\n", programName, w.cmd, msg)
+		})
 		if err != nil {
 			return w.callerError(writeReasonBadPath, "%v", err)
 		}

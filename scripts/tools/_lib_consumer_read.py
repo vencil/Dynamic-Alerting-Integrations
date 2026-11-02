@@ -108,6 +108,19 @@ DA_READ_ENV = "DA_READ_BINARY"
 CRDECODE_ENV = "DA_CRDECODE_BINARY"
 #: Every reader binary's environment variable, in no particular order.
 READER_BINARY_ENVS: "tuple[str, ...]" = (DA_GUARD_ENV, DA_READ_ENV, CRDECODE_ENV)
+#: Where each reader is built from in this repository, keyed by its variable:
+#: (Go module directory relative to the repo root, package, binary name).
+#: Every harness that runs the real generator without a release image builds
+#: exactly these — tenant-api's Go tests (`generatorTools`, pinned to this
+#: table by tests/shared/test_lib_consumer_read_reader_envs.py) and the
+#: contract runner (tests/contract/run_contract_tests.py, which reads it). A
+#: reader added here without them is red, not a run_failed nobody can read
+#: (#3343: one was added to a single workflow, and the nightly broke).
+READER_BUILD_SOURCES: "dict[str, tuple[str, str, str]]" = {
+    DA_GUARD_ENV: ("components/threshold-exporter/app", "./cmd/da-guard", "da-guard"),
+    CRDECODE_ENV: ("components/threshold-exporter/app", "./cmd/da-crdecode", "da-crdecode"),
+    DA_READ_ENV: ("components/da-read", ".", "da-read"),
+}
 
 
 def absolute_reader_binaries(environ: "dict[str, str] | None" = None) -> None:

@@ -135,7 +135,7 @@ defaults:
   mysql_connections: 80
   container_cpu: 70
   container_memory: 80
-  # 維度閾值不寫在這裡：維度 key 僅限租戶設定，不繼承 defaults
+  # 完整維度 key（metric{label="v"}）也可寫在這裡，label 須在頂層 dimensions: 宣告才送出（見 migration-guide）
   # 平台不想給某個 key 預設值 → 整條不寫。defaults 沒有 "disable" 這個狀態；
   # 三態的 "disable" 與 <key>_critical 都只在租戶設定裡有效（見 for-tenants.md）
 

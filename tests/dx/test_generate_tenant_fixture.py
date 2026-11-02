@@ -129,8 +129,10 @@ def test_synthetic_v2_count_matches_request(fixture_module, tmp_path):
 
 
 def test_synthetic_v2_yaml_has_extra_threshold_keys(fixture_module, tmp_path):
-    """At least some tenants should have `_extra_threshold_NN` keys
-    from the Zipfian size>1 sample. Sample size 500 ensures we hit
+    """At least some tenants should have `extra_threshold_NN` keys
+    from the Zipfian size>1 sample (#3489: `_extra_threshold_NN` until the
+    padding became declared threshold keys — a `_` key the registry does not
+    list is read by nothing). Sample size 500 ensures we hit
     at least a few size>=2 tenants under any reasonable seed.
     """
     out = tmp_path / "synthetic-v2"
@@ -142,10 +144,10 @@ def test_synthetic_v2_yaml_has_extra_threshold_keys(fixture_module, tmp_path):
         if p.name == "_defaults.yaml":
             continue
         text = p.read_text(encoding="utf-8")
-        if "_extra_threshold_" in text:
+        if "extra_threshold_" in text:
             found_extra = True
             break
-    assert found_extra, "expected at least one tenant with _extra_threshold_NN key (Zipf size>1)"
+    assert found_extra, "expected at least one tenant with extra_threshold_NN key (Zipf size>1)"
 
 
 def test_synthetic_v2_yaml_has_overlay_blocks(fixture_module, tmp_path):
@@ -328,7 +330,8 @@ def test_the_default_output_dir_names_no_flag(fixture_module, tmp_path):
 # gap between them is the whole finding: `mysql_connections_critical=90` is
 # numeric, parses, and lands in `defaults:` — where the exporter never looks at
 # it (`resolveCriticalRows` keys off `defaults[<base>]` from TENANT overrides;
-# `resolveDimensionalRows` is tenant-only). No parse error, no WARN, no series,
+# a dimensional key needs a `dimensions:` declaration this tool does not
+# write, #3475). No parse error, no WARN, no series,
 # which is #1218's silent failure reached through a caller-supplied name.
 #
 # ⚠️ Why the refusal is here rather than in `check_threshold_reachability`: this
@@ -395,3 +398,57 @@ def test_generated_silent_mode_values_are_schema_words(fixture_module):
                   if b.get("type") == "string")
     choices = fixture_module.SILENT_MODE_TARGETS
     assert choices and set(choices) <= set(scalar), sorted(set(choices) - set(scalar))
+
+
+# ── every generated key has a reader (#3489) ────────────────────────────
+
+
+@pytest.mark.usefixtures("da_guard_env")
+@pytest.mark.parametrize("with_defaults", [False, True])
+@pytest.mark.parametrize("layout", ["flat", "hierarchical", "synthetic-v2"])
+def test_every_generated_tenant_key_has_a_reader(fixture_module, tmp_path, layout, with_defaults):
+    """`da-guard write` refuses a tenant file that adds a key no reader reads
+    (#3489), so the generator declares every key it writes in the root
+    `_defaults.yaml`. Judged here by the shared key verdict itself: the tree
+    is decidable (a root platform file) and no tenant key is unread at ERROR
+    — nor at all, for a threshold key. A tree without the declarations is
+    refused before this runs; one whose verdict is undecidable would pass
+    vacuously, so that is asserted too."""
+    import _lib_key_verdict as kv
+    out = tmp_path / "conf.d"
+    gen = {"flat": fixture_module.generate_flat, "hierarchical": fixture_module.generate_hierarchical,
+           "synthetic-v2": fixture_module.generate_synthetic_v2}[layout]
+    gen(count=200, output_dir=out, with_defaults=with_defaults, seed=7,
+        extra_defaults={"bench_trigger": 50})
+    verdict = kv.judge_tree(out)
+    assert not verdict.undecidable
+    rows = [v for vs in verdict.keys.values() for v in vs]
+    assert len({v.tenant for v in rows}) == 200
+    unread = [(v.tenant, v.key, v.severity, v.reason) for v in rows
+              if v.verdict == kv.UNREAD and (v.severity == kv.ERROR or not v.key.startswith("_"))
+              and v.reason != "disable_noop"]
+    assert unread == [], unread[:10]
+
+
+@pytest.mark.parametrize("with_defaults", [False, True])
+def test_cli_extra_defaults_refusal_is_a_caller_error_not_a_traceback(
+    tmp_path, with_defaults,
+):
+    """#3489 review: every layout writes the root `_defaults.yaml` now, so a
+    bad `--extra-defaults` reaches `_gen_defaults_yaml`'s ValueError on every
+    run — `main` must report it as a caller error (exit 2), never a
+    traceback (exit 1), with or without `--with-defaults`."""
+    import os  # noqa: PLC0415
+    import subprocess  # noqa: PLC0415
+    script = (Path(__file__).resolve().parents[2]
+              / "scripts" / "tools" / "dx" / "generate_tenant_fixture.py")
+    out = tmp_path / "conf.d"
+    cmd = [sys.executable, str(script), "--count", "2", "--output", str(out),
+           "--extra-defaults", "mysql_connections_critical=90"]
+    if with_defaults:
+        cmd.append("--with-defaults")
+    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                       env={**os.environ, "PYTHONIOENCODING": "utf-8"}, timeout=120)
+    assert r.returncode == 2, r.stdout + r.stderr
+    assert "Traceback" not in r.stderr, r.stderr
+    assert "--extra-defaults" in r.stderr and "mysql_connections_critical" in r.stderr, r.stderr

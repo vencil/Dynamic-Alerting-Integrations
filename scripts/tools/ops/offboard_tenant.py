@@ -79,6 +79,7 @@ from _lib_tenant_state import (  # noqa: E402  (#2883 groups / views / subsets l
     KEY_GROUPS,
     KEY_VIEWS,
     StateInputError,
+    empty_state_hint,
     load_state,
     subset_key,
 )
@@ -566,10 +567,9 @@ def main():
     state = None
     if args.state:
         try:
-            state = load_state(args.state)
+            state = load_state(args.state, lang="zh")  # #3512: this tool's language
         except StateInputError as e:
-            hint = ("（state store 若確實是空的，不給 --state、改加 --skip-state-check）"
-                    if e.empty else "")
+            hint = empty_state_hint("zh") if e.empty else ""  # #3512: the module's table
             print(f"ERROR: {safe_label(e)}{hint}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
 

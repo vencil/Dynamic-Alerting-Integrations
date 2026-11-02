@@ -289,6 +289,24 @@ class TestPatchMultifile:
         assert patched["tenants"]["db-a"]["cpu"] == 90
 
 
+class TestPatchRefusesAKeyNoReaderReads:
+    """#3489：patch-config 經 `da-guard write` 寫入；寫進一個沒有讀取端讀的鍵
+    （拼錯）會讓樹變壞（worsens_tree，kind `unread`），拒絕、什麼都不寫；拼對的照寫。
+    Tenant ids are fixture names (CLAUDE.md #9)."""
+
+    _DATA = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
+             "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: '70'\n"}
+
+    def test_a_misspelt_key_is_refused(self):
+        with pytest.raises(pc.ConfigMapShapeError, match="unread") as exc:
+            pc.patch_multifile({"data": dict(self._DATA)}, "t-a", "mysql_conections", "50")
+        assert "mysql_conections" in str(exc.value)
+
+    def test_the_key_spelled_right_is_written(self):
+        result = pc.patch_multifile({"data": dict(self._DATA)}, "t-a", "mysql_connections", "50")
+        assert yaml.safe_load(result["data"]["t-a.yaml"])["tenants"]["t-a"]["mysql_connections"] == 50
+
+
 # ---------------------------------------------------------------------------
 # apply_patch
 # ---------------------------------------------------------------------------

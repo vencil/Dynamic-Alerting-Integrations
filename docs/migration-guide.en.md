@@ -267,7 +267,7 @@ tenants:
 |------------|------|
 | YAML quoting required | Keys containing `{` must be wrapped in double quotes |
 | No `_critical` suffix | Use `"value:severity"` syntax instead, e.g. `"500:critical"` |
-| Defaults | A tenant's dimension key does not inherit its base's scalar default. A complete dimension key in the root `defaults:` whose labels `dimensions:` declares is served by the exporter as the default for every tenant that does not write it (#2031), but the threshold-reachability check (`DIMENSIONAL-IN-DEFAULTS`) still rejects it — the mismatch is tracked in #3478; write it in the tenant file |
+| Defaults | A tenant's dimension key does not inherit its base's scalar default. The root `defaults:` may carry a complete dimension key: once `dimensions:` declares its labels, the exporter serves it as the default for every tenant that does not write it (#2031); undeclared, it is not served and the shared verdict reports `unread … (no_row)` |
 | Labels must be declared | Every label a dimension key serves must be declared for its base under the root `_defaults.yaml` `dimensions:` (for example `dimensions: {redis_connected_clients: [instance]}`; a regex selector serves `<label>_re`, so declare `instance_re`), whichever layer writes the key; otherwise no metric is served and validate-config reports `unread … (no_row)` (`disable_noop` for a key written `disable`; a key a Policy-as-Code rule names reads `read` and serves no metric either; ADR-038 §11). The shipped `dimensions:` lists only the labels the rule packs actually keep (today `version` on container cpu/memory) |
 | Three-state still applies | Value=Custom, omitted=Default (for a basic key with a value in `defaults:` of `_defaults.yaml`, and for a complete dimension key the root `defaults:` writes — see the row above; a key listed under `optional_overrides:` inherits nothing, so omitted=no value=silent), `"disable"`=Disabled |
 
@@ -305,7 +305,18 @@ Yes. New-architecture alerts use different alertname values and don't collide. R
 
 **Q: Can dimension keys be set under defaults?**
 
-Not recommended. A complete dimension key in the root `defaults:` (for example `"redis_queue_length{queue=\"orders\"}": 500`) whose labels `dimensions:` declares is served by the exporter as the default for every tenant that does not write it (#2031), but the threshold-reachability check (`DIMENSIONAL-IN-DEFAULTS`) still rejects it — the mismatch is tracked in #3478; write it in the tenant file. A dimension key a tenant writes does not inherit its base's scalar default. See also the ⚠️ in §9: the shipped Rule Packs do not judge per dimension yet (#3475).
+Yes. A complete dimension key in the root `defaults:` (for example `"redis_queue_length{queue=\"orders\"}": 500`) whose labels `dimensions:` declares is served by the exporter as the default for every tenant that does not write it (#2031); undeclared, it is not served and the shared verdict reports `unread … (no_row)`.
+
+```yaml
+# _defaults.yaml
+dimensions:
+  redis_queue_length: [queue]
+defaults:
+  redis_queue_length: 1000
+  'redis_queue_length{queue="orders"}': 500
+```
+
+A dimension key a tenant writes does not inherit its base's scalar default. See also the ⚠️ in §9: the shipped Rule Packs do not judge per dimension yet (#3475).
 
 **Q: How do you mark a dimension key as critical?**
 

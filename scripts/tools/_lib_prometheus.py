@@ -5,6 +5,7 @@ Import via _lib_python.py facade for backward compatibility.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import math
 import time
@@ -16,6 +17,19 @@ from typing import Any, Optional
 from _lib_constants import _ALLOWED_SCHEMES
 # No import cycle: _lib_exitcodes imports only stdlib + _lib_compat (#1641).
 from _lib_exitcodes import CallerError
+
+#: What a request over urllib raises when it got no usable HTTP answer: the
+#: connection (``OSError``, ``URLError`` among them), a reply that is not
+#: HTTP (``http.client.HTTPException`` — ``BadStatusLine``, ``IncompleteRead``,
+#: ``LineTooLong`` and ``InvalidURL``, none an ``OSError``), or a URL urllib
+#: refuses (``ValueError``). ⚠️ ``ValueError`` also catches a body that is not
+#: JSON / not UTF-8 where the caller decodes inside the same ``try`` (as
+#: `maintenance_scheduler.get_existing_silences` does): there it means "no
+#: usable answer", which is what such a caller wants. The one list
+#: (#3477): a caller that treats a failed request as "no answer" catches this,
+#: not its own enumeration (#3519 moves the helpers below onto it).
+TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
+    OSError, http.client.HTTPException, ValueError)
 
 
 class QueryError(CallerError):

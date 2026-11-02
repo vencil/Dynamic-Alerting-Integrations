@@ -64,8 +64,8 @@ Overrides:
 
 * ``DA_TEST_CRASH_EXIT_CODE`` (#3092) — test suites only, never set in
   production: an integer 3..255 in this environment variable is the crash
-  code, over every choice below (``set_crash_exit_code``, ``@main(
-  crash_exit_code=)``, ``exit_on_crash(code=)``); any other value is
+  code, over every choice below (``set_crash_exit_code``,
+  ``exit_on_crash(code=)``); any other value is
   ignored. A crash then cannot pass for a named rc-2 exit in a test that
   only checks ``returncode == 2`` (tests/conftest.py sets it to 70 for the
   whole run). The caller-error code — a named caller error, a closed stdout
@@ -79,18 +79,13 @@ Overrides:
   ``test_no_tool_moves_the_crash_or_caller_error_code`` in
   tests/shared/test_tool_exit_codes.py); it stays for the harnesses that
   save and restore it around an in-process tool run.
-* ``@main`` / ``@main(crash_exit_code=..., on_crash=...)`` — wrap a tool's
-  ``main()``: same report + exit, but in-function, so a tool with a
-  ``--json`` contract can emit its ``internal_error`` envelope from
-  ``on_crash(exc)`` before the process ends ("rc 2 always has an
-  envelope", #3059).
 * ``arm_crash_envelope(build, **fields)`` (#3094) — the way a ``--json``
-  tool keeps that promise without a decorator: called right after the
+  tool keeps "rc 2 always has an envelope" (#3059): called right after the
   arguments are parsed (only when ``--json`` was given), it makes the crash
   path print one JSON document to stdout — the tool's own zeroed report from
   ``build()`` (dev-rules §13) plus ``{"status": "caller_error", "reason":
   "internal_error", "error": <the ERROR line>}``. Every crash path uses it
-  (this hook, ``@main`` without ``on_crash``, and ``da-tools``' last line of
+  (``run``, this hook, ``exit_on_crash``, and ``da-tools``' last line of
   defence). It fires at most once, and not at all once the tool wrote to
   stdout itself (#3115); a tool that can still run code after printing its
   own document may also call ``disarm_crash_envelope()`` there. A crash
@@ -112,7 +107,7 @@ The same armed envelope covers every caller-error exit, so "rc 2 in
   (``served_values_unavailable``), ``exit_on_observed_map_error``
   (``observed_map_unavailable``).
 * ``CallerError(message, reason=None)`` — the raisable form. Wherever it
-  ends up (``run``, ``@main``, the excepthook, ``exit_on_crash``) it is not
+  ends up (``run``, the excepthook, ``exit_on_crash``) it is not
   a crash: one ``ERROR:`` line, no traceback, the caller-error code, the
   envelope. A subclass names its reason on the class.
 * ``run(main)`` — the one process entry: ``if __name__ == "__main__":
@@ -281,11 +276,10 @@ New subcommands MUST follow this contract — see docs/internal/dev-rules.md.
 from __future__ import annotations
 
 import errno
-import functools
 import os
 import sys
 import traceback
-from typing import Any, Callable, Final, NoReturn, Optional, TypeVar, overload
+from typing import Any, Callable, Final, NoReturn, Optional
 
 # Import-time stdout hardening (cp950-class consoles): every da-tools CLI
 # imports at least one of the four root libs (_lib_compat / _lib_python /
@@ -332,8 +326,8 @@ class CallerError(Exception):
     caller-error code with one ``ERROR:`` line on stderr — no traceback — and,
     in ``--json`` mode, one envelope naming ``reason``.
 
-    Raise it from anywhere below ``run()`` (or let the module excepthook /
-    ``@main`` see it); it is never reported as a crash. A subclass names its
+    Raise it from anywhere below ``run()`` (or let the module excepthook
+    see it); it is never reported as a crash. A subclass names its
     reason once, on the class (``reason = "prometheus_query_error"``); the
     constructor's *reason* overrides that for one instance.
     """
@@ -396,8 +390,6 @@ def exit_caller_error(error: str, reason: Optional[str] = None, *,
 
 
 # ── Unexpected crash handling (#3090) ─────────────────────────────────
-
-_F = TypeVar("_F", bound=Callable[..., Any])
 
 _CRASH_MESSAGE_MAX = 500
 _crash_exit_code: int = EXIT_CALLER_ERROR
@@ -699,6 +691,7 @@ def reset_exit_state() -> None:
     harnesses that run tools in-process (tests/conftest.py calls it after
     every test — an idempotent reset, not save-then-restore)."""
     global _crash_exit_code, _caller_error_code, _stdout_closed_reported, _lost_envelope, _stdout_owner
+    global _stdout_failure_line
     # A recorded failure holds its exception, whose traceback frames can be
     # in a cycle with the failing stream; an armed or tapped stream alone is
     # not (the taps are undone first), and dies by refcount right here.
@@ -709,6 +702,7 @@ def reset_exit_state() -> None:
     _stdout_closed_reported = False
     _lost_envelope = None
     _stdout_owner = None
+    _stdout_failure_line = None
     _crash_exit_code = _IMPORT_CRASH_EXIT_CODE
     _caller_error_code = _IMPORT_CALLER_ERROR_CODE
     if held:
@@ -869,16 +863,14 @@ def _leave(status: Any, handled: Optional[BaseException] = None) -> NoReturn:
     sys.exit(status)
 
 
-def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
-                  on_crash: Optional[Callable[[BaseException], Any]] = None
-                  ) -> NoReturn:
+def exit_on_crash(exc: BaseException, *, code: Optional[int] = None) -> NoReturn:
     """Report *exc* as an unexpected crash and exit.
 
     Exits with *code*, else the process crash code (``set_crash_exit_code``);
     ``DA_TEST_CRASH_EXIT_CODE`` (tests only, #3092) overrides both.
-    *on_crash* runs after the report; without one, the envelope armed by
-    ``arm_crash_envelope`` (if any) is printed instead. If that raises, it is
-    reported too and the exit code is unchanged. Uses ``sys.exit`` so atexit
+    The envelope armed by ``arm_crash_envelope`` (if any) is printed after
+    the report; if that raises, it is reported too and the exit code is
+    unchanged. Uses ``sys.exit`` so atexit
     handlers run.
 
     Two exceptions are not crashes and leave by their own exit instead: a
@@ -891,48 +883,12 @@ def exit_on_crash(exc: BaseException, *, code: Optional[int] = None,
     _exit_if_stdout_lost(exc)
     report_crash(exc)
     try:
-        (on_crash or _print_crash_envelope)(exc)
+        _print_crash_envelope(exc)
     except Exception as hook_exc:  # noqa: BLE001
-        what = "on_crash handler" if on_crash else "crash envelope"
-        print(f"ERROR: {what} failed:", file=sys.stderr)
+        print("ERROR: crash envelope failed:", file=sys.stderr)
         traceback.print_exception(type(hook_exc), hook_exc,
                                   hook_exc.__traceback__, file=sys.stderr)
     _leave(_crash_code(code), exc)
-
-
-@overload
-def main(func: _F) -> _F: ...
-@overload
-def main(*, crash_exit_code: Optional[int] = None,
-         on_crash: Optional[Callable[[BaseException], Any]] = None
-         ) -> Callable[[_F], _F]: ...
-
-
-def main(func: Optional[_F] = None, *, crash_exit_code: Optional[int] = None,
-         on_crash: Optional[Callable[[BaseException], Any]] = None) -> Any:
-    """Decorator for a tool's ``main()``: an ``Exception`` escaping it becomes
-    an unexpected crash (traceback + ERROR line + crash exit code).
-
-    ``@main`` or ``@main(crash_exit_code=1, on_crash=emit_envelope)``.
-    ``crash_exit_code`` overrides ``set_crash_exit_code`` for this function;
-    ``on_crash(exc)`` lets a ``--json`` tool emit its envelope. ``SystemExit``
-    and ``KeyboardInterrupt`` pass through untouched.
-    """
-    if crash_exit_code is not None:
-        _check_code("crash", crash_exit_code)
-
-    def decorate(f: _F) -> _F:
-        @functools.wraps(f)
-        def wrapper(*args: Any, **kwargs: Any) -> Any:
-            try:
-                return f(*args, **kwargs)
-            except Exception as exc:  # noqa: BLE001 — that is the point
-                exit_on_crash(exc, code=crash_exit_code, on_crash=on_crash)
-        return wrapper  # type: ignore[return-value]
-
-    if func is not None:
-        return decorate(func)
-    return decorate
 
 
 _previous_excepthook = sys.excepthook
@@ -992,15 +948,28 @@ class Report:
     prints its own document, so a crash can never leave a complete-looking
     one on stdout next to rc 2, and the encoder's rules hold for every tool.
     *status* is an exit code (an int in 0..255); anything else is the
-    tool's defect, refused here rather than read the way ``sys.exit`` would."""
+    tool's defect, refused here rather than read the way ``sys.exit`` would.
 
-    __slots__ = ("document", "status")
+    *on_stdout_failure* (#3450): the tool's own stderr line for stdout
+    failing while ``run`` writes the document. It is given the shared
+    detail (``cannot write to stdout: …`` / ``stdout was closed …``) and
+    returns the whole line — so a tool whose error lines carry a code
+    (waveform-score's ``ERROR [ERR_OUTPUT]: …``, which ``--redact`` prints
+    without the detail) keeps it on this path too. Only the line: the exit
+    code is the lost-stdout exit's either way. A builder that raises, or
+    returns anything but a non-empty str, gets the shared line instead."""
 
-    def __init__(self, document: Any, status: int = 0) -> None:
+    __slots__ = ("document", "status", "on_stdout_failure")
+
+    def __init__(self, document: Any, status: int = 0, *,
+                 on_stdout_failure: Optional[Callable[[str], str]] = None) -> None:
         if status != 0 or isinstance(status, bool):
             _check_code("Report status", status)
+        if on_stdout_failure is not None and not callable(on_stdout_failure):
+            raise TypeError("Report on_stdout_failure must be callable")
         self.document = document
         self.status = status
+        self.on_stdout_failure = on_stdout_failure
 
 
 class OutputNotSerializable(Exception):
@@ -1144,6 +1113,8 @@ def _write_report(report: Report) -> int:
         _to_stderr(line)
         _print_armed_envelope(OutputNotSerializable.reason, line)
         return _crash_code()
+    global _stdout_failure_line
+    _stdout_failure_line = report.on_stdout_failure  # #3450: through the last flush
     print(text)
     disarm_crash_envelope()  # the document is out; a late failure must not add a second
     return report.status
@@ -1186,8 +1157,9 @@ def run(entry: Callable[[], Any]) -> NoReturn:
     Gate: tests/shared/test_single_exit_path.py (every tool that calls
     ``arm_crash_envelope`` enters through here).
     """
-    global _stdout_owner
+    global _stdout_owner, _stdout_failure_line
     _stdout_owner = None  # #3107 v2: each run starts with stdout unclaimed
+    _stdout_failure_line = None  # #3450: set by the Report being written
     try:
         status = emit_result(entry())  # #3216: a Report's document goes out here
     except SystemExit as exc:
@@ -1218,6 +1190,8 @@ def run(entry: Callable[[], Any]) -> NoReturn:
 
 STDOUT_CLOSED_MESSAGE = "ERROR: stdout was closed before all output was written"
 _stdout_closed_reported = False
+# #3450: the Report being written names its own stdout-failure line.
+_stdout_failure_line: Optional[Callable[[str], str]] = None
 # The errnos that mean "the reader left / the fd is gone"; any other stdout
 # failure (ENOSPC, EIO, Windows' EINVAL) is named "cannot write to stdout".
 _STDOUT_LOST_ERRNOS = frozenset((errno.EPIPE, errno.EBADF, errno.ECONNRESET))
@@ -1255,8 +1229,23 @@ def _report_stdout_failed(exc: OSError) -> None:
     _crash_envelope_armed = None  # no stdout to put it on
     if not _stdout_closed_reported:
         _stdout_closed_reported = True
-        _to_stderr(STDOUT_CLOSED_MESSAGE if exc.errno in _STDOUT_LOST_ERRNOS
-                   else f"ERROR: cannot write to stdout: {exc.strerror or exc}")
+        line = (STDOUT_CLOSED_MESSAGE if exc.errno in _STDOUT_LOST_ERRNOS
+                else f"ERROR: cannot write to stdout: {exc.strerror or exc}")
+        _to_stderr(_tools_stdout_failure_line(line))
+
+
+def _tools_stdout_failure_line(line: str) -> str:
+    """*line* as the Report being written words it (#3450), else *line*.
+    Best effort: this is an exit path, so a builder that fails or answers
+    with something that is not a line leaves the shared one."""
+    build = _stdout_failure_line
+    if build is None:
+        return line
+    try:
+        own = build(line[len("ERROR: "):] if line.startswith("ERROR: ") else line)
+    except Exception:  # noqa: BLE001 — the exit must still say why
+        return line
+    return own if isinstance(own, str) and own.strip() else line
 
 
 def _exit_stdout_failed(exc: OSError, stream: Any, *, code: Optional[int] = None,

@@ -5,10 +5,10 @@
 # the SHIPPED binary is fixed purely by which builder compiles it (#1058). The
 # builder's Go version MUST equal this module's go.mod `go` directive — go.mod is
 # the SSOT, and tests/ops/test_go_toolchain_parity.py fails on any skew (#1278:
-# 1.26.8 clears the 1.26.5 stdlib CVE set). The builder's alpine suffix is INERT
+# 1.26.8 cleared the 1.26.5 stdlib CVE set, 1.26.10 the 1.26.8 one). The builder's alpine suffix is INERT
 # here: CGO_ENABLED=0 below, and this stage is discarded — the runtime base is
 # the distroless image at the bottom of the file.
-FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine3.23 AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine3.23 AS builder
 
 # Build context: the REPO ROOT (#3425), so the build runs
 # scripts/ops/go_build.sh — the one place the repo's `go build` flags are

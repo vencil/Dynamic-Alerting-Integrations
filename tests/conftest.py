@@ -189,6 +189,41 @@ def _no_ignored_signal_outlives_its_test():
 
 
 @pytest.fixture(autouse=True)
+def _no_cwd_change_outlives_its_test():
+    """A test that leaves the working directory changed fails (#3481): the
+    cwd is the worker's, and every later test that reads a default relative
+    path (`rule-packs/`, `conf.d/`) fails there instead, in an order xdist
+    decides. Put back either way, so the leak is reported once, where it
+    happened. `monkeypatch.chdir` is undone before this check runs — because
+    pytest sets autouse fixtures of one conftest up in name order, and every
+    one above this name leaves `monkeypatch` alone. An autouse fixture named
+    before it that takes `monkeypatch` would turn that around (every test
+    that only `monkeypatch.chdir`s, test_validate_all's 304 among them, then
+    errors at teardown — loud, not silent). Not seen either: a module-scope
+    fixture that chdirs, fetched mid-test with `request.getfixturevalue`
+    (none in tests/)."""
+    before = os.getcwd()
+    yield
+    leak = _cwd_put_back(before)
+    if leak:
+        pytest.fail(leak, pytrace=False)
+
+
+def _cwd_put_back(before):
+    """The working directory back at *before*; the failure message when it
+    had moved, else None."""
+    try:
+        now = os.getcwd()
+    except FileNotFoundError:  # the directory it moved to is gone
+        now = None
+    if now == before:
+        return None
+    os.chdir(before)
+    return (f"left the working directory at {now!r}, not {before!r} "
+            "(#3481); use monkeypatch.chdir, or restore it in the test")
+
+
+@pytest.fixture(autouse=True)
 def _disarm_crash_envelope():
     """A tool's ``main([... "--json"])`` called in-process arms the
     process-wide crash envelope (#3094) with whatever ``sys.stdout`` was
@@ -689,11 +724,17 @@ def _provide_session_da_guard() -> None:
 #: 經 da-crdecode、Alertmanager 設定經 da-read。讀它們的工具（onboard_platform、
 #: check_retire_drift）同樣遍布各處的測試在呼叫，理由與做法同 da-guard：
 #: (binary 名, 環境變數, 給 xdist worker 的 session 變數, 模組目錄, go build 的套件)。
-_SESSION_CONSUMER_BINARIES = (
-    ("da-crdecode", "DA_CRDECODE_BINARY", "VIBE_TEST_DA_CRDECODE_BINARY",
-     ("components", "threshold-exporter", "app"), "./cmd/da-crdecode"),
-    ("da-read", "DA_READ_BINARY", "VIBE_TEST_DA_READ_BINARY", ("components", "da-read"), "."),
-)
+#: 清單與來源取自 `_lib_consumer_read.READER_BUILD_SOURCES`（唯一一份；da-guard
+#: 由上面的 `_provide_session_da_guard` 另外處理），不在這裡另寫（#3343）。
+def _consumer_binaries() -> "tuple[tuple[str, str, str, tuple[str, ...], str], ...]":
+    from _lib_consumer_read import DA_GUARD_ENV, READER_BUILD_SOURCES
+    return tuple(
+        (name, env, "VIBE_TEST_" + env, tuple(module.split("/")), pkg)
+        for env, (module, pkg, name) in READER_BUILD_SOURCES.items()
+        if env != DA_GUARD_ENV)
+
+
+_SESSION_CONSUMER_BINARIES = _consumer_binaries()
 _SESSION_CONSUMER_DIRS: "list[str]" = []
 
 

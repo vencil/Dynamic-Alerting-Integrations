@@ -200,6 +200,102 @@ func TestNonFiniteThresholdWrites(t *testing.T) {
 	}
 }
 
+// #3267: every other value RefusedValueAt refuses.
+func TestRefusedThresholdWrites(t *testing.T) {
+	t.Parallel()
+	got := refusedThresholdWrites(nil, map[string]ScheduledValue{
+		"mysql_connections":          {Default: "NaN"},
+		"mysql_connections_critical": {Default: "+Inf"},
+		"container_cpu":              {Default: "70"},
+		"pg_x":                       {Default: "abc"},
+		"pg_high":                    {Default: "70:high"},
+		"pg_range":                   {Default: "1e999"},
+		"pg_hexrange":                {Default: "0x1p1024"},
+		"pg_off_sev":                 {Default: "disable:critical"},
+		"pg_crit_critical":           {Default: "70:critical"},
+		"pg_window":                  {Default: "70", Overrides: []TimeWindowOverride{{Window: "01:00-02:00", Value: "abc"}}},
+		"ok_underscore":              {Default: "1_000"},
+		"ok_hex":                     {Default: "0x1p4"},
+		"ok_sev":                     {Default: "70:critical"},
+		"ok_off":                     {Default: "disable"},
+		"_silent_mode":               {Default: "abc"},
+	})
+	var keys []string
+	for _, r := range got {
+		keys = append(keys, r.Key)
+		if !strings.HasPrefix(r.Message, r.Key+": ") {
+			t.Errorf("%s: message %q does not name the key", r.Key, r.Message)
+		}
+	}
+	want := []string{"pg_crit_critical", "pg_hexrange", "pg_high", "pg_off_sev", "pg_range", "pg_window", "pg_x"}
+	if !reflect.DeepEqual(keys, want) {
+		t.Errorf("keys = %v, want %v (%+v)", keys, want, got)
+	}
+}
+
+// The write gate's two predicates are RefusedValueAt, split: a value is
+// refused by exactly one of them exactly when RefusedValueAt refuses it.
+func TestRefusedThresholdWrites_IsRefusedValueAt(t *testing.T) {
+	t.Parallel()
+	values := []string{"70", "1_000", "0x1p4", "70:critical", " 70 : Warning ", "disable", "off", "017",
+		"abc", "70:high", "70:", "1e999", "0x1p1024", "0x1F", "", "NaN", "-Inf:critical", "disable:critical", "CRİTICAL"}
+	for _, key := range []string{"mysql_connections", "mysql_connections_critical", "x{db=\"a\"}"} {
+		for _, v := range values {
+			sv := ScheduledValue{Default: v}
+			refused := RefusedValueAt(key, sv, fixedNow) != ""
+			nf := len(NonFiniteThresholdWrites(map[string]ScheduledValue{key: sv})) > 0
+			other := len(refusedThresholdWrites(nil, map[string]ScheduledValue{key: sv})) > 0
+			if nf && other {
+				t.Errorf("%s=%q: both predicates report it", key, v)
+			}
+			if (nf || other) != refused {
+				t.Errorf("%s=%q: write predicates refuse %v, RefusedValueAt %v", key, v, nf || other, refused)
+			}
+		}
+	}
+}
+
+// ADR-038 decision 12: "unchanged" is the resolver's reading, not the text.
+func TestThresholdReadAlike(t *testing.T) {
+	t.Parallel()
+	w := func(d, win, v string) ScheduledValue {
+		return ScheduledValue{Default: d, Overrides: []TimeWindowOverride{{Window: win, Value: v}}}
+	}
+	alike := [][3]any{
+		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: " abc "}},
+		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: "abc:warning"}},
+		{"k", ScheduledValue{Default: "70:high"}, ScheduledValue{Default: "70 : HIGH"}},
+		{"k", ScheduledValue{Default: "1_000"}, ScheduledValue{Default: "1000"}},
+		{"k", ScheduledValue{Default: "70:Critical"}, ScheduledValue{Default: "70.0:critical"}},
+		{"k", ScheduledValue{Default: "disable"}, ScheduledValue{Default: "OFF"}},
+		{"k", w("70", "01:00-02:00", "abc"), w("70", " 01:00-02:00 ", " abc")},
+		{"k_critical", ScheduledValue{Default: "90:critical"}, ScheduledValue{Default: " 90:critical"}},
+	}
+	for _, c := range alike {
+		if !thresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
+			t.Errorf("%s: %+v and %+v should read alike", c[0], c[1], c[2])
+		}
+	}
+	differ := [][3]any{
+		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: "xyz"}},
+		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: "abc:critical"}},
+		{"k", ScheduledValue{Default: "1e999"}, ScheduledValue{Default: "1e998"}},
+		{"k", ScheduledValue{Default: "70"}, ScheduledValue{Default: "71"}},
+		{"k", w("70", "01:00-02:00", "abc"), w("70", "03:00-04:00", "abc")},
+		{"k", w("70", "01:00-02:00", "abc"), ScheduledValue{Default: "70"}},
+		{"k_critical", ScheduledValue{Default: "90:critical"}, ScheduledValue{Default: "90:warning"}},
+		{"k", ScheduledValue{Default: "abc"}, ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2030-01-01T00:00:00Z"}}},
+		{"k", w("70", "01:00-02:00", "abc"), w("70", "01:00-02:00", "xyz")},
+		{"k", ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2030-01-01T00:00:00Z"}},
+			ScheduledValue{Default: "abc", Expiry: &ExpiryMeta{Expires: "2031-01-01T00:00:00Z"}}},
+	}
+	for _, c := range differ {
+		if thresholdReadAlike(c[0].(string), c[1].(ScheduledValue), c[2].(ScheduledValue)) {
+			t.Errorf("%s: %+v and %+v should not read alike", c[0], c[1], c[2])
+		}
+	}
+}
+
 // #3141: `disable:<severity>` on a threshold row is no disable. Base: the
 // default is served and the WARN names both spellings meant; the other rows
 // are dropped. A plain disable still switches the key off.
@@ -278,5 +374,167 @@ func TestRefusedValueAt(t *testing.T) {
 	sv := ScheduledValue{Default: "70", Overrides: []TimeWindowOverride{{Window: "01:00-02:00", Value: "-Inf"}}}
 	if got := RefusedValueAt("mysql_connections", sv, at); got != RefusedNonFinite {
 		t.Errorf("window: %q", got)
+	}
+}
+
+// #3267: a refused threshold value is a ValidateTenantKeys value finding —
+// in Errors and Values — that Ratchet turns into a notice when the prior
+// value reads alike, by the resolver's reading. A non-finite number is not
+// one (#3140 stays strict on its own path).
+func TestValidateTenantKeys_ThresholdValueFinding(t *testing.T) {
+	t.Parallel()
+	c := &ThresholdConfig{
+		Defaults: map[string]float64{"mysql_connections": 80, "redis_memory": 70},
+		Tenants: map[string]map[string]ScheduledValue{"t": {
+			"mysql_connections": {Default: "abc"},
+			"redis_memory":      {Default: "NaN"},
+		}},
+	}
+	kv := c.ValidateTenantKeysByTenant()
+	v := kv.Tenants["t"]
+	if len(v.Values) != 1 || !v.Values[0].threshold || v.Values[0].Key != "mysql_connections" {
+		t.Fatalf("values %+v, want the one threshold finding", v.Values)
+	}
+	if len(v.Errors) != 1 || !strings.HasPrefix(v.Errors[0], `WARN: tenant=t: mysql_connections: "abc" is not a threshold`) {
+		t.Fatalf("errors %q", v.Errors)
+	}
+	for prior, want := range map[string]bool{" abc ": true, "abc:WARNING": true, "xyz": false, "abc:critical": false} {
+		r := kv.Ratchet(func(tenant, key string) (ScheduledValue, bool) {
+			return ScheduledValue{Default: prior}, tenant == "t" && key == "mysql_connections"
+		}).Tenants["t"]
+		if got := len(r.Errors) == 0 && len(r.Notices) == 1; got != want {
+			t.Errorf("prior %q: errors %q notices %q, want ratcheted %v", prior, r.Errors, r.Notices, want)
+		}
+	}
+	if s := kv.SelfRatchet().Tenants["t"]; len(s.Errors) != 0 || len(s.Notices) != 1 ||
+		!strings.HasPrefix(s.Notices[0], `NOTICE: tenant=t: mysql_connections "abc" is not a threshold`) {
+		t.Errorf("self-ratchet: errors %q notices %q", s.Errors, s.Notices)
+	}
+}
+
+// #3267: the flat-KV fallback (MergeTenantOverRootPlatform, a tenant file
+// with no `tenants.<id>`) is a display-only rebuild the exporter does not
+// read, so its non-`_` keys get no threshold value finding; its reserved-key
+// findings stay. A tenant the file declares under `tenants:` is judged.
+func TestTenantMerge_FlatFallbackHasNoThresholdFinding(t *testing.T) {
+	t.Parallel()
+	var root RootPlatform
+	thresholdFindings := func(v KeyValidation) (n int, reserved int) {
+		for _, f := range v.Values {
+			if f.threshold {
+				n++
+			} else {
+				reserved++
+			}
+		}
+		return n, reserved
+	}
+	// The flat form, and a `tenants:` file declaring another tenant only
+	// (the fallback wraps the whole document under tx: key `tenants`).
+	for _, body := range []string{
+		"mysql_connections: abc\n_silent_mode: purple\n",
+		"tenants:\n  other:\n    x_note: SECRET\n",
+	} {
+		m := MergeTenantOverRootPlatform(root, "tx", []byte(body))
+		kv := m.ValidateTenantKeysByTenant()
+		n, _ := thresholdFindings(kv.Tenants["tx"])
+		if n != 0 {
+			t.Errorf("%q: the fallback tenant got threshold findings: %+v", body, kv.Tenants["tx"].Values)
+		}
+		if strings.Contains(strings.Join(kv.Tenants["tx"].Errors, "\n"), "is not a threshold") {
+			t.Errorf("%q: errors %q", body, kv.Tenants["tx"].Errors)
+		}
+	}
+	m := MergeTenantOverRootPlatform(root, "tx", []byte("mysql_connections: abc\n_silent_mode: purple\n"))
+	if _, reserved := thresholdFindings(m.ValidateTenantKeysByTenant().Tenants["tx"]); reserved != 1 {
+		t.Errorf("the fallback tenant's reserved finding is gone")
+	}
+	// Control: the same keys declared under `tenants:` are judged.
+	m = MergeTenantOverRootPlatform(root, "tx", []byte("tenants:\n  tx:\n    mysql_connections: abc\n"))
+	if n, _ := thresholdFindings(m.ValidateTenantKeysByTenant().Tenants["tx"]); n != 1 {
+		t.Errorf("control: a declared tenant's refused threshold is not judged")
+	}
+}
+
+// #3267 review: the write gate's threshold value finding and the exporter
+// agree on one tree — the finding is there exactly when the row resolvers
+// that read the key refuse the value (ValuesNotServed: value_unparsed /
+// value_unparsed_dropped). A key no resolver reads (unconsumed) is the
+// shared key verdict's, not this check's, and is left out. A root
+// `defaults:` that values `foo_critical` itself makes resolveBaseRows read
+// it by the shared grammar, so `90:critical` is served there.
+func TestThresholdFinding_IsExporterRefusal(t *testing.T) {
+	t.Parallel()
+	trees := map[string]ThresholdConfig{
+		"critical key valued":        {Defaults: map[string]float64{"foo_critical": 100}},
+		"base valued":                {Defaults: map[string]float64{"foo": 80}},
+		"both valued":                {Defaults: map[string]float64{"foo": 80, "foo_critical": 100}},
+		"critical key declared":      {Defaults: map[string]float64{"bar": 1}, OptionalOverrides: []string{"foo_critical"}},
+		"base declared, crit valued": {Defaults: map[string]float64{"foo_critical": 100}, OptionalOverrides: []string{"foo"}},
+	}
+	values := []string{"90", "90:critical", "90:warning", "90:high", "abc", "1e999", "disable", " 90 ", "disable:critical"}
+	checked := 0
+	for name, tree := range trees {
+		for _, v := range values {
+			c := tree
+			c.Tenants = map[string]map[string]ScheduledValue{"t": {"foo_critical": {Default: v}}}
+			reason := c.ValuesNotServed(fixedNow)["t"]["foo_critical"]
+			if reason == NotServedUnconsumed {
+				continue
+			}
+			checked++
+			refused := reason == NotServedValueUnparsed || reason == NotServedValueUnparsedDropped
+			finding := false
+			for _, f := range c.ValidateTenantKeysByTenant().Tenants["t"].Values {
+				finding = finding || (f.threshold && f.Key == "foo_critical")
+			}
+			if finding != refused {
+				t.Errorf("%s, foo_critical=%q: gate finding %v, exporter refuses %v (not served: %q)", name, v, finding, refused, reason)
+			}
+		}
+	}
+	if checked < 20 {
+		t.Fatalf("only %d tree×value cases are read by a resolver", checked)
+	}
+}
+
+// The aggregated TenantMerge.ValidateTenantKeys judges the flat-KV
+// fallback's tenant as ValidateTenantKeysByTenant does (one ownLayerKeys):
+// no threshold value finding, its reserved-key finding kept.
+func TestTenantMerge_FlatFallbackAggregatedAgrees(t *testing.T) {
+	t.Parallel()
+	var root RootPlatform
+	for _, body := range []string{
+		"mysql_connections: abc\n_silent_mode: purple\n",
+		"tenants:\n  other:\n    x_note: SECRET\n",
+	} {
+		m := MergeTenantOverRootPlatform(root, "tx", []byte(body))
+		agg := m.ValidateTenantKeys()
+		for _, f := range agg.Values {
+			if f.threshold && f.Tenant == "tx" {
+				t.Errorf("%q: the aggregated view gives the fallback tenant a threshold finding: %+v", body, f)
+			}
+		}
+		by := m.ValidateTenantKeysByTenant()
+		var want []string
+		for _, v := range by.Tenants {
+			want = append(want, v.Errors...)
+		}
+		got := append([]string(nil), agg.Errors...)
+		sort.Strings(got)
+		sort.Strings(want)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%q: aggregated errors %q, by tenant %q", body, got, want)
+		}
+	}
+	m := MergeTenantOverRootPlatform(root, "tx", []byte("mysql_connections: abc\n_silent_mode: purple\n"))
+	reserved := 0
+	for _, f := range m.ValidateTenantKeys().Values {
+		if !f.threshold && f.Key == "_silent_mode" {
+			reserved++
+		}
+	}
+	if reserved != 1 {
+		t.Errorf("the fallback tenant's reserved finding is gone from the aggregated view")
 	}
 }

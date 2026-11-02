@@ -601,8 +601,12 @@ def build_pytest_argv(result: dict, xdist_threshold: int) -> list:
 
 
 def run_pytest(result: dict, xdist_threshold: int, timeout_s: int,
-               repo_root: Path) -> int:
-    """實跑選中的 pytest 集。回傳 exit code（0 綠、1 有紅）。"""
+               repo_root: Path, *, json_mode: bool = False) -> int:
+    """實跑選中的 pytest 集。回傳 exit code（0 綠、1 有紅）。
+
+    *json_mode*（#3448）：stdout 只放 run() 寫出的那份文件，pytest 的輸出
+    （它寫在自己的 stdout）改導到 fd 2；fd 2 在啟動時就關了（sys.stderr
+    為 None）則丟棄，不讓它進 stdout。"""
     if result["mode"] == "empty" and not result["external_suites"]:
         _warn("選集為空——本次 diff 無 Python 測試面，不跑 pytest。")
         return EXIT_OK
@@ -626,8 +630,11 @@ def run_pytest(result: dict, xdist_threshold: int, timeout_s: int,
     env = dict(os.environ)
     env.setdefault("PYTHONIOENCODING", "utf-8")  # zh-TW Windows cp950 防線
     _warn("執行: " + " ".join(argv[2:]))
+    child_out = None
+    if json_mode:
+        child_out = 2 if sys.stderr is not None else subprocess.DEVNULL
     proc = subprocess.run(argv, cwd=str(repo_root), env=env,
-                          timeout=timeout_s)
+                          timeout=timeout_s, stdout=child_out)
     return EXIT_OK if proc.returncode == 0 else EXIT_VIOLATION
 
 
@@ -841,7 +848,7 @@ def main() -> "int | Report":
 
     if args.run:
         rc = run_pytest(result, args.xdist_threshold,
-                        args.pytest_timeout, repo_root)
+                        args.pytest_timeout, repo_root, json_mode=args.json)
         if rc == EXIT_OK and unacked_external:
             _warn(f"{len(result['unrun_external'])} 個外部套件未跑且未 "
                   "--ack-external → exit 1")

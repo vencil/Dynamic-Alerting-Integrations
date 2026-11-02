@@ -13,7 +13,7 @@
 # The builder's Go version MUST equal the module's go.mod `go` directive
 # (tests/ops/test_go_toolchain_parity.py): Trivy reads the toolchain the
 # shipped binary was compiled with. This stage is discarded.
-FROM --platform=$BUILDPLATFORM golang:1.26.8-alpine3.23 AS gobuild
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine3.23 AS gobuild
 
 WORKDIR /src
 COPY components/threshold-exporter/app/go.mod components/threshold-exporter/app/go.sum ./
@@ -53,9 +53,9 @@ RUN pip install --no-cache-dir PyYAML==6.0.3 \
 # injects TARGETARCH (amd64 / arm64) per platform; pick the matching tarball +
 # its OWN pinned digest. busybox wget/sha256sum/tar (no apk add).
 ARG TARGETARCH
-ARG PROM_VERSION=3.15.0
-ARG PROM_SHA256_amd64=2a542df32eac02ee17b9d844fb2aa1de00dafa5476579ba8a3ba862e9d572ea0
-ARG PROM_SHA256_arm64=f1f90ec08e849d494ca66c611470afc50192f0355f1a61c33f2cbde02d067823
+ARG PROM_VERSION=3.15.1
+ARG PROM_SHA256_amd64=6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84
+ARG PROM_SHA256_arm64=ceb6d21493c37ca0b4513b147642797c68cf39a0f50a444d50e1e80c74f21b26
 RUN set -eu; \
     case "${TARGETARCH}" in \
       amd64) PROM_SHA256="${PROM_SHA256_amd64}" ;; \

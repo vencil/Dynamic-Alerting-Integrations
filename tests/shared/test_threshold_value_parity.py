@@ -6,17 +6,16 @@ The matrix's verdict columns and ``severities`` are written by Go
 from ``splitThresholdSeverity`` and ``ThresholdSeverities``, the one grammar
 the threshold rows and custom alerts share). Held to the same columns here:
 
-* ``_lib_validation.split_threshold_severity`` — the shared Python reader;
-* ``_lib_validation.parse_threshold_number`` — the number half, finite only
-  (#3140), against ``float_ok`` (Go's parseThresholdNumber);
+* ``da-guard threshold-values`` (#3267), as ``_lib_parse_tree.threshold_values``
+  reads it — the reading the unit-sanity lint judges. Python has no reader
+  of a threshold value of its own any more (the ``_lib_validation`` copy of
+  the grammar and of parseThresholdNumber is gone), so this checks the
+  Python reading of Go's answer against Go's own columns;
+* ``check_threshold_unit_sanity._numbers`` — the number the lint judges
+  (None for a value the exporter cannot read, the value itself for a
+  non-finite one, #3140 ruling D);
 * ``backtest_threshold._served_written`` — how ``backtest --tenant`` reads a
-  value written for a base key: from da-guard served-values (#3140 PR2), so
-  this checks the Python reading of served-values' answer against Go's
-  ``row_disabled`` / ``ok`` / ``float_ok`` columns, not a Python mirror
-  (``_lib_validation.is_disabled`` and ``parse_threshold_value``, the
-  mirrors it replaced, are gone);
-* ``check_threshold_unit_sanity._as_number`` — the number the unit-sanity
-  lint judges (None for a value the exporter cannot read);
+  value written for a base key: from da-guard served-values (#3140 PR2);
 * the severity set the backtest compares against;
 * tenant-config.schema.json ``thresholdScalar``'s ``pattern``, which checks
   the suffix only (``ok`` is false only for a refused suffix), through ``re``
@@ -37,6 +36,7 @@ sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools", "ops"))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools", "lint"))
 sys.path.insert(0, os.path.join(_REPO_ROOT, "scripts", "tools"))
 
+import _lib_parse_tree  # noqa: E402
 import _lib_validation  # noqa: E402
 import backtest_threshold as bt  # noqa: E402
 import check_threshold_unit_sanity as unit_sanity  # noqa: E402
@@ -76,63 +76,85 @@ def test_severity_sets_are_gos():
     assert tuple(_matrix()["severities"]) == _lib_validation.THRESHOLD_SEVERITIES
 
 
-@pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
-def test_shared_reader_splits_as_the_exporter_does(row):
-    if not row["ok"]:
-        with pytest.raises(ValueError):
-            _lib_validation.split_threshold_severity(row["value"])
-        return
-    assert _lib_validation.split_threshold_severity(row["value"]) == (
-        row["value_part"], row["severity"]), row
-
-
-@pytest.mark.parametrize("row", [r for r in _rows() if r["ok"]], ids=lambda r: repr(r["value"]))
-def test_shared_number_reader_is_the_exporters(row):
-    """#3140: `float_ok` is Go's parseThresholdNumber — finite only."""
-    if not row["float_ok"]:
-        with pytest.raises(ValueError):
-            _lib_validation.parse_threshold_number(row["value_part"])
-        return
-    got = _lib_validation.parse_threshold_number(row["value_part"])
-    assert math.isfinite(got) and got == _number(row["value_part"]), row
-
-
 def _number(text):
-    """The number of a `value_part` Go's `float_ok` accepts: a hex float by
-    `float.fromhex`, anything else by `float` (both without the `_` Go and
-    Python allow between digits)."""
+    """The number of a `value_part` Go's `float_ok` accepts — test-side only,
+    to check the value Go answers: a hex float by `float.fromhex`, anything
+    else by `float` (both without the `_` Go and Python allow between
+    digits)."""
     text = text.replace("_", "")
     return float.fromhex(text) if "x" in text.lower() else float(text)
 
 
+def _same(a, b):
+    return a == b or (a is not None and b is not None and math.isnan(a) and math.isnan(b))
+
+
+@pytest.fixture(scope="module")
+def _readings(da_guard_binary):
+    """Every matrix value read once by `da-guard threshold-values`, for a
+    base key and for its `_critical` key."""
+    items = [(k, r["value"]) for r in _rows()
+             for k in ("mysql_connections", "mysql_connections_critical")]
+    got = _lib_parse_tree.threshold_values(items, binary=da_guard_binary)
+    return {(g.key, g.text): g for g in got}
+
+
 @pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
-def test_unit_sanity_lint_judges_the_number_the_exporter_serves(row):
-    """The number the exporter serves — and, owner ruling on #3140 (D), a
-    non-finite one too, which the exporter refuses but this lint judges
-    (±Inf is OUT-OF-DOMAIN)."""
-    got = unit_sanity._as_number(row["value"])
-    if row["ok"] and "x" in row["value_part"].lower():
-        # A hex float, which the exporter reads: this lint never judged one
-        # and does not start to without an owner ruling (it would turn
-        # `--ci` from 0 to 1; see `_as_number`).
-        assert got is None, row
-        return
-    if row["ok"] and not row["float_ok"] and _non_finite_text(row["value_part"]):
-        want = float(row["value_part"])
-        assert got is not None and (got == want or (math.isnan(got) and math.isnan(want))), row
-        return
-    if not (row["ok"] and row["float_ok"]):
-        assert got is None, row
-        return
-    assert got == _number(row["value_part"]), row
+def test_threshold_values_reads_as_the_matrix_says(row, _readings):
+    """#3267: the subcommand's reading of every row is Go's columns —
+    severity, a finite number exactly when `ok` and `float_ok`, refused
+    exactly when the row resolvers do not read it (not a number, not a
+    disable). A `_critical` key differs in `refused` alone: it is read
+    whole, so any suffix refuses it."""
+    base = _readings[("mysql_connections", row["value"])]
+    crit = _readings[("mysql_connections_critical", row["value"])]
+    read = row["ok"] and row["float_ok"]
+    if not row["ok"]:
+        assert (base.severity, base.number, base.non_finite) == ("", None, None), row
+    else:
+        assert base.severity == row["severity"], row
+        assert (base.number is not None) == row["float_ok"], row
+        if read:
+            assert math.isfinite(base.number) and base.number == _number(row["value_part"]), row
+    assert (base.refused == "") == (read or row["row_disabled"]), (row, base)
+    assert (crit.severity, crit.number, crit.non_finite is None) == (
+        base.severity, base.number, base.non_finite is None), (row, crit)
+    whole = read and ":" not in row["value"]
+    assert (crit.refused == "") == (whole or row["row_disabled"]), (row, crit)
 
 
-def _non_finite_text(text):
-    """Whether Python reads `text` as NaN or ±inf at all (`1e999` included)."""
-    try:
-        return not math.isfinite(float(text))
-    except ValueError:
-        return False
+@pytest.mark.usefixtures("da_guard_env")
+@pytest.mark.parametrize("row", _rows(), ids=lambda r: repr(r["value"]))
+def test_unit_sanity_lint_judges_the_number_the_exporter_reads(row, _readings):
+    """The number the exporter reads — every spelling it reads, a hex float
+    included (#3267) — and, owner ruling on #3140 (D), a non-finite one too,
+    which the exporter refuses but this lint judges (±Inf is OUT-OF-DOMAIN).
+    A value whose suffix the exporter refuses is not judged."""
+    got = unit_sanity._numbers([("mysql_connections", row["value"])])[0]
+    if not row["ok"]:
+        assert got is None, row
+    elif row["float_ok"]:
+        assert got == _number(row["value_part"]), row
+    else:
+        want = _readings[("mysql_connections", row["value"])].non_finite
+        if want is None:
+            assert got is None, row
+        else:
+            assert _same(got, want) and not math.isfinite(got), row
+
+
+#: The matrix rows that read as NaN or ±Inf (an overflow included): each is
+#: judged by the lint as that value, never skipped (#3140 ruling D).
+_NON_FINITE_ROWS = {"NaN": math.nan, "nan": math.nan, "Inf": math.inf, "+Inf": math.inf,
+                    "-Inf": -math.inf, "infinity": math.inf, "-inf:critical": -math.inf,
+                    "NaN:warning": math.nan, "Inf:critical": math.inf, "1e999": math.inf}
+
+
+@pytest.mark.usefixtures("da_guard_env")
+def test_unit_sanity_lint_judges_the_non_finite_samples():
+    got = unit_sanity._numbers([("mysql_connections", v) for v in _NON_FINITE_ROWS])
+    for (v, want), g in zip(_NON_FINITE_ROWS.items(), got):
+        assert g is not None and _same(g, want), (v, g)
 
 
 @pytest.mark.usefixtures("da_guard_env")
@@ -151,12 +173,10 @@ def test_backtest_reads_a_base_key_value_as_the_exporter_does(row):
         got = "not read"
     if row["row_disabled"]:
         assert got is None, row
-    elif row["ok"] and row["float_ok"] and bt._SPELLINGS_NOT_BACKTESTED.search(value):
-        # `1_000`, `0x1p4`: read by the exporter, not backtested by
-        # `--tenant` (as before #3140 PR2; `_SPELLINGS_NOT_BACKTESTED`).
-        assert got == "not read", row
     elif row["ok"] and row["float_ok"]:
-        assert got == (float(row["value_part"]), row["severity"]), row
+        # `1_000`, `0x1p4` included: backtested at the number the exporter
+        # serves (#3267), with no spelling table of this tool's own.
+        assert got == (_number(row["value_part"]), row["severity"]), row
     else:
         assert got in ("not read", (80.0, "warning")), (row, got)
 
@@ -192,8 +212,9 @@ def test_matrix_carries_the_non_finite_and_row_disable_samples():
 
 def test_matrix_carries_the_go_number_spellings():
     """#3140: what Go's ParseFloat reads beyond Python's `float` (a hex
-    float) and the `_` both read between digits — so the Python readers
-    are held to Go on them, not to a conservative refusal of their own."""
+    float) and the `_` both read between digits — so the readers checked
+    here (`da-guard threshold-values`, the lint's judging, #3267) are held
+    to Go on them."""
     rows = {r["value"]: r for r in _rows()}
     for v in ("1_000", "-1_0", "1e1_0", "0x1p4", "0x_1p4", "0x1.p1"):
         assert rows[v]["ok"] and rows[v]["float_ok"] is True, v

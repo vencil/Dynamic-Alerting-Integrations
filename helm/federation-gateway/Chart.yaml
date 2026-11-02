@@ -54,7 +54,11 @@ type: application
 # 0.6.1 — #2469: access-log `path` drops the query string (REQ_WITHOUT_QUERY),
 #         so a token put in the URL is no longer logged. Audit line format
 #         changes (other URL params gone); no value keys change. PATCH.
-version: 0.6.1
+# 0.6.2 — #3520: auditLog.metrics.image Vector 0.57.0 -> 0.61.0 (tag + digest,
+#         same image as helm/vector), clearing libssl3 CVE-2026-84782. The
+#         sidecar's audit-metrics.vector.yaml uses no component or option
+#         0.58-0.61 removed or changed. No value keys change. PATCH.
+version: 0.6.2
 # appVersion: pinned Envoy release
 appVersion: "v1.38.0"
 # kubeVersion: the deployment uses the native preStop.sleep lifecycle

@@ -232,6 +232,7 @@ func assertEverySubcommandRefuses(t *testing.T, conf string) {
 		{"--config-dir", conf, "--format", "json", "--cardinality-limit", "0"},
 		{servedValuesCmd, "--config-dir", conf},
 		{effectiveCmd, "--config-dir", conf},
+		{keyVerdictCmd, "--config-dir", conf},
 		{keyRefsCmd, "--config-dir", conf, "--metric", "mysql_connections"},
 		{compileCustomAlertsCmd, "--config-dir", conf},
 	} {

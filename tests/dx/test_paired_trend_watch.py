@@ -831,9 +831,10 @@ def test_transition_flags_a_changed_reference_pin_as_its_own_event():
 
 _TREE = parse_py(_TOOLS_DIR / "paired_trend_watch.py")
 
-# Every name in `analyze_bench_history` that can mutate an issue. Listed by name
-# rather than checked by intent, so adding a new writer over there does not
-# silently widen what this module may reach for.
+# Names of issue-mutating helpers. `analyze_bench_history` no longer defines
+# any of them (its trend watchdog was retired), but the module this one
+# imports from is where a writer would reappear, so the ban list stays: listed
+# by name rather than checked by intent.
 _WRITERS = (
     "render_trend_issue_body", "_render_state_marker", "_carry_forward_state",
     "upsert_issue", "close_issue", "comment_issue", "trend_watch", "_gh",
@@ -957,9 +958,11 @@ def test_never_writes_the_workflow_job_has_no_issue_token():
     job = workflow["jobs"]["paired-trend-watch"]
     assert "issues" not in job["permissions"]
     assert job["permissions"] == {"contents": "read", "actions": "read"}
-    # And the job that DOES hold the token must still be the old watchdog, so a
-    # future edit cannot quietly move the paired engine under it.
-    assert workflow["jobs"]["trend-watch"]["permissions"]["issues"] == "write"
+    # And no job in the nightly holds an issue token any more: the absolute
+    # watchdog that did was retired (ADR-032 §6 withdrawn), so a job that
+    # regains `issues: write` is a new decision, not a leftover.
+    assert all("issues" not in (j.get("permissions") or {})
+               for j in workflow["jobs"].values())
     steps = " ".join(str(s.get("run", "")) for s in job["steps"])
     assert "paired_trend_watch.py" in steps
     assert "analyze_bench_history.py" not in steps
@@ -1198,39 +1201,6 @@ def test_the_window_asks_for_completed_runs_not_only_successful_ones(
     seen = []
     _spy_effective_status(monkeypatch, abh, seen)
     ptw.nights_from_gh("bench-record.yaml", 14, str(tmp_path))
-    assert seen == ["completed"]
-
-
-def test_both_watchdogs_now_ask_for_completed_runs(monkeypatch, tmp_path):
-    """⛔ THE ASYMMETRY THIS TEST USED TO PIN IS GONE (TRK-371 / #1635).
-
-    It was named `test_the_old_watchdogs_window_still_asks_only_for_successful_
-    runs` and asserted `seen == ["success"]`. That was correct for exactly the
-    reason its own last paragraph gave, and that paragraph named its own exit
-    condition: "`bench-baseline.txt` carrying its own completeness marker would
-    let both sides ask `completed`". #1635 shipped the marker
-    (`bench-baseline.rows`, written by `write_baseline_marker.py`), so the
-    predicate moved and this test moved with it. Renamed rather than deleted:
-    the pin is still worth having, it just points the other way now.
-
-    ⚠️ AND THE SPY HISTORY IS KEPT, because it is why this assertion is worth
-    anything. The first cut gave the spy its own `status="success"` default, so
-    the assertion was true by construction and stayed GREEN while the real
-    default was flipped — a test whose name promised more than it checked.
-    `_spy_effective_status` reads the default off the real signature instead, so
-    both break directions are still caught here: a call site that starts passing
-    something else, and the module default being flipped under a call site that
-    passes nothing.
-
-    ⛔ WHAT MAKES THE WIDENING SAFE IS NOT THIS PREDICATE. It is
-    `judge_night_completeness`, which refuses a night whose marker is absent on
-    a non-success run and one whose row count disagrees with its marker. Those
-    are pinned in `test_analyze_bench_history.py`, not here.
-    """
-    import analyze_bench_history as abh
-    seen = []
-    _spy_effective_status(monkeypatch, abh, seen)
-    abh.night_records_from_gh("bench-record.yaml", 14, tmp_path)
     assert seen == ["completed"]
 
 
@@ -1602,7 +1572,7 @@ def test_rule_that_cannot_complete_reports_inconclusive_not_clear():
     anything, and "nothing fired" rendered as CLEAR with the benchmark's name
     and its +42% appearing NOWHERE on the page.
 
-    ADR-032 §待決 6, verbatim: 切換當下比值序列從零開始，持續判準需要幾夜才能發射
+    ADR-032 §待決 6, verbatim: 比值序列從零開始時，持續判準需要幾夜才能發射
     ——那幾夜必須回報「無法評估」，不得回報「無發現」。
     """
     nights = []
@@ -2067,57 +2037,28 @@ def test_the_new_job_cannot_take_the_nights_data_down_with_it():
 
     So an exit-2 from this unproven reporter would delete that night's artifact
     from such a window — silently shortening a window the operator believes is
-    14 nights. `continue-on-error` is what makes the "does not entangle" claim
-    in the workflow comment actually true.
+    14 nights. `continue-on-error` is what prevents that.
 
-    ⛔ NARROWED ONCE, THEN SUPERSEDED. Both prior wordings are kept because each
-    was the reason for a decision. (1) It first said "BOTH watchdogs" and named
-    `bench-paired.json` beside `bench-baseline.txt`; #1626 made that false for
-    the paired side. (2) It then said the line below is load-bearing for
-    `analyze_bench_history.py` only, "which still asks `success`".
-
-    ⚠️ (2) IS NOW FALSE TOO, and the consequence is worth stating rather than
-    quietly editing: since TRK-371 / #1635 the old watchdog's TREND-WATCH
-    window asks `completed` and admission is decided by the artifact's
-    completeness marker, so a red `paired-trend-watch` no longer removes that
-    night from that window. `continue-on-error` is therefore NO LONGER what
-    protects a marked night — the marker is.
-
-    ⛔ (3) AND A THIRD CORRECTION, because the draft of (2) over-generalised it
-    to "both watchdogs ask `completed`". Only `night_records_from_gh` opts in;
-    `list_recent_runs` keeps the conservative `success` DEFAULT so that
-    `analyze_bench_history.main()`'s aggregation path — which has no
-    completeness check — cannot inherit the widening. Flipping that default was
-    a regression this PR introduced and review caught.
-
-    ⛔ It is still asserted, for two reasons that survive: during the ~14-night
-    roll-in the window still holds pre-marker nights, and those ARE admitted on
-    their run's `success` conclusion, so for them the old mechanism is still
-    load-bearing; and removing it would let an unproven reporter redden the
-    nightly. The `list_recent_runs` assertion below pins the conservative
-    `success` DEFAULT; the trend-watch window's opt-in to `completed` is pinned
-    in `test_analyze_bench_history.py`, not here.
+    `release-attach-bench-baseline.yaml` and `analyze_bench_history.main()`'s
+    variance table still pick nights with `--status success`, so this stays
+    load-bearing even though the absolute watchdog that used to be the main
+    reason for it was retired. The `list_recent_runs` assertion below pins
+    that conservative default.
     """
     yaml = pytest.importorskip("yaml")
     workflow = yaml.safe_load(
         (_REPO / ".github" / "workflows" / "bench-record.yaml").read_text(
             encoding="utf-8"))
     assert workflow["jobs"]["paired-trend-watch"]["continue-on-error"] is True
-    # ⚠️ NOT asserted for `trend-watch`: it owns the `perf-trend` issue, so its
-    # failure IS the nightly failing. Pinning the asymmetry so a future edit
-    # cannot quietly make this reporter load-bearing, or that watchdog silent.
-    assert "continue-on-error" not in workflow["jobs"]["trend-watch"]
     # The window query this depends on, pinned at the real object rather than
     # at the file's text: a literal search passes on a decoy and on a line that
     # no longer executes, and the flag is now a parameter, not a constant.
     import inspect
 
     import analyze_bench_history as abh
-    # ⚠️ Back to `success`, and NOT a revert of #1635. The default is the
-    # CONSERVATIVE value on purpose: `analyze_bench_history.main()`'s
+    # The CONSERVATIVE value on purpose: `analyze_bench_history.main()`'s
     # aggregation path has no completeness check, so it must inherit the safe
-    # predicate. The trend-watch window opts in explicitly with
-    # `status="completed"` — pinned in test_analyze_bench_history.py, not here.
+    # predicate; this module opts in to `completed` explicitly.
     assert inspect.signature(
         abh.list_recent_runs).parameters["status"].default == "success"
 
