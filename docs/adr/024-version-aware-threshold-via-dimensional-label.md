@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: threshold-exporter
 created_at: 2026-05-30
-updated_at: 2026-11-01
+updated_at: 2026-11-02
 ---
 
 # ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts
@@ -32,6 +32,8 @@ updated_at: 2026-11-01
 📝 **修訂（2026-10-21）**：自訂告警的逐條判定、recipe_id 與規則產生只有一份 Go 實作，recipe 的列舉、格式與數值界限寫在一份契約檔，其他各處由它產生（見 §3、§5、§9）；`describe_tenant` 只顯示 exporter 送出的清單，「這次變更影響什麼」只由 config-diff 回答（見「後果」）。實作依 [#3229](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3229) 分步進行；編譯器與 recipe-preview 已改用 Go（2026-10-23），`describe_tenant` 的改動還沒做。
 
 📝 **修訂（2026-11-01）**：租戶 metadata（runbook_url、owner、tier）不再 join 進告警 label，改由 annotation 以唯一的查詢樣板讀出（見 §2「metadata 走 annotation」）。告警因此不帶這三個 label，依它們路由的 Alertmanager 設定要改用 `tenant`。
+
+📝 **修訂（2026-11-02）**：自訂告警的 threshold 紀錄改為 exporter 各副本一致時才送出，換版空窗內正在改 mode／name 的那一條告警在 Prometheus 與 VictoriaMetrics 上都暫停（見「Consequences」）。
 
 📎 **Addendum** (v2.10.0) — 磁碟與 PVC 告警（容量逐顆 PVC 評估 + 需 CSI driver + 兩道防線），見下方 §Addendum；epic [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)。
 
@@ -293,7 +295,7 @@ portal 表單裡手寫的檢查改讀產生物，不再自己寫界限。tenant-
 - **編譯器與 exporter 的來源要一致**——編譯器自己走樹時會為 exporter 不送的 `_custom_alerts` 產生規則（對沒有門檻送出的租戶永遠不會觸發），也會漏掉 exporter 有送的（例如 profile）。來源只由 exporter 判定，編譯器讀的就是 exporter 取得的清單（§3）。診斷工具也只看這一份：`describe_tenant`（列出一個租戶最終設定的 CLI）顯示 exporter 為每個租戶送出的 `custom_alerts` 與每條的狀態，不顯示把子目錄 `_defaults.yaml` 與租戶自己的清單合起來的視圖（exporter 從不送出那種合併結果）；「這次 conf.d 變更影響什麼」只由 config-diff 回答（[ADR-037](037-config-diff-compares-rendered-output.md)），回答同一問題、讀 `describe_tenant` 輸出的 blast_radius 退役。
 - **遷移時規則檔的位元組可能改變**——編譯器改到 Go 時，驗收標準是產生的規則檔以 YAML 解析後內容相同、alert 與 recording rule 名稱及 recipe_id 集合相同、promtool golden 測試通過，不要求逐位元組相同；committed 的規則檔在那次一併重新產生。
 - **recipe-preview 映像多帶一支 da-guard**——預覽要用與部署相同的判定，映像因此變大（da-guard 是單一靜態 Go 執行檔）。
-- **告警不帶 runbook_url／owner／tier label**——metadata 改由 annotation 查詢（§2），依這三個 label 路由或抑制的 Alertmanager 設定要改用 `tenant`；annotation 每次評估多一次查詢（每個顯示 metadata 的 annotation 一次）。自訂告警的 `name`／`mode` 仍是 label（`mode` 決定路由），threshold 紀錄以 `topk by(tenant, version, severity) (1, …)` 在換版空窗只留一筆；這一筆在 VictoriaMetrics 上可能每次評估不同，正在改 mode／name 的租戶在空窗內可能晚發（[VictoriaMetrics 整合 §3.1](../integration/victoriametrics-integration.md)）。
+- **告警不帶 runbook_url／owner／tier label**——metadata 改由 annotation 查詢（§2），依這三個 label 路由或抑制的 Alertmanager 設定要改用 `tenant`；annotation 每次評估多一次查詢（每個顯示 metadata 的 annotation 一次）。自訂告警的 `name`／`mode` 仍是 label（`mode` 決定路由），threshold 紀錄只在兩個副本對同一個 (tenant, version, severity) 送出相同的 name／mode 時才送出（`and on(…) (count by(…) (…) == 1)`，不挑其中一筆）：租戶正在改某條自訂告警的 mode 或 name 時，**那一條告警**在換版空窗（至多約一兩分鐘）內不觸發，Prometheus 與 VictoriaMetrics 都一樣；其他租戶、其他告警不受影響（[VictoriaMetrics 整合 §3.1](../integration/victoriametrics-integration.md)）。
 
 **關鍵不變式**（驗收契約，非 tracking checklist）：(1) 既有未寫 version 的租戶升級後行為 100% 等價（無 series 數變動）；(2) over-cap 截斷跨多次 scrape 截掉的是固定版號（無 flapping）；(3) `mode: silent` recipe 觸發時不進 PagerDuty / Slack、只留 Grafana 痕跡；(4) rolling update 結束、舊版 metric 消失後，正在燒的告警能正常收到 Resolve（不留殭屍告警）；(5) version-aware metric 上的 recipe 自動 graceful-join、label 缺時落 default、不產 NaN / 空集。
 

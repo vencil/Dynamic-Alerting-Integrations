@@ -15,10 +15,12 @@ metadata:
 data:
   custom-alerts-recording.yml: "groups:\n- name: custom-alerts-normalization\n  interval:\
     \ 15s\n  rules:\n  - record: custom:threshold:rate__mysql_global_status_slow_queries__gt__w5m__for1m\n\
-    \    expr: label_replace(topk by(tenant, version, severity) (1, max by(tenant,\
-    \ version, severity, name, mode) (user_threshold{component=\"custom\", metric=\"\
-    mysql_global_status_slow_queries\", recipe_id=\"rate__mysql_global_status_slow_queries__gt__w5m__for1m\"\
-    })), \"version\", \"default\", \"version\", \"^$\")\n  - record: custom:metric:rate__mysql_global_status_slow_queries__gt__w5m__for1m\n\
+    \    expr: label_replace(max by(tenant, version, severity, name, mode) (user_threshold{component=\"\
+    custom\", metric=\"mysql_global_status_slow_queries\", recipe_id=\"rate__mysql_global_status_slow_queries__gt__w5m__for1m\"\
+    }) and on(tenant, version, severity) (count by(tenant, version, severity) (max\
+    \ by(tenant, version, severity, name, mode) (user_threshold{component=\"custom\"\
+    , metric=\"mysql_global_status_slow_queries\", recipe_id=\"rate__mysql_global_status_slow_queries__gt__w5m__for1m\"\
+    })) == 1), \"version\", \"default\", \"version\", \"^$\")\n  - record: custom:metric:rate__mysql_global_status_slow_queries__gt__w5m__for1m\n\
     \    expr: label_replace(sum by(tenant, version) (rate(mysql_global_status_slow_queries[5m])),\
     \ \"version\", \"default\", \"version\", \"^$\")\n  - record: custom:rate__mysql_global_status_slow_queries__gt__w5m__for1m:warning:core\n\
     \    expr: \"(\\n  (\\n    custom:metric:rate__mysql_global_status_slow_queries__gt__w5m__for1m\\\
@@ -28,10 +30,12 @@ data:
     \"warning\\\"}\\n    )\\n    > on(tenant) group_left(name, mode)\\n      custom:threshold:rate__mysql_global_status_slow_queries__gt__w5m__for1m{version=\\\
     \"default\\\", severity=\\\"warning\\\"}\\n  )\\n)\\nunless on(tenant)\\n(user_state_filter{filter=\\\
     \"maintenance\\\"} == 1)\"\n  - record: custom:threshold:threshold__mysql_global_status_threads_connected__gt__w5m__for1m\n\
-    \    expr: label_replace(topk by(tenant, version, severity) (1, max by(tenant,\
-    \ version, severity, name, mode) (user_threshold{component=\"custom\", metric=\"\
-    mysql_global_status_threads_connected\", recipe_id=\"threshold__mysql_global_status_threads_connected__gt__w5m__for1m\"\
-    })), \"version\", \"default\", \"version\", \"^$\")\n  - record: custom:metric:threshold__mysql_global_status_threads_connected__gt__w5m__for1m\n\
+    \    expr: label_replace(max by(tenant, version, severity, name, mode) (user_threshold{component=\"\
+    custom\", metric=\"mysql_global_status_threads_connected\", recipe_id=\"threshold__mysql_global_status_threads_connected__gt__w5m__for1m\"\
+    }) and on(tenant, version, severity) (count by(tenant, version, severity) (max\
+    \ by(tenant, version, severity, name, mode) (user_threshold{component=\"custom\"\
+    , metric=\"mysql_global_status_threads_connected\", recipe_id=\"threshold__mysql_global_status_threads_connected__gt__w5m__for1m\"\
+    })) == 1), \"version\", \"default\", \"version\", \"^$\")\n  - record: custom:metric:threshold__mysql_global_status_threads_connected__gt__w5m__for1m\n\
     \    expr: label_replace(max by(tenant, version) (mysql_global_status_threads_connected),\
     \ \"version\", \"default\", \"version\", \"^$\")\n  - record: custom:threshold__mysql_global_status_threads_connected__gt__w5m__for1m:warning:core\n\
     \    expr: \"(\\n  (\\n    custom:metric:threshold__mysql_global_status_threads_connected__gt__w5m__for1m\\\

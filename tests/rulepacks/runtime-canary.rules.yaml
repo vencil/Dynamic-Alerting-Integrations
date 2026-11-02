@@ -22,7 +22,7 @@ groups:
   interval: 15s
   rules:
   - record: custom:threshold:threshold__canary_pipeline_heartbeat__gt__w5m__for1m
-    expr: label_replace(topk by(tenant, version, severity) (1, max by(tenant, version, severity, name, mode) (user_threshold{component="custom", metric="canary_pipeline_heartbeat", recipe_id="threshold__canary_pipeline_heartbeat__gt__w5m__for1m"})), "version", "default", "version", "^$")
+    expr: label_replace(max by(tenant, version, severity, name, mode) (user_threshold{component="custom", metric="canary_pipeline_heartbeat", recipe_id="threshold__canary_pipeline_heartbeat__gt__w5m__for1m"}) and on(tenant, version, severity) (count by(tenant, version, severity) (max by(tenant, version, severity, name, mode) (user_threshold{component="custom", metric="canary_pipeline_heartbeat", recipe_id="threshold__canary_pipeline_heartbeat__gt__w5m__for1m"})) == 1), "version", "default", "version", "^$")
   - record: custom:metric:threshold__canary_pipeline_heartbeat__gt__w5m__for1m
     expr: label_replace(max by(tenant, version) (canary_pipeline_heartbeat), "version", "default", "version", "^$")
   - record: custom:threshold__canary_pipeline_heartbeat__gt__w5m__for1m:warning:core

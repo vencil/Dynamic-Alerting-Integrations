@@ -342,15 +342,21 @@ const thresholdJoinKey = "tenant, version, severity"
 
 // thresholdRecord is the per-tenant threshold the core rules join with
 // group_left(name, mode). `max by(…, name, mode)` collapses replicas serving
-// the same row; the outer `topk by(thresholdJoinKey) (1, …)` keeps one series
-// per join key while the replicas briefly disagree on a row's name or mode
-// during a config reload (#3483) — without it that tenant has two series on
-// the joined side and the shape's rule fails ("many-to-many matching not
-// allowed") for EVERY tenant, the #3112 failure reached through the replicas.
+// the same row. A join key is emitted ONLY while every replica agrees on its
+// (name, mode): `and on(key) (count by(key) (…) == 1)` drops the key while
+// the replicas briefly serve two rows during a config reload (#3483) — a
+// tenant changing one custom alert's mode or name. Without the guard that
+// tenant has two series on the joined side and the shape's rule fails
+// ("many-to-many matching not allowed") for EVERY tenant, the #3112 failure
+// reached through the replicas. No tie-break (topk) on purpose: name and mode
+// are the alert's identity, and a tie-break picks differently per evaluation
+// on VictoriaMetrics; dropping the key behaves the same on both engines — that
+// one alert of that one tenant pauses for the reload window, nothing else
+// changes.
 func thresholdRecord(id, metric string) orderedMap {
-	inner := `topk by(` + thresholdJoinKey + `) (1, ` +
-		`max by(` + thresholdJoinKey + `, name, mode) ` +
-		`(user_threshold{component="custom", metric="` + metric + `", recipe_id="` + id + `"}))`
+	rows := `max by(` + thresholdJoinKey + `, name, mode) ` +
+		`(user_threshold{component="custom", metric="` + metric + `", recipe_id="` + id + `"})`
+	inner := rows + ` and on(` + thresholdJoinKey + `) (count by(` + thresholdJoinKey + `) (` + rows + `) == 1)`
 	return record("custom:threshold:"+id, normVersion(inner))
 }
 

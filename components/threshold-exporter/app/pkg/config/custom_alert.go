@@ -1305,8 +1305,8 @@ func CustomAlertDuplicates(tenant string, overrides map[string]ScheduledValue) [
 // rows of one tenant that differ only in name or mode leave two series on
 // that side, and the evaluation fails ("many-to-many matching not allowed")
 // for EVERY tenant of the shape, not just this one (#3112). (The compiled
-// record wraps that in `topk by(tenant, version, severity) (1, …)` for the
-// replicas' reload window, #3483 — it is not a licence to serve two rows.) Two rows with
+// record emits a key only while every replica serves one row for it — #3483,
+// for the replicas' reload window; it is not a licence to serve two rows.) Two rows with
 // one label set — the same name too — are the narrower case client_golang
 // refuses to gather (#2031). The preflight's other rule (one name per
 // tenant) stays the preflight's: an entry only it refuses is still served
