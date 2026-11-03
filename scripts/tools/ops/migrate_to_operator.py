@@ -47,7 +47,7 @@ except ImportError:
 from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir, write_text_secure  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
-from _lib_exitcodes import EXIT_CALLER_ERROR, arm_crash_envelope, die_caller_error, encode_json  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError, arm_crash_envelope, die_caller_error, encode_json  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import (  # noqa: E402
@@ -61,6 +61,7 @@ import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 from _lib_paths import classify_path, raise_path_problems, supplied  # noqa: E402  (#3392)
+import _lib_input  # noqa: E402  (#3446: --source-dir is a directory da-guard lists)
 
 _RECEIVER_TEMPLATES = ("slack", "pagerduty", "email", "teams", "opsgenie", "webhook")
 
@@ -183,11 +184,24 @@ def list_source_dir(source_dir: Path) -> "_lib_parse_tree.Listing":
     link, a FIFO, a link to a directory, a directory it cannot list, a
     directory with a file's name). A name Go classes `not_config_name`
     (`notes.txt`) was never a rule file and is not named. Raises
-    ParseTreeError (no usable da-guard)."""
+    ParseTreeError (no usable da-guard).
+
+    ⛔ #3446: a *source_dir* da-guard cannot list (its root entry is role
+    `unlistable_dir`) raises CallerError (`dir_not_accessible`, rc 2): it was
+    a WARNING and a migration made from no source file, rc 0."""
     listing = _lib_parse_tree.list_tree(source_dir)
+    root = listing.entry(".")
+    if root is not None and root.unlistable_dir:
+        why = safe_label(root.problem[1]) if root.problem else root.role
+        raise CallerError(i18n_text(
+            f"--source-dir {safe_label(str(source_dir))}: 無法列出目錄內容（da-guard: {why}）",
+            f"--source-dir {safe_label(str(source_dir))}: cannot list the directory "
+            f"(da-guard: {why})"), "dir_not_accessible")
     warn_nested(source_dir, tool="migrate_to_operator", listing=listing)
     try:
-        names = os.listdir(source_dir)
+        # Only for the hidden names da-guard's listing leaves out (#3446:
+        # through the one listing, `_lib_input._list`).
+        names = _lib_input._list(source_dir)
     except OSError:
         names = []  # list_tree read it; a race is not worth a second error
     top = [e for e in listing.entries if e.depth == 0]
@@ -1010,10 +1024,9 @@ def main():
         description=i18n_text(_HELP["zh"]["desc"], _HELP["en"]["desc"]),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "--source-dir",
-        type=Path,
-        required=True,
+    _lib_input.add_input(
+        parser, "--source-dir", select=_lib_input.DA_GUARD_LISTS,
+        empty=_lib_input.EMPTY_ALLOWED, required=True,
         help=i18n_text(_HELP["zh"]["source_dir"], _HELP["en"]["source_dir"]),
     )
     parser.add_argument(
@@ -1084,7 +1097,7 @@ def main():
         if supplied(args, parser, "config_dir") else None])
 
     # Resolve paths
-    source_dir = args.source_dir.resolve()
+    source_dir = _lib_input.selected(args, "source_dir", lang=_LANG)[0].resolve()
     config_dir = args.config_dir.resolve()
     # #1582：沒給 --output-dir 就沒有寫入目標。⛔ 不要在這裡塞回一個預設值。
     output_dir = args.output_dir.resolve() if args.output_dir is not None else None

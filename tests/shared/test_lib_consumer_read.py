@@ -227,3 +227,30 @@ def test_rule_file_refusals_are_input_refused() -> None:
     InputRefused too."""
     assert issubclass(cr.RuleFileRefused, cr.InputRefused)
     assert issubclass(cr.RuleFilesRefused, cr.InputRefused)
+
+
+# ── #3446: a subdirectory _list cannot list is named, never skipped ──────
+
+def test_a_subdirectory_that_cannot_be_listed_is_named_not_skipped(tmp_path, monkeypatch):
+    """`_walk_yaml` asks `_list` for every directory it enters; one it cannot
+    list (EACCES under a non-root caller) is a `SourcesUnlisted` entry naming
+    the directory — the rest of the tree is still walked. `_list` is made to
+    refuse here so the branch is run under root as well."""
+    (tmp_path / "ok.yaml").write_text("groups: []\n", encoding="utf-8")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    (locked / "hidden-by-perms.yaml").write_text("groups: []\n", encoding="utf-8")
+    real = cr._list
+
+    def refusing(d):
+        if os.path.abspath(d) == str(locked):
+            raise PermissionError(13, "Permission denied", str(locked))
+        return real(d)
+
+    monkeypatch.setattr(cr, "_list", refusing)
+    walk = cr._walk_yaml(str(tmp_path))
+    assert [rel for _p, rel in walk.files] == ["ok.yaml"]
+    assert walk.problems == [(str(locked), "cannot list this directory: Permission denied")]
+    with pytest.raises(cr.SourcesUnlisted) as exc:
+        cr.files_to_read([str(tmp_path)])
+    assert (str(locked), "cannot list this directory: Permission denied") in exc.value.files

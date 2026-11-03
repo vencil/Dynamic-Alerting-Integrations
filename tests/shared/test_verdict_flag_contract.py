@@ -160,21 +160,40 @@ def _helper_files() -> list[Path]:
     return sorted(TOOLS_DIR.glob("_lib*.py"))
 
 
+#: #3446: `_lib_input.add_input(parser, "--flag", ...)` declares a flag;
+#: its option string is the second positional argument. The one
+#: `add_argument` inside it passes the caller's literal on, so it is the
+#: shape taught here, not an opaque one.
+_WRAPPERS = {"add_input": 1}
+_TAUGHT = {("_lib_input.py", "add_input")}
+
+
 def _add_argument_calls(path: Path):
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    taught = {id(n) for fn in ast.walk(tree)
+              if isinstance(fn, ast.FunctionDef) and (path.name, fn.name) in _TAUGHT
+              for n in ast.walk(fn)}
     for node in ast.walk(tree):
-        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "add_argument"):
+        if not isinstance(node, ast.Call) or id(node) in taught:
+            continue
+        name = (node.func.attr if isinstance(node.func, ast.Attribute)
+                else getattr(node.func, "id", None))
+        if name == "add_argument" and isinstance(node.func, ast.Attribute):
+            yield node
+        elif name in _WRAPPERS:
             yield node
 
 
 def _option_strings(call: ast.Call) -> list[str] | None:
     """The call's option strings, or None when any of them is not a string
     literal — the enumeration cannot see a name built at runtime."""
-    if not call.args:
+    name = (call.func.attr if isinstance(call.func, ast.Attribute)
+            else getattr(call.func, "id", None))
+    args = call.args[_WRAPPERS[name]:_WRAPPERS[name] + 1] if name in _WRAPPERS else call.args
+    if not args:
         return None
     out = []
-    for arg in call.args:
+    for arg in args:
         if not (isinstance(arg, ast.Constant) and isinstance(arg.value, str)):
             return None
         out.append(arg.value)
