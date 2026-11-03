@@ -596,33 +596,78 @@ def edit_live_yaml(
 # ---------------------------------------------------------------------------
 # tenant-api client (read-modify-write a per-tenant governance PR)
 # ---------------------------------------------------------------------------
+def _token_file_is_sole_credential(args: argparse.Namespace) -> bool:
+    """True when the token file is the request's only credential: no
+    identity headers (``--identity-groups``) and no literal token
+    (``--auth-token`` / ``DA_GOVERN_TOKEN``) — the oauth2-proxy mode the
+    ``--apply`` precheck lets through on ``--auth-token-file`` alone (#3511)."""
+    literal = args.auth_token or os.environ.get("DA_GOVERN_TOKEN", "")
+    return bool(args.auth_token_file) and not literal and not args.identity_groups
+
+
 def _resolve_auth_token(args: argparse.Namespace) -> str:
     """Resolve the Bearer token: a literal (``--auth-token`` / ``DA_GOVERN_TOKEN``)
     wins, else a token FILE (``--auth-token-file`` / ``DA_GOVERN_TOKEN_FILE``) — a
     Kubernetes audience-bound projected SA token (ADR-027). kubelet rotates the
     file, so it is read at call time (this one-shot CLI reads it once per run).
 
-    The Bearer here only feeds tenant-api's machine-identity AUDIT, which never
-    gates the write; authz rides on the identity headers. So a token-file read
-    error must NOT abort governance — it degrades to no Bearer (the audit records
-    no_token) with a warning, mirroring the audit's own never-block contract.
+    What an unreadable token file means depends on what else authenticates
+    the request (#3511):
+
+    * identity headers are sent (``--identity-groups``): the Bearer only
+      feeds tenant-api's machine-identity AUDIT, which never gates the write;
+      authz rides on the headers. The read error degrades to no Bearer (the
+      audit records no_token) with a warning (#962).
+    * the file is the only credential (`_token_file_is_sole_credential`): a
+      request without it carries no credential at all and is refused at the
+      proxy, far from the cause. The read error is a named caller error
+      (rc 2): the path through `_lib_paths.classify_path`, its content
+      when it is not UTF-8. ``--apply`` resolves it once, before any
+      write, and the whole run sends that token (``resolved_sole_token``).
+
     Returns "" when no token is configured or the file cannot be read.
     """
     literal = args.auth_token or os.environ.get("DA_GOVERN_TOKEN", "")
     if literal:
         return literal
-    if args.auth_token_file:
-        try:
-            with open(args.auth_token_file, encoding="utf-8") as fh:
-                return fh.read().strip()
-        except (OSError, UnicodeDecodeError) as exc:
-            # OSError = I/O failure; UnicodeDecodeError = a non-UTF-8/corrupt file
-            # (NOT an OSError subclass). Both degrade to no Bearer — the fail-open
-            # contract must not let a malformed token file abort governance (#962).
-            print(f"warning: could not read --auth-token-file "
-                  f"{args.auth_token_file!r}: {exc}; continuing without a Bearer "
-                  f"(tenant-api machine-identity audit will record no_token)",
-                  file=sys.stderr)
+    if not args.auth_token_file:
+        return ""
+    # Resolved once by the --apply precheck (#3511): the run sends what it
+    # judged, so a file gone mid-run cannot end it after PRs were opened.
+    resolved = getattr(args, "resolved_sole_token", None)
+    if resolved is not None:
+        return resolved
+    sole = _token_file_is_sole_credential(args)
+    flag = "--auth-token-file"
+    if sole:
+        problem = classify_path(args.auth_token_file, "file", lang=_LANG, flag=flag)
+        if problem is not None:
+            raise CallerError(
+                f"唯一憑證讀不到: {problem.message}" if _LANG == "zh" else
+                f"the only credential cannot be read: {problem.message}",
+                problem.reason)
+    try:
+        with open(args.auth_token_file, encoding="utf-8") as fh:
+            return fh.read().strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        # OSError = I/O failure; UnicodeDecodeError = a non-UTF-8/corrupt file
+        # (NOT an OSError subclass).
+        if sole:
+            shown = safe_label(str(args.auth_token_file))
+            if isinstance(exc, UnicodeDecodeError):
+                why = "不是 UTF-8" if _LANG == "zh" else "not UTF-8"
+                reason = "file_not_utf8"
+            else:
+                why = exc.strerror or str(exc)
+                reason = "file_not_accessible"
+            raise CallerError(
+                f"唯一憑證讀不到: {flag} {shown}: {why}" if _LANG == "zh" else
+                f"the only credential cannot be read: {flag} {shown}: {why}",
+                reason) from exc
+        print(f"warning: could not read --auth-token-file "
+              f"{args.auth_token_file!r}: {exc}; continuing without a Bearer "
+              f"(tenant-api machine-identity audit will record no_token)",
+              file=sys.stderr)
     return ""
 
 
@@ -1509,6 +1554,10 @@ def main() -> "Report | None":
                    f"refused write: {exc}")
             print(msg, file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
+        # #3511: a token file that is the only credential is read before any
+        # write — unreadable, the run stops here (rc 2), not at the proxy.
+        if _token_file_is_sole_credential(args):
+            args.resolved_sole_token = _resolve_auth_token(args)
 
     result = run(args)
 

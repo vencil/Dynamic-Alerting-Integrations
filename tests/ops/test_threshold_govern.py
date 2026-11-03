@@ -14,6 +14,7 @@ Focus areas (highest-risk first):
      and dry-run sending zero network calls.
 """
 import argparse
+import os
 import json
 
 import types
@@ -1263,6 +1264,76 @@ def test_resolve_auth_token_malformed_utf8_degrades_not_raises(tmp_path, monkeyp
     f.write_bytes(b"\xff\xfe not valid utf-8")
     assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=str(f))) == ""
     assert "could not read" in capsys.readouterr().err
+
+
+# #3511: the token file as the ONLY credential (no identity headers, no
+# literal token) — unreadable is a named caller error, not a warning.
+def _sole(path):
+    return _args(auth_token=None, auth_token_file=str(path), identity_groups=None)
+
+
+@pytest.mark.parametrize("make, reason", [
+    (lambda d: d / "nope", "file_not_found"),                        # missing
+    (lambda d: d, "file_not_found"),                                 # a directory
+    (lambda d: (d / "t").write_bytes(b"\xff\xfe x") and d / "t", "file_not_utf8"),
+])
+def test_sole_credential_token_file_unreadable_is_a_caller_error(tmp_path, monkeypatch, make, reason):
+    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
+    path = make(tmp_path)
+    with pytest.raises(tg.CallerError) as exc:
+        tg._resolve_auth_token(_sole(path))
+    assert exc.value.reason == reason
+    assert "--auth-token-file" in str(exc.value) and str(path) in str(exc.value)
+
+
+def test_sole_credential_readable_token_file_is_its_token(tmp_path, monkeypatch):
+    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
+    f = tmp_path / "token"
+    f.write_text("ksa-jwt\n", encoding="utf-8")
+    assert tg._resolve_auth_token(_sole(f)) == "ksa-jwt"
+
+
+@pytest.mark.parametrize("over", [
+    {"identity_groups": "threshold-governance"},   # headers carry the authz
+    {"auth_token": "lit"},                          # a literal token is the credential
+])
+def test_token_file_is_not_sole_with_another_credential(over):
+    assert not tg._token_file_is_sole_credential(
+        _args(**{"auth_token": None, "auth_token_file": "/x", "identity_groups": None, **over}))
+
+
+def test_env_literal_token_makes_the_file_not_sole(monkeypatch):
+    monkeypatch.setenv("DA_GOVERN_TOKEN", "env-tok")
+    assert not tg._token_file_is_sole_credential(_sole("/x"))
+
+
+def test_sole_token_resolved_by_the_precheck_is_sent_for_the_whole_run(tmp_path, monkeypatch):
+    """A file gone after the precheck read it does not end the run between
+    tenants (PRs already opened would leave the report): the resolved token
+    is what every request sends."""
+    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
+    args = _sole(tmp_path / "gone")
+    args.resolved_sole_token = "jwt-from-precheck"
+    assert tg._auth_headers(args)["Authorization"] == "Bearer jwt-from-precheck"
+
+
+def test_apply_with_an_unreadable_sole_token_file_stops_before_any_write(tmp_path):
+    """End to end: `--apply --auth-token-file <missing>` without
+    `--identity-groups` exits 2 naming the flag — before run() reaches
+    tenant-api (no URL there is reachable: a request would be a different error)."""
+    import subprocess
+    import sys as _sys
+    env = {k: v for k, v in os.environ.items()
+           if k not in ("DA_GOVERN_TOKEN", "DA_GOVERN_GROUPS", "DA_GOVERN_TOKEN_FILE")}
+    missing = tmp_path / "no-token"
+    proc = subprocess.run(
+        [_sys.executable, str(REPO_ROOT / "scripts/tools/ops/threshold_govern.py"),
+         "--config-dir", str(tmp_path), "--apply", "--tenant-api-url", "http://127.0.0.1:9",
+         "--auth-token-file", str(missing), "--json"],
+        capture_output=True, text=True, encoding="utf-8", env=env, timeout=60, check=False)
+    assert proc.returncode == 2, proc.stderr
+    assert "--auth-token-file" in proc.stderr and str(missing) in proc.stderr
+    assert '"reason": "file_not_found"' in proc.stdout, proc.stdout
 
 
 def test_resolve_auth_token_none_configured(monkeypatch):
