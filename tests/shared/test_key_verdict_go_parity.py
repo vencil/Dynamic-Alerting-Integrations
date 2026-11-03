@@ -45,10 +45,37 @@ _SOURCES = (
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
 
+def _nested_env(log: Path) -> dict[str, str]:
+    """The nested pytest's environment.
+
+    The nested run is a check, not a measurement: the source tests are
+    measured where the suite runs them. ⛔ Without stripping coverage's
+    child wiring (tests/conftest.py exports COVERAGE_PROCESS_CONFIG; the
+    nested pytest never starts coverage, so it never cleans it up for its
+    own subprocesses — #3414's shape) every process the nested run starts
+    writes a data file into the parent's directory (57 on one run), and the
+    parent's combine fails on one it cannot write (CI: "attempt to write a
+    readonly database"). The parent's PYTEST_* (xdist worker ids) are not
+    the nested run's either."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("COVERAGE_", "COV_CORE_", "PYTEST_"))}
+    env.update(KEY_VERDICT_PARITY_LOG=str(log),
+               PYTHONPATH=os.pathsep.join([str(REPO / "tests" / "shared"), os.environ.get("PYTHONPATH", "")]))
+    return env
+
+
+def test_the_nested_run_carries_no_coverage_wiring(monkeypatch, tmp_path):
+    monkeypatch.setenv("COVERAGE_PROCESS_CONFIG", "{}")
+    monkeypatch.setenv("COVERAGE_FILE", str(tmp_path / ".coverage"))
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
+    env = _nested_env(tmp_path / "log")
+    assert not [k for k in env if k.startswith(("COVERAGE_", "COV_CORE_", "PYTEST_"))]
+    assert env["KEY_VERDICT_PARITY_LOG"] == str(tmp_path / "log")
+
+
 def test_go_verdict_equals_python_on_every_tree_the_callers_build(tmp_path):
     log = tmp_path / "parity.jsonl"
-    env = dict(os.environ, KEY_VERDICT_PARITY_LOG=str(log),
-               PYTHONPATH=os.pathsep.join([str(REPO / "tests" / "shared"), os.environ.get("PYTHONPATH", "")]))
+    env = _nested_env(log)
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", *_SOURCES, "-q", "-n", "4", "-p", "no:cacheprovider",
          "-p", "_key_verdict_parity_plugin"],
