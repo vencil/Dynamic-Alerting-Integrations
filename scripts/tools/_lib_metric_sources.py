@@ -371,30 +371,49 @@ class AbsenceGuardUnreadable(Exception):
     """The expression could not be parsed, so its guards cannot be judged."""
 
 
-def _walk(node):
-    """Every node of a promql_parser AST, depth first."""
-    yield node
-    for attr in ("lhs", "rhs", "expr", "param", "vector_selector"):
-        child = getattr(node, attr, None)
-        if child is not None and not isinstance(child, (str, int, float)):
-            yield from _walk(child)
-    for arg in getattr(node, "args", None) or []:
-        yield from _walk(arg)
+#: Functions whose result has a value whatever their argument holds, so a
+#: presence check inside them proves nothing.
+_ALWAYS_VALUED_CALLS = frozenset({
+    "absent", "absent_over_time", "scalar", "vector", "time", "pi",
+})
 
 
-def _present(node) -> set:
-    """The optional charts whose presence check appears anywhere under *node*."""
-    found = set()
-    for n in _walk(node):
-        if type(n).__name__ != "VectorSelector":
-            continue
-        for chart, (metric, label, value) in CHART_PRESENCE.items():
-            if n.name == metric and any(
-                    m.name == label and str(m.op).endswith("Equal") and
-                    not str(m.op).endswith("NotEqual") and m.value == value
-                    for m in n.matchers.matchers):
-                found.add(chart)
-    return found
+def _present(node) -> frozenset:
+    """The optional charts whose presence is GUARANTEED whenever *node* has a
+    value — not merely mentioned under it. `x and y` guarantees what either
+    side does; `x or y` only what both sides do (`<presence> or vector(1)`
+    guarantees nothing); `x unless y` only what `x` does; arithmetic and
+    comparison need every vector operand, so they guarantee what any operand
+    does; a function or aggregation guarantees what its arguments do, except
+    the always-valued ones (_ALWAYS_VALUED_CALLS). Unknown node → nothing."""
+    kind = type(node).__name__
+    if kind == "VectorSelector":
+        return frozenset(
+            chart for chart, (metric, label, value) in CHART_PRESENCE.items()
+            if node.name == metric and any(
+                m.name == label and str(m.op).endswith("Equal") and
+                not str(m.op).endswith("NotEqual") and m.value == value
+                for m in node.matchers.matchers))
+    if kind == "BinaryExpr":
+        op = str(node.op)
+        lhs, rhs = _present(node.lhs), _present(node.rhs)
+        if op == "or":
+            return lhs & rhs
+        if op == "unless":
+            return lhs
+        return lhs | rhs
+    if kind == "Call":
+        if node.func.name in _ALWAYS_VALUED_CALLS:
+            return frozenset()
+        out: frozenset = frozenset()
+        for arg in node.args or []:
+            out |= _present(arg)
+        return out
+    if kind == "MatrixSelector":
+        return _present(node.vector_selector)
+    if kind in ("AggregateExpr", "ParenExpr", "UnaryExpr", "SubqueryExpr"):
+        return _present(node.expr)
+    return frozenset()
 
 
 def unguarded_absences(expr: str) -> list[str]:

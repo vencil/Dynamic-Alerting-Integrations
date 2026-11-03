@@ -86,6 +86,16 @@ def test_every_optional_chart_has_a_presence_check():
     (f'absent(federation_revocation_channel_up) or {_RECONCILER}', False),
     # present elsewhere, but not AND-ed to the absence
     (f'(absent(federation_revocation_channel_up) or vector(0)) + on() {_RECONCILER}', False),
+    # the guard side must GUARANTEE presence, not merely mention it: an `or`
+    # arm that always has a value lets the absence through when undeployed
+    (f'absent(federation_revocation_channel_up) and on() (({_RECONCILER}) or vector(1))', False),
+    (f'absent(federation_revocation_channel_up) and on() ({_RECONCILER} unless on() vector(1))', True),
+    (f'absent(federation_revocation_channel_up) and on() (vector(1) unless on() {_RECONCILER})', False),
+    (f'absent(federation_revocation_channel_up) and on() ({_RECONCILER} or {_RECONCILER})', True),
+    ('absent(federation_revocation_channel_up) and on() '
+     'vector(scalar(count(kube_deployment_spec_replicas{deployment="federation-reconciler"})))', False),
+    ('absent(federation_revocation_channel_up) and on() '
+     'absent(kube_deployment_spec_replicas{deployment="federation-reconciler"})', False),
     # the WRONG chart's presence is no guard
     (f'absent(federation_revocation_channel_up) and on() {_GATEWAY}', False),
     # `up` is no presence check (it vanishes with the scrape target)
