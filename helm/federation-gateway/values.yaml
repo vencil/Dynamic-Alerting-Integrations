@@ -318,7 +318,9 @@ networkPolicy:
   # port (auditLog.metrics.port, rendered only with auditLog.enabled). This is
   # where PROMETHEUS runs, not where this chart is installed (#1595 D1b: the
   # policy used to admit only listenPort, so the scrape was refused whenever
-  # the policy was enforced). Empty map = allow the port from any namespace.
+  # the policy was enforced). `null` = any namespace (rendered as
+  # `namespaceSelector: {}` — never an unrestricted `from`). ⚠️ `{}` does NOT
+  # clear it: Helm merges a map into the default, so the default stays.
   scrapeNamespaceLabel:
     kubernetes.io/metadata.name: monitoring
 

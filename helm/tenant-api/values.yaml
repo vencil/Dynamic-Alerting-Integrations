@@ -704,8 +704,16 @@ networkPolicy:
   # ADR-027 D2-B O1). Change only if you relabel Prometheus / the threshold-govern
   # CronJob / recipe-preview / da-portal.
   internalPortAllow:
+    # This repo's raw Prometheus (k8s/03-monitoring/deployment-prometheus.yaml).
     prometheus:
       app: prometheus
+    # A Prometheus Operator / kube-prometheus-stack Prometheus (#1595 D1b): its
+    # pods carry app.kubernetes.io/name=prometheus, not app=prometheus, so with
+    # only the entry above a ServiceMonitor scrape of 8080 was refused wherever
+    # the policy is enforced and every tenant-api platform alert went blind.
+    # Same namespace scoping (prometheusNamespace) as every entry here.
+    prometheusOperator:
+      app.kubernetes.io/name: prometheus
     thresholdGovern:
       component: threshold-govern
     recipePreview:

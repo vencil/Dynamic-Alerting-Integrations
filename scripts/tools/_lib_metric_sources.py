@@ -254,6 +254,13 @@ def operator_unportable(expr: str, produced: "dict[str, list[str]] | None" = Non
 
     *produced* maps a recording-rule output to the reasons its own rule is not
     portable ([] = portable), so a rule built on a recording rule inherits it.
+
+    ⚠️ Of the labels a selector matches, only `job` is modelled. Other labels
+    that exist in one mode only are not: the raw tenant-exporters job's
+    `tenant` relabel, or a `namespace="monitoring"` pin on an object this
+    repo's raw manifests put there (ThresholdGovernanceStale,
+    CronJobLastRunFailed, ConfigReloader*) — such a rule counts as portable
+    because its series exist, though it may watch nothing under the Operator.
     """
     produced = produced or {}
     reasons: list[str] = []
@@ -326,3 +333,31 @@ def operator_split(groups: list) -> tuple[list, list[tuple[str, list[str]]]]:
         if kept_rules:
             kept_groups.append({**group, "rules": kept_rules})
     return kept_groups, dropped
+
+
+# ── absence guards on optional components (#1595 D1b) ───────────────────────
+#: The charts a deployment may leave out. An `absent()` / `absent_over_time()`
+#: over one of their metrics fires forever where the chart is not installed,
+#: unless the rule also requires the chart's target to be scraped.
+#: threshold-exporter is the platform itself and is not optional.
+OPTIONAL_CHARTS: frozenset = frozenset(
+    set(CHART_SERVICEMONITOR_JOBS) - {THRESHOLD_EXPORTER_CHART})
+
+
+def unguarded_absences(expr: str) -> list[str]:
+    """The absence checks in *expr* over an optional chart's metric that carry
+    no presence guard: an `up{job="<one of that chart's Service names>"}`
+    reference in the same expression (the job is the Service name in raw and
+    Prometheus Operator mode alike). [] when every one is guarded."""
+    found: list[str] = []
+    guards = {job[1] for job in _job_matchers("up", expr or "")
+              if job is not None and job[0] == "="}
+    for metric in ABSENT_RE.findall(expr or ""):
+        fam = resolve_family(metric)
+        if fam is None or fam[1] != "helm-service" or fam[2] not in OPTIONAL_CHARTS:
+            continue
+        jobs = CHART_SERVICEMONITOR_JOBS[fam[2]]
+        if not guards & jobs:
+            found.append(f"absent({metric}): {fam[2]} is optional — guard it with "
+                         f"`and on() count(up{{job=<one of {sorted(jobs)}>}}) > 0`")
+    return found

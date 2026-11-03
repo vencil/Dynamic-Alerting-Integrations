@@ -230,3 +230,116 @@ def test_selector_label_defaults_and_overrides(chart: str) -> None:
          "--set", "serviceMonitor.labels.app\\.kubernetes\\.io/name=x"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert res.returncode != 0 and "must not set" in res.stderr, res.stderr[-400:]
+
+
+# ── NetworkPolicy: the ServiceMonitor's Prometheus may actually connect ─────
+# A ServiceMonitor that selects the right port is still blind where a chart's
+# own NetworkPolicy refuses the scraper. kube-prometheus-stack's Prometheus pods
+# carry app.kubernetes.io/name=prometheus (not the raw manifest's app=prometheus);
+# tenant-api admitted only the latter (#1595 D1b review). Evaluated the way the
+# API server does: policies selecting the pod with policyType Ingress; with none,
+# everything is admitted; else some rule must match both port and peer.
+_KPS_PROMETHEUS = {"app.kubernetes.io/name": "prometheus",
+                   "app.kubernetes.io/instance": "kube-prometheus-stack-prometheus",
+                   "prometheus": "kube-prometheus-stack-prometheus"}
+_RAW_PROMETHEUS = {"app": "prometheus"}
+
+
+def _match(selector: dict, labels: dict) -> bool:
+    assert not selector.get("matchExpressions"), "matchExpressions not modelled"
+    return all(labels.get(k) == v for k, v in (selector.get("matchLabels") or {}).items())
+
+
+def _admitted(docs, policy_ns, pod_labels, named_ports, port, peer_ns, peer_labels) -> bool:
+    """Would a pod (*peer_labels*) in namespace *peer_ns* reach *port* on a pod
+    labelled *pod_labels* in *policy_ns*, under the rendered NetworkPolicies?"""
+    peer_ns_labels = {"kubernetes.io/metadata.name": peer_ns}
+    policies = [d for d in docs if d.get("kind") == "NetworkPolicy"
+                and "Ingress" in (d["spec"].get("policyTypes") or ["Ingress"])
+                and _match(d["spec"].get("podSelector") or {}, pod_labels)]
+    if not policies:
+        return True
+    for pol in policies:
+        for rule in pol["spec"].get("ingress") or []:
+            ports = rule.get("ports")
+            if ports and not any(
+                    (named_ports.get(p["port"]) if isinstance(p.get("port"), str) else p.get("port"))
+                    == port for p in ports):
+                continue
+            peers = rule.get("from")
+            if peers is None:
+                return True
+            for peer in peers:
+                assert "ipBlock" not in peer, "ipBlock not modelled"
+                ns_sel, pod_sel = peer.get("namespaceSelector"), peer.get("podSelector")
+                ns_ok = _match(ns_sel, peer_ns_labels) if ns_sel is not None else peer_ns == policy_ns
+                pod_ok = _match(pod_sel, peer_labels) if pod_sel is not None else True
+                if ns_ok and pod_ok:
+                    return True
+    return False
+
+
+def _scrape_targets(docs):
+    """(Service name, pod labels, named container ports, pod port) per platform Service."""
+    out = []
+    for svc in _platform_services(docs):
+        sel = svc["spec"]["selector"]
+        for d in docs:
+            if d.get("kind") not in {"Deployment", "DaemonSet", "StatefulSet"}:
+                continue
+            tpl = d["spec"]["template"]
+            labels = (tpl.get("metadata") or {}).get("labels") or {}
+            if all(labels.get(k) == v for k, v in sel.items()):
+                named = {p["name"]: int(p["containerPort"])
+                         for c in tpl["spec"].get("containers", []) for p in c.get("ports") or []
+                         if p.get("name")}
+                out.append((svc["metadata"]["name"], labels, named,
+                            int(svc["metadata"]["annotations"]["prometheus.io/port"])))
+    assert out, "no platform Service resolved to a workload"
+    return out
+
+
+@_needs_helm
+@pytest.mark.parametrize("chart", sorted(_EXPECTED_CHARTS))
+@pytest.mark.parametrize("prometheus", [_KPS_PROMETHEUS, _RAW_PROMETHEUS], ids=["kps", "raw"])
+def test_the_scraping_prometheus_is_admitted_by_the_charts_networkpolicy(chart, prometheus):
+    """A Prometheus in `monitoring` (every chart's default scraper namespace),
+    labelled the kube-prometheus-stack way or this repo's raw way, reaches the
+    pod port the ServiceMonitor scrapes."""
+    docs = _render(chart, _ENABLE[chart])
+    for name, labels, named, port in _scrape_targets(docs):
+        assert _admitted(docs, "some-ns", labels, named, port, "monitoring", prometheus), (
+            f"{chart}: {name}'s NetworkPolicy refuses a Prometheus {prometheus} in "
+            f"`monitoring` on port {port} — the ServiceMonitor scrape is blind there")
+
+
+@_needs_helm
+def test_tenant_api_8080_stays_pod_scoped():
+    """Admitting kube-prometheus-stack must not open the header-trusting port
+    (GHSA-3g2h-rf85-5rrv) to any other pod of the namespace, or to a Prometheus
+    in another namespace; the namespace stays configurable."""
+    docs = _render("helm/tenant-api", _ENABLE["helm/tenant-api"])
+    (_name, labels, named, port), = _scrape_targets(docs)
+    assert not _admitted(docs, "some-ns", labels, named, port, "monitoring", {"app": "grafana"})
+    assert not _admitted(docs, "some-ns", labels, named, port, "elsewhere", _KPS_PROMETHEUS)
+    moved = _render("helm/tenant-api", _ENABLE["helm/tenant-api"]
+                    + ["--set", "networkPolicy.prometheusNamespace=observability"])
+    assert _admitted(moved, "some-ns", labels, named, port, "observability", _KPS_PROMETHEUS)
+    assert not _admitted(moved, "some-ns", labels, named, port, "monitoring", _KPS_PROMETHEUS)
+
+
+@_needs_helm
+@pytest.mark.parametrize("chart", ["helm/federation-gateway", "helm/federation-reconciler"])
+def test_federation_scrape_namespace_default_and_null(chart):
+    """Default: only `monitoring`. `scrapeNamespaceLabel: null`: any namespace,
+    rendered `namespaceSelector: {}` — never a rule without `from`."""
+    docs = _render(chart, _ENABLE[chart])
+    (_name, labels, named, port), = _scrape_targets(docs)
+    assert not _admitted(docs, "some-ns", labels, named, port, "elsewhere", _KPS_PROMETHEUS)
+    anyns = _render(chart, _ENABLE[chart] + ["--set", "networkPolicy.scrapeNamespaceLabel=null"])
+    assert _admitted(anyns, "some-ns", labels, named, port, "elsewhere", _KPS_PROMETHEUS)
+    scrape_rules = [rule for pol in anyns if pol.get("kind") == "NetworkPolicy"
+                    for rule in pol["spec"].get("ingress") or []
+                    if any(p.get("port") == port for p in rule.get("ports") or [])]
+    assert scrape_rules and all(r.get("from") == [{"namespaceSelector": {}}] for r in scrape_rules), (
+        scrape_rules)

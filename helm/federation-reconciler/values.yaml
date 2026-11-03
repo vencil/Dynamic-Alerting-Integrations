@@ -165,7 +165,11 @@ resources:
 # VictoriaLogs) and ingress from the monitoring namespace (Prometheus scrape).
 networkPolicy:
   enabled: true
-  # Namespace label selector for the Prometheus that scrapes /metrics.
+  # Namespace label selector for the Prometheus that scrapes /metrics — where
+  # PROMETHEUS runs (any pod there, so a kube-prometheus-stack Prometheus in
+  # that namespace is admitted), not this chart. `null` = any namespace
+  # (`namespaceSelector: {}`). ⚠️ `{}` does NOT clear it: Helm merges a map into
+  # the default, so the default stays.
   scrapeNamespaceLabel:
     kubernetes.io/metadata.name: monitoring
 

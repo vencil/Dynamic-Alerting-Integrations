@@ -164,7 +164,7 @@ def test_render_enabled_no_per_container_runasuser(repo_root: Path):
 
 @_needs_helm
 def test_render_netpol_admits_da_portal_as_fourth_entry(repo_root: Path):
-    """The 8080 ingress rule admits exactly four pod-scoped clients, incl. da-portal."""
+    """The 8080 ingress rule admits exactly the pod-scoped clients listed, incl. da-portal."""
     res = _helm_template(repo_root, template="templates/networkpolicy.yaml")
     assert res.returncode == 0, f"netpol render must succeed: {res.stderr}"
     docs = [d for d in yaml.safe_load_all(res.stdout) if d]
@@ -181,9 +181,15 @@ def test_render_netpol_admits_da_portal_as_fourth_entry(repo_root: Path):
     assert {"app.kubernetes.io/name": "da-portal"} in selectors, (
         f"8080 ingress must admit da-portal; got selectors {selectors}"
     )
-    assert len(selectors) == 4, (
-        f"8080 ingress must have exactly 4 pod-scoped allow entries; got {len(selectors)}"
-    )
+    # Five since #1595 D1b: Prometheus is admitted by the raw manifest's label
+    # AND a Prometheus Operator's (kube-prometheus-stack), one entry each.
+    assert selectors == [
+        {"app": "prometheus"},
+        {"app.kubernetes.io/name": "prometheus"},
+        {"component": "threshold-govern"},
+        {"app.kubernetes.io/name": "recipe-preview"},
+        {"app.kubernetes.io/name": "da-portal"},
+    ], f"8080 ingress must admit exactly these pod-scoped clients; got {selectors}"
 
 
 @_needs_helm

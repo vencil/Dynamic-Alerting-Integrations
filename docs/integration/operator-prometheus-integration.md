@@ -215,6 +215,16 @@ curl -s 'http://localhost:9090/api/v1/rules' | \
 
 每個 ServiceMonitor 選的是帶 `dynamic-alerting.io/scrape: platform` 的那個 Service、抓的是 raw 設定 `platform-components` job 抓的同一個 pod port，且**不設 `jobLabel`**——`job` 就是 Service 名稱，與 raw 模式相同，所以告警裡 `job="tenant-api"` 這類 selector 兩邊都成立。預設帶 `release: kube-prometheus-stack`，其他 release 名稱用 `serviceMonitor.labels` 改（`release: null` 可拿掉）。
 
+**NetworkPolicy**：ServiceMonitor 選對了 port，若 chart 自己的 NetworkPolicy 擋下 Prometheus，scrape 仍然是空的。各 chart 預設都假設 Prometheus 在 `monitoring` namespace；kube-prometheus-stack 裝在別處就要改：
+
+| Chart | 放行 scrape 的設定 | 預設 |
+|---|---|---|
+| `threshold-exporter` | `networkPolicy.allowExternal`／`prometheusNamespace`／`prometheusPodLabels`（見 1b） | metrics port 不限來源 |
+| `tenant-api` | `networkPolicy.prometheusNamespace` ＋ pod 級白名單 `networkPolicy.internalPortAllow.prometheus`（raw 的 `app=prometheus`）與 `.prometheusOperator`（kube-prometheus-stack 的 `app.kubernetes.io/name=prometheus`） | `monitoring` 裡帶這兩組 label 之一的 pod；8080 信任 identity header，所以只放 pod 級白名單 |
+| `vector` | chart 不帶 NetworkPolicy | — |
+| `federation-gateway` | `networkPolicy.scrapeNamespaceLabel`（Prometheus 所在 namespace 的 label） | `monitoring` 裡任何 pod；設 `null` 表示任何 namespace（`{}` 不會清掉預設值，Helm 會合併 map） |
+| `federation-reconciler` | `networkPolicy.scrapeNamespaceLabel` | 同上 |
+
 **2. 套用 `operator-generate` 產出的 `da-rule-pack-platform`。** 它是平台 pack 去掉 kube-prometheus-stack 沒有指標來源的那幾條：哪幾條由 `_lib_metric_sources.operator_split` 依 scrape 閘門的 metric family 表推導（不是手列），產出時每條在 stderr 印一行 `NOTE:`，也列在該 PrometheusRule 的 `dynamic-alerting.io/operator-excluded-rules` annotation。目前是：
 
 <!-- operator-excluded-rules:begin -->

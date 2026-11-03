@@ -29,14 +29,18 @@ spec:
     {{- if .Values.auditLog.enabled }}
     # Prometheus scrape of the audit-metrics sidecar (#1595 D1b). Without this
     # rule the policy admitted only listenPort and every scrape was refused.
+    # scrapeNamespaceLabel null = any namespace: `namespaceSelector: {}`, never
+    # a rule without `from` (that would admit every source, ipBlocks included).
     - ports:
         - port: {{ .Values.auditLog.metrics.port }}
           protocol: TCP
-      {{- with .Values.networkPolicy.scrapeNamespaceLabel }}
       from:
+        {{- with .Values.networkPolicy.scrapeNamespaceLabel }}
         - namespaceSelector:
             matchLabels:
               {{- toYaml . | nindent 14 }}
-      {{- end }}
+        {{- else }}
+        - namespaceSelector: {}
+        {{- end }}
     {{- end }}
 {{- end }}

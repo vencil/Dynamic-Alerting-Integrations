@@ -551,17 +551,18 @@ data:
     \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md\n\
     \      summary: Federation token un-revoke suspected — reconciler found a revoked-but-live\
     \ token absent from the live set (ADR-028)\n  - alert: FederationRevocationReconcileStale\n\
-    \    expr: '(time() - federation_revocation_last_reconcile_timestamp_seconds >\
-    \ 1800)\n\n      or absent(federation_revocation_last_reconcile_timestamp_seconds)\n\
-    \n      '\n    for: 10m\n    labels:\n      alert_source: platform\n      severity:\
-    \ critical\n    annotations:\n      description: 'The federation-reconciler has\
-    \ not SUCCESSFULLY reconciled in over 30\n\n        minutes, or its metrics are\
-    \ absent (pod down / never scraped). A\n\n        fail-closed pass (a VictoriaLogs\
-    \ query or revoked.txt read failed)\n\n        deliberately does NOT refresh the\
-    \ last-reconcile timestamp, so a\n\n        stuck reconciler surfaces here rather\
-    \ than as a false all-clear — but\n\n        while it is stale the un-revoke tamper-evidence\
-    \ is BLIND. ACTION:\n\n        check the reconciler Deployment (`kubectl -n monitoring\
-    \ get deploy\n\n        federation-reconciler`), its recent logs for fail-closed\
+    \    expr: \"(time() - federation_revocation_last_reconcile_timestamp_seconds\
+    \ > 1800)\\nor\\n(\\n  absent(federation_revocation_last_reconcile_timestamp_seconds)\\\
+    n  and on() count(up{job=\\\"federation-reconciler\\\"}) > 0\\n)\\n\"\n    for:\
+    \ 10m\n    labels:\n      alert_source: platform\n      severity: critical\n \
+    \   annotations:\n      description: 'The federation-reconciler has not SUCCESSFULLY\
+    \ reconciled in over 30\n\n        minutes, or its metrics are absent (pod down\
+    \ / never scraped). A\n\n        fail-closed pass (a VictoriaLogs query or revoked.txt\
+    \ read failed)\n\n        deliberately does NOT refresh the last-reconcile timestamp,\
+    \ so a\n\n        stuck reconciler surfaces here rather than as a false all-clear\
+    \ — but\n\n        while it is stale the un-revoke tamper-evidence is BLIND. ACTION:\n\
+    \n        check the reconciler Deployment (`kubectl get deploy -A -l\n\n     \
+    \   app.kubernetes.io/name=federation-reconciler`), its recent logs for fail-closed\
     \ messages,\n\n        and VictoriaLogs reachability. Details:\n\n        docs/adr/028-federation-revocation-tamper-evidence.md.\n\
     \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md\n\
     \      summary: Federation revocation reconciler stale or down — un-revoke detection\
@@ -723,9 +724,10 @@ data:
     \ the Layer 3 proxy and\n\n        the storage backend.\n\n        '\n      runbook_url:\
     \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/020-tenant-federation.md\n\
     \      summary: Federation backend errors for {{ $labels.tenant }}\n  - alert:\
-    \ FederationAuditPipelineSilent\n    expr: absent_over_time(tenant_federation_requests_total[10m])\n\
-    \    for: 5m\n    labels:\n      alert_source: platform\n      severity: critical\n\
-    \    annotations:\n      description: 'No `tenant_federation_requests_total` samples\
+    \ FederationAuditPipelineSilent\n    expr: 'absent_over_time(tenant_federation_requests_total[10m])\n\
+    \n      and on() count(up{job=\"federation-gateway\"}) > 0\n\n      '\n    for:\
+    \ 5m\n    labels:\n      alert_source: platform\n      severity: critical\n  \
+    \  annotations:\n      description: 'No `tenant_federation_requests_total` samples\
     \ in the last\n\n        10m — federation gateway audit pipeline is broken. Check\n\
     \n        (a) gateway pods Running, (b) audit-metrics sidecar logs, (c) the\n\n\
     \        Prometheus scrape target. If both gateway + sidecar are\n\n        healthy\

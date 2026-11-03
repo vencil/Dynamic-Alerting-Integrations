@@ -14,10 +14,15 @@ spec:
     - Egress
   ingress:
     # Prometheus scrape of /metrics from the monitoring namespace.
+    # scrapeNamespaceLabel null = any namespace (`namespaceSelector: {}`).
     - from:
+        {{- with .Values.networkPolicy.scrapeNamespaceLabel }}
         - namespaceSelector:
             matchLabels:
-              {{- toYaml .Values.networkPolicy.scrapeNamespaceLabel | nindent 14 }}
+              {{- toYaml . | nindent 14 }}
+        {{- else }}
+        - namespaceSelector: {}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.metricsPort }}

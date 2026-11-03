@@ -112,18 +112,20 @@ tests:
                 deliberately does NOT refresh the last-reconcile timestamp, so a
                 stuck reconciler surfaces here rather than as a false all-clear — but
                 while it is stale the un-revoke tamper-evidence is BLIND. ACTION:
-                check the reconciler Deployment (`kubectl -n monitoring get deploy
-                federation-reconciler`), its recent logs for fail-closed messages,
+                check the reconciler Deployment (`kubectl get deploy -A -l
+                app.kubernetes.io/name=federation-reconciler`), its recent logs for fail-closed messages,
                 and VictoriaLogs reachability. Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
               summary: "Federation revocation reconciler stale or down — un-revoke detection is not operational (ADR-028)"
 
-  # 5) Reconciler down — metric absent → stale FIRES via absent() after for:10m.
+  # 5) Reconciler down — its target is scraped (up 0) but the metric is absent →
+  #    stale FIRES via the guarded absent() after for:10m. The not-deployed case
+  #    (no reconciler target → no alert) is in platform-optional-component-absence_test.yaml.
   - interval: 1m
     name: reconcile-absent-fires-stale
     input_series:
-      - series: 'federation_revocation_tamper_suspected'   # unrelated, keeps the test populated
+      - series: 'up{job="federation-reconciler", instance="10.0.0.7:9099"}'
         values: '0+0x15'
     alert_rule_test:
       - eval_time: 12m
@@ -140,8 +142,8 @@ tests:
                 deliberately does NOT refresh the last-reconcile timestamp, so a
                 stuck reconciler surfaces here rather than as a false all-clear — but
                 while it is stale the un-revoke tamper-evidence is BLIND. ACTION:
-                check the reconciler Deployment (`kubectl -n monitoring get deploy
-                federation-reconciler`), its recent logs for fail-closed messages,
+                check the reconciler Deployment (`kubectl get deploy -A -l
+                app.kubernetes.io/name=federation-reconciler`), its recent logs for fail-closed messages,
                 and VictoriaLogs reachability. Details:
                 docs/adr/028-federation-revocation-tamper-evidence.md.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"

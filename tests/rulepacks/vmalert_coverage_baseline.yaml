@@ -77,7 +77,6 @@ uncovered:
   rule-pack-platform.yaml:
   - ConfigBlastRadiusHighImpact
   - ConfigReloadStuck
-  - FederationAuditPipelineSilent
   - FederationGatewayBackendErrors
   - FederationRejectionRateAnomaly
   - PrometheusRuleEvaluationFailing

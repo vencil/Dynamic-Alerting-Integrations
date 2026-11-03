@@ -299,7 +299,7 @@ exposed, 1 = one ingress, …).
 | `network.xffTrustedHops` | `0` | Trusted L7 proxy hops — see "Client IP behind a load balancer". No safe universal default |
 | `rateLimit.perToken.*` / `perTenant.*` / `perIp.*` | see values.yaml | Token-bucket params; tuning corridors in comments |
 | `networkPolicy.allowedNamespaces` | `[]` | Restrict ingress; empty = cluster-wide on the listen port |
-| `networkPolicy.scrapeNamespaceLabel` | `kubernetes.io/metadata.name: monitoring` | Namespace label selector for the Prometheus that scrapes `auditLog.metrics.port` (where Prometheus runs, not this chart); `{}` = any namespace |
+| `networkPolicy.scrapeNamespaceLabel` | `kubernetes.io/metadata.name: monitoring` | Namespace label selector for the Prometheus that scrapes `auditLog.metrics.port` (where Prometheus runs, not this chart; any pod there, so a kube-prometheus-stack Prometheus in that namespace is admitted). `null` = any namespace (`namespaceSelector: {}`); `{}` does not clear it — Helm merges maps |
 | `serviceMonitor.enabled` | `false` | Prometheus Operator only: a ServiceMonitor for the metrics port (needs `auditLog.enabled`), no `jobLabel`; `serviceMonitor.labels` defaults to `release: kube-prometheus-stack` |
 | `auditLog.enabled` | `true` | Master switch for the metrics pipeline (audit-metrics + logrotate sidecars, `emptyDir` mirror, scrape). `false` keeps only the stdout audit log |
 | `auditLog.maxRequestBytes` | `1048576` | Request-body buffer cap (1 MiB) — bounds the POST body the Lua audit filter reads |

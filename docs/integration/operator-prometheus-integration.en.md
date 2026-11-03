@@ -215,6 +215,16 @@ The platform self-monitoring alerts (`rule-packs/rule-pack-platform.yaml`, `Watc
 
 Each ServiceMonitor selects the Service carrying `dynamic-alerting.io/scrape: platform`, scrapes the same pod port the raw config's `platform-components` job scrapes, and sets **no `jobLabel`** — `job` is the Service name, as in raw mode, so a selector such as `job="tenant-api"` holds in both. They carry `release: kube-prometheus-stack` by default; set `serviceMonitor.labels` for another release name (`release: null` drops it).
 
+**NetworkPolicy**: a ServiceMonitor on the right port still scrapes nothing if the chart's own NetworkPolicy refuses the Prometheus. Every chart assumes by default that Prometheus runs in the `monitoring` namespace; change it when kube-prometheus-stack lives elsewhere:
+
+| Chart | Settings that admit the scrape | Default |
+|---|---|---|
+| `threshold-exporter` | `networkPolicy.allowExternal` / `prometheusNamespace` / `prometheusPodLabels` (see 1b) | metrics port open to any source |
+| `tenant-api` | `networkPolicy.prometheusNamespace` + the pod-scoped allow-list `networkPolicy.internalPortAllow.prometheus` (raw `app=prometheus`) and `.prometheusOperator` (kube-prometheus-stack's `app.kubernetes.io/name=prometheus`) | pods with either label in `monitoring`; 8080 trusts identity headers, so it admits a pod-scoped list only |
+| `vector` | the chart ships no NetworkPolicy | — |
+| `federation-gateway` | `networkPolicy.scrapeNamespaceLabel` (label of Prometheus's namespace) | any pod in `monitoring`; `null` = any namespace (`{}` does not clear the default — Helm merges maps) |
+| `federation-reconciler` | `networkPolicy.scrapeNamespaceLabel` | same |
+
 **2. Apply the `da-rule-pack-platform` that `operator-generate` emits.** It is the platform pack without the rules whose metric source a kube-prometheus-stack install lacks: `_lib_metric_sources.operator_split` derives which ones from the scrape gate's metric-family table (not a hand list); each gets a `NOTE:` line on stderr and is listed in that PrometheusRule's `dynamic-alerting.io/operator-excluded-rules` annotation. Today:
 
 <!-- operator-excluded-rules:begin -->

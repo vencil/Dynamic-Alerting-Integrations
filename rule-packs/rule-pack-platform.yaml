@@ -1711,10 +1711,22 @@ groups:
             docs/adr/028-federation-revocation-tamper-evidence.md.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
 
+      # The absent() arm is GUARDED by the reconciler being scraped (#1595 D1b):
+      # the chart is optional, so an unguarded absent() fired forever — critical —
+      # wherever federation is not deployed. `up{job="federation-reconciler"}`
+      # exists (0 or 1) for every reconciler target, a crashed one included, so
+      # "deployed but down" still fires; only "no reconciler target at all"
+      # (not installed, or its Service lost the scrape label) is silent.
+      # Mechanical rule: _lib_metric_sources.unguarded_absences, pinned by
+      # tests/lint/test_absence_guard.py.
       - alert: FederationRevocationReconcileStale
         expr: |
           (time() - federation_revocation_last_reconcile_timestamp_seconds > 1800)
-          or absent(federation_revocation_last_reconcile_timestamp_seconds)
+          or
+          (
+            absent(federation_revocation_last_reconcile_timestamp_seconds)
+            and on() count(up{job="federation-reconciler"}) > 0
+          )
         for: 10m
         labels:
           severity: critical
@@ -1728,8 +1740,8 @@ groups:
             deliberately does NOT refresh the last-reconcile timestamp, so a
             stuck reconciler surfaces here rather than as a false all-clear — but
             while it is stale the un-revoke tamper-evidence is BLIND. ACTION:
-            check the reconciler Deployment (`kubectl -n monitoring get deploy
-            federation-reconciler`), its recent logs for fail-closed messages,
+            check the reconciler Deployment (`kubectl get deploy -A -l
+            app.kubernetes.io/name=federation-reconciler`), its recent logs for fail-closed messages,
             and VictoriaLogs reachability. Details:
             docs/adr/028-federation-revocation-tamper-evidence.md.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
@@ -2167,8 +2179,16 @@ groups:
       # in chargeback is otherwise ambiguous between "tenant didn't
       # use" / "audit pipeline broke" / "operator wiped data"; this
       # alert names the second case.
+      # GUARDED by the gateway's audit-metrics target being scraped (#1595 D1b):
+      # the chart is optional and auditLog can be off, so an unguarded
+      # absent_over_time() fired forever — critical — wherever no gateway audit
+      # pipeline is deployed. `up{job="federation-gateway"}` exists only while
+      # the gateway Service is labelled and annotated for scraping (auditLog on),
+      # a crashed pod included (up 0).
       - alert: FederationAuditPipelineSilent
-        expr: absent_over_time(tenant_federation_requests_total[10m])
+        expr: |
+          absent_over_time(tenant_federation_requests_total[10m])
+          and on() count(up{job="federation-gateway"}) > 0
         for: 5m
         labels:
           severity: critical
