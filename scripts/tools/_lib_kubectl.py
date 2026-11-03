@@ -6,7 +6,8 @@ never "no data". ``kubectl_list`` returns the listed objects only when
 kubectl answered (rc 0, a JSON list); every other outcome raises
 ``KubectlError``:
 
-* kubectl is not on PATH, or does not finish within the timeout;
+* kubectl is not on PATH, cannot be started (no execute permission, a file
+  the kernel cannot execute), or does not finish within the timeout;
 * kubectl exits non-zero — the cluster cannot be reached, the caller may not
   list the kind (forbidden), or the kind does not exist (a CRD that is not
   installed). Measured on kubectl 1.37.1 against a real kube-apiserver: a
@@ -35,6 +36,7 @@ uncaught, ``run()`` ends the process at rc 2 with one ``ERROR:`` line.
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
 import tempfile
 from typing import Any, Optional
@@ -60,8 +62,9 @@ def _last_line(text: str) -> str:
 
 def _answer(cmd: list[str], what: str, timeout: float) -> str:
     """kubectl's stdout when it answered (rc 0), else ``KubectlError``: not
-    on PATH, no answer within *timeout*, or a non-zero exit (named by
-    kubectl's own last stderr line). The one place that decides it.
+    on PATH or cannot be started, no answer within *timeout*, or a non-zero
+    exit (named by kubectl's own last stderr line). The one place that
+    decides it.
 
     Both streams go to files, not pipes: the answer is read once kubectl
     itself has exited. A process kubectl leaves behind still holding a pipe
@@ -72,7 +75,17 @@ def _answer(cmd: list[str], what: str, timeout: float) -> str:
             proc = subprocess.run(cmd, stdin=subprocess.DEVNULL, stdout=out, stderr=err,
                                   timeout=timeout, check=False)
         except FileNotFoundError as exc:
-            raise KubectlError(f"{what}: kubectl is not on PATH") from exc
+            if shutil.which(cmd[0]) is None:
+                raise KubectlError(f"{what}: kubectl is not on PATH") from exc
+            # On PATH, yet ENOENT: its #! interpreter does not exist (#3534).
+            raise KubectlError(f"{what}: kubectl cannot be run: "
+                               f"{exc.strerror or exc} (its interpreter?)") from exc
+        except OSError as exc:
+            # Found but not started (#3534): no execute permission, a file
+            # the kernel cannot execute (ENOEXEC), a directory on the way
+            # that cannot be entered. Still no answer, not a tool defect.
+            raise KubectlError(f"{what}: kubectl cannot be run: "
+                               f"{exc.strerror or exc}") from exc
         except subprocess.TimeoutExpired as exc:
             raise KubectlError(f"{what}: no answer within {timeout:.3g}s") from exc
         out.seek(0)
