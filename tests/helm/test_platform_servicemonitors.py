@@ -1,0 +1,396 @@
+"""Every platform scrape Service has a ServiceMonitor that scrapes it like the raw job does (#1595 D1b).
+
+WHY: in Prometheus Operator mode (kube-prometheus-stack) Prometheus scrapes only
+what a ServiceMonitor selects. Before D1b only threshold-exporter shipped one,
+so every platform alert reading tenant-api, Vector or federation metrics had
+zero series there. The raw config scrapes these Services with the
+`platform-components` job (k8s/03-monitoring/configmap-prometheus.yaml): it
+keeps Services labelled `dynamic-alerting.io/scrape: platform`, one target per
+pod on the port the `prometheus.io/port` annotation names, `job` = Service name.
+
+WHAT IS CHECKED, per chart whose template labels a Service for that job (the
+chart list is DERIVED from the templates, with a literal anchor below so an
+empty glob cannot pass):
+
+* rendered with the values that turn the Service on and the ServiceMonitor on,
+  each platform Service is reached by exactly ONE (ServiceMonitor, endpoint)
+  pair — the monitor's selector matches the Service's labels and the endpoint
+  names one of its ports (that is how the Operator builds targets);
+* that port routes to the pod port the annotation names (the raw job's port);
+* no monitor sets `jobLabel` (so `job` is the Service name, as in raw mode),
+  and no monitor selects a Service outside the platform set;
+* `_lib_metric_sources.CHART_SERVICEMONITOR_JOBS` — what operator-generate's
+  portability derivation believes — equals the rendered charts and Service
+  names, so dropping a ServiceMonitor or renaming a Service turns this red
+  instead of leaving the derivation wrong;
+* off by default (no CRD, nothing to apply), and off when its Service is off.
+"""
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+import pytest
+import yaml
+
+_REPO = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(_REPO / "tests"))
+sys.path.insert(0, str(_REPO / "scripts" / "tools"))
+
+from _helm_gate import HAS_HELM, helm_required  # noqa: E402
+import _lib_metric_sources as ms  # noqa: E402
+
+_LABEL = "dynamic-alerting.io/scrape"
+_SERVICE_KIND = re.compile(r"^kind:\s*Service\s*$", re.MULTILINE)
+_BASELINE = ["-f", str(_REPO / "tests" / "helm" / "tenant_api_render_baseline.yaml")]
+_VECTOR_ON = ["--set", "metrics.enabled=true",
+              "--set", "tenantProjections[0].tenantId=tenant-alpha",
+              "--set", "tenantProjections[0].accountId=1000",
+              "--set", "projectionGate.registry.configMapName=test-registry"]
+
+# chart -> `helm template` args turning on every platform Service AND its
+# ServiceMonitor. Must cover exactly the derived chart set.
+_ENABLE = {
+    "helm/threshold-exporter": ["--set", "rules.mode=operator"],
+    "helm/tenant-api": _BASELINE + ["--set", "serviceMonitor.enabled=true"],
+    "helm/vector": _VECTOR_ON + ["--set", "serviceMonitor.enabled=true"],
+    "helm/federation-gateway": ["--set", "serviceMonitor.enabled=true"],
+    "helm/federation-reconciler": ["--set", "serviceMonitor.enabled=true"],
+}
+# chart -> args that turn the Services on but leave the ServiceMonitor default.
+_DEFAULTS = {
+    "helm/threshold-exporter": [],
+    "helm/tenant-api": _BASELINE,
+    "helm/vector": _VECTOR_ON,
+    "helm/federation-gateway": [],
+    "helm/federation-reconciler": [],
+}
+
+# Non-vacuity anchor, LITERAL on purpose (deriving it from the glob it checks
+# would let an empty glob pass).
+_EXPECTED_CHARTS = {
+    "helm/threshold-exporter", "helm/tenant-api", "helm/vector",
+    "helm/federation-gateway", "helm/federation-reconciler",
+}
+
+_needs_helm = pytest.mark.skipif(not HAS_HELM, reason="helm CLI not on PATH")
+
+
+def test_helm_present_when_required() -> None:
+    """Fail closed: without helm every render assertion below would skip."""
+    reason = helm_required()
+    if reason:
+        assert HAS_HELM, f"{reason}: but `helm` is not on PATH"
+
+
+def _derived_charts() -> set[str]:
+    """Charts with a template that puts the platform label on a Service."""
+    found = set()
+    for p in (_REPO / "helm").glob("*/templates/**/*.yaml"):
+        text = p.read_text(encoding="utf-8")
+        if f"{_LABEL}: platform" in text and _SERVICE_KIND.search(text):
+            found.add("helm/" + p.relative_to(_REPO / "helm").parts[0])
+    return found
+
+
+def _render(chart: str, args: list[str]) -> list[dict]:
+    out = subprocess.run(
+        ["helm", "template", "t", str(_REPO / chart), "-n", "some-ns", *args],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+        check=True, timeout=60)
+    return [d for d in yaml.safe_load_all(out.stdout) if d]
+
+
+def _platform_services(docs: list[dict]) -> list[dict]:
+    return [d for d in docs if d.get("kind") == "Service"
+            and ((d["metadata"].get("labels") or {}).get(_LABEL) == "platform")
+            and ((d["metadata"].get("annotations") or {}).get("prometheus.io/scrape") == "true")]
+
+
+def _pod_port(docs: list[dict], svc: dict, port_name: str) -> int:
+    """The pod port the Service port *port_name* routes to."""
+    sp = next(p for p in svc["spec"]["ports"] if p.get("name") == port_name)
+    target = sp.get("targetPort", sp["port"])
+    if isinstance(target, int):
+        return target
+    sel = svc["spec"]["selector"]
+    for d in docs:
+        if d.get("kind") not in {"Deployment", "DaemonSet", "StatefulSet"}:
+            continue
+        tpl = d["spec"]["template"]
+        labels = (tpl.get("metadata") or {}).get("labels") or {}
+        if all(labels.get(k) == v for k, v in sel.items()):
+            for c in tpl["spec"].get("containers", []):
+                for p in c.get("ports") or []:
+                    if p.get("name") == target:
+                        return int(p["containerPort"])
+    raise AssertionError(f"{svc['metadata']['name']}: targetPort {target!r} names no container port")
+
+
+def _selects(sm: dict, labels: dict) -> bool:
+    want = sm["spec"]["selector"].get("matchLabels") or {}
+    assert not sm["spec"]["selector"].get("matchExpressions"), "matchExpressions not modelled"
+    return all(labels.get(k) == v for k, v in want.items())
+
+
+def test_the_chart_list_is_derived_and_covered() -> None:
+    derived = _derived_charts()
+    assert derived == _EXPECTED_CHARTS, (
+        f"charts labelling a Service for the platform job changed: "
+        f"new={sorted(derived - _EXPECTED_CHARTS)} gone={sorted(_EXPECTED_CHARTS - derived)} — "
+        "a new one needs a ServiceMonitor and a row in _ENABLE")
+    assert set(_ENABLE) == derived == set(_DEFAULTS)
+    assert set(ms.CHART_SERVICEMONITOR_JOBS) == derived, (
+        "_lib_metric_sources.CHART_SERVICEMONITOR_JOBS (operator-generate's portability "
+        f"model) disagrees with the charts: {sorted(set(ms.CHART_SERVICEMONITOR_JOBS) ^ derived)}")
+
+
+@_needs_helm
+@pytest.mark.parametrize("chart", sorted(_EXPECTED_CHARTS))
+def test_each_platform_service_is_scraped_once_on_the_raw_jobs_port(chart: str) -> None:
+    docs = _render(chart, _ENABLE[chart])
+    services = _platform_services(docs)
+    monitors = [d for d in docs if d.get("kind") == "ServiceMonitor"]
+    assert services, f"{chart}: no platform scrape Service rendered with {_ENABLE[chart]}"
+    assert monitors, f"{chart}: no ServiceMonitor rendered with {_ENABLE[chart]}"
+    for sm in monitors:
+        assert "jobLabel" not in sm["spec"], (
+            f"{chart}: ServiceMonitor {sm['metadata']['name']} sets jobLabel — `job` "
+            "would no longer be the Service name the platform alerts select")
+        assert "namespaceSelector" not in sm["spec"], sm["metadata"]["name"]
+        assert sm["metadata"]["namespace"] == "some-ns", sm["metadata"]
+    platform_names = {s["metadata"]["name"] for s in services}
+    for d in docs:
+        if d.get("kind") == "Service" and d["metadata"]["name"] not in platform_names:
+            hit = [sm["metadata"]["name"] for sm in monitors
+                   if _selects(sm, d["metadata"].get("labels") or {})]
+            assert not hit, f"{chart}: {hit} also select non-platform Service {d['metadata']['name']}"
+    for svc in services:
+        names = {p.get("name") for p in svc["spec"]["ports"]}
+        pairs = [(sm["metadata"]["name"], ep["port"]) for sm in monitors
+                 if _selects(sm, svc["metadata"].get("labels") or {})
+                 for ep in sm["spec"]["endpoints"] if ep.get("port") in names]
+        assert len(pairs) == 1, (
+            f"{chart} Service {svc['metadata']['name']}: reached by {pairs} "
+            "(ServiceMonitor, endpoint) pairs — want exactly one")
+        annotated = int(svc["metadata"]["annotations"]["prometheus.io/port"])
+        assert _pod_port(docs, svc, pairs[0][1]) == annotated, (
+            f"{chart} Service {svc['metadata']['name']}: the ServiceMonitor scrapes port "
+            f"{pairs[0][1]!r}, which is not the annotated pod port {annotated} the raw "
+            "platform-components job keeps")
+    for sm in monitors:
+        for ep in sm["spec"]["endpoints"]:
+            assert any(ep.get("port") in {p.get("name") for p in s["spec"]["ports"]}
+                       and _selects(sm, s["metadata"].get("labels") or {}) for s in services), (
+                f"{chart}: endpoint {ep.get('port')!r} of {sm['metadata']['name']} reaches no Service")
+    assert platform_names == set(ms.CHART_SERVICEMONITOR_JOBS[chart]), (
+        f"{chart}: rendered platform Services {sorted(platform_names)} != the jobs "
+        f"_lib_metric_sources.CHART_SERVICEMONITOR_JOBS declares "
+        f"{sorted(ms.CHART_SERVICEMONITOR_JOBS[chart])} (job = Service name)")
+
+
+@_needs_helm
+@pytest.mark.parametrize("chart", sorted(_EXPECTED_CHARTS))
+def test_servicemonitors_are_off_by_default(chart: str) -> None:
+    docs = _render(chart, _DEFAULTS[chart])
+    assert not [d for d in docs if d.get("kind") == "ServiceMonitor"], (
+        f"{chart} renders a ServiceMonitor by default — without the "
+        "monitoring.coreos.com CRDs the release cannot be applied")
+
+
+@_needs_helm
+@pytest.mark.parametrize("chart,args,ports", [
+    ("helm/vector", ["--set", "serviceMonitor.enabled=true"], None),
+    ("helm/vector", ["--set", "serviceMonitor.enabled=true", "--set", "metrics.enabled=true"],
+     ["metrics"]),
+    ("helm/federation-gateway",
+     ["--set", "serviceMonitor.enabled=true", "--set", "auditLog.enabled=false"], None),
+], ids=["vector-no-service", "vector-metrics-only", "gateway-no-audit"])
+def test_an_endpoint_renders_only_with_its_service(chart, args, ports) -> None:
+    monitors = [d for d in _render(chart, args) if d.get("kind") == "ServiceMonitor"]
+    if ports is None:
+        assert not monitors, f"{chart} {args}: a ServiceMonitor with no Service to scrape"
+    else:
+        assert [ep["port"] for m in monitors for ep in m["spec"]["endpoints"]] == ports
+
+
+@_needs_helm
+@pytest.mark.parametrize("chart", sorted(_EXPECTED_CHARTS - {"helm/threshold-exporter"}))
+def test_selector_label_defaults_and_overrides(chart: str) -> None:
+    labels = next(d for d in _render(chart, _ENABLE[chart])
+                  if d.get("kind") == "ServiceMonitor")["metadata"]["labels"]
+    assert labels.get("release") == "kube-prometheus-stack", labels
+    dropped = next(d for d in _render(chart, _ENABLE[chart] + ["--set", "serviceMonitor.labels.release=null"])
+                   if d.get("kind") == "ServiceMonitor")["metadata"]["labels"]
+    assert "release" not in dropped, dropped
+    res = subprocess.run(
+        ["helm", "template", "t", str(_REPO / chart), *_ENABLE[chart],
+         "--set", "serviceMonitor.labels.app\\.kubernetes\\.io/name=x"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    assert res.returncode != 0 and "must not set" in res.stderr, res.stderr[-400:]
+
+
+# ── NetworkPolicy: the ServiceMonitor's Prometheus may actually connect ─────
+# A ServiceMonitor that selects the right port is still blind where a chart's
+# own NetworkPolicy refuses the scraper. kube-prometheus-stack's Prometheus pods
+# carry app.kubernetes.io/name=prometheus (not the raw manifest's app=prometheus);
+# tenant-api admitted only the latter (#1595 D1b review). Evaluated the way the
+# API server does: policies selecting the pod with policyType Ingress; with none,
+# everything is admitted; else some rule must match both port and peer.
+_KPS_PROMETHEUS = {"app.kubernetes.io/name": "prometheus",
+                   "app.kubernetes.io/instance": "kube-prometheus-stack-prometheus",
+                   "prometheus": "kube-prometheus-stack-prometheus"}
+_RAW_PROMETHEUS = {"app": "prometheus"}
+
+
+def _match(selector: dict, labels: dict) -> bool:
+    assert not selector.get("matchExpressions"), "matchExpressions not modelled"
+    return all(labels.get(k) == v for k, v in (selector.get("matchLabels") or {}).items())
+
+
+def _admitted(docs, policy_ns, pod_labels, named_ports, port, peer_ns, peer_labels) -> bool:
+    """Would a pod (*peer_labels*) in namespace *peer_ns* reach *port* on a pod
+    labelled *pod_labels* in *policy_ns*, under the rendered NetworkPolicies?"""
+    peer_ns_labels = {"kubernetes.io/metadata.name": peer_ns}
+    policies = [d for d in docs if d.get("kind") == "NetworkPolicy"
+                and "Ingress" in (d["spec"].get("policyTypes") or ["Ingress"])
+                and _match(d["spec"].get("podSelector") or {}, pod_labels)]
+    if not policies:
+        return True
+    for pol in policies:
+        for rule in pol["spec"].get("ingress") or []:
+            ports = rule.get("ports")
+            if ports and not any(
+                    (named_ports.get(p["port"]) if isinstance(p.get("port"), str) else p.get("port"))
+                    == port for p in ports):
+                continue
+            peers = rule.get("from")
+            if peers is None:
+                return True
+            for peer in peers:
+                assert "ipBlock" not in peer, "ipBlock not modelled"
+                ns_sel, pod_sel = peer.get("namespaceSelector"), peer.get("podSelector")
+                ns_ok = _match(ns_sel, peer_ns_labels) if ns_sel is not None else peer_ns == policy_ns
+                pod_ok = _match(pod_sel, peer_labels) if pod_sel is not None else True
+                if ns_ok and pod_ok:
+                    return True
+    return False
+
+
+def _scrape_targets(docs):
+    """(Service name, pod labels, named container ports, pod port) per platform Service."""
+    out = []
+    for svc in _platform_services(docs):
+        sel = svc["spec"]["selector"]
+        for d in docs:
+            if d.get("kind") not in {"Deployment", "DaemonSet", "StatefulSet"}:
+                continue
+            tpl = d["spec"]["template"]
+            labels = (tpl.get("metadata") or {}).get("labels") or {}
+            if all(labels.get(k) == v for k, v in sel.items()):
+                named = {p["name"]: int(p["containerPort"])
+                         for c in tpl["spec"].get("containers", []) for p in c.get("ports") or []
+                         if p.get("name")}
+                out.append((svc["metadata"]["name"], labels, named,
+                            int(svc["metadata"]["annotations"]["prometheus.io/port"])))
+    assert out, "no platform Service resolved to a workload"
+    return out
+
+
+@_needs_helm
+@pytest.mark.parametrize("chart", sorted(_EXPECTED_CHARTS))
+@pytest.mark.parametrize("prometheus", [_KPS_PROMETHEUS, _RAW_PROMETHEUS], ids=["kps", "raw"])
+def test_the_scraping_prometheus_is_admitted_by_the_charts_networkpolicy(chart, prometheus):
+    """A Prometheus in `monitoring` (every chart's default scraper namespace),
+    labelled the kube-prometheus-stack way or this repo's raw way, reaches the
+    pod port the ServiceMonitor scrapes."""
+    docs = _render(chart, _ENABLE[chart])
+    for name, labels, named, port in _scrape_targets(docs):
+        assert _admitted(docs, "some-ns", labels, named, port, "monitoring", prometheus), (
+            f"{chart}: {name}'s NetworkPolicy refuses a Prometheus {prometheus} in "
+            f"`monitoring` on port {port} — the ServiceMonitor scrape is blind there")
+
+
+@_needs_helm
+def test_tenant_api_8080_stays_pod_scoped():
+    """Admitting kube-prometheus-stack must not open the header-trusting port
+    (GHSA-3g2h-rf85-5rrv) to any other pod of the namespace, or to a Prometheus
+    in another namespace; the namespace stays configurable."""
+    docs = _render("helm/tenant-api", _ENABLE["helm/tenant-api"])
+    (_name, labels, named, port), = _scrape_targets(docs)
+    assert not _admitted(docs, "some-ns", labels, named, port, "monitoring", {"app": "grafana"})
+    assert not _admitted(docs, "some-ns", labels, named, port, "elsewhere", _KPS_PROMETHEUS)
+    moved = _render("helm/tenant-api", _ENABLE["helm/tenant-api"]
+                    + ["--set", "networkPolicy.prometheusNamespace=observability"])
+    assert _admitted(moved, "some-ns", labels, named, port, "observability", _KPS_PROMETHEUS)
+    assert not _admitted(moved, "some-ns", labels, named, port, "monitoring", _KPS_PROMETHEUS)
+
+
+@_needs_helm
+@pytest.mark.parametrize("chart", ["helm/federation-gateway", "helm/federation-reconciler"])
+def test_federation_scrape_namespace_default_and_null(chart):
+    """Default: only `monitoring`. `scrapeNamespaceLabel: null`: any namespace,
+    rendered `namespaceSelector: {}` — never a rule without `from`."""
+    docs = _render(chart, _ENABLE[chart])
+    (_name, labels, named, port), = _scrape_targets(docs)
+    assert not _admitted(docs, "some-ns", labels, named, port, "elsewhere", _KPS_PROMETHEUS)
+    anyns = _render(chart, _ENABLE[chart] + ["--set", "networkPolicy.scrapeNamespaceLabel=null"])
+    assert _admitted(anyns, "some-ns", labels, named, port, "elsewhere", _KPS_PROMETHEUS)
+    scrape_rules = [rule for pol in anyns if pol.get("kind") == "NetworkPolicy"
+                    for rule in pol["spec"].get("ingress") or []
+                    if any(p.get("port") == port for p in rule.get("ports") or [])]
+    assert scrape_rules and all(r.get("from") == [{"namespaceSelector": {}}] for r in scrape_rules), (
+        scrape_rules)
+
+
+def _victorialogs_egress(docs) -> list:
+    return [rule for pol in docs if pol.get("kind") == "NetworkPolicy"
+            for rule in pol["spec"].get("egress") or []
+            if any(p.get("port") == 9428 for p in rule.get("ports") or [])]
+
+
+@_needs_helm
+@pytest.mark.parametrize("scrape", [[], ["--set", "networkPolicy.scrapeNamespaceLabel=null"]],
+                         ids=["default", "scrape-null"])
+def test_reconciler_victorialogs_egress_does_not_follow_the_scrape_namespace(scrape):
+    """The reconciler's VictoriaLogs egress (9428) has its own namespace selector:
+    `scrapeNamespaceLabel: null` (any SCRAPER namespace) used to render it as
+    `namespaceSelector: {matchLabels: null}` — 9428 egress to every namespace."""
+    rules = _victorialogs_egress(_render("helm/federation-reconciler", scrape))
+    assert rules == [{
+        "to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}}}],
+        "ports": [{"protocol": "TCP", "port": 9428}]}], rules
+
+
+@_needs_helm
+def test_reconciler_victorialogs_namespace_must_not_be_empty():
+    res = subprocess.run(
+        ["helm", "template", "t", str(_REPO / "helm/federation-reconciler"),
+         "--set", "networkPolicy.victorialogsNamespaceLabel=null"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    assert res.returncode != 0 and "victorialogsNamespaceLabel" in res.stderr, res.stderr[-400:]
+
+
+# ── presence declarations match the charts ──────────────────────────────────
+_PRESENCE_KIND = {"deployment": "Deployment", "daemonset": "DaemonSet"}
+
+
+@_needs_helm
+@pytest.mark.parametrize("chart", sorted(ms.CHART_PRESENCE))
+def test_presence_declaration_names_what_the_chart_renders(chart):
+    """`_lib_metric_sources.CHART_PRESENCE` — the kube-state-metrics series that
+    says an optional chart is deployed, which the absence guards read — names
+    the chart's real workload (Deployment / DaemonSet name) or container. A
+    renamed workload would leave the guard matching nothing: the absence alert
+    silently never fires."""
+    metric, label, value = ms.CHART_PRESENCE[chart]
+    docs = _render(chart, _ENABLE[chart])
+    if label == "container":
+        names = {c["name"] for d in docs if d.get("kind") in {"Deployment", "DaemonSet", "StatefulSet"}
+                 for c in d["spec"]["template"]["spec"].get("containers", [])}
+    else:
+        names = {d["metadata"]["name"] for d in docs if d.get("kind") == _PRESENCE_KIND[label]}
+    assert value in names, (f"{chart}: CHART_PRESENCE says {metric}{{{label}={value!r}}} but the "
+                            f"chart renders {label} names {sorted(names)}")

@@ -161,11 +161,11 @@ class OperatorChecker:
             return self._unanswered("check_rules", exc)
 
         # #3426: the one declaration of which files are rule packs; one that
-        # does not cover the directory is no expected count. #1595 D1a: the
-        # packs operator-generate emits — the declared platform packs are not
-        # operator-portable, so they are not expected in the cluster either.
+        # does not cover the directory is no expected count. The packs
+        # operator-generate emits: every declared pack, the platform pack
+        # included since #1595 D1b (as the rules operator mode can run).
         try:
-            expected = len(_lib_consumer_read.tenant_rule_pack_files(self.args.rule_packs_dir)) \
+            expected = len(_lib_consumer_read.rule_pack_files(self.args.rule_packs_dir)) \
                 if Path(self.args.rule_packs_dir).is_dir() else 0
         except _lib_consumer_read.ConsumerReadError as exc:
             return CheckResult(i18n("check_rules", self.lang), "fail",

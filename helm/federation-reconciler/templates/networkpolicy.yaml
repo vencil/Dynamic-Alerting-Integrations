@@ -14,10 +14,15 @@ spec:
     - Egress
   ingress:
     # Prometheus scrape of /metrics from the monitoring namespace.
+    # scrapeNamespaceLabel null = any namespace (`namespaceSelector: {}`).
     - from:
+        {{- with .Values.networkPolicy.scrapeNamespaceLabel }}
         - namespaceSelector:
             matchLabels:
-              {{- toYaml .Values.networkPolicy.scrapeNamespaceLabel | nindent 14 }}
+              {{- toYaml . | nindent 14 }}
+        {{- else }}
+        - namespaceSelector: {}
+        {{- end }}
       ports:
         - protocol: TCP
           port: {{ .Values.metricsPort }}
@@ -31,11 +36,13 @@ spec:
         - protocol: TCP
           port: 53
     # VictoriaLogs query API (:9428) in the monitoring namespace — the only
-    # off-pod dependency. Read-only queries; no other egress is granted.
+    # off-pod dependency. Read-only queries; no other egress is granted. Its
+    # own namespace selector (#1595 D1b): it used to reuse scrapeNamespaceLabel,
+    # so `scrapeNamespaceLabel: null` opened 9428 egress to every namespace.
     - to:
         - namespaceSelector:
             matchLabels:
-              {{- toYaml .Values.networkPolicy.scrapeNamespaceLabel | nindent 14 }}
+              {{- toYaml (required "networkPolicy.victorialogsNamespaceLabel must be a non-empty namespace label selector: an empty one opens VictoriaLogs egress (9428) to every namespace" .Values.networkPolicy.victorialogsNamespaceLabel) | nindent 14 }}
       ports:
         - protocol: TCP
           port: 9428

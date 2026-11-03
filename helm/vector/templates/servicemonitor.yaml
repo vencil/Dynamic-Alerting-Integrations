@@ -1,0 +1,48 @@
+{{- /*
+ServiceMonitor for Prometheus Operator installs (kube-prometheus-stack), #1595 D1b.
+In operator mode Prometheus scrapes only what a ServiceMonitor selects. This one
+selects both Vector metrics Services (each carries
+`dynamic-alerting.io/scrape: platform`) and has one endpoint per Service, by the
+port name only that Service has — so each Service yields exactly one target per
+pod, on the pod port its `prometheus.io/port` annotation names (the port the
+raw `platform-components` job keeps). An endpoint is rendered only when its
+Service is: `metrics` with metrics.enabled, `gate-metrics` with
+tenantProjections. No `jobLabel`: the job is the Service name, as in raw mode.
+Pinned by tests/helm/test_platform_servicemonitors.py.
+*/ -}}
+{{- if and .Values.serviceMonitor.enabled (or .Values.metrics.enabled .Values.tenantProjections) }}
+{{- $own := include "vector.labels" . | fromYaml }}
+{{- range $k, $_ := .Values.serviceMonitor.labels }}
+{{- if hasKey $own $k }}
+{{- fail (printf "serviceMonitor.labels must not set %q — the chart sets it" $k) }}
+{{- end }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "vector.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "vector.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "vector.selectorLabels" . | nindent 6 }}
+      dynamic-alerting.io/scrape: platform
+  endpoints:
+    {{- if .Values.metrics.enabled }}
+    # <vector>-metrics: Vector self-telemetry.
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval | default "15s" }}
+    {{- end }}
+    {{- if .Values.tenantProjections }}
+    # <vector>-projection-gate-metrics: the projection-gate verdict exposer.
+    - port: gate-metrics
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval | default "15s" }}
+    {{- end }}
+{{- end }}

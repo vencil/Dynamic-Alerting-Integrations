@@ -250,10 +250,18 @@ rotations (≈ `sizeMB × (keep + 1)` ceiling), and triggers Envoy's admin
 > job, which runs the same Vector image and program and scrapes the metrics.
 
 The metric is scraped via the `prometheus.io/scrape` annotations on the
-Service — **install the chart in the `monitoring` namespace** so the
-`monitoring-components` Prometheus job discovers it. The
-`FederationRejectionRateAnomaly` alert and the `federation-audit` Grafana
-dashboard live under `k8s/03-monitoring/`.
+Service, which also carries `dynamic-alerting.io/scrape: platform`: the
+platform Prometheus's `platform-components` job keeps it in **any** namespace,
+so the chart no longer has to be installed into `monitoring` (#1595; before
+that only the namespace-bound `monitoring-components` job could find it). The
+chart's NetworkPolicy admits the metrics port from the namespace
+`networkPolicy.scrapeNamespaceLabel` selects — where Prometheus runs, default
+`monitoring`; it used to admit only the listen port, so the scrape was refused
+wherever the policy was enforced. Under the Prometheus Operator set
+`serviceMonitor.enabled: true` instead (no `jobLabel`, so `job` is the Service
+name in both modes). The `FederationRejectionRateAnomaly` alert lives in
+`rule-packs/rule-pack-platform.yaml`, the `federation-audit` Grafana dashboard
+under `k8s/03-monitoring/`.
 
 `auditLog.enabled: false` drops the whole metrics pipeline — both
 sidecars, the `emptyDir` mirror and the scrape — leaving only the stdout
@@ -291,6 +299,8 @@ exposed, 1 = one ingress, …).
 | `network.xffTrustedHops` | `0` | Trusted L7 proxy hops — see "Client IP behind a load balancer". No safe universal default |
 | `rateLimit.perToken.*` / `perTenant.*` / `perIp.*` | see values.yaml | Token-bucket params; tuning corridors in comments |
 | `networkPolicy.allowedNamespaces` | `[]` | Restrict ingress; empty = cluster-wide on the listen port |
+| `networkPolicy.scrapeNamespaceLabel` | `kubernetes.io/metadata.name: monitoring` | Namespace label selector for the Prometheus that scrapes `auditLog.metrics.port` (where Prometheus runs, not this chart; any pod there, so a kube-prometheus-stack Prometheus in that namespace is admitted). `null` = any namespace (`namespaceSelector: {}`); `{}` does not clear it — Helm merges maps |
+| `serviceMonitor.enabled` | `false` | Prometheus Operator only: a ServiceMonitor for the metrics port (needs `auditLog.enabled`), no `jobLabel`; `serviceMonitor.labels` defaults to `release: kube-prometheus-stack` |
 | `auditLog.enabled` | `true` | Master switch for the metrics pipeline (audit-metrics + logrotate sidecars, `emptyDir` mirror, scrape). `false` keeps only the stdout audit log |
 | `auditLog.maxRequestBytes` | `1048576` | Request-body buffer cap (1 MiB) — bounds the POST body the Lua audit filter reads |
 | `auditLog.volumeSizeLimit` | `1Gi` | `emptyDir` cap for the audit-log mirror. Disk-backed (node ephemeral storage, not RAM). The headroom is deliberate: under a flood of rejected requests, logrotate has to rotate the file before the `emptyDir` fills and the kubelet evicts the pod |

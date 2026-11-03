@@ -3028,8 +3028,12 @@ class TestPlatformRunbookCoverageContract:
 # above — a second copy of the family table would drift and silently narrow
 # whichever gate lost the race.
 from check_scrape_reachability import (  # noqa: E402
+    FEDERATION_GATEWAY_CHART,
+    FEDERATION_RECONCILER_CHART,
     KNOWN_UNKNOWN_SOURCE,
     PLANE_OF_UNPINNED_SOURCE,
+    TENANT_API_CHART,
+    THRESHOLD_EXPORTER_CHART,
     VECTOR_CHART,
     extract_metrics,
 )
@@ -3066,6 +3070,37 @@ _EDGE_LOCAL_BY_SELECTOR: dict[str, str] = {
         'selector; container="projection-gate" exists only in the Vector '
         f'DaemonSet ({VECTOR_CHART}), so the KSM that sees it is the '
         "EDGE cluster's, not central's (helm/vector/templates/daemonset.yaml)",
+}
+
+# The central-cluster counterpart (#1595 D1b). These two read a cluster-local
+# family and USED to pin a central namespace — namespace="tenant-api" /
+# "monitoring" — which is what made their plane derivable. The pins were dropped
+# because the charts render into Release.Namespace (an install into any other
+# namespace was never watched), so the selector now names the WORKLOAD
+# instead, and a human says where that workload runs. Same discipline as the
+# edge table: explicit, exit-locked below, never a fallback.
+_PLATFORM_LOCAL_BY_SELECTOR: dict[str, str] = {
+    "TenantApiSingleWriterBreach":
+        'reads kube_deployment_{spec,status}_replicas{deployment="tenant-api"} '
+        f'with no namespace selector; the tenant-api Deployment ({TENANT_API_CHART}) '
+        "runs on CENTRAL under the federation topology (the write plane)",
+    "ThresholdExporterHighRestarts":
+        'reads kube_pod_container_status_restarts_total{container='
+        '"threshold-exporter"} with no namespace selector; the exporter '
+        f'({THRESHOLD_EXPORTER_CHART}) runs beside the platform rules on CENTRAL',
+    # The two presence guards (#1595 D1b review): the federation components'
+    # absence arms are AND-ed with a kube-state-metrics check that the
+    # component is deployed, with no namespace selector (charts render into
+    # Release.Namespace). Both components run on CENTRAL (PLANE note in
+    # check_scrape_reachability: every chart defaults its upstreams to
+    # *.monitoring.svc), as the alerts' own federation metrics do.
+    "FederationRevocationReconcileStale":
+        'guards its absent() arm with kube_deployment_spec_replicas{deployment='
+        f'"federation-reconciler"}}; the reconciler ({FEDERATION_RECONCILER_CHART}) '
+        "runs on CENTRAL",
+    "FederationAuditPipelineSilent":
+        'guards with kube_pod_container_info{container="audit-metrics"}, the '
+        f'gateway\'s audit sidecar ({FEDERATION_GATEWAY_CHART}), which runs on CENTRAL',
 }
 
 # Non-vacuity anchor. LITERAL on purpose: deriving the expectation from the
@@ -3110,6 +3145,10 @@ def _alert_plane(alert: str, expr: str) -> tuple[str, list[str]]:
                 verdicts.add(EDGE_LOCAL)
                 why.append(f"{metric}: declared edge-local — "
                            f"{_EDGE_LOCAL_BY_SELECTOR[alert]}")
+            elif alert in _PLATFORM_LOCAL_BY_SELECTOR:
+                verdicts.add(PLATFORM_LOCAL)
+                why.append(f"{metric}: declared central — "
+                           f"{_PLATFORM_LOCAL_BY_SELECTOR[alert]}")
             else:
                 verdicts.add(UNRESOLVED)
                 why.append(f"{metric}: cluster-local family, selector pins no "
@@ -3205,15 +3244,21 @@ class TestPlatformAlertPlaneContract:
         # gate's KNOWN_UNKNOWN_SOURCE.
         by_name = {rule["alert"]: str(rule.get("expr", ""))
                    for _, rule in self._platform_alerts()}
-        for alert in _EDGE_LOCAL_BY_SELECTOR:
-            assert alert in by_name, (
-                f"{alert} is declared edge-local but no longer exists in the "
-                "platform tree — drop the entry")
-            metrics = extract_metrics(by_name[alert])
-            assert any(m.startswith(_CLUSTER_LOCAL_PREFIXES) for m in metrics), (
-                f"{alert} no longer reads a cluster-local metric family, so its "
-                "plane is derivable now — remove it from _EDGE_LOCAL_BY_SELECTOR "
-                "instead of pinning a verdict by hand")
+        for table_name, table in (("_EDGE_LOCAL_BY_SELECTOR", _EDGE_LOCAL_BY_SELECTOR),
+                                  ("_PLATFORM_LOCAL_BY_SELECTOR", _PLATFORM_LOCAL_BY_SELECTOR)):
+            for alert in table:
+                assert alert in by_name, (
+                    f"{alert} is declared in {table_name} but no longer exists in "
+                    "the platform tree — drop the entry")
+                metrics = extract_metrics(by_name[alert])
+                assert any(m.startswith(_CLUSTER_LOCAL_PREFIXES) for m in metrics), (
+                    f"{alert} no longer reads a cluster-local metric family, so its "
+                    f"plane is derivable now — remove it from {table_name} "
+                    "instead of pinning a verdict by hand")
+                assert not _NAMESPACE_MATCHER_RE.search(by_name[alert]), (
+                    f"{alert} pins a namespace again, so its plane derives from "
+                    f"the selector — remove it from {table_name}")
+        assert not set(_EDGE_LOCAL_BY_SELECTOR) & set(_PLATFORM_LOCAL_BY_SELECTOR)
 
     @pytest.mark.parametrize("expr,expected", [
         # cluster-local family pinned to a central namespace -> central
@@ -3231,7 +3276,8 @@ class TestPlatformAlertPlaneContract:
         ('sum(vector_buffer_discarded_events_total) and up{job="x"}', EDGE_LOCAL),
         ('up{job="x"} and vector_sink_errors_total', EDGE_LOCAL),
         ('absent(vector_tenant_projection_gate_info)', EDGE_LOCAL),
-        # ledger row resolves through PLANE_OF_UNPINNED_SOURCE
+        # a helm-service family that is not vector_ (since #1595 D1b the
+        # federation gateway's, ledgered before) -> central
         ('absent_over_time(tenant_log_query_requests_total[10m])', PLATFORM_LOCAL),
         ('increase(alertmanager_notifications_failed_total[15m]) > 0',
          PLATFORM_LOCAL),

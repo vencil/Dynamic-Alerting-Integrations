@@ -199,6 +199,54 @@ curl -s 'http://localhost:9090/api/v1/rules' | \
 
 ---
 
+## 平台自監控告警（platform pack）
+
+平台自監控告警（`rule-packs/rule-pack-platform.yaml`，含 `Watchdog`）讀的是平台元件自己的 metrics。Operator 模式下 Prometheus 只 scrape ServiceMonitor 選到的東西，所以要兩件事都做（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)）：
+
+**1. 打開平台 chart 的 ServiceMonitor**（預設關閉：沒有 `monitoring.coreos.com` CRD 的叢集套不上）：
+
+| Chart | 打開的 values | 抓的 Service（= `job`） |
+|---|---|---|
+| `threshold-exporter` | `rules.mode: operator`（`rules.operator.serviceMonitor.enabled` 預設 `true`） | `threshold-exporter` |
+| `tenant-api` | `serviceMonitor.enabled: true` | `tenant-api` |
+| `vector` | `serviceMonitor.enabled: true`（端點跟著 `metrics.enabled`／`tenantProjections` 各自的 Service 走） | `vector-metrics`、`vector-projection-gate-metrics` |
+| `federation-gateway` | `serviceMonitor.enabled: true`（需 `auditLog.enabled`，預設開） | `federation-gateway` |
+| `federation-reconciler` | `serviceMonitor.enabled: true` | `federation-reconciler` |
+
+每個 ServiceMonitor 選的是帶 `dynamic-alerting.io/scrape: platform` 的那個 Service、抓的是 raw 設定 `platform-components` job 抓的同一個 pod port，且**不設 `jobLabel`**——`job` 就是 Service 名稱，與 raw 模式相同，所以告警裡 `job="tenant-api"` 這類 selector 兩邊都成立。預設帶 `release: kube-prometheus-stack`，其他 release 名稱用 `serviceMonitor.labels` 改（`release: null` 可拿掉）。
+
+**NetworkPolicy**：ServiceMonitor 選對了 port，若 chart 自己的 NetworkPolicy 擋下 Prometheus，scrape 仍然是空的。各 chart 預設都假設 Prometheus 在 `monitoring` namespace；kube-prometheus-stack 裝在別處就要改：
+
+| Chart | 放行 scrape 的設定 | 預設 |
+|---|---|---|
+| `threshold-exporter` | `networkPolicy.allowExternal`／`prometheusNamespace`／`prometheusPodLabels`（見 1b） | metrics port 不限來源 |
+| `tenant-api` | `networkPolicy.prometheusNamespace` ＋ pod 級白名單 `networkPolicy.internalPortAllow.prometheus`（raw 的 `app=prometheus`）與 `.prometheusOperator`（kube-prometheus-stack 的 `app.kubernetes.io/name=prometheus`） | `monitoring` 裡帶這兩組 label 之一的 pod；8080 信任 identity header，所以只放 pod 級白名單 |
+| `vector` | chart 不帶 NetworkPolicy | — |
+| `federation-gateway` | `networkPolicy.scrapeNamespaceLabel`（Prometheus 所在 namespace 的 label） | `monitoring` 裡任何 pod；設 `null` 表示任何 namespace（`{}` 不會清掉預設值，Helm 會合併 map） |
+| `federation-reconciler` | `networkPolicy.scrapeNamespaceLabel`（scrape 入站）；它查 VictoriaLogs 的出站另由 `networkPolicy.victorialogsNamespaceLabel` 決定，不跟著 `null` 放寬 | 同上 |
+
+⚠️ 改了 federation-gateway 的 `auditLog.metrics.port` 或 federation-reconciler 的 `metricsPort`，Prometheus 那一側也要放行新 port：本 repo 的 raw stack 是 `k8s/03-monitoring/network-policies.yaml` 的 `allow-prometheus-egress`（只列 chart 預設的 3903／9099）；你的 kube-prometheus-stack 若有 egress NetworkPolicy，同理。
+
+**2. 套用 `operator-generate` 產出的 `da-rule-pack-platform`。** 它是平台 pack 去掉 kube-prometheus-stack 沒有指標來源的那幾條：哪幾條由 `_lib_metric_sources.operator_split` 依 scrape 閘門的 metric family 表推導（不是手列），產出時每條在 stderr 印一行 `NOTE:`，也列在該 PrometheusRule 的 `dynamic-alerting.io/operator-excluded-rules` annotation。目前是：
+
+<!-- operator-excluded-rules:begin -->
+| 告警 | 為什麼 Operator 模式沒有它的來源 |
+|---|---|
+| `PrometheusConfigReloadFailed` | 選 `job="prometheus"`：那是本 repo raw 設定的 Prometheus 自 scrape job，kube-prometheus-stack 以自己的 Service 名稱命名該 job（它自帶的 `PrometheusBadConfig` 涵蓋同一件事） |
+| `TenantExporterJobAbsent` | 讀 `up{job="tenant-exporters"}`：那個 job 只存在於 raw 設定；Operator 模式下租戶 exporter 由你自己的 ServiceMonitor 抓，job 名稱由它決定。照樣輸出會永遠 firing |
+| `MassExporterOutage` | 同上（`up{job="tenant-exporters"}`） |
+<!-- operator-excluded-rules:end -->
+
+`tests/ops/test_operator_generate_rule_copies.py` 比對上表與推導結果，兩邊不一致就紅。
+
+⚠️ **`Watchdog` 與 kube-prometheus-stack 自帶的同名告警。** 兩者的 label 都只有 `alertname="Watchdog"`、`severity="none"`（同一個 Prometheus 評估，external labels 也相同），Alertmanager 依 label 集合去重，收到的是**一條** Watchdog；不會多出第二條、也不受 `severity` 型 inhibit 影響。你在 kube-prometheus-stack 上替 Watchdog 設的 route（例如 dead-man's-switch）照常適用；它的 annotations 可能是兩份中任一份的。例外：Prometheus 設了 `enforcedNamespaceLabel` 且兩份 PrometheusRule 在不同 namespace 時，兩條帶不同 `namespace` label，不會去重。
+
+⚠️ **部署了 federation 卻沒開 ServiceMonitor，會收到兩條 critical。** `FederationRevocationReconcileStale`（指標不存在的那一半）與 `FederationAuditPipelineSilent` 以 kube-state-metrics 判斷元件是否部署（reconciler 的 Deployment、gateway 帶 `audit-metrics` 容器的 pod），不看 `up`——scrape 目標遺失正是它們要抓的狀況。所以 federation 有部署、但 `serviceMonitor.enabled` 還是預設的 `false` 時，這兩條會響：撤銷竄改偵測與稽核管線確實沒人在看。這是正確的訊號；把那兩個 chart 的 `serviceMonitor.enabled` 打開即可。沒部署 federation 的叢集不會收到。
+
+⚠️ **仍然選 `namespace="monitoring"` 的幾條**（`ThresholdGovernanceStale`、`CronJobLastRunFailed`、`ConfigReloaderHighRestarts`、`ConfigReloaderNotStarting`）看的是本 repo `k8s/03-monitoring/` 的 raw manifest（`threshold-govern` CronJob、Prometheus／Alertmanager 的 `config-reloader` sidecar），那些 manifest 寫死在 `monitoring`。Operator 模式下它們照樣輸出（kube-state-metrics 有這些 series），但只看名為 `monitoring` 的 namespace：kube-prometheus-stack 裝在那裡時，它自己 Prometheus 的 `config-reloader` sidecar 也會被看到。平台 chart 的工作負載（`TenantApiSingleWriterBreach`、`ThresholdExporterHighRestarts`）不再釘 namespace，裝在哪都看得到。
+
+---
+
 ## Helm Chart: rules.mode 切換
 
 threshold-exporter Helm chart 在 v2.6.0 新增 `rules.mode` toggle：

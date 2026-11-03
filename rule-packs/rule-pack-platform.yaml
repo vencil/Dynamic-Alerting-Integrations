@@ -342,12 +342,16 @@ groups:
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md"
 
       # --- Pod Restart Storm ---
+      # The exporter's container in whatever namespace the chart is installed
+      # into (#1595 D1b: it used to pin namespace="monitoring", so a release in
+      # any other namespace — `da-tools init --namespace`, #1425 — was never
+      # watched). Per pod on purpose: each pod's restarts are its own fact, not a
+      # replica duplicate of one shared state.
       - alert: ThresholdExporterHighRestarts
         expr: |
           increase(
             kube_pod_container_status_restarts_total{
-              container="threshold-exporter",
-              namespace="monitoring"
+              container="threshold-exporter"
             }[1h]
           ) > 3
         for: 0s
@@ -410,6 +414,20 @@ groups:
             and restart the stale replica.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md"
 
+      # ── Replica collapse (#1595 D1b) ─────────────────────────────────────
+      # Since #3483 every exporter POD is a scrape target, so each da_* /
+      # tenant_* series below arrives once per replica (helm replicaCount
+      # defaults to 2), identical but for `instance` / `pod`. Both replicas read
+      # the SAME conf.d tree, so those copies are one fact; alerts on them fire
+      # ONCE via `max without (instance, pod)` (Prometheus Operator mode adds
+      # `namespace` / `service` / `endpoint` / `container`, equal across the
+      # replicas, so the collapse holds there too). Every other label —
+      # reason, file_basename, tenant — is kept for the annotations. NOT
+      # collapsed, on purpose: process health that is per replica by nature
+      # (ThresholdExporterDown / HighRestarts, ConfigReloadStuck — one pod can
+      # be wedged while the other reloads). Pinned by
+      # tests/rulepacks/platform-exporter-replica-collapse_test.yaml.
+
       # --- Config Blast Radius (v2.8.0, Issue #61) ---
       # Fires when a defaults change ripples to >500 tenants in p99
       # over a 5-minute window. effect="applied" filter excludes
@@ -444,7 +462,7 @@ groups:
       # tenant overrides. Often indicates ops drift (operator keeps
       # tweaking a global default that nobody actually consumes).
       - alert: ConfigDefaultsShadowedSurge
-        expr: rate(da_config_defaults_shadowed_total[1h]) > (10 / 3600)
+        expr: max without (instance, pod) (rate(da_config_defaults_shadowed_total[1h])) > (10 / 3600)
         for: 30m
         labels:
           severity: info
@@ -477,7 +495,7 @@ groups:
       #     failure silently DROPS THE ENTIRE DEFAULTS CHAIN for
       #     every dependent tenant; much wider blast radius).
       - alert: ConfigParseFailure
-        expr: increase(da_config_parse_failure_total{file_basename!="_defaults.yaml"}[1h]) > 5
+        expr: max without (instance, pod) (increase(da_config_parse_failure_total{file_basename!="_defaults.yaml"}[1h])) > 5
         for: 5m
         labels:
           severity: warning
@@ -516,7 +534,7 @@ groups:
       # and false-page this critical sentinel. 0.5 immunises the noise
       # while still firing on any real ≥1 increment.
       - alert: ConfigDefaultsParseFailure
-        expr: increase(da_config_parse_failure_total{file_basename="_defaults.yaml"}[5m]) > 0.5
+        expr: max without (instance, pod) (increase(da_config_parse_failure_total{file_basename="_defaults.yaml"}[5m])) > 0.5
         labels:
           severity: critical
           alert_source: platform
@@ -653,9 +671,11 @@ groups:
       # single-failed-tick-at-240s-interval-fires case.
       - alert: ConfigScanFailing
         expr: |
-          (increase(da_config_scan_failures_total[10m]) > 0)
-          and ignoring (reason)
-          ((time() - da_config_last_scan_complete_unixtime_seconds) > 300)
+          max without (instance, pod) (
+            (increase(da_config_scan_failures_total[10m]) > 0)
+            and ignoring (reason)
+            ((time() - da_config_last_scan_complete_unixtime_seconds) > 300)
+          )
         for: 1m
         labels:
           severity: critical
@@ -663,9 +683,11 @@ groups:
         annotations:
           summary: "Threshold-exporter conf.d unscannable for >5m ({{ $labels.reason }}) — config frozen at last good state"
           description: |
-            No conf.d scan on {{ $labels.instance }} has succeeded for
-            more than 5 minutes, and scans are failing with reason
-            `{{ $labels.reason }}`. Nothing is reloaded while it lasts:
+            At least one threshold-exporter replica has not completed a
+            conf.d scan for more than 5 minutes, and its scans are failing
+            with reason `{{ $labels.reason }}` (which replicas:
+            `increase(da_config_scan_failures_total[10m]) > 0` per pod).
+            Nothing is reloaded on it while it lasts:
             the exporter keeps serving the last good config and /ready
             stays 200, so edits to ANY tenant (git-sync, kubectl apply,
             Tenant API) are NOT applied. duplicate_tenant = one tenant id
@@ -704,7 +726,7 @@ groups:
       # listed (walk_error) drops every tenant under it at once. promtool:
       # tests/rulepacks/platform-config-unusable-files_test.yaml.
       - alert: ConfigFilesUnreadable
-        expr: da_config_unreadable_files > 0
+        expr: max without (instance, pod) (da_config_unreadable_files) > 0
         for: 10m
         labels:
           severity: critical
@@ -712,8 +734,8 @@ groups:
         annotations:
           summary: "Threshold-exporter cannot read conf.d entries ({{ $labels.reason }}) — tenants in them are not served"
           description: |
-            {{ $value }} config-named entr(ies) under the conf.d tree of
-            {{ $labels.instance }} could not be used for more than 10
+            {{ $value }} config-named entr(ies) under the threshold-exporter's
+            conf.d tree could not be used for more than 10
             minutes ({{ $labels.reason }}): stat_error = the file (or a
             symlink's target) cannot be statted, e.g. a dangling link;
             read_error = it cannot be read, e.g. permission denied;
@@ -748,7 +770,7 @@ groups:
       # tests/rulepacks/platform-config-unusable-files_test.yaml (fires
       # within 10m and keeps firing while the file stays broken).
       - alert: ConfigDefaultsUnusable
-        expr: da_config_defaults_unusable > 0
+        expr: max without (instance, pod) (da_config_defaults_unusable) > 0
         for: 10m
         labels:
           severity: critical
@@ -756,8 +778,8 @@ groups:
         annotations:
           summary: "Threshold-exporter cannot use a _defaults.yaml ({{ $labels.reason }}) — inherited thresholds dropped"
           description: |
-            {{ $value }} `_defaults.yaml` file(s) under the conf.d tree
-            of {{ $labels.instance }} have been unusable for more than
+            {{ $value }} `_defaults.yaml` file(s) under the threshold-exporter's
+            conf.d tree have been unusable for more than
             10 minutes ({{ $labels.reason }}). Per ADR-017 the whole
             defaults block of such a file is dropped: every tenant below
             it loses the thresholds it inherits from it (for the ROOT
@@ -798,7 +820,7 @@ groups:
       #     instead of relying on on-call to correlate 50+ warning
       #     pages.
       - alert: TenantMetricsOverLimit
-        expr: da_tenant_metrics_over_limit > 0
+        expr: max without (instance, pod) (da_tenant_metrics_over_limit) > 0
         for: 5m
         labels:
           severity: warning
@@ -834,17 +856,15 @@ groups:
       # the tenant fan-out and preserves topology labels.
       # Under the HA default (helm replicaCount=2, no leader-election;
       # only environments/local + environments/ci override to 1) BOTH
-      # threshold-exporter pods emit da_tenant_metrics_over_limit, so
-      # `count without (tenant)` yields ONE count series PER pod (instance /
-      # pod retained) and `> 50` is evaluated per-pod. Both pods load the same
-      # conf.d, so each independently sees the same >50-tenant storm and fires —
-      # i.e. this pages once per replica (the same HA per-pod-duplicate-series
-      # nuance as MassExporterOutage, #882). Acceptable for a critical
-      # defaults-chain sentinel: > 50 means a pod is seeing >50 tenants over the
-      # cap at once, and the per-pod payload keeps the exporter-pod attribution
-      # on-call needs.
+      # threshold-exporter pods emit da_tenant_metrics_over_limit. The tenants
+      # are counted PER replica first, then the largest count is taken across
+      # replicas (`max without (instance, pod)`, see the replica-collapse note
+      # above), so this pages once, not once per replica (#1595 D1b; it used to
+      # page per pod, #882). Not the other way round: collapsing before the
+      # count would add up different replicas' tenant sets — during a stuck
+      # rollout two replicas with 30 over-limit tenants each would read 60.
       - alert: DefaultsTruncationStorm
-        expr: count without (tenant) (da_tenant_metrics_over_limit > 0) > 50
+        expr: max without (instance, pod) (count without (tenant) (da_tenant_metrics_over_limit > 0)) > 50
         for: 2m
         labels:
           severity: critical
@@ -1550,9 +1570,15 @@ groups:
       # Deployment declares > 1 replica, and doubles as the codified re-eval trigger
       # for #787 (mirrors how the sibling TenantApiReadHANeeded codifies A4's).
       #
-      # Signal: TWO KSM gauges OR'd, for the tenant-api/tenant-api Deployment (KSM
-      # job="kube-state-metrics", NO --namespaces / metric-denylist filter so both
-      # are emitted for the tenant-api namespace). `max by (namespace, deployment)`
+      # Signal: TWO KSM gauges OR'd, for the `tenant-api` Deployment in WHATEVER
+      # namespace the chart is installed into (#1595 D1b: the selector used to pin
+      # namespace="tenant-api" — the getting-started path's namespace, but the
+      # chart renders into whatever `helm -n` names, so an install anywhere else,
+      # `monitoring` included, was never watched; the Deployment name is the
+      # chart's own, the namespace is the operator's choice). KSM must emit both gauges for
+      # that namespace (no --namespaces / metric-denylist filter excluding it).
+      # `max by (namespace, deployment)` keeps the namespace in the alert, so
+      # on-call sees where it runs. `max by (namespace, deployment)`
       # collapses the scrape-added job/instance labels to ONE logical series (and
       # survives a KSM rescrape under a new instance), so a stray label can't make
       # the `> 1` comparison silently never match — the same anti-silent-fire
@@ -1585,11 +1611,11 @@ groups:
       - alert: TenantApiSingleWriterBreach
         expr: |
           max by (namespace, deployment) (
-            kube_deployment_spec_replicas{namespace="tenant-api", deployment="tenant-api"}
+            kube_deployment_spec_replicas{deployment="tenant-api"}
           ) > 1
           or
           max by (namespace, deployment) (
-            kube_deployment_status_replicas{namespace="tenant-api", deployment="tenant-api"}
+            kube_deployment_status_replicas{deployment="tenant-api"}
           ) > 1
         for: 2m
         labels:
@@ -1608,7 +1634,7 @@ groups:
             `kubectl scale`, an HPA, a GitOps controller reconciling a patched
             `replicas`, or a node-eviction replacement racing a stuck-Terminating
             pod. ACTION NOW: scale back to one
-            (`kubectl -n tenant-api scale deploy/tenant-api --replicas=1`) and find
+            (`kubectl -n {{ $labels.namespace }} scale deploy/tenant-api --replicas=1`) and find
             what set it — check `kubectl get events`, the GitOps app's sync history
             / an `ignoreDifferences` on replicas, and any HPA targeting tenant-api.
             This alert is ALSO the codified re-eval trigger for the deferred K8s
@@ -1689,10 +1715,22 @@ groups:
             docs/adr/028-federation-revocation-tamper-evidence.md.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
 
+      # The absent() arm is GUARDED by the reconciler being DEPLOYED (#1595 D1b):
+      # the chart is optional, so an unguarded absent() fired forever — critical —
+      # wherever federation is not deployed. Presence is read from
+      # kube-state-metrics (the Deployment exists with replicas > 0), NOT from
+      # `up`: a lost scrape target (ServiceMonitor off or removed, Service label
+      # changed) is exactly what this arm must catch, and `up` vanishes with it.
+      # Mechanical rule: _lib_metric_sources.unguarded_absences (CHART_PRESENCE),
+      # pinned by tests/lint/test_absence_guard.py.
       - alert: FederationRevocationReconcileStale
         expr: |
           (time() - federation_revocation_last_reconcile_timestamp_seconds > 1800)
-          or absent(federation_revocation_last_reconcile_timestamp_seconds)
+          or
+          (
+            absent(federation_revocation_last_reconcile_timestamp_seconds)
+            and on() count(kube_deployment_spec_replicas{deployment="federation-reconciler"} > 0) > 0
+          )
         for: 10m
         labels:
           severity: critical
@@ -1706,8 +1744,8 @@ groups:
             deliberately does NOT refresh the last-reconcile timestamp, so a
             stuck reconciler surfaces here rather than as a false all-clear — but
             while it is stale the un-revoke tamper-evidence is BLIND. ACTION:
-            check the reconciler Deployment (`kubectl -n monitoring get deploy
-            federation-reconciler`), its recent logs for fail-closed messages,
+            check the reconciler Deployment (`kubectl get deploy -A -l
+            app.kubernetes.io/name=federation-reconciler`), its recent logs for fail-closed messages,
             and VictoriaLogs reachability. Details:
             docs/adr/028-federation-revocation-tamper-evidence.md.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
@@ -2024,15 +2062,19 @@ groups:
       # deliberately NOT this rule's job; the job-absent / collector-down classes
       # are owned by TenantExporterJobAbsent + ThresholdExporterAbsent, so the
       # sentinel is never the sole dependency. Tune 5 / 0.1 to the deployment.
+      # REPLICA COLLAPSE (#1595 D1b): every exporter replica emits
+      # tenant_expected_exporter, so it is read as `max without (instance, pod)`
+      # — otherwise each replica yields its own count series and the sentinel
+      # pages once per replica (see the replica-collapse note above).
       - alert: MassExporterOutage
         expr: |
           (
-            count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1)) > 5
+            count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter) unless on(tenant) (up{job="tenant-exporters"} == 1)) > 5
             and
             (
-              count without (tenant, db_type) (tenant_expected_exporter unless on(tenant) (up{job="tenant-exporters"} == 1))
+              count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter) unless on(tenant) (up{job="tenant-exporters"} == 1))
               /
-              count without (tenant, db_type) (tenant_expected_exporter)
+              count without (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter))
             ) > 0.1
           )
           unless on() absent(up{job="tenant-exporters"})
@@ -2141,8 +2183,17 @@ groups:
       # in chargeback is otherwise ambiguous between "tenant didn't
       # use" / "audit pipeline broke" / "operator wiped data"; this
       # alert names the second case.
+      # GUARDED by the gateway's audit-metrics sidecar being DEPLOYED (#1595
+      # D1b): the chart is optional and auditLog can be off, so an unguarded
+      # absent_over_time() fired forever — critical — wherever no gateway audit
+      # pipeline is deployed. Presence is read from kube-state-metrics (a pod
+      # has the `audit-metrics` container, which renders only with auditLog
+      # enabled), NOT from `up`: a lost scrape target is what this alert must
+      # catch, and `up` vanishes with it.
       - alert: FederationAuditPipelineSilent
-        expr: absent_over_time(tenant_federation_requests_total[10m])
+        expr: |
+          absent_over_time(tenant_federation_requests_total[10m])
+          and on() count(kube_pod_container_info{container="audit-metrics"}) > 0
         for: 5m
         labels:
           severity: critical

@@ -314,6 +314,30 @@ network:
 networkPolicy:
   enabled: true
   allowedNamespaces: []
+  # Namespace label selector for the Prometheus that scrapes the audit-metrics
+  # port (auditLog.metrics.port, rendered only with auditLog.enabled). This is
+  # where PROMETHEUS runs, not where this chart is installed (#1595 D1b: the
+  # policy used to admit only listenPort, so the scrape was refused whenever
+  # the policy was enforced). `null` = any namespace (rendered as
+  # `namespaceSelector: {}` — never an unrestricted `from`). ⚠️ `{}` does NOT
+  # clear it: Helm merges a map into the default, so the default stays.
+  scrapeNamespaceLabel:
+    kubernetes.io/metadata.name: monitoring
+
+# ServiceMonitor for a Prometheus Operator install (kube-prometheus-stack),
+# #1595 D1b. Off by default: without the monitoring.coreos.com CRDs the object
+# cannot be applied. Rendered only with auditLog.enabled (no metrics port
+# otherwise); it scrapes the same pod port as the raw `platform-components`
+# job, with no jobLabel, so `job` is the Service name in both modes.
+serviceMonitor:
+  enabled: false
+  interval: 15s
+  # Labels Prometheus's serviceMonitorSelector matches. kube-prometheus-stack's
+  # default selector matches `release: <its Helm release name>`; the default
+  # matches `da-tools operator-generate`. `release: null` drops it. A key the
+  # chart's own labels set cannot be overridden (the render fails).
+  labels:
+    release: kube-prometheus-stack
 
 # Horizontal autoscaling — JWT verify (RSA) + PromQL pass-through is
 # CPU-bound; scale on CPU.

@@ -1,0 +1,901 @@
+# promtool behavioural test: platform alerts on threshold-exporter series fire ONCE
+# with two exporter replicas (#1595 D1b).
+#
+# Since #3483 every exporter pod is a scrape target, so each da_* / tenant_* series
+# arrives once per replica (helm replicaCount defaults to 2), identical but for
+# `instance` / `pod`. Both replicas read the same conf.d tree, so the copies are one
+# fact; the rules collapse them with `max without (instance, pod)`. Every case below
+# feeds TWO replicas and expects exactly ONE alert, carrying no instance / pod.
+# Removing a collapse makes its case red (two alerts).
+# Not collapsed, on purpose (per-replica by nature): ThresholdExporterDown /
+# HighRestarts and ConfigReloadStuck — their own tests cover them.
+# Run: promtool test rules tests/rulepacks/platform-exporter-replica-collapse_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-platform.yaml
+
+evaluation_interval: 1m
+
+tests:
+
+  # ConfigDefaultsShadowedSurge: 1 shadowed edit/min on both replicas.
+  - interval: 1m
+    name: shadowed-surge-two-replicas-fires-once
+    input_series:
+    - series: da_config_defaults_shadowed_total{job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 0+1x120
+    - series: da_config_defaults_shadowed_total{job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 0+1x120
+    alert_rule_test:
+    - eval_time: 100m
+      alertname: ConfigDefaultsShadowedSurge
+      exp_alerts:
+      - exp_labels:
+          severity: info
+          alert_source: platform
+          job: threshold-exporter
+        exp_annotations:
+          summary: High rate of override-shadowed defaults edits
+          description: |
+            Inheritance system blocked >10 defaults changes per hour over
+            the last 30m. Not an outage, but suggests the platform's
+            global defaults are diverging from how tenants actually
+            consume them — investigate which defaults are being touched
+            without effect.
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md
+
+  # ConfigDefaultsShadowedSurge, replicas DIFFER (mid config rollout): one at 15
+  # shadowed edits/h, the other at 0. The threshold is 10/h, so only `max` fires
+  # (min 0, avg 7.5). Swapping max for min/avg makes this red.
+  - interval: 1m
+    name: shadowed-surge-replicas-differ-max-fires
+    input_series:
+    - series: da_config_defaults_shadowed_total{job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 0+0.25x200
+    - series: da_config_defaults_shadowed_total{job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 0+0x200
+    alert_rule_test:
+    - eval_time: 100m
+      alertname: ConfigDefaultsShadowedSurge
+      exp_alerts:
+      - exp_labels:
+          severity: info
+          alert_source: platform
+          job: threshold-exporter
+        exp_annotations:
+          summary: High rate of override-shadowed defaults edits
+          description: |
+            Inheritance system blocked >10 defaults changes per hour over
+            the last 30m. Not an outage, but suggests the platform's
+            global defaults are diverging from how tenants actually
+            consume them — investigate which defaults are being touched
+            without effect.
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md
+
+  # ConfigDefaultsShadowedSurge, each replica at 6/h: the threshold is per replica
+  # (10/h); their SUM (12/h) would cross it. Swapping max for sum makes this red.
+  - interval: 1m
+    name: shadowed-surge-each-replica-below-no-fire
+    input_series:
+    - series: da_config_defaults_shadowed_total{job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 0+0.1x200
+    - series: da_config_defaults_shadowed_total{job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 0+0.1x200
+    alert_rule_test:
+    - eval_time: 100m
+      alertname: ConfigDefaultsShadowedSurge
+      exp_alerts: []
+
+  # ConfigParseFailure: both replicas fail to parse the same tenant file.
+  - interval: 1m
+    name: parse-failure-two-replicas-fires-once
+    input_series:
+    - series: da_config_parse_failure_total{file_basename="tenant-x.yaml", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 0+1x80
+    - series: da_config_parse_failure_total{file_basename="tenant-x.yaml", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 0+1x80
+    alert_rule_test:
+    - eval_time: 70m
+      alertname: ConfigParseFailure
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          alert_source: platform
+          job: threshold-exporter
+          file_basename: tenant-x.yaml
+        exp_annotations:
+          summary: Config YAML parse failures (file tenant-x.yaml)
+          description: |
+            The threshold-exporter has logged >5 YAML parse failures
+            for `tenant-x.yaml` in the last hour. If it is
+            a tenant file, every tenant declared in that file (all of them, if the file
+            declares several) is removed from /metrics, unless another
+            file that parses declares it too, so their threshold
+            alerts stop firing (#1980). Fix the YAML (the
+            exporter logs `WARN: skip unparseable file` with the
+            parse error) and the tenants come back on the next
+            reload. Tenants declared in other files are unaffected
+            when the file is a tenant file. When it is a `_`-prefixed
+            platform file (e.g. `_profiles.yaml`), the exporter logs
+            `ERROR: skip unparseable defaults/profiles file` instead,
+            and every tenant that uses what the file provides (e.g. a
+            profile) loses those values.
+            NOTE: this evaluates a 1-hour sliding window, so the
+            alert may stay Firing for up to ~1h after the YAML is
+            fixed (the old failures only drop out of the window as
+            time passes) — that's expected, not a stuck alert.
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#validate-config
+
+  # ConfigDefaultsParseFailure: both replicas fail on the same _defaults.yaml.
+  - interval: 1m
+    name: defaults-parse-failure-two-replicas-fires-once
+    input_series:
+    - series: da_config_parse_failure_total{file_basename="_defaults.yaml", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 0+0x10 1+0x10
+    - series: da_config_parse_failure_total{file_basename="_defaults.yaml", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 0+0x10 1+0x10
+    alert_rule_test:
+    - eval_time: 12m
+      alertname: ConfigDefaultsParseFailure
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          alert_source: platform
+          job: threshold-exporter
+          file_basename: _defaults.yaml
+        exp_annotations:
+          summary: _defaults.yaml parse failure — defaults chain dropped
+          description: |
+            A `_defaults.yaml` parse failure occurred in the last
+            5m. Per the inheritance design (ADR-017) this silently
+            drops the ENTIRE defaults block for every tenant that
+            depends on this chain — those tenants quietly lose any
+            rule pulled from defaults. Fix the YAML immediately
+            (see the exporter ERROR logs).
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md
+
+  # ConfigScanFailing: the shared tree has a duplicate tenant; both replicas fail every tick.
+  - interval: 1m
+    name: scan-failing-two-replicas-fires-once
+    input_series:
+    - series: da_config_scan_failures_total{reason="duplicate_tenant", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 0+1x20
+    - series: da_config_scan_failures_total{reason="duplicate_tenant", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 0+1x20
+    - series: da_config_last_scan_complete_unixtime_seconds{job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 0+0x20
+    - series: da_config_last_scan_complete_unixtime_seconds{job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 0+0x20
+    alert_rule_test:
+    - eval_time: 10m
+      alertname: ConfigScanFailing
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          alert_source: platform
+          job: threshold-exporter
+          reason: duplicate_tenant
+        exp_annotations:
+          summary: Threshold-exporter conf.d unscannable for >5m (duplicate_tenant) — config frozen at last good state
+          description: |
+            At least one threshold-exporter replica has not completed a
+            conf.d scan for more than 5 minutes, and its scans are failing
+            with reason `duplicate_tenant` (which replicas:
+            `increase(da_config_scan_failures_total[10m]) > 0` per pod).
+            Nothing is reloaded on it while it lasts:
+            the exporter keeps serving the last good config and /ready
+            stays 200, so edits to ANY tenant (git-sync, kubectl apply,
+            Tenant API) are NOT applied. duplicate_tenant = one tenant id
+            is declared in two files; the exporter log names both files
+            in "WARN: cannot check config ...: duplicate tenant ID ..."
+            every tick ("...: hierarchical scan: duplicate tenant ID ..."
+            once a _defaults.yaml has been seen anywhere in the tree).
+            Remove one declaration.
+            walk_error = the config directory is missing or not a
+            directory. root_unreadable = it exists but cannot be listed
+            (permissions; log "cannot list config directory").
+            empty_tree = it holds no usable config file (all deleted, or
+            none readable — see da_config_unreadable_files). Once the
+            cause is fixed the next tick reloads the
+            tree (pending edits included), no restart needed, and the
+            alert resolves once that tick's successful scan is scraped.
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md
+
+  # ConfigFilesUnreadable: one unreadable entry, seen by both replicas.
+  - interval: 1m
+    name: files-unreadable-two-replicas-fires-once
+    input_series:
+    - series: da_config_unreadable_files{reason="read_error", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x20
+    - series: da_config_unreadable_files{reason="read_error", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x20
+    alert_rule_test:
+    - eval_time: 15m
+      alertname: ConfigFilesUnreadable
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          alert_source: platform
+          job: threshold-exporter
+          reason: read_error
+        exp_annotations:
+          summary: Threshold-exporter cannot read conf.d entries (read_error) — tenants in them are not served
+          description: |
+            1 config-named entr(ies) under the threshold-exporter's
+            conf.d tree could not be used for more than 10
+            minutes (read_error): stat_error = the file (or a
+            symlink's target) cannot be statted, e.g. a dangling link;
+            read_error = it cannot be read, e.g. permission denied;
+            walk_error = a directory cannot be listed, so nothing under
+            it is loaded; special_file = it is not a regular file (a
+            FIFO, a socket or a device, or a symlink to one) and is
+            never opened. Every tenant declared there has no thresholds
+            on /metrics, while every other tenant keeps reloading. The
+            exporter log names each entry ("WARN: cannot read ...",
+            "WARN: cannot stat ...", "WARN: walk error at ...",
+            "WARN: ... is a special file ..."). Fix the file mode /
+            ownership or the link, or replace the special file with a
+            regular one; the next tick picks it up.
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md
+
+  # ConfigDefaultsUnusable: one broken _defaults.yaml, seen by both replicas.
+  - interval: 1m
+    name: defaults-unusable-two-replicas-fires-once
+    input_series:
+    - series: da_config_defaults_unusable{reason="parse_failure", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x20
+    - series: da_config_defaults_unusable{reason="parse_failure", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x20
+    alert_rule_test:
+    - eval_time: 15m
+      alertname: ConfigDefaultsUnusable
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          alert_source: platform
+          job: threshold-exporter
+          reason: parse_failure
+        exp_annotations:
+          summary: Threshold-exporter cannot use a _defaults.yaml (parse_failure) — inherited thresholds dropped
+          description: |
+            1 `_defaults.yaml` file(s) under the threshold-exporter's
+            conf.d tree have been unusable for more than
+            10 minutes (parse_failure). Per ADR-017 the whole
+            defaults block of such a file is dropped: every tenant below
+            it loses the thresholds it inherits from it (for the ROOT
+            file, every tenant — those user_threshold series are gone).
+            parse_failure = the YAML does not parse (exporter log:
+            "ERROR: skip unparseable defaults/profiles file ...");
+            unreadable = it cannot be statted or read (log: "WARN:
+            cannot read ..." / "WARN: cannot stat ..."). Fix the file;
+            the next tick reloads and the alert resolves.
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md
+
+  # TenantMetricsOverLimit: one tenant 3 over the cap, reported by both replicas.
+  - interval: 1m
+    name: tenant-over-limit-two-replicas-fires-once
+    input_series:
+    - series: da_tenant_metrics_over_limit{tenant="tenant-x", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 3+0x20
+    - series: da_tenant_metrics_over_limit{tenant="tenant-x", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 3+0x20
+    alert_rule_test:
+    - eval_time: 10m
+      alertname: TenantMetricsOverLimit
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          alert_source: platform
+          tenant: tenant-x
+          job: threshold-exporter
+        exp_annotations:
+          summary: Tenant tenant-x exceeded max metrics limit (truncated)
+          description: |
+            Tenant `tenant-x` is producing more
+            thresholds than `max_metrics_per_tenant` allows
+            (3 excess). The runtime silently truncated
+            the excess (`pkg/config/resolve.go`), so the rules
+            falling outside the cap stop evaluating until the
+            tenant either trims their config or raises the
+            per-tenant limit.
+            If `DefaultsTruncationStorm` is firing simultaneously
+            treat this as a symptom — root cause is a
+            `_defaults.yaml` change adding metric keys across the
+            ADR-017 inheritance chain, not single-tenant
+            overgrowth.
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#cardinality-forecast
+
+  # DefaultsTruncationStorm: 51 tenants over the cap on both replicas = ONE storm of 51
+  # (before the collapse: one alert per replica).
+  - interval: 1m
+    name: truncation-storm-two-replicas-fires-once
+    input_series:
+    - series: da_tenant_metrics_over_limit{tenant="t00", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t00", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t01", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t01", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t02", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t02", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t03", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t03", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t04", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t04", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t05", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t05", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t06", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t06", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t07", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t07", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t08", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t08", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t09", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t09", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t10", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t10", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t11", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t11", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t12", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t12", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t13", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t13", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t14", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t14", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t15", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t15", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t16", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t16", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t17", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t17", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t18", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t18", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t19", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t19", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t20", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t20", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t21", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t21", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t22", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t22", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t23", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t23", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t24", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t24", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t25", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t25", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t26", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t26", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t27", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t27", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t28", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t28", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t29", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t29", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t30", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t30", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t31", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t31", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t32", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t32", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t33", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t33", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t34", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t34", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t35", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t35", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t36", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t36", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t37", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t37", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t38", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t38", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t39", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t39", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t40", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t40", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t41", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t41", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t42", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t42", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t43", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t43", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t44", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t44", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t45", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t45", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t46", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t46", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t47", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t47", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t48", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t48", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t49", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t49", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t50", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t50", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    alert_rule_test:
+    - eval_time: 5m
+      alertname: DefaultsTruncationStorm
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          alert_source: platform
+          job: threshold-exporter
+        exp_annotations:
+          summary: Massive tenant metrics truncation (51 tenants) — _defaults.yaml suspected
+          description: |
+            More than 50 tenants are simultaneously over the
+            per-tenant metric cap. The likely cause is a
+            `_defaults.yaml` change that added metric keys across
+            the ADR-017 inheritance chain, pushing dependent
+            tenants past the limit. Roll back or trim the defaults
+            change FIRST — remediating individual tenants without
+            addressing the defaults change will just re-fire the
+            same storm next reload.
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md
+
+  # DefaultsTruncationStorm during a stuck rollout: each replica has 30 tenants over
+  # the cap, different ones (union 60). No replica sees > 50, so no storm: tenants
+  # are counted per replica before the max. Collapsing first makes this red.
+  - interval: 1m
+    name: truncation-storm-disjoint-replica-sets-no-fire
+    input_series:
+    - series: da_tenant_metrics_over_limit{tenant="t00", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t01", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t02", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t03", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t04", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t05", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t06", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t07", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t08", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t09", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t10", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t11", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t12", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t13", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t14", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t15", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t16", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t17", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t18", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t19", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t20", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t21", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t22", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t23", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t24", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t25", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t26", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t27", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t28", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t29", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t30", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t31", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t32", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t33", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t34", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t35", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t36", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t37", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t38", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t39", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t40", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t41", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t42", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t43", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t44", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t45", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t46", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t47", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t48", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t49", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t50", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t51", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t52", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t53", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t54", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t55", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t56", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t57", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t58", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t59", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    alert_rule_test:
+    - eval_time: 5m
+      alertname: DefaultsTruncationStorm
+      exp_alerts: []
+
+  # DefaultsTruncationStorm: one replica has 60 tenants over the cap, the other none
+  # → fires once with 60.
+  - interval: 1m
+    name: truncation-storm-one-replica-60-fires
+    input_series:
+    - series: da_tenant_metrics_over_limit{tenant="t00", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t01", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t02", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t03", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t04", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t05", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t06", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t07", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t08", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t09", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t10", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t11", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t12", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t13", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t14", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t15", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t16", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t17", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t18", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t19", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t20", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t21", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t22", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t23", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t24", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t25", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t26", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t27", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t28", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t29", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t30", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t31", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t32", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t33", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t34", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t35", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t36", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t37", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t38", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t39", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t40", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t41", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t42", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t43", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t44", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t45", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t46", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t47", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t48", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t49", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t50", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t51", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t52", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t53", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t54", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t55", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t56", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t57", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t58", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t59", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: da_tenant_metrics_over_limit{tenant="t00", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 0+0x10
+    alert_rule_test:
+    - eval_time: 5m
+      alertname: DefaultsTruncationStorm
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          alert_source: platform
+          job: threshold-exporter
+        exp_annotations:
+          summary: Massive tenant metrics truncation (60 tenants) — _defaults.yaml suspected
+          description: |
+            More than 50 tenants are simultaneously over the
+            per-tenant metric cap. The likely cause is a
+            `_defaults.yaml` change that added metric keys across
+            the ADR-017 inheritance chain, pushing dependent
+            tenants past the limit. Roll back or trim the defaults
+            change FIRST — remediating individual tenants without
+            addressing the defaults change will just re-fire the
+            same storm next reload.
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md
+
+  # MassExporterOutage: 10 expected exporters (emitted by both replicas), 6 down.
+  - interval: 1m
+    name: mass-exporter-outage-two-replicas-fires-once
+    input_series:
+    - series: tenant_expected_exporter{tenant="t0", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t0", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t1", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t1", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t2", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t2", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t3", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t3", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t4", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t4", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t5", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t5", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t6", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t6", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t7", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t7", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t8", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t8", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t9", db_type="mariadb", job="threshold-exporter", instance="10.0.0.9:8080", pod="threshold-exporter-a"}
+      values: 1+0x10
+    - series: tenant_expected_exporter{tenant="t9", db_type="mariadb", job="threshold-exporter", instance="10.0.0.10:8080", pod="threshold-exporter-b"}
+      values: 1+0x10
+    - series: up{job="tenant-exporters", tenant="t0", instance="t0:9104"}
+      values: 0+0x10
+    - series: up{job="tenant-exporters", tenant="t1", instance="t1:9104"}
+      values: 0+0x10
+    - series: up{job="tenant-exporters", tenant="t2", instance="t2:9104"}
+      values: 0+0x10
+    - series: up{job="tenant-exporters", tenant="t3", instance="t3:9104"}
+      values: 0+0x10
+    - series: up{job="tenant-exporters", tenant="t4", instance="t4:9104"}
+      values: 0+0x10
+    - series: up{job="tenant-exporters", tenant="t5", instance="t5:9104"}
+      values: 0+0x10
+    - series: up{job="tenant-exporters", tenant="t6", instance="t6:9104"}
+      values: 1+0x10
+    - series: up{job="tenant-exporters", tenant="t7", instance="t7:9104"}
+      values: 1+0x10
+    - series: up{job="tenant-exporters", tenant="t8", instance="t8:9104"}
+      values: 1+0x10
+    - series: up{job="tenant-exporters", tenant="t9", instance="t9:9104"}
+      values: 1+0x10
+    alert_rule_test:
+    - eval_time: 5m
+      alertname: MassExporterOutage
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          alert_source: platform
+          job: threshold-exporter
+        exp_annotations:
+          summary: Mass exporter outage (6 tenants) — shared-dependency failure suspected
+          description: |
+            More than 5 tenants AND over 10% of the expected-exporter fleet
+            simultaneously have no healthy up{job="tenant-exporters"}==1 target.
+            Both conditions together mean this is almost certainly a SHARED
+            failure (node pool drained, network partition, image-pull outage on a
+            rolling restart) rather than N independent exporter deaths or a
+            routine single-node blip. Treat as ONE incident: inspect node health
+            / network / recent cluster-wide changes FIRST — remediating tenants
+            one by one will not address the common cause. Per-tenant detail is in
+            the fanned-out TenantExporterAbsent alerts. If instead the WHOLE
+            tenant-exporters job is gone, TenantExporterJobAbsent fires instead.
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage

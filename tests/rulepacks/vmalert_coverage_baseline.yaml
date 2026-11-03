@@ -76,19 +76,12 @@ uncovered:
   - TenantSilentWarning
   rule-pack-platform.yaml:
   - ConfigBlastRadiusHighImpact
-  - ConfigDefaultsParseFailure
-  - ConfigDefaultsShadowedSurge
-  - ConfigParseFailure
   - ConfigReloadStuck
-  - DefaultsTruncationStorm
-  - FederationAuditPipelineSilent
   - FederationGatewayBackendErrors
   - FederationRejectionRateAnomaly
   - PrometheusRuleEvaluationFailing
-  - TenantMetricsOverLimit
   - ThresholdExporterAbsent
   - ThresholdExporterDown
-  - ThresholdExporterHighRestarts
   - ThresholdExporterTooFewReplicas
   rule-pack-postgresql.yaml:
   - PostgreSQLDown
