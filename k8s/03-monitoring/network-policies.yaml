@@ -167,6 +167,11 @@ spec:
     # helm/federation-reconciler `metricsPort`). Both Services carry the
     # platform scrape label since #1595 D1b, so — like Vector above — they are
     # scraped in whatever namespace the chart is installed into.
+    # ⚠️ These are the charts' DEFAULT ports. Overriding federation-gateway
+    # `auditLog.metrics.port` or federation-reconciler `metricsPort` (or any
+    # platform chart's scrape port) requires adding that port here, or the
+    # scrape is refused. tests/k8s/test_prometheus_scrape_egress.py checks the
+    # chart defaults only — it cannot see a values override in your install.
     - to:
         - namespaceSelector: {}
       ports:

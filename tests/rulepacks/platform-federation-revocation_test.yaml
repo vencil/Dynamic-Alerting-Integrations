@@ -119,14 +119,14 @@ tests:
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
               summary: "Federation revocation reconciler stale or down — un-revoke detection is not operational (ADR-028)"
 
-  # 5) Reconciler down — its target is scraped (up 0) but the metric is absent →
+  # 5) Reconciler down — its Deployment exists (KSM) but the metric is absent →
   #    stale FIRES via the guarded absent() after for:10m. The not-deployed case
-  #    (no reconciler target → no alert) is in platform-optional-component-absence_test.yaml.
+  #    (no Deployment → no alert) is in platform-optional-component-absence_test.yaml.
   - interval: 1m
     name: reconcile-absent-fires-stale
     input_series:
-      - series: 'up{job="federation-reconciler", instance="10.0.0.7:9099"}'
-        values: '0+0x15'
+      - series: 'kube_deployment_spec_replicas{namespace="monitoring", deployment="federation-reconciler", job="kube-state-metrics"}'
+        values: '1+0x15'
     alert_rule_test:
       - eval_time: 12m
         alertname: FederationRevocationReconcileStale

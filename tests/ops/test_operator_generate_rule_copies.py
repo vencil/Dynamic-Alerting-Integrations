@@ -139,6 +139,10 @@ def test_the_docs_table_lists_exactly_the_derived_rules(doc):
     ('max_over_time(federation_gateway_revoked_set_missing[1h]) > 0', True),
     ('rate(tenant_log_query_requests_total[10m])', True),
     ('mysql_up == 0', False),
+    # the compact form reads the same metric (#1595 D1b)
+    ('mysql_up==0', False),
+    ('mysql_up!=1', False),
+    ('up{job="tenant-exporters"}==0', False),
     # a label VALUE spelling `up` is not a reference to it
     ('kube_pod_info{pod="up"}', True),
 ])

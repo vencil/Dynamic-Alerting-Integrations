@@ -343,3 +343,54 @@ def test_federation_scrape_namespace_default_and_null(chart):
                     if any(p.get("port") == port for p in rule.get("ports") or [])]
     assert scrape_rules and all(r.get("from") == [{"namespaceSelector": {}}] for r in scrape_rules), (
         scrape_rules)
+
+
+def _victorialogs_egress(docs) -> list:
+    return [rule for pol in docs if pol.get("kind") == "NetworkPolicy"
+            for rule in pol["spec"].get("egress") or []
+            if any(p.get("port") == 9428 for p in rule.get("ports") or [])]
+
+
+@_needs_helm
+@pytest.mark.parametrize("scrape", [[], ["--set", "networkPolicy.scrapeNamespaceLabel=null"]],
+                         ids=["default", "scrape-null"])
+def test_reconciler_victorialogs_egress_does_not_follow_the_scrape_namespace(scrape):
+    """The reconciler's VictoriaLogs egress (9428) has its own namespace selector:
+    `scrapeNamespaceLabel: null` (any SCRAPER namespace) used to render it as
+    `namespaceSelector: {matchLabels: null}` — 9428 egress to every namespace."""
+    rules = _victorialogs_egress(_render("helm/federation-reconciler", scrape))
+    assert rules == [{
+        "to": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "monitoring"}}}],
+        "ports": [{"protocol": "TCP", "port": 9428}]}], rules
+
+
+@_needs_helm
+def test_reconciler_victorialogs_namespace_must_not_be_empty():
+    res = subprocess.run(
+        ["helm", "template", "t", str(_REPO / "helm/federation-reconciler"),
+         "--set", "networkPolicy.victorialogsNamespaceLabel=null"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
+    assert res.returncode != 0 and "victorialogsNamespaceLabel" in res.stderr, res.stderr[-400:]
+
+
+# ── presence declarations match the charts ──────────────────────────────────
+_PRESENCE_KIND = {"deployment": "Deployment", "daemonset": "DaemonSet"}
+
+
+@_needs_helm
+@pytest.mark.parametrize("chart", sorted(ms.CHART_PRESENCE))
+def test_presence_declaration_names_what_the_chart_renders(chart):
+    """`_lib_metric_sources.CHART_PRESENCE` — the kube-state-metrics series that
+    says an optional chart is deployed, which the absence guards read — names
+    the chart's real workload (Deployment / DaemonSet name) or container. A
+    renamed workload would leave the guard matching nothing: the absence alert
+    silently never fires."""
+    metric, label, value = ms.CHART_PRESENCE[chart]
+    docs = _render(chart, _ENABLE[chart])
+    if label == "container":
+        names = {c["name"] for d in docs if d.get("kind") in {"Deployment", "DaemonSet", "StatefulSet"}
+                 for c in d["spec"]["template"]["spec"].get("containers", [])}
+    else:
+        names = {d["metadata"]["name"] for d in docs if d.get("kind") == _PRESENCE_KIND[label]}
+    assert value in names, (f"{chart}: CHART_PRESENCE says {metric}{{{label}={value!r}}} but the "
+                            f"chart renders {label} names {sorted(names)}")

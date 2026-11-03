@@ -58,9 +58,11 @@ tests:
               job: threshold-exporter
             exp_annotations:
               description: |
-                No conf.d scan of the threshold-exporter has succeeded for
-                more than 5 minutes, and scans are failing with reason
-                `duplicate_tenant`. Nothing is reloaded while it lasts:
+                At least one threshold-exporter replica has not completed a
+                conf.d scan for more than 5 minutes, and its scans are failing
+                with reason `duplicate_tenant` (which replicas:
+                `increase(da_config_scan_failures_total[10m]) > 0` per pod).
+                Nothing is reloaded on it while it lasts:
                 the exporter keeps serving the last good config and /ready
                 stays 200, so edits to ANY tenant (git-sync, kubectl apply,
                 Tenant API) are NOT applied. duplicate_tenant = one tenant id
@@ -100,9 +102,11 @@ tests:
               job: threshold-exporter
             exp_annotations:
               description: |
-                No conf.d scan of the threshold-exporter has succeeded for
-                more than 5 minutes, and scans are failing with reason
-                `duplicate_tenant`. Nothing is reloaded while it lasts:
+                At least one threshold-exporter replica has not completed a
+                conf.d scan for more than 5 minutes, and its scans are failing
+                with reason `duplicate_tenant` (which replicas:
+                `increase(da_config_scan_failures_total[10m]) > 0` per pod).
+                Nothing is reloaded on it while it lasts:
                 the exporter keeps serving the last good config and /ready
                 stays 200, so edits to ANY tenant (git-sync, kubectl apply,
                 Tenant API) are NOT applied. duplicate_tenant = one tenant id
@@ -142,9 +146,11 @@ tests:
               job: threshold-exporter
             exp_annotations:
               description: |
-                No conf.d scan of the threshold-exporter has succeeded for
-                more than 5 minutes, and scans are failing with reason
-                `duplicate_tenant`. Nothing is reloaded while it lasts:
+                At least one threshold-exporter replica has not completed a
+                conf.d scan for more than 5 minutes, and its scans are failing
+                with reason `duplicate_tenant` (which replicas:
+                `increase(da_config_scan_failures_total[10m]) > 0` per pod).
+                Nothing is reloaded on it while it lasts:
                 the exporter keeps serving the last good config and /ready
                 stays 200, so edits to ANY tenant (git-sync, kubectl apply,
                 Tenant API) are NOT applied. duplicate_tenant = one tenant id
@@ -186,9 +192,11 @@ tests:
               job: threshold-exporter
             exp_annotations:
               description: |
-                No conf.d scan of the threshold-exporter has succeeded for
-                more than 5 minutes, and scans are failing with reason
-                `walk_error`. Nothing is reloaded while it lasts:
+                At least one threshold-exporter replica has not completed a
+                conf.d scan for more than 5 minutes, and its scans are failing
+                with reason `walk_error` (which replicas:
+                `increase(da_config_scan_failures_total[10m]) > 0` per pod).
+                Nothing is reloaded on it while it lasts:
                 the exporter keeps serving the last good config and /ready
                 stays 200, so edits to ANY tenant (git-sync, kubectl apply,
                 Tenant API) are NOT applied. duplicate_tenant = one tenant id
@@ -235,9 +243,11 @@ tests:
               job: threshold-exporter
             exp_annotations:
               description: |
-                No conf.d scan of the threshold-exporter has succeeded for
-                more than 5 minutes, and scans are failing with reason
-                `root_unreadable`. Nothing is reloaded while it lasts:
+                At least one threshold-exporter replica has not completed a
+                conf.d scan for more than 5 minutes, and its scans are failing
+                with reason `root_unreadable` (which replicas:
+                `increase(da_config_scan_failures_total[10m]) > 0` per pod).
+                Nothing is reloaded on it while it lasts:
                 the exporter keeps serving the last good config and /ready
                 stays 200, so edits to ANY tenant (git-sync, kubectl apply,
                 Tenant API) are NOT applied. duplicate_tenant = one tenant id
@@ -277,9 +287,11 @@ tests:
               job: threshold-exporter
             exp_annotations:
               description: |
-                No conf.d scan of the threshold-exporter has succeeded for
-                more than 5 minutes, and scans are failing with reason
-                `empty_tree`. Nothing is reloaded while it lasts:
+                At least one threshold-exporter replica has not completed a
+                conf.d scan for more than 5 minutes, and its scans are failing
+                with reason `empty_tree` (which replicas:
+                `increase(da_config_scan_failures_total[10m]) > 0` per pod).
+                Nothing is reloaded on it while it lasts:
                 the exporter keeps serving the last good config and /ready
                 stays 200, so edits to ANY tenant (git-sync, kubectl apply,
                 Tenant API) are NOT applied. duplicate_tenant = one tenant id
@@ -350,9 +362,11 @@ tests:
               job: threshold-exporter
             exp_annotations:
               description: |
-                No conf.d scan of the threshold-exporter has succeeded for
-                more than 5 minutes, and scans are failing with reason
-                `duplicate_tenant`. Nothing is reloaded while it lasts:
+                At least one threshold-exporter replica has not completed a
+                conf.d scan for more than 5 minutes, and its scans are failing
+                with reason `duplicate_tenant` (which replicas:
+                `increase(da_config_scan_failures_total[10m]) > 0` per pod).
+                Nothing is reloaded on it while it lasts:
                 the exporter keeps serving the last good config and /ready
                 stays 200, so edits to ANY tenant (git-sync, kubectl apply,
                 Tenant API) are NOT applied. duplicate_tenant = one tenant id
@@ -432,9 +446,11 @@ tests:
               job: threshold-exporter
             exp_annotations:
               description: |
-                No conf.d scan of the threshold-exporter has succeeded for
-                more than 5 minutes, and scans are failing with reason
-                `duplicate_tenant`. Nothing is reloaded while it lasts:
+                At least one threshold-exporter replica has not completed a
+                conf.d scan for more than 5 minutes, and its scans are failing
+                with reason `duplicate_tenant` (which replicas:
+                `increase(da_config_scan_failures_total[10m]) > 0` per pod).
+                Nothing is reloaded on it while it lasts:
                 the exporter keeps serving the last good config and /ready
                 stays 200, so edits to ANY tenant (git-sync, kubectl apply,
                 Tenant API) are NOT applied. duplicate_tenant = one tenant id
@@ -503,9 +519,11 @@ tests:
               job: threshold-exporter
             exp_annotations:
               description: |
-                No conf.d scan of the threshold-exporter has succeeded for
-                more than 5 minutes, and scans are failing with reason
-                `duplicate_tenant`. Nothing is reloaded while it lasts:
+                At least one threshold-exporter replica has not completed a
+                conf.d scan for more than 5 minutes, and its scans are failing
+                with reason `duplicate_tenant` (which replicas:
+                `increase(da_config_scan_failures_total[10m]) > 0` per pod).
+                Nothing is reloaded on it while it lasts:
                 the exporter keeps serving the last good config and /ready
                 stays 200, so edits to ANY tenant (git-sync, kubectl apply,
                 Tenant API) are NOT applied. duplicate_tenant = one tenant id

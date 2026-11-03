@@ -683,9 +683,11 @@ groups:
         annotations:
           summary: "Threshold-exporter conf.d unscannable for >5m ({{ $labels.reason }}) — config frozen at last good state"
           description: |
-            No conf.d scan of the threshold-exporter has succeeded for
-            more than 5 minutes, and scans are failing with reason
-            `{{ $labels.reason }}`. Nothing is reloaded while it lasts:
+            At least one threshold-exporter replica has not completed a
+            conf.d scan for more than 5 minutes, and its scans are failing
+            with reason `{{ $labels.reason }}` (which replicas:
+            `increase(da_config_scan_failures_total[10m]) > 0` per pod).
+            Nothing is reloaded on it while it lasts:
             the exporter keeps serving the last good config and /ready
             stays 200, so edits to ANY tenant (git-sync, kubectl apply,
             Tenant API) are NOT applied. duplicate_tenant = one tenant id
@@ -854,13 +856,15 @@ groups:
       # the tenant fan-out and preserves topology labels.
       # Under the HA default (helm replicaCount=2, no leader-election;
       # only environments/local + environments/ci override to 1) BOTH
-      # threshold-exporter pods emit da_tenant_metrics_over_limit. Both load the
-      # same conf.d, so the per-pod copies are one storm: they are collapsed
-      # (`max without (instance, pod)`, see the replica-collapse note above)
-      # BEFORE the tenant count, so this pages once, not once per replica
-      # (#1595 D1b; it used to page per pod, #882).
+      # threshold-exporter pods emit da_tenant_metrics_over_limit. The tenants
+      # are counted PER replica first, then the largest count is taken across
+      # replicas (`max without (instance, pod)`, see the replica-collapse note
+      # above), so this pages once, not once per replica (#1595 D1b; it used to
+      # page per pod, #882). Not the other way round: collapsing before the
+      # count would add up different replicas' tenant sets — during a stuck
+      # rollout two replicas with 30 over-limit tenants each would read 60.
       - alert: DefaultsTruncationStorm
-        expr: count without (tenant) (max without (instance, pod) (da_tenant_metrics_over_limit) > 0) > 50
+        expr: max without (instance, pod) (count without (tenant) (da_tenant_metrics_over_limit > 0)) > 50
         for: 2m
         labels:
           severity: critical
@@ -1711,21 +1715,21 @@ groups:
             docs/adr/028-federation-revocation-tamper-evidence.md.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md"
 
-      # The absent() arm is GUARDED by the reconciler being scraped (#1595 D1b):
+      # The absent() arm is GUARDED by the reconciler being DEPLOYED (#1595 D1b):
       # the chart is optional, so an unguarded absent() fired forever — critical —
-      # wherever federation is not deployed. `up{job="federation-reconciler"}`
-      # exists (0 or 1) for every reconciler target, a crashed one included, so
-      # "deployed but down" still fires; only "no reconciler target at all"
-      # (not installed, or its Service lost the scrape label) is silent.
-      # Mechanical rule: _lib_metric_sources.unguarded_absences, pinned by
-      # tests/lint/test_absence_guard.py.
+      # wherever federation is not deployed. Presence is read from
+      # kube-state-metrics (the Deployment exists with replicas > 0), NOT from
+      # `up`: a lost scrape target (ServiceMonitor off or removed, Service label
+      # changed) is exactly what this arm must catch, and `up` vanishes with it.
+      # Mechanical rule: _lib_metric_sources.unguarded_absences (CHART_PRESENCE),
+      # pinned by tests/lint/test_absence_guard.py.
       - alert: FederationRevocationReconcileStale
         expr: |
           (time() - federation_revocation_last_reconcile_timestamp_seconds > 1800)
           or
           (
             absent(federation_revocation_last_reconcile_timestamp_seconds)
-            and on() count(up{job="federation-reconciler"}) > 0
+            and on() count(kube_deployment_spec_replicas{deployment="federation-reconciler"} > 0) > 0
           )
         for: 10m
         labels:
@@ -2179,16 +2183,17 @@ groups:
       # in chargeback is otherwise ambiguous between "tenant didn't
       # use" / "audit pipeline broke" / "operator wiped data"; this
       # alert names the second case.
-      # GUARDED by the gateway's audit-metrics target being scraped (#1595 D1b):
-      # the chart is optional and auditLog can be off, so an unguarded
+      # GUARDED by the gateway's audit-metrics sidecar being DEPLOYED (#1595
+      # D1b): the chart is optional and auditLog can be off, so an unguarded
       # absent_over_time() fired forever — critical — wherever no gateway audit
-      # pipeline is deployed. `up{job="federation-gateway"}` exists only while
-      # the gateway Service is labelled and annotated for scraping (auditLog on),
-      # a crashed pod included (up 0).
+      # pipeline is deployed. Presence is read from kube-state-metrics (a pod
+      # has the `audit-metrics` container, which renders only with auditLog
+      # enabled), NOT from `up`: a lost scrape target is what this alert must
+      # catch, and `up` vanishes with it.
       - alert: FederationAuditPipelineSilent
         expr: |
           absent_over_time(tenant_federation_requests_total[10m])
-          and on() count(up{job="federation-gateway"}) > 0
+          and on() count(kube_pod_container_info{container="audit-metrics"}) > 0
         for: 5m
         labels:
           severity: critical

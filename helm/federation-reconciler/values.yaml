@@ -172,6 +172,13 @@ networkPolicy:
   # the default, so the default stays.
   scrapeNamespaceLabel:
     kubernetes.io/metadata.name: monitoring
+  # Namespace label selector for the VictoriaLogs the reconciler queries
+  # (victorialogs.url, TCP 9428) — the egress side, separate from the scrape
+  # ingress above on purpose: `scrapeNamespaceLabel: null` (any scraper
+  # namespace) must not widen this egress to every namespace. Must be a
+  # non-empty map; the render fails otherwise.
+  victorialogsNamespaceLabel:
+    kubernetes.io/metadata.name: monitoring
 
 nodeSelector: {}
 tolerations: []

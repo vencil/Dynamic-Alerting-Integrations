@@ -1125,6 +1125,22 @@ def test_extractor_does_not_leak_grouping_labels_or_keywords():
     assert gate.extract_metrics("vector(1)") == set()
 
 
+@pytest.mark.parametrize("expr,want", [
+    # compact comparisons, no whitespace (#1595 D1b: `==` / `!=` were missed)
+    ("mysql_up==0", {"mysql_up"}),
+    ("mysql_up!=1", {"mysql_up"}),
+    ("mysql_up>0", {"mysql_up"}),
+    ("mysql_up<1", {"mysql_up"}),
+    ('up{job="tenant-exporters"}==0', {"up"}),
+    ("a==bool b", {"a", "b"}),
+    # matcher names inside {...} never leak, with any operator after them
+    ('kube_pod_status_ready{condition="true",pod!="x"}==1', {"kube_pod_status_ready"}),
+    ('kube_pod_status_ready{condition=~"t.*"}!=0', {"kube_pod_status_ready"}),
+])
+def test_extractor_catches_compact_comparisons(expr, want):
+    assert gate.extract_metrics(expr) == want
+
+
 # ── the CLI exit-code contract (main), independent of the real artifacts ──
 
 def test_main_without_ci_is_report_only(monkeypatch):

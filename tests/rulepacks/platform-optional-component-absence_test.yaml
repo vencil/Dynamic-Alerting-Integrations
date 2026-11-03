@@ -5,9 +5,11 @@
 # alerts — FederationRevocationReconcileStale's absent() arm and
 # FederationAuditPipelineSilent — were unguarded, so both critical alerts fired forever
 # wherever federation was not deployed (raw and Prometheus Operator mode alike). Each
-# is now guarded by `count(up{job="<the chart's Service>"}) > 0`: up exists for every
-# scraped target, a crashed one included (up 0). Removing a guard makes the
-# not-deployed case red. The rule that every absent() over an optional chart's metric
+# is now AND-ed with a kube-state-metrics presence check (the reconciler Deployment
+# with replicas > 0; a gateway pod with the audit-metrics container) — not with `up`,
+# which vanishes exactly when the scrape target is lost, the failure these alerts
+# exist to catch. Removing a guard makes the not-deployed case red; swapping it for
+# an `up` guard makes the deployed-not-scraped case red. The rule that every absent() over an optional chart's metric
 # carries such a guard is pinned by tests/lint/test_absence_guard.py.
 # Run: promtool test rules tests/rulepacks/platform-optional-component-absence_test.yaml
 rule_files:
@@ -17,7 +19,7 @@ evaluation_interval: 1m
 
 tests:
 
-  # FederationRevocationReconcileStale: no reconciler target at all (federation not
+  # FederationRevocationReconcileStale: no reconciler Deployment (federation not
   # deployed) → the absent() arm is guarded off. It fired forever before #1595 D1b.
   - interval: 1m
     name: reconciler-not-deployed-no-alert
@@ -29,13 +31,26 @@ tests:
       alertname: FederationRevocationReconcileStale
       exp_alerts: []
 
-  # FederationRevocationReconcileStale: the reconciler target is scraped but down
-  # (up 0, no gauge) → the guarded absent() arm fires after for:10m.
+  # FederationRevocationReconcileStale: the Deployment exists with replicas 0 → off.
   - interval: 1m
-    name: reconciler-deployed-metric-absent-fires
+    name: reconciler-scaled-to-zero-no-alert
     input_series:
-    - series: up{job="federation-reconciler", instance="10.0.0.7:9099"}
+    - series: kube_deployment_spec_replicas{namespace="da-system", deployment="federation-reconciler", job="kube-state-metrics"}
       values: 0+0x30
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: FederationRevocationReconcileStale
+      exp_alerts: []
+
+  # FederationRevocationReconcileStale: the Deployment runs (KSM) but no reconciler
+  # series reach Prometheus — no `up` either (ServiceMonitor off, scrape label lost).
+  # This is what the absent() arm exists for, so it fires; an `up`-based guard
+  # would hide it.
+  - interval: 1m
+    name: reconciler-deployed-not-scraped-fires
+    input_series:
+    - series: kube_deployment_spec_replicas{namespace="da-system", deployment="federation-reconciler", job="kube-state-metrics"}
+      values: 1+0x30
     alert_rule_test:
     - eval_time: 12m
       alertname: FederationRevocationReconcileStale
@@ -58,8 +73,21 @@ tests:
             docs/adr/028-federation-revocation-tamper-evidence.md.
           runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md
 
-  # FederationAuditPipelineSilent: no gateway audit target (federation not deployed,
-  # or auditLog off) → guarded off. It fired forever before #1595 D1b.
+  # FederationRevocationReconcileStale: deployed, scraped and reconciling → silent.
+  - interval: 1m
+    name: reconciler-deployed-scraped-fresh-no-alert
+    input_series:
+    - series: kube_deployment_spec_replicas{namespace="da-system", deployment="federation-reconciler", job="kube-state-metrics"}
+      values: 1+0x30
+    - series: federation_revocation_last_reconcile_timestamp_seconds{job="federation-reconciler"}
+      values: 0+60x30
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: FederationRevocationReconcileStale
+      exp_alerts: []
+
+  # FederationAuditPipelineSilent: no gateway at all → guarded off. It fired forever
+  # before #1595 D1b.
   - interval: 1m
     name: gateway-not-deployed-no-alert
     input_series:
@@ -70,12 +98,26 @@ tests:
       alertname: FederationAuditPipelineSilent
       exp_alerts: []
 
-  # FederationAuditPipelineSilent: the gateway target is scraped but no
-  # tenant_federation_requests_total sample for 10m → fires after for:5m.
+  # FederationAuditPipelineSilent: the gateway runs with auditLog off (no audit-metrics
+  # container) → there is no audit pipeline to be silent.
   - interval: 1m
-    name: gateway-deployed-silent-fires
+    name: gateway-without-audit-sidecar-no-alert
     input_series:
-    - series: up{job="federation-gateway", instance="10.0.0.8:3903"}
+    - series: kube_pod_container_info{namespace="da-system", pod="federation-gateway-0", container="envoy", job="kube-state-metrics"}
+      values: 1+0x30
+    alert_rule_test:
+    - eval_time: 20m
+      alertname: FederationAuditPipelineSilent
+      exp_alerts: []
+
+  # FederationAuditPipelineSilent: the audit sidecar runs (KSM) but no
+  # tenant_federation_requests_total for 10m (not scraped, or broken) → fires.
+  - interval: 1m
+    name: gateway-audit-deployed-not-scraped-fires
+    input_series:
+    - series: kube_pod_container_info{namespace="da-system", pod="federation-gateway-0", container="audit-metrics", job="kube-state-metrics"}
+      values: 1+0x30
+    - series: kube_pod_container_info{namespace="da-system", pod="federation-gateway-0", container="envoy", job="kube-state-metrics"}
       values: 1+0x30
     alert_rule_test:
     - eval_time: 16m
@@ -95,11 +137,13 @@ tests:
             (suppress the alert during planned maintenance).
           runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/020-tenant-federation.md
 
-  # FederationAuditPipelineSilent: gateway scraped and counting requests → silent.
+  # FederationAuditPipelineSilent: audit sidecar scraped and counting → silent.
   - interval: 1m
-    name: gateway-deployed-with-traffic-no-alert
+    name: gateway-audit-deployed-with-traffic-no-alert
     input_series:
-    - series: up{job="federation-gateway", instance="10.0.0.8:3903"}
+    - series: kube_pod_container_info{namespace="da-system", pod="federation-gateway-0", container="audit-metrics", job="kube-state-metrics"}
+      values: 1+0x30
+    - series: kube_pod_container_info{namespace="da-system", pod="federation-gateway-0", container="envoy", job="kube-state-metrics"}
       values: 1+0x30
     - series: tenant_federation_requests_total{tenant="tenant-x", status="ok", job="federation-gateway", instance="10.0.0.8:3903"}
       values: 0+5x30

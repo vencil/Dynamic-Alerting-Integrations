@@ -3028,6 +3028,8 @@ class TestPlatformRunbookCoverageContract:
 # above — a second copy of the family table would drift and silently narrow
 # whichever gate lost the race.
 from check_scrape_reachability import (  # noqa: E402
+    FEDERATION_GATEWAY_CHART,
+    FEDERATION_RECONCILER_CHART,
     KNOWN_UNKNOWN_SOURCE,
     PLANE_OF_UNPINNED_SOURCE,
     TENANT_API_CHART,
@@ -3086,6 +3088,19 @@ _PLATFORM_LOCAL_BY_SELECTOR: dict[str, str] = {
         'reads kube_pod_container_status_restarts_total{container='
         '"threshold-exporter"} with no namespace selector; the exporter '
         f'({THRESHOLD_EXPORTER_CHART}) runs beside the platform rules on CENTRAL',
+    # The two presence guards (#1595 D1b review): the federation components'
+    # absence arms are AND-ed with a kube-state-metrics check that the
+    # component is deployed, with no namespace selector (charts render into
+    # Release.Namespace). Both components run on CENTRAL (PLANE note in
+    # check_scrape_reachability: every chart defaults its upstreams to
+    # *.monitoring.svc), as the alerts' own federation metrics do.
+    "FederationRevocationReconcileStale":
+        'guards its absent() arm with kube_deployment_spec_replicas{deployment='
+        f'"federation-reconciler"}}; the reconciler ({FEDERATION_RECONCILER_CHART}) '
+        "runs on CENTRAL",
+    "FederationAuditPipelineSilent":
+        'guards with kube_pod_container_info{container="audit-metrics"}, the '
+        f'gateway\'s audit sidecar ({FEDERATION_GATEWAY_CHART}), which runs on CENTRAL',
 }
 
 # Non-vacuity anchor. LITERAL on purpose: deriving the expectation from the

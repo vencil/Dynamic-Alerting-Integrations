@@ -155,9 +155,14 @@ GROUPING_CLAUSE_RE = re.compile(
 # negative-lookahead-on-`(` leak function-argument labels (label_replace/
 # group_left args); `=` and `!` leak selector label-matcher names (this
 # extractor does NOT strip brace interiors — the lookahead IS the brace
-# filter: `{condition="Ready"}` must not yield `condition`). Compact `a==1`
-# therefore stays unextracted — documented limitation, spaced form works.
+# filter: `{condition="Ready"}` must not yield `condition`). The compact
+# comparisons `a==1` / `a!=1` are caught by a second scan, COMPARISON_RE, run on
+# the text with every `{...}` emptied — so no matcher name can reach it (#1595
+# D1b: a rule `mysql_up==0` otherwise read as reading no metric, and
+# operator_unportable kept it).
 TOKEN_RE = re.compile(r"\b([a-zA-Z_:][a-zA-Z0-9_:]*)\b(?=[{\[\s)+\-*/<>^%]|$)")
+COMPARISON_RE = re.compile(r"\b([a-zA-Z_:][a-zA-Z0-9_:]*)\b(?=[=!]=)")
+BRACE_RE = re.compile(r"\{[^}]*\}")
 ABSENT_RE = re.compile(r"absent(?:_over_time)?\(\s*([a-zA-Z_:][a-zA-Z0-9_:]*)")
 STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
 
@@ -170,6 +175,8 @@ def extract_metrics(expr: str) -> set[str]:
     stripped = STRING_RE.sub('""', expr)
     stripped = GROUPING_CLAUSE_RE.sub(r"\1 ", stripped)
     extra = {m for m in TOKEN_RE.findall(stripped) if not m[0].isupper()}
+    unbraced = BRACE_RE.sub("{}", stripped)
+    extra |= {m for m in COMPARISON_RE.findall(unbraced) if not m[0].isupper()}
     extra |= set(ABSENT_RE.findall(expr))
     return (base | extra) - EXTRA_KEYWORDS
 
@@ -336,28 +343,102 @@ def operator_split(groups: list) -> tuple[list, list[tuple[str, list[str]]]]:
 
 
 # ── absence guards on optional components (#1595 D1b) ───────────────────────
-#: The charts a deployment may leave out. An `absent()` / `absent_over_time()`
-#: over one of their metrics fires forever where the chart is not installed,
-#: unless the rule also requires the chart's target to be scraped.
+#: The charts a deployment may leave out, and how kube-state-metrics shows that
+#: one IS deployed: (KSM metric, label, value). An `absent()` /
+#: `absent_over_time()` over one of their metrics fires forever where the chart
+#: is not installed, so it must be AND-ed with this presence check.
+#: ⛔ Presence is read from kube-state-metrics, NOT from `up`: `up` disappears
+#: exactly when the scrape target is lost (ServiceMonitor off or removed, the
+#: Service's selector or label changed) — the failure the absence alert exists
+#: to catch. KSM ships in this repo's raw stack and in kube-prometheus-stack.
+#: The values are the charts' own resource names (Chart.Name-based, release
+#: independent unless `nameOverride` is set); tests/helm/
+#: test_platform_servicemonitors.py renders each chart and pins them. The
+#: gateway's is its audit-metrics sidecar, not the Deployment: the audit
+#: pipeline exists only with auditLog.enabled.
 #: threshold-exporter is the platform itself and is not optional.
-OPTIONAL_CHARTS: frozenset = frozenset(
-    set(CHART_SERVICEMONITOR_JOBS) - {THRESHOLD_EXPORTER_CHART})
+CHART_PRESENCE: dict[str, tuple[str, str, str]] = {
+    TENANT_API_CHART: ("kube_deployment_spec_replicas", "deployment", "tenant-api"),
+    VECTOR_CHART: ("kube_daemonset_status_desired_number_scheduled", "daemonset", "vector"),
+    FEDERATION_GATEWAY_CHART: ("kube_pod_container_info", "container", "audit-metrics"),
+    FEDERATION_RECONCILER_CHART: ("kube_deployment_spec_replicas", "deployment",
+                                  "federation-reconciler"),
+}
+OPTIONAL_CHARTS: frozenset = frozenset(CHART_PRESENCE)
+
+
+class AbsenceGuardUnreadable(Exception):
+    """The expression could not be parsed, so its guards cannot be judged."""
+
+
+def _walk(node):
+    """Every node of a promql_parser AST, depth first."""
+    yield node
+    for attr in ("lhs", "rhs", "expr", "param", "vector_selector"):
+        child = getattr(node, attr, None)
+        if child is not None and not isinstance(child, (str, int, float)):
+            yield from _walk(child)
+    for arg in getattr(node, "args", None) or []:
+        yield from _walk(arg)
+
+
+def _present(node) -> set:
+    """The optional charts whose presence check appears anywhere under *node*."""
+    found = set()
+    for n in _walk(node):
+        if type(n).__name__ != "VectorSelector":
+            continue
+        for chart, (metric, label, value) in CHART_PRESENCE.items():
+            if n.name == metric and any(
+                    m.name == label and str(m.op).endswith("Equal") and
+                    not str(m.op).endswith("NotEqual") and m.value == value
+                    for m in n.matchers.matchers):
+                found.add(chart)
+    return found
 
 
 def unguarded_absences(expr: str) -> list[str]:
-    """The absence checks in *expr* over an optional chart's metric that carry
-    no presence guard: an `up{job="<one of that chart's Service names>"}`
-    reference in the same expression (the job is the Service name in raw and
-    Prometheus Operator mode alike). [] when every one is guarded."""
+    """The absence checks in *expr* over an optional chart's metric that are
+    not filtered by that chart's presence check (CHART_PRESENCE). A guard
+    counts only when an `and` joins it to the absence: walking down from the
+    root, the side of an `and` inherits the charts whose presence the OTHER
+    side checks; nothing else (`or`, `unless`, arithmetic) adds a guard. So
+    `absent(x) and on() count(<presence>) > 0` passes and `absent(x) or
+    <presence>` does not. Read with promql_parser; an expression it cannot
+    parse raises AbsenceGuardUnreadable (fail closed). [] when all guarded."""
+    try:
+        import promql_parser
+        tree = promql_parser.parse(expr)
+    except Exception as exc:  # noqa: BLE001 — any reader failure is unjudgeable
+        raise AbsenceGuardUnreadable(f"{expr!r}: {exc}") from exc
     found: list[str] = []
-    guards = {job[1] for job in _job_matchers("up", expr or "")
-              if job is not None and job[0] == "="}
-    for metric in ABSENT_RE.findall(expr or ""):
-        fam = resolve_family(metric)
-        if fam is None or fam[1] != "helm-service" or fam[2] not in OPTIONAL_CHARTS:
-            continue
-        jobs = CHART_SERVICEMONITOR_JOBS[fam[2]]
-        if not guards & jobs:
-            found.append(f"absent({metric}): {fam[2]} is optional — guard it with "
-                         f"`and on() count(up{{job=<one of {sorted(jobs)}>}}) > 0`")
+
+    def visit(node, guarded: frozenset) -> None:
+        kind = type(node).__name__
+        if kind == "BinaryExpr":
+            if str(node.op) == "and":
+                visit(node.lhs, guarded | _present(node.rhs))
+                visit(node.rhs, guarded | _present(node.lhs))
+            else:
+                visit(node.lhs, guarded)
+                visit(node.rhs, guarded)
+            return
+        if kind == "Call" and node.func.name in ("absent", "absent_over_time"):
+            arg = node.args[0] if node.args else None
+            vs = getattr(arg, "vector_selector", arg)
+            metric = getattr(vs, "name", None)
+            fam = resolve_family(metric) if metric else None
+            if fam and fam[1] == "helm-service" and fam[2] in OPTIONAL_CHARTS \
+                    and fam[2] not in guarded:
+                pm, label, value = CHART_PRESENCE[fam[2]]
+                found.append(f"{node.func.name}({metric}): {fam[2]} is optional — AND it with "
+                             f"`count({pm}{{{label}=\"{value}\"}}) > 0`")
+        for attr in ("expr", "param"):
+            child = getattr(node, attr, None)
+            if child is not None and not isinstance(child, (str, int, float)):
+                visit(child, guarded)
+        for arg in getattr(node, "args", None) or []:
+            visit(arg, guarded)
+
+    visit(tree, frozenset())
     return found
