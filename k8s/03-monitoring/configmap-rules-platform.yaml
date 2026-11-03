@@ -116,8 +116,25 @@ data:
     \    annotations:\n      description: '{{ $value | printf \"%.0f\" }} restarts\
     \ in the last hour'\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md\n\
     \      summary: Threshold exporter {{ $labels.pod }} restarting frequently\n \
-    \ - alert: ConfigBlastRadiusHighImpact\n    expr: \"histogram_quantile(\\n  0.99,\\\
-    n  sum by (le) (\\n    rate(da_config_blast_radius_tenants_affected_bucket{effect=\\\
+    \ - alert: CustomAlertReplicasDisagree\n    expr: \"count by (tenant, recipe_id,\
+    \ threshold_severity) (\\n  label_replace(\\n    max by (tenant, recipe_id, severity,\
+    \ name, mode) (user_threshold{component=\\\"custom\\\"}),\\n    \\\"threshold_severity\\\
+    \", \\\"$1\\\", \\\"severity\\\", \\\"(.*)\\\"\\n  )\\n) > 1\\n\"\n    for: 10m\n\
+    \    labels:\n      alert_source: platform\n      severity: warning\n    annotations:\n\
+    \      description: 'The threshold-exporter replicas have served {{ $value | printf\
+    \ \"%.0f\" }}\n\n        different (name, mode) rows for tenant {{ $labels.tenant\
+    \ }}''s custom\n\n        alert {{ $labels.recipe_id }} (severity {{ $labels.threshold_severity\
+    \ }}) for\n\n        over 10 minutes. While they disagree, that custom alert is\
+    \ paused —\n\n        its threshold record emits nothing for the key, on Prometheus\
+    \ and\n\n        VictoriaMetrics alike — so a breach of it does not fire. A normal\n\
+    \n        config reload converges within a minute or two; this long means a\n\n\
+    \        replica is stuck on old config: compare `user_threshold{component=\"\
+    custom\",\n\n        tenant=\"{{ $labels.tenant }}\"}` per pod, check each replica''s\n\
+    \n        `da_config_last_reload_complete_unixtime_seconds` and ConfigReloadStuck,\n\
+    \n        and restart the stale replica.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md\n\
+    \      summary: threshold-exporter replicas disagree on custom alert {{ $labels.recipe_id\
+    \ }} ({{ $labels.threshold_severity }}) for {{ $labels.tenant }}\n  - alert: ConfigBlastRadiusHighImpact\n\
+    \    expr: \"histogram_quantile(\\n  0.99,\\n  sum by (le) (\\n    rate(da_config_blast_radius_tenants_affected_bucket{effect=\\\
     \"applied\\\"}[5m])\\n  )\\n) > 500\\n\"\n    for: 10m\n    labels:\n      alert_source:\
     \ platform\n      severity: warning\n    annotations:\n      description: 'A defaults\
     \ / source change has been propagating to a large\n\n        fraction of tenants.\

@@ -1,0 +1,115 @@
+# promtool / vmalert-tool behavioural test for CustomAlertReplicasDisagree (#3483).
+# The custom-alert threshold record emits a key only while every
+# threshold-exporter replica serves one (name, mode) for it, so a replica stuck
+# on old config pauses that custom alert indefinitely; this platform alert is
+# what surfaces it. Contract:
+#   1) FIRES after `for: 10m` when the replicas keep serving two (name, mode)
+#      rows for one (tenant, recipe_id, severity), carrying tenant / recipe_id /
+#      severity (as threshold_severity).
+#   2) does NOT fire for a normal reload: the rows disagree for < 10m, then
+#      converge (the old row ends with a stale marker).
+#   3) does NOT fire while the replicas agree — including the same row served
+#      by both replicas (the replica copy collapses in the inner count). The
+#      fixture's user_threshold carries no instance/pod (rulepack_contract_test.go,
+#      #731); identical copies are modelled as one series, which is what the
+#      inner `max by (…, name, mode)` reduces them to anyway.
+# Run: promtool test rules tests/rulepacks/platform-custom-alert-replica-disagreement_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-platform.yaml
+
+evaluation_interval: 1m
+
+tests:
+  # 1) stuck: one replica keeps serving mode=page, the other mode=silent.
+  - interval: 1m
+    name: stuck-disagreement-fires-after-for
+    input_series:
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="warning", name="conns_high", mode="page"}'
+        values: '150x30'
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="warning", name="conns_high", mode="silent"}'
+        values: '150x30'
+    alert_rule_test:
+      - eval_time: 9m
+        alertname: CustomAlertReplicasDisagree
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: CustomAlertReplicasDisagree
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              tenant: t1
+              recipe_id: threshold__m1__gt__w5m__for1m
+              threshold_severity: warning
+            exp_annotations:
+              summary: "threshold-exporter replicas disagree on custom alert threshold__m1__gt__w5m__for1m (warning) for t1"
+              description: |
+                The threshold-exporter replicas have served 2
+                different (name, mode) rows for tenant t1's custom
+                alert threshold__m1__gt__w5m__for1m (severity warning) for
+                over 10 minutes. While they disagree, that custom alert is paused —
+                its threshold record emits nothing for the key, on Prometheus and
+                VictoriaMetrics alike — so a breach of it does not fire. A normal
+                config reload converges within a minute or two; this long means a
+                replica is stuck on old config: compare `user_threshold{component="custom",
+                tenant="t1"}` per pod, check each replica's
+                `da_config_last_reload_complete_unixtime_seconds` and ConfigReloadStuck,
+                and restart the stale replica.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md"
+
+  # 1b) stuck on both severities of one recipe: two alerts, told apart by
+  #     threshold_severity (the rule-level severity overwrites the expr's).
+  - interval: 1m
+    name: stuck-on-both-severities-fires-twice
+    input_series:
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="warning", name="conns_high", mode="page"}'
+        values: '150x30'
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="warning", name="conns_high", mode="silent"}'
+        values: '150x30'
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="critical", name="conns_high", mode="page"}'
+        values: '300x30'
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="critical", name="conns_high", mode="silent"}'
+        values: '300x30'
+    promql_expr_test:
+      - eval_time: 12m
+        expr: |
+          count by (alertname, severity, threshold_severity) (
+            ALERTS{alertstate="firing", alertname="CustomAlertReplicasDisagree", tenant="t1"}
+          )
+        exp_samples:
+          - labels: '{alertname="CustomAlertReplicasDisagree", severity="warning", threshold_severity="critical"}'
+            value: 1
+          - labels: '{alertname="CustomAlertReplicasDisagree", severity="warning", threshold_severity="warning"}'
+            value: 1
+
+  # 2) transient: a normal reload — two rows for 3m, then the old one goes stale.
+  - interval: 1m
+    name: transient-reload-does-not-fire
+    input_series:
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="warning", name="conns_high", mode="page"}'
+        values: '150x2 stale'
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="warning", name="conns_high", mode="silent"}'
+        values: '150x30'
+    alert_rule_test:
+      - eval_time: 12m
+        alertname: CustomAlertReplicasDisagree
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: CustomAlertReplicasDisagree
+        exp_alerts: []
+
+  # 3) agreement: one row per key; two tenants and two severities of one recipe
+  #    do not count against each other.
+  - interval: 1m
+    name: agreement-does-not-fire
+    input_series:
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="warning", name="conns_high", mode="page"}'
+        values: '150x30'
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="critical", name="conns_high", mode="page"}'
+        values: '300x30'
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t2", severity="warning", name="conns_other", mode="silent"}'
+        values: '150x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CustomAlertReplicasDisagree
+        exp_alerts: []
