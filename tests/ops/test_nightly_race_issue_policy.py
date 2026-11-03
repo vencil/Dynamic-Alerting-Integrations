@@ -1209,29 +1209,52 @@ def test_raw_stream_is_uploaded_for_human_triage() -> None:
     )
 
 
+
+
 # ---------------------------------------------------------------------------
-# -short split between nightly and PR CI (#2977 option A, #3180)
+# -short split: nightly, the PR race leg, and the PR full leg (#2977, #3180)
 # ---------------------------------------------------------------------------
-# cmd/da-guard's exhaustive matrices honour testing.Short(). Nightly runs them
-# reduced (otherwise -count=10 blows the 30m per-package timeout); PR CI runs
-# them in full, once per PR. Both halves are pinned here, because each half
-# alone is a silent regression: nightly losing -short times out again, and PR
-# CI gaining -short drops the full matrix from EVERY gate with nothing red.
+# cmd/da-guard's exhaustive matrices honour testing.Short(). Three places run
+# the exporter module, and each is pinned here because each alone drifting is a
+# silent regression with nothing red:
+#
+#   * nightly (-race -count=10 -short): losing -short times out again (#2977);
+#   * PR race leg `go-tests-threshold-exporter` (-race -short): the race
+#     detector catches concurrency, and the matrices are deterministic logic,
+#     so they run reduced here (#3180 option B). Losing -short only costs
+#     minutes; losing -race drops the race detector from every PR gate;
+#   * PR full leg `go-tests-threshold-exporter-full` (no -race, no -short):
+#     the ONLY gate that runs every matrix cell. Gaining -short, narrowing its
+#     packages past cmd/da-guard, or leaving the `Go Tests (1.26)` gate's
+#     `needs:` each drops the full matrix from every gate.
+#
+# ⚠️ Not modelled: flags injected through GOFLAGS (job/step `env:`) or a
+# wrapper script that rewrites the command line. Neither is how these steps are
+# written today.
 
 CI_WORKFLOW = ROOT / ".github" / "workflows" / "ci.yml"
 EXPORTER_WORKDIR = "components/threshold-exporter/app"
-_SHORT_FLAG_RE = re.compile(r"^--?short(?:=(.*))?$")
+RACE_JOB = "go-tests-threshold-exporter"
+FULL_JOB = "go-tests-threshold-exporter-full"
+GO_GATE_JOB = "go-tests"
+_BOOL_FLAG_RE = re.compile(r"^--?(?P<name>[a-z]+)(?:=(?P<value>.*))?$")
+
+# The comment-aware, continuation-joining `run:` splitter. ⛔ Imported, not
+# reimplemented (same reason as tests/_ci_lint_wiring.py): it already knows a
+# `#` comment is not continued by a trailing backslash.
+sys.path.insert(0, str(ROOT / "tests" / "ops"))
+from test_ci_path_filter_coverage import _logical_shell_lines  # noqa: E402
 
 
 def _go_test_commands(run: str) -> list[list[str]]:
     """Every `go test ...` invocation in a run block, as whitespace tokens.
 
-    Backslash continuations are joined first so a flag on a continuation line
-    still belongs to its command; a command ends at a newline, `|`, `;` or `&&`.
+    Continuations are joined and comment lines dropped first, so a flag on a
+    continuation line still belongs to its command and a commented-out command
+    is not read as live; a command ends at a newline, `|`, `;` or `&&`.
     """
-    joined = re.sub(r"\\\n", " ", run)
     cmds = []
-    for line in joined.splitlines():
+    for line in _logical_shell_lines(run):
         for segment in re.split(r"\|\|?|;|&&", line):
             tokens = segment.split()
             for i in range(len(tokens) - 1):
@@ -1243,7 +1266,7 @@ def _go_test_commands(run: str) -> list[list[str]]:
 
 # Package patterns that include cmd/da-guard, where the exhaustive matrices
 # live. A narrower scope (`./internal/...`) keeps the step green while the
-# matrices silently stop running in PR CI.
+# matrices silently stop running.
 _DA_GUARD_PACKAGES = ("./...", "./cmd/...", "./cmd/da-guard", "./cmd/da-guard/...")
 
 
@@ -1251,12 +1274,20 @@ def _covers_da_guard(tokens: list[str]) -> bool:
     return any(tok in _DA_GUARD_PACKAGES for tok in tokens if tok.startswith("./"))
 
 
-def _has_short(tokens: list[str]) -> bool:
+def _has_bool_flag(tokens: list[str], name: str) -> bool:
+    """`-name`, `--name`, or `-name=true|1|t` — what `go test` reads as set."""
     for tok in tokens:
-        m = _SHORT_FLAG_RE.match(tok)
-        if m and (m.group(1) is None or m.group(1).lower() in ("1", "t", "true")):
+        m = _BOOL_FLAG_RE.match(tok)
+        if not m or m.group("name") != name:
+            continue
+        value = m.group("value")
+        if value is None or value.lower() in ("1", "t", "true"):
             return True
     return False
+
+
+def _has_short(tokens: list[str]) -> bool:
+    return _has_bool_flag(tokens, "short")
 
 
 def _load_workflow(path: Path) -> dict:
@@ -1271,6 +1302,31 @@ def _load_workflow(path: Path) -> dict:
     return doc
 
 
+def _ci_job(job_id: str) -> dict:
+    jobs = _load_workflow(CI_WORKFLOW)["jobs"]
+    job = jobs.get(job_id)
+    assert isinstance(job, dict), (
+        f"ci.yml has no job {job_id!r} — it moved or was renamed; re-anchor this "
+        "guard (#3180), do not delete it"
+    )
+    return job
+
+
+def _exporter_go_tests(job_id: str) -> list[tuple[str, list[str]]]:
+    """(`job / step`, tokens) for every `go test` run in the exporter module."""
+    found = []
+    for step in _ci_job(job_id).get("steps") or []:
+        if str(step.get("working-directory") or "").rstrip("/") != EXPORTER_WORKDIR:
+            continue
+        for cmd in _go_test_commands(str(step.get("run") or "")):
+            found.append((f"{job_id} / {step.get('name')!r}", cmd))
+    assert found, (
+        f"no `go test` step with working-directory {EXPORTER_WORKDIR} in ci.yml "
+        f"job {job_id!r} — the step moved; re-anchor this guard, do not delete it"
+    )
+    return found
+
+
 def test_nightly_go_test_runs_with_short() -> None:
     steps = (_load_workflow(WORKFLOW)["jobs"].get("race") or {}).get("steps") or []
     cmds = [c for s in steps for c in _go_test_commands(str(s.get("run") or ""))]
@@ -1283,34 +1339,74 @@ def test_nightly_go_test_runs_with_short() -> None:
     )
 
 
-def test_pr_ci_exporter_race_step_runs_the_full_matrix() -> None:
-    """#2977 acceptance 3: PR CI keeps the exhaustive matrix (no -short)."""
-    jobs = _load_workflow(CI_WORKFLOW)["jobs"]
-    found, shorted, narrowed = [], [], []
-    for job_id, job in jobs.items():
-        for step in (job or {}).get("steps") or []:
-            if str(step.get("working-directory") or "").rstrip("/") != EXPORTER_WORKDIR:
-                continue
-            for cmd in _go_test_commands(str(step.get("run") or "")):
-                if "-race" not in cmd:
-                    continue
-                where = f"{job_id} / {step.get('name')!r}"
-                found.append(where)
-                if _has_short(cmd):
-                    shorted.append(f"{where}: go test {' '.join(cmd)}")
-                if not _covers_da_guard(cmd):
-                    narrowed.append(f"{where}: go test {' '.join(cmd)}")
-    assert found, (
-        f"no `go test ... -race` step with working-directory {EXPORTER_WORKDIR} in "
-        "ci.yml — the step moved or was renamed; re-anchor this guard, do not delete it"
+def test_pr_ci_exporter_race_leg_runs_race_with_short() -> None:
+    """#3180 option B: the race leg keeps -race and runs the matrices reduced."""
+    no_race, no_short = [], []
+    for where, cmd in _exporter_go_tests(RACE_JOB):
+        line = f"{where}: go test {' '.join(cmd)}"
+        if not _has_bool_flag(cmd, "race"):
+            no_race.append(line)
+        if not _has_short(cmd):
+            no_short.append(line)
+    assert not no_race, (
+        "PR CI's threshold-exporter race leg no longer runs the race detector, so "
+        "no PR gate checks the exporter for data races:\n  " + "\n  ".join(no_race)
     )
+    assert not no_short, (
+        "PR CI's threshold-exporter race leg runs without -short, paying the "
+        "exhaustive cmd/da-guard matrices under -race again. They are deterministic "
+        f"logic and run in full in {FULL_JOB} (#3180 option B):\n  "
+        + "\n  ".join(no_short)
+    )
+
+
+def test_pr_ci_exporter_full_leg_runs_every_matrix_cell() -> None:
+    """#3180 option B: the full leg is the one gate that runs every cell."""
+    cmds = _exporter_go_tests(FULL_JOB)
+    raced = [f"{w}: go test {' '.join(c)}" for w, c in cmds if _has_bool_flag(c, "race")]
+    shorted = [f"{w}: go test {' '.join(c)}" for w, c in cmds if _has_short(c)]
+    covering = [w for w, c in cmds if _covers_da_guard(c)]
     assert not shorted, (
-        "PR CI's threshold-exporter race step runs with -short, so the exhaustive "
-        "cmd/da-guard matrices are reduced in EVERY gate (#2977 acceptance 3; make "
-        "them cheaper instead, #3180):\n  " + "\n  ".join(shorted)
+        f"{FULL_JOB} runs with -short, so the exhaustive cmd/da-guard matrices "
+        "run reduced in EVERY gate (#2977 acceptance 3, #3180):\n  "
+        + "\n  ".join(shorted)
     )
-    assert not narrowed, (
-        "PR CI's threshold-exporter race step no longer includes cmd/da-guard, so "
-        "its exhaustive matrices run in no gate at all (#2977 acceptance 3):\n  "
-        + "\n  ".join(narrowed)
+    assert not raced, (
+        f"{FULL_JOB} runs with -race. Race detection is {RACE_JOB}'s job; under "
+        "-race the full matrices cost what #3180 split them out to avoid:\n  "
+        + "\n  ".join(raced)
+    )
+    assert covering, (
+        f"{FULL_JOB}'s go test no longer includes cmd/da-guard, so its exhaustive "
+        "matrices run in no gate at all (#3180):\n  "
+        + "\n  ".join(f"{w}: go test {' '.join(c)}" for w, c in cmds)
+    )
+
+
+def test_pr_ci_exporter_full_leg_is_weighed_by_the_go_tests_gate() -> None:
+    """A leg outside the required gate's `needs:` can go red and still merge."""
+    gate = _ci_job(GO_GATE_JOB)
+    needs = gate.get("needs")
+    needs = [needs] if isinstance(needs, str) else list(needs or [])
+    assert FULL_JOB in needs, (
+        f"{FULL_JOB} is not in the `{GO_GATE_JOB}` gate's needs ({needs}). The gate "
+        "backs the required `Go Tests (1.26)` check; outside it the full matrix "
+        "can fail and the PR still merges (#3180)."
+    )
+    want = f"needs.{FULL_JOB}.result"
+    bound = [
+        name
+        for step in gate.get("steps") or []
+        for name, value in ((step.get("env") or {}).items())
+        if re.fullmatch(r"\$\{\{\s*" + re.escape(want) + r"\s*\}\}", str(value).strip())
+    ]
+    assert bound, (
+        f"the `{GO_GATE_JOB}` gate needs {FULL_JOB} but no step binds "
+        f"`${{{{ {want} }}}}` in its env, so its result is never weighed"
+    )
+    race_if = _ci_job(RACE_JOB).get("if")
+    full_if = _ci_job(FULL_JOB).get("if")
+    assert full_if == race_if, (
+        f"{FULL_JOB}'s path gate ({full_if!r}) differs from {RACE_JOB}'s "
+        f"({race_if!r}); a PR that wakes the race leg must also wake the full one"
     )

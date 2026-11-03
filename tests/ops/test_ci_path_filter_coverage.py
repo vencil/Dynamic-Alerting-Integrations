@@ -2114,6 +2114,8 @@ GATED_LEGS = {
     ("ci.yml", "python-coverage-combine"),
     ("ci.yml", "portal-tests-run"),
     ("ci.yml", "go-tests-threshold-exporter"),
+    # #3180: the exporter's full (no -race, no -short) leg, same `go || docs` gate.
+    ("ci.yml", "go-tests-threshold-exporter-full"),
     ("ci.yml", "go-tests-tenant-api"),
     ("ci.yml", "go-tests-am-inhibit"),
     # #3206: the da-read module's leg, gated on the `go` filter like its siblings.
@@ -2150,6 +2152,7 @@ PINNED_STEP_INPUTS = {
         "scripts/tools/lint/check_portal_bundle_size.py",
     ("ci.yml", "go-tests-tenant-api"): "tests/contract/requirements.txt",
     ("ci.yml", "go-tests-threshold-exporter"): "scripts/ops/ci_flake_retry.py",
+    ("ci.yml", "go-tests-threshold-exporter-full"): "scripts/ops/ci_flake_retry.py",
     ("docs-ci.yaml", "mkdocs-build"): "requirements/ci-constraints.txt",
     ("validate.yaml", "go-lint"): "scripts/ops/_verify_download.sh",
     ("validate.yaml", "version-check"): "requirements/ci-constraints.txt",

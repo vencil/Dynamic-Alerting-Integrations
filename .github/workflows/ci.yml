@@ -2272,8 +2272,8 @@ jobs:
     # "skipped while go_changed!=true" branch.
     needs: detect-changes
     if: needs.detect-changes.outputs.go_changed == 'true' || needs.detect-changes.outputs.docs_changed == 'true'
-    # Least-privilege token (CodeQL: workflow-missing-permissions). Tests +
-    # coverage-artifact upload need nothing beyond repo read.
+    # Least-privilege token (CodeQL: workflow-missing-permissions). The tests
+    # need nothing beyond repo read (coverage moved to the -full leg, #3180).
     permissions:
       contents: read
     # `matrix.go` is only the check-name LABEL (the "Go Tests (1.26)" family):
@@ -2330,15 +2330,94 @@ jobs:
         # unlisted failure fails immediately (regression doesn't get
         # masked by retry). Pass-through behavior is identical when all
         # tests pass on first try, which is the normal case.
+        #
+        # -short (#3180, option B): the race detector exists to catch
+        # CONCURRENCY bugs, and the exhaustive matrices that honour
+        # testing.Short() (cmd/da-guard's alias-spelling and null-override
+        # products) are deterministic logic — running all their cells under
+        # -race bought no extra race signal and cost most of this step's
+        # minutes. Their FULL run lives in go-tests-threshold-exporter-full
+        # below (no -race, no -short), which also produces the coverage
+        # profile. Both halves are pinned by
+        # tests/ops/test_nightly_race_issue_policy.py.
         run: |
           export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
           mkdir -p "$GO_TESTLOG_DIR"
           python3 "$GITHUB_WORKSPACE/scripts/ops/ci_flake_retry.py" -- \
-            go test ./... -race -count=1 -coverprofile=coverage.out \
+            go test ./... -race -short -count=1 \
             -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
 
       - name: Check the tests read nothing this leg's filter misses (#1399)
         run: python3 scripts/ops/go_test_reads.py --job go-tests-threshold-exporter --logs "$RUNNER_TEMP/go-testlog"
+
+  go-tests-threshold-exporter-full:
+    name: Go Tests — threshold-exporter full (${{ matrix.go }})
+    runs-on: ubuntu-24.04
+    # #3180 option B: the deterministic half of the exporter leg. Runs the
+    # whole module WITHOUT -race and WITHOUT -short, so cmd/da-guard's
+    # exhaustive matrices (and every other testing.Short() reduction) run in
+    # full here, once per PR, while the race leg above runs -short. It is a
+    # leg of the `Go Tests (1.26)` gate, not its own required check (see the
+    # gate's note on new split jobs).
+    #
+    # Same path gate as the race leg, for the same reason: this leg also
+    # decodes every documented `_defaults.yaml` sample under docs/**.
+    needs: detect-changes
+    if: needs.detect-changes.outputs.go_changed == 'true' || needs.detect-changes.outputs.docs_changed == 'true'
+    # Least-privilege token (CodeQL: workflow-missing-permissions). Tests +
+    # coverage-artifact upload need nothing beyond repo read.
+    permissions:
+      contents: read
+    # `matrix.go` is a check-name label only — see go-tests-threshold-exporter.
+    strategy:
+      matrix:
+        go: ["1.26"]
+      fail-fast: false
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go (version from go.mod)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+
+      - name: Cache Go modules + build cache
+        # Same key as the race leg (same go.sum hash); module cache is shared.
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-go-${{ matrix.go }}-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-${{ matrix.go }}-
+            ${{ runner.os }}-go-
+
+      # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml.
+      - name: Install pyyaml for flake-retry wrapper
+        run: |
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
+          fi
+
+      - name: Run threshold-exporter tests in full (no race detector, no -short)
+        working-directory: components/threshold-exporter/app
+        # Same unprivileged-FS requirement as the race leg (TestRoleUnderRealModes).
+        env:
+          VIBE_REQUIRE_UNPRIVILEGED_FS: "1"
+        # Same ci_flake_retry.py + go_testlog_exec.sh wrapping as the race leg.
+        # ⛔ No -short: this is the only PR gate that runs the exhaustive
+        # matrices in full (#3180). No -race: concurrency is the other leg's job.
+        run: |
+          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
+          mkdir -p "$GO_TESTLOG_DIR"
+          python3 "$GITHUB_WORKSPACE/scripts/ops/ci_flake_retry.py" -- \
+            go test ./... -count=1 -coverprofile=coverage.out \
+            -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+
+      - name: Check the tests read nothing this leg's filter misses (#1399)
+        run: python3 scripts/ops/go_test_reads.py --job go-tests-threshold-exporter-full --logs "$RUNNER_TEMP/go-testlog"
 
       - name: Upload coverage artifact
         if: always()
@@ -2699,7 +2778,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
-    needs: [detect-changes, go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit, go-tests-da-read, go-tests-e2e-bench-receiver, go-tests-bench-filter]
+    needs: [detect-changes, go-tests-threshold-exporter, go-tests-threshold-exporter-full, go-tests-tenant-api, go-tests-am-inhibit, go-tests-da-read, go-tests-e2e-bench-receiver, go-tests-bench-filter]
     # always(): without it a failed dependency SKIPS this job, and a skipped
     # check would satisfy branch protection — the gate must FAIL, not skip,
     # when any split job fails.
@@ -2716,6 +2795,7 @@ jobs:
           DETECT_RESULT: ${{ needs.detect-changes.result }}
           GO_CHANGED: ${{ needs.detect-changes.outputs.go_changed }}
           R_TE: ${{ needs.go-tests-threshold-exporter.result }}
+          R_TF: ${{ needs.go-tests-threshold-exporter-full.result }}
           R_TA: ${{ needs.go-tests-tenant-api.result }}
           R_AM: ${{ needs.go-tests-am-inhibit.result }}
           R_DR: ${{ needs.go-tests-da-read.result }}
@@ -2724,6 +2804,7 @@ jobs:
         run: |
           echo "detect-changes:     $DETECT_RESULT (go_changed=$GO_CHANGED)"
           echo "threshold-exporter: $R_TE"
+          echo "exporter (full):    $R_TF"
           echo "tenant-api:         $R_TA"
           echo "am-inhibit:         $R_AM"
           echo "da-read:            $R_DR"
@@ -2733,7 +2814,7 @@ jobs:
             echo "::error::detect-changes did not succeed — refusing to treat skipped tests as green"
             exit 1
           fi
-          for r in "$R_TE" "$R_TA" "$R_AM" "$R_DR" "$R_RX" "$R_BF"; do
+          for r in "$R_TE" "$R_TF" "$R_TA" "$R_AM" "$R_DR" "$R_RX" "$R_BF"; do
             if [ "$r" = "success" ]; then
               continue
             fi

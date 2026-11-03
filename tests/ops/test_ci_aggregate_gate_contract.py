@@ -2018,6 +2018,16 @@ KNOWN_SKIP_TOLERANCE_GAPS = {
         "and getting that wrong reds every docs-only PR, so #1397 does not "
         "attempt it.",
     ),
+    ("ci.yml", "go-tests", "go-tests-threshold-exporter-full"): (
+        frozenset({"docs_changed"}),
+        "the full (no -race, no -short) half of the exporter leg, split out by "
+        "#3180, runs on the same `go_changed || docs_changed` condition as "
+        "go-tests-threshold-exporter, for the same reason (it decodes every "
+        "documented `_defaults.yaml` sample). Same latent shape and same "
+        "reachability argument as that row: its only `needs:` is "
+        "detect-changes, whose failure the gate's first branch already "
+        "catches, so it cannot skip while its own `if:` was true.",
+    ),
     ("ci.yml", "go-tests", "go-tests-am-inhibit"): (
         frozenset({"schema_changed"}),
         "the leg runs on `go_changed || schema_changed` (#2984: it pins the "

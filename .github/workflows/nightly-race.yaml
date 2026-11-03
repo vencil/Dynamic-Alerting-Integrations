@@ -115,12 +115,14 @@ jobs:
         # problems BETWEEN repetitions, which a reduced matrix exposes just as
         # well. The exhaustive matrices that honour testing.Short() (cmd/da-guard's
         # alias-spelling and null-override products) keep their FULL coverage in
-        # PR CI (ci.yml, -race -count=1, no -short), once per PR that passes the
-        # exporter job's go/docs path gate — a guard test in
-        # tests/ops/test_nightly_race_issue_policy.py pins both halves. Side effect:
+        # PR CI's go-tests-threshold-exporter-full leg (ci.yml, -count=1, no
+        # -race, no -short), once per PR that passes the exporter's go/docs path
+        # gate; since #3180 the PR race leg runs -short too, so the full matrix
+        # never runs under the race detector. A guard test in
+        # tests/ops/test_nightly_race_issue_policy.py pins all three. Side effect:
         # the vendored yaml.v3 TestLimits also skips under -short; tenant-api has
         # no testing.Short() call, so -short is a no-op there. Making the matrices
-        # themselves cheap is tracked as TRK-3180 (#3180).
+        # themselves cheap is tracked in #3544.
         # PACKAGES is intentionally unquoted: it is a multi-pattern list.
         run: |
           set -o pipefail

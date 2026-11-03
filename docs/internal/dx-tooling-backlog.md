@@ -172,12 +172,14 @@ status: in-progress
 domain: exporter
 target_version: v3.0.0
 created_at: 2026-10-18
-updated_at: 2026-10-21
+updated_at: 2026-11-03
 ```
 
 **來源**：[#3180](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3180)（[#2977](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2977) 的方案 B）。`cmd/da-guard` 的兩支窮舉矩陣（`TestGuard_RedundantAdviceNeverMovesMetricsAcrossAliasSpellings`、`TestGuard_NullOverrideIsNoWriteOnEveryLayer`）讓該 package 在 `-race -count=1` 下要 138 s（本機 4 核；加 `-short` 為 53–58 s），nightly `-count=10` 兩度撞上 30m 上限。
 
-方案 A（nightly 帶 `-short`）已止血 nightly，但 PR CI（`-race -count=1`，不帶 `-short`）每支碰到 exporter 的 PR 仍付完整矩陣成本，且會隨新矩陣繼續成長。本項是在不降覆蓋的前提下讓矩陣本身變便宜；驗收條件（含前後量測與反事實）見 #3180。
+方案 A（nightly 帶 `-short`）已止血 nightly，但 PR CI 原本以一條 `-race -count=1`（不帶 `-short`）同時抓併發問題與跑完整矩陣，每支碰到 exporter 的 PR 都在 race detector 下付完整矩陣成本。
+
+**現況**（2026-11-03 owner 改裁決：方案 B，取代下方「拆分」的原目標）：把 race 檢查和窮舉檢查拆開跑。矩陣是確定性邏輯，race detector 對它不多抓什麼。`ci.yml` 的 `go-tests-threshold-exporter` 改為 `-race -short`；新增 `go-tests-threshold-exporter-full`，整個 module 不帶 `-race`、不帶 `-short`，覆蓋率 artifact 改由它產出，兩條都是 `Go Tests (1.26)` gate 的 leg、path gate 相同。`tests/ops/test_nightly_race_issue_policy.py` 釘住 nightly、race leg、完整 leg 三處的旗標與套件範圍，以及完整 leg 在 gate 的 `needs:` 裡。PR-2b 不做；讓矩陣本身變便宜的根因（同一份 conf.d 檔在一次載入中被多次解碼）改由 [#3544](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3544) 以正式程式設計追蹤。剩下的驗收（PR 與 main 的 CI 前後牆鐘時間、合入後 nightly `cmd/da-guard` 5 夜）見 #3180。
 
 **拆分**（2026-10-20 owner 裁決）：PR-1（測試修復線）只做機械加速，把兩支矩陣的 `t.TempDir()`／`WriteTree` 提到平台檔不再變化的那一層，每格只覆寫租戶檔，格子與斷言不動；PR-2（conf.d／routing 線）做等價格合併、重用解析結果這類需要懂語意的改動。PR-1 量測（同一台 4 核機器，`-race -count=1`）：package 142.4 s → 118.2 s，`-short` 58.8 s → 47.1 s，兩支單跑 102.6 s → 74.2 s、42.9 s → 29.4 s；格數不變（21504、8125），未達「快一半」，差距交給 PR-2。PR-2a 把 `TestGuard_RedundantAdviceNeverMovesMetricsAcrossAliasSpellings` 與值無關的「刪掉 key 後」觀測上提出值迴圈（每格少一次 LoadDir）；null 矩陣的基準觀測本來就每棵樹只算一次，沒有可上提的。PR-2a 量測（同一台 4 核機器，`-race -count=1`）：package 122.4 s → 111.1 s，`-short` 51.9 s → 49.5 s，alias 矩陣單跑 82.1 s → 64.9 s；格數不變。
 
