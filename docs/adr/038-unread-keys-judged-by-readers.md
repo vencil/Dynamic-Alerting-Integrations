@@ -274,7 +274,7 @@ da-guard 本身只輸出事實：exporter 實測的 `read_by` 與原因，以及
 
 決定 4 的等級只描述缺陷。一道寫入閘門擋不擋一筆寫入，只看 finding 所在的檔是不是這次寫入的檔，與等級來自哪一層無關：
 
-- **tenant-api**：error 只在 finding 所在的檔就是這次寫入的檔、而且屬於寫入對象租戶時才擋（決定 5）。它不寫 profile 檔與 defaults 檔，所以 profile、子目錄 `_defaults.yaml` 上的 error 不擋任何租戶的寫入；寫入對象租戶宣告在根平台檔的 `tenants:` 裡、這次寫的就是那個檔時，那個檔上屬於該租戶的 error 照擋。今天已經這樣判。
+- **tenant-api**：error 只在 finding 所在的檔就是這次寫入的檔、而且屬於寫入對象租戶時才擋（決定 5）。所以 profile、子目錄 `_defaults.yaml` 或其他平台檔上的 error，不擋只改了租戶檔的寫入；寫到 defaults 檔或帶 `profiles:` 的根平台檔時判決不判（決定 5）。今天已經這樣判。
 - **改 profile 檔、子目錄 `_defaults.yaml` 或根平台檔的寫入**（例如經 `da-guard write` 寫檔的工具）：各閘門改成判到就擋之後，在這次寫入讓該檔新出現 error 時被擋；該檔寫入前就有的 error 不擋。今天的比對只涵蓋租戶的鍵（以租戶與鍵比對寫入前後），沒有租戶的 profile finding 要另訂比對單位（檔案與鍵）。
 - **整棵樹的 CI**（validate-config、產生器 `--validate`）：各閘門改成判到就擋之後，判到 error 就擋，不分 finding 在哪個檔；今天只報不擋（決定 4 末段）。
 
