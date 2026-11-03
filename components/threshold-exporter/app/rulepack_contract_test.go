@@ -107,9 +107,10 @@ type rulePackDoc struct {
 	Groups []struct {
 		Name  string `yaml:"name"`
 		Rules []struct {
-			Record string `yaml:"record"`
-			Alert  string `yaml:"alert"`
-			Expr   string `yaml:"expr"`
+			Record string            `yaml:"record"`
+			Alert  string            `yaml:"alert"`
+			Expr   string            `yaml:"expr"`
+			Labels map[string]string `yaml:"labels"`
 		} `yaml:"rules"`
 	} `yaml:"groups"`
 }
@@ -174,9 +175,9 @@ func userThresholdSelectors(t *testing.T, where, expr string) []*promqlparser.Ve
 // selector: it must carry BOTH a `component` and a `metric` matcher, each an
 // EXACT (=) match. Returns the matched values for the optional ParseMetricKey
 // round-trip check. ok=false means a structural violation was already reported.
-func assertComponentMetric(t *testing.T, where string, vs *promqlparser.VectorSelector) (component, metric string, ok bool) {
+func assertComponentMetric(t *testing.T, where string, vs *promqlparser.VectorSelector, platformAlert bool) (component, metric string, ok bool) {
 	t.Helper()
-	var hasComp, hasMetric, hasSilentMode bool
+	var hasComp, hasMetric, hasSilentMode, hasMode bool
 	ok = true
 	for _, m := range vs.LabelMatchers {
 		switch m.Name {
@@ -195,6 +196,7 @@ func assertComponentMetric(t *testing.T, where string, vs *promqlparser.VectorSe
 				ok = false
 			}
 		case "mode":
+			hasMode = true
 			// only the EXACT mode="silent" matcher identifies the sentinel; a
 			// mode="page" or regex-mode selector must NOT be exempted from metric.
 			if m.Type == labels.MatchEqual && m.Value == "silent" {
@@ -215,7 +217,15 @@ func assertComponentMetric(t *testing.T, where string, vs *promqlparser.VectorSe
 	// regex-mode custom selector — still requires it, so platform packs and the
 	// #731 empty-set guard are unaffected.
 	sentinelShape := component == "custom" && hasSilentMode && !hasMetric
-	if !hasMetric && !sentinelShape {
+	// Replica-disagreement audit (#3483): CustomAlertReplicasDisagree counts the
+	// distinct (name, mode) every replica serves for each (tenant, recipe_id,
+	// severity), so it spans EVERY custom recipe's metric by design — a `metric`
+	// matcher would defeat it. Exempt only that shape: component="custom", no
+	// metric, no mode matcher, in an ALERT carrying `alert_source: platform`
+	// (the platform's own marker, enforced by TestPlatformAlertSourceContract).
+	// Records, tenant packs and the compiled custom-alerts pack still need it.
+	auditShape := component == "custom" && !hasMetric && !hasMode && platformAlert
+	if !hasMetric && !sentinelShape && !auditShape {
 		t.Errorf("%s: user_threshold selector is missing a `metric` matcher: %s", where, vs.String())
 		ok = false
 	}
@@ -302,7 +312,7 @@ func TestRulePackExporterContract(t *testing.T) {
 				}
 				where := base + " [" + g.Name + "] " + ruleID(r.Record, r.Alert)
 				for _, vs := range userThresholdSelectors(t, where, r.Expr) {
-					component, metric, ok := assertComponentMetric(t, where, vs)
+					component, metric, ok := assertComponentMetric(t, where, vs, r.Alert != "" && r.Labels["alert_source"] == "platform")
 					// If this selector lives in a threshold-normalization recording
 					// rule, its (component, metric) must equal the exporter's real
 					// split of the record's conf.d key — the load-bearing #731 check.
@@ -412,7 +422,7 @@ func TestRulePackFixturesCarryComponent(t *testing.T) {
 				}
 				for _, vs := range userThresholdSelectors(t, base+" series", s.Series) {
 					seriesChecked++
-					assertComponentMetric(t, base+" series "+s.Series, vs)
+					assertComponentMetric(t, base+" series "+s.Series, vs, false)
 				}
 			}
 		}
