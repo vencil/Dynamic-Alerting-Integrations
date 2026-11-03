@@ -13,12 +13,13 @@
 # tests/ops/test_generate_routes_orchestration.py::TestPlatformAlertSourceContract
 # (the value is RESERVED — non-platform rule trees must not use it).
 #
-# ⚠️ THREE alerts here DO carry a `tenant` label, and two of them only at fire
+# ⚠️ FOUR alerts here DO carry a `tenant` label, and three of them only at fire
 # time — do NOT re-derive this count by reading `labels:` blocks:
 #   * TenantMetricsOverLimit          — rule-level `labels.tenant`
 #   * FederationRejectionRateAnomaly  — runtime label from `sum by (tenant)`
 #   * FederationGatewayBackendErrors  — runtime label from `sum by (tenant)`
-# All three are severity=warning, which is why the tenant-scoped Silent Mode
+#   * CustomAlertReplicasDisagree     — runtime label from `count by (tenant, …)`
+# All four are severity=warning, which is why the tenant-scoped Silent Mode
 # inhibits in configmap-alertmanager.yaml must carry `alert_source=""` on their
 # target side (else a tenant can mute the platform's own failure alerts).
 #
@@ -356,6 +357,57 @@ groups:
         annotations:
           summary: "Threshold exporter {{ $labels.pod }} restarting frequently"
           description: "{{ $value | printf \"%.0f\" }} restarts in the last hour"
+          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md"
+
+      # --- Custom-alert replica disagreement (#3483) ---
+      # The custom-alert threshold record emits a (tenant, version, severity)
+      # only while every threshold-exporter replica serves ONE (name, mode) for
+      # it (custom_alert_compile.go: thresholdRecord); while they disagree, that
+      # one custom alert of that tenant does not fire on Prometheus or
+      # VictoriaMetrics. A normal reload ends that within the reload window
+      # (reloadInterval + per-node kubelet ConfigMap sync, about 1-2 min). A
+      # replica stuck on the old config (wedged watch loop, kubelet sync stuck,
+      # a not-ready new pod still scraped, two exporter deployments serving one
+      # tenant) keeps it paused indefinitely — this alert surfaces that.
+      # Inner max collapses each replica's copy of a row (instance / pod) and
+      # keeps one series per distinct (name, mode) — `max`, never `sum`/`count`,
+      # on user_threshold (check_ha_threshold_aggregation.py); the outer count is how many
+      # distinct ones the replicas serve for one key. The exporter never serves
+      # two rows for one (tenant, recipe_id, severity) itself (customSeriesID,
+      # #3112), so > 1 means the replicas disagree. `for: 10m` lets a normal
+      # reload converge first. Carries `tenant` (runtime, from `count by`) and
+      # is severity=warning like the other tenant-bearing platform alerts. The
+      # custom alert's own severity rides as `threshold_severity`: the rule-level
+      # `severity: warning` overwrites an expr `severity` label, so a tenant
+      # disagreeing on both the warning and the critical row of one recipe would
+      # otherwise give two series with one label set and fail the rule.
+      # promtool: tests/rulepacks/platform-custom-alert-replica-disagreement_test.yaml.
+      - alert: CustomAlertReplicasDisagree
+        expr: |
+          count by (tenant, recipe_id, threshold_severity) (
+            label_replace(
+              max by (tenant, recipe_id, severity, name, mode) (user_threshold{component="custom"}),
+              "threshold_severity", "$1", "severity", "(.*)"
+            )
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "threshold-exporter replicas disagree on custom alert {{ $labels.recipe_id }} ({{ $labels.threshold_severity }}) for {{ $labels.tenant }}"
+          description: |
+            The threshold-exporter replicas have served {{ $value | printf "%.0f" }}
+            different (name, mode) rows for tenant {{ $labels.tenant }}'s custom
+            alert {{ $labels.recipe_id }} (severity {{ $labels.threshold_severity }}) for
+            over 10 minutes. While they disagree, that custom alert is paused —
+            its threshold record emits nothing for the key, on Prometheus and
+            VictoriaMetrics alike — so a breach of it does not fire. A normal
+            config reload converges within a minute or two; this long means a
+            replica is stuck on old config: compare `user_threshold{component="custom",
+            tenant="{{ $labels.tenant }}"}` per pod, check each replica's
+            `da_config_last_reload_complete_unixtime_seconds` and ConfigReloadStuck,
+            and restart the stale replica.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md"
 
       # --- Config Blast Radius (v2.8.0, Issue #61) ---
