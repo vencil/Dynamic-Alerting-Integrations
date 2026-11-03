@@ -13,6 +13,12 @@ Pinned contracts
 5. **Live dogfood**: every committed rule pack / operator / configmap copy
    already aggregates user_threshold with max (gates a regression of the
    ADR-024 PR3-pre HA fix).
+6. **Reached, not adjacent (#3483)**: the expr is parsed, so an aggregation
+   that reaches raw `user_threshold` through a function, parentheses or a
+   binary operator is judged like a direct one; a `max` in between collapses
+   the replica copies and the outer aggregation passes.
+7. **Fail closed**: an expr `promql-parser` cannot parse is an error
+   (`UnparseableExpr`, main rc 2), never a pass.
 """
 from __future__ import annotations
 
@@ -87,6 +93,72 @@ def test_whitespace_variants_flagged():
     # Token-adjacency whitespace must not hide a sum.
     assert _ops('sum by (tenant) ( user_threshold{metric="x"} )') == ["sum"]
     assert _ops('sum(user_threshold{metric="x"})') == ["sum"]
+
+
+# --- 6. reached through functions / parens / binary operators (#3483) -------
+
+@pytest.mark.parametrize("expr, ops", [
+    # The CustomAlertReplicasDisagree shape with its inner max removed: the
+    # outer count then counts replica copies (scrape-identity labels differ).
+    ('count by (tenant, recipe_id) (label_replace(user_threshold{component="custom"},'
+     ' "threshold_severity", "$1", "severity", "(.*)"))', ["count"]),
+    ('sum(abs(user_threshold{metric="x"}))', ["sum"]),
+    ('sum(user_threshold{metric="x"} * 2)', ["sum"]),
+    ('sum(2 * user_threshold{metric="x"})', ["sum"]),
+    ('topk(1, (user_threshold{metric="x"}))', ["topk"]),
+    ('sum(max_over_time(user_threshold{metric="x"}[5m]))', ["sum"]),
+    ('sum(real_metric or user_threshold{metric="x"})', ["sum"]),
+    ('sum({__name__="user_threshold", metric="x"})', ["sum"]),
+    ('count by (tenant) (\n'
+     '  label_replace(\n'
+     '    # a comment between the aggregation and the selector\n'
+     '    clamp_min(user_threshold{metric="x"}, 0),\n'
+     '    "a", "$1", "b", "(.*)"\n'
+     '  )\n'
+     ') > 1', ["count"]),
+], ids=["label_replace", "abs", "times-2", "2-times", "topk-paren",
+        "over_time", "or-rhs", "__name__", "multi-line"])
+def test_aggregation_reaching_user_threshold_is_flagged(expr, ops):
+    assert _ops(expr) == ops
+
+
+@pytest.mark.parametrize("expr", [
+    # The committed CustomAlertReplicasDisagree shape: max collapses the copies.
+    'count by (tenant, recipe_id, threshold_severity) (label_replace('
+    'max by (tenant, recipe_id, severity, name, mode) (user_threshold{component="custom"}),'
+    ' "threshold_severity", "$1", "severity", "(.*)")) > 1',
+    'max by (tenant) (user_threshold{metric="x"})',
+    'user_threshold{metric="x"} > 3',
+    'sum(rate(real_metric[5m]))',
+    'sum(real_metric and on(tenant) user_threshold{metric="x"})',
+    'count(absent(user_threshold{metric="x"}))',
+    'sum by (tenant) (real_metric) > on(tenant) max by (tenant) (user_threshold{metric="x"})',
+], ids=["max-inside-count", "max", "no-aggregation", "real-metric",
+        "and-filter-rhs", "absent", "compare-to-max"])
+def test_copies_collapsed_or_absent_pass(expr):
+    assert _ops(expr) == []
+
+
+def test_a_hash_inside_a_string_is_not_a_comment():
+    # The regex version stripped `#...` to end-of-line, string or not, so the
+    # `sum` after it on the same line vanished; the parser keeps a `#` inside
+    # a string literal as text.
+    expr = ('max by (a) (label_replace(real_metric, "a", "#", "b", "(.*)"))'
+            ' + sum(user_threshold{metric="x"})')
+    assert _ops(expr) == ["sum"]
+
+
+# --- 7. fail closed ---------------------------------------------------------
+
+def test_unparseable_expr_raises_not_passes():
+    with pytest.raises(lint.UnparseableExpr):
+        lint.nonmax_aggregations('sum(user_threshold{metric="x"}')
+
+
+def test_unparseable_expr_names_the_rule():
+    groups = [{"name": "g", "rules": [{"record": "r:x", "expr": "sum(user_threshold"}]}]
+    with pytest.raises(lint.UnparseableExpr, match="r:x"):
+        lint.check_groups(groups)
 
 
 _RAW = """\
@@ -232,3 +304,33 @@ def test_live_repo_all_max():
         if findings:
             offenders[str(path.relative_to(repo))] = findings
     assert not offenders, f"non-max user_threshold aggregation(s): {offenders}"
+
+
+def test_main_without_parser_is_rc2_not_a_pass(tmp_path, monkeypatch, capsys):
+    """Fail closed: when the expressions cannot be parsed (here: no parser),
+    main exits 2 naming the rule — it never reports `use max`."""
+    rp = _ha_tree(tmp_path, monkeypatch)
+    (rp / "rule-pack-t.yaml").write_text(_RAW.format(op="max"), encoding="utf-8")
+    monkeypatch.setattr(lint, "promql_parser", None)
+    assert lint.main() == 2
+    assert "tenant:alert_threshold:x" in capsys.readouterr().err
+
+
+_INNER_MAX = ('max by (tenant, recipe_id, severity, name, mode) '
+              '(user_threshold{component="custom"})')
+
+
+def test_live_replica_disagreement_alert_without_inner_max_is_caught(
+        tmp_path, monkeypatch, capsys):
+    """#3483: the committed CustomAlertReplicasDisagree with its inner `max`
+    replaced by the raw selector makes the outer `count` count replica
+    copies. The regex version passed that (rc 0); it must be rc 1."""
+    repo = Path(__file__).resolve().parents[2]
+    text = (repo / "rule-packs" / "rule-pack-platform.yaml").read_text(encoding="utf-8")
+    assert text.count(_INNER_MAX) == 1, "the alert's inner max changed — update this test"
+    rp = _ha_tree(tmp_path, monkeypatch)
+    (rp / "rule-pack-platform.yaml").write_text(
+        text.replace(_INNER_MAX, 'user_threshold{component="custom"}'), encoding="utf-8")
+    assert lint.main() == 1
+    out = capsys.readouterr().out
+    assert "CustomAlertReplicasDisagree" in out and "`count`" in out
