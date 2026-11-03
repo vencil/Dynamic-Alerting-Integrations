@@ -622,7 +622,8 @@ def _resolve_auth_token(args: argparse.Namespace) -> str:
       request without it carries no credential at all and is refused at the
       proxy, far from the cause. The read error is a named caller error
       (rc 2): the path through `_lib_paths.classify_path`, its content
-      when it is not UTF-8. ``--apply`` resolves it once, before any
+      when it is not UTF-8 or holds nothing but whitespace (client-go's
+      fileTokenSource refuses an empty token the same way). ``--apply`` resolves it once, before any
       write, and the whole run sends that token (``resolved_sole_token``).
 
     Returns "" when no token is configured or the file cannot be read.
@@ -648,7 +649,15 @@ def _resolve_auth_token(args: argparse.Namespace) -> str:
                 problem.reason)
     try:
         with open(args.auth_token_file, encoding="utf-8") as fh:
-            return fh.read().strip()
+            token = fh.read().strip()
+        if sole and not token:
+            # As client-go's fileTokenSource: an empty token is no token.
+            shown = safe_label(str(args.auth_token_file))
+            raise CallerError(
+                f"唯一憑證讀不到: {flag} {shown}: 檔案是空的" if _LANG == "zh" else
+                f"the only credential cannot be read: {flag} {shown}: the file is empty",
+                "file_empty")
+        return token
     except (OSError, UnicodeDecodeError) as exc:
         # OSError = I/O failure; UnicodeDecodeError = a non-UTF-8/corrupt file
         # (NOT an OSError subclass).

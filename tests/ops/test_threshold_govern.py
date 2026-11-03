@@ -1276,6 +1276,8 @@ def _sole(path):
     (lambda d: d / "nope", "file_not_found"),                        # missing
     (lambda d: d, "file_not_found"),                                 # a directory
     (lambda d: (d / "t").write_bytes(b"\xff\xfe x") and d / "t", "file_not_utf8"),
+    (lambda d: (d / "t").write_bytes(b"") or d / "t", "file_empty"),
+    (lambda d: (d / "t").write_bytes(b" \n\t\n") and d / "t", "file_empty"),
 ])
 def test_sole_credential_token_file_unreadable_is_a_caller_error(tmp_path, monkeypatch, make, reason):
     monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
@@ -1291,6 +1293,14 @@ def test_sole_credential_readable_token_file_is_its_token(tmp_path, monkeypatch)
     f = tmp_path / "token"
     f.write_text("ksa-jwt\n", encoding="utf-8")
     assert tg._resolve_auth_token(_sole(f)) == "ksa-jwt"
+
+
+def test_empty_token_file_with_identity_headers_sends_no_bearer(tmp_path, monkeypatch):
+    """Not the only credential: an empty file stays no Bearer, no error."""
+    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
+    f = tmp_path / "token"
+    f.write_text("\n", encoding="utf-8")
+    assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=str(f))) == ""
 
 
 @pytest.mark.parametrize("over", [
