@@ -93,6 +93,32 @@ var customAlertPermittedLabels = map[string]bool{
 	"mode":      true,
 }
 
+// fixtureScrapeIdentityLabels are the scrape-target labels Prometheus attaches
+// to every user_threshold series it ingests. Since #3515 the raw config scrapes
+// every threshold-exporter pod (not one Service endpoint), so real series carry
+// `pod` / `instance`, and a fixture that models two replicas serving the SAME
+// row (e.g. CustomAlertReplicasDisagree's replica-copy case) has to tell the
+// copies apart with them. They are permitted ONLY on fixture `input_series`
+// (TestRulePackFixturesCarryComponent): a rule-expression selector that pins
+// one would narrow to a single replica, so permittedThresholdLabels /
+// customAlertPermittedLabels deliberately stay without them.
+var fixtureScrapeIdentityLabels = map[string]bool{
+	"pod":      true,
+	"instance": true,
+}
+
+// withoutScrapeIdentity drops fixtureScrapeIdentityLabels matchers so a fixture
+// input series is checked against the same closed set as rule selectors.
+func withoutScrapeIdentity(ms []*labels.Matcher) []*labels.Matcher {
+	out := ms[:0:0]
+	for _, m := range ms {
+		if !fixtureScrapeIdentityLabels[m.Name] {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 // minimum coverage floors — a green run over an EMPTY set is itself a new echo
 // chamber, so the test fails loudly if it discovers far fewer rules than exist
 // today (14 packs; ~63 threshold recording rules). These are conservative
@@ -422,6 +448,7 @@ func TestRulePackFixturesCarryComponent(t *testing.T) {
 				}
 				for _, vs := range userThresholdSelectors(t, base+" series", s.Series) {
 					seriesChecked++
+					vs.LabelMatchers = withoutScrapeIdentity(vs.LabelMatchers)
 					assertComponentMetric(t, base+" series "+s.Series, vs, false)
 				}
 			}

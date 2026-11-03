@@ -8,11 +8,13 @@
 #      severity (as threshold_severity).
 #   2) does NOT fire for a normal reload: the rows disagree for < 10m, then
 #      converge (the old row ends with a stale marker).
-#   3) does NOT fire while the replicas agree — including the same row served
-#      by both replicas (the replica copy collapses in the inner count). The
-#      fixture's user_threshold carries no instance/pod (rulepack_contract_test.go,
-#      #731); identical copies are modelled as one series, which is what the
-#      inner `max by (…, name, mode)` reduces them to anyway.
+#   3) does NOT fire while the replicas agree — one row per key.
+#   4) does NOT fire for the same row served by both replicas: since #3515 each
+#      pod is scraped, so the copies differ only in `pod` and the inner
+#      `max by (…, name, mode)` must collapse them before the count. A raw count
+#      would see 2 and fire — this case is what holds the inner `max by` in place.
+#      (`pod` / `instance` are allowed on fixture input series only —
+#      fixtureScrapeIdentityLabels in rulepack_contract_test.go.)
 # Run: promtool test rules tests/rulepacks/platform-custom-alert-replica-disagreement_test.yaml
 rule_files:
   - ../../rule-packs/rule-pack-platform.yaml
@@ -108,6 +110,20 @@ tests:
       - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="critical", name="conns_high", mode="page"}'
         values: '300x30'
       - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t2", severity="warning", name="conns_other", mode="silent"}'
+        values: '150x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: CustomAlertReplicasDisagree
+        exp_alerts: []
+
+  # 4) replica copy: both replicas serve the SAME (name, mode) row — identical
+  #    labels apart from `pod`. Must not fire (same verdict as agreement).
+  - interval: 1m
+    name: replica-copy-does-not-fire
+    input_series:
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="warning", name="conns_high", mode="page", pod="replica-a"}'
+        values: '150x30'
+      - series: 'user_threshold{component="custom", metric="m1", recipe_id="threshold__m1__gt__w5m__for1m", tenant="t1", severity="warning", name="conns_high", mode="page", pod="replica-b"}'
         values: '150x30'
     alert_rule_test:
       - eval_time: 25m
