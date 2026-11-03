@@ -5,19 +5,67 @@ Codifies the design rule in `docs/design/high-availability.md` §4.3.
 
 WHY: `user_threshold` is a per-tenant CONFIG value emitted by every
 threshold-exporter replica. Under HA the exporter runs replicaCount=2 with
-NO leader-election, and the metric carries no per-pod label
-(`collector.go`: label set = {tenant, metric, component, severity}). So
-Prometheus scrapes TWO identical `user_threshold` series per (tenant, metric,
-severity). A recording rule that aggregates them with `sum by(tenant)` then
+NO leader-election. The exporter's own label set is the same on every
+replica (`collector.go`: {tenant, metric, component, severity}), but the
+platform's Prometheus scrapes per pod (#3483, PR #3515: the raw config's
+`platform-components` job discovers `role: endpointslice` and adds `pod`;
+Prometheus adds `instance` / `job`). So each replica's copy arrives as its
+OWN series, differing from the other copy only in those scrape-identity
+labels. A recording rule that aggregates them with `sum by(tenant)` then
 ADDS the two replicas → the threshold DOUBLES (a `70` becomes `140`) → the
-alert never fires. `max by(...)` collapses the duplicates back to the single
-true value. This bug shipped silently for ~2 months in 4 packs' source
-copies (elasticsearch / kubernetes / mongodb / redis) — see ADR-024 PR3-pre.
+alert never fires; a `count` counts replicas, not values. `max by(...)`
+collapses the copies back to the single true value. This bug shipped
+silently for ~2 months in 4 packs' source copies (elasticsearch /
+kubernetes / mongodb / redis) — see ADR-024 PR3-pre.
 
-WHAT THIS CHECKS: every aggregation applied DIRECTLY to `user_threshold`
-must use the `max` operator. `sum` is the critical HA-double-count danger;
-`avg`/`min` happen to be HA-safe for identical duplicates but are off the
-documented convention, so anything other than `max` is flagged.
+WHAT THIS CHECKS: every aggregation whose argument still carries the raw
+replica copies of `user_threshold` must use the `max` operator. `sum` is
+the critical HA-double-count danger; `avg`/`min` happen to be HA-safe for
+identical duplicates but are off the documented convention, so anything
+other than `max` is flagged.
+
+HOW (PromQL AST, `promql-parser`): the expression is parsed, not matched
+as text, so an aggregation that reaches `user_threshold` through a function
+or parentheses (`count by(x) (label_replace(user_threshold, ...))`,
+`sum(abs(user_threshold))`, `topk(1, (user_threshold))`) is judged exactly
+like `sum(user_threshold)`. A subtree "carries" the copies when it reaches
+a `user_threshold` selector through only these nodes:
+
+  - function calls (`label_replace`, `abs`, `clamp_*`, `*_over_time`, ...):
+    they map series one-to-one and keep the scrape-identity labels — except
+    `absent`, `absent_over_time` and `scalar`, whose result is no longer
+    one series per replica;
+  - parentheses, unary minus, range selectors, subqueries, `offset` / `@`;
+  - binary operators, through EITHER operand (`sum(user_threshold * 2)`
+    still adds two copies) — except the RIGHT operand of `and` / `unless`,
+    which only filters the left side and contributes no series. Vector
+    matching cardinality is not modelled: a copy-carrying operand counts
+    whatever the `on` / `group_*` clause says (over-flagging, never under).
+
+An aggregation stops the walk: past any aggregation the copies count as
+collapsed (operator-only — see below), so `count(max by(...)
+(user_threshold))` passes.
+
+A selector counts as (possibly) selecting `user_threshold` unless it rules
+the metric out: a metric name other than `user_threshold`, or an `__name__`
+matcher (`=`, `!=`, `=~`, `!~`) that rejects it — in every `or` alternative.
+So a nameless `{severity="warning"}` or `{__name__!="foo"}` counts: Prometheus would
+select `user_threshold` with it. Other label matchers never rule it out (the
+lint does not know which label values `user_threshold` series carry). The
+name is matched exactly: `user_threshold_x` or a recording rule named
+`user_threshold:foo` is another metric. Prometheus matches regexes with RE2;
+this lint uses Python `re` (anchored, `fullmatch`). Where the two can
+disagree it does not guess: a regex Python cannot compile (`\\pL`) or that
+uses a POSIX class (`[[:alpha:]]`, which Python reads as a different set)
+counts as accepting `user_threshold` (fail closed). Other RE2/`re`
+differences in the semantics of a regex both accept are not modelled.
+
+An expression `promql-parser` cannot parse is an error (exit 2), never a
+pass: every expression here was already accepted by Prometheus' rule
+loader (`_lib_consumer_read`), so a parse failure means the parser diverged
+from Prometheus and this lint cannot vouch for the expression. A panic in
+the Rust parser (pyo3 `PanicException`, a `BaseException`) is that error
+too, not a crash read as a violation.
 
 WHAT THIS DOES **NOT** CHECK (deliberately — Gemini adversarial review):
 the labels inside `by(...)`. The lint constrains only the OPERATOR, never
@@ -25,7 +73,9 @@ the grouping. Dimensional thresholds (`container_cpu{env="prod"}: "80"` +
 `{env="test"}: "60"`) MUST keep their business labels (env, version,
 severity, tablespace_re, ...) in `by(...)`; forcing a bare `by(tenant)` here
 would flatten them and silently drop a dimension. Operator vs grouping are
-separate concerns — this lint owns only the operator.
+separate concerns — this lint owns only the operator. The flip side: a
+`max by(pod)` / `max without(tenant)` that KEEPS a scrape-identity label
+leaves the copies apart, and an aggregation above it is not flagged.
 
 Real-metric aggregation (`rate(mysql_...)`, `sum(...real metric...)`) is NOT
 constrained — only aggregations of the `user_threshold` config metric.
@@ -33,7 +83,7 @@ constrained — only aggregations of the `user_threshold` config metric.
 Exit codes:
     0  All `user_threshold` aggregations use `max`
     1  Found a non-`max` aggregation of `user_threshold` (--ci)
-    2  Error (YAML parse / no files)
+    2  Error (YAML parse / no files / an expr `promql-parser` cannot parse)
 
 Usage:
     python scripts/tools/lint/check_ha_threshold_aggregation.py        # report
@@ -60,14 +110,22 @@ except Exception:  # pragma: no cover
     def try_utf8_stdout() -> None:  # type: ignore
         pass
 
-# Matches an aggregation operator applied directly to user_threshold:
-#   `<op> by(...) (user_threshold...`  or  `<op>(user_threshold...`
-# Captures <op>. `by/without(...)` grouping is optional and its CONTENTS are
-# intentionally not inspected (operator-only check).
-_AGG_OVER_USER_THRESHOLD = re.compile(
-    r"\b(sum|avg|min|max|count|group|stddev|stdvar|topk|bottomk|quantile)\b"
-    r"\s*(?:(?:by|without)\s*\([^)]*\))?\s*\(\s*user_threshold",
-)
+try:
+    import promql_parser  # requirements/ci-constraints.txt pins it
+except ImportError:  # pragma: no cover - reported by main() as rc 2
+    promql_parser = None  # type: ignore[assignment]
+
+_METRIC = "user_threshold"
+# Their result is no longer one series per replica copy (see module doc).
+_NON_CARRYING_FUNCS = frozenset({"absent", "absent_over_time", "scalar"})
+# Set operators whose RIGHT operand only filters the left one.
+_FILTER_SET_OPS = frozenset({"and", "unless"})
+_EXCERPT_LEN = 100
+
+
+class UnparseableExpr(ValueError):
+    """`promql-parser` refused an expression (or is not installed). Never a
+    pass: the lint cannot say what that expression aggregates."""
 
 
 def _repo_root() -> Path:
@@ -75,36 +133,124 @@ def _repo_root() -> Path:
     return require_project_root(_THIS_DIR)
 
 
+def _regex_accepts(pattern: str) -> "bool | None":
+    """Whether Prometheus' anchored regex *pattern* matches `user_threshold`,
+    or None when Python `re` cannot tell the way RE2 would (see module doc)."""
+    if "[:" in pattern:
+        return None  # POSIX class: Python reads `[[:alpha:]]` as another set
+    try:
+        return re.fullmatch(pattern, _METRIC) is not None
+    except re.error:
+        return None  # RE2-only syntax (`\pL`, ...)
+
+
+def _name_matcher_accepts(m) -> bool:
+    """Whether `__name__` matcher *m* lets `user_threshold` through.
+    Undecidable regexes let it through (fail closed)."""
+    op = m.op
+    MatchOp = promql_parser.MatchOp
+    if op == MatchOp.Equal:
+        return m.value == _METRIC
+    if op == MatchOp.NotEqual:
+        return m.value != _METRIC
+    hit = _regex_accepts(m.value)
+    if hit is None:
+        return True
+    return hit if op == MatchOp.Re else not hit
+
+
+def _may_select_metric(sel) -> bool:
+    """True unless VectorSelector *sel* rules `user_threshold` out: a metric
+    name other than it, or `__name__` matchers rejecting it in every `or`
+    alternative. A nameless `{severity="warning"}` may select it."""
+    if sel.name is not None and sel.name != _METRIC:
+        return False
+    matchers = sel.matchers
+    if matchers is None:
+        return True
+    base = list(matchers.matchers)
+    alternatives = ([base + list(g) for g in matchers.or_matchers]
+                    if matchers.or_matchers else [base])
+    return any(all(_name_matcher_accepts(m) for m in group if m.name == "__name__")
+               for group in alternatives)
+
+
+def _walk(node, out: List[Tuple[str, str]]) -> bool:
+    """Append a finding to *out* for every non-`max` aggregation in *node*
+    whose argument carries raw `user_threshold` replica copies. Return
+    whether *node* itself still carries them (see the module doc)."""
+    p = promql_parser
+    if isinstance(node, p.AggregateExpr):
+        if node.param is not None:
+            _walk(node.param, out)  # topk's k, quantile's φ: findings only
+        if _walk(node.expr, out):
+            op = str(node.op)
+            if op != "max":
+                out.append((op, str(node)[:_EXCERPT_LEN]))
+        return False  # past an aggregation the copies count as collapsed
+    if isinstance(node, p.VectorSelector):
+        return _may_select_metric(node)
+    if isinstance(node, p.MatrixSelector):
+        return _walk(node.vector_selector, out)
+    if isinstance(node, (p.ParenExpr, p.UnaryExpr, p.SubqueryExpr)):
+        return _walk(node.expr, out)
+    if isinstance(node, p.Call):
+        carried = [_walk(arg, out) for arg in node.args]
+        return any(carried) and node.func.name not in _NON_CARRYING_FUNCS
+    if isinstance(node, p.BinaryExpr):
+        lhs = _walk(node.lhs, out)
+        rhs = _walk(node.rhs, out)
+        return lhs or (rhs and str(node.op) not in _FILTER_SET_OPS)
+    if isinstance(node, (p.NumberLiteral, p.StringLiteral)):
+        return False
+    # A node kind this walk does not know: refuse rather than pass it by.
+    raise UnparseableExpr(f"unhandled PromQL node {type(node).__name__}: {node}")
+
+
 def nonmax_aggregations(expr: str) -> List[Tuple[str, str]]:
     """Pure core: return [(operator, excerpt)] for each non-`max` aggregation
-    applied directly to `user_threshold` in `expr`. Empty list = HA-safe.
+    whose argument carries raw `user_threshold` replica copies in `expr` —
+    directly or through functions, parentheses and binary operators (see the
+    module doc). Empty list = HA-safe.
 
     Only the OPERATOR is judged — the `by(...)` grouping is never inspected,
     so `max by(tenant, version, env)` is fine (dimensions preserved) while
-    `sum by(tenant)` is flagged (HA double-count)."""
-    # Strip PromQL line comments BEFORE collapsing newlines. `#` comments to
-    # end-of-line, so flattening first would let a `# ...` comment swallow the
-    # following `user_threshold` token and hide a `sum` violation (false
-    # negative on a FATAL gate). Strip per-line, then check + flatten.
-    s = re.sub(r"#[^\n]*", "", str(expr))
-    if "user_threshold" not in s:
-        return []
-    flat = re.sub(r"\s+", " ", s)
+    `sum by(tenant)` is flagged (HA double-count).
+
+    Raises `UnparseableExpr` when `promql-parser` refuses `expr` (or is not
+    installed) — the expression is parsed, so `#` comments need no
+    stripping: the parser drops them, and a `#` inside a string stays text."""
+    # No textual pre-filter: a nameless `{severity="warning"}` selects user_threshold
+    # without spelling it, so every expression is parsed and walked.
+    s = str(expr)
+    if promql_parser is None:
+        raise UnparseableExpr("promql-parser is not installed "
+                              "(pip install -c requirements/ci-constraints.txt promql-parser)")
+    try:
+        ast = promql_parser.parse(s)
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except BaseException as exc:  # noqa: B036 — ValueError, or pyo3's PanicException
+        raise UnparseableExpr(
+            f"promql-parser refuses the expression ({type(exc).__name__}): {exc}") from exc
     out: List[Tuple[str, str]] = []
-    for m in _AGG_OVER_USER_THRESHOLD.finditer(flat):
-        if m.group(1) != "max":
-            out.append((m.group(1), flat[max(0, m.start() - 5):m.start() + 60]))
+    _walk(ast, out)
     return out
 
 
 def check_groups(groups: list) -> List[Tuple[str, str, str]]:
-    """Return [(rule_name, operator, expr_excerpt)] for non-max aggregations."""
+    """Return [(rule_name, operator, expr_excerpt)] for non-max aggregations.
+    Raises `UnparseableExpr` naming the rule whose expr cannot be parsed."""
     findings: List[Tuple[str, str, str]] = []
     for group in groups:
         for rule in group.get("rules", []):
             expr = str(rule.get("expr", ""))
             name = rule.get("record") or rule.get("alert") or "?"
-            for op, excerpt in nonmax_aggregations(expr):
+            try:
+                found = nonmax_aggregations(expr)
+            except UnparseableExpr as exc:
+                raise UnparseableExpr(f"{name}: {exc}") from exc
+            for op, excerpt in found:
                 findings.append((name, op, excerpt))
     return findings
 
@@ -156,6 +302,11 @@ def main() -> int:
         return EXIT_CALLER_ERROR
     except _lib_consumer_read.ConsumerReadError as exc:
         print(f"ERROR: {_lib_consumer_read.error_text(exc)}", file=sys.stderr)
+        return EXIT_CALLER_ERROR
+    except UnparseableExpr as exc:
+        # Prometheus loaded it, promql-parser did not: this lint cannot judge
+        # the expression, so it does not pass it.
+        print(f"ERROR: cannot judge a rule expression: {exc}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
     total_violations = 0

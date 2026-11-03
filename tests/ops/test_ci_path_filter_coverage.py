@@ -1310,6 +1310,10 @@ PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     # GAINED by #3471: tests/shared/test_rule_source_globs_declared_once.py
     # holds CODEOWNERS' rule-family globs to the rule-source declaration.
     ".github/CODEOWNERS",
+    # GAINED by #3483: tests/shared/test_toolchain_pin_parity.py reads
+    # requirements/ci-constraints.txt to hold pre-commit hooks' pinned
+    # additional_dependencies to the same versions.
+    "requirements/**",
 }
 
 
