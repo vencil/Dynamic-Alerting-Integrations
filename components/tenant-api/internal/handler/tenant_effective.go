@@ -78,14 +78,19 @@ import (
 // @Description with the exporter's own reason and the file of the value
 // @Description shown. The reasons are a closed set, each defined in
 // @Description docs/cli-reference.md under `da-guard effective` (one list,
-// @Description held against pkg/config's NotServed* constants by a test). One entry is not a
-// @Description key of effective_config: a `_` key (not a routing key) a
+// @Description held against pkg/config's NotServed* constants by a test). Two entries are not
+// @Description keys of effective_config: a `_` key (not a routing key) a
 // @Description subtree _defaults.yaml writes non-null and effective_config
 // @Description does not show; the subtree value is never applied (#3341) —
 // @Description value_rejected, or unregistered when the registry does not list it, with file
-// @Description the subtree file (ADR-017 Decision 4's table). Dimensional keys are
+// @Description the subtree file (ADR-017 Decision 4's table); and
+// @Description profile_not_filled, a key the tenant's profile writes that the
+// @Description root declares without a platform value, so no layer applies
+// @Description it (#3395), with file the profile file. Dimensional keys are
 // @Description one threshold whatever their label order or quoting: every key
-// @Description here is spelled as the layer that supplied its value wrote it.
+// @Description here is spelled as the layer that supplied its value wrote it,
+// @Description except profile_not_filled, keyed by the canonical name (the
+// @Description one the exporter's WARN at load names).
 // @Description chain_parse_failed lists the
 // @Description defaults_chain files with a syntax error the exporter does not
 // @Description read; they are read as empty and the tenant is still answered

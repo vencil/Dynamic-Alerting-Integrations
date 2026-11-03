@@ -94,9 +94,12 @@ package config
 //     at the same profileFill's onDeclared on the walker plane
 //     (PlatformProfiles.expand). Named with the profile file and only when
 //     the tenant side sets no value of the key (profileFill never reports
-//     one it sets; withProfileNotFilled leaves out one the view holds).
-//     Like withNotCarried's entries, the value is laid by no plane, so it
-//     is not in the effective config — only here.
+//     one it sets; withProfileNotFilled leaves out one the view holds — a
+//     subtree level valuing it, whose value effective shows and /metrics
+//     serves, the WARN then the profile value's only trace). Like
+//     withNotCarried's entries, the value is laid by no plane, so it is not
+//     in the effective config — only here; keyed by the canonical name the
+//     decision and the WARN use, not by the profile's spelling.
 //
 //     ⛔ Like unconsumed, NOT one of the reasons ValueNotServedAsWritten
 //     selects: not da-guard's value_not_served, not the exporter's

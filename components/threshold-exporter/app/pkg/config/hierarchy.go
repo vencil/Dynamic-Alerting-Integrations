@@ -494,10 +494,21 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 // platform value (#1189: profileFill's onDeclared, the same decision
 // ApplyProfiles WARNs about on /metrics) — profile_not_filled, with the
 // profile file (#3395). Like withNotCarried, the value is applied by no
-// plane, so it is not in the effective config and is named only here. A
-// key the view holds under any spelling (a value another layer gives it)
-// is left out: the entry would read as a verdict on that value. The tenant
-// side never sets such a key (profileFill skips one it sets).
+// plane, so it is not in the effective config and is named only here.
+//
+// The key is the canonical name profileFill decides on (it runs over
+// canonicalView) — the one ApplyProfiles' WARN names — not the profile's
+// spelling: `mysql_cpu` is named `mysql_threads_running`, a dimensional key
+// in its canonical label form. Not re-spelled here: that would be a second
+// naming rule beside the decision.
+//
+// A key the view holds under any spelling is left out: the entry would read
+// as a verdict on that value. The tenant side never sets such a key
+// (profileFill skips one it sets), so the view holds it only from the chain
+// — a subtree `_defaults.yaml` valuing it. Then effective shows and
+// /metrics serves the chain's value, and the profile's value is discarded
+// with ApplyProfiles' WARN as its only trace: the one shape where /metrics
+// reports the decision and not_served does not (#3395).
 func withProfileNotFilled(notServed map[string]NotServedKey, view map[string]any, notFilled map[string]string) map[string]NotServedKey {
 	for k, file := range notFilled {
 		if hasAliasEquivalent(view, k) {

@@ -143,11 +143,15 @@ for that tenant (`effective_config`, `merged_hash`, `source_file`,
   readers that act on a tenant's file (threshold-govern, #2116) act on
   those keys only, in the spelling `effective_config` keys them by, which
   is the one written.
-* `not_served` — per key of `effective_config` whose value /metrics does not
-  serve as shown, a `NotServedKey`: `reason` (da-guard effective's
-  `not_served` reasons, e.g. `value_unparsed`, `window_invalid`) and `file`
-  (relative to `conf_d`; "" when no single file applies). Empty when /metrics
-  serves every key as shown. A da-guard whose effective document lacks the
+* `not_served` — per key /metrics does not serve as written, a
+  `NotServedKey`: `reason` (da-guard effective's `not_served` reasons, e.g.
+  `value_unparsed`, `window_invalid`) and `file` (relative to `conf_d`; ""
+  when no single file applies). Mostly keys of `effective_config` whose
+  shown value is not served; a few entries name a key `effective_config`
+  does not hold — a `_` key a subdirectory `_defaults.yaml` writes, a
+  losing spelling (`spelling_duplicate`), and a key the tenant's profile
+  may not fill in (`profile_not_filled`, keyed by the canonical name). Empty
+  when /metrics serves every value as written. A da-guard whose effective document lacks the
   field is named as older than this tool (#2065). Which of them da-guard's
   `value_not_served` refuses is da-guard's to say (its check's findings,
   `load_guard_report`, #3387), not re-derived here.

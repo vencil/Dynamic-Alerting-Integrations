@@ -1438,7 +1438,9 @@ definitions:
           not_served.go). EffectiveConfig keeps the value as written. It also
           names a reserved key a subtree `_defaults.yaml` writes but does not
           carry, which neither EffectiveConfig nor /metrics holds (#3341;
-          withNotCarried), with that file. Filled by
+          withNotCarried), with that file; and a key the tenant's profile
+          writes but may not fill in, the root declaring it without a platform
+          value (#3395; withProfileNotFilled), with the profile file. Filled by
           ResolveEffective and EffectiveTree; nil from ScopeEffective, and
           omitted when no key is named.
         type: object
@@ -3013,14 +3015,19 @@ paths:
         with the exporter's own reason and the file of the value
         shown. The reasons are a closed set, each defined in
         docs/cli-reference.md under `da-guard effective` (one list,
-        held against pkg/config's NotServed* constants by a test). One entry is not a
-        key of effective_config: a `_` key (not a routing key) a
+        held against pkg/config's NotServed* constants by a test). Two entries are not
+        keys of effective_config: a `_` key (not a routing key) a
         subtree _defaults.yaml writes non-null and effective_config
         does not show; the subtree value is never applied (#3341) —
         value_rejected, or unregistered when the registry does not list it, with file
-        the subtree file (ADR-017 Decision 4's table). Dimensional keys are
+        the subtree file (ADR-017 Decision 4's table); and
+        profile_not_filled, a key the tenant's profile writes that the
+        root declares without a platform value, so no layer applies
+        it (#3395), with file the profile file. Dimensional keys are
         one threshold whatever their label order or quoting: every key
-        here is spelled as the layer that supplied its value wrote it.
+        here is spelled as the layer that supplied its value wrote it,
+        except profile_not_filled, keyed by the canonical name (the
+        one the exporter's WARN at load names).
         chain_parse_failed lists the
         defaults_chain files with a syntax error the exporter does not
         read; they are read as empty and the tenant is still answered
