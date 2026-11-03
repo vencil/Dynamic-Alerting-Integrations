@@ -190,8 +190,8 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 		note(fmt.Sprintf("the unread-key check judged no %s tree (%s); the keys this call writes "+
 			"were not checked for a reader", which, strings.ReplaceAll(fmt.Sprint(why), "\n", " ")))
 	}
-	now, err := keyVerdictOf(root, config.ScanOptions{Overlays: overlays, OverlayMakesDirs: mkdirs,
-		SkipDuplicated: true}, hasRootPlatformFile(afterDoc), at)
+	now, err := keyVerdictOf(root, keyVerdictOpts{scan: config.ScanOptions{Overlays: overlays,
+		OverlayMakesDirs: mkdirs, SkipDuplicated: true}, rootPlatform: hasRootPlatformFile(afterDoc)}, at)
 	if err != nil {
 		return nil, err
 	}
@@ -214,7 +214,7 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 	if len(candidates) == 0 {
 		return nil, nil
 	}
-	was, err := keyVerdictOf(root, config.ScanOptions{SkipDuplicated: true}, true, at)
+	was, err := keyVerdictOf(root, keyVerdictOpts{scan: config.ScanOptions{SkipDuplicated: true}, rootPlatform: true}, at)
 	if err != nil {
 		return nil, err
 	}

@@ -1,8 +1,9 @@
 package main
 
-// The ERROR layer of the shared key verdict (key_verdict.go, #3489 step 1)
-// over real trees, and `da-guard write` refusing a batch that adds such an
-// error (worsens_tree, kind unread). The Python verdict's own trees pin the
+// The shared key verdict (key_verdict.go, pkg/keyverdict, #3489) over real
+// trees — its ERROR layer and `da-guard key-verdict`'s document — and `da-guard
+// write` refusing a batch that adds such an error (worsens_tree, kind
+// unread). The Python verdict's own trees pin the
 // same answers on the Python side, and
 // tests/shared/test_key_verdict_go_parity.py pins the two to each other.
 // Tenant ids are fixture names (CLAUDE.md #9).
@@ -37,7 +38,8 @@ func verdictErrors(t *testing.T, root string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := keyVerdictOf(root, config.ScanOptions{}, hasRootPlatformFile(doc), time.Now().UTC())
+	res, err := keyVerdictOf(root, keyVerdictOpts{rootPlatform: hasRootPlatformFile(doc), profiles: rootProfilesOf(doc)},
+		time.Now().UTC())
 	if err != nil || !res.judged {
 		t.Fatalf("not judged: %v %v", err, res.why)
 	}
@@ -115,7 +117,7 @@ func TestPolicyHeads_ReadAsPolicyAsCodeReadsThem(t *testing.T) {
 	heads := func(doc string) []string {
 		out := []string{}
 		for _, h := range policyHeadsOf([]byte(doc)) {
-			out = append(out, fmt.Sprintf("%s%v", h.head, sortedKeys(h.excluded)))
+			out = append(out, fmt.Sprintf("%s%v", h.Head, sortedKeys(h.Excluded)))
 		}
 		return out
 	}
@@ -145,14 +147,42 @@ func TestKeyVerdict_Subcommand(t *testing.T) {
 	if code := run([]string{keyVerdictCmd, "--config-dir", root, "--at", "2026-07-01T03:00:00Z"}, &out, &errOut); code != exitOK {
 		t.Fatalf("exit %d: %s", code, errOut.String())
 	}
-	var doc keyVerdictDoc
+	var doc map[string]any
 	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
 		t.Fatal(err)
 	}
-	want := keyVerdictDoc{Schema: keyVerdictSchema,
-		Errors: []keyError{{Tenant: "t1", Key: "mysql_conections", Reason: "no_row", File: "a.yaml"}}}
-	if !reflect.DeepEqual(doc, want) {
-		t.Fatalf("doc %+v, want %+v", doc, want)
+	if doc["schema"] != keyVerdictSchema || doc["at"] != "2026-07-01T03:00:00Z" || doc["undecidable"] != false {
+		t.Fatalf("head %v %v %v", doc["schema"], doc["at"], doc["undecidable"])
+	}
+	misspelt := map[string]any{"key": "mysql_conections", "layer": "tenant", "file": "a.yaml", "read_by": []any{},
+		"verdict": "unread", "severity": "error", "reason": "no_row", "disable": nil, "served_family": []any{},
+		"value": "70", "served": nil}
+	rows := doc["tenants"].(map[string]any)["t1"].([]any)
+	if got := fmt.Sprintf("%d %v", len(rows), rows[0].(map[string]any)["key"]); got != "4 mysql_conections" {
+		t.Fatalf("t1's keys: %s", got)
+	}
+	if !reflect.DeepEqual(rows[0], misspelt) {
+		t.Fatalf("t1's misspelt key %v, want %v", rows[0], misspelt)
+	}
+	finding := map[string]any{"severity": "error", "kind": "unread", "key": "mysql_conections", "file": "a.yaml",
+		"tenants": []any{"t1"}, "reason": "no_row", "served_family": []any{}, "served_from": []any{}}
+	if fs := doc["findings"].([]any); len(fs) != 1 || !reflect.DeepEqual(fs[0], finding) {
+		t.Fatalf("findings %v, want [%v]", fs, finding)
+	}
+	if _, subset := doc["tenants_requested"]; subset {
+		t.Fatalf("a whole-tree verdict carries tenants_requested")
+	}
+	// --tenant: only the requested tenants, the absent one named.
+	out.Reset()
+	if code := run([]string{keyVerdictCmd, "--config-dir", root, "--tenant", "t9", "--tenant", "t1"}, &out, &errOut); code != exitOK {
+		t.Fatalf("--tenant: exit %d: %s", code, errOut.String())
+	}
+	doc = nil
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if got := fmt.Sprint(doc["tenants_requested"], doc["tenants_absent"], len(doc["tenants"].(map[string]any))); got != "[t1 t9] [t9] 1" {
+		t.Fatalf("--tenant: %s", got)
 	}
 	// A tree the verdict cannot judge is no empty answer.
 	dup := writeTree(t, map[string]string{"_defaults.yaml": kvRoot, "a.yaml": "tenants:\n  t1: {}\n",
