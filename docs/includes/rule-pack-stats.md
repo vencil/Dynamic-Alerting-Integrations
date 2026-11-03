@@ -15,8 +15,8 @@
 | nginx | nginx-prometheus-exporter | 9 | 6 |
 | operational | threshold-exporter 運營模式 | 0 | 4 |
 | oracle | oracledb_exporter | 11 | 7 |
-| platform | threshold-exporter 自監控 | 0 | 51 |
+| platform | threshold-exporter 自監控 | 0 | 52 |
 | postgresql | postgres_exporter | 11 | 9 |
 | rabbitmq | rabbitmq_exporter | 12 | 8 |
 | redis | redis_exporter | 11 | 6 |
-| **合計** | | **166** | **170** |
+| **合計** | | **166** | **171** |

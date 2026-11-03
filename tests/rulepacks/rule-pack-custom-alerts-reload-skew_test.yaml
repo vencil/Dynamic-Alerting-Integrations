@@ -20,7 +20,8 @@
 #   - t1（一致）＋ t2（整段都不一致）：t1 照常觸發、恰好一則；t2 不觸發。
 #     少了 `== 1` 那道守門，兩筆撞 many-to-many，t1 也一起消失。
 #   - 只有 t2：前 5 分鐘不一致（不觸發），5 分鐘時舊的那筆送出 stale marker、兩個副本
-#     一致（11 分鐘時以新的 mode／name 觸發）。改回 topk，promtool 上前段就會觸發。
+#     一致，6 分 30 秒時（stale 後 5m + for 1m）已以新的 mode／name 觸發——守門只在
+#     不一致的期間暫停，不會多壓。改回 topk，promtool 上前段就會觸發。
 rule_files:
   - ../../rule-packs/rule-pack-custom-alerts.yaml
 
@@ -75,7 +76,9 @@ tests:
       - eval_time: 4m
         alertname: Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m
         exp_alerts: []
-      - eval_time: 11m
+      # stale at 5m + for: 1m ⇒ firing by 6m30s: the guard pauses only while the
+      # replicas disagree, not one evaluation longer.
+      - eval_time: 6m30s
         alertname: Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m
         exp_alerts:
           - exp_labels:
@@ -142,7 +145,9 @@ tests:
       - eval_time: 4m
         alertname: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m
         exp_alerts: []
-      - eval_time: 11m
+      # stale at 5m + for: 1m ⇒ firing by 6m30s: the guard pauses only while the
+      # replicas disagree, not one evaluation longer.
+      - eval_time: 6m30s
         alertname: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m
         exp_alerts:
           - exp_labels:

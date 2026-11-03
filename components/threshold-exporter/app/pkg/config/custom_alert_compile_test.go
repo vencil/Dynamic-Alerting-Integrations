@@ -143,8 +143,6 @@ func TestCompileCustomAlertPack_EmptyHasNoGroups(t *testing.T) {
 	}
 }
 
-// The emit-time invariant: a template action or backtick the platform did
-// not write fails the compile; the platform's own pass.
 // #3483: the threshold record emits a join key only while the replicas agree
 // on its (name, mode) — no tie-break, so Prometheus and VictoriaMetrics behave
 // the same during a reload. Behaviour is pinned by promtool and vmalert-tool in
@@ -172,6 +170,8 @@ func TestThresholdRecordEmitsAKeyOnlyWhileReplicasAgree(t *testing.T) {
 	}
 }
 
+// The emit-time invariant: a template action or backtick the platform did
+// not write fails the compile; the platform's own pass.
 func TestAssertTemplateSafe(t *testing.T) {
 	group := func(v string) []orderedMap {
 		return []orderedMap{{{"name", "g"}, {"rules", []any{orderedMap{

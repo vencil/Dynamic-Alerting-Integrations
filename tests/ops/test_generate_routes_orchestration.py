@@ -1775,6 +1775,7 @@ class TestPlatformAlertsNotTenantSilenceable:
             f"only {len(sets)} platform alerts derived")
         tenant_bearing = sorted(s["alertname"] for s in sets if "tenant" in s)
         assert tenant_bearing == [
+            "CustomAlertReplicasDisagree",
             "FederationGatewayBackendErrors",
             "FederationRejectionRateAnomaly",
             "TenantMetricsOverLimit",
