@@ -26,7 +26,7 @@ lang: zh
 | `TRK-006` | dx | TRK-006: Skip budget CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-010` | dx | TRK-010: Flake 自動重試 CI Policy（不是盲目全域 retry） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-336` | dx | TRK-336: 補齊本地 gate 覆蓋（CI-only / 單邊 gate 執行點判準） | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
-| `TRK-3180` | tech-debt | TRK-3180: da-guard 窮舉矩陣測試在 -race 下太貴，讓矩陣本身變便宜 | exporter | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+| `TRK-3541` | tech-debt | TRK-3541: nightly race 依上一晚各 package 耗時分片 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
 ### accepted (37)
 
@@ -96,6 +96,12 @@ lang: zh
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
 | `TRK-011` | dx | TRK-011: Fake-Clock 注入（根因修復 Go 時間相依測試） | exporter | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
+
+### superseded (1)
+
+| ID | Kind | Title | Domain | PR | Source |
+|----|------|-------|--------|------|--------|
+| `TRK-3180` | tech-debt | TRK-3180: da-guard 窮舉矩陣測試在 -race 下太貴，讓矩陣本身變便宜 | exporter | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 
 
 <!-- PLANNING_INDEX_END -->

@@ -515,7 +515,8 @@ def load_fragment(frags_dir: Path, module: str) -> tuple[dict, str]:
         "fragment_missing": True,
     }
     if not path.is_file():
-        return stub, f"fragment for `{module}` is missing — its matrix leg never uploaded one"
+        return stub, (f"fragment for `{module}` is missing — its merge leg never uploaded "
+                      "one (a race shard left no complete evidence, or the leg never ran)")
     try:
         frag = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(frag, dict):
@@ -799,8 +800,8 @@ def compose_body(inc: dict, frag: dict, state: dict, run_url: str, date: str,
                 "cannot tell a plain failure (fails every repetition) from an "
                 "isolation-shaped one (fails in some). No data race was attributed to it."
             )
-            steps.append(f"Count this test's `pass` and `fail` events in the `race-raw-{module}` "
-                         "artifact: failing every repetition means a plain failure, failing in "
+            steps.append(f"Count this test's `pass` and `fail` events in the `race-raw-{module}-<shard>` "
+                         "artifacts: failing every repetition means a plain failure, failing in "
                          "some means isolation.")
     elif kind == "tests":
         groups = inc.get("groups") or {}
@@ -815,7 +816,7 @@ def compose_body(inc: dict, frag: dict, state: dict, run_url: str, date: str,
                 "",
                 f"_… and {len(tests) - len(shown)} more (list capped at "
                 f"{MAX_RENDERED_TESTS} to stay inside GitHub's {ISSUE_BODY_MAX}-char "
-                f"body limit) — the complete list is in the `race-raw-{module}` artifact._",
+                f"body limit) — the complete list is in the `race-raw-{module}-<shard>` artifacts._",
             ]
         out += [""]
         shapes = [repetitions(inc.get("runs"), t)[0] for t in tests]
@@ -851,7 +852,7 @@ def compose_body(inc: dict, frag: dict, state: dict, run_url: str, date: str,
             out += [f"- `{t}`" for t in shown] or ["- _none listed in the panic_"]
             if len(running) > len(shown):
                 out += ["", f"_… and {len(running) - len(shown)} more — see the "
-                            f"`race-raw-{module}` artifact._"]
+                            f"`race-raw-{module}-<shard>` artifacts._"]
             out += [""]
         out += ["_Running at the deadline is not the same as failing: these tests were "
                 "in flight when the clock ran out, which makes them the first ones to "
@@ -872,7 +873,7 @@ def compose_body(inc: dict, frag: dict, state: dict, run_url: str, date: str,
                      "issues.")
         nature.append(para)
         steps.append(
-            f"Find where the time went: in the `race-raw-{module}` artifact, compare "
+            f"Find where the time went: in the `race-raw-{module}-<shard>` artifacts, compare "
             "the package's `Elapsed` with the `-timeout` above, and rank that package's "
             "`pass`/`fail` events by `Elapsed`. Start with the tests listed as running "
             "at the deadline."
@@ -905,7 +906,7 @@ def compose_body(inc: dict, frag: dict, state: dict, run_url: str, date: str,
 
     triage = [f"Reproduce: `{reproduce}`", *steps,
               f"Full evidence — race report / panic / build error — is in the "
-              f"`race-raw-{module}` artifact on [the run]({run_url})."]
+              f"`race-raw-{module}-<shard>` artifacts on [the run]({run_url})."]
     out += ["## Triage", ""]
     out += [f"{i}. {step}" for i, step in enumerate(triage, 1)]
     out += [
