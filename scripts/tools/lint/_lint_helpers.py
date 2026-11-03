@@ -49,6 +49,9 @@ BUILD_EXEMPT = frozenset({
     # of _lib_io so tools without PyYAML can import them. Library, not CLI.
     "_lib_paths.py",
     "_lib_label.py",
+    # #3446 — what a caller-given value selects + the one directory listing.
+    # Library, not CLI.
+    "_lib_input.py",
     # v2.10.0 (da-tools ROI r5) — minimal CRD YAML serializer shared by
     # operator_generate + migrate_to_operator. Library, not CLI.
     "_lib_yaml.py",

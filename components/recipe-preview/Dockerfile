@@ -121,6 +121,8 @@ COPY scripts/tools/_lib_io.py                   ./core/_lib_io.py
 # #3276: _lib_io → _lib_label (safe_label); compile_custom_alerts → _lib_paths.
 COPY scripts/tools/_lib_label.py                ./core/_lib_label.py
 COPY scripts/tools/_lib_paths.py                ./core/_lib_paths.py
+# #3446: _lib_consumer_read → _lib_input (the one directory listing).
+COPY scripts/tools/_lib_input.py                ./core/_lib_input.py
 COPY scripts/tools/_lib_constants.py            ./core/_lib_constants.py
 COPY scripts/tools/_lib_tenant_values.py        ./core/_lib_tenant_values.py
 COPY scripts/tools/_lib_parse_cache.py          ./core/_lib_parse_cache.py

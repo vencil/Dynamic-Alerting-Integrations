@@ -2,7 +2,8 @@
 """test_state_reconcile.py — tests for da-tools state-reconcile (#405 Cat A).
 
 Coverage:
-  - find_state_files: empty dir, multiple files, deterministic sort
+  - the state files --state-dir selects (#3446, `_lib_input.selected`):
+    empty dir, multiple files, deterministic sort
   - read_state: valid / missing / invalid JSON
   - apply_migration_chain: pass-through (same version), no-path failure
   - build_manifest: shape + path canonicalisation
@@ -23,6 +24,7 @@ from pathlib import Path
 import pytest
 
 import state_reconcile as sr
+import _lib_input  # noqa: E402  (#3446: what --state-dir selects)
 from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
 
 
@@ -58,22 +60,30 @@ def _write_state(state_dir: Path, cluster: str, schema_version: str = "1.0") -> 
     return p
 
 
-# ─── find_state_files ─────────────────────────────────────────────────
+# ─── what --state-dir selects ─────────────────────────────────────────
+
+
+def _files(state_dir: Path) -> list[Path]:
+    """The state files --state-dir *state_dir* selects, as main() asks."""
+    args = sr.build_parser().parse_args(["--state-dir", str(state_dir)])
+    return _lib_input.selected(args, "state_dir", lang="en")
 
 
 def test_find_state_files_empty_dir(state_dir):
-    assert sr.find_state_files(state_dir) == []
+    assert _files(state_dir) == []
 
 
-def test_find_state_files_missing_dir(tmp_path):
-    assert sr.find_state_files(tmp_path / "nope") == []
+def test_find_state_files_missing_default_dir(tmp_path, monkeypatch):
+    """The default nobody gave, not there: nothing selected (ABSENT_EMPTY)."""
+    monkeypatch.chdir(tmp_path)
+    assert _lib_input.selected(sr.build_parser().parse_args([]), "state_dir", lang="en") == []
 
 
 def test_find_state_files_sorted(state_dir):
     _write_state(state_dir, "zebra")
     _write_state(state_dir, "alpha")
     _write_state(state_dir, "middle")
-    result = [f.stem for f in sr.find_state_files(state_dir)]
+    result = [f.stem for f in _files(state_dir)]
     assert result == ["alpha", "middle", "zebra"]
 
 
@@ -81,7 +91,7 @@ def test_find_state_files_only_json(state_dir):
     _write_state(state_dir, "cluster-a")
     (state_dir / "README.md").write_text("not state")
     (state_dir / "ignore.txt").write_text("not state")
-    result = [f.name for f in sr.find_state_files(state_dir)]
+    result = [f.name for f in _files(state_dir)]
     assert result == ["cluster-a.json"]
 
 
@@ -202,7 +212,7 @@ def test_build_manifest_custom_state_dir_path_prefix(tmp_path):
     custom = tmp_path / "custom" / "states"
     custom.mkdir(parents=True)
     _write_state(custom, "cluster-x")
-    files = sr.find_state_files(custom)
+    files = _files(custom)
 
     # Relative-form state_dir → preserve as-is in manifest
     rel = Path("custom/states")
@@ -228,7 +238,7 @@ def test_build_manifest_uses_posix_separators_on_windows():
 def test_build_manifest_multiple(state_dir):
     _write_state(state_dir, "prod-us-east")
     _write_state(state_dir, "prod-us-west")
-    files = sr.find_state_files(state_dir)
+    files = _files(state_dir)
     manifest = sr.build_manifest(files, state_dir)
     assert manifest["schema_version"] == "1.0"
     assert {s["cluster"] for s in manifest["states"]} == {
@@ -250,11 +260,11 @@ def test_reconcile_idempotent(state_dir, manifest_path):
     _write_state(state_dir, "cluster-a")
     _write_state(state_dir, "cluster-b")
 
-    r1 = sr.reconcile(state_dir, manifest_path)
+    r1 = sr.reconcile(state_dir, manifest_path, _files(state_dir))
     assert r1["manifest_change"] is not None  # first run creates manifest
     assert manifest_path.exists()
 
-    r2 = sr.reconcile(state_dir, manifest_path)
+    r2 = sr.reconcile(state_dir, manifest_path, _files(state_dir))
     assert r2["manifest_change"] is None  # second run is consistent
     assert r2["schema_migrations"] == []
     assert r2["schema_drift_unresolvable"] == []
@@ -263,10 +273,10 @@ def test_reconcile_idempotent(state_dir, manifest_path):
 def test_reconcile_manifest_drift(state_dir, manifest_path):
     """State file added but manifest missing it → rebuild."""
     _write_state(state_dir, "cluster-a")
-    sr.reconcile(state_dir, manifest_path)  # initial manifest with 1 cluster
+    sr.reconcile(state_dir, manifest_path, _files(state_dir))  # initial manifest with 1 cluster
     _write_state(state_dir, "cluster-b")  # second cluster added
 
-    r = sr.reconcile(state_dir, manifest_path)
+    r = sr.reconcile(state_dir, manifest_path, _files(state_dir))
     assert r["manifest_change"] is not None
     assert r["manifest_change"]["old_state_count"] == 1
     assert r["manifest_change"]["new_state_count"] == 2
@@ -282,7 +292,7 @@ def test_reconcile_unresolvable_drift_missing_version(state_dir, manifest_path):
     p = state_dir / "broken.json"
     p.write_text(json.dumps({"generated_at": "x"}), encoding="utf-8")
 
-    r = sr.reconcile(state_dir, manifest_path)
+    r = sr.reconcile(state_dir, manifest_path, _files(state_dir))
     assert len(r["schema_drift_unresolvable"]) == 1
     assert "missing schema_version" in r["schema_drift_unresolvable"][0]["reason"]
 
@@ -303,7 +313,7 @@ def test_reconcile_numeric_schema_version_normalised(state_dir, manifest_path):
         encoding="utf-8",
     )
 
-    r = sr.reconcile(state_dir, manifest_path)
+    r = sr.reconcile(state_dir, manifest_path, _files(state_dir))
     # No drift reported — numeric 1.0 normalised to "1.0" matches CURRENT.
     assert r["schema_drift_unresolvable"] == []
     assert r["schema_migrations"] == []
@@ -317,7 +327,7 @@ def test_reconcile_unsupported_schema_version_type(state_dir, manifest_path):
         encoding="utf-8",
     )
 
-    r = sr.reconcile(state_dir, manifest_path)
+    r = sr.reconcile(state_dir, manifest_path, _files(state_dir))
     assert len(r["schema_drift_unresolvable"]) == 1
     reason = r["schema_drift_unresolvable"][0]["reason"]
     assert "unsupported type" in reason
@@ -328,7 +338,7 @@ def test_reconcile_unresolvable_drift_old_version(state_dir, manifest_path):
     """State file with old version + no migration → unresolvable."""
     _write_state(state_dir, "cluster-x", schema_version="0.9")
 
-    r = sr.reconcile(state_dir, manifest_path)
+    r = sr.reconcile(state_dir, manifest_path, _files(state_dir))
     assert len(r["schema_drift_unresolvable"]) == 1
     drift = r["schema_drift_unresolvable"][0]
     assert drift["from"] == "0.9"
@@ -339,7 +349,7 @@ def test_reconcile_dry_run_no_writes(state_dir, manifest_path):
     """--dry-run reports changes but does not touch the filesystem."""
     _write_state(state_dir, "cluster-a")
 
-    r = sr.reconcile(state_dir, manifest_path, dry_run=True)
+    r = sr.reconcile(state_dir, manifest_path, _files(state_dir), dry_run=True)
     assert r["manifest_change"] is not None  # reports change
     assert not manifest_path.exists()  # but no write happened
 
@@ -356,7 +366,7 @@ def test_reconcile_applies_migration(state_dir, manifest_path, monkeypatch):
     monkeypatch.setitem(sr.MIGRATIONS, ("1.0", "1.1"), _migrate)
 
     p = _write_state(state_dir, "cluster-a", schema_version="1.0")
-    sr.reconcile(state_dir, manifest_path)
+    sr.reconcile(state_dir, manifest_path, _files(state_dir))
 
     data = json.loads(p.read_text(encoding="utf-8"))
     assert data["schema_version"] == "1.1"
@@ -559,7 +569,7 @@ def test_reconcile_excludes_manifest_from_state_files(tmp_path):
     )
 
     # Run reconcile with state_dir == flat_dir (manifest sibling, same dir)
-    r = sr.reconcile(flat_dir, manifest_path)
+    r = sr.reconcile(flat_dir, manifest_path, _files(flat_dir))
 
     # Only the real cluster should be counted
     assert r["state_file_count"] == 1
@@ -571,7 +581,7 @@ def test_reconcile_excludes_manifest_from_state_files(tmp_path):
     assert "manifest" not in cluster_names
 
     # Run reconcile again — must be idempotent (no growth on re-run)
-    r2 = sr.reconcile(flat_dir, manifest_path)
+    r2 = sr.reconcile(flat_dir, manifest_path, _files(flat_dir))
     assert r2["state_file_count"] == 1
     assert r2["manifest_change"] is None  # already consistent
 
@@ -678,10 +688,10 @@ def test_reconcile_report_includes_state_dir_missing_flag(tmp_path):
     wants to distinguish typo from empty."""
     missing = tmp_path / "nope"
     manifest = tmp_path / "manifest.json"
-    r = sr.reconcile(missing, manifest)
+    r = sr.reconcile(missing, manifest, [])
     assert r["state_dir_missing"] is True
 
     empty = tmp_path / "empty"
     empty.mkdir()
-    r = sr.reconcile(empty, manifest)
+    r = sr.reconcile(empty, manifest, _files(empty))
     assert r["state_dir_missing"] is False

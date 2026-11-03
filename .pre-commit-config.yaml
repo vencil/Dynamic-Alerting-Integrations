@@ -231,7 +231,7 @@ repos:
         # WARN, but the hook venv should carry it so the rule actually runs.
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: '^k8s/.*\.ya?ml$|^\.kube-linter\.yaml$|^scripts/tools/lint/check_(k8s_manifests|iac_helm)\.py$|^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh)$|^components/threshold-exporter/app/(cmd/da-crdecode/|go\.(mod|sum)$)'
+        files: '^k8s/.*\.ya?ml$|^\.kube-linter\.yaml$|^scripts/tools/lint/check_(k8s_manifests|iac_helm)\.py$|^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh)$|^components/threshold-exporter/app/(cmd/da-crdecode/|go\.(mod|sum)$)'
         stages: [manual]
 
       # --- Fast drift checks (< 5s each) ---
@@ -316,7 +316,7 @@ repos:
         pass_filenames: false
         # 也涵蓋兩個注入目標本身（#1277）：手改 sentinel 區塊內的生成表
         # 若不觸發 hook 就不會被擋——與 byo-rulepack-table-check 同一課。
-        files: (?:^(rule-packs/.*\.ya?ml$|k8s/03-monitoring/.*\.ya?ml$|docs/architecture-and-design(\.en)?\.md$|docs/design/rule-packs(\.en)?\.md$|scripts/tools/dx/generate_rule_pack_stats\.py$|scripts/tools/dx/generate_platform_data\.py$))|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/.*\.ya?ml$|k8s/03-monitoring/.*\.ya?ml$|docs/architecture-and-design(\.en)?\.md$|docs/design/rule-packs(\.en)?\.md$|scripts/tools/dx/generate_rule_pack_stats\.py$|scripts/tools/dx/generate_platform_data\.py$))|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         additional_dependencies: ['pyyaml']
 
       - id: byo-rulepack-table-check
@@ -337,7 +337,7 @@ repos:
         pass_filenames: false
         # 也涵蓋生成器本身：只改 render 邏輯（例如欄位格式）而不碰來源時，
         # 若 hook 不觸發，committed 表格就會與新實作不一致（外審抓到）。
-        files: (?:^(rule-packs/|k8s/03-monitoring/.*\.ya?ml|docs/integration/byo-prometheus-integration(\.en)?\.md|scripts/tools/dx/generate_byo_rulepack_table\.py))|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/|k8s/03-monitoring/.*\.ya?ml|docs/integration/byo-prometheus-integration(\.en)?\.md|scripts/tools/dx/generate_byo_rulepack_table\.py))|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         additional_dependencies: ['pyyaml']
 
       - id: alert-reference-check
@@ -349,7 +349,7 @@ repos:
         entry: bash scripts/ops/with_da_read.sh python3 -X utf8 scripts/tools/dx/generate_alert_reference.py --check
         language: python
         pass_filenames: false
-        files: (?:^rule-packs/.*\.ya?ml$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+        files: (?:^rule-packs/.*\.ya?ml$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
         additional_dependencies: ['pyyaml']
 
       - id: gen-agent-adapters-check
@@ -467,7 +467,7 @@ repos:
         #
         # Kept honest by `TestTheHookFiresOnEverythingTheGateReads`, which
         # re-measures both sets and compares them to THIS pattern.
-        files: (?:(\.(md|ya?ml|jsx|json|html)$)|((^|/)VERSION$)|(^scripts/tools/(_lib_.*|lint/(validate_docs_versions|_version_patterns))\.py$))|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:(\.(md|ya?ml|jsx|json|html)$)|((^|/)VERSION$)|(^scripts/tools/(_lib_.*|lint/(validate_docs_versions|_version_patterns))\.py$))|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         additional_dependencies: ['pyyaml']
 
       - id: doc-k8s-refs
@@ -591,7 +591,7 @@ repos:
         # alone must reach this hook too, and so must a change to how the
         # exporter resolves that tree (the whole Go module: served-values reads
         # what the collector's scrape resolved) or how da-guard is dispatched.
-        files: (?:^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py|scripts/tools/dx/generate_platform_data\.py|scripts/tools/dx/generate_tenant_metadata\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|components/threshold-exporter/config/conf\.d/|tools/portal/src/interactive/tools/_common/data/rule-packs-fallback\.json))|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/|k8s/03-monitoring/|docs/assets/platform-data\.json|scripts/tools/ops/scaffold_tenant\.py|scripts/tools/dx/generate_platform_data\.py|scripts/tools/dx/generate_tenant_metadata\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/|components/threshold-exporter/config/conf\.d/|tools/portal/src/interactive/tools/_common/data/rule-packs-fallback\.json))|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         additional_dependencies: ['pyyaml']
 
       - id: repo-name-check
@@ -930,7 +930,7 @@ repos:
         entry: bash scripts/ops/with_da_read.sh bash scripts/ops/with_da_crdecode.sh python3 -X utf8 scripts/tools/lint/check_metric_dictionary.py --ci
         language: python
         pass_filenames: false
-        files: (?:^(scripts/tools/metric-dictionary\.yaml|rule-packs/.*\.ya?ml|k8s/03-monitoring/.*\.ya?ml)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(scripts/tools/metric-dictionary\.yaml|rule-packs/.*\.ya?ml|k8s/03-monitoring/.*\.ya?ml)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         additional_dependencies: ['pyyaml']
 
       # --- v2.7.0 Harness Audit: 啟用原本未掛入的防守工具 ---
@@ -950,7 +950,7 @@ repos:
         entry: bash scripts/ops/with_da_read.sh python3 -X utf8 scripts/tools/lint/check_bilingual_annotations.py --ci
         language: python
         pass_filenames: false
-        files: (?:^(rule-packs/.*\.ya?ml|k8s/03-monitoring/.*\.ya?ml)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+        files: (?:^(rule-packs/.*\.ya?ml|k8s/03-monitoring/.*\.ya?ml)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
         additional_dependencies: ['pyyaml']
 
       # --- Optional heavier checks (enable with SKIP= override) ---
@@ -1236,7 +1236,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml', 'promql-parser==0.10.0']
         pass_filenames: false
-        files: (?:^(rule-packs/|k8s/03-monitoring/configmap-rules-).*\.ya?ml$)|^(?:scripts/tools/lint/check_ha_threshold_aggregation\.py|scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/|k8s/03-monitoring/configmap-rules-).*\.ya?ml$)|^(?:scripts/tools/lint/check_ha_threshold_aggregation\.py|scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         # FATAL: a `sum by(...)(user_threshold)` DOUBLES the threshold under the
         # default HA topology (replicaCount=2, no leader-election) → alert never
         # fires. Checks the OPERATOR only (must be max); does NOT constrain by()
@@ -1251,7 +1251,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|helm/tenant-api/(values\.yaml|templates/.*\.(ya?ml|tpl))|scripts/tools/lint/check_single_writer_invariant\.py)$
+        files: ^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|helm/tenant-api/(values\.yaml|templates/.*\.(ya?ml|tpl))|scripts/tools/lint/check_single_writer_invariant\.py)$
         # FATAL: the write plane (internal/gitops/Writer) is a single writer —
         # a per-process lock + in-memory PR tracker that do NOT coordinate across
         # pods. replicaCount>1 OR a missing `strategy: Recreate` reintroduces the
@@ -1267,7 +1267,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|helm/.*\.ya?ml|k8s/.*\.ya?ml|try-local/docker-compose\.yaml|components/da-portal/nginx\.conf|scripts/tools/lint/check_cross_ns_url_consistency\.py|scripts/tools/lint/cross_ns_url_lint\.config\.yaml)$
+        files: ^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|helm/.*\.ya?ml|k8s/.*\.ya?ml|try-local/docker-compose\.yaml|components/da-portal/nginx\.conf|scripts/tools/lint/check_cross_ns_url_consistency\.py|scripts/tools/lint/cross_ns_url_lint\.config\.yaml)$
         # FATAL: past drift shipped charts/docs pinning `tenant-api.monitoring.
         # svc…` while raw manifests deployed tenant-api into its dedicated
         # `tenant-api` ns, and recipe-preview called bare `http://tenant-api:8080`
@@ -1309,7 +1309,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/runtime-canary\.rules\.yaml|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/runtime-canary\.rules\.yaml|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         # No rule may join tenant_metadata_info (arithmetic / comparison match,
         # either side, any label list): a join made runbook_url/owner/tier part
         # of the alert's identity, and threshold-exporter's replicas briefly
@@ -1355,7 +1355,7 @@ repos:
         language: python
         pass_filenames: false
         additional_dependencies: ['pyyaml']
-        files: '^k8s/03-monitoring/(configmap-rules-.*\.ya?ml|deployment-prometheus\.yaml)$|^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh)$|^components/threshold-exporter/app/(cmd/da-crdecode/|go\.(mod|sum)$)'
+        files: '^k8s/03-monitoring/(configmap-rules-.*\.ya?ml|deployment-prometheus\.yaml)$|^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh)$|^components/threshold-exporter/app/(cmd/da-crdecode/|go\.(mod|sum)$)'
 
       - id: rulepack-configmap-drift
         name: "ADR-024: configmap-rules-*.yaml must match rule-packs/ source (Commit 4 hard gate)"
@@ -1368,7 +1368,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         # The deployed configmaps must never silently drift from source (the
         # ~2-month drift caused the onboarding-vacuum bug, #709). Edit a rule pack
         # but forget to regenerate its configmap → this fails locally before the
@@ -1385,7 +1385,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         # Semantic copy guard (the hook id keeps its old "3copy" name for the
         # ledger). The third copy — committed PrometheusRule CRDs under
         # operator-manifests/ — is gone (#3427): it drifted on metadata this
@@ -1405,7 +1405,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(scripts/tools/lint/check_portal_rulepack_claims\.py|tools/portal/src/interactive/tools/rule-pack-detail\.jsx|rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(scripts/tools/lint/check_portal_rulepack_claims\.py|tools/portal/src/interactive/tools/rule-pack-detail\.jsx|rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
         # rule-pack-detail.jsx is HAND-maintained customer-facing copy with no
         # generator behind it. It had drifted to 28 alert names that exist in no
         # rule tree — invented capability claims a prospect can read. Note the
@@ -1427,7 +1427,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: (?:^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+        files: (?:^(rule-packs/rule-pack-custom-alerts\.yaml|components/threshold-exporter/config/conf\.d/.*\.yaml|scripts/tools/dx/compile_custom_alerts\.py|scripts/tools/_lib_tenant_values\.py|scripts/tools/ops/guard_dispatch\.py|scripts/ops/with_da_guard\.sh|components/threshold-exporter/app/.*)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
 
       - id: retire-drift-check
         name: "#869: forbid removing a K8s exporter target while conf.d _metadata.db_type remains (false-positive guard)"
@@ -1582,7 +1582,7 @@ repos:
         language: python
         additional_dependencies: ['pyyaml']
         pass_filenames: false
-        files: '^k8s/.*kube-state-metrics.*\.ya?ml$|^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh)$|^components/threshold-exporter/app/(cmd/da-crdecode/|go\.(mod|sum)$)'
+        files: '^k8s/.*kube-state-metrics.*\.ya?ml$|^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh)$|^components/threshold-exporter/app/(cmd/da-crdecode/|go\.(mod|sum)$)'
         # The kubernetes rule pack's (0a) version join needs
         # kube_pod_labels{label_app_kubernetes_io_version}, which KSM emits only
         # with --metric-labels-allowlist=pods=[app.kubernetes.io/version]. Static
@@ -1619,7 +1619,7 @@ repos:
         # listings + orphan warns still never red-gate (Gemini final-check) —
         # only the deferral *itself* rotting is an error. A missing map exits 2. Fix: `da-tools threshold-recommend
         # --generate-observed-map` + re-resolve needs_review, then commit the map.
-        files: (?:^(scripts/tools/ops/metric_observed_map\.yaml|rule-packs/rule-pack-.*\.ya?ml|scripts/tools/(ops/_observed_map_lib|lint/check_threshold_observed_map)\.py)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
+        files: (?:^(scripts/tools/ops/metric_observed_map\.yaml|rule-packs/rule-pack-.*\.ya?ml|scripts/tools/(ops/_observed_map_lib|lint/check_threshold_observed_map)\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_read\.sh|components/da-read/.*)$
 
       - id: threshold-reachability-check
         name: "threshold key reachability — every alert-demanded key must be producible by platform defaults (TRK-337)"
@@ -1699,7 +1699,7 @@ repos:
         # `migrate_rule` and six more `_lib_*` modules — loaded on every run via
         # onboard_platform / scaffold_tenant / check_confd_schema — joined this
         # list: all seven were read by the gate and none fired it.
-        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/rule-pack-.*\.ya?ml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|label|parse_cache|parse_tree|paths|prometheus|python|validation|write_check)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
+        files: ^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/rule-pack-.*\.ya?ml|helm/threshold-exporter/values\.yaml|(.*/)?(?i:_defaults[^/]*\.ya?ml)|scripts/tools/ops/(scaffold_tenant|_observed_map_lib|init_project|_registry_lib|onboard_platform|migrate_rule|guard_dispatch)\.py|scripts/tools/_lib_(atomic_write|compat|confd|confedit|constants|consumer_read|exitcodes|godispatch|io|label|parse_cache|parse_tree|paths|prometheus|python|validation|write_check)\.py|scripts/ops/(guard_defaults_scopes\.py|with_da_guard\.sh)|scripts/tools/lint/check_(threshold_reachability|confd_schema)\.py|docs/schemas/platform-defaults\.schema\.json|components/threshold-exporter/app/.*)$
 
       - id: threshold-registry-check
         name: "threshold registry SoT — schema + scaffold equivalence + generated-surface freshness + prose membership (TRK-339 WS1a / #1200)"
@@ -1747,7 +1747,7 @@ repos:
         # gate itself. (#1231 later knowingly reversed the #992/#944 "keep
         # mysql_cpu" decision — the key is now mysql_threads_running; this gate
         # predates and outlives that rename.)
-        files: ^(scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|scripts/tools/lint/check_threshold_unit_sanity\.py|scripts/tools/_lib_parse_cache\.py|scripts/tools/_lib_doc_yaml_inventory\.py|scripts/tools/_lib_parse_tree\.py|scripts/ops/with_da_(guard|read)\.sh|components/da-read/.*|components/threshold-exporter/app/.*)$
+        files: ^(scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum))|rule-packs/threshold-registry\.yaml|docs/assets/(platform|recommendation|template)-data\.json|helm/threshold-exporter/values\.yaml|environments/.*/threshold-exporter\.yaml|k8s/crd/examples/.*\.yaml|(components/threshold-exporter/config|try-local/seed)/conf\.d/.*\.ya?ml|docs/.*\.md|scripts/tools/lint/check_threshold_unit_sanity\.py|scripts/tools/_lib_parse_cache\.py|scripts/tools/_lib_doc_yaml_inventory\.py|scripts/tools/_lib_parse_tree\.py|scripts/ops/with_da_(guard|read)\.sh|components/da-read/.*|components/threshold-exporter/app/.*)$
 
       - id: scrape-reachability-check
         name: "scrape-face reachability — every rule-consumed leaf metric must be admitted by a scrape job (TRK-340 / #1203)"
@@ -1806,7 +1806,7 @@ repos:
         # edit that never runs the gate.
         # The render path reads every file under templates/ (a `_helpers.tpl`
         # changes what renders) and check_iac_helm.py's RENDER_BASE_SETS.
-        files: ^(k8s/.*\.ya?ml|helm/[^/]+/(values[^/]*\.ya?ml|Chart\.ya?ml|templates/.*)|components/da-tools/app/(entrypoint\.py|build\.sh)|scripts/tools/lint/(check_image_pin_capability|_lint_helpers|check_iac_helm)\.py|scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: ^(k8s/.*\.ya?ml|helm/[^/]+/(values[^/]*\.ya?ml|Chart\.ya?ml|templates/.*)|components/da-tools/app/(entrypoint\.py|build\.sh)|scripts/tools/lint/(check_image_pin_capability|_lint_helpers|check_iac_helm)\.py|scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_crdecode\.sh|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
 
       - id: chart-ship-surface
         name: "chart ship surface — every root file of a packaged chart must be declared SHIP or .helmignore'd (#1755)"
@@ -1889,7 +1889,7 @@ repos:
         # firing tests) fails unless grandfathered; a baselined alert that gains a test
         # / is removed also fails (baseline == reality). Fix: add an alert_rule_test, or
         # `python scripts/tools/lint/check_vmalert_coverage.py --generate` + commit.
-        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/(.*_test\.ya?ml|vmalert_coverage_baseline\.yaml)|scripts/tools/lint/check_vmalert_coverage\.py)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|tests/rulepacks/(.*_test\.ya?ml|vmalert_coverage_baseline\.yaml)|scripts/tools/lint/check_vmalert_coverage\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
 
       - id: maintenance-symmetry-check
         name: rule-pack per-arm maintenance-clause symmetry (#947/#977 bare-arm class guard)
@@ -1908,7 +1908,7 @@ repos:
         # during its maintenance window. Requires 0 copies (:core-factored upstream),
         # 1 factored top-level copy (union parenthesised — `or` binds looser than
         # `unless`), or 2 copies one-per-arm and byte-canonical.
-        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|scripts/tools/lint/check_maintenance_symmetry\.py|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|scripts/tools/lint/check_maintenance_symmetry\.py|scripts/tools/lint/check_leftouterjoin_enrichment\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
 
       - id: orphan-recordings-check
         name: "orphan recording rules — every record must have a consumer across trees/dashboards/observed-map (TRK-339 WS2a / #1200)"
@@ -1928,7 +1928,7 @@ repos:
         # grandfathered orphans are INFO (dispositions tracked in #1204).
         # or-masking (WS2a S2) is deliberately NOT gated — heuristic, stays a
         # periodic script (see the lint docstring).
-        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/(configmap-rules-.*\.ya?ml|configmap-grafana-.*\.ya?ml|.*\.json)|try-local/grafana/dashboards/.*\.json|scripts/tools/ops/metric_observed_map\.yaml|scripts/tools/lint/check_orphan_recordings\.py)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/(configmap-rules-.*\.ya?ml|configmap-grafana-.*\.ya?ml|.*\.json)|try-local/grafana/dashboards/.*\.json|scripts/tools/ops/metric_observed_map\.yaml|scripts/tools/lint/check_orphan_recordings\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
 
       - id: metric-group-pairs-check
         name: "metric_group upgrade pairs — X/XCritical must share the severity-dedup label (TRK-339 WS2a / #1200; bug #1199)"
@@ -1948,7 +1948,7 @@ repos:
         # (exit-locked, now empty — #1199 fixed the 4 kubernetes pairs)
         # KNOWN_UNGROUPED. Differently-named conceptual pairs and single alerts are out
         # of detection scope by design (see the lint docstring).
-        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml|scripts/tools/lint/check_metric_group_pairs\.py)$)|^(?:scripts/tools/_lib_consumer_read\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
+        files: (?:^(rule-packs/rule-pack-.*\.ya?ml|k8s/03-monitoring/configmap-rules-.*\.ya?ml|scripts/tools/lint/check_metric_group_pairs\.py)$)|^(?:scripts/tools/_lib_(consumer_read|input)\.py|scripts/ops/with_da_(read|crdecode)\.sh|components/da-read/.*|components/threshold-exporter/app/(cmd/da-crdecode/.*|go\.(mod|sum)))$
 
       - id: undefined-tokens-check
         name: Detect JSX/CSS/HTML references to --da-* tokens not defined in design-tokens.css

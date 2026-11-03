@@ -1,6 +1,8 @@
 # #3276 G1: every value a da-tools command takes, and what it is.
 # The rules and the kinds: tests/shared/test_caller_path_manifest.py (module docstring).
 # `by` names the reader that judges a `reader` input (documentation; the gate checks pinned_by).
+# A flag declared with `_lib_input.add_input` (#3446) has no line here: its
+# declaration is on the parser (state-reconcile --state-dir, migrate-to-operator --source-dir).
 
 # COMMAND_MAP entries that dispatch to Go: no Python parser to walk.
 dispatched_to_go: [batch-pr, guard, parser]
@@ -209,7 +211,6 @@ commands:
     "--receiver-template": not_path
     "--secret-key": not_path
     "--secret-name": not_path
-    "--source-dir": dir
   offboard:
     "--config-dir": {kind: reader, by: "da-guard parse-tree", pinned_by: "tests/shared/test_caller_path_manifest.py::test_a_reader_refuses_a_missing_input_by_name"}
     "--state": any
@@ -303,7 +304,6 @@ commands:
     "--silences-file": {kind: reader, by: "OSError -> caller error", pinned_by: "tests/ops/test_silencer_drift_check.py::test_main_missing_silences_file"}
   state-reconcile:
     "--manifest-path": {kind: reader, by: "read_old_manifest: an existing one that is not a manifest is manifest_unreadable, never overwritten", pinned_by: "tests/ops/test_state_reconcile.py::test_an_unreadable_manifest_is_not_overwritten"}
-    "--state-dir": dir
   tenant-verify:
     "--conf-d": dir
     "--expect-merged-hash": not_path
@@ -316,7 +316,7 @@ commands:
     "--timeout": not_path
   threshold-govern:
     "--auth-token": not_path
-    "--auth-token-file": {kind: reader, by: "deliberate fail-open (#962, ADR-027): warns and continues without a Bearer", pinned_by: "tests/ops/test_threshold_govern.py::test_resolve_auth_token_file_read_error_degrades_not_raises"}
+    "--auth-token-file": {kind: reader, by: "_lib_paths.classify_path when it is the only credential (#3511); a warning when identity headers carry the authz (#962)", pinned_by: "tests/ops/test_threshold_govern.py::test_sole_credential_token_file_unreadable_is_a_caller_error"}
     "--config-dir": dir
     "--identity-email": not_path
     "--identity-groups": not_path

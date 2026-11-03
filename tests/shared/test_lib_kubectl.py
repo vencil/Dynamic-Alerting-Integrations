@@ -92,6 +92,38 @@ def test_kubectl_not_on_path(tmp_path, monkeypatch):
         lk.kubectl_list("secret")
 
 
+@pytest.mark.parametrize("mode, body, why", [
+    # no execute permission: EACCES
+    (0o644, "#!/bin/sh\necho {}\n", "Permission denied"),
+    # executable, but no #! and not a binary the kernel knows: ENOEXEC
+    (0o755, "\x00\x01not a program\n", "Exec format error"),
+    # on PATH, but its #! interpreter does not exist: ENOENT, not "not on PATH"
+    (0o755, "#!/nonexistent/interpreter\n", "No such file or directory"),
+])
+def test_a_kubectl_that_cannot_be_started_is_no_answer(tmp_path, monkeypatch, mode, body, why):
+    """#3534: found on PATH but not started is a named caller error (rc 2,
+    reason kubectl_error), not a crash (internal_error)."""
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    exe = bindir / "kubectl"
+    exe.write_text(body, encoding="utf-8")
+    exe.chmod(mode)
+    monkeypatch.setenv("PATH", str(bindir))
+    with pytest.raises(lk.KubectlError, match=f"kubectl cannot be run: {why}"):
+        lk.kubectl_list("secret")
+
+
+def test_a_failed_start_is_named_by_any_os_error(monkeypatch):
+    """Every OSError raised while starting kubectl is no answer, whichever
+    errno the kernel picks (a directory on PATH that cannot be entered,
+    ENOMEM at fork) — not only the two the test above can stage."""
+    def boom(*a, **kw):
+        raise OSError(8, "Exec format error")
+    monkeypatch.setattr(lk.subprocess, "run", boom)
+    with pytest.raises(lk.KubectlError, match="kubectl cannot be run: Exec format error"):
+        lk.kubectl_list("secret")
+
+
 def test_no_answer_within_the_timeout(monkeypatch):
     def boom(*a, **kw):
         raise subprocess.TimeoutExpired(cmd="kubectl", timeout=3)

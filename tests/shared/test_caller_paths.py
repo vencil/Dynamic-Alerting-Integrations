@@ -1047,3 +1047,132 @@ def test_an_empty_path_is_refused_not_taken_for_cwd(tmp_path, script, argv, flag
     assert f"{flag} '': {NOT_FOUND}" in proc.stderr, proc.stderr
     after = {p: p.read_bytes() for p in (tmp_path / "cwd").rglob("*") if p.is_file()}
     assert after == before, "the current directory was changed"
+
+
+# ── #3446: the rows each `_lib_input.add_input` declaration implies ────────
+# G1 reads every parser's declarations (`action.input_spec`) and runs the
+# flag's OPS_SITES row — the one that hands it a locked directory {D} — three
+# more ways, each judged by what the declaration says, not by a row written
+# for it:
+#
+# * {E}: an empty directory — `empty` allowed: no caller error; refused: rc 2,
+#   `input_empty`.
+# * {UL}: a directory that stats but cannot be listed (0311: x, no r) — rc 2,
+#   `dir_not_accessible`, the flag and the path named, nothing written. (Not
+#   {NX}: that one is r without x — listable, nothing under it stats.)
+# * the flag left out, its default not there — `absent_default` empty: no
+#   caller error; refused: rc 2, `dir_not_found`.
+
+def _declared_inputs() -> "list[tuple[str, str, str, object, list[str], object]]":
+    """(id, script under ops/, flag, InputSpec, its OPS_SITES argv, that
+    row's reason) for every argument a da-tools parser declares with
+    `_lib_input.add_input`, read off the parsers by G1's walk."""
+    spec = importlib.util.spec_from_file_location(
+        "_g1_manifest", pathlib.Path(__file__).with_name("test_caller_path_manifest.py"))
+    g1 = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(g1)
+    specs: dict = {}
+    found, _dispatched = g1.parsed_arguments(specs)
+    out = []
+    for (command, flag), input_spec in sorted(specs.items()):
+        script = found[(command, flag)]
+        rows = [(argv, reason) for _id, s, argv, _f, reason in OPS_SITES
+                if f"ops/{s}" == script and g1._locked_argument(argv) == (flag, "D")]
+        assert rows, (f"{command} {flag}: declared with add_input, no OPS_SITES row hands it "
+                      "{D} (test_caller_path_manifest names this too)")
+        out.append((f"{command} {flag}", script.split("/", 1)[1], flag, input_spec, *rows[0]))
+    return out
+
+
+@pytest.fixture(scope="module")
+def declared_inputs():
+    found = _declared_inputs()
+    assert found, "no add_input declaration was read off a parser — nothing was measured"
+    return found
+
+
+def _declared_run(box, script, argv, case_dir_name, holder):
+    """Run *script* with *argv* ({D} → *holder*), {BOX} a fresh directory the
+    unprivileged uid can write (the row's outputs land there); returns the
+    process and that directory."""
+    root, run, subst = box
+    scratch = root / f"g1-{case_dir_name}"
+    scratch.mkdir()
+    scratch.chmod(0o777)
+    shutil.copy2(root / "silences.json", scratch / "silences.json")
+    local = {**subst, "{BOX}": str(scratch), "{D}": holder}
+    args = [_expand(a, local) for a in argv]
+    proc = run(["env", "DA_LANG=en", sys.executable,
+                str(root / "scripts" / "tools" / "ops" / script), *args],
+               stdin=subprocess.DEVNULL)
+    return proc, scratch
+
+
+def _reason(proc):
+    try:
+        return json.loads(proc.stdout).get("reason")
+    except (ValueError, AttributeError):
+        return None
+
+
+def test_a_declared_input_answers_an_empty_directory_as_declared(box, declared_inputs):
+    import _lib_input
+    root = box[0]
+    for n, (rid, script, flag, spec, argv, reason) in enumerate(declared_inputs):
+        empty = root / f"g1-empty-{n}"
+        empty.mkdir()
+        empty.chmod(0o755)
+        proc, _ = _declared_run(box, script, argv, f"e{n}", str(empty))
+        out = proc.stdout + proc.stderr
+        assert "Traceback" not in out, (rid, out[-3000:])
+        if spec.empty == _lib_input.EMPTY_REFUSED:
+            assert proc.returncode == 2, (rid, out[-3000:])
+            assert f"{flag} {empty}" in out, (rid, out[-3000:])
+            if reason is not None:
+                assert _reason(proc) == "input_empty", (rid, proc.stdout)
+        else:
+            assert proc.returncode != 2, (rid, out[-3000:])
+
+
+def test_a_declared_input_refuses_a_directory_it_cannot_list(box, declared_inputs):
+    """#3446: a directory that stats but cannot be listed was read as empty —
+    state-reconcile overwrote its manifest with no state, migrate-to-operator
+    made a migration from no source file — rc 0."""
+    root = box[0]
+    for n, (rid, script, flag, _spec, argv, reason) in enumerate(declared_inputs):
+        unlisted = root / f"g1-unlisted-{n}"
+        unlisted.mkdir()
+        (unlisted / "a.json").write_text('{"schema_version": "1.0"}\n', encoding="utf-8")
+        (unlisted / "a.json").chmod(0o644)
+        unlisted.chmod(0o311)
+        proc, scratch = _declared_run(box, script, argv, f"ul{n}", str(unlisted))
+        out = proc.stdout + proc.stderr
+        assert proc.returncode == 2, (rid, out[-3000:])
+        assert "Traceback" not in out, (rid, out[-3000:])
+        assert (f"{flag} {unlisted}" in out
+                or f"{flag} {os.path.realpath(unlisted)}" in out), (rid, out[-3000:])
+        if reason is not None:
+            assert _reason(proc) == "dir_not_accessible", (rid, proc.stdout)
+        written = sorted(p.name for p in scratch.rglob("*") if p.name != "silences.json")
+        assert written == [], (rid, f"written before the input was judged: {written}")
+
+
+def test_a_declared_input_reads_its_absent_default_as_declared(box, declared_inputs):
+    import _lib_input
+    root = box[0]
+    measured = 0
+    for n, (rid, script, flag, spec, argv, _reason_) in enumerate(declared_inputs):
+        if spec.default is None:
+            continue
+        assert not (root / spec.default).exists(), (rid, "the default is there in the box")
+        i = argv.index(flag)
+        proc, _ = _declared_run(box, script, argv[:i] + argv[i + 2:], f"abs{n}", "")
+        out = proc.stdout + proc.stderr
+        assert "Traceback" not in out, (rid, out[-3000:])
+        if spec.absent_default == _lib_input.ABSENT_REFUSED:
+            assert proc.returncode == 2 and _reason(proc) in (None, "dir_not_found"), \
+                (rid, out[-3000:])
+        else:
+            assert proc.returncode != 2, (rid, out[-3000:])
+        measured += 1
+    assert measured, "no declared input has a default: this test measured nothing"
