@@ -80,6 +80,14 @@ def _call_kind(node: ast.Call) -> str | None:
         return "recursive"
     if name in _FLAT_CALLS:
         return "flat"
+    # #3446: `_lib_input._list` is the one listing of a directory in the
+    # Python tools — a call to it (`_lib_input._list(d)`, or `_list(d)` as
+    # imported) is a flat read where it is made, so the gate keeps seeing
+    # every listing that moved behind it. A method of that name
+    # (`self._list`) is something else.
+    if name == "_list" and (isinstance(fn, ast.Name) or (
+            isinstance(fn.value, ast.Name) and fn.value.id == "_lib_input")):
+        return "flat"
     if name in ("iter_config_files", "unusable_config_paths"):
         # The shared helper has a `recursive=` knob, so the call name alone
         # does not settle it: `iter_config_files(d, recursive=False)` is a
@@ -232,14 +240,32 @@ _ROOT_ONLY_BY_DEFINITION: dict[tuple[str, str], str] = {
 }
 
 
+#: #3446: functions that walk every level themselves, one `_lib_input._list`
+#: per directory — recursive by construction, which no call name says.
+#: Reviewed one by one; their listings count as recursive.
+_RECURSIVE_BY_CONSTRUCTION: dict[tuple[str, str], str] = {
+    ("_lib_consumer_read.py", "_walk_yaml"):
+        "the `os.walk` it replaced, top-down over `_lib_input._list`: every "
+        "directory it lists that is not a symlink is pushed and listed in "
+        "turn, so nothing below the root goes unread (a directory it cannot "
+        "list is named, #3426)",
+}
+
+
 def _enumeration_kinds(path: pathlib.Path) -> set[str]:
     """Every `_call_kind` this file's AST contains — {} if unparseable —
     plus "flat" for a top-level filter over da-guard's listing (#3206)."""
     tree = parse(path)
     if tree is None:
         return set()
+    walkers = [fn for fn in ast.walk(tree)
+               if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
+               and (path.name, fn.name) in _RECURSIVE_BY_CONSTRUCTION]
+    inside = {id(n) for fn in walkers for n in ast.walk(fn)}
     kinds = {k for k in (_call_kind(n) for n in ast.walk(tree)
-                         if isinstance(n, ast.Call)) if k}
+                         if isinstance(n, ast.Call) and id(n) not in inside) if k}
+    if walkers:
+        kinds.add("recursive")
     if any(_flat_listing_filters(fn) for fn in ast.walk(tree)
            if isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef))
            and (path.name, fn.name) not in _ROOT_ONLY_BY_DEFINITION):
@@ -295,7 +321,8 @@ def _flat_scopes_without_guard(path: pathlib.Path) -> list[str]:
     for fn in ast.walk(tree):
         if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
             continue
-        if (path.name, fn.name) in _ROOT_ONLY_BY_DEFINITION:
+        if ((path.name, fn.name) in _ROOT_ONLY_BY_DEFINITION
+                or (path.name, fn.name) in _RECURSIVE_BY_CONSTRUCTION):
             continue
         kinds = _scope_kinds(fn, _own_scope_calls(fn))
         # Recursing is the other valid answer, so it counts as guarded.
@@ -504,6 +531,11 @@ def test_legitimate_shapes_are_not_flagged(name, tmp_path: pathlib.Path):
 # that answer — the pin cannot be satisfied by the classifier going dark.
 
 FLAT_OUTSIDE_POPULATION: dict[str, str] = {
+    "_lib_input.py":
+        "`_list` is the one listing primitive (#3446) and `selected` lists a "
+        "declared input's top level (`TopLevel`); whether a CALLER's listing "
+        "is flat is judged at the caller, where `_list` is a flat call; a "
+        "tree da-guard walks is never listed here (`DA_GUARD_LISTS`)",
     "_lib_toolcount.py":
         "iterdir over scripts/tools and its ops/dx/lint subdirectories — the "
         "repo's own Python tools, counted case-insensitively (issue 1541)",

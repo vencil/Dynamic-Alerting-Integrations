@@ -209,6 +209,11 @@ TOOL_FILES=(
     # one judgement of a caller-given path (_lib_paths imports _lib_label).
     _lib_label.py
     _lib_paths.py
+    # #3446 — stdlib only: what a caller-given value selects (`add_input` /
+    # `selected` / `read_bytes`) and the one directory listing (`_list`);
+    # imported by state_reconcile, migrate_to_operator and _lib_consumer_read.
+    # Imports _lib_paths / _lib_label (above).
+    _lib_input.py
     _lib_io.py
     # #3107 — the one atomic writer (moved from dx/): _lib_io.write_repo_artifact
     # is its entry point; state-reconcile rewrites its manifest atomically.

@@ -40,7 +40,9 @@ Exit codes:
   1  unresolvable schema drift (e.g. missing schema_version field) — or, in
      --ci --dry-run mode, changes are pending and were not applied
   2  caller error: bad arguments; a --state-dir given that is not there or
-     not a directory (#3392 — nothing is written); an existing
+     not a directory (#3392 — nothing is written); a --state-dir, given or
+     the default, that cannot be listed (#3446 — it was read as empty and the
+     manifest overwritten with no state; nothing is written); an existing
      --manifest-path that cannot be read as a manifest (#3392 — it is not
      overwritten). The default --state-dir missing is still an empty state
      directory, reported as `state_dir_missing`.
@@ -63,7 +65,8 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, CallerError, Report, arm_crash_envelope, encode_json  # noqa: E402
-from _lib_paths import classify_path, require_dir, supplied  # noqa: E402  (#3392)
+import _lib_input  # noqa: E402  (#3446: which state files --state-dir selects)
+from _lib_paths import classify_path  # noqa: E402  (#3392)
 from _lib_io import (  # noqa: E402  (#1789)
     OutputWriteError,
     check_repo_artifact,
@@ -91,11 +94,8 @@ CURRENT_SCHEMA_VERSION = "1.0"
 MIGRATIONS: dict = {}
 
 
-def find_state_files(state_dir: Path) -> list[Path]:
-    """Enumerate .json files in state_dir, sorted for deterministic output."""
-    if not state_dir.is_dir():
-        return []
-    return sorted(state_dir.glob("*.json"))
+#: What --state-dir selects (#3446): its top-level `*.json` entries.
+STATE_FILES = _lib_input.TopLevel("*.json")
 
 
 def read_state(filepath: Path) -> tuple[dict | None, str | None]:
@@ -272,14 +272,16 @@ def read_old_manifest(manifest_path: Path) -> dict | None:
 def reconcile(
     state_dir: Path,
     manifest_path: Path,
+    state_files: list[Path],
     *,
     dry_run: bool = False,
 ) -> dict:
     """Core reconciliation logic. Returns a report dict suitable for JSON output.
 
-    The old manifest is read first (`read_old_manifest`), before any state
-    file is migrated: one that cannot be read stops the run with nothing
-    written."""
+    *state_files* are the files --state-dir selects
+    (`_lib_input.selected`, sorted). The old manifest is read first
+    (`read_old_manifest`), before any state file is migrated: one that
+    cannot be read stops the run with nothing written."""
     old_manifest = read_old_manifest(manifest_path)
     report: dict = {
         "state_dir": str(state_dir),
@@ -290,8 +292,6 @@ def reconcile(
         "manifest_change": None,
         "state_file_count": 0,
     }
-
-    state_files = find_state_files(state_dir)
 
     # Exclude the manifest file itself from being treated as a state file.
     # Without this, a caller setting --state-dir to the same directory that
@@ -445,9 +445,8 @@ def compute_exit_code(report: dict, *, ci: bool, dry_run: bool) -> int:
     return EXIT_OK
 
 
-@exit_on_output_write_error
-def main(argv: list[str] | None = None) -> "int | Report":
-    try_utf8_stdout()
+def build_parser() -> argparse.ArgumentParser:
+    """The state-reconcile parser (--state-dir declared with `_lib_input`)."""
     ap = argparse.ArgumentParser(
         description="Reconcile migration state directory (schema + manifest).",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -458,9 +457,9 @@ def main(argv: list[str] | None = None) -> "int | Report":
             "  da-tools state-reconcile --ci --json\n"
         ),
     )
-    ap.add_argument(
-        "--state-dir",
-        default=".da/state",
+    _lib_input.add_input(
+        ap, "--state-dir", select=STATE_FILES, empty=_lib_input.EMPTY_ALLOWED,
+        default=".da/state", absent_default=_lib_input.ABSENT_EMPTY,
         help="Directory with per-cluster state files (default: .da/state)",
     )
     ap.add_argument(
@@ -488,7 +487,13 @@ def main(argv: list[str] | None = None) -> "int | Report":
         action="store_true",
         help="Emit machine-readable JSON report instead of human-readable text.",
     )
-    args = ap.parse_args(argv)
+    return ap
+
+
+@exit_on_output_write_error
+def main(argv: list[str] | None = None) -> "int | Report":
+    try_utf8_stdout()
+    args = build_parser().parse_args(argv)
     if args.json:
         arm_crash_envelope()  # #3094: a crash in --json mode still prints one envelope
 
@@ -498,13 +503,14 @@ def main(argv: list[str] | None = None) -> "int | Report":
     # directory is a caller error, before anything is written — it was read
     # as an empty state directory and an empty manifest written, rc 0 (a file
     # given here was not even reported as missing). The default nobody gave
-    # keeps that reading (`state_dir_missing`).
-    if supplied(args, ap, "state_dir"):
-        require_dir(args.state_dir, lang="en", flag="--state-dir")
+    # keeps that reading (`state_dir_missing`). #3446: one that cannot be
+    # listed, given or default, is a caller error too — the glob read it as
+    # empty and the manifest was overwritten with no state, rc 0.
+    state_files = _lib_input.selected(args, "state_dir", lang="en")
     # #3107 v2: checked BEFORE the read — a FIFO or /dev/stdout would block it.
     check_repo_artifact(manifest_path, flag="--manifest-path")
 
-    report = reconcile(state_dir, manifest_path, dry_run=args.dry_run)
+    report = reconcile(state_dir, manifest_path, state_files, dry_run=args.dry_run)
     report["dry_run"] = args.dry_run
 
     status = compute_exit_code(report, ci=args.ci, dry_run=args.dry_run)
