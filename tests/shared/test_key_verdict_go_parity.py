@@ -11,8 +11,14 @@ explain-keys、產生器 `--validate` 與產生器容器的呼叫都算——每
 兩份文件經 JSON 正規化後必須相等。兩邊不同就是紅燈，不放寬：先查哪一邊才對。
 
 呼叫端另傳樹裡沒有的 `rules=`，或 `disable_effects=False`，Go 重現不了：那一次
-改由 Python 不帶它們重判同一棵樹來比。另以子程序執行的 CLI 不在同一個行程，
-看不到。
+改由 Python 不帶它們重判同一棵樹來比。
+
+比不到的範圍（照實寫出，不是「量了沒事」）：
+- 另以子程序執行的 CLI 不在同一個行程，看不到。
+- Python 判決丟例外的樹不比：無效的 policy 規則（`InvalidPolicyRules`；Go 刻意
+  寬鬆，讀得到的 target 照算，見 `key_verdict.go` 的 `policyHeadsOf`），以及根
+  `_defaults.yaml` 讀不進來（Python 停下；Go 以 exit 3 照樣判，根平台檔與
+  profiles 取自 parse-tree 讀到的那份）。這兩種差異由 #3489 PR-b 換呼叫端時定案。
 """
 from __future__ import annotations
 
@@ -50,6 +56,6 @@ def test_go_verdict_equals_python_on_every_tree_the_callers_build(tmp_path):
     assert proc.returncode == 0, f"the source tests failed:\n{proc.stdout[-4000:]}\n{proc.stderr[-2000:]}"
     entries = [json.loads(line) for line in log.read_text(encoding="utf-8").splitlines()] if log.exists() else []
     # An empty comparison is always green: the shape this repo has caught again and again.
-    assert len(entries) >= 70, f"only {len(entries)} judge_tree calls compared"
+    assert len(entries) >= 78, f"only {len(entries)} judge_tree calls compared"
     bad = [e for e in entries if not e["ok"]]
     assert not bad, f"{len(bad)} of {len(entries)} differ; first:\n{bad[0]['conf_d']}\n{bad[0]['diff']}"

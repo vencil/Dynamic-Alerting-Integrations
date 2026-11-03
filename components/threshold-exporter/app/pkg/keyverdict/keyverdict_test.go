@@ -100,11 +100,11 @@ func TestJudge_APartialSiblingWithNoSourceIsServedFromUnknown(t *testing.T) {
 	}
 }
 
-// A Policy-as-Code rule names a key in either #1231 spelling, as the
-// exporter's own canonical function maps them: a retired base key and its
-// dimensional spelling map; a dimensional `_critical` does not — the
-// exporter serves `mysql_cpu_critical{…}` as written.
-func TestJudge_APolicyRuleNamesAKeyInTheExportersCanonicalSpelling(t *testing.T) {
+// A Policy-as-Code rule names a key in either #1231 spelling, as
+// Policy-as-Code compares them (policyCanonical) — a dimensional `_critical`
+// included, though the exporter serves `mysql_cpu_critical{…}` as written:
+// the rule reads it, so it is read.
+func TestJudge_APolicyRuleNamesAKeyAsPolicyAsCodeSpellsIt(t *testing.T) {
 	t.Parallel()
 	judged := func(key, head string) string {
 		tree := Judge(Input{
@@ -121,7 +121,9 @@ func TestJudge_APolicyRuleNamesAKeyInTheExportersCanonicalSpelling(t *testing.T)
 		{"mysql_threads_running", "mysql_cpu", "read policy_engine"},
 		{`mysql_cpu{db="x"}`, `mysql_threads_running{db="x"}`, "read policy_engine"},
 		{"mysql_cpu_critical", "mysql_threads_running_critical", "read policy_engine"},
-		{`mysql_cpu_critical{db="x"}`, `mysql_threads_running_critical{db="x"}`, "unread "},
+		{`mysql_cpu_critical{db="x"}`, `mysql_threads_running_critical{db="x"}`, "read policy_engine"},
+		{`mysql_threads_running_critical{db="x"}`, `mysql_cpu_critical{db="x"}`, "read policy_engine"},
+		{`mysql_cpu_critical{db="x"}`, `mysql_threads_running{db="x"}`, "unread "},
 		{"mysql_cpu", "mysql_*", "unread "},
 	}
 	for _, tc := range cases {

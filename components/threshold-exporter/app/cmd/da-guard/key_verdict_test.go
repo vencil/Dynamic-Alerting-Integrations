@@ -226,6 +226,19 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 			t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
 		}
 	})
+	t.Run("a key a policy rule names in the other #1231 spelling is read, not refused", func(t *testing.T) {
+		t.Parallel()
+		// #3489 review: the exporter serves a dimensional retired `_critical`
+		// as written, but Policy-as-Code reads it in the canonical spelling.
+		root := writeTree(t, map[string]string{
+			"_defaults.yaml": kvRoot + "_policies:\n  - {name: p, target: 'mysql_threads_running_critical{db=\"a\"}', " +
+				"operator: required, severity: error}\n",
+			"a.yaml": "tenants:\n  t1: {}\n"})
+		code, res := runBatch(t, writeCmd, set(`mysql_cpu_critical{db="a"}`, "3"), "--config-dir", root)
+		if code != exitOK || len(res.Worsened) != 0 {
+			t.Fatalf("exit %d reason %q worsened %v", code, callReason(res), worsenedOf(res))
+		}
+	})
 	t.Run("an error already there does not block another key, and a fix passes", func(t *testing.T) {
 		t.Parallel()
 		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
