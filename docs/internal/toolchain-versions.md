@@ -66,7 +66,7 @@ Renovate（repo 根目錄 `renovate.json`，由 `.github/workflows/renovate.yaml
 | yq | docs-ci.yaml `YQ_VERSION` | 無其他消費端 | 無 |
 | Vector | ci.yml `VECTOR_VERSION` | `.devcontainer/install-vector.sh`、`helm/vector` image tag / appVersion | `tests/shared/test_vector_pin_parity.py` |
 | GitHub Actions | 無單一 SSOT：同一個 action 在全部 workflow 必須同一個 ref | `.github/workflows/**`（Renovate 的 github-actions manager 以單一 grouped PR 一起升，見上節） | `test_toolchain_pin_parity.py`（single version）、`tests/ops/test_renovate_config.py`（grouping） |
-| Python 套件 | `requirements/ci-constraints.txt` | 每個 `pip install … -c`、devcontainer `postCreateCommand`、`.claude/hooks/session-start.sh` | `check_unpinned_deps`、`check_devcontainer_dep_parity.py` |
+| Python 套件 | `requirements/ci-constraints.txt` | 每個 `pip install … -c`、devcontainer `postCreateCommand`、`.claude/hooks/session-start.sh`；`.pre-commit-config.yaml` 裡以 `==` 釘版的 `additional_dependencies`（hook 的隔離環境自己裝，不經 `-c`） | `check_unpinned_deps`、`check_devcontainer_dep_parity.py`、`test_toolchain_pin_parity.py`（pre-commit hook 釘版） |
 
 ## Go 建置旗標
 

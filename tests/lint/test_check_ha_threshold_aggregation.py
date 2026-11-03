@@ -148,6 +148,88 @@ def test_a_hash_inside_a_string_is_not_a_comment():
     assert _ops(expr) == ["sum"]
 
 
+# One test per propagation / selection rule in the module doc, so reverting
+# any single rule turns exactly its test red.
+
+def test_unless_rhs_only_filters():
+    assert _ops('sum(real_metric unless user_threshold{metric="x"})') == []
+    assert _ops('sum(user_threshold{metric="x"} unless real_metric)') == ["sum"]
+
+
+@pytest.mark.parametrize("expr", [
+    'sum(scalar(user_threshold{metric="x"}) * real_metric)',
+    'count(absent_over_time(user_threshold{metric="x"}[5m]))',
+], ids=["scalar", "absent_over_time"])
+def test_non_carrying_functions(expr):
+    assert _ops(expr) == []
+
+
+def test_subquery_passes_copies_through():
+    assert _ops('sum(max_over_time(user_threshold{metric="x"}[5m:1m]))') == ["sum"]
+
+
+def test_aggregation_param_is_walked():
+    # quantile's φ is itself an expression; a sum inside it is judged too.
+    assert _ops('quantile(scalar(sum(user_threshold{metric="x"})), real_metric)') == ["sum"]
+
+
+@pytest.mark.parametrize("expr, ops", [
+    ('sum({__name__=~"user_.*"})', ["sum"]),
+    ('sum({__name__=~"real_.*", tenant="x"})', []),
+    ('sum({__name__!~"user_.*", tenant="x"})', []),
+    ('sum({__name__="a" or __name__="user_threshold"})', ["sum"]),
+    ('sum({__name__="a" or __name__="b"})', []),
+], ids=["re-accepts", "re-rejects", "not-re-rejects", "or-second", "or-neither"])
+def test_name_matchers(expr, ops):
+    assert _ops(expr) == ops
+
+
+@pytest.mark.parametrize("expr", [
+    'sum({__name__=~"user_\\\\pL+"})',          # RE2 `\pL`: Python re.error
+    'sum({__name__=~"user_[[:alpha:]]+"})',     # POSIX class: Python reads another set
+    'sum({__name__!~"user_\\\\pL+", tenant="x"})',
+], ids=["re-error", "posix-class", "not-re-error"])
+def test_undecidable_name_regex_fails_closed(expr):
+    assert _ops(expr) == ["sum"]
+
+
+@pytest.mark.parametrize("expr", [
+    'sum({tenant="x"})',
+    'sum({__name__!="foo", tenant="x"})',
+    'sum({__name__!~"foo.*", tenant="x"})',
+], ids=["nameless", "name-not-equal", "name-not-re"])
+def test_nameless_selector_may_select_user_threshold(expr):
+    # Prometheus would select user_threshold with these; no textual mention.
+    assert _ops(expr) == ["sum"]
+
+
+@pytest.mark.parametrize("expr", [
+    'sum(user_threshold_x{tenant="x"})',
+    'sum(user_threshold:foo)',
+    'sum({__name__!="user_threshold", tenant="x"})',
+], ids=["prefix-name", "recording-rule-name", "name-excluded"])
+def test_other_metric_names_pass(expr):
+    # Exact name, not a prefix (the regex version flagged the first two).
+    assert _ops(expr) == []
+
+
+def test_unknown_node_kind_raises():
+    with pytest.raises(lint.UnparseableExpr, match="unhandled PromQL node"):
+        lint._walk(object(), [])
+
+
+def test_parser_panic_is_an_error_not_a_crash(monkeypatch):
+    class PanicException(BaseException):  # pyo3's panic type is a BaseException
+        pass
+
+    def boom(_s):
+        raise PanicException("rust panicked")
+
+    monkeypatch.setattr(lint.promql_parser, "parse", boom)
+    with pytest.raises(lint.UnparseableExpr, match="PanicException"):
+        lint.nonmax_aggregations("sum(user_threshold)")
+
+
 # --- 7. fail closed ---------------------------------------------------------
 
 def test_unparseable_expr_raises_not_passes():

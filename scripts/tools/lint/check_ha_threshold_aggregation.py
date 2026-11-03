@@ -44,13 +44,28 @@ a `user_threshold` selector through only these nodes:
 
 An aggregation stops the walk: past any aggregation the copies count as
 collapsed (operator-only — see below), so `count(max by(...)
-(user_threshold))` passes. A selector names the metric by name, or by an
-`__name__` equality / regex matcher that accepts `user_threshold`.
+(user_threshold))` passes.
+
+A selector counts as (possibly) selecting `user_threshold` unless it rules
+the metric out: a metric name other than `user_threshold`, or an `__name__`
+matcher (`=`, `!=`, `=~`, `!~`) that rejects it — in every `or` alternative.
+So a nameless `{severity="warning"}` or `{__name__!="foo"}` counts: Prometheus would
+select `user_threshold` with it. Other label matchers never rule it out (the
+lint does not know which label values `user_threshold` series carry). The
+name is matched exactly: `user_threshold_x` or a recording rule named
+`user_threshold:foo` is another metric. Prometheus matches regexes with RE2;
+this lint uses Python `re` (anchored, `fullmatch`). Where the two can
+disagree it does not guess: a regex Python cannot compile (`\\pL`) or that
+uses a POSIX class (`[[:alpha:]]`, which Python reads as a different set)
+counts as accepting `user_threshold` (fail closed). Other RE2/`re`
+differences in the semantics of a regex both accept are not modelled.
 
 An expression `promql-parser` cannot parse is an error (exit 2), never a
 pass: every expression here was already accepted by Prometheus' rule
 loader (`_lib_consumer_read`), so a parse failure means the parser diverged
-from Prometheus and this lint cannot vouch for the expression.
+from Prometheus and this lint cannot vouch for the expression. A panic in
+the Rust parser (pyo3 `PanicException`, a `BaseException`) is that error
+too, not a crash read as a violation.
 
 WHAT THIS DOES **NOT** CHECK (deliberately — Gemini adversarial review):
 the labels inside `by(...)`. The lint constrains only the OPERATOR, never
@@ -118,28 +133,46 @@ def _repo_root() -> Path:
     return require_project_root(_THIS_DIR)
 
 
-def _names_metric(sel) -> bool:
-    """True when VectorSelector *sel* selects `user_threshold`: by name, or
-    by an `__name__` matcher (equality or regex) that accepts it."""
-    if sel.name == _METRIC:
+def _regex_accepts(pattern: str) -> "bool | None":
+    """Whether Prometheus' anchored regex *pattern* matches `user_threshold`,
+    or None when Python `re` cannot tell the way RE2 would (see module doc)."""
+    if "[:" in pattern:
+        return None  # POSIX class: Python reads `[[:alpha:]]` as another set
+    try:
+        return re.fullmatch(pattern, _METRIC) is not None
+    except re.error:
+        return None  # RE2-only syntax (`\pL`, ...)
+
+
+def _name_matcher_accepts(m) -> bool:
+    """Whether `__name__` matcher *m* lets `user_threshold` through.
+    Undecidable regexes let it through (fail closed)."""
+    op = m.op
+    MatchOp = promql_parser.MatchOp
+    if op == MatchOp.Equal:
+        return m.value == _METRIC
+    if op == MatchOp.NotEqual:
+        return m.value != _METRIC
+    hit = _regex_accepts(m.value)
+    if hit is None:
         return True
+    return hit if op == MatchOp.Re else not hit
+
+
+def _may_select_metric(sel) -> bool:
+    """True unless VectorSelector *sel* rules `user_threshold` out: a metric
+    name other than it, or `__name__` matchers rejecting it in every `or`
+    alternative. A nameless `{severity="warning"}` may select it."""
+    if sel.name is not None and sel.name != _METRIC:
+        return False
     matchers = sel.matchers
     if matchers is None:
-        return False
-    groups = [list(matchers.matchers)] + [list(g) for g in matchers.or_matchers]
-    for group in groups:
-        for m in group:
-            if m.name != "__name__":
-                continue
-            if m.op == promql_parser.MatchOp.Equal and m.value == _METRIC:
-                return True
-            if m.op == promql_parser.MatchOp.Re:
-                try:
-                    if re.fullmatch(m.value, _METRIC):
-                        return True
-                except re.error:
-                    return True  # cannot decide → assume it does (fail closed)
-    return False
+        return True
+    base = list(matchers.matchers)
+    alternatives = ([base + list(g) for g in matchers.or_matchers]
+                    if matchers.or_matchers else [base])
+    return any(all(_name_matcher_accepts(m) for m in group if m.name == "__name__")
+               for group in alternatives)
 
 
 def _walk(node, out: List[Tuple[str, str]]) -> bool:
@@ -156,7 +189,7 @@ def _walk(node, out: List[Tuple[str, str]]) -> bool:
                 out.append((op, str(node)[:_EXCERPT_LEN]))
         return False  # past an aggregation the copies count as collapsed
     if isinstance(node, p.VectorSelector):
-        return _names_metric(node)
+        return _may_select_metric(node)
     if isinstance(node, p.MatrixSelector):
         return _walk(node.vector_selector, out)
     if isinstance(node, (p.ParenExpr, p.UnaryExpr, p.SubqueryExpr)):
@@ -187,18 +220,19 @@ def nonmax_aggregations(expr: str) -> List[Tuple[str, str]]:
     Raises `UnparseableExpr` when `promql-parser` refuses `expr` (or is not
     installed) — the expression is parsed, so `#` comments need no
     stripping: the parser drops them, and a `#` inside a string stays text."""
+    # No textual pre-filter: a nameless `{severity="warning"}` selects user_threshold
+    # without spelling it, so every expression is parsed and walked.
     s = str(expr)
-    # Cheap pre-filter: an expr that neither names the metric nor matches on
-    # `__name__` cannot select it.
-    if _METRIC not in s and "__name__" not in s:
-        return []
     if promql_parser is None:
         raise UnparseableExpr("promql-parser is not installed "
                               "(pip install -c requirements/ci-constraints.txt promql-parser)")
     try:
         ast = promql_parser.parse(s)
-    except Exception as exc:  # the binding raises a bare ValueError/RuntimeError
-        raise UnparseableExpr(f"promql-parser refuses the expression: {exc}") from exc
+    except (KeyboardInterrupt, SystemExit, GeneratorExit):
+        raise
+    except BaseException as exc:  # noqa: B036 — ValueError, or pyo3's PanicException
+        raise UnparseableExpr(
+            f"promql-parser refuses the expression ({type(exc).__name__}): {exc}") from exc
     out: List[Tuple[str, str]] = []
     _walk(ast, out)
     return out

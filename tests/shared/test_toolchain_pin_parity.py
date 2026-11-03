@@ -48,6 +48,8 @@ _INSTALL_TRIVY = _REPO / ".devcontainer" / "install-trivy.sh"
 _MAKEFILE = _REPO / "Makefile"
 _IAC_HELM = _REPO / "scripts" / "tools" / "lint" / "check_iac_helm.py"
 _SESSION_START = _REPO / ".claude" / "hooks" / "session-start.sh"
+_PRECOMMIT = _REPO / ".pre-commit-config.yaml"
+_CONSTRAINTS = _REPO / "requirements" / "ci-constraints.txt"
 
 _RUNNER = "ubuntu-24.04"
 
@@ -375,7 +377,53 @@ def test_each_action_is_used_at_a_single_version() -> None:
         + "\n  ".join(f"{a}: {r}  ({', '.join(where[a])})" for a, r in split.items()))
 
 
+# ── pre-commit hook envs ↔ ci-constraints ──────────────────────────────────
+
+
+def _pip_name(name: str) -> str:
+    """PEP 503 normalisation: `PyYAML`, `pyyaml`, `py_yaml` are one package."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _constraint_pins() -> dict[str, str]:
+    pins: dict[str, str] = {}
+    for line in _CONSTRAINTS.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        m = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)\s*==\s*(\S+)", line)
+        if m:
+            pins[_pip_name(m.group(1))] = m.group(2)
+    assert pins, f"no `name==version` pin read from {_CONSTRAINTS}"
+    return pins
+
+
+def test_precommit_hook_dependency_pins_match_ci_constraints() -> None:
+    """#3483: a hook's isolated env installs its `additional_dependencies`
+    itself, outside `-c requirements/ci-constraints.txt`. A hook dep pinned
+    with `==` whose package ci-constraints also pins must be the same
+    version, or the hook and CI's pytest of the same lint run two parsers."""
+    pins = _constraint_pins()
+    config = _load(_PRECOMMIT)
+    compared: list[str] = []
+    split: list[str] = []
+    for repo in config.get("repos", []):
+        for hook in repo.get("hooks", []):
+            for dep in hook.get("additional_dependencies", []) or []:
+                m = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)(?:\[[^\]]*\])?\s*==\s*(\S+)",
+                                 str(dep).strip())
+                if not m or _pip_name(m.group(1)) not in pins:
+                    continue
+                name, ver = _pip_name(m.group(1)), m.group(2)
+                compared.append(f"{hook['id']}: {name}")
+                if ver != pins[name]:
+                    split.append(f"{hook['id']}: {name}=={ver} "
+                                 f"(ci-constraints: {pins[name]})")
+    assert compared, ("no `==`-pinned additional_dependencies shared with "
+                      "ci-constraints found — the walker no longer reaches them")
+    assert not split, ("pre-commit hook deps disagree with "
+                       "requirements/ci-constraints.txt:\n  " + "\n  ".join(split))
+
+
 @pytest.mark.parametrize("path", [_DEVCONTAINER, _INSTALL_TRIVY, _MAKEFILE, _IAC_HELM,
-                                  _SESSION_START])
+                                  _SESSION_START, _PRECOMMIT, _CONSTRAINTS])
 def test_inputs_exist(path: Path) -> None:
     assert path.is_file(), f"missing {path}"
