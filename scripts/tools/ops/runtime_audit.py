@@ -62,9 +62,11 @@ Known limitations (honest boundaries — not claimed away)
   MISSING. Lever: point ``--rule-packs-dir`` at only the enabled packs. (The
   ORPHAN direction is unaffected — it is scoped to declared groups.)
 - ``declared`` includes the platform pack (``rule-pack-platform.yaml``, #1595).
-  Under the Prometheus Operator, ``operator-generate`` does not emit it yet, so
-  its alerts are reported MISSING there: they really are not running. Same
-  lever as above if you need a clean run before that lands.
+  Under the Prometheus Operator, ``operator-generate`` emits it without the
+  rules whose metric source a kube-prometheus-stack install lacks (#1595 D1b;
+  it names them on stderr and in the PrometheusRule's
+  ``dynamic-alerting.io/operator-excluded-rules`` annotation), so exactly
+  those rules are reported MISSING there: they really are not running.
 - Rule identity is ``(group, name)``. A pathological same-group collision
   (a ``record:`` and an ``alert:`` sharing one name in one group) is not
   distinguished; conventional naming (``level:metric:op`` vs ``CamelCase``)

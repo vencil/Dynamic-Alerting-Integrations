@@ -1503,10 +1503,12 @@ RULE_PACKS = RuleSource(
 #: ⛔ Here, not as a key in the pack file: Prometheus' rule loader refuses any
 #: top-level key but ``groups`` (``field kind not found in type
 #: rulefmt.RuleGroups``), and every reader of a pack reads it that way.
-#: ⛔ Not operator-portable (#1595 D1b): their exprs select this repo's own
-#: scrape jobs (``tenant-exporters``, ``prometheus``, ``threshold-govern``),
-#: which a kube-prometheus-stack install does not have, so
-#: ``operator-generate`` emits no PrometheusRule for them.
+#: Operator mode (#1595 D1b): ``operator-generate`` emits each as the rules a
+#: kube-prometheus-stack install can run — the pack minus every rule reading a
+#: metric whose source such an install lacks, which
+#: ``_lib_metric_sources.operator_split`` derives from the scrape gate's
+#: family table (e.g. a ``job="tenant-exporters"`` selector: that job exists
+#: only in this repo's raw scrape config).
 PLATFORM_PACKS: "frozenset[str]" = frozenset({"platform"})
 
 
@@ -1519,8 +1521,8 @@ def is_platform_pack(name: "str | None") -> bool:
 def tenant_rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathlib.Path]":
     """``rule_pack_files`` less the declared platform packs (``PLATFORM_PACKS``):
     the packs a TENANT-pack contract judges — the custom-rule policy, the
-    threshold contract, maintenance symmetry, vmalert coverage — and the packs
-    ``operator-generate`` makes portable. Same refusals as ``rule_pack_files``."""
+    threshold contract, maintenance symmetry, vmalert coverage. Same refusals as
+    ``rule_pack_files``."""
     return [p for p in rule_pack_files(rule_packs)
             if not is_platform_pack(RULE_PACKS.member(p))]
 

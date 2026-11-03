@@ -138,6 +138,21 @@ service:
     prometheus.io/scrape: "true"
     prometheus.io/path: /metrics
 
+# ServiceMonitor for a Prometheus Operator install (kube-prometheus-stack),
+# #1595 D1b. Off by default: without the monitoring.coreos.com CRDs the object
+# cannot be applied. On, it scrapes the same pod port as the raw
+# `platform-components` job (metricsPort), with no jobLabel, so `job` is the
+# Service name in both modes.
+serviceMonitor:
+  enabled: false
+  interval: 15s
+  # Labels Prometheus's serviceMonitorSelector matches. kube-prometheus-stack's
+  # default selector matches `release: <its Helm release name>`; the default
+  # matches `da-tools operator-generate`. `release: null` drops it. A key the
+  # chart's own labels set cannot be overridden (the render fails).
+  labels:
+    release: kube-prometheus-stack
+
 resources:
   requests:
     cpu: 10m

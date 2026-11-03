@@ -273,6 +273,9 @@ _NOT_PROBED: dict[str, str] = {
                                             "Prometheus configs and Prometheus rule files "
                                             "through da-crdecode / da-read (ADR-036 §12)"),
     "ops/generate_rule_pack_split.py": _PROSE_ONLY + "; reads rule packs",
+    "_lib_metric_sources.py": _PROSE_ONLY + ("; the metric family → source table and "
+                                             "operator-generate's portability derivation "
+                                             "(#1595 D1b): reads PromQL strings handed to it"),
     "ops/cutover_tenant.py": _PROSE_ONLY + "; reads a readiness JSON and drives kubectl",
     "ops/baseline_discovery.py": _PROSE_ONLY + "; reads Prometheus",
     "ops/blind_spot_discovery.py": _GO,

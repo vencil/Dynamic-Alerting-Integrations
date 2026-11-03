@@ -5,12 +5,21 @@ metadata:
   namespace: {{ .Release.Namespace }}
   labels:
     {{- include "federation-gateway.labels" . | nindent 4 }}
+    {{- if .Values.auditLog.enabled }}
+    # Platform scrape discovery (#1595 D1b, the #1425 shape): Prometheus'
+    # `platform-components` job keeps Services carrying this label in ANY
+    # namespace, so the chart no longer has to be installed into `monitoring`
+    # for its audit metrics to be scraped (see
+    # helm/threshold-exporter/templates/service.yaml).
+    dynamic-alerting.io/scrape: platform
+    {{- end }}
   {{- if .Values.auditLog.enabled }}
   annotations:
     # Scrape the audit-metrics sidecar's federation-audit metrics (ADR-020
-    # IV-2f). The monitoring-components Prometheus job discovers
-    # annotated Services in the monitoring namespace — install the
-    # chart there for tenant_federation_requests_total to be collected.
+    # IV-2f): tenant_federation_requests_total and
+    # tenant_log_query_requests_total. The port is the sidecar's container
+    # port — the raw `platform-components` job (role: endpointslice) keeps the
+    # endpoint whose pod port equals it (#3483).
     prometheus.io/scrape: "true"
     prometheus.io/port: {{ .Values.auditLog.metrics.port | quote }}
     prometheus.io/path: /metrics

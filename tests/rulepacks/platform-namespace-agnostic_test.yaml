@@ -1,0 +1,77 @@
+# promtool behavioural test: platform alerts on chart workloads fire in whatever
+# namespace the chart is installed into (#1595 D1b).
+#
+# The charts render into Release.Namespace; the scrape side stopped assuming a
+# namespace in #1425. These two kube-state-metrics alerts still pinned one —
+# TenantApiSingleWriterBreach namespace="tenant-api" (the getting-started path's
+# namespace; the chart renders into whatever `helm -n` names) and
+# ThresholdExporterHighRestarts namespace="monitoring" — so an install anywhere
+# else was never watched. Re-adding either pin makes its case red.
+# Run: promtool test rules tests/rulepacks/platform-namespace-agnostic_test.yaml
+rule_files:
+  - ../../rule-packs/rule-pack-platform.yaml
+
+evaluation_interval: 1m
+
+tests:
+
+  # TenantApiSingleWriterBreach with the chart installed into `monitoring` (the README path).
+  # It pinned namespace="tenant-api" before #1595 D1b and never fired here.
+  - interval: 1m
+    name: single-writer-breach-in-monitoring-fires
+    input_series:
+    - series: kube_deployment_spec_replicas{namespace="monitoring", deployment="tenant-api", job="kube-state-metrics", instance="10.0.0.5:8080"}
+      values: 2+0x9
+    alert_rule_test:
+    - eval_time: 3m
+      alertname: TenantApiSingleWriterBreach
+      exp_alerts:
+      - exp_labels:
+          severity: critical
+          alert_source: platform
+          namespace: monitoring
+          deployment: tenant-api
+        exp_annotations:
+          summary: tenant-api running >1 replica — single-writer invariant (ADR-023) breached at runtime
+          description: |
+            The tenant-api Deployment has more than one replica (2) by
+            declared spec OR actually-running status. The write plane is a SINGLE
+            WRITER by design (ADR-023): a per-process write lock + in-memory PR
+            tracker that do NOT coordinate across pods, so two replicas push to the
+            same git working tree → tree corruption + silent data loss. The static
+            guards (Helm `fail` + check_single_writer_invariant.py lint, `strategy:
+            Recreate`) bind only deploy-time config; THIS is a runtime breach — a
+            `kubectl scale`, an HPA, a GitOps controller reconciling a patched
+            `replicas`, or a node-eviction replacement racing a stuck-Terminating
+            pod. ACTION NOW: scale back to one
+            (`kubectl -n monitoring scale deploy/tenant-api --replicas=1`) and find
+            what set it — check `kubectl get events`, the GitOps app's sync history
+            / an `ignoreDifferences` on replicas, and any HPA targeting tenant-api.
+            This alert is ALSO the codified re-eval trigger for the deferred K8s
+            Lease (ADR-023 Deferred A3 / #787): if multi-writer is now a real
+            operational need, build leader-election — do NOT raise replicaCount.
+            Details: docs/api/tenant-api-hardening.md §5.7.
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md
+
+  # ThresholdExporterHighRestarts with the chart installed into `da-system`
+  # (`da-tools init --namespace`). It pinned namespace="monitoring" before #1595 D1b.
+  # Ramp mid-window on a non-zero base (see platform-config-reloader-restarts_test.yaml).
+  - interval: 1m
+    name: exporter-restarts-in-another-namespace-fires
+    input_series:
+    - series: kube_pod_container_status_restarts_total{container="threshold-exporter", namespace="da-system", pod="threshold-exporter-a"}
+      values: 7+0x49 8 9 10 11 12 12+0x36
+    alert_rule_test:
+    - eval_time: 90m
+      alertname: ThresholdExporterHighRestarts
+      exp_alerts:
+      - exp_labels:
+          severity: warning
+          alert_source: platform
+          container: threshold-exporter
+          namespace: da-system
+          pod: threshold-exporter-a
+        exp_annotations:
+          summary: Threshold exporter threshold-exporter-a restarting frequently
+          description: 5 restarts in the last hour
+          runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md

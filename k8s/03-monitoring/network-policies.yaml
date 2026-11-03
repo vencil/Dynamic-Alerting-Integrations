@@ -162,6 +162,18 @@ spec:
           port: 9598
         - protocol: TCP
           port: 9599
+    # Federation gateway audit metrics (3903, helm/federation-gateway
+    # `auditLog.metrics.port`) and the federation revocation reconciler (9099,
+    # helm/federation-reconciler `metricsPort`). Both Services carry the
+    # platform scrape label since #1595 D1b, so — like Vector above — they are
+    # scraped in whatever namespace the chart is installed into.
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 3903
+        - protocol: TCP
+          port: 9099
     # Alertmanager
     - to:
         - podSelector:

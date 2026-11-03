@@ -258,6 +258,10 @@ TOOL_FILES=(
     # its consumer reads it (runs the da-crdecode / da-read binaries bundled
     # below); imported by ops/onboard_platform. Stdlib-only.
     _lib_consumer_read.py
+    # #1595 D1b — the metric-family → source table and the Prometheus Operator
+    # portability derivation; imported by ops/operator_generate. Imports
+    # ops/generate_rule_pack_split (above).
+    _lib_metric_sources.py
     # Data files
     metric-dictionary.yaml
     # #719 — SoT map read by _observed_map_lib.py via same-dir lookup

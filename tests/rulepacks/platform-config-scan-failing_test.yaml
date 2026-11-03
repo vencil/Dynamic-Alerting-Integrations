@@ -56,10 +56,9 @@ tests:
               alert_source: platform
               reason: duplicate_tenant
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                No conf.d scan on 10.0.0.9:8080 has succeeded for
+                No conf.d scan of the threshold-exporter has succeeded for
                 more than 5 minutes, and scans are failing with reason
                 `duplicate_tenant`. Nothing is reloaded while it lasts:
                 the exporter keeps serving the last good config and /ready
@@ -99,10 +98,9 @@ tests:
               alert_source: platform
               reason: duplicate_tenant
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                No conf.d scan on 10.0.0.9:8080 has succeeded for
+                No conf.d scan of the threshold-exporter has succeeded for
                 more than 5 minutes, and scans are failing with reason
                 `duplicate_tenant`. Nothing is reloaded while it lasts:
                 the exporter keeps serving the last good config and /ready
@@ -142,10 +140,9 @@ tests:
               alert_source: platform
               reason: duplicate_tenant
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                No conf.d scan on 10.0.0.9:8080 has succeeded for
+                No conf.d scan of the threshold-exporter has succeeded for
                 more than 5 minutes, and scans are failing with reason
                 `duplicate_tenant`. Nothing is reloaded while it lasts:
                 the exporter keeps serving the last good config and /ready
@@ -187,10 +184,9 @@ tests:
               alert_source: platform
               reason: walk_error
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                No conf.d scan on 10.0.0.9:8080 has succeeded for
+                No conf.d scan of the threshold-exporter has succeeded for
                 more than 5 minutes, and scans are failing with reason
                 `walk_error`. Nothing is reloaded while it lasts:
                 the exporter keeps serving the last good config and /ready
@@ -237,10 +233,9 @@ tests:
               alert_source: platform
               reason: root_unreadable
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                No conf.d scan on 10.0.0.9:8080 has succeeded for
+                No conf.d scan of the threshold-exporter has succeeded for
                 more than 5 minutes, and scans are failing with reason
                 `root_unreadable`. Nothing is reloaded while it lasts:
                 the exporter keeps serving the last good config and /ready
@@ -280,10 +275,9 @@ tests:
               alert_source: platform
               reason: empty_tree
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                No conf.d scan on 10.0.0.9:8080 has succeeded for
+                No conf.d scan of the threshold-exporter has succeeded for
                 more than 5 minutes, and scans are failing with reason
                 `empty_tree`. Nothing is reloaded while it lasts:
                 the exporter keeps serving the last good config and /ready
@@ -354,10 +348,9 @@ tests:
               alert_source: platform
               reason: duplicate_tenant
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                No conf.d scan on 10.0.0.9:8080 has succeeded for
+                No conf.d scan of the threshold-exporter has succeeded for
                 more than 5 minutes, and scans are failing with reason
                 `duplicate_tenant`. Nothing is reloaded while it lasts:
                 the exporter keeps serving the last good config and /ready
@@ -437,10 +430,9 @@ tests:
               alert_source: platform
               reason: duplicate_tenant
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                No conf.d scan on 10.0.0.9:8080 has succeeded for
+                No conf.d scan of the threshold-exporter has succeeded for
                 more than 5 minutes, and scans are failing with reason
                 `duplicate_tenant`. Nothing is reloaded while it lasts:
                 the exporter keeps serving the last good config and /ready
@@ -509,10 +501,9 @@ tests:
               alert_source: platform
               reason: duplicate_tenant
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                No conf.d scan on 10.0.0.9:8080 has succeeded for
+                No conf.d scan of the threshold-exporter has succeeded for
                 more than 5 minutes, and scans are failing with reason
                 `duplicate_tenant`. Nothing is reloaded while it lasts:
                 the exporter keeps serving the last good config and /ready

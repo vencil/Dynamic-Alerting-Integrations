@@ -27,10 +27,11 @@ service.internalPort must not lose the target).
 
 SCOPE BOUNDARY: the egress end only. The ingress end is each chart's own
 NetworkPolicy; measured 2026-10-31, threshold-exporter and tenant-api admit
-Prometheus on these ports and the vector chart ships no NetworkPolicy. A
-cluster's own default-deny in the Vector namespace is outside this repo. Charts
-scraped by `monitoring-components` (installed into `monitoring`, no platform
-label) are not covered here.
+Prometheus on these ports and the vector chart ships no NetworkPolicy; the
+federation reconciler admits its metrics port from the Prometheus namespace,
+and the federation gateway does too since #1595 D1b (it admitted only its listen
+port before, so the scrape was refused wherever the policy was enforced). A
+cluster's own default-deny in the Vector namespace is outside this repo.
 """
 from __future__ import annotations
 
@@ -63,6 +64,10 @@ _CHARTS = {
         "--set", "tenantProjections[0].accountId=1000",
         "--set", "projectionGate.registry.configMapName=test-registry",
     ],
+    # #1595 D1b: both federation charts label their scrape Service for the
+    # platform job. The gateway's renders under defaults (auditLog.enabled).
+    "helm/federation-gateway": [],
+    "helm/federation-reconciler": [],
 }
 
 # Non-vacuity anchor, LITERAL on purpose: derived from the same render it would
@@ -73,6 +78,8 @@ _EXPECTED = {
     ("helm/tenant-api", "tenant-api", 8080),
     ("helm/vector", "vector-metrics", 9598),
     ("helm/vector", "vector-projection-gate-metrics", 9599),
+    ("helm/federation-gateway", "federation-gateway", 3903),
+    ("helm/federation-reconciler", "federation-reconciler", 9099),
 }
 
 _needs_helm = pytest.mark.skipif(not HAS_HELM, reason="helm CLI not on PATH")
@@ -86,6 +93,7 @@ def test_helm_present_when_required() -> None:
 
 
 _SOURCE = re.compile(r"^# Source: [^/]+/(.+)$", re.MULTILINE)
+_SERVICE_KIND = re.compile(r"^kind:\s*Service\s*$", re.MULTILINE)
 
 
 def _render(chart: str, extra: list[str]) -> list[dict]:
@@ -212,9 +220,11 @@ def test_every_platform_label_template_is_rendered() -> None:
     switched off by default would otherwise pass while its port is never checked.
     Its fix is render args in _CHARTS that turn it on.
     """
+    # A Service template, not a ServiceMonitor that SELECTS by the label (#1595 D1b).
     labelled = {str(p.relative_to(_REPO_ROOT)).replace("\\", "/")
                 for p in (_REPO_ROOT / "helm").glob("*/templates/**/*.yaml")
-                if f"{_PLATFORM_LABEL}: platform" in p.read_text(encoding="utf-8")}
+                if f"{_PLATFORM_LABEL}: platform" in (text := p.read_text(encoding="utf-8"))
+                and _SERVICE_KIND.search(text)}
     assert labelled, "no chart template carries the platform scrape label — glob broke"
     rendered: set[str] = set()
     _scrape_targets(rendered)
@@ -231,6 +241,8 @@ _MOVED_SERVICE_PORTS = {
     "helm/threshold-exporter": ["--set", "service.port=9090"],
     "helm/tenant-api": _CHARTS["helm/tenant-api"] + ["--set", "service.internalPort=9090"],
     "helm/vector": _CHARTS["helm/vector"],
+    "helm/federation-gateway": ["--set", "service.port=9090"],
+    "helm/federation-reconciler": [],
 }
 
 

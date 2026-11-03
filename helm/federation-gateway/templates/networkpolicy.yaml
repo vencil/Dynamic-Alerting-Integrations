@@ -26,4 +26,17 @@ spec:
               kubernetes.io/metadata.name: {{ . }}
         {{- end }}
       {{- end }}
+    {{- if .Values.auditLog.enabled }}
+    # Prometheus scrape of the audit-metrics sidecar (#1595 D1b). Without this
+    # rule the policy admitted only listenPort and every scrape was refused.
+    - ports:
+        - port: {{ .Values.auditLog.metrics.port }}
+          protocol: TCP
+      {{- with .Values.networkPolicy.scrapeNamespaceLabel }}
+      from:
+        - namespaceSelector:
+            matchLabels:
+              {{- toYaml . | nindent 14 }}
+      {{- end }}
+    {{- end }}
 {{- end }}

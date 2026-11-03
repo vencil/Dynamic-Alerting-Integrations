@@ -4,6 +4,13 @@
 Reads rule-packs/ and conf.d/ directories, generates PrometheusRule,
 AlertmanagerConfig, and ServiceMonitor CRDs for dynamic alerting stack.
 
+One PrometheusRule per declared rule pack. The platform pack
+(`_lib_consumer_read.PLATFORM_PACKS`, #1595 D1b) is emitted without the rules
+whose metric source a kube-prometheus-stack install does not have
+(`_lib_metric_sources.operator_split`); each left-out rule is named on stderr
+and in the PrometheusRule's `dynamic-alerting.io/operator-excluded-rules`
+annotation.
+
 One AlertmanagerConfig per tenant id the conf.d declares: the keys of each
 tenant file's `tenants:` mapping, at any depth, read through `da-guard
 parse-tree` (ADR-036) — not file names. A tenant file parse-tree cannot read,
@@ -44,6 +51,7 @@ from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
 from _lib_exitcodes import Report, arm_crash_envelope, die_caller_error  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
+import _lib_metric_sources  # noqa: E402  (#1595 D1b: which platform rules operator mode can run)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import TenantSetUnknown, tree_tenants  # noqa: E402  (#2906: parse-tree's tenant set)
@@ -140,6 +148,7 @@ def build_prometheus_rule(
     rule_pack_data: dict,
     namespace: str,
     selector_labels: Optional[Dict[str, str]] = None,
+    excluded_rules: Optional[List[str]] = None,
 ) -> dict:
     """Build a PrometheusRule CRD from a rule pack YAML.
 
@@ -148,26 +157,45 @@ def build_prometheus_rule(
         rule_pack_data: Parsed YAML dict with 'groups' key
         namespace: Target Kubernetes namespace
         selector_labels: Extra labels; each overrides the default of that key
+        excluded_rules: Rules of the pack left out of *rule_pack_data*
+            (#1595 D1b) — named in the EXCLUDED_RULES_ANNOTATION
 
     Returns:
         PrometheusRule CRD dict
     """
     groups = rule_pack_data.get("groups", [])
+    metadata = {
+        # #3471: the object name is the stem of the file it is written to
+        # (`<name>.yaml`), both the declaration's (`OPERATOR_RULES`).
+        "name": _lib_consumer_read.OPERATOR_RULES.file_stem(rule_pack_name),
+        "namespace": namespace,
+        "labels": {**_RULE_SELECTOR_LABELS, **(selector_labels or {}), **_PART_OF},
+    }
+    if excluded_rules:
+        metadata["annotations"] = {EXCLUDED_RULES_ANNOTATION: ",".join(excluded_rules)}
 
     return {
         "apiVersion": "monitoring.coreos.com/v1",
         "kind": "PrometheusRule",
-        "metadata": {
-            # #3471: the object name is the stem of the file it is written to
-            # (`<name>.yaml`), both the declaration's (`OPERATOR_RULES`).
-            "name": _lib_consumer_read.OPERATOR_RULES.file_stem(rule_pack_name),
-            "namespace": namespace,
-            "labels": {**_RULE_SELECTOR_LABELS, **(selector_labels or {}), **_PART_OF},
-        },
+        "metadata": metadata,
         "spec": {
             "groups": groups,
         },
     }
+
+
+#: The PrometheusRule annotation naming the rules of a platform pack left out
+#: because a kube-prometheus-stack install has no source for a metric they
+#: read (#1595 D1b) — comma-separated, in pack order.
+EXCLUDED_RULES_ANNOTATION = "dynamic-alerting.io/operator-excluded-rules"
+
+
+def platform_pack_for_operator(rule_pack_data: dict) -> "tuple[dict, list]":
+    """The platform pack as operator mode can run it (#1595 D1b): the pack
+    minus every rule ``_lib_metric_sources.operator_split`` finds a metric
+    source missing for. → (pack data, [(rule name, reasons)])."""
+    groups, dropped = _lib_metric_sources.operator_split(rule_pack_data.get("groups") or [])
+    return {**rule_pack_data, "groups": groups}, dropped
 
 
 def build_servicemonitor(
@@ -498,8 +526,9 @@ def build_alertmanager_config(
 
 
 def discover_rule_packs(rule_packs_dir: Path) -> List[Path]:
-    """Discover the operator-portable rule packs: every declared rule pack but
-    the platform packs (``_lib_consumer_read.PLATFORM_PACKS``, #1595).
+    """Discover the rule packs to emit: every declared rule pack — the
+    platform packs (``_lib_consumer_read.PLATFORM_PACKS``) included since
+    #1595 D1b, as the subset ``platform_pack_for_operator`` keeps.
 
     Args:
         rule_packs_dir: Directory containing rule packs
@@ -520,12 +549,9 @@ def discover_rule_packs(rule_packs_dir: Path) -> List[Path]:
     # #3426: the one declaration of what in a rule-packs directory is a rule
     # pack (rule-pack-*.yaml|yml; an undeclared YAML there raises
     # `SourcesUnlisted`, a ConsumerReadError: `main` stops at rc 2 naming it).
-    # #1595 D1a: the declared platform packs are not operator-portable yet —
-    # their exprs select this repo's own scrape jobs, which a
-    # kube-prometheus-stack install does not have (D1b) — so no PrometheusRule
-    # is generated for them. Which packs those are is the declaration's
-    # (`PLATFORM_PACKS`), not a name spelled here.
-    return _lib_consumer_read.tenant_rule_pack_files(rule_packs_dir)
+    # #1595 D1b: the platform packs are included; generate_crds emits each as
+    # the rules a kube-prometheus-stack install can run.
+    return _lib_consumer_read.rule_pack_files(rule_packs_dir)
 
 
 def validate_tenant_name(name: str) -> bool:
@@ -628,6 +654,8 @@ def generate_crds(
         "prometheus_rules": [],
         "alertmanager_configs": [],
         "service_monitor": None,
+        # #1595 D1b: [{"pack", "rule", "reasons"}] left out of platform packs.
+        "excluded_rules": [],
     }
 
     # PrometheusRule CRDs
@@ -644,8 +672,23 @@ def generate_crds(
                 rule_pack_data = rule_file.documents[0]
                 if "groups" in rule_pack_data:
                     rule_pack_name = _lib_consumer_read.RULE_PACKS.member(rule_pack_file)
+                    dropped: list = []
+                    if _lib_consumer_read.is_platform_pack(rule_pack_name):
+                        rule_pack_data, dropped = platform_pack_for_operator(rule_pack_data)
+                    for rule, reasons in dropped:
+                        result["excluded_rules"].append(
+                            {"pack": rule_pack_name, "rule": rule, "reasons": reasons})
+                        print(i18n_text(
+                            f"NOTE: {safe_label(rule_pack_file.name)} 的 {safe_label(rule)} "
+                            f"未輸出（Prometheus Operator 模式沒有它讀的指標來源）："
+                            f"{safe_label('; '.join(reasons))}",
+                            f"NOTE: {safe_label(rule)} from {safe_label(rule_pack_file.name)} "
+                            f"left out (no source for a metric it reads under the "
+                            f"Prometheus Operator): {safe_label('; '.join(reasons))}",
+                        ), file=sys.stderr)
                     crd = build_prometheus_rule(
                         rule_pack_name, rule_pack_data, namespace, selector_labels,
+                        [rule for rule, _ in dropped],
                     )
                     result["prometheus_rules"].append({
                         "name": crd["metadata"]["name"],

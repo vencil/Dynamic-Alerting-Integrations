@@ -1,0 +1,36 @@
+{{- /*
+ServiceMonitor for Prometheus Operator installs (kube-prometheus-stack), #1595 D1b.
+In operator mode Prometheus scrapes only what a ServiceMonitor selects. This one
+selects the reconciler Service (it carries `dynamic-alerting.io/scrape:
+platform`) and scrapes its `metrics` port — the pod port the raw
+`platform-components` job keeps. No `jobLabel`: the job is the Service name, as
+in raw mode.
+Pinned by tests/helm/test_platform_servicemonitors.py.
+*/ -}}
+{{- if .Values.serviceMonitor.enabled }}
+{{- $own := include "federation-reconciler.labels" . | fromYaml }}
+{{- range $k, $_ := .Values.serviceMonitor.labels }}
+{{- if hasKey $own $k }}
+{{- fail (printf "serviceMonitor.labels must not set %q — the chart sets it" $k) }}
+{{- end }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "federation-reconciler.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "federation-reconciler.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "federation-reconciler.selectorLabels" . | nindent 6 }}
+      dynamic-alerting.io/scrape: platform
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval | default "15s" }}
+{{- end }}

@@ -4,10 +4,18 @@ metadata:
   name: {{ include "federation-reconciler.name" . }}
   labels:
     {{- include "federation-reconciler.labels" . | nindent 4 }}
+    # Platform scrape discovery (#1595 D1b, the #1425 shape): Prometheus'
+    # `platform-components` job keeps Services carrying this label in ANY
+    # namespace, so the chart no longer has to be installed into `monitoring`
+    # for its revocation gauges to be scraped (see
+    # helm/threshold-exporter/templates/service.yaml).
+    dynamic-alerting.io/scrape: platform
   annotations:
     {{- with .Values.service.annotations }}
     {{- toYaml . | nindent 4 }}
     {{- end }}
+    # The container port: `platform-components` (role: endpointslice) keeps
+    # the endpoint whose pod port equals it (#3483).
     prometheus.io/port: {{ .Values.metricsPort | quote }}
 spec:
   selector:
