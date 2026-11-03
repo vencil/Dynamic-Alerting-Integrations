@@ -78,8 +78,10 @@ import (
 // @Description with the exporter's own reason and the file of the value
 // @Description shown. The reasons are a closed set, each defined in
 // @Description docs/cli-reference.md under `da-guard effective` (one list,
-// @Description held against pkg/config's NotServed* constants by a test). Two entries are not
-// @Description keys of effective_config: a `_` key (not a routing key) a
+// @Description held against pkg/config's NotServed* constants by a test). Three entries are not
+// @Description keys of effective_config: spelling_duplicate, keyed by the
+// @Description losing spelling as written while effective_config holds the
+// @Description spelling the decode keeps (#2031); a `_` key (not a routing key) a
 // @Description subtree _defaults.yaml writes non-null and effective_config
 // @Description does not show; the subtree value is never applied (#3341) —
 // @Description value_rejected, or unregistered when the registry does not list it, with file

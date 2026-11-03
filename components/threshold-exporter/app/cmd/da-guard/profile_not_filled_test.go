@@ -95,14 +95,14 @@ func TestGuard_ProfileNotFilledAddsNoError(t *testing.T) {
 	if !reflect.DeepEqual(withKey, without) {
 		t.Errorf("errors with the profile's declared key %+v, without it %+v", withKey, without)
 	}
-	// The run's own exit code: no error, so no exit 1.
+	// The run's own exit code: no error, so exit 0 (not 1, and not a caller error).
 	tmp := t.TempDir()
 	tree := map[string]string{}
 	for k, v := range profileNotFilledFiles(`kafka_lag: "7"`) {
 		tree["conf.d/"+k] = v
 	}
 	testutil.WriteTree(t, tmp, tree)
-	if code, _, stderr := runOnce(t, "--config-dir", filepath.Join(tmp, "conf.d")); code == exitFindings && len(without) == 0 {
-		t.Errorf("exit = %d with no error over the tree without the key; stderr=%s", code, stderr)
+	if code, _, stderr := runOnce(t, "--config-dir", filepath.Join(tmp, "conf.d")); code != exitOK && len(without) == 0 {
+		t.Errorf("exit = %d, want %d over the tree with the key; stderr=%s", code, exitOK, stderr)
 	}
 }

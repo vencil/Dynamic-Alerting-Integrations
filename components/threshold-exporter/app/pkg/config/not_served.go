@@ -169,7 +169,9 @@ type NotServedKey struct {
 	// File is the root-relative slash path of the file whose value the
 	// effective config shows (the key's winning layer) — or, for a `_` key a
 	// subtree level writes non-null that the effective config does not show
-	// (#3341), the deepest subtree file writing it; empty when no single file
+	// (#3341), the deepest subtree file writing it; or, for a
+	// profile_not_filled key, which the effective config does not show
+	// either, the profile file writing it (#3395); empty when no single file
 	// applies.
 	File string `json:"file,omitempty"`
 }
