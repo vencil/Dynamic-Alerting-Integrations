@@ -3331,7 +3331,7 @@ da-tools threshold-govern --config-dir <PATH> --prometheus <URL> --apply \
 | `--identity-email` | X-Forwarded-Email (PR git author / governance identity) | `threshold-governance@platform.local` |
 | `--identity-groups` | X-Forwarded-Groups (an RBAC group with write perm; required for direct `--apply`) | `$DA_GOVERN_GROUPS` |
 | `--auth-token` | Bearer token (oauth2-proxy mode; or `$DA_GOVERN_TOKEN`) | - |
-| `--auth-token-file` | Path to a Bearer token file (K8s audience-bound projected SA token, read at call time; or `$DA_GOVERN_TOKEN_FILE`) | - |
+| `--auth-token-file` | Path to a Bearer token file (K8s audience-bound projected SA token, read at call time; or `$DA_GOVERN_TOKEN_FILE`). Without `--identity-groups` and without a literal token it is the only credential: unreadable (missing, inaccessible, not UTF-8, empty) exits 2 before any write; with identity headers it only warns and continues | - |
 | `--throttle-seconds` | Seconds to pause between opened PRs (>= 0, fractions allowed; `0` = no pause; a negative value, `nan` or `inf` exits `2` before any PR is opened) | `2` |
 | `--timeout` | HTTP timeout in seconds for the tenant-api calls (GET / PUT), used only with `--apply`; Prometheus queries are not affected. Must be above 0, fractions allowed; `0`, negatives, `nan`, `inf` and values above `9223372036` (`threading.TIMEOUT_MAX`) are refused with exit code `2` ([#2942](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2942)) | `30` |
 | `--json` | JSON output | - |
