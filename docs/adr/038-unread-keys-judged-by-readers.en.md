@@ -40,6 +40,8 @@ Revised 2026-10-31: reading a tenant's config (GET) no longer reports whether an
 
 Revised 2026-11-01: whether a dimensional key is served is decided by the labels `dimensions:` declares, replacing "served once its base is declared"; the shipped list is generated from the threshold registry (decision 11).
 
+Revised 2026-11-03: a key no reader reads is an error wherever it is written — a tenant file, a profile, a sub-directory `_defaults.yaml` or a root platform file's `tenants:` — with two exceptions left, a key unread only because of `disable_noop` (warning) and a `_state_<filter>` naming an undeclared filter (notice); every key of a profile, threshold keys included, is judged per profile; the level is kept apart from who is blocked, and a write gate blocks only on a finding in a file that write writes (decisions 4, 5, 6).
+
 ## Summary
 
 **Problem**: Misspelled keys in tenant config mostly fail silently. The route generator's `--validate --strict` only warns about them; da-guard (the config check tool that ships with the exporter) reports nothing at all; validate-config only catches misspelled `_`-prefixed keys, and misspelled threshold keys still get only a warning. An alert written as `disable` to turn it off may not actually be turned off. Today, "is this key valid" is decided by several separately maintained key-name rules that do not line up with each other.
@@ -208,16 +210,35 @@ For each key of each tenant, the shared function gives:
 | verdict | Meaning | Level |
 |---|---|---|
 | `read` | At least one reader reads it; keys registered as `annotation` also count | — |
-| `unread` | No reader reads it; always so for a `_` key the registry does not list (reason `unregistered`) | Written in the tenant file: error; from a platform file or profile: notice, naming the file; unread only because of `disable_noop`: warning (see decision 8) |
+| `unread` | No reader reads it; always so for a `_` key the registry does not list (reason `unregistered`), and for a retired `_` key (reason `retired`) | Error, whether written in a tenant file, a profile, a sub-directory `_defaults.yaml` or a root platform file's `tenants:`; from a file other than the tenant file, the file is named. Two exceptions: unread only because of `disable_noop`: warning (see decision 8); a `_state_<filter>` naming a filter the platform has not declared: notice (see decision 7) |
 | `undecidable` | No root platform file was read, so the exporter half cannot judge the threshold keys the tenant wrote; reserved keys are judged as usual (see decision 7) | The verdict output returns rc 2 |
 
 The same typo coming from a platform file is reported only once (deduplicated by file and key), listing the affected tenants, rather than one finding per tenant.
 
-A `_` key in a profile is also judged directly from the registry's profile layer, not through tenants: a key no reader reads in the profile layer is one notice on that profile file, listing the tenants that bind the profile (possibly none). The verdict and reason are the same whether or not a tenant binds the profile and whether or not a tenant's own value shadows it; a `_profile` written in a profile, for example, is always shadowed by the tenant layer and is reported only this way. Policy-as-Code reads the configuration a tenant sees, so a rule naming the key counts as a read only when some tenant actually gets the value.
+Every key of a profile (`_` keys and threshold keys) is judged directly, per profile, not through tenants: the verdict and reason are the same whether or not a tenant binds the profile and whether or not a tenant's own value shadows it, and the level follows the table above. A key no reader reads is one finding on that profile file, listing the tenants that bind the profile (possibly none).
+
+- A `_` key is judged from the registry's profile layer: a key no reader reads in the profile layer is `unread`. A `_profile` written in a profile, for example, is always shadowed by the tenant layer and is reported only this way.
+- A threshold key is judged by resolving that profile in memory with the same code the exporter builds threshold rows with — no second set of key-name rules, and no fake tenant file. For example, a profile writing a threshold key the root does not declare, or a key declared only in `optional_overrides`, which a profile by rule cannot fill in (the exporter today logs a WARN for the latter on load and does not apply it), is `unread`.
+- Policy-as-Code reads the configuration a tenant sees, so a rule naming the key counts as a read only when some tenant actually gets the value.
+
+Example: the root `_defaults.yaml` does not declare `redis_evicted_keys`, and tenant `t1` writes `_profile: gold`:
+
+```yaml
+# _profiles.yaml
+profiles:
+  gold:
+    redis_evicted_keys: "11"   # t1 binds gold
+  silver:
+    redis_evictd: "5"          # misspelt, and no tenant binds silver
+```
+
+Both keys are `unread` at error, both reported on `_profiles.yaml`: `redis_evicted_keys` lists `t1`, and `redis_evictd` has an empty tenant list. Today's verdict reports the first only as a notice and the second not at all. Whom these two errors can block is decision 6's.
 
 `disable_noop` is only a warning while a misspelled threshold key is an error, because a `disable` that turns nothing off makes no value take wrong effect, and it may be a deliberate safety entry (for example for a key the defaults will only add later); its risk is that what was meant to be turned off was not, so besides the warning, a newly introduced one also appears in the config-diff PR comment (see decision 8). `disable_partial` does not change the verdict (the key is read); it is reported as a separate warning.
 
-The levels in the table above apply once the gates change to "block when judged". Until then, these findings are reported, not blocked: validate-config lists all of them as warnings and the exit code does not change; the rc 2 of `undecidable` appears only in the verdict output (explain, decision 9).
+A level describes only the defect, not who is blocked; whether a write gate blocks depends on the file the finding is in (decision 6).
+
+The levels in the table above apply once the gates change to "block when judged", taking effect in that same step ([#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)), which will be a breaking change. Until then, these findings are reported, not blocked: validate-config lists all of them as warnings and the exit code does not change; today's verdict reports an `unread` from a platform file or profile as a notice, and a threshold key on a profile no tenant binds not at all; the rc 2 of `undecidable` appears only in the verdict output (explain, decision 9).
 
 ### 5. Where the computation lives
 
@@ -229,7 +250,7 @@ The levels in the table above apply once the gates change to "block when judged"
 - Each write in the generator container needs the verdict for the written tenants only, so served-values and effective must both be able to compute only the named tenants (`--tenant`; the platform files are still read whole, each requested tenant gets what it gets from the whole tree, and one the tree lacks is listed in `tenants_absent`). The verdict judges only those tenants; a tenant not requested does not appear, rather than reading as one no reader reads. Two things are not one tenant's, and a subset judges them over the requested tenants only: whether /metrics can be gathered (another tenant's failure to gather is not seen), and a finding on a profile's key (a reader of an unrequested tenant bound to the same profile is not seen, so a notice can appear that the whole tree would not give). To judge a write, the caller names every tenant the written file declares, before and after the write.
 - In the container the verdict runs only after a write the generator passes, and **shares the one judgement's deadline** with the generator (ADR-036 §3's deadline is authoritative and not restated here): it has no deadline of its own and does not yield when another write is waiting. When time or memory runs out, da-guard fails, or the result is `undecidable`, it reports "verdict not completed" with the reason. The container recomputes counterfactually for the written tenants only (decision 8); it does not truncate error-level findings, and the line limit of a response governs only what is shown. A write to a defaults file, or to a root platform file with `profiles:` before or after, is not judged: such a file's keys reach tenants it does not name, which only a whole-tree verdict sees, so it too reports "verdict not completed" and names the file. The verdict takes about 30% of a judgement, and a judgement grows with the number of tenants; on one CPU, for example, a judgement nears half of the deadline (the line ADR-036 §3 draws) at about 2500 tenants (an illustration; hosts differ). The actual limit is read from a metric, the ratio of judgement time to judgement deadline, named by the implementation. It alerts above 0.5, keeping half for queueing and tenant growth (the same ratio as ADR-036 §3's cache-removal condition), and at 1 writes are refused because their verdict does not complete. The count of each outcome and the latest duration are metrics too.
 - Once tenant-api blocks when judged ([#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)):
-  - A write is refused with 400, as when the key-name check refuses today, when a tenant it is for has an error-level finding, and the response lists those findings. An existing error of that tenant that the write does not touch counts too, as with Go's key-name check today; decision 12's approach applies to newly added value checks only.
+  - A write is refused with 400, as when the key-name check refuses today, when a file it writes has an error-level finding about a tenant the write is for, and the response lists those findings. Such an error already in that file that the write does not touch counts too, as with Go's key-name check today; decision 12's approach applies to newly added value checks only. An error on any other file does not refuse the write (decision 6).
   - A write whose verdict does not complete is refused. By ADR-036 §3's line this is "refusing that write", not an unavailable container: running out of time answers with a retryable error, any other reason with a non-retryable one naming the reason. `undecidable` means no root platform file was read, which a retry does not change, and the response names the missing root platform file; Go blocks the threshold keys of such a tree today too.
   - da-guard missing or not runnable, or a container that returns no verdict (an image older than this step), is an unavailable container under ADR-036 §3 and answers 503; as with a missing amtool, da-guard is checked before each judgement, so a da-guard that stays missing shows on the container availability alert rather than as one refusal after another.
   - The other findings go in the write response's `warnings`.
@@ -245,7 +266,21 @@ This brings a linked amendment: [ADR-036](./036-single-parser-effective-config.e
 
 ### 6. Platform-side problems are not charged to tenants
 
-Decision 4's "`unread` from a platform file or profile" (for example, a `_` key the registry does not list, declared in the root defaults) appears in every run and is not charged to the tenant being changed. tenant-api's write check does not block writes for unrelated tenants because of such existing problems in platform files.
+Decision 4's levels describe only the defect. Whether a write gate blocks a write depends only on whether the finding is in a file that write writes, not on which layer the level comes from:
+
+- **tenant-api** writes only tenant files, so an error on a platform file, a profile or a sub-directory `_defaults.yaml` blocks no tenant's write; an error in a tenant file blocks only a write to that file for a tenant the write is for (decision 5).
+- **A write that changes a profile file, a sub-directory `_defaults.yaml` or a root platform file** (for example, a tool that writes through `da-guard write`) is blocked when it makes a new error appear in that file; an error the file already had before the write does not block it.
+- **Whole-tree CI** (validate-config, the generator's `--validate`) blocks on any error, whichever file it is in.
+
+That platform-side problems are not charged to the tenant being changed is guaranteed by this file scope, not by lowering the level of platform-side findings.
+
+Example: the root `_defaults.yaml` does not declare `redis_evicted_keys`, and tenant `t1` binds profile `gold` ("after" is once the gates block when judged):
+
+| Written | Today | After |
+|---|---|---|
+| profile `gold` writes `redis_evicted_keys: "11"` | the verdict reports a notice on `_profiles.yaml`; da-guard has no finding | error on `_profiles.yaml`, listing `t1`. A write to `_profiles.yaml` that makes this error appear is blocked, and whole-tree CI blocks; `t1`'s own writes through tenant-api are accepted |
+| a sub-directory `_defaults.yaml` writes `redis_evicted_keys: 100` | the verdict reports a notice; da-guard reports an error (the sub-directory's value does not reach the exporter), so the two disagree on the level | both are errors, on the sub-directory `_defaults.yaml`. Writes to that file and whole-tree CI as in the row above; the own writes of tenants under that sub-directory are accepted |
+| a profile no tenant binds writes a wrong threshold key (`silver` in decision 4's example) | no finding at all | error on the profile file, with an empty tenant list; who is blocked as in the first row |
 
 ### 7. When it cannot be judged
 
@@ -331,7 +366,7 @@ Changing the gates to "block when judged" is not part of this ADR and is driven 
       container_cpu{pod="a"}: "70"          # not served: pod is not declared, verdict unread
       container_cpu{version=~"v3.*"}: "95"  # not served: it serves version_re, which is not declared
   ```
-- Platform-file and profile notices no longer carry keys no reader reads; the verdict reports them (decision 6).
+- Platform-file and profile notices no longer carry keys no reader reads; the verdict reports them (decision 4).
 
 ### 12. Bad values already on disk
 
@@ -381,6 +416,9 @@ Value checks and decision 12: the exporter does not know `_silent_mode: purple` 
 - **The key-name verdict needs only da-guard and the registry**: the generator half comes from the registry's declarations, without running the generator. Whether a value is valid under the generator's semantics (such as the profile `_routing_profile` names) is still judged only by the generator; in an environment with only da-guard, that part returns exit 4 (undecided).
 - **Judging a write takes longer, and one generator container serves fewer tenants**: the verdict joins the generator container's one judgement and takes about 30% of it; on one CPU, for example, a judgement nears half of the deadline at about 2500 tenants (an illustration; hosts differ). On a larger tree, or with writes waiting, a write may be refused because its verdict did not complete: running out of time is retryable, other reasons are not (decision 5). Read the limit from decision 5's metric; the ways to win capacity back are computing served-values and effective in one da-guard run, running the verdict alongside the generator, and speeding up the generator itself.
 - **When the verdict breaks, writes are refused**: da-guard missing or not runnable in the container makes it unavailable, as a missing amtool does, and writes answer 503; da-guard failing to judge one write refuses that write (decision 5).
+- **Platform-side keys of this kind turn red at once on upgrade**: in the release where the gates block when judged, keys no reader reads on a profile, a sub-directory `_defaults.yaml` or a root platform file's `tenants:` in an existing tree, and `_` keys the registry does not list or has retired, go from notice to error, and whole-tree CI turns red at once. The platform-side keys validate-config's `unread_keys` lists as notices today are most of what turns red then; a threshold key on a profile no tenant binds is not listed today and is reported only once per-profile judging is in place.
+- **When the platform removes a root declaration, the error lands on the layer left unread**: after the root `_defaults.yaml` drops a threshold's declaration, values of the same name in profiles and sub-directory `_defaults.yaml` files are read by nothing, and the error lands on those profile / sub-directory files, not on the root file that was changed; the write gate does not block the root-file write for it, and whole-tree CI reports it.
+- **Retired `_` keys get no grace period**: a retired key written on the platform side goes straight from notice to error, with no warning phase in between; migration relies on the hint text the registry has for it, which the error message prints.
 - **A key unread only because of `disable_noop` is accepted at write time**: decision 4 reports it as a warning only, so a misspelt key written as `disable` is accepted with a warning, where Go blocks it today.
 - **Direct mode has no whole-tree verdict**: a write judges only the written tenants. What does not belong to one write — a platform file change that leaves an existing tenant's key unread — is judged by CI in PR mode; direct mode (writes stay in the pod, no PR) has no such whole-tree verdict yet.
 - **Typos and intentional omissions are not told apart**: for a threshold key the platform has not declared, the verdict does not know whether the tenant misspelled it or the platform forgot to declare it; both are reported with the same reason.
@@ -400,6 +438,8 @@ Value checks and decision 12: the exporter does not know `_silent_mode: purple` 
 - **Each reader reports at run time which keys it read, and take the union**: no industry precedent was found for a union verdict of "valid if any reader read it"; the mainstream is to split ownership by prefix or subtree (each OpenTelemetry Collector component validates its own subtree; Helm subcharts and `global`). In practice, data on the Python side loses tracking once copied (`copy.copy`, `json.dumps`), and the source is lost after platform files are merged; Go map reads cannot be intercepted, so every parsing stage would need its own instrumentation. Measurement shows the generator reads only four keys one by one at the tenant level, `_routing`, `_routing_profile`, `_severity_dedup` and `_metadata`, and they do not vary with the config, so run-time tracking buys no extra information. The idea is reused as the black-box probe of decision 3.
 - **Judge whether `disable` has an effect by recording "a lower layer has a value" at a single point**: the exporter reads `disable` in five threshold-related places (base, declared thresholds, `_critical`, dimension keys, state filter). And the base stage walks defaults one by one, so every `disable` it reaches already has a lower-layer value, while the ones with no effect are exactly the ones it never reaches. So counterfactual recomputation is used instead.
 - **"conf.d has a root `_defaults.yaml`" counts as decidable**: measurement shows that when the root `_defaults.yaml` exists but has no `defaults:`, only `_routing_defaults`, or `defaults: {}`, no threshold is served; and a tree with only `optional_overrides` and no defaults can still serve values. So the check is instead "was any root platform file read", and the rest is left to the existing per-key reasons.
+- **Keep platform-side keys no reader reads at notice**: one kind of defect (the platform wrote a value its bound tenants never get) would keep different levels depending on the layer and the check — a sub-directory's value is a notice in the verdict and an error in da-guard — and a wrong profile would never turn any gate red. Not blocking unrelated tenants' writes is already guaranteed by decision 6's file scope and needs no lower level. Industry reference: `kubectl --validate=strict` fails on an unknown field; Terraform only warns on an undeclared variable in tfvars, on the premise that a shared tfvars file may be used by other configurations, whereas a profile here is read only within this tree, so that premise does not hold.
+- **Raise only threshold keys to error, keeping `_` keys at notice on the platform side**: this adds an exception rule of "key kind × layer" that readers must remember and each implementation must match, and it drifts. What it saves is a grace period for retired `_` keys, but the error message already carries the hint, and the breaking change is acceptable.
 - **Let the schema itself be the registry** (add custom fields to the JSON Schema to mark readers): neither Go module has a JSON Schema library, so using it on the Go side would mean adding a dependency or copying it by hand. Also, the schema is today the side that is "pinned" by code; having it drive the code would reverse the current direction.
 
 ## Where it is implemented
