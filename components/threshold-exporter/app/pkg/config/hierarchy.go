@@ -99,7 +99,9 @@ type EffectiveConfig struct {
 	// not_served.go). EffectiveConfig keeps the value as written. It also
 	// names a reserved key a subtree `_defaults.yaml` writes but does not
 	// carry, which neither EffectiveConfig nor /metrics holds (#3341;
-	// withNotCarried), with that file. Filled by
+	// withNotCarried), with that file; and a key the tenant's profile
+	// writes but may not fill in, the root declaring it without a platform
+	// value (#3395; withProfileNotFilled), with the profile file. Filled by
 	// ResolveEffective and EffectiveTree; nil from ScopeEffective, and
 	// omitted when no key is named.
 	NotServed map[string]NotServedKey `json:"not_served,omitempty"`
@@ -482,8 +484,31 @@ func (r *effectiveResolver) resolve(tenantID string) (*EffectiveConfig, error) {
 	}
 	if r.served != nil {
 		ec.NotServed = withNotCarried(ec.NotServed, view, notCarried, relChain)
+		ec.NotServed = withProfileNotFilled(ec.NotServed, view, parts.profileNotFilled)
 	}
 	return ec, nil
+}
+
+// withProfileNotFilled adds to notServed each key the tenant's profile
+// writes but does not fill in, because the root declares the key without a
+// platform value (#1189: profileFill's onDeclared, the same decision
+// ApplyProfiles WARNs about on /metrics) — profile_not_filled, with the
+// profile file (#3395). Like withNotCarried, the value is applied by no
+// plane, so it is not in the effective config and is named only here. A
+// key the view holds under any spelling (a value another layer gives it)
+// is left out: the entry would read as a verdict on that value. The tenant
+// side never sets such a key (profileFill skips one it sets).
+func withProfileNotFilled(notServed map[string]NotServedKey, view map[string]any, notFilled map[string]string) map[string]NotServedKey {
+	for k, file := range notFilled {
+		if hasAliasEquivalent(view, k) {
+			continue
+		}
+		if notServed == nil {
+			notServed = map[string]NotServedKey{}
+		}
+		notServed[k] = NotServedKey{Reason: NotServedProfileNotFilled, File: file}
+	}
+	return notServed
 }
 
 // withNotCarried adds to notServed each reserved key a subtree level of the
@@ -550,6 +575,10 @@ type effectiveParts struct {
 	platformSources                   []PlatformOverlaySource
 	profileSources                    []ProfileOverlaySource
 	profile                           string // EffectiveConfig.BoundProfile
+	// profileNotFilled is each key the elected profile writes that it does
+	// not fill in, because the root declares it without a platform value
+	// (#1189) → the profile file (PlatformProfiles.expand; #3395). nil: none.
+	profileNotFilled map[string]string
 	// override is the tenant side as ONE layer — the tenant file's block
 	// with the platform overlay and the profile filled in — exactly what
 	// `merged` laid over the chain. effectiveView lays it per threshold
@@ -1268,15 +1297,16 @@ func mergeTenantOver(merged map[string]any, tenantDoc *TenantDoc, tenantID strin
 		return tenantMerge{}, err
 	}
 	own, platformSources := overlayTenant(tenantRaw, overlay, merged)
-	override, profileSources := profiles.expand(own, merged)
+	override, profileSources, profileNotFilled := profiles.expand(own, merged)
 	return tenantMerge{
 		effectiveParts: effectiveParts{
-			merged:          deepMerge(merged, override),
-			override:        override,
-			tenantRaw:       tenantRaw,
-			platformSources: platformSources,
-			profileSources:  profileSources,
-			profile:         profiles.bound(own),
+			merged:           deepMerge(merged, override),
+			override:         override,
+			tenantRaw:        tenantRaw,
+			platformSources:  platformSources,
+			profileSources:   profileSources,
+			profileNotFilled: profileNotFilled,
+			profile:          profiles.bound(own),
 		},
 		own: own,
 	}, nil
