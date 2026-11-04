@@ -30,6 +30,16 @@ type ValidateResponse struct {
 	// can tell "change this tenant in git" / "commit or discard the change
 	// in the repository" from a body to fix. Absent otherwise.
 	Code string `json:"code,omitempty" enums:"TENANT_GIT_MANAGED,TENANT_FILE_DIRTY"`
+	// Judged: the write's own judgement — the route generator and the shared
+	// key verdict, as PUT asks them — ran on this body (#3016). When false,
+	// Valid reflects only the steps before it, and NotJudged says why: an
+	// earlier step refused the body (refused), PR write mode (pr_mode), the
+	// body changes nothing (unchanged), another preview is being judged
+	// (preview_busy, retry), or the reason PUT would be answered with
+	// (a retryable GENERATOR_BUSY / GENERATOR_REJECTED reason, or a
+	// VALIDATOR_UNAVAILABLE / POLICY_UNAVAILABLE one).
+	Judged    bool   `json:"judged"`
+	NotJudged string `json:"not_judged,omitempty"`
 }
 
 // ValidateTenant handles POST /api/v1/tenants/{id}/validate
@@ -38,9 +48,10 @@ type ValidateResponse struct {
 // planPut and gitops.PreviewPut, tenant_put_plan.go) — the write scope, the
 // placeholder, then in direct mode the steps PUT runs on the tree
 // (resolution, the git-managed refusal of #3064, validation, #2124), in PR
-// mode only the body-only pre-flight (#1718). Routing and the domain policy are not part
-// of it: the route generator judges those on the write (PUT's 422
-// GENERATOR_FINDINGS, #2903), and the dry-run does not call it. A refusal
+// mode only the body-only pre-flight (#1718). In direct mode a body those
+// steps pass is then judged as PUT judges it (#3016, judgePreview): the
+// route generator and the shared key verdict, without the writer lock and
+// one preview at a time. A refusal
 // of the request itself (the id, the body's size) is this route's 400 /
 // 413; every other refusal is valid: false with PUT's text. Body checks
 // belong in gitops, never here.
@@ -60,6 +71,11 @@ type ValidateResponse struct {
 // @Description listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
 // @Description base branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718) —
 // @Description so a reserved key's value (_silent_mode, #3227), which validation judges against the file the write replaces, is not judged here in PR mode.
+// @Description In direct mode a body that passes those steps is then judged as PUT judges it (#3016): the route generator and the shared key verdict.
+// @Description Their refusal is valid: false with PUT's text (its 400 key-verdict lines, its 422 findings as the caller may see them, a non-retryable GENERATOR_REJECTED).
+// @Description judged is false when that judgement did not run, with not_judged saying why: refused (an earlier step refused the body),
+// @Description pr_mode, unchanged (the body changes nothing), preview_busy (another preview is being judged; retry), or the reason PUT would be
+// @Description answered 429 or 503 with (retry, or the generator container cannot judge). Then valid reflects only the earlier steps.
 // @Description This route needs read permission only, but the verdict is the write's: a caller who may read the tenant and not write
 // @Description it gets valid: false with the write gate's text, as its PUT is refused (#3062; before, such a caller got a verdict on
 // @Description the body alone). POST /api/v1/tenants/{id}/diff shows that caller a masked preview instead.
@@ -86,22 +102,31 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 		plan, ok := planPut(w, verdict, r, d, endpointValidate, readBody)
 		if !ok {
 			if verdict.status != 0 {
-				writeJSON(w, http.StatusOK, ValidateResponse{Valid: false, Warnings: verdict.validateWarnings()})
+				writeJSON(w, http.StatusOK, ValidateResponse{Valid: false, Warnings: verdict.validateWarnings(),
+					NotJudged: notJudgedRefused})
 			}
 			return
 		}
 
 		var errs, notices []string
 		var err error
+		judged, notJudged := false, notJudgedRefused
 		if d.prWritePath() {
 			// The local tree may lag the base in PR mode (#1718), so only the
 			// body-only pre-flight WritePR itself runs before the PR is cut;
 			// PUT runs the rest on the fresh base, under the writer lock.
 			errs, err = gitops.DryRunValidateBodyOnly(plan.tenantID, plan.body)
+			notJudged = notJudgedPRMode
 		} else {
 			var res gitops.PutResolution
 			res, errs, err = plan.preview(d)
 			notices = res.Notices
+			if err == nil && len(errs) == 0 {
+				// #3016: the write's own judgement, as PUT asks it.
+				var advice []string
+				judged, notJudged, errs, advice = judgePreview(d, withTenantNames(r, d), plan.tenantID, res)
+				notices = append(notices, advice...)
+			}
 		}
 		var code string
 		if err != nil {
@@ -113,11 +138,16 @@ func ValidateTenant(d *Deps) http.HandlerFunc {
 				code = string(errcode.TenantFileDirty)
 			}
 		}
+		if judged {
+			notJudged = ""
+		}
 		writeJSON(w, http.StatusOK, ValidateResponse{
-			Valid:    len(errs) == 0,
-			Warnings: errs,
-			Notices:  notices,
-			Code:     code,
+			Valid:     len(errs) == 0,
+			Warnings:  errs,
+			Notices:   notices,
+			Code:      code,
+			Judged:    judged,
+			NotJudged: notJudged,
 		})
 	}
 }

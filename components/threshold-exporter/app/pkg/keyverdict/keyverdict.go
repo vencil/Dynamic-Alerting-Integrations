@@ -69,6 +69,10 @@ const (
 	KindUnread         = "unread"
 	KindDisableNoop    = "disable_noop"
 	KindDisablePartial = "disable_partial"
+	// KindProfileNotJudged: a threshold key of a profile no tenant binds —
+	// not judged (whether the exporter reads it is measured on a tenant),
+	// said so rather than left to read as judged and fine (#3395).
+	KindProfileNotJudged = "profile_not_judged"
 )
 
 // Reasons this package reads from the served reading or gives itself. The
@@ -93,6 +97,8 @@ const (
 	// ReasonNotReadInProfile: a registered `_` key no reader reads in the
 	// profile layer.
 	ReasonNotReadInProfile = "not_read_in_profile"
+	// ReasonProfileUnbound: KindProfileNotJudged's reason.
+	ReasonProfileUnbound = "profile_unbound"
 )
 
 // Disable effects (served-values' keys[].disable).
@@ -165,6 +171,10 @@ type Input struct {
 	// name → body), for the root platform files that have one and a reader
 	// reads. nil: the profile layer is not judged.
 	RootProfiles map[string]map[string]any
+	// Whole: Served and Effective hold every tenant of the tree (no
+	// `--tenant` subset) — only then is a profile no tenant binds known to
+	// be one (unboundProfileFindings).
+	Whole bool
 }
 
 // KeyVerdict is the verdict on one key of one tenant. The JSON is
@@ -316,6 +326,9 @@ func Judge(in Input) Tree {
 	findings := findingsOf(keys, rootDefaults, canon)
 	if in.RootProfiles != nil {
 		findings = mergeProfileFindings(keys, findings, profileLayerFindings(in.RootProfiles, in.Effective))
+		if in.Whole {
+			findings = append(findings, unboundProfileFindings(in.RootProfiles, in.Effective)...)
+		}
 	}
 	sortFindings(findings)
 	for i := range findings {
@@ -695,6 +708,42 @@ func profileLayerFindings(byFile map[string]map[string]any, effective map[string
 		file, reason := fk[0], f.reason
 		out = append(out, Finding{Severity: SeverityError, Kind: KindUnread, Key: fk[1], File: &file,
 			Tenants: sortedKeys(f.tenants), Reason: &reason, ServedFamily: []string{}, ServedFrom: []string{}})
+	}
+	return out
+}
+
+// unboundProfileFindings is a notice for every threshold key of a profile
+// no tenant binds (#3395, ADR-038 decision 4): whether the exporter reads
+// it is what it does on a tenant, and no tenant has it, so it is not
+// judged — said so, once per file and key, rather than left to read as
+// judged and fine. A `_` key there is judged by the registry
+// (profileLayerFindings) and is not listed here.
+func unboundProfileFindings(byFile map[string]map[string]any, effective map[string]EffectiveTenant) []Finding {
+	bound := map[string]bool{}
+	for _, te := range effective {
+		if te.Profile != "" {
+			bound[te.Profile] = true
+		}
+	}
+	got := map[[2]string]bool{}
+	for file, profiles := range byFile {
+		for name, body := range profiles {
+			m, ok := body.(map[string]any)
+			if !ok || bound[name] {
+				continue
+			}
+			for key := range m {
+				if !strings.HasPrefix(key, "_") {
+					got[[2]string{file, key}] = true
+				}
+			}
+		}
+	}
+	out := make([]Finding, 0, len(got))
+	for fk := range got {
+		file, reason := fk[0], ReasonProfileUnbound
+		out = append(out, Finding{Severity: SeverityNotice, Kind: KindProfileNotJudged, Key: fk[1], File: &file,
+			Tenants: []string{}, Reason: &reason, ServedFamily: []string{}, ServedFrom: []string{}})
 	}
 	return out
 }

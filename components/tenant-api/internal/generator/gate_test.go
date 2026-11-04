@@ -467,8 +467,9 @@ func TestValidateWrites_KeyVerdictOfTheMatchingPassOnly(t *testing.T) {
 		}
 		v["key_verdict"] = map[string]any{"status": "complete", "tenants": 1, "seconds": 0.1, "truncated": 3,
 			"findings": []map[string]any{{"severity": "error", "kind": "unread", "key": key,
-				"file": "db-a.yaml", "tenants": []string{"db-a"}, "reason": "unregistered"},
-				{"severity": "notice", "kind": "unread", "key": "_p", "file": nil, "tenants": []string{}, "reason": nil}}}
+				"file": "db-a.yaml", "tenants": []string{"db-a"}, "reason": "unregistered", "blocks": true},
+				{"severity": "notice", "kind": "unread", "key": "_p", "file": nil, "tenants": []string{}, "reason": nil,
+					"blocks": false}}}
 		return 200, v
 	})
 	kv, err := fastGate(t, fake, "").ValidateWrites(ctxFor(t, 20*time.Second), testBase, testFiles())
@@ -476,7 +477,8 @@ func TestValidateWrites_KeyVerdictOfTheMatchingPassOnly(t *testing.T) {
 		t.Fatalf("pass: %v", err)
 	}
 	want := &gitops.KeyVerdict{Status: gitops.KeyVerdictComplete, Truncated: 3, Findings: []gitops.KeyFinding{
-		{Severity: "error", Kind: "unread", Key: "_second_pass_key", File: "db-a.yaml", Tenants: []string{"db-a"}, Reason: "unregistered"},
+		{Severity: "error", Kind: "unread", Key: "_second_pass_key", File: "db-a.yaml", Tenants: []string{"db-a"}, Reason: "unregistered",
+			Blocks: true},
 		{Severity: "notice", Kind: "unread", Key: "_p", Tenants: []string{}},
 	}}
 	if !reflect.DeepEqual(kv, want) {

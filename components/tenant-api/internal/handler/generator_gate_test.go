@@ -411,7 +411,7 @@ func TestGeneratorGate_KeyVerdictErrorIs400(t *testing.T) {
 		v := testutil.PassVerdict(req, nil)
 		v["key_verdict"] = map[string]any{"status": "complete", "tenants": 1, "seconds": 0.1, "truncated": 0,
 			"findings": []map[string]any{{"severity": "error", "kind": "unread", "key": key,
-				"file": "t-a.yaml", "tenants": []string{"t-a"}, "reason": "unregistered"}}}
+				"file": "t-a.yaml", "tenants": []string{"t-a"}, "reason": "unregistered", "blocks": true}}}
 		return 200, v
 	}
 	f, fake := generatorDirectFixture(t, answer)
@@ -758,7 +758,7 @@ func TestGeneratorGate_KeyVerdictPlatformFindingsDisclosure(t *testing.T) {
 		v := testutil.PassVerdict(req, nil)
 		v["key_verdict"] = map[string]any{"status": "complete", "tenants": 2, "seconds": 1.0, "truncated": 0,
 			"findings": []map[string]any{{"severity": "notice", "kind": "unread", "key": "_x",
-				"file": "_defaults.yaml", "tenants": []string{"t-a", "t-b"}, "reason": nil}}}
+				"file": "_defaults.yaml", "tenants": []string{"t-a", "t-b"}, "reason": nil, "blocks": false}}}
 		return 200, v
 	}
 	const ops = `{"operations":[{"tenant_id":"t-a","patch":{"_silent_mode":"warning"}}]}`

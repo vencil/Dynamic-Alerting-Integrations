@@ -237,6 +237,8 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 			Sources: ec.KeySources, Profile: ec.BoundProfile, DefaultsChain: ec.DefaultsChain}
 	}
 	in.RootProfiles = opts.profiles
+	// A profile no tenant binds is known only over every tenant (#3395).
+	in.Whole = opts.tenants == nil
 	res := keyVerdictResult{judged: true, tree: keyverdict.Judge(in),
 		keyChecks: map[string]servedKeyChecks{}, computed: map[string]bool{},
 		parseFailed: rep.ParseFailed, unreadable: unreadableEntries(rep.Unreadable), setAside: setAside}

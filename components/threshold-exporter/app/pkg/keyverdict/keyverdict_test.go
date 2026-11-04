@@ -185,3 +185,41 @@ func TestJudge_AFileLevelKeyOfADefaultsFileIsNotATenantsKey(t *testing.T) {
 		t.Fatalf("judged %v", got)
 	}
 }
+
+// A threshold key of a profile no tenant binds is not judged — whether the
+// exporter reads it is measured on a tenant — and says so with a notice
+// that blocks nothing (#3395); only over the whole tree, where "no tenant
+// binds it" is known. A bound profile's keys are judged through its
+// tenants; an unbound profile's `_` key by the registry.
+func TestJudge_AnUnboundProfilesThresholdKeyIsNotJudged(t *testing.T) {
+	t.Parallel()
+	in := func(whole bool) Input {
+		return Input{
+			Served: map[string]ServedTenant{"t1": {Keys: map[string]ServedKey{}, Values: map[string]any{}}},
+			Effective: map[string]EffectiveTenant{"t1": {Config: map[string]any{}, Profile: "gold",
+				Sources: map[string]config.KeySource{}}},
+			RootProfiles: map[string]map[string]any{"_profiles.yaml": {
+				"gold":   map[string]any{"redis_memory": "1"},
+				"silver": map[string]any{"redis_evictd": "5", "_routng": "x"},
+			}},
+			Whole: whole,
+		}
+	}
+	var got []string
+	for _, f := range Judge(in(true)).Findings {
+		if f.Kind == KindProfileNotJudged {
+			got = append(got, f.Severity+" "+f.Key+" "+deref(f.File)+" "+deref(f.Reason)+" "+strings.Join(f.Tenants, ","))
+			if f.Blocks {
+				t.Errorf("a not-judged notice blocks: %+v", f)
+			}
+		}
+	}
+	if !reflect.DeepEqual(got, []string{"notice redis_evictd _profiles.yaml profile_unbound "}) {
+		t.Fatalf("whole tree: %q", got)
+	}
+	for _, f := range Judge(in(false)).Findings {
+		if f.Kind == KindProfileNotJudged {
+			t.Fatalf("a tenant subset knows no profile to be unbound: %+v", f)
+		}
+	}
+}

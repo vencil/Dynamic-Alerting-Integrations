@@ -52,6 +52,8 @@ updated_at: 2026-11-04
 
 2026-11-04 修訂：各閘門判到就擋，決定 4 的等級生效，擋不擋由判決的 `blocks` 欄位決定；整棵樹的 CI 也擋判不了的閾值鍵；寫入閘門比對新舊的單位跟著 finding 的單位走；profile 閾值鍵逐 profile 直接判延到 #3395（決定 4、6、7）。
 
+2026-11-04 修訂：沒有租戶綁定的 profile 上的閾值鍵不判，報 `profile_not_judged` notice，取代「profile 的每個鍵都逐 profile 直接判」；tenant-api 的預覽走寫入同一套判定；tenant-api 與產生器容器擋不擋讀判決的 `blocks`（決定 4、5、6）。
+
 ## 摘要
 
 **問題**：租戶設定裡拼錯的鍵大多默默失效。路由產生器 `--validate --strict` 對它們只給警告；da-guard（exporter 隨附的設定檢查工具）完全不報；validate-config 只擋得到 `_` 開頭的拼錯，閾值鍵的拼錯一樣只有警告。寫成 `disable` 想關掉的告警，也可能其實沒關掉。今天判斷「這個鍵合不合法」的是幾處各自維護的鍵名規則，彼此對不齊。
@@ -225,11 +227,13 @@ tenant-api 那條入口的 Go 鍵名段，要等 tenant-api 自己改成依共�
 
 同一個錯字來自平台檔時只報一次（依檔案與鍵去重），並列出受影響的租戶，不會變成每個租戶各一筆。
 
-profile 裡的每個鍵（`_` 鍵與閾值鍵）都逐 profile 直接判，不經租戶：不論有沒有租戶綁定、值有沒有被租戶自己的值蓋掉，判決與原因都相同，等級照上表。沒有讀取端讀的鍵在該 profile 檔報一筆，列出綁定它的租戶（可以一個都沒有）。
+profile 裡的鍵在該 profile 檔報，`_` 鍵與閾值鍵判法不同：
 
-- `_` 鍵依登錄表的 profile 層判：沒有任何讀取端在 profile 這一層讀的鍵判為 `unread`。例如寫在 profile 裡的 `_profile` 永遠被租戶那一層蓋掉，只有這樣判才報得出來。
-- 閾值鍵以 exporter 建閾值列的同一套程式，在記憶體內解析該 profile 來判，不另寫一套鍵名規則，也不為此建假的租戶檔。例如 profile 寫了根層沒宣告的閾值鍵，或寫了只宣告在 `optional_overrides`、profile 依規則不能填入的鍵（exporter 今天載入時對後者記一行 WARN、不套用），兩者都沒有讀取端讀到 profile 的這個值，改成逐 profile 判之後都判為 `unread`。
+- `_` 鍵逐 profile 直接判，不經租戶：依登錄表的 profile 層，沒有任何讀取端在 profile 這一層讀的鍵判為 `unread`，不論有沒有租戶綁定，列出綁定它的租戶（可以一個都沒有）。例如寫在 profile 裡的 `_profile` 永遠被租戶那一層蓋掉，只有這樣判才報得出來。
+- 閾值鍵經綁定它的租戶判：exporter 會不會為它建閾值列，是在租戶上實測出來的（served-values），沒有不經租戶就能呼叫的判定。沒有租戶綁定的 profile 上的閾值鍵**不判**，每個鍵報一筆 `notice`（種類 `profile_not_judged`），不擋，只把「沒判」和「判了沒事」分開；這筆只在判整棵樹時出現（只判部分租戶時無從得知 profile 有沒有人綁）。
 - Policy-as-Code 讀的是租戶看到的設定，所以只有真的有租戶拿到這個值時，規則指名它才算有人讀。
+
+不逐 profile 判閾值鍵的理由：要判就得模擬一個綁定該 profile 的租戶，而兩輪實測找出多處與真實載入不同的地方（`optional_overrides` 與別名雙拼的填入、維度鍵原寫法、同名 profile 跨根檔逐鍵合併、policy 讀取端、只判部分租戶）；另一條路是從 exporter 的建列程式抽出「這個鍵會不會出列」的純函式，但建列判斷散在多處，抽出後要先證明與實測等價，成本高。設定系統的慣例也是用到才驗（Helm 只驗渲染到的 template、Kustomize 只驗被引用的 base）。代價見決定 6：沒有租戶綁的 profile 上的錯鍵，等到有租戶綁定時才判到。
 
 例：根 `_defaults.yaml` 沒有宣告 `redis_evicted_keys`，租戶 `t1` 寫了 `_profile: gold`：
 
@@ -242,7 +246,7 @@ profiles:
     redis_evictd: "5"          # 拼錯，而且沒有租戶綁 silver
 ```
 
-兩個鍵都判為 `unread`、等級 error，都報在 `_profiles.yaml`：`redis_evicted_keys` 列出 `t1`，`redis_evictd` 的租戶清單是空的。今天的判決對前者只報 notice，對後者什麼都不報。這兩筆 error 擋得到誰見決定 6。
+`redis_evicted_keys` 判為 `unread`、等級 error，報在 `_profiles.yaml`，列出 `t1`；`redis_evictd` 不判，報一筆 `profile_not_judged` notice，租戶清單是空的。誰被擋見決定 6。
 
 `disable_noop` 只報 warning、拼錯的閾值鍵報 error，理由是：一個沒關到東西的 `disable` 不會讓任何值錯誤生效，也可能是刻意的保險寫法（例如預設日後才會加上的鍵）；它的風險在於原意要關的東西沒關到，所以除了 warning，這次變更新引入的還會出現在 config-diff 的 PR 留言（見決定 8）。`disable_partial` 不改變 verdict（鍵有被讀），另以 warning 報。
 
@@ -250,7 +254,7 @@ profiles:
 
 上表的等級隨各閘門改成「判到就擋」一起生效（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)，breaking change）：整棵樹的 CI 有 error、或有判不了的閾值鍵就擋（決定 6、7）。擋不擋只在判決裡定一次：每筆 finding 帶 `blocks`（等級是 error 時為 true），判決文件頂層的 `blocks` 表示整棵樹該不該擋；各閘門讀這兩個欄位，不自己依等級另判。
 
-profile 的閾值鍵逐 profile 直接判尚未實作：今天經綁定的租戶判，所以沒有租戶綁定的 profile 上的閾值鍵不報（[#3395](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3395)）。profile 的 `_` 鍵已經逐 profile 直接判。
+沒有租戶綁定的 profile 上的閾值鍵不判，報 `profile_not_judged` notice（上文，[#3395](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3395)）。
 
 ### 5. 計算放在哪
 
@@ -262,14 +266,16 @@ profile 的閾值鍵逐 profile 直接判尚未實作：今天經綁定的租戶
 - 產生器容器每次寫入只需要被寫入的租戶的判決，所以 `da-guard key-verdict`（連同它底下的 served-values 與 effective）都要能只算指定的租戶（`--tenant`；平台檔照常整份讀，每個要求的租戶得到的與整棵樹時相同，樹裡沒有的列在 `tenants_absent`）。判決也只判這些租戶，沒要求的租戶不出現，不會被讀成「沒有讀取端讀」。/metrics 能不能收集不屬於單一租戶，子集裡只就要求的租戶判（別的租戶收集失敗看不到）。profile 鍵依決定 4 逐 profile 直接判，所以有沒有 finding 與要求了哪些租戶無關，只是 finding 列出的綁定租戶只含被要求的租戶。profile 裡的 `_` 鍵今天已經這樣判；閾值鍵在改成逐 profile 判之前經由綁定的租戶判，子集裡看不到沒被要求、但綁同一個 profile 的租戶，所以可能出現整棵樹不會給的 finding。判一筆寫入時，呼叫端要把被寫檔案寫入前後宣告的租戶都列進去。
 - 容器裡的判決只在產生器放行的寫入之後跑，與產生器**共用同一次判定的期限**（ADR-036 §3 的期限以該節為準，不在此重述），不另有自己的期限，也不因有寫入在排隊而讓位。時間或記憶體用完、da-guard 失敗，或結果是 `undecidable`，都回「判決未完成」與原因。容器裡的反事實重算只算被寫的租戶（決定 8）；error 級的 finding 不截斷，回應裡顯示行數的上限只管顯示。寫到 defaults 檔，或寫到前後版本帶 `profiles:` 的根平台檔時不判：這種檔的鍵會影響它沒有列名的租戶，只有整棵樹的判決判得到，同樣回「判決未完成」並指名那個檔。判決約佔一次判定的三成，一次判定的時間隨租戶數成長；以 1 CPU 為例，約 2500 個租戶時就接近 ADR-036 §3 所說的期限一半（示意值，依主機而異）。實際的界線看一個 metric：一次判定耗時與判定期限的比值，名稱由實作決定。比值超過 0.5 時告警，留一半給排隊與租戶成長（與 ADR-036 §3 撤快取條件用的是同一個比例），到 1 時寫入就會因判不完而被拒。各結果的次數與最近一次的耗時也是 metric。
 - tenant-api 改成判到就擋之後（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）：
-  - 被寫入的檔裡、屬於寫入對象租戶的 error 級 finding，讓寫入不收，回 400，與今天鍵名檢查擋下時相同，回應列出這些 finding。這筆寫入沒有碰到、但已經在該檔裡的這類 error 也算，與今天 Go 的鍵名檢查相同；決定 12 的作法只用於新加的值檢查。其他檔上的 error 不擋這筆寫入（決定 6）。
+  - 被寫入的檔裡、屬於寫入對象租戶、判決說會擋（`blocks`）的 finding，讓寫入不收，回 400，與今天鍵名檢查擋下時相同，回應列出這些 finding。這筆寫入沒有碰到、但已經在該檔裡的這類 error 也算，與今天 Go 的鍵名檢查相同；決定 12 的作法只用於新加的值檢查。其他檔上的 error 不擋這筆寫入（決定 6）。
   - 判決未完成時寫入不收。依 ADR-036 §3 的分界，這是「拒收該筆」，不是容器不可用：時間不夠的回可重試的錯誤，其他原因回不可重試的錯誤並說明原因。`undecidable` 是沒讀到任何根平台檔，重試也不會改變，回應指名缺少根平台檔；今天 Go 對這種樹的閾值鍵也會擋。
+  - 擋不擋讀判決的 `blocks`，tenant-api 與容器都不依等級另判；容器原樣轉送每筆 finding 的 `blocks`，判不了的閾值鍵讀判決的 `undecidable_blocks`。finding 不帶 `blocks`（映像早於 [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）與沒有回判決同樣是容器太舊，回 503。
   - 找不到或無法執行 da-guard，或容器沒有回判決（映像早於這一步），依 ADR-036 §3 是容器不可用，回 503；與找不到 amtool 相同，每次判定前先確認 da-guard，所以長期缺 da-guard 會出現在容器可用性的告警上，不會變成一筆筆的拒收。
   - 其餘的 finding 放進寫入回應的 `warnings`。
 
   在那之前，判決只放進 `warnings`，不擋寫入；判決未完成或容器沒有回判決時，回應明說沒有判決，不留成看起來像「沒找到問題」。
 
   誰看得到什麼，沿用寫入回應既有的揭露規則：被寫入的檔案裡、屬於這筆寫入對象租戶的 finding，寫入者一律看得到；同一檔案裡其他租戶的 finding，只在呼叫者能讀那個租戶時顯示；平台檔、profile，或這筆寫入沒有動到的檔案上的 finding，只給能看整棵樹的呼叫者，其他人只看到一行「有你看不到的 finding，細節在伺服器日誌」。判決未完成時只顯示原因，不轉述容器的訊息，因為那段訊息可能帶有平台檔的路徑或程式的 stderr。直接寫入的批次裡，租戶的 finding 掛在該租戶第一個有變更的操作上，整筆寫入共用的那幾行只掛一次，因為非同步批次的任務只保留逐操作的結果；只報不擋時，判決未完成則每個有變更的操作都寫，因為只看得到部分結果的讀者不能把其他操作讀成「沒找到問題」。PR 模式的回應只有一份清單，每行自己寫出租戶名。清單有行數上限，超過時先留寫入對象租戶自己的行。判決看的是寫入之後的樹，不與寫入之前比較，所以列出的問題可能早就存在；內容沒有改變的寫入不附判決。
+- tenant-api 的預覽（`POST /tenants/{id}/validate`，direct mode）走寫入同一套判定：PUT 的拒收步驟通過後，問產生器與判決，拒收的理由與文字與 PUT 相同（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）。產生器一次只判一筆，預覽不能把寫入擠出佇列，所以預覽不拿寫入鎖、同時只判一筆，其餘直接回「沒判」與原因，不排隊；預覽被拒不計入寫入的拒收計數，有產生器 finding 時也不再判一次 base。PUT 會回 429 或 503 的情況（忙、時間不夠、容器不可用），預覽回 `judged: false` 與原因，`valid` 只反映前面的步驟；chart 對「容器不可用時讀取照常」的承諾因此不受影響。PR mode 的本地樹可能落後 base，預覽照舊只做 body 預檢。
 - 判決未完成時**不設降級路徑**：既不照收，也不退回另一份鍵名判斷。照收會讓今天會被擋的拼錯鍵進 repo；退回 Go 的鍵名判斷，等於永久保留第二份判斷（決定 2）。代價是 da-guard 壞了，tenant-api 的寫入就不收。但產生器容器本來就是寫入的必要條件，產生器壞了寫入也不收；判決併進同一次判定，增加的是它的工作量，不是多一個依賴。
 
 判決只用三種事實：exporter 實測的讀取與原因、登錄表對其他讀取端的宣告、policy 規則點名的鍵。產生器負責的鍵依登錄表的宣告判，不另外量產生器的輸出（決定 1）。policy 規則有沒有效由 Policy-as-Code 自己判：它拒收的規則從來不執行，所以 Python 的呼叫端（validate-config、產生器 `--validate`、`explain-keys`、產生器容器）先用它載入規則，拒收的樹不判，不拿無效的規則把鍵算成有人讀。已知限制：`da-guard write` 的寫入檢查不經 Policy-as-Code，規則讀得到 `target` 就算，所以無效的規則仍會讓它點名的鍵算成有人讀；這種樹在 validate-config 的 `policy_dsl` 列是 FAIL。
@@ -303,7 +309,7 @@ tenants:
 決定 4 的等級只描述缺陷。一道寫入閘門擋不擋一筆寫入，只看 finding 所在的檔是不是這次寫入的檔，與等級來自哪一層無關：
 
 - **tenant-api**：error 只在 finding 所在的檔就是這次寫入的檔、而且屬於寫入對象租戶時才擋（決定 5）。所以 profile、子目錄 `_defaults.yaml` 或其他平台檔上的 error，不擋只改了租戶檔的寫入；寫到 defaults 檔或帶 `profiles:` 的根平台檔時判決不判（決定 5）。今天已經這樣判。
-- **經 `da-guard write` 寫檔的工具**（改租戶檔、profile 檔、子目錄 `_defaults.yaml` 或根平台檔）：這次寫入讓被寫的檔新出現 error 時被擋；寫入前就有的 error 不擋。新舊的比對單位跟著 finding 的單位走：鍵寫在租戶自己那一筆（租戶檔，或根平台檔 `tenants:` 下它那一筆）時以「租戶＋鍵」比對，所以把租戶搬到別的檔不算新出現，同檔另一個租戶新寫錯則算；其他 finding（鍵來自 profile、子目錄 `_defaults.yaml` 等繼承的檔，或沒有列出租戶）以「檔案＋鍵」比對，寫入前同一個檔與鍵已有 error 就不算新的，所以解除或改綁 profile 不會讓它原有的錯變成新的，profile 新寫錯的鍵也不會因為租戶檔裡已有同一個錯而放行。已知限制：同一個根平台檔裡 profile 與 `tenants:` 下的租戶寫了同一個錯鍵時，兩者是同一筆 finding，其中一邊新寫進同一個錯不算新出現。這條規則只在 `pkg/keyverdict` 定一次（`NewBlocks`）。判不了的閾值鍵寫入時不擋，交給整棵樹的 CI 擋。
+- **經 `da-guard write` 寫檔的工具**（改租戶檔、profile 檔、子目錄 `_defaults.yaml` 或根平台檔）：這次寫入讓被寫的檔新出現 error 時被擋；寫入前就有的 error 不擋。與 tenant-api 不同（它連被寫的檔裡原本就有的 error 也擋，決定 5），這裡只擋新出現的；這個差異是刻意的：整棵樹的 CI 擋住任何 error，main 上平常沒有既有的 error，tenant-api 擋既有的是讓租戶自己的檔先修好，`da-guard write` 常一次改多個平台檔，擋既有的會讓與之無關的修改都過不了。新舊的比對單位跟著 finding 的單位走：鍵寫在租戶自己那一筆（租戶檔，或根平台檔 `tenants:` 下它那一筆）時以「租戶＋鍵」比對，所以把租戶搬到別的檔不算新出現，同檔另一個租戶新寫錯則算；其他 finding（鍵來自 profile、子目錄 `_defaults.yaml` 等繼承的檔，或沒有列出租戶）以「檔案＋鍵」比對，寫入前同一個檔與鍵已有 error 就不算新的，所以解除或改綁 profile 不會讓它原有的錯變成新的，profile 新寫錯的鍵也不會因為租戶檔裡已有同一個錯而放行。已知限制：同一個根平台檔裡 profile 與 `tenants:` 下的租戶寫了同一個錯鍵時，兩者是同一筆 finding，其中一邊新寫進同一個錯不算新出現。這條規則只在 `pkg/keyverdict` 定一次（`NewBlocks`）。判不了的閾值鍵寫入時不擋，交給整棵樹的 CI 擋。
 - **整棵樹的 CI**（validate-config、產生器 `--validate`）：判到 error、有判不了的閾值鍵、或判決沒有給出時就擋，不分 finding 在哪個檔；讀判決文件的 `blocks`。
 
 平台側的問題不算在正在修改的租戶頭上，由上面的檔案範圍保證，不靠降低平台側 finding 的等級。
@@ -314,7 +320,7 @@ tenants:
 |---|---|---|
 | profile `gold` 寫 `redis_evicted_keys: "11"` | 判決報 notice，掛在 `_profiles.yaml`；da-guard 沒有 finding | error，掛在 `_profiles.yaml`，列出 `t1`。讓這筆 error 新出現的 `_profiles.yaml` 寫入被擋，整棵樹的 CI 擋；`t1` 自己經 tenant-api 的寫入照收 |
 | 子目錄 `_defaults.yaml` 寫 `redis_evicted_keys: 100` | 判決報 notice；da-guard 報 error（子目錄的值送不到 exporter），兩者等級不一致 | 兩者都是 error，掛在子目錄 `_defaults.yaml`。改這個檔的寫入與整棵樹的 CI 照上一列；子目錄下租戶自己的寫入照收 |
-| 沒有租戶綁的 profile 寫錯閾值鍵（決定 4 例子裡的 `silver`） | 沒有任何 finding | 逐 profile 直接判實作後（[#3395](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3395)）：error，掛在 profile 檔，租戶清單為空；誰被擋同第一列。在那之前仍沒有 finding |
+| 沒有租戶綁的 profile 寫錯閾值鍵（決定 4 例子裡的 `silver`） | 沒有任何 finding | 不判，報 `profile_not_judged` notice，不擋（決定 4，[#3395](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3395)）。有租戶綁定之後判為 error、掛在 profile 檔，只有整棵樹的 CI 擋：綁定那筆寫入只改租戶檔，tenant-api 與 `da-guard write` 都不擋，只給 warning |
 
 ### 7. 無從判斷的情況
 
@@ -455,6 +461,8 @@ db-a
 - **退役的 `_` 鍵沒有緩衝期**：寫在平台側的已退役鍵直接從 notice 變成 error，中間沒有一段 warning 的過渡；遷移靠登錄表為它寫的提示文字，所以判決的 `retired` finding 要帶上這段提示。
 - **寫入時只因 `disable_noop` 而未讀的鍵照收**：決定 4 讓它只報 warning，所以拼錯的鍵寫成 `disable` 時寫入照收、只附 warning，而今天 Go 會擋。
 - **direct 模式沒有整棵樹的判決**：寫入時只判被寫的租戶。平台檔改動讓既有租戶的鍵變成沒人讀這類不屬於單筆寫入的情況，PR 模式由 CI 判；direct 模式（寫入只留在 pod 裡、沒有 PR）目前沒有對應的整棵樹判決。
+- **沒有租戶綁的 profile 上的錯鍵進得了線上**：這種鍵不判，只報 notice（決定 4）；有租戶綁定之後，只有整棵樹的 CI 擋得到，direct 模式下綁定那筆寫入只給 warning。
+- **被租戶檔蓋掉的平台鍵不另報**：根平台檔 `tenants:` 下的鍵被租戶檔同名鍵蓋掉時，判決只判租戶那份（鍵名相同，拼錯就報在租戶檔）；平台那份的值不生效。例外：租戶寫 `typo: disable` 蓋掉平台的 `typo: 70` 時報的是 `disable_noop` warning，不是 error。
 - **錯字與有意省略不區分**：平台沒有宣告的閾值鍵，判決不知道是租戶拼錯還是平台漏宣告，兩者報同一個原因。
 - **規則讀取以 repo 內的規則包為準**：客戶自己的規則讀了某個閾值，除非宣告為外部讀取端，否則會被報成「沒有規則讀」。這一項因此永遠只是建議。
 - **schema 比讀取端窄**：JSON schema 只是給編輯器的提示，判值的是讀取端。exporter 讀 `_silent_mode` 時不分大小寫、會去掉前後空白，也認得 `disabled`、`off`、`false` 等停用詞；schema 的列舉沒有這些寫法。YAML 未加引號的 `false`、`off` 在部分解析器裡是布林值，字串列舉表達不了。所以 schema 標錯的值不一定是錯的，以讀取端為準。

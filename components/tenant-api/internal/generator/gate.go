@@ -78,7 +78,7 @@ var (
 // ones judged (gitops.NormalizationRefuser): GENERATOR_REJECTED reason
 // normalized, counted.
 func (g *Gate) RefuseNormalized(paths []string) error {
-	return g.reject(ReasonNormalized, "git attributes (.gitattributes: eol, text or a filter) would commit other bytes than the ones the generator judged for "+
+	return g.reject(context.Background(), ReasonNormalized, "git attributes (.gitattributes: eol, text or a filter) would commit other bytes than the ones the generator judged for "+
 		strings.Join(paths, ", ")+"; nothing was written — send the content as git stores it, or change the attributes")
 }
 
@@ -110,7 +110,7 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 			if attempt > 1 {
 				what = "judge the write again after the generator judged other content than tenant-api would write"
 			}
-			return nil, g.reject(ReasonNoTime, fmt.Sprintf("%v of the request's time is left, too little to %s (at least %v is needed); retry", remaining.Round(time.Millisecond), what, g.minJudge))
+			return nil, g.reject(ctx, ReasonNoTime, fmt.Sprintf("%v of the request's time is left, too little to %s (at least %v is needed); retry", remaining.Round(time.Millisecond), what, g.minJudge))
 		}
 		v, err := g.client.Validate(ctx, base, writes, remaining)
 		if err != nil {
@@ -118,7 +118,7 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 		}
 		switch v.Result {
 		case ResultRejected:
-			return nil, g.reject(v.Reason, v.Message)
+			return nil, g.reject(ctx, v.Reason, v.Message)
 		case ResultFindings:
 			if v.StderrTail != "" {
 				slog.Info("generator: write refused with findings", "base", base, "files", len(files), "stderr_tail", v.StderrTail)
@@ -129,14 +129,14 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 		if problem == "" {
 			// Only this pass's key verdict: an earlier pass judged other
 			// content.
-			if err := g.refuseUnjudged(v.KeyVerdict, base, len(files)); err != nil {
+			if err := g.refuseUnjudged(ctx, v.KeyVerdict, base, len(files)); err != nil {
 				return nil, err
 			}
 			return keyVerdict(v.KeyVerdict, base, len(files)), nil
 		}
 		slog.Warn("generator: the judged content is not what would be written", "attempt", attempt, "problem", problem)
 		if attempt >= 2 {
-			return nil, g.reject(ReasonMismatch, "the generator judged other content than tenant-api would write, twice: "+problem+"; retry")
+			return nil, g.reject(ctx, ReasonMismatch, "the generator judged other content than tenant-api would write, twice: "+problem+"; retry")
 		}
 	}
 }
@@ -149,13 +149,22 @@ func (g *Gate) ValidateWrites(ctx context.Context, base string, files []gitops.P
 // retryable when time ran out, otherwise not. The service's message is
 // logged, not passed on: it can carry a platform path or a program's
 // stderr.
-func (g *Gate) refuseUnjudged(kv *KeyVerdict, base string, files int) error {
+func (g *Gate) refuseUnjudged(ctx context.Context, kv *KeyVerdict, base string, files int) error {
 	if kv == nil {
 		return unavailable(ReasonGeneratorTooOld, "the generator passed the write without a key "+
 			"verdict: its image predates ADR-038 decision 5, so whether every key of the write is read "+
 			"cannot be judged")
 	}
 	if kv.Status == gitops.KeyVerdictComplete {
+		// Whether a finding refuses the write is the verdict's own `blocks`
+		// (#3016), never re-derived here: an image that does not send it
+		// cannot be relied on, as one that sends no verdict at all.
+		for _, f := range kv.Findings {
+			if f.Blocks == nil {
+				return unavailable(ReasonGeneratorTooOld, "the generator sent a key verdict without "+
+					"`blocks`: its image predates #3016, so which findings refuse the write cannot be read")
+			}
+		}
 		return nil
 	}
 	slog.Info("generator: write refused, key verdict not completed", "base", base, "files", files,
@@ -164,7 +173,7 @@ func (g *Gate) refuseUnjudged(kv *KeyVerdict, base string, files int) error {
 	if !ok {
 		r = keyVerdictReasons["error"]
 	}
-	return g.reject(r.reason, r.message)
+	return g.reject(ctx, r.reason, r.message)
 }
 
 // keyVerdictReasons maps the generator's reason for a key verdict that did
@@ -203,7 +212,7 @@ func keyVerdict(kv *KeyVerdict, base string, files int) *gitops.KeyVerdict {
 		Findings: make([]gitops.KeyFinding, len(kv.Findings))}
 	for i, f := range kv.Findings {
 		out.Findings[i] = gitops.KeyFinding{Severity: f.Severity, Kind: f.Kind, Key: f.Key,
-			File: deref(f.File), Tenants: f.Tenants, Reason: deref(f.Reason)}
+			File: deref(f.File), Tenants: f.Tenants, Reason: deref(f.Reason), Blocks: f.Blocks != nil && *f.Blocks}
 	}
 	return out
 }
@@ -224,7 +233,7 @@ func deref(s *string) string {
 func (g *Gate) fromCallError(ctx context.Context, err error) error {
 	var rej *RejectedError
 	if errors.As(err, &rej) {
-		return g.reject(rej.Reason, rej.Message)
+		return g.reject(ctx, rej.Reason, rej.Message)
 	}
 	if isCtxErr(err) {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -235,7 +244,13 @@ func (g *Gate) fromCallError(ctx context.Context, err error) error {
 	return err
 }
 
-func (g *Gate) reject(reason, message string) error {
+// reject is the *RejectedError of reason, counted in
+// tenant_api_generator_rejections_total — a write's refusal; a preview's
+// (gitops.IsPreview) is not one, and is not counted.
+func (g *Gate) reject(ctx context.Context, reason, message string) error {
+	if gitops.IsPreview(ctx) {
+		return &RejectedError{Reason: reason, Message: message}
+	}
 	if n, ok := g.rejections[reason]; ok {
 		n.Add(1)
 	} else {
@@ -332,7 +347,10 @@ func (g *Gate) findings(ctx context.Context, deadline time.Time, base string, fi
 	sort.SliceStable(out.Findings, func(i, j int) bool {
 		return out.Findings[i].Related && !out.Findings[j].Related
 	})
-	if remaining := time.Until(deadline); remaining >= g.minJudge {
+	// A preview (gitops.IsPreview) does not judge the base again: the marks
+	// only shape the message, and a second judgement would double what a
+	// preview asks of the generator.
+	if remaining := time.Until(deadline); remaining >= g.minJudge && !gitops.IsPreview(ctx) {
 		bv, err := g.client.Validate(ctx, base, nil, remaining)
 		switch {
 		case err != nil:
