@@ -58,3 +58,30 @@ deviations:
       redundancy-lost warning being late is low severity.
     disposition: accept-document
     ref: docs/integration/victoriametrics-integration.md （§3.1 MetricsQL 已知限制）
+
+  - fixture: tenant-log-query-platform_test.yaml
+    rules: [TenantProjectionMappingErrors]
+    mechanism: >-
+      MetricsQL increase(X[10m]) treats a series whose first sample lies inside the
+      window as having started from 0 and returns its whole first value; Prometheus
+      returns no increase without an earlier sample. The fixture's empty-TSDB case
+      (projection-mapping-errors-fresh-tsdb-no-fire: an intentional="false" counter
+      already at 5 when the TSDB starts) is muted on the `unless … offset 10m` arm by
+      prometheus_tsdb_lowest_timestamp_seconds, but the `increase` arm alone reports 5
+      on vmalert. Verified with vmalert-tool v1.146.0: `increase(m[10m]) > 0` on
+      `5x40` fires at 5m, while the muted new-series arm does not.
+    direction: over-fire
+    vm_behavior: >-
+      A counter that existed before the evaluating storage held any of its samples is
+      reported once (its lifetime value, for ~10m) by the `increase` arm. On warm data
+      both engines agree; for a series Vector creates lazily on its first error,
+      MetricsQL's increase already catches it natively (the case the `unless` arm exists
+      for on Prometheus).
+    prod_impact: >-
+      Only when the VM storage has none of the counter's history — a fresh/emptied
+      vmstorage or a new retention boundary — and the Vector pod has had at least one
+      projection VRL error since it started (the series only exists after an error). The
+      warning then re-reports those real, already-happened drops once. vmstorage is
+      persistent in normal operation, so this is a rare one-off, never a flap.
+    disposition: accept-document
+    ref: docs/internal/platform-log-aggregation-runbook.md （§8.7 TenantProjectionMappingErrors）
