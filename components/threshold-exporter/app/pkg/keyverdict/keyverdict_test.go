@@ -223,3 +223,38 @@ func TestJudge_AnUnboundProfilesThresholdKeyIsNotJudged(t *testing.T) {
 		}
 	}
 }
+
+// A key a bound profile writes that the exporter does not fill in (the
+// root declares it in optional_overrides without a value, #1189) is in no
+// layer of the tenant's config; effective names it profile_not_filled, and
+// it is unread — an error on the profile file listing the tenants (#3395).
+// A key the tenant's config holds otherwise keeps its own row.
+func TestJudge_AProfileKeyNotFilledInIsUnread(t *testing.T) {
+	t.Parallel()
+	ns := map[string]config.NotServedKey{
+		"redis_memory": {Reason: config.NotServedProfileNotFilled, File: "_profiles.yaml"},
+		"redis_x":      {Reason: "no_row", File: "a.yaml"},
+	}
+	tree := Judge(Input{
+		Served: map[string]ServedTenant{"t1": {Keys: map[string]ServedKey{}, Values: map[string]any{}},
+			"t2": {Keys: map[string]ServedKey{}, Values: map[string]any{}}},
+		Effective: map[string]EffectiveTenant{
+			"t1": {Config: map[string]any{}, Sources: map[string]config.KeySource{}, Profile: "gold", NotServed: ns},
+			"t2": {Config: map[string]any{}, Sources: map[string]config.KeySource{}, Profile: "gold", NotServed: ns},
+		},
+	})
+	v := one(t, tree, "t1", "redis_memory")
+	if v.Verdict != Unread || deref(v.Severity) != SeverityError || deref(v.File) != "_profiles.yaml" ||
+		deref(v.Layer) != config.KeyLayerProfile || deref(v.Reason) != config.NotServedProfileNotFilled {
+		t.Fatalf("row %+v", v)
+	}
+	if len(tree.Findings) != 1 || !tree.Findings[0].Blocks ||
+		!reflect.DeepEqual(tree.Findings[0].Tenants, []string{"t1", "t2"}) {
+		t.Fatalf("findings %+v", tree.Findings)
+	}
+	for _, kv := range tree.Keys["t1"] {
+		if kv.Key == "redis_x" {
+			t.Fatalf("a not_served entry of another reason became a row: %+v", kv)
+		}
+	}
+}

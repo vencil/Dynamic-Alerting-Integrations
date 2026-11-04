@@ -151,6 +151,10 @@ type EffectiveTenant struct {
 	Profile string
 	// DefaultsChain: the chain's files, root first.
 	DefaultsChain []string
+	// NotServed: effective's not_served (keys as written). A
+	// profile_not_filled entry is a key the tenant's profile writes that the
+	// exporter does not fill in (#1189), in no layer of Config (#3395).
+	NotServed map[string]config.NotServedKey
 }
 
 // PolicyHead is the first path element of a Policy-as-Code rule's
@@ -172,8 +176,9 @@ type Input struct {
 	// reads. nil: the profile layer is not judged.
 	RootProfiles map[string]map[string]any
 	// Whole: Served and Effective hold every tenant of the tree (no
-	// `--tenant` subset) — only then is a profile no tenant binds known to
-	// be one (unboundProfileFindings).
+	// `--tenant` subset, no file the load dropped, no tenant set aside) —
+	// only then is a profile no tenant binds known to be one
+	// (unboundProfileFindings).
 	Whole bool
 }
 
@@ -321,6 +326,8 @@ func Judge(in Input) Tree {
 			rows = append(rows, judgeKey(tenant, key, sk, hasSk, src, hasSrc, value, servedValue, hasRows,
 				in.Heads, in.Undecidable, policy))
 		}
+		rows = append(rows, profileNotFilled(tenant, ef.NotServed, all)...)
+		sort.SliceStable(rows, func(i, j int) bool { return rows[i].Key < rows[j].Key })
 		keys[tenant] = rows
 	}
 	findings := findingsOf(keys, rootDefaults, canon)
@@ -708,6 +715,27 @@ func profileLayerFindings(byFile map[string]map[string]any, effective map[string
 		file, reason := fk[0], f.reason
 		out = append(out, Finding{Severity: SeverityError, Kind: KindUnread, Key: fk[1], File: &file,
 			Tenants: sortedKeys(f.tenants), Reason: &reason, ServedFamily: []string{}, ServedFrom: []string{}})
+	}
+	return out
+}
+
+// profileNotFilled is a row for every key the tenant's profile writes that
+// the exporter does not fill in — the root declares it without a platform
+// value (#1189) — as effective names it (not_served profile_not_filled,
+// #3395): no reader reads the profile's value, so it is unread, on the
+// profile file. A key the tenant's config holds otherwise (all) has its
+// own row.
+func profileNotFilled(tenant string, notServed map[string]config.NotServedKey, all map[string]bool) []KeyVerdict {
+	var out []KeyVerdict
+	for _, key := range sortedKeys(notServed) {
+		ns := notServed[key]
+		if ns.Reason != config.NotServedProfileNotFilled || all[key] {
+			continue
+		}
+		layer, file := config.KeyLayerProfile, ns.File
+		sev, reason := SeverityError, ns.Reason
+		out = append(out, KeyVerdict{Tenant: tenant, Key: key, Layer: &layer, File: &file, ReadBy: []string{},
+			Verdict: Unread, Severity: &sev, Reason: &reason, ServedFamily: []string{}})
 	}
 	return out
 }

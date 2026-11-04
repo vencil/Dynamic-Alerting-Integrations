@@ -6,6 +6,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -51,6 +52,9 @@ func TestValidateTenant_AsksTheWritesJudgement(t *testing.T) {
 	tooLarge := func(int, testutil.FakeValidateRequest) (int, any) {
 		return 413, map[string]any{"error": "too large"}
 	}
+	memory := func(int, testutil.FakeValidateRequest) (int, any) {
+		return 200, testutil.RejectedVerdict("memory")
+	}
 	unavailable := func(int, testutil.FakeValidateRequest) (int, any) {
 		return 503, map[string]any{"error": "VALIDATOR_UNAVAILABLE", "reason": "da_guard_missing", "message": "x"}
 	}
@@ -67,6 +71,8 @@ func TestValidateTenant_AsksTheWritesJudgement(t *testing.T) {
 		{"generator findings", findings, false, true, "", "t-a route is wrong"},
 		{"a non-retryable rejection", tooLarge, false, true, "", "too large"},
 		{"busy", busy, true, false, "busy", ""},
+		// The container's own failure says nothing about the body.
+		{"the container ran out of memory", memory, true, false, "memory", ""},
 		{"unavailable", unavailable, true, false, "da_guard_missing", ""},
 	}
 	for _, c := range cases {
@@ -92,4 +98,23 @@ func TestValidateTenant_AsksTheWritesJudgement(t *testing.T) {
 			t.Fatalf("%+v, asked %d", resp, len(fake.Requests()))
 		}
 	})
+}
+
+// A caller that went away is no failure of the judgement: not judged,
+// canceled (logged at info, not error).
+func TestJudgePreview_ACallerThatWentAway(t *testing.T) {
+	t.Parallel()
+	f, _ := generatorDirectFixture(t, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	req := newRequestWithChiParam("POST", "/api/v1/tenants/t-a/validate", "id", "t-a",
+		bytes.NewBufferString(tAPut)).WithContext(ctx)
+	res, errs, err := previewWriter(f.deps).PreviewPut(context.Background(), "t-a", tAPut)
+	if err != nil || len(errs) > 0 {
+		t.Fatalf("preview: %v %q", err, errs)
+	}
+	judged, notJudged, warnings, _ := judgePreview(f.deps, req, "t-a", res)
+	if judged || notJudged != notJudgedCanceled || len(warnings) != 0 {
+		t.Fatalf("judged %v not_judged %q warnings %q", judged, notJudged, warnings)
+	}
 }
