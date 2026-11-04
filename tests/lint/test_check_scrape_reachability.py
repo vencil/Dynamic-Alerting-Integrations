@@ -891,15 +891,12 @@ _RENDER_MINIMUM = {
 # gate's REACHABLE verdict for that family currently rests on an operator
 # opting in. EXIT-LOCKED: an entry that starts rendering must be deleted (the
 # test below fails on it), so this map can only shrink.
-_KNOWN_UNRENDERED_UNDER_DEFAULTS = {
-    "helm/vector": (
-        "both metrics Services are conditional — `-metrics` on metrics.enabled "
-        "(default false) and `-projection-gate-metrics` on tenantProjections "
-        "(default []). #1291 also found the Prometheus egress NetworkPolicy "
-        "admitted neither 9598 nor 9599; that is fixed and pinned by "
-        "tests/k8s/test_prometheus_scrape_egress.py."
-    ),
-}
+# helm/vector left it in #1595: `metrics.enabled` now defaults to true, so its
+# `-metrics` Service renders under defaults and the chart face is enforced by
+# test_helm_service_charts_render_an_annotated_service_under_defaults. (Its
+# `-projection-gate-metrics` Service still needs tenantProjections — pinned
+# when opted in by test_vectors_opt_in_services_carry_the_label_when_rendered.)
+_KNOWN_UNRENDERED_UNDER_DEFAULTS: dict[str, str] = {}
 
 
 def _helm_template(chart_rel: str, *extra: str) -> list[dict]:
@@ -986,9 +983,9 @@ def test_known_unrendered_charts_are_exit_locked():
 
 @_needs_helm
 def test_vectors_opt_in_services_carry_the_label_when_rendered():
-    """The exemption above covers only "not rendered under DEFAULTS". Once an
-    operator opts in, both Vector Services must be ones `platform-components`
-    keeps — otherwise opting in would still yield zero series, by label this
+    """Under DEFAULTS only `-metrics` renders (the gate Service needs
+    tenantProjections). Once an operator opts in, both Vector Services must be
+    ones `platform-components` keeps — otherwise opting in would still yield zero series, by label this
     time rather than by namespace (#1425)."""
     docs = _helm_template(
         "helm/vector", "--set", "metrics.enabled=true",

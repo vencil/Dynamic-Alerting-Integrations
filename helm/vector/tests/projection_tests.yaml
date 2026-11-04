@@ -29,6 +29,8 @@
 #   - `tenant_route.t_1000`   → tenant-alpha's sanitized partition.
 #   - `tenant_route._unmatched` → the discard bucket (no sink consumes it):
 #                               proof a row did NOT reach any tenant partition.
+#   - `tenant_eligible` / `tenant_project` (#1595) → where a non-audit row is
+#                               dropped: the filter, never the projection remap.
 #
 # The ADR-028 / #1234 evidence-channel cases at the bottom insert_at
 # `origin_split` instead — the whole point of that group is the ROUTING
@@ -281,6 +283,65 @@ tests:
               assert_eq!(.log_type, "prometheus_query_log", "parse-OK non-audit shape")
     no_outputs_from:
       - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (v-b) #1595: non-audit rows are dropped by the tenant_eligible FILTER ──
+  # The point of the filter is that tenant_project's discard counter stops
+  # tracking traffic volume. So assert where the drop happens, not just that
+  # the tenant plane is empty: a gateway_operational row must leave NOTHING at
+  # tenant_eligible (the filter dropped it) and therefore nothing at
+  # tenant_project. If tenant_project were fed from demux again, the row would
+  # still be dropped (by its own defense-in-depth abort) — the render test
+  # test_vector_projection_vrl.py pins the input list for that case.
+  - name: "#1595: gateway_operational row is dropped by tenant_eligible and never reaches tenant_project"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: "GET /ready HTTP/1.1 200 upstream_cluster=federation tenant_id=tenant-alpha"
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: demux
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "gateway_operational", "non-JSON gateway line is operational")
+    no_outputs_from:
+      - tenant_eligible
+      - tenant_project
+      - tenant_route.t_1000
+      - tenant_route.t_1001
+
+  # ── (v-c) #1595: an audit row passes tenant_eligible into tenant_project ──
+  # The other half: the filter must not drop what the projection is for.
+  - name: "#1595: federation_audit row passes tenant_eligible and is projected"
+    inputs:
+      - insert_at: demux
+        type: log
+        log_fields:
+          message: '{"tenant_id":"tenant-alpha","status":200}'
+          kubernetes.container_name: federation-gateway
+          kubernetes.pod_namespace: monitoring
+          kubernetes.pod_name: federation-gateway-7d9f-abcde
+          kubernetes.pod_node_name: node-7
+          kubernetes.pod_owner: ReplicaSet/federation-gateway-7d9f
+    outputs:
+      - extract_from: tenant_eligible
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.log_type, "federation_audit")
+              assert_eq!(.tenant_id, "tenant-alpha")
+      - extract_from: tenant_route.t_1000
+        conditions:
+          - type: vrl
+            source: |
+              assert_eq!(.account_id, 1000)
+    no_outputs_from:
       - tenant_route.t_1001
 
   # ── multi-tenant routing isolation: alpha and beta never cross ────────────

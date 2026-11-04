@@ -1,6 +1,6 @@
 {{- if .Values.metrics.enabled }}
 # Vector self-telemetry Service. Only rendered when metrics.enabled is
-# true — the prometheus_exporter sink lives inside the same DaemonSet
+# true (the default since chart 0.11.0, #1595) — the prometheus_exporter sink lives inside the same DaemonSet
 # pod, so this is a node-local pod-IP scrape target (no load balance
 # semantics, no per-pod endpoint slicing needed). Without this Service
 # operators have to rely on pod-IP scrape annotations, which works but

@@ -2293,68 +2293,174 @@ groups:
             per ADR-020).
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md"
 
-      # ── Tenant-projection fan-out discard spike (ADR-021 #609 PR-4) ──
-      # ⛔ COARSE ANOMALY TRIPWIRE, not a precise gap detector — read the
-      # honest-limitation note below before tuning.
+      # ── Tenant-projection mapping ERRORS (#1595) ────────────────────────────
+      # The precise half of the tenant_project discard counter. Vector splits a
+      # remap's drops by the native `intentional` label: an `abort` (eligibility
+      # / unknown tenant_id) is intentional="true"; a runtime VRL error caught
+      # by drop_on_error is intentional="false". The projection's VRL is written
+      # to be error-free (every fallible call is coalesced), so ANY unintentional
+      # drop means a row the fail-closed projection could not process — it was
+      # silently removed from the tenant plane (the platform 0:0 copy still has
+      # it). There is no benign baseline: one is already a bug.
       #
-      # The (b) tenant-sanitized projection (helm/vector tenant_project
-      # remap) is fail-closed: a row that is non-audit / blank-or-unknown
-      # tenant_id / parse-error is `abort`-dropped from the tenant branch
-      # (it still reaches the platform 0:0 copy). Runbook §8.7 wants ops
-      # visibility when a registry desync (a tenant sending audit traffic
-      # but missing from `tenantProjections`) or a malicious payload flood
-      # causes a SURGE of drops — rather than waiting for a tenant to file
-      # a "my logs are missing" ticket.
+      # `increase(...[10m]) > 0` with `for: 0m`: every such drop is a lost tenant
+      # row, so there is nothing to ride out, and the 10m increase window already
+      # holds the alert ~10m past the last error, so an intermittent bug does not
+      # flap. `sum without (instance, pod, host)`: Vector is a DaemonSet and each pod
+      # projects different rows, so per-pod counts are SUMMED into one series
+      # (keeping component_id / intentional; a bare sum() would strip them).
+      # ⛔ Why the `unless … offset 10m` arm: Vector creates this series lazily,
+      # on the FIRST error, already at a non-zero value. `increase` alone has no
+      # earlier sample to diff against, so a one-off burst that never repeats on
+      # that pod would be missed. A series that did not exist 10m ago therefore
+      # contributes its whole value (every error it counts happened since it
+      # appeared); `* 1` strips the metric name so the two arms carry the same
+      # label set and `or` keeps the new-series arm for that pod. Older series
+      # fall through to `increase`. Residual: a Prometheus scrape gap longer
+      # than the 5m lookback around t-10m makes an old series look new and
+      # re-reports its lifetime count once. A Prometheus that restarts on an
+      # EMPTY TSDB (the raw stack's emptyDir) would make EVERY surviving
+      # series look new, so that arm is muted while the TSDB holds less than
+      # 20m of data (`prometheus_tsdb_lowest_timestamp_seconds`; where the
+      # metric is absent — e.g. vmalert — the mute is a no-op). Cost: a ONE-OFF
+      # error in those first ~20m is missed (a recurring one still shows in
+      # `increase`); telling a pre-restart counter from a post-restart series
+      # would need per-series first-seen times — not worth it. ⛔ `host` is in
+      # the `without` list because Vector's internal_metrics stamps every
+      # metric with `host=<hostname>` by default (src/sources/internal_metrics
+      # .rs, `only_host_tags_by_default`) — the pod name, which changes on
+      # every rollout. Requires helm/vector `metrics.enabled` (default on).
+      - alert: TenantProjectionMappingErrors
+        expr: |
+          sum without (instance, pod, host) (
+            (
+              vector_component_discarded_events_total{component_id="tenant_project", intentional="false"}
+              unless
+              vector_component_discarded_events_total{component_id="tenant_project", intentional="false"} offset 10m
+            ) * 1
+            unless on () (time() - min(prometheus_tsdb_lowest_timestamp_seconds) < 1200)
+            or
+            increase(vector_component_discarded_events_total{component_id="tenant_project", intentional="false"}[10m])
+          ) > 0
+        for: 0m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "Vector tenant projection is dropping rows on VRL runtime errors"
+          description: |
+            The `tenant_project` remap dropped
+            {{ $value | humanize }} event(s) in the last 10m because its VRL
+            hit a runtime error (Vector `intentional="false"`), not because
+            of an eligibility abort. drop_on_error keeps this fail-closed —
+            no half-processed row reaches a tenant partition — but the
+            affected rows are missing from their tenant's projection (the
+            platform 0:0 copy is intact). This is always a bug: an
+            audit-payload shape the VRL does not handle, or a chart change
+            that broke the projection. Check the Vector pod logs for the
+            remap error, then the `tenant_project` source in
+            helm/vector/templates/configmap.yaml.
+          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+
+      # ── Tenant-projection unprojected-audit SURGE (ADR-021 #609 PR-4, #1595) ──
+      # ⛔ COARSE SURGE TRIPWIRE. It is NOT a registry-desync detector — read the
+      # limits below before relying on it.
       #
-      # ⚠️ Why this is `> N` sustained, NOT `> 0` (the §8.7 prose's naive
-      # form): `vector_component_discarded_events_total{component_id=
-      # "tenant_project"}` is a COMPONENT-level counter that aggregates
-      # EVERY abort reason. By design the bulk of demux rows are non-audit
-      # (gateway_operational / prometheus_query_log / JWT-fail /
-      # suspicious_audit) and ALL of them are legitimately aborted from
-      # this branch — so `> 0` is effectively always-true and would be
-      # pure noise. There is no abort-REASON label on the counter to
-      # separate "unknown mappable tenant" (the real gap) from "non-audit
-      # row" (normal). So this alert can only catch a gross SPIKE above
-      # the operational-drop baseline; it cannot pinpoint which tenant's
-      # projection broke. The floor (5/s) + 15m hold are deliberately
-      # conservative; tune the floor against the observed steady-state
-      # drop rate of YOUR gateway's operational-log volume (a busy
-      # gateway's baseline may exceed it → raise it). A precise
-      # per-account gap detector needs a new per-partition row-count
-      # metric (option b) — tracked as a defer-with-trigger follow-up.
+      # What the counter means now: the `tenant_eligible` filter (helm/vector,
+      # #1595) drops every non-federation_audit row BEFORE tenant_project, so
+      # `{component_id="tenant_project", intentional="true"}` counts only audit
+      # rows the projection aborted — blank, missing or unknown tenant_id. Those
+      # rows reach the platform 0:0 copy but no tenant partition.
       #
-      # Requires helm/vector `metrics.enabled=true` + a Prometheus scrape
-      # target (same precondition as VectorBufferEventsDropped above).
-      # `sum without (instance, pod)` collapses the per-DaemonSet-pod
-      # series into one platform-wide rate WITHOUT stripping every label
-      # (a bare `sum()` would also drop component_id; the topology-label
-      # trap) — component_id is pinned by the matcher anyway, so the
-      # result is a single series.
+      # Why it compares against its own baseline instead of a constant: an
+      # unknown tenant_id mixes two populations the counter cannot separate —
+      # a registry desync (tenant missing from `tenantProjections`) and tenants
+      # that legitimately have no projection (completeness is intentionally not
+      # enforced; see helm/vector/projection-gate/verify_tenant_projections.py,
+      # deferred under #908). Their steady volume is deployment-specific, so no
+      # fixed floor can be right everywhere (the old `> 5/s` was a guess). The
+      # alert fires when the current rate exceeds 3x its own 1-day average AND a
+      # 0.1/s absolute floor (so a near-zero baseline does not flap on a handful
+      # of rows), held 15m.
+      #
+      # The baseline is `sum_over_time(...[1d:10m]) / 144` — the 1-day TIME
+      # average with missing points counted as zero — rather than
+      # avg_over_time, which averages only the points that exist: a series that
+      # first appears now (no unprojected audit rows before) would otherwise be
+      # its own baseline and never fire. Consequence: a brand-new series that
+      # stays above the floor fires once, then is absorbed as its own history
+      # fills the window.
+      #
+      # What it catches: a SURGE of unprojected audit rows — new unprojected
+      # tenant activity, or a forged/malformed payload flood. What it cannot do:
+      # name the account, or see a desync whose volume is small next to the
+      # baseline. ⚠️ A permanent STEP shift is absorbed into the baseline after
+      # about a day; the alert resolves while the rows are still being dropped.
+      # Precise desync detection needs the #908 enablement SSOT (which tenants
+      # SHOULD have a projection).
+      #
+      # `sum without (instance, pod, host)`: Vector is a DaemonSet and each pod
+      # handles different logs, so per-pod rates are SUMMED (same reasoning as
+      # the sibling above). ⛔ `host` MUST be in the list: Vector stamps
+      # `host=<pod hostname>` on every internal metric, so without it each
+      # Vector rollout starts a fresh per-pod series with an empty baseline
+      # and the alert would fire for hours on unchanged traffic.
+      # `and on () count(vector_uptime_seconds offset 1d) > 0`: the baseline is
+      # only meaningful when Vector's own telemetry already covered the whole
+      # 1-day window. `vector_uptime_seconds` is Vector's always-on heartbeat
+      # gauge (src/internal_events/heartbeat.rs), so its presence one day ago
+      # means "unprojected rows were countable all day" — absent ones really
+      # were zero. That one condition covers every empty-baseline start:
+      # metrics just switched on (this chart's 0.11.0 upgrade turns them on for
+      # existing installs), a Prometheus restarted on an EMPTY TSDB (the raw
+      # stack's emptyDir), and a fresh install. Cost: nothing fires for the
+      # first day, a sustained surge that starts inside it is absorbed into the
+      # baseline and never reported, and a Prometheus whose retention is under
+      # one day never fires this alert at all. Scope: rows `demux` reclassifies
+      # as `suspicious_audit` (a foreign pod_owner) are dropped by
+      # `tenant_eligible` and never counted here — that class has no alert
+      # (docs/internal/log-visibility-2tier-catalogue.md); a forged or
+      # malformed tenant_id inside a genuine federation_audit row still is.
+      # Requires helm/vector `metrics.enabled` (default on).
       - alert: TenantProjectionFanoutDiscardSpike
         expr: |
-          sum without (instance, pod) (
-            rate(vector_component_discarded_events_total{component_id="tenant_project"}[10m])
-          ) > 5
+          sum without (instance, pod, host) (
+            rate(vector_component_discarded_events_total{component_id="tenant_project", intentional="true"}[10m])
+          )
+          > 3 * (
+            sum_over_time(
+              sum without (instance, pod, host) (
+                rate(vector_component_discarded_events_total{component_id="tenant_project", intentional="true"}[10m])
+              )[1d:10m]
+            ) / 144
+          )
+          and
+          sum without (instance, pod, host) (
+            rate(vector_component_discarded_events_total{component_id="tenant_project", intentional="true"}[10m])
+          ) > 0.1
+          and on () count(vector_uptime_seconds offset 1d) > 0
         for: 15m
         labels:
           severity: warning
           alert_source: platform
         annotations:
-          summary: "Vector tenant-projection drop rate >5/s for 15m — above baseline (usually rising operational-log volume, NOT registry desync; compare baseline first)"
+          summary: "Unprojected tenant audit rows surged above 3x their 1-day baseline for 15m"
           description: |
-            The (b) tenant-sanitized projection (`tenant_project` remap)
-            is `abort`-dropping events well above the operational-log
-            baseline. The platform 0:0 copy is unaffected (this is the
-            tenant-facing projection only), but tenants whose rows are
-            being dropped will NOT see their own platform-operational
-            logs. Likely causes: (a) a tenant sending federation_audit
-            traffic but missing from helm/vector `tenantProjections`
-            (registry desync — reconcile `_account_registry.yaml` →
-            `tenantProjections`); (b) a malicious / malformed payload
-            flood. This is a COARSE signal — it cannot name the affected
-            account; correlate with the Vector logs and the account
-            registry. See platform-log-aggregation-runbook §8.7.
+            The `tenant_project` remap is aborting federation_audit rows
+            whose tenant_id is blank or not in helm/vector
+            `tenantProjections` at {{ $value | humanize }}/s, more than 3x
+            its own 1-day average, for 15m. Those rows reach the platform
+            0:0 copy but no tenant partition. Likely causes: (a) audit
+            traffic from a tenant that has no projection yet (new tenant,
+            or `tenantProjections` behind `_account_registry.yaml`);
+            (b) a forged or malformed payload flood. This is a coarse
+            surge signal: it cannot name the account and it is NOT a
+            registry-desync detector — a small or long-standing gap is
+            part of the baseline and does not fire, and a permanent step
+            stops firing after about a day. Query the 0:0 store for
+            recent `log_type:federation_audit` rows by `tenant_id` and
+            compare against `tenantProjections`. See
+            platform-log-aggregation-runbook §8.7.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md"
 
       # ── Projection gate: unique-but-wrong accountId, DEGRADED (#908 PR-3a) ──

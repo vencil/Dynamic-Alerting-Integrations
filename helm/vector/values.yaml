@@ -630,14 +630,39 @@ nodeSelector: {}
 affinity: {}
 
 # Vector exposes a Prometheus exporter on this port (internal_metrics
-# source + prometheus_exporter sink). Disabled by default in Phase 1;
-# enable once the cluster has Prometheus scraping in place to track
-# shipper health (events_in / events_out / dropped). Enabling renders a
-# headless Service (templates/service.yaml) so Prometheus can scrape by
-# service name rather than pod-IP annotations.
+# source + prometheus_exporter sink) to track shipper health (events_in /
+# events_out / dropped). Enabled renders a headless Service
+# (templates/service.yaml) so Prometheus can scrape by service name rather
+# than pod-IP annotations.
+#
+# ⛔ ON by default (#1595; was off in Phase 1). The platform pack's Vector
+# alerts — VectorBufferEventsDropped, TenantProjectionMappingErrors,
+# TenantProjectionFanoutDiscardSpike — read ONLY these internal_metrics. With
+# this off their `vector_*` series do not exist at all, so they can never
+# fire and look exactly like "nothing is being dropped". Turning it off is a
+# deliberate opt-out of that alerting, not a neutral default; Prometheus also
+# needs egress to this port (k8s/03-monitoring/network-policies.yaml
+# `allow-prometheus-egress` admits 9598, #1291).
 metrics:
-  enabled: false
+  enabled: true
   port: 9598
+
+# Ingress NetworkPolicy for the Vector pods (#1595 D2④). Vector takes no inbound
+# traffic of its own (api disabled, kubernetes_logs reads node files); its only
+# listeners are the scrape ports above and the projection-gate exposer, and the
+# self-telemetry series name every tenant sink (`vl_tenant_<accountId>`) with its
+# event counts. So only the scraping Prometheus may reach them; with no scrape
+# port rendered all ingress is denied. Egress is left open (deployment-specific).
+# ⚠️ Only isolates on a CNI that enforces NetworkPolicy.
+networkPolicy:
+  enabled: true
+  # Namespace label selector for the Prometheus that scrapes these ports — where
+  # PROMETHEUS runs (any pod there, so a kube-prometheus-stack Prometheus in that
+  # namespace is admitted). `null` = any namespace (`namespaceSelector: {}`).
+  # ⚠️ `{}` does NOT clear it: Helm merges a map into the default, so the
+  # default stays.
+  scrapeNamespaceLabel:
+    kubernetes.io/metadata.name: monitoring
 
 # ServiceMonitor for a Prometheus Operator install (kube-prometheus-stack),
 # #1595 D1b. Off by default: without the monitoring.coreos.com CRDs the object
