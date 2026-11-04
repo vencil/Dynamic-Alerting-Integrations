@@ -194,18 +194,22 @@ def _main(tmp_path, monkeypatch, judge, files=THRESHOLDS_ONLY, **kw):
     return gar._exit_code_of(exc.value)
 
 
-@pytest.mark.parametrize("exc", [
-    tv.ServedValuesError("da-guard served-values exited -6", -6, ""),
-    tv.DaGuardNotFoundError("no da-guard"),
-    SystemExit(3),
-    ValueError("anything else"),
-], ids=["served-values", "no-da-guard", "system-exit", "value-error"])
-def test_a_verdict_that_fails_fails_validate(tmp_path, monkeypatch, capsys, exc):
+@pytest.mark.parametrize("exc, rc", [
+    (tv.ServedValuesError("da-guard served-values exited -6", -6, ""), 1),
+    # The binary's own fault is no verdict on the config: rc 2, as
+    # validate-config's unread_keys (#3016 review).
+    (tv.DaGuardNotFoundError("no da-guard"), 2),
+    (tv.DaGuardError("da-guard key-verdict exited 139", 139, "", broken=True), 2),
+    (tv.DaGuardError("da-guard key-verdict: no field blocks", 0, "", stale=True), 2),
+    (SystemExit(3), 1),
+    (ValueError("anything else"), 1),
+], ids=["served-values", "no-da-guard", "broken", "stale", "system-exit", "value-error"])
+def test_a_verdict_that_fails_fails_validate(tmp_path, monkeypatch, capsys, exc, rc):
     """#3016: no verdict, no pass — as tenant-api refuses a write it has no
     verdict for (decision 5)."""
     def fail(*_a, **_k):
         raise exc
-    assert _main(tmp_path, monkeypatch, fail) == 1
+    assert _main(tmp_path, monkeypatch, fail) == rc
     err = capsys.readouterr().err
     assert "ERROR: key verdict incomplete: the keys no reader reads were not judged" in err, err
     assert type(exc).__name__ in err

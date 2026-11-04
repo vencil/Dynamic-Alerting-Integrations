@@ -235,8 +235,8 @@ Runs automatically on every PR and push. Checks:
 ⛔ **This table says who is looking, not what gets stopped.** Of the four rows,
 only syntax errors, a tenant tree that cannot be read (da-guard missing, say — that
 one exits 2), and the cases the table marks "FAIL, exit 1" make validation FAIL; everything else is a WARN, and **WARN does not affect the exit code**. A
-clamped threshold, a misspelled tenant key (one not starting with `_`), a negative
-threshold — all of those pass commit and CI silently.
+clamped threshold or a negative threshold passes commit and CI silently; a misspelled
+tenant key no reader reads FAILs the `unread_keys` row (exit 1).
 
 ```bash
 # Local validation (same command the pre-commit hooks run; the second one is generate-routes, in §2.3)

@@ -211,7 +211,7 @@ graph LR
 
 ⛔ **這張表列的是「有沒有人在看」，不是「壞的東西過不去」。** 上面四列裡，會讓驗證 FAIL 的
 只有語法錯、讀不了租戶樹（例如找不到 da-guard，這時是 exit 2），以及表裡明寫「FAIL、exit 1」的那幾種；其他都是 WARN，而 **WARN 不影響 exit code**。
-閾值被 clamp、租戶 key 打錯字（不以 `_` 開頭的）、閾值填成負數——這些都會安靜地通過 commit 與 CI。
+閾值被 clamp、閾值填成負數——這些都會安靜地通過 commit 與 CI；租戶 key 打錯字、沒有讀取端讀時，`unread_keys` 列 FAIL（exit 1）。
 
 ```bash
 # 本地驗證（與 pre-commit hook 相同的命令；第二支是 §2.3 的 generate-routes）

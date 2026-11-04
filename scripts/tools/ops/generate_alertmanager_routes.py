@@ -1319,6 +1319,14 @@ def _report_key_verdict(config_dir: str, findings: list[str]) -> list[str]:
             kind="key_verdict_incomplete", blocks="validate")
         print(safe_label(line), file=sys.stderr)
         findings.append(line)
+        # The da-guard binary's own fault (missing, stale, broken) is no
+        # verdict on the config: rc 2 as validate-config's unread_keys, and
+        # ahead of any violation (#3016 review). A tree da-guard refuses to
+        # judge is the tree's: a blocking line, rc 1.
+        tv = _lib_tenant_values
+        if isinstance(exc, tv.DaGuardNotFoundError) or (
+                isinstance(exc, tv.DaGuardError) and exc.binary_fault):
+            sys.exit(EXIT_CALLER_ERROR)
         return [line]
     lines = []
     for f in verdict.findings:
