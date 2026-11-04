@@ -763,9 +763,10 @@ data:
     \ jwt_authn stats,\n\n        per ADR-020).\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
     \      summary: Log-query requests for account {{ $labels.account_id }} are mostly\
     \ rejected\n  - alert: TenantProjectionMappingErrors\n    expr: \"sum without\
-    \ (instance, pod) (\\n  (\\n    vector_component_discarded_events_total{component_id=\\\
+    \ (instance, pod, host) (\\n  (\\n    vector_component_discarded_events_total{component_id=\\\
     \"tenant_project\\\", intentional=\\\"false\\\"}\\n    unless\\n    vector_component_discarded_events_total{component_id=\\\
-    \"tenant_project\\\", intentional=\\\"false\\\"} offset 10m\\n  ) * 1\\n  or\\\
+    \"tenant_project\\\", intentional=\\\"false\\\"} offset 10m\\n  ) * 1\\n  unless\
+    \ on () (time() - min(prometheus_tsdb_lowest_timestamp_seconds) < 1200)\\n  or\\\
     n  increase(vector_component_discarded_events_total{component_id=\\\"tenant_project\\\
     \", intentional=\\\"false\\\"}[10m])\\n) > 0\\n\"\n    for: 0s\n    labels:\n\
     \      alert_source: platform\n      severity: warning\n    annotations:\n   \
@@ -781,12 +782,13 @@ data:
     \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
     \      summary: Vector tenant projection is dropping rows on VRL runtime errors\n\
     \  - alert: TenantProjectionFanoutDiscardSpike\n    expr: \"sum without (instance,\
-    \ pod) (\\n  rate(vector_component_discarded_events_total{component_id=\\\"tenant_project\\\
-    \", intentional=\\\"true\\\"}[10m])\\n)\\n> 3 * (\\n  sum_over_time(\\n    sum\
-    \ without (instance, pod) (\\n      rate(vector_component_discarded_events_total{component_id=\\\
+    \ pod, host) (\\n  rate(vector_component_discarded_events_total{component_id=\\\
+    \"tenant_project\\\", intentional=\\\"true\\\"}[10m])\\n)\\n> 3 * (\\n  sum_over_time(\\\
+    n    sum without (instance, pod, host) (\\n      rate(vector_component_discarded_events_total{component_id=\\\
     \"tenant_project\\\", intentional=\\\"true\\\"}[10m])\\n    )[1d:10m]\\n  ) /\
-    \ 144\\n)\\nand\\nsum without (instance, pod) (\\n  rate(vector_component_discarded_events_total{component_id=\\\
-    \"tenant_project\\\", intentional=\\\"true\\\"}[10m])\\n) > 0.1\\n\"\n    for:\
+    \ 144\\n)\\nand\\nsum without (instance, pod, host) (\\n  rate(vector_component_discarded_events_total{component_id=\\\
+    \"tenant_project\\\", intentional=\\\"true\\\"}[10m])\\n) > 0.1\\nunless on ()\
+    \ (time() - min(prometheus_tsdb_lowest_timestamp_seconds) < 86400)\\n\"\n    for:\
     \ 15m\n    labels:\n      alert_source: platform\n      severity: warning\n  \
     \  annotations:\n      description: 'The `tenant_project` remap is aborting federation_audit\
     \ rows\n\n        whose tenant_id is blank or not in helm/vector\n\n        `tenantProjections`\

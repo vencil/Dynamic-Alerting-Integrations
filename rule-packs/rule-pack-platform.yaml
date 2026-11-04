@@ -2306,7 +2306,7 @@ groups:
       # `increase(...[10m]) > 0` with `for: 0m`: every such drop is a lost tenant
       # row, so there is nothing to ride out, and the 10m increase window already
       # holds the alert ~10m past the last error, so an intermittent bug does not
-      # flap. `sum without (instance, pod)`: Vector is a DaemonSet and each pod
+      # flap. `sum without (instance, pod, host)`: Vector is a DaemonSet and each pod
       # projects different rows, so per-pod counts are SUMMED into one series
       # (keeping component_id / intentional; a bare sum() would strip them).
       # ⛔ Why the `unless … offset 10m` arm: Vector creates this series lazily,
@@ -2318,16 +2318,24 @@ groups:
       # label set and `or` keeps the new-series arm for that pod. Older series
       # fall through to `increase`. Residual: a Prometheus scrape gap longer
       # than the 5m lookback around t-10m makes an old series look new and
-      # re-reports its lifetime count once. Requires helm/vector
-      # `metrics.enabled` (default on).
+      # re-reports its lifetime count once. A Prometheus that restarts on an
+      # EMPTY TSDB (the raw stack's emptyDir) would make EVERY surviving
+      # series look new, so that arm is muted while the TSDB holds less than
+      # 20m of data (`prometheus_tsdb_lowest_timestamp_seconds`; where the
+      # metric is absent — e.g. vmalert — the mute is a no-op). ⛔ `host` is in
+      # the `without` list because Vector's internal_metrics stamps every
+      # metric with `host=<hostname>` by default (src/sources/internal_metrics
+      # .rs, `only_host_tags_by_default`) — the pod name, which changes on
+      # every rollout. Requires helm/vector `metrics.enabled` (default on).
       - alert: TenantProjectionMappingErrors
         expr: |
-          sum without (instance, pod) (
+          sum without (instance, pod, host) (
             (
               vector_component_discarded_events_total{component_id="tenant_project", intentional="false"}
               unless
               vector_component_discarded_events_total{component_id="tenant_project", intentional="false"} offset 10m
             ) * 1
+            unless on () (time() - min(prometheus_tsdb_lowest_timestamp_seconds) < 1200)
             or
             increase(vector_component_discarded_events_total{component_id="tenant_project", intentional="false"}[10m])
           ) > 0
@@ -2388,25 +2396,34 @@ groups:
       # Precise desync detection needs the #908 enablement SSOT (which tenants
       # SHOULD have a projection).
       #
-      # `sum without (instance, pod)`: Vector is a DaemonSet and each pod handles
-      # different logs, so per-pod rates are SUMMED (same reasoning as the
-      # sibling above). Requires helm/vector `metrics.enabled` (default on).
+      # `sum without (instance, pod, host)`: Vector is a DaemonSet and each pod
+      # handles different logs, so per-pod rates are SUMMED (same reasoning as
+      # the sibling above). ⛔ `host` MUST be in the list: Vector stamps
+      # `host=<pod hostname>` on every internal metric, so without it each
+      # Vector rollout starts a fresh per-pod series with an empty baseline
+      # and the alert would fire for hours on unchanged traffic.
+      # `unless on () (... < 86400)`: a Prometheus restarted on an EMPTY TSDB
+      # (the raw stack's emptyDir) has no baseline either; the alert is muted
+      # until the TSDB holds a full day. Where
+      # `prometheus_tsdb_lowest_timestamp_seconds` is absent (vmalert) the mute
+      # is a no-op. Requires helm/vector `metrics.enabled` (default on).
       - alert: TenantProjectionFanoutDiscardSpike
         expr: |
-          sum without (instance, pod) (
+          sum without (instance, pod, host) (
             rate(vector_component_discarded_events_total{component_id="tenant_project", intentional="true"}[10m])
           )
           > 3 * (
             sum_over_time(
-              sum without (instance, pod) (
+              sum without (instance, pod, host) (
                 rate(vector_component_discarded_events_total{component_id="tenant_project", intentional="true"}[10m])
               )[1d:10m]
             ) / 144
           )
           and
-          sum without (instance, pod) (
+          sum without (instance, pod, host) (
             rate(vector_component_discarded_events_total{component_id="tenant_project", intentional="true"}[10m])
           ) > 0.1
+          unless on () (time() - min(prometheus_tsdb_lowest_timestamp_seconds) < 86400)
         for: 15m
         labels:
           severity: warning
