@@ -2,9 +2,9 @@ package keyverdict
 
 // The branches of Judge no tree today reaches through da-guard — the
 // reserved-key registry declares no reader that would take them — over
-// synthetic readings. The trees da-guard reads are pinned to the Python
-// verdict by tests/shared/test_key_verdict_go_parity.py. Tenant ids are
-// fixture names (CLAUDE.md #9).
+// synthetic readings. The trees da-guard reads are pinned by
+// tests/shared/test_key_verdict.py and cmd/da-guard/key_verdict_golden_test.go.
+// Tenant ids are fixture names (CLAUDE.md #9).
 
 import (
 	"reflect"
@@ -130,5 +130,28 @@ func TestJudge_APolicyRuleNamesAKeyAsPolicyAsCodeSpellsIt(t *testing.T) {
 		if got := judged(tc.key, tc.head); got != tc.want {
 			t.Errorf("key %s, rule %s: %q, want %q", tc.key, tc.head, got, tc.want)
 		}
+	}
+}
+
+// A reserved key the effective config shows in a layer the exporter does not
+// read it in (the root's top level, level 0: no registry layer) is read by no
+// one — the served reading's values list `_silent_mode` for every tenant,
+// which is no evidence it was read. A notice: the platform's file.
+func TestJudge_AReservedKeyInALayerTheExporterDoesNotReadIsUnread(t *testing.T) {
+	t.Parallel()
+	yes := true
+	tree := Judge(Input{
+		Served: map[string]ServedTenant{"t1": {
+			Keys: map[string]ServedKey{"_silent_mode": {Reason: "reserved", Registered: &yes,
+				Declared: map[string][]string{"exporter": {"tenant", "platform_tenants", "profile"}}}},
+			Values: map[string]any{"_silent_mode": []string{}}}},
+		Effective: map[string]EffectiveTenant{"t1": {Config: map[string]any{"_silent_mode": "warning"},
+			Sources: map[string]config.KeySource{"_silent_mode": {Layer: config.KeyLayerDefaults,
+				File: "_defaults.yaml", Level: level(0)}},
+			DefaultsChain: []string{"_defaults.yaml"}}},
+	})
+	v := one(t, tree, "t1", "_silent_mode")
+	if len(v.ReadBy) != 0 || v.Verdict != Unread || deref(v.Severity) != SeverityNotice || deref(v.File) != "_defaults.yaml" {
+		t.Fatalf("verdict %+v", v)
 	}
 }

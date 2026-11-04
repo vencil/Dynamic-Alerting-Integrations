@@ -1,19 +1,15 @@
-"""ADR-038 決定 4–7：共用判決 `_lib_key_verdict`。
+"""ADR-038 決定 4–7：共用判決（`da-guard key-verdict`，經 `_lib_key_verdict` 讀）。
 
-每棵樹都用真的 da-guard（served-values 與 effective）跑，判決只來自兩份輸出
-與登錄表，不自己讀 YAML。
+每棵樹都用真的 da-guard 跑：判決是 Go 的（`pkg/keyverdict`），這裡釘住它對
+真實的樹給出的答案；樹到不了的分支在 `pkg/keyverdict/keyverdict_test.go`。
 """
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 import _lib_key_verdict as kv
-
-_REGISTRY = (Path(__file__).resolve().parents[2] / "components" / "threshold-exporter" / "app"
-             / "pkg" / "config" / "reserved_keys.json")
 
 pytestmark = pytest.mark.usefixtures("da_guard_env")
 
@@ -287,62 +283,6 @@ def test_custom_alerts_have_the_same_readers_in_every_layer(tmp_path):
         assert _by_key(t, tenant)["_custom_alerts"].read_by == ("custom_alert_compiler", "exporter")
 
 
-def test_a_reserved_key_in_a_layer_the_exporter_does_not_read_is_unread():
-    """effective 顯示、exporter 卻不讀那一層的 `_silent_mode`（合成輸入：#3341 起子目錄
-    `_defaults.yaml` 的那份連 effective 都不顯示，真實的樹裡只剩根目錄沒有 `defaults:`
-    的頂層這種形狀）。served-values 的 `values` 一律列出 `_silent_mode`，不能拿來當讀過的證據。"""
-    import _lib_tenant_values as tv
-    sk = tv.ServedKey(False, "reserved", True, {"exporter": ("tenant", "platform_tenants", "profile")})
-    served = {"ta": tv.TenantValues("ta", {}, {}, {}, {}, None, {}, {}, {}, None, {"_silent_mode": sk})}
-    eff = {"ta": tv.TenantEffective("ta", {"_silent_mode": "warning"},
-                                    {"_silent_mode": tv.KeySource("defaults", "_defaults.yaml", 0)},
-                                    None, "", "", "", ["_defaults.yaml"], [], [], [], {})}
-    v = kv.judge(served, eff, [], undecidable=False).keys["ta"][0]
-    assert (v.key, v.read_by, v.verdict, v.severity, v.file) == (
-        "_silent_mode", (), "unread", "notice", "_defaults.yaml")
-
-
-def test_without_disable_effects_a_switched_off_key_is_taken_as_read(tmp_path):
-    t = kv.judge_tree(_tree(tmp_path, {"_defaults.yaml": _ADR_DEFAULTS, "db-a.yaml": _ADR_TENANT}),
-                      disable_effects=False)
-    v = _by_key(t, "db-a")["mysql_slave_lagg"]
-    assert (v.verdict, v.disable) == ("read", None)
-    # 拼錯的 `_` 鍵不靠 disable 判：照樣沒人讀
-    assert _by_key(t, "db-a")["_routng"].verdict == "unread"
-
-
-def test_registered_readers_is_the_registry():
-    """Python 的查找與 Go 的 config.RegisteredReaders 同一個規則，各自對 JSON 釘住。"""
-    with open(_REGISTRY, encoding="utf-8") as f:
-        reg = json.load(f)
-    for k, e in reg["keys"].items():
-        got, ok = kv.registered_readers(k)
-        assert ok and {r: list(ls) for r, ls in got.items()} == e["read_by"], k
-    for p, e in reg["prefixes"].items():
-        got, ok = kv.registered_readers(p + "zz")
-        assert ok and {r: list(ls) for r, ls in got.items()} == e["read_by"], p
-    for k in reg["retired"]:
-        assert kv.registered_readers(k) == ({}, False)
-    assert kv.registered_readers("_no_such_key") == ({}, False)
-    assert kv.registered_readers("_routing_profile")[0] == {"generator": ("tenant", "platform_tenants")}
-
-
-def test_a_subtree_defaults_source_is_the_registry_layer_subtree_defaults():
-    """effective 的 defaults 層（level > 0）對應登錄表的 subtree_defaults：今天沒有非 exporter
-    的讀取端宣告這一層，所以以合成輸入釘住對應本身。"""
-    import _lib_tenant_values as tv
-    sk = tv.ServedKey(False, "not_exporter_key", True, {"generator": ("subtree_defaults",)})
-    served = {"ta": tv.TenantValues("ta", {}, {}, {"_x": 1}, {}, None, {}, {}, {}, None, {"_x": sk})}
-
-    def eff(level):
-        return {"ta": tv.TenantEffective("ta", {"_x": 1}, {"_x": tv.KeySource("defaults", "f.yaml", level)},
-                                         None, "", "", "", ["_defaults.yaml"], [], [], [], {})}
-    sub = kv.judge(served, eff(1), [], undecidable=False)
-    root = kv.judge(served, eff(0), [], undecidable=False)
-    assert sub.keys["ta"][0].read_by == ("generator",)
-    assert root.keys["ta"][0].read_by == ()
-
-
 @pytest.mark.parametrize("rule_key, written", [
     ("mysql_threads_running_critical", "mysql_" + "cpu_critical"),
     ("mysql_" + "cpu_critical", "mysql_threads_running_critical"),
@@ -393,16 +333,6 @@ def test_a_subset_verdict_is_the_whole_trees_for_those_tenants(tmp_path):
     assert {f.key for f in sub.findings} == {"mysql_conections_b"}, sub.findings
 
 
-def test_a_whole_tree_effective_reading_does_not_widen_a_subset(tmp_path):
-    """validate-config 一類的呼叫者把整棵樹的 effective 傳進來時，子集判決仍只
-    判要求的租戶：只在一邊有的租戶，會被讀成每個鍵都沒人讀。"""
-    import _lib_tenant_values as tv
-    conf_d = _tree(tmp_path, _TWO_TENANTS)
-    sub = kv.judge_tree(conf_d, tenants=["db-b"], effective_tree=tv.load_effective_tree(conf_d))
-    assert sorted(sub.keys) == ["db-b"]
-    assert all(f.tenants == ("db-b",) for f in sub.findings), sub.findings
-
-
 def test_a_requested_tenant_the_tree_lacks_has_no_key(tmp_path):
     conf_d = _tree(tmp_path, _TWO_TENANTS)
     sub = kv.judge_tree(conf_d, tenants=["db-gone"])
@@ -417,30 +347,33 @@ def test_a_bare_string_is_not_read_as_its_characters(tmp_path):
         kv.judge_tree(conf_d, tenants="db-b")
 
 
-def test_an_effective_reading_lacking_a_requested_tenant_is_refused(tmp_path):
-    """傳進來的 effective 少了某個要求的租戶時，那個租戶的鍵會只剩 served
-    那一邊（layer、file 為 None），所以拒絕，而不是靜默判錯。"""
-    import _lib_tenant_values as tv
-    conf_d = _tree(tmp_path, _TWO_TENANTS)
-    with pytest.raises(ValueError, match="db-b"):
-        kv.judge_tree(conf_d, tenants=["db-a", "db-b"],
-                      effective_tree=tv.load_effective_tree(conf_d, tenants=["db-a"]))
-
-
 def test_a_profile_finding_in_a_subset_is_judged_over_the_requested_tenants(tmp_path):
     """profile 鍵的 finding 不屬於單一租戶：子集裡只看得到要求的租戶。這裡
     規則讀 `_namespaces`、但排除 db-a，所以全樹裡 db-b 讀到它、profile 不出
     notice；只要求 db-a 時看不到 db-b，profile notice 就出現了。這是 ADR-038
     §5 記下的差異，不是「每個租戶跟全樹一樣」的那部分。"""
-    from types import SimpleNamespace
     conf_d = _tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  mysql_connections: 80\nprofiles:\n  gold:\n    _namespaces: [a]\n",
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\nprofiles:\n  gold:\n    _namespaces: [a]\n"
+                          "_policies:\n  - {name: p, target: _namespaces, operator: required, severity: error,"
+                          " exclude_tenants: [db-a]}\n",
         "db-a.yaml": "tenants:\n  db-a:\n    _profile: gold\n",
         "db-b.yaml": "tenants:\n  db-b:\n    _profile: gold\n",
     })
-    rules = [SimpleNamespace(target="_namespaces", when=None, exclude_tenants=["db-a"])]
     reasons = lambda v: [(f.key, f.file, f.tenants, f.reason) for f in v.findings if f.key == "_namespaces"]  # noqa: E731
-    assert reasons(kv.judge_tree(conf_d, rules=rules)) == [
+    assert reasons(kv.judge_tree(conf_d)) == [
         ("_namespaces", "_defaults.yaml", ("db-a",), "not_exporter_key")]
-    assert reasons(kv.judge_tree(conf_d, rules=rules, tenants=["db-a"])) == [
+    assert reasons(kv.judge_tree(conf_d, tenants=["db-a"])) == [
         ("_namespaces", "_defaults.yaml", ("db-a",), "not_read_in_profile")]
+
+
+def test_rules_policy_engine_refuses_are_judged_by_no_one(tmp_path):
+    """#3489：da-guard 讀規則時讀得到 `target` 就算，不驗規則；規則是不是無效，
+    是 Policy-as-Code 自己的事。`judge_tree` 先用 policy_engine 載入，它拒收的樹
+    （`InvalidPolicyRules`）不判——無效的規則從來不執行，不能拿來把鍵算成有人讀。"""
+    conf_d = _tree(tmp_path, {
+        "_defaults.yaml": "defaults:\n  mysql_connections: 80\n"
+                          "_policies:\n  - {name: p, target: owner_tag, check: lte, value: 3}\n",
+        "ta.yaml": "tenants:\n  ta:\n    owner_tag: x\n"})
+    with pytest.raises(ValueError) as e:
+        kv.judge_tree(conf_d)
+    assert type(e.value).__name__ == "InvalidPolicyRules" and e.value.problems, e.value

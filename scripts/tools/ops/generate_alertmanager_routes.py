@@ -1290,9 +1290,7 @@ _KEY_CHECK_KINDS = {
 }
 
 
-def _report_key_verdict(config_dir: str, findings: list[str],
-                        served: "_lib_tenant_values.ServedTree | BaseException | None" = None,
-                        ) -> None:
+def _report_key_verdict(config_dir: str, findings: list[str]) -> None:
     """The shared verdict on keys no reader reads (``_lib_key_verdict``,
     ADR-038 §5), under ``--validate``: the same lines validate-config's
     ``unread_keys`` row prints, on stderr, each a ``blocks: never`` finding.
@@ -1302,14 +1300,11 @@ def _report_key_verdict(config_dir: str, findings: list[str],
     verdict raises — is one NOTICE, never a refusal (decision 5: a broken
     da-guard must not fail a run the generator passed).
 
-    *served*: the run's one served-values reading (``_load_served_tree``,
-    read with ``disable_effects``), shared with the custom-alert delivery
-    check (#1211); an exception in its place is the reading having failed,
-    reported here as it would have been raised by the verdict."""
+    The verdict is ``da-guard key-verdict``'s own run; the custom-alert
+    delivery check (#1211) reads served-values separately, so a failing
+    verdict leaves that check as it is."""
     try:
-        if isinstance(served, BaseException):
-            raise served
-        verdict = _lib_key_verdict.judge_tree(config_dir, served_tree=served)
+        verdict = _lib_key_verdict.judge_tree(config_dir)
     except (Exception, SystemExit) as exc:  # noqa: BLE001 — "not judged", never a refusal
         line = Finding(
             "  NOTICE: key verdict incomplete: the keys no reader reads were not "
@@ -1614,12 +1609,8 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # else), before the exits below that end the run short of
     # `_validate_mode` ("No tenants found", "No valid routes …"): a tree with
     # nothing to render is judged too.
-    # #1211: ONE served-values run per invocation — read here when the key
-    # verdict needs it (with disable_effects, which it judges), else below.
-    served = None
     if args.validate and key_verdict:
-        served = _load_served_tree(args.config_dir, disable_effects=True)
-        _report_key_verdict(args.config_dir, findings, served=served)
+        _report_key_verdict(args.config_dir, findings)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)
@@ -1668,8 +1659,7 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # under the custom route fall to the firehose receiver. Only a mode that
     # assembles the config it writes (--output-configmap, --apply) knows that
     # receiver — it judges there; every other mode says it could not check.
-    if served is None:
-        served = _load_served_tree(args.config_dir, disable_effects=False)
+    served = _load_served_tree(args.config_dir, disable_effects=False)
     undelivered = _undelivered_custom_alerts(served, routes, tree, findings)
     assembles = (args.output_configmap or args.apply) and not args.validate
     if undelivered and not assembles:

@@ -503,7 +503,7 @@ def written_scope(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
     *platform paths*: the written files whose keys reach tenants they do
     not name: a defaults file at any depth, or a root platform file with
     ``profiles:`` before or after (the verdict reads profiles from those
-    files too, ``_lib_key_verdict._root_profiles``). What a path is, is Go's
+    files too: ``da-guard key-verdict``'s profile layer). What a path is, is Go's
     classification of the tree after the write (*reader*'s listing); a
     deleted path, gone from it, by its name alone. A file no reader selects
     (a hidden one, a ``_`` file below the root that is not a defaults file)

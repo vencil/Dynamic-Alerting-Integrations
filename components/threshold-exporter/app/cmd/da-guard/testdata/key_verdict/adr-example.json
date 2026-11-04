@@ -1,0 +1,173 @@
+{
+  "schema": "da-guard.key-verdict/v2",
+  "at": "2026-07-01T03:00:00Z",
+  "undecidable": false,
+  "tenants": {
+    "db-a": [
+      {
+        "key": "_namespaces",
+        "layer": "tenant",
+        "file": "db-a.yaml",
+        "read_by": [
+          "annotation"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "served_family": [],
+        "value": [
+          "prod-ns"
+        ],
+        "served": null
+      },
+      {
+        "key": "_routng",
+        "layer": "tenant",
+        "file": "db-a.yaml",
+        "read_by": [],
+        "verdict": "unread",
+        "severity": "error",
+        "reason": "unregistered",
+        "disable": "noop",
+        "served_family": [],
+        "value": "disable",
+        "served": null
+      },
+      {
+        "key": "mysql_conections",
+        "layer": "tenant",
+        "file": "db-a.yaml",
+        "read_by": [],
+        "verdict": "unread",
+        "severity": "error",
+        "reason": "no_row",
+        "disable": null,
+        "served_family": [],
+        "value": "70",
+        "served": null
+      },
+      {
+        "key": "mysql_connections",
+        "layer": "defaults",
+        "file": "_defaults.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "served_family": [],
+        "value": 80,
+        "served": 80
+      },
+      {
+        "key": "mysql_slave_lag",
+        "layer": "defaults",
+        "file": "_defaults.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "served_family": [],
+        "value": 30,
+        "served": 30
+      },
+      {
+        "key": "mysql_slave_lagg",
+        "layer": "tenant",
+        "file": "db-a.yaml",
+        "read_by": [],
+        "verdict": "unread",
+        "severity": "warning",
+        "reason": "disable_noop",
+        "disable": "noop",
+        "served_family": [],
+        "value": "disable",
+        "served": null
+      },
+      {
+        "key": "redis_memory",
+        "layer": "tenant",
+        "file": "db-a.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": "partial",
+        "served_family": [
+          "redis_memory_critical"
+        ],
+        "value": "disable",
+        "served": null
+      },
+      {
+        "key": "redis_memory_critical",
+        "layer": "tenant",
+        "file": "db-a.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "served_family": [],
+        "value": "90",
+        "served": 90
+      }
+    ]
+  },
+  "findings": [
+    {
+      "severity": "error",
+      "kind": "unread",
+      "key": "_routng",
+      "file": "db-a.yaml",
+      "tenants": [
+        "db-a"
+      ],
+      "reason": "unregistered",
+      "served_family": [],
+      "served_from": []
+    },
+    {
+      "severity": "error",
+      "kind": "unread",
+      "key": "mysql_conections",
+      "file": "db-a.yaml",
+      "tenants": [
+        "db-a"
+      ],
+      "reason": "no_row",
+      "served_family": [],
+      "served_from": []
+    },
+    {
+      "severity": "warning",
+      "kind": "disable_noop",
+      "key": "mysql_slave_lagg",
+      "file": "db-a.yaml",
+      "tenants": [
+        "db-a"
+      ],
+      "reason": "disable_noop",
+      "served_family": [],
+      "served_from": []
+    }
+  ],
+  "key_checks": {
+    "db-a": {
+      "version_labels": [],
+      "renames": []
+    }
+  },
+  "parse_failed": [],
+  "unreadable": []
+}
