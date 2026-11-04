@@ -180,7 +180,7 @@ def test_the_combine_step_warns_instead_of_failing_on_missing_shards(tmp_path, p
     `cp` literally ("cannot stat") and `set -e` failed the step before the
     warning branch — a red on a run nobody reads. Run the real step script."""
     for k in range(1, present + 1):
-        d = tmp_path / "coverage-shards" / f"coverage-data-py3.13-shard{k}"
+        d = tmp_path / "coverage-shards" / f"coverage-data-shard{k}"
         d.mkdir(parents=True)
         (d / ".coverage").write_bytes(b"")
     proc = subprocess.run([_BASH, "-c", _combine_script()], cwd=tmp_path,

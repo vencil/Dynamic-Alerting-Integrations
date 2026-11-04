@@ -1,6 +1,6 @@
 r"""The three ci.yml aggregate gates were required checks with no assertions.
 
-#1397. `ci.yml` reports three REQUIRED status checks — `Python Tests (3.13)`,
+#1397. `ci.yml` reports three REQUIRED status checks — `Python Tests`,
 `Go Tests (1.26)`, `Portal Tests` — from three jobs that run no tests at all.
 Each is a pure aggregation gate: `if: always()`, a handful of
 `${{ needs.*.result }}` bindings in one step's `env:`, and ~10 lines of shell
@@ -559,7 +559,7 @@ UNMODELLED_GATE_SHAPED_JOBS: dict[tuple[str, str], str] = {}
 # Blind review did it by swapping `name:` between `portal-tests` and
 # `portal-tests-run`; every assertion here stayed green.
 REQUIRED_CHECK_NAMES = frozenset({
-    "Python Tests (3.13)",
+    "Python Tests",
     "Go Tests (1.26)",
     "Portal Tests",
     # validate.yaml (#1398)
@@ -975,7 +975,7 @@ def test_gate_discovery_did_not_refuse() -> None:
 # guard people delete.
 UNWATCHED_PATH_GATED_JOBS: dict[tuple[str, str], str] = {
     # The coverage leg is ADVISORY by owner decision (2026-09-19): it runs the
-    # same tree as `python-tests-run` plus `--cov`, uploads `coverage-py3.13`
+    # same tree as `python-tests-run` plus `--cov`, uploads `coverage-python`
     # for coverage-delta.yml, and fails on `--cov-fail-under` — visibly, as a
     # red non-required job — but backs no required check. Measured reason:
     # under the tracer every worker's collection was ~4x slower on the runner
@@ -985,7 +985,7 @@ UNWATCHED_PATH_GATED_JOBS: dict[tuple[str, str], str] = {
     # reads its result.
     ("ci.yml", "python-coverage"): (
         "ADVISORY coverage leg (owner decision, PR #1910): same tree and flags "
-        "as python-tests-run plus --cov; uploads coverage-py3.13 for "
+        "as python-tests-run plus --cov; uploads coverage-python for "
         "coverage-delta.yml and reddens on --cov-fail-under, but backs no "
         "required check — it is deliberately absent from the python-tests "
         "gate's needs:. Cannot be modelled as a leg because a gate weighing it "
@@ -995,11 +995,11 @@ UNWATCHED_PATH_GATED_JOBS: dict[tuple[str, str], str] = {
         "(a policy reversal) or deleting the job. Sharded 3-way (--shard=K/3); "
         "the report, floor and artifact moved to python-coverage-combine."),
     # The tail of the coverage leg once it was sharded: merges the shards'
-    # raw data, writes coverage-py3.13, applies pyproject's fail_under. Same
+    # raw data, writes coverage-python, applies pyproject's fail_under. Same
     # advisory standing and same `python_changed` gate as the shards it reads.
     ("ci.yml", "python-coverage-combine"): (
         "ADVISORY: combines the sharded python-coverage legs into the "
-        "coverage-py3.13 artifact coverage-delta.yml reads and applies the "
+        "coverage-python artifact coverage-delta.yml reads and applies the "
         "fail_under floor; backs no required check, for the same owner "
         "decision as python-coverage (sharding: #2102). Closing this row "
         "means the same as closing that one."),

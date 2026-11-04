@@ -1,6 +1,6 @@
-FROM python:3.13.15-alpine3.23 AS builder
+FROM python:3.13.18-alpine3.23 AS builder
 
-# ── Security: Alpine 3.23 (python:3.13.15-alpine3.23 ships libcrypto3 3.5.8-r0
+# ── Security: Alpine 3.23 (the python:3.13.15-alpine3.23 base shipped libcrypto3 3.5.8-r0
 # and libuuid 2.41.6-r1 — #1401 found 3.5.6 / 2.41-r9 on the alpine3.22 base).
 # apk upgrade picks up any additional point-release patches.
 RUN apk --no-cache upgrade
@@ -15,11 +15,16 @@ ENV PATH="/opt/venv/bin:$PATH"
 # 1.1.2 under pip/_vendor/ — CVE-2025-47273 (fix 78.1.1) and GHSA-6v7p-g79w-8964
 # (fix 1.2.1) — so no pip upgrade clears them; a CLI image that never installs
 # anything at runtime does not need pip at all.
-RUN pip install --no-cache-dir PyYAML==6.0.3 promql-parser==0.7.0 croniter==6.0.0 && \
+# ⛔ These versions must equal requirements/ci-constraints.txt — the file every
+# CI `pip install` uses — so the image ships what CI tests
+# (tests/shared/test_toolchain_pin_parity.py::test_image_pip_pins_are_the_ci_constraints).
+# Literal, not `-c`: this build context is components/da-tools/app, which the CI
+# and Makefile image builds stub without build.sh, so requirements/ is not in it.
+RUN pip install --no-cache-dir PyYAML==6.0.3 promql-parser==0.10.0 croniter==6.2.4 && \
     python -m pip uninstall -y pip
 
 # ── Runtime Stage ──────────────────────────────────────────────────
-FROM python:3.13.15-alpine3.23
+FROM python:3.13.18-alpine3.23
 
 LABEL org.opencontainers.image.title="da-tools" \
       org.opencontainers.image.description="Dynamic Alerting CLI Toolkit — portable verification and migration tools" \

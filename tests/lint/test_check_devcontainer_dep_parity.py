@@ -36,11 +36,11 @@ name: CI
 on: [push]
 jobs:
   aggregation-gate:
-    name: Python Tests (3.13)
+    name: Python Tests
     steps:
       - run: echo "no tests here"
   python-tests-run:
-    name: Python Tests — run (3.13)
+    name: Python Tests — run (1/3)
     steps:
       - name: Install
         run: pip install {packages} -c requirements/ci-constraints.txt

@@ -54,8 +54,11 @@
       "golangciLintVersion": "2.12.2"
     },
     // 5. Python (確保有 pip)
+    // ⛔ Must equal .python-version exactly (tests/shared/test_toolchain_pin_parity.py).
+    //   A bare "3.13" is resolved to the newest 3.13.x at build time, i.e. a
+    //   different patch than CI and the images whenever upstream ships one.
     "ghcr.io/devcontainers/features/python:1": {
-      "version": "3.13",
+      "version": "3.13.18",
       "installTools": true
     }
   },

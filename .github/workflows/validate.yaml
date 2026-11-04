@@ -27,7 +27,7 @@
 #
 # DEDUP (CI-ROI wave): the former `python-tests` ("Python Tests") and
 # `go-tests` ("Go Tests") jobs of this workflow were strict SUBSETS of
-# ci.yml's "Python Tests (3.13)" and "Go Tests (1.26)":
+# ci.yml's "Python Tests" and "Go Tests (1.26)":
 #   - python-tests ran the SAME `pytest tests/` with the SAME --ignore list
 #     as ci.yml, but with fewer optional CLIs installed (no helm / vector /
 #     mtail / jsonschema) → strictly MORE silent skips, zero extra coverage.
@@ -43,7 +43,7 @@
 #   - REMOVE "Python Tests" and "Go Tests"          (this workflow's
 #     deleted job names — once the jobs are gone these checks would sit
 #     "Expected" forever and hard-block EVERY PR)
-#   - ADD "Python Tests (3.13)" and "Go Tests (1.26)" (the ci.yml
+#   - ADD "Python Tests" and "Go Tests (1.26)" (the ci.yml
 #     equivalents; ci.yml runs unfiltered on every PR + push to main, so
 #     the names are reported on every PR — verify they appear in the
 #     latest CI run before enrolling, per the iac-lint-baseline checklist
@@ -240,7 +240,7 @@ jobs:
               - "k8s/**"
 
   # (python-tests / go-tests jobs removed — see the DEDUP + OWNER RUNBOOK
-  # banner at the top of this file. ci.yml's "Python Tests (3.13)" and
+  # banner at the top of this file. ci.yml's "Python Tests" and
   # "Go Tests (1.26)" are the required checks now.)
 
   go-lint:
@@ -507,7 +507,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
       - run: pip install pyyaml -c requirements/ci-constraints.txt
 
       # ADR-036 step 4 (#2906) moves the route generator onto `da-guard
@@ -618,7 +618,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
       - run: pip install pyyaml -c requirements/ci-constraints.txt
       # bump_docs counts the rule packs with validate_docs_versions' counter.
       - name: Set up Go (da-read / da-crdecode)
