@@ -259,6 +259,16 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 			t.Fatalf("exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
 		}
 	})
+	t.Run("fixing a tenant entry beside a profile with the same error in one file passes (#3016)", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"_profiles.yaml": "profiles:\n  p1:\n    _routng: x\ntenants:\n  t1:\n    _routng: x\n",
+			"a.yaml":         "tenants:\n  t1:\n    _profile: p1\n"})
+		in := `{"files":[{"path":"_profiles.yaml","ops":[{"op":"unset","path":["tenants","t1","_routng"]}]}]}`
+		if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitOK {
+			t.Fatalf("exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
+		}
+	})
 	t.Run("a profile's new error is refused though the tenant's file has the same one (#3016)", func(t *testing.T) {
 		t.Parallel()
 		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,

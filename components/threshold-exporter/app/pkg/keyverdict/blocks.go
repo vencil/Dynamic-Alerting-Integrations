@@ -33,22 +33,14 @@ type Block struct {
 	Own bool
 }
 
-// identity is what makes two Blocks of two verdicts the same one (#3016):
-//   - one about a tenant's own entry: the tenant and the key, wherever the
-//     entry is, so moving a tenant to another file is no new block;
-//   - one about a file the tenant inherits from: the tenant, the key and that
-//     file, so a profile's new misspelling is new though the tenant's own
-//     file has the same one;
-//   - one about no tenant: the file and the key.
-func (b Block) identity() string {
-	switch {
-	case b.Tenant == "":
-		return "f\x00" + b.File + "\x00" + b.Key
-	case b.Own:
-		return "o\x00" + b.Tenant + "\x00" + b.Key
-	}
-	return "i\x00" + b.Tenant + "\x00" + b.Key + "\x00" + b.File
-}
+// own is what makes two Blocks about a tenant's own entry the same one
+// (#3016): the tenant and the key, wherever the entry is, so moving a tenant
+// to another file is no new block.
+func (b Block) own() string { return b.Tenant + "\x00" + b.Key }
+
+// at is a Block's place: its file and its key — a finding's own unit, for
+// a finding on a file is one per file and key.
+func (b Block) at() string { return b.File + "\x00" + b.Key }
 
 // ownEntry reports whether file is where tenant's own entry writes key.
 func ownEntry(t Tree, tenant, key, file string) bool {
@@ -102,24 +94,35 @@ func Blocks(t Tree) []Block {
 // NewBlocks is the Blocks of after that a write adds (decision 6): those in
 // a file the write writes (written) that before did not have. One the tree
 // already had is not the write's: it can fix the tree, never make it worse.
-// Before had a Block when one of its Blocks has the same identity — or, for
-// one about no tenant, when before had any Block on that file and key: the
-// write unbound the last tenant of a profile whose key was already wrong.
+//
+// A Block about a tenant's own entry is old when before had one about that
+// tenant and key — in its own entry in any file (the tenant moved), or in
+// the same file whatever the entry (a finding merged from a profile and a
+// tenant entry in one root platform file reads as either). Any other Block
+// (a key a tenant inherits, or one naming no tenant) is old when before had
+// one at the same file and key — the unit of a finding on a file, whoever it
+// names, so unbinding a profile's last tenant is no new block.
 func NewBlocks(before, after Tree, written func(file string) bool) []Block {
-	had, hadFile := map[string]bool{}, map[string]bool{}
+	hadAt, hadOwn, hadTenantAt := map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, b := range Blocks(before) {
-		had[b.identity()] = true
-		hadFile[b.File+"\x00"+b.Key] = true
+		hadAt[b.at()] = true
+		hadTenantAt[b.Tenant+"\x00"+b.at()] = true
+		if b.Own {
+			hadOwn[b.own()] = true
+		}
 	}
 	var out []Block
 	for _, b := range Blocks(after) {
-		if b.File == "" || !written(b.File) || had[b.identity()] {
+		if b.File == "" || !written(b.File) {
 			continue
 		}
-		if b.Tenant == "" && hadFile[b.File+"\x00"+b.Key] {
-			continue
+		old := hadAt[b.at()]
+		if b.Own {
+			old = hadOwn[b.own()] || hadTenantAt[b.Tenant+"\x00"+b.at()]
 		}
-		out = append(out, b)
+		if !old {
+			out = append(out, b)
+		}
 	}
 	return out
 }

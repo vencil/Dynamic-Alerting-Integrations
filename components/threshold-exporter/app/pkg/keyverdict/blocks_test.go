@@ -114,6 +114,19 @@ func TestNewBlocks_WhatAWriteAdds(t *testing.T) {
 			tree([]Finding{finding(SeverityError, "k", "_profiles.yaml", "t1")}),
 			tree([]Finding{finding(SeverityError, "k", "_profiles.yaml")}), []string{"_profiles.yaml", "a.yaml"},
 			[]string{}},
+		// One root platform file holds a profile and the tenant's entry with
+		// the same key: one finding, read as the tenant's own entry or as
+		// the profile's as the tenant's effective source moves (#3016 review).
+		{"a merged finding read as the profile's after a fix of the entry",
+			tree([]Finding{finding(SeverityError, "k", "_p.yaml", "t1")}, "t1 k _p.yaml"),
+			tree([]Finding{finding(SeverityError, "k", "_p.yaml", "t1")}), []string{"_p.yaml"}, []string{}},
+		{"a merged finding read as the entry's after it was the profile's",
+			tree([]Finding{finding(SeverityError, "k", "_p.yaml", "t1")}),
+			tree([]Finding{finding(SeverityError, "k", "_p.yaml", "t1")}, "t1 k _p.yaml"), []string{"_p.yaml"}, []string{}},
+		// A tenant bound to a profile already wrong: the file had it.
+		{"binding a tenant to a profile already wrong", tree([]Finding{finding(SeverityError, "k", "_profiles.yaml")}),
+			tree([]Finding{finding(SeverityError, "k", "_profiles.yaml", "t1")}), []string{"_profiles.yaml", "a.yaml"},
+			[]string{}},
 		{"a warning is never a block", tree(nil),
 			tree([]Finding{finding(SeverityWarning, "k", "a.yaml", "t1")}, "t1 k a.yaml"), []string{"a.yaml"},
 			[]string{}},
