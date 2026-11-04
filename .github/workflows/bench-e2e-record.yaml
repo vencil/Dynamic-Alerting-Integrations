@@ -100,10 +100,10 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up Python 3.13
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version-file: .python-version
 
       # `make bench-e2e` builds .build/da-guard (go build): the synthetic
       # fixture generator confirms every file it writes through

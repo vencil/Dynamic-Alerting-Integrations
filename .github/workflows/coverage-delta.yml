@@ -2,7 +2,7 @@
 # diff between this PR and the latest main-branch run.
 #
 # Wired in Gap 5 PR 2 (testing-quality memory roadmap). Consumes the
-# `coverage-py3.13` artifact uploaded by the existing python-tests job
+# `coverage-python` artifact uploaded by the existing python-tests job
 # in ci.yml; runs scripts/tools/dx/coverage_delta.py against this run's
 # coverage.xml + the latest main-branch run's coverage.xml; posts/updates
 # a PR comment using the stable `<!-- coverage-delta-bot -->` marker so
@@ -64,13 +64,13 @@ jobs:
           ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 1
 
-      - name: Set up Python 3.13
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       - name: Download PR coverage artifact
-        # The triggering CI run uploaded `coverage-py3.13` as one of its
+        # The triggering CI run uploaded `coverage-python` as one of its
         # artifacts. Fetch it into ./pr-coverage/.
         # Run id bound via env (#1021 class house rule: zero raw
         # ${{ github.event.* }} inside run:).
@@ -81,7 +81,7 @@ jobs:
           mkdir -p pr-coverage
           gh run download "$RUN_ID" \
             --repo "${{ github.repository }}" \
-            --name coverage-py3.13 \
+            --name coverage-python \
             --dir pr-coverage \
             || echo "::warning::PR coverage artifact missing — skipping delta"
 
@@ -91,7 +91,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # List recent successful CI runs on main and pick the most
-          # recent one that has the coverage-py3.13 artifact attached.
+          # recent one that has the coverage-python artifact attached.
           # Fall back to "no-base" if nothing usable found in the last
           # 20 runs (workflow stays informational; no failure).
           echo "base_run_id=" >> "$GITHUB_OUTPUT"
@@ -107,7 +107,7 @@ jobs:
             sha=$(echo "$row" | base64 --decode | jq -r '.headSha')
             # Check whether this run has the coverage artifact.
             if gh api "repos/${{ github.repository }}/actions/runs/$id/artifacts" \
-                 --jq '.artifacts[].name' | grep -qx 'coverage-py3.13'; then
+                 --jq '.artifacts[].name' | grep -qx 'coverage-python'; then
               echo "base_run_id=$id" >> "$GITHUB_OUTPUT"
               echo "base_sha=$sha" >> "$GITHUB_OUTPUT"
               echo "Found base coverage run $id (sha=$sha)"
@@ -123,7 +123,7 @@ jobs:
           mkdir -p main-coverage
           gh run download "${{ steps.find-base.outputs.base_run_id }}" \
             --repo "${{ github.repository }}" \
-            --name coverage-py3.13 \
+            --name coverage-python \
             --dir main-coverage
 
       - name: Compute coverage delta

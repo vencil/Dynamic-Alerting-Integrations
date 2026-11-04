@@ -41,6 +41,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from _tree import repo_files
+
 _REPO = Path(__file__).resolve().parents[2]
 _WORKFLOWS = _REPO / ".github" / "workflows"
 _DEVCONTAINER = _REPO / ".devcontainer" / "devcontainer.json"
@@ -50,6 +52,7 @@ _IAC_HELM = _REPO / "scripts" / "tools" / "lint" / "check_iac_helm.py"
 _SESSION_START = _REPO / ".claude" / "hooks" / "session-start.sh"
 _PRECOMMIT = _REPO / ".pre-commit-config.yaml"
 _CONSTRAINTS = _REPO / "requirements" / "ci-constraints.txt"
+_PYTHON_VERSION_FILE = _REPO / ".python-version"
 
 _RUNNER = "ubuntu-24.04"
 
@@ -167,39 +170,104 @@ def test_node_version_is_one_value_and_matches_the_dev_container() -> None:
 
 
 # ── Python ──────────────────────────────────────────────────────────────────
+#
+# ⛔ ONE source: `.python-version` (exact patch). Every consumer either READS it
+# (setup-python's `python-version-file`) or must spell the same value where the
+# consumer needs a literal (devcontainer feature, `FROM python:<tag>` /
+# `image: python:<tag>` — Renovate's docker manager only bumps literals, and its
+# pyenv manager bumps `.python-version` from the same docker datasource, so
+# renovate.json groups them into one PR).
+#
+# Why exact patch and not "3.13": a minor-only pin let setup-python pick the
+# runner's newest patch, so one CI run had shards on 3.13.17 and 3.13.18 while
+# the images shipped 3.13.15 — three Pythons, each judged by a different gate.
 
 
-def _python_versions(job: dict, raw: object) -> list[str]:
-    """Resolve a setup-python `python-version` to literal versions.
-
-    `${{ matrix.python }}` is expanded from the job's own matrix list; any other
-    expression is returned verbatim so it FAILS the comparison (unresolvable is
-    reported, never skipped).
-    """
-    s = str(raw)
-    m = re.fullmatch(r"\$\{\{\s*matrix\.([A-Za-z0-9_-]+)\s*\}\}", s)
-    if not m:
-        return [s]
-    vals = ((job.get("strategy") or {}).get("matrix") or {}).get(m.group(1))
-    if not isinstance(vals, list) or not vals:
-        return [f"<unresolvable {s}>"]
-    return [str(v) for v in vals]
+def _python_version() -> str:
+    raw = _PYTHON_VERSION_FILE.read_text(encoding="utf-8")
+    v = raw.strip()
+    assert raw == v + "\n" and re.fullmatch(r"3\.\d+\.\d+", v), (
+        f".python-version must be exactly one line `3.X.Y`, got {raw!r}")
+    return v
 
 
-def test_python_version_matches_the_dev_container() -> None:
-    """One Python across CI and the container. A deliberate floor/matrix test
-    would be a new, commented matrix entry — and a conscious edit here."""
-    dc = str(_feature("python")["version"])
-    assert re.fullmatch(r"3\.\d+", dc), f"devcontainer python version {dc!r} is not a pinned 3.x"
+def test_every_setup_python_reads_the_version_file() -> None:
+    """A literal `python-version:` is a second copy of the version. setup-python
+    lets `python-version` win over `python-version-file`, so both together is
+    still a second copy."""
+    _python_version()
     bad = []
-    for f, j, job, step in _action_steps("actions/setup-python"):
-        raw = (step.get("with") or {}).get("python-version")
-        if raw is None:
-            bad.append(f"{f}:{j} setup-python without python-version")
-            continue
-        bad += [f"{f}:{j} python-version={v!r}" for v in _python_versions(job, raw) if v != dc]
+    for f, j, _job, step in _action_steps("actions/setup-python"):
+        w = step.get("with") or {}
+        if "python-version" in w:
+            bad.append(f"{f}:{j} has python-version={w['python-version']!r}")
+        if w.get("python-version-file") != ".python-version":
+            bad.append(f"{f}:{j} python-version-file={w.get('python-version-file')!r}")
     assert not bad, (
-        f"python-version must be the dev container's {dc}:\n  " + "\n  ".join(bad))
+        "every actions/setup-python must read `python-version-file: .python-version` "
+        "and carry no `python-version`:\n  " + "\n  ".join(bad))
+
+
+def test_the_dev_container_python_is_the_version_file() -> None:
+    """A bare minor here is resolved to the newest patch at container build
+    time — a different interpreter than CI's as soon as upstream ships one."""
+    dc = str(_feature("python")["version"])
+    want = _python_version()
+    assert dc == want, f"devcontainer python {dc!r} != .python-version {want!r}"
+
+
+_PY_IMAGE_RE = re.compile(
+    r"^\s*(?:FROM\s+(?:--platform=\S+\s+)?|-?\s*image:\s*[\"']?)"
+    r"(?:docker\.io/)?(?:library/)?python:([^\s\"'@]+)", re.MULTILINE)
+
+
+def test_every_python_image_is_the_version_file() -> None:
+    """`FROM python:<tag>` in every Dockerfile and `image: python:<tag>` in every
+    YAML (compose stubs and doc examples included — each is a copy someone runs)
+    must carry the .python-version patch as its version part."""
+    want = _python_version()
+    sites, bad = [], []
+    for path in repo_files("Dockerfile", ".yaml", ".yml"):
+        for tag in _PY_IMAGE_RE.findall(path.read_text(encoding="utf-8")):
+            rel = path.relative_to(_REPO).as_posix()
+            sites.append(rel)
+            if tag != want and not tag.startswith(want + "-"):
+                bad.append(f"{rel}: python:{tag}")
+    assert sites, "no python image found anywhere — the walker lost its sites"
+    assert not bad, (
+        f"python image tags must start with .python-version {want!r}:\n  " + "\n  ".join(bad))
+
+
+_PIP_PIN_RE = re.compile(r"([A-Za-z0-9][A-Za-z0-9._-]*)==([^\s\\&;]+)")
+
+
+def _constraints() -> dict[str, str]:
+    out = {}
+    for line in _CONSTRAINTS.read_text(encoding="utf-8").splitlines():
+        m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]*)==(\S+)", line.strip())
+        if m:
+            out[re.sub(r"[-_.]+", "-", m.group(1)).lower()] = m.group(2)
+    assert out, "requirements/ci-constraints.txt yielded no pins"
+    return out
+
+
+def test_image_pip_pins_are_the_ci_constraints() -> None:
+    """An image's Python deps are either installed with `-c` against the CI
+    constraints file (preferred: nothing to keep in step) or, where the build
+    context cannot see `requirements/`, pinned to the SAME version. The literal
+    form drifted before: promql-parser 0.7.0 in da-tools while CI tested 0.10.0,
+    because nothing bumps a `RUN pip install` line."""
+    want = _constraints()
+    seen, bad = 0, []
+    for path in repo_files("Dockerfile"):
+        rel = path.relative_to(_REPO).as_posix()
+        for name, ver in _PIP_PIN_RE.findall(path.read_text(encoding="utf-8")):
+            key = re.sub(r"[-_.]+", "-", name).lower()
+            seen += 1
+            if want.get(key) != ver:
+                bad.append(f"{rel}: {name}=={ver} (ci-constraints: {want.get(key)!r})")
+    assert seen, "no literal pip pin left in any Dockerfile — drop this test's floor deliberately"
+    assert not bad, "Dockerfile pip pins must equal requirements/ci-constraints.txt:\n  " + "\n  ".join(bad)
 
 
 # ── Trivy ───────────────────────────────────────────────────────────────────

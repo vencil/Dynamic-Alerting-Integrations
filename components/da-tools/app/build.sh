@@ -352,6 +352,13 @@ done
 
 echo "  Copied ${#REPO_DATA_FILES[@]} data file(s) from the repo tree"
 
+# ── Python dependency pins: the CI constraints file, not a second list ──
+# The Dockerfile installs its runtime deps with `-c ci-constraints.txt`, so
+# the image ships exactly the versions CI tests. A literal `pkg==ver` in the
+# Dockerfile drifted silently before (promql-parser 0.7.0 in the image while
+# CI tested 0.10.0): nothing reads a `RUN pip install` line to bump it.
+cp "$PROJECT_ROOT/requirements/ci-constraints.txt" "$SCRIPT_DIR/ci-constraints.txt"
+
 # ── Parent-dir sys.path inserts are shipped as-is (#2313) ────────────
 # Tools insert both their own dir and their parent dir on sys.path; the
 # parent entry is what the repo's subdir layout needs. Copies are NOT
@@ -432,7 +439,7 @@ docker build -t "$IMAGE_NAME" "$SCRIPT_DIR"
 # ── Cleanup temporary copies ────────────────────────────────────────
 rm -rf "$SCRIPT_DIR/tools"
 rm -f "$SCRIPT_DIR"/da-guard.* "$SCRIPT_DIR"/da-batchpr.* "$SCRIPT_DIR"/da-parser.* \
-    "$SCRIPT_DIR"/da-crdecode.* "$SCRIPT_DIR"/da-read.*
+    "$SCRIPT_DIR"/da-crdecode.* "$SCRIPT_DIR"/da-read.* "$SCRIPT_DIR"/ci-constraints.txt
 
 echo "✓ Built: $IMAGE_NAME"
 echo ""

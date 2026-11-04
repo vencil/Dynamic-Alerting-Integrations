@@ -21,7 +21,7 @@ Same reason as tests/ops/test_nightly_scan_matrix_drift.py: this workflow is
 only thing that can catch a regression before it ships a month of silence is an
 offline test in a job that actually runs. `tests/ops/*.sh` would not do — pytest
 does not collect shell scripts. This file is collected by the existing
-"Python Tests (3.13)" required check, whose path filter includes
+"Python Tests" required check, whose path filter includes
 `.github/workflows/**` (see ci.yml's `python:` filter), so editing the workflow
 runs this guard. ⚠️ Anchored by NAME, not by line number: the two citations in
 this docstring were both stale before anyone noticed, because a line number is
