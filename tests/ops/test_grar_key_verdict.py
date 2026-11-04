@@ -137,6 +137,28 @@ def test_a_threshold_key_no_root_platform_file_lets_the_verdict_judge_fails(tmp_
     assert "1 threshold key(s) cannot be judged (undecidable)" in recs[0]["message"]
 
 
+def test_an_undecidable_key_beside_an_error_is_marked_as_blocking_too(tmp_path):
+    """#3016 review: with an error also there, the undecidable line still
+    says it blocks — fixing the error alone leaves rc 1 (Go's
+    `undecidable_blocks`, not inferred from the findings)."""
+    files = {"t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"70\"\n    _routng: x\n"}
+    res, doc = _cli(tmp_path, files, "--validate")
+    assert res.returncode == 1, res.stderr
+    got = {(r["kind"], r["severity"], r["blocks"]) for r in _key_records(doc)}
+    assert ("key_undecidable", "error", "validate") in got, doc
+    assert ("key_unread", "error", "validate") in got, doc
+
+
+def test_a_key_name_with_a_control_character_is_never_printed_raw(tmp_path):
+    """#3016 review: the FAIL list repeats the blocking key verdict lines —
+    a tenant's key name in them goes through safe_label there too."""
+    files = dict(THRESHOLDS_ONLY, **{"t-a.yaml": "tenants:\n  t-a:\n    \"mysql_conn\\e[2Jx\": \"1\"\n"})
+    res, _ = _cli(tmp_path, files, "--validate")
+    assert res.returncode == 1, res.stderr
+    assert "FAIL:" in res.stderr and "mysql_conn?[2Jx" in res.stderr.split("FAIL:")[1], res.stderr
+    assert "\x1b" not in res.stderr
+
+
 def test_a_tree_with_only_routing_and_no_root_platform_file_passes(tmp_path):
     """ADR-038 decision 7: a tree with only routing settings has no
     threshold key the verdict could not judge — rc 0, the line a note."""

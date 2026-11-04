@@ -97,6 +97,9 @@ class TreeVerdict(NamedTuple):
     # some key is undecidable (Go's keyverdict.Blocks, #3016). The one
     # answer validate-config and the route generator's `--validate` read.
     blocks: bool = False
+    # Some key is undecidable, and so blocks (Go's Tree.UndecidableBlocks):
+    # what the line of undecidable keys says, read, never inferred.
+    undecidable_blocks: bool = False
 
 
 # key_check_lines' kinds: a `version` label the exporter refuses (it reads
@@ -241,6 +244,7 @@ def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
     if not isinstance(doc["undecidable"], bool):
         raise TypeError(f"undecidable: {doc['undecidable']!r}")
     blocks = _bool(doc["blocks"], "blocks")
+    undecidable_blocks = _bool(doc["undecidable_blocks"], "undecidable_blocks")
     keys = {_str(t, "tenants"): [_key_verdict(t, r) for r in _rows(rows, f"tenants.{t}")]
             for t, rows in _mapping(doc["tenants"], "tenants").items()}
     findings = [_finding(f) for f in _rows(doc["findings"], "findings")]
@@ -248,7 +252,7 @@ def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
                   _tuple(_mapping(c, f"key_checks.{t}")["version_labels"], f"key_checks.{t}.version_labels"),
                   _tuple(c["renames"], f"key_checks.{t}.renames"))
               for t, c in _mapping(doc["key_checks"], "key_checks").items()}
-    return TreeVerdict(keys, findings, doc["undecidable"], checks, blocks)
+    return TreeVerdict(keys, findings, doc["undecidable"], checks, blocks, undecidable_blocks)
 
 
 def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary: str | None = None,

@@ -220,6 +220,9 @@ type Tree struct {
 	// Blocks: some finding blocks, or some key is undecidable — a gate that
 	// judges the whole tree refuses it (len(Blocks(tree)) > 0).
 	Blocks bool
+	// UndecidableBlocks: some key is undecidable, and so blocks (Blocks
+	// with Kind Undecidable) — what a report of the undecidable keys says.
+	UndecidableBlocks bool
 }
 
 // registryLayers maps KeySource.Layer to the registry's layer. The root
@@ -293,7 +296,11 @@ func Judge(in Input) Tree {
 		findings[i].Blocks = Blocking(findings[i].Severity)
 	}
 	t := Tree{Keys: keys, Findings: findings, Undecidable: in.Undecidable}
-	t.Blocks = len(Blocks(t)) > 0
+	bs := Blocks(t)
+	t.Blocks = len(bs) > 0
+	for _, b := range bs {
+		t.UndecidableBlocks = t.UndecidableBlocks || b.Kind == Undecidable
+	}
 	return t
 }
 

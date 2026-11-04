@@ -6,6 +6,7 @@ package keyverdict
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -39,6 +40,18 @@ func TestBlocks_AnUndecidableKeyBlocks(t *testing.T) {
 	}
 }
 
+// tree is a verdict of findings, with the tenants' own entries: "t1 k a.yaml"
+// says t1's own entry writes k in a.yaml.
+func tree(findings []Finding, own ...string) Tree {
+	t := Tree{Findings: findings, Keys: map[string][]KeyVerdict{}}
+	for _, o := range own {
+		parts := strings.Fields(o)
+		file, layer := parts[2], "tenant"
+		t.Keys[parts[0]] = append(t.Keys[parts[0]], KeyVerdict{Tenant: parts[0], Key: parts[1], File: &file, Layer: &layer})
+	}
+	return t
+}
+
 func TestNewBlocks_WhatAWriteAdds(t *testing.T) {
 	t.Parallel()
 	written := func(files ...string) func(string) bool {
@@ -60,32 +73,53 @@ func TestNewBlocks_WhatAWriteAdds(t *testing.T) {
 	}
 	cases := []struct {
 		name          string
-		before, after []Finding
+		before, after Tree
 		written       []string
 		want          []string
 	}{
-		{"a new error in a written file", nil,
-			[]Finding{finding(SeverityError, "k", "a.yaml", "t1")}, []string{"a.yaml"}, []string{"t1 k a.yaml"}},
-		{"one in a file the write does not write", nil,
-			[]Finding{finding(SeverityError, "k", "a.yaml", "t1")}, []string{"b.yaml"}, []string{}},
-		{"one the tree had", []Finding{finding(SeverityError, "k", "a.yaml", "t1")},
-			[]Finding{finding(SeverityError, "k", "a.yaml", "t1")}, []string{"a.yaml"}, []string{}},
+		{"a new error in a written file", tree(nil),
+			tree([]Finding{finding(SeverityError, "k", "a.yaml", "t1")}, "t1 k a.yaml"), []string{"a.yaml"},
+			[]string{"t1 k a.yaml"}},
+		{"one in a file the write does not write", tree(nil),
+			tree([]Finding{finding(SeverityError, "k", "a.yaml", "t1")}, "t1 k a.yaml"), []string{"b.yaml"},
+			[]string{}},
+		{"one the tree had", tree([]Finding{finding(SeverityError, "k", "a.yaml", "t1")}, "t1 k a.yaml"),
+			tree([]Finding{finding(SeverityError, "k", "a.yaml", "t1")}, "t1 k a.yaml"), []string{"a.yaml"},
+			[]string{}},
 		// A second tenant writing the same misspelt key into the same file is new.
-		{"the same key for another tenant of the file", []Finding{finding(SeverityError, "k", "a.yaml", "t1")},
-			[]Finding{finding(SeverityError, "k", "a.yaml", "t1", "t2")}, []string{"a.yaml"}, []string{"t2 k a.yaml"}},
+		{"the same key for another tenant of the file",
+			tree([]Finding{finding(SeverityError, "k", "a.yaml", "t1")}, "t1 k a.yaml"),
+			tree([]Finding{finding(SeverityError, "k", "a.yaml", "t1", "t2")}, "t1 k a.yaml", "t2 k a.yaml"),
+			[]string{"a.yaml"}, []string{"t2 k a.yaml"}},
 		// A tenant moved from a root platform file's tenants: into its own file.
-		{"a tenant moved to another file keeps its baseline", []Finding{finding(SeverityError, "k", "_platform.yaml", "t1")},
-			[]Finding{finding(SeverityError, "k", "t1.yaml", "t1")}, []string{"t1.yaml"}, []string{}},
+		{"a tenant moved to another file keeps its baseline",
+			tree([]Finding{finding(SeverityError, "k", "_platform.yaml", "t1")}, "t1 k _platform.yaml"),
+			tree([]Finding{finding(SeverityError, "k", "t1.yaml", "t1")}, "t1 k t1.yaml"), []string{"t1.yaml"},
+			[]string{}},
+		// A profile the tenant binds writes the misspelling its own file
+		// already had: the profile's is new (the tenant's own is no excuse).
+		{"a profile's new error beside the tenant's own",
+			tree([]Finding{finding(SeverityError, "k", "a.yaml", "t1")}, "t1 k a.yaml"),
+			tree([]Finding{finding(SeverityError, "k", "_profiles.yaml", "t1"), finding(SeverityError, "k", "a.yaml", "t1")},
+				"t1 k a.yaml"),
+			[]string{"_profiles.yaml"}, []string{"t1 k _profiles.yaml"}},
 		// A profile no tenant binds: the file and the key.
-		{"an unbound profile's key the file had", []Finding{finding(SeverityError, "k", "_profiles.yaml")},
-			[]Finding{finding(SeverityError, "k", "_profiles.yaml")}, []string{"_profiles.yaml"}, []string{}},
-		{"an unbound profile's new key", nil,
-			[]Finding{finding(SeverityError, "k", "_profiles.yaml")}, []string{"_profiles.yaml"}, []string{" k _profiles.yaml"}},
-		{"a warning is never a block", nil,
-			[]Finding{finding(SeverityWarning, "k", "a.yaml", "t1")}, []string{"a.yaml"}, []string{}},
+		{"an unbound profile's key the file had", tree([]Finding{finding(SeverityError, "k", "_profiles.yaml")}),
+			tree([]Finding{finding(SeverityError, "k", "_profiles.yaml")}), []string{"_profiles.yaml"}, []string{}},
+		{"an unbound profile's new key", tree(nil),
+			tree([]Finding{finding(SeverityError, "k", "_profiles.yaml")}), []string{"_profiles.yaml"},
+			[]string{" k _profiles.yaml"}},
+		// The write unbinds the profile's last tenant: its error was there.
+		{"unbinding the last tenant of a profile with an error",
+			tree([]Finding{finding(SeverityError, "k", "_profiles.yaml", "t1")}),
+			tree([]Finding{finding(SeverityError, "k", "_profiles.yaml")}), []string{"_profiles.yaml", "a.yaml"},
+			[]string{}},
+		{"a warning is never a block", tree(nil),
+			tree([]Finding{finding(SeverityWarning, "k", "a.yaml", "t1")}, "t1 k a.yaml"), []string{"a.yaml"},
+			[]string{}},
 	}
 	for _, tc := range cases {
-		got := keys(NewBlocks(Tree{Findings: tc.before}, Tree{Findings: tc.after}, written(tc.written...)))
+		got := keys(NewBlocks(tc.before, tc.after, written(tc.written...)))
 		if !reflect.DeepEqual(got, tc.want) {
 			t.Errorf("%s: %q, want %q", tc.name, got, tc.want)
 		}

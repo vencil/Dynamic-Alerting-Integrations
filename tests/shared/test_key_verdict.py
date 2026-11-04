@@ -422,7 +422,8 @@ _FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml",
 
 def _doc(**over):
     doc = {"undecidable": False, "tenants": {"t": [dict(_ROW)]}, "findings": [dict(_FINDING)],
-           "key_checks": {"t": {"version_labels": [], "renames": []}}, "blocks": True}
+           "key_checks": {"t": {"version_labels": [], "renames": []}}, "blocks": True,
+           "undecidable_blocks": False}
     doc.update(over)
     return doc
 
@@ -442,6 +443,7 @@ def _doc(**over):
     _doc(findings=[dict(_FINDING, kind="typo")]),
     _doc(undecidable="no"),
     _doc(blocks="yes"),
+    _doc(undecidable_blocks=None),
     _doc(findings=[dict(_FINDING, blocks=None)]),
 ], ids=lambda d: next(iter(k for k in d if d[k] != _doc()[k]), "?"))
 def test_a_document_this_reader_cannot_read_is_refused_not_read_as_another_answer(doc):

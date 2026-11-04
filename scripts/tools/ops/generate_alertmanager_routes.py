@@ -284,7 +284,9 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
                   f"({probe_set_degraded_reason()})")
     # #3016: the shared key verdict's blocking lines (`_report_key_verdict`,
     # already printed and recorded) fail the run with the generator's own.
-    errors = list(verdict.errors) + list(key_blocks or [])
+    # A key verdict line carries a tenant's key name: printed as the first
+    # print did (safe_label), never raw (#3016 review).
+    errors = list(verdict.errors) + [safe_label(line) for line in key_blocks or []]
     if errors:
         print(f"FAIL: {len(errors)} error(s) found:", file=sys.stderr)
         for e in errors:
@@ -1330,9 +1332,7 @@ def _report_key_verdict(config_dir: str, findings: list[str]) -> list[str]:
             file=f.file, field=f.key))
     undecidable = _lib_key_verdict.undecidable_line(verdict)
     if undecidable is not None:
-        # Blocks exactly when some key is undecidable: the findings' own
-        # `blocks` all said no, so the verdict's is that key's.
-        stops = verdict.blocks and not any(f.blocks for f in verdict.findings)
+        stops = verdict.undecidable_blocks
         lines.append(Finding(f"  {'ERROR' if stops else 'NOTICE'}: key verdict: {undecidable}",
                              kind="key_undecidable",
                              blocks="validate" if stops else "never"))
