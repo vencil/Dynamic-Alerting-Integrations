@@ -630,13 +630,21 @@ nodeSelector: {}
 affinity: {}
 
 # Vector exposes a Prometheus exporter on this port (internal_metrics
-# source + prometheus_exporter sink). Disabled by default in Phase 1;
-# enable once the cluster has Prometheus scraping in place to track
-# shipper health (events_in / events_out / dropped). Enabling renders a
-# headless Service (templates/service.yaml) so Prometheus can scrape by
-# service name rather than pod-IP annotations.
+# source + prometheus_exporter sink) to track shipper health (events_in /
+# events_out / dropped). Enabled renders a headless Service
+# (templates/service.yaml) so Prometheus can scrape by service name rather
+# than pod-IP annotations.
+#
+# ⛔ ON by default (#1595; was off in Phase 1). The platform pack's Vector
+# alerts — VectorBufferEventsDropped, TenantProjectionMappingErrors,
+# TenantProjectionFanoutDiscardSpike — read ONLY these internal_metrics. With
+# this off their `vector_*` series do not exist at all, so they can never
+# fire and look exactly like "nothing is being dropped". Turning it off is a
+# deliberate opt-out of that alerting, not a neutral default; Prometheus also
+# needs egress to this port (k8s/03-monitoring/network-policies.yaml
+# `allow-prometheus-egress` admits 9598, #1291).
 metrics:
-  enabled: false
+  enabled: true
   port: 9598
 
 # ServiceMonitor for a Prometheus Operator install (kube-prometheus-stack),

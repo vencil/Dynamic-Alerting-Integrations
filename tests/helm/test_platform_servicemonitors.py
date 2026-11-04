@@ -202,12 +202,18 @@ def test_servicemonitors_are_off_by_default(chart: str) -> None:
 
 @_needs_helm
 @pytest.mark.parametrize("chart,args,ports", [
-    ("helm/vector", ["--set", "serviceMonitor.enabled=true"], None),
+    ("helm/vector", ["--set", "serviceMonitor.enabled=true", "--set", "metrics.enabled=false"],
+     None),
     ("helm/vector", ["--set", "serviceMonitor.enabled=true", "--set", "metrics.enabled=true"],
      ["metrics"]),
+    # #1595: metrics.enabled defaults to TRUE, so turning on the ServiceMonitor
+    # alone scrapes Vector's self-telemetry. Pins the default: with it back at
+    # false this renders no ServiceMonitor at all and the case goes red.
+    ("helm/vector", ["--set", "serviceMonitor.enabled=true"], ["metrics"]),
     ("helm/federation-gateway",
      ["--set", "serviceMonitor.enabled=true", "--set", "auditLog.enabled=false"], None),
-], ids=["vector-no-service", "vector-metrics-only", "gateway-no-audit"])
+], ids=["vector-no-service", "vector-metrics-only", "vector-metrics-by-default",
+        "gateway-no-audit"])
 def test_an_endpoint_renders_only_with_its_service(chart, args, ports) -> None:
     monitors = [d for d in _render(chart, args) if d.get("kind") == "ServiceMonitor"]
     if ports is None:

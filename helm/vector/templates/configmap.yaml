@@ -19,7 +19,8 @@ data:
   #            │                   │ stream-field promotion: app / k8s_namespace
   #            │                   │
   #            │                   ├─▶ victorialogs(sink, elasticsearch _bulk)
-  #            │                   └─▶ tenant_project ─▶ tenant_route ─▶ vl_tenant_<id>
+  #            │                   └─▶ tenant_eligible(filter: log_type == federation_audit)
+  #            │                          └─▶ tenant_project ─▶ tenant_route ─▶ vl_tenant_<id>
   #            │
   #            └─▶ .evidence ─▶ federation_evidence(transform, VRL)
   #                                │ parse_json(.message) + deep merge  ⛔ load-bearing
@@ -378,7 +379,8 @@ data:
           # run under the real `vector test`. Comparing the RAW value
           # against a workload-NAME prefix can never match, so every REAL
           # gateway audit row was reclassified to suspicious_audit and, via
-          # tenant_project's `!= "federation_audit"` abort below, silently
+          # tenant_project's `!= "federation_audit"` abort below (today the
+          # tenant_eligible filter drops it first, same outcome), silently
           # dropped out of every tenant partition (#1293). Strip the Kind half
           # before the compare.
           #
@@ -646,10 +648,24 @@ data:
       # the platform's operational logs ABOUT ITSELF without seeing infra
       # topology or another tenant's rows.
       #
-      # Two-stage by design:
-      #   tenant_project  (remap)  — eligibility gate + tenant_id→AccountID
+      # Three-stage by design:
+      #   tenant_eligible (filter) — log_type == "federation_audit" only
+      #   tenant_project  (remap)  — tenant_id gate + tenant_id→AccountID
       #                              enrichment + ALLOWLIST sanitization
       #   tenant_route    (route)  — static per-AccountID fan to N sinks
+      #
+      # Why the log_type check is a SEPARATE filter (#1595): by design most
+      # demux rows are not federation_audit, and when tenant_project aborted
+      # them itself its `vector_component_discarded_events_total` tracked
+      # gateway traffic volume — no threshold on it could tell "nothing is
+      # wrong" from "rows are being lost". Dropping them here first leaves
+      # tenant_project's counter with exactly two meanings, split by Vector's
+      # own `intentional` label: "true" = an audit row whose tenant_id is
+      # blank/unknown (abort), "false" = a VRL runtime error (drop_on_error,
+      # always a bug). The rule pack alerts on each separately
+      # (TenantProjectionMappingErrors / TenantProjectionFanoutDiscardSpike).
+      # The filter's own drops count under component_id="tenant_eligible"
+      # and are volume, not a signal — nothing alerts on them.
       #
       # FAIL-CLOSED is structural, not a runtime branch we hope fires:
       #   - Only `federation_audit` rows with a NON-EMPTY, KNOWN tenant_id
@@ -663,10 +679,20 @@ data:
       #     consumes — so it is DISCARDED from the tenant plane (it still
       #     reached 0:0 via `demux`). There is no default/catch-all tenant
       #     sink, so a mis-stamp cannot leak into another tenant.
+      tenant_eligible:
+        type: filter
+        inputs:
+          - demux
+        # Exact match on the log_type demux assigned. demux overwrites any
+        # payload-supplied log_type (see the demux VRL), so a producer cannot
+        # opt a non-audit row into the tenant branch by naming it here.
+        condition: '.log_type == "federation_audit"'
       tenant_project:
         type: remap
         inputs:
-          - demux
+          # NOT demux: the projection must only ever see rows tenant_eligible
+          # passed. test_vector_projection_vrl.py pins this input list.
+          - tenant_eligible
         # Fail-closed error handling (§Fork B / Gemini 1c): a row that aborts
         # (eligibility/enrichment miss) OR hits a runtime VRL error is DROPPED
         # from this branch — NOT sent onward, NOT rerouted to a tenant sink.
@@ -677,6 +703,8 @@ data:
         #     hinges on it, so it's pinned.)
         #   - drop_on_error: a parse/coercion error must ALSO drop, never
         #     default-allow a half-processed row into a partition.
+        #     Vector counts these drops with intentional="false" (aborts are
+        #     intentional="true"); TenantProjectionMappingErrors alerts on any.
         #   - reroute_dropped:false: dropped events vanish from this branch
         #     entirely (no `.dropped` output wired to any tenant sink).
         # The 0:0 full copy is unaffected — it is fed from `demux`, upstream
@@ -690,6 +718,15 @@ data:
           # gateway_operational / suspicious_audit / prometheus_query_log /
           # JWT-fail rows are platform-only — abort so drop_on_abort removes
           # them from THIS branch (they remain in 0:0 via demux).
+          #
+          # ⛔ Unreachable by design since #1595: tenant_eligible (the only
+          # input) already drops every non-audit row, so this abort should
+          # never fire and contributes nothing to the discard counter. It is
+          # KEPT, not deleted, because this transform IS the tenant isolation
+          # boundary and must fail closed on its own: if the filter is ever
+          # rewired, loosened, or bypassed by a new input, a platform-only
+          # row must still be dropped here rather than projected into a
+          # tenant partition. Do not remove it to "simplify".
           if .log_type != "federation_audit" {
             abort
           }

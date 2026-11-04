@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -165,6 +166,7 @@ class TestProjectionDisabledByDefault:
         A regression here would silently start (or fail to render) the
         projection for every existing single-tenant install."""
         cfg = _vector_yaml(_render(repo_root / "helm/vector"))
+        assert "tenant_eligible" not in cfg["transforms"]
         assert "tenant_project" not in cfg["transforms"]
         assert "tenant_route" not in cfg["transforms"]
         assert not any(k.startswith("vl_tenant_") for k in cfg["sinks"])
@@ -180,6 +182,26 @@ class TestProjectionDisabledByDefault:
         # template writes demux first, and a reorder would mean someone
         # restructured the sink block without reading this.
         assert cfg["sinks"]["victorialogs"]["inputs"] == ["demux", "federation_evidence"]
+
+    @_needs_helm
+    def test_self_telemetry_is_on_by_default(self, repo_root: Path) -> None:
+        """#1595: `metrics.enabled` defaults to TRUE. The platform pack's Vector
+        alerts (VectorBufferEventsDropped, TenantProjectionMappingErrors,
+        TenantProjectionFanoutDiscardSpike) read ONLY Vector's internal_metrics;
+        with the exporter off their series never exist and they can never fire.
+        Flipping the default back to false must go red here."""
+        docs = _render(repo_root / "helm/vector")
+        cfg = _vector_yaml(docs)
+        assert cfg["sources"].get("internal_metrics", {}).get("type") == "internal_metrics"
+        prom = cfg["sinks"].get("prometheus") or {}
+        assert prom.get("type") == "prometheus_exporter", sorted(cfg["sinks"])
+        assert prom.get("inputs") == ["internal_metrics"]
+        assert prom.get("address") == "0.0.0.0:9598"
+        ds = next(d for d in docs if d.get("kind") == "DaemonSet")
+        vec = next(c for c in ds["spec"]["template"]["spec"]["containers"] if c["name"] == "vector")
+        assert {"name": "metrics", "containerPort": 9598, "protocol": "TCP"} in (vec.get("ports") or [])
+        svc = [d["metadata"]["name"] for d in docs if d.get("kind") == "Service"]
+        assert "vector-metrics" in svc, svc
 
     @_needs_helm
     def test_log_event_id_injected_even_when_projection_disabled(self, repo_root: Path) -> None:
@@ -207,12 +229,37 @@ class TestProjectionEnabledShape:
         cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
         tp = cfg["transforms"]["tenant_project"]
         assert tp["type"] == "remap"
-        assert tp["inputs"] == ["demux"], "projection forks off demux, not the source"
+        assert tp["inputs"] == ["tenant_eligible"], (
+            "tenant_project must read ONLY the tenant_eligible filter (#1595) — "
+            "fed from demux directly, every non-audit row is aborted HERE and "
+            "tenant_project's discard counter tracks traffic volume again, which "
+            "is what made TenantProjectionFanoutDiscardSpike unthresholdable")
         # abort is governed by drop_on_abort (NOT drop_on_error); the
         # fail-closed eligibility aborts hinge on it, so it's pinned explicitly.
         assert tp["drop_on_abort"] is True, "abort must drop the event (PRIMARY fail-closed path)"
         assert tp["drop_on_error"] is True, "VRL runtime error must also drop (fail-closed)"
         assert tp["reroute_dropped"] is False, "dropped events must NOT be rerouted onward"
+
+    @_needs_helm
+    def test_eligibility_filter_admits_only_federation_audit(self, repo_root: Path) -> None:
+        """#1595: a `filter` between demux and tenant_project drops every
+        non-federation_audit row BEFORE the projection remap, so the remap's
+        `vector_component_discarded_events_total` carries only audit rows it
+        could not project (intentional="true") and VRL runtime errors
+        (intentional="false") — the two signals the rule pack alerts on.
+        The behavioural proof (a non-audit row never reaches tenant_project, an
+        audit row does) is in projection_tests.yaml; this pins the wiring."""
+        cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
+        te = cfg["transforms"]["tenant_eligible"]
+        assert te["type"] == "filter"
+        assert te["inputs"] == ["demux"]
+        assert te["condition"] == '.log_type == "federation_audit"', te["condition"]
+        # Defense in depth: the remap keeps its own non-audit abort even though
+        # the filter makes it unreachable — it is the isolation boundary and
+        # must fail closed on its own if the filter is ever rewired.
+        vrl = cfg["transforms"]["tenant_project"]["source"]
+        assert re.search(r'if \.log_type != "federation_audit" \{\s*abort\s*\}', vrl), (
+            "tenant_project must keep its own non-audit abort (defense in depth)")
 
     @_needs_helm
     def test_route_has_one_exact_match_route_per_tenant(self, repo_root: Path) -> None:
@@ -358,7 +405,13 @@ class TestFederationEvidenceChannel:
         selector the whole ADR-028 detection plane is DOA again — silently."""
         cfg = _vector_yaml(_render(repo_root / "helm/vector"))
         sources = cfg["sources"]
-        assert list(sources) == ["kubernetes_logs"], "still exactly one primary source"
+        # Exactly one LOG source. `internal_metrics` (Vector self-telemetry,
+        # rendered by default since #1595) is not a log source and does not
+        # share the kubernetes_logs checkpoint concern, so it is excluded by
+        # type — any second kubernetes_logs source still goes red here.
+        log_sources = [n for n, src in sources.items() if src.get("type") == "kubernetes_logs"]
+        assert log_sources == ["kubernetes_logs"], "still exactly one primary source"
+        assert set(sources) <= {"kubernetes_logs", "internal_metrics"}, sorted(sources)
         sel = sources["kubernetes_logs"]["extra_label_selector"]
         assert "federation-gateway" in sel, "gateway must stay in scope (#539)"
         assert "tenant-api" in sel, "evidence producer must be in scope (ADR-028 / #1234)"
@@ -569,9 +622,11 @@ class TestFederationEvidenceChannel:
         behavioural proof is the `no_outputs_from` in projection_tests.yaml):
         no tenant-facing transform or sink may consume the evidence stream."""
         cfg = _vector_yaml(_render(repo_root / "helm/vector", sets=_PROJECTION_SETS))
-        assert cfg["transforms"]["tenant_project"]["inputs"] == ["demux"], (
-            "tenant_project must fork off demux ONLY — the evidence stream is "
-            "platform-only (0:0) and must be unreachable from any tenant partition"
+        # tenant_project -> tenant_eligible -> demux is the ONLY path in.
+        assert cfg["transforms"]["tenant_project"]["inputs"] == ["tenant_eligible"]
+        assert cfg["transforms"]["tenant_eligible"]["inputs"] == ["demux"], (
+            "the tenant projection must fork off demux ONLY — the evidence stream "
+            "is platform-only (0:0) and must be unreachable from any tenant partition"
         )
         for name, sink in cfg["sinks"].items():
             if name.startswith("vl_tenant_"):
