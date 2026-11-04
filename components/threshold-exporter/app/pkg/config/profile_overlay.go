@@ -371,21 +371,32 @@ func (pp *PlatformProfiles) bound(own map[string]any) string {
 }
 
 // expand returns `own` (the tenant block with the platform overlay applied)
-// with the elected profile's values filled in, and the attribution of the
-// keys it filled. With nothing to fill `own` is returned as is (no copy).
+// with the elected profile's values filled in, the attribution of the keys
+// it filled, and notFilled: each key the profile writes that profileFill
+// skips only because the root declares it without a platform value (#1189,
+// the decision ApplyProfiles WARNs about on /metrics) → the profile file
+// that supplied it (#3395; withProfileNotFilled names it in not_served).
+// profileFill never reports a key `own` sets. With nothing to fill `own`
+// is returned as is (no copy).
 //
 // Attribution follows overlayTenant's: never `_metadata` (not in the
 // effective config),
 // never a null on a threshold key (deepMerge ignores it), a null on a
 // reserved key only when `chain` has that key to delete.
-func (pp *PlatformProfiles) expand(own, chain map[string]any) (map[string]any, []ProfileOverlaySource) {
+func (pp *PlatformProfiles) expand(own, chain map[string]any) (map[string]any, []ProfileOverlaySource, map[string]string) {
 	name, profile := pp.profileFor(own)
 	if profile == nil {
-		return own, nil
+		return own, nil, nil
 	}
-	fill := profileFill(profile, own, pp.declared, nil)
+	var notFilled map[string]string
+	fill := profileFill(profile, own, pp.declared, func(key string) {
+		if notFilled == nil {
+			notFilled = map[string]string{}
+		}
+		notFilled[key] = profile[key].file
+	})
 	if len(fill) == 0 {
-		return own, nil
+		return own, nil, notFilled
 	}
 	out := make(map[string]any, len(own)+len(fill))
 	for k, v := range own {
@@ -413,7 +424,7 @@ func (pp *PlatformProfiles) expand(own, chain map[string]any) (map[string]any, [
 		sort.Strings(keys)
 		sources = append(sources, ProfileOverlaySource{Profile: name, File: f, Keys: keys})
 	}
-	return out, sources
+	return out, sources, notFilled
 }
 
 // inherited is the part of the profile a tenant key falls back to when it
@@ -553,7 +564,7 @@ func (pp *PlatformProfiles) absOf(file string) string {
 // profile fills is shadowed, exactly as one the tenant file writes. nil pp =
 // no profiles (own returned as is).
 func (pp *PlatformProfiles) Expand(own map[string]any) map[string]any {
-	out, _ := pp.expand(own, nil)
+	out, _, _ := pp.expand(own, nil)
 	return out
 }
 

@@ -178,11 +178,39 @@ def _setup_go_steps():
                     yield wf, job_id, job, (step.get("with") or {})
 
 
+def _plan_race_rows() -> list[dict]:
+    """Rows of nightly-race's plan-generated matrices: one per SSOT module (#3541).
+
+    Every leg the plan emits copies its module's `workdir` from
+    plan_race_shards.MODULES, so the SSOT rows are exactly the workdirs those
+    legs can carry.
+    """
+    import sys
+    sys.path.insert(0, str(ROOT / "scripts" / "ops"))
+    import plan_race_shards
+    return [dict(m) for m in plan_race_shards.MODULES]
+
+
+# Matrices computed by an earlier job, with how to enumerate their rows offline.
+# An unlisted expression FAILS the walk: skipping it would leave that job's
+# go-version-file unchecked while the guard still read green.
+_DYNAMIC_MATRICES = {
+    "fromJSON(needs.plan.outputs.race_matrix)": _plan_race_rows,
+    "fromJSON(needs.plan.outputs.merge_matrix)": _plan_race_rows,
+}
+
+
 def _expand_matrix(value: str, job: dict) -> list[str]:
     refs = _MATRIX_REF.findall(value)
     if not refs:
         return [value]
     matrix = ((job.get("strategy") or {}).get("matrix")) or {}
+    if isinstance(matrix, str):
+        expr = re.sub(r"\s+", "", matrix).removeprefix("${{").removesuffix("}}")
+        assert expr in _DYNAMIC_MATRICES, (
+            f"{value!r} references a matrix computed at run time ({matrix!r}) that this "
+            "guard cannot enumerate — add a resolver to _DYNAMIC_MATRICES")
+        matrix = {"include": _DYNAMIC_MATRICES[expr]()}
     rows = list(matrix.get("include") or [])
     out = []
     for row in rows:
@@ -231,3 +259,9 @@ def test_matrix_expansion_substitutes_every_row() -> None:
     assert _expand_matrix("x/go.mod", {}) == ["x/go.mod"]
     with pytest.raises(AssertionError):
         _expand_matrix("${{ matrix.workdir }}/go.mod", {})
+    dynamic = {"strategy": {"matrix": "${{ fromJSON(needs.plan.outputs.race_matrix) }}"}}
+    assert _expand_matrix("${{ matrix.workdir }}/go.mod", dynamic) == [
+        f"{r['workdir']}/go.mod" for r in _plan_race_rows()]
+    with pytest.raises(AssertionError):
+        _expand_matrix("${{ matrix.workdir }}/go.mod",
+                       {"strategy": {"matrix": "${{ fromJSON(needs.x.outputs.y) }}"}})
