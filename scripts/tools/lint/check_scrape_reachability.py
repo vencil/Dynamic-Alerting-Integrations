@@ -25,8 +25,9 @@ k8s/**. Each leaf is classified:
                           static_configs job), so SD namespace + annotation keep
                           + __name__ filter are all evaluated against it.
                         * `helm-service` families (vector_, tenant_api_ /
-                          da_generator_, and the threshold-exporter families
-                          below) — no repo manifest
+                          da_generator_, the threshold-exporter families
+                          below, and since #1595 D1b the federation gateway's
+                          and reconciler's) — no repo manifest
                           pins the target, so only the JOB side is checked: that
                           some job keeps annotated Services carrying the
                           platform scrape label (PLATFORM_SCRAPE_LABEL) in EVERY
@@ -134,6 +135,11 @@ vector-plane mini-design + generate_rule_pack_split's central-input validator
 — deliberately NOT covered here, so vector_* classifies REACHABLE (the scrape
 face itself does admit it).
 
+SCOPE BOUNDARY (Prometheus Operator): this gate judges the raw scrape config
+only. Whether a kube-prometheus-stack install has each source is the same
+table asked a different question — `_lib_metric_sources.operator_split`, which
+`operator-generate` runs on the platform pack (#1595 D1b).
+
 Exit codes (_lib_exitcodes): 0 clean / 1 violation (--ci) / 2 caller error.
 """
 from __future__ import annotations
@@ -149,7 +155,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _OPS = PROJECT_ROOT / "scripts" / "tools" / "ops"
 sys.path.insert(0, str(_OPS))
 from generate_rule_pack_split import (  # noqa: E402
-    extract_metrics_from_expr,
     extract_recording_outputs,
     is_federated_exporter_metric,
 )
@@ -160,6 +165,7 @@ sys.path.insert(0, str(_THIS_DIR.parent))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 from _lib_validation import i18n_text  # noqa: E402
+import _lib_metric_sources  # noqa: E402  (the family table, #1595 D1b)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: prometheus.yml / manifests as their consumers read them)
 # The repo's one content-based rule-tree scanner. Same directory, zero
 # import cost — see collect_rule_trees for why this file no longer globs.
@@ -212,110 +218,38 @@ _SERVICE_FACE_ROLES = ("service", "endpoints", "endpointslice")
 #: Of those, the roles that make every pod a target (#3483).
 _PER_POD_ROLES = ("endpoints", "endpointslice")
 
-# The charts behind the helm-service families. A chart is what the family's
-# target comes from; tests/lint/test_check_scrape_reachability.py renders each
-# one and requires a Service carrying the scrape annotation and the label.
-THRESHOLD_EXPORTER_CHART = "helm/threshold-exporter"
-VECTOR_CHART = "helm/vector"
-TENANT_API_CHART = "helm/tenant-api"
-
-# ── metric-family → expected source (declarative, longest-prefix wins) ──────
-# kind:
-#   static           scraped by a static_configs self-job (value = job name)
-#   service          repo-pinned Service manifest (value = (namespace, name));
-#                    admission is computed from the parsed manifests + jobs
-#   helm-service     helm chart Service in Release.Namespace (value = chart
-#                    path); admission = some annotation-keep job keeps the
-#                    platform scrape label in every namespace
-#   name-filtered    node-role job with a __name__ allowlist (value = job name)
-# Families not listed here fall through to the tenant-exporter face (the
+# The family table (metric family → expected source) and the charts behind the
+# helm-service families live in `scripts/tools/_lib_metric_sources.py` since
+# #1595 D1b: `da-tools operator-generate` asks the same table whether a
+# Prometheus Operator install has each source, and it runs inside the da-tools
+# image, which does not ship this lint. Re-exported under the names this gate
+# and its tests have always used — the SAME objects, so there is one copy.
+# tests/lint/test_check_scrape_reachability.py renders each helm-service chart
+# and requires a Service carrying the scrape annotation and the label.
+THRESHOLD_EXPORTER_CHART = _lib_metric_sources.THRESHOLD_EXPORTER_CHART
+VECTOR_CHART = _lib_metric_sources.VECTOR_CHART
+TENANT_API_CHART = _lib_metric_sources.TENANT_API_CHART
+FEDERATION_GATEWAY_CHART = _lib_metric_sources.FEDERATION_GATEWAY_CHART
+FEDERATION_RECONCILER_CHART = _lib_metric_sources.FEDERATION_RECONCILER_CHART
+# kind: static / service / helm-service / name-filtered — see the table's
+# comment. Families not listed fall through to the tenant-exporter face (the
 # is_federated_exporter_metric SSOT) and then UNKNOWN-SOURCE.
-# _FAMILY_EXACT (below) is consulted FIRST — see _resolve_family.
-_FAMILY_TABLE: list[tuple[str, str, object]] = [
-    ("prometheus_", "static", "prometheus"),
-    ("alertmanager_", "service", ("monitoring", "alertmanager")),
-    ("tenant_api_", "helm-service", TENANT_API_CHART),
-    # NOTE `kubelet_` before `kube_` is load-bearing — longest-prefix matching
-    # protects it, but keep the order human-readable too (substring trap).
-    ("kubelet_", "name-filtered", "kubelet-volume-stats"),
-    ("kube_", "service", ("monitoring", "kube-state-metrics")),
-    ("container_", "name-filtered", "kubelet-cadvisor"),
-    ("vector_", "helm-service", VECTOR_CHART),
-    # threshold-exporter's two config-driven families (#1285). Their VALUES
-    # come from conf.d; their SERIES come from the threshold-exporter target
-    # like everything else it registers — see the module docstring.
-    ("da_", "helm-service", THRESHOLD_EXPORTER_CHART),
-    ("user_", "helm-service", THRESHOLD_EXPORTER_CHART),
-    # NOTE `da_generator_` is NOT threshold-exporter's: it is the generator
-    # container's (`da-tools generator-service`, ADR-036 §3), which has only a
-    # Unix socket — tenant-api appends its /metrics to its own (#2903), so the
-    # series come from the tenant-api target. Longest-prefix matching routes
-    # it here before `da_` above; da_generator_build_info is the generator /
-    # da-guard version metric (ADR-036 §6).
-    ("da_generator_", "helm-service", TENANT_API_CHART),
-]
+# _FAMILY_EXACT is consulted FIRST — see _resolve_family.
+_FAMILY_TABLE = _lib_metric_sources.FAMILY_TABLE
+_FAMILY_EXACT = _lib_metric_sources.FAMILY_EXACT
 
-# ── EXACT-NAME families (checked before _FAMILY_TABLE) ─────────────────────
-# For series whose name shares a prefix with metrics from a DIFFERENT source,
-# so no prefix can route them without collateral.
-#
-# ⛔ DO NOT "simplify" these two rows into a `tenant_` prefix entry (#1285).
-# Measured: a `tenant_` prefix also swallows tenant_federation_requests_total
-# (federation-gateway chart) and tenant_log_query_requests_total
-# (tenant-log-query plane) — both correctly ledgered UNKNOWN-SOURCE because
-# their charts carry no platform scrape label, so no job here is known to
-# select them wherever they are installed. A prefix would reclassify them
-# REACHABLE off the wrong component's Service and trip the ledger exit-lock.
-# The pin lives in tests/lint/test_check_scrape_reachability.py.
-_FAMILY_EXACT: dict[str, tuple[str, object]] = {
-    # Same collector.go / same registry / same /metrics as the da_*+user_* rows.
-    "tenant_metadata_info": ("helm-service", THRESHOLD_EXPORTER_CHART),
-    "tenant_expected_exporter": ("helm-service", THRESHOLD_EXPORTER_CHART),
-}
-
-# Helm-only components: install namespace is Release.Namespace, NOT pinned by
-# any repo manifest, so the single-cluster scrape face cannot statically decide
-# whether their Services land in an SD-listed namespace. Ledger-managed, never
-# judged DEAD here. Exit-locked: entries must stay demanded AND stay
-# unknown-source, else they must be removed (see module docstring).
-KNOWN_UNKNOWN_SOURCE: dict[str, str] = {
-    "federation_gateway_revocation_load_errors":
-        "federation-gateway helm chart — install ns = Release.Namespace, not pinned (#1203)",
-    "tenant_federation_requests_total":
-        "federation-gateway helm chart — install ns = Release.Namespace, not pinned (#1203)",
-    "federation_revocation_last_reconcile_timestamp_seconds":
-        "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
-    "federation_revocation_tamper_suspected":
-        "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
-    # Same reconciler Deployment as the two rows above — a zero-label PLATFORM
-    # gauge. It could not be ledgered until TRK-353 / #1250 removed the `*_up`
-    # suffix shortcut that classified it REACHABLE-IF-EXPORTED (the exit-lock
-    # rejected the row with STALE-EXEMPTION).
-    # ⚠️ Be precise about what this row buys, because #1250 overstated it: the
-    # EXIT-LOCK, not target-drop detection. No helm-only row (these three
-    # included) can be judged DEAD — Release.Namespace is not statically
-    # resolvable on this single-cluster face — so "the reconciler's target
-    # silently vanished" is out of reach for the cohort, not a protection this
-    # gauge was singled out of. What the shortcut really cost: a factually false
-    # reason string, exclusion from the exit-locked cohort, and a blanket excuse
-    # for every FUTURE platform gauge whose name ends in `_up`.
-    "federation_revocation_channel_up":
-        "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
-    "federation_revocation_live_set_rejected_lines":
-        "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
-    # NOTE the federation_gateway_ prefix, but the RECONCILER emits it: it is the
-    # gateway's reload-refusal warning counted off the gateway's log stream, so the
-    # scrape target is the reconciler Deployment, not the gateway (#1235).
-    "federation_gateway_revoked_set_reload_rejected":
-        "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
-    # Same producer and same prefix caveat as the row above, but NOT the same
-    # condition: those two mean the gateway is frozen on a set it already had;
-    # this one means the file is gone and it is enforcing nothing (#1236).
-    "federation_gateway_revoked_set_missing":
-        "federation-reconciler helm chart — install ns = Release.Namespace, not pinned (#1203)",
-    "tenant_log_query_requests_total":
-        "tenant-log-query plane, helm-only — install ns not pinned by repo manifests (#1203)",
-}
+# Helm-only components whose Service no job is known to select wherever they
+# are installed: NOT judged dead here, ledger-managed instead. Exit-locked:
+# entries must stay demanded AND stay unknown-source, else they must be removed
+# (see module docstring).
+# EMPTY since #1595 D1b: the nine rows that sat here were the federation
+# gateway's and reconciler's series. Both charts now label their scrape
+# Service `dynamic-alerting.io/scrape: platform`, so `platform-components`
+# keeps them in any namespace and the families are pinned in _FAMILY_TABLE /
+# _FAMILY_EXACT (helm-service) like threshold-exporter's. Before that their
+# Services were scraped only when installed into `monitoring`
+# (`monitoring-components`), which is why they could not be judged.
+KNOWN_UNKNOWN_SOURCE: dict[str, str] = {}
 
 # ── federation PLANE provenance (TRK-340 / #1203 part 2) ───────────────────
 # Which CLUSTER each unpinned-namespace source is ASSUMED to run on, under the
@@ -323,95 +257,30 @@ KNOWN_UNKNOWN_SOURCE: dict[str, str] = {
 # TestPlatformAlertPlaneContract; this file only owns the fact, not the
 # assertion.
 #
-# `platform-local-on-central` is the provenance category #1284 named in
-# generate_rule_pack_split._is_external_pipeline_input's FORWARD NOTE: a series
-# scraped from a target in the CENTRAL cluster's own namespaces, which is
-# neither federated-from-edge nor injected into the tenant plane. The scrape
-# face (above) and the federation plane are different questions about the same
-# metric — a target can be perfectly scrapeable and still sit on the wrong
-# cluster for the rules that read it.
-#
-# ⚠️ These are ASSUMPTIONS the repo cannot verify: install ns is
-# `Release.Namespace`, i.e. the operator's choice — which is exactly WHY these
-# metrics are ledgered above. "central" reflects every chart defaulting its
-# upstreams to `*.monitoring.svc`. Writing them down makes the assumption
-# reviewable instead of implicit.
-#
 # ⚠️ NOT a comprehension over KNOWN_UNKNOWN_SOURCE, deliberately: deriving it
 # would hand every future ledger entry a silent "central" — the exact default
 # this table exists to prevent. The contract pins the two key sets equal, so a
 # new ledger row without a plane decision is a red test, not a default.
 #
-# ⚠️ The sharpest known consequence of a wrong assumption here:
-# `tenant_log_query_requests_total` is `by account_id, project_id, status`
-# (helm/federation-gateway/files/audit-metrics.vector.yaml, `m_lq`) — NO `tenant`
-# label. Install federation-gateway on an EDGE cluster and the alert reading it
-# goes blind on central AND cannot be federated back, because the
-# `match[]={tenant!=""}` selector skips it. Its sibling
-# `tenant_federation_requests_total` IS `by tenant, status` (same file :13) and
-# would federate. That asymmetry is invisible from the alert side.
-PLANE_OF_UNPINNED_SOURCE: dict[str, str] = {
-    "federation_gateway_revocation_load_errors": "platform-local-on-central",
-    "tenant_federation_requests_total": "platform-local-on-central",
-    "federation_revocation_last_reconcile_timestamp_seconds": "platform-local-on-central",
-    "federation_revocation_tamper_suspected": "platform-local-on-central",
-    "federation_revocation_channel_up": "platform-local-on-central",
-    "federation_revocation_live_set_rejected_lines": "platform-local-on-central",
-    "federation_gateway_revoked_set_reload_rejected": "platform-local-on-central",
-    "federation_gateway_revoked_set_missing": "platform-local-on-central",
-    "tenant_log_query_requests_total": "platform-local-on-central",
-}
+# Empty with the ledger (#1595 D1b). The federation charts' series it used to
+# place on central are helm-service families now, which the plane contract
+# places by family like threshold-exporter's and tenant-api's. ⚠️ The
+# asymmetry recorded here before still holds and is invisible from the alert
+# side: `tenant_log_query_requests_total` is `by account_id, project_id,
+# status` (helm/federation-gateway/files/audit-metrics.vector.yaml, `m_lq`) —
+# NO `tenant` label — so a gateway installed on an EDGE cluster blinds the
+# alert reading it on central and cannot be federated back (the
+# `match[]={tenant!=""}` selector skips it), while its sibling
+# `tenant_federation_requests_total` (`by tenant, status`) would federate.
+PLANE_OF_UNPINNED_SOURCE: dict[str, str] = {}
 
-# ── PromQL extraction (patched superset of the split tool's extractor) ──────
-# generate_rule_pack_split.extract_metrics_from_expr requires the metric name
-# to be followed by `{`, `[` or whitespace, so it misses a metric directly
-# followed by `)` or end-of-string (e.g. `(time() - foo_seconds) > 600`) and
-# bare `absent(foo)`. The patch strips grouping clauses (by/on/... lists would
-# otherwise leak label names as metrics) and string literals, then re-scans
-# with a trailing charset that includes `)`/EOL. Keyword/function names the
-# wider scan can capture are subtracted below. Verified against every rule in
-# both trees by the sanity tests (tests/lint/test_check_scrape_reachability.py).
-_EXTRA_KEYWORDS = frozenset({
-    "without", "bool", "offset", "vector", "time", "absent", "absent_over_time",
-    "label_replace", "label_join", "changes", "clamp_min", "clamp_max",
-    "max_over_time", "min_over_time", "avg_over_time", "count_over_time",
-    "sum_over_time", "last_over_time", "quantile_over_time", "stddev_over_time",
-    "predict_linear", "deriv", "round", "ceil", "floor", "abs", "scalar",
-    "count_values", "quantile", "stddev", "stdvar", "idelta", "resets",
-    "sort", "sort_desc", "day_of_week", "hour", "minute", "sgn", "exp", "ln",
-    # the split extractor's own builtin set (its filter only applies to ITS
-    # matches; the wider re-scan here captures these again)
-    "rate", "sum", "max", "min", "avg", "count", "topk", "bottomk",
-    "histogram_quantile", "increase", "delta", "irate", "group",
-    "on", "ignoring", "group_left", "group_right", "unless", "by",
-    "or", "and",
-})
-_GROUPING_CLAUSE_RE = re.compile(
-    r"\b(by|without|on|ignoring|group_left|group_right)\s*\([^)]*\)")
-# Lookahead allowlist = what may legally follow a METRIC reference: selector
-# `{`, range `[`, whitespace, `)`, EOF — plus compact-writing operators like
-# `metric>60` (Gemini review of #1221 — verified miss). Two DELIBERATE
-# exclusions, both verified regressions when attempted: `,` / bare
-# negative-lookahead-on-`(` leak function-argument labels (label_replace/
-# group_left args); `=` and `!` leak selector label-matcher names (this
-# extractor does NOT strip brace interiors — the lookahead IS the brace
-# filter: `{condition="Ready"}` must not yield `condition`). Compact `a==1`
-# therefore stays unextracted — documented limitation, spaced form works.
-_TOKEN_RE = re.compile(r"\b([a-zA-Z_:][a-zA-Z0-9_:]*)\b(?=[{\[\s)+\-*/<>^%]|$)")
-_ABSENT_RE = re.compile(r"absent(?:_over_time)?\(\s*([a-zA-Z_:][a-zA-Z0-9_:]*)")
-_STRING_RE = re.compile(r'"(?:[^"\\]|\\.)*"')
-
-
-def extract_metrics(expr: str) -> set[str]:
-    """Metric names consumed by *expr* (see patch note above)."""
-    if not expr or not isinstance(expr, str):
-        return set()
-    base = extract_metrics_from_expr(expr)
-    stripped = _STRING_RE.sub('""', expr)
-    stripped = _GROUPING_CLAUSE_RE.sub(r"\1 ", stripped)
-    extra = {m for m in _TOKEN_RE.findall(stripped) if not m[0].isupper()}
-    extra |= set(_ABSENT_RE.findall(expr))
-    return (base | extra) - _EXTRA_KEYWORDS
+# ── PromQL extraction ───────────────────────────────────────────────────────
+# The patched superset of the split tool's extractor lives with the family
+# table (scripts/tools/_lib_metric_sources.py, #1595 D1b) — operator-generate
+# reads rules with it too. Re-exported here: the plane contract and this
+# gate's tests import it from this module.
+extract_metrics = _lib_metric_sources.extract_metrics
+_EXTRA_KEYWORDS = _lib_metric_sources.EXTRA_KEYWORDS
 
 
 # ── scrape-face parsing ─────────────────────────────────────────────────────
@@ -892,19 +761,9 @@ UNKNOWN_SOURCE = "UNKNOWN-SOURCE"
 DEAD = "DEAD"
 
 
-def _resolve_family(metric: str):
-    """→ (matched key, kind, spec) or None. Exact beats prefix, then longest
-    prefix wins. Exact-first is load-bearing, not a tie-break nicety: an exact
-    row exists precisely because the name's prefix belongs to someone else."""
-    exact = _FAMILY_EXACT.get(metric)
-    if exact is not None:
-        kind, spec = exact
-        return (metric, kind, spec)
-    best = None
-    for prefix, kind, spec in _FAMILY_TABLE:
-        if metric.startswith(prefix) and (best is None or len(prefix) > len(best[0])):
-            best = (prefix, kind, spec)
-    return best
+#: → (matched key, kind, spec) or None — exact beats prefix, then longest
+#: prefix wins (the table's module, re-exported).
+_resolve_family = _lib_metric_sources.resolve_family
 
 
 def classify(metric: str, jobs: list[dict], services: list[dict]) -> tuple[str, str]:

@@ -138,6 +138,21 @@ service:
     prometheus.io/scrape: "true"
     prometheus.io/path: /metrics
 
+# ServiceMonitor for a Prometheus Operator install (kube-prometheus-stack),
+# #1595 D1b. Off by default: without the monitoring.coreos.com CRDs the object
+# cannot be applied. On, it scrapes the same pod port as the raw
+# `platform-components` job (metricsPort), with no jobLabel, so `job` is the
+# Service name in both modes.
+serviceMonitor:
+  enabled: false
+  interval: 15s
+  # Labels Prometheus's serviceMonitorSelector matches. kube-prometheus-stack's
+  # default selector matches `release: <its Helm release name>`; the default
+  # matches `da-tools operator-generate`. `release: null` drops it. A key the
+  # chart's own labels set cannot be overridden (the render fails).
+  labels:
+    release: kube-prometheus-stack
+
 resources:
   requests:
     cpu: 10m
@@ -150,8 +165,19 @@ resources:
 # VictoriaLogs) and ingress from the monitoring namespace (Prometheus scrape).
 networkPolicy:
   enabled: true
-  # Namespace label selector for the Prometheus that scrapes /metrics.
+  # Namespace label selector for the Prometheus that scrapes /metrics — where
+  # PROMETHEUS runs (any pod there, so a kube-prometheus-stack Prometheus in
+  # that namespace is admitted), not this chart. `null` = any namespace
+  # (`namespaceSelector: {}`). ⚠️ `{}` does NOT clear it: Helm merges a map into
+  # the default, so the default stays.
   scrapeNamespaceLabel:
+    kubernetes.io/metadata.name: monitoring
+  # Namespace label selector for the VictoriaLogs the reconciler queries
+  # (victorialogs.url, TCP 9428) — the egress side, separate from the scrape
+  # ingress above on purpose: `scrapeNamespaceLabel: null` (any scraper
+  # namespace) must not widen this egress to every namespace. Must be a
+  # non-empty map; the render fails otherwise.
+  victorialogsNamespaceLabel:
     kubernetes.io/metadata.name: monitoring
 
 nodeSelector: {}

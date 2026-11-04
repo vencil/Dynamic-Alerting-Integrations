@@ -1,28 +1,26 @@
 package main
 
-// key_verdict.go — the ERROR layer of the shared key verdict (ADR-038
-// decisions 4–7), ported from Python's `scripts/tools/_lib_key_verdict.py`
-// (`judge`, `_judge_key`) so `da-guard write` can refuse a batch that leaves
-// a tenant a key no reader reads (#3489 step 1: a misspelt
-// `mysql_conections`, a dimensional key whose labels the root `dimensions:`
-// does not declare).
+// key_verdict.go — the shared key verdict (ADR-038 decisions 4–7) over a
+// tree: da-guard reads the tree, pkg/keyverdict judges (#3489 step 2).
+// `da-guard key-verdict` prints it; `da-guard write` refuses a batch that
+// leaves a tenant a key no reader reads at ERROR (write_worsen.go).
 //
-// ⛔ NO READING OF ITS OWN. It joins the same three readings the Python
-// verdict joins, each from the function the Python reader's subcommand runs:
-//   - served-values with --disable-effects (servedValues, addDisableEffects,
-//     spellAsWritten over config.LoadDirFromScan — runServedValues' own
-//     path): whether the exporter reads a key, why not, the registry's other
-//     readers of a `_` key, what a `disable` does;
+// ⛔ NO READING OF ITS OWN. The readings handed to keyverdict.Judge are each
+// the function another subcommand runs:
+//   - served-values with --disable-effects (servedValuesWith,
+//     addDisableEffectsWith, spellAsWritten, keyChecksOf over
+//     config.LoadDirFromScan — runServedValues' own path): whether the
+//     exporter reads a key, why not, the registry's other readers of a `_`
+//     key, what a `disable` does;
 //   - effective (config.EffectiveTreeWith, AsWritten — runEffective's): the
 //     layer and file each key of a tenant's effective config comes from;
 //   - the Policy-as-Code rules of the root carrier (TreeScan.RootCarrier):
-//     a rule's `target` / `when.target` head names a key it reads.
+//     a rule's `target` / `when.target` head names a key it reads;
+//   - parse-tree's document of the tree (parseTreeOf): whether a root
+//     platform file is read (decision 7) and the `profiles:` of those files.
 //
-// Only the ERROR severity is computed here (step 1); the warnings and
-// notices, the deduplicated findings and the profile-layer judgment stay in
-// Python until step 2 ports them and deletes the Python verdict.
-// tests/shared/test_key_verdict_go_parity.py pins this file to the Python
-// verdict over every tree the Python verdict's own tests build.
+// tests/shared/test_key_verdict_go_parity.py pins it to the Python verdict
+// until step 2 deletes that.
 
 import (
 	"encoding/json"
@@ -33,6 +31,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -40,46 +39,64 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/keyverdict"
 )
 
 // keyVerdictCmd is the subcommand name: `da-guard key-verdict ...`.
 const keyVerdictCmd = "key-verdict"
 
 // keyVerdictSchema names the document's shape (see servedValuesSchema).
-const keyVerdictSchema = "da-guard.key-verdict/v1"
+// v2 (#3489 step 2): the whole verdict; v1 carried the ERROR layer only.
+const keyVerdictSchema = "da-guard.key-verdict/v2"
 
-// keyError is one key the verdict reads as unread at severity ERROR.
+// keyError is one key the verdict reads as unread at severity ERROR — what
+// `da-guard write` compares before and after a batch.
 type keyError struct {
-	Tenant string `json:"tenant"`
-	// Key as the tenant's config spells it (the effective config's spelling).
-	Key string `json:"key"`
-	// Reason: served-values' reason (no_row, unregistered, retired, …), or
-	// not_served for a key served-values has no entry for; "" for none.
-	Reason string `json:"reason"`
-	// File: the file the tenant's value comes from (KeySource.File); "" when
-	// effective has no source for the key.
-	File string `json:"file"`
+	Tenant string
+	// Key as the tenant's config spells it.
+	Key string
+	// Reason: the verdict's reason (no_row, unregistered, not_served, …).
+	Reason string
+	// File: the file the tenant's value comes from; "" when none.
+	File string
 }
 
 // keyVerdictDoc is `da-guard key-verdict`'s JSON document.
 type keyVerdictDoc struct {
-	Schema string     `json:"schema"`
-	Errors []keyError `json:"errors"`
+	Schema string `json:"schema"`
+	At     string `json:"at"`
+	// Undecidable: no root platform file was read (decision 7): a threshold
+	// key's verdict is "undecidable".
+	Undecidable bool `json:"undecidable"`
+	// Tenants: tenant → the verdict on each of its keys, sorted by key.
+	Tenants map[string][]keyverdict.KeyVerdict `json:"tenants"`
+	// Findings: what a report prints, error first.
+	Findings []keyverdict.Finding `json:"findings"`
+	// KeyChecks (ADR-038 §11): per tenant, the exporter's own messages on
+	// its keys' `version` labels and retired spellings (served-values'
+	// key_checks). Not part of the verdict on whether a key is read.
+	KeyChecks map[string]servedKeyChecks `json:"key_checks"`
+	tenantSubset
 }
 
-// keyVerdictResult is one tree's ERROR layer. judged is false when the tree
+// keyVerdictResult is one tree's verdict. judged is false when the tree
 // cannot be judged at all — the exporter's load or effective refuses it (a
 // tenant declared twice, no config file, a file the merge cannot decode, a
-// /metrics that cannot be gathered): the Python verdict raises there, and
-// why says so.
+// /metrics that cannot be gathered); why says so.
 type keyVerdictResult struct {
-	judged      bool
-	why         error
-	undecidable bool
-	errors      []keyError
+	judged bool
+	why    error
+	tree   keyverdict.Tree
+	// keyChecks: served-values' key_checks per judged tenant.
+	keyChecks map[string]servedKeyChecks
+	// computed: the tenants the served reading computed (a --tenant
+	// request's present ones).
+	computed map[string]bool
+	// errors: the keys the verdict reads as unread at ERROR, sorted by
+	// tenant then key.
+	errors []keyError
 	// parseFailed / unreadable: the files the exporter's load drops
-	// (LoadReport), which served-values names under exit 3 — a verdict over
-	// a tree that lacks them is one Python does not give.
+	// (LoadReport), which served-values names under exit 3.
 	parseFailed []string
 	unreadable  []skippedFile
 	// noConfig: the tree holds no config file at all — judged, no tenant,
@@ -92,67 +109,77 @@ type keyVerdictResult struct {
 	setAside map[string]bool
 }
 
-// Registry layers of KeySource.Layer (Python `_LAYERS`). The root
-// `defaults:` (level 0) is no registry layer.
-var keyRegistryLayers = map[string]string{
-	config.KeyLayerTenant:   "tenant",
-	config.KeyLayerPlatform: "platform_tenants",
-	config.KeyLayerProfile:  "profile",
+// keyVerdictOpts is how keyVerdictOf reads the tree.
+type keyVerdictOpts struct {
+	// scan: Overlays (the tree a `da-guard write` batch leaves),
+	// OverlayMakesDirs, SkipDuplicated (a tenant declared in two files does
+	// not stop the judgment: every file that declares such a tenant is set
+	// aside with every tenant it declares, the rest judged as usual —
+	// without it such a tree is not judged).
+	scan config.ScanOptions
+	// tenants: compute and judge only these (served-values' and effective's
+	// --tenant); nil for the whole tree.
+	tenants []string
+	// rootPlatform: a root platform file is read (hasRootPlatformFile of
+	// parse-tree's document of the same tree): without one the threshold
+	// keys are undecidable (decision 7). A write's baseline sets it whatever
+	// the tree holds (write_worsen.go).
+	rootPlatform bool
+	// profiles: rootProfilesOf the same document — the profile layer; nil:
+	// not judged. The facts, not the document: the document of a large tree
+	// need not stay in memory through the verdict.
+	profiles map[string]map[string]any
 }
 
-// policyHead is Python's PolicyHead: the first path element of a rule's
-// `target` / `when.target`, and the tenants the rule leaves out.
-type policyHead struct {
-	head     string
-	excluded map[string]bool
-}
-
-// keyVerdictOf is the ERROR layer of the tree at root as opts makes it read
-// (opts.Overlays: the tree a `da-guard write` batch leaves), at `at`.
-// rootPlatform: the tree has a root platform file — parse-tree's `_` config
-// file at depth 0 (hasRootPlatformFile); without one the threshold keys are
-// undecidable (decision 7). dir names the tree in the load (LoadDirReport's
-// argument).
-//
-// opts.SkipDuplicated: a tenant declared in two files does not stop the
-// judgment (the exporter's load refuses the whole tree) — every file that
-// declares such a tenant is set aside with every tenant it declares
-// (setAsideDuplicates), and the rest of the tree is judged as usual. Without
-// it such a tree is not judged (`key-verdict`, as served-values refuses it).
-func keyVerdictOf(dir string, opts config.ScanOptions, rootPlatform bool, at time.Time) (keyVerdictResult, error) {
+// keyVerdictOf is the verdict on the tree at dir as opts makes it read, at
+// `at`. dir names the tree in the load (LoadDirReport's argument).
+func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResult, error) {
 	discard := log.New(io.Discard, "", 0)
-	overlays := opts.Overlays
+	overlays := opts.scan.Overlays
+	rootPlatform := opts.rootPlatform
 	scan, err := config.ScanDirTreeWith(dir, nil, nil, discard, config.ScanOptions{
-		Overlays: overlays, OverlayMakesDirs: opts.OverlayMakesDirs})
+		Overlays: overlays, OverlayMakesDirs: opts.scan.OverlayMakesDirs})
 	if err != nil {
 		return keyVerdictResult{}, err
 	}
 	var setAside map[string]bool
-	if scan.Conflict != nil && opts.SkipDuplicated {
+	if scan.Conflict != nil && opts.scan.SkipDuplicated {
 		var files map[string]bool
 		files, setAside = duplicateDeclarers(scan)
 		if overlays, err = setAsideOverlays(scan.AbsRoot, overlays, files); err != nil {
 			return keyVerdictResult{}, err
 		}
 		if scan, err = config.ScanDirTreeWith(dir, nil, nil, discard, config.ScanOptions{
-			Overlays: overlays, OverlayMakesDirs: opts.OverlayMakesDirs}); err != nil {
+			Overlays: overlays, OverlayMakesDirs: opts.scan.OverlayMakesDirs}); err != nil {
 			return keyVerdictResult{}, err
 		}
 	}
 	unjudged := func(err error) (keyVerdictResult, error) {
 		return keyVerdictResult{why: err, setAside: setAside}, nil
 	}
+	empty := func() keyVerdictResult {
+		return keyVerdictResult{judged: true, tree: keyverdict.Tree{Keys: map[string][]keyverdict.KeyVerdict{},
+			Findings: []keyverdict.Finding{}, Undecidable: !rootPlatform},
+			keyChecks: map[string]servedKeyChecks{}, computed: map[string]bool{}, errors: []keyError{},
+			setAside: setAside}
+	}
+	var heads []keyverdict.PolicyHead
+	if _, data, ok := scan.RootCarrier(); ok {
+		heads = policyHeadsOf(data)
+	}
 	cfg, rep, written, err := config.LoadDirFromScan(scan, dir, discard)
 	if errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) == 0 && rep.RootListErr == nil {
 		// No config file at all: no tenant, so no error.
-		return keyVerdictResult{judged: true, why: err, undecidable: !rootPlatform, errors: []keyError{},
-			noConfig: true, setAside: setAside}, nil
+		res := empty()
+		res.why, res.noConfig = err, true
+		return res, nil
 	}
 	if errors.Is(err, config.ErrNoYAMLFiles) && len(rep.Unreadable) > 0 {
 		// Every config file unreadable: no tenant, the files named
 		// (loadJSONTree's allUnreadable).
-		return keyVerdictResult{judged: true, undecidable: !rootPlatform, errors: []keyError{},
-			unreadable: unreadableEntries(rep.Unreadable), setAside: setAside}, nil
+		res := empty()
+		res.unreadable = unreadableEntries(rep.Unreadable)
+		return res, nil
 	}
 	if err != nil {
 		return unjudged(err)
@@ -163,30 +190,113 @@ func keyVerdictOf(dir string, opts config.ScanOptions, rootPlatform bool, at tim
 	// Quiet: every resolver WARN discarded. This reading is a judgment's,
 	// not a report: `da-guard write`'s stderr stays what it was before the
 	// key verdict joined it, and `key-verdict` prints JSON only (#3489).
-	served, err := servedValuesWith(cfg, at, rep.Undeliverable, false, written, refusedTextsOf(rep), true)
+	sub := subsetConfig(cfg, opts.tenants)
+	served, err := servedValuesWith(sub, at, rep.Undeliverable, false, written, refusedTextsOf(rep), true)
 	if err == nil {
-		err = addDisableEffectsWith(cfg, at, served, written, true)
+		err = addDisableEffectsWith(sub, at, served, written, true)
 	}
 	if err != nil {
 		return unjudged(err)
 	}
 	spellAsWritten(served, written)
-	tree, err := config.EffectiveTreeWith(dir, discard, config.ScanOptions{
-		Overlays: overlays, OverlayMakesDirs: opts.OverlayMakesDirs, QuietBuild: true}, at)
+	keyChecksOf(sub, served)
+	effOpts := config.ScanOptions{Overlays: overlays, OverlayMakesDirs: opts.scan.OverlayMakesDirs, QuietBuild: true}
+	if opts.tenants != nil {
+		effOpts.Tenants = map[string]bool{}
+		for _, t := range opts.tenants {
+			effOpts.Tenants[t] = true
+		}
+	}
+	tree, err := config.EffectiveTreeWith(dir, discard, effOpts, at)
 	if err != nil {
 		return unjudged(err)
 	}
-	effective := make(map[string]*config.EffectiveConfig, len(tree.Tenants))
+	in := keyverdict.Input{
+		Served:      servedForVerdict(served),
+		Effective:   make(map[string]keyverdict.EffectiveTenant, len(tree.Tenants)),
+		Heads:       heads,
+		Undecidable: !rootPlatform,
+	}
 	for _, ec := range tree.Tenants {
-		effective[ec.TenantID] = ec.AsWritten() // #2031: as `da-guard effective` prints it
+		ec = ec.AsWritten() // #2031: as `da-guard effective` prints it
+		// A YAML `.inf` / `.nan` is text, as effective prints it.
+		in.Effective[ec.TenantID] = keyverdict.EffectiveTenant{Config: config.NonFiniteAsText(ec.EffectiveConfig),
+			Sources: ec.KeySources, Profile: ec.BoundProfile, DefaultsChain: ec.DefaultsChain}
 	}
-	var heads []policyHead
-	if _, data, ok := scan.RootCarrier(); ok {
-		heads = policyHeadsOf(data)
+	in.RootProfiles = opts.profiles
+	res := keyVerdictResult{judged: true, tree: keyverdict.Judge(in),
+		keyChecks: map[string]servedKeyChecks{}, computed: map[string]bool{},
+		parseFailed: rep.ParseFailed, unreadable: unreadableEntries(rep.Unreadable), setAside: setAside}
+	for t, sv := range served {
+		res.keyChecks[t] = sv.KeyChecks
+		res.computed[t] = true
 	}
-	return keyVerdictResult{judged: true, undecidable: !rootPlatform,
-		errors:      keyVerdictErrors(served, effective, heads, !rootPlatform),
-		parseFailed: rep.ParseFailed, unreadable: unreadableEntries(rep.Unreadable), setAside: setAside}, nil
+	res.errors = errorsOf(res.tree)
+	return res, nil
+}
+
+// errorsOf is every key tree reads as unread at ERROR, sorted by tenant then
+// key.
+func errorsOf(tree keyverdict.Tree) []keyError {
+	out := []keyError{}
+	for _, tenant := range sortedKeys(tree.Keys) {
+		for _, v := range tree.Keys[tenant] {
+			if v.Verdict != keyverdict.Unread || v.Severity == nil || *v.Severity != keyverdict.SeverityError {
+				continue
+			}
+			e := keyError{Tenant: tenant, Key: v.Key}
+			if v.Reason != nil {
+				e.Reason = *v.Reason
+			}
+			if v.File != nil {
+				e.File = *v.File
+			}
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// servedForVerdict is served-values' tenants as keyverdict reads them.
+func servedForVerdict(served map[string]servedTenantValues) map[string]keyverdict.ServedTenant {
+	out := make(map[string]keyverdict.ServedTenant, len(served))
+	for t, sv := range served {
+		keys := make(map[string]keyverdict.ServedKey, len(sv.Keys))
+		for k, sk := range sv.Keys {
+			keys[k] = keyverdict.ServedKey{Exporter: sk.Exporter, Reason: sk.Reason, Registered: sk.Registered,
+				Declared: sk.Declared, Disable: sk.Disable, ServedFamily: sk.ServedFamily}
+		}
+		rows := make(map[string]bool, len(sv.Severities)+len(sv.Dropped))
+		for k := range sv.Severities {
+			rows[k] = true
+		}
+		for k := range sv.Dropped {
+			rows[k] = true
+		}
+		out[t] = keyverdict.ServedTenant{Keys: keys, Values: sv.Values, Rows: rows}
+	}
+	return out
+}
+
+// rootProfilesOf is the `profiles:` mapping of each root platform file
+// parse-tree reads (the files the exporter takes profiles from): file →
+// profile name → body. A root file no reader reads (an unselected defaults
+// spelling) or one parse-tree cannot read has no content and gives none.
+func rootProfilesOf(doc *parseTreeDoc) map[string]map[string]any {
+	out := map[string]map[string]any{}
+	for _, e := range doc.Entries {
+		if e.Role != config.RoleConfig || e.Depth != 0 || (e.Class != classDefaults && e.Class != classPlatform) {
+			continue
+		}
+		content, ok := doc.Files[e.Path]
+		if !ok {
+			continue
+		}
+		if profiles, ok := content["profiles"].(map[string]any); ok {
+			out[e.Path] = profiles
+		}
+	}
+	return out
 }
 
 // duplicateDeclarers is, for a scan whose walk recorded a tenant declared in
@@ -259,199 +369,6 @@ func hasRootPlatformFile(doc *parseTreeDoc) bool {
 	return false
 }
 
-// keyVerdictErrors is Python's `judge` keeping only the keys it reads as
-// unread at severity ERROR, sorted by tenant then key. Every key of a
-// tenant's served `keys` and of its effective config is judged — a key
-// served-values has no entry for (one the tenant inherits) goes through the
-// same rules as in Python, though in practice it never reaches ERROR.
-func keyVerdictErrors(served map[string]servedTenantValues, effective map[string]*config.EffectiveConfig,
-	heads []policyHead, undecidable bool) []keyError {
-	aliases := config.DeprecatedKeyAliases()
-	tenants := map[string]bool{}
-	for t := range served {
-		tenants[t] = true
-	}
-	for t := range effective {
-		tenants[t] = true
-	}
-	out := []keyError{}
-	for _, tenant := range sortedKeys(tenants) {
-		sv, hasSv := served[tenant]
-		ef := effective[tenant]
-		keys := map[string]bool{}
-		if hasSv {
-			for k := range sv.Keys {
-				keys[k] = true
-			}
-		}
-		var sources map[string]config.KeySource
-		if ef != nil {
-			for k := range ef.EffectiveConfig {
-				keys[k] = true
-			}
-			sources = ef.KeySources
-		}
-		for _, key := range sortedKeys(keys) {
-			var svp *servedTenantValues
-			if hasSv {
-				svp = &sv
-			}
-			src, hasSrc := sources[key]
-			if e, isErr := judgeKeyError(tenant, key, svp, src, hasSrc, heads, undecidable, aliases); isErr {
-				out = append(out, e)
-			}
-		}
-	}
-	return out
-}
-
-// judgeKeyError is Python's `_judge_key` (with disable effects) reduced to
-// the question "unread at ERROR?", and the error when it is.
-func judgeKeyError(tenant, key string, sv *servedTenantValues, src config.KeySource, hasSrc bool,
-	heads []policyHead, undecidable bool, aliases map[string]string) (keyError, bool) {
-	layer := ""
-	if hasSrc {
-		layer = src.Layer
-	}
-	regLayer := keyRegistryLayers[layer]
-	if layer == config.KeyLayerDefaults && hasSrc && src.Level != nil && *src.Level > 0 {
-		regLayer = "subtree_defaults"
-	}
-	reserved := strings.HasPrefix(key, "_")
-
-	var sk servedKey
-	hasSk := false
-	if sv != nil {
-		sk, hasSk = sv.Keys[key]
-	}
-	reason, disable := sk.Reason, sk.Disable
-	declared := sk.Declared
-	var registered *bool
-	if hasSk {
-		registered = sk.Registered
-	} else if reserved {
-		// A key the exporter's build does not take into the tenant's config
-		// (no `keys` entry): the registry's own declaration.
-		readers, ok := config.RegisteredReaders(key)
-		declared, registered = readers, &ok
-	}
-	misspeltReserved := reserved && registered != nil && !*registered
-
-	canon := pyCanonicalKey(key, aliases)
-	var servedValue any
-	hasRows := false
-	if sv != nil {
-		if v, ok := sv.Values[key]; ok {
-			servedValue = v
-		} else {
-			servedValue = sv.Values[canon]
-		}
-		for _, k := range []string{key, canon} {
-			_, inSev := sv.Severities[k]
-			_, inDropped := sv.Dropped[k]
-			hasRows = hasRows || inSev || inDropped
-		}
-	}
-
-	read := false
-	switch {
-	case hasSk && sk.Exporter:
-		read = true
-	case !hasSk && hasRows:
-		// A threshold the tenant inherits, which /metrics serves for it.
-		read = true
-	case !hasSk && reserved && containsString(declared["exporter"], regLayer) && servedValue != nil:
-		read = true
-	case !hasSk && strings.HasPrefix(key, "_state_") && servedValue == nil:
-		reason = keyReasonStateFilterUndeclared
-	}
-	if hasSk && reason == keyReasonDisabled && (disable == disableEffective || disable == disablePartial) {
-		read, reason = true, ""
-	}
-	for reader, layers := range declared {
-		if reader != "exporter" && containsString(layers, regLayer) {
-			read = true
-		}
-	}
-	// Policy-as-Code reads what its view holds: every threshold key, and a
-	// `_` key only when the registry lists it.
-	inPolicyView := !reserved || (registered != nil && *registered)
-	if inPolicyView && namedByPolicy(tenant, key, heads, aliases) {
-		read = true
-	}
-	if read {
-		return keyError{}, false
-	}
-	if undecidable && !reserved {
-		return keyError{}, false // undecidable, not unread (decision 7)
-	}
-	platformSide := layer == config.KeyLayerPlatform || layer == config.KeyLayerProfile ||
-		layer == config.KeyLayerDefaults
-	switch {
-	case misspeltReserved:
-		// A `_` key the registry does not list is a misspelt reserved key:
-		// ERROR in the tenant's own file, a notice on a platform file.
-		if platformSide {
-			return keyError{}, false
-		}
-		if reason != keyReasonRetired {
-			reason = keyReasonUnregistered
-		}
-	case disable == disableNoop:
-		return keyError{}, false // WARNING
-	case platformSide || reason == keyReasonStateFilterUndeclared:
-		return keyError{}, false // NOTICE: the platform's to fix
-	}
-	if reason == "" && !hasSk {
-		reason = "not_served"
-	}
-	file := ""
-	if hasSrc {
-		file = src.File
-	}
-	return keyError{Tenant: tenant, Key: key, Reason: reason, File: file}, true
-}
-
-// pyCanonicalKey is Python's `tv.canonical_key` over the exporter's alias
-// table (config.DeprecatedKeyAliases, the table served-values' `aliases`
-// carries). Not config.CanonicalKeyFor: the two differ on a dimensional
-// retired `_critical` (`mysql_cpu_critical{db="a"}`), which Python maps and
-// Go does not; the verdict is Python's until step 2 deletes it.
-func pyCanonicalKey(key string, aliases map[string]string) string {
-	if len(aliases) == 0 || strings.HasPrefix(key, "_") {
-		return key
-	}
-	base, dims, _ := strings.Cut(key, "{")
-	brace := ""
-	if strings.Contains(key, "{") {
-		brace = "{"
-	}
-	if c, ok := aliases[base]; ok {
-		return c + brace + dims
-	}
-	const critical = "_critical"
-	if b, ok := strings.CutSuffix(base, critical); ok {
-		if c, ok := aliases[b]; ok {
-			return c + critical + brace + dims
-		}
-	}
-	return key
-}
-
-// namedByPolicy is Python's `_named_by_policy`: a rule that applies to the
-// tenant names the key itself, in either #1231 spelling. A wildcard head
-// (`mysql_*`) is compared as written, so it names only a key literally
-// spelt that way — never every misspelling it would match.
-func namedByPolicy(tenant, key string, heads []policyHead, aliases map[string]string) bool {
-	canon := pyCanonicalKey(key, aliases)
-	for _, h := range heads {
-		if !h.excluded[tenant] && pyCanonicalKey(h.head, aliases) == canon {
-			return true
-		}
-	}
-	return false
-}
-
 // policyHeadsOf is Python's `policy_targets(_tree_rules(...))` over the root
 // carrier's bytes: the top-level `policies` when the document has that key
 // (whatever its value), else `_policies`; each rule's `target` and
@@ -463,7 +380,7 @@ func namedByPolicy(tenant, key string, heads []policyHead, aliases map[string]st
 // InvalidPolicyRules (#2961) and the Python verdict fails with it. A tree
 // carrying such rules is one Python judges not at all; this side judges it
 // without them.
-func policyHeadsOf(data []byte) []policyHead {
+func policyHeadsOf(data []byte) []keyverdict.PolicyHead {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil || len(doc.Content) == 0 {
 		return nil
@@ -479,7 +396,7 @@ func policyHeadsOf(data []byte) []policyHead {
 	if rules == nil || rules.Kind != yaml.SequenceNode {
 		return nil
 	}
-	var out []policyHead
+	var out []keyverdict.PolicyHead
 	for _, rule := range rules.Content {
 		if rule.Kind != yaml.MappingNode {
 			continue
@@ -503,7 +420,7 @@ func policyHeadsOf(data []byte) []policyHead {
 		}
 		for _, t := range targets {
 			head, _, _ := strings.Cut(t, ".")
-			out = append(out, policyHead{head: head, excluded: excluded})
+			out = append(out, keyverdict.PolicyHead{Head: head, Excluded: excluded})
 		}
 	}
 	return out
@@ -534,15 +451,6 @@ func stringScalar(n *yaml.Node) string {
 	return n.Value
 }
 
-func containsString(list []string, s string) bool {
-	for _, x := range list {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-
 func sortedKeys[V any](m map[string]V) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -552,18 +460,42 @@ func sortedKeys[V any](m map[string]V) []string {
 	return out
 }
 
-// runKeyVerdict is `da-guard key-verdict --config-dir <dir> [--at <RFC3339>]`.
+// treeFacts is what parse-tree's document of the tree at dir says for the
+// verdict (keyVerdictOpts.rootPlatform, .profiles). The document itself does
+// not outlive this call: a large tree's need not stay in memory through the
+// verdict.
+func treeFacts(dir string) (keyVerdictOpts, error) {
+	list, err := config.ScanDirTreeFiles(dir, log.New(io.Discard, "", 0))
+	if err != nil {
+		return keyVerdictOpts{}, err
+	}
+	doc, err := parseTreeOf(list)
+	if err != nil {
+		return keyVerdictOpts{}, err
+	}
+	return keyVerdictOpts{rootPlatform: hasRootPlatformFile(doc), profiles: rootProfilesOf(doc)}, nil
+}
+
+// runKeyVerdict is `da-guard key-verdict --config-dir <dir> [--at <RFC3339>]
+// [--tenant <id> ...]`.
 func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 	fs := flag.NewFlagSet(programName+" "+keyVerdictCmd, flag.ContinueOnError)
 	fs.SetOutput(errOut)
 	configDir := fs.String("config-dir", "", "Path to the conf.d/ root. Required.")
 	atFlag := fs.String("at", "", "Instant to resolve at, RFC3339. Empty = now.")
+	var tenants tenantList
+	fs.Var(&tenants, "tenant",
+		"Judge only this tenant (repeatable): the whole tree is still loaded, every platform file read;\n"+
+			"the document then carries tenants_requested and tenants_absent (requested, not in the tree).\n"+
+			"A profile's finding is judged over the requested tenants only.")
 	fs.Usage = func() {
-		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>]\n", programName, keyVerdictCmd)
-		fmt.Fprintf(errOut, "Print, as JSON, every tenant key the shared key verdict (ADR-038) reads as unread at\n"+
-			"severity ERROR: {\"schema\": %q, \"errors\": [{\"tenant\", \"key\", \"reason\", \"file\"}]}.\n"+
-			"The ERROR layer only (#3489 step 1); warnings and notices stay with the Python verdict.\n\n",
-			keyVerdictSchema)
+		fmt.Fprintf(errOut, "Usage: %s %s --config-dir <dir> [--at <RFC3339>] [--tenant <id> ...]\n", programName, keyVerdictCmd)
+		fmt.Fprintf(errOut, "Print, as JSON, the shared key verdict (ADR-038): for every key of every tenant whether\n"+
+			"some reader reads it, and the findings a report prints:\n"+
+			"{\"schema\": %q, \"at\", \"undecidable\", \"tenants\": {<tenant>: [{key, layer, file, read_by,\n"+
+			"verdict, severity, reason, disable, served_family, value, served}]}, \"findings\": [{severity, kind,\n"+
+			"key, file, tenants, reason, served_family, served_from}], \"key_checks\": {<tenant>: {version_labels,\n"+
+			"renames}}}.\n\n", keyVerdictSchema)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, or a tree the verdict cannot judge (the exporter's load or\n"+
 			"     effective refuses it, e.g. a tenant declared twice), or a conf.d path that is not valid UTF-8\n"+
@@ -598,22 +530,26 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "%s %s: %v\n", programName, keyVerdictCmd, err)
 		return exitCallerErr
 	}
-	list, err := config.ScanDirTreeFiles(*configDir, log.New(io.Discard, "", 0))
+	opts, err := treeFacts(*configDir)
 	if err != nil {
 		return fail(err)
 	}
-	doc, err := parseTreeOf(list)
-	if err != nil {
-		return fail(err)
-	}
-	res, err := keyVerdictOf(*configDir, config.ScanOptions{}, hasRootPlatformFile(doc), at)
+	requested := tenants.requested()
+	opts.tenants = requested
+	res, err := keyVerdictOf(*configDir, opts, at)
 	if err != nil {
 		return fail(err)
 	}
 	if !res.judged || res.noConfig {
 		return fail(res.why)
 	}
-	b, err := json.MarshalIndent(keyVerdictDoc{Schema: keyVerdictSchema, Errors: res.errors}, "", "  ")
+	out := keyVerdictDoc{Schema: keyVerdictSchema, At: at.Format(time.RFC3339), Undecidable: res.tree.Undecidable,
+		Tenants: res.tree.Keys, Findings: res.tree.Findings, KeyChecks: res.keyChecks,
+		tenantSubset: subset(requested, func(t string) bool { return res.computed[t] })}
+	if err := checkOutputUTF8("", reflect.ValueOf(out)); err != nil {
+		return fail(err)
+	}
+	b, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {
 		return fail(err)
 	}

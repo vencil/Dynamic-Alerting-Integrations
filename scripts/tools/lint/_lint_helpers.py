@@ -49,6 +49,9 @@ BUILD_EXEMPT = frozenset({
     # of _lib_io so tools without PyYAML can import them. Library, not CLI.
     "_lib_paths.py",
     "_lib_label.py",
+    # #3446 — what a caller-given value selects + the one directory listing.
+    # Library, not CLI.
+    "_lib_input.py",
     # v2.10.0 (da-tools ROI r5) — minimal CRD YAML serializer shared by
     # operator_generate + migrate_to_operator. Library, not CLI.
     "_lib_yaml.py",
@@ -86,6 +89,9 @@ BUILD_EXEMPT = frozenset({
     # #3206 (ADR-036 §12) — runs da-crdecode / da-read for a manifest or an
     # Alertmanager config; imported by onboard_platform. Library, not CLI.
     "_lib_consumer_read.py",
+    # #1595 D1b — the metric family → source table and operator-generate's
+    # portability derivation. Library, not CLI.
+    "_lib_metric_sources.py",
     # v2.8.0 PR-3a — generate_alertmanager_routes.py split into 5 helpers.
     # These are library modules consumed by the main file via re-export,
     # not CLI commands themselves.

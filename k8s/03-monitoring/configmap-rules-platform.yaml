@@ -111,10 +111,10 @@ data:
     \      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md\n\
     \      summary: Threshold exporter HA degraded\n  - alert: ThresholdExporterHighRestarts\n\
     \    expr: \"increase(\\n  kube_pod_container_status_restarts_total{\\n    container=\\\
-    \"threshold-exporter\\\",\\n    namespace=\\\"monitoring\\\"\\n  }[1h]\\n) > 3\\\
-    n\"\n    for: 0s\n    labels:\n      alert_source: platform\n      severity: warning\n\
-    \    annotations:\n      description: '{{ $value | printf \"%.0f\" }} restarts\
-    \ in the last hour'\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md\n\
+    \"threshold-exporter\\\"\\n  }[1h]\\n) > 3\\n\"\n    for: 0s\n    labels:\n  \
+    \    alert_source: platform\n      severity: warning\n    annotations:\n     \
+    \ description: '{{ $value | printf \"%.0f\" }} restarts in the last hour'\n  \
+    \    runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/design/high-availability.md\n\
     \      summary: Threshold exporter {{ $labels.pod }} restarting frequently\n \
     \ - alert: CustomAlertReplicasDisagree\n    expr: \"count by (tenant, recipe_id,\
     \ threshold_severity) (\\n  label_replace(\\n    max by (tenant, recipe_id, severity,\
@@ -143,41 +143,43 @@ data:
     \ heatmap by\n\n        (reason, scope, effect).\n\n        '\n      runbook_url:\
     \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
     \      summary: Config change rippled to >500 tenants (p99, 5m)\n  - alert: ConfigDefaultsShadowedSurge\n\
-    \    expr: rate(da_config_defaults_shadowed_total[1h]) > (10 / 3600)\n    for:\
-    \ 30m\n    labels:\n      alert_source: platform\n      severity: info\n    annotations:\n\
-    \      description: 'Inheritance system blocked >10 defaults changes per hour\
-    \ over\n\n        the last 30m. Not an outage, but suggests the platform''s\n\n\
-    \        global defaults are diverging from how tenants actually\n\n        consume\
-    \ them — investigate which defaults are being touched\n\n        without effect.\n\
-    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
+    \    expr: max without (instance, pod) (rate(da_config_defaults_shadowed_total[1h]))\
+    \ > (10 / 3600)\n    for: 30m\n    labels:\n      alert_source: platform\n   \
+    \   severity: info\n    annotations:\n      description: 'Inheritance system blocked\
+    \ >10 defaults changes per hour over\n\n        the last 30m. Not an outage, but\
+    \ suggests the platform''s\n\n        global defaults are diverging from how tenants\
+    \ actually\n\n        consume them — investigate which defaults are being touched\n\
+    \n        without effect.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
     \      summary: High rate of override-shadowed defaults edits\n  - alert: ConfigParseFailure\n\
-    \    expr: increase(da_config_parse_failure_total{file_basename!=\"_defaults.yaml\"\
-    }[1h]) > 5\n    for: 5m\n    labels:\n      alert_source: platform\n      severity:\
-    \ warning\n    annotations:\n      description: 'The threshold-exporter has logged\
-    \ >5 YAML parse failures\n\n        for `{{ $labels.file_basename }}` in the last\
-    \ hour. If it is\n\n        a tenant file, every tenant declared in that file\
-    \ (all of them, if the file\n\n        declares several) is removed from /metrics,\
-    \ unless another\n\n        file that parses declares it too, so their threshold\n\
-    \n        alerts stop firing (#1980). Fix the YAML (the\n\n        exporter logs\
-    \ `WARN: skip unparseable file` with the\n\n        parse error) and the tenants\
-    \ come back on the next\n\n        reload. Tenants declared in other files are\
-    \ unaffected\n\n        when the file is a tenant file. When it is a `_`-prefixed\n\
-    \n        platform file (e.g. `_profiles.yaml`), the exporter logs\n\n       \
-    \ `ERROR: skip unparseable defaults/profiles file` instead,\n\n        and every\
-    \ tenant that uses what the file provides (e.g. a\n\n        profile) loses those\
-    \ values.\n\n        NOTE: this evaluates a 1-hour sliding window, so the\n\n\
-    \        alert may stay Firing for up to ~1h after the YAML is\n\n        fixed\
-    \ (the old failures only drop out of the window as\n\n        time passes) — that''s\
-    \ expected, not a stuck alert.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#validate-config\n\
+    \    expr: max without (instance, pod) (increase(da_config_parse_failure_total{file_basename!=\"\
+    _defaults.yaml\"}[1h])) > 5\n    for: 5m\n    labels:\n      alert_source: platform\n\
+    \      severity: warning\n    annotations:\n      description: 'The threshold-exporter\
+    \ has logged >5 YAML parse failures\n\n        for `{{ $labels.file_basename }}`\
+    \ in the last hour. If it is\n\n        a tenant file, every tenant declared in\
+    \ that file (all of them, if the file\n\n        declares several) is removed\
+    \ from /metrics, unless another\n\n        file that parses declares it too, so\
+    \ their threshold\n\n        alerts stop firing (#1980). Fix the YAML (the\n\n\
+    \        exporter logs `WARN: skip unparseable file` with the\n\n        parse\
+    \ error) and the tenants come back on the next\n\n        reload. Tenants declared\
+    \ in other files are unaffected\n\n        when the file is a tenant file. When\
+    \ it is a `_`-prefixed\n\n        platform file (e.g. `_profiles.yaml`), the exporter\
+    \ logs\n\n        `ERROR: skip unparseable defaults/profiles file` instead,\n\n\
+    \        and every tenant that uses what the file provides (e.g. a\n\n       \
+    \ profile) loses those values.\n\n        NOTE: this evaluates a 1-hour sliding\
+    \ window, so the\n\n        alert may stay Firing for up to ~1h after the YAML\
+    \ is\n\n        fixed (the old failures only drop out of the window as\n\n   \
+    \     time passes) — that''s expected, not a stuck alert.\n\n        '\n     \
+    \ runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#validate-config\n\
     \      summary: Config YAML parse failures (file {{ $labels.file_basename }})\n\
-    \  - alert: ConfigDefaultsParseFailure\n    expr: increase(da_config_parse_failure_total{file_basename=\"\
-    _defaults.yaml\"}[5m]) > 0.5\n    labels:\n      alert_source: platform\n    \
-    \  severity: critical\n    annotations:\n      description: 'A `_defaults.yaml`\
-    \ parse failure occurred in the last\n\n        5m. Per the inheritance design\
-    \ (ADR-017) this silently\n\n        drops the ENTIRE defaults block for every\
-    \ tenant that\n\n        depends on this chain — those tenants quietly lose any\n\
-    \n        rule pulled from defaults. Fix the YAML immediately\n\n        (see\
-    \ the exporter ERROR logs).\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
+    \  - alert: ConfigDefaultsParseFailure\n    expr: max without (instance, pod)\
+    \ (increase(da_config_parse_failure_total{file_basename=\"_defaults.yaml\"}[5m]))\
+    \ > 0.5\n    labels:\n      alert_source: platform\n      severity: critical\n\
+    \    annotations:\n      description: 'A `_defaults.yaml` parse failure occurred\
+    \ in the last\n\n        5m. Per the inheritance design (ADR-017) this silently\n\
+    \n        drops the ENTIRE defaults block for every tenant that\n\n        depends\
+    \ on this chain — those tenants quietly lose any\n\n        rule pulled from defaults.\
+    \ Fix the YAML immediately\n\n        (see the exporter ERROR logs).\n\n     \
+    \   '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
     \      summary: _defaults.yaml parse failure — defaults chain dropped\n  - alert:\
     \ ConfigReloadStuck\n    expr: '(sum without (reason) (increase(da_config_reload_trigger_total[10m]))\
     \ > 0)\n\n      and\n\n      ((time() - da_config_last_reload_complete_unixtime_seconds)\
@@ -192,82 +194,86 @@ data:
     \ / panic /\n\n        lock contention; restart the pod if no obvious cause.\n\
     \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md\n\
     \      summary: Threshold-exporter reload pipeline stuck — phantom config state\n\
-    \  - alert: ConfigScanFailing\n    expr: '(increase(da_config_scan_failures_total[10m])\
-    \ > 0)\n\n      and ignoring (reason)\n\n      ((time() - da_config_last_scan_complete_unixtime_seconds)\
-    \ > 300)\n\n      '\n    for: 1m\n    labels:\n      alert_source: platform\n\
-    \      severity: critical\n    annotations:\n      description: 'No conf.d scan\
-    \ on {{ $labels.instance }} has succeeded for\n\n        more than 5 minutes,\
-    \ and scans are failing with reason\n\n        `{{ $labels.reason }}`. Nothing\
-    \ is reloaded while it lasts:\n\n        the exporter keeps serving the last good\
-    \ config and /ready\n\n        stays 200, so edits to ANY tenant (git-sync, kubectl\
-    \ apply,\n\n        Tenant API) are NOT applied. duplicate_tenant = one tenant\
-    \ id\n\n        is declared in two files; the exporter log names both files\n\n\
-    \        in \"WARN: cannot check config ...: duplicate tenant ID ...\"\n\n   \
-    \     every tick (\"...: hierarchical scan: duplicate tenant ID ...\"\n\n    \
-    \    once a _defaults.yaml has been seen anywhere in the tree).\n\n        Remove\
-    \ one declaration.\n\n        walk_error = the config directory is missing or\
-    \ not a\n\n        directory. root_unreadable = it exists but cannot be listed\n\
-    \n        (permissions; log \"cannot list config directory\").\n\n        empty_tree\
-    \ = it holds no usable config file (all deleted, or\n\n        none readable —\
-    \ see da_config_unreadable_files). Once the\n\n        cause is fixed the next\
-    \ tick reloads the\n\n        tree (pending edits included), no restart needed,\
-    \ and the\n\n        alert resolves once that tick''s successful scan is scraped.\n\
-    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md\n\
+    \  - alert: ConfigScanFailing\n    expr: \"max without (instance, pod) (\\n  (increase(da_config_scan_failures_total[10m])\
+    \ > 0)\\n  and ignoring (reason)\\n  ((time() - da_config_last_scan_complete_unixtime_seconds)\
+    \ > 300)\\n)\\n\"\n    for: 1m\n    labels:\n      alert_source: platform\n  \
+    \    severity: critical\n    annotations:\n      description: 'At least one threshold-exporter\
+    \ replica has not completed a\n\n        conf.d scan for more than 5 minutes,\
+    \ and its scans are failing\n\n        with reason `{{ $labels.reason }}` (which\
+    \ replicas:\n\n        `increase(da_config_scan_failures_total[10m]) > 0` per\
+    \ pod).\n\n        Nothing is reloaded on it while it lasts:\n\n        the exporter\
+    \ keeps serving the last good config and /ready\n\n        stays 200, so edits\
+    \ to ANY tenant (git-sync, kubectl apply,\n\n        Tenant API) are NOT applied.\
+    \ duplicate_tenant = one tenant id\n\n        is declared in two files; the exporter\
+    \ log names both files\n\n        in \"WARN: cannot check config ...: duplicate\
+    \ tenant ID ...\"\n\n        every tick (\"...: hierarchical scan: duplicate tenant\
+    \ ID ...\"\n\n        once a _defaults.yaml has been seen anywhere in the tree).\n\
+    \n        Remove one declaration.\n\n        walk_error = the config directory\
+    \ is missing or not a\n\n        directory. root_unreadable = it exists but cannot\
+    \ be listed\n\n        (permissions; log \"cannot list config directory\").\n\n\
+    \        empty_tree = it holds no usable config file (all deleted, or\n\n    \
+    \    none readable — see da_config_unreadable_files). Once the\n\n        cause\
+    \ is fixed the next tick reloads the\n\n        tree (pending edits included),\
+    \ no restart needed, and the\n\n        alert resolves once that tick''s successful\
+    \ scan is scraped.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md\n\
     \      summary: Threshold-exporter conf.d unscannable for >5m ({{ $labels.reason\
     \ }}) — config frozen at last good state\n  - alert: ConfigFilesUnreadable\n \
-    \   expr: da_config_unreadable_files > 0\n    for: 10m\n    labels:\n      alert_source:\
-    \ platform\n      severity: critical\n    annotations:\n      description: '{{\
-    \ $value }} config-named entr(ies) under the conf.d tree of\n\n        {{ $labels.instance\
-    \ }} could not be used for more than 10\n\n        minutes ({{ $labels.reason\
-    \ }}): stat_error = the file (or a\n\n        symlink''s target) cannot be statted,\
-    \ e.g. a dangling link;\n\n        read_error = it cannot be read, e.g. permission\
-    \ denied;\n\n        walk_error = a directory cannot be listed, so nothing under\n\
-    \n        it is loaded; special_file = it is not a regular file (a\n\n       \
-    \ FIFO, a socket or a device, or a symlink to one) and is\n\n        never opened.\
-    \ Every tenant declared there has no thresholds\n\n        on /metrics, while\
-    \ every other tenant keeps reloading. The\n\n        exporter log names each entry\
-    \ (\"WARN: cannot read ...\",\n\n        \"WARN: cannot stat ...\", \"WARN: walk\
-    \ error at ...\",\n\n        \"WARN: ... is a special file ...\"). Fix the file\
-    \ mode /\n\n        ownership or the link, or replace the special file with a\n\
-    \n        regular one; the next tick picks it up.\n\n        '\n      runbook_url:\
-    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md\n\
+    \   expr: max without (instance, pod) (da_config_unreadable_files) > 0\n    for:\
+    \ 10m\n    labels:\n      alert_source: platform\n      severity: critical\n \
+    \   annotations:\n      description: '{{ $value }} config-named entr(ies) under\
+    \ the threshold-exporter''s\n\n        conf.d tree could not be used for more\
+    \ than 10\n\n        minutes ({{ $labels.reason }}): stat_error = the file (or\
+    \ a\n\n        symlink''s target) cannot be statted, e.g. a dangling link;\n\n\
+    \        read_error = it cannot be read, e.g. permission denied;\n\n        walk_error\
+    \ = a directory cannot be listed, so nothing under\n\n        it is loaded; special_file\
+    \ = it is not a regular file (a\n\n        FIFO, a socket or a device, or a symlink\
+    \ to one) and is\n\n        never opened. Every tenant declared there has no thresholds\n\
+    \n        on /metrics, while every other tenant keeps reloading. The\n\n     \
+    \   exporter log names each entry (\"WARN: cannot read ...\",\n\n        \"WARN:\
+    \ cannot stat ...\", \"WARN: walk error at ...\",\n\n        \"WARN: ... is a\
+    \ special file ...\"). Fix the file mode /\n\n        ownership or the link, or\
+    \ replace the special file with a\n\n        regular one; the next tick picks\
+    \ it up.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/troubleshooting.md\n\
     \      summary: Threshold-exporter cannot read conf.d entries ({{ $labels.reason\
     \ }}) — tenants in them are not served\n  - alert: ConfigDefaultsUnusable\n  \
-    \  expr: da_config_defaults_unusable > 0\n    for: 10m\n    labels:\n      alert_source:\
-    \ platform\n      severity: critical\n    annotations:\n      description: '{{\
-    \ $value }} `_defaults.yaml` file(s) under the conf.d tree\n\n        of {{ $labels.instance\
-    \ }} have been unusable for more than\n\n        10 minutes ({{ $labels.reason\
-    \ }}). Per ADR-017 the whole\n\n        defaults block of such a file is dropped:\
-    \ every tenant below\n\n        it loses the thresholds it inherits from it (for\
-    \ the ROOT\n\n        file, every tenant — those user_threshold series are gone).\n\
-    \n        parse_failure = the YAML does not parse (exporter log:\n\n        \"\
-    ERROR: skip unparseable defaults/profiles file ...\");\n\n        unreadable =\
-    \ it cannot be statted or read (log: \"WARN:\n\n        cannot read ...\" / \"\
-    WARN: cannot stat ...\"). Fix the file;\n\n        the next tick reloads and the\
-    \ alert resolves.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
+    \  expr: max without (instance, pod) (da_config_defaults_unusable) > 0\n    for:\
+    \ 10m\n    labels:\n      alert_source: platform\n      severity: critical\n \
+    \   annotations:\n      description: '{{ $value }} `_defaults.yaml` file(s) under\
+    \ the threshold-exporter''s\n\n        conf.d tree have been unusable for more\
+    \ than\n\n        10 minutes ({{ $labels.reason }}). Per ADR-017 the whole\n\n\
+    \        defaults block of such a file is dropped: every tenant below\n\n    \
+    \    it loses the thresholds it inherits from it (for the ROOT\n\n        file,\
+    \ every tenant — those user_threshold series are gone).\n\n        parse_failure\
+    \ = the YAML does not parse (exporter log:\n\n        \"ERROR: skip unparseable\
+    \ defaults/profiles file ...\");\n\n        unreadable = it cannot be statted\
+    \ or read (log: \"WARN:\n\n        cannot read ...\" / \"WARN: cannot stat ...\"\
+    ). Fix the file;\n\n        the next tick reloads and the alert resolves.\n\n\
+    \        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
     \      summary: Threshold-exporter cannot use a _defaults.yaml ({{ $labels.reason\
     \ }}) — inherited thresholds dropped\n  - alert: TenantMetricsOverLimit\n    expr:\
-    \ da_tenant_metrics_over_limit > 0\n    for: 5m\n    labels:\n      alert_source:\
-    \ platform\n      severity: warning\n      tenant: '{{ $labels.tenant }}'\n  \
-    \  annotations:\n      description: 'Tenant `{{ $labels.tenant }}` is producing\
-    \ more\n\n        thresholds than `max_metrics_per_tenant` allows\n\n        ({{\
-    \ $value }} excess). The runtime silently truncated\n\n        the excess (`pkg/config/resolve.go`),\
-    \ so the rules\n\n        falling outside the cap stop evaluating until the\n\n\
-    \        tenant either trims their config or raises the\n\n        per-tenant\
-    \ limit.\n\n        If `DefaultsTruncationStorm` is firing simultaneously\n\n\
-    \        treat this as a symptom — root cause is a\n\n        `_defaults.yaml`\
-    \ change adding metric keys across the\n\n        ADR-017 inheritance chain, not\
-    \ single-tenant\n\n        overgrowth.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#cardinality-forecast\n\
+    \ max without (instance, pod) (da_tenant_metrics_over_limit) > 0\n    for: 5m\n\
+    \    labels:\n      alert_source: platform\n      severity: warning\n      tenant:\
+    \ '{{ $labels.tenant }}'\n    annotations:\n      description: 'Tenant `{{ $labels.tenant\
+    \ }}` is producing more\n\n        thresholds than `max_metrics_per_tenant` allows\n\
+    \n        ({{ $value }} excess). The runtime silently truncated\n\n        the\
+    \ excess (`pkg/config/resolve.go`), so the rules\n\n        falling outside the\
+    \ cap stop evaluating until the\n\n        tenant either trims their config or\
+    \ raises the\n\n        per-tenant limit.\n\n        If `DefaultsTruncationStorm`\
+    \ is firing simultaneously\n\n        treat this as a symptom — root cause is\
+    \ a\n\n        `_defaults.yaml` change adding metric keys across the\n\n     \
+    \   ADR-017 inheritance chain, not single-tenant\n\n        overgrowth.\n\n  \
+    \      '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#cardinality-forecast\n\
     \      summary: Tenant {{ $labels.tenant }} exceeded max metrics limit (truncated)\n\
-    \  - alert: DefaultsTruncationStorm\n    expr: count without (tenant) (da_tenant_metrics_over_limit\
-    \ > 0) > 50\n    for: 2m\n    labels:\n      alert_source: platform\n      severity:\
-    \ critical\n    annotations:\n      description: 'More than 50 tenants are simultaneously\
-    \ over the\n\n        per-tenant metric cap. The likely cause is a\n\n       \
-    \ `_defaults.yaml` change that added metric keys across\n\n        the ADR-017\
-    \ inheritance chain, pushing dependent\n\n        tenants past the limit. Roll\
-    \ back or trim the defaults\n\n        change FIRST — remediating individual tenants\
-    \ without\n\n        addressing the defaults change will just re-fire the\n\n\
-    \        same storm next reload.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
+    \  - alert: DefaultsTruncationStorm\n    expr: max without (instance, pod) (count\
+    \ without (tenant) (da_tenant_metrics_over_limit > 0)) > 50\n    for: 2m\n   \
+    \ labels:\n      alert_source: platform\n      severity: critical\n    annotations:\n\
+    \      description: 'More than 50 tenants are simultaneously over the\n\n    \
+    \    per-tenant metric cap. The likely cause is a\n\n        `_defaults.yaml`\
+    \ change that added metric keys across\n\n        the ADR-017 inheritance chain,\
+    \ pushing dependent\n\n        tenants past the limit. Roll back or trim the defaults\n\
+    \n        change FIRST — remediating individual tenants without\n\n        addressing\
+    \ the defaults change will just re-fire the\n\n        same storm next reload.\n\
+    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/017-defaults-yaml-inheritance-dual-hash.md\n\
     \      summary: Massive tenant metrics truncation ({{ $value }} tenants) — _defaults.yaml\
     \ suspected\n  - alert: PrometheusRuleEvaluationFailing\n    expr: increase(prometheus_rule_evaluation_failures_total[10m])\
     \ > 0\n    for: 15m\n    labels:\n      alert_source: platform\n      severity:\
@@ -507,9 +513,8 @@ data:
     \ §5.6. Dashboard: tenant_api_sse_clients.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/api/tenant-api-hardening.md\n\
     \      summary: tenant-api read load sustained — revisit read/write CQRS split\
     \ (ADR-023 A4)\n  - alert: TenantApiSingleWriterBreach\n    expr: \"max by (namespace,\
-    \ deployment) (\\n  kube_deployment_spec_replicas{namespace=\\\"tenant-api\\\"\
-    , deployment=\\\"tenant-api\\\"}\\n) > 1\\nor\\nmax by (namespace, deployment)\
-    \ (\\n  kube_deployment_status_replicas{namespace=\\\"tenant-api\\\", deployment=\\\
+    \ deployment) (\\n  kube_deployment_spec_replicas{deployment=\\\"tenant-api\\\"\
+    }\\n) > 1\\nor\\nmax by (namespace, deployment) (\\n  kube_deployment_status_replicas{deployment=\\\
     \"tenant-api\\\"}\\n) > 1\\n\"\n    for: 2m\n    labels:\n      alert_source:\
     \ platform\n      severity: critical\n    annotations:\n      description: 'The\
     \ tenant-api Deployment has more than one replica ({{ $value }}) by\n\n      \
@@ -521,9 +526,9 @@ data:
     \n        Recreate`) bind only deploy-time config; THIS is a runtime breach —\
     \ a\n\n        `kubectl scale`, an HPA, a GitOps controller reconciling a patched\n\
     \n        `replicas`, or a node-eviction replacement racing a stuck-Terminating\n\
-    \n        pod. ACTION NOW: scale back to one\n\n        (`kubectl -n tenant-api\
-    \ scale deploy/tenant-api --replicas=1`) and find\n\n        what set it — check\
-    \ `kubectl get events`, the GitOps app''s sync history\n\n        / an `ignoreDifferences`\
+    \n        pod. ACTION NOW: scale back to one\n\n        (`kubectl -n {{ $labels.namespace\
+    \ }} scale deploy/tenant-api --replicas=1`) and find\n\n        what set it —\
+    \ check `kubectl get events`, the GitOps app''s sync history\n\n        / an `ignoreDifferences`\
     \ on replicas, and any HPA targeting tenant-api.\n\n        This alert is ALSO\
     \ the codified re-eval trigger for the deferred K8s\n\n        Lease (ADR-023\
     \ Deferred A3 / #787): if multi-writer is now a real\n\n        operational need,\
@@ -547,19 +552,21 @@ data:
     \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md\n\
     \      summary: Federation token un-revoke suspected — reconciler found a revoked-but-live\
     \ token absent from the live set (ADR-028)\n  - alert: FederationRevocationReconcileStale\n\
-    \    expr: '(time() - federation_revocation_last_reconcile_timestamp_seconds >\
-    \ 1800)\n\n      or absent(federation_revocation_last_reconcile_timestamp_seconds)\n\
-    \n      '\n    for: 10m\n    labels:\n      alert_source: platform\n      severity:\
-    \ critical\n    annotations:\n      description: 'The federation-reconciler has\
-    \ not SUCCESSFULLY reconciled in over 30\n\n        minutes, or its metrics are\
-    \ absent (pod down / never scraped). A\n\n        fail-closed pass (a VictoriaLogs\
+    \    expr: \"(time() - federation_revocation_last_reconcile_timestamp_seconds\
+    \ > 1800)\\nor\\n(\\n  absent(federation_revocation_last_reconcile_timestamp_seconds)\\\
+    n  and on() count(kube_deployment_spec_replicas{deployment=\\\"federation-reconciler\\\
+    \"} > 0) > 0\\n)\\n\"\n    for: 10m\n    labels:\n      alert_source: platform\n\
+    \      severity: critical\n    annotations:\n      description: 'The federation-reconciler\
+    \ has not SUCCESSFULLY reconciled in over 30\n\n        minutes, or its metrics\
+    \ are absent (pod down / never scraped). A\n\n        fail-closed pass (a VictoriaLogs\
     \ query or revoked.txt read failed)\n\n        deliberately does NOT refresh the\
     \ last-reconcile timestamp, so a\n\n        stuck reconciler surfaces here rather\
     \ than as a false all-clear — but\n\n        while it is stale the un-revoke tamper-evidence\
-    \ is BLIND. ACTION:\n\n        check the reconciler Deployment (`kubectl -n monitoring\
-    \ get deploy\n\n        federation-reconciler`), its recent logs for fail-closed\
-    \ messages,\n\n        and VictoriaLogs reachability. Details:\n\n        docs/adr/028-federation-revocation-tamper-evidence.md.\n\
-    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md\n\
+    \ is BLIND. ACTION:\n\n        check the reconciler Deployment (`kubectl get deploy\
+    \ -A -l\n\n        app.kubernetes.io/name=federation-reconciler`), its recent\
+    \ logs for fail-closed messages,\n\n        and VictoriaLogs reachability. Details:\n\
+    \n        docs/adr/028-federation-revocation-tamper-evidence.md.\n\n        '\n\
+    \      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/028-federation-revocation-tamper-evidence.md\n\
     \      summary: Federation revocation reconciler stale or down — un-revoke detection\
     \ is not operational (ADR-028)\n  - alert: FederationRevocationEvidenceChannelDown\n\
     \    expr: federation_revocation_channel_up == 0\n    for: 15m\n    labels:\n\
@@ -677,23 +684,24 @@ data:
     \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/federation-integration.md\n\
     \      summary: Entire tenant-exporters scrape job is absent — per-tenant liveness\
     \ is BLIND\n  - alert: MassExporterOutage\n    expr: \"(\\n  count without (tenant,\
-    \ db_type) (tenant_expected_exporter unless on(tenant) (up{job=\\\"tenant-exporters\\\
-    \"} == 1)) > 5\\n  and\\n  (\\n    count without (tenant, db_type) (tenant_expected_exporter\
-    \ unless on(tenant) (up{job=\\\"tenant-exporters\\\"} == 1))\\n    /\\n    count\
-    \ without (tenant, db_type) (tenant_expected_exporter)\\n  ) > 0.1\\n)\\nunless\
-    \ on() absent(up{job=\\\"tenant-exporters\\\"})\\n\"\n    for: 3m\n    labels:\n\
-    \      alert_source: platform\n      severity: critical\n    annotations:\n  \
-    \    description: 'More than 5 tenants AND over 10% of the expected-exporter fleet\n\
-    \n        simultaneously have no healthy up{job=\"tenant-exporters\"}==1 target.\n\
-    \n        Both conditions together mean this is almost certainly a SHARED\n\n\
-    \        failure (node pool drained, network partition, image-pull outage on a\n\
-    \n        rolling restart) rather than N independent exporter deaths or a\n\n\
-    \        routine single-node blip. Treat as ONE incident: inspect node health\n\
-    \n        / network / recent cluster-wide changes FIRST — remediating tenants\n\
-    \n        one by one will not address the common cause. Per-tenant detail is in\n\
-    \n        the fanned-out TenantExporterAbsent alerts. If instead the WHOLE\n\n\
-    \        tenant-exporters job is gone, TenantExporterJobAbsent fires instead.\n\
-    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage\n\
+    \ db_type) (max without (instance, pod) (tenant_expected_exporter) unless on(tenant)\
+    \ (up{job=\\\"tenant-exporters\\\"} == 1)) > 5\\n  and\\n  (\\n    count without\
+    \ (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter) unless\
+    \ on(tenant) (up{job=\\\"tenant-exporters\\\"} == 1))\\n    /\\n    count without\
+    \ (tenant, db_type) (max without (instance, pod) (tenant_expected_exporter))\\\
+    n  ) > 0.1\\n)\\nunless on() absent(up{job=\\\"tenant-exporters\\\"})\\n\"\n \
+    \   for: 3m\n    labels:\n      alert_source: platform\n      severity: critical\n\
+    \    annotations:\n      description: 'More than 5 tenants AND over 10% of the\
+    \ expected-exporter fleet\n\n        simultaneously have no healthy up{job=\"\
+    tenant-exporters\"}==1 target.\n\n        Both conditions together mean this is\
+    \ almost certainly a SHARED\n\n        failure (node pool drained, network partition,\
+    \ image-pull outage on a\n\n        rolling restart) rather than N independent\
+    \ exporter deaths or a\n\n        routine single-node blip. Treat as ONE incident:\
+    \ inspect node health\n\n        / network / recent cluster-wide changes FIRST\
+    \ — remediating tenants\n\n        one by one will not address the common cause.\
+    \ Per-tenant detail is in\n\n        the fanned-out TenantExporterAbsent alerts.\
+    \ If instead the WHOLE\n\n        tenant-exporters job is gone, TenantExporterJobAbsent\
+    \ fires instead.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#172-massexporteroutage\n\
     \      summary: Mass exporter outage ({{ $value }} tenants) — shared-dependency\
     \ failure suspected\n- name: federation-audit\n  rules:\n  - alert: FederationRejectionRateAnomaly\n\
     \    expr: \"(\\n  sum by (tenant) (\\n    rate(tenant_federation_requests_total{status=~\\\
@@ -718,14 +726,15 @@ data:
     \ the Layer 3 proxy and\n\n        the storage backend.\n\n        '\n      runbook_url:\
     \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/020-tenant-federation.md\n\
     \      summary: Federation backend errors for {{ $labels.tenant }}\n  - alert:\
-    \ FederationAuditPipelineSilent\n    expr: absent_over_time(tenant_federation_requests_total[10m])\n\
-    \    for: 5m\n    labels:\n      alert_source: platform\n      severity: critical\n\
-    \    annotations:\n      description: 'No `tenant_federation_requests_total` samples\
-    \ in the last\n\n        10m — federation gateway audit pipeline is broken. Check\n\
-    \n        (a) gateway pods Running, (b) audit-metrics sidecar logs, (c) the\n\n\
-    \        Prometheus scrape target. If both gateway + sidecar are\n\n        healthy\
-    \ the silence may indicate genuine zero traffic\n\n        (suppress the alert\
-    \ during planned maintenance).\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/020-tenant-federation.md\n\
+    \ FederationAuditPipelineSilent\n    expr: 'absent_over_time(tenant_federation_requests_total[10m])\n\
+    \n      and on() count(kube_pod_container_info{container=\"audit-metrics\"}) >\
+    \ 0\n\n      '\n    for: 5m\n    labels:\n      alert_source: platform\n     \
+    \ severity: critical\n    annotations:\n      description: 'No `tenant_federation_requests_total`\
+    \ samples in the last\n\n        10m — federation gateway audit pipeline is broken.\
+    \ Check\n\n        (a) gateway pods Running, (b) audit-metrics sidecar logs, (c)\
+    \ the\n\n        Prometheus scrape target. If both gateway + sidecar are\n\n \
+    \       healthy the silence may indicate genuine zero traffic\n\n        (suppress\
+    \ the alert during planned maintenance).\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/adr/020-tenant-federation.md\n\
     \      summary: Federation audit pipeline has produced zero rows for 10m\n  -\
     \ alert: VectorBufferEventsDropped\n    expr: \"sum by (component_id) (\\n  rate(vector_buffer_discarded_events_total[5m])\\\
     n) > 0\\n\"\n    for: 5m\n    labels:\n      alert_source: platform\n      severity:\

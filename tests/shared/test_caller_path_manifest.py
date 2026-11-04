@@ -19,6 +19,15 @@ that takes a value to be declared in ``caller_path_manifest.yaml`` as one of:
   is the ceiling, so a new pending entry is a visible edit here, not a
   quiet line in the manifest.
 
+#3446: an argument declared with ``_lib_input.add_input`` carries its
+declaration on the parser's action (``action.input_spec``) and needs no
+manifest line — one there is a fault (two declarations of one flag). It
+still needs a row in OPS_SITES that hands it a locked directory: that row's
+argv is what ``test_caller_paths.py``'s ``test_a_declared_input_*`` rows and
+``test_input_listing_audit.py`` run it with. Every one of its rows is held to
+``dir``, as a manifest ``dir`` line would be: a locked directory only, a
+``dir_*`` reason, one declaration per site.
+
 A declaration the parser no longer has is a fault too: the manifest may not
 outlive the flag it describes.
 
@@ -99,9 +108,11 @@ def rows_by_site() -> dict[tuple[str, str | None], list[tuple[str, str | None]]]
     return rows
 
 
-def parsed_arguments() -> tuple[dict[tuple[str, str], str], list[str]]:
+def parsed_arguments(specs: "dict | None" = None) -> tuple[dict[tuple[str, str], str], list[str]]:
     """(command, argument) -> script relative to scripts/tools, for every
-    argument that takes a value; plus the commands no parser was reached for."""
+    argument that takes a value; plus the commands no parser was reached for.
+    *specs*, when given, is filled with (command, argument) -> the
+    ``_lib_input.InputSpec`` of every argument declared with ``add_input``."""
     import argparse
     sys.path[:0] = [str(TOOLS / "lint"), str(TOOLS)]
     try:
@@ -125,6 +136,8 @@ def parsed_arguments() -> tuple[dict[tuple[str, str], str], list[str]]:
             name = longs[0] if longs else (action.option_strings[0]
                                             if action.option_strings else action.dest)
             found[(command, name)] = script
+            if specs is not None and getattr(action, "input_spec", None) is not None:
+                specs[(command, name)] = action.input_spec
 
     for command, model in captured.items():
         script = cli._resolve(command_map[command]).relative_to(TOOLS).as_posix()
@@ -162,19 +175,47 @@ def _test_exists(ref: str) -> bool:
 
 
 def manifest_faults(parsed: dict[tuple[str, str], str], dispatched: list[str],
-                    manifest: dict, rows: dict, pending_ceiling: frozenset) -> list[str]:
-    """Every way the manifest and the parsers disagree, one line each."""
+                    manifest: dict, rows: dict, pending_ceiling: frozenset,
+                    specs: "dict | None" = None) -> list[str]:
+    """Every way the manifest and the parsers disagree, one line each.
+    *specs*: the arguments declared with ``_lib_input.add_input``."""
     faults: list[str] = []
     entries = _entries(manifest)
+    specs = specs or {}
     if sorted(manifest.get("dispatched_to_go") or []) != dispatched:
         faults.append(f"dispatched_to_go is {sorted(manifest.get('dispatched_to_go') or [])}; "
                       f"no Python parser is reached for {dispatched}")
-    for key in sorted(set(parsed) - set(entries)):
+    for key in sorted(set(parsed) - set(entries) - set(specs)):
         faults.append(f"{key[0]} {key[1]}: takes a value and is not declared")
+    for key in sorted(set(specs) & set(entries)):
+        faults.append(f"{key[0]} {key[1]}: declared with _lib_input.add_input — drop its "
+                      "manifest line (one declaration per flag)")
+    claims: dict[tuple, list[str]] = {}
+    for key in sorted(set(specs) & set(parsed)):
+        # Every add_input selection is a directory (TopLevel, DA_GUARD_LISTS):
+        # its rows are held to `dir` exactly as a manifest `dir` line is.
+        where = f"{key[0]} {key[1]}"
+        site = (parsed[key], key[1] if key[1].startswith("-") else None)
+        holders = {holder for holder, _reason in rows.get(site, [])}
+        if "D" not in holders:
+            faults.append(f"{where}: declared with _lib_input.add_input but no "
+                          "OPS_SITES row hands it a locked directory — the declared-input "
+                          "rows and the listing audit are made from that row")
+        if site in rows:
+            claims.setdefault(site, []).append(where)
+            for holder, reason in rows[site]:
+                if holder != "D":
+                    faults.append(f"{where}: declared with _lib_input.add_input (a "
+                                  "directory), its row hands it a locked file")
+                if reason is not None and reason.startswith(tuple(REASON_PREFIX.values())) \
+                        and not reason.startswith(REASON_PREFIX["dir"]):
+                    faults.append(f"{where}: declared with _lib_input.add_input (a "
+                                  f"directory), its row answers {reason}")
     for key in sorted(set(entries) - set(parsed)):
         faults.append(f"{key[0]} {key[1]}: declared, but the parser has no such argument")
-    claims: dict[tuple, list[str]] = {}
-    for key in sorted(set(entries) & set(parsed)):
+    # A flag declared both ways already has its fault above; its manifest
+    # line is not judged a second time.
+    for key in sorted((set(entries) & set(parsed)) - set(specs)):
         where, decl = f"{key[0]} {key[1]}", entries[key]
         kind = decl.get("kind")
         if kind not in KINDS:
@@ -331,13 +372,17 @@ def test_the_go_dispatchers_dispatch_to_go():
 
 @pytest.fixture(scope="module")
 def parsed():
-    return parsed_arguments()
+    specs: dict = {}
+    arguments, dispatched = parsed_arguments(specs)
+    return arguments, dispatched, specs
 
 
 def test_every_da_tools_argument_is_declared(parsed):
-    arguments, dispatched = parsed
+    arguments, dispatched, specs = parsed
     assert len(arguments) > 200, "the walk found too few arguments to be measuring anything"
-    faults = manifest_faults(arguments, dispatched, load_manifest(), rows_by_site(), PENDING)
+    assert specs, "no add_input declaration was read off a parser — the walk measured none"
+    faults = manifest_faults(arguments, dispatched, load_manifest(), rows_by_site(), PENDING,
+                             specs)
     assert not faults, "\n".join(faults)
 
 
@@ -458,3 +503,55 @@ def test_the_go_dispatchers_are_named():
     assert len(_faults({"t": {"--d": "dir", "--n": "not_path"}}, dispatched=["guard"])) == 0
     assert len(manifest_faults(_PARSED, ["guard"], {"commands": {"t": {"--d": "dir",
                                "--n": "not_path"}}}, _ROWS, frozenset())) == 1
+
+
+def test_an_add_input_flag_needs_no_manifest_line_and_may_not_have_one():
+    """#3446: the declaration on the parser replaces the manifest line."""
+    spec = object()
+    parsed = {("t", "--d"): "ops/t.py", ("t", "--n"): "ops/t.py"}
+    assert _faults({"t": {"--n": "not_path"}}, parsed=parsed) == [
+        "t --d: takes a value and is not declared"]
+    assert manifest_faults(parsed, [], {"commands": {"t": {"--n": "not_path"}}},
+                           _ROWS, frozenset(), {("t", "--d"): spec}) == []
+    assert manifest_faults(parsed, [], {"commands": {"t": {"--d": "dir", "--n": "not_path"}}},
+                           _ROWS, frozenset(), {("t", "--d"): spec}) == [
+        "t --d: declared with _lib_input.add_input — drop its manifest line "
+        "(one declaration per flag)"]
+
+
+def test_an_add_input_flag_needs_a_locked_directory_row():
+    spec = object()
+    parsed = {("t", "--d"): "ops/t.py"}
+    faults = manifest_faults(parsed, [], {"commands": {}}, {}, frozenset(),
+                             {("t", "--d"): spec})
+    assert len(faults) == 1 and "no OPS_SITES row hands it a locked directory" in faults[0]
+    rows = {("ops/t.py", "--d"): [("F", None)]}
+    faults = manifest_faults(parsed, [], {"commands": {}}, rows, frozenset(),
+                             {("t", "--d"): spec})
+    assert len(faults) == 2 and "its row hands it a locked file" in faults[1], faults
+
+
+def test_an_add_input_flag_is_held_to_dir_like_a_manifest_dir_line():
+    """#3446 review: a declaration on the parser may not loosen what a
+    manifest `dir` line demands of its rows."""
+    spec = object()
+    parsed = {("t", "--d"): "ops/t.py"}
+    ok = {("ops/t.py", "--d"): [("D", "dir_not_found")]}
+    assert manifest_faults(parsed, [], {"commands": {}}, ok, frozenset(),
+                           {("t", "--d"): spec}) == []
+    # a D row besides an F row: the F row is still a fault
+    mixed = {("ops/t.py", "--d"): [("D", None), ("F", None)]}
+    assert manifest_faults(parsed, [], {"commands": {}}, mixed, frozenset(),
+                           {("t", "--d"): spec}) == [
+        "t --d: declared with _lib_input.add_input (a directory), its row hands it a locked file"]
+    # a row that answers with a file_* reason
+    wrong = {("ops/t.py", "--d"): [("D", "file_not_found")]}
+    assert manifest_faults(parsed, [], {"commands": {}}, wrong, frozenset(),
+                           {("t", "--d"): spec}) == [
+        "t --d: declared with _lib_input.add_input (a directory), its row answers file_not_found"]
+    # one site answering for an add_input flag and a manifest declaration
+    two = {("t", "--d"): "ops/t.py", ("u", "--d"): "ops/t.py"}
+    faults = manifest_faults(two, [], {"commands": {"u": {"--d": "dir"}}}, ok, frozenset(),
+                             {("t", "--d"): spec})
+    assert faults == ["t --d / u --d: one row (ops/t.py --d) cannot answer for more than "
+                      "one declaration"], faults

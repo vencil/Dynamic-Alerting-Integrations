@@ -209,6 +209,11 @@ TOOL_FILES=(
     # one judgement of a caller-given path (_lib_paths imports _lib_label).
     _lib_label.py
     _lib_paths.py
+    # #3446 — stdlib only: what a caller-given value selects (`add_input` /
+    # `selected` / `read_bytes`) and the one directory listing (`_list`);
+    # imported by state_reconcile, migrate_to_operator and _lib_consumer_read.
+    # Imports _lib_paths / _lib_label (above).
+    _lib_input.py
     _lib_io.py
     # #3107 — the one atomic writer (moved from dx/): _lib_io.write_repo_artifact
     # is its entry point; state-reconcile rewrites its manifest atomically.
@@ -258,6 +263,10 @@ TOOL_FILES=(
     # its consumer reads it (runs the da-crdecode / da-read binaries bundled
     # below); imported by ops/onboard_platform. Stdlib-only.
     _lib_consumer_read.py
+    # #1595 D1b — the metric-family → source table and the Prometheus Operator
+    # portability derivation; imported by ops/operator_generate. Imports
+    # ops/generate_rule_pack_split (above).
+    _lib_metric_sources.py
     # Data files
     metric-dictionary.yaml
     # #719 — SoT map read by _observed_map_lib.py via same-dir lookup

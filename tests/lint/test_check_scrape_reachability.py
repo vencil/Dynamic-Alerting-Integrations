@@ -3,7 +3,8 @@
 The gate asserts every rule-consumed leaf metric is admitted by at least one
 scrape job of k8s/03-monitoring/configmap-prometheus.yaml. Each test pins one
 branch of that contract:
-  - the live repo is green (0 DEAD, the 8 helm-only unknowns ledgered)
+  - the live repo is green (0 DEAD, 0 unknown-source: the federation charts'
+    series that were ledgered are helm-service families since #1595 D1b)
   - sanity anchors: the cadvisor job's three filter layers parse correctly,
     and the PRE-#1203 scrape face (tenant-api ns absent from the SD list /
     alertmanager unannotated) classifies the victim metrics DEAD — injected,
@@ -206,28 +207,41 @@ def test_real_repo_is_green():
 
 def test_ledger_is_exactly_the_live_unknown_source_set():
     """Every KNOWN_UNKNOWN_SOURCE entry must still be demanded AND still be
-    unknown-source (exit-lock keeps the ledger honest on the real artifacts)."""
+    unknown-source (exit-lock keeps the ledger honest on the real artifacts).
+    Empty since #1595 D1b — and nothing on the real tree is unknown-source."""
     result = gate.run_check()
-    assert len(result["infos"]) == len(gate.KNOWN_UNKNOWN_SOURCE) == 9
+    assert len(result["infos"]) == len(gate.KNOWN_UNKNOWN_SOURCE) == 0
+    assert result["counts"].get(gate.UNKNOWN_SOURCE, 0) == 0
     assert not any("STALE-EXEMPTION" in e for e in result["errors"])
 
 
-def test_reconciler_gauges_are_protected_as_one_cohort():
-    """TRK-353 / #1250: `channel_up` gets the SAME reachability protection as
-    its two siblings on the same federation-reconciler Deployment.
+# The federation charts' series, by the chart that emits them (#1595 D1b).
+# LITERAL: the reconciler emits the two federation_gateway_* names (it counts the
+# gateway's reload refusals off the gateway's log stream), the gateway's audit
+# sidecar emits the two tenant_* names.
+_FEDERATION_SERIES = {
+    "federation_revocation_channel_up": "helm/federation-reconciler",
+    "federation_revocation_tamper_suspected": "helm/federation-reconciler",
+    "federation_revocation_last_reconcile_timestamp_seconds": "helm/federation-reconciler",
+    "federation_revocation_live_set_rejected_lines": "helm/federation-reconciler",
+    "federation_gateway_revocation_load_errors": "helm/federation-reconciler",
+    "federation_gateway_revoked_set_reload_rejected": "helm/federation-reconciler",
+    "federation_gateway_revoked_set_missing": "helm/federation-reconciler",
+    "tenant_federation_requests_total": "helm/federation-gateway",
+    "tenant_log_query_requests_total": "helm/federation-gateway",
+}
 
-    It used to classify REACHABLE-IF-EXPORTED off a `*_up` suffix shortcut —
-    a runtime-optimistic class that is never an error — so the one gauge whose
-    whole job is detecting silent evidence-channel failure was itself the one
-    gauge with no mechanical protection against silently losing its target.
-    """
+
+def test_federation_series_route_to_the_chart_that_emits_them():
+    """#1595 D1b: both federation charts label their scrape Service for the
+    platform job, so their series are helm-service families (REACHABLE on the
+    label face) instead of ledgered UNKNOWN-SOURCE. TRK-353 / #1250's cohort
+    (`channel_up` with its siblings) is kept: one family, one chart."""
     classes = gate.run_check()["classes"]
-    cohort = ("federation_revocation_channel_up",
-              "federation_revocation_tamper_suspected",
-              "federation_revocation_last_reconcile_timestamp_seconds")
-    for m in cohort:
-        assert classes[m][0] == gate.UNKNOWN_SOURCE, (m, classes[m])
-        assert m in gate.KNOWN_UNKNOWN_SOURCE, m
+    for m, chart in _FEDERATION_SERIES.items():
+        key, kind, spec = gate._resolve_family(m)
+        assert (kind, spec) == ("helm-service", chart), (m, key, kind, spec)
+        assert classes[m][0] == gate.REACHABLE, (m, classes[m])
 
 
 def test_repo_victim_metrics_are_reachable_after_fix():
@@ -360,15 +374,17 @@ def test_platform_gauge_ending_in_up_is_not_tenant_exporter_face():
     "tenant-exporters face (annotated db-* ns Service)" — a class that is never
     an error, so the gate stayed silent AND the exit-lock refused to let the
     metric be ledgered (STALE-EXEMPTION). It must now fall through to
-    UNKNOWN-SOURCE and, unledgered, be a hard error.
+    UNKNOWN-SOURCE and, unledgered, be a hard error. (The real gauge,
+    federation_revocation_channel_up, is a pinned helm-service family since
+    #1595 D1b; an unrouted name of the same shape keeps the pin.)
     """
     result = _check(
-        consumed={"federation_revocation_channel_up": {"platform::EvidenceChannelDown"}},
+        consumed={"somepack_platform_channel_up": {"platform::EvidenceChannelDown"}},
         jobs=_pre_fix_jobs(), services=[])
-    cls, reason = result["classes"]["federation_revocation_channel_up"]
+    cls, reason = result["classes"]["somepack_platform_channel_up"]
     assert cls == gate.UNKNOWN_SOURCE, (cls, reason)
     assert "tenant-exporters face" not in reason
-    assert any("NEW-UNKNOWN-SOURCE" in e and "federation_revocation_channel_up" in e
+    assert any("NEW-UNKNOWN-SOURCE" in e and "somepack_platform_channel_up" in e
                for e in result["errors"]), result["errors"]
 
 
@@ -376,11 +392,11 @@ def test_platform_gauge_ending_in_up_can_be_ledgered():
     """The other half of the defect: with the shortcut gone, the ledger row the
     exit-lock used to reject is now accepted (INFO, not STALE-EXEMPTION)."""
     result = _check(
-        consumed={"federation_revocation_channel_up": {"platform::EvidenceChannelDown"}},
+        consumed={"somepack_platform_channel_up": {"platform::EvidenceChannelDown"}},
         jobs=_pre_fix_jobs(), services=[],
-        known_unknown={"federation_revocation_channel_up": "reconciler helm-only (#1203)"})
+        known_unknown={"somepack_platform_channel_up": "reconciler helm-only (#1203)"})
     assert result["errors"] == []
-    assert any("federation_revocation_channel_up" in i for i in result["infos"])
+    assert any("somepack_platform_channel_up" in i for i in result["infos"])
 
 
 def test_tenant_exporter_family_dead_without_exporter_face():
@@ -853,7 +869,8 @@ _HAS_HELM = shutil.which("helm") is not None
 _needs_helm = pytest.mark.skipif(not _HAS_HELM, reason="helm binary not on PATH")
 
 # The helm-service families' specs: the charts their targets come from.
-_HELM_SERVICE_CHARTS = {"helm/threshold-exporter", "helm/vector", "helm/tenant-api"}
+_HELM_SERVICE_CHARTS = {"helm/threshold-exporter", "helm/vector", "helm/tenant-api",
+                        "helm/federation-gateway", "helm/federation-reconciler"}
 
 # Rendered into a namespace no Prometheus job names, on purpose: since #1425 the
 # install namespace is no premise, so a chart face that only held in one
@@ -983,25 +1000,24 @@ def test_vectors_opt_in_services_carry_the_label_when_rendered():
 
 
 def test_exact_family_does_not_swallow_other_charts_tenant_metrics():
-    """⛔ Hazard pin: tenant_metadata_info / tenant_expected_exporter are routed
-    by EXACT NAME, never by a `tenant_` prefix.
+    """⛔ Hazard pin: the tenant_* series are routed by EXACT NAME, never by a
+    `tenant_` prefix.
 
-    A `tenant_` prefix entry would also capture tenant_federation_requests_total
-    (federation-gateway chart) and tenant_log_query_requests_total
-    (tenant-log-query plane). Both install into Release.Namespace, are correctly
-    ledgered UNKNOWN-SOURCE, and would be silently reclassified REACHABLE off
-    the wrong component's Service — tripping the ledger exit-lock. If a future
-    author "simplifies" the exact rows into a prefix, this test must go red.
+    tenant_metadata_info / tenant_expected_exporter are threshold-exporter's;
+    tenant_federation_requests_total / tenant_log_query_requests_total are the
+    federation gateway's audit sidecar's (#1595 D1b). A `tenant_` prefix would
+    hand one component's series to the other's Service. If a future author
+    "simplifies" the exact rows into a prefix, this test must go red.
     """
-    for m in ("tenant_federation_requests_total", "tenant_log_query_requests_total"):
-        assert gate._resolve_family(m) is None, (m, gate._resolve_family(m))
-        cls, _reason = gate.classify(m, _pre_fix_jobs(), [])
-        assert cls == gate.UNKNOWN_SOURCE, (m, cls)
-        assert m in gate.KNOWN_UNKNOWN_SOURCE, m
-    # and on the real artifacts they stay ledgered, not pinned
-    classes = gate.run_check()["classes"]
-    assert classes["tenant_federation_requests_total"][0] == gate.UNKNOWN_SOURCE
-    assert classes["tenant_log_query_requests_total"][0] == gate.UNKNOWN_SOURCE
+    assert not [p for p, _k, _s in gate._FAMILY_TABLE if "tenant_".startswith(p) or p == "tenant_"]
+    expected = {"tenant_metadata_info": gate.THRESHOLD_EXPORTER_CHART,
+                "tenant_expected_exporter": gate.THRESHOLD_EXPORTER_CHART,
+                "tenant_federation_requests_total": gate.FEDERATION_GATEWAY_CHART,
+                "tenant_log_query_requests_total": gate.FEDERATION_GATEWAY_CHART}
+    for m, chart in expected.items():
+        assert gate._resolve_family(m) == (m, "helm-service", chart), (m, gate._resolve_family(m))
+    # an unlisted tenant_* name routes nowhere — it is not swallowed by a prefix
+    assert gate._resolve_family("tenant_something_new_total") is None
 
 
 def test_exact_family_beats_prefix_family(monkeypatch):
@@ -1043,16 +1059,16 @@ def test_new_unknown_source_is_an_error():
 
 def test_ledgered_unknown_source_is_info_only():
     result = _check(
-        consumed={"tenant_federation_requests_total": {"p::FederationAuditPipelineSilent"}},
+        consumed={"somepack_helm_only_metric": {"p::SomeAlert"}},
         jobs=_pre_fix_jobs(), services=[],
-        known_unknown={"tenant_federation_requests_total": "helm-only (#1203)"})
+        known_unknown={"somepack_helm_only_metric": "helm-only (#1203)"})
     assert result["errors"] == []
-    assert any("tenant_federation_requests_total" in i for i in result["infos"])
+    assert any("somepack_helm_only_metric" in i for i in result["infos"])
 
 
 def test_ledger_entry_no_longer_demanded_is_stale():
     result = _check(consumed={}, jobs=_pre_fix_jobs(), services=[],
-                    known_unknown={"tenant_log_query_requests_total": "helm-only"})
+                    known_unknown={"somepack_helm_only_metric": "helm-only"})
     assert any("STALE-EXEMPTION" in e and "demands it" in e
                for e in result["errors"]), result["errors"]
 
@@ -1107,6 +1123,22 @@ def test_extractor_does_not_leak_grouping_labels_or_keywords():
         '{category="mismatch"}) > 0')
     assert got == {"vector_tenant_projection_gate_info"}
     assert gate.extract_metrics("vector(1)") == set()
+
+
+@pytest.mark.parametrize("expr,want", [
+    # compact comparisons, no whitespace (#1595 D1b: `==` / `!=` were missed)
+    ("mysql_up==0", {"mysql_up"}),
+    ("mysql_up!=1", {"mysql_up"}),
+    ("mysql_up>0", {"mysql_up"}),
+    ("mysql_up<1", {"mysql_up"}),
+    ('up{job="tenant-exporters"}==0', {"up"}),
+    ("a==bool b", {"a", "b"}),
+    # matcher names inside {...} never leak, with any operator after them
+    ('kube_pod_status_ready{condition="true",pod!="x"}==1', {"kube_pod_status_ready"}),
+    ('kube_pod_status_ready{condition=~"t.*"}!=0', {"kube_pod_status_ready"}),
+])
+def test_extractor_catches_compact_comparisons(expr, want):
+    assert gate.extract_metrics(expr) == want
 
 
 # ── the CLI exit-code contract (main), independent of the real artifacts ──

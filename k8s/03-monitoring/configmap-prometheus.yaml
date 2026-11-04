@@ -92,9 +92,12 @@ data:
             replacement: "test"
 
       # Platform chart Services, in ANY namespace (#1425).
-      # The threshold-exporter, Vector and tenant-api charts render their
-      # Services into the release namespace and label them
-      # `dynamic-alerting.io/scrape: platform`; this job keeps exactly those.
+      # The threshold-exporter, Vector, tenant-api, federation-gateway and
+      # federation-reconciler charts render their Services into the release
+      # namespace and label them `dynamic-alerting.io/scrape: platform`; this
+      # job keeps exactly those. (The two federation charts joined in #1595
+      # D1b; before that they were scraped only when installed into
+      # `monitoring`, by `monitoring-components` below.)
       # The install namespace is therefore written nowhere: before #1425 this
       # was a namespace list ("monitoring", "vector", "tenant-api") that the
       # charts' namespaces had to match by hand, and a release installed

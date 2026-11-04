@@ -98,6 +98,9 @@
     "service": {
       "type": "object"
     },
+    "serviceMonitor": {
+      "type": "object"
+    },
     "ingress": {
       "type": "object"
     },

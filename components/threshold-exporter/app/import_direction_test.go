@@ -40,6 +40,7 @@ var logicPackages = []string{
 	"internal/confdlayout", // #2899: conf.d layout helpers moved out of routingpolicy
 	"internal/guard",
 	"internal/parser",
+	"pkg/keyverdict",   // #3489: the shared key verdict tenant-api will import
 	"pkg/receiverspec", // #2295: the receiver types pkg/config looks up (#2905: Known only)
 }
 

@@ -45,11 +45,10 @@ tests:
               alert_source: platform
               reason: parse_failure
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                1 `_defaults.yaml` file(s) under the conf.d tree
-                of 10.0.0.9:8080 have been unusable for more than
+                1 `_defaults.yaml` file(s) under the threshold-exporter's
+                conf.d tree have been unusable for more than
                 10 minutes (parse_failure). Per ADR-017 the whole
                 defaults block of such a file is dropped: every tenant below
                 it loses the thresholds it inherits from it (for the ROOT
@@ -89,11 +88,10 @@ tests:
               alert_source: platform
               reason: unreadable
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                1 `_defaults.yaml` file(s) under the conf.d tree
-                of 10.0.0.9:8080 have been unusable for more than
+                1 `_defaults.yaml` file(s) under the threshold-exporter's
+                conf.d tree have been unusable for more than
                 10 minutes (unreadable). Per ADR-017 the whole
                 defaults block of such a file is dropped: every tenant below
                 it loses the thresholds it inherits from it (for the ROOT
@@ -129,11 +127,10 @@ tests:
               alert_source: platform
               reason: walk_error
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                1 config-named entr(ies) under the conf.d tree of
-                10.0.0.9:8080 could not be used for more than 10
+                1 config-named entr(ies) under the threshold-exporter's
+                conf.d tree could not be used for more than 10
                 minutes (walk_error): stat_error = the file (or a
                 symlink's target) cannot be statted, e.g. a dangling link;
                 read_error = it cannot be read, e.g. permission denied;
@@ -194,11 +191,10 @@ tests:
               alert_source: platform
               reason: read_error
               job: threshold-exporter
-              instance: 10.0.0.9:8080
             exp_annotations:
               description: |
-                1 config-named entr(ies) under the conf.d tree of
-                10.0.0.9:8080 could not be used for more than 10
+                1 config-named entr(ies) under the threshold-exporter's
+                conf.d tree could not be used for more than 10
                 minutes (read_error): stat_error = the file (or a
                 symlink's target) cannot be statted, e.g. a dangling link;
                 read_error = it cannot be read, e.g. permission denied;

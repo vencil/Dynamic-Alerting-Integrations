@@ -1,0 +1,37 @@
+{{- /*
+ServiceMonitor for Prometheus Operator installs (kube-prometheus-stack), #1595 D1b.
+In operator mode Prometheus scrapes only what a ServiceMonitor selects; this one
+selects the Service the raw `platform-components` job keeps (it carries
+`dynamic-alerting.io/scrape: platform`) and scrapes the same pod port
+(`api-internal` → tenant-api.apiPort, the `prometheus.io/port` annotation).
+No `jobLabel`: the job is then the Service name, `tenant-api` — the value the
+platform alerts' `job="tenant-api"` selectors read in both modes.
+Pinned by tests/helm/test_platform_servicemonitors.py.
+*/ -}}
+{{- if .Values.serviceMonitor.enabled }}
+{{- $own := include "tenant-api.labels" . | fromYaml }}
+{{- range $k, $_ := .Values.serviceMonitor.labels }}
+{{- if hasKey $own $k }}
+{{- fail (printf "serviceMonitor.labels must not set %q — the chart sets it" $k) }}
+{{- end }}
+{{- end }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "tenant-api.name" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "tenant-api.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "tenant-api.selectorLabels" . | nindent 6 }}
+      dynamic-alerting.io/scrape: platform
+  endpoints:
+    - port: api-internal
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval | default "15s" }}
+{{- end }}

@@ -199,6 +199,54 @@ curl -s 'http://localhost:9090/api/v1/rules' | \
 
 ---
 
+## Platform self-monitoring alerts (platform pack)
+
+The platform self-monitoring alerts (`rule-packs/rule-pack-platform.yaml`, `Watchdog` included) read the platform components' own metrics. Under the Operator, Prometheus scrapes only what a ServiceMonitor selects, so both of the following are needed ([#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)):
+
+**1. Turn on the platform charts' ServiceMonitors** (off by default: a cluster without the `monitoring.coreos.com` CRDs cannot apply them):
+
+| Chart | Values that turn it on | Service scraped (= `job`) |
+|---|---|---|
+| `threshold-exporter` | `rules.mode: operator` (`rules.operator.serviceMonitor.enabled` defaults to `true`) | `threshold-exporter` |
+| `tenant-api` | `serviceMonitor.enabled: true` | `tenant-api` |
+| `vector` | `serviceMonitor.enabled: true` (each endpoint follows its Service: `metrics.enabled` / `tenantProjections`) | `vector-metrics`, `vector-projection-gate-metrics` |
+| `federation-gateway` | `serviceMonitor.enabled: true` (needs `auditLog.enabled`, on by default) | `federation-gateway` |
+| `federation-reconciler` | `serviceMonitor.enabled: true` | `federation-reconciler` |
+
+Each ServiceMonitor selects the Service carrying `dynamic-alerting.io/scrape: platform`, scrapes the same pod port the raw config's `platform-components` job scrapes, and sets **no `jobLabel`** — `job` is the Service name, as in raw mode, so a selector such as `job="tenant-api"` holds in both. They carry `release: kube-prometheus-stack` by default; set `serviceMonitor.labels` for another release name (`release: null` drops it).
+
+**NetworkPolicy**: a ServiceMonitor on the right port still scrapes nothing if the chart's own NetworkPolicy refuses the Prometheus. Every chart assumes by default that Prometheus runs in the `monitoring` namespace; change it when kube-prometheus-stack lives elsewhere:
+
+| Chart | Settings that admit the scrape | Default |
+|---|---|---|
+| `threshold-exporter` | `networkPolicy.allowExternal` / `prometheusNamespace` / `prometheusPodLabels` (see 1b) | metrics port open to any source |
+| `tenant-api` | `networkPolicy.prometheusNamespace` + the pod-scoped allow-list `networkPolicy.internalPortAllow.prometheus` (raw `app=prometheus`) and `.prometheusOperator` (kube-prometheus-stack's `app.kubernetes.io/name=prometheus`) | pods with either label in `monitoring`; 8080 trusts identity headers, so it admits a pod-scoped list only |
+| `vector` | the chart ships no NetworkPolicy | — |
+| `federation-gateway` | `networkPolicy.scrapeNamespaceLabel` (label of Prometheus's namespace) | any pod in `monitoring`; `null` = any namespace (`{}` does not clear the default — Helm merges maps) |
+| `federation-reconciler` | `networkPolicy.scrapeNamespaceLabel` (scrape ingress); its VictoriaLogs egress has its own `networkPolicy.victorialogsNamespaceLabel` and does not widen with `null` | same |
+
+⚠️ Changing federation-gateway `auditLog.metrics.port` or federation-reconciler `metricsPort` means the Prometheus side must admit the new port too: in this repo's raw stack that is `allow-prometheus-egress` in `k8s/03-monitoring/network-policies.yaml` (it lists the charts' default 3903 / 9099 only); likewise for any egress NetworkPolicy your kube-prometheus-stack has.
+
+**2. Apply the `da-rule-pack-platform` that `operator-generate` emits.** It is the platform pack without the rules whose metric source a kube-prometheus-stack install lacks: `_lib_metric_sources.operator_split` derives which ones from the scrape gate's metric-family table (not a hand list); each gets a `NOTE:` line on stderr and is listed in that PrometheusRule's `dynamic-alerting.io/operator-excluded-rules` annotation. Today:
+
+<!-- operator-excluded-rules:begin -->
+| Alert | Why operator mode has no source for it |
+|---|---|
+| `PrometheusConfigReloadFailed` | Selects `job="prometheus"`: this repo's raw Prometheus self-scrape job; kube-prometheus-stack names that job after its own Service (its own `PrometheusBadConfig` covers the same failure) |
+| `TenantExporterJobAbsent` | Reads `up{job="tenant-exporters"}`: that job exists only in the raw config; under the Operator your own ServiceMonitors scrape tenant exporters and name the job. Emitted anyway it would fire forever |
+| `MassExporterOutage` | Same (`up{job="tenant-exporters"}`) |
+<!-- operator-excluded-rules:end -->
+
+`tests/ops/test_operator_generate_rule_copies.py` compares this table with the derivation and goes red when they disagree.
+
+⚠️ **`Watchdog` and kube-prometheus-stack's own alert of the same name.** Both carry only `alertname="Watchdog"` and `severity="none"` (evaluated by the same Prometheus, so the external labels match too); Alertmanager deduplicates by label set and receives **one** Watchdog — no second one, and no `severity`-based inhibit touches it. A route you set on kube-prometheus-stack for Watchdog (e.g. a dead-man's switch) keeps applying; its annotations may be either copy's. Exception: with `enforcedNamespaceLabel` set on the Prometheus and the two PrometheusRules in different namespaces, the two carry different `namespace` labels and are not deduplicated.
+
+⚠️ **Federation deployed without its ServiceMonitors means two critical alerts.** `FederationRevocationReconcileStale` (its metric-absent arm) and `FederationAuditPipelineSilent` decide whether the component is deployed from kube-state-metrics (the reconciler Deployment; a gateway pod with the `audit-metrics` container), not from `up` — a lost scrape target is exactly what they must catch. So with federation deployed but `serviceMonitor.enabled` still at its default `false`, both fire: revocation tamper-evidence and the audit pipeline really are unmonitored. That is the correct signal; turn on `serviceMonitor.enabled` in those two charts. A cluster without federation gets neither.
+
+⚠️ **The few that still select `namespace="monitoring"`** (`ThresholdGovernanceStale`, `CronJobLastRunFailed`, `ConfigReloaderHighRestarts`, `ConfigReloaderNotStarting`) watch this repo's raw manifests under `k8s/03-monitoring/` (the `threshold-govern` CronJob, the Prometheus / Alertmanager `config-reloader` sidecars), which are hard-wired to `monitoring`. They are emitted under the Operator too (kube-state-metrics has the series) but only see the namespace named `monitoring`: with kube-prometheus-stack installed there, its own Prometheus's `config-reloader` sidecar is watched as well. The platform charts' workloads (`TenantApiSingleWriterBreach`, `ThresholdExporterHighRestarts`) no longer pin a namespace and are watched wherever they are installed.
+
+---
+
 ## Helm Chart: rules.mode Toggle
 
 The threshold-exporter Helm chart adds a `rules.mode` toggle in v2.6.0:

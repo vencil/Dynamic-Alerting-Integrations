@@ -94,6 +94,16 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Callable, Iterable, NamedTuple
 
+import sys
+
+# Loaded by file path too (scripts/ops tools, the vendored-tree harness): its
+# one sibling import resolves from its own directory, as the other _lib
+# modules' do.
+_HERE = os.path.dirname(os.path.abspath(__file__))
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+from _lib_input import _list  # noqa: E402  ⛔ the one directory listing (#3446)
+
 CRDECODE_BINARY_NAME = "da-crdecode"
 DA_READ_BINARY_NAME = "da-read"
 TIMEOUT_SECONDS = 60
@@ -1265,24 +1275,38 @@ def _walk_yaml(root: str) -> _Walk:
     def rel(path: str) -> str:
         return pathlib.Path(os.path.relpath(path, root)).as_posix()
 
-    for d, dirs, names in os.walk(root, onerror=unlisted):
+    # Top-down, as `os.walk` walked it (#3446: every listing is `_list`): a
+    # directory that cannot be listed is named and not walked; a symlink to
+    # a directory is never entered.
+    pending = [root]
+    while pending:
+        d = pending.pop()
+        try:
+            entries = _list(d)
+        except OSError as err:
+            unlisted(err)
+            continue
         in_hidden = d != root and _has_hidden_segment(rel(d))
-        for n in dirs:
+        below = []
+        for n in entries:
             f = os.path.join(d, n)
-            if os.path.islink(f):
+            if os.path.isdir(f):
+                if not os.path.islink(f):
+                    below.append(f)
+                    continue
                 why = _dir_symlink_problem(f, root_real, in_hidden or _has_hidden_segment(n))
                 if why is not None:
                     problems.append((f, why))
-        for n in names:
+                continue
             if not _is_yaml_name(n):
                 continue
-            f = os.path.join(d, n)
             if not os.path.isfile(f):
                 problems.append((f, _not_regular(f)))
             elif in_hidden or _is_hidden(n):
                 hidden.append((f, rel(f)))
             else:
                 files.append((f, rel(f)))
+        pending.extend(reversed(below))
     return _Walk(files, problems, hidden)
 
 
@@ -1470,7 +1494,7 @@ class RuleSource(NamedTuple):
         raise :class:`SourcesUnlisted`."""
         root = pathlib.Path(directory)
         try:
-            entries = sorted(root.iterdir())
+            entries = [root / n for n in _list(root)]
         except (FileNotFoundError, NotADirectoryError):
             return []
         except OSError as e:
@@ -1503,10 +1527,12 @@ RULE_PACKS = RuleSource(
 #: ⛔ Here, not as a key in the pack file: Prometheus' rule loader refuses any
 #: top-level key but ``groups`` (``field kind not found in type
 #: rulefmt.RuleGroups``), and every reader of a pack reads it that way.
-#: ⛔ Not operator-portable (#1595 D1b): their exprs select this repo's own
-#: scrape jobs (``tenant-exporters``, ``prometheus``, ``threshold-govern``),
-#: which a kube-prometheus-stack install does not have, so
-#: ``operator-generate`` emits no PrometheusRule for them.
+#: Operator mode (#1595 D1b): ``operator-generate`` emits each as the rules a
+#: kube-prometheus-stack install can run — the pack minus every rule reading a
+#: metric whose source such an install lacks, which
+#: ``_lib_metric_sources.operator_split`` derives from the scrape gate's
+#: family table (e.g. a ``job="tenant-exporters"`` selector: that job exists
+#: only in this repo's raw scrape config).
 PLATFORM_PACKS: "frozenset[str]" = frozenset({"platform"})
 
 
@@ -1519,8 +1545,8 @@ def is_platform_pack(name: "str | None") -> bool:
 def tenant_rule_pack_files(rule_packs: "str | os.PathLike[str]") -> "list[pathlib.Path]":
     """``rule_pack_files`` less the declared platform packs (``PLATFORM_PACKS``):
     the packs a TENANT-pack contract judges — the custom-rule policy, the
-    threshold contract, maintenance symmetry, vmalert coverage — and the packs
-    ``operator-generate`` makes portable. Same refusals as ``rule_pack_files``."""
+    threshold contract, maintenance symmetry, vmalert coverage. Same refusals as
+    ``rule_pack_files``."""
     return [p for p in rule_pack_files(rule_packs)
             if not is_platform_pack(RULE_PACKS.member(p))]
 
@@ -1622,7 +1648,7 @@ def _declared_in(directory: "str | os.PathLike[str]", source: RuleSource) -> "li
     (see :class:`RuleSource`)."""
     root = pathlib.Path(directory)
     try:
-        entries = sorted(root.iterdir())
+        entries = [root / n for n in _list(root)]
     except OSError as e:
         raise SourcesUnlisted([(str(root), f"cannot list this directory: {e.strerror}")]) from e
     found, problems = [], []

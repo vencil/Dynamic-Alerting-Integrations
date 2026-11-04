@@ -253,10 +253,12 @@ lang: en
 - `scripts/tools/_lib_doc_yaml_inventory.py`: The one inventory of the YAML fences in docs/**/*.md (ADR-036 §12, #3416).
 - `scripts/tools/_lib_exitcodes.py`: Canonical exit-code contract for da-tools CLI tools (#452 Track A).
 - `scripts/tools/_lib_godispatch.py`: Shared dispatcher for da-tools subcommands that wrap a Go binary.
+- `scripts/tools/_lib_input.py`: Which files a value the caller gave selects, and the bytes read from them (#3446).
 - `scripts/tools/_lib_io.py`: File I/O and YAML helpers for Dynamic Alerting platform.
 - `scripts/tools/_lib_key_verdict.py`: The one verdict on "does any reader read this key" (ADR-038 decisions 4–7).
 - `scripts/tools/_lib_kubectl.py`: Read Kubernetes resources through ``kubectl get -o json`` (#3207, #3210).
 - `scripts/tools/_lib_label.py`: `safe_label`: neutralise control characters in a value before it is printed.
+- `scripts/tools/_lib_metric_sources.py`: Where each metric a rule reads comes from — and whether a Prometheus Operator install has that source.
 - `scripts/tools/_lib_parse_cache.py`: the conf.d reader of the routing tools, with a cache.
 - `scripts/tools/_lib_parse_tree.py`: read `da-guard parse-tree`'s document (ADR-036 §2).
 - `scripts/tools/_lib_paths.py`: The one judgement of a path the caller gave (#3276).

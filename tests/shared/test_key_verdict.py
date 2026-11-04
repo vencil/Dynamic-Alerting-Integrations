@@ -346,12 +346,16 @@ def test_a_subtree_defaults_source_is_the_registry_layer_subtree_defaults():
 @pytest.mark.parametrize("rule_key, written", [
     ("mysql_threads_running_critical", "mysql_" + "cpu_critical"),
     ("mysql_" + "cpu_critical", "mysql_threads_running_critical"),
+    # #3489 review: a dimensional `_critical` — the exporter serves the
+    # retired spelling as written, Policy-as-Code still reads it canonically.
+    ('mysql_threads_running_critical{db="a"}', "mysql_" + 'cpu_critical{db="a"}'),
+    ("mysql_" + 'cpu_critical{db="a"}', 'mysql_threads_running_critical{db="a"}'),
 ])
 def test_a_rule_names_a_key_in_either_alias_spelling(tmp_path, rule_key, written):
     """Policy-as-Code 以別名表比對規則與 key；共用判決用同一個比法。"""
     t = kv.judge_tree(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n_policies:\n"
-                          f"  - {{name: p, target: {rule_key}, operator: required, severity: error}}\n",
+                          f"  - {{name: p, target: '{rule_key}', operator: required, severity: error}}\n",
         "ta.yaml": f"tenants:\n  ta:\n    {written}: abc\n"}))
     assert "policy_engine" in _by_key(t, "ta")[written].read_by
 
