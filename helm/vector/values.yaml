@@ -647,6 +647,23 @@ metrics:
   enabled: true
   port: 9598
 
+# Ingress NetworkPolicy for the Vector pods (#1595 D2④). Vector takes no inbound
+# traffic of its own (api disabled, kubernetes_logs reads node files); its only
+# listeners are the scrape ports above and the projection-gate exposer, and the
+# self-telemetry series name every tenant sink (`vl_tenant_<accountId>`) with its
+# event counts. So only the scraping Prometheus may reach them; with no scrape
+# port rendered all ingress is denied. Egress is left open (deployment-specific).
+# ⚠️ Only isolates on a CNI that enforces NetworkPolicy.
+networkPolicy:
+  enabled: true
+  # Namespace label selector for the Prometheus that scrapes these ports — where
+  # PROMETHEUS runs (any pod there, so a kube-prometheus-stack Prometheus in that
+  # namespace is admitted). `null` = any namespace (`namespaceSelector: {}`).
+  # ⚠️ `{}` does NOT clear it: Helm merges a map into the default, so the
+  # default stays.
+  scrapeNamespaceLabel:
+    kubernetes.io/metadata.name: monitoring
+
 # ServiceMonitor for a Prometheus Operator install (kube-prometheus-stack),
 # #1595 D1b. Off by default: without the monitoring.coreos.com CRDs the object
 # cannot be applied. On, it scrapes whichever of the two metrics Services is

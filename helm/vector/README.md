@@ -95,6 +95,8 @@ tenantProjections:
 
 Projection health is alerted on from Vector's own `internal_metrics` (`metrics.enabled`, **on by default** since chart 0.11.0): `TenantProjectionMappingErrors` (any VRL runtime-error drop in `tenant_project`) and `TenantProjectionFanoutDiscardSpike` (unprojected audit rows surging above their own 1-day baseline). Setting `metrics.enabled: false` silences both, and `VectorBufferEventsDropped`, by removing their series.
 
+Those series name every tenant sink (`vl_tenant_<accountId>`) with its event counts, so the chart ships an ingress `NetworkPolicy` (`networkPolicy.enabled`, on by default): only the scraping Prometheus — selected by `networkPolicy.scrapeNamespaceLabel`, default the `monitoring` namespace, `null` for any namespace — may reach the self-telemetry port and, with `tenantProjections`, the projection-gate port. Vector takes no other inbound traffic, so with no scrape port rendered all ingress is denied. Egress is not restricted. It only isolates on a CNI that enforces NetworkPolicy.
+
 Behavior is pinned by `vector test` (`tests/projection_tests.yaml`) + `tests/shared/test_vector_projection_vrl.py`. See [`platform-log-aggregation-runbook.md` §8](../../docs/internal/platform-log-aggregation-runbook.md) for the operator how-to and the `log_event_id` join SOP.
 
 ## RBAC
