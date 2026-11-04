@@ -143,6 +143,10 @@ tests:
   - interval: 1m
     name: fanout-discard-surge-over-baseline-fires-summed-across-pods
     input_series:
+      # A TSDB that has held data since t=0 (> 1d at eval): the empty-TSDB
+      # mute must NOT swallow a real surge.
+      - series: 'prometheus_tsdb_lowest_timestamp_seconds{instance="localhost:9090",job="prometheus"}'
+        values: '0x1540'
       - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
         values: '0+30x1499 45270+300x40'
       - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.2:9598",pod="vector-bbbbb",host="vector-bbbbb"}'
