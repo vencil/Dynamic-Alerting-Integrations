@@ -222,13 +222,3 @@ def test_without_validate_no_key_check_is_printed(tmp_path):
     d = h.write_tree(tmp_path / "conf.d", KEY_CHECKS)
     res = cases.run_gar(d, [], [])
     assert "renamed" not in res.stderr and "version" not in res.stderr, res.stderr
-
-
-def test_a_da_guard_without_key_checks_is_named_not_read_as_none(tmp_path, monkeypatch, capsys):
-    """A da-guard older than the field gives no key checks: said, as one
-    NOTICE naming the tenants — never read as "no message"."""
-    def judge(*_a, **_k):
-        return kv.TreeVerdict({}, [], False, key_checks={"t-a": None, "t-b": tv.KeyChecks((), ())})
-    assert _main(tmp_path, monkeypatch, judge) == 0
-    err = capsys.readouterr().err
-    assert "gives no key checks" in err and "tenants: t-a)" in err, err

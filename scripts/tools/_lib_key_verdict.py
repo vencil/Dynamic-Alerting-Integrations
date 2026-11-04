@@ -42,6 +42,9 @@ import _lib_tenant_values as tv  # noqa: E402
 
 SUBCOMMAND = "key-verdict"
 SCHEMA = "da-guard.key-verdict/v2"
+#: Earlier versions of the document: a da-guard writing one is older than
+#: this tool (v1: the ERROR layer only).
+OLDER_SCHEMAS = ("da-guard.key-verdict/v1",)
 
 READ, UNREAD, UNDECIDABLE = "read", "unread", "undecidable"
 ERROR, WARNING, NOTICE = "error", "warning", "notice"
@@ -87,7 +90,7 @@ class TreeVerdict(NamedTuple):
     # `version` labels and retired spellings (served-values' key_checks),
     # which a CI reader prints as they are. Not part of the verdict on
     # whether a key is read.
-    key_checks: "dict[str, tv.KeyChecks | None]" = {}
+    key_checks: "dict[str, tv.KeyChecks]" = {}
 
 
 # key_check_lines' kinds: a `version` label the exporter refuses (it reads
@@ -96,20 +99,17 @@ KEY_CHECK_VERSION_LABEL = "version_label"
 KEY_CHECK_RENAMED = "renamed"
 
 
-def key_check_lines(verdict: TreeVerdict) -> "tuple[list[tuple[str, str, str]], list[str]]":
+def key_check_lines(verdict: TreeVerdict) -> "list[tuple[str, str, str]]":
     """The exporter's key checks of `verdict`, as (kind, tenant, message)
-    sorted by tenant, and the tenants whose reading has none (not checked,
-    not "no message")."""
+    sorted by tenant. Every judged tenant has them: key-verdict's document
+    always carries `key_checks` (one without it is refused as another
+    version's)."""
     lines: list[tuple[str, str, str]] = []
-    unchecked: list[str] = []
     for tenant in sorted(verdict.key_checks):
         kc = verdict.key_checks[tenant]
-        if kc is None:
-            unchecked.append(tenant)
-            continue
         lines += [(KEY_CHECK_VERSION_LABEL, tenant, m) for m in kc.version_labels]
         lines += [(KEY_CHECK_RENAMED, tenant, m) for m in kc.renames]
-    return lines, unchecked
+    return lines
 
 
 def _reader_for(conf_d: str | os.PathLike[str], binary: str | None) -> Any:
@@ -154,36 +154,87 @@ def note_root_only_policies(conf_d: str | os.PathLike[str], reader: Any = None) 
                                      else _reader_for(conf_d, None))
 
 
-def _tuple(v: Any) -> tuple[str, ...]:
-    if not isinstance(v, list):
-        raise TypeError(f"not a list: {v!r}")
-    return tuple(str(x) for x in v)
+_VERDICTS = frozenset({READ, UNREAD, UNDECIDABLE})
+_SEVERITIES = frozenset({ERROR, WARNING, NOTICE})
+_KINDS = frozenset({"unread", "disable_noop", "disable_partial"})
+_DISABLES = frozenset({"effective", "partial", "noop"})
 
 
-def _optional(v: Any) -> str | None:
-    if v is not None and not isinstance(v, str):
-        raise TypeError(f"not a string or null: {v!r}")
+def _str(v: Any, what: str) -> str:
+    if not isinstance(v, str):
+        raise TypeError(f"{what}: not a string: {v!r}")
     return v
 
 
+def _tuple(v: Any, what: str) -> tuple[str, ...]:
+    if not isinstance(v, list):
+        raise TypeError(f"{what}: not a list: {v!r}")
+    return tuple(_str(x, what) for x in v)
+
+
+def _optional(v: Any, what: str, allowed: "frozenset[str] | None" = None) -> str | None:
+    if v is None:
+        return None
+    return _one_of(v, what, allowed) if allowed is not None else _str(v, what)
+
+
+def _one_of(v: Any, what: str, allowed: "frozenset[str]") -> str:
+    if v not in allowed:
+        raise ValueError(f"{what}: {v!r} is none of {sorted(allowed)}")
+    return v
+
+
+def _mapping(v: Any, what: str) -> dict:
+    if not isinstance(v, dict):
+        raise TypeError(f"{what}: not an object: {v!r}")
+    return v
+
+
+def _rows(v: Any, what: str) -> list:
+    if not isinstance(v, list) or not all(isinstance(r, dict) for r in v):
+        raise TypeError(f"{what}: not a list of objects: {v!r}")
+    return v
+
+
+def _key_verdict(tenant: str, r: dict) -> KeyVerdict:
+    w = f"tenants.{tenant}"
+    verdict = _one_of(r["verdict"], f"{w}.verdict", _VERDICTS)
+    severity = _optional(r["severity"], f"{w}.severity", _SEVERITIES)
+    # A read key has no severity; an unread one has one (undecidable: none).
+    if (verdict == UNREAD) != (severity is not None):
+        raise ValueError(f"{w}: verdict {verdict!r} with severity {severity!r}")
+    return KeyVerdict(tenant, _str(r["key"], f"{w}.key"), _optional(r["layer"], f"{w}.layer"),
+                      _optional(r["file"], f"{w}.file"), _tuple(r["read_by"], f"{w}.read_by"), verdict,
+                      severity, _optional(r["reason"], f"{w}.reason"),
+                      _optional(r["disable"], f"{w}.disable", _DISABLES),
+                      _tuple(r["served_family"], f"{w}.served_family"), r["value"], r["served"])
+
+
+def _finding(f: dict) -> Finding:
+    return Finding(_one_of(f["severity"], "findings.severity", _SEVERITIES),
+                   _one_of(f["kind"], "findings.kind", _KINDS), _str(f["key"], "findings.key"),
+                   _optional(f["file"], "findings.file"), _tuple(f["tenants"], "findings.tenants"),
+                   _optional(f["reason"], "findings.reason"),
+                   _tuple(f["served_family"], "findings.served_family"),
+                   _tuple(f["served_from"], "findings.served_from"))
+
+
 def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
-    """The document as a TreeVerdict; a field missing or not of its shape is
-    output that is not the JSON it should be (KeyError / TypeError /
-    ValueError, which `_run_da_guard` reports as such)."""
+    """The document as a TreeVerdict. A field missing, of another type, or
+    with a value outside its closed set is output that is not the JSON it
+    should be (KeyError / TypeError / ValueError, which `_run_da_guard`
+    reports as such) — never read as some other answer: a verdict this
+    module cannot read is not "nothing unread"."""
     tv._subset_absent(doc, requested)
     if not isinstance(doc["undecidable"], bool):
         raise TypeError(f"undecidable: {doc['undecidable']!r}")
-    keys: dict[str, list[KeyVerdict]] = {}
-    for tenant, rows in doc["tenants"].items():
-        keys[str(tenant)] = [KeyVerdict(
-            str(tenant), str(r["key"]), _optional(r["layer"]), _optional(r["file"]), _tuple(r["read_by"]),
-            str(r["verdict"]), _optional(r["severity"]), _optional(r["reason"]), _optional(r["disable"]),
-            _tuple(r["served_family"]), r["value"], r["served"]) for r in rows]
-    findings = [Finding(str(f["severity"]), str(f["kind"]), str(f["key"]), _optional(f["file"]),
-                        _tuple(f["tenants"]), _optional(f["reason"]), _tuple(f["served_family"]),
-                        _tuple(f["served_from"])) for f in doc["findings"]]
-    checks = {str(t): tv.KeyChecks(_tuple(c["version_labels"]), _tuple(c["renames"]))
-              for t, c in doc["key_checks"].items()}
+    keys = {_str(t, "tenants"): [_key_verdict(t, r) for r in _rows(rows, f"tenants.{t}")]
+            for t, rows in _mapping(doc["tenants"], "tenants").items()}
+    findings = [_finding(f) for f in _rows(doc["findings"], "findings")]
+    checks = {_str(t, "key_checks"): tv.KeyChecks(
+                  _tuple(_mapping(c, f"key_checks.{t}")["version_labels"], f"key_checks.{t}.version_labels"),
+                  _tuple(c["renames"], f"key_checks.{t}.renames"))
+              for t, c in _mapping(doc["key_checks"], "key_checks").items()}
     return TreeVerdict(keys, findings, doc["undecidable"], checks)
 
 
@@ -208,7 +259,7 @@ def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary:
         extra = ["--at", at, *extra]
     verdict, _rc, _stderr = tv._run_da_guard(
         SUBCOMMAND, extra, conf_d, binary, timeout, KeyVerdictError, schema=SCHEMA,
-        read=lambda doc: _read(doc, requested), reads_unreadable=True)
+        read=lambda doc: _read(doc, requested), reads_unreadable=True, older_schemas=OLDER_SCHEMAS)
     return verdict
 
 

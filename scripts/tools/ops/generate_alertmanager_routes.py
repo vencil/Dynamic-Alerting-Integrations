@@ -1328,16 +1328,9 @@ def _report_key_verdict(config_dir: str, findings: list[str]) -> None:
     # ADR-038 §11: the exporter's own key checks (a `version` label, a
     # retired spelling), printed as it wrote them — this tool no longer
     # judges keys itself.
-    checks, unchecked = _lib_key_verdict.key_check_lines(verdict)
-    for kind, tenant, msg in checks:
+    for kind, tenant, msg in _lib_key_verdict.key_check_lines(verdict):
         lines.append(Finding(f"  {msg}", kind=_KEY_CHECK_KINDS[kind],
                              blocks="never", tenant=tenant))
-    if unchecked:
-        lines.append(Finding(
-            "  NOTICE: key verdict incomplete: this da-guard gives no key checks "
-            "(version labels, renamed keys) — it is older than this tool: upgrade "
-            f"or rebuild it (tenants: {', '.join(unchecked[:WARN_LIMIT])})",
-            kind="key_verdict_incomplete", blocks="never"))
     for line in lines:
         print(safe_label(line), file=sys.stderr)
     findings.extend(lines)

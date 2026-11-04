@@ -190,16 +190,6 @@ def test_the_exporters_key_checks_are_printed_as_it_words_them(tmp_path):
     assert any('"mysql_cpu" was renamed to "mysql_threads_running"' in d for d in r["details"]), r["details"]
 
 
-def test_a_da_guard_without_key_checks_is_said(tmp_path, monkeypatch):
-    """A da-guard older than the field: "not checked", never "no message"."""
-    import _lib_key_verdict as key_verdict
-    verdict = key_verdict.TreeVerdict({}, [], False, key_checks={"db-a": None})
-    monkeypatch.setattr(vc.key_verdict, "judge_tree", lambda *_a, **_k: verdict)
-    r = vc.check_unread_keys(str(tmp_path))
-    assert r["status"] == vc.WARN, r
-    assert any("gives no key checks" in d and "tenants: db-a)" in d for d in r["details"]), r
-
-
 class TestAPlatformDeclaringNothingIsNotAdvisedAway:
     """⛔ With no platform defaults declared, the verdict reads every tenant
     threshold key as unread, and the row's generic advice — remove a key

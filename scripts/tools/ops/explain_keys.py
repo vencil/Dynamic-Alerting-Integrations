@@ -14,8 +14,7 @@ tenant of a conf.d, every key of its config is listed with
 * the value as written (`value`) and what /metrics serves for it (`served`).
 
 All of it is the shared verdict (`da-guard key-verdict`, read through
-`_lib_key_verdict.judge_tree`), at `--at` — the effective config too —,
-not a reading of this tool's own.
+`_lib_key_verdict.judge_tree`) at `--at`, not a reading of this tool's own.
 
 `--assert FILE` compares the result with an expected document of the same
 shape and fails (exit 1) on any difference, so a CI can pin what a tenant's

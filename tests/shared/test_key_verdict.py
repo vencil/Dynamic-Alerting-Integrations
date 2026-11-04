@@ -377,3 +377,72 @@ def test_rules_policy_engine_refuses_are_judged_by_no_one(tmp_path):
     with pytest.raises(ValueError) as e:
         kv.judge_tree(conf_d)
     assert type(e.value).__name__ == "InvalidPolicyRules" and e.value.problems, e.value
+
+
+def _da_guard_answering(tmp_path, document: str) -> str:
+    """A da-guard that answers `key-verdict` with *document* and runs the real
+    one for everything else (parse-tree, which every read asks first)."""
+    import os
+    import stat
+    real = os.environ["DA_GUARD_BINARY"]
+    (tmp_path / "doc.json").write_text(document, encoding="utf-8")
+    fake = tmp_path / "da-guard"
+    fake.write_text(f'#!/bin/sh\nif [ "$1" = key-verdict ]; then cat "{tmp_path / "doc.json"}"; exit 0; fi\n'
+                    f'exec "{real}" "$@"\n', encoding="utf-8")
+    fake.chmod(fake.stat().st_mode | stat.S_IXUSR)
+    return str(fake)
+
+
+@pytest.mark.parametrize("document", [
+    # The document of the step that ported only the ERROR layer.
+    '{"schema": "da-guard.key-verdict/v1", "errors": []}',
+    # The first whole-verdict document, before it carried parse_failed.
+    '{"schema": "da-guard.key-verdict/v2", "at": "x", "undecidable": false, "tenants": {},'
+    ' "findings": [], "key_checks": {}}',
+], ids=["v1", "v2-without-parse_failed"])
+def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
+    """#3489 審查：舊版 da-guard 的文件要說「比這支工具舊」（stale），不是「壞掉」——
+    呼叫端與使用者據此知道要升級 da-guard，而不是去查樹。"""
+    import _lib_tenant_values as tv
+    conf_d = _tree(tmp_path / "conf.d", {"_defaults.yaml": _ADR_DEFAULTS})
+    with pytest.raises(tv.DaGuardError) as e:
+        kv.judge_tree(conf_d, binary=_da_guard_answering(tmp_path, document))
+    assert e.value.stale and not e.value.broken, e.value
+    assert "older than this tool" in str(e.value)
+
+
+_ROW = {"key": "k", "layer": "tenant", "file": "a.yaml", "read_by": [], "verdict": "unread",
+        "severity": "error", "reason": "no_row", "disable": None, "served_family": [],
+        "value": 1, "served": None}
+_FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml", "tenants": ["t"],
+            "reason": "no_row", "served_family": [], "served_from": []}
+
+
+def _doc(**over):
+    doc = {"undecidable": False, "tenants": {"t": [dict(_ROW)]}, "findings": [dict(_FINDING)],
+           "key_checks": {"t": {"version_labels": [], "renames": []}}}
+    doc.update(over)
+    return doc
+
+
+@pytest.mark.parametrize("doc", [
+    _doc(tenants=None),
+    _doc(key_checks=[]),
+    _doc(findings=None),
+    _doc(tenants={"t": [dict(_ROW, verdict=None)]}),
+    _doc(tenants={"t": [dict(_ROW, verdict="maybe")]}),
+    _doc(tenants={"t": [dict(_ROW, verdict="maybe", severity=None)]}),  # no severity to give it away
+    _doc(tenants={"t": [dict(_ROW, verdict="read")]}),          # read, with a severity
+    _doc(tenants={"t": [dict(_ROW, severity=None)]}),           # unread, with none
+    _doc(tenants={"t": [dict(_ROW, read_by=[1])]}),
+    _doc(tenants={"t": [dict(_ROW, disable="off")]}),
+    _doc(findings=[dict(_FINDING, severity=None)]),
+    _doc(findings=[dict(_FINDING, kind="typo")]),
+    _doc(undecidable="no"),
+], ids=lambda d: next(iter(k for k in d if d[k] != _doc()[k]), "?"))
+def test_a_document_this_reader_cannot_read_is_refused_not_read_as_another_answer(doc):
+    """#3489 審查：讀不懂的值不能被讀成「判完、沒有 error」——產生器容器以
+    `verdict == undecidable`、`severity == error` 決定擋不擋。"""
+    assert kv._read(_doc(), None).findings  # the valid document reads
+    with pytest.raises((TypeError, ValueError, KeyError)):
+        kv._read(doc, None)

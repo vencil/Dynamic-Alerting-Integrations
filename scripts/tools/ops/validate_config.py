@@ -2130,13 +2130,7 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
         details.append(undecidable)
     # ADR-038 §11: the exporter's own key checks (a `version` label, a
     # retired spelling), as it words them; this tool judges no key itself.
-    checks, unchecked = key_verdict.key_check_lines(verdict)
-    details += [msg for _, _, msg in checks]
-    if unchecked:
-        details.append(
-            "key checks incomplete: this da-guard gives no key checks (version labels, renamed "
-            f"keys) — it is older than this tool: upgrade or rebuild it (tenants: "
-            f"{', '.join(unchecked[:WARN_LIMIT])})")
+    details += [msg for _, _, msg in key_verdict.key_check_lines(verdict)]
     if details:
         # Only an undecidable line: no key was found unread, so the advice
         # is about the root file, not about a key.
