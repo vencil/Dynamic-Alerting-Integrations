@@ -401,7 +401,13 @@ def _da_guard_answering(tmp_path, document: str) -> str:
     # The first whole-verdict document, before it carried parse_failed.
     '{"schema": "da-guard.key-verdict/v2", "at": "x", "undecidable": false, "tenants": {},'
     ' "findings": [], "key_checks": {}}',
-], ids=["v1", "v2-without-parse_failed"])
+    # Before the gates blocked (#3016): no `blocks`, no `undecidable_blocks`.
+    '{"schema": "da-guard.key-verdict/v2", "at": "x", "undecidable": false, "tenants": {},'
+    ' "findings": [], "key_checks": {}, "parse_failed": [], "unreadable": []}',
+    # `blocks` but not `undecidable_blocks` (#3016 review).
+    '{"schema": "da-guard.key-verdict/v2", "at": "x", "undecidable": false, "tenants": {},'
+    ' "findings": [], "key_checks": {}, "parse_failed": [], "unreadable": [], "blocks": false}',
+], ids=["v1", "v2-without-parse_failed", "v2-without-blocks", "v2-without-undecidable_blocks"])
 def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
     """#3489 審查：舊版 da-guard 的文件要說「比這支工具舊」（stale），不是「壞掉」——
     呼叫端與使用者據此知道要升級 da-guard，而不是去查樹。"""

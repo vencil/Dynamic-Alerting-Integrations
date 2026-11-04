@@ -233,6 +233,29 @@ var registryLayers = map[string]string{
 	config.KeyLayerProfile:  "profile",
 }
 
+// fileLevelKey reports whether key, written at the top level of a defaults
+// file, is the file's own key and not a tenant's: a ThresholdConfig field
+// (`optional_overrides`, `state_filters`…), a key another reader takes from
+// the file's top level (`_routing_defaults`, `_policies`…), or a routing
+// key. Effective shows it as inherited when the file has no `defaults:`
+// wrapper (the merge reads the whole document) — which takes it into no
+// tenant's config (config.ActsWhenMerged) — so it is not judged as a
+// tenant's key; with the wrapper effective does not show it at all. Inside
+// `defaults:` such a key is reported by validate-config's `root_defaults`
+// row and the route generator, not here (#3016: once the gates block, a
+// valid routing-only `_defaults.yaml` must not fail them).
+func fileLevelKey(key string) bool {
+	if config.RootDecodedKeys()[key] || config.IsRoutingKey(key) {
+		return true
+	}
+	for _, k := range config.TopLevelReadElsewhere() {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
 // Judge is the verdict over the readings in.
 func Judge(in Input) Tree {
 	// A key in the exporter's canonical spelling (#1231): the exporter's
@@ -278,6 +301,9 @@ func Judge(in Input) Tree {
 			}
 			sk, hasSk := sv.Keys[key]
 			src, hasSrc := ef.Sources[key]
+			if hasSrc && src.Layer == config.KeyLayerDefaults && fileLevelKey(key) {
+				continue
+			}
 			var value any
 			if hasEf {
 				value = ef.Config[key]

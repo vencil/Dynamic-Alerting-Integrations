@@ -150,6 +150,9 @@ class TestGeneratedNameCollision:
         """Same shape minus the colliding tenant: rc 0, file written, PASS."""
         d = tmp_path / "conf.d"
         d.mkdir()
+        # declared: a tree with no root platform file fails --validate (#3016)
+        (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+                                          encoding="utf-8")
         _write_tenant(d, _BASE_T, _routing_with("routes"))
         _write_tenant(d, "t2", make_routing_config("t2"))
         rc, out, err = _gar(["--config-dir", str(d), "--validate"], tmp_path)

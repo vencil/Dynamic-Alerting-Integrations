@@ -64,6 +64,9 @@ _EMAIL_RD = ("_routing_defaults:\n  receiver:\n    type: email\n"
              "    smarthost: smtp.example.com:587\n  group_wait: 30s\n")
 _SLACK_RD = ("_routing_defaults:\n  receiver:\n    type: slack\n"
              "    api_url: https://hooks.slack.com/services/T/B/x\n")
+# The key `_tenant` writes, declared at the root: an undeclared threshold key
+# fails --validate on the key verdict (#3016), which is not what these test.
+_DECL = "defaults:\n  mysql_connections: 80\n"
 
 
 def _tenant(tid: str, extra: str = "") -> str:
@@ -200,7 +203,7 @@ def test_null_receiver_or_overrides_below_root_is_refused(tmp_path, key, mode):
 def test_null_group_wait_below_root_is_legal(tmp_path):
     """Control: the four timing fields may be null (ADR-017 null rules)."""
     d = _write(tmp_path / "conf.d", {
-        "_defaults.yaml": _EMAIL_RD,
+        "_defaults.yaml": _DECL + _EMAIL_RD,
         "team/_defaults.yaml": "_routing_defaults:\n  group_wait: null\n",
         "team/t-team.yaml": _tenant("t-team"),
     })
@@ -315,7 +318,7 @@ def test_policies_are_additive(tmp_path):
 def test_subtree_policy_naming_an_outside_tenant(tmp_path, strict, prefix, rc):
     d = _policy_tree(tmp_path, extra=", t-root, t-nowhere")
     # Only the out-of-scope entry is under test: drop the in-scope violation.
-    (d / "_defaults.yaml").write_text(_EMAIL_RD, encoding="utf-8")
+    (d / "_defaults.yaml").write_text(_DECL + _EMAIL_RD, encoding="utf-8")
     res = _gar("--config-dir", str(d), "--validate", *(["--strict"] if strict else []))
     assert res.returncode == rc, res.stderr
     # (--validate prints the line once as a finding and again under FAIL.)
@@ -487,7 +490,7 @@ def test_f3_a_nested_tenant_file_is_not_this_finding(tmp_path):
     """Control: a TENANT file never carries `_routing_defaults`, at the root
     either — a stderr WARN there as here, not the moved-file finding."""
     d = _write(tmp_path / "conf.d", {
-        "_defaults.yaml": _EMAIL_RD,
+        "_defaults.yaml": _DECL + _EMAIL_RD,
         "team/t-team.yaml": _tenant("t-team") + "_routing_defaults:\n  repeat_interval: 1h\n",
     })
     res = _gar("--config-dir", str(d), "--validate")
@@ -605,7 +608,7 @@ def test_a_null_root_stays_silent(tmp_path):
     """#2412 control: `_routing_defaults: null` at the root was already an
     empty layer without a word, and still is — no WARN, rc 0."""
     d = _write(tmp_path / "conf.d", {
-        "_defaults.yaml": "_routing_defaults: null\n",
+        "_defaults.yaml": _DECL + "_routing_defaults: null\n",
         "t-root.yaml": _tenant("t-root"),
     })
     res = _gar("--config-dir", str(d), "--validate", "--strict")

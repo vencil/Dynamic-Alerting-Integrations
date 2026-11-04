@@ -872,7 +872,7 @@ def _run_da_guard(
         # called older.
         stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
                  if isinstance(e, _OlderSchema)
-                 or (isinstance(e, KeyError) and (e.args in (("skipped",), ("unreadable",), ("parse_failed",), ("blocks",))
+                 or (isinstance(e, KeyError) and (e.args in _FIELDS_ADDED_SINCE
                                                   or (e.args == ("schema",) and subcommand == SUBCOMMAND)))
                 else "")
         # Not the tree's either way: da-guard writes this JSON whatever the
@@ -899,6 +899,12 @@ def _run_da_guard(
             f"da-guard {subcommand} exited {proc.returncode} with no file in {fields}",
             proc.returncode, stderr, broken=True)
     return got, proc.returncode, stderr
+
+
+# Fields a da-guard document gained after its first version: one missing
+# names the binary as older than this tool (#3489, #3016).
+_FIELDS_ADDED_SINCE = (("skipped",), ("unreadable",), ("parse_failed",), ("blocks",),
+                       ("undecidable_blocks",))
 
 
 def _accepts(cmd: list[str], timeout: float) -> bool:

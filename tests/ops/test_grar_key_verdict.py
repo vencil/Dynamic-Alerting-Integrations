@@ -159,6 +159,20 @@ def test_a_key_name_with_a_control_character_is_never_printed_raw(tmp_path):
     assert "\x1b" not in res.stderr
 
 
+def test_a_routing_only_root_defaults_file_passes(tmp_path):
+    """#3016: a root `_defaults.yaml` holding only `_routing_defaults` (no
+    `defaults:` wrapper, so effective reads the whole document) is valid —
+    the route generator reads the key there; the verdict must not call it
+    unread now that the gates block."""
+    files = {"_defaults.yaml": "_routing_defaults:\n  receiver:\n    type: webhook\n"
+                               "    url: https://hooks.example.com/noc\n",
+             "t-a.yaml": "tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: webhook\n"
+                         "        url: https://hooks.example.com/t-a\n"}
+    res, doc = _cli(tmp_path, files, "--validate")
+    assert res.returncode == 0, res.stderr
+    assert [r for r in _key_records(doc) if r["kind"] == "key_unread"] == [], doc
+
+
 def test_a_tree_with_only_routing_and_no_root_platform_file_passes(tmp_path):
     """ADR-038 decision 7: a tree with only routing settings has no
     threshold key the verdict could not judge — rc 0, the line a note."""

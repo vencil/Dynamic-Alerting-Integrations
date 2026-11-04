@@ -2125,7 +2125,11 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
     try:
         verdict = key_verdict.judge_tree(config_dir)
     except Exception as exc:  # noqa: BLE001 — any failure is "not judged": no pass
-        tool = isinstance(exc, (DaGuardNotFoundError, DaGuardError))
+        # The binary's fault (missing, stale, broken) is a caller error; a
+        # tree da-guard refuses to judge (a tenant in two files) is the
+        # tree's own, already a FAIL in the row that names it (#2725).
+        tool = isinstance(exc, DaGuardNotFoundError) or (
+            isinstance(exc, DaGuardError) and exc.binary_fault)
         return _make_result("unread_keys", FAIL, [
             "verdict incomplete: the keys no reader reads were not judged "
             f"({type(exc).__name__}: {' '.join(str(exc).split())})"],

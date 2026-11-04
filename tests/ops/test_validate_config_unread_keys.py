@@ -137,9 +137,13 @@ def test_a_tree_with_only_routing_is_no_undecidable_failure(tmp_path):
 
 @pytest.mark.parametrize("exc, caller_error", [
     (tv.DaGuardNotFoundError("no da-guard"), True),
-    (tv.DaGuardError("boom", 2, "boom"), True),
+    (tv.DaGuardError("boom", 139, "boom", broken=True), True),
+    (tv.DaGuardError("old", 2, "old", stale=True), True),
+    # da-guard refuses the tree itself (a tenant in two files): the tree's
+    # fault, a FAIL the row naming it already carries — exit 1, not 2.
+    (tv.DaGuardError("config rejected", 2, "duplicate tenant ID"), False),
     (RuntimeError("anything else"), False),
-])
+], ids=["not-found", "broken", "stale", "tree-refused", "other"])
 def test_a_verdict_that_cannot_be_given_fails(tmp_path, monkeypatch, exc, caller_error):
     """#3016：判決給不出來不算通過（與 tenant-api 判不了就不收一致）。da-guard
     本身失敗是 caller error（exit 2），樹的內容擋住判決（例如 policy_engine 拒收的

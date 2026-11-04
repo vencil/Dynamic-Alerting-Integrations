@@ -59,6 +59,9 @@ _NOT_VALIDATED = ("NOTICE: amtool not found on PATH; generated Alertmanager "
 def tenant_dir(tmp_path):
     d = tmp_path / "conf.d"
     d.mkdir()
+    # A root platform file declaring the tenant's threshold: without one the
+    # key is undecidable, which fails --validate before amtool runs (#3016).
+    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
     (d / "t1.yaml").write_text(
         make_tenant_yaml("t1", keys={"mysql_connections": "70"},
                          routing=make_routing_config("t1")),
