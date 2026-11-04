@@ -787,22 +787,22 @@ data:
     n    sum without (instance, pod, host) (\\n      rate(vector_component_discarded_events_total{component_id=\\\
     \"tenant_project\\\", intentional=\\\"true\\\"}[10m])\\n    )[1d:10m]\\n  ) /\
     \ 144\\n)\\nand\\nsum without (instance, pod, host) (\\n  rate(vector_component_discarded_events_total{component_id=\\\
-    \"tenant_project\\\", intentional=\\\"true\\\"}[10m])\\n) > 0.1\\nunless on ()\
-    \ (time() - min(prometheus_tsdb_lowest_timestamp_seconds) < 86400)\\n\"\n    for:\
-    \ 15m\n    labels:\n      alert_source: platform\n      severity: warning\n  \
-    \  annotations:\n      description: 'The `tenant_project` remap is aborting federation_audit\
-    \ rows\n\n        whose tenant_id is blank or not in helm/vector\n\n        `tenantProjections`\
-    \ at {{ $value | humanize }}/s, more than 3x\n\n        its own 1-day average,\
-    \ for 15m. Those rows reach the platform\n\n        0:0 copy but no tenant partition.\
-    \ Likely causes: (a) audit\n\n        traffic from a tenant that has no projection\
-    \ yet (new tenant,\n\n        or `tenantProjections` behind `_account_registry.yaml`);\n\
-    \n        (b) a forged or malformed payload flood. This is a coarse\n\n      \
-    \  surge signal: it cannot name the account and it is NOT a\n\n        registry-desync\
-    \ detector — a small or long-standing gap is\n\n        part of the baseline and\
-    \ does not fire, and a permanent step\n\n        stops firing after about a day.\
-    \ Query the 0:0 store for\n\n        recent `log_type:federation_audit` rows by\
-    \ `tenant_id` and\n\n        compare against `tenantProjections`. See\n\n    \
-    \    platform-log-aggregation-runbook §8.7.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
+    \"tenant_project\\\", intentional=\\\"true\\\"}[10m])\\n) > 0.1\\nand on () count(vector_uptime_seconds\
+    \ offset 1d) > 0\\n\"\n    for: 15m\n    labels:\n      alert_source: platform\n\
+    \      severity: warning\n    annotations:\n      description: 'The `tenant_project`\
+    \ remap is aborting federation_audit rows\n\n        whose tenant_id is blank\
+    \ or not in helm/vector\n\n        `tenantProjections` at {{ $value | humanize\
+    \ }}/s, more than 3x\n\n        its own 1-day average, for 15m. Those rows reach\
+    \ the platform\n\n        0:0 copy but no tenant partition. Likely causes: (a)\
+    \ audit\n\n        traffic from a tenant that has no projection yet (new tenant,\n\
+    \n        or `tenantProjections` behind `_account_registry.yaml`);\n\n       \
+    \ (b) a forged or malformed payload flood. This is a coarse\n\n        surge signal:\
+    \ it cannot name the account and it is NOT a\n\n        registry-desync detector\
+    \ — a small or long-standing gap is\n\n        part of the baseline and does not\
+    \ fire, and a permanent step\n\n        stops firing after about a day. Query\
+    \ the 0:0 store for\n\n        recent `log_type:federation_audit` rows by `tenant_id`\
+    \ and\n\n        compare against `tenantProjections`. See\n\n        platform-log-aggregation-runbook\
+    \ §8.7.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
     \      summary: Unprojected tenant audit rows surged above 3x their 1-day baseline\
     \ for 15m\n  - alert: VectorProjectionGateMismatch\n    expr: \"max by (mode,\
     \ namespace) (\\n  vector_tenant_projection_gate_info{category=\\\"mismatch\\\"\

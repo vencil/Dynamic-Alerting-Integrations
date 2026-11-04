@@ -103,3 +103,24 @@ def test_no_scrape_port_denies_all_ingress():
 
 def test_disabled_renders_no_policy():
     assert _policies(_render("--set", "networkPolicy.enabled=false")) == []
+
+
+def test_absent_map_takes_the_secure_default():
+    """`helm upgrade --reuse-values` from a pre-0.11.0 release has no
+    `networkPolicy` map. That must render the default policy (monitoring only),
+    not fail the upgrade, not drop the policy, and not open every namespace."""
+    [np] = _policies(_render("--set", "networkPolicy=null"))
+    [rule] = np["spec"]["ingress"]
+    assert rule["from"] == [{"namespaceSelector": {"matchLabels": {
+        "kubernetes.io/metadata.name": "monitoring"}}}]
+
+
+def test_equal_scrape_ports_fail_render():
+    """Vector and the gate exposer share the pod network; one port for both
+    would leave one container crash-looping on bind."""
+    proc = subprocess.run(
+        ["helm", "template", "t", _CHART, "-n", "x", *_PROJ,
+         "--set", "projectionGate.metrics.port=9598"],
+        capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode != 0
+    assert "must differ from metrics.port" in proc.stderr

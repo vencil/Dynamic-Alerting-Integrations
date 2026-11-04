@@ -14,7 +14,12 @@ Ingress only, on purpose: egress (VictoriaLogs sinks, syslog forwarders, the
 Kubernetes API for kubernetes_logs) is deployment-specific and left open.
 ⚠️ Like every NetworkPolicy this only isolates on a CNI that enforces policy.
 */}}
-{{- if .Values.networkPolicy.enabled }}
+{{- /* Nil-safe: `helm upgrade --reuse-values` from a pre-0.11.0 release carries
+     no `networkPolicy` map at all. An ABSENT map takes the chart default (on,
+     monitoring namespace) — never "off" and never "any namespace"; a present
+     map is taken as written (so `scrapeNamespaceLabel: null` still means any). */}}
+{{- $np := .Values.networkPolicy | default (dict "enabled" true "scrapeNamespaceLabel" (dict "kubernetes.io/metadata.name" "monitoring")) }}
+{{- if $np.enabled }}
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -32,7 +37,7 @@ spec:
     # Prometheus scrape. scrapeNamespaceLabel null = any namespace
     # (`namespaceSelector: {}`).
     - from:
-        {{- with .Values.networkPolicy.scrapeNamespaceLabel }}
+        {{- with $np.scrapeNamespaceLabel }}
         - namespaceSelector:
             matchLabels:
               {{- toYaml . | nindent 14 }}

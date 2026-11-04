@@ -143,10 +143,10 @@ tests:
   - interval: 1m
     name: fanout-discard-surge-over-baseline-fires-summed-across-pods
     input_series:
-      # A TSDB that has held data since t=0 (> 1d at eval): the empty-TSDB
-      # mute must NOT swallow a real surge.
-      - series: 'prometheus_tsdb_lowest_timestamp_seconds{instance="localhost:9090",job="prometheus"}'
-        values: '0x1540'
+      # Vector telemetry scraped since t=0 (> 1d at eval): the
+      # baseline-coverage gate must NOT swallow a real surge.
+      - series: 'vector_uptime_seconds{instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
+        values: '0+60x1540'
       - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
         values: '0+30x1499 45270+300x40'
       - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.2:9598",pod="vector-bbbbb",host="vector-bbbbb"}'
@@ -212,17 +212,21 @@ tests:
         alertname: TenantProjectionFanoutDiscardSpike
         exp_alerts: []
 
-  # 8) A series with NO history that comes up above the floor fires. The
-  #    baseline is the 1-day TIME average (missing points = 0); an
-  #    avg_over_time baseline would average only the 30m that exist, equal
-  #    the current rate, and never fire on first appearance.
+  # 8) A series with NO history that comes up above the floor fires — while
+  #    Vector's telemetry (the heartbeat) has been scraped for over a day, so
+  #    "no unprojected rows before" is a measurement, not a gap. The baseline
+  #    is the 1-day TIME average (missing points = 0); an avg_over_time
+  #    baseline would average only the 30m that exist, equal the current
+  #    rate, and never fire on first appearance.
   - interval: 1m
     name: fanout-discard-first-appearance-above-floor-fires
     input_series:
+      - series: 'vector_uptime_seconds{instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
+        values: '0+60x1540'
       - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
-        values: '0+60x40'
+        values: '_x1500 0+60x40'
     alert_rule_test:
-      - eval_time: 30m
+      - eval_time: 1530m
         alertname: TenantProjectionFanoutDiscardSpike
         exp_alerts:
           - exp_labels:
@@ -284,20 +288,22 @@ tests:
         alertname: TenantProjectionFanoutDiscardSpike
         exp_alerts: []
 
-  # 9c) A Prometheus restarted on an EMPTY TSDB (raw stack: emptyDir) does
-  #     not fire it. The TSDB's lowest timestamp is t=0, so at 30m it holds
-  #     less than a day; a long-running steady 0.5/s counter (huge start
-  #     value, no history in this TSDB) would otherwise look like a surge
-  #     over an empty baseline.
+  # 9c) Vector telemetry that only just became visible does not fire it: the
+  #     chart upgrade that turns `metrics.enabled` on for an existing install
+  #     (on a Prometheus with plenty of history), and equally a Prometheus
+  #     restarted on an EMPTY TSDB (raw stack: emptyDir). The heartbeat and a
+  #     long-running steady 0.5/s counter (huge start value) both appear at
+  #     25h; a day earlier there was no heartbeat, so the zero-filled baseline
+  #     is a gap, not a measurement, and the alert stays muted.
   - interval: 1m
-    name: fanout-discard-fresh-tsdb-no-fire
+    name: fanout-discard-telemetry-just-visible-no-fire
     input_series:
-      - series: 'prometheus_tsdb_lowest_timestamp_seconds{instance="localhost:9090",job="prometheus"}'
-        values: '0x60'
+      - series: 'vector_uptime_seconds{instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
+        values: '_x1500 0+60x40'
       - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
-        values: '1000000+30x60'
+        values: '_x1500 1000000+30x40'
     alert_rule_test:
-      - eval_time: 30m
+      - eval_time: 1530m
         alertname: TenantProjectionFanoutDiscardSpike
         exp_alerts: []
 

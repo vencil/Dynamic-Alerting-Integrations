@@ -196,6 +196,9 @@ spec:
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
         {{- if .Values.tenantProjections }}
+        {{- if and .Values.metrics.enabled (eq (int .Values.projectionGate.metrics.port) (int .Values.metrics.port)) }}
+        {{- fail (printf "projectionGate.metrics.port (%v) must differ from metrics.port (%v): the gate exposer and Vector share the pod network, so only one could bind it and the other would crash-loop" .Values.projectionGate.metrics.port .Values.metrics.port) }}
+        {{- end }}
         # ── Projection-gate metrics exposer (#908 PR-3a) ─────────────────────────
         # Long-lived sidecar (same image as the init-container, command overridden
         # to serve_metrics.py) that re-serves the init-container's verdict textfile

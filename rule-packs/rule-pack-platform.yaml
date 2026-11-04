@@ -2405,13 +2405,23 @@ groups:
       # `host=<pod hostname>` on every internal metric, so without it each
       # Vector rollout starts a fresh per-pod series with an empty baseline
       # and the alert would fire for hours on unchanged traffic.
-      # `unless on () (... < 86400)`: a Prometheus restarted on an EMPTY TSDB
-      # (the raw stack's emptyDir) has no baseline either; the alert is muted
-      # until the TSDB holds a full day. Where
-      # `prometheus_tsdb_lowest_timestamp_seconds` is absent (vmalert) the mute
-      # is a no-op. Cost: nothing fires during that first day, and a sustained
-      # surge that starts inside it is absorbed into the baseline and never
-      # reported. Requires helm/vector `metrics.enabled` (default on).
+      # `and on () count(vector_uptime_seconds offset 1d) > 0`: the baseline is
+      # only meaningful when Vector's own telemetry already covered the whole
+      # 1-day window. `vector_uptime_seconds` is Vector's always-on heartbeat
+      # gauge (src/internal_events/heartbeat.rs), so its presence one day ago
+      # means "unprojected rows were countable all day" — absent ones really
+      # were zero. That one condition covers every empty-baseline start:
+      # metrics just switched on (this chart's 0.11.0 upgrade turns them on for
+      # existing installs), a Prometheus restarted on an EMPTY TSDB (the raw
+      # stack's emptyDir), and a fresh install. Cost: nothing fires for the
+      # first day, a sustained surge that starts inside it is absorbed into the
+      # baseline and never reported, and a Prometheus whose retention is under
+      # one day never fires this alert at all. Scope: rows `demux` reclassifies
+      # as `suspicious_audit` (a foreign pod_owner) are dropped by
+      # `tenant_eligible` and never counted here — that class has no alert
+      # (docs/internal/log-visibility-2tier-catalogue.md); a forged or
+      # malformed tenant_id inside a genuine federation_audit row still is.
+      # Requires helm/vector `metrics.enabled` (default on).
       - alert: TenantProjectionFanoutDiscardSpike
         expr: |
           sum without (instance, pod, host) (
@@ -2428,7 +2438,7 @@ groups:
           sum without (instance, pod, host) (
             rate(vector_component_discarded_events_total{component_id="tenant_project", intentional="true"}[10m])
           ) > 0.1
-          unless on () (time() - min(prometheus_tsdb_lowest_timestamp_seconds) < 86400)
+          and on () count(vector_uptime_seconds offset 1d) > 0
         for: 15m
         labels:
           severity: warning
