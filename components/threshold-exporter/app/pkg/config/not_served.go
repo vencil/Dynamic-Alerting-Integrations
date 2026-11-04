@@ -26,9 +26,9 @@ package config
 //     (FlatBuild.RejectedChainValues, less the keys the tenant sets itself:
 //     FlatBuild.rejectedTenantSets); or a subtree level writes a reserved
 //     key a subtree does not carry (subtreeReservedUnsupported, #3341) and
-//     the tenant side sets none — the one entry not shown in the effective
-//     config, since neither it nor /metrics lays that value
-//     (withNotCarried).
+//     the tenant side sets none — not shown in the effective config, since
+//     neither it nor /metrics lays that value (withNotCarried; the other
+//     such entry is profile_not_filled).
 //   - value_unparsed: resolveBaseRows cannot parse the tenant's value (a
 //     non-finite number included, #3140; `disable:<severity>` too, #3141) and
 //     serves the platform default instead (rejectRecorder).
@@ -87,11 +87,29 @@ package config
 //     in a profile or a platform file — and #3016 leaves the key-name
 //     judgement with that verdict alone; a second, uniform error here would
 //     contradict it for the profile and platform layers.
+//   - profile_not_filled (#3395): the tenant's profile writes a key the
+//     root declares without a platform value (`optional_overrides:` only),
+//     and profileFill skips it (#1189: a profile may not arm the declared
+//     tier) — the decision ApplyProfiles WARNs about on /metrics, recorded
+//     at the same profileFill's onDeclared on the walker plane
+//     (PlatformProfiles.expand). Named with the profile file and only when
+//     the tenant side sets no value of the key (profileFill never reports
+//     one it sets; withProfileNotFilled leaves out one the view holds — a
+//     subtree level valuing it, whose value effective shows and /metrics
+//     serves, the WARN then the profile value's only trace). Like
+//     withNotCarried's entries, the value is laid by no plane, so it is not
+//     in the effective config — only here; keyed by the canonical name the
+//     decision and the WARN use, not by the profile's spelling.
+//
+//     ⛔ Like unconsumed, NOT one of the reasons ValueNotServedAsWritten
+//     selects: not da-guard's value_not_served, not the exporter's
+//     da_config_values_not_served. How severe it is belongs to ADR-038's
+//     shared verdict (#3394), not a uniform error here
+//     (TestValueNotServedAsWritten_NotProfileNotFilled pins it).
 //
 // ⚠️ NOT COVERED, stated so an empty NotServed is not read as "/metrics
-// serves what effective shows": a profile-layer value applyProfiles discards
-// (e.g. `pg_connections: abc` in `_profiles.yaml`) and an expired
-// (`expires:`) override. No recording point exists for either.
+// serves what effective shows": an expired (`expires:`) override. No
+// recording point exists for it.
 //
 // The effective side only answers WHOSE value the effective config shows
 // (keySources, the winning layer and file) and looks that up in the tables
@@ -136,6 +154,11 @@ const (
 	// that no row phase reads — undeclared at the root, or a `_critical`
 	// whose base the root `defaults:` does not value (noteUnclaimed).
 	NotServedUnconsumed = "unconsumed"
+	// NotServedProfileNotFilled (#3395): a key the tenant's profile writes
+	// that profileFill does not fill in, the root declaring it without a
+	// platform value (#1189); not in the effective config
+	// (withProfileNotFilled).
+	NotServedProfileNotFilled = "profile_not_filled"
 )
 
 // NotServedKey is why /metrics does not serve one key of an effective config
@@ -146,7 +169,9 @@ type NotServedKey struct {
 	// File is the root-relative slash path of the file whose value the
 	// effective config shows (the key's winning layer) — or, for a `_` key a
 	// subtree level writes non-null that the effective config does not show
-	// (#3341), the deepest subtree file writing it; empty when no single file
+	// (#3341), the deepest subtree file writing it; or, for a
+	// profile_not_filled key, which the effective config does not show
+	// either, the profile file writing it (#3395); empty when no single file
 	// applies.
 	File string `json:"file,omitempty"`
 }
