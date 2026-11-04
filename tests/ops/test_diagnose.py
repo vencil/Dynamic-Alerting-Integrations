@@ -1117,7 +1117,8 @@ class TestGivenConfigDirIsNeverSilent:
     def _cli(*argv):
         p = subprocess.run([sys.executable, diagnose.__file__, *argv, "--json"],
                            capture_output=True, text=True, encoding="utf-8", timeout=120)
-        return p, json.loads(p.stdout)   # one JSON document on every path
+        # #3558: a document on stdout only with rc 0/1; a caller error has none
+        return p, (json.loads(p.stdout) if p.returncode in (0, 1) else None)
 
     @pytest.mark.parametrize("case", ["missing", "plain-file", "empty"])
     def test_an_unusable_dir_exits_2_naming_it(self, tmp_path, case):
@@ -1127,14 +1128,14 @@ class TestGivenConfigDirIsNeverSilent:
         (tmp_path / "f.yaml").write_text("tenants: {}\n", encoding="utf-8")
         p, doc = self._cli("db-a", "--config-dir", target, "--show-inheritance")
         assert p.returncode == 2, (p.stdout, p.stderr)
-        assert doc["status"] == "caller_error" and doc["reason"] == "dir_not_found", doc
+        assert doc is None and p.stdout == "", p.stdout
         assert "--config-dir" in p.stderr, p.stderr
         assert "Could not resolve" not in p.stdout
 
     def test_a_tree_without_the_tenant_exits_2(self, tmp_path):
         p, doc = self._cli("db-z", "--config-dir", self._tree(tmp_path), "--show-inheritance")
         assert p.returncode == 2, (p.stdout, p.stderr)
-        assert doc["reason"] == "tenant_not_found", doc
+        assert doc is None and p.stdout == "", p.stdout
         assert "no tenant 'db-z'" in p.stderr, p.stderr
 
     def test_must_fire_control_the_good_tree_still_answers(self, tmp_path):
@@ -1154,7 +1155,6 @@ class TestGivenConfigDirIsNeverSilent:
                             lambda *a: asked.append(a) or ([], None))
         monkeypatch.setattr(sys, "argv", ["diagnose", "db-a", "--config-dir",
                                           str(tmp_path / "nope")])
-        monkeypatch.setattr(diagnose, "arm_crash_envelope", lambda: None)
         with pytest.raises(diagnose.CallerError) as exc:
             diagnose.main()
         assert exc.value.reason == "dir_not_found"

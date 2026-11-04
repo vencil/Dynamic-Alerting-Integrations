@@ -37,8 +37,7 @@ from _lib_paths import require_dir, supplied  # noqa: E402  (#3392)
 from _lib_prometheus import QueryError, prometheus_targets  # noqa: E402  (#3133)
 from _lib_kubectl import KubectlError, kubectl_get, kubectl_list  # noqa: E402  (#3207)
 import _lib_consumer_read  # noqa: E402  (#3426: rule_pack_files, the one declaration)
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 
 # The CRDs of the kinds the checks list (#3207): whether each is installed
 # is a `kubectl_get` of the CRD by name — an answer, unlike a `kubectl get`
@@ -356,9 +355,6 @@ def main():
     )
 
     args = parser.parse_args()
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
     # #3392: a --rule-packs-dir the caller gave that is not there or not a
     # directory is a caller error, before the cluster is asked — it was an
     # expected count of 0 and a WARN that never named the path, rc 0. The

@@ -87,8 +87,7 @@ from _grar_merge import (  # noqa: E402
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 from _lib_paths import require_dir  # noqa: E402  (#3276)
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope)
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR, CallerError, Report  # noqa: E402
 
 #: the status of a receiver slot the --policy domain allowlist refuses (#3142).
 STATUS_POLICY_REFUSED = "POLICY_REFUSED"
@@ -1390,9 +1389,6 @@ def main(argv: list[str] | None = None) -> int | Report:
     add_policy_argument(parser, lang=lang)  # #3142: the generator's own flag
 
     args = parser.parse_args(argv)
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
 
     # #2264: --label only feeds the trace; outside it the flag would be
     # silently ignored, so refuse it (argparse caller error → rc 2).

@@ -164,9 +164,6 @@ def test_a_tree_the_generator_refuses_is_refused_not_empty(tmp_path, name, files
     gen = _run(GEN, "--config-dir", str(confd), "--dry-run")
     assert gen.returncode != 0, f"{name}: the row no longer exercises a generator refusal"
     p = _run(NT, "--config-dir", str(confd), "--dry-run", "--json")
-    doc = json.loads(p.stdout)
-    assert doc["status"] == "caller_error"
-    assert doc["tenants"] == [] and doc["summary"]["total_receivers"] == 0
     # #3206: a row whose tree holds a path da-guard validation names ends
     # through the shared conf.d refusal before the generator's reading; the
     # rest are the generator's own refusal. Pinned, and checked against Go.
@@ -174,8 +171,11 @@ def test_a_tree_the_generator_refuses_is_refused_not_empty(tmp_path, name, files
     assert named == (["alpha.yaml"] if name == "unreadable_tenant_file" else []), (name, named)
     if named:
         assert_refused(p.returncode, p.stderr, named)
-        assert doc["reason"] == "conf_d_not_servable"
+        assert p.stdout == "", p.stdout  # #3558: the shared refusal carries no document
         return
+    doc = json.loads(p.stdout)  # the tool's own refusal: its document, zeroed
+    assert doc["status"] == "caller_error"
+    assert doc["tenants"] == [] and doc["summary"]["total_receivers"] == 0
     assert p.returncode == 2, (p.returncode, p.stderr[-800:])
     assert "route generator refuses this tree" in p.stderr, p.stderr[-800:]
     assert doc["reason"] == "routing_tree_refused"

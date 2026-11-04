@@ -64,7 +64,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, CallerError, Report, arm_crash_envelope, encode_json  # noqa: E402
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, CallerError, Report, encode_json  # noqa: E402
 import _lib_input  # noqa: E402  (#3446: which state files --state-dir selects)
 from _lib_paths import classify_path  # noqa: E402  (#3392)
 from _lib_io import (  # noqa: E402  (#1789)
@@ -494,8 +494,6 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> "int | Report":
     try_utf8_stdout()
     args = build_parser().parse_args(argv)
-    if args.json:
-        arm_crash_envelope()  # #3094: a crash in --json mode still prints one envelope
 
     state_dir = Path(args.state_dir)
     manifest_path = Path(args.manifest_path)

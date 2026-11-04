@@ -51,10 +51,7 @@ from _lib_tenant_values import (  # noqa: E402
     load_effective_tree,
     load_served_tree,
 )
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report,
-    arm_crash_envelope,
-)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 
 # Creator label for idempotency checks
 SILENCE_CREATOR = "da-tools/maintenance-scheduler"
@@ -522,9 +519,6 @@ def main():
     try_utf8_stdout()
     parser = build_parser()
     args = parser.parse_args()
-    if args.json_output:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
 
     require_dir(args.config_dir, lang="en", flag="--config-dir")  # #3276
 
@@ -563,8 +557,8 @@ def main():
 
     status = EXIT_VIOLATION if errors else EXIT_OK
     if args.json_output:
-        # #3216: run() encodes it — after push_metrics, so a crash there is
-        # the envelope alone, never this document next to rc 2
+        # #3216: run() encodes it — after push_metrics, so a crash there
+        # leaves stdout empty, never this document next to rc 2
         return Report({
             "created": created,
             "skipped": skipped,

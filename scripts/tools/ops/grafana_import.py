@@ -41,8 +41,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_paths import classify_path, require_dir  # noqa: E402  (#3276)
 from _lib_kubectl import KubectlError, kubectl_list  # noqa: E402  (#3349)
 
@@ -256,8 +255,6 @@ def main():
     parser.add_argument("--json", action="store_true",
                         help="Output as JSON")
     args = parser.parse_args()
-    if args.json:  # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope(tool="grafana-import")
 
     if args.verify:
         checks = verify_dashboards(args.namespace)

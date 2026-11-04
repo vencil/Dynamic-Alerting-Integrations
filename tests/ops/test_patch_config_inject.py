@@ -13,7 +13,7 @@ from unittest import mock
 import pytest
 
 import patch_config as pc  # noqa: E402
-from _patch_config_fake import MIRROR, FakeCluster  # noqa: E402
+from _patch_config_fake import MIRROR, FakeCluster, run_main  # noqa: E402
 
 FAST = ["--poll-interval", "0.001", "--reload-timeout", "0.05"]
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
@@ -114,7 +114,7 @@ def test_the_answer_follows_the_configmap(scenario, exc_name, nth, sticky, targe
             contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()), \
             _inject(*target, nth, EXCS[exc_name], sticky):
         try:
-            pc.main()
+            run_main()
             outcome = 0
         except SystemExit as exc:
             outcome = exc.code

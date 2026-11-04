@@ -224,16 +224,15 @@ def _cwd_put_back(before):
 
 
 @pytest.fixture(autouse=True)
-def _disarm_crash_envelope():
-    """A tool's ``main([... "--json"])`` called in-process arms the
-    process-wide crash envelope (#3094) with whatever ``sys.stdout`` was
-    then (a capture or fake stream); a tool run in-process as ``__main__``
-    may set the process caller-error and crash codes (no tool does since
-    #3393; tenant_verify set 1 until then);
-    stdout write failures are recorded process-wide (#3124). None of it may
-    outlive that test — a stale armed stream that fails turned a green run
-    into rc 2 at interpreter exit, depending on test order. Idempotent
-    reset of every piece, not save-then-restore (see test-map.md)."""
+def _reset_exit_state():
+    """A tool run in-process may leave `_lib_exitcodes`' process-global exit
+    state behind: the caller-error and crash codes it set (no tool does
+    since #3393; tenant_verify set 1 until then), a stdout failure it said
+    (#3124: the next test's would go unsaid), a best-effort delivery or a
+    Report's own failure line (#3450, #3558: the next test's run would keep
+    a status a failed stdout must replace), its stdout owner (#3107). None
+    of it may outlive that test. Idempotent reset of every piece, not
+    save-then-restore (see test-map.md)."""
     yield
     ec = sys.modules.get("_lib_exitcodes")
     if ec is not None:

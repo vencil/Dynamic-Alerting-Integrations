@@ -582,30 +582,22 @@ def test_e2e_nothing_verified_exits_2(conf_d, tmp_path, case):
     assert "merged_hash: " not in proc.stdout, "nothing verified"
 
 
-_ENVELOPE_REASON = {
-    "no-tenant-id": "caller_error",
-    "all-with-expect": "caller_error",
-    "conf-d-missing": "dir_not_found",
-    "conf-d-is-a-file": "dir_not_found",
-    "da-guard-missing": "served_values_unavailable",
-    "conf-d-refused": "conf_d_not_servable",
-}
+# The caller errors that carry no document of tenant-verify's own.
+_NO_DOCUMENT = ("no-tenant-id", "all-with-expect", "conf-d-missing", "conf-d-is-a-file",
+                "da-guard-missing", "conf-d-refused")
 
 
-@pytest.mark.parametrize("case", sorted(_ENVELOPE_REASON))
-def test_e2e_json_caller_error_prints_one_envelope(conf_d, tmp_path, case):
-    """#3393 Q3: with --json, an exit 2 prints exactly one JSON document on
-    stdout — the shared `caller_error` envelope (until #3393 stdout was
-    empty: tenant-verify was the documented exception)."""
-    import json as _json
+@pytest.mark.parametrize("case", _NO_DOCUMENT)
+def test_e2e_json_caller_error_prints_nothing_on_stdout(conf_d, tmp_path, case):
+    """#3558: with --json, a caller error leaves stdout empty — the library
+    no longer prints a `caller_error` envelope (#3393 had added one); the
+    reason is the stderr line, the code is 2."""
     argv, env = _nothing_verified_argv(case, conf_d, tmp_path)
     proc = _run_tool(*argv, "--json", env=env)
     assert proc.returncode == 2, (proc.stdout, proc.stderr)
-    doc, end = _json.JSONDecoder().raw_decode(proc.stdout)
-    assert proc.stdout[end:].strip() == "", "exactly one document"
-    assert doc["status"] == "caller_error", doc
-    assert doc["reason"] == _ENVELOPE_REASON[case], doc
-    assert doc["error"].startswith("ERROR:") or doc["error"].startswith("error:"), doc
+    assert proc.stdout == "", proc.stdout
+    assert any(line.startswith(("ERROR:", "error:", "usage:"))
+               for line in proc.stderr.splitlines()), proc.stderr
 
 
 def test_e2e_json_other_tenant_duplicated_is_its_own_one_document(tmp_path):
@@ -644,8 +636,7 @@ def _crash_wrapper(tmp_path, argv):
 def test_crash_exits_2_the_shared_crash_code(tmp_path, json_mode):
     """#3393: an uncaught exception ends at the shared crash code 2 (was 1,
     #3090) — 1 is "verification failed" now, which the rollback runbook
-    acts on. With --json, stdout carries the one `internal_error`
-    envelope."""
+    acts on. stdout stays empty, --json or not (#3558: no crash envelope)."""
     import json as _json
     import subprocess
     argv = ["db-fin-a", "--conf-d", str(tmp_path)] + (["--json"] if json_mode else [])
@@ -655,8 +646,4 @@ def test_crash_exits_2_the_shared_crash_code(tmp_path, json_mode):
     assert proc.returncode == 2, proc.stderr
     assert "Traceback" in proc.stderr
     assert "ERROR: unexpected internal error (RuntimeError): injected crash" in proc.stderr
-    if json_mode:
-        doc = _json.loads(proc.stdout)
-        assert (doc["status"], doc["reason"]) == ("caller_error", "internal_error"), doc
-    else:
-        assert proc.stdout == ""
+    assert proc.stdout == ""

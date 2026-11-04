@@ -49,9 +49,7 @@ from _lib_tenant_values import (  # noqa: E402  (#2115)
     load_served_tree,
     print_load_warnings,
 )
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, Report, arm_crash_envelope,
-)
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, Report  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Default paths (relative to script location for da-tools container)
@@ -379,9 +377,6 @@ def main():
         help="Output JSON only",
     )
     args = parser.parse_args()
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
 
     if not args.config_dir and not args.tenant_config:
         print("ERROR: Specify --config-dir or --tenant-config", file=sys.stderr)
@@ -420,7 +415,8 @@ def main():
     if args.output:
         # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
         # Under --json it is written before the document goes out (#3216):
-        # an unwritable -o is then the envelope, not a document beside rc 2.
+        # an unwritable -o is then rc 2 with stdout empty, not a document
+        # beside rc 2.
         write_json_or_die(args.output, results, flag="-o/--output")
         if not args.json:
             print(f"  JSON report: {args.output}")

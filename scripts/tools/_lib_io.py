@@ -648,10 +648,10 @@ def exit_on_yaml_file_error(fn: _F) -> _F:
     name and did not come from the helper; it keeps propagating so the
     layer that raised it stays visible.
 
-    ``--json`` (#3115): the exit goes through ``die_caller_error`` with
-    ``reason="yaml_file_unreadable"``, so a tool that armed its envelope
-    (``_lib_exitcodes.arm_crash_envelope``) gets one on stdout here too —
-    a tool no longer has to catch the error itself to keep that promise.
+    The exit goes through ``die_caller_error`` with
+    ``reason="yaml_file_unreadable"``: one stderr line and the caller-error
+    code; under ``--json`` stdout stays empty (#3558 — a caller error
+    carries no document unless the tool returns one as a ``Report``).
 
     Lives here rather than in ``_lib_exitcodes`` because that module is
     kept stdlib-only for the tools that import nothing else; this one
@@ -741,8 +741,8 @@ class OutputWriteError(OSError):
 
 
 def _die_on_write_error(exc: OutputWriteError, exit_code: Optional[int]) -> None:
-    """Print the one-line message to stderr and exit — no traceback; an armed
-    ``--json`` envelope says ``reason: output_unwritable`` (#3115)."""
+    """Print the one-line message to stderr and exit — no traceback, and
+    nothing on stdout (#3558)."""
     # #1538: the path is operator argv — still escape control characters
     # before it reaches a terminal (blind review).
     die_caller_error(f"ERROR: {safe_label(str(exc))}", reason="output_unwritable",
@@ -1303,9 +1303,7 @@ def exit_on_output_write_error(fn: _F) -> _F:
     ⚠️ Only :class:`OutputWriteError`, never a bare ``OSError``: an
     ``OSError`` that reached ``main`` from somewhere else (an unreadable
     INPUT, a socket) has no output path to name and no flag to point at, and
-    turning it into this message would misattribute it. A tool that armed
-    its ``--json`` envelope gets one here, ``reason: output_unwritable``
-    (#3115) — no need to catch the error itself.
+    turning it into this message would misattribute it.
     """
     @functools.wraps(fn)
     def _wrapped(*args: Any, **kwargs: Any) -> Any:

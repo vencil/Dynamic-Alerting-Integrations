@@ -131,8 +131,7 @@ sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     FlatRead,
@@ -2961,9 +2960,6 @@ def _main() -> "Report | None":
     parser.add_argument("--strict", action="store_true",
                         help=_h('strict'))
     args = parser.parse_args()
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
 
     # #3276: the shared judgement of a caller-given path — a directory under
     # a parent the caller cannot enter is named as such, not "not found".

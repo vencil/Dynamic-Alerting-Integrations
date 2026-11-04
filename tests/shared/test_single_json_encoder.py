@@ -3,8 +3,15 @@
 A tool hands its document back (`return Report(doc)`); `_lib_exitcodes.run`
 encodes it with `encode_json` — two-space indent, no NaN / Infinity, `date` /
 `datetime` as ISO 8601, a type's own `__json__()` — and prints it. A value
-the encoder cannot carry is the `output_not_serializable` envelope at the
-crash exit code, never a document with `Infinity` in it, never part of one.
+the encoder cannot carry is one stderr line at the crash exit code, never a
+document with `Infinity` in it, never part of one (#3558: and no envelope).
+
+Why the AST gate below stays next to the runtime invariant of
+tests/shared/test_json_stdout_contract.py ("stdout non-empty ⇔ the tool
+returned a Report", #3558): that one observes only the paths its recipes
+drive, in ops/ and the top level; this one reads every branch of every tool,
+dx/ and lint/ included, so a tool printing JSON text itself on a path no
+recipe reaches — the very thing the invariant forbids — is still refused.
 
 The gate below refuses every shape it can see of a tool printing JSON text
 itself; there are none left, so it is a plain refusal, no longer a ratchet
@@ -147,31 +154,27 @@ def test_run_prints_the_document_and_exits_with_its_status():
     assert json.loads(p.stdout) == {"n": 1}
 
 
-def _armed(body: str) -> str:
-    return f"def main():\n    lib.arm_crash_envelope()\n{body}\nlib.run(main)"
-
-
 @pytest.mark.real_crash_exit_code
-def test_a_document_json_cannot_carry_is_the_named_envelope_not_part_of_it():
-    p = _run(_armed("    return lib.Report({'ok': [1], 'bad': {'x': math.inf}})"))
+def test_a_document_json_cannot_carry_is_named_on_stderr_and_none_of_it_printed():
+    """No part of the document — and no envelope (#3558) — on stdout; the
+    crash code; one line naming where the value is."""
+    p = _run("def main():\n    return lib.Report({'ok': [1], 'bad': {'x': math.inf}})\n"
+             "lib.run(main)")
     assert p.returncode == 2, p.stderr
-    doc = json.loads(p.stdout)  # only the envelope: no `"ok"` printed before it
-    assert (doc["status"], doc["reason"]) == ("caller_error", "output_not_serializable")
-    assert "bad.x" in doc["error"] and "ok" not in doc
+    assert p.stdout == "", p.stdout
     assert "bad.x: inf is not a JSON number" in p.stderr
     assert "Traceback" not in p.stderr
 
 
 @pytest.mark.real_crash_exit_code
-@pytest.mark.parametrize("armed, printed_first, envelope", [
-    (True, False, True), (True, True, False), (False, False, False), (False, True, False)])
-def test_the_envelope_follows_the_armed_rule(armed, printed_first, envelope):
-    """Like every other rc-2 exit: an envelope only when armed and the tool
-    has not written to stdout itself — unarmed is not armed on the spot."""
+@pytest.mark.parametrize("printed_first", [False, True])
+def test_what_the_tool_printed_before_stays_and_nothing_is_added(printed_first):
+    """The library adds nothing to stdout for an unencodable document: what
+    the tool printed itself stays, nothing follows it."""
     body = ("    print('NOTICE: x')\n" if printed_first else "") + "    return lib.Report([math.nan])"
-    p = _run(_armed(body) if armed else f"def main():\n{body}\nlib.run(main)")
+    p = _run(f"def main():\n{body}\nlib.run(main)")
     assert p.returncode == 2, p.stderr
-    assert ('"output_not_serializable"' in p.stdout) is envelope, p.stdout
+    assert p.stdout == ("NOTICE: x\n" if printed_first else ""), p.stdout
     assert "[0]: nan is not a JSON number" in p.stderr
 
 
@@ -198,8 +201,8 @@ def test_in_process_callers_take_the_same_step(capsys):
 
 # ── the gate: no tool prints its own JSON ────────────────────────────────
 
-#: The one file allowed to print JSON text: it holds the encoder, `run()`'s
-#: writer and the crash envelope.
+#: The one file allowed to print JSON text: it holds the encoder and `run()`'s
+#: writer.
 LIB = "_lib_exitcodes.py"
 
 #: What counts as printing its own JSON: `print` / `sys.stdout.write` /
