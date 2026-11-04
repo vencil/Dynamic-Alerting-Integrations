@@ -763,20 +763,22 @@ data:
     \ jwt_authn stats,\n\n        per ADR-020).\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
     \      summary: Log-query requests for account {{ $labels.account_id }} are mostly\
     \ rejected\n  - alert: TenantProjectionMappingErrors\n    expr: \"sum without\
-    \ (instance, pod) (\\n  increase(vector_component_discarded_events_total{component_id=\\\
-    \"tenant_project\\\", intentional=\\\"false\\\"}[10m])\\n) > 0\\n\"\n    for:\
-    \ 0s\n    labels:\n      alert_source: platform\n      severity: warning\n   \
-    \ annotations:\n      description: 'The `tenant_project` remap dropped\n\n   \
-    \     {{ $value | humanize }} event(s) in the last 10m because its VRL\n\n   \
-    \     hit a runtime error (Vector `intentional=\"false\"`), not because\n\n  \
-    \      of an eligibility abort. drop_on_error keeps this fail-closed —\n\n   \
-    \     no half-processed row reaches a tenant partition — but the\n\n        affected\
-    \ rows are missing from their tenant''s projection (the\n\n        platform 0:0\
-    \ copy is intact). This is always a bug: an\n\n        audit-payload shape the\
-    \ VRL does not handle, or a chart change\n\n        that broke the projection.\
-    \ Check the Vector pod logs for the\n\n        remap error, then the `tenant_project`\
-    \ source in\n\n        helm/vector/templates/configmap.yaml.\n\n        '\n  \
-    \    runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
+    \ (instance, pod) (\\n  (\\n    vector_component_discarded_events_total{component_id=\\\
+    \"tenant_project\\\", intentional=\\\"false\\\"}\\n    unless\\n    vector_component_discarded_events_total{component_id=\\\
+    \"tenant_project\\\", intentional=\\\"false\\\"} offset 10m\\n  ) * 1\\n  or\\\
+    n  increase(vector_component_discarded_events_total{component_id=\\\"tenant_project\\\
+    \", intentional=\\\"false\\\"}[10m])\\n) > 0\\n\"\n    for: 0s\n    labels:\n\
+    \      alert_source: platform\n      severity: warning\n    annotations:\n   \
+    \   description: 'The `tenant_project` remap dropped\n\n        {{ $value | humanize\
+    \ }} event(s) in the last 10m because its VRL\n\n        hit a runtime error (Vector\
+    \ `intentional=\"false\"`), not because\n\n        of an eligibility abort. drop_on_error\
+    \ keeps this fail-closed —\n\n        no half-processed row reaches a tenant partition\
+    \ — but the\n\n        affected rows are missing from their tenant''s projection\
+    \ (the\n\n        platform 0:0 copy is intact). This is always a bug: an\n\n \
+    \       audit-payload shape the VRL does not handle, or a chart change\n\n   \
+    \     that broke the projection. Check the Vector pod logs for the\n\n       \
+    \ remap error, then the `tenant_project` source in\n\n        helm/vector/templates/configmap.yaml.\n\
+    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
     \      summary: Vector tenant projection is dropping rows on VRL runtime errors\n\
     \  - alert: TenantProjectionFanoutDiscardSpike\n    expr: \"sum without (instance,\
     \ pod) (\\n  rate(vector_component_discarded_events_total{component_id=\\\"tenant_project\\\

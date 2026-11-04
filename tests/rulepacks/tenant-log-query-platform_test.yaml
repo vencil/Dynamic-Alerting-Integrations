@@ -301,6 +301,46 @@ tests:
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
               summary: "Vector tenant projection is dropping rows on VRL runtime errors"
 
+  # 10b) A ONE-OFF error on a series Vector creates lazily: the
+  #     intentional="false" series first appears at minute 15 already at 3 and
+  #     never moves. `increase` alone sees no change (blind); the
+  #     `unless … offset 10m` arm reports the 3 new drops while the series is
+  #     younger than 10m, and stops once it has history.
+  - interval: 1m
+    name: projection-mapping-errors-fires-on-lazily-created-series
+    input_series:
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+        values: '_x15 3x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantProjectionMappingErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              component_id: tenant_project
+              component_kind: transform
+              component_type: remap
+              intentional: "false"
+            exp_annotations:
+              description: |
+                The `tenant_project` remap dropped
+                3 event(s) in the last 10m because its VRL
+                hit a runtime error (Vector `intentional="false"`), not because
+                of an eligibility abort. drop_on_error keeps this fail-closed —
+                no half-processed row reaches a tenant partition — but the
+                affected rows are missing from their tenant's projection (the
+                platform 0:0 copy is intact). This is always a bug: an
+                audit-payload shape the VRL does not handle, or a chart change
+                that broke the projection. Check the Vector pod logs for the
+                remap error, then the `tenant_project` source in
+                helm/vector/templates/configmap.yaml.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+              summary: "Vector tenant projection is dropping rows on VRL runtime errors"
+      - eval_time: 45m
+        alertname: TenantProjectionMappingErrors
+        exp_alerts: []
+
   # 11) Intentional drops alone never fire it. A heavy intentional="true"
   #     abort rate (unknown tenant_ids) with the intentional="false" counter
   #     flat at 0 -> nothing. Without the `intentional="false"` matcher this

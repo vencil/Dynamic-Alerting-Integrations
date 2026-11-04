@@ -2309,14 +2309,26 @@ groups:
       # flap. `sum without (instance, pod)`: Vector is a DaemonSet and each pod
       # projects different rows, so per-pod counts are SUMMED into one series
       # (keeping component_id / intentional; a bare sum() would strip them).
-      # ⚠️ Known blind spot: Vector creates the series on its first error, at a
-      # non-zero value, and `increase` has no earlier sample to diff against —
-      # a one-off burst that never repeats on that pod can be missed. A
-      # persistent bug (the case that loses rows at scale) keeps incrementing
-      # and is caught. Requires helm/vector `metrics.enabled` (default on).
+      # ⛔ Why the `unless … offset 10m` arm: Vector creates this series lazily,
+      # on the FIRST error, already at a non-zero value. `increase` alone has no
+      # earlier sample to diff against, so a one-off burst that never repeats on
+      # that pod would be missed. A series that did not exist 10m ago therefore
+      # contributes its whole value (every error it counts happened since it
+      # appeared); `* 1` strips the metric name so the two arms carry the same
+      # label set and `or` keeps the new-series arm for that pod. Older series
+      # fall through to `increase`. Residual: a Prometheus scrape gap longer
+      # than the 5m lookback around t-10m makes an old series look new and
+      # re-reports its lifetime count once. Requires helm/vector
+      # `metrics.enabled` (default on).
       - alert: TenantProjectionMappingErrors
         expr: |
           sum without (instance, pod) (
+            (
+              vector_component_discarded_events_total{component_id="tenant_project", intentional="false"}
+              unless
+              vector_component_discarded_events_total{component_id="tenant_project", intentional="false"} offset 10m
+            ) * 1
+            or
             increase(vector_component_discarded_events_total{component_id="tenant_project", intentional="false"}[10m])
           ) > 0
         for: 0m
