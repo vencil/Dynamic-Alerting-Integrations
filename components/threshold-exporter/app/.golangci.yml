@@ -45,6 +45,7 @@ linters:
             - "**/internal/confdlayout/**"
             - "**/internal/guard/**"
             - "**/pkg/receiverspec/**"
+            - "**/pkg/keyverdict/**"
             - "**/pkg/tenantid/**"
           deny:
             - pkg: net/http

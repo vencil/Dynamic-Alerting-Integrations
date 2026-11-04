@@ -243,3 +243,6 @@ k8s/03-monitoring/configmap-rules-platform.yaml
 # GO/NO-GO variance table and the gh helpers stay — removed, not truncated.
 scripts/tools/dx/analyze_bench_history.py
 tests/dx/test_analyze_bench_history.py
+# #3489: the parity test's replay moved into _key_verdict_parity_plugin.py,
+# which compares every judge_tree call of the callers' tests — moved, not truncated.
+tests/shared/test_key_verdict_go_parity.py
