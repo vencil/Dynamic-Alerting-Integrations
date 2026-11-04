@@ -2108,8 +2108,7 @@ _UNREAD_KEYS_UNDECIDABLE_HINT = (
 
 def check_unread_keys(config_dir: str) -> dict[str, object]:
     """Keys no reader reads (ADR-038), by the shared verdict
-    (`_lib_key_verdict.judge_tree`: da-guard served-values with
-    `--disable-effects`, da-guard effective, the tree's `_policies`).
+    (`_lib_key_verdict.judge_tree`: `da-guard key-verdict`).
 
     Report only, until the gates block (#3016): every finding is a WARN
     line with the severity the verdict gives it once they do, and the exit
@@ -2119,7 +2118,7 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
     the threshold keys are undecidable, said in one line (decision 7).
     """
     try:
-        verdict = key_verdict.judge_tree(config_dir, effective_tree=_effective_tree(config_dir))
+        verdict = key_verdict.judge_tree(config_dir)
     except Exception as exc:  # noqa: BLE001 — any failure is "not judged", never a refusal
         return _make_result("unread_keys", WARN, [
             "verdict incomplete: the keys no reader reads were not judged "
@@ -2131,13 +2130,7 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
         details.append(undecidable)
     # ADR-038 §11: the exporter's own key checks (a `version` label, a
     # retired spelling), as it words them; this tool judges no key itself.
-    checks, unchecked = key_verdict.key_check_lines(verdict)
-    details += [msg for _, _, msg in checks]
-    if unchecked:
-        details.append(
-            "key checks incomplete: this da-guard gives no key checks (version labels, renamed "
-            f"keys) — it is older than this tool: upgrade or rebuild it (tenants: "
-            f"{', '.join(unchecked[:WARN_LIMIT])})")
+    details += [msg for _, _, msg in key_verdict.key_check_lines(verdict)]
     if details:
         # Only an undecidable line: no key was found unread, so the advice
         # is about the root file, not about a key.

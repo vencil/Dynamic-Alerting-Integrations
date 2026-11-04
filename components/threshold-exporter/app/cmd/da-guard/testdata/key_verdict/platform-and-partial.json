@@ -1,0 +1,182 @@
+{
+  "schema": "da-guard.key-verdict/v2",
+  "at": "2026-07-01T03:00:00Z",
+  "undecidable": false,
+  "tenants": {
+    "ta": [
+      {
+        "key": "mysql_conections",
+        "layer": "platform",
+        "file": "_platform.yaml",
+        "read_by": [],
+        "verdict": "unread",
+        "severity": "notice",
+        "reason": "no_row",
+        "disable": null,
+        "served_family": [],
+        "value": 5,
+        "served": null
+      },
+      {
+        "key": "mysql_connections",
+        "layer": "defaults",
+        "file": "_defaults.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "served_family": [],
+        "value": 80,
+        "served": 80
+      },
+      {
+        "key": "redis_memory",
+        "layer": "tenant",
+        "file": "team/ta.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": "partial",
+        "served_family": [
+          "redis_memory_critical"
+        ],
+        "value": "disable",
+        "served": null
+      },
+      {
+        "key": "redis_memory_critical",
+        "layer": "defaults",
+        "file": "team/_defaults.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "served_family": [],
+        "value": 95,
+        "served": 95
+      }
+    ],
+    "tb": [
+      {
+        "key": "mysql_conections",
+        "layer": "platform",
+        "file": "_platform.yaml",
+        "read_by": [],
+        "verdict": "unread",
+        "severity": "notice",
+        "reason": "no_row",
+        "disable": null,
+        "served_family": [],
+        "value": 5,
+        "served": null
+      },
+      {
+        "key": "mysql_connections",
+        "layer": "defaults",
+        "file": "_defaults.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "served_family": [],
+        "value": 80,
+        "served": 80
+      },
+      {
+        "key": "redis_memory",
+        "layer": "defaults",
+        "file": "_defaults.yaml",
+        "read_by": [
+          "exporter"
+        ],
+        "verdict": "read",
+        "severity": null,
+        "reason": null,
+        "disable": null,
+        "served_family": [],
+        "value": 70,
+        "served": 70
+      },
+      {
+        "key": "redis_memroy",
+        "layer": "tenant",
+        "file": "tb.yaml",
+        "read_by": [],
+        "verdict": "unread",
+        "severity": "error",
+        "reason": "no_row",
+        "disable": null,
+        "served_family": [],
+        "value": 3,
+        "served": null
+      }
+    ]
+  },
+  "findings": [
+    {
+      "severity": "error",
+      "kind": "unread",
+      "key": "redis_memroy",
+      "file": "tb.yaml",
+      "tenants": [
+        "tb"
+      ],
+      "reason": "no_row",
+      "served_family": [],
+      "served_from": []
+    },
+    {
+      "severity": "warning",
+      "kind": "disable_partial",
+      "key": "redis_memory",
+      "file": "team/ta.yaml",
+      "tenants": [
+        "ta"
+      ],
+      "reason": null,
+      "served_family": [
+        "redis_memory_critical"
+      ],
+      "served_from": [
+        "team/_defaults.yaml"
+      ]
+    },
+    {
+      "severity": "notice",
+      "kind": "unread",
+      "key": "mysql_conections",
+      "file": "_platform.yaml",
+      "tenants": [
+        "ta",
+        "tb"
+      ],
+      "reason": "no_row",
+      "served_family": [],
+      "served_from": []
+    }
+  ],
+  "key_checks": {
+    "ta": {
+      "version_labels": [],
+      "renames": []
+    },
+    "tb": {
+      "version_labels": [],
+      "renames": []
+    }
+  },
+  "parse_failed": [],
+  "unreadable": []
+}

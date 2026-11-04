@@ -1,0 +1,57 @@
+{
+  "schema": "da-guard.key-verdict/v2",
+  "at": "2026-07-01T03:00:00Z",
+  "undecidable": true,
+  "tenants": {
+    "ta": [
+      {
+        "key": "_routng",
+        "layer": "tenant",
+        "file": "ta.yaml",
+        "read_by": [],
+        "verdict": "unread",
+        "severity": "error",
+        "reason": "unregistered",
+        "disable": "noop",
+        "served_family": [],
+        "value": "disable",
+        "served": null
+      },
+      {
+        "key": "mysql_conections",
+        "layer": "tenant",
+        "file": "ta.yaml",
+        "read_by": [],
+        "verdict": "undecidable",
+        "severity": null,
+        "reason": "no_row",
+        "disable": null,
+        "served_family": [],
+        "value": 70,
+        "served": null
+      }
+    ]
+  },
+  "findings": [
+    {
+      "severity": "error",
+      "kind": "unread",
+      "key": "_routng",
+      "file": "ta.yaml",
+      "tenants": [
+        "ta"
+      ],
+      "reason": "unregistered",
+      "served_family": [],
+      "served_from": []
+    }
+  ],
+  "key_checks": {
+    "ta": {
+      "version_labels": [],
+      "renames": []
+    }
+  },
+  "parse_failed": [],
+  "unreadable": []
+}

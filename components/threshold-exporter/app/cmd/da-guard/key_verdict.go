@@ -19,8 +19,9 @@ package main
 //   - parse-tree's document of the tree (parseTreeOf): whether a root
 //     platform file is read (decision 7) and the `profiles:` of those files.
 //
-// tests/shared/test_key_verdict_go_parity.py pins it to the Python verdict
-// until step 2 deletes that.
+// It is the only verdict: the Python tools read `da-guard key-verdict`'s
+// document (scripts/tools/_lib_key_verdict.py) and judge nothing themselves.
+// key_verdict_golden_test.go pins the document.
 
 import (
 	"encoding/json"
@@ -76,6 +77,11 @@ type keyVerdictDoc struct {
 	// its keys' `version` labels and retired spellings (served-values'
 	// key_checks). Not part of the verdict on whether a key is read.
 	KeyChecks map[string]servedKeyChecks `json:"key_checks"`
+	// ParseFailed / Unreadable: the files the exporter's load drops, as
+	// served-values names them (exit 3); the verdict is on the rest of the
+	// tree. Always present ([] when none).
+	ParseFailed []string      `json:"parse_failed"`
+	Unreadable  []skippedFile `json:"unreadable"`
 	tenantSubset
 }
 
@@ -495,7 +501,7 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 			"{\"schema\": %q, \"at\", \"undecidable\", \"tenants\": {<tenant>: [{key, layer, file, read_by,\n"+
 			"verdict, severity, reason, disable, served_family, value, served}]}, \"findings\": [{severity, kind,\n"+
 			"key, file, tenants, reason, served_family, served_from}], \"key_checks\": {<tenant>: {version_labels,\n"+
-			"renames}}}.\n\n", keyVerdictSchema)
+			"renames}}, \"parse_failed\": [<file>], \"unreadable\": [{file, reason}]}.\n\n", keyVerdictSchema)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, or a tree the verdict cannot judge (the exporter's load or\n"+
 			"     effective refuses it, e.g. a tenant declared twice), or a conf.d path that is not valid UTF-8\n"+
@@ -545,7 +551,11 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 	}
 	out := keyVerdictDoc{Schema: keyVerdictSchema, At: at.Format(time.RFC3339), Undecidable: res.tree.Undecidable,
 		Tenants: res.tree.Keys, Findings: res.tree.Findings, KeyChecks: res.keyChecks,
+		ParseFailed: nonNilStrings(res.parseFailed), Unreadable: res.unreadable,
 		tenantSubset: subset(requested, func(t string) bool { return res.computed[t] })}
+	if out.Unreadable == nil {
+		out.Unreadable = []skippedFile{}
+	}
 	if err := checkOutputUTF8("", reflect.ValueOf(out)); err != nil {
 		return fail(err)
 	}

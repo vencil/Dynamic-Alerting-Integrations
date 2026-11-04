@@ -60,8 +60,7 @@ def _refused(tmp_path: Path, case: dict) -> list[str]:
     verdict = kv.judge_tree(str(tmp_path))
     why = [kv.finding_line(f, 5) for f in verdict.findings
            if f.severity == kv.ERROR and f.key == case["key"]]
-    checks, unchecked = kv.key_check_lines(verdict)
-    assert not unchecked, "this da-guard gives no key checks"
+    checks = kv.key_check_lines(verdict)
     return why + [msg for kind, _, msg in checks if kind == kv.KEY_CHECK_VERSION_LABEL]
 
 

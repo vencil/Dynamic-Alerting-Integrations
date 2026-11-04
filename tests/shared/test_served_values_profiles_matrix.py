@@ -335,5 +335,9 @@ def test_dropped_file_reason_comes_from_effective_alone(tmp_path, monkeypatch, f
     assert row["status"] == vc.FAIL and row["caller_error"] is False, row
     assert any(d.startswith("da-guard (exit 3): ") for d in row["details"]), row
     # ADR-036 step 4 (#2906): one parse-tree read of the tree, then effective
-    # (no served-values to borrow the reason from), then da-guard's check.
-    assert log.read_text(encoding="utf-8").split() == ["parse-tree", "effective", "--config-dir"]
+    # (no served-values to borrow the reason from), then da-guard's check,
+    # then the unread_keys row's own `key-verdict` (#3489: it reads the
+    # verdict from da-guard, and says it is incomplete on this tree).
+    assert log.read_text(encoding="utf-8").split() == ["parse-tree", "effective", "--config-dir",
+                                                       "key-verdict"]
+    assert rows["unread_keys"]["details"][0].startswith("verdict incomplete: "), rows["unread_keys"]

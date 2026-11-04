@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-16
-updated_at: 2026-11-03
+updated_at: 2026-11-04
 ---
 
 # ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告
@@ -47,6 +47,8 @@ updated_at: 2026-11-03
 2026-11-01 修訂：維度鍵改以 `dimensions:` 宣告的 label 判定是否送出，取代「base 已宣告即送出」；出貨清單由門檻登錄表生成（決定 11）。
 
 2026-11-03 修訂：沒有讀取端讀的鍵一律 error，不分寫在租戶檔、profile、子目錄 `_defaults.yaml` 或根平台檔的 `tenants:`，例外只留只因 `disable_noop` 而未讀（warning）與 `_state_<filter>` 指向未宣告的 filter（notice）；profile 的每個鍵（含閾值鍵）逐 profile 直接判；等級與誰被擋分開，寫入閘門擋不擋只看 finding 所在的檔是不是這次寫入的檔（決定 4、5、6）。
+
+2026-11-04 修訂：判決改由 da-guard 計算（`da-guard key-verdict`），取代「放在 Python 的共用函式」；需要判決的工具都讀它的輸出、不自己判（決定 5）。
 
 ## 摘要
 
@@ -248,12 +250,12 @@ profiles:
 
 ### 5. 計算放在哪
 
-「沒有任何讀取端讀」需要把 exporter 與產生器兩邊的結果併起來，放在 Python 的共用函式：
+「沒有任何讀取端讀」需要把 exporter 與產生器兩邊的結果併起來，由 da-guard 計算，指令是 `da-guard key-verdict`；需要判決的工具都讀它輸出的 JSON，不自己判：
 
-- 它呼叫 served-values 取得 exporter 那半（validate-config 今天已經這樣呼叫）。
-- 它併上登錄表宣告的產生器讀取（見決定 1）。
-- validate-config、產生器 `--validate` 與 tenant-api 的產生器容器（tenant-api 每次寫入前呼叫的產生器，見 [ADR-036](./036-single-parser-effective-config.md) §3）都呼叫它。產生器 `--validate` 把判到的每一筆印成一行 WARN 或 NOTICE（與 validate-config 的行相同），結束碼不變；被拒收的樹不判。容器在產生器放行之後、在同一次判定裡判（下一點），所以它執行產生器時，產生器不再判一次。
-- 產生器容器每次寫入只需要被寫入的租戶的判決，所以 served-values 與 effective 都要能只算指定的租戶（`--tenant`；平台檔照常整份讀，每個要求的租戶得到的與整棵樹時相同，樹裡沒有的列在 `tenants_absent`）。判決也只判這些租戶，沒要求的租戶不出現，不會被讀成「沒有讀取端讀」。/metrics 能不能收集不屬於單一租戶，子集裡只就要求的租戶判（別的租戶收集失敗看不到）。profile 鍵依決定 4 逐 profile 直接判，所以有沒有 finding 與要求了哪些租戶無關，只是 finding 列出的綁定租戶只含被要求的租戶。profile 裡的 `_` 鍵今天已經這樣判；閾值鍵在改成逐 profile 判之前經由綁定的租戶判，子集裡看不到沒被要求、但綁同一個 profile 的租戶，所以可能出現整棵樹不會給的 finding。判一筆寫入時，呼叫端要把被寫檔案寫入前後宣告的租戶都列進去。
+- exporter 那半走 exporter 自己的載入，與 served-values 同一條路徑。
+- 它併上登錄表宣告的其他讀取端（見決定 1），以及根 `_defaults.yaml` 的 policy 規則點名的鍵。
+- validate-config、產生器 `--validate`、`explain-keys` 與 tenant-api 的產生器容器（tenant-api 每次寫入前呼叫的產生器，見 [ADR-036](./036-single-parser-effective-config.md) §3）都呼叫它。產生器 `--validate` 把判到的每一筆印成一行 WARN 或 NOTICE（與 validate-config 的行相同），結束碼不變；被拒收的樹不判。容器在產生器放行之後、在同一次判定裡判（下一點），所以它執行產生器時，產生器不再判一次。
+- 產生器容器每次寫入只需要被寫入的租戶的判決，所以 `da-guard key-verdict`（連同它底下的 served-values 與 effective）都要能只算指定的租戶（`--tenant`；平台檔照常整份讀，每個要求的租戶得到的與整棵樹時相同，樹裡沒有的列在 `tenants_absent`）。判決也只判這些租戶，沒要求的租戶不出現，不會被讀成「沒有讀取端讀」。/metrics 能不能收集不屬於單一租戶，子集裡只就要求的租戶判（別的租戶收集失敗看不到）。profile 鍵依決定 4 逐 profile 直接判，所以有沒有 finding 與要求了哪些租戶無關，只是 finding 列出的綁定租戶只含被要求的租戶。profile 裡的 `_` 鍵今天已經這樣判；閾值鍵在改成逐 profile 判之前經由綁定的租戶判，子集裡看不到沒被要求、但綁同一個 profile 的租戶，所以可能出現整棵樹不會給的 finding。判一筆寫入時，呼叫端要把被寫檔案寫入前後宣告的租戶都列進去。
 - 容器裡的判決只在產生器放行的寫入之後跑，與產生器**共用同一次判定的期限**（ADR-036 §3 的期限以該節為準，不在此重述），不另有自己的期限，也不因有寫入在排隊而讓位。時間或記憶體用完、da-guard 失敗，或結果是 `undecidable`，都回「判決未完成」與原因。容器裡的反事實重算只算被寫的租戶（決定 8）；error 級的 finding 不截斷，回應裡顯示行數的上限只管顯示。寫到 defaults 檔，或寫到前後版本帶 `profiles:` 的根平台檔時不判：這種檔的鍵會影響它沒有列名的租戶，只有整棵樹的判決判得到，同樣回「判決未完成」並指名那個檔。判決約佔一次判定的三成，一次判定的時間隨租戶數成長；以 1 CPU 為例，約 2500 個租戶時就接近 ADR-036 §3 所說的期限一半（示意值，依主機而異）。實際的界線看一個 metric：一次判定耗時與判定期限的比值，名稱由實作決定。比值超過 0.5 時告警，留一半給排隊與租戶成長（與 ADR-036 §3 撤快取條件用的是同一個比例），到 1 時寫入就會因判不完而被拒。各結果的次數與最近一次的耗時也是 metric。
 - tenant-api 改成判到就擋之後（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）：
   - 被寫入的檔裡、屬於寫入對象租戶的 error 級 finding，讓寫入不收，回 400，與今天鍵名檢查擋下時相同，回應列出這些 finding。這筆寫入沒有碰到、但已經在該檔裡的這類 error 也算，與今天 Go 的鍵名檢查相同；決定 12 的作法只用於新加的值檢查。其他檔上的 error 不擋這筆寫入（決定 6）。
@@ -266,7 +268,29 @@ profiles:
   誰看得到什麼，沿用寫入回應既有的揭露規則：被寫入的檔案裡、屬於這筆寫入對象租戶的 finding，寫入者一律看得到；同一檔案裡其他租戶的 finding，只在呼叫者能讀那個租戶時顯示；平台檔、profile，或這筆寫入沒有動到的檔案上的 finding，只給能看整棵樹的呼叫者，其他人只看到一行「有你看不到的 finding，細節在伺服器日誌」。判決未完成時只顯示原因，不轉述容器的訊息，因為那段訊息可能帶有平台檔的路徑或程式的 stderr。直接寫入的批次裡，租戶的 finding 掛在該租戶第一個有變更的操作上，整筆寫入共用的那幾行只掛一次，因為非同步批次的任務只保留逐操作的結果；只報不擋時，判決未完成則每個有變更的操作都寫，因為只看得到部分結果的讀者不能把其他操作讀成「沒找到問題」。PR 模式的回應只有一份清單，每行自己寫出租戶名。清單有行數上限，超過時先留寫入對象租戶自己的行。判決看的是寫入之後的樹，不與寫入之前比較，所以列出的問題可能早就存在；內容沒有改變的寫入不附判決。
 - 判決未完成時**不設降級路徑**：既不照收，也不退回另一份鍵名判斷。照收會讓今天會被擋的拼錯鍵進 repo；退回 Go 的鍵名判斷，等於永久保留第二份判斷（決定 2）。代價是 da-guard 壞了，tenant-api 的寫入就不收。但產生器容器本來就是寫入的必要條件，產生器壞了寫入也不收；判決併進同一次判定，增加的是它的工作量，不是多一個依賴。
 
-da-guard 本身只輸出事實：exporter 實測的 `read_by` 與原因，以及登錄表對非 exporter 鍵的宣告。它對產生器負責的鍵不下判決。
+判決只用三種事實：exporter 實測的讀取與原因、登錄表對其他讀取端的宣告、policy 規則點名的鍵。產生器負責的鍵依登錄表的宣告判，不另外量產生器的輸出（決定 1）。policy 規則有沒有效由 Policy-as-Code 自己判：它拒收的規則從來不執行，所以 Python 的呼叫端（validate-config、產生器 `--validate`、`explain-keys`、產生器容器）先用它載入規則，拒收的樹不判，不拿無效的規則把鍵算成有人讀。已知限制：`da-guard write` 的寫入檢查不經 Policy-as-Code，規則讀得到 `target` 就算，所以無效的規則仍會讓它點名的鍵算成有人讀；這種樹在 validate-config 的 `policy_dsl` 列是 FAIL。
+
+例如租戶檔寫了拼錯的鍵：
+
+```yaml
+# _defaults.yaml
+defaults:
+  mysql_connections: 80
+# db-a.yaml
+tenants:
+  db-a:
+    mysql_conections: "70"
+```
+
+`da-guard key-verdict --config-dir conf.d` 對這個鍵輸出的那一筆與 finding：
+
+```json
+{"key": "mysql_conections", "layer": "tenant", "file": "db-a.yaml", "read_by": [],
+ "verdict": "unread", "severity": "error", "reason": "no_row", "disable": null,
+ "served_family": [], "value": "70", "served": null}
+{"severity": "error", "kind": "unread", "key": "mysql_conections", "file": "db-a.yaml",
+ "tenants": ["db-a"], "reason": "no_row", "served_family": [], "served_from": []}
+```
 
 這帶來一個連動修訂：[ADR-036](./036-single-parser-effective-config.md) §9 規定單獨執行的 da-guard 對它判不了的內容回 exit 4（未判定）。原本觸發條件只有「樹上有路由或 policy 內容」，現在擴大為「樹上有只有產生器能判值的內容」，例如租戶寫了 `_routing_profile`，它指向的 profile 存不存在只有產生器能判。鍵名本身不需要產生器：共用判決以 da-guard 與登錄表就判得出來（決定 1）。否則單獨跑 da-guard 的人會把「沒判」讀成「判過、沒問題」。exit 4 本身要等 ADR-036 §7 的步驟 2（da-guard 加上「未判定」）完成後才存在，這個擴大範圍也從那時起生效。
 
@@ -453,7 +477,7 @@ db-a
 - 登錄表：`components/threshold-exporter/app/pkg/config/reserved_keys.json`；`scripts/tools/dx/sync_schema.py --update` 產生、`--check` 比對（CI 由 `tests/dx/test_sync_schema.py` 執行）。
 - 值的形狀、判斷式綁定、批次可移除的鍵與決定租戶範圍的鍵的查詢：`components/threshold-exporter/app/pkg/config/reserved_values.go`。
 - 探針：`tests/shared/test_reserved_key_probes.py`。
-- 共用函式：`scripts/tools/` 下的新模組，由 validate-config、產生器與產生器容器呼叫。
+- 判決：`components/threshold-exporter/app/pkg/keyverdict`；`da-guard key-verdict`（`cmd/da-guard/key_verdict.go`）讀樹並輸出。Python 工具經 `scripts/tools/_lib_key_verdict.py` 讀它的輸出。
 - exporter 實測：`da-guard served-values`（`components/threshold-exporter/app/cmd/da-guard/served_values.go`）。
 - 規則讀取索引：`scripts/tools/ops/_threshold_alerts.py`、`rule-packs/threshold-registry.yaml`。
 

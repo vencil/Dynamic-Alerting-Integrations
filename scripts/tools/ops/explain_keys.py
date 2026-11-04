@@ -4,17 +4,17 @@
 ADR-038 decision 9: let users check and test their own config. For each
 tenant of a conf.d, every key of its config is listed with
 
-* where it comes from: da-guard effective's layer and file;
-* who reads it: the exporter (measured by da-guard served-values), and the
-  readers the reserved-key registry declares for that layer (route
-  generator, custom-alert compiler, Policy-as-Code, annotation), plus
-  Policy-as-Code for a key a `_policies` rule names as `target`;
-* the verdict (read / unread / undecidable) with its
-  severity and reason — the shared verdict, `_lib_key_verdict.judge_tree`,
-  not a reading of this tool's own;
-* what a `disable` does (effective / partial / noop), by resolving the tree
-  again without it (da-guard served-values --disable-effects);
+* where it comes from: the layer and file of the tenant's effective config;
+* who reads it: the exporter (what /metrics serves), and the readers the
+  reserved-key registry declares for that layer (route generator,
+  custom-alert compiler, Policy-as-Code, annotation), plus Policy-as-Code
+  for a key a `_policies` rule names as `target`;
+* the verdict (read / unread / undecidable) with its severity and reason;
+* what a `disable` does (effective / partial / noop);
 * the value as written (`value`) and what /metrics serves for it (`served`).
+
+All of it is the shared verdict (`da-guard key-verdict`, read through
+`_lib_key_verdict.judge_tree`) at `--at`, not a reading of this tool's own.
 
 `--assert FILE` compares the result with an expected document of the same
 shape and fails (exit 1) on any difference, so a CI can pin what a tenant's

@@ -752,6 +752,11 @@ def _threshold(v: Any) -> float:
 _T = TypeVar("_T")
 
 
+class _OlderSchema(ValueError):
+    """A da-guard document whose `schema` is an older version of the one its
+    reader reads (`_run_da_guard`'s *older_schemas*)."""
+
+
 def _run_da_guard(
     subcommand: str,
     extra: list[str],
@@ -763,6 +768,7 @@ def _run_da_guard(
     read: Callable[[dict[str, Any]], _T],
     reads_unreadable: bool = False,
     dropped_ok: bool = False,
+    older_schemas: "tuple[str, ...]" = (),
 ) -> tuple[_T, int, str]:
     """Run `da-guard <subcommand> --config-dir <conf_d> <extra>` and return
     (`read(document)`, the exit code, stderr) — the one error contract both
@@ -778,7 +784,8 @@ def _run_da_guard(
     field the document must carry — `unreadable`; exit 3 with neither.
     With `dropped_ok` (key-refs, #1822) a non-empty `parse_failed` /
     `unreadable` is returned through `read` instead of raised; exit 3 with
-    neither is still output that is not da-guard's."""
+    neither is still output that is not da-guard's. *older_schemas*: earlier
+    versions of `schema`, which name the binary as older than this tool."""
     dispatcher = guard_dispatch.DISPATCHER
     exe = dispatcher.resolve_binary(binary)
     if exe is None:
@@ -849,15 +856,24 @@ def _run_da_guard(
     try:
         doc = json.loads(proc.stdout.decode("utf-8"))
         if schema is not None and doc["schema"] != schema:
-            raise ValueError(f"schema {doc['schema']!r}, this reader reads {schema!r}")
+            older = doc["schema"] in older_schemas
+            raise (_OlderSchema if older else ValueError)(
+                f"schema {doc['schema']!r}, this reader reads {schema!r}")
         parse_failed = list(doc["parse_failed"])
         got = read(doc)
         unreadable = ([UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]
                       if reads_unreadable else [])
     except (ValueError, KeyError, TypeError) as e:  # UnicodeDecodeError is a ValueError
+        # A field every da-guard of this tool's version writes, or a schema the
+        # caller names as an older version of its document, is a da-guard
+        # older than this tool — named so, not as broken output (key-verdict's
+        # document gained `parse_failed` and a v2 after its first version,
+        # #3489). A schema this reader does not know may be a newer one: not
+        # called older.
         stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
-                 if isinstance(e, KeyError) and (e.args in (("skipped",), ("unreadable",))
-                                                or (e.args == ("schema",) and subcommand == SUBCOMMAND))
+                 if isinstance(e, _OlderSchema)
+                 or (isinstance(e, KeyError) and (e.args in (("skipped",), ("unreadable",), ("parse_failed",))
+                                                  or (e.args == ("schema",) and subcommand == SUBCOMMAND)))
                 else "")
         # Not the tree's either way: da-guard writes this JSON whatever the
         # tree holds (#2725).
