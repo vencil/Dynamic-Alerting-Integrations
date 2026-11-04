@@ -127,23 +127,25 @@ tests:
 
   # ── TenantProjectionFanoutDiscardSpike (#1595 rework) ─────────────────────
   # The series carry Vector's real label set for a remap drop counter
-  # (component_id / component_kind / component_type / intentional) plus the
-  # per-DaemonSet-pod scrape labels (instance / pod) that `sum without
-  # (instance, pod)` must collapse. Each fixture runs >1d (1541 samples at 1m)
+  # (component_id / component_kind / component_type / intentional), the
+  # `host` tag internal_metrics stamps on every metric by default (the pod
+  # hostname), and the per-DaemonSet-pod scrape labels (instance / pod) —
+  # all three per-pod labels `sum without (instance, pod, host)` must
+  # collapse. Each fixture runs >1d (1541 samples at 1m)
   # so the 1-day baseline subquery `[1d:10m]` is fully populated at eval time.
 
   # 5) Surge fires, summed across two DaemonSet pods. Each pod aborts 30/min
   #    (0.5/s) for 25h, then 300/min (5/s). Platform-wide: 1/s baseline -> 10/s.
   #    At eval (30m into the surge) the 1-day time average is ~1.2/s, so
   #    10 > 3 x 1.2 and 10 > 0.1 -> fires after the 15m hold. The two series
-  #    differ ONLY in instance/pod, so a correct `sum without (instance, pod)`
+  #    differ ONLY in instance/pod/host, so a correct `sum without (instance, pod, host)`
   #    yields ONE series that keeps component_id / intentional.
   - interval: 1m
     name: fanout-discard-surge-over-baseline-fires-summed-across-pods
     input_series:
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
         values: '0+30x1499 45270+300x40'
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.2:9598",pod="vector-bbbbb"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.2:9598",pod="vector-bbbbb",host="vector-bbbbb"}'
         values: '0+30x1499 45270+300x40'
     alert_rule_test:
       - eval_time: 1530m
@@ -183,9 +185,9 @@ tests:
   - interval: 1m
     name: fanout-discard-steady-high-rate-no-fire
     input_series:
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
         values: '0+600x1540'
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.2:9598",pod="vector-bbbbb"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.2:9598",pod="vector-bbbbb",host="vector-bbbbb"}'
         values: '0+600x1540'
     alert_rule_test:
       - eval_time: 1530m
@@ -199,7 +201,7 @@ tests:
   - interval: 1m
     name: fanout-discard-surge-below-floor-no-fire
     input_series:
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
         values: '0x1499 3+3x40'
     alert_rule_test:
       - eval_time: 1530m
@@ -213,7 +215,7 @@ tests:
   - interval: 1m
     name: fanout-discard-first-appearance-above-floor-fires
     input_series:
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
         values: '0+60x40'
     alert_rule_test:
       - eval_time: 30m
@@ -251,8 +253,45 @@ tests:
   - interval: 1m
     name: fanout-discard-ignores-unintentional-drops
     input_series:
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
         values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TenantProjectionFanoutDiscardSpike
+        exp_alerts: []
+
+  # 9b) A Vector ROLLOUT does not fire it. Vector's internal_metrics stamp
+  #     every metric with `host=<pod hostname>` (on by default), so the
+  #     replacement pod's series differs from the old one in host as well as
+  #     instance/pod. Pod a aborts 0.5/s for 25h and goes away; pod c takes
+  #     over at the same rate. Summed without (instance, pod, host) the rate
+  #     is continuous and equal to its baseline -> nothing. Without `host` in
+  #     the without-list pod c would be a fresh series with an empty baseline
+  #     and fire.
+  - interval: 1m
+    name: fanout-discard-vector-rollout-no-fire
+    input_series:
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
+        values: '0+30x1500 stale'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.3:9598",pod="vector-ccccc",host="vector-ccccc"}'
+        values: '_x1500 0+30x60'
+    alert_rule_test:
+      - eval_time: 1530m
+        alertname: TenantProjectionFanoutDiscardSpike
+        exp_alerts: []
+
+  # 9c) A Prometheus restarted on an EMPTY TSDB (raw stack: emptyDir) does
+  #     not fire it. The TSDB's lowest timestamp is t=0, so at 30m it holds
+  #     less than a day; a long-running steady 0.5/s counter (huge start
+  #     value, no history in this TSDB) would otherwise look like a surge
+  #     over an empty baseline.
+  - interval: 1m
+    name: fanout-discard-fresh-tsdb-no-fire
+    input_series:
+      - series: 'prometheus_tsdb_lowest_timestamp_seconds{instance="localhost:9090",job="prometheus"}'
+        values: '0x60'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
+        values: '1000000+30x60'
     alert_rule_test:
       - eval_time: 30m
         alertname: TenantProjectionFanoutDiscardSpike
@@ -268,11 +307,11 @@ tests:
   - interval: 1m
     name: projection-mapping-errors-fires-on-unintentional-drop
     input_series:
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
         values: '0x9 1+1x30'
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.2:9598",pod="vector-bbbbb"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.2:9598",pod="vector-bbbbb",host="vector-bbbbb"}'
         values: '0x40'
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
         values: '0+600x40'
     alert_rule_test:
       - eval_time: 20m
@@ -309,7 +348,7 @@ tests:
   - interval: 1m
     name: projection-mapping-errors-fires-on-lazily-created-series
     input_series:
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
         values: '_x15 3x40'
     alert_rule_test:
       - eval_time: 20m
@@ -341,6 +380,25 @@ tests:
         alertname: TenantProjectionMappingErrors
         exp_alerts: []
 
+  # 10c) A Prometheus restarted on an EMPTY TSDB does not re-report old
+  #     errors. The pod's intentional="false" counter has sat at 5 for weeks;
+  #     the new TSDB has no sample 10m ago, so the new-series arm would read
+  #     all 5 as fresh. While the TSDB holds less than 20m that arm is muted.
+  - interval: 1m
+    name: projection-mapping-errors-fresh-tsdb-no-fire
+    input_series:
+      - series: 'prometheus_tsdb_lowest_timestamp_seconds{instance="localhost:9090",job="prometheus"}'
+        values: '0x40'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
+        values: '5x40'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: TenantProjectionMappingErrors
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: TenantProjectionMappingErrors
+        exp_alerts: []
+
   # 11) Intentional drops alone never fire it. A heavy intentional="true"
   #     abort rate (unknown tenant_ids) with the intentional="false" counter
   #     flat at 0 -> nothing. Without the `intentional="false"` matcher this
@@ -348,9 +406,9 @@ tests:
   - interval: 1m
     name: projection-mapping-errors-ignores-intentional-aborts
     input_series:
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
         values: '0+600x40'
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa",host="vector-aaaaa"}'
         values: '0x40'
     alert_rule_test:
       - eval_time: 20m
