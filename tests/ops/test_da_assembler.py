@@ -1369,6 +1369,24 @@ NULL_KEY_ACCEPTED = [
 ]
 
 
+
+def _json_depth_this_python_cannot_read() -> int:
+    """The smallest doubling of 50000 that this interpreter's ``json.loads``
+    rejects with RecursionError — measured, because the limit is the
+    interpreter's and the build's, not a constant: 3.14 bounds recursion by
+    the C stack left, so the same depth reads on one 3.14 build and not on
+    another. Measured in this process, which is where da_assembler parses
+    da-crdecode's output."""
+    depth = 50_000
+    while depth <= 10_000_000:
+        try:
+            json.loads("[" * depth + "]" * depth)
+        except RecursionError:
+            return depth
+        depth *= 2
+    pytest.fail(f"json.loads read {depth // 2} levels of nesting: no depth this "
+                "test can afford reaches the interpreter's limit")
+
 class TestRenderCrNameFormat:
     """#2396：`--render-cr` 以 Kubernetes 的規則驗 name／namespace。
 
@@ -1637,13 +1655,19 @@ class TestRenderCrNameFormat:
         da-crdecode 在約 1 萬層拒收，與 Python 的上限只差幾層，用真的
         binary 量會隨 Python 版本漂移。
 
+        深度由 `_json_depth_this_python_cannot_read()` 在本行程量出，不寫死：
+        3.14 起 `json` 的遞迴上限看剩餘的 C stack，不再是固定層數——先前
+        寫死的 50000 層在 3.13 與 3.14.6 拋 RecursionError，在 CI 的
+        3.14.10 build 卻讀得進去，本測試因此量到別的路徑。
+
         訊息要能讓人分辨「量不到」與「拒收」。會讓本組轉紅的改動：拿掉
         `RecursionError` 的專屬分支（落到通用分支，訊息只剩例外原文）。
         """
+        depth = _json_depth_this_python_cannot_read()
         TestRenderCrDecoder._fake_binary(
             tmp_path, monkeypatch,
-            "print('{\"documents\": [' + '[' * 50000 + ']' * 50000 + "
-            "'], \"differs_from_text\": [[]]}')")
+            "print('{\"documents\": [' + '[' * %d + ']' * %d + "
+            "'], \"differs_from_text\": [[]]}')" % (depth, depth))
         cr_path = tmp_path / "cr.yaml"
         cr_path.write_text("kind: ThresholdConfig\nmetadata: {name: ok}\n",
                            encoding="utf-8")
