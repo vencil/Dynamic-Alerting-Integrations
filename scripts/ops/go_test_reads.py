@@ -3,7 +3,7 @@
 
 #1399. A Go leg in ci.yml runs only when its `if:` says one of its path filters
 matched. If a test reads a repo file that no such filter covers, a PR that
-changes only that file skips the leg and the required `Go Tests (1.26)` still
+changes only that file skips the leg and the required `Go Tests` still
 reports green — the test that would have caught the drift never ran. Python
 and portal legs have static scanners for this
 (tests/ops/test_ci_path_filter_coverage.py); Go had none, and a live instance existed
