@@ -2322,7 +2322,10 @@ groups:
       # EMPTY TSDB (the raw stack's emptyDir) would make EVERY surviving
       # series look new, so that arm is muted while the TSDB holds less than
       # 20m of data (`prometheus_tsdb_lowest_timestamp_seconds`; where the
-      # metric is absent — e.g. vmalert — the mute is a no-op). ⛔ `host` is in
+      # metric is absent — e.g. vmalert — the mute is a no-op). Cost: a ONE-OFF
+      # error in those first ~20m is missed (a recurring one still shows in
+      # `increase`); telling a pre-restart counter from a post-restart series
+      # would need per-series first-seen times — not worth it. ⛔ `host` is in
       # the `without` list because Vector's internal_metrics stamps every
       # metric with `host=<hostname>` by default (src/sources/internal_metrics
       # .rs, `only_host_tags_by_default`) — the pod name, which changes on
@@ -2406,7 +2409,9 @@ groups:
       # (the raw stack's emptyDir) has no baseline either; the alert is muted
       # until the TSDB holds a full day. Where
       # `prometheus_tsdb_lowest_timestamp_seconds` is absent (vmalert) the mute
-      # is a no-op. Requires helm/vector `metrics.enabled` (default on).
+      # is a no-op. Cost: nothing fires during that first day, and a sustained
+      # surge that starts inside it is absorbed into the baseline and never
+      # reported. Requires helm/vector `metrics.enabled` (default on).
       - alert: TenantProjectionFanoutDiscardSpike
         expr: |
           sum without (instance, pod, host) (
