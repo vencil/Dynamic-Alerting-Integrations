@@ -58,7 +58,7 @@
     //   A bare "3.13" is resolved to the newest 3.13.x at build time, i.e. a
     //   different patch than CI and the images whenever upstream ships one.
     "ghcr.io/devcontainers/features/python:1": {
-      "version": "3.13.18",
+      "version": "3.14.10",
       "installTools": true
     }
   },

@@ -41,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
@@ -1358,7 +1359,14 @@ def main():
         # ------------------------------------------------------------------
         wall_start = time.time()
         futures = {}
-        with ProcessPoolExecutor() as pool:
+        # ⛔ The start method is explicit, never the interpreter's default:
+        # the default is fork through 3.13 and forkserver from 3.14, and a
+        # forkserver is one long-lived process shared by every pool in the
+        # interpreter — one that something else killed made the next pool
+        # die at start (BrokenPipeError writing its authkey, seen on CI's
+        # 3.14.10). spawn gives each pool fresh workers, the same on every
+        # version; _run_one and its arguments are picklable for it.
+        with ProcessPoolExecutor(mp_context=multiprocessing.get_context("spawn")) as pool:
             for short_name, script_name, tool_args, _desc in runnable:
                 script_path = str(tools_dir / script_name)
                 fut = pool.submit(
