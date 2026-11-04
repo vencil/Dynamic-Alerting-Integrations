@@ -80,8 +80,12 @@ def test_a_passed_write_carries_the_verdict_of_its_tenants(world, tmp_path):
 
 def test_a_write_the_generator_refuses_gets_no_verdict(world, tmp_path):
     for fixture, files in sorted(cases.FIXTURES.items()):
-        rc, _ = h.run_cli(h.write_tree(tmp_path / fixture, files), world["bin"], tmp_path / f"{fixture}.json")
-        if rc == 0:
+        rc, cli = h.run_cli(h.write_tree(tmp_path / fixture, files), world["bin"], tmp_path / f"{fixture}.json")
+        # The generator's own refusals: the CLI also fails on the shared key
+        # verdict (#3016), which the container judges after the generator
+        # passes — a fixture failing on that alone is no generator refusal.
+        if rc == 0 or all(f["kind"].startswith("key_") for f in cli["findings"]
+                          if f["blocks"] in ("always", "validate", "strict")):
             continue
         repo_base = h.commit_tree(world["repo"], {})
         writes = [{"path": p, "content_b64": h.b64(c)} for p, c in sorted(files.items())]

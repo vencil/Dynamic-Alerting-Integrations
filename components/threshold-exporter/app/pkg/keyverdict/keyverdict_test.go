@@ -48,7 +48,7 @@ func TestJudge_AnInheritedReservedKeyTheResolverReadIsRead(t *testing.T) {
 		Effective: map[string]EffectiveTenant{"t1": {Config: map[string]any{"_silent_mode": "warning"},
 			Sources: map[string]config.KeySource{"_silent_mode": {Layer: config.KeyLayerProfile, File: "_profiles.yaml"}}}},
 	})
-	if v := one(t, tree, "t1", "_silent_mode"); v.Verdict != Unread || deref(v.Severity) != SeverityNotice {
+	if v := one(t, tree, "t1", "_silent_mode"); v.Verdict != Unread || deref(v.Severity) != SeverityError {
 		t.Fatalf("no reading: %+v", v)
 	}
 }
@@ -136,7 +136,8 @@ func TestJudge_APolicyRuleNamesAKeyAsPolicyAsCodeSpellsIt(t *testing.T) {
 // A reserved key the effective config shows in a layer the exporter does not
 // read it in (the root's top level, level 0: no registry layer) is read by no
 // one — the served reading's values list `_silent_mode` for every tenant,
-// which is no evidence it was read. A notice: the platform's file.
+// which is no evidence it was read. An error, though the file is the
+// platform's (#3394: the severity describes the defect).
 func TestJudge_AReservedKeyInALayerTheExporterDoesNotReadIsUnread(t *testing.T) {
 	t.Parallel()
 	yes := true
@@ -151,7 +152,36 @@ func TestJudge_AReservedKeyInALayerTheExporterDoesNotReadIsUnread(t *testing.T) 
 			DefaultsChain: []string{"_defaults.yaml"}}},
 	})
 	v := one(t, tree, "t1", "_silent_mode")
-	if len(v.ReadBy) != 0 || v.Verdict != Unread || deref(v.Severity) != SeverityNotice || deref(v.File) != "_defaults.yaml" {
+	if len(v.ReadBy) != 0 || v.Verdict != Unread || deref(v.Severity) != SeverityError || deref(v.File) != "_defaults.yaml" {
 		t.Fatalf("verdict %+v", v)
+	}
+}
+
+// A defaults file with no `defaults:` wrapper: effective shows the whole
+// document as inherited, its own top-level keys too. `_routing_defaults`
+// (the route generator reads it there) and `optional_overrides` (a field of
+// the file) are no tenant's keys and are not judged — once the gates block,
+// a valid routing-only `_defaults.yaml` must not fail them (#3016). A
+// misspelt `_` key there is still a tenant's key no one reads.
+func TestJudge_AFileLevelKeyOfADefaultsFileIsNotATenantsKey(t *testing.T) {
+	t.Parallel()
+	src := func(lvl int) config.KeySource {
+		return config.KeySource{Layer: config.KeyLayerDefaults, File: "_defaults.yaml", Level: level(lvl)}
+	}
+	tree := Judge(Input{
+		Served: map[string]ServedTenant{"t1": {Keys: map[string]ServedKey{}, Values: map[string]any{}}},
+		Effective: map[string]EffectiveTenant{"t1": {
+			Config: map[string]any{"_routing_defaults": map[string]any{}, "optional_overrides": []any{"k"},
+				"_routng": "x"},
+			Sources: map[string]config.KeySource{"_routing_defaults": src(0), "optional_overrides": src(0),
+				"_routng": src(0)},
+			DefaultsChain: []string{"_defaults.yaml"}}},
+	})
+	var got []string
+	for _, v := range tree.Keys["t1"] {
+		got = append(got, v.Key+" "+v.Verdict)
+	}
+	if !reflect.DeepEqual(got, []string{"_routng unread"}) {
+		t.Fatalf("judged %v", got)
 	}
 }

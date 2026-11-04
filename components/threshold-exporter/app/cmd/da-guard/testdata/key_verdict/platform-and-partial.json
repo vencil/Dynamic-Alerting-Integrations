@@ -2,6 +2,8 @@
   "schema": "da-guard.key-verdict/v2",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": false,
+  "blocks": true,
+  "undecidable_blocks": false,
   "tenants": {
     "ta": [
       {
@@ -10,7 +12,7 @@
         "file": "_platform.yaml",
         "read_by": [],
         "verdict": "unread",
-        "severity": "notice",
+        "severity": "error",
         "reason": "no_row",
         "disable": null,
         "served_family": [],
@@ -72,7 +74,7 @@
         "file": "_platform.yaml",
         "read_by": [],
         "verdict": "unread",
-        "severity": "notice",
+        "severity": "error",
         "reason": "no_row",
         "disable": null,
         "served_family": [],
@@ -128,6 +130,20 @@
     {
       "severity": "error",
       "kind": "unread",
+      "key": "mysql_conections",
+      "file": "_platform.yaml",
+      "tenants": [
+        "ta",
+        "tb"
+      ],
+      "reason": "no_row",
+      "served_family": [],
+      "served_from": [],
+      "blocks": true
+    },
+    {
+      "severity": "error",
+      "kind": "unread",
       "key": "redis_memroy",
       "file": "tb.yaml",
       "tenants": [
@@ -135,7 +151,8 @@
       ],
       "reason": "no_row",
       "served_family": [],
-      "served_from": []
+      "served_from": [],
+      "blocks": true
     },
     {
       "severity": "warning",
@@ -151,20 +168,8 @@
       ],
       "served_from": [
         "team/_defaults.yaml"
-      ]
-    },
-    {
-      "severity": "notice",
-      "kind": "unread",
-      "key": "mysql_conections",
-      "file": "_platform.yaml",
-      "tenants": [
-        "ta",
-        "tb"
       ],
-      "reason": "no_row",
-      "served_family": [],
-      "served_from": []
+      "blocks": false
     }
   ],
   "key_checks": {

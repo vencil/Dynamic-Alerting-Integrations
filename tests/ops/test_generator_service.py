@@ -120,11 +120,16 @@ def test_verdict_equals_the_cli_on_the_written_tree(world, tmp_path, fixture):
     assert status == 200, doc
     tree = h.write_tree(tmp_path / "conf.d", cases.FIXTURES[fixture])
     rc, cli = h.run_cli(tree, world["bin"], tmp_path / "f.json")
+    # ADR-038 §5: the CLI's `--validate` also prints the shared key verdict
+    # (`key_*`); the container does not run it inside the generator — it
+    # judges the keys itself, in `key_verdict`. So the generator's verdict
+    # is the CLI's without it: when only `key_*` findings block (#3016),
+    # the generator alone passes.
+    blocking = [r for r in cli["findings"] if r["blocks"] in ("always", "validate", "strict")]
+    if blocking and all(r["kind"].startswith("key_") for r in blocking):
+        rc, cli = 0, dict(cli, exit_code=0)
     assert doc["rc"] == rc
     assert doc["result"] == ("pass" if rc == 0 else "findings")
-    # ADR-038 §5: the CLI's `--validate` also prints the shared key verdict
-    # (`key_*`, `blocks: never`); the container does not run it inside the
-    # generator — it judges the keys itself, in `key_verdict`.
     assert not [r for r in doc["findings"]["findings"] if r["kind"].startswith("key_")]
     cli = dict(cli, findings=[r for r in cli["findings"] if not r["kind"].startswith("key_")])
     assert _norm(doc["findings"], Path(doc["findings"]["config_dir"])) \

@@ -1083,10 +1083,10 @@ class TestCriticalTierPlacement:
         # assertions below are the load-bearing half — they forbid re-describing
         # the neighbouring defect in a file customers keep.
         assert 'tenant-api' in prefill, header
-        assert 'ONLY the tenant-api write path' in prefill, header
-        assert 'validate-config' in prefill and 'exits 0' in prefill, header
-        assert 'never establishes that this is fixed' in prefill, header
-        for time_bound in ('--ci', 'does not accept', 'before it validates',
+        assert 'validate-config` FAILs on it (exit 1)' in prefill, header
+        for time_bound in ('exits 0', 'ONLY the tenant-api write path',
+                           'never establishes that this is fixed',
+                           '--ci', 'does not accept', 'before it validates',
                            'EVERY write of this file is rejected',
                            # ⛔ and no relative clause re-attributing the TOOL's
                            # behaviour to the generated CI job: "…, which the CI
@@ -1161,17 +1161,13 @@ class TestCriticalTierPlacement:
         # the deploy-independent property it says instead
         assert 'nothing generated here tracks the platform' in header, header
 
-    def test_validate_config_really_warns_and_exits_zero_on_a_dangling_critical(self):
+    def test_validate_config_really_fails_on_a_dangling_critical(self):
         """⛔ The load-bearing sentence in the tenant header says `da-tools
-        validate-config` reports a dangling `<base>_critical` as a WARNING and
-        exits 0, so its verdict proves nothing. That was asserted as a SUBSTRING
-        only (blind review, round 4) — the third time this PR shipped a claim
-        whose truth nothing executed.
-
-        The natural follow-up to #1218 is to make `validate_config` escalate this
-        shape to an error. On that day the header would keep telling operators a
-        green run means nothing while the tool actually goes red, and every
-        string assertion would stay green. So this runs the real validator.
+        validate-config` FAILs on a dangling `<base>_critical` (exit 1). That
+        was asserted as a SUBSTRING only (blind review, round 4) — the third
+        time a PR shipped a claim whose truth nothing executed. It said
+        "a WARNING, exits 0" until the key verdict blocked (#3016); this test,
+        which runs the real validator, is what went red on that day.
         """
         import subprocess
         import sys
@@ -1192,9 +1188,8 @@ class TestCriticalTierPlacement:
                     [sys.executable, validator, '--config-dir', str(conf), *extra],
                     capture_output=True, text=True, encoding='utf-8',
                     errors='replace', env=env, timeout=180)
-                assert run.returncode == 0, (extra, run.returncode, run.stdout[-800:])
-                assert 'WARN' in (run.stdout + run.stderr).upper(), (
-                    extra, run.stdout[-800:])
+                assert run.returncode == 1, (extra, run.returncode, run.stdout[-800:])
+                assert 'pg_connections_critical' in run.stdout, (extra, run.stdout[-800:])
 
     def test_force_really_discards_hand_edits_in_both_files(self):
         """The header tells the operator that `--force` is the only in-tool

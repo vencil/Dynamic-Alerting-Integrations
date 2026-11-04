@@ -107,7 +107,11 @@ def test_validate_fails_on_it(tmp_path, where, body, strict):
     d, unselected, _chosen = _tree(tmp_path, where, _BODIES[body])
     res, findings = _gar(d, tmp_path / "f.json", "--validate", *(["--strict"] if strict else []))
     assert res.returncode == EXIT_VIOLATION, res.stdout + res.stderr
-    assert "FAIL: 1 error(s) found" in res.stderr, res.stderr
+    # One error of the generator's own. The exporter decodes a subtree's
+    # unselected `_defaults.yml` too, and drops it when it does not decode:
+    # the key verdict is then not given, one more blocking line (#3016).
+    own = [x for x in findings if x["blocks"] != "never" and not x["kind"].startswith("key_")]
+    assert len(own) == 1, findings
     [f] = _mine(findings)
     assert f["file"] == unselected
     # The only finding about that file: its content was never read, so

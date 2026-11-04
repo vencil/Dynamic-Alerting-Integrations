@@ -1,7 +1,9 @@
-"""validate-config `unread_keys`（ADR-038 第二步）：沒有任何讀取端讀的鍵，只報不擋。
+"""validate-config `unread_keys`（ADR-038）：沒有任何讀取端讀的鍵。
 
-判決來自共用判決 `_lib_key_verdict`；這一列只負責「怎麼報」：一律 WARN、不影響
-結束碼，da-guard 不可用或失敗時說判決未完成，不拒收（決定 5）。
+判決來自共用判決（`da-guard key-verdict`，經 `_lib_key_verdict` 讀）；這一列只負責
+「怎麼報」。#3016 起判到就擋：文件的 `blocks`（error，或判不了的閾值鍵）是 FAIL，
+只有 warning／notice 是 WARN；判決給不出來也是 FAIL（da-guard 失敗時 exit 2），與
+tenant-api「判不了就不收」一致（決定 5）。
 """
 from __future__ import annotations
 
@@ -27,12 +29,12 @@ def _tree(root: Path, files: dict[str, str]) -> str:
     return str(root)
 
 
-def test_each_finding_is_one_warn_line(tmp_path):
+def test_each_finding_is_one_line_and_an_error_fails(tmp_path):
     r = vc.check_unread_keys(_tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
         "db-a.yaml": "tenants:\n  db-a:\n    mysql_conections: 70\n    mysql_slave_lagg: disable\n"
                      "    redis_memory: disable\n    redis_memory_critical: 90\n"}))
-    assert r["status"] == vc.WARN
+    assert r["status"] == vc.FAIL and not r["caller_error"]
     assert r["details"] == [
         "db-a.yaml: error: unread `mysql_conections` (no_row) — tenant(s) db-a",
         "db-a.yaml: warning: disable_noop `mysql_slave_lagg` (disable_noop) — tenant(s) db-a",
@@ -48,6 +50,7 @@ def test_disable_partial_names_where_the_still_served_sibling_comes_from(tmp_pat
         "team/db-a.yaml: warning: disable_partial `redis_memory`; still served: redis_memory_critical"
         " (from team/_defaults.yaml) — tenant(s) db-a",
     ]
+    assert r["status"] == vc.WARN  # a warning alone does not fail
 
 
 def test_a_platform_side_finding_is_one_line_with_its_tenants(tmp_path):
@@ -55,10 +58,11 @@ def test_a_platform_side_finding_is_one_line_with_its_tenants(tmp_path):
     for t in ("ta", "tb"):
         files[f"{t}.yaml"] = f"tenants:\n  {t}:\n    _profile: p1\n"
     r = vc.check_unread_keys(_tree(tmp_path, files))
-    assert r["details"] == ["_profiles.yaml: notice: unread `mysql_conections` (no_row) — tenant(s) ta, tb"]
+    assert r["details"] == ["_profiles.yaml: error: unread `mysql_conections` (no_row) — tenant(s) ta, tb"]
+    assert r["status"] == vc.FAIL  # #3394: the severity is the defect's, wherever it is written
 
 
-def test_a_profile_key_no_reader_reads_is_a_notice_on_the_profile(tmp_path):
+def test_a_profile_key_no_reader_reads_is_an_error_on_the_profile(tmp_path):
     """The `profiles` row judges no key names (#3042); a `_` key the registry
     does not list, written in a profile, is reported here instead, on the
     profile file — and `_custom_alerts`, which a profile carries, is not."""
@@ -68,7 +72,7 @@ def test_a_profile_key_no_reader_reads_is_a_notice_on_the_profile(tmp_path):
                           "      - {recipe: threshold, name: q, metric: m, op: \">\", window: 5m,"
                           " threshold: \"1:warning\"}\n",
         "ta.yaml": "tenants:\n  ta:\n    _profile: p1\n"}))
-    assert r["details"] == ["_profiles.yaml: notice: unread `_unknown_thing` (unregistered) — tenant(s) ta"]
+    assert r["details"] == ["_profiles.yaml: error: unread `_unknown_thing` (unregistered) — tenant(s) ta"]
 
 
 _PROFILE_KEYS = ("profiles:\n  p1:\n    _unknown_thing: bad\n    _namespaces: [x]\n"
@@ -93,9 +97,9 @@ def test_a_profile_key_is_judged_from_the_profile_layer_bound_or_not(tmp_path, t
     who = "tenant(s) ta" if "_profile: p1" in text else "no tenant"
     got = [d for d in r["details"] if d.startswith("_profiles.yaml:")]
     assert got == [
-        f"_profiles.yaml: notice: unread `_namespaces` (not_read_in_profile) — {who}",
-        f"_profiles.yaml: notice: unread `_profile` (not_read_in_profile) — {who}",
-        f"_profiles.yaml: notice: unread `_unknown_thing` (unregistered) — {who}",
+        f"_profiles.yaml: error: unread `_namespaces` (not_read_in_profile) — {who}",
+        f"_profiles.yaml: error: unread `_profile` (not_read_in_profile) — {who}",
+        f"_profiles.yaml: error: unread `_unknown_thing` (unregistered) — {who}",
     ], r["details"]
 
 
@@ -105,9 +109,11 @@ def test_a_clean_tree_passes(tmp_path):
     assert r["status"] == vc.PASS
 
 
-def test_undecidable_is_said(tmp_path):
+def test_an_undecidable_key_fails(tmp_path):
+    """#3016 option A: a threshold key no root platform file lets the
+    verdict judge fails the row, as tenant-api refuses such a write (422)."""
     r = vc.check_unread_keys(_tree(tmp_path, {"ta.yaml": "tenants:\n  ta:\n    mysql_conections: 70\n"}))
-    assert r["status"] == vc.WARN
+    assert r["status"] == vc.FAIL and not r["caller_error"]
     assert r["details"][-1] == "no root platform file was read: 1 threshold key(s) cannot be judged (undecidable)"
     # Nothing was found unread: the advice is about the root file.
     assert r["hint"] == vc._UNREAD_KEYS_UNDECIDABLE_HINT
@@ -117,36 +123,50 @@ def test_a_finding_keeps_the_key_advice(tmp_path):
     """A key found unread gets the check-level advice (fix or remove it)."""
     r = vc.check_unread_keys(_tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS, "db-a.yaml": "tenants:\n  db-a:\n    mysql_conections: 70\n"}))
-    assert r["status"] == vc.WARN and r["hint"] is None
+    assert r["status"] == vc.FAIL and r["hint"] is None
     assert "misspelt key" in vc._CHECK_HINTS["unread_keys"][0]
 
 
-@pytest.mark.parametrize("exc", [
-    tv.DaGuardNotFoundError("no da-guard"),
-    tv.DaGuardError("boom", 2, "boom"),
-    RuntimeError("anything else"),
-])
-def test_a_verdict_that_cannot_be_given_is_a_warn_not_a_refusal(tmp_path, monkeypatch, exc):
-    """da-guard 不可用或失敗：只說判決未完成，不 FAIL、不 caller error（決定 5）。"""
+def test_a_tree_with_only_routing_is_no_undecidable_failure(tmp_path):
+    """No root platform file but no threshold key either: nothing the
+    verdict could not judge, so nothing fails (ADR-038 decision 7)."""
+    r = vc.check_unread_keys(_tree(tmp_path, {
+        "ta.yaml": "tenants:\n  ta:\n    _routing: {receiver: {type: webhook, url: \"https://x.example\"}}\n"}))
+    assert r["status"] != vc.FAIL, r
+
+
+@pytest.mark.parametrize("exc, caller_error", [
+    (tv.DaGuardNotFoundError("no da-guard"), True),
+    (tv.DaGuardError("boom", 139, "boom", broken=True), True),
+    (tv.DaGuardError("old", 2, "old", stale=True), True),
+    # da-guard refuses the tree itself (a tenant in two files): the tree's
+    # fault, a FAIL the row naming it already carries — exit 1, not 2.
+    (tv.DaGuardError("config rejected", 2, "duplicate tenant ID"), False),
+    (RuntimeError("anything else"), False),
+], ids=["not-found", "broken", "stale", "tree-refused", "other"])
+def test_a_verdict_that_cannot_be_given_fails(tmp_path, monkeypatch, exc, caller_error):
+    """#3016：判決給不出來不算通過（與 tenant-api 判不了就不收一致）。da-guard
+    本身失敗是 caller error（exit 2），樹的內容擋住判決（例如 policy_engine 拒收的
+    規則）是一般 FAIL。"""
     def boom(*_a, **_k):
         raise exc
     monkeypatch.setattr(vc.key_verdict, "judge_tree", boom)
     r = vc.check_unread_keys(_tree(tmp_path, {"_defaults.yaml": _DEFAULTS}))
-    assert r["status"] == vc.WARN and not r["caller_error"]
+    assert r["status"] == vc.FAIL and r["caller_error"] is caller_error
     assert r["details"][0].startswith("verdict incomplete: ")
     # No key was judged: the advice is about da-guard, not "fix a misspelt key".
     assert r["hint"] == vc._UNREAD_KEYS_INCOMPLETE_HINT
 
 
-def test_the_row_does_not_change_the_exit_code(tmp_path):
-    """只報不擋：拼錯的閾值鍵今天只是其他列的 WARN，加上這一列仍是 0。"""
+def test_an_unread_key_fails_the_run(tmp_path):
+    """#3016：判到就擋——拼錯的閾值鍵讓這一列 FAIL，整支 exit 1。"""
     d = _tree(tmp_path, {"_defaults.yaml": _DEFAULTS,
                          "db-a.yaml": "tenants:\n  db-a:\n    mysql_conections: \"70\"\n"})
     p = subprocess.run([sys.executable, vc.__file__, "--config-dir", d, "--json"],
                        capture_output=True, encoding="utf-8", timeout=600)
     rows = {r["check"]: r for r in json.loads(p.stdout)}
-    assert rows["unread_keys"]["status"] == vc.WARN
-    assert p.returncode == 0, p.stderr
+    assert rows["unread_keys"]["status"] == vc.FAIL
+    assert p.returncode == 1, p.stderr
 
 
 def test_a_clean_nested_tree_passes_without_a_flat_read_caveat(tmp_path):
@@ -174,7 +194,7 @@ def test_a_rule_naming_a_profile_key_no_tenant_gets_does_not_count(tmp_path):
         "_defaults.yaml": defaults,
         "_profiles.yaml": "profiles:\n  p1:\n    _namespaces: [x]\n",
         "ta.yaml": "tenants:\n  ta:\n    mysql_connections: 70\n"}))
-    assert "_profiles.yaml: notice: unread `_namespaces` (not_read_in_profile) — no tenant" in r["details"], r
+    assert "_profiles.yaml: error: unread `_namespaces` (not_read_in_profile) — no tenant" in r["details"], r
 
 
 def test_the_exporters_key_checks_are_printed_as_it_words_them(tmp_path):
@@ -185,7 +205,8 @@ def test_the_exporters_key_checks_are_printed_as_it_words_them(tmp_path):
         "_defaults.yaml": "defaults:\n  container_cpu: 80\n  mysql_threads_running: 30\n",
         "db-a.yaml": "tenants:\n  db-a:\n    mysql_cpu: \"40\"\n"
                      "    container_cpu{version=\"V2!\"}: \"5\"\n"}))
-    assert r["status"] == vc.WARN, r
+    # The dimensional key's `version` label is undeclared: it is unread too.
+    assert r["status"] == vc.FAIL, r
     assert any('version "V2!"' in d and "tenant=db-a" in d for d in r["details"]), r["details"]
     assert any('"mysql_cpu" was renamed to "mysql_threads_running"' in d for d in r["details"]), r["details"]
 
@@ -205,7 +226,7 @@ class TestAPlatformDeclaringNothingIsNotAdvisedAway:
         r = vc.check_unread_keys(_tree(tmp_path, {
             "_defaults.yaml": body,
             "db-a.yaml": "tenants:\n  db-a:\n    mysql_threads_running: \"90\"\n"}))
-        assert r["status"] == vc.WARN, r
+        assert r["status"] == vc.FAIL, r
         assert r["hint"] == vc.NO_DECLARED_DEFAULTS_HINT, r
 
     def test_a_real_typo_keeps_the_normal_advice(self, tmp_path):
@@ -214,7 +235,7 @@ class TestAPlatformDeclaringNothingIsNotAdvisedAway:
         r = vc.check_unread_keys(_tree(tmp_path, {
             "_defaults.yaml": _DEFAULTS,
             "db-a.yaml": "tenants:\n  db-a:\n    mysql_conections: \"70\"\n"}))
-        assert r["status"] == vc.WARN and r["hint"] is None, r
+        assert r["status"] == vc.FAIL and r["hint"] is None, r
 
     def test_declared_optional_overrides_count_as_declared(self, tmp_path):
         """A platform declaring keys without values declares something."""

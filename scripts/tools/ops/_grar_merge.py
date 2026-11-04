@@ -204,11 +204,11 @@ FINDING_KINDS: dict[str, str] = {
     "timing_value_replaced":
         "A timing value Alertmanager cannot read, rendered as the platform "
         "default.",
-    # ADR-038 §5: the shared key verdict, under --validate. Reported only
-    # (`blocks: never`) until the gates block (#3016).
+    # ADR-038 §5: the shared key verdict, under --validate. A finding the
+    # verdict says blocks (an error) is `blocks: validate` (#3016).
     "key_unread":
         "A key no reader reads, by the shared key verdict (ADR-038); the line "
-        "names the verdict's own severity.",
+        "names the verdict's own severity, and an error fails --validate.",
     "key_disable_noop":
         "A `disable` that switches nothing off (ADR-038 decision 8).",
     "key_disable_partial":
@@ -216,7 +216,7 @@ FINDING_KINDS: dict[str, str] = {
         "decision 8).",
     "key_undecidable":
         "No root platform file was read, so the threshold keys were not "
-        "judged (ADR-038 decision 7).",
+        "judged (ADR-038 decision 7); with any such key, --validate fails.",
     "key_version_label":
         "A dimensional key's `version` label the exporter refuses (ADR-024 "
         "OQ-6), as the exporter words it.",
@@ -224,8 +224,9 @@ FINDING_KINDS: dict[str, str] = {
         "A key written in a retired spelling (#1231), as the exporter words "
         "it; advisory.",
     "key_verdict_incomplete":
-        "The shared key verdict could not be given (da-guard failing); the "
-        "keys were not judged and the run's verdict is unchanged.",
+        "The shared key verdict could not be given (da-guard failing, rules "
+        "Policy-as-Code refuses); the keys were not judged and --validate "
+        "fails.",
     # #1211: a tenant's served page-mode custom alerts get no delivery child
     # under the component="custom" route and fall to the firehose receiver.
     "custom_alert_undelivered":

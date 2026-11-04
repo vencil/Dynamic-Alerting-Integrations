@@ -50,6 +50,8 @@ updated_at: 2026-11-04
 
 2026-11-04 修訂：判決改由 da-guard 計算（`da-guard key-verdict`），取代「放在 Python 的共用函式」；需要判決的工具都讀它的輸出、不自己判（決定 5）。
 
+2026-11-04 修訂：各閘門判到就擋，決定 4 的等級生效，擋不擋由判決的 `blocks` 欄位決定；整棵樹的 CI 也擋判不了的閾值鍵；寫入閘門比對新舊的單位跟著 finding 的單位走；profile 閾值鍵逐 profile 直接判延到 #3395（決定 4、6、7）。
+
 ## 摘要
 
 **問題**：租戶設定裡拼錯的鍵大多默默失效。路由產生器 `--validate --strict` 對它們只給警告；da-guard（exporter 隨附的設定檢查工具）完全不報；validate-config 只擋得到 `_` 開頭的拼錯，閾值鍵的拼錯一樣只有警告。寫成 `disable` 想關掉的告警，也可能其實沒關掉。今天判斷「這個鍵合不合法」的是幾處各自維護的鍵名規則，彼此對不齊。
@@ -246,7 +248,9 @@ profiles:
 
 等級只描述缺陷，不決定誰被擋；一道寫入閘門擋不擋，看的是 finding 所在的檔（決定 6）。
 
-上表的等級是各閘門改成「判到就擋」之後的等級，與那一步同時生效（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)），屆時是 breaking change。在那之前，這些 finding 只報不擋：validate-config 一律列為警告，結束碼不變；今天的判決對來自平台檔或 profile 的 `unread` 報 notice，沒有租戶綁定的 profile 上的閾值鍵不報；`undecidable` 的 rc 2 只出現在判決輸出（決定 9 的 explain）。
+上表的等級隨各閘門改成「判到就擋」一起生效（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)，breaking change）：整棵樹的 CI 有 error、或有判不了的閾值鍵就擋（決定 6、7）。擋不擋只在判決裡定一次：每筆 finding 帶 `blocks`（等級是 error 時為 true），判決文件頂層的 `blocks` 表示整棵樹該不該擋；各閘門讀這兩個欄位，不自己依等級另判。
+
+profile 的閾值鍵逐 profile 直接判尚未實作：今天經綁定的租戶判，所以沒有租戶綁定的 profile 上的閾值鍵不報（[#3395](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3395)）。profile 的 `_` 鍵已經逐 profile 直接判。
 
 ### 5. 計算放在哪
 
@@ -254,7 +258,7 @@ profiles:
 
 - exporter 那半走 exporter 自己的載入，與 served-values 同一條路徑。
 - 它併上登錄表宣告的其他讀取端（見決定 1），以及根 `_defaults.yaml` 的 policy 規則點名的鍵。
-- validate-config、產生器 `--validate`、`explain-keys` 與 tenant-api 的產生器容器（tenant-api 每次寫入前呼叫的產生器，見 [ADR-036](./036-single-parser-effective-config.md) §3）都呼叫它。產生器 `--validate` 把判到的每一筆印成一行 WARN 或 NOTICE（與 validate-config 的行相同），結束碼不變；被拒收的樹不判。容器在產生器放行之後、在同一次判定裡判（下一點），所以它執行產生器時，產生器不再判一次。
+- validate-config、產生器 `--validate`、`explain-keys` 與 tenant-api 的產生器容器（tenant-api 每次寫入前呼叫的產生器，見 [ADR-036](./036-single-parser-effective-config.md) §3）都呼叫它。產生器 `--validate` 把判到的每一筆印成一行（與 validate-config 的行相同），判決會擋的（`blocks`）讓結束碼 1（決定 4 末段）；被拒收的樹不判。容器在產生器放行之後、在同一次判定裡判（下一點），所以它執行產生器時，產生器不再判一次。
 - 產生器容器每次寫入只需要被寫入的租戶的判決，所以 `da-guard key-verdict`（連同它底下的 served-values 與 effective）都要能只算指定的租戶（`--tenant`；平台檔照常整份讀，每個要求的租戶得到的與整棵樹時相同，樹裡沒有的列在 `tenants_absent`）。判決也只判這些租戶，沒要求的租戶不出現，不會被讀成「沒有讀取端讀」。/metrics 能不能收集不屬於單一租戶，子集裡只就要求的租戶判（別的租戶收集失敗看不到）。profile 鍵依決定 4 逐 profile 直接判，所以有沒有 finding 與要求了哪些租戶無關，只是 finding 列出的綁定租戶只含被要求的租戶。profile 裡的 `_` 鍵今天已經這樣判；閾值鍵在改成逐 profile 判之前經由綁定的租戶判，子集裡看不到沒被要求、但綁同一個 profile 的租戶，所以可能出現整棵樹不會給的 finding。判一筆寫入時，呼叫端要把被寫檔案寫入前後宣告的租戶都列進去。
 - 容器裡的判決只在產生器放行的寫入之後跑，與產生器**共用同一次判定的期限**（ADR-036 §3 的期限以該節為準，不在此重述），不另有自己的期限，也不因有寫入在排隊而讓位。時間或記憶體用完、da-guard 失敗，或結果是 `undecidable`，都回「判決未完成」與原因。容器裡的反事實重算只算被寫的租戶（決定 8）；error 級的 finding 不截斷，回應裡顯示行數的上限只管顯示。寫到 defaults 檔，或寫到前後版本帶 `profiles:` 的根平台檔時不判：這種檔的鍵會影響它沒有列名的租戶，只有整棵樹的判決判得到，同樣回「判決未完成」並指名那個檔。判決約佔一次判定的三成，一次判定的時間隨租戶數成長；以 1 CPU 為例，約 2500 個租戶時就接近 ADR-036 §3 所說的期限一半（示意值，依主機而異）。實際的界線看一個 metric：一次判定耗時與判定期限的比值，名稱由實作決定。比值超過 0.5 時告警，留一半給排隊與租戶成長（與 ADR-036 §3 撤快取條件用的是同一個比例），到 1 時寫入就會因判不完而被拒。各結果的次數與最近一次的耗時也是 metric。
 - tenant-api 改成判到就擋之後（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）：
@@ -299,26 +303,26 @@ tenants:
 決定 4 的等級只描述缺陷。一道寫入閘門擋不擋一筆寫入，只看 finding 所在的檔是不是這次寫入的檔，與等級來自哪一層無關：
 
 - **tenant-api**：error 只在 finding 所在的檔就是這次寫入的檔、而且屬於寫入對象租戶時才擋（決定 5）。所以 profile、子目錄 `_defaults.yaml` 或其他平台檔上的 error，不擋只改了租戶檔的寫入；寫到 defaults 檔或帶 `profiles:` 的根平台檔時判決不判（決定 5）。今天已經這樣判。
-- **改 profile 檔、子目錄 `_defaults.yaml` 或根平台檔的寫入**（例如經 `da-guard write` 寫檔的工具）：各閘門改成判到就擋之後，在這次寫入讓該檔新出現 error 時被擋；該檔寫入前就有的 error 不擋。今天的比對只涵蓋租戶的鍵（以租戶與鍵比對寫入前後），沒有租戶的 profile finding 要另訂比對單位（檔案與鍵）。
-- **整棵樹的 CI**（validate-config、產生器 `--validate`）：各閘門改成判到就擋之後，判到 error 就擋，不分 finding 在哪個檔；今天只報不擋（決定 4 末段）。
+- **經 `da-guard write` 寫檔的工具**（改租戶檔、profile 檔、子目錄 `_defaults.yaml` 或根平台檔）：這次寫入讓被寫的檔新出現 error 時被擋；寫入前就有的 error 不擋。新舊的比對單位跟著 finding 的單位走：鍵寫在租戶自己那一筆（租戶檔，或根平台檔 `tenants:` 下它那一筆）時以「租戶＋鍵」比對，所以把租戶搬到別的檔不算新出現，同檔另一個租戶新寫錯則算；其他 finding（鍵來自 profile、子目錄 `_defaults.yaml` 等繼承的檔，或沒有列出租戶）以「檔案＋鍵」比對，寫入前同一個檔與鍵已有 error 就不算新的，所以解除或改綁 profile 不會讓它原有的錯變成新的，profile 新寫錯的鍵也不會因為租戶檔裡已有同一個錯而放行。已知限制：同一個根平台檔裡 profile 與 `tenants:` 下的租戶寫了同一個錯鍵時，兩者是同一筆 finding，其中一邊新寫進同一個錯不算新出現。這條規則只在 `pkg/keyverdict` 定一次（`NewBlocks`）。判不了的閾值鍵寫入時不擋，交給整棵樹的 CI 擋。
+- **整棵樹的 CI**（validate-config、產生器 `--validate`）：判到 error、有判不了的閾值鍵、或判決沒有給出時就擋，不分 finding 在哪個檔；讀判決文件的 `blocks`。
 
 平台側的問題不算在正在修改的租戶頭上，由上面的檔案範圍保證，不靠降低平台側 finding 的等級。
 
 例：根 `_defaults.yaml` 沒有宣告 `redis_evicted_keys`，租戶 `t1` 綁 profile `gold`（「之後」是各閘門改成判到就擋之後）：
 
-| 寫法 | 今天 | 之後 |
+| 寫法 | 改成判到就擋之前 | 之後 |
 |---|---|---|
 | profile `gold` 寫 `redis_evicted_keys: "11"` | 判決報 notice，掛在 `_profiles.yaml`；da-guard 沒有 finding | error，掛在 `_profiles.yaml`，列出 `t1`。讓這筆 error 新出現的 `_profiles.yaml` 寫入被擋，整棵樹的 CI 擋；`t1` 自己經 tenant-api 的寫入照收 |
 | 子目錄 `_defaults.yaml` 寫 `redis_evicted_keys: 100` | 判決報 notice；da-guard 報 error（子目錄的值送不到 exporter），兩者等級不一致 | 兩者都是 error，掛在子目錄 `_defaults.yaml`。改這個檔的寫入與整棵樹的 CI 照上一列；子目錄下租戶自己的寫入照收 |
-| 沒有租戶綁的 profile 寫錯閾值鍵（決定 4 例子裡的 `silver`） | 沒有任何 finding | error，掛在 profile 檔，租戶清單為空；誰被擋同第一列 |
+| 沒有租戶綁的 profile 寫錯閾值鍵（決定 4 例子裡的 `silver`） | 沒有任何 finding | 逐 profile 直接判實作後（[#3395](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3395)）：error，掛在 profile 檔，租戶清單為空；誰被擋同第一列。在那之前仍沒有 finding |
 
 ### 7. 無從判斷的情況
 
 exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，而不是 conf.d 裡有沒有某個檔：
 
-- **沒讀到任何根平台檔**（例如客戶 CI 只檢出租戶 repo）：租戶寫的閾值鍵標 `undecidable`。保留鍵照常判。
+- **沒讀到任何根平台檔**（例如只放了單一團隊目錄的分片樹）：租戶寫的閾值鍵標 `undecidable`。保留鍵照常判。整棵樹的 CI 擋下，因為沒判的鍵不能當成判過、沒問題；要驗，就驗組好的整棵樹。tenant-api 對判不了的寫入同樣不收。
 - **有讀到根平台檔，但沒有宣告任何閾值**（例如只有 profiles、只有子目錄的 `_defaults.yaml`）：這是可以判定的錯誤，照現有的精確 finding 報（例如「子目錄的 defaults 送不到 exporter」），不降級成無從判斷。
-- **只有路由設定的樹**：rc 0。
+- **只有路由設定的樹**：沒有閾值鍵，也就沒有判不了的鍵，rc 0。
 
 拼錯的閾值鍵與「平台沒宣告、租戶有意省略」得到的原因相同，判決不嘗試區分兩者。
 

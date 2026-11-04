@@ -15,8 +15,15 @@
 // that names it); unread when none does; undecidable when no root platform
 // file was read (Input.Undecidable) and the key is a threshold key — `_`
 // keys are judged as usual (decision 7). A `_` key the registry does not
-// list is read by no reader (#3045): an error in the tenant's own file, a
-// notice on the platform file or profile it comes from (decision 4).
+// list is read by no reader (#3045).
+//
+// Every unread key is an error, wherever it is written — a tenant file, a
+// profile, a subtree `_defaults.yaml`, a root platform file's `tenants:`
+// (decision 4, #3394). Two exceptions: a key unread only because its
+// `disable` switches nothing off is a warning, and a `_state_<filter>` whose
+// filter the root does not declare is a notice (the platform's missing
+// declaration, decision 7). The severity describes the defect, not who is
+// blocked: which gate refuses what is Blocks / NewBlocks (decision 6).
 //
 // A `disable` is read when it switches something off (effective /
 // partial); a noop one is unread at warning — except on a `_` key the
@@ -27,7 +34,7 @@
 //
 // A `_` key written in a profile is judged on its own, from the
 // registry's `profile` layer, whether or not a tenant binds the profile: a
-// key no reader reads there is ONE notice on that file, with the tenants
+// key no reader reads there is ONE error on that file, with the tenants
 // that bind the profile — it replaces the finding the tenants' keys would
 // give (#3042).
 //
@@ -200,6 +207,8 @@ type Finding struct {
 	// tenants differ; "?" unknown). [] otherwise.
 	ServedFamily []string `json:"served_family"`
 	ServedFrom   []string `json:"served_from"`
+	// Blocks: a gate that judges the whole tree refuses it (Blocking).
+	Blocks bool `json:"blocks"`
 }
 
 // Tree is the verdict on a tree.
@@ -208,6 +217,12 @@ type Tree struct {
 	Keys        map[string][]KeyVerdict
 	Findings    []Finding
 	Undecidable bool
+	// Blocks: some finding blocks, or some key is undecidable — a gate that
+	// judges the whole tree refuses it (len(Blocks(tree)) > 0).
+	Blocks bool
+	// UndecidableBlocks: some key is undecidable, and so blocks (Blocks
+	// with Kind Undecidable) — what a report of the undecidable keys says.
+	UndecidableBlocks bool
 }
 
 // registryLayers maps KeySource.Layer to the registry's layer. The root
@@ -216,6 +231,29 @@ var registryLayers = map[string]string{
 	config.KeyLayerTenant:   "tenant",
 	config.KeyLayerPlatform: "platform_tenants",
 	config.KeyLayerProfile:  "profile",
+}
+
+// fileLevelKey reports whether key, written at the top level of a defaults
+// file, is the file's own key and not a tenant's: a ThresholdConfig field
+// (`optional_overrides`, `state_filters`…), a key another reader takes from
+// the file's top level (`_routing_defaults`, `_policies`…), or a routing
+// key. Effective shows it as inherited when the file has no `defaults:`
+// wrapper (the merge reads the whole document) — which takes it into no
+// tenant's config (config.ActsWhenMerged) — so it is not judged as a
+// tenant's key; with the wrapper effective does not show it at all. Inside
+// `defaults:` such a key is reported by validate-config's `root_defaults`
+// row and the route generator, not here (#3016: once the gates block, a
+// valid routing-only `_defaults.yaml` must not fail them).
+func fileLevelKey(key string) bool {
+	if config.RootDecodedKeys()[key] || config.IsRoutingKey(key) {
+		return true
+	}
+	for _, k := range config.TopLevelReadElsewhere() {
+		if k == key {
+			return true
+		}
+	}
+	return false
 }
 
 // Judge is the verdict over the readings in.
@@ -263,6 +301,9 @@ func Judge(in Input) Tree {
 			}
 			sk, hasSk := sv.Keys[key]
 			src, hasSrc := ef.Sources[key]
+			if hasSrc && src.Layer == config.KeyLayerDefaults && fileLevelKey(key) {
+				continue
+			}
 			var value any
 			if hasEf {
 				value = ef.Config[key]
@@ -277,7 +318,16 @@ func Judge(in Input) Tree {
 		findings = mergeProfileFindings(keys, findings, profileLayerFindings(in.RootProfiles, in.Effective))
 	}
 	sortFindings(findings)
-	return Tree{Keys: keys, Findings: findings, Undecidable: in.Undecidable}
+	for i := range findings {
+		findings[i].Blocks = Blocking(findings[i].Severity)
+	}
+	t := Tree{Keys: keys, Findings: findings, Undecidable: in.Undecidable}
+	bs := Blocks(t)
+	t.Blocks = len(bs) > 0
+	for _, b := range bs {
+		t.UndecidableBlocks = t.UndecidableBlocks || b.Kind == Undecidable
+	}
+	return t
 }
 
 // judgeKey is the verdict on one key (the module doc's rules).
@@ -342,8 +392,6 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 		readBy["policy_engine"] = true
 	}
 
-	platformSide := layer == config.KeyLayerPlatform || layer == config.KeyLayerProfile ||
-		layer == config.KeyLayerDefaults
 	verdict, severity := "", ""
 	switch {
 	case len(readBy) > 0:
@@ -358,17 +406,13 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 			// key (`_routng: disable`), not a switch-off with nothing to
 			// switch.
 			severity = SeverityError
-			if platformSide {
-				severity = SeverityNotice
-			}
 			if reason != ReasonRetired {
 				reason = ReasonUnregistered
 			}
 		case disable == DisableNoop:
 			severity, reason = SeverityWarning, ReasonDisableNoop
-		case platformSide || reason == ReasonStateFilterUndeclared:
-			// The platform's to fix; an undeclared `_state_<filter>` is the
-			// root's missing declaration (decision 7).
+		case reason == ReasonStateFilterUndeclared:
+			// The root's missing declaration, not a misspelling (decision 7).
 			severity = SeverityNotice
 		default:
 			severity = SeverityError
@@ -649,7 +693,7 @@ func profileLayerFindings(byFile map[string]map[string]any, effective map[string
 	out := make([]Finding, 0, len(got))
 	for fk, f := range got {
 		file, reason := fk[0], f.reason
-		out = append(out, Finding{Severity: SeverityNotice, Kind: KindUnread, Key: fk[1], File: &file,
+		out = append(out, Finding{Severity: SeverityError, Kind: KindUnread, Key: fk[1], File: &file,
 			Tenants: sortedKeys(f.tenants), Reason: &reason, ServedFamily: []string{}, ServedFrom: []string{}})
 	}
 	return out

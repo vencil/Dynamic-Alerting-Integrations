@@ -86,9 +86,9 @@ def test_an_undeclared_subtree_key_exits_1_end_to_end(tmp_path, cli_argv, capsys
     rc, rows = _run_main(cli_argv, capsys, _tree(tmp_path, _FINANCE))
     assert rc == 1, rows
     assert rows["guard_errors"]["status"] == vc.FAIL, rows["guard_errors"]
-    assert [r for r, v in rows.items() if v["status"] == vc.FAIL] == ["guard_errors"], rows
-    # ADR-038 的共用判決列不動：仍是 WARN，不是 FAIL。
-    assert rows["unread_keys"]["status"] == vc.WARN, rows["unread_keys"]
+    # ADR-038 的共用判決列也 FAIL：子目錄 _defaults.yaml 沒人讀的鍵是 error，
+    # 各閘門判到就擋（#3394、#3016）。
+    assert [r for r, v in rows.items() if v["status"] == vc.FAIL] == ["guard_errors", "unread_keys"], rows
 
 
 def test_an_undeclared_subtree_key_switched_off_is_not_a_finding(tmp_path):

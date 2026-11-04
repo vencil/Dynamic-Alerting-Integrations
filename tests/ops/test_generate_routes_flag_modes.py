@@ -64,6 +64,9 @@ def _text(r) -> str:
 def tenant_dir(tmp_path_factory):
     """A tree that PRODUCES routes — controls must reach the output paths."""
     d = tmp_path_factory.mktemp("conf.d")
+    # declared: a tree with no root platform file fails --validate (#3016)
+    (d / "_defaults.yaml").write_text(
+        "defaults:\n  mysql_connections: 80\n", encoding="utf-8")
     (d / "alpha.yaml").write_text(
         make_tenant_yaml("alpha", keys={"mysql_connections": "70"},
                          routing=make_routing_config("alpha")),
