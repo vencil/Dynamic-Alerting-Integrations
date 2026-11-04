@@ -195,7 +195,7 @@ Existing code cites this ADR with the numbering of the 2026-07 draft. Those refe
 
 | Legacy reference | This ADR |
 |---|---|
-| `D1`, `G4`, `PR-1b-i`, `PR-1b-ii-b` | §4 (machine identity deferred) |
+| `D1`, `G4`, and machine-identity audit references tagged with implementation PR numbers | §4 (machine identity deferred) |
 | `D2-B`, `O1`, `L7` | §1, §2, §5 (da-portal relay removed) |
 | `Phase-1` | §6 (no soak) |
 | `§2.3`, `§2.5` | §2 |
