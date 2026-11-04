@@ -1284,7 +1284,7 @@ def test_paths_filter_action_stays_on_the_verified_major() -> None:
 PYTHON_ENTRIES_THIS_SCANNER_JUSTIFIES = {
     "**/*.py", "tests/**", "scripts/**", "components/**", "helm/**", "k8s/**",
     "try-local/**", "Makefile", ".pre-commit-config.yaml", "docs/**",
-    "renovate.json", ".devcontainer/**", ".github/workflows/**",
+    "renovate.json", ".python-version", ".devcontainer/**", ".github/workflows/**",
     "environments/**", "tools/portal/tests/**", "tools/portal/src/**",
     # GAINED by #1218: the threshold-reachability gate's defaults-tier face
     # stopped naming two `_defaults.yaml` paths and started deriving the

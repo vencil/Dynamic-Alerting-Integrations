@@ -263,7 +263,7 @@ on #1383.
 be genuinely path-gated while tracked files fell outside ci.yml's `python`
 filter (#1383), so a PR touching only such a file did not run this guard at
 all.
-⚠️ The required check `Python Tests (3.13)` is reported by the always-run
+⚠️ The required check `Python Tests` is reported by the always-run
 aggregate, not by the skipped leg — so it reported SUCCESS, never `skipped`.
 The defect was never "a skipped required check satisfies branch protection";
 it was `detect-changes` answering "not needed" for a suite that was needed.

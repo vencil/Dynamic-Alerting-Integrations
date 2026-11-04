@@ -874,7 +874,7 @@ def test_github_workflow_top_level_shape(generated, ci, deploy) -> None:
 # and nothing was red.
 #
 # This repo already records the same mechanic from the other direction:
-# .github/workflows/ci.yml, the `Python Tests (3.13)` aggregation gate, whose
+# .github/workflows/ci.yml, the `Python Tests` aggregation gate, whose
 # `always():` comment says "without it a failed/skipped dependency SKIPS this
 # job" (grep that sentence — a line number here goes stale on the next edit of
 # a 1700-line workflow, and it already had). `if: always()` is precisely

@@ -45,7 +45,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: '3.13'
+          python-version-file: .python-version
 
       - name: Check titles against the TRK index
         # Titles are bound via env, never interpolated into the script (#1021).

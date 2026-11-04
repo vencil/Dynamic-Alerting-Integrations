@@ -70,7 +70,7 @@ pytest_plugins = ["_encoding_gate"]
 # So this is a DX fix that also removes a LATENT CI risk, not a fix for an
 # active CI fire. The latent risk is real: the module is NOT in the
 # --ignore list of the job that actually runs pytest — `Python Tests —
-# run (3.13)` (ci.yml; "Python Tests (3.13)" is the aggregation gate that
+# run (K/3)` (ci.yml; "Python Tests" is the aggregation gate that
 # runs no tests) — and that job uses `-n auto` with `-x`, so if the timing
 # margin ever closes there, one trip reddens a required check.
 #
