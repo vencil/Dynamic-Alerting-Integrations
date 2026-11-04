@@ -50,7 +50,7 @@ CRASH_MARK = "unexpected internal error"
 _ENV = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
 
 _PRELUDE = (
-    "import os, sys\n"
+    "import io, os, sys\n"
     "sys.path.insert(0, {tools!r})\n"
     "import _lib_exitcodes\n"
 )
@@ -1419,6 +1419,13 @@ def test_a_clean_exit_goes_back_to_the_interpreter(tmp_path):
 
 # ── #3156 v2 review round: seal, never redirect ─────────────────────────
 _LATE = "import time\ntime.sleep(0.3)\n"  # let `| true` leave first
+# A write that cannot fit in the CHILD's stdout buffer, so a buffered stdout
+# whose reader left fails at the write itself, not at the exit flush. Derived
+# from the child's own io.DEFAULT_BUFFER_SIZE, never a literal: Python 3.14
+# raised it from 8 KiB to 128 KiB, and the 100000-char literal this replaced
+# then sat in the buffer — the two "caught exit" cases silently tested the
+# exit-flush path instead and read rc 2.
+_OVERFLOW = "'x' * (io.DEFAULT_BUFFER_SIZE * 4)"
 
 
 def _run_reader_gone(tmp_path: Path, body: str, buffering: str = "buffered") -> tuple[int, str]:
@@ -1440,7 +1447,7 @@ def test_a_caught_lib_exit_does_not_decide_the_final_code(tmp_path, buffering):
     """Review F1: a tool without ``run()`` catches the lib's stdout-lost exit
     (``except SystemExit``), carries on, and ends with its own verdict (1).
     That verdict is the exit code — the caught exit decided nothing."""
-    body = (_LATE + "try:\n    try:\n        print('x' * 100000)\n"
+    body = (_LATE + "try:\n    try:\n        print(" + _OVERFLOW + ")\n"
             "    except OSError:\n        _lib_exitcodes.die_caller_error('ERROR: report failed', code=5)\n"
             "except SystemExit:\n    pass\nsys.exit(1)\n")
     rc, err = _run_reader_gone(tmp_path, body, buffering)
@@ -1456,10 +1463,10 @@ def test_stdout_still_takes_writes_after_its_failure_was_handled(tmp_path, buffe
     caught exit, or an atexit handler, is not an AttributeError crash."""
     if where == "atexit":
         body = ("import atexit\natexit.register(lambda: sys.stdout.write('summary\\n'))\n"
-                + _LATE + "print('x' * 100000)\n")
+                + _LATE + "print(" + _OVERFLOW + ")\n")
         want = 2
     else:
-        body = (_LATE + "import json\ntry:\n    try:\n        print('x' * 100000)\n"
+        body = (_LATE + "import json\ntry:\n    try:\n        print(" + _OVERFLOW + ")\n"
                 "    except OSError:\n        _lib_exitcodes.die_caller_error('ERROR: report failed')\n"
                 "except SystemExit:\n    pass\njson.dump({'v': 1}, sys.stdout)\nsys.exit(0)\n")
         want = 0
@@ -1560,12 +1567,12 @@ def test_code_still_holding_a_sealed_stdout_writes_to_nowhere(tmp_path, bufferin
     tool's own 0."""
     prelude = ("import logging\nSAVED = sys.stdout\n"
                "logging.basicConfig(stream=sys.stdout)\n" + _LATE)
-    handle = ("    try:\n        print('x' * 100000)\n        sys.stdout.flush()\n"
+    handle = ("    try:\n        print(" + _OVERFLOW + ")\n        sys.stdout.flush()\n"
               "    except OSError:\n        _lib_exitcodes.die_caller_error('ERROR: report failed')\n")
     if held == "redirect-restored":
         body = (prelude + "import contextlib, io\ntry:\n"
                 "    with contextlib.redirect_stdout(io.StringIO()):\n"
-                "        try:\n            SAVED.write('x' * 100000)\n            SAVED.flush()\n"
+                "        try:\n            SAVED.write(" + _OVERFLOW + ")\n            SAVED.flush()\n"
                 "        except OSError:\n"
                 "            _lib_exitcodes.die_caller_error('ERROR: report failed')\n"
                 "except SystemExit:\n    pass\nprint('summary')\nsys.exit(0)\n")

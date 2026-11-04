@@ -17,7 +17,7 @@ services:
   # Stand-in for VictoriaLogs — a pure-stdlib echo server. python:alpine has no pip
   # deps needed (mock_logstore.py is stdlib only).
   mock-logstore:
-    image: python:3.13.18-alpine3.23
+    image: python:3.14.10-alpine3.23
     command: ["python", "/app/mock_logstore.py", "9428"]
     volumes:
       - ./mock_logstore.py:/app/mock_logstore.py:ro

@@ -1,4 +1,4 @@
-FROM python:3.13.18-alpine3.23 AS builder
+FROM python:3.14.10-alpine3.23 AS builder
 
 # ── Security: Alpine 3.23 (the python:3.13.15-alpine3.23 base shipped libcrypto3 3.5.8-r0
 # and libuuid 2.41.6-r1 — #1401 found 3.5.6 / 2.41-r9 on the alpine3.22 base).
@@ -24,7 +24,7 @@ RUN pip install --no-cache-dir PyYAML==6.0.3 promql-parser==0.10.0 croniter==6.2
     python -m pip uninstall -y pip
 
 # ── Runtime Stage ──────────────────────────────────────────────────
-FROM python:3.13.18-alpine3.23
+FROM python:3.14.10-alpine3.23
 
 LABEL org.opencontainers.image.title="da-tools" \
       org.opencontainers.image.description="Dynamic Alerting CLI Toolkit — portable verification and migration tools" \

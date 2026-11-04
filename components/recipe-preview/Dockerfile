@@ -30,7 +30,7 @@ ARG TARGETOS TARGETARCH
 RUN sh /opt/go_build.sh --goos "${TARGETOS}" --goarch "${TARGETARCH}" . ./cmd/da-guard /da-guard
 
 # ── Python + promtool ────────────────────────────────────────────────────
-FROM python:3.13.18-alpine3.23 AS builder
+FROM python:3.14.10-alpine3.23 AS builder
 
 # Alpine 3.23 CVE fixes (mirrors components/da-tools).
 RUN apk --no-cache upgrade
@@ -73,7 +73,7 @@ RUN set -eu; \
     /usr/local/bin/promtool --version
 
 # ── runtime ──────────────────────────────────────────────────────────────
-FROM python:3.13.18-alpine3.23
+FROM python:3.14.10-alpine3.23
 
 LABEL org.opencontainers.image.title="recipe-preview" \
       org.opencontainers.image.description="Would-fire preview service (#657) — POST /preview" \
