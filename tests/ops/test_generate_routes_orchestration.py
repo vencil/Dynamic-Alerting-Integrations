@@ -3109,6 +3109,7 @@ _PLATFORM_LOCAL_BY_SELECTOR: dict[str, str] = {
 # nightly matrix guards, where `*_EXTRA_SCANNED` emptied both sides at once).
 _EXPECTED_EDGE_LOCAL_ALERTS = frozenset({
     "VectorBufferEventsDropped",
+    "TenantProjectionMappingErrors",
     "TenantProjectionFanoutDiscardSpike",
     "VectorProjectionGateMismatch",
     "VectorRegistryUnreadableAtBoot",
