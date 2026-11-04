@@ -145,7 +145,7 @@ make pre-tag                    # 一鍵整合；實際包含哪些檢查，以 
 | `release.yaml` | `push.tags` | ✅ #474 `component-docker-build.yaml`（本 PR 新增） |
 | `release-attach-bench-baseline.yaml` | `release.published` | ❌ 低風險（fail-soft attach） |
 | `bench-record.yaml` | `schedule` + `workflow_dispatch` | ✅ 已有手動 dispatch |
-| `nightly-race.yaml` | `schedule` + `workflow_dispatch`（含 `file_issue` 輸入） | ✅ #1275 新增 `report` fan-in job（`if: always()`），開 issue 另由 `file_issue`（預設 false）閘住。`file_issue=false` 走完 fragment 載入→判定→body 組裝→step summary 而**不寫任何 issue**；label 建立、issue 查詢與 create/edit 分支則被跳過，要驗那半段得用 `file_issue=true`（在無失敗可報時它不會建立任何東西）。這條路徑無法在自己的 PR CI 裡跑（schedule/dispatch-only），dispatch 是唯一的上線前驗證手段 |
+| `nightly-race.yaml` | `schedule` + `workflow_dispatch`（含 `file_issue` 輸入） | ✅ #1275 新增 `report` fan-in job（`if: always()`），開 issue 另由 `file_issue`（預設 false）閘住。`file_issue=false` 走完 fragment 載入→判定→body 組裝→step summary 而**不寫任何 issue**；label 建立、issue 查詢與 create/edit 分支則被跳過，要驗那半段得用 `file_issue=true`（在無失敗可報時它不會建立任何東西）。這條路徑無法在自己的 PR CI 裡跑（schedule/dispatch-only），dispatch 是唯一的上線前驗證手段。#3541 起拓撲為 `plan` → `race`（module × 分片）→ `merge`（每 module 一條）→ `report`；dispatch 也會走完整條，`plan` 讀的是 main 上前幾次已完成 run 的 `race-timings-*`，讀不到就 round-robin 並留 `::warning::` |
 | `nightly-mutation-pilot.yaml` | `schedule` + `workflow_dispatch` | ✅ 已有手動 dispatch（#350） |
 | `weekly-fuzz.yaml` | `schedule` + `workflow_dispatch` | ✅ 已有手動 dispatch |
 | `nightly-image-scan.yaml` | `schedule` + `workflow_dispatch` | ✅ build/scan 邏輯鏡 `component-docker-build.yaml`；它本身就是 release.yaml CVE gate 的**時間維度補位**（見下） |

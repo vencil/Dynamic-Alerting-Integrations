@@ -1128,14 +1128,44 @@ def test_issue_titles_fit_the_github_api_cap() -> None:
     assert not problems, "issue title would 422 or lose its verdict:\n  " + "\n  ".join(problems)
 
 
-# ── matrix <-> report drift ──────────────────────────────────────────────────
+# ── module SSOT <-> matrices <-> report drift ─────────────────────────────────
+#
+# Since #3541 the module list lives in ONE place, plan_race_shards.MODULES. The
+# race matrix (module x shard) and the merge matrix (module) are the `plan`
+# job's output, and the report computes --expected-modules from the same script.
+# These guards pin that every consumer DERIVES from it: a hand-written copy
+# anywhere is exactly the drift the old literal list allowed.
+
+PLAN_PY = "scripts/ops/plan_race_shards.py"
 
 
 def _matrix_modules() -> list[str]:
-    return [e["module"] for e in _jobs()["race"]["strategy"]["matrix"]["include"]]
+    """Modules the race + merge matrices run: whatever `plan` emits from the SSOT."""
+    import plan_race_shards
+    jobs = _jobs()
+    problems = []
+    for job, output in (("race", "race_matrix"), ("merge", "merge_matrix")):
+        matrix = (jobs.get(job, {}).get("strategy") or {}).get("matrix")
+        want = f"fromJSON(needs.plan.outputs.{output})"
+        if not isinstance(matrix, str) or want not in matrix.replace(" ", ""):
+            problems.append(f"{job}.strategy.matrix is {matrix!r}, expected ${{{{ {want} }}}}")
+        if "plan" not in (jobs.get(job, {}).get("needs") or []):
+            problems.append(f"{job} does not need `plan`")
+    plan_job = jobs.get("plan") or {}
+    plan_run = "\n".join(str(s.get("run") or "") for s in plan_job.get("steps") or [])
+    if f"{PLAN_PY} plan" not in plan_run:
+        problems.append(f"the plan job no longer runs `{PLAN_PY} plan`")
+    outs = plan_job.get("outputs") or {}
+    for output in ("race_matrix", "merge_matrix"):
+        if f"steps.plan.outputs.{output}" not in str(outs.get(output)):
+            problems.append(f"plan job output {output!r} is not the plan step's: {outs.get(output)!r}")
+    assert not problems, "the matrices stopped deriving from the module SSOT:\n  " + "\n  ".join(problems)
+    return plan_race_shards.module_names()
 
 
 def _report_expected_modules() -> list[str]:
+    """What the report's --expected-modules evaluates to, read from its run block."""
+    import plan_race_shards
     run = "\n".join(
         str(s.get("run") or "") for s in _jobs()["report"]["steps"]
     )
@@ -1144,7 +1174,18 @@ def _report_expected_modules() -> list[str]:
         "could not find --expected-modules in the report job — the drift check below "
         "would be vacuous."
     )
-    return [x.strip() for x in m.group(1).split(",") if x.strip()]
+    value = m.group(1)
+    var = re.fullmatch(r"\$\{?(\w+)\}?", value)
+    if var is None:
+        # A literal list: compared below, and refused as a second copy.
+        return [x.strip() for x in value.split(",") if x.strip()]
+    assign = re.search(rf'^\s*{var.group(1)}="\$\(python3 {re.escape(PLAN_PY)} modules\)"\s*$',
+                       run, re.M)
+    assert assign is not None, (
+        f"--expected-modules reads ${var.group(1)}, but nothing assigns it from "
+        f"`python3 {PLAN_PY} modules` — cannot tell what the report expects"
+    )
+    return plan_race_shards.module_names()
 
 
 def test_report_expected_modules_track_the_race_matrix() -> None:
@@ -1152,7 +1193,9 @@ def test_report_expected_modules_track_the_race_matrix() -> None:
 
     Same class as the third-party scan-matrix drift guard: the report cannot
     notice a fragment it was never told to expect, so the new module would fail
-    silently forever.
+    silently forever. Since #3541 both sides must DERIVE from
+    plan_race_shards.MODULES; an equal-today literal copy is still refused,
+    because that is how they drifted before.
     """
     matrix, expected = sorted(_matrix_modules()), sorted(_report_expected_modules())
     assert matrix == expected, (
@@ -1161,17 +1204,46 @@ def test_report_expected_modules_track_the_race_matrix() -> None:
         f"  only in report : {sorted(set(expected) - set(matrix))}\n"
         "A module missing from --expected-modules is never reported on at all."
     )
+    run = "\n".join(str(s.get("run") or "") for s in _jobs()["report"]["steps"])
+    # _report_expected_modules already proved a variable is assigned from the
+    # SSOT; here the argument itself must BE that variable, not a literal.
+    assert re.search(r'--expected-modules\s+"\$\{?\w+\}?"', run), (
+        "the report's --expected-modules is a hand-written list again; derive it from "
+        f"`python3 {PLAN_PY} modules` so it cannot drift from the matrices"
+    )
+
+
+def test_every_module_reaches_both_matrices_in_the_plan(tmp_path: Path) -> None:
+    """The plan emits a merge leg and >=1 race leg for every SSOT module."""
+    import plan_race_shards
+
+    def fake_go_list(args, cwd=None):
+        return subprocess.CompletedProcess(args, 0, b"x/a\t1\t0\nx/b\t1\t0\n", b"")
+    out = plan_race_shards.plan(None, runner=fake_go_list, root=tmp_path)
+    names = plan_race_shards.module_names()
+    assert [m["module"] for m in out["merge"]] == names
+    assert sorted({leg["module"] for leg in out["race"]}) == sorted(names)
 
 
 def test_report_job_fans_in_from_the_matrix() -> None:
-    report = _jobs()["report"]
+    jobs = _jobs()
+    report, merge = jobs["report"], jobs.get("merge") or {}
     problems = []
-    if report.get("needs") != ["race"]:
-        problems.append(f"needs is {report.get('needs')!r}, expected ['race']")
+    if report.get("needs") != ["merge"]:
+        problems.append(f"report needs is {report.get('needs')!r}, expected ['merge']")
     if "always()" not in str(report.get("if") or ""):
         problems.append("report `if` lacks always() — a red matrix leg would skip reporting")
     if (report.get("strategy") or {}).get("matrix"):
         problems.append("the report job grew a matrix — that reintroduces the write race")
+    if "race" not in (merge.get("needs") or []):
+        problems.append(f"merge needs is {merge.get('needs')!r}; it must wait for the race legs")
+    if "always()" not in str(merge.get("if") or ""):
+        problems.append("merge `if` lacks always() — a red race leg would skip its module's fragment")
+    merge_run = "\n".join(str(s.get("run") or "") for s in merge.get("steps") or [])
+    if merge_run.count("parse_go_test_json.py") != 1:
+        problems.append("merge must parse each module's merged stream exactly once")
+    if any("parse_go_test_json" in str(s.get("run") or "") for s in jobs["race"].get("steps") or []):
+        problems.append("a race shard parses its own stream — fragments must come from the merge")
     assert not problems, "fan-in topology broken:\n  " + "\n  ".join(problems)
 
 

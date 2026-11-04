@@ -9,11 +9,19 @@ name: Nightly Race Detector
 # (does NOT block any PR) — a failure surfaced here is a real bug to triage,
 # not a "fix this PR" gate.
 #
-# Failure handling: the matrix legs only PRODUCE evidence (a parsed fragment +
-# the raw `go test -json` stream as an artifact). A single fan-in `report` job
-# splits each module's result into incidents (build / package timeout / data
-# race / failing test / unattributed) and keeps ONE tracking issue per failure
-# fingerprint (`module|kind|subject`, the first line of the body), labelled
+# Topology (#3541): plan -> race (one leg per module x shard) -> merge (one leg
+# per module) -> report. scripts/ops/plan_race_shards.py is the SSOT for the
+# module list (workdir + package patterns) and the shard count; the race
+# matrix, the merge matrix and the report's --expected-modules are all derived
+# from it, so they cannot drift apart.
+#
+# Failure handling: the race legs only PRODUCE evidence (the raw `go test -json`
+# stream + its exit code, as an artifact). `merge` concatenates one module's
+# shards and parses them ONCE into a fragment — the same fragment one unsharded
+# leg used to produce. A single fan-in `report` job splits each module's result
+# into incidents (build / package timeout / data race / failing test /
+# unattributed) and keeps ONE tracking issue per failure fingerprint
+# (`module|kind|subject`, the first line of the body), labelled
 # `test-isolation`, with that fingerprint's own first-seen date and latest run.
 # One issue per module used to merge unrelated failures (#2977). It EDITS in
 # place rather than creating — GitHub does not notify on a title or body edit,
@@ -57,21 +65,68 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Why shards (#3541): one `go test` per module on one 4-core runner made every
+  # package share those cores, so wall-clock time was inflated by contention —
+  # on 11-02 tenant-api's internal/handler took 1718 s of the 1800 s per-binary
+  # -timeout. `plan` splits each module by the previous night's per-package
+  # timings (greedy longest-first). Scheduling is fail-open: no timings ->
+  # round-robin, no package list -> ONE leg with the module's own patterns (the
+  # pre-#3541 run), each as a ::warning::. Results stay fail-closed in `merge`.
+  plan:
+    name: plan race shards
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read # list earlier runs of this workflow and download their timings artifacts
+    outputs:
+      race_matrix: ${{ steps.plan.outputs.race_matrix }}
+      merge_matrix: ${{ steps.plan.outputs.merge_matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      # Only for `go list`. Seeded from the platform's Go SSOT go.mod (the one
+      # tests/ops/test_go_toolchain_parity.py pins); this is NOT a module list —
+      # each module's own go.mod still selects its toolchain (GOTOOLCHAIN=auto
+      # on the plan step).
+      - name: Set up Go (version from the SSOT go.mod)
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: components/threshold-exporter/app/go.mod
+          cache: false
+
+      # Newest unexpired `race-timings-<module>` artifact of an earlier
+      # completed run of THIS workflow on main. Never fails the step.
+      - name: Fetch the previous night's per-package timings
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          wf="${GITHUB_WORKFLOW_REF%%@*}"
+          python3 scripts/ops/plan_race_shards.py fetch-timings \
+            --repo "$GITHUB_REPOSITORY" --workflow "${wf##*/}" --branch main \
+            --out-dir timings
+
+      - name: Plan shards
+        id: plan
+        env:
+          # Explicit: `go list` must be allowed to switch to the toolchain a
+          # module's go.mod asks for, whatever setup-go exported. Otherwise a
+          # too-old `stable` fails go list and every module degrades to one leg.
+          GOTOOLCHAIN: auto
+        run: |
+          set -euo pipefail
+          python3 scripts/ops/plan_race_shards.py plan --timings-dir timings
+
   race:
-    name: Race Detector (${{ matrix.module }})
+    name: Race Detector (${{ matrix.module }} ${{ matrix.shard }}/${{ matrix.shards }})
+    needs: [plan]
     runs-on: ubuntu-24.04
     permissions:
       contents: read
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - module: tenant-api
-            workdir: components/tenant-api
-            packages: ./cmd/... ./internal/...
-          - module: threshold-exporter
-            workdir: components/threshold-exporter/app
-            packages: ./...
+      matrix: ${{ fromJSON(needs.plan.outputs.race_matrix) }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -81,14 +136,21 @@ jobs:
         with:
           go-version-file: ${{ matrix.workdir }}/go.mod
 
-      - name: Cache Go modules
+      # Module cache AND build cache: without the latter every leg recompiles
+      # its module's -race dependency graph. One entry per module per run — the
+      # build cache is content-addressed, so whichever shard saves it serves
+      # every shard of the next night; the other legs of the run only log that
+      # the key is taken. Restored by prefix, newest first.
+      - name: Cache Go modules and build cache
         uses: actions/cache@v5
         with:
-          path: ~/go/pkg/mod
-          key: ${{ runner.os }}-go-1.26-${{ hashFiles('**/go.sum') }}
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          key: ${{ runner.os }}-nightly-race-go-${{ matrix.module }}-${{ hashFiles(format('{0}/go.sum', matrix.workdir)) }}-${{ github.run_id }}
           restore-keys: |
-            ${{ runner.os }}-go-1.26-
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-nightly-race-go-${{ matrix.module }}-${{ hashFiles(format('{0}/go.sum', matrix.workdir)) }}-
+            ${{ runner.os }}-nightly-race-go-${{ matrix.module }}-
 
       # -json so the failure is machine-readable. `cmd/go` feeds the test
       # binary's stdout AND stderr through test2json, so a `WARNING: DATA RACE`
@@ -97,19 +159,23 @@ jobs:
       #
       # `set -o pipefail` + `|| rc=$?` so go test's exit code survives the tee
       # (same shape as scripts/tools/ops/bench_wrapper.sh). The step itself does
-      # NOT fail here: the parse + upload steps below must still run, and the leg
-      # is failed explicitly at the end so it still shows red in the Actions tab.
+      # NOT fail here: the upload step below must still run, and the leg is
+      # failed explicitly at the end so it still shows red in the Actions tab.
+      # The rc file is written only once go test has returned: `merge` reads a
+      # shard without one as a leg that died mid-run, i.e. a partial stream.
       - name: Run tests with -race -count=10
         id: race
         working-directory: ${{ matrix.workdir }}
         env:
           PACKAGES: ${{ matrix.packages }}
-          RAW: ${{ github.workspace }}/race-raw-${{ matrix.module }}.jsonl
-          ERR: ${{ github.workspace }}/race-stderr-${{ matrix.module }}.log
+          RAW: ${{ github.workspace }}/race-raw-${{ matrix.module }}-${{ matrix.shard }}.jsonl
+          ERR: ${{ github.workspace }}/race-stderr-${{ matrix.module }}-${{ matrix.shard }}.log
+          RC_FILE: ${{ github.workspace }}/race-rc-${{ matrix.module }}-${{ matrix.shard }}
         # -timeout=30m guards against single test hangs (default 10m is tight at 10x).
         # It is a per-package-binary budget, so a package whose tests are merely
         # slow hits it too: threshold-exporter's cmd/da-guard did, twice (#2977).
         # Raising it is not the fix — that only postpones the next collision.
+        # plan_race_shards.py's GO_TEST_TIMEOUT_S mirrors it.
         #
         # -short (#2977 option A): the -count=10 here exists to catch isolation
         # problems BETWEEN repetitions, which a reduced matrix exposes just as
@@ -119,23 +185,94 @@ jobs:
         # exporter job's go/docs path gate — a guard test in
         # tests/ops/test_nightly_race_issue_policy.py pins both halves. Side effect:
         # the vendored yaml.v3 TestLimits also skips under -short; tenant-api has
-        # no testing.Short() call, so -short is a no-op there. Making the matrices
-        # themselves cheap is tracked as TRK-3180 (#3180).
-        # PACKAGES is intentionally unquoted: it is a multi-pattern list.
+        # no testing.Short() call, so -short is a no-op there. Sharding (#3541)
+        # superseded TRK-3180's plan of making the matrices themselves cheap.
+        # PACKAGES is intentionally unquoted: it is a multi-package list.
         run: |
           set -o pipefail
           rc=0
           go test $PACKAGES -race -count=10 -short -timeout=30m -json 2>"$ERR" | tee "$RAW" || rc=$?
           echo "go test exited $rc"
+          echo "$rc" > "$RC_FILE"
           echo "go_exit_code=$rc" >> "$GITHUB_OUTPUT"
 
-      # Always runs: a crashed/timed-out leg still has to produce a fragment, or
-      # the report job would read "no fragment" as "nothing to say" — the silent
-      # direction this whole rework exists to remove.
-      - name: Extract failing tests
+      # The full race report / panic / build error, for a human triaging, and
+      # the input `merge` parses.
+      - name: Upload raw go test -json stream
         if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: race-raw-${{ matrix.module }}-${{ matrix.shard }}
+          path: |
+            race-raw-${{ matrix.module }}-${{ matrix.shard }}.jsonl
+            race-stderr-${{ matrix.module }}-${{ matrix.shard }}.log
+            race-rc-${{ matrix.module }}-${{ matrix.shard }}
+          retention-days: 14
+          if-no-files-found: warn
+
+      # Visibility: the leg goes red for the same reason it always did. The
+      # upload above just happens first.
+      - name: Fail the leg if go test failed
+        if: always() && steps.race.outputs.go_exit_code != '0'
         env:
           RC: ${{ steps.race.outputs.go_exit_code }}
+          MODULE: ${{ matrix.module }}
+          SHARD: ${{ matrix.shard }}
+        run: |
+          echo "::error title=Nightly race::go test exited ${RC:-<none>} for ${MODULE} shard ${SHARD}"
+          exit 1
+
+  # One leg per MODULE: concatenate its shards' streams and parse them ONCE, so
+  # frag-<module>.json and every fingerprint derived from it are what a single
+  # unsharded leg would have produced. A shard that left no complete evidence
+  # (no rc file, or no stream) means this module's results are missing: no
+  # fragment is uploaded, and the report reads that as `no-result` — the verdict
+  # a module whose only leg never uploaded already got. Parsing just the shards
+  # that did arrive would let the missing shard's failure read green.
+  merge:
+    name: merge + parse (${{ matrix.module }})
+    needs: [plan, race]
+    # always(): a red race leg must still be merged and reported. Skipped only
+    # when there is no plan to merge against; the report then finds no fragment
+    # for any module and reports each as no-result.
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.merge_matrix) }}
+    steps:
+      - uses: actions/checkout@v6 # for scripts/ops/*.py
+
+      # continue-on-error: download-artifact FAILS the step when no artifact
+      # matches. The merge step below then finds every shard missing and says so.
+      - name: Download shard streams
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: race-raw-${{ matrix.module }}-*
+          path: raw
+          merge-multiple: true
+
+      - name: Merge shard streams
+        id: merge
+        if: always()
+        env:
+          MODULE: ${{ matrix.module }}
+          SHARDS: ${{ matrix.shards }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ops/plan_race_shards.py merge \
+            --module "$MODULE" --shards "$SHARDS" --raw-dir raw \
+            --output "race-raw-${MODULE}.jsonl"
+
+      # Exactly the parse the unsharded leg ran, on the merged stream, with the
+      # module's own workdir and package patterns (the triage repro command).
+      - name: Extract failing tests
+        if: always() && steps.merge.outputs.complete == 'true'
+        env:
+          RC: ${{ steps.merge.outputs.go_exit_code }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           MODULE: ${{ matrix.module }}
           WORKDIR: ${{ matrix.workdir }}
@@ -151,44 +288,51 @@ jobs:
             --workdir "$WORKDIR" \
             --packages "$PACKAGES"
 
-      # The full race report / panic / build error, for a human triaging. The
-      # parsed fragment is deliberately lossy; this is the evidence behind it.
-      - name: Upload raw go test -json stream
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: race-raw-${{ matrix.module }}
-          path: |
-            race-raw-${{ matrix.module }}.jsonl
-            race-stderr-${{ matrix.module }}.log
-          retention-days: 14
-          if-no-files-found: warn
+      # Tomorrow's plan input, only from a complete night: a partial one would
+      # under-weight exactly the shard that died, so the next plan falls back to
+      # the newest complete night instead.
+      - name: Record per-package timings
+        if: always() && steps.merge.outputs.complete == 'true'
+        env:
+          MODULE: ${{ matrix.module }}
+        run: |
+          set -euo pipefail
+          python3 scripts/ops/plan_race_shards.py timings \
+            --input "race-raw-${MODULE}.jsonl" \
+            --output "race-timings-${MODULE}.json"
 
       - name: Upload fragment
-        if: always()
+        if: always() && steps.merge.outputs.complete == 'true'
         uses: actions/upload-artifact@v7
         with:
           name: race-frag-${{ matrix.module }}
           path: frag-${{ matrix.module }}.json
           retention-days: 14
 
-      # Visibility: the leg goes red for the same reason it always did. The
-      # reporting above just happens first.
-      - name: Fail the leg if go test failed
-        if: always() && steps.race.outputs.go_exit_code != '0'
+      - name: Upload per-package timings
+        if: always() && steps.merge.outputs.complete == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: race-timings-${{ matrix.module }}
+          path: race-timings-${{ matrix.module }}.json
+          retention-days: 14
+
+      - name: Fail the leg if a shard failed or is missing
+        if: always() && (steps.merge.outputs.complete != 'true' || steps.merge.outputs.go_exit_code != '0')
         env:
-          RC: ${{ steps.race.outputs.go_exit_code }}
+          RC: ${{ steps.merge.outputs.go_exit_code }}
+          COMPLETE: ${{ steps.merge.outputs.complete }}
           MODULE: ${{ matrix.module }}
         run: |
-          echo "::error title=Nightly race::go test exited ${RC} for ${MODULE}"
+          echo "::error title=Nightly race::${MODULE}: go_exit_code=${RC:-<none>} complete=${COMPLETE:-<none>}"
           exit 1
 
-  # Single writer. `needs: [race]` + `always()` so a red leg still reports; the
+  # Single writer. `needs: [merge]` + `always()` so a red leg still reports; the
   # issue write lives here and NOWHERE else, which is what makes the duplicate-
   # create race impossible rather than merely unlikely.
   report:
     name: aggregate + file/refresh tracking issues
-    needs: [race]
+    needs: [merge]
     # Runs on dispatch too, so this path can be REHEARSED. It is brand new and
     # cannot run in its own PR's CI (schedule/dispatch triggers only), so gating
     # the whole job on `schedule` left no way to exercise it before the first
@@ -205,7 +349,7 @@ jobs:
       - uses: actions/checkout@v6 # for scripts/ops/file_race_report.py
 
       # continue-on-error: download-artifact FAILS the step when no artifact
-      # matches the pattern. If both legs died before uploading, that failure
+      # matches the pattern. If every module's fragment was withheld, that failure
       # would skip the reporting step below and the night would pass in silence
       # — the worst possible direction. Let it fail soft; the script treats a
       # missing fragment as a FAILING module and exits non-zero for it.
@@ -217,6 +361,9 @@ jobs:
           path: frags
           merge-multiple: true
 
+      # The expected modules come from the SSOT itself, NOT from plan's outputs:
+      # a plan job that died must leave every module expected (so each reads as
+      # no-result), not none.
       - name: File or refresh the tracking issues
         if: always()
         env:
@@ -227,7 +374,8 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p frags
+          expected="$(python3 scripts/ops/plan_race_shards.py modules)"
           python3 scripts/ops/file_race_report.py \
             --frags-dir frags \
-            --expected-modules "tenant-api,threshold-exporter" \
+            --expected-modules "$expected" \
             --run-url "${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
