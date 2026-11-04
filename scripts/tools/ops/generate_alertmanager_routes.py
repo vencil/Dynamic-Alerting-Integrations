@@ -241,7 +241,8 @@ def _unverifiable(exc: PlatformProbeSetUnverifiable, refusing: str) -> None:
 
 
 def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
-                   all_warnings: list[str], sink: list | None = None) -> None:
+                   all_warnings: list[str], sink: list | None = None,
+                   key_blocks: "list[str] | None" = None) -> None:
     """Handle --validate mode: check for errors and exit.
 
     #2311: every verdict comes from ``evaluate_generated_config`` — the SAME
@@ -281,9 +282,12 @@ def _validate_mode(routes: list[dict], receivers: list[dict], inhibit_rules: lis
             print(f"Probe set: DEGRADED, shipped platform alert identities "
                   f"only partly read; built-in fallback added back "
                   f"({probe_set_degraded_reason()})")
-    if verdict.errors:
-        print(f"FAIL: {len(verdict.errors)} error(s) found:", file=sys.stderr)
-        for e in verdict.errors:
+    # #3016: the shared key verdict's blocking lines (`_report_key_verdict`,
+    # already printed and recorded) fail the run with the generator's own.
+    errors = list(verdict.errors) + list(key_blocks or [])
+    if errors:
+        print(f"FAIL: {len(errors)} error(s) found:", file=sys.stderr)
+        for e in errors:
             print(e, file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
     if verdict.assembly_error is not None:
@@ -1290,41 +1294,48 @@ _KEY_CHECK_KINDS = {
 }
 
 
-def _report_key_verdict(config_dir: str, findings: list[str]) -> None:
+def _report_key_verdict(config_dir: str, findings: list[str]) -> list[str]:
     """The shared verdict on keys no reader reads (``_lib_key_verdict``,
     ADR-038 §5), under ``--validate``: the same lines validate-config's
-    ``unread_keys`` row prints, on stderr, each a ``blocks: never`` finding.
-
-    Reported only until the gates block (#3016): the exit code does not
-    change. A verdict that cannot be given — da-guard failing, anything the
-    verdict raises — is one NOTICE, never a refusal (decision 5: a broken
-    da-guard must not fail a run the generator passed).
+    ``unread_keys`` row prints, on stderr. Returns the lines that block the
+    run (#3016), each a ``blocks: validate`` finding: the findings the
+    verdict says block (an error), the undecidable line when a threshold key
+    could not be judged (decision 7), and the one line saying no verdict was
+    given — a tree no verdict was given for does not pass, as tenant-api
+    refuses a write it has none for (decision 5). Warnings and notices are
+    ``blocks: never``.
 
     The verdict is ``da-guard key-verdict``'s own run; the custom-alert
     delivery check (#1211) reads served-values separately, so a failing
     verdict leaves that check as it is."""
     try:
         verdict = _lib_key_verdict.judge_tree(config_dir)
-    except (Exception, SystemExit) as exc:  # noqa: BLE001 — "not judged", never a refusal
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 — "not judged": no pass
         line = Finding(
-            "  NOTICE: key verdict incomplete: the keys no reader reads were not "
+            "  ERROR: key verdict incomplete: the keys no reader reads were not "
             f"judged ({type(exc).__name__}: {' '.join(str(exc).split())})",
-            kind="key_verdict_incomplete", blocks="never")
+            kind="key_verdict_incomplete", blocks="validate")
         print(safe_label(line), file=sys.stderr)
         findings.append(line)
-        return
+        return [line]
     lines = []
     for f in verdict.findings:
-        level = "NOTICE" if f.severity == _lib_key_verdict.NOTICE else "WARN"
+        level = ("ERROR" if f.blocks else
+                 "NOTICE" if f.severity == _lib_key_verdict.NOTICE else "WARN")
         lines.append(Finding(
             f"  {level}: key verdict: {_lib_key_verdict.finding_line(f, WARN_LIMIT)}",
-            kind=_KEY_VERDICT_KINDS[f.kind], blocks="never",
+            kind=_KEY_VERDICT_KINDS[f.kind],
+            blocks="validate" if f.blocks else "never",
             tenant=f.tenants[0] if len(f.tenants) == 1 else None,
             file=f.file, field=f.key))
     undecidable = _lib_key_verdict.undecidable_line(verdict)
     if undecidable is not None:
-        lines.append(Finding(f"  NOTICE: key verdict: {undecidable}",
-                             kind="key_undecidable", blocks="never"))
+        # Blocks exactly when some key is undecidable: the findings' own
+        # `blocks` all said no, so the verdict's is that key's.
+        stops = verdict.blocks and not any(f.blocks for f in verdict.findings)
+        lines.append(Finding(f"  {'ERROR' if stops else 'NOTICE'}: key verdict: {undecidable}",
+                             kind="key_undecidable",
+                             blocks="validate" if stops else "never"))
     # ADR-038 §11: the exporter's own key checks (a `version` label, a
     # retired spelling), printed as it wrote them — this tool no longer
     # judges keys itself.
@@ -1334,6 +1345,7 @@ def _report_key_verdict(config_dir: str, findings: list[str]) -> None:
     for line in lines:
         print(safe_label(line), file=sys.stderr)
     findings.extend(lines)
+    return [line for line in lines if line.blocks == "validate"]
 
 
 # ── #1211: served page-mode custom alerts that reach no one ─────────
@@ -1602,8 +1614,9 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # else), before the exits below that end the run short of
     # `_validate_mode` ("No tenants found", "No valid routes …"): a tree with
     # nothing to render is judged too.
+    key_blocks: list[str] = []
     if args.validate and key_verdict:
-        _report_key_verdict(args.config_dir, findings)
+        key_blocks = _report_key_verdict(args.config_dir, findings)
 
     has_routing = bool(routing_configs)
     has_dedup = bool(dedup_configs)
@@ -1616,7 +1629,8 @@ def _run(args: argparse.Namespace, findings: list[str], *,
         for w in schema_warnings:
             print(safe_label(w), file=sys.stderr)
         errors = ((blocking_generation_errors(schema_warnings) if args.validate else [])
-                  + (_policy_errors(schema_warnings) if args.strict else []))
+                  + (_policy_errors(schema_warnings) if args.strict else [])
+                  + key_blocks)
         if errors:
             print(f"FAIL: {len(errors)} error(s) found and nothing to render:",
                   file=sys.stderr)
@@ -1663,7 +1677,7 @@ def _run(args: argparse.Namespace, findings: list[str], *,
 
     # Validate mode
     if args.validate:
-        _validate_mode(routes, receivers, inhibit_rules, all_warnings, findings)
+        _validate_mode(routes, receivers, inhibit_rules, all_warnings, findings, key_blocks)
 
     # #2279: two generated receivers with one name. Blocking in EVERY mode and
     # with or without --strict — Alertmanager refuses such a config, and a

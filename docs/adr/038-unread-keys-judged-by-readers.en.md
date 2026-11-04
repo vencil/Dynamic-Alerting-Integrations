@@ -44,6 +44,8 @@ Revised 2026-11-03: a key no reader reads is an error wherever it is written —
 
 Revised 2026-11-04: da-guard computes the verdict (`da-guard key-verdict`), replacing "a shared Python function"; every tool that needs the verdict reads its output and judges nothing itself (decision 5).
 
+Revised 2026-11-04: the gates block on what they judge, decision 4's levels take effect, and the verdict's `blocks` field decides whether to block; whole-tree CI also blocks on a threshold key it cannot judge; the write gate compares before and after by tenant and key; judging profile threshold keys per profile is deferred to #3395 (decisions 4, 6, 7).
+
 ## Summary
 
 **Problem**: Misspelled keys in tenant config mostly fail silently. The route generator's `--validate --strict` only warns about them; da-guard (the config check tool that ships with the exporter) reports nothing at all; validate-config only catches misspelled `_`-prefixed keys, and misspelled threshold keys still get only a warning. An alert written as `disable` to turn it off may not actually be turned off. Today, "is this key valid" is decided by several separately maintained key-name rules that do not line up with each other.
@@ -240,7 +242,9 @@ Both keys are `unread` at error, both reported on `_profiles.yaml`: `redis_evict
 
 A level describes only the defect, not who is blocked; whether a write gate blocks depends on the file the finding is in (decision 6).
 
-The levels in the table above apply once the gates change to "block when judged", taking effect in that same step ([#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)), which will be a breaking change. Until then, these findings are reported, not blocked: validate-config lists all of them as warnings and the exit code does not change; today's verdict reports an `unread` from a platform file or profile as a notice, and a threshold key on a profile no tenant binds not at all; the rc 2 of `undecidable` appears only in the verdict output (explain, decision 9).
+The levels in the table above take effect together with the gates blocking on what they judge ([#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016), a breaking change): whole-tree CI blocks on any error, or on a threshold key it cannot judge (decisions 6, 7). Whether to block is decided once, in the verdict: each finding carries `blocks` (true when its level is error), and the verdict document's top-level `blocks` says whether the whole tree is blocked; the gates read these two fields rather than deriving them from the level themselves.
+
+Judging a profile's threshold keys per profile is not implemented yet: today they are judged through the tenants that bind the profile, so a threshold key on a profile no tenant binds is not reported ([#3395](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3395)). A profile's `_` keys are already judged per profile.
 
 ### 5. Where the computation lives
 
@@ -293,26 +297,26 @@ This brings a linked amendment: [ADR-036](./036-single-parser-effective-config.e
 Decision 4's levels describe only the defect. Whether a write gate blocks a write depends only on whether the finding is in a file that write writes, not on which layer the level comes from:
 
 - **tenant-api**: an error blocks only when the file it is in is the file this write writes, and it belongs to a tenant the write is for (decision 5). So an error on a profile, a sub-directory `_defaults.yaml` or another platform file does not block a write that changes only tenant files; a write to a defaults file or to a root platform file with `profiles:` is not judged (decision 5). This is how it judges today.
-- **A write that changes a profile file, a sub-directory `_defaults.yaml` or a root platform file** (for example, a tool that writes through `da-guard write`): once the gates block on what they judge, it is blocked when it makes a new error appear in that file; an error the file already had before the write does not block it. Today's comparison covers only tenants' keys (before and after the write, by tenant and key); a profile finding with no tenant needs its own unit of comparison (file and key).
-- **Whole-tree CI** (validate-config, the generator's `--validate`): once the gates block on what they judge, it blocks on any error, whichever file it is in; today it reports and does not block (end of decision 4).
+- **A tool that writes through `da-guard write`** (changing a tenant file, a profile file, a sub-directory `_defaults.yaml` or a root platform file): it is blocked when the write makes a new error appear in a file it writes; an error that existed before the write does not block it. Before and after are compared by tenant and key, the tenants being those the finding lists, whatever the file, so moving a tenant to another file or renaming a profile does not count as new; a finding that lists no tenant (for example, on a profile no tenant binds) is compared by file and key. The rule is defined once, in `pkg/keyverdict` (`NewBlocks`). A threshold key that cannot be judged does not block a write; whole-tree CI blocks it.
+- **Whole-tree CI** (validate-config, the generator's `--validate`): it blocks on any error, on a threshold key it cannot judge, or when no verdict was given, whichever file the finding is in; it reads the verdict document's `blocks`.
 
 That platform-side problems are not charged to the tenant being changed is guaranteed by this file scope, not by lowering the level of platform-side findings.
 
 Example: the root `_defaults.yaml` does not declare `redis_evicted_keys`, and tenant `t1` binds profile `gold` ("after" is once the gates block when judged):
 
-| Written | Today | After |
+| Written | Before the gates blocked | After |
 |---|---|---|
 | profile `gold` writes `redis_evicted_keys: "11"` | the verdict reports a notice on `_profiles.yaml`; da-guard has no finding | error on `_profiles.yaml`, listing `t1`. A write to `_profiles.yaml` that makes this error appear is blocked, and whole-tree CI blocks; `t1`'s own writes through tenant-api are accepted |
 | a sub-directory `_defaults.yaml` writes `redis_evicted_keys: 100` | the verdict reports a notice; da-guard reports an error (the sub-directory's value does not reach the exporter), so the two disagree on the level | both are errors, on the sub-directory `_defaults.yaml`. Writes to that file and whole-tree CI as in the row above; the own writes of tenants under that sub-directory are accepted |
-| a profile no tenant binds writes a wrong threshold key (`silver` in decision 4's example) | no finding at all | error on the profile file, with an empty tenant list; who is blocked as in the first row |
+| a profile no tenant binds writes a wrong threshold key (`silver` in decision 4's example) | no finding at all | once profiles are judged per profile ([#3395](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3395)): error on the profile file, with an empty tenant list; who is blocked as in the first row. Until then, still no finding |
 
 ### 7. When it cannot be judged
 
 Whether the exporter half can be judged depends on **whether any root platform file was read**, not on whether some particular file exists in conf.d:
 
-- **No root platform file was read** (for example, the customer's CI checks out only the tenant repo): threshold keys written by the tenant are marked `undecidable`. Reserved keys are judged as usual.
+- **No root platform file was read** (for example, a sharded tree holding a single team's directory): threshold keys written by the tenant are marked `undecidable`. Reserved keys are judged as usual. Whole-tree CI blocks, because a key not judged must not read as judged and fine; to validate, validate the assembled tree. tenant-api likewise refuses a write it cannot judge.
 - **A root platform file was read, but it declares no thresholds** (for example, only profiles, or only a `_defaults.yaml` in a sub-directory): this is a decidable error and is reported with the existing precise finding (for example, "defaults in a sub-directory do not reach the exporter"), not downgraded to undecidable.
-- **A tree with only routing config**: rc 0.
+- **A tree with only routing config**: it has no threshold keys, so none it cannot judge; rc 0.
 
 A misspelled threshold key and "the platform did not declare it, the tenant left it out on purpose" get the same reason; the verdict does not try to tell them apart.
 

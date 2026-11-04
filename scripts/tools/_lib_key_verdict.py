@@ -14,8 +14,9 @@ print.
 A key is `read` when some reader reads it, `unread` when none does, and
 `undecidable` when no root platform file was read (a threshold key's exporter
 half cannot be judged; `_` keys are judged as usual, decision 7). Severities
-are those decision 4 gives the gates once they block; callers that only
-report print them as they are. A finding is a tenant's own key, or a platform
+describe the defect (decision 4); whether a whole-tree gate refuses the
+tree is the document's `blocks`, Go's one rule (#3016) — callers read it,
+none restates "an error blocks". A finding is a tenant's own key, or a platform
 file's or profile's key with the tenants it reaches (one per file and key).
 
 Policy-as-Code's rules are its own to validate: `judge_tree` loads them with
@@ -80,6 +81,7 @@ class Finding(NamedTuple):
     reason: str | None
     served_family: tuple[str, ...] = ()
     served_from: tuple[str, ...] = ()   # each of served_family's files (", "-joined when the tenants differ; "?" unknown)
+    blocks: bool = False                # a whole-tree gate refuses it (Go's keyverdict.Blocking)
 
 
 class TreeVerdict(NamedTuple):
@@ -91,6 +93,10 @@ class TreeVerdict(NamedTuple):
     # which a CI reader prints as they are. Not part of the verdict on
     # whether a key is read.
     key_checks: "dict[str, tv.KeyChecks]" = {}
+    # A gate that judges the whole tree refuses it: some finding blocks, or
+    # some key is undecidable (Go's keyverdict.Blocks, #3016). The one
+    # answer validate-config and the route generator's `--validate` read.
+    blocks: bool = False
 
 
 # key_check_lines' kinds: a `version` label the exporter refuses (it reads
@@ -184,6 +190,12 @@ def _one_of(v: Any, what: str, allowed: "frozenset[str]") -> str:
     return v
 
 
+def _bool(v: Any, what: str) -> bool:
+    if not isinstance(v, bool):
+        raise TypeError(f"{what}: not a boolean: {v!r}")
+    return v
+
+
 def _mapping(v: Any, what: str) -> dict:
     if not isinstance(v, dict):
         raise TypeError(f"{what}: not an object: {v!r}")
@@ -216,7 +228,7 @@ def _finding(f: dict) -> Finding:
                    _optional(f["file"], "findings.file"), _tuple(f["tenants"], "findings.tenants"),
                    _optional(f["reason"], "findings.reason"),
                    _tuple(f["served_family"], "findings.served_family"),
-                   _tuple(f["served_from"], "findings.served_from"))
+                   _tuple(f["served_from"], "findings.served_from"), _bool(f["blocks"], "findings.blocks"))
 
 
 def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
@@ -228,6 +240,7 @@ def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
     tv._subset_absent(doc, requested)
     if not isinstance(doc["undecidable"], bool):
         raise TypeError(f"undecidable: {doc['undecidable']!r}")
+    blocks = _bool(doc["blocks"], "blocks")
     keys = {_str(t, "tenants"): [_key_verdict(t, r) for r in _rows(rows, f"tenants.{t}")]
             for t, rows in _mapping(doc["tenants"], "tenants").items()}
     findings = [_finding(f) for f in _rows(doc["findings"], "findings")]
@@ -235,7 +248,7 @@ def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
                   _tuple(_mapping(c, f"key_checks.{t}")["version_labels"], f"key_checks.{t}.version_labels"),
                   _tuple(c["renames"], f"key_checks.{t}.renames"))
               for t, c in _mapping(doc["key_checks"], "key_checks").items()}
-    return TreeVerdict(keys, findings, doc["undecidable"], checks)
+    return TreeVerdict(keys, findings, doc["undecidable"], checks, blocks)
 
 
 def judge_tree(conf_d: str | os.PathLike[str], *, at: str | None = None, binary: str | None = None,

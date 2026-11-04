@@ -2,6 +2,7 @@
   "schema": "da-guard.key-verdict/v2",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": false,
+  "blocks": true,
   "tenants": {
     "db-a": [
       {
@@ -135,7 +136,8 @@
       ],
       "reason": "unregistered",
       "served_family": [],
-      "served_from": []
+      "served_from": [],
+      "blocks": true
     },
     {
       "severity": "error",
@@ -147,7 +149,8 @@
       ],
       "reason": "no_row",
       "served_family": [],
-      "served_from": []
+      "served_from": [],
+      "blocks": true
     },
     {
       "severity": "warning",
@@ -159,7 +162,8 @@
       ],
       "reason": "disable_noop",
       "served_family": [],
-      "served_from": []
+      "served_from": [],
+      "blocks": false
     }
   ],
   "key_checks": {

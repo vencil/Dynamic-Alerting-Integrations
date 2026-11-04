@@ -67,22 +67,37 @@ def _key_records(doc: dict) -> list[dict]:
     return [r for r in doc["findings"] if r["kind"].startswith("key_")]
 
 
-@pytest.mark.parametrize("files,rc", [(THRESHOLDS_ONLY, 0), (NOTHING_RENDERED, 1), (ROUTED, 0)],
+@pytest.mark.parametrize("files", [THRESHOLDS_ONLY, NOTHING_RENDERED, ROUTED],
                          ids=["no-routing", "nothing-rendered", "routed"])
-def test_validate_reports_the_shared_verdict_and_keeps_its_exit_code(tmp_path, files, rc):
+def test_validate_fails_on_the_shared_verdicts_errors(tmp_path, files):
+    """#3016: an error the shared verdict gives fails `--validate` (rc 1) on
+    every path the run ends on — after rendering, and where it ends with
+    nothing to render."""
     res, doc = _cli(tmp_path, files, "--validate", "--strict")
-    assert res.returncode == rc, res.stderr
+    assert res.returncode == 1, res.stderr
     tree = tmp_path / "conf.d"
     want = [kv.finding_line(f, 5) for f in kv.judge_tree(tree).findings]
     assert any("mysql_conections" in w for w in want), want  # the case judges something
     for w in want:
         assert f"key verdict: {w}" in res.stderr, res.stderr
     recs = _key_records(doc)
-    assert [r["message"] for r in recs] == [f"WARN: key verdict: {w}" for w in want]
+    assert [r["message"] for r in recs] == [f"ERROR: key verdict: {w}" for w in want]
     for r in recs:
-        assert (r["kind"], r["blocks"], r["severity"]) == ("key_unread", "never", "warning"), r
+        assert (r["kind"], r["blocks"], r["severity"]) == ("key_unread", "validate", "error"), r
         assert (r["tenant"], r["file"]) == ("t-a", "t-a.yaml"), r
     assert {r["field"] for r in recs} >= {"mysql_conections"}
+    assert doc["exit_code"] == 1
+
+
+def test_a_warning_alone_does_not_fail_validate(tmp_path):
+    """A `disable` that switches nothing off is a warning (decision 8): it is
+    reported, `blocks: never`, and the run passes."""
+    files = {"_defaults.yaml": DEFAULTS,
+             "t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"70\"\n    mysql_slave_lagg: disable\n"}
+    res, doc = _cli(tmp_path, files, "--validate")
+    assert res.returncode == 0, res.stderr
+    assert [(r["kind"], r["blocks"], r["severity"]) for r in _key_records(doc)] == [
+        ("key_disable_noop", "never", "warning")], doc
 
 
 def test_the_verdict_lines_are_validate_configs(tmp_path):
@@ -110,14 +125,27 @@ def test_a_refused_tree_is_not_judged(tmp_path):
     assert _key_records(doc) == []
 
 
-def test_no_root_platform_file_is_said(tmp_path):
+def test_a_threshold_key_no_root_platform_file_lets_the_verdict_judge_fails(tmp_path):
+    """#3016 option A: an undecidable threshold key fails `--validate`, as
+    tenant-api refuses such a write (422)."""
     files = {"t-a.yaml": "tenants:\n  t-a:\n    mysql_connections: \"70\"\n"}
     res, doc = _cli(tmp_path, files, "--validate")
-    assert res.returncode == 0, res.stderr
+    assert res.returncode == 1, res.stderr
     recs = _key_records(doc)
     assert [(r["kind"], r["severity"], r["blocks"]) for r in recs] == [
-        ("key_undecidable", "note", "never")], recs
-    assert "cannot be judged (undecidable)" in recs[0]["message"]
+        ("key_undecidable", "error", "validate")], recs
+    assert "1 threshold key(s) cannot be judged (undecidable)" in recs[0]["message"]
+
+
+def test_a_tree_with_only_routing_and_no_root_platform_file_passes(tmp_path):
+    """ADR-038 decision 7: a tree with only routing settings has no
+    threshold key the verdict could not judge — rc 0, the line a note."""
+    files = {"t-a.yaml": "tenants:\n  t-a:\n    _routing:\n      receiver:\n        type: webhook\n"
+                         "        url: https://hooks.example.com/t-a\n"}
+    res, doc = _cli(tmp_path, files, "--validate")
+    assert res.returncode == 0, res.stderr
+    assert [(r["kind"], r["severity"], r["blocks"]) for r in _key_records(doc)] == [
+        ("key_undecidable", "note", "never")], doc
 
 
 # ── in-process: a verdict that cannot be given, and who asks for one ──────
@@ -136,12 +164,14 @@ def _main(tmp_path, monkeypatch, judge, files=THRESHOLDS_ONLY, **kw):
     SystemExit(3),
     ValueError("anything else"),
 ], ids=["served-values", "no-da-guard", "system-exit", "value-error"])
-def test_a_verdict_that_fails_is_a_notice_never_a_refusal(tmp_path, monkeypatch, capsys, exc):
+def test_a_verdict_that_fails_fails_validate(tmp_path, monkeypatch, capsys, exc):
+    """#3016: no verdict, no pass — as tenant-api refuses a write it has no
+    verdict for (decision 5)."""
     def fail(*_a, **_k):
         raise exc
-    assert _main(tmp_path, monkeypatch, fail) == 0
+    assert _main(tmp_path, monkeypatch, fail) == 1
     err = capsys.readouterr().err
-    assert "NOTICE: key verdict incomplete: the keys no reader reads were not judged" in err, err
+    assert "ERROR: key verdict incomplete: the keys no reader reads were not judged" in err, err
     assert type(exc).__name__ in err
 
 
@@ -205,9 +235,11 @@ KEY_CHECKS = {
 def test_validate_prints_the_exporters_key_checks(tmp_path):
     """A `version` label the exporter refuses and a retired spelling: the
     exporter's own lines (da-guard served-values' key_checks), not a judgement
-    of this tool's; reported only, the exit code unchanged."""
+    of this tool's; reported only (`blocks: never`). The run fails on the
+    dimensional key itself, which no row reads (its `version` label is not
+    declared under `dimensions:`)."""
     res, doc = _cli(tmp_path, KEY_CHECKS, "--validate")
-    assert res.returncode == 0, res.stderr
+    assert res.returncode == 1, res.stderr
     recs = {r["kind"]: r for r in _key_records(doc)}
     label, renamed = recs.get("key_version_label"), recs.get("key_renamed")
     assert label and 'version "V2!"' in label["message"], doc

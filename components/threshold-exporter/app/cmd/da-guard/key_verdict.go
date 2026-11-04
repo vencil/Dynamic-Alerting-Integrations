@@ -69,6 +69,9 @@ type keyVerdictDoc struct {
 	// Undecidable: no root platform file was read (decision 7): a threshold
 	// key's verdict is "undecidable".
 	Undecidable bool `json:"undecidable"`
+	// Blocks: a gate that judges the whole tree refuses it — some finding
+	// blocks, or some key is undecidable (keyverdict.Blocks; #3016).
+	Blocks bool `json:"blocks"`
 	// Tenants: tenant → the verdict on each of its keys, sorted by key.
 	Tenants map[string][]keyverdict.KeyVerdict `json:"tenants"`
 	// Findings: what a report prints, error first.
@@ -550,6 +553,7 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 		return fail(res.why)
 	}
 	out := keyVerdictDoc{Schema: keyVerdictSchema, At: at.Format(time.RFC3339), Undecidable: res.tree.Undecidable,
+		Blocks:  res.tree.Blocks,
 		Tenants: res.tree.Keys, Findings: res.tree.Findings, KeyChecks: res.keyChecks,
 		ParseFailed: nonNilStrings(res.parseFailed), Unreadable: res.unreadable,
 		tenantSubset: subset(requested, func(t string) bool { return res.computed[t] })}

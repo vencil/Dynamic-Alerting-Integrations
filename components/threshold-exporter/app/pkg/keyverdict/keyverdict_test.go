@@ -48,7 +48,7 @@ func TestJudge_AnInheritedReservedKeyTheResolverReadIsRead(t *testing.T) {
 		Effective: map[string]EffectiveTenant{"t1": {Config: map[string]any{"_silent_mode": "warning"},
 			Sources: map[string]config.KeySource{"_silent_mode": {Layer: config.KeyLayerProfile, File: "_profiles.yaml"}}}},
 	})
-	if v := one(t, tree, "t1", "_silent_mode"); v.Verdict != Unread || deref(v.Severity) != SeverityNotice {
+	if v := one(t, tree, "t1", "_silent_mode"); v.Verdict != Unread || deref(v.Severity) != SeverityError {
 		t.Fatalf("no reading: %+v", v)
 	}
 }
@@ -136,7 +136,8 @@ func TestJudge_APolicyRuleNamesAKeyAsPolicyAsCodeSpellsIt(t *testing.T) {
 // A reserved key the effective config shows in a layer the exporter does not
 // read it in (the root's top level, level 0: no registry layer) is read by no
 // one — the served reading's values list `_silent_mode` for every tenant,
-// which is no evidence it was read. A notice: the platform's file.
+// which is no evidence it was read. An error, though the file is the
+// platform's (#3394: the severity describes the defect).
 func TestJudge_AReservedKeyInALayerTheExporterDoesNotReadIsUnread(t *testing.T) {
 	t.Parallel()
 	yes := true
@@ -151,7 +152,7 @@ func TestJudge_AReservedKeyInALayerTheExporterDoesNotReadIsUnread(t *testing.T) 
 			DefaultsChain: []string{"_defaults.yaml"}}},
 	})
 	v := one(t, tree, "t1", "_silent_mode")
-	if len(v.ReadBy) != 0 || v.Verdict != Unread || deref(v.Severity) != SeverityNotice || deref(v.File) != "_defaults.yaml" {
+	if len(v.ReadBy) != 0 || v.Verdict != Unread || deref(v.Severity) != SeverityError || deref(v.File) != "_defaults.yaml" {
 		t.Fatalf("verdict %+v", v)
 	}
 }

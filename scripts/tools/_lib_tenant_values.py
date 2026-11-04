@@ -867,12 +867,12 @@ def _run_da_guard(
         # A field every da-guard of this tool's version writes, or a schema the
         # caller names as an older version of its document, is a da-guard
         # older than this tool — named so, not as broken output (key-verdict's
-        # document gained `parse_failed` and a v2 after its first version,
-        # #3489). A schema this reader does not know may be a newer one: not
+        # document gained `parse_failed`, a v2 and `blocks` after its first
+        # version, #3489, #3016). A schema this reader does not know may be a newer one: not
         # called older.
         stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
                  if isinstance(e, _OlderSchema)
-                 or (isinstance(e, KeyError) and (e.args in (("skipped",), ("unreadable",), ("parse_failed",))
+                 or (isinstance(e, KeyError) and (e.args in (("skipped",), ("unreadable",), ("parse_failed",), ("blocks",))
                                                   or (e.args == ("schema",) and subcommand == SUBCOMMAND)))
                 else "")
         # Not the tree's either way: da-guard writes this JSON whatever the

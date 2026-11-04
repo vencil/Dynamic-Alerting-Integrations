@@ -2,6 +2,7 @@
   "schema": "da-guard.key-verdict/v2",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": false,
+  "blocks": true,
   "tenants": {
     "db-a": [
       {
@@ -10,7 +11,7 @@
         "file": "_defaults.yaml",
         "read_by": [],
         "verdict": "unread",
-        "severity": "notice",
+        "severity": "error",
         "reason": "not_exporter_key",
         "disable": null,
         "served_family": [],
@@ -40,7 +41,7 @@
         "file": "_defaults.yaml",
         "read_by": [],
         "verdict": "unread",
-        "severity": "notice",
+        "severity": "error",
         "reason": "unregistered",
         "disable": null,
         "served_family": [],
@@ -85,7 +86,7 @@
         "file": "_defaults.yaml",
         "read_by": [],
         "verdict": "unread",
-        "severity": "notice",
+        "severity": "error",
         "reason": "not_exporter_key",
         "disable": null,
         "served_family": [],
@@ -115,7 +116,7 @@
         "file": "_defaults.yaml",
         "read_by": [],
         "verdict": "unread",
-        "severity": "notice",
+        "severity": "error",
         "reason": "unregistered",
         "disable": null,
         "served_family": [],
@@ -156,18 +157,6 @@
     {
       "severity": "error",
       "kind": "unread",
-      "key": "owner_tag",
-      "file": "db-b.yaml",
-      "tenants": [
-        "db-b"
-      ],
-      "reason": "no_row",
-      "served_family": [],
-      "served_from": []
-    },
-    {
-      "severity": "notice",
-      "kind": "unread",
       "key": "_namespaces",
       "file": "_defaults.yaml",
       "tenants": [
@@ -176,10 +165,11 @@
       ],
       "reason": "not_read_in_profile",
       "served_family": [],
-      "served_from": []
+      "served_from": [],
+      "blocks": true
     },
     {
-      "severity": "notice",
+      "severity": "error",
       "kind": "unread",
       "key": "_routng",
       "file": "_defaults.yaml",
@@ -189,7 +179,21 @@
       ],
       "reason": "unregistered",
       "served_family": [],
-      "served_from": []
+      "served_from": [],
+      "blocks": true
+    },
+    {
+      "severity": "error",
+      "kind": "unread",
+      "key": "owner_tag",
+      "file": "db-b.yaml",
+      "tenants": [
+        "db-b"
+      ],
+      "reason": "no_row",
+      "served_family": [],
+      "served_from": [],
+      "blocks": true
     }
   ],
   "key_checks": {

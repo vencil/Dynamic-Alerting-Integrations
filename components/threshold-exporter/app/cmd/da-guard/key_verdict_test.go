@@ -94,12 +94,13 @@ func TestKeyVerdict_TheErrorLayer(t *testing.T) {
 		{"no root platform file: threshold keys are undecidable, reserved keys judged",
 			map[string]string{"a.yaml": tenant(a, "    mysql_conections: \"70\"\n    _routng: x\n")},
 			[]string{a + " _routng unregistered a.yaml"}},
-		{"a key from a platform file or a profile is the platform's notice",
+		{"a key from a platform file or a profile is an error too (#3394)",
 			map[string]string{"_defaults.yaml": kvRoot,
 				"_platform.yaml": tenant(a, "    mysql_conections: \"70\"\n    _routng: x\n"),
 				"_profiles.yaml": "profiles:\n  p1:\n    redis_memroy: 5\n",
 				"a.yaml":         tenant(a, "    _profile: p1\n")},
-			[]string{}},
+			[]string{a + " _routng unregistered _platform.yaml", a + " mysql_conections no_row _platform.yaml",
+				a + " redis_memroy no_row _profiles.yaml"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -150,8 +151,9 @@ func TestKeyVerdict_Subcommand(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
 		t.Fatal(err)
 	}
-	if doc["schema"] != keyVerdictSchema || doc["at"] != "2026-07-01T03:00:00Z" || doc["undecidable"] != false {
-		t.Fatalf("head %v %v %v", doc["schema"], doc["at"], doc["undecidable"])
+	if doc["schema"] != keyVerdictSchema || doc["at"] != "2026-07-01T03:00:00Z" || doc["undecidable"] != false ||
+		doc["blocks"] != true {
+		t.Fatalf("head %v %v %v %v", doc["schema"], doc["at"], doc["undecidable"], doc["blocks"])
 	}
 	misspelt := map[string]any{"key": "mysql_conections", "layer": "tenant", "file": "a.yaml", "read_by": []any{},
 		"verdict": "unread", "severity": "error", "reason": "no_row", "disable": nil, "served_family": []any{},
@@ -164,7 +166,7 @@ func TestKeyVerdict_Subcommand(t *testing.T) {
 		t.Fatalf("t1's misspelt key %v, want %v", rows[0], misspelt)
 	}
 	finding := map[string]any{"severity": "error", "kind": "unread", "key": "mysql_conections", "file": "a.yaml",
-		"tenants": []any{"t1"}, "reason": "no_row", "served_family": []any{}, "served_from": []any{}}
+		"tenants": []any{"t1"}, "reason": "no_row", "served_family": []any{}, "served_from": []any{}, "blocks": true}
 	if fs := doc["findings"].([]any); len(fs) != 1 || !reflect.DeepEqual(fs[0], finding) {
 		t.Fatalf("findings %v, want [%v]", fs, finding)
 	}
@@ -223,6 +225,27 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 		code, res := runBatch(t, writeCmd, set(`redis_memory{queue="q"}`, "5"), "--config-dir", root)
 		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread a.yaml t1"}) {
 			t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
+		}
+	})
+	t.Run("a new misspelt key in a profile file is refused (#3016, #3394)", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"_profiles.yaml": "profiles:\n  p1:\n    mysql_connections: \"70\"\n",
+			"a.yaml":         "tenants:\n  t1:\n    _profile: p1\n"})
+		in := `{"files":[{"path":"_profiles.yaml","ops":[{"op":"set","path":["profiles","p1","mysql_conections"],` +
+			`"value":{"str":"60"}}]}]}`
+		code, res := runBatch(t, writeCmd, in, "--config-dir", root)
+		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread _profiles.yaml t1"}) {
+			t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
+		}
+		// The same key already there: an edit beside it is not refused.
+		root = writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"_profiles.yaml": "profiles:\n  p1:\n    mysql_conections: \"70\"\n",
+			"a.yaml":         "tenants:\n  t1:\n    _profile: p1\n"})
+		in = `{"files":[{"path":"_profiles.yaml","ops":[{"op":"set","path":["profiles","p1","redis_memory"],` +
+			`"value":{"str":"60"}}]}]}`
+		if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitOK {
+			t.Fatalf("an existing error blocked another key: exit %d worsened %v", code, worsenedOf(res))
 		}
 	})
 	t.Run("a key a policy rule names in the other #1231 spelling is read, not refused", func(t *testing.T) {

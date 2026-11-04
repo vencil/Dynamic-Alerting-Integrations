@@ -262,8 +262,8 @@ def test_skipped_entry_document(tmp_path):
         ("timing_value_replaced", "alpha", "group_wait"),
         ("unknown_receiver_type", "beta", "receiver.type"),
     }
-    assert all(r["blocks"] == ("never" if r["kind"].startswith("key_") else "validate")
-               for r in doc["findings"] if r["kind"] != "unclassified")
+    # #3016: the shared verdict's error blocks under --validate like the rest.
+    assert all(r["blocks"] == "validate" for r in doc["findings"] if r["kind"] != "unclassified")
 
 
 def test_caller_error_exit_still_writes_the_document(tmp_path):

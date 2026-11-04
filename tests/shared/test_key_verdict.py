@@ -133,8 +133,9 @@ def test_one_platform_side_disable_is_one_finding_naming_every_source(tmp_path):
                     ("t1/_defaults.yaml, t2/_defaults.yaml, t3/_defaults.yaml",))]
 
 
-def test_a_platform_side_typo_is_one_notice_naming_the_file_and_its_tenants(tmp_path):
-    """profile 裡的錯字：每個選用它的租戶都讀不到，報成一筆 notice，指名 profile 檔。"""
+def test_a_platform_side_typo_is_one_error_naming_the_file_and_its_tenants(tmp_path):
+    """profile 裡的錯字：每個選用它的租戶都讀不到，報成一筆 error，指名 profile 檔
+    （#3394：等級描述缺陷，不因寫在平台側而降級；誰被擋看檔，決定 6）。"""
     files = {"_defaults.yaml": "defaults:\n  mysql_connections: 80\n",
              "_profiles.yaml": "profiles:\n  p1:\n    mysql_conections: 70\n"}
     for t in ("ta", "tb", "tc"):
@@ -142,9 +143,10 @@ def test_a_platform_side_typo_is_one_notice_naming_the_file_and_its_tenants(tmp_
     t = kv.judge_tree(_tree(tmp_path, files))
     for tenant in ("ta", "tb", "tc"):
         v = _by_key(t, tenant)["mysql_conections"]
-        assert (v.verdict, v.severity, v.file) == ("unread", "notice", "_profiles.yaml")
+        assert (v.verdict, v.severity, v.file) == ("unread", "error", "_profiles.yaml")
     unread = [f for f in t.findings if f.key == "mysql_conections"]
-    assert len(unread) == 1 and unread[0].tenants == ("ta", "tb", "tc")
+    assert len(unread) == 1 and unread[0].tenants == ("ta", "tb", "tc") and unread[0].blocks
+    assert t.blocks
 
 
 def test_a_tenant_own_typo_is_one_error_per_tenant(tmp_path):
@@ -159,8 +161,8 @@ def test_a_tenant_own_typo_is_one_error_per_tenant(tmp_path):
 
 def test_an_unregistered_key_the_root_declares_is_unread(tmp_path):
     """#3045：根 defaults 宣告了沒登記的 `_myth`，exporter 也不送（任何一層都不送）。
-    所以它和其他沒人讀的鍵一樣是 `unread`：寫在租戶自己的檔是 error、算在該租戶；
-    只從根 defaults 繼承的是 notice，報一筆在根 defaults，列出它到達的租戶。"""
+    所以它和其他沒人讀的鍵一樣是 `unread`、error：寫在租戶自己的檔的算在該租戶；
+    只從根 defaults 繼承的報一筆在根 defaults，列出它到達的租戶（#3394）。"""
     t = kv.judge_tree(_tree(tmp_path, {
         "_defaults.yaml": "defaults:\n  mysql_connections: 80\n  _myth: 5\n",
         "ta.yaml": "tenants:\n  ta:\n    _myth: 7\n",
@@ -169,11 +171,11 @@ def test_an_unregistered_key_the_root_declares_is_unread(tmp_path):
     assert (a.read_by, a.verdict, a.severity, a.reason, a.file) == (
         (), "unread", "error", "unregistered", "ta.yaml")
     assert (b.read_by, b.verdict, b.severity, b.reason, b.file) == (
-        (), "unread", "notice", "unregistered", "_defaults.yaml")
+        (), "unread", "error", "unregistered", "_defaults.yaml")
     assert a.served is None and b.served is None
     found = sorted((f.kind, f.severity, f.file, f.tenants) for f in t.findings if f.key == "_myth")
-    assert found == [("unread", "error", "ta.yaml", ("ta",)),
-                     ("unread", "notice", "_defaults.yaml", ("tb",))]
+    assert found == [("unread", "error", "_defaults.yaml", ("tb",)),
+                     ("unread", "error", "ta.yaml", ("ta",))]
 
 
 def test_no_root_platform_file_leaves_threshold_keys_undecidable(tmp_path):
@@ -415,12 +417,12 @@ _ROW = {"key": "k", "layer": "tenant", "file": "a.yaml", "read_by": [], "verdict
         "severity": "error", "reason": "no_row", "disable": None, "served_family": [],
         "value": 1, "served": None}
 _FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml", "tenants": ["t"],
-            "reason": "no_row", "served_family": [], "served_from": []}
+            "reason": "no_row", "served_family": [], "served_from": [], "blocks": True}
 
 
 def _doc(**over):
     doc = {"undecidable": False, "tenants": {"t": [dict(_ROW)]}, "findings": [dict(_FINDING)],
-           "key_checks": {"t": {"version_labels": [], "renames": []}}}
+           "key_checks": {"t": {"version_labels": [], "renames": []}}, "blocks": True}
     doc.update(over)
     return doc
 
@@ -439,6 +441,8 @@ def _doc(**over):
     _doc(findings=[dict(_FINDING, severity=None)]),
     _doc(findings=[dict(_FINDING, kind="typo")]),
     _doc(undecidable="no"),
+    _doc(blocks="yes"),
+    _doc(findings=[dict(_FINDING, blocks=None)]),
 ], ids=lambda d: next(iter(k for k in d if d[k] != _doc()[k]), "?"))
 def test_a_document_this_reader_cannot_read_is_refused_not_read_as_another_answer(doc):
     """#3489 審查：讀不懂的值不能被讀成「判完、沒有 error」——產生器容器以
