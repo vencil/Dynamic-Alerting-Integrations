@@ -335,6 +335,7 @@ nav:
       - ADR-024 宣告式 Dimensional 告警引擎: adr/024-version-aware-threshold-via-dimensional-label.md
       - ADR-025 告警平面自我存活性: adr/025-alerting-plane-self-liveness.md
       - ADR-026 Node/Cluster 維護告警抑制: adr/026-node-maintenance-liveness-suppression.md
+      - ADR-027 tenant-api 呼叫端身分只在 pod 內建立: adr/027-tenant-api-caller-identity.md
       - ADR-028 Federation 撤銷儲存 tamper-evidence: adr/028-federation-revocation-tamper-evidence.md
       - ADR-029 租戶自訂告警跨租戶查詢隔離: adr/029-custom-alert-cross-tenant-query-scoping.md
       - ADR-030 決策層遷移驗證: adr/030-decision-layer-migration-validation.md
