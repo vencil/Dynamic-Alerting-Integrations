@@ -10,12 +10,17 @@
 #   4) Per-account isolation: a rejected account and a healthy account evaluated
 #      together produce exactly ONE alert (the rejected one), not a smeared
 #      platform-wide verdict — the `sum by(account_id)` keeps accounts separate.
-#   5) TenantProjectionFanoutDiscardSpike FIRES on a SUSTAINED drop rate above the
-#      floor, summed across multiple Vector DaemonSet pods (`sum without
-#      (instance, pod)` collapses per-pod series) — exercises the topology-label
-#      handling on real-shaped Vector metric series, not a lab-clean single series.
-#   6) It does NOT fire at/below the floor — proves it is the `> N` form, NOT the
-#      always-true `> 0` form the runbook §8.7 prose naively implied.
+#   5) TenantProjectionFanoutDiscardSpike (#1595 rework) FIRES on a surge above
+#      3x its own 1-day baseline, summed across Vector DaemonSet pods (`sum
+#      without (instance, pod)` collapses per-pod series).
+#   6) It does NOT fire on a high but STEADY rate (the old `> 5` would have).
+#   7) It does NOT fire on a relative surge below the 0.1/s absolute floor.
+#   8) It DOES fire when a series with no history comes up above the floor
+#      (the baseline is a time average with missing points = 0).
+#   9) It ignores intentional="false" drops.
+#  10) TenantProjectionMappingErrors FIRES on any intentional="false"
+#      (VRL runtime error) drop in tenant_project.
+#  11) It does NOT fire on intentional="true" aborts alone.
 rule_files:
   - ../../rule-packs/rule-pack-platform.yaml
 
@@ -120,20 +125,28 @@ tests:
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md"
               summary: "Log-query requests for account 1000 are mostly rejected"
 
-  # 5) Fan-out discard spike fires, summed across two DaemonSet pods. Each pod
-  #    drops 360/min (6/s over [10m]); sum = 12/s > 5 floor → fires after 15m.
-  #    The two series differ ONLY in instance/pod, so a correct `sum without
-  #    (instance, pod)` collapses them into one 12/s series (and does NOT strip
-  #    component_id, which is pinned by the matcher).
+  # ── TenantProjectionFanoutDiscardSpike (#1595 rework) ─────────────────────
+  # The series carry Vector's real label set for a remap drop counter
+  # (component_id / component_kind / component_type / intentional) plus the
+  # per-DaemonSet-pod scrape labels (instance / pod) that `sum without
+  # (instance, pod)` must collapse. Each fixture runs >1d (1541 samples at 1m)
+  # so the 1-day baseline subquery `[1d:10m]` is fully populated at eval time.
+
+  # 5) Surge fires, summed across two DaemonSet pods. Each pod aborts 30/min
+  #    (0.5/s) for 25h, then 300/min (5/s). Platform-wide: 1/s baseline -> 10/s.
+  #    At eval (30m into the surge) the 1-day time average is ~1.2/s, so
+  #    10 > 3 x 1.2 and 10 > 0.1 -> fires after the 15m hold. The two series
+  #    differ ONLY in instance/pod, so a correct `sum without (instance, pod)`
+  #    yields ONE series that keeps component_id / intentional.
   - interval: 1m
-    name: fanout-discard-spike-fires-summed-across-pods
+    name: fanout-discard-surge-over-baseline-fires-summed-across-pods
     input_series:
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
-        values: '0+360x40'
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",instance="10.0.0.2:9598",pod="vector-bbbbb"}'
-        values: '0+360x40'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+        values: '0+30x1499 45270+300x40'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.2:9598",pod="vector-bbbbb"}'
+        values: '0+30x1499 45270+300x40'
     alert_rule_test:
-      - eval_time: 25m
+      - eval_time: 1530m
         alertname: TenantProjectionFanoutDiscardSpike
         exp_alerts:
           - exp_labels:
@@ -141,32 +154,165 @@ tests:
               alert_source: platform
               component_id: tenant_project
               component_kind: transform
+              component_type: remap
+              intentional: "true"
             exp_annotations:
               description: |
-                The (b) tenant-sanitized projection (`tenant_project` remap)
-                is `abort`-dropping events well above the operational-log
-                baseline. The platform 0:0 copy is unaffected (this is the
-                tenant-facing projection only), but tenants whose rows are
-                being dropped will NOT see their own platform-operational
-                logs. Likely causes: (a) a tenant sending federation_audit
-                traffic but missing from helm/vector `tenantProjections`
-                (registry desync — reconcile `_account_registry.yaml` →
-                `tenantProjections`); (b) a malicious / malformed payload
-                flood. This is a COARSE signal — it cannot name the affected
-                account; correlate with the Vector logs and the account
-                registry. See platform-log-aggregation-runbook §8.7.
+                The `tenant_project` remap is aborting federation_audit rows
+                whose tenant_id is blank or not in helm/vector
+                `tenantProjections` at 10/s, more than 3x
+                its own 1-day average, for 15m. Those rows reach the platform
+                0:0 copy but no tenant partition. Likely causes: (a) audit
+                traffic from a tenant that has no projection yet (new tenant,
+                or `tenantProjections` behind `_account_registry.yaml`);
+                (b) a forged or malformed payload flood. This is a coarse
+                surge signal: it cannot name the account and it is NOT a
+                registry-desync detector — a small or long-standing gap is
+                part of the baseline and does not fire, and a permanent step
+                stops firing after about a day. Query the 0:0 store for
+                recent `log_type:federation_audit` rows by `tenant_id` and
+                compare against `tenantProjections`. See
+                platform-log-aggregation-runbook §8.7.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md"
-              summary: "Vector tenant-projection drop rate >5/s for 15m — above baseline (usually rising operational-log volume, NOT registry desync; compare baseline first)"
+              summary: "Unprojected tenant audit rows surged above 3x their 1-day baseline for 15m"
 
-  # 6) Below-floor steady drops do NOT fire — proves `> 5`, not always-true `> 0`.
-  #    A single pod dropping 120/min = 2/s < 5 floor (the by-design operational
-  #    non-audit drop baseline must NOT page).
+  # 6) HIGH but STEADY rate does NOT fire. Two pods at 600/min each = 20/s for
+  #    25h: the current rate equals its own baseline. The old `> 5` constant
+  #    would have fired here for the whole day — this is the case that made it
+  #    unusable on a busy deployment.
   - interval: 1m
-    name: fanout-discard-below-floor-no-fire
+    name: fanout-discard-steady-high-rate-no-fire
     input_series:
-      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
-        values: '0+120x40'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+        values: '0+600x1540'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.2:9598",pod="vector-bbbbb"}'
+        values: '0+600x1540'
     alert_rule_test:
-      - eval_time: 25m
+      - eval_time: 1530m
         alertname: TenantProjectionFanoutDiscardSpike
+        exp_alerts: []
+
+  # 7) Relative surge BELOW the absolute floor does NOT fire. Zero for 25h,
+  #    then 3/min (0.05/s): far above 3x a ~0 baseline, but under the 0.1/s
+  #    floor — a handful of unprojected rows on a quiet deployment must not
+  #    page. Proves the floor clause.
+  - interval: 1m
+    name: fanout-discard-surge-below-floor-no-fire
+    input_series:
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+        values: '0x1499 3+3x40'
+    alert_rule_test:
+      - eval_time: 1530m
+        alertname: TenantProjectionFanoutDiscardSpike
+        exp_alerts: []
+
+  # 8) A series with NO history that comes up above the floor fires. The
+  #    baseline is the 1-day TIME average (missing points = 0); an
+  #    avg_over_time baseline would average only the 30m that exist, equal
+  #    the current rate, and never fire on first appearance.
+  - interval: 1m
+    name: fanout-discard-first-appearance-above-floor-fires
+    input_series:
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TenantProjectionFanoutDiscardSpike
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              component_id: tenant_project
+              component_kind: transform
+              component_type: remap
+              intentional: "true"
+            exp_annotations:
+              description: |
+                The `tenant_project` remap is aborting federation_audit rows
+                whose tenant_id is blank or not in helm/vector
+                `tenantProjections` at 1/s, more than 3x
+                its own 1-day average, for 15m. Those rows reach the platform
+                0:0 copy but no tenant partition. Likely causes: (a) audit
+                traffic from a tenant that has no projection yet (new tenant,
+                or `tenantProjections` behind `_account_registry.yaml`);
+                (b) a forged or malformed payload flood. This is a coarse
+                surge signal: it cannot name the account and it is NOT a
+                registry-desync detector — a small or long-standing gap is
+                part of the baseline and does not fire, and a permanent step
+                stops firing after about a day. Query the 0:0 store for
+                recent `log_type:federation_audit` rows by `tenant_id` and
+                compare against `tenantProjections`. See
+                platform-log-aggregation-runbook §8.7.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md"
+              summary: "Unprojected tenant audit rows surged above 3x their 1-day baseline for 15m"
+
+  # 9) The spike ignores unintentional (VRL-error) drops: a surge that is
+  #    entirely intentional="false" belongs to TenantProjectionMappingErrors.
+  - interval: 1m
+    name: fanout-discard-ignores-unintentional-drops
+    input_series:
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+        values: '0+60x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: TenantProjectionFanoutDiscardSpike
+        exp_alerts: []
+
+  # ── TenantProjectionMappingErrors (#1595) ─────────────────────────────────
+
+  # 10) Fires on ANY unintentional drop. Pod a's intentional="false" counter
+  #     sits at 0, then climbs 1/min from minute 10; pod b's stays 0. The
+  #     series exist from t=0 so `increase` has a sample to diff against.
+  #     Sum over (10m, 20m] = 10. Pod a's intentional="true" counter climbing
+  #     at the same time must NOT add a second alert.
+  - interval: 1m
+    name: projection-mapping-errors-fires-on-unintentional-drop
+    input_series:
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+        values: '0x9 1+1x30'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.2:9598",pod="vector-bbbbb"}'
+        values: '0x40'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+        values: '0+600x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantProjectionMappingErrors
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              component_id: tenant_project
+              component_kind: transform
+              component_type: remap
+              intentional: "false"
+            exp_annotations:
+              description: |
+                The `tenant_project` remap dropped
+                10 event(s) in the last 10m because its VRL
+                hit a runtime error (Vector `intentional="false"`), not because
+                of an eligibility abort. drop_on_error keeps this fail-closed —
+                no half-processed row reaches a tenant partition — but the
+                affected rows are missing from their tenant's projection (the
+                platform 0:0 copy is intact). This is always a bug: an
+                audit-payload shape the VRL does not handle, or a chart change
+                that broke the projection. Check the Vector pod logs for the
+                remap error, then the `tenant_project` source in
+                helm/vector/templates/configmap.yaml.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md"
+              summary: "Vector tenant projection is dropping rows on VRL runtime errors"
+
+  # 11) Intentional drops alone never fire it. A heavy intentional="true"
+  #     abort rate (unknown tenant_ids) with the intentional="false" counter
+  #     flat at 0 -> nothing. Without the `intentional="false"` matcher this
+  #     would fire on every unprojected audit row.
+  - interval: 1m
+    name: projection-mapping-errors-ignores-intentional-aborts
+    input_series:
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="true",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+        values: '0+600x40'
+      - series: 'vector_component_discarded_events_total{component_id="tenant_project",component_kind="transform",component_type="remap",intentional="false",instance="10.0.0.1:9598",pod="vector-aaaaa"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TenantProjectionMappingErrors
         exp_alerts: []

@@ -762,28 +762,49 @@ data:
     \ account_id is stamped,\n\n        so it is NOT counted here (attack noise; see\
     \ jwt_authn stats,\n\n        per ADR-020).\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
     \      summary: Log-query requests for account {{ $labels.account_id }} are mostly\
-    \ rejected\n  - alert: TenantProjectionFanoutDiscardSpike\n    expr: \"sum without\
-    \ (instance, pod) (\\n  rate(vector_component_discarded_events_total{component_id=\\\
-    \"tenant_project\\\"}[10m])\\n) > 5\\n\"\n    for: 15m\n    labels:\n      alert_source:\
-    \ platform\n      severity: warning\n    annotations:\n      description: 'The\
-    \ (b) tenant-sanitized projection (`tenant_project` remap)\n\n        is `abort`-dropping\
-    \ events well above the operational-log\n\n        baseline. The platform 0:0\
-    \ copy is unaffected (this is the\n\n        tenant-facing projection only), but\
-    \ tenants whose rows are\n\n        being dropped will NOT see their own platform-operational\n\
-    \n        logs. Likely causes: (a) a tenant sending federation_audit\n\n     \
-    \   traffic but missing from helm/vector `tenantProjections`\n\n        (registry\
-    \ desync — reconcile `_account_registry.yaml` →\n\n        `tenantProjections`);\
-    \ (b) a malicious / malformed payload\n\n        flood. This is a COARSE signal\
-    \ — it cannot name the affected\n\n        account; correlate with the Vector\
-    \ logs and the account\n\n        registry. See platform-log-aggregation-runbook\
-    \ §8.7.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
-    \      summary: Vector tenant-projection drop rate >5/s for 15m — above baseline\
-    \ (usually rising operational-log volume, NOT registry desync; compare baseline\
-    \ first)\n  - alert: VectorProjectionGateMismatch\n    expr: \"max by (mode, namespace)\
-    \ (\\n  vector_tenant_projection_gate_info{category=\\\"mismatch\\\"}\\n) > 0\\\
-    n\"\n    for: 5m\n    labels:\n      alert_source: platform\n      severity: critical\n\
-    \    annotations:\n      description: 'A `tenantProjections` entry''s accountId\
-    \ does not match the\n\n        AccountID registry''s (`_account_registry.yaml`)\
+    \ rejected\n  - alert: TenantProjectionMappingErrors\n    expr: \"sum without\
+    \ (instance, pod) (\\n  increase(vector_component_discarded_events_total{component_id=\\\
+    \"tenant_project\\\", intentional=\\\"false\\\"}[10m])\\n) > 0\\n\"\n    for:\
+    \ 0s\n    labels:\n      alert_source: platform\n      severity: warning\n   \
+    \ annotations:\n      description: 'The `tenant_project` remap dropped\n\n   \
+    \     {{ $value | humanize }} event(s) in the last 10m because its VRL\n\n   \
+    \     hit a runtime error (Vector `intentional=\"false\"`), not because\n\n  \
+    \      of an eligibility abort. drop_on_error keeps this fail-closed —\n\n   \
+    \     no half-processed row reaches a tenant partition — but the\n\n        affected\
+    \ rows are missing from their tenant''s projection (the\n\n        platform 0:0\
+    \ copy is intact). This is always a bug: an\n\n        audit-payload shape the\
+    \ VRL does not handle, or a chart change\n\n        that broke the projection.\
+    \ Check the Vector pod logs for the\n\n        remap error, then the `tenant_project`\
+    \ source in\n\n        helm/vector/templates/configmap.yaml.\n\n        '\n  \
+    \    runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/internal/platform-log-aggregation-runbook.md\n\
+    \      summary: Vector tenant projection is dropping rows on VRL runtime errors\n\
+    \  - alert: TenantProjectionFanoutDiscardSpike\n    expr: \"sum without (instance,\
+    \ pod) (\\n  rate(vector_component_discarded_events_total{component_id=\\\"tenant_project\\\
+    \", intentional=\\\"true\\\"}[10m])\\n)\\n> 3 * (\\n  sum_over_time(\\n    sum\
+    \ without (instance, pod) (\\n      rate(vector_component_discarded_events_total{component_id=\\\
+    \"tenant_project\\\", intentional=\\\"true\\\"}[10m])\\n    )[1d:10m]\\n  ) /\
+    \ 144\\n)\\nand\\nsum without (instance, pod) (\\n  rate(vector_component_discarded_events_total{component_id=\\\
+    \"tenant_project\\\", intentional=\\\"true\\\"}[10m])\\n) > 0.1\\n\"\n    for:\
+    \ 15m\n    labels:\n      alert_source: platform\n      severity: warning\n  \
+    \  annotations:\n      description: 'The `tenant_project` remap is aborting federation_audit\
+    \ rows\n\n        whose tenant_id is blank or not in helm/vector\n\n        `tenantProjections`\
+    \ at {{ $value | humanize }}/s, more than 3x\n\n        its own 1-day average,\
+    \ for 15m. Those rows reach the platform\n\n        0:0 copy but no tenant partition.\
+    \ Likely causes: (a) audit\n\n        traffic from a tenant that has no projection\
+    \ yet (new tenant,\n\n        or `tenantProjections` behind `_account_registry.yaml`);\n\
+    \n        (b) a forged or malformed payload flood. This is a coarse\n\n      \
+    \  surge signal: it cannot name the account and it is NOT a\n\n        registry-desync\
+    \ detector — a small or long-standing gap is\n\n        part of the baseline and\
+    \ does not fire, and a permanent step\n\n        stops firing after about a day.\
+    \ Query the 0:0 store for\n\n        recent `log_type:federation_audit` rows by\
+    \ `tenant_id` and\n\n        compare against `tenantProjections`. See\n\n    \
+    \    platform-log-aggregation-runbook §8.7.\n\n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/tenant-log-query.md\n\
+    \      summary: Unprojected tenant audit rows surged above 3x their 1-day baseline\
+    \ for 15m\n  - alert: VectorProjectionGateMismatch\n    expr: \"max by (mode,\
+    \ namespace) (\\n  vector_tenant_projection_gate_info{category=\\\"mismatch\\\"\
+    }\\n) > 0\\n\"\n    for: 5m\n    labels:\n      alert_source: platform\n     \
+    \ severity: critical\n    annotations:\n      description: 'A `tenantProjections`\
+    \ entry''s accountId does not match the\n\n        AccountID registry''s (`_account_registry.yaml`)\
     \ allocation — a unique-but-wrong\n\n        value (the cross-tenant-leak case\
     \ the render-time uniqueness\n\n        guard and the integer schema both pass).\
     \ The gate DEGRADED to\n\n        platform-only 0:0: the tenant-sanitized projection\

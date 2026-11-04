@@ -53,8 +53,9 @@ _POLICY = "allow-prometheus-egress"
 _PLATFORM_LABEL = "dynamic-alerting.io/scrape"
 
 # chart -> extra `helm template` args turning on every Service it labels for
-# the platform job. The Vector Services are off by default: `-metrics` needs
-# metrics.enabled, `-projection-gate-metrics` needs tenantProjections.
+# the platform job. `-metrics` follows metrics.enabled (default on since
+# #1595; set explicitly so this stays independent of the default), and
+# `-projection-gate-metrics` needs tenantProjections.
 _CHARTS = {
     "helm/threshold-exporter": [],
     "helm/tenant-api": ["-f", str(_REPO_ROOT / "tests" / "helm" / "tenant_api_render_baseline.yaml")],
