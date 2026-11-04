@@ -84,7 +84,10 @@ pymdown-extensions==11.0.1
 # Pulled in by the pins above, never named by a `pip install`. Each block is
 # what that CI job installed on main ed1f68495 (from its job log's
 # `Successfully installed` line); coverage above is the one deliberate
-# exception. Kept honest by tests/shared/test_ci_constraints_transitive_pins.py.
+# exception. tests/shared/test_ci_constraints_transitive_pins.py walks the
+# install set of the interpreter running pytest: in CI that is Python Tests,
+# which does not install MkDocs, so the MkDocs block below is checked only
+# where MkDocs is installed (dev container / session-start), not in CI.
 
 # from ci.yml `Python Tests — run` (job 126567873283)
 attrs==26.1.0

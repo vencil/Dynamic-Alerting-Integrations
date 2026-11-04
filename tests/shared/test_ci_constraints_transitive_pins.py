@@ -47,6 +47,7 @@ from pathlib import Path
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
+from packaging.version import InvalidVersion, Version
 
 _REPO = Path(__file__).resolve().parents[2]
 _CONSTRAINTS = _REPO / "requirements" / "ci-constraints.txt"
@@ -61,6 +62,17 @@ def _pins() -> dict[str, str]:
             pins[canonicalize_name(m.group(1))] = m.group(2)
     assert pins, f"no `name==version` pin read from {_CONSTRAINTS}"
     return pins
+
+
+def _at_pin(installed: str, pinned: str) -> bool:
+    """PEP 440 equality, as pip applies a ``==`` pin: ``1.0`` matches
+    ``1.0.0``. A string compare would call that drift and skip the walk below
+    it, hiding an unpinned dependency. An unparsable version falls back to
+    the string compare."""
+    try:
+        return Version(installed) == Version(pinned)
+    except InvalidVersion:
+        return installed == pinned
 
 
 def _distribution(name: str) -> md.Distribution | None:
@@ -98,7 +110,7 @@ def _reached(roots: list[str], pins: dict[str, str]
         dist = _distribution(name)
         if dist is None:  # required but absent: still a name that must be pinned
             continue
-        if name in pins and dist.version != pins[name]:
+        if name in pins and not _at_pin(dist.version, pins[name]):
             drifted[name] = dist.version
             continue
         for raw in dist.requires or []:
@@ -113,7 +125,7 @@ def test_every_transitive_dependency_of_a_pinned_package_is_pinned() -> None:
     pins = _pins()
     installed = {name: dist for name in pins
                  if (dist := _distribution(name)) is not None}
-    roots = [name for name, dist in installed.items() if dist.version == pins[name]]
+    roots = [name for name, dist in installed.items() if _at_pin(dist.version, pins[name])]
     assert roots, (
         f"none of the {len(pins)} packages pinned in {_CONSTRAINTS.name} is "
         f"installed at its pinned version in this interpreter ({len(installed)} "
@@ -121,7 +133,7 @@ def test_every_transitive_dependency_of_a_pinned_package_is_pinned() -> None:
         "pass without checking anything")
     path_to, drifted = _reached(roots, pins)
     drifted.update({name: dist.version for name, dist in installed.items()
-                    if dist.version != pins[name]})
+                    if not _at_pin(dist.version, pins[name])})
     if drifted:
         warnings.warn(
             "drifted, not walked (installed != pin, so its Requires-Dist is not "
