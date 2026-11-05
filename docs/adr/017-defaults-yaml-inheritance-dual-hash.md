@@ -182,7 +182,7 @@ tenants:
 | 你改的鍵 | 去哪裡確認 |
 |:--|:--|
 | `state_filters` | `/metrics` 的 `user_state_filter{tenant,filter,severity}` |
-| `_routing_defaults`、`_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run` 的完整輸出，改前改後對照 |
+| `_routing_defaults`、`_routing_enforced` | `generate_alertmanager_routes.py --config-dir conf.d/ --output-alertmanager --dry-run` 的完整輸出，改前改後對照 |
 | `_custom_alerts` | `da-guard served-values` 的 `custom_alerts`（`_defaults.yaml` 裡的 `_custom_alerts` 不送出，也不編譯成規則，見 [ADR-024](024-version-aware-threshold-via-dimensional-label.md) §3） |
 | `max_metrics_per_tenant` | 見下方 |
 

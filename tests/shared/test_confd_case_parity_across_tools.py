@@ -123,6 +123,9 @@ EXTRA_ARGS: dict[str, list[str]] = {
     "offboard_tenant.py": ["alpha"],
     "diagnose.py": ["alpha", "--show-inheritance"],
     "describe_tenant.py": ["--all"],
+    # #1211 gap 2: no flagless mode (rc 2 before the conf.d is read); the
+    # merged alertmanager.yml preview on stdout, nothing written.
+    "generate_alertmanager_routes.py": ["--output-alertmanager", "--dry-run"],
 }
 
 # Tools that query Prometheus while they read the conf.d. #3133: one that

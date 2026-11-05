@@ -100,7 +100,7 @@ def _issue_tree(tmp_path: Path) -> Path:
 
 class TestNestedTenantsAreRouted:
     def test_issue_tree_routes_the_nested_tenant(self, tmp_path):
-        res = _gar("--config-dir", str(_issue_tree(tmp_path)), "--dry-run")
+        res = _gar("--config-dir", str(_issue_tree(tmp_path)), "--output-alertmanager", "--dry-run")
         assert res.returncode == EXIT_OK, res.stderr
         assert "Found 2 tenant(s) with routing config: nestedb, roota" in res.stdout
         assert 'tenant="nestedb"' in res.stdout and "receiver: tenant-nestedb" in res.stdout
@@ -179,9 +179,9 @@ class TestRoutingDefaultsChain:
 
 @pytest.mark.parametrize("key", ["receiver", "overrides"])
 @pytest.mark.parametrize("mode", [
-    pytest.param(["--dry-run"], id="dry-run"),
+    pytest.param(["--output-alertmanager", "--dry-run"], id="dry-run"),
     pytest.param(["--validate", "--strict"], id="validate-strict"),
-    pytest.param(["-o", "{out}"], id="render"),
+    pytest.param(["--output-alertmanager", "-o", "{out}"], id="output-alertmanager"),
     pytest.param(["--output-configmap", "-o", "{out}"], id="output-configmap"),
 ])
 def test_null_receiver_or_overrides_below_root_is_refused(tmp_path, key, mode):
@@ -219,7 +219,7 @@ def test_routing_enforced_below_root_is_refused(tmp_path, where):
     files = {"_defaults.yaml": _EMAIL_RD, "team/t-team.yaml": _tenant("t-team")}
     files[where] = files.get(where, "") + "_routing_enforced:\n  enabled: false\n"
     d = _write(tmp_path / "conf.d", files)
-    res = _gar("--config-dir", str(d), "--dry-run")
+    res = _gar("--config-dir", str(d), "--output-alertmanager", "--dry-run")
     assert res.returncode == EXIT_CALLER_ERROR, res.stderr
     assert f"{where}: _routing_enforced is read only at the conf.d root" in res.stderr
 
@@ -231,7 +231,7 @@ def test_routing_enforced_at_the_root_is_still_read(tmp_path):
                                        "    url: https://noc.example.com/a\n"),
         "team/t-team.yaml": _tenant("t-team"),
     })
-    res = _gar("--config-dir", str(d), "--dry-run")
+    res = _gar("--config-dir", str(d), "--output-alertmanager", "--dry-run")
     assert res.returncode == EXIT_OK, res.stderr
     assert "Platform enforced routing: ENABLED" in res.stdout
 
@@ -272,7 +272,7 @@ def test_profiles_are_visible_to_their_subtree_only(tmp_path):
 def test_one_profile_name_in_two_files_is_refused(tmp_path, files, later):
     d = _write(tmp_path / "conf.d", {"_defaults.yaml": _EMAIL_RD,
                                      "t-a.yaml": _tenant("t-a"), **files})
-    res = _gar("--config-dir", str(d), "--dry-run")
+    res = _gar("--config-dir", str(d), "--output-alertmanager", "--dry-run")
     assert res.returncode == EXIT_CALLER_ERROR, res.stderr
     assert f"routing profile 'p1' is defined in both" in res.stderr
     assert f"and {later} —" in res.stderr
@@ -358,7 +358,7 @@ def test_duplicate_tenant_id_is_refused(tmp_path):
         "team/t-x.yaml": _tenant("t-x"),
     })
     out = tmp_path / "out.yaml"
-    res = _gar("--config-dir", str(d), "-o", str(out))
+    res = _gar("--config-dir", str(d), "--output-alertmanager", "-o", str(out))
     # #2315's refusal (rc 1, validate-config's own scan) runs first and owns
     # this verdict; the routing-tree refusal (rc 2) does not repeat it.
     assert res.returncode == EXIT_VIOLATION, res.stderr
@@ -398,7 +398,7 @@ def test_nested_platform_tenants_block_is_named_not_read(tmp_path):
         "team/_defaults.yaml": "tenants:\n  t-team:\n    _severity_dedup: disable\n",
         "team/t-team.yaml": _tenant("t-team"),
     })
-    res = _gar("--config-dir", str(d), "--dry-run")
+    res = _gar("--config-dir", str(d), "--output-alertmanager", "--dry-run")
     assert res.returncode == EXIT_OK, res.stderr
     assert "team/_defaults.yaml: 'tenants:' block ignored" in res.stderr
     tree = load_tenant_tree(str(d))
@@ -458,7 +458,7 @@ def test_f2_a_null_body_still_declares_the_tenant(tmp_path):
         "a/t-x.yaml": "tenants:\n  t-x:\n",
         "b/t-x.yaml": _tenant("t-x"),
     })
-    res = _gar("--config-dir", str(d), "--dry-run")
+    res = _gar("--config-dir", str(d), "--output-alertmanager", "--dry-run")
     assert res.returncode == EXIT_VIOLATION, res.stderr
     assert "tenant 't-x' is declared in 2 files: a/t-x.yaml, b/t-x.yaml" in res.stderr
     tree = load_tenant_tree(str(d))
@@ -553,7 +553,7 @@ def test_a_non_mapping_level_contributes_nothing(tmp_path):
         "team/_defaults.yaml": "_routing_defaults: [a, b]\n",
         "team/t-team.yaml": _tenant("t-team"),
     })
-    res = _gar("--config-dir", str(d), "--dry-run")
+    res = _gar("--config-dir", str(d), "--output-alertmanager", "--dry-run")
     assert res.returncode == EXIT_OK, res.stderr
     assert ("_routing_defaults in team/_defaults.yaml must be a mapping, got list"
             in res.stderr)
@@ -719,6 +719,6 @@ def test_unread_routing_is_one_finding_printed_as_every_blocking_line(tmp_path, 
     for f in found:
         line = f["message"]
         assert (stream.count(line), summary.count(line)) == (1, 1), (line, res.stderr)
-    render = _gar("--config-dir", str(d), "-o", str(tmp_path / "out.yaml"))
+    render = _gar("--config-dir", str(d), "--output-alertmanager", "-o", str(tmp_path / "out.yaml"))
     unread = next(f["message"] for f in found if f["kind"] == "routing_in_unread_location")
     assert render.stderr.count(unread) == 1, render.stderr

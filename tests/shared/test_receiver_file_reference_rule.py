@@ -379,8 +379,8 @@ def test_a_clean_http_config_in_the_same_place_is_no_error(tmp_path, where):
 
 
 _MODES = {
-    "render": lambda out: ["-o", str(out)],
-    "dry-run": lambda out: ["--dry-run"],
+    "output-alertmanager": lambda out: ["--output-alertmanager", "-o", str(out)],
+    "dry-run": lambda out: ["--output-alertmanager", "--dry-run"],
     "output-configmap": lambda out: ["--output-configmap", "-o", str(out)],
     "validate-strict": lambda out: ["--validate", "--strict"],
 }
@@ -503,12 +503,14 @@ def test_base_global_is_checked_before_the_tenant_scan(tmp_path):
 
 
 def test_apply_merge_refuses_a_cluster_global_credential():
-    """--apply merges into the cluster's config, whose global is the base."""
-    from _grar_render import _merge_routes_receivers_inhibits
+    """--apply merges into the cluster's config, whose global is the base:
+    --apply's merge is ``merge_generated`` with that config as the base
+    (#1211 gap 2 — the one merge every output mode uses)."""
+    from _grar_render import merge_generated
     existing = {"global": {"smtp_auth_password": "p"}, "route": {"receiver": "default"},
                 "receivers": [{"name": "default"}], "inhibit_rules": []}
     with pytest.raises(ValueError, match="global.smtp_auth_password"):
-        _merge_routes_receivers_inhibits(existing, [], [], [])
+        merge_generated(existing, [], [], [])
 
 
 def test_alertmanager_pod_mounts_no_service_account_token():

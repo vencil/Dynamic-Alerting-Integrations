@@ -38,7 +38,7 @@ def _build_help_text(lang):
     alert-correlate   告警關聯分析 (時間窗口聚類 + 根因推斷)
 
 命令 (配置生成 — 讀取租戶 YAML):
-    generate-routes   租戶 YAML → Alertmanager route/receiver/inhibit 片段
+    generate-routes   租戶 YAML → route/receiver/inhibit 合併進 Alertmanager 設定
     patch-config      修補 threshold-config ConfigMap (含 --diff 預覽)
     analyze-gaps      Rule Pack 間隙分析 (用於自訂規則)
 
@@ -128,7 +128,7 @@ Commands (Prometheus API — portable):
     alert-correlate   Alert correlation analysis (time-window clustering + root cause)
 
 Commands (Config Generation — reads tenant YAML):
-    generate-routes   Tenant YAML → Alertmanager route/receiver/inhibit fragment
+    generate-routes   Tenant YAML → route/receiver/inhibit merged into Alertmanager config
     patch-config      Patch threshold-config ConfigMap (with --diff preview)
     analyze-gaps      Rule Pack gap analysis for custom rules
 

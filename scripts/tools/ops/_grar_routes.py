@@ -1001,13 +1001,13 @@ def _build_custom_alert_routes(tenant_names: list[str] | None = None,
     """Build the platform-static Custom Alerts isolation route + firehose receiver.
 
     #741 S7/S8. ALWAYS emitted (tenant-agnostic), and prepended AHEAD of all
-    generated routes at ConfigMap assembly (assemble_configmap /
-    _merge_routes_receivers_inhibits) for two reasons:
+    generated routes by the one merge every output mode uses (merge_generated)
+    for two reasons:
 
-      1. Durability: generate_alertmanager_routes.py --apply REPLACES route.routes
-         (it does not append), so a route that lived only in the base ConfigMap
-         would be silently dropped on the next --apply. Emitting it here keeps it
-         present across regeneration.
+      1. Durability: the merge emits the platform routes canonically and
+         drops a base route to these receivers, so a route that lived only in
+         the base would not survive. Emitting it here keeps it present in
+         every output.
       2. Correctness: the enforced NOC route uses `continue: true` and its
          matchers are OPTIONAL — a matcher-less enforced route matches ALL alerts,
          so without an earlier `continue: false` custom route, tenant custom alerts
@@ -1086,7 +1086,7 @@ def _build_watchdog_route() -> tuple[list[dict], list[dict]]:
     the base ConfigMap's watchdog-heartbeat receiver. The name-only placeholder
     only guarantees the route resolves to a defined receiver in synthetic /
     default-base contexts; the merge paths defer to the richer base definition so
-    the url_file is never clobbered (see _merge_routes_receivers_inhibits).
+    the url_file is never clobbered (see _grar_render.merge_generated).
 
     repeat_interval is 3m; the operator's EXTERNAL TTL must be LONGER (e.g. 5m)
     to absorb network jitter AND rule-evaluation lag under load — that tolerance
@@ -1276,9 +1276,8 @@ def _build_root_fallthrough_routes(enforced_tenants: list[str],
     restore one.
 
     Emitted with ``matchers`` ONLY: no ``receiver`` (the root's is not known
-    here — Alertmanager inherits it, so the render-mode fragment is right
-    under whatever root it is merged into; ``pin_root_fallthrough_receiver``
-    writes the name where the root is known), no ``continue`` (nothing after
+    here — Alertmanager inherits it; ``pin_root_fallthrough_receiver``
+    writes the name when the merge knows the root), no ``continue`` (nothing after
     it can match this tenant), no ``group_by`` / timings (inherited from the
     root as the root delivery did). It adds no receiver, so
     ``receiver_name_collisions`` never sees it.

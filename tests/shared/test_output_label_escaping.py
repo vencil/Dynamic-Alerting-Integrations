@@ -131,6 +131,10 @@ EXTRA_ARGS: dict[str, list[str]] = {
     # up. Measured: with these two words it reaches its `WARN: skip <file>` line
     # and forged a report line at column 0. "Unmeasurable" was hiding a real hole.
     "diagnose.py": ["victim", "--show-inheritance"],
+    # #1211 gap 2: the generator has no flagless mode (rc 2 before it reads
+    # the conf.d). `--dry-run` prints the merged alertmanager.yml to stdout
+    # and writes nothing — the stdout the old flagless render printed.
+    "generate_alertmanager_routes.py": ["--output-alertmanager", "--dry-run"],
 }
 
 # Tools that query Prometheus while they read the conf.d. #3133: one that

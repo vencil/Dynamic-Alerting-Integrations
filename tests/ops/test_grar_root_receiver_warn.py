@@ -32,7 +32,11 @@ import generate_alertmanager_routes as gar
 _GAR = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
         / "generate_alertmanager_routes.py")
 
-_WARN = "has no integration (no non-empty *_configs)"
+#: Anchored on the ROOT receiver: since #1211 gap 2 the watchdog-heartbeat
+#: finding shares the "has no integration" wording, so a bare substring would
+#: count it too.
+_WARN = "root route's receiver"
+_WARN_TAIL = "has no integration (no non-empty *_configs)"
 _DOC = "byo-alertmanager-integration.en.md §11"
 
 
@@ -108,7 +112,8 @@ class TestOutputConfigmap:
                         "-o", str(tmp_path / "cm.yaml")], tmp_path)
         assert rc == 0, err
         assert err.count(_WARN) == 1, err
-        assert "'default'" in err and _DOC in err, err
+        [line] = [ln for ln in err.splitlines() if _WARN in ln]
+        assert _WARN_TAIL in line and "'default'" in line and _DOC in line, err
 
     def test_strict_does_not_escalate(self, tenant_dir, tmp_path):
         rc, err = _gar(["--config-dir", str(tenant_dir), "--output-configmap",
@@ -137,11 +142,11 @@ class TestOutputConfigmap:
 # ── modes that do not deploy a complete config ──────────────────────
 class TestOtherModesDoNotWarn:
 
-    @pytest.mark.parametrize("extra", [[], ["--dry-run"], ["--validate"]])
+    # #1211 gap 2: the render / --dry-run fragment modes are gone; --validate
+    # is the one mode left that assembles nothing it deploys.
+    @pytest.mark.parametrize("extra", [["--validate"], ["--validate", "--strict"]])
     def test_no_warn(self, tenant_dir, tmp_path, extra):
         argv = ["--config-dir", str(tenant_dir), *extra]
-        if not extra:
-            argv += ["-o", str(tmp_path / "frag.yaml")]
         rc, err = _gar(argv, tmp_path)
         assert rc == 0, err
         assert _WARN not in err, err

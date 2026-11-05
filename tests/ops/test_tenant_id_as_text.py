@@ -67,7 +67,7 @@ def test_route_generation_emits_the_ids_as_written(tmp_path):
                    + "  yes:\n" + _ROUTING)})
     p = subprocess.run(
         [sys.executable, str(TOOLS / "ops" / "generate_alertmanager_routes.py"),
-         "--config-dir", str(d), "--dry-run"],
+         "--config-dir", str(d), "--output-alertmanager", "--dry-run"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert p.returncode == 0, p.stderr[-2000:]
     # ADR-035: a DNS-1123 id (`0x1F` would refuse the whole tree).
