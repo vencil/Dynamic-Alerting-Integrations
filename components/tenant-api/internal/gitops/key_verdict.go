@@ -55,7 +55,8 @@ type KeyVerdict struct {
 
 // KeyFinding is one finding of a KeyVerdict: a key (Key, as the file
 // spells it) written in File (relative to conf.d; "" when no single file
-// applies) that reaches Tenants. Kind is unread or disable_noop; Severity the one ADR-038 decision 4 gives the gates once
+// applies) that reaches Tenants. Kind is unread, disable_noop or
+// disable_cascade; Severity the one ADR-038 decision 4 gives the gates once
 // they block; Reason served-values' reason for an unread key.
 type KeyFinding struct {
 	Severity string
@@ -123,8 +124,9 @@ var verdictReasons = map[string]string{
 
 // verdictKinds say what a finding's Kind means.
 var verdictKinds = map[string]string{
-	"unread":       "is read by no reader",
-	"disable_noop": "is a disable that switches nothing off",
+	"unread":          "is read by no reader",
+	"disable_noop":    "is a disable that switches nothing off",
+	"disable_cascade": "is switched off with its base's disable; to keep the critical tier alone write the base as \"N:critical\" and delete this key",
 }
 
 // verdictAdvice is a key verdict rendered for one caller: the lines for

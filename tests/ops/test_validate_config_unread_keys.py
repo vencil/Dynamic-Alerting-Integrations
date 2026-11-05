@@ -38,7 +38,9 @@ def test_each_finding_is_one_line_and_an_error_fails(tmp_path):
     assert r["details"] == [
         "db-a.yaml: error: unread `mysql_conections` (no_row) — tenant(s) db-a",
         "db-a.yaml: warning: disable_noop `mysql_slave_lagg` (disable_noop) — tenant(s) db-a",
-    ]  # `redis_memory_critical` is switched off with its base: read, no finding (#3046)
+        "db-a.yaml: warning: disable_cascade `redis_memory_critical` (switched off with its base"
+        " `redis_memory`) — tenant(s) db-a",
+    ]  # #3046: db-a's own critical tier is switched off with its base — a warning
 
 
 def test_an_inherited_sibling_switched_off_with_its_base_is_no_finding(tmp_path):

@@ -929,7 +929,8 @@ def test_disable_effects_are_asked_for_and_read(tmp_path, da_guard):
     assert got["mysql_connections"].disable == "effective"
     assert got["redis_memory"].disable == "effective"
     # #3046：critical 跟著 base 關掉，exporter 讀了它（base_disabled）。
-    assert got["redis_memory_critical"] == tv.ServedKey(False, "base_disabled")
+    assert got["redis_memory_critical"] == tv.ServedKey(False, "base_disabled",
+                                                        switched_off_with="redis_memory")
     # 對照：沒要求就不算（也不付重算的成本）
     plain = tv.load_served_values(conf_d, binary=da_guard)["t"].keys
     assert plain["mysql_conections"].disable is None

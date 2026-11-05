@@ -282,7 +282,7 @@ func servedForVerdict(served map[string]servedTenantValues) map[string]keyverdic
 		keys := make(map[string]keyverdict.ServedKey, len(sv.Keys))
 		for k, sk := range sv.Keys {
 			keys[k] = keyverdict.ServedKey{Exporter: sk.Exporter, Reason: sk.Reason, Registered: sk.Registered,
-				Declared: sk.Declared, Disable: sk.Disable}
+				Declared: sk.Declared, Disable: sk.Disable, SwitchedOffWith: sk.SwitchedOffWith}
 		}
 		rows := make(map[string]bool, len(sv.Severities)+len(sv.Dropped))
 		for k := range sv.Severities {
@@ -511,8 +511,8 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 		fmt.Fprintf(errOut, "Print, as JSON, the shared key verdict (ADR-038): for every key of every tenant whether\n"+
 			"some reader reads it, and the findings a report prints:\n"+
 			"{\"schema\": %q, \"at\", \"undecidable\", \"tenants\": {<tenant>: [{key, layer, file, read_by,\n"+
-			"verdict, severity, reason, disable, value, served}]}, \"findings\": [{severity, kind,\n"+
-			"key, file, tenants, reason}], \"key_checks\": {<tenant>: {version_labels,\n"+
+			"verdict, severity, reason, disable, switched_off_with, value, served}]}, \"findings\": [{severity,\n"+
+			"kind, key, file, tenants, reason, base}], \"key_checks\": {<tenant>: {version_labels,\n"+
 			"renames}}, \"parse_failed\": [<file>], \"unreadable\": [{file, reason}]}.\n\n", keyVerdictSchema)
 		fs.PrintDefaults()
 		fmt.Fprintf(errOut, "\nExit codes:\n  0  ok\n  2  caller error, or a tree the verdict cannot judge (the exporter's load or\n"+

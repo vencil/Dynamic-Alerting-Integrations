@@ -51,10 +51,12 @@ def test_the_adr_example(tmp_path):
         "mysql_slave_lag": (("exporter",), "read", None, None),
     }
     # `redis_memory: disable` 連同 `redis_memory_critical` 一起關掉（#3046）：
-    # 那條 critical 是 exporter 讀了、跟著 base 關掉的，算 read，不報。
+    # 那條 critical 是 exporter 讀了、跟著 base 關掉的，算 read；它是 db-a 自己檔裡
+    # 寫的，舊語意下會照送，所以報 disable_cascade（warning）。
     kinds = {(f.kind, f.key, f.severity) for f in t.findings}
     assert kinds == {("unread", "mysql_conections", "error"), ("unread", "_routng", "error"),
-                     ("disable_noop", "mysql_slave_lagg", "warning")}
+                     ("disable_noop", "mysql_slave_lagg", "warning"),
+                     ("disable_cascade", "redis_memory_critical", "warning")}
     assert not t.undecidable
 
 
@@ -87,7 +89,14 @@ def test_a_disable_switches_off_its_whole_family_wherever_it_comes_from(tmp_path
             v = by[k]
             assert (v.read_by, v.verdict, v.severity, v.reason, v.served) == \
                 (("exporter",), "read", None, None, None), (tenant, k, v)
-    assert not t.findings, t.findings
+    # 只有租戶自己檔裡寫的同族鍵報 disable_cascade（warning，不擋），繼承來的不報。
+    got = {(f.kind, f.key, f.tenants, f.base, f.blocks) for f in t.findings}
+    assert got == {
+        ("disable_cascade", "redis_memory_critical", ("ta",), "redis_memory", False),
+        ("disable_cascade", 'mysql_connections{db="y"}', ("ta",), "mysql_connections", False),
+        ("disable_cascade", "mysql_cpu_critical", ("town",), "mysql_cpu", False),
+        ("disable_cascade", 'mysql_cpu{db="z"}', ("town",), "mysql_cpu", False),
+    }, t.findings
 
 
 def test_a_platform_side_typo_is_one_error_naming_the_file_and_its_tenants(tmp_path):
@@ -389,10 +398,10 @@ def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
 
 
 _ROW = {"key": "k", "layer": "tenant", "file": "a.yaml", "read_by": [], "verdict": "unread",
-        "severity": "error", "reason": "no_row", "disable": None,
+        "severity": "error", "reason": "no_row", "disable": None, "switched_off_with": None,
         "value": 1, "served": None}
 _FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml", "tenants": ["t"],
-            "reason": "no_row", "blocks": True}
+            "reason": "no_row", "base": None, "blocks": True}
 
 
 def _doc(**over):

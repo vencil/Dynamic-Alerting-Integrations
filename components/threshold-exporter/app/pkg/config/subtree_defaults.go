@@ -529,7 +529,7 @@ func keyCanReachTheOutputPlane(cfg *ThresholdConfig, key string) bool {
 		// every label of the key declared under `dimensions:` for its base.
 		return dimensionDeclared(key, cfg.Dimensions)
 	}
-	if declaredAnywhere(cfg, key) {
+	if declaredAnywhere(cfg, key) || dimensionsNameBase(cfg, key) {
 		return true
 	}
 	// ⛔ CANONICALIZE BEFORE GIVING UP. `ResolveAtWithStats` runs
@@ -628,6 +628,28 @@ func reservedShapeWins(key string) bool {
 	return strings.HasPrefix(key, "_state_") ||
 		strings.HasPrefix(key, "_silent_") ||
 		IsRoutingLayerKey(key)
+}
+
+// dimensionsNameBase reports whether key (any #1231 spelling) is a base the
+// root `dimensions:` names (#3046): a family head, whose value
+// resolveDimensionalRows reads through familyHeadOff — its `disable`
+// switches the family off — though no `defaults:` value or
+// `optional_overrides:` entry declares it. A `_` key and a `<base>_critical`
+// name (DimensionBaseRefused) are none.
+func dimensionsNameBase(cfg *ThresholdConfig, key string) bool {
+	if strings.Contains(key, "{") || baseRowsSkipKey(key) {
+		return false
+	}
+	canon := canonicalDimensionBase(key)
+	if DimensionBaseRefused(canon) {
+		return false
+	}
+	for b := range cfg.Dimensions {
+		if canonicalDimensionBase(b) == canon {
+			return true
+		}
+	}
+	return false
 }
 
 // declaredAnywhere reports whether the platform recognises this exact key on

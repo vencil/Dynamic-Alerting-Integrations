@@ -15,6 +15,7 @@
         "severity": "error",
         "reason": "unregistered",
         "disable": "noop",
+        "switched_off_with": null,
         "value": "disable",
         "served": null
       },
@@ -27,6 +28,7 @@
         "severity": null,
         "reason": "no_row",
         "disable": null,
+        "switched_off_with": null,
         "value": 70,
         "served": null
       }
@@ -42,6 +44,7 @@
         "ta"
       ],
       "reason": "unregistered",
+      "base": null,
       "blocks": true
     }
   ],

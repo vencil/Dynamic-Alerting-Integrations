@@ -384,6 +384,11 @@ type servedKey struct {
 	// what switching it off does to the user_threshold rows /metrics serves — effective or
 	// noop — by resolving the tree again without it (served_disable.go).
 	Disable string `json:"disable,omitempty"`
+	// SwitchedOffWith, only with --disable-effects: for a `<key>_critical`
+	// / `<key>{…}` key the tenant's base `<key>: disable` switches off in
+	// some part of the day, that base (as the tenant's config spells it) —
+	// read off /metrics by the same counterfactual (#3046).
+	SwitchedOffWith string `json:"switched_off_with,omitempty"`
 }
 
 // Reasons of servedKey.Reason — a closed set.
@@ -1086,15 +1091,40 @@ func addDisableEffectsWith(cfg *config.ThresholdConfig, at time.Time,
 	for tenant, byKey := range effects {
 		tv := tenants[tenant]
 		for k, eff := range byKey {
+			if _, ok := tv.Keys[k]; !ok && eff.effect == "" {
+				// A family key is named as /metrics serves it — canonical
+				// (#1231); the tenant's map may spell it the retired way.
+				k = keyAsSpelt(tv.Keys, k)
+			}
 			e, ok := tv.Keys[k]
 			if !ok {
+				if eff.effect == "" {
+					continue // a root `defaults:` dimensional default: no keys entry of the tenant's
+				}
 				return fmt.Errorf("internal: tenant %s: switched-off key %q has no keys entry", tenant, k)
 			}
 			e.Disable = eff.effect
+			if eff.switchedOffWith != "" {
+				e.SwitchedOffWith = name(tenant, eff.switchedOffWith)
+			}
 			tv.Keys[k] = e
 		}
 	}
 	return nil
+}
+
+// keyAsSpelt is the key of keys spelling canonical key k (#1231): k itself
+// when keys holds it, else the retired spelling keys holds; k when none.
+func keyAsSpelt(keys map[string]servedKey, k string) string {
+	if _, ok := keys[k]; ok {
+		return k
+	}
+	for kk := range keys {
+		if c, _ := config.CanonicalKeyFor(kk); c == k {
+			return kk
+		}
+	}
+	return k
 }
 
 // servedKeys is servedTenantValues.Keys for one tenant: an entry for every

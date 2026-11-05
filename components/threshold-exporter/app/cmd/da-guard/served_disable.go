@@ -113,6 +113,10 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 		}
 	}
 	changed := map[tenantKey]bool{}
+	// cascaded: tenant → family key → the base whose `disable` switches it
+	// off in some part of the day (#3046) — a key of the base's family
+	// served with the `disable` taken away and not served with it.
+	cascaded := map[string]map[string]string{}
 	var judge func(set []tenantKey, m int) error
 	judge = func(set []tenantKey, m int) error {
 		tenants := make([]string, len(set))
@@ -146,6 +150,14 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 			}
 			if err := familyLeak(part, base, tk, at); err != nil {
 				return err
+			}
+			if !cf.failed && !base.failed {
+				for _, k := range switchedOffFamily(base.series[tk.tenant], cf.series[tk.tenant], tk.key) {
+					if cascaded[tk.tenant] == nil {
+						cascaded[tk.tenant] = map[string]string{}
+					}
+					cascaded[tk.tenant][k] = tk.key
+				}
 			}
 		}
 		return nil
@@ -184,7 +196,43 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 			out[tenant][k] = e
 		}
 	}
+	for tenant, byKey := range cascaded {
+		if out[tenant] == nil {
+			out[tenant] = map[string]disableEffect{}
+		}
+		for k, base := range byKey {
+			e := out[tenant][k]
+			e.switchedOffWith = base
+			out[tenant][k] = e
+		}
+	}
 	return out, nil
+}
+
+// switchedOffFamily is the keys of key's family (a /metrics series whose
+// metric_key is key, the key itself aside) served in one part of the day
+// with key's `disable` taken away (without) and not served with it (with):
+// the keys the `disable` switches off with its base (#3046), read off
+// /metrics, not decided by a rule here. Sorted, as cfg spells them.
+func switchedOffFamily(with, without map[string][]metricsSeries, key string) []string {
+	canon, _ := config.CanonicalKeyFor(key)
+	var out []string
+	for k, ss := range without {
+		if kc, _ := config.CanonicalKeyFor(k); kc == canon {
+			continue
+		}
+		if _, served := with[k]; served {
+			continue
+		}
+		for _, s := range ss {
+			if s.MetricKey == canon {
+				out = append(out, k)
+				break
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 // onlyTenants is cfg holding only the given tenants (their maps shared).
@@ -197,9 +245,12 @@ func onlyTenants(cfg *config.ThresholdConfig, tenants []string) *config.Threshol
 	return &out
 }
 
-// disableEffect is one switched-off key's effect.
+// disableEffect is one key's reading under --disable-effects: for a key
+// that reads `disable`, its effect; for a key of a family a base's
+// `disable` switches off in some part of the day, that base (#3046).
 type disableEffect struct {
-	effect string
+	effect          string
+	switchedOffWith string
 }
 
 // withoutDisables is cfg (one part of the day: every value fixed) with each

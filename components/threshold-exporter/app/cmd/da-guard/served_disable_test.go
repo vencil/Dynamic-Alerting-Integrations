@@ -326,3 +326,72 @@ func TestEffective_NotServedNamesBaseDisabled(t *testing.T) {
 		t.Errorf("not_served %v, want %v", a.NotServed, want)
 	}
 }
+
+// A base only `dimensions:` names is a family head (#3046): a subtree
+// `_defaults.yaml` that switches it off reaches the tenant and switches its
+// dimensional keys off — /metrics, served-values and the verdict agree with
+// /effective — and a numeric value there is a key no phase reads, not one
+// the overlay drops.
+func TestServedValues_ASubtreeDisableOfABaseOnlyDimensionsNames(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := servedWith(t, map[string]string{
+		"_defaults.yaml":      "dimensions:\n  bar_depth: [db]\ndefaults:\n  mysql_connections: 80\n",
+		"team/_defaults.yaml": "defaults:\n  bar_depth: disable\n",
+		"team/a.yaml":         "tenants:\n  a:\n    bar_depth{db=\"a\"}: \"5\"\n",
+		"num/_defaults.yaml":  "defaults:\n  bar_depth: 7\n",
+		"num/b.yaml":          "tenants:\n  b:\n    bar_depth{db=\"a\"}: \"5\"\n",
+	}, "2026-07-01T03:00:00Z")
+	mustOK(t, code, stderr)
+	if _, served := doc.Tenants["a"].Values[`bar_depth{db="a"}`]; served {
+		t.Errorf("a: the subtree disable did not switch the dimensional key off")
+	}
+	if e := doc.Tenants["a"].Keys["bar_depth"]; e.Reason != keyReasonDisabled {
+		t.Errorf("a: keys[bar_depth] = %+v, want disabled (reached the tenant)", e)
+	}
+	if _, served := doc.Tenants["b"].Values[`bar_depth{db="a"}`]; !served {
+		t.Errorf("b: a numeric base switched the dimensional key off")
+	}
+	if e := doc.Tenants["b"].Keys["bar_depth"]; e.Reason != keyReasonNoRow {
+		t.Errorf("b: keys[bar_depth] = %+v, want no_row (a value no phase reads)", e)
+	}
+}
+
+// --disable-effects names, on each family key, the base whose `disable`
+// switches it off in some part of the day — read off /metrics (#3046):
+// the tenant's own and an inherited key alike, under a scheduled base, a
+// profile's `disable` and a retired spelling; a key its base never switches
+// off names none.
+func TestServedValues_SwitchedOffWith(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := servedWith(t, map[string]string{
+		"_defaults.yaml": "dimensions:\n  redis_memory: [db]\ndefaults:\n  redis_memory: 70\n  pg_conn: 50\n" +
+			"  mysql_threads_running: 30\nprofiles:\n  p1:\n    pg_conn: disable\n",
+		"team/_defaults.yaml": "defaults:\n  redis_memory_critical: 95\n",
+		"team/a.yaml": "tenants:\n  a:\n    redis_memory: disable\n    redis_memory{db=\"x\"}: \"5\"\n" +
+			"  s:\n    redis_memory:\n      default: \"70\"\n      overrides:\n" +
+			"        - {window: \"01:00-02:00\", value: disable}\n    redis_memory_critical: \"90\"\n" +
+			"  p:\n    _profile: p1\n    pg_conn_critical: \"60\"\n" +
+			"  r:\n    " + retiredCPU + ": disable\n    " + retiredCPU + "_critical: \"9\"\n" +
+			"  n:\n    redis_memory_critical: \"90\"\n" +
+			// The base is off 01:00-02:00, but so is its critical tier, by
+			// its own value: the base switches nothing of it off.
+			"  o:\n    redis_memory:\n      default: \"70\"\n      overrides:\n" +
+			"        - {window: \"01:00-02:00\", value: disable}\n" +
+			"    redis_memory_critical:\n      default: \"90\"\n      overrides:\n" +
+			"        - {window: \"01:00-02:00\", value: disable}\n",
+	}, "2026-07-01T03:00:00Z", "--disable-effects")
+	mustOK(t, code, stderr)
+	for _, c := range []struct{ tenant, key, base string }{
+		{"a", "redis_memory_critical", "redis_memory"}, // inherited from the subtree
+		{"a", `redis_memory{db="x"}`, "redis_memory"},
+		{"s", "redis_memory_critical", "redis_memory"}, // switched off 01:00-02:00 only
+		{"p", "pg_conn_critical", "pg_conn"},           // the profile's disable
+		{"r", retiredCPU + "_critical", retiredCPU},    // named as the tenant spells them
+		{"n", "redis_memory_critical", ""},             // no disable: none
+		{"o", "redis_memory_critical", ""},             // off by its own value whenever the base is
+	} {
+		if got := doc.Tenants[c.tenant].Keys[c.key].SwitchedOffWith; got != c.base {
+			t.Errorf("%s: keys[%q].switched_off_with = %q, want %q", c.tenant, c.key, got, c.base)
+		}
+	}
+}
