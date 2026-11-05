@@ -1613,8 +1613,8 @@ func (c *ThresholdConfig) validateOverrideKeysOf(thresholdValues bool) KeyValida
 					// `_critical` tier takes no dimensions — so it is no fix.
 					tier := strings.TrimSuffix(head, criticalSuffix)
 					renamed(fmt.Sprintf(
-						"NOTICE: tenant=%s: key %q was renamed to %q (#1231), but a `_critical` tier takes no dimensions and neither spelling is served (#3556); write it as %s: \"N:critical\"",
-						tenant, key, canonKey, tier+labels))
+						"NOTICE: tenant=%s: key %q was renamed to %q (#1231), but a `_critical` tier takes no dimensions and neither spelling is served (#3556); write it as %s: \"N:critical\", its labels declared for %s under the root `dimensions:`",
+						tenant, key, canonKey, tier+labels, tier))
 				} else {
 					renamed(fmt.Sprintf(
 						"NOTICE: tenant=%s: key %q was renamed to %q (#1231) — the old name still resolves during the 2-release transition window; please update this override to %q",

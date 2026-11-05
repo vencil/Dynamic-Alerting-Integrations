@@ -1277,7 +1277,7 @@ def key_spellings(keys: "Iterable[str]", binary: Optional[str] = None,
                     or spellings[0] != canon or not all(isinstance(x, str) for x in spellings):
                 raise ValueError(f"an answer of the wrong shape: {a!r}")
             of[key] = (canon, tuple(spellings))
-    except (ValueError, TypeError, KeyError) as e:  # UnicodeDecodeError is a ValueError
+    except (ValueError, TypeError, KeyError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
         raise ParseTreeError(f"da-guard {what} wrote no answer this tool can read ({e}); "
                              "nothing of it is used") from e
     return KeySpellings(MappingProxyType(of))

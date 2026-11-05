@@ -1048,8 +1048,9 @@ def run_analysis(
     The tenants, each tenant's values (written plus inherited) and which file
     owns each key are `da-guard effective`'s (#2116): the config as tenant-api's
     /effective resolves it, so a key a tenant inherits is seen, and is told
-    apart from a key its own file writes. The alias table comes from
-    `da-guard served-values`; its stderr and the files it serves no tenant
+    apart from a key its own file writes. A retired #1231 spelling is put
+    in the canonical one by `da-guard key-spellings` (#3556). `da-guard
+    served-values` runs first: its stderr and the files it serves no tenant
     from are printed to stderr (`print_load_warnings`). A tree served-values
     refuses (e.g. the root `defaults:` and a tenant both writing an
     `X_critical` key, deferred under #2115) therefore fails this tool too.

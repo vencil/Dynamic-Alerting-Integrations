@@ -95,12 +95,16 @@ var errNotKeyList = errors.New("not a JSON array of strings")
 
 // decodeKeyList reads raw as exactly one JSON array whose elements are all
 // strings. Anything else — another JSON value, null, a non-string element,
-// trailing data, bytes that are not UTF-8 (encoding/json would replace them
-// with U+FFFD and answer for a key nobody asked) — is an error, never a
-// partial answer.
+// trailing data, bytes that are not UTF-8 or an unpaired \uD800-\uDFFF
+// escape (encoding/json would replace either with U+FFFD and answer for a
+// key nobody asked; `write` refuses the same, checkSurrogates) — is an
+// error, never a partial answer.
 func decodeKeyList(raw []byte) ([]string, error) {
 	if !utf8.Valid(raw) {
 		return nil, fmt.Errorf("%w: not UTF-8", errNotKeyList)
+	}
+	if err := checkSurrogates(raw); err != nil {
+		return nil, fmt.Errorf("%w: %v", errNotKeyList, err)
 	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if t, err := dec.Token(); err != nil || t != json.Delim('[') {

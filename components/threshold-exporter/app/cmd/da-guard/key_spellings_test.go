@@ -50,7 +50,7 @@ func TestKeySpellings_EveryShapeInOrder(t *testing.T) {
 
 func TestKeySpellings_RefusesWhatIsNotAKeyList(t *testing.T) {
 	t.Parallel()
-	for _, in := range []string{``, `null`, `{}`, `["a", 1]`, `["a", null]`, `["a"] []`, `[`, "[\"\xff\"]"} {
+	for _, in := range []string{``, `null`, `{}`, `["a", 1]`, `["a", null]`, `["a"] []`, `[`, "[\"\xff\"]", `["\ud800"]`, `["\udc00x"]`} {
 		var out, errOut bytes.Buffer
 		if code := runKeySpellings(nil, strings.NewReader(in), &out, &errOut); code != exitCallerErr || out.Len() != 0 {
 			t.Errorf("stdin %q: exit %d, stdout %q; want exit %d and no output", in, code, out.String(), exitCallerErr)

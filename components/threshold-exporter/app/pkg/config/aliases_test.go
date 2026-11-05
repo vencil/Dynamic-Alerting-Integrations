@@ -728,7 +728,7 @@ func TestDeprecationNotice_CriticalTierWithDimensionsNamesTheNCriticalForm(t *te
 			got = append(got, n)
 		}
 	}
-	if len(got) != 1 || !strings.Contains(got[0], `write it as mysql_threads_running{db="a"}: "N:critical"`) ||
+	if len(got) != 1 || !strings.Contains(got[0], `write it as mysql_threads_running{db="a"}: "N:critical", its labels declared for mysql_threads_running under the root `+"`dimensions:`") ||
 		strings.Contains(got[0], "please update this override") {
 		t.Fatalf("want one notice naming the N:critical form, got %q", got)
 	}
