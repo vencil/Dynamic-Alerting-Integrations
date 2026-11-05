@@ -242,17 +242,12 @@ spec:
             - name: TA_STATE_STORE
               value: "configmap"
             {{- include "tenant-api.taEnv" (list "TA_STATE_CONFIGMAP" .Values.state.configMapName "state.configMapName") | nindent 12 }}
-            {{- if .Values.identity.claimHeaders }}
-            # ADR-027 / LD-6 P2: named trusted-hop headers → principal claims
-            # (identity.claimHeaders). Rendered as ONE value, keys sorted (helm
-            # map range iterates key-sorted). Carriage-only in P2 — the binary
-            # loads the named claims onto the verified principal; no authz
-            # behavior changes until P3 match evaluation consumes them.
-            {{- $pairs := list }}
-            {{- range $k, $v := .Values.identity.claimHeaders }}
-            {{- $pairs = append $pairs (printf "%s=%s" $k $v) }}
-            {{- end }}
-            {{- include "tenant-api.taEnv" (list "TA_IDENTITY_CLAIM_HEADERS" (join "," $pairs) "identity.claimHeaders") | nindent 12 }}
+            {{- if .Values.oauth2Proxy.enabled }}
+            # ADR-027 §2: the oauth2-proxy sidecar's own config file, mounted
+            # at the same path here. tenant-api reads its injectRequestHeaders
+            # to know which header carries email, groups and each extra claim,
+            # and refuses to start on a file whose shape is ambiguous.
+            {{- include "tenant-api.taEnv" (list "TA_OAUTH2_PROXY_CONFIG" (include "tenant-api.oauth2ProxyConfigPath" .) "tenant-api.oauth2ProxyConfigPath") | nindent 12 }}
             {{- end }}
             {{- if eq .Values.writeBack.mode "pr-github" }}
             - name: TA_GITHUB_TOKEN
@@ -361,6 +356,11 @@ spec:
             {{- if .Values.federation.enabled }}
             - name: federation-signing-key
               mountPath: /etc/federation
+              readOnly: true
+            {{- end }}
+            {{- if .Values.oauth2Proxy.enabled }}
+            - name: oauth2-proxy-config
+              mountPath: {{ include "tenant-api.oauth2ProxyConfigDir" . }}
               readOnly: true
             {{- end }}
             {{- if .Values.humanSocket.enabled }}
@@ -492,32 +492,14 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: ["ALL"]
+          # ADR-027 §10: provider, request-header injection and the listener
+          # (with the upstream: humanSocket.path when humanSocket.enabled) are
+          # in the structured config file; oauth2-proxy refuses the legacy
+          # flags for them alongside it. Session, cookie and route flags stay.
           args:
-            - --provider={{ .Values.oauth2Proxy.provider }}
-            {{- with .Values.oauth2Proxy.oidcIssuerUrl }}
-            - --oidc-issuer-url={{ . }}
-            {{- end }}
-            {{- with .Values.oauth2Proxy.scope }}
-            - --scope={{ . }}
-            {{- end }}
-            {{- range .Values.oauth2Proxy.gitlabGroups }}
-            - --gitlab-group={{ . }}
-            {{- end }}
-            {{- if .Values.humanSocket.enabled }}
-            # ADR-027 D2-B: upstream is the pod-internal Unix socket, NOT the
-            # network 8080 plane. oauth2-proxy dials the socket over the shared
-            # human-sock volume; --flush-interval defaults to 1s, well below the
-            # SSE 25s heartbeat, so /api/v1/events streaming is not buffered
-            # (spike-verified against this exact oauth2-proxy digest).
-            - --upstream=unix://{{ .Values.humanSocket.path }}
-            {{- else }}
-            - --upstream=http://localhost:{{ include "tenant-api.apiPort" . }}
-            {{- end }}
-            - --http-address=0.0.0.0:4180
+            - --alpha-config={{ include "tenant-api.oauth2ProxyConfigPath" . }}
             - --redirect-url={{ .Values.oauth2Proxy.redirectUrl }}
             - --email-domain={{ .Values.oauth2Proxy.emailDomain }}
-            - --pass-user-headers=true
-            - --set-xauthrequest=true
             - --skip-auth-route=^/health$
             - --skip-auth-route=^/ready$
             - --cookie-secure={{ .Values.oauth2Proxy.cookieSecure }}
@@ -536,29 +518,27 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.oauth2Proxy.secretName }}
                   key: OAUTH2_PROXY_COOKIE_SECRET
-            - name: OAUTH2_PROXY_CLIENT_ID
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.oauth2Proxy.secretName }}
-                  key: OAUTH2_PROXY_CLIENT_ID
-            - name: OAUTH2_PROXY_CLIENT_SECRET
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.oauth2Proxy.secretName }}
-                  key: OAUTH2_PROXY_CLIENT_SECRET
           ports:
             - name: http
               containerPort: 4180
               protocol: TCP
-          {{- if .Values.humanSocket.enabled }}
-          # ADR-027 D2-B: mount the shared human-sock dir so oauth2-proxy can dial
-          # the Unix socket tenant-api binds. readOnly: the proxy only connects to
-          # the socket, never creates files here (its rootfs stays read-only).
           volumeMounts:
+            - name: oauth2-proxy-config
+              mountPath: {{ include "tenant-api.oauth2ProxyConfigDir" . }}
+              readOnly: true
+            # The client secret, as the file the config's clientSecretFile
+            # names. Mounted here only: tenant-api never sees it.
+            - name: oauth2-proxy-client-secret
+              mountPath: {{ include "tenant-api.oauth2ProxyClientSecretDir" . }}
+              readOnly: true
+            {{- if .Values.humanSocket.enabled }}
+            # ADR-027 D2-B: mount the shared human-sock dir so oauth2-proxy can dial
+            # the Unix socket tenant-api binds. readOnly: the proxy only connects to
+            # the socket, never creates files here (its rootfs stays read-only).
             - name: human-sock
               mountPath: {{ dir .Values.humanSocket.path }}
               readOnly: true
-          {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources.oauth2Proxy | nindent 12 }}
           readinessProbe:
@@ -582,6 +562,22 @@ spec:
             medium: Memory
             sizeLimit: 16Mi
 
+        {{- if .Values.oauth2Proxy.enabled }}
+        # ADR-027 §2: the oauth2-proxy structured config, mounted into both
+        # the oauth2-proxy and the tenant-api containers.
+        - name: oauth2-proxy-config
+          configMap:
+            name: {{ include "tenant-api.oauth2ProxyConfigMap" . }}
+        # defaultMode 0440: readable by the pod's fsGroup (oauth2-proxy runs
+        # as the pod-level uid/gid), not by others.
+        - name: oauth2-proxy-client-secret
+          secret:
+            secretName: {{ .Values.oauth2Proxy.secretName }}
+            defaultMode: 0440
+            items:
+              - key: OAUTH2_PROXY_CLIENT_SECRET
+                path: client-secret
+        {{- end }}
         {{- if .Values.humanSocket.enabled }}
         # ADR-027 D2-B: pod-internal dir for the human-plane Unix socket. Memory-
         # backed (tmpfs) — the socket is an ephemeral pod-local rendezvous, never

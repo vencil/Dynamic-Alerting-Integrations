@@ -31,6 +31,7 @@ MODULES=(
   "exporter|components/threshold-exporter/app|./..."
   "tenant-api|components/tenant-api|./cmd/... ./internal/..."
   "am-inhibit|tests/alertmanager-inhibit|./..."
+  "oauth2-proxy|tests/oauth2-proxy|./..."
   "da-read|components/da-read|./..."
   "receiver|tests/e2e-bench/receiver|./..."
   "bench-filter|scripts/tools/ops|./..."

@@ -1,0 +1,11 @@
+injectRequestHeaders:
+- name: X-Forwarded-Email
+  values:
+  - claimSource:
+      claim: email
+      basicAuthPassword:
+        value: cGFzcw==
+- name: X-Forwarded-Groups
+  values:
+  - claimSource:
+      claim: groups

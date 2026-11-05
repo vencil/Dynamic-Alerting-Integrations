@@ -511,8 +511,8 @@ function StepIdentity({ groups, onChange }) {
               <label className="text-sm font-medium text-[color:var(--da-color-fg)] mb-2 block">{t('宣告條件（claims）', 'Claim conditions')}</label>
               <p className="text-xs text-[color:var(--da-color-muted)] mb-3">
                 {t(
-                  '每個宣告鍵須已在部署的 --identity-claim-headers 宣告，否則整份 _rbac.yaml 載入失敗。多個鍵之間為「且」，同鍵多值之間為「或」。',
-                  'Each claim key must be declared in the deployment\'s --identity-claim-headers, or the whole _rbac.yaml fails to load. Keys are AND-ed; values within a key are OR-ed.',
+                  '每個 claim 須由部署的 oauth2-proxy 設定檔注入（helm oauth2Proxy.claimHeaders），否則整份 _rbac.yaml 載入失敗。多個鍵之間為「且」，同鍵多值之間為「或」。',
+                  'Each claim must be injected by the deployment\'s oauth2-proxy config (helm oauth2Proxy.claimHeaders), or the whole _rbac.yaml fails to load. Keys are AND-ed; values within a key are OR-ed.',
                 )}
               </p>
 

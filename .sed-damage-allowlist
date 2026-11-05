@@ -138,6 +138,8 @@ components/recipe-preview/promtool.openvex.json
 tests/alertmanager-inhibit/.golangci.yml
 # #3206: a copy of the alertmanager-inhibit config above, guarded the same way.
 components/da-read/.golangci.yml
+# ADR-027 §9 item 9: the same copy for the oauth2-proxy module.
+tests/oauth2-proxy/.golangci.yml
 scripts/tools/ops/bench-canary/.golangci.yml
 
 # check_cli_contract's baseline ledger: written by `--write-baseline`, never

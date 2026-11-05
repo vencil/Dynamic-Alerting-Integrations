@@ -7,13 +7,15 @@ import (
 	"io"
 	"os"
 
+	"github.com/vencil/tenant-api/internal/proxyconfig"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/tenantorg"
 )
 
 // configCmdUsage is printed for `tenant-api config` misuse.
-const configCmdUsage = `usage: tenant-api config check --kind rbac|tenant-orgs [--identity-claim-headers k=Header,...] FILE|-
-       tenant-api config check --kind scope --config-dir DIR [--rbac PATH] [--tenant-orgs PATH] [--identity-claim-headers k=Header,...]
+const configCmdUsage = `usage: tenant-api config check --kind rbac|tenant-orgs [--oauth2-proxy-config PATH] FILE|-
+       tenant-api config check --kind oauth2-proxy FILE|-
+       tenant-api config check --kind scope --config-dir DIR [--rbac PATH] [--tenant-orgs PATH] [--oauth2-proxy-config PATH]
 
 --kind rbac|tenant-orgs judges an admin config file with the parse function
 the server reads it with (ADR-036 §12) and prints one JSON document (schema
@@ -24,8 +26,15 @@ config's checks refuse it). Exactly one of the two is not null. An empty file
 can be read: it is the empty config, as in the server. "-" reads standard
 input.
 
---kind rbac is also checked against the declared identity claims, taken from
---identity-claim-headers or TA_IDENTITY_CLAIM_HEADERS as the server takes them.
+--kind rbac is also checked against the claims the oauth2-proxy config file
+injects (--oauth2-proxy-config or TA_OAUTH2_PROXY_CONFIG, as the server takes
+it; none given = no claims). A config file the server would refuse is a usage
+error (exit 2): the server would not start with it.
+
+--kind oauth2-proxy judges an oauth2-proxy structured config file (ADR-027
+§2) as the server reads it: "config" is {email_header, groups_header,
+claim_headers} (claim name -> header), or "problem" says why the server
+refuses the file.
 
 Exit codes: 0 can be read, 1 refused, 2 usage or the input cannot be opened.
 
@@ -52,6 +61,13 @@ an input cannot be opened.`
 // configCheckSchema names the JSON document `tenant-api config check` prints.
 const configCheckSchema = "tenant-api.config-check/v1"
 
+// proxyIdentityDoc is the "config" of `config check --kind oauth2-proxy`.
+type proxyIdentityDoc struct {
+	EmailHeader  string            `json:"email_header"`
+	GroupsHeader string            `json:"groups_header"`
+	ClaimHeaders map[string]string `json:"claim_headers"`
+}
+
 type configCheckDoc struct {
 	Schema  string   `json:"schema"`
 	Kind    string   `json:"kind"`
@@ -71,8 +87,8 @@ func runConfigCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	fs := flag.NewFlagSet("tenant-api config check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprintln(stderr, configCmdUsage) }
-	kind := fs.String("kind", "", "What to check: rbac, tenant-orgs (one FILE) or scope (--config-dir)")
-	claimHeaders := registerIdentityClaimFlag(fs)
+	kind := fs.String("kind", "", "What to check: rbac, tenant-orgs, oauth2-proxy (one FILE) or scope (--config-dir)")
+	proxyConfig := registerOAuth2ProxyConfigFlag(fs)
 	configDir := fs.String("config-dir", "", "--kind scope: the conf.d directory (tenant files)")
 	rbacPath := fs.String("rbac", "", "--kind scope: the RBAC config (default DIR/_rbac.yaml)")
 	tenantOrgsPath := fs.String("tenant-orgs", "", "--kind scope: the tenant-to-organization mapping (default DIR/_tenant_orgs.yaml)")
@@ -91,7 +107,7 @@ func runConfigCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 			ConfigDir:      *configDir,
 			RBACPath:       *rbacPath,
 			TenantOrgsPath: *tenantOrgsPath,
-			ClaimHeaders:   *claimHeaders,
+			ProxyConfig:    *proxyConfig,
 		}, stdout, stderr)
 	}
 	scopeOnly := false
@@ -101,7 +117,7 @@ func runConfigCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 			scopeOnly = true
 		}
 	})
-	if scopeOnly || fs.NArg() != 1 || (*kind != "rbac" && *kind != "tenant-orgs") {
+	if scopeOnly || fs.NArg() != 1 || (*kind != "rbac" && *kind != "tenant-orgs" && *kind != "oauth2-proxy") {
 		fmt.Fprintln(stderr, configCmdUsage)
 		return 2
 	}
@@ -114,15 +130,21 @@ func runConfigCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	doc := configCheckDoc{Schema: configCheckSchema, Kind: *kind}
 	switch *kind {
 	case "rbac":
-		claims, cerr := rbac.ParseClaimHeaders(*claimHeaders)
+		ident, cerr := loadProxyIdentity(*proxyConfig)
 		if cerr != nil {
-			// The declaration, not the file, is wrong: the server would not
-			// start with it either.
-			fmt.Fprintf(stderr, "config check: --identity-claim-headers: %v\n", cerr)
+			// The oauth2-proxy config, not the file, is wrong: the server
+			// would not start with it either.
+			fmt.Fprintf(stderr, "config check: --oauth2-proxy-config: %v\n", cerr)
 			return 2
 		}
-		c, perr := rbac.ParseCandidateConfig(data, claims)
+		c, perr := rbac.ParseCandidateConfig(data, ident.ClaimHeaders)
 		doc.Config, err = c, perr
+	case "oauth2-proxy":
+		ident, perr := proxyconfig.Parse(data)
+		if perr == nil {
+			doc.Config = proxyIdentityDoc{EmailHeader: ident.EmailHeader, GroupsHeader: ident.GroupsHeader, ClaimHeaders: ident.ClaimHeaders}
+		}
+		err = perr
 	case "tenant-orgs":
 		c, perr := tenantorg.ParseConfig(data)
 		doc.Config, err = c, perr

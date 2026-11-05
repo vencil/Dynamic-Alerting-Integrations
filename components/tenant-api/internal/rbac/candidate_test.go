@@ -130,7 +130,7 @@ func TestParseCandidateConfig_KeepsLivePipeline(t *testing.T) {
 			name:         "undeclared org-scope key rejected",
 			yaml:         "groups:\n  - name: ops\n    tenants: [\"*\"]\n    permissions: [read]\n    org-scope: org\n",
 			claimHeaders: nil,
-			wantErr:      "not declared in --identity-claim-headers",
+			wantErr:      "is not injected by the oauth2-proxy config",
 		},
 		{
 			name:         "declared org-scope key accepted",

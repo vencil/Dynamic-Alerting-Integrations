@@ -1,0 +1,15 @@
+# The oauth2-proxy config the cmd/server tests run with: email, groups and
+# the org claim (for the org-scope rule in scope-check/rbac.yaml).
+injectRequestHeaders:
+- name: X-Forwarded-Email
+  values:
+  - claimSource:
+      claim: email
+- name: X-Forwarded-Groups
+  values:
+  - claimSource:
+      claim: groups
+- name: X-Auth-Request-Org
+  values:
+  - claimSource:
+      claim: org

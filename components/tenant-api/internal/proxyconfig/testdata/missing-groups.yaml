@@ -1,0 +1,5 @@
+injectRequestHeaders:
+- name: X-Forwarded-Email
+  values:
+  - claimSource:
+      claim: email

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/vencil/tenant-api/internal/proxyconfig"
 	"github.com/vencil/tenant-api/internal/statestore"
 )
 
@@ -146,13 +147,22 @@ func readStateSnapshot(f stateFlags) (map[string][]byte, error) {
 	}
 }
 
-// registerIdentityClaimFlag registers --identity-claim-headers on fs. The
+// registerOAuth2ProxyConfigFlag registers --oauth2-proxy-config on fs. The
 // server and `tenant-api config check` (ADR-036 §12) both call it, so an RBAC
-// file is checked against the claims the deployment declares, read from the
-// same flag or TA_IDENTITY_CLAIM_HEADERS.
-func registerIdentityClaimFlag(fs *flag.FlagSet) *string {
-	return fs.String("identity-claim-headers", envOrDefault("TA_IDENTITY_CLAIM_HEADERS", ""),
-		"ADR-027/LD-6 P2: comma-separated claimKey=Header-Name pairs (e.g. 'org=X-Auth-Request-Org,region=X-Auth-Request-Region') declaring which trusted-hop headers load which named verified claims onto the request principal. Claims are carried only — nothing consumes them for authz until P3 match evaluation. Default empty = the seam is closed and behavior is unchanged.")
+// file is checked against the claims the deployment's oauth2-proxy injects,
+// read from the same flag or TA_OAUTH2_PROXY_CONFIG.
+func registerOAuth2ProxyConfigFlag(fs *flag.FlagSet) *string {
+	return fs.String("oauth2-proxy-config", envOrDefault("TA_OAUTH2_PROXY_CONFIG", ""),
+		"ADR-027 §2: path of the oauth2-proxy structured config file (--alpha-config) the same pod's oauth2-proxy runs with. Its injectRequestHeaders decide which headers carry email, groups and each extra claim; a file whose shape is ambiguous stops tenant-api. Empty = no extra claims, email and groups from X-Forwarded-Email / X-Forwarded-Groups.")
+}
+
+// loadProxyIdentity reads the identity headers from the oauth2-proxy config
+// file at path; "" gives proxyconfig.Default().
+func loadProxyIdentity(path string) (proxyconfig.Identity, error) {
+	if path == "" {
+		return proxyconfig.Default(), nil
+	}
+	return proxyconfig.Load(path)
 }
 
 // version is set at build time (-ldflags "-X main.version=..."); when it is

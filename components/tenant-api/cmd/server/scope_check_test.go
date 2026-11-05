@@ -16,7 +16,8 @@ import (
 // broken tenant file is written by the test (scopeFixture), so no unparsable
 // YAML is checked in.
 
-const scopeFixtureClaims = "org=X-Auth-Request-Org"
+// scopeFixtureClaims is the oauth2-proxy config that injects the org claim.
+var scopeFixtureClaims = filepath.Join("testdata", "oauth2-proxy.yaml")
 
 // scopeFixture copies testdata/scope-check/tree, plus testdata/scope-check/rbac.yaml
 // as _rbac.yaml, into a temporary directory, minus the files named in drop,
@@ -79,7 +80,7 @@ func TestConfigCheckScope_Fixture(t *testing.T) {
 		// Declares another id: git-managed (id_mismatch), metadata unknown.
 		"tenant-foxtrot.yaml": "tenants:\n  other-id:\n    _metadata:\n      environment: production\n",
 	})
-	code, out, errOut := runScope(t, "--config-dir", dir, "--identity-claim-headers", scopeFixtureClaims)
+	code, out, errOut := runScope(t, "--config-dir", dir, "--oauth2-proxy-config", scopeFixtureClaims)
 	if code != 1 {
 		t.Fatalf("exit %d, want 1; stderr:\n%s\nstdout:\n%s", code, errOut, out)
 	}
@@ -147,7 +148,7 @@ func TestConfigCheckScope_Fixture(t *testing.T) {
 func TestConfigCheckScope_CleanExitsZero(t *testing.T) {
 	t.Parallel()
 	dir := scopeFixture(t, []string{"tenant-bravo.yaml", "tenant-charlie.yaml", "tenant-delta.yaml"}, nil)
-	code, out, errOut := runScope(t, "--config-dir", dir, "--identity-claim-headers", scopeFixtureClaims)
+	code, out, errOut := runScope(t, "--config-dir", dir, "--oauth2-proxy-config", scopeFixtureClaims)
 	if code != 0 {
 		t.Fatalf("exit %d, want 0; stderr:\n%s\nstdout:\n%s", code, errOut, out)
 	}
@@ -162,12 +163,12 @@ func TestConfigCheckScope_CleanExitsZero(t *testing.T) {
 func TestConfigCheckScope_TenantOrgsFile(t *testing.T) {
 	t.Parallel()
 	dir := scopeFixture(t, []string{"_tenant_orgs.yaml", "tenant-bravo.yaml", "tenant-charlie.yaml", "tenant-delta.yaml"}, nil)
-	code, out, errOut := runScope(t, "--config-dir", dir, "--identity-claim-headers", scopeFixtureClaims)
+	code, out, errOut := runScope(t, "--config-dir", dir, "--oauth2-proxy-config", scopeFixtureClaims)
 	if code != 1 || !strings.Contains(out, `"tenant": "tenant-alpha"`) || !strings.Contains(out, `"axis": "org"`) {
 		t.Fatalf("exit %d, want 1 with an org finding for tenant-alpha; stderr:\n%s\nstdout:\n%s", code, errOut, out)
 	}
 
-	code, _, errOut = runScope(t, "--config-dir", dir, "--identity-claim-headers", scopeFixtureClaims,
+	code, _, errOut = runScope(t, "--config-dir", dir, "--oauth2-proxy-config", scopeFixtureClaims,
 		"--tenant-orgs", filepath.Join(dir, "missing.yaml"))
 	if code != 2 || !strings.Contains(errOut, "tenant-orgs") {
 		t.Fatalf("explicit missing --tenant-orgs: exit %d, want 2; stderr:\n%s", code, errOut)
@@ -190,7 +191,7 @@ func TestConfigCheckScope_TenantOrgsFile(t *testing.T) {
 	if err := os.Remove(filepath.Join(dir, "_rbac.yaml")); err != nil {
 		t.Fatal(err)
 	}
-	code, out, errOut = runScope(t, "--config-dir", dir, "--identity-claim-headers", scopeFixtureClaims,
+	code, out, errOut = runScope(t, "--config-dir", dir, "--oauth2-proxy-config", scopeFixtureClaims,
 		"--rbac", rbacFile, "--tenant-orgs", orgs)
 	if code != 0 {
 		t.Fatalf("--rbac/--tenant-orgs outside DIR: exit %d, want 0; stderr:\n%s\nstdout:\n%s", code, errOut, out)
@@ -220,7 +221,7 @@ func TestConfigCheckScope_ConfigProblems(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			dir := scopeFixture(t, nil, c.extra)
-			code, out, errOut := runScope(t, "--config-dir", dir, "--identity-claim-headers", c.claims)
+			code, out, errOut := runScope(t, "--config-dir", dir, "--oauth2-proxy-config", c.claims)
 			if code != 1 {
 				t.Fatalf("exit %d, want 1; stderr:\n%s\nstdout:\n%s", code, errOut, out)
 			}

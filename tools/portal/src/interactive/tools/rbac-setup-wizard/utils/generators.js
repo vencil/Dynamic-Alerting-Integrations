@@ -130,8 +130,8 @@ function rbacGenerateYaml(groups) {
       yaml += `    domains: [${group.domains.map(yq).join(', ')}]\n`;
     }
 
-    // org-scope axis (optional). The key must be declared in the deployment's
-    // --identity-claim-headers or the WHOLE file fails to load (validate warns).
+    // org-scope axis (optional). The claim must be injected by the deployment's
+    // oauth2-proxy config or the WHOLE file fails to load (validate warns).
     if (group.orgScope) {
       yaml += `    org-scope: ${yblock(group.orgScope)}\n`;
     }
@@ -152,8 +152,8 @@ function validTenantPattern(pat) {
   return false;
 }
 
-// Claim/org-scope keys must match this shape or they can never be declared in
-// --identity-claim-headers (principal.go claimKeyRe) — the rule would be dead.
+// Claim/org-scope keys must match this shape or the oauth2-proxy config can
+// never inject them (proxyconfig claimNameRe) — the rule would be dead.
 const CLAIM_KEY_RE = /^[A-Za-z0-9_.-]+$/;
 
 function rbacValidate(groups) {
@@ -228,8 +228,8 @@ function rbacValidate(groups) {
       warnings.push({
         level: 'warning',
         msg: () => t(
-          `群組 "${group.name}" 使用宣告軸（claims/org-scope）：這些鍵必須已在部署的 --identity-claim-headers 宣告，否則整份 _rbac.yaml 會載入失敗。載入前請用租戶管理員的稽核（dry-run）驗證。`,
-          `Group "${group.name}" uses an identity axis (claims/org-scope): these keys MUST be declared in the deployment's --identity-claim-headers or the ENTIRE _rbac.yaml fails to load. Verify with the admin audit (dry-run) before deploying.`,
+          `群組 "${group.name}" 使用宣告軸（claims/org-scope）：這些 claim 必須由部署的 oauth2-proxy 設定檔注入（helm oauth2Proxy.claimHeaders），否則整份 _rbac.yaml 會載入失敗。載入前請用租戶管理員的稽核（dry-run）驗證。`,
+          `Group "${group.name}" uses an identity axis (claims/org-scope): these claims MUST be injected by the deployment's oauth2-proxy config (helm oauth2Proxy.claimHeaders) or the ENTIRE _rbac.yaml fails to load. Verify with the admin audit (dry-run) before deploying.`,
         ),
       });
     }

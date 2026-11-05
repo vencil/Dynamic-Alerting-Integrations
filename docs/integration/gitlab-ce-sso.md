@@ -28,13 +28,16 @@ lang: zh
 
 ## 步驟二：設定 Helm values
 
-把 GitLab 的 client 憑證放進既有的 `oauth2-proxy-secrets`（key `OAUTH2_PROXY_CLIENT_ID` / `OAUTH2_PROXY_CLIENT_SECRET` / `OAUTH2_PROXY_COOKIE_SECRET`）。charts 讀既有 secret，不新增管道。
+把 GitLab 的 client 憑證放進既有的 `oauth2-proxy-secrets`（key `OAUTH2_PROXY_CLIENT_SECRET` / `OAUTH2_PROXY_COOKIE_SECRET`；da-portal chart 另讀 `OAUTH2_PROXY_CLIENT_ID`）。charts 讀既有 secret，不新增管道。
+
+tenant-api chart 的 oauth2-proxy 以結構化設定檔執行（[ADR-027](../adr/027-tenant-api-caller-identity.md) §10），**Application ID 寫在 values 的 `oauth2Proxy.clientID`**，不讀 secret 的 `OAUTH2_PROXY_CLIENT_ID`。GitLab 的額外 claim（例如組織）以 `oauth2Proxy.claimHeaders` 宣告注入哪個 header，tenant-api 從同一份設定檔得知（見 [tenant-api README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md)「身分 header 由 oauth2-proxy 設定檔決定」）。
 
 tenant-api 與 da-portal 兩個 chart 的 `oauth2Proxy` 區塊設定一致（單一 SSO）：
 
 ```yaml
 oauth2Proxy:
   provider: gitlab
+  clientID: "<Application ID>"                     # 僅 tenant-api chart；da-portal 讀 secret
   oidcIssuerUrl: "https://gitlab.acme.internal"   # 你的 GitLab 裸 instance URL
   scope: "openid profile email"
   redirectUrl: "https://portal.acme.internal/oauth2/callback"

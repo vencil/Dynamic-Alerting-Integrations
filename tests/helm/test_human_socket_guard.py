@@ -86,17 +86,28 @@ def test_deployment_gates_socket_on_flag(repo_root: Path):
     assert "TA_HUMAN_SOCKET" in directives and "--human-socket" not in directives, (
         "deployment must pass TA_HUMAN_SOCKET (env, ADR-036 §12) when enabled"
     )
-    assert "unix://" in directives, (
-        "deployment must switch the oauth2-proxy upstream to unix:// when enabled"
+    # The upstream itself lives in the oauth2-proxy config file (ADR-027
+    # §10, _helpers.tpl tenant-api.oauth2ProxyConfig); the render tests below
+    # read it from there.
+    helpers = (repo_root / "helm/tenant-api/templates/_helpers.tpl").read_text(encoding="utf-8")
+    assert 'printf "unix://%s" .Values.humanSocket.path' in helpers, (
+        "the oauth2-proxy config must switch its upstream to unix:// when enabled"
     )
-    # the http upstream must survive as the else-branch (off state unchanged);
-    # its port is tenant-api.apiPort (#3483), the render tests below pin 8080.
-    assert "--upstream=http://localhost:{{ include \"tenant-api.apiPort\" . }}" in directives, (
-        "deployment must keep the http upstream for the disabled (default) path"
+    assert 'printf "http://localhost:%s" (include "tenant-api.apiPort" .)' in helpers, (
+        "the oauth2-proxy config must keep the http upstream for the disabled (default) path"
     )
 
 
 # ── render layer (helm-gated) ───────────────────────────────────────────────
+def _upstream_uris(out: str) -> list[str]:
+    """The upstream URIs of the rendered oauth2-proxy config file."""
+    for doc in yaml.safe_load_all(out):
+        if doc and doc.get("kind") == "ConfigMap" and "-oauth2-proxy-" in doc["metadata"]["name"]:
+            cfg = yaml.safe_load(doc["data"]["oauth2-proxy.yaml"])
+            return [u["uri"] for u in cfg["upstreamConfig"]["upstreams"]]
+    raise AssertionError("no oauth2-proxy config in the render")
+
+
 def _helm_template(repo_root: Path, *set_args: str, template: str | None = None):
     cmd = ["helm", "template", "t", str(repo_root / _CHART), *baseline_args(_CHART)]
     if template:
@@ -112,7 +123,7 @@ def test_render_default_omits_socket_wiring(repo_root: Path):
     res = _helm_template(repo_root)
     assert res.returncode == 0, f"default render must succeed: {res.stderr}"
     out = res.stdout
-    assert "--upstream=http://localhost:8080" in out, (
+    assert _upstream_uris(out) == ["http://localhost:8080"], (
         "default render must keep the http upstream"
     )
     assert "unix://" not in out, "default render must NOT emit a unix:// upstream"
@@ -131,7 +142,7 @@ def test_render_enabled_switches_upstream_and_mounts_socket(repo_root: Path):
     res = _helm_template(repo_root, "humanSocket.enabled=true")
     assert res.returncode == 0, f"enabled render must succeed: {res.stderr}"
     out = res.stdout
-    assert "--upstream=unix:///run/ta-human/human.sock" in out, (
+    assert _upstream_uris(out) == ["unix:///run/ta-human/human.sock"], (
         "enabled render must point oauth2-proxy at the unix socket"
     )
     assert "http://localhost:8080" not in out, (

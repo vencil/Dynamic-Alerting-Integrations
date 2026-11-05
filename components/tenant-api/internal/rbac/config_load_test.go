@@ -55,8 +55,8 @@ var invalidConfigTable = []struct {
 	{"null match: comment-only children", "groups:\n  - name: operators\n    match:\n      # claims:\n      #   org: [ORG-A]\n    tenants: [\"*\"]\n    permissions: [read, write]\n", "present but null"},
 	// validateConfig rejections routed through the real load entry points.
 	{"empty match block", "groups:\n  - name: r\n    match: {}\n    tenants: [\"*\"]\n    permissions: [read]\n", "empty match block"},
-	{"undeclared claim key", "groups:\n  - name: r\n    match:\n      claims:\n        region: [eu-1]\n    tenants: [\"*\"]\n    permissions: [read]\n", "not declared"},
-	{"undeclared org-scope key", "groups:\n  - name: ops\n    tenants: [\"*\"]\n    permissions: [read]\n    org-scope: region\n", "not declared"},
+	{"undeclared claim key", "groups:\n  - name: r\n    match:\n      claims:\n        region: [eu-1]\n    tenants: [\"*\"]\n    permissions: [read]\n", "is not injected"},
+	{"undeclared org-scope key", "groups:\n  - name: ops\n    tenants: [\"*\"]\n    permissions: [read]\n    org-scope: region\n", "is not injected"},
 	// Tenant-pattern allowlist. The load-bearing row is "**": it must be
 	// rejected here so it never reaches tenantMatches, where it would collapse
 	// to prefix "*" and fail open onto a platform-scope "*" gate (see
@@ -128,8 +128,8 @@ func TestValidateConfig_Branches(t *testing.T) {
 		{"claims-only match valid with declared key", rule(&MatchBlock{Claims: map[string][]string{"org": {"ORG-A"}}}), declared, ""},
 		{"groups+claims valid", rule(&MatchBlock{Groups: []string{"ops"}, Claims: map[string][]string{"org": {"ORG-A"}}}), declared, ""},
 		{"empty match block rejected", rule(&MatchBlock{}), declared, "empty match block"},
-		{"undeclared claim key rejected (nil declared)", rule(&MatchBlock{Claims: map[string][]string{"org": {"ORG-A"}}}), nil, "not declared"},
-		{"undeclared claim key rejected (other key declared)", rule(&MatchBlock{Claims: map[string][]string{"region": {"eu-1"}}}), declared, "not declared"},
+		{"undeclared claim key rejected (nil declared)", rule(&MatchBlock{Claims: map[string][]string{"org": {"ORG-A"}}}), nil, "is not injected"},
+		{"undeclared claim key rejected (other key declared)", rule(&MatchBlock{Claims: map[string][]string{"region": {"eu-1"}}}), declared, "is not injected"},
 		{"empty claim value list rejected", rule(&MatchBlock{Claims: map[string][]string{"org": {}}}), declared, "empty value list"},
 		{"blank claim value rejected", rule(&MatchBlock{Claims: map[string][]string{"org": {"ORG-A", "  "}}}), declared, "empty value"},
 		{"blank match.groups entry rejected", rule(&MatchBlock{Groups: []string{"ops", ""}}), nil, "empty entry"},
@@ -336,7 +336,7 @@ func TestNewManager_OrgScopeValidation(t *testing.T) {
 		t.Parallel()
 		_, path := testutil.MkTempYAML(t, "_rbac.yaml", orgScopedLegacyYAML)
 		_, err := NewManager(path, nil) // "org" NOT declared
-		if err == nil || !strings.Contains(err.Error(), "not declared") {
+		if err == nil || !strings.Contains(err.Error(), "is not injected") {
 			t.Errorf("NewManager = %v, want error containing \"not declared\"", err)
 		}
 	})

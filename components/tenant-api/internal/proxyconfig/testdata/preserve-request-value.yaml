@@ -1,0 +1,10 @@
+injectRequestHeaders:
+- name: X-Forwarded-Email
+  preserveRequestValue: true
+  values:
+  - claimSource:
+      claim: email
+- name: X-Forwarded-Groups
+  values:
+  - claimSource:
+      claim: groups

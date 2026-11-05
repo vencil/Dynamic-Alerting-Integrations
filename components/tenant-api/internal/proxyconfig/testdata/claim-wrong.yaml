@@ -1,0 +1,10 @@
+# The email header carries the user name, so no header carries email.
+injectRequestHeaders:
+- name: X-Forwarded-Email
+  values:
+  - claimSource:
+      claim: user
+- name: X-Forwarded-Groups
+  values:
+  - claimSource:
+      claim: groups

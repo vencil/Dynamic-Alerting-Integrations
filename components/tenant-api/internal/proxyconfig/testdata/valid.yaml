@@ -1,0 +1,29 @@
+# The shape the tenant-api chart renders: email, groups and one extra claim.
+upstreamConfig:
+  upstreams:
+  - id: api
+    path: /
+    uri: unix:///run/ta-human/human.sock
+injectRequestHeaders:
+- name: X-Forwarded-Email
+  values:
+  - claimSource:
+      claim: email
+- name: X-Forwarded-Groups
+  preserveRequestValue: false
+  values:
+  - claimSource:
+      claim: groups
+      prefix: ""
+- name: X-Auth-Request-Org
+  InsecureSkipHeaderNormalization: false
+  values:
+  - claimSource:
+      claim: org
+providers:
+- id: github
+  provider: github
+  clientID: abc
+  clientSecretFile: /etc/oauth2-proxy/client-secret
+server:
+  BindAddress: 0.0.0.0:4180

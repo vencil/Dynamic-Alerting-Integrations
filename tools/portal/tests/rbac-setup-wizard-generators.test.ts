@@ -235,7 +235,7 @@ describe('rbacValidate', () => {
 
   it('warns that claim / org-scope keys must be declared or the file fails to load', () => {
     const out = msgs([group({ orgScope: 'org-code' })]);
-    expect(out.some((w) => w.level === 'warning' && /--identity-claim-headers/.test(w.msg))).toBe(true);
+    expect(out.some((w) => w.level === 'warning' && /oauth2Proxy\.claimHeaders/.test(w.msg))).toBe(true);
   });
 
   it('flags a whitespace-only group name as an error', () => {

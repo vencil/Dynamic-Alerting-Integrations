@@ -113,7 +113,7 @@ func main() {
 	rbacPath := flag.String("rbac", envNonEmptyOrDefault("TA_RBAC_PATH", ""),
 		"Path to _rbac.yaml. Without one — or with one that has no rules — every request is denied (ADR-027 §7: no open mode). An empty value is refused (#2491)")
 	// Shared with `tenant-api config check` (ADR-036 §12).
-	identityClaimHeaders := registerIdentityClaimFlag(flag.CommandLine)
+	oauth2ProxyConfig := registerOAuth2ProxyConfigFlag(flag.CommandLine)
 	listenAddr := flag.String("addr", envOrDefault("TA_ADDR", ":8080"),
 		"HTTP listen address")
 	reloadInterval := flag.Duration("reload-interval", 30*time.Second,
@@ -293,21 +293,21 @@ func main() {
 	}
 
 	// ── Dependencies ──────────────────────────────────────────────────────────
-	// ADR-027 / LD-6 P2+P3: identity-claims seam. The flag declares which
-	// trusted-hop headers load which named claims (claimKey=Header-Name);
-	// parsing is fail-loud — a misconfigured identity axis must never be
-	// silently absent. Default empty = no claim axes → byte-identical pre-P2
-	// behavior. Parsed BEFORE the RBAC manager because the declared claim
-	// keys participate in _rbac.yaml validation (a match.claims rule on an
-	// undeclared key is rejected at load — initial load fatal below,
-	// hot-reload keeps last-good). The INFO line logs claim keys and header
-	// NAMES only (startup config — request values never appear in logs).
-	claimHeaders, err := rbac.ParseClaimHeaders(*identityClaimHeaders)
+	// ADR-027 §2: the oauth2-proxy config file the same pod's oauth2-proxy
+	// runs with decides which headers carry email, groups and each extra
+	// claim; tenant-api reads that file rather than keeping a list of its own.
+	// A file whose shape is ambiguous stops the start. Read BEFORE the RBAC
+	// manager because the injected claims participate in _rbac.yaml
+	// validation (a match.claims rule on a claim no header carries is
+	// rejected at load — initial load fatal below, hot-reload keeps
+	// last-good). The INFO line logs claim and header NAMES only.
+	proxyIdentity, err := loadProxyIdentity(*oauth2ProxyConfig)
 	if err != nil {
-		log.Fatalf("FATAL: --identity-claim-headers: %v", err)
+		log.Fatalf("FATAL: --oauth2-proxy-config: %v", err)
 	}
-	if len(claimHeaders) > 0 {
-		log.Printf("INFO: identity claim headers configured: %s (claims ride the principal; _rbac.yaml match: rules may consume them)", formatClaimHeaders(claimHeaders))
+	claimHeaders := proxyIdentity.ClaimHeaders
+	if *oauth2ProxyConfig != "" {
+		log.Printf("INFO: identity headers from %s: email=%s groups=%s claims=%s", *oauth2ProxyConfig, proxyIdentity.EmailHeader, proxyIdentity.GroupsHeader, formatClaimHeaders(claimHeaders))
 	}
 
 	rbacMgr, err := rbac.NewManager(*rbacPath, claimHeaders)
@@ -1004,8 +1004,8 @@ func pathExists(p string) bool {
 	return err == nil
 }
 
-// formatClaimHeaders renders a claimKey→headerName map as deterministic
-// (key-sorted) "key=Header-Name" CSV for the startup INFO log. This is
+// formatClaimHeaders renders a claim-name→headerName map as deterministic
+// (key-sorted) "claim=Header-Name" CSV for the startup INFO log. This is
 // startup config only — no request-carried claim values are ever logged.
 func formatClaimHeaders(m map[string]string) string {
 	keys := make([]string, 0, len(m))

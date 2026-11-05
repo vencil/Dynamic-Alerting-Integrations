@@ -1,0 +1,10 @@
+injectRequestHeaders:
+- name: X-Forwarded-Email
+  values:
+  - claimSource:
+      claim: email
+- name: X-Forwarded-Groups
+  values:
+  - claimSource:
+      claim: groups
+      prefix: "github:"

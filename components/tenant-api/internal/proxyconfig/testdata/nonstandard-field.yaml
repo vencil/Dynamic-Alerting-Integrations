@@ -1,0 +1,10 @@
+# oauth2-proxy matches field names ignoring case, so it reads these headers.
+InjectRequestHeaders:
+- name: X-Forwarded-Email
+  values:
+  - claimSource:
+      claim: email
+- name: X-Forwarded-Groups
+  values:
+  - claimSource:
+      claim: groups

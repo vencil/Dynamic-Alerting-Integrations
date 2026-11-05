@@ -3,8 +3,7 @@ package rbac
 // HeaderResolver unit tests: the base identity resolution (email / groups /
 // provenance) plus the ADR-027 / LD-6 P2 identity-claims seam —
 //
-//   - ParseClaimHeaders: the fail-loud flag parser (claimKey=Header-Name CSV).
-//   - HeaderResolver.ClaimHeaders: loading declared trusted-hop headers into
+//   - HeaderResolver.ClaimHeaders: loading the injected claim headers into
 //     VerifiedPrincipal.Claims, including the security assertion that an
 //     UNDECLARED header can never be copied onto the principal.
 //
@@ -93,99 +92,6 @@ func TestHeaderResolver_ImplementsIdentityResolver(t *testing.T) {
 	req.Header.Set("X-Forwarded-Email", "x@y.z")
 	if _, err := r.Resolve(req); err != nil {
 		t.Fatalf("Resolve via interface: %v", err)
-	}
-}
-
-// --- ParseClaimHeaders (ADR-027 / LD-6 P2) ---
-
-func TestParseClaimHeaders_SinglePair(t *testing.T) {
-	t.Parallel()
-	got, err := ParseClaimHeaders("org=X-Auth-Request-Org")
-	if err != nil {
-		t.Fatalf("ParseClaimHeaders returned error: %v", err)
-	}
-	want := map[string]string{"org": "X-Auth-Request-Org"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ParseClaimHeaders = %v, want %v", got, want)
-	}
-}
-
-func TestParseClaimHeaders_MultiPair(t *testing.T) {
-	t.Parallel()
-	got, err := ParseClaimHeaders("org=X-Auth-Request-Org,region=X-Auth-Request-Region")
-	if err != nil {
-		t.Fatalf("ParseClaimHeaders returned error: %v", err)
-	}
-	want := map[string]string{
-		"org":    "X-Auth-Request-Org",
-		"region": "X-Auth-Request-Region",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ParseClaimHeaders = %v, want %v", got, want)
-	}
-}
-
-// An empty (or all-whitespace) flag value means "no claim axes declared" —
-// (nil, nil), the seam stays closed.
-func TestParseClaimHeaders_EmptyStringIsNilNil(t *testing.T) {
-	t.Parallel()
-	for _, s := range []string{"", "   ", "\t"} {
-		got, err := ParseClaimHeaders(s)
-		if err != nil {
-			t.Errorf("ParseClaimHeaders(%q) returned error: %v", s, err)
-		}
-		if got != nil {
-			t.Errorf("ParseClaimHeaders(%q) = %v, want nil", s, got)
-		}
-	}
-}
-
-// Whitespace around pairs, keys, and header names is trimmed and accepted.
-func TestParseClaimHeaders_TrimsWhitespace(t *testing.T) {
-	t.Parallel()
-	got, err := ParseClaimHeaders(" org = X-Auth-Request-Org , region=X-Auth-Request-Region ")
-	if err != nil {
-		t.Fatalf("ParseClaimHeaders returned error: %v", err)
-	}
-	want := map[string]string{
-		"org":    "X-Auth-Request-Org",
-		"region": "X-Auth-Request-Region",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("ParseClaimHeaders = %v, want %v", got, want)
-	}
-}
-
-// Fail-loud contract: a malformed declaration is a startup error (main wraps
-// it in log.Fatalf) — a misconfigured identity axis must never be silently
-// absent.
-func TestParseClaimHeaders_MalformedIsError(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		name string
-		in   string
-	}{
-		{"missing equals", "org"},
-		{"empty key", "=X-Auth-Request-Org"},
-		{"empty header name", "org="},
-		{"duplicate key", "org=X-Auth-Request-Org,org=X-Other"},
-		{"key outside charset", "org code=X-Auth-Request-Org"},
-		{"empty segment", "org=X-Auth-Request-Org,,region=X-R"},
-		{"double equals (header starts with '=')", "org==X-Auth-Request-Org"},
-		{"embedded equals in header name", "org=X-Auth=Request-Org"},
-		{"space in header name", "org=X Auth Request Org"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got, err := ParseClaimHeaders(tc.in)
-			if err == nil {
-				t.Fatalf("ParseClaimHeaders(%q) = %v, want error", tc.in, got)
-			}
-			if got != nil {
-				t.Errorf("ParseClaimHeaders(%q) returned non-nil map %v alongside error", tc.in, got)
-			}
-		})
 	}
 }
 

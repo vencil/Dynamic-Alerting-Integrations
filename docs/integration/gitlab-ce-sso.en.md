@@ -28,13 +28,16 @@ In GitLab **User Settings → Applications** (or Group / Admin, per scope), crea
 
 ## Step 2: Configure Helm values
 
-Put GitLab's client credentials into the existing `oauth2-proxy-secrets` (keys `OAUTH2_PROXY_CLIENT_ID` / `OAUTH2_PROXY_CLIENT_SECRET` / `OAUTH2_PROXY_COOKIE_SECRET`). The charts read the existing secret; no new channel is added.
+Put GitLab's client credentials into the existing `oauth2-proxy-secrets` (keys `OAUTH2_PROXY_CLIENT_SECRET` / `OAUTH2_PROXY_COOKIE_SECRET`; the da-portal chart also reads `OAUTH2_PROXY_CLIENT_ID`). The charts read the existing secret; no new channel is added.
+
+The tenant-api chart runs oauth2-proxy with a structured config file ([ADR-027](../adr/027-tenant-api-caller-identity.en.md) §10), so **the Application ID goes in the `oauth2Proxy.clientID` value**; the secret's `OAUTH2_PROXY_CLIENT_ID` is not read. GitLab's extra claims (an organization, say) are declared with `oauth2Proxy.claimHeaders` (which header carries each), and tenant-api learns them from the same file (see the [tenant-api README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/tenant-api/README.md), "身分 header 由 oauth2-proxy 設定檔決定").
 
 Configure the `oauth2Proxy` block identically in both the tenant-api and da-portal charts (single SSO):
 
 ```yaml
 oauth2Proxy:
   provider: gitlab
+  clientID: "<Application ID>"                     # tenant-api chart only; da-portal reads the secret
   oidcIssuerUrl: "https://gitlab.acme.internal"   # your bare GitLab instance URL
   scope: "openid profile email"
   redirectUrl: "https://portal.acme.internal/oauth2/callback"
