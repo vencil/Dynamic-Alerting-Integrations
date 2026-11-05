@@ -11,6 +11,7 @@
 """
 from __future__ import annotations
 
+import os
 import re
 import shlex
 import shutil
@@ -935,9 +936,12 @@ def test_a_customer_copy_needs_all_three_files(tmp_path, copied):
     ops.mkdir(parents=True)
     for rel in copied:
         shutil.copy(_REPO / rel, ops / Path(rel).name)
+    # The customer's environment, not ours: no PYTHONPATH that could reach
+    # this repo's scripts/tools and stand in for the missing copies.
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}
     proc = subprocess.run([sys.executable, "scripts/ops/guard_defaults_scopes.py", "--null", "-"],
                           input=b"a/_defaults.yaml\0", cwd=tmp_path, capture_output=True,
-                          timeout=60)
+                          timeout=60, env=env)
     if len(copied) == 3:
         assert proc.returncode == 0, proc.stderr
         assert proc.stdout.startswith(b"unmanaged\ta/_defaults.yaml"), proc.stdout
