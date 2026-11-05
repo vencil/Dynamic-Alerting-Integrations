@@ -843,7 +843,10 @@ def test_follow_redirects_is_asked_only_of_a_header_reference():
 def test_a_bearer_token_reference_still_conflicts_with_basic_auth():
     receiver = _ref_at(("http_config", "bearer_token"), {"secret": {"key": "k"}},
                        basic_auth={"username": "u", "password": "p"})
-    assert [k for k, _f in _kinds(receiver)] == ["invalid_receiver_field"]
+    cfg, warnings = _build(receiver)
+    assert cfg is None and [w.kind for w in warnings] == ["invalid_receiver_field"]
+    # 是「至多一個」的衝突，不是「bearer_token 必須是字串」
+    assert "accepts at most one" in warnings[0], warnings
 
 
 @pytest.mark.parametrize("site", _NESTED, ids=lambda s: ".".join(s.path))
