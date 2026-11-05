@@ -1380,25 +1380,10 @@ def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
         # stdout carries the findings document alone. #1560: the same for
         # `--secret-mounts-out -` in the modes that read it; the two together
         # on stdout are two documents on one stream (claim_stdout: rc 2).
+        # #1560 (CodeRabbit on #3615): every destination this run writes is
+        # judged by ONE function, before anything is written.
         receipts = contextlib.nullcontext()
-        reads_mount_list = ((args.output_alertmanager or args.output_configmap)
-                            and not args.validate and not args.dry_run)
-        stdout_documents = [flag for flag, value in (
-            ("--findings-json", args.findings_json),
-            ("--secret-mounts-out", args.mount_list_out if reads_mount_list else None))
-            if value is not None and _lib_io.targets_stdout(value)]
-        if stdout_documents:
-            asked = (["the routes output (no -o)"] if args.output is None else []) \
-                + stdout_documents
-            try:
-                for owner in asked:
-                    _lib_io.claim_stdout(owner)
-            except _lib_io.OutputWriteError as exc:
-                print(f"ERROR: {_lib_io.safe_label(str(exc))}", file=sys.stderr)
-                # The shared line names the first clash only; name them all.
-                print(f"  standard output was asked for by: {', '.join(asked)} — "
-                      "only one of them may write there", file=sys.stderr)
-                sys.exit(EXIT_CALLER_ERROR)
+        if refuse_clashing_outputs(args):
             receipts = contextlib.redirect_stdout(sys.stderr)
         # #1560: the mount list is written HERE, after the redirect ends, so
         # `--secret-mounts-out -` reaches the real stdout.
@@ -1586,11 +1571,106 @@ def _assembled_judge(undelivered: list[UndeliveredCustomAlerts], *, strict: bool
     return judge
 
 
+def _same_file(a: str | None, b: str | None) -> bool:
+    """Whether paths *a* and *b* name one file: the same path once symlinks
+    are resolved (``os.path.realpath`` — also for a file not created yet),
+    or the same inode (``os.path.samefile`` — a hard link)."""
+    if not a or not b:
+        return False
+    if os.path.realpath(a) == os.path.realpath(b):
+        return True
+    try:
+        return os.path.exists(a) and os.path.exists(b) and os.path.samefile(a, b)
+    except OSError:
+        return False
+
+
 def _names_the_source(dest: str | None, base_config: str | None) -> bool:
     """Whether writing *dest* would overwrite the --base-config file (the
-    source, #1211 gap 2). Same file by inode (``os.path.samefile``)."""
-    return bool(dest and base_config and os.path.exists(dest)
-                and os.path.exists(base_config) and os.path.samefile(dest, base_config))
+    source, #1211 gap 2): ``_same_file``."""
+    return _same_file(dest, base_config)
+
+
+#: The stdout owner the routes output is named as (#3107 v2).
+ROUTES_ON_STDOUT = "the routes output (no -o)"
+
+
+def output_destinations(args: argparse.Namespace) -> tuple[list[tuple[str, str]], list[str]]:
+    """What this run writes, in the mode it runs (#1560): ``(files, stdout)``.
+
+    *files*: ``(flag, path)`` of each FILE written — ``-o`` in an output mode
+    without ``--dry-run``, ``--findings-json`` (every mode, every exit),
+    ``--secret-mounts-out`` where it is read. *stdout*: the owners of
+    standard output — the routes output when an output mode prints it (no
+    ``-o``, or an ``-o`` that is the file / pipe fd 1 already is), and each
+    operator output given ``-`` or fd 1's file (``targets_stdout``). A flag
+    the mode never reads is not a destination: ``_flags_this_mode_never_reads``
+    refuses it by name.
+
+    ⛔ ``-o -`` is a file named ``-`` (the routes writer is not an operator
+    output), so it is a file here, never stdout.
+    """
+    assembles = ((args.output_alertmanager or args.output_configmap)
+                 and not args.validate)
+    files: list[tuple[str, str]] = []
+    stdout: list[str] = []
+    if assembles and not args.dry_run:
+        if args.output is None:
+            stdout.append(ROUTES_ON_STDOUT)
+        elif args.output != _lib_io.STDOUT_PATH and _lib_io.targets_stdout(args.output):
+            stdout.append(f"-o/--output {args.output}")
+        else:
+            files.append(("-o/--output", args.output))
+    elif args.output is None and args.findings_json is not None:
+        # #3107 v2 as it stood: without -o this run's stdout is the routes
+        # output's (or its report) — `--findings-json -` is a second writer.
+        stdout.append(ROUTES_ON_STDOUT)
+    for flag, value in (("--findings-json", args.findings_json),
+                        ("--secret-mounts-out",
+                         args.mount_list_out if assembles and not args.dry_run else None)):
+        if value is None:
+            continue
+        if _lib_io.targets_stdout(value):
+            stdout.append(flag)
+        else:
+            files.append((flag, value))
+    return files, stdout
+
+
+def refuse_clashing_outputs(args: argparse.Namespace) -> bool:
+    """Refuse (rc 2, before anything is written) a run two of whose outputs
+    land in one place (#1560): two files that are one file
+    (``_same_file``: a symlink or a hard link to it included), a file that
+    is the ``--base-config`` source (in the modes that read it), or more
+    than one writer of stdout. Returns whether an operator output owns
+    stdout (the caller moves its own receipts to stderr); the stdout owners
+    are claimed (``_lib_io.claim_stdout``)."""
+    files, stdout = output_destinations(args)
+    lines: list[str] = []
+    reads_base = ((args.output_alertmanager or args.output_configmap)
+                  and not args.validate and args.base_config is not None)
+    for flag, path in files:
+        if reads_base and _names_the_source(path, args.base_config):
+            lines.append(
+                f"{flag} names the --base-config file itself: the base is your "
+                "source config and the output is rendered from it, so writing over "
+                "it would destroy the source (refused).\n"
+                "  Write it to another path and keep the source as it is.")
+    for i, (flag_a, path_a) in enumerate(files):
+        for flag_b, path_b in files[i + 1:]:
+            if _same_file(path_a, path_b):
+                lines.append(
+                    f"{flag_b} names the same file as {flag_a}: one would replace "
+                    "the other (refused).\n  Write each to its own path.")
+    if len(stdout) > 1:
+        lines.append(
+            f"standard output was asked for by: {', '.join(stdout)} — only one of "
+            "them may write there (refused).")
+    if lines:
+        die_caller_error("ERROR: " + "\nERROR: ".join(lines))
+    for owner in stdout:
+        _lib_io.claim_stdout(owner)
+    return any(owner != ROUTES_ON_STDOUT and not owner.startswith("-o/") for owner in stdout)
 
 
 def _write_findings_if_asked(early: argparse.Namespace,
@@ -1775,25 +1855,9 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # would turn the next run's base into an output, which it refuses.
     # ⛔ Every path this run writes, not just -o: --findings-json over the
     # source destroys it just the same (blind review F4).
-    for flag, dest in (("-o/--output", args.output),
-                       ("--findings-json", args.findings_json),
-                       ("--secret-mounts-out", args.mount_list_out)):
-        if writes_a_file_mode and _names_the_source(dest, args.base_config):
-            die_caller_error(
-                f"{flag} names the --base-config file itself: the base is your "
-                "source config and the output is rendered from it, so writing over "
-                "it would destroy the source (refused).\n"
-                "  Write it to another path and keep the source as it is.")
-    # #1560: the mount list and the config are two documents; one path for
-    # both would leave only the list (written second).
-    if (writes_a_file_mode and args.mount_list_out is not None
-            and args.output is not None
-            and (os.path.abspath(args.mount_list_out) == os.path.abspath(args.output)
-                 or _names_the_source(args.mount_list_out, args.output))):
-        die_caller_error(
-            "--secret-mounts-out names the same file as -o/--output: the list "
-            "would replace the config just written (refused).\n"
-            "  Write the list to another path.")
+    # Every path this run writes against the source and against each other
+    # — and who writes stdout — is `refuse_clashing_outputs`, which main()
+    # runs before this.
     if writes_a_file_mode:
         try:
             base_config = load_base_config(args.base_config)

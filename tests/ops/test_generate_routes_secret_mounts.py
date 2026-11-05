@@ -23,6 +23,8 @@ import pytest
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO / "scripts" / "tools"))
 sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
+sys.path.insert(0, str(REPO / "tests"))
+from _platform_fs import symlink_or_skip  # noqa: E402
 from _grar_merge import DEFAULT_MOUNT_ROOT, MOUNT_LIST_SCHEMA, required_mounts  # noqa: E402
 
 _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
@@ -268,7 +270,7 @@ def test_the_list_and_the_findings_both_on_stdout_are_refused(tmp_path):
     r = _run(tmp_path, d, "--output-alertmanager", "-o", str(tmp_path / "am.yml"),
              "--secret-mounts-out", "-", "--findings-json", "-")
     assert r.returncode == 2, (r.stdout, r.stderr)
-    assert "standard output is already used" in r.stderr
+    assert "standard output was asked for by" in r.stderr
     assert not (tmp_path / "am.yml").exists()
 
 
@@ -293,7 +295,7 @@ def test_an_unread_stdout_list_is_refused_as_unread_not_as_a_stdout_clash(tmp_pa
     r = _run(tmp_path, d, *mode, *other, "--secret-mounts-out", "-")
     assert r.returncode == 2, (r.stdout, r.stderr)
     assert "--secret-mounts-out is not read in" in r.stderr
-    assert "standard output is already used" not in r.stderr
+    assert "standard output was asked for by" not in r.stderr
 
 
 def test_every_stdout_claimant_is_named_when_they_clash(tmp_path):
@@ -304,3 +306,73 @@ def test_every_stdout_claimant_is_named_when_they_clash(tmp_path):
     named = r.stderr[r.stderr.index("asked for by:"):]
     assert all(x in named for x in ("the routes output (no -o)", "--findings-json",
                                     "--secret-mounts-out"))
+
+
+# ── #1560 (CodeRabbit on #3615): one judgement of every output destination ──
+
+def _out_args(tmp_path):
+    return _tree(tmp_path, {"t-a": _OWN}), tmp_path / "out.yml"
+
+
+@pytest.mark.parametrize("first,second", [
+    ("-o", "--findings-json"), ("-o", "--secret-mounts-out"),
+    ("--findings-json", "--secret-mounts-out")])
+@pytest.mark.parametrize("alias", ["same", "symlink"])
+def test_two_outputs_that_are_one_file_are_refused(tmp_path, first, second, alias):
+    d, _ = _out_args(tmp_path)
+    target = tmp_path / "one.file"
+    target.write_text("kept\n", encoding="utf-8")
+    other = target
+    if alias == "symlink":
+        other = tmp_path / "alias.file"
+        symlink_or_skip(target, other)
+    flags = {first: str(target), second: str(other)}
+    argv = ["--output-alertmanager"]
+    for flag, value in flags.items():
+        argv += [flag, value]
+    if "-o" not in flags:
+        argv += ["-o", str(tmp_path / "am.yml")]
+    r = _run(tmp_path, d, *argv)
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert "names the same file as" in r.stderr, r.stderr
+    assert not (tmp_path / "am.yml").exists()
+    if "--findings-json" not in flags:
+        # Nothing was written: the file keeps its content.
+        assert target.read_text(encoding="utf-8") == "kept\n"
+
+
+@pytest.mark.parametrize("flag", ["-o", "--findings-json", "--secret-mounts-out"])
+def test_a_symlink_to_the_base_config_is_the_base_config(tmp_path, flag):
+    d, _ = _out_args(tmp_path)
+    base = _base(tmp_path)
+    alias = tmp_path / "base-alias.yml"
+    symlink_or_skip(base, alias)
+    argv = ["--output-alertmanager", "--base-config", base, flag, str(alias)]
+    if flag != "-o":
+        argv += ["-o", str(tmp_path / "am.yml")]
+    r = _run(tmp_path, d, *argv)
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert f"{flag if flag != '-o' else '-o/--output'} names the --base-config file" in r.stderr
+    assert Path(base).read_text(encoding="utf-8") == _BASE
+
+
+@pytest.mark.parametrize("other", ["--secret-mounts-out", "--findings-json"])
+def test_an_o_that_is_stdout_owns_stdout(tmp_path, other):
+    d, _ = _out_args(tmp_path)
+    r = _run(tmp_path, d, "--output-alertmanager", "-o", "/dev/stdout", other, "-")
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert "-o/--output /dev/stdout" in r.stderr and other in r.stderr
+    assert "receivers:" not in r.stdout
+
+
+def test_an_o_named_dash_is_a_file_not_stdout(tmp_path):
+    """`-o -` is a file called `-` (the routes writer is not an operator
+    output), so the list may take stdout beside it."""
+    d, _ = _out_args(tmp_path)
+    r = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d),
+                        "--output-alertmanager", "-o", "-", "--secret-mounts-out", "-"],
+                       capture_output=True, text=True, encoding="utf-8", errors="replace",
+                       timeout=300, cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout)["schema"] == MOUNT_LIST_SCHEMA
+    assert (tmp_path / "-").is_file()
