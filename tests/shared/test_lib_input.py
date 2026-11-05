@@ -20,7 +20,7 @@ sys.path.insert(0, str(REPO / "scripts" / "tools"))
 import _lib_input  # noqa: E402
 from _lib_exitcodes import CallerError  # noqa: E402
 
-from _platform_fs import has_posix_modes  # noqa: E402
+from _platform_fs import has_posix_modes, symlink_or_skip  # noqa: E402
 
 
 def _parser(**kw):
@@ -54,7 +54,7 @@ def test_an_empty_directory_is_as_declared(tmp_path):
     with pytest.raises(CallerError) as exc:
         _select(["--d", str(tmp_path)], empty=_lib_input.EMPTY_REFUSED)
     assert exc.value.reason == "input_empty"
-    assert str(exc.value).startswith(f"--d {tmp_path}: no entry matches *.json")
+    assert str(exc.value) == f"--d {tmp_path}: selects nothing (*.json)"
 
 
 @pytest.mark.parametrize("make, reason", [("missing", "dir_not_found"),
@@ -179,3 +179,91 @@ def test_read_bytes_refuses_a_directory(tmp_path):
         _lib_input.read_bytes(tmp_path, flag=None, lang="en")
     assert exc.value.reason == "file_unreadable"
     assert str(exc.value) == f"{tmp_path}: {os.strerror(errno.EISDIR)}"
+
+
+# ── #3462 / #3548 ────────────────────────────────────────────────────────
+
+def test_a_default_that_is_there_but_no_directory_is_refused_even_if_absent_reads_empty(tmp_path):
+    """#3548: `absent` is nothing there. A regular file at the default was
+    read as an empty state directory, and state-reconcile overwrote the
+    manifest with no state, rc 0."""
+    there = tmp_path / "state"
+    there.write_text("x", encoding="utf-8")
+    with pytest.raises(CallerError) as exc:
+        _select([], default=str(there), absent_default=_lib_input.ABSENT_EMPTY)
+    assert exc.value.reason == "dir_not_found"
+    assert str(exc.value) == f"--d {there}: not a directory"
+
+
+def test_a_default_under_a_regular_file_is_refused(tmp_path):
+    """ENOTDIR on a parent (`.da` is a regular file, the default is
+    `.da/state`): something is in the way, not nothing — refused (#3548
+    review: it was read as no state and the manifest overwritten)."""
+    (tmp_path / "da").write_text("x", encoding="utf-8")
+    with pytest.raises(CallerError):
+        _select([], default=str(tmp_path / "da" / "state"),
+                absent_default=_lib_input.ABSENT_EMPTY)
+
+
+def test_a_default_that_is_a_dangling_link_is_refused(tmp_path):
+    """stat calls a dangling link ENOENT; `ls` lists it — not absent."""
+    link = tmp_path / "state"
+    symlink_or_skip(tmp_path / "nowhere", link)
+    with pytest.raises(CallerError):
+        _select([], default=str(link), absent_default=_lib_input.ABSENT_EMPTY)
+
+
+def test_a_default_whose_parent_is_missing_is_absent(tmp_path):
+    assert _select([], default=str(tmp_path / "da" / "state"),
+                   absent_default=_lib_input.ABSENT_EMPTY) == []
+
+
+@pytest.mark.parametrize("default", ["rule-packs/", "a/b/"])
+def test_a_default_with_a_trailing_separator_is_refused(default):
+    """The default is shown in messages as typed; one spelling of it."""
+    with pytest.raises(ValueError):
+        _parser(default=default, absent_default=_lib_input.ABSENT_EMPTY)
+
+
+def test_a_selector_judges_the_one_listing(tmp_path, monkeypatch):
+    """`select` is any declaration with choose(directory, names) / wanted:
+    `selected` lists once and hands the names over — the selector never
+    lists (`RULE_PACKS`, the rule-pack declaration, is one)."""
+    import _lib_consumer_read
+    (tmp_path / "rule-pack-a.yaml").write_text("groups: []\n", encoding="utf-8")
+    (tmp_path / "threshold-registry.yaml").write_text("x: 1\n", encoding="utf-8")
+    (tmp_path / "notes.txt").write_text("", encoding="utf-8")
+    calls = []
+    real = _lib_input._list
+    monkeypatch.setattr(_lib_input, "_list", lambda d: calls.append(d) or real(d))
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--rp", select=_lib_consumer_read.RULE_PACKS,
+                         empty=_lib_input.EMPTY_REFUSED)
+    got = _lib_input.selected(p.parse_args(["--rp", str(tmp_path)]), "rp", lang="en")
+    assert got == [tmp_path / "rule-pack-a.yaml"] and len(calls) == 1
+    (tmp_path / "rule-pack-a.yaml").unlink()
+    with pytest.raises(CallerError) as exc:
+        _lib_input.selected(p.parse_args(["--rp", str(tmp_path)]), "rp", lang="en")
+    assert exc.value.reason == "input_empty"
+    assert str(exc.value) == (f"--rp {tmp_path}: selects nothing "
+                              f"({' / '.join(_lib_consumer_read.RULE_PACKS.rule_files)})")
+    (tmp_path / "other.yaml").write_text("x: 1\n", encoding="utf-8")
+    with pytest.raises(_lib_consumer_read.SourcesUnlisted):
+        _lib_input.selected(p.parse_args(["--rp", str(tmp_path)]), "rp", lang="en")
+
+
+def test_require_selection_judges_a_selection_made_elsewhere(tmp_path):
+    p = argparse.ArgumentParser()
+    _lib_input.add_input(p, "--src", select=_lib_input.DA_GUARD_LISTS,
+                         empty=_lib_input.EMPTY_REFUSED)
+    _lib_input.add_input(p, "--ok", select=_lib_input.DA_GUARD_LISTS)
+    args = p.parse_args(["--src", str(tmp_path), "--ok", str(tmp_path)])
+    assert _lib_input.require_selection(args, "src", ["x"], wanted="*.yaml", lang="en") == ["x"]
+    assert _lib_input.require_selection(args, "ok", [], wanted="*.yaml", lang="en") == []
+    with pytest.raises(CallerError) as exc:
+        _lib_input.require_selection(args, "src", [], wanted="*.yaml", lang="zh")
+    assert exc.value.reason == "input_empty"
+    assert str(exc.value) == f"--src {tmp_path}: 沒有選到任何項目（*.yaml）"
+    with pytest.raises(TypeError):
+        _lib_input.require_selection(argparse.Namespace(src="x"), "src", [], wanted="w",
+                                     lang="en")

@@ -34,6 +34,7 @@ policy 的 `file_overrides` 取得逐檔豁免（例如 forecast recipe 的 pred
 讀哪些檔由路徑決定（#3426）：檔案照給的讀，目錄遞迴取 *.yaml／*.yml，減去
 --exclude 符合的。選到的每個檔都必須是 rule file 或 ConfigMap／PrometheusRule
 manifest，否則以讀者理由回報 ERROR，不會當成「沒有 rule」略過。
+--ci 下一個檔都沒選到是呼叫端錯誤（rc 2，#3462）；不帶 --ci 時只印提示、rc 0。
 
 參考: docs/custom-rule-governance.md §4
 """
@@ -62,6 +63,8 @@ from _lib_constants import FORECAST_MAX_LOOKBACK  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, die_caller_error  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
+import _lib_input  # noqa: E402  (#3462: the one wording of "selected nothing")
+from _lib_label import safe_label  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # Defaults (used when no policy file is provided)
@@ -510,7 +513,8 @@ def main():
     )
     parser.add_argument(
         "--ci", action="store_true",
-        help="CI mode: exit with non-zero code on any ERROR"
+        help="CI mode: exit with non-zero code on any ERROR; selecting no file "
+             "is a caller error (exit 2)"
     )
     parser.add_argument(
         "--exclude", action="append", default=[], metavar="GLOB",
@@ -534,7 +538,7 @@ def main():
     # `lint /typo/dir --ci` printed "No YAML files found." and exited 0 —
     # a governance gate that passes on a path nobody scanned. Same answer
     # with and without `--ci`. A target that EXISTS but holds no YAML is a
-    # legitimate no-op and stays EXIT_OK below.
+    # no-op without `--ci` (EXIT_OK below) and a caller error with it (#3462).
     # ⛔ `p == ""` is a separate test, not folded into `exists()`:
     # `Path('')` is `PosixPath('.')`, so `exists()` is True and `lint ''`
     # (an unset shell variable) silently linted the CURRENT DIRECTORY and
@@ -578,6 +582,20 @@ def main():
         die_caller_error(f"ERROR: {_lib_consumer_read.error_text(exc)}")
 
     if not files:
+        # #3462: under --ci a run that selected no file is a caller error, not
+        # a pass — `lint <dir with no YAML> --ci` was rc 0, a governance gate
+        # green over nothing (owner, 2026-11-02). Without --ci it stays the
+        # advisory note below, rc 0.
+        if args.ci:
+            if args.rule_pack_dir is not None:
+                label = f"--rule-pack-dir {safe_label(args.rule_pack_dir)}"
+                wanted = (f"{_lib_consumer_read.RULE_PACKS.wanted}, less the declared "
+                          "platform packs")
+            else:
+                label = ", ".join(safe_label(p) for p in args.paths)
+                wanted = (" / ".join("*" + x for x in _lib_consumer_read.YAML_SUFFIXES)
+                          + " files (any case) under the directories given, less --exclude")
+            raise _lib_input.refuse_empty(label, wanted, lang="en")
         print("No YAML files found under: "
               + ", ".join(repr(p) for p in (args.paths or [args.rule_pack_dir])))
         sys.exit(EXIT_OK)

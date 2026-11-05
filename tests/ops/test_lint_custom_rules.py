@@ -428,16 +428,42 @@ def test_main_empty_string_alongside_real_dir_names_only_the_empty_one(
 
 
 def test_main_existing_empty_dir_is_ok(tmp_path, monkeypatch, capsys):
-    """control：存在但沒有 YAML 的目錄 → exit 0，"No YAML files found" 並指名目標。"""
+    """control：不帶 --ci 時，存在但沒有 YAML 的目錄 → exit 0，"No YAML files found" 並指名目標。"""
     empty = tmp_path / "empty"
     empty.mkdir()
-    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", str(empty), "--ci"])
+    monkeypatch.setattr(sys, "argv", ["lint_custom_rules", str(empty)])
     with pytest.raises(SystemExit) as exc:
         lint_custom_rules.main()
     assert exc.value.code == 0
     out = capsys.readouterr().out
     assert "No YAML files found" in out
     assert repr(str(empty)) in out
+
+
+@pytest.mark.parametrize("make", ["empty", "only-txt", "rule-pack-dir-platform-only"])
+def test_main_ci_that_selects_no_file_is_a_caller_error(tmp_path, make):
+    """#3462：--ci 下一個檔都沒選到 → rc 2、點名目標，stdout 沒有東西；先前是 rc 0，
+    治理閘門在「什麼都沒掃」時綠燈。"""
+    import subprocess
+    import _lib_consumer_read
+    target = tmp_path / "t"
+    target.mkdir()
+    if make == "only-txt":
+        (target / "notes.txt").write_text("x\n", encoding="utf-8")
+    if make == "rule-pack-dir-platform-only":
+        platform = sorted(_lib_consumer_read.PLATFORM_PACKS)[0]
+        (target / _lib_consumer_read.RULE_PACKS.file_name(platform)).write_text(
+            "groups: []\n", encoding="utf-8")
+        argv = ["--rule-pack-dir", str(target)]
+        named = f"--rule-pack-dir {target}: selects nothing"
+    else:
+        argv = [str(target)]
+        named = f"{target}: selects nothing"
+    proc = subprocess.run([sys.executable, lint_custom_rules.__file__, *argv, "--ci"],
+                          capture_output=True, text=True, encoding="utf-8", timeout=120)
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+    assert proc.stdout == "", proc.stdout
+    assert named in proc.stderr and "Traceback" not in proc.stderr, proc.stderr
 
 
 _CP950_BYTES = b"groups:\n  - name: \xa4\xa4\n"   # cp950「中」— invalid UTF-8

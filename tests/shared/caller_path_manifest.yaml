@@ -2,7 +2,7 @@
 # The rules and the kinds: tests/shared/test_caller_path_manifest.py (module docstring).
 # `by` names the reader that judges a `reader` input (documentation; the gate checks pinned_by).
 # A flag declared with `_lib_input.add_input` (#3446) has no line here: its
-# declaration is on the parser (state-reconcile --state-dir, migrate-to-operator --source-dir).
+# declaration is on the parser (`action.input_spec`), and the gate reads it there.
 
 # COMMAND_MAP entries that dispatch to Go: no Python parser to walk.
 dispatched_to_go: [batch-pr, guard, parser]
@@ -237,7 +237,6 @@ commands:
     "--kubeconfig": {kind: reader, by: "kubectl through _lib_kubectl (KubectlError)", pinned_by: "tests/shared/test_caller_path_manifest.py::test_kubectls_refusal_of_a_kubeconfig_is_relayed"}
     "--namespace": not_path
     "--prometheus": not_path
-    "--rule-packs-dir": dir
   operator-generate:
     "--api-version": not_path
     "--components": not_path
@@ -245,7 +244,6 @@ commands:
     "--namespace": not_path
     "--output-dir": output
     "--receiver-template": not_path
-    "--rule-packs-dir": dir
     "--secret-key": not_path
     "--secret-name": not_path
     "--selector-label": not_path
@@ -269,7 +267,6 @@ commands:
     "--rule-packs-dir": dir
   runtime-audit:
     "--prometheus": not_path
-    "--rule-packs-dir": dir
     "--runtime-json": file
   scaffold:
     "--db": not_path

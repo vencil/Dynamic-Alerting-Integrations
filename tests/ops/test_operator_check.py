@@ -40,6 +40,12 @@ def _make_args(**overrides) -> SimpleNamespace:
 _ALL_CRDS = (oc._CRD_RULES, oc._CRD_MONITORS, oc._CRD_AM_CONFIGS)
 
 
+def _packs(directory):
+    """What `main` hands the checker: the rule packs --rule-packs-dir selects."""
+    import _lib_consumer_read
+    return _lib_consumer_read.rule_pack_files(directory)
+
+
 def _stub_cluster(monkeypatch, crds=_ALL_CRDS, lists=None, fail=None):
     """Replace `kubectl_list` (the shared reader, #3207) with an in-memory
     cluster: `crds` names the installed CRDs, `lists` maps kind → items,
@@ -157,7 +163,7 @@ class TestCheckPrometheusRuleStatus:
         (tmp_path / "rule-pack-database.yaml").write_text("x", encoding="utf-8")
         (tmp_path / "rule-pack-mongodb.yaml").write_text("x", encoding="utf-8")
         _stub_cluster(monkeypatch, lists={"prometheusrule": [{"x": 1}, {"x": 2}]})
-        result = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path))).check_prometheus_rule_status()
+        result = oc.OperatorChecker(_make_args(), _packs(tmp_path)).check_prometheus_rule_status()
         assert result.status == "pass"
         assert "2/2" in result.detail
 
@@ -165,33 +171,33 @@ class TestCheckPrometheusRuleStatus:
         for i in range(3):
             (tmp_path / f"rule-pack-{i}.yaml").write_text("x", encoding="utf-8")
         _stub_cluster(monkeypatch, lists={"prometheusrule": [{"x": 1}]})
-        result = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path))).check_prometheus_rule_status()
+        result = oc.OperatorChecker(_make_args(), _packs(tmp_path)).check_prometheus_rule_status()
         assert result.status == "warn"
         assert "1/3" in result.detail
 
     def test_nothing_loaded_fails(self, monkeypatch, tmp_path):
         (tmp_path / "rule-pack-x.yaml").write_text("x", encoding="utf-8")
         _stub_cluster(monkeypatch)
-        result = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path))).check_prometheus_rule_status()
+        result = oc.OperatorChecker(_make_args(), _packs(tmp_path)).check_prometheus_rule_status()
         assert result.status == "fail" and not result.caller_error
 
     def test_crd_not_installed_is_a_finding_and_is_not_listed(self, monkeypatch, tmp_path):
         (tmp_path / "rule-pack-x.yaml").write_text("x", encoding="utf-8")
         calls = _stub_cluster(monkeypatch, crds=(), fail={"prometheusrule": "must not be read"})
-        result = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path))).check_prometheus_rule_status()
+        result = oc.OperatorChecker(_make_args(), _packs(tmp_path)).check_prometheus_rule_status()
         assert result.status == "fail" and not result.caller_error
         assert oc._CRD_RULES in result.detail and [k for k, _ in calls] == ["crd"]
         assert "prometheusrule" not in [k for k, _ in calls]
 
-    def test_missing_default_rule_packs_dir_treated_as_zero_expected(self, monkeypatch,
-                                                                     tmp_path):
-        # The default --rule-packs-dir nobody gave, not there → expected = 0;
-        # with loaded > 0 → warn. One the caller GAVE is judged by main()
-        # before the checker runs (#3392, test_a_given_rule_packs_dir_...).
+    def test_missing_default_rule_packs_dir_is_not_compared_and_says_so(self, monkeypatch):
+        # #3462: the default --rule-packs-dir nobody gave, nothing there →
+        # main passes no rule packs; the count is not compared and the row
+        # says so (it was a bare "1", the path never named). One the caller
+        # GAVE, or an empty one, is refused by main() before the checker runs.
         _stub_cluster(monkeypatch, lists={"prometheusrule": [{"x": 1}]})
-        result = oc.OperatorChecker(_make_args(rule_packs_dir=str(tmp_path / "ghost"))).check_prometheus_rule_status()
+        result = oc.OperatorChecker(_make_args(), None).check_prometheus_rule_status()
         assert result.status == "warn"
-        assert result.detail == "1"
+        assert result.detail.startswith("1 (the default rule-packs is not there")
 
 
 # ---------------------------------------------------------------------------
