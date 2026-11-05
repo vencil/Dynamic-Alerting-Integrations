@@ -75,7 +75,7 @@ DEFAULT_TIMEOUT = tv.DEFAULT_TIMEOUT
 TOP_FIELDS = frozenset({"schema", "status", "at", "undecidable", "tenants", "findings",
                         "assert_differences"})
 FIELDS = ("layer", "file", "read_by", "verdict", "severity", "reason", "disable",
-          "value", "served")
+          "switched_off_with", "value", "served")
 
 
 class ExplainError(Exception):
@@ -85,7 +85,8 @@ class ExplainError(Exception):
 def _entry(v: kv.KeyVerdict) -> dict[str, Any]:
     return {"key": v.key, "layer": v.layer, "file": v.file, "read_by": list(v.read_by),
             "verdict": v.verdict, "severity": v.severity, "reason": v.reason,
-            "disable": v.disable, "value": v.value, "served": v.served}
+            "disable": v.disable, "switched_off_with": v.switched_off_with,
+            "value": v.value, "served": v.served}
 
 
 def explain(conf_d: Path, tenants: list[str], at: Optional[str], binary: Optional[str],
@@ -193,6 +194,8 @@ def render_text(doc: dict[str, Any]) -> str:
             who = ", ".join(safe_label(t) for t in f["tenants"][:5]) + (
                 f" (+{len(f['tenants']) - 5} more)" if len(f["tenants"]) > 5 else "")
             why = f" ({f['reason']})" if f["reason"] else ""
+            if f.get("base"):
+                why = f" (switched off with its base {safe_label(f['base'])})"  # #3046
             lines.append(f"  {f['severity']}: {f['kind']}: {safe_label(f['key'])} in "
                          f"{safe_label(f['file'] or '?')}{why} — {who or 'no tenant'}")
     if doc["undecidable"]:

@@ -68,6 +68,11 @@ const (
 const (
 	KindUnread      = "unread"
 	KindDisableNoop = "disable_noop"
+	// KindDisableCascade (#3046): a `<base>_critical` / `<base>{…}` key the
+	// tenant's own file writes, switched off in some part of the day with
+	// its base's `disable` (from any layer) — what the old semantics kept
+	// served. A warning: the key is read, its value serves nothing there.
+	KindDisableCascade = "disable_cascade"
 	// KindProfileNotJudged: a threshold key of a profile no tenant binds —
 	// not judged (whether the exporter reads it is measured on a tenant),
 	// said so rather than left to read as judged and fine (#3395).
@@ -126,6 +131,9 @@ type ServedKey struct {
 	// Disable: what switching the key off does (Disable*); "" when it
 	// reads no disable.
 	Disable string
+	// SwitchedOffWith: the base whose `disable` switches this key off in
+	// some part of the day (#3046); "" for none.
+	SwitchedOffWith string
 }
 
 // ServedTenant is one tenant's served reading.
@@ -200,6 +208,9 @@ type KeyVerdict struct {
 	Severity *string  `json:"severity"`
 	Reason   *string  `json:"reason"`
 	Disable  *string  `json:"disable"`
+	// SwitchedOffWith: the base whose `disable` switches this key off in
+	// some part of the day (#3046); nil for none.
+	SwitchedOffWith *string `json:"switched_off_with"`
 	// Value: the effective config's value as written; nil when absent.
 	Value any `json:"value"`
 	// Served: what /metrics serves for it; nil when nothing.
@@ -216,6 +227,9 @@ type Finding struct {
 	// Tenants: sorted; [] for a profile no tenant binds.
 	Tenants []string `json:"tenants"`
 	Reason  *string  `json:"reason"`
+	// Base: a disable_cascade's base, whose `disable` switches the key off;
+	// nil for any other kind.
+	Base *string `json:"base"`
 	// Blocks: a gate that judges the whole tree refuses it (Blocking).
 	Blocks bool `json:"blocks"`
 }
@@ -443,7 +457,7 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 	return KeyVerdict{
 		Tenant: tenant, Key: key, Layer: nilIfEmpty(layer, hasSrc), File: nilIfEmpty(src.File, hasSrc),
 		ReadBy: sortedKeys(readBy), Verdict: verdict, Severity: optional(severity), Reason: optional(reason),
-		Disable: optional(disable), Value: value, Served: servedValue,
+		Disable: optional(disable), SwitchedOffWith: optional(sk.SwitchedOffWith), Value: value, Served: servedValue,
 	}
 }
 
@@ -517,6 +531,11 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 				}
 				kinds = append(kinds, k)
 			}
+			if v.SwitchedOffWith != nil && deref(v.Layer) == config.KeyLayerTenant {
+				// #3046: the tenant's own sibling the base's `disable`
+				// switches off — a sibling it inherits is the cascade asked.
+				kinds = append(kinds, KindDisableCascade)
+			}
 			for _, kind := range kinds {
 				var gk groupKey
 				if deref(v.Reason) == ReasonStateFilterUndeclared {
@@ -548,8 +567,13 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []
 		for _, v := range g.vs {
 			tenantSet[v.Tenant] = true
 		}
-		out = append(out, Finding{Severity: sev, Kind: g.gk.kind, Key: g.gk.key, File: g.gk.file,
-			Tenants: sortedKeys(tenantSet), Reason: g.vs[0].Reason})
+		f := Finding{Severity: sev, Kind: g.gk.kind, Key: g.gk.key, File: g.gk.file,
+			Tenants: sortedKeys(tenantSet), Reason: g.vs[0].Reason}
+		if g.gk.kind == KindDisableCascade {
+			reason := ReasonBaseDisabled
+			f.Severity, f.Reason, f.Base = SeverityWarning, &reason, g.vs[0].SwitchedOffWith
+		}
+		out = append(out, f)
 	}
 	sortFindings(out)
 	return out

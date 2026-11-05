@@ -15,6 +15,7 @@
         "severity": "error",
         "reason": "not_exporter_key",
         "disable": null,
+        "switched_off_with": null,
         "value": [
           "a"
         ],
@@ -31,6 +32,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "switched_off_with": null,
         "value": "gold",
         "served": null
       },
@@ -43,6 +45,7 @@
         "severity": "error",
         "reason": "unregistered",
         "disable": null,
+        "switched_off_with": null,
         "value": "x",
         "served": null
       },
@@ -57,6 +60,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "switched_off_with": null,
         "value": 80,
         "served": 80
       },
@@ -71,6 +75,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "switched_off_with": null,
         "value": "x",
         "served": null
       }
@@ -85,6 +90,7 @@
         "severity": "error",
         "reason": "not_exporter_key",
         "disable": null,
+        "switched_off_with": null,
         "value": [
           "a"
         ],
@@ -101,6 +107,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "switched_off_with": null,
         "value": "gold",
         "served": null
       },
@@ -113,6 +120,7 @@
         "severity": "error",
         "reason": "unregistered",
         "disable": null,
+        "switched_off_with": null,
         "value": "x",
         "served": null
       },
@@ -127,6 +135,7 @@
         "severity": null,
         "reason": null,
         "disable": null,
+        "switched_off_with": null,
         "value": 80,
         "served": 80
       },
@@ -139,6 +148,7 @@
         "severity": "error",
         "reason": "no_row",
         "disable": null,
+        "switched_off_with": null,
         "value": "x",
         "served": null
       }
@@ -155,6 +165,7 @@
         "db-b"
       ],
       "reason": "not_read_in_profile",
+      "base": null,
       "blocks": true
     },
     {
@@ -167,6 +178,7 @@
         "db-b"
       ],
       "reason": "unregistered",
+      "base": null,
       "blocks": true
     },
     {
@@ -178,6 +190,7 @@
         "db-b"
       ],
       "reason": "no_row",
+      "base": null,
       "blocks": true
     }
   ],

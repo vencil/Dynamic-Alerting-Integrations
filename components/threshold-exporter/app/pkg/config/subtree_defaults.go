@@ -293,10 +293,28 @@ func subtreeLevelValue(cfg *ThresholdConfig, key string, raw any) (ScheduledValu
 	if !written || !shaped {
 		return value, subtreeRefused // or fills nothing: not applied either way
 	}
-	if !keyCanReachTheOutputPlane(cfg, key) {
+	if !keyCanReachTheOutputPlane(cfg, key) && !familyHeadSwitchOff(cfg, key, value) {
 		return value, subtreeUnreachable
 	}
 	return value, subtreeApplied
+}
+
+// familyHeadSwitchOff reports whether a subtree level's value of key is a
+// `disable` (in some part of the day) of a base only `dimensions:` names
+// (#3046): such a base has no row of its own, but its `disable` switches its
+// dimensional family off (familyHeadOff), so the overlay carries it to the
+// tenant. Any other value of that key is read by no phase and stays
+// unreachable — subtree_default_undeliverable, as before.
+func familyHeadSwitchOff(cfg *ThresholdConfig, key string, value ScheduledValue) bool {
+	if !dimensionsNameBase(cfg, key) {
+		return false
+	}
+	for _, seg := range value.DaySegments() {
+		if off, _ := thresholdRowDisabled(seg.Value); off {
+			return true
+		}
+	}
+	return false
 }
 
 // subtreeLevelRead is raw, one defaults level's value of key, as the
@@ -628,6 +646,27 @@ func reservedShapeWins(key string) bool {
 	return strings.HasPrefix(key, "_state_") ||
 		strings.HasPrefix(key, "_silent_") ||
 		IsRoutingLayerKey(key)
+}
+
+// dimensionsNameBase reports whether key (any #1231 spelling) is a base the
+// root `dimensions:` names (#3046): a family head, whose `disable`
+// resolveDimensionalRows reads through familyHeadOff, though no `defaults:`
+// value or `optional_overrides:` entry declares it. A `_` key and a
+// `<base>_critical` name (DimensionBaseRefused) are none.
+func dimensionsNameBase(cfg *ThresholdConfig, key string) bool {
+	if strings.Contains(key, "{") || baseRowsSkipKey(key) {
+		return false
+	}
+	canon := canonicalDimensionBase(key)
+	if DimensionBaseRefused(canon) {
+		return false
+	}
+	for b := range cfg.Dimensions {
+		if canonicalDimensionBase(b) == canon {
+			return true
+		}
+	}
+	return false
 }
 
 // declaredAnywhere reports whether the platform recognises this exact key on
