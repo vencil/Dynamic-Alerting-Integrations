@@ -696,17 +696,69 @@ def run(entry: Callable[[], Any]) -> NoReturn:
     _stdout_failure_line = None
     _best_effort = False
     try:
-        status = emit_result(entry())
+        status = _contract_status(emit_result(entry()))
     except SystemExit as exc:
-        status = exc.code
+        status = _contract_status(exc.code)
     except Exception as exc:  # noqa: BLE001 — that is the point
         if _interactive():
             raise
         try:
             exit_on_crash(exc)
         except SystemExit as done:
-            status = done.code
+            status = done.code  # the crash code: the contract's own, not checked
     _finalize_and_exit(status)
+
+
+# ── The exit-code registry (#3611) ────────────────────────────────────
+
+#: An entry may also end at any code its wrapped command ends at.
+PASSTHROUGH: Final[str] = "passthrough"
+
+#: ⛔ The one list of exit codes beyond 0/1/2, by entry module name (the
+#: ``__main__`` file's stem — the da-tools image is flat, so a path would
+#: not match there). ``run()`` refuses any other code at runtime (#3611):
+#: a code a tool picked on its own, a multiple of 256 (which the OS would
+#: truncate to 0 — a false success) or a non-int status. Each row is an
+#: owner-sanctioned exception; dev-rules §13 names them.
+EXTENDED_EXIT_CODES: Final[dict] = {
+    # Network-blocked host: "switch host", not 2's "gh missing" (diag_pr_ci).
+    "diag_pr_ci": frozenset({3}),
+    # What happened after or around the write (#1950, docs/cli-reference.md).
+    "patch_config": frozenset({3, 4, 5, 6, 7}),
+    # da-guard's 3 (cannot decode) and 4 (not judged), passed through (#2123, #2904).
+    "guard_dispatch": frozenset({3, 4}),
+}
+
+
+def _entry_name() -> str:
+    main = sys.modules.get("__main__")
+    path = getattr(main, "__file__", None) or ""
+    return os.path.splitext(os.path.basename(path))[0]
+
+
+def _contract_status(status: Any) -> Any:
+    """*status* as ``run()`` may end with it (#3611): None, 0/1/2, a code
+    the registry gives this entry — or, for anything else, the caller-error
+    code after one ``ERROR:`` line (under tests: the test crash code, so a
+    test pinning an unregistered code goes red). A string is printed first,
+    as Python would."""
+    if status is None or isinstance(status, bool):
+        return status
+    name = _entry_name()
+    allowed = EXTENDED_EXIT_CODES.get(name, frozenset())
+    if isinstance(status, int):
+        if status in (0, 1, 2) or (
+                1 <= status <= 255 and (allowed == PASSTHROUGH or status in allowed)):
+            return status
+        why = f"exit status {status} is not in {name or 'this tool'}'s exit-code contract"
+    else:
+        _to_stderr(str(status))
+        why = f"a non-integer exit status ({type(status).__name__}) ends as a caller error"
+        if crash_exit_code_from_env() is None:
+            return _caller_error_code
+    _to_stderr(f"ERROR: {why} (scripts/tools/_lib_exitcodes.py EXTENDED_EXIT_CODES, #3611)")
+    override = crash_exit_code_from_env()
+    return override if override is not None else _caller_error_code
 
 
 # ── stdout failures (#3124) ───────────────────────────────────────────
