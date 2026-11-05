@@ -570,22 +570,30 @@ def test_critical_tier_entry_condition_is_still_defaults_of_the_base():
     `defaults[base]`, the three-way split below is measuring the wrong thing and
     this fails FIRST, naming the reason."""
     body = _resolve_critical_rows_body()
-    # #2518: the base derivation lives in criticalRowBase, shared with the
-    # build's root-null check, so read it there.
-    assert "baseKey, critical := criticalRowBase(key)" in body
     src = _RESOLVE_GO.read_text(encoding="utf-8")
-    helper_sig = "func criticalRowBase(key string) (string, bool) {"
-    h_start = src.find(helper_sig)
-    assert h_start != -1, (
-        f"{_RESOLVE_GO} no longer defines {helper_sig!r}, which "
-        "resolveCriticalRows uses to derive the base key; repoint this reader")
-    h_end = src.find("\nfunc ", h_start + 1)
-    helper = src[h_start:h_end if h_end != -1 else len(src)]
-    assert 'return strings.TrimSuffix(key, "_critical"), true' in helper
-    assert "if _, exists := defaults[baseKey]; !exists {" in body
-    # ...and it never consults the declared list, which is why `_critical` keys
-    # are deliberately off it (#1311)
-    assert "OptionalOverrides" not in body and "declared" not in body.lower()
+
+    def helper(sig):
+        h_start = src.find(sig)
+        assert h_start != -1, (
+            f"{_RESOLVE_GO} no longer defines {sig!r}, which "
+            "resolveCriticalRows uses for its entry test; repoint this reader")
+        h_end = src.find("\nfunc ", h_start + 1)
+        return src[h_start:h_end if h_end != -1 else len(src)]
+
+    # #3046: the entry test lives in criticalRowRead, shared with da-guard's
+    # "switched off with its base" reading; #2518: the base derivation in
+    # criticalRowBase, shared with the build's root-null check.
+    assert "baseKey, read := criticalRowRead(key, defaults)" in body
+    assert "if !read {" in body
+    read = helper("func criticalRowRead(key string, defaults map[string]float64) (base string, ok bool) {")
+    assert "criticalRowBase(key)" in read and "_, valued := defaults[base]" in read
+    # …and neither consults the declared list, which is why `_critical` keys
+    # are deliberately off it (#1311). Code lines only: the helper's slice
+    # runs into the next function's doc comment.
+    code = "\n".join(ln for ln in (body + read).splitlines() if not ln.strip().startswith("//"))
+    assert "OptionalOverrides" not in code and "declared" not in code.lower()
+    base = helper("func criticalRowBase(key string) (string, bool) {")
+    assert 'return strings.TrimSuffix(key, "_critical"), true' in base
 
 
 def test_every_real_pack_header_critical_claim_is_true_per_key():
