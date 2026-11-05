@@ -95,6 +95,8 @@ from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _grar_merge import receiver_type  # noqa: E402  (#2839 the one type read)
 from _grar_merge import build_receiver_config  # noqa: E402  (#3048 the generator's verdict)
 from _grar_merge import Finding  # noqa: E402  (#3076 a slot verdict's reason)
+from _grar_merge import SecretBinding  # noqa: E402  (#1560)
+from _lib_validation import is_secret_ref, receiver_secret_ref_fields  # noqa: E402  (#1560)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 
@@ -200,14 +202,16 @@ def _slot_label(tenant_name: str, slot: str) -> str:
 
 
 def slot_verdicts(tenant_name: str, routing: dict[str, Any],
-                  allowed_domains: Optional[list[str]] = None) -> list[Any]:
+                  allowed_domains: Optional[list[str]] = None,
+                  secrets: Optional[SecretBinding] = None) -> list[Any]:
     """The route generator's verdict for every receiver slot of *routing*
     (``_grar_routes.tenant_slot_verdicts``) under the --policy domain
-    allowlist *allowed_domains* (None: not applied): what it renders, and why
-    it drops the rest."""
+    allowlist *allowed_domains* (None: not applied) and its shared_secrets
+    (*secrets*, #1560; None: no policy): what it renders, and why it drops
+    the rest."""
     import generate_alertmanager_routes as gar  # the generator's own verdict
 
-    return gar.tenant_slot_verdicts(tenant_name, routing, allowed_domains)
+    return gar.tenant_slot_verdicts(tenant_name, routing, allowed_domains, secrets)
 
 
 # ---------------------------------------------------------------------------
@@ -385,6 +389,9 @@ def test_receiver(
     *,
     timeout: float = 10,
     dry_run: bool = False,
+    owner_tenant: Optional[str] = None,
+    secrets: Optional[SecretBinding] = None,
+    allowed_domains: Optional[list[str]] = None,
 ) -> ReceiverTestResult:
     """Test connectivity to a single receiver.
 
@@ -392,6 +399,10 @@ def test_receiver(
         receiver: Receiver dict with 'type' and type-specific fields.
         timeout: HTTP timeout in seconds.
         dry_run: If True, only validate URL without sending.
+        owner_tenant / secrets / allowed_domains: #1560 — how the generator
+            binds the receiver's Secret references (the tenant it delivers
+            for, None for a receiver handed in on its own; the policy's
+            shared_secrets; its allowlist).
 
     Returns:
         ReceiverTestResult with status and timing.
@@ -415,7 +426,8 @@ def test_receiver(
     # renders goes through. A receiver it refuses there is not tested (or
     # passed in dry-run). run_all_tests only hands in receivers the generator
     # rendered (#3076), so this matters for a receiver handed in directly.
-    refusal = _generator_refusal(receiver, label, rtype)
+    refusal = _generator_refusal(receiver, label, rtype, owner_tenant=owner_tenant,
+                                 secrets=secrets, allowed_domains=allowed_domains)
     if refusal is not None:
         status, detail = refusal
         return ReceiverTestResult(
@@ -423,6 +435,20 @@ def test_receiver(
             receiver_type=rtype,
             status=status,
             detail=detail,
+        )
+
+    # #1560: a credential held in a Secret is read by Alertmanager from its
+    # mount (<field>_file); this tool cannot read it, so nothing is sent and
+    # the URL is not checked — SKIPPED, in dry-run too, never a pass.
+    in_secret = [f for f in receiver_secret_ref_fields(rtype) if is_secret_ref(receiver.get(f))]
+    if in_secret:
+        return ReceiverTestResult(
+            receiver_name=label,
+            receiver_type=rtype,
+            status=STATUS_SKIPPED,
+            detail=(f"{', '.join(in_secret)} is a Secret reference; Alertmanager "
+                    "reads it from the mounted Secret, which this tool cannot "
+                    "read, so nothing is sent"),
         )
 
     # Validate URL (the generator accepted it; the port range is on top)
@@ -464,6 +490,10 @@ def _generator_refusal(
     receiver: dict[str, Any],
     label: str,
     rtype: str,
+    *,
+    owner_tenant: Optional[str] = None,
+    secrets: Optional[SecretBinding] = None,
+    allowed_domains: Optional[list[str]] = None,
 ) -> Optional[tuple[str, str]]:
     """(status, detail) when ``build_receiver_config`` refuses *receiver*,
     else None. For a receiver handed in directly; ``run_all_tests`` takes the
@@ -477,7 +507,9 @@ def _generator_refusal(
     generator is given a copy without it.
     """
     receiver_obj = {k: v for k, v in receiver.items() if k != "_label"}
-    am_config, warnings = build_receiver_config(receiver_obj, label)
+    am_config, warnings = build_receiver_config(
+        receiver_obj, label, owner_tenant=owner_tenant, secrets=secrets,
+        allowed_domains=allowed_domains)
     if am_config is not None:
         return None
     return _refusal_status(receiver, rtype, warnings[0] if warnings else None)
@@ -746,6 +778,7 @@ def test_tenant_receivers(
     dry_run: bool = False,
     rate_limit: float = 0.5,
     allowed_domains: Optional[list[str]] = None,
+    secrets: Optional[SecretBinding] = None,
 ) -> TenantTestReport:
     """Test all receivers for a tenant.
 
@@ -767,14 +800,16 @@ def test_tenant_receivers(
 
     # #3076: the generator's verdict per slot, in render order (main,
     # overrides[i], routes[i]); only what it renders is tested.
-    verdicts = slot_verdicts(tenant_name, routing, allowed_domains)
+    verdicts = slot_verdicts(tenant_name, routing, allowed_domains, secrets)
     left_to_send = sum(1 for v in verdicts if v.rendered)
     for verdict in verdicts:
         label = _slot_label(tenant_name, verdict.slot)
         if verdict.rendered:
             recv = dict(verdict.receiver)
             recv["_label"] = label
-            result = test_receiver(recv, timeout=timeout, dry_run=dry_run)
+            result = test_receiver(recv, timeout=timeout, dry_run=dry_run,
+                                   owner_tenant=tenant_name, secrets=secrets,
+                                   allowed_domains=allowed_domains)
             left_to_send -= 1
         else:
             result = _unrendered_result(verdict, label)
@@ -868,6 +903,7 @@ def run_all_tests(
     dry_run: bool = False,
     rate_limit: float = 0.5,
     allowed_domains: Optional[list[str]] = None,
+    secrets: Optional[SecretBinding] = None,
 ) -> list[TenantTestReport]:
     """Run notification tests for all (or filtered) tenants.
 
@@ -902,6 +938,7 @@ def run_all_tests(
             dry_run=dry_run,
             rate_limit=rate_limit,
             allowed_domains=allowed_domains,
+            secrets=secrets,
         )
         # Only include tenants that have receivers configured
         if report.receivers:
@@ -1079,6 +1116,7 @@ def main() -> None:
             dry_run=args.dry_run,
             rate_limit=args.rate_limit,
             allowed_domains=policy.allowed_domains,
+            secrets=policy.secret_binding(),
         )
     except RoutingTreeRefused as exc:
         # #2752: not "no receivers" — the tree cannot be read the way the

@@ -315,6 +315,12 @@ kubectl create secret generic da-db-a-pagerduty \
 
 > **安全提醒**：在 GitOps 環境中，使用 Sealed Secrets 或 External Secrets Operator 管理 Secret，避免明文進入 Git repo。
 
+### 租戶 receiver 的 Secret 命名（`secretRef`，[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）
+
+租戶在 `_routing` 寫的 `secretRef` 不寫 Secret 名稱：`{secret: {key}}` 是 `da-<tenant>`，`{secret: {shared: <別名>, key}}` 是部署端 policy `shared_secrets` 列出的 Secret（形狀與規則見 [BYO 整合指南 §5](byo-alertmanager-integration.md#憑證放在-secretsecretref)）。ConfigMap 路徑已經照這套推導與檢查 render；`operator-generate` 改用同一套推導、輸出 SecretKeySelector `{name: <推導出的名稱>, key}` 是後續工作（#1560 ③-b），目前它的 `--secret-name` 仍沿用上面 `da-<tenant>-<type>` 的命名。
+
+⚠️ **Operator 路徑上，這套命名只是約定**：AlertmanagerConfig CRD 可以直接手寫，SecretKeySelector 寫哪個 Secret 名稱 Prometheus Operator 都照收（只限同一個 namespace）。產生器擋得住的是經它產出的 CRD；要真正擋住手寫的 CRD 引用別的租戶的 `da-<tenant>`，需要叢集內的 admission（例如 Kyverno 規則：`AlertmanagerConfig` 的 `metadata.labels.tenant` 必須等於每個 SecretKeySelector `name` 去掉 `da-` 之後的值，或該名稱列在共用清單）。repo 不提供、也不強制這條 admission。
+
 ---
 
 ## Troubleshooting

@@ -208,7 +208,7 @@ O(M) 複雜度（`group_left` 向量匹配）· 各 Rule Pack 以 Projected Volu
 
 ### 租戶管理
 
-三態模式（Normal / Silent / Maintenance，支援 `expires` 自動失效）· 四層路由合併：`_routing_defaults` → profile → tenant → enforced（[ADR-007](docs/adr/007-cross-domain-routing-profiles.md)）· 排程式閾值與維護窗口 · Schema Validation 雙端驗證 · Cardinality Guard（per-tenant 500 上限）
+三態模式（Normal / Silent / Maintenance，支援 `expires` 自動失效）· 四層路由合併：`_routing_defaults` → profile → tenant → enforced（[ADR-007](docs/adr/007-cross-domain-routing-profiles.md)）· 排程式閾值與維護窗口 · Schema Validation 雙端驗證 · Cardinality Guard（per-tenant 500 上限） · receiver 憑證可放在 Kubernetes Secret（`secretRef`，名稱由租戶 id 推導為 `da-<tenant>`，共用 Secret 由部署端 policy `shared_secrets` 列管；[BYO 整合指南 §5](docs/integration/byo-alertmanager-integration.md#憑證放在-secretsecretref)）
 
 ### 租戶自助與跨叢集
 

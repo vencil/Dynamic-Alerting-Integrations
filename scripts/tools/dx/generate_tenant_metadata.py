@@ -44,6 +44,7 @@ from _lib_exitcodes import EXIT_VIOLATION, EXIT_CALLER_ERROR, OutputNotSerializa
 from _lib_validation import (  # noqa: E402  (#2137 one presence rule)
     FIELD_NOT_STRING,
     FIELD_SET,
+    is_secret_ref,
     receiver_field_state,
 )
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
@@ -209,19 +210,23 @@ def extract_routing_channel(tenant_config: dict) -> str:
     if not recv_type:
         return ""
 
-    # Format: type:url or type:endpoint
+    # Format: type:url or type:endpoint. #1560: a URL held in a Secret
+    # (a Secret reference) is not known here: the channel reads `type:secret`,
+    # never the reference's text.
+    def url_channel(value: object) -> str:
+        if is_secret_ref(value):
+            return f"{recv_type}:secret"
+        return f"{recv_type}:{value}" if value else ""
+
     if recv_type == "webhook":
-        url = receiver.get("url", "")
-        return f"{recv_type}:{url}" if url else ""
+        return url_channel(receiver.get("url", ""))
     elif recv_type == "email":
         to = receiver.get("to", "")
         return f"{recv_type}:{to}" if to else ""
     elif recv_type == "slack":
-        api_url = receiver.get("api_url", "")
-        return f"{recv_type}:{api_url}" if api_url else ""
+        return url_channel(receiver.get("api_url", ""))
     elif recv_type == "teams":
-        webhook_url = receiver.get("webhook_url", "")
-        return f"{recv_type}:{webhook_url}" if webhook_url else ""
+        return url_channel(receiver.get("webhook_url", ""))
     elif recv_type == "pagerduty":
         # The keys are credentials: name the Events API version, never the
         # key. service_key wins when both are set, as it does in Alertmanager.

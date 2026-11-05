@@ -315,6 +315,12 @@ kubectl create secret generic da-db-a-pagerduty \
 
 > **Security Note**: In GitOps environments, use Sealed Secrets or External Secrets Operator to manage Secrets, preventing plaintext from entering the Git repository.
 
+### Secret names of tenant receivers (`secretRef`, [#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560))
+
+A `secretRef` a tenant writes in `_routing` does not name its Secret: `{secret: {key}}` is `da-<tenant>`, and `{secret: {shared: <alias>, key}}` is the Secret the deployment policy's `shared_secrets` lists (shapes and rules in the [BYO integration guide §5](byo-alertmanager-integration.en.md#credentials-in-a-secret-secretref)). The ConfigMap path already renders and checks by these rules; moving `operator-generate` to the same derivation, emitting a SecretKeySelector `{name: <derived name>, key}`, is follow-up work (#1560 ③-b). Until then its `--secret-name` keeps the `da-<tenant>-<type>` naming above.
+
+⚠️ **On the Operator path this naming is a convention only**: an AlertmanagerConfig CRD can be written by hand, and Prometheus Operator accepts any Secret name in a SecretKeySelector (within the same namespace). The generator stops what it renders; to really stop a hand-written CRD from referencing another tenant's `da-<tenant>`, the cluster needs an admission rule (for example a Kyverno policy: an `AlertmanagerConfig`'s `metadata.labels.tenant` must equal each SecretKeySelector `name` with `da-` removed, or the name must be on the shared list). The repo neither ships nor enforces such a rule.
+
 ---
 
 ## Troubleshooting

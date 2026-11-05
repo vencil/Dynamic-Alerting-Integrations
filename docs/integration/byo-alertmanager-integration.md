@@ -303,12 +303,46 @@ PagerDuty 的 `routing_key` 與 `service_key` 兩個都給會被擋：Alertmanag
 選填欄位的值也會檢查（[#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)）：只擋 Alertmanager 會拒收、導致整份設定 reload 失敗的值，以 amtool 0.34.1 的判定為準。
 
 - `send_resolved`、email 的 `require_tls`、webhook 的 `http_config.proxy_from_environment`：只收布林與空值（視同沒設），寫成未加引號的 `true`／`false`。未加引號的 YAML 1.1 布林字 `yes`／`no`／`on`／`off` 是字串：路由產生器經 `da-guard parse-tree` 以 yaml.v3 讀，同樣拒收，請改寫成 `true`／`false`。加引號的 `"yes"`、`"true"` 以及 `maybe`、`1`、`""` 都擋，路由產生器在所有模式拒收整棵樹（[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）。
-- webhook 的 `http_config`：空值視同沒設，其餘必須是 mapping。可用的鍵是 Alertmanager 的 `http_config` 鍵扣掉檔案型欄位：`basic_auth`、`oauth2`、`authorization`、`bearer_token`、`tls_config`、`follow_redirects`、`enable_http2`、`http_headers`、`proxy_url`、`no_proxy`、`proxy_from_environment`、`proxy_connect_header`（[#2984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2984)）。⚠️ **檔案型欄位一律拒收**（[#3257](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3257)）：receiver 任何一層（含 `http_config` 底下各層）以 `_file`、`_ref` 結尾的鍵，或名為 `files` 的鍵（例如 `bearer_token_file`、`basic_auth.password_file`、`tls_config.key_file`、`oauth2.client_secret_ref`、`http_headers` 的 `files`），會讓 Alertmanager 讀取它自己容器內的檔案或找它沒有的 secret manager，因此 schema 與路由產生器都拒收，產生器在所有模式下整棵樹拒收（rc 1，什麼都不寫出），tenant-api 寫入回 422。憑證請直接寫值；需要放在 Secret 的憑證，在 [#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560) 的 `secretRef` 接線之前，請由平台寫進 base config 裡平台自己的 receiver。其他鍵 Alertmanager 會拒收整份設定，validate-config 的 JSON schema 擋下，路由產生器則交給 `--validate` 的 amtool 判。`follow_redirects`／`enable_http2` 原樣交給 Alertmanager，請寫不加引號的 `true`／`false`。`tls_config`、`oauth2`、`authorization`、`basic_auth`、`http_headers`、`proxy_connect_header` 的內層照 Alertmanager 的規則判（未知鍵、`oauth2` 缺 `client_id`／`token_url`、`authorization` 的 `type: basic`、保留的 header 名稱如 `Authorization`）；這一層只有 validate-config 的 JSON schema 擋，路由產生器交給 `--validate` 的 amtool，da-guard 與 tenant-api 不判。`basic_auth`、`oauth2`、`authorization`、`bearer_token` 最多只能設一個：空值與 `bearer_token: ""` 視同沒設，`basic_auth: {}` 算有設。`bearer_token`／`proxy_url`／`no_proxy` 必須是字串（YAML 會讀成布林、數字或日期的值請加引號）。`basic_auth`、`oauth2`、`authorization`、`tls_config` 底下的字串欄位也一樣：純數字的 `password`、`username`、`client_id`、`client_secret`、`credentials`，或 yaml.v3 會讀成數字、日期的值（`1e3`、`0x1F`、`2024-01-02`），請寫成 `password: "123456"` 這樣加引號。不加引號時 validate-config 的 `yaml_quoting` 列會 FAIL，逐筆列出檔名、欄位路徑和改法（例如 `quote it, without a tag: password: "123456"`），照著補上引號即可。原因是路由產生器與驗證工具（validate-config 與 conf.d 的 lint）都經 `da-guard parse-tree` 以 yaml.v3 讀 conf.d，值是什麼由它解析出的 tag 決定：未加引號的 `0x1F` 是整數 31、`1e3` 是浮點數 1000、`2024-01-02` 是日期，Alertmanager 收到的就不是你寫的那串（[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）。
+- webhook 的 `http_config`：空值視同沒設，其餘必須是 mapping。可用的鍵是 Alertmanager 的 `http_config` 鍵扣掉檔案型欄位：`basic_auth`、`oauth2`、`authorization`、`bearer_token`、`tls_config`、`follow_redirects`、`enable_http2`、`http_headers`、`proxy_url`、`no_proxy`、`proxy_from_environment`、`proxy_connect_header`（[#2984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2984)）。⚠️ **檔案型欄位一律拒收**（[#3257](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3257)）：receiver 任何一層（含 `http_config` 底下各層）以 `_file`、`_ref` 結尾的鍵，或名為 `files` 的鍵（例如 `bearer_token_file`、`basic_auth.password_file`、`tls_config.key_file`、`oauth2.client_secret_ref`、`http_headers` 的 `files`），會讓 Alertmanager 讀取它自己容器內的檔案或找它沒有的 secret manager，因此 schema 與路由產生器都拒收，產生器在所有模式下整棵樹拒收（rc 1，什麼都不寫出），tenant-api 寫入回 422。憑證請直接寫值，或改用下方的 [`secretRef`](#憑證放在-secretsecretref)。其他鍵 Alertmanager 會拒收整份設定，validate-config 的 JSON schema 擋下，路由產生器則交給 `--validate` 的 amtool 判。`follow_redirects`／`enable_http2` 原樣交給 Alertmanager，請寫不加引號的 `true`／`false`。`tls_config`、`oauth2`、`authorization`、`basic_auth`、`http_headers`、`proxy_connect_header` 的內層照 Alertmanager 的規則判（未知鍵、`oauth2` 缺 `client_id`／`token_url`、`authorization` 的 `type: basic`、保留的 header 名稱如 `Authorization`）；這一層只有 validate-config 的 JSON schema 擋，路由產生器交給 `--validate` 的 amtool，da-guard 與 tenant-api 不判。`basic_auth`、`oauth2`、`authorization`、`bearer_token` 最多只能設一個：空值與 `bearer_token: ""` 視同沒設，`basic_auth: {}` 算有設。`bearer_token`／`proxy_url`／`no_proxy` 必須是字串（YAML 會讀成布林、數字或日期的值請加引號）。`basic_auth`、`oauth2`、`authorization`、`tls_config` 底下的字串欄位也一樣：純數字的 `password`、`username`、`client_id`、`client_secret`、`credentials`，或 yaml.v3 會讀成數字、日期的值（`1e3`、`0x1F`、`2024-01-02`），請寫成 `password: "123456"` 這樣加引號。不加引號時 validate-config 的 `yaml_quoting` 列會 FAIL，逐筆列出檔名、欄位路徑和改法（例如 `quote it, without a tag: password: "123456"`），照著補上引號即可。原因是路由產生器與驗證工具（validate-config 與 conf.d 的 lint）都經 `da-guard parse-tree` 以 yaml.v3 讀 conf.d，值是什麼由它解析出的 tag 決定：未加引號的 `0x1F` 是整數 31、`1e3` 是浮點數 1000、`2024-01-02` 是日期，Alertmanager 收到的就不是你寫的那串（[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）。
 - `http_config.proxy_url`：必須是字串；tenant-api 只擋 Go `net/url` 解析不了的值（例如 `::x`、host 含空白、`%zz`、非法 port），路由產生器則交給 `--validate` 的 amtool 判。`proxy_from_environment: true` 不能與非空的 `proxy_url` 或 `no_proxy` 並用；`no_proxy` 需要 `proxy_url`；`proxy_connect_header` 需要非空的 `proxy_url` 或 `proxy_from_environment`。
 
 刻意比 Alertmanager 嚴格的形狀，以共享表 [`receiver_presence_cases.json`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json) 中標 `strict` 的列為準。
 
 這些規則在 `generate_alertmanager_routes`（沒有 amtool 時也擋，`proxy_url` 能否解析除外），以及 tenant-api 的 `PUT /api/v1/tenants/{id}` 與 `POST /api/v1/tenants/{id}/validate` 都一致。tenant-api 對 PUT 回 400 `INVALID_BODY`，validate 回 `valid: false`，都只判 body 自己寫的 receiver。⚠️ 產生器的「擋」分兩種。布林欄位（`send_resolved`、`require_tls`、`proxy_from_environment`）的值型別不對時，所有模式都拒收整棵樹、rc 1、不寫出任何產出（見上方第一項）。其餘規則是印 WARN、略過該租戶的 receiver 與 route，產出照寫、rc 0（加 `--strict` 也一樣）；只有 `--validate` 會以 rc 1 結束，所以 CI 要跑 `--validate`。
+
+### 憑證放在 Secret（`secretRef`）
+
+7 個憑證欄位可以不寫值，改寫成 Kubernetes Secret 的參照（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）：webhook／Rocket.Chat 的 `url`、Slack 的 `api_url`、Teams 的 `webhook_url`、PagerDuty 的 `service_key`／`routing_key`、email 的 `auth_password`。email 的 `headers` 與 webhook 的 `http_config` 在 Alertmanager 沒有對應的 `*_file`，任何一層都不接：參照寫在別處，產生器在 render 之後掃到就擋下該 receiver（`secret_ref_unsupported_field`），不會原樣寫進 Alertmanager 設定。
+
+參照**不寫 Secret 名稱**，只有兩種形狀：
+
+```yaml
+_routing:
+  receiver:
+    type: slack
+    api_url: {secret: {key: slack-url}}                    # 租戶自己的 Secret：da-<tenant>
+  routes:
+    - match: {severity: critical}
+      receiver:
+        type: webhook
+        url: {secret: {shared: corp-alerting, key: url}}   # 共用 Secret：別名列在部署端 policy
+```
+
+- **自己的 Secret**：`{secret: {key: <key>}}`。名稱固定是 `da-<tenant>`，由租戶 id 推導；租戶寫不出別的名稱，也就引用不到別的租戶的 Secret。`_routing_defaults` 裡的參照，對每個繼承它的租戶各自推導。`_routing_enforced` 帶 `{{tenant}}` 時，展開出的每條 receiver 也歸該租戶；不帶 `{{tenant}}` 的平台級 receiver 沒有所屬租戶，只能用共用 Secret。
+- **共用的 Secret**：`{secret: {shared: <別名>, key: <key>}}`。別名必須列在部署端 policy 檔（`generate-routes --policy`，tenant-api 的 `generator.policy`）的 `shared_secrets`：
+
+  ```yaml
+  allowed_domains: ["*.example.com"]
+  shared_secrets:
+    corp-alerting: {secret: corp-alerting, fields: [api_url, webhook_url, url]}
+  ```
+
+  `secret` 是實際的 Secret 名稱，不得以 `da-` 開頭（避免與租戶推導出的名稱撞名）；`fields` 只能列內容本身就是送達目的地的欄位，不能列 `auth_password`。沒有 policy 檔，或 policy 沒有 `shared_secrets`，就沒有任何共用例外。receiver 只要用了任一共用 Secret，就不能設 `http_config.proxy_url`：代理是租戶自己指定的，會看到送往共用目的地的請求（`secret_ref_shared_proxy_url`）。`shared_secrets` 寫壞（不是 mapping、別名不是 DNS-1123 label、條目不是 `{secret, fields}`、名稱以 `da-` 開頭、`fields` 列了不接 Secret 的欄位）時整份 policy 不可用，結束碼 `2`。
+- **`auth_password`**：只能用自己的 Secret，而且 policy 必須設了非空的 `allowed_domains`、`smarthost` 的 host 也在其中。`smarthost` 是租戶自己填的，密碼會送到那台伺服器。
+
+產生器把參照寫成 Alertmanager 的 `<field>_file: <root>/<secret-name>/<key>`，拿掉原欄位；`<root>` 預設 `/etc/alertmanager/secrets`，用 `generate-routes --secret-mount-root` 改。違反上面任何一條，該 receiver 不產出，`generate-routes --validate` 非 0、`validate-config` 的 routes 列 FAIL、tenant-api 寫入回 422。URL 欄位是參照時，產生器看不到 host，`allowed_domains` 不檢查它：Secret 由 operator 或 ExternalSecrets 建立，租戶寫不到內容，也指定不了名稱。`test-notification` 讀不到 Secret，這類 receiver 一律 `SKIPPED`、不送出。
+
+⛔ **掛載契約（BYO 必做）**：Alertmanager 容器必須把每個被引用的 Secret 掛在 `<root>/<secret-name>/`，Secret 的每個 key 是其中一個檔案。這與 Prometheus Operator 的 `spec.secrets` 掛到 `/etc/alertmanager/secrets/<name>` 的版面相同；repo 自帶的 `watchdog-heartbeat` 也掛在 `/etc/alertmanager/secrets/watchdog-heartbeat/`。產生器與 tenant-api 都沒有 Secret 讀權限，看不到 Secret 是否存在：檔案不在時 Alertmanager 在送出那一刻才失敗。
 
 ### 訊息模板（Go Template）
 

@@ -24,7 +24,7 @@ lang: zh
 |---|---|
 | `Watchdog` 規則 + `AlertmanagerWebhookNotificationsFailing` 內部互補告警 | `rule-packs/rule-pack-platform.yaml`（來源；`make rulepack-configmaps` 生成部署用的 `k8s/03-monitoring/configmap-rules-platform.yaml`） |
 | 置頂 route（`routes[0]`）+ `watchdog-heartbeat` receiver（`url_file`） | `k8s/03-monitoring/configmap-alertmanager.yaml`（路由由平台的 `generate_alertmanager_routes.py` 於每次重生時重新注入 index 0，撐過 route-REPLACE） |
-| 外部 DMS URL（內嵌 token，**機密**） | `k8s/03-monitoring/secret-watchdog-heartbeat.yaml` → 掛載到 `/etc/alertmanager/secrets/watchdog-heartbeat-url` |
+| 外部 DMS URL（內嵌 token，**機密**） | `k8s/03-monitoring/secret-watchdog-heartbeat.yaml` → 掛載到 `/etc/alertmanager/secrets/watchdog-heartbeat/watchdog-heartbeat-url` |
 
 > ⚠️ **本文只涵蓋 `Watchdog` 這一條心跳專線**。同一份 rule pack 裡還有**其餘的**平台自監控告警（exporter / tenant-api / 聯邦 / 投影管線的健康），它們**不走**這條專線、出貨預設落在無 notifier 的 `default` receiver。設好心跳**不等於**它們會通知你——怎麼接見 [BYO Alertmanager 整合指南 §11 平台自監控告警的投遞](byo-alertmanager-integration.md#11-平台自監控告警的投遞)（用 `_routing_enforced` + `match: ['alert_source="platform"']`）。
 

@@ -698,3 +698,25 @@ class TestGeneratedFreshnessLintFailsClosed:
         )
         res = _run_cli(script, "--ci", str(target))
         assert res.returncode == 0, (res.stdout, res.stderr)
+
+
+class TestGeneratedLintRunsThroughRun:
+    """#3579: the template enters through ``_lib_exitcodes.run(main)``; the
+    generated file, run as a script, still answers argparse's two codes."""
+
+    @pytest.mark.timeout(60)
+    @pytest.mark.parametrize("kind", sl.VALID_KINDS)
+    def test_help_is_rc_0_and_an_unknown_flag_rc_2(self, kind, tmp_path):
+        script = tmp_path / f"check_probe_{kind}.py"
+        script.write_text(
+            sl.render_script(sl.derive_paths("probe", kind), "probe"),
+            encoding="utf-8",
+            newline="\n",
+        )
+        res = _run_cli(script, "--help")
+        assert res.returncode == 0, (res.stdout, res.stderr)
+        assert "usage:" in res.stdout
+        res = _run_cli(script, "--no-such-flag")
+        assert res.returncode == 2, (res.stdout, res.stderr)
+        assert "unrecognized arguments: --no-such-flag" in res.stderr
+        assert res.stdout == ""
