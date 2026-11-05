@@ -361,13 +361,19 @@ def test_no_tool_moves_the_crash_or_caller_error_code():
                # save / restore around an in-process tool run
                TOOLS_DIR / "lint" / "check_cli_contract.py",
                TOOLS_DIR / "lint" / "check_cli_default_drift.py"}
+    # #3579: every tree whose entries exit through run(), not scripts/tools
+    # alone — a session-guard declares its codes with use_hook_protocol()
+    # only, and must not move them again after it.
+    scripts = TOOLS_DIR.parent
+    paths = sorted(p for tree in ("tools", "ops", "dx", "session-guards")
+                   for p in (scripts / tree).rglob("*.py"))
     scanned, offenders = 0, []
-    for path in sorted(TOOLS_DIR.rglob("*.py")):
+    for path in paths:
         if path in allowed:
             continue
         scanned += 1
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        offenders += [f"{path.relative_to(TOOLS_DIR)}:{line} {name}"
+        offenders += [f"{path.relative_to(scripts)}:{line} {name}"
                       for line, name in _setter_calls(tree)]
     assert scanned > 100, scanned  # the walk reached the tools
     assert offenders == [], offenders

@@ -2252,25 +2252,45 @@ HOOK_TREE = "scripts/session-guards/"
 
 
 def _hook_declaration_fault(rel: str, source: str) -> str | None:
-    """None when *source* calls `_lib_exitcodes.use_hook_protocol()` at
-    module level, preceded only by the docstring, imports, assignments and
-    `sys.path` edits — nothing else runs before it. Otherwise the reason."""
+    """None when *source* imports `_lib_exitcodes` at module level (plain
+    `import _lib_exitcodes`, no alias) and the very next statement is
+    `_lib_exitcodes.use_hook_protocol()` — the import installs the crash
+    hook with the blocking 2, so nothing may run between the two — and
+    nothing at module level rebinds `_lib_exitcodes` or sets an attribute
+    on it. What runs before the import ends at Python's own 1 (no hook
+    yet). Otherwise the reason."""
     tree = ast.parse(source, filename=rel)
-    for node in tree.body:
-        if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
-                and ast.unparse(node.value.func) == "_lib_exitcodes.use_hook_protocol"
-                and not node.value.args and not node.value.keywords):
-            return None
-        if isinstance(node, (ast.Import, ast.ImportFrom, ast.Assign, ast.AnnAssign)):
-            continue
-        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant):
-            continue  # the docstring
-        if (isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
-                and ast.unparse(node.value.func).startswith("sys.path.")):
-            continue
-        return (f"{rel}:{node.lineno}: `{ast.unparse(node).splitlines()[0]}` runs before "
-                "`_lib_exitcodes.use_hook_protocol()` (or the call is missing)")
-    return f"{rel}: no module-level `_lib_exitcodes.use_hook_protocol()`"
+    body = tree.body
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for t in targets:
+            base = t
+            while isinstance(base, ast.Attribute):
+                base = base.value
+            if isinstance(base, ast.Name) and base.id == "_lib_exitcodes":
+                return f"{rel}:{node.lineno}: `{ast.unparse(node)}` rebinds `_lib_exitcodes`"
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for a in node.names:
+                if (a.asname == "_lib_exitcodes"
+                        or (a.name == "_lib_exitcodes" and a.asname not in (None, "_lib_exitcodes"))):
+                    return f"{rel}:{node.lineno}: `{ast.unparse(node)}` aliases `_lib_exitcodes`"
+    for k, node in enumerate(body):
+        if (isinstance(node, ast.Import) and len(node.names) == 1
+                and node.names[0].name == "_lib_exitcodes" and node.names[0].asname is None):
+            nxt = body[k + 1] if k + 1 < len(body) else None
+            if (isinstance(nxt, ast.Expr) and isinstance(nxt.value, ast.Call)
+                    and ast.unparse(nxt.value.func) == "_lib_exitcodes.use_hook_protocol"
+                    and not nxt.value.args and not nxt.value.keywords):
+                return None
+            where = f"{rel}:{nxt.lineno}" if nxt is not None else rel
+            return (f"{where}: the statement after `import _lib_exitcodes` must be "
+                    "`_lib_exitcodes.use_hook_protocol()`")
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+                a.name == "_lib_exitcodes" for a in node.names):
+            return f"{rel}:{node.lineno}: import `_lib_exitcodes` on a line of its own"
+    return f"{rel}: no module-level `import _lib_exitcodes` + `use_hook_protocol()`"
 
 
 def test_every_hook_declares_the_hook_protocol_first():
@@ -2302,14 +2322,22 @@ _DECL = "import _lib_exitcodes\n_lib_exitcodes.use_hook_protocol()\n"
 
 @pytest.mark.parametrize("src,fault", [
     ("import sys\n" + _DECL, False),
-    ('"""doc"""\nimport sys\nX = 1\nsys.path.insert(0, "x")\n' + _DECL, False),
+    ('"""doc"""\nimport sys\nX = 1\nsys.path.insert(0, "x")\n' + _DECL + "Y = int('2')\n", False),
+    ("import _lib_exitcodes\nX = int('x')\n_lib_exitcodes.use_hook_protocol()\n", True),
+    ("import _lib_exitcodes\nimport no_such_mod\n_lib_exitcodes.use_hook_protocol()\n", True),
     ("import _lib_exitcodes\nprint('x')\n_lib_exitcodes.use_hook_protocol()\n", True),
-    ("import _lib_exitcodes\ntry:\n    import y\nexcept Exception:\n    pass\n"
-     "_lib_exitcodes.use_hook_protocol()\n", True),
+    ("import _lib_exitcodes\ntry:\n    _lib_exitcodes.use_hook_protocol()\nexcept Exception:\n"
+     "    pass\n", True),
     ("import _lib_exitcodes\ndef main():\n    _lib_exitcodes.use_hook_protocol()\n", True),
     ("import _lib_exitcodes\n_lib_exitcodes.use_hook_protocol(1)\n", True),
-], ids=["plain", "after-path-setup", "after-a-call", "after-a-try", "only-inside-main",
-        "with-args"])
+    ("import os as _lib_exitcodes\n_lib_exitcodes.use_hook_protocol()\n", True),
+    ("import _lib_exitcodes as ec\nec.use_hook_protocol()\n", True),
+    ("import os, _lib_exitcodes\n_lib_exitcodes.use_hook_protocol()\n", True),
+    (_DECL + "_lib_exitcodes.use_hook_protocol = lambda: None\n", True),
+    ("if False:\n    import _lib_exitcodes\n    _lib_exitcodes.use_hook_protocol()\n", True),
+], ids=["plain", "after-path-setup", "assign-between", "import-between", "call-between",
+        "in-try", "only-inside-main", "with-args", "lib-is-another-module", "lib-aliased",
+        "lib-on-a-shared-line", "lib-attr-rebound", "under-if"])
 def test_the_hook_declaration_rule(src, fault):
     assert (_hook_declaration_fault("x.py", src) is not None) is fault
 
