@@ -14,7 +14,7 @@ lang: en
 
 🟡 **Proposed** (rewritten 2026-11-04; on the same day the owner settled the three formerly open items: the browser entry point, threshold-govern, and shadow mode for scope axes). Moves to Accepted once the owner approves the full text.
 
-2026-11-05: the §10 premise was tested — routing by path to the UDS is only possible with oauth2-proxy's structured configuration file (alpha config), not with legacy flags; on the same day the owner settled three items: adopt the structured configuration file (§10), tenant-api reads oauth2-proxy's configuration file to decide which headers to trust (§2, §7), and "one-shot" refers to the changes that reject old configuration (§6).
+Revised 2026-11-05: §10 now records the test result and adopts oauth2-proxy's structured configuration file (alpha config); tenant-api decides which headers to trust from that same file (§2, §7); the "one-shot" of §6 is limited to the changes that reject old configuration.
 
 This ADR replaces an unpublished draft from 2026-07. That draft's direction was "authenticate every hop": each component relaying identity to tenant-api would attach its own workload token, first in audit-only mode, then enforced after a multi-week soak. The code merged under that direction is either audit-only or off by default, and none of it is in any released tenant-api image. This ADR withdraws that direction; see §Context and §Alternatives considered. Fixes completed in that period that do not depend on the direction (an empty `_rbac.yaml` denies access; the middleware that derived the source IP from headers is gone) are kept.
 
@@ -71,12 +71,16 @@ The only identity source tenant-api accepts is the headers sent by the oauth2-pr
 ### 2. The listener decides the identity source
 
 - UDS listener: identity is built from headers.
-- TCP listener: no identity; it only serves the endpoints in §3. A TCP request carrying any identity header (`X-Forwarded-Email`, `X-Forwarded-Groups`, configured claim headers) gets 400, so an old configuration still relaying identity fails immediately instead of being silently ignored.
+- TCP listener: no identity; it only serves the endpoints in §3. A TCP request carrying any identity header (`X-Forwarded-Email`, `X-Forwarded-Groups`, claim headers injected in oauth2-proxy's configuration file) gets 400, so an old configuration still relaying identity fails immediately instead of being silently ignored.
 - Which listener a connection came from is stamped by the server when the connection is set up; a request cannot rewrite it.
 - Everything that needs the caller's identity (including rate limiting and the request log) reads the identity object, never the headers directly.
 - The development-mode auth bypass injects the identity object directly, no longer headers.
 - The UDS is no longer optional: tenant-api refuses to start without it. Within the pod only the tenant-api and oauth2-proxy containers may mount the socket.
-- Which headers are trusted is decided by the configuration file oauth2-proxy actually runs with, not by a separate list: the same file is mounted into both containers, and at startup tenant-api reads its `injectRequestHeaders` to learn which header carries the email, the groups and each claim. For every header it injects, oauth2-proxy by default first strips any value of that name sent by the client; if any identity header in the file is set to keep the client's value (`preserveRequestValue: true`), or the file does not inject email and groups, tenant-api refuses to start.
+- Which headers are trusted is decided by the configuration file oauth2-proxy actually runs with, not by a separate list: the same file is mounted into both containers, and at startup tenant-api reads its `injectRequestHeaders` to learn which header carries the email, the groups and each claim. For every header it injects, oauth2-proxy by default first strips any value of that name sent by the client.
+- tenant-api accepts only a configuration file whose meaning is unambiguous, and refuses to start otherwise:
+  - Each identity header comes from exactly one session claim (email from `email`, groups from `groups`, the rest from allowed additional claims), with no prefix, no conversion to basic auth, no fixed (secret) value, no keeping of the client's value (`preserveRequestValue`), and header-name normalization left on; a file that injects no email or no groups is refused too.
+  - oauth2-proxy expands environment-variable references in the file first and matches field names case-insensitively; tenant-api's reading must be the same, so a file containing environment-variable references or non-canonical field-name spellings is refused.
+- Login-skipping routes must not cover `/api/`: for a request that qualifies to skip login (`--skip-auth-route`-type flags, trusted source IPs, preflight pass-through), if it carries a valid session oauth2-proxy still injects the identity headers, and skips the email-domain and group restrictions. These flags are not in the configuration file; the chart's render test guards them (§9 item 3).
 
 **Trade-off**: one more mandatory socket and shared volume, and tenant-api must parse the small part of oauth2-proxy's configuration file that concerns header injection; in exchange, where human identity may be asserted becomes a topology fact rather than a setting, and "what the proxy injects" and "what tenant-api trusts" are the same file in every way of deploying.
 
@@ -144,10 +148,10 @@ This document is explanation; the checks below are the single source of truth fo
 
 1. TCP registers only the paths enumerated in §3 (exact match) and returns 404 for the rest; a TCP request carrying any identity header gets 400. (§2, §3)
 2. Architecture test: building identity from headers happens only on the UDS listener's path; rate limiting, the request log and the auth bypass never read identity headers. (§2)
-3. Chart render test: the deployment has exactly one oauth2-proxy, and unauthenticated `/api/` requests get 401; only tenant-api and oauth2-proxy mount the human socket; the UDS always exists; oauth2-proxy and tenant-api mount the same configuration file. The nginx configuration the portal container actually loads (whether from the chart or the image) contains no forwarding. (§2, §5)
+3. Chart render test: the deployment has exactly one oauth2-proxy, and unauthenticated `/api/` requests get 401; only tenant-api and oauth2-proxy mount the human socket; the UDS always exists; oauth2-proxy and tenant-api mount the same configuration file; oauth2-proxy in a production deployment has no login-skipping condition that covers `/api/` (the development topology of §3 is contained per ADR-022 and is exempt). The nginx configuration the portal container actually loads (whether from the chart or the image) contains no forwarding. (§2, §5)
 4. Every backend path called from the portal source is under the `/api/` prefix; the simulate path returns 501 with the original body. (§5)
 5. A scan of helm, k8s manifests and rule packs: no configuration relays identity headers over the network to any component; the chart keys deleted in §6 do not exist; threshold-govern's CronJob, its NetworkPolicy allowance and its alert do not exist. The environment variables deleted in §6 are not in tenant-api's known list. (§4, §5, §6)
-6. tenant-api refuses to start when an identity header in oauth2-proxy's configuration file keeps the client's value, or when the file does not inject email or groups; an `_rbac.yaml` with no rules denies all access, and no switch exists that restores open mode; a write by a non-platform-admin that changes a tenant's environment or domain tags is rejected. (§7)
+6. tenant-api refuses to start when oauth2-proxy's configuration file does not have the shape in §2, with fixtures covering at least: keeping the client's value, a fixed value, a prefix, the wrong claim, missing email or groups, environment-variable references, and non-canonical field-name spellings; an `_rbac.yaml` with no rules denies all access, and no switch exists that restores open mode; a write by a non-platform-admin that changes a tenant's environment or domain tags is rejected. (§7)
 7. `tenant-api config check` lists untagged tenants per scope axis and exits non-zero, tested against a fixed fixture; CI runs it against the sample configuration in the repo. (§7)
 8. Reference check: every section reference after an `ADR-NNN` in the repo must resolve to an existing section of that ADR (matched by the section heading's number or name); `ADR-027` followed by a legacy ID from §Legacy references always fails. (This ADR and [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667))
 9. CI runs oauth2-proxy's configuration check (`--config-test`) with the image pinned by the chart (the same digest) against the configuration file the chart generates, and uses the same version of the oauth2-proxy library to assert that routing matches the example in §10. (§10)
@@ -156,7 +160,7 @@ This document is explanation; the checks below are the single source of truth fo
 
 Tested against the oauth2-proxy version pinned by the chart (v7.15.5):
 
-- **Legacy flags cannot do it**: the route path of `--upstream=unix://…` is fixed at `/`, so a second upstream always collides with it and configuration validation fails (`multiple upstreams found with path "/"`).
+- **Legacy flags cannot do it**: the route path of `--upstream=unix://…` is fixed at `/`, so the API cannot be placed at `/api/`; the portal is at `/` as well, the two collide, and configuration validation fails (`multiple upstreams found with path "/"`).
 - **The structured configuration file (`--alpha-config`) can**: each upstream's path and destination are set separately.
 
 Configuration (excerpt):
@@ -181,7 +185,7 @@ Routing result:
 | `/api`, `/apix` | portal |
 | `/`, `/index.html` | portal |
 
-With the structured configuration file, the provider, header injection and listener address live in the file, and the corresponding legacy flags can no longer be used alongside it; other flags such as session, cookie and `--api-route` (return 401 instead of redirecting when not logged in) stay as they are. Upstream marks the structure of this file as subject to change between minor versions; the file is parsed strictly, and oauth2-proxy refuses to start on a field it does not recognize, so a structural change fails immediately on upgrade instead of being silently ignored. §9 item 9 makes that failure happen in CI.
+With the structured configuration file, the provider, header injection and listener address live in the file, and the corresponding legacy flags can no longer be used alongside it (with them, oauth2-proxy fails to parse its flags and refuses to start); other flags such as session, cookie and `--api-route` (return 401 instead of redirecting when not logged in) stay as they are. The oauth2-proxy project marks the structure of this file as subject to change between minor versions; the file is parsed strictly, and oauth2-proxy refuses to start on a field it does not recognize, so a structural change fails immediately on upgrade instead of being silently ignored. §9 item 9 makes that failure happen in CI.
 
 Fallback (not adopted, kept for the record): the Ingress routes `/api/` by path to tenant-api's oauth2-proxy and the portal is served without login. §7's claim-header injection needs the structured configuration file as well, so the fallback would not avoid it.
 

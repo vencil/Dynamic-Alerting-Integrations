@@ -20,7 +20,7 @@ updated_at: 2026-11-05
 
 🟡 **Proposed**（2026-11-04 改寫；同日 owner 裁決原待決的三項：瀏覽器入口、threshold-govern、範圍軸 shadow 模式）。owner 核可全文後昇格 Accepted。
 
-2026-11-05：§10 的前提已實測——依路徑分流到 UDS 只能用 oauth2-proxy 的結構化設定檔（alpha config），legacy 旗標做不到；同日 owner 裁決三項：採用結構化設定檔（§10）、tenant-api 直接讀 oauth2-proxy 的設定檔決定信任哪些 header（§2、§7）、「一次生效」指拒絕舊設定的變更（§6）。
+2026-11-05 修訂：§10 改為實測結果，採用 oauth2-proxy 的結構化設定檔（alpha config）；tenant-api 由同一份設定檔決定信任哪些 header（§2、§7）；§6 的「一次生效」限於會拒絕舊設定的變更。
 
 本 ADR 取代 2026-07 一份未公開的草稿。那份草稿的方向是「逐跳認證」：每個把身分轉給 tenant-api 的元件各自加上 workload token，先只做稽核、觀察數週後再強制。依那個方向合併的程式碼不是只做稽核、就是預設關閉，而且都不在任何已發布的 tenant-api image 裡。本 ADR 撤回那個方向，理由見 §背景 與 §考慮過但否決；那段期間完成、與方向無關的修正（`_rbac.yaml` 空檔拒絕存取、移除以 header 決定來源 IP 的中介層）保留。
 
@@ -77,12 +77,16 @@ tenant-api 唯一接受的身分來源，是同一個 pod 裡的 oauth2-proxy �
 ### 2. listener 決定身分來源
 
 - UDS listener：從 header 建立身分。
-- TCP listener：沒有身分；只服務 §3 的端點。TCP request 帶了任何身分 header（`X-Forwarded-Email`、`X-Forwarded-Groups`、設定的 claim header）一律回 400，讓仍在轉送身分的舊設定立即失敗，而不是被默默忽略。
+- TCP listener：沒有身分；只服務 §3 的端點。TCP request 帶了任何身分 header（`X-Forwarded-Email`、`X-Forwarded-Groups`、oauth2-proxy 設定檔中注入的 claim header）一律回 400，讓仍在轉送身分的舊設定立即失敗，而不是被默默忽略。
 - 連線來自哪個 listener，由伺服器在建立連線時標記，request 無法改寫。
 - 所有需要呼叫者身分的地方（含 rate limit 與 request log）都讀身分物件，不直接讀 header。
 - 開發模式的驗證旁路改為直接注入身分物件，不再注入 header。
 - UDS 不再是選項：tenant-api 啟動時沒有 UDS 就不啟動。pod 內只有 tenant-api 與 oauth2-proxy 兩個容器能掛載這個 socket。
-- 信任哪些 header，由 oauth2-proxy 實際使用的設定檔決定，不另設名單：同一份設定檔掛進兩個容器，tenant-api 啟動時讀其中的 `injectRequestHeaders`，得知 email、group 與各 claim 由哪個 header 帶來。oauth2-proxy 對每個注入的 header 預設先清除 client 帶來的同名值；設定檔裡任何一個身分 header 設了保留 client 值（`preserveRequestValue: true`），或沒有注入 email 與 group，tenant-api 就拒絕啟動。
+- 信任哪些 header，由 oauth2-proxy 實際使用的設定檔決定，不另設名單：同一份設定檔掛進兩個容器，tenant-api 啟動時讀其中的 `injectRequestHeaders`，得知 email、group 與各 claim 由哪個 header 帶來。oauth2-proxy 對每個注入的 header 預設先清除 client 帶來的同名值。
+- tenant-api 只接受意義不含糊的設定檔，其餘一律拒絕啟動：
+  - 每個身分 header 恰好取自一個 session claim（email 取 `email`、group 取 `groups`，其餘為允許的額外 claim），不加前綴、不轉成 basic auth、不用固定值（secret），不保留 client 值（`preserveRequestValue`），不關閉 header 名稱正規化；沒有注入 email 與 group 也拒絕。
+  - oauth2-proxy 會先展開設定檔裡的環境變數參照、且以不分大小寫比對欄位名稱；tenant-api 的解讀必須與它相同，所以設定檔含環境變數參照、或欄位名稱不是標準拼法時，一律拒絕。
+- 免登入路由不得涵蓋 `/api/`：符合免登入條件的請求（`--skip-auth-route` 一類旗標、信任的來源 IP、preflight 放行）若帶著有效 session，oauth2-proxy 仍會注入身分 header，而且略過 email 網域與 group 的限制。這類旗標不在設定檔裡，由 chart 的 render 測試守住（§9 第 3 項）。
 
 **取捨**：多一個必須存在的 socket 與共享 volume，且 tenant-api 要解析 oauth2-proxy 設定檔中與 header 注入有關的那一小段；換到的是「哪裡可以主張人類身分」變成拓撲事實，「proxy 注入什麼」與「tenant-api 信什麼」在每一種部署方式下都是同一份檔案。
 
@@ -150,10 +154,10 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
 
 1. TCP 只註冊 §3 列舉的路徑（精確比對），其餘回 404；TCP 上帶任何身分 header 回 400。（§2、§3）
 2. 架構測試：從 header 建立身分只發生在 UDS listener 的路徑上；rate limit、request log 與驗證旁路都不讀身分 header。（§2）
-3. chart render 測試：整個部署只有一個 oauth2-proxy，且 `/api/` 未登入回 401；只有 tenant-api 與 oauth2-proxy 掛載 human socket；UDS 必定存在；oauth2-proxy 與 tenant-api 掛載同一份設定檔。portal 容器實際載入的 nginx 設定（不論來自 chart 或 image）沒有任何轉送。（§2、§5）
+3. chart render 測試：整個部署只有一個 oauth2-proxy，且 `/api/` 未登入回 401；只有 tenant-api 與 oauth2-proxy 掛載 human socket；UDS 必定存在；oauth2-proxy 與 tenant-api 掛載同一份設定檔；正式部署的 oauth2-proxy 沒有任何涵蓋 `/api/` 的免登入條件（§3 的開發拓撲依 ADR-022 隔離，不在此限）。portal 容器實際載入的 nginx 設定（不論來自 chart 或 image）沒有任何轉送。（§2、§5）
 4. portal 原始碼呼叫的每個後端路徑都在 `/api/` 前綴下；simulate 路徑回 501 與原 body。（§5）
 5. 掃描 helm、k8s manifest 與 rule-pack：沒有任何設定把身分 header 跨網路轉送給任何元件；§6 刪除的 chart key 不存在；threshold-govern 的 CronJob、它在 NetworkPolicy 的放行與它的告警都不存在。§6 刪除的環境變數不在 tenant-api 的已知清單裡。（§4、§5、§6）
-6. oauth2-proxy 設定檔中的身分 header 保留 client 值、或缺少 email 或 group 的注入時，tenant-api 拒絕啟動；沒有規則的 `_rbac.yaml` 拒絕所有存取，且不存在恢復 open mode 的開關；非平台管理員的寫入若變更租戶的環境或 domain 標記即被拒絕。（§7）
+6. oauth2-proxy 設定檔不符合 §2 的形狀時 tenant-api 拒絕啟動，fixture 至少涵蓋：保留 client 值、固定值、前綴、claim 對錯、缺 email 或 group、環境變數參照、非標準拼法的欄位名稱；沒有規則的 `_rbac.yaml` 拒絕所有存取，且不存在恢復 open mode 的開關；非平台管理員的寫入若變更租戶的環境或 domain 標記即被拒絕。（§7）
 7. `tenant-api config check` 對每條範圍軸列出未標記租戶並非零退出，以固定 fixture 測試；CI 對 repo 內的範例設定執行它。（§7）
 8. 引用檢查：repo 內每個 `ADR-NNN` 後接的小節引用都必須對應到該 ADR 存在的小節（以小節標題的編號或名稱比對）；`ADR-027` 後接 §舊引用對照 表中的舊編號一律失敗。（本 ADR 與 [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667)）
 9. CI 以 chart 釘住的 oauth2-proxy image（同一個 digest）對 chart 產生的設定檔執行設定檢查（`--config-test`），並以同版本的 oauth2-proxy 程式庫斷言分流結果與 §10 的範例一致。（§10）
@@ -162,7 +166,7 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
 
 已以 chart 釘住的 oauth2-proxy 版本（v7.15.5）實測：
 
-- **legacy 旗標做不到**：`--upstream=unix://…` 的路由路徑固定為 `/`，第二條 upstream 必然與它衝突，設定驗證失敗（`multiple upstreams found with path "/"`）。
+- **legacy 旗標做不到**：`--upstream=unix://…` 的路由路徑固定為 `/`，API 無法放在 `/api/`；portal 也在 `/`，兩者衝突，設定驗證失敗（`multiple upstreams found with path "/"`）。
 - **結構化設定檔（`--alpha-config`）做得到**：每條 upstream 的路徑與目的地分開設定。
 
 設定（節錄）：
@@ -187,7 +191,7 @@ upstreamConfig:
 | `/api`、`/apix` | portal |
 | `/`、`/index.html` | portal |
 
-改用結構化設定檔後，provider、header 注入與 listener 位址都寫在設定檔裡，對應的 legacy 旗標不能再並用；session、cookie、`--api-route`（未登入回 401 而非轉址）等其他旗標照舊。上游標示這個檔案的結構可能在 minor 版之間變動；檔案以嚴格模式解析，出現不認得的欄位時 oauth2-proxy 拒絕啟動，所以結構變動會在升級時立即失敗，而不是被默默忽略。§9 第 9 項讓這件事在 CI 就失敗。
+改用結構化設定檔後，provider、header 注入與 listener 位址都寫在設定檔裡，對應的 legacy 旗標不能再並用（帶了 oauth2-proxy 就無法解析旗標而拒絕啟動）；session、cookie、`--api-route`（未登入回 401 而非轉址）等其他旗標照舊。oauth2-proxy 專案標示這個檔案的結構可能在 minor 版之間變動；檔案以嚴格模式解析，出現不認得的欄位時 oauth2-proxy 拒絕啟動，所以結構變動會在升級時立即失敗，而不是被默默忽略。§9 第 9 項讓這件事在 CI 就失敗。
 
 退路（不採用，保留紀錄）：由 Ingress 依路徑把 `/api/` 導到 tenant-api 的 oauth2-proxy、portal 不經登入。§7 的 claim header 注入同樣需要結構化設定檔，退路並不能免除它。
 
