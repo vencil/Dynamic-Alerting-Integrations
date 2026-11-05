@@ -49,6 +49,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import os
+import stat
 from pathlib import Path
 from typing import Any, NamedTuple, Optional
 
@@ -206,17 +207,32 @@ def require_selection(args: argparse.Namespace, dest: str, chosen: "list[Any]", 
 
 
 def _nothing_at(path: "str | os.PathLike[str]") -> bool:
-    """True only when nothing is at *path* itself — not even a dangling
-    link (``os.lstat``: ENOENT). ``PathProblem.missing`` (stat: ENOENT /
-    ENOTDIR) is wider: a dangling link and a path under a regular file are
-    "missing" to stat, yet ``ls`` shows something there (#3548 review)."""
+    """True only when nothing is at *path* — not even a dangling link —
+    and nothing is in its way: ``os.lstat`` answers ENOENT for it, and its
+    nearest ancestor that is there is a directory. ``PathProblem.missing``
+    (stat: ENOENT / ENOTDIR) is wider: a dangling link at the path or at
+    an ancestor (`.da` → nowhere), and a path under a regular file, are
+    "missing" to stat, yet ``ls`` shows something there (#3548)."""
     try:
         os.lstat(path)
     except FileNotFoundError:
-        return True
+        pass
     except OSError:
         return False
-    return False
+    else:
+        return False
+    for ancestor in Path(os.path.abspath(path)).parents:
+        try:
+            os.lstat(ancestor)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return False
+        try:  # there: it must be a directory (a link to one counts)
+            return stat.S_ISDIR(os.stat(ancestor).st_mode)
+        except OSError:
+            return False  # a dangling link
+    return True
 
 
 def _list(directory: "str | os.PathLike[str]") -> "list[str]":

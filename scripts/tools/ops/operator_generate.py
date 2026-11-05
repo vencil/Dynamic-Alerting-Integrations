@@ -721,8 +721,11 @@ def main():
         # caller error (rc 2, `_lib_input`), named before anything is
         # generated or written: it was a WARNING and a CRD set without its
         # PrometheusRules, rc 0. Only when the chosen --components reads it.
+        # ⛔ Not resolved file by file: a pack name is the file's own name
+        # (RULE_PACKS.member), and a symlinked rule-pack-x.yaml resolved to
+        # its target would be named after the target (PR #3610 review).
         rule_pack_files = (
-            [p.resolve() for p in _lib_input.selected(args, "rule_packs_dir", lang=_LANG)]
+            _lib_input.selected(args, "rule_packs_dir", lang=_LANG)
             if args.components in ("all", "rules") else [])
         result = generate_crds(
             rule_pack_files,

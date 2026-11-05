@@ -322,8 +322,9 @@ def test_docker_with_no_daemon_is_no_run(tmp_path):
     (0, "null"),
     (0, "[1]"),
     (0, "not json"),
+    (0, '[{"message":"parse failed"}]'),   # no level: it would pass as INFO
 ], ids=["rc0-empty", "rc1-array", "rc2-array", "rc125-empty", "object", "null",
-        "array-of-number", "not-json"])
+        "array-of-number", "not-json", "finding-without-level"])
 def test_an_engine_run_that_does_not_show_it_ran_is_exit_3(tmp_path, rc, stdout):
     proc = _wrapper(_stand_in(tmp_path, "hadolint", _replies(rc, stdout)))
     assert proc.returncode == 3, proc.stdout + proc.stderr

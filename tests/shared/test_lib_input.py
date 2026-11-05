@@ -213,6 +213,21 @@ def test_a_default_that_is_a_dangling_link_is_refused(tmp_path):
         _select([], default=str(link), absent_default=_lib_input.ABSENT_EMPTY)
 
 
+def test_a_default_under_a_dangling_link_is_refused(tmp_path):
+    """`.da` → nowhere: `.da/state` is ENOENT to lstat, yet `.da` is listed."""
+    symlink_or_skip(tmp_path / "nowhere", tmp_path / "da")
+    with pytest.raises(CallerError):
+        _select([], default=str(tmp_path / "da" / "state"),
+                absent_default=_lib_input.ABSENT_EMPTY)
+
+
+def test_a_default_under_a_link_to_a_directory_is_absent(tmp_path):
+    (tmp_path / "real").mkdir()
+    symlink_or_skip(tmp_path / "real", tmp_path / "da")
+    assert _select([], default=str(tmp_path / "da" / "state"),
+                   absent_default=_lib_input.ABSENT_EMPTY) == []
+
+
 def test_a_default_whose_parent_is_missing_is_absent(tmp_path):
     assert _select([], default=str(tmp_path / "da" / "state"),
                    absent_default=_lib_input.ABSENT_EMPTY) == []

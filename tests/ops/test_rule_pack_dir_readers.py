@@ -112,3 +112,20 @@ def test_rule_pack_split(tmp_path):
     report = grps.process_rule_packs(str(rp), str(tmp_path / "out2"), dry_run=True)
     assert report["status"] == "error"
     assert any("extra.yaml" in e for e in report["errors"]), report["errors"]
+
+
+def test_operator_generate_names_a_symlinked_pack_by_its_own_name(tmp_path, monkeypatch):
+    """A pack's name is its file's own name (`RULE_PACKS.member`): a
+    rule-pack-x.yaml that is a symlink keeps `x`, not its target's name
+    (PR #3610 review: the selected files were resolved one by one)."""
+    from _platform_fs import symlink_or_skip
+    rp = tmp_path / "rule-packs"
+    rp.mkdir()
+    (tmp_path / "source.yaml").write_text(_PACK, encoding="utf-8")
+    symlink_or_skip(tmp_path / "source.yaml", rp / "rule-pack-linked.yaml")
+    monkeypatch.setattr("sys.argv", ["operator_generate.py", "--rule-packs-dir", str(rp),
+                                     "--components", "rules", "--dry-run", "--json"])
+    report = og.main()
+    names = [c["metadata"]["name"] for c in report.document["crds"]]
+    assert any("linked" in n for n in names), names
+    assert not any("source" in n for n in names), names

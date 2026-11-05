@@ -342,7 +342,11 @@ def run_hadolint(dockerfiles: list[str]) -> list[dict] | None:
     except json.JSONDecodeError:
         _no_run(f"stdout is not JSON: {out[:500]}")
         return None
-    if not (isinstance(findings, list) and all(isinstance(f, dict) for f in findings)):
+    # The fields every hadolint finding carries: one without `level` would be
+    # classified INFO, a finding of any severity passed over (PR #3610 review).
+    required = {"file", "line", "code", "level", "message"}
+    if not (isinstance(findings, list)
+            and all(isinstance(f, dict) and required <= f.keys() for f in findings)):
         _no_run(f"stdout is not a JSON array of findings: {out[:500]}")
         return None
     return findings
