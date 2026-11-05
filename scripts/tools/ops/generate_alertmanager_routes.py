@@ -1430,6 +1430,7 @@ def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
 _KEY_VERDICT_KINDS = {
     "unread": "key_unread",
     "disable_noop": "key_disable_noop",
+    "disable_cascade": "key_disable_cascade",
     "profile_not_judged": "key_profile_not_judged",
 }
 

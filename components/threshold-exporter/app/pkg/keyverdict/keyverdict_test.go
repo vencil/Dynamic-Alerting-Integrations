@@ -264,3 +264,47 @@ func TestJudge_AProfileKeyNotFilledInIsUnread(t *testing.T) {
 		}
 	}
 }
+
+// #3046: a family key switched off with its base (SwitchedOffWith) is a
+// disable_cascade warning, naming the base, only when the tenant's own file
+// writes it; one it inherits is what the cascade asks — no finding. It stays
+// read either way.
+func TestJudge_DisableCascadeOnlyForTheTenantsOwnKey(t *testing.T) {
+	t.Parallel()
+	for layer, want := range map[string]bool{
+		config.KeyLayerTenant: true, config.KeyLayerProfile: false,
+		config.KeyLayerDefaults: false, config.KeyLayerPlatform: false,
+	} {
+		tree := Judge(Input{
+			Served: map[string]ServedTenant{"t1": {Keys: map[string]ServedKey{
+				"mysql_connections":          {Reason: ReasonDisabled, Disable: DisableEffective},
+				"mysql_connections_critical": {Reason: ReasonBaseDisabled, SwitchedOffWith: "mysql_connections"}}}},
+			Effective: map[string]EffectiveTenant{"t1": {
+				Config: map[string]any{"mysql_connections": "disable", "mysql_connections_critical": "90"},
+				Sources: map[string]config.KeySource{
+					"mysql_connections":          {Layer: config.KeyLayerTenant, File: "t1.yaml"},
+					"mysql_connections_critical": {Layer: layer, File: "x.yaml"}}}},
+		})
+		v := one(t, tree, "t1", "mysql_connections_critical")
+		if v.Verdict != Read || deref(v.SwitchedOffWith) != "mysql_connections" {
+			t.Errorf("%s: %+v", layer, v)
+		}
+		var got []Finding
+		for _, f := range tree.Findings {
+			if f.Kind == KindDisableCascade {
+				got = append(got, f)
+			}
+		}
+		if !want {
+			if len(got) != 0 {
+				t.Errorf("%s: findings %+v, want none", layer, got)
+			}
+			continue
+		}
+		if len(got) != 1 || got[0].Severity != SeverityWarning || got[0].Blocks ||
+			deref(got[0].Base) != "mysql_connections" || deref(got[0].Reason) != ReasonBaseDisabled ||
+			got[0].Key != "mysql_connections_critical" || !reflect.DeepEqual(got[0].Tenants, []string{"t1"}) {
+			t.Errorf("%s: findings %+v", layer, got)
+		}
+	}
+}

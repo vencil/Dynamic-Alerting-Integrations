@@ -480,6 +480,10 @@ class ServedKey(NamedTuple):
     # "root_default_refused": the refused value is the root default's).
     # None when the value is read (a number, or a disable).
     refused: str | None = None
+    # Only from `disable_effects=True` (#3046): for a `<base>_critical` /
+    # `<base>{…}` key the tenant's base `disable` switches off in some part
+    # of the day, that base; None otherwise.
+    switched_off_with: str | None = None
 
 
 #: The closed set of served-values' `keys[*].refused` (pkg/config Refused*).
@@ -912,7 +916,7 @@ def _run_da_guard(
 # Fields a da-guard document gained after its first version: one missing
 # names the binary as older than this tool (#3489, #3016).
 _FIELDS_ADDED_SINCE = (("skipped",), ("unreadable",), ("parse_failed",), ("blocks",),
-                       ("undecidable_blocks",))
+                       ("undecidable_blocks",), ("switched_off_with",), ("base",))
 
 
 def _accepts(cmd: list[str], timeout: float) -> bool:
@@ -1240,8 +1244,11 @@ def _served_key(e: Any) -> ServedKey:
         raise ValueError(f"refused {refused!r}")
     if (reason in SERVED_KEY_REFUSED_REASONS) != (refused is not None and not exporter):
         raise ValueError(f"reason {reason!r} with refused {refused!r}")
+    switched = e.get("switched_off_with")
+    if switched is not None and not isinstance(switched, str):
+        raise TypeError(f"switched_off_with is a {type(switched).__name__}")
     return ServedKey(exporter, reason, registered, declared, None if hint is None else str(hint),
-                     disable, refused)
+                     disable, refused, switched)
 
 
 def _time_boxes(m: Any) -> dict[str, tuple[TimeBox, ...]]:
