@@ -454,46 +454,86 @@ func headLive(base string, defaults map[string]float64, sv ScheduledValue, now t
 //
 // ⛔ THE one reading. resolveBaseRows' and resolveDeclaredRows' State 3 are
 // this same pair (headLive, thresholdRowDisabled) on the value they already
-// resolved; the sibling phases and da-guard (FamilyHeadOffAt) ask this
-// function — nothing else decides whether a family is switched off.
+// resolved; the sibling phases and da-guard (FamilyView) ask this function —
+// nothing else decides whether a family is switched off.
 //
 // base and both maps are canonical (#1231). The base's invalid-window WARN
 // is its own phase's, not repeated here (resolveValue with no logf).
 func familyHeadOff(base string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time) bool {
+	return familyHeadOffSplit(base, defaults, overrides, now, now)
+}
+
+// familyHeadOffSplit is familyHeadOff with the expiry read at expiryAt and
+// the schedule at valueAt — da-guard's reading of one part of the day,
+// which, like the resolver's (AtMinuteOfDay), reads `expires:` at --at.
+func familyHeadOffSplit(base string, defaults map[string]float64, overrides map[string]ScheduledValue, expiryAt, valueAt time.Time) bool {
 	sv, ok := overrides[base]
-	if !ok || !headLive(base, defaults, sv, now) {
+	if !ok || !headLive(base, defaults, sv, expiryAt) {
 		return false
 	}
-	off, _ := thresholdRowDisabled(sv.resolveValue(now, nil))
+	off, _ := thresholdRowDisabled(sv.resolveValue(valueAt, nil))
 	return off
+}
+
+// criticalRowRead is resolveCriticalRows' entry test: key is a
+// `<base>_critical` key whose base the root `defaults:` (canonical) values —
+// the key the phase reads; any other `_critical` key it drops
+// ("has no matching default").
+func criticalRowRead(key string, defaults map[string]float64) (base string, ok bool) {
+	base, critical := criticalRowBase(key)
+	if !critical {
+		return "", false
+	}
+	_, valued := defaults[base]
+	return base, valued
+}
+
+// dimensionalRowRead is resolveDimensionalRows' entry test, for a tenant
+// key and a root `defaults:` one alike: a dimensional key, no `_` key
+// (#3045), every label of its selector declared under `dimensions:` for its
+// base (dimensionDeclared, ADR-038 §11).
+func dimensionalRowRead(key string, dims map[string][]string) bool {
+	return strings.Contains(key, "{") && !baseRowsSkipKey(key) && dimensionDeclared(key, dims)
 }
 
 // FamilyHeadOffAt is familyHeadOff for tenant's map of c (any #1231
 // spelling of key), at now — for da-guard.
 func (c *ThresholdConfig) FamilyHeadOffAt(tenant, key string, now time.Time) bool {
-	overrides, _ := canonicalizeOverrides(c.Tenants[tenant])
-	canon, _ := CanonicalKeyFor(key)
-	return familyHeadOff(canon, canonicalizeDefaults(c.Defaults), overrides, now)
+	return c.FamilyView(tenant).headOff(key, now, now)
 }
 
-// FamilyBase is the family base key of a `<base>_critical` or dimensional
-// `<base>{…}` key (any #1231 spelling; the base canonical), as the critical
-// and dimensional phases derive it (criticalRowBase, parseKeyWithLabels) —
-// ok false for any other key. Whether the phase then reads the key at all is
-// the phase's own entry test, not this function's.
-func FamilyBase(key string) (base string, ok bool) {
+// FamilyView is one tenant's maps of c, canonical once (#1231), for asking
+// many keys whether they are switched off with their base (#3046).
+type FamilyView struct {
+	defaults  map[string]float64
+	overrides map[string]ScheduledValue
+	dims      map[string][]string
+}
+
+// FamilyView is tenant's FamilyView.
+func (c *ThresholdConfig) FamilyView(tenant string) FamilyView {
+	overrides, _ := canonicalizeOverrides(c.Tenants[tenant])
+	return FamilyView{defaults: canonicalizeDefaults(c.Defaults), overrides: overrides, dims: c.Dimensions}
+}
+
+func (v FamilyView) headOff(key string, expiryAt, valueAt time.Time) bool {
 	canon, _ := CanonicalKeyFor(key)
-	if b, critical := criticalRowBase(canon); critical {
-		return b, true
+	return familyHeadOffSplit(canon, v.defaults, v.overrides, expiryAt, valueAt)
+}
+
+// SwitchedOffWithBase reports whether key (any #1231 spelling; the
+// tenant's or a root `defaults:` one) is one the critical or dimensional
+// phase reads — their own entry tests, criticalRowRead and
+// dimensionalRowRead — and serves no row for because the tenant switches
+// its base off: `expires:` read at expiryAt, the schedule at valueAt.
+func (v FamilyView) SwitchedOffWithBase(key string, expiryAt, valueAt time.Time) bool {
+	canon, _ := CanonicalKeyFor(key)
+	base, ok := criticalRowRead(canon, v.defaults)
+	if !ok && dimensionalRowRead(canon, v.dims) {
+		base, _, _ = parseKeyWithLabels(canon)
+		ok = true
 	}
-	if isDimensionalKey(canon) && !baseRowsSkipKey(canon) {
-		b, exact, regex := parseKeyWithLabels(canon)
-		if exact == nil && regex == nil {
-			return "", false
-		}
-		return b, true
-	}
-	return "", false
+	return ok && familyHeadOffSplit(base, v.defaults, v.overrides, expiryAt, valueAt)
 }
 
 // baseRowsSkipKey reports whether resolveBaseRows skips a defaults key
@@ -792,8 +832,8 @@ func criticalRowBase(key string) (string, bool) {
 func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
 	var rows []ResolvedThreshold
 	for key, sv := range overrides {
-		baseKey, critical := criticalRowBase(key)
-		if !critical {
+		baseKey, read := criticalRowRead(key, defaults)
+		if _, critical := criticalRowBase(key); !critical {
 			continue
 		}
 		if rec != nil {
@@ -804,7 +844,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 			// `defaults:` that values the `_critical` key itself is walked by
 			// resolveBaseRows), which an unconditional note here could not
 			// see.
-			if _, exists := defaults[baseKey]; exists {
+			if read {
 				rec.claim(key)
 			}
 		}
@@ -823,7 +863,7 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		}
 
 		// Verify that the base metric exists in defaults (otherwise ignore)
-		if _, exists := defaults[baseKey]; !exists {
+		if !read {
 			logf("WARN: _critical key %q has no matching default %q, skipping", key, baseKey)
 			continue // unclaimed above: NotServedUnconsumed (#3378)
 		}
@@ -908,8 +948,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		return off
 	}
 	for key, v := range defaults {
-		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !isDimensionalKey(key) ||
-			baseRowsSkipKey(key) || !dimensionDeclared(key, c.Dimensions) {
+		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !dimensionalRowRead(key, c.Dimensions) {
 			continue
 		}
 		if familyOff(key) {
@@ -919,14 +958,10 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		rows = c.appendDimensionalRow(rows, tenant, key, ScheduledValue{Default: strconv.FormatFloat(v, 'g', -1, 64)}, false, now, sink, discardLogf, nil)
 	}
 	for key, sv := range overrides {
-		if !strings.Contains(key, "{") {
-			continue // not a dimensional key
-		}
-		if baseRowsSkipKey(key) { // every `_` key (#3045)
+		if !dimensionalRowRead(key, c.Dimensions) {
+			// Not dimensional, a `_` key (#3045), or a label `dimensions:`
+			// does not name (ADR-038 §11, #3475) — unconsumed.
 			continue
-		}
-		if !dimensionDeclared(key, c.Dimensions) {
-			continue // ADR-038 §11 (#3475): a label `dimensions:` does not name — unconsumed
 		}
 		if rec != nil {
 			rec.claim(key) // #3378

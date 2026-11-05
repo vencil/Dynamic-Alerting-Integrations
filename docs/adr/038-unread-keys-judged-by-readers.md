@@ -479,7 +479,7 @@ db-a
 - **沒變的錯值會一直留著**：決定 12 讓沒改過的錯值只報 notice，它會留在檔裡直到有人改這個鍵；期間它照樣什麼都不靜音。
 - **探針不涵蓋兩類**：標註類的鍵（`_namespaces`），以及讀了但輸出不變的鍵，靠登錄表的明確標註。
 - **反事實重算的成本**：整棵樹時，重算的輪數等於單一租戶最多有幾個 `disable`，每輪是一次 served-values，所以不進入寫入檢查；寫入檢查只對被寫的租戶重算（決定 8）。
-- **`disable` 連帶關閉少了一種寫法**：「base 關掉、只對某個維度告警」（`X: disable` 加 `X{db="a"}: 5`）沒有替代寫法；要這麼做，得把 base 的門檻設成不會觸發的值。被連帶關掉的同族鍵不報，所以從舊語意升級時，`X: disable` 加 `X_critical: 90` 會靜靜地不再送出 critical（決定 8 的遷移寫法）。
+- **`disable` 連帶關閉少了一種寫法**：「base 關掉、只對某個維度告警」（`X: disable` 加 `X{db="a"}: 5`）沒有替代寫法；要這麼做，得把 base 的門檻設成不會觸發的值。被連帶關掉的同族鍵不報，所以從舊語意升級時，`X: disable` 加 `X_critical: 90` 會靜靜地不再送出 critical（決定 8 的遷移寫法）。根目錄 `defaults:` 自己給了 `X_critical` 的值時，它是一個獨立的閾值鍵（exporter 以 `metric="…_critical"` 的 warning 列送出），不屬於 `X` 這一族，`X: disable` 不連帶關掉它；這種寫法另有 `root_defaults_critical_key` 警告。
 - **實測中發現、另案處理的問題**：
   - 產生器讀了 `_metadata` 卻沒有使用（[#3043](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3043)）。
   - `_severity_dedup` 只讀租戶檔，其他保留鍵會繼承 profile；需要確認是否刻意（[#3044](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3044)）。

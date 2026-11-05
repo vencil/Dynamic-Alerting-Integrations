@@ -110,8 +110,11 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 			writtenOf[name(tenant, canon)] = wk
 		}
 		recorded := recordedReasons(cfg, tenant, at)
+		view := cfg.FamilyView(tenant)
 		for k := range keys {
-			why := func(minute int) string { return nullReason(cfg, tenant, writtenOf[k], at, minute, recorded) }
+			why := func(minute int) string {
+				return nullReason(cfg, tenant, k, writtenOf[k], at, minute, recorded, view)
+			}
 			sch := servedSchedule{Segments: daySegments(cuts, ends, passes, gatherErrs, tenant, k, why)}
 			if te, ok := expiryOf[tenant][k]; ok {
 				sv, written := cfg.Tenants[tenant][te.MetricKey]
@@ -269,31 +272,36 @@ func hhmm(m int) string {
 	return fmt.Sprintf("%02d:%02d", m/60, m%60)
 }
 
-// nullReason is why threshold key written (cfg's spelling; "" for a key the
-// tenant's map does not write) serves no row from minute of the UTC day of
-// at (#3140): keyReasonDisabled for a disable written for that part of the
-// day, keyReasonValueNonFinite / keyReasonValueUnparsed for a value the
-// resolver refuses (and recorded refusing), keyReasonBaseDisabled for a
-// `<base>_critical` / `<base>{…}` key whose base the tenant switches off
-// for that part of the day (#3046, switchedOffWithBase), else "" (nothing to serve: a
-// lapsed or absent value).
-func nullReason(cfg *config.ThresholdConfig, tenant, written string, at time.Time, minute int,
-	recorded func(canon string) string,
+// nullReason is why threshold key served (the served name) — written in
+// cfg's spelling, "" for a key the tenant's map does not write — serves no
+// row from minute of the UTC day of at (#3140): keyReasonDisabled for a
+// disable written for that part of the day, keyReasonValueNonFinite /
+// keyReasonValueUnparsed for a value the resolver refuses (and recorded
+// refusing), keyReasonBaseDisabled for a `<base>_critical` / `<base>{…}` key
+// — written or a root `defaults:` one — whose base the tenant switches off
+// for that part of the day (#3046, FamilyView.SwitchedOffWithBase: the
+// expiry read at at, as the resolver reads each part of the day), else ""
+// (nothing to serve: a lapsed or absent value).
+func nullReason(cfg *config.ThresholdConfig, tenant, served, written string, at time.Time, minute int,
+	recorded func(canon string) string, view config.FamilyView,
 ) string {
+	utc := at.UTC()
+	t := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, minute, 0, 0, time.UTC)
 	sv, ok := cfg.Tenants[tenant][written]
 	if !ok {
+		if view.SwitchedOffWithBase(served, at, t) {
+			return keyReasonBaseDisabled // a root `defaults:` dimensional default (#3046)
+		}
 		return ""
 	}
 	canon, _ := config.CanonicalKeyFor(written)
-	utc := at.UTC()
-	t := time.Date(utc.Year(), utc.Month(), utc.Day(), 0, minute, 0, 0, time.UTC)
 	if config.DisabledAt(sv, t) {
 		return keyReasonDisabled
 	}
 	if r := config.RefusedValueAt(canon, sv, t); r != "" && isRecordedRefusal(recorded(canon)) {
 		return refusedReason(r)
 	}
-	if switchedOffWithBase(cfg, tenant, written, t, recorded) {
+	if view.SwitchedOffWithBase(written, at, t) {
 		return keyReasonBaseDisabled // #3046
 	}
 	return ""

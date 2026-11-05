@@ -730,6 +730,10 @@ func (v *servedVerdicts) notServed(tenantID string, view map[string]any, ks map[
 			// the overlay never writes an undeliverable key into the map the
 			// resolver reads.
 			reason = NotServedUnconsumed
+		case unparsed[canon] == NotServedBaseDisabled:
+			// #3046: the weakest verdict, recorded only when the day holds no
+			// other for the key.
+			reason = NotServedBaseDisabled
 		default:
 			continue
 		}

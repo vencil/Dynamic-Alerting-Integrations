@@ -466,21 +466,6 @@ func isRecordedRefusal(r string) bool {
 	return r == config.NotServedValueUnparsed || r == config.NotServedValueUnparsedDropped
 }
 
-// switchedOffWithBase reports whether, at t, tenant's key k is one the
-// critical or dimensional phase serves no row for because the tenant
-// switches its base off (#3046): k has a family base (config.FamilyBase),
-// the base is off (config.FamilyHeadOffAt), and the phase reads k at all —
-// the resolver did not record it unconsumed, the verdict on a key no phase
-// reads.
-func switchedOffWithBase(cfg *config.ThresholdConfig, tenant, k string, t time.Time, recorded func(canon string) string) bool {
-	base, ok := config.FamilyBase(k)
-	if !ok || !cfg.FamilyHeadOffAt(tenant, base, t) {
-		return false
-	}
-	canon, _ := config.CanonicalKeyFor(k)
-	return recorded(canon) != config.NotServedUnconsumed
-}
-
 // servedTimeBox is one entry of servedTenantValues.TimeBoxes.
 type servedTimeBox struct {
 	// Target is the silenced severity for `_silent_mode`; empty (absent)
@@ -1067,10 +1052,9 @@ func servedValuesWith(cfg *config.ThresholdConfig, at time.Time,
 		for k, sv := range undeliverable[tenant] {
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
+		view := cfg.FamilyView(tenant)
 		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at, recordedReasons(cfg, tenant, at),
-			func(k string, recorded func(string) string) bool {
-				return switchedOffWithBase(cfg, tenant, k, at, recorded)
-			})
+			func(k string) bool { return view.SwitchedOffWithBase(k, at, at) })
 		addRootRefused(tv, overrides, rootRefused)
 		out[tenant] = tv
 	}
@@ -1121,7 +1105,7 @@ func addDisableEffectsWith(cfg *config.ThresholdConfig, at time.Time,
 func servedKeys(tv servedTenantValues,
 	overrides map[string]config.ScheduledValue, undeliverable map[string]config.ScheduledValue,
 	at time.Time, recorded func(canon string) string,
-	withBase func(k string, recorded func(canon string) string) bool,
+	withBase func(k string) bool,
 ) map[string]servedKey {
 	out := map[string]servedKey{}
 	add := func(k string) {
@@ -1158,7 +1142,7 @@ func servedKeys(tv servedTenantValues,
 				e.Reason = keyReasonUndeliverable
 			case refused != "":
 				e.Reason, e.Refused = refusedReason(refused), refused
-			case withBase(k, recorded):
+			case withBase(k):
 				// Written or inherited — a root `defaults:` dimensional
 				// default the tenant's base switches off too (#3046).
 				e.Reason = keyReasonBaseDisabled

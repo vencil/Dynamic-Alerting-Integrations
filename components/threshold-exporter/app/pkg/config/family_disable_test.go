@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 // rowsOf is tenant's rows at fixedNow as "metric severity value labels".
@@ -180,37 +181,43 @@ func TestValueNotServedAsWritten_NotBaseDisabled(t *testing.T) {
 	}
 }
 
-// FamilyBase derives a family member's base as the phases do; any other key
-// has none.
-func TestFamilyBase(t *testing.T) {
+// SwitchedOffWithBase asks the phases' own entry tests: a `_critical` key
+// whose base the root does not value, a dimensional key whose label
+// `dimensions:` does not declare, and a `_` key are none of the family the
+// base's `disable` switches off — they are read by no phase. `expires:` is
+// read at the first instant, the schedule at the second.
+func TestFamilyView_SwitchedOffWithBase(t *testing.T) {
 	t.Parallel()
-	for key, want := range map[string]string{
-		"redis_memory_critical": "redis_memory",
-		`redis_memory{db="x"}`:  "redis_memory",
-		`redis_memory{db=~"x"}`: "redis_memory",
-		"redis_memory":          "",
-		"_state_x_critical":     "",
-		`_myth{a="b"}`:          "",
+	night := ScheduledValue{Default: "70", Overrides: []TimeWindowOverride{{Window: "01:00-02:00", Value: "disable"}},
+		Expiry: &ExpiryMeta{Expires: "2026-08-01T00:30:00Z"}}
+	cfg := &ThresholdConfig{
+		Dimensions: map[string][]string{"redis_memory": {"db"}, "bar_depth": {"db"}},
+		Defaults:   map[string]float64{"redis_memory": 70, "night_lag": 5},
+		Tenants: map[string]map[string]ScheduledValue{"t": {
+			"redis_memory": {Default: "disable"}, "bar_depth": {Default: "disable"}, "night_lag": night}},
+	}
+	v := cfg.FamilyView("t")
+	for key, want := range map[string]bool{
+		"redis_memory_critical":    true,
+		`redis_memory{db="x"}`:     true,
+		`redis_memory{ db = "x" }`: true,
+		`redis_memory{host="h"}`:   false, // label `dimensions:` does not declare
+		`bar_depth{db="a"}`:        true,  // a base only `dimensions:` names
+		"bar_depth_critical":       false, // its base has no root value
+		"redis_memory":             false, // the base itself
+		"_state_x_critical":        false,
+		`_myth{a="b"}`:             false,
 	} {
-		got, ok := FamilyBase(key)
-		if got != want || ok != (want != "") {
-			t.Errorf("FamilyBase(%q) = %q %v, want %q", key, got, ok, want)
+		if got := v.SwitchedOffWithBase(key, fixedNow, fixedNow); got != want {
+			t.Errorf("%s: %v, want %v", key, got, want)
 		}
 	}
-}
-
-// base_disabled is the weakest verdict of the day: a value refused at
-// another minute keeps value_unparsed_dropped.
-func TestFamilyDisable_IsTheWeakestVerdictOfTheDay(t *testing.T) {
-	t.Parallel()
-	cfg := &ThresholdConfig{
-		Defaults: map[string]float64{"redis_memory": 70},
-		Tenants: map[string]map[string]ScheduledValue{"t": {
-			"redis_memory":          {Default: "70", Overrides: []TimeWindowOverride{{Window: "09:00-11:00", Value: "disable"}}},
-			"redis_memory_critical": {Default: "90", Overrides: []TimeWindowOverride{{Window: "01:00-02:00", Value: "abc"}}},
-		}},
+	oneAM := time.Date(2026, 8, 1, 1, 15, 0, 0, time.UTC)
+	before := time.Date(2026, 8, 1, 0, 10, 0, 0, time.UTC)
+	if !v.SwitchedOffWithBase("night_lag_critical", before, oneAM) {
+		t.Error("expiry read before it lapses, schedule at 01:15: want switched off")
 	}
-	if got := cfg.ValuesNotServed(fixedNow)["t"]["redis_memory_critical"]; got != NotServedValueUnparsedDropped {
-		t.Errorf("not served %q, want %q", got, NotServedValueUnparsedDropped)
+	if v.SwitchedOffWithBase("night_lag_critical", fixedNow, oneAM) {
+		t.Error("expiry lapsed at the instant read: want not switched off")
 	}
 }

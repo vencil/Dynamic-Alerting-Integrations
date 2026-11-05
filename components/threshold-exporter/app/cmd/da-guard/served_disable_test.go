@@ -5,6 +5,9 @@ package main
 // user_threshold rows /metrics serves.
 
 import (
+	"bytes"
+	"encoding/json"
+	"reflect"
 	"testing"
 	"time"
 
@@ -247,5 +250,79 @@ func TestServedValues_ARootDimensionalDefaultIsSwitchedOffWithItsBase(t *testing
 	}
 	if _, served := doc.Tenants["b"].Values[k]; !served {
 		t.Errorf("b: %q not served", k)
+	}
+}
+
+// A root dimensional default whose label `dimensions:` does not declare is
+// read by no phase: it stays an unread error, though the tenant's base is
+// switched off — base_disabled is only a key the phase reads (#3046).
+func TestKeyVerdict_AnUndeclaredRootDimensionalDefaultStaysUnread(t *testing.T) {
+	t.Parallel()
+	root := writeTree(t, map[string]string{
+		"_defaults.yaml": "dimensions:\n  redis_memory: [db]\ndefaults:\n  redis_memory: 70\n" +
+			"  redis_memory{host=\"h\"}: 5\n",
+		"a.yaml": "tenants:\n  a:\n    redis_memory: disable\n",
+	})
+	var out, errOut bytes.Buffer
+	if code := run([]string{keyVerdictCmd, "--config-dir", root, "--at", "2026-07-01T03:00:00Z"}, &out, &errOut); code != exitOK {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	var doc struct {
+		Findings []struct {
+			Kind, Key string
+			Blocks    bool
+		} `json:"findings"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if len(doc.Findings) != 1 || doc.Findings[0].Key != `redis_memory{host="h"}` || doc.Findings[0].Kind != "unread" ||
+		!doc.Findings[0].Blocks {
+		t.Errorf("findings %+v, want one blocking unread redis_memory{host=\"h\"}", doc.Findings)
+	}
+}
+
+// schedules name base_disabled for a root dimensional default too, and read
+// the base's `expires:` at --at, as the resolver reads each part of the day
+// (#3046).
+func TestServedSchedules_BaseDisabledForARootDefaultAndAtExpiry(t *testing.T) {
+	t.Parallel()
+	code, doc, _, stderr := servedS(t, map[string]string{
+		"_defaults.yaml": "dimensions:\n  redis_memory: [db]\ndefaults:\n  redis_memory: 70\n" +
+			"  redis_memory{db=\"y\"}: 40\n",
+		"a.yaml": "tenants:\n  a:\n    redis_memory:\n      default: \"70\"\n      expires: \"2026-07-01T03:30:00Z\"\n" +
+			"      overrides:\n        - window: \"05:00-06:00\"\n          value: disable\n" +
+			"    redis_memory_critical: \"90\"\n",
+	}, scheduleAt) // 03:00, before the expiry
+	mustOK(t, code, stderr)
+	checkNullReason(t, doc, "a", `redis_memory{db="y"}`, map[string]string{"05:00": keyReasonBaseDisabled})
+	checkNullReason(t, doc, "a", "redis_memory_critical", map[string]string{"05:00": keyReasonBaseDisabled})
+}
+
+// `da-guard effective` (and /effective) names a key switched off with its
+// base in not_served: base_disabled, the file its value comes from (#3046).
+func TestEffective_NotServedNamesBaseDisabled(t *testing.T) {
+	t.Parallel()
+	dir := writeTree(t, map[string]string{
+		"_defaults.yaml": "dimensions:\n  redis_memory: [db]\ndefaults:\n  redis_memory: 70\n",
+		"a.yaml": "tenants:\n  a:\n    redis_memory: disable\n    redis_memory_critical: \"90\"\n" +
+			"    redis_memory{db=\"x\"}: \"5\"\n",
+	})
+	code, doc, stderr := runEffectiveOn(t, dir)
+	if code != exitOK {
+		t.Fatalf("exit %d: %s", code, stderr)
+	}
+	var a struct {
+		NotServed map[string]config.NotServedKey `json:"not_served"`
+	}
+	if err := json.Unmarshal(doc.Tenants["a"], &a); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]config.NotServedKey{
+		"redis_memory_critical": {Reason: config.NotServedBaseDisabled, File: "a.yaml"},
+		`redis_memory{db="x"}`:  {Reason: config.NotServedBaseDisabled, File: "a.yaml"},
+	}
+	if !reflect.DeepEqual(a.NotServed, want) {
+		t.Errorf("not_served %v, want %v", a.NotServed, want)
 	}
 }
