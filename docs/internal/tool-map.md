@@ -56,7 +56,7 @@ lang: zh
 | `offboard_tenant.py` | 安全的 Tenant 下架工具。 |
 | `onboard_platform.py` | Reverse-analyze existing configs for Dynamic Alerting onboarding. |
 | `operator_check.py` | Verify Prometheus Operator CRD deployment status. |
-| `operator_generate.py` | operator-generate — Generate Kubernetes CRD YAML for Prometheus + Alertmanager. |
+| `operator_generate.py` | operator-generate — Generate the Prometheus Operator CRD YAML of the dynamic alerting stack. |
 | `parser_dispatch.py` | `da-tools parser` Python entrypoint. |
 | `patch_config.py` | Patch threshold-config ConfigMap for a specific tenant. |
 | `policy_engine.py` | Policy-as-Code 引擎（Path A — 內建 DSL）。 |

@@ -159,7 +159,7 @@ These tools only need HTTP access to Prometheus API and can run from anywhere.
 
 | Command | Purpose | Minimum Parameters |
 |---------|---------|-------------------|
-| `operator-generate` | Rule Packs + Tenant config → PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--rule-packs-dir <dir>` |
+| `operator-generate` | Rule Packs → PrometheusRule / ServiceMonitor CRD YAML (reads no conf.d; routing goes through `generate-routes`) | `--rule-packs-dir <dir>` |
 | `operator-check` | Operator CRD deployment status verification (checks + diagnostic report) | `[--namespace <ns>]` |
 | `runtime-audit` | Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING / UNHEALTHY / ORPHAN) | `--prometheus <url>` or `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3), Federation Scenario B | `--rule-packs-dir <dir>` |
@@ -1585,11 +1585,11 @@ da-tools silencer-drift-check --silences-file silences.json --rule-pack-dir rule
 
 #### operator-generate
 
-Generate Kubernetes Operator CRDs (PrometheusRule, AlertmanagerConfig, ServiceMonitor) from Rule Packs and Tenant configuration.
+Generate Kubernetes Operator CRDs (PrometheusRule, ServiceMonitor) from Rule Packs. It reads no conf.d.
 
-When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+**No Alertmanager routing** ([#3572](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3572)): routing is rendered only by [`generate-routes`](#generate-routes). AlertmanagerConfig CRDs cannot carry it — the Prometheus Operator prepends a CR's routes before the global routes, forces `continue: true` and by default adds a `namespace` matcher, so the platform routes cannot come first. On the Operator path, `generate-routes --output-alertmanager` produces `alertmanager.yaml`, which goes into a Secret the Alertmanager CR loads through `spec.configSecret`; see [Operator Alertmanager Integration](integration/operator-alertmanager-integration.en.md). `--components alertmanager` and the flags that only fed AlertmanagerConfig (`--config-dir`, `--api-version`, `--receiver-template`, `--secret-name`, `--secret-key`) exit 2 when given, whatever the value: stdout is empty, nothing is written, and the error names the flag with that procedure. The `--json` `summary` has no `alertmanager_configs` key. ⚠️ The v2.9.0 image still has the old behaviour: it accepts these flags, and `all` includes `alertmanager`, reads conf.d and emits one AlertmanagerConfig per tenant <!-- image-caveat: v2.9.0 -->
 
-**Purpose**: Dynamic alert rule and routing deployment in Prometheus Operator clusters; GitOps-friendly CRD YAML generation.
+**Purpose**: Dynamic alert rule deployment in Prometheus Operator clusters; GitOps-friendly CRD YAML generation.
 
 **Syntax**
 
@@ -1602,14 +1602,14 @@ da-tools operator-generate [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--rule-packs-dir <DIR>` | Rule Pack directory; the packs are taken from the one declaration, `rule_pack_files` (top-level `rule-pack-*.yaml` / `.yml`; the `threshold-registry.yaml` beside them is declared too); any other top-level YAML (suffix in any case) or a dangling symlink there is named, exit 2 ([#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)). Given and not there, not a directory or a symlink loop ⇒ exit `2`, named before anything is generated (stdout empty under `--json`, [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558); it used to be a WARNING and the CRDs generated anyway at rc 0, [#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)); judged only when the chosen `--components` read it, and the default is not judged when the flag is not given. The declared platform packs (`_lib_consumer_read.PLATFORM_PACKS`, i.e. `rule-pack-platform.yaml`) are emitted too, without the rules whose metric source a kube-prometheus-stack install lacks: `_lib_metric_sources.operator_split` derives them from the scrape gate's metric-family table, and each one left out gets a `NOTE:` line on stderr and is listed in that PrometheusRule's `dynamic-alerting.io/operator-excluded-rules` annotation ([#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595); which ones today: [Operator Prometheus Integration Guide](integration/operator-prometheus-integration.en.md)). | `rule-packs/` |
-| `--config-dir <DIR>` | Tenant configuration directory path. One AlertmanagerConfig per tenant; the tenants are the keys of each tenant file's `tenants:` across the whole tree (subdirectories included), read through `da-guard parse-tree` — **not file names**: the tenant in `team-a.yaml` holding `tenants: {db-a: …}` is `db-a`, and a flat-format file with no `tenants:` yields no tenant. ⚠️ A tenant file parse-tree cannot read (each named with its kind), one tenant declared in two files, or no usable da-guard ⇒ exit `2` and no CRD at all (stdout empty under `--json`, [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)). A tenant id that is not RFC 1123 is warned about and skipped. Given and not there, not a directory or a symlink loop ⇒ exit `2`, named before anything is generated (stdout empty under `--json`, [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558); it used to be a WARNING and the CRDs generated anyway at rc 0, [#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)); judged only when the chosen `--components` read it, and the default is not judged when the flag is not given | `conf.d/` |
+| `--config-dir <DIR>` | ⛔ No longer used: this tool reads no conf.d. Exit 2 when given (see above); routing uses `generate-routes --config-dir` | — |
 | `--output-dir <DIR>` | Write CRDs into this directory. ⚠️ **Writing requires both: this flag set _and_ no `--dry-run`**; if either fails, everything goes to **stdout** and no file is written | none |
 | `--namespace <NS>` | Target K8s namespace | `monitoring` |
-| `--api-version <VER>` | AlertmanagerConfig API version (`v1alpha1` / `v1beta1`) | `v1beta1` |
-| `--components <COMP>` | Components to generate (`all` / `rules` / `alertmanager` / `servicemonitor`) | `all` |
-| `--receiver-template <TYPE>` | Receiver template type (`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`) | — |
-| `--secret-name <NAME>` | K8s Secret name (receiver credential reference); use with `--receiver-template` | `da-{tenant}-{type}` |
-| `--secret-key <KEY>` | Key name inside the K8s Secret | inferred from the receiver type |
+| `--api-version <VER>` | ⛔ Only fed the removed AlertmanagerConfig output; exit 2 when given | — |
+| `--components <COMP>` | Components to generate: `all` (= `rules` + `servicemonitor`) / `rules` / `servicemonitor`. `alertmanager` exits 2 (see above) | `all` |
+| `--receiver-template <TYPE>` | ⛔ Only fed the removed AlertmanagerConfig output; exit 2 when given. Receivers are declared in the tenants' `_routing` and rendered by `generate-routes` | — |
+| `--secret-name <NAME>` | ⛔ Only fed the removed AlertmanagerConfig output; exit 2 when given. Credentials use `secretRef` in the tenants' `_routing` | — |
+| `--secret-key <KEY>` | ⛔ Only fed the removed AlertmanagerConfig output; exit 2 when given | — |
 | `--selector-label <KEY=VALUE>` | Label added to the PrometheusRule and ServiceMonitor (repeatable; overrides a default of the same key) so Prometheus's `ruleSelector` / `serviceMonitorSelector` matches. Use `release=<name>` when your Helm release is not named `kube-prometheus-stack` | PrometheusRule: `prometheus=kube-prometheus`, `release=kube-prometheus-stack`; ServiceMonitor: `release=kube-prometheus-stack` |
 | `--gitops` | GitOps mode (sorted keys, no timestamps) | false |
 | `--dry-run` | Print output instead of writing files | false |
@@ -1620,26 +1620,20 @@ da-tools operator-generate [options]
 
 ```bash
 # Basic: CRDs go to stdout (no files written) and can be applied directly
-da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ | kubectl apply -f -
+da-tools operator-generate --rule-packs-dir rule-packs/ | kubectl apply -f -
 
 # To write files, name the directory explicitly (#1582: writing is opt-in)
-da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ --output-dir ./operator-crds
+da-tools operator-generate --rule-packs-dir rule-packs/ --output-dir ./operator-crds
 
-# GitOps mode + Slack receiver
-da-tools operator-generate \
-  --config-dir conf.d/ \
-  --output-dir ./operator-crds \
-  --receiver-template slack \
-  --gitops
+# GitOps mode
+da-tools operator-generate --rule-packs-dir rule-packs/ --output-dir ./operator-crds --gitops
 
-# PagerDuty + custom Secret
-da-tools operator-generate \
-  --receiver-template pagerduty \
-  --secret-name org-pd-secret \
-  --secret-key routing-key
+# PrometheusRule only
+da-tools operator-generate --components rules --output-dir ./operator-crds
 
-# AlertmanagerConfig only
-da-tools operator-generate --components alertmanager --receiver-template email
+# Routing is not this tool: render alertmanager.yaml with generate-routes, then give it to the Alertmanager CR's configSecret
+da-tools generate-routes --config-dir conf.d --output-alertmanager \
+  --base-config alertmanager.base.yaml -o alertmanager.yaml
 
 # Dry-run JSON report — stdout is a single JSON document:
 #   {"crds": [...], "kustomization": {...}|null, "summary": {...}}
@@ -1652,9 +1646,7 @@ da-tools operator-generate --dry-run --json | jq -r '.crds[].metadata.name'
 
 #### migrate-to-operator
 
-Read existing ConfigMap-based Prometheus rules and produce equivalent CRD YAML files with a migration checklist.
-
-When the conf.d holds a path da-guard validation names, this tool refuses with `2` before it reads or writes anything, each path named (the [shared refusal](#confd-refusal), [#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)).
+Read existing ConfigMap-based Prometheus rules and produce equivalent PrometheusRule CRD YAML files with a migration checklist. It reads no conf.d and emits no AlertmanagerConfig: the checklist's routing steps point to `generate-routes --output-alertmanager` → Secret → the Alertmanager CR's `spec.configSecret` (see [Operator Alertmanager Integration](integration/operator-alertmanager-integration.en.md)). `--config-dir`, `--receiver-template`, `--secret-name` and `--secret-key` exit 2 when given (the same refusal as [`operator-generate`](#operator-generate)). ⚠️ The v2.9.0 image still reads conf.d and emits one AlertmanagerConfig per tenant <!-- image-caveat: v2.9.0 -->
 
 **Purpose**: Migrate from ConfigMap native format to Operator native CRD; GitOps-friendly conversion; pre-migration validation and preview.
 
@@ -1669,12 +1661,12 @@ da-tools migrate-to-operator [options]
 | Option | Description | Default |
 |--------|-------------|---------|
 | `--source-dir <DIR>` | Directory containing ConfigMap YAML files. Its top-level YAML files are read, listed by da-guard's list-only walk of the directory (`parse-tree --list-only`), so da-guard is required (exit `2` without it); files in subdirectories are not read, and stderr names them; top-level entries that are not read (a dot-prefixed hidden file or directory, a dangling symlink, a FIFO, ...) are each named, with the reason, on one `WARNING:` line. This directory is not a conf.d, so the conf.d refusal does not apply; what each file is, its readers decide ([#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)): it is first read as the manifest kubectl reads (`da-crdecode`), and the data values of its ConfigMaps that are rule files are migrated; an object that is already a PrometheusRule is not converted and is no error (the exit code is untouched): it is named in a `NOTE:` line on stderr and in the checklist's "Already PrometheusRule CRDs (nothing to migrate)" section (`already_crd` under `--json`); a `kind: List` (what `kubectl get cm -o yaml` prints) is expanded into its items as kubectl expands it, each item an object with an `apiVersion` and a `kind`, and not itself a list; a file that reading refuses is migrated as a rule file when its any-YAML reading (`da-crdecode --any-shape`) is a plain rule file — one mapping that declares `groups`; a file neither reading reads (an annotation value `.inf`, say) goes to Prometheus' rule loader (`da-read prometheus-rules`), and is a rule file when the loader reads `groups` from it; any other file (broken YAML, a top-level list or scalar, a document with no `kind`, a List item kubectl would not apply) stops the whole run at exit `2` with nothing written, every such file named on stderr with the reader's reason (stdout empty under `--json`, [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)). ⚠️ Known exception: a ConfigMap data value that neither reading reads (Kubernetes' YAML reading nor Prometheus' rule loader) is taken for a file that is no rule file (an Alertmanager markdown template, say), and is neither read nor reported; so a rule value broken so badly that neither reads it (a tab in its indentation, say) is not read and not reported when it sits in a ConfigMap (a whole file that is a rule file is not judged this way: it is named). A rule file Prometheus' rule loader refuses, or no `da-crdecode` / `da-read`, stops the run the same way at exit `2` before anything is written, the reason on stderr (stdout empty under `--json`). ⚠️ Before, these got a WARNING (or an `issues` / `errors` entry) and the other CRDs were written, at exit 0. Not there, not a directory or a symlink loop ⇒ exit `2`, named before anything is analysed or written (stdout empty under `--json`, [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558); it used to go into `issues` and the checklist and CRDs were written anyway at rc 0, [#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)). There but not listable (da-guard's walk marks the root `unlistable_dir`; mode `0311`, say) ⇒ exit `2` (stdout empty under `--json`; ⚠️ it used to print one `WARNING:` line and make a migration from no source file at rc 0, [#3446](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3446)) | (required) |
-| `--config-dir <DIR>` | Tenant config directory. Tenants are found as in `operator-generate`: the keys of each tenant file's `tenants:` across the whole tree (through `da-guard parse-tree`), not file names. ⚠️ An unreadable tenant file, one tenant declared in two files, or no usable da-guard ⇒ exit `2` (stdout empty under `--json`, [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)). A tenant id that is not RFC 1123 goes into `issues` and is skipped. Given and not there, not a directory or a symlink loop ⇒ exit `2`, named together with `--source-dir` (it used to generate with `tenants: 0` at rc 0, [#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)); the default is not judged when the flag is not given | `conf.d` |
+| `--config-dir <DIR>` | ⛔ No longer used: this tool reads no conf.d. Exit 2 when given (see above) | — |
 | `--output-dir <DIR>` | Write CRDs and the checklist into this directory. ⚠️ **Writing requires all three: this flag set, no `--dry-run`, and no `--checklist-only`** (the same discriminators as the `--json` envelope below); if any fails, everything goes to **stdout** and no file is written | none |
 | `--namespace <NS>` | Target K8s namespace | `monitoring` |
-| `--receiver-template <TYPE>` | Receiver type (`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`) | — |
-| `--secret-name <NAME>` | K8s Secret name | — |
-| `--secret-key <KEY>` | Key within K8s Secret | — |
+| `--receiver-template <TYPE>` | ⛔ Only fed the removed AlertmanagerConfig output; exit 2 when given | — |
+| `--secret-name <NAME>` | ⛔ Only fed the removed AlertmanagerConfig output; exit 2 when given | — |
+| `--secret-key <KEY>` | ⛔ Only fed the removed AlertmanagerConfig output; exit 2 when given | — |
 | `--dry-run` | Preview without writing files | false |
 | `--checklist-only` | Generate migration checklist only | false |
 | `--json` | JSON output mode | false |
@@ -1698,10 +1690,6 @@ da-tools migrate-to-operator --source-dir configmaps/ --output-dir ./migration-o
 # Preview migration plan
 da-tools migrate-to-operator --source-dir configmaps/ --dry-run
 
-# With receiver configuration
-da-tools migrate-to-operator --source-dir configmaps/ \
-  --receiver-template slack --secret-name da-slack
-
 # Checklist only
 da-tools migrate-to-operator --source-dir configmaps/ --checklist-only
 
@@ -1718,7 +1706,7 @@ To revert from Operator deployment back to ConfigMap mode:
 # Delete PrometheusRule CRDs
 kubectl delete prometheusrules -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
 
-# Delete AlertmanagerConfig CRDs (if present)
+# Delete AlertmanagerConfig CRDs left by older versions (if present)
 kubectl delete alertmanagerconfigs -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
 ```
 
@@ -1739,7 +1727,7 @@ da-tools drift-detect --dirs conf.d --mode configmap
 promtool query instant 'count(ALERTS{alertstate="firing"})'
 ```
 
-> ⚠️ Rollback does not delete the CRD files you wrote earlier with `--output-dir`; they can be re-applied at any time. If you kept none, re-run the command that produced them (the repo commits no generated copy): `da-tools migrate-to-operator` with the original `--source-dir` / `--config-dir` plus `--output-dir <dir>` for migration output, `da-tools operator-generate --output-dir <dir>` for CRDs it generated from the rule packs.
+> ⚠️ Rollback does not delete the CRD files you wrote earlier with `--output-dir`; they can be re-applied at any time. If you kept none, re-run the command that produced them (the repo commits no generated copy): `da-tools migrate-to-operator` with the original `--source-dir` plus `--output-dir <dir>` for migration output, `da-tools operator-generate --output-dir <dir>` for CRDs it generated from the rule packs.
 
 ---
 
@@ -1771,7 +1759,7 @@ da-tools operator-check [options]
 1. Operator detection: `get` the CRD `prometheusrules.monitoring.coreos.com` by name; fail if the cluster has no such CRD.
 2. PrometheusRule: how many in `--namespace` carry `app.kubernetes.io/part-of=dynamic-alerting`, against the number of packs (`rule-pack-*.yaml` / `.yml`, the same declaration) in `--rule-packs-dir` (equal passes, fewer but more than 0 warns, 0 fails); with the CRD not installed it is 0, a fail saying so.
 3. ServiceMonitor: at least one in that namespace with that label (else fail; says so when the CRD is not installed).
-4. AlertmanagerConfig: how many in that namespace with that label (0 warns; with the CRD not installed it warns and says so).
+4. AlertmanagerConfig leftovers: the platform no longer generates AlertmanagerConfigs, so any in that namespace with that label are left from an older version — present warns (delete them: `kubectl delete alertmanagerconfig -n <ns> -l app.kubernetes.io/part-of=dynamic-alerting`; the Operator still prepends their routes before the `configSecret`'s routes), none passes, CRD not installed passes. ⚠️ The v2.9.0 image has it the other way round: 0 warns, CRD not installed warns <!-- image-caveat: v2.9.0 -->
 5. Target health (only with `--prometheus`): whether every target whose job contains `threshold` or `exporter` is `up`.
 
 **Cluster reads** ([#3207](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3207)): every read goes through `_lib_kubectl` (`kubectl_get` / `kubectl_list`, `kubectl get … -o json`). kubectl not answering — the cluster unreachable, the list forbidden, kubectl not on PATH or timed out — marks the row `caller_error` with exit 2, never "not found". Whether a CRD is installed is a `get` of that CRD by name (`--ignore-not-found`: absent is an answer, a finding, not a failed read). Permissions needed: `get` on `customresourcedefinitions` (cluster scope), and `list` on PrometheusRule / ServiceMonitor / AlertmanagerConfig in `--namespace`. ⚠️ **Behaviour change**: an unreachable or forbidden cluster used to make three rows `fail` / "not found" with exit 0 (`--ci` 1) and now exits 2; a failed AlertmanagerConfig read used to warn with exit 0 and is 2 now too.
@@ -1908,7 +1896,7 @@ Generate Alertmanager route + receiver + inhibit_rules from tenant YAML, merge t
 |-----------|-------------|
 | `--validate` | Judges the tree and writes nothing (CI runs `--validate --strict`). Base: the built-in base (for the amtool check only, see "Alertmanager validation" below) |
 | `--output-configmap` | The merged config wrapped in a Kubernetes ConfigMap (GitOps PR flow). Base: `--base-config`, else the built-in placeholder base |
-| `--output-alertmanager` | The merged config as a plain `alertmanager.yml` (BYO Alertmanager outside Kubernetes). Base: `--base-config`, else the built-in placeholder base |
+| `--output-alertmanager` | The merged config as a plain `alertmanager.yml` (BYO Alertmanager, or the Prometheus Operator's configSecret). Base: `--base-config`, else the built-in placeholder base |
 | `--apply` | Merges into the cluster's Alertmanager ConfigMap and reloads (requires kubectl). Base: the ConfigMap's `alertmanager.base.yml` (on the first run its existing `alertmanager.yml`; see "`--apply`'s source" below) |
 
 A run without a mode flag (only `-o`, only `--dry-run`, or nothing) is a caller error: exit 2, nothing produced. The former fragment (render) mode is gone: pasting the fragment after your own routes, as its header said, put the Watchdog heartbeat into your default channel and let custom and sentinel alerts page your NOC — the platform's four routes must come first, and a fragment cannot place them. ⚠️ The v2.9.0 image still has the old behaviour: without a mode flag it prints the fragment at exit 0, it has no `--output-alertmanager`, and `--apply` replaces `route.routes` whole <!-- image-caveat: v2.9.0 -->
@@ -1950,7 +1938,7 @@ da-tools generate-routes --config-dir <path> {--validate | --output-configmap | 
 |--------|-------------|---------|
 | `-o, --output <FILE>` | Output to file. **Read only by `--output-configmap` and `--output-alertmanager`, and not together with `--dry-run`**; with `--validate` / `--apply` / `--dry-run` it is a caller error (exit 2), never a silent no-write (#1650). `-o` with no mode flag is exit 2 too | stdout |
 | `--output-configmap` | Mode: the merged config as complete Kubernetes ConfigMap YAML | false |
-| `--output-alertmanager` | Mode: the merged config as a plain `alertmanager.yml` (BYO Alertmanager outside Kubernetes). The same merge and the same checks as `--output-configmap`, without the ConfigMap wrapper; `--namespace` / `--configmap` with it are exit 2. ⚠️ The v2.9.0 image has no such flag <!-- image-caveat: v2.9.0 --> | false |
+| `--output-alertmanager` | Mode: the merged config as a plain `alertmanager.yml` (BYO Alertmanager, or the Prometheus Operator's configSecret). The same merge and the same checks as `--output-configmap`, without the ConfigMap wrapper; `--namespace` / `--configmap` with it are exit 2. ⚠️ The v2.9.0 image has no such flag <!-- image-caveat: v2.9.0 --> | false |
 | `--base-config <FILE>` | Your own Alertmanager config (the source), which the generated routing is merged into; see "The merge" above. Not an output of this tool: a `tenant-*` / `platform-enforced*` receiver in it is exit 1, and `-o` naming the same file is exit 2. **Only `--output-configmap` and `--output-alertmanager` read it**; supplying it in any other mode is a caller error (exit 2), not a silent no-op. Read by Alertmanager's own loader (`da-read alertmanager`, [ADR-036](adr/036-single-parser-effective-config.en.md) §12): it must be a complete config Alertmanager accepts, at least `route:` and the `receivers:` it names; `global:` / `inhibit_rules:` may be left out and fall back to the built-in ones; values are Alertmanager's reading (a duration in its spelling, `300s` is `5m`) | built-in default (**only when the flag is omitted**; a supplied value that is unreadable, refused by the loader (a missing `route:` included), or read with no `da-read` exits 2 rather than falling back). ⚠️ **Breaking**: a file without `route:` used to get the built-in route |
 | `--dry-run` | Show preview without writing. **Read only by `--output-configmap` / `--output-alertmanager`**; not read by `--validate` / `--apply` (exit 2), and without a mode flag it is exit 2 too | false |
 | `--validate` | Validate only, don't output. Any tenant file in conf.d that cannot be parsed → exit 1, with or without `--strict` (#1460). Once every other check passes, it also assembles the complete config on the **built-in default base** and hands it to `amtool` (see "Alertmanager validation" below; #2260). It also reports the keys no reader reads: the same shared verdict as validate-config's `unread_keys` row ([ADR-038](adr/038-unread-keys-judged-by-readers.en.md)), the same lines, each on stderr after `key verdict:`; in `--findings-json` they are `key_unread`, `key_disable_noop`, `key_disable_partial`, `key_profile_not_judged`, `key_undecidable` or `key_verdict_incomplete`. What the verdict says blocks (an error finding, a threshold key it cannot judge because no root platform file was read) and the line saying no verdict was given start with `ERROR:`, are `blocks: validate`, and make `--validate` exit 1; a fault of the da-guard binary itself (missing, stale, broken) exits 2, as validate-config does; warnings and notices are `blocks: never` ([#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)). It also prints, in the exporter's own words, its two checks on tenant keys (da-guard served-values' `key_checks`): a dimensional key whose `version` label breaks ADR-024 OQ-6 (`key_version_label`) and a key in a retired spelling (`key_renamed`, #1231), also `blocks: never`. The generator itself no longer judges key names, so the output modes do not warn about an unknown key ([ADR-038](adr/038-unread-keys-judged-by-readers.en.md) decision 11). A refused tree is not judged; the generator container does not judge inside the generator (it judges after the generator passes, see "Key verdict" below) | false |

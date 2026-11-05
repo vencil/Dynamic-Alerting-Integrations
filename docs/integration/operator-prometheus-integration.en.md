@@ -145,7 +145,8 @@ curl -s 'http://localhost:9090/api/v1/query?query=up{tenant!=""}' | jq '.data.re
 
 ```bash
 da-tools operator-generate \
-  --config-dir /path/to/conf.d \
+  --components rules \
+  --rule-packs-dir rule-packs/ \
   --output-dir ./rules-crd \
   --gitops
 
@@ -239,7 +240,7 @@ Each ServiceMonitor selects the Service carrying `dynamic-alerting.io/scrape: pl
 
 `tests/ops/test_operator_generate_rule_copies.py` compares this table with the derivation and goes red when they disagree.
 
-⚠️ **`Watchdog` and kube-prometheus-stack's own alert of the same name.** Both carry only `alertname="Watchdog"` and `severity="none"` (evaluated by the same Prometheus, so the external labels match too); Alertmanager deduplicates by label set and receives **one** Watchdog — no second one, and no `severity`-based inhibit touches it. A route you set on kube-prometheus-stack for Watchdog (e.g. a dead-man's switch) keeps applying; its annotations may be either copy's. Exception: with `enforcedNamespaceLabel` set on the Prometheus and the two PrometheusRules in different namespaces, the two carry different `namespace` labels and are not deduplicated.
+⚠️ **`Watchdog` and kube-prometheus-stack's own alert of the same name.** Both carry only `alertname="Watchdog"` and `severity="none"` (evaluated by the same Prometheus, so the external labels match too); Alertmanager deduplicates by label set and receives **one** Watchdog — no second one, and no `severity`-based inhibit touches it. When routing is rendered by `generate-routes` (see [Operator Alertmanager Integration](operator-alertmanager-integration.en.md)), that one Watchdog is taken first by the platform's `watchdog-heartbeat` route; wire a dead-man's switch to the `watchdog-heartbeat` receiver in your base, not to kube-prometheus-stack's default route that sends it to `null`. Its annotations may be either copy's. Exception: with `enforcedNamespaceLabel` set on the Prometheus and the two PrometheusRules in different namespaces, the two carry different `namespace` labels and are not deduplicated.
 
 ⚠️ **Federation deployed without its ServiceMonitors means two critical alerts.** `FederationRevocationReconcileStale` (its metric-absent arm) and `FederationAuditPipelineSilent` decide whether the component is deployed from kube-state-metrics (the reconciler Deployment; a gateway pod with the `audit-metrics` container), not from `up` — a lost scrape target is exactly what they must catch. So with federation deployed but `serviceMonitor.enabled` still at its default `false`, both fire: revocation tamper-evidence and the audit pipeline really are unmonitored. That is the correct signal; turn on `serviceMonitor.enabled` in those two charts. A cluster without federation gets neither.
 
@@ -326,7 +327,7 @@ kubectl get clusterrolebinding | grep prometheus
 
 | Document | Description |
 |----------|-------------|
-| [Operator Alertmanager Integration](operator-alertmanager-integration.en.md) | AlertmanagerConfig CRD routing configuration |
+| [Operator Alertmanager Integration](operator-alertmanager-integration.en.md) | `generate-routes` → Secret → `configSecret` routing |
 | [Operator GitOps Deployment](operator-gitops-deployment.en.md) | ArgoCD / Flux integration |
 | [Operator Shadow Monitoring](operator-shadow-monitoring.en.md) | Dual-track observation strategy |
 | [BYO Prometheus Integration](byo-prometheus-integration.en.md) | ConfigMap path (Path A) |

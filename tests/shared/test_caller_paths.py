@@ -176,16 +176,12 @@ OPS_SITES = [
      "dir_not_accessible"),
     ("runtime-audit --runtime-json", "runtime_audit.py",
      ["--rule-packs-dir", "{RP}", "--runtime-json", "{F}", "--json"], "--runtime-json", None),
-    # #3392
+    # #3392 (#3572: the two --config-dir rows left — that flag is refused
+    # whatever its value; tests/ops/test_operator_routing_single_renderer.py)
     ("operator-generate --rule-packs-dir", "operator_generate.py",
      ["--rule-packs-dir", "{D}", "--json"], "--rule-packs-dir", "dir_not_accessible"),
-    ("operator-generate --config-dir", "operator_generate.py",
-     ["--config-dir", "{D}", "--json"], "--config-dir", "dir_not_accessible"),
     ("migrate-to-operator --source-dir", "migrate_to_operator.py",
      ["--source-dir", "{D}", "--json"], "--source-dir", "dir_not_accessible"),
-    ("migrate-to-operator --config-dir", "migrate_to_operator.py",
-     ["--source-dir", "{CONF}", "--config-dir", "{D}", "--json"], "--config-dir",
-     "dir_not_accessible"),
     ("blind-spot --config-dir", "blind_spot_discovery.py",
      ["--config-dir", "{D}", "--json-output", "--prometheus", "http://127.0.0.1:9"],
      "--config-dir", "dir_not_accessible"),
@@ -793,13 +789,8 @@ _NO_PROM = "http://127.0.0.1:9"
 INPUT_SITES_3392 = [
     ("operator-generate --rule-packs-dir", "operator_generate.py",
      ["--rule-packs-dir", "{P}", "--output-dir", "{OUT}", "--json"], "--rule-packs-dir", "dir"),
-    ("operator-generate --config-dir", "operator_generate.py",
-     ["--config-dir", "{P}", "--output-dir", "{OUT}", "--json"], "--config-dir", "dir"),
     ("migrate-to-operator --source-dir", "migrate_to_operator.py",
      ["--source-dir", "{P}", "--output-dir", "{OUT}", "--json"], "--source-dir", "dir"),
-    ("migrate-to-operator --config-dir", "migrate_to_operator.py",
-     ["--source-dir", _CONF_3392, "--config-dir", "{P}", "--output-dir", "{OUT}", "--json"],
-     "--config-dir", "dir"),
     ("blind-spot --config-dir", "blind_spot_discovery.py",
      ["--config-dir", "{P}", "--json-output", "--prometheus", _NO_PROM], "--config-dir", "dir"),
     ("shadow-verify --mapping", "shadow_verify.py",

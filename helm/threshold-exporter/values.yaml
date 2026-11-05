@@ -218,9 +218,11 @@ thresholdConfig:
 # whether it renders a ServiceMonitor for the exporter (operator) or not.
 # - configmap (Path A): mount k8s/03-monitoring/configmap-rules-*.yaml into
 #   your Prometheus yourself.
-# - operator (Path B): generate PrometheusRule / AlertmanagerConfig CRDs with
-#   `da-tools operator-generate` (--receiver-template / --secret-name /
-#   --secret-key) — per ADR-008 the chart stays path-agnostic (#2073).
+# - operator (Path B): generate PrometheusRule / ServiceMonitor CRDs with
+#   `da-tools operator-generate`; Alertmanager routing is rendered by
+#   `da-tools generate-routes` into alertmanager.yaml and given to the
+#   Alertmanager as its configSecret, not AlertmanagerConfig CRDs (#3572) —
+#   per ADR-008 the chart stays path-agnostic (#2073).
 # IMPORTANT: Do NOT mix modes in the same cluster's Alertmanager.
 rules:
   mode: configmap    # configmap | operator

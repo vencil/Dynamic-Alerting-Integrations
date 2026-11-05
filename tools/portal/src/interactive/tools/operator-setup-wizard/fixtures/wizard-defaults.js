@@ -1,7 +1,7 @@
 ---
 title: "Operator Setup Wizard — Default catalogs"
 purpose: |
-  Static data tables for the 5-step Operator Setup Wizard: step
+  Static data tables for the 3-step Operator Setup Wizard: step
   metadata, demo tenant list, supported Operator versions, cluster
   types, receiver types, and rule deployment modes.
 
@@ -12,10 +12,8 @@ purpose: |
 
   Public API:
     OSW_STEPS                ordered step metadata
-    OSW_DEMO_TENANTS         pre-baked demo tenant ids
     OSW_OPERATOR_VERSIONS    Prometheus Operator version matrix
     OSW_CLUSTER_TYPES        K8s cluster type catalog
-    OSW_RECEIVER_TYPES       Alertmanager receiver type catalog
     OSW_RULE_MODES           rule deployment mode catalog
 
   Closure deps: reads window.__t at consumer call time.
@@ -26,15 +24,9 @@ const t = window.__t || ((zh, en) => en);
 const OSW_STEPS = [
   { id: 'environment', label: () => t('環境偵測', 'Environment Detection') },
   { id: 'crd-config', label: () => t('CRD 配置', 'CRD Configuration') },
-  { id: 'receiver', label: () => t('Receiver 設定', 'Receiver Setup') },
-  { id: 'tenants', label: () => t('Tenant 選擇', 'Tenant Selection') },
   { id: 'review', label: () => t('產出 & 檢視', 'Review & Generate') },
 ];
 
-const OSW_DEMO_TENANTS = [
-  'db-a', 'db-b', 'web-prod', 'cache-staging',
-  'analytics-dev', 'kafka-prod', 'redis-cache'
-];
 
 const OSW_OPERATOR_VERSIONS = [
   { id: 'v0.65+', label: 'v0.65+ (Latest)', apiVersion: 'v1beta1', recommended: true },
@@ -51,14 +43,6 @@ const OSW_CLUSTER_TYPES = [
   { id: 'other', label: 'Other', icon: '❓' },
 ];
 
-const OSW_RECEIVER_TYPES = [
-  { id: 'slack', label: 'Slack', icon: '💬', defaultPort: 80 },
-  { id: 'pagerduty', label: 'PagerDuty', icon: '📱', defaultPort: 443 },
-  { id: 'email', label: 'Email (SMTP)', icon: '📧', defaultPort: 587 },
-  { id: 'teams', label: 'Microsoft Teams', icon: '🟦', defaultPort: 443 },
-  { id: 'opsgenie', label: 'OpsGenie', icon: '🚨', defaultPort: 443 },
-  { id: 'webhook', label: 'Custom Webhook', icon: '🪝', defaultPort: 443 },
-];
 
 const OSW_RULE_MODES = [
   {
@@ -81,4 +65,4 @@ const OSW_RULE_MODES = [
   },
 ];
 
-export { OSW_STEPS, OSW_DEMO_TENANTS, OSW_OPERATOR_VERSIONS, OSW_CLUSTER_TYPES, OSW_RECEIVER_TYPES, OSW_RULE_MODES };
+export { OSW_STEPS, OSW_OPERATOR_VERSIONS, OSW_CLUSTER_TYPES, OSW_RULE_MODES };

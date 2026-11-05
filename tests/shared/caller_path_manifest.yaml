@@ -208,7 +208,7 @@ commands:
     "--prefix": not_path
     input_file: {kind: reader, by: "da-read (Prometheus' rule loader)", pinned_by: "tests/ops/test_migrate_rule_outputs.py::test_missing_input_file_exits_caller_error"}
   migrate-to-operator:
-    "--config-dir": dir
+    "--config-dir": {kind: reader, by: "refused whatever the value: no conf.d is read, rc 2 with the routing remedy (#3572)", pinned_by: "tests/ops/test_operator_routing_single_renderer.py::test_each_alertmanagerconfig_flag_is_refused_naming_it"}
     "--namespace": not_path
     "--output-dir": output
     "--receiver-template": not_path
@@ -241,7 +241,7 @@ commands:
   operator-generate:
     "--api-version": not_path
     "--components": not_path
-    "--config-dir": dir
+    "--config-dir": {kind: reader, by: "refused whatever the value: no conf.d is read, rc 2 with the routing remedy (#3572)", pinned_by: "tests/ops/test_operator_routing_single_renderer.py::test_each_alertmanagerconfig_flag_is_refused_naming_it"}
     "--namespace": not_path
     "--output-dir": output
     "--receiver-template": not_path

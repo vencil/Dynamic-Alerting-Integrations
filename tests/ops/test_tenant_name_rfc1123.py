@@ -33,9 +33,13 @@ test_alert_quality.py.
 """
 from __future__ import annotations
 
+# #3572: operator_generate / migrate_to_operator no longer read tenant ids
+# (they emit no AlertmanagerConfig and read no conf.d), so their two faces and
+# the discover-level tests that drove `discover_tenant_configs` are gone; the
+# remaining faces are init_project's and the shared rule itself.
+
 import os
 import sys
-from pathlib import Path
 
 import pytest
 
@@ -45,14 +49,10 @@ sys.path.insert(0, _OPS_DIR)
 sys.path.insert(0, os.path.join(_OPS_DIR, '..'))
 
 import init_project  # noqa: E402
-import migrate_to_operator  # noqa: E402
-import operator_generate  # noqa: E402
 from _lib_validation import is_valid_tenant_id  # noqa: E402
 
 
 IMPLEMENTATIONS = [
-    ("operator_generate", operator_generate.validate_tenant_name),
-    ("migrate_to_operator", migrate_to_operator.validate_tenant_name),
     ("init_project", init_project._validate_tenant_name),
     ("is_valid_tenant_id", is_valid_tenant_id),
 ]
@@ -120,92 +120,3 @@ def test_accept_face_is_not_vacuous():
     for name, fn in IMPLEMENTATIONS:
         assert any(fn(p) for p in ACCEPT), (
             f"{name} accepts none of the ACCEPT probes")
-
-
-# ── discover level: the gate's rejections must be NAMED on stderr ─────────────
-
-_INVALID_STEMS = ("DB-A", "db_a", "db-a-")
-
-# ⛔ `.hidden` is NOT a name reject any more (#2066 option 1, #2067): the
-# exporter's walker never reads a dot-prefixed file, so parse-tree never
-# selects it and its tenant never reaches the name gate (#2906) — naming it would report the
-# loss of a tenant that was never served. It stays in the seed so a change
-# that starts handing dot-prefixed stems to the gate again (and so naming
-# them) fails here, in the opposite direction from before.
-_HIDDEN_STEMS = (".hidden",)
-
-
-def _seed_confd(root: Path) -> Path:
-    """conf.d with one valid carrier, three RFC 1123 rejects and one hidden file."""
-    root.mkdir(parents=True, exist_ok=True)
-    for stem in ("ok-a",) + _INVALID_STEMS + _HIDDEN_STEMS:
-        (root / f"{stem}.yaml").write_text(
-            f"tenants:\n  {stem}:\n    pg_connections: 90\n", encoding="utf-8")
-    return root
-
-
-@pytest.mark.parametrize("discover", [
-    operator_generate.discover_tenant_configs,
-    migrate_to_operator.discover_tenant_configs,
-], ids=["operator_generate", "migrate_to_operator"])
-def test_discover_drops_and_names_every_rfc1123_reject(
-        discover, tmp_path, monkeypatch, capsys):
-    """#1713: "don't only assert the list excludes it; assert it is named".
-
-    `i18n_text` reads the environment at call time; `DA_LANG` is checked
-    first, so pinning it makes the English line the one to grep. The
-    `RFC 1123` token appears in both languages as well.
-    """
-    monkeypatch.setenv("DA_LANG", "en")
-    root = _seed_confd(tmp_path / "conf.d")
-
-    tenants = discover(root)
-    err = capsys.readouterr().err
-
-    assert tenants == ["ok-a"], tenants
-    for stem in _INVALID_STEMS:
-        named = [ln for ln in err.splitlines()
-                 if f"'{stem}'" in ln
-                 and "Skipping invalid tenant name" in ln
-                 and "RFC 1123" in ln]
-        assert len(named) == 1, (
-            f"{stem!r} must be named exactly once as an RFC 1123 reject; "
-            f"stderr was {err!r}")
-    for stem in _HIDDEN_STEMS:
-        assert f"'{stem}'" not in err, (
-            f"{stem!r} is a hidden file the exporter never reads; it must be "
-            f"skipped silently, not named (#2066): stderr was {err!r}")
-    assert "'ok-a'" not in err, err
-
-
-@pytest.mark.parametrize("discover", [
-    operator_generate.discover_tenant_configs,
-    migrate_to_operator.discover_tenant_configs,
-], ids=["operator_generate", "migrate_to_operator"])
-def test_discover_rejects_an_id_with_a_trailing_newline(
-        discover, tmp_path, monkeypatch, capsys):
-    """#1779 end to end: a tenant id literally `evil\\n`.
-
-    Measured on `a0c892bb` with the `re.match` gates: both readers returned
-    `['evil\\n', 'ok-a']`, i.e. the CR would have been
-    `metadata.name: da-tenant-evil\\n`. Since #2906 the id is the
-    `tenants:` key (a file NAME is no longer one), so the newline is written
-    as a quoted key. `safe_label` prints the newline as `?`, which is what
-    stderr must name.
-    """
-    monkeypatch.setenv("DA_LANG", "en")
-    root = tmp_path / "conf.d"
-    root.mkdir()
-    (root / "team.yaml").write_text(
-        'tenants:\n  ok-a:\n    pg_connections: 90\n'
-        '  "evil\\n":\n    pg_connections: 90\n', encoding="utf-8")
-
-    tenants = discover(root)
-    err = capsys.readouterr().err
-
-    assert tenants == ["ok-a"], tenants
-    named = [ln for ln in err.splitlines()
-             if "'evil?'" in ln
-             and "Skipping invalid tenant name" in ln
-             and "RFC 1123" in ln]
-    assert len(named) == 1, err

@@ -170,8 +170,8 @@ kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'
    - 修正：確保 PrometheusRule 同時包含 `prometheus: kube-prometheus` 和 `release: kube-prometheus-stack`
    ```bash
    # 使用 operator-generate 自動產出正確 label（預設即帶上述兩個；Helm release 名稱不同時用 --selector-label 覆寫）
-   da-tools operator-generate --config-dir conf.d/ --output-dir ./crds/
-   da-tools operator-generate --config-dir conf.d/ --selector-label release=<你的 release> --output-dir ./crds/
+   da-tools operator-generate --rule-packs-dir rule-packs/ --output-dir ./crds/
+   da-tools operator-generate --rule-packs-dir rule-packs/ --selector-label release=<你的 release> --output-dir ./crds/
    # 或手動 patch 現有 CRD
    kubectl label prometheusrule <name> -n monitoring release=kube-prometheus-stack prometheus=kube-prometheus
    ```
@@ -182,25 +182,22 @@ kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'
    - 修正：擴展 namespace selector 或將 PrometheusRule 部署至已納入監控的 namespace
    ```bash
    # 方案 A：將 CRD 部署到 monitoring namespace
-   da-tools operator-generate --config-dir conf.d/ --namespace monitoring --output-dir ./crds/
+   da-tools operator-generate --rule-packs-dir rule-packs/ --namespace monitoring --output-dir ./crds/
    # 方案 B：修改 Prometheus CRD 的 ruleNamespaceSelector 納入目標 namespace
    kubectl edit prometheus -n monitoring kube-prometheus-stack-prometheus
    # 在 spec.ruleNamespaceSelector.matchLabels 加入目標 namespace label
    ```
 
 3. **CRD API 版本不匹配**
-   - 原因：叢集安裝的 Operator 版本與產出的 CRD apiVersion 不一致
+   - 原因：`operator-generate` 產出的 PrometheusRule 與 ServiceMonitor 是 `monitoring.coreos.com/v1`，叢集沒有這個版本（Operator CRD 沒裝或太舊）
    - 診斷：`kubectl api-versions | grep monitoring.coreos.com`
-   - 修正：
-   ```bash
-   # 指定與叢集相符的 AlertmanagerConfig API 版本（v1alpha1 / v1beta1，預設 v1beta1）
-   da-tools operator-generate --config-dir conf.d/ --api-version v1alpha1 --output-dir ./crds/
-   ```
+   - 修正：安裝或升級 Prometheus Operator 的 CRD。`--api-version` 只用於已移除的 AlertmanagerConfig 產出，現在帶它是結束碼 2；路由改走 `generate-routes` → Secret → `configSecret`（見 [Operator Alertmanager 整合](integration/operator-alertmanager-integration.md)）
 
 **Rollback 程序**（從 Operator 退回 ConfigMap 模式）：
 ```bash
-# 1. 停止 Operator 管理：刪除 PrometheusRule / AlertmanagerConfig CRD
+# 1. 停止 Operator 管理：刪除 PrometheusRule CRD（以及舊版留下的 AlertmanagerConfig）
 kubectl delete prometheusrule -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
+kubectl delete alertmanagerconfig -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
 # 2. 恢復 ConfigMap 模式：Helm upgrade 切換 rules.mode
 helm upgrade threshold-exporter ./helm/threshold-exporter --set rules.mode=configmap
 # 3. 驗證 ConfigMap rules 已生效

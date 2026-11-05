@@ -46,6 +46,41 @@ DOCS_INSTALL_URL: Final[str] = (
 )
 
 # ============================================================
+# Operator-mode Alertmanager routing (#3572)
+# ============================================================
+# ⛔ One text, printed by every operator-path tool that used to emit
+# AlertmanagerConfig CRDs (operator-generate, migrate-to-operator) when it is
+# asked for routing. The route generator is the one Alertmanager route
+# renderer: the Prometheus Operator puts AlertmanagerConfig routes first with
+# `continue: true` and a namespace matcher, so the platform routes could never
+# come first. Callers print it through `i18n_text(ZH, EN)`.
+OPERATOR_ROUTING_REMEDY_EN: Final[str] = (
+    "Alertmanager routing is no longer generated as AlertmanagerConfig CRDs (#3572): "
+    "the Prometheus Operator puts their routes first with continue: true and a "
+    "namespace matcher, so the platform routes (Watchdog, custom isolation, synthetic "
+    "probe, sentinel) could not come first. Render alertmanager.yaml with the route "
+    "generator and give it to the Alertmanager as its configSecret:\n"
+    "  da-tools generate-routes --config-dir conf.d --output-alertmanager "
+    "--base-config <your alertmanager.yaml> -o alertmanager.yaml\n"
+    "  kubectl create secret generic <secret> -n <namespace> "
+    "--from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -\n"
+    "  then set the Alertmanager's configSecret to <secret> "
+    "(kube-prometheus-stack: alertmanager.alertmanagerSpec.configSecret)."
+)
+OPERATOR_ROUTING_REMEDY_ZH: Final[str] = (
+    "Alertmanager 路由不再以 AlertmanagerConfig CRD 產生（#3572）：Prometheus Operator "
+    "會把它們的路由排在最前面、強制 continue: true 並加上 namespace matcher，平台路由"
+    "（Watchdog、custom 隔離、synthetic probe、sentinel）因此無法排在第一。請用路由產生器"
+    "產出 alertmanager.yaml，交給 Alertmanager 當作它的 configSecret：\n"
+    "  da-tools generate-routes --config-dir conf.d --output-alertmanager "
+    "--base-config <你的 alertmanager.yaml> -o alertmanager.yaml\n"
+    "  kubectl create secret generic <secret> -n <namespace> "
+    "--from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -\n"
+    "  再把 Alertmanager 的 configSecret 設為 <secret>"
+    "（kube-prometheus-stack：alertmanager.alertmanagerSpec.configSecret）。"
+)
+
+# ============================================================
 # Reserved Tenant Config Keys
 # ============================================================
 # The top-level `_` keys are listed once, in

@@ -46,6 +46,7 @@ import pytest
 import yaml
 
 import _lib_consumer_read as cr  # noqa: E402  (#3471: the rule-source declaration)
+import _confd_population  # noqa: E402  (#3572: a hidden flag is no reader)
 
 pytestmark = pytest.mark.usefixtures("da_guard_env", "da_crdecode_env")
 
@@ -77,10 +78,12 @@ def config_dir_tools(root: Path) -> list[str]:
             func = node.func
             name = func.attr if isinstance(func, ast.Attribute) else getattr(
                 func, "id", None)
+            # #3572: a hidden (`help=argparse.SUPPRESS`) --config-dir is
+            # declared only to be refused; it reads no tree.
             if name == "add_config_dir_arg" or (
-                    name == "add_argument" and any(
-                        isinstance(a, ast.Constant) and a.value == "--config-dir"
-                        for a in node.args)):
+                    name == "add_argument" and not _confd_population.is_suppressed(node)
+                    and any(isinstance(a, ast.Constant) and a.value == "--config-dir"
+                            for a in node.args)):
                 out.append(p.relative_to(root).as_posix())
                 break
     return out
@@ -103,10 +106,6 @@ SHAPES: dict[str, list[list[str]]] = {
     "policy_opa_bridge.py": [["--policy-path", "{named}/p.rego"]],
     "run_chaos_soak.py": [["--target-url", "http://127.0.0.1:9",
                            "--output-dir", "{named}/soak"]],
-    "operator_generate.py": [["--output-dir", "{named}/m"]],
-    "migrate_to_operator.py": [["--config-dir", "{cfg}"],
-                               ["--config-dir", "{cfg}",
-                                "--output-dir", "{named}/m"]],
     "da_assembler.py": [["--render-cr", "{named}/tc.yaml"]],
     # #1211 gap 2: no flagless mode — `--output-alertmanager` (stdout) stands
     # where the bare shape's flagless render stood.
@@ -121,9 +120,10 @@ SHAPES: dict[str, list[list[str]]] = {
 # measured shapes are all in SHAPES.
 NO_BARE_SHAPE = {"run_chaos_soak.py", "config_history.py", "deprecate_rule.py",
                  "offboard_tenant.py", "diagnose.py", "generate_alertmanager_routes.py"}
-# `migrate_to_operator` reads ConfigMaps from a required `--source-dir`; its
-# `--config-dir` (default `conf.d` under the cwd) is passed by its shapes.
-SOURCE_DIR_TOOLS = {"migrate_to_operator.py"}
+# Tools reading a required `--source-dir` beside their `--config-dir`. (#3572:
+# `migrate_to_operator`, the one such tool, reads no conf.d any more and left
+# the population with `operator_generate`.)
+SOURCE_DIR_TOOLS: "set[str]" = set()
 
 # (tool, shape args with placeholders) -> {place: path prefix} every write in
 # that place must start with. Absent = no write allowed there.
@@ -142,13 +142,10 @@ EXPECTED_WRITES: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
 # detector (or the shape) is broken and every "no write" above is vacuous.
 MUST_WRITE_NAMED = {
     ("compile_custom_alerts.py", ("--out", "{named}/pack.yaml")),
-    ("operator_generate.py", ("--output-dir", "{named}/m")),
     ("generate_alertmanager_routes.py", ("--output-alertmanager", "-o", "{named}/r.yaml")),
     ("generate_tenant_mapping_rules.py", ("-o", "{named}/r.yaml")),
     ("backtest_threshold.py", ("--baseline", "{cfg}", "--skip-if-unavailable",
                                "--markdown-output", "{named}/b.md")),
-    ("migrate_to_operator.py", ("--config-dir", "{cfg}",
-                                "--output-dir", "{named}/m")),
 }
 # Shapes that stop before any write path because a service is absent, with
 # the output line that proves they stopped. A shape listed here whose line

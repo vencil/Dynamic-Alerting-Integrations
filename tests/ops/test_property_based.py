@@ -32,7 +32,8 @@ sys.path.insert(0, _OPS_DIR)
 sys.path.insert(0, os.path.join(_OPS_DIR, '..'))
 
 # Import functions to test
-from migrate_to_operator import validate_tenant_name  # noqa: E402
+# #3572: migrate_to_operator reads no tenant ids any more; the one rule (ADR-035).
+from _lib_validation import is_valid_tenant_id as validate_tenant_name  # noqa: E402
 from drift_detect import _file_sha256, compare_manifests, FileManifest  # noqa: E402
 from operator_generate import build_kustomization  # noqa: E402
 

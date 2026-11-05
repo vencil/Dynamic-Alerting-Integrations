@@ -447,6 +447,9 @@ def test_the_unmeasurable_set_is_named(variant: str, hostile_dirs, tmp_path):
 # Measured on 2026-08-27 (19 pairs red under the identity counterfactual).
 # Shrinking this set is a FAILURE; growing it is fine and just needs the pair
 # added — after checking the counterfactual actually reddens it.
+# #3572: the two `operator_generate.py` pairs left with the code path itself —
+# it reads no conf.d (no AlertmanagerConfig, so no tenant name reaches its
+# output) and refuses --config-dir, so there is no output left to escape.
 MEASURED: set[tuple[str, str]] = {
     ("malformed", "check_confd_schema.py"),
     ("malformed", "compile_custom_alerts.py"),
@@ -457,7 +460,6 @@ MEASURED: set[tuple[str, str]] = {
     ("malformed", "generate_tenant_metadata.py"),
     ("malformed", "migrate_to_operator.py"),
     ("malformed", "offboard_tenant.py"),
-    ("malformed", "operator_generate.py"),
     ("malformed", "validate_config.py"),
     ("valid", "blind_spot_discovery.py"),
     ("valid", "check_confd_schema.py"),
@@ -465,7 +467,6 @@ MEASURED: set[tuple[str, str]] = {
     ("valid", "explain_route.py"),
     ("valid", "generate_alertmanager_routes.py"),
     ("valid", "offboard_tenant.py"),
-    ("valid", "operator_generate.py"),
     ("valid", "threshold_recommend.py"),
 }
 

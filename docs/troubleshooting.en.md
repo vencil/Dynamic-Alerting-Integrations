@@ -168,8 +168,8 @@ kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'
    - Fix: Ensure PrometheusRule includes both `prometheus: kube-prometheus` and `release: kube-prometheus-stack`
    ```bash
    # Use operator-generate to produce correct labels automatically (both are on by default; override with --selector-label when your Helm release is named differently)
-   da-tools operator-generate --config-dir conf.d/ --output-dir ./crds/
-   da-tools operator-generate --config-dir conf.d/ --selector-label release=<your-release> --output-dir ./crds/
+   da-tools operator-generate --rule-packs-dir rule-packs/ --output-dir ./crds/
+   da-tools operator-generate --rule-packs-dir rule-packs/ --selector-label release=<your-release> --output-dir ./crds/
    # Or manually patch existing CRD
    kubectl label prometheusrule <name> -n monitoring release=kube-prometheus-stack prometheus=kube-prometheus
    ```
@@ -180,25 +180,22 @@ kubectl get prometheus -n monitoring -o jsonpath='{.items[0].spec.ruleSelector}'
    - Fix: Extend namespace selector or deploy PrometheusRule to an already-monitored namespace
    ```bash
    # Option A: Deploy CRD to monitoring namespace
-   da-tools operator-generate --config-dir conf.d/ --namespace monitoring --output-dir ./crds/
+   da-tools operator-generate --rule-packs-dir rule-packs/ --namespace monitoring --output-dir ./crds/
    # Option B: Modify Prometheus CRD ruleNamespaceSelector to include target namespace
    kubectl edit prometheus -n monitoring kube-prometheus-stack-prometheus
    # Add target namespace label under spec.ruleNamespaceSelector.matchLabels
    ```
 
 3. **CRD API version mismatch**
-   - Cause: Cluster Operator version does not match generated CRD apiVersion
+   - Cause: the PrometheusRule and ServiceMonitor `operator-generate` emits are `monitoring.coreos.com/v1`, and the cluster does not serve that version (Operator CRDs missing or too old)
    - Diagnosis: `kubectl api-versions | grep monitoring.coreos.com`
-   - Fix:
-   ```bash
-   # Specify the AlertmanagerConfig API version matching your cluster (v1alpha1 / v1beta1, default v1beta1)
-   da-tools operator-generate --config-dir conf.d/ --api-version v1alpha1 --output-dir ./crds/
-   ```
+   - Fix: install or upgrade the Prometheus Operator CRDs. `--api-version` only applied to the removed AlertmanagerConfig output and now exits 2; routing goes `generate-routes` → Secret → `configSecret` (see [Operator Alertmanager Integration](integration/operator-alertmanager-integration.en.md))
 
 **Rollback Procedure** (from Operator back to ConfigMap mode):
 ```bash
-# 1. Stop Operator management: delete PrometheusRule / AlertmanagerConfig CRDs
+# 1. Stop Operator management: delete PrometheusRule CRDs (and AlertmanagerConfigs left by older versions)
 kubectl delete prometheusrule -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
+kubectl delete alertmanagerconfig -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
 # 2. Restore ConfigMap mode: Helm upgrade to switch rules.mode
 helm upgrade threshold-exporter ./helm/threshold-exporter --set rules.mode=configmap
 # 3. Verify ConfigMap rules are active

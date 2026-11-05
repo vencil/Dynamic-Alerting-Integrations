@@ -145,7 +145,8 @@ curl -s 'http://localhost:9090/api/v1/query?query=up{tenant!=""}' | jq '.data.re
 
 ```bash
 da-tools operator-generate \
-  --config-dir /path/to/conf.d \
+  --components rules \
+  --rule-packs-dir rule-packs/ \
   --output-dir ./rules-crd \
   --gitops
 
@@ -239,7 +240,7 @@ curl -s 'http://localhost:9090/api/v1/rules' | \
 
 `tests/ops/test_operator_generate_rule_copies.py` 比對上表與推導結果，兩邊不一致就紅。
 
-⚠️ **`Watchdog` 與 kube-prometheus-stack 自帶的同名告警。** 兩者的 label 都只有 `alertname="Watchdog"`、`severity="none"`（同一個 Prometheus 評估，external labels 也相同），Alertmanager 依 label 集合去重，收到的是**一條** Watchdog；不會多出第二條、也不受 `severity` 型 inhibit 影響。你在 kube-prometheus-stack 上替 Watchdog 設的 route（例如 dead-man's-switch）照常適用；它的 annotations 可能是兩份中任一份的。例外：Prometheus 設了 `enforcedNamespaceLabel` 且兩份 PrometheusRule 在不同 namespace 時，兩條帶不同 `namespace` label，不會去重。
+⚠️ **`Watchdog` 與 kube-prometheus-stack 自帶的同名告警。** 兩者的 label 都只有 `alertname="Watchdog"`、`severity="none"`（同一個 Prometheus 評估，external labels 也相同），Alertmanager 依 label 集合去重，收到的是**一條** Watchdog；不會多出第二條、也不受 `severity` 型 inhibit 影響。路由由 `generate-routes` 渲染時（見 [Operator Alertmanager 整合](operator-alertmanager-integration.md)），這一條 Watchdog 先被平台的 `watchdog-heartbeat` 路由收下；dead-man's-switch 接在你 base 裡的 `watchdog-heartbeat` receiver 上，而不是 kube-prometheus-stack 預設送往 `null` 的那條路由。它的 annotations 可能是兩份中任一份的。例外：Prometheus 設了 `enforcedNamespaceLabel` 且兩份 PrometheusRule 在不同 namespace 時，兩條帶不同 `namespace` label，不會去重。
 
 ⚠️ **部署了 federation 卻沒開 ServiceMonitor，會收到兩條 critical。** `FederationRevocationReconcileStale`（指標不存在的那一半）與 `FederationAuditPipelineSilent` 以 kube-state-metrics 判斷元件是否部署（reconciler 的 Deployment、gateway 帶 `audit-metrics` 容器的 pod），不看 `up`——scrape 目標遺失正是它們要抓的狀況。所以 federation 有部署、但 `serviceMonitor.enabled` 還是預設的 `false` 時，這兩條會響：撤銷竄改偵測與稽核管線確實沒人在看。這是正確的訊號；把那兩個 chart 的 `serviceMonitor.enabled` 打開即可。沒部署 federation 的叢集不會收到。
 
@@ -326,7 +327,7 @@ kubectl get clusterrolebinding | grep prometheus
 
 | 文件 | 說明 |
 |------|------|
-| [Operator Alertmanager 整合](operator-alertmanager-integration.md) | AlertmanagerConfig CRD 路由配置 |
+| [Operator Alertmanager 整合](operator-alertmanager-integration.md) | `generate-routes` → Secret → `configSecret` 路由配置 |
 | [Operator GitOps 部署](operator-gitops-deployment.md) | ArgoCD / Flux 整合 |
 | [Operator Shadow Monitoring](operator-shadow-monitoring.md) | 雙軌觀察策略 |
 | [BYO Prometheus 整合](byo-prometheus-integration.md) | ConfigMap 路徑（Path A） |
