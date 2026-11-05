@@ -1490,4 +1490,5 @@ def _controller_main(args: argparse.Namespace, config_dir: Path) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)

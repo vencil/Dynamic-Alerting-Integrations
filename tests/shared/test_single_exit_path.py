@@ -966,6 +966,51 @@ MIGRATED: frozenset[str] = frozenset({
     "scripts/tools/lint/trufflehog_to_sarif.py",
     "scripts/tools/lint/validate_mermaid.py",
     "scripts/tools/lint/validate_planning_session_row.py",
+    # #3579 PR3: dx / ops / scripts-ops / scripts-dx, already importing _lib_exitcodes
+    # (directly, or through a _lib_* it imports) — exit codes unchanged
+    "scripts/dx/generate_adr_index.py",
+    "scripts/dx/generate_planning_index.py",
+    "scripts/ops/audit_rules_drift.py",
+    "scripts/ops/bench_synth_tenants.py",
+    "scripts/ops/configmap_assemble.py",
+    "scripts/tools/dx/add_frontmatter.py",
+    "scripts/tools/dx/analyze_bench_history.py",
+    "scripts/tools/dx/axe_lite_static.py",
+    "scripts/tools/dx/bump_docs.py",
+    "scripts/tools/dx/bump_playbook_versions.py",
+    "scripts/tools/dx/check_aria_references.py",
+    "scripts/tools/dx/compile_custom_alerts.py",
+    "scripts/tools/dx/converge_status.py",
+    "scripts/tools/dx/describe_tenant.py",
+    "scripts/tools/dx/gen_agent_adapters.py",
+    "scripts/tools/dx/gen_recipe_contract.py",
+    "scripts/tools/dx/generate_alert_reference.py",
+    "scripts/tools/dx/generate_byo_rulepack_table.py",
+    "scripts/tools/dx/generate_changelog.py",
+    "scripts/tools/dx/generate_crd_schemas.py",
+    "scripts/tools/dx/generate_doc_map.py",
+    "scripts/tools/dx/generate_nav.py",
+    "scripts/tools/dx/generate_rule_pack_readme.py",
+    "scripts/tools/dx/generate_rulepack_configmaps.py",
+    "scripts/tools/dx/generate_tenant_fixture.py",
+    "scripts/tools/dx/generate_tool_map.py",
+    "scripts/tools/dx/measure_judgement_budget.py",
+    "scripts/tools/dx/migrate_conf_d.py",
+    "scripts/tools/dx/migrate_ssot_language.py",
+    "scripts/tools/dx/pair_bench_ratio.py",
+    "scripts/tools/dx/paired_trend_watch.py",
+    "scripts/tools/dx/pr_preflight.py",
+    "scripts/tools/dx/render_soak_diff.py",
+    "scripts/tools/dx/reword_chain.py",
+    "scripts/tools/dx/run_chaos_soak.py",
+    "scripts/tools/dx/scaffold_lint.py",
+    "scripts/tools/dx/suggest_related.py",
+    "scripts/tools/dx/sync_glossary_abbr.py",
+    "scripts/tools/dx/sync_schema.py",
+    "scripts/tools/dx/sync_tool_registry.py",
+    "scripts/tools/ops/da_assembler.py",
+    "scripts/tools/ops/generate_tenant_mapping_rules.py",
+    "scripts/tools/ops/inject_metadata_join.py",
 })
 
 #: The ceiling of entries not yet through run(): it only shrinks. A new tool
@@ -1050,7 +1095,7 @@ def test_migrated_names_baseline_entries():
 def test_the_pending_entries_are_a_pinned_ceiling():
     """The count is written out so that a shorter PENDING is a visible edit of
     this line too (#3579): only ever lower it."""
-    assert len(PENDING) == 71
+    assert len(PENDING) == 28
 
 
 _RUN_TOOL = ("import _lib_exitcodes\ndef main(argv=None):\n    return 0\n"
