@@ -4941,4 +4941,6 @@ def test_findings_json_dash_without_o_is_refused_before_any_route(tmp_path):
                    capture_output=True, text=True,
                    encoding="utf-8", timeout=300, check=False)
     assert proc.returncode == 2 and proc.stdout == "", (proc.stdout, proc.stderr)
-    assert "standard output is already used" in proc.stderr
+    # #1560: refused by the one output judgement, which names every owner;
+    # the document is then not written to the taken stdout either.
+    assert "standard output was asked for by: the routes output (no -o), --findings-json" in proc.stderr

@@ -34,7 +34,7 @@ import generate_alertmanager_routes as gar  # noqa: E402
 import notification_tester as nt  # noqa: E402
 import validate_config as vc  # noqa: E402
 from _grar_merge import (  # noqa: E402
-    DEFAULT_SECRET_MOUNT_ROOT, SecretBinding, SharedSecret, SkippedEntryWarning,
+    DEFAULT_MOUNT_ROOT, SecretBinding, SharedSecret, SkippedEntryWarning,
     build_receiver_config,
 )
 from _grar_validate import (  # noqa: E402
@@ -46,7 +46,7 @@ _GAR = REPO / "scripts" / "tools" / "ops" / "generate_alertmanager_routes.py"
 
 OWN = {"secret": {"key": "slack-url"}}
 CORP = {"secret": {"shared": "corp-slack", "key": "url"}}
-BINDING = SecretBinding(DEFAULT_SECRET_MOUNT_ROOT, MappingProxyType({
+BINDING = SecretBinding(DEFAULT_MOUNT_ROOT, MappingProxyType({
     "corp-slack": SharedSecret("corp-alerting", frozenset({"api_url", "webhook_url", "url"})),
 }))
 SMTP = {"type": "email", "to": ["ops@example.com"], "from": "am@example.com",
@@ -77,14 +77,14 @@ def test_own_reference_renders_as_the_file_field(receiver, field):
     assert warnings == []
     entry = _entry(cfg)
     assert field not in entry
-    assert entry[f"{field}_file"] == f"{DEFAULT_SECRET_MOUNT_ROOT}/da-t-a/slack-url"
+    assert entry[f"{field}_file"] == f"{DEFAULT_MOUNT_ROOT}/da-t-a/slack-url"
 
 
 def test_shared_reference_renders_the_policy_secret_name():
     cfg, warnings = build_receiver_config(_slack(CORP), "t-a", owner_tenant="t-a",
                                           secrets=BINDING)
     assert warnings == []
-    assert _entry(cfg) == {"api_url_file": f"{DEFAULT_SECRET_MOUNT_ROOT}/corp-alerting/url"}
+    assert _entry(cfg) == {"api_url_file": f"{DEFAULT_MOUNT_ROOT}/corp-alerting/url"}
 
 
 def test_mount_root_is_configurable():
@@ -100,7 +100,7 @@ def test_auth_password_own_reference_under_allowed_domains_renders():
     assert warnings == []
     entry = _entry(cfg)
     assert "auth_password" not in entry
-    assert entry["auth_password_file"] == f"{DEFAULT_SECRET_MOUNT_ROOT}/da-t-a/smtp-password"
+    assert entry["auth_password_file"] == f"{DEFAULT_MOUNT_ROOT}/da-t-a/smtp-password"
 
 
 def test_plain_values_are_unchanged():
@@ -199,7 +199,7 @@ def test_defaults_receiver_binds_to_each_inheriting_tenant():
 
 def test_tenant_placeholder_is_substituted_before_the_check():
     defaults = {"receiver": _slack({"secret": {"shared": "{{tenant}}-slack", "key": "url"}})}
-    binding = SecretBinding(DEFAULT_SECRET_MOUNT_ROOT, MappingProxyType({
+    binding = SecretBinding(DEFAULT_MOUNT_ROOT, MappingProxyType({
         "t-a-slack": SharedSecret("team-a-slack", frozenset({"api_url"}))}))
     configs = {t: gar.merge_routing_with_defaults(defaults, {}, t) for t in ("t-a", "t-b")}
     _r, receivers, warnings = gar.generate_routes(configs, tenants=configs, secrets=binding)
@@ -420,7 +420,7 @@ def test_a_rendered_reference_is_not_a_leftover():
                 "http_config": {"oauth2": {**_OAUTH, "claims": {"sub": "x"}}}}
     cfg, warnings = build_receiver_config(receiver, "t-a", owner_tenant="t-a")
     assert warnings == []
-    assert _entry(cfg) == {"url_file": f"{DEFAULT_SECRET_MOUNT_ROOT}/da-t-a/slack-url",
+    assert _entry(cfg) == {"url_file": f"{DEFAULT_MOUNT_ROOT}/da-t-a/slack-url",
                            "http_config": receiver["http_config"]}
 
 
@@ -563,7 +563,7 @@ def test_routes_receiver_own_reference_renders_the_tenants_path():
     for tenant in ("t-a", "t-b"):
         route = by_name[f"tenant-{tenant}-route-0"]
         assert route["pagerduty_configs"] == [
-            {"routing_key_file": f"{DEFAULT_SECRET_MOUNT_ROOT}/da-{tenant}/pd-key"}]
+            {"routing_key_file": f"{DEFAULT_MOUNT_ROOT}/da-{tenant}/pd-key"}]
 
 
 # ── F4：經 generate-routes 的正向路徑 ─────────────────────────────────────
@@ -576,7 +576,7 @@ def test_override_with_a_shared_secret_renders_through_generate_routes():
     assert not [w for w in warnings if isinstance(w, SkippedEntryWarning)]
     override = next(r for r in receivers if r["name"] == "tenant-t-a-override-0")
     assert override["slack_configs"] == [
-        {"api_url_file": f"{DEFAULT_SECRET_MOUNT_ROOT}/corp-alerting/url"}]
+        {"api_url_file": f"{DEFAULT_MOUNT_ROOT}/corp-alerting/url"}]
 
 
 _PASSWORD = {**SMTP, "auth_password": {"secret": {"key": "smtp-password"}}}
@@ -592,7 +592,7 @@ def test_auth_password_own_reference_renders_in_every_tenant_slot():
         {"t-a": routing}, ["*.example.com"], enforced, tenants=["t-a"], secrets=BINDING)
     assert not [w for w in warnings if isinstance(w, SkippedEntryWarning)]
     by_name = {r["name"]: r for r in receivers}
-    want = f"{DEFAULT_SECRET_MOUNT_ROOT}/da-t-a/smtp-password"
+    want = f"{DEFAULT_MOUNT_ROOT}/da-t-a/smtp-password"
     for name in ("tenant-t-a", "tenant-t-a-override-0", "tenant-t-a-route-0",
                  "platform-enforced-t-a"):
         [entry] = by_name[name]["email_configs"]
@@ -692,7 +692,7 @@ def test_each_http_config_row_renders_its_file_key(site):
     cfg, warnings = _build(receiver)
     assert warnings == [], warnings
     entry = _entry(cfg)
-    want = f"{DEFAULT_SECRET_MOUNT_ROOT}/da-t-a/cred"
+    want = f"{DEFAULT_MOUNT_ROOT}/da-t-a/cred"
     if site.path[-1] == "[]":
         header = _at(entry, ("http_config", "http_headers", "X-Token"))
         assert header == {"files": [want]}           # secrets 只剩參照 → 整個拿掉
@@ -714,7 +714,7 @@ def test_header_secrets_keep_plain_values_and_move_references_in_order():
     cfg, warnings = _build(receiver)
     assert warnings == []
     headers = _entry(cfg)["http_config"]["http_headers"]
-    root = f"{DEFAULT_SECRET_MOUNT_ROOT}/da-t-a"
+    root = f"{DEFAULT_MOUNT_ROOT}/da-t-a"
     assert headers == {"X-A": {"values": ["v"], "secrets": ["lit-1", "lit-2"],
                                "files": [f"{root}/h1", f"{root}/h2"]},
                        "X-B": {"values": ["only-values"]}}
@@ -813,7 +813,7 @@ def test_an_http_config_reference_with_no_owner_is_refused():
 
 _ALL_TOP = frozenset(s.path[0] for s in CREDENTIAL_REF_SITES
                      if len(s.path) == 1 and not s.destinations)
-_SHARED_ALL = SecretBinding(DEFAULT_SECRET_MOUNT_ROOT, MappingProxyType({
+_SHARED_ALL = SecretBinding(DEFAULT_MOUNT_ROOT, MappingProxyType({
     "corp-slack": SharedSecret("corp-alerting", _ALL_TOP)}))
 _PROXY_CASES = [(s, proxy) for s in CREDENTIAL_REF_SITES for proxy in s.proxies]
 
@@ -981,7 +981,7 @@ def test_http_config_reference_renders_through_the_cli(tmp_path):
     receivers = yaml.safe_load(out.read_text(encoding="utf-8"))["receivers"]
     main = next(x for x in receivers if x["name"] == "tenant-t-a")
     assert main["webhook_configs"][0]["http_config"]["basic_auth"] == {
-        "username": "u", "password_file": f"{DEFAULT_SECRET_MOUNT_ROOT}/da-t-a/hook-pw"}
+        "username": "u", "password_file": f"{DEFAULT_MOUNT_ROOT}/da-t-a/hook-pw"}
     # 同一棵樹、policy 沒有 allowed_domains：--validate 非 0
     p = tmp_path / "bare-policy.yaml"
     p.write_text("shared_secrets: {}\n", encoding="utf-8")

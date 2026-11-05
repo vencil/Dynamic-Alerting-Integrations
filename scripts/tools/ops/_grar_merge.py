@@ -693,9 +693,9 @@ def receiver_type(receiver_obj: object) -> str:
 # Secrets are created by the operator / ExternalSecrets, and mounting each one
 # at <root>/<name>/ is the deployment's contract (BYO integration guide §5:
 # docs/integration/byo-alertmanager-integration.md); the generator cannot see them.
-DEFAULT_SECRET_MOUNT_ROOT = "/etc/alertmanager/secrets"
+DEFAULT_MOUNT_ROOT = "/etc/alertmanager/secrets"
 #: the tenant's own Secret is `da-<tenant>`; a shared Secret may not start so.
-OWN_SECRET_PREFIX = "da-"
+OWN_NAME_PREFIX = "da-"
 #: the top-level receiver fields a shared Secret is never allowed on: their
 #: value goes to a destination the receiver itself names (CREDENTIAL_REF_SITES
 #: rows with `destinations`; today auth_password → smarthost). The nested
@@ -705,8 +705,8 @@ CONFINED_REF_FIELDS = frozenset(
     s.path[0] for s in CREDENTIAL_REF_SITES if len(s.path) == 1 and s.destinations)
 # Which proxies the requests carrying a credential go through are each site's
 # `proxies` (CREDENTIAL_REF_SITES): http_config.proxy_url, and for oauth2
-# oauth2.proxy_url as well (the token request). proxy_from_environment is Alertmanager's own environment,
-# not the tenant's to choose, and is never refused.
+# oauth2.proxy_url as well (the token request). proxy_from_environment is Alertmanager's own
+# environment, not the tenant's to choose, and is never refused.
 
 
 class SharedSecret(NamedTuple):
@@ -721,7 +721,7 @@ class SecretBinding(NamedTuple):
     mount root and the policy's ``shared_secrets`` (empty: no shared
     reference is accepted). The default is no policy."""
 
-    mount_root: str = DEFAULT_SECRET_MOUNT_ROOT
+    mount_root: str = DEFAULT_MOUNT_ROOT
     shared_secrets: Mapping[str, SharedSecret] = MappingProxyType({})
 
 
@@ -734,7 +734,97 @@ _OWNER_UNSET = object()
 def own_secret_name(tenant: str) -> str:
     """The name of tenant *tenant*'s own Secret: ``da-<tenant>``. A tenant id
     is a DNS-1123 label (ADR-035), so this is a valid Secret name."""
-    return f"{OWN_SECRET_PREFIX}{tenant}"
+    return f"{OWN_NAME_PREFIX}{tenant}"
+
+
+# ── #1560: which Secrets the emitted config needs mounted, and which keys ────
+# The list is read off the EMITTED config (as Alertmanager loads it), never
+# re-derived from conf.d: every path Alertmanager will open is in that config,
+# the base config's own receivers (watchdog-heartbeat's `url_file`) and its
+# `global:` included, and nothing else is. A second derivation from the
+# references would miss the base's paths and could disagree with the render.
+#: `generate-routes --secret-mounts-out`'s document.
+MOUNT_LIST_SCHEMA = "da-tools.secret-mounts/v1"
+
+
+def _file_paths(node: object, in_headers: bool = False) -> list[str]:
+    """Every file path *node* (a config as Alertmanager loads it) names: the
+    string value of each ``*_file`` key, at any depth, and the entries of an
+    ``http_headers.<name>.files`` list (prometheus/common's header files)."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if isinstance(k, str) and k.endswith("_file") and isinstance(v, str):
+                found.append(v)
+            elif in_headers and k == "files" and isinstance(v, list):
+                found.extend(x for x in v if isinstance(x, str))
+            else:
+                found.extend(_file_paths(v, in_headers or k == "http_headers"))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_file_paths(item, in_headers))
+    return found
+
+
+#: The characters Go's ``filepath.Glob`` (Alertmanager's ``templates``)
+#: reads as a pattern (``\\`` escapes one).
+_GLOB_CHARS = frozenset("*?[\\")
+
+
+def required_mounts(config: Mapping, mount_root: str) -> dict:
+    """The Secrets *config* (an Alertmanager config as Alertmanager loads it)
+    reads under *mount_root*, as the ``--secret-mounts-out`` document.
+
+    A path ``<root>/<name>/<key>`` (exactly two non-empty segments under the
+    root: Prometheus Operator mounts Secret ``<name>`` at ``<root>/<name>/``,
+    one file per key, and a key holds no ``/``) lists Secret ``<name>`` with
+    ``<key>`` under ``mounts``. Every other path a ``*_file`` field names —
+    outside the root, or under it in another shape — is not a Secret this
+    list can name; it is kept in ``other_files`` so the deployment sees it
+    has to provide it some other way, instead of it vanishing.
+
+    The top-level ``templates`` list is read too (CodeRabbit on #3615): its
+    entries are globs Alertmanager expands at load. A literal name with a
+    literal key lists both; a literal name with a glob key lists the name
+    with no key for it (the Secret must be mounted; which keys match is the
+    glob's business); a glob in the name segment cannot name a Secret and
+    goes to ``other_files``, as does a template outside the root.
+
+    Names and keys are coordinates, never the values. Sorted, so the same
+    config gives the same bytes."""
+    root = mount_root.rstrip("/")  # "/" → "": the render's own spelling
+    prefix = root + "/"
+    keys_by_name: dict[str, set[str]] = {}
+    other: set[str] = set()
+
+    def segments(path: str) -> list[str]:
+        parts = path[len(prefix):].split("/") if path.startswith(prefix) else []
+        return parts if len(parts) == 2 and all(parts) else []
+
+    for path in _file_paths(config):
+        parts = segments(path)
+        if parts:
+            keys_by_name.setdefault(parts[0], set()).add(parts[1])
+        else:
+            other.add(path)
+    templates = config.get("templates") if isinstance(config, Mapping) else None
+    for path in templates if isinstance(templates, list) else []:
+        if not isinstance(path, str) or not path:
+            continue  # an empty entry names no file: nothing to mount or provide
+        parts = segments(path)
+        if not parts or _GLOB_CHARS & set(parts[0]):
+            other.add(path)
+            continue
+        keys = keys_by_name.setdefault(parts[0], set())
+        if not _GLOB_CHARS & set(parts[1]):
+            keys.add(parts[1])
+    return {
+        "schema": MOUNT_LIST_SCHEMA,
+        "mount_root": mount_root,
+        "mounts": [{"name": n, "keys": sorted(keys_by_name[n])}
+                   for n in sorted(keys_by_name)],
+        "other_files": sorted(other),
+    }
 
 
 def _receiver_secret_refs(receiver_obj: object) -> list[tuple[CredentialRefSite, RefPath]]:

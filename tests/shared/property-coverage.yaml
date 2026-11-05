@@ -335,6 +335,8 @@ modules:
       _destination_problem: "#1560 allowlist check of a site's destination (no allowed_domains / a reference / missing / host outside); each branch example-pinned by tests/ops/test_grar_secret_ref.py (destination cases)"
       _is_set: "#1560 one-line 'not None and not empty' test, Alertmanager's reading of an unset proxy_url; pinned by the empty / null proxy cases in tests/ops/test_grar_secret_ref.py"
       render_secret_refs: "#1560 in-place rewrite of every CREDENTIAL_REF_SITES reference to its file key (<root>/<name>/<key>; a header item moves to files); every row, own / shared / configurable root pinned by tests/ops/test_grar_secret_ref.py"
+      _file_paths: "#1560 recursive collection of *_file values and http_headers files lists (structural walk, no algebraic law); each shape example-pinned by tests/ops/test_generate_routes_secret_mounts.py"
+      required_mounts: "#1560 classification of those paths into <root>/<name>/<key> vs other_files, sorted (case table, not a law); own / shared / base / outside-root / custom-root / ordering / empty rows pinned by tests/ops/test_generate_routes_secret_mounts.py"
       secret_ref_paths: "#1560 recursive walk naming each mapping-with-a-secret-key left in the output; flat, nested-list and multi-leftover paths pinned by tests/ops/test_grar_secret_ref.py::test_a_reference_left_in_the_output_drops_the_receiver"
 
   scripts/tools/ops/_grar_validate.py:
