@@ -2217,6 +2217,7 @@ def test_every_ops_entry_finds_its_exit_from_anywhere(via, tmp_path):
     through a symlink to the file, the `import _lib_exitcodes` of the guard
     must still resolve — whatever the tool then does with `--help`."""
     import subprocess
+    from _platform_fs import symlink_or_skip  # noqa: E402
     entries = _ops_entries()
     assert len(entries) >= 14, entries
     env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONUNBUFFERED")}
@@ -2225,7 +2226,7 @@ def test_every_ops_entry_finds_its_exit_from_anywhere(via, tmp_path):
         target = REPO_ROOT / rel
         if via == "symlink":
             link = tmp_path / Path(rel).name
-            link.symlink_to(target)
+            symlink_or_skip(target, link)
             target = link
         proc = subprocess.run([sys.executable, str(target), "--help"], cwd=tmp_path,
                               capture_output=True, text=True, encoding="utf-8",
