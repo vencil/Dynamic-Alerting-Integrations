@@ -29,6 +29,8 @@ from pathlib import Path
 # 直接 UnicodeEncodeError，hook 鏈路因此七週把成功記成 partial（#489 sweep
 # 漏掃 session-guards/）。寫入先於 print 落地，所以毀的是 telemetry 不是功能。
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+import _lib_exitcodes  # noqa: E402  (#3579: the run() exit, under the hook protocol)
+_lib_exitcodes.use_hook_protocol()  # a crash or a failed write never blocks (exit 1)
 try:
     from _lib_compat import try_utf8_stdout
 except Exception:  # pragma: no cover — standalone fallback, never block
@@ -128,4 +130,5 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)
