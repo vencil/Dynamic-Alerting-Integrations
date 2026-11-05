@@ -889,7 +889,84 @@ BASELINE: frozenset[str] = frozenset({
 #: BASELINE entries that enter through run() now (or are gone). Add a line
 #: when a tool migrates, and lower the count in
 #: test_the_pending_entries_are_a_pinned_ceiling with it.
-MIGRATED: frozenset[str] = frozenset()
+MIGRATED: frozenset[str] = frozenset({
+    # #3579 PR2: scripts/tools/lint/, already importing _lib_exitcodes (exit codes unchanged)
+    "scripts/tools/lint/check_account_registry_monotonic.py",
+    "scripts/tools/lint/check_ad_hoc_git_scripts.py",
+    "scripts/tools/lint/check_admin_config_schema.py",
+    "scripts/tools/lint/check_bat_ascii_purity.py",
+    "scripts/tools/lint/check_bilingual_annotations.py",
+    "scripts/tools/lint/check_changelog_no_tbd.py",
+    "scripts/tools/lint/check_chart_package_contents.py",
+    "scripts/tools/lint/check_chart_pull_surface.py",
+    "scripts/tools/lint/check_chart_ship_surface.py",
+    "scripts/tools/lint/check_codename_gate.py",
+    "scripts/tools/lint/check_codename_leak.py",
+    "scripts/tools/lint/check_confd_schema.py",
+    "scripts/tools/lint/check_configmap_mount_completeness.py",
+    "scripts/tools/lint/check_cross_ns_url_consistency.py",
+    "scripts/tools/lint/check_design_token_usage.py",
+    "scripts/tools/lint/check_dev_bypass_manifest.py",
+    "scripts/tools/lint/check_dev_rules_enforcement.py",
+    "scripts/tools/lint/check_devrules_size.py",
+    "scripts/tools/lint/check_dist_source_consistency.py",
+    "scripts/tools/lint/check_doc_links.py",
+    "scripts/tools/lint/check_env_bool_parsers.py",
+    "scripts/tools/lint/check_flaky_registry.py",
+    "scripts/tools/lint/check_go_fmt.py",
+    "scripts/tools/lint/check_ha_threshold_aggregation.py",
+    "scripts/tools/lint/check_hardcode_tenant.py",
+    "scripts/tools/lint/check_head_blob_hygiene.py",
+    "scripts/tools/lint/check_helm_values_secrets.py",
+    "scripts/tools/lint/check_hub_badge_drift.py",
+    "scripts/tools/lint/check_iac_helm.py",
+    "scripts/tools/lint/check_iac_vibe_rules.py",
+    "scripts/tools/lint/check_image_pin_capability.py",
+    "scripts/tools/lint/check_includes_sync.py",
+    "scripts/tools/lint/check_init_chart_pin_published.py",
+    "scripts/tools/lint/check_jsx_loader_compat.py",
+    "scripts/tools/lint/check_k8s_manifests.py",
+    "scripts/tools/lint/check_ksm_version_allowlist.py",
+    "scripts/tools/lint/check_leftouterjoin_enrichment.py",
+    "scripts/tools/lint/check_lint_toolchain_fit.py",
+    "scripts/tools/lint/check_md_yaml_drift.py",
+    "scripts/tools/lint/check_metric_group_pairs.py",
+    "scripts/tools/lint/check_open_encoding.py",
+    "scripts/tools/lint/check_orphan_docs.py",
+    "scripts/tools/lint/check_orphan_lint.py",
+    "scripts/tools/lint/check_orphan_recordings.py",
+    "scripts/tools/lint/check_path_metadata_consistency.py",
+    "scripts/tools/lint/check_pint.py",
+    "scripts/tools/lint/check_planning_status_sync.py",
+    "scripts/tools/lint/check_playbook_freshness.py",
+    "scripts/tools/lint/check_playwright_rtl_drift.py",
+    "scripts/tools/lint/check_portal_asset_shipping.py",
+    "scripts/tools/lint/check_portal_audience_enum.py",
+    "scripts/tools/lint/check_pr_scope_drift.py",
+    "scripts/tools/lint/check_repo_name.py",
+    "scripts/tools/lint/check_routing_profiles.py",
+    "scripts/tools/lint/check_scrape_reachability.py",
+    "scripts/tools/lint/check_session_guard_liveness.py",
+    "scripts/tools/lint/check_single_writer_invariant.py",
+    "scripts/tools/lint/check_skip_a11y_justification.py",
+    "scripts/tools/lint/check_subprocess_timeout.py",
+    "scripts/tools/lint/check_threshold_observed_map.py",
+    "scripts/tools/lint/check_threshold_reachability.py",
+    "scripts/tools/lint/check_threshold_registry.py",
+    "scripts/tools/lint/check_tool_registry_jsx_parity.py",
+    "scripts/tools/lint/check_undefined_tokens.py",
+    "scripts/tools/lint/check_unpinned_deps.py",
+    "scripts/tools/lint/check_window_x_no_fallback.py",
+    "scripts/tools/lint/check_workflow_git_push_permissions.py",
+    "scripts/tools/lint/check_workload_closure_drift.py",
+    "scripts/tools/lint/detect_sed_damage.py",
+    "scripts/tools/lint/fix_file_hygiene.py",
+    "scripts/tools/lint/lint_html_doc_links.py",
+    "scripts/tools/lint/lint_jsx_babel.py",
+    "scripts/tools/lint/trufflehog_to_sarif.py",
+    "scripts/tools/lint/validate_mermaid.py",
+    "scripts/tools/lint/validate_planning_session_row.py",
+})
 
 #: The ceiling of entries not yet through run(): it only shrinks. A new tool
 #: enters through run() from its first commit — there is no way to add one.
@@ -973,7 +1050,7 @@ def test_migrated_names_baseline_entries():
 def test_the_pending_entries_are_a_pinned_ceiling():
     """The count is written out so that a shorter PENDING is a visible edit of
     this line too (#3579): only ever lower it."""
-    assert len(PENDING) == 146
+    assert len(PENDING) == 71
 
 
 _RUN_TOOL = ("import _lib_exitcodes\ndef main(argv=None):\n    return 0\n"

@@ -305,4 +305,5 @@ scan_file = scan_file_full
 
 
 if __name__ == '__main__':
-    sys.exit(main())
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)

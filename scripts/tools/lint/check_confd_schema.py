@@ -822,4 +822,5 @@ def _main_in_session() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(_main_in_session())
+    import _lib_exitcodes
+    _lib_exitcodes.run(_main_in_session)
