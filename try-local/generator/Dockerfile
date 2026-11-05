@@ -8,9 +8,37 @@
 # scripts/tools at /opt/da-tools, so the demo judges with what the checkout
 # holds. This image is only the runtime the da-tools image gives it:
 # Python + PyYAML (same pins as components/da-tools/app/Dockerfile), git,
-# amtool, and the nonroot user at uid 10001 — which tenant-api runs as too
-# (docker-compose.yaml `user:`): the service answers only a peer of its own
-# uid.
+# amtool, da-guard, and the nonroot user at uid 10001 — which tenant-api runs
+# as too (docker-compose.yaml `user:`): the service answers only a peer of its
+# own uid.
+#
+# Build context = repo ROOT (#3530): da-guard is built from
+# components/threshold-exporter/app, as the recipe-preview image builds it.
+#   docker build -f try-local/generator/Dockerfile .
+
+# ── da-guard ─────────────────────────────────────────────────────────────
+# Without it the service answers every write 503 da_guard_missing and
+# GET /v1/status reports `ready: false` (#3530). Same stage as
+# components/recipe-preview/Dockerfile: pinned to the native BUILDPLATFORM and
+# cross-compiled to TARGETARCH (CGO_ENABLED=0). The builder's Go version MUST
+# equal the module's go.mod `go` directive (tests/ops/test_go_toolchain_parity.py).
+# This stage is discarded.
+FROM --platform=$BUILDPLATFORM golang:1.26.10-alpine3.23 AS gobuild
+
+WORKDIR /src
+COPY components/threshold-exporter/app/go.mod components/threshold-exporter/app/go.sum ./
+# go.mod replaces gopkg.in/yaml.v3 with this directory (#2681); `go mod
+# download` reads the replacement's go.mod.
+COPY components/threshold-exporter/app/third_party ./third_party
+RUN go mod download
+COPY components/threshold-exporter/app/ ./
+# The build flags live in ONE place, scripts/ops/go_build.sh (#3425). The root
+# .dockerignore re-includes scripts/ops/ for this COPY.
+COPY scripts/ops/go_build.sh /opt/go_build.sh
+ARG TARGETOS TARGETARCH
+RUN sh /opt/go_build.sh --goos "${TARGETOS}" --goarch "${TARGETARCH}" . ./cmd/da-guard /da-guard
+
+# ── runtime ──────────────────────────────────────────────────────────────
 FROM python:3.14.10-alpine3.23
 
 # pip is removed once PyYAML is in, for the reason the da-tools image gives
@@ -29,6 +57,8 @@ RUN apk --no-cache upgrade && \
 # amtool: without it the service answers every write 503 amtool_missing
 # (ADR-036 §3). The same ref the da-tools image copies it from.
 COPY --from=prom/alertmanager:v0.34.2@sha256:39d8bb3966c694a124428a3a88fbcffd40bd069129ecd47c059f8a3f17c55f3b /bin/amtool /usr/local/bin/amtool
+# On PATH, where the service resolves it when $DA_GUARD_BINARY is not set.
+COPY --from=gobuild /da-guard /usr/local/bin/da-guard
 
 USER nonroot:nonroot
 

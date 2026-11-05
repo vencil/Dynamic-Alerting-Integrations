@@ -114,8 +114,9 @@ DOCKERFILE_CONTEXTS: dict[str, str] = {
     "helm/federation-gateway/audit-sidecar/Dockerfile": "helm/federation-gateway/audit-sidecar",
     "helm/vector/projection-gate/Dockerfile": "helm/vector/projection-gate",
     # try-local's generator service runtime (#2903): built by the demo
-    # compose stack, never published; the service code is bind-mounted.
-    "try-local/generator/Dockerfile": "try-local/generator",
+    # compose stack, never published; the service code is bind-mounted. The
+    # repo root since #3530: its da-guard stage builds the exporter's Go.
+    "try-local/generator/Dockerfile": ".",
 }
 
 # Mandated .dockerignore baseline (epic #448 AC 1). Each is (label, probe):
