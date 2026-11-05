@@ -961,9 +961,12 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
             is a caller bug and raises ``TypeError``.
         secrets: #1560 — mount root and the policy's ``shared_secrets``
             (None: the default root, no shared Secret).
-        allowed_domains: #1560 — the --policy allowlist, read only by the
-            auth_password rule of ``secret_binding_findings`` (the domain
-            allowlist itself is the caller's ``validate_receiver_domains``).
+        allowed_domains: #1560 — the --policy allowlist, read only by
+            ``secret_binding_findings`` for every ``CREDENTIAL_REF_SITES`` row
+            with destinations (email auth_password → smarthost, the webhook
+            http_config leaves → url, the oauth2 ones → token_url and url);
+            the domain allowlist itself is the caller's
+            ``validate_receiver_domains``.
 
     Returns:
         (am_config_dict, warnings) where am_config_dict is e.g.
