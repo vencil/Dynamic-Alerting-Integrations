@@ -1,7 +1,7 @@
 r"""The three ci.yml aggregate gates were required checks with no assertions.
 
 #1397. `ci.yml` reports three REQUIRED status checks — `Python Tests`,
-`Go Tests (1.26)`, `Portal Tests` — from three jobs that run no tests at all.
+`Go Tests`, `Portal Tests` — from three jobs that run no tests at all.
 Each is a pure aggregation gate: `if: always()`, a handful of
 `${{ needs.*.result }}` bindings in one step's `env:`, and ~10 lines of shell
 that decide pass/fail. Those ten lines are the whole reason a path-SKIPPED
@@ -560,7 +560,7 @@ UNMODELLED_GATE_SHAPED_JOBS: dict[tuple[str, str], str] = {}
 # `portal-tests-run`; every assertion here stayed green.
 REQUIRED_CHECK_NAMES = frozenset({
     "Python Tests",
-    "Go Tests (1.26)",
+    "Go Tests",
     "Portal Tests",
     # validate.yaml (#1398)
     "Go Lint",
@@ -579,6 +579,21 @@ REQUIRED_CHECK_NAMES = frozenset({
     "Documentation Line Count Monitor",
     "Drift Detection (validate_all.py)",
 })
+
+
+_VERSION_IN_NAME = re.compile(r"\b\d+\.\d+(?:\.\d+)?\b")
+
+
+def test_no_required_check_name_carries_a_toolchain_version():
+    """A version in a required-check name is a second copy of the version:
+    every bump then also needs a branch-protection edit, and until the owner
+    makes it the renamed gate never reports and every PR hangs. Both
+    "Python Tests (3.13)" and "Go Tests (1.26)" were that shape; the versions
+    live in .python-version and the modules' go.mod now."""
+    bad = sorted(n for n in REQUIRED_CHECK_NAMES if _VERSION_IN_NAME.search(n))
+    assert not bad, (
+        f"required check names must not carry a version: {bad} — put the "
+        "version in its SSOT file and keep the gate name stable")
 
 
 # ── the exit-code contract ─────────────────────────────────────────────────
@@ -1121,11 +1136,12 @@ def _rendered_names(job_id: str, job: dict) -> list[str] | None:
     """Every check-run name this job can report. None = not modellable.
 
     ⛔ Comparing the RAW `name:` is not enough, and this is the bypass that
-    forced the function: GitHub expands `${{ }}` into the check-run name, and
-    three jobs in this workflow already carry an expression there. Renaming a
-    path-gated leg to `Go Tests (${{ matrix.go }})` renders to exactly the
-    required context `Go Tests (1.26)` — one character from the name it has —
-    while a raw-string comparison sees two different strings.
+    forced the function: GitHub expands `${{ }}` into the check-run name.
+    Renaming a path-gated leg to `Go ${{ matrix.word }}` with
+    `word: ["Tests"]` renders to exactly the required context `Go Tests`,
+    while a raw-string comparison sees two different strings. (The Go legs
+    used to carry `(${{ matrix.go }})`, rendering to the then-required
+    `Go Tests (1.26)`.)
     """
     raw = str(job.get("name") or job_id)
     refs = _EXPRESSION.findall(raw)
@@ -1151,8 +1167,8 @@ def _could_render_to(raw_name: str, target: str) -> bool:
     """Could `raw_name`, with every `${{ }}` free, come out as `target`?
 
     Each expression becomes `.*` and the literal fragments must still line up.
-    `scan ${{ matrix.name }}` cannot become `Portal Tests`; `Go Tests
-    (${{ matrix.go }})` can become `Go Tests (1.26)`.
+    `scan ${{ matrix.name }}` cannot become `Portal Tests`; `Go
+    ${{ matrix.word }}` can become `Go Tests`.
     """
     # `re.split` with one capture group interleaves literals and captures, so
     # the literal fragments are the even indices.
