@@ -21,7 +21,7 @@ import ast
 from pathlib import Path
 
 from _registry_lib import DEPRECATED_KEY_ALIASES
-from tests._tree import REPO_ROOT, repo_files
+from _tree import REPO_ROOT, repo_files
 
 _TABLE_HOME = Path("scripts/tools/ops/_registry_lib.py")
 
