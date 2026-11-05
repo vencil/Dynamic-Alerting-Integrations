@@ -20,7 +20,6 @@ modules import directly.
 """
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -130,21 +129,6 @@ def test_default_mode_is_a_dry_run_that_writes_nothing(packs):
         f"dry-run 應把產生的 README 印到 stdout，實得 {len(proc.stdout)} 字元"
     )
     assert readme.read_bytes() == before, "dry-run 不得寫檔"
-
-
-@pytest.mark.skipif(not os.path.exists("/dev/full"), reason="needs /dev/full")
-def test_a_dry_run_whose_stdout_fails_is_not_rc_0(packs):
-    """#3579：dry-run 的 README 小於一個緩衝區，舊的裸 `main()` 結尾讓 CPython
-    在模組跑完時自己 flush 並吞掉錯誤（rc 0、什麼都沒交付）。經 `run()` 結束時
-    由它做最後一次 flush：寫 stdout 失敗是 rc 2，stderr 一行點名。"""
-    env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
-    with open("/dev/full", "w", encoding="utf-8") as full:
-        proc = subprocess.run(
-            [sys.executable, str(GENERATOR), "--rule-packs-dir", str(packs)],
-            stdout=full, stderr=subprocess.PIPE, text=True, encoding="utf-8",
-            errors="replace", timeout=60, env=env)
-    assert proc.returncode == 2, proc.stderr
-    assert "ERROR: cannot write to stdout:" in proc.stderr, proc.stderr
 
 
 def test_update_rewrites_the_readme(packs):

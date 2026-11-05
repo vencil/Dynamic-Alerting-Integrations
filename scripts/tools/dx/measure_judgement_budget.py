@@ -130,9 +130,11 @@ import time
 #: The judgement process (`--_judge`, started by this tool) records every
 #: program it starts. Only there: the recorder must be in place before
 #: anything imports subprocess (its poll captures os.waitpid at import time),
-#: and an importer of this module (a test) must not get a patched os. "Run
-#: as the program" is read from argv[0], not `__name__`: the module's one
-#: `__name__` test is its run() guard (#3579, tests/shared/test_single_exit_path.py).
+#: and an importer of this module (a test, whose argv[0] is its own runner)
+#: must not get a patched os. The judgement process is told by its argv —
+#: argv[0] this file, argv[1] `--_judge`, as run_judgement launches it — not
+#: by `__name__`: the module's one `__name__` test is its run() guard (#3579,
+#: tests/shared/test_single_exit_path.py).
 _JUDGING = (len(sys.argv) > 1 and sys.argv[1] == "--_judge"
             and os.path.realpath(sys.argv[0]) == os.path.realpath(__file__))
 

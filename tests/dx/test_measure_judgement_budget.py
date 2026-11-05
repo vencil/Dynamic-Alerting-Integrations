@@ -251,7 +251,7 @@ def test_the_generator_runs_as_the_container_runs_it(monkeypatch, tmp_path):
     assert "--validate" in calls[0][0]
 
 
-# ── #3579: judgement mode is "this file run as the program with --_judge" ─
+# ── #3579: judgement mode is told by argv: [this file, "--_judge", spec] ─
 
 def _judging_after_loading(argv0: str) -> list[str]:
     """Load the module in a fresh interpreter with argv
@@ -272,10 +272,11 @@ def _judging_after_loading(argv0: str) -> list[str]:
     return proc.stdout.split()
 
 
-def test_the_program_started_with_judge_records_what_it_starts():
+def test_the_argv_run_judgement_launches_turns_the_recorder_on():
+    # run_judgement starts [sys.executable, this file, "--_judge", spec]
     assert _judging_after_loading(str(_PATH)) == ["True", "True"]
 
 
-def test_an_importer_with_judge_in_its_argv_gets_no_recorder():
+def test_an_importer_whose_argv0_is_another_program_gets_no_recorder():
     # e.g. a test runner whose own argv happens to carry the flag
     assert _judging_after_loading(sys.executable) == ["False", "False"]
