@@ -9,7 +9,7 @@ package handler
 //
 // That gap is not theoretical. The write plane's metadata gate lives ONLY in
 // the handler: a PermWrite route's middleware authorizes through m.Allowed,
-// which stays metadata-blind even in enforce mode — pinned by
+// which stays metadata-blind — pinned by
 // rbac.TestAllowedStaysBlindOnBothAxes, and consistent with middleware.go's
 // note that write routes keep their org gate handler-side in RequireOrgWrite.
 // So every part of this axis a deployment actually depends on — the resolver
@@ -27,7 +27,7 @@ package handler
 //     both, one out on environment only, one out on domain only. Both halves
 //     are covered on purpose — dropping `domain` from the two resolvers used to
 //     leave this file (and the whole module) green, while `scopeFieldModes`
-//     treats an unresolved domain as UNLABELED, which in enforce mode denies
+//     treats an unresolved domain as UNLABELED, which denies
 //     every write a `domains:` rule covers. That is a hard false-403, so the
 //     half that would cause it gets its own rows.
 //   - A git-backed writer with an onWrite spy: a denied request must not merely
@@ -108,17 +108,16 @@ type metaEnfFixture struct {
 	writes    atomic.Int32
 }
 
-// newMetaEnfFixture builds the harness. enforce selects the mode under test:
-// true = the axis is fail-closed, false = shadow (the default a deployment
-// upgrades into).
-func newMetaEnfFixture(t *testing.T, enforce bool) *metaEnfFixture {
+// newMetaEnfFixture builds the harness. The axis is fail-closed (ADR-027 §7:
+// always enforced).
+func newMetaEnfFixture(t *testing.T) *metaEnfFixture {
 	t.Helper()
-	return newMetaEnfFixtureWith(t, enforce, nil)
+	return newMetaEnfFixtureWith(t, nil)
 }
 
 // newMetaEnfFixtureWith is newMetaEnfFixture with files seeded over the
 // three default tenant files (a key naming one of them replaces it).
-func newMetaEnfFixtureWith(t *testing.T, enforce bool, files map[string]string) *metaEnfFixture {
+func newMetaEnfFixtureWith(t *testing.T, files map[string]string) *metaEnfFixture {
 	t.Helper()
 	seeded := map[string]string{
 		metaEnfTenantIn + ".yaml":        tenantYAMLWithMeta(metaEnfTenantIn, metaEnfScopedEnv, metaEnfScopedDomain, metaEnfSeedMode),
@@ -141,9 +140,6 @@ func newMetaEnfFixtureWith(t *testing.T, enforce bool, files map[string]string) 
 	f.writer = newTestWriter(configDir)
 	f.writer.SetOnWrite(func(string) { f.writes.Add(1) })
 	f.rbacMgr = newRBACManagerWithClaims(t, metaEnfRBACYAML, nil)
-	if enforce {
-		f.rbacMgr.EnableMetadataWriteScopeEnforce()
-	}
 	return f
 }
 
@@ -221,7 +217,7 @@ func TestMetadataWriteEnforce_EndToEnd_PreStateDenied(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newMetaEnfFixture(t, true)
+			f := newMetaEnfFixture(t)
 
 			w := f.putTenant(t, tc.tenant,
 				tenantYAMLWithMeta(tc.tenant, metaEnfScopedEnv, metaEnfScopedDomain, metaEnfPutMode), nil)
@@ -245,11 +241,11 @@ func TestMetadataWriteEnforce_EndToEnd_PreStateDenied(t *testing.T) {
 	}
 }
 
-// Enforce must NARROW, not deny outright. A tenant inside the caller's scope on
+// The axis must NARROW, not deny outright. A tenant inside the caller's scope on
 // both halves stays writable over real HTTP.
 func TestMetadataWriteEnforce_EndToEnd_InScopeTenantAllowed(t *testing.T) {
 	t.Parallel()
-	f := newMetaEnfFixture(t, true)
+	f := newMetaEnfFixture(t)
 
 	w := f.putTenant(t, metaEnfTenantIn,
 		tenantYAMLWithMeta(metaEnfTenantIn, metaEnfScopedEnv, metaEnfScopedDomain, metaEnfPutMode), nil)
@@ -269,7 +265,7 @@ func TestMetadataWriteEnforce_EndToEnd_InScopeTenantAllowed(t *testing.T) {
 // the gate ever moves below readBaseHashHeader, this answers 400 instead.
 func TestMetadataWriteEnforce_EndToEnd_GateRunsBeforeHeaderParsing(t *testing.T) {
 	t.Parallel()
-	f := newMetaEnfFixture(t, true)
+	f := newMetaEnfFixture(t)
 
 	w := f.putTenant(t, metaEnfTenantEnvOut,
 		tenantYAMLWithMeta(metaEnfTenantEnvOut, metaEnfScopedEnv, metaEnfScopedDomain, metaEnfPutMode),
@@ -281,27 +277,6 @@ func TestMetadataWriteEnforce_EndToEnd_GateRunsBeforeHeaderParsing(t *testing.T)
 	}
 	if n := f.writes.Load(); n != 0 {
 		t.Errorf("denied request committed %d time(s), want 0", n)
-	}
-}
-
-// Migration safety, measured on the wire rather than on a predicate: the exact
-// request that enforce refuses must still succeed — and actually commit — in
-// the shadow default a deployment upgrades into. A shadow regression here is
-// the shape that silently tightens deployments that never opted in.
-func TestMetadataWriteEnforce_EndToEnd_ShadowStillWritesOutOfScopeTenant(t *testing.T) {
-	t.Parallel()
-	f := newMetaEnfFixture(t, false)
-
-	// Byte-identical request to the environment_half row above, so the two
-	// differ in the flag and nothing else.
-	w := f.putTenant(t, metaEnfTenantEnvOut,
-		tenantYAMLWithMeta(metaEnfTenantEnvOut, metaEnfScopedEnv, metaEnfScopedDomain, metaEnfPutMode), nil)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("shadow: status = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	if n := f.writes.Load(); n != 1 {
-		t.Errorf("shadow: commits = %d, want 1 — shadow must not merely avoid 403, it must still write", n)
 	}
 }
 
@@ -323,7 +298,7 @@ func TestMetadataWriteEnforce_EndToEnd_RelabelOutOfScopeDenied(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			f := newMetaEnfFixture(t, true)
+			f := newMetaEnfFixture(t)
 
 			// Precondition, over the same wire: this tenant IS writable.
 			if w := f.putTenant(t, metaEnfTenantIn,
@@ -354,40 +329,22 @@ func TestMetadataWriteEnforce_EndToEnd_RelabelOutOfScopeDenied(t *testing.T) {
 	}
 }
 
-// The post-state gate inherits the axis's flag, so in shadow the same relabel
-// goes through. Pinned end-to-end for the same reason as the pre-state shadow
-// row: the migration promise is about real requests, not predicates.
-func TestMetadataWriteEnforce_EndToEnd_ShadowAllowsRelabel(t *testing.T) {
-	t.Parallel()
-	f := newMetaEnfFixture(t, false)
-
-	w := f.putTenant(t, metaEnfTenantIn,
-		tenantYAMLWithMeta(metaEnfTenantIn, metaEnfOutsideEnv, metaEnfOutsideDomain, metaEnfPutMode), nil)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("shadow relabel: status = %d, want 200; body=%s", w.Code, w.Body.String())
-	}
-	if n := f.writes.Load(); n != 1 {
-		t.Errorf("shadow relabel: commits = %d, want 1", n)
-	}
-}
-
 // ── Onboarding: the tenant that does not exist on disk yet ─────────────────
 
 // scopeFieldModes (rbac.go) treats an UNRESOLVABLE metadata field as unlabeled,
-// and unlabeled under enforce is a DENY — fail-closed by design. A tenant file
+// and unlabeled on a restricting rule is a DENY — fail-closed by design. A tenant file
 // that does not exist yet resolves to exactly that pair, so the pre-state gate
 // sees a brand-new tenant the same way it sees a mislabeled one.
 //
 // This row is here because that consequence is the operationally surprising
-// one: an operator who flips the flag keeps every existing in-scope tenant
-// writable and loses the ability to ONBOARD, with a message about the tenant's
-// environment/domain for a tenant that has neither yet. The behavior is
-// measured here rather than reasoned about, and its shadow counterpart below
-// pins that the flag is what changes it.
+// one: a caller whose rule restricts environments/domains keeps every
+// existing in-scope tenant writable but cannot ONBOARD one, with a message
+// about the tenant's environment/domain for a tenant that has neither yet. The
+// behavior is measured here rather than reasoned about, and the unrestricted
+// counterpart below pins that the rule's restriction is what changes it.
 func TestMetadataWriteEnforce_EndToEnd_CreateNewTenantDenied(t *testing.T) {
 	t.Parallel()
-	f := newMetaEnfFixture(t, true)
+	f := newMetaEnfFixture(t)
 
 	const newTenant = "tenant-meta-brandnew"
 	w := f.putTenant(t, newTenant,
@@ -395,7 +352,7 @@ func TestMetadataWriteEnforce_EndToEnd_CreateNewTenantDenied(t *testing.T) {
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403 — an absent tenant file resolves as unlabeled, "+
-			"and unlabeled under enforce is fail-closed; body=%s", w.Code, w.Body.String())
+			"and unlabeled on a restricting rule is fail-closed; body=%s", w.Code, w.Body.String())
 	}
 	code, errText := decodeEnvelope(t, w)
 	if code != "FORBIDDEN" {
@@ -412,21 +369,27 @@ func TestMetadataWriteEnforce_EndToEnd_CreateNewTenantDenied(t *testing.T) {
 	}
 }
 
-// The migration-safety half of the row above: the identical create succeeds in
-// shadow. Together they pin that onboarding is blocked BY THE FLAG and not by
+// The contrast half of the row above: the identical create succeeds for a
+// rule that restricts neither environments nor domains. Together they pin
+// that onboarding is blocked BY THE RULE'S METADATA RESTRICTION and not by
 // something else in the create path.
-func TestMetadataWriteEnforce_EndToEnd_ShadowAllowsCreateNewTenant(t *testing.T) {
+func TestMetadataWriteEnforce_EndToEnd_UnrestrictedRuleCreatesNewTenant(t *testing.T) {
 	t.Parallel()
-	f := newMetaEnfFixture(t, false)
+	f := newMetaEnfFixture(t)
+	f.rbacMgr = newRBACManagerWithClaims(t, `groups:
+  - name: `+metaEnfGroup+`
+    tenants: ["*"]
+    permissions: [read, write, admin]
+`, nil)
 
 	const newTenant = "tenant-meta-brandnew"
 	w := f.putTenant(t, newTenant,
 		tenantYAMLWithMeta(newTenant, metaEnfScopedEnv, metaEnfScopedDomain, metaEnfPutMode), nil)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("shadow: status = %d, want 200; body=%s", w.Code, w.Body.String())
+		t.Fatalf("unrestricted rule: status = %d, want 200; body=%s", w.Code, w.Body.String())
 	}
 	if n := f.writes.Load(); n != 1 {
-		t.Errorf("shadow: commits = %d, want 1", n)
+		t.Errorf("unrestricted rule: commits = %d, want 1", n)
 	}
 }

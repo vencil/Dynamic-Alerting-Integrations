@@ -70,11 +70,12 @@ lang: zh
 | `ADR-038` | adr | ADR-038: 沒有讀取端讀的鍵以實測判定，保留鍵由一份登錄表宣告 | platform | — | [docs/adr/038-unread-keys-judged-by-readers.md](../adr/038-unread-keys-judged-by-readers.md) |
 | `ADR-039` | adr | ADR-039: 刻意付出的效能成本寫進 repo 裡的接受帳本，由 bench 閘門核對實測 | dx | — | [docs/adr/039-bench-acceptance-ledger.md](../adr/039-bench-acceptance-ledger.md) |
 
-### proposed (16)
+### proposed (17)
 
 | ID | Kind | Title | Domain | PR | Source |
 |----|------|-------|--------|------|--------|
 | `ADR-026` | adr | ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統 | k8s | — | [docs/adr/026-node-maintenance-liveness-suppression.md](../adr/026-node-maintenance-liveness-suppression.md) |
+| `ADR-027` | adr | ADR-027: tenant-api 的呼叫端身分只在自己的 pod 內建立，網路上不轉送人類身分 | tenant-api | — | [docs/adr/027-tenant-api-caller-identity.md](../adr/027-tenant-api-caller-identity.md) |
 | `TRK-001` | dx | TRK-001: `check_noqa_hygiene.py` — noqa/nosec 必要性驗證 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-002` | dx | TRK-002: `make test-impact` — 變更影響測試自動縮減 | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |
 | `TRK-003` | dx | TRK-003: Pre-commit hook CI gate | ci | — | [docs/internal/dx-tooling-backlog.md](../internal/dx-tooling-backlog.md) |

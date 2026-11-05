@@ -46,7 +46,7 @@ func TestNewManager_Loads1NAndLookups(t *testing.T) {
 	}
 
 	// known-but-empty and unknown are distinguishable (P6 reverse-lookup needs it)
-	// yet both carry zero orgs (org-scope denies both, shadow-lenient).
+	// yet both carry zero orgs (org-scope denies both).
 	if orgs, _ := m.OrgsForTenant("db-c"); len(orgs) != 0 {
 		t.Errorf("db-c must have zero orgs, got %v", orgs)
 	}

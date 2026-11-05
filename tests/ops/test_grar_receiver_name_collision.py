@@ -15,11 +15,14 @@ going to the base's stale endpoint.
 The contract pinned here (owner decision on #2279), all with amtool NOT on
 PATH so the verdict cannot be amtool's:
 
-* duplicate generated names → ``--validate`` rc 1 naming BOTH sources; render /
-  ``--output-configmap`` rc 1 with nothing written, with or without --strict;
-  validate-config's ``routes`` row FAIL — through the same predicate;
+* duplicate generated names → ``--validate`` rc 1 naming BOTH sources;
+  ``--output-alertmanager`` / ``--output-configmap`` rc 1 with nothing
+  written, with or without --strict; validate-config's ``routes`` row FAIL —
+  through the same predicate;
 * base shadowing a generated name → ``--output-configmap`` rc 1, nothing
-  written; the four platform placeholder names are NOT shadowing;
+  written (#1211 gap 2 states the reason the other way round too: the base
+  is a SOURCE, and a ``tenant-*`` receiver there is an earlier output); the
+  four platform placeholder names are NOT shadowing;
 * a tree without collisions is unaffected (control).
 
 Tenant ids are fixture names (CLAUDE.md #9).
@@ -125,8 +128,8 @@ class TestGeneratedNameCollision:
         assert "OK: all configs valid" not in out
         assert src in err and f"tenant '{other}' main receiver" in err, err
 
-    @pytest.mark.parametrize("mode", [[], ["--output-configmap"]],
-                             ids=["render", "output-configmap"])
+    @pytest.mark.parametrize("mode", [["--output-alertmanager"], ["--output-configmap"]],
+                             ids=["output-alertmanager", "output-configmap"])
     @pytest.mark.parametrize("strict", [False, True], ids=["plain", "strict"])
     def test_write_modes_exit_1_and_write_nothing(self, clash, tmp_path,
                                                    mode, strict):
@@ -150,6 +153,9 @@ class TestGeneratedNameCollision:
         """Same shape minus the colliding tenant: rc 0, file written, PASS."""
         d = tmp_path / "conf.d"
         d.mkdir()
+        # declared: a tree with no root platform file fails --validate (#3016)
+        (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n",
+                                          encoding="utf-8")
         _write_tenant(d, _BASE_T, _routing_with("routes"))
         _write_tenant(d, "t2", make_routing_config("t2"))
         rc, out, err = _gar(["--config-dir", str(d), "--validate"], tmp_path)

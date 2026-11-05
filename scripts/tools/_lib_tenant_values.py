@@ -13,12 +13,10 @@ load read but serves no tenant from (a file outside the `_` files with no
 `tenants:` mapping, #2115 R3), each a `SkippedFile(file, reason)` in the words
 of the load; `stderr_lines` every non-empty line da-guard wrote to stderr on
 a run that succeeded (a successful run would otherwise swallow them), split on
-"\n" only. They are not sorted into kinds here. `aliases` is the exporter's
-own alias table, retired base key -> canonical base key (#2115): the keys of
-`values` / `severities` / `schedules` / `dropped` are canonical, and a key a
-caller holds in a retired spelling is looked up through this table, not
-through one kept here. The exporter canonicalizes the `<base>_critical` and
-`<base>{...}` spellings of a retired base the same way. `print_load_warnings` prints
+"\n" only. They are not sorted into kinds here. The keys of `values` / `severities` /
+`schedules` / `dropped` are canonical; a key a caller holds in a retired
+#1231 spelling is put in the canonical one by `key_spellings` (`da-guard
+key-spellings`, #3556) — no table or rule of it is kept here. `print_load_warnings` prints
 both: each of those lines behind `DA_GUARD_PREFIX` and escaped with
 `safe_label`, then one named WARN line per skipped file. A file the load
 cannot stat or read (da-guard's `unreadable`) is not a warning: it raises
@@ -297,9 +295,9 @@ __all__ = [
     "DA_GUARD_PREFIX",
     "MISSING_BINARY_MESSAGE",
     "ParseFailedError",
-    "canonical_key",
     "exit_on_served_values_error",
     "is_tenant_reserved_key",
+    "key_spellings",
     "load_effective",
     "load_effective_tree",
     "load_guard_report",
@@ -515,7 +513,6 @@ class ServedTree(NamedTuple):
     tenants: dict[str, TenantValues]
     skipped: list[SkippedFile]
     stderr_lines: list[str]  # every non-empty line of da-guard's stderr, as written
-    aliases: dict[str, str]  # the exporter's table: retired base key -> canonical base key
     # With `partial=True` only: the files the load skips (they do not decode)
     # and cannot read; their tenants are absent from `tenants`.
     parse_failed: "tuple[str, ...] | list[str]" = ()
@@ -867,12 +864,12 @@ def _run_da_guard(
         # A field every da-guard of this tool's version writes, or a schema the
         # caller names as an older version of its document, is a da-guard
         # older than this tool — named so, not as broken output (key-verdict's
-        # document gained `parse_failed` and a v2 after its first version,
-        # #3489). A schema this reader does not know may be a newer one: not
+        # document gained `parse_failed`, a v2 and `blocks` after its first
+        # version, #3489, #3016). A schema this reader does not know may be a newer one: not
         # called older.
         stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
                  if isinstance(e, _OlderSchema)
-                 or (isinstance(e, KeyError) and (e.args in (("skipped",), ("unreadable",), ("parse_failed",))
+                 or (isinstance(e, KeyError) and (e.args in _FIELDS_ADDED_SINCE
                                                   or (e.args == ("schema",) and subcommand == SUBCOMMAND)))
                 else "")
         # Not the tree's either way: da-guard writes this JSON whatever the
@@ -899,6 +896,12 @@ def _run_da_guard(
             f"da-guard {subcommand} exited {proc.returncode} with no file in {fields}",
             proc.returncode, stderr, broken=True)
     return got, proc.returncode, stderr
+
+
+# Fields a da-guard document gained after its first version: one missing
+# names the binary as older than this tool (#3489, #3016).
+_FIELDS_ADDED_SINCE = (("skipped",), ("unreadable",), ("parse_failed",), ("blocks",),
+                       ("undecidable_blocks",))
 
 
 def _accepts(cmd: list[str], timeout: float) -> bool:
@@ -1047,28 +1050,14 @@ def load_served_tree(
     # A da-guard from before --schedules refuses the flag with exit 2; that
     # is named as older than this tool by `_run_da_guard`'s `-h` check, not
     # by a phrase of its stderr (#2725).
-    (tenants, skipped, aliases, dropped, absent, root_refused), returncode, stderr = _run_da_guard(
+    (tenants, skipped, dropped, absent, root_refused), returncode, stderr = _run_da_guard(
         SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=SERVED_VALUES_SCHEMA,
         read=lambda doc: (doc["tenants"],
                           [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
-                          doc.get("aliases"),
                           ([str(f) for f in doc["parse_failed"]],
                            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
                           _subset_absent(doc, requested), doc.get("root_defaults_refused", _MISSING)),
         reads_unreadable=True, dropped_ok=partial)
-    # Read after the fields _run_da_guard checks, so an older da-guard is
-    # named by the first field it lacks.
-    if aliases is None:
-        raise ServedValuesError(
-            f"da-guard {SUBCOMMAND} exited {returncode} without the expected JSON ('aliases') — this "
-            "da-guard is older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
-    try:
-        aliases = {str(k): str(v) for k, v in aliases.items()}
-    except AttributeError as e:
-        raise ServedValuesError(
-            f"da-guard {SUBCOMMAND} exited {returncode} without the expected JSON (aliases: {e})",
-            returncode, stderr, broken=True) from e
-
     out: dict[str, TenantValues] = {}
     for tenant_id, tv in tenants.items():
         severities = dict(tv["severities"])
@@ -1159,7 +1148,7 @@ def load_served_tree(
                                      state_filters, time_boxes, routing, keys, alert_rows,
                                      custom_alerts, custom_alerts_error, custom_alerts_finding,
                                      key_checks)
-    return ServedTree(out, skipped, _nonempty_lines(stderr), aliases, *dropped, absent,
+    return ServedTree(out, skipped, _nonempty_lines(stderr), *dropped, absent,
                       _root_defaults_refused(root_refused, returncode, stderr, SUBCOMMAND, ServedValuesError))
 
 
@@ -1352,8 +1341,7 @@ def exit_on_served_values_error(fn: _F) -> _F:
     one names `da-tools guard`'s `--da-guard-binary` flag, which the tools
     using this decorator do not have.
 
-    `--json` (#3115): a tool that armed its envelope gets one on stdout,
-    `reason: served_values_unavailable`, `error` the `ERROR:` line."""
+    Nothing on stdout, `--json` or not (#3558: no envelope)."""
     @functools.wraps(fn)
     def _wrapped(*args: Any, **kwargs: Any) -> Any:
         try:
@@ -1368,7 +1356,7 @@ def print_load_error(exc: DaGuardNotFoundError | ParseFailedError | DaGuardError
     """The lines `exit_on_served_values_error` prints for `exc`, without the
     exit — for a tool that owes something more on that path: one `ERROR:`
     line, then da-guard's stderr, every non-empty line escaped and behind
-    `DA_GUARD_PREFIX`. Returns the `ERROR:` line (an envelope's `error`)."""
+    `DA_GUARD_PREFIX`. Returns the `ERROR:` line."""
     stream = sys.stderr if stream is None else stream
     if isinstance(exc, DaGuardNotFoundError):
         head, lines = _missing_binary_message(), []
@@ -1644,22 +1632,22 @@ def is_tenant_reserved_key(key: str) -> bool:
     return key.startswith(VALID_RESERVED_PREFIXES) and key not in TOP_LEVEL_READ_ELSEWHERE
 
 
-_CRITICAL = "_critical"
-
-
-def canonical_key(key: str, aliases: dict[str, str] | None) -> str:
-    """A threshold key in the exporter's canonical spelling: a retired base
-    key (also as `<base>_critical` / `<base>{...}`) through `aliases`
-    (`ServedTree.aliases`, the exporter's own table). Reserved keys and keys
-    not in the table are returned as they are."""
-    if not aliases or key.startswith("_"):
-        return key
-    base, brace, dims = key.partition("{")
-    if base in aliases:
-        return aliases[base] + brace + dims
-    if base.endswith(_CRITICAL) and base[:-len(_CRITICAL)] in aliases:
-        return aliases[base[:-len(_CRITICAL)]] + _CRITICAL + brace + dims
-    return key
+def key_spellings(keys: "Iterable[str]", binary: str | None = None,
+                  timeout: float = DEFAULT_TIMEOUT) -> "_lib_parse_tree.KeySpellings":
+    """Every #1231 spelling of each of *keys*, canonical first: one `da-guard
+    key-spellings` run (none for no keys). The exporter's rule, asked — no
+    Python copy of it (#3556). Raises DaGuardNotFoundError with no binary
+    and ServedValuesError for any other failure, so every caller's handler
+    for a failing da-guard applies (rc 2)."""
+    import _lib_parse_tree  # lazy: it imports modules that import this one
+    try:
+        return _lib_parse_tree.key_spellings(keys, binary=binary, timeout=timeout)
+    except _lib_parse_tree.ParseTreeError as e:
+        text = " ".join(str(e).split())
+        if isinstance(e, _lib_parse_tree.BinaryMissing):
+            raise DaGuardNotFoundError(text) from e
+        stale = "older than this tool" in text
+        raise ServedValuesError(text, None, "", stale=stale, broken=not stale) from e
 
 
 _EMPTY_FILL = ("", [], {}, None)

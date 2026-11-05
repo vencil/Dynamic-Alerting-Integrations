@@ -1,33 +1,33 @@
-"""One exit path for da-tools CLI tools (#3124, #3115).
+"""One exit path for da-tools CLI tools (#3124, #3558).
 
-Two contracts of ``scripts/tools/_lib_exitcodes.py``, both observable only at
-the end of a REAL interpreter (atexit, excepthook, the final stdout flush), so
-every behavioural case runs a subprocess:
+The contract of ``scripts/tools/_lib_exitcodes.py`` that is observable only
+at the end of a REAL interpreter (atexit, excepthook, the final stdout
+flush), so every behavioural case runs a subprocess:
 
-* **A reader that closed stdout early is not a crash (#3124).** ``tool |
-  head -c1``, ``tool | true``, a closed fd 1: whatever the tool was about to
-  exit with — 0, 1, a named caller error, a crash — the process used to end
-  at rc **120** (the interpreter's own "could not flush stdout" status, outside
-  the 0/1/2 contract), and a large write into a closed pipe was reported as
-  ``ERROR: unexpected internal error (BrokenPipeError)``. Now the process
-  ends at the CALLER-ERROR code (2) with one line,
-  ``ERROR: stdout was closed before all output was written``. A
-  ``BrokenPipeError`` that did NOT come from stdout (a socket) is still a
-  crash — the control case below.
+* **stdout that cannot take the output is a failure, never success.** A
+  reader that left (``tool | head -c1``, ``tool | true``), a full device, a
+  closed fd 1 (``>&-``, closed mid-run): whatever the tool was about to exit
+  with, the process ends non-zero — the caller-error code (2) — with one line
+  ``ERROR: cannot write to stdout: <reason>``; never 0, never the
+  interpreter's own 120 (#3124). Which line is printed when two things fail
+  at once is not part of the contract (dev-rules §13, known limits); the
+  exit code is.
 
-* **Every rc-2 exit of a ``--json`` tool prints one envelope (#3115).** A tool
-  that armed its envelope (``arm_crash_envelope``) and then leaves through a
-  caller-error exit — ``die_caller_error``, a shared ``exit_on_*`` decorator,
-  a raised ``CallerError``, or a hand-written ``sys.exit(2)`` reaching
-  ``_lib_exitcodes.run`` — gets exactly one ``{"status": "caller_error",
-  "reason": <named>, "error": <line>}`` document on stdout, unless it already
-  wrote its own. The per-tool recipes live in test_json_stdout_contract.py;
-  this file pins the mechanism and the AST gate that every armed tool enters
-  through ``_lib_exitcodes.run``.
+* **The library writes nothing to stdout but the tool's own Report**
+  (#3558). A caller error, a ``CallerError``, a hand-written ``sys.exit(2)``
+  and a crash all leave stdout empty — no envelope.
+
+* **Closed standard fds are filled at import** (#3558, ``sanitize_std_fds``):
+  ``>&-`` is then an ordinary failing write (rc 2), ``2>&-`` keeps a tool's
+  stderr line off stdout, and a later ``open()`` can never be handed fd 1.
+
+* **``Report(..., delivery="best_effort")``** (patch-config, #3558 P2): the
+  stdout line is printed, the tool's status is kept.
 """
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import shutil
@@ -42,15 +42,29 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "scripts" / "tools"
 OPS_DIR = TOOLS_DIR / "ops"
 
-STDOUT_CLOSED_LINE = "ERROR: stdout was closed before all output was written"
+# The stdout-failure line, up to its reason (EPIPE / ENOSPC / EBADF / …).
+STDOUT_CLOSED_LINE = "ERROR: cannot write to stdout:"
 CRASH_MARK = "unexpected internal error"
+
+
+def _said_and_failed(rc: int, err: str, where: str = "", code: int = 2) -> None:
+    """The new contract's floor for a delivery failure (#3558): the run
+    ends non-zero (*code*), never 0 or the interpreter's 120, and stderr
+    says something — the stdout line, or, where the failure surfaced as an
+    exception the library cannot tie to stdout, the crash line (which line
+    is a documented limit, dev-rules §13; the exit code is the contract)."""
+    where = where or err
+    assert rc == code, where
+    assert "Exception ignored" not in err, where
+    assert err.count(STDOUT_CLOSED_LINE) <= 1, where
+    assert STDOUT_CLOSED_LINE in err or CRASH_MARK in err, where
 
 # Run without PYTHONUNBUFFERED, as CI does: the 120 only appears when the
 # tool's own output is still sitting in the block buffer at exit.
 _ENV = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
 
 _PRELUDE = (
-    "import os, sys\n"
+    "import io, os, sys\n"
     "sys.path.insert(0, {tools!r})\n"
     "import _lib_exitcodes\n"
 )
@@ -149,26 +163,27 @@ def _run_closed(tmp_path: Path, body: str, closure: str,
 @pytest.mark.parametrize("entry", _ENTRIES)
 @pytest.mark.parametrize("closure", ["fd-closed", "reader-gone", "big-output-into-head"])
 @pytest.mark.parametrize("ending", sorted(_ENDINGS))
+@pytest.mark.real_crash_exit_code  # a crash line ends at the production crash code, 2
 def test_closed_stdout_ends_at_the_caller_error_code(tmp_path, ending, closure, entry,
                                                      buffering):
-    """Any ending × any way of losing stdout × either buffering ⇒ rc 2 and
-    the named line, never 120; and only a real crash prints the crash line.
+    """Any ending × any way of losing stdout × either buffering ⇒ rc 2,
+    never 0 or 120, and a line on stderr.
 
-    Where the write fails before the ending runs — the ``big-output-into-head``
-    column, and every column when unbuffered — every row is "a write to a
-    lost stdout raised" (BrokenPipeError, or EBADF on a closed fd), which
-    must not be reported as a crash either.
+    Where the reader left (``reader-gone``, ``big-output-into-head``) the
+    line is the named stdout line, exactly once, and a non-crash ending
+    prints no crash line. fd 1 closed mid-run with an unbuffered stdout
+    raises EBADF from the write itself, which the library does not tie to
+    stdout (#3558 drops the exception-chain tracing): reported as a crash,
+    still rc 2 — the documented "which line" limit.
     """
     rc, err = _run_closed(tmp_path, _body(_ENDINGS[ending], closure, entry), closure,
                           _BUFFERING[buffering])
     where = f"{ending} × {closure} × {entry} × {buffering}: rc={rc}\nstderr:\n{err[-1500:]}"
-    assert rc == 2, where
-    assert STDOUT_CLOSED_LINE in err, where
-    assert err.count(STDOUT_CLOSED_LINE) == 1, where
-    assert "Exception ignored" not in err, where
-    if ending != "crash" or closure == "big-output-into-head" or buffering == "unbuffered":
-        assert CRASH_MARK not in err, where
-        assert "Traceback" not in err, where
+    _said_and_failed(rc, err, where)
+    if closure != "fd-closed":
+        assert err.count(STDOUT_CLOSED_LINE) == 1, where
+        if ending != "crash":
+            assert CRASH_MARK not in err and "Traceback" not in err, where
 
 
 def test_closed_stdout_uses_the_caller_error_code_not_the_crash_code(tmp_path):
@@ -280,13 +295,13 @@ def test_set_caller_error_code_rejects_unusable_codes():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# #3115 — every caller-error exit of an armed tool prints one envelope
+# #3558 — the library writes nothing to stdout but the tool's own Report
 # ═══════════════════════════════════════════════════════════════════════════
-def _armed(body: str, build: str = "None", fields: str = "") -> str:
-    """A `--json` tool: arm, then *body* inside main, entered through run()."""
+def _armed(body: str) -> str:
+    """*body* inside main, entered through run() — the shape of every tool
+    (#3558: nothing is armed any more; the name is kept for the cases)."""
     indented = "".join("    " + line + "\n" for line in body.splitlines())
     return (f"def main():\n"
-            f"    _lib_exitcodes.arm_crash_envelope({build}{', ' if fields else ''}{fields})\n"
             f"{indented}"
             f"_lib_exitcodes.run(main)\n")
 
@@ -297,43 +312,17 @@ def _json_run(tmp_path: Path, body: str) -> tuple[int, str, str]:
             proc.stderr.decode("utf-8", "replace"))
 
 
-def test_hand_written_exit_2_gets_the_generic_envelope(tmp_path):
-    """`print(...stderr); sys.exit(2)` — no named reason, but the envelope
-    carries the line the tool printed (alert_quality --period bogus)."""
-    rc, out, err = _json_run(tmp_path, _armed(
-        "print(\"Error: invalid period 'bogus'\", file=sys.stderr)\nsys.exit(2)\n",
-        fields="tool='t'"))
-    assert rc == 2, err
-    assert json.loads(out) == {"tool": "t", "status": "caller_error",
-                               "reason": "caller_error",
-                               "error": "Error: invalid period 'bogus'"}
-
-
-def test_die_caller_error_names_its_reason(tmp_path):
-    rc, out, err = _json_run(tmp_path, _armed(
-        "_lib_exitcodes.die_caller_error('ERROR: cannot read x.yaml: bad', "
-        "reason='yaml_file_unreadable')\n",
-        build="lambda: {'total': 0, 'reason': 'zeroed'}"))
-    assert rc == 2, err
-    assert json.loads(out) == {"total": 0, "status": "caller_error",
-                               "reason": "yaml_file_unreadable",
-                               "error": "ERROR: cannot read x.yaml: bad"}
-    assert err.strip() == "ERROR: cannot read x.yaml: bad"
-
-
 @pytest.mark.parametrize("entry", ["run", "excepthook"])
 def test_raised_caller_error_is_not_a_crash(tmp_path, entry):
     """`raise CallerError(message, reason)`: rc 2, ONE stderr line, no
-    traceback, and the envelope names the reason — whether it reaches
-    run() or the module-level excepthook."""
+    traceback, and nothing on stdout — whether it reaches run() or the
+    module-level excepthook."""
     raise_it = "raise _lib_exitcodes.CallerError('prometheus unreachable', reason='prometheus_query_error')\n"
-    body = (_armed(raise_it) if entry == "run" else
-            "_lib_exitcodes.arm_crash_envelope()\n" + raise_it)
+    body = _armed(raise_it) if entry == "run" else raise_it
     rc, out, err = _json_run(tmp_path, body)
     assert rc == 2, err
     assert err.strip().splitlines() == ["ERROR: prometheus unreachable"], err
-    assert json.loads(out) == {"status": "caller_error", "reason": "prometheus_query_error",
-                               "error": "ERROR: prometheus unreachable"}
+    assert out == "", out
 
 
 def test_a_caller_error_subclass_carries_its_own_reason(tmp_path):
@@ -346,7 +335,7 @@ def test_a_caller_error_subclass_carries_its_own_reason(tmp_path):
     assert rc == 2, err
     assert CRASH_MARK not in err and "Traceback" not in err, err
     assert err.strip() == "ERROR: query failed: timeout"
-    assert json.loads(out)["reason"] == "prometheus_query_error"
+    assert out == "", out
 
 
 def test_caller_error_follows_the_caller_error_code(tmp_path):
@@ -357,38 +346,34 @@ def test_caller_error_follows_the_caller_error_code(tmp_path):
     assert out == ""
 
 
-def test_a_tools_own_document_is_not_doubled(tmp_path):
-    """The tool printed its own caller_error document and exits 2 without
-    disarming: nothing is added (patch_config's early exits)."""
-    rc, out, err = _json_run(tmp_path, _armed(
-        "print(json.dumps({'status': 'caller_error', 'reason': 'own'}))\nsys.exit(2)\n"
-        .replace("json.dumps", "__import__('json').dumps")))
-    assert rc == 2, err
-    assert json.loads(out) == {"status": "caller_error", "reason": "own"}
+# Every way a run ends without a Report. The library adds nothing to stdout
+# on any of them (#3558: no envelope) — the tool's stderr line, its code.
+_NO_REPORT_EXITS = {
+    "die_caller_error": ("_lib_exitcodes.die_caller_error('ERROR: x', reason='y')\n", 2, "ERROR: x"),
+    "exit_caller_error": ("print('ERROR: x', file=sys.stderr)\n"
+                          "_lib_exitcodes.exit_caller_error('ERROR: x', 'y')\n", 2, "ERROR: x"),
+    "CallerError": ("raise _lib_exitcodes.CallerError('x', reason='y')\n", 2, "ERROR: x"),
+    "hand-written": ("print('ERROR: x', file=sys.stderr)\nsys.exit(2)\n", 2, "ERROR: x"),
+    "returned-2": ("print('ERROR: x', file=sys.stderr)\nreturn 2\n", 2, "ERROR: x"),
+    "crash": ("raise RuntimeError('x')\n", 2, "ERROR: unexpected internal error (RuntimeError): x"),
+    "exit-0": ("sys.exit(0)\n", 0, ""),
+    "exit-1": ("return 1\n", 1, ""),
+    "exit-3": ("sys.exit(3)\n", 3, ""),
+}
 
 
+@pytest.mark.parametrize("how", sorted(_NO_REPORT_EXITS))
 @pytest.mark.real_crash_exit_code
-def test_a_crash_after_the_tools_own_document_adds_none(tmp_path):
-    rc, out, err = _json_run(tmp_path, _armed("print('{}')\nraise RuntimeError('late')\n"))
-    assert rc == 2, err
-    assert out == "{}\n"
-    assert CRASH_MARK in err
-
-
-def test_unarmed_exit_2_prints_nothing(tmp_path):
-    """Not --json: the stdout of a caller error stays empty."""
-    rc, out, err = _json_run(tmp_path, (
-        "def main():\n    _lib_exitcodes.die_caller_error('ERROR: x', reason='y')\n"
-        "_lib_exitcodes.run(main)\n"))
-    assert (rc, out, err.strip()) == (2, "", "ERROR: x")
-
-
-@pytest.mark.parametrize("code", ["0", "1", "3", "None"])
-def test_other_exit_codes_pass_through_without_an_envelope(tmp_path, code):
-    for how in (f"sys.exit({code})\n", f"return {code}\n"):
-        rc, out, err = _json_run(tmp_path, _armed(how))
-        assert rc == (0 if code == "None" else int(code)), (how, err)
-        assert out == "", how
+def test_no_report_means_an_empty_stdout(tmp_path, how):
+    """#3558: a run that hands back no Report leaves stdout byte-for-byte
+    empty — a caller error and a crash included — with the tool's line as
+    the last line of stderr and its code."""
+    body, code, line = _NO_REPORT_EXITS[how]
+    proc = _run(_script(tmp_path, _armed(body)))
+    err = proc.stderr.decode("utf-8", "replace")
+    assert proc.returncode == code, err
+    assert proc.stdout == b"", proc.stdout
+    assert (err.strip().splitlines() or [""])[-1] == line, err
 
 
 def test_run_returns_the_mains_value_as_the_exit_status(tmp_path):
@@ -396,93 +381,194 @@ def test_run_returns_the_mains_value_as_the_exit_status(tmp_path):
     assert (rc, out, err) == (2, "", "")
 
 
-def test_the_stdout_tap_changes_nothing_a_tool_can_see(tmp_path):
-    """Arming wraps stdout's write to notice the tool's own document; the
-    stream is the same object, its buffer, fileno and encoding unchanged,
-    and write still returns the count."""
-    rc, out, err = _json_run(tmp_path, (
-        "before = (sys.stdout, sys.stdout.buffer, sys.stdout.fileno(), sys.stdout.encoding)\n"
-        "_lib_exitcodes.arm_crash_envelope()\n"
-        "after = (sys.stdout, sys.stdout.buffer, sys.stdout.fileno(), sys.stdout.encoding)\n"
-        "assert before == after, (before, after)\n"
-        "n = sys.stdout.write('abc')\n"
-        "print(n, file=sys.stderr)\n"
-        "_lib_exitcodes.arm_crash_envelope()\n"   # arming twice taps once
-        "sys.stdout.write('d\\n')\n"))
-    assert (rc, out, err.strip()) == (0, "abcd\n", "3"), err
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # AST gate: every armed tool enters through _lib_exitcodes.run
 # ═══════════════════════════════════════════════════════════════════════════
-def _calls_arm(tree: ast.AST) -> bool:
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Call):
-            f = node.func
-            name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
-            if name == "arm_crash_envelope":
-                return True
-    return False
+
+
+def _is_main_test(node: ast.AST) -> bool:
+    """A comparison of `__name__` with "__main__" — either order, any
+    operator, anywhere in an expression (#3579 F1: the population is every
+    module that asks the question, not only the ones that ask it the
+    standard way)."""
+    if not isinstance(node, ast.Compare):
+        return False
+    parts = [node.left, *node.comparators]
+    return (any(isinstance(p, ast.Name) and p.id == "__name__" for p in parts)
+            and any(isinstance(p, ast.Constant) and p.value == "__main__" for p in parts))
 
 
 def _is_main_guard(node: ast.stmt) -> bool:
-    return (isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+    """The one standard shape: `if __name__ == "__main__":` with no else."""
+    return (isinstance(node, ast.If) and not node.orelse
+            and isinstance(node.test, ast.Compare)
             and isinstance(node.test.left, ast.Name) and node.test.left.id == "__name__"
+            and len(node.test.ops) == 1 and isinstance(node.test.ops[0], ast.Eq)
             and len(node.test.comparators) == 1
             and isinstance(node.test.comparators[0], ast.Constant)
             and node.test.comparators[0].value == "__main__")
 
 
-def _armed_tools() -> dict[str, ast.Module]:
-    out = {}
-    for d in (TOOLS_DIR, OPS_DIR):
-        for f in sorted(d.glob("*.py")):
-            if f.name == "_lib_exitcodes.py":
-                continue
-            tree = ast.parse(f.read_text(encoding="utf-8"), filename=str(f))
-            if _calls_arm(tree):
-                out[str(f.relative_to(REPO_ROOT))] = tree
-    return out
+def _module_scope(tree: ast.Module):
+    """Every node evaluated when the module runs: function and lambda bodies
+    are left out (they run when called); decorators, defaults and class
+    bodies are kept (they run at import)."""
+    stack: list[ast.AST] = list(tree.body)
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            if not isinstance(node, ast.Lambda):
+                stack.extend(node.decorator_list)
+            stack.extend(node.args.defaults)
+            stack.extend(d for d in node.args.kw_defaults if d is not None)
+        else:
+            stack.extend(ast.iter_child_nodes(node))
 
 
-def _guard_problem(tree: ast.Module) -> str | None:
+def _bindings(tree: ast.Module, name: str) -> list[ast.AST]:
+    """Every statement or name that binds *name* in the module's namespace,
+    in source order. `import *` and `global <name>` count: either can put
+    something else under the name."""
+    out: list[ast.AST] = []
+    for node in _module_scope(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == name:
+                out.append(node)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            if any(a.name == "*" or (a.asname or a.name.split(".")[0]) == name
+                   for a in node.names):
+                out.append(node)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            if node.id == name:
+                out.append(node)
+    out += [n for n in ast.walk(tree)
+            if isinstance(n, (ast.Global, ast.Nonlocal)) and name in n.names]
+    return sorted(out, key=lambda n: (n.lineno, n.col_offset))
+
+
+#: The decorators the run() tools put on their entry (26 of 97 measured on
+#: 2026-11-05): each turns one library error into rc 2 and forwards
+#: `*args, **kwargs` to the def, so run()'s no-argument call reaches it
+#: unchanged — test_the_allowed_entry_decorators_forward_a_bare_call runs
+#: each. Matched by the last name of a dotted reference; `session()` is
+#: `_lib_parse_cache.session()`, a context manager used as a decorator.
+_ENTRY_DECORATORS = frozenset({
+    "exit_on_yaml_file_error", "exit_on_output_write_error", "exit_on_served_values_error",
+    "exit_on_parse_tree_error", "exit_on_observed_map_error",
+})
+
+
+def _dotted(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute) and (head := _dotted(node.value)):
+        return f"{head}.{node.attr}"
+    return None
+
+
+def _is_allowed_entry_decorator(deco: ast.expr) -> bool:
+    if isinstance(deco, ast.Call):
+        return (not deco.args and not deco.keywords
+                and _dotted(deco.func) == "_lib_parse_cache.session")
+    name = _dotted(deco)
+    return name is not None and name.rsplit(".", 1)[-1] in _ENTRY_DECORATORS
+
+
+def _is_plain_lib_import(node: ast.AST) -> bool:
+    return (isinstance(node, ast.Import) and len(node.names) == 1
+            and node.names[0].name == "_lib_exitcodes" and node.names[0].asname is None)
+
+
+def _entry_signature_fault(fn: ast.FunctionDef) -> str | None:
+    """`run()` calls the entry with no arguments (#3579): a parameter without
+    a default is a TypeError on the first run, and a ``main(argv)`` whose
+    argv is required cannot be reached through run() at all."""
+    a = fn.args
+    positional = a.posonlyargs + a.args
+    required = [p.arg for p in positional[:len(positional) - len(a.defaults)]]
+    required += [k.arg for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is None]
+    if required:
+        return (f"`{fn.name}` takes {', '.join(required)} without a default, but "
+                "run() calls it with no arguments — give every parameter a default, "
+                "or hand run() a no-argument wrapper")
+    return None
+
+
+def _guard_fault(tree: ast.Module) -> tuple[int, str] | None:
+    """(line, why) when the module does not enter through
+    `_lib_exitcodes.run(<entry>)` and only through it, else None (#3579).
+
+    The shape that passes, and nothing looser:
+
+    * exactly one module-level `if __name__ == "__main__":` (no else), and no
+      other test of `__name__` against "__main__" anywhere in the module;
+    * its body is `_lib_exitcodes.run(<entry>)`, optionally preceded by
+      `import _lib_exitcodes` — the two shapes the run() tools use (94 / 3
+      of 97 measured on 2026-11-05);
+    * `_lib_exitcodes` is bound only by plain `import _lib_exitcodes`;
+    * `<entry>` is bound once, by a module-level `def` decorated only with
+      _ENTRY_DECORATORS, whose every parameter has a default, and is not
+      called at module scope.
+
+    ⚠️ Not seen: rebinding through `globals()` / `setattr` on the module, a
+    `sys.modules` entry planted before the import, or a module that defines
+    its own function under an _ENTRY_DECORATORS name (one does, as a no-op
+    fallback: generate_rule_pack_split.py)."""
     guards = [n for n in tree.body if _is_main_guard(n)]
-    if len(guards) != 1:
-        return f"expected one `if __name__ == \"__main__\":` guard, found {len(guards)}"
-    last = guards[0].body[-1]
+    tests = [n for n in ast.walk(tree) if _is_main_test(n)]
+    if len(guards) != 1 or len(tests) != 1:
+        stray = [t for t in tests if not guards or t is not guards[0].test]
+        line = stray[0].lineno if stray else 1
+        return line, ("expected exactly one module-level `if __name__ == \"__main__\":` "
+                      "and no other test of `__name__` against \"__main__\"; found "
+                      f"{len(guards)} guard(s) and {len(tests)} test(s)")
+    *before, last = guards[0].body
+    if before and not (len(before) == 1 and _is_plain_lib_import(before[0])):
+        stmt = before[-1] if len(before) == 1 else before[0]
+        return stmt.lineno, ("the guard holds only `_lib_exitcodes.run(<entry>)`, optionally "
+                             f"after `import _lib_exitcodes`; got `{ast.unparse(stmt)}`")
     call = last.value if isinstance(last, ast.Expr) else None
     if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
             and call.func.attr == "run" and isinstance(call.func.value, ast.Name)
             and call.func.value.id == "_lib_exitcodes"
             and len(call.args) == 1 and isinstance(call.args[0], ast.Name)
             and not call.keywords):
-        return f"the guard must end with `_lib_exitcodes.run(<entry>)`, got `{ast.unparse(last)}`"
+        return (last.lineno,
+                f"the guard must end with `_lib_exitcodes.run(<entry>)`, got `{ast.unparse(last)}`")
+    lib = _bindings(tree, "_lib_exitcodes")
+    if not lib:
+        return last.lineno, "`_lib_exitcodes` is never imported"
+    for node in lib:
+        if not _is_plain_lib_import(node):
+            return node.lineno, ("`_lib_exitcodes` must be bound only by "
+                                 f"`import _lib_exitcodes`, got `{ast.unparse(node).splitlines()[0]}`")
     entry = call.args[0].id
-    defined = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
-    if entry not in defined:
-        return f"`{entry}` is not a module-level function"
-    for stmt in guards[0].body[:-1]:
-        for node in ast.walk(stmt):
-            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == entry:
-                return f"`{entry}` is also called outside run(): `{ast.unparse(stmt)}`"
+    binds = _bindings(tree, entry)
+    if len(binds) != 1 or not isinstance(binds[0], ast.FunctionDef) or binds[0] not in tree.body:
+        odd = next((b for b in binds if not (isinstance(b, ast.FunctionDef) and b in tree.body)),
+                   binds[1] if len(binds) > 1 else None)
+        line = odd.lineno if odd is not None else last.lineno
+        got = ast.unparse(odd).splitlines()[0] if odd is not None else "no definition"
+        return line, (f"`{entry}` must be bound once, by one module-level `def`; "
+                      f"found {len(binds)} binding(s), e.g. `{got}`")
+    fn = binds[0]
+    for deco in fn.decorator_list:
+        if not _is_allowed_entry_decorator(deco):
+            return deco.lineno, (f"`{entry}` is decorated with `{ast.unparse(deco)}`, which is "
+                                 "not one of the decorators known to forward run()'s no-argument "
+                                 "call (_ENTRY_DECORATORS)")
+    for node in _module_scope(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == entry:
+            return node.lineno, f"`{entry}` is also called outside run(): `{ast.unparse(node)}`"
+    if why := _entry_signature_fault(fn):
+        return fn.lineno, why
     return None
 
 
-def test_every_armed_tool_enters_through_run():
-    """A `--json` tool that arms its envelope must reach `_lib_exitcodes.run`:
-    that is where a hand-written `sys.exit(2)` gets its envelope and where a
-    `CallerError` stops being a crash. Without it the tool would print
-    nothing on those paths and only a recipe for that exact path would see."""
-    tools = _armed_tools()
-    # anti-vacuity: the population is the --json tools, both directories
-    assert "scripts/tools/validate_all.py" in tools
-    assert "scripts/tools/ops/alert_quality.py" in tools
-    # 39 since migration-audit was deleted (#3419). Not derived from
-    # test_json_stdout_contract.JSON_TOOLS: that set is "declares a --json
-    # flag", this one "arms the envelope" — equal today, not by definition.
-    assert len(tools) >= 39, sorted(tools)
-    bad = {path: why for path, tree in tools.items() if (why := _guard_problem(tree))}
-    assert not bad, "\n".join(f"{p}: {w}" for p, w in sorted(bad.items()))
+def _guard_problem(tree: ast.Module) -> str | None:
+    fault = _guard_fault(tree)
+    return None if fault is None else f"line {fault[0]}: {fault[1]}"
 
 
 def _da_tools_scripts() -> dict[str, Path]:
@@ -531,56 +617,665 @@ def test_guard_predicate_on_known_shapes(src, ok):
     assert (_guard_problem(tree) is None) is ok, _guard_problem(tree)
 
 
+@pytest.mark.parametrize("sig, ok", [
+    ("def main():", True),
+    ("def main(argv=None):", True),
+    ("def main(argv: list[str] | None = None, *, lang='en'):", True),
+    ("def main(*args, **kwargs):", True),
+    ("def main(argv):", False),
+    ("def main(argv, /, x=1):", False),
+    ("def main(argv=None, *, lang):", False),
+])
+def test_entry_signature_on_known_shapes(sig, ok):
+    """#3579: run() calls the entry with no arguments, so every parameter
+    needs a default. The fault names the def's own line."""
+    src = ("import _lib_exitcodes\n" + sig + "\n    pass\n"
+           "if __name__ == '__main__':\n    _lib_exitcodes.run(main)\n")
+    fault = _guard_fault(ast.parse(src))
+    assert (fault is None) is ok, fault
+    if not ok:
+        assert fault[0] == 2, fault
+
+
+_OK_TOOL = ("import sys\nimport _lib_exitcodes\n"
+            "def main(argv=None):\n    return 0\n"
+            "if __name__ == '__main__':\n    _lib_exitcodes.run(main)\n")
+_GUARD = "if __name__ == '__main__':\n    _lib_exitcodes.run(main)\n"
+
+
+def _shape(old: str, new: str) -> str:
+    assert _OK_TOOL.count(old) == 1, old
+    return _OK_TOOL.replace(old, new)
+
+
+@pytest.mark.parametrize("src", [
+    _OK_TOOL,
+    _shape("import _lib_exitcodes\n", "").replace(
+        "':\n", "':\n    import _lib_exitcodes\n"),
+    _OK_TOOL.replace("':\n", "':\n    import _lib_exitcodes\n"),
+    _shape("def main(argv=None):",
+           "@exit_on_yaml_file_error\n@_lib_parse_cache.session()\n"
+           "@recommend.observed_map_lib.exit_on_observed_map_error\ndef main(argv=None):"),
+], ids=["module-import", "guard-import", "both-imports", "allowed-decorators"])
+def test_the_shapes_the_run_tools_use_pass(src):
+    assert _guard_fault(ast.parse(src)) is None
+
+
+def test_the_allowed_entry_decorators_forward_a_bare_call():
+    """Each name in _ENTRY_DECORATORS, taken from the library the tools take
+    it from, leaves a no-argument call reaching the def: what run() does."""
+    import _lib_io
+    import _lib_parse_cache
+    import _lib_tenant_values
+    import _observed_map_lib  # noqa: E402  (scripts/tools/ops, path set by conftest.py)
+    found = {
+        "exit_on_yaml_file_error": _lib_io.exit_on_yaml_file_error,
+        "exit_on_output_write_error": _lib_io.exit_on_output_write_error,
+        "exit_on_served_values_error": _lib_tenant_values.exit_on_served_values_error,
+        "exit_on_parse_tree_error": _lib_parse_cache.exit_on_parse_tree_error,
+        "exit_on_observed_map_error": _observed_map_lib.exit_on_observed_map_error,
+    }
+    assert set(found) == _ENTRY_DECORATORS
+
+    def entry(argv=None, *, lang="en"):
+        return (argv, lang)
+
+    for name, deco in found.items():
+        assert deco(entry)() == (None, "en"), name
+    assert _lib_parse_cache.session()(entry)() == (None, "en")
+
+
+@pytest.mark.parametrize("src, line", [
+    (_shape(_GUARD, "if '__main__' == __name__:\n    _lib_exitcodes.run(main)\n"), 5),
+    (_shape("== '__main__':", "== '__main__' and sys.argv:"), 5),
+    (_shape(_GUARD, "try:\n    " + _GUARD.replace("\n    ", "\n        ") + "except Exception:\n"
+                    "    pass\n"), 6),
+    (_shape(_GUARD, _GUARD + "else:\n    pass\n"), 5),
+    (_shape("== '__main__'", "!= '__main__'"), 5),
+    (_shape("import sys\n", "import sys\n_X = __name__ == '__main__'\n"), 2),
+    (_shape("':\n", "':\n    sys.exit(other())\n"), 6),
+    (_shape(_GUARD, "main()\n" + _GUARD), 5),
+    (_shape("def main(argv=None):", "def helper(x=main()):\n    pass\ndef main(argv=None):"), 3),
+    (_shape("import _lib_exitcodes\n",
+            "class _lib_exitcodes:\n    run = staticmethod(lambda f: f())\n"), 2),
+    (_shape("import _lib_exitcodes\n", "import _lib_exitcodes\n_lib_exitcodes = object()\n"),
+     3),
+    (_shape("import _lib_exitcodes\n", "import os as _lib_exitcodes\n"), 2),
+    (_shape("import _lib_exitcodes\n", "from os import *\nimport _lib_exitcodes\n"), 2),
+    (_shape("import _lib_exitcodes\n", ""), 5),
+    (_shape(_GUARD, "main = lambda: 1\n" + _GUARD), 5),
+    (_shape(_GUARD, "def main():\n    return 1\n" + _GUARD), 5),
+    (_shape("def main(argv=None):", "@wrap\ndef main(argv=None):"), 3),
+    (_shape("def main(argv=None):", "@exit_on_yaml_file_error\n@wrap(1)\ndef main(argv=None):"),
+     4),
+    (_shape("def main(argv=None):", "async def main(argv=None):"), 3),
+    (_shape(_GUARD, "def f():\n    global main\n    main = 1\n" + _GUARD), 6),
+    (_shape("    _lib_exitcodes.run(main)\n",
+            "    from _lib_exitcodes import run as r\n    r(main)\n"), 6),
+    (_shape("    _lib_exitcodes.run(main)\n", "    _lib_exitcodes.run(lambda: main())\n"), 6),
+], ids=["reversed-guard", "and-guard", "guard-in-try", "guard-with-else", "ne-guard",
+        "stray-test", "call-before-run", "module-level-call", "call-in-default",
+        "class-named-lib", "lib-reassigned", "lib-alias", "star-import", "lib-not-imported",
+        "entry-rebound", "entry-redefined", "entry-decorated", "entry-decorated-twice",
+        "entry-async",
+        "entry-global-rebind", "run-alias", "run-lambda"])
+def test_ways_around_run_are_faults(src, line):
+    """#3579 F1/F2: each shape reaches the entry some other way than through
+    `_lib_exitcodes.run`, or hands run() something other than the `def`
+    the source shows. Each is a fault, on the line that carries it."""
+    fault = _guard_fault(ast.parse(src))
+    assert fault is not None and fault[0] == line, (fault, src)
+
+
+# ── #3579: every `__main__` under the tool trees, not only da-tools ─────────
+
+#: The trees whose modules must enter through run() (#3579, owner
+#: 2026-11-05). Repo-relative POSIX prefixes.
+GATED_TREES = ("scripts/tools/", "scripts/ops/", "scripts/dx/", "scripts/session-guards/")
+
+#: ⛔ Frozen: the entries that did not go through run() when the gate widened
+#: (#3579, 2026-11-05). Never edited — its digest is pinned in
+#: test_the_baseline_is_frozen, so an entry can neither be added nor swapped
+#: for another. A tool that migrates joins MIGRATED instead.
+BASELINE: frozenset[str] = frozenset({
+    "scripts/dx/generate_adr_index.py",
+    "scripts/dx/generate_planning_index.py",
+    "scripts/ops/add_t_parallel.py",
+    "scripts/ops/audit_rules_drift.py",
+    "scripts/ops/bench_synth_tenants.py",
+    "scripts/ops/check_image_refs_resolve.py",
+    "scripts/ops/ci_flake_retry.py",
+    "scripts/ops/commit_helper.py",
+    "scripts/ops/configmap_assemble.py",
+    "scripts/ops/dx_run.py",
+    "scripts/ops/file_race_report.py",
+    "scripts/ops/fuse_plumbing_commit.py",
+    "scripts/ops/go_test_reads.py",
+    "scripts/ops/guard_defaults_scopes.py",
+    "scripts/ops/inject_default_key.py",
+    "scripts/ops/parse_go_test_json.py",
+    "scripts/ops/plan_race_shards.py",
+    "scripts/ops/route_metrics_through_field.py",
+    "scripts/ops/use_get_metrics.py",
+    "scripts/session-guards/paths_map.py",
+    "scripts/session-guards/preflight_bash.py",
+    "scripts/session-guards/session-init.py",
+    "scripts/session-guards/skill_usage.py",
+    "scripts/session-guards/stop_evidence.py",
+    "scripts/session-guards/vscode_git_toggle.py",
+    "scripts/tools/dx/add_frontmatter.py",
+    "scripts/tools/dx/analyze_bench_history.py",
+    "scripts/tools/dx/analyze_probe.py",
+    "scripts/tools/dx/axe_lite_static.py",
+    "scripts/tools/dx/bench_verdict.py",
+    "scripts/tools/dx/bump_docs.py",
+    "scripts/tools/dx/bump_playbook_versions.py",
+    "scripts/tools/dx/check_aria_references.py",
+    "scripts/tools/dx/compile_custom_alerts.py",
+    "scripts/tools/dx/converge_status.py",
+    "scripts/tools/dx/describe_tenant.py",
+    "scripts/tools/dx/gen_agent_adapters.py",
+    "scripts/tools/dx/gen_am_duration_json.py",
+    "scripts/tools/dx/gen_recipe_contract.py",
+    "scripts/tools/dx/gen_tenant_id_json.py",
+    "scripts/tools/dx/generate_alert_reference.py",
+    "scripts/tools/dx/generate_byo_rulepack_table.py",
+    "scripts/tools/dx/generate_changelog.py",
+    "scripts/tools/dx/generate_crd_schemas.py",
+    "scripts/tools/dx/generate_doc_map.py",
+    "scripts/tools/dx/generate_nav.py",
+    "scripts/tools/dx/generate_rule_pack_readme.py",
+    "scripts/tools/dx/generate_rulepack_configmaps.py",
+    "scripts/tools/dx/generate_tenant_fixture.py",
+    "scripts/tools/dx/generate_tool_map.py",
+    "scripts/tools/dx/measure_judgement_budget.py",
+    "scripts/tools/dx/migrate_conf_d.py",
+    "scripts/tools/dx/migrate_ssot_language.py",
+    "scripts/tools/dx/pair_bench_ratio.py",
+    "scripts/tools/dx/paired_trend_watch.py",
+    "scripts/tools/dx/pr_preflight.py",
+    "scripts/tools/dx/render_soak_diff.py",
+    "scripts/tools/dx/reword_chain.py",
+    "scripts/tools/dx/run_chaos_soak.py",
+    "scripts/tools/dx/scaffold_lint.py",
+    "scripts/tools/dx/suggest_related.py",
+    "scripts/tools/dx/sync_glossary_abbr.py",
+    "scripts/tools/dx/sync_schema.py",
+    "scripts/tools/dx/sync_tool_registry.py",
+    "scripts/tools/lint/check_account_registry_monotonic.py",
+    "scripts/tools/lint/check_ad_hoc_git_scripts.py",
+    "scripts/tools/lint/check_admin_config_schema.py",
+    "scripts/tools/lint/check_bat_ascii_purity.py",
+    "scripts/tools/lint/check_bilingual_annotations.py",
+    "scripts/tools/lint/check_changelog_no_tbd.py",
+    "scripts/tools/lint/check_chart_package_contents.py",
+    "scripts/tools/lint/check_chart_pull_surface.py",
+    "scripts/tools/lint/check_chart_ship_surface.py",
+    "scripts/tools/lint/check_codename_gate.py",
+    "scripts/tools/lint/check_codename_leak.py",
+    "scripts/tools/lint/check_confd_schema.py",
+    "scripts/tools/lint/check_configmap_mount_completeness.py",
+    "scripts/tools/lint/check_cross_ns_url_consistency.py",
+    "scripts/tools/lint/check_design_token_usage.py",
+    "scripts/tools/lint/check_dev_bypass_manifest.py",
+    "scripts/tools/lint/check_dev_rules_enforcement.py",
+    "scripts/tools/lint/check_devrules_size.py",
+    "scripts/tools/lint/check_dist_source_consistency.py",
+    "scripts/tools/lint/check_doc_links.py",
+    "scripts/tools/lint/check_env_bool_parsers.py",
+    "scripts/tools/lint/check_flaky_registry.py",
+    "scripts/tools/lint/check_go_fmt.py",
+    "scripts/tools/lint/check_ha_threshold_aggregation.py",
+    "scripts/tools/lint/check_hardcode_tenant.py",
+    "scripts/tools/lint/check_head_blob_hygiene.py",
+    "scripts/tools/lint/check_helm_values_secrets.py",
+    "scripts/tools/lint/check_hub_badge_drift.py",
+    "scripts/tools/lint/check_iac_helm.py",
+    "scripts/tools/lint/check_iac_vibe_rules.py",
+    "scripts/tools/lint/check_image_pin_capability.py",
+    "scripts/tools/lint/check_includes_sync.py",
+    "scripts/tools/lint/check_init_chart_pin_published.py",
+    "scripts/tools/lint/check_jsx_loader_compat.py",
+    "scripts/tools/lint/check_k8s_manifests.py",
+    "scripts/tools/lint/check_ksm_version_allowlist.py",
+    "scripts/tools/lint/check_leftouterjoin_enrichment.py",
+    "scripts/tools/lint/check_lint_toolchain_fit.py",
+    "scripts/tools/lint/check_maintenance_symmetry.py",
+    "scripts/tools/lint/check_md_yaml_drift.py",
+    "scripts/tools/lint/check_metric_group_pairs.py",
+    "scripts/tools/lint/check_open_encoding.py",
+    "scripts/tools/lint/check_orphan_docs.py",
+    "scripts/tools/lint/check_orphan_lint.py",
+    "scripts/tools/lint/check_orphan_recordings.py",
+    "scripts/tools/lint/check_path_metadata_consistency.py",
+    "scripts/tools/lint/check_pint.py",
+    "scripts/tools/lint/check_planning_status_sync.py",
+    "scripts/tools/lint/check_playbook_freshness.py",
+    "scripts/tools/lint/check_playwright_rtl_drift.py",
+    "scripts/tools/lint/check_portal_asset_shipping.py",
+    "scripts/tools/lint/check_portal_audience_enum.py",
+    "scripts/tools/lint/check_pr_scope_drift.py",
+    "scripts/tools/lint/check_repo_name.py",
+    "scripts/tools/lint/check_routing_profiles.py",
+    "scripts/tools/lint/check_scrape_reachability.py",
+    "scripts/tools/lint/check_session_guard_liveness.py",
+    "scripts/tools/lint/check_single_writer_invariant.py",
+    "scripts/tools/lint/check_skip_a11y_justification.py",
+    "scripts/tools/lint/check_structure.py",
+    "scripts/tools/lint/check_subprocess_timeout.py",
+    "scripts/tools/lint/check_threshold_observed_map.py",
+    "scripts/tools/lint/check_threshold_reachability.py",
+    "scripts/tools/lint/check_threshold_registry.py",
+    "scripts/tools/lint/check_tool_registry_jsx_parity.py",
+    "scripts/tools/lint/check_undefined_tokens.py",
+    "scripts/tools/lint/check_unpinned_deps.py",
+    "scripts/tools/lint/check_vmalert_coverage.py",
+    "scripts/tools/lint/check_window_x_no_fallback.py",
+    "scripts/tools/lint/check_workflow_git_push_permissions.py",
+    "scripts/tools/lint/check_workload_closure_drift.py",
+    "scripts/tools/lint/detect_sed_damage.py",
+    "scripts/tools/lint/fix_file_hygiene.py",
+    "scripts/tools/lint/lint_html_doc_links.py",
+    "scripts/tools/lint/lint_jsx_babel.py",
+    "scripts/tools/lint/trufflehog_to_sarif.py",
+    "scripts/tools/lint/validate_mermaid.py",
+    "scripts/tools/lint/validate_planning_session_row.py",
+    "scripts/tools/ops/_federation_revocation_reconciler.py",
+    "scripts/tools/ops/da_assembler.py",
+    "scripts/tools/ops/generate_tenant_mapping_rules.py",
+    "scripts/tools/ops/inject_metadata_join.py",
+})
+
+#: BASELINE entries that enter through run() now (or are gone). Add a line
+#: when a tool migrates, and lower the count in
+#: test_the_pending_entries_are_a_pinned_ceiling with it.
+MIGRATED: frozenset[str] = frozenset({
+    # #3579 PR2: scripts/tools/lint/, already importing _lib_exitcodes (exit codes unchanged)
+    "scripts/tools/lint/check_account_registry_monotonic.py",
+    "scripts/tools/lint/check_ad_hoc_git_scripts.py",
+    "scripts/tools/lint/check_admin_config_schema.py",
+    "scripts/tools/lint/check_bat_ascii_purity.py",
+    "scripts/tools/lint/check_bilingual_annotations.py",
+    "scripts/tools/lint/check_changelog_no_tbd.py",
+    "scripts/tools/lint/check_chart_package_contents.py",
+    "scripts/tools/lint/check_chart_pull_surface.py",
+    "scripts/tools/lint/check_chart_ship_surface.py",
+    "scripts/tools/lint/check_codename_gate.py",
+    "scripts/tools/lint/check_codename_leak.py",
+    "scripts/tools/lint/check_confd_schema.py",
+    "scripts/tools/lint/check_configmap_mount_completeness.py",
+    "scripts/tools/lint/check_cross_ns_url_consistency.py",
+    "scripts/tools/lint/check_design_token_usage.py",
+    "scripts/tools/lint/check_dev_bypass_manifest.py",
+    "scripts/tools/lint/check_dev_rules_enforcement.py",
+    "scripts/tools/lint/check_devrules_size.py",
+    "scripts/tools/lint/check_dist_source_consistency.py",
+    "scripts/tools/lint/check_doc_links.py",
+    "scripts/tools/lint/check_env_bool_parsers.py",
+    "scripts/tools/lint/check_flaky_registry.py",
+    "scripts/tools/lint/check_go_fmt.py",
+    "scripts/tools/lint/check_ha_threshold_aggregation.py",
+    "scripts/tools/lint/check_hardcode_tenant.py",
+    "scripts/tools/lint/check_head_blob_hygiene.py",
+    "scripts/tools/lint/check_helm_values_secrets.py",
+    "scripts/tools/lint/check_hub_badge_drift.py",
+    "scripts/tools/lint/check_iac_helm.py",
+    "scripts/tools/lint/check_iac_vibe_rules.py",
+    "scripts/tools/lint/check_image_pin_capability.py",
+    "scripts/tools/lint/check_includes_sync.py",
+    "scripts/tools/lint/check_init_chart_pin_published.py",
+    "scripts/tools/lint/check_jsx_loader_compat.py",
+    "scripts/tools/lint/check_k8s_manifests.py",
+    "scripts/tools/lint/check_ksm_version_allowlist.py",
+    "scripts/tools/lint/check_leftouterjoin_enrichment.py",
+    "scripts/tools/lint/check_lint_toolchain_fit.py",
+    "scripts/tools/lint/check_md_yaml_drift.py",
+    "scripts/tools/lint/check_metric_group_pairs.py",
+    "scripts/tools/lint/check_open_encoding.py",
+    "scripts/tools/lint/check_orphan_docs.py",
+    "scripts/tools/lint/check_orphan_lint.py",
+    "scripts/tools/lint/check_orphan_recordings.py",
+    "scripts/tools/lint/check_path_metadata_consistency.py",
+    "scripts/tools/lint/check_pint.py",
+    "scripts/tools/lint/check_planning_status_sync.py",
+    "scripts/tools/lint/check_playbook_freshness.py",
+    "scripts/tools/lint/check_playwright_rtl_drift.py",
+    "scripts/tools/lint/check_portal_asset_shipping.py",
+    "scripts/tools/lint/check_portal_audience_enum.py",
+    "scripts/tools/lint/check_pr_scope_drift.py",
+    "scripts/tools/lint/check_repo_name.py",
+    "scripts/tools/lint/check_routing_profiles.py",
+    "scripts/tools/lint/check_scrape_reachability.py",
+    "scripts/tools/lint/check_session_guard_liveness.py",
+    "scripts/tools/lint/check_single_writer_invariant.py",
+    "scripts/tools/lint/check_skip_a11y_justification.py",
+    "scripts/tools/lint/check_subprocess_timeout.py",
+    "scripts/tools/lint/check_threshold_observed_map.py",
+    "scripts/tools/lint/check_threshold_reachability.py",
+    "scripts/tools/lint/check_threshold_registry.py",
+    "scripts/tools/lint/check_tool_registry_jsx_parity.py",
+    "scripts/tools/lint/check_undefined_tokens.py",
+    "scripts/tools/lint/check_unpinned_deps.py",
+    "scripts/tools/lint/check_window_x_no_fallback.py",
+    "scripts/tools/lint/check_workflow_git_push_permissions.py",
+    "scripts/tools/lint/check_workload_closure_drift.py",
+    "scripts/tools/lint/detect_sed_damage.py",
+    "scripts/tools/lint/fix_file_hygiene.py",
+    "scripts/tools/lint/lint_html_doc_links.py",
+    "scripts/tools/lint/lint_jsx_babel.py",
+    "scripts/tools/lint/trufflehog_to_sarif.py",
+    "scripts/tools/lint/validate_mermaid.py",
+    "scripts/tools/lint/validate_planning_session_row.py",
+    # #3579 PR3: dx / ops / scripts-ops / scripts-dx, already importing _lib_exitcodes
+    # (directly, or through a _lib_* it imports) — exit codes unchanged
+    "scripts/dx/generate_adr_index.py",
+    "scripts/dx/generate_planning_index.py",
+    "scripts/ops/audit_rules_drift.py",
+    "scripts/ops/bench_synth_tenants.py",
+    "scripts/ops/configmap_assemble.py",
+    "scripts/tools/dx/add_frontmatter.py",
+    "scripts/tools/dx/analyze_bench_history.py",
+    "scripts/tools/dx/axe_lite_static.py",
+    "scripts/tools/dx/bump_docs.py",
+    "scripts/tools/dx/bump_playbook_versions.py",
+    "scripts/tools/dx/check_aria_references.py",
+    "scripts/tools/dx/compile_custom_alerts.py",
+    "scripts/tools/dx/converge_status.py",
+    "scripts/tools/dx/describe_tenant.py",
+    "scripts/tools/dx/gen_agent_adapters.py",
+    "scripts/tools/dx/gen_recipe_contract.py",
+    "scripts/tools/dx/generate_alert_reference.py",
+    "scripts/tools/dx/generate_byo_rulepack_table.py",
+    "scripts/tools/dx/generate_changelog.py",
+    "scripts/tools/dx/generate_crd_schemas.py",
+    "scripts/tools/dx/generate_doc_map.py",
+    "scripts/tools/dx/generate_nav.py",
+    "scripts/tools/dx/generate_rule_pack_readme.py",
+    "scripts/tools/dx/generate_rulepack_configmaps.py",
+    "scripts/tools/dx/generate_tenant_fixture.py",
+    "scripts/tools/dx/generate_tool_map.py",
+    "scripts/tools/dx/measure_judgement_budget.py",
+    "scripts/tools/dx/migrate_conf_d.py",
+    "scripts/tools/dx/migrate_ssot_language.py",
+    "scripts/tools/dx/pair_bench_ratio.py",
+    "scripts/tools/dx/paired_trend_watch.py",
+    "scripts/tools/dx/pr_preflight.py",
+    "scripts/tools/dx/render_soak_diff.py",
+    "scripts/tools/dx/reword_chain.py",
+    "scripts/tools/dx/run_chaos_soak.py",
+    "scripts/tools/dx/scaffold_lint.py",
+    "scripts/tools/dx/suggest_related.py",
+    "scripts/tools/dx/sync_glossary_abbr.py",
+    "scripts/tools/dx/sync_schema.py",
+    "scripts/tools/dx/sync_tool_registry.py",
+    "scripts/tools/ops/da_assembler.py",
+    "scripts/tools/ops/generate_tenant_mapping_rules.py",
+    "scripts/tools/ops/inject_metadata_join.py",
+    # #3579 PR4: the rest of scripts/tools/ (no _lib_exitcodes before) — a crash 1→2,
+    # a failed stdout write 120→2, `>&-` 0→2 (owner-approved rule, #3579)
+    "scripts/tools/dx/analyze_probe.py",
+    "scripts/tools/dx/bench_verdict.py",
+    "scripts/tools/dx/gen_am_duration_json.py",
+    "scripts/tools/dx/gen_tenant_id_json.py",
+    "scripts/tools/lint/check_maintenance_symmetry.py",
+    "scripts/tools/lint/check_structure.py",
+    "scripts/tools/lint/check_vmalert_coverage.py",
+    "scripts/tools/ops/_federation_revocation_reconciler.py",
+    # #3579 PR5: scripts/ops/ (scripts/tools/ appended to sys.path) — a crash 1→2,
+    # a failed stdout write 120→2, `>&-` 0→2 (owner-approved rule, #3579)
+    "scripts/ops/add_t_parallel.py",
+    "scripts/ops/check_image_refs_resolve.py",
+    "scripts/ops/ci_flake_retry.py",
+    "scripts/ops/commit_helper.py",
+    "scripts/ops/dx_run.py",
+    "scripts/ops/file_race_report.py",
+    "scripts/ops/fuse_plumbing_commit.py",
+    "scripts/ops/go_test_reads.py",
+    "scripts/ops/guard_defaults_scopes.py",
+    "scripts/ops/inject_default_key.py",
+    "scripts/ops/parse_go_test_json.py",
+    "scripts/ops/plan_race_shards.py",
+    "scripts/ops/route_metrics_through_field.py",
+    "scripts/ops/use_get_metrics.py",
+})
+
+#: The ceiling of entries not yet through run(): it only shrinks. A new tool
+#: enters through run() from its first commit — there is no way to add one.
+PENDING: frozenset[str] = BASELINE - MIGRATED
+
+_BASELINE_SHA256 = "f6d1e806ad139f85efdf4e8ac4937fa4f28ded1a9b24e4fa7963d74c5f78cbfc"
+
+
+def _gated_sources() -> dict[str, str]:
+    """repo-relative path -> source of every `.py` under GATED_TREES that
+    tests `__name__` against "__main__" anywhere, in any shape (#3579 F1: a
+    module asking the question the wrong way is in the population and is a
+    fault, not left out). The population is the tree itself (`git ls-files`,
+    tests/_tree.py), not a list kept here."""
+    from _tree import REPO_ROOT as TREE_ROOT, repo_files  # noqa: E402
+    out = {}
+    for path in repo_files(".py"):
+        rel = path.relative_to(TREE_ROOT).as_posix()
+        if not rel.startswith(GATED_TREES):
+            continue
+        source = path.read_text(encoding="utf-8")
+        if "__main__" not in source:
+            continue
+        tree = ast.parse(source, filename=rel)  # a file that cannot parse fails here
+        if any(_is_main_test(n) for n in ast.walk(tree)):
+            out[rel] = source
+    return out
+
+
+def _gate_faults(sources: dict[str, str], pending: frozenset[str]) -> list[str]:
+    """Every fault of the gate over *sources* (path -> source) with *pending*
+    as the ceiling. A pure function, so its answers can be pinned on shapes
+    whose answer is known (test_gate_faults_on_known_shapes)."""
+    faults = []
+    for rel in sorted(pending - set(sources)):
+        faults.append(f"{rel}: pending but not an entry point under the gated trees "
+                      "(gone, or moved) — add it to MIGRATED")
+    for rel, source in sorted(sources.items()):
+        fault = _guard_fault(ast.parse(source, filename=rel))
+        if fault is None and rel in pending:
+            faults.append(f"{rel}: enters through run() now — add it to MIGRATED "
+                          "and lower the pinned count")
+        elif fault is not None and rel not in pending:
+            faults.append(f"{rel}:{fault[0]}: {fault[1]}")
+    return faults
+
+
+def test_every_tool_entry_enters_through_run():
+    """#3579 (owner, 2026-11-05): every `__main__` under scripts/{tools,ops,
+    dx,session-guards} ends through `_lib_exitcodes.run`, with an entry run()
+    can call. The ones not migrated yet are PENDING, a ceiling that only
+    shrinks."""
+    sources = _gated_sources()
+    # anti-vacuity: each gated tree is in the population, and so is every
+    # da-tools script (the narrower gate above is a subset of this one).
+    for tree in GATED_TREES:
+        assert any(rel.startswith(tree) for rel in sources), (tree, len(sources))
+    in_cli = {p.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+              for p in _da_tools_scripts().values()}
+    assert in_cli <= set(sources), sorted(in_cli - set(sources))
+    assert len(sources) >= 200, len(sources)
+    faults = _gate_faults(sources, PENDING)
+    assert not faults, "\n".join(faults)
+
+
+def test_the_baseline_is_frozen():
+    """BASELINE is the list as it stood when the gate widened; it is never
+    edited (#3579 F3). A changed digest means an entry was added or swapped —
+    put it back, and migrate the tool instead."""
+    digest = hashlib.sha256("\n".join(sorted(BASELINE)).encode()).hexdigest()
+    assert digest == _BASELINE_SHA256
+    assert len(BASELINE) == 146
+
+
+def test_migrated_names_baseline_entries():
+    """A MIGRATED line outside BASELINE subtracts nothing — a typo there would
+    leave its tool pending without anyone seeing it."""
+    assert MIGRATED <= BASELINE, sorted(MIGRATED - BASELINE)
+
+
+def test_the_pending_entries_are_a_pinned_ceiling():
+    """The count is written out so that a shorter PENDING is a visible edit of
+    this line too (#3579): only ever lower it."""
+    assert len(PENDING) == 6
+
+
+_RUN_TOOL = ("import _lib_exitcodes\ndef main(argv=None):\n    return 0\n"
+             "if __name__ == '__main__':\n    _lib_exitcodes.run(main)\n")
+_BARE_TOOL = ("import sys\ndef main():\n    return 0\n"
+              "if __name__ == '__main__':\n    sys.exit(main())\n")
+_REQUIRED_ARG_TOOL = _RUN_TOOL.replace("main(argv=None)", "main(argv)")
+
+
+@pytest.mark.parametrize("sources, pending, want", [
+    ({"a.py": _RUN_TOOL}, frozenset(), []),
+    ({"a.py": _BARE_TOOL}, frozenset({"a.py"}), []),
+    ({"a.py": _BARE_TOOL}, frozenset(),
+     ["a.py:5: the guard must end with `_lib_exitcodes.run(<entry>)`, got `sys.exit(main())`"]),
+    ({"a.py": _RUN_TOOL}, frozenset({"a.py"}),
+     ["a.py: enters through run() now — add it to MIGRATED and lower the pinned count"]),
+    ({}, frozenset({"gone.py"}),
+     ["gone.py: pending but not an entry point under the gated trees (gone, or moved) "
+      "— add it to MIGRATED"]),
+    ({"a.py": _REQUIRED_ARG_TOOL}, frozenset(),
+     ["a.py:2: `main` takes argv without a default, but run() calls it with no "
+      "arguments — give every parameter a default, or hand run() a no-argument wrapper"]),
+], ids=["compliant", "pending", "new-bare", "pending-but-compliant", "pending-gone",
+        "required-arg"])
+def test_gate_faults_on_known_shapes(sources, pending, want):
+    assert _gate_faults(sources, pending) == want
+
+
+@pytest.mark.parametrize("kind", ["ast", "text", "yaml", "meta", "freshness"])
+def test_a_scaffolded_lint_enters_through_run(kind):
+    """#3579: `scaffold_lint.py` writes new lints into scripts/tools/lint, a
+    gated tree — what it generates must pass the gate from its first commit."""
+    import scaffold_lint as sl  # noqa: E402  (path set by conftest.py)
+    assert kind in sl.VALID_KINDS
+    source = sl.render_script(sl.derive_paths("probe", kind), "probe")
+    assert _guard_fault(ast.parse(source)) is None
+
+
 # ═══════════════════════════════════════════════════════════════════════════
-# Review round (a19e90df): `>&-`, other write errors, a tool's own handler,
-# one-line envelope errors, redirected stdout, bypassing the stdout tap
+# #3558 — closed standard fds are filled at import (sanitize_std_fds)
 # ═══════════════════════════════════════════════════════════════════════════
-def _run_with_fds_closed(script: Path, *, close: str) -> subprocess.CompletedProcess:
-    """`tool >&-` / `tool 2>&-`: the shell closes the fd before Python starts,
-    so `sys.stdout` (or `sys.stderr`) is None in the tool."""
+def _run_with_fds_closed(script: Path, *, close: str,
+                         env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
+    """`tool >&-` / `tool 2>&-` / `tool <&-`: the shell closes the fd before
+    Python starts, so the interpreter leaves `sys.stdout` (or `sys.stderr`)
+    None — until `_lib_exitcodes` is imported."""
     bash = shutil.which("bash")
     if bash is None:
         pytest.skip("bash is not on PATH")
     return subprocess.run(
         [bash, "-c", f'exec "$0" "$1" {close}', sys.executable, str(script)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60, env=_ENV)
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
+        env=_ENV if env is None else env)
 
 
-_ARMED_EXITS = {
-    "die_caller_error": "_lib_exitcodes.die_caller_error('ERROR: bad input', reason='r')\n",
-    "exit_caller_error": ("print('ERROR: bad input', file=sys.stderr)\n"
-                          "_lib_exitcodes.exit_caller_error('ERROR: bad input', reason='r')\n"),
-    "hand-written": "print('ERROR: bad input', file=sys.stderr)\nreturn 2\n",
-    "crash": "raise RuntimeError('boom')\n",
+# (body, its code with every fd open, whether it writes stdout)
+_CLOSED_FD_ENDINGS = {
+    "printed-exit0": ("print('report')\nreturn 0\n", 0, True),
+    "printed-exit1": ("print('report')\nreturn 1\n", 1, True),
+    "report": ("return _lib_exitcodes.Report({'n': 1})\n", 0, True),
+    "report-status-1": ("return _lib_exitcodes.Report({'n': 1}, 1)\n", 1, True),
+    "big-report": ("return _lib_exitcodes.Report({'x': 'y' * (io.DEFAULT_BUFFER_SIZE * 4)})\n",
+                   0, True),
+    "silent-exit0": ("print('note', file=sys.stderr)\nreturn 0\n", 0, False),
+    "die_caller_error": ("_lib_exitcodes.die_caller_error('ERROR: bad input')\n", 2, False),
+    "crash": ("raise RuntimeError('boom')\n", 2, False),
 }
 
 
-@pytest.mark.parametrize("how", sorted(_ARMED_EXITS))
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("close", [">&-", "<&- >&-", "2>&-", "<&-"])
+@pytest.mark.parametrize("ending", sorted(_CLOSED_FD_ENDINGS))
 @pytest.mark.real_crash_exit_code
-def test_shell_closed_stdout_is_not_a_crash(tmp_path, how):
-    """`tool --json >&-`: sys.stdout is None. There is nowhere to put the
-    envelope; the exit must still be the tool's own (rc 2, its stderr line),
-    not a crash in the envelope printer."""
-    proc = _run_with_fds_closed(_script(tmp_path, _armed(_ARMED_EXITS[how])), close=">&-")
+def test_a_closed_std_fd_at_start(tmp_path, ending, close, buffering):
+    """`>&-`: a tool that writes stdout ends at 2 with the named line (it was
+    0 before #3558: the output was dropped); one that writes nothing keeps
+    its code. `2>&-` / `<&-`: the tool's code and its stdout as with every fd
+    open — no stderr line on stdout."""
+    body, code, writes = _CLOSED_FD_ENDINGS[ending]
+    proc = _run_with_fds_closed(_script(tmp_path, _armed(body)), close=close,
+                                env=_BUFFERING[buffering])
+    err = proc.stderr.decode("utf-8", "replace")
+    where = f"{ending} × {close} × {buffering}: rc={proc.returncode}\n{err[-1200:]}"
+    stdout_closed = ">&-" in close.split()
+    assert "Exception ignored" not in err, where
+    if stdout_closed and writes:
+        assert proc.returncode == 2, where
+        assert err.count(STDOUT_CLOSED_LINE + " Bad file descriptor") == 1, where
+    else:
+        assert proc.returncode == code, where
+        assert STDOUT_CLOSED_LINE not in err, where
+    if not stdout_closed:
+        with_all = _run(_script(tmp_path, _armed(body)), env=_BUFFERING[buffering])
+        assert proc.stdout == with_all.stdout, where
+    if close == "2>&-":
+        assert b"note" not in proc.stdout and b"ERROR" not in proc.stdout, where
+
+
+_FD_PROBE = """
+import fcntl, subprocess, tempfile
+def mode(fd):
+    acc = fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE
+    return {os.O_RDONLY: 'r', os.O_WRONLY: 'w', os.O_RDWR: 'rw'}[acc]
+seen = {}
+for fd in (0, 1, 2):
+    seen[fd] = (os.path.realpath(f'/proc/self/fd/{fd}'), mode(fd), os.get_inheritable(fd))
+with tempfile.TemporaryFile() as f:
+    seen['open'] = f.fileno()
+child = subprocess.run([sys.executable, '-c', 'import os; os.write(1, b"x")'],
+                       stderr=subprocess.DEVNULL)
+seen['child'] = child.returncode
+os.write(3, repr(seen).encode())
+"""
+
+
+@pytest.mark.parametrize("close", [">&-", "<&- >&- 2>&-"])
+def test_a_closed_fd_gets_the_null_device_read_only_and_inheritable(tmp_path, close):
+    """git `sanitize_stdfds` / Rust std: each closed fd 0..2 holds the null
+    device, read-only (a write fails, it does not vanish), inheritable (a
+    child sees the same), so a later `open()` is never handed fd 1 and a
+    child writing its inherited stdout fails."""
+    if not os.path.exists("/proc/self/fd"):
+        pytest.skip("no /proc/self/fd here")
+    probe = _script(tmp_path, _FD_PROBE)
+    r, w = os.pipe()
+    bash = shutil.which("bash") or pytest.skip("bash is not on PATH")
+    proc = subprocess.run([bash, "-c", f'exec "$0" "$1" {close} 3>&{w}', sys.executable, str(probe)],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
+                          env=_ENV, pass_fds=(w,))
+    os.close(w)
+    with os.fdopen(r, "rb") as reader:
+        seen = eval(reader.read().decode())  # noqa: S307 — our own repr
+    closed = {int(c[0]) if c[0].isdigit() else (1 if c.startswith(">") else 0)
+              for c in close.split()}
+    for fd in closed:
+        assert seen[fd] == (os.devnull, "r", True), (fd, seen, proc.stderr)
+    assert seen["open"] not in (0, 1, 2), seen
+    assert seen["child"] != 0, seen
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("argv", [["--version"], ["--help"]])
+def test_the_entrypoints_own_output_to_a_closed_stdout_is_rc_2(argv, buffering):
+    """`da-tools --version >&-` / `--help >&-`: the dispatcher's own output
+    fails like a tool's — rc 2 and the named line, never 0 or 120."""
+    bash = shutil.which("bash") or pytest.skip("bash is not on PATH")
+    entry = REPO_ROOT / "components" / "da-tools" / "app" / "entrypoint.py"
+    proc = subprocess.run([bash, "-c", 'exec "$0" "$@" >&-', sys.executable, str(entry), *argv],
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60,
+                          env=_BUFFERING[buffering])
     err = proc.stderr.decode("utf-8", "replace")
     assert proc.returncode == 2, err
-    assert "crash envelope failed" not in err and "AttributeError" not in err, err
-    if how == "crash":
-        assert err.count("Traceback") == 1, err
-    else:
-        assert "Traceback" not in err and CRASH_MARK not in err, err
-        assert "ERROR: bad input" in err, err
-    assert STDOUT_CLOSED_LINE not in err, err  # nothing was lost: stdout never existed
-
-
-@pytest.mark.parametrize("how", ["die_caller_error", "hand-written"])
-def test_shell_closed_stderr_keeps_stdout_one_document(tmp_path, how):
-    """`tool --json 2>&-`: sys.stderr is None. The stderr line must not land
-    on stdout (print(file=None) would), so stdout stays one document."""
-    proc = _run_with_fds_closed(_script(tmp_path, _armed(_ARMED_EXITS[how])), close="2>&-")
-    assert proc.returncode == 2
-    doc = json.loads(proc.stdout)
-    assert doc["status"] == "caller_error", proc.stdout
+    assert err.count(STDOUT_CLOSED_LINE + " Bad file descriptor") == 1, err
+    assert "Exception ignored" not in err and "Traceback" not in err, err
 
 
 def test_a_full_device_is_named_as_a_write_error(tmp_path):
@@ -592,16 +1287,16 @@ def test_a_full_device_is_named_as_a_write_error(tmp_path):
         proc = _run(_script(tmp_path, "print('partial report')\nsys.exit(0)\n"), stdout=full.fileno())
     err = proc.stderr.decode("utf-8", "replace")
     assert proc.returncode == 2, err
-    assert "ERROR: cannot write to stdout: No space left on device" in err, err
-    assert STDOUT_CLOSED_LINE not in err, err
+    assert err.count(STDOUT_CLOSED_LINE) == 1, err
 
 
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
 @pytest.mark.parametrize("exit_fn", ["die_caller_error", "exit_caller_error"])
 def test_a_lost_stdout_caught_by_the_tools_own_handler(tmp_path, exit_fn, buffering):
     """A tool's own `except Exception` (config_diff, operator_generate) turns
-    the BrokenPipeError of a lost stdout into its named caller error. That is
-    still the reader leaving: the closed-stdout exit, not the tool's reason."""
+    the BrokenPipeError of a lost stdout into its named caller error: rc 2,
+    not a crash. Which line names it is not the contract any more (#3558:
+    the exception chain is not followed — dev-rules §13, known limits)."""
     body = _armed(
         "try:\n"
         "    print('x' * 1_000_000)\n"
@@ -609,54 +1304,7 @@ def test_a_lost_stdout_caught_by_the_tools_own_handler(tmp_path, exit_fn, buffer
         f"    _lib_exitcodes.{exit_fn}(f'ERROR: report failed: {{exc}}', reason='compare_failed')\n")
     rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
     assert rc == 2, err
-    assert STDOUT_CLOSED_LINE in err and "report failed" not in err, err
     assert CRASH_MARK not in err and "Traceback" not in err, err
-
-
-def test_a_handler_for_another_os_error_still_names_its_reason(tmp_path):
-    """Control: an OSError that is not stdout's (a missing file) keeps the
-    tool's own message and envelope."""
-    rc, out, err = _json_run(tmp_path, _armed(
-        "try:\n"
-        "    open('/nonexistent/x/y')\n"
-        "except Exception as exc:\n"
-        "    _lib_exitcodes.die_caller_error(f'ERROR: cannot read: {exc}', reason='compare_failed')\n"))
-    assert rc == 2, err
-    assert json.loads(out)["reason"] == "compare_failed"
-    assert STDOUT_CLOSED_LINE not in err
-
-
-def test_the_generic_envelope_names_the_error_line_not_the_last_line(tmp_path):
-    """A hint printed after the ERROR line is not the error; control
-    characters (an ANSI escape from a file name) do not reach the JSON."""
-    rc, out, err = _json_run(tmp_path, _armed(
-        "print('ERROR: cannot read \\x1b[31mevil\\x1b[0m.yaml', file=sys.stderr)\n"
-        "print('  hint: fix the file and re-run', file=sys.stderr)\nreturn 2\n"))
-    assert rc == 2, err
-    error = json.loads(out)["error"]
-    assert error.startswith("ERROR: cannot read ") and "evil" in error, error
-    assert "\x1b" not in error and "hint" not in error, error
-
-
-def test_a_multi_line_message_is_one_line_in_the_envelope(tmp_path):
-    rc, out, err = _json_run(tmp_path, _armed(
-        "_lib_exitcodes.die_caller_error('ERROR: two problems:\\n  a\\n  b', reason='r')\n"))
-    assert rc == 2, err
-    assert json.loads(out)["error"] == "ERROR: two problems: a b"
-    assert "  a\n  b" in err  # stderr keeps the tool's own layout
-
-
-def test_the_envelope_goes_to_the_armed_stdout_under_redirect_stdout(tmp_path):
-    """patch_config / policy_engine run parts of main under
-    `redirect_stdout(sys.stderr)`; an exit from inside must still put the
-    envelope on the real stdout, not on stderr."""
-    rc, out, err = _json_run(tmp_path, _armed(
-        "import contextlib\n"
-        "with contextlib.redirect_stdout(sys.stderr):\n"
-        "    _lib_exitcodes.die_caller_error('ERROR: boom', reason='x')\n"))
-    assert rc == 2, err
-    assert json.loads(out)["reason"] == "x"
-    assert '"status"' not in err, err
 
 
 def test_or_die_writers_follow_the_caller_error_code(tmp_path, monkeypatch):
@@ -676,67 +1324,6 @@ def test_or_die_writers_follow_the_caller_error_code(tmp_path, monkeypatch):
 
 
 # ── stdout writes the tap cannot see ───────────────────────────────────
-def _stdout_bypasses(tree: ast.AST) -> list[str]:
-    """Writes an armed tool could make to stdout without `sys.stdout.write`:
-    `sys.stdout.buffer`, `os.write` to fd 1 / stdout's fileno, rebinding
-    `sys.stdout` (also via `setattr`), and the aliases that would hide those
-    from this walk (`from sys import stdout`, `import sys as x`). Binding
-    the stdout OBJECT to another name (`out = sys.stdout`) is not seen — a
-    documented limit; writes through it still go through the tap.
-    (`contextlib.redirect_stdout` is fine: the envelope goes to the stdout
-    object that was armed.)"""
-    def is_sys_stdout(n: ast.AST) -> bool:
-        return (isinstance(n, ast.Attribute) and n.attr == "stdout"
-                and isinstance(n.value, ast.Name) and n.value.id == "sys")
-    found = []
-    for n in ast.walk(tree):
-        # aliases that would hide the shapes below from this walk
-        if isinstance(n, ast.ImportFrom) and n.module == "sys" and any(
-                a.name in ("stdout", "__stdout__") for a in n.names):
-            found.append(f"{n.lineno}: from sys import stdout")
-        elif isinstance(n, ast.Import) and any(
-                a.name == "sys" and a.asname not in (None, "sys") for a in n.names):
-            found.append(f"{n.lineno}: import sys as <alias>")
-        elif (isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
-              and n.func.id == "setattr" and len(n.args) >= 2
-              and isinstance(n.args[0], ast.Name) and n.args[0].id == "sys"
-              and isinstance(n.args[1], ast.Constant) and n.args[1].value == "stdout"):
-            found.append(f"{n.lineno}: setattr(sys, 'stdout', ...)")
-        elif isinstance(n, ast.Attribute) and n.attr == "buffer" and is_sys_stdout(n.value):
-            found.append(f"{n.lineno}: sys.stdout.buffer")
-        elif isinstance(n, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
-            targets = n.targets if isinstance(n, ast.Assign) else [n.target]
-            if any(is_sys_stdout(t) for t in targets):
-                found.append(f"{n.lineno}: sys.stdout rebound")
-        elif (isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
-              and n.func.attr == "write" and isinstance(n.func.value, ast.Name)
-              and n.func.value.id == "os" and n.args):
-            fd = n.args[0]
-            if (isinstance(fd, ast.Constant) and fd.value == 1) or "stdout" in ast.unparse(fd):
-                found.append(f"{n.lineno}: {ast.unparse(n)[:60]}")
-    return found
-
-
-def test_armed_tools_write_stdout_only_through_sys_stdout():
-    """The tap that keeps a second document off stdout sees `sys.stdout.write`
-    (print, json.dump) only. A tool that writes around it would get the
-    library's envelope after its own document."""
-    tools = _armed_tools()
-    assert len(tools) >= 39  # 39 since migration-audit was deleted (#3419); see above
-    bad = {p: b for p, tree in tools.items() if (b := _stdout_bypasses(tree))}
-    assert not bad, bad
-
-
-@pytest.mark.parametrize("src, n", [
-    ("sys.stdout.buffer.write(b'x')\n", 1),
-    ("os.write(1, b'x')\n", 1),
-    ("os.write(sys.stdout.fileno(), b'x')\n", 1),
-    ("sys.stdout = open('f', 'w')\n", 1),
-    ("os.write(fd, b'x')\nsys.stdout.write('x')\nprint('x')\n", 0),
-    ("with contextlib.redirect_stdout(sys.stderr):\n    pass\n", 0),
-])
-def test_stdout_bypass_predicate_on_known_shapes(src, n):
-    assert len(_stdout_bypasses(ast.parse(src))) == n
 
 
 def test_an_unarmed_caller_error_with_stderr_closed_keeps_stdout_empty(tmp_path):
@@ -772,12 +1359,15 @@ def test_a_socket_epipe_while_the_reader_is_gone_keeps_its_own_reason(tmp_path, 
 
 
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
-@pytest.mark.real_crash_exit_code
-def test_a_socket_epipe_crash_while_the_reader_is_gone_is_a_crash(tmp_path, buffering):
+@pytest.mark.real_crash_exit_code  # a crash line ends at the production crash code, 2
+def test_a_socket_epipe_crash_while_the_reader_is_gone_is_rc_2(tmp_path, buffering):
+    """A socket's EPIPE while stdout's reader has also left: rc 2 either way.
+    The library asks stdout (POLLERR) and finds it gone, so the line it
+    prints is the stdout one — the documented "which line" limit (#3558),
+    not a different exit code."""
     body = _armed(_SOCKET_EPIPE)
     rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
-    assert rc == 2, err
-    assert f"{CRASH_MARK} (BrokenPipeError)" in err and "Traceback" in err, err
+    _said_and_failed(rc, err)
 
 
 def test_another_fd_ebadf_while_stdout_is_closed_is_a_crash(tmp_path):
@@ -787,28 +1377,13 @@ def test_another_fd_ebadf_while_stdout_is_closed_is_a_crash(tmp_path):
 
 
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
-def test_a_wrapped_stdout_failure_is_still_the_reader_leaving(tmp_path, buffering):
-    """N2: the handler sees `RuntimeError(...) from <BrokenPipeError>`; the
-    chain leads back to stdout's own failure."""
-    body = _armed(
-        "try:\n"
-        "    try:\n"
-        "        print('x' * 1_000_000)\n"
-        "        sys.stdout.flush()\n"
-        "    except OSError as e:\n"
-        "        raise RuntimeError('render failed') from e\n"
-        "except RuntimeError as e:\n"
-        "    _lib_exitcodes.die_caller_error(f'ERROR: {e}', reason='render_failed')\n")
-    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
-    assert rc == 2, err
-    assert STDOUT_CLOSED_LINE in err and "render failed" not in err, err
-
-
-@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
 @pytest.mark.parametrize("how", ["uncaught", "handled"])
+@pytest.mark.real_crash_exit_code  # a crash line ends at the production crash code, 2
 def test_a_full_device_mid_run_is_a_write_error_not_a_crash(tmp_path, how, buffering):
     """S2: more than a buffer's worth into /dev/full fails mid-run (ENOSPC):
-    named, caller-error code, no traceback."""
+    the caller-error code. Uncaught, the ENOSPC raised by the write is not
+    tied to stdout once the bytes are dropped (#3558: the documented "which
+    line" limit) — rc 2 all the same; handled, the tool's own line."""
     if not os.path.exists("/dev/full"):
         pytest.skip("/dev/full does not exist here")
     work = "print('x' * 1_000_000)\n"
@@ -819,16 +1394,19 @@ def test_a_full_device_mid_run_is_a_write_error_not_a_crash(tmp_path, how, buffe
         proc = _run(_script(tmp_path, _armed(work)), stdout=full.fileno(),
                     env=_BUFFERING[buffering])
     err = proc.stderr.decode("utf-8", "replace")
-    assert proc.returncode == 2, err
-    assert "ERROR: cannot write to stdout: No space left on device" in err, err
-    assert "Traceback" not in err and CRASH_MARK not in err, err
+    if how == "handled":
+        assert proc.returncode == 2, err
+        assert "ERROR: [Errno 28] No space left on device" in err, err
+        assert "Traceback" not in err and CRASH_MARK not in err, err
+    else:
+        _said_and_failed(proc.returncode, err)
 
 
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
 def test_a_broken_stderr_under_redirect_stdout_is_not_a_lost_stdout(tmp_path, buffering):
     """S3: inside `redirect_stdout(sys.stderr)` the progress lines go to
-    stderr, whose reader left. stdout is healthy: the tool's own reason and
-    its envelope, on stdout."""
+    stderr, whose reader left. stdout is healthy and the tool's caller
+    error stands: rc 2, nothing on stdout (#3558: no envelope)."""
     script = _script(tmp_path, _armed(
         "import contextlib\n"
         "with contextlib.redirect_stdout(sys.stderr):\n"
@@ -846,50 +1424,27 @@ def test_a_broken_stderr_under_redirect_stdout_is_not_a_lost_stdout(tmp_path, bu
     finally:
         os.close(w)
     assert proc.returncode == 2  # not 120: a broken stderr never changes the code
-    assert json.loads(proc.stdout)["reason"] == "progress_failed", proc.stdout
+    assert proc.stdout == b"", proc.stdout
 
 
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
 @pytest.mark.parametrize("size", ["small", "big"])
 def test_the_lost_stdout_exit_honours_an_explicit_code(tmp_path, size, buffering):
-    """N1: `die_caller_error(..., code=7)` from a stdout-loss handler keeps 7
-    — also with bytes still buffered for the broken stdout (small output,
-    buffered), which the exit must drop or the final flush fails again and
-    replaces 7 with the caller-error code."""
+    """N1: `die_caller_error(..., code=7)` from a stdout-loss handler: never
+    0. The tool caught stdout's failure itself, so what decides is the last
+    flush (gnulib ``close_stdout``, #3558): bytes still buffered for the
+    broken stdout fail it again — rc 2 and the stdout line; none left (the
+    big write took them down with it) — the tool's 7 stands."""
     n = 100 if size == "small" else 1_000_000
     body = _armed(f"try:\n    print('x' * {n})\n    sys.stdout.flush()\nexcept OSError:\n"
                   "    _lib_exitcodes.die_caller_error('ERROR: x', reason='r', code=7)\n")
     rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
-    assert rc == 7, err
-    assert err.count(STDOUT_CLOSED_LINE) == 1, err
-
-
-def test_the_envelope_error_keeps_wide_spaces_and_drops_format_characters(tmp_path):
-    """N3: only line breaks / tabs fold; U+3000 and NBSP stay, so the
-    envelope matches the stderr line; Cf characters (U+202E, U+200B) go."""
-    rc, out, err = _json_run(tmp_path, _armed(
-        "_lib_exitcodes.die_caller_error('ERROR: 設定檔　壞了\\u00a0x \\u202eevil\\u200b', reason='r')\n"))
-    assert rc == 2, err
-    assert json.loads(out)["error"] == "ERROR: 設定檔　壞了\u00a0x ?evil?"
-
-
-def test_the_generic_error_line_must_start_with_error_colon(tmp_path):
-    """N4: `ERRORS: 3` is a count, not the error line."""
-    rc, out, err = _json_run(tmp_path, _armed(
-        "print('ERROR: the real one', file=sys.stderr)\n"
-        "print('ERRORS: 3 found', file=sys.stderr)\nreturn 2\n"))
-    assert json.loads(out)["error"] == "ERROR: the real one"
-
-
-@pytest.mark.parametrize("src, n", [
-    ("from sys import stdout\n", 1),
-    ("import sys as system\n", 1),
-    ("setattr(sys, 'stdout', x)\n", 1),
-    ("from sys import argv, path\nimport sys\n", 0),
-])
-def test_stdout_bypass_predicate_sees_aliases(src, n):
-    """N5 (aliasing the stdout OBJECT itself stays a documented limit)."""
-    assert len(_stdout_bypasses(ast.parse(src))) == n
+    assert "ERROR: x" in err, err
+    if size == "small" and buffering == "buffered":
+        assert rc == 2, err
+        assert err.count(STDOUT_CLOSED_LINE) == 1, err
+    else:
+        assert rc == 7, err
 
 
 def test_the_final_flush_is_of_the_original_stdout_not_a_rebound_one(tmp_path):
@@ -914,21 +1469,6 @@ _BROKEN_STREAM = (
     "    def flush(self):\n        raise OSError(errno.EPIPE, 'Broken pipe')\n")
 
 
-@pytest.mark.parametrize("unarm", ["disarm", "envelope-consumed"])
-def test_a_stdout_armed_earlier_is_not_flushed_once_unarmed(tmp_path, unarm):
-    """M1: an in-process test arms with a stream that fails (a fake, a
-    capture object) and puts the real stdout back. Once the arm is gone,
-    that stream is nobody's stdout: the process must not end at rc 2 over it."""
-    how = ("_lib_exitcodes.disarm_crash_envelope()\n" if unarm == "disarm"
-           else "_lib_exitcodes._crash_envelope_armed = None\n")
-    proc = _run(_script(tmp_path, _BROKEN_STREAM +
-                        "sys.stdout = Broken()\n_lib_exitcodes.arm_crash_envelope()\n"
-                        "sys.stdout = sys.__stdout__\n" + how + "print('fine')\n"))
-    err = proc.stderr.decode("utf-8", "replace")
-    assert (proc.returncode, proc.stdout) == (0, b"fine\n"), err
-    assert "ERROR" not in err, err
-
-
 _STATE_PROBE = "DA_EXIT_STATE_PROBE"
 
 
@@ -936,64 +1476,38 @@ _STATE_PROBE = "DA_EXIT_STATE_PROBE"
 def test_probe_leaves_every_piece_of_exit_state_dirty(monkeypatch):
     sys.path.insert(0, str(TOOLS_DIR))
     import _lib_exitcodes as ec  # noqa: E402
-    ns: dict = {}
-    exec(_BROKEN_STREAM, ns)
-    monkeypatch.setattr(sys, "stdout", ns["Broken"]())
-    ec.arm_crash_envelope()          # never disarmed: the conftest must
     ec.set_crash_exit_code(70)
     ec.set_caller_error_code(1)
-    ec._record_stdout_failure(OSError(32, "Broken pipe"), sys.stdout)
-    ec._stdout_closed_reported = True
-    ec._lost_envelope = (OSError(32, "Broken pipe"), sys.stdout)
-
-
-@pytest.mark.skipif(not os.environ.get(_STATE_PROBE), reason="driven by the test below")
-def test_probe_leaves_a_failing_stdout_armed(monkeypatch):
-    """Armed with a stream whose flush fails, no failure recorded: the reset
-    takes no collection for it, so nothing but undoing the tap keeps the
-    stream's last flush from recording in the next test."""
-    sys.path.insert(0, str(TOOLS_DIR))
-    import _lib_exitcodes as ec  # noqa: E402
-    ns: dict = {}
-    exec(_BROKEN_STREAM, ns)
-    monkeypatch.setattr(sys, "stdout", ns["Broken"]())
-    ec.arm_crash_envelope()
+    ec.claim_stdout_owner("probe")
+    ec._failure_reported = True          # a stdout failure said this run
+    ec._best_effort = True               # a best-effort Report written
+    ec._stdout_failure_line = lambda d: "ERROR [X]: " + d
 
 
 @pytest.mark.skipif(not os.environ.get(_STATE_PROBE), reason="driven by the test below")
 def test_probe_sees_clean_exit_state():
     sys.path.insert(0, str(TOOLS_DIR))
     import _lib_exitcodes as ec  # noqa: E402
-    # The previous test's fake stdout dies in a reference cycle (its tapped
-    # flush refers to it): collect it here, not at whatever later moment the
-    # collector happens to run, so a stale record cannot hide behind timing.
-    import gc
-    gc.collect()
-    assert ec._lost_envelope is None
-    assert (ec._crash_envelope_armed, ec._armed_stdout, ec._stdout_failures,
-            ec._stdout_closed_reported, ec.get_crash_exit_code(),
-            ec.get_caller_error_code()) == (None, None, [], False,
+    assert (ec._failure_reported, ec._best_effort, ec._stdout_failure_line,
+            ec._stdout_owner, ec.get_crash_exit_code(),
+            ec.get_caller_error_code()) == (False, False, None, None,
                                             ec._IMPORT_CRASH_EXIT_CODE,
                                             ec._IMPORT_CALLER_ERROR_CODE)
 
 
-@pytest.mark.parametrize("dirty", ["test_probe_leaves_every_piece_of_exit_state_dirty",
-                                   "test_probe_leaves_a_failing_stdout_armed"])
-def test_exit_state_does_not_leak_between_tests(dirty):
-    """M1/S2: a green pytest run must not end at rc 2 because one test left
-    a failing stream armed (order-dependent: measured on
-    test_patch_config_verify -k "test_w1 and EPIPE and json"), and no test
-    may see another's codes, recorded failures or flags."""
+def test_exit_state_does_not_leak_between_tests():
+    """M1/S2: no test may see another's codes, its said stdout failure (it
+    would silence the next one's line), its best-effort delivery (it would
+    keep a status a failed stdout must replace) or its stdout owner."""
     me = Path(__file__)
     proc = subprocess.run(
         [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", "-p", "no:xdist",
-         f"{me}::{dirty}",
+         f"{me}::test_probe_leaves_every_piece_of_exit_state_dirty",
          f"{me}::test_probe_sees_clean_exit_state"],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
         timeout=300, cwd=str(REPO_ROOT), env=dict(os.environ, **{_STATE_PROBE: "1"}))
     out = proc.stdout + proc.stderr
     assert proc.returncode == 0 and "2 passed" in proc.stdout, out[-2000:]
-    assert STDOUT_CLOSED_LINE not in out, out[-2000:]
 
 
 # A small write stays in the buffer after the failed flush, so the exit
@@ -1005,10 +1519,10 @@ _SIZES = {"small": 100, "big": 1_000_000}
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
 def test_a_bug_in_a_broken_pipe_handler_is_still_a_crash(tmp_path, buffering, size):
     """S1 (p1): the handler for stdout's BrokenPipeError has a bug of its
-    own. Its TypeError only has the BrokenPipeError as implicit context —
-    it is a crash, reported as one, at the tool's crash code: the bytes
-    still buffered for the broken stdout must not turn it into the
-    stdout-closed exit at interpreter exit."""
+    own: a crash, reported as one. Its code is the tool's crash code — unless
+    bytes are still buffered for the broken stdout (small, buffered), whose
+    last flush then fails too: rc 2 and the stdout line after the crash line
+    (#3558, gnulib ``close_stdout``: stdout's failure is never forgiven)."""
     body = ("_lib_exitcodes.set_crash_exit_code(70)\n"
             "def main():\n"
             f"    try:\n        print('x' * {_SIZES[size]})\n        sys.stdout.flush()\n"
@@ -1016,8 +1530,12 @@ def test_a_bug_in_a_broken_pipe_handler_is_still_a_crash(tmp_path, buffering, si
             "    return 0\n_lib_exitcodes.run(main)\n")
     rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
     assert f"{CRASH_MARK} (TypeError)" in err and "Traceback" in err, err
-    assert rc == 70, err
-    assert STDOUT_CLOSED_LINE not in err, err
+    if size == "small" and buffering == "buffered":
+        assert rc == 2, err
+        assert err.count(STDOUT_CLOSED_LINE) == 1, err
+    else:
+        assert rc == 70, err
+        assert STDOUT_CLOSED_LINE not in err, err
 
 
 @pytest.mark.parametrize("size", sorted(_SIZES))
@@ -1025,8 +1543,9 @@ def test_a_bug_in_a_broken_pipe_handler_is_still_a_crash(tmp_path, buffering, si
 def test_a_tools_own_error_inside_a_broken_pipe_handler_keeps_its_line_and_code(
         tmp_path, buffering, size):
     """S1 (p2): after stdout's failure the tool hits ANOTHER error and names
-    it with its own code. Implicit context is not a cause: its line and code
-    stand — also when bytes are still buffered for the broken stdout."""
+    it with its own code: its line stands, and its code — unless bytes are
+    still buffered for the broken stdout (small, buffered): the last flush
+    fails too, rc 2 (#3558, gnulib ``close_stdout``)."""
     body = ("def main():\n"
             f"    try:\n        print('x' * {_SIZES[size]})\n        sys.stdout.flush()\n"
             "    except BrokenPipeError:\n"
@@ -1037,68 +1556,12 @@ def test_a_tools_own_error_inside_a_broken_pipe_handler_keeps_its_line_and_code(
             "    return 0\n_lib_exitcodes.run(main)\n")
     rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
     assert "ERROR: cannot write --output" in err, err
-    assert rc == 5, err
-    assert STDOUT_CLOSED_LINE not in err, err
-
-
-def test_raise_from_none_cuts_the_chain(tmp_path):
-    """`raise ... from None` says "not caused by that": the tool's reason stands."""
-    body = _armed(
-        "try:\n"
-        "    try:\n        print('x' * 1_000_000)\n"
-        "    except OSError:\n        raise RuntimeError('render failed') from None\n"
-        "except RuntimeError as e:\n"
-        "    _lib_exitcodes.die_caller_error(f'ERROR: {e}', reason='render_failed')\n")
-    rc, err = _run_closed(tmp_path, body, "reader-gone")
-    assert "ERROR: render failed" in err, err
-
-
-def test_a_reset_after_an_arm_alone_takes_no_collection(monkeypatch):
-    """#3156: an arm with no failure recorded is undone without a full
-    collection (one per such test cost ~0.4 s, the bulk of the suite's time),
-    and the stream gets its own write / flush back."""
-    sys.path.insert(0, str(TOOLS_DIR))
-    import _lib_exitcodes as ec  # noqa: E402
-    import gc
-    ns: dict = {}
-    exec(_BROKEN_STREAM, ns)
-    fake = ns["Broken"]()
-    monkeypatch.setattr(sys, "stdout", fake)
-    ec.arm_crash_envelope()
-    assert "flush" in vars(fake) and fake._da_stdout_tap
-    calls = []
-    monkeypatch.setattr(gc, "collect", lambda *a: calls.append(a) or 0)
-    ec.reset_exit_state()
-    assert calls == []
-    assert "write" not in vars(fake) and "flush" not in vars(fake)
-    assert not getattr(fake, "_da_stdout_tap", False)
-
-
-def test_a_reset_keeps_the_import_time_tap_of_the_original_stdout():
-    """Unarmed, a failure of the original stdout is recorded (the import-time
-    tap); a reset that undoes the taps must leave that one as import made it."""
-    sys.path.insert(0, str(TOOLS_DIR))
-    import _lib_exitcodes as ec  # noqa: E402
-    ec.reset_exit_state()
-    assert getattr(sys.__stdout__, "_da_stdout_tap", False)
-    assert "flush" in vars(sys.__stdout__)
-
-
-def test_a_reset_gives_back_a_streams_own_instance_flush(monkeypatch):
-    """A stream whose flush was already an instance attribute gets that one
-    back, not the class's."""
-    sys.path.insert(0, str(TOOLS_DIR))
-    import _lib_exitcodes as ec  # noqa: E402
-    import io
-    fake = io.StringIO()
-    own = fake.flush
-    fake.flush = own
-    monkeypatch.setattr(sys, "stdout", fake)
-    ec.arm_crash_envelope()
-    assert vars(fake)["flush"] is not own
-    ec.reset_exit_state()
-    assert vars(fake)["flush"] is own
-    assert "write" not in vars(fake)
+    if size == "small" and buffering == "buffered":
+        assert rc == 2, err
+        assert err.count(STDOUT_CLOSED_LINE) == 1, err
+    else:
+        assert rc == 5, err
+        assert STDOUT_CLOSED_LINE not in err, err
 
 
 def test_reset_restores_the_codes_this_module_was_imported_with(monkeypatch):
@@ -1114,55 +1577,19 @@ def test_reset_restores_the_codes_this_module_was_imported_with(monkeypatch):
     assert (ec.get_crash_exit_code(), ec.get_caller_error_code()) == (70, 3)
 
 
-
-# ═══════════════════════════════════════════════════════════════════════════
-# The library's own envelope is stdout output too (final review, finding 1)
-# ═══════════════════════════════════════════════════════════════════════════
-_ENVELOPE_ONLY_EXITS = {
+_CALLER_EXITS = {
     "die_caller_error": "_lib_exitcodes.die_caller_error('ERROR: bad input', reason='r')\n",
     "hand-written": "print('ERROR: bad input', file=sys.stderr)\nreturn 2\n",
-    "crash": "raise RuntimeError('bad input')\n",
 }
 
 
-def _run_envelope_only(tmp_path: Path, body: str, where: str, env: dict[str, str]):
-    script = _script(tmp_path, body)
-    if where == "dev-full":
-        if not os.path.exists("/dev/full"):
-            pytest.skip("/dev/full does not exist here")
-        with open("/dev/full", "wb") as full:
-            proc = _run(script, stdout=full.fileno(), env=env)
-        return proc.returncode, proc.stderr.decode("utf-8", "replace")
-    return _run_closed(tmp_path, body, "reader-gone", env)
-
-
-@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
-@pytest.mark.parametrize("where", ["dev-full", "reader-gone"])
-@pytest.mark.parametrize("how", sorted(_ENVELOPE_ONLY_EXITS))
-def test_an_envelope_that_cannot_be_written_is_named(tmp_path, how, where, buffering):
-    """The envelope is the only stdout output, and stdout fails while it is
-    written: the tool's own line stays, the named stdout line follows it
-    exactly once, and the exit code is the one the tool was leaving with
-    (here 2; a crash at the crash code)."""
-    body = ("_lib_exitcodes.set_crash_exit_code(70)\n"
-            + _armed(_ENVELOPE_ONLY_EXITS[how]))
-    rc, err = _run_envelope_only(tmp_path, body, where, _BUFFERING[buffering])
-    named = (STDOUT_CLOSED_LINE if where == "reader-gone"
-             else "ERROR: cannot write to stdout: No space left on device")
-    assert rc == (70 if how == "crash" else 2), err
-    assert err.count(named) == 1, err
-    own = err.index(f"{CRASH_MARK} (RuntimeError)" if how == "crash" else "ERROR: bad input")
-    assert own < err.index(named), err
-
-
-@pytest.mark.parametrize("how", ["die_caller_error", "hand-written"])
+@pytest.mark.parametrize("how", sorted(_CALLER_EXITS))
 def test_an_fd_less_stdout_is_not_a_stdout_failure(how):
-    """A stdout with no fd (a host swapped in StringIO) has nowhere to put the
-    envelope; that is not stdout failing. `fileno()` raises
-    io.UnsupportedOperation, an OSError: only the tool's own line, no named
-    stdout line, the tool's code."""
+    """A stdout with no fd (a host swapped in StringIO): `fileno()` raises
+    io.UnsupportedOperation, an OSError — that is not stdout failing: only
+    the tool's own line, no named stdout line, the tool's code."""
     body = ("import io\nsys.stdout = io.StringIO()\n"
-            + _armed(_ENVELOPE_ONLY_EXITS[how]))
+            + _armed(_CALLER_EXITS[how]))
     code = f"import sys\nsys.path.insert(0, {str(TOOLS_DIR)!r})\nimport _lib_exitcodes\n" + body
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True,
                           text=True, encoding="utf-8", errors="replace",
@@ -1174,9 +1601,11 @@ def test_an_fd_less_stdout_is_not_a_stdout_failure(how):
 
 
 @pytest.mark.parametrize("where", ["dev-full", "reader-gone"])
-def test_a_real_tool_names_a_lost_envelope(tmp_path, where):
-    """The reported repro: `onboard_platform --json` with no inputs prints
-    only its envelope on stdout."""
+def test_a_real_tools_caller_error_writes_nothing_to_a_failing_stdout(tmp_path, where):
+    """`onboard_platform --json` with no inputs: a caller error, so nothing
+    is written to stdout (#3558: there used to be an envelope) — and a
+    stdout that cannot take anything is then never asked: its own line,
+    rc 2, no stdout line."""
     if where == "dev-full" and not os.path.exists("/dev/full"):
         pytest.skip("/dev/full does not exist here")
     argv = [sys.executable, str(OPS_DIR / "onboard_platform.py"), "-o", str(tmp_path / "o"), "--json"]
@@ -1194,8 +1623,7 @@ def test_a_real_tool_names_a_lost_envelope(tmp_path, where):
     err = proc.stderr.decode("utf-8", "replace")
     assert proc.returncode == 2, err
     assert "ERROR: At least one phase input is required." in err, err
-    assert (err.count(STDOUT_CLOSED_LINE)
-            + err.count("ERROR: cannot write to stdout:")) == 1, err
+    assert STDOUT_CLOSED_LINE not in err, err
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1203,51 +1631,13 @@ def test_a_real_tool_names_a_lost_envelope(tmp_path, where):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
-@pytest.mark.parametrize("size", sorted(_SIZES))
-@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
-def test_a_crash_raised_from_another_error_in_a_broken_pipe_handler_keeps_its_code(
-        tmp_path, buffering, size):
-    """#3156 (1): the handler's crash is ``raise ... from <unrelated>``. Its
-    ``__cause__`` is the unrelated error, so stdout's failure sits only on
-    the ``__context__`` chain; both chains must be walked so the failed
-    stream counts as answered for, or the exit flush replaces the crash code (70) and adds
-    the stdout-closed line."""
-    body = ("_lib_exitcodes.set_crash_exit_code(70)\n"
-            "def main():\n"
-            f"    try:\n        print('x' * {_SIZES[size]})\n        sys.stdout.flush()\n"
-            "    except BrokenPipeError:\n"
-            "        raise RuntimeError('render failed') from ValueError('unrelated')\n"
-            "    return 0\n_lib_exitcodes.run(main)\n")
-    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
-    assert f"{CRASH_MARK} (RuntimeError)" in err, err
-    assert rc == 70, err
-    assert STDOUT_CLOSED_LINE not in err, err
-
-
-def test_failures_in_chain_walks_both_chains_and_stops_on_a_cycle(monkeypatch):
-    """#3156 (1), in-process: the failure is reached through ``__context__``
-    of a ``__cause__``; a cycle in the chain ends the walk."""
-    sys.path.insert(0, str(TOOLS_DIR))
-    import _lib_exitcodes as ec  # noqa: E402
-    failure = BrokenPipeError(32, "Broken pipe")
-    stream = object()
-    monkeypatch.setattr(ec, "_stdout_failures", [(failure, stream)])
-    top = RuntimeError("top")
-    cause = ValueError("unrelated")
-    cause.__context__ = top  # a cycle back to the top
-    top.__cause__ = cause
-    top.__context__ = failure  # only on the context link of the top
-    assert ec._failures_in_chain(top) == [stream]
-
-
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
 def test_a_still_closed_fd_1_keeps_the_tools_own_code(tmp_path, buffering):
-    """#3156 (3), the other side: fd 1 was closed when stdout failed and is
-    still closed when the tool leaves with its own code (5). The final flush
-    of the failed stream must not run again, or it fails and replaces that
-    code. (Red before #3156: with fd 1 closed, the null device opened for
-    the old redirect GOT fd 1, and closing it afterwards closed fd 1
-    again.)"""
+    """#3156 (3), the other side: fd 1 was closed (by the tool, mid-run) when
+    stdout failed and is still closed when the tool leaves with its own code
+    (5). Buffered, the bytes still owed to stdout fail the last flush again:
+    rc 2 and the stdout line (#3558, gnulib ``close_stdout``); unbuffered
+    nothing is owed: the tool's 5."""
     body = ("os.close(1)\n"
             "def main():\n"
             "    try:\n        print('x' * 100)\n        sys.stdout.flush()\n"
@@ -1260,8 +1650,12 @@ def test_a_still_closed_fd_1_keeps_the_tools_own_code(tmp_path, buffering):
     proc = _run(_script(tmp_path, body), env=_BUFFERING[buffering])
     err = proc.stderr.decode("utf-8", "replace")
     assert "ERROR: cannot write --output" in err, err
-    assert proc.returncode == 5, err
-    assert STDOUT_CLOSED_LINE not in err, err
+    if buffering == "buffered":
+        assert proc.returncode == 2, err
+        assert err.count(STDOUT_CLOSED_LINE + " Bad file descriptor") == 1, err
+    else:
+        assert proc.returncode == 5, err
+        assert STDOUT_CLOSED_LINE not in err, err
 
 
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
@@ -1270,8 +1664,8 @@ def test_a_caller_error_reaching_the_excepthook_after_a_broken_pipe_prints_one_l
     """#3156 (2): a tool without ``run()`` raises ``CallerError`` while
     handling stdout's failure; it reaches the module excepthook, where
     ``sys.exc_info()`` is empty. The exception must be handed on explicitly,
-    so the failed stream counts as answered for: its own line only, its caller-error
-    code (3 here)."""
+    so it is not a crash: its own line, its caller-error code (3 here) — the
+    stdout line may follow it (the last flush, #3558)."""
     body = ("_lib_exitcodes.set_caller_error_code(3)\n"
             "try:\n    print('x' * 100)\n    sys.stdout.flush()\n"
             "except BrokenPipeError:\n"
@@ -1279,11 +1673,25 @@ def test_a_caller_error_reaching_the_excepthook_after_a_broken_pipe_prints_one_l
     rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
     assert "ERROR: my own reason" in err, err
     assert rc == 3, err
-    assert STDOUT_CLOSED_LINE not in err, err
+    assert err.count(STDOUT_CLOSED_LINE) <= 1, err
     assert CRASH_MARK not in err, err
 
 
-@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+# #3558 drops the seal: a tool that closes or replaces fd 1 ITSELF after
+# stdout failed, with bytes still buffered for the old stdout (buffered
+# mode), gets them flushed into its own file at exit. No tool in the repo
+# closes or dup2s fd 1; the case is kept as a strict xfail so a change in
+# either direction is seen. Recorded on #3558.
+_NO_SEAL = pytest.mark.xfail(strict=True, reason="#3558: no seal of a failed stdout; "
+                                                 "a tool's own reuse of fd 1 gets stale bytes")
+
+
+def _xfail_buffered(buffering: str):
+    return [_NO_SEAL] if buffering == "buffered" else []
+
+
+@pytest.mark.parametrize("buffering", [pytest.param(b, marks=_xfail_buffered(b))
+                                       for b in sorted(_BUFFERING)])
 def test_a_reused_fd_1_gets_neither_the_null_device_nor_stale_bytes(tmp_path, buffering):
     """#3156 (3): stdout failed while fd 1 was closed; the tool then opened a
     file, which got fd 1. Pointing "stdout's fd" at the null device now
@@ -1302,13 +1710,13 @@ def test_a_reused_fd_1_gets_neither_the_null_device_nor_stale_bytes(tmp_path, bu
     proc = _run(_script(tmp_path, body), env=_BUFFERING[buffering])
     err = proc.stderr.decode("utf-8", "replace")
     assert proc.returncode == 2, err
-    assert err.count(STDOUT_CLOSED_LINE) == 1, err
     content = out.read_text(encoding="utf-8")
     assert "old" not in content, content
     assert content == "mine\n", err
 
 
-@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("buffering", [pytest.param(b, marks=_xfail_buffered(b))
+                                       for b in sorted(_BUFFERING)])
 def test_a_file_dup2ed_onto_fd_1_after_a_broken_pipe_gets_no_stale_bytes(
         tmp_path, buffering):
     """#3156 (3), review F1: after stdout's EPIPE the tool ``dup2``-s a file of
@@ -1325,7 +1733,6 @@ def test_a_file_dup2ed_onto_fd_1_after_a_broken_pipe_gets_no_stale_bytes(
             "    return 0\n_lib_exitcodes.run(main)\n")
     rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
     assert rc == 5, err
-    assert err.count(STDOUT_CLOSED_LINE) == 1, err
     content = out.read_text(encoding="utf-8")
     assert "old" not in content, content
     assert content == "mine\n", err
@@ -1419,6 +1826,13 @@ def test_a_clean_exit_goes_back_to_the_interpreter(tmp_path):
 
 # ── #3156 v2 review round: seal, never redirect ─────────────────────────
 _LATE = "import time\ntime.sleep(0.3)\n"  # let `| true` leave first
+# A write that cannot fit in the CHILD's stdout buffer, so a buffered stdout
+# whose reader left fails at the write itself, not at the exit flush. Derived
+# from the child's own io.DEFAULT_BUFFER_SIZE, never a literal: Python 3.14
+# raised it from 8 KiB to 128 KiB, and the 100000-char literal this replaced
+# then sat in the buffer — the two "caught exit" cases silently tested the
+# exit-flush path instead and read rc 2.
+_OVERFLOW = "'x' * (io.DEFAULT_BUFFER_SIZE * 4)"
 
 
 def _run_reader_gone(tmp_path: Path, body: str, buffering: str = "buffered") -> tuple[int, str]:
@@ -1437,35 +1851,37 @@ def _run_reader_gone(tmp_path: Path, body: str, buffering: str = "buffered") -> 
 
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
 def test_a_caught_lib_exit_does_not_decide_the_final_code(tmp_path, buffering):
-    """Review F1: a tool without ``run()`` catches the lib's stdout-lost exit
-    (``except SystemExit``), carries on, and ends with its own verdict (1).
-    That verdict is the exit code — the caught exit decided nothing."""
-    body = (_LATE + "try:\n    try:\n        print('x' * 100000)\n"
+    """Review F1: a tool without ``run()`` catches the lib's exit (``except
+    SystemExit``), carries on, and ends with its own verdict (1). The bytes
+    went down with the failed big write, so the last flush has nothing to
+    fail on: that verdict is the exit code — the caught exit decided
+    nothing (never 0)."""
+    body = (_LATE + "try:\n    try:\n        print(" + _OVERFLOW + ")\n"
             "    except OSError:\n        _lib_exitcodes.die_caller_error('ERROR: report failed', code=5)\n"
             "except SystemExit:\n    pass\nsys.exit(1)\n")
     rc, err = _run_reader_gone(tmp_path, body, buffering)
     assert rc == 1, err
-    assert err.count(STDOUT_CLOSED_LINE) == 1, err
+    assert "ERROR: report failed" in err, err
 
 
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
 @pytest.mark.parametrize("where", ["after-caught-exit", "atexit"])
 def test_stdout_still_takes_writes_after_its_failure_was_handled(tmp_path, buffering, where):
-    """Review F2: once stdout's failure is handled, ``sys.stdout`` still takes
-    writes (dropped, as the null device would) — a ``json.dump`` after a
-    caught exit, or an atexit handler, is not an AttributeError crash."""
+    """Review F2: after stdout failed, ``sys.stdout`` still takes writes — a
+    ``json.dump`` after a caught exit, or an atexit handler, is not an
+    AttributeError crash. Whatever the tool then exits with, stdout did fail
+    and nothing hides it: rc 2 (#3558: the failure is no longer "answered
+    for" by the caught exit — that read as 0)."""
     if where == "atexit":
         body = ("import atexit\natexit.register(lambda: sys.stdout.write('summary\\n'))\n"
-                + _LATE + "print('x' * 100000)\n")
-        want = 2
+                + _LATE + "print(" + _OVERFLOW + ")\n")
     else:
-        body = (_LATE + "import json\ntry:\n    try:\n        print('x' * 100000)\n"
+        body = (_LATE + "import json\ntry:\n    try:\n        print(" + _OVERFLOW + ")\n"
                 "    except OSError:\n        _lib_exitcodes.die_caller_error('ERROR: report failed')\n"
                 "except SystemExit:\n    pass\njson.dump({'v': 1}, sys.stdout)\nsys.exit(0)\n")
-        want = 0
     rc, err = _run_reader_gone(tmp_path, body, buffering)
-    assert rc == want, err
-    assert "Traceback" not in err and "Exception ignored" not in err, err
+    assert rc == 2, err
+    assert "Exception ignored" not in err and "AttributeError" not in err, err
 
 
 @pytest.mark.parametrize("how", ["swallowed", "atexit-after-run"])
@@ -1515,6 +1931,7 @@ def test_a_crash_with_stderr_gone_still_ends_at_the_crash_code(tmp_path, entry):
     assert proc.returncode == 70
 
 
+@_NO_SEAL
 def test_a_second_wrapper_on_a_failed_stdout_leaks_nothing_into_a_reused_fd(tmp_path):
     """Review F4: a second ``TextIOWrapper`` shares the failed stdout's
     buffer; fd 1 is then reused by the tool's log file. Sealing drops
@@ -1550,35 +1967,44 @@ _HELD = {
 }
 
 
+# Documented limit (dev-rules §13, #3558): a write error something else
+# swallows — here logging's own handleError — with nothing left in stdout's
+# buffer for the last flush to fail on, after the tool caught the library's
+# exit itself. Strict, so a change either way is seen.
+_SWALLOWED = pytest.mark.xfail(strict=True, reason="#3558 known limit: a write error "
+                                                   "swallowed with nothing left to flush")
+
+
 @pytest.mark.parametrize("buffering", sorted(_BUFFERING))
 @pytest.mark.parametrize("held", sorted(_HELD))
-def test_code_still_holding_a_sealed_stdout_writes_to_nowhere(tmp_path, buffering, held):
-    """Review 2, F1: after stdout's failure is handled (the lib's exit
-    caught), code still holding the ORIGINAL stream — a saved reference,
-    ``sys.__stdout__``, its buffer, a logging handler, ``redirect_stdout``
-    restoring it — writes as onto the null device: no ValueError crash, the
-    tool's own 0."""
+def test_code_still_holding_a_sealed_stdout_writes_to_nowhere(tmp_path, buffering, held, request):
+    """Review 2, F1: after stdout's failure (the lib's exit caught), code
+    still holding the ORIGINAL stream — a saved reference, ``sys.__stdout__``,
+    its buffer, a logging handler, ``redirect_stdout`` restoring it — writes
+    to it: no ValueError crash, no logging error. The exit is never 0: what
+    stdout still owes fails the last flush (#3558 — the seal that made this
+    the tool's own 0 is gone; a lost stdout no longer reads as success)."""
     prelude = ("import logging\nSAVED = sys.stdout\n"
                "logging.basicConfig(stream=sys.stdout)\n" + _LATE)
-    handle = ("    try:\n        print('x' * 100000)\n        sys.stdout.flush()\n"
+    handle = ("    try:\n        print(" + _OVERFLOW + ")\n        sys.stdout.flush()\n"
               "    except OSError:\n        _lib_exitcodes.die_caller_error('ERROR: report failed')\n")
     if held == "redirect-restored":
         body = (prelude + "import contextlib, io\ntry:\n"
                 "    with contextlib.redirect_stdout(io.StringIO()):\n"
-                "        try:\n            SAVED.write('x' * 100000)\n            SAVED.flush()\n"
+                "        try:\n            SAVED.write(" + _OVERFLOW + ")\n            SAVED.flush()\n"
                 "        except OSError:\n"
                 "            _lib_exitcodes.die_caller_error('ERROR: report failed')\n"
                 "except SystemExit:\n    pass\nprint('summary')\nsys.exit(0)\n")
     else:
         body = (prelude + "try:\n" + handle + "except SystemExit:\n    pass\n"
                 + _HELD[held] + "sys.exit(0)\n")
+    if (held, buffering) == ("logging", "unbuffered"):
+        request.node.add_marker(_SWALLOWED)
     rc, err = _run_reader_gone(tmp_path, body, buffering)
-    if buffering == "unbuffered" and held == "redirect-restored":
-        pass  # the write fails before the handler: a separate path
-    else:
-        assert rc == 0, err
-    assert "Traceback" not in err and "Logging error" not in err, err
-    assert CRASH_MARK not in err, err
+    assert rc != 0, err
+    assert CRASH_MARK not in err and "Exception ignored" not in err, err
+    if held != "logging":  # logging reports a failed emit itself ("--- Logging error ---")
+        assert "Traceback" not in err, err
 
 
 def test_a_string_exit_status_is_still_printed_when_stdout_is_lost(tmp_path):
@@ -1640,7 +2066,7 @@ def test_a_reader_that_left_gets_the_reports_own_line_too(tmp_path):
             "{'x': 'y' * 1_000_000}, on_stdout_failure=own))\n")
     rc, err = _run_closed(tmp_path, body, "reader-gone")
     assert rc == 2, err
-    assert "ERROR [ERR_OUTPUT]: stdout was closed before all output was written" in err, err
+    assert "ERROR [ERR_OUTPUT]: cannot write to stdout: Broken pipe" in err, err
 
 
 @pytest.mark.parametrize("builder", ["bad", "lambda d: ''", "lambda d: 3"])
@@ -1663,21 +2089,148 @@ def test_on_stdout_failure_must_be_callable():
 def test_a_reports_stdout_failure_line_does_not_outlive_its_run(capsys):
     """#3450: the builder a Report set is cleared by the reset (tests that run
     tools in-process) and at the start of every run(), so a later run's
-    stdout failure is not worded by an earlier run's tool."""
+    stdout failure is not worded by an earlier run's tool. The same for a
+    best-effort delivery (#3558)."""
     sys.path.insert(0, str(TOOLS_DIR))
     import _lib_exitcodes as ec  # noqa: E402
 
     def own(detail):
         return "ERROR [X]: " + detail
 
-    ec.emit_result(ec.Report({}, on_stdout_failure=own))
-    assert ec._tools_stdout_failure_line("ERROR: d") == "ERROR [X]: d"
+    ec.emit_result(ec.Report({}, on_stdout_failure=own, delivery="best_effort"))
+    assert ec._stdout_failure_line is own and ec._best_effort
     ec.reset_exit_state()
-    assert ec._tools_stdout_failure_line("ERROR: d") == "ERROR: d"
+    assert ec._stdout_failure_line is None and not ec._best_effort
 
-    ec.emit_result(ec.Report({}, on_stdout_failure=own))
+    ec.emit_result(ec.Report({}, on_stdout_failure=own, delivery="best_effort"))
     seen = []
     with pytest.raises(SystemExit):
-        ec.run(lambda: seen.append(ec._tools_stdout_failure_line("ERROR: d")) or 0)
-    assert seen == ["ERROR: d"]
+        ec.run(lambda: seen.append((ec._stdout_failure_line, ec._best_effort)) or 0)
+    assert seen == [(None, False)]
     capsys.readouterr()
+
+
+# ── #3558 P2: Report(..., delivery="best_effort") ────────────────────────
+
+_DELIVERY_WAYS = {
+    # (how stdout fails, size of the document)
+    "dev-full-small": ("dev-full", 10),
+    "dev-full-big": ("dev-full", "io.DEFAULT_BUFFER_SIZE * 4"),
+    "reader-gone-small": ("reader-gone", 10),
+    "reader-gone-big": ("reader-gone", "io.DEFAULT_BUFFER_SIZE * 4"),
+    "closed-at-start": (">&-", 10),
+}
+
+
+def _deliver(tmp_path: Path, kwargs: str, way: str, buffering: str) -> tuple[int, str]:
+    how, size = _DELIVERY_WAYS[way]
+    body = (f"_lib_exitcodes.run(lambda: _lib_exitcodes.Report("
+            f"{{'x': 'y' * ({size})}}, 5{kwargs}))\n")
+    script = _script(tmp_path, body)
+    env = _BUFFERING[buffering]
+    if how == "dev-full":
+        if not os.path.exists("/dev/full"):
+            pytest.skip("/dev/full does not exist here")
+        with open("/dev/full", "wb") as full:
+            proc = _run(script, stdout=full.fileno(), env=env)
+    elif how == "reader-gone":
+        r, w = os.pipe()
+        os.close(r)
+        try:
+            proc = _run(script, stdout=w, env=env)
+        finally:
+            os.close(w)
+    else:
+        proc = _run_with_fds_closed(script, close=">&-", env=env)
+    return proc.returncode, proc.stderr.decode("utf-8", "replace")
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("way", sorted(_DELIVERY_WAYS))
+def test_best_effort_keeps_the_status_and_says_the_failure(tmp_path, way, buffering):
+    """P2: the document cannot be delivered — the line is printed once, and
+    the run keeps the Report's status (5 here: patch-config's codes say what
+    the ConfigMap holds)."""
+    rc, err = _deliver(tmp_path, ", delivery='best_effort'", way, buffering)
+    assert rc == 5, err
+    assert err.count(STDOUT_CLOSED_LINE) == 1, err
+    assert "Exception ignored" not in err and "Traceback" not in err, err
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("way", sorted(_DELIVERY_WAYS))
+def test_the_default_delivery_replaces_the_status(tmp_path, way, buffering):
+    """Control for the test above: the same failure without best effort is
+    the run's failure — rc 2, whatever the Report's status was."""
+    rc, err = _deliver(tmp_path, "", way, buffering)
+    assert rc == 2, err
+    assert err.count(STDOUT_CLOSED_LINE) == 1, err
+
+
+def test_best_effort_with_a_healthy_stdout_is_the_plain_report(tmp_path):
+    proc = _run(_script(tmp_path, "_lib_exitcodes.run(lambda: _lib_exitcodes.Report("
+                                  "{'n': 1}, 3, delivery='best_effort'))\n"))
+    assert proc.returncode == 3, proc.stderr
+    assert json.loads(proc.stdout) == {"n": 1}
+    assert proc.stderr == b""
+
+
+@pytest.mark.parametrize("bad", ["best-effort", "", None, "ALL"])
+def test_delivery_must_be_one_of_the_two(bad):
+    sys.path.insert(0, str(TOOLS_DIR))
+    import _lib_exitcodes as ec  # noqa: E402
+    with pytest.raises(ValueError):
+        ec.Report({}, delivery=bad)
+    assert ec.DELIVERIES == ("all", "best_effort")
+
+
+@pytest.mark.parametrize("buffering", sorted(_BUFFERING))
+@pytest.mark.parametrize("then", ["return-int", "best-effort-report"])
+def test_a_noted_stdout_failure_keeps_the_status(tmp_path, then, buffering):
+    """`note_stdout_failure` (patch-config's `_say`): the tool caught its own
+    stdout write's error and handed it over — one line, and the run keeps
+    the code it ends with, even with bytes still owed to stdout."""
+    ending = ("return 6" if then == "return-int"
+              else "return _lib_exitcodes.Report({'n': 1}, 6, delivery='best_effort')")
+    body = ("def main():\n"
+            "    try:\n        print('owed')\n        print('x' * (io.DEFAULT_BUFFER_SIZE * 4))\n"
+            "        sys.stdout.flush()\n"
+            "    except OSError as exc:\n        _lib_exitcodes.note_stdout_failure(exc)\n"
+            f"    {ending}\n"
+            "_lib_exitcodes.run(main)\n")
+    rc, err = _run_closed(tmp_path, body, "reader-gone", _BUFFERING[buffering])
+    assert rc == 6, err
+    assert err.count(STDOUT_CLOSED_LINE + " Broken pipe") == 1, err
+    assert "Traceback" not in err and "Exception ignored" not in err, err
+
+
+# ── #3579 PR5: scripts/ops/ reaches the run() exit on its own ───────────────
+
+def _ops_entries() -> list[str]:
+    return sorted(rel for rel in _gated_sources() if rel.startswith("scripts/ops/"))
+
+
+@pytest.mark.parametrize("via", ["path", "symlink"])
+def test_every_ops_entry_finds_its_exit_from_anywhere(via, tmp_path):
+    """scripts/ops/ tools append scripts/tools/ to sys.path themselves (no
+    _lib_* of theirs did before #3579): run from another directory, or
+    through a symlink to the file, the `import _lib_exitcodes` of the guard
+    must still resolve — whatever the tool then does with `--help`."""
+    import subprocess
+    from _platform_fs import symlink_or_skip  # noqa: E402
+    entries = _ops_entries()
+    assert len(entries) >= 14, entries
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONUNBUFFERED")}
+    missing = []
+    for rel in entries:
+        target = REPO_ROOT / rel
+        if via == "symlink":
+            link = tmp_path / Path(rel).name
+            symlink_or_skip(target, link)
+            target = link
+        proc = subprocess.run([sys.executable, str(target), "--help"], cwd=tmp_path,
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", env=env, timeout=60, stdin=subprocess.DEVNULL)
+        if "No module named '_lib_" in proc.stderr:
+            missing.append(f"{rel}: {proc.stderr.strip().splitlines()[-1]}")
+    assert not missing, "\n".join(missing)

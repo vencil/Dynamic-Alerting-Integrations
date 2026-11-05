@@ -5,7 +5,8 @@ The threshold-exporter's walker rejects such a tree WHOLE
 on a change to a tenant file, and the generator merged the two blocks key by
 key and routed on whichever file sorted last. Measured before this, on a
 conf.d with ``t-a.yaml`` and ``t-a2.yaml`` both declaring ``t-a``:
-``--validate`` / ``--validate --strict --policy`` / render /
+``--validate`` / ``--validate --strict --policy`` / render (the former
+no-mode routing fragment; ``--output-alertmanager`` here since #1211) /
 ``--output-configmap`` all rc 0.
 
 The contract pinned here (owner decision on #2315 (c)), with amtool NOT on
@@ -123,8 +124,8 @@ class TestDuplicateTenantIsRefused:
         for label in labels:
             assert label in err, err
 
-    @pytest.mark.parametrize("mode", [[], ["--output-configmap"]],
-                             ids=["render", "output-configmap"])
+    @pytest.mark.parametrize("mode", [["--output-alertmanager"], ["--output-configmap"]],
+                             ids=["output-alertmanager", "output-configmap"])
     @pytest.mark.parametrize("strict", [False, True], ids=["plain", "strict"])
     def test_write_modes_exit_1_and_write_nothing(self, dup, tmp_path, mode,
                                                    strict):

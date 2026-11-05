@@ -2,6 +2,8 @@
   "schema": "da-guard.key-verdict/v2",
   "at": "2026-07-01T03:00:00Z",
   "undecidable": true,
+  "blocks": true,
+  "undecidable_blocks": true,
   "tenants": {
     "ta": [
       {
@@ -43,7 +45,8 @@
       ],
       "reason": "unregistered",
       "served_family": [],
-      "served_from": []
+      "served_from": [],
+      "blocks": true
     }
   ],
   "key_checks": {

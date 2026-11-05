@@ -81,7 +81,6 @@ func wFixture(t *testing.T, role, file string) *orgEnfFixture {
 			y = wUnrestrictedRBAC
 		}
 		f.rbacMgr = newRBACManagerWithClaims(t, y, map[string]string{"org": orgEnfClaimHeader})
-		f.rbacMgr.EnableOrgScopeEnforce()
 	}
 	return f
 }

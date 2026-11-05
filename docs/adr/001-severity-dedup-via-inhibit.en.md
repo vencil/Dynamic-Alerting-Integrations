@@ -64,7 +64,7 @@ tenants:
 ```
 
 ```bash
-python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
+python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --output-alertmanager --dry-run
 ```
 
 Output (excerpt): only `shop` gets an inhibit rule; `batch` is skipped.

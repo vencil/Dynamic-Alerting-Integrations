@@ -67,8 +67,7 @@ const auditReverseForbiddenMsg = "platform admin (non-org-scoped) permission req
 // @Summary     Reverse access report: who can access this tenant (audit-only)
 // @Description Enumerates the live RBAC config with the SAME predicates the
 // @Description forward gates run and reports, per rule, who is granted what on
-// @Description tenant {id} under which org-gate conditions (both shadow and
-// @Description enforce outcomes). Audit-only: authorization decisions remain
+// @Description tenant {id} under which org-gate conditions. Audit-only: authorization decisions remain
 // @Description with the forward gates. Requires a NON-org-scoped platform
 // @Description admin grant; all other callers receive a constant 403
 // @Description regardless of {id} (no tenant-enumeration oracle). Note the

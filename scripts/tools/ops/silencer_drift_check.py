@@ -137,9 +137,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope,
-)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_paths import require_path  # noqa: E402  (#3276)
 
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
@@ -701,8 +699,6 @@ def main(argv: list[str] | None = None) -> "int | Report":
         ),
     )
     args = ap.parse_args(argv)
-    if args.json:
-        arm_crash_envelope()  # #3094: a crash in --json mode still prints one envelope
 
     if (args.rule_source is None) == (args.rule_pack_dir is None):
         print("ERROR: give --rule-source or --rule-pack-dir (exactly one of them)",

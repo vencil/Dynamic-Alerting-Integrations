@@ -37,12 +37,12 @@ lang: zh
 |------|---------------------|------------------------|
 | **前置條件** | 任何 Prometheus 環境 | kube-prometheus-stack 已安裝 |
 | **Rule Pack 載入** | projected volume / configMapGenerator | PrometheusRule CRD |
-| **路由配置** | `generate_alertmanager_routes.py` → ConfigMap | `operator-generate` → AlertmanagerConfig CRD |
+| **路由配置** | `generate_alertmanager_routes.py` → ConfigMap | `generate-routes --output-alertmanager` → Secret → Alertmanager CR `configSecret`（同一個產生器；不產生 AlertmanagerConfig CRD） |
 | **配置重載** | config-reloader sidecar（Rule Pack 熱更新；`prometheus.yml` 若以 `subPath` 掛載則仍須重啟 Pod——K8s 不把 ConfigMap 更新傳播進 subPath 掛載，本 repo 的 manifest 正是這樣掛的） | Operator 自動 reconcile |
 | **GitOps 支援** | 手動管理 ConfigMap YAML | `--gitops` 產出 deterministic YAML |
 | **多 Prometheus** | 複雜（需手動分配 ConfigMap） | 原生支援（namespace-scoped CRD） |
 | **遷移複雜度** | 低（直接掛載） | 中（需轉換 CRD 格式） |
-| **Receiver 模板** | 5 種（YAML 模板） | 6 種（secretKeyRef 安全引用） |
+| **Receiver 模板** | 5 種（YAML 模板） | 同 Path A（`generate-routes` 渲染；`secretRef` 經 Alertmanager CR `spec.secrets` 掛載） |
 | **驗證工具** | `validate_config.py` | `operator-check` |
 | **學習曲線** | 低 | 中（需理解 CRD + Operator 概念） |
 
@@ -73,7 +73,7 @@ lang: zh
 
 ## 混合注意事項
 
-**同一叢集的 Alertmanager 不可同時使用兩種路徑管理路由**。Prometheus 端（Rule Pack 載入）可以混合使用，但 Alertmanager 路由必須擇一。詳見 [ADR-008](../adr/008-operator-native-integration-path.md)。
+**同一叢集的 Alertmanager 不可同時使用兩種路徑管理路由**。兩條路徑的路由都由 `generate-routes` 渲染，差別在載入方式：ConfigMap 掛載，或 Alertmanager CR 的 `spec.configSecret`。Prometheus 端（Rule Pack 載入）可以混合使用，但一個 Alertmanager 只能從其中一種載入。詳見 [ADR-008](../adr/008-operator-native-integration-path.md)。
 
 ---
 

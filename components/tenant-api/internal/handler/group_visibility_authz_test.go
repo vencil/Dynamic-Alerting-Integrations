@@ -180,7 +180,6 @@ func TestDeleteGroup_403NamesReadableAndAcknowledgesHidden(t *testing.T) {
     tenants: ["`+readOnlyTenant+`"]
     permissions: [read]
 `, map[string]string{"org": orgEnfClaimHeader})
-	f.rbacMgr.EnableOrgScopeEnforce()
 	d := f.deps()
 
 	req := newRequestWithChiParam("DELETE", "/api/v1/groups/g3", "id", "g3", nil)

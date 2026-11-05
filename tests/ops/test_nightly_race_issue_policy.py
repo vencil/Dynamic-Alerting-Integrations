@@ -21,7 +21,7 @@ Same reason as tests/ops/test_nightly_scan_matrix_drift.py: this workflow is
 only thing that can catch a regression before it ships a month of silence is an
 offline test in a job that actually runs. `tests/ops/*.sh` would not do — pytest
 does not collect shell scripts. This file is collected by the existing
-"Python Tests (3.13)" required check, whose path filter includes
+"Python Tests" required check, whose path filter includes
 `.github/workflows/**` (see ci.yml's `python:` filter), so editing the workflow
 runs this guard. ⚠️ Anchored by NAME, not by line number: the two citations in
 this docstring were both stale before anyone noticed, because a line number is
@@ -1119,8 +1119,9 @@ def test_issue_titles_fit_the_github_api_cap() -> None:
     long_subject = "github.com/vencil/threshold-exporter/" + "very/deep/package/" * 20
     for module in _matrix_modules():
         for verdict in ("NO RESULT — leg produced no fragment", "not seen on 2026-10-14",
-                        "isolation-shaped — failed 9 of 10 repetitions"):
-            title = file_race_report.make_title(module, "timeout", long_subject, verdict)
+                        "isolation-shaped — failed 9 of 10 repetitions",
+                        "WARNING, not failing — 1799.9 s of the 1800 s -timeout"):
+            title = file_race_report.make_title(module, "slow-package", long_subject, verdict)
             if len(title) > 256:
                 problems.append(f"{module}: {len(title)} > 256")
             if not title.endswith(f" — {verdict}"):
@@ -1344,7 +1345,12 @@ def _load_workflow(path: Path) -> dict:
 
 
 def test_nightly_go_test_runs_with_short() -> None:
-    steps = (_load_workflow(WORKFLOW)["jobs"].get("race") or {}).get("steps") or []
+    """Nightly is the repeat-stress tier and keeps -short for good (#3541).
+
+    Full coverage is PR CI's job (see the next test); a package is one test
+    binary, so sharding cannot split a full matrix run x10 across legs.
+    """
+    steps =(_load_workflow(WORKFLOW)["jobs"].get("race") or {}).get("steps") or []
     cmds = [c for s in steps for c in _go_test_commands(str(s.get("run") or ""))]
     assert cmds, "no `go test` command found in nightly-race.yaml's race job"
     missing = [" ".join(c) for c in cmds if not _has_short(c)]
@@ -1386,3 +1392,187 @@ def test_pr_ci_exporter_race_step_runs_the_full_matrix() -> None:
         "its exhaustive matrices run in no gate at all (#2977 acceptance 3):\n  "
         + "\n  ".join(narrowed)
     )
+
+
+# ── (f) slow packages are tracked, but are warnings (#3541 PR-B) ─────────────
+#
+# A package over half its per-binary -timeout gets its own `slow-package`
+# fingerprint issue, filed / refreshed / not-seen like every other kind — but
+# it is NOT a failure: it must not turn a green module red, suppress
+# `unattributed`, or be filed a second time for a package that timed out.
+
+SLOW_PKG = "github.com/vencil/tenant-api/internal/handler"
+
+
+def _slow(pkg: str = SLOW_PKG, elapsed: float = 940.79) -> dict:
+    return {"package": pkg, "elapsed_s": elapsed}
+
+
+def _slow_frag(**over) -> dict:
+    """A green night with one slow package, as the REAL parser shapes it."""
+    from parse_go_test_json import GO_TEST_TIMEOUT_S, SLOW_PACKAGE_RATIO  # noqa: PLC0415
+
+    base = {"failed": False, "failed_tests": [], "go_exit_code": 0, "fail_events": 0,
+            "slow_packages": [_slow()],
+            "slow_package_threshold_s": GO_TEST_TIMEOUT_S * SLOW_PACKAGE_RATIO,
+            "go_test_timeout_s": GO_TEST_TIMEOUT_S}
+    base.update(over)
+    return _frag(**base)
+
+
+def test_slow_package_kind_is_registered() -> None:
+    assert "slow-package" in file_race_report.INCIDENT_KINDS
+    assert file_race_report.WARNING_KINDS == {"slow-package"}
+    assert file_race_report.WARNING_KINDS <= set(file_race_report.INCIDENT_KINDS)
+
+
+def test_slow_package_derivation() -> None:
+    tp = {"package": SLOW_PKG, "after": "30m0s", "running_tests": []}
+    cases = {
+        "green + slow": (_slow_frag(), [("slow-package", SLOW_PKG)]),
+        "failing test + slow": (_slow_frag(failed=True, failed_tests=["TestA"], go_exit_code=1),
+                                [("test", "TestA"), ("slow-package", SLOW_PKG)]),
+        # Defence in depth: the parser already drops it, an odd fragment must too.
+        "timed out is not also slow": (
+            _slow_frag(failed=True, go_exit_code=1, timed_out=True,
+                       timeout_packages=[tp]), [("timeout", SLOW_PKG)]),
+        "slow does not hide an unattributed failure": (
+            _slow_frag(failed=True, go_exit_code=1, unattributed_failure=True),
+            [("unattributed", "tenant-api"), ("slow-package", SLOW_PKG)]),
+        "build subsumes it": (_slow_frag(failed=True, build_failed=True),
+                              [("build", "tenant-api")]),
+        "older fragment without the field": (
+            _frag(failed=False, failed_tests=[], go_exit_code=0), []),
+    }
+    problems = []
+    for name, (frag, want) in cases.items():
+        got = _kinds(frag)
+        if got != want:
+            problems.append(f"{name}: got {got}, expected {want}")
+    inc = derive_incidents(_slow_frag())[0]
+    if inc["fingerprint"] != f"tenant-api|slow-package|{SLOW_PKG}":
+        problems.append(f"fingerprint shape drifted: {inc['fingerprint']}")
+    assert not problems, "slow-package derivation drifted:\n  " + "\n  ".join(problems)
+
+
+def test_slow_package_body_explains_elapsed_threshold_and_triage() -> None:
+    frag = _slow_frag()
+    body = _bodies(frag)["slow-package"]
+    problems = []
+    for phrase in ("940.8 s", "900 s", "1800 s", "one test binary", "cannot split it",
+                   "race-raw-tenant-api-<shard>", "rank the tests"):
+        if phrase.lower() not in body.lower():
+            problems.append(f"body does not say {phrase!r}")
+    for phrase in (ISOLATION_CLAIM, ISOLATION_STEP, "Package timeout"):
+        if phrase in body:
+            problems.append(f"a slow-package body contains {phrase!r}")
+    if f"go test {SLOW_PKG} -race -count=10 -short" not in _section(body, "Triage"):
+        problems.append("Triage does not reproduce the single package with the nightly flags")
+    if "WARNING, not failing" not in file_race_report.incident_verdict(derive_incidents(frag)[0]):
+        problems.append("the verdict does not read as a warning")
+    assert not problems, ("slow-package body is incomplete:\n  " + "\n  ".join(problems)
+                          + f"\n--- body ---\n{body}")
+
+
+def test_a_slow_package_keeps_a_green_module_green(tmp_path: Path, capsys, monkeypatch) -> None:
+    calls: list[list[str]] = []
+    rc = _run_main(tmp_path, _slow_frag(), _list_script([], calls), monkeypatch)
+    out = capsys.readouterr().out
+    creates = [c for c in _writes(calls) if c[:2] == ["issue", "create"]]
+    problems = []
+    if rc != 0:
+        problems.append(f"a slow package alone made the report exit {rc}")
+    if "### tenant-api — GREEN (" not in out or "1 warning(s)" not in out:
+        problems.append("the module no longer reads GREEN with its warning listed")
+    if "incident(s)" in out:
+        problems.append("a warning was counted as a failing incident")
+    if len(creates) != 1:
+        problems.append(f"expected one filed slow-package issue, got {len(creates)}")
+    else:
+        title = _arg(creates[0], "--title")
+        labels = [creates[0][i + 1] for i, a in enumerate(creates[0]) if a == "--label"]
+        if f"slow-package: {SLOW_PKG} — WARNING" not in title:
+            problems.append(f"title does not carry kind/subject/warning verdict: {title!r}")
+        if labels != ["bug", "ci", "P2", LABEL]:
+            problems.append(f"labels differ from the other kinds: {labels}")
+    assert not problems, "slow package broke the module verdict:\n  " + "\n  ".join(problems)
+
+
+def test_failures_are_counted_apart_from_slow_warnings(tmp_path: Path, capsys, monkeypatch) -> None:
+    frag = _slow_frag(failed=True, failed_tests=["TestA"], go_exit_code=1)
+    _run_main(tmp_path, frag, _list_script([], []), monkeypatch)
+    out = capsys.readouterr().out
+    assert "### tenant-api — 1 incident(s) — 1 warning(s)" in out, out
+
+
+def test_slow_package_issue_is_refreshed_then_marked_not_seen(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    frag = _slow_frag()
+    row = _row(3601, frag, ("slow-package", SLOW_PKG), state=_state(streak=2))
+    calls: list[list[str]] = []
+    _run_main(tmp_path, frag, _list_script([row], calls), monkeypatch)
+    capsys.readouterr()
+    refreshed = _writes(calls)
+    problems = []
+    if [c[:3] for c in refreshed] != [["issue", "edit", "3601"]]:
+        problems.append(f"expected one refresh of #3601, got {refreshed}")
+    else:
+        state = parse_state(_arg(refreshed[0], "--body"))
+        if not state or state["streak"] != 3:
+            problems.append(f"streak not carried: {state}")
+
+    # The next night the package is back under the line: not seen, never closed.
+    calls = []
+    green = _slow_frag(slow_packages=[])
+    rc = _run_main(tmp_path / "n2", green, _list_script([row], calls), monkeypatch)
+    out = capsys.readouterr().out
+    unseen = _writes(calls)
+    if [c[:3] for c in unseen] != [["issue", "edit", "3601"]]:
+        problems.append(f"expected one not-seen edit of #3601, got {unseen}")
+    elif "not seen on" not in _arg(unseen[0], "--title"):
+        problems.append("the not-seen night is not in the title")
+    if "### tenant-api — GREEN (" not in out or rc != 0:
+        problems.append(f"green night without the slow package did not read GREEN (rc={rc})")
+    assert not problems, "slow-package lifecycle broken:\n  " + "\n  ".join(problems)
+
+
+def test_slow_package_that_timed_out_tonight_says_so(tmp_path: Path, capsys, monkeypatch) -> None:
+    """Absent because it got WORSE must not read like relief."""
+    tp = {"package": SLOW_PKG, "after": "30m0s", "running_tests": ["TestH"]}
+    frag = _slow_frag(failed=True, go_exit_code=1, slow_packages=[], timed_out=True,
+                      timeout_packages=[tp], timeout_running_tests=["TestH"])
+    row = _row(3602, frag, ("slow-package", SLOW_PKG))
+    calls: list[list[str]] = []
+    _run_main(tmp_path, frag, _list_script([row], calls), monkeypatch)
+    capsys.readouterr()
+    edit = [c for c in _writes(calls) if c[:3] == ["issue", "edit", "3602"]]
+    assert edit, f"#3602 was not refreshed: {_writes(calls)}"
+    assert "hit the `-timeout` tonight" in _arg(edit[0], "--body")
+
+
+def test_no_result_night_leaves_slow_package_issues_alone(
+    tmp_path: Path, capsys, monkeypatch
+) -> None:
+    """Same as every other kind: an unmeasured night tells no issue `not seen`."""
+    row = _row(3603, _slow_frag(), ("slow-package", SLOW_PKG))
+    calls: list[list[str]] = []
+    rc = _run_main(tmp_path, None, _list_script([row], calls), monkeypatch,
+                   modules="tenant-api")
+    out = capsys.readouterr().out
+    edits = [c for c in _writes(calls) if c[:2] == ["issue", "edit"]]
+    assert not edits, f"an unmeasured slow-package issue was edited: {edits}"
+    assert "#3603" in out and "Not re-evaluated" in out
+    assert rc != 0, "a missing fragment must still red the run"
+
+
+def test_slow_package_end_to_end_from_the_real_parser() -> None:
+    """parse_stream -> fragment fields -> incident, with no hand-built fragment."""
+    from parse_go_test_json import GO_TEST_TIMEOUT_S, parse_stream  # noqa: PLC0415
+
+    lines = [json.dumps({"Action": "pass", "Package": p, "Elapsed": e})
+             for p, e in ((SLOW_PKG, GO_TEST_TIMEOUT_S * 0.6), ("m/fast", 12.0))]
+    frag = _frag(**parse_stream(lines, go_exit_code=0), failed=False)
+    assert _kinds(frag) == [("slow-package", SLOW_PKG)]
+    inc = derive_incidents(frag)[0]
+    assert inc["threshold_s"] == GO_TEST_TIMEOUT_S / 2 and inc["timeout_s"] == GO_TEST_TIMEOUT_S

@@ -114,6 +114,13 @@ func TestValidateTenant_VerdictMatchesWrite(t *testing.T) {
 				}
 				got = append(got, resp)
 			}
+			// The ConfigDir-only wiring has no validator (#3016: the write's
+			// judgement is not asked there); the production one judges every
+			// body the earlier steps pass, as its write does.
+			if c.wantValid && (!got[0].Judged || got[1].Judged || got[1].NotJudged != notJudgedNoValidator) {
+				t.Fatalf("judged: writer %+v, configDir %+v", got[0], got[1])
+			}
+			got[1].Judged, got[1].NotJudged = got[0].Judged, got[0].NotJudged
 			if !reflect.DeepEqual(got[0], got[1]) {
 				t.Fatalf("the two handler wirings disagree:\n writer:    %+v\n configDir: %+v", got[0], got[1])
 			}

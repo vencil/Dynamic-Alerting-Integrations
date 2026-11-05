@@ -57,7 +57,7 @@ var derivedWant = map[string]ConfigDerivedState{
 func getList(t *testing.T, d *Deps) []TenantSummary {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	ListTenants(d)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
+	asUnrestricted(d.RBAC, ListTenants(d)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("ListTenants status = %d, body: %s", rec.Code, rec.Body.String())
 	}
@@ -87,7 +87,7 @@ func TestTenantList_ConfigDerivedStateIsTheExportersReading(t *testing.T) {
 
 	t.Run("list", func(t *testing.T) {
 		t.Parallel()
-		items := getList(t, &Deps{ConfigDir: dir, RBAC: openModeRBAC(t), SearchCache: NewTenantSnapshotCache()})
+		items := getList(t, &Deps{ConfigDir: dir, RBAC: unrestrictedRBAC(t), SearchCache: NewTenantSnapshotCache()})
 		if got := derivedByID(t, items); !reflect.DeepEqual(got, derivedWant) {
 			t.Errorf("config_derived\n got: %+v\nwant: %+v", got, derivedWant)
 		}
@@ -101,7 +101,7 @@ func TestTenantList_ConfigDerivedStateIsTheExportersReading(t *testing.T) {
 	t.Run("search", func(t *testing.T) {
 		t.Parallel()
 		before := time.Now()
-		resp, _, body := runSearch(t, dir, openModeRBAC(t), nil, "page_size=500")
+		resp, _, body := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "page_size=500")
 		if resp == nil {
 			t.Fatalf("search failed: %s", body)
 		}
@@ -121,7 +121,7 @@ func TestTenantList_ConfigDerivedStateIsTheExportersReading(t *testing.T) {
 func TestTenantSnapshotCache_SecondRequestDoesNotReload(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, derivedFixture())
-	d := &Deps{ConfigDir: dir, RBAC: openModeRBAC(t), SearchCache: NewTenantSnapshotCache()}
+	d := &Deps{ConfigDir: dir, RBAC: unrestrictedRBAC(t), SearchCache: NewTenantSnapshotCache()}
 
 	first := derivedByID(t, getList(t, d))
 	// Silence t-plain on disk. Within the TTL, and with no write signal, the
@@ -138,7 +138,7 @@ func TestTenantSnapshotCache_ReloadsAfterAChange(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, derivedFixture())
 	cache := NewTenantSnapshotCache()
-	d := &Deps{ConfigDir: dir, RBAC: openModeRBAC(t), SearchCache: cache}
+	d := &Deps{ConfigDir: dir, RBAC: unrestrictedRBAC(t), SearchCache: cache}
 	_ = getList(t, d)
 
 	testutil.WriteYAML(t, dir, "t-plain.yaml", "tenants:\n  t-plain:\n    _silent_mode: all\n")
@@ -177,9 +177,9 @@ func TestSearchTenants_ReportsParseFailedFiles(t *testing.T) {
 		testutil.WriteYAML(t, dir, sub, body)
 	}
 
-	t.Run("open mode names every file, relative to conf.d", func(t *testing.T) {
+	t.Run("unrestricted admin names every file, relative to conf.d", func(t *testing.T) {
 		t.Parallel()
-		resp, _, body := runSearch(t, dir, openModeRBAC(t), nil, "page_size=500")
+		resp, _, body := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "page_size=500")
 		if resp == nil {
 			t.Fatalf("search failed: %s", body)
 		}
@@ -314,7 +314,7 @@ func TestSearchTenants_LoadErrorIsContentFreeForScopedCallers(t *testing.T) {
 
 	t.Run("org-scoped caller", func(t *testing.T) {
 		t.Parallel()
-		mgr, torg, _ := newOrgReadManager(t, orgReadRBACYAML, true)
+		mgr, torg, _ := newOrgReadManager(t, orgReadRBACYAML)
 		d := &Deps{ConfigDir: dir, RBAC: mgr, TenantOrg: torg, SearchCache: NewTenantSnapshotCache()}
 		resp, body := searchAs(t, d, mgr.Middleware(rbac.PermRead, nil), func(r *http.Request) { orgReadIdentity(r, orgReadMemberOrg) })
 		if resp.ConfigDerivation.LoadError != scopedLoadError {
@@ -382,7 +382,7 @@ func TestSearchTenants_LoadErrorIsContentFreeForScopedCallers(t *testing.T) {
 // not write into it (run under -race).
 func TestTenantSnapshotCache_ConcurrentReadersShareOneLoad(t *testing.T) {
 	t.Parallel()
-	d := &Deps{ConfigDir: setupConfigDir(t, derivedFixture()), RBAC: openModeRBAC(t), SearchCache: NewTenantSnapshotCache()}
+	d := &Deps{ConfigDir: setupConfigDir(t, derivedFixture()), RBAC: unrestrictedRBAC(t), SearchCache: NewTenantSnapshotCache()}
 	var wg sync.WaitGroup
 	recs := make([]*httptest.ResponseRecorder, 8)
 	for i := range recs {
@@ -390,7 +390,7 @@ func TestTenantSnapshotCache_ConcurrentReadersShareOneLoad(t *testing.T) {
 		wg.Add(1)
 		go func(rec *httptest.ResponseRecorder) {
 			defer wg.Done()
-			ListTenants(d)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
+			asUnrestricted(d.RBAC, ListTenants(d)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
 		}(recs[i])
 	}
 	wg.Wait()
@@ -483,7 +483,7 @@ func TestListTenants_LoadErrorDropsRawState(t *testing.T) {
 	files := derivedFixture()
 	files["t-dup.yaml"] = "tenants:\n  t-silent:\n    cpu: \"1\"\n" // the exporter rejects the tree
 	dir := setupConfigDir(t, files)
-	for _, it := range getList(t, &Deps{ConfigDir: dir, RBAC: openModeRBAC(t), SearchCache: NewTenantSnapshotCache()}) {
+	for _, it := range getList(t, &Deps{ConfigDir: dir, RBAC: unrestrictedRBAC(t), SearchCache: NewTenantSnapshotCache()}) {
 		if it.ConfigDerived != nil || it.SilentMode != "" || it.Maintenance != "" {
 			t.Errorf("load-error row carries state: %+v", it)
 		}

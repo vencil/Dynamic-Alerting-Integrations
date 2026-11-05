@@ -42,18 +42,19 @@ from _lib_python import detect_cli_lang, add_prometheus_arg  # noqa: E402
 # #3133: the lib's raising reader (shape checked, samples read once).
 from _lib_prometheus import QueryError, prometheus_instant  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 from _lib_paths import require_dir  # noqa: E402  (#3276 / #3392)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_kubectl import KubectlError, kubectl_list, kubectl_logs  # noqa: E402  (#3349)
 # #2526 / #2547: the tenant's resolution is threshold-exporter's own
 # (`da-guard effective`); see resolve_inheritance_chain.
+from _lib_parse_tree import KeySpellings  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
     EffectiveTree,
     ServedTree,
     ServedValuesError,
-    canonical_key,
     exit_on_served_values_error,
+    key_spellings,
     load_effective_tree,
     load_served_tree,
 )
@@ -371,18 +372,28 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
 
     tree = _load_effective(base)
     _tenant_entry(tree, tenant, str(base))
-    return chain_for(tenant, ChainSource(base, tree, load_served_tree(base)))
+    return chain_for(tenant, _chain_source(base, tree, load_served_tree(base)))
 
 
 class ChainSource(NamedTuple):
-    """One read of a tree for many chains (#1525): `da-guard effective` and
-    `served-values` once, then `chain_for` per tenant."""
+    """One read of a tree for many chains (#1525): `da-guard effective`,
+    `served-values` and `key-spellings` (#3556) once, then `chain_for` per
+    tenant."""
 
     base: Path
     effective: EffectiveTree
     served: ServedTree
+    spellings: KeySpellings
+    """The #1231 spellings of every tenant's threshold keys."""
     where: str = ""
     """How a missing tenant names the tree (default: `base`)."""
+
+
+def _chain_source(base: Path, tree: EffectiveTree, served: ServedTree, where: str = "") -> ChainSource:
+    """`ChainSource` with one `key-spellings` run over every tenant's keys."""
+    spellings = key_spellings(k for te in tree.tenants.values() for k in te.key_sources
+                              if not k.startswith("_"))
+    return ChainSource(base, tree, served, spellings, where)
 
 
 def load_chain_source(config_dir: str | Path, *, where: str = "") -> ChainSource:
@@ -392,7 +403,7 @@ def load_chain_source(config_dir: str | Path, *, where: str = "") -> ChainSource
     require_config_dir(str(config_dir))
     base = Path(config_dir)
     tree = _load_effective(base)
-    return ChainSource(base, tree, load_served_tree(base), where)
+    return _chain_source(base, tree, load_served_tree(base), where)
 
 
 def _load_effective(base: Path) -> EffectiveTree:
@@ -438,11 +449,13 @@ def chain_for(tenant: str, source: ChainSource) -> dict[str, object]:
     resolved: dict[str, object] = {}
     groups: dict[tuple[str, str], dict[str, object]] = {}
     # /effective keeps one spelling per threshold (it drops the shadowed
-    # one), so each key below maps to its own canonical row.
+    # one), so each key below maps to its own canonical row — the exporter's
+    # spelling, asked of it (#3556).
+    spellings = source.spellings
     for key, src in te.key_sources.items():
         if key.startswith("_"):
             continue
-        canon = canonical_key(key, served_tree.aliases)
+        canon = spellings.canonical(key)
         written = te.effective_config[key]
         if canon in served.severities:
             value = served.values[canon]
@@ -667,8 +680,6 @@ def main() -> Report:
     parser.add_argument("--json", action="store_true", default=True,
                         help="Emit machine-readable JSON to stdout (default).")
     args = parser.parse_args()
-    if args.json:  # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
 
     if args.show_inheritance and args.config_dir is None:
         print("ERROR: --show-inheritance requires --config-dir",
@@ -691,8 +702,8 @@ def main() -> Report:
     except KubectlError as exc:
         # issue 1513 / #2968 / #3349: no answer from the cluster — kubectl
         # missing (the da-tools image ships none), forbidden, unreachable or
-        # out of time — is the environment: rc 2 and one line, the reason
-        # `kubectl_error` under --json; never "Pod not found" (rc 1).
+        # out of time — is the environment: rc 2 and one stderr line (stdout
+        # empty under --json, #3558); never "Pod not found" (rc 1).
         raise KubectlError(f"{exc}; the MariaDB Pod check needs kubectl and a cluster "
                            "that answers") from None
     except CommandTimeoutError as exc:

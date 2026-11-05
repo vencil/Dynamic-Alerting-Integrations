@@ -14,7 +14,7 @@ lang: en
 >
 > Related: [GitOps CI/CD Guide](gitops-ci-integration.en.md) · [Tenant Lifecycle](tenant-lifecycle.en.md) · [CLI Reference](../cli-reference.md)
 
-> ⚠️ **Version**: the expected outputs on this page were measured with da-tools from main, which is newer than the current `ghcr.io/vencil/da-tools:latest` (v2.9.0). Until the next release, following along with `:latest` shows three differences: Exercise 3 has only 5 checks (no `tenant_uniqueness`); `schema` shows 7 extra `unknown key … not in defaults` lines (`jvm_memory`, `kafka_broker_count`, `mysql_threads_running`, `oracle_sessions_active`, `oracle_sessions_active_critical`, `redis_memory_used_bytes`, `redis_memory_used_bytes_critical`); and `--strict` in Exercise 8 does not exist in v2.9.0, so adding it fails with exit code 2 (without it, the domain policy WARN still appears). <!-- image-caveat: v2.9.0 -->
+> ⚠️ **Version**: the expected outputs on this page were measured with da-tools from main, which is newer than the current `ghcr.io/vencil/da-tools:latest` (v2.9.0). Until the next release, following along with `:latest` shows four differences: Exercise 3 has only 5 checks (no `tenant_uniqueness`); `schema` shows 7 extra `unknown key … not in defaults` lines (`jvm_memory`, `kafka_broker_count`, `mysql_threads_running`, `oracle_sessions_active`, `oracle_sessions_active_critical`, `redis_memory_used_bytes`, `redis_memory_used_bytes_critical`); `--strict` in Exercise 8 does not exist in v2.9.0, so adding it fails with exit code 2 (without it, the domain policy WARN still appears); and v2.9.0 has no `--output-alertmanager`, so the Exercise 4 command fails there. <!-- image-caveat: v2.9.0 -->
 
 > 💡 **Want to see the product running in ~1 minute instead of typing CLI commands?** → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md) (recommended first stop: da-portal UI in the browser + a real firing alert, no K8s; `⏱️ <1 min · 🟢 Docker only`). **This lab** focuses on the hands-on **da-tools CLI workflow** (config / routing / blast radius; `⏱️ 30–45 min · 🟡 Medium (CLI)`) — complementary, different depth, not either/or.
 
@@ -291,17 +291,20 @@ The exit code is `0`: it is non-zero (`1`) only when a check is `fail`, and a WA
 
 ## Exercise 4: Generate Alertmanager Routes
 
+> ⚠️ The command below needs a da-tools build with `--output-alertmanager`; the `:latest` image (v2.9.0) does not have it — see the version note at the top of this page. <!-- image-caveat: v2.9.0 -->
+
 ```bash
 mkdir -p .output
 
-# Write the file: do NOT add --validate here — it returns before -o is used, and the tool refuses the pair (exit 2)
+# Write the merged alertmanager.yml: a mode flag is required (-o alone is exit 2);
+# do NOT add --validate here — it returns before -o is used, and the tool refuses the pair (exit 2)
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   -v $(pwd)/.output:/data/output \
   ghcr.io/vencil/da-tools:latest \
-  generate-routes --config-dir /data/conf.d \
-  -o /data/output/alertmanager-routes.yaml
+  generate-routes --config-dir /data/conf.d --output-alertmanager \
+  -o /data/output/alertmanager.yml
 
 # Validate in a separate run (read-only, writes nothing)
 docker run --rm \
@@ -317,8 +320,10 @@ Expected output (first run):
 Config files: 8 read, 0 skipped
 Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
 Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
-Written to /data/output/alertmanager-routes.yaml (5 routes, 5 receivers, 5 inhibit rules)
+Written to /data/output/alertmanager.yml (5 routes, 5 receivers, 5 inhibit rules)
 ```
+
+stderr also carries two WARN lines, expected in this exercise: no `--base-config` is given, so the config is merged into the built-in placeholder base, whose root receiver `default` and `watchdog-heartbeat` are wired to nothing. For your own Alertmanager pass `--base-config <your own Alertmanager config>` — the source, not the `alertmanager.yml` this tool writes (an output passed as the base is refused, exit 1); see [BYO Alertmanager Integration Guide Step 5](../integration/byo-alertmanager-integration.en.md#step-5-merge-into-alertmanager-configmap). ⚠️ The v2.9.0 image has no `--output-alertmanager` (and `:latest` is that image until the next release); with it, drop `--output-alertmanager` and you get a fragment holding only the tenant routing <!-- image-caveat: v2.9.0 -->
 
 Second run (`--validate`):
 
@@ -330,7 +335,7 @@ Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
 OK: all configs valid
 ```
 
-Each tenant gets its own block under `route.routes` in `.output/alertmanager-routes.yaml` (`matchers: tenant="…"`), with 5 `receivers` and 5 `inhibit_rules`. Against the Exercise 2 settings:
+`.output/alertmanager.yml` is a complete Alertmanager config. `route.routes` starts with the platform's four routes (Watchdog, `component="custom"`, synthetic probe, sentinel), then each tenant gets its own block (`matchers: tenant="…"`); `receivers` holds the base's `default` and the four platform receivers besides the five `tenant-…` ones, and `inhibit_rules` the five tenants' severity dedup rules. Against the Exercise 2 settings:
 
 | Tenant | receiver | group_wait | repeat_interval | From |
 |---|---|---|---|---|

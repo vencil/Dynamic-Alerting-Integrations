@@ -503,9 +503,9 @@ class TestCli:
     @pytest.mark.parametrize("json_flag", [[], ["--json"]], ids=["text", "json"])
     def test_run_with_stderr_closed_at_start(self, synth_cli, tmp_path, json_flag):
         """#3448 審查：fd 2 在啟動時就關了（sys.stderr 為 None）時，結束碼與
-        修正前相同（0），pytest 的輸出不進 stdout。（工具自己的 stderr 行在
-        sys.stderr 為 None 時會被 print 送到 stdout——所有工具共通、修正前
-        就如此，追蹤於 #3518。）"""
+        修正前相同（0），pytest 的輸出不進 stdout。#3558 起關閉的 fd 2 以唯讀
+        /dev/null 補上、sys.stderr 指向可寫的 /dev/null：工具自己的 stderr 行
+        也不再進 stdout。"""
         import shutil
         if shutil.which("sh") is None:
             pytest.skip("needs a POSIX sh to start the tool with fd 2 closed")

@@ -53,6 +53,9 @@ on:
       - "helm/**/values*.yaml"
       - "k8s/**"
       - "scripts/ops/check_image_refs_resolve.py"
+      # #3579: the script exits through _lib_exitcodes.run(), which imports _lib_compat.
+      - "scripts/tools/_lib_exitcodes.py"
+      - "scripts/tools/_lib_compat.py"
       # #3206: the reading the scan asks (da-crdecode) and its client.
       - "scripts/tools/_lib_consumer_read.py"
       - "components/threshold-exporter/app/cmd/da-crdecode/**"
@@ -89,7 +92,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       # Its own step so a dependency failure cannot be mistaken for a resolve
       # failure in either scope below.

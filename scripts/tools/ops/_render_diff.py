@@ -228,8 +228,9 @@ def render_routes(conf_d: str | os.PathLike[str], *,
             kind = "config" if refused and not crashed else "tool"
             raise RenderError(RenderFailure(kind, f"route generator exited {proc.returncode}: {last}"))
         if not out.exists():
-            # A tree with no tenant: the generator exits 0 and writes nothing
-            # ("No tenants found in config directory.").
+            # Nothing written at rc 0. Since #1211 gap 2 a tree with no tenant
+            # is still written (the base and the platform routes), so this is
+            # only reached if the generator stops writing one again.
             return dict(EMPTY_ROUTES)
         # ADR-036 §12 (#3206): the ConfigMap as kubectl reads it (da-crdecode),
         # its alertmanager.yml as Alertmanager loads it (da-read alertmanager).
@@ -429,10 +430,29 @@ def flatten_routes(cfg: dict[str, Any]) -> dict[tuple[str, ...], dict[str, Any]]
     """Every route node keyed by its matcher path (the root is `()`)."""
     out: dict[tuple[str, ...], dict[str, Any]] = {}
 
+    def children(node: dict[str, Any]) -> list[dict[str, Any]]:
+        # #2519: with per-tenant enforced routing the merge puts the routes
+        # below the enforced ones under one matcher-less route to the SAME
+        # receiver, standing in for the root. It is not a level of its own:
+        # its children are the node's children (the same routes, not moved).
+        # Only the LAST child: an earlier matcher-less route without
+        # `continue` takes every alert before its later siblings, a real
+        # difference the comparison must keep.
+        out_: list[dict[str, Any]] = []
+        kids = node.get("routes") or []
+        for i, child in enumerate(kids):
+            if (i == len(kids) - 1 and not _matchers(child) and not child.get("continue")
+                    and child.get("receiver") in (None, node.get("receiver"))
+                    and set(child) <= {"receiver", "routes"}):
+                out_.extend(children(child))
+            else:
+                out_.append(child)
+        return out_
+
     def walk(node: dict[str, Any], path: tuple[str, ...]) -> None:
         out[path] = {a: node[a] for a in ROUTE_ATTRS if a in node}
         seen: dict[str, int] = {}
-        for child in node.get("routes") or []:
+        for child in children(node):
             step = ", ".join(_matchers(child))
             n = seen.get(step, 0)
             seen[step] = n + 1

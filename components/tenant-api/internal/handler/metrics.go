@@ -156,10 +156,8 @@ func MetricsHandler(w http.ResponseWriter, r *http.Request) {
 	// audit is disabled) so the metric's shape is stable across the flag.
 	writeIdentityAuditMetrics(w)
 
-	// ADR-027 / LD-6 P1: scope-filter would-deny counters. Records unlabeled
-	// subjects that shadow mode allows but enforce mode would deny; operators
-	// watch this to zero before flipping a scope axis to enforce.
-	writeScopeWouldDenyMetrics(w)
+	// ADR-027 §7: decisions a scope axis denied, by axis.
+	writeScopeDeniedMetrics(w)
 
 	// Gemini #1056 disposition 3a: per-config-manager reload-failure counters.
 	// Non-zero ⇒ a manager hit a parse error on reload — either a periodic

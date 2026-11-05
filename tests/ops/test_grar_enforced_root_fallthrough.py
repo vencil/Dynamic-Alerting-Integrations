@@ -3,8 +3,10 @@
 Alertmanager `dispatch/route.go` 的 `Route.Match`：子 route 一個都沒命中才加入 root；
 `continue: true` 的子 route 命中也算命中。所以只有閾值／只有 `_silent_mode`／
 `_routing: disable`／`_routing` 被拒收的租戶，在 #2519 之前落到 root receiver，
-展開 enforced route 之後若不補尾端 route，就只剩 `platform-enforced-<id>`
-（amtool v0.28.1 實測 `default` → `platform-enforced-t-thr`）。
+展開 enforced route 之後若沒有東西代替 root，就只剩 `platform-enforced-<id>`
+（amtool v0.28.1 實測 `default` → `platform-enforced-t-thr`）。合併時在 enforced
+route 之後放一條沒有 matcher、送往 root receiver 的 route，其餘路由都在它底下——
+它只在底下都沒命中時才送，正是 root 的行為。
 
 釘的不變量：**加上 `{{tenant}}` `_routing_enforced` 只多出 `platform-enforced-<id>`**——
 同一棵樹拿掉 enforced 區塊時的投遞，前面加上該租戶的 enforced receiver，就是加上
@@ -34,9 +36,9 @@ sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
 import validate_config as vc  # noqa: E402
 from _grar_parse import load_tenant_tree  # noqa: E402
 from _grar_render import (  # noqa: E402
-    _merge_routes_receivers_inhibits, assemble_configmap, load_base_config)
+    merge_generated, assemble_configmap, load_base_config)
 from _grar_routes import (  # noqa: E402
-    generate_inhibit_rules, generate_routes, is_root_fallthrough_route)
+    generate_inhibit_rules, generate_routes)
 
 _PER_TENANT = ("_routing_enforced:\n  enabled: true\n  receiver:\n    type: webhook\n"
                "    url: \"https://noc.example.com/{{tenant}}\"\n")
@@ -144,52 +146,54 @@ def test_enforced_only_adds_its_receiver(tmp_path, base_name):
     assert _deliver(with_enf["route"], {"alertname": "X"}) == [root]
 
 
-def test_single_platform_route_gets_no_fallthrough(tmp_path):
+def test_single_platform_route_gets_no_roots_place(tmp_path):
     """The matcher-less enforced route took every alert off the root before
-    #2519 too; adding fallthroughs would change that, so none is emitted."""
-    routes, _r, _w, _i = _generate(_tree(tmp_path, _SINGLE))
-    assert not [r for r in routes if is_root_fallthrough_route(r)]
+    #2519 too; putting a route in the root's place would change that, so the
+    tree stays flat."""
+    am = _assembled(_tree(tmp_path, _SINGLE), load_base_config(None))
+    unmatched = [r for r in am["route"]["routes"] if not r.get("matchers")]
+    assert [r.get("receiver") for r in unmatched] == ["platform-enforced"], unmatched
 
 
-def test_fallthrough_routes_shape_and_place(tmp_path):
+def test_the_generator_emits_no_root_route(tmp_path):
+    """The root's place is the merge's to make (it knows the root receiver);
+    the generator emits nothing for it — every route it emits has a receiver,
+    and it adds no receiver, so no receiver-name collision either."""
     routes, receivers, warnings, _i = _generate(_tree(tmp_path, _PER_TENANT))
-    tails = [r for r in routes if is_root_fallthrough_route(r)]
-    assert tails == [{"matchers": [f'tenant="{t}"']} for t in _UNROUTED]
-    # Last, after every enforced and tenant route.
-    assert routes[-len(tails):] == tails
-    # They add no receiver, and so no receiver-name collision either.
+    assert all(r.get("receiver") for r in routes), routes
     assert len(receivers) == len(_TENANTS) + 1
     assert not [w for w in warnings if "duplicate receiver" in w.lower()], warnings
 
 
 @pytest.mark.parametrize("base_name", ["builtin", "byo"])
-def test_assembly_pins_the_bases_root_receiver(tmp_path, base_name):
+def test_assembly_puts_the_bases_root_receiver_below_the_enforced_routes(tmp_path, base_name):
     base = _bases(tmp_path)[base_name]
     am = _assembled(_tree(tmp_path, _PER_TENANT), base)
-    root = base["route"]["receiver"]
-    tails = [r for r in am["route"]["routes"]
-             if r.get("receiver") == root and "continue" not in r]
-    assert tails == [{"matchers": [f'tenant="{t}"'], "receiver": root}
-                     for t in _UNROUTED]
+    routes = am["route"]["routes"]
+    last = routes[-1]
+    assert "matchers" not in last and last["receiver"] == base["route"]["receiver"], last
+    assert all(str(r.get("receiver", "")).startswith("platform-enforced-")
+               for r in routes[4:-1]), routes
 
 
 def test_apply_merge_pins_the_cluster_root(tmp_path):
     routes, receivers, _w, inhibit = _generate(_tree(tmp_path, _PER_TENANT))
     existing = {"route": {"receiver": "cluster-root"},
                 "receivers": [{"name": "cluster-root"}], "inhibit_rules": []}
-    merged = _merge_routes_receivers_inhibits(existing, routes, receivers, inhibit)
+    merged = merge_generated(existing, routes, receivers, inhibit)
     for tid in _TENANTS:
         want = [f"platform-enforced-{tid}"] + (
             [f"tenant-{tid}"] if _TENANTS[tid][1] else ["cluster-root"])
         assert _deliver(merged["route"], _labels(tid)) == want, tid
-    assert [r for r in merged["route"]["routes"] if r.get("receiver") == "cluster-root"]
+    assert merged["route"]["routes"][-1]["receiver"] == "cluster-root"
 
 
-def test_validate_config_routes_row_counts_the_fallthroughs(tmp_path):
+def test_validate_config_routes_row_counts_one_route_per_receiver(tmp_path):
+    """No per-tenant fallthrough route any more: one route per receiver."""
     # t-skipped is a skipped entry, which fails the row before it counts.
     row = vc.check_routes(str(_tree(tmp_path, _PER_TENANT, exclude=("t-skipped",))))
     n_recv = len(_TENANTS) - 1 + 1
-    n_routes = n_recv + len(_UNROUTED) - 1
+    n_routes = n_recv
     assert row["details"][0].startswith(
         f"{n_routes} routes, {n_recv} receivers, "), row
 

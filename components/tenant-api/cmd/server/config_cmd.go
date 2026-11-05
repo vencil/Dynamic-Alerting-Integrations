@@ -13,19 +13,41 @@ import (
 
 // configCmdUsage is printed for `tenant-api config` misuse.
 const configCmdUsage = `usage: tenant-api config check --kind rbac|tenant-orgs [--identity-claim-headers k=Header,...] FILE|-
+       tenant-api config check --kind scope --config-dir DIR [--rbac PATH] [--tenant-orgs PATH] [--identity-claim-headers k=Header,...]
 
-Judges an admin config file with the parse function the server reads it with
-(ADR-036 §12) and prints one JSON document (schema tenant-api.config-check/v1):
-"config" is the decoded config, with the field names of the YAML, or
-"problem" says why the server would refuse it (kind "unreadable": parse-tree
-refuses the bytes; "rejected": the decode or the config's checks refuse it).
-Exactly one of the two is not null. An empty file can be read: it is the
-empty config, as in the server. "-" reads standard input.
+--kind rbac|tenant-orgs judges an admin config file with the parse function
+the server reads it with (ADR-036 §12) and prints one JSON document (schema
+tenant-api.config-check/v1): "config" is the decoded config, with the field
+names of the YAML, or "problem" says why the server would refuse it (kind
+"unreadable": parse-tree refuses the bytes; "rejected": the decode or the
+config's checks refuse it). Exactly one of the two is not null. An empty file
+can be read: it is the empty config, as in the server. "-" reads standard
+input.
 
 --kind rbac is also checked against the declared identity claims, taken from
 --identity-claim-headers or TA_IDENTITY_CLAIM_HEADERS as the server takes them.
 
-Exit codes: 0 can be read, 1 refused, 2 usage or the input cannot be opened.`
+Exit codes: 0 can be read, 1 refused, 2 usage or the input cannot be opened.
+
+--kind scope (ADR-027 §7) reads the RBAC config (--rbac, default
+DIR/_rbac.yaml), the tenant-to-organization mapping (--tenant-orgs, default
+DIR/_tenant_orgs.yaml; when that default file does not exist no tenant has an
+organization, as in the server) and the tenants in DIR as GET
+/api/v1/tenants reads them, and prints one JSON document (schema
+tenant-api.scope-check/v1) listing, for every scope axis, each rule that
+restricts it x each tenant the rule applies to that carries no label on it:
+"findings" entries {axis, rule, rule_index, tenant}, axis "environment"
+(the rule lists environments, the tenant has none), "domain" (likewise) or
+"org" (the rule has an org-scope, the tenant has no organization). Every
+scope axis is enforced, so each finding is a tenant the rule does not grant.
+"tenant_problems" lists the tenants whose environment/domain cannot be read
+(reason: the config_error, or metadata_incomplete); their metadata axes are
+not judged. "config_problems" lists an RBAC config, organization mapping or
+tenant listing the server would refuse. The result depends only on the files;
+the lists are sorted. Run it with the image you are upgrading to.
+
+Exit codes: 0 no finding and no problem, 1 any finding or problem, 2 usage or
+an input cannot be opened.`
 
 // configCheckSchema names the JSON document `tenant-api config check` prints.
 const configCheckSchema = "tenant-api.config-check/v1"
@@ -49,15 +71,37 @@ func runConfigCmd(args []string, stdin io.Reader, stdout, stderr io.Writer) int 
 	fs := flag.NewFlagSet("tenant-api config check", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.Usage = func() { fmt.Fprintln(stderr, configCmdUsage) }
-	kind := fs.String("kind", "", "What the file is: rbac or tenant-orgs")
+	kind := fs.String("kind", "", "What to check: rbac, tenant-orgs (one FILE) or scope (--config-dir)")
 	claimHeaders := registerIdentityClaimFlag(fs)
+	configDir := fs.String("config-dir", "", "--kind scope: the conf.d directory (tenant files)")
+	rbacPath := fs.String("rbac", "", "--kind scope: the RBAC config (default DIR/_rbac.yaml)")
+	tenantOrgsPath := fs.String("tenant-orgs", "", "--kind scope: the tenant-to-organization mapping (default DIR/_tenant_orgs.yaml)")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
 	if !checkTAEnv(os.Environ(), stderr) {
 		return 2
 	}
-	if fs.NArg() != 1 || (*kind != "rbac" && *kind != "tenant-orgs") {
+	if *kind == "scope" {
+		if fs.NArg() != 0 || *configDir == "" {
+			fmt.Fprintln(stderr, configCmdUsage)
+			return 2
+		}
+		return runScopeCheck(scopeCheckArgs{
+			ConfigDir:      *configDir,
+			RBACPath:       *rbacPath,
+			TenantOrgsPath: *tenantOrgsPath,
+			ClaimHeaders:   *claimHeaders,
+		}, stdout, stderr)
+	}
+	scopeOnly := false
+	fs.Visit(func(f *flag.Flag) {
+		switch f.Name {
+		case "config-dir", "rbac", "tenant-orgs":
+			scopeOnly = true
+		}
+	})
+	if scopeOnly || fs.NArg() != 1 || (*kind != "rbac" && *kind != "tenant-orgs") {
 		fmt.Fprintln(stderr, configCmdUsage)
 		return 2
 	}

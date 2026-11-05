@@ -71,7 +71,7 @@ tenant-api 透過 `_rbac.yaml` 控制 API 層級的讀寫權限。RBAC Manager �
 | Helm chart | `/etc/rbac/_rbac.yaml` | ConfigMap `rbac-config`（內容來自 values 的 `rbac._rbacYaml`） |
 | try-local / QUICKSTART | `/conf.d/_rbac.yaml` | `conf.d` 目錄本身 |
 
-**空設定的行為是 fail-closed，不是 open-read**：只要指定了 `--rbac` 路徑（上表三種姿態皆是），檔案不存在或群組為空即 **一律拒絕，含讀取**。只有兩種情況會進入 open-read mode（所有已認證使用者可讀、無人可寫）：完全沒有設定 RBAC 路徑（既不帶 `--rbac`、也不設 `TA_RBAC_PATH`），或明示 `--rbac-empty-open` / `TA_RBAC_EMPTY_OPEN=true`——出貨資產均未設定後者。`--rbac=` 或 `TA_RBAC_PATH` 設成空字串**不會**進 open-read，而是拒絕啟動：模板沒渲染到值時，不該靜默把全部租戶開放讀取（[#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)）。
+**沒有 open mode：沒有規則就一律拒絕，含讀取**。完全沒有設定 RBAC 路徑（既不帶 `--rbac`、也不設 `TA_RBAC_PATH`）、檔案不存在、或檔內沒有任何規則（群組為空），都 **拒絕所有存取，含讀取**。早期版本在未設 RBAC 路徑時進入 open-read mode（所有已認證使用者可讀、無人可寫），並有 `--rbac-empty-open` / `TA_RBAC_EMPTY_OPEN` 可在空設定下恢復它；兩者都已刪除（[ADR-027](adr/027-tenant-api-caller-identity.md) §7），部署仍帶著該環境變數時，tenant-api 以「未知 `TA_*` 變數」拒絕啟動。`--rbac=` 或 `TA_RBAC_PATH` 設成空字串則拒絕啟動：模板沒渲染到值是設定錯誤，該在啟動時就看見（[#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)）。
 
 ### RBAC 救援 SOP（Break-Glass Procedure）
 
@@ -110,7 +110,7 @@ git push
 
 **⛔ 不要刪除 `_rbac.yaml`**
 
-本節早期版本曾建議「刪掉 `_rbac.yaml` 回到 open-read mode 恢復可見性」。實際行為與此相反，且兩種姿態各自不同：
+本節早期版本曾建議「刪掉 `_rbac.yaml` 回到 open-read mode 恢復可見性」。即使在 open-read mode 還存在時，實際行為也與此相反；現在它已刪除（見上方 API RBAC 一節）。刪檔的效果依姿態而異：
 
 - **ConfigMap 來源**：刪掉 git 裡的 `conf.d/_rbac.yaml` 是 no-op——RBAC 不讀那個路徑，權限完全不變。
 - **`conf.d` 來源**：檔案消失即空群組集，fail-closed 生效 → **全站 403（含讀取）**，比原本的狀態更糟。
@@ -235,7 +235,7 @@ Default deny-all（Ingress + Egress）+ 逐元件白名單：
 | Grafana | monitoring namespace (3000) | Prometheus 9090, DNS |
 | threshold-exporter | Prometheus (8080) | DNS only |
 | kube-state-metrics | Prometheus (8080/8081) | K8s API 6443, DNS |
-| tenant-api | 4180（oauth2-proxy，全叢集）；**8080 只放行 pod 級白名單**：Prometheus（raw 部署的 `app=prometheus`，以及 Prometheus Operator／kube-prometheus-stack 的 `app.kubernetes.io/name=prometheus`）、threshold-govern CronJob（`component=threshold-govern`）、recipe-preview（`app.kubernetes.io/name=recipe-preview`）、da-portal relay（`app.kubernetes.io/name=da-portal`）。清單以 helm values `networkPolicy.internalPortAllow` 為準，每一組都預設放行、也關不掉（清空 selector 會讓 `helm template` 失敗） | Egress opt-in（`networkPolicy.egress.enabled`，預設 off）；啟用後 DNS + Prometheus 9090 + `extraEgress`（K8s API / git forge） |
+| tenant-api | 4180（oauth2-proxy，全叢集）；**8080 只放行 pod 級白名單**：Prometheus（raw 部署的 `app=prometheus`，以及 Prometheus Operator／kube-prometheus-stack 的 `app.kubernetes.io/name=prometheus`）、recipe-preview（`app.kubernetes.io/name=recipe-preview`）、da-portal relay（`app.kubernetes.io/name=da-portal`）。清單以 helm values `networkPolicy.internalPortAllow` 為準，每一組都預設放行、也關不掉（清空 selector 會讓 `helm template` 失敗） | Egress opt-in（`networkPolicy.egress.enabled`，預設 off）；啟用後 DNS + Prometheus 9090 + `extraEgress`（K8s API / git forge） |
 | da-portal | 4180 + listenPort，僅 `allowedNamespaces`（monitoring + `ingress-nginx`〔values 預設；換成你的 ingress controller ns〕；**不含租戶 ns**） | — |
 
 > ⛔ **8080 是 header-trust 面（GHSA-3g2h-rf85-5rrv）**：tenant-api 的 8080 埠刻意繞過 oauth2-proxy、盲信 `X-Forwarded-Groups` / `X-Forwarded-Email`。任何能連到 8080 的 pod 可主張任意身分（含 `platform-admins`）。因此 8080 的 NetworkPolicy 必須是 **pod 級**（只放行上表 tenant-api 那列列出的 workload），且 **不可停用** — 兩個 chart 的 `networkPolicy.enabled=false` 已 codified 為 `helm template` 硬失敗（tenant-api 無條件；da-portal 於 `oauth2Proxy.enabled=true` 時）。tenant-api namespace 另掛 **default-deny-ingress**（`podSelector:{}`，僅 Ingress）補齊「非 tenant-api pod 進入該 ns 即全開」的缺口。da-portal 另有 render-time **open-proxy guard**：`oauth2Proxy.enabled=false` 時強制 `portal.tenantApiUrl` / `portal.recipePreviewUrl` 為空（否則 nginx 無 strip proxy 會把 client 原始 `X-Forwarded-Groups` 直送後端 = 未認證開放代理），此 guard 為 render-time、**不依賴 CNI**。

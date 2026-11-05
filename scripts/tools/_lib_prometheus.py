@@ -42,9 +42,9 @@ class QueryError(CallerError):
     somewhere, which reads as "no data" — a measurement that never happened.
 
     It is a named caller error: uncaught, it ends the process at rc 2 with
-    one ``ERROR: <source> query failed: <message>`` line on stderr and, in
-    ``--json`` mode, a ``caller_error`` envelope whose ``reason`` is
-    ``<source>_query_error`` (``prometheus_query_error`` /
+    one ``ERROR: <source> query failed: <message>`` line on stderr and
+    nothing on stdout, ``--json`` or not (#3558; its ``reason`` is
+    ``<source>_query_error``: ``prometheus_query_error`` /
     ``alertmanager_query_error``). A tool that tolerates a failed query
     must say so with an explicit ``except QueryError``.
 

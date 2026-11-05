@@ -28,11 +28,11 @@ Renovate（repo 根目錄 `renovate.json`，由 `.github/workflows/renovate.yaml
 | 交給 Renovate | 刻意保留手動（`renovate.json` 內 disabled） | 為什麼手動 |
 |---|---|---|
 | 每個 `uses:` 的 action 版本（同一 action 全部出現處同一支 PR） | `runs-on:`（github-runner）與 devcontainer base `image` | 兩者互綁（本表 Runner OS 列），分屬不同 manager、無法同 PR |
-| | action `with:` 裡的工具版本（`node-version`、`python-version`、`go-version`、setup-helm `version`、trivy-action `version`、cosign `cosign-release`…） | 另一側是 devcontainer feature、Makefile、`install-*.sh` 或 lint wrapper 的 digest pin，都不是 Renovate dep |
-| Dockerfile 的 `FROM` base image（`alpine`、`python`、`nginx` 等；python 的 minor 需 Dashboard 打勾） | `golang:*` builder | Go 的 SSOT 是 `go.mod`（本表 Go 列）；`test_go_toolchain_parity.py` 綁住 |
+| | action `with:` 裡的工具版本（`node-version`、`go-version`、setup-helm `version`、trivy-action `version`、cosign `cosign-release`…；Python 不在此列，setup-python 一律讀 `python-version-file`） | 另一側是 devcontainer feature、Makefile、`install-*.sh` 或 lint wrapper 的 digest pin，都不是 Renovate dep |
+| Dockerfile 的 `FROM` base image（`alpine`、`nginx` 等）；Python 直譯器（`.python-version`［pyenv manager］、Dockerfile 的 `FROM python:`、devcontainer python feature 三者同一支 `Python interpreter` PR，minor 需 Dashboard 打勾；`tests/**` 與 `**/examples/**` 下的 python 映像不在 Renovate 範圍，那支 PR 會被守衛擋紅到手動補齊為止） | `golang:*` builder | Go 的 SSOT 是 `go.mod`（本表 Go 列）；`test_go_toolchain_parity.py` 綁住 |
 | | da-tools Dockerfile 的 `COPY --from=prom/alertmanager` | 已由 `custom.regex` 與部署的 Alertmanager 同 PR 升（#2294），不能有第二個 owner |
 | forge-e2e 的 GitLab CE（`scripts/ops/forge_e2e_run.sh` 的 `GITLAB_CE_IMAGE` 預設值，tag＋digest；`custom.regex`，自己一支 group，major → Dashboard；[#2442](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2442)） | | |
-| devcontainer feature 參照本身（`features/<name>:<major>`，皆為 major → Dashboard） | node / go / python feature 的 `version` | 與 CI `setup-*` 或 `go.mod` 互綁 |
+| devcontainer feature 參照本身（`features/<name>:<major>`，皆為 major → Dashboard） | node / go feature 的 `version` | 與 CI `setup-*` 或 `go.mod` 互綁 |
 | — | `sigstore/cosign-installer`、`anchore/sbom-action` | 仍會出現在 Dashboard，但每次都要打勾才開 PR（release.yaml：「bump deliberately」） |
 | — | `tests/**`、`test/**` 下的一切（`ignorePaths`） | bench Dockerfile 與 federation-e2e compose 由各自的綁定測試守，不交給 Renovate |
 
@@ -46,7 +46,7 @@ Renovate（repo 根目錄 `renovate.json`，由 `.github/workflows/renovate.yaml
 |---|---|---|---|
 | Runner OS | 各 workflow job 的 `runs-on`（全部同值） | `.devcontainer/devcontainer.json` 的 base `image` tag | `tests/shared/test_toolchain_pin_parity.py`（runner） |
 | Node.js | `.devcontainer/devcontainer.json` node feature `version`（major） | 每個 `actions/setup-node` 的 `node-version`（ci.yml portal、playwright.yml ×2、visual-baseline.yaml、commitlint.yaml、docs-ci.yaml）；Makefile `test-e2e` 說明 | 同上（node） |
-| Python | `.devcontainer/devcontainer.json` python feature `version` | 每個 `actions/setup-python` 的 `python-version`（含 `${{ matrix.python }}` 展開後的值）；`requirements/ci-constraints.txt` 的版本是對這個 Python 解的 | 同上（python） |
+| Python | `.python-version`（精確到 patch，例如 `3.14.10`） | 每個 `actions/setup-python` 以 `python-version-file: .python-version` 直接讀它，不得另寫 `python-version`；需要字面值的消費端必須同值：devcontainer python feature `version`、每個 Dockerfile 的 `FROM python:<版本>-…`、YAML 裡的 `image: python:<版本>-…`（compose 測試替身、文件範例）。CI job／artifact／cache 名稱**不帶版本**（required check 是 `Python Tests`）。`requirements/ci-constraints.txt` 的版本是對這個 Python 解的 | `test_toolchain_pin_parity.py`（python：setup-python 讀檔、devcontainer、映像 tag） |
 | Go | 各 module 的 `go.mod` | Dockerfile builder、devcontainer go feature、CI `setup-go`（`go-version-file`）皆從它對齊；pre-commit `go-fmt` hook 用 PATH 上的 `gofmt`，不另釘版：在 devcontainer 內即 go feature 那一版；在主機上是主機裝的任意版本（PATH 上沒有 `gofmt` 時改用 `go env GOROOT` 底下那支），不保證與 go.mod 同版 | 另一支 PR 補守衛 |
 | golangci-lint | `.github/workflows/validate.yaml` `GOLANGCI_VERSION` | devcontainer go feature `golangciLintVersion`（⛔ 不帶 `v`）；`.claude/hooks/session-start.sh` 的 `GOLANGCI_LINT_VERSION` + `GOLANGCI_LINT_SHA256`（remote session 自己裝，[#2955](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2955)） | `tests/ops/test_go_lint_module_coverage.py`（CI ↔ devcontainer）、`test_toolchain_pin_parity.py`（session-start ↔ devcontainer） |
 | Trivy | `Makefile` `TRIVY_VERSION` | 每個 `aquasecurity/trivy-action` 步驟的 `version:`（release.yaml、component-docker-build.yaml、nightly-image-scan.yaml）；`.devcontainer/install-trivy.sh`（`TRIVY_VERSION` + `TRIVY_SHA256`） | `test_toolchain_pin_parity.py`（trivy） |
@@ -66,7 +66,7 @@ Renovate（repo 根目錄 `renovate.json`，由 `.github/workflows/renovate.yaml
 | yq | docs-ci.yaml `YQ_VERSION` | 無其他消費端 | 無 |
 | Vector | ci.yml `VECTOR_VERSION` | `.devcontainer/install-vector.sh`、`helm/vector` image tag / appVersion | `tests/shared/test_vector_pin_parity.py` |
 | GitHub Actions | 無單一 SSOT：同一個 action 在全部 workflow 必須同一個 ref | `.github/workflows/**`（Renovate 的 github-actions manager 以單一 grouped PR 一起升，見上節） | `test_toolchain_pin_parity.py`（single version）、`tests/ops/test_renovate_config.py`（grouping） |
-| Python 套件 | `requirements/ci-constraints.txt` | 每個 `pip install … -c`、devcontainer `postCreateCommand`、`.claude/hooks/session-start.sh`；`.pre-commit-config.yaml` 裡以 `==` 釘版的 `additional_dependencies`（hook 的隔離環境自己裝，不經 `-c`） | `check_unpinned_deps`、`check_devcontainer_dep_parity.py`、`test_toolchain_pin_parity.py`（pre-commit hook 釘版） |
+| Python 套件 | `requirements/ci-constraints.txt` | 每個 `pip install … -c`、devcontainer `postCreateCommand`、`.claude/hooks/session-start.sh`；映像：recipe-preview（build context 是 repo 根）以 `-c` 安裝；da-tools 與 try-local generator 的 build context 是各自的目錄、看不到 `requirements/`（CI 與 `make docker-build-all` 不經 `build.sh` 直接 stub context），以 `==` 寫同一版；`.pre-commit-config.yaml` 裡以 `==` 釘版的 `additional_dependencies`（hook 的隔離環境自己裝，不經 `-c`） | `check_unpinned_deps`、`check_devcontainer_dep_parity.py`、`test_toolchain_pin_parity.py`（pre-commit hook 釘版；Dockerfile 的 `==` 釘版） |
 
 ## Go 建置旗標
 

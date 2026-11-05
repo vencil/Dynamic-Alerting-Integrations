@@ -46,8 +46,13 @@ export const RECEIVER_SPECS: Record<string, ReceiverSpec> = (() => {
         if (!shapeOk) throw new Error(`${name}.oneOf[${i}] is not {"required": [k], "properties": {k: {"type": "string", "minLength": 1}}}`);
         // Python and the Go guard read "" and null as unset; the branch must too.
         // minLength does not apply to null, so the type must be pinned as well.
-        if (props[k]?.type !== 'string' || !((props[k]?.minLength ?? 0) >= 1)) {
-          throw new Error(`${name}.oneOf[${i}]: ${k} lacks type: string + minLength >= 1`);
+        // #1560: [string, object] also passes — the object is a Secret
+        // reference (definitions.secretRef), which counts as set; null stays out.
+        const t = props[k]?.type;
+        const typeOk = t === 'string'
+          || (Array.isArray(t) && t.length === 2 && t.includes('string') && t.includes('object'));
+        if (!typeOk || !((props[k]?.minLength ?? 0) >= 1)) {
+          throw new Error(`${name}.oneOf[${i}]: ${k} lacks type: string (or [string, object]) + minLength >= 1`);
         }
         return k;
       }));

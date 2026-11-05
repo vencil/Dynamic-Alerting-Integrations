@@ -391,6 +391,33 @@ type promtoolTestDoc struct {
 	} `yaml:"tests"`
 }
 
+// fixtureScrapeTargetLabels are the target labels Prometheus attaches to every
+// scraped user_threshold series (#3515), so a fixture modelling the stored
+// series may carry them — a replica-dedup test (#3537) needs two series that
+// differ ONLY in pod/instance. Permitted on fixture input_series ONLY, and only
+// as exact matchers: a rule selector narrowing on them is still the #731
+// empty-set class, so permittedThresholdLabels / customAlertPermittedLabels
+// (which also gate rule expressions) deliberately stay without them.
+var fixtureScrapeTargetLabels = map[string]bool{
+	"pod":      true,
+	"instance": true,
+}
+
+// withoutScrapeTargetLabels returns vs minus its exact pod/instance matchers,
+// for the fixture guard only. Any other matcher (and a non-exact pod/instance
+// one) is kept, so the closed-label check still rejects it.
+func withoutScrapeTargetLabels(vs *promqlparser.VectorSelector) *promqlparser.VectorSelector {
+	out := *vs
+	out.LabelMatchers = nil
+	for _, m := range vs.LabelMatchers {
+		if fixtureScrapeTargetLabels[m.Name] && m.Type == labels.MatchEqual {
+			continue
+		}
+		out.LabelMatchers = append(out.LabelMatchers, m)
+	}
+	return &out
+}
+
 // TestRulePackFixturesCarryComponent asserts every `user_threshold{...}` series
 // in the promtool fixtures carries a `component` (and `metric`) exact matcher.
 // This locks the fixtures to the real exporter output shape so they can never
@@ -422,7 +449,7 @@ func TestRulePackFixturesCarryComponent(t *testing.T) {
 				}
 				for _, vs := range userThresholdSelectors(t, base+" series", s.Series) {
 					seriesChecked++
-					assertComponentMetric(t, base+" series "+s.Series, vs, false)
+					assertComponentMetric(t, base+" series "+s.Series, withoutScrapeTargetLabels(vs), false)
 				}
 			}
 		}

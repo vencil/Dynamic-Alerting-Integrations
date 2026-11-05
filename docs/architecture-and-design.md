@@ -257,11 +257,11 @@ Config-Driven 是平台核心：租戶與平台只改 YAML、不寫 PromQL，由
 | nginx | nginx-prometheus-exporter | 9 | 6 |
 | operational | threshold-exporter 運營模式 | 0 | 4 |
 | oracle | oracledb_exporter | 11 | 7 |
-| platform | threshold-exporter 自監控 | 0 | 53 |
+| platform | threshold-exporter 自監控 | 0 | 52 |
 | postgresql | postgres_exporter | 11 | 9 |
 | rabbitmq | rabbitmq_exporter | 12 | 8 |
 | redis | redis_exporter | 11 | 6 |
-| **合計** | | **166** | **172** |
+| **合計** | | **166** | **171** |
 <!-- RULE_PACK_STATS_END -->
 
 
@@ -378,6 +378,7 @@ spec:
 | ADR-024 | [宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts](adr/024-version-aware-threshold-via-dimensional-label.md) | ✅ Accepted | v2.9.0 |
 | ADR-025 | [告警平面自我存活性 — 讓告警系統能偵測自己的死亡](adr/025-alerting-plane-self-liveness.md) | ✅ Accepted | — |
 | ADR-026 | [Node/Cluster 維護告警抑制 — 不需要子系統](adr/026-node-maintenance-liveness-suppression.md) | 🟡 Proposed | — |
+| ADR-027 | [tenant-api 的呼叫端身分只在自己的 pod 內建立，網路上不轉送人類身分](adr/027-tenant-api-caller-identity.md) | 🟡 Proposed | — |
 | ADR-028 | [Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控](adr/028-federation-revocation-tamper-evidence.md) | ✅ Accepted | — |
 | ADR-029 | [租戶自訂告警跨租戶查詢隔離 — 編譯期邊界中和為主、評估期 ruler 隔離延後](adr/029-custom-alert-cross-tenant-query-scoping.md) | ✅ Accepted | — |
 | ADR-030 | [決策層遷移驗證 — 製造 Oracle 而非觀測](adr/030-decision-layer-migration-validation.md) | 🟢 Accepted | — |

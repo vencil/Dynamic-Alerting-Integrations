@@ -11,7 +11,7 @@ ADR-036 步驟 4 讓產生器改讀 yaml.v3（`da-guard parse-tree`）之後，�
 * 列舉欄位只收定義的值：租戶的 `_severity_dedup` 收 `enable`／`disable`（以及 exporter
   也認得的 `enabled`／`on`／`true`、`disabled`／`off`／`false`，去空白、不分大小寫），
   或布林、null（＝預設 enable）。`"no"`、`"yes"`、`""`、數字一律拒收。
-* 拒收＝所有模式（render、`--dry-run`、`--output-configmap`、`--apply`、`--validate`、
+* 拒收＝所有模式（`--output-alertmanager`（含 `-o`、stdout、`--dry-run`）、`--output-configmap`、`--apply`、`--validate`、
   `--strict`）rc 1、不寫出、不套用，走 `tree_refusal` 那一條路；validate-config 的
   schema 列 FAIL。
 * 租戶的 `_routing_profile` 只收 profile 名稱（字串）或 null（#3269）：mapping（例如帶時間窗
@@ -214,7 +214,7 @@ def test_an_accepted_value_is_no_error_and_renders(tmp_path, name, value):
     build = FIELDS[name][0]
     d = _write(tmp_path, build(value))
     assert _errors(d) == []
-    p = _gar(d, "--dry-run")
+    p = _gar(d, "--output-alertmanager", "--dry-run")
     assert p.returncode == 0, p.stderr
     assert _REFUSAL not in p.stderr
 
@@ -222,14 +222,14 @@ def test_an_accepted_value_is_no_error_and_renders(tmp_path, name, value):
 # ── every mode refuses, nothing is written or applied ────────────────────
 
 _MODES = {
-    "render": lambda out: ["-o", str(out)],
-    "render-stdout": lambda out: [],
-    "dry-run": lambda out: ["--dry-run"],
+    "output-alertmanager": lambda out: ["--output-alertmanager", "-o", str(out)],
+    "output-alertmanager-stdout": lambda out: ["--output-alertmanager"],
+    "output-alertmanager-dry-run": lambda out: ["--output-alertmanager", "--dry-run"],
     "output-configmap": lambda out: ["--output-configmap", "-o", str(out)],
     "output-configmap-dry-run": lambda out: ["--output-configmap", "--dry-run"],
     "apply": lambda out: ["--apply", "--yes"],
     "validate": lambda out: ["--validate"],
-    "strict": lambda out: ["--strict", "-o", str(out)],
+    "strict": lambda out: ["--output-alertmanager", "--strict", "-o", str(out)],
     "validate-strict": lambda out: ["--validate", "--strict"],
 }
 # One quoted string per field: the form this PR newly refuses.
@@ -263,7 +263,7 @@ def test_the_findings_document_names_the_field(tmp_path, name):
     build, kind, field, _ok, _bad = FIELDS[name]
     d = _write(tmp_path, build(_QUOTED[name]))
     doc_path = tmp_path / "findings.json"
-    p = _gar(d, "--dry-run", "--findings-json", str(doc_path))
+    p = _gar(d, "--output-alertmanager", "--dry-run", "--findings-json", str(doc_path))
     assert p.returncode == 1, p.stderr
     doc = json.loads(doc_path.read_text(encoding="utf-8"))
     assert doc["exit_code"] == 1
@@ -333,6 +333,6 @@ def test_bool_word_is_no_longer_written_as_a_boolean(tmp_path):
     true`; since ADR-036 step 4 an unquoted `yes` is the string "yes" too,
     and the tree is refused."""
     d = _write(tmp_path, _send_resolved("yes"))
-    p = _gar(d, "--dry-run")
+    p = _gar(d, "--output-alertmanager", "--dry-run")
     assert p.returncode == 1, p.stderr
     assert "send_resolved: true" not in p.stdout, p.stdout

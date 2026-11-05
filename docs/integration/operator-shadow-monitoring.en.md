@@ -17,65 +17,34 @@ lang: en
 
 ## Overview
 
-Shadow Monitoring is a dual-track observation strategy used during routing migration in Operator environments. It allows you to validate new AlertmanagerConfig routing configuration without impacting production alerts.
+Shadow Monitoring is a dual-track observation strategy used when changing alert routing in Operator environments. It lets you confirm that a tenant's alerts actually flow through the new routing config without impacting production alerts.
+
+On the Operator path, routing is one `alertmanager.yaml` rendered by `generate-routes` and loaded through the Alertmanager CR's `spec.configSecret` (see [Operator Alertmanager Integration](operator-alertmanager-integration.en.md)), so the shadow route goes into **your source (base)**, not into a separate AlertmanagerConfig CR.
 
 ---
 
-## Strategy: Dual AlertmanagerConfig in Parallel
-
-### Production Route (Existing)
+## Strategy: a `continue: true` shadow route in the source
 
 ```yaml
-apiVersion: monitoring.coreos.com/v1beta1
-kind: AlertmanagerConfig
-metadata:
-  name: da-tenant-db-a
-  namespace: monitoring
-  labels:
-    app.kubernetes.io/part-of: dynamic-alerting
-    tenant: db-a
-spec:
-  route:
-    receiver: db-a-pagerduty
-    matchers:
-      - name: tenant
-        value: db-a
-    groupBy: ["alertname", "instance"]
-  receivers:
-    - name: db-a-pagerduty
-      pagerdutyConfigs:
-        - routingKey:
-            name: da-db-a-pagerduty
-            key: routing-key
+# alertmanager.base.yaml (your source, not generate-routes output)
+route:
+  receiver: default
+  routes:
+    - receiver: db-a-shadow-webhook
+      matchers:
+        - tenant="db-a"
+      continue: true                # ★ Key: keep matching after this route, so the tenant route still receives it
+receivers:
+  - name: default
+  - name: db-a-shadow-webhook
+    webhook_configs:
+      - url: "http://shadow-collector:8080/collect"
+        send_resolved: true
 ```
 
-### Shadow Route (Observation)
+> After the merge the order is: the 4 platform routes → the base's own routes (this shadow route is here) → the tenant routes. `continue: true` lets an alert go on to the tenant routes after the shadow route matched it, so it is sent to both the production receiver and the shadow receiver.
 
-```yaml
-apiVersion: monitoring.coreos.com/v1beta1
-kind: AlertmanagerConfig
-metadata:
-  name: da-shadow-db-a
-  namespace: monitoring
-  labels:
-    app.kubernetes.io/part-of: dynamic-alerting
-    tenant: db-a
-    shadow: "true"
-spec:
-  route:
-    receiver: db-a-shadow-webhook
-    matchers:
-      - name: tenant
-        value: db-a
-    continue: true                  # ★ Key: don't stop routing, continue matching next route
-  receivers:
-    - name: db-a-shadow-webhook
-      webhookConfigs:
-        - url: "http://shadow-collector:8080/collect"
-          sendResolved: true
-```
-
-> The `continue: true` setting allows Alertmanager to continue matching subsequent routes after this one, ensuring alerts are sent to both production and shadow receivers.
+⚠️ Do not use an AlertmanagerConfig CR as the shadow route: the Operator adds a `namespace="<CR namespace>"` matcher to a CR's routes, so the shadow route only sees alerts carrying that label and the comparison does not reflect production traffic.
 
 ---
 
@@ -122,40 +91,37 @@ spec:
 EOF
 ```
 
-### Step 2: Deploy Shadow AlertmanagerConfig
+### Step 2: Merge the shadow route into the production config
 
 ```bash
-kubectl apply -f shadow-alertmanagerconfig-db-a.yaml
+da-tools generate-routes --config-dir conf.d --output-alertmanager \
+  --base-config alertmanager.base.yaml -o alertmanager.yaml
+kubectl create secret generic da-alertmanager-config -n monitoring \
+  --from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 ### Step 3: Compare Production vs Shadow
 
 ```bash
 # Production alert count
-curl -s 'http://localhost:9093/api/v1/alerts' | \
-  jq '[.data[] | select(.labels.tenant=="db-a")] | length'
+curl -s 'http://localhost:9093/api/v2/alerts' | \
+  jq '[.[] | select(.labels.tenant=="db-a")] | length'
 
 # Shadow collector logs
 kubectl logs -n monitoring deploy/shadow-collector --tail=50
 ```
 
-### Step 4: Switch After Confirming No Differences
+### Step 4: Remove the Shadow Route After Confirming No Differences
 
-```bash
-# Delete shadow route
-kubectl delete alertmanagerconfig da-shadow-db-a -n monitoring
-
-# Update production route (if changes needed)
-kubectl apply -f alertmanagerconfig-db-a-new.yaml
-```
+Delete the shadow route and its receiver from `alertmanager.base.yaml`, rerun Step 2 and update the Secret.
 
 ---
 
 ## Important Notes
 
-1. **Shadow route must come before production route**: Alertmanager matches routes sequentially, and `continue: true` must be set on an earlier route. Within the same namespace, AlertmanagerConfigs are ordered alphabetically by metadata.name.
+1. **The shadow route does not see alerts the platform routes take**: the 4 platform routes come before the base, so alerts they take (e.g. custom alerts in the `component="custom"` isolation subtree) never reach the shadow route.
 2. **Performance Impact**: Shadow routing generates additional HTTP requests. In high-traffic environments, consider limiting shadow observation to specific tenants.
-3. **Cleanup**: After observation is complete, always delete the shadow AlertmanagerConfig to avoid long-term extra webhook invocations.
+3. **Cleanup**: After observation is complete, always delete the shadow route from the source and regenerate, to avoid long-term extra webhook invocations.
 
 ---
 
@@ -163,6 +129,6 @@ kubectl apply -f alertmanagerconfig-db-a-new.yaml
 
 | Document | Description |
 |----------|-------------|
-| [Operator Alertmanager Integration](operator-alertmanager-integration.en.md) | Complete AlertmanagerConfig configuration |
+| [Operator Alertmanager Integration](operator-alertmanager-integration.en.md) | The `configSecret` routing procedure |
 | [Operator GitOps Deployment](operator-gitops-deployment.en.md) | CI/CD integration |
 | [Shadow Monitoring SOP](../shadow-monitoring-sop.en.md) | Generic Shadow Monitoring workflow |

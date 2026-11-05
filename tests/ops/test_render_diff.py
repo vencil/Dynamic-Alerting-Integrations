@@ -351,6 +351,41 @@ def test_route_identity_is_the_matcher_path_not_the_receiver_name():
     assert ('tenant="a" #2',) in rd.flatten_routes(cfg("x"))
 
 
+def test_the_route_standing_in_for_the_root_is_not_a_level_of_its_own():
+    """With per-tenant enforced routing the merge puts the base's and the
+    tenant routes under one matcher-less route to the root receiver (#2519):
+    the same routes, not moved ones — no `""` step, no change reported."""
+    flat = {"route": {"receiver": "d", "routes": [
+        {"matchers": ['tenant="a"'], "receiver": "platform-enforced-a", "continue": True},
+        {"matchers": ['team="db"'], "receiver": "db"},
+        {"matchers": ['tenant="a"'], "receiver": "tenant-a"}]}}
+    nested = {"route": {"receiver": "d", "routes": [
+        {"matchers": ['tenant="a"'], "receiver": "platform-enforced-a", "continue": True},
+        {"receiver": "d", "routes": [
+            {"matchers": ['team="db"'], "receiver": "db"},
+            {"matchers": ['tenant="a"'], "receiver": "tenant-a"}]}]}}
+    assert rd.flatten_routes(nested) == rd.flatten_routes(flat)
+    assert [c for c in rd.diff_routes(flat, nested) if isinstance(c, rd.RouteChange)] == []
+
+
+def test_an_empty_same_receiver_route_before_a_sibling_is_a_level():
+    """Not the last child, it takes every alert before its later siblings —
+    a real delivery change, which the diff must report."""
+    flat = {"route": {"receiver": "d", "routes": [
+        {"matchers": ['team="db"'], "receiver": "db"}]}}
+    shadowing = {"route": {"receiver": "d", "routes": [
+        {"receiver": "d"},
+        {"matchers": ['team="db"'], "receiver": "db"}]}}
+    assert rd.flatten_routes(shadowing) != rd.flatten_routes(flat)
+    assert [c for c in rd.diff_routes(flat, shadowing) if isinstance(c, rd.RouteChange)]
+
+
+def test_control_a_matcher_less_route_to_another_receiver_is_a_level():
+    cfg = {"route": {"receiver": "d", "routes": [{"receiver": "other", "routes": [
+        {"matchers": ['team="db"'], "receiver": "db"}]}]}}
+    assert ("", 'team="db"') in rd.flatten_routes(cfg)
+
+
 def test_matcher_spelling_alone_is_no_change():
     """Alertmanager 讀成同一個 matcher 的寫法（空白、沒加引號）不算路由變更。"""
     def cfg(m):
@@ -378,10 +413,16 @@ def test_tenant_matcher(matcher, tenant):
     assert rd._tenant_of_matcher(matcher) == tenant
 
 
-def test_generator_renders_nothing_for_a_tree_without_tenants(tmp_path):
-    """產生器對沒有租戶的樹回 0 且不寫檔：讀成空的設定，不是工具失敗。"""
+def test_generator_renders_no_tenant_routing_for_a_tree_without_tenants(tmp_path):
+    """產生器對沒有租戶的樹回 0：#1211 缺口 2 起照樣寫出（只有 base 與平台
+    路由），讀成沒有任何租戶內容的設定，不是工具失敗。"""
     (tmp_path / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
-    assert rd.render_routes(tmp_path) == rd.EMPTY_ROUTES
+    cfg = rd.render_routes(tmp_path)
+    names = [r["name"] for r in cfg["receivers"]]
+    assert not [n for n in names if n.startswith(("tenant-", "platform-enforced"))], names
+    assert [r["receiver"] for r in cfg["route"]["routes"]] == [
+        "watchdog-heartbeat", "custom-alerts-firehose", "synthetic-receiver",
+        "sentinel-sinkhole"], cfg["route"]
 
 
 def test_generator_is_found_beside_this_module():

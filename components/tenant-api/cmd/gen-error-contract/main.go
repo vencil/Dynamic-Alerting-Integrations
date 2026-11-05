@@ -306,7 +306,28 @@ func moduleRoot(dir string) (string, error) {
 	}
 }
 
+// scanModule reads the module at mod: its direct answers and the Extra
+// fields its handlers set.
+func scanModule(mod string) ([]directUse, []extraUse, error) {
+	direct, err := scanDirect(mod)
+	if err != nil {
+		return nil, nil, err
+	}
+	extras, err := scanExtra(mod)
+	if err != nil {
+		return nil, nil, err
+	}
+	return direct, extras, nil
+}
+
 func run(args []string, stdout, stderr io.Writer) int {
+	return runWith(args, stdout, stderr, scanModule)
+}
+
+// runWith is run reading the module through scan. The scans type-check the
+// whole module, so a test that runs the command several times over the same
+// tree hands the later runs the first one's answer (#3574).
+func runWith(args []string, stdout, stderr io.Writer, scan func(mod string) ([]directUse, []extraUse, error)) int {
 	fs := flag.NewFlagSet("gen-error-contract", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	check := fs.Bool("check", false, "verify the committed contract matches; exit 1 on drift")
@@ -334,12 +355,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		path = filepath.Join(filepath.Dir(filepath.Dir(mod)), filepath.FromSlash(contractRel))
 		shown = contractRel
 	}
-	direct, err := scanDirect(mod)
-	if err != nil {
-		fmt.Fprintf(stderr, "ERROR: %v\n", err)
-		return 2
-	}
-	extras, err := scanExtra(mod)
+	direct, extras, err := scan(mod)
 	if err != nil {
 		fmt.Fprintf(stderr, "ERROR: %v\n", err)
 		return 2

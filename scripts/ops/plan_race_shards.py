@@ -55,10 +55,19 @@ import sys
 import zipfile
 from pathlib import Path
 
+# #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
+# Appended, so a copy beside this file (one directory holding all three) wins.
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
+
 # Explicit, so `python3 -I` (which drops the script's own directory from
-# sys.path) still finds the sibling parser whose timeout regex is reused.
+# sys.path) still finds the sibling parser whose timeout regex, -timeout value
+# and package-elapsed reader are reused.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from parse_go_test_json import TIMEOUT_PANIC_RE  # noqa: E402
+from parse_go_test_json import (  # noqa: E402
+    GO_TEST_TIMEOUT_S,
+    TIMEOUT_PANIC_RE,
+    package_verdict,
+)
 
 # ── the SSOT ─────────────────────────────────────────────────────────────────
 
@@ -74,9 +83,9 @@ MODULES: tuple[dict, ...] = (
 # Shards per module. A module with fewer packages gets fewer (never an empty one).
 SHARDS_PER_MODULE = 4
 
-# Must equal the workflow's `go test -timeout`. A package that timed out is
-# recorded at least this long, so the planner keeps treating it as the heaviest.
-GO_TEST_TIMEOUT_S = 30 * 60
+# GO_TEST_TIMEOUT_S (imported above, defined in parse_go_test_json.py) must
+# equal the workflow's `go test -timeout`. A package that timed out is recorded
+# at least this long, so the planner keeps treating it as the heaviest.
 
 TIMINGS_ARTIFACT_TMPL = "race-timings-{module}"
 TIMINGS_FILE_TMPL = "race-timings-{module}.json"
@@ -269,11 +278,10 @@ def stream_timings(lines) -> dict[str, float]:
             if m:
                 d = go_duration_seconds(m.group(1))
                 timeout[pkg] = d if d is not None else float(GO_TEST_TIMEOUT_S)
-        elif action in ("pass", "fail") and not ev.get("Test"):
-            e = ev.get("Elapsed")
-            if isinstance(e, (int, float)) and not isinstance(e, bool) and math.isfinite(e) and e >= 0:
-                elapsed[pkg] = float(e)
-            elif action == "fail":
+        elif (verdict := package_verdict(ev)) is not None:
+            if verdict[1] is not None:
+                elapsed[pkg] = verdict[1]
+            elif verdict[0] == "fail":
                 elapsed.setdefault(pkg, 0.0)
     for pkg, d in timeout.items():
         if pkg in elapsed:
@@ -497,4 +505,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)

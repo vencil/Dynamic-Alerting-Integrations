@@ -635,7 +635,7 @@ class TestCLI:
         p = _run_cli(dirs["old"], dirs["new"], "--format", "json")
         assert p.returncode == 2, p.stderr
         assert f"--{side}-dir {loop}: " in p.stderr, p.stderr
-        assert _json(p)["reason"] == "dir_not_accessible", p.stdout
+        assert p.stdout == ""  # #3558: a caller error carries no document
 
     @pytest.mark.parametrize("side", ["old", "new"])
     def test_a_file_given_as_a_directory_is_a_caller_error(self, tmp_path, side):

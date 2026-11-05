@@ -234,6 +234,33 @@ def _run_trace(capsys, conf, *extra):
     return trace
 
 
+@pytest.fixture
+def enforced_label_conf(label_conf):
+    """The same tenant with `{{tenant}}` enforced routing: the merge puts the
+    tenant route one level down, under the route that stands in for the root."""
+    (label_conf / "_defaults.yaml").write_text(yaml.safe_dump({"_routing_enforced": {
+        "enabled": True, "receiver": {"type": "webhook",
+                                      "url": "https://noc.example.com/{{tenant}}"}}}),
+        encoding="utf-8")
+    return label_conf
+
+
+class TestTraceLabelCliUnderEnforcedRouting:
+    @needs_amtool
+    @pytest.mark.parametrize("labels,sub", [
+        (["--label", "metric_group=mg-conn"], "overrides[0]"),
+        (["--label", "team=x"], "routes[0]"),
+    ])
+    def test_the_sub_route_is_named(self, capsys, enforced_label_conf, labels, sub):
+        trace = _run_trace(capsys, enforced_label_conf, *labels)
+        assert trace["steps"][1]["matched_sub_route"] == sub, trace["steps"][1]
+
+    @needs_amtool
+    def test_without_label_stays_on_main_receiver(self, capsys, enforced_label_conf):
+        trace = _run_trace(capsys, enforced_label_conf)
+        assert "matched_sub_route" not in trace["steps"][1]
+
+
 class TestTraceLabelCli:
     @needs_amtool
     def test_metric_group_hits_override(self, capsys, label_conf):
@@ -487,10 +514,12 @@ class TestBaseConfigFlag:
         assert "Traceback" not in err
 
     def test_unassemblable_base_dict_is_unknown_not_a_crash(self, tmp_path):
-        """A base dict that reaches assemble_configmap's KeyError (only a
-        direct caller can hand one now) is UnassemblableBase, not a crash."""
+        """A base dict with a receiver that has no `name` (only a direct
+        caller can hand one now) is a refusal, not a crash. #1211 gap 2: the
+        merge no longer indexes `r["name"]` on base receivers, so the verdict
+        is Alertmanager's own loader's, in its words."""
         parsed = er._parse_config_files(str(_tree(tmp_path)))
-        with pytest.raises(er.UnassemblableBase):
+        with pytest.raises(er.AssemblyRefusedByAlertmanager, match="missing name in receiver"):
             er.build_trace_tree(parsed, {"global": {}, "route": {"receiver": "ops"},
                                          "receivers": [{"slack_configs": []}],
                                          "inhibit_rules": []})
@@ -703,8 +732,11 @@ class TestTraceThroughAmtool:
                                    "repeat_interval": "15m"}
         assert trace["steps"][1]["matched_sub_route"] == "routes[0]"
 
-    def test_base_config_root_is_used_and_its_routes_replaced(
+    def test_base_config_root_is_used_and_its_routes_kept(
             self, capsys, tmp_path):
+        """#1211 gap 2: the assembly keeps the base's own routes (it used to
+        replace them), between the platform routes and the tenant routes —
+        so the base's `alertname="X"` route takes the trace's alert first."""
         conf = _tree(tmp_path)
         base = tmp_path / "base.yml"
         base.write_text(yaml.safe_dump({"route": {
@@ -713,7 +745,7 @@ class TestTraceThroughAmtool:
             "receivers": [{"name": "base-default"}, {"name": "stale"}]}),
             encoding="utf-8")
         trace = _trace(capsys, conf, "--base-config", str(base))
-        assert _delivered(trace) == [f"tenant-{_TT}"]
+        assert _delivered(trace) == ["stale"]
         assert trace["timing"]["group_wait"] == "45s"
 
     def test_noc_receiver_type_is_not_policed_as_the_tenants(self, capsys,

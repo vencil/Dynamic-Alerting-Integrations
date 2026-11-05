@@ -225,7 +225,7 @@ def test_refusal_documents(tmp_path, fixture, rc, kind, where):
     """Each of the four refusals: its rc, its itemised finding (kind + where)
     and its framing lines as ``refusal_summary`` — and nothing else, since a
     refused run prints nothing else."""
-    _d, res, doc, _out = _run(tmp_path, fixture, "render")
+    _d, res, doc, _out = _run(tmp_path, fixture, "output-alertmanager")
     assert res.returncode == doc["exit_code"] == rc
     [item] = _records(doc, kind=kind)
     assert {k: item[k] for k in where} == where
@@ -262,8 +262,8 @@ def test_skipped_entry_document(tmp_path):
         ("timing_value_replaced", "alpha", "group_wait"),
         ("unknown_receiver_type", "beta", "receiver.type"),
     }
-    assert all(r["blocks"] == ("never" if r["kind"].startswith("key_") else "validate")
-               for r in doc["findings"] if r["kind"] != "unclassified")
+    # #3016: the shared verdict's error blocks under --validate like the rest.
+    assert all(r["blocks"] == "validate" for r in doc["findings"] if r["kind"] != "unclassified")
 
 
 def test_caller_error_exit_still_writes_the_document(tmp_path):
@@ -315,8 +315,8 @@ def _pigeon_tree(root: Path) -> Path:
 
 
 @pytest.mark.parametrize("argv,validate,strict", [
-    (["--dry-run"], False, False),
-    (["--strict", "--dry-run"], False, True),
+    (["--output-alertmanager", "--dry-run"], False, False),
+    (["--output-alertmanager", "--strict", "--dry-run"], False, True),
     (["--validate"], True, False),
 ])
 def test_exit_1_without_a_blocking_line_still_blocks(tmp_path, argv, validate,
@@ -340,7 +340,7 @@ def test_usage_error_replaces_a_stale_document(tmp_path):
     d = cases.build_tree(tmp_path, "clean")
     out = tmp_path / "f.json"
     out.write_text('{"exit_code": 0, "findings": []}\n', encoding="utf-8")
-    res = cases.run_gar(d, ["--dry-run", "--no-such-flag"],
+    res = cases.run_gar(d, ["--output-alertmanager", "--dry-run", "--no-such-flag"],
                         ["--findings-json", str(out)])
     assert res.returncode == 2, res.stderr
     doc = json.loads(out.read_text(encoding="utf-8"))
@@ -352,7 +352,8 @@ def test_usage_error_replaces_a_stale_document(tmp_path):
 def test_an_exception_still_writes_a_failing_document(tmp_path, monkeypatch):
     out = tmp_path / "f.json"
     monkeypatch.setattr(sys, "argv", ["gar", "--config-dir", str(tmp_path),
-                                      "--dry-run", "--findings-json", str(out)])
+                                      "--output-alertmanager", "--dry-run",
+                                      "--findings-json", str(out)])
 
     def boom(_args, findings, **_kw):
         findings.append(gm.Finding("  WARN: x", blocks="never"))
@@ -392,7 +393,7 @@ def test_run_failed_backstop(exit_code, findings, validate, strict, backstop):
 def test_unwritable_findings_path_is_a_caller_error(tmp_path):
     d = cases.build_tree(tmp_path, "clean")
     out = tmp_path / "absent" / "f.json"
-    res = cases.run_gar(d, ["--dry-run"], ["--findings-json", str(out)])
+    res = cases.run_gar(d, ["--output-alertmanager", "--dry-run"], ["--findings-json", str(out)])
     assert res.returncode == 2
     assert "Traceback" not in res.stderr
     [line] = [ln for ln in res.stderr.splitlines() if ln.startswith("ERROR:")]
@@ -404,7 +405,7 @@ def test_rewrite_replaces_the_previous_document(tmp_path):
     d = cases.build_tree(tmp_path, "clean")
     out = tmp_path / "f.json"
     out.write_text("stale", encoding="utf-8")
-    res = cases.run_gar(d, ["--dry-run"], ["--findings-json", str(out)])
+    res = cases.run_gar(d, ["--output-alertmanager", "--dry-run"], ["--findings-json", str(out)])
     assert res.returncode == 0
     assert json.loads(out.read_text(encoding="utf-8"))["exit_code"] == 0
 
@@ -567,9 +568,19 @@ def test_every_kind_literal_is_in_the_catalog():
     assert len(seen) > 20, seen
 
 
+# #1560: the binding kinds secret_binding_findings produces in _grar_merge.
+_MERGE_PRODUCED_KINDS = frozenset({
+    "secret_ref_shared_unknown", "secret_ref_shared_field_not_allowed",
+    "secret_ref_shared_auth_password", "secret_ref_auth_password_unconfined",
+    "secret_ref_no_owner", "secret_ref_shared_proxy_url",
+    "secret_ref_unsupported_field",
+})
+
+
 def test_catalog_has_no_dead_kind_and_one_line_descriptions():
     text = "\n".join(p.read_text(encoding="utf-8") for p in _producer_sources()
                      if p.name != "_grar_merge.py")
+    merge_text = Path(gm.__file__).read_text(encoding="utf-8")
     dynamic = set(gar.BLOCKING_TREE_KINDS) | {"domain_policy_out_of_scope"}
     for kind, desc in gm.FINDING_KINDS.items():
         assert kind == kind.lower() and " " not in kind, kind
@@ -578,6 +589,11 @@ def test_catalog_has_no_dead_kind_and_one_line_descriptions():
                     "unknown_receiver_type", "invalid_receiver_field",
                     "conflicting_receiver_field", "timing_value_replaced"):
             continue  # produced in _grar_merge itself
+        if kind in _MERGE_PRODUCED_KINDS:
+            # #1560: produced in _grar_merge (secret_binding_findings) — pinned
+            # by name, and its literal must be there, so none can go dead.
+            assert f'kind="{kind}"' in merge_text, kind
+            continue
         assert f'"{kind}"' in text or kind in dynamic, kind
     assert dynamic <= set(gm.FINDING_KINDS)
 
@@ -697,7 +713,8 @@ def test_unwritable_path_keeps_the_exception(tmp_path, monkeypatch, capsys):
     original exception (its traceback) still propagates — not SystemExit."""
     out = tmp_path / "absent" / "f.json"
     monkeypatch.setattr(sys, "argv", ["gar", "--config-dir", str(tmp_path),
-                                      "--dry-run", "--findings-json", str(out)])
+                                      "--output-alertmanager", "--dry-run",
+                                      "--findings-json", str(out)])
 
     def boom(_args, _findings, **_kw):
         raise RuntimeError("crash")

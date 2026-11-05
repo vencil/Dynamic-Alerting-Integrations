@@ -85,7 +85,7 @@ DEFAULT_CI = REPO_ROOT / ".github" / "workflows" / "ci.yml"
 # The ci.yml job we demand parity with: the one that runs the FULL pytest
 # suite. Identified by a step whose `run` invokes pytest over `tests/` with
 # coverage — matching on the job NAME would break the moment someone renames
-# it, and matching the aggregation gate ("Python Tests (3.13)") would be wrong
+# it, and matching the aggregation gate ("Python Tests") would be wrong
 # because that job runs no tests at all.
 _FULL_SUITE_RUN_RE = re.compile(r"\bpytest\s+tests/.*--cov\b", re.DOTALL)
 

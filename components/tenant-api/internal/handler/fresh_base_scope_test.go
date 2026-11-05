@@ -4,14 +4,14 @@ package handler
 // on the fresh base the branch is cut from. The check on the pod's local tree
 // (synced at pod start) can only refuse early, never let a write through that
 // the base would refuse. Each case below has a local tree the caller's scope
-// allows and a base it does not: under enforce the write is refused (403, no
-// PR, no branch, origin unmoved); in shadow the PR is opened and exactly one
-// would-deny{axis="metadata_write"} is counted.
+// allows and a base it does not: the write is refused (403, no PR, no
+// branch, origin unmoved) and exactly one scope_denied{axis="metadata_write"}
+// is counted — by the re-judgement on the base, the local check having
+// allowed.
 
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -84,10 +84,11 @@ func (c freshScopeCase) run(t *testing.T, f *staleFixture) *httptest.ResponseRec
 
 func TestPRModeScopeAuthoritativeOnFreshBase(t *testing.T) {
 	for _, c := range freshScopeCases() {
-		t.Run(c.name+"/enforce", func(t *testing.T) {
+		t.Run(c.name, func(t *testing.T) {
 			f := newStaleFixture(t, c.local, c.origin)
 			mgr := newRBACManager(t, postStateRBAC)
-			mgr.EnableMetadataWriteScopeEnforce()
+			audit := &countingScopeAuditor{n: map[string]int{}}
+			mgr.SetScopeAuditor(audit)
 			f.deps.RBAC = mgr
 			if env, _ := WriteScopeMeta(f.dir)("db-a"); env != "production" {
 				t.Fatalf("precondition: db-a on the local tree = %q, want production", env)
@@ -114,26 +115,17 @@ func TestPRModeScopeAuthoritativeOnFreshBase(t *testing.T) {
 			if got := gitRev(t, f.bare, "main"); got != before {
 				t.Errorf("origin main moved: %s → %s", before, got)
 			}
-		})
-		t.Run(c.name+"/shadow", func(t *testing.T) {
-			f := newStaleFixture(t, c.local, c.origin)
-			mgr := newRBACManager(t, postStateRBAC)
-			audit := &countingScopeAuditor{n: map[string]int{}}
-			mgr.SetScopeAuditor(audit)
-			f.deps.RBAC = mgr
-			if w := c.run(t, f); w.Code != http.StatusOK || !f.prOpened {
-				t.Fatalf("status %d, PR opened %v; want the PR opened in shadow: %s", w.Code, f.prOpened, w.Body.String())
-			}
 			if got := audit.n["metadata_write"]; got != 1 {
-				t.Errorf("would-deny{axis=metadata_write} = %d, want 1: the write leaves scope only on the latest base", got)
+				t.Errorf("scope_denied{axis=metadata_write} = %d, want 1: the write leaves scope only on the latest base", got)
 			}
 		})
 	}
 }
 
-// When the base agrees with the local tree, the in-lock check does not ask
-// again: a write the local check already counted is counted once.
-func TestPRModeScopeShadowCountsOnceWhenBaseAgrees(t *testing.T) {
+// When the base agrees with the local tree, a write the local check refused
+// is counted once: the refusal comes before the in-lock re-judgement, which
+// therefore never asks again.
+func TestPRModeScopeCountsOnceWhenBaseAgrees(t *testing.T) {
 	local := map[string]string{"_defaults.yaml": freshScopeDefaults, "_profiles.yaml": freshScopeProfiles, "db-a.yaml": freshScopeDev}
 	for name, run := range map[string]func(*staleFixture) *httptest.ResponseRecorder{
 		"PUT": func(f *staleFixture) *httptest.ResponseRecorder {
@@ -149,14 +141,13 @@ func TestPRModeScopeShadowCountsOnceWhenBaseAgrees(t *testing.T) {
 			audit := &countingScopeAuditor{n: map[string]int{}}
 			mgr.SetScopeAuditor(audit)
 			f.deps.RBAC = mgr
-			if w := run(f); w.Code != http.StatusOK {
-				t.Fatalf("status %d: %s", w.Code, w.Body.String())
+			if w := run(f); w.Code == http.StatusOK || f.prOpened {
+				t.Fatalf("status %d, PR opened %v; want refused: db-a is dev on the local tree: %s", w.Code, f.prOpened, w.Body.String())
 			}
-			// PUT judges the pre-state and the post-state (both dev);
-			// batch judges the pre-state alone (the op leaves metadata).
-			want := map[string]int{"PUT": 2, "batch": 1}[name]
-			if got := audit.n["metadata_write"]; got != want {
-				t.Errorf("would-deny{axis=metadata_write} = %d, want %d (the local checks only)", got, want)
+			// The pre-state check on the local tree refuses; nothing after
+			// it — the post-state check, the in-lock re-judgement — runs.
+			if got := audit.n["metadata_write"]; got != 1 {
+				t.Errorf("scope_denied{axis=metadata_write} = %d, want 1 (the local pre-state check only)", got)
 			}
 		})
 	}
@@ -184,9 +175,7 @@ func (b *sideEffectBody) Read(p []byte) (int, error) {
 func TestPRModeScopeJudgedEvenWhenTheTreeMovedMidRequest(t *testing.T) {
 	local := map[string]string{"_defaults.yaml": freshScopeDefaults, "_profiles.yaml": freshScopeProfiles, "db-a.yaml": freshScopeProduction}
 	f := newStaleFixture(t, local, map[string]string{"db-a.yaml": freshScopeDev})
-	mgr := newRBACManager(t, postStateRBAC)
-	mgr.EnableMetadataWriteScopeEnforce()
-	f.deps.RBAC = mgr
+	f.deps.RBAC = newRBACManager(t, postStateRBAC)
 	body := &sideEffectBody{
 		r: bytes.NewBufferString("tenants:\n  db-a:\n    _metadata:\n      environment: production\n    mysql_connections: '90'\n"),
 		fn: func() {
@@ -205,9 +194,10 @@ func TestPRModeScopeJudgedEvenWhenTheTreeMovedMidRequest(t *testing.T) {
 }
 
 // A tenant's later op in the same batch is compared with the local state
-// after its earlier ops, so a would-deny is not counted twice: op0's local
-// post-state counts it, op1 (thresholds only) adds nothing.
-func TestPRModeScopeShadowSameTenantOpsCountOnce(t *testing.T) {
+// after its earlier ops, so a scope denial is not counted twice: op0's local
+// post-state is refused and counted, op1 (thresholds only) adds nothing —
+// the batch is rejected whole (#2900), nothing written.
+func TestPRModeScopeSameTenantOpsCountOnce(t *testing.T) {
 	local := map[string]string{"_defaults.yaml": freshScopeDefaults, "_profiles.yaml": freshScopeProfiles, "db-a.yaml": freshScopeProduction}
 	f := newStaleFixture(t, local, nil)
 	mgr := newRBACManager(t, postStateRBAC)
@@ -215,11 +205,12 @@ func TestPRModeScopeShadowSameTenantOpsCountOnce(t *testing.T) {
 	mgr.SetScopeAuditor(audit)
 	f.deps.RBAC = mgr
 	w := postTenantBatch(t, f.deps, `[{"tenant_id":"db-a","patch":{"_profile":"devprof"}},{"tenant_id":"db-a","patch":{"mysql_connections":"90"}}]`)
-	if w.Code != http.StatusOK || !f.prOpened {
-		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	assertRejectedOp(t, w, 0, "db-a", string(errcode.Forbidden), "this op proposes")
+	if f.prOpened {
+		t.Error("a PR was opened")
 	}
 	if got := audit.n["metadata_write"]; got != 1 {
-		t.Errorf("would-deny{axis=metadata_write} = %d, want 1 (op0's post-state)", got)
+		t.Errorf("scope_denied{axis=metadata_write} = %d, want 1 (op0's post-state)", got)
 	}
 }
 
@@ -233,9 +224,7 @@ func TestPRModeScopeReadsTheBaseRootPlatformLayer(t *testing.T) {
 				"db-a.yaml":      "tenants:\n  db-a:\n    mysql_connections: '80'\n"}
 			origin := map[string]string{"_platform.yaml": "tenants:\n  db-a:\n    _metadata:\n      environment: dev\n"}
 			f := newStaleFixture(t, local, origin)
-			mgr := newRBACManager(t, postStateRBAC)
-			mgr.EnableMetadataWriteScopeEnforce()
-			f.deps.RBAC = mgr
+			f.deps.RBAC = newRBACManager(t, postStateRBAC)
 			var w *httptest.ResponseRecorder
 			if kind == "batch" {
 				w = postTenantBatch(t, f.deps, `[{"tenant_id":"db-a","patch":{"mysql_connections":"90"}}]`)
@@ -250,35 +239,30 @@ func TestPRModeScopeReadsTheBaseRootPlatformLayer(t *testing.T) {
 }
 
 // A tenant file that cannot be read on the base is refused for what it is,
-// not as a scope violation, and counts no would-deny of its own.
+// not as a scope violation, and counts no scope denial of its own.
 func TestPRModeScopeBrokenBaseFileIsNotAScopeVerdict(t *testing.T) {
 	broken := "tenants:\n  db-a:\n    _profile: prodprof\n    mysql_connections: [unclosed\n"
-	for _, enforce := range []bool{true, false} {
-		for _, kind := range []string{"batch", "PUT"} {
-			t.Run(fmt.Sprintf("%s/enforce=%v", kind, enforce), func(t *testing.T) {
-				local := map[string]string{"_defaults.yaml": freshScopeDefaults, "_profiles.yaml": freshScopeProfiles, "db-a.yaml": freshScopeProduction}
-				f := newStaleFixture(t, local, map[string]string{"db-a.yaml": broken})
-				mgr := newRBACManager(t, postStateRBAC)
-				audit := &countingScopeAuditor{n: map[string]int{}}
-				mgr.SetScopeAuditor(audit)
-				if enforce {
-					mgr.EnableMetadataWriteScopeEnforce()
-				}
-				f.deps.RBAC = mgr
-				var w *httptest.ResponseRecorder
-				if kind == "batch" {
-					w = postTenantBatch(t, f.deps, `[{"tenant_id":"db-a","patch":{"mysql_connections":"90"}}]`)
-				} else {
-					w = putStale(t, f, "db-a", "tenants:\n  db-a:\n    _metadata:\n      environment: production\n    mysql_connections: '90'\n")
-				}
-				if w.Code == http.StatusForbidden || w.Code == http.StatusOK {
-					t.Errorf("status %d; want the broken base file's own error: %s", w.Code, w.Body.String())
-				}
-				if got := audit.n["metadata_write"]; got != 0 {
-					t.Errorf("would-deny{axis=metadata_write} = %d, want 0", got)
-				}
-			})
-		}
+	for _, kind := range []string{"batch", "PUT"} {
+		t.Run(kind, func(t *testing.T) {
+			local := map[string]string{"_defaults.yaml": freshScopeDefaults, "_profiles.yaml": freshScopeProfiles, "db-a.yaml": freshScopeProduction}
+			f := newStaleFixture(t, local, map[string]string{"db-a.yaml": broken})
+			mgr := newRBACManager(t, postStateRBAC)
+			audit := &countingScopeAuditor{n: map[string]int{}}
+			mgr.SetScopeAuditor(audit)
+			f.deps.RBAC = mgr
+			var w *httptest.ResponseRecorder
+			if kind == "batch" {
+				w = postTenantBatch(t, f.deps, `[{"tenant_id":"db-a","patch":{"mysql_connections":"90"}}]`)
+			} else {
+				w = putStale(t, f, "db-a", "tenants:\n  db-a:\n    _metadata:\n      environment: production\n    mysql_connections: '90'\n")
+			}
+			if w.Code == http.StatusForbidden || w.Code == http.StatusOK {
+				t.Errorf("status %d; want the broken base file's own error: %s", w.Code, w.Body.String())
+			}
+			if got := audit.n["metadata_write"]; got != 0 {
+				t.Errorf("scope_denied{axis=metadata_write} = %d, want 0", got)
+			}
+		})
 	}
 }
 
@@ -290,16 +274,23 @@ const freshScopeOrgRBAC = `groups:
     org-scope: org
 `
 
-// The in-lock re-judgement records nothing on the org axis: organization
-// membership does not come from the tree, so a stale base adds no org_write
-// would-deny to what the local gates already counted.
+// The in-lock re-judgement records nothing on the org axis when the base's
+// organizations agree with the local gate's: a stale base adds no org_write
+// denial to what the local gates already counted.
+//
+// The base moves db-a to dev by moving its profile (prodprof), and the body
+// keeps that profile: the write changes db-a's labels on neither tree, which
+// an org-scoped caller may not do (ADR-027 §7, label_guard.go). On the stale
+// base the pre-state already differs from what the local gate judged and is
+// refused there, so the write is counted once; the post-state is never judged.
 func TestPRModeScopeRejudgeAddsNoOrgCount(t *testing.T) {
 	counts := map[bool]map[string]int{}
 	for _, stale := range []bool{false, true} {
-		local := map[string]string{"_defaults.yaml": freshScopeDefaults, "_profiles.yaml": freshScopeProfiles, "db-a.yaml": freshScopeProduction}
+		local := map[string]string{"_defaults.yaml": freshScopeDefaults, "_profiles.yaml": freshScopeProfiles, "db-a.yaml": freshScopeProduction,
+			"_tenant_orgs.yaml": "tenant_orgs:\n  db-a: [acme]\n"}
 		var origin map[string]string
 		if stale {
-			origin = map[string]string{"db-a.yaml": freshScopeDev}
+			origin = map[string]string{"_profiles.yaml": strings.Replace(freshScopeProfiles, "environment: production", "environment: dev", 1)}
 		}
 		f := newStaleFixture(t, local, origin)
 		claimHeaders := map[string]string{"org": "X-Org"}
@@ -308,35 +299,34 @@ func TestPRModeScopeRejudgeAddsNoOrgCount(t *testing.T) {
 		mgr.SetScopeAuditor(audit)
 		f.deps.RBAC = mgr
 		f.deps.ClaimHeaders = claimHeaders
-		f.deps.TenantOrg = tenantorg.NewForTest(&tenantorg.Config{TenantOrgs: map[string][]string{"db-a": {}}})
+		f.deps.TenantOrg = tenantorg.NewForTest(&tenantorg.Config{TenantOrgs: map[string][]string{"db-a": {"acme"}}})
 		req := newRequestWithChiParam("PUT", "/api/v1/tenants/db-a", "id", "db-a",
-			bytes.NewBufferString("tenants:\n  db-a:\n    _metadata:\n      environment: production\n    mysql_connections: '90'\n"))
+			bytes.NewBufferString("tenants:\n  db-a:\n    _profile: prodprof\n    mysql_connections: '90'\n"))
 		req.Header.Set("X-Forwarded-Email", "alice@example.com")
 		req.Header.Set("X-Forwarded-Groups", "admins")
 		req.Header.Set("X-Org", "acme")
 		w := httptest.NewRecorder()
 		wrapWithRBACMiddleware(PutTenant(f.deps), f.deps.RBAC, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
-		if w.Code != http.StatusOK {
-			t.Fatalf("stale=%v: status %d: %s", stale, w.Code, w.Body.String())
+		if want := map[bool]int{false: http.StatusOK, true: http.StatusForbidden}[stale]; w.Code != want {
+			t.Fatalf("stale=%v: status %d, want %d: %s", stale, w.Code, want, w.Body.String())
 		}
 		counts[stale] = audit.n
 	}
 	if counts[true]["org_write"] != counts[false]["org_write"] {
-		t.Errorf("org_write would-deny: %d with a stale base, %d without; want equal", counts[true]["org_write"], counts[false]["org_write"])
+		t.Errorf("org_write scope denials: %d with a stale base, %d without; want equal", counts[true]["org_write"], counts[false]["org_write"])
 	}
 	if counts[true]["metadata_write"] != counts[false]["metadata_write"]+1 {
-		t.Errorf("metadata_write would-deny: %d stale vs %d; want exactly one more for the stale base", counts[true]["metadata_write"], counts[false]["metadata_write"])
+		t.Errorf("metadata_write scope denials: %d stale vs %d; want exactly one more for the stale base (the pre-state refusal)", counts[true]["metadata_write"], counts[false]["metadata_write"])
 	}
 }
 
 // The organization axis is judged on the base too: the base's
-// `_tenant_orgs.yaml` moved db-a out of the caller's organization (refused in
-// both modes: a tenant in another org is never the caller's), or left it
-// unlabeled (refused under enforce, a would-deny in shadow), while the
-// manager's copy (the local tree) still has it in.
+// `_tenant_orgs.yaml` moved db-a out of the caller's organization, or left it
+// unlabeled, while the manager's copy (the local tree) still has it in: both
+// are refused, and the refusal is counted once on org_write.
 func TestPRModeOrgScopeJudgedOnFreshBase(t *testing.T) {
 	orgsFile := func(org string) string { return "tenant_orgs:\n  db-a: [" + org + "]\n" }
-	run := func(t *testing.T, kind string, enforce bool, originOrgs string) (*staleFixture, *httptest.ResponseRecorder, map[string]int) {
+	run := func(t *testing.T, kind string, originOrgs string) (*staleFixture, *httptest.ResponseRecorder, map[string]int) {
 		local := map[string]string{"_defaults.yaml": freshScopeDefaults, "_profiles.yaml": freshScopeProfiles,
 			"db-a.yaml": freshScopeProduction, "_tenant_orgs.yaml": orgsFile("acme")}
 		var origin map[string]string
@@ -348,9 +338,6 @@ func TestPRModeOrgScopeJudgedOnFreshBase(t *testing.T) {
 		mgr := newRBACManagerWithClaims(t, freshScopeOrgRBAC, claimHeaders)
 		audit := &countingScopeAuditor{n: map[string]int{}}
 		mgr.SetScopeAuditor(audit)
-		if enforce {
-			mgr.EnableOrgScopeEnforce()
-		}
 		f.deps.RBAC = mgr
 		f.deps.ClaimHeaders = claimHeaders
 		f.deps.TenantOrg = tenantorg.NewForTest(&tenantorg.Config{TenantOrgs: map[string][]string{"db-a": {"acme"}}})
@@ -375,27 +362,21 @@ func TestPRModeOrgScopeJudgedOnFreshBase(t *testing.T) {
 		return f, w, audit.n
 	}
 	for _, kind := range []string{"PUT", "batch"} {
-		for name, c := range map[string]struct {
-			enforce bool
-			origin  string
-		}{"other org": {false, orgsFile("other")}, "unlabeled, enforce": {true, "tenant_orgs: {}\n"}} {
+		_, w0, base := run(t, kind, "")
+		if w0.Code != http.StatusOK {
+			t.Fatalf("%s with the base agreeing: status %d, want 200: %s", kind, w0.Code, w0.Body.String())
+		}
+		for name, origin := range map[string]string{"other org": orgsFile("other"), "unlabeled": "tenant_orgs: {}\n"} {
 			t.Run(kind+"/"+name, func(t *testing.T) {
-				f, w, _ := run(t, kind, c.enforce, c.origin)
+				f, w, stale := run(t, kind, origin)
 				if w.Code != freshRefusalStatus(kind == "batch") || f.prOpened {
 					t.Errorf("status %d, PR opened %v; want %d: %s", w.Code, f.prOpened, freshRefusalStatus(kind == "batch"), w.Body.String())
 				}
+				if stale["org_write"] != base["org_write"]+1 {
+					t.Errorf("org_write scope denials: %d with the stale base, %d without; want exactly one more", stale["org_write"], base["org_write"])
+				}
 			})
 		}
-		t.Run(kind+"/unlabeled, shadow", func(t *testing.T) {
-			_, w0, base := run(t, kind, false, "")
-			f, w, stale := run(t, kind, false, "tenant_orgs: {}\n")
-			if w0.Code != http.StatusOK || w.Code != http.StatusOK || !f.prOpened {
-				t.Fatalf("status %d / %d, PR opened %v; want both written in shadow: %s", w0.Code, w.Code, f.prOpened, w.Body.String())
-			}
-			if stale["org_write"] != base["org_write"]+1 {
-				t.Errorf("org_write would-deny: %d with the stale base, %d without; want exactly one more", stale["org_write"], base["org_write"])
-			}
-		})
 	}
 	t.Run("broken org file on the base", func(t *testing.T) {
 		local := map[string]string{"_defaults.yaml": freshScopeDefaults, "_profiles.yaml": freshScopeProfiles,
@@ -409,7 +390,7 @@ func TestPRModeOrgScopeJudgedOnFreshBase(t *testing.T) {
 	// A batch answers the same refusal per op: 422, the op's code
 	// CONFIG_DECODE_ERROR, no PR/MR.
 	t.Run("broken org file on the base, batch", func(t *testing.T) {
-		f, w, _ := run(t, "batch", false, "tenant_orgs: [unclosed\n")
+		f, w, _ := run(t, "batch", "tenant_orgs: [unclosed\n")
 		if w.Code != http.StatusUnprocessableEntity || f.prOpened {
 			t.Fatalf("status %d, PR opened %v; want 422: %s", w.Code, f.prOpened, w.Body.String())
 		}

@@ -74,7 +74,8 @@ def _enforced_names(receivers: list[dict]) -> list[str]:
 
 def _render(d: Path) -> dict:
     out = d.parent / "routes.yaml"
-    p = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d), "-o", str(out)],
+    p = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d),
+                        "--output-alertmanager", "-o", str(out)],
                        capture_output=True, text=True, encoding="utf-8",
                        check=False, timeout=120)
     assert p.returncode == 0, p.stderr
@@ -149,12 +150,12 @@ def test_validate_config_routes_row_counts_them(tmp_path):
     row = vc.check_routes(str(_tree(tmp_path, _PER_TENANT)))
     assert row["status"] in (vc.PASS, vc.WARN), row
     # One enforced route + receiver per tenant, one tenant route + receiver
-    # per routed tenant (t-routed, t-dflt), one root fallthrough route (no
-    # receiver) per unrouted tenant; one dedup inhibit rule each.
+    # per routed tenant (t-routed, t-dflt); an unrouted tenant reaches the
+    # root through the merge, not a route of its own. One dedup inhibit
+    # rule each.
     n = len(_EVERY) + 2
-    unrouted = sum(1 for _b, routed in _TENANTS.values() if not routed)
     assert row["details"][0] == (
-        f"{n + unrouted} routes, {n} receivers, {len(_EVERY)} inhibit_rules"), row
+        f"{n} routes, {n} receivers, {len(_EVERY)} inhibit_rules"), row
 
 
 def test_explain_route_trace_tree_and_types_follow(tmp_path):

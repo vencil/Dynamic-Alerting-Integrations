@@ -176,12 +176,6 @@ DECLARED: Dict[str, Dict[str, Tuple[str, str]]] = {
             "being silently ignored. Useless unless it ships.",
         ),
         ".helmignore": (SHIP, "helm's own packing control file"),
-        "values-scope-enforce.yaml": (
-            EXCLUDE,
-            "#1597: Container SAST L2 lint variant with every RBAC scope axis "
-            "pre-enforced — not a deployment profile. check_iac_helm.py reads "
-            "it from the repo by path, so excluding it costs the lint nothing.",
-        ),
     },
 }
 
@@ -634,4 +628,5 @@ def main(argv: List[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)

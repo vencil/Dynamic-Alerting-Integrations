@@ -212,6 +212,6 @@ def test_a_profile_key_no_tenant_binds_is_a_finding_with_no_tenant(tmp_path):
     got = [(f["file"], f["key"], f["reason"], f["tenants"]) for f in _json(p)["findings"]]
     assert got == [("_profiles.yaml", "_unknown_thing", "unregistered", [])]
     p = _run("--config-dir", d)
-    assert "notice: unread: _unknown_thing in _profiles.yaml (unregistered) — no tenant" in p.stdout
+    assert "error: unread: _unknown_thing in _profiles.yaml (unregistered) — no tenant" in p.stdout
     p = _run("--config-dir", d, "--tenant", "db-b", "--json")
     assert _json(p)["findings"] == []

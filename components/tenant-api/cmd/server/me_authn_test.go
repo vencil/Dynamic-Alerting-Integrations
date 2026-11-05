@@ -52,18 +52,18 @@ func assertOnlyOwnRule(t *testing.T, label string, me handler.MeResponse, rules 
 func TestMe_AuthenticatedOnly(t *testing.T) {
 	t.Parallel()
 
-	t.Run("org-scoped star rule without org claim under enforce", func(t *testing.T) {
+	t.Run("org-scoped star rule without org claim", func(t *testing.T) {
 		t.Parallel()
-		f := newGateFixture(t, anyTenantRBACYAML, true)
+		f := newGateFixture(t, anyTenantRBACYAML)
 		c := caller{group: "orgs"}
 		// The any-tenant gate refuses this caller everywhere else …
 		if w := f.do(t, c, http.MethodGet, "/api/v1/tenants", ""); w.Code != http.StatusForbidden {
-			t.Fatalf("/tenants as orgs without claim under enforce: %d, want 403", w.Code)
+			t.Fatalf("/tenants as orgs without claim: %d, want 403", w.Code)
 		}
 		// … /me shows its own rule, which grants it nothing here, and no org
 		// key it carries no value for.
 		me := f.me(t, c)
-		assertOnlyOwnRule(t, "orgs/no-claim/enforce", me, map[string][]string{"orgs": {"read"}}, []string{"*"})
+		assertOnlyOwnRule(t, "orgs/no-claim", me, map[string][]string{"orgs": {"read"}}, []string{"*"})
 		if len(me.OrgClaimKeys) != 0 {
 			t.Errorf("org_claim_keys = %v, want none (the caller has no org claim)", me.OrgClaimKeys)
 		}
@@ -74,7 +74,7 @@ func TestMe_AuthenticatedOnly(t *testing.T) {
 
 	t.Run("no matching rule", func(t *testing.T) {
 		t.Parallel()
-		f := newGateFixture(t, anyTenantRBACYAML, true)
+		f := newGateFixture(t, anyTenantRBACYAML)
 		me := f.me(t, noRuleCaller)
 		assertOnlyOwnRule(t, "no rule", me, map[string][]string{}, nil)
 		if me.Groups == nil || me.AccessibleTenants == nil {
@@ -84,7 +84,7 @@ func TestMe_AuthenticatedOnly(t *testing.T) {
 
 	t.Run("MED-8 configured but zero groups", func(t *testing.T) {
 		t.Parallel()
-		f := newGateFixture(t, "groups: []\n", false)
+		f := newGateFixture(t, "groups: []\n")
 		// The platform admin's group gets no grant — /me says so, and every
 		// data route still refuses it.
 		me := f.me(t, adminCaller)
@@ -94,23 +94,31 @@ func TestMe_AuthenticatedOnly(t *testing.T) {
 		}
 	})
 
-	t.Run("open mode", func(t *testing.T) {
+	t.Run("no rbac path", func(t *testing.T) {
 		t.Parallel()
-		f := newGateFixture(t, "", false) // no --rbac path
+		f := newGateFixture(t, "") // no --rbac path
+		// ADR-027 §7: no open mode. /me still answers (authentication-only)
+		// with no grants; every data route refuses — the platform admin's
+		// group included, since no rule exists to name it.
 		me := f.me(t, noRuleCaller)
-		assertOnlyOwnRule(t, "open mode", me, map[string][]string{}, nil)
+		assertOnlyOwnRule(t, "no rbac path", me, map[string][]string{}, nil)
+		for _, c := range []caller{noRuleCaller, adminCaller} {
+			if w := f.do(t, c, http.MethodGet, "/api/v1/tenants", ""); w.Code != http.StatusForbidden {
+				t.Errorf("/tenants as %q with no --rbac path: %d, want 403", c.group, w.Code)
+			}
+		}
 	})
 
 	t.Run("scoped caller sees its own rule only", func(t *testing.T) {
 		t.Parallel()
-		f := newGateFixture(t, anyTenantRBACYAML, false)
+		f := newGateFixture(t, anyTenantRBACYAML)
 		assertOnlyOwnRule(t, "exact", f.me(t, exactCaller),
 			map[string][]string{"exact": {"read", "write"}}, []string{"alpha-one"})
 	})
 
 	t.Run("unauthenticated", func(t *testing.T) {
 		t.Parallel()
-		f := newGateFixture(t, anyTenantRBACYAML, false)
+		f := newGateFixture(t, anyTenantRBACYAML)
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 		req.Header.Set("X-Forwarded-Groups", "admins") // groups without an identity
 		w := httptest.NewRecorder()

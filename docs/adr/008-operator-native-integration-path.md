@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: k8s
 created_at: 2026-04-04
-updated_at: 2026-05-13
+updated_at: 2026-11-05
 ---
 # ADR-008: Operator-Native 整合路徑
 
@@ -17,220 +17,116 @@ updated_at: 2026-05-13
 
 ## 狀態
 
-✅ **Accepted** (v2.3.0) — 平台同時支援 ConfigMap 路徑和 Operator CRD 路徑，由偵測邏輯自動判斷
-📎 **Addendum** (v2.6.0) — 新增架構邊界宣言，見下方 §Addendum: 架構邊界宣言
-📎 **Addendum** (v2.10.0) — da-assembler direct-render 退役 + Operator 路徑定案，見下方 §Addendum (v2.10.0)
+✅ **Accepted**（v2.3.0）
 
-## 背景
-
-Prometheus Operator（kube-prometheus-stack）已成為 Kubernetes 環境中部署 Prometheus 的主流方式。Operator 使用自定義 CRD（`PrometheusRule`、`ServiceMonitor`、`AlertmanagerConfig`）取代傳統 ConfigMap，並透過 label selector 自動載入配置。
-
-### 問題陳述
-
-1. **雙路徑共存**：既有用戶使用 ConfigMap 掛載 Rule Pack（`configMapGenerator` / `projected volume`），Operator 用戶需要 PrometheusRule CRD 格式
-2. **互斥風險**：`generate_alertmanager_routes.py` 產出的 ConfigMap 格式與 `AlertmanagerConfig` CRD 不可混用，混用會導致路由覆蓋
-3. **API 版本碎片化**：AlertmanagerConfig 存在 `v1alpha1` 和 `v1beta1` 兩個版本，不同 Operator 版本支援不同 API
-4. **GitOps 冪等性**：自動產出的 CRD YAML 若帶有 `resourceVersion`、`creationTimestamp` 等 server-side metadata，ArgoCD/Flux 會持續報告 OutOfSync
-5. **Namespace 策略**：cluster-wide vs namespace-scoped 的 CRD 部署影響 RBAC 設計和多租戶隔離
-
-### 決策驅動力
-
-- 不增加核心架構複雜度（threshold-exporter 不變）
-- 工具鏈可適配兩種路徑，而非強制遷移
-- 產出物必須是 GitOps-friendly 的純淨 declarative YAML
+- 2026-11-05 修訂（同時把先前分段附加的修訂併進正文）：Alertmanager 路由不再產生成 `AlertmanagerConfig` CRD。兩條路徑的路由都由 `generate-routes` 產生；Operator 路徑把產出的 `alertmanager.yaml` 放進 Alertmanager 的 `configSecret`。`operator-generate` 只產 PrometheusRule 與 ServiceMonitor（[#3572](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3572)）。
 
 ## 決策
 
-**採用工具鏈適配模式：核心平台（threshold-exporter + Rule Pack）保持 path-agnostic，新增 `operator-generate` / `operator-check` 工具處理 CRD 轉換與驗證。**
+**核心平台（threshold-exporter + Rule Pack）不分路徑；工具鏈處理兩種部署方式的差異。**
 
-### 架構分層
+- **Prometheus 這一側分兩條路徑。** ConfigMap 路徑用 projected volume 掛 Rule Pack；Operator 路徑由 `da-tools operator-generate` 產出 PrometheusRule（每個 Rule Pack 一份）與 threshold-exporter 的 ServiceMonitor，`da-tools operator-check` 驗證它們有沒有被 Operator 載入。
+- **Alertmanager 路由只有一個產生器：`da-tools generate-routes`。** 輸出＝合併（你自己的 Alertmanager 設定, conf.d），順序固定是：平台路由（Watchdog 心跳、`component="custom"` 隔離子樹、synthetic probe、sentinel）→ 你自己的路由（原順序）→ 租戶路由。ConfigMap 路徑把結果放進 Alertmanager 的 ConfigMap（或 `--apply`）；Operator 路徑把同一份結果放進 Secret，再讓 Alertmanager CR 的 `spec.configSecret` 指向它。兩條路徑套用的是**同一份**設定檔，不是兩個各自產生、要保持一致的版本。
 
-```mermaid
-graph TB
-    TE["threshold-exporter（不變）<br/>YAML → Prometheus Metrics<br/>SHA-256 hot-reload"]
-    TE --> PA
-    TE --> PB
+### 範例
 
-    subgraph PA["Path A: ConfigMap（既有路徑）"]
-        direction TB
-        PA1["projected volume"]
-        PA2["configMapGenerator"]
-        PA3["generate-routes.py"]
-        PA4["config-reloader sidecar"]
-    end
+conf.d 一個租戶、你自己的設定一條 critical 路由：
 
-    subgraph PB["Path B: Operator CRD（v2.3.0 新增）"]
-        direction TB
-        PB1["PrometheusRule"]
-        PB2["ServiceMonitor"]
-        PB3["AlertmanagerConfig"]
-        PB4["operator-generate / operator-check"]
-    end
+```yaml
+# conf.d/team-a.yaml
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        type: webhook
+        url: "https://hooks.example.com/team-a"
 ```
 
-### Path B 工具設計
-
-**`da-tools operator-generate`**：
-- 讀取 `rule-packs/` → 產出 16 個 PrometheusRule CRD YAML
-- 讀取 `conf.d/` → 產出 per-tenant AlertmanagerConfig CRD
-- 產出 ServiceMonitor for threshold-exporter
-- `--api-version` flag 指定 AlertmanagerConfig API 版本（`v1alpha1` | `v1beta1`，預設 `v1beta1`）
-- `--gitops` flag：sorted keys、無 timestamps/resourceVersion/status、deterministic output
-- `--namespace` flag：目標 namespace（影響 CRD metadata.namespace）
-- `--output-dir` flag：Kustomize/Helm friendly 輸出
-
-**`da-tools operator-check`**：
-- 偵測 Operator 存在（`kubectl get crd prometheusrules.monitoring.coreos.com`）
-- 驗證 PrometheusRule 載入狀態（label 比對 ruleSelector）
-- 驗證 ServiceMonitor target 狀態（Prometheus `/api/v1/targets`）
-- 驗證 AlertmanagerConfig 生效（Alertmanager status API）
-- 輸出診斷報告（PASS / WARN / FAIL）
-
-### 偵測邏輯
-
-```python
-def detect_deployment_mode(kubeconfig=None):
-    """偵測目標叢集使用 ConfigMap 還是 Operator 部署"""
-    try:
-        result = kubectl("get", "crd", "prometheusrules.monitoring.coreos.com")
-        if result.returncode == 0:
-            return "operator"
-    except Exception:
-        pass
-    return "configmap"
+```yaml
+# alertmanager.yaml（你自己的設定，來源）
+route:
+  receiver: ops-default
+  routes:
+  - matchers: ['severity="critical"']
+    receiver: ops-pager
+receivers:
+- name: ops-default
+- name: ops-pager
+  webhook_configs: [{url: 'https://pager.example.com/hook'}]
 ```
 
-### 互斥邊界
-
-| 項目 | Path A (ConfigMap) | Path B (Operator) |
-|------|-------------------|-------------------|
-| Rule Pack 掛載 | projected volume ConfigMap | PrometheusRule CRD |
-| 路由產生 | `generate_alertmanager_routes.py` | `operator-generate` AlertmanagerConfig |
-| 配置重載 | config-reloader sidecar（Rule Pack；`prometheus.yml` 若以 `subPath` 掛載則仍須重啟——本 repo manifest 如此，自架 Prometheus 若整目錄掛載則不受此限） | Operator 自動 reconcile |
-| 驗證工具 | `validate_config.py` | `operator-check` |
-
-**嚴格互斥**：同一叢集的 Alertmanager 不可同時使用 ConfigMap 和 AlertmanagerConfig CRD 管理路由。`operator-generate` 會偵測並警告。
-
-## 基本原理
-
-### 為什麼不把 threshold-exporter 改為 Kubernetes Operator？
-
-評估過將 threshold-exporter 改寫為監聽 `DynamicAlertTenant` CRD 的 Kubernetes Operator，但基於以下原因決定不在 v2.3.0 採用：
-
-1. **架構邊界擴大**：引入 Operator SDK + CRD + Controller 會大幅增加核心複雜度
-2. **部署靈活度降低**：當前 config-dir + SHA-256 hot-reload 設計可在任何環境運行（非 K8s 環境也行），Operator 模式綁定 K8s
-3. **已驗證的穩定性**：hot-reload 機制已通過 v2.2.0 benchmark 驗證（2,000 tenant 10ms reload）
-4. **漸進式採用**：工具鏈適配讓用戶可逐步遷移，而非全有全無
-
-### 為什麼不只提供文件指引（而是建工具）？
-
-v2.2.0 BYO 文件的 Operator Appendix 僅是 CRD 範例翻譯，用戶反映：
-- 逐一手工把每個 Rule Pack ConfigMap 轉成 PrometheusRule 耗時且易錯
-- AlertmanagerConfig API 版本差異容易踩坑
-- GitOps pipeline 需要 deterministic 輸出
-
-## 後果
-
-### 正面
-
-- Operator 用戶獲得一級公民體驗（自動產出 CRD + 驗證工具）
-- 既有 ConfigMap 用戶不受影響
-- GitOps pipeline 可直接整合（`operator-generate --gitops` 輸出 deterministic YAML）
-- 遷移路徑明確（ConfigMap → CRD 漸進式轉換）
-
-### 負面
-
-- 工具鏈維護成本增加（Path A + Path B 兩套路徑）
-- 需追蹤 AlertmanagerConfig API 版本演進
-- `operator-generate` 的 CRD 輸出需與 Operator 版本保持相容
-
-### 風險
-
-- AlertmanagerConfig `v1alpha1` 可能在未來 Operator 版本中被移除 → 預設 `v1beta1`，`v1alpha1` 標注 deprecation
-- Operator ruleSelector label 策略多樣 → `operator-check` 提供診斷指引
-
-## Addendum: 架構邊界宣言 (v2.6.0)
-
-> 正式記錄核心元件的職責邊界，防止功能蔓延。
-
-### 不可違反的邊界
-
-1. **threshold-exporter 不 watch 任何 CRD**。它只讀 `conf.d/` YAML 檔案，透過 SHA-256 hot-reload 機制偵測變更。這是刻意的設計——維持 exporter 在非 K8s 環境也能運行的通用性。
-
-2. **CRD → conf.d/ 的轉換由外部負責**。兩種支援路徑：
-   - **da-assembler-controller**（未來 Operator 模式）：watch `ThresholdConfig` CRD → 渲染 `conf.d/` 檔案
-   - **CI pipeline 中的 `operator-generate`**：靜態轉換 → 輸出 CRD YAML 供 GitOps 部署
-
-3. **`operator-generate` 僅是「組裝 / 渲染」角色**。它讀取 `rule-packs/` 和 `conf.d/` 目錄，產出標準 CRD YAML。它不擴充 exporter 本身的職責，不連線叢集，不執行 `kubectl apply`。
-
-### 邊界圖
-
-```mermaid
-graph LR
-    subgraph "核心（不變）"
-        TE["threshold-exporter<br/>YAML → Metrics"]
-    end
-
-    subgraph "外部轉換層"
-        OG["operator-generate<br/>（CI / 開發時靜態產出）"]
-        AC["da-assembler-controller<br/>（K8s Operator 模式）"]
-    end
-
-    subgraph "配置來源"
-        YAML["conf.d/ YAML"]
-        CRD["ThresholdConfig CRD"]
-    end
-
-    YAML --> TE
-    CRD -->|watch + render| AC --> YAML
-    OG -->|靜態產出| K8sCRD["PrometheusRule<br/>AlertmanagerConfig<br/>ServiceMonitor"]
+```bash
+da-tools generate-routes --config-dir conf.d --output-alertmanager \
+  --base-config alertmanager.yaml -o out.yaml
+# Operator 路徑：放進 configSecret（key 必須是 alertmanager.yaml）
+kubectl create secret generic alertmanager-routing -n monitoring \
+  --from-file=alertmanager.yaml=out.yaml --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-### 新增 Operator 工具的判斷標準
+`out.yaml` 的 `route.routes` 依序送往：`watchdog-heartbeat`、`custom-alerts-firehose`、`synthetic-receiver`、`sentinel-sinkhole`、`ops-pager`、`tenant-team-a`。用 `amtool config routes test --config.file=out.yaml` 測去向：
 
-任何新增與 Operator 相關的工具或功能，必須通過以下三個問題：
+| 告警標籤 | 送往 |
+|---|---|
+| `alertname=Watchdog` | `watchdog-heartbeat` |
+| `alertname=HighCPU tenant=team-a severity=warning` | `tenant-team-a` |
+| `alertname=MyRule component=custom tenant=team-a severity=critical` | `tenant-team-a`（custom 子樹的租戶子路由，不經 `ops-pager`） |
+| `alertname=NodeDown severity=critical` | `ops-pager` |
 
-1. **是否改變了 threshold-exporter 的輸入介面？** → 如果是，違反邊界，不可進行
-2. **是否需要 exporter 連線 K8s API？** → 如果是，違反邊界，應由外部工具處理
-3. **是否只是「讀取 → 轉換 → 輸出」？** → 如果是，屬於工具鏈範疇，可以進行
+kube-prometheus-stack 用 `alertmanager.alertmanagerSpec.configSecret: alertmanager-routing` 指過去；Operator 讀這個 Secret 的 `alertmanager.yaml` key。
 
-## Addendum (v2.10.0)：da-assembler direct-render 退役 + Operator 路徑定案
+## 背景
 
-把本 epic（[#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692)）原本設想的「監聽 CRD、即時編譯規則的 operator」拆開後，它的三個職責各自找到了更好的歸宿：**編譯邏輯留在 CI**（純建置期、不增加任何執行期元件）；**寫入交給 tenant-api 既有的單一寫入平面**（[ADR-023](023-write-plane-single-writer-invariant.md)）；**上線前的回放驗證變成 PR 留言裡的回測**。剩下的只有「把 CRD 翻成一個寫入請求」這層皮，而它的需求還沒出現。據此對上方 §演進狀態 的 da-assembler-controller 探索項做三點定案：
+Prometheus Operator（kube-prometheus-stack）是 Kubernetes 上部署 Prometheus 的主流方式。它用 CRD（`PrometheusRule`、`ServiceMonitor`、`AlertmanagerConfig`）取代 ConfigMap，以 label selector 載入設定。平台要讓 ConfigMap 使用者與 Operator 使用者都能用，而不改 threshold-exporter。
 
-1. **`da_assembler` 的 direct-render 模式退役，只留本機除錯用。** 規則一律由 CI 編譯產生（recipe → 編譯 → promtool → PR → ConfigMap），這是 production 唯一合法的上線路徑。direct-render 會繞過這條管線：CRD 宣告的告警會送出指標，CI 卻編不出對應規則——又是一條會悄悄不觸發的告警。
+要處理的問題：
 
-2. **`ThresholdConfig` CRD 預設不安裝（休眠）。** direct-render 退役後它暫時沒有消費者。不安裝的好處是 `kubectl apply` 會當場報錯——這是最自然的「大聲壞掉」，比在描述欄寫一句沒人看的警語、或為一個沒人用的 CRD 立一個 always-deny 元件都好。schema 留著供 CI 驗證，需求出現時再一併恢復。
+1. **兩種掛載方式共存**：ConfigMap 使用者以 projected volume 掛 Rule Pack；Operator 使用者需要 PrometheusRule。
+2. **Operator 只載入 label 對得上的 CRD**：PrometheusRule／ServiceMonitor 的 label 要符合 Prometheus 的 `ruleSelector`／`serviceMonitorSelector`，各安裝方式不同。
+3. **GitOps 要可重現的輸出**：帶 `resourceVersion`、`creationTimestamp` 這類伺服器端欄位的 YAML，會讓 ArgoCD／Flux 一直報 OutOfSync。
+4. **平台路由必須排在最前面**。Watchdog 心跳要送到外部 dead-man's switch（告警管線本身死掉時，靠「心跳停了」被發現）；租戶的 custom 告警要隔離在自己的子樹，不能流進叢集的 NOC 路由。這兩件事都靠路由順序：Alertmanager 由上往下比對，先命中、又沒有 `continue: true` 的路由就收走告警。
 
-3. **未來若要 CRD 原生的自助介面，做成 tenant-api 內嵌的選用模式，不另立 operator。** 原本的獨立 operator 構想取消。觸發條件是客戶明確需要 kubectl 原生介面；屆時就在 tenant-api 內嵌一個可開關的監聽模式（沿用既有的單一寫入機制），不蓋新元件、也不為它另開一條發版線。理由很簡單：那層皮的價值有限，為它單獨維護一套狀態機、重試、認證、發版流程並不划算。
+第 4 點是路由不產生成 `AlertmanagerConfig` 的原因。Operator 合併 `AlertmanagerConfig` 的方式（Prometheus Operator v0.95.0，`pkg/alertmanager/amcfg.go`）：
 
-對外一句話：多租戶、HA 校正、版本感知的告警編譯全在建置期完成，production 叢集不需要安裝任何新的 controller。
+- CR 的路由一律插在全域路由**之前**，頂層路由強制 `continue: true`（比對成功後繼續往下比）；
+- 預設的 `alertmanagerConfigMatcherStrategy: OnNamespace` 會在 CR 的路由與 inhibit rule 加上 `namespace="<CR 所在 namespace>"`。
 
-## 演進狀態
+所以每個租戶一份 CR 的做法下：平台路由排不到最前面；租戶路由只命中帶 `namespace="monitoring"`（CR 所在處）的告警；命中了也會因 `continue: true` 再流進全域路由，custom 隔離不成立。kube-prometheus-stack 預設還把 Watchdog 送往 `null`。
 
-- **v2.3.0**（已完成）：`operator-generate` / `operator-check` 工具鏈、PrometheusRule + AlertmanagerConfig + ServiceMonitor CRD 產出
-- **v2.6.0**（已完成）：架構邊界宣言（見上方 §Addendum）、`operator-generate --kustomize` 多叢集部署、`drift_detect.py --mode operator` 跨叢集 CRD 漂移偵測
+## 後果與已知限制
 
-**殘留**：
-- ~~**da-assembler-controller**（長期探索）：外部 Operator watch `ThresholdConfig` CRD → 渲染 `conf.d/`~~ → **v2.10.0 取消**（見下方 §Addendum (v2.10.0)）：direct-render hard-deprecate、CRD dormant、未來 CR-native 介面改 tenant-api 內嵌 watch mode
-- **Helm Chart kube-prometheus-stack values 範例**：提供常見 Operator 部署的 values.yaml 參考
-- **ArgoCD ApplicationSet 整合**：多叢集 Federation 場景的 CRD 部署自動化
+- **Operator 路徑多一步**：conf.d 改了，要重跑 `generate-routes` 並更新 Secret（GitOps 時把產出放進 pipeline）。換到的是兩條路徑同一份路由、同一組測試。
+- **Alertmanager CR 若同時選取 `AlertmanagerConfig`**（設了 `alertmanagerConfigSelector`；kube-prometheus-stack 預設會設），那些 CR 的路由仍會被插在 configSecret 的路由之前。平台自己不再產 CR；舊版 `operator-generate` 留下的（帶 `app.kubernetes.io/part-of=dynamic-alerting`）要刪掉，`operator-check` 會對它們報 WARN。別的團隊的 CR 因為 `continue: true` 攔不走告警，但會多送一份；要讓平台路由之前什麼都沒有，就把 selector 設成不選任何 `AlertmanagerConfig`。
+- **Breaking**：`operator-generate --components alertmanager` 與只給 `AlertmanagerConfig` 用的旗標（`--config-dir`、`--api-version`、`--receiver-template`、`--secret-name`、`--secret-key`）結束碼 2，訊息附上 `generate-routes` 與 configSecret 的做法；`migrate-to-operator` 也不再產 `AlertmanagerConfig`。
+- **PrometheusRule 的 label 要對上 selector**：`operator-generate` 預設帶 `release=kube-prometheus-stack`，Helm release 名稱不同時用 `--selector-label` 改；`operator-check` 會報出沒被載入的情況。
+- **`--gitops`** 輸出排序過的鍵、不帶時間戳與伺服器端欄位，同一輸入產出相同 YAML；`--kustomize` 另產 `kustomization.yaml` 供多叢集部署；`drift_detect.py --mode operator` 比對跨叢集的 CRD 漂移。
+- **判斷叢集走哪條路徑**：`operator-check` 先看 `prometheusrules.monitoring.coreos.com` CRD 在不在；在就是 Operator 路徑。
+- **還沒做的**：常見 Operator 部署的 kube-prometheus-stack values 範例；多叢集 Federation 下以 ArgoCD ApplicationSet 部署 CRD 的自動化。
 
-## 相關決策
+### 架構邊界
 
-| ADR | 關係 |
+- **threshold-exporter 不 watch 任何 CRD**，只讀 `conf.d/`（SHA-256 比對內容變更後重載）。這讓 exporter 在非 Kubernetes 環境也能跑。
+- **工具只做「讀取 → 轉換 → 輸出」**。`operator-generate` 讀 `rule-packs/`，產出 CRD YAML；不連叢集、不 `kubectl apply`。`generate-routes` 的 `--apply` 是它唯一會改叢集的模式，屬於 ConfigMap 路徑。
+- 新增 Operator 相關工具前，問三件事：會不會改 threshold-exporter 的輸入介面？會不會要 exporter 連 Kubernetes API？是不是只是讀取、轉換、輸出？前兩個是「是」就不做；第三個是「是」才屬於工具鏈。
+- **CRD 原生的自助介面不另立 operator。** 規則一律在 CI 編譯（recipe → 編譯 → promtool → PR → ConfigMap）；`da_assembler` 的 direct-render 只留本機除錯用，因為它會繞過這條管線，讓 CRD 宣告的告警送出指標、CI 卻沒有對應規則。`ThresholdConfig` CRD 預設不安裝：沒有消費者，不裝的話 `kubectl apply` 會當場報錯。日後客戶明確需要 kubectl 原生介面時，做成 tenant-api 內嵌、可開關的監聽模式，沿用它既有的單一寫入機制（[ADR-023](023-write-plane-single-writer-invariant.md)），不另開元件與發版線。
+
+## 考慮過的替代方案
+
+- **把 threshold-exporter 改成 Kubernetes Operator**（監聽 `DynamicAlertTenant` CRD）：核心要引入 controller 與 CRD，複雜度大增，也綁死 Kubernetes；現有的檔案熱重載已驗證可用。不採用。
+- **只寫文件、不做工具**：使用者回報手工把每個 Rule Pack 轉成 PrometheusRule 費時易錯，GitOps 也需要可重現的輸出。不採用。
+- **Operator 路徑每個租戶產一份 `AlertmanagerConfig`**（v2.3.0 起的做法）：因上方「背景」第 4 點的合併方式，平台路由排不到最前面、租戶路由受 namespace matcher 限制、custom 告警會流進全域路由。改為 configSecret。
+- **一份平台專用的 `AlertmanagerConfig` 放平台路由**：CR 一樣被強制 `continue: true` 並加上 namespace matcher，Watchdog 與 sentinel 告警的 namespace 不一定是 CR 所在處，排序也無法保證在別的 CR 之前。不採用。
+- **文件化 `alertmanagerConfigMatcherStrategy: None` 繼續用 per-tenant CR**：解決 namespace matcher，但 `continue: true` 與排序問題仍在；而且要維護第二個路由產生器，與 `generate-routes` 保持一致。不採用。
+
+## 相關
+
+| 文件 | 關係 |
 |-----|------|
-| [ADR-001](001-severity-dedup-via-inhibit.md) | Inhibit rule 在 Operator CRD 中的等價表達 |
-| [ADR-004](004-federation-central-exporter-first.md) | Federation 場景 CRD 部署需考慮 edge/central 分層 |
-| [ADR-005](005-projected-volume-for-rule-packs.md) | Path A 的 projected volume 設計；Path B 用 PrometheusRule 取代 |
-| [ADR-007](007-cross-domain-routing-profiles.md) | 路由 Profile 在 AlertmanagerConfig CRD 中的映射 |
-
-## 相關資源
-
-| 資源 | 說明 |
-|------|------|
-| [`docs/prometheus-operator-integration.md`](../integration/prometheus-operator-integration.md) | Operator 整合完整手冊 |
-| [`docs/byo-prometheus-integration.md`](../integration/byo-prometheus-integration.md) | Path A: 既有 BYO Prometheus 整合 |
-| [`docs/byo-alertmanager-integration.md`](../integration/byo-alertmanager-integration.md) | Path A: 既有 BYO Alertmanager 整合 |
+| [ADR-001](001-severity-dedup-via-inhibit.md) | severity 去重的 inhibit rule，由 `generate-routes` 產生 |
+| [ADR-004](004-federation-central-exporter-first.md) | Federation 場景的 CRD 部署要考慮 edge／central 分層 |
+| [ADR-005](005-projected-volume-for-rule-packs.md) | ConfigMap 路徑的 projected volume；Operator 路徑以 PrometheusRule 取代 |
+| [ADR-007](007-cross-domain-routing-profiles.md) | 路由 profile，由 `generate-routes` 展開 |
+| [Operator Alertmanager 整合](../integration/operator-alertmanager-integration.md) | configSecret 的完整步驟 |
+| [Operator 整合手冊](../integration/prometheus-operator-integration.md) | Operator 路徑總覽 |
+| [CLI 參考 §generate-routes](../cli-reference.md#generate-routes) | 合併規則與結束碼 |
 | [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) | 上游 Helm chart |
-| [Prometheus Operator CRD Reference](https://prometheus-operator.dev/docs/api-reference/api/) | CRD API 文件 |
+| [Prometheus Operator API](https://prometheus-operator.dev/docs/api-reference/api/) | CRD API 文件 |

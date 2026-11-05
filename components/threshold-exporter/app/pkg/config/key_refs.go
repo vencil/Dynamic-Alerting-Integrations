@@ -66,12 +66,21 @@ func overrideKeyShape(canonKey string) (overrideShape, string) {
 //	mysql_cpu                     → mysql_threads_running
 //	mysql_cpu_critical            → mysql_threads_running
 //	mysql_cpu{db='a'}             → mysql_threads_running
+//	mysql_cpu_critical{db='a'}    → mysql_threads_running
 //	redis_queue_length{queue="x"} → redis_queue_length
+//
+// A `<base>_critical{…}` key — a `_critical` tier with dimensions, which the
+// exporter serves no row for (DimensionBaseRefused, #3556) — belongs to
+// `<base>` like `<base>_critical` does, so a tool retiring `<base>` finds it.
+// Only this answer maps it: validateOverrideKeys' membership is unchanged.
 func PlatformKeyFor(key string) (string, bool) {
 	canon, _ := canonicalKeyFor(key)
 	shape, base := overrideKeyShape(canon)
 	if shape == shapeReserved {
 		return "", false
+	}
+	if shape == shapeDimensional && DimensionBaseRefused(base) {
+		base = strings.TrimSuffix(base, criticalSuffix)
 	}
 	return base, true
 }

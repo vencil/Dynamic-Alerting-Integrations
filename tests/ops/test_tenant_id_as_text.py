@@ -67,7 +67,7 @@ def test_route_generation_emits_the_ids_as_written(tmp_path):
                    + "  yes:\n" + _ROUTING)})
     p = subprocess.run(
         [sys.executable, str(TOOLS / "ops" / "generate_alertmanager_routes.py"),
-         "--config-dir", str(d), "--dry-run"],
+         "--config-dir", str(d), "--output-alertmanager", "--dry-run"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     assert p.returncode == 0, p.stderr[-2000:]
     # ADR-035: a DNS-1123 id (`0x1F` would refuse the whole tree).
@@ -127,7 +127,7 @@ def test_exclude_tenants_matches_by_text(tmp_path, tenant_key, exclude, excluded
         "t.yaml": f"tenants:\n  {tenant_key}:\n    mem: 2\n"})
     rules = pe.load_policies(str(d / "_defaults.yaml"))
     inputs = pe.load_policy_inputs(str(d))   # #2115 0-B: the tenants as the exporter reads them
-    result = pe.evaluate_policies(rules, inputs.views, inputs.aliases)
+    result = pe.evaluate_policies(rules, inputs.views)
     assert (result.violations == []) is excluded, result.violations
 
 
@@ -983,20 +983,6 @@ def test_reader_returns_the_tenant_id_as_written(tmp_path, capsys, reader, varia
     if reader in _READERS_VIA_DA_GUARD:
         request.getfixturevalue("da_guard_env")
     assert _READERS_2216[reader](tmp_path, _ID_SPELLINGS[variant]) == {"010"}
-
-
-@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
-def test_threshold_govern_finds_the_tenant_as_written(variant):
-    """Before: UNQ answered "tenant '010' vanished from config after edit"
-    for an edit that changed only the expected key."""
-    import threshold_govern as tg
-    old = _T2216.format(id=_ID_SPELLINGS[variant])
-    new, err = tg.edit_live_yaml(old, "010", {"mysql_connections": "45"})
-    assert err is None, err
-    assert 'mysql_connections: "45"' in new and "'70'" not in new, new
-    # Control: a key the tenant does not have is refused, not added.
-    assert tg.edit_live_yaml(old, "010", {"no_such_key": "45"}) == (
-        None, "keys not found in live config: ['no_such_key']")
 
 
 @pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))

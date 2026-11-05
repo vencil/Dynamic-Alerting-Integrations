@@ -141,26 +141,6 @@ def _list_config_tree(root):
     return _names(got.files + got.unusable, root)
 
 
-def _operator_generate(root):
-    import operator_generate
-    # stderr too: the pre-#2067 leak here was a `Skipping invalid tenant
-    # name '.ghost'` warning, not a tenant.
-    return operator_generate.discover_tenant_configs(root)
-
-
-def _migrate_to_operator(root):
-    import migrate_to_operator
-    src = root.parent / "h2067-empty-source"
-    src.mkdir(exist_ok=True)
-    analysis = migrate_to_operator.analyze_migration(src, root)
-    # `tenants` is a COUNT; the tree has exactly one visible carrier, so
-    # every count above 1 is a hidden file being counted.
-    return ([CONTROL] * min(analysis["tenants"], 1)
-            + ["ghost?"] * max(analysis["tenants"] - 1, 0)
-            + list(analysis["issues"])
-            + migrate_to_operator.discover_tenant_configs(root))
-
-
 def _check_path_metadata(root):
     import check_path_metadata_consistency as cpm
     return _names(cpm.iter_tenant_files(root), root)
@@ -180,9 +160,10 @@ def _generate_tenant_metadata(root):
 
 # Cells whose reader takes the tenants (or, for check_retire_drift, #2858, the
 # db_type) from da-guard (#2115 0-B; config_diff renders through it, ADR-037).
-# The operator-plane readers take their tenant set from parse-tree (#2906).
+# `tree_tenants` takes its tenant set from parse-tree (#2906). (#3572: the
+# operator-plane readers that used it read no conf.d any more.)
 _SERVED_VALUES_CELLS = frozenset({"generate_tenant_metadata", "check_retire_drift", "config_diff",
-                                  "tree_tenants", "operator_generate", "migrate_to_operator"})
+                                  "tree_tenants"})
 
 
 @pytest.fixture(autouse=True)
@@ -198,7 +179,7 @@ def _gitops_check(root):
     import gitops_check
     details = gitops_check.check_local(str(root)).details
     n = details.get("tenant_files", 0)
-    # A count, like `_migrate_to_operator`: one visible carrier in the tree.
+    # A count: one visible carrier in the tree.
     return [CONTROL] * min(n, 1) + ["ghost?"] * max(n - 1, 0)
 
 
@@ -279,9 +260,6 @@ CELLS: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {
     "declared_tenants": ("_lib_parse_cache.py", _declared_tenants),
     "iter_config_files": ("_lib_confd.py", _iter_config_files),
     "list_config_tree": ("_lib_confd.py", _list_config_tree),
-    "operator_generate": ("ops/operator_generate.py", _operator_generate),
-    "migrate_to_operator": ("ops/migrate_to_operator.py",
-                            _migrate_to_operator),
     "check_path_metadata_consistency": (
         "lint/check_path_metadata_consistency.py", _check_path_metadata),
     "describe_tenant": ("dx/describe_tenant.py", _describe_tenant),
@@ -312,6 +290,10 @@ KNOWN_OPEN: dict[str, tuple[str, Callable[[pathlib.Path], list[str]]]] = {}
 
 # Population files that list a directory themselves but get no cell here.
 NOT_A_CELL: dict[str, str] = {
+    "ops/migrate_to_operator.py":
+        "lists its --source-dir of ConfigMap dumps / rule files (da-guard's "
+        "list-only walk; a hidden one is named on stderr, #3446), never a "
+        "conf.d: #3572 removed its conf.d read (no AlertmanagerConfig)",
     "_lib_consumer_read.py":
         "lists rule-file SOURCES — the files and directories a rule-file CLI is "
         "given (`files_to_read`) and rule-packs/ (`rule_pack_files`) — never a "
@@ -380,9 +362,10 @@ def test_reader_does_not_see_hidden_paths(cell, tmp_path) -> None:
         f"{cell}: reported {_leaks(seen)!r} from a `.`-prefixed path the "
         f"exporter's walker never reads. Full answer: {seen!r}"
     )
-    if cell in ("operator_generate", "migrate_to_operator", "tree_tenants"):
+    if cell == "tree_tenants":
         # The operator readers leaked through a WARNING before #2067, not a
-        # tenant; their tenant set is `tree_tenants` since #2906.
+        # tenant; their tenant set was `tree_tenants` from #2906 until they
+        # stopped reading conf.d (#3572).
         assert "ghost" not in err, (
             f"{cell}: warned about a hidden entry as if it were a lost "
             f"tenant: {err!r}"
@@ -432,9 +415,6 @@ def test_every_enumerating_reader_is_accounted_for() -> None:
     accounted = ({f for f, _ in CELLS.values()}
                  | {f for f, _ in KNOWN_OPEN.values()}
                  | set(NOT_A_CELL))
-    # `operator_generate` / `migrate_to_operator` list no directory (their
-    # tenant set is parse-tree's, #2906), so they are not own-enumerators;
-    # they are cells because their leak lived in a warning (#2067).
     unaccounted = derived - accounted
     stale = (set(NOT_A_CELL) | {f for f, _ in KNOWN_OPEN.values()}) - derived
     assert not unaccounted, (

@@ -70,18 +70,19 @@ from _lib_python import (  # noqa: E402
 # sample is read once, by the lib (#3213).
 from _lib_prometheus import QueryError, finite_row_samples, prometheus_instant  # noqa: E402
 # #2116: the tenants, their values and who owns each key come from Go
-# (`da-guard effective`); the alias table from `da-guard served-values`.
+# (`da-guard effective`); the #1231 spellings from `da-guard key-spellings`.
+from _lib_parse_tree import KeySpellings  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
     KeySource,
-    canonical_key,
     exit_on_served_values_error,
+    key_spellings,
     load_effective,
     load_served_tree,
     print_load_warnings,
 )
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1538; #1641; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, CallerError, Report, arm_crash_envelope  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, CallerError, Report  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -138,7 +139,7 @@ CONFIDENCE_LOW = "LOW"
 # which would read as "too few samples".
 CONFIDENCE_NOT_QUERIED = "n/a"
 # The confidences a recommendation may act on: an --export-patch value line
-# (`_exportable`) and a governance PR (threshold_govern) both read this (#2969).
+# (`_exportable`) and the governance report (threshold_govern) both read this (#2969).
 ACTIONABLE_CONFIDENCES = (CONFIDENCE_HIGH, CONFIDENCE_MEDIUM)
 
 
@@ -841,7 +842,7 @@ def analyze_tenant(
     dry_run: bool = False,
     observed_map: Optional[dict[str, Any]] = None,
     key_sources: Optional[dict[str, KeySource]] = None,
-    aliases: Optional[dict[str, str]] = None,
+    spellings: Optional[KeySpellings] = None,
     source_file: str = "",
 ) -> TenantRecommendation:
     """Analyze one tenant and generate threshold recommendations.
@@ -856,8 +857,9 @@ def analyze_tenant(
     goes to `inherited`: listed with its current value and source file only —
     no Prometheus query, no recommended value (a change to it belongs in the
     file that owns it, not in this tenant's). A key written in a retired spelling
-    is looked up in the observed-map by its canonical spelling (`aliases`,
-    the exporter's table) and keeps the written one in `key`.
+    is looked up in the observed-map by its canonical spelling (the
+    exporter's rule, `da-guard key-spellings`, #3556) and keeps the written
+    one in `key`.
 
     Args:
         tenant_name: Tenant identifier.
@@ -870,7 +872,8 @@ def analyze_tenant(
         observed_map: conf.d-key -> observed-series map (loads default if None).
         key_sources: `{key: KeySource}` from `da-guard effective`; None reads
             every key as the tenant's own.
-        aliases: retired base key -> canonical base key (served-values).
+        spellings: `key_spellings` answers covering this tenant's keys; None
+            asks da-guard for them.
         source_file: the tenant's own file, relative to the config dir.
 
     Returns:
@@ -880,6 +883,8 @@ def analyze_tenant(
         observed_map = observed_map_lib.load_observed_map()
 
     report = TenantRecommendation(tenant=tenant_name, source_file=source_file)
+    if spellings is None:
+        spellings = key_spellings(k for k in tenant_config if not is_reserved_key(k))
 
     for key, current_value in sorted(tenant_config.items()):
         src = (key_sources or {}).get(key)
@@ -888,7 +893,7 @@ def analyze_tenant(
         # platform-level one merged from a root file (e.g. `_policies`).
         if is_reserved_key(key) or (layer != "tenant" and key.startswith("_")):
             continue
-        canonical = canonical_key(key, aliases)
+        canonical = spellings.canonical(key)
         if layer != "tenant":
             report.inherited.append(KeyRecommendation(
                 key=key, current_value=current_value, reason=_INHERITED_REASON,
@@ -1001,7 +1006,7 @@ def _recommend_key(
             if (hours < MIN_UPPER_COVERAGE_HOURS and rec.confidence != CONFIDENCE_LOW
                     and not rec.force_manual):
                 # #2941: too little history for any recommendation to be
-                # trusted; LOW keeps threshold_govern from opening a PR.
+                # trusted; LOW keeps it out of threshold_govern's report.
                 # #2997: a force_manual key has no recommendation to downgrade,
                 # and its reason is the manual-review text govern shows.
                 rec.confidence = CONFIDENCE_LOW
@@ -1043,8 +1048,9 @@ def run_analysis(
     The tenants, each tenant's values (written plus inherited) and which file
     owns each key are `da-guard effective`'s (#2116): the config as tenant-api's
     /effective resolves it, so a key a tenant inherits is seen, and is told
-    apart from a key its own file writes. The alias table comes from
-    `da-guard served-values`; its stderr and the files it serves no tenant
+    apart from a key its own file writes. A retired #1231 spelling is put
+    in the canonical one by `da-guard key-spellings` (#3556). `da-guard
+    served-values` runs first: its stderr and the files it serves no tenant
     from are printed to stderr (`print_load_warnings`). A tree served-values
     refuses (e.g. the root `defaults:` and a tenant both writing an
     `X_critical` key, deferred under #2115) therefore fails this tool too.
@@ -1064,10 +1070,10 @@ def run_analysis(
         What `load_effective` / `load_served_tree` raise (da-guard missing,
         failing, or a file the exporter cannot load): fail-closed.
     """
-    # served-values is needed for the alias table either way. On a file the
-    # load cannot decode, both subcommands' stderr carry the exporter's parse
-    # reason (`da-guard effective` too since #2115), so the order does not
-    # decide which reason is shown.
+    # served-values first, for its load warnings. On a file the load cannot
+    # decode, both subcommands' stderr carry the exporter's parse reason
+    # (`da-guard effective` too since #2115), so the order does not decide
+    # which reason is shown.
     tree = load_served_tree(config_dir)
     print_load_warnings(tree)
     effective = load_effective(config_dir)
@@ -1082,6 +1088,9 @@ def run_analysis(
             return []
         effective = {tenant_filter: effective[tenant_filter]}
 
+    # One `da-guard key-spellings` run for every tenant's keys (#3556).
+    spellings = key_spellings(k for eff in effective.values() for k in eff.effective_config
+                              if not is_reserved_key(k))
     reports: list[TenantRecommendation] = []
     for tenant_name in sorted(effective):
         eff = effective[tenant_name]
@@ -1094,7 +1103,7 @@ def run_analysis(
             dry_run=dry_run,
             observed_map=observed_map,
             key_sources=eff.key_sources,
-            aliases=tree.aliases,
+            spellings=spellings,
             source_file=eff.source_file,
         )
         if report.keys or report.inherited:
@@ -1572,11 +1581,6 @@ def main() -> "Report | None":
         ),
     )
     args = parser.parse_args()
-    # #3094: a crash in --json mode still prints one envelope, in the report's
-    # shape with no tenant. Not when stdout is YAML: below, --export-patch
-    # beats --json everywhere except --generate-observed-map, which ignores it.
-    if args.json_output and (args.generate_observed_map or not args.export_patch):
-        arm_crash_envelope(build=lambda: json_document([]))
 
     # #719: regenerate the observed-map and exit (does not need --config-dir).
     if args.generate_observed_map:

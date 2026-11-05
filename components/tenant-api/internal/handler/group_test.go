@@ -30,11 +30,13 @@ func setRequestIdentity(req *http.Request, email string) *http.Request {
 	return req
 }
 
-// executeWithRBAC runs a handler through the RBAC middleware to set identity context.
+// executeWithRBAC runs a handler through the identity-only RBAC middleware
+// (MiddlewareAuthenticated: no grant required) to set identity context; the
+// handler's own authorization decides.
 func executeWithRBAC(t *testing.T, handler http.HandlerFunc, req *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
 	mgr := newRBACManager(t, "")
-	wrapped := wrapWithRBACMiddleware(handler, mgr, rbac.PermRead, nil)
+	wrapped := mgr.MiddlewareAuthenticated()(handler)
 	w := httptest.NewRecorder()
 	wrapped.ServeHTTP(w, req)
 	return w
@@ -44,8 +46,8 @@ func executeWithRBAC(t *testing.T, handler http.HandlerFunc, req *http.Request) 
 // (read+write) on all tenants to the test caller's IDP group
 // `platform-admins` (set by setRequestIdentity). Used by tests that
 // invoke handlers requiring v2.8.0 B-6 PR-2 tenant-scoped write
-// authz on member tenants — open-read mode (empty rbac.yaml) only
-// grants reads, so those tests need an explicit permissive config.
+// authz on member tenants — with no rules nothing is granted (ADR-027
+// §7), so those tests need an explicit permissive config.
 func permissiveRBACManager(t *testing.T) *rbac.Manager {
 	t.Helper()
 	return newRBACManager(t, `groups:
@@ -94,8 +96,8 @@ func TestListGroups_Empty(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	mgr := groups.NewDirManager(configDir)
 
-	rbacMgr := newRBACManager(t, "")
-	h := ListGroups(&Deps{State: mustDirState(configDir), Groups: mgr, RBAC: rbacMgr})
+	rbacMgr := unrestrictedRBAC(t)
+	h := asUnrestricted(rbacMgr, ListGroups(&Deps{State: mustDirState(configDir), Groups: mgr, RBAC: rbacMgr}))
 	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -119,8 +121,8 @@ func TestListGroups_WithData(t *testing.T) {
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	mgr := groups.NewDirManager(configDir)
 
-	rbacMgr := newRBACManager(t, "")
-	h := ListGroups(&Deps{State: mustDirState(configDir), Groups: mgr, RBAC: rbacMgr})
+	rbacMgr := unrestrictedRBAC(t)
+	h := asUnrestricted(rbacMgr, ListGroups(&Deps{State: mustDirState(configDir), Groups: mgr, RBAC: rbacMgr}))
 	req := httptest.NewRequest("GET", "/api/v1/groups", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -160,9 +162,9 @@ func TestGetGroup_Success(t *testing.T) {
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	mgr := groups.NewDirManager(configDir)
 
-	// Open-mode RBAC (empty _rbac.yaml): filterAccessibleMembers is the
-	// identity transform, so this pins the byte-identical open-mode path.
-	h := GetGroup(&Deps{State: mustDirState(configDir), Groups: mgr, RBAC: newRBACManager(t, "")})
+	// An unrestricted "*" reader: filterAccessibleMembers is the identity
+	// transform, so every member is returned.
+	h := asUnrestrictedOn(t, GetGroup, &Deps{State: mustDirState(configDir), Groups: mgr})
 	req := newRequestWithChiParam("GET", "/api/v1/groups/production-dba", "id", "production-dba", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -247,7 +249,7 @@ func TestGetGroup_OrgScopeFiltersMembers(t *testing.T) {
 
 	get := func(t *testing.T, groupID, callerOrg string) *httptest.ResponseRecorder {
 		t.Helper()
-		mgr, torg, _ := newOrgReadManager(t, orgReadRBACYAML, true) // enforce
+		mgr, torg, _ := newOrgReadManager(t, orgReadRBACYAML)
 		d := &Deps{State: mustDirState(configDir), Groups: groupMgr, RBAC: mgr, TenantOrg: torg}
 		// GetGroup's route uses a nil tenantIDFn (the group id is not a tenant
 		// id), so the middleware gate is the org-blind Allowed(p, "*", read) —
@@ -271,7 +273,7 @@ func TestGetGroup_OrgScopeFiltersMembers(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if len(resp.Members) != 1 || resp.Members[0] != orgReadTenantIn {
-		t.Errorf("GetGroup members = %v, want [%s] (cross-org member must be filtered under enforce)", resp.Members, orgReadTenantIn)
+		t.Errorf("GetGroup members = %v, want [%s] (cross-org member must be filtered)", resp.Members, orgReadTenantIn)
 	}
 
 	// A group whose only member is cross-org is hidden — an identical 404 to a
@@ -290,7 +292,7 @@ func TestGetGroup_OrgScopeFiltersMembers(t *testing.T) {
 }
 
 // TestGetGroup_NoOrgRuleByteIdentical is the byte-identical control: with a
-// plain (non-org-scoped) read grant, enforce mode changes nothing — a "*"
+// plain (non-org-scoped) read grant, the org axis changes nothing — a "*"
 // reader sees every member, exactly as before this fix. Guards against the
 // filter over-restricting a deployment that has RBAC groups but no org-scope.
 func TestGetGroup_NoOrgRuleByteIdentical(t *testing.T) {
@@ -306,7 +308,7 @@ func TestGetGroup_NoOrgRuleByteIdentical(t *testing.T) {
 	setupGroupsFile(t, configDir, groupsYAML)
 	groupMgr := groups.NewDirManager(configDir)
 
-	mgr, torg, _ := newOrgReadManager(t, orgReadPlainRBACYAML, true) // enforce, but no org-scope rule
+	mgr, torg, _ := newOrgReadManager(t, orgReadPlainRBACYAML) // no org-scope rule
 	d := &Deps{State: mustDirState(configDir), Groups: groupMgr, RBAC: mgr, TenantOrg: torg}
 	wrapped := wrapWithRBACMiddleware(GetGroup(d), mgr, rbac.PermRead, nil)
 	req := newRequestWithChiParam("GET", "/api/v1/groups/mixed-org", "id", "mixed-org", nil)
@@ -322,7 +324,7 @@ func TestGetGroup_NoOrgRuleByteIdentical(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 	if len(resp.Members) != 2 {
-		t.Errorf("no-org-rule GetGroup members = %d, want 2 (no org-scope rule → org axis (true,true) → no filtering)", len(resp.Members))
+		t.Errorf("no-org-rule GetGroup members = %d, want 2 (no org-scope rule → the org axis restricts nothing → no filtering)", len(resp.Members))
 	}
 }
 
@@ -342,8 +344,8 @@ func TestPutGroup_Create(t *testing.T) {
 	setRequestIdentity(req, "test@example.com")
 
 	// permissiveRBACManager: v2.8.0 B-6 PR-2 hardening requires
-	// PermWrite on every member tenant. Open-mode RBAC only grants
-	// PermRead, so the test caller needs an explicit admin grant.
+	// PermWrite on every member tenant, so the test caller needs an
+	// explicit admin grant.
 	h := PutGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: permissiveRBACManager(t)})
 	w := executeWithRBAC(t, h, req)
 
@@ -415,7 +417,7 @@ func TestPutGroup_MissingLabel(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, PutGroup, &Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer})
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -434,7 +436,7 @@ func TestPutGroup_InvalidJSON(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := PutGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, PutGroup, &Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer})
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -484,7 +486,7 @@ func TestDeleteGroup_NotFound(t *testing.T) {
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
 
 	w := httptest.NewRecorder()
-	h := DeleteGroup(&Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, DeleteGroup, &Deps{State: mustDirState(configDir), Groups: mgr, Writer: writer})
 	h(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -543,7 +545,7 @@ func TestGroupBatch_GroupNotFound(t *testing.T) {
 	configDir := setupConfigDir(t, nil)
 	groupMgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
-	rbacMgr := newRBACManager(t, "")
+	rbacMgr := unrestrictedRBAC(t)
 
 	body := `{"patch":{"_silent_mode":"warning"}}`
 	req := newRequestWithChiParam("POST", "/api/v1/groups/nonexistent/batch",
@@ -551,7 +553,7 @@ func TestGroupBatch_GroupNotFound(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := GroupBatch(&Deps{State: mustDirState(configDir), Groups: groupMgr, Writer: writer, ConfigDir: configDir, RBAC: rbacMgr})
+	h := asUnrestricted(rbacMgr, GroupBatch(&Deps{State: mustDirState(configDir), Groups: groupMgr, Writer: writer, ConfigDir: configDir, RBAC: rbacMgr}))
 	h(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -565,7 +567,7 @@ func TestGroupBatch_EmptyPatch(t *testing.T) {
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	groupMgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
-	rbacMgr := newRBACManager(t, "")
+	rbacMgr := unrestrictedRBAC(t)
 
 	body := `{"patch":{}}`
 	req := newRequestWithChiParam("POST", "/api/v1/groups/production-dba/batch",
@@ -573,7 +575,7 @@ func TestGroupBatch_EmptyPatch(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 
 	w := httptest.NewRecorder()
-	h := GroupBatch(&Deps{State: mustDirState(configDir), Groups: groupMgr, Writer: writer, ConfigDir: configDir, RBAC: rbacMgr})
+	h := asUnrestricted(rbacMgr, GroupBatch(&Deps{State: mustDirState(configDir), Groups: groupMgr, Writer: writer, ConfigDir: configDir, RBAC: rbacMgr}))
 	h(w, req)
 
 	if w.Code != http.StatusBadRequest {
@@ -603,8 +605,8 @@ func TestListTenants_WithMetadata(t *testing.T) {
 `,
 	})
 
-	rbacMgr := newRBACManager(t, "")
-	h := ListTenants(&Deps{ConfigDir: configDir, State: mustDirState(configDir), RBAC: rbacMgr})
+	rbacMgr := unrestrictedRBAC(t)
+	h := asUnrestricted(rbacMgr, ListTenants(&Deps{ConfigDir: configDir, State: mustDirState(configDir), RBAC: rbacMgr}))
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)

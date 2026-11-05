@@ -1,0 +1,160 @@
+name: Python next-minor readiness probe
+
+# When can the repo move to the next Python minor? Not when it is released —
+# when every dependency ships a wheel for it, the base image exists and
+# setup-python can install it. This probe measures exactly that, weekly, so the
+# move is triggered by a measurement instead of someone remembering to check.
+#
+# "Next minor" is DERIVED from .python-version (the Python SSOT; see
+# docs/internal/toolchain-versions.md), never written here: after a bump this
+# probe starts asking about the minor after that without an edit.
+#
+# Ready means ALL of:
+#   1. `pip download --only-binary=:all:` resolves the next minor with wheels
+#      only: on glibc the whole requirements/ci-constraints.txt (CI, dev
+#      container); on musl the packages the alpine images install, read from
+#      the Dockerfiles' `pip install` lines (never listed here) under the same
+#      constraints. A dependency without a wheel would need a compiler
+#      (promql-parser is Rust) in CI and in every image.
+#   2. Docker Hub has python:<next>-alpine3.23 (the images' base).
+#   3. actions/python-versions lists a stable <next>.x (what setup-python installs).
+# Ready + scheduled run → one issue (an open one with the same title is reused).
+#
+# ⛔ Fail-closed: "not ready" is ONLY pip saying no wheel set exists ("No
+# matching distribution found" / "ResolutionImpossible") or an absent tag or
+# manifest entry. Any other failure (network, a pip error, an
+# unparseable .python-version) turns the job red — a broken probe must never
+# read as "not ready yet" for months.
+
+on:
+  schedule:
+    # Mondays 03:17 UTC — off the hour, outside the 06–09 Pacific window.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: python-next-minor-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    name: Probe next Python minor
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: .python-version
+
+      - name: Measure readiness
+        id: probe
+        run: |
+          set -euo pipefail
+          cur="$(cat .python-version)"
+          if ! [[ "$cur" =~ ^3\.([0-9]+)\.[0-9]+$ ]]; then
+            echo "::error::.python-version is not 3.X.Y: '$cur'"; exit 1
+          fi
+          next="3.$(( BASH_REMATCH[1] + 1 ))"
+          echo "current=$cur next=$next"
+          echo "next=$next" >> "$GITHUB_OUTPUT"
+          missing=()
+
+          # 1. wheels: glibc = the whole constraints file; musl = what the
+          #    alpine images install (package names from every Dockerfile's
+          #    `pip install` line), under the same constraints.
+          image_pkgs="$(git ls-files -z -- '*Dockerfile' | xargs -0 python -c "
+          import re, sys
+          names = set()
+          for path in sys.argv[1:]:
+              text = open(path, encoding='utf-8').read()
+              text = re.sub(r'(?m)^[ \t]*#.*$', '', text).replace('\\\\\n', ' ')
+              for cmd in re.findall(r'pip\s+install([^&;\n]*)', text):
+                  toks = cmd.split()
+                  skip = False
+                  for t in toks:
+                      if skip: skip = False; continue
+                      if t in ('-c', '-r', '--constraint', '--requirement'): skip = True; continue
+                      if t.startswith('-'): continue
+                      names.add(t.split('==')[0])
+          print(' '.join(sorted(names)))")"
+          [ -n "$image_pkgs" ] || { echo "::error::no pip-installed package found in any Dockerfile"; exit 1; }
+          echo "image packages: $image_pkgs"
+          probe() {  # <label> <pip args...>
+            local label="$1"; shift
+            local log; log="$(mktemp)"
+            if python -m pip download -q --only-binary=:all: --python-version "$next" "$@" \
+                -c requirements/ci-constraints.txt -d "$(mktemp -d)" >"$log" 2>&1; then
+              echo "wheels ($label): ok"
+            elif grep -qE "No matching distribution found|ResolutionImpossible" "$log"; then
+              local what; what="$(grep -oE 'No matching distribution found for [^ ]*|Cannot install [^ ]*' "$log" | head -1)"
+              echo "wheels ($label): ${what:-no wheel-only resolution}"
+              missing+=("wheels ($label): ${what:-no wheel-only resolution}")
+            else
+              cat "$log"; echo "::error::pip failed for a reason other than a missing wheel"; exit 1
+            fi
+          }
+          probe glibc --platform manylinux2014_x86_64 --platform manylinux_2_17_x86_64 \
+            --platform manylinux_2_28_x86_64 -r requirements/ci-constraints.txt
+          # shellcheck disable=SC2086  # word-splitting the package list is the point
+          probe musl --platform musllinux_1_2_x86_64 $image_pkgs
+
+          # 2. base image tag
+          code="$(curl -sS -o /dev/null -w '%{http_code}' \
+            "https://hub.docker.com/v2/repositories/library/python/tags/${next}-alpine3.23")"
+          case "$code" in
+            200) echo "image python:${next}-alpine3.23: ok" ;;
+            404) echo "image python:${next}-alpine3.23: absent"; missing+=("image python:${next}-alpine3.23") ;;
+            *) echo "::error::Docker Hub answered HTTP $code"; exit 1 ;;
+          esac
+
+          # 3. setup-python can install a stable release
+          manifest="$(curl -fsSL https://raw.githubusercontent.com/actions/python-versions/main/versions-manifest.json)"
+          stable="$(printf '%s' "$manifest" | python -c "
+          import json, sys
+          nxt = sys.argv[1]
+          vs = [x['version'] for x in json.load(sys.stdin) if x.get('stable') and x['version'].startswith(nxt + '.')]
+          print(vs[0] if vs else '')" "$next")"
+          if [ -n "$stable" ]; then echo "setup-python stable: $stable"; else
+            echo "setup-python stable: none"; missing+=("no stable ${next}.x in actions/python-versions"); fi
+
+          if [ "${#missing[@]}" -eq 0 ]; then
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "Python $next is READY (latest stable $stable)"
+          else
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            printf 'not ready: %s\n' "${missing[@]}"
+          fi
+
+      - name: Open issue when ready
+        if: steps.probe.outputs.ready == 'true' && github.event_name == 'schedule'
+        uses: actions/github-script@v9
+        env:
+          NEXT: ${{ steps.probe.outputs.next }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const next = process.env.NEXT;
+            const title = `Python ${next} is ready: every dependency has a wheel, the base image and setup-python exist`;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', per_page: 100 });
+            if (open.data.some((i) => !i.pull_request && i.title === title)) return;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${context.runId}`;
+            await github.rest.issues.create({
+              owner, repo, title,
+              body: [
+                `The weekly probe found Python ${next} installable everywhere this repo runs Python. Run: ${runUrl}`,
+                ``,
+                `Moving is one line: \`.python-version\` (the SSOT). Then the parity test (\`tests/shared/test_toolchain_pin_parity.py\`) lists every literal copy that must follow (dev container, Dockerfile FROMs, compose / example images).`,
+                `Run the full suite on the new minor before merging: the 3.13→3.14 move found a behavior change (io.DEFAULT_BUFFER_SIZE 8 KiB → 128 KiB) only that way.`,
+                ``,
+                `Auto-opened by [.github/workflows/python-next-minor-probe.yaml](https://github.com/${owner}/${repo}/blob/main/.github/workflows/python-next-minor-probe.yaml).`,
+              ].join('\n'),
+            });

@@ -1,0 +1,7 @@
+# Metadata labeled; listed in _tenant_orgs.yaml with an empty list: an
+# org-writers finding.
+tenants:
+  tenant-delta:
+    _metadata:
+      environment: production
+      domain: finance

@@ -30,7 +30,7 @@ ARG TARGETOS TARGETARCH
 RUN sh /opt/go_build.sh --goos "${TARGETOS}" --goarch "${TARGETARCH}" . ./cmd/da-guard /da-guard
 
 # ── Python + promtool ────────────────────────────────────────────────────
-FROM python:3.13.15-alpine3.23 AS builder
+FROM python:3.14.10-alpine3.23 AS builder
 
 # Alpine 3.23 CVE fixes (mirrors components/da-tools).
 RUN apk --no-cache upgrade
@@ -42,7 +42,10 @@ RUN apk --no-cache upgrade
 # installs anything at runtime.
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
-RUN pip install --no-cache-dir PyYAML==6.0.3 \
+# PyYAML's version comes from requirements/ci-constraints.txt — the file every
+# CI `pip install` uses — so the image ships what CI tests.
+COPY requirements/ci-constraints.txt /tmp/ci-constraints.txt
+RUN pip install --no-cache-dir -c /tmp/ci-constraints.txt PyYAML \
  && python -m pip uninstall -y pip
 
 # promtool, SHA-256 pinned PER ARCH (§6 #5 + the #849/#851 supply-chain policy:
@@ -70,7 +73,7 @@ RUN set -eu; \
     /usr/local/bin/promtool --version
 
 # ── runtime ──────────────────────────────────────────────────────────────
-FROM python:3.13.15-alpine3.23
+FROM python:3.14.10-alpine3.23
 
 LABEL org.opencontainers.image.title="recipe-preview" \
       org.opencontainers.image.description="Would-fire preview service (#657) — POST /preview" \

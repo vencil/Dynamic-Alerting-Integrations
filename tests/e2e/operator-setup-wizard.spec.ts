@@ -40,7 +40,7 @@ test.describe('Operator Setup Wizard @critical', () => {
     }
   });
 
-  test('should render all 5 wizard steps', async ({ page }) => {
+  test('should render all 3 wizard steps', async ({ page }) => {
     await loadOperatorWizard(page);
 
     // Wait for wizard container to be visible
@@ -55,14 +55,14 @@ test.describe('Operator Setup Wizard @critical', () => {
 
     const stepCount = await stepElements.count();
 
-    // We expect at least 5 steps (or at least some step indicator)
+    // We expect at least 3 steps (or at least some step indicator)
     // If no explicit step elements, check for text containing "Step" or "Phase"
     if (stepCount === 0) {
       const stepText = page.locator('text=/Step|Phase|Stage/i');
       const textCount = await stepText.count();
       expect(textCount).toBeGreaterThanOrEqual(2); // At least some step mentions
     } else {
-      expect(stepCount).toBeGreaterThanOrEqual(5);
+      expect(stepCount).toBeGreaterThanOrEqual(3);
     }
   });
 

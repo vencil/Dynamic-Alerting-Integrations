@@ -38,14 +38,12 @@ gate = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(gate)
 
 # The known-incapable workloads, as EXEMPTIONS keys (source, entry, TAG).
-_GOVERN_KEY = ("k8s/03-monitoring/cronjob-threshold-govern.yaml",
-               "threshold-govern", "v2.9.0")
 _RECONCILER_KEY = ("helm/federation-reconciler",
                    "_federation_revocation_reconciler.py", "v2.9.0")
 # #2902: tenant-api's opt-in generator container (generator.enabled=false by
 # default, because of exactly this).
 _GENERATOR_KEY = ("helm/tenant-api", "generator-service", "v2.9.0")
-_KNOWN_KEYS = (_GOVERN_KEY, _RECONCILER_KEY, _GENERATOR_KEY)
+_KNOWN_KEYS = (_RECONCILER_KEY, _GENERATOR_KEY)
 
 
 @pytest.fixture(scope="module")
@@ -74,7 +72,6 @@ class TestLiveRepoIsClean:
         """
         workloads, _ = live
         keys = {w.key for w in workloads}
-        assert _GOVERN_KEY in keys
         assert _RECONCILER_KEY in keys
         assert _GENERATOR_KEY in keys
 
@@ -129,8 +126,7 @@ class TestLiveRepoIsClean:
 
 # ── counterfactual: the gate, not the registry, does the catching ───────────
 @pytest.mark.parametrize("dropped", _KNOWN_KEYS,
-                         ids=["threshold-govern", "federation-reconciler",
-                              "tenant-api-generator"])
+                         ids=["federation-reconciler", "tenant-api-generator"])
 def test_de_registering_an_exemption_turns_the_gate_red(live, dropped):
     workloads, _ = live
     reduced = {k: v for k, v in gate.EXEMPTIONS.items() if k != dropped}
@@ -153,10 +149,10 @@ class TestExemptionIsTagScoped:
     """
 
     def test_same_workload_other_incapable_tag_is_not_exempt(self, live):
-        """v2.8.0 lacks the subcommand too — and is NOT covered by the v2.9.0 entry."""
+        """v2.8.0 lacks the script too — and is NOT covered by the v2.9.0 entry."""
         workloads, _ = live
-        pinned = next(w for w in workloads if w.key == _GOVERN_KEY)
-        moved = gate.Workload(pinned.source, f"{pinned.source} (container govern)",
+        pinned = next(w for w in workloads if w.key == _RECONCILER_KEY)
+        moved = gate.Workload(pinned.source, f"{pinned.source} (container reconciler)",
                               "v2.8.0", pinned.kind, pinned.entry)
         # Precondition: the other tag really is incapable (else this proves nothing).
         assert gate.evaluate(moved) is not None
@@ -167,7 +163,7 @@ class TestExemptionIsTagScoped:
 
     def test_key_carries_the_tag(self, live):
         workloads, _ = live
-        pinned = next(w for w in workloads if w.source == _GOVERN_KEY[0])
+        pinned = next(w for w in workloads if w.source == _RECONCILER_KEY[0])
         assert pinned.key == (pinned.source, pinned.entry, pinned.image_tag)
         assert len(pinned.key) == 3
 
@@ -1078,9 +1074,7 @@ def test_missing_subcommand_finding_states_the_exact_exit_code(monkeypatch):
 def test_v290_lacks_both_entry_points():
     """Ground truth for the registered workloads, read straight off the tag."""
     command_map, tool_files = gate.capabilities_for_tag("tools/v2.9.0")
-    assert "threshold-govern" not in command_map
     assert "generator-service" not in command_map
-    assert "threshold_govern.py" not in tool_files
     assert "_federation_revocation_reconciler.py" not in tool_files
     # …and the positive control that makes those absences meaningful.
     assert command_map.get("maintenance-scheduler") == "maintenance_scheduler.py"
@@ -1111,8 +1105,6 @@ def test_head_would_satisfy_both_workloads():
     build_sh = (REPO_ROOT / "components" / "da-tools" / "app" / "build.sh")
     command_map = gate.parse_command_map_text(entrypoint.read_text(encoding="utf-8"))
     tool_files = gate.parse_tool_files_text(build_sh.read_text(encoding="utf-8"))
-    assert command_map.get("threshold-govern") == "threshold_govern.py"
-    assert "threshold_govern.py" in tool_files
     assert command_map.get("generator-service") == "generator_service.py"
     assert "generator_service.py" in tool_files
     assert "_federation_revocation_reconciler.py" in tool_files

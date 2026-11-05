@@ -60,7 +60,8 @@ def world(tmp_path_factory):
 
 def _findings(verdict) -> list[dict]:
     return [{"severity": f.severity, "kind": f.kind, "key": f.key, "file": f.file,
-             "tenants": list(f.tenants), "reason": f.reason} for f in verdict.findings]
+             "tenants": list(f.tenants), "reason": f.reason, "blocks": f.blocks}
+            for f in verdict.findings]
 
 
 def test_a_passed_write_carries_the_verdict_of_its_tenants(world, tmp_path):
@@ -80,8 +81,12 @@ def test_a_passed_write_carries_the_verdict_of_its_tenants(world, tmp_path):
 
 def test_a_write_the_generator_refuses_gets_no_verdict(world, tmp_path):
     for fixture, files in sorted(cases.FIXTURES.items()):
-        rc, _ = h.run_cli(h.write_tree(tmp_path / fixture, files), world["bin"], tmp_path / f"{fixture}.json")
-        if rc == 0:
+        rc, cli = h.run_cli(h.write_tree(tmp_path / fixture, files), world["bin"], tmp_path / f"{fixture}.json")
+        # The generator's own refusals: the CLI also fails on the shared key
+        # verdict (#3016), which the container judges after the generator
+        # passes — a fixture failing on that alone is no generator refusal.
+        if rc == 0 or all(f["kind"].startswith("key_") for f in cli["findings"]
+                          if f["blocks"] in ("always", "validate", "strict")):
             continue
         repo_base = h.commit_tree(world["repo"], {})
         writes = [{"path": p, "content_b64": h.b64(c)} for p, c in sorted(files.items())]
@@ -146,7 +151,8 @@ def test_an_undecidable_key_is_not_completed(monkeypatch, tmp_path):
     """ADR-038 §5/§7: no root platform file read and a threshold key written
     — it cannot be judged, and a retry changes nothing: not complete."""
     got = _run(monkeypatch, tmp_path, 15.0, lambda *_a, **_k: SimpleNamespace(
-        findings=[], undecidable=True, keys={"t-a": [_key(kv.UNDECIDABLE), _key(kv.READ, "_routing")]}))
+        findings=[], undecidable=True, undecidable_blocks=True,
+        keys={"t-a": [_key(kv.UNDECIDABLE), _key(kv.READ, "_routing")]}))
     assert (got["status"], got["reason"]) == ("not_completed", "undecidable"), got
     assert "root platform file" in got["message"]
 
@@ -164,7 +170,8 @@ def test_reserved_keys_alone_are_judged_without_a_root_platform_file(tmp_path, m
 
 
 def _finding(severity: str, n: int) -> kv.Finding:
-    return kv.Finding(severity, "unread", f"k{n}", "t-a.yaml", ("t-a",), "unregistered")
+    return kv.Finding(severity, "unread", f"k{n}", "t-a.yaml", ("t-a",), "unregistered",
+                      blocks=severity == kv.ERROR)
 
 
 @pytest.mark.parametrize("errors,others,sent_errors,sent_others", [
@@ -179,7 +186,8 @@ def test_error_findings_are_never_truncated(monkeypatch, tmp_path, errors, other
     found = ([_finding(kv.WARNING, i) for i in range(others)]
              + [_finding(kv.ERROR, i) for i in range(errors)])
     got = _run(monkeypatch, tmp_path, 15.0,
-               lambda *_a, **_k: SimpleNamespace(findings=found, undecidable=False, keys={}))
+               lambda *_a, **_k: SimpleNamespace(findings=found, undecidable=False,
+                                                 undecidable_blocks=False, keys={}))
     assert got["status"] == "complete", got
     sev = [f["severity"] for f in got["findings"]]
     assert sev.count(kv.ERROR) == sent_errors
@@ -222,7 +230,7 @@ def test_the_verdicts_parses_are_not_streamed(monkeypatch, tmp_path):
 
     def storing(*_a, **_k):
         pc.active().store(("k" * 64, "mode"), {"tenants": {}})
-        return SimpleNamespace(findings=[], undecidable=False, keys={})
+        return SimpleNamespace(findings=[], undecidable=False, undecidable_blocks=False, keys={})
     _run(monkeypatch, tmp_path, 15.0, storing, cache)
     assert sent == [], "a verdict entry went down the pipe"
     assert cache.on_store is not None, "the generator's streaming is not restored"
@@ -341,3 +349,21 @@ def test_a_waiting_write_does_not_stop_the_verdict(world, tmp_path):
             status2, doc2 = second.result(timeout=120)
             assert status2 == 200 and doc2["result"] == "pass", doc2
             assert doc2["key_verdict"]["status"] == "complete", doc2["key_verdict"]
+
+
+def test_what_blocks_is_the_verdicts_own_answer(monkeypatch, tmp_path):
+    """#3016: the container sends Go's `blocks` as it came and keeps the
+    blocking findings by it, never by the severity; whether keys are
+    undecidable is the verdict's `undecidable_blocks`."""
+    not_blocking = kv.Finding(kv.ERROR, "unread", "k", "t-a.yaml", ("t-a",), "no_row", blocks=False)
+    blocking = kv.Finding(kv.WARNING, "unread", "j", "t-a.yaml", ("t-a",), "no_row", blocks=True)
+    monkeypatch.setattr(child, "VERDICT_MAX_FINDINGS", 1)
+    got = _run(monkeypatch, tmp_path, 15.0, lambda *_a, **_k: SimpleNamespace(
+        findings=[not_blocking, blocking], undecidable=False, undecidable_blocks=False, keys={}))
+    assert got["status"] == "complete", got
+    assert [(f["key"], f["blocks"]) for f in got["findings"]] == [("j", True)], got
+    assert got["truncated"] == 1, got
+    # An undecidable key the verdict does not block on: complete.
+    got = _run(monkeypatch, tmp_path, 15.0, lambda *_a, **_k: SimpleNamespace(
+        findings=[], undecidable=True, undecidable_blocks=False, keys={"t-a": [_key(kv.UNDECIDABLE)]}))
+    assert got["status"] == "complete", got

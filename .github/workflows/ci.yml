@@ -23,8 +23,8 @@ jobs:
   #
   # Required-check safety (the "required check skipped → Expected forever"
   # trap, see validate.yaml's banner + memory Trap 17): the two names
-  # branch protection requires — "Go Tests (1.26)" and "Python Tests
-  # (3.13)" — are BOTH reported by always-run aggregate gate jobs below
+  # branch protection requires — "Go Tests" and "Python Tests"
+  # — are BOTH reported by always-run aggregate gate jobs below
   # (`if: always()`), never by a path-skipped job directly. A skipped leg
   # counts as PASS only when detect-changes said it was not needed; a leg
   # that RAN and failed, or a failed/cancelled detect job, fails the gate
@@ -49,7 +49,7 @@ jobs:
     outputs:
       # push events (main) carry no PR file list — treat as "everything
       # changed" so main always runs the full suite (this also keeps the
-      # coverage-py3.13 baseline artifact flowing for coverage-delta).
+      # coverage-python baseline artifact flowing for coverage-delta).
       go_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.go }}
       python_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.python }}
       portal_changed: ${{ github.event_name != 'pull_request' && 'true' || steps.filter.outputs.portal }}
@@ -131,7 +131,7 @@ jobs:
               #     repo root; their Python ends are covered by `tests/**`. So a
               #     PR that only regenerated those fixtures ran the Python half
               #     — which passes by construction — while every Go leg skipped
-              #     and `Go Tests (1.26)` reported PASS.
+              #     and `Go Tests` reported PASS.
               #     All three were found BY HAND, the third only after the first
               #     two were "fixed" — and a fourth (helm/tenant-api/values.yaml,
               #     below) landed later with nobody noticing. Since #1399 each
@@ -214,6 +214,9 @@ jobs:
             #   - .devcontainer/** — promtool pin parity compares
             #     install-promtool.sh against ci.yml/Dockerfile; a
             #     devcontainer-side-only bump must not skip the guard.
+            #   - .python-version — the Python SSOT; the toolchain pin
+            #     parity test binds every image and the dev container to
+            #     it, so a version-only bump must run it.
             #   - tools/portal/tests/** — the ONLY non-Python source this
             #     job's tests read: test_ci_path_filter_coverage SCANS
             #     that directory to assert every out-of-tree file a portal
@@ -333,6 +336,7 @@ jobs:
               - "docs/**"
               - "flaky-tests.yaml"
               - "renovate.json"
+              - ".python-version"
               - ".devcontainer/**"
               - ".github/workflows/**"
               - "environments/**"
@@ -514,10 +518,10 @@ jobs:
           # exit 2 — fail-closed, but red for the wrong reason.
           git fetch --no-tags origin "${GITHUB_BASE_REF:-main}"
 
-      - name: Set up Python 3.13
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       - name: Cache pip packages
         uses: actions/cache@v5
@@ -887,10 +891,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.13
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       - name: Cache pip packages
         uses: actions/cache@v5
@@ -1287,10 +1291,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.13
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       - name: Set up Helm
         uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
@@ -1374,11 +1378,11 @@ jobs:
         run: bash scripts/ops/with_da_crdecode.sh python3 scripts/tools/lint/check_k8s_manifests.py --ci
 
   python-tests-run:
-    # CI-ROI 6C: renamed from the required-check name "Python Tests
-    # (3.13)" — that name is now reported by the always-run python-tests
+    # CI-ROI 6C: renamed from the required-check name "Python Tests"
+    # — that name is now reported by the always-run python-tests
     # gate job below (same pattern as go-tests), so this job can be
     # path-skipped without ever leaving the required check un-reported.
-    name: Python Tests — run (${{ matrix.python }}, ${{ matrix.shard }}/3)
+    name: Python Tests — run (${{ matrix.shard }}/3)
     runs-on: ubuntu-24.04
     needs: detect-changes
     if: needs.detect-changes.outputs.python_changed == 'true'
@@ -1397,7 +1401,6 @@ jobs:
       # pytest command must name the same N — a shorter list silently drops
       # a shard's tests; tests/ops/test_ci_pytest_shards.py pins them.
       matrix:
-        python: ["3.13"]
         shard: [1, 2, 3]
       fail-fast: false
     env:
@@ -1507,10 +1510,10 @@ jobs:
           # takes the full history.
           fetch-depth: 0
 
-      - name: Set up Python ${{ matrix.python }}
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python }}
+          python-version-file: .python-version
 
       # Helm chart invariant tests (tests/shared/test_helm_*.py) are gated
       # on `helm` being on PATH (shutil.which); without it they SILENTLY
@@ -1656,9 +1659,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-py${{ matrix.python }}-${{ hashFiles('**/requirements*.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('.python-version') }}-${{ hashFiles('**/requirements*.txt') }}
           restore-keys: |
-            ${{ runner.os }}-pip-py${{ matrix.python }}-
+            ${{ runner.os }}-pip-${{ hashFiles('.python-version') }}-
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
@@ -1703,7 +1706,7 @@ jobs:
       # else did either, so they had never run in CI since being written. That
       # blind spot is why the file_cve_report.sh alerting break survived 33
       # nightly failures unnoticed. Run them here (seconds, no deps) so the
-      # existing "Python Tests (3.13)" required check covers them; the shell
+      # existing "Python Tests" required check covers them; the shell
       # scripts they exercise live under scripts/ops/**, already in this job's
       # path filter. Explicit loop over a glob rather than `find -exec`: a new
       # test file is picked up automatically, but an empty glob fails loudly
@@ -1766,7 +1769,7 @@ jobs:
   python-coverage:
     # ADVISORY coverage leg (owner decision, 2026-09-19). Same tree and
     # flags as python-tests-run above, plus --cov: it uploads the
-    # coverage-py3.13 artifact that coverage-delta.yml turns into the PR
+    # coverage-python artifact that coverage-delta.yml turns into the PR
     # comment, and it goes red on --cov-fail-under — visibly, but it backs
     # NO required check: it is deliberately absent from the python-tests
     # gate's needs: and ledgered in tests/ops/test_ci_aggregate_gate_contract
@@ -1776,7 +1779,7 @@ jobs:
     # and that sat on the required leg's critical path. The setup steps are
     # a verbatim copy of python-tests-run on purpose — every guard that reads
     # ci.yml (pinned versions, path filter, dep parity) keeps seeing them.
-    name: Python Coverage (${{ matrix.python }}, ${{ matrix.shard }}/3)
+    name: Python Coverage (${{ matrix.shard }}/3)
     runs-on: ubuntu-24.04
     needs: detect-changes
     if: needs.detect-changes.outputs.python_changed == 'true'
@@ -1789,10 +1792,9 @@ jobs:
       # Sharded like python-tests-run (same `--shard=K/3`, same pin in
       # tests/ops/test_ci_pytest_shards.py). Each shard uploads its raw
       # `.coverage` data; `python-coverage-combine` below merges them and
-      # owns the report, the fail_under floor and the coverage-py3.13
+      # owns the report, the fail_under floor and the coverage-python
       # artifact — a per-shard floor would judge a third of the tree.
       matrix:
-        python: ["3.13"]
         shard: [1, 2, 3]
       fail-fast: false
     env:
@@ -1894,10 +1896,10 @@ jobs:
           # takes the full history.
           fetch-depth: 0
 
-      - name: Set up Python ${{ matrix.python }}
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: ${{ matrix.python }}
+          python-version-file: .python-version
 
       # Helm chart invariant tests (tests/shared/test_helm_*.py) are gated
       # on `helm` being on PATH (shutil.which); without it they SILENTLY
@@ -2043,9 +2045,9 @@ jobs:
         uses: actions/cache@v5
         with:
           path: ~/.cache/pip
-          key: ${{ runner.os }}-pip-py${{ matrix.python }}-${{ hashFiles('**/requirements*.txt') }}
+          key: ${{ runner.os }}-pip-${{ hashFiles('.python-version') }}-${{ hashFiles('**/requirements*.txt') }}
           restore-keys: |
-            ${{ runner.os }}-pip-py${{ matrix.python }}-
+            ${{ runner.os }}-pip-${{ hashFiles('.python-version') }}-
             ${{ runner.os }}-pip-
 
       - name: Install dependencies
@@ -2119,7 +2121,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-data-py${{ matrix.python }}-shard${{ matrix.shard }}
+          name: coverage-data-shard${{ matrix.shard }}
           path: .coverage
           # ⛔ upload-artifact skips dot-files unless told otherwise, and
           # `.coverage` is one: without this the artifact is empty and the
@@ -2160,7 +2162,7 @@ jobs:
     # check. It owns what used to be the single job's tail: the coverage.xml
     # that coverage-delta.yml turns into the PR comment, and the fail_under
     # floor from pyproject.toml [tool.coverage.report].
-    name: Python Coverage (3.13)
+    name: Python Coverage
     runs-on: ubuntu-24.04
     needs: [detect-changes, python-coverage]
     # `always()` so a shard whose tests failed still gets a combined report
@@ -2175,10 +2177,10 @@ jobs:
         # source tree, so it has to be here.
         uses: actions/checkout@v6
 
-      - name: Set up Python 3.13
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       - name: Install coverage
         run: pip install pytest-cov -c requirements/ci-constraints.txt
@@ -2186,7 +2188,7 @@ jobs:
       - name: Download shard coverage data
         uses: actions/download-artifact@v4
         with:
-          pattern: coverage-data-py3.13-shard*
+          pattern: coverage-data-shard*
           path: coverage-shards
 
       - name: Combine shards, write coverage.xml, apply the floor
@@ -2225,13 +2227,13 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-py3.13
+          name: coverage-python
           path: coverage.xml
           retention-days: 7
 
   python-tests:
     # Aggregation gate mirroring go-tests below: keeps reporting the
-    # EXACT branch-protection required-check name "Python Tests (3.13)"
+    # EXACT branch-protection required-check name "Python Tests"
     # on every PR/push, whether the run job ran or was path-skipped.
     # Semantics (CI-ROI 6C):
     #   - run job succeeded              → PASS
@@ -2241,9 +2243,12 @@ jobs:
     #     or detect-changes itself did not succeed
     #                                    → FAIL (fail-closed: a broken
     #     detect job must never let tests silently skip to green).
-    # If the Python matrix ever grows beyond 3.13, update this static
-    # name together with the branch-protection entry (owner action).
-    name: Python Tests (3.13)
+    # ⛔ The name carries no Python version on purpose: the version lives
+    # only in .python-version, and a version in a required-check name turns
+    # every Python bump into a branch-protection edit (or a PR whose required
+    # check never reports). A deliberate multi-version matrix would add
+    # legs, not rename this gate.
+    name: Python Tests
     runs-on: ubuntu-24.04
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
@@ -2281,9 +2286,9 @@ jobs:
   # job — the single long pole of the whole CI run. The two module test
   # suites share nothing at runtime, so they now run as two parallel jobs;
   # the `go-tests` gate job below keeps reporting the historical
-  # "Go Tests (1.26)" check name for branch protection.
+  # "Go Tests" check name for branch protection.
   go-tests-threshold-exporter:
-    name: Go Tests — threshold-exporter (${{ matrix.go }})
+    name: Go Tests — threshold-exporter
     runs-on: ubuntu-24.04
     # CI-ROI 6C: path-gated — the go-tests aggregate gate below (the
     # required check) treats this skip as PASS only when detect-changes
@@ -2301,15 +2306,13 @@ jobs:
     # coverage-artifact upload need nothing beyond repo read.
     permissions:
       contents: read
-    # `matrix.go` is only the check-name LABEL (the "Go Tests (1.26)" family):
-    # the toolchain comes from the module's go.mod `go` directive, the Go SSOT
+    # The toolchain comes from the module's go.mod `go` directive, the Go SSOT
     # that the Dockerfile builder and the dev container also match (#1278;
     # tests/ops/test_go_toolchain_parity.py). A floating "1.26" let CI build on
     # whatever 1.26.x the runner resolved while the image shipped another.
-    strategy:
-      matrix:
-        go: ["1.26"]
-      fail-fast: false
+    # ⛔ No Go version in any job / artifact / cache name: a `matrix.go` label
+    # used to put "1.26" into the required-check name, a second copy of the
+    # version that every Go bump had to change in branch protection too.
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -2328,9 +2331,9 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ matrix.go }}-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.mod', '**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-${{ matrix.go }}-
+            ${{ runner.os }}-go-
             ${{ runner.os }}-go-
 
       # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml.
@@ -2369,12 +2372,12 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-go${{ matrix.go }}-threshold-exporter
+          name: coverage-go-threshold-exporter
           path: components/threshold-exporter/app/coverage.out
           retention-days: 7
 
   go-tests-tenant-api:
-    name: Go Tests — tenant-api (${{ matrix.go }})
+    name: Go Tests — tenant-api
     runs-on: ubuntu-24.04
     # CI-ROI 6C: path-gated (see go-tests-threshold-exporter note).
     needs: detect-changes
@@ -2383,11 +2386,7 @@ jobs:
     # swag drift check and schemathesis all run against the local checkout.
     permissions:
       contents: read
-    # `matrix.go` is a check-name label only — see go-tests-threshold-exporter.
-    strategy:
-      matrix:
-        go: ["1.26"]
-      fail-fast: false
+    # Toolchain from go.mod, no version in any name — see go-tests-threshold-exporter.
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
@@ -2407,9 +2406,9 @@ jobs:
           path: |
             ~/go/pkg/mod
             ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ matrix.go }}-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.mod', '**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-${{ matrix.go }}-
+            ${{ runner.os }}-go-
             ${{ runner.os }}-go-
 
       # ci_flake_retry.py (TRK-010) needs pyyaml to parse flaky-tests.yaml.
@@ -2433,6 +2432,18 @@ jobs:
           python3 "$GITHUB_WORKSPACE/scripts/ops/ci_flake_retry.py" -- \
             go test ./cmd/... ./internal/... -race -count=1 -coverprofile=coverage.out \
             -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+
+      # ADR-027 §9 item 7: the offline scope check over the repo's sample
+      # config — the conf.d tree, _rbac.yaml and (absent) _tenant_orgs.yaml
+      # try-local mounts as TA_CONFIG_DIR / TA_RBAC_PATH. Any rule × untagged
+      # tenant (or a tenant file the list cannot read) exits 1. A step running
+      # the CLI rather than a Go test, so what is checked is the command an
+      # operator runs before upgrading, flags and exit code included; a moved
+      # tree exits 2 here instead of skipping. try-local/** is in the `go`
+      # filter above, so a sample-only change wakes this leg.
+      - name: Scope check on the try-local sample config (ADR-027 §7)
+        working-directory: components/tenant-api
+        run: go run ./cmd/server config check --kind scope --config-dir ../../try-local/seed/conf.d
 
       # #616: the forge_e2e real-forge E2E package is build-tag gated, so the
       # regular `go test ./...` above never compiles it. This step keeps it from
@@ -2509,7 +2520,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-go${{ matrix.go }}-tenant-api
+          name: coverage-go-tenant-api
           path: components/tenant-api/coverage.out
           retention-days: 7
 
@@ -2707,20 +2718,19 @@ jobs:
         run: python3 scripts/ops/go_test_reads.py --job go-tests-bench-filter --logs "$RUNNER_TEMP/go-testlog"
 
   go-tests:
-    # Aggregation gate for the split Go jobs above. The job name is kept
-    # EXACTLY "Go Tests (1.26)" — the check name the former matrix job
-    # reported — because branch protection required_status_checks matches by
+    # Aggregation gate for the split Go jobs above. The job name is EXACTLY
+    # "Go Tests" because branch protection required_status_checks matches by
     # check-run name: if this name stopped being reported, any PR would hang
     # forever on a permanently-pending required check (same failure class as
-    # the validate.yaml banner comment). If the Go matrix ever grows beyond
-    # 1.26, update this static name together with the branch-protection
-    # entry (owner action).
+    # the validate.yaml banner comment). ⛔ It carries no Go version: the
+    # version lives in each module's go.mod, and a version in a required-check
+    # name turns every Go bump into a branch-protection edit.
     #
     # New split jobs join HERE rather than getting their own required check:
     # branch protection is owner-managed, so a new required name would sit
     # permanently pending until the owner adds it. Aggregating keeps the gate
     # enforcing from the first green run.
-    name: Go Tests (1.26)
+    name: Go Tests
     runs-on: ubuntu-24.04
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
@@ -2922,10 +2932,10 @@ jobs:
           # exit 2 — fail-closed, but red for the wrong reason.
           git fetch --no-tags origin "${GITHUB_BASE_REF:-main}"
 
-      - name: Set up Python 3.13
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       - name: Cache pip packages
         uses: actions/cache@v5
@@ -3000,10 +3010,10 @@ jobs:
           # crossed Helm 3→4). tests/shared/test_toolchain_pin_parity.py.
           version: v4.3.0
 
-      - name: Set up Python 3.13
+      - name: Set up Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       # The runner is self-contained — it builds its own venv and runs
       # every Python step (render-extract, keygen, pytest) inside it.

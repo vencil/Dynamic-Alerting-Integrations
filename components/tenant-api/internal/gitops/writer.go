@@ -194,8 +194,7 @@ func DiscloseKeyValidation(tenantID string, kv cfg.KeyValidationByTenant, names 
 	for _, tid := range others {
 		v := kv.Tenants[tid]
 		// Before Shown, not after: each Shown is an RBAC org-read check that
-		// logs and counts a deny (the scope_would_deny soak count the enforce
-		// flip reads), so asking about a tenant with nothing to say would
+		// logs and counts a deny (tenant_api_scope_denied_total), so asking about a tenant with nothing to say would
 		// count a deny no message depended on — O(tenants) of them, under
 		// the writer lock, for a large flat file.
 		if len(v.Errors)+len(v.Notices) == 0 {
@@ -372,6 +371,12 @@ type Writer struct {
 	// for before it commits (#2903, write_validator.go). Required (#1535):
 	// nil refuses every content-changing write with ErrNoValidator.
 	validator WriteValidator
+
+	// previewMu admits one PUT preview's judgement at a time (JudgePreview,
+	// #3016): the generator judges one write at a time, and a preview that
+	// waited behind another would queue ahead of the writes it competes
+	// with — a busy one is answered "not judged" instead.
+	previewMu sync.Mutex
 
 	// #2078 conf.d walk bound (see scanTree): 0 → defaultTreeScanTimeout.
 	// stuckTreeScans counts write-path walks that outlived it and are still

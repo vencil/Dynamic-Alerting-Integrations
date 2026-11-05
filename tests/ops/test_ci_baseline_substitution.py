@@ -2478,7 +2478,7 @@ def _artifact_producers(workflow: Path, upload: Step) -> list[Step]:
     # misdiagnosed it as "the artifact moved".
     # ⚠️ Naming the blocking check precisely, because this PR argues elsewhere
     # that the three workflows are NOT required and that is still true: the red
-    # lands on `Python Tests (3.13)`, which IS a required context (measured via
+    # lands on `Python Tests`, which IS a required context (measured via
     # the protection API), not on the workflow being described. So a false red
     # HERE blocks a merge that a real failure of the workflow itself would not.
     # The obvious

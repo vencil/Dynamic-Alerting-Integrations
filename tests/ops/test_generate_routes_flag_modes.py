@@ -3,12 +3,15 @@
 The flag × mode matrix `_flags_this_mode_never_reads` implements, from the
 read sites in `generate_alertmanager_routes.main()` and its mode handlers::
 
-    flag          --validate  --apply  --output-configmap  render
+    flag          --validate  --apply  --output-configmap  --output-alertmanager
     -o/--output   never       never    unless --dry-run    unless --dry-run
     --dry-run     never       never    read                read
     --namespace   never       read     read                never
     --configmap   never       read     read                never
     --yes         never       read     never               never
+
+(#1211 gap 2: the routing-fragment "render" column is gone — a run with no
+mode is refused before this guard, pinned in test_grar_owned_merge.py.)
 
 Measured on main before the fix (``d4754fc7``): ``--validate -o <path>``
 exited 0 with the file absent and stderr empty — the operator's signal was
@@ -64,6 +67,9 @@ def _text(r) -> str:
 def tenant_dir(tmp_path_factory):
     """A tree that PRODUCES routes — controls must reach the output paths."""
     d = tmp_path_factory.mktemp("conf.d")
+    # declared: a tree with no root platform file fails --validate (#3016)
+    (d / "_defaults.yaml").write_text(
+        "defaults:\n  mysql_connections: 80\n", encoding="utf-8")
     (d / "alpha.yaml").write_text(
         make_tenant_yaml("alpha", keys={"mysql_connections": "70"},
                          routing=make_routing_config("alpha")),
@@ -88,18 +94,22 @@ def routeless_dir(tmp_path_factory):
 # argv is replaced by a per-test path.
 _UNREAD = [
     ("o/validate", ["--validate", "-o", "out"], "-o", "--validate",
-     [["--validate"], ["-o", "out"]]),
+     [["--validate"], ["--output-alertmanager", "-o", "out"],
+      ["--output-configmap", "-o", "out"]]),
     ("o/apply", ["--apply", "--yes", "-o", "out"], "-o", "--apply",
      [["--apply", "--yes"], ["--output-configmap", "-o", "out"]]),
-    ("o/render+dry-run", ["--dry-run", "-o", "out"], "-o", "render",
-     [["-o", "out"], ["--dry-run"]]),
+    ("o/output-alertmanager+dry-run",
+     ["--output-alertmanager", "--dry-run", "-o", "out"], "-o", "--output-alertmanager",
+     [["--output-alertmanager", "-o", "out"], ["--output-alertmanager", "--dry-run"]]),
     ("o/configmap+dry-run", ["--output-configmap", "--dry-run", "-o", "out"],
      "-o", "--output-configmap",
      [["--output-configmap", "-o", "out"], ["--output-configmap", "--dry-run"]]),
     ("dry-run/validate", ["--validate", "--dry-run"], "--dry-run", "--validate",
-     [["--validate"], ["--dry-run"]]),
+     [["--validate"], ["--output-alertmanager", "--dry-run"],
+      ["--output-configmap", "--dry-run"]]),
     ("dry-run/apply", ["--apply", "--yes", "--dry-run"], "--dry-run", "--apply",
-     [["--apply", "--yes"], ["--output-configmap", "--dry-run"]]),
+     [["--apply", "--yes"], ["--output-configmap", "--dry-run"],
+      ["--output-alertmanager", "--dry-run"]]),
     # Blind review: the second clause of these remedies is read LITERALLY —
     # "drop --validate AND add --apply/--output-configmap (keeping the flag)"
     # — so both additions are run, not just the one that happens to be
@@ -109,21 +119,22 @@ _UNREAD = [
      "--namespace", "--validate",
      [["--validate"], ["--apply", "--namespace", PROBE_NS],
       ["--output-configmap", "--namespace", PROBE_NS]]),
-    ("namespace/render", ["--namespace", PROBE_NS], "--namespace", "render",
-     [[], ["--apply", "--namespace", PROBE_NS],
-      ["--output-configmap", "--namespace", PROBE_NS]]),
+    ("namespace/output-alertmanager", ["--output-alertmanager", "--namespace", PROBE_NS],
+     "--namespace", "--output-alertmanager",
+     [["--output-alertmanager"], ["--output-configmap", "--namespace", PROBE_NS]]),
     ("configmap/validate", ["--validate", "--configmap", PROBE_CM],
      "--configmap", "--validate",
      [["--validate"], ["--apply", "--configmap", PROBE_CM],
       ["--output-configmap", "--configmap", PROBE_CM]]),
-    ("configmap/render", ["--configmap", PROBE_CM], "--configmap", "render",
-     [[], ["--apply", "--configmap", PROBE_CM],
-      ["--output-configmap", "--configmap", PROBE_CM]]),
+    ("configmap/output-alertmanager", ["--output-alertmanager", "--configmap", PROBE_CM],
+     "--configmap", "--output-alertmanager",
+     [["--output-alertmanager"], ["--output-configmap", "--configmap", PROBE_CM]]),
     ("yes/validate", ["--validate", "--yes"], "--yes", "--validate",
      [["--validate"], ["--apply", "--yes"]]),
     ("yes/output-configmap", ["--output-configmap", "--yes"], "--yes",
      "--output-configmap", [["--output-configmap"]]),
-    ("yes/render", ["--yes"], "--yes", "render", [[], ["--apply", "--yes"]]),
+    ("yes/output-alertmanager", ["--output-alertmanager", "--yes"], "--yes",
+     "--output-alertmanager", [["--output-alertmanager"]]),
     # The mode flags themselves under --validate (blind review of the first
     # cut: measured rc 0 for both, nothing applied / emitted).
     ("apply/validate", ["--validate", "--apply", "--yes"], "--apply", "--validate",
@@ -131,6 +142,9 @@ _UNREAD = [
     ("output-configmap/validate", ["--validate", "--output-configmap"],
      "--output-configmap", "--validate",
      [["--validate"], ["--output-configmap"]]),
+    ("output-alertmanager/validate", ["--validate", "--output-alertmanager"],
+     "--output-alertmanager", "--validate",
+     [["--validate"], ["--output-alertmanager"]]),
     # Multi-flag cells: --validate wins over --apply / --output-configmap
     # (main() exits inside _validate_mode), so flags those modes read are
     # unread here too, and the mode flag itself is reported alongside them.
@@ -246,11 +260,12 @@ class TestRoutelessTreeControl:
 # ── Controls: the mode that READS the flag honours it ───────────────
 class TestReadingModeHonoursTheFlag:
 
-    def test_o_in_render_writes_the_file(self, tenant_dir, tmp_path):
-        out = tmp_path / "routes.yaml"
-        r = _gar(["--config-dir", str(tenant_dir), "-o", str(out)])
+    def test_o_in_output_alertmanager_writes_the_file(self, tenant_dir, tmp_path):
+        out = tmp_path / "alertmanager.yml"
+        r = _gar(["--config-dir", str(tenant_dir), "--output-alertmanager", "-o", str(out)])
         assert r.returncode == EXIT_OK, _text(r)
         assert out.exists() and b"receivers" in out.read_bytes()
+        assert b"kind: ConfigMap" not in out.read_bytes()
 
     def test_o_in_output_configmap_writes_the_file(self, tenant_dir, tmp_path):
         out = tmp_path / "cm.yaml"
@@ -258,10 +273,10 @@ class TestReadingModeHonoursTheFlag:
         assert r.returncode == EXIT_OK, _text(r)
         assert b"kind: ConfigMap" in out.read_bytes()
 
-    def test_dry_run_in_render_previews(self, tenant_dir):
-        r = _gar(["--config-dir", str(tenant_dir), "--dry-run"])
+    def test_dry_run_in_output_alertmanager_previews(self, tenant_dir):
+        r = _gar(["--config-dir", str(tenant_dir), "--output-alertmanager", "--dry-run"])
         assert r.returncode == EXIT_OK, _text(r)
-        assert b"--- DRY RUN OUTPUT ---" in r.stdout
+        assert b"--- DRY RUN: alertmanager.yml ---" in r.stdout
 
     def test_dry_run_in_output_configmap_previews(self, tenant_dir):
         r = _gar(["--config-dir", str(tenant_dir), "--output-configmap", "--dry-run"])
@@ -308,6 +323,11 @@ class TestReadingModeHonoursTheFlag:
 class TestModeFlagsAloneAreRead:
     """Controls for the `apply/validate` / `output-configmap/validate`
     cells: each mode flag, without --validate, does its job."""
+
+    def test_output_alertmanager_alone_emits_an_alertmanager_yml(self, tenant_dir):
+        r = _gar(["--config-dir", str(tenant_dir), "--output-alertmanager"])
+        assert r.returncode == EXIT_OK, _text(r)
+        assert b"route:" in r.stdout and b"kind: ConfigMap" not in r.stdout
 
     def test_output_configmap_alone_emits_a_configmap(self, tenant_dir):
         r = _gar(["--config-dir", str(tenant_dir), "--output-configmap"])
@@ -357,7 +377,8 @@ class TestEveryFlagIsClassified:
         are the flags no mode ignores, so none of them may ever be reported
         by the guard in any mode."""
         parser = _build_parser()
-        for mode_argv in ([], ["--validate"], ["--apply"], ["--output-configmap"]):
+        for mode_argv in ([], ["--validate"], ["--apply"], ["--output-configmap"],
+                          ["--output-alertmanager"]):
             args = parser.parse_args(["--config-dir", "x", "--strict",
                                       "--policy", "p.yaml", *mode_argv])
             reported = {f.split("/")[0] for f, _, _ in _flags_this_mode_never_reads(args)}

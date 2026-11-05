@@ -2,11 +2,13 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/vencil/tenant-api/internal/errcode"
@@ -121,19 +123,33 @@ func TestRender_Bytes(t *testing.T) {
 }
 
 // TestRun_ExitCodes: 0 written / in sync, 1 drift or missing, 2 a caller
-// error.
+// error. The first run scans the module itself; the later ones, over the
+// same tree, are handed that answer (realScans) instead of each scanning it
+// again (#3574).
 func TestRun_ExitCodes(t *testing.T) {
 	t.Parallel()
+	mod, err := testModuleRoot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reuse := func(m string) ([]directUse, []extraUse, error) {
+		if m != mod {
+			t.Errorf("run read the module at %s, want %s", m, mod)
+		}
+		direct, extras := realScans(t)
+		return direct, extras, nil
+	}
+	again := func(args []string, stdout, stderr io.Writer) int { return runWith(args, stdout, stderr, reuse) }
 	out := filepath.Join(t.TempDir(), "errors.json")
 	docs := copyDocs(t)
 	var so, se bytes.Buffer
 	if rc := run([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 1 || !strings.Contains(se.String(), "missing") {
 		t.Errorf("--check of a missing file: rc %d, stderr %q", rc, se.String())
 	}
-	if rc := run([]string{"--out", out, "--docs", docs}, &so, &se); rc != 0 {
+	if rc := again([]string{"--out", out, "--docs", docs}, &so, &se); rc != 0 {
 		t.Fatalf("write: rc %d, stderr %q", rc, se.String())
 	}
-	if rc := run([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 0 {
+	if rc := again([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 0 {
 		t.Errorf("--check after write: rc %d, stderr %q", rc, se.String())
 	}
 	b, _ := os.ReadFile(out)
@@ -141,13 +157,13 @@ func TestRun_ExitCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	se.Reset()
-	if rc := run([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 1 || !strings.Contains(se.String(), "DRIFT") {
+	if rc := again([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 1 || !strings.Contains(se.String(), "DRIFT") {
 		t.Errorf("--check of an edited file: rc %d, stderr %q", rc, se.String())
 	}
 	if err := os.WriteFile(out, bytes.ReplaceAll(b, []byte("\n"), []byte("\r\n")), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if rc := run([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 1 {
+	if rc := again([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 1 {
 		t.Errorf("--check of a CRLF copy: rc %d, want 1 (bytes, not text)", rc)
 	}
 	// #3272: docs/ as swag alone writes it (no Extra properties) drifts.
@@ -159,31 +175,57 @@ func TestRun_ExitCodes(t *testing.T) {
 		t.Fatal(err)
 	}
 	se.Reset()
-	if rc := run([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 1 || !strings.Contains(se.String(), "swagger.yaml") {
+	if rc := again([]string{"--check", "--out", out, "--docs", docs}, &so, &se); rc != 1 || !strings.Contains(se.String(), "swagger.yaml") {
 		t.Errorf("--check of an edited swagger.yaml: rc %d, stderr %q", rc, se.String())
 	}
 	for _, args := range [][]string{{"--nope"}, {"extra"}} {
-		if rc := run(args, &so, &se); rc != 2 {
+		if rc := again(args, &so, &se); rc != 2 {
 			t.Errorf("run(%q): rc %d, want 2", args, rc)
 		}
 	}
 }
 
+// realScan is this module's own scans, run once per test binary (#3574):
+// scanExtra type-checks the whole module, the tree does not change under the
+// tests, and every test that read the real answers — times -count — used to
+// pay for its own. Written only inside once; each caller gets a copy.
+var realScan struct {
+	once   sync.Once
+	direct []directUse
+	extra  []extraUse
+	err    error
+}
+
+// realScans is the direct answers and the Extra fields of this module.
+func realScans(t *testing.T) ([]directUse, []extraUse) {
+	t.Helper()
+	realScan.once.Do(func() {
+		mod, err := testModuleRoot()
+		if err != nil {
+			realScan.err = err
+			return
+		}
+		realScan.direct, realScan.extra, realScan.err = scanModule(mod)
+	})
+	if realScan.err != nil {
+		t.Fatal(realScan.err)
+	}
+	return slices.Clone(realScan.direct), slices.Clone(realScan.extra)
+}
+
+// testModuleRoot is the module root above the test's directory.
+func testModuleRoot() (string, error) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", err
+	}
+	return moduleRoot(wd)
+}
+
 // realDirect is the direct answers of this module.
 func realDirect(t *testing.T) []directUse {
 	t.Helper()
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	mod, err := moduleRoot(wd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	direct, err := scanDirect(mod)
-	if err != nil {
-		t.Fatal(err)
-	}
+	direct, _ := realScans(t)
 	return direct
 }
 
@@ -218,6 +260,15 @@ func TestScanDirect_ReadsTheDirectAnswers(t *testing.T) {
 // type-checks — with file added as internal/handler/zz_planted.go.
 func plantedModule(t *testing.T, file string) string {
 	t.Helper()
+	return plantedModuleFiles(t, map[string]string{"zz_planted.go": file})
+}
+
+// plantedModuleFiles is plantedModule with each file added under
+// internal/handler by its name. A scan of a copy builds every package in it
+// (its directory is new to the build cache), so a test with several planted
+// shapes plants them all in one copy (#3574).
+func plantedModuleFiles(t *testing.T, files map[string]string) string {
+	t.Helper()
 	wd, _ := os.Getwd()
 	mod, err := moduleRoot(wd)
 	if err != nil {
@@ -244,8 +295,10 @@ func plantedModule(t *testing.T, file string) string {
 	if err := os.WriteFile(filepath.Join(dst, "go.sum"), gosum, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dst, "internal", "handler", "zz_planted.go"), []byte(file), 0o644); err != nil {
-		t.Fatal(err)
+	for name, file := range files {
+		if err := os.WriteFile(filepath.Join(dst, "internal", "handler", name), []byte(file), 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return dst
 }

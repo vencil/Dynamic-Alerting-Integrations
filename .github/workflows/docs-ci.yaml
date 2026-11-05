@@ -199,7 +199,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       - name: Cache pip dependencies
         uses: actions/cache@v5
@@ -240,7 +240,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       - name: Cache pip dependencies
         uses: actions/cache@v5
@@ -286,7 +286,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
       - name: Scan HEAD blobs
         run: |
           # --strict is intentionally omitted until the pre-existing EOF
@@ -305,7 +305,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       - name: Cache pip dependencies
         uses: actions/cache@v5
@@ -339,7 +339,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       - name: Cache pip dependencies
         uses: actions/cache@v5
@@ -377,7 +377,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       - name: Cache pip dependencies
         uses: actions/cache@v5
@@ -462,7 +462,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v6
         with:
-          python-version: "3.13"
+          python-version-file: .python-version
 
       - name: Install Python dependencies
         run: |

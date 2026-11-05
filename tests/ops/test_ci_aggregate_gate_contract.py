@@ -1,7 +1,7 @@
 r"""The three ci.yml aggregate gates were required checks with no assertions.
 
-#1397. `ci.yml` reports three REQUIRED status checks — `Python Tests (3.13)`,
-`Go Tests (1.26)`, `Portal Tests` — from three jobs that run no tests at all.
+#1397. `ci.yml` reports three REQUIRED status checks — `Python Tests`,
+`Go Tests`, `Portal Tests` — from three jobs that run no tests at all.
 Each is a pure aggregation gate: `if: always()`, a handful of
 `${{ needs.*.result }}` bindings in one step's `env:`, and ~10 lines of shell
 that decide pass/fail. Those ten lines are the whole reason a path-SKIPPED
@@ -559,8 +559,8 @@ UNMODELLED_GATE_SHAPED_JOBS: dict[tuple[str, str], str] = {}
 # Blind review did it by swapping `name:` between `portal-tests` and
 # `portal-tests-run`; every assertion here stayed green.
 REQUIRED_CHECK_NAMES = frozenset({
-    "Python Tests (3.13)",
-    "Go Tests (1.26)",
+    "Python Tests",
+    "Go Tests",
     "Portal Tests",
     # validate.yaml (#1398)
     "Go Lint",
@@ -579,6 +579,21 @@ REQUIRED_CHECK_NAMES = frozenset({
     "Documentation Line Count Monitor",
     "Drift Detection (validate_all.py)",
 })
+
+
+_VERSION_IN_NAME = re.compile(r"\b\d+\.\d+(?:\.\d+)?\b")
+
+
+def test_no_required_check_name_carries_a_toolchain_version():
+    """A version in a required-check name is a second copy of the version:
+    every bump then also needs a branch-protection edit, and until the owner
+    makes it the renamed gate never reports and every PR hangs. Both
+    "Python Tests (3.13)" and "Go Tests (1.26)" were that shape; the versions
+    live in .python-version and the modules' go.mod now."""
+    bad = sorted(n for n in REQUIRED_CHECK_NAMES if _VERSION_IN_NAME.search(n))
+    assert not bad, (
+        f"required check names must not carry a version: {bad} — put the "
+        "version in its SSOT file and keep the gate name stable")
 
 
 # ── the exit-code contract ─────────────────────────────────────────────────
@@ -975,7 +990,7 @@ def test_gate_discovery_did_not_refuse() -> None:
 # guard people delete.
 UNWATCHED_PATH_GATED_JOBS: dict[tuple[str, str], str] = {
     # The coverage leg is ADVISORY by owner decision (2026-09-19): it runs the
-    # same tree as `python-tests-run` plus `--cov`, uploads `coverage-py3.13`
+    # same tree as `python-tests-run` plus `--cov`, uploads `coverage-python`
     # for coverage-delta.yml, and fails on `--cov-fail-under` — visibly, as a
     # red non-required job — but backs no required check. Measured reason:
     # under the tracer every worker's collection was ~4x slower on the runner
@@ -985,7 +1000,7 @@ UNWATCHED_PATH_GATED_JOBS: dict[tuple[str, str], str] = {
     # reads its result.
     ("ci.yml", "python-coverage"): (
         "ADVISORY coverage leg (owner decision, PR #1910): same tree and flags "
-        "as python-tests-run plus --cov; uploads coverage-py3.13 for "
+        "as python-tests-run plus --cov; uploads coverage-python for "
         "coverage-delta.yml and reddens on --cov-fail-under, but backs no "
         "required check — it is deliberately absent from the python-tests "
         "gate's needs:. Cannot be modelled as a leg because a gate weighing it "
@@ -995,11 +1010,11 @@ UNWATCHED_PATH_GATED_JOBS: dict[tuple[str, str], str] = {
         "(a policy reversal) or deleting the job. Sharded 3-way (--shard=K/3); "
         "the report, floor and artifact moved to python-coverage-combine."),
     # The tail of the coverage leg once it was sharded: merges the shards'
-    # raw data, writes coverage-py3.13, applies pyproject's fail_under. Same
+    # raw data, writes coverage-python, applies pyproject's fail_under. Same
     # advisory standing and same `python_changed` gate as the shards it reads.
     ("ci.yml", "python-coverage-combine"): (
         "ADVISORY: combines the sharded python-coverage legs into the "
-        "coverage-py3.13 artifact coverage-delta.yml reads and applies the "
+        "coverage-python artifact coverage-delta.yml reads and applies the "
         "fail_under floor; backs no required check, for the same owner "
         "decision as python-coverage (sharding: #2102). Closing this row "
         "means the same as closing that one."),
@@ -1121,11 +1136,12 @@ def _rendered_names(job_id: str, job: dict) -> list[str] | None:
     """Every check-run name this job can report. None = not modellable.
 
     ⛔ Comparing the RAW `name:` is not enough, and this is the bypass that
-    forced the function: GitHub expands `${{ }}` into the check-run name, and
-    three jobs in this workflow already carry an expression there. Renaming a
-    path-gated leg to `Go Tests (${{ matrix.go }})` renders to exactly the
-    required context `Go Tests (1.26)` — one character from the name it has —
-    while a raw-string comparison sees two different strings.
+    forced the function: GitHub expands `${{ }}` into the check-run name.
+    Renaming a path-gated leg to `Go ${{ matrix.word }}` with
+    `word: ["Tests"]` renders to exactly the required context `Go Tests`,
+    while a raw-string comparison sees two different strings. (The Go legs
+    used to carry `(${{ matrix.go }})`, rendering to the then-required
+    `Go Tests (1.26)`.)
     """
     raw = str(job.get("name") or job_id)
     refs = _EXPRESSION.findall(raw)
@@ -1151,8 +1167,8 @@ def _could_render_to(raw_name: str, target: str) -> bool:
     """Could `raw_name`, with every `${{ }}` free, come out as `target`?
 
     Each expression becomes `.*` and the literal fragments must still line up.
-    `scan ${{ matrix.name }}` cannot become `Portal Tests`; `Go Tests
-    (${{ matrix.go }})` can become `Go Tests (1.26)`.
+    `scan ${{ matrix.name }}` cannot become `Portal Tests`; `Go
+    ${{ matrix.word }}` can become `Go Tests`.
     """
     # `re.split` with one capture group interleaves literals and captures, so
     # the literal fragments are the even indices.

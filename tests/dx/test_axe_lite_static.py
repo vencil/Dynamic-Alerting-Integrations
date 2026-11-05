@@ -400,3 +400,29 @@ class TestPortalFloor:
             "WCAG static floor regressed (was 0 across all portal JSX). "
             "Offenders:\n" + "\n".join(offenders)
         )
+
+
+class TestCommandLine:
+    """#3579: the process enters through `_lib_exitcodes.run(_cli)`, which
+    calls with no arguments; `main` takes the argv explicitly (the tests
+    above pass it), so `_cli` must hand it the command line."""
+
+    def _run(self, *args):
+        import subprocess
+        return subprocess.run([sys.executable, os.path.join(_TOOLS_DIR, "axe_lite_static.py"), *args],
+                              capture_output=True, text=True, encoding="utf-8", timeout=60)
+
+    def test_the_file_on_the_command_line_is_scanned(self, tmp_path):
+        ok = tmp_path / "ok.jsx"
+        ok.write_text("<button>OK</button>", encoding="utf-8")
+        bad = tmp_path / "bad.jsx"
+        bad.write_text("<button></button>", encoding="utf-8")
+        assert self._run(str(ok)).returncode == 0
+        proc = self._run(str(bad))
+        assert proc.returncode == 1, (proc.stdout, proc.stderr)
+        assert "Traceback" not in proc.stderr, proc.stderr
+
+    def test_no_file_is_a_usage_error(self):
+        proc = self._run()
+        assert proc.returncode == 2, (proc.stdout, proc.stderr)
+        assert "usage:" in proc.stdout and "Traceback" not in proc.stderr, proc.stderr

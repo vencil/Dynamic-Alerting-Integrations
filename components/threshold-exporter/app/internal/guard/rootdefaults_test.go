@@ -295,3 +295,55 @@ func TestCheckRootDefaultsRefused(t *testing.T) {
 		t.Fatalf("CheckDefaultsImpact: %+v, %v; want one error", rep, err)
 	}
 }
+
+// #3556: a `_critical` tier under the root `dimensions:` is an error, in
+// either #1231 spelling (the retired one taken from the alias table, so this
+// file need not spell it), with or without the `defaults:` wrapper; a
+// subtree carrier's `dimensions:` is ignored by the exporter and not judged.
+func TestCheckRootDimensionsCriticalBase(t *testing.T) {
+	t.Parallel()
+	var legacy, canon string
+	for l, c := range config.DeprecatedKeyAliases() {
+		legacy, canon = l, c
+	}
+	if legacy == "" {
+		t.Skip("no #1231 alias left to spell the retired tier with")
+	}
+	root := "defaults:\n  " + canon + ": 10\ndimensions:\n  " + canon + ": [db]\n  " +
+		canon + "_critical: [db]\n  " + legacy + "_critical: [db]\n"
+	got := checkRootDimensionsCriticalBase(CheckInput{DefaultsFiles: []config.DefaultsFile{
+		{Name: "_defaults.yaml", Data: []byte(root)},
+		{Name: "sub/_defaults.yaml", Data: []byte("dimensions:\n  x_critical: [db]\n")},
+	}})
+	var fields []string
+	for _, f := range got {
+		if f.Severity != SeverityError || f.Kind != findingkind.FindingRootDimensionsCriticalBase || f.TenantID != "" {
+			t.Errorf("finding %+v, want a tree-level error root_dimensions_critical_base", f)
+		}
+		if !strings.Contains(f.Message, `{label="v"}: "N:critical"`) {
+			t.Errorf("message %q, want it to name the N:critical form", f.Message)
+		}
+		fields = append(fields, f.Field)
+	}
+	want := []string{"_defaults.yaml:dimensions." + canon + "_critical", "_defaults.yaml:dimensions." + legacy + "_critical"}
+	sort.Strings(want)
+	if strings.Join(fields, ",") != strings.Join(want, ",") {
+		t.Errorf("fields = %v, want %v", fields, want)
+	}
+	unwrapped := checkRootDimensionsCriticalBase(CheckInput{DefaultsFiles: []config.DefaultsFile{
+		{Name: "_defaults.yaml", Data: []byte("dimensions:\n  x_critical: [db]\n")}}})
+	if len(unwrapped) != 1 {
+		t.Errorf("a root without `defaults:` still declares `dimensions:`; got %v", unwrapped)
+	}
+	if n := len(checkRootDimensionsCriticalBase(CheckInput{
+		DefaultsFiles: []config.DefaultsFile{{Name: "_defaults.yaml", Data: []byte(root)}},
+		ParseFailed:   []string{"_defaults.yaml"},
+	})); n != 0 {
+		t.Errorf("a dropped file got %d findings", n)
+	}
+	rep, err := CheckDefaultsImpact(CheckInput{DefaultsFiles: []config.DefaultsFile{
+		{Name: "_defaults.yaml", Data: []byte("dimensions:\n  x_critical: [db]\n")}}})
+	if err != nil || rep.Summary.Errors < 1 {
+		t.Fatalf("CheckDefaultsImpact: %+v, %v; want the error counted", rep, err)
+	}
+}

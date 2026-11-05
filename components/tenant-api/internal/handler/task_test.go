@@ -19,12 +19,15 @@ const taskTester = "tester@example.com"
 
 var taskTesterOwner = taskOwner(&rbac.VerifiedPrincipal{Subject: taskTester, Source: rbac.SourceHumanHopB})
 
-// asTaskTester serves h through the open-mode RBAC middleware as taskTester.
+// asTaskTester serves h through the identity-only RBAC middleware
+// (MiddlewareAuthenticated) as taskTester, in unrestrictedGroup — so a
+// handler built over unrestrictedRBAC may read every task result.
 func asTaskTester(h http.HandlerFunc) http.HandlerFunc {
 	mgr, _ := rbac.NewManager("", nil)
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("X-Forwarded-Email", taskTester)
-		mgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, r)
+		r.Header.Set("X-Forwarded-Groups", unrestrictedGroup)
+		mgr.MiddlewareAuthenticated()(h).ServeHTTP(w, r)
 	}
 }
 
@@ -55,7 +58,7 @@ func TestGetTask_Found(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	// Call handler
-	handler := GetTask(&Deps{Tasks: taskMgr, RBAC: newRBACManager(t, "")})
+	handler := GetTask(&Deps{Tasks: taskMgr, RBAC: unrestrictedRBAC(t)})
 	asTaskTester(handler)(w, req)
 
 	// Verify response
@@ -103,7 +106,7 @@ func TestGetTask_NotFound(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	// Call handler
-	handler := GetTask(&Deps{Tasks: taskMgr, RBAC: newRBACManager(t, "")})
+	handler := GetTask(&Deps{Tasks: taskMgr, RBAC: unrestrictedRBAC(t)})
 	asTaskTester(handler)(w, req)
 
 	// Verify response status is 404
@@ -185,7 +188,7 @@ func TestGetTask_CompletedTask(t *testing.T) {
 				req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 				// Call handler
-				handler := GetTask(&Deps{Tasks: taskMgr, RBAC: newRBACManager(t, "")})
+				handler := GetTask(&Deps{Tasks: taskMgr, RBAC: unrestrictedRBAC(t)})
 				asTaskTester(handler)(w, req)
 
 				// Verify response
@@ -264,7 +267,7 @@ func TestGetTask_OrphanedHint(t *testing.T) {
 	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 	// Call handler
-	handler := GetTask(&Deps{Tasks: taskMgr2, RBAC: newRBACManager(t, "")})
+	handler := GetTask(&Deps{Tasks: taskMgr2, RBAC: unrestrictedRBAC(t)})
 	asTaskTester(handler)(w, req)
 
 	// Verify 404 response
@@ -320,7 +323,7 @@ func TestGetTask_MultiplePolls(t *testing.T) {
 		req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
 
 		// Call handler
-		handler := GetTask(&Deps{Tasks: taskMgr, RBAC: newRBACManager(t, "")})
+		handler := GetTask(&Deps{Tasks: taskMgr, RBAC: unrestrictedRBAC(t)})
 		asTaskTester(handler)(w, req)
 
 		// Decode response

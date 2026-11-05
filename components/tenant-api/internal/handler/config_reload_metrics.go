@@ -135,7 +135,7 @@ func (m *ConfigReloadMetrics) StateSnapshot() map[string]int64 {
 var _ configwatcher.ReloadObserver = (*ConfigReloadMetrics)(nil)
 
 // activeConfigReloadMetrics holds the most-recently installed store so /metrics
-// can render it without threading it through Deps. Mirrors activeScopeWouldDeny.
+// can render it without threading it through Deps. Mirrors activeScopeDenied.
 // There is one store in production (shared across all managers); tests that want
 // isolation construct their own ConfigReloadMetrics and read it via Snapshot().
 var activeConfigReloadMetrics atomic.Pointer[ConfigReloadMetrics]

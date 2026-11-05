@@ -38,6 +38,7 @@ lang: zh
 | `docs/adr/024-version-aware-threshold-via-dimensional-label.md` (.en.md) | Platform Engineers, contributors, SREs | ADR-024: 宣告式 Dimensional 告警引擎 — Version-Aware Thresholds + Custom Alerts |
 | `docs/adr/025-alerting-plane-self-liveness.md` (.en.md) | Platform Engineers, SREs, contributors | ADR-025: 告警平面自我存活性 — 讓告警系統能偵測自己的死亡 |
 | `docs/adr/026-node-maintenance-liveness-suppression.md` | Platform Engineers, SREs | ADR-026: Node/Cluster 維護告警抑制 — 不需要子系統 |
+| `docs/adr/027-tenant-api-caller-identity.md` (.en.md) | Platform Engineers, contributors | ADR-027: tenant-api 的呼叫端身分只在自己的 pod 內建立，網路上不轉送人類身分 |
 | `docs/adr/028-federation-revocation-tamper-evidence.md` | Platform Engineers, 安全合規, SREs | ADR-028: Federation 撤銷儲存 tamper-evidence — off-cluster 對帳為主控 |
 | `docs/adr/029-custom-alert-cross-tenant-query-scoping.md` | Platform Engineers, 安全合規, SREs | ADR-029: 租戶自訂告警跨租戶查詢隔離 — 編譯期邊界中和為主、評估期 ruler 隔離延後 |
 | `docs/adr/030-decision-layer-migration-validation.md` | Platform Engineers, contributors | ADR-030: 決策層遷移驗證 — 製造 Oracle 而非觀測 |

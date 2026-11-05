@@ -63,18 +63,17 @@ HELP_CONTRACTS = {
     },
     "operator_generate": {
         "script": TOOLS_DIR / "ops" / "operator_generate.py",
+        # #3572: --config-dir / --api-version / --receiver-template /
+        # --secret-name / --secret-key are hidden (refused with the routing
+        # remedy), and `alertmanager` is no --components choice in --help.
         "flags": [
-            "--rule-packs-dir", "--config-dir", "--output-dir",
-            "--namespace", "--api-version", "--gitops", "--dry-run",
-            "--json", "--components", "--receiver-template",
-            "--secret-name", "--secret-key", "--kustomize",
+            "--rule-packs-dir", "--output-dir",
+            "--namespace", "--gitops", "--dry-run",
+            "--json", "--components", "--kustomize",
         ],
         "required": [],
         "choices": {
-            "--api-version": "{v1alpha1,v1beta1}",
-            "--components": "{all,rules,alertmanager,servicemonitor}",
-            "--receiver-template":
-                "{slack,pagerduty,email,teams,opsgenie,webhook}",
+            "--components": "{all,rules,servicemonitor}",
         },
     },
     "config_diff": {

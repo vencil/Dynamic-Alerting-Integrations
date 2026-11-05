@@ -196,21 +196,14 @@ func TestListTenants_DegradedRowVisibleOnlyToMetadataUnrestricted(t *testing.T) 
 		// pinned at the decision itself in rbac's
 		// TestScopeAllowedUnknownMetadata_MetadataAxis.
 	}
-	for _, enforce := range []bool{false, true} {
-		mgr := newRBACManager(t, degradedRBACYAML)
-		mode := "metadata=shadow"
-		if enforce {
-			mgr.EnableMetadataScopeEnforce()
-			mode = "metadata=enforce"
-		}
-		for _, c := range cases {
-			t.Run(mode+"/"+c.group, func(t *testing.T) {
-				got := idsOf(listTenantsAs(t, dir, mgr, c.group))
-				if !reflect.DeepEqual(got, c.want) {
-					t.Errorf("ids = %v, want %v", got, c.want)
-				}
-			})
-		}
+	mgr := newRBACManager(t, degradedRBACYAML)
+	for _, c := range cases {
+		t.Run(c.group, func(t *testing.T) {
+			got := idsOf(listTenantsAs(t, dir, mgr, c.group))
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("ids = %v, want %v", got, c.want)
+			}
+		})
 	}
 
 	// The unrestricted caller gets the reason, not just the id.

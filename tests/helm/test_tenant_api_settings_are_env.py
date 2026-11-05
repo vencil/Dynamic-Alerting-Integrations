@@ -42,8 +42,7 @@ _RENDERS = {
     "default": [],
     "everything-on": [
         "federation.enabled=true", "machineIdentity.enabled=true", "humanSocket.enabled=true",
-        "rbac.metadataScopeEnforce=true", "rbac.metadataWriteScopeEnforce=true",
-        "rbac.orgScopeEnforce=true", "identity.claimHeaders.org=X-Org",
+        "identity.claimHeaders.org=X-Org",
         "generator.policy.existingConfigMap=da-policy",
     ],
     "pr-github": ["writeBack.mode=pr-github", "gitRepoUrl=https://github.com/acme/conf.git",
@@ -118,8 +117,7 @@ def test_the_settings_reach_the_env():
     for flag in ("addr", "config-dir", "git-dir", "rbac", "write-mode", "generator-socket",
                  "deploy-policy", "federation-key", "federation-store", "federation-namespace",
                  "machine-identity-audit", "machine-identity-audience", "human-socket",
-                 "rbac-metadata-scope-enforce", "rbac-metadata-write-scope-enforce",
-                 "rbac-org-scope-enforce", "identity-claim-headers", "state-store",
+                 "identity-claim-headers", "state-store",
                  "state-configmap"):
         assert envs[flag] in env, f"--{flag} ({envs[flag]}) is not in the tenant-api env"
 

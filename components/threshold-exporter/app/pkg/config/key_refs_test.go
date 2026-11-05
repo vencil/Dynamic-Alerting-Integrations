@@ -23,6 +23,10 @@ func TestPlatformKeyFor(t *testing.T) {
 		{"mysql_threads_running_critical", "mysql_threads_running", true},
 		{`mysql_cpu{db="a"}`, "mysql_threads_running", true},
 		{`mysql_cpu{db='a', z = "b"}`, "mysql_threads_running", true},
+		// #3556: a `_critical` tier with dimensions belongs to its base, in
+		// either spelling.
+		{`mysql_cpu_critical{db="a"}`, "mysql_threads_running", true},
+		{`mysql_threads_running_critical{db="a"}`, "mysql_threads_running", true},
 		{`redis_queue_length{queue=~"x.*"}`, "redis_queue_length", true},
 		// Exact-match alias contract: a prefix is not an alias.
 		{"mysql_cpu_util", "mysql_cpu_util", true},

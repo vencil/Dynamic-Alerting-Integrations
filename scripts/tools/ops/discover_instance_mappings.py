@@ -51,8 +51,7 @@ from _lib_python import (  # noqa: E402
 # "no label values" at exit 1.
 from _lib_prometheus import prometheus_label_values, prometheus_series  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope, encode_json,
-)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, encode_json)
 
 _LANG = detect_cli_lang()
 
@@ -315,10 +314,6 @@ def main(argv: list[str] | None = None) -> "int | Report":
     parser.add_argument("--json", action="store_true", help=_h("json"))
 
     args = parser.parse_args(argv)
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope, with the
-        # one payload key _empty_mapping (below) carries
-        arm_crash_envelope(instance_tenant_mapping={})
 
     # ── Discover label values ──────────────────────────────────────
     label_values: dict[str, set[str]] = {}

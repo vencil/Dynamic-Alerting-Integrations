@@ -58,8 +58,7 @@ MAINTENANCE_QUERY = collapse_replicas('user_state_filter{filter="maintenance"}')
 # --alertmanager when it is not given. Only a URL the caller gave is a source
 # the run must read (#3133, owner 2026-10-23: an optional source).
 _DEFAULT_ALERTMANAGER = "http://localhost:9093"
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_paths import classify_path, raise_path_problems  # noqa: E402  (#3392)
 
 # The module's one query call: (rows, None) or (None, why).
@@ -411,9 +410,6 @@ def main():
     parser.add_argument("--json", action="store_true",
                         help="Output as JSON (for CI integration)")
     args = parser.parse_args()
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope(tool="shadow-verify")
 
     all_checks = []
     all_results = []

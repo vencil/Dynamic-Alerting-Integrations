@@ -80,10 +80,8 @@ def test_operator_generate_main_exits_2_on_an_undeclared_yaml(tmp_path, monkeypa
     """`main` turns `SourcesUnlisted` into rc 2 naming the file
     (`rule_packs_unreadable`), never a CRD set without it."""
     rp = _rule_packs(tmp_path, extra=True)
-    conf = tmp_path / "conf.d"
-    conf.mkdir()
     monkeypatch.setattr("sys.argv", ["operator_generate.py", "--rule-packs-dir", str(rp),
-                                     "--config-dir", str(conf), "--dry-run"])
+                                     "--dry-run"])
     with pytest.raises(SystemExit) as exc:
         og.main()
     assert exc.value.code == 2

@@ -46,7 +46,7 @@ type ConfigDerivedMeta struct {
 	EvaluatedAt time.Time `json:"evaluated_at"`
 	// When conf.d was last loaded into the cache the states were evaluated from.
 	ConfigLoadedAt time.Time `json:"config_loaded_at"`
-	// conf.d files threshold-exporter skips because they fail to parse — a broken file, not a missing tenant. Unrestricted callers (open mode, or an admin restricted on no org, environment or domain) get root-relative paths; any other caller gets only the file name, and only for a file named after a tenant it could see as a degraded list row. Other files are left out without trace (not even counted).
+	// conf.d files threshold-exporter skips because they fail to parse — a broken file, not a missing tenant. Unrestricted callers (an admin restricted on no org, environment or domain) get root-relative paths; any other caller gets only the file name, and only for a file named after a tenant it could see as a degraded list row. Other files are left out without trace (not even counted).
 	ParseFailedFiles []string `json:"parse_failed_files"`
 	// Set when conf.d could not be loaded at all; no tenant then has config_derived. The loader's own message (paths relative to conf.d) only for unrestricted callers; any other caller gets a fixed message, since the loader's message names other tenants.
 	LoadError string `json:"load_error,omitempty"`
@@ -205,7 +205,7 @@ func (s *tenantSnapshot) withConfigDerived(in []TenantSummary, now time.Time) []
 // ⛔ EVERYTHING HERE CAN NAME ANOTHER TENANT. The loader's error and the
 // parse-failed paths carry tenant ids, file names and directory names, and
 // the directory layout of conf.d is per-team as often as not. So only an
-// UNRESTRICTED caller — open mode, or an admin whose rule restricts no org,
+// UNRESTRICTED caller — an admin whose rule restricts no org,
 // environment or domain (rbac.PlatformAdminUnrestricted; NOT
 // PlatformAdminNonOrgScoped, which ignores the metadata axes) — gets them as
 // the loader reported them (paths relative to conf.d). Anyone else gets:
@@ -223,7 +223,7 @@ func (s *tenantSnapshot) configDerivedMeta(d *Deps, p *rbac.VerifiedPrincipal, n
 		ConfigLoadedAt:   s.loadedAt,
 		ParseFailedFiles: []string{},
 	}
-	unrestricted := len(d.RBAC.Get().Groups) == 0 || d.RBAC.PlatformAdminUnrestricted(p)
+	unrestricted := d.RBAC.PlatformAdminUnrestricted(p)
 	if s.derived.loadErr != "" {
 		meta.LoadError = scopedLoadError
 		if unrestricted {

@@ -1,7 +1,7 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended"],
-  "enabledManagers": ["custom.regex", "github-actions", "dockerfile", "devcontainer"],
+  "enabledManagers": ["custom.regex", "github-actions", "dockerfile", "devcontainer", "pyenv"],
   "pinDigests": true,
   "semanticCommits": "enabled",
   "semanticCommitType": "chore",
@@ -189,7 +189,7 @@
     },
     {
       "description": "#1354 — no digest/SHA pinning from the built-in managers in this change: pinDigests=true (global, for the #902 images) would otherwise open a pin PR rewriting every `uses:` to a commit SHA and every Dockerfile FROM to @sha256. That is a separate, deliberate decision (see docs/internal/toolchain-versions.md), not a side effect of turning managers on.",
-      "matchManagers": ["github-actions", "dockerfile", "devcontainer"],
+      "matchManagers": ["github-actions", "dockerfile", "devcontainer", "pyenv"],
       "pinDigests": false
     },
     {
@@ -212,7 +212,7 @@
     },
     {
       "description": "#1354 — majors from the built-in managers (a new action major, a new feature major, a new base-image major) wait for a Dependency Dashboard tick, same policy as the #902 images.",
-      "matchManagers": ["github-actions", "dockerfile", "devcontainer"],
+      "matchManagers": ["github-actions", "dockerfile", "devcontainer", "pyenv"],
       "matchUpdateTypes": ["major"],
       "dependencyDashboardApproval": true
     },
@@ -248,9 +248,9 @@
       "enabled": false
     },
     {
-      "description": "#1354 — the language versions the devcontainer manager reads out of the node / go / python features are bound to CI (node-version, python-version) and to go.mod (go). One-sided bumps are red; hand-maintained.",
+      "description": "#1354 — the language versions the devcontainer manager reads out of the node / go / python features are bound to CI (node-version) and to go.mod (go). One-sided bumps are red; hand-maintained. Python is NOT here: it moves in the `Python interpreter` group (last rule).",
       "matchManagers": ["devcontainer"],
-      "matchDatasources": ["node-version", "golang-version", "python-version", "ruby-version"],
+      "matchDatasources": ["node-version", "golang-version", "ruby-version"],
       "enabled": false
     },
     {
@@ -258,6 +258,12 @@
       "matchManagers": ["dockerfile"],
       "matchDepNames": ["prom/alertmanager"],
       "enabled": false
+    },
+    {
+      "description": "ONE source for the Python version: .python-version (exact patch; every setup-python reads it via python-version-file). The other copies are literals only because their consumer needs one (Dockerfile `FROM python:<tag>`, the dev container python feature), and tests/shared/test_toolchain_pin_parity.py requires them to equal the file. This rule puts the three managers' `python` in ONE PR so none moves alone. ⚠️ Sites under ignorePaths (tests/**, **/examples/**) are not Renovate's: the parity test keeps that PR red until they are moved by hand (fail-closed, like the da-read go.sum rule). Minor bumps still wait for the Dashboard (the python MINOR rule above).",
+      "matchManagers": ["pyenv", "dockerfile", "devcontainer"],
+      "matchDepNames": ["python"],
+      "groupName": "Python interpreter"
     }
   ]
 }

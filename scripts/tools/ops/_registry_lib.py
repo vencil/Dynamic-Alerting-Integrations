@@ -154,18 +154,19 @@ CHART_DEFAULT_KEYS: frozenset[str] = frozenset({
 # never consumes aliases, so the table is authored here and merged into the
 # registry document rather than widening the scaffold contract before PR-3.
 #
-# This table is the alias SSOT. The two runtime mirrors —
-#   - Go   components/threshold-exporter/app/pkg/config/aliases.go
-#          (deprecatedKeyAliases)
-#   - Py   scripts/tools/ops/_grar_validate.py (DEPRECATED_KEY_ALIASES)
-# — are PINNED to the registry's deprecated_aliases section by tests
-# (Go: pkg/config/aliases_registry_test.go; Py:
-# tests/lint/test_check_threshold_registry.py), so a drifted mirror fails CI.
+# This table is the alias SSOT. Its one runtime mirror, Go's
+# components/threshold-exporter/app/pkg/config/aliases.go
+# (deprecatedKeyAliases), is PINNED to the registry's deprecated_aliases
+# section by pkg/config/aliases_registry_test.go, so a drifted mirror fails
+# CI. ⛔ No Python reader applies this table to a key: the rule that does
+# (exact, `_critical`, `{...}`, both) is Go's alone, asked through `da-guard
+# key-spellings` (#3556); tests/shared/test_alias_rule_lives_in_go.py keeps a
+# copy of the table or a reader of it from coming back.
 #
 # Contract (fail-loud in build_registry_doc): the OLD spelling must NOT be an
 # active registry key (it is retired), the target MUST be an active key, and
 # old != new. When a window closes, delete the entry here, regen, and drop the
-# mirror entries (the pin tests force the mirrors to follow).
+# Go mirror's entry (its pin test forces it to follow).
 # ---------------------------------------------------------------------------
 DEPRECATED_KEY_ALIASES: dict[str, str] = {
     # #944 / #1231: the metric has always measured mysql threads_running
@@ -286,8 +287,8 @@ _REGISTRY_HEADER = (
     "# 本 registry 首要服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。\n"
     "#\n"
     "# deprecated_aliases（#1231）：退役舊拼法 → canonical key（2-release 過渡窗）。\n"
-    "# 本區段是 alias SSOT——Go（pkg/config/aliases.go）與 Python（_grar_validate.py）\n"
-    "# 兩個 runtime 鏡像由 pin 測試釘住本區段（鏡像漂移＝CI 紅）。\n"
+    "# 本區段是 alias SSOT——唯一的 runtime 鏡像 Go（pkg/config/aliases.go）由 pin 測試\n"
+    "# 釘住本區段（鏡像漂移＝CI 紅）；Python 不留副本，經 da-guard key-spellings 問（#3556）。\n"
 )
 
 

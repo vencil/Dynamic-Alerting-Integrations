@@ -11,7 +11,7 @@
     "groups": {
       "type": ["array", "null"],
       "title": "RBAC Group Rules",
-      "description": "List of group rules. An absent / null / empty list parses to zero groups (MED-8 fail-closed: all access denied unless --rbac-empty-open).",
+      "description": "List of group rules. An absent / null / empty list parses to zero groups (MED-8 fail-closed: all access denied, reads included; there is no open mode, ADR-027 §7).",
       "items": { "$ref": "#/definitions/groupRule" }
     }
   },

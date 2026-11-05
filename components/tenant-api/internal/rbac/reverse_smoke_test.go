@@ -83,7 +83,7 @@ func TestReverseAccessReport_SmokeHappyPath(t *testing.T) {
 	if g0.Who.Kind != WhoKindLegacyGroup || g0.Who.LegacyGroup != "platform-admins" {
 		t.Errorf("grant0 who = %+v, want legacy_group/platform-admins", g0.Who)
 	}
-	if g0.OrgGate.Required || g0.OrgGate.OutcomeShadow != OrgOutcomeNotRequired {
+	if g0.OrgGate.Required || g0.OrgGate.Outcome != OrgOutcomeNotRequired {
 		t.Errorf("grant0 org_gate = %+v, want not required", g0.OrgGate)
 	}
 	if want := []string{SurfaceList, SurfaceReadByID, SurfaceWrite, SurfaceAdmin}; !reflect.DeepEqual(g0.Surfaces, want) {
@@ -100,9 +100,8 @@ func TestReverseAccessReport_SmokeHappyPath(t *testing.T) {
 	if !g1.OrgGate.Required || g1.OrgGate.ClaimKey != "org" {
 		t.Errorf("grant1 org_gate = %+v, want required on key org", g1.OrgGate)
 	}
-	if g1.OrgGate.OutcomeShadow != OrgOutcomeConditional || g1.OrgGate.OutcomeEnforce != OrgOutcomeConditional {
-		t.Errorf("grant1 outcomes = %q/%q, want conditional/conditional",
-			g1.OrgGate.OutcomeShadow, g1.OrgGate.OutcomeEnforce)
+	if g1.OrgGate.Outcome != OrgOutcomeConditional {
+		t.Errorf("grant1 outcome = %q, want %q", g1.OrgGate.Outcome, OrgOutcomeConditional)
 	}
 	if want := []string{"ORG-1"}; !reflect.DeepEqual(g1.OrgGate.PassingOrgValues, want) {
 		t.Errorf("grant1 passing_org_values = %v, want %v (intersection by enumeration)",
@@ -147,12 +146,12 @@ func TestReverseAccessReport_SmokeHappyPath(t *testing.T) {
 }
 
 func TestReverseAccessReport_ModesAndRedact(t *testing.T) {
-	// open_read: path-less empty config — grants empty, but the report must
-	// say any authenticated caller can read (mode + verdict), not "no one".
-	open := NewForTest(&RBACConfig{})
-	rep := open.ReverseAccessReport("db-team-1", nil, false, "", ReverseReportOptions{DevBypassActive: true})
-	if rep.Mode != ReverseModeOpenRead || rep.Verdict != ReverseVerdictOpenRead {
-		t.Errorf("open mode = %q/%q, want open_read/open_read", rep.Mode, rep.Verdict)
+	// fail_closed_empty: an empty rule set (no --rbac path, or one with no
+	// rules) denies everything — there is no open_read mode (ADR-027 §7).
+	empty := NewForTest(&RBACConfig{})
+	rep := empty.ReverseAccessReport("db-team-1", nil, false, "", ReverseReportOptions{DevBypassActive: true})
+	if rep.Mode != ReverseModeFailClosedEmpty || rep.Verdict != ReverseVerdictFailClosedEmpty {
+		t.Errorf("empty rule set mode = %q/%q, want fail_closed_empty×2", rep.Mode, rep.Verdict)
 	}
 	if rep.Tenant.OrgStatus != OrgStatusNotOnboarded {
 		t.Errorf("org_status = %q, want %q for known=false", rep.Tenant.OrgStatus, OrgStatusNotOnboarded)
@@ -165,13 +164,7 @@ func TestReverseAccessReport_ModesAndRedact(t *testing.T) {
 		t.Errorf("dev_bypass status = %q, want active", got)
 	}
 
-	// fail_closed_empty: configured-but-empty policy (MED-8).
-	closed := NewForTest(&RBACConfig{})
-	closed.failClosedOnEmpty = true
-	rep = closed.ReverseAccessReport("db-team-1", nil, false, "", ReverseReportOptions{})
-	if rep.Mode != ReverseModeFailClosedEmpty || rep.Verdict != ReverseVerdictFailClosedEmpty {
-		t.Errorf("fail-closed mode = %q/%q, want fail_closed_empty×2", rep.Mode, rep.Verdict)
-	}
+	rep = empty.ReverseAccessReport("db-team-1", nil, false, "", ReverseReportOptions{})
 	if got := rep.Completeness.NotCovered[0].Status; got != "inactive" {
 		t.Errorf("dev_bypass status = %q, want inactive", got)
 	}
@@ -213,7 +206,7 @@ func TestReverseAccessReport_ModesAndRedact(t *testing.T) {
 		t.Errorf("match who claims_count = %d, want 1", cc)
 	}
 	// Booleans/outcomes survive redaction.
-	if !red.Grants[2].OrgGate.Unsatisfiable || red.Grants[1].OrgGate.OutcomeShadow != OrgOutcomeConditional {
+	if !red.Grants[2].OrgGate.Unsatisfiable || red.Grants[1].OrgGate.Outcome != OrgOutcomeConditional {
 		t.Errorf("redacted view lost outcome/unsatisfiable booleans")
 	}
 	// Idempotent: re-redacting changes nothing.
@@ -261,15 +254,10 @@ func TestPlatformAdminNonOrgScoped_Bar(t *testing.T) {
 		t.Fatalf("premise broken: bare Allowed no longer admits the org-scoped wildcard admin")
 	}
 
-	// Both zero-group states: no rule can satisfy the bar → false.
-	open := NewForTest(&RBACConfig{})
-	if open.PlatformAdminNonOrgScoped(&VerifiedPrincipal{Groups: []string{"anyone"}}) {
-		t.Errorf("open_read mode must not satisfy the bar")
-	}
-	closed := NewForTest(&RBACConfig{})
-	closed.failClosedOnEmpty = true
-	if closed.PlatformAdminNonOrgScoped(&VerifiedPrincipal{Groups: []string{"anyone"}}) {
-		t.Errorf("fail_closed_empty mode must not satisfy the bar")
+	// Zero groups: no rule can satisfy the bar → false.
+	empty := NewForTest(&RBACConfig{})
+	if empty.PlatformAdminNonOrgScoped(&VerifiedPrincipal{Groups: []string{"anyone"}}) {
+		t.Errorf("an empty rule set must not satisfy the bar")
 	}
 }
 
@@ -318,14 +306,9 @@ func TestPlatformNonOrgScoped_Levels(t *testing.T) {
 		t.Errorf("anonymous caller passes PlatformNonOrgScoped(read)")
 	}
 
-	// Both zero-group states: false (open-mode read is the caller's branch).
-	open := NewForTest(&RBACConfig{})
-	if open.PlatformNonOrgScoped(&VerifiedPrincipal{Groups: []string{"anyone"}}, PermRead) {
-		t.Errorf("open_read mode must not satisfy PlatformNonOrgScoped")
-	}
-	closed := NewForTest(&RBACConfig{})
-	closed.failClosedOnEmpty = true
-	if closed.PlatformNonOrgScoped(&VerifiedPrincipal{Groups: []string{"anyone"}}, PermRead) {
-		t.Errorf("fail_closed_empty mode must not satisfy PlatformNonOrgScoped")
+	// Zero groups: false.
+	empty := NewForTest(&RBACConfig{})
+	if empty.PlatformNonOrgScoped(&VerifiedPrincipal{Groups: []string{"anyone"}}, PermRead) {
+		t.Errorf("an empty rule set must not satisfy PlatformNonOrgScoped")
 	}
 }

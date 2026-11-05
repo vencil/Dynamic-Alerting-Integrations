@@ -270,7 +270,7 @@ func TestNewManager_EmptyPath(t *testing.T) {
 	}
 	cfg := m.Get()
 	if len(cfg.Groups) != 0 {
-		t.Errorf("expected empty groups in open mode, got %d", len(cfg.Groups))
+		t.Errorf("expected empty groups for a path-less manager, got %d", len(cfg.Groups))
 	}
 }
 

@@ -96,3 +96,25 @@ class TestLiveTreeClean:
 
     def test_live_tree_passes(self):
         assert fit.main() == 0
+
+
+class TestCommandLine:
+    """#3579: the process enters through `_lib_exitcodes.run(_cli)`, which
+    calls with no arguments — `_cli` must still hand `main` the command line
+    (`main()` alone parses none, for the in-process tests above)."""
+
+    def _run(self, *args):
+        import subprocess
+        return subprocess.run(
+            [sys.executable, str(Path(_LINT_DIR) / "check_lint_toolchain_fit.py"), *args],
+            capture_output=True, text=True, encoding="utf-8", timeout=60)
+
+    def test_a_flag_on_the_command_line_is_read(self):
+        proc = self._run("--list")
+        assert proc.returncode == 0, proc.stderr
+        assert "[allowlisted]" in proc.stdout and "OK:" not in proc.stdout, proc.stdout
+
+    def test_an_unknown_flag_is_a_caller_error(self):
+        proc = self._run("--no-such-flag")
+        assert proc.returncode == 2, (proc.stdout, proc.stderr)
+        assert "unrecognized arguments: --no-such-flag" in proc.stderr

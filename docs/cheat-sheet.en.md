@@ -49,7 +49,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `config-diff` | Compare two config directories (GitOps PR review) | --old-dir <PATH>, --new-dir <PATH>, --json-output | `da-tools config-diff --help` |
 | `test-notification` | Multi-channel notification connectivity testing | --config-dir <PATH>, --tenant <NAME>, --dry-run, --ci | `da-tools test-notification --help` |
 | `threshold-recommend` | Threshold recommendation engine (historical P50/P95/P99) | --config-dir <PATH>, --prometheus <URL>, --lookback, --json | `da-tools threshold-recommend --help` |
-| `threshold-govern` | Threshold governance loop: recommend→gate→open per-tenant proposed-PR via tenant-api (#656) | --config-dir <PATH>, --prometheus <URL>, --apply, --min-delta-pct | `da-tools threshold-govern --help` |
+| `threshold-govern` | Threshold governance report: recommend→gate→list rotten thresholds (read-only, writes nothing; #656) | --config-dir <PATH>, --prometheus <URL>, --min-delta-pct, --json | `da-tools threshold-govern --help` |
 | `explain-route` | Routing merge pipeline debugger: four-layer expansion + profile (ADR-007) | --config-dir <PATH>, --tenant <NAME>, --show-profile-expansion, --trace, --alertname <NAME>, --severity <LEVEL>, --label <KEY=VALUE>, --base-config <PATH>, --json | `da-tools explain-route --help` |
 | `explain-keys` | Per key: source, readers, verdict and what a disable does; --assert checks it (ADR-038) | --config-dir <PATH>, --tenant <NAME>, --at <RFC3339>, --assert <FILE>, --json, --da-guard-binary <PATH>, --timeout <SECONDS> | `da-tools explain-keys --help` |
 | `discover-mappings` | Auto-discover 1:N instance-tenant mappings (ADR-006) | --endpoint <URL> or --prometheus <URL> --instance <INST>, --job, -o, --json | `da-tools discover-mappings --help` |
@@ -59,10 +59,10 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
 | `state-reconcile` | Migration state directory reconciliation (.da/state/ schema validation + .da/manifest.json rebuild, #405 Cat A) | --state-dir <DIR>, --manifest-path <PATH>, --dry-run, --ci, --json | `da-tools state-reconcile --help` |
 | `rule-pack-diff` | Mechanical diff between two Rule Pack versions (added / removed / breaking label schema, #405 Cat D) | --from <V1.YAML>, --to <V2.YAML>, --json, --ci | `da-tools rule-pack-diff --help` |
 | `silencer-drift-check` | AM silence drift audit against v2 rule pack (offline, eats amtool dump, #405 Cat B) | --silences-file <JSON>, --rule-source <PATH>, --include-inactive, --json, --ci | `da-tools silencer-drift-check --help` |
-| `operator-generate` | Operator CRD generation (PrometheusRule / AlertmanagerConfig / ServiceMonitor) | --rule-packs-dir <DIR>, --config-dir <DIR>, --output-dir <DIR>, --components, --selector-label | `da-tools operator-generate --help` |
+| `operator-generate` | Operator CRD generation (PrometheusRule / ServiceMonitor; routing goes through `generate-routes`) | --rule-packs-dir <DIR>, --output-dir <DIR>, --components, --selector-label | `da-tools operator-generate --help` |
 | `operator-check` | Operator CRD deployment status verification (checks + diagnostic report) | --namespace <NS>, --json | `da-tools operator-check --help` |
 | `runtime-audit` | Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING/UNHEALTHY/ORPHAN, detect-only) | --prometheus <URL>, --runtime-json <FILE>, --ci | `da-tools runtime-audit --help` |
-| `migrate-to-operator` | Read ConfigMap-based rules, produce equivalent CRD YAML + 6-stage migration plan | --source-dir <DIR>, --dry-run, --receiver-template | `da-tools migrate-to-operator --help` |
+| `migrate-to-operator` | Read ConfigMap-based rules, produce equivalent PrometheusRule CRD YAML + migration checklist | --source-dir <DIR>, --dry-run, --checklist-only | `da-tools migrate-to-operator --help` |
 | `rule-pack-split` | Rule Pack hierarchical split (edge Part 1 + central Parts 2+3) | --rule-packs-dir <DIR>, --output-dir <DIR>, --operator | `da-tools rule-pack-split --help` |
 | `opa-evaluate` | OPA Rego policy evaluation bridge (OPA integration) | --config-dir <PATH>, --opa-url <URL>, --opa-binary, --policy-path, --dry-run | `da-tools opa-evaluate --help` |
 | `guard` | Dangling Defaults Guard (v2.8.0); shells out to the `da-guard` Go binary to validate conf.d/ schema + cardinality (routing: `generate-routes`; exit 4 when the tree has routing) | defaults-impact subcommand + --config-dir <PATH>, --scope, --required-fields, --cardinality-limit, --format md\|json | `da-tools guard --help` |
@@ -85,7 +85,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `threshold-recommend` — Threshold recommendation (P50/P95/P99)
 
 - **Config Generation Tools**
-  - `generate-routes` — Tenant YAML → Alertmanager fragment
+  - `generate-routes` — Tenant YAML → merged into your Alertmanager config (`--output-alertmanager` / `--output-configmap` / `--apply`; `--validate` only checks)
   - `patch-config` — ConfigMap partial update
   - `generator-service` — Generator container service (judges tenant-api writes)
 
@@ -110,7 +110,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `silencer-drift-check` — Alertmanager silence drift audit (offline; required at cutover)
 
 - **Operator + Federation**
-  - `operator-generate` — Operator CRD generation (PrometheusRule / AlertmanagerConfig / ServiceMonitor)
+  - `operator-generate` — Operator CRD generation (PrometheusRule / ServiceMonitor)
   - `operator-check` — Operator CRD deployment status verification
   - `rule-pack-split` — Rule Pack hierarchical split (Federation Scenario B)
   - `opa-evaluate` — OPA Rego policy evaluation bridge

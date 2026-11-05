@@ -64,9 +64,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import OutputWriteError  # noqa: E402  (#3089 output preflight)
 import _lib_parse_tree  # noqa: E402  (#3206 the shared conf.d refusal)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
-    OutputNotSerializable, Report, arm_crash_envelope, encode_json,
-)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, OutputNotSerializable, Report, encode_json)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
 from _lib_validation import THRESHOLD_SEVERITIES  # noqa: E402  (#3071)
 # #2119: both trees (`--config-dir` / `--baseline`) are read by the exporter,
@@ -76,16 +74,16 @@ from _lib_tenant_values import (  # noqa: E402
     DaGuardNotFoundError,
     ServedValuesError,
     DA_GUARD_PREFIX,
-    canonical_key,
+    key_spellings,
     load_served_tree,
     now_at,
     print_load_error,
 )
 # #3017 / #3002: what each alert compares (series + direction) is read from the
 # observed-map, never guessed; a `--tenant` key is as written, so a retired
-# spelling goes through the alias table first.
+# spelling is put in the exporter's canonical one first (`da-guard
+# key-spellings`, #3556 — no Python copy of that rule).
 import _observed_map_lib as observed_map_lib  # noqa: E402
-from _registry_lib import DEPRECATED_KEY_ALIASES  # noqa: E402
 import _registry_lib as registry_lib  # noqa: E402  (#3140: the shipped platform defaults `--tenant` is served over)
 
 # ---------------------------------------------------------------------------
@@ -744,7 +742,12 @@ def _no_alert(key):
 def _written_key(change):
     """A change's key as `--tenant` gives it, in canonical spelling, without
     a dimension part."""
-    return canonical_key(change["metric"], DEPRECATED_KEY_ALIASES).partition("{")[0]
+    return _canonical(change["metric"]).partition("{")[0]
+
+
+def _canonical(key):
+    """`key` in the exporter's canonical spelling (`da-guard key-spellings`)."""
+    return key_spellings([key]).canonical(key)
 
 
 def _written_alert(key, served):
@@ -770,7 +773,7 @@ def written_changes(tenant, metric, old_value, new_value):
     A value this backtest does not replay (`_NotRead`) is one row of the
     values as written, with the reason in `unread`; `not_backtestable`
     names it. Raises what `load_served_tree` raises."""
-    key = canonical_key(metric, DEPRECATED_KEY_ALIASES)
+    key = _canonical(metric)
     base, brace, dims = key.partition("{")
     try:
         sides = _served_written(key, (old_value, new_value))
@@ -1646,10 +1649,6 @@ def _main():
         help="Write Markdown report to file (for PR comments)",
     )
     args = parser.parse_args()
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope(build=lambda: empty_report(
-            args.lookback, "caller_error", "internal_error"))
 
     # #3059: argument errors first — before the Prometheus check, so
     # `--skip-if-unavailable` cannot turn them into a green skip — and with
@@ -1755,8 +1754,12 @@ def _main():
     results = []
     for change in changes:
         # `not_backtestable` is asked inside: a change it refuses is listed
-        # as not backtested and Prometheus is not asked about it.
-        result = backtest_change(args.prometheus, change, lookback_seconds)
+        # as not backtested and Prometheus is not asked about it. A `--tenant`
+        # key's canonical spelling is asked of da-guard there too (#3556).
+        try:
+            result = backtest_change(args.prometheus, change, lookback_seconds)
+        except (DaGuardNotFoundError, DaGuardError) as exc:
+            _exit_served_values_error(exc, args)
         if change.get("window"):  # #2119: the part of the day the values hold in
             result["window"] = change["window"]
         if "keys" in change:  # #3111: the keys serving the /metrics row

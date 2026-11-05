@@ -45,7 +45,7 @@ func confErrDir(t *testing.T) string {
 func TestListTenants_ConfigErrorMatchesExporterVerdict(t *testing.T) {
 	t.Parallel()
 	dir := confErrDir(t)
-	h := ListTenants(&Deps{ConfigDir: dir, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListTenants, &Deps{ConfigDir: dir})
 	w := httptest.NewRecorder()
 	h(w, httptest.NewRequest("GET", "/api/v1/tenants", nil))
 	if w.Code != http.StatusOK {

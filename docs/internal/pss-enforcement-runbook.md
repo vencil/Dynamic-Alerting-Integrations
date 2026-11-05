@@ -56,7 +56,7 @@ issue、修掉或 carve，**不要**急著開豁免。
 評估，長駐 Deployment 不重排就不觸發——窗口必須涵蓋所有「會建新 pod 的
 排程」完整跑過一輪：
 
-- `threshold-govern` CronJob：**weekly**（`0 3 * * 1`，週一 03:00）→ 8 天下限的來源
+- 8 天下限原本來自週跑的 `threshold-govern` CronJob；它已依 [ADR-027](../adr/027-tenant-api-caller-identity.md) §4 移除，下限沿用，涵蓋週期性 deploy 與手動作業
 - `maintenance-scheduler` CronJob：`*/5 * * * *`（頭一小時就覆蓋）
 - 至少一次正常 deploy / rollout（CI 出版節奏即可）
 

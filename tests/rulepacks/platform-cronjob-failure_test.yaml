@@ -1,8 +1,8 @@
 # promtool unit tests for CronJobLastRunFailed (issue #1242).
 #
-# What this alert exists for: ThresholdGovernanceStale detects "has not
-# SUCCEEDED in 8 days", but it reads kube_cronjob_status_last_successful_time —
-# a series that a CronJob which has NEVER succeeded does not have. A CronJob
+# What this alert exists for: a staleness alert ("has not SUCCEEDED in 8 days")
+# reads kube_cronjob_status_last_successful_time — a series that a CronJob
+# which has NEVER succeeded does not have. A CronJob
 # pinned to an image that cannot run it therefore failed weekly for months with
 # zero signal. This alert closes that by reading the JOB face instead, which
 # only exists once something actually ran.
@@ -26,11 +26,11 @@ tests:
   - interval: 1m
     name: cronjob-latest-run-failed-fires-after-for-and-projects-labels
     input_series:
-      - series: 'kube_job_status_start_time{job_name="tg-2",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_status_start_time{job_name="wr-2",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "200x30"
-      - series: 'kube_job_failed{job_name="tg-2",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_failed{job_name="wr-2",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
-      - series: 'kube_job_owner{job_name="tg-2",namespace="monitoring",owner_kind="CronJob",owner_name="threshold-govern",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_owner{job_name="wr-2",namespace="monitoring",owner_kind="CronJob",owner_name="weekly-report",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
     alert_rule_test:
       # for: 15m must be real — a for:0s mutant would already fire at 10m.
@@ -42,39 +42,37 @@ tests:
         exp_alerts:
           # exp_labels asserts EXACTLY {severity, alert_source, owner_name,
           # namespace}: no instance / job / job_name / condition. That is the
-          # regression guard for the alert-identity bug the sibling
-          # ThresholdGovernanceStale was fixed for — a bare join would carry the
-          # KSM pod's instance label. (`alert_source` is the STATIC platform
+          # regression guard for the alert-identity bug — a bare join would
+          # carry the KSM pod's instance label. (`alert_source` is the STATIC platform
           # delivery discriminator from the rule's `labels:`, not a projected
           # series label — see configmap-rules-platform.yaml's header.)
           - exp_labels:
               severity: warning
               alert_source: platform
-              owner_name: threshold-govern
+              owner_name: weekly-report
               namespace: monitoring
             exp_annotations:
               description: |
-                The most recent Job created by CronJob threshold-govern
+                The most recent Job created by CronJob weekly-report
                 in namespace monitoring ended in a Failed
-                condition. Unlike ThresholdGovernanceStale — which needs a
-                PREVIOUS success to measure staleness against — this fires the
-                first time a run fails, including for a CronJob that has never
+                condition. Unlike a staleness alert — which needs a PREVIOUS
+                success to measure staleness against — this fires the first
+                time a run fails, including for a CronJob that has never
                 succeeded even once.
-                NOT urgent: platform CronJobs are weekly (threshold-govern) or
-                every-5-minutes (maintenance-scheduler); neither carries a 3am
-                action. Triage in business hours.
+                NOT urgent: platform CronJobs (maintenance-scheduler, every 5
+                minutes) carry no 3am action. Triage in business hours.
                 Check: (a) `kubectl get jobs -n monitoring` and the
                 failing pod's logs; (b) whether the CronJob's pinned image
                 actually contains the program it invokes — that failure mode is
                 what motivated this alert and is now also gated at CI time by
                 scripts/tools/lint/check_image_pin_capability.py; (c) whether a
-                dependency the Job talks to (tenant-api, Prometheus) is
+                dependency the Job talks to (Alertmanager, Prometheus) is
                 reachable from this namespace.
                 Self-resolving: a subsequent successful run clears this without
                 anyone deleting the failed Job. Suspending the CronJob also
-                silences it, matching ThresholdGovernanceStale.
+                silences it.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#171-cronjoblastrunfailed"
-              summary: "CronJob threshold-govern: most recent run failed"
+              summary: "CronJob weekly-report: most recent run failed"
 
   # ── does NOT fire: an older Job failed but the latest one succeeded ─────
   # This is the case that separates us from mixin's KubeJobFailed.
@@ -143,23 +141,22 @@ tests:
               description: |
                 The most recent Job created by CronJob maintenance-scheduler
                 in namespace monitoring ended in a Failed
-                condition. Unlike ThresholdGovernanceStale — which needs a
-                PREVIOUS success to measure staleness against — this fires the
-                first time a run fails, including for a CronJob that has never
+                condition. Unlike a staleness alert — which needs a PREVIOUS
+                success to measure staleness against — this fires the first
+                time a run fails, including for a CronJob that has never
                 succeeded even once.
-                NOT urgent: platform CronJobs are weekly (threshold-govern) or
-                every-5-minutes (maintenance-scheduler); neither carries a 3am
-                action. Triage in business hours.
+                NOT urgent: platform CronJobs (maintenance-scheduler, every 5
+                minutes) carry no 3am action. Triage in business hours.
                 Check: (a) `kubectl get jobs -n monitoring` and the
                 failing pod's logs; (b) whether the CronJob's pinned image
                 actually contains the program it invokes — that failure mode is
                 what motivated this alert and is now also gated at CI time by
                 scripts/tools/lint/check_image_pin_capability.py; (c) whether a
-                dependency the Job talks to (tenant-api, Prometheus) is
+                dependency the Job talks to (Alertmanager, Prometheus) is
                 reachable from this namespace.
                 Self-resolving: a subsequent successful run clears this without
                 anyone deleting the failed Job. Suspending the CronJob also
-                silences it, matching ThresholdGovernanceStale.
+                silences it.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#171-cronjoblastrunfailed"
               summary: "CronJob maintenance-scheduler: most recent run failed"
 
@@ -172,17 +169,17 @@ tests:
   - interval: 1m
     name: dual-ksm-replica-yields-single-alert
     input_series:
-      - series: 'kube_job_status_start_time{job_name="tg-5",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_status_start_time{job_name="wr-5",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "200x30"
-      - series: 'kube_job_status_start_time{job_name="tg-5",namespace="monitoring",instance="ksm-1:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_status_start_time{job_name="wr-5",namespace="monitoring",instance="ksm-1:8080",job="kube-state-metrics"}'
         values: "200x30"
-      - series: 'kube_job_failed{job_name="tg-5",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_failed{job_name="wr-5",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
-      - series: 'kube_job_failed{job_name="tg-5",namespace="monitoring",condition="true",instance="ksm-1:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_failed{job_name="wr-5",namespace="monitoring",condition="true",instance="ksm-1:8080",job="kube-state-metrics"}'
         values: "1x30"
-      - series: 'kube_job_owner{job_name="tg-5",namespace="monitoring",owner_kind="CronJob",owner_name="threshold-govern",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_owner{job_name="wr-5",namespace="monitoring",owner_kind="CronJob",owner_name="weekly-report",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
-      - series: 'kube_job_owner{job_name="tg-5",namespace="monitoring",owner_kind="CronJob",owner_name="threshold-govern",owner_is_controller="true",instance="ksm-1:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_owner{job_name="wr-5",namespace="monitoring",owner_kind="CronJob",owner_name="weekly-report",owner_is_controller="true",instance="ksm-1:8080",job="kube-state-metrics"}'
         values: "1x30"
     alert_rule_test:
       - eval_time: 30m
@@ -191,36 +188,35 @@ tests:
           - exp_labels:
               severity: warning
               alert_source: platform
-              owner_name: threshold-govern
+              owner_name: weekly-report
               namespace: monitoring
             exp_annotations:
               description: |
-                The most recent Job created by CronJob threshold-govern
+                The most recent Job created by CronJob weekly-report
                 in namespace monitoring ended in a Failed
-                condition. Unlike ThresholdGovernanceStale — which needs a
-                PREVIOUS success to measure staleness against — this fires the
-                first time a run fails, including for a CronJob that has never
+                condition. Unlike a staleness alert — which needs a PREVIOUS
+                success to measure staleness against — this fires the first
+                time a run fails, including for a CronJob that has never
                 succeeded even once.
-                NOT urgent: platform CronJobs are weekly (threshold-govern) or
-                every-5-minutes (maintenance-scheduler); neither carries a 3am
-                action. Triage in business hours.
+                NOT urgent: platform CronJobs (maintenance-scheduler, every 5
+                minutes) carry no 3am action. Triage in business hours.
                 Check: (a) `kubectl get jobs -n monitoring` and the
                 failing pod's logs; (b) whether the CronJob's pinned image
                 actually contains the program it invokes — that failure mode is
                 what motivated this alert and is now also gated at CI time by
                 scripts/tools/lint/check_image_pin_capability.py; (c) whether a
-                dependency the Job talks to (tenant-api, Prometheus) is
+                dependency the Job talks to (Alertmanager, Prometheus) is
                 reachable from this namespace.
                 Self-resolving: a subsequent successful run clears this without
                 anyone deleting the failed Job. Suspending the CronJob also
-                silences it, matching ThresholdGovernanceStale.
+                silences it.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#171-cronjoblastrunfailed"
-              summary: "CronJob threshold-govern: most recent run failed"
+              summary: "CronJob weekly-report: most recent run failed"
 
   # ── does NOT fire: never scheduled (cold start) ─────────────────────────
   # A fresh install has no Job objects at all, so the JOB face is empty. This is
-  # exactly why this alert can be strict where ThresholdGovernanceStale had to
-  # stay lenient: it cannot false-fire on a cluster that has not run yet.
+  # exactly why this alert can be strict where a CronJob-face staleness alert
+  # has to stay lenient: it cannot false-fire on a cluster that has not run yet.
   - interval: 1m
     name: cronjob-cold-start-no-jobs-no-fire
     input_series:
@@ -236,13 +232,13 @@ tests:
   - interval: 1m
     name: cronjob-suspended-no-fire
     input_series:
-      - series: 'kube_job_status_start_time{job_name="tg-3",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_status_start_time{job_name="wr-3",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "200x30"
-      - series: 'kube_job_failed{job_name="tg-3",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_failed{job_name="wr-3",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
-      - series: 'kube_job_owner{job_name="tg-3",namespace="monitoring",owner_kind="CronJob",owner_name="threshold-govern",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_owner{job_name="wr-3",namespace="monitoring",owner_kind="CronJob",owner_name="weekly-report",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
-      - series: 'kube_cronjob_spec_suspend{cronjob="threshold-govern",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_cronjob_spec_suspend{cronjob="weekly-report",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
     alert_rule_test:
       - eval_time: 30m
@@ -274,13 +270,13 @@ tests:
   - interval: 1m
     name: failed-condition-false-no-fire
     input_series:
-      - series: 'kube_job_status_start_time{job_name="tg-4",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_status_start_time{job_name="wr-4",namespace="monitoring",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "200x30"
-      - series: 'kube_job_failed{job_name="tg-4",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_failed{job_name="wr-4",namespace="monitoring",condition="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "0x30"
-      - series: 'kube_job_failed{job_name="tg-4",namespace="monitoring",condition="false",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_failed{job_name="wr-4",namespace="monitoring",condition="false",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
-      - series: 'kube_job_owner{job_name="tg-4",namespace="monitoring",owner_kind="CronJob",owner_name="threshold-govern",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
+      - series: 'kube_job_owner{job_name="wr-4",namespace="monitoring",owner_kind="CronJob",owner_name="weekly-report",owner_is_controller="true",instance="ksm-0:8080",job="kube-state-metrics"}'
         values: "1x30"
     alert_rule_test:
       - eval_time: 30m

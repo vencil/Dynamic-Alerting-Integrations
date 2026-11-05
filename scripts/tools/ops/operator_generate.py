@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""operator-generate — Generate Kubernetes CRD YAML for Prometheus + Alertmanager.
+"""operator-generate — Generate the Prometheus Operator CRD YAML of the dynamic alerting stack.
 
-Reads rule-packs/ and conf.d/ directories, generates PrometheusRule,
-AlertmanagerConfig, and ServiceMonitor CRDs for dynamic alerting stack.
+Reads the rule-packs/ directory and generates PrometheusRule and ServiceMonitor
+CRDs. It reads no conf.d.
 
 One PrometheusRule per declared rule pack. The platform pack
 (`_lib_consumer_read.PLATFORM_PACKS`, #1595 D1b) is emitted without the rules
@@ -11,20 +11,23 @@ whose metric source a kube-prometheus-stack install does not have
 and in the PrometheusRule's `dynamic-alerting.io/operator-excluded-rules`
 annotation.
 
-One AlertmanagerConfig per tenant id the conf.d declares: the keys of each
-tenant file's `tenants:` mapping, at any depth, read through `da-guard
-parse-tree` (ADR-036) — not file names. A tenant file parse-tree cannot read,
-a tenant id declared in two files, or no usable da-guard exits 2.
+⛔ No Alertmanager routing (#3572): `generate-routes` is the one Alertmanager
+route renderer. AlertmanagerConfig CRDs cannot carry it — the Prometheus
+Operator puts their routes first with `continue: true` and a namespace
+matcher, so the platform routes (Watchdog, custom isolation, synthetic probe,
+sentinel) could never come first. `--components alertmanager` and the flags
+that only fed AlertmanagerConfig (`--config-dir`, `--api-version`,
+`--receiver-template`, `--secret-name`, `--secret-key`) are refused (rc 2)
+with how to render alertmanager.yaml and hand it to the Alertmanager as its
+configSecret (`_lib_constants.OPERATOR_ROUTING_REMEDY_*`).
 
 Usage:
     da-tools operator-generate | kubectl apply -f -   # CRDs to stdout; nothing written
     da-tools operator-generate --rule-packs-dir /path/to/rule-packs
     da-tools operator-generate --output-dir operator-crds/   # writing is opt-in (#1582)
     da-tools operator-generate --namespace monitoring --dry-run
-    da-tools operator-generate --components rules,alertmanager
+    da-tools operator-generate --components rules
     da-tools operator-generate --gitops --json
-    da-tools operator-generate --receiver-template slack --secret-name da-slack --secret-key webhook-url
-    da-tools operator-generate --receiver-template pagerduty --secret-name da-pd --secret-key routing-key
     da-tools operator-generate --selector-label release=my-prom   # match a Prometheus selector (#2075)
 """
 from __future__ import annotations
@@ -48,42 +51,52 @@ except ImportError:
     yaml = None
 
 from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
-from _lib_exitcodes import Report, arm_crash_envelope, die_caller_error  # noqa: E402
+from _lib_exitcodes import Report, die_caller_error  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 import _lib_metric_sources  # noqa: E402  (#1595 D1b: which platform rules operator mode can run)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
-from _lib_confd import TenantSetUnknown, tree_tenants  # noqa: E402  (#2906: parse-tree's tenant set)
-from _lib_parse_cache import parse_tree_error_line  # noqa: E402
-from _lib_parse_tree import ParseTreeError  # noqa: E402
-from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
+from _lib_constants import OPERATOR_ROUTING_REMEDY_EN, OPERATOR_ROUTING_REMEDY_ZH  # noqa: E402  (#3572)
 from _lib_paths import classify_path, raise_path_problems, supplied  # noqa: E402  (#3392)
 
 # ---------------------------------------------------------------------------
 # Constants and Help Text
 # ---------------------------------------------------------------------------
 
-_RECEIVER_TEMPLATES = ("slack", "pagerduty", "email", "teams", "opsgenie", "webhook")
+# #3572: what --components may name. `alertmanager` is still parsed so that
+# asking for it is refused with the remedy, not argparse's bare "invalid choice".
+_COMPONENTS = ("all", "rules", "servicemonitor")
+_REFUSED_COMPONENT = "alertmanager"
+
+# #3572: the flags that only fed AlertmanagerConfig, as (flag, dest). Still
+# parsed — hidden (`help=argparse.SUPPRESS`), `default=None`, no type /
+# choices — so that giving one, with any value, is refused naming it with the
+# remedy rather than as a bare "unrecognized arguments": the caller learns
+# where routing went. They are declared one literal `add_argument` each in
+# the parser builder (the conf.d population walks read flags statically).
+_ROUTING_FLAGS = (
+    ("--config-dir", "config_dir"),
+    ("--api-version", "api_version"),
+    ("--receiver-template", "receiver_template"),
+    ("--secret-name", "secret_name"),
+    ("--secret-key", "secret_key"),
+)
 
 _HELP = {
     "zh": {
-        "desc": "生成 Prometheus + Alertmanager CRD YAML（PrometheusRule、AlertmanagerConfig、ServiceMonitor）",
-        "rule_packs_dir": "Rule packs 目錄（預設 rule-packs/）",
-        "config_dir": (
-            "租户配置目錄（預設 conf.d/）。租戶是整棵樹各租戶檔 `tenants:` 的鍵"
-            "（經 da-guard parse-tree 讀，不是檔名）；租戶檔讀不了或同一租戶在兩個檔宣告時以 rc 2 結束"
+        "desc": (
+            "生成 Prometheus Operator CRD YAML（PrometheusRule、ServiceMonitor）。"
+            "Alertmanager 路由不在此產生：用 generate-routes 產出 alertmanager.yaml，"
+            "交給 Alertmanager 當 configSecret（#3572）"
         ),
+        "rule_packs_dir": "Rule packs 目錄（預設 rule-packs/）",
         "output_dir": "把 CRD 寫進這個目錄。不給、或帶 --dry-run，就改印到 stdout 而不寫任何檔案",
         "namespace": "目標命名空間（預設 monitoring）",
-        "api_version": "AlertmanagerConfig API 版本（預設 v1beta1）",
         "gitops": "啟用 GitOps 模式（排序鍵、無時間戳）",
         "dry_run": "列印輸出而不寫入檔案",
         "json": "以 JSON 格式輸出結果報告",
-        "components": "要生成的元件（all | rules | alertmanager | servicemonitor）",
-        "receiver_template": f"Receiver 模板類型（{' | '.join(_RECEIVER_TEMPLATES)}）",
-        "secret_name": "K8s Secret 名稱（receiver 機密引用）",
-        "secret_key": "K8s Secret 中的 key 名稱（預設依 receiver 類型自動推斷）",
+        "components": "要生成的元件（all | rules | servicemonitor；all = rules + servicemonitor）",
         "kustomize": "生成 kustomization.yaml，列出所有 CRD 檔案為資源",
         "selector_label": (
             "加在 PrometheusRule 與 ServiceMonitor 上的 label（key=value，可重複；"
@@ -92,23 +105,18 @@ _HELP = {
         ),
     },
     "en": {
-        "desc": "Generate Kubernetes CRD YAML for Prometheus + Alertmanager (PrometheusRule, AlertmanagerConfig, ServiceMonitor)",
-        "rule_packs_dir": "Rule packs directory (default rule-packs/)",
-        "config_dir": (
-            "Tenant config directory (default conf.d/). Tenants are the keys of each tenant "
-            "file's `tenants:` across the whole tree (read through da-guard parse-tree, not "
-            "file names); an unreadable tenant file or a tenant declared in two files exits 2"
+        "desc": (
+            "Generate Prometheus Operator CRD YAML (PrometheusRule, ServiceMonitor). "
+            "Alertmanager routing is not generated here: render alertmanager.yaml with "
+            "generate-routes and give it to the Alertmanager as its configSecret (#3572)"
         ),
+        "rule_packs_dir": "Rule packs directory (default rule-packs/)",
         "output_dir": "Write CRDs into this directory. Omit it, or pass --dry-run, and they go to stdout instead; nothing is written",
         "namespace": "Target namespace (default monitoring)",
-        "api_version": "AlertmanagerConfig API version (default v1beta1)",
         "gitops": "Enable GitOps mode (sorted keys, no timestamps)",
         "dry_run": "Print output instead of writing files",
         "json": "Output results as JSON report",
-        "components": "Components to generate (all | rules | alertmanager | servicemonitor)",
-        "receiver_template": f"Receiver template type ({' | '.join(_RECEIVER_TEMPLATES)})",
-        "secret_name": "K8s Secret name (for receiver credential reference)",
-        "secret_key": "Key within the K8s Secret (auto-inferred from receiver type if omitted)",
+        "components": "Components to generate (all | rules | servicemonitor; all = rules + servicemonitor)",
         "kustomize": "Generate kustomization.yaml listing all CRD files as resources",
         "selector_label": (
             "Label added to the PrometheusRule and ServiceMonitor CRDs (key=value, repeatable; "
@@ -235,291 +243,6 @@ def build_servicemonitor(
     }
 
 
-_DEFAULT_SECRET_KEYS = {
-    "slack": "webhook-url",
-    "pagerduty": "routing-key",
-    "email": "smtp-password",
-    "teams": "webhook-url",
-    "opsgenie": "api-key",
-    "webhook": "auth-token",
-}
-
-
-def _build_slack_config(tenant_name: str, secret_ref: dict) -> dict:
-    """Build Slack receiver config."""
-    return {
-        "slackConfigs": [
-            {
-                "apiURL": {"secret": secret_ref},
-                "channel": f"#alerts-{tenant_name}",
-                "title": '{{ template "slack.default.title" . }}',
-                "text": '{{ or .CommonAnnotations.summary_zh .CommonAnnotations.summary "Alert triggered" }}',
-                "sendResolved": True,
-            },
-        ],
-    }
-
-
-def _build_pagerduty_config(tenant_name: str, secret_ref: dict) -> dict:
-    """Build PagerDuty receiver config."""
-    return {
-        "pagerdutyConfigs": [
-            {
-                "routingKey": {"secret": secret_ref},
-                "description": '{{ template "pagerduty.default.description" . }}',
-                "severity": '{{ if eq .CommonLabels.severity "critical" }}critical{{ else }}warning{{ end }}',
-                "sendResolved": True,
-            },
-        ],
-    }
-
-
-def _build_email_config(tenant_name: str, secret_ref: dict) -> dict:
-    """Build Email receiver config.
-
-    NOTE: to/from/smarthost are placeholders — operators MUST override
-    via AlertmanagerConfig overlay or Helm values before production use.
-    """
-    return {
-        "emailConfigs": [
-            {
-                "to": f"alerts-{tenant_name}@example.com",
-                "from": "dynamic-alerting@example.com",
-                "smarthost": "smtp.example.com:587",
-                "authUsername": f"da-alerts-{tenant_name}",
-                "authPassword": {"secret": secret_ref},
-                "requireTLS": True,
-                "sendResolved": True,
-            },
-        ],
-    }
-
-
-def _build_teams_config(tenant_name: str, secret_ref: dict) -> dict:
-    """Build Microsoft Teams receiver config."""
-    return {
-        "webhookConfigs": [
-            {
-                "url": "http://prometheus-msteams:2000/alertmanager",
-                "httpConfig": {
-                    "authorization": {
-                        "credentials": {"secret": secret_ref},
-                    },
-                },
-                "sendResolved": True,
-            },
-        ],
-    }
-
-
-def _build_opsgenie_config(tenant_name: str, secret_ref: dict) -> dict:
-    """Build OpsGenie receiver config."""
-    return {
-        "opsgenieConfigs": [
-            {
-                "apiKey": {"secret": secret_ref},
-                "message": '{{ .CommonAnnotations.summary | default "DA Alert" }}',
-                "priority": '{{ if eq .CommonLabels.severity "critical" }}P1{{ else }}P3{{ end }}',
-                "tags": f"dynamic-alerting,{tenant_name}",
-                "sendResolved": True,
-            },
-        ],
-    }
-
-
-def _build_webhook_config(tenant_name: str, secret_ref: dict) -> dict:
-    """Build Webhook receiver config."""
-    return {
-        "webhookConfigs": [
-            {
-                "url": f"http://alert-receiver:5001/webhook/{tenant_name}",
-                "httpConfig": {
-                    "authorization": {
-                        "credentials": {"secret": secret_ref},
-                    },
-                },
-                "sendResolved": True,
-            },
-        ],
-    }
-
-
-_RECEIVER_STRATEGIES = {
-    "slack": _build_slack_config,
-    "pagerduty": _build_pagerduty_config,
-    "email": _build_email_config,
-    "teams": _build_teams_config,
-    "opsgenie": _build_opsgenie_config,
-    "webhook": _build_webhook_config,
-}
-
-
-def _build_receiver_config(
-    tenant_name: str,
-    receiver_type: str,
-    secret_name: Optional[str] = None,
-    secret_key: Optional[str] = None,
-) -> dict:
-    """Build a receiver config block for the given template type.
-
-    All credential fields use secretKeyRef — plaintext values are NEVER
-    written into the YAML output (enterprise audit requirement).
-
-    Args:
-        tenant_name: Tenant identifier
-        receiver_type: One of _RECEIVER_TEMPLATES
-        secret_name: K8s Secret name; defaults to 'da-{tenant}-{type}'
-        secret_key: Key within Secret; defaults to _DEFAULT_SECRET_KEYS[type]
-
-    Returns:
-        Receiver config dict for embedding in AlertmanagerConfig spec
-    """
-    effective_secret = secret_name or f"da-{tenant_name}-{receiver_type}"
-    effective_key = secret_key or _DEFAULT_SECRET_KEYS.get(receiver_type, "token")
-    secret_ref = {
-        "name": effective_secret,
-        "key": effective_key,
-    }
-
-    receiver: Dict[str, Any] = {"name": f"{tenant_name}-{receiver_type}"}
-
-    # Dispatch to strategy function
-    strategy = _RECEIVER_STRATEGIES.get(receiver_type)
-    if strategy:
-        receiver.update(strategy(tenant_name, secret_ref))
-    else:
-        # Fallback: generic webhook (no secret)
-        receiver["webhookConfigs"] = [
-            {"url": "http://localhost:5001/webhook"},
-        ]
-
-    return receiver
-
-
-def _build_inhibit_rules_crd(tenant_name: str) -> list:
-    """Build CRD-format inhibit rules for severity dedup + silent/maintenance modes.
-
-    Returns:
-        List of inhibitRules for AlertmanagerConfig spec
-    """
-    return [
-        # Severity dedup: critical suppresses warning
-        {
-            "sourceMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "severity", "value": "critical"},
-            ],
-            "targetMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "severity", "value": "warning"},
-            ],
-            "equal": ["alertname", "instance"],
-        },
-        # Silent mode: sentinel suppresses warning alerts
-        {
-            "sourceMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "alertname", "value": "TenantSilentWarning"},
-            ],
-            "targetMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "severity", "value": "warning"},
-            ],
-            "equal": ["tenant"],
-        },
-        # Silent mode: sentinel suppresses critical alerts
-        {
-            "sourceMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "alertname", "value": "TenantSilentCritical"},
-            ],
-            "targetMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "severity", "value": "critical"},
-            ],
-            "equal": ["tenant"],
-        },
-        # Maintenance mode: sentinel suppresses ALL severity levels
-        {
-            "sourceMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "alertname", "value": "TenantMaintenanceMode"},
-            ],
-            "targetMatch": [
-                {"name": "tenant", "value": tenant_name},
-            ],
-            "equal": ["tenant"],
-        },
-    ]
-
-
-def build_alertmanager_config(
-    tenant_name: str,
-    namespace: str,
-    api_version: str = "v1beta1",
-    receiver_template: Optional[str] = None,
-    secret_name: Optional[str] = None,
-    secret_key: Optional[str] = None,
-) -> dict:
-    """Build an AlertmanagerConfig CRD for a tenant.
-
-    Args:
-        tenant_name: Tenant identifier
-        namespace: Target Kubernetes namespace
-        api_version: AlertmanagerConfig API version (v1alpha1 or v1beta1)
-        receiver_template: Receiver type (slack/pagerduty/email/teams/opsgenie/webhook)
-        secret_name: K8s Secret name for credential reference
-        secret_key: Key within the K8s Secret
-
-    Returns:
-        AlertmanagerConfig CRD dict
-    """
-    # Build receiver
-    if receiver_template and receiver_template in _RECEIVER_TEMPLATES:
-        receiver = _build_receiver_config(
-            tenant_name, receiver_template, secret_name, secret_key,
-        )
-        receiver_name = receiver["name"]
-    else:
-        receiver_name = f"{tenant_name}-receiver"
-        receiver = {
-            "name": receiver_name,
-            "webhookConfigs": [
-                {"url": "http://localhost:5001/webhook"},
-            ],
-        }
-
-    # Build inhibit rules (severity dedup + silent/maintenance modes)
-    inhibit_rules = _build_inhibit_rules_crd(tenant_name)
-
-    return {
-        "apiVersion": f"monitoring.coreos.com/{api_version}",
-        "kind": "AlertmanagerConfig",
-        "metadata": {
-            "name": f"da-tenant-{tenant_name}",
-            "namespace": namespace,
-            "labels": {
-                "app.kubernetes.io/part-of": "dynamic-alerting",
-                "tenant": tenant_name,
-            },
-        },
-        "spec": {
-            "route": {
-                "receiver": receiver_name,
-                "groupBy": ["alertname", "instance"],
-                "groupWait": "5s",
-                "groupInterval": "5m",
-                "repeatInterval": "12h",
-                "matchers": [
-                    {"name": "tenant", "value": tenant_name},
-                ],
-            },
-            "receivers": [receiver],
-            "inhibitRules": inhibit_rules,
-        },
-    }
-
-
 # ---------------------------------------------------------------------------
 # File I/O
 # ---------------------------------------------------------------------------
@@ -554,68 +277,6 @@ def discover_rule_packs(rule_packs_dir: Path) -> List[Path]:
     return _lib_consumer_read.rule_pack_files(rule_packs_dir)
 
 
-def validate_tenant_name(name: str) -> bool:
-    """Validate tenant name against K8s label value rules (RFC 1123).
-
-    Must be lowercase alphanumeric + hyphens, max 63 chars, start/end with
-    alphanumeric.
-
-    Args:
-        name: Tenant name to validate
-
-    Returns:
-        True if valid
-    """
-    # ADR-035: the one tenant-id rule (a DNS-1123 label, full match — a
-    # stem literally named `evil\n` is refused, #1779).
-    return is_valid_tenant_id(name)
-
-
-def discover_tenant_configs(config_dir: Path) -> List[str]:
-    """The tenant ids the conf.d tree declares — one AlertmanagerConfig each.
-
-    ADR-036 step 4 (#2906): `_lib_confd.tree_tenants`, i.e. the keys of the
-    `tenants:` mapping of every tenant file `da-guard parse-tree` selects,
-    at any depth, as source text — the ids threshold-exporter serves. ⛔ Not
-    the file stem: `team-a.yaml` holding `tenants: {db-a: …}` yields `db-a`,
-    a tenant in `sub/x.yaml` is found, and a file with no `tenants:` mapping
-    yields nothing (the exporter serves no tenant from the flat format).
-
-    An id that is not a DNS-1123 label (ADR-035) is skipped with a stderr
-    warning: it cannot name a Kubernetes object.
-
-    Args:
-        config_dir: Directory containing tenant configs
-
-    Returns:
-        Sorted list of valid tenant ids
-
-    Raises:
-        FileNotFoundError: If directory does not exist
-        TenantSetUnknown: a tenant file parse-tree cannot read, or one id
-            declared by two files (rc 2 in `main`)
-        ParseTreeError: no usable `da-guard parse-tree` (rc 2 in `main`)
-    """
-    if not config_dir.is_dir():
-        raise FileNotFoundError(
-            i18n_text(
-                f"配置目錄不存在: {config_dir}",
-                f"config directory not found: {config_dir}",
-            )
-        )
-    found = tree_tenants(config_dir, validate=validate_tenant_name)
-    for tenant in found.invalid:
-        print(
-            i18n_text(
-                f"WARNING: 略過無效的租戶名稱 '{safe_label(tenant)}'（不符合 RFC 1123）",
-                f"WARNING: Skipping invalid tenant name '{safe_label(tenant)}' "
-                f"(not RFC 1123 compliant)",
-            ),
-            file=sys.stderr,
-        )
-    return found.tenants
-
-
 # ---------------------------------------------------------------------------
 # Main Logic
 # ---------------------------------------------------------------------------
@@ -623,26 +284,16 @@ def discover_tenant_configs(config_dir: Path) -> List[str]:
 
 def generate_crds(
     rule_packs_dir: Path,
-    config_dir: Path,
     namespace: str,
-    api_version: str,
     components: str,
-    receiver_template: Optional[str] = None,
-    secret_name: Optional[str] = None,
-    secret_key: Optional[str] = None,
     selector_labels: Optional[Dict[str, str]] = None,
 ) -> Dict[str, Any]:
-    """Generate all CRDs from input directories.
+    """Generate all CRDs from the rule-packs directory.
 
     Args:
         rule_packs_dir: Path to rule-packs directory
-        config_dir: Path to conf.d directory
         namespace: Target Kubernetes namespace
-        api_version: AlertmanagerConfig API version
-        components: Comma-separated components to generate
-        receiver_template: Receiver type for AlertmanagerConfig
-        secret_name: K8s Secret name for credential reference
-        secret_key: Key within the K8s Secret
+        components: One of ``_COMPONENTS`` (``all`` = rules + servicemonitor)
         selector_labels: Extra labels on the PrometheusRule / ServiceMonitor CRDs
 
     Returns:
@@ -652,7 +303,6 @@ def generate_crds(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "namespace": namespace,
         "prometheus_rules": [],
-        "alertmanager_configs": [],
         "service_monitor": None,
         # #1595 D1b: [{"pack", "rule", "reasons"}] left out of platform packs.
         "excluded_rules": [],
@@ -695,23 +345,6 @@ def generate_crds(
                         "file": rule_pack_file.name,
                         "crd": crd,
                     })
-        except FileNotFoundError as exc:
-            print(f"WARNING: {safe_label(exc)}", file=sys.stderr)
-
-    # AlertmanagerConfig CRDs
-    if components in ("all", "alertmanager"):
-        try:
-            tenants = discover_tenant_configs(config_dir)
-            for tenant in tenants:
-                crd = build_alertmanager_config(
-                    tenant, namespace, api_version,
-                    receiver_template, secret_name, secret_key,
-                )
-                result["alertmanager_configs"].append({
-                    "name": crd["metadata"]["name"],
-                    "tenant": tenant,
-                    "crd": crd,
-                })
         except FileNotFoundError as exc:
             print(f"WARNING: {safe_label(exc)}", file=sys.stderr)
 
@@ -800,12 +433,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help=i18n_text(_HELP["zh"]["rule_packs_dir"], _HELP["en"]["rule_packs_dir"]),
     )
     parser.add_argument(
-        "--config-dir",
-        type=Path,
-        default=Path("conf.d"),
-        help=i18n_text(_HELP["zh"]["config_dir"], _HELP["en"]["config_dir"]),
-    )
-    parser.add_argument(
         "--output-dir",
         type=_output_dir_arg,
         default=None,   # #1582：不給就不寫檔（寫入是 opt-in），見 main() 的分派
@@ -815,12 +442,6 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--namespace",
         default="monitoring",
         help=i18n_text(_HELP["zh"]["namespace"], _HELP["en"]["namespace"]),
-    )
-    parser.add_argument(
-        "--api-version",
-        choices=["v1alpha1", "v1beta1"],
-        default="v1beta1",
-        help=i18n_text(_HELP["zh"]["api_version"], _HELP["en"]["api_version"]),
     )
     parser.add_argument(
         "--gitops",
@@ -839,29 +460,17 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--components",
-        choices=["all", "rules", "alertmanager", "servicemonitor"],
+        choices=[*_COMPONENTS, _REFUSED_COMPONENT],
+        metavar="{" + ",".join(_COMPONENTS) + "}",
         default="all",
         help=i18n_text(_HELP["zh"]["components"], _HELP["en"]["components"]),
     )
-    parser.add_argument(
-        "--receiver-template",
-        choices=list(_RECEIVER_TEMPLATES),
-        default=None,
-        help=i18n_text(
-            _HELP["zh"]["receiver_template"],
-            _HELP["en"]["receiver_template"],
-        ),
-    )
-    parser.add_argument(
-        "--secret-name",
-        default=None,
-        help=i18n_text(_HELP["zh"]["secret_name"], _HELP["en"]["secret_name"]),
-    )
-    parser.add_argument(
-        "--secret-key",
-        default=None,
-        help=i18n_text(_HELP["zh"]["secret_key"], _HELP["en"]["secret_key"]),
-    )
+    # #3572: hidden and refused (`refuse_routing_flags`) — see _ROUTING_FLAGS.
+    parser.add_argument("--config-dir", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--api-version", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--receiver-template", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--secret-name", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--secret-key", default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--kustomize",
         action="store_true",
@@ -879,9 +488,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
 
 
 def _ordered_crds(result: Dict[str, Any]) -> List[dict]:
-    """CRD dicts in canonical emit order: PrometheusRules, AlertmanagerConfigs, ServiceMonitor."""
+    """CRD dicts in canonical emit order: PrometheusRules, ServiceMonitor."""
     crds = [item["crd"] for item in result["prometheus_rules"]]
-    crds += [item["crd"] for item in result["alertmanager_configs"]]
     if result["service_monitor"]:
         crds.append(result["service_monitor"]["crd"])
     return crds
@@ -999,14 +607,6 @@ def write_crds(
         print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
         crd_files.append(f"{name}.yaml")
 
-    for item in result["alertmanager_configs"]:
-        crd = item["crd"]
-        name = crd["metadata"]["name"]
-        output_path = output_dir / f"{name}.yaml"
-        write_yaml_crd(output_path, crd, gitops=gitops, flag="--output-dir")
-        print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
-        crd_files.append(f"{name}.yaml")
-
     if result["service_monitor"]:
         crd = result["service_monitor"]["crd"]
         name = crd["metadata"]["name"]
@@ -1037,13 +637,11 @@ def build_summary(result: Dict[str, Any], kustomize: bool) -> Dict[str, int]:
     """Count generated artefacts — shared by the --json envelope and the stderr line."""
     base_total = (
         len(result["prometheus_rules"]) +
-        len(result["alertmanager_configs"]) +
         (1 if result["service_monitor"] else 0)
     )
     kustomize_count = 1 if kustomize else 0
     return {
         "prometheus_rules": len(result["prometheus_rules"]),
-        "alertmanager_configs": len(result["alertmanager_configs"]),
         "service_monitor": 1 if result["service_monitor"] else 0,
         "kustomization": kustomize_count,
         "total": base_total + kustomize_count,
@@ -1070,14 +668,12 @@ def _summary_message(summary: Dict[str, int], kustomize: bool) -> str:
         msg_zh = (
             f"\n✓ 已產出 {summary['total']} 個檔案: "
             f"{summary['prometheus_rules']} PrometheusRules, "
-            f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
             f"{summary['service_monitor']} ServiceMonitor, "
             f"1 kustomization.yaml"
         )
         msg_en = (
             f"\n✓ Generated {summary['total']} files: "
             f"{summary['prometheus_rules']} PrometheusRules, "
-            f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
             f"{summary['service_monitor']} ServiceMonitor, "
             f"1 kustomization.yaml"
         )
@@ -1085,28 +681,49 @@ def _summary_message(summary: Dict[str, int], kustomize: bool) -> str:
         msg_zh = (
             f"\n✓ 已產出 {summary['total']} 個 CRD: "
             f"{summary['prometheus_rules']} PrometheusRules, "
-            f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
             f"{summary['service_monitor']} ServiceMonitor"
         )
         msg_en = (
             f"\n✓ Generated {summary['total']} CRDs: "
             f"{summary['prometheus_rules']} PrometheusRules, "
-            f"{summary['alertmanager_configs']} AlertmanagerConfigs, "
             f"{summary['service_monitor']} ServiceMonitor"
         )
     return i18n_text(msg_zh, msg_en)
+
+
+def refuse_routing_flags(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """#3572: a flag that only fed AlertmanagerConfig is a caller error (rc 2,
+    nothing on stdout, nothing written) that names it and says how routing
+    is rendered now. It counts when it was given (`supplied`), whatever its
+    value: an explicit `--config-dir conf.d` (the old default) is refused
+    like any other."""
+    given = [flag for flag, dest in _ROUTING_FLAGS if supplied(args, parser, dest)]
+    if given:
+        die_caller_error(
+            f"ERROR: {', '.join(given)}: "
+            f"{i18n_text(OPERATOR_ROUTING_REMEDY_ZH, OPERATOR_ROUTING_REMEDY_EN)}",
+            reason="routing_not_generated")
+
+
+def refuse_routing_component(args: argparse.Namespace) -> None:
+    """#3572: `--components alertmanager` is a caller error (rc 2, nothing on
+    stdout, nothing written) saying how routing is rendered now."""
+    if args.components == _REFUSED_COMPONENT:
+        die_caller_error(
+            f"ERROR: --components {_REFUSED_COMPONENT}: "
+            f"{i18n_text(OPERATOR_ROUTING_REMEDY_ZH, OPERATOR_ROUTING_REMEDY_EN)}",
+            reason="routing_not_generated")
 
 
 def main():
     """CLI entry point (thin orchestration: parse → validate → generate → emit → exit)."""
     parser = build_arg_parser()
     args = parser.parse_args()
-    if args.json:
-        arm_crash_envelope()  # #3094: a crash in --json mode still prints one envelope
+    refuse_routing_flags(args, parser)
+    refuse_routing_component(args)
 
     # Resolve paths relative to current directory
     rule_packs_dir = args.rule_packs_dir.resolve()
-    config_dir = args.config_dir.resolve()
     # #1582：沒給 --output-dir 就沒有寫入目標。⛔ 不要在這裡塞回一個預設值——
     # 那正是本票的缺陷形狀（輸入被重導、輸出沒被重導，仍寫進呼叫目錄）。
     output_dir = args.output_dir.resolve() if args.output_dir is not None else None
@@ -1123,53 +740,30 @@ def main():
     except (AttributeError, ValueError, OSError):  # 非 TextIOWrapper 的 stdout
         pass
 
-    # Validate: --secret-name requires --receiver-template
-    if args.secret_name and not args.receiver_template:
-        parser.error(
-            i18n_text(
-                "--secret-name 需搭配 --receiver-template 使用",
-                "--secret-name requires --receiver-template",
-            )
-        )
-
     # #3392: a directory the caller gave that is not there or not a
     # directory is a caller error, named before anything is generated or
-    # written — it was a WARNING and a CRD set without its PrometheusRules /
-    # AlertmanagerConfigs, rc 0. Only the directories the chosen
-    # --components read; a default nobody gave keeps the WARNING below.
+    # written — it was a WARNING and a CRD set without its PrometheusRules,
+    # rc 0. Only when the chosen --components reads it; a default nobody
+    # gave keeps the WARNING below.
     raise_path_problems([
-        classify_path(getattr(args, dest), "dir", lang=_LANG, flag=flag)
-        for flag, dest, components in (("--rule-packs-dir", "rule_packs_dir", ("all", "rules")),
-                                       ("--config-dir", "config_dir", ("all", "alertmanager")))
-        if args.components in components and supplied(args, parser, dest)])
+        classify_path(args.rule_packs_dir, "dir", lang=_LANG, flag="--rule-packs-dir")
+        if args.components in ("all", "rules") and supplied(args, parser, "rule_packs_dir")
+        else None])
 
     # Generate CRDs
     try:
         result = generate_crds(
             rule_packs_dir,
-            config_dir,
             args.namespace,
-            args.api_version,
             args.components,
-            receiver_template=args.receiver_template,
-            secret_name=args.secret_name,
-            secret_key=args.secret_key,
             selector_labels=dict(args.selector_label),
         )
-    except ParseTreeError as exc:
-        # #2906: no usable `da-guard parse-tree` — the tenant set was not read.
-        # Same reason as migrate_to_operator, which reads the same tenant set.
-        die_caller_error(parse_tree_error_line(exc), reason="tenant_set_unknown")
-    except TenantSetUnknown as exc:
-        # An unreadable tenant file or a duplicate id: the set cannot be
-        # answered, named — the reason migrate_to_operator gives too.
-        die_caller_error(f"ERROR: {safe_label(exc)}", reason="tenant_set_unknown")
     except _lib_consumer_read.ConsumerReadError as exc:
         # #3206: a rule pack Prometheus' rule loader refuses, or no da-read.
         die_caller_error(f"ERROR: rule packs: {safe_label(_lib_consumer_read.error_text(exc))}",
                          reason="rule_packs_unreadable")
     except Exception as exc:  # noqa: BLE001 — the tool's own "no result"
-        # #3115: through die_caller_error, so --json gets its one envelope.
+        # rc 2 and one line; nothing on stdout, --json or not (#3558).
         die_caller_error(f"ERROR: {safe_label(exc)}", reason="generate_failed")
 
     # Emit CRDs. No --output-dir (or --dry-run) prints YAML to stdout; the write path writes files and

@@ -28,8 +28,8 @@ since #3393; before it, 1 and 2 were swapped here):
          because another tenant is declared twice (#1549; named on stderr
          and in the entry's `detail`); also an uncaught exception
          (traceback + one `ERROR: unexpected internal error` line) and a
-         stdout that cannot be written. With --json, an exit 2 that printed
-         no document of its own prints the shared `caller_error` envelope.
+         stdout that cannot be written. With --json, an exit 2 that has no
+         document of its own leaves stdout empty (#3558: no envelope).
 
 Design note: this tool reuses describe_tenant.ConfDScanner, whose every
 field — the inheritance chain, source_hash and merged_hash — is
@@ -56,9 +56,7 @@ sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report, arm_crash_envelope,
-    exit_caller_error,
-)
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report, exit_caller_error)
 
 # Exit-code contract: the #452 0/1/2 SSOT (scripts/tools/_lib_exitcodes.py).
 # Until #3393 this tool inverted 1 and 2; the codes are load-bearing in a
@@ -247,10 +245,6 @@ def main() -> int:
         help="Emit JSON instead of human-readable output.",
     )
     args = parser.parse_args()
-    if args.json:
-        # #3393: every exit 2 below that prints no document of its own
-        # prints the one `caller_error` envelope, as in every --json tool.
-        arm_crash_envelope()
 
     if not args.all and not args.tenant_id:
         print("error: tenant_id is required (or pass --all)", file=sys.stderr)
@@ -280,8 +274,8 @@ def main() -> int:
         # reported for any tenant. Named on stderr as an input error (exit
         # 2), not a traceback — and not exit 1, which the rollback checklist
         # reads as "hash mismatch".
-        # With --json, the envelope names the head line (not da-guard's
-        # last one) under the shared `served_values_unavailable` reason.
+        # The head line goes first (not da-guard's last one); stdout stays
+        # empty under --json too (#3558).
         lines = exc.lines or [str(exc)]
         print(f"error: {lines[0]}", file=sys.stderr)
         for line in lines[1:]:

@@ -90,7 +90,8 @@ FORGE_E2E_SCRIPT = "scripts/ops/forge_e2e_run.sh"
 
 
 # #1354 option B: the built-in managers the owner approved, on top of custom.regex.
-BUILTIN_MANAGERS = ("github-actions", "dockerfile", "devcontainer")
+# `pyenv` reads .python-version, the Python SSOT (test_toolchain_pin_parity.py).
+BUILTIN_MANAGERS = ("github-actions", "dockerfile", "devcontainer", "pyenv")
 ENABLED_MANAGERS = ("custom.regex", *BUILTIN_MANAGERS)
 
 
@@ -453,7 +454,6 @@ _MUST_BE_DISABLED = [
     ("github-actions", "sigstore/cosign", "github-releases", "uses-with", "patch"),
     # language versions inside the dev container features, bound to CI / go.mod.
     ("devcontainer", "node", "node-version", None, "major"),
-    ("devcontainer", "python", "python-version", None, "minor"),
     ("devcontainer", "go", "golang-version", None, "patch"),
 ]
 
@@ -465,6 +465,31 @@ def test_ci_bound_pins_are_not_renovates(manager, dep, datasource, dep_type, upd
     assert got["enabled"] is False, (
         f"{manager} would open a PR for {dep} ({dep_type}, {update}); its other side "
         f"is not a Renovate dep, so the bump is one-sided and a parity guard goes red.")
+
+
+# The three places Renovate can see the Python version. .python-version is the
+# source (pyenv manager, docker datasource); the Dockerfile FROMs and the dev
+# container feature are literals the parity test binds to it.
+_PYTHON_SITES = [
+    ("pyenv", "python", "docker", None),
+    ("dockerfile", "python", "docker", "final"),
+    ("devcontainer", "python", "python-version", None),
+]
+
+
+@pytest.mark.parametrize("update", ["patch", "minor"])
+def test_python_moves_as_one_group_across_every_manager(update):
+    """A bump that moves one copy of the Python version and not the others is
+    red by construction (test_toolchain_pin_parity.py) — so every manager that
+    sees `python` must land it in the SAME PR, and minors still wait for a tick."""
+    cfg = _load_config()
+    got = [_resolve(cfg, manager=m, dep=d, datasource=ds, dep_type=t, update=update)
+           for m, d, ds, t in _PYTHON_SITES]
+    assert all(g["enabled"] is True for g in got), got
+    groups = {g.get("groupName") for g in got}
+    assert len(groups) == 1 and None not in groups, f"python splits across groups: {groups}"
+    assert all(g["pinDigests"] is False for g in got), got
+    assert all(bool(g.get("dependencyDashboardApproval")) is (update == "minor") for g in got), got
 
 
 @pytest.mark.parametrize("manager,dep,datasource,dep_type", [

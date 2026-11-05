@@ -111,15 +111,7 @@ func main() {
 	gitDir := flag.String("git-dir", envOrDefault("TA_GIT_DIR", ""),
 		"Git repository root for commit-on-write (defaults to config-dir)")
 	rbacPath := flag.String("rbac", envNonEmptyOrDefault("TA_RBAC_PATH", ""),
-		"Path to _rbac.yaml (omit it and TA_RBAC_PATH for open-read mode; an empty value is refused, #2491)")
-	rbacEmptyOpen := flag.Bool("rbac-empty-open", envBool("TA_RBAC_EMPTY_OPEN"),
-		"MED-8 escape hatch: allow open-read when a --rbac path parses to zero groups (default false = fail closed)")
-	rbacMetadataScopeEnforce := flag.Bool("rbac-metadata-scope-enforce", envBool("TA_RBAC_METADATA_SCOPE_ENFORCE"),
-		"ADR-027/LD-6 P1: DENY an unlabeled tenant on an env/domain-restricted rule (fail-closed). Default false = shadow (still allow, but count tenant_api_scope_would_deny_total{axis=\"metadata\"}); flip only after that counter stops incrementing over the soak window (increase()==0 — it is a monotonic counter, not a gauge)")
-	rbacMetadataWriteScopeEnforce := flag.Bool("rbac-metadata-write-scope-enforce", envBool("TA_RBAC_METADATA_WRITE_SCOPE_ENFORCE"),
-		"#1597: bind a rule's environments[]/domains[] on the WRITE plane. Before this the fields constrained only list visibility, so a rule reading environments:[production] still permitted writes to every tenant it matched. Default false = shadow (writes still allowed, but counted as tenant_api_scope_would_deny_total{axis=\"metadata_write\"}); flip only after that counter shows increase()==0 over the soak window. SEPARATE from --rbac-metadata-scope-enforce on purpose: that flag governs an axis the list plane already binds, so reusing it would tighten writes the moment a list-plane-soaked deployment upgraded.")
-	rbacOrgScopeEnforce := flag.Bool("rbac-org-scope-enforce", envBool("TA_RBAC_ORG_SCOPE_ENFORCE"),
-		"ADR-027/LD-6 P4: fail-closed org-scope axis — an org-scoped rule DENIES an unlabeled tenant (no orgs in _tenant_orgs.yaml) instead of shadow-allowing it. ONE flag flips both list visibility (ScopeAllowed) and write authorization (AllowedInOrg) atomically. Default false = shadow (allow, but count tenant_api_scope_would_deny_total{axis=\"org\"} and {axis=\"org_write\"}); flip only after BOTH axes show increase()==0 over the soak window")
+		"Path to _rbac.yaml. Without one — or with one that has no rules — every request is denied (ADR-027 §7: no open mode). An empty value is refused (#2491)")
 	// Shared with `tenant-api config check` (ADR-036 §12).
 	identityClaimHeaders := registerIdentityClaimFlag(flag.CommandLine)
 	listenAddr := flag.String("addr", envOrDefault("TA_ADDR", ":8080"),
@@ -322,52 +314,15 @@ func main() {
 	if err != nil {
 		log.Fatalf("FATAL: rbac init: %v", err)
 	}
-	// MED-8: a configured --rbac path fails closed on an empty policy by
-	// default. --rbac-empty-open restores the legacy open-read behavior.
-	if *rbacEmptyOpen {
-		rbacMgr.AllowOpenReadOnEmpty()
-		log.Printf("WARN: --rbac-empty-open set: an empty _rbac.yaml grants open read to all authenticated identities (MED-8 fail-closed disabled)")
-	}
-	if *rbacPath == "" {
-		log.Printf("WARN: no --rbac path configured: running in open-read mode (all authenticated identities have read access)")
+	if len(rbacMgr.Get().Groups) == 0 {
+		log.Printf("WARN: _rbac.yaml is absent or has no rules: every request is denied (ADR-027 §7: there is no open mode)")
 	}
 
-	// ADR-027 / LD-6 P1: metadata (env/domain) scope filter fail-mode. The
-	// would-deny recorder is wired unconditionally so tenant_api_scope_would_
-	// deny_total is always present (0-series). Default is SHADOW — an unlabeled
-	// tenant on a restricted rule still passes (byte-identical to the legacy
-	// fail-open) but is counted. --rbac-metadata-scope-enforce flips to
-	// fail-closed AFTER the counter stops incrementing over the soak window
-	// (it is a monotonic counter: the flip signal is a zero rate/increase, not
-	// an absolute zero value).
-	rbacMgr.SetScopeAuditor(handler.NewScopeWouldDenyRecorder())
-	if *rbacMetadataScopeEnforce {
-		rbacMgr.EnableMetadataScopeEnforce()
-		log.Printf("INFO: --rbac-metadata-scope-enforce set: unlabeled tenants on env/domain-restricted rules are DENIED (metadata scope fail-closed)")
-	} else {
-		log.Printf("INFO: metadata scope filter in SHADOW mode: unlabeled tenants still pass; watch increase(tenant_api_scope_would_deny_total{axis=\"metadata\"}[<soak-window>]) and flip --rbac-metadata-scope-enforce once it stays 0 across the window (monotonic counter — its rate, not its value, is the signal)")
-	}
-
-	// #1597: the WRITE plane's metadata axis. Its own flag, its own soak series
-	// — see the flag's help text for why it is not --rbac-metadata-scope-enforce.
-	if *rbacMetadataWriteScopeEnforce {
-		rbacMgr.EnableMetadataWriteScopeEnforce()
-		log.Printf("INFO: --rbac-metadata-write-scope-enforce set: a rule's environments[]/domains[] now DENY writes to tenants outside them (previously these fields constrained list visibility only)")
-	} else {
-		log.Printf("INFO: metadata scope axis on the WRITE plane in SHADOW mode: environments[]/domains[] do not yet restrict writes; watch increase(tenant_api_scope_would_deny_total{axis=\"metadata_write\"}[<soak-window>]) — a non-zero rate names exactly the writes this flip would start rejecting — and flip --rbac-metadata-write-scope-enforce once it stays 0 across the window")
-	}
-
-	// ADR-027 / LD-6 P4: org-scope axis fail-mode. ONE flag governs the
-	// list-visibility side (ScopeAllowed, P4a), the write-authorization side
-	// (AllowedInOrg, P4b) AND read-by-id (AllowedInOrgRead, P4c) — they flip to
-	// enforce atomically so there is no split-brain window where a tenant is
-	// hidden from lists but still readable or writable (or any other combination).
-	if *rbacOrgScopeEnforce {
-		rbacMgr.EnableOrgScopeEnforce()
-		log.Printf("INFO: --rbac-org-scope-enforce set: org-scoped rules are fail-closed — an unlabeled tenant (no orgs in _tenant_orgs.yaml) is DENIED on list visibility, write authorization AND read-by-id")
-	} else {
-		log.Printf("INFO: org scope axis in SHADOW mode: unlabeled tenants still pass; flip --rbac-org-scope-enforce only after increase(tenant_api_scope_would_deny_total{axis=\"org\"}[<soak-window>]) AND {axis=\"org_write\"} BOTH stay 0 across the window (monotonic counters — the rate is the signal; axis=\"org\" now covers list AND read-by-id/collection reads, P4c closed the read IDOR #1040), plus a scan for still-unlabeled tenants (the counters are traffic-driven). A labeled tenant is already org-enforced in shadow on every plane — verify the org claim reaches tenant-api through every PEP (incl. recipe-preview) before labeling")
-	}
+	// ADR-027 §7: every scope axis (metadata read, metadata write, org) is
+	// enforced; there is no shadow mode. The recorder is wired unconditionally
+	// so tenant_api_scope_denied_total is always present (0-series) and counts
+	// decisions a scope axis denied.
+	rbacMgr.SetScopeAuditor(handler.NewScopeDeniedRecorder())
 
 	// ADR-027 PR-1b-i: machine-identity audit side-channel. Built here so an
 	// in-cluster-config failure is fatal (MED-7 fail-loud) rather than a
@@ -503,8 +458,8 @@ func main() {
 	// default (no tenant has any org — org-scope simply grants nothing extra).
 	// The axis covers list visibility (P4a, ScopeAllowed), per-tenant write
 	// authorization (P4b, AllowedInOrg via handler.OrgAllowed) and read-by-id
-	// (P4c, AllowedInOrgRead via the resolver wired below); its fail-mode is
-	// --rbac-org-scope-enforce above (default shadow).
+	// (P4c, AllowedInOrgRead via the resolver wired below); an org-scoped rule
+	// grants nothing on an unlabeled tenant (ADR-027 §7).
 	tenantOrgMgr, err := tenantorg.NewManager(*configDir)
 	if err != nil {
 		log.Fatalf("FATAL: tenantorg init: %v", err)
@@ -513,9 +468,6 @@ func main() {
 	// ADR-027 / LD-6 P4c: wire the tenant→orgs resolver into the RBAC manager so
 	// the read-by-id middleware gate can evaluate the org axis (rbac does not
 	// import tenantorg — the resolver is a func value, mirroring SetScopeAuditor).
-	// Read-by-id thereby flips to enforce atomically with list + write under the
-	// single --rbac-org-scope-enforce flag; in SHADOW (default) it only records
-	// the read/visibility would-deny on axis="org".
 	rbacMgr.SetOrgResolver(func(tid string) []string {
 		orgs, _ := tenantOrgMgr.OrgsForTenant(tid)
 		return orgs
@@ -613,14 +565,7 @@ func main() {
 			"store_configmap", ff.ConfigMapName, "store_namespace", federationNS,
 			"account_registry", account.RegistryFileName)
 		if len(rbacMgr.Get().Groups) == 0 {
-			if rbacMgr.FailClosedOnEmpty() {
-				// MED-8: a configured --rbac path resolved to zero groups → ALL
-				// access is denied (not just federation); "supply --rbac" would
-				// be wrong advice since a path is already set.
-				slog.Warn("federation endpoint enabled but RBAC fails closed on an empty configured policy — ALL access is denied; fix the _rbac.yaml referenced by --rbac")
-			} else {
-				slog.Warn("federation endpoint enabled but RBAC is in open mode — every token issuance will be denied (admin permission required); supply --rbac")
-			}
+			slog.Warn("federation endpoint enabled but _rbac.yaml has no rules — ALL access is denied, including token issuance; fix the _rbac.yaml referenced by --rbac")
 		}
 	}
 
@@ -928,7 +873,7 @@ var errEnvSetButEmpty = errors.New("set but empty")
 // Unset keeps def. Set to "" or whitespace only is rejected rather than read
 // as "unset": an unrendered Helm/Kustomize/Compose variable produces exactly
 // that, and for the values this guards, def is the more open side — direct
-// write (no review) or open-read RBAC. Landing there from an empty value is
+// write (no review). Landing there from an empty value is
 // indistinguishable from choosing it (ADR-034's failure shape). envBool may
 // treat whitespace as unset because every flag it serves defaults to the
 // fail-closed false; these do not.
@@ -957,12 +902,11 @@ func envNonEmptyOrDefault(key, def string) string {
 }
 
 // errRBACFlagEmpty is checkRBACFlag's rejection.
-var errRBACFlagEmpty = errors.New("--rbac was given an empty path; omit --rbac and TA_RBAC_PATH entirely for open-read mode")
+var errRBACFlagEmpty = errors.New("--rbac was given an empty path; give it the path to _rbac.yaml (without one every request is denied)")
 
 // checkRBACFlag rejects --rbac passed explicitly with an empty or whitespace
-// value (#2491, R3). open-read is reached only by configuring no RBAC path at
-// all; an explicit empty value is the same accident envNonEmptyOrDefault
-// rejects for TA_RBAC_PATH.
+// value (#2491, R3): an explicit empty value is the same accident
+// envNonEmptyOrDefault rejects for TA_RBAC_PATH.
 func checkRBACFlag(explicit bool, v string) error {
 	if explicit && strings.TrimSpace(v) == "" {
 		return errRBACFlagEmpty

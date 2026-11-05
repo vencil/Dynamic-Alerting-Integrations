@@ -88,7 +88,7 @@ da-tools blind-spot \
   > blind-spot-report.json
 ```
 
-**Expected output**: `blind-spot-report.json` is an array with one element per DB type inferred from scrape job names: `live_instances` (instances in the cluster), `monitored_tenants` (tenants already monitoring it), and `status`. No tenant config exists yet (`--config-dir /dev/null`; the `WARN: config-dir not found` line on stderr is expected), so every recognised DB type is `blind_spot`; instances whose job name maps to no DB type land in `unrecognized`. This list is the candidate pool when picking the pilot domain in Step 0.4; score the matrix's `rule_pack_coverage` by checking these DB types against the [Rule Packs README](../rule-packs/README.md). When Prometheus is unreachable (or answers in the wrong shape) there is no blind-spot list: `blind-spot-report.json` holds a `{"status": "caller_error", "reason": "prometheus_query_error", …}` envelope, stderr one `ERROR: Prometheus query failed: …` line, and the exit code is 2 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133); it used to output `[]` at exit code 0).
+**Expected output**: `blind-spot-report.json` is an array with one element per DB type inferred from scrape job names: `live_instances` (instances in the cluster), `monitored_tenants` (tenants already monitoring it), and `status`. No tenant config exists yet (`--config-dir /dev/null`; the `WARN: config-dir not found` line on stderr is expected), so every recognised DB type is `blind_spot`; instances whose job name maps to no DB type land in `unrecognized`. This list is the candidate pool when picking the pilot domain in Step 0.4; score the matrix's `rule_pack_coverage` by checking these DB types against the [Rule Packs README](../rule-packs/README.md). When Prometheus is unreachable (or answers in the wrong shape) there is no blind-spot list: `blind-spot-report.json` is empty (since [#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558); read the exit code first), stderr one `ERROR: Prometheus query failed: …` line, and the exit code is 2 ([#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133); it used to output `[]` at exit code 0).
 
 ### Step 0.4: Decision Matrix — Select Pilot Domain
 
@@ -248,7 +248,7 @@ kubectl delete -f k8s/03-monitoring/configmap-rules-redis.yaml
 
 **Goal**: Run new and old alerts simultaneously, compare quality. Collect data over 1-2 weeks, verify Dynamic Alerting alert quality equals or exceeds existing system.
 
-### Step 2.1: Generate Alertmanager Routing Fragment
+### Step 2.1: Generate Alertmanager Routing
 
 First add `_routing` to the tenant file (full receiver schema: [BYO Alertmanager Integration Guide](../integration/byo-alertmanager-integration.en.md)):
 
@@ -267,81 +267,81 @@ tenants:
       repeat_interval: 4h
 ```
 
-Then generate the routing fragment:
+Then preview the result merged into the legacy config (nothing written):
 
 ```bash
 da-tools generate-routes \
   --config-dir conf.d/ \
-  -o alertmanager-fragment.yaml
+  --output-alertmanager --base-config alertmanager.yaml --dry-run
 ```
 
-**Expected output**: stderr prints `Found 1 tenant(s) with routing config: redis-prod` and `Written to alertmanager-fragment.yaml (1 routes, 1 receivers, 1 inhibit rules)`. The fragment's route matches `tenant="redis-prod"` and sends to the `tenant-redis-prod` receiver, plus one inhibit rule where the tenant's critical suppresses its warning. The tool always generates **every** tenant in conf.d that has `_routing`; generating a single tenant is not implemented yet, and a tenant without `_routing` gets no route.
+**Expected output**: `Found 1 tenant(s) with routing config: redis-prod`, then the complete merged `alertmanager.yml`. The generated route matches `tenant="redis-prod"` and sends to the `tenant-redis-prod` receiver, plus one inhibit rule where the tenant's critical suppresses its warning. The tool always generates **every** tenant in conf.d that has `_routing`; generating a single tenant is not implemented yet, and a tenant without `_routing` gets no route.
+
+The generator no longer emits a fragment to paste in yourself: a run without a mode flag is exit 2, and the output is always the complete merged config ([#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)). Your legacy config is the source (`--base-config`) and the merged result a separate output: your routes, receivers and inhibit rules in the legacy config are kept as written and the generated ones added; the output cannot be used as a base again. ⚠️ The v2.9.0 image has no `--output-alertmanager`, and its `--apply` and `--output-configmap --base-config` replace `route.routes` whole (every legacy sub-route disappears), so do not merge with that image during dual-run <!-- image-caveat: v2.9.0 -->
 
 ### Step 2.2: Prepare Dual-Run Configuration
 
-⚠️ Do not merge into the legacy Alertmanager config with `generate-routes --apply` or `--output-configmap --base-config`: both modes **replace** the whole `route.routes` with the generated routes, so every legacy sub-route disappears. Merge by hand during dual-run:
+The merge always orders `route.routes` as: the four platform routes → **the legacy config's own sub-routes, in their order** → the tenant routes. So the legacy sub-routes come before `tenant-redis-prod`: the legacy `severity="critical"` sub-route has no `continue` and takes redis-prod's criticals first, so the new channel misses them; and a warning no legacy sub-route claims falls to the tenant route, so `legacy-default` misses it. For dual-run, where both sides receive, make one change to the legacy config first — wrap its existing sub-routes in a parent route with no matchers, `continue: true`, and the original root receiver:
 
 ```bash
 cp alertmanager.yaml alertmanager.yaml.backup-phase1
 ```
 
-Put the fragment's route **first** in `route.routes` and add `continue: true` by hand (the tool does not emit it), add the fragment's receiver and inhibit rule, and finish `route.routes` with a catch-all route that has no matchers and points back at the original root receiver:
-
 ```yaml
-# alertmanager.yaml (during dual-run)
+# alertmanager.yaml (the dual-run base: only the route.routes level changed)
 route:
   receiver: legacy-default
   group_by: [alertname]
   routes:
-  - matchers: ['tenant="redis-prod"']    # the route generate-routes produced
-    receiver: tenant-redis-prod
-    group_wait: 30s
-    group_interval: 5m
-    repeat_interval: 4h
-    continue: true                       # added by hand
-  - matchers: ['severity="critical"']    # legacy sub-route, unchanged
-    receiver: legacy-pager
-  - receiver: legacy-default             # added by hand: catch-all
+  - receiver: legacy-default             # added by hand: parent of the legacy sub-routes
+    continue: true                       # added by hand: go on to the tenant routes afterwards
+    routes:
+    - matchers: ['severity="critical"']  # legacy sub-route, unchanged
+      receiver: legacy-pager
 receivers:
 - name: legacy-default
   webhook_configs: [{url: 'http://legacy.example/default'}]
 - name: legacy-pager
   webhook_configs: [{url: 'http://legacy.example/pager'}]
-- name: tenant-redis-prod
-  slack_configs:
-  - api_url: https://hooks.slack.com/services/T000/B000/XXXX
-    channel: '#da-pilot'
-inhibit_rules:
-- source_matchers: ['severity="critical"', 'metric_group=~".+"', 'tenant="redis-prod"']
-  target_matchers: ['severity="warning"', 'metric_group=~".+"', 'tenant="redis-prod"']
-  equal: [metric_group]
 ```
 
-Why both manual additions matter:
+Within the legacy config this parent behaves as before: when a sub-route matches, the sub-route delivers; when none does, the parent itself delivers to `legacy-default` (what falling back to the root receiver used to do). The only difference is `continue: true`: after delivering, matching goes on to the later routes, so the tenant route receives the alert too.
 
-- Without `continue: true`, every alert with `tenant="redis-prod"` goes only to the new channel. Legacy alerts carry `tenant` after Step 1.4, so legacy critical alerts would vanish from `legacy-pager`.
-- With `continue` but no catch-all, legacy warning alerts still leave `legacy-default`: once any sub-route matches, Alertmanager no longer falls back to the root receiver.
+Then merge the tenant routing in:
+
+```bash
+da-tools generate-routes --config-dir conf.d/ \
+  --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
+```
+
+The resulting `route.routes` is the four platform routes, the parent route above, then `tenant="redis-prod"` → `tenant-redis-prod`; receivers gain `tenant-redis-prod` and the four platform receivers, and inhibit_rules gains redis-prod's critical-suppresses-warning rule. The legacy receivers and inhibit rules stay as written. `alertmanager.yaml` is the source and `alertmanager.merged.yaml` the output; keep them apart: when conf.d changes later, run the command above again on `alertmanager.yaml` (the source). Do not pass `alertmanager.merged.yaml` as `--base-config` — its first line marks it as an output, and it is refused (exit 1), and `-o` naming the source itself is refused too (exit 2). To change the legacy config, edit `alertmanager.yaml` as well and regenerate. ⚠️ While the platform's `watchdog-heartbeat` receiver is wired to nothing, a `watchdog_undelivered` WARN is printed (under `--strict`, exit 1 and nothing written); during dual-run you can accept that WARN, and wire it in the base per [Alerting-plane self-liveness](../integration/alerting-plane-self-liveness.en.md) before the cutover.
 
 After merging, check the syntax, then test each kind of alert:
 
 ```bash
-amtool check-config alertmanager.yaml
-amtool config routes test --config.file=alertmanager.yaml \
+amtool check-config alertmanager.merged.yaml
+amtool config routes test --config.file=alertmanager.merged.yaml \
   alertname=RedisHighMemory tenant=redis-prod severity=warning
-amtool config routes test --config.file=alertmanager.yaml \
+amtool config routes test --config.file=alertmanager.merged.yaml \
   alertname=RedisDownLegacy tenant=redis-prod severity=critical
 ```
 
-**Expected**: the first test prints `tenant-redis-prod,legacy-default`, the second `tenant-redis-prod,legacy-pager`. During dual-run both channels receive the tenant's old and new alerts; tell the Rule Pack ones apart by alertname (list: [Rule Pack Alert Reference](../rule-packs/ALERT-REFERENCE.en.md)).
+**Expected**: the first test prints `legacy-default,tenant-redis-prod`, the second `legacy-pager,tenant-redis-prod`; legacy alerts without `tenant="redis-prod"` still reach only `legacy-default` or `legacy-pager`. During dual-run both channels receive the tenant's old and new alerts; tell the Rule Pack ones apart by alertname (list: [Rule Pack Alert Reference](../rule-packs/ALERT-REFERENCE.en.md)).
 
 ### Step 2.3: Preflight Check
 
 ```bash
 da-tools generate-routes --config-dir conf.d/ --validate
-amtool check-config alertmanager.yaml
+amtool check-config alertmanager.merged.yaml
 ```
 
 **Expected**: `--validate` checks the tenants' `_routing` (receiver shape, timing guardrails, routing-profile references and domain policies) and exits 0 when there are no errors; `amtool check-config` validates the whole merged config. `da-tools shadow-verify preflight` belongs to the migrate / shadow flow (it checks the prefix mapping, `migration_status: shadow` rules and the Alertmanager shadow intercept) and does not apply here.
+
+Then deploy `alertmanager.merged.yaml` (update the ConfigMap or config file as your deployment requires) and reload; until it is loaded, Alertmanager keeps running the legacy config and the tenant channel receives nothing:
+
+```bash
+curl -X POST http://localhost:9093/-/reload
+```
 
 ### Step 2.4: Monitor Dual-Run (1-2 weeks)
 
@@ -399,18 +399,36 @@ cp alertmanager.yaml alertmanager.yaml.backup-phase3
 #    expr and labels included), then check the format
 promtool check rules prometheus-rules.yaml
 
-# 2. Alertmanager: drop continue: true from the pilot tenant's route, then test
-amtool config routes test --config.file=alertmanager.yaml \
+# 2. Alertmanager: in the source alertmanager.yaml, stop Step 2.2's parent route
+#    from matching the pilot tenant (one matchers line, below), then regenerate
+#    from the source and test
+da-tools generate-routes --config-dir conf.d/ \
+  --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
+amtool config routes test --config.file=alertmanager.merged.yaml \
   alertname=RedisHighMemory tenant=redis-prod severity=warning
+amtool config routes test --config.file=alertmanager.merged.yaml \
+  alertname=RedisDownLegacy tenant=redis-prod severity=critical
+amtool config routes test --config.file=alertmanager.merged.yaml \
+  alertname=OtherDown severity=critical
 ```
 
-**Expected**: `promtool` reports `SUCCESS`; `amtool` prints only `tenant-redis-prod`.
+```yaml
+# alertmanager.yaml (the source): only Step 2.2's parent route changes
+  - receiver: legacy-default
+    matchers: ['tenant!="redis-prod"']   # cutover: the pilot tenant skips the legacy routes
+    continue: true                       # kept: the next domain's dual-run needs it
+    routes:
+    - matchers: ['severity="critical"']
+      receiver: legacy-pager
+```
 
-**Verify dry-run output**: Confirm only the pilot domain's legacy alert rules were removed and other domains' rules remain; confirm the destination of other alerts (those without `tenant="redis-prod"`) did not change.
+**Expected**: `promtool` reports `SUCCESS`; the first two `amtool` tests print only `tenant-redis-prod`, and the third (a legacy alert without `tenant`) still prints `legacy-pager`. The change goes into the source `alertmanager.yaml`, not `alertmanager.merged.yaml`: the output is regenerated from the source every time, so an edit made to the output is gone on the next run.
+
+**Verify dry-run output**: Confirm only the pilot domain's legacy alert rules were removed and other domains' rules remain; confirm the destination of other alerts (those without `tenant="redis-prod"`) did not change. When the next domain cuts over, add it to the same matcher (e.g. `tenant!~"redis-prod|mariadb-prod"`).
 
 ### Step 3.2: Execute Cutover
 
-After confirming dry-run, apply both configs to the cluster (update the ConfigMaps or config files as your deployment requires), then reload:
+After confirming dry-run, apply `prometheus-rules.yaml` and the `alertmanager.merged.yaml` regenerated in Step 3.1 to the cluster (update the ConfigMaps or config files as your deployment requires), then reload:
 
 ```bash
 kubectl rollout restart deployment/prometheus -n monitoring
@@ -450,9 +468,11 @@ curl -sG http://localhost:9093/api/v2/alerts \
 
 ### Phase 3 Rollback
 
-If cutover fails, restore the two Step 3.1 backups (`*.backup-phase3`) and reload: legacy rules fire again and the pilot tenant's route gets `continue: true` back, returning to dual-run.
+If cutover fails, restore the two Step 3.1 backups (`*.backup-phase3`), regenerate `alertmanager.merged.yaml` from the restored source, apply it and reload: legacy rules fire again and the parent route matches the pilot tenant again, returning to dual-run.
 
 ```bash
+da-tools generate-routes --config-dir conf.d/ \
+  --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
 kubectl rollout restart deployment/prometheus -n monitoring
 curl -X POST http://localhost:9093/-/reload
 ```
@@ -619,9 +639,9 @@ set -e
 out="$(mktemp -d)"            # a fresh directory each run: never compares a file left by the last one
 trap 'rm -rf "$out"' EXIT
 # run with the current version's image
-da-tools generate-routes --config-dir ./conf.d -o "$out/routes-current.yaml"
+da-tools generate-routes --config-dir ./conf.d --output-configmap -o "$out/routes-current.yaml"
 # run with the new version's image
-if ! da-tools generate-routes --config-dir ./conf.d -o "$out/routes-new.yaml"; then
+if ! da-tools generate-routes --config-dir ./conf.d --output-configmap -o "$out/routes-new.yaml"; then
   echo "the new version refuses this conf.d: see Check 1's result" >&2
   exit 1
 fi
@@ -642,10 +662,10 @@ else
 fi
 ```
 
-When running with `docker run`, mount the temporary directory into the container so the output files can be written to it.
+When running with `docker run`, mount the temporary directory into the container so the output files can be written to it. Both runs use `--output-configmap` (no `--base-config`, so assembled on the built-in base): the new version exits 2 without a mode flag, and this mode exists in both versions, so the two outputs are of the same kind.
 
 - **The new version refuses the tree**: `generate-routes` exits non-zero and writes no output file, so there is nothing to compare. The example fails the job right there; the reason is in Check 1 (the new da-guard's exit code and the files it names). If the current version already refuses it, `set -e` fails the job on the first command.
-- **No output file**: on a tree with no tenants, `generate-routes` exits 0 and writes no output file. No output from both versions counts as the same; output from only one counts as a difference, and the message says which version produced none.
+- **No output file**: on a tree with no tenants, the current version (v2.9.0) exits 0 and writes no output file, while the new one still writes the merged output (the built-in base and the platform routes only). Output from only one version counts as a difference, and the message says which version produced none — expected on such a tree when comparing these two versions.
 - **A difference**: the example only asks `diff -q` whether the outputs differ and fails the job; it does not print the full diff into the CI log, because the output holds the webhook URLs of tenants' `_routing.receiver` (a Slack `api_url`, for example), and printing it writes them into the log. To see the full diff, run the same two `generate-routes` commands with the two images on your machine or in an access-controlled environment, then `diff -u`. The output files hold those URLs too: do not upload them as public CI artifacts.
 
 The comparison shows where the rendered output changed, but not which change in reading caused it; to attribute it, look at the source at that place (for example, `send_resolved: yes` is a string in the new version and is refused; write `true`).
@@ -762,7 +782,7 @@ Until they exist, run the procedures in this section by hand; this section is al
 
 ### Q5: What if I get duplicate alerts (both old and new)?
 
-**A**: In Phase 2 the pilot tenant's route has `continue: true` and the route list ends with a catch-all, so both channels receive the tenant's old and new alerts; that is the dual-run design (see Step 2.2). Phase 3 deletes the old rules and drops `continue: true` to eliminate duplicates.
+**A**: In Phase 2 the source wraps the legacy sub-routes in a parent route with `continue: true`, so both channels receive the tenant's old and new alerts; that is the dual-run design (see Step 2.2). Phase 3 deletes the old rules, makes that parent route skip the pilot tenant with `tenant!="…"`, and regenerates the merged file, which eliminates the duplicates (see Step 3.1).
 
 ### Q6: What if a Rule Pack doesn't fit my domain?
 

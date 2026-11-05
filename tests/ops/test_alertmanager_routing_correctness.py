@@ -538,8 +538,8 @@ _FT_UNROUTED = "demo-unrouted"
 
 
 def _build_fallthrough_am_yml() -> str:
-    """`{{tenant}}` enforced route 對每個認得的租戶展開；沒有 tenant route 的
-    租戶另有一條尾端 route 把告警交回 root receiver（內建 base 的 ``default``）。"""
+    """`{{tenant}}` enforced route 對每個認得的租戶展開；其餘路由收在一條送往 root
+    receiver（內建 base 的 ``default``）的上層路由底下，代替 root 兜底。"""
     routing_configs = {_FT_ROUTED: {"receiver": {
         "type": "webhook", "url": f"https://hooks.example.com/{_FT_ROUTED}"}}}
     enforced = {"receiver": {"type": "webhook",
@@ -566,7 +566,7 @@ def fallthrough_etc(tmp_path_factory):
 class TestEnforcedRootFallthrough:
     """Alertmanager 的 `Route.Match`：子 route 都沒命中才加入 root，而
     continue:true 的子 route 命中也算命中——所以只有 enforced route 的租戶若
-    沒有尾端 route，root 就再也收不到它的告警。"""
+    沒有東西代替 root，root 就再也收不到它的告警。"""
 
     def test_unrouted_tenant_reaches_enforced_and_root(self, fallthrough_etc):
         _assert_routed(fallthrough_etc, {

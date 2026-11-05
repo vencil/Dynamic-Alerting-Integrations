@@ -46,8 +46,8 @@ func TestPlatformAdminUnrestricted_Bar(t *testing.T) {
 
 // PlatformUnrestricted at write level (#2405): the bar for replacing a tenant
 // file that cannot be parsed. Only a literal "*" rule granting write (or
-// admin) with no org / environment / domain restriction passes — in shadow
-// mode too; a prefix pattern is not all tenants, and read-only is not write.
+// admin) with no org / environment / domain restriction passes; a prefix
+// pattern is not all tenants, and read-only is not write.
 func TestPlatformUnrestricted_Write(t *testing.T) {
 	t.Parallel()
 	m := NewForTest(&RBACConfig{Groups: []GroupRule{
@@ -60,8 +60,6 @@ func TestPlatformUnrestricted_Write(t *testing.T) {
 		{Name: "prefix-writers", Tenants: []string{"svc-*"}, Permissions: []Permission{PermWrite}},
 		{Name: "listed-writers", Tenants: []string{"svc-alpha", "svc-beta"}, Permissions: []Permission{PermWrite}},
 	}})
-	m.EnableOrgScopeEnforce() // flags must not matter; also checked in shadow below
-	shadow := NewForTest(m.Get())
 	for _, c := range []struct {
 		group string
 		want  bool
@@ -79,11 +77,8 @@ func TestPlatformUnrestricted_Write(t *testing.T) {
 		if got := m.PlatformUnrestricted(p, PermWrite); got != c.want {
 			t.Errorf("%s: PlatformUnrestricted(write) = %v, want %v", c.group, got, c.want)
 		}
-		if got := shadow.PlatformUnrestricted(p, PermWrite); got != c.want {
-			t.Errorf("%s (shadow): PlatformUnrestricted(write) = %v, want %v", c.group, got, c.want)
-		}
 	}
 	if NewForTest(&RBACConfig{}).PlatformUnrestricted(&VerifiedPrincipal{Groups: []string{"platform-writers"}}, PermWrite) {
-		t.Error("zero-group (open) config must not grant write on all tenants")
+		t.Error("zero-group config must not grant write on all tenants")
 	}
 }

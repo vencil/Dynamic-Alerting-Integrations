@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,15 +39,7 @@ func copyDocs(t *testing.T) string {
 // realExtra is the Extra fields this module's handlers set.
 func realExtra(t *testing.T) []extraUse {
 	t.Helper()
-	wd, _ := os.Getwd()
-	mod, err := moduleRoot(wd)
-	if err != nil {
-		t.Fatal(err)
-	}
-	uses, err := scanExtra(mod)
-	if err != nil {
-		t.Fatal(err)
-	}
+	_, uses := realScans(t)
 	return uses
 }
 
@@ -93,15 +87,30 @@ func TestScanExtra_ReadsEveryShape(t *testing.T) {
 	}
 }
 
-const plantedHead = "package handler\n\nimport (\n\t\"maps\"\n\t\"net/http\"\n\n\t\"github.com/vencil/tenant-api/internal/errcode\"\n\t\"github.com/vencil/tenant-api/internal/errkind\"\n)\n\n" +
-	"var (\n\t_ = errcode.Conflict\n\t_ = errkind.Conflict\n\t_ = maps.Copy[map[string]any, map[string]any]\n\t_ http.Handler\n)\n\n" +
-	"func addSecret(m map[string]any) { m[\"undeclared_a\"] = 1 }\n\n"
+// plantedImports is a planted file's package clause and imports, each used.
+const plantedImports = "package handler\n\nimport (\n\t\"maps\"\n\t\"net/http\"\n\n\t\"github.com/vencil/tenant-api/internal/errcode\"\n\t\"github.com/vencil/tenant-api/internal/errkind\"\n)\n\n" +
+	"var (\n\t_ = errcode.Conflict\n\t_ = errkind.Conflict\n\t_ = maps.Copy[map[string]any, map[string]any]\n\t_ http.Handler\n)\n\n"
+
+// plantedHead is plantedImports and a helper planted code may call; one
+// file of a planted copy carries it.
+const plantedHead = plantedImports + "func addSecret(m map[string]any) { m[\"undeclared_a\"] = 1 }\n\n"
+
+// refusalLine reports whether one line of the scan's refusal names file and
+// says want.
+func refusalLine(err error, file, want string) bool {
+	return err != nil && slices.ContainsFunc(strings.Split(err.Error(), "\n  ")[1:], func(l string) bool {
+		return strings.HasPrefix(l, file+":") && strings.Contains(l, want)
+	})
+}
 
 // TestScanExtra_FailsClosed: an Extra the scan cannot read stops it with its
-// place — never a field that slips past the declarations.
+// place — never a field that slips past the declarations. Every shape is
+// planted in its own file of one copy, scanned once (a copy's scan builds
+// the whole module; #3574), and each must be refused on a line naming its
+// own file.
 func TestScanExtra_FailsClosed(t *testing.T) {
 	t.Parallel()
-	for name, c := range map[string]struct{ body, want string }{
+	cases := map[string]struct{ body, want string }{
 		"key variable":     {`WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: map[string]any{k: 1}})`, ""},
 		"index variable":   {`e := map[string]any{}; e[k] = 1; WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`, ""},
 		"from a call":      {`e := extraOf(); WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`, ""},
@@ -117,19 +126,29 @@ func TestScanExtra_FailsClosed(t *testing.T) {
 		"copied":             {`e := map[string]any{"committed": false}; o := e; o["undeclared_d"] = 4; WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`, "is used other than"},
 		"ranged into":        {`e := map[string]any{"committed": false}; for k, v := range map[string]any{"undeclared_e": 5} { e[k] = v }; WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: e})`, "that is not a string literal"},
 		"untellable type":    {`WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.Conflict, Extra: map[string]any{"committed": any(false)}})`, "cannot tell the JSON type"},
-	} {
+	}
+	names := slices.Sorted(maps.Keys(cases))
+	files := map[string]string{"zz_planted.go": plantedHead + "func extraOf() map[string]any { return nil }\n"}
+	for i, name := range names {
+		files[fmt.Sprintf("zz_planted_%02d.go", i)] = plantedImports +
+			fmt.Sprintf("func planted%02d(w http.ResponseWriter, r *http.Request, k string) {\n\t%s\n}\n", i, cases[name].body)
+	}
+	_, err := scanExtra(plantedModuleFiles(t, files))
+	// A type error would name a file too: the planted code must compile, so
+	// the refusals are the scan's.
+	if err == nil || strings.Contains(err.Error(), "type-check:") {
+		t.Fatalf("scan error %v, want the scan's refusals of the planted files", err)
+	}
+	for i, name := range names {
 		t.Run(name, func(t *testing.T) {
-			t.Parallel()
-			src := plantedHead + "func extraOf() map[string]any { return nil }\n\n" +
-				"func planted(w http.ResponseWriter, r *http.Request, k string) {\n\t" + c.body + "\n}\n"
-			_, err := scanExtra(plantedModule(t, src))
-			// A type error would name the file too: the planted code must
-			// compile, so the refusal is the scan's.
-			if err == nil || !strings.Contains(err.Error(), "\n  internal/handler/zz_planted.go:") || strings.Contains(err.Error(), "type-check:") ||
-				!strings.Contains(err.Error(), c.want) {
-				t.Errorf("scan error %v, want the scan's refusal naming the planted file and %q", err, c.want)
+			if file := fmt.Sprintf("internal/handler/zz_planted_%02d.go", i); !refusalLine(err, file, cases[name].want) {
+				t.Errorf("scan error %v, want a refusal naming %s and %q", err, file, cases[name].want)
 			}
 		})
+	}
+	// The helpers the shapes share are not what is refused.
+	if refusalLine(err, "internal/handler/zz_planted.go", "") {
+		t.Errorf("scan error %v refuses the shared helpers", err)
 	}
 	// The control: the writeKindAnswer shape is read, with its kind.
 	uses, err := scanExtra(plantedModule(t, plantedHead+"func planted(w http.ResponseWriter, r *http.Request) {\n\t"+
@@ -152,25 +171,23 @@ func TestCheckExtra_RefusesUndeclared(t *testing.T) {
 	t.Parallel()
 	specs, kinds, fixed := errcode.Specs(), handler.KindSpecs(), handler.EnvelopeFieldNames()
 
+	// One copy, one scan (#3574): an undeclared field in a literal, and — in
+	// its own file — a declared field set to a value of another JSON type
+	// (#3272 review). Each must be refused on a line naming its file.
 	planted := plantedHead + "func planted(w http.ResponseWriter, r *http.Request) {\n\t" +
 		`WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.PendingPR, Extra: map[string]any{"pr_number": 1, "tenant_id": "x"}})` + "\n}\n"
-	uses, err := scanExtra(plantedModule(t, planted))
+	typed := plantedImports + "func plantedTyped(w http.ResponseWriter, r *http.Request) {\n\t" +
+		`WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.PendingPR, Extra: map[string]any{"existing_pr_url": "", "pr_number": "7", "message": "m"}})` + "\n}\n"
+	uses, err := scanExtra(plantedModuleFiles(t, map[string]string{"zz_planted.go": planted, "zz_planted_typed.go": typed}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := checkExtra(specs, kinds, uses, fixed); err == nil ||
-		!strings.Contains(err.Error(), "internal/handler/zz_planted.go:") || !strings.Contains(err.Error(), `"tenant_id" on code PENDING_PR_EXISTS`) {
+	err = checkExtra(specs, kinds, uses, fixed)
+	if !refusalLine(err, "internal/handler/zz_planted.go", `"tenant_id" on code PENDING_PR_EXISTS`) {
 		t.Errorf("an undeclared field in a literal: %v", err)
 	}
-
-	// A declared field set to a value of another JSON type (#3272 review).
-	typed := plantedHead + "func planted(w http.ResponseWriter, r *http.Request) {\n\t" +
-		`WriteErrorEnvelope(w, r, http.StatusConflict, ErrorResponse{Code: errcode.PendingPR, Extra: map[string]any{"existing_pr_url": "", "pr_number": "7", "message": "m"}})` + "\n}\n"
-	if uses, err = scanExtra(plantedModule(t, typed)); err != nil {
-		t.Fatal(err)
-	}
-	if err := checkExtra(specs, kinds, uses, fixed); err == nil ||
-		!strings.Contains(err.Error(), `Extra "pr_number" on code PENDING_PR_EXISTS to a string (JSON string), but internal/errcode declares it integer`) {
+	if !refusalLine(err, "internal/handler/zz_planted_typed.go",
+		`Extra "pr_number" on code PENDING_PR_EXISTS to a string (JSON string), but internal/errcode declares it integer`) {
 		t.Errorf("a declared field of another type: %v", err)
 	}
 

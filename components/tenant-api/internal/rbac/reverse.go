@@ -11,7 +11,7 @@ package rbac
 //
 // ⛔ SEMANTICS ARE BORROWED, NEVER RE-IMPLEMENTED: every match-shaped question
 // this file answers is answered by calling the forward predicates —
-// ruleMatches (via subjectFor), tenantMatches, ruleGrants, scopeSetModes — on
+// ruleMatches (via subjectFor), tenantMatches, ruleGrants, scopeSetPasses — on
 // real inputs. There is NO second copy of rule-matching, permission-coverage,
 // tenant-pattern or org-membership logic here (rbac.go's ruleMatches iron
 // rule). If the forward semantics change, this report follows automatically;
@@ -44,12 +44,8 @@ import (
 const (
 	// ReverseModeRules: a non-empty rule set is loaded; grants enumerate it.
 	ReverseModeRules = "rules"
-	// ReverseModeOpenRead: zero groups WITHOUT fail-closed (path-less open
-	// mode) — grants is empty but ANY authenticated caller can read. The
-	// report must say so rather than lie that nobody can touch the tenant.
-	ReverseModeOpenRead = "open_read"
-	// ReverseModeFailClosedEmpty: zero groups WITH fail-closed (ADR-027
-	// MED-8: configured-but-empty _rbac.yaml) — all access is denied.
+	// ReverseModeFailClosedEmpty: zero groups (no _rbac.yaml, or one with no
+	// rules) — all access is denied (ADR-027 §7: there is no open mode).
 	ReverseModeFailClosedEmpty = "fail_closed_empty"
 )
 
@@ -58,7 +54,6 @@ const (
 const (
 	ReverseVerdictGrantsFound     = "grants_found"
 	ReverseVerdictNoGrants        = "no_grants"
-	ReverseVerdictOpenRead        = "open_read"
 	ReverseVerdictFailClosedEmpty = "fail_closed_empty"
 )
 
@@ -68,13 +63,11 @@ const (
 	WhoKindMatchBlock  = "match_block"  // claims-aware match: block (P3)
 )
 
-// Org-gate outcomes, one per fail-mode (flag-agnostic dual view: the reader
-// projects the effective one via flags.org_scope_enforce).
+// Org-gate outcomes (every scope axis is enforced, ADR-027 §7).
 const (
 	OrgOutcomeNotRequired   = "not_required"              // rule has no org-scope
 	OrgOutcomeConditional   = "conditional_on_caller_org" // labeled tenant: depends on the caller's org claim value
-	OrgOutcomePassUnlabeled = "pass_unlabeled"            // unlabeled tenant, shadow leniency passes
-	OrgOutcomeFailUnlabeled = "fail_unlabeled"            // unlabeled tenant, enforce denies
+	OrgOutcomeFailUnlabeled = "fail_unlabeled"            // unlabeled tenant: the rule grants nothing on it
 )
 
 // Tenant org labeling status (tenantorg.OrgsForTenant's known bit, reserved
@@ -121,28 +114,14 @@ const provenanceRuntime = "runtime"
 const ReverseAdvisory = "audit-only; authorization decisions remain with forward gates"
 
 // reverseSchemaVersion pins the report's JSON schema generation.
-const reverseSchemaVersion = 1
+const reverseSchemaVersion = 2
 
 // ── Report structs (the swagger @Success shape; JSON contract spec §3) ────
-
-// BoolProvenance is a runtime boolean plus where it came from.
-type BoolProvenance struct {
-	Value  bool   `json:"value"`
-	Source string `json:"source"`
-}
 
 // StringProvenance is a runtime string plus where it came from.
 type StringProvenance struct {
 	Value  string `json:"value"`
 	Source string `json:"source"`
-}
-
-// ReverseFlags reports the per-axis enforce flags in effect when the report
-// was generated. Flag values are excluded from the P7 dry-run diff semantics
-// (the dual outcome_shadow/outcome_enforce fields are the diffable surface).
-type ReverseFlags struct {
-	MetadataScopeEnforce BoolProvenance `json:"metadata_scope_enforce"`
-	OrgScopeEnforce      BoolProvenance `json:"org_scope_enforce"`
 }
 
 // ReverseConfigAnchor pins the report to the exact config bytes it enumerated
@@ -199,19 +178,16 @@ type ReverseWho struct {
 	ClaimsCount *int                `json:"claims_count,omitempty"` // redacted view only
 }
 
-// ReverseOrgGate reports a rule's org-scope axis for the queried tenant in
-// BOTH fail-modes at once (flag-agnostic; the reader projects the effective
-// outcome via flags.org_scope_enforce). PassingOrgValues is derived by
-// ENUMERATION — each candidate org value is run through the real ruleMatches
-// + scopeSetModes, so an OrgScope=K rule that also pins match.claims[K]
+// ReverseOrgGate reports a rule's org-scope axis for the queried tenant.
+// PassingOrgValues is derived by ENUMERATION — each candidate org value is run
+// through the real ruleMatches + scopeSetPasses, so an OrgScope=K rule that also pins match.claims[K]
 // yields the intersection naturally. An empty derived set on a LABELED tenant
 // marks the grant Unsatisfiable: no caller org value can ever pass this gate
 // for this tenant.
 type ReverseOrgGate struct {
 	Required         bool     `json:"required"`
 	ClaimKey         string   `json:"claim_key,omitempty"`
-	OutcomeShadow    string   `json:"outcome_shadow"`
-	OutcomeEnforce   string   `json:"outcome_enforce"`
+	Outcome          string   `json:"outcome"`
 	Unsatisfiable    bool     `json:"unsatisfiable"`
 	PassingOrgValues []string `json:"passing_org_values,omitempty"` // opt-in (IncludeOrgValues); sorted
 }
@@ -257,16 +233,14 @@ type ReverseGrant struct {
 // IS the endpoint's @Success schema; field additions bump reverseSchemaVersion
 // only when the change is not backward-compatible.
 //
-// P7 dry-run diff contract: GeneratedAt and Flags are excluded from diff
-// semantics; the dual outcome_shadow/outcome_enforce fields are the diffable
-// surface (they are flag-agnostic by construction).
+// P7 dry-run diff contract: GeneratedAt is excluded from diff semantics; the
+// org-gate outcome is the diffable surface.
 type ReverseReport struct {
 	SchemaVersion int                 `json:"schema_version"`
 	Advisory      string              `json:"advisory"`
 	GeneratedAt   string              `json:"generated_at"`
 	Verdict       string              `json:"verdict"`
 	Mode          string              `json:"mode"`
-	Flags         ReverseFlags        `json:"flags"`
 	ConfigAnchor  ReverseConfigAnchor `json:"config_anchor"`
 	Tenant        ReverseTenant       `json:"tenant"`
 	Completeness  ReverseCompleteness `json:"completeness"`
@@ -323,13 +297,11 @@ type ReverseReportOptions struct {
 // slices keep their config order (they are prose, and config order is itself
 // deterministic).
 //
-// Modes (round-1 C4) — the report never lies about an empty rule set:
-// zero groups without fail-closed is open_read (any authenticated caller can
-// read even though grants is empty); with fail-closed it is
-// fail_closed_empty. Both make the LOCKED endpoint bar unsatisfiable, so the
-// endpoint is unreachable in those states — but this core function must stay
-// honest because P7 dry-run and a future CLI call it directly, with no bar in
-// front.
+// Modes — the report never lies about an empty rule set: zero groups is
+// fail_closed_empty (ADR-027 §7: all access denied). That makes the LOCKED
+// endpoint bar unsatisfiable, so the endpoint is unreachable in that state —
+// but this core function must stay honest because P7 dry-run and a future CLI
+// call it directly, with no bar in front.
 func (m *Manager) ReverseAccessReport(tenantID string, orgs []string, orgsKnown bool,
 	tenantOrgsHash string, opts ReverseReportOptions) ReverseReport {
 
@@ -354,11 +326,7 @@ func (m *Manager) ReverseAccessReport(tenantID string, orgs []string, orgsKnown 
 
 	mode := ReverseModeRules
 	if len(cfg.Groups) == 0 {
-		if m.failClosedOnEmpty {
-			mode = ReverseModeFailClosedEmpty
-		} else {
-			mode = ReverseModeOpenRead
-		}
+		mode = ReverseModeFailClosedEmpty
 	}
 
 	tenant := ReverseTenant{ID: tenantID, OrgStatus: orgStatusOf(orgs, orgsKnown)}
@@ -415,8 +383,6 @@ func (m *Manager) ReverseAccessReport(tenantID string, orgs []string, orgsKnown 
 
 	verdict := ReverseVerdictNoGrants
 	switch {
-	case mode == ReverseModeOpenRead:
-		verdict = ReverseVerdictOpenRead
 	case mode == ReverseModeFailClosedEmpty:
 		verdict = ReverseVerdictFailClosedEmpty
 	case len(grants) > 0:
@@ -434,10 +400,6 @@ func (m *Manager) ReverseAccessReport(tenantID string, orgs []string, orgsKnown 
 		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
 		Verdict:       verdict,
 		Mode:          mode,
-		Flags: ReverseFlags{
-			MetadataScopeEnforce: BoolProvenance{Value: m.metadataScopeEnforce, Source: provenanceRuntime},
-			OrgScopeEnforce:      BoolProvenance{Value: m.orgScopeEnforce, Source: provenanceRuntime},
-		},
 		ConfigAnchor: ReverseConfigAnchor{
 			RBACSHA256:       StringProvenance{Value: rbacAnchor, Source: provenanceRuntime},
 			TenantOrgsSHA256: StringProvenance{Value: orgAnchor, Source: provenanceRuntime},
@@ -463,16 +425,11 @@ func (m *Manager) ReverseAccessReport(tenantID string, orgs []string, orgsKnown 
 //
 // This is deliberately TIGHTER than Allowed(p, "*", PermAdmin): the bare
 // check has an org-blind seam — an ORG-SCOPED wildcard admin rule always
-// passes it (Allowed evaluates the shadow component with tenantOrgs=nil, and
-// flipping org enforce changes nothing on the platform-scope query), which
-// would let a merely-org-scoped admin read the platform-wide access map.
+// passes it (Allowed is scope-blind), which would let a merely-org-scoped admin read the platform-wide access map.
 // The platform-wide WRITES — the federation whitelist PUT and the account
 // backfill — use this bar too (#3160).
 //
-// In both zero-group states (open_read / fail_closed_empty) no rule exists to
-// satisfy the bar, so it returns false — the endpoint answers 403 even though
-// open_read mode grants forward read access; the audit surface is
-// intentionally narrower than the data surface.
+// With zero groups no rule exists to satisfy the bar, so it returns false.
 func (m *Manager) PlatformAdminNonOrgScoped(p *VerifiedPrincipal) bool {
 	return m.PlatformNonOrgScoped(p, PermAdmin)
 }
@@ -486,12 +443,11 @@ func (m *Manager) PlatformAdminNonOrgScoped(p *VerifiedPrincipal) bool {
 //
 // It is the bar for a platform-wide resource that belongs to no tenant and no
 // org: the federation whitelist / backfill (want=admin) and saved views (read
-// for GET, write for PUT/DELETE — #3160). An org-scoped "*" rule fails it
-// whatever the enforce flags say: org-scope bounds a rule to some orgs'
+// for GET, write for PUT/DELETE — #3160). An org-scoped "*" rule fails it:
+// org-scope bounds a rule to some orgs'
 // tenants, and such a resource is not bounded to any org.
 //
-// Both zero-group states return false. A caller that must keep open-mode read
-// access (GET /views) checks open mode itself before asking this.
+// Zero groups returns false.
 func (m *Manager) PlatformNonOrgScoped(p *VerifiedPrincipal, want Permission) bool {
 	cfg := m.Get()
 	subject := subjectFor(p)
@@ -525,7 +481,7 @@ func (m *Manager) PlatformNonOrgScoped(p *VerifiedPrincipal, want Permission) bo
 // it does not reveal tenant content). A surface that hands out text naming
 // arbitrary tenants — a loader error, a conf.d path (#1988) — must not treat
 // an environment- or domain-restricted admin as someone who may read about
-// every tenant. Both zero-group states return false, like its sibling.
+// every tenant. Zero groups returns false, like its sibling.
 func (m *Manager) PlatformAdminUnrestricted(p *VerifiedPrincipal) bool {
 	return m.PlatformUnrestricted(p, PermAdmin)
 }
@@ -538,11 +494,8 @@ func (m *Manager) PlatformAdminUnrestricted(p *VerifiedPrincipal) bool {
 //
 // Only the literal "*" entry qualifies: a prefix pattern ("svc-*") never
 // matches the query id "*" (tenantMatches), so it is not "all tenants". A rule
-// carrying org-scope / environments / domains does not qualify WHATEVER the
-// enforce flags say: in shadow mode such a rule still reaches unlabeled
-// tenants, but that leniency is a migration posture for tenants whose labels
-// can be read, not a platform-wide grant. Both zero-group states return false
-// (open mode grants read only; fail-closed-empty grants nothing).
+// carrying org-scope / environments / domains does not qualify: it reaches
+// only the tenants labeled into its scope. Zero groups returns false.
 func (m *Manager) PlatformUnrestricted(p *VerifiedPrincipal, want Permission) bool {
 	cfg := m.Get()
 	subject := subjectFor(p)
@@ -571,7 +524,7 @@ func (m *Manager) PlatformUnrestricted(p *VerifiedPrincipal, want Permission) bo
 // struct copy followed by field deletion, which fails open the moment a new
 // sensitive field is added (denylist-after-merge hazard).
 //
-// Kept: the schema skeleton (version/advisory/timestamps/mode/verdict/flags/
+// Kept: the schema skeleton (version/advisory/timestamps/mode/verdict/
 // config anchors/completeness), enums, booleans, counts, indexes,
 // permissions, effective, surfaces, org-gate outcomes + unsatisfiable, and
 // whether the pattern is platform-wide.
@@ -600,7 +553,6 @@ func RedactReverseReport(r ReverseReport) ReverseReport {
 		GeneratedAt:   r.GeneratedAt,
 		Verdict:       r.Verdict,
 		Mode:          r.Mode,
-		Flags:         r.Flags,        // value struct, no identifiers
 		ConfigAnchor:  r.ConfigAnchor, // hashes are anchors, not identifiers
 		Tenant: ReverseTenant{
 			ID:        r.Tenant.ID,
@@ -635,9 +587,8 @@ func RedactReverseReport(r ReverseReport) ReverseReport {
 			OrgGate: ReverseOrgGate{
 				Required: g.OrgGate.Required,
 				// ClaimKey deliberately dropped (claim identifier).
-				OutcomeShadow:  g.OrgGate.OutcomeShadow,
-				OutcomeEnforce: g.OrgGate.OutcomeEnforce,
-				Unsatisfiable:  g.OrgGate.Unsatisfiable,
+				Outcome:       g.OrgGate.Outcome,
+				Unsatisfiable: g.OrgGate.Unsatisfiable,
 				// PassingOrgValues deliberately dropped (org values).
 			},
 			// Verbatim env/domain strings deliberately dropped (see the doc
@@ -680,28 +631,20 @@ func whoOf(rule *GroupRule) ReverseWho {
 	}
 }
 
-// orgGateFor reports a rule's org-scope axis for the queried tenant in both
-// fail-modes. The unlabeled-vs-labeled distinction is DERIVED by probing the
-// real scopeSetModes with an absent caller value: the (true, false) pair is
-// that predicate's unique signature for the unlabeled-tenant leniency, so the
-// classification can never drift from the forward semantics.
+// orgGateFor reports a rule's org-scope axis for the queried tenant. An
+// unlabeled tenant (no orgs) fails scopeSetPasses for every caller value, so
+// no caller can pass the rule's org gate on it.
 func orgGateFor(rule *GroupRule, tenantOrgs []string, includeValues bool) ReverseOrgGate {
 	if rule.OrgScope == "" {
-		return ReverseOrgGate{
-			Required:       false,
-			OutcomeShadow:  OrgOutcomeNotRequired,
-			OutcomeEnforce: OrgOutcomeNotRequired,
-		}
+		return ReverseOrgGate{Required: false, Outcome: OrgOutcomeNotRequired}
 	}
 	g := ReverseOrgGate{Required: true, ClaimKey: rule.OrgScope}
-	if sh, en := scopeSetModes("", tenantOrgs); sh && !en {
-		// Unlabeled tenant: shadow passes (migration leniency), enforce denies.
-		g.OutcomeShadow, g.OutcomeEnforce = OrgOutcomePassUnlabeled, OrgOutcomeFailUnlabeled
+	if len(tenantOrgs) == 0 {
+		g.Outcome = OrgOutcomeFailUnlabeled
 		return g
 	}
-	// Labeled tenant: the outcome hinges on the caller's org claim value in
-	// BOTH modes (a labeled non-match is denied even in shadow).
-	g.OutcomeShadow, g.OutcomeEnforce = OrgOutcomeConditional, OrgOutcomeConditional
+	// Labeled tenant: the outcome hinges on the caller's org claim value.
+	g.Outcome = OrgOutcomeConditional
 
 	// Passing value domain by ENUMERATION (round-1 C2): each candidate value
 	// from the tenant's org list is run through the real predicates via a
@@ -753,8 +696,7 @@ func witnessPrincipal(rule *GroupRule) *VerifiedPrincipal {
 // through rule's org gate for a tenant with tenantOrgs, by BORROWING the
 // forward predicates: take the rule's minimal witness principal
 // (witnessPrincipal), pin its org claim to v, then run the SAME ruleMatches +
-// scopeSetModes the forward gates run. The strict (enforce) membership result
-// is the criterion — a passing value must pass even under enforce.
+// scopeSetPasses the forward gates run.
 func orgWitnessPasses(rule *GroupRule, v string, tenantOrgs []string) bool {
 	p := witnessPrincipal(rule)
 	// Pin the org claim to the candidate AFTER seeding, so a rule pinning
@@ -764,8 +706,7 @@ func orgWitnessPasses(rule *GroupRule, v string, tenantOrgs []string) bool {
 	if !subjectFor(p).ruleMatches(rule) {
 		return false
 	}
-	_, enforce := scopeSetModes(v, tenantOrgs)
-	return enforce
+	return scopeSetPasses(v, tenantOrgs)
 }
 
 // surfacesOf maps effective permissions to the decision surfaces they act on:

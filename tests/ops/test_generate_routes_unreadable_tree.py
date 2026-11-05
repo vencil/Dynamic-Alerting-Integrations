@@ -45,6 +45,10 @@ _GAR = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
         / "generate_alertmanager_routes.py")
 EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR = 0, 1, 2
 
+# The tenants' threshold key, declared at a root platform file: without one
+# --validate fails on the key verdict (#3016), which is not what these test.
+_DECL = "defaults:\n  mysql_connections: 80\n"
+
 # An unterminated quoted scalar — the exact shape in the ticket ("take one
 # quote out of a tenant file").
 _BROKEN_QUOTE = 'tenants:\n  alpha:\n    mysql_connections: "70\n'
@@ -129,8 +133,11 @@ class TestTheRecordIsStructural:
         assert "Config files: 1 read, 1 skipped (alpha.yaml)" in r.stdout, r.stdout
 
     def test_tenant_entry_that_is_not_a_mapping_is_named_but_not_booked(self, tmp_path):
-        """Per-ENTRY, not per-file: the other tenants in the file are fine,
-        so the file is not refused — but the entry used to vanish silently."""
+        """Per-ENTRY, not per-file: the other tenants in the file are fine
+        to the generator, so it does not refuse the file — but the entry used
+        to vanish silently. The exporter drops the whole file (beta's
+        thresholds too), so the key verdict on it is not given, and since
+        #3016 that fails `--validate` (rc 1), naming the dropped file."""
         d = tmp_path / "conf.d"
         d.mkdir()
         (d / "alpha.yaml").write_text(
@@ -140,8 +147,9 @@ class TestTheRecordIsStructural:
         assert tree.tenant_file_errors == [] and tree.files_read == 1
         assert "beta" in tree.dedup_configs and "alpha" not in tree.dedup_configs
         r = _gar(["--config-dir", str(d), "--validate"])
-        assert r.returncode == EXIT_OK, (r.stdout, r.stderr)
+        assert r.returncode == 1, (r.stdout, r.stderr)
         assert "alpha.yaml: tenant 'alpha' must be a mapping" in r.stderr, r.stderr
+        assert "key verdict incomplete" in r.stderr and "alpha.yaml" in r.stderr, r.stderr
 
 
 # ── --validate ────────────────────────────────────────────────────────
@@ -166,9 +174,10 @@ class TestValidateRefusesAnUnreadableTree:
         assert "WARN: skip alpha.yaml: could not be read (syntax_error)" in r.stderr, r.stderr
 
     def test_control_both_valid_is_ok_with_counts(self, good_tree):
+        (good_tree / "_defaults.yaml").write_text(_DECL, encoding="utf-8")
         r = _gar(["--config-dir", str(good_tree), "--validate"])
         assert r.returncode == EXIT_OK, (r.stdout, r.stderr)
-        assert "Config files: 2 read, 0 skipped" in r.stdout, r.stdout
+        assert "Config files: 3 read, 0 skipped" in r.stdout, r.stdout
         assert r.stdout.rstrip().endswith("OK: all configs valid"), r.stdout
 
     def test_the_failure_is_on_the_exit_code_not_only_on_stderr(self, broken_tree):
@@ -197,14 +206,14 @@ class TestValidateRefusesAnUnreadableTree:
         assert "Config files: 0 read, 1 skipped (alpha.yaml)" in r.stdout, r.stdout
 
 
-# ── Render / --output-configmap: never emit from a partial tree ───────
+# ── --output-alertmanager / --output-configmap: never emit from a partial tree ──
 class TestWritersRefuseAnUnreadableTree:
 
-    def test_render_mode_exits_1_and_writes_nothing(self, broken_tree, tmp_path):
-        out = tmp_path / "routes.yaml"
-        r = _gar(["--config-dir", str(broken_tree), "-o", str(out)])
+    def test_output_alertmanager_exits_1_and_writes_nothing(self, broken_tree, tmp_path):
+        out = tmp_path / "alertmanager.yml"
+        r = _gar(["--config-dir", str(broken_tree), "--output-alertmanager", "-o", str(out)])
         assert r.returncode == EXIT_VIOLATION, (r.stdout, r.stderr)
-        assert not out.exists(), "a fragment from a partial tree was written"
+        assert not out.exists(), "a config from a partial tree was written"
         assert "alpha.yaml" in r.stdout and "1 read, 1 skipped" in r.stdout, r.stdout
 
     def test_output_configmap_exits_1_and_emits_no_configmap(self, broken_tree):
@@ -215,10 +224,10 @@ class TestWritersRefuseAnUnreadableTree:
         assert "kind: ConfigMap" not in r.stdout, r.stdout
         assert "alpha.yaml" in r.stdout, r.stdout
 
-    def test_control_render_mode_writes_the_file_and_prints_counts(
+    def test_control_output_alertmanager_writes_the_file_and_prints_counts(
             self, good_tree, tmp_path):
-        out = tmp_path / "routes.yaml"
-        r = _gar(["--config-dir", str(good_tree), "-o", str(out)])
+        out = tmp_path / "alertmanager.yml"
+        r = _gar(["--config-dir", str(good_tree), "--output-alertmanager", "-o", str(out)])
         assert r.returncode == EXIT_OK, (r.stdout, r.stderr)
         assert out.exists()
         assert "Config files: 2 read, 0 skipped" in r.stdout, r.stdout

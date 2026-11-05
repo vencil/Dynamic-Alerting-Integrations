@@ -1253,11 +1253,9 @@ class TestProfileOverlayCLI:
         (ApplyProfiles' hasAliasEquivalent)."""
         # The deprecated spelling comes from the alias table, not a literal:
         # the #1231 pre-commit hook forbids the retired key as a live value.
-        ops_dir = os.path.join(REPO_ROOT, "scripts", "tools", "ops")
-        if ops_dir not in sys.path:
-            sys.path.append(ops_dir)
-        from _grar_validate import _legacy_tenant_key
-        legacy = _legacy_tenant_key("mysql_threads_running")
+        from _lib_tenant_values import key_spellings  # #3556: the exporter's rule
+        others = key_spellings(["mysql_threads_running"]).spellings("mysql_threads_running")[1:]
+        legacy = others[0] if others else None
         if legacy is None:
             pytest.skip("no deprecated spelling of mysql_threads_running in its alias window")
         conf_d = self._tree(tmp_path)
@@ -1916,7 +1914,5 @@ class TestCustomAlertsAndMergedHash:
                            capture_output=True, text=True, encoding="utf-8", timeout=120)
         assert v.returncode == 2, (v.returncode, v.stdout, v.stderr)
         assert "da-guard binary not found" in v.stderr, v.stderr
-        # #3393 Q3: with --json, the one caller_error envelope on stdout.
-        env = json.loads(v.stdout)
-        assert (env["status"], env["reason"]) == ("caller_error", "served_values_unavailable"), env
-        assert "da-guard binary not found" in env["error"], env
+        # #3558: a caller error carries no document, --json or not.
+        assert v.stdout == "", v.stdout

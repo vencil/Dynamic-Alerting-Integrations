@@ -269,6 +269,29 @@ def platform_tenants_violations(rel: str, block: object, tenant_schema: dict,
     return []
 
 
+_SECRET_REF_ALT = {"$ref": "#/definitions/secretRef"}
+
+
+def _narrow_secret_ref_alternative(err, validator):
+    """#1560: a credential field is `anyOf: [<value>, secretRef]`, so a bad
+    value surfaces as "... is not valid under any of the given schemas".
+    A value that is not a mapping was meant as the value, not a Secret
+    reference: report the value branch's own error (the URL pattern, the
+    empty string), as before the field took a reference. A mapping keeps the
+    anyOf message — it may be a malformed reference."""
+    if (err.validator != "anyOf" or not err.context or isinstance(err.instance, dict)
+            or not isinstance(err.schema, dict)):
+        return err
+    alts = err.schema.get("anyOf", [])
+    if len(alts) != 2 or alts.count(_SECRET_REF_ALT) != 1:
+        return err
+    value_idx = 1 - alts.index(_SECRET_REF_ALT)
+    subs = [s for s in err.context if s.relative_schema_path[0] == value_idx]
+    if not subs:
+        return err
+    return subs[0] if len(subs) == 1 else validator.exceptions.best_match(subs)
+
+
 def _explain(exc, validator) -> str:
     """Message for `exc`, narrowed through a type-discriminated `oneOf` (#2137).
 
@@ -303,6 +326,7 @@ def _explain(exc, validator) -> str:
         # without saying which rule it belongs to.
         subs = live[0]
         err = subs[0] if len(subs) == 1 else validator.exceptions.best_match(subs)
+    err = _narrow_secret_ref_alternative(err, validator)
     if err is not exc and err.validator == "oneOf" and isinstance(err.schema, dict):
         desc = err.schema.get("description")
         if desc:
@@ -798,4 +822,5 @@ def _main_in_session() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(_main_in_session())
+    import _lib_exitcodes
+    _lib_exitcodes.run(_main_in_session)

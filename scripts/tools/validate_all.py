@@ -41,6 +41,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import multiprocessing
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Dict, List, NamedTuple, Optional, Tuple
@@ -59,9 +60,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 # lint/ only, so this file sat outside it; since #1642 the top level of
 # scripts/tools/ is enumerated too and this file IS under that contract
 # (--help → 0, unknown flag → 2).
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, Report, arm_crash_envelope, encode_json,
-)
+from _lib_exitcodes import EXIT_CALLER_ERROR, Report, encode_json  # noqa: E402
 from _lib_consumer_read import absolute_reader_binaries  # noqa: E402  (#3424)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -1201,10 +1200,6 @@ def main():
     # --baseline and --compare imply --json
     if args.baseline or args.compare:
         args.json = True
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope. Armed
-        # after the implication above, so --baseline / --compare are covered.
-        arm_crash_envelope()
 
     # --list: show available checks
     if args.list:
@@ -1358,7 +1353,14 @@ def main():
         # ------------------------------------------------------------------
         wall_start = time.time()
         futures = {}
-        with ProcessPoolExecutor() as pool:
+        # ⛔ The start method is explicit, never the interpreter's default:
+        # the default is fork through 3.13 and forkserver from 3.14, and a
+        # forkserver is one long-lived process shared by every pool in the
+        # interpreter — one that something else killed made the next pool
+        # die at start (BrokenPipeError writing its authkey, seen on CI's
+        # 3.14.10). spawn gives each pool fresh workers, the same on every
+        # version; _run_one and its arguments are picklable for it.
+        with ProcessPoolExecutor(mp_context=multiprocessing.get_context("spawn")) as pool:
             for short_name, script_name, tool_args, _desc in runnable:
                 script_path = str(tools_dir / script_name)
                 fut = pool.submit(

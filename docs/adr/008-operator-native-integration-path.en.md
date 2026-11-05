@@ -12,220 +12,116 @@ lang: en
 
 ## Status
 
-✅ **Accepted** (v2.3.0) — Platform supports both ConfigMap and Operator CRD paths; detection logic auto-selects
-📎 **Addendum** (v2.6.0) — Architecture boundary declaration added, see §Addendum: Architecture Boundary Declaration
-📎 **Addendum** (v2.10.0) — da-assembler direct-render retired + Operator path decision, see §Addendum (v2.10.0)
+✅ **Accepted** (v2.3.0)
 
-## Context
-
-Prometheus Operator (kube-prometheus-stack) has become the dominant deployment method for Prometheus in Kubernetes environments. The Operator uses custom CRDs (`PrometheusRule`, `ServiceMonitor`, `AlertmanagerConfig`) instead of traditional ConfigMaps, and auto-loads configurations via label selectors.
-
-### Problem Statement
-
-1. **Dual-path coexistence**: Existing users mount Rule Packs via ConfigMap (`configMapGenerator` / `projected volume`); Operator users need PrometheusRule CRD format
-2. **Mutual exclusion risk**: ConfigMap-based `generate_alertmanager_routes.py` output and `AlertmanagerConfig` CRD cannot be mixed — mixing causes route overrides
-3. **API version fragmentation**: AlertmanagerConfig has `v1alpha1` and `v1beta1` versions; different Operator releases support different APIs
-4. **GitOps idempotency**: Auto-generated CRD YAML with `resourceVersion`, `creationTimestamp` or other server-side metadata causes ArgoCD/Flux to continuously report OutOfSync
-5. **Namespace strategy**: Cluster-wide vs namespace-scoped CRD deployment affects RBAC design and multi-tenant isolation
-
-### Decision Drivers
-
-- No added complexity to core architecture (threshold-exporter unchanged)
-- Toolchain adapts to both paths rather than forcing migration
-- Output must be GitOps-friendly pure declarative YAML
+- 2026-11-05 revision (also folding the earlier appended revisions into the body): Alertmanager routing is no longer generated as `AlertmanagerConfig` CRDs. On both paths routing comes from `generate-routes`; the Operator path puts the resulting `alertmanager.yaml` in the Alertmanager's `configSecret`. `operator-generate` produces PrometheusRule and ServiceMonitor only ([#3572](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3572)).
 
 ## Decision
 
-**Adopt toolchain adaptation pattern: core platform (threshold-exporter + Rule Packs) remains path-agnostic; new `operator-generate` / `operator-check` tools handle CRD conversion and validation.**
+**The core platform (threshold-exporter + Rule Packs) does not depend on the deployment path; the toolchain handles the difference between the two.**
 
-### Architecture Layering
+- **On the Prometheus side there are two paths.** The ConfigMap path mounts Rule Packs through a projected volume; on the Operator path `da-tools operator-generate` produces PrometheusRules (one per Rule Pack) and the ServiceMonitor for threshold-exporter, and `da-tools operator-check` verifies that the Operator loaded them.
+- **Alertmanager routing has one generator: `da-tools generate-routes`.** Output = merge(your own Alertmanager config, conf.d), always in this order: the platform routes (Watchdog heartbeat, the `component="custom"` isolation subtree, synthetic probe, sentinel) → your own routes (in their order) → the tenant routes. The ConfigMap path puts the result in the Alertmanager ConfigMap (or uses `--apply`); the Operator path puts the same result in a Secret and points the Alertmanager CR's `spec.configSecret` at it. Both paths apply **the same** config file, not two versions generated separately that must be kept in agreement.
 
-```mermaid
-graph TB
-    TE["threshold-exporter (unchanged)<br/>YAML → Prometheus Metrics<br/>SHA-256 hot-reload"]
-    TE --> PA
-    TE --> PB
+### Example
 
-    subgraph PA["Path A: ConfigMap (existing)"]
-        direction TB
-        PA1["projected volume"]
-        PA2["configMapGenerator"]
-        PA3["generate-routes.py"]
-        PA4["config-reloader sidecar"]
-    end
+One tenant in conf.d, and one critical route in your own config:
 
-    subgraph PB["Path B: Operator CRD (new in v2.3.0)"]
-        direction TB
-        PB1["PrometheusRule"]
-        PB2["ServiceMonitor"]
-        PB3["AlertmanagerConfig"]
-        PB4["operator-generate / operator-check"]
-    end
+```yaml
+# conf.d/team-a.yaml
+tenants:
+  team-a:
+    _routing:
+      receiver:
+        type: webhook
+        url: "https://hooks.example.com/team-a"
 ```
 
-### Path B Tool Design
-
-**`da-tools operator-generate`**:
-- Read `rule-packs/` → output 16 PrometheusRule CRD YAML
-- Read `conf.d/` → output per-tenant AlertmanagerConfig CRD
-- Output ServiceMonitor for threshold-exporter
-- `--api-version` flag specifies AlertmanagerConfig API version (`v1alpha1` | `v1beta1`, default `v1beta1`)
-- `--gitops` flag: sorted keys, no timestamps/resourceVersion/status, deterministic output
-- `--namespace` flag: target namespace (affects CRD metadata.namespace)
-- `--output-dir` flag: Kustomize/Helm friendly output
-
-**`da-tools operator-check`**:
-- Detect Operator presence (`kubectl get crd prometheusrules.monitoring.coreos.com`)
-- Verify PrometheusRule loading status (label match ruleSelector)
-- Verify ServiceMonitor target status (Prometheus `/api/v1/targets`)
-- Verify AlertmanagerConfig effectiveness (Alertmanager status API)
-- Output diagnostic report (PASS / WARN / FAIL)
-
-### Detection Logic
-
-```python
-def detect_deployment_mode(kubeconfig=None):
-    """Detect whether target cluster uses ConfigMap or Operator deployment"""
-    try:
-        result = kubectl("get", "crd", "prometheusrules.monitoring.coreos.com")
-        if result.returncode == 0:
-            return "operator"
-    except Exception:
-        pass
-    return "configmap"
+```yaml
+# alertmanager.yaml (your own config, the source)
+route:
+  receiver: ops-default
+  routes:
+  - matchers: ['severity="critical"']
+    receiver: ops-pager
+receivers:
+- name: ops-default
+- name: ops-pager
+  webhook_configs: [{url: 'https://pager.example.com/hook'}]
 ```
 
-### Mutual Exclusion Boundary
-
-| Item | Path A (ConfigMap) | Path B (Operator) |
-|------|-------------------|-------------------|
-| Rule Pack mount | projected volume ConfigMap | PrometheusRule CRD |
-| Route generation | `generate_alertmanager_routes.py` | `operator-generate` AlertmanagerConfig |
-| Config reload | config-reloader sidecar (Rule Packs; `prometheus.yml` still needs a restart *if* mounted with `subPath`, as this repo's manifest does — a bring-your-own Prometheus mounting the whole directory is not affected) | Operator auto-reconcile |
-| Validation tool | `validate_config.py` | `operator-check` |
-
-**Strict exclusion**: A single cluster's Alertmanager must not use both ConfigMap and AlertmanagerConfig CRD for route management simultaneously. `operator-generate` detects and warns.
-
-## Rationale
-
-### Why not rewrite threshold-exporter as a Kubernetes Operator?
-
-We evaluated rewriting threshold-exporter to watch a custom `DynamicAlertTenant` CRD, but decided against it for v2.3.0:
-
-1. **Architecture scope expansion**: Operator SDK + CRD + Controller significantly increases core complexity
-2. **Reduced deployment flexibility**: Current config-dir + SHA-256 hot-reload works anywhere (including non-K8s environments)
-3. **Proven stability**: Hot-reload benchmarked at 2,000 tenants / 10ms reload in v2.2.0
-4. **Incremental adoption**: Toolchain adaptation lets users migrate gradually
-
-### Why not just provide documentation (instead of building tools)?
-
-v2.2.0 BYO documentation's Operator Appendix was only CRD example translation. User feedback revealed:
-- Manually converting every Rule Pack ConfigMap → PrometheusRule is time-consuming and error-prone
-- AlertmanagerConfig API version differences are easy to get wrong
-- GitOps pipelines require deterministic output
-
-## Consequences
-
-### Positive
-
-- Operator users get first-class experience (auto-generated CRDs + validation tools)
-- Existing ConfigMap users are unaffected
-- GitOps pipelines integrate directly (`operator-generate --gitops` for deterministic YAML)
-- Clear migration path (ConfigMap → CRD gradual conversion)
-
-### Negative
-
-- Increased toolchain maintenance cost (Path A + Path B two paths)
-- Must track AlertmanagerConfig API version evolution
-- `operator-generate` CRD output must maintain compatibility with Operator versions
-
-### Risks
-
-- AlertmanagerConfig `v1alpha1` may be removed in future Operator versions → Default to `v1beta1`, mark `v1alpha1` as deprecated
-- Operator ruleSelector label strategies vary → `operator-check` provides diagnostic guidance
-
-## Addendum: Architecture Boundary Declaration (v2.6.0)
-
-> Formally documents core component responsibility boundaries to prevent scope creep.
-
-### Inviolable Boundaries
-
-1. **threshold-exporter does NOT watch any CRD**. It only reads `conf.d/` YAML files via SHA-256 hot-reload. This is intentional — it preserves the exporter's ability to run in non-K8s environments.
-
-2. **CRD → conf.d/ conversion is handled externally**. Two supported paths:
-   - **da-assembler-controller** (future Operator mode): watches `ThresholdConfig` CRD → renders `conf.d/` files
-   - **`operator-generate` in CI pipeline**: static conversion → outputs CRD YAML for GitOps deployment
-
-3. **`operator-generate` is strictly an "assemble / render" role**. It reads `rule-packs/` and `conf.d/` directories and outputs standard CRD YAML. It does not extend the exporter's responsibilities, does not connect to clusters, and does not run `kubectl apply`.
-
-### Boundary Diagram
-
-```mermaid
-graph LR
-    subgraph "Core (unchanged)"
-        TE["threshold-exporter<br/>YAML → Metrics"]
-    end
-
-    subgraph "External Conversion Layer"
-        OG["operator-generate<br/>(CI / dev-time static output)"]
-        AC["da-assembler-controller<br/>(K8s Operator mode)"]
-    end
-
-    subgraph "Configuration Sources"
-        YAML["conf.d/ YAML"]
-        CRD["ThresholdConfig CRD"]
-    end
-
-    YAML --> TE
-    CRD -->|watch + render| AC --> YAML
-    OG -->|static output| K8sCRD["PrometheusRule<br/>AlertmanagerConfig<br/>ServiceMonitor"]
+```bash
+da-tools generate-routes --config-dir conf.d --output-alertmanager \
+  --base-config alertmanager.yaml -o out.yaml
+# Operator path: into the configSecret (the key must be alertmanager.yaml)
+kubectl create secret generic alertmanager-routing -n monitoring \
+  --from-file=alertmanager.yaml=out.yaml --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-### Decision Criteria for New Operator Tools
+The `route.routes` of `out.yaml` go, in order, to: `watchdog-heartbeat`, `custom-alerts-firehose`, `synthetic-receiver`, `sentinel-sinkhole`, `ops-pager`, `tenant-team-a`. Testing destinations with `amtool config routes test --config.file=out.yaml`:
 
-Any new Operator-related tool or feature must pass these three questions:
+| Alert labels | Delivered to |
+|---|---|
+| `alertname=Watchdog` | `watchdog-heartbeat` |
+| `alertname=HighCPU tenant=team-a severity=warning` | `tenant-team-a` |
+| `alertname=MyRule component=custom tenant=team-a severity=critical` | `tenant-team-a` (the tenant child route of the custom subtree, not `ops-pager`) |
+| `alertname=NodeDown severity=critical` | `ops-pager` |
 
-1. **Does it change threshold-exporter's input interface?** → If yes, boundary violation — do not proceed
-2. **Does it require the exporter to connect to the K8s API?** → If yes, boundary violation — delegate to external tools
-3. **Is it purely "read → transform → output"?** → If yes, falls within toolchain scope — proceed
+kube-prometheus-stack points at it with `alertmanager.alertmanagerSpec.configSecret: alertmanager-routing`; the Operator reads that Secret's `alertmanager.yaml` key.
 
-## Addendum (v2.10.0): da-assembler direct-render retired + Operator path decision
+## Context
 
-When the [#692](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/692) epic took the originally-imagined "operator that watches a CRD and compiles rules on the fly" and pulled it apart, its three jobs each found a better home: **the compile logic stays in CI** (pure build-time, no new runtime component); **the write goes through tenant-api's existing single-writer plane** ([ADR-023](023-write-plane-single-writer-invariant.md)); **the pre-deploy replay check becomes a backtest posted as a PR comment**. All that's left is the thin skin that translates a CRD into one write request — and there is no demand for it yet. So the da-assembler-controller exploration item in §Evolution Status above gets three decisions:
+The Prometheus Operator (kube-prometheus-stack) is the mainstream way to deploy Prometheus on Kubernetes. It replaces ConfigMaps with CRDs (`PrometheusRule`, `ServiceMonitor`, `AlertmanagerConfig`) and loads configuration through label selectors. The platform has to serve ConfigMap users and Operator users alike without changing threshold-exporter.
 
-1. **`da_assembler`'s direct-render mode is retired, kept only for local debugging.** Rules are always produced by CI compilation (recipe → compile → promtool → PR → ConfigMap), the only legal way to ship to production. Direct-render bypasses that pipeline: a CRD-declared alert emits a metric, but CI compiles no matching rule — another alert that silently never fires.
+The problems to handle:
 
-2. **The `ThresholdConfig` CRD is not installed by default (dormant).** With direct-render retired it has no consumer for now. Not installing it means `kubectl apply` errors on the spot — the most natural "fail loud," better than a warning in a description field nobody reads, or standing up an always-deny component for a CRD nobody uses. The schema is kept for CI validation and reinstated when the need returns.
+1. **Two ways of mounting**: ConfigMap users mount Rule Packs through a projected volume; Operator users need PrometheusRules.
+2. **The Operator loads only CRDs whose labels match**: PrometheusRule / ServiceMonitor labels must match the Prometheus `ruleSelector` / `serviceMonitorSelector`, which differ between installs.
+3. **GitOps needs reproducible output**: YAML carrying server-side fields such as `resourceVersion` or `creationTimestamp` keeps ArgoCD / Flux reporting OutOfSync.
+4. **The platform routes must come first.** The Watchdog heartbeat must reach an external dead-man's switch (a dead alerting pipeline is noticed because the heartbeat stops); a tenant's custom alerts must stay isolated in their own subtree and must not flow into the cluster's NOC routes. Both depend on route order: Alertmanager matches top-down, and the first matching route without `continue: true` takes the alert.
 
-3. **If a CRD-native self-service interface is ever wanted, build it as an optional mode embedded in tenant-api, not a separate operator.** The original standalone-operator idea is cancelled. The trigger is a customer explicitly needing a kubectl-native interface; at that point, embed a switchable watch mode in tenant-api (reusing the existing single-writer mechanism) — no new component, and no separate release line for it. The reasoning is simple: that skin has limited value, and maintaining a dedicated state machine, retries, auth, and release process for it isn't worth it.
+Point 4 is why routing is not generated as `AlertmanagerConfig`. How the Operator merges `AlertmanagerConfig` (Prometheus Operator v0.95.0, `pkg/alertmanager/amcfg.go`):
 
-In one sentence: multi-tenant, HA-correct, version-aware alert compilation happens entirely at build time, and the production cluster needs no new controller installed.
+- a CR's routes always go **before** the global routes, and its top-level routes are forced to `continue: true` (keep matching after a match);
+- the default `alertmanagerConfigMatcherStrategy: OnNamespace` adds `namespace="<the CR's namespace>"` to the CR's routes and inhibit rules.
 
-## Evolution Status
+So with one CR per tenant: the platform routes cannot come first; a tenant route only matches alerts carrying `namespace="monitoring"` (where the CRs live); and a matched alert still flows on into the global routes because of `continue: true`, so custom isolation does not hold. kube-prometheus-stack also sends Watchdog to `null` by default.
 
-- **v2.3.0** (completed): `operator-generate` / `operator-check` toolchain, PrometheusRule + AlertmanagerConfig + ServiceMonitor CRD output
-- **v2.6.0** (completed): Architecture boundary declaration (see §Addendum above), `operator-generate --kustomize` multi-cluster deployment, `drift_detect.py --mode operator` cross-cluster CRD drift detection
+## Consequences and known limitations
 
-**Remaining**:
-- ~~**da-assembler-controller** (long-term exploration): external Operator watches `ThresholdConfig` CRD → renders `conf.d/`~~ → **retired in v2.10.0** (see §Addendum (v2.10.0)): direct-render hard-deprecated, CRD dormant, a future CR-native interface becomes an embedded tenant-api watch mode
-- **Helm Chart kube-prometheus-stack values examples**: provide values.yaml reference for common Operator deployments
-- **ArgoCD ApplicationSet integration**: multi-cluster Federation CRD deployment automation
+- **One more step on the Operator path**: when conf.d changes, run `generate-routes` again and update the Secret (with GitOps, put the output in the pipeline). In return both paths have the same routing and the same tests.
+- **If the Alertmanager CR also selects `AlertmanagerConfig`s** (`alertmanagerConfigSelector` set; kube-prometheus-stack sets one by default), those CRs' routes still go before the configSecret's routes. The platform no longer generates CRs; ones an older `operator-generate` left behind (labelled `app.kubernetes.io/part-of=dynamic-alerting`) should be deleted, and `operator-check` reports them as WARN. Other teams' CRs cannot take an alert away, because of `continue: true`, but they can deliver it a second time; to have nothing ahead of the platform routes, set the selector so it selects no `AlertmanagerConfig`.
+- **Breaking**: `operator-generate --components alertmanager` and the flags that only served `AlertmanagerConfig` (`--config-dir`, `--api-version`, `--receiver-template`, `--secret-name`, `--secret-key`) exit 2, with a message giving the `generate-routes` and configSecret steps; `migrate-to-operator` no longer produces `AlertmanagerConfig` either.
+- **PrometheusRule labels must match the selector**: `operator-generate` sets `release=kube-prometheus-stack` by default; use `--selector-label` when the Helm release name differs, and `operator-check` reports when they are not loaded.
+- **`--gitops`** emits sorted keys with no timestamps or server-side fields, so the same input produces the same YAML; `--kustomize` also writes a `kustomization.yaml` for multi-cluster deployment; `drift_detect.py --mode operator` compares CRD drift across clusters.
+- **Telling which path a cluster uses**: `operator-check` first checks whether the `prometheusrules.monitoring.coreos.com` CRD exists; if it does, the cluster is on the Operator path.
+- **Not done yet**: a kube-prometheus-stack values example for common Operator deployments; automation for deploying the CRDs with an ArgoCD ApplicationSet in multi-cluster federation.
 
-## Related Decisions
+### Architecture boundary
 
-| ADR | Relationship |
-|-----|-------------|
-| [ADR-001](001-severity-dedup-via-inhibit.en.md) | Inhibit rule equivalence in Operator CRDs |
-| [ADR-004](004-federation-central-exporter-first.en.md) | Federation CRD deployment for edge/central split |
-| [ADR-005](005-projected-volume-for-rule-packs.en.md) | Path A projected volume design; Path B replaces with PrometheusRule |
-| [ADR-007](007-cross-domain-routing-profiles.en.md) | Routing Profile mapping in AlertmanagerConfig CRD |
+- **threshold-exporter watches no CRD**; it reads `conf.d/` only (reloading when the SHA-256 of the content changes). This keeps the exporter runnable outside Kubernetes.
+- **Tools only read, transform and write.** `operator-generate` reads `rule-packs/` and writes CRD YAML; it does not connect to the cluster or run `kubectl apply`. `generate-routes --apply` is its only mode that changes the cluster, and it belongs to the ConfigMap path.
+- Before adding an Operator-related tool, ask three questions: does it change threshold-exporter's input interface? Does it need the exporter to call the Kubernetes API? Is it only read, transform, write? A "yes" to either of the first two means no; only a "yes" to the third makes it toolchain work.
+- **No separate operator for a CRD-native self-service interface.** Rules are always compiled in CI (recipe → compile → promtool → PR → ConfigMap); `da_assembler`'s direct-render is kept for local debugging only, because it bypasses that pipeline and lets a CRD-declared alert emit metrics with no rule CI compiled for it. The `ThresholdConfig` CRD is not installed by default: it has no consumer, and without it `kubectl apply` fails on the spot. If customers explicitly need a kubectl-native interface later, it becomes an optional watch mode inside tenant-api, reusing its existing single-writer mechanism ([ADR-023](023-write-plane-single-writer-invariant.md)), with no new component and no new release line.
 
-## Related Resources
+## Alternatives considered
 
-| Resource | Description |
-|----------|-------------|
-| [`docs/prometheus-operator-integration.md`](../integration/prometheus-operator-integration.md) | Full Operator integration guide |
-| [`docs/byo-prometheus-integration.md`](../integration/byo-prometheus-integration.md) | Path A: Existing BYO Prometheus integration |
-| [`docs/byo-alertmanager-integration.md`](../integration/byo-alertmanager-integration.md) | Path A: Existing BYO Alertmanager integration |
+- **Turning threshold-exporter into a Kubernetes Operator** (watching a `DynamicAlertTenant` CRD): the core would gain a controller and CRDs, greatly increasing complexity and binding it to Kubernetes; the existing file hot-reload is proven. Rejected.
+- **Documentation only, no tools**: users reported that hand-converting each Rule Pack into a PrometheusRule is slow and error-prone, and GitOps needs reproducible output. Rejected.
+- **One `AlertmanagerConfig` per tenant on the Operator path** (the approach since v2.3.0): because of the merge described under "Context" point 4, the platform routes cannot come first, tenant routes are limited by the namespace matcher, and custom alerts flow into the global routes. Replaced by the configSecret.
+- **A single platform `AlertmanagerConfig` carrying the platform routes**: the CR is still forced to `continue: true` and given a namespace matcher, Watchdog and sentinel alerts do not necessarily carry the CR's namespace, and its order relative to other CRs is not guaranteed. Rejected.
+- **Documenting `alertmanagerConfigMatcherStrategy: None` and keeping per-tenant CRs**: fixes the namespace matcher, but `continue: true` and ordering remain, and a second route generator would have to be kept in agreement with `generate-routes`. Rejected.
+
+## Related
+
+| Document | Relation |
+|-----|------|
+| [ADR-001](001-severity-dedup-via-inhibit.en.md) | Severity dedup inhibit rules, generated by `generate-routes` |
+| [ADR-004](004-federation-central-exporter-first.en.md) | CRD deployment in federation has to account for the edge / central split |
+| [ADR-005](005-projected-volume-for-rule-packs.en.md) | The ConfigMap path's projected volume; the Operator path uses PrometheusRule instead |
+| [ADR-007](007-cross-domain-routing-profiles.en.md) | Routing profiles, expanded by `generate-routes` |
+| [Operator Alertmanager integration](../integration/operator-alertmanager-integration.en.md) | The full configSecret procedure |
+| [Operator integration handbook](../integration/prometheus-operator-integration.en.md) | Operator path overview |
+| [CLI reference §generate-routes](../cli-reference.en.md#generate-routes) | Merge rules and exit codes |
 | [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack) | Upstream Helm chart |
-| [Prometheus Operator CRD Reference](https://prometheus-operator.dev/docs/api-reference/api/) | CRD API documentation |
+| [Prometheus Operator API](https://prometheus-operator.dev/docs/api-reference/api/) | CRD API documentation |

@@ -30,7 +30,7 @@ Silent Mode 和 Maintenance Mode 均支援結構化物件設定，含 `expires`�
 
 > 上表是 **BYO 整合情境的速查視角**。完整的告警最佳實務（該對什麼告警 → 通知 → 動作層冪等）見系列文章：[告警設計入門](../alerting-design-fundamentals.md) · [Actionable 之後](../alerting-best-practices.md)。
 
-所有 Alertmanager 配置 fragment 由 `generate_alertmanager_routes.py` 從 tenant YAML 自動產出：
+所有 Alertmanager 路由設定由 `generate_alertmanager_routes.py` 從 tenant YAML 自動產出，並合併進你自己的 Alertmanager 設定（來源），輸出另一份產物、不回寫來源：
 
 ```mermaid
 graph LR
@@ -47,18 +47,21 @@ graph LR
 
     GEN["generate_alertmanager_routes.py"]
 
+    BASE["你的 alertmanager.yml<br/>（--base-config）"]
+
     TY --> GEN
     PL --> GEN
+    BASE --> GEN
 
-    subgraph AM["Alertmanager Fragment"]
-        RT["route.routes[]<br/>Per-tenant 路由"]
-        RC["receivers[]<br/>Per-tenant receiver"]
-        IR["inhibit_rules[]<br/>Severity dedup + Silent mode"]
+    subgraph AM["合併後的 alertmanager.yml"]
+        RT["route.routes[]<br/>平台路由 → 你的路由 → Per-tenant 路由"]
+        RC["receivers[]<br/>你的 receiver + Per-tenant receiver"]
+        IR["inhibit_rules[]<br/>你的規則 + Severity dedup"]
     end
 
     GEN --> AM
 
-    AM -->|"merge + reload"| ALM["Alertmanager"]
+    AM -->|"deploy + reload"| ALM["Alertmanager"]
 
     style TY fill:#e8f4fd,stroke:#1a73e8
     style PL fill:#fff3e0,stroke:#e65100
@@ -130,72 +133,90 @@ tenants:
       repeat_interval: "4h"
 ```
 
-### Step 4: Generate Alertmanager Fragment
+### Step 4: 驗證 tenant 設定
 
 ```bash
-# 產出 fragment
-da-tools generate-routes --config-dir conf.d/ -o alertmanager-routes.yaml
-
-# 驗證產出
-da-tools generate-routes --config-dir conf.d/ --validate
+# 驗證整棵 conf.d（CI 跑 --strict）
+da-tools generate-routes --config-dir conf.d/ --validate --strict
 
 # 驗證 + webhook domain allowlist 檢查
-da-tools generate-routes --config-dir conf.d/ --validate --policy .github/custom-rule-policy.yaml
+da-tools generate-routes --config-dir conf.d/ --validate --strict --policy .github/custom-rule-policy.yaml
 ```
 
-產出內容包含：
-- `route.routes[]`: Per-tenant 路由（含 `tenant="<name>"` matcher + timing guardrails）
-- `receivers[]`: Per-tenant receiver（webhook/email/slack/teams/rocketchat/pagerduty）
-- `inhibit_rules[]`: Per-tenant severity dedup rules
+`--validate` 不寫任何東西。產生器的輸出一律是**合併後的完整 Alertmanager 設定**，沒有「只產片段、自己貼」的模式：不帶模式旗標（只帶 `-o`、只帶 `--dry-run`）是結束碼 2。⚠️ v2.9.0 映像仍會在不帶模式旗標時輸出片段 <!-- image-caveat: v2.9.0 -->
 
-⚠️ 手動合併 fragment 時，fragment 的 `route.routes` 必須放在 root 子 route 的**最後**。若接在你自己的子 route 之前，沒有 tenant route 的租戶的告警會被 fragment 裡的尾端 route（只帶 `tenant="<id>"`、不帶 `continue`）交回 root receiver，到不了後面你自己的子 route（[#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)）。
+> **為什麼不再提供片段**（[#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)）：舊版片段的檔頭要你把它接在自己的子 route **後面**。但片段裡有 4 條平台路由（Watchdog 心跳、custom alert 隔離、synthetic probe、sentinel sink）必須排在最前面——接在後面時，你自己的 catch-all 子 route 先接走它們：Watchdog 心跳進了你的預設頻道（外部 dead-man's switch 收不到）、custom alert 與 sentinel 告警叫醒你的 NOC。改由產生器自己合併才排得對。
 
 ### Step 5: Merge into Alertmanager ConfigMap
 
-將產出的 fragment 合併至 Alertmanager 主配置。**兩種模式根據部署流程選擇：**
+產生器把 tenant 路由合併進**你自己的** Alertmanager 設定。三種輸出模式共用同一個合併，依部署方式選一個：
 
-**模式 A：`--apply`（Runtime 直接操作，v1.4.0）**
+**模式 A：`--output-alertmanager`（Kubernetes 以外的 BYO Alertmanager，或 Prometheus Operator 的 configSecret）**
 
 ```bash
-# 一站式自動合併 + apply + reload
-da-tools generate-routes --config-dir conf.d/ --apply --yes
+# 來源：你自己的設定，另外保管（例如放 git）；第一次可從現有設定複製
+cp /etc/alertmanager/alertmanager.yml alertmanager.base.yml
+
+# 先預覽
+da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
+  --base-config alertmanager.base.yml --dry-run
+
+# 寫出合併後的 alertmanager.yml（產物），部署到 /etc/alertmanager/ 後 reload（Step 6）
+da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
+  --base-config alertmanager.base.yml -o alertmanager.yml
 ```
 
-適合：初次部署測試、P0 緊急修復、不走 GitOps 的環境。
+之後 conf.d 改了，拿同一份 `alertmanager.base.yml` 再跑；要改你自己的設定也改它，不要改部署出去的 `alertmanager.yml`。
 
 **模式 B：`--output-configmap`（GitOps PR flow，v1.10.0）**
 
 ```bash
-# 產出完整 ConfigMap YAML（含 global + default route/receiver + tenant routes）
-da-tools generate-routes --config-dir conf.d/ --output-configmap -o deploy/alertmanager-configmap.yaml
-
-# 搭配自訂基礎配置
+# 產出合併後的完整 ConfigMap YAML
 da-tools generate-routes --config-dir conf.d/ --output-configmap \
-  --base-config conf.d/base-alertmanager.yaml -o deploy/alertmanager-configmap.yaml
+  --base-config base-alertmanager.yaml -o deploy/alertmanager-configmap.yaml
 
 # 檔案進 Git → PR review → merge → ArgoCD/Flux 自動 sync
 git add deploy/alertmanager-configmap.yaml && git commit -m "update AM routes"
 ```
 
-適合：正式 GitOps 流程。產出的 ConfigMap YAML 是完整可 `kubectl apply` 的格式，無需手動合併。不提供 `--base-config` 時使用內建預設值（`resolve_timeout: 5m`、`group_by: [alertname, tenant]`、default receiver）。
+**模式 C：`--apply`（Runtime 直接操作，v1.4.0）**
+
+```bash
+# 以 ConfigMap 的 alertmanager.base.yml（來源）渲染 + apply + reload
+da-tools generate-routes --config-dir conf.d/ --apply --yes
+```
+
+適合：初次部署測試、P0 緊急修復、不走 GitOps 的環境。它不讀 `--base-config`，來源在叢集上：ConfigMap 的 `alertmanager.base.yml` key 存來源，`--apply` 以它渲染，寫回 `alertmanager.yml`（產物）與 `alertmanager.base.yml`（來源）；Alertmanager 會忽略多出來的檔。第一次 `--apply`（還沒有這個 key）採用現有的 `alertmanager.yml` 當來源；它若已經是先前產生的（第一行是 `# GENERATED by da-tools generate-routes` 標記，或含 `tenant-*` receiver），結束碼 1、不套用，請先把你的來源放進 `alertmanager.base.yml`。⚠️ 升級時：舊版 `--apply` 寫進去的 `alertmanager.yml` 沒有標記行；conf.d 若沒有任何 `_routing`／`_routing_enforced`，裡面也沒有 `tenant-*` receiver，第一次 `--apply` 就會把它當來源收下，產物裡的 dedup inhibit 規則會多一份（只多一份，不會一直累加）——第一次跑之前先把你自己的設定放進 `alertmanager.base.yml`。要改設定請改 `alertmanager.base.yml`，不要改 `alertmanager.yml`——下一次 `--apply` 會從來源重新渲染它。⚠️ **行為變更**：`--apply` 先前整個取代叢集上的 `route.routes`，你手加的子 route 會消失；現在與另外兩種模式是同一個合併，你的路由保留。v2.9.0 映像仍是舊行為 <!-- image-caveat: v2.9.0 -->
+
+**合併規則**（三種模式相同；完整說明見 [CLI 參考 §generate-routes](../cli-reference.md#generate-routes)）：
+
+- **來源與產物分開**：輸出＝合併（來源 base, conf.d）。base 是你自己的設定，不是本工具先前產生的輸出；輸出是另一份產物，不能再拿來當 base（同 Prometheus Operator：讀使用者的 Secret、寫到另一個 `<name>-generated` Secret，從不回寫）。你自己的路由、receiver、inhibit rule、`global:`、root route 原樣保留，加上這次產生的。
+- **順序**：`route.routes` 變成「平台 4 條 + enforced NOC 路由（`continue: true`）」→「你的路由，原順序」→「租戶路由」。平台路由在你的路由之前，所以你的 catch-all 搶不走 Watchdog；租戶路由在你的路由之後。有 `{{tenant}}` enforced routing 時，你的路由與租戶路由收在一條送往你 root receiver 的上層路由底下（代替 root 兜底，見 [CLI 參考](../cli-reference.md#generate-routes)）。
+- **可重複執行**：conf.d 改了就拿**同一份來源**再跑一次。每次都從來源重新渲染，移除的租戶不殘留。
+- **base 不能是輸出**：產物第一行是 `# GENERATED by da-tools generate-routes` 註解；base 帶這一行，或出現 `tenant-*`、`platform-enforced*` receiver（只有產生器會寫的名稱）⇒ 結束碼 1、不寫檔，訊息說這看起來是本工具的輸出、請給來源；你自己的 receiver 也不要取這兩種名字。`-o` 與 `--base-config` 指向同一個檔 ⇒ 結束碼 2。四個平台 receiver 可以寫在你的 base，完整定義（例如 `watchdog-heartbeat` 接了 dead-man's switch）優先；base 裡送往它們的頂層路由視為平台的，以標準形式只輸出一次、排在最前面。
+- **從 fragment 模式遷移（一次性）**：base 裡貼過 fragment 的（含 `tenant-*` receiver）會被拒收。把貼進去的部分刪掉，留下你自己原本的設定當來源。
+- **Watchdog 要接出去**：你的 base 裡 `watchdog-heartbeat` 沒有 integration 時，輸出模式印 `watchdog_undelivered` WARN，加 `--strict` 時結束碼 1、不寫檔。接法見[告警平面自我存活性](alerting-plane-self-liveness.md)。⚠️ v2.9.0 映像不報這項 <!-- image-caveat: v2.9.0 -->
+
+不提供 `--base-config` 時合併進內建 placeholder base（`resolve_timeout: 5m`、`group_by: [alertname, tenant]`、空的 `default` receiver）——那不是你的設定，BYO 部署請一律帶 `--base-config`。
 
 ⚠️ **`--base-config` 必須是 Alertmanager 收得下的完整設定**（[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）：要有 `route:` 與它指名的 `receivers:`；`global:`、`inhibit_rules:` 可以省略、會補內建值。generator 以 Alertmanager 自己的載入函式（`da-read alertmanager`）讀 base，少了 `route:` 或 receivers 就拒收、結束碼 2，訊息是載入函式的原話——不會再補一個內建的 route。
 
-⚠️ **v2.10.0 起「提供了但用不了」不再等於「沒提供」（BREAKING，[#1616](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1616)）**：上面範例的 `--base-config` 是相對路徑。舊行為是——路徑打錯、指到目錄、檔案是空的或只有註解，都**結束碼 0 並靜默改用內建預設值**，產出的 ConfigMap 與完全不提供這個旗標**逐位元組相同**；你的 `global:`（SMTP smarthost、Slack webhook）就這樣被換掉並被 ArgoCD/Flux sync 進叢集。新行為是**結束碼 2 並指名這個旗標**。⛔ 正確的處置是修路徑，不是拿掉 `--base-config`——拿掉的結果與舊的錯誤行為相同。另外 `--base-config` 只有 `--output-configmap` 會讀它（`--validate` 會在組裝 ConfigMap 之前就返回），用在其他模式現在也是結束碼 2 而不是被靜默忽略。
+⚠️ **v2.10.0 起「提供了但用不了」不再等於「沒提供」（BREAKING，[#1616](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1616)）**：上面範例的 `--base-config` 是相對路徑。舊行為是——路徑打錯、指到目錄、檔案是空的或只有註解，都**結束碼 0 並靜默改用內建預設值**，產出的 ConfigMap 與完全不提供這個旗標**逐位元組相同**；你的 `global:`（SMTP smarthost、Slack webhook）就這樣被換掉並被 ArgoCD/Flux sync 進叢集。新行為是**結束碼 2 並指名這個旗標**。⛔ 正確的處置是修路徑，不是拿掉 `--base-config`——拿掉的結果與舊的錯誤行為相同。另外 `--base-config` 只有 `--output-configmap` 與 `--output-alertmanager` 會讀它（`--validate` 會在組裝設定之前就返回，`--apply` 的 base 是叢集上的設定），用在其他模式現在也是結束碼 2 而不是被靜默忽略。
 
 **模式比較：**
 
-| | `--apply` | `--output-configmap` |
-|---|-----------|---------------------|
-| 操作方式 | 直接修改 K8s ConfigMap | 產出 YAML 檔案 |
-| 適用流程 | CLI 手動操作 / 緊急修復 | Git PR → review → GitOps sync |
-| 是否需要 K8s 連線 | 是（kubectl context） | 否（純文件產出） |
-| Alertmanager reload | `--apply` 自動觸發 | GitOps sync 後由 sidecar/webhook 觸發 |
-| 可審計性 | 無 Git 紀錄 | 完整 Git history |
+| | `--output-alertmanager` | `--output-configmap` | `--apply` |
+|---|---|---|---|
+| 操作方式 | 產出 `alertmanager.yml` | 產出 ConfigMap YAML 檔案 | 直接修改 K8s ConfigMap |
+| base 來源 | `--base-config` | `--base-config` | ConfigMap 的 `alertmanager.base.yml`（第一次為現有的 `alertmanager.yml`） |
+| 適用流程 | Kubernetes 以外的 Alertmanager | Git PR → review → GitOps sync | CLI 手動操作 / 緊急修復 |
+| 是否需要 K8s 連線 | 否 | 否（純文件產出） | 是（kubectl context） |
+| Alertmanager reload | 部署後自行觸發（Step 6） | GitOps sync 後由 sidecar/webhook 觸發 | `--apply` 自動觸發 |
+| 可審計性 | 看你怎麼部署 | 完整 Git history | 無 Git 紀錄 |
 
-> **注意**：`--apply` 與 `--output-configmap` 互斥，不能同時使用。
+> **注意**：三種模式（與 `--validate`）互斥，一次只能帶一個。`--namespace` / `--configmap` 只有 `--output-configmap` 與 `--apply` 讀，配 `--output-alertmanager` 是結束碼 2。
 
-PATH 上有 `amtool` 時，兩種模式都會先用它驗證要寫出／套用的 `alertmanager.yml`，Alertmanager 拒收就結束碼 1、不寫檔也不 apply；沒有 `amtool` 會印 NOTICE 說明「未經 Alertmanager 驗證」。`--validate` 也會做，但它組的是**內建預設 base** 而不是你的 base（#2260），所以要驗你自己的 base 仍得跑 `--output-configmap --base-config`；fragment 輸出不做這項驗證。`--apply` 的 reload 失敗是結束碼 2（#2219）。⚠️ v2.9.0 映像的 `--validate` 不經 `amtool` <!-- image-caveat: v2.9.0 -->
+PATH 上有 `amtool` 時，三種模式都會先用它驗證要寫出／套用的 `alertmanager.yml`，Alertmanager 拒收就結束碼 1、不寫檔也不 apply；沒有 `amtool` 會印 NOTICE 說明「未經 Alertmanager 驗證」。`--validate` 也會做，但它組的是**內建預設 base** 而不是你的 base（#2260），所以要驗你自己的 base 仍得跑 `--output-alertmanager --base-config ... --dry-run`（或 `--output-configmap`）。`--apply` 的 reload 失敗是結束碼 2（#2219）。⚠️ v2.9.0 映像的 `--validate` 不經 `amtool` <!-- image-caveat: v2.9.0 -->
 
 ### Step 6: Reload Alertmanager
 
@@ -213,19 +234,28 @@ curl -sf http://localhost:9093/-/ready && echo "Alertmanager ready"
 
 ### 功能
 
-讀取 `conf.d/` 所有 tenant YAML，掃描 `_routing` 和 `_severity_dedup` 設定，產出合法的 Alertmanager YAML fragment。
+讀取 `conf.d/` 所有 tenant YAML，掃描 `_routing` 和 `_severity_dedup` 設定，產出 route、receiver、inhibit rule，合併進 base 設定（你自己的設定，即來源）後輸出完整、合法的 Alertmanager 設定，見 Step 5。
 
 ### 模式
 
+模式旗標恰好一個，不帶是結束碼 2：
+
 | Flag | 說明 |
 |------|------|
-| `--dry-run` | 輸出至 stdout，不寫入檔案 |
-| `-o FILE` | 寫入指定檔案 |
-| `--validate` | 驗證配置合法性（exit 0/1，適合 CI） |
+| `--validate` | 驗證配置合法性（exit 0/1，適合 CI），不寫任何東西 |
+| `--output-alertmanager` | 產出合併後的純 `alertmanager.yml`，適合 Kubernetes 以外的 BYO Alertmanager 或 Prometheus Operator 的 configSecret |
+| `--output-configmap` | 產出合併後的完整 ConfigMap YAML，適合 GitOps PR flow |
+| `--apply [--yes]` | 合併進叢集上的 Alertmanager ConfigMap + reload（`--yes` 跳過確認） |
+
+其他旗標：
+
+| Flag | 說明 |
+|------|------|
+| `--base-config FILE` | 搭配 `--output-alertmanager` / `--output-configmap`：你的 Alertmanager 設定，產生的路由合併進去 |
+| `-o FILE` | 搭配 `--output-alertmanager` / `--output-configmap`：寫入指定檔案（預設 stdout） |
+| `--dry-run` | 搭配 `--output-alertmanager` / `--output-configmap`：預覽輸出，不寫入檔案 |
 | `--policy FILE` | 載入 `allowed_domains` 做 webhook URL 合規檢查 |
-| `--apply [--yes]` | 自動合併至 Alertmanager ConfigMap + reload（`--yes` 跳過確認） |
-| `--output-configmap` | 產出完整 ConfigMap YAML（與 `--apply` 互斥），適合 GitOps PR flow |
-| `--base-config FILE` | 搭配 `--output-configmap`，載入基礎 Alertmanager 配置（global / default receiver 等） |
+| `--strict` | 把可升級的 WARN 升為 ERROR 並結束碼 1（CI 用） |
 
 ### Timing Guardrails
 
@@ -260,7 +290,7 @@ curl -X POST http://alertmanager:9093/-/reload
 | **ConfigMap Watcher Sidecar** | 類似 `prometheus-config-reloader` | 全自動，適合生產環境 |
 | **CI Pipeline 整合** | GitOps: `generate-routes --validate` + apply + reload | 適合 GitOps 工作流 |
 | **GitOps ConfigMap 產出** | `generate-routes --output-configmap` 產出完整 ConfigMap YAML 進 Git PR flow | v1.10.0+，取代 `--apply` 直操作 |
-| **Alertmanager Operator** | `kube-prometheus-stack` 的 AlertmanagerConfig CRD | 適合已使用 Operator 的環境 |
+| **Alertmanager Operator** | `generate-routes --output-alertmanager` 的輸出放進 Secret，由 Alertmanager CR 的 `spec.configSecret` 載入（Operator 自己 reload） | 適合已使用 Operator 的環境 |
 
 ---
 
@@ -303,12 +333,46 @@ PagerDuty 的 `routing_key` 與 `service_key` 兩個都給會被擋：Alertmanag
 選填欄位的值也會檢查（[#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)）：只擋 Alertmanager 會拒收、導致整份設定 reload 失敗的值，以 amtool 0.34.1 的判定為準。
 
 - `send_resolved`、email 的 `require_tls`、webhook 的 `http_config.proxy_from_environment`：只收布林與空值（視同沒設），寫成未加引號的 `true`／`false`。未加引號的 YAML 1.1 布林字 `yes`／`no`／`on`／`off` 是字串：路由產生器經 `da-guard parse-tree` 以 yaml.v3 讀，同樣拒收，請改寫成 `true`／`false`。加引號的 `"yes"`、`"true"` 以及 `maybe`、`1`、`""` 都擋，路由產生器在所有模式拒收整棵樹（[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）。
-- webhook 的 `http_config`：空值視同沒設，其餘必須是 mapping。可用的鍵是 Alertmanager 的 `http_config` 鍵扣掉檔案型欄位：`basic_auth`、`oauth2`、`authorization`、`bearer_token`、`tls_config`、`follow_redirects`、`enable_http2`、`http_headers`、`proxy_url`、`no_proxy`、`proxy_from_environment`、`proxy_connect_header`（[#2984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2984)）。⚠️ **檔案型欄位一律拒收**（[#3257](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3257)）：receiver 任何一層（含 `http_config` 底下各層）以 `_file`、`_ref` 結尾的鍵，或名為 `files` 的鍵（例如 `bearer_token_file`、`basic_auth.password_file`、`tls_config.key_file`、`oauth2.client_secret_ref`、`http_headers` 的 `files`），會讓 Alertmanager 讀取它自己容器內的檔案或找它沒有的 secret manager，因此 schema 與路由產生器都拒收，產生器在所有模式下整棵樹拒收（rc 1，什麼都不寫出），tenant-api 寫入回 422。憑證請直接寫值；需要放在 Secret 的憑證，在 [#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560) 的 `secretRef` 接線之前，請由平台寫進 base config 裡平台自己的 receiver。其他鍵 Alertmanager 會拒收整份設定，validate-config 的 JSON schema 擋下，路由產生器則交給 `--validate` 的 amtool 判。`follow_redirects`／`enable_http2` 原樣交給 Alertmanager，請寫不加引號的 `true`／`false`。`tls_config`、`oauth2`、`authorization`、`basic_auth`、`http_headers`、`proxy_connect_header` 的內層照 Alertmanager 的規則判（未知鍵、`oauth2` 缺 `client_id`／`token_url`、`authorization` 的 `type: basic`、保留的 header 名稱如 `Authorization`）；這一層只有 validate-config 的 JSON schema 擋，路由產生器交給 `--validate` 的 amtool，da-guard 與 tenant-api 不判。`basic_auth`、`oauth2`、`authorization`、`bearer_token` 最多只能設一個：空值與 `bearer_token: ""` 視同沒設，`basic_auth: {}` 算有設。`bearer_token`／`proxy_url`／`no_proxy` 必須是字串（YAML 會讀成布林、數字或日期的值請加引號）。`basic_auth`、`oauth2`、`authorization`、`tls_config` 底下的字串欄位也一樣：純數字的 `password`、`username`、`client_id`、`client_secret`、`credentials`，或 yaml.v3 會讀成數字、日期的值（`1e3`、`0x1F`、`2024-01-02`），請寫成 `password: "123456"` 這樣加引號。不加引號時 validate-config 的 `yaml_quoting` 列會 FAIL，逐筆列出檔名、欄位路徑和改法（例如 `quote it, without a tag: password: "123456"`），照著補上引號即可。原因是路由產生器與驗證工具（validate-config 與 conf.d 的 lint）都經 `da-guard parse-tree` 以 yaml.v3 讀 conf.d，值是什麼由它解析出的 tag 決定：未加引號的 `0x1F` 是整數 31、`1e3` 是浮點數 1000、`2024-01-02` 是日期，Alertmanager 收到的就不是你寫的那串（[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）。
+- webhook 的 `http_config`：空值視同沒設，其餘必須是 mapping。可用的鍵是 Alertmanager 的 `http_config` 鍵扣掉檔案型欄位：`basic_auth`、`oauth2`、`authorization`、`bearer_token`、`tls_config`、`follow_redirects`、`enable_http2`、`http_headers`、`proxy_url`、`no_proxy`、`proxy_from_environment`、`proxy_connect_header`（[#2984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2984)）。⚠️ **檔案型欄位一律拒收**（[#3257](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3257)）：receiver 任何一層（含 `http_config` 底下各層）以 `_file`、`_ref` 結尾的鍵，或名為 `files` 的鍵（例如 `bearer_token_file`、`basic_auth.password_file`、`tls_config.key_file`、`oauth2.client_secret_ref`、`http_headers` 的 `files`），會讓 Alertmanager 讀取它自己容器內的檔案或找它沒有的 secret manager，因此 schema 與路由產生器都拒收，產生器在所有模式下整棵樹拒收（rc 1，什麼都不寫出），tenant-api 寫入回 422。憑證請直接寫值，或改用下方的 [`secretRef`](#憑證放在-secretsecretref)。其他鍵 Alertmanager 會拒收整份設定，validate-config 的 JSON schema 擋下，路由產生器則交給 `--validate` 的 amtool 判。`follow_redirects`／`enable_http2` 原樣交給 Alertmanager，請寫不加引號的 `true`／`false`。`tls_config`、`oauth2`、`authorization`、`basic_auth`、`http_headers`、`proxy_connect_header` 的內層照 Alertmanager 的規則判（未知鍵、`oauth2` 缺 `client_id`／`token_url`、`authorization` 的 `type: basic`、保留的 header 名稱如 `Authorization`）；這一層只有 validate-config 的 JSON schema 擋，路由產生器交給 `--validate` 的 amtool，da-guard 與 tenant-api 不判。`basic_auth`、`oauth2`、`authorization`、`bearer_token` 最多只能設一個：空值與 `bearer_token: ""` 視同沒設，`basic_auth: {}` 算有設。`bearer_token`／`proxy_url`／`no_proxy` 必須是字串（YAML 會讀成布林、數字或日期的值請加引號）。`basic_auth`、`oauth2`、`authorization`、`tls_config` 底下的字串欄位也一樣：純數字的 `password`、`username`、`client_id`、`client_secret`、`credentials`，或 yaml.v3 會讀成數字、日期的值（`1e3`、`0x1F`、`2024-01-02`），請寫成 `password: "123456"` 這樣加引號。不加引號時 validate-config 的 `yaml_quoting` 列會 FAIL，逐筆列出檔名、欄位路徑和改法（例如 `quote it, without a tag: password: "123456"`），照著補上引號即可。原因是路由產生器與驗證工具（validate-config 與 conf.d 的 lint）都經 `da-guard parse-tree` 以 yaml.v3 讀 conf.d，值是什麼由它解析出的 tag 決定：未加引號的 `0x1F` 是整數 31、`1e3` 是浮點數 1000、`2024-01-02` 是日期，Alertmanager 收到的就不是你寫的那串（[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）。
 - `http_config.proxy_url`：必須是字串；tenant-api 只擋 Go `net/url` 解析不了的值（例如 `::x`、host 含空白、`%zz`、非法 port），路由產生器則交給 `--validate` 的 amtool 判。`proxy_from_environment: true` 不能與非空的 `proxy_url` 或 `no_proxy` 並用；`no_proxy` 需要 `proxy_url`；`proxy_connect_header` 需要非空的 `proxy_url` 或 `proxy_from_environment`。
 
 刻意比 Alertmanager 嚴格的形狀，以共享表 [`receiver_presence_cases.json`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json) 中標 `strict` 的列為準。
 
 這些規則在 `generate_alertmanager_routes`（沒有 amtool 時也擋，`proxy_url` 能否解析除外），以及 tenant-api 的 `PUT /api/v1/tenants/{id}` 與 `POST /api/v1/tenants/{id}/validate` 都一致。tenant-api 對 PUT 回 400 `INVALID_BODY`，validate 回 `valid: false`，都只判 body 自己寫的 receiver。⚠️ 產生器的「擋」分兩種。布林欄位（`send_resolved`、`require_tls`、`proxy_from_environment`）的值型別不對時，所有模式都拒收整棵樹、rc 1、不寫出任何產出（見上方第一項）。其餘規則是印 WARN、略過該租戶的 receiver 與 route，產出照寫、rc 0（加 `--strict` 也一樣）；只有 `--validate` 會以 rc 1 結束，所以 CI 要跑 `--validate`。
+
+### 憑證放在 Secret（`secretRef`）
+
+7 個憑證欄位可以不寫值，改寫成 Kubernetes Secret 的參照（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）：webhook／Rocket.Chat 的 `url`、Slack 的 `api_url`、Teams 的 `webhook_url`、PagerDuty 的 `service_key`／`routing_key`、email 的 `auth_password`。email 的 `headers` 與 webhook 的 `http_config` 在 Alertmanager 沒有對應的 `*_file`，任何一層都不接：參照寫在別處，產生器在 render 之後掃到就擋下該 receiver（`secret_ref_unsupported_field`），不會原樣寫進 Alertmanager 設定。
+
+參照**不寫 Secret 名稱**，只有兩種形狀：
+
+```yaml
+_routing:
+  receiver:
+    type: slack
+    api_url: {secret: {key: slack-url}}                    # 租戶自己的 Secret：da-<tenant>
+  routes:
+    - match: {severity: critical}
+      receiver:
+        type: webhook
+        url: {secret: {shared: corp-alerting, key: url}}   # 共用 Secret：別名列在部署端 policy
+```
+
+- **自己的 Secret**：`{secret: {key: <key>}}`。名稱固定是 `da-<tenant>`，由租戶 id 推導；租戶寫不出別的名稱，也就引用不到別的租戶的 Secret。`_routing_defaults` 裡的參照，對每個繼承它的租戶各自推導。`_routing_enforced` 帶 `{{tenant}}` 時，展開出的每條 receiver 也歸該租戶；不帶 `{{tenant}}` 的平台級 receiver 沒有所屬租戶，只能用共用 Secret。
+- **共用的 Secret**：`{secret: {shared: <別名>, key: <key>}}`。別名必須列在部署端 policy 檔（`generate-routes --policy`，tenant-api 的 `generator.policy`）的 `shared_secrets`：
+
+  ```yaml
+  allowed_domains: ["*.example.com"]
+  shared_secrets:
+    corp-alerting: {secret: corp-alerting, fields: [api_url, webhook_url, url]}
+  ```
+
+  `secret` 是實際的 Secret 名稱，不得以 `da-` 開頭（避免與租戶推導出的名稱撞名）；`fields` 只能列內容本身就是送達目的地的欄位，不能列 `auth_password`。沒有 policy 檔，或 policy 沒有 `shared_secrets`，就沒有任何共用例外。receiver 只要用了任一共用 Secret，就不能設 `http_config.proxy_url`：代理是租戶自己指定的，會看到送往共用目的地的請求（`secret_ref_shared_proxy_url`）。`shared_secrets` 寫壞（不是 mapping、別名不是 DNS-1123 label、條目不是 `{secret, fields}`、名稱以 `da-` 開頭、`fields` 列了不接 Secret 的欄位）時整份 policy 不可用，結束碼 `2`。
+- **`auth_password`**：只能用自己的 Secret，而且 policy 必須設了非空的 `allowed_domains`、`smarthost` 的 host 也在其中。`smarthost` 是租戶自己填的，密碼會送到那台伺服器。
+
+產生器把參照寫成 Alertmanager 的 `<field>_file: <root>/<secret-name>/<key>`，拿掉原欄位；`<root>` 預設 `/etc/alertmanager/secrets`，用 `generate-routes --secret-mount-root` 改。違反上面任何一條，該 receiver 不產出，`generate-routes --validate` 非 0、`validate-config` 的 routes 列 FAIL、tenant-api 寫入回 422。URL 欄位是參照時，產生器看不到 host，`allowed_domains` 不檢查它：Secret 由 operator 或 ExternalSecrets 建立，租戶寫不到內容，也指定不了名稱。`test-notification` 讀不到 Secret，這類 receiver 一律 `SKIPPED`、不送出。
+
+⛔ **掛載契約（BYO 必做）**：Alertmanager 容器必須把每個被引用的 Secret 掛在 `<root>/<secret-name>/`，Secret 的每個 key 是其中一個檔案。這與 Prometheus Operator 的 `spec.secrets` 掛到 `/etc/alertmanager/secrets/<name>` 的版面相同；repo 自帶的 `watchdog-heartbeat` 也掛在 `/etc/alertmanager/secrets/watchdog-heartbeat/`。產生器與 tenant-api 都沒有 Secret 讀權限，看不到 Secret 是否存在：檔案不在時 Alertmanager 在送出那一刻才失敗。
 
 ### 訊息模板（Go Template）
 
@@ -342,8 +406,9 @@ Email 和 Teams 使用相同的 Go template 語法，僅欄位名稱不同：
 ### 工具驗證
 
 ```bash
-# 1. 產出 fragment（dry-run 預覽）
-da-tools generate-routes --config-dir /data/conf.d --dry-run
+# 1. 預覽合併後的 alertmanager.yml（dry-run，不寫檔）
+da-tools generate-routes --config-dir /data/conf.d --output-alertmanager \
+  --base-config /data/alertmanager.yml --dry-run
 
 # 2. 驗證配置合法性
 da-tools generate-routes --config-dir /data/conf.d --validate
@@ -451,7 +516,7 @@ _routing_enforced:
 
 **模式 B：Per-tenant 獨立通道**
 
-當 receiver 欄位包含 `{{tenant}}` 佔位符，系統自動為每個 tenant 建立獨立的 enforced route。Platform 可藉此為各 tenant 建立專屬通知通道，tenant 無法拒絕也無法覆寫。「每個 tenant」指產生器讀到的每個租戶，與 severity dedup inhibit rule 涵蓋的是同一群：沒有 `_routing` 的租戶（只寫閾值、只設 `_silent_mode`）也有，寫 `_routing: disable` 或 `_routing` 被拒收的租戶同樣有——租戶無法用它退出這條通道；tenant id 不合法的租戶例外，產生器會整棵樹拒收。沒有 tenant route 的租戶另有一條尾端 route（只帶 `tenant="<id>"`）把告警交回 root receiver，所以 root 照收，enforced 通道是額外多送的一份。Silent mode 由 base config 的 TenantSilent inhibit rule 壓制（內建 base 不含，需以 `--base-config` 帶入），與 route 無關。route 數因此隨租戶數線性增加（[#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)）：
+當 receiver 欄位包含 `{{tenant}}` 佔位符，系統自動為每個 tenant 建立獨立的 enforced route。Platform 可藉此為各 tenant 建立專屬通知通道，tenant 無法拒絕也無法覆寫。「每個 tenant」指產生器讀到的每個租戶，與 severity dedup inhibit rule 涵蓋的是同一群：沒有 `_routing` 的租戶（只寫閾值、只設 `_silent_mode`）也有，寫 `_routing: disable` 或 `_routing` 被拒收的租戶同樣有——租戶無法用它退出這條通道；tenant id 不合法的租戶例外，產生器會整棵樹拒收。合併時其餘路由收在 enforced route 之後一條送往 root receiver 的上層路由底下，所以沒有 tenant route 的租戶，告警在你的路由都沒命中時照樣送到 root（命中你的路由時——含 `continue: true` 的——就照那條路由送，不再多送 root 一份），enforced 通道是額外多送的一份。Silent mode 由 base config 的 TenantSilent inhibit rule 壓制（內建 base 不含，需以 `--base-config` 帶入），與 route 無關。route 數因此隨租戶數線性增加（[#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)）：
 
 ```yaml
 # conf.d/_defaults.yaml
@@ -562,7 +627,7 @@ _routing_enforced:
    - 選 `alert_source="platform"` → 除 `Watchdog` 外的平台自監控全部收到；租戶的 critical 走各租戶自己的 `_routing`（不進 NOC）。
    - 選 `severity="critical"` → NOC 收到所有租戶 critical，但平台自監控只涵蓋 `severity: critical` 的那些，`warning` 與 `info` 的仍然靜默。
 
-   ⚠️ 不要試圖「手動在 base ConfigMap 再加一條 route」繞過：重新產生設定時 `route.routes` 是**整段 REPLACE**（`assemble_configmap`），手加的 route 會在下一次 regen 消失。
+   ⚠️ 若要在 base 設定裡手加第二條 route 補上另一個需求：重新產生時它會保留（輸出每次都從你的 base 重新渲染，[#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)），位置在平台路由與 enforced 路由之後、租戶路由之前。所以它不帶 `continue: true` 又匹配到租戶告警時，那些告警到不了租戶自己的路由——手加的 route 請只匹配你要的告警，或加 `continue: true`。receiver 不要取名 `tenant-…`／`platform-enforced…`：那兩種名字只有產生器會寫，base 裡出現會被拒收（結束碼 1）。⚠️ v2.9.0 映像仍整段取代 `route.routes`，手加的 route 會在下一次重新產生時消失 <!-- image-caveat: v2.9.0 -->
 
 4. **模式 B（`{{tenant}}` 展開）不能拿來收平台告警——而且它的失敗方式有兩種、方向相反**：per-tenant enforced route 硬帶 `tenant="<name>"` matcher（`scripts/tools/ops/_grar_routes.py`）。
    - **收不到**：完全沒有 `tenant` label 的那些（下一條那 3 條以外的全部）永遠匹配不到任何 per-tenant route。
@@ -599,7 +664,7 @@ _routing_enforced:
 
 ## Alertmanager Operator Path
 
-> 使用 Prometheus Operator 的 AlertmanagerConfig CRD？請參閱 [Prometheus Operator 整合手冊](prometheus-operator-integration.md)，包含 AlertmanagerConfig v1beta1 產出、驗證與遷移指引。
+> 使用 Prometheus Operator 管理 Alertmanager？路由一樣由 `generate-routes` 渲染，輸出放進 Secret、由 Alertmanager CR 的 `spec.configSecret` 載入；平台不產生 AlertmanagerConfig CRD（它的路由會被 Operator 插在全域路由之前並強制 `continue: true`）。流程見 [Operator Alertmanager 整合](operator-alertmanager-integration.md)，導覽見 [Prometheus Operator 整合手冊](prometheus-operator-integration.md)。
 
 ## 相關資源
 

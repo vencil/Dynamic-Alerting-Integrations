@@ -37,7 +37,7 @@ import (
 type ParseFunc[T any] func([]byte) (*T, error)
 
 // EmptyFunc returns a zero-value snapshot to use when the path is
-// empty (open mode), the file doesn't exist, or initial load fails.
+// empty (no file configured), the file doesn't exist, or initial load fails.
 type EmptyFunc[T any] func() *T
 
 // ReadFunc replaces the single-file read of a Watcher built by NewWithReader:
@@ -93,7 +93,7 @@ type ReloadObserver interface {
 // demand or via a periodic ticker, and serves snapshots lock-free.
 //
 // Path semantics:
-//   - "" (empty path) — open mode. Get returns empty(), WatchLoop
+//   - "" (empty path) — no file. Get returns empty(), WatchLoop
 //     is a no-op, load is a no-op. rbac uses this for "no
 //     _rbac.yaml configured".
 //   - non-empty + file missing — empty config stored, no error.
@@ -122,7 +122,7 @@ type Watcher[T any] struct {
 	// still nil — is reflected on the gauge the moment the observer is wired,
 	// instead of the gauge sitting at its assumed-current default until the
 	// next load (a WatchLoop tick, or forever for a watcher nobody runs a
-	// WatchLoop for). Defaults true (open mode / pre-load are healthy).
+	// WatchLoop for). Defaults true (no-file / pre-load are healthy).
 	//
 	// Concurrency: both the WRITE (loadLocked's defer) and the READ
 	// (SetReloadObserver's replay) hold loadMu, so lastOK is fully serialised with
@@ -148,7 +148,7 @@ type Watcher[T any] struct {
 // load result is returned so callers can decide whether to fail
 // fast (rbac.NewManager: fatal) or log-and-continue (others).
 //
-// path: full filesystem path. Empty = open mode.
+// path: full filesystem path. Empty = no file (the empty config).
 // label: log line prefix (e.g. "rbac", "policy"). Used as
 //
 //	"<label>: loaded ... from <path>" / "WARN: <label> reload failed: %v".
@@ -166,7 +166,7 @@ func New[T any](path, label string, parse ParseFunc[T], empty EmptyFunc[T]) (*Wa
 		label:  label,
 		parse:  parse,
 		empty:  empty,
-		lastOK: true, // healthy until a load() proves otherwise (open mode stays true)
+		lastOK: true, // healthy until a load() proves otherwise (no-file stays true)
 	}
 	// Always start with empty so Get is non-nil even before load().
 	w.value.Store(empty())
@@ -182,7 +182,7 @@ func New[T any](path, label string, parse ParseFunc[T], empty EmptyFunc[T]) (*Wa
 
 // NewWithReader is New with read in place of the single-file read of path
 // (see ReadFunc). desc names the source in logs and Path() and must be
-// non-empty: there is no open mode. Everything else — SHA-256 dedup of
+// non-empty: there is no no-file mode. Everything else — SHA-256 dedup of
 // read's bytes, last-good on a failure, WatchLoop, Reload, the reload
 // observer — is New's.
 func NewWithReader[T any](desc, label string, read ReadFunc, parse ParseFunc[T], empty EmptyFunc[T]) (*Watcher[T], error) {
@@ -283,7 +283,7 @@ func (w *Watcher[T]) reloadAsync() {
 // New() ran while reloadObs was nil, so without this replay a file that was
 // already broken at startup would leave the gauge at its assumed-current default
 // until the next load — a WatchLoop tick later, or never for a watcher nobody
-// runs a WatchLoop for (tests, tools). Healthy and open-mode managers replay ok=true
+// runs a WatchLoop for (tests, tools). Healthy and no-file managers replay ok=true
 // (gauge stays 1), so there is no false positive. The replay goes through
 // RecordReload, so a replayed startup FAILURE also increments the failure counter
 // once — a real load failure counted once; it stays below the
@@ -340,7 +340,7 @@ func (w *Watcher[T]) load() error {
 //
 // Empty path or missing file → store empty(). A missing file is NOT
 // an error: for rbac that empty snapshot is what makes a deleted
-// _rbac.yaml fail closed (ADR-027 MED-8, see rbac.failClosedOnEmpty),
+// _rbac.yaml deny everything (ADR-027 §7: an empty rule set grants nothing),
 // and for every manager it is how a GitOps `git rm` of the config
 // takes effect. Do not "harden" this into an error — see
 // config_reload_test.go TestLoad_DeletedFile (internal/rbac).

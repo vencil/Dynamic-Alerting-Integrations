@@ -63,6 +63,7 @@ from __future__ import annotations
 import argparse
 import ast
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -280,7 +281,99 @@ def validate_manifest(
                     ),
                 ))
 
+        # 5. A test an exclusion reason names as pinning the function must
+        # exist (`tests/<path>.py::name` or `::Class::name`). A dangling
+        # name reads as coverage that is not there.
+        for name, reason in sorted(excluded.items()):
+            if not isinstance(reason, str):
+                continue
+            for ref in _TEST_REF.finditer(reason):
+                problem = _dangling_test_ref(repo_root, *ref.groups())
+                if problem:
+                    issues.append(Issue(
+                        module=rel_path, severity="error", kind="dangling-test-ref",
+                        detail=(
+                            f"the `excluded:` reason of {name!r} names "
+                            f"{ref.group(0)!r}, but {problem}. Point it at the "
+                            "test that pins the function now, or drop the claim."
+                        ),
+                    ))
+
     return issues
+
+
+_TEST_REF = re.compile(r"(tests/[\w./-]+\.py)::(\w+)(?:::(\w+))?")
+
+
+def _dangling_test_ref(repo_root: Path, path: str, first: str,
+                       second: Optional[str]) -> Optional[str]:
+    """Why `path::first[::second]` does not name a test pytest collects, or
+    None if it does (pyproject: `python_functions = test_*`, `python_classes =
+    Test*`): a top-level `test_*` function, a top-level `Test*`
+    class, or a `test_*` method of one — its own or inherited from a class
+    of the same file (pytest collects inherited methods under the subclass).
+    A base imported from elsewhere cannot be read here, so a method only it
+    defines is reported; a misspelled name must not pass."""
+    test_file = repo_root / path
+    if not test_file.is_file():
+        return f"{path} does not exist"
+    try:
+        tree = ast.parse(test_file.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return f"{path} cannot be read ({exc})"
+    except (SyntaxError, ValueError) as exc:
+        return f"{path} does not parse ({exc})"
+    defs = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    top = {n.name: n for n in tree.body if isinstance(n, defs)}
+    if first not in top:
+        return f"{path} defines no {first!r}"
+    owner = top[first]
+    # A unittest.TestCase subclass is collected whatever its name
+    # (python_classes does not apply to it); its methods follow unittest's
+    # `test` prefix.
+    unittest_case = isinstance(owner, ast.ClassDef) and _is_unittest_case(owner, top)
+    collected = (unittest_case or owner.name.startswith("Test")
+                 if isinstance(owner, ast.ClassDef) else owner.name.startswith("test_"))
+    if not collected:
+        return f"{path}::{first} is not a test pytest collects"
+    if second is None:
+        return None
+    if not isinstance(owner, ast.ClassDef):
+        return f"{path}::{first} is a function, not a class holding {second!r}"
+    members: set = set()
+    pending, seen = [owner], set()
+    while pending:
+        node = pending.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        members |= {n.name for n in node.body if isinstance(n, defs)}
+        pending.extend(top[b.id] for b in node.bases
+                       if isinstance(b, ast.Name) and isinstance(top.get(b.id), ast.ClassDef))
+    if second not in members:
+        return f"{path} defines no {first}::{second}"
+    if not second.startswith("test" if unittest_case else "test_"):
+        return f"{path}::{first}::{second} is not a test pytest collects"
+    return None
+
+
+def _is_unittest_case(cls: ast.ClassDef, top: dict, _seen=None) -> bool:
+    """Whether *cls* subclasses ``unittest.TestCase`` (spelled
+    ``unittest.TestCase`` or ``TestCase``), directly or through a class of
+    the same file."""
+    seen = _seen if _seen is not None else set()
+    if id(cls) in seen:
+        return False
+    seen.add(id(cls))
+    for b in cls.bases:
+        if isinstance(b, ast.Attribute) and b.attr == "TestCase":
+            return True
+        if isinstance(b, ast.Name):
+            if b.id == "TestCase":
+                return True
+            if isinstance(top.get(b.id), ast.ClassDef) and _is_unittest_case(top[b.id], top, seen):
+                return True
+    return False
 
 
 def main(argv: Optional[list] = None) -> "int | Report":

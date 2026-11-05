@@ -69,7 +69,6 @@ type servedOut struct {
 			Refused      string              `json:"refused"`
 		} `json:"keys"`
 	} `json:"tenants"`
-	Aliases map[string]string `json:"aliases"`
 }
 
 // served runs the subcommand over files (paths relative to conf.d) at `at`.

@@ -17,65 +17,34 @@ lang: zh
 
 ## Overview
 
-Shadow Monitoring（影子監控）是在 Operator 環境中進行路由遷移時的雙軌觀察策略。它允許你在不影響生產告警的前提下，驗證新的 AlertmanagerConfig 路由配置是否正確。
+Shadow Monitoring（影子監控）是在 Operator 環境中變更告警路由時的雙軌觀察策略。它允許你在不影響生產告警的前提下，確認某個租戶的告警確實流經新的路由設定。
+
+Operator 路徑上的路由是 `generate-routes` 渲染、經 Alertmanager CR 的 `spec.configSecret` 載入的一份 `alertmanager.yaml`（見 [Operator Alertmanager 整合](operator-alertmanager-integration.md)），所以影子路由寫在**你的來源（base）**裡，而不是另一份 AlertmanagerConfig CR。
 
 ---
 
-## 策略：雙 AlertmanagerConfig 並行
-
-### 生產路由（現有）
+## 策略：在來源裡加一條 `continue: true` 的影子路由
 
 ```yaml
-apiVersion: monitoring.coreos.com/v1beta1
-kind: AlertmanagerConfig
-metadata:
-  name: da-tenant-db-a
-  namespace: monitoring
-  labels:
-    app.kubernetes.io/part-of: dynamic-alerting
-    tenant: db-a
-spec:
-  route:
-    receiver: db-a-pagerduty
-    matchers:
-      - name: tenant
-        value: db-a
-    groupBy: ["alertname", "instance"]
-  receivers:
-    - name: db-a-pagerduty
-      pagerdutyConfigs:
-        - routingKey:
-            name: da-db-a-pagerduty
-            key: routing-key
+# alertmanager.base.yaml（你的來源，不是 generate-routes 的輸出）
+route:
+  receiver: default
+  routes:
+    - receiver: db-a-shadow-webhook
+      matchers:
+        - tenant="db-a"
+      continue: true                # ★ 關鍵：匹配後繼續往下，租戶路由照常收到
+receivers:
+  - name: default
+  - name: db-a-shadow-webhook
+    webhook_configs:
+      - url: "http://shadow-collector:8080/collect"
+        send_resolved: true
 ```
 
-### 影子路由（觀察用）
+> 合併後的順序是：平台 4 條路由 → base 自己的路由（這條影子路由在這裡）→ 租戶路由。`continue: true` 讓告警在影子路由匹配後繼續往下走到租戶路由，同時送往生產 receiver 與影子 receiver。
 
-```yaml
-apiVersion: monitoring.coreos.com/v1beta1
-kind: AlertmanagerConfig
-metadata:
-  name: da-shadow-db-a
-  namespace: monitoring
-  labels:
-    app.kubernetes.io/part-of: dynamic-alerting
-    tenant: db-a
-    shadow: "true"
-spec:
-  route:
-    receiver: db-a-shadow-webhook
-    matchers:
-      - name: tenant
-        value: db-a
-    continue: true                  # ★ 關鍵：不中斷路由，繼續匹配下一條
-  receivers:
-    - name: db-a-shadow-webhook
-      webhookConfigs:
-        - url: "http://shadow-collector:8080/collect"
-          sendResolved: true
-```
-
-> `continue: true` 讓 Alertmanager 在匹配後繼續嘗試下一條路由，確保告警同時發送至生產 receiver 和影子 receiver。
+⚠️ 不要用 AlertmanagerConfig CR 做影子路由：Operator 會替 CR 的路由加上 `namespace="<CR namespace>"` matcher，影子路由只看得到帶這個 label 的告警，比對結果不代表生產流量。
 
 ---
 
@@ -170,40 +139,37 @@ EOF
 > kubectl logs -n monitoring deploy/shadow-collector -f | jq '.'
 > ```
 
-### Step 2: 部署影子 AlertmanagerConfig
+### Step 2: 把影子路由合併進生產設定
 
 ```bash
-kubectl apply -f shadow-alertmanagerconfig-db-a.yaml
+da-tools generate-routes --config-dir conf.d --output-alertmanager \
+  --base-config alertmanager.base.yaml -o alertmanager.yaml
+kubectl create secret generic da-alertmanager-config -n monitoring \
+  --from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -
 ```
 
 ### Step 3: 比對生產 vs 影子
 
 ```bash
 # 生產告警數量
-curl -s 'http://localhost:9093/api/v1/alerts' | \
-  jq '[.data[] | select(.labels.tenant=="db-a")] | length'
+curl -s 'http://localhost:9093/api/v2/alerts' | \
+  jq '[.[] | select(.labels.tenant=="db-a")] | length'
 
 # 影子收集器日誌
 kubectl logs -n monitoring deploy/shadow-collector --tail=50
 ```
 
-### Step 4: 確認無差異後切換
+### Step 4: 確認無差異後移除影子路由
 
-```bash
-# 刪除影子路由
-kubectl delete alertmanagerconfig da-shadow-db-a -n monitoring
-
-# 更新生產路由（若有變更）
-kubectl apply -f alertmanagerconfig-db-a-new.yaml
-```
+從 `alertmanager.base.yaml` 刪掉影子路由與它的 receiver，照 Step 2 重跑一次並更新 Secret。
 
 ---
 
 ## 注意事項
 
-1. **影子路由必須排在生產路由之前**：Alertmanager 按順序匹配路由，`continue: true` 需在較早的路由上設定。在同一 namespace 內，AlertmanagerConfig 按 metadata.name 字母序排列。
+1. **影子路由看不到被平台路由攔下的告警**：平台 4 條路由排在 base 之前，被它們收下的告警（例如 `component="custom"` 隔離子樹裡的 custom alert）不會到達影子路由。
 2. **效能影響**：影子路由會產生額外的 HTTP 請求。高流量環境建議限制影子觀察的 tenant 數量。
-3. **清理**：觀察完畢後務必刪除影子 AlertmanagerConfig，避免長期的額外 webhook 調用。
+3. **清理**：觀察完畢後務必從來源刪除影子路由並重新產出，避免長期的額外 webhook 調用。
 
 ---
 
@@ -211,6 +177,6 @@ kubectl apply -f alertmanagerconfig-db-a-new.yaml
 
 | 文件 | 說明 |
 |------|------|
-| [Operator Alertmanager 整合](operator-alertmanager-integration.md) | AlertmanagerConfig 完整設定 |
+| [Operator Alertmanager 整合](operator-alertmanager-integration.md) | `configSecret` 路由流程 |
 | [Operator GitOps 部署](operator-gitops-deployment.md) | CI/CD 整合 |
 | [Shadow Monitoring SOP](../shadow-monitoring-sop.md) | 通用 Shadow Monitoring 流程 |

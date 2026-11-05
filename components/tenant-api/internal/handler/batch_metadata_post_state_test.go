@@ -5,9 +5,9 @@ package handler
 // `_profile` (its profile's `_metadata`). `_metadata` itself a batch cannot
 // set (#2859, TestBatchMetadataPatchRefused). The batch write gate therefore authorizes such an op against the metadata
 // the tenant will have once it is written (gateBatchOpPostState), as PUT does
-// for its body (RequireOrgWriteProposed): under
-// --rbac-metadata-write-scope-enforce a production-scoped caller cannot move
-// a tenant to dev by batch, in either write mode; in shadow nothing changes.
+// for its body (RequireOrgWriteProposed): a production-scoped caller cannot
+// move a tenant to dev by batch, in either write mode (ADR-027 §7: the write
+// plane's environments/domains always bind).
 
 import (
 	"encoding/json"
@@ -21,11 +21,15 @@ import (
 	"github.com/vencil/tenant-api/internal/platform"
 )
 
+// postStateRBAC carries admin so the label gate (ADR-027 §7, label_guard.go)
+// lets these writes through to the scope axis they pin: a "*" admin rule
+// without org-scope is a platform administrator (PlatformAdminNonOrgScoped
+// does not read environments). The label gate itself: label_guard_test.go.
 const postStateRBAC = `groups:
   - name: admins
     tenants: ["*"]
     environments: ["production"]
-    permissions: [read, write]
+    permissions: [read, write, admin]
 `
 
 // postStateTree: db-a is production through its profile alone; prodalt is a
@@ -47,19 +51,16 @@ const ownProductionMetadata = "tenants:\n  db-a:\n    _profile: prodprof\n    _m
 // postStateBatch runs ops against a fresh postStateTree in mode and returns
 // the per-op results and whether anything was written (a PR opened in PR
 // mode, HEAD moved in direct mode).
-func postStateBatch(t *testing.T, mode WriteMode, enforce bool, ops string) (results []BatchResult, wrote bool) {
+func postStateBatch(t *testing.T, mode WriteMode, ops string) (results []BatchResult, wrote bool) {
 	t.Helper()
-	return postStateBatchOn(t, postStateTree(), mode, enforce, ops)
+	return postStateBatchOn(t, postStateTree(), mode, ops)
 }
 
 // postStateBatchOn is postStateBatch over tree.
-func postStateBatchOn(t *testing.T, tree map[string]string, mode WriteMode, enforce bool, ops string) (results []BatchResult, wrote bool) {
+func postStateBatchOn(t *testing.T, tree map[string]string, mode WriteMode, ops string) (results []BatchResult, wrote bool) {
 	t.Helper()
 	dir := seedGitTree(t, tree)
 	mgr := newRBACManager(t, postStateRBAC)
-	if enforce {
-		mgr.EnableMetadataWriteScopeEnforce()
-	}
 	if env, _ := WriteScopeMeta(dir)("db-a"); env != "production" {
 		t.Fatalf("precondition: db-a environment on disk = %q, want production", env)
 	}
@@ -88,7 +89,7 @@ func postStateBatchOn(t *testing.T, tree map[string]string, mode WriteMode, enfo
 func TestBatchRelabelOutOfScopeRefusedUnderEnforce(t *testing.T) {
 	for _, mode := range []WriteMode{WriteModePR, WriteModeDirect} {
 		t.Run(string(mode), func(t *testing.T) {
-			results, wrote := postStateBatch(t, mode, true, `[{"tenant_id":"db-a","patch":{"_profile":"devprof"}}]`)
+			results, wrote := postStateBatch(t, mode, `[{"tenant_id":"db-a","patch":{"_profile":"devprof"}}]`)
 			if len(results) != 1 || results[0].Status != "error" ||
 				!strings.Contains(results[0].Message, "the tenant metadata this op proposes") {
 				t.Errorf("results = %+v, want one op refused by the post-state check", results)
@@ -102,7 +103,7 @@ func TestBatchRelabelOutOfScopeRefusedUnderEnforce(t *testing.T) {
 
 // #2859: `_metadata` is a mapping and a patch value a string, so a batch op
 // that sets it is refused up front — 400 naming the field, nothing written —
-// in shadow too, whatever the value would place the tenant in.
+// whatever the value would place the tenant in.
 func TestBatchMetadataPatchRefused(t *testing.T) {
 	for _, mode := range []WriteMode{WriteModePR, WriteModeDirect} {
 		t.Run(string(mode), func(t *testing.T) {
@@ -130,17 +131,6 @@ func TestBatchMetadataPatchRefused(t *testing.T) {
 	}
 }
 
-func TestBatchRelabelStaysWritableInShadow(t *testing.T) {
-	for _, mode := range []WriteMode{WriteModePR, WriteModeDirect} {
-		t.Run(string(mode), func(t *testing.T) {
-			results, wrote := postStateBatch(t, mode, false, `[{"tenant_id":"db-a","patch":{"_profile":"devprof"}}]`)
-			if len(results) != 1 || results[0].Status == "error" || !wrote {
-				t.Errorf("results = %+v, wrote = %v; want the op written in shadow", results, wrote)
-			}
-		})
-	}
-}
-
 // An op that keeps the tenant in the caller's environment goes through: the
 // second op would move db-a to dev through its profile alone, but db-a's own
 // `_metadata` on disk wins over any profile, so it stays production.
@@ -149,7 +139,7 @@ func TestBatchInScopeMetadataEditsWritableUnderEnforce(t *testing.T) {
 	tree["db-a.yaml"] = ownProductionMetadata
 	for _, mode := range []WriteMode{WriteModePR, WriteModeDirect} {
 		t.Run(string(mode), func(t *testing.T) {
-			results, wrote := postStateBatchOn(t, tree, mode, true, `[
+			results, wrote := postStateBatchOn(t, tree, mode, `[
 				{"tenant_id":"db-a","patch":{"_profile":"prodalt"}},
 				{"tenant_id":"db-a","patch":{"_profile":"devprof"}}]`)
 			if len(results) != 2 || !wrote {
@@ -183,8 +173,8 @@ func TestPostStateScopeMetaKeepsUntouchedKeys(t *testing.T) {
 // cut from: the pod's local tree (synced at pod start) still has db-a's own
 // `_metadata`, which wins over any profile, so the per-op check reads
 // production; on the base that line is gone, and `_profile: devprof` would
-// land db-a in dev. Under enforce the whole batch is refused (403 FORBIDDEN,
-// no PR, no branch, origin unmoved); in shadow the PR is opened as before.
+// land db-a in dev. The whole batch is refused (403 FORBIDDEN, no PR, no
+// branch, origin unmoved).
 func TestBatchPRModeScopeJudgedOnFreshBase(t *testing.T) {
 	profiles := postStateTree()["_profiles.yaml"]
 	local := map[string]string{"_profiles.yaml": profiles,
@@ -192,11 +182,9 @@ func TestBatchPRModeScopeJudgedOnFreshBase(t *testing.T) {
 	origin := map[string]string{"db-a.yaml": "tenants:\n  db-a:\n    _profile: prodprof\n"}
 	const ops = `[{"tenant_id":"db-a","patch":{"_profile":"devprof"}}]`
 
-	t.Run("enforce", func(t *testing.T) {
+	{
 		f := newStaleFixture(t, local, origin)
-		mgr := newRBACManager(t, postStateRBAC)
-		mgr.EnableMetadataWriteScopeEnforce()
-		f.deps.RBAC = mgr
+		f.deps.RBAC = newRBACManager(t, postStateRBAC)
 		if env, _ := WriteScopeMeta(f.dir)("db-a"); env != "production" {
 			t.Fatalf("precondition: db-a on the local tree = %q, want production", env)
 		}
@@ -213,26 +201,19 @@ func TestBatchPRModeScopeJudgedOnFreshBase(t *testing.T) {
 		if got := gitRev(t, f.bare, "main"); got != before {
 			t.Errorf("origin main moved: %s → %s", before, got)
 		}
-	})
-	t.Run("shadow", func(t *testing.T) {
-		f := newStaleFixture(t, local, origin)
-		f.deps.RBAC = newRBACManager(t, postStateRBAC)
-		if w := postTenantBatch(t, f.deps, ops); w.Code != http.StatusOK || !f.prOpened {
-			t.Errorf("status %d, PR opened %v; want the PR opened in shadow: %s", w.Code, f.prOpened, w.Body.String())
-		}
-	})
+	}
 }
 
-// countingScopeAuditor counts would-deny observations per axis.
+// countingScopeAuditor counts scope denials per axis.
 type countingScopeAuditor struct{ n map[string]int }
 
-func (a *countingScopeAuditor) IncWouldDeny(axis string) { a.n[axis]++ }
+func (a *countingScopeAuditor) IncScopeDenied(axis string) { a.n[axis]++ }
 
-// No false would-deny in shadow: an op whose profile alone reads dev, on a
-// tenant whose own `_metadata` keeps it in production, is counted neither by
-// the per-op check nor by the fresh-base check of the post-checkout pass
-// (FreshMerge, #2857).
-func TestBatchPRModeShadowCountsNoFalseWouldDeny(t *testing.T) {
+// No false scope denial: an op whose profile alone reads dev, on a tenant
+// whose own `_metadata` keeps it in production, is allowed and counted neither
+// by the per-op check nor by the fresh-base check of the post-checkout pass
+// (FreshMerge, #2857) — an allowed decision is never counted.
+func TestBatchPRModeCountsNoFalseScopeDenial(t *testing.T) {
 	tree := postStateTree()
 	tree["db-a.yaml"] = ownProductionMetadata
 	dir := seedGitTree(t, tree)
@@ -248,6 +229,6 @@ func TestBatchPRModeShadowCountsNoFalseWouldDeny(t *testing.T) {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
 	if got := audit.n["metadata_write"]; got != 0 {
-		t.Errorf("would-deny{axis=metadata_write} = %d, want 0: nothing in this batch leaves production", got)
+		t.Errorf("scope_denied{axis=metadata_write} = %d, want 0: nothing in this batch leaves production", got)
 	}
 }

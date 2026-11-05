@@ -86,3 +86,21 @@ func TestCheckSubtreeUndeliverable(t *testing.T) {
 		t.Errorf("summary = %+v, want 0 warnings, 2 errors, 1 passing", report.Summary)
 	}
 }
+
+// #3556: a subtree's `<base>_critical{…}` key is not fixed by a `dimensions:`
+// declaration (a `_critical` tier declares nothing), so its fix sentence
+// names the `N:critical` form; any other dimensional key keeps the
+// declaration sentence.
+func TestUndeliverableFix_CriticalTierWithDimensions(t *testing.T) {
+	t.Parallel()
+	fix, why := undeliverableFix(`x_critical{db="a"}`), undeliverableWhy(`x_critical{db="a"}`)
+	if !strings.Contains(fix, "`x{…}: \"N:critical\"`") || strings.Contains(fix, "Declare every label") {
+		t.Errorf("fix for a `_critical` tier = %q, want the N:critical form and no declaration advice", fix)
+	}
+	if strings.Contains(why, "does not declare") {
+		t.Errorf("why for a `_critical` tier = %q, must not blame a missing declaration", why)
+	}
+	if fix := undeliverableFix(`x{db="a"}`); !strings.Contains(fix, "Declare every label") {
+		t.Errorf("fix for a base = %q, want the declaration advice", fix)
+	}
+}

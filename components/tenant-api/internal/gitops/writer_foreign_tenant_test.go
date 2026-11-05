@@ -462,7 +462,7 @@ func TestValidateNamesAnotherTenantOnlyWhenShown(t *testing.T) {
 
 // #3039: DiscloseKeyValidation asks names only about a tenant with something
 // to say. Each question is an RBAC org-read check that logs a deny and counts
-// it into the scope_would_deny soak count the enforce flip is judged by, so a
+// it on tenant_api_scope_denied_total, so a
 // question about a quiet tenant counts a deny no message depended on — one
 // per tenant in a large flat file, under the writer lock.
 func TestDiscloseKeyValidationAsksOnlyAboutTenantsWithMessages(t *testing.T) {

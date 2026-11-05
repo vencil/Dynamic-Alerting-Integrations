@@ -1,9 +1,9 @@
 package rbac
 
 // Metadata (environment/domain) axis: the pure matchers (metadataMatches /
-// scopeFieldModes), the HasMetadataAccess restriction matrix, the accessible
-// env/domain union sets, and the shadow/enforce scope-mode behavior with
-// per-tenant would-deny recording (ADR-027 / LD-6 P1, Option Y).
+// scopeFieldPasses), the HasMetadataAccess restriction matrix, the accessible
+// env/domain union sets, and the enforced list-plane behavior with per-decision
+// scope-denied recording (ADR-027 §7).
 //
 // fakeScopeRecorder / newFakeScopeRecorder / toSet live in testhelpers_test.go.
 
@@ -22,11 +22,10 @@ func TestMetadataMatches(t *testing.T) {
 		// Empty allowList = wildcard (all values allowed)
 		{"empty allowList matches any value", []string{}, "production", true},
 		{"empty allowList matches empty value", []string{}, "", true},
-		// Empty value on a NON-empty allow-list is no longer a match: the
-		// "unlabeled tenant" fail-open moved out of metadataMatches into the
-		// mode-aware scopeFieldModes (ADR-027/LD-6 P1). metadataMatches is now
-		// pure exact-membership. The shadow/enforce behavior is covered by
-		// TestScopeFieldModes / TestHasMetadataAccess_ScopeMode below.
+		// Empty value on a NON-empty allow-list is not a match: metadataMatches
+		// is pure exact-membership. The unlabeled-tenant decision lives in
+		// scopeFieldPasses, covered by TestScopeFieldPasses /
+		// TestHasMetadataAccess_ScopeEnforced below.
 		{"empty value does not match non-empty allowList (pure membership)", []string{"production", "staging"}, "", false},
 		// Exact match cases
 		{"exact match in allowList", []string{"production", "staging", "dev"}, "production", true},
@@ -69,10 +68,10 @@ func TestHasMetadataAccess(t *testing.T) {
 		domain      string
 		want        bool
 	}{
-		// Open mode (no groups configured)
-		{"open mode allows any metadata",
+		// Empty rule set: no open mode (ADR-027 §7)
+		{"empty rule set denies any metadata",
 			&RBACConfig{Groups: []GroupRule{}},
-			[]string{"any-group"}, "any-tenant", "production", "finance", true},
+			[]string{"any-group"}, "any-tenant", "production", "finance", false},
 		// Wildcard rules (no environment/domain restrictions, explicit empty slices)
 		{"wildcard environments and domains",
 			rules(GroupRule{Name: "admins", Tenants: []string{"*"}, Permissions: []Permission{PermWrite}, Environments: []string{}, Domains: []string{}}),
@@ -101,10 +100,14 @@ func TestHasMetadataAccess(t *testing.T) {
 		{"both environment and domain, domain fails",
 			rules(GroupRule{Name: "finance-prod-ops", Tenants: []string{"db-a", "db-b"}, Permissions: []Permission{PermWrite}, Environments: []string{"production", "staging"}, Domains: []string{"finance", "compliance"}}),
 			[]string{"finance-prod-ops"}, "db-a", "production", "ecommerce", false},
-		// Empty metadata in tenant (should pass)
-		{"empty environment passes despite restriction",
+		// Empty metadata in tenant: unlabeled on a restricted field is denied
+		{"empty environment denied under restriction",
 			rules(GroupRule{Name: "ops", Tenants: []string{"db-a"}, Permissions: []Permission{PermWrite}, Environments: []string{"production"}, Domains: []string{}}),
-			[]string{"ops"}, "db-a", "", "", true},
+			[]string{"ops"}, "db-a", "", "", false},
+		// ...but an unlabeled field the rule does NOT restrict still passes
+		{"empty domain passes when only environment is restricted",
+			rules(GroupRule{Name: "ops", Tenants: []string{"svc-meta"}, Permissions: []Permission{PermWrite}, Environments: []string{"production"}, Domains: []string{}}),
+			[]string{"ops"}, "svc-meta", "production", "", true},
 		// Tenant doesn't match rule
 		{"tenant doesn't match pattern",
 			rules(GroupRule{Name: "db-a-ops", Tenants: []string{"db-a-*"}, Permissions: []Permission{PermWrite}, Environments: []string{"production"}, Domains: []string{}}),
@@ -155,8 +158,8 @@ func TestAccessibleEnvironments(t *testing.T) {
 		idpGroups []string
 		want      []string
 	}{
-		{"open mode returns nil",
-			&RBACConfig{Groups: []GroupRule{}}, []string{"any"}, nil},
+		{"empty rule set returns empty (no access)",
+			&RBACConfig{Groups: []GroupRule{}}, []string{"any"}, []string{}},
 		{"wildcard environments rule returns nil",
 			rules(GroupRule{Name: "admins", Tenants: []string{"*"}, Permissions: []Permission{PermWrite}, Environments: []string{}}),
 			[]string{"admins"}, nil},
@@ -175,9 +178,9 @@ func TestAccessibleEnvironments(t *testing.T) {
 				GroupRule{Name: "prod-ops", Tenants: []string{"*"}, Permissions: []Permission{PermWrite}, Environments: []string{"production"}},
 			),
 			[]string{"admins", "prod-ops"}, nil},
-		{"user in no matching groups returns nil",
+		{"user in no matching groups returns empty (no access)",
 			rules(GroupRule{Name: "prod-ops", Tenants: []string{"*"}, Permissions: []Permission{PermWrite}, Environments: []string{"production"}}),
-			[]string{"other-group"}, nil},
+			[]string{"other-group"}, []string{}},
 		{"duplicate environments are deduped",
 			rules(
 				GroupRule{Name: "group1", Tenants: []string{"*"}, Permissions: []Permission{PermRead}, Environments: []string{"production", "staging"}},
@@ -192,6 +195,11 @@ func TestAccessibleEnvironments(t *testing.T) {
 
 			got := m.AccessibleEnvironments(tt.idpGroups)
 
+			// nil ("no restriction") and non-nil empty ("no access") are
+			// opposite answers; toSet below would conflate them.
+			if (tt.want == nil) != (got == nil) {
+				t.Fatalf("AccessibleEnvironments(%v) = %#v, want %#v (nil-ness differs)", tt.idpGroups, got, tt.want)
+			}
 			// For slice comparison, convert to map for order-independent comparison
 			if want, got := toSet(tt.want), toSet(got); len(want) != len(got) {
 				t.Errorf("AccessibleEnvironments(%v) returned %v, want %v",
@@ -215,8 +223,8 @@ func TestAccessibleDomains(t *testing.T) {
 		idpGroups []string
 		want      []string
 	}{
-		{"open mode returns nil",
-			&RBACConfig{Groups: []GroupRule{}}, []string{"any"}, nil},
+		{"empty rule set returns empty (no access)",
+			&RBACConfig{Groups: []GroupRule{}}, []string{"any"}, []string{}},
 		{"wildcard domains rule returns nil",
 			rules(GroupRule{Name: "admins", Tenants: []string{"*"}, Domains: []string{}}),
 			[]string{"admins"}, nil},
@@ -249,6 +257,9 @@ func TestAccessibleDomains(t *testing.T) {
 
 			got := m.AccessibleDomains(tt.idpGroups)
 
+			if (tt.want == nil) != (got == nil) {
+				t.Fatalf("AccessibleDomains(%v) = %#v, want %#v (nil-ness differs)", tt.idpGroups, got, tt.want)
+			}
 			// Order-independent comparison
 			if want, got := toSet(tt.want), toSet(got); len(want) != len(got) {
 				t.Errorf("AccessibleDomains(%v) returned %v, want %v",
@@ -264,97 +275,107 @@ func TestAccessibleDomains(t *testing.T) {
 	}
 }
 
-// TestScopeFieldModes pins the pure two-mode field evaluator: wildcard passes
-// both modes, an unlabeled value passes shadow but not enforce, and a labeled
-// value is identical exact-membership in both modes.
-func TestScopeFieldModes(t *testing.T) {
+// TestScopeFieldPasses pins the pure field evaluator: an empty allow-list is
+// the wildcard, an unlabeled value on a restricted field fails, and a labeled
+// value is exact membership.
+func TestScopeFieldPasses(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name        string
-		allowList   []string
-		value       string
-		wantShadow  bool
-		wantEnforce bool
+		name      string
+		allowList []string
+		value     string
+		want      bool
 	}{
-		{"empty allow-list is wildcard", nil, "production", true, true},
-		{"empty allow-list wildcard even for empty value", nil, "", true, true},
-		{"unlabeled on restricted: shadow yes, enforce no", []string{"production"}, "", true, false},
-		{"labeled member: both yes", []string{"production", "staging"}, "production", true, true},
-		{"labeled non-member: both no", []string{"production"}, "dev", false, false},
+		{"empty allow-list is wildcard", nil, "production", true},
+		{"empty allow-list wildcard even for empty value", nil, "", true},
+		{"unlabeled on restricted field fails", []string{"production"}, "", false},
+		{"labeled member passes", []string{"production", "staging"}, "production", true},
+		{"labeled non-member fails", []string{"production"}, "dev", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotShadow, gotEnforce := scopeFieldModes(c.allowList, c.value)
-			if gotShadow != c.wantShadow || gotEnforce != c.wantEnforce {
-				t.Errorf("scopeFieldModes(%v, %q) = (%v, %v), want (%v, %v)",
-					c.allowList, c.value, gotShadow, gotEnforce, c.wantShadow, c.wantEnforce)
+			if got := scopeFieldPasses(c.allowList, c.value); got != c.want {
+				t.Errorf("scopeFieldPasses(%v, %q) = %v, want %v", c.allowList, c.value, got, c.want)
 			}
 		})
 	}
 }
 
-// TestHasMetadataAccess_ScopeMode exercises the mode end-to-end through the
-// public method the list filter calls, and asserts the would-deny counter is
-// PER-TENANT (Option Y): one observation per would-be-hidden tenant, not per
-// field-check, and zero when another rule grants access under strict semantics.
-func TestHasMetadataAccess_ScopeMode(t *testing.T) {
+// TestHasMetadataAccess_ScopeEnforced exercises the metadata axis end-to-end
+// through the public method the list filter calls, and asserts the
+// scope-denied counter: exactly one observation per DENIED decision that the
+// metadata axis caused (not one per field), and none for an allowed decision
+// or a denial no rule would have granted anyway.
+func TestHasMetadataAccess_ScopeEnforced(t *testing.T) {
 	t.Parallel()
 
 	envRule := &RBACConfig{Groups: []GroupRule{{
 		Name:         "ops",
-		Tenants:      []string{"db-a"},
+		Tenants:      []string{"svc-meta"},
 		Permissions:  []Permission{PermWrite},
 		Environments: []string{"production"},
 	}}}
 
-	t.Run("shadow: unlabeled tenant stays visible, one would-deny", func(t *testing.T) {
+	t.Run("unlabeled tenant hidden, one scope-denied", func(t *testing.T) {
 		m := NewForTest(envRule)
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
-		if !m.HasMetadataAccess([]string{"ops"}, "db-a", "", "") {
-			t.Error("shadow: unlabeled tenant must remain accessible (byte-identical to legacy)")
+		if m.HasMetadataAccess([]string{"ops"}, "svc-meta", "", "") {
+			t.Error("unlabeled tenant on a restricted field must be denied")
 		}
 		if got := rec.counts[scopeAxisMetadata]; got != 1 {
-			t.Errorf("shadow: want 1 would-deny, got %d", got)
+			t.Errorf("want 1 scope-denied on %q, got %d", scopeAxisMetadata, got)
+		}
+		if got := rec.counts[scopeAxisOrg]; got != 0 {
+			t.Errorf("org axis did not deny; want 0 on %q, got %d", scopeAxisOrg, got)
 		}
 	})
 
-	t.Run("enforce: unlabeled tenant hidden, one would-deny", func(t *testing.T) {
+	t.Run("labeled out-of-scope tenant hidden, one scope-denied", func(t *testing.T) {
 		m := NewForTest(envRule)
-		m.EnableMetadataScopeEnforce()
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
-		if m.HasMetadataAccess([]string{"ops"}, "db-a", "", "") {
-			t.Error("enforce: unlabeled tenant must be denied")
+		if m.HasMetadataAccess([]string{"ops"}, "svc-meta", "staging", "") {
+			t.Error("labeled tenant outside the rule's environments must be denied")
 		}
 		if got := rec.counts[scopeAxisMetadata]; got != 1 {
-			t.Errorf("enforce: want 1 would-deny, got %d", got)
+			t.Errorf("want 1 scope-denied, got %d", got)
 		}
 	})
 
-	t.Run("labeled matching tenant unaffected by mode, no would-deny", func(t *testing.T) {
-		for _, enforce := range []bool{false, true} {
-			m := NewForTest(envRule)
-			if enforce {
-				m.EnableMetadataScopeEnforce()
-			}
-			rec := newFakeScopeRecorder()
-			m.SetScopeAuditor(rec)
-			if !m.HasMetadataAccess([]string{"ops"}, "db-a", "production", "") {
-				t.Errorf("enforce=%v: labeled matching tenant must stay visible", enforce)
-			}
-			if got := rec.counts[scopeAxisMetadata]; got != 0 {
-				t.Errorf("enforce=%v: labeled tenant must not record would-deny, got %d", enforce, got)
-			}
+	t.Run("labeled matching tenant visible, no scope-denied", func(t *testing.T) {
+		m := NewForTest(envRule)
+		rec := newFakeScopeRecorder()
+		m.SetScopeAuditor(rec)
+		if !m.HasMetadataAccess([]string{"ops"}, "svc-meta", "production", "") {
+			t.Error("labeled matching tenant must stay visible")
+		}
+		if len(rec.counts) != 0 {
+			t.Errorf("an allowed decision must record nothing, got %v", rec.counts)
 		}
 	})
 
-	// Option Y fix: two restricted fields, both unlabeled → exactly ONE
-	// observation for the tenant (not two, one per field).
+	t.Run("denial no rule would have granted records nothing", func(t *testing.T) {
+		m := NewForTest(envRule)
+		rec := newFakeScopeRecorder()
+		m.SetScopeAuditor(rec)
+		if m.HasMetadataAccess([]string{"ops"}, "other-tenant", "", "") {
+			t.Error("tenant outside the rule's pattern must be denied")
+		}
+		if m.HasMetadataAccess([]string{"stranger"}, "svc-meta", "", "") {
+			t.Error("caller matching no rule must be denied")
+		}
+		if len(rec.counts) != 0 {
+			t.Errorf("a denial not caused by a scope axis must record nothing, got %v", rec.counts)
+		}
+	})
+
+	// Two restricted fields, both unlabeled → exactly ONE observation for the
+	// decision (not two, one per field).
 	t.Run("two restricted fields both unlabeled record once", func(t *testing.T) {
 		cfg := &RBACConfig{Groups: []GroupRule{{
 			Name:         "ops",
-			Tenants:      []string{"db-a"},
+			Tenants:      []string{"svc-meta"},
 			Permissions:  []Permission{PermWrite},
 			Environments: []string{"production"},
 			Domains:      []string{"finance"},
@@ -362,40 +383,54 @@ func TestHasMetadataAccess_ScopeMode(t *testing.T) {
 		m := NewForTest(cfg)
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
-		if !m.HasMetadataAccess([]string{"ops"}, "db-a", "", "") {
-			t.Error("shadow: unlabeled tenant must remain visible")
+		if m.HasMetadataAccess([]string{"ops"}, "svc-meta", "", "") {
+			t.Error("unlabeled tenant must be denied")
 		}
 		if got := rec.counts[scopeAxisMetadata]; got != 1 {
-			t.Errorf("two-field unlabeled: want exactly 1 would-deny (per-tenant), got %d", got)
+			t.Errorf("two-field unlabeled: want exactly 1 scope-denied (per decision), got %d", got)
 		}
 	})
 
-	// Option Y fix: a wildcard rule grants access under strict semantics, so the
-	// tenant is NOT would-be-hidden → zero would-deny even though a co-matching
-	// restricted rule would deny the unlabeled field. Prevents a stuck counter.
-	t.Run("wildcard rule rescues unlabeled tenant: no would-deny", func(t *testing.T) {
+	// Two co-matching restricted rules both cut by metadata → still ONE
+	// observation for the decision.
+	t.Run("two blocked rules record once per decision", func(t *testing.T) {
 		cfg := &RBACConfig{Groups: []GroupRule{
-			{Name: "ops", Tenants: []string{"db-a"}, Permissions: []Permission{PermWrite}, Environments: []string{"production"}},
-			{Name: "ops", Tenants: []string{"db-a"}, Permissions: []Permission{PermWrite}}, // wildcard env/domain
+			{Name: "ops", Tenants: []string{"svc-meta"}, Permissions: []Permission{PermRead}, Environments: []string{"production"}},
+			{Name: "ops", Tenants: []string{"svc-*"}, Permissions: []Permission{PermRead}, Domains: []string{"finance"}},
 		}}
 		m := NewForTest(cfg)
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
-		for _, enforce := range []bool{false, true} {
-			m.metadataScopeEnforce = enforce
-			if !m.HasMetadataAccess([]string{"ops"}, "db-a", "", "") {
-				t.Errorf("enforce=%v: wildcard rule must keep tenant visible", enforce)
-			}
+		if m.HasMetadataAccess([]string{"ops"}, "svc-meta", "", "") {
+			t.Error("unlabeled tenant must be denied by both rules")
 		}
-		if got := rec.counts[scopeAxisMetadata]; got != 0 {
-			t.Errorf("wildcard-rescued tenant must record 0 would-deny, got %d", got)
+		if got := rec.counts[scopeAxisMetadata]; got != 1 {
+			t.Errorf("want exactly 1 scope-denied for one decision, got %d", got)
+		}
+	})
+
+	// A wildcard rule grants the unlabeled tenant, so the decision is ALLOWED
+	// → zero scope-denied even though a co-matching restricted rule fails.
+	t.Run("wildcard rule rescues unlabeled tenant: no scope-denied", func(t *testing.T) {
+		cfg := &RBACConfig{Groups: []GroupRule{
+			{Name: "ops", Tenants: []string{"svc-meta"}, Permissions: []Permission{PermWrite}, Environments: []string{"production"}},
+			{Name: "ops", Tenants: []string{"svc-meta"}, Permissions: []Permission{PermWrite}}, // wildcard env/domain
+		}}
+		m := NewForTest(cfg)
+		rec := newFakeScopeRecorder()
+		m.SetScopeAuditor(rec)
+		if !m.HasMetadataAccess([]string{"ops"}, "svc-meta", "", "") {
+			t.Error("wildcard rule must keep tenant visible")
+		}
+		if len(rec.counts) != 0 {
+			t.Errorf("wildcard-rescued tenant must record nothing, got %v", rec.counts)
 		}
 	})
 
 	t.Run("nil recorder does not panic", func(t *testing.T) {
 		m := NewForTest(envRule) // scopeAudit nil
-		if !m.HasMetadataAccess([]string{"ops"}, "db-a", "", "") {
-			t.Error("shadow with nil recorder must still allow")
+		if m.HasMetadataAccess([]string{"ops"}, "svc-meta", "", "") {
+			t.Error("nil recorder: unlabeled tenant must still be denied")
 		}
 	})
 }

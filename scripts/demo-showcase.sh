@@ -226,14 +226,13 @@ step "Validate all tenant configs"
 # `make validate-config` runs) rather than trust a da-guard on $PATH, which may
 # be older than these tools. A failed build stops the demo here, by name,
 # rather than as an rc=2 from validate-config below.
-if [ -z "${DA_GUARD_BINARY:-}" ]; then
-  info "Building da-guard (make da-guard-build) — validate-config reads the tenants through it"
-  if ! make -C "$PROJECT_DIR" --no-print-directory da-guard-build; then
-    warn "could not build da-guard (see above) — set DA_GUARD_BINARY to one, or install Go"
-    exit 2
-  fi
-  export DA_GUARD_BINARY="$PROJECT_DIR/.build/da-guard"
-fi
+# generate-routes below also needs da-read and da-crdecode (the shipped
+# platform rules); each is built the same way unless its DA_*_BINARY is set.
+# shellcheck source=ops/_da_binaries.sh
+. "$PROJECT_DIR/scripts/ops/_da_binaries.sh"
+ensure_da_binary da-guard || exit 2
+ensure_da_binary da-read || exit 2
+ensure_da_binary da-crdecode || exit 2
 
 info "Running: da-tools validate-config --config-dir $CONF_DIR"
 vc_rc=0
@@ -252,17 +251,21 @@ pause
 step "Generate Alertmanager routes for all tenants"
 # ─────────────────────────────────────────────
 
-ROUTES_OUTPUT="$SHOWCASE_DIR/alertmanager-routes.yaml"
+ROUTES_OUTPUT="$SHOWCASE_DIR/alertmanager.yml"
 # #1423 / #1650: not `--validate` here — that mode returns before `-o` is
 # used (so the preview below never had a file to show), and the tool now
 # refuses the two together. Validation is its own call in the CI templates.
-info "Running: da-tools generate-routes --config-dir $CONF_DIR -o $ROUTES_OUTPUT"
+# #1211: a mode is required; --output-alertmanager merges the generated
+# routing into an Alertmanager config (the built-in base here; yours with
+# --base-config).
+info "Running: da-tools generate-routes --config-dir $CONF_DIR --output-alertmanager -o $ROUTES_OUTPUT"
 python3 "$TOOLS_DIR/ops/generate_alertmanager_routes.py" \
   --config-dir "$CONF_DIR" \
+  --output-alertmanager \
   -o "$ROUTES_OUTPUT" 2>&1 || true
 echo ""
 if [ -f "$ROUTES_OUTPUT" ]; then
-  info "Generated routes → $ROUTES_OUTPUT"
+  info "Generated alertmanager.yml → $ROUTES_OUTPUT"
   info "Preview (first 40 lines):"
   head -40 "$ROUTES_OUTPUT"
 fi

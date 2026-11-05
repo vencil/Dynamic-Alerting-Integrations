@@ -2,7 +2,7 @@
 
 產生器的判定（1A）：非 strict 印 `WARN … skipping`、該租戶不出任何 route
 （不改走 defaults），`--validate` 因此 rc 1；`--strict` 另加 ERROR 行，
-`--dry-run --strict` 也 rc 1。跨語言的判定由
+`--output-alertmanager --dry-run --strict` 也 rc 1。跨語言的判定由
 tests/shared/routing_policy_parity_matrix.json 的 `routing-not-mapping` /
 `routing-defaults-not-mapping-below-root` 兩棵樹釘住；這裡釘的是 CLI 行為。
 """
@@ -63,25 +63,25 @@ class TestTenantRoutingNotMapping:
     @pytest.mark.parametrize("value", _REFUSED)
     def test_refused_renders_nothing_and_blocks_validate(self, tmp_path, value):
         d = _tree(tmp_path, value)
-        dry = _gar(d, "--dry-run")
+        dry = _gar(d, "--output-alertmanager", "--dry-run")
         assert dry.returncode == 0, dry.stderr
         assert _LINE in dry.stderr and "skipping" in dry.stderr, dry.stderr
         # 不改走 defaults：該租戶沒有任何 route／receiver。
         assert "tenant-t-x" not in dry.stdout, dry.stdout
         assert "tenant-t-ok" in dry.stdout, dry.stdout
         assert _gar(d, "--validate").returncode == 1
-        strict = _gar(d, "--dry-run", "--strict")
+        strict = _gar(d, "--output-alertmanager", "--dry-run", "--strict")
         assert strict.returncode == 1, strict.stderr
         assert "ERROR: tenant 't-x': _routing must be a mapping" in strict.stderr
         assert "t-x" not in load_tenant_tree(str(d)).routing_configs
 
     @pytest.mark.parametrize("value", ["false", "true"])
     def test_unquoted_boolean_gets_the_quote_hint(self, tmp_path, value):
-        out = _gar(_tree(tmp_path, value), "--dry-run").stderr
+        out = _gar(_tree(tmp_path, value), "--output-alertmanager", "--dry-run").stderr
         assert "got boolean" in out and "write a quoted string ('off') or disable" in out, out
 
     def test_a_string_gets_no_boolean_hint(self, tmp_path):
-        out = _gar(_tree(tmp_path, "slack"), "--dry-run").stderr
+        out = _gar(_tree(tmp_path, "slack"), "--output-alertmanager", "--dry-run").stderr
         assert "got string 'slack'" in out and "quoted string ('off')" not in out, out
 
     @pytest.mark.parametrize("value", ["disable", "'off'", "off", "' DISABLED '", "'false'",
@@ -132,10 +132,10 @@ class TestRoutingDefaultsNotMapping:
         with p.open("a", encoding="utf-8") as f:
             f.write("_routing_defaults: false\n")
         line = f"WARN: _routing_defaults in {where} must be a mapping, got boolean False"
-        dry = _gar(d, "--dry-run")
+        dry = _gar(d, "--output-alertmanager", "--dry-run")
         assert dry.returncode == 0 and line in dry.stderr and "skipping" in dry.stderr, dry.stderr
         assert _gar(d, "--validate").returncode == 1
-        strict = _gar(d, "--dry-run", "--strict")
+        strict = _gar(d, "--output-alertmanager", "--dry-run", "--strict")
         assert strict.returncode == 1, strict.stderr
         assert f"ERROR: _routing_defaults in {where} must be a mapping" in strict.stderr
 

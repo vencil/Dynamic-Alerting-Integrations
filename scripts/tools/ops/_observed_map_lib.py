@@ -775,11 +775,11 @@ def _entry_shape_error(key: Any, entry: Any) -> Optional[str]:
 def exit_on_observed_map_error(fn):
     """Decorate a CLI ``main`` so an unusable observed-map (``ObservedMapError``)
     exits 2 (``EXIT_CALLER_ERROR``, an environment error) with one ``ERROR:``
-    line naming the file, instead of a traceback at rc 1; a tool that armed
-    its ``--json`` envelope gets one, ``reason: observed_map_unavailable``
-    (#3115, the name backtest_threshold already used). Rule packs that
-    cannot be read the way Prometheus reads them (#3206: a refused pack, or
-    no da-read) exit the same way, ``reason: rule_packs_unreadable``."""
+    line naming the file, instead of a traceback at rc 1; nothing on stdout,
+    ``--json`` or not (#3558; ``reason: observed_map_unavailable`` names it
+    for the reader of the call). Rule packs that cannot be read the way
+    Prometheus reads them (#3206: a refused pack, or no da-read) exit the
+    same way, ``reason: rule_packs_unreadable``."""
     @functools.wraps(fn)
     def _wrapped(*args, **kwargs):
         try:

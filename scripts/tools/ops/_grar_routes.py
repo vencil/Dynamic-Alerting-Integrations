@@ -26,10 +26,6 @@ Functions:
     routing authors (main receiver, overrides[i], routes[i]), the receiver
     rendered for it or why none is
 
-  Root fallthrough for enforced-only tenants (#2519):
-    _build_root_fallthrough_routes / is_root_fallthrough_route
-    pin_root_fallthrough_receiver (called where the root receiver is known)
-
   Severity-dedup inhibit rules:
     _build_inhibit_rules / generate_inhibit_rules
 """
@@ -51,6 +47,7 @@ from _grar_merge import (  # noqa: E402
     _apply_timing_params,
     _contains_tenant_placeholder,
     _substitute_tenant,
+    SecretBinding,
     build_receiver_config,
     skipped_entry_warning,
     unclassified,
@@ -169,11 +166,16 @@ def enforced_group_by_problems(enforced_routing: object, tenants: list[str]
     if not isinstance(enforced_routing, dict) or not enforced_routing.get("receiver"):
         return out
 
-    def judge(ctx: str, cfg: dict, receiver_ctx: str) -> None:
+    def judge(ctx: str, cfg: dict, receiver_ctx: str, owner: str | None) -> None:
         group_by = cfg.get("group_by")
         if not (group_by and isinstance(group_by, list)):
             return
-        if build_receiver_config(cfg.get("receiver"), receiver_ctx)[0] is None:
+        # #1560: the owner as the render gives it (see
+        # _build_per_tenant_enforced_route). The policy's shared_secrets is not
+        # known here either, so a receiver with a shared Secret reference is
+        # not judged — like the domain allowlist above.
+        if build_receiver_config(cfg.get("receiver"), receiver_ctx,
+                                 owner_tenant=owner)[0] is None:
             return
         out.extend((ctx, idx, kind, value)
                    for idx, kind, value in group_by_problems(group_by)[1])
@@ -182,9 +184,9 @@ def enforced_group_by_problems(enforced_routing: object, tenants: list[str]
         for tenant in sorted(tenants):
             judge(f"_routing_enforced ({tenant})",
                   _substitute_tenant(enforced_routing, tenant),
-                  f"platform-enforced-{tenant}")
+                  f"platform-enforced-{tenant}", tenant)
     else:
-        judge("_routing_enforced", enforced_routing, "platform-enforced")
+        judge("_routing_enforced", enforced_routing, "platform-enforced", None)
     return out
 
 
@@ -308,13 +310,16 @@ def _drop_unrendered_main(tenant: str, cfg: dict, warnings: list[str],
 
 
 def tenant_slot_verdicts(tenant: str, routing: dict,
-                         allowed_domains: list[str] | None = None
+                         allowed_domains: list[str] | None = None,
+                         secrets: SecretBinding | None = None,
                          ) -> list[SlotVerdict]:
     """Every receiver slot of *tenant*'s resolved *routing*, as
     ``_build_tenant_routes`` renders or drops it: the main receiver first,
-    then overrides[i], then routes[i] (#3076)."""
+    then overrides[i], then routes[i] (#3076). *secrets*: the policy's
+    ``shared_secrets`` and the mount root (#1560; None: no policy)."""
     verdicts: list[SlotVerdict] = []
-    _build_tenant_routes({tenant: routing}, allowed_domains, verdicts=verdicts)
+    _build_tenant_routes({tenant: routing}, allowed_domains, verdicts=verdicts,
+                         secrets=secrets)
     return verdicts
 
 
@@ -369,7 +374,9 @@ def _build_override_matchers(override: dict, tenant: str, has_alertname: bool) -
 
 
 def _process_override_receiver(override: dict, idx: int, tenant: str,
-                               allowed_domains: list[str] | None) -> tuple[dict | None, list[str]]:
+                               allowed_domains: list[str] | None,
+                               secrets: SecretBinding | None = None,
+                               ) -> tuple[dict | None, list[str]]:
     """Process receiver config for a single override.
 
     Returns (am_config, warnings) — am_config is None if invalid.
@@ -384,7 +391,8 @@ def _process_override_receiver(override: dict, idx: int, tenant: str,
 
     am_config, recv_warnings = build_receiver_config(
         receiver_obj, f"{tenant}-override-{idx}",
-        tenant_id=tenant, field=f"overrides[{idx}].receiver")
+        tenant_id=tenant, field=f"overrides[{idx}].receiver",
+        owner_tenant=tenant, secrets=secrets, allowed_domains=allowed_domains)
     warnings.extend(recv_warnings)
     if am_config is None:
         return None, warnings
@@ -429,7 +437,8 @@ def _build_override_route(idx: int, tenant: str, matchers: list[str],
 
 
 def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains: list[str] | None = None,
-                             verdicts: list[SlotVerdict] | None = None
+                             verdicts: list[SlotVerdict] | None = None,
+                             secrets: SecretBinding | None = None,
                              ) -> tuple[list[dict], list[dict], list[str]]:
     """Expand per-rule routing overrides into sub-routes.
 
@@ -496,7 +505,8 @@ def expand_routing_overrides(tenant: str, routing_config: dict, allowed_domains:
         matchers = _build_override_matchers(override, tenant, has_alertname)
 
         # Process receiver config
-        am_config, recv_warnings = _process_override_receiver(override, idx, tenant, allowed_domains)
+        am_config, recv_warnings = _process_override_receiver(override, idx, tenant, allowed_domains,
+                                                              secrets)
         warnings.extend(recv_warnings)
         if am_config is None:
             _note_skipped(verdicts, tenant, slot, override.get("receiver"), "receiver",
@@ -531,7 +541,8 @@ def _route_receiver_name(tenant: str, idx: int) -> str:
 
 def expand_routing_routes(tenant: str, routing_config: dict,
                           allowed_domains: list[str] | None = None,
-                          verdicts: list[SlotVerdict] | None = None
+                          verdicts: list[SlotVerdict] | None = None,
+                          secrets: SecretBinding | None = None,
                           ) -> tuple[list[dict], list[dict], list[str]]:
     """Expand ADR-007 label-match ``routes`` into child routes (#2245).
 
@@ -588,7 +599,8 @@ def expand_routing_routes(tenant: str, routing_config: dict,
             _note_skipped(verdicts, tenant, slot, receiver_obj, "receiver", warnings, start)
             continue
         am_config, recv_warnings = build_receiver_config(
-            receiver_obj, ctx, tenant_id=tenant, field=f"routes[{idx}].receiver")
+            receiver_obj, ctx, tenant_id=tenant, field=f"routes[{idx}].receiver",
+            owner_tenant=tenant, secrets=secrets, allowed_domains=allowed_domains)
         warnings.extend(recv_warnings)
         if am_config is None:
             _note_skipped(verdicts, tenant, slot, receiver_obj, "receiver", warnings, start)
@@ -627,7 +639,9 @@ def expand_routing_routes(tenant: str, routing_config: dict,
 # ============================================================
 
 def _build_per_tenant_enforced_route(tenant: str, enforced_routing: dict,
-                                      allowed_domains: list[str] | None) -> tuple[dict | None, dict | None, list[str]]:
+                                      allowed_domains: list[str] | None,
+                                      secrets: SecretBinding | None = None,
+                                      ) -> tuple[dict | None, dict | None, list[str]]:
     """Build a single per-tenant enforced route with receiver.
 
     Returns (route_dict, receiver_dict, warnings) — both None if invalid.
@@ -635,9 +649,15 @@ def _build_per_tenant_enforced_route(tenant: str, enforced_routing: dict,
     warnings = []
     substituted = _substitute_tenant(enforced_routing, tenant)
     sub_receiver = substituted.get("receiver")
+    # #1560 design choice: a per-tenant ({{tenant}}) enforced receiver is
+    # written by the platform, but it is bound like the tenant's own — its
+    # owner is the tenant it is expanded for, so `{secret: {key}}` names
+    # da-<tenant>. The platform-wide one (_build_single_enforced_route) has
+    # no owner and can use a shared Secret only.
     am_config, recv_warnings = build_receiver_config(
         sub_receiver, f"platform-enforced-{tenant}",
-        field="_routing_enforced.receiver")
+        field="_routing_enforced.receiver",
+        owner_tenant=tenant, secrets=secrets, allowed_domains=allowed_domains)
     warnings.extend(recv_warnings)
     if am_config is None:
         return None, None, warnings
@@ -678,15 +698,20 @@ def _build_per_tenant_enforced_route(tenant: str, enforced_routing: dict,
 
 
 def _build_single_enforced_route(enforced_routing: dict,
-                                 allowed_domains: list[str] | None) -> tuple[dict | None, dict | None, list[str]]:
+                                 allowed_domains: list[str] | None,
+                                 secrets: SecretBinding | None = None,
+                                 ) -> tuple[dict | None, dict | None, list[str]]:
     """Build a single platform-wide enforced route with receiver.
 
     Returns (route_dict, receiver_dict, warnings) — both None if invalid.
     """
     warnings = []
     enforced_receiver = enforced_routing.get("receiver")
+    # #1560: no tenant owns the platform-wide receiver (owner None): a
+    # tenant's own Secret is refused here, a listed shared one is not.
     am_config, recv_warnings = build_receiver_config(
-        enforced_receiver, "platform-enforced", field="_routing_enforced.receiver")
+        enforced_receiver, "platform-enforced", field="_routing_enforced.receiver",
+        owner_tenant=None, secrets=secrets, allowed_domains=allowed_domains)
     warnings.extend(recv_warnings)
     if am_config is None:
         return None, None, warnings
@@ -733,6 +758,7 @@ def _build_single_enforced_route(enforced_routing: dict,
 def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, dict],
                            allowed_domains: list[str] | None = None,
                            *, tenants: Iterable[str],
+                           secrets: SecretBinding | None = None,
                            ) -> tuple[list[dict], list[dict], list[str]]:
     """Generate platform-enforced Alertmanager routes and receivers.
 
@@ -788,7 +814,7 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
         # Per-tenant enforced routes: expand {{tenant}} for each tenant
         for tenant in enforced_route_tenants(routing_configs, tenants):
             route, receiver, route_warnings = _build_per_tenant_enforced_route(
-                tenant, enforced_routing, allowed_domains)
+                tenant, enforced_routing, allowed_domains, secrets)
             warnings.extend(route_warnings)
             if route is not None and receiver is not None:
                 routes.append(route)
@@ -796,7 +822,7 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
     else:
         # Single platform-wide enforced route
         route, receiver, route_warnings = _build_single_enforced_route(
-            enforced_routing, allowed_domains)
+            enforced_routing, allowed_domains, secrets)
         warnings.extend(route_warnings)
         if route is not None and receiver is not None:
             routes.append(route)
@@ -812,6 +838,7 @@ def _build_enforced_routes(enforced_routing: dict, routing_configs: dict[str, di
 def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None,
                          sources: list[tuple[str, str]] | None = None,
                          verdicts: list[SlotVerdict] | None = None,
+                         secrets: SecretBinding | None = None,
                          ) -> tuple[list[dict], list[dict], list[str]]:
     """Generate tenant-specific Alertmanager routes and receivers.
 
@@ -868,8 +895,9 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
             continue
 
         # 從結構化物件建立 receiver config
-        am_config, recv_warnings = build_receiver_config(receiver_obj, tenant,
-                                                         tenant_id=tenant)
+        am_config, recv_warnings = build_receiver_config(
+            receiver_obj, tenant, tenant_id=tenant,
+            owner_tenant=tenant, secrets=secrets, allowed_domains=allowed_domains)
         warnings.extend(recv_warnings)
         if am_config is None:
             _drop_unrendered_main(tenant, cfg, warnings, verdicts, main_start)
@@ -891,7 +919,7 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
         # override 沒寫的 timing / group_by 會繼承 root，而不是 tenant。
         override_sub_routes, override_receivers, override_warnings = \
             expand_routing_overrides(tenant, cfg, allowed_domains=allowed_domains,
-                                     verdicts=child_verdicts)
+                                     verdicts=child_verdicts, secrets=secrets)
         warnings.extend(override_warnings)
         receivers.extend(override_receivers)
         _record_sources(sources, override_receivers, tenant, "overrides",
@@ -901,7 +929,7 @@ def _build_tenant_routes(routing_configs: dict[str, dict], allowed_domains: list
         # 同樣掛在主 route 底下，排在 overrides 之後。
         label_sub_routes, label_receivers, label_warnings = \
             expand_routing_routes(tenant, cfg, allowed_domains=allowed_domains,
-                                  verdicts=child_verdicts)
+                                  verdicts=child_verdicts, secrets=secrets)
         warnings.extend(label_warnings)
         receivers.extend(label_receivers)
         _record_sources(sources, label_receivers, tenant, "routes",
@@ -969,13 +997,13 @@ def _build_custom_alert_routes(tenant_names: list[str] | None = None,
     """Build the platform-static Custom Alerts isolation route + firehose receiver.
 
     #741 S7/S8. ALWAYS emitted (tenant-agnostic), and prepended AHEAD of all
-    generated routes at ConfigMap assembly (assemble_configmap /
-    _merge_routes_receivers_inhibits) for two reasons:
+    generated routes by the one merge every output mode uses (merge_generated)
+    for two reasons:
 
-      1. Durability: generate_alertmanager_routes.py --apply REPLACES route.routes
-         (it does not append), so a route that lived only in the base ConfigMap
-         would be silently dropped on the next --apply. Emitting it here keeps it
-         present across regeneration.
+      1. Durability: the merge emits the platform routes canonically and
+         drops a base route to these receivers, so a route that lived only in
+         the base would not survive. Emitting it here keeps it present in
+         every output.
       2. Correctness: the enforced NOC route uses `continue: true` and its
          matchers are OPTIONAL — a matcher-less enforced route matches ALL alerts,
          so without an earlier `continue: false` custom route, tenant custom alerts
@@ -1054,7 +1082,7 @@ def _build_watchdog_route() -> tuple[list[dict], list[dict]]:
     the base ConfigMap's watchdog-heartbeat receiver. The name-only placeholder
     only guarantees the route resolves to a defined receiver in synthetic /
     default-base contexts; the merge paths defer to the richer base definition so
-    the url_file is never clobbered (see _merge_routes_receivers_inhibits).
+    the url_file is never clobbered (see _grar_render.merge_generated).
 
     repeat_interval is 3m; the operator's EXTERNAL TTL must be LONGER (e.g. 5m)
     to absorb network jitter AND rule-evaluation lag under load — that tolerance
@@ -1148,6 +1176,7 @@ def _build_sentinel_sinkhole_route() -> tuple[list[dict], list[dict]]:
 def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str] | None = None,
                     enforced_routing: dict | None = None,
                     *, tenants: Iterable[str],
+                    secrets: SecretBinding | None = None,
                     ) -> tuple[list[dict], list[dict], list[str]]:
     """Generate Alertmanager route tree + receivers from routing configs.
 
@@ -1171,6 +1200,8 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
             routing expands over them all, routed or not (#2519,
             ``enforced_route_tenants``). No default: forgetting it is a
             TypeError, not the routed-only set.
+        secrets: #1560 — the Secret mount root and the deployment policy's
+            ``shared_secrets`` (None: default root, no shared Secret).
 
     Returns:
         (routes_list, receivers_list, warnings_list) where:
@@ -1185,7 +1216,8 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
 
     # Platform Enforced Routing — NOC 永遠收到通知
     enf_routes, enf_receivers, enf_warnings = _build_enforced_routes(
-        enforced_routing, routing_configs, allowed_domains, tenants=tenants)
+        enforced_routing, routing_configs, allowed_domains, tenants=tenants,
+        secrets=secrets)
     routes.extend(enf_routes)
     receivers.extend(enf_receivers)
     all_warnings.extend(enf_warnings)
@@ -1196,7 +1228,7 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
 
     # Tenant routes（在 enforced route 之後）
     t_routes, t_receivers, t_warnings = _build_tenant_routes(
-        routing_configs, allowed_domains, sources=sources)
+        routing_configs, allowed_domains, sources=sources, secrets=secrets)
     routes.extend(t_routes)
     receivers.extend(t_receivers)
     all_warnings.extend(t_warnings)
@@ -1207,78 +1239,13 @@ def generate_routes(routing_configs: dict[str, dict], allowed_domains: list[str]
     # _grar_validate.blocking_generation_errors。
     all_warnings.extend(receiver_name_collisions(sources))
 
-    # #2519: the root fallthrough of every tenant whose only top-level route is
-    # its continue:true enforced one — LAST, after every tenant route.
-    routes.extend(_build_root_fallthrough_routes(
-        [r["name"][len("platform-enforced-"):] for r in enf_receivers
-         if r["name"] != "platform-enforced"],
-        t_routes))
+    # #2519: a tenant whose only top-level route is its continue:true
+    # enforced one still reaches the root receiver — not through a route
+    # emitted here but through the merge, which puts everything below the
+    # enforced routes under one route to the root receiver
+    # (`_grar_render.merge_generated`).
 
     return routes, receivers, all_warnings
-
-
-def _build_root_fallthrough_routes(enforced_tenants: list[str],
-                                   tenant_routes: list[dict]) -> list[dict]:
-    """One ``tenant="<t>"`` route per tenant of *enforced_tenants* that owns
-    no main tenant route in *tenant_routes* — so the root receiver still gets
-    its alerts (#2519).
-
-    Alertmanager's ``Route.Match`` adds the root only when NO child matched,
-    and a matched ``continue: true`` child counts. Before #2519 such a tenant
-    (threshold-only, ``_silent_mode``-only, ``_routing: disable``, a refused
-    ``_routing``) matched no child and its alerts reached the root receiver;
-    its per-tenant enforced route alone would take them off the root
-    (amtool-measured: ``default`` → ``platform-enforced-<t>``). This route is
-    matched next and delivers to the root's receiver, so the result is the
-    pre-#2519 delivery plus the enforced one.
-
-    A tenant WITH a main tenant route gets none: that route (no
-    ``continue``, matcher ``tenant="<t>"`` only) already took its alerts off
-    the root before #2519. The single, matcher-less enforced route
-    (``platform-enforced``) gets none either: it took every alert off the
-    root before #2519 too, so adding one would change that behaviour, not
-    restore one.
-
-    Emitted with ``matchers`` ONLY: no ``receiver`` (the root's is not known
-    here — Alertmanager inherits it, so the render-mode fragment is right
-    under whatever root it is merged into; ``pin_root_fallthrough_receiver``
-    writes the name where the root is known), no ``continue`` (nothing after
-    it can match this tenant), no ``group_by`` / timings (inherited from the
-    root as the root delivery did). It adds no receiver, so
-    ``receiver_name_collisions`` never sees it.
-    """
-    owned = {t for t in enforced_tenants
-             if any(r.get("receiver") == f"tenant-{t}"
-                    and f'tenant="{t}"' in (r.get("matchers") or [])
-                    for r in tenant_routes)}
-    return [{"matchers": [f'tenant="{t}"']}
-            for t in enforced_tenants if t not in owned]
-
-
-def is_root_fallthrough_route(route: object) -> bool:
-    """Whether *route* is one ``_build_root_fallthrough_routes`` emitted and
-    no receiver has been pinned on yet: a top-level route whose only key is
-    ``matchers``, holding exactly one ``tenant="..."``. No other generated
-    top-level route lacks a receiver."""
-    if not isinstance(route, dict) or set(route) != {"matchers"}:
-        return False
-    m = route["matchers"]
-    return (isinstance(m, list) and len(m) == 1 and isinstance(m[0], str)
-            and m[0].startswith('tenant="') and m[0].endswith('"'))
-
-
-def pin_root_fallthrough_receiver(routes: list[dict],
-                                  root_receiver: object) -> list[dict]:
-    """*routes* with the root's receiver name written on each root
-    fallthrough route (#2519) — the base config's ``route.receiver`` (built-in
-    base, ``--base-config``, or the cluster's on ``--apply``). Alertmanager
-    would inherit the same receiver; the name is written so the assembled
-    config says where the alert goes. A root without a usable receiver name
-    leaves the routes as they are (inheritance still applies)."""
-    if not isinstance(root_receiver, str) or not root_receiver:
-        return routes
-    return [dict(r, receiver=root_receiver) if is_root_fallthrough_route(r)
-            else r for r in routes]
 
 
 def _build_inhibit_rules(tenant: str) -> dict:

@@ -34,66 +34,43 @@ data:
     \ If\n\n        the url_file is still the deploy placeholder, populate the Secret.\n\
     \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/alerting-plane-self-liveness.md\n\
     \      summary: Alertmanager webhook notifications are failing — Watchdog heartbeat\
-    \ may not be egressing\n  - alert: ThresholdGovernanceStale\n    expr: \"(\\n\
-    \  max by (cronjob, namespace) (\\n    time() - kube_cronjob_status_last_successful_time{cronjob=\\\
-    \"threshold-govern\\\", namespace=\\\"monitoring\\\"}\\n  ) > 691200\\n)\\nunless\
-    \ on (cronjob, namespace)\\n  kube_cronjob_spec_suspend{cronjob=\\\"threshold-govern\\\
-    \", namespace=\\\"monitoring\\\"} == 1\\n\"\n    for: 15m\n    labels:\n     \
-    \ alert_source: platform\n      severity: warning\n    annotations:\n      description:\
-    \ 'The weekly threshold-governance CronJob (threshold-govern,\n\n        Mondays\
-    \ 03:00 UTC) has not recorded a successful run for 8\n\n        days — at least\
-    \ one weekly run was missed or has been\n\n        failing, so drifted thresholds\
-    \ are no longer being\n\n        retightened into proposed-PRs.\n\n        NOT\
-    \ urgent: config rot degrades over weeks, there is no 3am\n\n        action —\
-    \ triage in business hours. Check (a) the CronJob is\n\n        not suspended,\
-    \ (b) recent threshold-govern Jobs and their\n\n        logs (`kubectl get jobs\
-    \ -n monitoring`), (c) tenant-api\n\n        reachability from the monitoring\
-    \ namespace.\n\n        did-it-run != did-it-work: a run whose failed tenant-api\n\
-    \n        writes (errors + circuit-breaker skips) reach >= 90% of the\n\n    \
-    \    attempted writes exits non-zero (Job Failed) even if it opened\n\n      \
-    \  a PR, and does NOT advance last_successful_time, so this fires\n\n        on\
-    \ a silent near-total write failure too — not only when the\n\n        scheduler\
-    \ stops. A CronJob deleted entirely is not caught here\n\n        (its KSM series\
-    \ vanishes); that surfaces at deploy/review time.\n\n        '\n      runbook_url:\
-    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#threshold-govern\n\
-    \      summary: Threshold-governance loop has not succeeded in 8 days\n  - alert:\
-    \ CronJobLastRunFailed\n    expr: \"(\\n  max by (owner_name, namespace) (\\n\
-    \    (\\n      max by (job_name, namespace) (\\n        kube_job_status_start_time{namespace=\\\
-    \"monitoring\\\"}\\n      )\\n      and on (job_name, namespace)\\n        max\
-    \ by (job_name, namespace) (\\n          kube_job_failed{namespace=\\\"monitoring\\\
-    \", condition=\\\"true\\\"}\\n        ) == 1\\n    )\\n    * on (job_name, namespace)\
+    \ may not be egressing\n  - alert: CronJobLastRunFailed\n    expr: \"(\\n  max\
+    \ by (owner_name, namespace) (\\n    (\\n      max by (job_name, namespace) (\\\
+    n        kube_job_status_start_time{namespace=\\\"monitoring\\\"}\\n      )\\\
+    n      and on (job_name, namespace)\\n        max by (job_name, namespace) (\\\
+    n          kube_job_failed{namespace=\\\"monitoring\\\", condition=\\\"true\\\"\
+    }\\n        ) == 1\\n    )\\n    * on (job_name, namespace) group_left (owner_name)\\\
+    n      max by (job_name, namespace, owner_name) (\\n        kube_job_owner{namespace=\\\
+    \"monitoring\\\", owner_kind=\\\"CronJob\\\"}\\n      )\\n  )\\n  ==\\n  max by\
+    \ (owner_name, namespace) (\\n    (\\n      max by (job_name, namespace) (\\n\
+    \        kube_job_status_start_time{namespace=\\\"monitoring\\\"}\\n      )\\\
+    n      and on (job_name, namespace)\\n        (\\n          max by (job_name,\
+    \ namespace) (\\n            kube_job_failed{namespace=\\\"monitoring\\\", condition=\\\
+    \"true\\\"}\\n          )\\n          or\\n          max by (job_name, namespace)\
+    \ (\\n            kube_job_complete{namespace=\\\"monitoring\\\", condition=\\\
+    \"true\\\"}\\n          )\\n        ) == 1\\n    )\\n    * on (job_name, namespace)\
     \ group_left (owner_name)\\n      max by (job_name, namespace, owner_name) (\\\
     n        kube_job_owner{namespace=\\\"monitoring\\\", owner_kind=\\\"CronJob\\\
-    \"}\\n      )\\n  )\\n  ==\\n  max by (owner_name, namespace) (\\n    (\\n   \
-    \   max by (job_name, namespace) (\\n        kube_job_status_start_time{namespace=\\\
-    \"monitoring\\\"}\\n      )\\n      and on (job_name, namespace)\\n        (\\\
-    n          max by (job_name, namespace) (\\n            kube_job_failed{namespace=\\\
-    \"monitoring\\\", condition=\\\"true\\\"}\\n          )\\n          or\\n    \
-    \      max by (job_name, namespace) (\\n            kube_job_complete{namespace=\\\
-    \"monitoring\\\", condition=\\\"true\\\"}\\n          )\\n        ) == 1\\n  \
-    \  )\\n    * on (job_name, namespace) group_left (owner_name)\\n      max by (job_name,\
-    \ namespace, owner_name) (\\n        kube_job_owner{namespace=\\\"monitoring\\\
-    \", owner_kind=\\\"CronJob\\\"}\\n      )\\n  )\\n)\\nunless on (owner_name, namespace)\\\
-    n  label_replace(\\n    max by (cronjob, namespace) (\\n      kube_cronjob_spec_suspend{namespace=\\\
+    \"}\\n      )\\n  )\\n)\\nunless on (owner_name, namespace)\\n  label_replace(\\\
+    n    max by (cronjob, namespace) (\\n      kube_cronjob_spec_suspend{namespace=\\\
     \"monitoring\\\"}\\n    ) == 1,\\n    \\\"owner_name\\\", \\\"$1\\\", \\\"cronjob\\\
     \", \\\"(.*)\\\"\\n  )\\n\"\n    for: 15m\n    labels:\n      alert_source: platform\n\
     \      severity: warning\n    annotations:\n      description: 'The most recent\
     \ Job created by CronJob {{ $labels.owner_name }}\n\n        in namespace {{ $labels.namespace\
-    \ }} ended in a Failed\n\n        condition. Unlike ThresholdGovernanceStale —\
-    \ which needs a\n\n        PREVIOUS success to measure staleness against — this\
-    \ fires the\n\n        first time a run fails, including for a CronJob that has\
-    \ never\n\n        succeeded even once.\n\n        NOT urgent: platform CronJobs\
-    \ are weekly (threshold-govern) or\n\n        every-5-minutes (maintenance-scheduler);\
-    \ neither carries a 3am\n\n        action. Triage in business hours.\n\n     \
-    \   Check: (a) `kubectl get jobs -n {{ $labels.namespace }}` and the\n\n     \
-    \   failing pod''s logs; (b) whether the CronJob''s pinned image\n\n        actually\
-    \ contains the program it invokes — that failure mode is\n\n        what motivated\
-    \ this alert and is now also gated at CI time by\n\n        scripts/tools/lint/check_image_pin_capability.py;\
-    \ (c) whether a\n\n        dependency the Job talks to (tenant-api, Prometheus)\
+    \ }} ended in a Failed\n\n        condition. Unlike a staleness alert — which\
+    \ needs a PREVIOUS\n\n        success to measure staleness against — this fires\
+    \ the first\n\n        time a run fails, including for a CronJob that has never\n\
+    \n        succeeded even once.\n\n        NOT urgent: platform CronJobs (maintenance-scheduler,\
+    \ every 5\n\n        minutes) carry no 3am action. Triage in business hours.\n\
+    \n        Check: (a) `kubectl get jobs -n {{ $labels.namespace }}` and the\n\n\
+    \        failing pod''s logs; (b) whether the CronJob''s pinned image\n\n    \
+    \    actually contains the program it invokes — that failure mode is\n\n     \
+    \   what motivated this alert and is now also gated at CI time by\n\n        scripts/tools/lint/check_image_pin_capability.py;\
+    \ (c) whether a\n\n        dependency the Job talks to (Alertmanager, Prometheus)\
     \ is\n\n        reachable from this namespace.\n\n        Self-resolving: a subsequent\
     \ successful run clears this without\n\n        anyone deleting the failed Job.\
-    \ Suspending the CronJob also\n\n        silences it, matching ThresholdGovernanceStale.\n\
-    \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#171-cronjoblastrunfailed\n\
+    \ Suspending the CronJob also\n\n        silences it.\n\n        '\n      runbook_url:\
+    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#171-cronjoblastrunfailed\n\
     \      summary: 'CronJob {{ $labels.owner_name }}: most recent run failed'\n \
     \ - alert: ThresholdExporterDown\n    expr: up{job=\"threshold-exporter\"} ==\
     \ 0\n    for: 1m\n    labels:\n      alert_source: platform\n      severity: warning\n\

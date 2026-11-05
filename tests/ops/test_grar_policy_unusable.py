@@ -2,7 +2,7 @@
 
 一條規則：kind 本身就是拒收條件。不論哪個欄位、哪種壞法，產生器的 reader 都在同一個函式
 （`_grar_validate.domain_policy_problems`）判 policy 的形狀，記成欄位型別錯誤，
-`tree_refusal` 因此在 render、`--dry-run`、`--output-configmap`、`--apply`、`--validate`、
+`tree_refusal` 因此在 `--output-alertmanager`（含 `--dry-run`）、`--output-configmap`、`--apply`、`--validate`、
 `--strict` 都 rc 1、不寫出、不套用。涵蓋：
 
 * policy 本身不是 mapping（null＝沒有約束，照收）；
@@ -272,7 +272,7 @@ _LEGAL = {
 def test_a_policy_written_correctly_is_no_error_and_renders(tmp_path, name):
     d = _write(tmp_path, _LEGAL[name])
     assert _errors(d) == []
-    p = _gar(d, "--dry-run")
+    p = _gar(d, "--output-alertmanager", "--dry-run")
     assert p.returncode == 0, p.stderr
     assert _REFUSAL not in p.stderr
 
@@ -317,7 +317,7 @@ def test_the_findings_document_names_the_problem(tmp_path, name):
     files, field, policy, _text = CASES[name]
     d = _write(tmp_path, files)
     doc_path = tmp_path / "findings.json"
-    p = _gar(d, "--dry-run", "--findings-json", str(doc_path))
+    p = _gar(d, "--output-alertmanager", "--dry-run", "--findings-json", str(doc_path))
     assert p.returncode == 1, p.stderr
     doc = json.loads(doc_path.read_text(encoding="utf-8"))
     items = [r for r in doc["findings"] if r["kind"] != "refusal_summary"]

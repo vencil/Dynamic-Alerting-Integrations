@@ -45,8 +45,8 @@ MODULE "tenant-api" — `internal/rbac/rbac.go` (LD-6 permission core)
   - permCovers        — permission hierarchy admin⊇write⊇read (2 muts)
   - tenantMatches     — tenant wildcard/prefix matcher + "**" fail-open backstop (2 muts)
   - validTenantPattern— pattern allowlist that keeps "**" out of the matcher (2 muts)
-  - scopeSetModes     — org-axis shadow/enforce set membership (3 muts)
-  - scopeFieldModes   — metadata-axis shadow/enforce field match (1 mut)
+  - scopeSetPasses    — org-axis set membership (3 muts)
+  - scopeFieldPasses  — metadata-axis field match (1 mut)
   - metadataMatches   — pure env/domain membership (1 mut)
 
 MODULE "tenant-api" — `internal/rbac/context.go` + `.../principal.go`
@@ -68,7 +68,7 @@ benchmarks, not the parse/merge primitives).
 
 Kill targets, tenant-api: the round-3-reorganised rbac test files
 (match_eval_test.go for tenantMatches/permCovers, org_scope_test.go for
-scopeSetModes, metadata_scope_test.go for scopeFieldModes/metadataMatches,
+scopeSetPasses, metadata_scope_test.go for scopeFieldPasses/metadataMatches,
 principal_test.go for parseForwardedGroups/ParseClaimHeaders) and the
 token manager_test.go for audienceFor. These are in-package tests, so
 the runner scopes to `./internal/rbac/...` / `./internal/federation/token/...`.
@@ -460,61 +460,59 @@ MUTATIONS: list[Mutation] = [
         kill_test="TestValidateConfig_TenantPatterns",
     ),
 
-    # ── scopeSetModes (rbac.go) — org-axis shadow/enforce membership ──────
+    # ── scopeSetPasses (rbac.go) — org-axis set membership (ADR-027 §7) ──
     Mutation(
         target_file="internal/rbac/rbac.go",
         test_target="./internal/rbac/...",
         module="tenant-api",
-        label="scopeSetModes: unlabeled tenant passes ENFORCE (org scope defeated, the exact leak)",
-        fn_name="scopeSetModes",
-        # bug class: an org-unlabeled tenant would be granted even under enforce,
-        # so org-scope grants every unassigned tenant to every caller — the leak
-        # org-scope exists to prevent. Kill: TestScopeSetModes
-        # "unlabeled (nil): shadow yes, enforce no".
-        old="if len(tenantOrgs) == 0 {\n\t\treturn true, false",
-        new="if len(tenantOrgs) == 0 {\n\t\treturn true, true",
-        kill_test="TestScopeSetModes",
+        label="scopeSetPasses: unlabeled tenant passes (org scope defeated, the exact leak)",
+        fn_name="scopeSetPasses",
+        # bug class: an org-unlabeled tenant would be granted, so org-scope
+        # grants every unassigned tenant to every caller — the leak org-scope
+        # exists to prevent. Kill: TestScopeSetPasses (unlabeled → false).
+        old="return false // unlabeled tenant: no org to match",
+        new="return true // unlabeled tenant: no org to match",
+        kill_test="TestScopeSetPasses",
     ),
     Mutation(
         target_file="internal/rbac/rbac.go",
         test_target="./internal/rbac/...",
         module="tenant-api",
-        label="scopeSetModes: caller with no org claim matches a LABELED tenant (shadow fail-open)",
-        fn_name="scopeSetModes",
+        label="scopeSetPasses: caller with no org claim matches a LABELED tenant (fail-open)",
+        fn_name="scopeSetPasses",
         # bug class: a caller carrying no org claim would still match a labeled
-        # tenant in shadow mode — no basis to match, yet granted. Kill:
-        # TestScopeSetModes "labeled + no caller claim: both no".
-        old='if userOrgVal == "" {\n\t\treturn false, false',
-        new='if userOrgVal == "" {\n\t\treturn true, false',
-        kill_test="TestScopeSetModes",
+        # tenant — no basis to match, yet granted. Kill: TestScopeSetPasses
+        # (labeled + no caller claim → false).
+        old="return false // caller carries no org claim: no basis to match",
+        new="return true // caller carries no org claim: no basis to match",
+        kill_test="TestScopeSetPasses",
     ),
     Mutation(
         target_file="internal/rbac/rbac.go",
         test_target="./internal/rbac/...",
         module="tenant-api",
-        label="scopeSetModes: org membership test inverted (== → !=; non-member matches)",
-        fn_name="scopeSetModes",
+        label="scopeSetPasses: org membership test inverted (== → !=; non-member matches)",
+        fn_name="scopeSetPasses",
         # bug class: the caller's org value would match every tenant org it is
-        # NOT a member of — a caller sees exactly the orgs it does not belong to.
-        # Kill: TestScopeSetModes "labeled non-member: both no".
+        # NOT a member of. Kill: TestScopeSetPasses (labeled non-member → false).
         old="if o == userOrgVal {",
         new="if o != userOrgVal {",
-        kill_test="TestScopeSetModes",
+        kill_test="TestScopeSetPasses",
     ),
 
-    # ── scopeFieldModes (rbac.go) — metadata-axis shadow/enforce ──────────
+    # ── scopeFieldPasses (rbac.go) — metadata-axis field match ────────────
     Mutation(
         target_file="internal/rbac/rbac.go",
         test_target="./internal/rbac/...",
         module="tenant-api",
-        label="scopeFieldModes: unlabeled tenant passes ENFORCE on a restricted field (fail-open)",
-        fn_name="scopeFieldModes",
-        # bug class: an env/domain-unlabeled tenant would stay visible even under
-        # enforce, so the metadata scope filter never actually hides anything.
-        # Kill: TestScopeFieldModes "unlabeled on restricted: shadow yes, enforce no".
-        old='if value == "" {\n\t\treturn true, false',
-        new='if value == "" {\n\t\treturn true, true',
-        kill_test="TestScopeFieldModes",
+        label="scopeFieldPasses: unlabeled tenant passes on a restricted field (fail-open)",
+        fn_name="scopeFieldPasses",
+        # bug class: an env/domain-unlabeled tenant would stay visible, so the
+        # metadata scope filter never hides anything. Kill: TestScopeFieldPasses
+        # (unlabeled on restricted → false).
+        old="return false // unlabeled tenant on a restricted field",
+        new="return true // unlabeled tenant on a restricted field",
+        kill_test="TestScopeFieldPasses",
     ),
 
     # ── metadataMatches (rbac.go) — pure env/domain membership ────────────

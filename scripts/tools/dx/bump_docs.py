@@ -317,8 +317,7 @@ def _build_tools_rules():
     # the release bump moves the generator and leaves the matrix behind, and
     # the nightly matrix-drift guard goes red on the release PR.
     for f in [".github/workflows/nightly-image-scan.yaml",
-              "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml",
-              "k8s/03-monitoring/cronjob-threshold-govern.yaml"]:
+              "k8s/03-monitoring/cronjob-maintenance-scheduler.yaml"]:
         rules.append({
             "file": f,
             "desc": f"da-tools image tag in {f}",
@@ -3253,4 +3252,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)

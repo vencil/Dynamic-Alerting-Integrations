@@ -686,9 +686,10 @@ ROWS: list[Row] = [
       out_name="federation-jwks.json",
       requires="openssl"),
     R("ops/generate_alertmanager_routes.py", "-o/--output", "file",
-      lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "-o", str(out)],
-      reach="in-repo try-local seed conf.d; the default render mode writes the "
-            "routing fragment to -o",
+      lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output-alertmanager",
+                      "-o", str(out)],
+      reach="in-repo try-local seed conf.d; --output-alertmanager writes the "
+            "merged alertmanager.yml to -o",
       out_name="alertmanager-routes.yaml"),
     R("ops/generate_tenant_mapping_rules.py", "-o/--output", "file",
       lambda c, out: ["--config-dir", _mapping_conf_d(c.tmp), "--metrics", "mysql_up",
@@ -733,9 +734,8 @@ ROWS: list[Row] = [
       reach="tmp legacy Prometheus rules file",
       shapes=("parent_is_file", "target_is_file")),
     R("ops/migrate_to_operator.py", "--output-dir", "dir",
-      lambda c, out: ["--source-dir", str(_jsc.K8S_MONITORING),
-                      "--config-dir", str(_jsc.SEED_CONF_D), "--output-dir", str(out)],
-      reach="in-repo k8s/03-monitoring + seed conf.d",
+      lambda c, out: ["--source-dir", str(_jsc.K8S_MONITORING), "--output-dir", str(out)],
+      reach="in-repo k8s/03-monitoring",
       shapes=("parent_is_file", "target_is_file")),
     R("ops/onboard_platform.py", "-o/--output-dir", "dir",
       lambda c, out: ["--alertmanager-config", str(_jsc.ALERTMANAGER_YML), "-o", str(out)],
@@ -763,9 +763,8 @@ ROWS: list[Row] = [
       shapes=("parent_is_file", "target_is_file", "artifact_is_dir"),
       artifact="validation-report.json"),
     R("ops/operator_generate.py", "--output-dir", "dir",
-      lambda c, out: ["--rule-packs-dir", str(_jsc.RULE_PACKS),
-                      "--config-dir", str(_jsc.SEED_CONF_D), "--output-dir", str(out)],
-      reach="in-repo rule-packs + seed conf.d",
+      lambda c, out: ["--rule-packs-dir", str(_jsc.RULE_PACKS), "--output-dir", str(out)],
+      reach="in-repo rule-packs",
       shapes=("parent_is_file", "target_is_file")),
 ]
 

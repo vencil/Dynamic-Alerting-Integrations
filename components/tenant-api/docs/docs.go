@@ -20,7 +20,7 @@ const docTemplate = `{
     "paths": {
         "/api/v1/audit/tenants/{id}/access-report": {
             "get": {
-                "description": "Enumerates the live RBAC config with the SAME predicates the\nforward gates run and reports, per rule, who is granted what on\ntenant {id} under which org-gate conditions (both shadow and\nenforce outcomes). Audit-only: authorization decisions remain\nwith the forward gates. Requires a NON-org-scoped platform\nadmin grant; all other callers receive a constant 403\nregardless of {id} (no tenant-enumeration oracle). Note the\nredacted view cannot remove the org-membership inference carried\nby a grant entry's mere existence: for a value-pinned org rule,\nthe grant entry itself is weakly identifying.",
+                "description": "Enumerates the live RBAC config with the SAME predicates the\nforward gates run and reports, per rule, who is granted what on\ntenant {id} under which org-gate conditions. Audit-only: authorization decisions remain\nwith the forward gates. Requires a NON-org-scoped platform\nadmin grant; all other callers receive a constant 403\nregardless of {id} (no tenant-enumeration oracle). Note the\nredacted view cannot remove the org-membership inference carried\nby a grant entry's mere existence: for a value-pinned org rule,\nthe grant entry itself is weakly identifying.",
                 "produces": [
                     "application/json"
                 ],
@@ -1197,12 +1197,6 @@ const docTemplate = `{
                     },
                     {
                         "type": "string",
-                        "description": "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI.",
-                        "name": "X-DA-Write-Source",
-                        "in": "header"
-                    },
-                    {
-                        "type": "string",
                         "description": "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode).",
                         "name": "X-DA-Base-Hash",
                         "in": "header"
@@ -1732,7 +1726,7 @@ const docTemplate = `{
         },
         "/api/v1/tenants/{id}/validate": {
             "post": {
-                "description": "Dry-run validation of a tenant YAML without writing to disk.\nWhen conf.d holds an entry that cannot be read other than the tenant's file (#2939), the answer is\nvalid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE (a\nsymlink that cannot be resolved) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);\nwhen the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.\nThe body is judged by PUT's own refusal sequence, in PUT's order (#3062): the write scope on {id} as the file\nholds it and as the body proposes it, a masked-credential placeholder, the body's own shape (it must declare\ntenants.{id} alone, API-shaped, #3064), the tenant file's resolution, a git-managed tenant (#3064: valid: false\nwith PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), the tenant file differing from HEAD\nin this server's copy (#1535: valid: false with PUT's 409 TENANT_FILE_DIRTY text and code: TENANT_FILE_DIRTY), a tenant another conf.d file also\ndeclares, validation. A refusal is valid: false with the text PUT refuses with (a validation error\nlisted bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest\nbase branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718) —\nso a reserved key's value (_silent_mode, #3227), which validation judges against the file the write replaces, is not judged here in PR mode.\nThis route needs read permission only, but the verdict is the write's: a caller who may read the tenant and not write\nit gets valid: false with the write gate's text, as its PUT is refused (#3062; before, such a caller got a verdict on\nthe body alone). POST /api/v1/tenants/{id}/diff shows that caller a masked preview instead.",
+                "description": "Dry-run validation of a tenant YAML without writing to disk.\nWhen conf.d holds an entry that cannot be read other than the tenant's file (#2939), the answer is\nvalid: false with the text PUT /api/v1/tenants/{id} returns in its 409 TENANT_TREE_UNREADABLE (a\nsymlink that cannot be resolved) or its 500 TENANT_STORE_FAULT (an entry of tenant-api's copy the server cannot read);\nwhen the tenant's own file cannot be read, with PUT's 409 TENANT_CONFIG_NOT_LOADABLE text.\nThe body is judged by PUT's own refusal sequence, in PUT's order (#3062): the write scope on {id} as the file\nholds it and as the body proposes it, a masked-credential placeholder, the body's own shape (it must declare\ntenants.{id} alone, API-shaped, #3064), the tenant file's resolution, a git-managed tenant (#3064: valid: false\nwith PUT's 409 TENANT_GIT_MANAGED text and code: TENANT_GIT_MANAGED), the tenant file differing from HEAD\nin this server's copy (#1535: valid: false with PUT's 409 TENANT_FILE_DIRTY text and code: TENANT_FILE_DIRTY), a tenant another conf.d file also\ndeclares, validation. A refusal is valid: false with the text PUT refuses with (a validation error\nlisted bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest\nbase branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718) —\nso a reserved key's value (_silent_mode, #3227), which validation judges against the file the write replaces, is not judged here in PR mode.\nIn direct mode a body that passes those steps is then judged as PUT judges it (#3016): the route generator and the shared key verdict.\nTheir refusal is valid: false with PUT's text (its 400 key-verdict lines, its 422 findings as the caller may see them, a GENERATOR_REJECTED\nthat is a verdict on the write: too_large, invalid_request, normalized, key_verdict_undecidable, key_verdict_platform_file).\njudged is false when that judgement gave no verdict on the body, with not_judged saying why: refused (an earlier step refused the body),\npr_mode, unchanged (the body changes nothing), preview_busy (another preview is being judged; retry), no_validator, canceled,\nerror, or the generator's reason — what PUT would answer 429 (retry) or 503 with, or the container's own failure (memory,\nincomplete, key_verdict_memory, key_verdict_error). Then valid reflects only the earlier steps.\nThis route needs read permission only, but the verdict is the write's: a caller who may read the tenant and not write\nit gets valid: false with the write gate's text, as its PUT is refused (#3062; before, such a caller got a verdict on\nthe body alone). POST /api/v1/tenants/{id}/diff shows that caller a masked preview instead.",
                 "consumes": [
                     "application/yaml"
                 ],
@@ -1785,7 +1779,7 @@ const docTemplate = `{
         },
         "/api/v1/views": {
             "get": {
-                "description": "Returns all saved filter views defined in _views.yaml.\nRequires read on \"*\" from a rule with no org-scope (open mode\nreads them too).",
+                "description": "Returns all saved filter views defined in _views.yaml.\nRequires read on \"*\" from a rule with no org-scope.",
                 "produces": [
                     "application/json"
                 ],
@@ -2519,17 +2513,6 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_vencil_tenant-api_internal_rbac.BoolProvenance": {
-            "type": "object",
-            "properties": {
-                "source": {
-                    "type": "string"
-                },
-                "value": {
-                    "type": "boolean"
-                }
-            }
-        },
         "github_com_vencil_tenant-api_internal_rbac.CoverageGap": {
             "type": "object",
             "properties": {
@@ -2593,17 +2576,6 @@ const docTemplate = `{
                 },
                 "tenant_orgs_sha256": {
                     "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.StringProvenance"
-                }
-            }
-        },
-        "github_com_vencil_tenant-api_internal_rbac.ReverseFlags": {
-            "type": "object",
-            "properties": {
-                "metadata_scope_enforce": {
-                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.BoolProvenance"
-                },
-                "org_scope_enforce": {
-                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.BoolProvenance"
                 }
             }
         },
@@ -2692,10 +2664,7 @@ const docTemplate = `{
                 "claim_key": {
                     "type": "string"
                 },
-                "outcome_enforce": {
-                    "type": "string"
-                },
-                "outcome_shadow": {
+                "outcome": {
                     "type": "string"
                 },
                 "passing_org_values": {
@@ -2724,9 +2693,6 @@ const docTemplate = `{
                 },
                 "config_anchor": {
                     "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseConfigAnchor"
-                },
-                "flags": {
-                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseFlags"
                 },
                 "generated_at": {
                     "type": "string"
@@ -2987,7 +2953,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "parse_failed_files": {
-                    "description": "conf.d files threshold-exporter skips because they fail to parse — a broken file, not a missing tenant. Unrestricted callers (open mode, or an admin restricted on no org, environment or domain) get root-relative paths; any other caller gets only the file name, and only for a file named after a tenant it could see as a degraded list row. Other files are left out without trace (not even counted).",
+                    "description": "conf.d files threshold-exporter skips because they fail to parse — a broken file, not a missing tenant. Unrestricted callers (an admin restricted on no org, environment or domain) get root-relative paths; any other caller gets only the file name, and only for a file named after a tenant it could see as a degraded list row. Other files are left out without trace (not even counted).",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -3081,7 +3047,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "claim_key": {
-                    "description": "ClaimKey is the fourth axis: org_gate.claim_key (rule.OrgScope). A\nsame-name pair that re-scopes to a different declared claim key changes\nhere even when the three outcome axes are identical (e.g. an unlabeled\ntenant, where every required gate reads pass/fail_unlabeled regardless of\nwhich key). The claim key IS a claim identifier, so it is DROPPED in the\nredacted view (mirroring ReverseOrgGate.ClaimKey) — the redact rebuild's\nallowlist simply never copies it forward.",
+                    "description": "ClaimKey is the third axis: org_gate.claim_key (rule.OrgScope). A\nsame-name pair that re-scopes to a different declared claim key changes\nhere even when the outcome axes are identical (e.g. an unlabeled\ntenant, where every required gate reads fail_unlabeled regardless of\nwhich key). The claim key IS a claim identifier, so it is DROPPED in the\nredacted view (mirroring ReverseOrgGate.ClaimKey) — the redact rebuild's\nallowlist simply never copies it forward.",
                     "allOf": [
                         {
                             "$ref": "#/definitions/internal_handler.StringDelta"
@@ -3091,10 +3057,7 @@ const docTemplate = `{
                 "live_index": {
                     "type": "integer"
                 },
-                "outcome_enforce": {
-                    "$ref": "#/definitions/internal_handler.StringDelta"
-                },
-                "outcome_shadow": {
+                "outcome": {
                     "$ref": "#/definitions/internal_handler.StringDelta"
                 },
                 "rule": {
@@ -3787,6 +3750,13 @@ const docTemplate = `{
                         "TENANT_GIT_MANAGED",
                         "TENANT_FILE_DIRTY"
                     ]
+                },
+                "judged": {
+                    "description": "Judged: the write's own judgement — the route generator and the shared\nkey verdict, as PUT asks them — ran on this body and gave a verdict on\nit (#3016). When false, Valid reflects only the steps before it, and\nNotJudged says why: an earlier step refused the body (refused), PR\nwrite mode (pr_mode), the body changes nothing (unchanged), another\npreview is being judged (preview_busy, retry), no validator is wired\n(no_validator), the caller went away (canceled), an unexpected failure\n(error, in the log), or the generator's reason when it gave no verdict\non the body — what PUT answers 429 (retry) or 503 (the container cannot\njudge) with, or the container's own failure (memory, incomplete,\nkey_verdict_memory, key_verdict_error).",
+                    "type": "boolean"
+                },
+                "not_judged": {
+                    "type": "string"
                 },
                 "notices": {
                     "type": "array",

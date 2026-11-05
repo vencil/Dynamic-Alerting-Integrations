@@ -556,6 +556,10 @@ func WriteValidationErrors(w http.ResponseWriter, r *http.Request, violations []
 //   - otherwise the post-state: the content this write would leave places
 //     the tenant outside the caller's scope.
 //
+// Labels is the label check judged on the base (ADR-027 §7): the write
+// changes the tenant's environment/domain labels there and the caller is not
+// a platform administrator.
+//
 // Put marks a single-tenant PUT; otherwise Op is the batch op's index in the
 // request (for /groups/{id}/batch, the member's index in the expansion).
 type freshBaseScopeError struct {
@@ -563,6 +567,10 @@ type freshBaseScopeError struct {
 	Op       int
 	Put      bool
 	PreState bool
+	// Labels: the write changes the tenant's environment/domain labels on
+	// the base and the caller is not a platform administrator (ADR-027 §7,
+	// label_guard.go).
+	Labels bool
 }
 
 // ErrorKind is errkind.FreshBaseScope.
@@ -574,6 +582,10 @@ func (e *freshBaseScopeError) Error() string {
 	if e.Put {
 		subject = "this write to tenant " + e.TenantID
 		nothing = "Nothing was written and no PR/MR was opened"
+	}
+	if e.Labels {
+		return fmt.Sprintf("%s. On the latest base branch %s changes them. %s.",
+			labelChangeDeniedText(e.TenantID), subject, nothing)
 	}
 	if e.PreState {
 		// As generic as RequireOrgWrite's refusal: the tenant's state on the

@@ -11,7 +11,7 @@
 # amtool, and the nonroot user at uid 10001 — which tenant-api runs as too
 # (docker-compose.yaml `user:`): the service answers only a peer of its own
 # uid.
-FROM python:3.13.15-alpine3.23
+FROM python:3.14.10-alpine3.23
 
 # pip is removed once PyYAML is in, for the reason the da-tools image gives
 # (#1278: every pip release vendors a setuptools / msgpack with open CVEs).

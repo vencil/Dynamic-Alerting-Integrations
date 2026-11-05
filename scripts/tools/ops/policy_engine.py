@@ -30,7 +30,7 @@ DSL 運算子：
       `_defaults.yaml` 都一樣；排程閾值逐時段比對，任一時段違規即違規（訊息帶 UTC 時段）。
       某時段 `disable`（served 在該段沒有列）：`required` 算違規，`forbidden` 不算，
       其他運算子略過該段；整天都不發的鍵視同沒有（`required` 違規、其他略過）。
-      target 用舊拼法（別名）時，以 served-values 的 `aliases` 表換成現行拼法。
+      target 用舊拼法（別名）時，照 exporter 的規則（`da-guard key-spellings`）換成現行拼法。
   保留鍵（`_` 開頭，`_routing` 除外）— 寫法＋繼承（`da-guard effective` 的
       `effective_config`）；Go 自動補的預設值（`_severity_dedup`、`_metadata` 空欄位等）不算有寫。
   `_routing` — 路由產生器解析後的結果（`_routing_defaults` 逐層、routing profile、
@@ -60,8 +60,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report, arm_crash_envelope,
-)
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report)
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility: the repo subdir layout needs the
@@ -100,12 +99,13 @@ import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import FileUnreadable, ParseTreeError  # noqa: E402
 
 # #2115 0-B: the values a rule reads come from Go (served-values / effective).
+from _lib_parse_tree import KeySpellings  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
     DaGuardError,
     DaGuardNotFoundError,
     ParseFailedError,
     ServedValuesError,
-    canonical_key,
+    key_spellings,
     load_effective,
     load_served_tree,
     print_load_error,
@@ -528,11 +528,9 @@ class Unserved(NamedTuple):
 
 class PolicyInputs(NamedTuple):
     """What `load_policy_inputs` reads: `views` is `{tenant: {key: value}}`
-    in the shape `evaluate_policies` takes, `aliases` the exporter's alias
-    table (retired base key -> canonical base key) rule targets are read
-    through."""
+    in the shape `evaluate_policies` takes, threshold keys in the exporter's
+    canonical spelling."""
     views: dict[str, dict[str, Any]]
-    aliases: dict[str, str]
 
 
 class RoutingTreeRefused(Exception):
@@ -615,6 +613,10 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
         _lib_parse_cache.reader_for(config_dir).require()
     routed = _resolved_routing(config_dir) if routing else {}
 
+    # The exporter's canonical spelling of every unserved threshold key, in
+    # one `da-guard key-spellings` run (#3556).
+    spellings = key_spellings(str(k) for served in tree.tenants.values()
+                              for k in served.unserved if not str(k).startswith("_"))
     views: dict[str, dict[str, Any]] = {}
     for tenant, served in tree.tenants.items():
         view: dict[str, Any] = {
@@ -622,7 +624,7 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
             if k.startswith("_") and k != _ROUTING}
         for key, raw in served.unserved.items():
             if not str(key).startswith("_"):
-                view[_canonical_key(str(key), tree.aliases)] = Unserved(raw)
+                view[spellings.canonical(str(key))] = Unserved(raw)
         if tenant in routed:
             view[_ROUTING] = routed[tenant]
         for key, day in (served.schedules or {}).items():
@@ -636,34 +638,34 @@ def load_policy_inputs(config_dir: str, *, routing: bool = False) -> PolicyInput
             if any(v is not None for _s, _e, v in segments):
                 view[key] = ServedThreshold(segments)
         views[tenant] = view
-    return PolicyInputs(views, dict(tree.aliases))
+    return PolicyInputs(views)
 
 
 # ---------------------------------------------------------------------------
 # Target resolution
 # ---------------------------------------------------------------------------
-_CRITICAL = "_critical"
-# A threshold key in the exporter's canonical spelling (#2115); shared with
-# threshold_recommend (#2116), so it lives in _lib_tenant_values.
-_canonical_key = canonical_key
-
-
 def _is_wildcard(target: str) -> bool:
     return "*" in target and "." not in target
 
 
-def _canonical_target(target: str, aliases: Optional[dict[str, str]]) -> str:
-    """`target` with its first path element in canonical spelling (a
-    wildcard is matched against both spellings instead, see
-    `_resolve_wildcard_values`)."""
-    if _is_wildcard(target):
+def _target_head(target: str) -> str:
+    """The first path element of a dot-path target: the key it names."""
+    return target.partition(".")[0]
+
+
+def _canonical_target(target: str, spellings: Optional[KeySpellings]) -> str:
+    """`target` with its first path element in the exporter's canonical
+    spelling (`spellings`, `da-guard key-spellings`; None: as written). A
+    wildcard is matched against every spelling instead, see
+    `_resolve_wildcard_values`."""
+    if _is_wildcard(target) or spellings is None:
         return target
     head, dot, rest = target.partition(".")
-    return _canonical_key(head, aliases) + dot + rest
+    return spellings.canonical(head) + dot + rest
 
 
 def _resolve_target(config: dict, target: str,
-                    aliases: Optional[dict[str, str]] = None) -> tuple[bool, Any]:
+                    spellings: Optional[KeySpellings] = None) -> tuple[bool, Any]:
     """解析 dot-path 目標，從 tenant 配置中取值。
 
     支援：
@@ -673,7 +675,8 @@ def _resolve_target(config: dict, target: str,
     Args:
         config: tenant 配置 dict。
         target: dot-separated path 或含萬用字元的 pattern。
-        aliases: exporter 的別名表；給了的話，舊拼法的閾值 key 換成現行拼法再找（#2115）。
+        spellings: exporter 的拼法答案（`da-guard key-spellings`，涵蓋 target 與 config 的鍵）；
+            給了的話，舊拼法的閾值 key 換成現行拼法再找（#2115、#3556）。None：照原樣比對。
 
     Returns:
         (found, value) — found 表示是否找到，value 是解析到的值。
@@ -681,13 +684,13 @@ def _resolve_target(config: dict, target: str,
     """
     # Wildcard pattern — match at top level
     if _is_wildcard(target):
-        matches = dict(_resolve_wildcard_values(config, target, aliases))
+        matches = dict(_resolve_wildcard_values(config, target, spellings))
         if matches:
             return True, matches
         return False, None
 
     # Dot-path navigation
-    parts = _canonical_target(target, aliases).split(".")
+    parts = _canonical_target(target, spellings).split(".")
     current: Any = config
     for part in parts:
         if isinstance(current, dict):
@@ -701,19 +704,15 @@ def _resolve_target(config: dict, target: str,
 
 
 def _resolve_wildcard_values(config: dict, target: str,
-                             aliases: Optional[dict[str, str]] = None) -> list[tuple[str, Any]]:
+                             spellings: Optional[KeySpellings] = None) -> list[tuple[str, Any]]:
     """解析萬用字元目標，回傳 (key, value) 清單。
 
-    閾值 key 以現行拼法回傳；pattern 對現行拼法或任一舊拼法（別名）相符即算（#2115）。
+    閾值 key 以現行拼法回傳；pattern 對現行拼法或任一舊拼法（別名）相符即算
+    （#2115）。各鍵有哪些拼法是 exporter 的規則（`spellings`，#3556）；None：只比原樣。
     """
-    retired: dict[str, list[str]] = {}
-    for old, new in (aliases or {}).items():
-        retired.setdefault(new, []).append(old)
     results = []
     for k, v in config.items():
-        names = [k, *retired.get(k, [])]
-        if k.endswith(_CRITICAL):
-            names += [old + _CRITICAL for old in retired.get(k[:-len(_CRITICAL)], [])]
+        names = spellings.spellings(str(k)) if spellings is not None else (k,)
         if any(fnmatch.fnmatch(n, target) for n in names):
             results.append((k, v))
     return results
@@ -894,7 +893,7 @@ def _holds(operator: str, actual: Any, expected: Any) -> bool:
 # Condition evaluation (when clause)
 # ---------------------------------------------------------------------------
 def _evaluate_when(config: dict, when: dict,
-                   aliases: Optional[dict[str, str]] = None) -> bool:
+                   spellings: Optional[KeySpellings] = None) -> bool:
     """評估 when 條件子句。
 
     when 結構：
@@ -917,7 +916,7 @@ def _evaluate_when(config: dict, when: dict,
 
     # A key carried but not served (`Unserved`) is absent to a condition —
     # for an exact target and for every key a wildcard target expands to.
-    found, actual = _resolve_target(config, target, aliases)
+    found, actual = _resolve_target(config, target, spellings)
     if isinstance(actual, Unserved):
         found, actual = False, None
     elif _is_wildcard(target) and isinstance(actual, dict):
@@ -939,14 +938,14 @@ def _evaluate_when(config: dict, when: dict,
 # Core evaluation
 # ---------------------------------------------------------------------------
 def evaluate_rule(rule: PolicyRule, tenant: str, config: dict,
-                  aliases: Optional[dict[str, str]] = None) -> list[Violation]:
+                  spellings: Optional[KeySpellings] = None) -> list[Violation]:
     """對單一 tenant 評估單一策略規則。
 
     Args:
         rule: 策略規則。
         tenant: tenant 名稱。
         config: tenant 配置 dict（`load_policy_inputs` 的 view，或一般 dict）。
-        aliases: exporter 的別名表（`PolicyInputs.aliases`）。
+        spellings: exporter 的拼法答案（`evaluate_policies` 一次問好）；None：照原樣比對。
 
     Returns:
         違規清單（空 = 通過）。
@@ -957,7 +956,7 @@ def evaluate_rule(rule: PolicyRule, tenant: str, config: dict,
         return []
 
     # Evaluate when condition
-    if rule.when and not _evaluate_when(config, rule.when, aliases):
+    if rule.when and not _evaluate_when(config, rule.when, spellings):
         return []
 
     def violation(target: str, actual: Any, window: Optional[str]) -> Violation:
@@ -973,7 +972,7 @@ def evaluate_rule(rule: PolicyRule, tenant: str, config: dict,
 
     # Wildcard target — evaluate against all matching keys
     if _is_wildcard(rule.target):
-        matched = _resolve_wildcard_values(config, rule.target, aliases)
+        matched = _resolve_wildcard_values(config, rule.target, spellings)
         if rule.operator == "required" and not matched:
             return [Violation(
                 tenant=tenant,
@@ -988,7 +987,7 @@ def evaluate_rule(rule: PolicyRule, tenant: str, config: dict,
                 for actual, window in _failures(rule.operator, val, rule.value)]
 
     # Standard dot-path target
-    found, actual = _resolve_target(config, rule.target, aliases)
+    found, actual = _resolve_target(config, rule.target, spellings)
 
     if rule.operator in ("required", "forbidden"):
         return [violation(rule.target, a, window)
@@ -1028,14 +1027,15 @@ def _format_violation_msg(operator: str, target: str, actual: Any, expected: Any
 def evaluate_policies(
     rules: list[PolicyRule],
     tenant_configs: dict[str, dict],
-    aliases: Optional[dict[str, str]] = None,
 ) -> PolicyResult:
     """對所有 tenant 評估所有策略規則。
 
     Args:
         rules: 策略規則清單。
         tenant_configs: {tenant_name: config_dict}（`load_policy_inputs(...).views`）。
-        aliases: exporter 的別名表（`load_policy_inputs(...).aliases`）。
+
+    舊拼法（#1231）照 exporter 的規則比對：規則 target 與各 tenant 的鍵一次問
+    `da-guard key-spellings`（#3556），Python 不留自己的換名規則。
 
     Returns:
         PolicyResult 包含所有違規及統計。
@@ -1044,10 +1044,14 @@ def evaluate_policies(
         tenants_evaluated=len(tenant_configs),
         rules_evaluated=len(rules),
     )
+    heads = [_target_head(t) for r in rules
+             for t in (r.target, (r.when or {}).get("target", ""))
+             if t and not _is_wildcard(t)]
+    spellings = key_spellings([*heads, *(str(k) for c in tenant_configs.values() for k in c)])
 
     for tenant, config in sorted(tenant_configs.items()):
         for rule in rules:
-            violations = evaluate_rule(rule, tenant, config, aliases)
+            violations = evaluate_rule(rule, tenant, config, spellings)
             result.violations.extend(violations)
 
     return result
@@ -1193,10 +1197,9 @@ def _unreadable_yaml_exit(exc: YamlFileError, args, lang: str) -> "int | Report"
 
     ``_defaults.yaml`` and every tenant file reach ``_lib_io.load_yaml_file``
     with no handler; a ``\\xff`` byte in one of them used to be a
-    ``UnicodeDecodeError`` traceback (rc 1, 0 bytes of stdout under
-    ``--json``). Not the shared ``exit_on_yaml_file_error`` wrapper: this
-    tool owes ``--json`` its ``caller_error`` envelope on every terminal
-    path, same as the ``--policy`` ladder above.
+    ``UnicodeDecodeError`` traceback (rc 1). Now rc 2 and one line naming
+    the file and, under ``--json``, this tool's own ``caller_error`` document
+    (``_caller_error_exit``, a Report), same as the ``--policy`` ladder below.
     """
     label = safe_label(exc)   # untrusted filename in the message (#1538)
     print(f"無法讀取 {label}" if lang == "zh" else f"ERROR: cannot read {label}",
@@ -1227,7 +1230,8 @@ def _load_error_exit(exc: Exception, args, rules_evaluated: int) -> "int | Repor
     → rc 2, nothing evaluated. da-guard missing or failing, a file the
     exporter drops or cannot read (named, with da-guard's stderr below), a
     tree da-guard refuses, or one the route generator refuses (its own
-    lines). The ``--json`` envelope as on every other caller-error path."""
+    lines). Under ``--json``, this tool's own ``caller_error`` document
+    (``_caller_error_exit``)."""
     if isinstance(exc, RoutingTreeRefused):
         print("ERROR: the route generator refuses this tree, so `_routing` "
               "cannot be resolved:", file=sys.stderr)
@@ -1260,11 +1264,6 @@ def _main(argv: Optional[list[str]] = None) -> "int | Report":
     lang = detect_cli_lang()
     parser = build_parser(lang)
     args = parser.parse_args(argv)
-    if args.json_output:
-        # #3094: a crash in --json mode still prints one envelope, with the
-        # keys of the caller_error documents below
-        arm_crash_envelope(tenants_evaluated=0, rules_evaluated=0, error_count=0,
-                           warning_count=0, passed=False, violations=[])
 
     # A non-existent --config-dir is a caller error, not a vacuous pass:
     # without this guard a typo'd path silently yields no rules AND no tenant
@@ -1272,8 +1271,8 @@ def _main(argv: Optional[list[str]] = None) -> "int | Report":
     # --config-dir <typo> --ci && promote` would fail open. (Note: a dir that
     # EXISTS but has no _policies is a separate, legitimate no-op handled at
     # the `if not rules` path and left at EXIT_OK.)
-    # #3276: judged by the shared caller-path check; `--json` gets the armed
-    # envelope (the keys above) with that check's reason.
+    # #3276: judged by the shared caller-path check: rc 2, its line, nothing
+    # on stdout (#3558).
     config_dir_problem = classify_path(args.config_dir, "dir", lang=lang, flag="--config-dir")
     if config_dir_problem is not None:
         raise CallerError(f"設定目錄無法使用: {config_dir_problem.message}" if lang == "zh"
@@ -1333,8 +1332,9 @@ def _main(argv: Optional[list[str]] = None) -> "int | Report":
         # fell through to "No policy rules found" rc 0 because
         # `"policies" in "just a string"` is a substring test. Same handler
         # ladder as `lint_custom_rules.load_policy`: each shape is a caller
-        # error (2) naming the path and the reason, with the --json envelope
-        # the not-found path emits.
+        # error (2) naming the path and the reason, with this tool's own
+        # caller_error document under --json (the not-found path above is a
+        # CallerError: stdout empty, #3558).
         problem: Optional[tuple[str, str, str]] = None   # (reason, en, zh)
         try:
             # ADR-036 step 4 (#2906): yaml.v3, as the tenants it is compared
@@ -1468,8 +1468,12 @@ def _main(argv: Optional[list[str]] = None) -> "int | Report":
                 rules_evaluated=len(rules)))
         return EXIT_OK
 
-    # Evaluate
-    result = evaluate_policies(rules, tenant_configs, inputs.aliases)
+    # Evaluate. It asks da-guard for the #1231 spellings (#3556), so a
+    # da-guard that cannot answer is the same failure as the load's.
+    try:
+        result = evaluate_policies(rules, tenant_configs)
+    except (DaGuardNotFoundError, DaGuardError) as exc:
+        return _load_error_exit(exc, args, len(rules))
 
     # Exit code
     status = EXIT_VIOLATION if args.ci and not result.passed else EXIT_OK

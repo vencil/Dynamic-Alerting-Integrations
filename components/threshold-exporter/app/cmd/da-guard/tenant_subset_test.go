@@ -120,7 +120,7 @@ func TestTenantSubset_EachTenantIsItsWholeTreeEntry(t *testing.T) {
 					t.Errorf("%s %v --tenant %s: entry differs from the whole tree's\n got: %v\nwant: %v",
 						name, run, id, got[id], tenants[id])
 				}
-				for _, k := range []string{"parse_failed", "skipped", "unreadable", "aliases", "unread_keys"} {
+				for _, k := range []string{"parse_failed", "skipped", "unreadable", "unread_keys"} {
 					if _, ok := full[k]; ok && !reflect.DeepEqual(sub[k], full[k]) {
 						t.Errorf("%s %v --tenant %s: %s differs: %v vs %v", name, run, id, k, sub[k], full[k])
 					}
