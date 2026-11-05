@@ -139,6 +139,10 @@ STRINGS = {
             "the config reads"
         ),
         "mounts_cr_missing": "Alertmanager CR {ns}/{name} not found",
+        "mounts_pick_one": (
+            "every Alertmanager CR in {ns} is compared; if only one serves this "
+            "configSecret, pass --alertmanager <name> to compare that one"
+        ),
         "mounts_other": "{n} *_file path(s) outside {root} not judged (other_files)",
         "mounts_unusable": "--secret-mounts {path}: not a generate-routes --secret-mounts-out list ({why})",
     },
@@ -187,6 +191,10 @@ STRINGS = {
         ),
         "mounts_no_cr": "namespace {ns} 裡沒有 Alertmanager CR：設定讀的 {n} 個 Secret 沒有任何東西掛載",
         "mounts_cr_missing": "找不到 Alertmanager CR {ns}/{name}",
+        "mounts_pick_one": (
+            "{ns} 裡每個 Alertmanager CR 都會比對；只有其中一個使用這份 configSecret 時，"
+            "帶 --alertmanager <名稱> 只比對那一個"
+        ),
         "mounts_other": "{n} 個 *_file 路徑在 {root} 之外，未判定（other_files）",
         "mounts_unusable": "--secret-mounts {path}：不是 generate-routes --secret-mounts-out 產出的清單（{why}）",
     }
@@ -417,6 +425,10 @@ class OperatorChecker:
                 notes.append(i18n("mounts_ok", self.lang).format(name=cr_name, n=len(needed)))
         if not needed and not notes:
             notes.append(i18n("mounts_none_needed", self.lang))
+        if len(crs) > 1 and name is None and any(
+                needed - {x for x in ((c.get("spec") or {}).get("secrets") or [])
+                          if isinstance(x, str)} for c in crs):
+            notes.append(i18n("mounts_pick_one", self.lang).format(ns=self.args.namespace))
         if self.mount_list["other_files"]:
             notes.append(i18n("mounts_other", self.lang).format(
                 n=len(self.mount_list["other_files"]), root=root))

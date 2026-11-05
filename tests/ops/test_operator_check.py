@@ -319,6 +319,19 @@ class TestCheckSecretMounts:
         assert r.status == "fail"
         assert "am-one" in r.detail and "am-two" in r.detail
 
+    def test_a_lacking_cr_among_several_points_at_the_alertmanager_flag(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a"),
+                    [_am("am-one", "da-t-a"), _am("am-two")])
+        assert r.status == "fail" and "--alertmanager <name>" in r.detail
+
+    def test_one_lacking_cr_alone_is_not_pointed_at_the_flag(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a"), [_am("am-one")])
+        assert r.status == "fail" and "--alertmanager" not in r.detail
+
+    def test_the_hint_is_written_in_both_languages(self):
+        assert all("--alertmanager <" in oc.STRINGS[lang]["mounts_pick_one"]
+                   for lang in ("en", "zh"))
+
     def test_alertmanager_flag_judges_that_cr_only(self, monkeypatch):
         r = _mounts(monkeypatch, _mount_list("da-t-a"),
                     [_am("am-one", "da-t-a"), _am("am-two")],
