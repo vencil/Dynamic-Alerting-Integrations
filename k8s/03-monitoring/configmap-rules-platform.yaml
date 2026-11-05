@@ -34,25 +34,38 @@ data:
     \ If\n\n        the url_file is still the deploy placeholder, populate the Secret.\n\
     \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/alerting-plane-self-liveness.md\n\
     \      summary: Alertmanager webhook notifications are failing — Watchdog heartbeat\
-    \ may not be egressing\n  - alert: CronJobLastRunFailed\n    expr: \"(\\n  max\
-    \ by (owner_name, namespace) (\\n    (\\n      max by (job_name, namespace) (\\\
-    n        kube_job_status_start_time{namespace=\\\"monitoring\\\"}\\n      )\\\
-    n      and on (job_name, namespace)\\n        max by (job_name, namespace) (\\\
-    n          kube_job_failed{namespace=\\\"monitoring\\\", condition=\\\"true\\\"\
-    }\\n        ) == 1\\n    )\\n    * on (job_name, namespace) group_left (owner_name)\\\
-    n      max by (job_name, namespace, owner_name) (\\n        kube_job_owner{namespace=\\\
-    \"monitoring\\\", owner_kind=\\\"CronJob\\\"}\\n      )\\n  )\\n  ==\\n  max by\
-    \ (owner_name, namespace) (\\n    (\\n      max by (job_name, namespace) (\\n\
-    \        kube_job_status_start_time{namespace=\\\"monitoring\\\"}\\n      )\\\
-    n      and on (job_name, namespace)\\n        (\\n          max by (job_name,\
-    \ namespace) (\\n            kube_job_failed{namespace=\\\"monitoring\\\", condition=\\\
-    \"true\\\"}\\n          )\\n          or\\n          max by (job_name, namespace)\
-    \ (\\n            kube_job_complete{namespace=\\\"monitoring\\\", condition=\\\
-    \"true\\\"}\\n          )\\n        ) == 1\\n    )\\n    * on (job_name, namespace)\
+    \ may not be egressing\n  - alert: AlertmanagerNotificationsFailing\n    expr:\
+    \ \"(\\n  sum without (reason, receiver_name) (rate(alertmanager_notifications_failed_total{integration!=\\\
+    \"webhook\\\"}[15m]))\\n/\\n  sum without (reason, receiver_name) (rate(alertmanager_notifications_total{integration!=\\\
+    \"webhook\\\"}[15m]))\\n) > 0.01\\n\"\n    for: 5m\n    labels:\n      alert_source:\
+    \ platform\n      severity: warning\n    annotations:\n      description: '{{\
+    \ $value | humanizePercentage }} of Alertmanager''s\n\n        {{ $labels.integration\
+    \ }} notification attempts failed over the\n\n        last 15m (all failure reasons\
+    \ together). Those notifications did\n\n        not reach their receivers. Check\
+    \ Alertmanager''s log for the\n\n        failing receiver and why; a credential\
+    \ read from a Secret file\n\n        that is not mounted fails here (run operator-check\n\
+    \n        --secret-mounts, or check your own mounts), as do an unreachable\n\n\
+    \        endpoint and a rejected credential.\n\n        '\n      runbook_url:\
+    \ https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/operator-alertmanager-integration.md\n\
+    \      summary: Alertmanager {{ $labels.integration }} notifications are failing\n\
+    \  - alert: CronJobLastRunFailed\n    expr: \"(\\n  max by (owner_name, namespace)\
+    \ (\\n    (\\n      max by (job_name, namespace) (\\n        kube_job_status_start_time{namespace=\\\
+    \"monitoring\\\"}\\n      )\\n      and on (job_name, namespace)\\n        max\
+    \ by (job_name, namespace) (\\n          kube_job_failed{namespace=\\\"monitoring\\\
+    \", condition=\\\"true\\\"}\\n        ) == 1\\n    )\\n    * on (job_name, namespace)\
     \ group_left (owner_name)\\n      max by (job_name, namespace, owner_name) (\\\
     n        kube_job_owner{namespace=\\\"monitoring\\\", owner_kind=\\\"CronJob\\\
-    \"}\\n      )\\n  )\\n)\\nunless on (owner_name, namespace)\\n  label_replace(\\\
-    n    max by (cronjob, namespace) (\\n      kube_cronjob_spec_suspend{namespace=\\\
+    \"}\\n      )\\n  )\\n  ==\\n  max by (owner_name, namespace) (\\n    (\\n   \
+    \   max by (job_name, namespace) (\\n        kube_job_status_start_time{namespace=\\\
+    \"monitoring\\\"}\\n      )\\n      and on (job_name, namespace)\\n        (\\\
+    n          max by (job_name, namespace) (\\n            kube_job_failed{namespace=\\\
+    \"monitoring\\\", condition=\\\"true\\\"}\\n          )\\n          or\\n    \
+    \      max by (job_name, namespace) (\\n            kube_job_complete{namespace=\\\
+    \"monitoring\\\", condition=\\\"true\\\"}\\n          )\\n        ) == 1\\n  \
+    \  )\\n    * on (job_name, namespace) group_left (owner_name)\\n      max by (job_name,\
+    \ namespace, owner_name) (\\n        kube_job_owner{namespace=\\\"monitoring\\\
+    \", owner_kind=\\\"CronJob\\\"}\\n      )\\n  )\\n)\\nunless on (owner_name, namespace)\\\
+    n  label_replace(\\n    max by (cronjob, namespace) (\\n      kube_cronjob_spec_suspend{namespace=\\\
     \"monitoring\\\"}\\n    ) == 1,\\n    \\\"owner_name\\\", \\\"$1\\\", \\\"cronjob\\\
     \", \\\"(.*)\\\"\\n  )\\n\"\n    for: 15m\n    labels:\n      alert_source: platform\n\
     \      severity: warning\n    annotations:\n      description: 'The most recent\
