@@ -328,8 +328,12 @@ def _dangling_test_ref(repo_root: Path, path: str, first: str,
     if first not in top:
         return f"{path} defines no {first!r}"
     owner = top[first]
-    collected = (owner.name.startswith("Test") if isinstance(owner, ast.ClassDef)
-                 else owner.name.startswith("test_"))
+    # A unittest.TestCase subclass is collected whatever its name
+    # (python_classes does not apply to it); its methods follow unittest's
+    # `test` prefix.
+    unittest_case = isinstance(owner, ast.ClassDef) and _is_unittest_case(owner, top)
+    collected = (unittest_case or owner.name.startswith("Test")
+                 if isinstance(owner, ast.ClassDef) else owner.name.startswith("test_"))
     if not collected:
         return f"{path}::{first} is not a test pytest collects"
     if second is None:
@@ -348,9 +352,28 @@ def _dangling_test_ref(repo_root: Path, path: str, first: str,
                        if isinstance(b, ast.Name) and isinstance(top.get(b.id), ast.ClassDef))
     if second not in members:
         return f"{path} defines no {first}::{second}"
-    if not second.startswith("test_"):
+    if not second.startswith("test" if unittest_case else "test_"):
         return f"{path}::{first}::{second} is not a test pytest collects"
     return None
+
+
+def _is_unittest_case(cls: ast.ClassDef, top: dict, _seen=None) -> bool:
+    """Whether *cls* subclasses ``unittest.TestCase`` (spelled
+    ``unittest.TestCase`` or ``TestCase``), directly or through a class of
+    the same file."""
+    seen = _seen if _seen is not None else set()
+    if id(cls) in seen:
+        return False
+    seen.add(id(cls))
+    for b in cls.bases:
+        if isinstance(b, ast.Attribute) and b.attr == "TestCase":
+            return True
+        if isinstance(b, ast.Name):
+            if b.id == "TestCase":
+                return True
+            if isinstance(top.get(b.id), ast.ClassDef) and _is_unittest_case(top[b.id], top, seen):
+                return True
+    return False
 
 
 def main(argv: Optional[list] = None) -> "int | Report":

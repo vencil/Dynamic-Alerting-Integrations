@@ -299,6 +299,23 @@ class TestValidateManifest:
             repo, test)
         assert issues == [], issues
 
+    @pytest.mark.parametrize("base", ["unittest.TestCase", "TestCase"])
+    def test_a_unittest_testcase_with_any_name_resolves(self, fake_repo, base):
+        """pytest collects unittest.TestCase subclasses whatever their name
+        (python_classes does not apply to them)."""
+        repo, _, test = fake_repo
+        _write(repo / "tests" / "shared" / "test_helpers.py", f"""
+            import unittest
+            from unittest import TestCase
+
+            class Checks({base}):
+                def test_it(self):
+                    pass
+        """)
+        issues = mod.validate_manifest(self._with_reason(
+            repo, "pinned by tests/shared/test_helpers.py::Checks::test_it"), repo, test)
+        assert issues == [], issues
+
     @pytest.mark.parametrize("ref,why", [
         ("tests/shared/test_helpers.py::_helper", "not a test pytest collects"),
         ("tests/shared/test_helpers.py::Helper", "not a test pytest collects"),
