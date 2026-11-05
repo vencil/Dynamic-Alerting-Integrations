@@ -122,6 +122,18 @@ def test_main_happy_path_returns_0(mod, tmp_path):
     assert rc == 0
 
 
+
+def test_the_command_line_reaches_main(tmp_path):
+    """#3579: the process enters through `_lib_exitcodes.run(_cli)`, which
+    calls with no arguments; `_cli` hands `main` the command line."""
+    import subprocess
+    p = tmp_path / "_defaults.yaml"
+    p.write_text("defaults:\n", encoding="utf-8")
+    proc = subprocess.run([sys.executable, str(TOOL_PATH), str(p), "bench_trigger", "50"],
+                          capture_output=True, text=True, encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, (proc.stdout, proc.stderr)
+    assert "bench_trigger: 50" in p.read_text(encoding="utf-8")
+
 # ── The inert-shape refusal (#1412) ─────────────────────────────────────────
 #
 # ⛔ A different question from the numeric guard above, and the reason both

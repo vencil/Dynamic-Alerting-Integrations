@@ -150,7 +150,7 @@ def test_every_go_leg_is_woken_by_changes_to_what_it_compiles() -> None:
     problems = compile_input_problems(legs, gates, _tracked(), set(UNTESTED_GO_MODULES))
     assert not problems, (
         "a PR touching only these files skips the leg that compiles them, and "
-        "`Go Tests (1.26)` reports green without building the change. Add the "
+        "`Go Tests` reports green without building the change. Add the "
         "file's tree to that leg's filter in ci.yml:\n  " + "\n  ".join(problems))
 
 

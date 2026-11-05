@@ -27,7 +27,7 @@
 #
 # DEDUP (CI-ROI wave): the former `python-tests` ("Python Tests") and
 # `go-tests` ("Go Tests") jobs of this workflow were strict SUBSETS of
-# ci.yml's "Python Tests" and "Go Tests (1.26)":
+# ci.yml's "Python Tests" and "Go Tests":
 #   - python-tests ran the SAME `pytest tests/` with the SAME --ignore list
 #     as ci.yml, but with fewer optional CLIs installed (no helm / vector /
 #     mtail / jsonschema) → strictly MORE silent skips, zero extra coverage.
@@ -43,7 +43,7 @@
 #   - REMOVE "Python Tests" and "Go Tests"          (this workflow's
 #     deleted job names — once the jobs are gone these checks would sit
 #     "Expected" forever and hard-block EVERY PR)
-#   - ADD "Python Tests" and "Go Tests (1.26)" (the ci.yml
+#   - ADD "Python Tests" and "Go Tests" (the ci.yml
 #     equivalents; ci.yml runs unfiltered on every PR + push to main, so
 #     the names are reported on every PR — verify they appear in the
 #     latest CI run before enrolling, per the iac-lint-baseline checklist
@@ -241,7 +241,7 @@ jobs:
 
   # (python-tests / go-tests jobs removed — see the DEDUP + OWNER RUNBOOK
   # banner at the top of this file. ci.yml's "Python Tests" and
-  # "Go Tests (1.26)" are the required checks now.)
+  # "Go Tests" are the required checks now.)
 
   go-lint:
     name: Go Lint — run

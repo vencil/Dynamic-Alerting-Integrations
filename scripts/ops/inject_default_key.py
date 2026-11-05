@@ -28,8 +28,13 @@ Exit codes:
 """
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
+
+# #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
+# Appended, so a copy beside this file (one directory holding all three) wins.
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
 # ⛔ Same predicate as every other producer of a `defaults:` block, imported
 # rather than respelled (#1412). This file lives outside `scripts/tools/`, so the
@@ -136,5 +141,12 @@ def main(argv: list[str]) -> int:
     return inject(Path(argv[1]), argv[2], argv[3])
 
 
+def _cli() -> int:
+    """The process entry: `main` with the command line (`main` takes the
+    argv explicitly, for importers and tests)."""
+    return main(sys.argv)
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    import _lib_exitcodes
+    _lib_exitcodes.run(_cli)
