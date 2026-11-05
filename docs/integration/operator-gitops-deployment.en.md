@@ -227,6 +227,7 @@ kubectl get configmap alertmanager-config -n monitoring \
   -o jsonpath='{.data.alertmanager\.base\.yml}' > alertmanager/alertmanager.base.yaml
 # produce and apply secrets/da-alertmanager-config.yaml as in "Generate GitOps-friendly YAML with da-tools" above
 kubectl apply -f secrets/da-alertmanager-config.yaml
+kubectl port-forward -n monitoring svc/alertmanager-operated 9093 &
 curl -s http://localhost:9093/api/v2/status | jq -r '.config.original' | head -40
 ```
 
