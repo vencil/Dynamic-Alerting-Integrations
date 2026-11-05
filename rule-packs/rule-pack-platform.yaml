@@ -117,6 +117,53 @@ groups:
             the url_file is still the deploy placeholder, populate the Secret.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/alerting-plane-self-liveness.md"
 
+      # --- Notification delivery failing on any other integration (#1560) ---
+      # The upstream alertmanager-mixin's AlertmanagerFailedToSendAlerts: the
+      # share of notification attempts that failed, per integration, over
+      # 15m. A receiver credential read from a Secret file (`*_file`, #1560)
+      # fails at SEND time when the Secret is not mounted — Alertmanager
+      # starts fine and the notification is lost (notify.Unrecoverable, no
+      # retry) — so this is where an unmounted Secret shows up after the fact
+      # (`operator-check --secret-mounts` is the check before it).
+      # Design notes:
+      #   - `integration!="webhook"` on both sides: webhook failures are the
+      #     rule above's (any failure for 15m, framed as the Watchdog egress);
+      #     without the exclusion one webhook outage would page twice with two
+      #     different stories. Together the two cover every integration.
+      #   - `ignoring(reason) group_left`: Alertmanager >= 0.27 splits the
+      #     failed counter by `reason` (clientError / serverError / other /
+      #     context*), the total has no such label — many failed series to
+      #     one total. With an older Alertmanager (no `reason`) it matches 1:1.
+      #   - Known limit: the ratio is per integration, not per receiver
+      #     (`receiver_name` needs Alertmanager's `receiver-name-in-metrics`
+      #     feature flag), so one tenant's receiver failing among many on the
+      #     same integration can stay under 1%. Behaviour pinned by
+      #     tests/rulepacks/platform-notifications-failing_test.yaml.
+      - alert: AlertmanagerNotificationsFailing
+        expr: |
+          (
+            rate(alertmanager_notifications_failed_total{integration!="webhook"}[15m])
+          /
+            ignoring (reason) group_left
+            rate(alertmanager_notifications_total{integration!="webhook"}[15m])
+          ) > 0.01
+        for: 5m
+        labels:
+          severity: warning
+          alert_source: platform
+        annotations:
+          summary: "Alertmanager {{ $labels.integration }} notifications are failing"
+          description: |
+            {{ $value | humanizePercentage }} of Alertmanager's
+            {{ $labels.integration }} notification attempts failed over the
+            last 15m (reason: {{ $labels.reason }}). Those notifications did
+            not reach their receivers. Check Alertmanager's log for the
+            failing receiver; a credential read from a Secret file that is not
+            mounted fails here (run operator-check --secret-mounts, or check
+            your own mounts), as do an unreachable endpoint and a rejected
+            credential.
+          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/operator-alertmanager-integration.md"
+
       # Why #1242 was opened: a staleness alert on the CRONJOB face
       # (kube_cronjob_status_last_successful_time) needs a previous success,
       # which a CronJob that has NEVER succeeded simply does not have — so it
