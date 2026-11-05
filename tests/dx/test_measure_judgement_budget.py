@@ -249,3 +249,33 @@ def test_the_generator_runs_as_the_container_runs_it(monkeypatch, tmp_path):
     assert report["generator_rc"] == 0
     assert [kw for _argv, kw in calls] == [{"key_verdict": False}]
     assert "--validate" in calls[0][0]
+
+
+# ── #3579: judgement mode is "this file run as the program with --_judge" ─
+
+def _judging_after_loading(argv0: str) -> list[str]:
+    """Load the module in a fresh interpreter with argv
+    [*argv0*, "--_judge", spec] (not as __main__, so its run() guard stays
+    out of it): its _JUDGING, and whether os.waitpid was replaced."""
+    import subprocess
+    # importlib, not runpy: runpy.run_path rewrites argv[0] to the path.
+    code = ("import importlib.util, os, sys\n"
+            f"sys.argv = [{argv0!r}, '--_judge', 'spec.json']\n"
+            "before = os.waitpid\n"
+            f"spec = importlib.util.spec_from_file_location('loaded', {str(_PATH)!r})\n"
+            "m = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(m)\n"
+            "print(m._JUDGING, os.waitpid is not before)\n")
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                          encoding="utf-8", timeout=60)
+    assert proc.returncode == 0, proc.stderr
+    return proc.stdout.split()
+
+
+def test_the_program_started_with_judge_records_what_it_starts():
+    assert _judging_after_loading(str(_PATH)) == ["True", "True"]
+
+
+def test_an_importer_with_judge_in_its_argv_gets_no_recorder():
+    # e.g. a test runner whose own argv happens to carry the flag
+    assert _judging_after_loading(sys.executable) == ["False", "False"]

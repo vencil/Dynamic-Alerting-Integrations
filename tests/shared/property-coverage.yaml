@@ -273,6 +273,7 @@ modules:
       _find_opening_tag: "Substring-search helper; trivial bracket-balance logic, transitively covered by every scanner that uses it"
       check_file: "Orchestrator combining all scan_* functions on a file; covered by integration"
       main: "CLI entry point"
+      _cli: "Process entry handing main the command line (#3579); covered by tests/dx/test_axe_lite_static.py TestCommandLine"
 
   # ── Ops: routing pipeline + rule-pack split ──────────────────────
 

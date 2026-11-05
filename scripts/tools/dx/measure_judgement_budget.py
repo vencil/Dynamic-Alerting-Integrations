@@ -130,8 +130,11 @@ import time
 #: The judgement process (`--_judge`, started by this tool) records every
 #: program it starts. Only there: the recorder must be in place before
 #: anything imports subprocess (its poll captures os.waitpid at import time),
-#: and an importer of this module (a test) must not get a patched os.
-_JUDGING = __name__ == "__main__" and len(sys.argv) > 1 and sys.argv[1] == "--_judge"
+#: and an importer of this module (a test) must not get a patched os. "Run
+#: as the program" is read from argv[0], not `__name__`: the module's one
+#: `__name__` test is its run() guard (#3579, tests/shared/test_single_exit_path.py).
+_JUDGING = (len(sys.argv) > 1 and sys.argv[1] == "--_judge"
+            and os.path.realpath(sys.argv[0]) == os.path.realpath(__file__))
 
 _STARTED: "dict[int, tuple[list[str], float, str | None]]" = {}
 _REAPED: "list[dict]" = []
@@ -963,4 +966,5 @@ def print_result(r: dict) -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)
