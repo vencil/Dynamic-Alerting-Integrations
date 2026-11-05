@@ -1,0 +1,6 @@
+# Labeled on every axis: no finding.
+tenants:
+  tenant-alpha:
+    _metadata:
+      environment: production
+      domain: finance

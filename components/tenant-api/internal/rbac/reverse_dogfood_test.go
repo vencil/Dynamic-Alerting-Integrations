@@ -6,22 +6,21 @@ package rbac
 //
 //   §5.1 Witness-positive (RULE-ISOLATED): every emitted grant, replayed as a
 //        synthesized witness against a Manager holding ONLY that rule, must be
-//        granted by the real forward gates in both fail-modes. Isolation is
+//        granted by the real forward gates. Isolation is
 //        load-bearing (round-1 C3): on the full config another rule could
 //        supply the allow and mask a rendering error in THIS grant.
 //   §5.2 Completeness property (正⟹逆 — the direction fatal to an audit):
 //        seeded-fuzz principals from the config vocabulary; whenever a forward
 //        gate grants, the report must contain an explaining grant — decided by
 //        replaying the SAME forward gate on the grant's single-rule sub-config,
-//        never by a re-implemented WHO matcher. Fixtures include the open-mode
-//        and fail-closed-empty Managers (round-1 C4), where the explanation is
-//        the mode itself.
+//        never by a re-implemented WHO matcher. Fixtures include the empty rule
+//        set (round-1 C4), under which the forward gates must grant nothing.
 //   §5.3 Adversarial case table (fixed inclusion list).
 //   §5.6 Golden: try-local seed shape pins schema + ordering; a redacted
 //        golden pins the allowlist projection.
 //
 // Bar unit tests (org-scoped wildcard admin → false; non-org-scoped "*" admin
-// → true; no "*" admin → false; both zero-group states → false) live in
+// → true; no "*" admin → false; zero groups → false) live in
 // reverse_smoke_test.go (TestPlatformAdminNonOrgScoped_Bar); this file adds
 // the match-block and malformed-pattern bar cases.
 
@@ -64,13 +63,25 @@ func dogfoodConfig() *RBACConfig {
 	}}
 }
 
-// singleRuleManagers builds the shadow/enforce Manager pair whose config holds
-// ONLY rule — the §5.1 isolation harness.
-func singleRuleManagers(rule GroupRule) (shadow, enforce *Manager) {
-	shadow = NewForTest(&RBACConfig{Groups: []GroupRule{rule}})
-	enforce = NewForTest(&RBACConfig{Groups: []GroupRule{rule}})
-	enforce.EnableOrgScopeEnforce()
-	return shadow, enforce
+// singleRuleManager builds the Manager whose config holds ONLY rule — the
+// §5.1 isolation harness.
+func singleRuleManager(rule GroupRule) *Manager {
+	return NewForTest(&RBACConfig{Groups: []GroupRule{rule}})
+}
+
+// witnessMetadata returns tenant metadata that satisfies grant g's transcribed
+// environments/domains constraints (the first allowed value of each, or ""
+// where the rule does not restrict that field). The report transcribes these
+// constraints without evaluating them; the forward write plane enforces them,
+// so a witness replay must label its tenant into the rule's scope.
+func witnessMetadata(g ReverseGrant) (env, dom string) {
+	if len(g.Environments) > 0 {
+		env = g.Environments[0]
+	}
+	if len(g.Domains) > 0 {
+		dom = g.Domains[0]
+	}
+	return env, dom
 }
 
 // witnessFor synthesizes the minimal principal satisfying grant g's WHO, per
@@ -124,7 +135,7 @@ func TestReverseReport_WitnessPositiveRuleIsolated(t *testing.T) {
 			}
 			for _, g := range rep.Grants {
 				rule := cfg.Groups[g.Index] // grant identity = config index
-				shadowM, enforceM := singleRuleManagers(rule)
+				sm := singleRuleManager(rule)
 
 				// Unsatisfiable claim (labeled tenant, empty passing domain):
 				// verify NEGATIVELY by exhausting the candidate value space —
@@ -135,8 +146,7 @@ func TestReverseReport_WitnessPositiveRuleIsolated(t *testing.T) {
 					for _, v := range cands {
 						w := witnessFor(g)
 						w.Claims[g.OrgGate.ClaimKey] = v
-						if shadowM.AllowedInOrgRead(w, tc.id, PermRead, tc.orgs) ||
-							enforceM.AllowedInOrgRead(w, tc.id, PermRead, tc.orgs) {
+						if sm.AllowedInOrgRead(w, tc.id, PermRead, tc.orgs) {
 							t.Errorf("grant %d (%s): claimed unsatisfiable but org value %q passes forward",
 								g.Index, g.Rule, v)
 						}
@@ -144,24 +154,21 @@ func TestReverseReport_WitnessPositiveRuleIsolated(t *testing.T) {
 					continue
 				}
 
-				// Project the expected org-gate pass per mode from the grant's
-				// dual outcomes (the witness carries a PASSING org value for
-				// conditional gates, so conditional projects to pass).
-				gatePass := func(outcome string) bool {
-					switch outcome {
-					case OrgOutcomeNotRequired, OrgOutcomeConditional, OrgOutcomePassUnlabeled:
-						return true
-					case OrgOutcomeFailUnlabeled:
-						return false
-					default:
-						t.Fatalf("grant %d: unknown org outcome %q", g.Index, outcome)
-						return false
-					}
+				// Project the expected org-gate pass from the grant's outcome
+				// (the witness carries a PASSING org value for conditional gates,
+				// so conditional projects to pass).
+				var gate bool
+				switch g.OrgGate.Outcome {
+				case OrgOutcomeNotRequired, OrgOutcomeConditional:
+					gate = true
+				case OrgOutcomeFailUnlabeled:
+					gate = false
+				default:
+					t.Fatalf("grant %d: unknown org outcome %q", g.Index, g.OrgGate.Outcome)
 				}
-				shadowGate := gatePass(g.OrgGate.OutcomeShadow)
-				enforceGate := gatePass(g.OrgGate.OutcomeEnforce)
 
 				w := witnessFor(g)
+				env, dom := witnessMetadata(g)
 				perms := []struct {
 					perm Permission
 					eff  bool
@@ -171,30 +178,27 @@ func TestReverseReport_WitnessPositiveRuleIsolated(t *testing.T) {
 					{PermAdmin, g.Effective.Admin},
 				}
 				for _, pc := range perms {
-					wantShadow := pc.eff && shadowGate
-					wantEnforce := pc.eff && enforceGate
-					if got := shadowM.AllowedInOrg(w, tc.id, pc.perm, tc.orgs, "", ""); got != wantShadow {
-						t.Errorf("grant %d (%s) perm=%s: shadow AllowedInOrg = %v, report claims %v",
-							g.Index, g.Rule, pc.perm, got, wantShadow)
+					want := pc.eff && gate
+					if got := sm.AllowedInOrg(w, tc.id, pc.perm, tc.orgs, env, dom); got != want {
+						t.Errorf("grant %d (%s) perm=%s: AllowedInOrg = %v, report claims %v",
+							g.Index, g.Rule, pc.perm, got, want)
 					}
-					if got := enforceM.AllowedInOrg(w, tc.id, pc.perm, tc.orgs, "", ""); got != wantEnforce {
-						t.Errorf("grant %d (%s) perm=%s: enforce AllowedInOrg = %v, report claims %v",
-							g.Index, g.Rule, pc.perm, got, wantEnforce)
+					// Read plane: same rule/permission/org evaluation, metadata
+					// axis unbound — it must agree with the write-plane replay.
+					if got := sm.AllowedInOrgRead(w, tc.id, pc.perm, tc.orgs); got != want {
+						t.Errorf("grant %d perm=%s: AllowedInOrgRead = %v, want %v",
+							g.Index, pc.perm, got, want)
 					}
-					// Read plane shares the decision core (only the metric axis
-					// differs) — it must agree with the write-plane replay.
-					if got := shadowM.AllowedInOrgRead(w, tc.id, pc.perm, tc.orgs); got != wantShadow {
-						t.Errorf("grant %d perm=%s: shadow AllowedInOrgRead = %v, want %v",
-							g.Index, pc.perm, got, wantShadow)
+					// A transcribed metadata constraint IS enforced on the write
+					// plane: the same witness on a tenant unlabeled on that field
+					// must be denied.
+					if len(g.Environments) > 0 && sm.AllowedInOrg(w, tc.id, pc.perm, tc.orgs, "", dom) {
+						t.Errorf("grant %d perm=%s: environments %v transcribed but an unlabeled-environment write was granted",
+							g.Index, pc.perm, g.Environments)
 					}
-					if got := enforceM.AllowedInOrgRead(w, tc.id, pc.perm, tc.orgs); got != wantEnforce {
-						t.Errorf("grant %d perm=%s: enforce AllowedInOrgRead = %v, want %v",
-							g.Index, pc.perm, got, wantEnforce)
-					}
-					// Org-blind Allowed: the org axis is invisible (tenantOrgs=nil
-					// degenerates the gate), so it must equal the bare effective bit.
-					if got := shadowM.Allowed(w, tc.id, pc.perm); got != pc.eff {
-						t.Errorf("grant %d perm=%s: org-blind Allowed = %v, report effective %v",
+					// Scope-blind Allowed must equal the bare effective bit.
+					if got := sm.Allowed(w, tc.id, pc.perm); got != pc.eff {
+						t.Errorf("grant %d perm=%s: scope-blind Allowed = %v, report effective %v",
 							g.Index, pc.perm, got, pc.eff)
 					}
 				}
@@ -243,13 +247,11 @@ func seededPrincipals() []*VerifiedPrincipal {
 func TestReverseReport_CompletenessProperty(t *testing.T) {
 	t.Parallel()
 	fixtures := []struct {
-		name       string
-		cfg        *RBACConfig
-		failClosed bool
+		name string
+		cfg  *RBACConfig
 	}{
-		{"configured", dogfoodConfig(), false},
-		{"open", &RBACConfig{}, false},             // round-1 C4: must be in the fixture set
-		{"fail-closed-empty", &RBACConfig{}, true}, // or this direction is never tested
+		{"configured", dogfoodConfig()},
+		{"empty", &RBACConfig{}}, // round-1 C4: must be in the fixture set or this direction is never tested
 	}
 	tenants := []struct {
 		id    string
@@ -264,69 +266,50 @@ func TestReverseReport_CompletenessProperty(t *testing.T) {
 	principals := seededPrincipals()
 
 	for _, fx := range fixtures {
-		for _, enforce := range []bool{false, true} {
-			m := NewForTest(fx.cfg)
-			m.failClosedOnEmpty = fx.failClosed
-			if enforce {
-				m.EnableOrgScopeEnforce()
-			}
-			// Single-rule sub-managers (same flags), lazily built per rule index:
-			// the "does this grant explain the allow" question is answered by the
-			// SAME forward gate on the isolated rule — never by a re-implemented
-			// WHO matcher in test code.
-			subs := map[int]*Manager{}
-			subFor := func(idx int) *Manager {
-				if s, ok := subs[idx]; ok {
-					return s
-				}
-				s := NewForTest(&RBACConfig{Groups: []GroupRule{fx.cfg.Groups[idx]}})
-				if enforce {
-					s.EnableOrgScopeEnforce()
-				}
-				subs[idx] = s
+		m := NewForTest(fx.cfg)
+		// Single-rule sub-managers, lazily built per rule index: the "does this
+		// grant explain the allow" question is answered by the SAME forward
+		// gate on the isolated rule — never by a re-implemented WHO matcher in
+		// test code.
+		subs := map[int]*Manager{}
+		subFor := func(idx int) *Manager {
+			if s, ok := subs[idx]; ok {
 				return s
 			}
-			for _, tn := range tenants {
-				rep := m.ReverseAccessReport(tn.id, tn.orgs, tn.known, "h", ReverseReportOptions{})
-				// Mode honesty pins (independent of any principal).
-				switch {
-				case fx.failClosed:
-					if rep.Mode != ReverseModeFailClosedEmpty || rep.Verdict != ReverseVerdictFailClosedEmpty {
-						t.Fatalf("[%s] mode/verdict = %q/%q, want fail_closed_empty", fx.name, rep.Mode, rep.Verdict)
-					}
-				case len(fx.cfg.Groups) == 0:
-					if rep.Mode != ReverseModeOpenRead || rep.Verdict != ReverseVerdictOpenRead {
-						t.Fatalf("[%s] mode/verdict = %q/%q, want open_read", fx.name, rep.Mode, rep.Verdict)
-					}
+			s := singleRuleManager(fx.cfg.Groups[idx])
+			subs[idx] = s
+			return s
+		}
+		for _, tn := range tenants {
+			rep := m.ReverseAccessReport(tn.id, tn.orgs, tn.known, "h", ReverseReportOptions{})
+			// Mode honesty pin (independent of any principal).
+			if len(fx.cfg.Groups) == 0 {
+				if rep.Mode != ReverseModeFailClosedEmpty || rep.Verdict != ReverseVerdictFailClosedEmpty {
+					t.Fatalf("[%s] mode/verdict = %q/%q, want fail_closed_empty", fx.name, rep.Mode, rep.Verdict)
 				}
-				for pi, p := range principals {
-					for _, want := range []Permission{PermRead, PermWrite, PermAdmin} {
-						if !m.AllowedInOrg(p, tn.id, want, tn.orgs, "", "") {
+			}
+			for pi, p := range principals {
+				for _, want := range []Permission{PermRead, PermWrite, PermAdmin} {
+					for _, md := range []struct{ env, dom string }{{"", ""}, {"production", ""}} {
+						if !m.AllowedInOrg(p, tn.id, want, tn.orgs, md.env, md.dom) {
 							continue
 						}
 						// Forward granted → the report must explain it.
-						switch rep.Mode {
-						case ReverseModeFailClosedEmpty:
-							t.Errorf("[%s enforce=%v tenant=%s p#%d perm=%s] forward granted under fail_closed_empty",
-								fx.name, enforce, tn.id, pi, want)
-						case ReverseModeOpenRead:
-							// The mode IS the explanation — but only for read.
-							if want != PermRead {
-								t.Errorf("[%s enforce=%v tenant=%s p#%d] open mode granted %s (read-only expected)",
-									fx.name, enforce, tn.id, pi, want)
+						if rep.Mode == ReverseModeFailClosedEmpty {
+							t.Errorf("[%s tenant=%s p#%d perm=%s] forward granted under fail_closed_empty",
+								fx.name, tn.id, pi, want)
+							continue
+						}
+						explained := false
+						for _, g := range rep.Grants {
+							if subFor(g.Index).AllowedInOrg(p, tn.id, want, tn.orgs, md.env, md.dom) {
+								explained = true
+								break
 							}
-						default:
-							explained := false
-							for _, g := range rep.Grants {
-								if subFor(g.Index).AllowedInOrg(p, tn.id, want, tn.orgs, "", "") {
-									explained = true
-									break
-								}
-							}
-							if !explained {
-								t.Errorf("[%s enforce=%v tenant=%s p#%d perm=%s] forward grants but NO report grant explains it (groups=%v claims=%v)",
-									fx.name, enforce, tn.id, pi, want, p.Groups, p.Claims)
-							}
+						}
+						if !explained {
+							t.Errorf("[%s tenant=%s p#%d perm=%s env=%q] forward grants but NO report grant explains it (groups=%v claims=%v)",
+								fx.name, tn.id, pi, want, md.env, p.Groups, p.Claims)
 						}
 					}
 				}
@@ -340,7 +323,7 @@ func TestReverseReport_CompletenessProperty(t *testing.T) {
 func TestReverseReport_AdversarialCases(t *testing.T) {
 	t.Parallel()
 
-	t.Run("unlabeled tenant renders the (true,false) leniency as dual outcomes", func(t *testing.T) {
+	t.Run("unlabeled tenant renders org-scoped grants as fail_unlabeled", func(t *testing.T) {
 		t.Parallel()
 		m := NewForTest(dogfoodConfig())
 		rep := m.ReverseAccessReport("db-team-2", []string{}, true, "h",
@@ -354,9 +337,8 @@ func TestReverseReport_AdversarialCases(t *testing.T) {
 				continue
 			}
 			seen++
-			if g.OrgGate.OutcomeShadow != OrgOutcomePassUnlabeled || g.OrgGate.OutcomeEnforce != OrgOutcomeFailUnlabeled {
-				t.Errorf("grant %d outcomes = %q/%q, want pass_unlabeled/fail_unlabeled",
-					g.Index, g.OrgGate.OutcomeShadow, g.OrgGate.OutcomeEnforce)
+			if g.OrgGate.Outcome != OrgOutcomeFailUnlabeled {
+				t.Errorf("grant %d outcome = %q, want %q", g.Index, g.OrgGate.Outcome, OrgOutcomeFailUnlabeled)
 			}
 			if g.OrgGate.Unsatisfiable {
 				t.Errorf("grant %d: unlabeled tenant must not be marked unsatisfiable (that is the labeled-empty-intersection state)", g.Index)
@@ -370,7 +352,7 @@ func TestReverseReport_AdversarialCases(t *testing.T) {
 		}
 	})
 
-	t.Run("caller missing the org claim is denied in both modes on a labeled tenant", func(t *testing.T) {
+	t.Run("caller missing the org claim is denied on a labeled tenant", func(t *testing.T) {
 		t.Parallel()
 		cfg := dogfoodConfig()
 		orgs := []string{"ORG-1", "ORG-9"}
@@ -378,20 +360,19 @@ func TestReverseReport_AdversarialCases(t *testing.T) {
 		rep := m.ReverseAccessReport("db-team-1", orgs, true, "h",
 			ReverseReportOptions{IncludeOrgValues: true})
 		g := rep.Grants[2] // org-ops: match block + org scope on a separate key
-		if g.Rule != "org-ops" || g.OrgGate.OutcomeShadow != OrgOutcomeConditional {
-			t.Fatalf("fixture drift: grant2 = %s/%s", g.Rule, g.OrgGate.OutcomeShadow)
+		if g.Rule != "org-ops" || g.OrgGate.Outcome != OrgOutcomeConditional {
+			t.Fatalf("fixture drift: grant2 = %s/%s", g.Rule, g.OrgGate.Outcome)
 		}
-		shadowM, enforceM := singleRuleManagers(cfg.Groups[g.Index])
+		sm := singleRuleManager(cfg.Groups[g.Index])
 		w := witnessFor(g)
 		delete(w.Claims, g.OrgGate.ClaimKey) // strip the org claim
-		if shadowM.AllowedInOrg(w, "db-team-1", PermWrite, orgs, "", "") ||
-			enforceM.AllowedInOrg(w, "db-team-1", PermWrite, orgs, "", "") {
-			t.Error("conditional gate must deny a caller with NO org claim in BOTH modes (labeled tenant = no basis to match)")
+		if sm.AllowedInOrg(w, "db-team-1", PermWrite, orgs, "", "") {
+			t.Error("conditional gate must deny a caller with NO org claim (labeled tenant = no basis to match)")
 		}
 		// Control: the intact witness passes (proves the denial above is the
 		// missing claim, not a broken fixture).
-		if !enforceM.AllowedInOrg(witnessFor(g), "db-team-1", PermWrite, orgs, "", "") {
-			t.Error("control: intact witness must pass under enforce")
+		if !sm.AllowedInOrg(witnessFor(g), "db-team-1", PermWrite, orgs, "", "") {
+			t.Error("control: intact witness must pass")
 		}
 	})
 
@@ -576,19 +557,13 @@ func TestReverseReport_AdversarialCases(t *testing.T) {
 			}
 		}
 		// Forward cross-check: the caller holding BOTH WHOs but outside the org
-		// gets read (rule B) and never write — in either mode.
+		// gets read (rule B) and never write.
 		p := &VerifiedPrincipal{Groups: []string{"org-writers", "viewers"}, Claims: map[string]string{"org": "ORG-USER"}}
-		for _, enforce := range []bool{false, true} {
-			mm := NewForTest(cfg)
-			if enforce {
-				mm.EnableOrgScopeEnforce()
-			}
-			if mm.AllowedInOrg(p, "db-x", PermWrite, tenantOrgs, "", "") {
-				t.Errorf("enforce=%v: forward write granted across rules — premise broken", enforce)
-			}
-			if !mm.AllowedInOrg(p, "db-x", PermRead, tenantOrgs, "", "") {
-				t.Errorf("enforce=%v: forward read via rule B must hold", enforce)
-			}
+		if m.AllowedInOrg(p, "db-x", PermWrite, tenantOrgs, "", "") {
+			t.Error("forward write granted across rules — premise broken")
+		}
+		if !m.AllowedInOrg(p, "db-x", PermRead, tenantOrgs, "", "") {
+			t.Error("forward read via rule B must hold")
 		}
 	})
 
@@ -668,23 +643,13 @@ func TestPlatformAdminNonOrgScoped_MatchBlockShapes(t *testing.T) {
 // swapped to a synthetic fixture id) renders for a not-onboarded tenant.
 // generated_at is normalized to "" (excluded from diff semantics, spec §3).
 // Any field rename, reorder, enum change or default-view leak shows up here as
-// a byte diff — this literal IS the schema pin for reverseSchemaVersion 1.
+// a byte diff — this literal IS the schema pin for reverseSchemaVersion 2.
 const goldenSeedReport = `{
-  "schema_version": 1,
+  "schema_version": 2,
   "advisory": "audit-only; authorization decisions remain with forward gates",
   "generated_at": "",
   "verdict": "grants_found",
   "mode": "rules",
-  "flags": {
-    "metadata_scope_enforce": {
-      "value": false,
-      "source": "runtime"
-    },
-    "org_scope_enforce": {
-      "value": false,
-      "source": "runtime"
-    }
-  },
   "config_anchor": {
     "rbac_sha256": {
       "value": "unanchored",
@@ -738,8 +703,7 @@ const goldenSeedReport = `{
       },
       "org_gate": {
         "required": false,
-        "outcome_shadow": "not_required",
-        "outcome_enforce": "not_required",
+        "outcome": "not_required",
         "unsatisfiable": false
       },
       "environments": [],
@@ -780,21 +744,11 @@ func TestReverseReport_GoldenSeedShape(t *testing.T) {
 // downgrade. The identifier-absence sweep below guards the same output
 // mechanically, so an allowlist widening fails twice.
 const goldenRedactedReport = `{
-  "schema_version": 1,
+  "schema_version": 2,
   "advisory": "audit-only; authorization decisions remain with forward gates",
   "generated_at": "",
   "verdict": "grants_found",
   "mode": "rules",
-  "flags": {
-    "metadata_scope_enforce": {
-      "value": false,
-      "source": "runtime"
-    },
-    "org_scope_enforce": {
-      "value": false,
-      "source": "runtime"
-    }
-  },
   "config_anchor": {
     "rbac_sha256": {
       "value": "unanchored",
@@ -846,8 +800,7 @@ const goldenRedactedReport = `{
       },
       "org_gate": {
         "required": false,
-        "outcome_shadow": "not_required",
-        "outcome_enforce": "not_required",
+        "outcome": "not_required",
         "unsatisfiable": false
       },
       "environments": [],
@@ -885,8 +838,7 @@ const goldenRedactedReport = `{
       },
       "org_gate": {
         "required": true,
-        "outcome_shadow": "conditional_on_caller_org",
-        "outcome_enforce": "conditional_on_caller_org",
+        "outcome": "conditional_on_caller_org",
         "unsatisfiable": false
       },
       "environments": [],
@@ -922,8 +874,7 @@ const goldenRedactedReport = `{
       },
       "org_gate": {
         "required": true,
-        "outcome_shadow": "conditional_on_caller_org",
-        "outcome_enforce": "conditional_on_caller_org",
+        "outcome": "conditional_on_caller_org",
         "unsatisfiable": true
       },
       "environments": [],

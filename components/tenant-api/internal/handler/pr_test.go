@@ -107,7 +107,7 @@ func TestListPRs_Empty(t *testing.T) {
 	t.Parallel()
 	tracker := newTestTracker(t, []platform.PRInfo{})
 
-	h := ListPRs(&Deps{PRTracker: tracker, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListPRs, &Deps{PRTracker: tracker})
 	req := httptest.NewRequest("GET", "/api/v1/prs", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -132,7 +132,7 @@ func TestListPRs_WithPRs(t *testing.T) {
 		{Number: 2, WebURL: "https://gh/2", State: "open", Title: "PR2", HeadRef: "tenant-api/db-b/20260406"},
 	})
 
-	h := ListPRs(&Deps{PRTracker: tracker, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListPRs, &Deps{PRTracker: tracker})
 	req := httptest.NewRequest("GET", "/api/v1/prs", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -160,7 +160,7 @@ func TestListPRs_WithRegisteredPR(t *testing.T) {
 		HeadRef:  "tenant-api/db-a/20260406",
 	})
 
-	h := ListPRs(&Deps{PRTracker: tracker, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListPRs, &Deps{PRTracker: tracker})
 	req := httptest.NewRequest("GET", "/api/v1/prs", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -187,7 +187,7 @@ func TestListPRs_FilterByTenant(t *testing.T) {
 		Number: 2, WebURL: "https://gh/2", State: "open", TenantID: "db-b",
 	})
 
-	h := ListPRs(&Deps{PRTracker: tracker, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListPRs, &Deps{PRTracker: tracker})
 
 	// Filter for db-a only
 	req := httptest.NewRequest("GET", "/api/v1/prs?tenant=db-a", nil)
@@ -212,7 +212,7 @@ func TestListPRs_FilterByNonexistentTenant(t *testing.T) {
 		Number: 1, WebURL: "https://gh/1", State: "open", TenantID: "db-a",
 	})
 
-	h := ListPRs(&Deps{PRTracker: tracker, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListPRs, &Deps{PRTracker: tracker})
 	req := httptest.NewRequest("GET", "/api/v1/prs?tenant=nonexistent", nil)
 	w := httptest.NewRecorder()
 	h(w, req)

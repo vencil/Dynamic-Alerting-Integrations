@@ -35,9 +35,9 @@ const ten = (_zh: string, en: string) => en;
 describe('AXES (R2 frozen render driver)', () => {
   it('is the three diffable axes in a fixed, frozen order', () => {
     expect(AXES.map((a) => a.key)).toEqual([
-      'outcome_shadow',
-      'outcome_enforce',
+      'outcome',
       'unsatisfiable',
+      'claim_key',
     ]);
     // Frozen: a render-time push/reorder must throw, not silently mutate.
     expect(Object.isFrozen(AXES)).toBe(true);
@@ -89,9 +89,9 @@ describe('axisRows (drives changed-card render off frozen AXES)', () => {
     );
     expect(rows).toHaveLength(3);
     expect(rows.map((r: any) => r.key)).toEqual([
-      'outcome_shadow',
-      'outcome_enforce',
+      'outcome',
       'unsatisfiable',
+      'claim_key',
     ]);
     for (const r of rows as any[]) {
       expect(r.absent).toBe(true);
@@ -105,14 +105,14 @@ describe('axisRows (drives changed-card render off frozen AXES)', () => {
         rule: 'x',
         live_index: 2,
         candidate_index: 2,
-        // only unsatisfiable changed; the two outcome axes are absent
+        // only unsatisfiable changed; outcome and claim_key are absent
         unsatisfiable: { from: false, to: true },
       } as any,
       tzh,
     );
     const byKey: any = Object.fromEntries((rows as any[]).map((r) => [r.key, r]));
-    expect(byKey.outcome_shadow.absent).toBe(true);
-    expect(byKey.outcome_enforce.absent).toBe(true);
+    expect(byKey.outcome.absent).toBe(true);
+    expect(byKey.claim_key.absent).toBe(true);
     expect(byKey.unsatisfiable.absent).toBe(false);
     expect(byKey.unsatisfiable.from).toBe('否');
     expect(byKey.unsatisfiable.to).toBe('是');
@@ -121,8 +121,8 @@ describe('axisRows (drives changed-card render off frozen AXES)', () => {
 
 describe('token gloss + unknown/prototype passthrough (R8)', () => {
   it('glosses known outcome / verdict / mode tokens ZH-first', () => {
-    expect(glossOutcome('fail_unlabeled', tzh)).toBe('fail_unlabeled（未標記租戶：enforce 拒絕）');
-    expect(glossVerdict('open_read', tzh)).toBe('open_read（開放讀取——任何已認證者皆可讀）');
+    expect(glossOutcome('fail_unlabeled', tzh)).toBe('fail_unlabeled（未標記租戶：拒絕）');
+    expect(glossVerdict('fail_closed_empty', tzh)).toBe('fail_closed_empty（全部拒絕——沒有任何規則）');
     expect(glossMode('rules', tzh)).toBe('rules（規則模式）');
   });
 
@@ -168,7 +168,7 @@ describe('grantSetIdentical (R9 — multiset arithmetic, index excluded, single-
     platform_wide: false,
     permissions: ['read'],
     effective: { read: true, write: false, admin: false },
-    org_gate: { outcome_shadow: 'not_required', outcome_enforce: 'not_required', unsatisfiable: false },
+    org_gate: { outcome: 'not_required', unsatisfiable: false },
     ...over,
   });
 

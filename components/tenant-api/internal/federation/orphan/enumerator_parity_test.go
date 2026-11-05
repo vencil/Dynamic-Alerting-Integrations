@@ -52,16 +52,19 @@ func uniqSorted(in []string) []string {
 	return sortedKeys(set)
 }
 
-// listViaHTTP runs GET /api/v1/tenants through the real handler in open mode.
+// listViaHTTP runs GET /api/v1/tenants through the real handler (behind the
+// list route's read gate) as a caller granted read on every tenant — with no
+// rules nothing is visible (ADR-027 §7: there is no open mode).
 func listViaHTTP(t *testing.T, configDir string) []string {
 	t.Helper()
-	mgr, err := rbac.NewManager("", nil)
-	if err != nil {
-		t.Fatalf("rbac.NewManager: %v", err)
-	}
+	mgr := rbac.NewForTest(&rbac.RBACConfig{Groups: []rbac.GroupRule{{
+		Name: "readers", Tenants: []string{"*"}, Permissions: []rbac.Permission{rbac.PermRead},
+	}}})
 	w := httptest.NewRecorder()
-	handler.ListTenants(&handler.Deps{ConfigDir: configDir, RBAC: mgr})(w,
-		httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
+	req.Header.Set("X-Forwarded-Email", "reader@example.com")
+	req.Header.Set("X-Forwarded-Groups", "readers")
+	mgr.Middleware(rbac.PermRead, nil)(handler.ListTenants(&handler.Deps{ConfigDir: configDir, RBAC: mgr})).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /api/v1/tenants status = %d, body=%s", w.Code, w.Body.String())
 	}

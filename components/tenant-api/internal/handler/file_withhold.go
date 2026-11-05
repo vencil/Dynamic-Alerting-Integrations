@@ -27,8 +27,8 @@ import (
 // every tenant it declares — read by the one rule a message to the caller
 // may name a tenant by, tenantNamesFor (#3039, #1530). own is the tenant the
 // request is about, whose read the route's middleware already judged: it is
-// not asked again (a second AllowedInOrgRead would count a second would-deny
-// in shadow mode).
+// not asked again (a second AllowedInOrgRead would count a second scope
+// denial).
 //
 // ⛔ NO "ONLY MY SECTION". The file is shown whole or not at all: a re-encode
 // of one section is not the file (anchors, aliases and block scalars do not

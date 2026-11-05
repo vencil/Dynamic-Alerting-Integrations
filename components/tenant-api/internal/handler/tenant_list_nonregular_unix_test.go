@@ -38,7 +38,7 @@ func TestListTenants_NonRegularConfigErrorMatchesByID(t *testing.T) {
 
 			list := httptest.NewRecorder()
 			withinBound(t, "GET /api/v1/tenants", func() {
-				ListTenants(&Deps{ConfigDir: f.dir, RBAC: newRBACManager(t, "")})(
+				asUnrestrictedOn(t, ListTenants, &Deps{ConfigDir: f.dir})(
 					list, httptest.NewRequest("GET", "/api/v1/tenants", nil))
 			})
 			if list.Code != http.StatusOK {

@@ -28,12 +28,12 @@ func TestPutPlan_OrderRowsOnANonRegularFile(t *testing.T) {
 	t.Parallel()
 	runParityCases(t, []parityCase{
 		// The write scope on {id} as the file holds it (403) before the
-		// file that is not regular (409 not_regular_file): with the
-		// metadata axis enforced, a caller scoped to an environment may
+		// file that is not regular (409 not_regular_file): a caller
+		// scoped to an environment may
 		// not write a tenant whose metadata cannot be read. /diff gives
 		// that caller the masked preview's sequence (#1560), whose next
 		// step is the 409.
-		{name: "id_write_scope_and_not_regular", file: "tenants:\n" + paritySec(parityIn, "warning"), groups: "prod-ops", metaEnforce: true,
+		{name: "id_write_scope_and_not_regular", file: "tenants:\n" + paritySec(parityIn, "warning"), groups: "prod-ops",
 			setup: parityFIFO, body: parityBodyIn, want: http.StatusForbidden, wantText: "ADR-027",
 			maskedDiff: true, maskedRefusal: string(errcode.TenantConfigNotLoadable)},
 		// The file that is not regular (409) before the body's size (413).

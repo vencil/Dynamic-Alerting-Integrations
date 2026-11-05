@@ -35,7 +35,7 @@ func metadataOf(s TenantSummary) listedMetadata {
 // response code and the rows by id.
 func listTenantRows(t *testing.T, configDir string) (int, map[string]TenantSummary) {
 	t.Helper()
-	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListTenants, &Deps{ConfigDir: configDir})
 	w := httptest.NewRecorder()
 	h(w, httptest.NewRequest("GET", "/api/v1/tenants", nil))
 	if w.Code != http.StatusOK {
@@ -341,19 +341,12 @@ func TestListAndSearch_UnreadablePlatformLayerMakesMetadataUnknown(t *testing.T)
 	}
 	check := func(t *testing.T, phase string, wantRestricted []string) {
 		t.Helper()
-		for _, enforce := range []bool{false, true} {
-			mgr := newRBACManager(t, platformUnknownRBACYAML)
-			mode := "metadata=shadow"
-			if enforce {
-				mgr.EnableMetadataScopeEnforce()
-				mode = "metadata=enforce"
-			}
-			if got := viewAs(t, mgr, "prod-only", ""); !reflect.DeepEqual(got, view{wantRestricted, wantRestricted}) {
-				t.Errorf("%s/%s: prod-only sees %+v, want list and search %v", phase, mode, got, wantRestricted)
-			}
-			if got := viewAs(t, mgr, "all-tenants", ""); !reflect.DeepEqual(got, view{both, both}) {
-				t.Errorf("%s/%s: all-tenants sees %+v, want list and search %v", phase, mode, got, both)
-			}
+		mgr := newRBACManager(t, platformUnknownRBACYAML)
+		if got := viewAs(t, mgr, "prod-only", ""); !reflect.DeepEqual(got, view{wantRestricted, wantRestricted}) {
+			t.Errorf("%s: prod-only sees %+v, want list and search %v", phase, got, wantRestricted)
+		}
+		if got := viewAs(t, mgr, "all-tenants", ""); !reflect.DeepEqual(got, view{both, both}) {
+			t.Errorf("%s: all-tenants sees %+v, want list and search %v", phase, got, both)
 		}
 	}
 

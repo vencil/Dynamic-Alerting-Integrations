@@ -63,9 +63,7 @@ type parityCase struct {
 	file   string            // parity-in.yaml
 	extra  map[string]string // other conf.d files
 	groups string
-	// metaEnforce: the metadata write scope is enforced (#1597's row).
-	metaEnforce bool
-	body        string
+	body   string
 	// want is PUT's status in direct mode; refusals are compared in full.
 	want int
 	// wantText is in PUT's refusal (the order rows: which step answered,
@@ -170,9 +168,9 @@ func parityBaseCases(parityOwn string) []parityCase {
 			want: http.StatusBadRequest},
 		{name: "metadata_moved_out_of_scope",
 			file:   "tenants:\n  " + parityIn + ":\n    _metadata:\n      environment: production\n    _silent_mode: \"warning\"\n",
-			groups: "prod-ops", metaEnforce: true,
-			body: "tenants:\n  " + parityIn + ":\n    _metadata:\n      environment: dev\n    _silent_mode: \"warning\"\n",
-			want: http.StatusForbidden},
+			groups: "prod-ops",
+			body:   "tenants:\n  " + parityIn + ":\n    _metadata:\n      environment: dev\n    _silent_mode: \"warning\"\n",
+			want:   http.StatusForbidden},
 		{name: "declared_elsewhere", file: parityOwn, extra: map[string]string{"copy.yaml": "tenants:\n" + paritySec(parityIn, "warning")},
 			groups: "in-team", body: parityBodyIn, want: http.StatusConflict, wantText: string(errcode.TenantDeclaredElsewhere), tree: true},
 		// #3140: a threshold written as a non-finite number is refused by
@@ -206,7 +204,7 @@ func parityBaseCases(parityOwn string) []parityCase {
 		// text) before the body's shape (400).
 		{name: "proposed_scope_and_body_shape",
 			file:   "tenants:\n  " + parityIn + ":\n    _metadata:\n      environment: production\n    _silent_mode: \"warning\"\n",
-			groups: "in-prod-ops", metaEnforce: true,
+			groups: "in-prod-ops",
 			body: "tenants:\n  " + parityIn + ":\n    _metadata:\n      environment: dev\n    _silent_mode: \"warning\"\n" +
 				paritySec(parityOut, "critical"),
 			want: http.StatusForbidden, wantText: "this write proposes"},
@@ -254,9 +252,6 @@ func parityServe(t *testing.T, c parityCase, pr bool, ep putEndpoint) *httptest.
 		c.setup(t, dir)
 	}
 	mgr := newRBACManager(t, parityRBAC)
-	if c.metaEnforce {
-		mgr.EnableMetadataWriteScopeEnforce()
-	}
 	d := &Deps{ConfigDir: dir, State: mustDirState(dir), Writer: newTestWriter(dir), RBAC: mgr, WriteMode: WriteModeDirect,
 		MaxBodyBytes: c.maxBody}
 	if pr {

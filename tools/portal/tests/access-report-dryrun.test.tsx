@@ -29,7 +29,7 @@ const CAVEATS = [
 // tests that exercise the copy button / snapshot / locks rather than the diff
 // rendering itself.
 const OK_DIFF = {
-  schema_version: 1,
+  schema_version: 2,
   generated_at: '2026-07-18T00:00:00Z',
   candidate_sha256: 'abc123',
   baseline: { verdict: 'grants_found', mode: 'rules', grants: [] },
@@ -159,7 +159,7 @@ describe('AccessReportDryRun — POST outcomes', () => {
     await renderSelectRun(() =>
       Promise.resolve(
         makeResp(200, {
-          schema_version: 1,
+          schema_version: 2,
           generated_at: '2026-07-18T00:00:00Z',
           candidate_sha256: 'deadbeef',
           baseline: {
@@ -179,7 +179,7 @@ describe('AccessReportDryRun — POST outcomes', () => {
           diff: {
             alignment: 'exact',
             changed: [
-              { rule: 'db-team', live_index: 0, candidate_index: 0, outcome_shadow: { from: 'not_required', to: 'conditional_on_caller_org' } },
+              { rule: 'db-team', live_index: 0, candidate_index: 0, outcome: { from: 'not_required', to: 'conditional_on_caller_org' } },
             ],
             added: [],
             removed: [],
@@ -203,7 +203,7 @@ describe('AccessReportDryRun — POST outcomes', () => {
     await renderSelectRun(() =>
       Promise.resolve(
         makeResp(200, {
-          schema_version: 1,
+          schema_version: 2,
           generated_at: '2026-07-18T00:00:00Z',
           candidate_sha256: 'cafef00d',
           baseline: {
@@ -323,7 +323,7 @@ describe('AccessReportDryRun — org-values disclosure (?include=org_values)', (
   // A 200 whose candidate carries ONE added grant on a REQUIRED org gate, so the
   // added-grant enrichment renders OrgGateValues when the toggle is on.
   const ORG_RESP = (orgGate: any, tenantOrgs?: string[]) => ({
-    schema_version: 1,
+    schema_version: 2,
     generated_at: '2026-07-18T00:00:00Z',
     candidate_sha256: 'org123',
     baseline: {
@@ -416,7 +416,7 @@ describe('AccessReportDryRun — coarse alignment (same-source iron law)', () =>
   // auditor. This guards the constraint the code already honors (findByIndex is
   // index-only, single-directional) so a future refactor cannot regress it.
   const COARSE_RESP = {
-    schema_version: 1,
+    schema_version: 2,
     generated_at: '2026-07-18T00:00:00Z',
     candidate_sha256: 'coarse1',
     baseline: {

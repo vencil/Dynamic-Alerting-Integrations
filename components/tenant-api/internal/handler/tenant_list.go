@@ -148,31 +148,22 @@ func ListTenants(d *Deps) http.HandlerFunc {
 }
 
 // filterTenantsByRBAC returns only the tenants the caller has scope access to
-// (metadata env/domain axis + org axis). If RBAC is in open mode (empty config),
-// all tenants are returned. tenantOrg supplies each tenant's org list for the
-// org axis; a nil manager is tolerated (OrgsForTenant is nil-receiver-safe) and
-// yields unlabeled orgs, which with no org-scoped rule is byte-identical to the
-// pre-P4 metadata-only filter.
+// (metadata env/domain axis + org axis). An empty rule set returns no tenant
+// (ADR-027 §7: there is no open mode). tenantOrg supplies each tenant's org
+// list for the org axis; a nil manager is tolerated (OrgsForTenant is
+// nil-receiver-safe) and yields unlabeled orgs, which with no org-scoped rule
+// is the metadata-only filter.
 //
 // A DEGRADED row (ConfigError != "", #1680) — and, alike, a healthy row whose
 // metadata is unknown because the root platform layer could not be read
 // (#2370, metadataIsUnknown) — is decided by ScopeAllowedUnknownMetadata
 // instead of ScopeAllowed. ⛔ Passing its empty
-// Environment/Domain to ScopeAllowed would be a leak: ScopeAllowed reads an
-// empty value as UNLABELED, which shadow metadata mode lets through, so an
-// environment-restricted caller would see a broken tenant whose real — merely
-// unreadable — environment they may not be allowed. Unknown is not unlabeled.
+// Environment/Domain to ScopeAllowed would conflate two states: ScopeAllowed
+// reads an empty value as UNLABELED. Unknown is not unlabeled — the decision
+// must not depend on a label that merely cannot be read right now.
 // The org list still comes from _tenant_orgs.yaml, which the broken file does
 // not affect, so the org axis is evaluated normally.
 func filterTenantsByRBAC(tenants []TenantSummary, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal) []TenantSummary {
-	cfg := rbacMgr.Get()
-	if len(cfg.Groups) == 0 {
-		// Path-less open mode only. A configured-but-empty _rbac.yaml never
-		// reaches here: the route gate (MiddlewareAnyTenant, cmd/server/routes.go)
-		// fail-closes it with 403 before this filter runs (ADR-027 MED-8).
-		return tenants // open mode — no filtering
-	}
-
 	filtered := make([]TenantSummary, 0, len(tenants))
 	for _, t := range tenants {
 		orgs, _ := tenantOrg.OrgsForTenant(t.ID)
@@ -431,7 +422,7 @@ func loadAllTenants(configDir string) ([]TenantSummary, error) {
 		// another id's, not this one's. The empty fields are then unknown,
 		// not unlabeled: the row is decided as a degraded row is
 		// (ScopeAllowedUnknownMetadata), so an environment- or
-		// domain-restricted caller does not see it in shadow mode either.
+		// domain-restricted caller does not see it.
 		// An API-shaped file declaring no tenant yet (a shell) stays as it
 		// was: nothing in it belongs to anyone else.
 		summary.MetadataIncomplete = !platformKnown || !decoded || (gitReason != "" && !declared)

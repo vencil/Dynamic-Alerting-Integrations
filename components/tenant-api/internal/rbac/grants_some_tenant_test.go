@@ -30,60 +30,53 @@ func TestGrantsSomeTenant_Cases(t *testing.T) {
 		{Name: "org", Tenants: []string{"*"}, Permissions: []Permission{PermRead}, OrgScope: "org"},
 		{Name: "env", Tenants: []string{"svc-*"}, Permissions: []Permission{PermRead}, Environments: []string{"production"}},
 	}}
-	shadow := NewForTest(cfg)
-	enforce := NewForTest(cfg)
-	enforce.EnableOrgScopeEnforce()
+	m := NewForTest(cfg)
 
 	cases := []struct {
-		name          string
-		groups        []string
-		claims        map[string]string
-		want          Permission
-		shadow, enfor bool
+		name   string
+		groups []string
+		claims map[string]string
+		want   Permission
+		expect bool
 	}{
-		{"exact id grants read", []string{"exact"}, nil, PermRead, true, true},
-		{"exact id does not grant write", []string{"exact"}, nil, PermWrite, false, false},
-		{"prefix grants write", []string{"prefix-rw"}, nil, PermWrite, true, true},
-		{"admin covers read", []string{"admin"}, nil, PermRead, true, true},
-		{"rule naming no tenant", []string{"no-tenants"}, nil, PermRead, false, false},
-		{"malformed pattern only", []string{"bad-pattern"}, nil, PermRead, false, false},
-		{"rule granting no permission", []string{"no-perms"}, nil, PermRead, false, false},
-		{"no matching rule", []string{"stranger"}, nil, PermRead, false, false},
-		{"anonymous", nil, nil, PermRead, false, false},
-		{"org-scoped with claim", []string{"org"}, map[string]string{"org": "ORG-A"}, PermRead, true, true},
-		{"org-scoped without claim: shadow only", []string{"org"}, nil, PermRead, true, false},
-		{"metadata-restricted rule still counts", []string{"env"}, nil, PermRead, true, true},
+		{"exact id grants read", []string{"exact"}, nil, PermRead, true},
+		{"exact id does not grant write", []string{"exact"}, nil, PermWrite, false},
+		{"prefix grants write", []string{"prefix-rw"}, nil, PermWrite, true},
+		{"admin covers read", []string{"admin"}, nil, PermRead, true},
+		{"rule naming no tenant", []string{"no-tenants"}, nil, PermRead, false},
+		{"malformed pattern only", []string{"bad-pattern"}, nil, PermRead, false},
+		{"rule granting no permission", []string{"no-perms"}, nil, PermRead, false},
+		{"no matching rule", []string{"stranger"}, nil, PermRead, false},
+		{"anonymous", nil, nil, PermRead, false},
+		{"org-scoped with claim", []string{"org"}, map[string]string{"org": "ORG-A"}, PermRead, true},
+		// No claim value: the rule matches no labeled tenant, and an unlabeled
+		// tenant is denied under an org-scoped rule (ADR-027 §7).
+		{"org-scoped without claim grants nothing", []string{"org"}, nil, PermRead, false},
+		{"metadata-restricted rule still counts", []string{"env"}, nil, PermRead, true},
 	}
 	for _, tc := range cases {
 		p := gstPrincipal(tc.groups, tc.claims)
 		if tc.groups == nil {
 			p = nil
 		}
-		if got := shadow.GrantsSomeTenant(p, tc.want); got != tc.shadow {
-			t.Errorf("%s (org shadow): got %v, want %v", tc.name, got, tc.shadow)
-		}
-		if got := enforce.GrantsSomeTenant(p, tc.want); got != tc.enfor {
-			t.Errorf("%s (org enforce): got %v, want %v", tc.name, got, tc.enfor)
+		if got := m.GrantsSomeTenant(p, tc.want); got != tc.expect {
+			t.Errorf("%s: got %v, want %v", tc.name, got, tc.expect)
 		}
 	}
 }
 
-// MED-8 and open mode are unchanged from the "*" gate.
+// An empty rule set grants nothing — no open mode (ADR-027 §7) — and agrees
+// with the "*" gate.
 func TestGrantsSomeTenant_ZeroGroups(t *testing.T) {
 	t.Parallel()
-	open := NewForTest(&RBACConfig{})
-	failClosed := NewForTest(&RBACConfig{})
-	failClosed.failClosedOnEmpty = true
+	m := NewForTest(&RBACConfig{})
 	p := gstPrincipal([]string{"anyone"}, nil)
 	for _, want := range []Permission{PermRead, PermWrite, PermAdmin} {
-		if failClosed.GrantsSomeTenant(p, want) {
-			t.Errorf("fail-closed empty config granted %s (MED-8)", want)
+		if m.GrantsSomeTenant(p, want) {
+			t.Errorf("empty rule set granted %s", want)
 		}
-		if got, exp := open.GrantsSomeTenant(p, want), want == PermRead; got != exp {
-			t.Errorf("open mode %s: got %v, want %v", want, got, exp)
-		}
-		if got, exp := open.GrantsSomeTenant(p, want), open.Allowed(p, "*", want); got != exp {
-			t.Errorf("open mode %s: any-tenant %v differs from the \"*\" gate %v", want, got, exp)
+		if got, exp := m.GrantsSomeTenant(p, want), m.Allowed(p, "*", want); got != exp {
+			t.Errorf("empty rule set %s: any-tenant %v differs from the \"*\" gate %v", want, got, exp)
 		}
 	}
 }
@@ -103,7 +96,7 @@ func witnessIDs(pat string) []string {
 
 // GrantsSomeTenant ⇔ some witness tenant (an id the caller's patterns name,
 // with no org label, the caller's org, or another org) passes the per-tenant
-// read decision the filters use. Run in both org modes.
+// read decision the filters use.
 func TestGrantsSomeTenant_EquivalentToSomeReadableWitness(t *testing.T) {
 	t.Parallel()
 	rules := []GroupRule{
@@ -122,41 +115,36 @@ func TestGrantsSomeTenant_EquivalentToSomeReadableWitness(t *testing.T) {
 	}
 	principals = append(principals, gstPrincipal([]string{"c", "e"}, nil), gstPrincipal([]string{"zzz"}, nil))
 
-	for _, enforceOrg := range []bool{false, true} {
-		m := NewForTest(&RBACConfig{Groups: rules})
-		if enforceOrg {
-			m.EnableOrgScopeEnforce()
-		}
-		for _, p := range principals {
-			for _, want := range []Permission{PermRead, PermWrite} {
-				witness := false
-				for _, r := range rules {
-					for _, pat := range r.Tenants {
-						for _, id := range witnessIDs(pat) {
-							for _, orgs := range [][]string{nil, {"ORG-A"}, {"ORG-B"}} {
-								if m.AllowedInOrgRead(p, id, want, orgs) {
-									witness = true
-								}
+	m := NewForTest(&RBACConfig{Groups: rules})
+	for _, p := range principals {
+		for _, want := range []Permission{PermRead, PermWrite} {
+			witness := false
+			for _, r := range rules {
+				for _, pat := range r.Tenants {
+					for _, id := range witnessIDs(pat) {
+						for _, orgs := range [][]string{nil, {"ORG-A"}, {"ORG-B"}} {
+							if m.AllowedInOrgRead(p, id, want, orgs) {
+								witness = true
 							}
 						}
 					}
 				}
-				if got := m.GrantsSomeTenant(p, want); got != witness {
-					var groups []string
-					var claims map[string]string
-					if p != nil {
-						groups, claims = p.Groups, p.Claims
-					}
-					t.Errorf("enforce=%v groups=%v claims=%v want=%s: GrantsSomeTenant=%v, some readable witness=%v",
-						enforceOrg, groups, claims, want, got, witness)
+			}
+			if got := m.GrantsSomeTenant(p, want); got != witness {
+				var groups []string
+				var claims map[string]string
+				if p != nil {
+					groups, claims = p.Groups, p.Claims
 				}
+				t.Errorf("groups=%v claims=%v want=%s: GrantsSomeTenant=%v, some readable witness=%v",
+					groups, claims, want, got, witness)
 			}
 		}
 	}
 }
 
 // The middleware: 403 with the any-tenant body when no rule grants, 200 and
-// the principal in context when one does; never a would-deny count.
+// the principal in context when one does; never a scope-denied count.
 func TestMiddlewareAnyTenant(t *testing.T) {
 	t.Parallel()
 	m := NewForTest(&RBACConfig{Groups: []GroupRule{
@@ -186,7 +174,7 @@ func TestMiddlewareAnyTenant(t *testing.T) {
 		t.Errorf("stranger: %d %s; want 403 FORBIDDEN naming no tenant", w.Code, w.Body.String())
 	}
 	if len(rec.counts) != 0 {
-		t.Errorf("the gate recorded would-deny observations %v; it judges no tenant and must record none", rec.counts)
+		t.Errorf("the gate recorded scope-denied observations %v; it judges no tenant and must record none", rec.counts)
 	}
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
 	w401 := httptest.NewRecorder()

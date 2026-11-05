@@ -60,7 +60,6 @@ func TestWriteThatRelabelsTenantOutOfScopeIsRefused(t *testing.T) {
 	p := proposedTestPrincipal()
 
 	m := rbac.NewForTest(proposedTestCfg())
-	m.EnableMetadataWriteScopeEnforce()
 
 	if !OrgAllowed(m, nil, p, "db-a", rbac.PermWrite, WriteScopeMeta(dir)) {
 		t.Fatal("pre-state gate must allow: the tenant is production today and the caller is production-scoped")
@@ -72,18 +71,5 @@ func TestWriteThatRelabelsTenantOutOfScopeIsRefused(t *testing.T) {
 	// one shape, it does not block ordinary edits.
 	if !OrgAllowed(m, nil, p, "db-a", rbac.PermWrite, proposedScopeMeta(dir, tenantInProd)) {
 		t.Error("post-state gate must still allow a body that keeps the tenant in the caller's environment")
-	}
-}
-
-// Migration safety: the post-state check runs the SAME predicate as the rest of
-// the axis, so it must be inert until the flag flips. If this ever fails, the
-// follow-up has started tightening deployments that never opted in.
-func TestPostStateCheckIsInertInShadowMode(t *testing.T) {
-	t.Parallel()
-	p := proposedTestPrincipal()
-	m := rbac.NewForTest(proposedTestCfg()) // shadow: flag NOT enabled
-
-	if !OrgAllowed(m, nil, p, "db-a", rbac.PermWrite, proposedScopeMeta("", tenantInDev)) {
-		t.Error("shadow mode must still allow — the post-state check must not tighten anyone before the flip")
 	}
 }

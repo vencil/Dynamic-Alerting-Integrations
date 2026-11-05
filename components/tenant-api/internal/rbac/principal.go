@@ -139,55 +139,37 @@ const (
 	ResultAuditUnknownWorkload = "unknown_workload" // verified token, but the ServiceAccount is not in the machine-identity allowlist
 )
 
-// ScopeAuditRecorder is the metric sink for scope-filter would-deny
-// observations (ADR-027 / LD-6 P1). Like IdentityAuditRecorder it is declared
-// in package rbac (to avoid the handler→rbac import cycle) and implemented in
-// the handler package, injected into the Manager via SetScopeAuditor
-// (instance-method DI — no package singleton — so metric state stays
-// test-isolatable). Shared across scope axes.
+// ScopeAuditRecorder is the metric sink for scope-filter denials (ADR-027
+// §7). Like IdentityAuditRecorder it is declared in package rbac (to avoid the
+// handler→rbac import cycle) and implemented in the handler package, injected
+// into the Manager via SetScopeAuditor (instance-method DI — no package
+// singleton — so metric state stays test-isolatable). Shared across scope axes.
 type ScopeAuditRecorder interface {
-	// IncWouldDeny records one scope would-deny observation for the given axis
-	// (one of the ScopeAxis* constants) — a subject that shadow mode allows but
-	// enforce mode would deny. Backs tenant_api_scope_would_deny_total{axis}.
-	IncWouldDeny(axis string)
+	// IncScopeDenied records one decision that the given scope axis (one of
+	// the scopeAxis* constants) denied. Backs tenant_api_scope_denied_total{axis}.
+	IncScopeDenied(axis string)
 }
 
-// Scope axis labels for tenant_api_scope_would_deny_total{axis}. Fixed set
+// Scope axis labels for tenant_api_scope_denied_total{axis}. Fixed set
 // (bounded cardinality, no user-controlled values). All are emitted in this
-// package via recordScopeShadowGap — metadata/org by ScopeAllowed (list plane),
-// org_write by AllowedInOrg (write plane); the handler's exposition uses the
-// same string literals for the {axis} label and MUST keep its
-// scopeWouldDenyAxes array in sync with this set (a compile-time guard in
-// scope_metrics.go binds the counter array length to the label count).
+// package via recordScopeDenied; the handler's exposition uses the same string
+// literals for the {axis} label and MUST keep its scopeDeniedAxes array in
+// sync with this set (a compile-time guard in scope_metrics.go binds the
+// counter array length to the label count).
 const (
-	// scopeAxisMetadata is the environment/domain metadata scope filter axis.
+	// scopeAxisMetadata is the environment/domain axis on the LIST plane
+	// (ScopeAllowed).
 	scopeAxisMetadata = "metadata"
-	// scopeAxisOrg is the org (tenant→organization) scope filter axis on the
-	// READ/VISIBILITY plane: ScopeAllowed list filtering (P4a) AND the read-by-id
-	// middleware gate + collection read filters (P4c, AllowedInOrgRead). list and
-	// read-by-id track the identical phenomenon — the unlabeled-tenant leniency on
-	// "can this subject SEE this tenant" — with the identical remediation (label
-	// the tenant), so they share one axis; the write plane is the meaningfully
-	// different action and keeps its own axis below.
+	// scopeAxisOrg is the org (tenant→organization) axis on the READ/VISIBILITY
+	// plane: ScopeAllowed list filtering AND the read-by-id middleware gate +
+	// collection read filters (AllowedInOrgRead). Both answer "can this subject
+	// SEE this tenant", so they share one axis.
 	scopeAxisOrg = "org"
-	// scopeAxisOrgWrite is the org axis's WRITE-plane counterpart (ADR-027 /
-	// LD-6 P4b): recorded only by AllowedInOrg (per-tenant write/admin
-	// decisions), never by Allowed / ScopeAllowed / AllowedInOrgRead. Kept a
-	// separate axis from scopeAxisOrg so the enforce-flip soak criterion can
-	// require increase(tenant_api_scope_would_deny_total{axis=...})==0 on BOTH the
-	// read/visibility and the write plane independently before flipping.
+	// scopeAxisOrgWrite is the org axis on the WRITE plane: recorded only by
+	// AllowedInOrg / AllowedInOrgRejudge.
 	scopeAxisOrgWrite = "org_write"
-
-	// scopeAxisMetadataWrite is the metadata axis's WRITE-plane counterpart
-	// (#1597). It exists for the same reason scopeAxisOrgWrite does: the write
-	// plane's soak signal must not be polluted by reads, so the enforce-flip
-	// criterion can require increase()==0 on the plane it is about to close.
-	//
-	// Before #1597 the metadata axis had NO write-plane presence at all —
-	// AllowedInOrg took no environment/domain and never read rule.Environments
-	// or rule.Domains, so `environments:` in _rbac.yaml constrained only what a
-	// subject could SEE, never what it could WRITE, while the 403 told the
-	// denied operator to go adjust exactly that field.
+	// scopeAxisMetadataWrite is the environment/domain axis on the WRITE plane
+	// (#1597): recorded only by AllowedInOrg / AllowedInOrgRejudge.
 	scopeAxisMetadataWrite = "metadata_write"
 )
 

@@ -41,13 +41,12 @@ package handler
 //     reports first; redaction is applied to the already-paired structure.
 //     Cross-report indexes are each config's own order, so pairing redacted
 //     reports by index would misalign the moment a rule is inserted.
-//   - "changed" compares exactly four axes: outcome_shadow, outcome_enforce,
-//     unsatisfiable — the flag-agnostic outcome surface — plus
-//     org_gate.claim_key (the declared claim key the gate scopes on).
-//     generated_at and flags are excluded by the P6 contract; config_anchor is
-//     presented side by side, never diffed. Permission/WHO changes are visible
+//   - "changed" compares exactly three axes: org_gate.outcome and
+//     unsatisfiable — the outcome surface — plus org_gate.claim_key (the
+//     declared claim key the gate scopes on). generated_at is excluded by the
+//     P6 contract; config_anchor is presented side by side, never diffed. Permission/WHO changes are visible
 //     in the two embedded reports, not classified here.
-//   - a 1:1 pair identical on all four axes is NOT dropped: it lands in
+//   - a 1:1 pair identical on all three axes is NOT dropped: it lands in
 //     "unchanged" (rule + live/candidate index only) so the front end can
 //     find-by-index and compare the un-classified axes (permissions / WHO)
 //     for a grant the org-gate diff did not flag.
@@ -73,7 +72,7 @@ import (
 
 // dryRunSchemaVersion pins the dry-run envelope's JSON schema generation,
 // independent of the embedded reports' own schema_version.
-const dryRunSchemaVersion = 1
+const dryRunSchemaVersion = 2
 
 // maxCandidateRules bounds the candidate's rule count. Report generation is
 // O(rules × orgs) per report and the endpoint accepts arbitrary configs, so
@@ -125,13 +124,12 @@ type DryRunChanged struct {
 	Rule           string       `json:"rule,omitempty"` // stripped in the redacted view
 	LiveIndex      int          `json:"live_index"`
 	CandidateIndex int          `json:"candidate_index"`
-	OutcomeShadow  *StringDelta `json:"outcome_shadow,omitempty"`
-	OutcomeEnforce *StringDelta `json:"outcome_enforce,omitempty"`
+	Outcome        *StringDelta `json:"outcome,omitempty"`
 	Unsatisfiable  *BoolDelta   `json:"unsatisfiable,omitempty"`
-	// ClaimKey is the fourth axis: org_gate.claim_key (rule.OrgScope). A
+	// ClaimKey is the third axis: org_gate.claim_key (rule.OrgScope). A
 	// same-name pair that re-scopes to a different declared claim key changes
-	// here even when the three outcome axes are identical (e.g. an unlabeled
-	// tenant, where every required gate reads pass/fail_unlabeled regardless of
+	// here even when the outcome axes are identical (e.g. an unlabeled
+	// tenant, where every required gate reads fail_unlabeled regardless of
 	// which key). The claim key IS a claim identifier, so it is DROPPED in the
 	// redacted view (mirroring ReverseOrgGate.ClaimKey) — the redact rebuild's
 	// allowlist simply never copies it forward.
@@ -302,9 +300,8 @@ func DryRunTenantAccessReport(d *Deps) http.HandlerFunc {
 
 		// 8. Both reports over the SAME inputs: org labeling comes from the
 		// live tenantorg manager for candidate and baseline alike (the
-		// candidate axis is _rbac.yaml only), and the candidate inherits the
-		// live fail-closed bit so an empty candidate reports the verdict the
-		// same bytes would produce once deployed.
+		// candidate axis is _rbac.yaml only). There are no mode bits to
+		// inherit: an empty candidate denies everything, as it would live.
 		orgs, known := d.TenantOrg.OrgsForTenant(id)
 		tenantOrgsHash := ""
 		if d.TenantOrg != nil {
@@ -315,7 +312,7 @@ func DryRunTenantAccessReport(d *Deps) http.HandlerFunc {
 			DevBypassActive:  devBypassActive.Load(),
 		}
 		baseline := d.RBAC.ReverseAccessReport(id, orgs, known, tenantOrgsHash, opts)
-		candidate := rbac.NewCandidate(cfg, d.RBAC.EvaluationMode()).
+		candidate := rbac.NewCandidate(cfg).
 			ReverseAccessReport(id, orgs, known, tenantOrgsHash, opts)
 
 		// 9-10. Diff the FULL structures first, then project.
@@ -435,22 +432,18 @@ func grantsByRule(grants []rbac.ReverseGrant) map[string][]*rbac.ReverseGrant {
 	return byName
 }
 
-// changedEntry compares one exactly-paired grant across the four diffable
-// axes — outcome_shadow / outcome_enforce / unsatisfiable (the flag-agnostic
-// outcome surface) plus org_gate.claim_key (which declared claim key the gate
-// scopes on) — and returns nil when the pair is identical on all four. The
-// claim_key axis catches a re-scope that leaves every outcome unchanged (e.g.
-// on an unlabeled tenant, where any required gate reads pass/fail_unlabeled
-// regardless of key) — which the outcome axes alone would silently drop.
+// changedEntry compares one exactly-paired grant across the three diffable
+// axes — outcome / unsatisfiable (the outcome surface) plus
+// org_gate.claim_key (which declared claim key the gate scopes on) — and
+// returns nil when the pair is identical on all three. The claim_key axis
+// catches a re-scope that leaves every outcome unchanged (e.g. on an
+// unlabeled tenant, where any required gate reads fail_unlabeled regardless
+// of key) — which the outcome axes alone would silently drop.
 func changedEntry(live, cand *rbac.ReverseGrant) *DryRunChanged {
 	c := DryRunChanged{Rule: live.Rule, LiveIndex: live.Index, CandidateIndex: cand.Index}
 	hit := false
-	if live.OrgGate.OutcomeShadow != cand.OrgGate.OutcomeShadow {
-		c.OutcomeShadow = &StringDelta{From: live.OrgGate.OutcomeShadow, To: cand.OrgGate.OutcomeShadow}
-		hit = true
-	}
-	if live.OrgGate.OutcomeEnforce != cand.OrgGate.OutcomeEnforce {
-		c.OutcomeEnforce = &StringDelta{From: live.OrgGate.OutcomeEnforce, To: cand.OrgGate.OutcomeEnforce}
+	if live.OrgGate.Outcome != cand.OrgGate.Outcome {
+		c.Outcome = &StringDelta{From: live.OrgGate.Outcome, To: cand.OrgGate.Outcome}
 		hit = true
 	}
 	if live.OrgGate.Unsatisfiable != cand.OrgGate.Unsatisfiable {
@@ -458,7 +451,7 @@ func changedEntry(live, cand *rbac.ReverseGrant) *DryRunChanged {
 		hit = true
 	}
 	// Compared only when BOTH sides declare an org-scope key: a re-scope
-	// org→team is a genuine fourth-axis change. Adding/removing org-scope (one
+	// org→team is a genuine third-axis change. Adding/removing org-scope (one
 	// side empty) is already fully expressed by the outcome deltas, so an
 	// empty-side claim_key delta ("" → "org") would double-signal — skip it.
 	if live.OrgGate.ClaimKey != "" && cand.OrgGate.ClaimKey != "" &&
@@ -492,8 +485,7 @@ func redactDryRunDiff(diff DryRunDiff) DryRunDiff {
 		out.Changed[i] = DryRunChanged{
 			LiveIndex:      c.LiveIndex,
 			CandidateIndex: c.CandidateIndex,
-			OutcomeShadow:  c.OutcomeShadow,
-			OutcomeEnforce: c.OutcomeEnforce,
+			Outcome:        c.Outcome,
 			Unsatisfiable:  c.Unsatisfiable,
 			// ClaimKey deliberately NOT copied: it is a claim identifier.
 		}

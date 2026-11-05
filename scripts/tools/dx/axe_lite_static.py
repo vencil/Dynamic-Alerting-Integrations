@@ -399,5 +399,12 @@ def main(argv: list[str]) -> int:
     return EXIT_OK if bad == 0 else EXIT_VIOLATION
 
 
+def _cli() -> int:
+    """The process entry: `main` with the command line (`main` takes the
+    argv explicitly, for importers and tests)."""
+    return main(sys.argv)
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    import _lib_exitcodes
+    _lib_exitcodes.run(_cli)

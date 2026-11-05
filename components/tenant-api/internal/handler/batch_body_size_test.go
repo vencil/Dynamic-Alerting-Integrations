@@ -57,8 +57,8 @@ func TestBatchTenants_RejectsOversizeBody(t *testing.T) {
 	configDir := t.TempDir()
 	initGitRepo(t, configDir)
 	gw := newTestWriter(configDir)
-	rbacMgr := newRBACManager(t, "")
-	h := BatchTenants(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModeDirect})
+	rbacMgr := unrestrictedRBAC(t)
+	h := asUnrestricted(rbacMgr, BatchTenants(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModeDirect}))
 
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", bytes.NewBufferString(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -288,8 +288,8 @@ func TestOversizeBatchCarriesAnErrorCode(t *testing.T) {
 	configDir := t.TempDir()
 	initGitRepo(t, configDir)
 	gw := newTestWriter(configDir)
-	rbacMgr := newRBACManager(t, "")
-	h := BatchTenants(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModeDirect})
+	rbacMgr := unrestrictedRBAC(t)
+	h := asUnrestricted(rbacMgr, BatchTenants(&Deps{Writer: gw, ConfigDir: configDir, RBAC: rbacMgr, WriteMode: WriteModeDirect}))
 	req := httptest.NewRequest("POST", "/api/v1/tenants/batch", bytes.NewBufferString(body))
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -346,9 +346,9 @@ func TestGroupBatchRejectsOversizeBody(t *testing.T) {
 	configDir := t.TempDir()
 	setupGroupsFile(t, configDir, testGroupsYAML)
 	gw := newTestWriter(configDir)
-	rbacMgr := newRBACManager(t, "")
-	h := GroupBatch(&Deps{State: mustDirState(configDir), Writer: gw, ConfigDir: configDir, RBAC: rbacMgr,
-		Groups: groups.NewDirManager(configDir), WriteMode: WriteModeDirect})
+	rbacMgr := unrestrictedRBAC(t)
+	h := asUnrestricted(rbacMgr, GroupBatch(&Deps{State: mustDirState(configDir), Writer: gw, ConfigDir: configDir, RBAC: rbacMgr,
+		Groups: groups.NewDirManager(configDir), WriteMode: WriteModeDirect}))
 	req := newRequestWithChiParam("POST", "/api/v1/groups/production-dba/batch",
 		"id", "production-dba", bytes.NewBufferString(b.String()))
 	req.Header.Set("Content-Type", "application/json")
@@ -655,9 +655,10 @@ func TestUnboundedMapsAreRejectedBeforeTheWriteLock(t *testing.T) {
 		}
 		configDir := t.TempDir()
 		setupGroupsFile(t, configDir, testGroupsYAML)
-		h := GroupBatch(&Deps{State: mustDirState(configDir), Writer: newTestWriter(configDir), ConfigDir: configDir,
-			Groups: groups.NewDirManager(configDir), RBAC: newRBACManager(t, ""),
-			WriteMode: WriteModeDirect})
+		mgr := unrestrictedRBAC(t)
+		h := asUnrestricted(mgr, GroupBatch(&Deps{State: mustDirState(configDir), Writer: newTestWriter(configDir), ConfigDir: configDir,
+			Groups: groups.NewDirManager(configDir), RBAC: mgr,
+			WriteMode: WriteModeDirect}))
 		req := newRequestWithChiParam("POST", "/api/v1/groups/production-dba/batch",
 			"id", "production-dba", bytes.NewBufferString(b.String()))
 		req = setRequestIdentity(req, "a@a.com")

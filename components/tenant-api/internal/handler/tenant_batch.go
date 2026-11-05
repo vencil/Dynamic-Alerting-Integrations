@@ -320,6 +320,16 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 			batchResults = append(batchResults, res)
 			continue
 		}
+		// ADR-027 §7: only a platform administrator changes the labels
+		// (label_guard.go); judged again on the fresh base below.
+		var labelsBefore scopePair
+		if touchesScopeMetadata(op) {
+			labelsBefore = scopePairOf(stackedScopeMeta(d.ConfigDir, op.TenantID, included[op.TenantID]), op.TenantID)
+		}
+		if res, refused := gateBatchOpLabelsAt(d.RBAC, p, op, labelsBefore, gatePost.pair); refused {
+			batchResults = append(batchResults, res)
+			continue
+		}
 		// #1097: carry a merge closure, not pre-built content, so the
 		// authoritative partial merge runs under the writer lock against
 		// the fresh base (preserving untouched keys). op is per-iteration
@@ -386,6 +396,13 @@ func runBatchPR(d *Deps, rw http.ResponseWriter, r *http.Request, ops []BatchOpe
 					post := scopePairOf(proposedScopeMeta(baseDir, merged), op.TenantID)
 					if ok, err := freshScopeAllowed(d, p, baseDir, op.TenantID, gatePost, post, countOrg); err != nil || !ok {
 						return "", orFreshScopeError(err, &freshBaseScopeError{TenantID: op.TenantID, Op: i})
+					}
+					// ADR-027 §7: the label change judged on the base,
+					// existing being the tenant's file there with this
+					// request's earlier ops for it applied (label_guard.go).
+					if touchesScopeMetadata(op) &&
+						!labelChangeAllowed(d.RBAC, p, freshLabelsBefore(baseDir, existing, op.TenantID, labelsBefore), post) {
+						return "", &freshBaseScopeError{TenantID: op.TenantID, Op: i, Labels: true}
 					}
 				}
 				return merged, nil
@@ -738,6 +755,12 @@ func executeBatchOpsShown(ctx context.Context, w *gitops.Writer, configDir strin
 			refuse(i, res)
 			continue
 		}
+		// ADR-027 §7: only a platform administrator changes the labels
+		// (label_guard.go).
+		if res, failed := gateBatchOpLabels(rbacMgr, configDir, included[op.TenantID], op, p); failed {
+			refuse(i, res)
+			continue
+		}
 		included[op.TenantID] = append(included[op.TenantID], op)
 	}
 	if anyRefused {
@@ -970,6 +993,8 @@ func freshBaseOpResult(tenantID string, err error, treeVisible bool) BatchResult
 		orgs  *freshBaseOrgsError
 	)
 	switch {
+	case errors.As(err, &scope) && scope.Labels:
+		res.Message = labelChangeDeniedText(tenantID) + " (judged on the latest base branch)"
 	case errors.As(err, &scope) && scope.PreState:
 		res.Message = "insufficient permissions for tenant " + tenantID + " on the latest base branch (permission and organization-scope checks, ADR-027)"
 	case errors.As(err, &scope):

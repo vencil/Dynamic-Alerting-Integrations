@@ -153,9 +153,7 @@ func TestPermCovers(t *testing.T) {
 func TestAllowed_ExpectedValues(t *testing.T) {
 	t.Parallel()
 	configured := NewForTest(equivConfig())
-	open := NewForTest(&RBACConfig{})
-	failClosed := NewForTest(&RBACConfig{})
-	failClosed.failClosedOnEmpty = true
+	empty := NewForTest(&RBACConfig{})
 	// Two disjoint single-tenant grants: pins that a caller in BOTH groups gets
 	// each group's grant on its own tenant, and neither leaks across.
 	twoTeams := NewForTest(&RBACConfig{Groups: []GroupRule{
@@ -171,9 +169,8 @@ func TestAllowed_ExpectedValues(t *testing.T) {
 		want     Permission
 		expected bool
 	}{
-		{"open mode grants read", open, []string{"any"}, "any-tenant", PermRead, true},
-		{"open mode denies write", open, []string{"any"}, "any-tenant", PermWrite, false},
-		{"fail-closed denies read", failClosed, []string{"any"}, "any-tenant", PermRead, false},
+		{"empty rule set denies read (no open mode)", empty, []string{"any"}, "any-tenant", PermRead, false},
+		{"empty rule set denies write", empty, []string{"any"}, "any-tenant", PermWrite, false},
 		{"admin wildcard writes any", configured, []string{"platform-admins"}, "redis-01", PermWrite, true},
 		{"prefix rule writes matching tenant", configured, []string{"db-ops"}, "db-a-prod", PermWrite, true},
 		{"prefix rule reads matching tenant", configured, []string{"db-ops"}, "db-a-staging", PermRead, true},
@@ -332,7 +329,7 @@ func TestMatch_MetadataAndAccessibleSets(t *testing.T) {
 		t.Errorf("AccessibleEnvironmentsFor(unclaimed) = %v, want empty", got)
 	}
 
-	// Labeled-tenant membership is mode-independent (both shadow and enforce).
+	// Labeled-tenant membership: exact match against the matched rule's scope.
 	if !m.MetadataAllowed(claimed, "t1", "production", "finance") {
 		t.Error("MetadataAllowed(claimed, production/finance) = false, want true")
 	}
@@ -378,32 +375,21 @@ func TestMatch_EmptyMatchNeverMatches(t *testing.T) {
 
 // TestAllowed_NilPrincipalContract pins the documented nil-principal
 // (anonymous) contract: nil evaluates exactly like the empty groups slice —
-// open mode still grants read (the pre-existing rbac open-read behavior must
-// NOT be tightened by the principal refactor), configured and fail-closed
-// modes deny, and nil / &VP{} / &VP{Groups: nil} are indistinguishable.
+// no rule can match it, so every check denies (an empty rule set denies too:
+// ADR-027 §7, no open mode), and nil / &VP{} / &VP{Groups: nil} are
+// indistinguishable.
 func TestAllowed_NilPrincipalContract(t *testing.T) {
 	t.Parallel()
 
-	t.Run("open mode keeps anonymous read, denies write", func(t *testing.T) {
+	t.Run("empty rule set denies anonymous entirely", func(t *testing.T) {
 		t.Parallel()
 		m := NewForTest(&RBACConfig{})
-		if !m.Allowed(nil, "any-tenant", PermRead) {
-			t.Error("open mode: Allowed(nil, read) must stay TRUE (legacy open-read; must not tighten)")
-		}
-		if m.Allowed(nil, "any-tenant", PermWrite) {
-			t.Error("open mode: Allowed(nil, write) must be false")
-		}
-		if m.Allowed(nil, "any-tenant", PermAdmin) {
-			t.Error("open mode: Allowed(nil, admin) must be false")
-		}
-	})
-
-	t.Run("fail-closed mode denies anonymous entirely", func(t *testing.T) {
-		t.Parallel()
-		m := NewForTest(&RBACConfig{})
-		m.failClosedOnEmpty = true
-		if m.Allowed(nil, "*", PermRead) {
-			t.Error("fail-closed: Allowed(nil, read) must be false")
+		for _, tenant := range equivTenants {
+			for _, want := range equivPerms {
+				if m.Allowed(nil, tenant, want) {
+					t.Errorf("empty rule set: Allowed(nil, %q, %s) must be false (no open mode)", tenant, want)
+				}
+			}
 		}
 	})
 
@@ -438,14 +424,9 @@ func TestAllowed_NilPrincipalContract(t *testing.T) {
 
 	t.Run("MetadataAllowed nil principal", func(t *testing.T) {
 		t.Parallel()
-		open := NewForTest(&RBACConfig{})
-		if !open.MetadataAllowed(nil, "t", "production", "finance") {
-			t.Error("open mode: MetadataAllowed(nil) must be true (no restrictions)")
-		}
-		failClosed := NewForTest(&RBACConfig{})
-		failClosed.failClosedOnEmpty = true
-		if failClosed.MetadataAllowed(nil, "t", "production", "finance") {
-			t.Error("fail-closed: MetadataAllowed(nil) must be false")
+		empty := NewForTest(&RBACConfig{})
+		if empty.MetadataAllowed(nil, "t", "production", "finance") {
+			t.Error("empty rule set: MetadataAllowed(nil) must be false (no open mode)")
 		}
 		configured := NewForTest(equivConfig())
 		if configured.MetadataAllowed(nil, "t", "production", "finance") {
@@ -455,12 +436,12 @@ func TestAllowed_NilPrincipalContract(t *testing.T) {
 
 	t.Run("Accessible sets for nil principal", func(t *testing.T) {
 		t.Parallel()
-		open := NewForTest(&RBACConfig{})
-		if got := open.AccessibleEnvironmentsFor(nil); got != nil {
-			t.Errorf("open mode: AccessibleEnvironmentsFor(nil) = %v, want nil (no restriction)", got)
+		empty := NewForTest(&RBACConfig{})
+		if got := empty.AccessibleEnvironmentsFor(nil); got == nil || len(got) != 0 {
+			t.Errorf("empty rule set: AccessibleEnvironmentsFor(nil) = %v, want empty non-nil set (no access)", got)
 		}
-		if got := open.AccessibleDomainsFor(nil); got != nil {
-			t.Errorf("open mode: AccessibleDomainsFor(nil) = %v, want nil (no restriction)", got)
+		if got := empty.AccessibleDomainsFor(nil); got == nil || len(got) != 0 {
+			t.Errorf("empty rule set: AccessibleDomainsFor(nil) = %v, want empty non-nil set (no access)", got)
 		}
 		configured := NewForTest(equivConfig())
 		if got := configured.AccessibleEnvironmentsFor(nil); got == nil || len(got) != 0 {

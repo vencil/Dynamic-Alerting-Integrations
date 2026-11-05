@@ -25,7 +25,7 @@ func TestTenantSnapshots_BlockedLoadReleasesTheTreeLock(t *testing.T) {
 	release := func() { once.Do(func() { close(gate) }) }
 	t.Cleanup(release)
 	cache.afterLoad = func() { <-gate }
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: cache}
 
 	answered := make(chan *SearchResponse, 1)
 	go func() { answered <- openSearch(t, d) }()

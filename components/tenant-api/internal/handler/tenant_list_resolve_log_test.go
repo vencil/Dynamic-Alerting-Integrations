@@ -28,7 +28,7 @@ func TestListAndSearchWriteNoResolverLog(t *testing.T) {
 		"_defaults.yaml": "defaults:\n  m1_x: 1\nstate_filters:\n  maintenance:\n    severity: warning\n",
 		"tx.yaml":        "tenants:\n  tx:\n    _silent_mode: \"bogus\"\n    _state_maintenance:\n      expires: \"nope\"\n",
 	})
-	d := &Deps{ConfigDir: configDir, RBAC: newRBACManager(t, ""), SearchCache: NewTenantSnapshotCache()}
+	d := &Deps{ConfigDir: configDir, RBAC: unrestrictedRBAC(t), SearchCache: NewTenantSnapshotCache()}
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
@@ -36,7 +36,7 @@ func TestListAndSearchWriteNoResolverLog(t *testing.T) {
 	get := func(h http.HandlerFunc, url string) {
 		t.Helper()
 		w := httptest.NewRecorder()
-		h(w, httptest.NewRequest(http.MethodGet, url, nil))
+		asUnrestricted(d.RBAC, h)(w, httptest.NewRequest(http.MethodGet, url, nil))
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET %s = %d: %s", url, w.Code, w.Body.String())
 		}

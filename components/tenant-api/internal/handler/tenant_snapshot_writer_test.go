@@ -75,7 +75,7 @@ func snapshotRepo(t *testing.T) (string, string) {
 // derivedNow is the oracle: an uncached load of dir, as the list serves it.
 func derivedNow(t *testing.T, dir string) map[string]ConfigDerivedState {
 	t.Helper()
-	return derivedByID(t, getList(t, &Deps{ConfigDir: dir, RBAC: openModeRBAC(t)}))
+	return derivedByID(t, getList(t, &Deps{ConfigDir: dir, RBAC: unrestrictedRBAC(t)}))
 }
 
 // P5a: the production write → invalidate wiring. A direct write through the
@@ -84,7 +84,7 @@ func TestWireTenantSnapshots_WriteInvalidates(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
 	w := gitopstest.NewWriter(work, work)
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, false)}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: WireTenantSnapshots(w, work, false)}
 
 	if got := derivedByID(t, getList(t, d))[snapTenant]; len(got.SilentTargets) != 0 {
 		t.Fatalf("seed tenant already silenced: %+v", got)
@@ -108,7 +108,7 @@ func TestWireTenantSnapshots_FailedCommitStillInvalidates(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
 	w := gitopstest.NewWriter(work, work)
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, false)}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: WireTenantSnapshots(w, work, false)}
 	_ = getList(t, d) // populate the cache
 
 	const other = "t-snap-oob"
@@ -167,7 +167,7 @@ func listRaw(t *testing.T, d *Deps) map[string]TenantSummary {
 
 func openSearch(t *testing.T, d *Deps) *SearchResponse {
 	t.Helper()
-	resp, _ := searchAs(t, d, d.RBAC.Middleware(rbac.PermRead, nil), func(*http.Request) {})
+	resp, _ := searchAs(t, d, d.RBAC.Middleware(rbac.PermRead, nil), func(r *http.Request) { r.Header.Set("X-Forwarded-Groups", unrestrictedGroup) })
 	return resp
 }
 
@@ -179,7 +179,7 @@ func TestWireTenantSnapshots_NeverCachesAnUnmergedPRBranch(t *testing.T) {
 	t.Parallel()
 	work, bare := snapshotRepo(t)
 	w := gitopstest.NewWriter(work, work)
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, true)}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: WireTenantSnapshots(w, work, true)}
 
 	done := startHeldPR(t, w, bare, "sleep 2\n")
 	during := derivedByID(t, getList(t, d)) // issued while the push is held open
@@ -209,7 +209,7 @@ func TestWireTenantSnapshots_ReadersDoNotWaitForAPush(t *testing.T) {
 	const bound = time.Second
 	work, bare := snapshotRepo(t)
 	w := gitopstest.NewWriter(work, work)
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, true)}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: WireTenantSnapshots(w, work, true)}
 	done := startHeldPR(t, w, bare, "sleep 4\n")
 
 	type result struct {
@@ -225,7 +225,7 @@ func TestWireTenantSnapshots_ReadersDoNotWaitForAPush(t *testing.T) {
 			go func() {
 				start := time.Now()
 				rec := httptest.NewRecorder()
-				ListTenants(d)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
+				asUnrestricted(d.RBAC, ListTenants(d)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
 				var items []TenantSummary
 				_ = json.Unmarshal(rec.Body.Bytes(), &items)
 				r := result{took: time.Since(start), what: "list"}
@@ -239,7 +239,7 @@ func TestWireTenantSnapshots_ReadersDoNotWaitForAPush(t *testing.T) {
 			go func() {
 				start := time.Now()
 				rec := httptest.NewRecorder()
-				SearchTenants(d)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/tenants/search", nil))
+				asUnrestricted(d.RBAC, SearchTenants(d)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/tenants/search", nil))
 				var resp SearchResponse
 				_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 				r := result{took: time.Since(start), what: "search", loadErr: resp.ConfigDerivation.LoadError}
@@ -296,7 +296,7 @@ func TestWireTenantSnapshots_NoSnapshotDuringAPushIsUnknown(t *testing.T) {
 	t.Parallel()
 	work, bare := snapshotRepo(t)
 	w := gitopstest.NewWriter(work, work)
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: wireTenantSnapshots(w, true)} // not primed
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: wireTenantSnapshots(w, true)} // not primed
 
 	done := startHeldPR(t, w, bare, "sleep 3\n")
 	start := time.Now()
@@ -327,7 +327,7 @@ func TestWireTenantSnapshots_TreeOffBaseIsNeverDerived(t *testing.T) {
 	lock := filepath.Join(work, ".git", "index.lock")
 	t.Cleanup(func() { _ = os.Remove(lock) })
 	w := gitopstest.NewWriter(work, work)
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, true)}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: WireTenantSnapshots(w, work, true)}
 
 	done := startHeldPR(t, w, bare, "touch '"+lock+"'\n")
 	// #2070: the write now FAILS when both return-to-base attempts do (it used
@@ -385,7 +385,7 @@ func asyncList(d *Deps) <-chan []TenantSummary {
 	out := make(chan []TenantSummary, 1)
 	go func() {
 		rec := httptest.NewRecorder()
-		ListTenants(d)(rec, httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
+		asUnrestricted(d.RBAC, ListTenants(d)).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
 		var items []TenantSummary
 		_ = json.Unmarshal(rec.Body.Bytes(), &items)
 		out <- items
@@ -410,7 +410,7 @@ func TestTenantSnapshots_ReadAfterWriteWaitsForAnotherReadersReload(t *testing.T
 	work, _ := snapshotRepo(t)
 	w := gitopstest.NewWriter(work, work)
 	cache := WireTenantSnapshots(w, work, false)
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: cache}
 	if _, err := w.Write(context.Background(), snapTenant, "alice@example.com", snapSilentYAML); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestTenantSnapshots_ColdConcurrentReadersAllDerive(t *testing.T) {
 	work, _ := snapshotRepo(t)
 	w := gitopstest.NewWriter(work, work)
 	cache := wireTenantSnapshots(w, false) // not primed
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: cache}
 	loaded, release := holdNextLoad(cache)
 	first := asyncList(d)
 	<-loaded
@@ -464,7 +464,7 @@ func TestTenantSnapshots_InvalidateDuringReloadLeavesItStale(t *testing.T) {
 	work, _ := snapshotRepo(t)
 	w := gitopstest.NewWriter(work, work)
 	cache := WireTenantSnapshots(w, work, false)
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: cache}
 	cache.Invalidate() // make the next request reload
 	loaded, release := holdNextLoad(cache)
 	reloading := asyncList(d)
@@ -500,7 +500,7 @@ func TestTenantSnapshots_PRModeTreeCheck(t *testing.T) {
 			work, _ := snapshotRepo(t)
 			w := gitopstest.NewWriter(work, work)
 			cache := WireTenantSnapshots(w, work, true)
-			d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
+			d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: cache}
 			if err := os.WriteFile(filepath.Join(work, c.rel), []byte(c.body), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -539,7 +539,7 @@ func TestTenantSnapshots_StaleSnapshotIsNotKnownWhileAWriteRuns(t *testing.T) {
 	t.Parallel()
 	work, _ := snapshotRepo(t)
 	w := gitopstest.NewWriter(work, work)
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: WireTenantSnapshots(w, work, false)}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: WireTenantSnapshots(w, work, false)}
 	if _, err := w.Write(context.Background(), snapTenant, "alice@example.com", snapSilentYAML); err != nil {
 		t.Fatalf("write A: %v", err)
 	}
@@ -571,7 +571,7 @@ func TestTenantSnapshots_WaitTimeoutOnAStaleSnapshotIsUnknown(t *testing.T) {
 	w := gitopstest.NewWriter(work, work)
 	cache := WireTenantSnapshots(w, work, false)
 	cache.loadDeadline = 10 * reloadWaitBound
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: cache}
 	if _, err := w.Write(context.Background(), snapTenant, "alice@example.com", snapSilentYAML); err != nil {
 		t.Fatalf("Write: %v", err)
 	}
@@ -594,7 +594,7 @@ func TestTenantSnapshots_PanicInLoadIsRecovered(t *testing.T) {
 	work, _ := snapshotRepo(t)
 	w := gitopstest.NewWriter(work, work)
 	cache := wireTenantSnapshots(w, false) // not primed
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: cache}
 	var once sync.Once
 	cache.afterLoad = func() { once.Do(func() { panic("injected") }) }
 	resp := openSearch(t, d)
@@ -617,7 +617,7 @@ func TestTenantSnapshots_PanicInReloadIsRecovered(t *testing.T) {
 	work, _ := snapshotRepo(t)
 	w := gitopstest.NewWriter(work, work)
 	cache := wireTenantSnapshots(w, false)
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: cache}
 	cache.tryReadTree = func(func()) bool { panic("injected") }
 	if resp := openSearch(t, d); resp.ConfigDerivation.LoadError != loadPanicError {
 		t.Errorf("load_error = %q, want %q", resp.ConfigDerivation.LoadError, loadPanicError)
@@ -665,7 +665,7 @@ func TestTenantSnapshots_JoinerSkipsAReloadOlderThanItsInvalidate(t *testing.T) 
 	work, _ := snapshotRepo(t)
 	w := gitopstest.NewWriter(work, work)
 	cache := WireTenantSnapshots(w, work, false)
-	d := &Deps{ConfigDir: work, RBAC: openModeRBAC(t), SearchCache: cache}
+	d := &Deps{ConfigDir: work, RBAC: unrestrictedRBAC(t), SearchCache: cache}
 	cache.Invalidate()
 	loaded, release := holdNextLoad(cache)
 	older := asyncList(d)

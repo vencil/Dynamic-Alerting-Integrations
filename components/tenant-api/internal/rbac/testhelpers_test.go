@@ -17,15 +17,15 @@ import (
 
 // ── scope-audit double ───────────────────────────────────────────────────────
 
-// fakeScopeRecorder is an in-test ScopeAuditRecorder capturing would-deny
-// observations per axis, so tests assert on their own isolated instance.
+// fakeScopeRecorder is an in-test ScopeAuditRecorder capturing scope-denied
+// decisions per axis, so tests assert on their own isolated instance.
 type fakeScopeRecorder struct{ counts map[string]int }
 
 func newFakeScopeRecorder() *fakeScopeRecorder {
 	return &fakeScopeRecorder{counts: map[string]int{}}
 }
 
-func (f *fakeScopeRecorder) IncWouldDeny(axis string) { f.counts[axis]++ }
+func (f *fakeScopeRecorder) IncScopeDenied(axis string) { f.counts[axis]++ }
 
 // ── legacy-equivalence fixtures (ADR-027 / LD-6 P3) ─────────────────────────
 
@@ -44,16 +44,13 @@ func equivConfig() *RBACConfig {
 	}}
 }
 
-// equivManagers returns the three manager modes the legacy matrix covered:
-// path-less open mode, configured-but-empty fail-closed mode (MED-8), and a
+// equivManagers returns the manager states the legacy matrix covers: an empty
+// rule set (which denies everything — ADR-027 §7, no open mode) and a
 // configured rule set.
 func equivManagers() map[string]*Manager {
-	failClosed := NewForTest(&RBACConfig{})
-	failClosed.failClosedOnEmpty = true
 	return map[string]*Manager{
-		"open":        NewForTest(&RBACConfig{}),
-		"fail-closed": failClosed,
-		"configured":  NewForTest(equivConfig()),
+		"empty":      NewForTest(&RBACConfig{}),
+		"configured": NewForTest(equivConfig()),
 	}
 }
 

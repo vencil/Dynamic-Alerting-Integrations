@@ -3,7 +3,7 @@ package handler
 // #3123: list / stream endpoints gated on the route's `"*"` read check.
 //
 // A caller whose rule is `tenants: ["*"]` plus an org-scope passes that gate:
-// rbac.Allowed holds the org and metadata axes at shadow, so `"*"` is not an
+// rbac.Allowed is blind to the org and metadata axes, so `"*"` is not an
 // isolation barrier and each handler must filter per tenant. Every test here
 // uses that caller (orgEnfFixture / newOrgReadManager: org-scope ORG-ALPHA)
 // and asserts that nothing belonging to an ORG-BETA tenant reaches it.
@@ -26,6 +26,7 @@ import (
 	"github.com/vencil/tenant-api/internal/platform"
 	"github.com/vencil/tenant-api/internal/rbac"
 	"github.com/vencil/tenant-api/internal/statestore"
+	"github.com/vencil/tenant-api/internal/tenantorg"
 	"github.com/vencil/tenant-api/internal/ws"
 )
 
@@ -87,12 +88,11 @@ func TestIssue3123_Events_OtherOrgTenantNotStreamed(t *testing.T) {
 	}
 }
 
-// #3123 item 1: a caller who reads every tenant — open mode, or an unscoped
-// read on "*" — still receives everything, the unmapped state events included.
+// #3123 item 1: a caller who reads every tenant — an unscoped read on "*" —
+// still receives everything, the unmapped state events included.
 func TestIssue3123_Events_UnrestrictedCallerGetsEverything(t *testing.T) {
 	t.Parallel()
 	for name, yaml := range map[string]string{
-		"open_mode":       "",
 		"unscoped_reader": "groups:\n  - name: readers\n    tenants: [\"*\"]\n    permissions: [read]\n",
 	} {
 		yaml := yaml
@@ -162,11 +162,23 @@ func TestIssue3123_PRs_BatchPRNeedsEveryCoveredTenant(t *testing.T) {
 }
 
 // #3123 item 2, after a forge sync: the branch tenant-api/batch/<ts> parsed to
-// TenantID "batch", which any rule matching "batch" can read (here the
-// org-scoped "*" rule in shadow mode, where "batch" is an unlabeled tenant).
+// TenantID "batch", which any rule matching "batch" can read. The rule here
+// reads "batch" on the read plane (tenants "*", no org-scope; the read plane
+// does not bind environments) yet is not every-tenant (environment-restricted),
+// so it is the batch handling, not a scope axis, that must hide the PR.
 func TestIssue3123_PRs_SyncedBatchPRHidden(t *testing.T) {
 	t.Parallel()
-	mgr, torg, _ := newOrgReadManager(t, orgReadRBACYAML, false)
+	mgr := newRBACManager(t, `groups:
+  - name: `+orgReadGroup+`
+    tenants: ["*"]
+    permissions: [read]
+    environments: ["production"]
+`)
+	torg := tenantorg.NewForTest(&tenantorg.Config{})
+	p := &rbac.VerifiedPrincipal{Groups: []string{orgReadGroup}}
+	if !mgr.AllowedInOrgRead(p, "batch", rbac.PermRead, nil) || mgr.PlatformUnrestricted(p, rbac.PermRead) {
+		t.Fatal("premise: the rule must read tenant \"batch\" without reading every tenant")
+	}
 	pr := platform.PRInfo{Number: 78, WebURL: "https://forge.example/pr/78", State: "open", HeadRef: i3123BatchRef}
 	tracker := newTestTracker(t, []platform.PRInfo{pr})
 	tracker.Sync()

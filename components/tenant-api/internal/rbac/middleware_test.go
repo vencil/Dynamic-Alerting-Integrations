@@ -43,15 +43,14 @@ func TestMiddleware_MissingEmail(t *testing.T) {
 	}
 }
 
-func TestMiddleware_OpenModeAllowsRead(t *testing.T) {
+// An empty rule set grants nothing (ADR-027 §7: no open mode): an
+// authenticated read is refused with 403, and the handler never runs.
+func TestMiddleware_EmptyRuleSetDeniesRead(t *testing.T) {
 	t.Parallel()
-	m := NewForTest(&RBACConfig{}) // empty = open mode
+	m := NewForTest(&RBACConfig{}) // empty rule set
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		email := RequestEmail(r)
-		if email != "test@example.com" {
-			t.Errorf("RequestEmail = %q, want %q", email, "test@example.com")
-		}
+		t.Error("handler reached under an empty rule set")
 		w.WriteHeader(http.StatusOK)
 	})
 	mw := m.Middleware(PermRead, nil)(inner)
@@ -61,14 +60,14 @@ func TestMiddleware_OpenModeAllowsRead(t *testing.T) {
 	w := httptest.NewRecorder()
 	mw.ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Errorf("Middleware open-mode read status = %d, want %d", w.Code, http.StatusOK)
+	if w.Code != http.StatusForbidden {
+		t.Errorf("Middleware empty-rule-set read status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 
-func TestMiddleware_OpenModeDeniesWrite(t *testing.T) {
+func TestMiddleware_EmptyRuleSetDeniesWrite(t *testing.T) {
 	t.Parallel()
-	m := NewForTest(&RBACConfig{}) // empty = open mode
+	m := NewForTest(&RBACConfig{}) // empty rule set
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -81,7 +80,7 @@ func TestMiddleware_OpenModeDeniesWrite(t *testing.T) {
 	mw.ServeHTTP(w, req)
 
 	if w.Code != http.StatusForbidden {
-		t.Errorf("Middleware open-mode write status = %d, want %d", w.Code, http.StatusForbidden)
+		t.Errorf("Middleware empty-rule-set write status = %d, want %d", w.Code, http.StatusForbidden)
 	}
 }
 
@@ -169,14 +168,20 @@ func TestMiddleware_GroupsParsing(t *testing.T) {
 
 func TestMiddleware_EmptyGroups(t *testing.T) {
 	t.Parallel()
-	m := NewForTest(&RBACConfig{}) // open mode
+	// MiddlewareAuthenticated attaches the identity without an RBAC decision,
+	// so the header parsing is observable even with an empty rule set (which
+	// grants nothing through Middleware — ADR-027 §7).
+	m := NewForTest(&RBACConfig{})
 
 	var gotGroups []string
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotGroups = RequestGroups(r)
+		if email := RequestEmail(r); email != "test@example.com" {
+			t.Errorf("RequestEmail = %q, want %q", email, "test@example.com")
+		}
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := m.Middleware(PermRead, nil)(inner)
+	mw := m.MiddlewareAuthenticated()(inner)
 
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")

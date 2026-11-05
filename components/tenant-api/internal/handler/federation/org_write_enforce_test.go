@@ -5,7 +5,7 @@ package federation
 // (#3160: an org-scoped "*" admin is refused at the platform-wide writes). Mirrors internal/handler/org_write_enforce_test.go: an
 // org-scoped rule loaded through the PRODUCTION rbac.NewManager path (claim
 // key declared → validateConfig passes → middleware resolves the caller org
-// claim), EnableOrgScopeEnforce, a real tenantorg manager, and side-effect
+// claim), a real tenantorg manager, and side-effect
 // spies so a denied request provably wrote nothing.
 
 import (
@@ -42,7 +42,7 @@ const fedOrgRBACYAML = `groups:
     org-scope: org
 `
 
-// newFedOrgEnforceRBAC builds the enforce-mode org-scoped RBAC manager via
+// newFedOrgEnforceRBAC builds the org-scoped RBAC manager via
 // the production constructor (validateConfig + claim-header declaration).
 func newFedOrgEnforceRBAC(t *testing.T) *rbac.Manager {
 	t.Helper()
@@ -58,7 +58,6 @@ func newFedOrgEnforceRBACFrom(t *testing.T, rbacYAML string) *rbac.Manager {
 	if err != nil {
 		t.Fatalf("rbac.NewManager: %v", err)
 	}
-	mgr.EnableOrgScopeEnforce()
 	return mgr
 }
 
@@ -305,9 +304,9 @@ func TestOrgWriteEnforce_PutTenantFederation(t *testing.T) {
 // fleet's federation whitelist; every tenant's AccountID). Their bar is
 // rbac.PlatformAdminNonOrgScoped — the same bar as the /audit endpoints — NOT
 // the bare Allowed(p, "*", admin), whose org-blind seam lets an ORG-SCOPED
-// "*" admin rule through. This is a BAR, not the org-axis would-deny: an
-// org-scoped "*" admin is refused whether org-scope enforce is on or off, and
-// the refused request writes nothing.
+// "*" admin rule through. This is a BAR, not the org axis: an org-scoped "*"
+// admin is refused whatever its org value, and the refused request writes
+// nothing.
 
 const (
 	fedPlatformAdminGroup = "fed-platform-admins"
@@ -323,15 +322,12 @@ const fedPlatformBarRBACYAML = fedOrgRBACYAML + `  - name: ` + fedPlatformAdminG
     permissions: [read, write, admin]
 `
 
-func newFedPlatformBarRBAC(t *testing.T, enforce bool) *rbac.Manager {
+func newFedPlatformBarRBAC(t *testing.T) *rbac.Manager {
 	t.Helper()
 	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", fedPlatformBarRBACYAML)
 	mgr, err := rbac.NewManager(rbacFile, map[string]string{"org": fedOrgClaimHeader})
 	if err != nil {
 		t.Fatalf("rbac.NewManager: %v", err)
-	}
-	if enforce {
-		mgr.EnableOrgScopeEnforce()
 	}
 	return mgr
 }
@@ -341,9 +337,9 @@ func TestPlatformWriteBar_OrgScopedStarAdminDenied(t *testing.T) {
 
 	const seedPolicy = "whitelist:\n  - metric: " + fedSeedMetric + "\n"
 
-	putPolicy := func(t *testing.T, enforce bool, groups, callerOrg string) (*httptest.ResponseRecorder, *handler.Deps, string) {
+	putPolicy := func(t *testing.T, groups, callerOrg string) (*httptest.ResponseRecorder, *handler.Deps, string) {
 		t.Helper()
-		rbacMgr := newFedPlatformBarRBAC(t, enforce)
+		rbacMgr := newFedPlatformBarRBAC(t)
 		configDir := setupConfigDir(t, map[string]string{statestore.KeyFederationPolicy: seedPolicy})
 		initGitRepo(t, configDir)
 		d := &handler.Deps{
@@ -364,13 +360,13 @@ func TestPlatformWriteBar_OrgScopedStarAdminDenied(t *testing.T) {
 		return w, d, configDir
 	}
 
-	backfill := func(t *testing.T, enforce bool, groups, callerOrg string) (*httptest.ResponseRecorder, string) {
+	backfill := func(t *testing.T, groups, callerOrg string) (*httptest.ResponseRecorder, string) {
 		t.Helper()
 		files := map[string]string{fedOrgTenant + ".yaml": "tenants:\n  " + fedOrgTenant + ": {}\n"}
 		// The helper's plain manager cannot load an org-scoped rule (no claim
 		// header declared); replace it with the claim-aware one under test.
 		d, configDir := newLogsFederationDeps(t, platformAdminRBAC, files)
-		d.RBAC = newFedPlatformBarRBAC(t, enforce)
+		d.RBAC = newFedPlatformBarRBAC(t)
 		d.TenantOrg = newFedOrgTenantOrg()
 		req := httptest.NewRequest("POST", "/api/v1/federation/accounts/backfill", nil)
 		req = fedOrgIdentity(req, callerOrg)
@@ -380,93 +376,84 @@ func TestPlatformWriteBar_OrgScopedStarAdminDenied(t *testing.T) {
 		return w, configDir
 	}
 
-	for _, mode := range []struct {
-		name    string
-		enforce bool
-	}{{"enforce", true}, {"shadow", false}} {
-		t.Run(mode.name, func(t *testing.T) {
+	// The org value must not matter: a member of the only labeled org
+	// is refused exactly like an outsider.
+	for _, callerOrg := range []string{fedOrgMember, fedOrgOutsider} {
+		t.Run("put_federation_policy_org_scoped_403_unchanged_"+callerOrg, func(t *testing.T) {
 			t.Parallel()
-
-			// The org value must not matter: a member of the only labeled org
-			// is refused exactly like an outsider.
-			for _, callerOrg := range []string{fedOrgMember, fedOrgOutsider} {
-				t.Run("put_federation_policy_org_scoped_403_unchanged_"+callerOrg, func(t *testing.T) {
-					t.Parallel()
-					w, d, configDir := putPolicy(t, mode.enforce, fedOrgGroup, callerOrg)
-					if w.Code != http.StatusForbidden {
-						t.Fatalf("status = %d, want 403 for an org-scoped \"*\" admin editing the platform whitelist; body=%s",
-							w.Code, w.Body.String())
-					}
-					if !strings.Contains(w.Body.String(), "non-org-scoped") {
-						t.Errorf("403 body does not name the non-org-scoped bar; body=%s", w.Body.String())
-					}
-					got, err := os.ReadFile(filepath.Join(configDir, statestore.KeyFederationPolicy))
-					if err != nil {
-						t.Fatalf("read policy: %v", err)
-					}
-					if string(got) != seedPolicy {
-						t.Errorf("denied PUT rewrote the policy:\n got %q\nwant %q", got, seedPolicy)
-					}
-					if d.FederationPolicy.IsWhitelisted(fedPutMetric) {
-						t.Errorf("denied PUT made %s live in the whitelist", fedPutMetric)
-					}
-				})
-
-				t.Run("backfill_accounts_org_scoped_403_no_registry_"+callerOrg, func(t *testing.T) {
-					t.Parallel()
-					w, configDir := backfill(t, mode.enforce, fedOrgGroup, callerOrg)
-					if w.Code != http.StatusForbidden {
-						t.Fatalf("status = %d, want 403 for an org-scoped \"*\" admin running the fleet backfill; body=%s",
-							w.Code, w.Body.String())
-					}
-					if !strings.Contains(w.Body.String(), "non-org-scoped") {
-						t.Errorf("403 body does not name the non-org-scoped bar; body=%s", w.Body.String())
-					}
-					if _, ok := readRegistry(t, configDir).Lookup(fedOrgTenant); ok {
-						t.Errorf("denied backfill allocated an account_id for %s", fedOrgTenant)
-					}
-				})
+			w, d, configDir := putPolicy(t, fedOrgGroup, callerOrg)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403 for an org-scoped \"*\" admin editing the platform whitelist; body=%s",
+					w.Code, w.Body.String())
 			}
+			if !strings.Contains(w.Body.String(), "non-org-scoped") {
+				t.Errorf("403 body does not name the non-org-scoped bar; body=%s", w.Body.String())
+			}
+			got, err := os.ReadFile(filepath.Join(configDir, statestore.KeyFederationPolicy))
+			if err != nil {
+				t.Fatalf("read policy: %v", err)
+			}
+			if string(got) != seedPolicy {
+				t.Errorf("denied PUT rewrote the policy:\n got %q\nwant %q", got, seedPolicy)
+			}
+			if d.FederationPolicy.IsWhitelisted(fedPutMetric) {
+				t.Errorf("denied PUT made %s live in the whitelist", fedPutMetric)
+			}
+		})
 
-			// Contrast: a NON-org-scoped "*" admin still passes both bars —
-			// the denials above are the org-scope of the rule, not a missing
-			// permission in the fixture.
-			t.Run("put_federation_policy_non_org_scoped_200_written", func(t *testing.T) {
-				t.Parallel()
-				w, d, configDir := putPolicy(t, mode.enforce, fedPlatformAdminGroup, fedOrgOutsider)
-				if w.Code != http.StatusOK {
-					t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
-				}
-				if !d.FederationPolicy.IsWhitelisted(fedPutMetric) {
-					t.Errorf("IsWhitelisted(%s) = false after an allowed PUT", fedPutMetric)
-				}
-				got, err := os.ReadFile(filepath.Join(configDir, statestore.KeyFederationPolicy))
-				if err != nil {
-					t.Fatalf("read policy: %v", err)
-				}
-				if string(got) == seedPolicy {
-					t.Error("allowed PUT left the seeded policy in place")
-				}
-			})
-			t.Run("backfill_accounts_non_org_scoped_200_allocated", func(t *testing.T) {
-				t.Parallel()
-				w, configDir := backfill(t, mode.enforce, fedPlatformAdminGroup, fedOrgOutsider)
-				if w.Code != http.StatusOK {
-					t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
-				}
-				if _, ok := readRegistry(t, configDir).Lookup(fedOrgTenant); !ok {
-					t.Errorf("allowed backfill did not allocate an account_id for %s", fedOrgTenant)
-				}
-			})
-
-			// Contrast: a caller matching no rule is refused too.
-			t.Run("unmatched_caller_403", func(t *testing.T) {
-				t.Parallel()
-				w, _ := backfill(t, mode.enforce, "unrelated-group", fedOrgMember)
-				if w.Code != http.StatusForbidden {
-					t.Fatalf("status = %d, want 403 for a non-matching caller; body=%s", w.Code, w.Body.String())
-				}
-			})
+		t.Run("backfill_accounts_org_scoped_403_no_registry_"+callerOrg, func(t *testing.T) {
+			t.Parallel()
+			w, configDir := backfill(t, fedOrgGroup, callerOrg)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403 for an org-scoped \"*\" admin running the fleet backfill; body=%s",
+					w.Code, w.Body.String())
+			}
+			if !strings.Contains(w.Body.String(), "non-org-scoped") {
+				t.Errorf("403 body does not name the non-org-scoped bar; body=%s", w.Body.String())
+			}
+			if _, ok := readRegistry(t, configDir).Lookup(fedOrgTenant); ok {
+				t.Errorf("denied backfill allocated an account_id for %s", fedOrgTenant)
+			}
 		})
 	}
+
+	// Contrast: a NON-org-scoped "*" admin still passes both bars —
+	// the denials above are the org-scope of the rule, not a missing
+	// permission in the fixture.
+	t.Run("put_federation_policy_non_org_scoped_200_written", func(t *testing.T) {
+		t.Parallel()
+		w, d, configDir := putPolicy(t, fedPlatformAdminGroup, fedOrgOutsider)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if !d.FederationPolicy.IsWhitelisted(fedPutMetric) {
+			t.Errorf("IsWhitelisted(%s) = false after an allowed PUT", fedPutMetric)
+		}
+		got, err := os.ReadFile(filepath.Join(configDir, statestore.KeyFederationPolicy))
+		if err != nil {
+			t.Fatalf("read policy: %v", err)
+		}
+		if string(got) == seedPolicy {
+			t.Error("allowed PUT left the seeded policy in place")
+		}
+	})
+	t.Run("backfill_accounts_non_org_scoped_200_allocated", func(t *testing.T) {
+		t.Parallel()
+		w, configDir := backfill(t, fedPlatformAdminGroup, fedOrgOutsider)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if _, ok := readRegistry(t, configDir).Lookup(fedOrgTenant); !ok {
+			t.Errorf("allowed backfill did not allocate an account_id for %s", fedOrgTenant)
+		}
+	})
+
+	// Contrast: a caller matching no rule is refused too.
+	t.Run("unmatched_caller_403", func(t *testing.T) {
+		t.Parallel()
+		w, _ := backfill(t, "unrelated-group", fedOrgMember)
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403 for a non-matching caller; body=%s", w.Code, w.Body.String())
+		}
+	})
 }

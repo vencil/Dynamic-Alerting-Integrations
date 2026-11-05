@@ -109,7 +109,7 @@ func TestDiscover_MaliciousTenantIDIsEscapedNotInjected(t *testing.T) {
 	srv := f.server(t)
 
 	d := NewMetricDiscoverer(srv.URL)
-	// In RBAC open mode this crafted id reaches the discoverer. It must
+	// A "*" rule lets this crafted id reach the discoverer. It must
 	// be escaped inside the literal, NOT break out into new matchers.
 	evil := `db-a"} or {job=~".+`
 	if _, _, err := d.Discover(context.Background(), evil, "", 0); err != nil {
