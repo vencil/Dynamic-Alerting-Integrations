@@ -76,7 +76,8 @@ oauth2Proxy:
   # Cookie settings
   cookieSecure: true  # Requires HTTPS; set false only for local dev
   cookieHttpOnly: true
-  cookieSameSite: "Lax"
+  # lower case: oauth2-proxy v7.15.5 refuses "Lax" at start.
+  cookieSameSite: "lax"
   cookieName: "_da_portal_session"
   # Set to false to skip creating the placeholder Secret
   # (use this in production with externally managed secrets)

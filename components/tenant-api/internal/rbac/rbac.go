@@ -73,7 +73,7 @@ type GroupRule struct {
 	// byte-identically to pre-P4. When set, its value is the claim KEY (e.g.
 	// "org-code") whose caller value must be one of the target tenant's orgs
 	// (from _tenant_orgs.yaml, keyed by tenant ID) for the rule to grant that
-	// tenant. The key MUST be declared in --identity-claim-headers
+	// tenant. The key MUST be declared in the oauth2-proxy config
 	// (validateConfig enforces this at load — an org-scope on an undeclared
 	// claim could never match and must fail loud, not silently deny).
 	OrgScope string `yaml:"org-scope,omitempty" json:"org-scope,omitempty"`
@@ -92,7 +92,7 @@ type GroupRule struct {
 //
 // Fail-closed guarantees (enforced by validateConfig at load + defensively
 // at evaluation): an EMPTY match block is a config error, NOT match-all; a
-// claim key not declared in --identity-claim-headers is a load error; a
+// claim key not declared in the oauth2-proxy config is a load error; a
 // principal missing a required claim simply does not match.
 //
 // Namespace honesty (single-trusted-hop MVP): the claim KEY is the
@@ -139,8 +139,8 @@ type Manager struct {
 	scopeAudit ScopeAuditRecorder
 
 	// claimHeaders (ADR-027 / LD-6 P2) declares which trusted-hop header
-	// loads which named claim (claimKey → headerName), parsed from
-	// --identity-claim-headers by ParseClaimHeaders. Middleware hands it to
+	// loads which named claim (claim name → headerName), read from
+	// the oauth2-proxy config (--oauth2-proxy-config, proxyconfig.Load). Middleware hands it to
 	// HeaderResolver so the resolved principal carries the named claims.
 	// nil means no claim axes are declared — the principal's Claims stays
 	// nil and behavior is byte-identical to pre-P2. Installed by NewManager
@@ -187,8 +187,8 @@ func (m *Manager) SetOrgResolver(fn func(tenantID string) []string) { m.orgResol
 // If path is empty, the manager starts with an empty rule set, which grants
 // nothing (ADR-027 §7: there is no open mode).
 //
-// claimHeaders is the claimKey→headerName declaration parsed from
-// --identity-claim-headers (ParseClaimHeaders); nil means no claim axes.
+// claimHeaders is the claim-name→headerName map read from
+// the oauth2-proxy config (proxyconfig.Load); nil means no claim axes.
 // It is a constructor argument — not a setter — because the declared claim
 // keys participate in config validation: the parse closure below captures
 // them, so BOTH the initial load and every hot-reload reject a config whose
@@ -234,7 +234,7 @@ func emptyConfig() *RBACConfig { return &RBACConfig{} }
 // decoder surfaces io.EOF where the previous lenient yaml.Unmarshal returned
 // a zero struct); an empty config grants nothing (ADR-027 §7).
 //
-// declaredClaimKeys is the --identity-claim-headers declaration captured by
+// declaredClaimKeys is the the oauth2-proxy config declaration captured by
 // the NewManager parse closure; validateConfig rejects a config whose
 // match.claims references a key outside it.
 //
@@ -328,7 +328,7 @@ func detectNullMatchBlocks(data []byte) error {
 //   - A match.claims key not present in declaredClaimKeys is an error: a
 //     rule on an undeclared claim key could never match at runtime, and a
 //     silently-dead authorization rule must fail loud instead (same
-//     philosophy as the ParseClaimHeaders charset guards).
+//     philosophy as the proxyconfig claim-name charset guard).
 //   - Empty entries — a blank match.groups name, an empty match.claims
 //     value list, a blank claim value — are errors: they could only arise
 //     from an authoring mistake and would otherwise be silently unmatchable.
@@ -366,7 +366,7 @@ func validateRule(rule *GroupRule, declaredClaimKeys map[string]string) error {
 		}
 	}
 	// Org-scope opt-in (ADR-027 / LD-6 P4): the claim key an org-scoped rule
-	// keys off MUST be declared in --identity-claim-headers, exactly like a
+	// keys off MUST be declared in the oauth2-proxy config, exactly like a
 	// match.claims key. Checked for EVERY rule — independently of the match
 	// block — because a rule can be legacy name-matched AND org-scoped. An
 	// org-scope on an undeclared claim could never carry a value at runtime,
@@ -374,7 +374,7 @@ func validateRule(rule *GroupRule, declaredClaimKeys map[string]string) error {
 	// dead authorization rule must fail loud at load, not deny in silence.
 	if rule.OrgScope != "" {
 		if _, declared := declaredClaimKeys[rule.OrgScope]; !declared {
-			return fmt.Errorf("rbac: rule %q: org-scope key %q is not declared in --identity-claim-headers (an undeclared claim key can never match at runtime; declare the axis or remove org-scope)", rule.Name, rule.OrgScope)
+			return fmt.Errorf("rbac: rule %q: org-scope key %q is not injected by the oauth2-proxy config (--oauth2-proxy-config): a claim no header carries can never match at runtime; inject the claim or remove org-scope", rule.Name, rule.OrgScope)
 		}
 	}
 	if rule.Match == nil {
@@ -390,7 +390,7 @@ func validateRule(rule *GroupRule, declaredClaimKeys map[string]string) error {
 	}
 	for key, values := range rule.Match.Claims {
 		if _, declared := declaredClaimKeys[key]; !declared {
-			return fmt.Errorf("rbac: rule %q: match.claims key %q is not declared in --identity-claim-headers (an undeclared claim key can never match at runtime; declare the axis or remove the condition)", rule.Name, key)
+			return fmt.Errorf("rbac: rule %q: match.claims key %q is not injected by the oauth2-proxy config (--oauth2-proxy-config): a claim no header carries can never match at runtime; inject the claim or remove the condition", rule.Name, key)
 		}
 		if len(values) == 0 {
 			return fmt.Errorf("rbac: rule %q: match.claims[%q] has an empty value list", rule.Name, key)

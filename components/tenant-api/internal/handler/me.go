@@ -19,7 +19,7 @@ type MeResponse struct {
 	AccessibleDomains      []string            `json:"accessible_domains,omitempty"`      // nil = all
 	Permissions            map[string][]string `json:"permissions"`
 	// Claims are the named verified claims carried by the request principal
-	// (ADR-027 / LD-6 P2; declared via --identity-claim-headers). omitempty:
+	// (ADR-027 / LD-6 P2; injected per the oauth2-proxy config). omitempty:
 	// with no claim axes declared (nil map) the key is absent, keeping the
 	// zero-config response body byte-identical to pre-P2. Go serialises map
 	// keys sorted, so the rendering is deterministic.

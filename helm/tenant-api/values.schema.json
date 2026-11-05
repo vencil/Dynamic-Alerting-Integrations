@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft-07/schema#",
   "title": "tenant-api chart values — top-level keys + writeBack",
-  "description": "Catches a misspelled key at `helm template` / `helm install` instead of letting it be silently ignored (#1594). Constrains the TOP-LEVEL key set, the whole writeBack block and the rbac block (additionalProperties:false); every other block is left open. The rbac block admits only _rbacYaml: the scope-axis switches (metadataScopeEnforce, metadataWriteScopeEnforce, orgScopeEnforce) were removed with ADR-027 §7, and a values file still carrying one fails the render instead of being silently ignored (ADR-027 §6). Semantic checks stay in the templates' {{ fail }} guards on purpose, because their messages explain WHY a value is refused: writeBack.mode=\"\" (unset) and every cross-field requirement of the PR modes are refused by tenant-api.writeBackGuard in templates/_helpers.tpl, so the schema admits \"\" and does not type directAcknowledgeNotDelivered (the guard accepts only the boolean true, and says so). Only the KEY sets and writeBack.mode's values are constrained; the other leaves are deliberately untyped (a numeric GitLab project id, an unquoted numeric branch name are legal and the templates handle them).",
+  "description": "Catches a misspelled key at `helm template` / `helm install` instead of letting it be silently ignored (#1594). Constrains the TOP-LEVEL key set, the whole writeBack block, the rbac block and the oauth2Proxy block (additionalProperties:false); every other block is left open. The rbac block admits only _rbacYaml: the scope-axis switches (metadataScopeEnforce, metadataWriteScopeEnforce, orgScopeEnforce) were removed with ADR-027 §7, and a values file still carrying one fails the render instead of being silently ignored (ADR-027 §6). Semantic checks stay in the templates' {{ fail }} guards on purpose, because their messages explain WHY a value is refused: writeBack.mode=\"\" (unset) and every cross-field requirement of the PR modes are refused by tenant-api.writeBackGuard in templates/_helpers.tpl, so the schema admits \"\" and does not type directAcknowledgeNotDelivered (the guard accepts only the boolean true, and says so). Only the KEY sets, writeBack.mode's values and three oauth2Proxy leaves are constrained (clientID a string; claimHeaders claim names and header names to the charsets tenant-api accepts; cookieSameSite one of '', lax, strict, none, the spellings oauth2-proxy accepts); the other leaves are deliberately untyped (a numeric GitLab project id, an unquoted numeric branch name are legal and the templates handle them).",
   "type": "object",
   "additionalProperties": false,
   "properties": {
@@ -17,7 +17,46 @@
       "type": "object"
     },
     "oauth2Proxy": {
-      "type": "object"
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {},
+        "image": {},
+        "provider": {},
+        "clientID": {
+          "type": "string"
+        },
+        "claimHeaders": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[A-Za-z0-9_.-]+$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$"
+          }
+        },
+        "oidcIssuerUrl": {},
+        "scope": {},
+        "gitlabGroups": {},
+        "cookieExpire": {},
+        "cookieRefresh": {},
+        "redirectUrl": {},
+        "emailDomain": {},
+        "cookieSecure": {},
+        "cookieHttpOnly": {},
+        "cookieSameSite": {
+          "enum": [
+            "",
+            "lax",
+            "strict",
+            "none"
+          ]
+        },
+        "cookieName": {},
+        "createSecret": {},
+        "secretName": {}
+      }
     },
     "tenantApi": {
       "type": "object"
@@ -88,9 +127,6 @@
       "type": "object"
     },
     "machineIdentity": {
-      "type": "object"
-    },
-    "identity": {
       "type": "object"
     },
     "humanSocket": {

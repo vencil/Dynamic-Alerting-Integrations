@@ -41,7 +41,7 @@ type scopeCheckArgs struct {
 	ConfigDir      string
 	RBACPath       string // "" = ConfigDir/_rbac.yaml
 	TenantOrgsPath string // "" = ConfigDir/_tenant_orgs.yaml, absent = empty mapping
-	ClaimHeaders   string
+	ProxyConfig    string // the oauth2-proxy config file; "" = proxyconfig.Default()
 }
 
 // scopeConfigProblem is an input the server would refuse.
@@ -88,10 +88,11 @@ func runScopeCheck(a scopeCheckArgs, stdout, stderr io.Writer) int {
 	if a.RBACPath == "-" || a.TenantOrgsPath == "-" {
 		return fail("--kind scope reads files, not standard input")
 	}
-	claims, err := rbac.ParseClaimHeaders(a.ClaimHeaders)
+	ident, err := loadProxyIdentity(a.ProxyConfig)
 	if err != nil {
-		return fail("--identity-claim-headers: %v", err)
+		return fail("--oauth2-proxy-config: %v", err)
 	}
+	claims := ident.ClaimHeaders
 	if _, err := os.ReadDir(a.ConfigDir); err != nil {
 		return fail("--config-dir: %v", err)
 	}

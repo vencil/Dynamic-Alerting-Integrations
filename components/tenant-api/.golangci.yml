@@ -142,6 +142,7 @@ linters:
             - "**/internal/gitops/**"
             - "**/internal/groups/**"
             - "**/internal/platform/**"
+            - "**/internal/proxyconfig/**"
             - "**/internal/rbac/**"
             - "**/internal/statemigrate/**"
             - "**/internal/staterestore/**"

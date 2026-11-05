@@ -34,11 +34,7 @@ const wizardExpectedFixtureCount = 5
 // red is to widen this map rather than fix the wizard.
 func wizardDeclaredClaimKeys(t *testing.T) map[string]string {
 	t.Helper()
-	keys, err := ParseClaimHeaders("org-code=X-Forwarded-Org-Code,region=X-Forwarded-Region")
-	if err != nil {
-		t.Fatalf("ParseClaimHeaders: %v", err)
-	}
-	return keys
+	return map[string]string{"org-code": "X-Forwarded-Org-Code", "region": "X-Forwarded-Region"}
 }
 
 // TestWizardOutputStillParses is the load-bearing tripwire: every committed

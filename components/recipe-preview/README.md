@@ -38,7 +38,7 @@
 | `PREVIEW_TENANT_API_URL` | `http://tenant-api.tenant-api.svc.cluster.local:8080` | PEP 打的 tenant-api base URL（tenant-api 位於專屬 `tenant-api` namespace，#1004）|
 | `PREVIEW_AUTHZ_TIMEOUT` | `5` | authz 探測（打 tenant-api `/access`）的 timeout 秒數；逾時→fail-closed 拒絕（`403`）|
 | `PREVIEW_AUTH_TOKEN_FILE` | (空) | 送給 tenant-api 的 SA token 檔路徑，只用於對方的 machine-identity 稽核、不影響授權。Helm chart 設成 `/var/run/secrets/tokens/tenant-api-token`。空或讀不到 = 不帶 Bearer、照常預覽（讀不到時印 warning）|
-| `PREVIEW_CLAIM_HEADERS` | (空) | 逗號分隔的 header 名稱，有帶就一併轉發給 tenant-api `/access`（例如 org claim，對齊 tenant-api 的 `--identity-claim-headers`）。`X-Forwarded-Email`／`X-Forwarded-Groups`／`Authorization`／`Cookie` 會被忽略並印 warning |
+| `PREVIEW_CLAIM_HEADERS` | (空) | 逗號分隔的 header 名稱，有帶就一併轉發給 tenant-api `/access`（例如 org claim，對齊 tenant-api 的 oauth2-proxy 設定檔注入的 claim header，helm `oauth2Proxy.claimHeaders`）。`X-Forwarded-Email`／`X-Forwarded-Groups`／`Authorization`／`Cookie` 會被忽略並印 warning |
 | `PREVIEW_LISTEN_HOST` | `0.0.0.0` | 監聽位址 |
 | `PREVIEW_LISTEN_PORT` | `8082` | 監聽埠 |
 | `PREVIEW_MAX_CONCURRENCY` | `4` | 同時評估上限（每次評估開一個 `promtool` 子程序）|

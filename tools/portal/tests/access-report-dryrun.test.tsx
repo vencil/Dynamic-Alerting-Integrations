@@ -19,7 +19,7 @@ import AccessReportDryRun from '../src/interactive/tools/access-report-dryrun.js
 import { apiFixture } from './helpers/api-fixture';
 
 const CAVEATS = [
-  "candidate evaluated under THIS deployment's --identity-claim-headers declaration",
+  "candidate evaluated under the claims THIS deployment's oauth2-proxy config injects",
   'org labeling taken from the LIVE _tenant_orgs.yaml (candidate tenant-org input not supported)',
   'a renamed rule appears as removed+added (grants pair by rule name)',
   "presence-implies-membership applies: a grant entry's existence is itself weakly identifying",

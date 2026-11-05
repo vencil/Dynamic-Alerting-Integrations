@@ -23,8 +23,8 @@ const t = window.__t || ((zh, en) => en);
 // R10: show the server string VERBATIM plus a ZH gloss — never rewrite the
 // meaning. An unrecognized caveat string still renders verbatim (gloss omitted).
 const CAVEAT_GLOSS = {
-  "candidate evaluated under THIS deployment's --identity-claim-headers declaration":
-    { zh: '候選以「本部署」的 --identity-claim-headers 宣告求值。' },
+  "candidate evaluated under the claims THIS deployment's oauth2-proxy config injects":
+    { zh: '候選以「本部署」oauth2-proxy 設定檔注入的 claim 求值。' },
   'org labeling taken from the LIVE _tenant_orgs.yaml (candidate tenant-org input not supported)':
     { zh: 'org 標記取自「線上」的 _tenant_orgs.yaml（不支援候選 tenant-org 輸入）。' },
   'a renamed rule appears as removed+added (grants pair by rule name)':

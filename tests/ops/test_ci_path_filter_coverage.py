@@ -2120,6 +2120,8 @@ GATED_LEGS = {
     ("ci.yml", "go-tests-threshold-exporter"),
     ("ci.yml", "go-tests-tenant-api"),
     ("ci.yml", "go-tests-am-inhibit"),
+    # ADR-027 §9 item 9: the oauth2-proxy module's leg, on the `go` filter.
+    ("ci.yml", "go-tests-oauth2-proxy"),
     # #3206: the da-read module's leg, gated on the `go` filter like its siblings.
     ("ci.yml", "go-tests-da-read"),
     ("ci.yml", "go-tests-e2e-bench-receiver"),
@@ -3487,6 +3489,10 @@ GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
         ("go", "scripts/ops/ci_flake_retry.py"),
         ("go", "tests/contract/**"),
         ("go", "scripts/ops/go_test_reads.py"),
+        # go-tests-oauth2-proxy runs tests/oauth2-proxy/image_config_test.sh.
+        ("go", "tests/oauth2-proxy/**"),
+        # ...and builds tenant-api through scripts/ops/go_build.sh (#3425).
+        ("go", "scripts/ops/go_build.sh"),
         ("portal", "scripts/tools/lint/check_portal_bundle_size.py"),
         ("python", "requirements/**"),
         ("python", "scripts/**"),

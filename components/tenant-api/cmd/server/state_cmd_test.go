@@ -433,7 +433,7 @@ func runCheck(t *testing.T, stdin string, args ...string) (int, checkOut, string
 }
 
 func TestConfigCheck(t *testing.T) {
-	t.Setenv("TA_IDENTITY_CLAIM_HEADERS", "")
+	t.Setenv("TA_OAUTH2_PROXY_CONFIG", "")
 	for _, c := range []struct {
 		name, kind, data string
 		extra            []string
@@ -446,7 +446,11 @@ func TestConfigCheck(t *testing.T) {
 		{"rbac duplicate key", "rbac", "groups: []\ngroups: []\n", nil, 1, "unreadable", ""},
 		{"rbac undeclared claim", "rbac", "groups:\n  - name: ops\n    match: {claims: {org: [a]}}\n    tenants: [t]\n    permissions: [read]\n", nil, 1, "rejected", ""},
 		{"rbac declared claim", "rbac", "groups:\n  - name: ops\n    match: {claims: {org: [a]}}\n    tenants: [t]\n    permissions: [read]\n",
-			[]string{"--identity-claim-headers", "org=X-Org"}, 0, "", `"claims":{"org":["a"]}`},
+			[]string{"--oauth2-proxy-config", filepath.Join("testdata", "oauth2-proxy.yaml")}, 0, "", `"claims":{"org":["a"]}`},
+		{"oauth2-proxy good", "oauth2-proxy", "injectRequestHeaders:\n- name: x-forwarded-email\n  values:\n  - claimSource: {claim: email}\n- name: X-Forwarded-Groups\n  values:\n  - claimSource: {claim: groups}\n- name: X-Org\n  values:\n  - claimSource: {claim: org}\n",
+			nil, 0, "", `{"email_header":"X-Forwarded-Email","groups_header":"X-Forwarded-Groups","claim_headers":{"org":"X-Org"}}`},
+		{"oauth2-proxy keeps the client value", "oauth2-proxy", "injectRequestHeaders:\n- name: X-Forwarded-Email\n  preserveRequestValue: true\n  values:\n  - claimSource: {claim: email}\n- name: X-Forwarded-Groups\n  values:\n  - claimSource: {claim: groups}\n",
+			nil, 1, "rejected", ""},
 		{"rbac empty", "rbac", "", nil, 0, "", `{"groups":null}`},
 		{"tenant-orgs good", "tenant-orgs", "tenant_orgs:\n  t-a: [ORG-1]\n  010: []\n", nil, 0, "", `"010":[]`},
 		{"tenant-orgs not a list", "tenant-orgs", "tenant_orgs:\n  t-a: ORG-1\n", nil, 1, "rejected", ""},
@@ -486,15 +490,16 @@ func TestConfigCheck(t *testing.T) {
 func TestConfigCheck_Usage(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "absent.yaml")
 	for name, args := range map[string][]string{
-		"no verb":           nil,
-		"unknown verb":      {"lint"},
-		"no kind":           {"check", "-"},
-		"unknown kind":      {"check", "--kind", "groups", "-"},
-		"no file":           {"check", "--kind", "rbac"},
-		"two files":         {"check", "--kind", "rbac", "a", "b"},
-		"cannot be opened":  {"check", "--kind", "rbac", missing},
-		"is a directory":    {"check", "--kind", "tenant-orgs", t.TempDir()},
-		"bad claim headers": {"check", "--kind", "rbac", "--identity-claim-headers", "org", "-"},
+		"no verb":          nil,
+		"unknown verb":     {"lint"},
+		"no kind":          {"check", "-"},
+		"unknown kind":     {"check", "--kind", "groups", "-"},
+		"no file":          {"check", "--kind", "rbac"},
+		"two files":        {"check", "--kind", "rbac", "a", "b"},
+		"cannot be opened": {"check", "--kind", "rbac", missing},
+		"is a directory":   {"check", "--kind", "tenant-orgs", t.TempDir()},
+		"bad proxy config": {"check", "--kind", "rbac", "--oauth2-proxy-config", filepath.Join("..", "..", "internal", "proxyconfig", "testdata", "prefix.yaml"), "-"},
+		"no proxy config":  {"check", "--kind", "rbac", "--oauth2-proxy-config", missing, "-"},
 	} {
 		var errb bytes.Buffer
 		if code := runConfigCmd(args, strings.NewReader(""), &bytes.Buffer{}, &errb); code != 2 {

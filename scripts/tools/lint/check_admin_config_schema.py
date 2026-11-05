@@ -40,11 +40,15 @@ any of them with PyYAML:
     skip; an embedded block that is itself a Go-template indirection (`{{`) has
     no concrete RBAC here and is deferred. The Helm TEMPLATE configmap-rbac.yaml
     is not selected by the hook (its rendered RBAC is the values `_rbacYaml`).
-  * The declared identity claims an RBAC config is checked against come from the
-    Helm values' `identity.claimHeaders` (read with `da-crdecode`, joined as the
-    deployment template renders them: `key=Header` pairs, keys sorted, `,`) and
-    are passed as `--identity-claim-headers` — for the embedded RBAC and for a
-    standalone `_rbac.yaml` alike: a check inside the repo has no running server.
+  * The identity claims an RBAC config is checked against come from the Helm
+    values' `oauth2Proxy.claimHeaders` (read with `da-crdecode`). tenant-api
+    learns them from the oauth2-proxy config file the chart renders (ADR-027
+    §2), so the check writes the injectRequestHeaders the chart renders from
+    them (email, groups, then each claim, keys sorted —
+    helm/tenant-api/templates/_helpers.tpl tenant-api.oauth2ProxyConfig) to a
+    temporary file and passes it as `--oauth2-proxy-config` — for the embedded
+    RBAC and for a standalone `_rbac.yaml` alike: a check inside the repo has
+    no running server.
 
   Known loss against the PyYAML schema check this replaced: a value the decode
   folds away is no longer seen by the schema — `org-scope: ""` decodes to the
@@ -87,6 +91,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -105,8 +110,9 @@ _REPO_ROOT = os.path.normpath(os.path.join(_THIS_DIR, "..", "..", ".."))
 _DEFAULT_SCHEMA_DIR = os.path.join(_REPO_ROOT, "docs", "schemas")
 #: The Helm values the declared identity claims are read from (ADR-036 §12).
 _DEFAULT_HELM_VALUES = os.path.join(_REPO_ROOT, "helm", "tenant-api", "values.yaml")
-#: Where in those values the claims are declared (deployment.yaml renders it).
-CLAIMS_KEY_PATH = ("identity", "claimHeaders")
+#: Where in those values the claims are declared (_helpers.tpl renders them
+#: into the oauth2-proxy config file).
+CLAIMS_KEY_PATH = ("oauth2Proxy", "claimHeaders")
 
 # Admin meta-config basename STEM -> schema filename (under the schema dir).
 # Each schema mirrors the Go struct named in its `description`. Extend both this
@@ -228,9 +234,11 @@ def crdecode_documents(path: str) -> list:
 
 
 def claim_declaration(values_path: str) -> str:
-    """`--identity-claim-headers` as the chart renders it from *values_path*'s
-    `identity.claimHeaders`: `key=Header` pairs, keys sorted, joined by `,`
-    (helm/tenant-api/templates/deployment.yaml). Empty when none is declared."""
+    """The oauth2-proxy config the chart renders from *values_path*'s
+    `oauth2Proxy.claimHeaders`, as far as tenant-api reads it: the
+    injectRequestHeaders list (X-Forwarded-Email, X-Forwarded-Groups, then one
+    header per claim, keys sorted as helm's `range` sorts them). Empty when no
+    claim is declared: tenant-api then reads no claim, as with no file."""
     docs = crdecode_documents(values_path)
     claims = None
     for doc in docs:
@@ -238,12 +246,21 @@ def claim_declaration(values_path: str) -> str:
             value, missing = _navigate(doc, CLAIMS_KEY_PATH)
             if missing is None:
                 claims = value
-    if claims is None:
+    if not claims:
+        if claims is not None and not isinstance(claims, dict):
+            raise _CallerError(f"{values_path}: {'.'.join(CLAIMS_KEY_PATH)} is not a map of "
+                               "claim name to header name")
         return ""
     if not isinstance(claims, dict) or not all(isinstance(v, str) for v in claims.values()):
         raise _CallerError(f"{values_path}: {'.'.join(CLAIMS_KEY_PATH)} is not a map of "
-                           "claim key to header name")
-    return ",".join(f"{k}={claims[k]}" for k in sorted(claims))
+                           "claim name to header name")
+    headers = [("X-Forwarded-Email", "email"), ("X-Forwarded-Groups", "groups")]
+    headers += [(claims[k], k) for k in sorted(claims)]
+    lines = ["injectRequestHeaders:"]
+    for name, claim in headers:
+        lines += [f"- name: {json.dumps(name)}", "  values:",
+                  f"  - claimSource: {{claim: {json.dumps(claim)}}}"]
+    return "\n".join(lines) + "\n"
 
 
 def config_check(binary: str, kind: str, where: str, *, path: str | None = None,
@@ -252,11 +269,36 @@ def config_check(binary: str, kind: str, where: str, *, path: str | None = None,
     (config, None) when tenant-api reads it, (None, problem) when it refuses it.
     Anything else — a failing or missing binary, a document that is not
     `tenant-api.config-check/v1` (a tenant-api older than `config check`) — is
-    a caller error."""
+    a caller error. For `rbac`, *claims* is claim_declaration()'s oauth2-proxy
+    config ("" = none)."""
     cmd = [binary, "config", "check", "--kind", kind]
-    if kind == "rbac":
-        cmd += ["--identity-claim-headers", claims]
-    cmd.append(os.path.abspath(path) if path is not None else "-")
+    try:
+        tmp_dir = tempfile.TemporaryDirectory()
+    except OSError as exc:
+        raise _CallerError(f"{where}: cannot create a temporary directory for the "
+                           f"oauth2-proxy config: {exc}") from exc
+    with tmp_dir as tmp:
+        if kind == "rbac":
+            # Always passed, so a TA_OAUTH2_PROXY_CONFIG in the caller's
+            # environment cannot change what is checked; "" = no claims.
+            proxy_config = ""
+            if claims:
+                proxy_config = os.path.join(tmp, "oauth2-proxy.yaml")
+                try:
+                    with open(proxy_config, "w", encoding="utf-8", newline="\n") as f:
+                        f.write(claims)
+                    os.chmod(proxy_config, 0o600)
+                except OSError as exc:
+                    raise _CallerError(f"{where}: cannot write the temporary oauth2-proxy "
+                                       f"config {proxy_config}: {exc}") from exc
+            cmd += ["--oauth2-proxy-config", proxy_config]
+        cmd.append(os.path.abspath(path) if path is not None else "-")
+        return _run_config_check(cmd, binary, kind, where, data)
+
+
+def _run_config_check(cmd: list[str], binary: str, kind: str, where: str,
+                      data: bytes | None) -> tuple[object, dict | None]:
+    """Runs *cmd* (a `config check`) and reads its document."""
     older = ("(this needs a tenant-api that has `config check`; build one from this "
              "checkout: make tenant-api-build)")
     try:
@@ -463,7 +505,7 @@ def main() -> int:
                         help=f"tenant-api to run `config check` with (default: ${TENANT_API_ENV}, "
                              "else tenant-api on $PATH)")
     parser.add_argument("--helm-values", default=_DEFAULT_HELM_VALUES,
-                        help="Helm values whose identity.claimHeaders declare the claims an "
+                        help="Helm values whose oauth2Proxy.claimHeaders declare the claims an "
                              "RBAC config is checked against (default: helm/tenant-api/values.yaml)")
     parser.add_argument("--ci", action="store_true",
                         help="CI mode (accepted for symmetry with sibling lints; no behaviour change)")

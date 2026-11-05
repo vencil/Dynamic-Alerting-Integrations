@@ -1,0 +1,10 @@
+# Email and groups headers carry each other's claim.
+injectRequestHeaders:
+- name: X-Forwarded-Email
+  values:
+  - claimSource:
+      claim: groups
+- name: X-Forwarded-Groups
+  values:
+  - claimSource:
+      claim: email

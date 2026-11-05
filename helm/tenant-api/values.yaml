@@ -34,8 +34,33 @@ oauth2Proxy:
     #    Renovate (#902 L3) bumps tag + digest together.
     digest: "sha256:8498b0d0ef0a7b29686414000a08aee467f02d0299c9ed1e006a8f33fc017916"
     pullPolicy: IfNotPresent
+  # ADR-027 §2, §10: oauth2-proxy runs with a structured config file
+  # (--alpha-config) rendered from the values below (provider, header
+  # injection, listener); the same file is mounted into tenant-api, which
+  # reads from it which header carries email, groups and each claim
+  # (templates/configmap-oauth2-proxy.yaml). No value written into that file
+  # (provider, clientID, scope, oidcIssuerUrl, gitlabGroups, claimHeaders) may
+  # hold '$': the render fails. Values passed as flags (redirectUrl, cookie*)
+  # are not in the file and not checked here.
   # Provider: github | google | oidc | gitlab
   provider: github
+  # ⛔ Replace before deploying: the OAuth client ID, like the placeholder
+  # Secret's values (createSecret below). It is written into the config file
+  # (a ConfigMap — the client ID is not a secret; it is in every login
+  # redirect). Since ADR-027 §10 the OAUTH2_PROXY_CLIENT_ID key of
+  # secretName is no longer read; the client secret still comes from
+  # secretName's OAUTH2_PROXY_CLIENT_SECRET key, mounted as a file into
+  # oauth2-proxy only. An empty value fails the render.
+  clientID: "REPLACE_WITH_CLIENT_ID"
+  # Extra identity claims: claim name → the header oauth2-proxy injects it
+  # in, e.g. {org: X-Auth-Request-Org}. The claim name is what _rbac.yaml's
+  # match.claims and org-scope refer to. oauth2-proxy strips any client copy
+  # of each header before injecting it. Only OIDC-type providers (oidc,
+  # gitlab) have extra claims; the github provider has none (ADR-027 §7).
+  # email and groups are always injected (X-Forwarded-Email,
+  # X-Forwarded-Groups) and must not be listed. A header name uses letters,
+  # digits and single '-'; tenant-api refuses to start otherwise.
+  claimHeaders: {}
   # OIDC issuer URL — REQUIRED for `provider: oidc` and `provider: gitlab`
   # (self-hosted GitLab CE: the bare instance URL, e.g. https://gitlab.acme.internal).
   # Empty (default) → github provider, flag not rendered. See docs/integration/gitlab-ce-sso.md.
@@ -61,12 +86,15 @@ oauth2Proxy:
   # Cookie settings
   cookieSecure: true  # Requires HTTPS; set false only for local dev
   cookieHttpOnly: true
-  cookieSameSite: "Lax"
+  # One of "", lax, strict, none — lower case: oauth2-proxy v7.15.5 refuses
+  # any other spelling at start (the earlier default "Lax" did).
+  cookieSameSite: "lax"
   cookieName: "_tenant_api_session"
   # Set to false to skip creating the placeholder Secret
   # (use this in production with externally managed secrets)
   createSecret: true
-  # Secret name (must be pre-created; see secret-oauth2proxy.yaml template)
+  # Secret name (must be pre-created; see secret-oauth2proxy.yaml template).
+  # Keys read: OAUTH2_PROXY_COOKIE_SECRET, OAUTH2_PROXY_CLIENT_SECRET.
   secretName: oauth2-proxy-secrets
 
 # tenant-api application settings
@@ -425,32 +453,10 @@ machineIdentity:
   # projected token with `audience: tenant-api` to match.
   audience: tenant-api
 
-# ── Identity claim headers (ADR-027 / LD-6 P2, issue #962) ──────────────────
-# Named verified claims carried on the request principal. Each entry maps a
-# CLAIM KEY (e.g. org — the P3 match evaluation will consume it) to the
-# TRUSTED-HOP HTTP HEADER carrying its value. Which header exists is decided
-# by the deployment's login entrypoint (e.g. oauth2-proxy alpha-config
-# `injectRequestHeaders`); wiring that transport side is a follow-up PR.
-# Rendered as a single `TA_IDENTITY_CLAIM_HEADERS=key=Header,...` env value
-# (the variable --identity-claim-headers reads; env so `kubectl exec ...
-# tenant-api config check` sees it too, ADR-036 §12) with keys sorted (helm
-# map range iterates key-sorted).
-# ⚠ TRUST BOUNDARY: every header listed here MUST be injected by the trusted
-# hop and MUST NOT be client-forgeable (strip-and-set at the proxy) — the
-# same trust boundary as X-Forwarded-Groups. In-platform backstop: a claim
-# header arriving with MORE than one line is refused (claim not loaded,
-# WARN logged), so an append-not-overwrite proxy misconfig cannot enable
-# first-value hijacking. P2 is carriage-only: the
-# platform does not interpret claim semantics and no authz behavior changes.
-# Default {} = the seam is OFF: render and runtime behavior stay
-# byte-identical to pre-P2.
-identity:
-  claimHeaders: {}
-
 # ADR-027 D2-B: human-plane Unix domain socket (GHSA-3g2h-rf85-5rrv L7 root-cause
 # series). When enabled, tenant-api serves the SAME router on a second listener
-# bound to a pod-internal Unix socket, and the oauth2-proxy sidecar points its
-# --upstream at that socket instead of http://localhost:8080. Human (browser)
+# bound to a pod-internal Unix socket, and the oauth2-proxy sidecar's upstream
+# (in its config file) is that socket instead of http://localhost:8080. Human (browser)
 # traffic then reaches tenant-api over the socket — a physically pod-internal hop
 # that cannot be reached from the network — instead of the network 8080 plane.
 # The listener a request arrives on is stamped into its context (connection-
@@ -629,6 +635,9 @@ podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65534
   runAsGroup: 65534
+  # ⛔ Keep fsGroup when oauth2Proxy.enabled: the client-secret file is
+  # mounted 0440 and oauth2-proxy (pod-level uid/gid) reads it through this
+  # group; without it oauth2-proxy cannot read clientSecretFile and exits.
   fsGroup: 65534
   seccompProfile:
     type: RuntimeDefault

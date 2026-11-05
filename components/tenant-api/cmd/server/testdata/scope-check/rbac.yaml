@@ -1,5 +1,5 @@
 # Fixture for `tenant-api config check --kind scope` (scope_check_test.go).
-# Read with --identity-claim-headers org=X-Auth-Request-Org (rule 2's org-scope).
+# Read with --oauth2-proxy-config ../oauth2-proxy.yaml (it injects the org claim rule 2's org-scope reads).
 # Copied into the test's tree as _rbac.yaml; checked in under another name so
 # the admin-config schema lint (which reads every _rbac.yaml without that
 # claim declaration) does not judge it.

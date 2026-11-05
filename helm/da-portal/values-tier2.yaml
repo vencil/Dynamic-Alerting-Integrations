@@ -86,7 +86,8 @@ oauth2Proxy:
   # Cookie 設定：Tier 2 應使用 HTTPS（生產環境必須）
   cookieSecure: true
   cookieHttpOnly: true
-  cookieSameSite: "Lax"
+  # lower case: oauth2-proxy v7.15.5 refuses "Lax" at start.
+  cookieSameSite: "lax"
   cookieName: "_da_portal_session"
   # Tier 2: true — create Secret from Helm values (dev/staging)
   # 生產環境建議禁用此項，改用 External Secrets Operator

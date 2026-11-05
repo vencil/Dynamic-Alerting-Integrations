@@ -75,8 +75,8 @@ type Deps struct {
 	// Open-mode (no _rbac.yaml) returns "allow all" from Allowed.
 	RBAC *rbac.Manager
 
-	// ClaimHeaders is the claimKey→headerName declaration parsed from
-	// --identity-claim-headers (rbac.ParseClaimHeaders), the SAME map the
+	// ClaimHeaders is the claim-name→headerName map read from
+	// the oauth2-proxy config (proxyconfig.Load), the SAME map the
 	// RBAC manager was constructed with (ADR-027 / LD-6 P7). Handlers that
 	// validate a candidate _rbac.yaml (rbac.ParseCandidateConfig) need it so
 	// the candidate is checked against the identity axes this deployment

@@ -274,7 +274,7 @@ func TestDryRun_AuthorizedCaller400s(t *testing.T) {
 		{"missing rbac_yaml", dryrunTenantLabeled, "", `{"candidate":{}}`, "", "candidate.rbac_yaml is required"},
 		{"candidate invalid — undeclared org-scope key", dryrunTenantLabeled, "",
 			dryRunBody(t, "groups:\n  - name: dryrun-x\n    tenants: [\"*\"]\n    permissions: [read]\n    org-scope: team\n"),
-			string(errcode.CandidateInvalid), "not declared in --identity-claim-headers"},
+			string(errcode.CandidateInvalid), "is not injected by the oauth2-proxy config"},
 		{"candidate invalid — unknown field", dryrunTenantLabeled, "",
 			dryRunBody(t, "groups:\n  - name: dryrun-x\n    tenants: [\"*\"]\n    permissions: [read]\n    typo-field: x\n"),
 			string(errcode.CandidateInvalid), "candidate _rbac.yaml rejected"},

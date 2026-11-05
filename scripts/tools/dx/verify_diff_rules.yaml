@@ -94,6 +94,16 @@ dir_rules:
     suite: tests/alertmanager-inhibit
     runner: "make test-am-inhibit"
     justification: "#1132 inhibit 語意 gate 為 Go-only 套件（無 test_*.py，pytest 會空收集）；Go 僅 container 內可用"
+  - name: oauth2-proxy-self
+    source: "tests/oauth2-proxy/**"
+    suite: tests/oauth2-proxy
+    runner: "make dc-go-test MOD=oauth2-proxy"
+    justification: "ADR-027 §9 第 9 項：以 oauth2-proxy 自己的程式庫載入 tenant-api chart 的設定檔，Go-only 套件、無 test_*.py；Go 僅 container 內可用"
+  - name: oauth2-proxy-input-chart
+    source: "helm/tenant-api/**"
+    suite: tests/oauth2-proxy
+    runner: "make dc-go-test MOD=oauth2-proxy"
+    justification: "chart_test.go render 這個 chart（含 values.yaml）並以 oauth2-proxy 程式庫載入它產生的設定檔；version_test.go 讀 values.yaml 的 oauth2Proxy.image.tag"
   - name: da-read-self
     source: "components/da-read/**"
     suite: components/da-read

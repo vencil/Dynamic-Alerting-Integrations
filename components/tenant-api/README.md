@@ -305,7 +305,7 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 
 | 變數 | 預設 | 說明 |
 |------|------|------|
-| `TA_IDENTITY_CLAIM_HEADERS` | (空) | `claim=Header-Name` 逗號分隔,宣告從哪些受信任 header 讀取具名 claim。空 = 不讀 |
+| `TA_OAUTH2_PROXY_CONFIG` | (空) | 同一個 pod 的 oauth2-proxy 所用的結構化設定檔(`--alpha-config`)路徑;tenant-api 讀其中的 `injectRequestHeaders` 決定 email、group 與各 claim 由哪個 header 帶來,形狀不符即拒絕啟動(見「身分 header 由 oauth2-proxy 設定檔決定」)。空 = 不讀額外 claim,email／group 取自 `X-Forwarded-Email`／`X-Forwarded-Groups` |
 | `TA_MACHINE_IDENTITY_AUDIT` | `false` | 以 TokenReview 稽核呼叫端的 ServiceAccount token;只記錄,不影響授權。需要 in-cluster config |
 | `TA_MACHINE_IDENTITY_AUDIENCE` | `tenant-api` | 上述稽核要求的 audience |
 | `TA_MACHINE_IDENTITY_ISSUER` | (空) | 稽核的 issuer 允許清單(逗號分隔);空 = 全部交給 TokenReview |
@@ -375,7 +375,7 @@ Fail-closed 護欄:
 - principal **缺少**規則引用的 claim、或值不在允許清單 → 該規則不命中(缺 claim fail-closed)。
 - **空的 `match: {}`**(或條件全空)→ 載入錯誤(空 match ≠ match-all)。
 - **null 的 `match:`**(裸 `match:`、`match: null`、或子條件全被註解掉)→ 載入錯誤:此形式在結構上與「沒有 `match:`」無法區分,若放行會靜默退化成 legacy group-name 規則、丟失 claim 收斂,故一律 fail-loud(要 legacy 行為就整段移除 `match:` key)。
-- `match.claims` 引用**未在 `--identity-claim-headers` 宣告**的 key → 載入錯誤(未宣告的 claim key 在執行期永遠不可能命中——沉默的死規則必須 fail-loud)。
+- `match.claims` 引用 **oauth2-proxy 設定檔沒有注入**的 claim → 載入錯誤(沒有 header 帶的 claim 在執行期永遠不可能命中——沉默的死規則必須 fail-loud)。
 
 ⚠️ **嚴格解析(breaking-for-invalid-configs)**:`_rbac.yaml` 改以 strict mode 解析——**未知欄位(如 `mach:` 打錯字)是載入錯誤**,不再被靜默忽略(靜默忽略會讓 match 規則退化成比作者意圖更寬的 group-name 規則 = 提權面)。合法的既有 config 完全不受影響;無效 config **啟動即 FATAL**,hot-reload 則**保留 last-good** 並記 WARN。
 
@@ -403,15 +403,28 @@ tenant_orgs:
   team-beta-01:  []                       # 已建但未指派(unlabeled)
 ```
 
-- **opt-in**:沒有 `org-scope:` 的規則不受 org 軸影響(如平台管理員 `tenants: ["*"]` 照樣看全部、不受影響)。`org-scope:` 引用的 claim key **必須在 `--identity-claim-headers` 宣告**,否則載入錯誤。
+- **opt-in**:沒有 `org-scope:` 的規則不受 org 軸影響(如平台管理員 `tenants: ["*"]` 照樣看全部、不受影響)。`org-scope:` 引用的 claim **必須由 oauth2-proxy 設定檔注入**,否則載入錯誤。
 - **fail-closed**:使用者無該 org claim、或 org 不在租戶清單 → 該規則不命中;**未指派組織(空清單)的租戶**在 org-scoped 規則下不可見、不可寫(升級前以 `tenant-api config check` 列出)。
 - **判定面涵蓋(P4a+P4b+P4c)**:org 軸作用於 list 可見性(`GET /api/v1/tenants`,P4a)、per-tenant 寫入 / admin 授權(PUT tenant、custom-alerts、batch、group batch、federation token 簽發 / 清單 / 撤銷,P4b)、與 read-by-id 單租戶讀取(GET `/{id}`、`/effective`、`/metrics`、`/access`、`/federation`、POST `/diff`、`/validate`,P4c),外加 group 成員 / PR / task 清單的 collection 讀取過濾(P4c);三面同一套判定,不存在「list 藏、寫入開、直讀開」的中間態。read-by-id 的 org gate 在 rbac middleware(handler 讀檔前),故 cross-org 與不存在同回 403(不洩漏存在性);`/access` 為 recipe-preview PEP 契約(#657),org-deny 一律 403(existence-blind,不回 404)。
 - **設定變更順序**:先落 `_tenant_orgs.yaml`(補齊 org 對應)、後落引用 org-scope 的 `_rbac.yaml`——兩者是各自 hot-reload 的檔,反序會有一個輪詢窗內 org-scoped 規則對尚未標記的租戶全 deny(fail-closed、非洩漏,但徒增 would-deny 噪音)。
 - `_tenant_orgs.yaml` 走 strict 解析(typo=載入錯誤),org **僅**從此檔以租戶 ID 反查、**絕不**讀租戶自己的 `_metadata`(組織是授權邊界、非租戶可改屬性)。
 
-### 身分 claims 縫
+### 身分 header 由 oauth2-proxy 設定檔決定
 
-`--identity-claim-headers`(或 `TA_IDENTITY_CLAIM_HEADERS`;helm `--set identity.claimHeaders.<claimKey>=<Header-Name>`)以逗號分隔的 `claimKey=Header-Name` 對宣告「哪個 trusted-hop 標頭 → 哪個具名 claim」,例如 `org=X-Auth-Request-Org,region=X-Auth-Request-Region`。設定後請求 principal 會載運這些具名 claims,`GET /api/v1/me` 回應多出 `claims` 欄位;claims 在 `_rbac.yaml` 的 `match:` 規則引用時**參與授權**(見上節「RBAC match 規則」;ADR-027 / LD-6 P2+P3),未被任何規則引用的 claim 只載運、不影響決策。標頭與 `X-Forwarded-Groups` 同一信任邊界:必須由 trusted hop(oauth2-proxy)注入且對外 strip-and-set,不可被 client 偽造;空值 / 缺席的標頭不會成為 claim;同名標頭出現**多行**時該 claim 直接拒載並記警告(平台側 backstop:防 proxy 誤用 append 時的 first-value 劫持——Go `Header.Get` 只取第一行)。預設空 = 縫關閉,行為與 JSON 輸出完全不變;格式錯誤(缺 `=`、空 key、空 header 名、重複 key、key 超出 `[A-Za-z0-9_.-]`、header 名超出 `[A-Za-z0-9_-]`——含 `=`/空白的名字真實請求永遠帶不到,寧可啟動就擋)啟動即失敗(fail-loud)。
+tenant-api 信任哪些 header,由同一個 pod 的 oauth2-proxy 實際使用的結構化設定檔決定,不另設名單([ADR-027 §2](../../docs/adr/027-tenant-api-caller-identity.md))。helm chart 把同一份檔案掛進兩個容器,以 `--oauth2-proxy-config`(或 `TA_OAUTH2_PROXY_CONFIG`)指給 tenant-api;tenant-api 啟動時讀其中的 `injectRequestHeaders`:取 `email` claim 的 header 是 email、取 `groups` 的是 group,其餘每個 header 帶一個以 claim 名稱為 key 的額外 claim。`GET /api/v1/me` 回應的 `claims` 欄位就是這些額外 claim;`_rbac.yaml` 的 `match.claims` 與 `org-scope:` 以同一個 claim 名稱引用它們(見上節「RBAC match 規則」)。
+
+oauth2-proxy 會先清除 client 帶來的同名 header 再注入,所以這些 header 不能被 client 偽造;同一個 claim 有多個值時 oauth2-proxy 以逗號接成一行——group 依逗號拆開,額外 claim 原樣當作一個值比對(多值 claim 因此不會命中單一值條件,fail-closed)。空值不會成為 claim;同名 header 出現多行時該 claim 拒載並記警告。
+
+只接受意義不含糊的設定檔,其餘一律拒絕啟動(`config check --kind oauth2-proxy` 判定這份檔時拒絕為 exit 1;`--kind rbac|scope` 經 `--oauth2-proxy-config` 讀到不合格的檔時為 exit 2,因為 server 用它根本不會啟動):
+
+- 每個注入的 header 恰好一個值,且取自一個 session claim:不加前綴(`prefix`)、不轉成 basic auth、不用固定值(`secretSource`)、不保留 client 值(`preserveRequestValue: true`)、不關閉 header 名稱正規化(`InsecureSkipHeaderNormalization: true`)。
+- `email` 與 `groups` 各恰好由一個 header 注入;其他 claim 至多一個 header,且不得是 token 或時間戳(`access_token`、`id_token`、`refresh_token`、`created_at`、`expires_on`)。header 名只用英數與單個 `-`(oauth2-proxy 清除 client 值時把 `_` 當成 `-`,Go 不會)。
+- oauth2-proxy 會先展開設定檔裡的環境變數參照、且不分大小寫比對欄位名稱,所以**檔案含 `$`**、或欄位名稱不是 oauth2-proxy 的拼法,一律拒絕;YAML anchor／alias／merge key 與多文件檔也拒絕。
+- 這一版 email 與 group 只能是 `X-Forwarded-Email`／`X-Forwarded-Groups`:request log 與 rate limit 仍直接讀 `X-Forwarded-Email`,改讀身分物件之後才放寬。
+
+沒有設定檔時(本機試用、契約測試這類不經 oauth2-proxy 的拓撲)不讀任何額外 claim,email／group 取自 `X-Forwarded-Email`／`X-Forwarded-Groups`。
+
+`tenant-api config check --kind oauth2-proxy FILE` 以 server 的同一個解析函式判定設定檔,印出 email、group 與各 claim 的 header,或拒絕的理由。
 
 **GitHub provider 不提供額外 claim**:oauth2-proxy 只有 OIDC 類的 provider(含 GitLab)會從簽章 token 取出額外 claim,GitHub provider 不會。所以 GitHub 部署的授權範圍只能由 group 決定——`org-scope:` 與 `match.claims` 在這類部署沒有 claim 可比對,一律不命中(ADR-027 §7)。
 
@@ -540,14 +553,14 @@ docker run -i --rm <部署中的 tenant-api 映像> state show --from - < tenant
 - 不讀執行中 server 的熱重載快照：熱重載失敗時 server 保留上一版，讀快照會把壞掉的紀錄藏起來。
 - 結束碼：0 已印出（包括帶 problem 的紀錄）、1 store 或備份讀不到、2 用法錯誤。
 
-`config check --kind rbac|tenant-orgs FILE|-` 以 server 讀 `_rbac.yaml`／`_tenant_orgs.yaml` 的同一個解析函式判定，印出 `{"schema": "tenant-api.config-check/v1", "kind", "config", "problem"}`；RBAC 另依 `--identity-claim-headers`（或 `TA_IDENTITY_CLAIM_HEADERS`）宣告的 claim 檢查。空檔讀得了（空設定）。結束碼：0 讀得了、1 拒收、2 用法錯誤或輸入打不開。
+`config check --kind rbac|tenant-orgs FILE|-` 以 server 讀 `_rbac.yaml`／`_tenant_orgs.yaml` 的同一個解析函式判定，印出 `{"schema": "tenant-api.config-check/v1", "kind", "config", "problem"}`；RBAC 另依 `--oauth2-proxy-config`（或 `TA_OAUTH2_PROXY_CONFIG`）設定檔注入的 claim 檢查；`--kind oauth2-proxy` 判定那份設定檔本身。空檔讀得了（空設定）。結束碼：0 讀得了、1 拒收、2 用法錯誤或輸入打不開。
 
-`config check --kind scope --config-dir DIR [--rbac PATH] [--tenant-orgs PATH] [--identity-claim-headers ...]` 是升級前的範圍軸離線檢查（[ADR-027 §7](../../docs/adr/027-tenant-api-caller-identity.md)）：同時讀 RBAC 設定（預設 `DIR/_rbac.yaml`）、組織對應（預設 `DIR/_tenant_orgs.yaml`；這個預設檔不存在時與 server 相同，視為所有租戶都沒有組織）與 `DIR` 下的租戶設定，對每條範圍軸列出「有範圍限制的規則 × 該規則套得到、卻沒有標記的租戶」。各範圍軸一律強制，所以每一筆都是升級後該規則不再授予的租戶。
+`config check --kind scope --config-dir DIR [--rbac PATH] [--tenant-orgs PATH] [--oauth2-proxy-config PATH]` 是升級前的範圍軸離線檢查（[ADR-027 §7](../../docs/adr/027-tenant-api-caller-identity.md)）：同時讀 RBAC 設定（預設 `DIR/_rbac.yaml`）、組織對應（預設 `DIR/_tenant_orgs.yaml`；這個預設檔不存在時與 server 相同，視為所有租戶都沒有組織）與 `DIR` 下的租戶設定，對每條範圍軸列出「有範圍限制的規則 × 該規則套得到、卻沒有標記的租戶」。各範圍軸一律強制，所以每一筆都是升級後該規則不再授予的租戶。
 
 - 判定與 server 相同：租戶清單與每個租戶的環境、domain 用 `GET /api/v1/tenants` 的同一個讀法取得；規則套不套得到用同一個租戶 pattern 比對；`environments`／`domains` 非空而租戶該欄為空、或規則有 `org-scope` 而租戶在組織對應裡沒有任何組織（不在檔內與列了空清單都算），即為未標記。已標記但不在規則允許範圍內的租戶不在此列。
 - 印出一份 JSON（`schema: tenant-api.scope-check/v1`）：`findings` 每筆是 `{axis, rule, rule_index, tenant}`，`axis` 為 `environment`／`domain`／`org`；`tenant_problems` 列出環境與 domain 讀不到的租戶（`reason` 是該列的 `config_error`，或 `metadata_incomplete`），它們的 metadata 軸不判定，不會被靜默略過；`config_problems` 列出 server 會拒收的 RBAC 設定、組織對應或租戶清單（例如同一租戶有兩個檔）；另有 `summary`。結果只依設定、不依流量，各清單已排序。
 - 結束碼：0 沒有任何 finding 與 problem、1 有 finding 或 problem、2 用法錯誤或輸入打不開（`DIR` 或 RBAC 設定不存在、明確指定的 `--tenant-orgs` 不存在）。
-- 有 `org-scope` 的規則需要以 `--identity-claim-headers`（或 `TA_IDENTITY_CLAIM_HEADERS`）宣告部署用的 claim，否則 RBAC 設定會像在 server 一樣被拒收。
+- 有 `org-scope` 的規則需要以 `--oauth2-proxy-config`（或 `TA_OAUTH2_PROXY_CONFIG`）指向部署用的 oauth2-proxy 設定檔，否則它引用的 claim 沒有 header 注入，RBAC 設定會像在 server 一樣被拒收。
 - **升級前用要升級到的新版 image 跑**，讓判定與新版 server 一致，例如 `docker run --rm -v "$PWD/conf.d:/conf.d:ro" <新版 tenant-api 映像> config check --kind scope --config-dir /conf.d`。CI 對 repo 內的範例設定（`try-local/seed/conf.d`）也跑它。
 
 ### dir 模式的外部寫入者必須拿 flock

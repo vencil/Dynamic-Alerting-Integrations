@@ -81,7 +81,7 @@ _IDENTITY_HEADERS = ("X-Forwarded-Email", "X-Forwarded-Groups")
 # of any org-LABELED tenant is denied (the claim is absent → the org axis can't
 # match) even for a legitimate same-org caller. So forward the gateway-injected
 # org-claim header(s) alongside identity. Comma-separated header NAMES, matching
-# tenant-api's --identity-claim-headers header names; default empty = no-op
+# the claim headers tenant-api's oauth2-proxy config injects; default empty = no-op
 # (nothing labeled yet / claim transport not configured). Only NAMED, present
 # headers are forwarded — never arbitrary client headers (the confused-deputy
 # guard is preserved: these are gateway-injected identity attributes, not

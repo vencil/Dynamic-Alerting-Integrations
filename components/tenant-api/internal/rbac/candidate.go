@@ -15,7 +15,7 @@ import "github.com/vencil/tenant-api/internal/configwatcher"
 // candidate that this function accepts is byte-for-byte the config a
 // hot-reload would accept, and one it rejects would be rejected there too —
 // the fidelity the dry-run's verdict depends on. declaredClaimKeys is the
-// deployment's --identity-claim-headers declaration (ParseClaimHeaders);
+// deployment's oauth2-proxy config (proxyconfig.Load);
 // passing anything else would validate the candidate against an identity
 // axis the deployment does not run.
 func ParseCandidateConfig(data []byte, declaredClaimKeys map[string]string) (*RBACConfig, error) {

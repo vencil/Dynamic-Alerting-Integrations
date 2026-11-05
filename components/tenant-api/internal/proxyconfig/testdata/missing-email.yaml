@@ -1,0 +1,5 @@
+injectRequestHeaders:
+- name: X-Forwarded-Groups
+  values:
+  - claimSource:
+      claim: groups

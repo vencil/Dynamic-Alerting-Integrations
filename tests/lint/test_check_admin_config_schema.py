@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -119,8 +120,8 @@ def _readers(values: str = _REAL_HELM_VALUES) -> _Readers:
 
 
 def _values_declaring(d: str, claims: dict[str, str]) -> str:
-    """A Helm values file declaring *claims* in identity.claimHeaders."""
-    lines = ["identity:", "  claimHeaders:" + ("" if claims else " {}")]
+    """A Helm values file declaring *claims* in oauth2Proxy.claimHeaders."""
+    lines = ["oauth2Proxy:", "  claimHeaders:" + ("" if claims else " {}")]
     lines += [f"    {k}: {v}" for k, v in claims.items()]
     return _write(d, "claims-values.yaml", "\n".join(lines) + "\n")
 
@@ -266,16 +267,37 @@ class TestRealFiles:
 # --- identity claims come from the Helm values -----------------------------
 
 class TestClaimDeclaration:
-    def test_rendered_like_the_deployment_template(self, tmp):
+    def test_rendered_like_the_chart_template(self, tmp):
         values = _values_declaring(tmp, {"region": "X-R", "org": "X-Auth-Request-Org"})
-        assert claim_declaration(values) == \
-            "org=X-Auth-Request-Org,region=X-R"
+        doc = yaml.safe_load(claim_declaration(values))
+        assert doc["injectRequestHeaders"] == [
+            {"name": h, "values": [{"claimSource": {"claim": c}}]}
+            for h, c in [("X-Forwarded-Email", "email"), ("X-Forwarded-Groups", "groups"),
+                         ("X-Auth-Request-Org", "org"), ("X-R", "region")]]
+
+    @pytest.mark.skipif(shutil.which("helm") is None, reason="helm CLI not on PATH")
+    def test_same_headers_as_the_chart_renders(self, tmp):
+        """The file the check writes injects what the chart's oauth2-proxy
+        config injects for the same values (_helpers.tpl)."""
+        claims = {"region": "X-R", "org": "X-Auth-Request-Org"}
+        values = _values_declaring(tmp, claims)
+        chart = os.path.join(_REPO, "helm", "tenant-api")
+        baseline = os.path.join(_REPO, "tests", "helm", "tenant_api_render_baseline.yaml")
+        cmd = ["helm", "template", "t", chart, "-f", baseline, "--show-only",
+               "templates/configmap-oauth2-proxy.yaml"]
+        for k, v in claims.items():
+            cmd += ["--set", f"oauth2Proxy.claimHeaders.{k}={v}"]
+        out = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8",
+                             check=True, timeout=60).stdout
+        rendered = yaml.safe_load(yaml.safe_load(out)["data"]["oauth2-proxy.yaml"])
+        ours = yaml.safe_load(claim_declaration(values))
+        assert ours["injectRequestHeaders"] == rendered["injectRequestHeaders"]
 
     def test_repo_values_declare_none(self):
         assert claim_declaration(_REAL_HELM_VALUES) == ""
 
     def test_not_a_map_is_a_caller_error(self, tmp):
-        values = _write(tmp, "v.yaml", "identity:\n  claimHeaders: [org]\n")
+        values = _write(tmp, "v.yaml", "oauth2Proxy:\n  claimHeaders: [org]\n")
         with pytest.raises(_CallerError):
             claim_declaration(values)
 

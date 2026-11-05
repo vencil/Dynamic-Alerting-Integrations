@@ -484,6 +484,11 @@ jobs:
       - name: Lint alertmanager-inhibit
         working-directory: tests/alertmanager-inhibit
         run: golangci-lint run ./...
+      # ADR-027 §9 item 9: the module that loads the tenant-api chart's
+      # oauth2-proxy config with oauth2-proxy's own code.
+      - name: Lint oauth2-proxy
+        working-directory: tests/oauth2-proxy
+        run: golangci-lint run ./...
       # #3206: da-read, the module that keeps the alertmanager dependency out
       # of the exporter module; it ships in the da-tools image.
       - name: Lint da-read

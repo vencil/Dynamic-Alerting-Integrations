@@ -367,3 +367,100 @@ every tenant-api target.
 {{- end -}}
 {{- $port -}}
 {{- end }}
+
+{{/*
+ADR-027 §2, §10: where the oauth2-proxy structured config file lives. The
+same ConfigMap is mounted at the same path in the oauth2-proxy and the
+tenant-api containers, so "what the proxy injects" and "what tenant-api
+trusts" are one file. tests/helm/test_oauth2_proxy_alpha_config.py pins it.
+*/}}
+{{/*
+The ConfigMap is immutable and named after a hash of its content: both
+containers read the file only at start, so an in-place edit (kubectl edit, or
+kubelet refreshing a mounted ConfigMap) followed by a restart of ONE container
+would leave tenant-api trusting headers the running oauth2-proxy does not
+inject and strip. A content change is a new object, and the pod rolls with it.
+*/}}
+{{- define "tenant-api.oauth2ProxyConfigMap" -}}
+{{ include "tenant-api.name" . }}-oauth2-proxy-{{ include "tenant-api.oauth2ProxyConfig" . | sha256sum | trunc 10 }}
+{{- end -}}
+{{- define "tenant-api.oauth2ProxyConfigKey" -}}
+oauth2-proxy.yaml
+{{- end -}}
+{{- define "tenant-api.oauth2ProxyConfigDir" -}}
+/etc/oauth2-proxy/config
+{{- end -}}
+{{- define "tenant-api.oauth2ProxyConfigPath" -}}
+{{ include "tenant-api.oauth2ProxyConfigDir" . }}/{{ include "tenant-api.oauth2ProxyConfigKey" . }}
+{{- end -}}
+{{/* The client secret file, mounted into the oauth2-proxy container only. */}}
+{{- define "tenant-api.oauth2ProxyClientSecretDir" -}}
+/etc/oauth2-proxy/client-secret
+{{- end -}}
+
+{{/*
+The oauth2-proxy structured config (--alpha-config). Built as a dict and
+rendered with toYaml, so every value is quoted as YAML needs.
+
+  upstreamConfig        one upstream: tenant-api's human Unix socket when
+                        humanSocket.enabled, else its TCP port
+  injectRequestHeaders  X-Forwarded-Email ← email, X-Forwarded-Groups ←
+                        groups, plus one header per oauth2Proxy.claimHeaders
+                        entry (claim name → header name); the client's copy
+                        of each is stripped (preserveRequestValue defaults to
+                        false)
+  providers             one provider; the client secret from a file; the
+                        claimHeaders claims listed in additionalClaims
+  server                the listener (was --http-address)
+*/}}
+{{- define "tenant-api.oauth2ProxyConfig" -}}
+{{- $o := .Values.oauth2Proxy -}}
+{{- $upstream := printf "http://localhost:%s" (include "tenant-api.apiPort" .) -}}
+{{- if .Values.humanSocket.enabled -}}
+{{- $upstream = printf "unix://%s" .Values.humanSocket.path -}}
+{{- end -}}
+{{- $headers := list
+      (dict "name" "X-Forwarded-Email" "values" (list (dict "claimSource" (dict "claim" "email"))))
+      (dict "name" "X-Forwarded-Groups" "values" (list (dict "claimSource" (dict "claim" "groups")))) -}}
+{{- $seen := dict "x-forwarded-email" "email" "x-forwarded-groups" "groups" -}}
+{{- range $claim, $header := $o.claimHeaders -}}
+{{- if has $claim (list "email" "groups") -}}
+{{- fail (printf "oauth2Proxy.claimHeaders.%s: email and groups are always injected (X-Forwarded-Email / X-Forwarded-Groups); list only extra claims" $claim) -}}
+{{- end -}}
+{{- if has $claim (list "access_token" "id_token" "refresh_token" "created_at" "expires_on") -}}
+{{- fail (printf "oauth2Proxy.claimHeaders.%s: a session token or timestamp is not an identity claim; tenant-api refuses it" $claim) -}}
+{{- end -}}
+{{- $key := lower (toString $header) -}}
+{{- if hasKey $seen $key -}}
+{{- fail (printf "oauth2Proxy.claimHeaders.%s: header %s already carries %s (header names match ignoring case)" $claim (toString $header) (index $seen $key)) -}}
+{{- end -}}
+{{- $_ := set $seen $key $claim -}}
+{{- $headers = append $headers (dict "name" (toString $header) "values" (list (dict "claimSource" (dict "claim" $claim)))) -}}
+{{- end -}}
+{{- $provider := dict
+      "id" $o.provider
+      "provider" $o.provider
+      "clientID" (required "oauth2Proxy.clientID is required: with the structured config file the OAuth client ID is a value, not the OAUTH2_PROXY_CLIENT_ID Secret key (ADR-027 §10)" $o.clientID)
+      "clientSecretFile" (printf "%s/client-secret" (include "tenant-api.oauth2ProxyClientSecretDir" .)) -}}
+{{- with $o.scope -}}
+{{- $_ := set $provider "scope" . -}}
+{{- end -}}
+{{- with $o.oidcIssuerUrl -}}
+{{- $_ := set $provider "oidcConfig" (dict "issuerURL" .) -}}
+{{- end -}}
+{{- with $o.gitlabGroups -}}
+{{- $_ := set $provider "gitlabConfig" (dict "group" .) -}}
+{{- end -}}
+{{- /* oauth2-proxy copies a claim into the session only when the provider
+     lists it in additionalClaims (providers/provider_data.go); without this
+     every claim header would be injected empty. */ -}}
+{{- with $o.claimHeaders -}}
+{{- $_ := set $provider "additionalClaims" (keys . | sortAlpha) -}}
+{{- end -}}
+{{- $config := dict
+      "upstreamConfig" (dict "upstreams" (list (dict "id" "tenant-api" "path" "/" "uri" $upstream)))
+      "injectRequestHeaders" $headers
+      "providers" (list $provider)
+      "server" (dict "bindAddress" "0.0.0.0:4180") -}}
+{{- toYaml $config -}}
+{{- end -}}

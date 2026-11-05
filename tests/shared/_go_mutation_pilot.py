@@ -49,9 +49,11 @@ MODULE "tenant-api" — `internal/rbac/rbac.go` (LD-6 permission core)
   - scopeFieldPasses  — metadata-axis field match (1 mut)
   - metadataMatches   — pure env/domain membership (1 mut)
 
-MODULE "tenant-api" — `internal/rbac/context.go` + `.../principal.go`
+MODULE "tenant-api" — `internal/rbac/context.go`
   - parseForwardedGroups — X-Forwarded-Groups splitter, empty-entry drop (1 mut)
-  - ParseClaimHeaders — fail-loud --identity-claim-headers parser (2 muts)
+
+MODULE "tenant-api" — `internal/proxyconfig/proxyconfig.go`
+  - parseHeader       — oauth2-proxy injectRequestHeaders entry (ADR-027 §2) (2 muts)
 
 MODULE "tenant-api" — `internal/federation/token/manager.go`
   - audienceFor       — capability→JWT audience (cross-plane replay guard) (1 mut)
@@ -69,7 +71,8 @@ benchmarks, not the parse/merge primitives).
 Kill targets, tenant-api: the round-3-reorganised rbac test files
 (match_eval_test.go for tenantMatches/permCovers, org_scope_test.go for
 scopeSetPasses, metadata_scope_test.go for scopeFieldPasses/metadataMatches,
-principal_test.go for parseForwardedGroups/ParseClaimHeaders) and the
+principal_test.go for parseForwardedGroups, proxyconfig_test.go for
+parseHeader) and the
 token manager_test.go for audienceFor. These are in-package tests, so
 the runner scopes to `./internal/rbac/...` / `./internal/federation/token/...`.
 Every tenant-api mutation models a permission-WIDENS-unexpectedly (fail-open)
@@ -553,33 +556,33 @@ MUTATIONS: list[Mutation] = [
         kill_test="TestHeaderResolver_NoGroups",
     ),
 
-    # ── ParseClaimHeaders (principal.go) — fail-loud config parser ────────
+    # ── parseHeader (proxyconfig.go) — ADR-027 §2 identity-header shape ──
     Mutation(
-        target_file="internal/rbac/principal.go",
-        test_target="./internal/rbac/...",
+        target_file="internal/proxyconfig/proxyconfig.go",
+        test_target="./internal/proxyconfig/...",
         module="tenant-api",
-        label="ParseClaimHeaders: drop duplicate-key guard (later pair silently overwrites)",
-        fn_name="ParseClaimHeaders",
-        # bug class: a duplicate claim key would silently take its last value
-        # instead of failing loud, so the operator's declared axis is not the
-        # one enforced. Kill: TestParseClaimHeaders_MalformedIsError "duplicate key".
-        old="if _, dup := out[key]; dup {",
-        new="if false {",
-        kill_test="TestParseClaimHeaders_MalformedIsError",
+        label="parseHeader: accept preserveRequestValue: true (client value kept)",
+        fn_name="parseHeader",
+        # bug class: oauth2-proxy would keep the client's own copy of an
+        # identity header next to the injected value, so a client could send
+        # its own email or groups. Kill: TestLoad_RefusesAmbiguousShapes
+        # "preserve-request-value.yaml".
+        old="} else if keep {",
+        new="} else if keep && false {",
+        kill_test="TestLoad_RefusesAmbiguousShapes",
     ),
     Mutation(
-        target_file="internal/rbac/principal.go",
-        test_target="./internal/rbac/...",
+        target_file="internal/proxyconfig/proxyconfig.go",
+        test_target="./internal/proxyconfig/...",
         module="tenant-api",
-        label="ParseClaimHeaders: drop header-name charset guard (unreachable claim axis accepted)",
-        fn_name="ParseClaimHeaders",
-        # bug class: a header name a request can never carry (spaces, embedded
-        # '=') would be accepted, leaving the claim axis silently absent at
-        # runtime — a rule keyed on it can never match yet loads clean. Kill:
-        # TestParseClaimHeaders_MalformedIsError "space in header name".
-        old="if !headerNameRe.MatchString(header) {",
+        label="parseHeader: drop header-name charset guard ('_' names read differently)",
+        fn_name="parseHeader",
+        # bug class: oauth2-proxy strips a client's copy treating '_' as '-',
+        # Go does not, so a name with '_' is read differently by the two.
+        # Kill: TestParse_Refusals "underscore name".
+        old="if !headerNameRe.MatchString(name) {",
         new="if false {",
-        kill_test="TestParseClaimHeaders_MalformedIsError",
+        kill_test="TestParse_Refusals",
     ),
 
     # ── audienceFor (federation/token/manager.go) — cross-plane replay ────
