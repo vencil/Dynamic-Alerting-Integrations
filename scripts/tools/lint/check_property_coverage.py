@@ -307,25 +307,49 @@ _TEST_REF = re.compile(r"(tests/[\w./-]+\.py)::(\w+)(?:::(\w+))?")
 
 def _dangling_test_ref(repo_root: Path, path: str, first: str,
                        second: Optional[str]) -> Optional[str]:
-    """Why `path::first[::second]` does not name a test, or None if it does."""
+    """Why `path::first[::second]` does not name a test pytest collects, or
+    None if it does (pyproject: `python_functions = test_*`, `python_classes =
+    Test*`): a top-level `test_*` function, a top-level `Test*`
+    class, or a `test_*` method of one — its own or inherited from a class
+    of the same file (pytest collects inherited methods under the subclass).
+    A base imported from elsewhere cannot be read here, so a method only it
+    defines is reported; a misspelled name must not pass."""
     test_file = repo_root / path
     if not test_file.is_file():
         return f"{path} does not exist"
     try:
         tree = ast.parse(test_file.read_text(encoding="utf-8"))
+    except OSError as exc:
+        return f"{path} cannot be read ({exc})"
     except (SyntaxError, ValueError) as exc:
         return f"{path} does not parse ({exc})"
-    top = {n.name: n for n in tree.body
-           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    defs = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+    top = {n.name: n for n in tree.body if isinstance(n, defs)}
     if first not in top:
         return f"{path} defines no {first!r}"
+    owner = top[first]
+    collected = (owner.name.startswith("Test") if isinstance(owner, ast.ClassDef)
+                 else owner.name.startswith("test_"))
+    if not collected:
+        return f"{path}::{first} is not a test pytest collects"
     if second is None:
         return None
-    owner = top[first]
-    members = {n.name for n in getattr(owner, "body", [])
-               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    if not isinstance(owner, ast.ClassDef):
+        return f"{path}::{first} is a function, not a class holding {second!r}"
+    members: set = set()
+    pending, seen = [owner], set()
+    while pending:
+        node = pending.pop()
+        if id(node) in seen:
+            continue
+        seen.add(id(node))
+        members |= {n.name for n in node.body if isinstance(n, defs)}
+        pending.extend(top[b.id] for b in node.bases
+                       if isinstance(b, ast.Name) and isinstance(top.get(b.id), ast.ClassDef))
     if second not in members:
         return f"{path} defines no {first}::{second}"
+    if not second.startswith("test_"):
+        return f"{path}::{first}::{second} is not a test pytest collects"
     return None
 
 

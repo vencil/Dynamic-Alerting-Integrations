@@ -283,6 +283,66 @@ class TestValidateManifest:
         assert len(dangling) == 1, issues
         assert why in dangling[0].detail and "excluded_fn" in dangling[0].detail
 
+    def test_an_inherited_test_method_resolves(self, fake_repo):
+        """pytest collects a base class's test method under the subclass."""
+        repo, _, test = fake_repo
+        _write(repo / "tests" / "shared" / "test_helpers.py", """
+            class Base:
+                def test_behavior(self):
+                    pass
+
+            class TestConcrete(Base):
+                pass
+        """)
+        issues = mod.validate_manifest(self._with_reason(
+            repo, "pinned by tests/shared/test_helpers.py::TestConcrete::test_behavior"),
+            repo, test)
+        assert issues == [], issues
+
+    @pytest.mark.parametrize("ref,why", [
+        ("tests/shared/test_helpers.py::_helper", "not a test pytest collects"),
+        ("tests/shared/test_helpers.py::Helper", "not a test pytest collects"),
+        ("tests/shared/test_helpers.py::TestThing::_setup", "not a test pytest collects"),
+        ("tests/shared/test_broken.py::test_x", "does not parse"),
+    ])
+    def test_a_reference_to_something_pytest_does_not_collect_is_flagged(
+            self, fake_repo, ref, why):
+        repo, _, test = fake_repo
+        _write(repo / "tests" / "shared" / "test_helpers.py", """
+            def _helper():
+                pass
+
+            class Helper:
+                pass
+
+            class TestThing:
+                def _setup(self):
+                    pass
+        """)
+        (repo / "tests" / "shared" / "test_broken.py").write_text(
+            "def test_x(:\n    pass\n", encoding="utf-8")
+        issues = mod.validate_manifest(self._with_reason(repo, f"pinned by {ref}"), repo, test)
+        dangling = [i for i in issues if i.kind == "dangling-test-ref"]
+        assert len(dangling) == 1, issues
+        assert why in dangling[0].detail
+
+    def test_an_unreadable_test_file_is_flagged_not_a_crash(self, fake_repo, monkeypatch):
+        repo, _, test = fake_repo
+        target = repo / "tests" / "shared" / "test_helpers.py"
+        _write(target, "def test_it():\n    pass\n")
+        real = Path.read_text
+
+        def deny(self, *a, **kw):
+            if self == target:
+                raise PermissionError(13, "Permission denied", str(self))
+            return real(self, *a, **kw)
+        monkeypatch.setattr(Path, "read_text", deny)
+        issues = mod.validate_manifest(self._with_reason(
+            repo, "pinned by tests/shared/test_helpers.py::test_it"), repo, test)
+        dangling = [i for i in issues if i.kind == "dangling-test-ref"]
+        assert len(dangling) == 1, issues
+        assert "cannot be read" in dangling[0].detail
+
     def test_non_string_reason_flagged(self, fake_repo):
         repo, _, test = fake_repo
         manifest = {
