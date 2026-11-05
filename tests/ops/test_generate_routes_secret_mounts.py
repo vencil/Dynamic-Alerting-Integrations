@@ -97,8 +97,32 @@ def test_order_and_duplicates_do_not_change_the_document():
 
 def test_a_config_without_file_fields_gives_an_empty_list():
     doc = required_mounts({"receivers": [{"name": "r", "webhook_configs": [
-        {"url": "https://hooks.example.com/x"}]}], "templates": ["/etc/am/*.tmpl"]}, ROOT)
+        {"url": "https://hooks.example.com/x"}]}]}, ROOT)
     assert doc["mounts"] == [] and doc["other_files"] == []
+
+
+@pytest.mark.parametrize("template,mounts,other", [
+    # literal name, literal key: both listed
+    (f"{ROOT}/tmpl/alerts.tmpl", [{"name": "tmpl", "keys": ["alerts.tmpl"]}], []),
+    # literal name, glob key: the Secret must be mounted, no key recorded
+    (f"{ROOT}/tmpl/*.tmpl", [{"name": "tmpl", "keys": []}], []),
+    (f"{ROOT}/tmpl/a?.tmpl", [{"name": "tmpl", "keys": []}], []),
+    # a glob in the name segment cannot name a Secret
+    (f"{ROOT}/*/alerts.tmpl", [], [f"{ROOT}/*/alerts.tmpl"]),
+    (f"{ROOT}/tm[pq]l/alerts.tmpl", [], [f"{ROOT}/tm[pq]l/alerts.tmpl"]),
+    # outside the root, or another shape under it
+    ("/etc/am/*.tmpl", [], ["/etc/am/*.tmpl"]),
+    (f"{ROOT}/tmpl/sub/x.tmpl", [], [f"{ROOT}/tmpl/sub/x.tmpl"]),
+])
+def test_top_level_templates_are_listed(template, mounts, other):
+    doc = required_mounts({"templates": [template]}, ROOT)
+    assert doc["mounts"] == mounts and doc["other_files"] == other
+
+
+def test_a_template_glob_key_does_not_hide_a_literal_key_of_the_same_secret():
+    doc = required_mounts({"templates": [f"{ROOT}/tmpl/*.tmpl"], "receivers": [
+        {"name": "r", "webhook_configs": [{"url_file": f"{ROOT}/tmpl/hook"}]}]}, ROOT)
+    assert doc["mounts"] == [{"name": "tmpl", "keys": ["hook"]}]
 
 
 def test_values_are_never_in_the_document():
@@ -376,3 +400,15 @@ def test_an_o_named_dash_is_a_file_not_stdout(tmp_path):
     assert r.returncode == 0, r.stderr
     assert json.loads(r.stdout)["schema"] == MOUNT_LIST_SCHEMA
     assert (tmp_path / "-").is_file()
+
+
+def test_the_base_configs_templates_reach_the_list_through_the_cli(tmp_path):
+    d = _tree(tmp_path, {"t-a": _PLAIN})
+    base = tmp_path / "base.yml"
+    base.write_text(f"templates:\n  - {ROOT}/am-templates/*.tmpl\n" + _BASE, encoding="utf-8")
+    mounts = tmp_path / "mounts.json"
+    r = _run(tmp_path, d, "--output-alertmanager", "--base-config", str(base),
+             "-o", str(tmp_path / "am.yml"), "--secret-mounts-out", str(mounts))
+    assert r.returncode == 0, r.stderr
+    doc = json.loads(mounts.read_text(encoding="utf-8"))
+    assert {"name": "am-templates", "keys": []} in doc["mounts"]
