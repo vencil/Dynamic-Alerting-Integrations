@@ -654,13 +654,14 @@ tenants:
 **Generated Alertmanager Configuration**
 
 ```bash
-python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
-# Output includes per-tenant inhibit_rules section, merged into Alertmanager config
+python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ \
+  --output-alertmanager --base-config alertmanager.yml --dry-run
+# Previews the merged alertmanager.yml: the per-tenant inhibit_rules are merged into your base
 ```
 
 ### 2.9 Alert Routing (Config-Driven Routing)
 
-Tenants can manage notification destinations, grouping strategies, and timing controls via the `_routing` section. The platform tool `generate_alertmanager_routes.py` reads all tenant YAML files and generates Alertmanager route + receiver + inhibit_rules YAML fragment.
+Tenants can manage notification destinations, grouping strategies, and timing controls via the `_routing` section. The platform tool `generate_alertmanager_routes.py` reads all tenant YAML files, generates Alertmanager route + receiver + inhibit_rules, and merges them into a base Alertmanager config (replacing only what the generator owns, [#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)).
 
 > supports six receiver types: webhook / email / slack / teams / rocketchat / pagerduty. Receivers are structured objects (`{type, ...fields}`), validated by `generate_alertmanager_routes.py` for required fields and corresponding Alertmanager config generation.
 
@@ -699,26 +700,26 @@ Silent Mode naturally bypasses routing: Alertmanager's `inhibit_rules` intercept
 **Tool Chain**
 
 ```bash
-# Preview mode
+# Preview mode (merged into your base, nothing written)
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
-  --config-dir conf.d/ --dry-run
+  --config-dir conf.d/ --output-alertmanager --base-config alertmanager.yml --dry-run
 
 # CI validation (--validate writes nothing; with -o it is refused, exit 2)
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --validate \
   --policy .github/custom-rule-policy.yaml
 
-# Generate fragment
+# Write the merged alertmanager.yml (K8s GitOps: --output-configmap instead)
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
-  --config-dir conf.d/ -o alertmanager-routes.yaml \
-  --policy .github/custom-rule-policy.yaml
+  --config-dir conf.d/ --output-alertmanager --base-config alertmanager.yml \
+  -o alertmanager.new.yml --policy .github/custom-rule-policy.yaml
 
 # All-in-one merge into Alertmanager ConfigMap + reload
 python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --apply --yes
 ```
 
-`--validate` checks YAML validity + webhook domain allowlist (exit 0/1 for CI consumption); with `--strict`, domain-policy (ADR-007) violations escalate from WARN to ERROR and fail the run (CI runs `--validate --strict`). `--apply` directly merges fragment into Alertmanager ConfigMap and triggers reload. Output supports six receiver types: webhook, email, slack, teams, rocketchat, pagerduty.
+Exactly one mode flag (`--validate`, `--output-alertmanager`, `--output-configmap`, `--apply`); none is exit 2. The former fragment mode is gone: appending the fragment after your own routes, as its header said, could not put the platform routes (Watchdog and the rest) first. `--validate` checks YAML validity + webhook domain allowlist (exit 0/1 for CI consumption); with `--strict`, domain-policy (ADR-007) violations escalate from WARN to ERROR and fail the run (CI runs `--validate --strict`). The three output modes share one merge: only what the generator owns is replaced (`tenant-*` / `platform-enforced*` receivers, the four platform receivers and their routes, the root fallthroughs); the platform routes come first, your own routes follow in their order, the tenant routes come last; it can be re-run, and feeding the output back in as the base gives the same result. `--apply` does the same merge on the cluster's config as the base and triggers reload. ⚠️ The v2.9.0 image still has the fragment mode and no `--output-alertmanager`, and its `--apply` replaces `route.routes` whole <!-- image-caveat: v2.9.0 --> Output supports six receiver types: webhook, email, slack, teams, rocketchat, pagerduty.
 
 ### 2.10 Per-rule Routing Overrides 
 

@@ -165,8 +165,10 @@ class _Readers:
 
     def generator(self, d):
         out = d + ".routes.yaml"
-        return self._file_out([sys.executable, _GEN, "--config-dir", d, "-o", out], d, out,
-                              ok=(0, 1))
+        # --output-alertmanager (#1211 gap 2): the routing merged onto the
+        # built-in base — the generated part of it is what the probe reads.
+        return self._file_out([sys.executable, _GEN, "--config-dir", d,
+                               "--output-alertmanager", "-o", out], d, out, ok=(0, 1))
 
     def custom_alert_compiler(self, d):
         out = d + ".pack.yaml"

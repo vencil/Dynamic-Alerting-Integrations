@@ -224,15 +224,15 @@ def test_merge_exempts_generated_rules_but_not_lookalikes(degraded):
                                      'metric_group=~".+"'],
                  "equal": ["tenant", "metric_group"]}
     # this run generated nothing, so an earlier run's rule is kept
-    render._merge_routes_receivers_inhibits(
+    render.merge_generated(
         {"inhibit_rules": [dict(generated)]}, [], [], [])
     # this run's own generated rule
-    render._merge_routes_receivers_inhibits(
+    render.merge_generated(
         {"inhibit_rules": []}, [], [], [dict(generated)])
     lookalike = {"source_matchers": ['tenant=~".+"', 'metric_group=~".+"'],
                  "target_matchers": ['alertname="CronJobLastRunFailed"']}
     with pytest.raises(_VALIDATE.PlatformProbeSetUnverifiable):
-        render._merge_routes_receivers_inhibits(
+        render.merge_generated(
             {"inhibit_rules": [lookalike]}, [], [], [])
 
 

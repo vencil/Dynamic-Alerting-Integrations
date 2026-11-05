@@ -236,6 +236,10 @@ FINDING_KINDS: dict[str, str] = {
         "A tenant's served page-mode custom alerts fall to the custom-alerts "
         "firehose receiver; the line says whether that receiver has an "
         "integration or could not be checked.",
+    "watchdog_undelivered":
+        "The assembled config's watchdog-heartbeat receiver has no "
+        "integration, so the Watchdog heartbeat reaches no dead-man's switch; "
+        "an error under --strict only on the operator's own base (#1211).",
     "custom_alert_delivery_unchecked":
         "The tenants' served custom alerts could not be read (da-guard "
         "failing), so their delivery was not checked; the verdict is unchanged.",

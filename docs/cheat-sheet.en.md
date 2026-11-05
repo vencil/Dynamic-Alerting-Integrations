@@ -85,7 +85,7 @@ da-tools command quick reference. Full docs at [cli-reference.en.md](cli-referen
   - `threshold-recommend` — Threshold recommendation (P50/P95/P99)
 
 - **Config Generation Tools**
-  - `generate-routes` — Tenant YAML → Alertmanager fragment
+  - `generate-routes` — Tenant YAML → merged into your Alertmanager config (`--output-alertmanager` / `--output-configmap` / `--apply`; `--validate` only checks)
   - `patch-config` — ConfigMap partial update
   - `generator-service` — Generator container service (judges tenant-api writes)
 

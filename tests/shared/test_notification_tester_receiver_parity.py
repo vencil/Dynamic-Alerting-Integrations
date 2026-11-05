@@ -11,8 +11,13 @@ generator rendered one.
 Each row writes a conf.d tree, runs BOTH tools as subprocesses, and compares
 what they say about receivers:
 
-* the generator (render mode, `--dry-run`): the `receivers:` of its fragment
-  — how many, and every `http(s)://` endpoint they carry;
+* the generator (`--output-alertmanager --dry-run`, #1211 gap 2): the
+  tenants' `receivers:` of the alertmanager.yml it emits — how many, and
+  every `http(s)://` endpoint they carry. The emitted config also holds the
+  built-in base's `default` and the four platform receivers; those are not a
+  tenant's `_routing`, so they are set aside by name (`_NOT_TENANT`) — and
+  that they are exactly the ones set aside is asserted, so the filter cannot
+  hide a receiver;
 * notification_tester (`--dry-run --json`): `summary.total_receivers` and the
   `url_tested` of every receiver.
 
@@ -40,6 +45,13 @@ OPS = REPO_ROOT / "scripts" / "tools" / "ops"
 GEN = OPS / "generate_alertmanager_routes.py"
 NT = OPS / "notification_tester.py"
 _TIMEOUT = 60
+
+#: The receivers of the emitted alertmanager.yml that no tenant's `_routing`
+#: produces: the built-in base's root receiver and the four platform
+#: receivers (Watchdog heartbeat, custom-alert isolation, synthetic probe,
+#: sentinel sink). notification_tester tests a tenant's receivers only.
+_NOT_TENANT = {"default", "watchdog-heartbeat", "custom-alerts-firehose",
+               "synthetic-receiver", "sentinel-sinkhole"}
 
 _DEFAULTS = "defaults:\n  mysql_connections: 80\n"
 _HOOK = ("    _routing:\n      receiver:\n        type: webhook\n"
@@ -132,11 +144,16 @@ def _endpoints(obj: object) -> list[str]:
 
 
 def _generator_receivers(confd: Path) -> tuple[int, set[str]]:
-    p = _run(GEN, "--config-dir", str(confd), "--dry-run")
+    p = _run(GEN, "--config-dir", str(confd), "--output-alertmanager", "--dry-run")
     assert p.returncode == 0, p.stderr[-800:]
-    body = p.stdout.split("--- DRY RUN OUTPUT ---", 1)[1]
+    body = p.stdout.split("--- DRY RUN: alertmanager.yml ---", 1)[1]
     body = body.rsplit("\n--- ", 1)[0]
-    receivers = (yaml.safe_load(body) or {}).get("receivers") or []
+    emitted = (yaml.safe_load(body) or {}).get("receivers") or []
+    names = [r["name"] for r in emitted]
+    assert len(names) == len(set(names)), names
+    assert set(names) & _NOT_TENANT == _NOT_TENANT, names
+    receivers = [r for r in emitted if r["name"] not in _NOT_TENANT]
+    assert all(r["name"].startswith("tenant-") for r in receivers), names
     return len(receivers), set(_endpoints(receivers))
 
 
@@ -161,7 +178,7 @@ def test_tester_finds_the_receivers_the_generator_emits(tmp_path, name, files, n
 @pytest.mark.parametrize("name, files", _REFUSED_ROWS, ids=[r[0] for r in _REFUSED_ROWS])
 def test_a_tree_the_generator_refuses_is_refused_not_empty(tmp_path, name, files):
     confd = _write(tmp_path, files)
-    gen = _run(GEN, "--config-dir", str(confd), "--dry-run")
+    gen = _run(GEN, "--config-dir", str(confd), "--output-alertmanager", "--dry-run")
     assert gen.returncode != 0, f"{name}: the row no longer exercises a generator refusal"
     p = _run(NT, "--config-dir", str(confd), "--dry-run", "--json")
     # #3206: a row whose tree holds a path da-guard validation names ends

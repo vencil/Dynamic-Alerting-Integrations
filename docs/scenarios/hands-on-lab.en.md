@@ -294,14 +294,15 @@ The exit code is `0`: it is non-zero (`1`) only when a check is `fail`, and a WA
 ```bash
 mkdir -p .output
 
-# Write the file: do NOT add --validate here — it returns before -o is used, and the tool refuses the pair (exit 2)
+# Write the merged alertmanager.yml: a mode flag is required (-o alone is exit 2);
+# do NOT add --validate here — it returns before -o is used, and the tool refuses the pair (exit 2)
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   -v $(pwd)/.output:/data/output \
   ghcr.io/vencil/da-tools:latest \
-  generate-routes --config-dir /data/conf.d \
-  -o /data/output/alertmanager-routes.yaml
+  generate-routes --config-dir /data/conf.d --output-alertmanager \
+  -o /data/output/alertmanager.yml
 
 # Validate in a separate run (read-only, writes nothing)
 docker run --rm \
@@ -317,8 +318,10 @@ Expected output (first run):
 Config files: 8 read, 0 skipped
 Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
 Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
-Written to /data/output/alertmanager-routes.yaml (5 routes, 5 receivers, 5 inhibit rules)
+Written to /data/output/alertmanager.yml (5 routes, 5 receivers, 5 inhibit rules)
 ```
+
+stderr also carries two WARN lines, expected in this exercise: no `--base-config` is given, so the config is merged into the built-in placeholder base, whose root receiver `default` and `watchdog-heartbeat` are wired to nothing. For your own Alertmanager pass `--base-config <your alertmanager.yml>`; see [BYO Alertmanager Integration Guide Step 5](../integration/byo-alertmanager-integration.en.md#step-5-merge-into-alertmanager-configmap). ⚠️ The v2.9.0 image has no `--output-alertmanager` (and `:latest` is that image until the next release); with it, drop `--output-alertmanager` and you get a fragment holding only the tenant routing <!-- image-caveat: v2.9.0 -->
 
 Second run (`--validate`):
 
@@ -330,7 +333,7 @@ Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
 OK: all configs valid
 ```
 
-Each tenant gets its own block under `route.routes` in `.output/alertmanager-routes.yaml` (`matchers: tenant="…"`), with 5 `receivers` and 5 `inhibit_rules`. Against the Exercise 2 settings:
+`.output/alertmanager.yml` is a complete Alertmanager config. `route.routes` starts with the platform's four routes (Watchdog, `component="custom"`, synthetic probe, sentinel), then each tenant gets its own block (`matchers: tenant="…"`); `receivers` holds the base's `default` and the four platform receivers besides the five `tenant-…` ones, and `inhibit_rules` the five tenants' severity dedup rules. Against the Exercise 2 settings:
 
 | Tenant | receiver | group_wait | repeat_interval | From |
 |---|---|---|---|---|

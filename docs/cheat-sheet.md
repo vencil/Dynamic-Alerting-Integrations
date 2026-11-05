@@ -85,7 +85,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
   - `threshold-recommend` — 閾值推薦（P50/P95/P99）
 
 - **配置生成工具**
-  - `generate-routes` — Tenant YAML → Alertmanager fragment
+  - `generate-routes` — Tenant YAML → 合併進你的 Alertmanager 設定（`--output-alertmanager`／`--output-configmap`／`--apply`；`--validate` 只驗證）
   - `patch-config` — ConfigMap 快速更新
   - `generator-service` — 產生器容器的服務（tenant-api 寫入前的判定）
 

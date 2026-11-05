@@ -10,8 +10,8 @@
   `tenants:` 區塊）的主 route、`overrides[i]`、`routes[i]`；任一層 `_routing_defaults`
   的主 route 與 `overrides[i]`；routing profile 的主 route、`overrides[i]`、`routes[i]`；
   `_routing_enforced`。
-* 拒收＝`field_type_errors`（`ERROR (field type):`，blocks `always`）：render、
-  `--dry-run`、`--validate`、`--strict` 都 rc 1、什麼都不寫出；validate-config 的
+* 拒收＝`field_type_errors`（`ERROR (field type):`，blocks `always`）：
+  `--output-alertmanager`（含 `--dry-run`）、`--validate`、`--strict` 都 rc 1、什麼都不寫出；validate-config 的
   schema 列 FAIL。finding kind 沿用 `routing_group_by_invalid`。
 * 不把字串轉成 list；訊息指出正確寫法 `group_by: [alertname]`。
 * null 照舊＝沒寫（不輸出 group_by、繼承上層），`[]` 照舊＝不輸出。
@@ -206,7 +206,7 @@ def test_a_non_list_is_one_field_type_error(tmp_path, loc, value):
 def test_null_empty_and_a_list_are_accepted(tmp_path, loc, value):
     d = _write(tmp_path, LOCATIONS[loc][0](value))
     assert _errors(d) == []
-    p = _gar(d, "--dry-run")
+    p = _gar(d, "--output-alertmanager", "--dry-run")
     assert p.returncode == 0, p.stderr
     assert _REFUSAL not in p.stderr
 
@@ -214,11 +214,11 @@ def test_null_empty_and_a_list_are_accepted(tmp_path, loc, value):
 # ── every mode refuses, nothing is written ───────────────────────────────
 
 _MODES = {
-    "render": lambda out: ["-o", str(out)],
-    "dry-run": lambda out: ["--dry-run"],
+    "output-alertmanager": lambda out: ["--output-alertmanager", "-o", str(out)],
+    "output-alertmanager-dry-run": lambda out: ["--output-alertmanager", "--dry-run"],
     "output-configmap": lambda out: ["--output-configmap", "-o", str(out)],
     "validate": lambda out: ["--validate"],
-    "strict": lambda out: ["--strict", "-o", str(out)],
+    "strict": lambda out: ["--output-alertmanager", "--strict", "-o", str(out)],
     "validate-strict": lambda out: ["--validate", "--strict"],
 }
 
@@ -254,7 +254,7 @@ def test_issue_repro_validate_strict(tmp_path):
 def test_the_findings_document_names_the_field(tmp_path):
     d = _write(tmp_path, _override("alertname"))
     doc_path = tmp_path / "findings.json"
-    p = _gar(d, "--dry-run", "--findings-json", str(doc_path))
+    p = _gar(d, "--output-alertmanager", "--dry-run", "--findings-json", str(doc_path))
     assert p.returncode == 1, p.stderr
     doc = json.loads(doc_path.read_text(encoding="utf-8"))
     items = [r for r in doc["findings"] if r["kind"] != "refusal_summary"]
@@ -305,7 +305,7 @@ def test_validate_config_cli_prints_the_field_type_hint(tmp_path):
 def test_null_renders_no_group_by_and_inherits(tmp_path):
     d = _write(tmp_path, _main("~"))
     out = tmp_path / "out.yaml"
-    p = _gar(d, "-o", str(out))
+    p = _gar(d, "--output-alertmanager", "-o", str(out))
     assert p.returncode == 0, p.stderr
     doc = yaml.safe_load(out.read_text(encoding="utf-8"))
     [route] = [r for r in doc["route"]["routes"] if r.get("matchers") == ['tenant="t-a"']]

@@ -225,7 +225,7 @@ def test_refusal_documents(tmp_path, fixture, rc, kind, where):
     """Each of the four refusals: its rc, its itemised finding (kind + where)
     and its framing lines as ``refusal_summary`` — and nothing else, since a
     refused run prints nothing else."""
-    _d, res, doc, _out = _run(tmp_path, fixture, "render")
+    _d, res, doc, _out = _run(tmp_path, fixture, "output-alertmanager")
     assert res.returncode == doc["exit_code"] == rc
     [item] = _records(doc, kind=kind)
     assert {k: item[k] for k in where} == where
@@ -315,8 +315,8 @@ def _pigeon_tree(root: Path) -> Path:
 
 
 @pytest.mark.parametrize("argv,validate,strict", [
-    (["--dry-run"], False, False),
-    (["--strict", "--dry-run"], False, True),
+    (["--output-alertmanager", "--dry-run"], False, False),
+    (["--output-alertmanager", "--strict", "--dry-run"], False, True),
     (["--validate"], True, False),
 ])
 def test_exit_1_without_a_blocking_line_still_blocks(tmp_path, argv, validate,
@@ -340,7 +340,7 @@ def test_usage_error_replaces_a_stale_document(tmp_path):
     d = cases.build_tree(tmp_path, "clean")
     out = tmp_path / "f.json"
     out.write_text('{"exit_code": 0, "findings": []}\n', encoding="utf-8")
-    res = cases.run_gar(d, ["--dry-run", "--no-such-flag"],
+    res = cases.run_gar(d, ["--output-alertmanager", "--dry-run", "--no-such-flag"],
                         ["--findings-json", str(out)])
     assert res.returncode == 2, res.stderr
     doc = json.loads(out.read_text(encoding="utf-8"))
@@ -352,7 +352,8 @@ def test_usage_error_replaces_a_stale_document(tmp_path):
 def test_an_exception_still_writes_a_failing_document(tmp_path, monkeypatch):
     out = tmp_path / "f.json"
     monkeypatch.setattr(sys, "argv", ["gar", "--config-dir", str(tmp_path),
-                                      "--dry-run", "--findings-json", str(out)])
+                                      "--output-alertmanager", "--dry-run",
+                                      "--findings-json", str(out)])
 
     def boom(_args, findings, **_kw):
         findings.append(gm.Finding("  WARN: x", blocks="never"))
@@ -392,7 +393,7 @@ def test_run_failed_backstop(exit_code, findings, validate, strict, backstop):
 def test_unwritable_findings_path_is_a_caller_error(tmp_path):
     d = cases.build_tree(tmp_path, "clean")
     out = tmp_path / "absent" / "f.json"
-    res = cases.run_gar(d, ["--dry-run"], ["--findings-json", str(out)])
+    res = cases.run_gar(d, ["--output-alertmanager", "--dry-run"], ["--findings-json", str(out)])
     assert res.returncode == 2
     assert "Traceback" not in res.stderr
     [line] = [ln for ln in res.stderr.splitlines() if ln.startswith("ERROR:")]
@@ -404,7 +405,7 @@ def test_rewrite_replaces_the_previous_document(tmp_path):
     d = cases.build_tree(tmp_path, "clean")
     out = tmp_path / "f.json"
     out.write_text("stale", encoding="utf-8")
-    res = cases.run_gar(d, ["--dry-run"], ["--findings-json", str(out)])
+    res = cases.run_gar(d, ["--output-alertmanager", "--dry-run"], ["--findings-json", str(out)])
     assert res.returncode == 0
     assert json.loads(out.read_text(encoding="utf-8"))["exit_code"] == 0
 
@@ -697,7 +698,8 @@ def test_unwritable_path_keeps_the_exception(tmp_path, monkeypatch, capsys):
     original exception (its traceback) still propagates — not SystemExit."""
     out = tmp_path / "absent" / "f.json"
     monkeypatch.setattr(sys, "argv", ["gar", "--config-dir", str(tmp_path),
-                                      "--dry-run", "--findings-json", str(out)])
+                                      "--output-alertmanager", "--dry-run",
+                                      "--findings-json", str(out)])
 
     def boom(_args, _findings, **_kw):
         raise RuntimeError("crash")

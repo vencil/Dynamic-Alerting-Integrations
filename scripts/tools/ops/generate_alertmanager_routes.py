@@ -3,7 +3,14 @@
 generate_alertmanager_routes.py — Generate Alertmanager route + receiver + inhibit config from tenant YAML.
 
 Reads all tenant YAML files from conf.d/, extracts _routing and _severity_dedup sections,
-and produces an Alertmanager route tree + receivers + inhibit_rules YAML fragment.
+and merges the Alertmanager route tree + receivers + inhibit_rules they produce into a
+base Alertmanager config — replacing only what the generator owns (#1211 gap 2).
+
+Modes (exactly one; without one the run is a caller error, exit 2):
+  --validate             judge the tree, write nothing
+  --output-configmap     the merged config as a K8s ConfigMap (GitOps)
+  --output-alertmanager  the merged config as a plain alertmanager.yml
+  --apply                merge into the cluster's ConfigMap and reload
 
 Severity Dedup (per-tenant):
   Default (absent or "enable"): generate inhibit_rule that suppresses warning when critical fires
@@ -18,10 +25,9 @@ v2.0.0 Bilingual Templates (i18n):
   No changes to route generator needed — the fallback pattern is in Alertmanager's global templates.
 
 Usage:
-  python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/
-  python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ -o alertmanager-routes.yaml
-  python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
   python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --output-configmap -o am-configmap.yaml
+  python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --output-alertmanager --base-config my-am.yml -o alertmanager.yml
+  python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --output-alertmanager --dry-run
   python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --validate --findings-json findings.json
 
 v2.8.0 PR-3a: This file is now a CLI facade. The 1645-line monolith was
@@ -133,13 +139,13 @@ from _grar_routes import (  # noqa: E402, F401
 from _grar_render import (  # noqa: E402, F401
     BaseConfigInputError,
     _apply_merged_configmap,
-    _merge_routes_receivers_inhibits,
     _read_existing_configmap,
     _reload_alertmanager,
     apply_to_configmap,
+    assemble_alertmanager_yml,
     assemble_configmap,
     load_base_config,
-    render_output,
+    merge_generated,
 )
 # #2219: used here, not re-exported — hence no `# noqa: F401` (see the
 # `_lib_io` block above for why that marker must stay off used imports).
@@ -154,6 +160,8 @@ from _grar_render import (  # noqa: E402
     UndeliveredCustomAlerts, custom_firehose_findings, custom_firehose_has_integration,
     undelivered_custom_alert_tenants,
 )
+# #1211 gap 2: an assembled watchdog-heartbeat receiver that delivers nowhere.
+from _grar_render import watchdog_receiver_findings  # noqa: E402
 # #3206 (ADR-036 §12): the emitted ConfigMap read back the consumers' way.
 from _grar_render import (  # noqa: E402
     ConsumerReadError, InputRefused, alertmanager_reading, consumer_read_message,
@@ -200,7 +208,7 @@ from _lib_confd import WARN_LIMIT  # noqa: E402
 
 
 # ============================================================
-# CLI Mode Handlers (--validate, --apply, --output-configmap, default render)
+# CLI Mode Handlers (--validate, --apply, --output-configmap, --output-alertmanager)
 # ============================================================
 
 def _policy_errors(all_warnings: list[str]) -> list[str]:
@@ -431,47 +439,58 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
     sys.exit(EXIT_OK if success else EXIT_CALLER_ERROR)
 
 
-def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
+def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                            base: dict, namespace: str, configmap_name: str,
                            dry_run: bool, output: str | None, strict: bool = False,
-                           judge_emitted=None) -> None:
-    """Handle --output-configmap mode: produce complete ConfigMap YAML.
+                           judge_emitted=None, *, as_configmap: bool) -> None:
+    """Handle --output-configmap (*as_configmap*) and --output-alertmanager:
+    ``merge_generated`` on *base*, emitted as a ConfigMap or as a plain
+    alertmanager.yml — one merge, two wrappers (#1211 gap 2).
 
     *judge_emitted* (#1211): called with the emitted config as Alertmanager
-    reads it, before anything is written; True refuses it (rc 1).
+    reads it, before anything is written; the reasons it returns refuse it
+    (rc 1).
 
     Takes the ALREADY-LOADED base config, not a path: #1616 requires the
     supplied-but-unusable check to happen before the tenant scan, and a
     parameter that cannot be a path is the structural way to keep it there.
     """
+    what = "the ConfigMap" if as_configmap else "the alertmanager.yml"
+    am_what = "the ConfigMap's alertmanager.yml" if as_configmap else "the alertmanager.yml"
     target = safe_label(output) if (output and not dry_run) else "stdout"
     try:
-        cm_yaml = assemble_configmap(
-            base, routes, receivers, inhibit_rules,
-            namespace=namespace, configmap_name=configmap_name, strict=strict)
+        if as_configmap:
+            content = assemble_configmap(
+                base, routes, receivers, inhibit_rules,
+                namespace=namespace, configmap_name=configmap_name, strict=strict)
+        else:
+            content = assemble_alertmanager_yml(base, routes, receivers,
+                                                inhibit_rules, strict=strict)
     except ValueError as exc:
         _assembly_failed(exc, f"nothing was written to {target}")
     except PlatformProbeSetUnverifiable as exc:
         _unverifiable(exc, f"nothing was written to {target}")
 
     # #2219: validate what Alertmanager will LOAD from what this run EMITS.
-    # `cm_yaml` is the string that goes to -o / stdout below, unchanged; the
-    # alertmanager.yml handed to amtool is parsed back OUT of it, not taken
-    # from the dict or the inner dump — the outer dump is where a U+0085 in a
-    # value got folded into a line break, so only a round trip of the emitted
-    # text sees what the cluster will see. Gated before every emission
-    # (file, stdout, dry-run preview): a rejected config is not written.
-    # ADR-036 §12 (#3206): the round trip is Kubernetes' reading of the
-    # emitted text (da-crdecode), the config Alertmanager's (da-read).
-    try:
-        am_yml = emitted_alertmanager_yml(cm_yaml)
-    except ConsumerReadError as exc:
-        print(f"ERROR: cannot read the emitted ConfigMap the way kubectl does — refusing "
-              f"to write it to {target} (nothing was written): "
-              f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-    rc = amtool_gate(am_yml,
-                     what="the ConfigMap's alertmanager.yml",
+    # For a ConfigMap the alertmanager.yml handed to amtool is parsed back
+    # OUT of the emitted text, not taken from the dict or the inner dump —
+    # the outer dump is where a U+0085 in a value got folded into a line
+    # break, so only a round trip of the emitted text sees what the cluster
+    # will see. Gated before every emission (file, stdout, dry-run preview):
+    # a rejected config is not written. ADR-036 §12 (#3206): the round trip
+    # is Kubernetes' reading of the emitted text (da-crdecode), the config
+    # Alertmanager's (da-read).
+    if as_configmap:
+        try:
+            am_yml = emitted_alertmanager_yml(content)
+        except ConsumerReadError as exc:
+            print(f"ERROR: cannot read the emitted ConfigMap the way kubectl does — refusing "
+                  f"to write it to {target} (nothing was written): "
+                  f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
+            sys.exit(EXIT_CALLER_ERROR)
+    else:
+        am_yml = content
+    rc = amtool_gate(am_yml, what=am_what,
                      refusing=f"write it to {target} (nothing was written)")
     if rc is not None:
         sys.exit(rc)
@@ -483,76 +502,29 @@ def _output_configmap_mode(routes: list[dict], receivers: list[dict], inhibit_ru
         emitted = alertmanager_reading(am_yml)
     except ConsumerReadError as exc:
         if not isinstance(exc, InputRefused):
-            print(f"ERROR: cannot read the ConfigMap's alertmanager.yml the way "
-                  f"Alertmanager does — refusing to write it to {target} (nothing was "
-                  f"written): {exc}", file=sys.stderr)
+            print(f"ERROR: cannot read {am_what} the way Alertmanager does — refusing "
+                  f"to write it to {target} (nothing was written): {exc}", file=sys.stderr)
             sys.exit(EXIT_CALLER_ERROR)
-        print(f"FAIL: Alertmanager's config loader refuses the ConfigMap's alertmanager.yml "
+        print(f"FAIL: Alertmanager's config loader refuses {am_what} "
               f"— refusing to write it to {target} (nothing was written): "
               f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
     warn_if_root_receiver_without_integration(emitted)
-    # #1211: the emitted firehose receiver — a --base-config's own, else the
-    # name-only placeholder — decides whether those alerts notify anyone.
-    if judge_emitted is not None and judge_emitted(emitted):
-        print(f"FAIL: page-mode custom alerts would notify no one (the ERROR "
-              f"line(s) above, --strict) — refusing to write the ConfigMap to "
-              f"{target} (nothing was written)", file=sys.stderr)
+    # #1211: the emitted firehose / watchdog-heartbeat receivers — a
+    # --base-config's own, else the name-only placeholders — decide whether
+    # those alerts notify anyone.
+    reasons = judge_emitted(emitted) if judge_emitted is not None else []
+    if reasons:
+        print(f"FAIL: {'; '.join(reasons)} (the ERROR line(s) above, --strict) — "
+              f"refusing to write {what} to {target} (nothing was written)",
+              file=sys.stderr)
         sys.exit(EXIT_VIOLATION)
 
     route_count = len(routes)
     inhibit_count = len(inhibit_rules)
 
     if dry_run:
-        print("\n--- DRY RUN: ConfigMap YAML ---")
-        print(cm_yaml)
-        print(f"\n--- {route_count} route(s), {len(receivers)} receiver(s), "
-              f"{inhibit_count} inhibit rule(s) ---")
-        return
-
-    if output:
-        _write_output_or_die(output, cm_yaml)
-        print(f"Written to {output} ({route_count} routes, "
-              f"{len(receivers)} receivers, {inhibit_count} inhibit rules)")
-    else:
-        print(cm_yaml)
-
-
-def _render_output_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
-                       dry_run: bool, output: str | None) -> None:
-    """Handle default render mode: output routes/receivers fragment."""
-    header = (
-        "# ============================================================\n"
-        "# Alertmanager Route + Receiver + Inhibit Rules Fragment\n"
-        "# Generated by: generate_alertmanager_routes.py\n"
-        "# Merge into your Alertmanager config:\n"
-        "#   - route.routes: append the routes below, AFTER your own child routes\n"
-        "#     (a tenant with no tenant route ends on a trailing route here that\n"
-        "#     hands its alerts back to the root; your later routes would not see them)\n"
-        "#   - receivers: append the receivers below\n"
-        "#   - inhibit_rules: append the severity dedup inhibit rules below\n"
-        "# ============================================================\n"
-    )
-    body = render_output(routes, receivers, inhibit_rules)
-    content = header + body
-
-    # #2219: a fragment is not a complete Alertmanager config (no root
-    # receiver), and `amtool check-config` refuses it for that alone
-    # ("root route must specify a default receiver", measured with amtool
-    # 0.33.1). So this mode is NOT validated whether or not amtool is on PATH
-    # — say so, rather than let rc 0 read as "Alertmanager accepts this".
-    print("NOTICE: routing fragment mode; generated output was NOT validated "
-          "by Alertmanager (a fragment is not a complete Alertmanager config — "
-          "it has no root receiver, which amtool check-config rejects on its "
-          "own). Use --output-configmap to validate the merged config when "
-          "amtool is on PATH.",
-          file=sys.stderr)
-
-    route_count = len(routes)
-    inhibit_count = len(inhibit_rules)
-
-    if dry_run:
-        print("\n--- DRY RUN OUTPUT ---")
+        print(f"\n--- DRY RUN: {'ConfigMap YAML' if as_configmap else 'alertmanager.yml'} ---")
         print(content)
         print(f"\n--- {route_count} route(s), {len(receivers)} receiver(s), "
               f"{inhibit_count} inhibit rule(s) ---")
@@ -560,8 +532,8 @@ def _render_output_mode(routes: list[dict], receivers: list[dict], inhibit_rules
 
     if output:
         _write_output_or_die(output, content)
-        print(f"Written to {output} ({route_count} routes, {len(receivers)} receivers, "
-              f"{inhibit_count} inhibit rules)")
+        print(f"Written to {output} ({route_count} routes, "
+              f"{len(receivers)} receivers, {inhibit_count} inhibit rules)")
     else:
         print(content)
 
@@ -854,29 +826,45 @@ _DEFAULT_CONFIGMAP = "alertmanager-config"
 #   * FLAGS_GUARDED_BY_BASE_CONFIG_CHECK: the #1616 guard in main().
 FLAGS_CLASSIFIED_BY_MODE_GUARD = frozenset({
     "output", "dry_run", "namespace", "configmap", "yes",
-    "apply", "output_configmap",
+    "apply", "output_configmap", "output_alertmanager",
 })
 FLAGS_READ_IN_EVERY_MODE = frozenset({"config_dir", "validate", "strict", "policy",
                                       "findings_json"})
 FLAGS_GUARDED_BY_BASE_CONFIG_CHECK = frozenset({"base_config"})
 
 
+#: The modes that write or apply a config, by flag (argparse dest → flag).
+OUTPUT_MODE_FLAGS = {"apply": "--apply", "output_configmap": "--output-configmap",
+                     "output_alertmanager": "--output-alertmanager"}
+#: What a run without a mode is told (#1211 gap 2).
+NO_MODE_MESSAGE = (
+    "no mode given: pass one of --validate, --output-configmap, "
+    "--output-alertmanager or --apply.\n"
+    "  The routing-fragment mode (no mode flag) is gone (#1211): a fragment "
+    "pasted after your own routes loses the platform routes that must come "
+    "first. --output-alertmanager --base-config <your alertmanager.yml> "
+    "writes your config with the generated routing merged in (only what the "
+    "generator owns is replaced); --output-configmap does the same as a "
+    "ConfigMap.\n"
+    "  ⛔ Without --base-config those modes assemble on a built-in placeholder "
+    "base (its `global:` and empty root receiver are not yours).")
+
+
 def _mode_of(args: argparse.Namespace) -> str:
     """The ONE mode this invocation runs, by the precedence main() applies.
 
     `--validate` wins over everything: `_validate_mode` exits before the
-    apply / output-configmap / render branches are reached, so under
-    `--validate` those flags are as unread as any other (#1616 measured the
-    `--validate --output-configmap --base-config` shape). `--apply` and
-    `--output-configmap` are mutually exclusive by argparse.
+    output branches are reached, so under `--validate` those flags are as
+    unread as any other (#1616 measured the `--validate --output-configmap
+    --base-config` shape). The three output modes are mutually exclusive by
+    argparse. No mode at all is "none" — a caller error (#1211 gap 2).
     """
     if args.validate:
         return "--validate"
-    if args.apply:
-        return "--apply"
-    if args.output_configmap:
-        return "--output-configmap"
-    return "render"
+    for dest, flag in OUTPUT_MODE_FLAGS.items():
+        if getattr(args, dest):
+            return flag
+    return "none"
 
 
 def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, str, str]]:
@@ -887,10 +875,10 @@ def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, st
     ``--namespace`` / ``--configmap`` default to ``None`` and are resolved
     after this check), ``True`` for the store_true ones.
 
-    The read sites, from main() and the mode handlers (line numbers as of
-    this change; the matrix is what matters, the numbers will drift):
+    The read sites, from main() and the mode handlers (the matrix is what
+    matters; a run with no mode is refused before this is consulted):
 
-        flag          --validate  --apply  --output-configmap  render
+        flag          --validate  --apply  --output-configmap  --output-alertmanager
         -o/--output   never       never    unless --dry-run    unless --dry-run
         --dry-run     never       never    read                read
         --namespace   never       read     read                never
@@ -931,6 +919,13 @@ def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, st
             "ConfigMap is emitted",
             "Drop one of them: keep --validate to check, or keep "
             "--output-configmap to emit the ConfigMap."))
+    if validating and args.output_alertmanager:
+        found.append((
+            "--output-alertmanager",
+            "--validate returns before the config is assembled, so no "
+            "alertmanager.yml is emitted",
+            "Drop one of them: keep --validate to check, or keep "
+            "--output-alertmanager to emit the alertmanager.yml."))
 
     if args.output is not None:
         if validating:
@@ -938,15 +933,16 @@ def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, st
                 "-o/--output",
                 "--validate returns before anything is written, so the file "
                 "at -o is never created (not even checked for writability)",
-                "Drop -o, or drop --validate if you meant to write the file — "
-                "validate in one run and write in another."))
+                "Drop -o, or replace --validate with --output-alertmanager "
+                "or --output-configmap (keeping -o) if you meant to write "
+                "the file — validate in one run and write in another."))
         elif applying:
             found.append((
                 "-o/--output",
                 "--apply writes into the cluster's ConfigMap, not to a file",
-                "Drop -o. (To write the merged ConfigMap to a file instead, "
-                "use --output-configmap -o <file>; that mode cannot be "
-                "combined with --apply.)"))
+                "Drop -o. (To write the merged config to a file instead, "
+                "use --output-configmap or --output-alertmanager with -o "
+                "<file>; neither can be combined with --apply.)"))
         elif args.dry_run:
             found.append((
                 "-o/--output",
@@ -959,16 +955,18 @@ def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, st
                 "--dry-run",
                 "--validate returns before the render step, so there is no "
                 "preview to print — and --validate never writes a file anyway",
-                "Drop --dry-run, or drop --validate if you meant to preview "
-                "the output."))
+                "Drop --dry-run, or replace --validate with "
+                "--output-alertmanager or --output-configmap (keeping "
+                "--dry-run) if you meant to preview the output."))
         elif applying:
             found.append((
                 "--dry-run",
                 "--apply has no preview: it merges into the cluster or it "
                 "does nothing",
                 "Drop --dry-run. To preview the merged YAML without touching "
-                "the cluster, use --output-configmap --dry-run (cannot be "
-                "combined with --apply)."))
+                "the cluster, use --output-configmap --dry-run or "
+                "--output-alertmanager --dry-run (neither can be combined "
+                "with --apply)."))
 
     for flag, value in (("--namespace", args.namespace),
                         ("--configmap", args.configmap)):
@@ -987,9 +985,10 @@ def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, st
         else:
             found.append((
                 flag,
-                "plain render mode emits a routing fragment, which has no "
-                "ConfigMap to name",
-                f"Add --apply or --output-configmap, or drop {flag}."))
+                "--output-alertmanager writes a plain alertmanager.yml, which "
+                "has no ConfigMap to name",
+                f"Drop {flag}, or use --output-configmap instead of "
+                f"--output-alertmanager to wrap the config in a ConfigMap."))
 
     if args.yes and not applying:
         if validating:
@@ -998,18 +997,13 @@ def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, st
                 "--validate never prompts, and never applies",
                 "Drop --yes. To apply instead, drop --validate AND add "
                 "--apply (keeping --yes)."))
-        elif mode == "--output-configmap":
-            found.append((
-                "--yes",
-                "--output-configmap writes YAML and never touches the "
-                "cluster, so there is nothing to confirm",
-                "Drop --yes. (--apply, the mode that prompts, cannot be "
-                "combined with --output-configmap.)"))
         else:
             found.append((
                 "--yes",
-                "plain render mode never prompts",
-                "Add --apply if you meant to apply, or drop --yes."))
+                f"{mode} writes YAML and never touches the cluster, so there "
+                "is nothing to confirm",
+                f"Drop --yes. (--apply, the mode that prompts, cannot be "
+                f"combined with {mode}.)"))
     return found
 
 
@@ -1019,16 +1013,22 @@ def _build_parser() -> argparse.ArgumentParser:
         description="Generate Alertmanager route + receiver config from tenant YAML",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""
+            Exactly one mode is required: --validate, --output-configmap,
+            --output-alertmanager or --apply. The output modes merge into a
+            base config and replace only what the generator owns.
+
             Examples:
-              %(prog)s --config-dir components/threshold-exporter/config/conf.d/
-              %(prog)s --config-dir conf.d/ -o alertmanager-routes.yaml
-              %(prog)s --config-dir conf.d/ --dry-run
+              %(prog)s --config-dir conf.d/ --validate --strict
+              %(prog)s --config-dir conf.d/ --output-alertmanager --base-config my-am.yml -o alertmanager.yml
+              %(prog)s --config-dir conf.d/ --output-configmap --base-config my-am.yml -o am-configmap.yaml
+              %(prog)s --config-dir conf.d/ --output-alertmanager --dry-run
         """),
     )
     parser.add_argument("--config-dir", required=True,
                         help="Directory containing tenant YAML configs (conf.d/)")
     parser.add_argument("-o", "--output", default=None,
-                        help="Output file path (default: stdout)")
+                        help="Output file path for --output-configmap / "
+                             "--output-alertmanager (default: stdout)")
     parser.add_argument("--dry-run", action="store_true",
                         help="Preview output without writing file")
     parser.add_argument("--validate", action="store_true",
@@ -1043,23 +1043,37 @@ def _build_parser() -> argparse.ArgumentParser:
                              "a tenant _routing that is neither a mapping nor a "
                              "disabling string, a _routing_defaults that is not "
                              "a mapping (#2341) "
-                             "and, on the --apply/--output-configmap "
+                             "and, on the --apply/--output-configmap/"
+                             "--output-alertmanager "
                              "merge, any inhibit rule with an ungated `equal:` label "
-                             "(#1132) and a tenant (no _routing; an explicit "
+                             "(#1132), a tenant (no _routing; an explicit "
                              "`_routing: disable` stays WARN) whose served page-mode "
                              "custom alerts fall to a custom-alerts-firehose receiver "
-                             "with no integration (#1211). Without --strict these "
+                             "with no integration (#1211), and a watchdog-heartbeat "
+                             "receiver with no integration in your own base "
+                             "(--base-config, or the cluster's on --apply; #1211). "
+                             "Without --strict these "
                              "surface as WARN (an "
                              "unquoted override value is rendered via str() "
                              "instead; a bad group_by entry is dropped). CI runs "
                              "--strict.")
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--apply", action="store_true",
-                            help="Apply: merge into Alertmanager ConfigMap + reload")
+                            help="Apply: merge into the cluster's Alertmanager "
+                                 "ConfigMap (replacing only what the generator "
+                                 "owns) + reload")
     mode_group.add_argument("--output-configmap", action="store_true",
-                            help="Output complete Alertmanager ConfigMap YAML (for GitOps PR flow)")
+                            help="Output the merged Alertmanager config as a "
+                                 "ConfigMap (for GitOps PR flow)")
+    mode_group.add_argument("--output-alertmanager", action="store_true",
+                            help="Output the merged Alertmanager config as a "
+                                 "plain alertmanager.yml (BYO Alertmanager "
+                                 "outside Kubernetes)")
     parser.add_argument("--base-config", default=None,
-                        help="Base Alertmanager YAML for --output-configmap (global + defaults)")
+                        help="Your Alertmanager YAML for --output-configmap / "
+                             "--output-alertmanager: the generated routing is "
+                             "merged into it, replacing only what the "
+                             "generator owns (default: a built-in placeholder)")
     # #1650: default=None so "supplied" is decidable; the value is resolved
     # to _DEFAULT_NAMESPACE / _DEFAULT_CONFIGMAP after the mode check below.
     parser.add_argument("--namespace", default=None,
@@ -1419,18 +1433,26 @@ def _emit_custom_firehose_findings(undelivered: list[UndeliveredCustomAlerts],
     return strict and any(f.blocks == "strict" for f in lines)
 
 
-def _firehose_judge(undelivered: list[UndeliveredCustomAlerts], *, strict: bool,
-                    findings: list[str]):
-    """The check ``--output-configmap`` / ``--apply`` run on the config they
-    are about to write / apply, as Alertmanager reads it: only there is the
-    firehose receiver known. None when no tenant is affected."""
-    if not undelivered:
-        return None
-
-    def judge(am: dict) -> bool:
-        return _emit_custom_firehose_findings(
-            undelivered, custom_firehose_has_integration(am), strict=strict,
-            findings=findings)
+def _assembled_judge(undelivered: list[UndeliveredCustomAlerts], *, strict: bool,
+                     findings: list[str], real_base: bool):
+    """The check the output modes and ``--apply`` run on the config they are
+    about to write / apply, as Alertmanager reads it: only there are the
+    firehose and watchdog-heartbeat receivers known. The judge prints and
+    records its findings and returns the reasons to refuse (rc 1) — empty
+    unless one blocks under *strict*."""
+    def judge(am: dict) -> list[str]:
+        reasons = []
+        if undelivered and _emit_custom_firehose_findings(
+                undelivered, custom_firehose_has_integration(am), strict=strict,
+                findings=findings):
+            reasons.append("page-mode custom alerts would notify no one")
+        lines = watchdog_receiver_findings(am, strict=strict, real_base=real_base)
+        for line in lines:
+            print(safe_label(line), file=sys.stderr)
+        findings.extend(lines)
+        if strict and any(f.blocks == "strict" for f in lines):
+            reasons.append("the Watchdog heartbeat would reach no dead-man's switch")
+        return reasons
     return judge
 
 
@@ -1499,6 +1521,10 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # after the --base-config block below.
     caller_error_lines: list[str] = []
     mode = _mode_of(args)
+    # #1211 gap 2: no mode, no output — never a silent fragment or a
+    # built-in base the operator did not ask for. Before any work.
+    if mode == "none":
+        die_caller_error(NO_MODE_MESSAGE)
     for flag, why, remedy in _flags_this_mode_never_reads(args):
         caller_error_lines.append(f"{flag} is not read in {mode} mode: {why}.\n  {remedy}")
     namespace = args.namespace if args.namespace is not None else _DEFAULT_NAMESPACE
@@ -1524,28 +1550,23 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # byte-identical to omitting `--base-config` — i.e. following the advice
     # silently reproduces #1616 instead of fixing it. A message that routes the
     # operator into the defect is worse than no message.
-    honours_base_config = args.output_configmap and not args.validate
+    writes_a_file_mode = args.output_configmap or args.output_alertmanager
+    honours_base_config = writes_a_file_mode and not args.validate
     if args.base_config is not None and not honours_base_config:
         if args.apply:
             why, remedy = (
                 "--apply merges into the ConfigMap already in the cluster, so "
                 "a base file has no effect",
-                "  Drop --base-config. (--output-configmap, which does read "
-                "it, cannot be combined with --apply.)")
-        elif args.validate:
-            why, remedy = (
-                "--validate returns before the ConfigMap is assembled, so the "
-                "base file is never read — adding --output-configmap does NOT "
-                "change that",
-                "  Drop --base-config, or drop --validate if you meant to "
-                "produce a ConfigMap.")
+                "  Drop --base-config. (--output-configmap / "
+                "--output-alertmanager, which do read it, cannot be combined "
+                "with --apply.)")
         else:
             why, remedy = (
-                "only --output-configmap assembles a ConfigMap, and that is "
-                "the only thing that reads a base file",
-                "  Add --output-configmap, or drop --base-config.\n"
-                "  ⛔ Dropping it is only correct if you did not mean to "
-                "supply a base config — it does NOT make this mode honour one.")
+                "--validate returns before the config is assembled, so the "
+                "base file is never read — adding --output-configmap or "
+                "--output-alertmanager does NOT change that",
+                "  Drop --base-config, or drop --validate if you meant to "
+                "produce a config.")
         caller_error_lines.append(
             f"--base-config is not read in this mode: {why}.\n{remedy}")
     if caller_error_lines:
@@ -1579,7 +1600,7 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     if allowed_domains:
         print(f"Policy: {len(allowed_domains)} allowed domain pattern(s) loaded")
 
-    # #1616: load the base config HERE, not inside _output_configmap_mode.
+    # #1616: load the base config HERE, not inside _assembled_output_mode.
     # ⛔ Measured with the load left at its original site (after the tenant
     # scan): a typo'd --base-config against a tree that yields no routes still
     # exited 0 in silence, because main() returns at "No tenants found in
@@ -1588,7 +1609,7 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # it, not review. "Supplied but unusable" is a property of the INVOCATION,
     # so it has to be decided before any work — exactly like --policy above.
     base_config: dict | None = None
-    if args.output_configmap:
+    if writes_a_file_mode:
         try:
             base_config = load_base_config(args.base_config)
         except BaseConfigInputError as exc:
@@ -1673,16 +1694,20 @@ def _run(args: argparse.Namespace, findings: list[str], *,
 
     # #1211: a tenant's served page-mode custom alerts with no delivery child
     # under the custom route fall to the firehose receiver. Only a mode that
-    # assembles the config it writes (--output-configmap, --apply) knows that
-    # receiver — it judges there; every other mode says it could not check.
+    # assembles the config it writes (--output-configmap, --output-alertmanager,
+    # --apply) knows that receiver — it judges there; --validate says it
+    # could not check. The same modes judge the watchdog-heartbeat receiver.
     served = _load_served_tree(args.config_dir, disable_effects=False)
     undelivered = _undelivered_custom_alerts(served, routes, tree, findings)
-    assembles = (args.output_configmap or args.apply) and not args.validate
+    assembles = (writes_a_file_mode or args.apply) and not args.validate
     if undelivered and not assembles:
         _emit_custom_firehose_findings(undelivered, None, strict=args.strict,
                                        findings=findings)
-    firehose_judge = (_firehose_judge(undelivered, strict=args.strict,
-                                      findings=findings) if assembles else None)
+    # A real base: the operator's --base-config, or the cluster's on --apply.
+    assembled_judge = (_assembled_judge(
+        undelivered, strict=args.strict, findings=findings,
+        real_base=args.apply or args.base_config is not None)
+        if assembles else None)
 
     # Validate mode
     if args.validate:
@@ -1691,7 +1716,7 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # #2279: two generated receivers with one name. Blocking in EVERY mode and
     # with or without --strict — Alertmanager refuses such a config, and a
     # merge that de-duplicates by name would silently keep only one of them.
-    # Decided before render / --apply's prompt / --output-configmap, so
+    # Decided before --apply's prompt / the output modes, so
     # nothing is written or applied.
     collisions = [w for w in all_warnings if is_receiver_name_collision(w)]
     if collisions:
@@ -1719,17 +1744,13 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     if args.apply:
         _apply_mode(routes, receivers, inhibit_rules, namespace,
                     configmap_name, args.yes, strict=args.strict,
-                    judge_merged=firehose_judge)
+                    judge_merged=assembled_judge)
 
-    # Output-configmap mode
-    if args.output_configmap:
-        _output_configmap_mode(routes, receivers, inhibit_rules, base_config,
-                              namespace, configmap_name, args.dry_run, args.output,
-                              strict=args.strict, judge_emitted=firehose_judge)
-        return
-
-    # Default render mode
-    _render_output_mode(routes, receivers, inhibit_rules, args.dry_run, args.output)
+    # --output-configmap / --output-alertmanager: one merge, two wrappers.
+    _assembled_output_mode(routes, receivers, inhibit_rules, base_config,
+                           namespace, configmap_name, args.dry_run, args.output,
+                           strict=args.strict, judge_emitted=assembled_judge,
+                           as_configmap=bool(args.output_configmap))
 
 
 if __name__ == "__main__":

@@ -289,14 +289,15 @@ docker run --rm \
 ```bash
 mkdir -p .output
 
-# 產出檔案：不要同時給 --validate——它在用到 -o 之前就結束，工具會直接拒絕（結束碼 2）
+# 產出合併後的 alertmanager.yml：一定要帶模式旗標（只帶 -o 是結束碼 2）；
+# 不要同時給 --validate——它在用到 -o 之前就結束，工具會直接拒絕（結束碼 2）
 docker run --rm \
   --user $(id -u):$(id -g) \
   -v $(pwd)/conf.d:/data/conf.d:ro \
   -v $(pwd)/.output:/data/output \
   ghcr.io/vencil/da-tools:latest \
-  generate-routes --config-dir /data/conf.d \
-  -o /data/output/alertmanager-routes.yaml
+  generate-routes --config-dir /data/conf.d --output-alertmanager \
+  -o /data/output/alertmanager.yml
 
 # 驗證另外跑一次（只讀、不寫檔）
 docker run --rm \
@@ -312,8 +313,10 @@ docker run --rm \
 Config files: 8 read, 0 skipped
 Found 5 tenant(s) with routing config: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
 Found 5 tenant(s) for severity dedup: prod-kafka, prod-mariadb, prod-oracle, prod-redis, staging-pg
-Written to /data/output/alertmanager-routes.yaml (5 routes, 5 receivers, 5 inhibit rules)
+Written to /data/output/alertmanager.yml (5 routes, 5 receivers, 5 inhibit rules)
 ```
+
+stderr 另有兩行 WARN，在這個練習裡是預期的：本練習沒給 `--base-config`，所以設定合併進內建 placeholder base，它的 root receiver `default` 與 `watchdog-heartbeat` 都沒有接任何通知管道。接你自己的 Alertmanager 時要帶 `--base-config <你的 alertmanager.yml>`，見 [BYO Alertmanager 整合指南 Step 5](../integration/byo-alertmanager-integration.md#step-5-merge-into-alertmanager-configmap)。⚠️ v2.9.0 映像沒有 `--output-alertmanager`（`:latest` 在下一版發布前仍是它）；用那顆映像時拿掉 `--output-alertmanager`，它輸出的是只含租戶路由的片段 <!-- image-caveat: v2.9.0 -->
 
 第二次執行（`--validate`）：
 
@@ -325,7 +328,7 @@ Validation: 5 route(s), 5 receiver(s), 5 inhibit rule(s)
 OK: all configs valid
 ```
 
-每個租戶在產出檔 `.output/alertmanager-routes.yaml` 的 `route.routes` 底下各有一段（`matchers: tenant="…"`），`receivers` 與 `inhibit_rules` 各 5 筆。對照練習 2 的設定：
+產出檔 `.output/alertmanager.yml` 是完整的 Alertmanager 設定。`route.routes` 最前面是平台的 4 條路由（Watchdog、`component="custom"`、synthetic probe、sentinel），之後每個租戶各有一段（`matchers: tenant="…"`）；`receivers` 除了 5 個 `tenant-…` 之外還有 base 的 `default` 與 4 個平台 receiver，`inhibit_rules` 有 5 筆租戶的 severity dedup。對照練習 2 的設定：
 
 | 租戶 | receiver | group_wait | repeat_interval | 來自 |
 |---|---|---|---|---|

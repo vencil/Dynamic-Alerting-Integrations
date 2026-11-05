@@ -15,11 +15,17 @@ going to the base's stale endpoint.
 The contract pinned here (owner decision on #2279), all with amtool NOT on
 PATH so the verdict cannot be amtool's:
 
-* duplicate generated names → ``--validate`` rc 1 naming BOTH sources; render /
-  ``--output-configmap`` rc 1 with nothing written, with or without --strict;
-  validate-config's ``routes`` row FAIL — through the same predicate;
-* base shadowing a generated name → ``--output-configmap`` rc 1, nothing
-  written; the four platform placeholder names are NOT shadowing;
+* duplicate generated names → ``--validate`` rc 1 naming BOTH sources;
+  ``--output-alertmanager`` / ``--output-configmap`` rc 1 with nothing
+  written, with or without --strict; validate-config's ``routes`` row FAIL —
+  through the same predicate;
+* #1211 gap 2 reversed the base-shadowing half: a base receiver named in the
+  generator's namespace (``tenant-*``) is an earlier run's output, and the
+  generated one REPLACES it (one copy, the conf.d endpoint) — the silent
+  "base wins" defect stays fixed, from the other side; the four platform
+  placeholder names still defer to a richer base definition. A collision
+  OUTSIDE the namespace is still refused (unit-level, in
+  test_generate_routes_orchestration.py);
 * a tree without collisions is unaffected (control).
 
 Tenant ids are fixture names (CLAUDE.md #9).
@@ -125,8 +131,8 @@ class TestGeneratedNameCollision:
         assert "OK: all configs valid" not in out
         assert src in err and f"tenant '{other}' main receiver" in err, err
 
-    @pytest.mark.parametrize("mode", [[], ["--output-configmap"]],
-                             ids=["render", "output-configmap"])
+    @pytest.mark.parametrize("mode", [["--output-alertmanager"], ["--output-configmap"]],
+                             ids=["output-alertmanager", "output-configmap"])
     @pytest.mark.parametrize("strict", [False, True], ids=["plain", "strict"])
     def test_write_modes_exit_1_and_write_nothing(self, clash, tmp_path,
                                                    mode, strict):
@@ -203,7 +209,7 @@ class TestBaseShadowing:
         }), encoding="utf-8")
         return b
 
-    def test_base_receiver_with_a_generated_name_is_refused(self, tmp_path):
+    def test_base_receiver_with_a_generated_name_is_replaced(self, tmp_path):
         d = self._tree(tmp_path)
         base = self._base(tmp_path, [{
             "name": f"tenant-{_BASE_T}",
@@ -212,10 +218,13 @@ class TestBaseShadowing:
         rc, _out, err = _gar(["--config-dir", str(d), "--output-configmap",
                               "--base-config", str(base), "-o", str(out)],
                              tmp_path)
-        assert rc == 1, err
-        assert not out.exists()
-        assert f"'tenant-{_BASE_T}'" in err, err
-        assert "Traceback" not in err, err
+        assert rc == 0, err
+        am = yaml.safe_load(yaml.safe_load(out.read_text(encoding="utf-8"))
+                            ["data"]["alertmanager.yml"])
+        mine = [r for r in am["receivers"] if r["name"] == f"tenant-{_BASE_T}"]
+        assert len(mine) == 1, am["receivers"]
+        assert "stale.example.com" not in str(mine[0]), (
+            "the base's stale definition won over the conf.d one (#2279)")
 
     def test_platform_placeholder_names_in_base_are_not_shadowing(self, tmp_path):
         """These four are injected only if absent — a richer base definition

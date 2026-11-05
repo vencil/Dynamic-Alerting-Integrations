@@ -223,20 +223,22 @@ da-tools validate-config --config-dir conf.d/
 
 ### 2.3 Stage 2: Generate
 
-僅在 PR 時執行。產出 Alertmanager 配置片段並計算變更影響範圍。⚠️ 下方註解說的「da-tools 映像內含 amtool」不適用於 v2.9.0 映像：它不內含 `amtool` <!-- image-caveat: v2.9.0 -->
+僅在 PR 時執行。產出合併後的 Alertmanager 設定並計算變更影響範圍。⚠️ 下方註解說的「da-tools 映像內含 amtool」不適用於 v2.9.0 映像：它不內含 `amtool`；v2.9.0 映像也還是舊的產生器（不帶模式旗標時輸出片段、`--output-configmap` 整個取代 `route.routes`） <!-- image-caveat: v2.9.0 -->
 
 ```bash
-# 產出 Alertmanager routes/receivers/inhibit_rules
+# 把租戶路由合併進你的 Alertmanager base，產出完整 ConfigMap
+# （非 K8s 的 Alertmanager 改用 --output-alertmanager，輸出純 alertmanager.yml）
 mkdir -p .output
-da-tools generate-routes --config-dir conf.d/ \
-  -o .output/alertmanager-routes.yaml
+da-tools generate-routes --config-dir conf.d/ --output-configmap \
+  --base-config alertmanager-base.yaml -o .output/alertmanager-configmap.yaml
+# ⛔ 一定要帶一個模式旗標：只帶 -o 是結束碼 2（片段模式已移除，#1211）。
 # ⛔ 不要在同一次呼叫加 --validate：它會在用到 -o 之前就結束（#1423），
 # 而工具現在會直接拒絕這個組合（結束碼 2；#1650）。要驗證就另外跑一次
 # （--validate 也不讀 --dry-run，同樣結束碼 2）：
 da-tools generate-routes --config-dir conf.d/ --validate
-# ⚠️ -o 寫出的是 fragment（不是完整設定），不經 Alertmanager 自己的 parser 驗證；
-#    --validate 會把設定組進「內建預設 base」交給 amtool（#2260），不是你的 base。
-#    要驗你自己的 base 就改用 --output-configmap --base-config（#2219）。
+# ⚠️ --validate 會把設定組進「內建預設 base」交給 amtool（#2260），不是你的 base；
+#    上面的 --output-configmap --base-config 則驗你自己的 base 組出來的那份（#2219）。
+#    合併只換掉產生器擁有的部分，base 裡你自己的路由與 receiver 原樣保留。
 #    da-tools 映像內含 amtool（#2294），在映像裡跑這兩道驗證預設就會執行。
 
 # 計算 blast radius（影響哪些 tenant、哪些 metric）

@@ -70,7 +70,7 @@ tenants:
 ```
 
 ```bash
-python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --dry-run
+python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ --output-alertmanager --dry-run
 ```
 
 輸出（節錄）：只有 `shop` 得到抑制規則，`batch` 被略過。
