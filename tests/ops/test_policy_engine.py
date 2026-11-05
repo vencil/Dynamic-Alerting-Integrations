@@ -459,6 +459,22 @@ class TestEvaluatePolicies:
         assert result.passed is True
         assert result.tenants_evaluated == 0
 
+    def test_retired_spellings_are_the_exporters_rule(self, make_rule, da_guard_env):
+        """#3556: a rule's retired spelling is read by the exporter's rule
+        (`da-guard key-spellings`), the dimensional shapes included — a
+        wildcard written in the retired spelling reaches a dimensional key,
+        which the Python copy this replaced did not, and an exact
+        `<alias>_critical{…}` target names the canonical key."""
+        from _registry_lib import DEPRECATED_KEY_ALIASES
+        legacy, canon = next(iter(DEPRECATED_KEY_ALIASES.items()))
+        dim, crit = canon + '{db="a"}', canon + '_critical{db="a"}'
+        config = {dim: 5, crit: 9}
+        rules = [make_rule(name="wild", target=legacy + "*", operator="lte", value=3),
+                 make_rule(name="exact", target=legacy + '_critical{db="a"}', operator="lte", value=3)]
+        result = pe.evaluate_policies(rules, {"t": config})
+        got = sorted((v.rule_name, v.target) for v in result.violations)
+        assert got == [("exact", legacy + '_critical{db="a"}'), ("wild", crit), ("wild", dim)], got
+
 
 # ═══════════════════════════════════════════════════════════════════
 # TestLoadPolicies
@@ -597,7 +613,20 @@ class TestLoadPolicyInputs:
         # Go 自動補的預設值不算有寫
         assert "_severity_dedup" not in a and "_metadata" not in a and "_silent_mode" not in b
         assert "_routing" not in a                     # 沒有規則讀它就不載入
-        assert inputs.aliases.get("mysql_cpu") == "mysql_threads_running"
+
+    def test_an_unserved_retired_spelling_is_keyed_canonically(self, tmp_path):
+        """#3556: a threshold the config carries but /metrics does not serve,
+        written in a #1231 retired spelling, is in the view under the
+        exporter's canonical spelling, so a rule naming the canonical key
+        finds it configured."""
+        from _registry_lib import DEPRECATED_KEY_ALIASES
+        legacy, canon = next(iter(DEPRECATED_KEY_ALIASES.items()))
+        d = _write_tree(tmp_path, {
+            "_defaults.yaml": f"defaults:\n  {canon}: 80\n",
+            "tenant-a.yaml": f"tenants:\n  tenant-a:\n    {legacy}_critical{{db=\"a\"}}: '90'\n",
+        })
+        view = pe.load_policy_inputs(str(d)).views["tenant-a"]
+        assert isinstance(view.get(canon + '_critical{db="a"}'), pe.Unserved), view
 
     def test_flat_and_empty_files_are_not_tenants(self, tmp_path, capsys):
         """行為變更：沒有 `tenants:` 的檔（含空檔）不再以檔名當租戶，stderr 逐檔 WARN。"""
@@ -948,6 +977,26 @@ class TestCLI:
         assert doc["error_count"] == 0
         assert doc["passed"] is True
 
+    def test_main_spellings_failure_is_the_loads_failure(self, tmp_path, capsys, monkeypatch):
+        """#3556: evaluating asks da-guard for the #1231 spellings; a da-guard
+        that cannot answer (one older than `key-spellings`) is rc 2 with the
+        load's message, not an internal error with a traceback."""
+        import types
+        (tmp_path / "_defaults.yaml").write_text(
+            "_policies:\n  - {name: p, target: mysql_connections, operator: required}\n",
+            encoding="utf-8")
+        monkeypatch.setattr(pe, "load_policy_inputs",
+                            lambda *a, **kw: types.SimpleNamespace(views={"t": {"mysql_connections": 1}}))
+
+        def stale(_keys, **_kw):
+            raise pe.ServedValuesError("da-guard key-spellings exited 2 — it is older than this tool",
+                                       None, "", stale=True)
+        monkeypatch.setattr(pe, "key_spellings", stale)
+        exit_code = emit_result(pe.main(["--config-dir", str(tmp_path), "--ci"]))
+        err = capsys.readouterr().err
+        assert exit_code == 2, err
+        assert "older than this tool" in err and "Traceback" not in err and "internal error" not in err, err
+
     def test_main_no_tenant_configs_json_is_rc_0(self, tmp_path, capsys, monkeypatch):
         """#1112 under --json (#3216): rules but no tenant read — the zeroed
         report goes out through run() and the run is rc 0, as without --json."""
@@ -959,7 +1008,7 @@ _policies:
     operator: required
 """, encoding="utf-8")
         monkeypatch.setattr(pe, "load_policy_inputs",
-                            lambda *a, **kw: types.SimpleNamespace(views={}, aliases={}))
+                            lambda *a, **kw: types.SimpleNamespace(views={}))
         exit_code = emit_result(pe.main(["--config-dir", str(tmp_path), "--json", "--ci"]))
         doc = json.loads(capsys.readouterr().out)
         assert (doc["status"], doc["rules_evaluated"]) == ("no_tenant_configs", 1)

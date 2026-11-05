@@ -100,10 +100,9 @@ func TestJudge_APartialSiblingWithNoSourceIsServedFromUnknown(t *testing.T) {
 	}
 }
 
-// A Policy-as-Code rule names a key in either #1231 spelling, as
-// Policy-as-Code compares them (policyCanonical) — a dimensional `_critical`
-// included, though the exporter serves `mysql_cpu_critical{…}` as written:
-// the rule reads it, so it is read.
+// A Policy-as-Code rule names a key in either #1231 spelling
+// (canonicalSpelling, the exporter's own rule) — a dimensional `_critical`
+// included (#3556): the rule reads it, so it is read.
 func TestJudge_APolicyRuleNamesAKeyAsPolicyAsCodeSpellsIt(t *testing.T) {
 	t.Parallel()
 	judged := func(key, head string) string {

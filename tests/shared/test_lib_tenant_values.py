@@ -467,12 +467,14 @@ def test_ungatherable_segment_is_parsed_with_its_error(tmp_path, da_guard):
     assert segs[1].error and "HTTP 500" in segs[1].error
 
 
-def test_aliases_are_the_exporters_table(tmp_path, da_guard):
-    """舊拼法寫的 key 經 da-guard 給的別名表找得到；表不在 Python 端維護。"""
+def test_a_retired_spelling_is_found_through_the_exporters_rule(tmp_path, da_guard):
+    """舊拼法寫的 key 照 exporter 的規則（`key_spellings`，#3556）找得到；Python 端
+    沒有別名表，served-values 也不再給一份。"""
     conf_d = _tree(tmp_path, _SCHEDULED)
     tree = tv.load_served_tree(conf_d, binary=da_guard, schedules=True)
-    assert "mysql_cpu" in tree.aliases
-    canon = tree.aliases["mysql_cpu"]
+    assert "aliases" not in tv.ServedTree._fields
+    canon = tv.key_spellings(["mysql_cpu"], binary=da_guard).canonical("mysql_cpu")
+    assert canon != "mysql_cpu"
     assert tree.tenants["tenant-a"].values[canon] == 44
     assert "mysql_cpu" not in tree.tenants["tenant-a"].schedules
     assert canon in tree.tenants["tenant-a"].schedules
@@ -484,15 +486,6 @@ def _old_da_guard(tmp_path: Path, doc: str) -> str:
     fake.write_text(f"#!/bin/sh\necho '{doc}'\n", encoding="utf-8")
     fake.chmod(0o755)
     return str(fake)
-
-
-def test_output_without_aliases_is_refused(tmp_path):
-    fake = _old_da_guard(tmp_path, '{"schema": "da-guard.served-values/v1", "at": "x", "parse_failed": [], "skipped": [], '
-                                   '"unreadable": [], "tenants": {}}')
-    with pytest.raises(tv.ServedValuesError) as ei:
-        tv.load_served_tree(tmp_path, binary=fake)
-    assert "aliases" in str(ei.value)
-    assert "older than this tool: upgrade or rebuild it" in str(ei.value)
 
 
 def test_output_without_schedules_is_refused(tmp_path):
@@ -523,7 +516,6 @@ def test_schedules_are_asked_for_only_on_request(tmp_path, da_guard):
     full = tv.load_served_tree(conf_d, at="2026-07-01T03:00:00Z", binary=da_guard, schedules=True)
     assert all(t.schedules is None for t in plain.tenants.values())
     assert all(t.schedules for t in full.tenants.values())
-    assert plain.aliases == full.aliases and plain.aliases
     assert {k: t._replace(schedules=None) for k, t in full.tenants.items()} == plain.tenants
 
 

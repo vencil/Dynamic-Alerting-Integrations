@@ -273,12 +273,11 @@ func fileLevelKey(key string) bool {
 
 // Judge is the verdict over the readings in.
 func Judge(in Input) Tree {
-	// A key in the exporter's canonical spelling (#1231): the exporter's
-	// own function, which maps a retired base key, its `_critical` and its
-	// dimensional spellings — and not a dimensional `_critical`, which the
-	// exporter serves as written. It looks a key up in the served reading.
-	canon := func(k string) string { c, _ := config.CanonicalKeyFor(k); return c }
-	policy := policyCanonical(config.DeprecatedKeyAliases())
+	// A key in the exporter's canonical spelling (#1231, canonicalSpelling):
+	// it looks a key up in the served reading, and it is how a policy rule
+	// names a key — one rule for both (#3556).
+	canon := canonicalSpelling
+	policy := canonicalSpelling
 	keys := map[string][]KeyVerdict{}
 	rootDefaults := map[string]string{}
 	tenants := map[string]bool{}
@@ -453,7 +452,7 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 }
 
 // namedByPolicy: a rule that applies to the tenant names the key itself, in
-// either #1231 spelling as Policy-as-Code compares them (policyCanonical).
+// either #1231 spelling (canonicalSpelling).
 // A wildcard head (`mysql_*`) is compared as written, so it names only a key
 // literally spelt that way — never every misspelling it would match.
 func namedByPolicy(tenant, key string, heads []PolicyHead, policy func(string) string) bool {
@@ -466,35 +465,13 @@ func namedByPolicy(tenant, key string, heads []PolicyHead, policy func(string) s
 	return false
 }
 
-// policyCanonical is a key as Policy-as-Code spells it when it compares a
-// rule's target with a tenant's keys: policy_engine's `_canonical_target`
-// over `canonical_key` (scripts/tools/_lib_tenant_values.py), the alias
-// table applied to a base key, to its `_critical`, and to either with
-// dimensions — `mysql_cpu_critical{db="a"}` included, which the exporter
-// serves as written (CanonicalKeyFor leaves it) but Policy-as-Code reads in
-// the canonical spelling. The reader decides what it reads: a verdict that
-// compared by the exporter's spelling would call that key unread while the
-// rule reads it. Reserved keys are returned as they are.
-func policyCanonical(aliases map[string]string) func(string) string {
-	return func(key string) string {
-		if len(aliases) == 0 || strings.HasPrefix(key, "_") {
-			return key
-		}
-		base, dims, hasDims := strings.Cut(key, "{")
-		brace := ""
-		if hasDims {
-			brace = "{"
-		}
-		if c, ok := aliases[base]; ok {
-			return c + brace + dims
-		}
-		if b, ok := strings.CutSuffix(base, "_critical"); ok {
-			if c, ok := aliases[b]; ok {
-				return c + "_critical" + brace + dims
-			}
-		}
-		return key
-	}
+// canonicalSpelling is a key in the exporter's canonical spelling
+// (config.CanonicalKeyFor): the one rule every reader compares #1231
+// spellings by — Policy-as-Code included, which asks it through `da-guard
+// key-spellings` rather than keeping a copy (#3556).
+func canonicalSpelling(key string) string {
+	c, _ := config.CanonicalKeyFor(key)
+	return c
 }
 
 // groupKey groups the findings of keys: (kind, file, key, own tenant).

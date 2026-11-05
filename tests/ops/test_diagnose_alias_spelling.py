@@ -21,7 +21,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools"))
 sys.path.insert(0, str(REPO_ROOT / "scripts" / "tools" / "ops"))
 import diagnose  # noqa: E402
-from _grar_validate import DEPRECATED_KEY_ALIASES, _legacy_tenant_key  # noqa: E402
+from _registry_lib import DEPRECATED_KEY_ALIASES  # noqa: E402  (the authored table)
+from _lib_tenant_values import key_spellings  # noqa: E402  (#3556: the exporter's rule)
 from _lib_confd import overlay_platform_tenants  # noqa: E402
 
 # #2526: the chain is `da-guard effective`'s answer.
@@ -51,7 +52,7 @@ def test_resolved_carries_the_served_value_once(tree: dict, tmp_path: Path) -> N
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text(content, encoding="utf-8")
     key = tree["metric_key"]
-    spellings = {key, _legacy_tenant_key(key)}
+    spellings = set(key_spellings([key]).spellings(key))
     chain = diagnose.resolve_inheritance_chain("tx", str(tmp_path))
     got = {k: v for k, v in chain["resolved"].items() if k in spellings}
     assert len(got) == 1, (tree["name"], got)

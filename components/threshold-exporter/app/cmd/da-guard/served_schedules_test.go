@@ -1,7 +1,7 @@
 package main
 
-// served_schedules_test.go — served-values' `schedules` and `aliases`
-// (#2115 (c)).
+// served_schedules_test.go — served-values' `schedules` (#2115 (c)), and
+// the alias table it no longer carries (#3556).
 
 import (
 	"encoding/json"
@@ -323,13 +323,20 @@ func TestServedSchedules_ScalarTreeIsOneSegment(t *testing.T) {
 	}
 }
 
-// TestServedValues_Aliases: the document carries the exporter's alias table.
-func TestServedValues_Aliases(t *testing.T) {
+// TestServedValues_NoAliasTable: the document carries no alias table
+// (#3556) — a reader asks `key-spellings` for a retired spelling, so the
+// table Python rebuilt its own copies of the rule from is not handed out.
+func TestServedValues_NoAliasTable(t *testing.T) {
 	t.Parallel()
-	code, doc, _, stderr := served(t, map[string]string{"_defaults.yaml": defaultsOnly, "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 1\n"}, scheduleAt)
+	dir := writeTree(t, map[string]string{"_defaults.yaml": defaultsOnly, "tenant-a.yaml": "tenants:\n  tenant-a:\n    mysql_connections: 1\n"})
+	code, stdout, stderr := runOnce(t, servedValuesCmd, "--config-dir", dir, "--at", scheduleAt)
 	mustOK(t, code, stderr)
-	if !reflect.DeepEqual(doc.Aliases, config.DeprecatedKeyAliases()) || len(doc.Aliases) == 0 {
-		t.Errorf("aliases = %v, want %v", doc.Aliases, config.DeprecatedKeyAliases())
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(stdout), &doc); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := doc["aliases"]; ok {
+		t.Errorf("served-values carries an alias table: %v", doc["aliases"])
 	}
 }
 
@@ -496,8 +503,8 @@ func TestServedValues_SchedulesAreOptIn(t *testing.T) {
 		return doc
 	}
 	without, with := decode(), decode("--schedules")
-	if _, ok := without["aliases"]; !ok {
-		t.Error("aliases missing without --schedules")
+	if _, ok := without["skipped"]; !ok {
+		t.Error("skipped missing without --schedules")
 	}
 	tenantsWith := with["tenants"].(map[string]any)
 	for name, tv := range without["tenants"].(map[string]any) {

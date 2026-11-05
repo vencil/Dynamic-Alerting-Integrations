@@ -321,6 +321,22 @@ class TestAnalyzeTenant:
         assert "tenant:mysql_threads_connected:max" in rec.promql
         assert "dry-run" in rec.reason
 
+    def test_retired_spelling_is_looked_up_by_the_exporters_rule(self, da_guard_env):
+        """#3556: a key in a #1231 retired spelling — a dimensional `_critical`
+        included — is looked up in the observed-map by its canonical spelling,
+        which the exporter's rule gives (`da-guard key-spellings`)."""
+        from _registry_lib import DEPRECATED_KEY_ALIASES
+        legacy, canon = next(iter(DEPRECATED_KEY_ALIASES.items()))
+        key, canonical = legacy + '_critical{db="a"}', canon + '_critical{db="a"}'
+        observed_map = {canonical: {"scope": "tenant", "direction": ">",
+                                    "observed_series": "tenant:mysql_threads_running:avg1m"}}
+        report = tr.analyze_tenant("db-a", {key: 5}, dry_run=True, observed_map=observed_map)
+        rec = report.keys[0]
+        assert (rec.key, rec.canonical_key) == (key, canonical), rec
+        # The observed-map is keyed by the canonical spelling only: the
+        # lookup found it, so the query names its series.
+        assert "tenant:mysql_threads_running:avg1m" in rec.promql, rec
+
     def test_unmapped_key_skipped(self):
         """未對映的 key fail-loud skip。"""
         config = {"totally_unknown": 5}
