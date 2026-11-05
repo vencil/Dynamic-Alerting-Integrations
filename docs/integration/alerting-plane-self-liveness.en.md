@@ -24,7 +24,7 @@ The fix: a **permanently-firing** `Watchdog` alert (`expr: vector(1)`) routed th
 |---|---|
 | `Watchdog` rule + `AlertmanagerWebhookNotificationsFailing` internal companion alert | `rule-packs/rule-pack-platform.yaml` (source; `make rulepack-configmaps` generates the deployed `k8s/03-monitoring/configmap-rules-platform.yaml`) |
 | Top-priority route (`routes[0]`) + `watchdog-heartbeat` receiver (`url_file`) | `k8s/03-monitoring/configmap-alertmanager.yaml` (the route is re-injected at index 0 by the platform's `generate_alertmanager_routes.py` on every regeneration, surviving the route-REPLACE) |
-| External DMS URL (embeds a token, **secret**) | `k8s/03-monitoring/secret-watchdog-heartbeat.yaml` → mounted at `/etc/alertmanager/secrets/watchdog-heartbeat-url` |
+| External DMS URL (embeds a token, **secret**) | `k8s/03-monitoring/secret-watchdog-heartbeat.yaml` → mounted at `/etc/alertmanager/secrets/watchdog-heartbeat/watchdog-heartbeat-url` |
 
 > ⚠️ **This document covers only the `Watchdog` heartbeat lane.** The same rule pack contains **the rest of the** platform self-monitoring alerts (health of the exporter / tenant-api / federation / projection pipeline). They do **not** ride this lane, and out of the box they land in the notifier-less `default` receiver. Configuring the heartbeat does **not** mean those will reach you — to wire them, see [BYO Alertmanager Integration Guide §11 Delivering Platform Self-Monitoring Alerts](byo-alertmanager-integration.en.md#11-delivering-platform-self-monitoring-alerts) (`_routing_enforced` + `match: ['alert_source="platform"']`).
 

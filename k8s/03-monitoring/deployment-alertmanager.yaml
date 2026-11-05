@@ -65,8 +65,13 @@ spec:
             # embeds a token/UUID) is mounted here and referenced via the
             # watchdog-heartbeat receiver's url_file. Read-only; compatible with
             # readOnlyRootFilesystem (a separate volume mount, not the root fs).
+            # #1560: one directory per Secret, <root>/<secret-name>/<key> — the
+            # layout the route generator renders a receiver's Secret reference
+            # to (--secret-mount-root, default /etc/alertmanager/secrets) and
+            # Prometheus Operator's spec.secrets uses. A tenant's own Secret
+            # (da-<tenant>) or a shared one is mounted beside this one.
             - name: watchdog-secret
-              mountPath: /etc/alertmanager/secrets
+              mountPath: /etc/alertmanager/secrets/watchdog-heartbeat
               readOnly: true
           resources:
             requests:

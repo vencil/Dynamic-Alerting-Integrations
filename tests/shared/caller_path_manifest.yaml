@@ -149,6 +149,9 @@ commands:
     "--namespace": not_path
     "--output": output
     "--policy": file
+    # #1560: a path inside the Alertmanager container, written into the
+    # rendered `<field>_file`; never opened here.
+    "--secret-mount-root": not_path
   generator-service:
     "--cache-max-bytes": not_path
     "--config-subdir": {kind: reader, by: "git ls-tree of HEAD at start, the judgement's own reading (_gsvc_child.tree_entries): no directory there is refused, no entry at all is an empty conf.d", pinned_by: "tests/shared/test_caller_paths.py::test_generator_service_refuses_a_config_subdir_that_is_no_directory"}

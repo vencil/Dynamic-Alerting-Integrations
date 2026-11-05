@@ -65,7 +65,7 @@ receivers:
       # The heartbeat URL embeds a token/UUID = a secret; never inline it in the
       # ConfigMap (it would trip secret-scan). Use url_file pointing at a mounted
       # Secret; an unset Secret = disabled, blind spot recorded.
-      - url_file: /etc/alertmanager/secrets/watchdog-heartbeat-url
+      - url_file: /etc/alertmanager/secrets/watchdog-heartbeat/watchdog-heartbeat-url
       # ⚠️ For multi-channel redundancy (dual external monitors), add more
       #    webhook_configs HERE; never split into multiple routes above —
       #    they'd be cut off by continue: false.
