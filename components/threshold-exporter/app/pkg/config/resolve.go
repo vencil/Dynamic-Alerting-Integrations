@@ -433,6 +433,69 @@ func isThresholdExpired(sv ScheduledValue, now time.Time) bool {
 	return now.After(t)
 }
 
+// headLive reports whether the tenant's value sv of family base key base
+// applies at now — the one expiry rule of a family head (#3046): an
+// `expires:` is honoured only for a key the root `defaults:` values
+// (resolveBaseRows' fail-safe hook, PREVENT #656: a lapsed value falls back
+// to the platform default); every other head — a declared key, a base only
+// `dimensions:` names — keeps its value, as resolveDeclaredRows does.
+func headLive(base string, defaults map[string]float64, sv ScheduledValue, now time.Time) bool {
+	if _, valued := defaults[base]; valued {
+		return !isThresholdExpired(sv, now)
+	}
+	return true
+}
+
+// familyHeadOff reports whether the tenant switches family base off at now
+// (#3046): its value applies (headLive) and is a `disable`
+// (thresholdRowDisabled; `disable:<severity>` is none, #3141). Its family —
+// `<base>_critical` and every dimensional `<base>{…}`, the tenant's own and
+// the root `defaults:` ones — is then served no row.
+//
+// ⛔ THE one reading. resolveBaseRows' and resolveDeclaredRows' State 3 are
+// this same pair (headLive, thresholdRowDisabled) on the value they already
+// resolved; the sibling phases and da-guard (FamilyHeadOffAt) ask this
+// function — nothing else decides whether a family is switched off.
+//
+// base and both maps are canonical (#1231). The base's invalid-window WARN
+// is its own phase's, not repeated here (resolveValue with no logf).
+func familyHeadOff(base string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time) bool {
+	sv, ok := overrides[base]
+	if !ok || !headLive(base, defaults, sv, now) {
+		return false
+	}
+	off, _ := thresholdRowDisabled(sv.resolveValue(now, nil))
+	return off
+}
+
+// FamilyHeadOffAt is familyHeadOff for tenant's map of c (any #1231
+// spelling of key), at now — for da-guard.
+func (c *ThresholdConfig) FamilyHeadOffAt(tenant, key string, now time.Time) bool {
+	overrides, _ := canonicalizeOverrides(c.Tenants[tenant])
+	canon, _ := CanonicalKeyFor(key)
+	return familyHeadOff(canon, canonicalizeDefaults(c.Defaults), overrides, now)
+}
+
+// FamilyBase is the family base key of a `<base>_critical` or dimensional
+// `<base>{…}` key (any #1231 spelling; the base canonical), as the critical
+// and dimensional phases derive it (criticalRowBase, parseKeyWithLabels) —
+// ok false for any other key. Whether the phase then reads the key at all is
+// the phase's own entry test, not this function's.
+func FamilyBase(key string) (base string, ok bool) {
+	canon, _ := CanonicalKeyFor(key)
+	if b, critical := criticalRowBase(canon); critical {
+		return b, true
+	}
+	if isDimensionalKey(canon) && !baseRowsSkipKey(canon) {
+		b, exact, regex := parseKeyWithLabels(canon)
+		if exact == nil && regex == nil {
+			return "", false
+		}
+		return b, true
+	}
+	return "", false
+}
+
 // baseRowsSkipKey reports whether resolveBaseRows skips a defaults key
 // without producing a row: every `_` key (#3045). The `_` namespace is the
 // reserved-key registry's and none of its keys is a threshold — the
@@ -488,13 +551,15 @@ func (c *ThresholdConfig) resolveBaseRows(tenant string, defaults map[string]flo
 			// verdict below.
 			rec.claim(metricKey)
 		}
-		if exists && !isThresholdExpired(sv, now) {
+		if exists && headLive(metricKey, defaults, sv, now) { // familyHeadOff's rule
 			override := sv.resolveValue(now, logf)
 			if rec != nil {
 				rec.noteInvalidWindows(tenant, metricKey, sv)
 			}
-			// State 3: disable. `disable:<severity>` is not one (#3141): it
-			// falls through to the unreadable value below.
+			// State 3: disable — familyHeadOff's reading, which also
+			// switches the key's family off (#3046). `disable:<severity>`
+			// is not one (#3141): it falls through to the unreadable value
+			// below.
 			off, suffixedOff := thresholdRowDisabled(override)
 			if off {
 				continue
@@ -668,7 +733,9 @@ func (c *ThresholdConfig) resolveDeclaredRows(tenant string, defaults map[string
 			rec.claim(metricKey)
 			rec.noteInvalidWindows(tenant, metricKey, sv)
 		}
-		// State 3: disable. Note that for a declared key this is
+		// State 3: disable — familyHeadOff's reading (a declared key has no
+		// expiry: headLive), which also switches its dimensional family off
+		// (#3046). For the key itself this is
 		// indistinguishable in OUTPUT from "never set" — both emit nothing.
 		// It is still honoured so a tenant can express intent, and so a
 		// profile/inherited value can be switched off. `disable:<severity>`
@@ -764,20 +831,30 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 		component, metric := parseMetricKey(baseKey)
 		// The whole value is the number (no `:<severity>`: the row is
 		// critical), read by the one threshold-number reader (#3140).
-		if v, ok := parseThresholdNumber(strings.TrimSpace(override)); ok {
-			rows = appendWithLegacyTwin(rows, baseKey, ResolvedThreshold{
-				Tenant:    tenant,
-				Metric:    metric,
-				Value:     v,
-				Severity:  "critical",
-				Component: component,
-			}, sink, key)
-		} else {
+		v, ok := parseThresholdNumber(strings.TrimSpace(override))
+		if !ok {
 			logf("WARN: invalid critical threshold %q for tenant=%s key=%s%s", override, tenant, key, suffixedHint(suffixedOff, key))
 			if rec != nil {
 				rec.note(tenant, key, NotServedValueUnparsedDropped)
 			}
+			continue
 		}
+		// #3046: the base switched off switches its critical tier off. Asked
+		// after the value is read, so an unreadable value is reported
+		// whatever the base does.
+		if familyHeadOff(baseKey, defaults, overrides, now) {
+			if rec != nil {
+				rec.note(tenant, key, NotServedBaseDisabled)
+			}
+			continue
+		}
+		rows = appendWithLegacyTwin(rows, baseKey, ResolvedThreshold{
+			Tenant:    tenant,
+			Metric:    metric,
+			Value:     v,
+			Severity:  "critical",
+			Component: component,
+		}, sink, key)
 	}
 	return rows
 }
@@ -813,13 +890,33 @@ func (c *ThresholdConfig) resolveCriticalRows(tenant string, defaults map[string
 // unconsumed: the shared key verdict reads it as unread.
 func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[string]float64, overrides map[string]ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
 	var rows []ResolvedThreshold
+	// #3046: whether the tenant switches the family of base off, asked once
+	// per base (familyHeadOff); a base found off is claimed — its `disable`
+	// is read, by the phase that switches its family off — which matters for
+	// a base only `dimensions:` names, which no other phase reads.
+	headOff := map[string]bool{}
+	familyOff := func(key string) bool {
+		base, _, _ := parseKeyWithLabels(key)
+		off, asked := headOff[base]
+		if !asked {
+			off = familyHeadOff(base, defaults, overrides, now)
+			headOff[base] = off
+			if off && rec != nil {
+				rec.claim(base)
+			}
+		}
+		return off
+	}
 	for key, v := range defaults {
 		if sv, own := overrides[key]; (own && !isThresholdExpired(sv, now)) || !isDimensionalKey(key) ||
 			baseRowsSkipKey(key) || !dimensionDeclared(key, c.Dimensions) {
 			continue
 		}
+		if familyOff(key) {
+			continue // a root default of a family the tenant switched off
+		}
 		// Its parse failure is warnUnparsedRootDims' line, once per resolve.
-		rows = c.appendDimensionalRow(rows, tenant, key, ScheduledValue{Default: strconv.FormatFloat(v, 'g', -1, 64)}, now, sink, discardLogf, nil)
+		rows = c.appendDimensionalRow(rows, tenant, key, ScheduledValue{Default: strconv.FormatFloat(v, 'g', -1, 64)}, false, now, sink, discardLogf, nil)
 	}
 	for key, sv := range overrides {
 		if !strings.Contains(key, "{") {
@@ -837,7 +934,7 @@ func (c *ThresholdConfig) resolveDimensionalRows(tenant string, defaults map[str
 		if _, hasDefault := defaults[key]; hasDefault && isThresholdExpired(sv, now) {
 			continue // the default above is served
 		}
-		rows = c.appendDimensionalRow(rows, tenant, key, sv, now, sink, logf, rec)
+		rows = c.appendDimensionalRow(rows, tenant, key, sv, familyOff(key), now, sink, logf, rec)
 	}
 	return rows
 }
@@ -859,8 +956,9 @@ func warnUnparsedRootDims(defaults map[string]float64, logf func(format string, 
 }
 
 // appendDimensionalRow appends the row (and #1231 twin) dimensional key's
-// value sv serves for tenant — nothing for a disabled or unparseable value.
-func (c *ThresholdConfig) appendDimensionalRow(rows []ResolvedThreshold, tenant, key string, sv ScheduledValue, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
+// value sv serves for tenant — nothing for a disabled or unparseable value,
+// nor when familyOff: the tenant switches the key's base off (#3046).
+func (c *ThresholdConfig) appendDimensionalRow(rows []ResolvedThreshold, tenant, key string, sv ScheduledValue, familyOff bool, now time.Time, sink rowSink, logf func(format string, args ...any), rec *rejectRecorder) []ResolvedThreshold {
 	baseKey, customLabels, regexLabels := parseKeyWithLabels(key)
 	if len(customLabels) == 0 && len(regexLabels) == 0 {
 		logf("WARN: failed to parse dimensional key %q for tenant=%s, skipping", key, tenant)
@@ -886,6 +984,14 @@ func (c *ThresholdConfig) appendDimensionalRow(rows []ResolvedThreshold, tenant,
 		logf("WARN: invalid dimensional threshold %q for tenant=%s key=%s, skipping%s", valStr, tenant, key, suffixedHint(suffixedOff, key))
 		if rec != nil {
 			rec.note(tenant, key, NotServedValueUnparsedDropped)
+		}
+		return rows
+	}
+	// Asked after the value is read, as resolveCriticalRows does: an
+	// unreadable value is reported whatever the base does.
+	if familyOff {
+		if rec != nil {
+			rec.note(tenant, key, NotServedBaseDisabled)
 		}
 		return rows
 	}

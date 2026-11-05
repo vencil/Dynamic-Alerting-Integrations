@@ -16,10 +16,14 @@ package main
 // (config.ScheduleCuts), and the tenant's served rows are compared:
 //
 //   - unchanged in every part of the day → noop;
-//   - changed, and a row of the same family (`<key>_critical`, `<key>{…}`:
-//     a /metrics series whose metric_key is the key) is still served in
-//     some part of the day → partial;
-//   - changed otherwise → effective.
+//   - changed → effective.
+//
+// A base's `disable` switches its whole family off (#3046: the resolver's
+// familyHeadOff), so no row of the family (`<key>_critical`, `<key>{…}`: a
+// /metrics series whose metric_key is the key) is served in a part of the
+// day in which the base reads `disable`. That is checked here, on the
+// baseline of every part judged (familyLeak): a family row served there is
+// an internal error — a phase the cascade does not reach — never a verdict.
 //
 // Cost: a tenant's user_threshold rows depend on its own map and the
 // platform's only, so each tenant is judged at its own schedule cuts, over a
@@ -36,6 +40,7 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -46,7 +51,6 @@ import (
 // Values of servedKey.Disable.
 const (
 	disableEffective = "effective"
-	disablePartial   = "partial"
 	disableNoop      = "noop"
 )
 
@@ -76,8 +80,7 @@ func registeredReserved(k string) bool {
 type tenantKey struct{ tenant, key string }
 
 // disableEffects is the effect of every switched-off key of cfg: tenant →
-// key (as cfg spells it) → its effect and, for partial, the family keys still
-// served (sorted, as cfg spells them).
+// key (as cfg spells it) → its effect.
 func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, quiet bool) (
 	map[string]map[string]disableEffect, error,
 ) {
@@ -110,7 +113,6 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 		}
 	}
 	changed := map[tenantKey]bool{}
-	family := map[string]map[string][]metricsSeries{} // tenant → baseline series, every part of its day
 	var judge func(set []tenantKey, m int) error
 	judge = func(set []tenantKey, m int) error {
 		tenants := make([]string, len(set))
@@ -142,13 +144,8 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 			if cf.fingerprint(tk.tenant) != base.fingerprint(tk.tenant) {
 				changed[tk] = true
 			}
-			if !base.failed {
-				if family[tk.tenant] == nil {
-					family[tk.tenant] = map[string][]metricsSeries{}
-				}
-				for k, ss := range base.series[tk.tenant] {
-					family[tk.tenant][k] = append(family[tk.tenant][k], ss...)
-				}
+			if err := familyLeak(part, base, tk, at); err != nil {
+				return err
 			}
 		}
 		return nil
@@ -183,9 +180,6 @@ func disableEffects(cfg *config.ThresholdConfig, at time.Time, name keyNamer, qu
 			e := disableEffect{effect: disableNoop}
 			if changed[tenantKey{tenant, k}] {
 				e.effect = disableEffective
-				if fam := familyServed(family[tenant], k); len(fam) > 0 {
-					e.effect, e.family = disablePartial, fam
-				}
 			}
 			out[tenant][k] = e
 		}
@@ -206,7 +200,6 @@ func onlyTenants(cfg *config.ThresholdConfig, tenants []string) *config.Threshol
 // disableEffect is one switched-off key's effect.
 type disableEffect struct {
 	effect string
-	family []string
 }
 
 // withoutDisables is cfg (one part of the day: every value fixed) with each
@@ -276,9 +269,24 @@ func readCut(cfg *config.ThresholdConfig, at time.Time, name keyNamer, quiet boo
 	return r, nil
 }
 
+// familyLeak is the #3046 invariant on one part of the day (part, its
+// baseline reading base): when the tenant switches tk.key's family off there
+// (config.FamilyHeadOffAt, the resolver's own reading), no row of the
+// family is served. A family row served is an internal error: the cascade
+// misses a phase. Nothing to check when the part cannot be gathered.
+func familyLeak(part *config.ThresholdConfig, base *cutReading, tk tenantKey, at time.Time) error {
+	if base.failed || !part.FamilyHeadOffAt(tk.tenant, tk.key, at) {
+		return nil
+	}
+	if fam := familyServed(base.series[tk.tenant], tk.key); len(fam) > 0 {
+		return fmt.Errorf("internal: tenant %s switches %q off, yet its family %v is served (#3046)", tk.tenant, tk.key, fam)
+	}
+	return nil
+}
+
 // familyServed is the keys other than key whose /metrics series carry key as
-// their metric_key (its `_critical`, its dimensional spellings) in some part
-// of the tenant's day (series: the baseline's, every part), sorted.
+// their metric_key (its `_critical`, its dimensional spellings) in one part
+// of the tenant's day (series: that part's), sorted.
 func familyServed(series map[string][]metricsSeries, key string) []string {
 	canon, _ := config.CanonicalKeyFor(key)
 	var out []string

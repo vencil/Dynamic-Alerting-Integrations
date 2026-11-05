@@ -76,27 +76,34 @@ func TestJudge_ASubtreeDefaultsSourceIsTheSubtreeLayer(t *testing.T) {
 	}
 }
 
-// A partial disable's inherited sibling the effective config has no source
-// for is served from "?" (unknown), never from "".
-func TestJudge_APartialSiblingWithNoSourceIsServedFromUnknown(t *testing.T) {
+// #3046: a `<base>_critical` / `<base>{…}` key served no row because its
+// base is switched off (ReasonBaseDisabled) is read by the exporter — the
+// phase that switches it off read it — so it is no finding, wherever it is
+// written; any other no-row key of the same shape stays unread.
+func TestJudge_AKeySwitchedOffWithItsBaseIsRead(t *testing.T) {
 	t.Parallel()
-	tree := Judge(Input{
-		Served: map[string]ServedTenant{"t1": {
-			Keys: map[string]ServedKey{"mysql_connections": {Reason: ReasonDisabled, Disable: DisablePartial,
-				ServedFamily: []string{"mysql_connections_critical"}}},
-			Values: map[string]any{"mysql_connections_critical": 90.0},
-			Rows:   map[string]bool{"mysql_connections_critical": true}}},
-		Effective: map[string]EffectiveTenant{"t1": {Config: map[string]any{"mysql_connections": "disable"},
-			Sources: map[string]config.KeySource{"mysql_connections": {Layer: config.KeyLayerPlatform, File: "_p.yaml"}}}},
-	})
-	if len(tree.Findings) != 1 {
-		t.Fatalf("findings %+v", tree.Findings)
-	}
-	f := tree.Findings[0]
-	if f.Kind != KindDisablePartial || f.Severity != SeverityWarning ||
-		!reflect.DeepEqual(f.ServedFamily, []string{"mysql_connections_critical"}) ||
-		!reflect.DeepEqual(f.ServedFrom, []string{"?"}) {
-		t.Fatalf("finding %+v", f)
+	for _, layer := range []string{config.KeyLayerTenant, config.KeyLayerProfile, config.KeyLayerPlatform} {
+		for _, reason := range []string{ReasonBaseDisabled, "no_row"} {
+			tree := Judge(Input{
+				Served: map[string]ServedTenant{"t1": {Keys: map[string]ServedKey{
+					"mysql_connections":          {Reason: ReasonDisabled, Disable: DisableEffective},
+					"mysql_connections_critical": {Reason: reason}}}},
+				Effective: map[string]EffectiveTenant{"t1": {
+					Config: map[string]any{"mysql_connections": "disable", "mysql_connections_critical": "90"},
+					Sources: map[string]config.KeySource{
+						"mysql_connections":          {Layer: config.KeyLayerTenant, File: "t1.yaml"},
+						"mysql_connections_critical": {Layer: layer, File: "x.yaml"}}}},
+			})
+			v := one(t, tree, "t1", "mysql_connections_critical")
+			if reason == ReasonBaseDisabled {
+				if v.Verdict != Read || !reflect.DeepEqual(v.ReadBy, []string{"exporter"}) || v.Reason != nil ||
+					len(tree.Findings) != 0 {
+					t.Errorf("%s %s: %+v findings %+v", layer, reason, v, tree.Findings)
+				}
+			} else if v.Verdict != Unread || deref(v.Severity) != SeverityError {
+				t.Errorf("%s %s: %+v", layer, reason, v)
+			}
+		}
 	}
 }
 

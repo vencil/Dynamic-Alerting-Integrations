@@ -718,9 +718,10 @@ def served_metric_configs(tenants):
 
 def _switched_off(tv, key):
     """Whether the exporter switches `key` off for `tv`: served-values'
-    `keys[].reason` "disabled" (#3140 PR2), not a reading of the value."""
+    `keys[].reason` "disabled" (#3140 PR2), or "base_disabled" — switched
+    off with its base (#3046) — not a reading of the value."""
     entry = (tv.keys or {}).get(key)
-    return entry is not None and entry.reason == "disabled"
+    return entry is not None and entry.reason in ("disabled", "base_disabled")
 
 
 def served_disabled_keys(tenants):
@@ -989,13 +990,12 @@ def served_sections(old_tenants, new_tenants):
 
 
 #: What a `disable` does that the report warns about (ADR-038 decision 8).
-DISABLE_WARNED = ("noop", "partial")
+DISABLE_WARNED = ("noop",)
 
 
 def served_disable_warnings(old_tenants, new_tenants):
-    """`{tenant: [{"key", "disable", "served_family"}, ...]}`: every key the
-    PR side switches off with no effect (noop) or only in part (partial)
-    whose effect differs on the base side — what this change brings in, not
+    """`{tenant: [{"key", "disable"}, ...]}`: every key the PR side switches
+    off with no effect (noop) whose effect differs on the base side — what this change brings in, not
     what was already there. A warning, never a change: it does not make the
     exit code 1 on its own."""
     out = {}
@@ -1005,10 +1005,9 @@ def served_disable_warnings(old_tenants, new_tenants):
             if e.disable not in DISABLE_WARNED:
                 continue
             was = old_keys.get(key)
-            if was is not None and was.disable == e.disable and was.served_family == e.served_family:
+            if was is not None and was.disable == e.disable:
                 continue
-            out.setdefault(tenant, []).append(
-                {"key": key, "disable": e.disable, "served_family": list(e.served_family)})
+            out.setdefault(tenant, []).append({"key": key, "disable": e.disable})
     return out
 
 
@@ -1420,17 +1419,13 @@ def _render_keyed(title, note, per_tenant, lines):
 
 
 def _render_disable_warnings(per_tenant, lines):
-    lines.append("## `disable` With No or Partial Effect")
+    lines.append("## `disable` With No Effect")
     lines.append("")
     lines.append("> Brought in by this change. noop: taking the `disable` away changes nothing "
-                 "the exporter serves (often a misspelt key). partial: the key is off, but its "
-                 "`_critical` or dimensional keys are still served.")
+                 "the exporter serves (often a misspelt key).")
     lines.append("")
     for c, tenants in _group_per_tenant(per_tenant):
-        still = ""
-        if c["served_family"]:
-            still = " — still served: " + ", ".join(_code_span(k) for k in c["served_family"])
-        lines.append(f"- {_code_span(c['key'])}: {c['disable']}{still} — {_who(tenants)}")
+        lines.append(f"- {_code_span(c['key'])}: {c['disable']} — {_who(tenants)}")
     lines.append("")
 
 

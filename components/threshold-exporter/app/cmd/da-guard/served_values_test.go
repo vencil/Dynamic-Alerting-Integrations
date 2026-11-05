@@ -59,14 +59,13 @@ type servedOut struct {
 		} `json:"time_boxes"`
 		Routing map[string]any `json:"routing"`
 		Keys    map[string]struct {
-			Exporter     bool                `json:"exporter"`
-			Reason       string              `json:"reason"`
-			Registered   *bool               `json:"registered"`
-			Declared     map[string][]string `json:"declared"`
-			Hint         string              `json:"hint"`
-			Disable      string              `json:"disable"`
-			ServedFamily []string            `json:"served_family"`
-			Refused      string              `json:"refused"`
+			Exporter   bool                `json:"exporter"`
+			Reason     string              `json:"reason"`
+			Registered *bool               `json:"registered"`
+			Declared   map[string][]string `json:"declared"`
+			Hint       string              `json:"hint"`
+			Disable    string              `json:"disable"`
+			Refused    string              `json:"refused"`
 		} `json:"keys"`
 	} `json:"tenants"`
 }

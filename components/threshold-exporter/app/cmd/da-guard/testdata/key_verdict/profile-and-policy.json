@@ -15,7 +15,6 @@
         "severity": "error",
         "reason": "not_exporter_key",
         "disable": null,
-        "served_family": [],
         "value": [
           "a"
         ],
@@ -32,7 +31,6 @@
         "severity": null,
         "reason": null,
         "disable": null,
-        "served_family": [],
         "value": "gold",
         "served": null
       },
@@ -45,7 +43,6 @@
         "severity": "error",
         "reason": "unregistered",
         "disable": null,
-        "served_family": [],
         "value": "x",
         "served": null
       },
@@ -60,7 +57,6 @@
         "severity": null,
         "reason": null,
         "disable": null,
-        "served_family": [],
         "value": 80,
         "served": 80
       },
@@ -75,7 +71,6 @@
         "severity": null,
         "reason": null,
         "disable": null,
-        "served_family": [],
         "value": "x",
         "served": null
       }
@@ -90,7 +85,6 @@
         "severity": "error",
         "reason": "not_exporter_key",
         "disable": null,
-        "served_family": [],
         "value": [
           "a"
         ],
@@ -107,7 +101,6 @@
         "severity": null,
         "reason": null,
         "disable": null,
-        "served_family": [],
         "value": "gold",
         "served": null
       },
@@ -120,7 +113,6 @@
         "severity": "error",
         "reason": "unregistered",
         "disable": null,
-        "served_family": [],
         "value": "x",
         "served": null
       },
@@ -135,7 +127,6 @@
         "severity": null,
         "reason": null,
         "disable": null,
-        "served_family": [],
         "value": 80,
         "served": 80
       },
@@ -148,7 +139,6 @@
         "severity": "error",
         "reason": "no_row",
         "disable": null,
-        "served_family": [],
         "value": "x",
         "served": null
       }
@@ -165,8 +155,6 @@
         "db-b"
       ],
       "reason": "not_read_in_profile",
-      "served_family": [],
-      "served_from": [],
       "blocks": true
     },
     {
@@ -179,8 +167,6 @@
         "db-b"
       ],
       "reason": "unregistered",
-      "served_family": [],
-      "served_from": [],
       "blocks": true
     },
     {
@@ -192,8 +178,6 @@
         "db-b"
       ],
       "reason": "no_row",
-      "served_family": [],
-      "served_from": [],
       "blocks": true
     }
   ],

@@ -1352,15 +1352,16 @@ def test_a_platform_default_reaches_many_tenants_as_one_entry(tmp_path):
     assert p.stdout.count("`group_wait`: `30s` → `1m`") == 1
 
 
-# ── ADR-038 決定 8：這次變更新引入的 `disable` 沒作用／只關到一部分 ─────────
+# ── ADR-038 決定 8：這次變更新引入的 `disable` 沒作用 ─────────
 
 
 class TestDisableWarnings:
-    """PR 新引入的 noop／partial `disable` 列在報告裡；base 已經有的同一件事不重複列。"""
+    """PR 新引入的 noop `disable` 列在報告裡；base 已經有的同一件事不重複列。
+    base 的 `disable` 連帶關掉同族鍵（#3046），沒有「只關到一部分」。"""
 
     _DEFAULTS = "defaults:\n  mysql_connections: 80\n  mysql_slave_lag: 30\n  redis_memory: 70\n"
 
-    def test_new_noop_and_partial_are_listed(self, tmp_path):
+    def test_a_new_noop_is_listed(self, tmp_path):
         old, new = _pair(tmp_path, {
             "_defaults.yaml": self._DEFAULTS,
             "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: disable\n",
@@ -1369,22 +1370,20 @@ class TestDisableWarnings:
             "db-a.yaml": "tenants:\n  db-a:\n    mysql_connections: disable\n"
                          "    mysql_slave_lag: disable\n"  # 新加、有作用：不列
                          "    mysql_slave_lagg: disable\n"  # 拼錯：沒關到任何東西
-                         "    redis_memory: disable\n    redis_memory_critical: \"90\"\n",
+                         "    redis_memory: disable\n    redis_memory_critical: \"90\"\n",  # 連帶關掉：effective
         })
         p = _run_cli(old, new, "--format", "json")
         assert p.returncode == 1, p.stderr
         got = {w["key"]: w for w in _json(p)["disable_warnings"]}
         assert got["mysql_slave_lagg"]["disable"] == "noop"
         assert got["mysql_slave_lagg"]["tenants"] == ["db-a"]
-        assert got["redis_memory"]["disable"] == "partial"
-        assert got["redis_memory"]["served_family"] == ["redis_memory_critical"]
         # 有作用的 disable 不列，新加的也一樣；base 就有的也不列。
-        assert "mysql_slave_lag" not in got and "mysql_connections" not in got
+        assert set(got) == {"mysql_slave_lagg"}
 
         md = _run_cli(old, new).stdout
-        assert "## `disable` With No or Partial Effect" in md
+        assert "## `disable` With No Effect" in md
         assert "- `mysql_slave_lagg`: noop — " in md
-        assert "- `redis_memory`: partial — still served: `redis_memory_critical`" in md
+        assert "still served" not in md
 
     def test_a_noop_already_on_the_base_side_is_not_listed(self, tmp_path):
         tenant = "tenants:\n  db-a:\n    mysql_slave_lagg: disable\n"

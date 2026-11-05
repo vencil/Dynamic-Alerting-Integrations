@@ -107,6 +107,18 @@ package config
 //     shared verdict (#3394), not a uniform error here
 //     (TestValueNotServedAsWritten_NotProfileNotFilled pins it).
 //
+//   - base_disabled (#3046): the critical / dimensional phase reads a
+//     `<base>_critical` or `<base>{…}` key of the tenant's map and serves
+//     no row for it because the tenant switches its base off
+//     (familyHeadOff: `<base>: disable`, wherever the merge took it from)
+//     at the minute read (rejectRecorder). A root `defaults:` dimensional
+//     default of such a family is switched off too; it is not a key of the
+//     tenant's map, so it is not named.
+//
+//     ⛔ NOT one of the reasons ValueNotServedAsWritten selects: not
+//     serving it is what the base's `disable` asks
+//     (TestValueNotServedAsWritten_NotBaseDisabled pins it).
+//
 // ⚠️ NOT COVERED, stated so an empty NotServed is not read as "/metrics
 // serves what effective shows": an expired (`expires:`) override. No
 // recording point exists for it.
@@ -159,6 +171,14 @@ const (
 	// platform value (#1189); not in the effective config
 	// (withProfileNotFilled).
 	NotServedProfileNotFilled = "profile_not_filled"
+	// NotServedBaseDisabled (#3046): a `<base>_critical` or dimensional
+	// `<base>{…}` key of the tenant's map whose base the tenant switches off
+	// (familyHeadOff), so its row is not served — what the `disable` asks.
+	// Recorded by the critical / dimensional phase once the key passed the
+	// phase's own entry tests and its value was read; the weakest reason
+	// (recordedRank), so a reading of the day that refuses the value or
+	// the window keeps that verdict.
+	NotServedBaseDisabled = "base_disabled"
 )
 
 // NotServedKey is why /metrics does not serve one key of an effective config
@@ -331,6 +351,10 @@ func recordedRank(reason string) int {
 		return 2
 	case NotServedWindowInvalid:
 		return 1
+	case NotServedBaseDisabled:
+		// #3046: the weakest — a family switched off at some minute is no
+		// defect; a refused value or window at another minute is.
+		return 0
 	}
 	return 0
 }

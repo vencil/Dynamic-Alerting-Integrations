@@ -18,7 +18,7 @@ Revised 2026-10-16 (corrected from measurement while implementing the registry):
 
 Revised 2026-10-17: no `_` key produces a threshold row any more, and the exporter reads no `_` key the registry does not list, in line with the JSON schema (decision 2); the verdict therefore no longer has `platform_violation`, and such a key is `unread` (decisions 4 and 6).
 
-Revised 2026-10-17: `disable_partial` is reported only when the sibling still served is not written in the tenant's own file, and names the file it comes from; `disable` is to turn off the whole family later (decision 8).
+Revised 2026-11-05: a threshold key's `disable` turns off the whole family — `_critical` and dimension keys — whichever layer writes them; a key turned off with its base is judged read. The "turned off only in part" warning no longer exists and is removed (decision 8).
 
 Revised 2026-10-17: the custom alert compiler compiles the exporter's own reading, so the two read `_custom_alerts` in the same layers (decision 2).
 
@@ -95,12 +95,12 @@ tenants:
     mysql_conections: "70"        # misspelled
     mysql_slave_lagg: disable     # misspelled; meant to turn off mysql_slave_lag
     _routng: disable              # misspelled; meant to disable routing
-    redis_memory: disable         # turn off the warning tier
-    redis_memory_critical: "90"   # keep critical only
+    redis_memory: disable         # turn this alert off
+    redis_memory_critical: "90"
     _namespaces: [prod-ns]        # annotation for tools
 ```
 
-Today's result (actually run on main):
+The result when this was drafted (2026-10-16, actually run on main):
 
 | Tool | Result |
 |---|---|
@@ -113,7 +113,7 @@ validate-config stops `_routng`, but nobody stops the rest:
 
 - The tenant thinks the threshold is 70; the effective value is the default 80.
 - The tenant thinks `mysql_slave_lag` is turned off; it is still served as 30.
-- `redis_memory_critical` is still served as 90. Here the tenant wrote it, to keep the critical tier only; but were the same key inherited from a subdirectory `_defaults.yaml` or a profile, a tenant writing `redis_memory: disable` would think the whole alert is off while the critical alert still fires.
+- `redis_memory_critical` is still served as 90: the tenant wrote `redis_memory: disable` thinking the whole alert is off, yet the critical alert still fires; the same holds when it is inherited from a subdirectory `_defaults.yaml` or a profile. Decision 8 turns the family off with its base.
 
 ### Why not keep extending the key-name rules
 
@@ -244,7 +244,7 @@ profiles:
 
 `redis_evicted_keys` is `unread` at error, reported on `_profiles.yaml` and listing `t1`; `redis_evictd` is not judged and is one `profile_not_judged` notice with an empty tenant list. Who is blocked is decision 6's.
 
-`disable_noop` is only a warning while a misspelled threshold key is an error, because a `disable` that turns nothing off makes no value take wrong effect, and it may be a deliberate safety entry (for example for a key the defaults will only add later); its risk is that what was meant to be turned off was not, so besides the warning, a newly introduced one also appears in the config-diff PR comment (see decision 8). `disable_partial` does not change the verdict (the key is read); it is reported as a separate warning.
+`disable_noop` is only a warning while a misspelled threshold key is an error, because a `disable` that turns nothing off makes no value take wrong effect, and it may be a deliberate safety entry (for example for a key the defaults will only add later); its risk is that what was meant to be turned off was not, so besides the warning, a newly introduced one also appears in the config-diff PR comment (see decision 8).
 
 A level describes only the defect, not who is blocked; whether a write gate blocks depends on the file the finding is in (decision 6).
 
@@ -293,9 +293,9 @@ tenants:
 ```json
 {"key": "mysql_conections", "layer": "tenant", "file": "db-a.yaml", "read_by": [],
  "verdict": "unread", "severity": "error", "reason": "no_row", "disable": null,
- "served_family": [], "value": "70", "served": null}
+ "value": "70", "served": null}
 {"severity": "error", "kind": "unread", "key": "mysql_conections", "file": "db-a.yaml",
- "tenants": ["db-a"], "reason": "no_row", "served_family": [], "served_from": []}
+ "tenants": ["db-a"], "reason": "no_row", "blocks": true}
 ```
 
 This brings a linked amendment: [ADR-036](./036-single-parser-effective-config.en.md) §9 says that da-guard run alone returns exit 4 (undecided) for content it cannot judge. The trigger used to be only "the tree has routing or policy content". It now widens to "the tree has content whose value only the generator can judge": for example, when a tenant writes `_routing_profile`, only the generator can tell whether the profile it names exists. Key names themselves need no generator: the shared verdict judges them from da-guard and the registry (decision 1). Otherwise someone running da-guard alone would read "not judged" as "judged, no problem". Exit 4 itself only exists once step 2 of ADR-036 §7 (da-guard gains "undecided") is done, and this wider scope takes effect from then.
@@ -330,23 +330,29 @@ A misspelled threshold key and "the platform did not declare it, the tenant left
 
 When `_state_<filter>` points to a filter the platform has not declared, or the filter is declared in a sub-directory (which is not read), the cause is in the platform file. These are first reported as a platform-side notice that names the missing declaration. Upgrading them is considered only once a guard is in place for "the platform deleting a filter does not leave existing tenants dangling".
 
-### 8. Whether `disable` has an effect
+### 8. What `disable` turns off, and whether it has an effect
+
+A threshold key's `disable` turns off **a whole family**: the base key itself, `<key>_critical`, and the dimension keys `<key>{…}` (the tenant's, and the dimensional defaults of the root `defaults:`), whichever layer writes them (tenant file, subdirectory `_defaults.yaml`, profile, root platform file's `tenants:`). A scheduled `disable` does so in its window only. Whether a base's `disable` still counts after its `expires:` follows the base's own rule: a key the root `defaults:` values stops counting once expired; any other (a key declared under `optional_overrides:`, a key only `dimensions:` names) ignores `expires:`. A `disable` with a severity, such as `disable:critical`, is no disable and turns nothing off.
+
+To keep the critical tier only, write `X: "90:critical"` and delete `X_critical`: it serves the same series as the old `X: disable` with `X_critical: 90`, while both together serve one series twice and the whole `/metrics` fails. To turn off the critical tier only, write `X_critical: disable`.
+
+A sibling turned off with its base is read by the exporter, which then decides not to serve it, so it is judged read (`read_by` exporter) and not reported; `/effective`'s `not_served` and served-values' `keys` and per-segment `schedules` mark it with reason `base_disabled`. That reason is no `value_not_served`: not serving it is what the `disable` asks. A sibling whose own value cannot be read is still reported `value_unparsed_dropped`, not hidden by `base_disabled`.
+
+Whether a `disable` has an effect is judged by counterfactual recomputation:
 
 | Report | When | How it is judged |
 |---|---|---|
-| `disable_partial` | The base key is turned off, but a `_critical` or dimension key of the same family is still served, and that key is not written in the tenant's own file (it comes from a subdirectory `_defaults.yaml`, a profile, a root platform file's `tenants:`, or the root defaults' dimension keys) | One served-values pass compares keys of the same family; no recomputation needed; where each sibling comes from is `da-guard effective`'s source information |
 | `disable_noop` | Removing this `disable` leaves the served values completely unchanged | Counterfactual recomputation: assume this `disable` does not exist, compute again, and see whether the result changes; the recomputation runs inside Go |
 
 - Reserved keys (`_routing: disable`, `_silent_mode: disable` …) are not exempt and are judged per decision 4.
 - A common cause of `disable_noop` is a misspelled key: in the example above, `mysql_slave_lagg: disable` turns off nothing, and the real `mysql_slave_lag` is still served.
-- The counterfactual recomputation must look at time windows across the whole day (including scheduled values), not a single instant. Otherwise the judgment inside and outside a window would be opposite.
+- The counterfactual recomputation must look at time windows across the whole day (including scheduled values), not a single instant. Otherwise the judgment inside and outside a window would be opposite. The recomputation also checks that in a part of the day in which the base reads `disable`, no row of its family is served; if one is, da-guard exits with an internal error rather than giving a verdict. That check catches a place in the exporter that reads a family key and misses the cascade.
 - Cost: a tenant's threshold rows depend only on its own config and the platform's, so each tenant is recomputed at its own schedule cuts only, and each recomputation holds only that round's tenants; round k removes the k-th `disable` of every tenant together, so the number of rounds equals the most `disable`s any single tenant has, independent of the number of tenants.
 - A `disable` written in a profile or platform file affects every tenant that uses it and is reported on that file.
-- A sibling written in the tenant's own file is deliberate: `X: disable` with `X_critical: 90` means keeping the critical tier only. explain's `disable` column still shows `partial`, but it is no warning; a warning that is reported names the file each sibling still served comes from.
-- Both are reported as warnings across the whole tree. Those **newly introduced** by this change also appear in the config-diff PR comment, because that is what reviewers actually read ([ADR-037](./037-config-diff-compares-rendered-output.en.md)); config-diff does not tell siblings' sources apart and lists every newly introduced partial.
+- `disable_noop` is reported as a warning across the whole tree. Those **newly introduced** by this change also appear in the config-diff PR comment, because that is what reviewers actually read ([ADR-037](./037-config-diff-compares-rendered-output.en.md)).
 - tenant-api's write check recomputes for the written tenants only: the rounds depend on how many `disable`s that tenant has, and each round rebuilds that tenant only, a negligible cost next to loading the whole tree. Recomputing the whole tree runs only in explain, config-diff and CI: each of its rounds rebuilds every tenant of that round, and the number of rounds depends on the configuration, which does not fit the write check's time limit ([ADR-036](./036-single-parser-effective-config.en.md) §3).
 
-`disable` turning off only the base key, without also turning off `_critical` and dimension keys, is the current semantics. It will change to turning off every key of the same family, whatever its source; keeping the critical tier only is then written `X: "90:critical"` (it serves the same series as `X: disable` with `X_critical: 90`). That is a breaking change and ships with the gates starting to block ([#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)). Not adopted: keeping the siblings the tenant's file writes and turning off only the inherited ones — when the exporter computes thresholds it cannot tell which layer a sibling came from, since profile and subdirectory defaults values are already merged into the tenant's config by then.
+Not adopted: keeping the siblings the tenant's file writes and turning off only the inherited ones. When the exporter computes thresholds it cannot tell which layer a sibling came from, since profile and subdirectory defaults values are already merged into the tenant's config by then; telling them apart would take recording each key's source, an approach rejected earlier for its performance cost. The industry comparison is kube-prometheus-stack's `defaultRules.disabled.<AlertName>`: it turns off by alert name, every severity of that name together.
 
 ### 9. Letting users check for themselves
 
@@ -355,7 +361,7 @@ Add an `explain` output: for a given tenant, list per key
 - the source layer and file;
 - which readers read it, and the reason when none does;
 - the effective value;
-- the effect of `disable`: `effective` (it turns something off), `partial` (corresponds to `disable_partial`), `noop` (corresponds to `disable_noop`).
+- the effect of `disable`: `effective` (it turns something off), `noop` (corresponds to `disable_noop`).
 
 The output is a versioned JSON (plus a table for people), built from the existing `da-guard effective` source information, the reason field of served-values, and the counterfactual results; no third format is invented. `--assert <file>` compares the output with a file of expected results and returns non-zero on any difference, so it can go into the customer's own CI. This is used the same way as `amtool config routes test` (given a set of labels, answers which receiver they go to) and `promtool test rules`.
 
@@ -377,7 +383,7 @@ Measured on the main conf.d with the existing rule index, 18 keys are served but
 Each item can ship on its own:
 
 1. The registry, the generated constants and schemas, the black-box probe. No behavior change.
-2. da-guard outputs `read_by` and reasons, `disable_partial`, counterfactual `disable_noop`, explain and `--assert`; the shared function is wired into validate-config, report only, no blocking.
+2. da-guard outputs `read_by` and reasons, counterfactual `disable_noop`, explain and `--assert`; the shared function is wired into validate-config, report only, no blocking.
 3. The generator's `--validate` and the generator container are wired to the shared function, and da-guard's exit 4 widens. This must wait for step 2 of [ADR-036](./036-single-parser-effective-config.en.md) §7 (da-guard gains "undecided") to be done first; before the container is wired up, served-values must be able to compute only the named tenants and have its memory measured (decision 5).
 4. The items of decision 10, and the platform-side notice for `_state_`.
 
@@ -429,8 +435,8 @@ db-a
   mysql_conections        db-a.yaml     —           unread   —        ← error: no reader reads it
   mysql_slave_lagg        db-a.yaml     —           unread   noop     ← warning: turns off nothing; mysql_slave_lag still served as 30
   _routng                 db-a.yaml     —           unread   —        ← error
-  redis_memory            db-a.yaml     exporter    read     partial  ← not reported: redis_memory_critical is db-a's own, keeping critical only
-  redis_memory_critical   db-a.yaml     exporter    read     —
+  redis_memory            db-a.yaml     exporter    read     effective
+  redis_memory_critical   db-a.yaml     exporter    read     —        ← turned off with redis_memory (base_disabled): not served, not reported
   _namespaces             db-a.yaml     annotation  read     —
 ```
 
@@ -467,10 +473,10 @@ Value checks and decision 12: the exporter does not know `_silent_mode: purple` 
 - **An unchanged bad value stays**: under decision 12 an untouched bad value is only a notice, so it stays in the file until someone changes that key, and meanwhile it still silences nothing.
 - **The probe does not cover two kinds**: annotation keys (`_namespaces`), and keys that are read but do not change the output. These rely on explicit marks in the registry.
 - **Cost of counterfactual recomputation**: over the whole tree, the number of rounds equals the most `disable`s any single tenant has, and each round is one served-values, so it does not go into the write check; the write check recomputes for the written tenants only (decision 8).
+- **The cascading `disable` drops one way of writing**: "base off, alert on one dimension only" (`X: disable` with `X{db="a"}: 5`) has no replacement; it takes setting the base's threshold to a value that never fires. A sibling turned off with its base is not reported, so on upgrading from the old semantics, `X: disable` with `X_critical: 90` quietly stops serving the critical tier (decision 8 gives the form to migrate to).
 - **Problems found while measuring, handled separately**:
   - The generator reads `_metadata` but does not use it ([#3043](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3043)).
   - `_severity_dedup` is read only from the tenant file, while other reserved keys inherit from profiles; whether this is intended needs confirming ([#3044](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3044)).
-  - `disable` does not also turn off `_critical` and dimension keys (see decision 8, [#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)).
 
 ## Rejected alternatives
 

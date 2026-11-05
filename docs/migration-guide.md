@@ -274,7 +274,7 @@ tenants:
 | 不支援 `_critical` 後綴 | 改用 `"value:severity"` 語法，如 `"500:critical"` |
 | 預設值 | 租戶的維度 key 不繼承 base 的純量預設值。根 `defaults:` 可寫完整維度 key：label 在 `dimensions:` 宣告過時，exporter 會當作每個沒寫它的租戶的預設送出（#2031）；沒宣告則不送出，共用判決報 `unread … (no_row)` |
 | label 須宣告 | 維度 key 送出的每個 label 都要在根 `_defaults.yaml` 的 `dimensions:` 為該 base 宣告（例如 `dimensions: {redis_connected_clients: [instance]}`；regex 選擇器送出 `<label>_re`，要宣告的是 `instance_re`），不論寫在哪一層；否則不產生 metric，validate-config 報 `unread … (no_row)`（值寫 `disable` 的報 `disable_noop`；Policy-as-Code 規則指名的讀成 `read`，同樣不產生 metric；ADR-038 §11）。出貨的 `dimensions:` 只列規則包真的保留的 label（目前是 container cpu/memory 的 `version`） |
-| 三態仍適用 | 數值=Custom, 省略=Default (基本 key 在 `_defaults.yaml` 的 `defaults:` 有值時；根 `defaults:` 寫了完整維度 key 時也取那個值，見上一列；列在 `optional_overrides:` 的宣告 key 省略＝無值＝靜默), `"disable"`=停用 |
+| 三態仍適用 | 數值=Custom, 省略=Default (基本 key 在 `_defaults.yaml` 的 `defaults:` 有值時；根 `defaults:` 寫了完整維度 key 時也取那個值，見上一列；列在 `optional_overrides:` 的宣告 key 省略＝無值＝靜默), `"disable"`=停用；base key 寫 `"disable"` 時，它的維度 key 也一併停用（[#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)） |
 
 **平台團隊 PromQL 適配**：維度 label 必須同時出現在 Recording Rule 的 `by()` 與 Alert Rule 的 `on()` 中。改好之後，在根 `_defaults.yaml` 的 `dimensions:` 宣告該 base 與 label，維度 key 才會送出。三件套契約與 `tenant:<metric>:<agg>` 命名規範：[design/rule-packs.md](design/rule-packs.md)。出貨的 `conf.d/examples/` 因此不放維度鍵（#3475）。
 

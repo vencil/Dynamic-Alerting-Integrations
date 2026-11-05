@@ -109,7 +109,7 @@ func addSchedules(cfg *config.ThresholdConfig, at time.Time, tenants map[string]
 			}
 			writtenOf[name(tenant, canon)] = wk
 		}
-		recorded := recordedRefusals(cfg, tenant, at)
+		recorded := recordedReasons(cfg, tenant, at)
 		for k := range keys {
 			why := func(minute int) string { return nullReason(cfg, tenant, writtenOf[k], at, minute, recorded) }
 			sch := servedSchedule{Segments: daySegments(cuts, ends, passes, gatherErrs, tenant, k, why)}
@@ -273,10 +273,12 @@ func hhmm(m int) string {
 // tenant's map does not write) serves no row from minute of the UTC day of
 // at (#3140): keyReasonDisabled for a disable written for that part of the
 // day, keyReasonValueNonFinite / keyReasonValueUnparsed for a value the
-// resolver refuses (and recorded refusing), else "" (nothing to serve: a
+// resolver refuses (and recorded refusing), keyReasonBaseDisabled for a
+// `<base>_critical` / `<base>{…}` key whose base the tenant switches off
+// for that part of the day (#3046, switchedOffWithBase), else "" (nothing to serve: a
 // lapsed or absent value).
 func nullReason(cfg *config.ThresholdConfig, tenant, written string, at time.Time, minute int,
-	recorded func(canon string) bool,
+	recorded func(canon string) string,
 ) string {
 	sv, ok := cfg.Tenants[tenant][written]
 	if !ok {
@@ -288,8 +290,11 @@ func nullReason(cfg *config.ThresholdConfig, tenant, written string, at time.Tim
 	if config.DisabledAt(sv, t) {
 		return keyReasonDisabled
 	}
-	if r := config.RefusedValueAt(canon, sv, t); r != "" && recorded(canon) {
+	if r := config.RefusedValueAt(canon, sv, t); r != "" && isRecordedRefusal(recorded(canon)) {
 		return refusedReason(r)
+	}
+	if switchedOffWithBase(cfg, tenant, written, t, recorded) {
+		return keyReasonBaseDisabled // #3046
 	}
 	return ""
 }

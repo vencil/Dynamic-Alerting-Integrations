@@ -381,13 +381,9 @@ type servedKey struct {
 	Refused string `json:"refused,omitempty"`
 	// Disable, only with --disable-effects and only for a key that reads
 	// `disable` in some part of the day and is not a registered `_` key:
-	// what switching it off does to the user_threshold rows /metrics serves — effective, partial (ServedFamily is still served) or
+	// what switching it off does to the user_threshold rows /metrics serves — effective or
 	// noop — by resolving the tree again without it (served_disable.go).
 	Disable string `json:"disable,omitempty"`
-	// ServedFamily: for a partial Disable, the keys of the same family (its
-	// `_critical`, its dimensional spellings) /metrics still serves in some
-	// part of the day.
-	ServedFamily []string `json:"served_family,omitempty"`
 }
 
 // Reasons of servedKey.Reason — a closed set.
@@ -430,6 +426,12 @@ const (
 	// tenant values' own words (non_finite, unparsed). da-guard reports the
 	// root value as root_default_refused.
 	keyReasonRootDefaultRefused = "root_default_refused"
+	// keyReasonBaseDisabled (#3046): a `<base>_critical` / `<base>{…}` key
+	// the critical or dimensional phase reads and serves no row for at --at,
+	// because the tenant switches its base off there
+	// (config.FamilyHeadOffAt) — what the base's `disable` asks. Read: the
+	// phase read it to switch it off with its base.
+	keyReasonBaseDisabled = "base_disabled"
 )
 
 // refusedReason is the keyReason* / segment reason of a refusal
@@ -441,22 +443,42 @@ func refusedReason(refused string) string {
 	return keyReasonValueUnparsed
 }
 
-// recordedRefusals is, lazily, whether the resolver recorded a refused
-// value (NotServedValueUnparsed / NotServedValueUnparsedDropped, over the
-// whole UTC day) for a canonical key of tenant: the condition under which
-// served-values names a refusal at all (servedKey.Refused).
-func recordedRefusals(cfg *config.ThresholdConfig, tenant string, at time.Time) func(canon string) bool {
+// recordedReasons is, lazily, the verdict the resolver recorded over the
+// whole UTC day for a canonical key of tenant (config.TenantValuesNotServed;
+// "" for none).
+func recordedReasons(cfg *config.ThresholdConfig, tenant string, at time.Time) func(canon string) string {
 	var table map[string]string
-	return func(canon string) bool {
+	return func(canon string) string {
 		if table == nil {
 			table = cfg.TenantValuesNotServed(tenant, at)
 			if table == nil {
 				table = map[string]string{}
 			}
 		}
-		r := table[canon]
-		return r == config.NotServedValueUnparsed || r == config.NotServedValueUnparsedDropped
+		return table[canon]
 	}
+}
+
+// isRecordedRefusal reports whether a recorded verdict is a refused value
+// (NotServedValueUnparsed / NotServedValueUnparsedDropped): the condition
+// under which served-values names a refusal at all (servedKey.Refused).
+func isRecordedRefusal(r string) bool {
+	return r == config.NotServedValueUnparsed || r == config.NotServedValueUnparsedDropped
+}
+
+// switchedOffWithBase reports whether, at t, tenant's key k is one the
+// critical or dimensional phase serves no row for because the tenant
+// switches its base off (#3046): k has a family base (config.FamilyBase),
+// the base is off (config.FamilyHeadOffAt), and the phase reads k at all —
+// the resolver did not record it unconsumed, the verdict on a key no phase
+// reads.
+func switchedOffWithBase(cfg *config.ThresholdConfig, tenant, k string, t time.Time, recorded func(canon string) string) bool {
+	base, ok := config.FamilyBase(k)
+	if !ok || !cfg.FamilyHeadOffAt(tenant, base, t) {
+		return false
+	}
+	canon, _ := config.CanonicalKeyFor(k)
+	return recorded(canon) != config.NotServedUnconsumed
 }
 
 // servedTimeBox is one entry of servedTenantValues.TimeBoxes.
@@ -538,7 +560,7 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 			"Resolves the tree once per part of the day in which some schedule changes.")
 	fs.BoolVar(&f.disableEffects, "disable-effects", false,
 		"For every key a tenant switches off (disable), say in keys[].disable whether that changes\n"+
-			"what /metrics serves (effective / partial / noop), by resolving the tree again without it.\n"+
+			"what /metrics serves (effective / noop), by resolving the tree again without it.\n"+
 			"Costs (most switched-off keys of one tenant) x (parts of the day) resolves.")
 	fs.Var(&f.tenants, "tenant",
 		"Compute only this tenant (repeatable): the whole tree is still loaded, every platform file read;\n"+
@@ -1045,7 +1067,10 @@ func servedValuesWith(cfg *config.ThresholdConfig, at time.Time,
 		for k, sv := range undeliverable[tenant] {
 			tv.Unserved[k] = rawScheduledValue(sv)
 		}
-		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at, recordedRefusals(cfg, tenant, at))
+		tv.Keys = servedKeys(tv, overrides, undeliverable[tenant], at, recordedReasons(cfg, tenant, at),
+			func(k string, recorded func(string) string) bool {
+				return switchedOffWithBase(cfg, tenant, k, at, recorded)
+			})
 		addRootRefused(tv, overrides, rootRefused)
 		out[tenant] = tv
 	}
@@ -1057,7 +1082,7 @@ func servedValuesWith(cfg *config.ThresholdConfig, at time.Time,
 	return out, nil
 }
 
-// addDisableEffects fills Keys[].Disable / ServedFamily (--disable-effects).
+// addDisableEffects fills Keys[].Disable (--disable-effects).
 // Runs before spellAsWritten: tenants' keys are still cfg's spelling.
 func addDisableEffects(cfg *config.ThresholdConfig, at time.Time,
 	tenants map[string]servedTenantValues, written map[string]map[string]string,
@@ -1082,9 +1107,6 @@ func addDisableEffectsWith(cfg *config.ThresholdConfig, at time.Time,
 				return fmt.Errorf("internal: tenant %s: switched-off key %q has no keys entry", tenant, k)
 			}
 			e.Disable = eff.effect
-			for _, f := range eff.family {
-				e.ServedFamily = append(e.ServedFamily, name(tenant, f))
-			}
 			tv.Keys[k] = e
 		}
 	}
@@ -1098,7 +1120,8 @@ func addDisableEffectsWith(cfg *config.ThresholdConfig, at time.Time,
 // resolver's own).
 func servedKeys(tv servedTenantValues,
 	overrides map[string]config.ScheduledValue, undeliverable map[string]config.ScheduledValue,
-	at time.Time, recorded func(canon string) bool,
+	at time.Time, recorded func(canon string) string,
+	withBase func(k string, recorded func(canon string) string) bool,
 ) map[string]servedKey {
 	out := map[string]servedKey{}
 	add := func(k string) {
@@ -1120,7 +1143,7 @@ func servedKeys(tv servedTenantValues,
 			}
 			refused := ""
 			if written && !inUndeliverable && (!isAlias || !canonWritten) {
-				if r := config.RefusedValueAt(canon, sv, at); r != "" && recorded(canon) {
+				if r := config.RefusedValueAt(canon, sv, at); r != "" && isRecordedRefusal(recorded(canon)) {
 					refused = r
 				}
 			}
@@ -1135,6 +1158,10 @@ func servedKeys(tv servedTenantValues,
 				e.Reason = keyReasonUndeliverable
 			case refused != "":
 				e.Reason, e.Refused = refusedReason(refused), refused
+			case withBase(k, recorded):
+				// Written or inherited — a root `defaults:` dimensional
+				// default the tenant's base switches off too (#3046).
+				e.Reason = keyReasonBaseDisabled
 			default:
 				e.Reason = keyReasonNoRow
 			}
