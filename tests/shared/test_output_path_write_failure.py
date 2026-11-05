@@ -691,6 +691,13 @@ ROWS: list[Row] = [
       reach="in-repo try-local seed conf.d; --output-alertmanager writes the "
             "merged alertmanager.yml to -o",
       out_name="alertmanager-routes.yaml"),
+    # #1560: the mount list is a second sink, written after -o; -o is a
+    # writable tmp file so the run reaches it.
+    R("ops/generate_alertmanager_routes.py", "--secret-mounts-out", "file",
+      lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output-alertmanager",
+                      "-o", str(c.tmp / "alertmanager.yml"), "--secret-mounts-out", str(out)],
+      reach="same seed conf.d; -o writable, so the run reaches the mount-list write",
+      out_name="secret-mounts.json"),
     R("ops/generate_tenant_mapping_rules.py", "-o/--output", "file",
       lambda c, out: ["--config-dir", _mapping_conf_d(c.tmp), "--metrics", "mysql_up",
                       "-o", str(out)],

@@ -111,7 +111,7 @@ da-tools <command> --help
 
 **輸出路徑：operator 輸出與生成物兩種寫法**（[#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)）：工具寫檔分兩個入口。⚠️ v2.9.0 映像仍是舊行為。 <!-- image-caveat: v2.9.0 -->
 
-- **operator 輸出**：`generate-routes --findings-json`、`fed-key --jwks-out`、`assemble_config_dir --manifest`。路徑交給 kernel 開檔，與 shell 的 `>` 相同。`-` 是 stdout；一次執行只准一個輸出寫 stdout，第二個結束碼 `2`。路徑正是 fd 1 已在寫的一般檔、pipe 或 socket 時（例如 `>` 或 `|` 之下的 `/dev/stdout`），視同 `-`；終端機與 `/dev/null` 不算。沒有 reader 的 FIFO 結束碼 `2`，不會卡住。本 euid 擁有、且不經 symlink 的一般檔，寫入前設成該輸出的權限（新建與既有的都是）：`--findings-json` 為 `0600`，公開內容的 `--jwks-out` 與 `--manifest` 為 `0644`。別人的檔、裝置、symlink 的目標，權限不動。寫入時出錯，一般檔留空檔，不留前半段；行程在寫入途中被殺掉時仍可能留下前半段。
+- **operator 輸出**：`generate-routes --findings-json`、`generate-routes --secret-mounts-out`、`fed-key --jwks-out`、`assemble_config_dir --manifest`。路徑交給 kernel 開檔，與 shell 的 `>` 相同。`-` 是 stdout；一次執行只准一個輸出寫 stdout，第二個結束碼 `2`。路徑正是 fd 1 已在寫的一般檔、pipe 或 socket 時（例如 `>` 或 `|` 之下的 `/dev/stdout`），視同 `-`；終端機與 `/dev/null` 不算。沒有 reader 的 FIFO 結束碼 `2`，不會卡住。本 euid 擁有、且不經 symlink 的一般檔，寫入前設成該輸出的權限（新建與既有的都是）：`--findings-json` 與 `--secret-mounts-out` 為 `0600`，公開內容的 `--jwks-out` 與 `--manifest` 為 `0644`。別人的檔、裝置、symlink 的目標，權限不動。寫入時出錯，一般檔留空檔，不留前半段；行程在寫入途中被殺掉時仍可能留下前半段。
 - **生成物（原子取代）**：`state-reconcile --manifest-path`、`configmap-assemble --output`。先寫暫存檔再改名，中途失敗時原檔不動。目標必須不存在或是一般檔：`-`、裝置、FIFO、socket、本行程的 stdout 都是結束碼 `2`。`configmap-assemble` 的完整契約見 [GitOps 部署 §3](integration/gitops-deployment.md#3-configmap-assembly)。
 - ⚠️ **行為變更**：
   - owner 2026-10-21 核可（逐項見 [#3107](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3107)）：非 root 寫別人的裝置或可寫一般檔 `2` → `0`；唯讀檔、懸空 link、socket、無 reader 的 FIFO `0` → `2`；本來會卡住的寫入改為 `2`；`-` 不再建出名為 `-` 的檔。
@@ -1730,7 +1730,7 @@ promtool query instant 'count(ALERTS{alertstate="firing"})'
 
 #### operator-check
 
-驗證 Prometheus Operator 叢集中 CRD 部署狀態，檢查 5 項指標並產生診斷報告。
+驗證 Prometheus Operator 叢集中 CRD 部署狀態，檢查 6 項指標並產生診斷報告。
 
 **用途**：Operator 整合健康檢查；部署完整性驗證；故障診斷。
 
@@ -1748,6 +1748,8 @@ da-tools operator-check [options]
 | `--json` | JSON 格式輸出 | false |
 | `--rule-packs-dir <DIR>` | Rule Pack 目錄；pack 清單取自 `rule_pack_files` 這份宣告（頂層 `rule-pack-*.yaml`／`.yml`，旁邊的 `threshold-registry.yaml` 也已宣告），目錄頂層其他 YAML（副檔名不分大小寫）或懸空 symlink 會被點名、結束碼 2（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）；PrometheusRule 檢查拿叢集裡已載入的數量與這裡的 pack 數比；宣告蓋不住目錄時該列 fail（caller error）。明確給了卻不存在、不是目錄或是 symlink 迴圈 ⇒ 結束碼 `2`，問叢集之前點名（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)）；先前當成 0 個、只報 `⚠ WARN PrometheusRule`、完全沒提到路徑，rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）。沒給時的預設值不存在、或給了空目錄，仍是 0 個。宣告為平台 pack 的（`_lib_consumer_read.PLATFORM_PACKS`，即 `rule-pack-platform.yaml`）也算在內：`operator-generate` 為它輸出一份 PrometheusRule（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)）。 | `rule-packs/` |
 | `--prometheus <URL>` | Prometheus API URL；給了才檢查 exporter target 健康，不給則該項略過。給了卻讀不到 targets（連不上、回錯或回應格式不對）時該項 FAIL、結束碼 2，先前只是 warn（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） | （無） |
+| `--secret-mounts <FILE>` | `generate-routes --secret-mounts-out` 為 `configSecret` 那份設定寫出的 Secret 掛載清單；給了才跑第 5 項，不給則該項 SKIP（未判定，不算通過），並印出產生清單的指令。檔案不存在、不是一般檔，或不是那份清單（JSON 讀不了、`schema` 不是 `da-tools.secret-mounts/v1`、欄位形狀不對）⇒ 結束碼 `2`，問叢集之前點名（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)） | （無） |
+| `--alertmanager <NAME>` | 與 `--secret-mounts` 同用：只拿這個 Alertmanager CR 比對（不給時比對 `--namespace` 裡每一個）。沒帶 `--secret-mounts` 卻給了它 ⇒ 結束碼 `2` | （全部） |
 | `--kubeconfig <FILE>` | kubeconfig 路徑 | （無） |
 | `--ci` | 任一檢查為 fail 時結束碼 1（不帶時 fail 也是 0；kubectl 沒有回答、或給了 `--prometheus` 卻讀不到 targets，一律 2，見下方與 [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） | false |
 
@@ -1757,9 +1759,10 @@ da-tools operator-check [options]
 2. PrometheusRule：`--namespace` 裡帶 `app.kubernetes.io/part-of=dynamic-alerting` 的數量，與 `--rule-packs-dir` 的 pack 數（`rule-pack-*.yaml`／`.yml`，同上宣告）比（相等 pass、少於但大於 0 warn、0 fail）；CRD 沒裝時為 0、fail，並註明 CRD 沒裝。
 3. ServiceMonitor：同一 namespace、同一 label 至少一個（否則 fail；CRD 沒裝時註明）。
 4. AlertmanagerConfig 殘留：平台不再產生 AlertmanagerConfig，同一 namespace、同一 label 的 AlertmanagerConfig 是舊版留下的——有則 warn（刪掉它們：`kubectl delete alertmanagerconfig -n <ns> -l app.kubernetes.io/part-of=dynamic-alerting`；它們的路由仍會被 Operator 插在 `configSecret` 的路由之前），沒有則 pass，CRD 沒裝時 pass。⚠️ v2.9.0 映像是反過來的：0 個 warn、CRD 沒裝 warn <!-- image-caveat: v2.9.0 -->
-5. Target 健康（給了 `--prometheus` 才跑）：job 名含 `threshold` 或 `exporter` 的 target 是否都 `up`。
+5. Secret 掛載（給了 `--secret-mounts` 才跑，[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）：清單與 Alertmanager CR 的 `spec.secrets` 比對。清單有、`spec.secrets` 沒有 ⇒ fail：讀那個 Secret 的 receiver 每則通知都會在送出當下失敗（Alertmanager 開不了 `*_file`）而遺失。`spec.secrets` 有、清單沒有且名稱以 `da-` 開頭（租戶自己的 Secret 字首）⇒ warn：沒人讀它，而那個 Secret 不存在時 Pod 起不來（Operator 掛 Secret 的 volume 不是 optional）；其他名稱可能是部署自己要掛的（TLS、sidecar），不報。清單是以非預設 `--secret-mount-root` 產出的 ⇒ fail（Operator 一律掛在 `/etc/alertmanager/secrets/<名稱>/`）。`--namespace` 裡沒有 Alertmanager CR（或沒裝 CRD）而清單不是空的 ⇒ fail；`--alertmanager` 指名的 CR 不存在 ⇒ fail，與清單是否為空無關（什麼都沒比對到）。每個 CR 各自判、名稱寫在說明裡；有多個 CR、沒帶 `--alertmanager` 且有漏列時，說明另提示可改帶 `--alertmanager <名稱>` 只比對使用這份 `configSecret` 的那一個；`other_files`（根目錄外的路徑）只報數量、不判。只讀 CR，不讀 Secret（不需要 secrets 的權限），所以 Secret 裡有沒有那個 key 不判。
+6. Target 健康（給了 `--prometheus` 才跑）：job 名含 `threshold` 或 `exporter` 的 target 是否都 `up`。
 
-**叢集讀取**（[#3207](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3207)）：每一次讀取都經 `_lib_kubectl`（`kubectl_get`／`kubectl_list`，`kubectl get … -o json`）。kubectl 沒有回答——叢集連不上、權限不足（forbidden）、kubectl 不在 PATH 或逾時——該列標 `caller_error`、結束碼 2，不再當成「not found」。CRD 有沒有裝是以名稱 `get` 該 CRD（`--ignore-not-found`，不存在時有回答、為 finding，不是讀取失敗）。需要的權限：`customresourcedefinitions` 的 `get`（叢集範圍），以及 `--namespace` 內 PrometheusRule／ServiceMonitor／AlertmanagerConfig 的 `list`。⚠️ **行為變更**：叢集連不上或權限不足時，先前三列報 `fail`／"not found"、結束碼 0（`--ci` 為 1），現在結束碼 2；AlertmanagerConfig 讀取失敗先前是 warn、結束碼 0，現在也是 2。
+**叢集讀取**（[#3207](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3207)）：每一次讀取都經 `_lib_kubectl`（`kubectl_get`／`kubectl_list`，`kubectl get … -o json`）。kubectl 沒有回答——叢集連不上、權限不足（forbidden）、kubectl 不在 PATH 或逾時——該列標 `caller_error`、結束碼 2，不再當成「not found」。CRD 有沒有裝是以名稱 `get` 該 CRD（`--ignore-not-found`，不存在時有回答、為 finding，不是讀取失敗）。需要的權限：`customresourcedefinitions` 的 `get`（叢集範圍），以及 `--namespace` 內 PrometheusRule／ServiceMonitor／AlertmanagerConfig 的 `list`；帶 `--secret-mounts` 時另需 Alertmanager 的 `list`（給了 `--alertmanager` 時是 `get`）。⚠️ **行為變更**：叢集連不上或權限不足時，先前三列報 `fail`／"not found"、結束碼 0（`--ci` 為 1），現在結束碼 2；AlertmanagerConfig 讀取失敗先前是 warn、結束碼 0，現在也是 2。
 
 **範例**
 
@@ -1939,6 +1942,7 @@ da-tools generate-routes --config-dir <path> {--validate | --output-configmap | 
 | `--yes` | 搭配 --apply 跳過確認提示。**只有 `--apply` 會讀它**，其他模式結束碼 2 | false |
 | `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。可選填 `min_generator_version: "X.Y.Z"`：執行的 da-tools 比它舊（或讀不到自己的版本）時 exit 2，修法是調高 da-tools 版本；值不是 `X.Y.Z` 形式也是 exit 2（#2901）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
 | `--secret-mount-root <PATH>` | receiver 憑證欄位寫成 `secretRef` 時（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)），render 成 Alertmanager 的 `<field>_file: <PATH>/<secret-name>/<key>`：自己的 Secret 是 `da-<tenant>`，共用的是 `--policy` 檔 `shared_secrets` 條目的 `secret`。必須是 Alertmanager 容器內掛載 Secret 的絕對路徑；不是絕對路徑、含換行或 `..` 段時結束碼 `2`。只影響產出的路徑，不影響判定。`--policy` 檔可另加 `shared_secrets: {<別名>: {secret: <名稱>, fields: [...]}}` 列出可共用的 Secret；寫壞時整份 policy 不可用（結束碼 `2`）。規則與掛載契約見 [BYO 整合指南 §5](integration/byo-alertmanager-integration.md#憑證放在-secretsecretref) | `/etc/alertmanager/secrets` |
+| `--secret-mounts-out <PATH>` | 另外把產出的設定**實際會讀**的 Secret 掛載寫成 JSON 到 PATH（`schema: da-tools.secret-mounts/v1`，[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）：`mount_root`、`mounts`（每個 Secret 的 `name` 與它被讀的 `keys`，依名稱排序）與 `other_files`。清單從寫出的那份設定（以 Alertmanager 的讀法讀回）走訪每個 `*_file` 欄位與 `http_headers` 的 `files`，所以 `--base-config` 自己的路徑（例如 `watchdog-heartbeat` 的 `url_file`）也在內；`<mount_root>/<名稱>/<key>` 形狀的列進 `mounts`，其餘路徑（根目錄外、或根目錄下不是兩段的）列進 `other_files`，要由部署另外提供。只有名稱與 key，不含值。只有 `--output-alertmanager`／`--output-configmap` 讀它，而且不能與 `--dry-run` 同用；帶 `--validate`／`--apply`／`--dry-run` 結束碼 2。與 `-o` 或 `--base-config` 同一個檔結束碼 2。設定寫完後才寫清單；以 operator 輸出寫入（見上方「輸出路徑」），沒給 `-o`（設定寫 stdout）時 `-` 結束碼 2；給了 `-o` 時 `-` 讓這次執行自己印的訊息改寫到 stderr，stdout 只有這份清單（與 `--findings-json -` 相同）；兩者都寫 `-` 是同一次執行的第二個 stdout 輸出，結束碼 2、什麼都不寫。Operator 路徑把它交給 `operator-check --secret-mounts` 對照 Alertmanager CR 的 `spec.secrets`（見 [§operator-check](#operator-check)） | （不寫） |
 | `--findings-json <PATH>` | 另外把這次執行**印出的** finding（warning stream 與拒收訊息的每一行）寫成 JSON 到 PATH，格式見下方「結構化 finding」。所有模式都讀它；每一種結束（含拒收、呼叫端錯誤、參數錯誤與程式例外）都會寫，以 operator 輸出寫入（見上方「輸出路徑」：`-` 即 stdout，寫入失敗留空檔），PATH 上不會留下前一次執行的文件。stdout、stderr 與結束碼不變；PATH 寫不進去是結束碼 2（#2766）。⚠️ v2.9.0 映像沒有這個旗標 <!-- image-caveat: v2.9.0 --> | （不寫） |
 
 **輸出**

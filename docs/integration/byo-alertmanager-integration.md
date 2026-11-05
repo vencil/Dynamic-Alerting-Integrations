@@ -374,6 +374,8 @@ _routing:
 
 ⛔ **掛載契約（BYO 必做）**：Alertmanager 容器必須把每個被引用的 Secret 掛在 `<root>/<secret-name>/`，Secret 的每個 key 是其中一個檔案。這與 Prometheus Operator 的 `spec.secrets` 掛到 `/etc/alertmanager/secrets/<name>` 的版面相同；repo 自帶的 `watchdog-heartbeat` 也掛在 `/etc/alertmanager/secrets/watchdog-heartbeat/`。產生器與 tenant-api 都沒有 Secret 讀權限，看不到 Secret 是否存在：檔案不在時 Alertmanager 在送出那一刻才失敗。
 
+**要掛哪些 Secret**：`generate-routes --output-configmap`（或 `--output-alertmanager`）加 `--secret-mounts-out <檔>`，把產出的設定實際會讀的 Secret 寫成 JSON（`mounts[].name` 與各自的 `keys`，依名稱排序；只有名稱與 key，沒有值），掛載就照它列（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）。清單從產出的設定本身走訪每個 `*_file`，所以 base 自己的（例如 `watchdog-heartbeat`）也在內；`<root>` 以外的路徑列在 `other_files`，要另外提供。`--apply` 不寫清單：用同一份 conf.d 與來源跑一次 `--output-configmap --secret-mounts-out` 取得。格式與規則見 [cli-reference §generate-routes](../cli-reference.md#generate-routes)；Prometheus Operator 路徑另有 `operator-check --secret-mounts` 拿它比對 `spec.secrets`（[Operator 整合](operator-alertmanager-integration.md)）。
+
 ### 訊息模板（Go Template）
 
 Slack、Teams、Email 的 `title` / `text` / `html` 欄位支援 Alertmanager Go template 語法。以 Slack 為例：

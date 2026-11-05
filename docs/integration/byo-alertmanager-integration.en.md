@@ -380,6 +380,8 @@ The generator writes the reference as Alertmanager's `<field>_file: <root>/<secr
 
 ⛔ **Mount contract (required for BYO)**: the Alertmanager container must mount every referenced Secret at `<root>/<secret-name>/`, one file per key. This is the layout Prometheus Operator's `spec.secrets` uses (`/etc/alertmanager/secrets/<name>`); the repo's own `watchdog-heartbeat` is mounted at `/etc/alertmanager/secrets/watchdog-heartbeat/`. Neither the generator nor tenant-api can read Secrets, so neither sees whether one exists: a missing file fails in Alertmanager only when it sends.
 
+**Which Secrets to mount**: add `--secret-mounts-out <file>` to `generate-routes --output-configmap` (or `--output-alertmanager`) and it writes, as JSON, the Secrets the emitted config actually reads (`mounts[].name` with their `keys`, sorted by name; names and keys only, no values); mount by that list ([#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)). The list is walked from the emitted config itself, every `*_file`, so the base's own (e.g. `watchdog-heartbeat`) are in it; paths outside `<root>` are listed as `other_files`, for you to provide some other way. `--apply` writes no list: run `--output-configmap --secret-mounts-out` once on the same conf.d and source to get it. Format and rules: [cli-reference §generate-routes](../cli-reference.en.md#generate-routes); on the Prometheus Operator path `operator-check --secret-mounts` also compares it with `spec.secrets` ([Operator integration](operator-alertmanager-integration.en.md)).
+
 ### Message Templates (Go Template)
 
 Slack, Teams, and Email `title` / `text` / `html` fields support Alertmanager Go template syntax. Slack example:

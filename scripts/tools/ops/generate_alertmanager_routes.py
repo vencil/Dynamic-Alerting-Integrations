@@ -96,7 +96,9 @@ from _grar_merge import (  # noqa: E402, F401
     merge_routing_with_defaults,
 )
 # Used here (#1560: the mount root, the policy's shared_secrets), not re-exported.
-from _grar_merge import DEFAULT_SECRET_MOUNT_ROOT, SecretBinding, SharedSecret  # noqa: E402
+from _grar_merge import DEFAULT_MOUNT_ROOT, SecretBinding, SharedSecret  # noqa: E402
+# #1560: the Secrets the emitted config reads (--secret-mounts-out).
+from _grar_merge import MOUNT_LIST_SCHEMA, required_mounts  # noqa: E402
 
 # ── Re-exports from _grar_parse ────────────────────────────────────
 from _grar_parse import (  # noqa: E402, F401
@@ -446,7 +448,10 @@ def _apply_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[d
 def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                            base: dict, namespace: str, configmap_name: str,
                            dry_run: bool, output: str | None, strict: bool = False,
-                           judge_emitted=None, *, as_configmap: bool) -> None:
+                           judge_emitted=None, *, as_configmap: bool,
+                           mounts_out: str | None = None,
+                           mount_root: str = DEFAULT_MOUNT_ROOT,
+                           mount_lists: list[tuple[str, dict]] | None = None) -> None:
     """Handle --output-configmap (*as_configmap*) and --output-alertmanager:
     ``merge_generated`` on *base*, emitted as a ConfigMap or as a plain
     alertmanager.yml — one merge, two wrappers (#1211 gap 2).
@@ -458,6 +463,16 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
     Takes the ALREADY-LOADED base config, not a path: #1616 requires the
     supplied-but-unusable check to happen before the tenant scan, and a
     parameter that cannot be a path is the structural way to keep it there.
+
+    *mounts_out* (#1560, ``--secret-mounts-out``): also write the Secrets the
+    emitted config reads under *mount_root* (``required_mounts``), read off
+    the same reading of the emitted text the judges above saw — so the base
+    config's own ``*_file`` paths are in it and nothing conf.d did not render
+    is. Handed to *mount_lists* (``main`` writes it after the run, outside
+    the stdout redirect a stdout document needs), else written here; either
+    way after the config itself (the list describes an output that exists);
+    a failed write of either is rc 2. Which documents may share stdout is
+    decided in ``main`` before the run.
     """
     what = "the ConfigMap" if as_configmap else "the alertmanager.yml"
     am_what = "the ConfigMap's alertmanager.yml" if as_configmap else "the alertmanager.yml"
@@ -540,6 +555,27 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
               f"{len(receivers)} receivers, {inhibit_count} inhibit rules)")
     else:
         print(content)
+    if mounts_out is not None:
+        doc = required_mounts(emitted, mount_root)
+        if mount_lists is not None:
+            mount_lists.append((mounts_out, doc))
+        else:
+            _write_mount_list(mounts_out, doc)
+
+
+def _write_mount_list(path: str, doc: dict) -> None:
+    """Write the ``--secret-mounts-out`` document (#1560) to *path*, or exit
+    2. JSON, ``sort_keys``; ``-`` is stdout. One summary line on stderr:
+    counts and the path only."""
+    text = json.dumps(doc, ensure_ascii=False, sort_keys=True, indent=2) + "\n"
+    _lib_io.write_operator_output_or_die(path, text, flag="--secret-mounts-out",
+                                         exit_code=EXIT_CALLER_ERROR)
+    n_mounted = len(doc["mounts"])
+    n_keys = sum(len(m["keys"]) for m in doc["mounts"])
+    n_other = len(doc["other_files"])
+    print(f"Mount list: {n_mounted} Secret(s), {n_keys} key(s) under "
+          f"{doc['mount_root']}, {n_other} other file path(s) -> {safe_label(path)}",
+          file=sys.stderr)
 
 
 def _refuse_unreadable_tenant_files(tree: TenantTree,
@@ -830,12 +866,12 @@ _DEFAULT_CONFIGMAP = "alertmanager-config"
 #   * FLAGS_GUARDED_BY_BASE_CONFIG_CHECK: the #1616 guard in main().
 FLAGS_CLASSIFIED_BY_MODE_GUARD = frozenset({
     "output", "dry_run", "namespace", "configmap", "yes",
-    "apply", "output_configmap", "output_alertmanager",
+    "apply", "output_configmap", "output_alertmanager", "mount_list_out",
 })
 FLAGS_READ_IN_EVERY_MODE = frozenset({"config_dir", "validate", "strict", "policy",
                                       "findings_json",
                                       # #1560: judged (exit 2) beside --policy
-                                      "secret_mount_root"})
+                                      "mount_root"})
 FLAGS_GUARDED_BY_BASE_CONFIG_CHECK = frozenset({"base_config"})
 
 
@@ -883,12 +919,13 @@ def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, st
     The read sites, from main() and the mode handlers (the matrix is what
     matters; a run with no mode is refused before this is consulted):
 
-        flag          --validate  --apply  --output-configmap  --output-alertmanager
-        -o/--output   never       never    unless --dry-run    unless --dry-run
-        --dry-run     never       never    read                read
-        --namespace   never       read     read                never
-        --configmap   never       read     read                never
-        --yes         never       read     never               never
+        flag                 --validate  --apply  --output-configmap  --output-alertmanager
+        -o/--output          never       never    unless --dry-run    unless --dry-run
+        --secret-mounts-out  never       never    unless --dry-run    unless --dry-run
+        --dry-run            never       never    read                read
+        --namespace          never       read     read                never
+        --configmap          never       read     read                never
+        --yes                never       read     never               never
 
     Measured on main before this: `--validate -o <path>` exited 0 with the
     file absent and stderr empty — even for a path that could not have been
@@ -953,6 +990,32 @@ def _flags_this_mode_never_reads(args: argparse.Namespace) -> list[tuple[str, st
                 "-o/--output",
                 "--dry-run prints the preview to stdout and never writes a file",
                 "Drop --dry-run to write the file, or drop -o to preview."))
+
+    # #1560: the mount list is read off the config an output mode emits.
+    if args.mount_list_out is not None:
+        if validating:
+            found.append((
+                "--secret-mounts-out",
+                "--validate returns before the config is assembled, so there "
+                "is no emitted config to read the Secret mounts from",
+                "Drop --secret-mounts-out, or replace --validate with "
+                "--output-alertmanager or --output-configmap (keeping "
+                "--secret-mounts-out)."))
+        elif applying:
+            found.append((
+                "--secret-mounts-out",
+                "--apply writes into the cluster's ConfigMap and writes no "
+                "file",
+                "Drop --secret-mounts-out. (To write the list, use "
+                "--output-alertmanager or --output-configmap with "
+                "--secret-mounts-out <file>; neither can be combined with "
+                "--apply.)"))
+        elif args.dry_run:
+            found.append((
+                "--secret-mounts-out",
+                "--dry-run prints the preview to stdout and never writes a file",
+                "Drop --dry-run to write the list, or drop "
+                "--secret-mounts-out to preview."))
 
     if args.dry_run:
         if validating:
@@ -1090,7 +1153,7 @@ def _build_parser() -> argparse.ArgumentParser:
                         help=f"ConfigMap name for --apply/--output-configmap "
                              f"(default: {_DEFAULT_CONFIGMAP})")
     add_policy_argument(parser)
-    parser.add_argument("--secret-mount-root", default=DEFAULT_SECRET_MOUNT_ROOT,
+    parser.add_argument("--secret-mount-root", dest="mount_root", default=DEFAULT_MOUNT_ROOT,
                         metavar="PATH",
                         help="Where the Alertmanager container mounts the "
                              "Secrets a receiver's Secret reference names "
@@ -1098,8 +1161,20 @@ def _build_parser() -> argparse.ArgumentParser:
                              "<field>_file: <PATH>/<secret>/<key>, the tenant's "
                              "own Secret being da-<tenant> and a shared one the "
                              "--policy shared_secrets entry's (default: "
-                             f"{DEFAULT_SECRET_MOUNT_ROOT}, Prometheus Operator's "
+                             f"{DEFAULT_MOUNT_ROOT}, Prometheus Operator's "
                              "spec.secrets layout)")
+    parser.add_argument("--secret-mounts-out", dest="mount_list_out", default=None, metavar="PATH",
+                        help="With --output-alertmanager / --output-configmap: "
+                             f"also write, as JSON ({MOUNT_LIST_SCHEMA}), "
+                             "the Secrets the emitted config reads under "
+                             "--secret-mount-root — each Secret name with its "
+                             "keys (names only, never values), the base "
+                             "config's own *_file paths included; paths "
+                             "outside the root are listed as other_files. "
+                             "The list spec.secrets (Prometheus Operator) or "
+                             "your own mounts must match; operator-check "
+                             "--secret-mounts compares it with the "
+                             "Alertmanager CR (#1560)")
     parser.add_argument("--yes", action="store_true",
                         help="Skip confirmation prompt for --apply")
     parser.add_argument("--findings-json", default=None, metavar="PATH",
@@ -1166,13 +1241,13 @@ class ResolvedPolicy(NamedTuple):
     def applied(self) -> bool:
         return self.path is not None
 
-    def secret_binding(self, mount_root: str = DEFAULT_SECRET_MOUNT_ROOT) -> SecretBinding:
+    def secret_binding(self, mount_root: str = DEFAULT_MOUNT_ROOT) -> SecretBinding:
         """#1560: what the route builders bind Secret references with —
         this policy's ``shared_secrets`` and *mount_root*."""
         return SecretBinding(mount_root, self.shared_secrets)
 
 
-def secret_mount_root_problem(value: str) -> str | None:
+def mount_root_value_problem(value: str) -> str | None:
     """#1560: why *value* cannot be ``--secret-mount-root``, or None. It is
     written into every rendered ``<field>_file`` path, which Alertmanager
     opens inside its own container: an absolute path, one line, no ``..``
@@ -1181,7 +1256,7 @@ def secret_mount_root_problem(value: str) -> str | None:
             or ".." in value.split("/")):
         return (f"--secret-mount-root {value!r} must be an absolute path on one "
                 "line without '..' segments (where the Secrets are mounted in "
-                f"the Alertmanager container, default {DEFAULT_SECRET_MOUNT_ROOT})")
+                f"the Alertmanager container, default {DEFAULT_MOUNT_ROOT})")
     return None
 
 
@@ -1302,22 +1377,39 @@ def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
         # #3107 v2: `--findings-json -` (or the file stdout already is) owns
         # stdout. Without -o the routes go there too — refused before any is
         # printed; with -o the run's own stdout lines move to stderr, so
-        # stdout carries the findings document alone.
+        # stdout carries the findings document alone. #1560: the same for
+        # `--secret-mounts-out -` in the modes that read it; the two together
+        # on stdout are two documents on one stream (claim_stdout: rc 2).
         receipts = contextlib.nullcontext()
-        if args.findings_json is not None and _lib_io.targets_stdout(args.findings_json):
-            if args.output is None:
-                try:
-                    _lib_io.claim_stdout("the routes output (no -o)")
-                    _lib_io.claim_stdout("--findings-json")
-                except _lib_io.OutputWriteError as exc:
-                    print(f"ERROR: {_lib_io.safe_label(str(exc))}", file=sys.stderr)
-                    sys.exit(EXIT_CALLER_ERROR)
+        reads_mount_list = ((args.output_alertmanager or args.output_configmap)
+                            and not args.validate and not args.dry_run)
+        stdout_documents = [flag for flag, value in (
+            ("--findings-json", args.findings_json),
+            ("--secret-mounts-out", args.mount_list_out if reads_mount_list else None))
+            if value is not None and _lib_io.targets_stdout(value)]
+        if stdout_documents:
+            asked = (["the routes output (no -o)"] if args.output is None else []) \
+                + stdout_documents
+            try:
+                for owner in asked:
+                    _lib_io.claim_stdout(owner)
+            except _lib_io.OutputWriteError as exc:
+                print(f"ERROR: {_lib_io.safe_label(str(exc))}", file=sys.stderr)
+                # The shared line names the first clash only; name them all.
+                print(f"  standard output was asked for by: {', '.join(asked)} — "
+                      "only one of them may write there", file=sys.stderr)
+                sys.exit(EXIT_CALLER_ERROR)
             receipts = contextlib.redirect_stdout(sys.stderr)
+        # #1560: the mount list is written HERE, after the redirect ends, so
+        # `--secret-mounts-out -` reaches the real stdout.
+        mount_lists: list[tuple[str, dict]] = []
         # ADR-036 step 4 (#2906): one `da-guard parse-tree` reading per run.
         # A judge (#3206): it refuses a tree Go names paths on as its own
         # finding, so the reader's fail-closed exit stands aside.
         with receipts, _lib_parse_cache.session(), _lib_parse_cache.judging():
-            _run(args, findings, key_verdict=key_verdict)
+            _run(args, findings, key_verdict=key_verdict, mount_lists=mount_lists)
+        for path, doc in mount_lists:
+            _write_mount_list(path, doc)
         code = EXIT_OK
     except SystemExit as exc:
         code = _exit_code_of(exc)
@@ -1567,9 +1659,12 @@ def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _run(args: argparse.Namespace, findings: list[str], *,
-         key_verdict: bool = True) -> None:
+         key_verdict: bool = True,
+         mount_lists: list[tuple[str, dict]] | None = None) -> None:
     """``main`` after argument parsing; appends each finding to *findings*
-    (#2766) as soon as the run has determined it. *key_verdict*: ``main``'s."""
+    (#2766) as soon as the run has determined it. *key_verdict*: ``main``'s.
+    *mount_lists* (#1560): receives ``(path, document)`` for
+    ``--secret-mounts-out``, which ``main`` writes once the run is done."""
 
     # #1650: four more flags of the #1616 class — accepted, then never read
     # by the mode that is about to run. Decided HERE, before any conf.d work,
@@ -1645,7 +1740,7 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     except PolicyInputError as exc:
         die_caller_error(str(exc))
     # #1560: written into every rendered `<field>_file` path.
-    mount_root_problem = secret_mount_root_problem(args.secret_mount_root)
+    mount_root_problem = mount_root_value_problem(args.mount_root)
     if mount_root_problem is not None:
         die_caller_error(f"ERROR: {mount_root_problem}")
     # #3206 (ADR-036 §12): the platform probe set is read from the shipped
@@ -1680,13 +1775,24 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # ⛔ Every path this run writes, not just -o: --findings-json over the
     # source destroys it just the same (blind review F4).
     for flag, dest in (("-o/--output", args.output),
-                       ("--findings-json", args.findings_json)):
+                       ("--findings-json", args.findings_json),
+                       ("--secret-mounts-out", args.mount_list_out)):
         if writes_a_file_mode and _names_the_source(dest, args.base_config):
             die_caller_error(
                 f"{flag} names the --base-config file itself: the base is your "
                 "source config and the output is rendered from it, so writing over "
                 "it would destroy the source (refused).\n"
                 "  Write it to another path and keep the source as it is.")
+    # #1560: the mount list and the config are two documents; one path for
+    # both would leave only the list (written second).
+    if (writes_a_file_mode and args.mount_list_out is not None
+            and args.output is not None
+            and (os.path.abspath(args.mount_list_out) == os.path.abspath(args.output)
+                 or _names_the_source(args.mount_list_out, args.output))):
+        die_caller_error(
+            "--secret-mounts-out names the same file as -o/--output: the list "
+            "would replace the config just written (refused).\n"
+            "  Write the list to another path.")
     if writes_a_file_mode:
         try:
             base_config = load_base_config(args.base_config)
@@ -1764,7 +1870,7 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     routes, receivers, route_warnings = generate_routes(
         routing_configs, allowed_domains=allowed_domains,
         enforced_routing=enforced_routing, tenants=dedup_configs,
-        secrets=policy.secret_binding(args.secret_mount_root))
+        secrets=policy.secret_binding(args.mount_root))
 
     # Generate per-tenant severity dedup inhibit rules
     inhibit_rules, dedup_warnings = generate_inhibit_rules(dedup_configs)
@@ -1844,7 +1950,10 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     _assembled_output_mode(routes, receivers, inhibit_rules, base_config,
                            namespace, configmap_name, args.dry_run, args.output,
                            strict=args.strict, judge_emitted=assembled_judge,
-                           as_configmap=bool(args.output_configmap))
+                           as_configmap=bool(args.output_configmap),
+                           mounts_out=args.mount_list_out,
+                           mount_root=args.mount_root,
+                           mount_lists=mount_lists)
 
 
 if __name__ == "__main__":
