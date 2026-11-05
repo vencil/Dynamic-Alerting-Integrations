@@ -38,7 +38,8 @@ import json
 import os
 import sys
 import textwrap
-from typing import NamedTuple
+from types import MappingProxyType
+from typing import Mapping, NamedTuple
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -88,6 +89,8 @@ from _grar_merge import (  # noqa: E402, F401
     build_receiver_config,
     merge_routing_with_defaults,
 )
+# Used here (#1560: the mount root, the policy's shared_secrets), not re-exported.
+from _grar_merge import DEFAULT_SECRET_MOUNT_ROOT, SecretBinding, SharedSecret  # noqa: E402
 
 # ── Re-exports from _grar_parse ────────────────────────────────────
 from _grar_parse import (  # noqa: E402, F401
@@ -857,7 +860,9 @@ FLAGS_CLASSIFIED_BY_MODE_GUARD = frozenset({
     "apply", "output_configmap",
 })
 FLAGS_READ_IN_EVERY_MODE = frozenset({"config_dir", "validate", "strict", "policy",
-                                      "findings_json"})
+                                      "findings_json",
+                                      # #1560: judged (exit 2) beside --policy
+                                      "secret_mount_root"})
 FLAGS_GUARDED_BY_BASE_CONFIG_CHECK = frozenset({"base_config"})
 
 
@@ -1069,6 +1074,16 @@ def _build_parser() -> argparse.ArgumentParser:
                         help=f"ConfigMap name for --apply/--output-configmap "
                              f"(default: {_DEFAULT_CONFIGMAP})")
     add_policy_argument(parser)
+    parser.add_argument("--secret-mount-root", default=DEFAULT_SECRET_MOUNT_ROOT,
+                        metavar="PATH",
+                        help="Where the Alertmanager container mounts the "
+                             "Secrets a receiver's Secret reference names "
+                             "(#1560): a reference renders as "
+                             "<field>_file: <PATH>/<secret>/<key>, the tenant's "
+                             "own Secret being da-<tenant> and a shared one the "
+                             "--policy shared_secrets entry's (default: "
+                             f"{DEFAULT_SECRET_MOUNT_ROOT}, Prometheus Operator's "
+                             "spec.secrets layout)")
     parser.add_argument("--yes", action="store_true",
                         help="Skip confirmation prompt for --apply")
     parser.add_argument("--findings-json", default=None, metavar="PATH",
@@ -1128,10 +1143,30 @@ class ResolvedPolicy(NamedTuple):
     path: str | None
     allowed_domains: list[str] | None
     min_generator_version: str | None
+    #: #1560: the policy's ``shared_secrets`` (empty: none, or no policy).
+    shared_secrets: Mapping[str, SharedSecret] = MappingProxyType({})
 
     @property
     def applied(self) -> bool:
         return self.path is not None
+
+    def secret_binding(self, mount_root: str = DEFAULT_SECRET_MOUNT_ROOT) -> SecretBinding:
+        """#1560: what the route builders bind Secret references with —
+        this policy's ``shared_secrets`` and *mount_root*."""
+        return SecretBinding(mount_root, self.shared_secrets)
+
+
+def secret_mount_root_problem(value: str) -> str | None:
+    """#1560: why *value* cannot be ``--secret-mount-root``, or None. It is
+    written into every rendered ``<field>_file`` path, which Alertmanager
+    opens inside its own container: an absolute path, one line, no ``..``
+    segment."""
+    if (not value.startswith("/") or "\n" in value or "\r" in value
+            or ".." in value.split("/")):
+        return (f"--secret-mount-root {value!r} must be an absolute path on one "
+                "line without '..' segments (where the Secrets are mounted in "
+                f"the Alertmanager container, default {DEFAULT_SECRET_MOUNT_ROOT})")
+    return None
 
 
 def add_policy_argument(parser: argparse.ArgumentParser, *, lang: str = "en") -> None:
@@ -1154,7 +1189,8 @@ def resolve_policy(policy_path: str | None) -> ResolvedPolicy:
     too_old = generator_version_problem(da_tools_version(), doc.min_generator_version)
     if too_old is not None:
         raise PolicyVersionError(f"--policy: {too_old}")
-    return ResolvedPolicy(policy_path, doc.allowed_domains, doc.min_generator_version)
+    return ResolvedPolicy(policy_path, doc.allowed_domains, doc.min_generator_version,
+                          doc.shared_secrets)
 
 
 def is_policy_refusal(finding: object) -> bool:
@@ -1561,6 +1597,10 @@ def _run(args: argparse.Namespace, findings: list[str], *,
         policy = resolve_policy(args.policy)
     except PolicyInputError as exc:
         die_caller_error(str(exc))
+    # #1560: written into every rendered `<field>_file` path.
+    mount_root_problem = secret_mount_root_problem(args.secret_mount_root)
+    if mount_root_problem is not None:
+        die_caller_error(f"ERROR: {mount_root_problem}")
     # #3206 (ADR-036 §12): the platform probe set is read from the shipped
     # rules ConfigMap through da-crdecode and `da-read prometheus-rules`.
     # Without them that is a named rc 2 here, before any work — not a crash
@@ -1653,7 +1693,8 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # Generate routes + receivers (enforced route inserted first)
     routes, receivers, route_warnings = generate_routes(
         routing_configs, allowed_domains=allowed_domains,
-        enforced_routing=enforced_routing, tenants=dedup_configs)
+        enforced_routing=enforced_routing, tenants=dedup_configs,
+        secrets=policy.secret_binding(args.secret_mount_root))
 
     # Generate per-tenant severity dedup inhibit rules
     inhibit_rules, dedup_warnings = generate_inhibit_rules(dedup_configs)

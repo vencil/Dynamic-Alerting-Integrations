@@ -492,12 +492,17 @@
         },
         "url": {
           "x-credential": true,
-          "type": "string",
-          "minLength": 1,
           "title": "Webhook URL",
-          "description": "HTTP endpoint to POST alerts to. Subject to webhook domain allowlist policy (if configured).",
-          "allOf": [{ "$ref": "#/definitions/receiverHttpUrl" }],
-          "format": "uri",
+          "description": "HTTP endpoint to POST alerts to. Subject to webhook domain allowlist policy (if configured). Or a Secret reference (definitions.secretRef), which the generator renders as Alertmanager's url_file (#1560).",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "allOf": [{ "$ref": "#/definitions/receiverHttpUrl" }],
+              "format": "uri"
+            },
+            { "$ref": "#/definitions/secretRef" }
+          ],
           "examples": ["https://webhook.example.com/alerts", "https://hooks.example.com/monitoring"]
         },
         "send_resolved": {
@@ -561,9 +566,12 @@
         },
         "auth_password": {
           "x-credential": true,
-          "type": "string",
           "title": "SMTP Password",
-          "description": "Password for SMTP authentication. Optional. Use Kubernetes Secrets in production.",
+          "description": "Password for SMTP authentication. Optional. Prefer a Secret reference (definitions.secretRef), rendered as Alertmanager's auth_password_file (#1560): only the tenant's own Secret (`{secret: {key}}`), never a shared one, and only under a deployment policy whose allowed_domains admits this receiver's smarthost, since the password goes to the server the smarthost names.",
+          "anyOf": [
+            { "type": "string" },
+            { "$ref": "#/definitions/secretRef" }
+          ],
           "examples": ["password-here"]
         },
         "require_tls": {
@@ -612,12 +620,17 @@
         },
         "api_url": {
           "x-credential": true,
-          "type": "string",
-          "minLength": 1,
           "title": "Slack Webhook URL",
-          "description": "Slack incoming webhook URL. Create at https://api.slack.com/messaging/webhooks",
-          "allOf": [{ "$ref": "#/definitions/receiverHttpUrl" }],
-          "format": "uri",
+          "description": "Slack incoming webhook URL. Create at https://api.slack.com/messaging/webhooks Or a Secret reference (definitions.secretRef), which the generator renders as Alertmanager's api_url_file (#1560).",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "allOf": [{ "$ref": "#/definitions/receiverHttpUrl" }],
+              "format": "uri"
+            },
+            { "$ref": "#/definitions/secretRef" }
+          ],
           "examples": ["https://hooks.slack.com/services/T/B/xxx"]
         },
         "channel": {
@@ -668,12 +681,17 @@
         },
         "webhook_url": {
           "x-credential": true,
-          "type": "string",
-          "minLength": 1,
           "title": "Teams Webhook URL",
-          "description": "Microsoft Teams incoming webhook URL. Create at https://outlook.webhook.office.com",
-          "allOf": [{ "$ref": "#/definitions/receiverHttpUrl" }],
-          "format": "uri",
+          "description": "Microsoft Teams incoming webhook URL. Create at https://outlook.webhook.office.com Or a Secret reference (definitions.secretRef), which the generator renders as Alertmanager's webhook_url_file (#1560).",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "allOf": [{ "$ref": "#/definitions/receiverHttpUrl" }],
+              "format": "uri"
+            },
+            { "$ref": "#/definitions/secretRef" }
+          ],
           "examples": ["https://outlook.webhook.office.com/webhookb2/XXX@XXX/xxx"]
         },
         "title": {
@@ -707,12 +725,17 @@
         },
         "url": {
           "x-credential": true,
-          "type": "string",
-          "minLength": 1,
           "title": "Rocket.Chat Webhook URL",
-          "description": "Rocket.Chat incoming webhook URL.",
-          "allOf": [{ "$ref": "#/definitions/receiverHttpUrl" }],
-          "format": "uri",
+          "description": "Rocket.Chat incoming webhook URL. Or a Secret reference (definitions.secretRef), which the generator renders as Alertmanager's url_file (#1560).",
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "allOf": [{ "$ref": "#/definitions/receiverHttpUrl" }],
+              "format": "uri"
+            },
+            { "$ref": "#/definitions/secretRef" }
+          ],
           "examples": ["https://chat.example.com/hooks/xxx"]
         },
         "channel": {
@@ -746,11 +769,11 @@
       "type": "object",
       "title": "PagerDuty Receiver",
       "description": "PagerDuty incident receiver. Creates/resolves PagerDuty incidents. Set exactly one of service_key (Events API v1) or routing_key (Events API v2) — not both, not neither; an empty or null value counts as not set.",
-      "$comment": "#2137: exactly one of service_key / routing_key, expressed as a oneOf of single-field branches `{required: [k], properties: {k: {type: string, minLength: 1}}}` (both set matches both branches and fails oneOf; neither matches none). Empty and null count as unset, matching Alertmanager (its config is a Go struct: \"\" and a YAML null — e.g. `service_key:` rendered empty by envsubst — both decode to the zero value = not given) and the Python check. Hence the key properties allow null, and each branch needs BOTH `type: string` (minLength does not apply to null, so without it a null key would satisfy the branch) and `minLength: 1`. Alertmanager accepts both keys at once but then uses the v1 API via service_key and silently ignores routing_key (notify/pagerduty/pagerduty.go), so both-set is rejected here. Python RECEIVER_TYPES (exactly_one_of) reads this same shape; its parity test (tests/shared/test_receiver_spec_parity.py) fails on any other presence keyword here.",
+      "$comment": "#2137: exactly one of service_key / routing_key, expressed as a oneOf of single-field branches `{required: [k], properties: {k: {type: string, minLength: 1}}}` (both set matches both branches and fails oneOf; neither matches none). Empty and null count as unset, matching Alertmanager (its config is a Go struct: \"\" and a YAML null — e.g. `service_key:` rendered empty by envsubst — both decode to the zero value = not given) and the Python check. Hence the key properties allow null, and each branch needs BOTH a `type` without null (minLength does not apply to null, so without it a null key would satisfy the branch) and `minLength: 1`. #1560: the branch type is `[string, object]` because a key may be a Secret reference (definitions.secretRef, an object, which counts as set like a non-empty string); minLength does not apply to the object, and the property itself still requires the object to be a secretRef. Alertmanager accepts both keys at once but then uses the v1 API via service_key and silently ignores routing_key (notify/pagerduty/pagerduty.go), so both-set is rejected here. Python RECEIVER_TYPES (exactly_one_of) reads this same shape; its parity test (tests/shared/test_receiver_spec_parity.py) fails on any other presence keyword here.",
       "required": ["type"],
       "oneOf": [
-        { "required": ["service_key"], "properties": { "service_key": { "type": "string", "minLength": 1 } } },
-        { "required": ["routing_key"], "properties": { "routing_key": { "type": "string", "minLength": 1 } } }
+        { "required": ["service_key"], "properties": { "service_key": { "type": ["string", "object"], "minLength": 1 } } },
+        { "required": ["routing_key"], "properties": { "routing_key": { "type": ["string", "object"], "minLength": 1 } } }
       ],
       "properties": {
         "type": {
@@ -759,16 +782,22 @@
         },
         "service_key": {
           "x-credential": true,
-          "type": ["string", "null"],
           "title": "Service Key (Integration Key)",
-          "description": "PagerDuty service integration key for events API v1. Deprecated in favor of routing_key (v2). Mutually exclusive with routing_key.",
+          "description": "PagerDuty service integration key for events API v1. Deprecated in favor of routing_key (v2). Mutually exclusive with routing_key. Or a Secret reference (definitions.secretRef), which the generator renders as Alertmanager's service_key_file (#1560).",
+          "anyOf": [
+            { "type": ["string", "null"] },
+            { "$ref": "#/definitions/secretRef" }
+          ],
           "examples": ["xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"]
         },
         "routing_key": {
           "x-credential": true,
-          "type": ["string", "null"],
           "title": "Routing Key (v2 API)",
-          "description": "PagerDuty integration key for events API v2. Recommended over service_key. Mutually exclusive with service_key.",
+          "description": "PagerDuty integration key for events API v2. Recommended over service_key. Mutually exclusive with service_key. Or a Secret reference (definitions.secretRef), which the generator renders as Alertmanager's routing_key_file (#1560).",
+          "anyOf": [
+            { "type": ["string", "null"] },
+            { "$ref": "#/definitions/secretRef" }
+          ],
           "examples": ["xxxxx/xxxxx/xxxxx"]
         },
         "severity": {
@@ -805,23 +834,14 @@
     "secretRef": {
       "type": "object",
       "title": "Kubernetes Secret Reference",
-      "description": "Reference to one key of a Kubernetes Secret, in place of the credential's literal value. The Secret is created by the operator or ExternalSecrets, not by this config; the generator is to render the reference instead of copying the value: as the matching Alertmanager `*_file` path to the mounted Secret (ConfigMap output), or as a SecretKeySelector (Prometheus Operator AlertmanagerConfig output). Not wired to any field yet: a credential field accepts this shape only once the generator renders it (#1560). Of the nine `x-credential` fields, seven can take it (url, api_url, webhook_url, service_key, routing_key, auth_password each have an Alertmanager `*_file` counterpart); email `headers` and webhook `http_config` have none, so a reference there would go on an inner field instead. A SecretKeySelector is the flat `{name, key}`: the renderer unwraps `.secret` rather than copying this object. Distinct from Alertmanager's own `*_ref` / `*_file` fields (e.g. basic_auth.password_file), which a conf.d receiver may not carry (#3257, definitions.fileReferenceKey): only the generator writes a `*_file` path, when it renders a reference.",
-      "$comment": "#1560: name is a DNS-1123 subdomain (Kubernetes object name); key follows the Secret data key rule (Kubernetes IsConfigMapKey: [-._a-zA-Z0-9]+, at most 253, not '.' and not starting with '..'). Both reject a newline: Python's re `$` also matches before a trailing newline, so the pattern alone would let `name\n` through (same guard as definitions.duration). The `secret` / `key` children are the Secret's coordinates, not the credential value: the field that holds a secretRef is the one on the redaction list, and it is masked whole. tests/ops/test_config_diff.py skips this definition by name for that reason.",
+      "description": "Reference to one key of a Kubernetes Secret, in place of the credential's literal value (#1560). Two shapes. `{secret: {key: <k>}}` is the tenant's own Secret, whose name is not written: it is always `da-<tenant>`, derived from the tenant id. `{secret: {shared: <alias>, key: <k>}}` is a Secret several tenants share: the alias must be listed under `shared_secrets` of the deployment policy file (generate-routes --policy), which names the real Secret and the fields that may use it; with no policy, or none listed, no shared reference is accepted. The Secret is created by the operator or ExternalSecrets, not by this config. The generator renders the reference as Alertmanager's `<field>_file: <root>/<secret-name>/<key>` (ConfigMap output; <root> is generate-routes --secret-mount-root, default /etc/alertmanager/secrets, the layout Prometheus Operator gives `spec.secrets`), and refuses the receiver when the binding rules are broken. auth_password takes only the tenant's own Secret, and only under a policy whose allowed_domains admits the smarthost. Seven fields take it (webhook / rocketchat url, slack api_url, teams webhook_url, pagerduty service_key / routing_key, email auth_password); email `headers` and webhook `http_config` have no Alertmanager `*_file` counterpart and do not. Distinct from Alertmanager's own `*_ref` / `*_file` fields (e.g. basic_auth.password_file), which a conf.d receiver may not carry (#3257, definitions.fileReferenceKey): only the generator writes a `*_file` path, when it renders a reference.",
+      "$comment": "#1560: key follows the Secret data key rule (Kubernetes IsConfigMapKey: [-._a-zA-Z0-9]+, at most 253, not '.' and not starting with '..'); shared is a DNS-1123 label, like the shared_secrets aliases the generator accepts. Both reject a newline: Python's re `$` also matches before a trailing newline, so the pattern alone would let `key\\n` through (same guard as definitions.duration). No `name`: a tenant that could write a Secret name could point at another tenant's Secret (owner decision 2026-11-04). The `secret` / `key` / `shared` children are the Secret's coordinates, not the credential value: the field that holds a secretRef is the one on the redaction list, and it is masked whole. tests/ops/test_config_diff.py skips this definition by name for that reason. _lib_validation.secret_ref_problem reads the patterns below at run time.",
       "required": ["secret"],
       "properties": {
         "secret": {
           "type": "object",
-          "required": ["name", "key"],
+          "required": ["key"],
           "properties": {
-            "name": {
-              "type": "string",
-              "title": "Secret Name",
-              "description": "Name of the Secret (DNS-1123 subdomain).",
-              "maxLength": 253,
-              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$",
-              "not": { "pattern": "\\n" },
-              "examples": ["alerting-receivers"]
-            },
             "key": {
               "type": "string",
               "title": "Secret Key",
@@ -830,6 +850,15 @@
               "pattern": "^[-._a-zA-Z0-9]+$",
               "not": { "anyOf": [{ "const": "." }, { "pattern": "^\\.\\." }, { "pattern": "\\n" }] },
               "examples": ["slack-api-url"]
+            },
+            "shared": {
+              "type": "string",
+              "title": "Shared Secret Alias",
+              "description": "Alias of a shared Secret, as listed under shared_secrets in the deployment policy file. Omit it to use the tenant's own Secret (da-<tenant>).",
+              "maxLength": 63,
+              "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$",
+              "not": { "pattern": "\\n" },
+              "examples": ["corp-slack"]
             }
           },
           "additionalProperties": false

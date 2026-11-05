@@ -567,9 +567,18 @@ def test_every_kind_literal_is_in_the_catalog():
     assert len(seen) > 20, seen
 
 
+# #1560: the binding kinds secret_binding_findings produces in _grar_merge.
+_MERGE_PRODUCED_KINDS = frozenset({
+    "secret_ref_shared_unknown", "secret_ref_shared_field_not_allowed",
+    "secret_ref_shared_auth_password", "secret_ref_auth_password_unconfined",
+    "secret_ref_no_owner",
+})
+
+
 def test_catalog_has_no_dead_kind_and_one_line_descriptions():
     text = "\n".join(p.read_text(encoding="utf-8") for p in _producer_sources()
                      if p.name != "_grar_merge.py")
+    merge_text = Path(gm.__file__).read_text(encoding="utf-8")
     dynamic = set(gar.BLOCKING_TREE_KINDS) | {"domain_policy_out_of_scope"}
     for kind, desc in gm.FINDING_KINDS.items():
         assert kind == kind.lower() and " " not in kind, kind
@@ -578,6 +587,11 @@ def test_catalog_has_no_dead_kind_and_one_line_descriptions():
                     "unknown_receiver_type", "invalid_receiver_field",
                     "conflicting_receiver_field", "timing_value_replaced"):
             continue  # produced in _grar_merge itself
+        if kind in _MERGE_PRODUCED_KINDS:
+            # #1560: produced in _grar_merge (secret_binding_findings) — pinned
+            # by name, and its literal must be there, so none can go dead.
+            assert f'kind="{kind}"' in merge_text, kind
+            continue
         assert f'"{kind}"' in text or kind in dynamic, kind
     assert dynamic <= set(gm.FINDING_KINDS)
 

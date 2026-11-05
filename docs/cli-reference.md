@@ -1919,6 +1919,7 @@ da-tools generate-routes --config-dir <path> [options]
 | `--configmap <NAME>` | ConfigMap 名稱。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式結束碼 2 | `alertmanager-config` |
 | `--yes` | 搭配 --apply 跳過確認提示。**只有 `--apply` 會讀它**，其他模式結束碼 2 | false |
 | `--policy <FILE>` | 策略 YAML 的**路徑**，內含 `allowed_domains:` 清單（省略＝不限制）。⚠️ 這裡吃的是檔案路徑，不是逗號分隔的域名；供了但讀不到會 exit 2（#1556）；檔裡沒有 `allowed_domains` 鍵（空檔、只有註解、鍵拼錯）或清單有非字串項目也是 exit 2，要明示不限制請寫 `allowed_domains: []`（#1649）。可選填 `min_generator_version: "X.Y.Z"`：執行的 da-tools 比它舊（或讀不到自己的版本）時 exit 2，修法是調高 da-tools 版本；值不是 `X.Y.Z` 形式也是 exit 2（#2901）。⚠️ v2.9.0 映像仍是舊行為 | （不限制） <!-- image-caveat: v2.9.0 --> |
+| `--secret-mount-root <PATH>` | receiver 憑證欄位寫成 `secretRef` 時（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)），render 成 Alertmanager 的 `<field>_file: <PATH>/<secret-name>/<key>`：自己的 Secret 是 `da-<tenant>`，共用的是 `--policy` 檔 `shared_secrets` 條目的 `secret`。必須是 Alertmanager 容器內掛載 Secret 的絕對路徑；不是絕對路徑、含換行或 `..` 段時結束碼 `2`。只影響產出的路徑，不影響判定。`--policy` 檔可另加 `shared_secrets: {<別名>: {secret: <名稱>, fields: [...]}}` 列出可共用的 Secret；寫壞時整份 policy 不可用（結束碼 `2`）。規則與掛載契約見 [BYO 整合指南 §5](integration/byo-alertmanager-integration.md#憑證放在-secretsecretref) | `/etc/alertmanager/secrets` |
 | `--findings-json <PATH>` | 另外把這次執行**印出的** finding（warning stream 與拒收訊息的每一行）寫成 JSON 到 PATH，格式見下方「結構化 finding」。所有模式都讀它；每一種結束（含拒收、呼叫端錯誤、參數錯誤與程式例外）都會寫，以 operator 輸出寫入（見上方「輸出路徑」：`-` 即 stdout，寫入失敗留空檔），PATH 上不會留下前一次執行的文件。stdout、stderr 與結束碼不變；PATH 寫不進去是結束碼 2（#2766）。⚠️ v2.9.0 映像沒有這個旗標 <!-- image-caveat: v2.9.0 --> | （不寫） |
 
 **輸出**
