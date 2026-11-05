@@ -2130,6 +2130,31 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+      - name: List leftover coverage data files (diagnostic)
+        # A shard has failed with `sqlite3.OperationalError: attempt to write a
+        # readonly database` INSIDE pytest-cov's combine while every test
+        # passed. coverage only writes to a parallel data file it reads when the
+        # file has no schema yet (an empty file), so some child left an empty
+        # `.coverage.*` the runner user cannot write. combine stops at that
+        # file and leaves it (and every file after it) on disk — this lists
+        # them with owner / mode / size so the next failure names its source
+        # instead of being re-run blind. Read-only; it never changes the verdict.
+        # `always()` and not `failure()`: a step condition that consults the
+        # run's state is a shape tests/ops/test_ci_path_filter_coverage.py does
+        # not model. On a green run combine has deleted every file, so this
+        # prints 0 and costs nothing.
+        if: always()
+        run: |
+          shopt -s nullglob
+          files=(.coverage.*)
+          echo "runner: $(id)"
+          echo "leftover parallel data files: ${#files[@]}"
+          for f in "${files[@]}"; do
+            stat -c '%A %U:%G %s bytes %y %n' -- "$f"
+            [ -s "$f" ] || echo "  ^ empty: no coverage schema, combine must write to it"
+            [ -w "$f" ] || echo "  ^ not writable by $(id -un)"
+          done
+
   python-coverage-combine:
     # Merges the python-coverage shards into one report. ADVISORY like
     # python-coverage (ledgered next to it in
