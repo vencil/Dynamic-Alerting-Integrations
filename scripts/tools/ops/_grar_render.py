@@ -62,7 +62,7 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
-    _build_sentinel_sinkhole_route, pin_root_fallthrough_receiver)
+    _build_sentinel_sinkhole_route)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#3276)
 from _lib_confd import WARN_LIMIT  # noqa: E402  (#1211: the alert names a line lists)
@@ -751,8 +751,19 @@ def merge_generated(base: dict, routes: list[dict], receivers: list[dict],
     2. the base's own top-level routes, in the base's order — except one to a
        platform receiver: those four routes are the platform's, emitted
        canonically in 1;
-    3. the tenant routes and the root fallthroughs (#2519, pinned to the
-       base's root receiver).
+    3. the tenant routes.
+
+    With per-tenant enforced routes (``platform-enforced-<t>``, #2519), 2 and
+    3 go under ONE matcher-less route to the base's root receiver, right
+    after the enforced routes. Alertmanager delivers to a route's receiver
+    only when none of its children matched, and an enforced route that
+    matched (``continue: true``) counts — so without it a tenant with no
+    tenant route would lose its root delivery. Under it, that route plays
+    the root: it delivers when nothing below matched, and NOT when the
+    base's own ``continue: true`` route already took the alert (one root
+    delivery fewer than a per-tenant fallthrough route would give). The
+    single matcher-less ``platform-enforced`` route gets none: it has always
+    taken every alert off the root.
 
     Receivers — the base's, then this run's; a name-only platform
     placeholder defers to a richer base definition (watchdog-heartbeat's
@@ -773,12 +784,17 @@ def merge_generated(base: dict, routes: list[dict], receivers: list[dict],
     placeholders = _platform_placeholder_receiver_names()
 
     root = dict(merged.get("route") or {})
-    # #2519: the root fallthrough routes name THIS base's root receiver.
-    generated = pin_root_fallthrough_receiver(routes, root.get("receiver"))
-    head = generated[:4] + [r for r in generated[4:] if _is_enforced_route(r)]
-    tail = [r for r in generated[4:] if not _is_enforced_route(r)]
+    head = routes[:4] + [r for r in routes[4:] if _is_enforced_route(r)]
+    tail = [r for r in routes[4:] if not _is_enforced_route(r)]
     own = [r for r in (root.get("routes") or []) if not _routes_to(r, placeholders)]
-    root["routes"] = head + own + tail
+    if any(str(r.get("receiver", "")).startswith("platform-enforced-") for r in head):
+        # #2519: the root's place, below the enforced routes (see docstring).
+        below = {"receiver": root.get("receiver")}
+        if own + tail:
+            below["routes"] = own + tail
+        root["routes"] = head + [below]
+    else:
+        root["routes"] = head + own + tail
     merged["route"] = root
 
     base_receivers = [r for r in (merged.get("receivers") or []) if isinstance(r, dict)]
