@@ -696,14 +696,14 @@ DEFAULT_SECRET_MOUNT_ROOT = "/etc/alertmanager/secrets"
 OWN_SECRET_PREFIX = "da-"
 #: the top-level receiver fields a shared Secret is never allowed on: their
 #: value goes to a destination the receiver itself names (CREDENTIAL_REF_SITES
-#: rows with a `destination`; today auth_password → smarthost). The nested
+#: rows with `destinations`; today auth_password → smarthost). The nested
 #: http_config rows are all such fields too, and no `shared_secrets` entry can
 #: list them (it lists top-level field names).
 CONFINED_REF_FIELDS = frozenset(
-    s.path[0] for s in CREDENTIAL_REF_SITES if len(s.path) == 1 and s.destination)
-# Which proxy a request goes through is each site's `proxy`
-# (CREDENTIAL_REF_SITES): http_config.proxy_url, or oauth2.proxy_url for the
-# token request. proxy_from_environment is Alertmanager's own environment,
+    s.path[0] for s in CREDENTIAL_REF_SITES if len(s.path) == 1 and s.destinations)
+# Which proxies the requests carrying a credential go through are each site's
+# `proxies` (CREDENTIAL_REF_SITES): http_config.proxy_url, and for oauth2
+# oauth2.proxy_url as well (the token request). proxy_from_environment is Alertmanager's own environment,
 # not the tenant's to choose, and is never refused.
 
 
@@ -767,14 +767,15 @@ def secret_binding_findings(owner_tenant: str | None, receiver_obj: dict,
     The rules, per ``CREDENTIAL_REF_SITES`` row:
 
     * a shared alias must be listed, and its entry must list the field;
-    * a row with a ``destination`` (email auth_password → smarthost; every
-      webhook http_config leaf → url, the oauth2 ones → oauth2.token_url):
-      the tenant writes where the credential goes, so it never takes a shared
-      Secret, and takes the tenant's own only when *allowed_domains* is
-      non-empty and admits the destination's host, written out (a
-      destination that is missing, or itself a reference, cannot be checked);
-    * a shared reference, or a reference on a row with a destination, refuses
-      a set proxy on its row's ``proxy`` (a proxy the tenant chose sees a
+    * a row with ``destinations`` (email auth_password → smarthost; every
+      webhook http_config leaf → url, the oauth2 ones → oauth2.token_url and
+      url, where the access token they yield is sent): the tenant writes
+      where the credential goes, so it never takes a shared Secret, and takes
+      the tenant's own only when *allowed_domains* is non-empty and admits
+      every destination's host, written out (a destination that is missing,
+      or itself a reference, cannot be checked);
+    * a shared reference, or a reference on a row with destinations, refuses
+      a set proxy on any of its row's ``proxies`` (a proxy the tenant chose sees a
       plain-http request whole, and an https one whenever the receiver's
       own tls_config — a CA the tenant chose, insecure_skip_verify — lets
       it intercept); an own reference whose content IS the destination does
@@ -804,27 +805,28 @@ def secret_binding_findings(owner_tenant: str | None, receiver_obj: dict,
                        "deployment policy lists, or write {{tenant}} in "
                        "_routing_enforced to render one receiver per tenant",
                        where, kind="secret_ref_no_owner")
-            elif site.destination is not None:
-                problem = _destination_problem(receiver_obj, site.destination,
-                                               allowed_domains)
-                if problem:
-                    refuse(f"references a Secret, but {problem}", where,
-                           kind="secret_ref_destination_unconfined")
-                if site.proxy is not None:
-                    proxied.setdefault(site.proxy, []).append(
+            elif site.destinations:
+                problems = [p for d in site.destinations
+                            if (p := _destination_problem(receiver_obj, d, allowed_domains))]
+                if problems:
+                    refuse(f"references a Secret, but {'; '.join(dict.fromkeys(problems))}",
+                           where, kind="secret_ref_destination_unconfined")
+                checked = ", ".join(ref_path_text(d) for d in site.destinations)
+                for proxy in site.proxies:
+                    proxied.setdefault(proxy, []).append(
                         f"{where} is sent through it, past the allowed_domains "
-                        f"check on {ref_path_text(site.destination)}")
+                        f"check on {checked}")
                 if site.follows_redirects:
                     redirect_paths.append(where)
             continue
-        if site.proxy is not None:
-            proxied.setdefault(site.proxy, []).append(
+        for proxy in site.proxies:
+            proxied.setdefault(proxy, []).append(
                 f"the receiver uses the shared Secret '{alias}': the proxy "
                 "would see the request to the shared destination")
-        if site.destination is not None:
+        if site.destinations:
             refuse(f"references the shared Secret '{alias}', which this field "
                    f"may never use: the credential goes to "
-                   f"{ref_path_text(site.destination)}, which this receiver "
+                   f"{', '.join(ref_path_text(d) for d in site.destinations)}, which this receiver "
                    "names; use the tenant's own Secret ({secret: {key: …}})",
                    where, kind="secret_ref_shared_confined")
         elif alias not in binding.shared_secrets:

@@ -774,12 +774,27 @@ def test_a_destination_outside_or_unreadable_refuses_the_reference(path, dest_ed
     assert ("secret_ref_destination_unconfined", "receiver." + ".".join(path)) in got, got
 
 
-def test_oauth2_rows_are_confined_by_token_url_not_by_url():
-    """oauth2 的憑證送往 token_url：url 在 allowlist 外不影響它（url 的網域檢查
-    是 validate_receiver_domains 的事），token_url 在 allowlist 內就放行。"""
-    receiver = _ref_at(_CS, {"secret": {"key": "k"}})
-    receiver["url"] = "https://hook.attacker.example/a"
-    cfg, warnings = _build(receiver)
+_OAUTH2_ROWS = [s.path for s in _NESTED if s.path[:2] == ("http_config", "oauth2")]
+
+
+@pytest.mark.parametrize("path", _OAUTH2_ROWS, ids=".".join)
+@pytest.mark.parametrize("url,token_url", [
+    # 換出的 access token 隨每個送往 url 的請求出去：url 也是目的地
+    ("https://hook.attacker.example/a", _TOKEN_URL),
+    ({"secret": {"key": "url"}}, _TOKEN_URL),
+    ("https://hook.example.com/a", "https://token.attacker.example/t"),
+])
+def test_oauth2_rows_are_confined_by_token_url_and_by_url(path, url, token_url):
+    """oauth2 的憑證送往 token_url，換到的 access token 送往 url：兩者都要明文並通過
+    allowlist，任一不過就拒。"""
+    receiver = _ref_at(path, {"secret": {"key": "k"}})
+    receiver["url"] = url
+    receiver["http_config"]["oauth2"]["token_url"] = token_url
+    assert ("secret_ref_destination_unconfined", "receiver." + ".".join(path)) in _kinds(receiver)
+
+
+def test_oauth2_rows_pass_when_both_destinations_pass():
+    cfg, warnings = _build(_ref_at(_CS, {"secret": {"key": "k"}}))
     assert warnings == [] and cfg is not None
 
 
@@ -792,6 +807,7 @@ def test_an_http_config_reference_with_no_owner_is_refused():
     (_PW, ("http_config", "proxy_url")),
     (("http_config", "http_headers", "*", "secrets", "[]"), ("http_config", "proxy_url")),
     (_CS, ("http_config", "oauth2", "proxy_url")),
+    (_CS, ("http_config", "proxy_url")),          # access token 走 webhook 請求
     (("http_config", "oauth2", "tls_config", "key"), ("http_config", "oauth2", "proxy_url")),
 ])
 def test_the_proxy_the_request_goes_through_is_refused(path, proxy_key):
@@ -805,8 +821,7 @@ _TLS_KEY = ("http_config", "tls_config", "key")
 
 
 @pytest.mark.parametrize("path,proxy_key,value", [
-    # oauth2 的 token 請求不走 http_config.proxy_url；webhook 請求不走 oauth2.proxy_url
-    (_CS, ("http_config", "proxy_url"), "http://proxy.example.com:3128"),
+    # 只送往 url 的憑證不走 oauth2.proxy_url（那是 token 請求的 proxy）
     (_TLS_KEY, ("http_config", "oauth2", "proxy_url"), "http://proxy.example.com:3128"),
     # 空值／null 視同沒設
     (_PW, ("http_config", "proxy_url"), ""),

@@ -185,7 +185,7 @@ def test_table_file_keys_are_the_upstream_file_form():
             assert s.file_key == "files", s
         else:
             assert s.file_key == f"{s.path[-1]}_file", s
-        assert len(s.path) == 1 or s.destination is not None, s
+        assert len(s.path) == 1 or s.destinations, s
 
 
 _URL = "https://hook.example.com/a"

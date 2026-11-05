@@ -492,28 +492,36 @@ class CredentialRefSite(NamedTuple):
     (``password`` → ``password_file``), or, for a list item, the sibling list
     the item moves to (a header's ``secrets[i]`` → that header's ``files``).
 
-    ``destination`` is the receiver field naming where the credential is
-    sent, when that is not the credential itself: the tenant writes it, so a
-    reference here takes only the tenant's own Secret, and only under a
-    policy whose non-empty ``allowed_domains`` admits that field's host
-    (written out, not a reference). None: the credential IS where it goes
-    (a webhook URL, a routing key). ``proxy`` is the proxy key the request
-    carrying it goes through (None: there is none). ``follows_redirects``:
-    upstream sends it again to whatever host a redirect names (custom
-    http_headers; Authorization is dropped on a cross-host redirect).
+    ``destinations`` are the receiver fields naming where the credential is
+    sent, when that is not the credential itself: the tenant writes them, so
+    a reference here takes only the tenant's own Secret, and only under a
+    policy whose non-empty ``allowed_domains`` admits every one of their
+    hosts (written out, not a reference). Empty: the credential IS where it
+    goes (a webhook URL, a routing key). An oauth2 credential has two: it
+    goes to token_url, and the access token it is exchanged for — a
+    credential the tenant's Secret yields — goes with every request to url.
+    ``proxies`` are the proxy keys the requests carrying it go through (the
+    token request through oauth2.proxy_url, the request to url through
+    http_config.proxy_url). ``follows_redirects``: upstream sends it again to
+    whatever host a redirect names (custom http_headers; Authorization is
+    dropped on a cross-host redirect).
     """
 
     rtype: str
     path: tuple[str, ...]
     file_key: str
-    destination: Optional[tuple[str, ...]]
-    proxy: Optional[tuple[str, ...]]
+    destinations: tuple[tuple[str, ...], ...]
+    proxies: tuple[tuple[str, ...], ...]
     follows_redirects: bool = False
 
 
 _HTTP_PROXY = ("http_config", "proxy_url")
 _OAUTH2_PROXY = ("http_config", "oauth2", "proxy_url")
 _TOKEN_URL = ("http_config", "oauth2", "token_url")
+_URL = ("url",)
+_TO_URL = ((_URL,), (_HTTP_PROXY,))
+_TO_TOKEN_URL = ((_TOKEN_URL, _URL), (_OAUTH2_PROXY, _HTTP_PROXY))
+_IS_URL = ((), (_HTTP_PROXY,))
 
 #: ⛔ THE one table of where a Secret reference may stand (#1560). The schema
 #: (`anyOf: [<value>, secretRef]` at exactly these paths, pinned by
@@ -525,33 +533,34 @@ _TOKEN_URL = ("http_config", "oauth2", "token_url")
 #: TLSConfig.KeyFile, OAuth2.ClientSecretFile / ClientCertificateKeyFile,
 #: config/headers.go Header.Files; the receivers' own `*_file` for the rest.
 #: The oauth2 three go to token_url, through oauth2's own proxy_url (its
-#: token client is built from the OAuth2 block alone). Not here:
+#: token client is built from the OAuth2 block alone), and the access token
+#: they yield goes to url, through http_config.proxy_url. Not here:
 #: proxy_connect_header (no file form upstream).
 CREDENTIAL_REF_SITES: tuple[CredentialRefSite, ...] = (
-    CredentialRefSite("webhook", ("url",), "url_file", None, _HTTP_PROXY),
-    CredentialRefSite("rocketchat", ("url",), "url_file", None, _HTTP_PROXY),
-    CredentialRefSite("slack", ("api_url",), "api_url_file", None, _HTTP_PROXY),
-    CredentialRefSite("teams", ("webhook_url",), "webhook_url_file", None, _HTTP_PROXY),
-    CredentialRefSite("pagerduty", ("service_key",), "service_key_file", None, _HTTP_PROXY),
-    CredentialRefSite("pagerduty", ("routing_key",), "routing_key_file", None, _HTTP_PROXY),
+    CredentialRefSite("webhook", ("url",), "url_file", *_IS_URL),
+    CredentialRefSite("rocketchat", ("url",), "url_file", *_IS_URL),
+    CredentialRefSite("slack", ("api_url",), "api_url_file", *_IS_URL),
+    CredentialRefSite("teams", ("webhook_url",), "webhook_url_file", *_IS_URL),
+    CredentialRefSite("pagerduty", ("service_key",), "service_key_file", *_IS_URL),
+    CredentialRefSite("pagerduty", ("routing_key",), "routing_key_file", *_IS_URL),
     CredentialRefSite("email", ("auth_password",), "auth_password_file",
-                      ("smarthost",), None),
+                      (("smarthost",),), ()),
     CredentialRefSite("webhook", ("http_config", "basic_auth", "password"),
-                      "password_file", ("url",), _HTTP_PROXY),
+                      "password_file", *_TO_URL),
     CredentialRefSite("webhook", ("http_config", "authorization", "credentials"),
-                      "credentials_file", ("url",), _HTTP_PROXY),
+                      "credentials_file", *_TO_URL),
     CredentialRefSite("webhook", ("http_config", "bearer_token"),
-                      "bearer_token_file", ("url",), _HTTP_PROXY),
+                      "bearer_token_file", *_TO_URL),
     CredentialRefSite("webhook", ("http_config", "tls_config", "key"),
-                      "key_file", ("url",), _HTTP_PROXY),
+                      "key_file", *_TO_URL),
     CredentialRefSite("webhook", ("http_config", "http_headers", "*", "secrets", "[]"),
-                      "files", ("url",), _HTTP_PROXY, follows_redirects=True),
+                      "files", *_TO_URL, follows_redirects=True),
     CredentialRefSite("webhook", ("http_config", "oauth2", "client_secret"),
-                      "client_secret_file", _TOKEN_URL, _OAUTH2_PROXY),
+                      "client_secret_file", *_TO_TOKEN_URL),
     CredentialRefSite("webhook", ("http_config", "oauth2", "client_certificate_key"),
-                      "client_certificate_key_file", _TOKEN_URL, _OAUTH2_PROXY),
+                      "client_certificate_key_file", *_TO_TOKEN_URL),
     CredentialRefSite("webhook", ("http_config", "oauth2", "tls_config", "key"),
-                      "key_file", _TOKEN_URL, _OAUTH2_PROXY),
+                      "key_file", *_TO_TOKEN_URL),
 )
 
 
