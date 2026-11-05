@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 import pytest
+import yaml
 
 # #2115 0-B／B3: validate-config 的 profiles 列經 da-guard 讀租戶，每次都需要 da-guard
 # （conftest 以 `go build` 建出；建不起來就 fail、不 skip）。
@@ -104,11 +105,15 @@ def test_refused_duration_fails_both_clis(tmp_path, value):
     assert gen.returncode == 1, gen.stdout + gen.stderr
     assert f"invalid repeat_interval '{value}'" in gen.stderr
     assert vc.returncode == 1, vc.stdout + vc.stderr
-    # Render mode still renders (the default in its place), exit 0.
+    # The output mode still writes (the default in its place), exit 0.
     out = tmp_path / "out.yaml"
-    render = _cli("generate_alertmanager_routes.py", d, tmp_path, "-o", str(out))
+    render = _cli("generate_alertmanager_routes.py", d, tmp_path,
+                  "--output-alertmanager", "-o", str(out))
     assert render.returncode == 0, render.stdout + render.stderr
-    assert "repeat_interval: 4h" in out.read_text(encoding="utf-8")
+    merged = yaml.safe_load(out.read_text(encoding="utf-8"))
+    # The merged config's top-level route for t1 (the custom-alerts firehose
+    # carries a nested copy too; the top-level one is the tenant's own).
+    assert _tenant_route(merged["route"]["routes"])["repeat_interval"] == "4h"
 
 
 @pytest.mark.parametrize("routing_extra,where", [

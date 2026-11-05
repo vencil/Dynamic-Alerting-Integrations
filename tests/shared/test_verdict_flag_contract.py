@@ -22,7 +22,10 @@ Each recipe names one fixture and runs the tool on it three times:
    ``without``. Together with the flip this proves the fixture sits where
    the flag has something to change (e.g. a 5 % drift that the 0.1 % default
    tolerance rejects). When ``without`` is 0 the run alone proves no finding
-   exists — the flip on the same fixture is what does.
+   exists — the flip on the same fixture is what does. A flag that is itself
+   a mode (the route generator's ``--validate``) has no flagless run of the
+   same argv; its must-fire run is the tool's other mode on the same fixture
+   (``without_base``).
 2. **flip** — WITH the flag at a value that should change the verdict. The
    result must be exactly ``with_``, which a meta-test requires to differ
    from ``without``. Equal results would mean the flag changed nothing.
@@ -39,8 +42,8 @@ exits non-zero, so neither may stand in for a flip. A tool whose documented
 verdict is NOT 0 vs 1 (assemble_config_dir exits 2 on a validation error)
 is observed through its ``--json`` report together with the exit code
 (``observe``); an unparsable report observes as ``UNPARSABLE``, which no
-recipe may expect. A flag read on more than one path of a tool (render vs
-``--validate``, ``--dry-run`` vs write) gets one recipe per path (``mode``). Every run is also checked for
+recipe may expect. A flag read on more than one path of a tool (an output
+mode vs ``--validate``, ``--dry-run`` vs write) gets one recipe per path (``mode``). Every run is also checked for
 a traceback. Every recipe runs under ``DA_LANG=zh`` and ``DA_LANG=en``: some
 tools build a separate parser per help language (alert_quality declares
 ``--min-score`` once in each), and one language would leave the other's
@@ -600,6 +603,12 @@ class Recipe:
     without: object = EXIT_OK     # must-fire result (no flag)
     with_: object = EXIT_VIOLATION   # result under `flip`
     boundary_base: Argv | None = None   # boundary on another fixture, if any
+    # The must-fire run's argv, when the flag IS a mode and the fixture's
+    # argv without it is no invocation at all (#1211 gap 2: the route
+    # generator has no flagless mode, and `--validate` refuses an output
+    # mode next to it as a flag it never reads). The must-fire run is then
+    # the tool's other mode on the SAME fixture; None runs `base`.
+    without_base: Argv | None = None
     note: str = ""
     # A second recipe for the same flag in another mode of the tool (the flag
     # can be read on one path and dropped on another); empty for the first.
@@ -678,26 +687,34 @@ RECIPES: list[Recipe] = [
     # an ERROR is refused before assembly; tests/ops/test_assemble_config_dir.py
     # test_the_validate_flag_was_removed).
 
-    # Render mode replaces an unreadable group_wait with the default and
-    # exits 0; --validate counts that replacement as blocking.
+    # The output mode replaces an unreadable group_wait with the default and
+    # exits 0; --validate counts that replacement as blocking. --validate is
+    # a mode of its own (#1211 gap 2: no flagless mode, and an output mode
+    # next to --validate is refused as unread), so the must-fire run is
+    # --output-alertmanager --dry-run on the same fixture (`without_base`).
     R("generate_alertmanager_routes", "--validate",
       lambda t, s: ["--config-dir", _confd_with_group_wait(t, "5x")],
       flip=("--validate",), boundary=("--validate",),
+      without_base=lambda t, s: ["--config-dir", _confd_with_group_wait(t, "5x"),
+                                 "--output-alertmanager", "--dry-run"],
       boundary_base=lambda t, s: ["--config-dir", _confd_with_group_wait(t, "30s")],
-      note="group_wait 5x: render 0, --validate 1; group_wait 30s validates"),
+      note="group_wait 5x: --output-alertmanager 0, --validate 1; "
+           "group_wait 30s validates"),
 
     # Same ADR-007 fixture as validate_config --strict: the generator's own
     # --strict must fail on the violation it otherwise only warns about.
     R("generate_alertmanager_routes", "--strict",
-      lambda t, s: ["--config-dir", _confd_with_policy(t, "slack")],
+      lambda t, s: ["--config-dir", _confd_with_policy(t, "slack"),
+                    "--output-alertmanager", "--dry-run"],
       flip=("--strict",), boundary=("--strict",),
       boundary_base=lambda t, s: ["--config-dir",
-                                  _confd_with_policy(t, "pagerduty")],
+                                  _confd_with_policy(t, "pagerduty"),
+                                  "--output-alertmanager", "--dry-run"],
       note="forbidden slack receiver: WARN -> exit 1; no violation stays 0"),
 
     # --validate mode: there the policy violation reaches the verdict only
     # through load_tenant_tree(strict_policies=...), a different path from
-    # render mode's `if args.strict` block above.
+    # the output modes' `if args.strict` block above.
     R("generate_alertmanager_routes", "--strict", mode="with --validate",
       base=lambda t, s: ["--config-dir", _confd_with_policy(t, "slack"), "--validate"],
       flip=("--strict",), boundary=("--strict",),
@@ -1100,7 +1117,8 @@ def test_verdict_flag_changes_the_result(recipe: Recipe, lang: str, tmp_path: Pa
     # fresh output path per call gives every run its own artifact.
     boundary_base = recipe.boundary_base or recipe.base
     runs = {
-        "must-fire (no flag)": (recipe.base(tmp_path, stub_url), recipe.without),
+        "must-fire (no flag)": ((recipe.without_base or recipe.base)(tmp_path, stub_url),
+                                recipe.without),
         f"flip ({' '.join(recipe.flip)})":
             (recipe.base(tmp_path, stub_url) + list(recipe.flip), recipe.with_),
         f"boundary ({' '.join(recipe.boundary)})":

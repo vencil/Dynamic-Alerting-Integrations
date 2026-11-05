@@ -206,14 +206,14 @@ class TestValidateRefusesAnUnreadableTree:
         assert "Config files: 0 read, 1 skipped (alpha.yaml)" in r.stdout, r.stdout
 
 
-# ── Render / --output-configmap: never emit from a partial tree ───────
+# ── --output-alertmanager / --output-configmap: never emit from a partial tree ──
 class TestWritersRefuseAnUnreadableTree:
 
-    def test_render_mode_exits_1_and_writes_nothing(self, broken_tree, tmp_path):
-        out = tmp_path / "routes.yaml"
-        r = _gar(["--config-dir", str(broken_tree), "-o", str(out)])
+    def test_output_alertmanager_exits_1_and_writes_nothing(self, broken_tree, tmp_path):
+        out = tmp_path / "alertmanager.yml"
+        r = _gar(["--config-dir", str(broken_tree), "--output-alertmanager", "-o", str(out)])
         assert r.returncode == EXIT_VIOLATION, (r.stdout, r.stderr)
-        assert not out.exists(), "a fragment from a partial tree was written"
+        assert not out.exists(), "a config from a partial tree was written"
         assert "alpha.yaml" in r.stdout and "1 read, 1 skipped" in r.stdout, r.stdout
 
     def test_output_configmap_exits_1_and_emits_no_configmap(self, broken_tree):
@@ -224,10 +224,10 @@ class TestWritersRefuseAnUnreadableTree:
         assert "kind: ConfigMap" not in r.stdout, r.stdout
         assert "alpha.yaml" in r.stdout, r.stdout
 
-    def test_control_render_mode_writes_the_file_and_prints_counts(
+    def test_control_output_alertmanager_writes_the_file_and_prints_counts(
             self, good_tree, tmp_path):
-        out = tmp_path / "routes.yaml"
-        r = _gar(["--config-dir", str(good_tree), "-o", str(out)])
+        out = tmp_path / "alertmanager.yml"
+        r = _gar(["--config-dir", str(good_tree), "--output-alertmanager", "-o", str(out)])
         assert r.returncode == EXIT_OK, (r.stdout, r.stderr)
         assert out.exists()
         assert "Config files: 2 read, 0 skipped" in r.stdout, r.stdout

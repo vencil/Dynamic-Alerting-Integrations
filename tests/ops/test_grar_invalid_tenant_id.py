@@ -3,7 +3,7 @@
 判定函式 `_lib_validation.is_valid_tenant_id`（Go：tenantid.Valid）
 讀 schema 的 `definitions.tenantId`（DNS-1123 label），由
 tests/shared/routing_policy_parity_matrix.json 的 `tenant_ids` 表釘住。這裡釘產生器的
-行為：conf.d 只要宣告一個不合法 id，**每一種模式**（render、`--dry-run`、
+行為：conf.d 只要宣告一個不合法 id，**每一種模式**（`--output-alertmanager`（含 `--dry-run`）、
 `--output-configmap`、`--apply`、`--validate`、`--strict`）都 rc 1、不寫出也不套用任何
 設定。這是第 2 波 1A 規則（印 WARN、跳過、render rc 0）的例外：跳過整個租戶會部署出
 少了它的 Alertmanager 設定，它的告警落到 root receiver，而出貨的 `default` 是空
@@ -91,14 +91,14 @@ def test_every_mode_refuses_and_writes_nothing(tmp_path, tid, body):
     out = tmp_path / "out.yaml"
     bindir, calls = _fake_kubectl(tmp_path)
     modes = {
-        "render": ["-o", str(out)],
-        "render-stdout": [],
-        "dry-run": ["--dry-run"],
+        "output-alertmanager": ["--output-alertmanager", "-o", str(out)],
+        "output-alertmanager-stdout": ["--output-alertmanager"],
+        "output-alertmanager-dry-run": ["--output-alertmanager", "--dry-run"],
         "output-configmap": ["--output-configmap", "-o", str(out)],
         "output-configmap-dry-run": ["--output-configmap", "--dry-run"],
         "apply": ["--apply", "--yes"],
         "validate": ["--validate"],
-        "strict": ["--strict", "-o", str(out)],
+        "strict": ["--output-alertmanager", "--strict", "-o", str(out)],
         "validate-strict": ["--validate", "--strict"],
     }
     for mode, argv in modes.items():
@@ -119,7 +119,7 @@ def test_a_valid_id_still_renders(tmp_path, tid):
     d = _tree(tmp_path, tid)
     p = _gar(d, "--validate", "--strict")
     assert p.returncode == 0, p.stderr
-    dry = _gar(d, "--dry-run")
+    dry = _gar(d, "--output-alertmanager", "--dry-run")
     assert dry.returncode == 0, dry.stderr
     assert f"tenant-{tid}" in dry.stdout and "tenant-t-ok" in dry.stdout, dry.stdout
     assert tid in load_tenant_tree(str(d)).routing_configs
@@ -150,7 +150,8 @@ def test_every_tenant_refused_still_blocks(tmp_path):
     (d / "_defaults.yaml").write_text(_DEFAULTS, encoding="utf-8")
     (d / "t.yaml").write_text("tenants:\n  1.5e3:\n    cpu_usage_percent: '85'\n",
                               encoding="utf-8")
-    for argv in (["--dry-run"], ["--validate"], ["--dry-run", "--strict"]):
+    for argv in (["--output-alertmanager", "--dry-run"], ["--validate"],
+                 ["--output-alertmanager", "--dry-run", "--strict"]):
         p = _gar(d, *argv)
         assert p.returncode == 1, (argv, p.stderr)
         assert "tenant id '1.5e3' is not a valid tenant id" in p.stderr, p.stderr

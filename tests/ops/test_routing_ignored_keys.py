@@ -156,9 +156,9 @@ def test_each_place_is_named_and_blocks_validate_only(place, tmp_path):
     clean = _tree(tmp_path / "clean")
     dirty = _tree(tmp_path / "dirty", stray=(place,))
     _, file, field = _STRAY[place]
-    # Render mode: rc 0, the key named, the output as if it were absent.
-    rc_clean = _gen(clean, "-o", str(tmp_path / "clean.yaml"))
-    rc_dirty = _gen(dirty, "-o", str(tmp_path / "dirty.yaml"))
+    # --output-alertmanager: rc 0, the key named, the output as if it were absent.
+    rc_clean = _gen(clean, "--output-alertmanager", "-o", str(tmp_path / "clean.yaml"))
+    rc_dirty = _gen(dirty, "--output-alertmanager", "-o", str(tmp_path / "dirty.yaml"))
     assert rc_clean.returncode == 0 and rc_dirty.returncode == 0, rc_dirty.stderr
     assert (tmp_path / "clean.yaml").read_bytes() == (tmp_path / "dirty.yaml").read_bytes()
     key = field.rsplit(".", 1)[-1]

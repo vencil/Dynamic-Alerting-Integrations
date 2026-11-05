@@ -74,7 +74,8 @@ def _enforced_names(receivers: list[dict]) -> list[str]:
 
 def _render(d: Path) -> dict:
     out = d.parent / "routes.yaml"
-    p = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d), "-o", str(out)],
+    p = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d),
+                        "--output-alertmanager", "-o", str(out)],
                        capture_output=True, text=True, encoding="utf-8",
                        check=False, timeout=120)
     assert p.returncode == 0, p.stderr

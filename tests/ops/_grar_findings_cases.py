@@ -198,9 +198,9 @@ FIXTURES: dict[str, dict[str, str]] = {
 }
 
 MODES: dict[str, list[str]] = {
-    "render": ["--dry-run"],
+    "output-alertmanager": ["--output-alertmanager", "--dry-run"],
     "validate": ["--validate"],
-    "strict": ["--strict", "--dry-run"],
+    "strict": ["--output-alertmanager", "--strict", "--dry-run"],
     "validate_strict": ["--validate", "--strict"],
 }
 

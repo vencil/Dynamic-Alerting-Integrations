@@ -12,7 +12,7 @@ custom alert 的 `mode` 預設 `page`。產生器只替有效 `_routing` 的租�
   finding（stderr 一行＋`--findings-json` 一筆）。
 * 看得到 firehose 的模式（`--output-configmap`、`--apply`）才判它有沒有
   integration：有 ⇒ 沒有 finding；沒有 ⇒ WARN，`--strict` 升為 ERROR、rc 1、
-  不寫檔。看不到的模式（render、`--validate`）照樣 WARN，但說明沒檢查到，
+  不寫檔。看不到的模式（`--validate`；#1211 缺口 2 移除了 render）照樣 WARN，但說明沒檢查到，
   `--strict` 不升級。
 * 租戶自己寫的 `_routing: disable` 是刻意退出：照報 WARN，`--strict` 不升級。
 
@@ -86,6 +86,13 @@ TREES = {
     "page_routing_disabled": _tenant("t1", [_alert("q_high")], "_routing: disable\n"),
 }
 
+#: Both bases wire watchdog-heartbeat, so the only receiver judged here is the
+#: firehose (an unwired one is its own finding under --strict, #1211 gap 2).
+_WATCHDOG_WIRED = textwrap.indent(textwrap.dedent("""\
+    - name: watchdog-heartbeat
+      webhook_configs:
+        - url: "https://deadman.example.com/ping"
+"""), "  ")
 _BASE_NO_FIREHOSE_INTEGRATION = textwrap.dedent("""\
     global:
       resolve_timeout: 5m
@@ -94,7 +101,7 @@ _BASE_NO_FIREHOSE_INTEGRATION = textwrap.dedent("""\
     receivers:
       - name: default
       - name: custom-alerts-firehose
-""")
+""") + _WATCHDOG_WIRED
 _BASE_FIREHOSE_WITH_WEBHOOK = textwrap.dedent("""\
     global:
       resolve_timeout: 5m
@@ -105,7 +112,7 @@ _BASE_FIREHOSE_WITH_WEBHOOK = textwrap.dedent("""\
       - name: custom-alerts-firehose
         webhook_configs:
           - url: "https://logs.example.com/am"
-""")
+""") + _WATCHDOG_WIRED
 
 
 def _tree(tmp_path: Path, name: str) -> Path:
@@ -149,12 +156,10 @@ def _lines(proc: subprocess.CompletedProcess) -> list[str]:
 
 # ── 看不到 firehose 的模式：照報，但說沒檢查到 ─────────────────────────
 
-@pytest.mark.parametrize("mode", [[], ["--validate", "--strict"]],
-                         ids=["render", "validate-strict"])
+@pytest.mark.parametrize("mode", [["--validate"], ["--validate", "--strict"]],
+                         ids=["validate", "validate-strict"])
 def test_page_alert_without_routing_warns_when_the_firehose_is_unknown(tmp_path, mode):
-    out = tmp_path / "out.yaml"
-    proc, recs = _run(_tree(tmp_path, "page_no_routing"), *mode,
-                      *([] if mode else ["-o", str(out)]))
+    proc, recs = _run(_tree(tmp_path, "page_no_routing"), *mode)
     assert proc.returncode == 0, proc.stderr[-2000:]
     [line] = _lines(proc)
     assert line.startswith("WARN: tenant 't1': 2 served page-mode custom alert(s) "
@@ -222,8 +227,8 @@ def test_no_page_alert_to_lose_is_no_finding(tmp_path, tree):
     assert out.is_file()
 
 
-def test_silent_only_is_no_finding_in_render_mode_either(tmp_path):
-    proc, recs = _run(_tree(tmp_path, "silent_only"), "-o", str(tmp_path / "f.yaml"))
+def test_silent_only_is_no_finding_in_validate_mode_either(tmp_path):
+    proc, recs = _run(_tree(tmp_path, "silent_only"), "--validate")
     assert proc.returncode == 0, proc.stderr[-2000:]
     assert _lines(proc) == [] and recs == []
 

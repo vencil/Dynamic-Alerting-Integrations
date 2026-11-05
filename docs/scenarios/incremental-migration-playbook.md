@@ -248,7 +248,7 @@ kubectl delete -f k8s/03-monitoring/configmap-rules-redis.yaml
 
 **目標**：新舊告警同時運作，比較品質。使用 1-2 週時間收集數據，驗證 Dynamic Alerting 的告警品質不低於現有系統。
 
-### Step 2.1: Generate Alertmanager Routing Fragment
+### Step 2.1: Generate Alertmanager Routing
 
 先在租戶檔加上 `_routing`（receiver 的完整 schema 見 [BYO Alertmanager 整合指南](../integration/byo-alertmanager-integration.md)）：
 
@@ -267,81 +267,81 @@ tenants:
       repeat_interval: 4h
 ```
 
-再產生路由片段：
+再預覽合併進舊設定後的結果（不寫檔）：
 
 ```bash
 da-tools generate-routes \
   --config-dir conf.d/ \
-  -o alertmanager-fragment.yaml
+  --output-alertmanager --base-config alertmanager.yaml --dry-run
 ```
 
-**預期輸出**：stderr 印 `Found 1 tenant(s) with routing config: redis-prod` 與 `Written to alertmanager-fragment.yaml (1 routes, 1 receivers, 1 inhibit rules)`。片段裡的 route 以 `tenant="redis-prod"` 比對、送往 `tenant-redis-prod` receiver；另有一條同租戶 critical 抑制 warning 的 inhibit rule。工具一次產生 conf.d 裡**所有**有 `_routing` 的租戶，沒有只產單一租戶的選項（尚未實作）；沒有 `_routing` 的租戶不會產生 route。
+**預期輸出**：印 `Found 1 tenant(s) with routing config: redis-prod`，以及合併後的完整 `alertmanager.yml`。產生的 route 以 `tenant="redis-prod"` 比對、送往 `tenant-redis-prod` receiver；另有一條同租戶 critical 抑制 warning 的 inhibit rule。工具一次產生 conf.d 裡**所有**有 `_routing` 的租戶，沒有只產單一租戶的選項（尚未實作）；沒有 `_routing` 的租戶不會產生 route。
+
+產生器不再輸出「自己貼進去」的片段：不帶模式旗標是結束碼 2，輸出一律是合併後的完整設定（[#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)）。你的舊設定是來源（`--base-config`），合併結果是另一份產物：舊設定裡你的路由、receiver、inhibit rule 原樣保留，加上產生的；產物不能再拿來當 base。⚠️ v2.9.0 映像沒有 `--output-alertmanager`，它的 `--apply` 與 `--output-configmap --base-config` 會整個取代 `route.routes`（舊子路由全部消失），雙軌期間不能用那顆映像做合併 <!-- image-caveat: v2.9.0 -->
 
 ### 步驟 2.2：準備雙軌配置
 
-⚠️ 不要用 `generate-routes --apply` 或 `--output-configmap --base-config` 合併進舊的 Alertmanager 設定：這兩個模式會用產生的 route **取代**整個 `route.routes`，舊的子路由會全部消失。雙軌期間請手動合併：
+產生器合併時，`route.routes` 的順序固定是：平台 4 條路由 →**舊設定原有的子路由（原順序）**→ 租戶路由。所以舊子路由排在 `tenant-redis-prod` 之前：舊的 `severity="critical"` 子路由沒有 `continue`，會先接走 redis-prod 的 critical，新頻道收不到；舊設定沒有子路由接的 warning 則落到租戶路由，`legacy-default` 收不到。雙軌要兩邊都收，就先在舊設定裡做一個改動——把原有的子路由整組包進一條沒有 matcher、帶 `continue: true`、receiver 是原本 root receiver 的上層路由：
 
 ```bash
 cp alertmanager.yaml alertmanager.yaml.backup-phase1
 ```
 
-把片段的 route 插到 `route.routes` 的**最前面**並手動加上 `continue: true`（工具不會產生它），片段的 receiver 與 inhibit rule 也加進去，最後在 `route.routes` 末尾補一條沒有 matcher 的 catch-all，指回原本的 root receiver：
-
 ```yaml
-# alertmanager.yaml（雙軌期間）
+# alertmanager.yaml（雙軌期間的 base：只動了 route.routes 這一層）
 route:
   receiver: legacy-default
   group_by: [alertname]
   routes:
-  - matchers: ['tenant="redis-prod"']    # generate-routes 產生的 route
-    receiver: tenant-redis-prod
-    group_wait: 30s
-    group_interval: 5m
-    repeat_interval: 4h
-    continue: true                       # 手動加
-  - matchers: ['severity="critical"']    # 舊設定原有的子路由，原封不動
-    receiver: legacy-pager
-  - receiver: legacy-default             # 手動加：catch-all
+  - receiver: legacy-default             # 手動加：包住舊子路由的上層路由
+    continue: true                       # 手動加：比完舊路由後繼續往下比租戶路由
+    routes:
+    - matchers: ['severity="critical"']  # 舊設定原有的子路由，原封不動
+      receiver: legacy-pager
 receivers:
 - name: legacy-default
   webhook_configs: [{url: 'http://legacy.example/default'}]
 - name: legacy-pager
   webhook_configs: [{url: 'http://legacy.example/pager'}]
-- name: tenant-redis-prod
-  slack_configs:
-  - api_url: https://hooks.slack.com/services/T000/B000/XXXX
-    channel: '#da-pilot'
-inhibit_rules:
-- source_matchers: ['severity="critical"', 'metric_group=~".+"', 'tenant="redis-prod"']
-  target_matchers: ['severity="warning"', 'metric_group=~".+"', 'tenant="redis-prod"']
-  equal: [metric_group]
 ```
 
-為什麼兩樣都要手動加：
+這條上層路由在舊設定裡的效果與原本相同：子路由比對成功就照子路由送，都不成功就由它自己送 `legacy-default`（等於原本退回 root receiver）。差別只在 `continue: true`：送完之後繼續比後面的路由，於是租戶路由也收得到。
 
-- 少了 `continue: true`，所有帶 `tenant="redis-prod"` 的告警都只會進新頻道。步驟 1.4 之後舊告警也帶 `tenant`，所以舊的 critical 告警會從 `legacy-pager` 消失。
-- 只加 `continue`、不加 catch-all，舊的 warning 告警還是會離開 `legacy-default`：只要有任何子路由比對成功，Alertmanager 就不會退回 root receiver。
+接著把租戶路由合併進去：
+
+```bash
+da-tools generate-routes --config-dir conf.d/ \
+  --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
+```
+
+產出的 `route.routes` 依序是平台 4 條路由、上面那條上層路由、`tenant="redis-prod"` → `tenant-redis-prod`；receivers 多了 `tenant-redis-prod` 與四個平台 receiver，inhibit_rules 多了 redis-prod 的 critical 抑制 warning。舊的 receiver 與 inhibit rule 原樣保留。`alertmanager.yaml` 是來源、`alertmanager.merged.yaml` 是產物，兩份分開放：之後 conf.d 有變，就拿 `alertmanager.yaml`（來源）再跑一次上面的指令；不要拿 `alertmanager.merged.yaml` 當 `--base-config`——產物第一行標明它是產物，會被拒收（結束碼 1），`-o` 指向來源本身也不行（結束碼 2）。要改舊設定也改 `alertmanager.yaml`，再重新產生。⚠️ 平台的 `watchdog-heartbeat` receiver 沒接任何管道時會印 `watchdog_undelivered` WARN（加 `--strict` 是結束碼 1、不寫檔）；雙軌期間可以先接受這行 WARN，正式切換前照[告警平面自我存活性](../integration/alerting-plane-self-liveness.md)在 base 裡接上。
 
 合併後先驗語法，再逐類測去向：
 
 ```bash
-amtool check-config alertmanager.yaml
-amtool config routes test --config.file=alertmanager.yaml \
+amtool check-config alertmanager.merged.yaml
+amtool config routes test --config.file=alertmanager.merged.yaml \
   alertname=RedisHighMemory tenant=redis-prod severity=warning
-amtool config routes test --config.file=alertmanager.yaml \
+amtool config routes test --config.file=alertmanager.merged.yaml \
   alertname=RedisDownLegacy tenant=redis-prod severity=critical
 ```
 
-**預期**：第一個測試輸出 `tenant-redis-prod,legacy-default`，第二個輸出 `tenant-redis-prod,legacy-pager`。雙軌期間兩個頻道都會收到該租戶的新舊告警，要靠 alertname 區分哪些是 Rule Pack 的（清單見 [Rule Pack 告警參考](../rule-packs/ALERT-REFERENCE.md)）。
+**預期**：第一個測試輸出 `legacy-default,tenant-redis-prod`，第二個輸出 `legacy-pager,tenant-redis-prod`；沒有 `tenant="redis-prod"` 的舊告警照舊只到 `legacy-default` 或 `legacy-pager`。雙軌期間兩個頻道都會收到該租戶的新舊告警，要靠 alertname 區分哪些是 Rule Pack 的（清單見 [Rule Pack 告警參考](../rule-packs/ALERT-REFERENCE.md)）。
 
 ### 步驟 2.3：預檢查
 
 ```bash
 da-tools generate-routes --config-dir conf.d/ --validate
-amtool check-config alertmanager.yaml
+amtool check-config alertmanager.merged.yaml
 ```
 
 **預期**：`--validate` 檢查租戶的 `_routing`（receiver 格式、時序參數護欄、routing profile 引用與 domain policy），沒有錯誤時結束碼 0；`amtool check-config` 驗合併後的整份設定。`da-tools shadow-verify preflight` 是給 migrate／shadow 流程用的（檢查 prefix mapping、`migration_status: shadow` 的規則與 Alertmanager 的 shadow 攔截），這條流程用不到。
+
+接著部署 `alertmanager.merged.yaml`（依你的部署方式更新 ConfigMap 或設定檔）並 reload；載入之前 Alertmanager 仍跑舊設定，租戶頻道收不到任何告警：
+
+```bash
+curl -X POST http://localhost:9093/-/reload
+```
 
 ### 步驟 2.4：監控雙軌運行（1-2 週）
 
@@ -398,18 +398,35 @@ cp alertmanager.yaml alertmanager.yaml.backup-phase3
 #    試點域的舊告警規則（連同 expr、labels 整段），再驗格式
 promtool check rules prometheus-rules.yaml
 
-# 2. Alertmanager：拿掉試點租戶 route 的 continue: true，再測去向
-amtool config routes test --config.file=alertmanager.yaml \
+# 2. Alertmanager：在來源 alertmanager.yaml 裡，讓步驟 2.2 的上層路由不再比對試點租戶
+#    （加一行 matchers，見下方），再從來源重新產生、測去向
+da-tools generate-routes --config-dir conf.d/ \
+  --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
+amtool config routes test --config.file=alertmanager.merged.yaml \
   alertname=RedisHighMemory tenant=redis-prod severity=warning
+amtool config routes test --config.file=alertmanager.merged.yaml \
+  alertname=RedisDownLegacy tenant=redis-prod severity=critical
+amtool config routes test --config.file=alertmanager.merged.yaml \
+  alertname=OtherDown severity=critical
 ```
 
-**預期**：`promtool` 回報 `SUCCESS`；`amtool` 只輸出 `tenant-redis-prod`。
+```yaml
+# alertmanager.yaml（來源）：只改步驟 2.2 那條上層路由
+  - receiver: legacy-default
+    matchers: ['tenant!="redis-prod"']   # 切換：試點租戶不再進舊路由
+    continue: true                       # 保留：下一個域雙軌時還要用
+    routes:
+    - matchers: ['severity="critical"']
+      receiver: legacy-pager
+```
 
-**驗證乾跑輸出**：確認被刪的只有試點域的舊告警規則，其他域的規則仍在；確認其他（沒有 `tenant="redis-prod"` 的）告警的去向沒變。
+**預期**：`promtool` 回報 `SUCCESS`；前兩個 `amtool` 測試都只輸出 `tenant-redis-prod`，第三個（沒有 `tenant` 的舊告警）照舊輸出 `legacy-pager`。改的是來源 `alertmanager.yaml`，不是 `alertmanager.merged.yaml`：產物每次都從來源重新產生，直接改產物的內容下一次產生就不見了。
+
+**驗證乾跑輸出**：確認被刪的只有試點域的舊告警規則，其他域的規則仍在；確認其他（沒有 `tenant="redis-prod"` 的）告警的去向沒變。下一個域切換時，把它加進同一個 matcher（例如 `tenant!~"redis-prod|mariadb-prod"`）。
 
 ### 步驟 3.2：執行切換
 
-確認乾跑結果無誤，執行實際切換：把兩份設定套用到叢集（依你的部署方式更新 ConfigMap 或設定檔），再重載：
+確認乾跑結果無誤，執行實際切換：把 `prometheus-rules.yaml` 與步驟 3.1 重新產生的 `alertmanager.merged.yaml` 套用到叢集（依你的部署方式更新 ConfigMap 或設定檔），再重載：
 
 ```bash
 kubectl rollout restart deployment/prometheus -n monitoring
@@ -449,9 +466,11 @@ curl -sG http://localhost:9093/api/v2/alerts \
 
 ### 階段 3 回滾
 
-若切換失敗，用步驟 3.1 的兩份備份（`*.backup-phase3`）還原並重載：舊規則恢復觸發，試點租戶的 route 恢復 `continue: true`，回到雙軌狀態。
+若切換失敗，用步驟 3.1 的兩份備份（`*.backup-phase3`）還原，從還原後的來源重新產生 `alertmanager.merged.yaml`，套用並重載：舊規則恢復觸發，上層路由恢復比對試點租戶，回到雙軌狀態。
 
 ```bash
+da-tools generate-routes --config-dir conf.d/ \
+  --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
 kubectl rollout restart deployment/prometheus -n monitoring
 curl -X POST http://localhost:9093/-/reload
 ```
@@ -618,9 +637,9 @@ set -e
 out="$(mktemp -d)"            # 每次執行一個新的目錄，不會比到上次留下的檔
 trap 'rm -rf "$out"' EXIT
 # 以目前版本的映像執行
-da-tools generate-routes --config-dir ./conf.d -o "$out/routes-current.yaml"
+da-tools generate-routes --config-dir ./conf.d --output-configmap -o "$out/routes-current.yaml"
 # 以新版映像執行
-if ! da-tools generate-routes --config-dir ./conf.d -o "$out/routes-new.yaml"; then
+if ! da-tools generate-routes --config-dir ./conf.d --output-configmap -o "$out/routes-new.yaml"; then
   echo "新版拒收這棵 conf.d：先看檢查一的結果" >&2
   exit 1
 fi
@@ -641,10 +660,10 @@ else
 fi
 ```
 
-以 `docker run` 執行時，暫存目錄要掛進容器，輸出檔才寫得到它。
+以 `docker run` 執行時，暫存目錄要掛進容器，輸出檔才寫得到它。兩次都用 `--output-configmap`（不帶 `--base-config`，組在內建 base 上）：新版不帶模式旗標是結束碼 2，而這個模式新舊兩版都有，比的是同一種輸出。
 
 - **新版拒收這棵樹**：`generate-routes` 以非 0 結束、不寫輸出檔，沒有東西可比。範例讓 job 在這裡失敗，原因要回頭看檢查一（新版 da-guard 的結束碼與它點名的檔）。目前版本就拒收時，`set -e` 讓 job 在第一條指令失敗。
-- **沒有輸出檔**：樹上沒有租戶時，`generate-routes` 以 0 結束、不寫輸出檔。兩版都沒有輸出視為一致；只有一版有輸出視為有差異，訊息說明是哪一版沒有。
+- **沒有輸出檔**：樹上沒有租戶時，目前版本（v2.9.0）以 0 結束、不寫輸出檔，新版則照樣寫出合併結果（只有內建 base 與平台路由）。只有一版有輸出視為有差異，訊息說明是哪一版沒有——拿這兩版比對這種樹時，這是預期中的結果。
 - **有差異**：範例只以 `diff -q` 判斷有沒有差異，並讓 job 失敗，不把完整差異印進 CI 日誌，因為輸出含租戶 `_routing.receiver` 的 webhook URL（例如 Slack 的 `api_url`），印出來就等於把它們寫進日誌。要看完整差異，請在本機或有權限控管的環境，以兩版映像跑同樣兩條 `generate-routes` 後再 `diff -u`。輸出檔同樣含這些 URL，不要上傳成公開的 CI artifact。
 
 比對看得到渲染結果哪裡變了，但不會指出是哪一項讀法改變造成的；要歸因，回頭看那一處的原文（例如 `send_resolved: yes` 在新版是字串、會被拒收，要寫成 `true`）。
@@ -760,7 +779,7 @@ Rehearsal 內容：
 
 ### Q5：Double 告警（舊新都發）怎麼辦？
 
-**A**：Phase 2 的試點租戶 route 設 `continue: true`、末尾補 catch-all，新舊兩個頻道都會收到該租戶的新舊告警，這是雙軌的設計（見步驟 2.2）。切換時（Phase 3）刪除舊規則、拿掉 `continue: true` 即可消除重複。
+**A**：Phase 2 在來源裡把舊子路由包進一條帶 `continue: true` 的上層路由，新舊兩個頻道都會收到該租戶的新舊告警，這是雙軌的設計（見步驟 2.2）。切換時（Phase 3）刪除舊規則，並讓那條上層路由以 `tenant!="…"` 跳過試點租戶、重新產生合併檔，即可消除重複（見步驟 3.1）。
 
 ### Q6：Rule Pack 不適用怎麼辦？
 

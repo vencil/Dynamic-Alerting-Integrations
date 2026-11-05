@@ -7,7 +7,7 @@ schema（`definitions.routingEnforced.match`，`type: array`）與文件只記�
 
 現在：該區塊不啟用（與 `enabled` 不是布林同一套處理）——不產出 enforced route、
 印 `WARN … skipping`（kind `routing_enforced_match_invalid`），`--validate` 與
-validate-config 回 1；render 照常產出、結束碼不變。較早的根目錄檔已啟用的區塊保留。
+validate-config 回 1；輸出模式照常產出、結束碼不變。較早的根目錄檔已啟用的區塊保留。
 `match` 缺或 null 仍是「不加 matcher」。跨語言判定由
 tests/shared/routing_policy_parity_matrix.json 的 `routing-enforced-match-*-2989`
 四棵樹釘住；這裡釘 CLI 與各讀者的行為。租戶 id 都是 fixture 名稱（CLAUDE.md #9）。
@@ -64,7 +64,7 @@ def _gar(d: Path, *args: str) -> subprocess.CompletedProcess:
 def _enforced_routes(d: Path) -> list[dict]:
     """The rendered enforced routes (receiver `platform-enforced*`)."""
     out = d.parent / "routes.yaml"
-    p = _gar(d, "-o", str(out))
+    p = _gar(d, "--output-alertmanager", "-o", str(out))
     assert p.returncode == 0, p.stdout + p.stderr
     doc = yaml.safe_load(out.read_text(encoding="utf-8"))
     return [r for r in doc["route"]["routes"]
@@ -99,9 +99,9 @@ class TestRefused:
             assert p.returncode == 1, (args, p.stdout + p.stderr)
             assert _LINE in p.stdout + p.stderr, (args, p.stdout + p.stderr)
 
-    def test_render_still_exits_0(self, tmp_path):
+    def test_output_still_exits_0(self, tmp_path):
         d = _tree(tmp_path, _enforced("{severity: critical}"))
-        p = _gar(d, "--dry-run")
+        p = _gar(d, "--output-alertmanager", "--dry-run")
         assert p.returncode == 0, p.stdout + p.stderr
         assert _LINE in p.stderr
 

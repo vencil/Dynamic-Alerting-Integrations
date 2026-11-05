@@ -249,23 +249,27 @@ da-tools validate-config --config-dir conf.d/
 
 ### 2.3 Stage 2: Generate
 
-Runs only on PRs. Generates Alertmanager config fragments and computes blast radius. ⚠️ The comment below saying the da-tools image bundles amtool does not hold for the v2.9.0 image: it does not bundle `amtool` <!-- image-caveat: v2.9.0 -->
+Runs only on PRs. Generates the merged Alertmanager config and computes blast radius. ⚠️ The comment below saying the da-tools image bundles amtool does not hold for the v2.9.0 image: it does not bundle `amtool`; the v2.9.0 image also still has the old generator (a fragment when no mode flag is given, and an `--output-configmap` that replaces `route.routes` whole) <!-- image-caveat: v2.9.0 -->
 
 ```bash
-# Generate Alertmanager routes/receivers/inhibit_rules
+# Merge the tenant routing into your Alertmanager base, as a complete ConfigMap
+# (for an Alertmanager outside K8s use --output-alertmanager: a plain alertmanager.yml)
 mkdir -p .output
-da-tools generate-routes --config-dir conf.d/ \
-  -o .output/alertmanager-routes.yaml
+da-tools generate-routes --config-dir conf.d/ --output-configmap \
+  --base-config alertmanager-base.yaml -o .output/alertmanager-configmap.yaml
+# ⛔ Always pass a mode flag: -o alone is exit 2 (the fragment mode is gone, #1211).
 # ⛔ Do not add --validate to the same call: it returns before -o is used
 # (#1423), and the tool now refuses the combination outright (exit 2; #1650).
 # Validate in a separate run (--validate does not read --dry-run either — also
 # exit 2):
 da-tools generate-routes --config-dir conf.d/ --validate
-# ⚠️ What -o writes is a fragment (not a complete config) and is not checked
-#    by Alertmanager's own parser; --validate hands the config, assembled on
-#    the BUILT-IN default base (not yours), to amtool (#2260). To check your
-#    own base use --output-configmap --base-config (#2219). amtool ships in
-#    the image (#2294), so inside it both checks run by default.
+# ⚠️ --validate hands the config, assembled on the BUILT-IN default base (not
+#    yours), to amtool (#2260); the --output-configmap --base-config run above
+#    checks the one assembled on your own base (#2219). alertmanager-base.yaml
+#    is the source (your own config, in git) and .output/ the output; your own
+#    routes and receivers in the base stay. Never pass the output as the base:
+#    its tenant-* receivers are refused (exit 1).
+#    amtool ships in the image (#2294), so inside it both checks run by default.
 
 # Compute blast radius (which tenants, which metrics affected)
 # In CI, first extract the base branch's conf.d/ into conf.d.base/

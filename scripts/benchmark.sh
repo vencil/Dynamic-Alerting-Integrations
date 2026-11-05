@@ -492,7 +492,10 @@ print(f'Generated ${N_TENANTS} tenant configs → ${RB_TENANT_DIR}/')
       for round in $(seq 1 5); do
         RB_START=$(date +%s%N)
         RB_GEN_RC=0
-        RB_OUTPUT=$(python3 "${TOOLS_DIR}/generate_alertmanager_routes.py" --config-dir "${RB_TENANT_DIR}" --dry-run 2>"${RB_TMPDIR}/gen.err") || RB_GEN_RC=$?
+        # #1211: the routing-fragment mode is gone; time the merge every
+        # output mode runs (built-in base; amtool's check-config too when it
+        # is on PATH).
+        RB_OUTPUT=$(python3 "${TOOLS_DIR}/generate_alertmanager_routes.py" --config-dir "${RB_TENANT_DIR}" --output-alertmanager --dry-run 2>"${RB_TMPDIR}/gen.err") || RB_GEN_RC=$?
         RB_END=$(date +%s%N)
         # A failed run times nothing: report it instead of a duration and
         # zero routes that read like a measurement.

@@ -116,13 +116,15 @@ EXPECTED_REEXPORTS: dict[str, tuple[str, ...]] = {
         "AMTOOL_UNUSABLE",
         "BaseConfigInputError",  # #1616 supplied-but-unusable --base-config
         "_apply_merged_configmap",
-        "_merge_routes_receivers_inhibits",
         "_read_existing_configmap",
         "_reload_alertmanager",
         "apply_to_configmap",
+        # #1211 gap 2: the one merge every output mode uses, and its
+        # alertmanager.yml / ConfigMap renderings
+        "assemble_alertmanager_yml",
         "assemble_configmap",
         "load_base_config",
-        "render_output",
+        "merge_generated",
         # #2260 --validate NOTICE; moved here with the shared verdict (#2311)
         "VALIDATE_AMTOOL_NOT_FOUND_NOTICE",
     ),

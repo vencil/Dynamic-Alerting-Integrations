@@ -313,7 +313,8 @@ def _run(d: Path, *args: str) -> subprocess.CompletedProcess:
 def test_render_writes_the_file_field(tmp_path):
     d = _tree(tmp_path, _SHARED_RECEIVER)
     out = tmp_path / "routes.yaml"
-    r = _run(d, "--policy", _policy(tmp_path, _SHARED_POLICY),
+    # #1211 gap 2: a mode is required; the merged output carries the receiver.
+    r = _run(d, "--output-alertmanager", "--policy", _policy(tmp_path, _SHARED_POLICY),
              "--secret-mount-root", "/mnt/s", "-o", str(out))
     assert r.returncode == 0, r.stderr
     receivers = yaml.safe_load(out.read_text(encoding="utf-8"))["receivers"]
@@ -323,7 +324,8 @@ def test_render_writes_the_file_field(tmp_path):
 
 @pytest.mark.parametrize("root", ["relative/path", "/a/../b", "/a\nb"])
 def test_unusable_mount_root_is_a_caller_error(tmp_path, root):
-    r = _run(_tree(tmp_path, _SHARED_RECEIVER), "--secret-mount-root", root, "--dry-run")
+    r = _run(_tree(tmp_path, _SHARED_RECEIVER), "--output-alertmanager",
+             "--secret-mount-root", root, "--dry-run")
     assert r.returncode == 2, (r.stdout, r.stderr)
     assert "--secret-mount-root" in r.stderr
 
@@ -344,7 +346,7 @@ def test_validate_config_routes_row_fails_on_a_binding_violation(tmp_path):
 
 
 def test_unusable_shared_secrets_policy_is_rc_2(tmp_path):
-    r = _run(_tree(tmp_path, _SHARED_RECEIVER), "--dry-run", "--policy", _policy(
+    r = _run(_tree(tmp_path, _SHARED_RECEIVER), "--output-alertmanager", "--dry-run", "--policy", _policy(
         tmp_path, "shared_secrets:\n  corp-slack: {secret: da-x, fields: [api_url]}\n"))
     assert r.returncode == 2 and "da-" in r.stderr
 

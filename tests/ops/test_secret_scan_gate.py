@@ -1044,15 +1044,33 @@ def test_the_converter_fails_as_a_PROCESS_not_just_as_a_function() -> None:
     the same POLICY, and so did I; none of us checked that it exercised the
     same ENTRY POINT.
 
-    Asserted statically (no subprocess) so it stays cheap and cannot be
-    confused for a second copy of the policy test.
+    #3579: asserted by RUNNING it, not by matching the guard's text. The
+    entry's shape is the single-exit gate's
+    (`tests/shared/test_single_exit_path.py`: `_lib_exitcodes.run(main)`);
+    a second textual
+    predicate here pinned the old `sys.exit(main())` and went red on a
+    migration that kept the behaviour. What this test owns is the property:
+    the PROCESS ends at the policy's code. The policy itself stays
+    `TestMainExitPolicy`'s.
     """
-    src = CONVERTER.read_text(encoding="utf-8")
-    assert re.search(r'if\s+__name__\s*==\s*["\']__main__["\']\s*:\s*\n\s*sys\.exit\(\s*main\(\)\s*\)',
-                     src), (
-        f"{CONVERTER.relative_to(ROOT).as_posix()} no longer ends in "
-        "`sys.exit(main())`.\nWithout it the process exits 0 no matter what "
-        "`main()` returns, so a VERIFIED finding produces a GREEN workflow "
-        "step — and every existing test still passes, because they all call "
-        "`main()` in-process and inspect its return value (#1364)."
+    import sys
+    fixtures = ROOT / "tests" / "lint" / "fixtures" / "trufflehog"
+
+    def run(name: str, out: Path) -> int:
+        return subprocess.run(
+            [sys.executable, str(CONVERTER), "--input", str(fixtures / name),
+             "--output", str(out)],
+            cwd=ROOT, capture_output=True, text=True, encoding="utf-8",
+            timeout=60, check=False).returncode
+
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        verified = run("findings_mixed.json", Path(tmp) / "a.sarif")
+        clean = run("findings_unverified_only.json", Path(tmp) / "b.sarif")
+    assert (verified, clean) == (1, 0), (
+        f"{CONVERTER.relative_to(ROOT).as_posix()} run as a program exited "
+        f"{verified} on a VERIFIED finding and {clean} on unverified-only "
+        "(want 1 and 0).\nA process that exits 0 no matter what `main()` "
+        "returns makes a VERIFIED finding a GREEN workflow step — and every "
+        "in-process test still passes (#1364)."
     )

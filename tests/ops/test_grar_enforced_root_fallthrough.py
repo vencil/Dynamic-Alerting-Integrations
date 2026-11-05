@@ -34,7 +34,7 @@ sys.path.insert(0, str(REPO / "scripts" / "tools" / "ops"))
 import validate_config as vc  # noqa: E402
 from _grar_parse import load_tenant_tree  # noqa: E402
 from _grar_render import (  # noqa: E402
-    _merge_routes_receivers_inhibits, assemble_configmap, load_base_config)
+    merge_generated, assemble_configmap, load_base_config)
 from _grar_routes import (  # noqa: E402
     generate_inhibit_rules, generate_routes, is_root_fallthrough_route)
 
@@ -177,7 +177,7 @@ def test_apply_merge_pins_the_cluster_root(tmp_path):
     routes, receivers, _w, inhibit = _generate(_tree(tmp_path, _PER_TENANT))
     existing = {"route": {"receiver": "cluster-root"},
                 "receivers": [{"name": "cluster-root"}], "inhibit_rules": []}
-    merged = _merge_routes_receivers_inhibits(existing, routes, receivers, inhibit)
+    merged = merge_generated(existing, routes, receivers, inhibit)
     for tid in _TENANTS:
         want = [f"platform-enforced-{tid}"] + (
             [f"tenant-{tid}"] if _TENANTS[tid][1] else ["cluster-root"])

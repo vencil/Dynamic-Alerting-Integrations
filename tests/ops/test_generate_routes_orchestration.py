@@ -2,7 +2,7 @@
 
 Companion to test_generate_alertmanager_routes.py (which covers route-graph
 construction). This file targets the OUTPUT/CLI orchestrator concern:
-render_output, load_base_config, assemble_configmap, apply_to_configmap
+load_base_config, assemble_configmap, apply_to_configmap
 (mocked kubectl), and main() CLI paths (dry-run, validate, output-configmap,
 apply, stdout).
 
@@ -39,7 +39,6 @@ from factories import (
 )
 
 from generate_alertmanager_routes import (
-    render_output,
     load_base_config,
     assemble_configmap,
     apply_to_configmap,
@@ -55,7 +54,7 @@ from generate_alertmanager_routes import (
     _parse_config_files,
     write_text_secure,
 )
-from _grar_render import _merge_routes_receivers_inhibits, _enforce_equal_labels_gated
+from _grar_render import merge_generated, _enforce_equal_labels_gated
 from generate_alertmanager_routes import (
     assert_equal_labels_gated,
     assert_platform_alerts_not_tenant_silenceable,
@@ -66,52 +65,6 @@ from generate_alertmanager_routes import (
 )
 
 import generate_alertmanager_routes as gar
-
-
-# ============================================================
-# render_output
-# ============================================================
-class TestRenderOutput:
-    """render_output() YAML fragment rendering."""
-
-    def test_routes_only(self):
-        routes = [{"receiver": "tenant-db-a", "matchers": ['tenant="db-a"']}]
-        result = render_output(routes, [], None)
-        parsed = yaml.safe_load(result)
-        assert "route" in parsed
-        assert parsed["route"]["routes"] == routes
-        assert "receivers" not in parsed
-        assert "inhibit_rules" not in parsed
-
-    def test_receivers_only(self):
-        receivers = [{"name": "tenant-db-a", "webhook_configs": [{"url": "https://x.com"}]}]
-        result = render_output([], receivers, None)
-        parsed = yaml.safe_load(result)
-        assert "receivers" in parsed
-        assert "route" not in parsed
-
-    def test_inhibit_rules_only(self):
-        inhibit = [{"source_matchers": ["severity=\"critical\""],
-                     "target_matchers": ["severity=\"warning\""]}]
-        result = render_output([], [], inhibit)
-        parsed = yaml.safe_load(result)
-        assert "inhibit_rules" in parsed
-
-    def test_all_sections(self):
-        routes = [{"receiver": "r1"}]
-        receivers = [{"name": "r1"}]
-        inhibit = [{"source_matchers": ["a=b"]}]
-        result = render_output(routes, receivers, inhibit)
-        parsed = yaml.safe_load(result)
-        assert "route" in parsed
-        assert "receivers" in parsed
-        assert "inhibit_rules" in parsed
-
-    def test_empty_all(self):
-        result = render_output([], [], [])
-        parsed = yaml.safe_load(result)
-        # Empty lists => sections omitted
-        assert parsed is None or parsed == {}
 
 
 # ============================================================
@@ -415,7 +368,8 @@ def _gar(argv, stdin=b""):
 # suite stayed green.
 _UNWRITABLE_SHAPES = ["missing_parent", "is_a_directory"]
 # Modes that do NOT honour --base-config, under the predicate in main()
-# ("--output-configmap AND NOT --validate"). ⛔ NOT an exhaustive enumeration
+# ("(--output-configmap OR --output-alertmanager) AND NOT --validate"; #1211
+# gap 2 removed the render mode, which was the fourth). ⛔ NOT an exhaustive enumeration
 # of that complement — `--dry-run`, `--validate --apply` and other
 # combinations also fall in it and are not listed. These are the four that
 # were measured; `validate+output-configmap` is here because `--validate`
@@ -423,14 +377,14 @@ _UNWRITABLE_SHAPES = ["missing_parent", "is_a_directory"]
 # still ignores the file — the one shape where following the old advice
 # silently reproduced the defect.
 _UNHONOURED_MODES = [
-    ("render", []),
     ("apply", ["--apply", "--yes"]),
     ("validate", ["--validate"]),
     ("validate+output-configmap", ["--validate", "--output-configmap"]),
+    ("validate+output-alertmanager", ["--validate", "--output-alertmanager"]),
 ]
 # Both writers. #1617 named one; the file had two, and the `label` that tells
 # them apart was asserted by neither until this pair existed.
-_WRITER_MODES = [[], ["--output-configmap"]]
+_WRITER_MODES = [["--output-alertmanager"], ["--output-configmap"]]
 
 
 @pytest.fixture(scope="module")
@@ -465,13 +419,14 @@ class TestOutputAndClusterExitCodes:
     def test_control_a_writable_output_path_succeeds(self, _tenant_dir, tmp_path):
         """⛔ Without this, everything below is satisfied by a tool that
         exits 2 on every invocation."""
-        r = _gar(["--config-dir", str(_tenant_dir), "-o", str(tmp_path / "out.yaml")])
+        r = _gar(["--config-dir", str(_tenant_dir), "--output-alertmanager",
+                  "-o", str(tmp_path / "out.yaml")])
         assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[:400]
         assert (tmp_path / "out.yaml").is_file()
 
     @pytest.mark.parametrize("shape", _UNWRITABLE_SHAPES)
     @pytest.mark.parametrize("mode", _WRITER_MODES,
-                             ids=["render", "output-configmap"])
+                             ids=["output-alertmanager", "output-configmap"])
     def test_an_unwritable_output_path_is_a_caller_error(
             self, _tenant_dir, tmp_path, shape, mode):
         """Both writers, because #1617 named one and the file had two.
@@ -537,11 +492,11 @@ class TestOutputAndClusterExitCodes:
         # the label was standing in for.
 
     @pytest.mark.parametrize("mode,must_contain,must_not_contain", [
-        ([], b"Alertmanager Route + Receiver + Inhibit Rules Fragment",
-         b"kind: ConfigMap"),
-        (["--output-configmap"], b"kind: ConfigMap",
-         b"Alertmanager Route + Receiver + Inhibit Rules Fragment"),
-    ], ids=["render", "output-configmap"])
+        # #1211 gap 2: the plain alertmanager.yml starts at the top-level
+        # key; a ConfigMap carries it indented under data.
+        (["--output-alertmanager"], b"\nroute:\n", b"kind: ConfigMap"),
+        (["--output-configmap"], b"kind: ConfigMap", b"\nroute:\n"),
+    ], ids=["output-alertmanager", "output-configmap"])
     def test_control_each_writer_mode_writes_its_own_artefact(
             self, _tenant_dir, tmp_path, mode, must_contain, must_not_contain):
         """The two `-o` writers must stay distinguishable BY WHAT THEY WRITE.
@@ -815,9 +770,10 @@ class TestOutputAndClusterExitCodes:
     def test_both_writers_and_both_shapes_are_still_covered(self):
         """⛔ Anti-vacuity for the two lists above."""
         assert set(_UNWRITABLE_SHAPES) == {"missing_parent", "is_a_directory"}
-        assert _WRITER_MODES == [[], ["--output-configmap"]], (
+        assert _WRITER_MODES == [["--output-alertmanager"], ["--output-configmap"]], (
             "dropping a writer mode removes the only thing asserting that the "
-            "ConfigMap writer and the fragment writer report different labels")
+            "ConfigMap writer and the alertmanager.yml writer write different "
+            "artefacts")
 
     def test_a_missing_kubectl_is_a_caller_error_not_a_violation(self, _tenant_dir):
         """⛔ The doc row this PR rewrote says kubectl failures exit 2.
@@ -910,11 +866,12 @@ class TestBaseConfigIsOnlyReadByOneMode:
     "supplied but unusable", different door.
     """
 
-    def test_control_the_mode_that_reads_it_still_works(self, _tenant_dir, tmp_path):
+    @pytest.mark.parametrize("mode", ["--output-configmap", "--output-alertmanager"])
+    def test_control_the_mode_that_reads_it_still_works(self, _tenant_dir, tmp_path, mode):
         p = tmp_path / "base.yaml"
         p.write_text(yaml.dump({"global": {"smtp_smarthost": "mail.example:587"}, **_MIN_AM}),
                      encoding="utf-8")
-        r = _gar(["--config-dir", str(_tenant_dir), "--output-configmap",
+        r = _gar(["--config-dir", str(_tenant_dir), mode,
                   "--base-config", str(p)])
         assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[:400]
         assert b"mail.example:587" in r.stdout, (
@@ -1005,7 +962,8 @@ class TestBaseConfigIsOnlyReadByOneMode:
           returns before the ConfigMap is assembled — reachable but it silently
           reproduces #1616, which is worse than unreachable.
 
-        Only the render/dry-run modes may be told to add the flag.
+        No mode left in this list may be told to add the flag (#1211 gap 2
+        removed render, the one mode that could).
         """
         p = tmp_path / "base.yaml"
         p.write_text(yaml.dump({"global": {}}), encoding="utf-8")
@@ -1013,15 +971,13 @@ class TestBaseConfigIsOnlyReadByOneMode:
         r = _gar(["--config-dir", str(_tenant_dir), *argv,
                   "--base-config", str(p)], stdin=b"")
         err = (r.stdout + r.stderr).decode("utf-8", "replace")
-        if mode_id == "render":
-            assert "Add --output-configmap" in err, err[:400]
-        else:
-            assert "Add --output-configmap" not in err, (
+        for add in ("Add --output-configmap", "Add --output-alertmanager"):
+            assert add not in err, (
                 f"[{mode_id}] prescribes a remedy that is either forbidden by "
                 f"argparse or silently ineffective in this mode:\n{err[:400]}")
-            assert "Drop --base-config" in err, err[:400]
+        assert "Drop --base-config" in err, err[:400]
 
-    def test_control_the_remedy_the_render_message_gives_actually_works(
+    def test_control_the_output_modes_honour_the_base_they_are_given(
             self, _tenant_dir, tmp_path):
         """⛔ The point of the assertions above is not the wording — it is that
         following the advice fixes the problem. So follow it once, and check the
@@ -1059,9 +1015,11 @@ class TestBaseConfigIsOnlyReadByOneMode:
         the defect when you follow the advice was the one mode never tested.
         """
         ids = {m[0] for m in _UNHONOURED_MODES}
-        assert ids >= {"render", "apply", "validate", "validate+output-configmap"}, (
+        want = {"apply", "validate", "validate+output-configmap",
+                "validate+output-alertmanager"}
+        assert ids >= want, (
             f"a mode that does not honour --base-config lost its case: "
-            f"missing {sorted({'render', 'apply', 'validate', 'validate+output-configmap'} - ids)}")
+            f"missing {sorted(want - ids)}")
 
 
 # ============================================================
@@ -1128,11 +1086,25 @@ class TestAssembleConfigmap:
         """#2279: this test used to pin the silent de-duplication — the base
         receiver kept, the generated one of the same name DROPPED, rc 0. That
         is the defect (alerts went to the base's stale endpoint), so the pin is
-        reversed: the shadow is a ValueError naming the receiver."""
+        reversed: the shadow is a ValueError naming the receiver. #1211 gap 2
+        narrows it to names OUTSIDE the generator's namespace (the case
+        below covers the inside)."""
         base = load_base_config(None)
         receivers = [{"name": "default", "webhook_configs": [{"url": "https://x.com"}]}]
         with pytest.raises(ValueError, match=r"same name.*'default'"):
             assemble_configmap(base, [], receivers, [])
+
+    def test_a_base_receiver_in_the_generated_namespace_is_refused(self):
+        """#1211 gap 2 (owner decision S): the base is a SOURCE; a receiver
+        named `tenant-*` there marks it as an earlier output (or shadows the
+        generated one, #2279) — refused, naming it."""
+        base = load_base_config(None)
+        base["receivers"].append(
+            {"name": "tenant-db-a", "webhook_configs": [{"url": "https://stale.example.com"}]})
+        receivers = [{"name": "tenant-db-a", "webhook_configs": [{"url": "https://x.com"}]}]
+        routes = [{"receiver": "tenant-db-a", "matchers": ['tenant="db-a"']}]
+        with pytest.raises(ValueError, match=r"generator writes.*'tenant-db-a'.*not an earlier output"):
+            assemble_configmap(base, routes, receivers, [])
 
 
 # ============================================================
@@ -1143,7 +1115,7 @@ class TestCustomAlertIsolationInjection:
     Alerts isolation (index 1), synthetic-probe sinkhole (index 2), sentinel
     sinkhole (index 3, #1095) — plus their receivers must be present and pinned
     at the FRONT of the assembled ConfigMap, across BOTH the --output-configmap
-    (assemble_configmap) and --apply (_merge_routes_receivers_inhibits) paths,
+    (assemble_configmap) and --apply (merge_generated) paths,
     and survive the route-REPLACE."""
 
     def _routes_of(self, cm_yaml):
@@ -1226,7 +1198,7 @@ class TestCustomAlertIsolationInjection:
         }
         tenant_routes = [{"receiver": "tenant-db-a", "matchers": ['tenant="db-a"']}]
         gen_inhibits = [_build_inhibit_for_test()]
-        merged = _merge_routes_receivers_inhibits(
+        merged = merge_generated(
             existing, tenant_routes, [{"name": "tenant-db-a"}], gen_inhibits)
         routes = merged["route"]["routes"]
         assert routes[0]["matchers"] == ['alertname="Watchdog"']  # watchdog leads
@@ -1250,7 +1222,7 @@ class TestCustomAlertIsolationInjection:
             "receivers": [{"name": "default"}, rich_wd],
             "inhibit_rules": [],
         }
-        merged = _merge_routes_receivers_inhibits(
+        merged = merge_generated(
             existing, [{"receiver": "tenant-db-a", "matchers": ['tenant="db-a"']}],
             [{"name": "tenant-db-a"}], [])
         wd = [r for r in merged["receivers"] if r["name"] == "watchdog-heartbeat"]
@@ -1368,21 +1340,22 @@ class TestCustomSubtreeTenantDelivery:
             {"matchers": ['tenant="db-a"'], "receiver": "tenant-db-a"},
             {"matchers": ['tenant="db-b"'], "receiver": "tenant-db-b"},
         ]
-        merged = _merge_routes_receivers_inhibits(
+        merged = merge_generated(
             existing, gen_routes, [{"name": "tenant-db-a"}, {"name": "tenant-db-b"}], [])
         customs = [r for r in merged["route"]["routes"]
                    if 'component="custom"' in r.get("matchers", [])]
         assert len(customs) == 1
         assert [c["receiver"] for c in customs[0]["routes"]] == \
             ["tenant-db-a", "tenant-db-b"]
-        # Re-feed the ALREADY-INJECTED route list with tenant db-b removed: the
-        # stale custom route (children db-a+db-b) is dropped whole and rebuilt —
-        # still exactly one custom route, no duplicated children, and the
-        # removed tenant's stale child gone.
+        # Re-feed the ALREADY-INJECTED route list (as generated routes, on the
+        # same source) with tenant db-b removed: the stale custom route
+        # (children db-a+db-b) is dropped whole and rebuilt — still exactly
+        # one custom route, no duplicated children, and the removed tenant's
+        # stale child gone.
         refeed = [r for r in merged["route"]["routes"]
                   if r.get("receiver") != "tenant-db-b"]
-        merged2 = _merge_routes_receivers_inhibits(
-            merged, refeed, [{"name": "tenant-db-a"}], [])
+        merged2 = merge_generated(
+            existing, refeed, [{"name": "tenant-db-a"}], [])
         customs2 = [r for r in merged2["route"]["routes"]
                     if 'component="custom"' in r.get("matchers", [])]
         assert len(customs2) == 1
@@ -1477,10 +1450,11 @@ class TestCustomSubtreeTenantDelivery:
         routes, receivers, _w = generate_routes(self._split_routing_configs(), tenants=())
         existing = {"route": {"receiver": "default", "routes": []},
                     "receivers": [{"name": "default"}], "inhibit_rules": []}
-        merged = _merge_routes_receivers_inhibits(existing, routes, receivers, [])
+        merged = merge_generated(existing, routes, receivers, [])
         first = copy.deepcopy(merged["route"]["routes"])
-        merged2 = _merge_routes_receivers_inhibits(
-            merged, copy.deepcopy(first), receivers, [])
+        # the injected list handed back as generated routes, on the same source
+        merged2 = merge_generated(
+            existing, copy.deepcopy(first), receivers, [])
         assert merged2["route"]["routes"] == first
         customs = [r for r in merged2["route"]["routes"]
                    if 'component="custom"' in r.get("matchers", [])]
@@ -1786,7 +1760,7 @@ class TestPlatformAlertsNotTenantSilenceable:
     def test_runtime_default_is_the_derived_set_not_a_sample(self):
         """The guard's DEFAULT probe set must be the full pack, not a sample.
 
-        The render paths (`assemble_configmap`, `_merge_routes_receivers_inhibits`)
+        The merge paths (`assemble_configmap`, `merge_generated`)
         call the assert WITHOUT passing label sets, so whatever the default is IS
         the production guarantee. A hand-written sample goes stale on the next
         alert — and did: the pack grew 5 alerts (#1259, #1266) mid-PR, none of
@@ -3418,11 +3392,12 @@ class TestMainCLI:
 
     def test_dry_run(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
-        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir, "--dry-run")
+        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir,
+                 "--output-alertmanager", "--dry-run")
         gar.main()
         out = capsys.readouterr().out
-        assert "DRY RUN" in out
-        assert "route" in out.lower() or "receiver" in out.lower()
+        assert "DRY RUN: alertmanager.yml" in out
+        assert "tenant-db-a" in out
 
     def test_validate_mode(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
@@ -3435,19 +3410,21 @@ class TestMainCLI:
 
     def test_stdout_output(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
-        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir)
+        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir,
+                 "--output-alertmanager")
         gar.main()
         out = capsys.readouterr().out
-        assert "route" in out.lower() or "receiver" in out.lower()
+        assert "tenant-db-a" in out and "kind: ConfigMap" not in out
 
     def test_output_file(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
         out_file = str(tmp_path / "output.yaml")
-        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir, "-o", out_file)
+        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir,
+                 "--output-alertmanager", "-o", out_file)
         gar.main()
         assert os.path.isfile(out_file)
         content = open(out_file, encoding="utf-8").read()
-        assert "route" in content.lower() or "receiver" in content.lower()
+        assert "tenant-db-a" in content
 
     def test_output_configmap(self, tmp_path, monkeypatch, capsys, cli_argv):
         config_dir = self._make_config_dir(tmp_path)
@@ -3477,7 +3454,8 @@ class TestMainCLI:
         policy = tmp_path / "policy.yaml"
         policy.write_text(yaml.dump({"allowed_domains": ["hooks.example.com"]}),
                           encoding="utf-8")
-        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir, "--policy", str(policy))
+        cli_argv("generate_alertmanager_routes", "--config-dir", config_dir,
+                 "--output-alertmanager", "--policy", str(policy))
         gar.main()
         out = capsys.readouterr().out
         assert "Policy" in out or "route" in out.lower()
@@ -3485,10 +3463,14 @@ class TestMainCLI:
     def test_empty_config_dir(self, tmp_path, monkeypatch, capsys, cli_argv):
         d = tmp_path / "empty"
         d.mkdir()
-        cli_argv("generate_alertmanager_routes", "--config-dir", str(d))
-        with pytest.raises(SystemExit) as exc:
-            gar.main()
-        assert exc.value.code == 0
+        cli_argv("generate_alertmanager_routes", "--config-dir", str(d),
+                 "--output-alertmanager")
+        # #1211 gap 2: an output mode still writes the merge on an empty tree
+        # (the base's own content and the platform routes only).
+        gar.main()
+        out = capsys.readouterr().out
+        assert "No tenants found in config directory;" in out
+        assert "watchdog-heartbeat" in out and "tenant-" not in out
 
     def test_validate_with_errors(self, tmp_path, monkeypatch, capsys, cli_argv):
         """Validate mode with bad config should exit 1."""
@@ -4944,7 +4926,8 @@ def test_findings_json_dash_with_o_is_the_only_thing_on_stdout(tmp_path):
     import subprocess as _sp
     out = tmp_path / "r.yaml"
     proc = _sp.run([sys.executable, str(_GAR_SCRIPT_FOR_3107), "--config-dir", str(_CONF_FOR_3107),
-                    "-o", str(out), "--findings-json", "-"], capture_output=True, text=True,
+                    "--output-alertmanager", "-o", str(out), "--findings-json", "-"],
+                   capture_output=True, text=True,
                    encoding="utf-8", timeout=300, check=False)
     assert proc.returncode == 0, proc.stderr
     assert _json.loads(proc.stdout)["schema"] == "da-tools.findings/v1"
@@ -4954,7 +4937,8 @@ def test_findings_json_dash_with_o_is_the_only_thing_on_stdout(tmp_path):
 def test_findings_json_dash_without_o_is_refused_before_any_route(tmp_path):
     import subprocess as _sp
     proc = _sp.run([sys.executable, str(_GAR_SCRIPT_FOR_3107), "--config-dir", str(_CONF_FOR_3107),
-                    "--findings-json", "-"], capture_output=True, text=True,
+                    "--output-alertmanager", "--findings-json", "-"],
+                   capture_output=True, text=True,
                    encoding="utf-8", timeout=300, check=False)
     assert proc.returncode == 2 and proc.stdout == "", (proc.stdout, proc.stderr)
     assert "standard output is already used" in proc.stderr

@@ -383,3 +383,26 @@ class TestLiveRepoIsClean:
             .read_text(encoding="utf-8")
         )
         assert gate.is_shipped(copies, "/assets/dist/")
+
+
+class TestCommandLine:
+    """#3579: the process enters through `_lib_exitcodes.run(_cli)`, which
+    calls with no arguments — `_cli` must still hand `main` the command line
+    (`main()` alone parses none, so in-process callers get no pytest argv)."""
+
+    def _run(self, *args):
+        import subprocess
+        script = Path(gate.__file__).resolve()
+        return subprocess.run([sys.executable, str(script), *args],
+                              capture_output=True, text=True, encoding="utf-8",
+                              timeout=60)
+
+    def test_help_on_the_command_line_is_read(self):
+        proc = self._run("--help")
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.startswith("usage: check_portal_asset_shipping.py"), proc.stdout
+
+    def test_an_unknown_flag_is_a_caller_error(self):
+        proc = self._run("--no-such-flag")
+        assert proc.returncode == 2, (proc.stdout, proc.stderr)
+        assert "unrecognized arguments: --no-such-flag" in proc.stderr
