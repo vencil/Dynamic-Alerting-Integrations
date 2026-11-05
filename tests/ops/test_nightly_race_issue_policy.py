@@ -1344,7 +1344,12 @@ def _load_workflow(path: Path) -> dict:
 
 
 def test_nightly_go_test_runs_with_short() -> None:
-    steps = (_load_workflow(WORKFLOW)["jobs"].get("race") or {}).get("steps") or []
+    """Nightly is the repeat-stress tier and keeps -short for good (#3541).
+
+    Full coverage is PR CI's job (see the next test); a package is one test
+    binary, so sharding cannot split a full matrix run x10 across legs.
+    """
+    steps =(_load_workflow(WORKFLOW)["jobs"].get("race") or {}).get("steps") or []
     cmds = [c for s in steps for c in _go_test_commands(str(s.get("run") or ""))]
     assert cmds, "no `go test` command found in nightly-race.yaml's race job"
     missing = [" ".join(c) for c in cmds if not _has_short(c)]
