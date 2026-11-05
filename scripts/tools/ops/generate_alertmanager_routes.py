@@ -4,7 +4,7 @@ generate_alertmanager_routes.py — Generate Alertmanager route + receiver + inh
 
 Reads all tenant YAML files from conf.d/, extracts _routing and _severity_dedup sections,
 and merges the Alertmanager route tree + receivers + inhibit_rules they produce into a
-base Alertmanager config — replacing only what the generator owns (#1211 gap 2).
+SOURCE Alertmanager config — output = merge(source, conf.d), never fed back (#1211 gap 2).
 
 Modes (exactly one; without one the run is a caller error, exit 2):
   --validate             judge the tree, write nothing
@@ -843,9 +843,8 @@ NO_MODE_MESSAGE = (
     "  The routing-fragment mode (no mode flag) is gone (#1211): a fragment "
     "pasted after your own routes loses the platform routes that must come "
     "first. --output-alertmanager --base-config <your alertmanager.yml> "
-    "writes your config with the generated routing merged in (only what the "
-    "generator owns is replaced); --output-configmap does the same as a "
-    "ConfigMap.\n"
+    "renders your config (the source, kept as it is) with the generated "
+    "routing merged in; --output-configmap does the same as a ConfigMap.\n"
     "  ⛔ Without --base-config those modes assemble on a built-in placeholder "
     "base (its `global:` and empty root receiver are not yours).")
 
@@ -1014,8 +1013,9 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=textwrap.dedent("""
             Exactly one mode is required: --validate, --output-configmap,
-            --output-alertmanager or --apply. The output modes merge into a
-            base config and replace only what the generator owns.
+            --output-alertmanager or --apply. The output modes render
+            output = merge(your source --base-config, conf.d); the output is
+            never a base (a base holding generated receivers is refused).
 
             Examples:
               %(prog)s --config-dir conf.d/ --validate --strict
@@ -1059,9 +1059,10 @@ def _build_parser() -> argparse.ArgumentParser:
                              "--strict.")
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument("--apply", action="store_true",
-                            help="Apply: merge into the cluster's Alertmanager "
-                                 "ConfigMap (replacing only what the generator "
-                                 "owns) + reload")
+                            help="Apply: render from the cluster ConfigMap's "
+                                 "source (alertmanager.base.yml; on the first "
+                                 "run its alertmanager.yml), write the output "
+                                 "and the source back + reload")
     mode_group.add_argument("--output-configmap", action="store_true",
                             help="Output the merged Alertmanager config as a "
                                  "ConfigMap (for GitOps PR flow)")
@@ -1071,9 +1072,9 @@ def _build_parser() -> argparse.ArgumentParser:
                                  "outside Kubernetes)")
     parser.add_argument("--base-config", default=None,
                         help="Your Alertmanager YAML for --output-configmap / "
-                             "--output-alertmanager: the generated routing is "
-                             "merged into it, replacing only what the "
-                             "generator owns (default: a built-in placeholder)")
+                             "--output-alertmanager — the SOURCE the generated "
+                             "routing is merged into, never an earlier output "
+                             "(default: a built-in placeholder)")
     # #1650: default=None so "supplied" is decidable; the value is resolved
     # to _DEFAULT_NAMESPACE / _DEFAULT_CONFIGMAP after the mode check below.
     parser.add_argument("--namespace", default=None,
@@ -1609,6 +1610,17 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # it, not review. "Supplied but unusable" is a property of the INVOCATION,
     # so it has to be decided before any work — exactly like --policy above.
     base_config: dict | None = None
+    # #1211 gap 2 (owner decision S): the base is the operator's SOURCE and
+    # the output is rendered from it — writing the output over the source
+    # would turn the next run's base into an output, which it refuses.
+    if (writes_a_file_mode and args.output and args.base_config
+            and os.path.exists(args.output) and os.path.exists(args.base_config)
+            and os.path.samefile(args.output, args.base_config)):
+        die_caller_error(
+            "-o/--output names the --base-config file itself: the base is your "
+            "source config and the output is rendered from it, so writing over "
+            "it would make the next run's base an output (refused).\n"
+            "  Write the output to another path and keep the source as it is.")
     if writes_a_file_mode:
         try:
             base_config = load_base_config(args.base_config)
@@ -1670,9 +1682,9 @@ def _run(args: argparse.Namespace, findings: list[str], *,
         if not (writes_a_file_mode and not args.validate):
             print("No tenants found in config directory.")
             sys.exit(EXIT_OK)
-        # #1211 gap 2: an output mode still writes the merge — a base that is
-        # an earlier run's output loses that run's tenant routing, which is
-        # the point of "only what the generator owns is replaced". --apply
+        # #1211 gap 2: an output mode still writes the render — the output is
+        # always merge(source, conf.d), here the source plus the platform
+        # routes. --apply
         # keeps the early exit: an empty tree is more often a wrong
         # --config-dir than an intent to strip the cluster's routing.
         print("No tenants found in config directory; the output keeps the "

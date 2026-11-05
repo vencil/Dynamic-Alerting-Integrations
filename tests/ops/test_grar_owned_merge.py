@@ -1,4 +1,4 @@
-"""#1211 缺口 2：三種輸出模式共用「只換掉產生器自己那份」的合併。
+"""#1211 缺口 2：三種輸出模式共用一個合併，base 只當來源（owner 裁決 C′＋S）。
 
 背景：fragment 模式（不帶模式旗標）的檔頭叫 BYO 客戶把輸出「接在自己的路由
 後面」，但平台的 4 條路由（Watchdog、custom 隔離、synthetic probe、sentinel
@@ -9,18 +9,17 @@ custom 告警與 sentinel 叫醒客戶 NOC（#741 的隔離失效）。
 `--output-configmap`／`--apply` 則反過來整個取代 `route.routes`，把客戶自有的
 路由丟掉。
 
-本檔釘住 owner 拍板的 C′：
+本檔釘住 owner 拍板的設計：
 
-* fragment 模式移除；只帶 `-o`、或什麼模式都不帶 ⇒ 結束碼 2，不寫檔
-  （不默默套內建 base——那會把 placeholder `global:` 交給客戶）。
-* `--output-configmap`、新增的 `--output-alertmanager`（純 alertmanager.yml）、
-  `--apply` 共用同一個合併：「產生器擁有」以 receiver 命名空間辨認
-  （`tenant-*`、`platform-enforced*`、4 個平台 receiver）＋釘了 root receiver
-  的 root fallthrough；只換掉這些，其餘（客戶的路由、receiver、inhibit）原樣
-  保留。
+* fragment 模式移除；只帶 `-o`、或什麼模式都不帶 ⇒ 結束碼 2，不寫檔。
+* 輸出 = merge(來源 base, conf.d)。base 是客戶自己的 config，不是本工具上一次
+  的輸出（同 Prometheus Operator 的 input／generated Secret）：base 裡出現
+  `tenant-*`／`platform-enforced*` receiver ⇒ 結束碼 1、不寫檔；`-o` 指向
+  `--base-config` 本身 ⇒ 結束碼 2。
 * 合併後順序：[平台 4 條 ＋ enforced NOC] → [客戶路由，原順序] →
-  [租戶路由 ＋ root fallthrough]。
-* 輸出回灌成 base 再合併一次，逐位元相同（inhibit 不重複）。
+  [租戶路由 ＋ root fallthrough]；客戶的 receiver、inhibit 原樣保留。
+* `--apply` 以叢集 ConfigMap 的 `alertmanager.base.yml` 為來源（首次沒有時
+  採用 `alertmanager.yml`），寫回時兩個 key 一起寫。
 * `watchdog-heartbeat` 沒接 integration：WARN；有真實 base（`--base-config`，
   或 `--apply` 的叢集 config）且 `--strict` 時 ERROR、結束碼 1、不寫檔。
 
@@ -48,9 +47,7 @@ pytestmark = pytest.mark.usefixtures("judging_run")
 
 import _grar_render as render  # noqa: E402
 from _grar_parse import load_tenant_tree  # noqa: E402
-from _grar_routes import (  # noqa: E402
-    GENERATED_TIME_INTERVAL, generate_inhibit_rules, generate_routes,
-    generated_time_interval)
+from _grar_routes import generate_inhibit_rules, generate_routes  # noqa: E402
 from test_alertmanager_amtool_validity import _AM_IMAGE, _DOCKER, ensure_am_image  # noqa: E402
 
 _GAR = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
@@ -278,27 +275,46 @@ def test_the_customer_receivers_and_inhibit_rules_are_kept(tmp_path):
     assert am["global"]["resolve_timeout"] == "5m"
 
 
-def test_feeding_the_output_back_as_the_base_is_byte_identical(tmp_path):
+def test_the_same_source_renders_the_same_output(tmp_path):
     conf_d = _tree(tmp_path)
     first = _emit_am(tmp_path, conf_d, _base(tmp_path), "first.yml")
-    second = _emit_am(tmp_path, conf_d, _base(tmp_path, first, "base2.yml"), "second.yml")
+    second = _emit_am(tmp_path, conf_d, _base(tmp_path), "second.yml")
     assert second == first
-    am = render.alertmanager_reading(second)
-    dedup = [r for r in am["inhibit_rules"] if r.get("equal") == ["metric_group"]]
-    assert len(dedup) == len({json.dumps(r, sort_keys=True) for r in dedup}), \
-        "a generated inhibit rule is duplicated after re-merging"
-    names = [r["name"] for r in am["receivers"]]
-    assert len(names) == len(set(names)), names
 
 
-def test_a_removed_tenant_leaves_nothing_behind_on_re_merge(tmp_path):
-    """上一輪產出的租戶路由／receiver／inhibit 在租戶移除後不殘留。"""
+def test_feeding_the_output_back_as_the_base_is_refused(tmp_path):
+    """The base is a source: an earlier output (it holds `tenant-*` /
+    `platform-enforced*` receivers) is refused, rc 1, nothing written."""
+    conf_d = _tree(tmp_path)
+    first = _emit_am(tmp_path, conf_d, _base(tmp_path), "first.yml")
+    out = tmp_path / "second.yml"
+    proc = _run("--config-dir", str(conf_d), "--output-alertmanager",
+                "--base-config", str(_base(tmp_path, first, "base2.yml")), "-o", str(out))
+    assert proc.returncode == 1, proc.stderr[-3000:]
+    assert "not an earlier output of this tool" in proc.stderr, proc.stderr[-3000:]
+    assert "'tenant-t-routed'" in proc.stderr and "'platform-enforced-t-thr'" in proc.stderr
+    assert not out.exists()
+
+
+def test_writing_the_output_over_the_source_is_a_caller_error(tmp_path):
+    base = _base(tmp_path)
+    before = base.read_bytes()
+    proc = _run("--config-dir", str(_tree(tmp_path)), "--output-alertmanager",
+                "--base-config", str(base), "-o", str(base))
+    assert proc.returncode == 2, proc.stderr[-3000:]
+    assert "names the --base-config file itself" in proc.stderr
+    assert base.read_bytes() == before, "the source was overwritten"
+
+
+def test_a_removed_tenant_leaves_nothing_behind(tmp_path):
+    """Rendered again from the same source after a tenant is removed: none of
+    its routes, receivers or inhibit rules remain."""
     conf_d = _tree(tmp_path)
     first = _emit_am(tmp_path, conf_d, _base(tmp_path), "first.yml")
     assert "tenant-t-routed" in first
     (conf_d / "t-routed.yaml").unlink()
-    second = _emit_am(tmp_path, conf_d, _base(tmp_path, first, "base2.yml"), "second.yml")
-    assert "t-routed" not in second, "a removed tenant survived the re-merge"
+    second = _emit_am(tmp_path, conf_d, _base(tmp_path), "second.yml")
+    assert "t-routed" not in second, "a removed tenant survived"
     # ...and the customer's own content is still there
     assert "noc-pager" in second and "CustDown" in second
 
@@ -314,8 +330,8 @@ def test_output_configmap_carries_the_same_alertmanager_yml(tmp_path):
 
 
 def test_the_apply_merge_keeps_the_cluster_routes_too(tmp_path):
-    """`--apply` 從「整個取代 route.routes」改為同一個合併：叢集 config 的客戶
-    路由保留，且結果與 --output-alertmanager 對同一份 base 的輸出相同。"""
+    """`--apply` 從「整個取代 route.routes」改為同一個合併：來源的客戶路由保留，
+    且結果與 --output-alertmanager 對同一份 base 的輸出相同。"""
     conf_d = _tree(tmp_path)
     routes, receivers, inhibit_rules = _generated(conf_d)
     existing = render.alertmanager_reading(_CUSTOMER_BASE)
@@ -326,9 +342,9 @@ def test_the_apply_merge_keeps_the_cluster_routes_too(tmp_path):
                   sort_keys=False)) == emitted
 
 
-def test_a_matcher_spelling_does_not_make_a_customer_route_owned(tmp_path):
-    """辨認「產生器擁有」看 receiver 命名空間，不看 matcher 字串：客戶寫
-    `tenant = "t-routed"` 送到自己的 receiver，是客戶的路由，保留。"""
+def test_a_customer_tenant_route_is_kept_whatever_its_spelling(tmp_path):
+    """客戶寫 `tenant = "t-routed"` 送到自己的 receiver：來源裡的路由一律是
+    客戶的，原樣保留（da-read 正規化 matcher 寫法）。"""
     base = _CUSTOMER_BASE.replace(
         "    - matchers: ['team=\"db\"']\n",
         "    - matchers: ['tenant = \"t-routed\"']\n"
@@ -404,20 +420,77 @@ def test_control_a_wired_watchdog_reports_nothing(tmp_path):
     assert _watchdog_lines(proc) == []
 
 
-# ── --apply：叢集上的 config 就是真實 base ──────────────────────────
+# ── --apply：叢集 ConfigMap 的 alertmanager.base.yml 是來源 ────────────
 
-def _fake_cluster(monkeypatch, am_yml: str) -> list[list[str]]:
+def _fake_cluster(monkeypatch, am_yml: str, base_yml: str | None = None) -> list[list[str]]:
     calls: list[list[str]] = []
+    data = {"alertmanager.yml": am_yml}
+    if base_yml is not None:
+        data["alertmanager.base.yml"] = base_yml
 
     def fake(argv, *, timeout, stdin_text=None):
         calls.append(list(argv))
-        out = json.dumps({"data": {"alertmanager.yml": am_yml}}) \
-            if argv[:2] == ["kubectl", "get"] else ""
+        out = json.dumps({"data": data}) if argv[:2] == ["kubectl", "get"] else ""
         return subprocess.CompletedProcess(argv, 0, stdout=out, stderr="")
 
     monkeypatch.setattr(render, "_run_binary", fake)
     monkeypatch.setattr(render.shutil, "which", lambda name: None)
     return calls
+
+
+def _apply(tmp_path, *extra) -> int:
+    import generate_alertmanager_routes as gar
+    conf_d = tmp_path / "conf.d"
+    if not conf_d.is_dir():
+        _tree(tmp_path)
+    try:
+        gar.main(["--config-dir", str(conf_d), "--apply", "--yes", *extra])
+    except SystemExit as exc:
+        return exc.code
+    return 0
+
+
+def _created(calls) -> dict[str, str]:
+    """The keys `kubectl create configmap --from-literal=K=V` was given."""
+    [create] = [c for c in calls if c[:3] == ["kubectl", "create", "configmap"]]
+    lits = [a[len("--from-literal="):] for a in create if a.startswith("--from-literal=")]
+    return dict(lit.split("=", 1) for lit in lits)
+
+
+def test_apply_adopts_the_cluster_config_as_the_source_then_keeps_it(tmp_path, monkeypatch, capsys):
+    """First --apply (no base key): the running alertmanager.yml is the
+    source; the ConfigMap then holds the output AND that source."""
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE)
+    assert _apply(tmp_path) == 0, capsys.readouterr().err[-3000:]
+    keys = _created(calls)
+    assert keys["alertmanager.base.yml"] == _CUSTOMER_BASE
+    out = render.alertmanager_reading(keys["alertmanager.yml"])
+    assert "tenant-t-routed" in {r["name"] for r in out["receivers"]}
+
+
+def test_apply_renders_from_the_base_key_not_from_its_own_output(tmp_path, monkeypatch, capsys):
+    """Second --apply: alertmanager.yml is the previous output; the source is
+    the base key, and the new output equals a render from that source."""
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE)
+    assert _apply(tmp_path) == 0
+    first = _created(calls)
+    capsys.readouterr()
+    calls2 = _fake_cluster(monkeypatch, first["alertmanager.yml"], first["alertmanager.base.yml"])
+    assert _apply(tmp_path) == 0, capsys.readouterr().err[-3000:]
+    second = _created(calls2)
+    assert second == first
+
+
+def test_apply_refuses_a_cluster_config_that_is_already_an_output(tmp_path, monkeypatch, capsys):
+    """No base key, but alertmanager.yml already holds generated routing (an
+    older --apply): there is no source to render from — refused, nothing
+    applied."""
+    conf_d = _tree(tmp_path)
+    generated = _emit_am(tmp_path, conf_d, _base(tmp_path))
+    calls = _fake_cluster(monkeypatch, generated)
+    assert _apply(tmp_path) == 1
+    assert "not an earlier output of this tool" in capsys.readouterr().err
+    assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
 
 
 @pytest.mark.parametrize("base,strict,rc,level", [
@@ -427,14 +500,8 @@ def _fake_cluster(monkeypatch, am_yml: str) -> list[list[str]]:
 ], ids=["unwired-strict", "unwired", "wired-strict"])
 def test_apply_judges_the_clusters_watchdog_receiver(tmp_path, monkeypatch, capsys,
                                                      base, strict, rc, level):
-    import generate_alertmanager_routes as gar
     calls = _fake_cluster(monkeypatch, base)
-    try:
-        gar.main(["--config-dir", str(_tree(tmp_path)), "--apply", "--yes",
-                  *(["--strict"] if strict else [])])
-        code = 0
-    except SystemExit as exc:
-        code = exc.code
+    code = _apply(tmp_path, *(["--strict"] if strict else []))
     err = capsys.readouterr().err
     assert code == rc, err[-3000:]
     applied = [c for c in calls if c[:2] == ["kubectl", "apply"]]
@@ -448,37 +515,17 @@ def test_apply_judges_the_clusters_watchdog_receiver(tmp_path, monkeypatch, caps
         assert line.startswith(level), line
 
 
-# ── 擁有標記（owner 裁決 A）：fallthrough 以保留的 time interval 標記 ─────
+# ── fallthrough 與來源：客戶自己的路由、root receiver 改名、空樹 ────────
 
-_FIXTURE = (Path(__file__).resolve().parents[2] / "components" / "da-read"
-            / "testdata" / "platform-generated-always.yaml")
-
-
-def _fallthroughs(am: dict) -> list[dict]:
+def _fallthroughs(am: dict, root: str) -> list[dict]:
     return [r for r in am["route"]["routes"]
-            if GENERATED_TIME_INTERVAL in (r.get("active_time_intervals") or [])]
-
-
-def test_every_fallthrough_carries_the_mark_and_the_interval_is_defined_once(tmp_path):
-    am = render.alertmanager_reading(_emit_am(tmp_path, _tree(tmp_path), _base(tmp_path)))
-    fts = _fallthroughs(am)
-    assert [r["matchers"] for r in fts] == [['tenant="t-thr"']], fts
-    assert all(r["receiver"] == "cust-default" for r in fts), fts
-    defs = [t for t in am.get("time_intervals", []) if t["name"] == GENERATED_TIME_INTERVAL]
-    assert defs == [generated_time_interval()], am.get("time_intervals")
-
-
-def test_the_interval_definition_is_the_one_the_go_test_pins():
-    """components/da-read/generated_time_interval_test.go proves Alertmanager
-    reads the fixture's interval as active at every instant; this proves the
-    generator emits that same interval."""
-    fixture = yaml.safe_load(_FIXTURE.read_text(encoding="utf-8"))
-    assert fixture["time_intervals"] == [generated_time_interval()]
+            if r.get("receiver") == root and set(r) == {"matchers", "receiver"}
+            and r["matchers"][0].startswith('tenant="')]
 
 
 def test_a_customer_tenant_route_to_the_root_receiver_is_kept(tmp_path):
-    """F1: an operator's own `tenant="x"` → root route has the fallthrough's
-    shape; without the mark it is the operator's, kept where it was — for a
+    """An operator's own `tenant="x"` → root route has the fallthrough's
+    shape; in the source it is the operator's, kept where it was — for a
     tenant in conf.d and for one that is not."""
     base = _CUSTOMER_BASE.replace(
         "  routes:\n",
@@ -490,10 +537,10 @@ def test_a_customer_tenant_route_to_the_root_receiver_is_kept(tmp_path):
     assert base != _CUSTOMER_BASE
     am_text = _emit_am(tmp_path, _tree(tmp_path), _base(tmp_path, base))
     routes = render.alertmanager_reading(am_text)["route"]["routes"]
-    mine = [r for r in routes if not r.get("active_time_intervals")
-            and r.get("receiver") == "cust-default"]
-    assert mine == [{"matchers": ['tenant="t-thr"'], "receiver": "cust-default"},
-                    {"matchers": ['tenant="t-gone"'], "receiver": "cust-default"}], routes
+    cust_at = [i for i, r in enumerate(routes) if r.get("receiver") == "noc-pager"][0]
+    assert routes[cust_at - 2:cust_at] == [
+        {"matchers": ['tenant="t-thr"'], "receiver": "cust-default"},
+        {"matchers": ['tenant="t-gone"'], "receiver": "cust-default"}], routes
     am = tmp_path / "out"
     am.mkdir()
     (am / "alertmanager.yml").write_text(am_text, encoding="utf-8")
@@ -504,38 +551,35 @@ def test_a_customer_tenant_route_to_the_root_receiver_is_kept(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_a_changed_root_receiver_leaves_no_stale_fallthrough(tmp_path):
-    """F2: the base's root receiver renamed between runs — the earlier run's
-    fallthrough (pinned to the old name) is still recognised by its mark."""
-    conf_d = _tree(tmp_path)
-    first = _emit_am(tmp_path, conf_d, _base(tmp_path), "first.yml")
-    renamed = first.replace("  receiver: cust-default\n  group_by", "  receiver: noc-pager\n  group_by", 1)
-    assert renamed != first
-    second = render.alertmanager_reading(
-        _emit_am(tmp_path, conf_d, _base(tmp_path, renamed, "base2.yml"), "second.yml"))
-    fts = _fallthroughs(second)
-    assert [(r["matchers"], r["receiver"]) for r in fts] == [(['tenant="t-thr"'], "noc-pager")], fts
+def test_a_renamed_root_receiver_moves_the_fallthrough_with_it(tmp_path):
+    """The source's root receiver renamed: the fallthrough is rendered from
+    the source, so it names the new root and nothing names the old one."""
+    renamed = _CUSTOMER_BASE.replace("  receiver: cust-default\n  group_by",
+                                     "  receiver: noc-pager\n  group_by", 1)
+    assert renamed != _CUSTOMER_BASE
+    am = render.alertmanager_reading(
+        _emit_am(tmp_path, _tree(tmp_path), _base(tmp_path, renamed)))
+    assert [r["matchers"] for r in _fallthroughs(am, "noc-pager")] == [['tenant="t-thr"']]
+    assert _fallthroughs(am, "cust-default") == []
 
 
 @pytest.mark.parametrize("keep_enforced", [True, False],
                          ids=["enforced-left:no-valid-routes", "nothing-left:no-tenants"])
-def test_removing_every_tenant_still_writes_and_leaves_nothing_behind(tmp_path, keep_enforced):
-    """F3: an output mode on a tree with no tenant left writes the base with
-    the earlier run's content removed (it used to exit early writing nothing,
-    so re-running on the earlier output kept every stale tenant). Both early
-    exits: `_routing_enforced` still declared (no route generated) and
-    nothing routable declared at all (no tenants found)."""
+def test_an_output_mode_on_an_empty_tree_writes_the_source_and_platform_routes(
+        tmp_path, keep_enforced):
+    """With no tenant left an output mode still writes (the source plus the
+    platform routes) — the output is always a render of (source, conf.d).
+    Both early exits: `_routing_enforced` still declared (no route generated)
+    and nothing routable declared at all (no tenants found)."""
     conf_d = _tree(tmp_path)
-    first = _emit_am(tmp_path, conf_d, _base(tmp_path), "first.yml")
     for t in _TENANTS:
         (conf_d / f"{t}.yaml").unlink()
     if not keep_enforced:
         (conf_d / "_defaults.yaml").write_text(
             "defaults:\n  cpu_usage_percent: 80\n", encoding="utf-8")
-    second = _emit_am(tmp_path, conf_d, _base(tmp_path, first, "base2.yml"), "second.yml")
-    assert "tenant-" not in second and "platform-enforced" not in second, second
-    assert GENERATED_TIME_INTERVAL not in second, "the mark outlived its last fallthrough"
-    assert "noc-pager" in second and "CustDown" in second
+    out = _emit_am(tmp_path, conf_d, _base(tmp_path), "empty.yml")
+    assert "tenant-" not in out and "platform-enforced" not in out, out
+    assert "watchdog-heartbeat" in out and "noc-pager" in out and "CustDown" in out
 
 
 def test_control_apply_keeps_refusing_an_empty_tree(tmp_path, monkeypatch, capsys):
@@ -550,3 +594,21 @@ def test_control_apply_keeps_refusing_an_empty_tree(tmp_path, monkeypatch, capsy
         gar.main(["--config-dir", str(d), "--apply", "--yes"])
     assert exc.value.code == 0
     assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
+
+
+def test_a_base_that_carries_the_platform_routes_gets_each_once(tmp_path):
+    """The platform's own base (k8s/03-monitoring) writes the four platform
+    routes itself; they are the platform's, emitted canonically once, first."""
+    base = _CUSTOMER_BASE.replace(
+        "  routes:\n",
+        "  routes:\n"
+        "    - matchers: ['alertname=\"Watchdog\"']\n"
+        "      receiver: watchdog-heartbeat\n"
+        "    - matchers: ['component=\"sentinel\"']\n"
+        "      receiver: sentinel-sinkhole\n", 1)
+    base = base.replace("receivers:\n", "receivers:\n  - name: sentinel-sinkhole\n", 1)
+    routes = _routes_of(_emit_am(tmp_path, _tree(tmp_path), _base(tmp_path, base)))
+    receivers = [r.get("receiver") for r in routes]
+    for name in _PLATFORM_RECEIVERS:
+        assert receivers.count(name) == 1, receivers
+    assert receivers[:4] == list(_PLATFORM_RECEIVERS), receivers

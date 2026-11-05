@@ -30,7 +30,7 @@ Silent Mode 和 Maintenance Mode 均支援結構化物件設定，含 `expires`�
 
 > 上表是 **BYO 整合情境的速查視角**。完整的告警最佳實務（該對什麼告警 → 通知 → 動作層冪等）見系列文章：[告警設計入門](../alerting-design-fundamentals.md) · [Actionable 之後](../alerting-best-practices.md)。
 
-所有 Alertmanager 路由設定由 `generate_alertmanager_routes.py` 從 tenant YAML 自動產出，並合併進你自己的 Alertmanager 設定（只換掉產生器擁有的部分）：
+所有 Alertmanager 路由設定由 `generate_alertmanager_routes.py` 從 tenant YAML 自動產出，並合併進你自己的 Alertmanager 設定（來源），輸出另一份產物、不回寫來源：
 
 ```mermaid
 graph LR
@@ -154,14 +154,19 @@ da-tools generate-routes --config-dir conf.d/ --validate --strict --policy .gith
 **模式 A：`--output-alertmanager`（Kubernetes 以外的 BYO Alertmanager）**
 
 ```bash
+# 來源：你自己的設定，另外保管（例如放 git）；第一次可從現有設定複製
+cp /etc/alertmanager/alertmanager.yml alertmanager.base.yml
+
 # 先預覽
 da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
-  --base-config /etc/alertmanager/alertmanager.yml --dry-run
+  --base-config alertmanager.base.yml --dry-run
 
-# 寫出合併後的 alertmanager.yml，部署後 reload（Step 6）
+# 寫出合併後的 alertmanager.yml（產物），部署到 /etc/alertmanager/ 後 reload（Step 6）
 da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
-  --base-config /etc/alertmanager/alertmanager.yml -o alertmanager.yml
+  --base-config alertmanager.base.yml -o alertmanager.yml
 ```
+
+之後 conf.d 改了，拿同一份 `alertmanager.base.yml` 再跑；要改你自己的設定也改它，不要改部署出去的 `alertmanager.yml`。
 
 **模式 B：`--output-configmap`（GitOps PR flow，v1.10.0）**
 
@@ -177,18 +182,19 @@ git add deploy/alertmanager-configmap.yaml && git commit -m "update AM routes"
 **模式 C：`--apply`（Runtime 直接操作，v1.4.0）**
 
 ```bash
-# 合併進叢集上現有的 ConfigMap + apply + reload
+# 以 ConfigMap 的 alertmanager.base.yml（來源）渲染 + apply + reload
 da-tools generate-routes --config-dir conf.d/ --apply --yes
 ```
 
-適合：初次部署測試、P0 緊急修復、不走 GitOps 的環境。它的 base 就是叢集上現有的設定，不讀 `--base-config`。⚠️ **行為變更**：`--apply` 先前整個取代叢集上的 `route.routes`，你手加的子 route 會消失；現在與另外兩種模式是同一個合併，你的路由保留。v2.9.0 映像仍是舊行為 <!-- image-caveat: v2.9.0 -->
+適合：初次部署測試、P0 緊急修復、不走 GitOps 的環境。它不讀 `--base-config`，來源在叢集上：ConfigMap 的 `alertmanager.base.yml` key 存來源，`--apply` 以它渲染，寫回 `alertmanager.yml`（產物）與 `alertmanager.base.yml`（來源）；Alertmanager 會忽略多出來的檔。第一次 `--apply`（還沒有這個 key）採用現有的 `alertmanager.yml` 當來源；它若已經是先前產生的（含 `tenant-*` receiver），結束碼 1、不套用，請先把你的來源放進 `alertmanager.base.yml`。要改設定請改 `alertmanager.base.yml`，不要改 `alertmanager.yml`——下一次 `--apply` 會從來源重新渲染它。⚠️ **行為變更**：`--apply` 先前整個取代叢集上的 `route.routes`，你手加的子 route 會消失；現在與另外兩種模式是同一個合併，你的路由保留。v2.9.0 映像仍是舊行為 <!-- image-caveat: v2.9.0 -->
 
 **合併規則**（三種模式相同；完整說明見 [CLI 參考 §generate-routes](../cli-reference.md#generate-routes)）：
 
-- **只換掉產生器擁有的部分**：名稱在保留命名空間 `tenant-*`、`platform-enforced*` 的 receiver、四個平台 receiver（`watchdog-heartbeat`、`custom-alerts-firehose`、`synthetic-receiver`、`sentinel-sinkhole`）、送往它們的路由、root fallthrough，以及產生器形狀的 severity-dedup inhibit rule。你自己的路由、receiver、inhibit rule、`global:`、root route 原樣保留。
+- **來源與產物分開**：輸出＝合併（來源 base, conf.d）。base 是你自己的設定，不是本工具先前產生的輸出；輸出是另一份產物，不能再拿來當 base（同 Prometheus Operator：讀使用者的 Secret、寫到另一個 `<name>-generated` Secret，從不回寫）。你自己的路由、receiver、inhibit rule、`global:`、root route 原樣保留，加上這次產生的。
 - **順序**：`route.routes` 變成「平台 4 條 + enforced NOC 路由（`continue: true`）」→「你的路由，原順序」→「租戶路由 + root fallthrough」。平台路由在你的路由之前，所以你的 catch-all 搶不走 Watchdog；租戶路由在你的路由之後。
-- **可重複執行**：conf.d 改了就再跑一次。把上次的輸出直接當 `--base-config` 也行——conf.d 沒變時輸出逐位元相同，移除的租戶不殘留。
-- **保留命名空間**：你自己的 receiver 不要取名 `tenant-…` 或 `platform-enforced…`，那會被當成產生器的而被取代或刪除；time interval 名稱 `platform-generated-always` 也是保留的——產生器用它標記 root fallthrough（永遠生效，不影響投遞），你自己寫的「租戶 → root receiver」路由沒有這個標記，照原樣保留。舊版產生、沒有這個標記的 fallthrough（從 fragment 模式貼進 base 的、或標記出現前 `--output-configmap`／`--apply` 寫出的：單一 `tenant="…"` matcher、沒有 receiver 或 receiver 是 root receiver）請手動刪掉一次，否則該租戶日後加了 `_routing` 時，它會搶在新的租戶路由前面。四個平台 receiver 若在你的 base 有完整定義（例如 `watchdog-heartbeat` 接了 dead-man's switch），保留你的定義。
+- **可重複執行**：conf.d 改了就拿**同一份來源**再跑一次。每次都從來源重新渲染，移除的租戶不殘留。
+- **base 不能是輸出**：base 裡出現 `tenant-*` 或 `platform-enforced*` receiver（只有產生器會寫的名稱）⇒ 結束碼 1、不寫檔，訊息說這看起來是本工具的輸出、請給來源；你自己的 receiver 也不要取這兩種名字。`-o` 與 `--base-config` 指向同一個檔 ⇒ 結束碼 2。四個平台 receiver 可以寫在你的 base，完整定義（例如 `watchdog-heartbeat` 接了 dead-man's switch）優先；base 裡送往它們的頂層路由視為平台的，以標準形式只輸出一次、排在最前面。
+- **從 fragment 模式遷移（一次性）**：base 裡貼過 fragment 的（含 `tenant-*` receiver）會被拒收。把貼進去的部分刪掉，留下你自己原本的設定當來源。
 - **Watchdog 要接出去**：你的 base 裡 `watchdog-heartbeat` 沒有 integration 時，輸出模式印 `watchdog_undelivered` WARN，加 `--strict` 時結束碼 1、不寫檔。接法見[告警平面自我存活性](alerting-plane-self-liveness.md)。⚠️ v2.9.0 映像不報這項 <!-- image-caveat: v2.9.0 -->
 
 不提供 `--base-config` 時合併進內建 placeholder base（`resolve_timeout: 5m`、`group_by: [alertname, tenant]`、空的 `default` receiver）——那不是你的設定，BYO 部署請一律帶 `--base-config`。
@@ -202,7 +208,7 @@ da-tools generate-routes --config-dir conf.d/ --apply --yes
 | | `--output-alertmanager` | `--output-configmap` | `--apply` |
 |---|---|---|---|
 | 操作方式 | 產出 `alertmanager.yml` | 產出 ConfigMap YAML 檔案 | 直接修改 K8s ConfigMap |
-| base 來源 | `--base-config` | `--base-config` | 叢集上現有的設定 |
+| base 來源 | `--base-config` | `--base-config` | ConfigMap 的 `alertmanager.base.yml`（第一次為現有的 `alertmanager.yml`） |
 | 適用流程 | Kubernetes 以外的 Alertmanager | Git PR → review → GitOps sync | CLI 手動操作 / 緊急修復 |
 | 是否需要 K8s 連線 | 否 | 否（純文件產出） | 是（kubectl context） |
 | Alertmanager reload | 部署後自行觸發（Step 6） | GitOps sync 後由 sidecar/webhook 觸發 | `--apply` 自動觸發 |
@@ -228,7 +234,7 @@ curl -sf http://localhost:9093/-/ready && echo "Alertmanager ready"
 
 ### 功能
 
-讀取 `conf.d/` 所有 tenant YAML，掃描 `_routing` 和 `_severity_dedup` 設定，產出 route、receiver、inhibit rule，合併進 base 設定後輸出完整、合法的 Alertmanager 設定（只換掉產生器擁有的部分，見 Step 5）。
+讀取 `conf.d/` 所有 tenant YAML，掃描 `_routing` 和 `_severity_dedup` 設定，產出 route、receiver、inhibit rule，合併進 base 設定（你自己的設定，即來源）後輸出完整、合法的 Alertmanager 設定，見 Step 5。
 
 ### 模式
 
@@ -587,7 +593,7 @@ _routing_enforced:
    - 選 `alert_source="platform"` → 除 `Watchdog` 外的平台自監控全部收到；租戶的 critical 走各租戶自己的 `_routing`（不進 NOC）。
    - 選 `severity="critical"` → NOC 收到所有租戶 critical，但平台自監控只涵蓋 `severity: critical` 的那些，`warning` 與 `info` 的仍然靜默。
 
-   ⚠️ 若要在 base 設定裡手加第二條 route 補上另一個需求：重新產生時它會保留（合併只換掉產生器擁有的部分，[#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)），位置在平台路由與 enforced 路由之後、租戶路由之前。所以它不帶 `continue: true` 又匹配到租戶告警時，那些告警到不了租戶自己的路由——手加的 route 請只匹配你要的告警，或加 `continue: true`。receiver 不要取名 `tenant-…`／`platform-enforced…`，那是產生器的保留命名空間。⚠️ v2.9.0 映像仍整段取代 `route.routes`，手加的 route 會在下一次重新產生時消失 <!-- image-caveat: v2.9.0 -->
+   ⚠️ 若要在 base 設定裡手加第二條 route 補上另一個需求：重新產生時它會保留（輸出每次都從你的 base 重新渲染，[#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)），位置在平台路由與 enforced 路由之後、租戶路由之前。所以它不帶 `continue: true` 又匹配到租戶告警時，那些告警到不了租戶自己的路由——手加的 route 請只匹配你要的告警，或加 `continue: true`。receiver 不要取名 `tenant-…`／`platform-enforced…`：那兩種名字只有產生器會寫，base 裡出現會被拒收（結束碼 1）。⚠️ v2.9.0 映像仍整段取代 `route.routes`，手加的 route 會在下一次重新產生時消失 <!-- image-caveat: v2.9.0 -->
 
 4. **模式 B（`{{tenant}}` 展開）不能拿來收平台告警——而且它的失敗方式有兩種、方向相反**：per-tenant enforced route 硬帶 `tenant="<name>"` matcher（`scripts/tools/ops/_grar_routes.py`）。
    - **收不到**：完全沒有 `tenant` label 的那些（下一條那 3 條以外的全部）永遠匹配不到任何 per-tenant route。

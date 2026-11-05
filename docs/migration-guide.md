@@ -169,7 +169,7 @@ da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
 da-tools generate-routes --config-dir conf.d/ --apply --yes
 ```
 
-輸出模式只換掉產生器擁有的部分（`tenant-*`／`platform-enforced*` receiver、平台 receiver 與路由），你自己的路由、receiver、inhibit rule 保留，可以重複執行；不帶模式旗標是結束碼 2。⚠️ v2.9.0 映像沒有 `--output-alertmanager`，不帶模式旗標時輸出片段 <!-- image-caveat: v2.9.0 -->
+輸出模式把產生的路由合併進你自己的設定（`--base-config`，即來源），輸出另一份產物：你自己的路由、receiver、inhibit rule 保留；conf.d 改了就拿同一份來源再跑，不要拿產物當 base（含 `tenant-*` receiver 會被拒收，結束碼 1）；不帶模式旗標是結束碼 2。⚠️ v2.9.0 映像沒有 `--output-alertmanager`，不帶模式旗標時輸出片段 <!-- image-caveat: v2.9.0 -->
 
 平台對時序參數設 guardrails（`group_wait` 5s–5m、`group_interval` 5s–5m、`repeat_interval` 1m–72h），超限值自動 clamp。
 

@@ -1886,7 +1886,7 @@ da-tools rule-pack-split --rule-packs-dir rule-packs/ --output-dir federation-sp
 
 #### generate-routes
 
-從 tenant YAML 產出 Alertmanager route + receiver + inhibit_rules，合併進一份 base 設定後輸出完整的 `alertmanager.yml`（或包成 ConfigMap、或直接套用到叢集）；只換掉產生器擁有的部分。
+從 tenant YAML 產出 Alertmanager route + receiver + inhibit_rules，合併進一份 base 設定後輸出完整的 `alertmanager.yml`（或包成 ConfigMap、或直接套用到叢集）。base 是你自己的設定（來源），輸出是另一份產物，從不回寫來源。
 
 **用途**：GitOps 配置管理；自動產生告警路由與通知接收器。
 
@@ -1897,19 +1897,25 @@ da-tools rule-pack-split --rule-packs-dir rule-packs/ --output-dir federation-sp
 | `--validate` | 判整棵樹，不寫任何東西（CI 跑 `--validate --strict`）。base：內建 base（只供 amtool 驗證，見下方「Alertmanager 驗證」） |
 | `--output-configmap` | 合併後的設定包成 Kubernetes ConfigMap（GitOps PR 流程）。base：`--base-config`，未給為內建 placeholder base |
 | `--output-alertmanager` | 合併後的設定輸出為純 `alertmanager.yml`（Kubernetes 以外的 BYO Alertmanager）。base：`--base-config`，未給為內建 placeholder base |
-| `--apply` | 合併進叢集上的 Alertmanager ConfigMap 並 reload（需 kubectl）。base：叢集上現有的設定 |
+| `--apply` | 合併進叢集上的 Alertmanager ConfigMap 並 reload（需 kubectl）。base：ConfigMap 的 `alertmanager.base.yml`（第一次為現有的 `alertmanager.yml`，見下方「`--apply` 的來源」） |
 
 不帶模式旗標（只帶 `-o`、只帶 `--dry-run`、什麼都不帶）是呼叫端錯誤，結束碼 2，什麼都不產出。先前的 fragment（render）模式已移除：照檔頭把片段接在自有路由後面的做法，會讓 Watchdog 心跳落進你的預設頻道、custom alert 與 sentinel 告警叫醒你的 NOC——平台的 4 條路由必須在最前面，片段做不到。⚠️ v2.9.0 映像仍是舊行為：不帶模式旗標時輸出片段、結束碼 0，沒有 `--output-alertmanager`，`--apply` 整個取代 `route.routes` <!-- image-caveat: v2.9.0 -->
 
-**合併（三個輸出模式共用；`--output-configmap`、`--output-alertmanager`、`--apply`）**：只換掉產生器擁有的部分，其餘照 base 原樣保留。產生器擁有的是：名稱在保留命名空間 `tenant-*`、`platform-enforced*` 的 receiver；四個平台 receiver（`watchdog-heartbeat`、`custom-alerts-firehose`、`synthetic-receiver`、`sentinel-sinkhole`）；送往這些 receiver 的頂層路由與 root fallthrough 路由；產生器輸出形狀的 severity-dedup inhibit rule。合併後 `route.routes` 的順序是：
+**合併（三個輸出模式共用；`--output-configmap`、`--output-alertmanager`、`--apply`）**：輸出＝合併（來源 base, conf.d）。base 是**你自己的** Alertmanager 設定，是來源，不是本工具先前產生的輸出；輸出是另一份產物，不能再拿來當 base。這與 Prometheus Operator 的做法相同：它讀使用者的 Secret，把合併結果寫到另一個 `<name>-generated` Secret，從不回寫。所以合併不必分辨 base 裡哪些是產生器寫的：base 的內容保留，加上這次產生的。合併後 `route.routes` 的順序是：
 
 1. 平台 4 條路由（Watchdog、custom alert 隔離、synthetic probe、sentinel sink）與 enforced NOC 路由（`continue: true`）——在最前面，你自己的路由搶不走它們的告警；
-2. base 裡你自己的頂層路由，照 base 原順序；
+2. base 自己的頂層路由，照 base 原順序（送往四個平台 receiver 的除外，見下段）；
 3. 租戶路由與 root fallthrough（指向 base 的 root receiver）。
 
-root fallthrough 的 receiver 是 base 自己的 root receiver，名字說不出是誰寫的，所以產生器給它一個標記：`active_time_intervals: [platform-generated-always]`，並在 `time_intervals` 定義這個不帶任何條件、永遠生效的 interval（投遞與分組不受影響）。合併只認這個標記，不看路由形狀——你自己寫的 `tenant="x"` → root receiver 路由沒有標記，照原樣保留；base 換了 root receiver 名字，上一輪的 fallthrough 照樣認得出來。`platform-generated-always` 這個 interval 名稱也是保留的。⚠️ 已知限制：沒有租戶路由的租戶，若它的告警先命中你自己一條 `continue: true` 的路由，之後還會命中 fallthrough、再送到 root receiver 一次（不用 `{{tenant}}` enforced routing 時不會）——fallthrough 只比對 tenant，無從得知你的路由是否已經送過；要避免，替該租戶加 `_routing`，或讓你的那條路由不帶 `continue: true`。⚠️ 舊版產生的 fallthrough 沒有這個標記，會被當成你的路由保留：從 fragment 模式貼進 base 的（只有 `matchers: [tenant="…"]`、沒有 receiver），以及標記出現之前的 `--output-configmap`／`--apply` 寫出的（同樣的 matcher、receiver 是 root receiver，叢集上的 config 也算）。請手動刪掉一次：留著的話，該租戶日後加了 `_routing`，這條舊路由排在新的租戶路由之前，會把它的告警截走送到 root receiver。
+base 可以寫四個平台 receiver（`watchdog-heartbeat`、`custom-alerts-firehose`、`synthetic-receiver`、`sentinel-sinkhole`），比只有名字更完整的定義優先（例如 `watchdog-heartbeat` 以 `url_file` 接你的 dead-man's switch）。base 裡送往這四個 receiver 的頂層路由視為平台的，以標準形式只輸出一次、排在最前面（上面第 1 項）。receiver 是 base 的加上這次產生的；inhibit rule 也是 base 的加上這次產生的，不去重——來源本來就不該含產生的 severity-dedup 規則。⚠️ 已知限制：沒有租戶路由的租戶，若它的告警先命中你自己一條 `continue: true` 的路由，之後還會命中 fallthrough、再送到 root receiver 一次（不用 `{{tenant}}` enforced routing 時不會）——fallthrough 只比對 tenant，無從得知你的路由是否已經送過；要避免，替該租戶加 `_routing`，或讓你的那條路由不帶 `continue: true`。
 
-receiver 與 inhibit rule 同理：你自己的原樣保留，產生器擁有的換成這次的，這次沒有的（例如已移除的租戶）就刪掉，不殘留；conf.d 裡一個租戶都不剩時，`--output-configmap`／`--output-alertmanager` 照樣寫出（只剩 base 自己的內容與平台路由），`--apply` 則維持「No tenants found」、什麼都不套用，以免指錯 `--config-dir` 時清掉叢集上的路由。四個平台 receiver 若在 base 裡有比只有名字更完整的定義（例如 `watchdog-heartbeat` 接了你的 dead-man's switch），保留 base 的定義。輸出回灌當 base 再跑一次，結果逐位元相同，所以可以每次都拿上次的輸出當 base 重跑。⚠️ 名稱落在保留命名空間的 receiver 一律視為產生器的：你自己的 receiver 若叫 `tenant-…` 或 `platform-enforced…`，會被取代或刪除——請改名。
+**來源與產物分開**：base 裡出現名稱為 `tenant-*` 或 `platform-enforced*` 的 receiver（這兩個命名空間只有產生器會寫）⇒ 結束碼 1、不寫檔也不 apply，訊息說這看起來是本工具的輸出、請給來源；理由見下方「Receiver 名稱不可重複」。`-o` 與 `--base-config` 指向同一個檔 ⇒ 結束碼 2、不寫檔：寫進去的話，下一次的 base 就成了產物。
+
+**可重複執行**：conf.d 改了就拿**同一份來源**再跑一次。每次都從來源重新渲染，所以移除的租戶不會殘留。conf.d 裡一個租戶都不剩時，`--output-configmap`／`--output-alertmanager` 照樣寫出（來源加上平台路由），`--apply` 則維持「No tenants found」、什麼都不套用，以免指錯 `--config-dir` 時清掉叢集上的路由。
+
+**`--apply` 的來源**：叢集上的 ConfigMap 多一個 key `alertmanager.base.yml` 存來源。`--apply` 以它為來源渲染，寫回 `alertmanager.yml`（產物）與 `alertmanager.base.yml`（來源）；Alertmanager 會忽略多出來的檔。第一次 `--apply`（ConfigMap 還沒有這個 key）採用現有的 `alertmanager.yml` 當來源；它若已經是先前產生的（含 `tenant-*` receiver），結束碼 1、不套用——先把你的來源放進 `alertmanager.base.yml` 再跑。要改設定請改 `alertmanager.base.yml`（或 git 裡的來源），不要改 `alertmanager.yml`：下一次 `--apply` 會從來源重新渲染它。
+
+**從 fragment 模式遷移（一次性）**：先前把 fragment 貼進自己設定的人，那份設定含 `tenant-*` receiver，會被拒收。把貼進去的部分（fragment 的 receiver、路由與 inhibit rule）刪掉，留下你自己原本的設定當來源。
 
 **讀法**（ADR-036 步驟 4，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）：conf.d 一律經 `da-guard parse-tree`（yaml.v3）讀，與 exporter 同一種讀法；未加引號的 `yes`／`no`／`on`／`off` 是字串。需要 da-guard：`$DA_GUARD_BINARY`，否則 `$PATH` 上的 `da-guard`（da-tools 映像已內建；repo 內 `make da-guard-build`）；沒有或執行失敗時結束碼 2，什麼都不讀；巢狀深到接近 yaml.v3 上限（10,000 層）、本工具解不開 `parse-tree` 的 JSON 時也一樣（實測 9,999 層的巢狀陣列；9,990 層照讀，超過上限則是該檔 `syntax_error`）。`parse-tree` 讀不了的檔（`kind` 見 [ADR-036](adr/036-single-parser-effective-config.md) §2）整份略過並在拒收訊息裡帶上 `kind`。`validate-config`、`policy-engine`、`explain-route`、`notification-tester` 經產生器讀 conf.d，同樣需要 da-guard。
 
@@ -1933,11 +1939,11 @@ da-tools generate-routes --config-dir <path> {--validate | --output-configmap | 
 | `-o, --output <FILE>` | 輸出至檔案。**只有 `--output-configmap` 與 `--output-alertmanager` 會讀它，且不能配 `--dry-run`**；配 `--validate` / `--apply` / `--dry-run` 是呼叫端錯誤（結束碼 2），不會靜默不寫（#1650）。只帶 `-o` 不帶模式旗標也是結束碼 2 | stdout |
 | `--output-configmap` | 模式：合併後的設定包成完整 Kubernetes ConfigMap YAML | false |
 | `--output-alertmanager` | 模式：合併後的設定輸出為純 `alertmanager.yml`（Kubernetes 以外的 BYO Alertmanager）。與 `--output-configmap` 同一個合併、同樣的檢查，只是不包 ConfigMap；帶 `--namespace` / `--configmap` 是結束碼 2。⚠️ v2.9.0 映像沒有這個旗標 <!-- image-caveat: v2.9.0 --> | false |
-| `--base-config <FILE>` | 你的 Alertmanager 設定，產生的路由合併進去（只換掉產生器擁有的部分，見上方「合併」）。**只有 `--output-configmap` 與 `--output-alertmanager` 會讀它**；用在其他模式是呼叫端錯誤（結束碼 2），不會被靜默忽略。以 Alertmanager 自己的載入函式讀（`da-read alertmanager`，[ADR-036](adr/036-single-parser-effective-config.md) §12）：必須是 Alertmanager 收得下的完整設定，至少有 `route:` 與它指名的 `receivers:`；`global:`、`inhibit_rules:` 可省略、補內建預設；值是 Alertmanager 的讀法（時長寫成它的拼法，例如 `300s` 是 `5m`） | 內建預設（**僅在未提供本旗標時**；供了但讀不到、載入函式拒收（含缺 `route:`）、或沒有 `da-read` 一律結束碼 2，不會退回預設）。⚠️ **Breaking**：先前缺 `route:` 的檔會補內建 route |
+| `--base-config <FILE>` | 你自己的 Alertmanager 設定（來源），產生的路由合併進去，見上方「合併」。不是本工具的輸出：含 `tenant-*`／`platform-enforced*` receiver 是結束碼 1，`-o` 指向同一個檔是結束碼 2。**只有 `--output-configmap` 與 `--output-alertmanager` 會讀它**；用在其他模式是呼叫端錯誤（結束碼 2），不會被靜默忽略。以 Alertmanager 自己的載入函式讀（`da-read alertmanager`，[ADR-036](adr/036-single-parser-effective-config.md) §12）：必須是 Alertmanager 收得下的完整設定，至少有 `route:` 與它指名的 `receivers:`；`global:`、`inhibit_rules:` 可省略、補內建預設；值是 Alertmanager 的讀法（時長寫成它的拼法，例如 `300s` 是 `5m`） | 內建預設（**僅在未提供本旗標時**；供了但讀不到、載入函式拒收（含缺 `route:`）、或沒有 `da-read` 一律結束碼 2，不會退回預設）。⚠️ **Breaking**：先前缺 `route:` 的檔會補內建 route |
 | `--dry-run` | 僅輸出預覽，不寫入檔案。**只有 `--output-configmap` / `--output-alertmanager` 讀它**；`--validate` / `--apply` 不讀（結束碼 2），不帶模式旗標也是結束碼 2 | false |
 | `--validate` | 僅驗證，不輸出。conf.d 裡任何解析不了的租戶檔 → 結束碼 1，不分 `--strict`（#1460）。其餘檢查都通過後，還會以**內建預設 base** 組出完整設定交給 `amtool`（見下方「Alertmanager 驗證」；#2260）。另外報出沒有讀取端讀的鍵：與 validate-config `unread_keys` 列同一份共用判決（[ADR-038](adr/038-unread-keys-judged-by-readers.md)）、同樣的行，每行以 `key verdict:` 開頭印在 stderr，在 `--findings-json` 裡是 `key_unread`、`key_disable_noop`、`key_disable_partial`、`key_profile_not_judged`、`key_undecidable` 或 `key_verdict_incomplete`。判決說會擋的（error 級的 finding、沒讀到根平台檔而判不了的閾值鍵）與判決給不出來的那一行以 `ERROR:` 開頭、`blocks: validate`，讓 `--validate` 結束碼 1；da-guard 本身的問題（找不到、太舊、壞掉）結束碼 2，與 validate-config 相同；warning／notice 是 `blocks: never`（[#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016)）。另照 exporter 自己的措辭印出它對租戶 key 的兩項檢查（da-guard served-values 的 `key_checks`）：`version` label 不合 ADR-024 OQ-6 的維度 key（`key_version_label`）與舊拼法的 key（`key_renamed`，#1231），同樣 `blocks: never`。產生器本身不再判鍵名，輸出模式不對未知 key 印 WARN（[ADR-038](adr/038-unread-keys-judged-by-readers.md) 決定 11）。被拒收的樹不判；產生器容器在產生器裡不判（它在放行之後另判，見下方〈鍵的判決〉） | false |
 | `--strict` | 下列情況報 ERROR 並結束碼 1（CI 跑 `--strict`）：domain-policy（ADR-007）違規（不加時為 WARN）；`routes[i].match` 的值或 `overrides[i].alertname`／`metric_group` 是 yaml.v3 讀成的非字串（未加引號的 `8`、`true`、`2001-12-15`、`~` 等，#2431、#2906；`yes`／`on`／`1:30` 是字串；修法是加引號。不加時 routes 條目以 WARN 略過、override 則以 `str()` 渲染，如 `alertname="True"`；值為 `0`、`false` 這類假值時視同沒有 matcher：該 override 略過，`--validate` 也擋）；`group_by` 的元素不是非空字串（未加引號的 `8`、`true` 等）、重複、或 `...` 與其他 label 並存（#2503；不加時該元素以 `WARN … skipping` 略過後輸出，略過後為空就不輸出 `group_by`）；租戶 `_routing` 既不是 mapping 也不是停用字串、或 `_routing_defaults` 不是 mapping（#2341；不加時以 `WARN … skipping` 略過：該租戶不產出 route／該層不貢獻，`--validate` 也擋）；`--apply`／`--output-configmap`／`--output-alertmanager` 合併時 `equal:` 標籤沒有 presence gate 的 inhibit rule（#1132，不加時為 WARN）；同三個模式下，沒有 `_routing` 的租戶有 page-mode custom alert 落到沒有 integration 的 `custom-alerts-firehose`（#1211，見下方；不加時為 WARN，顯式 `_routing: disable` 不升級）；同三個模式下，你自己的 base（`--base-config`，或 `--apply` 時叢集上的設定）裡 `watchdog-heartbeat` 沒有 integration（`watchdog_undelivered`，見下方；不加時為 WARN，內建 base 不升級） | false |
-| `--apply` | 模式：合併進叢集上的 Alertmanager ConfigMap（只換掉產生器擁有的部分，叢集上你自己的路由、receiver、inhibit rule 保留）並 reload（需 kubectl）。⚠️ **行為變更**：先前整個取代 `route.routes`，叢集上你自己的子路由會消失；v2.9.0 映像仍是舊行為 <!-- image-caveat: v2.9.0 --> | false |
+| `--apply` | 模式：以叢集 ConfigMap 的 `alertmanager.base.yml` 為來源渲染（第一次沒有這個 key 時採用現有的 `alertmanager.yml`，它若已是產生的則結束碼 1、不套用），寫回 `alertmanager.yml`（產物）與 `alertmanager.base.yml`（來源）並 reload（需 kubectl），見上方「`--apply` 的來源」。來源裡你自己的路由、receiver、inhibit rule 保留。⚠️ **行為變更**：先前整個取代 `route.routes`，叢集上你自己的子路由會消失；v2.9.0 映像仍是舊行為 <!-- image-caveat: v2.9.0 --> | false |
 | `--namespace <NS>` | ConfigMap 所在 namespace。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式（含 `--output-alertmanager`）結束碼 2 | `monitoring` |
 | `--configmap <NAME>` | ConfigMap 名稱。**只有 `--apply` / `--output-configmap` 會讀它**，其他模式（含 `--output-alertmanager`）結束碼 2 | `alertmanager-config` |
 | `--yes` | 搭配 --apply 跳過確認提示。**只有 `--apply` 會讀它**，其他模式結束碼 2 | false |
@@ -1986,7 +1992,7 @@ da-tools generate-routes --config-dir <path> {--validate | --output-configmap | 
 
 **Receiver 名稱不可重複（#2279）**：租戶 id 可以含 `-`，所以租戶 `<t>` 的 `routes[0]` receiver（`tenant-<t>-route-0`）可能和另一個叫 `<t>-route-0` 的租戶的主 receiver 同名（`-override-<n>` 同理）。兩個來源產生同名 receiver 時，所有模式都回 1、不寫檔、不 apply，不分 `--strict`，訊息點名雙方來源。⚠️ v2.9.0 映像回 0 <!-- image-caveat: v2.9.0 -->
 
-base 裡的 receiver 與產生的同名則**不再拒收**：先前 `--output-configmap --base-config` 對這種 base 回 1，這個守衛已拿掉，因為它與冪等衝突——上一次的輸出本來就含產生的 receiver，回灌當 base 會被它擋下。現在名稱落在保留命名空間（`tenant-*`、`platform-enforced*`）的 base receiver 一律視為上一次的輸出，被這次產生的取代（這次沒有就刪掉），三個輸出模式相同；平台固定的 `custom-alerts-firehose` / `watchdog-heartbeat` / `synthetic-receiver` / `sentinel-sinkhole` 則保留 base 的定義（見上方「合併」）。保留命名空間**以外**的同名（產生的 receiver 與 base 的 receiver 撞名）仍拒收、結束碼 1。
+base 裡的 receiver 名稱落在 `tenant-*`、`platform-enforced*` 時同樣拒收、結束碼 1，三個輸出模式相同（`--apply` 判的是它的來源）。理由有兩條：你自己的 `tenant-*` receiver 會遮蔽同名的產生 receiver；而且這兩個命名空間只有產生器會寫，出現在 base 裡多半是把本工具的輸出當成了 base，照合併下去租戶路由會再合併一次。修法是給來源（自己的設定，放在輸出旁邊、不要拿輸出覆蓋它），或把你自己的 receiver 改名。平台固定的 `custom-alerts-firehose` / `watchdog-heartbeat` / `synthetic-receiver` / `sentinel-sinkhole` 可以寫在 base，保留 base 的定義（見上方「合併」）。
 
 **範例**
 
@@ -1998,15 +2004,15 @@ da-tools generate-routes --config-dir ./conf.d --output-configmap --base-config 
 da-tools generate-routes --config-dir ./conf.d --apply --yes
 ```
 
-上面第三行可以重複執行：conf.d 改了就再跑一次，把上次輸出的 `alertmanager.yml` 本身當 `--base-config` 也行——產生器擁有的部分換成新的，你自己的部分不動；conf.d 沒變時輸出逐位元相同。
+上面第三行可以重複執行：conf.d 改了就拿同一份 `my-alertmanager.yml`（來源）再跑一次。輸出的 `alertmanager.yml` 是產物，不要拿它當 `--base-config`——含 `tenant-*` receiver 會被拒收（結束碼 1）。
 
 **結束碼**
 
 | 代碼 | 說明 |
 |------|------|
 | `0` | 成功 |
-| `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460）；**或 PATH 上的 `amtool` 拒收 `--output-configmap` / `--output-alertmanager` / `--apply` 要寫出／套用的設定**——不寫檔、不 apply（#2219）；**或拒收 `--validate` 以內建 base 組出的設定**（#2260）；**或兩個來源產生同名 receiver**（所有模式，不分 `--strict`；#2279）；**或 `--strict` 下輸出模式報出會擋的 finding**（例如 `custom_alert_undelivered`、你自己 base 的 `watchdog_undelivered`）——不寫檔、不 apply（#1211）；**或組裝時違反平台不變式**（例如 base 的 inhibit 規則會讓租戶靜音平台告警）——`--output-configmap`／`--output-alertmanager`／`--validate` 印 `FAIL:`（#2260），`--apply` 時叢集上現有的設定違反不變式也印 `FAIL:`、不 apply（#2506）；**或同一個租戶 id 由兩個租戶檔宣告**（所有模式，見上方「階層式 conf.d」）；**或 conf.d 宣告了不合法的租戶 id**（所有模式，不分 `--strict`，見上方「租戶 id」；ADR-035）；**或 `--validate` 遇到 Alertmanager 不接受的時長**（見上方「時長寫法」；#2490）；**或產生器不讀的路由鍵**（見上方「產生器不讀的鍵」；#2960、#2983） |
-| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：**沒有給模式旗標**（`--validate`、`--output-configmap`、`--output-alertmanager`、`--apply` 恰好一個；只帶 `-o` 或 `--dry-run` 也算，#1211）、`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping；`--base-config` 是 Alertmanager 載入函式拒收）、沒有 `da-read`／`da-crdecode`（輸出模式、`--validate`、`--apply` 以它們讀回組出的 ConfigMap 與設定）、`--base-config` 用在 `--output-configmap`／`--output-alertmanager` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（`--output-alertmanager` 不讀 `--namespace` / `--configmap`）（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）；`amtool` 在 PATH 上但無法執行、逾時或自身出錯（沒有給出拒收判定）、`--apply` 之後 Alertmanager `/-/reload` 失敗（v2.10.0 前只印 WARN、結束碼 0；#2219）；conf.d 樹的形狀被路由面拒收（上方「階層式 conf.d」列回 2 的三種情況，訊息開頭 `ERROR: N routing-tree error(s)`；#2326）；平台告警探針集降級，而你提供的 inhibit 規則（base config 或叢集設定）裡有租戶觸發的規則驗證不了——不寫檔、不 apply（見上方「平台告警探針集降級時」；#1533）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
+| `1` | 配置驗證失敗；**或 conf.d 裡有解析不了／讀不了的租戶檔**（壞 YAML、非 UTF-8、頂層不是 mapping、目錄型 `x.yaml`）——所有模式一律拒絕，不分 `--strict`，stdout 點名檔案（#1460）；**或 PATH 上的 `amtool` 拒收 `--output-configmap` / `--output-alertmanager` / `--apply` 要寫出／套用的設定**——不寫檔、不 apply（#2219）；**或拒收 `--validate` 以內建 base 組出的設定**（#2260）；**或兩個來源產生同名 receiver**（所有模式，不分 `--strict`；#2279）；**或 base 定義了 `tenant-*`／`platform-enforced*` receiver**（看起來是本工具的輸出，不是來源；三個輸出模式，`--apply` 判它的來源；#2279、#1211）——不寫檔、不 apply；**或 `--strict` 下輸出模式報出會擋的 finding**（例如 `custom_alert_undelivered`、你自己 base 的 `watchdog_undelivered`）——不寫檔、不 apply（#1211）；**或組裝時違反平台不變式**（例如 base 的 inhibit 規則會讓租戶靜音平台告警）——`--output-configmap`／`--output-alertmanager`／`--validate` 印 `FAIL:`（#2260），`--apply` 時叢集上現有的設定違反不變式也印 `FAIL:`、不 apply（#2506）；**或同一個租戶 id 由兩個租戶檔宣告**（所有模式，見上方「階層式 conf.d」）；**或 conf.d 宣告了不合法的租戶 id**（所有模式，不分 `--strict`，見上方「租戶 id」；ADR-035）；**或 `--validate` 遇到 Alertmanager 不接受的時長**（見上方「時長寫法」；#2490）；**或產生器不讀的路由鍵**（見上方「產生器不讀的鍵」；#2960、#2983） |
+| `2` | 呼叫端錯誤：**工具因為「怎麼被呼叫的」或「環境」而做不了事**，不是你的設定有違規。今天到得了這一格的有（非窮舉）：**沒有給模式旗標**（`--validate`、`--output-configmap`、`--output-alertmanager`、`--apply` 恰好一個；只帶 `-o` 或 `--dry-run` 也算，#1211）、`--policy` / `--base-config` 供了但不可用（不是檔案、讀不到、不是合法 YAML、頂層不是 mapping；`--base-config` 是 Alertmanager 載入函式拒收）、沒有 `da-read`／`da-crdecode`（輸出模式、`--validate`、`--apply` 以它們讀回組出的 ConfigMap 與設定）、`--base-config` 用在 `--output-configmap`／`--output-alertmanager` 以外的模式、**`-o` / `--dry-run` / `--namespace` / `--configmap` / `--yes` 用在不讀它們的模式**（`--output-alertmanager` 不讀 `--namespace` / `--configmap`）（訊息會點名旗標與模式並給一個 argparse 接受的改法；#1650）、`-o` 的輸出路徑寫不進去、`-o` 與 `--base-config` 指向同一個檔（#1211）、`--apply` 在讀不到 stdin 的環境下沒帶 `--yes`、以及 kubectl／叢集操作失敗（#1556、#1616、#1617）；`amtool` 在 PATH 上但無法執行、逾時或自身出錯（沒有給出拒收判定）、`--apply` 之後 Alertmanager `/-/reload` 失敗（v2.10.0 前只印 WARN、結束碼 0；#2219）；conf.d 樹的形狀被路由面拒收（上方「階層式 conf.d」列回 2 的三種情況，訊息開頭 `ERROR: N routing-tree error(s)`；#2326）；平台告警探針集降級，而你提供的 inhibit 規則（base config 或叢集設定）裡有租戶觸發的規則驗證不了——不寫檔、不 apply（見上方「平台告警探針集降級時」；#1533）。⚠️ **上列是 v2.10.0 的契約**；本頁上方釘的 `v2.9.0` 映像對其中多數回 0 或 1 <!-- image-caveat: v2.9.0 --> |
 
 ---
 
@@ -3467,7 +3473,7 @@ da-tools explain-route --config-dir <PATH> --tenant <NAME> --trace [--alertname 
 | `--alertname` | 追蹤的 alert 名稱（只在 `--trace` 下讀取） | `GenericAlert` |
 | `--severity` | 追蹤的 alert 嚴重度（只在 `--trace` 下讀取） | `warning` |
 | `--label` | 追蹤用的額外 alert label，格式 `KEY=VALUE`（可多次指定；只在 `--trace` 下讀取） | (無) |
-| `--base-config` | 追蹤用的 base Alertmanager YAML：產生的路由以 `generate-routes` 輸出模式的同一個合併放進去（只換掉產生器擁有的部分，base 自己的路由保留；只在 `--trace` 下讀取） | 內建 base（與 `generate_alertmanager_routes --validate` 相同） |
+| `--base-config` | 追蹤用的 base Alertmanager YAML：產生的路由以 `generate-routes` 輸出模式的同一個合併放進去（base 是你自己的設定、不是 `generate-routes` 的輸出，base 自己的路由保留；只在 `--trace` 下讀取） | 內建 base（與 `generate_alertmanager_routes --validate` 相同） |
 | `--policy <FILE>` | 部署端 policy 檔（與 `generate-routes --policy` 同一份，由同一個 resolver 讀，[#3142](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3142)）：列出與追蹤的都是產生器在這份 `allowed_domains` 下產出的路由；被拒收的 receiver 列在「被 --policy 的 allowed_domains 拒收」（`--json` 的 `policy_refused`，每筆 `source`／`status: POLICY_REFUSED`／`detail`／`remedy`），主 receiver 被拒收時該租戶的路由整條不產出。檔案不可用或 `min_generator_version` 比本工具新時結束碼 `2`（原因只在 stderr，`--json` 時 stdout 為空）。被拒收的平台強制路由（`_routing_enforced`）receiver 也列在其中（`source: _routing_enforced.receiver`）。沒帶時不套用，stderr 印一行 `NOTICE`，結束碼不變；`--json` 每筆的 `policy_applied` 標明有沒有套用。`--show-profile-expansion` 只列 profile、不判 receiver，不讀這份 allowlist、也不印 NOTICE（檔案不可用時仍是 `2`） | （不套用） |
 | `--json` | 以 JSON 格式輸出 | `false` |
 

@@ -265,8 +265,10 @@ da-tools generate-routes --config-dir conf.d/ --output-configmap \
 da-tools generate-routes --config-dir conf.d/ --validate
 # ⚠️ --validate hands the config, assembled on the BUILT-IN default base (not
 #    yours), to amtool (#2260); the --output-configmap --base-config run above
-#    checks the one assembled on your own base (#2219). The merge replaces only
-#    what the generator owns; your own routes and receivers in the base stay.
+#    checks the one assembled on your own base (#2219). alertmanager-base.yaml
+#    is the source (your own config, in git) and .output/ the output; your own
+#    routes and receivers in the base stay. Never pass the output as the base:
+#    its tenant-* receivers are refused (exit 1).
 #    amtool ships in the image (#2294), so inside it both checks run by default.
 
 # Compute blast radius (which tenants, which metrics affected)

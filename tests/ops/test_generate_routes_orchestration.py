@@ -1094,19 +1094,17 @@ class TestAssembleConfigmap:
         with pytest.raises(ValueError, match=r"same name.*'default'"):
             assemble_configmap(base, [], receivers, [])
 
-    def test_a_base_receiver_in_the_generator_namespace_is_replaced(self):
-        """#1211 gap 2: a base receiver named `tenant-*` is an earlier run's
-        output — the one this run generates replaces it (feeding the output
-        back as the base must not be refused), exactly once."""
+    def test_a_base_receiver_in_the_generated_namespace_is_refused(self):
+        """#1211 gap 2 (owner decision S): the base is a SOURCE; a receiver
+        named `tenant-*` there marks it as an earlier output (or shadows the
+        generated one, #2279) — refused, naming it."""
         base = load_base_config(None)
         base["receivers"].append(
             {"name": "tenant-db-a", "webhook_configs": [{"url": "https://stale.example.com"}]})
         receivers = [{"name": "tenant-db-a", "webhook_configs": [{"url": "https://x.com"}]}]
         routes = [{"receiver": "tenant-db-a", "matchers": ['tenant="db-a"']}]
-        am = yaml.safe_load(yaml.safe_load(
-            assemble_configmap(base, routes, receivers, []))["data"]["alertmanager.yml"])
-        mine = [r for r in am["receivers"] if r["name"] == "tenant-db-a"]
-        assert mine == receivers, mine
+        with pytest.raises(ValueError, match=r"generator writes.*'tenant-db-a'.*not an earlier output"):
+            assemble_configmap(base, routes, receivers, [])
 
 
 # ============================================================
@@ -1349,14 +1347,15 @@ class TestCustomSubtreeTenantDelivery:
         assert len(customs) == 1
         assert [c["receiver"] for c in customs[0]["routes"]] == \
             ["tenant-db-a", "tenant-db-b"]
-        # Re-feed the ALREADY-INJECTED route list with tenant db-b removed: the
-        # stale custom route (children db-a+db-b) is dropped whole and rebuilt —
-        # still exactly one custom route, no duplicated children, and the
-        # removed tenant's stale child gone.
+        # Re-feed the ALREADY-INJECTED route list (as generated routes, on the
+        # same source) with tenant db-b removed: the stale custom route
+        # (children db-a+db-b) is dropped whole and rebuilt — still exactly
+        # one custom route, no duplicated children, and the removed tenant's
+        # stale child gone.
         refeed = [r for r in merged["route"]["routes"]
                   if r.get("receiver") != "tenant-db-b"]
         merged2 = merge_generated(
-            merged, refeed, [{"name": "tenant-db-a"}], [])
+            existing, refeed, [{"name": "tenant-db-a"}], [])
         customs2 = [r for r in merged2["route"]["routes"]
                     if 'component="custom"' in r.get("matchers", [])]
         assert len(customs2) == 1
@@ -1453,8 +1452,9 @@ class TestCustomSubtreeTenantDelivery:
                     "receivers": [{"name": "default"}], "inhibit_rules": []}
         merged = merge_generated(existing, routes, receivers, [])
         first = copy.deepcopy(merged["route"]["routes"])
+        # the injected list handed back as generated routes, on the same source
         merged2 = merge_generated(
-            merged, copy.deepcopy(first), receivers, [])
+            existing, copy.deepcopy(first), receivers, [])
         assert merged2["route"]["routes"] == first
         customs = [r for r in merged2["route"]["routes"]
                    if 'component="custom"' in r.get("matchers", [])]

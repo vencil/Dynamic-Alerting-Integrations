@@ -277,7 +277,7 @@ da-tools generate-routes \
 
 **預期輸出**：印 `Found 1 tenant(s) with routing config: redis-prod`，以及合併後的完整 `alertmanager.yml`。產生的 route 以 `tenant="redis-prod"` 比對、送往 `tenant-redis-prod` receiver；另有一條同租戶 critical 抑制 warning 的 inhibit rule。工具一次產生 conf.d 裡**所有**有 `_routing` 的租戶，沒有只產單一租戶的選項（尚未實作）；沒有 `_routing` 的租戶不會產生 route。
 
-產生器不再輸出「自己貼進去」的片段：不帶模式旗標是結束碼 2，輸出一律是合併後的完整設定（[#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)）。合併只換掉產生器擁有的部分（`tenant-*`／`platform-enforced*` receiver、四個平台 receiver 與路由），舊設定裡你的路由、receiver、inhibit rule 原樣保留。⚠️ v2.9.0 映像沒有 `--output-alertmanager`，它的 `--apply` 與 `--output-configmap --base-config` 會整個取代 `route.routes`（舊子路由全部消失），雙軌期間不能用那顆映像做合併 <!-- image-caveat: v2.9.0 -->
+產生器不再輸出「自己貼進去」的片段：不帶模式旗標是結束碼 2，輸出一律是合併後的完整設定（[#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)）。你的舊設定是來源（`--base-config`），合併結果是另一份產物：舊設定裡你的路由、receiver、inhibit rule 原樣保留，加上產生的；產物不能再拿來當 base。⚠️ v2.9.0 映像沒有 `--output-alertmanager`，它的 `--apply` 與 `--output-configmap --base-config` 會整個取代 `route.routes`（舊子路由全部消失），雙軌期間不能用那顆映像做合併 <!-- image-caveat: v2.9.0 -->
 
 ### 步驟 2.2：準備雙軌配置
 
@@ -314,7 +314,7 @@ da-tools generate-routes --config-dir conf.d/ \
   --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
 ```
 
-產出的 `route.routes` 依序是平台 4 條路由、上面那條上層路由、`tenant="redis-prod"` → `tenant-redis-prod`；receivers 多了 `tenant-redis-prod` 與四個平台 receiver，inhibit_rules 多了 redis-prod 的 critical 抑制 warning。舊的 receiver 與 inhibit rule 原樣保留。合併可以重複執行：之後 conf.d 有變，就拿 `alertmanager.merged.yaml` 本身當 `--base-config` 再跑一次，產生器擁有的部分換成新的、你的部分不動。⚠️ 平台的 `watchdog-heartbeat` receiver 沒接任何管道時會印 `watchdog_undelivered` WARN（加 `--strict` 是結束碼 1、不寫檔）；雙軌期間可以先接受這行 WARN，正式切換前照[告警平面自我存活性](../integration/alerting-plane-self-liveness.md)在 base 裡接上。
+產出的 `route.routes` 依序是平台 4 條路由、上面那條上層路由、`tenant="redis-prod"` → `tenant-redis-prod`；receivers 多了 `tenant-redis-prod` 與四個平台 receiver，inhibit_rules 多了 redis-prod 的 critical 抑制 warning。舊的 receiver 與 inhibit rule 原樣保留。`alertmanager.yaml` 是來源、`alertmanager.merged.yaml` 是產物，兩份分開放：之後 conf.d 有變，就拿 `alertmanager.yaml`（來源）再跑一次上面的指令；不要拿 `alertmanager.merged.yaml` 當 `--base-config`——它含 `tenant-*` receiver，會被拒收（結束碼 1），`-o` 指向來源本身也不行（結束碼 2）。要改舊設定也改 `alertmanager.yaml`，再重新產生。⚠️ 平台的 `watchdog-heartbeat` receiver 沒接任何管道時會印 `watchdog_undelivered` WARN（加 `--strict` 是結束碼 1、不寫檔）；雙軌期間可以先接受這行 WARN，正式切換前照[告警平面自我存活性](../integration/alerting-plane-self-liveness.md)在 base 裡接上。
 
 合併後先驗語法，再逐類測去向：
 

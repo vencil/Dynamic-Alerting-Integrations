@@ -640,7 +640,7 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py --config-dir conf.d/ \
 
 ### 2.9 Alert Routing 客製化 (Config-Driven Routing)
 
-Tenant 可透過 `_routing` section 自主管理通知目的地、分群策略與時序控制。平台工具 `generate_alertmanager_routes.py` 讀取所有 tenant YAML，產出 Alertmanager route + receiver + inhibit_rules，合併進一份 base Alertmanager 設定（只換掉產生器擁有的部分，[#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)）。
+Tenant 可透過 `_routing` section 自主管理通知目的地、分群策略與時序控制。平台工具 `generate_alertmanager_routes.py` 讀取所有 tenant YAML，產出 Alertmanager route + receiver + inhibit_rules，合併進一份 base Alertmanager 設定（你自己的設定，即來源；輸出是另一份產物，[#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)）。
 
 > 支援 webhook / email / slack / teams / rocketchat / pagerduty 六種 receiver type。Receiver 為結構化物件（`{type, ...fields}`），由 `generate_alertmanager_routes.py` 驗證必要欄位並產出對應 Alertmanager config。
 
@@ -698,7 +698,7 @@ python3 scripts/tools/ops/generate_alertmanager_routes.py \
   --config-dir conf.d/ --apply --yes
 ```
 
-模式旗標恰好一個（`--validate`、`--output-alertmanager`、`--output-configmap`、`--apply`），不帶是結束碼 2；先前的 fragment 模式已移除，因為照檔頭把片段接在自有路由後面會讓平台路由（Watchdog 等）排不到最前面。`--validate` 檢查 YAML 合法性 + webhook domain allowlist（exit 0/1，供 CI 消費）；搭配 `--strict` 時 domain policy（ADR-007）違規由 WARN 升級為 ERROR 並 fail（CI 跑 `--validate --strict`）。三個輸出模式共用同一個合併：只換掉產生器擁有的部分（`tenant-*`／`platform-enforced*` receiver、四個平台 receiver 與路由、root fallthrough），平台路由排最前、你自己的路由原順序居中、租戶路由在後；可重複執行，輸出回灌當 base 結果相同。`--apply` 以叢集上的設定為 base 做同一個合併並觸發 reload。⚠️ v2.9.0 映像仍有 fragment 模式、沒有 `--output-alertmanager`，`--apply` 整個取代 `route.routes` <!-- image-caveat: v2.9.0 -->產出支援 webhook、email、slack、teams、rocketchat、pagerduty 六種 receiver type。
+模式旗標恰好一個（`--validate`、`--output-alertmanager`、`--output-configmap`、`--apply`），不帶是結束碼 2；先前的 fragment 模式已移除，因為照檔頭把片段接在自有路由後面會讓平台路由（Watchdog 等）排不到最前面。`--validate` 檢查 YAML 合法性 + webhook domain allowlist（exit 0/1，供 CI 消費）；搭配 `--strict` 時 domain policy（ADR-007）違規由 WARN 升級為 ERROR 並 fail（CI 跑 `--validate --strict`）。三個輸出模式共用同一個合併：輸出＝合併（來源 base, conf.d），base 是你自己的設定、不是本工具的輸出（含 `tenant-*`／`platform-enforced*` receiver 就拒收、結束碼 1），平台路由排最前、你自己的路由原順序居中、租戶路由在後；conf.d 改了就拿同一份來源再跑。`--apply` 以叢集 ConfigMap 的 `alertmanager.base.yml`（來源；第一次為現有的 `alertmanager.yml`）做同一個合併，寫回 `alertmanager.yml` 與 `alertmanager.base.yml` 並觸發 reload。⚠️ v2.9.0 映像仍有 fragment 模式、沒有 `--output-alertmanager`，`--apply` 整個取代 `route.routes` <!-- image-caveat: v2.9.0 -->產出支援 webhook、email、slack、teams、rocketchat、pagerduty 六種 receiver type。
 
 ### 2.10 Per-rule Routing Overrides
 

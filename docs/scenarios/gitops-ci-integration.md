@@ -238,7 +238,9 @@ da-tools generate-routes --config-dir conf.d/ --output-configmap \
 da-tools generate-routes --config-dir conf.d/ --validate
 # ⚠️ --validate 會把設定組進「內建預設 base」交給 amtool（#2260），不是你的 base；
 #    上面的 --output-configmap --base-config 則驗你自己的 base 組出來的那份（#2219）。
-#    合併只換掉產生器擁有的部分，base 裡你自己的路由與 receiver 原樣保留。
+#    alertmanager-base.yaml 是來源（你自己的設定，進 git），.output/ 是產物；
+#    base 裡你自己的路由與 receiver 原樣保留。別拿產物當 base：含 tenant-*
+#    receiver 會被拒收（結束碼 1）。
 #    da-tools 映像內含 amtool（#2294），在映像裡跑這兩道驗證預設就會執行。
 
 # 計算 blast radius（影響哪些 tenant、哪些 metric）

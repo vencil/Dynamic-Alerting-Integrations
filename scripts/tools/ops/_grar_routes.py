@@ -972,10 +972,10 @@ def _build_custom_alert_routes(tenant_names: list[str] | None = None,
     generated routes by the one merge every output mode uses (merge_generated)
     for two reasons:
 
-      1. Durability: the merge treats a base route to this receiver as an
-         earlier run's output and replaces it, so a route that lived only in
-         the base would be dropped on the next run. Emitting it here keeps it
-         present across regeneration.
+      1. Durability: the merge emits the platform routes canonically and
+         drops a base route to these receivers, so a route that lived only in
+         the base would not survive. Emitting it here keeps it present in
+         every output.
       2. Correctness: the enforced NOC route uses `continue: true` and its
          matchers are OPTIONAL — a matcher-less enforced route matches ALL alerts,
          so without an earlier `continue: false` custom route, tenant custom alerts
@@ -1266,43 +1266,18 @@ def is_root_fallthrough_route(route: object) -> bool:
             and m[0].startswith('tenant="') and m[0].endswith('"'))
 
 
-#: The time interval every assembled root fallthrough is active in (#1211
-#: gap 2, owner decision A): the generator's ownership MARK. A fallthrough
-#: delivers to the base's own root receiver, so its receiver name cannot say
-#: who wrote it, and its shape (one ``tenant="…"`` matcher → the root) is one
-#: an operator may write too. ``active_time_intervals: [<this>]`` can: the
-#: name is the generator's, and a route carrying it is an earlier run's
-#: output. The interval has no constraints, so it contains every instant
-#: (Alertmanager ``timeinterval.TimeInterval.ContainsTime`` checks only the
-#: fields that are set; pinned against the vendored Alertmanager by
-#: components/da-read/generated_time_interval_test.go) — delivery and
-#: grouping are exactly the unmarked route's.
-GENERATED_TIME_INTERVAL = "platform-generated-always"
-
-def generated_time_interval() -> dict:
-    """The definition of ``GENERATED_TIME_INTERVAL``: no constraint at all."""
-    return {"name": GENERATED_TIME_INTERVAL, "time_intervals": [{}]}
-
-
 def pin_root_fallthrough_receiver(routes: list[dict],
                                   root_receiver: object) -> list[dict]:
-    """*routes* with each root fallthrough route (#2519) made assembled: the
-    root's receiver name written on it — the base config's ``route.receiver``
-    (built-in base, ``--base-config``, or the cluster's on ``--apply``) — and
-    the generator's mark ``active_time_intervals: [GENERATED_TIME_INTERVAL]``
-    (#1211 gap 2). Alertmanager would inherit the same receiver; the name is
-    written so the assembled config says where the alert goes. A root
-    without a usable receiver name gets the mark only (inheritance still
-    applies). The caller defines the interval (``generated_time_interval``)."""
-    has_root = isinstance(root_receiver, str) and bool(root_receiver)
-    out = []
-    for r in routes:
-        if is_root_fallthrough_route(r):
-            r = {"matchers": r["matchers"],
-                 **({"receiver": root_receiver} if has_root else {}),
-                 "active_time_intervals": [GENERATED_TIME_INTERVAL]}
-        out.append(r)
-    return out
+    """*routes* with the root's receiver name written on each root
+    fallthrough route (#2519) — the base config's ``route.receiver`` (built-in
+    base, ``--base-config``, or the cluster's on ``--apply``). Alertmanager
+    would inherit the same receiver; the name is written so the assembled
+    config says where the alert goes. A root without a usable receiver name
+    leaves the routes as they are (inheritance still applies)."""
+    if not isinstance(root_receiver, str) or not root_receiver:
+        return routes
+    return [dict(r, receiver=root_receiver) if is_root_fallthrough_route(r)
+            else r for r in routes]
 
 
 def _build_inhibit_rules(tenant: str) -> dict:
