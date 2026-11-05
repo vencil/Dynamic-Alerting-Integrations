@@ -1021,6 +1021,22 @@ MIGRATED: frozenset[str] = frozenset({
     "scripts/tools/lint/check_structure.py",
     "scripts/tools/lint/check_vmalert_coverage.py",
     "scripts/tools/ops/_federation_revocation_reconciler.py",
+    # #3579 PR5: scripts/ops/ (scripts/tools/ appended to sys.path) — a crash 1→2,
+    # a failed stdout write 120→2, `>&-` 0→2 (owner-approved rule, #3579)
+    "scripts/ops/add_t_parallel.py",
+    "scripts/ops/check_image_refs_resolve.py",
+    "scripts/ops/ci_flake_retry.py",
+    "scripts/ops/commit_helper.py",
+    "scripts/ops/dx_run.py",
+    "scripts/ops/file_race_report.py",
+    "scripts/ops/fuse_plumbing_commit.py",
+    "scripts/ops/go_test_reads.py",
+    "scripts/ops/guard_defaults_scopes.py",
+    "scripts/ops/inject_default_key.py",
+    "scripts/ops/parse_go_test_json.py",
+    "scripts/ops/plan_race_shards.py",
+    "scripts/ops/route_metrics_through_field.py",
+    "scripts/ops/use_get_metrics.py",
 })
 
 #: The ceiling of entries not yet through run(): it only shrinks. A new tool
@@ -1105,7 +1121,7 @@ def test_migrated_names_baseline_entries():
 def test_the_pending_entries_are_a_pinned_ceiling():
     """The count is written out so that a shorter PENDING is a visible edit of
     this line too (#3579): only ever lower it."""
-    assert len(PENDING) == 20
+    assert len(PENDING) == 6
 
 
 _RUN_TOOL = ("import _lib_exitcodes\ndef main(argv=None):\n    return 0\n"
@@ -2186,3 +2202,35 @@ def test_a_noted_stdout_failure_keeps_the_status(tmp_path, then, buffering):
     assert rc == 6, err
     assert err.count(STDOUT_CLOSED_LINE + " Broken pipe") == 1, err
     assert "Traceback" not in err and "Exception ignored" not in err, err
+
+
+# ── #3579 PR5: scripts/ops/ reaches the run() exit on its own ───────────────
+
+def _ops_entries() -> list[str]:
+    return sorted(rel for rel in _gated_sources() if rel.startswith("scripts/ops/"))
+
+
+@pytest.mark.parametrize("via", ["path", "symlink"])
+def test_every_ops_entry_finds_its_exit_from_anywhere(via, tmp_path):
+    """scripts/ops/ tools append scripts/tools/ to sys.path themselves (no
+    _lib_* of theirs did before #3579): run from another directory, or
+    through a symlink to the file, the `import _lib_exitcodes` of the guard
+    must still resolve — whatever the tool then does with `--help`."""
+    import subprocess
+    from _platform_fs import symlink_or_skip  # noqa: E402
+    entries = _ops_entries()
+    assert len(entries) >= 14, entries
+    env = {k: v for k, v in os.environ.items() if k not in ("PYTHONPATH", "PYTHONUNBUFFERED")}
+    missing = []
+    for rel in entries:
+        target = REPO_ROOT / rel
+        if via == "symlink":
+            link = tmp_path / Path(rel).name
+            symlink_or_skip(target, link)
+            target = link
+        proc = subprocess.run([sys.executable, str(target), "--help"], cwd=tmp_path,
+                              capture_output=True, text=True, encoding="utf-8",
+                              errors="replace", env=env, timeout=60, stdin=subprocess.DEVNULL)
+        if "No module named '_lib_" in proc.stderr:
+            missing.append(f"{rel}: {proc.stderr.strip().splitlines()[-1]}")
+    assert not missing, "\n".join(missing)
