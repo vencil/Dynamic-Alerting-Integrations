@@ -1697,6 +1697,41 @@ def refuse_clashing_outputs(args: argparse.Namespace) -> bool:
     return any(owner != ROUTES_ON_STDOUT and not owner.startswith("-o/") for owner in stdout)
 
 
+#: #1560: the flags whose value names a file on THIS host (argparse dest →
+#: flag), read from the raw argv as well as from the parse: the
+#: --findings-json document never lands on any of them. Not listed:
+#: --config-dir (a directory — the document's write to it fails anyway),
+#: --secret-mount-root (a path inside the Alertmanager container, never
+#: opened here); the rest of the flags name no path.
+FINDINGS_MUST_NOT_REPLACE = {"output": "-o/--output", "mount_list_out": "--secret-mounts-out",
+                             "base_config": "--base-config", "policy": "--policy"}
+#: Of those, the operator outputs, for which `-` is stdout, not a file.
+_STDOUT_DASH_FLAGS = frozenset({"--secret-mounts-out"})
+
+
+def findings_path_taken_by(findings: str | None, early: argparse.Namespace,
+                           args: argparse.Namespace | None) -> str | None:
+    """The flag (of ``FINDINGS_MUST_NOT_REPLACE``) whose file *findings*
+    would replace, or None. Its values come from the raw-argv scan
+    (``early.path_values``, every spelling argparse accepts) and, when the
+    parse succeeded, from *args* — independent of the mode and of whether
+    the run was refused. ``_same_file`` judges (a path that is not a
+    regular file is never taken). A findings path that is stdout is not a
+    file: stdout has its own owners (``claim_stdout``)."""
+    if findings is None or _lib_io.targets_stdout(findings):
+        return None
+    values = list(getattr(early, "path_values", []))
+    if args is not None:
+        values += [(flag, getattr(args, dest, None))
+                   for dest, flag in FINDINGS_MUST_NOT_REPLACE.items()]
+    for flag, value in values:
+        if value is None or (value == _lib_io.STDOUT_PATH and flag in _STDOUT_DASH_FLAGS):
+            continue
+        if _same_file(findings, value):
+            return flag
+    return None
+
+
 def _write_findings_if_asked(early: argparse.Namespace,
                              args: argparse.Namespace | None,
                              findings: list[str], code: int, *,
@@ -1708,19 +1743,16 @@ def _write_findings_if_asked(early: argparse.Namespace,
     src = args if args is not None else early
     if src.findings_json is None:
         return
-    # #1560: a destination another output (or the source) also names is not
-    # written — the same judgement that refused the run.
-    if args is not None and any("--findings-json" in flags
-                                for flags, _ in output_clashes(args)):
-        print("ERROR: --findings-json names a destination another output of this "
-              "run also names — not written, the file is kept as it is", file=sys.stderr)
-        return
-    if _names_the_source(src.findings_json, getattr(src, "base_config", None)):
-        # #1211 gap 2 (blind review F4): the document is written on every
-        # exit — a usage error included — so this is where the source is
-        # protected; `_run` refuses the invocation itself (rc 2).
-        print("ERROR: --findings-json names the --base-config file itself — "
-              "not written, the source is kept as it is", file=sys.stderr)
+    # #1560 (#1211 gap 2 for the source): the document is written on every
+    # exit — a usage error and a refusal included — so it must never land on
+    # a file another path flag of this command line names, whatever the mode
+    # and whether the parse succeeded. ONE invariant, not the run's verdict.
+    taken = findings_path_taken_by(src.findings_json, early, args)
+    if taken is not None:
+        what = ("the source is kept as it is" if taken == "--base-config"
+                else "the file is kept as it is")
+        print(f"ERROR: --findings-json names the same file as {taken} — "
+              f"not written, {what}", file=sys.stderr)
         return
     doc = findings_document(findings, config_dir=src.config_dir,
                             exit_code=code, validate=src.validate,
@@ -1736,6 +1768,41 @@ def _write_findings_if_asked(early: argparse.Namespace,
         write_findings_json(src.findings_json, doc)
 
 
+def _path_flag_values(argv: list[str]) -> list[tuple[str, str]]:
+    """``(flag, value)`` of every ``FINDINGS_MUST_NOT_REPLACE`` flag on the
+    raw *argv* (#1560), in every spelling argparse accepts — ``--flag V``,
+    ``--flag=V``, an abbreviation (``--secret-mounts-o``), ``-o V``, ``-oV``.
+    An abbreviation that could be more than one flag is read as each: this
+    list only ever STOPS a write, so reading too much is safe and reading
+    too little overwrote a file (review of #3615)."""
+    longs = [f.split("/")[-1] if f.startswith("-o/") else f
+             for f in FINDINGS_MUST_NOT_REPLACE.values()]
+    found: list[tuple[str, str]] = []
+    for i, tok in enumerate(argv):
+        if tok == "--":
+            break
+        nxt = argv[i + 1] if i + 1 < len(argv) else None
+        follows = nxt if nxt is not None and (nxt == "-" or not nxt.startswith("-")) else None
+        if tok.startswith("--"):
+            name, eq, value = tok.partition("=")
+            for long in longs:
+                if len(name) >= 3 and long.startswith(name):
+                    flag = "-o/--output" if long == "--output" else long
+                    v = value if eq else follows
+                    if v is not None:
+                        found.append((flag, v))
+        elif tok == "-o":
+            if follows is not None:
+                found.append(("-o/--output", follows))
+        elif tok.startswith("-o"):
+            # `-oV`; `-o=V` is read both ways (argparse's reading of the `=`
+            # has changed between versions), which is safe here.
+            found.append(("-o/--output", tok[2:]))
+            if tok[2:3] == "=":
+                found.append(("-o/--output", tok[3:]))
+    return found
+
+
 def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
     """The flags the --findings-json document needs, read from argv before
     the full parse (#2766), so a usage error still replaces a stale document
@@ -1746,7 +1813,8 @@ def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
     argv = sys.argv[1:] if argv is None else argv
     early = argparse.Namespace(findings_json=None, config_dir=None, base_config=None,
                                validate="--validate" in argv,
-                               strict="--strict" in argv)
+                               strict="--strict" in argv,
+                               path_values=_path_flag_values(argv))
     for i, tok in enumerate(argv):
         if tok == "--":
             break

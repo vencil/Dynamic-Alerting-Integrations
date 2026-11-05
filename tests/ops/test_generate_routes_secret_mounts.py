@@ -443,3 +443,48 @@ def test_devices_collide_with_nothing(tmp_path):
     r = _run(tmp_path, d, "--output-alertmanager", "-o", "/dev/null",
              "--findings-json", "/dev/null", "--secret-mounts-out", "/dev/null")
     assert r.returncode == 0, (r.stdout, r.stderr)
+
+
+@pytest.mark.parametrize("mode", [["--output-alertmanager", "--bogus"],
+                                  ["--output-alertmanager", "--dry-run"],
+                                  ["--validate"], []],
+                         ids=["usage-error", "dry-run", "validate", "no-mode"])
+@pytest.mark.parametrize("other", ["-o", "--secret-mounts-out"])
+def test_findings_never_replace_a_file_another_path_flag_names(tmp_path, mode, other):
+    """The --findings-json document is written on every exit, but never onto
+    a file another path flag of the command line names — whatever the mode,
+    and when the command line does not parse at all."""
+    d, _ = _out_args(tmp_path)
+    target = tmp_path / "one.file"
+    target.write_text("kept\n", encoding="utf-8")
+    r = _run(tmp_path, d, *mode, other, str(target), "--findings-json", str(target))
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert target.read_text(encoding="utf-8") == "kept\n"
+    named = "-o/--output" if other == "-o" else other
+    assert f"--findings-json names the same file as {named}" in r.stderr, r.stderr
+
+
+def test_an_abbreviated_path_flag_is_read_too(tmp_path):
+    d, _ = _out_args(tmp_path)
+    target = tmp_path / "one.file"
+    target.write_text("kept\n", encoding="utf-8")
+    r = _run(tmp_path, d, "--output-alertmanager", "--bogus", "--secret-mounts-o",
+             str(target), "--findings-json", str(target))
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert target.read_text(encoding="utf-8") == "kept\n"
+
+
+def test_dev_null_is_no_stdout_owner_even_when_stdout_is_dev_null(tmp_path):
+    """`_lib_io.targets_stdout` never counts a character device as fd 1's
+    file (`_is_our_stdout`), so `/dev/null` for two outputs is neither a
+    file clash nor a second stdout writer, also when fd 1 is /dev/null."""
+    if not os.path.exists("/dev/null") or not stat.S_ISCHR(os.stat("/dev/null").st_mode):
+        pytest.skip("no /dev/null character device on this host")
+    d, _ = _out_args(tmp_path)
+    policy = tmp_path / "policy.yaml"
+    policy.write_text(_POLICY, encoding="utf-8")
+    r = subprocess.run([sys.executable, str(_GAR), "--config-dir", str(d), "--policy", str(policy),
+                        "--output-alertmanager", "-o", "/dev/null", "--findings-json", "/dev/null"],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
+                       encoding="utf-8", errors="replace", timeout=300)
+    assert r.returncode == 0, r.stderr
