@@ -20,9 +20,15 @@ name: Nightly Race Detector
 # shards and parses them ONCE into a fragment — the same fragment one unsharded
 # leg used to produce. A single fan-in `report` job splits each module's result
 # into incidents (build / package timeout / data race / failing test /
-# unattributed) and keeps ONE tracking issue per failure fingerprint
+# unattributed / no-result, plus the warning-level slow-package) and keeps ONE
+# tracking issue per failure fingerprint
 # (`module|kind|subject`, the first line of the body), labelled
 # `test-isolation`, with that fingerprint's own first-seen date and latest run.
+# A slow-package (#3541 PR-B) is a package whose package-level Elapsed passed
+# half of the per-binary -timeout without hitting it (parse_go_test_json.py's
+# SLOW_PACKAGE_RATIO x GO_TEST_TIMEOUT_S). It gets its own issue but is a
+# warning: the module still reads GREEN and no job goes red for it, because
+# sharding cannot split one test binary — only cheaper tests can fix it.
 # One issue per module used to merge unrelated failures (#2977). It EDITS in
 # place rather than creating — GitHub does not notify on a title or body edit,
 # so a standing failure stays visible without mailing anyone nightly.
@@ -175,7 +181,8 @@ jobs:
         # It is a per-package-binary budget, so a package whose tests are merely
         # slow hits it too: threshold-exporter's cmd/da-guard did, twice (#2977).
         # Raising it is not the fix — that only postpones the next collision.
-        # plan_race_shards.py's GO_TEST_TIMEOUT_S mirrors it.
+        # GO_TEST_TIMEOUT_S in parse_go_test_json.py mirrors it (the planner and
+        # the slow-package threshold both read it; a test pins the two together).
         #
         # -short (#2977 option A): the -count=10 here exists to catch isolation
         # problems BETWEEN repetitions, which a reduced matrix exposes just as
