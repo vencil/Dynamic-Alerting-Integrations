@@ -12,7 +12,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Iterator, NamedTuple, Optional, Union
 
 from _lib_compat import find_project_root
 from _lib_constants import (
@@ -483,10 +483,140 @@ def secret_ref_problem(value: Any) -> Optional[str]:
     return None
 
 
+class CredentialRefSite(NamedTuple):
+    """One place in a receiver where a Secret reference may stand (#1560).
+
+    ``path`` is read from the receiver: a key, ``"*"`` for any key of a
+    mapping, ``"[]"`` for any item of a list. ``file_key`` is the
+    Alertmanager key the reference renders as — the leaf's sibling
+    (``password`` → ``password_file``), or, for a list item, the sibling list
+    the item moves to (a header's ``secrets[i]`` → that header's ``files``).
+
+    ``destination`` is the receiver field naming where the credential is
+    sent, when that is not the credential itself: the tenant writes it, so a
+    reference here takes only the tenant's own Secret, and only under a
+    policy whose non-empty ``allowed_domains`` admits that field's host
+    (written out, not a reference). None: the credential IS where it goes
+    (a webhook URL, a routing key). ``proxy`` is the proxy key the request
+    carrying it goes through (None: there is none). ``follows_redirects``:
+    upstream sends it again to whatever host a redirect names (custom
+    http_headers; Authorization is dropped on a cross-host redirect).
+    """
+
+    rtype: str
+    path: tuple[str, ...]
+    file_key: str
+    destination: Optional[tuple[str, ...]]
+    proxy: Optional[tuple[str, ...]]
+    follows_redirects: bool = False
+
+
+_HTTP_PROXY = ("http_config", "proxy_url")
+_OAUTH2_PROXY = ("http_config", "oauth2", "proxy_url")
+_TOKEN_URL = ("http_config", "oauth2", "token_url")
+
+#: ⛔ THE one table of where a Secret reference may stand (#1560). The schema
+#: (`anyOf: [<value>, secretRef]` at exactly these paths, pinned by
+#: tests/shared/test_secret_ref_schema.py), the shape check, the rendering,
+#: the binding rules and every listing of a receiver's references read it.
+#: Each `*_file` is the key prometheus/common v0.70.1 (Alertmanager v0.34.2)
+#: reads from a file: config/http_config.go BasicAuth.PasswordFile,
+#: Authorization.CredentialsFile, HTTPClientConfig.BearerTokenFile,
+#: TLSConfig.KeyFile, OAuth2.ClientSecretFile / ClientCertificateKeyFile,
+#: config/headers.go Header.Files; the receivers' own `*_file` for the rest.
+#: The oauth2 three go to token_url, through oauth2's own proxy_url (its
+#: token client is built from the OAuth2 block alone). Not here:
+#: proxy_connect_header (no file form upstream).
+CREDENTIAL_REF_SITES: tuple[CredentialRefSite, ...] = (
+    CredentialRefSite("webhook", ("url",), "url_file", None, _HTTP_PROXY),
+    CredentialRefSite("rocketchat", ("url",), "url_file", None, _HTTP_PROXY),
+    CredentialRefSite("slack", ("api_url",), "api_url_file", None, _HTTP_PROXY),
+    CredentialRefSite("teams", ("webhook_url",), "webhook_url_file", None, _HTTP_PROXY),
+    CredentialRefSite("pagerduty", ("service_key",), "service_key_file", None, _HTTP_PROXY),
+    CredentialRefSite("pagerduty", ("routing_key",), "routing_key_file", None, _HTTP_PROXY),
+    CredentialRefSite("email", ("auth_password",), "auth_password_file",
+                      ("smarthost",), None),
+    CredentialRefSite("webhook", ("http_config", "basic_auth", "password"),
+                      "password_file", ("url",), _HTTP_PROXY),
+    CredentialRefSite("webhook", ("http_config", "authorization", "credentials"),
+                      "credentials_file", ("url",), _HTTP_PROXY),
+    CredentialRefSite("webhook", ("http_config", "bearer_token"),
+                      "bearer_token_file", ("url",), _HTTP_PROXY),
+    CredentialRefSite("webhook", ("http_config", "tls_config", "key"),
+                      "key_file", ("url",), _HTTP_PROXY),
+    CredentialRefSite("webhook", ("http_config", "http_headers", "*", "secrets", "[]"),
+                      "files", ("url",), _HTTP_PROXY, follows_redirects=True),
+    CredentialRefSite("webhook", ("http_config", "oauth2", "client_secret"),
+                      "client_secret_file", _TOKEN_URL, _OAUTH2_PROXY),
+    CredentialRefSite("webhook", ("http_config", "oauth2", "client_certificate_key"),
+                      "client_certificate_key_file", _TOKEN_URL, _OAUTH2_PROXY),
+    CredentialRefSite("webhook", ("http_config", "oauth2", "tls_config", "key"),
+                      "key_file", _TOKEN_URL, _OAUTH2_PROXY),
+)
+
+
+def credential_ref_sites(rtype: str) -> tuple[CredentialRefSite, ...]:
+    """The ``CREDENTIAL_REF_SITES`` of receiver type *rtype*."""
+    return tuple(s for s in CREDENTIAL_REF_SITES if s.rtype == rtype)
+
+
+RefPath = tuple[Union[str, int], ...]
+
+
+def ref_path_text(path: RefPath) -> str:
+    """``("http_config", "http_headers", "X", "secrets", 0)`` →
+    ``http_config.http_headers.X.secrets[0]``."""
+    out = ""
+    for part in path:
+        out += f"[{part}]" if isinstance(part, int) else (f".{part}" if out else str(part))
+    return out
+
+
+def _walk_site(value: Any, pattern: tuple[str, ...], here: RefPath) -> Iterator[RefPath]:
+    if not pattern:
+        if is_secret_ref(value):
+            yield here
+        return
+    step, rest = pattern[0], pattern[1:]
+    if step == "[]":
+        if isinstance(value, list):
+            for i, item in enumerate(value):
+                yield from _walk_site(item, rest, here + (i,))
+    elif isinstance(value, dict):
+        keys = ([k for k in value if isinstance(k, str)] if step == "*"
+                else [step] if step in value else [])
+        for k in keys:
+            yield from _walk_site(value[k], rest, here + (k,))
+
+
+def find_credential_refs(receiver: Any) -> list[tuple[CredentialRefSite, RefPath]]:
+    """``(site, concrete path)`` of every Secret reference (``is_secret_ref``)
+    standing on a ``CREDENTIAL_REF_SITES`` path of *receiver*, in table
+    order. A receiver that is not a mapping, or whose ``type`` is not a
+    known type string, has none."""
+    if not isinstance(receiver, dict) or not isinstance(receiver.get("type"), str):
+        return []
+    return [(site, path) for site in credential_ref_sites(receiver["type"])
+            for path in _walk_site(receiver, site.path, ())]
+
+
+def ref_value_at(receiver: Any, path: RefPath) -> Any:
+    """The value at concrete *path* of *receiver* (None when absent)."""
+    value = receiver
+    for part in path:
+        if isinstance(part, int):
+            if not isinstance(value, list) or part >= len(value):
+                return None
+        elif not isinstance(value, dict) or part not in value:
+            return None
+        value = value[part]
+    return value
+
+
 def receiver_secret_ref_fields(rtype: str) -> list[str]:
-    """The fields of *rtype* the schema lets hold a Secret reference."""
-    return [f for f, prop in _receiver_field_schemas().get(rtype, {}).items()
-            if prop.get("secret_ref")]
+    """The top-level fields of *rtype* that take a Secret reference
+    (``CREDENTIAL_REF_SITES`` of one key)."""
+    return [s.path[0] for s in credential_ref_sites(rtype) if len(s.path) == 1]
 
 
 def _receiver_secret_ref_problem(rtype: str, receiver: dict[str, Any]) -> Optional[str]:
