@@ -1186,11 +1186,9 @@ RECIPES: list[Recipe] = [
     # ── migrate_to_operator  (⚠ known multi-mode trap) ─────────────────────
     R("migrate_to_operator", "dry-run",
       lambda t, s: ["--source-dir", str(K8S_MONITORING),
-                    "--config-dir", str(SEED_CONF_D),
                     "--output-dir", _out(t, "crds"), "--dry-run", "--json"]),
     R("migrate_to_operator", "checklist-only",
       lambda t, s: ["--source-dir", str(K8S_MONITORING),
-                    "--config-dir", str(SEED_CONF_D),
                     "--output-dir", _out(t, "crds2"), "--checklist-only", "--json"],
       doc_check=_checklist_doc),
     # THE COMBINATION RECIPE (#1112, CodeRabbit). The two mode flags above are
@@ -1201,13 +1199,11 @@ RECIPES: list[Recipe] = [
     # `doc_check`: this recipe is worthless without it.
     R("migrate_to_operator", "checklist-only-dry-run",
       lambda t, s: ["--source-dir", str(K8S_MONITORING),
-                    "--config-dir", str(SEED_CONF_D),
                     "--output-dir", _out(t, "crds2b"),
                     "--checklist-only", "--dry-run", "--json"],
       doc_check=_checklist_doc),
     R("migrate_to_operator", "write",
       lambda t, s: ["--source-dir", str(K8S_MONITORING),
-                    "--config-dir", str(SEED_CONF_D),
                     "--output-dir", _out(t, "crds3"), "--json"]),
 
     # ── notification_tester ────────────────────────────────────────────────
@@ -1244,15 +1240,12 @@ RECIPES: list[Recipe] = [
     # ── operator_generate  (⚠ known multi-mode trap: kustomize branch) ─────
     R("operator_generate", "dry-run",
       lambda t, s: ["--rule-packs-dir", str(RULE_PACKS),
-                    "--config-dir", str(SEED_CONF_D),
                     "--output-dir", _out(t, "op1"), "--dry-run", "--json"]),
     R("operator_generate", "write",
       lambda t, s: ["--rule-packs-dir", str(RULE_PACKS),
-                    "--config-dir", str(SEED_CONF_D),
                     "--output-dir", _out(t, "op2"), "--json"]),
     R("operator_generate", "kustomize",
       lambda t, s: ["--rule-packs-dir", str(RULE_PACKS),
-                    "--config-dir", str(SEED_CONF_D),
                     "--output-dir", _out(t, "op3"), "--kustomize", "--json"],
       doc_check=_kustomization_doc),
     # COMBINATION recipe (#1112 flag-matrix sweep): `--dry-run` and `--kustomize`
@@ -1261,7 +1254,6 @@ RECIPES: list[Recipe] = [
     # working behaviour rather than fixing broken behaviour.
     R("operator_generate", "dry-run-kustomize",
       lambda t, s: ["--rule-packs-dir", str(RULE_PACKS),
-                    "--config-dir", str(SEED_CONF_D),
                     "--output-dir", _out(t, "op4"),
                     "--dry-run", "--kustomize", "--json"],
       doc_check=_kustomization_doc),
@@ -1698,7 +1690,8 @@ CRASH_RECIPES = list({r.tool: r for r in reversed(RECIPES)
 # (module, attribute to break)
 OWN_BROAD_HANDLER = {
     "config_diff": ("_render_diff", "compare"),
-    "operator_generate": ("_lib_confd", "tree_tenants"),
+    # #3572: it reads no conf.d any more; the rule packs are its work.
+    "operator_generate": ("_lib_consumer_read", "prometheus_rule_files"),
 }
 _HANDLER_WRAPPER = f"""
 import importlib, os, runpy, sys

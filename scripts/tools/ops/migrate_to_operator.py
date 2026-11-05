@@ -2,13 +2,18 @@
 """migrate-to-operator — Migrate ConfigMap-based rules to Operator CRD format.
 
 Reads existing Prometheus ConfigMap rules (from configmaps/ or live cluster export)
-and conf.d/ tenant configs, then produces equivalent PrometheusRule + AlertmanagerConfig
-CRDs along with a step-by-step migration checklist.
+and produces equivalent PrometheusRule CRDs along with a step-by-step migration
+checklist. It reads no conf.d.
 
-The conf.d tenants are the keys of each tenant file's `tenants:` mapping, at
-any depth, read through `da-guard parse-tree` (ADR-036) — not file names. A
-tenant file parse-tree cannot read, a tenant id declared in two files, or no
-usable da-guard exits 2.
+⛔ No Alertmanager routing (#3572): `generate-routes` is the one Alertmanager
+route renderer. AlertmanagerConfig CRDs cannot carry it — the Prometheus
+Operator puts their routes first with `continue: true` and a namespace
+matcher, so the platform routes (Watchdog, custom isolation, synthetic probe,
+sentinel) could never come first. The flags that only fed AlertmanagerConfig
+(`--config-dir`, `--receiver-template`, `--secret-name`, `--secret-key`) are
+refused (rc 2) with how to render alertmanager.yaml and hand it to the
+Alertmanager as its configSecret (`_lib_constants.OPERATOR_ROUTING_REMEDY_*`);
+the checklist carries the same steps.
 
 The --source-dir files are what their readers say (#3426): a manifest kubectl
 reads (da-crdecode; a `kind: List` is read as its items), or else a plain rule
@@ -19,7 +24,7 @@ not apply — exits 2 before anything is written, every such file named with
 its reader's reason.
 
 Usage:
-    da-tools migrate-to-operator --source-dir configmaps/ --config-dir conf.d/   # stdout; nothing written
+    da-tools migrate-to-operator --source-dir configmaps/   # stdout; nothing written
     da-tools migrate-to-operator --source-dir configmaps/ --output-dir migration-output/   # writing is opt-in (#1582)
     da-tools migrate-to-operator --source-dir configmaps/ --dry-run
     da-tools migrate-to-operator --source-dir configmaps/ --checklist-only
@@ -33,7 +38,7 @@ import sys
 import textwrap
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
@@ -51,51 +56,51 @@ from _lib_exitcodes import (  # noqa: E402
     EXIT_CALLER_ERROR, CallerError, die_caller_error, encode_json)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
-from _lib_confd import (  # noqa: E402
-    TenantSetUnknown,
-    TreeTenants,
-    tree_tenants,
-    warn_nested,
-)
-import _lib_parse_cache  # noqa: E402  (#2906: one parse-tree snapshot per run)
+from _lib_confd import warn_nested  # noqa: E402
+import _lib_parse_cache  # noqa: E402  (parse_tree_error_line)
 import _lib_parse_tree  # noqa: E402
 from _lib_parse_tree import ParseTreeError  # noqa: E402
-from _lib_validation import is_valid_tenant_id  # noqa: E402  (ADR-035)
 from _lib_paths import classify_path, raise_path_problems, supplied  # noqa: E402  (#3392)
+from _lib_constants import (  # noqa: E402  (#3572)
+    DOCS_SITE_BASE, OPERATOR_ROUTING_REMEDY_EN, OPERATOR_ROUTING_REMEDY_ZH)
 import _lib_input  # noqa: E402  (#3446: --source-dir is a directory da-guard lists)
 
-_RECEIVER_TEMPLATES = ("slack", "pagerduty", "email", "teams", "opsgenie", "webhook")
+# #3572: the flags that only fed AlertmanagerConfig, as (flag, dest). Still
+# parsed — hidden (`help=argparse.SUPPRESS`), `default=None`, no type /
+# choices — so that giving one, with any value, is refused naming it with the
+# remedy rather than as a bare "unrecognized arguments": the caller learns
+# where routing went. They are declared one literal `add_argument` each in
+# the parser builder (the conf.d population walks read flags statically).
+_ROUTING_FLAGS = (
+    ("--config-dir", "config_dir"),
+    ("--receiver-template", "receiver_template"),
+    ("--secret-name", "secret_name"),
+    ("--secret-key", "secret_key"),
+)
 
 _HELP = {
     "zh": {
-        "desc": "將 ConfigMap 式規則遷移至 Operator CRD 格式（PrometheusRule、AlertmanagerConfig）",
-        "source_dir": "ConfigMap YAML 檔案來源目錄",
-        "config_dir": (
-            "租户配置目錄（預設 conf.d/）。租戶是整棵樹各租戶檔 `tenants:` 的鍵"
-            "（經 da-guard parse-tree 讀，不是檔名）；租戶檔讀不了或同一租戶在兩個檔宣告時以 rc 2 結束"
+        "desc": (
+            "將 ConfigMap 式規則遷移至 Operator CRD 格式（PrometheusRule）。"
+            "Alertmanager 路由不在此產生：用 generate-routes 產出 alertmanager.yaml，"
+            "交給 Alertmanager 當 configSecret（#3572）"
         ),
+        "source_dir": "ConfigMap YAML 檔案來源目錄",
         "output_dir": "把 CRD 與 checklist 寫進這個目錄。不給、或帶 --dry-run / --checklist-only，就改印到 stdout 而不寫任何檔案",
         "namespace": "目標命名空間（預設 monitoring）",
-        "receiver_template": f"Receiver 模板類型（{' | '.join(_RECEIVER_TEMPLATES)}）",
-        "secret_name": "K8s Secret 名稱（receiver 機密引用）",
-        "secret_key": "K8s Secret 中的 key 名稱（預設依 receiver 類型自動推斷）",
         "dry_run": "列印輸出而不寫入檔案",
         "checklist_only": "僅生成遷移檢核清單（不生成 CRD）",
         "json": "以 JSON 格式輸出結果報告",
     },
     "en": {
-        "desc": "Migrate ConfigMap-based Prometheus rules to Operator CRD format (PrometheusRule, AlertmanagerConfig)",
-        "source_dir": "Source directory with ConfigMap YAML files",
-        "config_dir": (
-            "Tenant config directory (default conf.d/). Tenants are the keys of each tenant "
-            "file's `tenants:` across the whole tree (read through da-guard parse-tree, not "
-            "file names); an unreadable tenant file or a tenant declared in two files exits 2"
+        "desc": (
+            "Migrate ConfigMap-based Prometheus rules to Operator CRD format (PrometheusRule). "
+            "Alertmanager routing is not generated here: render alertmanager.yaml with "
+            "generate-routes and give it to the Alertmanager as its configSecret (#3572)"
         ),
+        "source_dir": "Source directory with ConfigMap YAML files",
         "output_dir": "Write CRDs and the checklist into this directory. Omit it, or pass --dry-run / --checklist-only, and everything goes to stdout instead; nothing is written",
         "namespace": "Target namespace (default monitoring)",
-        "receiver_template": f"Receiver template type ({' | '.join(_RECEIVER_TEMPLATES)})",
-        "secret_name": "K8s Secret name (for receiver credential reference)",
-        "secret_key": "Key within the K8s Secret (auto-inferred from receiver type if omitted)",
         "dry_run": "Print output instead of writing files",
         "checklist_only": "Only generate migration checklist (skip CRD generation)",
         "json": "Output results as JSON report",
@@ -103,64 +108,6 @@ _HELP = {
 }
 
 _LANG = detect_cli_lang()
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Utility functions (reused from operator_generate)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-def validate_tenant_name(name: str) -> bool:
-    """Validate tenant name against K8s label value rules (RFC 1123)."""
-    # ADR-035: the one tenant-id rule (full match, #1779).
-    return is_valid_tenant_id(name)
-
-
-def _tree_tenants(config_dir: Path) -> TreeTenants:
-    """The tenant ids the conf.d tree declares, split by RFC 1123.
-
-    ADR-036 step 4 (#2906): `_lib_confd.tree_tenants` — the keys of the
-    `tenants:` mapping of every tenant file `da-guard parse-tree` selects,
-    at any depth, as source text; the same answer `operator_generate` takes,
-    so the two operator-plane readers cannot disagree about one tree
-    (#1604). ⛔ Not the file stem: `team-a.yaml` holding
-    `tenants: {db-a: …}` is tenant `db-a`, a tenant in `sub/x.yaml` is
-    found, and a file with no `tenants:` mapping (the flat format) is no
-    tenant — the exporter serves none from it.
-
-    Raises FileNotFoundError (directory missing), `TenantSetUnknown` (a
-    tenant file parse-tree cannot read, an id declared by two files) and
-    ParseTreeError (no usable parse-tree); `main` turns the last two into
-    rc 2.
-    """
-    if not config_dir.is_dir():
-        raise FileNotFoundError(
-            i18n_text(
-                f"配置目錄不存在: {config_dir}",
-                f"config directory not found: {config_dir}",
-            )
-        )
-    return tree_tenants(config_dir, validate=validate_tenant_name)
-
-
-def discover_tenant_configs(config_dir: Path) -> List[str]:
-    """The valid tenant ids of the conf.d tree (see `_tree_tenants`).
-
-    ⚠️ An invalid id is warned about on stderr here; `analyze_migration`
-    needs the same fact as DATA for its `issues` array, so it calls
-    `_tree_tenants` directly.
-    """
-    found = _tree_tenants(config_dir)
-    for tenant in found.invalid:
-        print(
-            i18n_text(
-                f"WARNING: 略過無效的租戶名稱 '{safe_label(tenant)}'（不符合 RFC 1123）",
-                f"WARNING: Skipping invalid tenant name '{safe_label(tenant)}' "
-                f"(not RFC 1123 compliant)",
-            ),
-            file=sys.stderr,
-        )
-    return found.tenants
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Migration-specific functions
@@ -353,120 +300,13 @@ def convert_rules_to_crd(
     }
 
 
-def _build_inhibit_rules_migration(tenant_name: str) -> list:
-    """Build inhibit rules for severity dedup + silent/maintenance modes."""
-    return [
-        {
-            "sourceMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "severity", "value": "critical"},
-            ],
-            "targetMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "severity", "value": "warning"},
-            ],
-            "equal": ["alertname", "instance"],
-        },
-        {
-            "sourceMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "alertname", "value": "TenantSilentWarning"},
-            ],
-            "targetMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "severity", "value": "warning"},
-            ],
-            "equal": ["tenant"],
-        },
-        {
-            "sourceMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "alertname", "value": "TenantSilentCritical"},
-            ],
-            "targetMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "severity", "value": "critical"},
-            ],
-            "equal": ["tenant"],
-        },
-        {
-            "sourceMatch": [
-                {"name": "tenant", "value": tenant_name},
-                {"name": "alertname", "value": "TenantMaintenanceMode"},
-            ],
-            "targetMatch": [
-                {"name": "tenant", "value": tenant_name},
-            ],
-            "equal": ["tenant"],
-        },
-    ]
-
-
-def build_alertmanager_config_for_migration(
-    tenant_name: str,
-    namespace: str,
-    receiver_template: Optional[str] = None,
-    secret_name: Optional[str] = None,
-    secret_key: Optional[str] = None,
-) -> dict:
-    """Build AlertmanagerConfig CRD for tenant migration.
-
-    Args:
-        tenant_name: Tenant identifier
-        namespace: Target Kubernetes namespace
-        receiver_template: Receiver type (if any)
-        secret_name: K8s Secret name
-        secret_key: Key within the K8s Secret
-
-    Returns:
-        AlertmanagerConfig CRD dict
-    """
-    receiver_name = f"{tenant_name}-receiver"
-    receiver = {
-        "name": receiver_name,
-        "webhookConfigs": [
-            {"url": "http://localhost:5001/webhook"},
-        ],
-    }
-
-    inhibit_rules = _build_inhibit_rules_migration(tenant_name)
-
-    return {
-        "apiVersion": "monitoring.coreos.com/v1beta1",
-        "kind": "AlertmanagerConfig",
-        "metadata": {
-            "name": f"da-tenant-{tenant_name}",
-            "namespace": namespace,
-            "labels": {
-                "app.kubernetes.io/part-of": "dynamic-alerting",
-                "tenant": tenant_name,
-                "migrated-from": "configmap",
-            },
-        },
-        "spec": {
-            "route": {
-                "receiver": receiver_name,
-                "groupBy": ["alertname", "instance"],
-                "groupWait": "5s",
-                "groupInterval": "5m",
-                "repeatInterval": "12h",
-                "matchers": [
-                    {"name": "tenant", "value": tenant_name},
-                ],
-            },
-            "receivers": [receiver],
-            "inhibitRules": inhibit_rules,
-        },
-    }
-
-
-def analyze_migration(source_dir: Path, config_dir: Path,
+def analyze_migration(source_dir: Path,
                       source_listing: "Optional[_lib_parse_tree.Listing]" = None) -> dict:
     """Analyze migration scope and identify potential issues.
 
     Args:
         source_dir: Directory with ConfigMap YAML files
-        config_dir: Directory with tenant configs
+        source_listing: its `list_source_dir` (taken here when None)
 
     Returns:
         Analysis dict with counts and issues
@@ -475,7 +315,6 @@ def analyze_migration(source_dir: Path, config_dir: Path,
         "configmap_files": 0,
         "already_crd": [],
         "rule_groups": 0,
-        "tenants": 0,
         "estimated_crds": 0,
         "issues": [],
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -496,30 +335,9 @@ def analyze_migration(source_dir: Path, config_dir: Path,
         ))
     # #3426: a rule file the rule loader refuses, an unreadable source file
     # and a missing da-read / da-crdecode are no `issues` entry beside a
-    # partial count: they reach `main` (`_tenant_set_or_exit`), rc 2.
+    # partial count: they reach `main` (`_sources_or_exit`), rc 2.
 
-    try:
-        # ⛔ The tenant set is parse-tree's (#2906); an invalid id becomes an
-        # `issues` entry here — `--json` consumers do not see the stderr
-        # warnings `discover_tenant_configs` prints. A tenant file
-        # parse-tree cannot read, or an id declared by two files, is not an
-        # issue but no answer: `TenantSetUnknown` reaches `main` (rc 2).
-        found = _tree_tenants(config_dir)
-        for raw_name in found.invalid:
-            analysis["issues"].append(
-                i18n_text(
-                    f"無效租戶名稱: {raw_name}（不符合 RFC 1123）",
-                    f"Invalid tenant name: {raw_name} (not RFC 1123 compliant)",
-                )
-            )
-        analysis["tenants"] = len(found.tenants)
-    except OSError as exc:
-        analysis["issues"].append(i18n_text(
-            f"配置目錄錯誤: {exc}",
-            f"Config directory error: {exc}",
-        ))
-
-    analysis["estimated_crds"] = analysis["configmap_files"] + analysis["tenants"]
+    analysis["estimated_crds"] = analysis["configmap_files"]
 
     return analysis
 
@@ -542,17 +360,24 @@ def _output_dir_arg(value: str) -> Path:
         ))
     return Path(value)
 
+# #3572: where the checklist sends the reader for Alertmanager routing under
+# the Operator — a published page (#1447: the reader's repository has no docs/).
+_ROUTING_DOC_URL = f"{DOCS_SITE_BASE}integration/operator-alertmanager-integration/"
+
+
 def build_migration_checklist(
     source_dir: Path,
-    config_dir: Path,
     output_dir: Optional[Path],
     result: dict,
 ) -> str:
     """Generate a markdown-formatted migration checklist.
 
+    Routing is no CRD this tool writes (#3572): its phase renders
+    alertmanager.yaml with generate-routes and hands it to the Alertmanager
+    as its configSecret.
+
     Args:
         source_dir: Source ConfigMap directory
-        config_dir: Tenant config directory
         output_dir: Output CRD directory, or ``None`` when no ``--output-dir``
             was given (#1582 — writing is opt-in)
         result: Migration result dict
@@ -566,9 +391,7 @@ def build_migration_checklist(
     if output_dir is None:
         output_dir = "<--output-dir>"
     timestamp = datetime.now(timezone.utc).isoformat()
-    pr_count = len(result.get("prometheus_rules", []))
-    ac_count = len(result.get("alertmanager_configs", []))
-    total = pr_count + ac_count
+    total = len(result.get("prometheus_rules", []))
     # #3426: PrometheusRules found in --source-dir are named here — they are
     # already the CRD, so nothing was converted from them.
     already = result.get("already_crd", [])
@@ -589,8 +412,7 @@ def build_migration_checklist(
 
 - **ConfigMap 檔案數**: {result.get('configmap_files', 0)}
 - **Rule 群組數**: {result.get('rule_group_count', 0)}
-- **租戶數**: {result.get('tenants', 0)}
-- **輸出 CRD 數**: {total} ({pr_count} PrometheusRules + {ac_count} AlertmanagerConfigs)
+- **輸出 CRD 數**: {total} PrometheusRules
 - **來源目錄**: {source_dir}
 - **輸出目錄**: {output_dir}
 {zh_already}
@@ -606,9 +428,25 @@ def build_migration_checklist(
 ### Phase 2: 套用新 CRD
 
 - [ ] 套用 PrometheusRule CRD (`kubectl apply -f {output_dir}/*-rule-pack-*.yaml`)
-- [ ] 套用 AlertmanagerConfig CRD (`kubectl apply -f {output_dir}/*-tenant-*.yaml`)
 - [ ] 等待 Prometheus reconcile（約 30-60 秒）
 - [ ] 驗證 Prometheus 載入新 Rule（`kubectl logs -n monitoring -l app=prometheus -c prometheus | grep "loaded groups"`)
+
+### Phase 2b: Alertmanager 路由（configSecret，不是 AlertmanagerConfig CRD）
+
+Alertmanager 路由不以 AlertmanagerConfig CRD 產生（#3572）：Prometheus Operator 會把它們的路由排在最前面、
+強制 `continue: true` 並加上 namespace matcher，平台路由（Watchdog、custom 隔離、synthetic probe、sentinel）
+因此無法排在第一。詳見 {_ROUTING_DOC_URL}
+
+- [ ] 用路由產生器產出 alertmanager.yaml：
+  ```
+  da-tools generate-routes --config-dir conf.d --output-alertmanager --base-config <你的 alertmanager.yaml> -o alertmanager.yaml
+  ```
+- [ ] 建立／更新 Secret：
+  ```
+  kubectl create secret generic <secret> -n monitoring --from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -
+  ```
+- [ ] 把 Alertmanager 的 configSecret 設為 `<secret>`（kube-prometheus-stack：`alertmanager.alertmanagerSpec.configSecret`）
+- [ ] 若叢集裡還有舊版 operator-generate 產生的 AlertmanagerConfig（`kubectl get alertmanagerconfig -A -l app.kubernetes.io/part-of=dynamic-alerting`），將它們刪除（`da-tools operator-check` 會以警告列出）
 
 ### Phase 3: 驗證規則
 
@@ -664,8 +502,8 @@ def build_migration_checklist(
 
 - 遷移過程中，Prometheus 不會中斷（配置滾動更新）
 - 新 CRD 被標記為 `migrated-from: configmap`，便於追蹤
-- 所有 AlertmanagerConfig 預設使用 webhook receiver，需要根據實際情況調整
-- 租戶 RBAC 和 routing 規則需在遷移後手動驗證
+- Alertmanager 路由只由 generate-routes 產出的 configSecret 承載；不要另外套用 AlertmanagerConfig CRD
+- 租戶 RBAC 需在遷移後手動驗證
 
 """
 
@@ -677,8 +515,7 @@ Generated: {timestamp}
 
 - **ConfigMap Files**: {result.get('configmap_files', 0)}
 - **Rule Groups**: {result.get('rule_group_count', 0)}
-- **Tenants**: {result.get('tenants', 0)}
-- **Output CRDs**: {total} ({pr_count} PrometheusRules + {ac_count} AlertmanagerConfigs)
+- **Output CRDs**: {total} PrometheusRules
 - **Source Directory**: {source_dir}
 - **Output Directory**: {output_dir}
 {en_already}
@@ -694,9 +531,25 @@ Generated: {timestamp}
 ### Phase 2: Apply New CRDs
 
 - [ ] Apply PrometheusRule CRDs (`kubectl apply -f {output_dir}/*-rule-pack-*.yaml`)
-- [ ] Apply AlertmanagerConfig CRDs (`kubectl apply -f {output_dir}/*-tenant-*.yaml`)
 - [ ] Wait for Prometheus reconciliation (approximately 30-60 seconds)
 - [ ] Verify Prometheus loaded new Rules (`kubectl logs -n monitoring -l app=prometheus -c prometheus | grep "loaded groups"`)
+
+### Phase 2b: Alertmanager Routing (configSecret, not AlertmanagerConfig CRDs)
+
+Alertmanager routing is not generated as AlertmanagerConfig CRDs (#3572): the Prometheus Operator puts their
+routes first with `continue: true` and a namespace matcher, so the platform routes (Watchdog, custom isolation,
+synthetic probe, sentinel) could not come first. See {_ROUTING_DOC_URL}
+
+- [ ] Render alertmanager.yaml with the route generator:
+  ```
+  da-tools generate-routes --config-dir conf.d --output-alertmanager --base-config <your alertmanager.yaml> -o alertmanager.yaml
+  ```
+- [ ] Create / update the Secret:
+  ```
+  kubectl create secret generic <secret> -n monitoring --from-file=alertmanager.yaml --dry-run=client -o yaml | kubectl apply -f -
+  ```
+- [ ] Set the Alertmanager's configSecret to `<secret>` (kube-prometheus-stack: `alertmanager.alertmanagerSpec.configSecret`)
+- [ ] Delete any AlertmanagerConfigs an older operator-generate left in the cluster (`kubectl get alertmanagerconfig -A -l app.kubernetes.io/part-of=dynamic-alerting`; `da-tools operator-check` warns about them)
 
 ### Phase 3: Verify Rules
 
@@ -752,8 +605,8 @@ If rollback is needed:
 
 - Prometheus will not be interrupted during migration (rolling configuration update)
 - New CRDs are marked with `migrated-from: configmap` for tracking
-- All AlertmanagerConfigs default to webhook receiver; adjust according to actual needs
-- Tenant RBAC and routing rules must be manually verified post-migration
+- Alertmanager routing lives only in the configSecret generate-routes renders; do not apply AlertmanagerConfig CRDs beside it
+- Tenant RBAC must be manually verified post-migration
 
 """
 
@@ -762,24 +615,17 @@ If rollback is needed:
 
 def generate_migration(
     source_dir: Path,
-    config_dir: Path,
     output_dir: Optional[Path],
     namespace: str,
-    receiver_template: Optional[str] = None,
-    secret_name: Optional[str] = None,
-    secret_key: Optional[str] = None,
     source_listing: "Optional[_lib_parse_tree.Listing]" = None,
 ) -> dict:
     """Main orchestration: parse → convert → write CRDs.
 
     Args:
         source_dir: Source ConfigMap directory
-        config_dir: Tenant config directory
         output_dir: Output CRD directory
         namespace: Target Kubernetes namespace
-        receiver_template: Receiver type for AlertmanagerConfig
-        secret_name: K8s Secret name
-        secret_key: Key within the K8s Secret
+        source_listing: its `list_source_dir` (taken here when None)
 
     Returns:
         Result dict with generated CRDs and metadata
@@ -788,11 +634,9 @@ def generate_migration(
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "namespace": namespace,
         "prometheus_rules": [],
-        "alertmanager_configs": [],
         "configmap_files": 0,
         "already_crd": [],
         "rule_group_count": 0,
-        "tenants": 0,
         "errors": [],
     }
 
@@ -829,31 +673,6 @@ def generate_migration(
     # ConsumerReadError (a refused rule file, no da-read / da-crdecode)
     # reaches `main`: rc 2 before any write (#3426).
 
-    # Generate AlertmanagerConfig CRDs for tenants
-    try:
-        tenants = discover_tenant_configs(config_dir)
-        result["tenants"] = len(tenants)
-
-        for tenant in tenants:
-            try:
-                crd = build_alertmanager_config_for_migration(
-                    tenant, namespace, receiver_template, secret_name, secret_key,
-                )
-                result["alertmanager_configs"].append({
-                    "name": crd["metadata"]["name"],
-                    "tenant": tenant,
-                    "crd": crd,
-                })
-            except Exception as exc:
-                result["errors"].append(
-                    i18n_text(
-                        f"為租戶 {tenant} 生成 AlertmanagerConfig 失敗: {exc}",
-                        f"Failed to generate AlertmanagerConfig for tenant {tenant}: {exc}",
-                    )
-                )
-    except FileNotFoundError as exc:
-        result["errors"].append(str(exc))
-
     return result
 
 
@@ -866,7 +685,6 @@ def plan_stdout(
     checklist: str,
     namespace: str,
     source_dir: Path,
-    config_dir: Path,
 ) -> List[str]:
     """Pure decision table for the (checklist_only × dry_run × json) matrix.
 
@@ -903,7 +721,6 @@ def plan_stdout(
         checklist: pre-rendered migration checklist markdown
         namespace: target namespace (dry-run JSON preview metadata)
         source_dir: resolved source dir (dry-run JSON preview metadata)
-        config_dir: resolved config dir (dry-run JSON preview metadata)
 
     Returns:
         List of text chunks to write to stdout, in order.
@@ -925,13 +742,10 @@ def plan_stdout(
                     "timestamp": result.get("timestamp"),
                     "namespace": namespace,
                     "source_dir": str(source_dir),
-                    "config_dir": str(config_dir),
                     "configmap_files": result.get("configmap_files", 0),
                     "rule_groups": result.get("rule_group_count", 0),
-                    "tenants": result.get("tenants", 0),
                 },
                 "prometheus_rules": [item["crd"] for item in result.get("prometheus_rules", [])],
-                "alertmanager_configs": [item["crd"] for item in result.get("alertmanager_configs", [])],
                 # #3426: PrometheusRules of --source-dir, named, not converted
                 "already_crd": list(result.get("already_crd", [])),
                 "errors": result.get("errors", []),
@@ -942,7 +756,6 @@ def plan_stdout(
             docs.append(checklist + "\n")
             docs.append("\n# CRD PREVIEW\n\n")
             all_crds = [item["crd"] for item in result["prometheus_rules"]]
-            all_crds += [item["crd"] for item in result["alertmanager_configs"]]
             if yaml:
                 for i, crd in enumerate(all_crds):
                     if i > 0:
@@ -966,14 +779,11 @@ def plan_stdout(
     # this run's one document, so suppressing it would leave stdout empty
     # while `--json` was asked for. Hence `or checklist_only`.
     if json_mode and (not dry_run or checklist_only):
-        total_crds = len(result["prometheus_rules"]) + len(result["alertmanager_configs"])
         summary = {
             "configmap_files": result.get("configmap_files", 0),
             "rule_groups": result.get("rule_group_count", 0),
-            "tenants": result.get("tenants", 0),
             "prometheus_rules": len(result["prometheus_rules"]),
-            "alertmanager_configs": len(result["alertmanager_configs"]),
-            "total_crds": total_crds,
+            "total_crds": len(result["prometheus_rules"]),
             # #3426: PrometheusRules of --source-dir, named, not converted
             "already_crd": list(result.get("already_crd", [])),
         }
@@ -991,13 +801,13 @@ def plan_stdout(
     return docs
 
 
-def _tenant_set_or_exit(fn, *args, **kwargs):
-    """*fn*'s result; a conf.d whose tenant set cannot be answered exits 2.
+def _sources_or_exit(fn, *args, **kwargs):
+    """*fn*'s result; a --source-dir that cannot be answered exits 2.
 
-    ⛔ Fail-closed (#2906): a tenant file `da-guard parse-tree` cannot read,
-    or one id declared by two files, leaves the set of AlertmanagerConfigs
-    to emit unknown — an `issues` line next to a partial set would read as
-    a migration plan. No usable parse-tree is the same: nothing was read.
+    ⛔ Fail-closed: a source file no reader reads, a rule file the rule
+    loader refuses, or no usable da-guard / da-read / da-crdecode leaves the
+    CRD set unknown — an `issues` line next to a partial set would read as a
+    migration plan.
     """
     try:
         return fn(*args, **kwargs)
@@ -1012,13 +822,25 @@ def _tenant_set_or_exit(fn, *args, **kwargs):
         die_caller_error(f"ERROR: --source-dir rule files: {_lib_consumer_read.error_text(exc)}",
                          reason="rule_files_unreadable")
     except ParseTreeError as exc:
+        # No usable `da-guard parse-tree --list-only`: --source-dir was not listed.
         die_caller_error(_lib_parse_cache.parse_tree_error_line(exc),
-                         reason="tenant_set_unknown")
-    except TenantSetUnknown as exc:
-        die_caller_error(f"ERROR: {safe_label(exc)}", reason="tenant_set_unknown")
+                         reason="source_dir_unlisted")
 
 
-@_lib_parse_cache.session()  # analysis and generation read ONE parse-tree snapshot
+def refuse_routing_flags(args: argparse.Namespace, parser: argparse.ArgumentParser) -> None:
+    """#3572: a flag that only fed AlertmanagerConfig is a caller error (rc 2,
+    nothing on stdout, nothing written) that names it and says how routing is
+    rendered now. A flag counts when it was given (`supplied`), whatever its
+    value: an explicit `--config-dir conf.d` (the old default) is refused like
+    any other."""
+    given = [flag for flag, dest in _ROUTING_FLAGS if supplied(args, parser, dest)]
+    if given:
+        die_caller_error(
+            f"ERROR: {', '.join(given)}: "
+            f"{i18n_text(OPERATOR_ROUTING_REMEDY_ZH, OPERATOR_ROUTING_REMEDY_EN)}",
+            reason="routing_not_generated")
+
+
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
@@ -1031,12 +853,6 @@ def main():
         help=i18n_text(_HELP["zh"]["source_dir"], _HELP["en"]["source_dir"]),
     )
     parser.add_argument(
-        "--config-dir",
-        type=Path,
-        default=Path("conf.d"),
-        help=i18n_text(_HELP["zh"]["config_dir"], _HELP["en"]["config_dir"]),
-    )
-    parser.add_argument(
         "--output-dir",
         type=_output_dir_arg,
         default=None,   # #1582：不給就不寫檔（寫入是 opt-in），見 main() 的寫入閘
@@ -1047,25 +863,11 @@ def main():
         default="monitoring",
         help=i18n_text(_HELP["zh"]["namespace"], _HELP["en"]["namespace"]),
     )
-    parser.add_argument(
-        "--receiver-template",
-        choices=list(_RECEIVER_TEMPLATES),
-        default=None,
-        help=i18n_text(
-            _HELP["zh"]["receiver_template"],
-            _HELP["en"]["receiver_template"],
-        ),
-    )
-    parser.add_argument(
-        "--secret-name",
-        default=None,
-        help=i18n_text(_HELP["zh"]["secret_name"], _HELP["en"]["secret_name"]),
-    )
-    parser.add_argument(
-        "--secret-key",
-        default=None,
-        help=i18n_text(_HELP["zh"]["secret_key"], _HELP["en"]["secret_key"]),
-    )
+    # #3572: hidden and refused (`refuse_routing_flags`) — see _ROUTING_FLAGS.
+    parser.add_argument("--config-dir", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--receiver-template", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--secret-name", default=None, help=argparse.SUPPRESS)
+    parser.add_argument("--secret-key", default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--dry-run",
         action="store_true",
@@ -1086,18 +888,16 @@ def main():
     )
 
     args = parser.parse_args()
+    refuse_routing_flags(args, parser)
     # #3392: a directory the caller gave that is not there or not a
     # directory is a caller error, named before anything is analysed or
     # written — it was an `issues` WARNING and a checklist / CRD set made from
-    # nothing, rc 0. The --config-dir default nobody gave keeps that reading.
+    # nothing, rc 0.
     raise_path_problems([
-        classify_path(args.source_dir, "dir", lang=_LANG, flag="--source-dir"),
-        classify_path(args.config_dir, "dir", lang=_LANG, flag="--config-dir")
-        if supplied(args, parser, "config_dir") else None])
+        classify_path(args.source_dir, "dir", lang=_LANG, flag="--source-dir")])
 
     # Resolve paths
     source_dir = _lib_input.selected(args, "source_dir", lang=_LANG)[0].resolve()
-    config_dir = args.config_dir.resolve()
     # #1582：沒給 --output-dir 就沒有寫入目標。⛔ 不要在這裡塞回一個預設值。
     output_dir = args.output_dir.resolve() if args.output_dir is not None else None
 
@@ -1122,9 +922,9 @@ def main():
         file=sys.stderr,
     )
     # One listing of --source-dir for analysis and generation (#3206).
-    source_listing = (_tenant_set_or_exit(list_source_dir, source_dir)
+    source_listing = (_sources_or_exit(list_source_dir, source_dir)
                       if source_dir.is_dir() else None)
-    analysis = _tenant_set_or_exit(analyze_migration, source_dir, config_dir, source_listing)
+    analysis = _sources_or_exit(analyze_migration, source_dir, source_listing)
 
     if analysis["issues"]:
         for issue in analysis["issues"]:
@@ -1138,7 +938,6 @@ def main():
     if args.checklist_only:
         result = analysis
         result["prometheus_rules"] = []
-        result["alertmanager_configs"] = []
         # analyze_migration() counts rule groups under "rule_groups", but the
         # checklist/summary consumers read generate_migration()'s key
         # "rule_group_count" — without this bridge the count is always 0.
@@ -1151,21 +950,17 @@ def main():
             ),
             file=sys.stderr,
         )
-        result = _tenant_set_or_exit(
+        result = _sources_or_exit(
             generate_migration,
             source_dir,
-            config_dir,
             output_dir,
             args.namespace,
-            receiver_template=args.receiver_template,
-            secret_name=args.secret_name,
-            secret_key=args.secret_key,
             source_listing=source_listing,
         )
 
     # The checklist is rendered once here (pure string) and reused by both the
     # write-mode file and whatever stdout documents plan_stdout() selects.
-    checklist = build_migration_checklist(source_dir, config_dir, output_dir, result)
+    checklist = build_migration_checklist(source_dir, output_dir, result)
 
     # Write mode: the only branch with filesystem side effects. Progress lines
     # go to stderr (existing convention); stdout is decided below.
@@ -1180,13 +975,6 @@ def main():
 
             # Write CRD files
             for item in result["prometheus_rules"]:
-                crd = item["crd"]
-                name = crd["metadata"]["name"]
-                output_path = output_dir / f"{name}.yaml"
-                write_yaml_crd(output_path, crd, gitops=False, flag="--output-dir")
-                print(f"Generated: {safe_label(output_path)}", file=sys.stderr)
-
-            for item in result["alertmanager_configs"]:
                 crd = item["crd"]
                 name = crd["metadata"]["name"]
                 output_path = output_dir / f"{name}.yaml"
@@ -1213,7 +1001,6 @@ def main():
         checklist=checklist,
         namespace=args.namespace,
         source_dir=source_dir,
-        config_dir=config_dir,
     ):
         print(doc, end="")
 
@@ -1221,19 +1008,14 @@ def main():
     # summary, when one is due, is a stdout document owned by plan_stdout()).
     if not args.json:
         pr_count = len(result["prometheus_rules"])
-        ac_count = len(result["alertmanager_configs"])
-        total_crds = pr_count + ac_count
-        tenants = result.get("tenants", 0)
         print(
             i18n_text(
                 f"\n✓ 遷移分析完成: {result.get('configmap_files', 0)} 個 ConfigMap → "
-                f"{total_crds} 個 CRD ({pr_count} PrometheusRules + "
-                f"{ac_count} AlertmanagerConfigs，"
-                f"{tenants} 個租戶)",
+                f"{pr_count} 個 PrometheusRule CRD（Alertmanager 路由見 checklist："
+                f"generate-routes + configSecret）",
                 f"\n✓ Migration analysis complete: {result.get('configmap_files', 0)} ConfigMaps → "
-                f"{total_crds} CRDs ({pr_count} PrometheusRules + "
-                f"{ac_count} AlertmanagerConfigs, "
-                f"{tenants} tenants)",
+                f"{pr_count} PrometheusRule CRDs (Alertmanager routing: see the checklist — "
+                f"generate-routes + configSecret)",
             ),
             file=sys.stderr,
         )

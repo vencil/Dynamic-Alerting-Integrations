@@ -74,7 +74,7 @@ def _build_help_text(lang):
     generator-service 產生器容器的服務：經 Unix socket 判定寫入後的 conf.d 能否通過 generate-routes --validate --strict (ADR-036 §3)
 
 命令 (Operator-Native — CRD 產生與驗證):
-    operator-generate 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
+    operator-generate 產出 PrometheusRule / ServiceMonitor CRD YAML（Alertmanager 路由改用 generate-routes → configSecret）
     operator-check    驗證 Operator CRD 部署狀態 (5 項檢查 + 診斷報告)
     runtime-audit     Git rule-packs ↔ Prometheus runtime 唯讀對帳 (#747；MISSING/UNHEALTHY/ORPHAN)
     migrate-to-operator ConfigMap 格式遷移至 Operator 原生 CRD (含遷移清單與預檢)
@@ -164,7 +164,7 @@ Commands (File System — offline):
     generator-service Generator container service: judge a conf.d plus writes with generate-routes --validate --strict over a Unix socket (ADR-036 §3)
 
 Commands (Operator-Native — CRD generation & validation):
-    operator-generate Generate PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
+    operator-generate Generate PrometheusRule / ServiceMonitor CRD YAML (Alertmanager routing: generate-routes → configSecret)
     operator-check    Validate Operator CRD deployment status (5 checks + diagnostic report)
     runtime-audit     Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING/UNHEALTHY/ORPHAN)
     migrate-to-operator Migrate ConfigMap format to Operator native CRD (migration checklist + pre-check)

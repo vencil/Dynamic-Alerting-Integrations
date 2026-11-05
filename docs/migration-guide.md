@@ -141,7 +141,7 @@ AST 引擎深度（為什麼 `promql-parser` 比 regex 準）+ 完整啟發規�
 
 - **選項 A（推薦）**：OCI Registry — `helm upgrade --install threshold-exporter oci://ghcr.io/vencil/charts/threshold-exporter --version 2.9.0 -n monitoring -f values-override.yaml`
 - **選項 B**：本地建置 — `docker build` + `kind load` + `make component-deploy`
-- **選項 C**：Operator CRD 路徑 — `da-tools operator-generate`，取代 ConfigMap 掛載（已安裝 kube-prometheus-stack 環境適用）
+- **選項 C**：Operator CRD 路徑 — `da-tools operator-generate` 產生 PrometheusRule／ServiceMonitor，取代 ConfigMap 掛載；告警路由由 `generate-routes` 產出、經 Alertmanager CR 的 `configSecret` 載入（已安裝 kube-prometheus-stack 環境適用）
 
 兩種路徑的詳細比較與決策指引見 [Deployment Decision Matrix](getting-started/decision-matrix.md)。完整 Helm values、Operator CRD migration、Use da-tools in K8s Cluster 模式：[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署) · [Operator integration guides](integration/operator-prometheus-integration.md)。
 

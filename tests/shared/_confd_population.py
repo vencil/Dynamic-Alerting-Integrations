@@ -107,6 +107,8 @@ def confd_flag(path: pathlib.Path) -> str | None:
         fn = node.func
         if not (isinstance(fn, ast.Attribute) and fn.attr == "add_argument"):
             continue
+        if is_suppressed(node):
+            continue
         for arg in node.args:
             if isinstance(arg, ast.Constant) and arg.value in CONFD_FLAGS:
                 found.add(arg.value)
@@ -115,6 +117,15 @@ def confd_flag(path: pathlib.Path) -> str | None:
         if preferred in found:
             return preferred
     return None
+
+
+def is_suppressed(call: ast.Call) -> bool:
+    """`add_argument(..., help=argparse.SUPPRESS)`: a hidden argument. #3572:
+    such a flag is declared only to be refused (`operator-generate
+    --config-dir` exits 2 with the routing remedy whatever its value), so it
+    does not make the tool a conf.d reader."""
+    return any(kw.arg == "help" and isinstance(kw.value, ast.Attribute)
+               and kw.value.attr == "SUPPRESS" for kw in call.keywords)
 
 
 def mentions_confd(src: str) -> bool:

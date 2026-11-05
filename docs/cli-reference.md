@@ -160,7 +160,7 @@ da-tools <command> --help
 
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
-| `operator-generate` | Rule Packs + Tenant 配置 → PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--rule-packs-dir <dir>` |
+| `operator-generate` | Rule Packs → PrometheusRule / ServiceMonitor CRD YAML（不讀 conf.d；路由走 `generate-routes`） | `--rule-packs-dir <dir>` |
 | `operator-check` | Operator CRD 部署狀態驗證（檢查項目 + 診斷報告） | `[--namespace <ns>]` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（#747；MISSING / UNHEALTHY / ORPHAN） | `--prometheus <url>` 或 `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3），Federation Scenario B | `--rule-packs-dir <dir>` |
@@ -1582,11 +1582,11 @@ da-tools silencer-drift-check --silences-file silences.json --rule-pack-dir rule
 
 #### operator-generate
 
-從 Rule Packs 與 Tenant 配置產出 Kubernetes Operator CRD（PrometheusRule、AlertmanagerConfig、ServiceMonitor）。
+從 Rule Packs 產出 Kubernetes Operator CRD（PrometheusRule、ServiceMonitor）。不讀 conf.d。
 
-conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
+**不產生 Alertmanager 路由**（[#3572](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3572)）：路由只由 [`generate-routes`](#generate-routes) 渲染。AlertmanagerConfig CRD 承載不了它——Prometheus Operator 把 CR 的路由插在全域路由之前、強制 `continue: true`，預設還加上 `namespace` matcher，平台路由排不到最前面。Operator 路徑上的做法是 `generate-routes --output-alertmanager` 產出 `alertmanager.yaml`、放進 Secret、由 Alertmanager CR 的 `spec.configSecret` 載入，見 [Operator Alertmanager 整合](integration/operator-alertmanager-integration.md)。`--components alertmanager` 與只供 AlertmanagerConfig 用的旗標（`--config-dir`、`--api-version`、`--receiver-template`、`--secret-name`、`--secret-key`）給了就結束碼 2（不論值）：stdout 為空、不寫任何檔，錯誤訊息點名旗標並附上述做法。`--json` 的 `summary` 沒有 `alertmanager_configs` 鍵。⚠️ v2.9.0 映像仍是舊行為：接受這些旗標，`all` 含 `alertmanager`、讀 conf.d、每個租戶產出一份 AlertmanagerConfig <!-- image-caveat: v2.9.0 -->
 
-**用途**：Prometheus Operator 叢集中的動態告警規則與路由部署；GitOps 友好的 CRD YAML 產生。
+**用途**：Prometheus Operator 叢集中的動態告警規則部署；GitOps 友好的 CRD YAML 產生。
 
 **語法**
 
@@ -1599,14 +1599,14 @@ da-tools operator-generate [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--rule-packs-dir <DIR>` | Rule Pack 目錄；pack 清單取自 `rule_pack_files` 這份宣告（頂層 `rule-pack-*.yaml`／`.yml`，旁邊的 `threshold-registry.yaml` 也已宣告），目錄頂層其他 YAML（副檔名不分大小寫）或懸空 symlink 會被點名、結束碼 2（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）。明確給了卻不存在、不是目錄或是 symlink 迴圈 ⇒ exit `2`，任何東西產出之前點名（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)）；先前印 WARNING 後照樣產出、rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）；只判定所選 `--components` 會讀的目錄，沒給時的預設值不判定。宣告為平台 pack 的（`_lib_consumer_read.PLATFORM_PACKS`，即 `rule-pack-platform.yaml`）也輸出，但去掉 kube-prometheus-stack 沒有其指標來源的 rule：由 `_lib_metric_sources.operator_split` 依 scrape 閘門的 metric family 表推導，去掉的每條在 stderr 印一行 `NOTE:` 並列在該 PrometheusRule 的 `dynamic-alerting.io/operator-excluded-rules` annotation（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)；目前是哪幾條見 [Operator Prometheus 整合指南](integration/operator-prometheus-integration.md)）。 | `rule-packs/` |
-| `--config-dir <DIR>` | 租戶配置目錄路徑。每個租戶一份 AlertmanagerConfig；租戶是整棵樹（含子目錄）各租戶檔 `tenants:` 的鍵，經 `da-guard parse-tree` 讀，**不是檔名**——`team-a.yaml` 裡寫 `tenants: {db-a: …}` 的租戶是 `db-a`，沒有 `tenants:` 的平面格式檔不產生租戶。⚠️ 有 parse-tree 讀不了的租戶檔（逐一指名檔與 kind）、同一租戶在兩個檔宣告、或沒有可用的 da-guard ⇒ exit `2`，一個 CRD 也不產出（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)））。不符合 RFC 1123 的租戶 id 印警告後略過。明確給了卻不存在、不是目錄或是 symlink 迴圈 ⇒ exit `2`，任何東西產出之前點名（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)）；先前印 WARNING 後照樣產出、rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）；只判定所選 `--components` 會讀的目錄，沒給時的預設值不判定 | `conf.d/` |
+| `--config-dir <DIR>` | ⛔ 不再使用：本工具不讀 conf.d。給了就結束碼 2（見上方），路由改用 `generate-routes --config-dir` | — |
 | `--output-dir <DIR>` | 把 CRD 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run`**；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
-| `--api-version <VER>` | AlertmanagerConfig API 版本（`v1alpha1` / `v1beta1`） | `v1beta1` |
-| `--components <COMP>` | 要生成的元件（`all` / `rules` / `alertmanager` / `servicemonitor`） | `all` |
-| `--receiver-template <TYPE>` | Receiver 模板類型（`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`） | — |
-| `--secret-name <NAME>` | K8s Secret 名稱（receiver 機密引用），需搭配 `--receiver-template` | `da-{tenant}-{type}` |
-| `--secret-key <KEY>` | K8s Secret 中的 key 名稱 | 依 receiver 類型自動推斷 |
+| `--api-version <VER>` | ⛔ 只供已移除的 AlertmanagerConfig 產出；給了就結束碼 2 | — |
+| `--components <COMP>` | 要生成的元件：`all`（= `rules` + `servicemonitor`）/ `rules` / `servicemonitor`。`alertmanager` 結束碼 2（見上方） | `all` |
+| `--receiver-template <TYPE>` | ⛔ 只供已移除的 AlertmanagerConfig 產出；給了就結束碼 2。receiver 改由租戶 `_routing` 宣告、`generate-routes` 渲染 | — |
+| `--secret-name <NAME>` | ⛔ 只供已移除的 AlertmanagerConfig 產出；給了就結束碼 2。憑證改用租戶 `_routing` 的 `secretRef` | — |
+| `--secret-key <KEY>` | ⛔ 只供已移除的 AlertmanagerConfig 產出；給了就結束碼 2 | — |
 | `--selector-label <KEY=VALUE>` | 加在 PrometheusRule 與 ServiceMonitor 上的 label（可重複；同 key 覆寫預設），讓 Prometheus 的 `ruleSelector`／`serviceMonitorSelector` 對得上。Helm release 不叫 `kube-prometheus-stack` 時用 `release=<名稱>` | PrometheusRule：`prometheus=kube-prometheus`、`release=kube-prometheus-stack`；ServiceMonitor：`release=kube-prometheus-stack` |
 | `--gitops` | GitOps 模式（sorted keys、無 timestamps） | false |
 | `--dry-run` | 列印輸出而不寫入檔案 | false |
@@ -1617,26 +1617,20 @@ da-tools operator-generate [options]
 
 ```bash
 # 基本：CRD 走 stdout（不寫檔），可直接 apply
-da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ | kubectl apply -f -
+da-tools operator-generate --rule-packs-dir rule-packs/ | kubectl apply -f -
 
 # 要寫成檔案就明確指定目錄（#1582：寫入是 opt-in）
-da-tools operator-generate --rule-packs-dir rule-packs/ --config-dir conf.d/ --output-dir ./operator-crds
+da-tools operator-generate --rule-packs-dir rule-packs/ --output-dir ./operator-crds
 
-# GitOps 模式 + Slack receiver
-da-tools operator-generate \
-  --config-dir conf.d/ \
-  --output-dir ./operator-crds \
-  --receiver-template slack \
-  --gitops
+# GitOps 模式
+da-tools operator-generate --rule-packs-dir rule-packs/ --output-dir ./operator-crds --gitops
 
-# PagerDuty + 自訂 Secret
-da-tools operator-generate \
-  --receiver-template pagerduty \
-  --secret-name org-pd-secret \
-  --secret-key routing-key
+# 僅產出 PrometheusRule
+da-tools operator-generate --components rules --output-dir ./operator-crds
 
-# 僅產出 AlertmanagerConfig
-da-tools operator-generate --components alertmanager --receiver-template email
+# 路由不是本工具：用 generate-routes 產出 alertmanager.yaml，再交給 Alertmanager CR 的 configSecret
+da-tools generate-routes --config-dir conf.d --output-alertmanager \
+  --base-config alertmanager.base.yaml -o alertmanager.yaml
 
 # Dry-run JSON 報告 — stdout 為單一 JSON 文件：
 #   {"crds": [...], "kustomization": {...}|null, "summary": {...}}
@@ -1649,9 +1643,7 @@ da-tools operator-generate --dry-run --json | jq -r '.crds[].metadata.name'
 
 #### migrate-to-operator
 
-讀取現有 ConfigMap 格式的 Prometheus 規則，產出等效的 CRD YAML 及遷移清單。
-
-conf.d 上有 da-guard 驗證會點名的路徑時，本工具在讀寫任何東西之前以 `2` 拒絕、逐條點名（[共用的拒絕](#confd-refusal)，[#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)）。
+讀取現有 ConfigMap 格式的 Prometheus 規則，產出等效的 PrometheusRule CRD YAML 及遷移清單。不讀 conf.d、不產出 AlertmanagerConfig：清單的路由步驟指向 `generate-routes --output-alertmanager` → Secret → Alertmanager CR 的 `spec.configSecret`（見 [Operator Alertmanager 整合](integration/operator-alertmanager-integration.md)）。`--config-dir`、`--receiver-template`、`--secret-name`、`--secret-key` 給了就結束碼 2（與 [`operator-generate`](#operator-generate) 同一個拒絕）。⚠️ v2.9.0 映像仍讀 conf.d、為每個租戶產出 AlertmanagerConfig <!-- image-caveat: v2.9.0 -->
 
 **用途**：從 ConfigMap 原生格式遷移至 Operator 原生 CRD；GitOps 友好的轉換工具；遷移前置檢查與預覽。
 
@@ -1666,12 +1658,12 @@ da-tools migrate-to-operator [options]
 | 選項 | 說明 | 預設值 |
 |------|------|--------|
 | `--source-dir <DIR>` | ConfigMap YAML 檔案所在目錄。讀的是頂層的 YAML 檔，清單取自 da-guard 只列檔模式（`parse-tree --list-only`）對這個目錄的走訪，所以需要 da-guard（找不到結束碼 `2`）；子目錄裡的檔不讀，stderr 會點名；頂層不讀的項目（以 `.` 開頭的隱藏檔或目錄、懸空 symlink、FIFO 等）也由一行 `WARNING:` 逐一點名並附原因。這個目錄不是 conf.d，不套用 conf.d 的拒絕；每個檔由讀者判定它是什麼（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）：先以 kubectl 的 manifest 讀法（`da-crdecode`）讀，其中 ConfigMap 的 data 值若是 rule file 就遷移；已經是 PrometheusRule 的物件不轉換、不算錯誤（結束碼不受影響），stderr 以一行 `NOTE:` 與 checklist 的「已是 PrometheusRule CRD（不需遷移）」段點名（`--json` 的 `already_crd`）；`kind: List`（`kubectl get cm -o yaml` 的輸出）照 kubectl 展開成它的 items 逐一讀，item 必須是帶 `apiVersion` 與 `kind` 的物件、不能再是 List；被拒收時，若以任意 YAML 讀法（`da-crdecode --any-shape`）讀出的是「單一 mapping、宣告 `groups`」的純 rule file，就當 rule file 遷移；兩種讀法都讀不了的檔（例如 annotation 值是 `.inf`）交給 Prometheus 的 rule loader（`da-read prometheus-rules`）判，讀得出 `groups` 就當 rule file；其餘的檔（YAML 壞掉、頂層是 list 或純量、沒有 `kind` 的 document、kubectl 不會套用的 List item）一律讓整次執行以結束碼 `2` 停下、一個檔都不寫，stderr 逐檔點名並附讀者的理由（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)））。⚠️ 已知例外：ConfigMap 的 data 值若兩個讀法（Kubernetes 的 YAML 讀法與 Prometheus 的 rule loader）都讀不了，視為不是 rule file 的檔（例如 Alertmanager 的 markdown 模板），不讀也不報錯；後果是縮排用了 tab 之類壞到兩者都讀不了的 rule 值，放在 ConfigMap 裡時不會被讀到、也不會報錯（整個檔本身是 rule file 時不在此列，會點名報錯）。rule file 被 Prometheus 的 rule loader 拒收，或找不到 `da-crdecode`／`da-read` 時，同樣在寫任何檔之前以結束碼 `2` 停下，stderr 附原因（`--json` 時 stdout 為空）。⚠️ 先前這些情況只印 WARNING（或記進 `issues`／`errors`）並照常寫出其餘 CRD、結束碼 0。不存在、不是目錄或是 symlink 迴圈 ⇒ exit `2`，分析與寫檔之前點名（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)）；先前列進 `issues` 後照樣寫出 checklist 與 CRD、rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）。存在卻無法列出內容（da-guard 的走訪把根目錄標為 `unlistable_dir`，例如權限 `0311`）⇒ exit `2`（`--json` 時 stdout 為空；⚠️ 先前只印一行 `WARNING:`、以 0 個來源檔產出遷移、rc 0，[#3446](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3446)） | （必填） |
-| `--config-dir <DIR>` | 租戶配置目錄。租戶的認定與 `operator-generate` 相同：整棵樹各租戶檔 `tenants:` 的鍵（經 `da-guard parse-tree`），不是檔名。⚠️ 有讀不了的租戶檔、同一租戶在兩個檔宣告、或沒有可用的 da-guard ⇒ exit `2`（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)））。不符合 RFC 1123 的租戶 id 進 `issues` 並略過。明確給了卻不存在、不是目錄或是 symlink 迴圈 ⇒ exit `2`，與 `--source-dir` 一起點名（先前 `tenants: 0` 照樣產出、rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）；沒給時的預設值不判定 | `conf.d` |
+| `--config-dir <DIR>` | ⛔ 不再使用：本工具不讀 conf.d。給了就結束碼 2（見上方） | — |
 | `--output-dir <DIR>` | 把 CRD 與 checklist 寫進這個目錄。⚠️ **寫檔要同時滿足：給了本旗標 _且_ 沒帶 `--dry-run` _且_ 沒帶 `--checklist-only`**（與下面 `--json` 信封同一組判別條件）；任一不成立就改印到 **stdout**、一個檔也不寫 | 無 |
 | `--namespace <NS>` | 目標 K8s namespace | `monitoring` |
-| `--receiver-template <TYPE>` | Receiver 類型（`slack` / `pagerduty` / `email` / `teams` / `opsgenie` / `webhook`） | — |
-| `--secret-name <NAME>` | K8s Secret 名稱 | — |
-| `--secret-key <KEY>` | K8s Secret 內的 key | — |
+| `--receiver-template <TYPE>` | ⛔ 只供已移除的 AlertmanagerConfig 產出；給了就結束碼 2 | — |
+| `--secret-name <NAME>` | ⛔ 只供已移除的 AlertmanagerConfig 產出；給了就結束碼 2 | — |
+| `--secret-key <KEY>` | ⛔ 只供已移除的 AlertmanagerConfig 產出；給了就結束碼 2 | — |
 | `--dry-run` | 僅預覽，不寫入檔案 | false |
 | `--checklist-only` | 僅產出遷移清單 | false |
 | `--json` | JSON 輸出模式 | false |
@@ -1695,10 +1687,6 @@ da-tools migrate-to-operator --source-dir configmaps/ --output-dir ./migration-o
 # 預覽遷移計畫
 da-tools migrate-to-operator --source-dir configmaps/ --dry-run
 
-# 含 receiver 設定
-da-tools migrate-to-operator --source-dir configmaps/ \
-  --receiver-template slack --secret-name da-slack
-
 # 僅產出 checklist
 da-tools migrate-to-operator --source-dir configmaps/ --checklist-only
 
@@ -1715,7 +1703,7 @@ da-tools migrate-to-operator --source-dir configmaps/ --json
 # 移除 PrometheusRule CRDs
 kubectl delete prometheusrules -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
 
-# 移除 AlertmanagerConfig CRDs (若有)
+# 移除舊版留下的 AlertmanagerConfig CRDs (若有)
 kubectl delete alertmanagerconfigs -n monitoring -l app.kubernetes.io/part-of=dynamic-alerting
 ```
 
@@ -1736,7 +1724,7 @@ da-tools drift-detect --dirs conf.d --mode configmap
 promtool query instant 'count(ALERTS{alertstate="firing"})'
 ```
 
-> ⚠️ Rollback 不會刪除你先前以 `--output-dir` 寫出的 CRD 檔案，可隨時重新 apply；沒留檔時，用當初產生它的指令重跑（repo 不提交這份產物）：migration 的輸出用原本的 `--source-dir`／`--config-dir` 加 `--output-dir <dir>` 重跑 `da-tools migrate-to-operator`；從 rule pack 產生的 CRD 重跑 `da-tools operator-generate --output-dir <dir>`。
+> ⚠️ Rollback 不會刪除你先前以 `--output-dir` 寫出的 CRD 檔案，可隨時重新 apply；沒留檔時，用當初產生它的指令重跑（repo 不提交這份產物）：migration 的輸出用原本的 `--source-dir` 加 `--output-dir <dir>` 重跑 `da-tools migrate-to-operator`；從 rule pack 產生的 CRD 重跑 `da-tools operator-generate --output-dir <dir>`。
 
 ---
 
@@ -1768,7 +1756,7 @@ da-tools operator-check [options]
 1. Operator 偵測：以名稱 `get` CRD `prometheusrules.monitoring.coreos.com`，叢集沒有這個 CRD 則 fail。
 2. PrometheusRule：`--namespace` 裡帶 `app.kubernetes.io/part-of=dynamic-alerting` 的數量，與 `--rule-packs-dir` 的 pack 數（`rule-pack-*.yaml`／`.yml`，同上宣告）比（相等 pass、少於但大於 0 warn、0 fail）；CRD 沒裝時為 0、fail，並註明 CRD 沒裝。
 3. ServiceMonitor：同一 namespace、同一 label 至少一個（否則 fail；CRD 沒裝時註明）。
-4. AlertmanagerConfig：同一 namespace、同一 label 的數量（0 為 warn；CRD 沒裝時 warn 並註明）。
+4. AlertmanagerConfig 殘留：平台不再產生 AlertmanagerConfig，同一 namespace、同一 label 的 AlertmanagerConfig 是舊版留下的——有則 warn（刪掉它們：`kubectl delete alertmanagerconfig -n <ns> -l app.kubernetes.io/part-of=dynamic-alerting`；它們的路由仍會被 Operator 插在 `configSecret` 的路由之前），沒有則 pass，CRD 沒裝時 pass。⚠️ v2.9.0 映像是反過來的：0 個 warn、CRD 沒裝 warn <!-- image-caveat: v2.9.0 -->
 5. Target 健康（給了 `--prometheus` 才跑）：job 名含 `threshold` 或 `exporter` 的 target 是否都 `up`。
 
 **叢集讀取**（[#3207](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3207)）：每一次讀取都經 `_lib_kubectl`（`kubectl_get`／`kubectl_list`，`kubectl get … -o json`）。kubectl 沒有回答——叢集連不上、權限不足（forbidden）、kubectl 不在 PATH 或逾時——該列標 `caller_error`、結束碼 2，不再當成「not found」。CRD 有沒有裝是以名稱 `get` 該 CRD（`--ignore-not-found`，不存在時有回答、為 finding，不是讀取失敗）。需要的權限：`customresourcedefinitions` 的 `get`（叢集範圍），以及 `--namespace` 內 PrometheusRule／ServiceMonitor／AlertmanagerConfig 的 `list`。⚠️ **行為變更**：叢集連不上或權限不足時，先前三列報 `fail`／"not found"、結束碼 0（`--ci` 為 1），現在結束碼 2；AlertmanagerConfig 讀取失敗先前是 warn、結束碼 0，現在也是 2。

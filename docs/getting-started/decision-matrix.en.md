@@ -37,12 +37,12 @@ Does your cluster have kube-prometheus-stack installed?
 |-----------|-------------------|----------------------|
 | **Prerequisites** | Any Prometheus environment | kube-prometheus-stack installed |
 | **Rule Pack Loading** | projected volume / configMapGenerator | PrometheusRule CRD |
-| **Route Configuration** | `generate_alertmanager_routes.py` → ConfigMap | `operator-generate` → AlertmanagerConfig CRD |
+| **Route Configuration** | `generate_alertmanager_routes.py` → ConfigMap | `generate-routes --output-alertmanager` → Secret → Alertmanager CR `configSecret` (the same generator; no AlertmanagerConfig CRDs) |
 | **Config Reload** | config-reloader sidecar (Rule Pack hot reload; `prometheus.yml` still needs a pod restart *if* mounted with `subPath` — K8s does not propagate ConfigMap updates into a subPath mount, and this repo's manifest mounts it that way) | Operator auto-reconcile |
 | **GitOps Support** | Manual ConfigMap YAML management | `--gitops` produces deterministic YAML |
 | **Multiple Prometheus** | Complex (manual ConfigMap distribution) | Native support (namespace-scoped CRD) |
 | **Migration Complexity** | Low (direct mount) | Medium (CRD format conversion needed) |
-| **Receiver Templates** | 5 types (YAML templates) | 6 types (secretKeyRef secure references) |
+| **Receiver Templates** | 5 types (YAML templates) | Same as Path A (rendered by `generate-routes`; `secretRef` mounted through the Alertmanager CR `spec.secrets`) |
 | **Validation Tool** | `validate_config.py` | `operator-check` |
 | **Learning Curve** | Low | Medium (CRD + Operator concepts required) |
 
@@ -73,7 +73,7 @@ Does your cluster have kube-prometheus-stack installed?
 
 ## Mixing Paths — Caveats
 
-**A single cluster's Alertmanager must not use both paths for route management simultaneously.** The Prometheus side (Rule Pack loading) can mix both approaches, but Alertmanager routing must use one or the other. See [ADR-008](../adr/008-operator-native-integration-path.en.md) for details.
+**A single cluster's Alertmanager must not use both paths for route management simultaneously.** Both paths render routing with `generate-routes`; they differ in how it is loaded: a ConfigMap mount, or the Alertmanager CR's `spec.configSecret`. The Prometheus side (Rule Pack loading) can mix both approaches, but one Alertmanager loads from only one of them. See [ADR-008](../adr/008-operator-native-integration-path.en.md) for details.
 
 ---
 

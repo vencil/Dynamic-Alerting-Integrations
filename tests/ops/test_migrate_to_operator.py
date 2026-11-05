@@ -7,10 +7,13 @@ Verifies:
   3. analyze_migration() — Analyze migration scope and identify issues
   4. build_migration_checklist() — Generate 6-phase migration checklist
   5. generate_migration() — Full E2E orchestration
-  6. RFC 1123 validation for tenant names
-  7. Dry-run mode (no file writes)
-  8. JSON output mode
-  9. ConfigMap → CRD end-to-end conversion
+  6. Dry-run mode (no file writes)
+  7. JSON output mode
+  8. ConfigMap → CRD end-to-end conversion
+
+#3572: the tool emits no AlertmanagerConfig and reads no conf.d (routing is
+generate-routes → configSecret); the refusal of its routing flags is pinned in
+test_operator_routing_single_renderer.py.
 """
 
 import dataclasses
@@ -30,7 +33,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..'
 
 # Import the module to test
 import migrate_to_operator as mto  # noqa: E402
-from _go_refusal import refuses  # noqa: E402  (#3206)
 from _platform_fs import symlink_or_skip  # noqa: E402
 
 
@@ -88,34 +90,6 @@ def temp_configmap_dir():
         """).strip()
 
         (tmppath / "memory-rules.yaml").write_text(cm_yaml_2)
-
-        yield tmppath
-
-
-@pytest.fixture
-def temp_config_dir():
-    """Create a temporary directory with sample tenant config files."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmppath = Path(tmpdir)
-
-        # Create tenant config files
-        tenant_a = textwrap.dedent("""
-            tenants:
-              db-a:
-                cpu_threshold_warning: 80
-                cpu_threshold_critical: 95
-                memory_threshold_warning: 85
-        """).strip()
-
-        tenant_b = textwrap.dedent("""
-            tenants:
-              db-b:
-                cpu_threshold_warning: 75
-                cpu_threshold_critical: 90
-        """).strip()
-
-        (tmppath / "db-a.yaml").write_text(tenant_a)
-        (tmppath / "db-b.yaml").write_text(tenant_b)
 
         yield tmppath
 
@@ -227,59 +201,16 @@ class TestConvertRulesToCRD:
 class TestAnalyzeMigration:
     """Tests for analyze_migration()."""
 
-    def test_analyze_migration(self, temp_configmap_dir, temp_config_dir):
-        """Check analysis counts (ConfigMaps, rule groups, tenants, estimated CRDs)."""
-        analysis = mto.analyze_migration(temp_configmap_dir, temp_config_dir)
+    def test_analyze_migration(self, temp_configmap_dir):
+        """Check analysis counts (ConfigMaps, rule groups, estimated CRDs)."""
+        analysis = mto.analyze_migration(temp_configmap_dir)
 
         # Verify counts
         assert analysis["configmap_files"] == 2
         assert analysis["rule_groups"] == 2
-        assert analysis["tenants"] == 2
-        assert analysis["estimated_crds"] == 4  # 2 ConfigMaps + 2 tenants
+        assert "tenants" not in analysis       # #3572: no conf.d is read
+        assert analysis["estimated_crds"] == 2  # 2 ConfigMaps → 2 PrometheusRules
         assert len(analysis["issues"]) == 0
-
-    def test_analyze_migration_invalid_tenant(self, temp_configmap_dir):
-        """RFC 1123 validation catches bad tenant names."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tmppath = Path(tmpdir)
-
-            # One invalid tenant id (starts with hyphen) and one valid one:
-            # the ids are the `tenants:` keys, not file names (#2906).
-            (tmppath / "team.yaml").write_text(
-                'tenants:\n  "-invalid": {}\n  valid-tenant: {}\n')
-
-            analysis = mto.analyze_migration(temp_configmap_dir, tmppath)
-
-            # Should report the invalid tenant name
-            assert len(analysis["issues"]) > 0
-            assert any("RFC 1123" in issue or "invalid" in issue.lower()
-                      for issue in analysis["issues"])
-            assert analysis["tenants"] == 1  # Only the valid one
-
-
-# ────────────────────────────────────────────────────────────────────────────
-# Test: validate_tenant_name
-# ────────────────────────────────────────────────────────────────────────────
-
-class TestValidateTenantName:
-    """Tests for validate_tenant_name()."""
-
-    @pytest.mark.parametrize("name,expected", [
-        ("db-a", True),
-        ("db-b", True),
-        ("tenant-1", True),
-        ("a", True),
-        ("ab", True),
-        ("-invalid", False),
-        ("invalid-", False),
-        ("UPPERCASE", False),
-        ("under_score", False),
-        ("db..a", False),
-    ])
-    def test_validate_tenant_name(self, name, expected):
-        """RFC 1123 compliance checks."""
-        assert mto.validate_tenant_name(name) == expected
-
 
 # ────────────────────────────────────────────────────────────────────────────
 # Test: build_migration_checklist
@@ -288,18 +219,16 @@ class TestValidateTenantName:
 class TestBuildMigrationChecklist:
     """Tests for build_migration_checklist()."""
 
-    def test_build_migration_checklist_contains_steps(self, temp_configmap_dir, temp_config_dir, temp_output_dir):
+    def test_build_migration_checklist_contains_steps(self, temp_configmap_dir, temp_output_dir):
         """Checklist has all 6 phases."""
         result = {
             "configmap_files": 2,
             "rule_group_count": 2,
-            "tenants": 2,
             "prometheus_rules": [{"crd": {}}],
-            "alertmanager_configs": [{"crd": {}}],
         }
 
         checklist = mto.build_migration_checklist(
-            temp_configmap_dir, temp_config_dir, temp_output_dir, result
+            temp_configmap_dir, temp_output_dir, result
         )
 
         # Check that all phases are present
@@ -317,6 +246,11 @@ class TestBuildMigrationChecklist:
 
         # Check that key sections exist
         assert "Migration Checklist" in checklist or "遷移檢核清單" in checklist
+        # #3572: the routing phase is generate-routes → configSecret, no CRD apply
+        assert "da-tools generate-routes --config-dir conf.d --output-alertmanager" in checklist
+        assert "alertmanager.alertmanagerSpec.configSecret" in checklist
+        assert "operator-alertmanager-integration/" in checklist
+        assert "*-tenant-*.yaml" not in checklist
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -326,11 +260,10 @@ class TestBuildMigrationChecklist:
 class TestGenerateMigration:
     """Tests for generate_migration()."""
 
-    def test_generate_migration_writes_crds(self, temp_configmap_dir, temp_config_dir, temp_output_dir):
+    def test_generate_migration_writes_crds(self, temp_configmap_dir, temp_output_dir):
         """Full run creates output directory with CRD files + checklist."""
         result = mto.generate_migration(
             temp_configmap_dir,
-            temp_config_dir,
             temp_output_dir,
             "monitoring",
         )
@@ -338,9 +271,8 @@ class TestGenerateMigration:
         # Verify result structure
         assert result["configmap_files"] == 2
         assert result["rule_group_count"] == 2
-        assert result["tenants"] == 2
+        assert "tenants" not in result and "alertmanager_configs" not in result   # #3572
         assert len(result["prometheus_rules"]) == 2
-        assert len(result["alertmanager_configs"]) == 2
         assert len(result["errors"]) == 0
 
         # Verify PrometheusRule CRD fields
@@ -351,20 +283,10 @@ class TestGenerateMigration:
             assert crd["kind"] == "PrometheusRule"
             assert crd["metadata"]["labels"]["migrated-from"] == "configmap"
 
-        # Verify AlertmanagerConfig CRD fields
-        for item in result["alertmanager_configs"]:
-            assert "name" in item
-            assert "tenant" in item
-            assert "crd" in item
-            crd = item["crd"]
-            assert crd["kind"] == "AlertmanagerConfig"
-            assert crd["metadata"]["labels"]["migrated-from"] == "configmap"
-
-    def test_generate_migration_json_output(self, temp_configmap_dir, temp_config_dir):
+    def test_generate_migration_json_output(self, temp_configmap_dir):
         """JSON mode returns valid JSON with all fields."""
         result = mto.generate_migration(
             temp_configmap_dir,
-            temp_config_dir,
             Path("/tmp/dummy"),
             "monitoring",
         )
@@ -376,9 +298,8 @@ class TestGenerateMigration:
         # Verify essential fields
         assert "configmap_files" in parsed
         assert "rule_group_count" in parsed
-        assert "tenants" in parsed
         assert "prometheus_rules" in parsed
-        assert "alertmanager_configs" in parsed
+        assert "alertmanager_configs" not in parsed   # #3572
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -388,19 +309,17 @@ class TestGenerateMigration:
 class TestEndToEnd:
     """End-to-end migration tests."""
 
-    def test_end_to_end_configmap_to_crd(self, temp_configmap_dir, temp_config_dir, temp_output_dir):
+    def test_end_to_end_configmap_to_crd(self, temp_configmap_dir, temp_output_dir):
         """Full E2E: create temp files, run migration, verify CRD output."""
         # Run full migration
         result = mto.generate_migration(
             temp_configmap_dir,
-            temp_config_dir,
             temp_output_dir,
             "monitoring",
         )
 
         # Verify we got CRDs
         assert len(result["prometheus_rules"]) == 2
-        assert len(result["alertmanager_configs"]) == 2
 
         # Verify PrometheusRule structure
         pr = result["prometheus_rules"][0]["crd"]
@@ -409,16 +328,6 @@ class TestEndToEnd:
         assert "spec" in pr
         assert "groups" in pr["spec"]
 
-        # Verify AlertmanagerConfig structure
-        ac = result["alertmanager_configs"][0]["crd"]
-        assert ac["apiVersion"] == "monitoring.coreos.com/v1beta1"
-        assert ac["kind"] == "AlertmanagerConfig"
-        assert "spec" in ac
-        assert "route" in ac["spec"]
-        assert "receivers" in ac["spec"]
-        assert "inhibitRules" in ac["spec"]
-
-
 # ────────────────────────────────────────────────────────────────────────────
 # Test: Dry-run Mode
 # ────────────────────────────────────────────────────────────────────────────
@@ -426,14 +335,13 @@ class TestEndToEnd:
 class TestDryRunMode:
     """Tests for dry-run functionality."""
 
-    def test_generate_migration_dry_run_produces_no_files(self, temp_configmap_dir, temp_config_dir, temp_output_dir):
+    def test_generate_migration_dry_run_produces_no_files(self, temp_configmap_dir, temp_output_dir):
         """Dry run produces result dict but no files are written."""
         # Note: generate_migration() itself doesn't write files
         # (that's done in main()), so we're testing the core behavior
 
         result = mto.generate_migration(
             temp_configmap_dir,
-            temp_config_dir,
             temp_output_dir,
             "monitoring",
         )
@@ -441,7 +349,6 @@ class TestDryRunMode:
         # Verify we got a result
         assert result is not None
         assert len(result["prometheus_rules"]) == 2
-        assert len(result["alertmanager_configs"]) == 2
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -451,11 +358,10 @@ class TestDryRunMode:
 class TestMainJsonEnvelope:
     """`--checklist-only --json` 的 envelope 形狀 + checklist 必須真的送到 stdout。"""
 
-    def _run(self, argv_tail, configmap_dir, config_dir, output_dir):
+    def _run(self, argv_tail, configmap_dir, output_dir):
         with patch("sys.argv", [
             "migrate_to_operator.py",
             "--source-dir", str(configmap_dir),
-            "--config-dir", str(config_dir),
             "--output-dir", str(output_dir),
             *argv_tail,
         ]):
@@ -475,32 +381,30 @@ class TestMainJsonEnvelope:
 
         # summary 的既有 schema 鍵都還在
         assert set(doc) == {
-            "configmap_files", "rule_groups", "tenants",
-            "prometheus_rules", "alertmanager_configs", "total_crds",
+            "configmap_files", "rule_groups",
+            "prometheus_rules", "total_crds",
             "already_crd", "status", "checklist",
         }
-        # checklist-only ⇒ 沒有產生任何 CRD，這三個計數確實是 0
+        # checklist-only ⇒ 沒有產生任何 CRD，這兩個計數確實是 0
         assert doc["prometheus_rules"] == 0
-        assert doc["alertmanager_configs"] == 0
         assert doc["total_crds"] == 0
-        # 但「掃到的東西」是真實計數（fixture: 2 個 ConfigMap、2 個租戶）
+        # 但「掃到的東西」是真實計數（fixture: 2 個 ConfigMap）
         assert doc["configmap_files"] == 2
-        assert doc["tenants"] == 2
 
         # 人類訊息在 stderr，stdout 不含散文（checklist 是 JSON 字串值，不是裸 Markdown）
         assert "Analyzing migration scope" in captured.err
         assert not captured.out.lstrip().startswith("#")
 
     def test_checklist_only_json_envelope(
-        self, temp_configmap_dir, temp_config_dir, temp_output_dir, capsys,
+        self, temp_configmap_dir, temp_output_dir, capsys,
     ):
         """#1112: `--checklist-only --json` → checklist 在 `checklist` 欄裡。"""
         self._run(["--checklist-only", "--json"],
-                  temp_configmap_dir, temp_config_dir, temp_output_dir)
+                  temp_configmap_dir, temp_output_dir)
         self._assert_checklist_envelope(capsys.readouterr())
 
     def test_checklist_only_with_dry_run_json_envelope(
-        self, temp_configmap_dir, temp_config_dir, temp_output_dir, capsys,
+        self, temp_configmap_dir, temp_output_dir, capsys,
     ):
         """#1112 (CodeRabbit): `--checklist-only --dry-run --json` 也必須給 checklist。
 
@@ -514,7 +418,7 @@ class TestMainJsonEnvelope:
         payload 的選擇。這條測試釘住「窄的 no-op flag 不得覆蓋選 payload 的 flag」。
         """
         self._run(["--checklist-only", "--dry-run", "--json"],
-                  temp_configmap_dir, temp_config_dir, temp_output_dir)
+                  temp_configmap_dir, temp_output_dir)
         captured = capsys.readouterr()
 
         doc = json.loads(captured.out)
@@ -525,7 +429,7 @@ class TestMainJsonEnvelope:
         self._assert_checklist_envelope(captured)
 
     def test_dry_run_json_is_crd_preview_not_summary(
-        self, temp_configmap_dir, temp_config_dir, temp_output_dir, capsys,
+        self, temp_configmap_dir, temp_output_dir, capsys,
     ):
         """對照組：沒有 --checklist-only 時，`--dry-run --json` 仍是單一 CRD preview。
 
@@ -534,17 +438,16 @@ class TestMainJsonEnvelope:
         json.loads 直接炸）。
         """
         self._run(["--dry-run", "--json"],
-                  temp_configmap_dir, temp_config_dir, temp_output_dir)
+                  temp_configmap_dir, temp_output_dir)
         captured = capsys.readouterr()
 
         doc = json.loads(captured.out)        # 兩份文件的話這裡就炸了
         assert set(doc) == {
-            "metadata", "prometheus_rules", "alertmanager_configs", "already_crd", "errors",
+            "metadata", "prometheus_rules", "already_crd", "errors",
         }
         assert "checklist" not in doc
         assert "status" not in doc
         assert len(doc["prometheus_rules"]) == 2      # 真的有預覽內容
-        assert len(doc["alertmanager_configs"]) == 2
 
 
 # ────────────────────────────────────────────────────────────────────────────
@@ -571,15 +474,15 @@ class ComboRow:
     #   json_summary            — 單一 JSON：6 鍵 summary（無 status/checklist）
     #   text_checklist_preview  — "# MIGRATION CHECKLIST" + "# CRD PREVIEW" + YAML
     #   json_crd_preview        — 單一 JSON：{metadata, prometheus_rules,
-    #                             alertmanager_configs, errors}
+    #                             already_crd, errors}
     #   text_checklist          — 裸 checklist markdown（無 CRD preview）
     #   json_checklist_envelope — 單一 JSON：6 鍵 summary + status + checklist
     payload: str
-    writes_files: bool          # output_dir 是否寫出檔案（CRD ×4 + checklist）
+    writes_files: bool          # output_dir 是否寫出檔案（CRD ×2 + checklist）
 
 
-# 8 列全矩陣。fixture 現況：2 個 ConfigMap（各 1 rule group）、2 個租戶
-# ⇒ 生成模式下 2 PrometheusRules + 2 AlertmanagerConfigs = 4 CRDs。
+# 8 列全矩陣。fixture 現況：2 個 ConfigMap（各 1 rule group）
+# ⇒ 生成模式下 2 PrometheusRules = 2 CRDs（#3572：沒有 AlertmanagerConfig）。
 OUTPUT_MODE_MATRIX = [
     ComboRow(False, False, False, "empty", True),
     ComboRow(False, False, True, "json_summary", True),
@@ -601,8 +504,8 @@ _MATRIX_IDS = [
 ]
 
 _SUMMARY_KEYS = {
-    "configmap_files", "rule_groups", "tenants",
-    "prometheus_rules", "alertmanager_configs", "total_crds",
+    "configmap_files", "rule_groups",
+    "prometheus_rules", "total_crds",
     "already_crd",   # #3426: PrometheusRules of --source-dir, named, not converted
 }
 
@@ -620,10 +523,8 @@ def _validate_json_summary(out):
     assert set(doc) == _SUMMARY_KEYS
     assert doc["configmap_files"] == 2
     assert doc["rule_groups"] == 2
-    assert doc["tenants"] == 2
     assert doc["prometheus_rules"] == 2
-    assert doc["alertmanager_configs"] == 2
-    assert doc["total_crds"] == 4
+    assert doc["total_crds"] == 2
 
 
 def _validate_text_checklist_preview(out):
@@ -631,25 +532,24 @@ def _validate_text_checklist_preview(out):
     assert out.startswith("# MIGRATION CHECKLIST\n")
     assert _checklist_header_in(out)
     assert "# CRD PREVIEW" in out
-    # preview 真的載有兩種 CRD 的 YAML（不是空殼）
+    # preview 真的載有 CRD 的 YAML（不是空殼），且沒有 AlertmanagerConfig（#3572）
     assert out.count("kind: PrometheusRule") == 2
-    assert out.count("kind: AlertmanagerConfig") == 2
+    assert "kind: AlertmanagerConfig" not in out
 
 
 def _validate_json_crd_preview(out):
     doc = json.loads(out)
     assert set(doc) == {
-        "metadata", "prometheus_rules", "alertmanager_configs", "already_crd", "errors",
+        "metadata", "prometheus_rules", "already_crd", "errors",
     }
     # 不是 checklist envelope（bug-1 的反向保證：純 dry-run 不長出 checklist）
     assert "checklist" not in doc
     assert "status" not in doc
     assert len(doc["prometheus_rules"]) == 2
-    assert len(doc["alertmanager_configs"]) == 2
     assert doc["errors"] == []
     assert doc["metadata"]["configmap_files"] == 2
     assert doc["metadata"]["rule_groups"] == 2
-    assert doc["metadata"]["tenants"] == 2
+    assert "tenants" not in doc["metadata"] and "config_dir" not in doc["metadata"]
     assert doc["metadata"]["namespace"] == "monitoring"
 
 
@@ -676,11 +576,9 @@ def _validate_json_checklist_envelope(out):
     assert _checklist_header_in(doc["checklist"])
     # checklist-only ⇒ 未生成任何 CRD
     assert doc["prometheus_rules"] == 0
-    assert doc["alertmanager_configs"] == 0
     assert doc["total_crds"] == 0
     # 掃描計數是真實的
     assert doc["configmap_files"] == 2
-    assert doc["tenants"] == 2
     # 鍵名錯配 bug 已修（owner 拍板）：analyze_migration() 的 "rule_groups"
     # 計數經 main() 橋接到消費端讀的 "rule_group_count"——fixture 有 2 個
     # rule group，envelope 必須回報真實值而非恆 0。
@@ -702,12 +600,11 @@ class TestOutputModeMatrix:
 
     @pytest.mark.parametrize("row", OUTPUT_MODE_MATRIX, ids=_MATRIX_IDS)
     def test_output_mode_matrix(
-        self, row, temp_configmap_dir, temp_config_dir, temp_output_dir, capsys,
+        self, row, temp_configmap_dir, temp_output_dir, capsys,
     ):
         argv = [
             "migrate_to_operator.py",
             "--source-dir", str(temp_configmap_dir),
-            "--config-dir", str(temp_config_dir),
             "--output-dir", str(temp_output_dir),
         ]
         if row.checklist_only:
@@ -736,8 +633,8 @@ class TestOutputModeMatrix:
         # "Generating CRDs" 只在非 checklist-only（checklist-only 跳過生成）
         has_generating = "Generating CRDs" in err or "正在生成 CRD" in err
         assert has_generating == (not row.checklist_only)
-        # "Generated: <path>" 只在 write 模式：4 CRD + 1 checklist = 5 行
-        assert err.count("Generated: ") == (5 if row.writes_files else 0)
+        # "Generated: <path>" 只在 write 模式：2 CRD + 1 checklist = 3 行
+        assert err.count("Generated: ") == (3 if row.writes_files else 0)
         # 人類 ✓ summary 走 stderr，且只在非 JSON 模式
         assert ("✓" in err) == (not row.json_mode)
 
@@ -745,7 +642,7 @@ class TestOutputModeMatrix:
         written = sorted(p.name for p in temp_output_dir.glob("*"))
         if row.writes_files:
             assert "MIGRATION-CHECKLIST.md" in written
-            assert len(written) == 5           # 2 PrometheusRule + 2 AMConfig + checklist
+            assert len(written) == 3           # 2 PrometheusRule + checklist
         else:
             assert written == []
 
@@ -772,13 +669,8 @@ class TestPlanStdout:
                 {"name": "da-rule-pack-x", "file": "x.yaml",
                  "crd": {"kind": "PrometheusRule", "metadata": {"name": "da-rule-pack-x"}}},
             ],
-            "alertmanager_configs": [
-                {"name": "da-tenant-t", "tenant": "t",
-                 "crd": {"kind": "AlertmanagerConfig", "metadata": {"name": "da-tenant-t"}}},
-            ],
             "configmap_files": 1,
             "rule_group_count": 1,
-            "tenants": 1,
             "errors": [],
         }
 
@@ -791,7 +683,6 @@ class TestPlanStdout:
             checklist=self._CHK,
             namespace="monitoring",
             source_dir=Path("/src"),
-            config_dir=Path("/conf"),
         )
 
     @pytest.mark.parametrize("row", OUTPUT_MODE_MATRIX, ids=_MATRIX_IDS)
@@ -811,12 +702,12 @@ class TestPlanStdout:
             assert docs[2] == "\n# CRD PREVIEW\n\n"
             preview = "".join(docs[3:])
             assert "kind: PrometheusRule" in preview
-            assert "kind: AlertmanagerConfig" in preview
+            assert "kind: AlertmanagerConfig" not in preview   # #3572
         elif row.payload == "json_crd_preview":
             assert len(docs) == 1
             doc = json.loads(docs[0])
             assert set(doc) == {
-                "metadata", "prometheus_rules", "alertmanager_configs", "already_crd", "errors",
+                "metadata", "prometheus_rules", "already_crd", "errors",
             }
         elif row.payload == "text_checklist":
             assert docs == [self._CHK + "\n"]
@@ -880,19 +771,18 @@ class TestWritingIsOptIn:
         return {p.relative_to(root) for p in root.rglob("*")}
 
     def test_no_output_dir_writes_nothing(
-        self, temp_configmap_dir, temp_config_dir, tmp_path, monkeypatch, capsys,
+        self, temp_configmap_dir, tmp_path, monkeypatch, capsys,
     ):
         cwd = tmp_path / "caller_cwd"
         cwd.mkdir()
         monkeypatch.chdir(cwd)
 
         # ⚠️ 兩個輸入樹是 module-level fixture（不在 tmp_path 底下），所以三棵都要看。
-        roots = [tmp_path, Path(temp_configmap_dir), Path(temp_config_dir)]
+        roots = [tmp_path, Path(temp_configmap_dir)]
         before = [self._tree(r) for r in roots]
         with patch("sys.argv", [
             "migrate_to_operator.py",
             "--source-dir", str(temp_configmap_dir),
-            "--config-dir", str(temp_config_dir),
         ]):
             mto.main()
 
@@ -905,7 +795,7 @@ class TestWritingIsOptIn:
         capsys.readouterr()
 
     def test_no_output_dir_still_produces_output_on_stdout(
-        self, temp_configmap_dir, temp_config_dir, tmp_path, monkeypatch, capsys,
+        self, temp_configmap_dir, tmp_path, monkeypatch, capsys,
     ):
         cwd = tmp_path / "caller_cwd2"
         cwd.mkdir()
@@ -914,7 +804,6 @@ class TestWritingIsOptIn:
         with patch("sys.argv", [
             "migrate_to_operator.py",
             "--source-dir", str(temp_configmap_dir),
-            "--config-dir", str(temp_config_dir),
         ]):
             mto.main()
 
@@ -931,19 +820,18 @@ class TestWritingIsOptIn:
         )
 
     def test_output_dir_still_writes_and_checklist_carries_the_real_path(
-        self, temp_configmap_dir, temp_config_dir, temp_output_dir, tmp_path, monkeypatch, capsys,
+        self, temp_configmap_dir, temp_output_dir, tmp_path, monkeypatch, capsys,
     ):
         cwd = tmp_path / "caller_cwd3"
         cwd.mkdir()
         monkeypatch.chdir(cwd)
         # ⚠️ before/after 差集，不是「必須為空」——輸入 fixture 本來就有檔案在裡面。
-        roots = [tmp_path, Path(temp_configmap_dir), Path(temp_config_dir)]
+        roots = [tmp_path, Path(temp_configmap_dir)]
         before = [self._tree(r) for r in roots]
 
         with patch("sys.argv", [
             "migrate_to_operator.py",
             "--source-dir", str(temp_configmap_dir),
-            "--config-dir", str(temp_config_dir),
             "--output-dir", str(temp_output_dir),
         ]):
             mto.main()
@@ -963,133 +851,20 @@ class TestWritingIsOptIn:
             )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# #1604: the twin that drifted
-# ─────────────────────────────────────────────────────────────────────────────
+class TestReadsNoConfd:
+    """#3572: migrate-to-operator emits no AlertmanagerConfig, so it reads no
+    conf.d at all — no tenant set, no `da-guard parse-tree` of a conf.d; it
+    lists --source-dir once (#3206)."""
 
-
-class TestDiscoveryParityWithOperatorGenerate:
-    """The two operator-plane readers must answer the SAME for one tree.
-
-    ⛔ This is the assertion #1604 exists for. `migrate_to_operator` and
-    `operator_generate` carried verbatim twins of one scan; #1603/#1607 fixed
-    only the second, and nothing compared them, so the pair drifted on three
-    axes at once and stayed green for months. Since #2906 both take
-    `_lib_confd.tree_tenants` (parse-tree's tenant set); this class keeps
-    pinning that they agree, and on the exporter's answer.
-
-    ⚠️ The fixture is built so that a fix on ONE axis is not enough: each
-    entry is a different axis (spelling, depth, id vs file name, the flat
-    format), and a stem-based or flat reader fails differently on each.
-    """
-
-    @staticmethod
-    def _tree(root):
-        """One carrier per divergence axis, plus a control that both always see."""
-        (root / "sub").mkdir(parents=True, exist_ok=True)
-        (root / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
-        (root / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
-        (root / "db-b.yml").write_text("tenants:\n  db-b:\n    x: 2\n", encoding="utf-8")
-        (root / "sub" / "x.yaml").write_text("tenants:\n  db-c:\n    x: 2\n", encoding="utf-8")
-        (root / "team.yaml").write_text("tenants:\n  db-d:\n    x: 2\n", encoding="utf-8")
-        (root / "flat.yaml").write_text("x: 2\n", encoding="utf-8")
-        return root
-
-    def test_both_readers_return_the_same_tenants(self, tmp_path):
-        import operator_generate as og
-
-        root = self._tree(tmp_path / "conf.d")
-        mine = mto.discover_tenant_configs(root)
-        theirs = og.discover_tenant_configs(root)
-
-        assert mine == theirs, (
-            f"the two operator-plane readers disagree about the same tree — "
-            f"that disagreement IS #1604.\n"
-            f"  migrate_to_operator: {mine}\n"
-            f"  operator_generate  : {theirs}\n"
-            f"  only in migrate    : {sorted(set(mine) - set(theirs))}\n"
-            f"  only in operator   : {sorted(set(theirs) - set(mine))}"
-        )
-        # ⛔ Equality alone would also hold if BOTH became blind. Pin the
-        # content: each axis decided the way the exporter decides it.
-        assert mine == ["db-a", "db-b", "db-c", "db-d"], mine
-        assert "team" not in mine, "a file NAME is not a tenant id (#2906)"
-        assert "flat" not in mine, "a file with no `tenants:` declares no tenant"
-
-    def test_both_readers_refuse_a_directory_named_like_a_carrier(self, tmp_path):
-        """`notes.yaml/` (a directory) is parse-tree's `not_regular_file`:
-        both refuse the tree alike (the shared refusal, #3206), naming it —
-        neither invents `notes`."""
-        import operator_generate as og
-
-        root = self._tree(tmp_path / "conf.d")
-        (root / "notes.yaml").mkdir()
-        for discover in (mto.discover_tenant_configs, og.discover_tenant_configs):
-            with refuses("notes.yaml") as err:
-                discover(root)
-            assert "(not_regular_file: " in err.getvalue(), err.getvalue()
-
-    def test_a_narrow_reader_would_be_caught(self, tmp_path, monkeypatch):
-        """Counterfactual: restore the pre-#2906 stem scan and this class reddens.
-
-        Without this, "the two agree" could be satisfied by a fix that made
-        them agree on the WRONG answer.
-        """
-        root = self._tree(tmp_path / "conf.d")
-        stems = sorted(
-            p.stem for p in root.iterdir()
-            if p.is_file() and p.suffix in (".yaml", ".yml") and not p.name.startswith("_")
-        )
-        assert stems != mto.discover_tenant_configs(root), (
-            "the old flat stem scan and the fixed reader return the "
-            "same list on this fixture, so the fixture cannot show the defect"
-        )
-
-
-class TestAnalyzeMigrationScansOnce:
-    """`analyze_migration` used to scan `config_dir` twice (#1604 `:372`);
-    one run reads ONE parse-tree snapshot (#2906)."""
-
-    def test_invalid_names_are_reported_without_a_second_scan(self, tmp_path, monkeypatch):
-        confd = tmp_path / "conf.d"
-        confd.mkdir()
-        (confd / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
-        (confd / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
-        (confd / "upper.yaml").write_text("tenants:\n  UPPER:\n    x: 2\n", encoding="utf-8")
-        src = tmp_path / "src"
-        src.mkdir()
-
-        calls = []
-        real = mto.tree_tenants
-
-        def counting(*a, **kw):
-            calls.append(a[0])
-            return real(*a, **kw)
-
-        monkeypatch.setattr(mto, "tree_tenants", counting)
-        analysis = mto.analyze_migration(src, confd)
-
-        assert len([c for c in calls if str(c) == str(confd)]) == 1, (
-            f"config_dir must be read ONCE; the tenant set was asked for "
-            f"{len(calls)} times: {calls}"
-        )
-        assert any("UPPER" in i for i in analysis["issues"]), (
-            f"the invalid name must still reach `issues`; got {analysis['issues']}"
-        )
-        assert analysis["tenants"] == 1, "only `db-a` is a valid tenant here"
-
-    def test_a_run_reads_one_parse_tree_snapshot(self, tmp_path, monkeypatch, capsys):
-        """Analysis and generation both ask for the tenant set and the
-        source files; da-guard parse-tree reads the conf.d once (one
-        `_lib_parse_cache.session`) and lists --source-dir once, and both
-        answer from the same snapshot of each."""
+    def test_a_run_lists_the_source_dir_once_and_parses_no_tree(self, tmp_path, monkeypatch, capsys):
         import _lib_parse_tree
 
-        confd = tmp_path / "conf.d"
+        confd = tmp_path / "conf.d"      # in the cwd, where the old default looked
         confd.mkdir()
         (confd / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
         src = tmp_path / "src"
         src.mkdir()
+        monkeypatch.chdir(tmp_path)
         loads, lists = [], []
         real, real_list = _lib_parse_tree.load, _lib_parse_tree.list_tree
 
@@ -1103,12 +878,11 @@ class TestAnalyzeMigrationScansOnce:
 
         monkeypatch.setattr(_lib_parse_tree, "load", counting)
         monkeypatch.setattr(_lib_parse_tree, "list_tree", counting_list)
-        monkeypatch.setattr(sys, "argv", ["mto", "--source-dir", str(src),
-                                          "--config-dir", str(confd), "--dry-run"])
+        monkeypatch.setattr(sys, "argv", ["mto", "--source-dir", str(src), "--dry-run"])
         mto.main()
-        assert len(loads) == 1, loads
+        assert loads == [], loads
         assert [os.path.realpath(d) for d in lists] == [os.path.realpath(src)], lists
-        assert "1 tenants" in capsys.readouterr().err
+        assert "tenants" not in capsys.readouterr().err
 
 
 class TestSourceDirNamesWhatItDoesNotRead:
@@ -1191,11 +965,10 @@ class TestSourceFilesAreWhatTheReadersSay:
             mto.parse_configmap_rules(src)
         assert [rf.path for rf in exc_info.value.refused] == [str(src / "two.yaml")]
 
-    def _main(self, src, config_dir, out):
+    def _main(self, src, out):
         with patch("sys.argv", [
             "migrate_to_operator.py",
             "--source-dir", str(src),
-            "--config-dir", str(config_dir),
             "--output-dir", str(out),
         ]):
             with pytest.raises(SystemExit) as exc_info:
@@ -1204,7 +977,7 @@ class TestSourceFilesAreWhatTheReadersSay:
 
     @pytest.mark.parametrize("json_mode", [False, True])
     def test_main_stops_on_a_rule_file_the_loader_refuses(
-            self, tmp_path, temp_config_dir, capsys, json_mode):
+            self, tmp_path, capsys, json_mode):
         """#3426 F2: a rule file Prometheus' rule loader refuses used to be an
         `issues` WARNING beside a CRD set written without it (rc 0)."""
         src = tmp_path / "src"
@@ -1215,7 +988,6 @@ class TestSourceFilesAreWhatTheReadersSay:
         out = tmp_path / "out"
         argv_json = ["--json"] if json_mode else []
         with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src),
-                                "--config-dir", str(temp_config_dir),
                                 "--output-dir", str(out), *argv_json]):
             with pytest.raises(SystemExit) as exc_info:
                 mto.main()
@@ -1224,21 +996,20 @@ class TestSourceFilesAreWhatTheReadersSay:
         captured = capsys.readouterr()
         assert "bad.yaml" in captured.err + captured.out and "parse error" in captured.err + captured.out
 
-    def test_checklist_only_stops_on_a_refused_rule_file(self, tmp_path, temp_config_dir, capsys):
+    def test_checklist_only_stops_on_a_refused_rule_file(self, tmp_path, capsys):
         """--checklist-only runs the analysis alone: a refused rule file
         there is rc 2 too, not an `issues` line beside a plan."""
         src = tmp_path / "src"
         src.mkdir()
         (src / "bad.yaml").write_text(
             "groups:\n- name: g\n  rules:\n  - {alert: B, expr: 'rate(x[5m]'}\n", encoding="utf-8")
-        with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src),
-                                "--config-dir", str(temp_config_dir), "--checklist-only"]):
+        with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src), "--checklist-only"]):
             with pytest.raises(SystemExit) as exc_info:
                 mto.main()
         assert exc_info.value.code == 2
         assert "bad.yaml" in capsys.readouterr().err
 
-    def test_main_stops_without_da_read(self, tmp_path, temp_config_dir, capsys, monkeypatch):
+    def test_main_stops_without_da_read(self, tmp_path, capsys, monkeypatch):
         """#3426 F2: no reader binary is no answer about the sources: rc 2,
         nothing written (it used to be an `errors` line and rc 0)."""
         src = tmp_path / "src"
@@ -1246,7 +1017,7 @@ class TestSourceFilesAreWhatTheReadersSay:
         (src / "ok.yaml").write_text(self._RULES, encoding="utf-8")
         monkeypatch.setenv("DA_READ_BINARY", str(tmp_path / "no-such-da-read"))
         out = tmp_path / "out"
-        assert self._main(src, temp_config_dir, out) == 2
+        assert self._main(src, out) == 2
         assert not out.exists()
         assert "da-read" in capsys.readouterr().err
 
@@ -1256,7 +1027,7 @@ class TestSourceFilesAreWhatTheReadersSay:
 
     @pytest.mark.parametrize("extra", [[], ["--checklist-only"]], ids=["write", "checklist"])
     def test_a_prometheusrule_is_named_already_a_crd_not_converted(
-            self, tmp_path, temp_config_dir, capsys, extra):
+            self, tmp_path, capsys, extra):
         """#3426 F11: a PrometheusRule in --source-dir is already the CRD this
         tool writes. It is not converted and no error (rc 0), but named on
         stderr and in the checklist — it used to be passed over by the kind
@@ -1267,7 +1038,6 @@ class TestSourceFilesAreWhatTheReadersSay:
         (src / "pr.yaml").write_text(self._PR, encoding="utf-8")
         out = tmp_path / "out"
         with patch("sys.argv", ["migrate_to_operator.py", "--source-dir", str(src),
-                                "--config-dir", str(temp_config_dir),
                                 "--output-dir", str(out), *extra]):
             try:
                 mto.main()
@@ -1288,7 +1058,7 @@ class TestSourceFilesAreWhatTheReadersSay:
             assert any("rule-pack-ok" in n for n in written), written
 
     @pytest.mark.parametrize("extra", [["--dry-run"], []], ids=["dry-run", "no-output-dir"])
-    def test_the_json_preview_names_a_prometheusrule_too(self, tmp_path, temp_config_dir,
+    def test_the_json_preview_names_a_prometheusrule_too(self, tmp_path,
                                                          capsys, extra):
         """#3426 F17: the preview envelope (`--dry-run --json`, or `--json`
         with no --output-dir) carries `already_crd` as the summary does."""
@@ -1296,8 +1066,7 @@ class TestSourceFilesAreWhatTheReadersSay:
         src.mkdir()
         (src / "ok.yaml").write_text(self._RULES, encoding="utf-8")
         (src / "pr.yaml").write_text(self._PR, encoding="utf-8")
-        argv = ["migrate_to_operator.py", "--source-dir", str(src),
-                "--config-dir", str(temp_config_dir), "--json", *extra]
+        argv = ["migrate_to_operator.py", "--source-dir", str(src), "--json", *extra]
         if extra:   # --dry-run with an --output-dir: still nothing written
             argv += ["--output-dir", str(tmp_path / "out")]
         with patch("sys.argv", argv):
@@ -1346,7 +1115,7 @@ class TestSourceFilesAreWhatTheReadersSay:
         assert got["file"] == "rules.yaml" and got["cm_data_key"] is None
         assert [g["name"] for g in got["rule_groups"]] == ["g"]
 
-    def test_main_stops_and_writes_nothing(self, tmp_path, temp_config_dir, capsys):
+    def test_main_stops_and_writes_nothing(self, tmp_path, capsys):
         src = tmp_path / "src"
         src.mkdir()
         (src / "rules.yaml").write_text(self._RULES, encoding="utf-8")
@@ -1355,7 +1124,6 @@ class TestSourceFilesAreWhatTheReadersSay:
         with patch("sys.argv", [
             "migrate_to_operator.py",
             "--source-dir", str(src),
-            "--config-dir", str(temp_config_dir),
             "--output-dir", str(out),
         ]):
             with pytest.raises(SystemExit) as exc_info:
@@ -1394,76 +1162,3 @@ class TestConfigMapScanAcceptsBothSpellings:
         (src / "cm.yml").unlink()
         (src / "cm.yaml").write_text(body, encoding="utf-8")
         assert mto.parse_configmap_rules(src), "control: .yaml must still be read"
-
-
-class TestAnalyzeMigrationReportsWhatItSkipped:
-    """`--json` 消費端看不到 stderr，所以「沒讀到什麼」不能只印在 stderr（PR #1750）。
-
-    ⛔ #1604 的那批項目：一個名為 `notes.yaml/` 的目錄先前會被變成租戶，後來改成
-    略過並寫進 `issues`。#2906 起租戶集合是 parse-tree 的答案，讀不了的項目
-    讓集合答不出來 ⇒ 不再是 `issues` 一行，而是 fail-closed（rc 2、指名）。
-    """
-
-    def test_a_directory_shaped_carrier_refuses_the_analysis(self, tmp_path):
-        """#2906: `notes.yaml/` 是 parse-tree 的 `not_regular_file`——租戶集合答不出來。
-
-        先前它只是 `issues` 裡的一行、旁邊照樣給出部分租戶；現在 fail-closed：
-        `analyze_migration` 走共用拒絕（#3206，rc 2），並指名該項目與 kind，
-        呼叫端不會拿到一份看起來完整的遷移計畫。
-        """
-        confd = tmp_path / "conf.d"
-        confd.mkdir()
-        (confd / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
-        (confd / "db-a.yaml").write_text(
-            "tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
-        (confd / "notes.yaml").mkdir()          # 目錄，不是檔案
-        src = tmp_path / "src"
-        src.mkdir()
-
-        with refuses("notes.yaml") as err:
-            mto.analyze_migration(src, confd)
-        assert "(not_regular_file: " in err.getvalue(), err.getvalue()
-
-    def test_a_clean_tree_produces_no_skip_issue(self, tmp_path):
-        """必響對照組：這則 issue 不能是無條件產生的。"""
-        confd = tmp_path / "conf.d"
-        confd.mkdir()
-        (confd / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
-        (confd / "db-a.yaml").write_text(
-            "tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
-        src = tmp_path / "src"
-        src.mkdir()
-
-        analysis = mto.analyze_migration(src, confd)
-
-        assert analysis["tenants"] == 1
-        assert not [i for i in analysis["issues"] if "notes.yaml" in i], (
-            f"乾淨的樹不得產生跳過訊息；issues = {analysis['issues']}"
-        )
-
-    def test_an_unlistable_config_dir_becomes_an_issue_not_a_traceback(
-        self, tmp_path, monkeypatch,
-    ):
-        """`is_dir()` 通過不代表 `iterdir()` 安全（PR #1750）。
-
-        ⛔ 修法是把 CATCH 放寬到 `OSError`，**不是**在掃描裡吞掉錯誤 —— 後者會
-        讓「讀不到的 conf.d」與「沒有租戶的 conf.d」畫面相同，正是
-        `_lib_confd` 存在要防的 silent zero。實測：目錄在檢查後消失時
-        `iterdir()` 會 raise，而 #1604 之前用的 `glob("*.yaml")` 靜默回 `[]`。
-        """
-        confd = tmp_path / "conf.d"
-        confd.mkdir()
-        src = tmp_path / "src"
-        src.mkdir()
-
-        def boom(_config_dir):
-            raise PermissionError(13, "Permission denied", str(confd))
-
-        monkeypatch.setattr(mto, "_tree_tenants", boom)
-        analysis = mto.analyze_migration(src, confd)
-
-        assert any("Permission denied" in i or "配置目錄錯誤" in i
-                   for i in analysis["issues"]), (
-            f"PermissionError 必須變成一則 issue，而不是裸 traceback；"
-            f"issues = {analysis['issues']}"
-        )

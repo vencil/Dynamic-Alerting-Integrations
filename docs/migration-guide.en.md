@@ -141,7 +141,7 @@ Three deployment options:
 
 - **Option A (Recommended)**: OCI Registry — `helm upgrade --install threshold-exporter oci://ghcr.io/vencil/charts/threshold-exporter --version 2.9.0 -n monitoring -f values-override.yaml`
 - **Option B**: Local build — `docker build` + `kind load` + `make component-deploy`
-- **Option C**: Operator CRD path — `da-tools operator-generate`, replacing ConfigMap mounting (suitable when kube-prometheus-stack is already installed)
+- **Option C**: Operator CRD path — `da-tools operator-generate` produces PrometheusRule / ServiceMonitor, replacing ConfigMap mounting; alert routing is produced by `generate-routes` and loaded through the Alertmanager CR's `configSecret` (suitable when kube-prometheus-stack is already installed)
 
 Comparison and decision guidance for the two paths: [Deployment Decision Matrix](getting-started/decision-matrix.en.md). Full Helm values, Operator CRD migration, and "Use da-tools in K8s Cluster" mode: [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署) · [Operator integration guides](integration/operator-prometheus-integration.en.md).
 

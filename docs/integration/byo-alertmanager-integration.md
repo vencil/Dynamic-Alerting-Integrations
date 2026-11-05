@@ -290,7 +290,7 @@ curl -X POST http://alertmanager:9093/-/reload
 | **ConfigMap Watcher Sidecar** | 類似 `prometheus-config-reloader` | 全自動，適合生產環境 |
 | **CI Pipeline 整合** | GitOps: `generate-routes --validate` + apply + reload | 適合 GitOps 工作流 |
 | **GitOps ConfigMap 產出** | `generate-routes --output-configmap` 產出完整 ConfigMap YAML 進 Git PR flow | v1.10.0+，取代 `--apply` 直操作 |
-| **Alertmanager Operator** | `kube-prometheus-stack` 的 AlertmanagerConfig CRD | 適合已使用 Operator 的環境 |
+| **Alertmanager Operator** | `generate-routes --output-alertmanager` 的輸出放進 Secret，由 Alertmanager CR 的 `spec.configSecret` 載入（Operator 自己 reload） | 適合已使用 Operator 的環境 |
 
 ---
 
@@ -664,7 +664,7 @@ _routing_enforced:
 
 ## Alertmanager Operator Path
 
-> 使用 Prometheus Operator 的 AlertmanagerConfig CRD？請參閱 [Prometheus Operator 整合手冊](prometheus-operator-integration.md)，包含 AlertmanagerConfig v1beta1 產出、驗證與遷移指引。
+> 使用 Prometheus Operator 管理 Alertmanager？路由一樣由 `generate-routes` 渲染，輸出放進 Secret、由 Alertmanager CR 的 `spec.configSecret` 載入；平台不產生 AlertmanagerConfig CRD（它的路由會被 Operator 插在全域路由之前並強制 `continue: true`）。流程見 [Operator Alertmanager 整合](operator-alertmanager-integration.md)，導覽見 [Prometheus Operator 整合手冊](prometheus-operator-integration.md)。
 
 ## 相關資源
 

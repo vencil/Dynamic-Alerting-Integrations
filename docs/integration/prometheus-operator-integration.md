@@ -24,7 +24,7 @@ v2.6.0 起，本手冊拆分為四份對稱文件，與 ConfigMap 路徑（BYO�
 | Operator 路徑（Path B） | 對應 ConfigMap 路徑（Path A） | 說明 |
 |--------------------------|-------------------------------|------|
 | [Operator Prometheus 整合](operator-prometheus-integration.md) | [BYO Prometheus 整合](byo-prometheus-integration.md) | ServiceMonitor + PrometheusRule |
-| [Operator Alertmanager 整合](operator-alertmanager-integration.md) | [BYO Alertmanager 整合](byo-alertmanager-integration.md) | AlertmanagerConfig + 6 種 Receiver 模板 + 三態抑制規則 |
+| [Operator Alertmanager 整合](operator-alertmanager-integration.md) | [BYO Alertmanager 整合](byo-alertmanager-integration.md) | `generate-routes` 產出 `alertmanager.yaml` → Secret → Alertmanager CR `configSecret` |
 | [Operator GitOps 部署](operator-gitops-deployment.md) | [GitOps 部署指南](gitops-deployment.md) | ArgoCD / Flux 整合 + CI Pipeline |
 | [Operator Shadow Monitoring](operator-shadow-monitoring.md) | [Shadow Monitoring SOP](../shadow-monitoring-sop.md) | 雙軌觀察策略 |
 
@@ -39,7 +39,7 @@ v2.6.0 起，本手冊拆分為四份對稱文件，與 ConfigMap 路徑（BYO�
 ### 第一次部署 Operator 路徑？
 
 1. [Operator Prometheus 整合](operator-prometheus-integration.md) — 設定 ServiceMonitor + PrometheusRule
-2. [Operator Alertmanager 整合](operator-alertmanager-integration.md) — 設定 AlertmanagerConfig + Receiver
+2. [Operator Alertmanager 整合](operator-alertmanager-integration.md) — 以 `generate-routes` 產出路由、經 `configSecret` 載入
 3. [Operator GitOps 部署](operator-gitops-deployment.md) — 接入 CI/CD pipeline
 
 ### 從 ConfigMap 路徑遷移？
@@ -58,12 +58,13 @@ rules:
       enabled: true
 ```
 
-chart 在 `operator` 模式只產出 ServiceMonitor。PrometheusRule 與 AlertmanagerConfig 由 [`da-tools operator-generate`](../cli-reference.md#operator-generate) 產生（ADR-008：chart 保持 path-agnostic），receiver 與 Secret 以旗標指定：
+chart 在 `operator` 模式只產出 ServiceMonitor。PrometheusRule 由 [`da-tools operator-generate`](../cli-reference.md#operator-generate) 產生（ADR-008：chart 保持 path-agnostic）：
 
 ```bash
-da-tools operator-generate --receiver-template slack \
-    --secret-name da-alerts-secret --secret-key webhook-url
+da-tools operator-generate --components rules --rule-packs-dir rule-packs/ --output-dir ./operator-crds
 ```
+
+告警路由不是 CRD：由 [`da-tools generate-routes`](../cli-reference.md#generate-routes) 合併進你自己的 Alertmanager 設定，放進 Secret 後由 Alertmanager CR 的 `spec.configSecret` 載入，見 [Operator Alertmanager 整合](operator-alertmanager-integration.md)。
 
 ---
 

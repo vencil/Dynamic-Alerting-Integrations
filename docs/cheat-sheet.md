@@ -59,10 +59,10 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `state-reconcile` | 遷移狀態目錄一致化（.da/state/ schema 驗證 + .da/manifest.json 重建，#405 Cat A） | --state-dir <DIR>, --manifest-path <PATH>, --dry-run, --ci, --json | `da-tools state-reconcile --help` |
 | `rule-pack-diff` | Rule Pack 兩版本機械比對（added / removed / breaking label schema，#405 Cat D） | --from <V1.YAML>, --to <V2.YAML>, --json, --ci | `da-tools rule-pack-diff --help` |
 | `silencer-drift-check` | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool dump，#405 Cat B） | --silences-file <JSON>, --rule-source <PATH>, --include-inactive, --json, --ci | `da-tools silencer-drift-check --help` |
-| `operator-generate` | Operator CRD 產生（PrometheusRule / AlertmanagerConfig / ServiceMonitor） | --rule-packs-dir <DIR>, --config-dir <DIR>, --output-dir <DIR>, --components, --selector-label | `da-tools operator-generate --help` |
+| `operator-generate` | Operator CRD 產生（PrometheusRule / ServiceMonitor；路由走 `generate-routes`） | --rule-packs-dir <DIR>, --output-dir <DIR>, --components, --selector-label | `da-tools operator-generate --help` |
 | `operator-check` | Operator CRD 部署狀態驗證（檢查項目 + 診斷報告） | --namespace <NS>, --json | `da-tools operator-check --help` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（#747；MISSING/UNHEALTHY/ORPHAN，偵測-only） | --prometheus <URL>, --runtime-json <FILE>, --ci | `da-tools runtime-audit --help` |
-| `migrate-to-operator` | 讀取 ConfigMap 格式規則，產出等效 CRD YAML + 6 階段遷移計畫 | --source-dir <DIR>, --dry-run, --receiver-template | `da-tools migrate-to-operator --help` |
+| `migrate-to-operator` | 讀取 ConfigMap 格式規則，產出等效 PrometheusRule CRD YAML + 遷移清單 | --source-dir <DIR>, --dry-run, --checklist-only | `da-tools migrate-to-operator --help` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | --rule-packs-dir <DIR>, --output-dir <DIR>, --operator | `da-tools rule-pack-split --help` |
 | `opa-evaluate` | OPA Rego 策略評估橋接（OPA 整合） | --config-dir <PATH>, --opa-url <URL>, --opa-binary, --policy-path, --dry-run | `da-tools opa-evaluate --help` |
 | `guard` | Dangling Defaults Guard（v2.8.0），shell-out 至 `da-guard` Go binary 驗 conf.d/ schema + cardinality（路由交給 `generate-routes`，樹上有路由時 exit 4） | defaults-impact 子命令 + --config-dir <PATH>, --scope, --required-fields, --cardinality-limit, --format md\|json | `da-tools guard --help` |
@@ -110,7 +110,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
   - `silencer-drift-check` — AM silence 漂移偵測（offline，cutover 必跑）
 
 - **Operator + Federation**
-  - `operator-generate` — Operator CRD 產生（PrometheusRule / AlertmanagerConfig / ServiceMonitor）
+  - `operator-generate` — Operator CRD 產生（PrometheusRule / ServiceMonitor）
   - `operator-check` — Operator CRD 部署狀態驗證
   - `rule-pack-split` — Rule Pack 分層拆分（Federation Scenario B）
   - `opa-evaluate` — OPA Rego 策略評估橋接

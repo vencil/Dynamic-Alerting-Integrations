@@ -1074,8 +1074,6 @@ def _argv_for(tool_rel: str, tree: pathlib.Path,
               out: pathlib.Path) -> list[str]:
     """Each tool's own way of being pointed at a conf.d."""
     return {
-        "ops/operator_generate.py": ["--config-dir", str(tree),
-                                     "--output-dir", str(out)],
         "ops/deprecate_rule.py": ["pg_connections", "--config-dir", str(tree)],
         "ops/offboard_tenant.py": ["alpha", "--config-dir", str(tree)],
         "dx/describe_tenant.py": ["--all", "--conf-d", str(tree)],
@@ -1096,7 +1094,8 @@ def _argv_for(tool_rel: str, tree: pathlib.Path,
 # (tests/shared/test_served_values_tenant_metadata_matrix.py).
 # `operator_generate` left it in #2906 for the same reason: its tenant set is
 # parse-tree's, and an entry parse-tree cannot read makes that set unknown —
-# rc 2, both entries named (`test_operator_readers_refuse_unusable_entries`).
+# rc 2, both entries named. #3572: it (and `migrate_to_operator`) read no
+# conf.d at all any more, so that refusal test left with them.
 _WARNING_CONTRACT = {
     "ops/deprecate_rule.py": ("stderr", "Processing:"),
     "ops/offboard_tenant.py": ("stdout", "Pre-check"),
@@ -1150,51 +1149,6 @@ def test_the_unusable_tree_is_not_vacuous(tmp_path: pathlib.Path) -> None:
     assert not (tree / "broken.yaml").is_file()
 
 
-@pytest.mark.parametrize("tool_rel", ["ops/operator_generate.py",
-                                      "ops/migrate_to_operator.py"])
-def test_operator_readers_refuse_unusable_entries(
-        tool_rel: str, tmp_path: pathlib.Path) -> None:
-    """#2906: the operator-plane readers fail closed on an unusable entry.
-
-    Their tenant set is parse-tree's (`_lib_confd.tree_tenants`). A directory
-    `notes.yaml/` and a dangling `broken.yaml` are entries it cannot read
-    (`not_regular_file` / `read_failure`), so which tenants the tree declares
-    is unknown: rc 2, each entry named with its kind, and NO CRD written —
-    neither a phantom tenant invented from the entry (#1607 measured 20 CRDs
-    where 18 were right) nor a partial set that reads as complete.
-    """
-    tree = _unusable_tree(tmp_path / "conf.d")
-    out = tmp_path / "out"
-    src = tmp_path / "src"
-    src.mkdir()
-    extra = ["--source-dir", str(src)] if "migrate" in tool_rel else []
-    r = subprocess.run(
-        [sys.executable, "-X", "utf8", str(TOOLS_DIR / tool_rel), *extra,
-         "--config-dir", str(tree), "--output-dir", str(out)],
-        capture_output=True, timeout=180, cwd=str(tmp_path),
-        env=dict(os.environ, PYTHONIOENCODING="utf-8"))
-    stderr = r.stderr.decode("utf-8", "replace")
-    assert r.returncode == 2, (r.returncode, stderr[:600])
-    # #3206: the shared refusal's words.
-    assert "ERROR: notes.yaml:" in stderr and "(not_regular_file:" in stderr, stderr[:600]
-    assert "ERROR: broken.yaml:" in stderr and "(read_failure:" in stderr, stderr[:600]
-    produced = sorted(p.name for p in out.rglob("*.yaml")) if out.exists() else []
-    assert produced == [], f"a refused run wrote CRDs: {produced}"
-
-    # ⛔ Control: the same tree without the two entries generates, so the
-    # refusal above is the entries' doing, not a tool that cannot run here.
-    (tree / "notes.yaml").rmdir()
-    (tree / "broken.yaml").unlink()
-    r = subprocess.run(
-        [sys.executable, "-X", "utf8", str(TOOLS_DIR / tool_rel), *extra,
-         "--config-dir", str(tree), "--output-dir", str(out)],
-        capture_output=True, timeout=180, cwd=str(tmp_path),
-        env=dict(os.environ, PYTHONIOENCODING="utf-8"))
-    assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[:600]
-    produced = sorted(p.name for p in out.rglob("*.yaml"))
-    assert any("alpha" in n for n in produced), produced
-
-
 def test_each_reader_names_an_unusable_entry_exactly_once(
         tmp_path: pathlib.Path, da_guard_env: str) -> None:
     """⛔ Said once per run, not once per scan.
@@ -1219,7 +1173,8 @@ def test_each_reader_names_an_unusable_entry_exactly_once(
     argv = {"ops/deprecate_rule.py": ["pg_connections", "mysql_connections",
                                       "redis_memory", "--config-dir",
                                       str(tree)]}
-    for tool_rel in ("ops/operator_generate.py", "ops/deprecate_rule.py",
+    # #3572: `operator_generate` left — it reads no conf.d any more.
+    for tool_rel in ("ops/deprecate_rule.py",
                      "ops/offboard_tenant.py",
                      "dx/describe_tenant.py",
                      "lint/check_path_metadata_consistency.py"):
@@ -1257,7 +1212,7 @@ def _reserved_unusable_tree(root: pathlib.Path) -> pathlib.Path:
 
 
 @pytest.mark.parametrize("tool_rel", [
-    "ops/operator_generate.py",
+    # #3572: `operator_generate` left — it reads no conf.d any more.
     "lint/check_path_metadata_consistency.py",
 ])
 def test_reader_names_a_reserved_entry_go_names(

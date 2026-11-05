@@ -251,3 +251,6 @@ scripts/tools/_lib_key_verdict.py
 # tests keep only the read-only report — removed, not truncated.
 scripts/tools/ops/threshold_govern.py
 tests/ops/test_threshold_govern.py
+# #3572: operator-generate no longer emits AlertmanagerConfig; its receiver /
+# inhibit / tenant-discovery test classes are removed, not truncated.
+tests/ops/test_operator_generate_v2.py

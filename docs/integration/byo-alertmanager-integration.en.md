@@ -296,7 +296,7 @@ curl -X POST http://alertmanager:9093/-/reload
 | **ConfigMap Watcher Sidecar** | Similar to `prometheus-config-reloader` | Fully automatic, suitable for production |
 | **CI Pipeline Integration** | GitOps: `generate-routes --validate` + apply + reload | Suitable for GitOps workflow |
 | **GitOps ConfigMap Output** | `generate-routes --output-configmap` outputs complete ConfigMap YAML into Git PR flow | v1.10.0+, replaces `--apply` direct manipulation |
-| **Alertmanager Operator** | `kube-prometheus-stack`'s AlertmanagerConfig CRD | Suitable for environments already using Operator |
+| **Alertmanager Operator** | `generate-routes --output-alertmanager` output in a Secret, loaded by the Alertmanager CR's `spec.configSecret` (the Operator reloads) | Suitable for environments already using Operator |
 
 ---
 
@@ -668,7 +668,7 @@ Apply during a maintenance window, or at least outside a known incident.
 
 ## Alertmanager Operator Path
 
-> Using Prometheus Operator's AlertmanagerConfig CRD? See the [Prometheus Operator Integration Guide](prometheus-operator-integration.en.md) for AlertmanagerConfig v1beta1 generation, validation, and migration guidance.
+> Managing Alertmanager with the Prometheus Operator? Routing is still rendered by `generate-routes`; the output goes into a Secret the Alertmanager CR loads through `spec.configSecret`. The platform does not generate AlertmanagerConfig CRDs (the Operator would prepend their routes before the global routes with a forced `continue: true`). Procedure: [Operator Alertmanager Integration](operator-alertmanager-integration.en.md); overview: [Prometheus Operator Integration Guide](prometheus-operator-integration.en.md).
 
 ## Related Resources
 

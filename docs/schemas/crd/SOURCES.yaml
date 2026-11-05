@@ -29,6 +29,12 @@ sources:
     kinds:
       - {group: monitoring.coreos.com, kind: AlertmanagerConfig, version: v1beta1}
 
+  - id: prometheus-operator-alertmanager
+    url: https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.86.0/example/prometheus-operator-crd-full/monitoring.coreos.com_alertmanagers.yaml
+    ref: v0.86.0
+    kinds:
+      - {group: monitoring.coreos.com, kind: Alertmanager, version: v1}
+
   - id: prometheus-operator-servicemonitor
     url: https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.86.0/example/prometheus-operator-crd-full/monitoring.coreos.com_servicemonitors.yaml
     ref: v0.86.0

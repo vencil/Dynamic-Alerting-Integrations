@@ -5,7 +5,14 @@ Usage:
     da-tools operator-check [--namespace NS] [--prometheus URL] [--json] [--ci]
 
 Checks: (1) Operator CRD, (2) PrometheusRule count, (3) ServiceMonitor,
-(4) AlertmanagerConfig, (5) Target Health (opt)
+(4) leftover AlertmanagerConfigs, (5) Target Health (opt)
+
+Check 4 (#3572): operator-generate no longer emits AlertmanagerConfig —
+routing lives in the configSecret `generate-routes` renders. An
+AlertmanagerConfig carrying this tool's part-of label is a leftover of an
+older operator-generate that the Prometheus Operator routes ahead of the
+platform routes with `continue: true`: it warns, naming how many to delete.
+None, or the CRD not installed (nothing can be left over), passes.
 
 Every cluster read goes through ``_lib_kubectl`` (``kubectl_get`` /
 ``kubectl_list``, #3207): a
@@ -63,7 +70,13 @@ STRINGS = {
         "rules_loaded": "rules loaded",
         "monitor_found": "ServiceMonitor found",
         "monitor_missing": "ServiceMonitor not found",
-        "alertconfig_found": "tenant configs",
+        "alertconfig_none": "no leftover AlertmanagerConfigs (routing lives in the configSecret rendered by generate-routes)",
+        "alertconfig_leftover": (
+            "leftover AlertmanagerConfigs from an older operator-generate: the Prometheus "
+            "Operator routes them ahead of the platform routes with continue: true — delete "
+            "them (kubectl delete alertmanagerconfig -n {ns} -l {sel}); routing lives in "
+            "the configSecret rendered by generate-routes"
+        ),
         "targets_healthy": "targets healthy",
         "targets_unhealthy": "targets unhealthy",
         "targets_skip": "no Prometheus URL",
@@ -79,7 +92,13 @@ STRINGS = {
         "rules_loaded": "已加載規則",
         "monitor_found": "ServiceMonitor 已找到",
         "monitor_missing": "ServiceMonitor 未找到",
-        "alertconfig_found": "租戶配置",
+        "alertconfig_none": "沒有殘留的 AlertmanagerConfig（路由由 generate-routes 產出的 configSecret 承載）",
+        "alertconfig_leftover": (
+            "個舊版 operator-generate 留下的 AlertmanagerConfig：Prometheus Operator 會把它們"
+            "排在平台路由前面並帶 continue: true——請刪除"
+            "（kubectl delete alertmanagerconfig -n {ns} -l {sel}）；路由由 generate-routes "
+            "產出的 configSecret 承載"
+        ),
         "targets_healthy": "Target 健康",
         "targets_unhealthy": "Target 不健康",
         "targets_skip": "未提供 Prometheus URL",
@@ -190,17 +209,25 @@ class OperatorChecker:
         return CheckResult(i18n("check_monitor", self.lang), "pass" if found else "fail", detail)
 
     def check_alertmanager_config(self) -> CheckResult:
-        """Check 4: AlertmanagerConfig resources."""
+        """Check 4: leftover AlertmanagerConfigs (#3572).
+
+        operator-generate no longer emits AlertmanagerConfig; one carrying
+        its part-of label is left over from an older run and is routed ahead
+        of the platform routes with `continue: true` → warn. None → pass; the
+        CRD not installed → pass (nothing can be left over)."""
         try:
             installed = self._installed(_CRD_AM_CONFIGS)
             count = len(self._list("alertmanagerconfig", namespace=self.args.namespace,
                                    selector=_PART_OF)) if installed else 0
         except KubectlError as exc:
             return self._unanswered("check_alertconfig", exc)
-        status = "pass" if count > 0 else "warn"
-        detail = f"{count} {i18n('alertconfig_found', self.lang)}" if count > 0 else (
-            "no tenants" if installed else f"CRD {_CRD_AM_CONFIGS} not installed")
-        return CheckResult(i18n("check_alertconfig", self.lang), status, detail)
+        if count > 0:
+            leftover = i18n("alertconfig_leftover", self.lang).format(
+                ns=self.args.namespace, sel=_PART_OF)
+            return CheckResult(i18n("check_alertconfig", self.lang), "warn", f"{count} {leftover}")
+        detail = (i18n("alertconfig_none", self.lang) if installed
+                  else f"CRD {_CRD_AM_CONFIGS} not installed")
+        return CheckResult(i18n("check_alertconfig", self.lang), "pass", detail)
 
     def check_target_health(self) -> CheckResult:
         """Check 5: Prometheus target health (optional)."""

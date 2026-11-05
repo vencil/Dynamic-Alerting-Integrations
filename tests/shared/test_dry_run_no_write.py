@@ -619,7 +619,6 @@ RECIPES: list[Recipe] = [
 
     R("migrate_to_operator",
       lambda t, s: ["--source-dir", _copy_into(t, K8S_MONITORING, "monitoring"),
-                    "--config-dir", _copy_into(t, SEED_CONF_D, "conf.d"),
                     "--output-dir", _out(t, "crds"), "--dry-run", "--json"]),
 
     R("notification_tester",
@@ -633,7 +632,6 @@ RECIPES: list[Recipe] = [
 
     R("operator_generate",
       lambda t, s: ["--rule-packs-dir", _copy_into(t, RULE_PACKS, "rule-packs"),
-                    "--config-dir", _copy_into(t, SEED_CONF_D, "conf.d"),
                     "--output-dir", _out(t, "operator"), "--dry-run", "--json"]),
 
     R("policy_opa_bridge",
