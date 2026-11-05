@@ -1791,15 +1791,21 @@ def _path_flag_values(argv: list[str]) -> list[tuple[str, str]]:
                     v = value if eq else follows
                     if v is not None:
                         found.append((flag, v))
-        elif tok == "-o":
-            if follows is not None:
-                found.append(("-o/--output", follows))
-        elif tok.startswith("-o"):
-            # `-oV`; `-o=V` is read both ways (argparse's reading of the `=`
-            # has changed between versions), which is safe here.
-            found.append(("-o/--output", tok[2:]))
-            if tok[2:3] == "=":
-                found.append(("-o/--output", tok[3:]))
+        elif len(tok) > 1 and "o" in tok[1:]:
+            # Short flags, argparse's way: this tool's are `-h` (no value)
+            # and `-o`, which may follow others in one token (`-ho V`,
+            # `-hoV`). After the `o`, the rest of the token is the value
+            # (`-oV`); an `o` at the end takes the next token. `-o=V` is read
+            # both ways (argparse's reading of the `=` has changed between
+            # versions), which is safe here.
+            rest = tok[tok.index("o", 1) + 1:]
+            if not rest:
+                if follows is not None:
+                    found.append(("-o/--output", follows))
+            else:
+                found.append(("-o/--output", rest))
+                if rest.startswith("="):
+                    found.append(("-o/--output", rest[1:]))
     return found
 
 

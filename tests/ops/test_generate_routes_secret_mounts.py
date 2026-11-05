@@ -488,3 +488,19 @@ def test_dev_null_is_no_stdout_owner_even_when_stdout_is_dev_null(tmp_path):
                        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True,
                        encoding="utf-8", errors="replace", timeout=300)
     assert r.returncode == 0, r.stderr
+
+
+@pytest.mark.parametrize("spelling", ["-o{}", "-o={}", "-ho {}", "-ho{}"])
+def test_every_short_o_spelling_is_read(tmp_path, spelling):
+    """`-oV`, `-o=V` and `-o` after `-h` in one token (`-ho V`, `-hoV`) name
+    the -o file too. `--bogus` makes the parse fail (and `-h` exits before
+    it ends), so only the raw-argv scan can protect the file."""
+    d, _ = _out_args(tmp_path)
+    target = tmp_path / "one.file"
+    target.write_text("kept\n", encoding="utf-8")
+    short = spelling.format(target).split(" ")
+    r = _run(tmp_path, d, "--output-alertmanager", "--bogus", *short,
+             "--findings-json", str(target))
+    assert r.returncode in (0, 2), (r.stdout, r.stderr)
+    assert target.read_text(encoding="utf-8") == "kept\n"
+    assert "--findings-json names the same file as -o/--output" in r.stderr, r.stderr
