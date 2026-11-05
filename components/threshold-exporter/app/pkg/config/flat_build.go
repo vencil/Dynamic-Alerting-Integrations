@@ -601,13 +601,15 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 			partial.Profiles = nil
 		}
 	}
-	warnRefusedDimensionBases(name, partial.Dimensions, logger)
+	WarnRefusedDimensionBases(name, partial.Dimensions, logger)
 }
 
-// warnRefusedDimensionBases logs each `dimensions:` base that is a
+// WarnRefusedDimensionBases logs each `dimensions:` base that is a
 // `_critical` tier (DimensionBaseRefused, #3556): it declares nothing, so no
 // key of that shape is served. Sorted, so the log is the same every reload.
-func warnRefusedDimensionBases(name string, dims map[string][]string, logger *log.Logger) {
+// applyBoundaryRules calls it for every directory-mode file; the single-file
+// Load, which applies no boundary rules, calls it itself.
+func WarnRefusedDimensionBases(name string, dims map[string][]string, logger *log.Logger) {
 	if logger == nil {
 		return
 	}
