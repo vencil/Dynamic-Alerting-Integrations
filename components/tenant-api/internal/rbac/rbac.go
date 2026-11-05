@@ -989,8 +989,11 @@ func scopeFieldPasses(allowList []string, value string) bool {
 //   - userOrgVal=="" (caller carries no org claim) → false: no basis to match.
 //   - otherwise → membership.
 func scopeSetPasses(userOrgVal string, tenantOrgs []string) bool {
-	if len(tenantOrgs) == 0 || userOrgVal == "" {
-		return false
+	if len(tenantOrgs) == 0 {
+		return false // unlabeled tenant: no org to match
+	}
+	if userOrgVal == "" {
+		return false // caller carries no org claim: no basis to match
 	}
 	for _, o := range tenantOrgs {
 		if o == userOrgVal {
