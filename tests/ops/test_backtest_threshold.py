@@ -3042,9 +3042,8 @@ class TestUnserializableDocument:
     def test_json_names_it_and_writes_no_o(self, tmp_path):
         res, written = self._run(tmp_path, "--json")
         assert res.returncode == _crash_code(), res.stderr
-        doc = _strict_json(res.stdout)
-        assert (doc["status"], doc["reason"]) == ("caller_error", "output_not_serializable")
-        assert doc["changes"] == []
+        assert res.stdout == ""  # #3558: no envelope — the line on stderr names it
+        assert "the --json document cannot be written as JSON" in res.stderr
         assert "changes[0].impact_pct" in res.stderr
         assert written == "stale\n"
 

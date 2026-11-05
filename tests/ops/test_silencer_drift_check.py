@@ -1342,7 +1342,7 @@ def test_a_configmap_mount_as_rule_source_exits_0(tmp_path, capsys):
 def test_json_a_nan_in_the_silences_is_the_named_crash_not_invalid_json(tmp_path):
     """#3216: `json.load` reads a bare `NaN` in the silences dump, and the
     report echoes the silence back. It was printed as `NaN` (not JSON) with
-    rc 1; run() refuses it now — the crash code, the named envelope."""
+    rc 1; run() refuses it now — the crash code, one named stderr line."""
     import subprocess
     import sys
     silences = tmp_path / "s.json"
@@ -1357,7 +1357,5 @@ def test_json_a_nan_in_the_silences_is_the_named_crash_not_invalid_json(tmp_path
                         "--rule-source", str(rules), "--json"],
                        capture_output=True, text=True, encoding="utf-8", timeout=120)
     assert p.returncode == 2, p.stderr
-    doc = json.loads(p.stdout)  # one valid document: the envelope, not the report
-    assert doc["reason"] == "output_not_serializable"
-    assert "NaN" not in p.stdout
+    assert p.stdout == "", p.stdout  # #3558: none of the report, and no envelope
     assert "nan is not a JSON number" in p.stderr

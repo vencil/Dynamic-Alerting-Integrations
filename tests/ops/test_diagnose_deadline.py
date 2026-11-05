@@ -177,21 +177,17 @@ class TestQueryPrometheusDeadline:
 
 def _run_cli():
     """`diagnose.main()` the way the CLI enters it — through `run()`, the one
-    exit path, which turns a raised `KubectlError` into rc 2, one `ERROR:`
-    line and, armed for --json (diagnose's default), one envelope. That
-    envelope goes straight to fd 1, so the caller reads it with `capfd`."""
+    exit path, which turns a raised `KubectlError` into rc 2 and one `ERROR:`
+    line — and nothing on stdout (#3558: no envelope). Read with `capfd`, so
+    a write straight to fd 1 would be seen too."""
     with pytest.raises(SystemExit) as exc:
         _lib_exitcodes.run(diagnose.main)
     return exc.value.code
 
 
 def _is_the_kubectl_error_envelope(out):
-    """stdout is the caller-error envelope (reason kubectl_error), not a
-    health document."""
-    doc = json.loads(out)
-    assert doc["reason"] == "kubectl_error", doc
-    assert "issues" not in doc and "tenant" not in doc, doc
-    return doc
+    """stdout is empty: no health document, and no envelope (#3558)."""
+    assert out == "", out
 
 
 class TestSingleDiagnoseCli:

@@ -610,7 +610,7 @@ VERDICT_WORDS = {
     "tree_refused": ("the route generator refuses the whole tree on it "
                      "(da-guard validation exits 4)"),
 }
-#: The `reason` of the `--json` envelope the refusal prints.
+#: The refusal's name (the `reason` a tool's own report gives it — backtest's).
 REFUSAL_REASON = "conf_d_not_servable"
 
 
@@ -662,9 +662,8 @@ def refuse_unservable(entries: "Iterable[Entry]", root: "Path | str") -> None:
     """THE fail-closed exit of a conf.d tool run (#3206): when any of a
     tree-mode document's *entries* has a `verdict`, print `refusal_lines`
     to stderr and end the process with the caller-error code (2, the tool
-    could not read its whole input; `_lib_exitcodes.exit_caller_error`, so a
-    `--json` run prints its one envelope, reason `REFUSAL_REASON`). Returns
-    only when no entry has one.
+    could not read its whole input; `_lib_exitcodes.exit_caller_error`:
+    nothing on stdout, #3558). Returns only when no entry has one.
 
     ⛔ Tree mode only: list mode knows only the walk's half of the verdict
     and file mode judges only its `--path` (see the module docstring). The
@@ -680,12 +679,13 @@ def refuse_unservable(entries: "Iterable[Entry]", root: "Path | str") -> None:
     if handler is not None:
         handler(bad, lines)
     from _lib_exitcodes import exit_caller_error  # lazy: no import cycle at load
-    exit_caller_error(lines[-1], REFUSAL_REASON, fields={"refused_paths": refused_paths(bad)})
+    exit_caller_error(lines[-1], REFUSAL_REASON)
 
 
 def refused_paths(entries: "Iterable[Entry]") -> "list[dict[str, str]]":
-    """The refusal's `--json` field: every refused entry as {path, verdict},
-    in order — all of them, as on stderr (#3206)."""
+    """The refusal's paths for a tool's own report (backtest's): every
+    refused entry as {path, verdict}, in order — all of them, as on stderr
+    (#3206)."""
     return [{"path": e.path, "verdict": e.verdict} for e in entries]
 
 

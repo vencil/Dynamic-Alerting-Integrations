@@ -96,8 +96,7 @@ from _grar_merge import receiver_type  # noqa: E402  (#2839 the one type read)
 from _grar_merge import build_receiver_config  # noqa: E402  (#3048 the generator's verdict)
 from _grar_merge import Finding  # noqa: E402  (#3076 a slot verdict's reason)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope,
-)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 
 _LANG = detect_cli_lang()
 
@@ -1056,12 +1055,6 @@ def main() -> None:
     import generate_alertmanager_routes as gar  # the one --policy resolver (#3142)
     gar.add_policy_argument(parser, lang=_LANG)
     args = parser.parse_args()
-    if args.json_output:
-        # #3094: a crash in --json mode still prints one envelope, with the
-        # keys of the routing_tree_refused document below
-        arm_crash_envelope(tool="test-notification", policy_applied=False,
-                           tenants=[], summary={"total_receivers": 0, "passed": 0,
-                                                "failed": 0, "skipped": 0})
 
     # #3142: decided before any receiver is sent — an unusable --policy (or
     # an unmet min_generator_version) is the caller's input, rc 2.

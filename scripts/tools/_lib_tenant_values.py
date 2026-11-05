@@ -1358,8 +1358,7 @@ def exit_on_served_values_error(fn: _F) -> _F:
     one names `da-tools guard`'s `--da-guard-binary` flag, which the tools
     using this decorator do not have.
 
-    `--json` (#3115): a tool that armed its envelope gets one on stdout,
-    `reason: served_values_unavailable`, `error` the `ERROR:` line."""
+    Nothing on stdout, `--json` or not (#3558: no envelope)."""
     @functools.wraps(fn)
     def _wrapped(*args: Any, **kwargs: Any) -> Any:
         try:
@@ -1374,7 +1373,7 @@ def print_load_error(exc: DaGuardNotFoundError | ParseFailedError | DaGuardError
     """The lines `exit_on_served_values_error` prints for `exc`, without the
     exit — for a tool that owes something more on that path: one `ERROR:`
     line, then da-guard's stderr, every non-empty line escaped and behind
-    `DA_GUARD_PREFIX`. Returns the `ERROR:` line (an envelope's `error`)."""
+    `DA_GUARD_PREFIX`. Returns the `ERROR:` line."""
     stream = sys.stderr if stream is None else stream
     if isinstance(exc, DaGuardNotFoundError):
         head, lines = _missing_binary_message(), []

@@ -60,9 +60,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 # lint/ only, so this file sat outside it; since #1642 the top level of
 # scripts/tools/ is enumerated too and this file IS under that contract
 # (--help → 0, unknown flag → 2).
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, Report, arm_crash_envelope, encode_json,
-)
+from _lib_exitcodes import EXIT_CALLER_ERROR, Report, encode_json  # noqa: E402
 from _lib_consumer_read import absolute_reader_binaries  # noqa: E402  (#3424)
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -1202,10 +1200,6 @@ def main():
     # --baseline and --compare imply --json
     if args.baseline or args.compare:
         args.json = True
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope. Armed
-        # after the implication above, so --baseline / --compare are covered.
-        arm_crash_envelope()
 
     # --list: show available checks
     if args.list:

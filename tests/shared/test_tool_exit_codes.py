@@ -451,94 +451,42 @@ def test_existing_custom_excepthook_is_not_clobbered(tmp_path):
 
 
 @pytest.mark.real_crash_exit_code
-def test_armed_crash_envelope_is_printed_once_on_stdout(tmp_path):
-    """arm_crash_envelope (#3094): a crash in --json mode puts exactly one
-    envelope on stdout — the tool's extra keys kept, status/reason/error not
-    overridable — and still exits 2 with the traceback on stderr."""
-    proc = _run_crash_script(
-        tmp_path,
-        "_lib_exitcodes.arm_crash_envelope(schema='t/v1', status='ok')\n"
-        "raise OSError('disk gone')\n")
+def test_a_crash_writes_nothing_to_stdout(tmp_path):
+    """#3558 (was the #3094 crash envelope): a crash puts nothing on stdout
+    — no envelope — and still exits 2 with the traceback and the one
+    `ERROR:` line on stderr, atexit handlers run."""
+    proc = _run_crash_script(tmp_path, "raise OSError('disk gone')\n")
     assert proc.returncode == 2, proc.stderr
-    assert json.loads(proc.stdout) == {
-        "schema": "t/v1", "status": "caller_error", "reason": "internal_error",
-        "error": "ERROR: unexpected internal error (OSError): disk gone"}
+    assert proc.stdout == ""
     assert "Traceback" in proc.stderr
+    assert "ERROR: unexpected internal error (OSError): disk gone" in _stderr_lines(proc)
     assert "ATEXIT-RAN" in proc.stderr
 
 
 @pytest.mark.real_crash_exit_code
-def test_armed_crash_envelope_builds_the_tools_zeroed_report_at_crash_time(tmp_path):
-    """dev-rules §13: the envelope keeps the tool's own schema keys, zeroed;
-    build() runs when the crash happens, not when the envelope is armed."""
+def test_run_writes_nothing_to_stdout_on_a_crash(tmp_path):
     proc = _run_crash_script(
         tmp_path,
-        "state = {'n': 0}\n"
-        "_lib_exitcodes.arm_crash_envelope(lambda: {'total': state['n'], 'reason': 'x'},"
-        " tool='t')\n"
-        "state['n'] = 7\nraise ValueError('late')\n")
+        "def main():\n"
+        "    raise RuntimeError('x')\n"
+        "_lib_exitcodes.run(main)\n")
     assert proc.returncode == 2, proc.stderr
-    assert json.loads(proc.stdout) == {
-        "total": 7, "tool": "t", "status": "caller_error", "reason": "internal_error",
-        "error": "ERROR: unexpected internal error (ValueError): late"}
-
-
-@pytest.mark.real_crash_exit_code
-def test_failing_build_still_prints_the_three_key_envelope(tmp_path):
-    """A build() that raises must not leave stdout empty: rc 2 keeps its envelope."""
-    proc = _run_crash_script(
-        tmp_path,
-        "_lib_exitcodes.arm_crash_envelope(lambda: {}['x'], tool='t')\n"
-        "raise RuntimeError('boom')\n")
-    assert proc.returncode == 2, proc.stderr
-    assert json.loads(proc.stdout) == {
-        "tool": "t", "status": "caller_error", "reason": "internal_error",
-        "error": "ERROR: unexpected internal error (RuntimeError): boom"}
-    assert _stderr_lines(proc)[-2] == \
-        "ERROR: unexpected internal error (RuntimeError): boom", proc.stderr
+    assert proc.stdout == ""
 
 
 @pytest.mark.parametrize("unbuffered", ["1", None])
 @pytest.mark.real_crash_exit_code
-def test_crash_envelope_on_a_closed_stdout_adds_no_second_traceback(tmp_path, unbuffered):
-    """`tool --json | head -c1`: stdout is gone, so the envelope is dropped
-    quietly — the crash report on stderr is the only one, rc stays 2. Run
-    with and without PYTHONUNBUFFERED: a write left in a block-buffered
-    stdout fails again at interpreter exit and makes the rc 120."""
+def test_a_crash_with_stdout_closed_mid_run_has_one_traceback(tmp_path, unbuffered):
+    """A crash after fd 1 was closed: the crash report on stderr is the only
+    one, rc stays 2 (not 120). Run with and without PYTHONUNBUFFERED: a
+    write left in a block-buffered stdout fails again at interpreter exit."""
     env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
     if unbuffered:
         env["PYTHONUNBUFFERED"] = unbuffered
     proc = _run_crash_script(
-        tmp_path,
-        "import os\n_lib_exitcodes.arm_crash_envelope()\n"
-        "os.close(1)\nraise RuntimeError('x')\n", env=env)
+        tmp_path, "import os\nos.close(1)\nraise RuntimeError('x')\n", env=env)
     assert proc.returncode == 2, proc.stderr
-    assert "crash envelope failed" not in proc.stderr
     assert proc.stderr.count("Traceback") == 1, proc.stderr
-
-
-@pytest.mark.real_crash_exit_code
-def test_disarmed_crash_envelope_prints_nothing(tmp_path):
-    """A tool whose own document is already out disarms: a later crash must
-    not add a second document."""
-    proc = _run_crash_script(
-        tmp_path,
-        "_lib_exitcodes.arm_crash_envelope()\nprint('{}')\n"
-        "_lib_exitcodes.disarm_crash_envelope()\nraise RuntimeError('late')\n")
-    assert proc.returncode == 2, proc.stderr
-    assert proc.stdout == "{}\n"
-
-
-@pytest.mark.real_crash_exit_code
-def test_run_prints_the_armed_envelope_on_a_crash(tmp_path):
-    proc = _run_crash_script(
-        tmp_path,
-        "def main():\n"
-        "    _lib_exitcodes.arm_crash_envelope()\n"
-        "    raise RuntimeError('x')\n"
-        "_lib_exitcodes.run(main)\n")
-    assert proc.returncode == 2, proc.stderr
-    assert json.loads(proc.stdout)["reason"] == "internal_error"
 
 
 class TestCrashExitInProcess:
@@ -550,35 +498,7 @@ class TestCrashExitInProcess:
         import _lib_exitcodes as ec  # noqa: E402
         # idempotent reset (not save-then-restore): every test starts from 2
         monkeypatch.setattr(ec, "_crash_exit_code", ec.EXIT_CALLER_ERROR)
-        monkeypatch.setattr(ec, "_crash_envelope_armed", None)
         return ec
-
-    def test_armed_envelope_fires_at_most_once(self, monkeypatch, capfd):
-        # capfd, not capsys: the envelope goes straight to fd 1
-        ec = self._ec(monkeypatch)
-        ec.arm_crash_envelope()
-        ec._print_crash_envelope(RuntimeError("a"))
-        ec._print_crash_envelope(RuntimeError("b"))
-        out = capfd.readouterr().out
-        assert json.loads(out)["error"].endswith("(RuntimeError): a")
-
-    @pytest.mark.real_crash_exit_code
-    def test_a_failing_envelope_still_exits_crash_code(self, monkeypatch, capsys):
-        """The envelope writer failing (an armed build() whose document
-        json cannot write) is reported, and the crash still ends at the
-        crash code — not as the envelope's exception."""
-        ec = self._ec(monkeypatch)
-
-        def broken(exc):
-            raise TypeError("envelope writer broke")
-
-        monkeypatch.setattr(ec, "_print_crash_envelope", broken)
-        with pytest.raises(SystemExit) as exc_info:
-            ec.exit_on_crash(ValueError("first"))
-        assert exc_info.value.code == 2
-        err = capsys.readouterr().err
-        assert "ERROR: unexpected internal error (ValueError): first" in err
-        assert "ERROR: crash envelope failed:" in err and "envelope writer broke" in err
 
     @pytest.mark.real_crash_exit_code
     def test_exit_on_crash_exits_crash_code(self, monkeypatch, capsys):

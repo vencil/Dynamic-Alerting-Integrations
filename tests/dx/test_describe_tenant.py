@@ -1916,7 +1916,5 @@ class TestCustomAlertsAndMergedHash:
                            capture_output=True, text=True, encoding="utf-8", timeout=120)
         assert v.returncode == 2, (v.returncode, v.stdout, v.stderr)
         assert "da-guard binary not found" in v.stderr, v.stderr
-        # #3393 Q3: with --json, the one caller_error envelope on stdout.
-        env = json.loads(v.stdout)
-        assert (env["status"], env["reason"]) == ("caller_error", "served_values_unavailable"), env
-        assert "da-guard binary not found" in env["error"], env
+        # #3558: a caller error carries no document, --json or not.
+        assert v.stdout == "", v.stdout

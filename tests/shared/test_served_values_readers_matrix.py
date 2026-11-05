@@ -198,11 +198,8 @@ def test_dangling_symlink_fails_closed(script, extra, tmp_path):
     p = _cli(script, conf_d, *extra)
     assert_refused(p.returncode, p.stderr, ["tenant-b.yaml"])  # #3206
     assert "(stat_error)" in p.stderr, p.stderr
-    # #3115: 兩支都帶 --json，stdout 是一份 envelope，error 是拒絕的最後一行 ERROR。
-    err = [ln for ln in p.stderr.split("\n") if ln.startswith("ERROR: ")]
-    doc = json.loads(p.stdout)
-    assert (doc["status"], doc["reason"], doc["error"]) == (
-        "caller_error", "conf_d_not_servable", err[-1]), p.stdout
+    # #3558：兩支都帶 --json，呼叫端錯誤不帶文件：stdout 是空的。
+    assert p.stdout == "", p.stdout
 
 
 @pytest.mark.skipif(not hasattr(os, "geteuid") or os.geteuid() == 0,

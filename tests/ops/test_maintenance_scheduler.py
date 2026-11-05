@@ -848,13 +848,12 @@ def test_summary_does_not_claim_silences_were_created(tmp_path, extra, mode, phr
 
 
 @requires_croniter
-def test_unreadable_silences_exit_2_with_one_envelope(tmp_path):
+def test_unreadable_silences_exit_2_with_nothing_on_stdout(tmp_path):
     """#3133: apply mode against an Alertmanager whose silences cannot be read
     used to create the silence anyway (a duplicate when one was active) and exit 0."""
     proc = _run_scheduler(tmp_path, "--alertmanager", "http://127.0.0.1:9")
     assert proc.returncode == 2, proc.stderr
-    doc = json.loads(proc.stdout)
-    assert (doc["status"], doc["reason"]) == ("caller_error", "alertmanager_query_error")
+    assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
     assert "Summary:" not in proc.stderr
 
 

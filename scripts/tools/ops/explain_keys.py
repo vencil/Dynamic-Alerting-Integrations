@@ -60,9 +60,7 @@ for _p in (_TOOLS, _HERE):
 
 import _lib_key_verdict as kv  # noqa: E402
 import _lib_tenant_values as tv  # noqa: E402
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report, arm_crash_envelope,
-)
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report  # noqa: E402
 from _lib_io import YamlFileError, safe_label  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 import _lib_parse_cache  # noqa: E402
@@ -272,10 +270,6 @@ def _fail(reason: str, as_json: bool) -> "int | Report":
 
 def main(argv: Optional[list[str]] = None) -> "int | Report":
     args = build_parser().parse_args(argv)
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope, with the
-        # keys _fail's caller_error document carries
-        arm_crash_envelope(schema=SCHEMA, at=None, undecidable=False, tenants={}, findings=[])
     try:
         expected = None
         if args.assert_file is not None:

@@ -58,7 +58,6 @@ import argparse
 import contextlib
 import hashlib
 import re
-import select
 import signal
 import subprocess
 import time
@@ -71,7 +70,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))  # Repo subdir layout
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, arm_crash_envelope, encode_json)
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, Report, note_stdout_failure)
 from _lib_python import positive_seconds  # noqa: E402
 import _lib_confedit  # noqa: E402  (ADR-036 §2, #3206: Go writes the key's text)
 from _lib_consumer_read import binary_data_bytes  # noqa: E402  (#3461: the one binaryData decode)
@@ -181,7 +180,7 @@ older exporters: a pod that answers /api/v1/config/identity with 404 predates
 signals: from the write on, Ctrl-C / SIGTERM is acted on before the next
   exporter call; from the rollback on they are ignored until the process
   ends. SIGKILL cannot be handled: the ConfigMap may stay at the new bytes
-  and no envelope is printed.
+  and no document is printed.
 exit codes: 0 ok or no-op; {EXIT_VERIFY_FAILED} verification failed, rolled back;
   {EXIT_CALLER_ERROR} caller error, nothing written (also: the change refused by
   `da-guard write`, or no usable da-guard); {EXIT_RELOAD_TIMEOUT} not served in time, rolled back;
@@ -1112,64 +1111,32 @@ def written_files(obj, cm_data, key, new):
 
 
 def _say(text, out=False):
-    """Best-effort output (stderr, or stdout when `out`); never raises.
-    A closed fd (`>&-`: the stream is None), a broken pipe or any other
-    stream failure only loses the text — it never changes what apply does
-    or the exit code it ends with."""
+    """Output that never changes what apply does or the exit code it ends
+    with (W1). A failing stdout is said, not swallowed: its first failure
+    goes to ``_lib_exitcodes.note_stdout_failure`` — one stderr line, and
+    the run keeps its code (the best-effort delivery, as the --json
+    document's ``Report(..., delivery="best_effort")``). A failing stderr
+    only loses the text: there is nowhere left to say it."""
     stream = sys.stdout if out else sys.stderr
+    if stream is None:
+        return
     try:
         stream.write(text + "\n")
         stream.flush()
-    except Exception:  # noqa: BLE001 — output is best effort, by contract
-        pass  # the fd is sent to /dev/null at the end of main (_seal_std_streams)
+    except Exception as exc:  # noqa: BLE001 — output is best effort, by contract
+        if stream is not sys.stderr:  # stdout's own failure (not a redirect to stderr)
+            note_stdout_failure(exc)
 
 
-def _to_devnull(stream):
-    """Point a failing stream's fd at /dev/null, so whatever is still
-    buffered for it — and anything written after main (atexit hooks) — can
-    no longer fail the interpreter's exit flush (exit code 120)."""
-    try:
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        try:
-            os.dup2(devnull, stream.fileno())
-        finally:
-            os.close(devnull)
-    except Exception:  # noqa: BLE001 — None, no fileno, not a real fd
-        pass
-
-
-def _seal_std_streams():
-    """At the end of main: flush stdout / stderr, and send any of them that
-    fails to flush or whose reader is gone (POLLERR / POLLHUP) to
-    /dev/null — including one this tool never wrote to.
-
-    Windows has no select.poll(): there only a failed flush counts. Treating
-    the missing API as a broken stream sealed every healthy one, so anything
-    the same process wrote after main was lost (#2505)."""
-    for stream in {id(s): s for s in (sys.stdout, sys.stderr, sys.__stdout__,
-                                      sys.__stderr__) if s is not None}.values():
-        try:
-            stream.flush()
-            fd = stream.fileno()
-            broken = False
-            if hasattr(select, "poll"):
-                poller = select.poll()
-                poller.register(fd, select.POLLOUT)
-                broken = any(ev & (select.POLLERR | select.POLLHUP | select.POLLNVAL)
-                             for _, ev in poller.poll(0))
-        except Exception:  # noqa: BLE001 — a failed flush is a broken stream
-            broken = True
-        if broken:
-            _to_devnull(stream)
-
-
-def _emit(document=None):
+def _emit(document=None, status=EXIT_OK, delivery="all"):
     """The one way main answers: SIGINT / SIGTERM to SIG_IGN first, so no
     signal can end the process with an exit code other than the one the
-    answer states, then the --json document (if any) on stdout."""
+    answer states; then the answer itself, for ``_lib_exitcodes.run`` — the
+    exit code, or with a --json document a ``Report`` (run writes it)."""
     _guarded(SIGNALS.ignore)
-    if document is not None:
-        _say(document, out=True)
+    if document is None:
+        return status
+    return Report(document, status, delivery=delivery)
 
 
 def new_report():
@@ -1641,18 +1608,19 @@ def build_parser():
 
 def _envelope(status, reason):
     """The diff keys emptied, plus `status`/`reason` (dev-rules §13)."""
-    return encode_json({
+    return {
         "tenant": None, "metric_key": None, "configmap_mode": None,
         "before": None, "after": None, "changed": False,
         "affected_alerts": [], "status": status, "reason": reason,
-        "written": False})
+        "written": False}
 
 
 def _refuse(as_json, reason, message):
-    """Caller error: message on stderr and, under --json, one envelope."""
+    """Caller error: message on stderr and, under --json, its document
+    (a ``Report`` with status 2: dev-rules §13)."""
     _say(f"ERROR: {message}")
-    _emit(_envelope("caller_error", reason) if as_json else None)
-    sys.exit(EXIT_CALLER_ERROR)
+    return _emit(_envelope("caller_error", reason) if as_json else None,
+                 EXIT_CALLER_ERROR)
 
 
 def _apply_envelope(args, mode, report, outcome, code):
@@ -1661,13 +1629,13 @@ def _apply_envelope(args, mode, report, outcome, code):
     `message` and per-pod `problems` / `warnings` / `target_changes`."""
     if outcome["status"] == "caller_error":
         return _envelope("caller_error", outcome["reason"])
-    return encode_json({
+    return {
         "tenant": args.tenant, "metric_key": args.metric_key,
         "configmap_mode": mode, "before": None, "after": None,
         "changed": outcome["changed"], "affected_alerts": [],
         "status": outcome["status"], "reason": None, "exit_code": code,
         "written": outcome["written"], "rolled_back": outcome["rolled_back"],
-        "message": outcome["message"], "pods": report["pods"]})
+        "message": outcome["message"], "pods": report["pods"]}
 
 
 def _status_exit_code(status):
@@ -1690,14 +1658,11 @@ def _status_exit_code(status):
 
 
 def main():
-    """CLI entry point: Patch threshold-config ConfigMap for a specific tenant."""
-    try:
-        _main()
-    finally:
-        _seal_std_streams()
+    """CLI entry point: Patch threshold-config ConfigMap for a specific tenant.
 
-
-def _main():
+    Returns the answer for ``_lib_exitcodes.run``: the exit code, or under
+    --json a ``Report``. Apply's is delivered best effort (#3558 P2): its
+    code says what the ConfigMap holds, which a lost stdout does not change."""
     as_json = any(len(a) > 2 and "--json".startswith(a.split("=", 1)[0])
                   for a in sys.argv[1:])
     try:
@@ -1705,12 +1670,10 @@ def _main():
             args = build_parser().parse_args()
     except SystemExit as exc:
         if as_json and not exc.code:  # --help: its text went to stderr
-            _emit(_envelope("help", None))
-        elif as_json:
-            _refuse(True, "bad_arguments", "arguments rejected (usage above)")
+            return _emit(_envelope("help", None))
+        if as_json:
+            return _refuse(True, "bad_arguments", "arguments rejected (usage above)")
         raise
-    if args.json:  # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope(build=lambda: json.loads(_envelope("caller_error", "internal_error")))
 
     global _CM_NS, _CM_NAME
     _CM_NS, _CM_NAME = args.namespace, args.configmap
@@ -1732,13 +1695,12 @@ def _main():
             diff = diff_preview(cm_data, mode, args.tenant, args.metric_key,
                                 args.value)
             if args.json:
-                # #3216: the one encoder; the one writer of this tool's
-                # answers stays _emit (signals ignored first, a failed write
-                # swallowed — rc is the answer's, not the stream's).
-                _emit(encode_json(diff))
-            else:
-                print_diff(diff)
-            return
+                # #3216: run() writes it, through the one encoder; signals
+                # are ignored first (_emit). Nothing was written, so its
+                # delivery is the default one: a lost stdout is rc 2.
+                return _emit(diff)
+            print_diff(diff)
+            return EXIT_OK
         with contextlib.redirect_stdout(sys.stderr if args.json else sys.stdout):
             _say(f"Detected ConfigMap mode: {mode}", out=True)
             status = apply_patch(
@@ -1767,21 +1729,18 @@ def _main():
         code = _status_exit_code(outcome["status"])
     except BaseException:  # noqa: BLE001
         code = EXIT_STATE_UNKNOWN
-    try:
-        _answer(args, mode, report, outcome, code)
-    except BaseException:  # noqa: BLE001 — the answer is best effort
-        pass
-    if code != EXIT_OK:
-        sys.exit(code)
+    answer = _guarded(_answer, args, mode, report, outcome, code)
+    return code if answer is None else answer
 
 
 def _answer(args, mode, report, outcome, code):
-    """Say the outcome (stderr, and the --json envelope)."""
+    """Say the outcome (stderr), and return the answer: *code*, or under
+    --json the document as a best-effort ``Report`` (#3558 P2)."""
     if outcome["message"] and outcome["status"] != "applied":
         _guarded(_say, f"ERROR: {outcome['message']}")
     doc = (_guarded(_apply_envelope, args, mode, report, outcome, code)
            if args.json else None)
-    _guarded(_emit, doc)
+    return _emit(doc, code, delivery="best_effort")
 
 
 if __name__ == "__main__":

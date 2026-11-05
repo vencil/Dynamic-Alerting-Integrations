@@ -47,7 +47,8 @@ except ImportError:
 from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir, write_text_secure  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule files as Prometheus reads them)
-from _lib_exitcodes import EXIT_CALLER_ERROR, CallerError, arm_crash_envelope, die_caller_error, encode_json  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_CALLER_ERROR, CallerError, die_caller_error, encode_json)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_confd import (  # noqa: E402
@@ -1085,8 +1086,6 @@ def main():
     )
 
     args = parser.parse_args()
-    if args.json:  # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
     # #3392: a directory the caller gave that is not there or not a
     # directory is a caller error, named before anything is analysed or
     # written — it was an `issues` WARNING and a checklist / CRD set made from

@@ -51,7 +51,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 
 # ---------------------------------------------------------------------------
@@ -618,9 +618,6 @@ def main() -> "int | Report":
     try_utf8_stdout()
     parser = build_parser()
     args = parser.parse_args()
-    if args.json_output:  # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope(build=lambda: empty_report(
-            args.period, "caller_error", "internal_error", ""))
 
     period_secs = parse_duration_seconds(args.period)
     if not period_secs:

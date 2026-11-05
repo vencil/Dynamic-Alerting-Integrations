@@ -122,8 +122,8 @@ def supplied(args: Any, parser: Any, dest: str) -> bool:
 
 
 def require_path(path: Any, kind: str, *, lang: str, flag: Optional[str] = None) -> None:
-    """`classify_path`, raising `CallerError` (rc 2 under ``run()``, the
-    reason in the ``--json`` envelope) when *path* is not usable."""
+    """`classify_path`, raising `CallerError` (rc 2 under ``run()``, one
+    stderr line, nothing on stdout) when *path* is not usable."""
     problem = classify_path(path, kind, lang=lang, flag=flag)
     if problem is not None:
         raise _caller_error(problem.message, problem.reason)
