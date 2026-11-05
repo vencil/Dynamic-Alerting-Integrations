@@ -104,13 +104,7 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_prometheus import QueryError, prometheus_rules, rules_groups  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK,
-    EXIT_VIOLATION,
-    EXIT_CALLER_ERROR,
-    Report,
-    arm_crash_envelope,
-)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 # Finding categories.
@@ -499,8 +493,6 @@ def main():
     parser.add_argument("--ci", action="store_true", help=i18n("h_ci", lang))
 
     args = parser.parse_args()
-    if args.json:  # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
 
     auditor = RuntimeAuditor(args)
     auditor.run()

@@ -17,7 +17,7 @@ import pytest
 import yaml
 
 import patch_config as pc  # noqa: E402
-from _patch_config_fake import FakeCluster  # noqa: E402
+from _patch_config_fake import FakeCluster, run_main  # noqa: E402
 from _exporter_reading import exporter_reading  # noqa: E402  (#3206)
 
 
@@ -344,7 +344,7 @@ class TestMainCLI:
         with mock.patch("sys.argv", [
             "patch_config.py", "--diff", "db-a", "cpu", "90",
         ]):
-            pc.main()
+            run_main()
         out = capsys.readouterr().out
         assert "Config Change Preview" in out
         assert "Before" not in out
@@ -358,7 +358,7 @@ class TestMainCLI:
         with mock.patch("sys.argv", [
             "patch_config.py", "--diff", "--json", "db-a", "cpu", "90",
         ]):
-            pc.main()
+            run_main()
         import json
         out = json.loads(capsys.readouterr().out)
         assert out["changed"] is True
@@ -372,7 +372,7 @@ class TestMainCLI:
         with mock.patch("patch_config.run_cmd", side_effect=cluster), \
                 mock.patch("sys.argv", ["patch_config.py", "--json",
                                         "db-a", "cpu", "90"]):
-            pc.main()
+            run_main()
         captured = capsys.readouterr()
         doc = json.loads(captured.out)
         assert (doc["status"], doc["exit_code"], doc["written"]) == (
@@ -386,7 +386,7 @@ class TestMainCLI:
         """argparse 接受 `--js`＝`--json`；參數錯誤時也要吐 envelope。"""
         with mock.patch("sys.argv", ["patch_config.py", "tenant-x", "--diff", flag]):
             with pytest.raises(SystemExit) as exc_info:
-                pc.main()
+                run_main()
         assert exc_info.value.code == 2
         assert json.loads(capsys.readouterr().out)["reason"] == "bad_arguments"
         mock_run.assert_not_called()
@@ -396,7 +396,7 @@ class TestMainCLI:
                                "db-a.yaml": "tenants:\n  db-a:\n    cpu: 80"})
         with mock.patch("patch_config.run_cmd", side_effect=cluster), \
                 mock.patch("sys.argv", ["patch_config.py", "db-a", "cpu", "90"]):
-            pc.main()
+            run_main()
         out = capsys.readouterr().out
         assert "Success" in out
 
@@ -593,7 +593,7 @@ class TestWritePathUsesTheLocator:
         mock_run.side_effect = [json.dumps(cm)]
         with mock.patch("sys.argv",
                         ["patch_config.py", "tenant-x", "cpu", "default"]):
-            pc.main()  # rc 0：不得 SystemExit
+            run_main()  # rc 0：不得 SystemExit
         assert mock_run.call_count == 1  # 只有 get，沒有 patch
         assert "No-op" in capsys.readouterr().err
 
@@ -607,7 +607,7 @@ class TestWritePathUsesTheLocator:
         with mock.patch("sys.argv",
                         ["patch_config.py", "tenant-x", "cpu", "90"]):
             with pytest.raises(SystemExit) as exc:
-                pc.main()
+                run_main()
         assert exc.value.code == 2
         assert mock_run.call_count == 1
         assert "a.yaml" in capsys.readouterr().err
@@ -830,7 +830,7 @@ class TestDiffChanged:
                                "tenant-x.yaml": _T})
         with mock.patch("patch_config.run_cmd", side_effect=cluster), \
                 mock.patch("sys.argv", ["patch_config.py", "tenant-x", "cpu", "9"]):
-            pc.main()
+            run_main()
         assert len(cluster.patches) == 1
 
 
@@ -1059,7 +1059,7 @@ class TestWriteAndCliEdges:
             {"data": {"_defaults.yaml": _DEFAULTS, "tx.yaml": "- a\n"}})
         with mock.patch("sys.argv", ["patch_config.py", "tx", "m", "1", *argv]):
             with pytest.raises(SystemExit) as exc:
-                pc.main()
+                run_main()
         assert exc.value.code == 2
         reason = json.loads(capsys.readouterr().out)["reason"]
         assert reason == ("configmap_shape" if argv[-1] == "--json"
@@ -1067,9 +1067,7 @@ class TestWriteAndCliEdges:
 
     def test_json_help_is_rc_0_and_one_document(self, capsys):
         with mock.patch("sys.argv", ["patch_config.py", "--json", "-h"]):
-            with pytest.raises(SystemExit) as exc:
-                pc.main()
-        assert not exc.value.code
+            run_main()  # rc 0: no SystemExit (#3558: a Report, written by run())
         out = capsys.readouterr()
         assert json.loads(out.out)["status"] == "help"
         assert "usage" in out.err and "rejected" not in out.err
@@ -1091,5 +1089,5 @@ class TestWriteAndCliEdges:
         with mock.patch("sys.argv", ["patch_config.py", "--diff", "--json",
                                      "tx", "m", "1"]):
             with pytest.raises(SystemExit):
-                pc.main()
+                run_main()
         assert json.loads(capsys.readouterr().out)["reason"] == "kubectl_failed"

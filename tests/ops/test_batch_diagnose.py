@@ -981,8 +981,8 @@ class TestExitCode:
 class TestDiscoveryWithoutAnAnswer:
     """真的跑 CLI、PATH 上放假 kubectl：探索讀取沒得到回答時，以前印一行
     `ERROR: kubectl failed` 再以 `No tenants found` 結束——讀起來像叢集裡沒有
-    租戶。現在是 KubectlError：rc 2，點名 kubectl，--json 的 envelope reason
-    是 `kubectl_error`。"""
+    租戶。現在是 KubectlError：rc 2，點名 kubectl；--json 的 stdout 是空的
+    （#3558：呼叫端錯誤不帶文件）。"""
 
     def test_forbidden_discovery_exits_2_naming_kubectl(self, tmp_path):
         path = _fake_kubectl(
@@ -993,7 +993,7 @@ class TestDiscoveryWithoutAnAnswer:
         assert "No tenants found" not in r.stderr
         assert "Traceback" not in r.stderr
         assert "kubectl get configmap threshold-config" in r.stderr and "Forbidden" in r.stderr
-        assert json.loads(r.stdout)["reason"] == "kubectl_error"
+        assert r.stdout == ""  # #3558: a caller error carries no document
 
     def test_a_configmap_the_exporter_rejects_exits_2(self, tmp_path, da_guard_env):
         """#1525: one tenant in two keys — the exporter rejects the whole tree,
@@ -1006,7 +1006,7 @@ class TestDiscoveryWithoutAnAnswer:
         assert r.returncode == 2, r.stdout + r.stderr
         assert "Traceback" not in r.stderr
         assert "duplicate tenant ID" in r.stderr
-        assert json.loads(r.stdout)["reason"] == "served_values_unavailable"
+        assert r.stdout == ""  # #3558: a caller error carries no document
 
     def test_a_missing_configmap_exits_2_naming_it(self, tmp_path):
         path = _fake_kubectl(tmp_path, 0)   # --ignore-not-found: rc 0, nothing on stdout
@@ -1014,7 +1014,7 @@ class TestDiscoveryWithoutAnAnswer:
         assert r.returncode == 2, r.stdout + r.stderr
         assert "No tenants found" not in r.stderr
         assert "ConfigMap 'threshold-config' not found in namespace 'monitoring'" in r.stderr
-        assert json.loads(r.stdout)["reason"] == "configmap_not_found"
+        assert r.stdout == ""  # #3558: a caller error carries no document
 
 
 # ── #2954：--timeout 真的會中斷單一租戶的檢查 ─────────────────────

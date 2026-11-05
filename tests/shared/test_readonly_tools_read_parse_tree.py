@@ -661,8 +661,8 @@ def test_operator_tools_without_da_guard_are_exit_2(
 
 @pytest.mark.parametrize("tool", _OPERATOR_TOOLS)
 def test_operator_tools_name_one_reason_for_an_unknown_tenant_set(tool, tmp_path):
-    """Run as the CLI (the `--json` envelope is armed there): both tools
-    reading the same tenant set give the same envelope `reason`."""
+    """Run as the CLI: both tools reading the same tenant set refuse it the
+    same way — rc 2, the reason on stderr, nothing on stdout (#3558)."""
     d = _write(tmp_path / "conf.d", {**_OP, "sub/y.yaml": "tenants:\n  db-c: {}\n"})
     (tmp_path / "src").mkdir()
     script = TOOLS / "ops" / f"{tool}.py"
@@ -672,4 +672,4 @@ def test_operator_tools_name_one_reason_for_an_unknown_tenant_set(tool, tmp_path
     r = subprocess.run([sys.executable, str(script), *argv], capture_output=True, text=True,
                        encoding="utf-8", timeout=120)
     assert r.returncode == 2, r.stderr
-    assert json.loads(r.stdout)["reason"] == "tenant_set_unknown", r.stdout
+    assert r.stdout == "", r.stdout

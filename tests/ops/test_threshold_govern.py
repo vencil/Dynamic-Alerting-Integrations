@@ -1343,7 +1343,7 @@ def test_apply_with_an_unreadable_sole_token_file_stops_before_any_write(tmp_pat
         capture_output=True, text=True, encoding="utf-8", env=env, timeout=60, check=False)
     assert proc.returncode == 2, proc.stderr
     assert "--auth-token-file" in proc.stderr and str(missing) in proc.stderr
-    assert '"reason": "file_not_found"' in proc.stdout, proc.stdout
+    assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
 
 
 def test_resolve_auth_token_none_configured(monkeypatch):

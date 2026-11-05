@@ -42,7 +42,7 @@ from _lib_python import detect_cli_lang, add_prometheus_arg  # noqa: E402
 # #3133: the lib's raising reader (shape checked, samples read once).
 from _lib_prometheus import QueryError, prometheus_instant  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 from _lib_paths import require_dir  # noqa: E402  (#3276 / #3392)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_kubectl import KubectlError, kubectl_list, kubectl_logs  # noqa: E402  (#3349)
@@ -667,8 +667,6 @@ def main() -> Report:
     parser.add_argument("--json", action="store_true", default=True,
                         help="Emit machine-readable JSON to stdout (default).")
     args = parser.parse_args()
-    if args.json:  # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
 
     if args.show_inheritance and args.config_dir is None:
         print("ERROR: --show-inheritance requires --config-dir",
@@ -691,8 +689,8 @@ def main() -> Report:
     except KubectlError as exc:
         # issue 1513 / #2968 / #3349: no answer from the cluster — kubectl
         # missing (the da-tools image ships none), forbidden, unreachable or
-        # out of time — is the environment: rc 2 and one line, the reason
-        # `kubectl_error` under --json; never "Pod not found" (rc 1).
+        # out of time — is the environment: rc 2 and one stderr line (stdout
+        # empty under --json, #3558); never "Pod not found" (rc 1).
         raise KubectlError(f"{exc}; the MariaDB Pod check needs kubectl and a cluster "
                            "that answers") from None
     except CommandTimeoutError as exc:

@@ -209,14 +209,14 @@ def test_deprecate_rule_judges_a_carrier_by_yaml_v3(tmp_path):
 
 def _pc(cm_data, *argv):
     import patch_config as pc
-    from _patch_config_fake import FakeCluster
+    from _patch_config_fake import FakeCluster, run_main
     cluster = FakeCluster(cm_data)
     with mock.patch("patch_config.run_cmd", side_effect=cluster), \
             mock.patch("sys.argv", ["patch_config.py", "--json", *argv,
                                     "--poll-interval", "0.001"]), \
             mock.patch("sys.stdout") as out:
         try:
-            pc.main()
+            run_main()  # #3558: main answers with a Report; run_main writes it
             rc = 0
         except SystemExit as exc:
             rc = exc.code

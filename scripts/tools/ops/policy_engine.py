@@ -60,8 +60,7 @@ sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report, arm_crash_envelope,
-)
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report)
 
 # ---------------------------------------------------------------------------
 # Repo-layout import compatibility: the repo subdir layout needs the
@@ -1193,10 +1192,9 @@ def _unreadable_yaml_exit(exc: YamlFileError, args, lang: str) -> "int | Report"
 
     ``_defaults.yaml`` and every tenant file reach ``_lib_io.load_yaml_file``
     with no handler; a ``\\xff`` byte in one of them used to be a
-    ``UnicodeDecodeError`` traceback (rc 1, 0 bytes of stdout under
-    ``--json``). Not the shared ``exit_on_yaml_file_error`` wrapper: this
-    tool owes ``--json`` its ``caller_error`` envelope on every terminal
-    path, same as the ``--policy`` ladder above.
+    ``UnicodeDecodeError`` traceback (rc 1). Now rc 2 and one line naming
+    the file and, under ``--json``, this tool's own ``caller_error`` document
+    (``_caller_error_exit``, a Report), same as the ``--policy`` ladder below.
     """
     label = safe_label(exc)   # untrusted filename in the message (#1538)
     print(f"無法讀取 {label}" if lang == "zh" else f"ERROR: cannot read {label}",
@@ -1227,7 +1225,8 @@ def _load_error_exit(exc: Exception, args, rules_evaluated: int) -> "int | Repor
     → rc 2, nothing evaluated. da-guard missing or failing, a file the
     exporter drops or cannot read (named, with da-guard's stderr below), a
     tree da-guard refuses, or one the route generator refuses (its own
-    lines). The ``--json`` envelope as on every other caller-error path."""
+    lines). Under ``--json``, this tool's own ``caller_error`` document
+    (``_caller_error_exit``)."""
     if isinstance(exc, RoutingTreeRefused):
         print("ERROR: the route generator refuses this tree, so `_routing` "
               "cannot be resolved:", file=sys.stderr)
@@ -1260,11 +1259,6 @@ def _main(argv: Optional[list[str]] = None) -> "int | Report":
     lang = detect_cli_lang()
     parser = build_parser(lang)
     args = parser.parse_args(argv)
-    if args.json_output:
-        # #3094: a crash in --json mode still prints one envelope, with the
-        # keys of the caller_error documents below
-        arm_crash_envelope(tenants_evaluated=0, rules_evaluated=0, error_count=0,
-                           warning_count=0, passed=False, violations=[])
 
     # A non-existent --config-dir is a caller error, not a vacuous pass:
     # without this guard a typo'd path silently yields no rules AND no tenant
@@ -1272,8 +1266,8 @@ def _main(argv: Optional[list[str]] = None) -> "int | Report":
     # --config-dir <typo> --ci && promote` would fail open. (Note: a dir that
     # EXISTS but has no _policies is a separate, legitimate no-op handled at
     # the `if not rules` path and left at EXIT_OK.)
-    # #3276: judged by the shared caller-path check; `--json` gets the armed
-    # envelope (the keys above) with that check's reason.
+    # #3276: judged by the shared caller-path check: rc 2, its line, nothing
+    # on stdout (#3558).
     config_dir_problem = classify_path(args.config_dir, "dir", lang=lang, flag="--config-dir")
     if config_dir_problem is not None:
         raise CallerError(f"設定目錄無法使用: {config_dir_problem.message}" if lang == "zh"
@@ -1333,8 +1327,9 @@ def _main(argv: Optional[list[str]] = None) -> "int | Report":
         # fell through to "No policy rules found" rc 0 because
         # `"policies" in "just a string"` is a substring test. Same handler
         # ladder as `lint_custom_rules.load_policy`: each shape is a caller
-        # error (2) naming the path and the reason, with the --json envelope
-        # the not-found path emits.
+        # error (2) naming the path and the reason, with this tool's own
+        # caller_error document under --json (the not-found path above is a
+        # CallerError: stdout empty, #3558).
         problem: Optional[tuple[str, str, str]] = None   # (reason, en, zh)
         try:
             # ADR-036 step 4 (#2906): yaml.v3, as the tenants it is compared

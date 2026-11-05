@@ -122,7 +122,7 @@ def test_tester_without_policy_says_so_and_keeps_rc(tmp_path):
 
 
 @pytest.mark.parametrize("kind", ["too_new", "not_a_file", "no_key"])
-def test_tester_unusable_policy_is_rc2_with_envelope(tmp_path, kind):
+def test_tester_unusable_policy_is_rc2_with_nothing_on_stdout(tmp_path, kind):
     conf = _tree(tmp_path, {"receiver": _OK})
     pol = {"too_new": lambda: _too_new(tmp_path),
            "not_a_file": lambda: str(tmp_path / "missing.yaml"),
@@ -130,9 +130,7 @@ def test_tester_unusable_policy_is_rc2_with_envelope(tmp_path, kind):
     res = _tester(conf, "--policy", pol)
     assert res.returncode == 2, res.stderr
     assert "Traceback" not in res.stderr
-    doc = json.loads(res.stdout)
-    assert (doc["status"], doc["reason"]) == ("caller_error", "policy_unusable"), doc
-    assert doc["tenants"] == [] and doc["policy_applied"] is False
+    assert res.stdout == "", res.stdout  # #3558: a caller error carries no document
 
 
 # ── explain-route ────────────────────────────────────────────────────
@@ -184,9 +182,8 @@ def test_explain_unusable_policy_is_rc2(tmp_path):
         res = _run(_EXPLAIN, "--config-dir", str(conf), "--json",
                    "--policy", _too_new(tmp_path), *flags)
         assert res.returncode == 2, res.stderr
-        doc = json.loads(res.stdout)
-        assert doc["reason"] == "policy_unusable", doc
-        assert "min_generator_version" in doc["error"]
+        assert res.stdout == "", res.stdout  # #3558: a caller error carries no document
+        assert "min_generator_version" in res.stderr, res.stderr
 
 
 # ── validate-config ──────────────────────────────────────────────────

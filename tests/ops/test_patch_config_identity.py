@@ -7,6 +7,8 @@ ConfigMap 算出 exporter 會回報的 config_hash，輪詢到相符為止；par
 規則算（`_patch_config_fake.fake_config_hash`），不呼叫 patch_config——Python 那份
 規則對錯由 `tests/shared/config_identity_golden.json` 與 Go 端共同釘住。
 """
+import contextlib
+import io
 import json
 import signal
 from pathlib import Path
@@ -15,7 +17,7 @@ from unittest import mock
 import pytest
 
 import patch_config as pc  # noqa: E402
-from _patch_config_fake import FakeCluster, NOT_FOUND, render_thresholds  # noqa: E402
+from _patch_config_fake import FakeCluster, NOT_FOUND, render_thresholds, run_main  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 GOLDEN = REPO / "tests" / "shared" / "config_identity_golden.json"
@@ -38,21 +40,19 @@ def _multi(**extra):
 
 
 def _run(cluster, *argv):
-    """(exit code, --json envelope) of `patch_config.py --json <argv>`."""
-    out = []
+    """(exit code, --json document) of `patch_config.py --json <argv>`.
+    The document is the one stdout carries (#3558: written by run(), from
+    the Report main returns), parsed whole."""
+    out = io.StringIO()
     with mock.patch("patch_config.run_cmd", side_effect=cluster), \
             mock.patch("sys.argv", ["patch_config.py", "--json", *argv, *FAST]), \
-            mock.patch("patch_config._say",
-                       side_effect=lambda t, out_=False, **k: out.append(t)
-                       if (out_ or k.get("out")) else None):
+            contextlib.redirect_stdout(out), contextlib.redirect_stderr(io.StringIO()):
         try:
-            pc.main()
+            run_main()
             code = 0
         except SystemExit as exc:
             code = exc.code
-    docs = [json.loads(t) for t in out if t.startswith("{")]
-    assert len(docs) == 1, out
-    return code, docs[0]
+    return code, json.loads(out.getvalue())
 
 
 def _first_call_after(cluster, n_patches):
@@ -238,7 +238,7 @@ class TestOlderExporter:
         with mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
                                      "mysql_connections", "65", *FAST]), \
                 mock.patch("patch_config.run_cmd", side_effect=c):
-            pc.main()
+            run_main()
         cap = capsys.readouterr()
         doc = json.loads(cap.out)
         assert doc["status"] == "applied"

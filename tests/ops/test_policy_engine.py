@@ -747,14 +747,13 @@ class TestCLI:
         assert f"--config-dir {missing}: " in proc.stderr
 
     def test_main_nonexistent_config_dir_json_envelope(self, tmp_path, capsys):
-        """不存在的 --config-dir + --json → stdout 仍恰一份 JSON（caller_error 信封）。"""
+        """不存在的 --config-dir + --json → rc 2、stderr 點名；stdout 是空的
+        （#3558：CallerError 不帶文件，lib 不再補 envelope）。"""
         missing = tmp_path / "does-not-exist"
         proc = _cli("--config-dir", str(missing), "--json")
         assert proc.returncode == 2, proc.stderr
-        doc = json.loads(proc.stdout)
-        assert doc["status"] == "caller_error"
-        assert doc["reason"] == "dir_not_found"  # #3276 (was config_dir_not_found)
-        assert doc["passed"] is False
+        assert proc.stdout == "", proc.stdout
+        assert f"--config-dir {missing}" in proc.stderr, proc.stderr
 
     # ── #1651: --policy supplied but not a file ──────────────────────
 
@@ -779,16 +778,12 @@ class TestCLI:
         assert "Do not drop the flag" in proc.stderr or "不要靠拿掉" in proc.stderr
 
     def test_main_policy_missing_file_json_envelope(self, tmp_path, capsys):
-        """同上 + --json → stdout 恰一份 JSON，caller_error / policy_file_not_found。"""
+        """同上 + --json → rc 2；stdout 是空的（#3558：CallerError 不帶文件）。"""
         (tmp_path / "tenant-a.yaml").write_text(_TENANT_A, encoding="utf-8")
         missing = tmp_path / "nope.yaml"
         proc = _cli("--config-dir", str(tmp_path), "--policy", str(missing), "--json")
         assert proc.returncode == 2, proc.stderr
-        doc = json.loads(proc.stdout)
-        assert doc["status"] == "caller_error"
-        assert doc["reason"] == "file_not_found"  # #3276 (was policy_file_not_found)
-        assert doc["passed"] is False
-        assert doc["violations"] == []
+        assert proc.stdout == "", proc.stdout
         assert f"--policy {missing}: " in proc.stderr
 
     # ── #1651 blind-review follow-up: --policy IS a file but cannot be read ──

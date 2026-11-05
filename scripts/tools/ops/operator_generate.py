@@ -48,7 +48,7 @@ except ImportError:
     yaml = None
 
 from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
-from _lib_exitcodes import Report, arm_crash_envelope, die_caller_error  # noqa: E402
+from _lib_exitcodes import Report, die_caller_error  # noqa: E402
 from _lib_io import OutputWriteError, ensure_dir  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 import _lib_metric_sources  # noqa: E402  (#1595 D1b: which platform rules operator mode can run)
@@ -1101,8 +1101,6 @@ def main():
     """CLI entry point (thin orchestration: parse → validate → generate → emit → exit)."""
     parser = build_arg_parser()
     args = parser.parse_args()
-    if args.json:
-        arm_crash_envelope()  # #3094: a crash in --json mode still prints one envelope
 
     # Resolve paths relative to current directory
     rule_packs_dir = args.rule_packs_dir.resolve()
@@ -1169,7 +1167,7 @@ def main():
         die_caller_error(f"ERROR: rule packs: {safe_label(_lib_consumer_read.error_text(exc))}",
                          reason="rule_packs_unreadable")
     except Exception as exc:  # noqa: BLE001 — the tool's own "no result"
-        # #3115: through die_caller_error, so --json gets its one envelope.
+        # rc 2 and one line; nothing on stdout, --json or not (#3558).
         die_caller_error(f"ERROR: {safe_label(exc)}", reason="generate_failed")
 
     # Emit CRDs. No --output-dir (or --dry-run) prints YAML to stdout; the write path writes files and

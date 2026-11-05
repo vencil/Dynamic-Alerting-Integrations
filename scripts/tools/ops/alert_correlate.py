@@ -32,9 +32,7 @@ from _lib_python import (  # noqa: E402
 # #3133: alerts are read by the lib; a Prometheus that does not answer raises
 # QueryError (rc 2) — never "no alerts".
 from _lib_prometheus import QueryError, alertmanager_alerts, prometheus_alerts  # noqa: E402
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope,
-)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_paths import require_file  # noqa: E402  (#3415)
 
 # ---------------------------------------------------------------------------
@@ -479,9 +477,6 @@ def main():
     """CLI entry point: 告警關聯分析引擎。"""
     parser = build_parser()
     args = parser.parse_args()
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
 
     window_secs = parse_duration_seconds(args.window)
     if window_secs is None or window_secs <= 0:

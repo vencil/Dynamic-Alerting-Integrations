@@ -193,12 +193,14 @@ domain: ci
 supersedes: [TRK-3180]
 target_version: v3.0.0
 created_at: 2026-11-03
-updated_at: 2026-11-03
+updated_at: 2026-11-05
 ```
 
 **來源**：[#3541](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3541)。nightly race 原本一個 module 一個 4 核 runner，所有 package 互搶核心，wall-clock 被擠壓灌水：11-02 那晚 tenant-api `internal/handler` 跑到 1718 s（`-timeout` 為 1800 s），threshold-exporter `cmd/da-guard` 1331 s。
 
 **PR-A**：`plan` job 以 `scripts/ops/plan_race_shards.py` 對每個 module 跑 `go list`，依上一晚 `race-timings-<module>` artifact 的各 package 耗時做 greedy 最長優先分片（每 module 至多 4 片，常數在腳本內）；無耗時資料則 round-robin、`go list` 失敗則退回一條跑原 pattern 的 leg，皆只發 `::warning::`。`merge` job 把同一 module 的各片串接後照舊只解析一次，fragment 與 fingerprint 不變；任一片缺證據即不產 fragment，report 判 `no-result`。module 清單只在該腳本，race／merge matrix 與 `--expected-modules` 都由它推導。
+
+**`-short` 定案**（2026-11-05 owner 裁決）：原計畫的 PR-C（量到放得下後拿掉 nightly 的 `-short`）取消。nightly 是重複壓力層、PR CI 是完整覆蓋層，與 Go 官方 race builder 帶 `-short`、完整測試在 `-longtest` builder 的分工相同；da-guard 完整矩陣 ×10 是單一 test binary 的成本，分片分不開。理由寫在 workflow 註解與守衛 `test_nightly_go_test_runs_with_short` 的 docstring。剩下：PR-B（PR CI 記錄每個 package 的 CPU 秒並 warning）；tenant-api `cmd/gen-error-contract`、`internal/handler` 獨佔一片仍約 950 s，由 tenant-api 線在 [#3574](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3574) 降 test 本身成本。
 
 ### Snapshot test 擴展
 

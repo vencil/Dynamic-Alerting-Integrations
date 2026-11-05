@@ -350,8 +350,8 @@ def _verify_cli(tmp_path, path):
 
 
 class TestVerifyWithoutAnAnswer:
-    """`--verify --json` when kubectl gives no answer: rc 2, one envelope with
-    reason `kubectl_error`, no traceback — not a verify report."""
+    """`--verify --json` when kubectl gives no answer: rc 2, the reason on
+    stderr, no traceback — not a verify report, and (#3558) no envelope."""
 
     def test_forbidden_kubectl(self, tmp_path):
         bindir = tmp_path / "bin"
@@ -368,10 +368,8 @@ class TestVerifyWithoutAnAnswer:
         r = _verify_cli(tmp_path, f"{bindir}{os.pathsep}{os.environ['PATH']}")
         assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
         assert "Traceback" not in r.stderr
-        doc = json.loads(r.stdout)
-        assert doc["reason"] == "kubectl_error", doc
-        assert "Forbidden" in doc["error"]
-        assert "checks" not in doc   # no verify report under the envelope
+        assert r.stdout == "", r.stdout  # #3558: a caller error carries no document
+        assert "Forbidden" in r.stderr, r.stderr
 
     def test_no_kubectl_on_path(self, tmp_path):
         empty = tmp_path / "no-kubectl"
@@ -379,9 +377,8 @@ class TestVerifyWithoutAnAnswer:
         r = _verify_cli(tmp_path, str(empty))
         assert r.returncode == EXIT_CALLER_ERROR, r.stdout + r.stderr
         assert "Traceback" not in r.stderr
-        doc = json.loads(r.stdout)
-        assert doc["reason"] == "kubectl_error", doc
-        assert "kubectl is not on PATH" in doc["error"]
+        assert r.stdout == "", r.stdout  # #3558: a caller error carries no document
+        assert "kubectl is not on PATH" in r.stderr, r.stderr
 
 
 def test_json_document_is_utf8_not_ascii_escaped(tmp_path):

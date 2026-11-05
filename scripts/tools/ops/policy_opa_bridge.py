@@ -100,8 +100,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 # ADR-036 step 4 (#2906): the root defaults carrier is parse-tree's choice
 # (`defaults_carriers`) and its content parse-tree's yaml.v3 reading.
@@ -729,12 +728,6 @@ def main(argv: Optional[list[str]] = None) -> "int | Report":
     lang = detect_cli_lang()
     parser = build_parser(lang)
     args = parser.parse_args(argv)
-    if args.json_output:
-        # #3094: a crash in --json mode still prints one envelope, with the
-        # keys of the zeroed report below; `passed` is False, not that
-        # report's True — a crash evaluated nothing and must not read as a pass
-        arm_crash_envelope(tenants_evaluated=0, error_count=0, warning_count=0,
-                           passed=False, violations=[])
 
     # Load configs
     tenant_configs, served = load_tenant_inputs(args.config_dir)
@@ -807,9 +800,8 @@ def main(argv: Optional[list[str]] = None) -> "int | Report":
         result = convert_opa_violations(opa_violations, len(tenant_configs))
     except OpaEvalError as e:
         # #2724: no evaluation (or an answer that is not violations) is not a
-        # pass. One stderr line; under --json, `_lib_exitcodes.run` adds the
-        # `caller_error` envelope this rc 2 owes, as for the da-guard and
-        # no-OPA-selected exits above (#3115 — stdout used to stay empty).
+        # pass. One stderr line, rc 2, stdout empty under --json too (#3558),
+        # as for the da-guard and no-OPA-selected exits above.
         print(f"ERROR: {safe_label(str(e))}", file=sys.stderr)
         return EXIT_CALLER_ERROR
 
