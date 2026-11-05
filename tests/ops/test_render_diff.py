@@ -351,6 +351,29 @@ def test_route_identity_is_the_matcher_path_not_the_receiver_name():
     assert ('tenant="a" #2',) in rd.flatten_routes(cfg("x"))
 
 
+def test_the_route_standing_in_for_the_root_is_not_a_level_of_its_own():
+    """With per-tenant enforced routing the merge puts the base's and the
+    tenant routes under one matcher-less route to the root receiver (#2519):
+    the same routes, not moved ones — no `""` step, no change reported."""
+    flat = {"route": {"receiver": "d", "routes": [
+        {"matchers": ['tenant="a"'], "receiver": "platform-enforced-a", "continue": True},
+        {"matchers": ['team="db"'], "receiver": "db"},
+        {"matchers": ['tenant="a"'], "receiver": "tenant-a"}]}}
+    nested = {"route": {"receiver": "d", "routes": [
+        {"matchers": ['tenant="a"'], "receiver": "platform-enforced-a", "continue": True},
+        {"receiver": "d", "routes": [
+            {"matchers": ['team="db"'], "receiver": "db"},
+            {"matchers": ['tenant="a"'], "receiver": "tenant-a"}]}]}}
+    assert rd.flatten_routes(nested) == rd.flatten_routes(flat)
+    assert [c for c in rd.diff_routes(flat, nested) if isinstance(c, rd.RouteChange)] == []
+
+
+def test_control_a_matcher_less_route_to_another_receiver_is_a_level():
+    cfg = {"route": {"receiver": "d", "routes": [{"receiver": "other", "routes": [
+        {"matchers": ['team="db"'], "receiver": "db"}]}]}}
+    assert ("", 'team="db"') in rd.flatten_routes(cfg)
+
+
 def test_matcher_spelling_alone_is_no_change():
     """Alertmanager 讀成同一個 matcher 的寫法（空白、沒加引號）不算路由變更。"""
     def cfg(m):

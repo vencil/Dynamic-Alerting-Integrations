@@ -1895,7 +1895,7 @@ da-tools rule-pack-split --rule-packs-dir rule-packs/ --output-dir federation-sp
 2. base 自己的頂層路由，照 base 原順序（送往四個平台 receiver 的除外，見下段）；
 3. 租戶路由。
 
-有 `{{tenant}}` enforced routing（每個租戶一條 `platform-enforced-<租戶>` 路由）時，第 2、3 項收在**一條**沒有 matcher、送往 base root receiver 的路由底下，緊接在 enforced 路由之後。原因：Alertmanager 只在沒有任何子路由命中時才送 root，而 enforced 路由（`continue: true`）命中也算——沒有這一層，沒有租戶路由的租戶就收不到 root 的告警。這一層代替 root：底下都沒命中時才送，所以你自己 `continue: true` 的路由已經送過的告警，不會再多送 root 一次。只有一條 `platform-enforced`（不分租戶、沒有 matcher）時不加這一層：它一向把所有告警從 root 拿走。
+有 `{{tenant}}` enforced routing（每個租戶一條 `platform-enforced-<租戶>` 路由）時，第 2、3 項收在**一條**沒有 matcher、送往 base root receiver 的路由底下，緊接在 enforced 路由之後。原因：Alertmanager 只在沒有任何子路由命中時才送 root，而 enforced 路由（`continue: true`）命中也算——沒有這一層，沒有租戶路由的租戶就收不到 root 的告警。這一層代替 root：底下都沒命中時才送，所以你自己 `continue: true` 的路由已經送過的告警，不會再多送 root 一次。只有一條不分租戶的 `platform-enforced` 路由（receiver 不含 `{{tenant}}`）時不加這一層，路由樹與先前相同：它命中的告警一向不再送 root。⚠️ 加了這一層，你的路由與租戶路由在 Alertmanager 的路由樹裡深了一層，group key 跟著變：第一次載入這份設定時，正在觸發的告警群組會再通知一次。
 
 base 可以寫四個平台 receiver（`watchdog-heartbeat`、`custom-alerts-firehose`、`synthetic-receiver`、`sentinel-sinkhole`），比只有名字更完整的定義優先（例如 `watchdog-heartbeat` 以 `url_file` 接你的 dead-man's switch）。base 裡送往這四個 receiver 的頂層路由視為平台的，以標準形式只輸出一次、排在最前面（上面第 1 項）。receiver 是 base 的加上這次產生的；inhibit rule 也是 base 的加上這次產生的，不去重——來源本來就不該含產生的 severity-dedup 規則。
 

@@ -762,8 +762,8 @@ def merge_generated(base: dict, routes: list[dict], receivers: list[dict],
     the root: it delivers when nothing below matched, and NOT when the
     base's own ``continue: true`` route already took the alert (one root
     delivery fewer than a per-tenant fallthrough route would give). The
-    single matcher-less ``platform-enforced`` route gets none: it has always
-    taken every alert off the root.
+    single ``platform-enforced`` route (no ``{{tenant}}``) gets none: an
+    alert it matches has never gone on to the root.
 
     Receivers — the base's, then this run's; a name-only platform
     placeholder defers to a richer base definition (watchdog-heartbeat's

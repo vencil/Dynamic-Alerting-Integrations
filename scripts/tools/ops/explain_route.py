@@ -1125,8 +1125,11 @@ def trace_alert_routing(
         where = _path(top)
         matched_sub = None
         nodes = top["nodes"] or []
-        if (len(nodes) == 3 and nodes[1].get("receiver") == main_prefix
-                and f'tenant="{tenant}"' in (nodes[1].get("matchers") or [])):
+        # root → [the matcher-less route standing in for the root, with
+        # per-tenant enforced routing (#2519)] → tenant route → sub-route.
+        if (len(nodes) >= 3 and nodes[-2].get("receiver") == main_prefix
+                and f'tenant="{tenant}"' in (nodes[-2].get("matchers") or [])
+                and not any(n.get("matchers") for n in nodes[1:-2])):
             name = top["receiver"]
             for kind, field in (("override", "overrides"), ("route", "routes")):
                 head = f"{main_prefix}-{kind}-"

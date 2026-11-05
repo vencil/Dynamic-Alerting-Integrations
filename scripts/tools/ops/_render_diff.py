@@ -430,10 +430,25 @@ def flatten_routes(cfg: dict[str, Any]) -> dict[tuple[str, ...], dict[str, Any]]
     """Every route node keyed by its matcher path (the root is `()`)."""
     out: dict[tuple[str, ...], dict[str, Any]] = {}
 
+    def children(node: dict[str, Any]) -> list[dict[str, Any]]:
+        # #2519: with per-tenant enforced routing the merge puts the routes
+        # below the enforced ones under one matcher-less route to the SAME
+        # receiver, standing in for the root. It is not a level of its own:
+        # its children are the node's children (the same routes, not moved).
+        out_: list[dict[str, Any]] = []
+        for child in node.get("routes") or []:
+            if (not _matchers(child) and not child.get("continue")
+                    and child.get("receiver") in (None, node.get("receiver"))
+                    and set(child) <= {"receiver", "routes"}):
+                out_.extend(children(child))
+            else:
+                out_.append(child)
+        return out_
+
     def walk(node: dict[str, Any], path: tuple[str, ...]) -> None:
         out[path] = {a: node[a] for a in ROUTE_ATTRS if a in node}
         seen: dict[str, int] = {}
-        for child in node.get("routes") or []:
+        for child in children(node):
             step = ", ".join(_matchers(child))
             n = seen.get(step, 0)
             seen[step] = n + 1
