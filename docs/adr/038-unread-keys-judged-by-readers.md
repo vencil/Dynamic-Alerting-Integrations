@@ -342,7 +342,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 只想留 critical 那一級，寫 `X: "90:critical"`，並刪掉 `X_critical`：它送出的 series 與舊的 `X: disable` 加 `X_critical: 90` 相同，兩者並存則會送出同一條 series 兩次，整份 `/metrics` 失敗。只想停 critical 那一級，寫 `X_critical: disable`。
 
-被連帶關掉的同族鍵，exporter 讀了它才決定不送，所以判為有讀（`read_by` 為 exporter）。它寫在租戶自己的檔裡、且在一天中某個時段被連帶關掉時，報 `disable_cascade`（warning，不擋）：舊語意下它會照送，這條提醒改用上面的遷移寫法；繼承來的同族鍵被關掉正是 `disable` 要的，不報。判定一樣是反事實重算：拿掉 base 的 `disable` 後才有列的同族鍵，就是被它連帶關掉的鍵。`/effective` 的 `not_served` 與 served-values 的 `keys`、逐時段 `schedules` 以原因 `base_disabled` 標出。這個原因不是 `value_not_served`：不送正是 `disable` 要的。同族鍵的值本身讀不懂時，照樣報 `value_unparsed_dropped`，不被 `base_disabled` 蓋掉。
+被連帶關掉的同族鍵，exporter 讀了它才決定不送，所以判為有讀（`read_by` 為 exporter）。它寫在租戶自己的檔裡、且在一天中某個時段被連帶關掉時，報 `disable_cascade`（warning，不擋），並寫出是哪個 base：舊語意下它會照送。被關掉的是 `<key>_critical` 時，上面的遷移寫法適用；是 `<key>{…}` 時沒有替代寫法（見後果與已知限制），`X: "90:critical"` 只會另加一條不分維度的 critical 列；繼承來的同族鍵被關掉正是 `disable` 要的，不報。判定一樣是反事實重算：拿掉 base 的 `disable` 後才有列的同族鍵，就是被它連帶關掉的鍵。`/effective` 的 `not_served` 與 served-values 的 `keys`、逐時段 `schedules` 以原因 `base_disabled` 標出。這個原因不是 `value_not_served`：不送正是 `disable` 要的。同族鍵的值本身讀不懂時，照樣報 `value_unparsed_dropped`，不被 `base_disabled` 蓋掉。
 
 `disable` 有沒有作用，以反事實重算判定：
 
