@@ -53,7 +53,6 @@ DIRECT_HTTP_ALLOWED: dict[str, str] = {
     "maintenance_scheduler.py": "writes silences and pushes to the Pushgateway",
     "notification_tester.py": "delivers test notifications to receivers",
     "policy_opa_bridge.py": "queries OPA (its own redirect-refusing opener)",
-    "threshold_govern.py": "writes to tenant-api (--apply)",
 }
 
 # Ops tools that can use HTTP but that no recipe runs: the hook cannot see

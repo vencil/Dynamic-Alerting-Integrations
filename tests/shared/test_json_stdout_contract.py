@@ -109,7 +109,7 @@ The HTTP stub is an *out-of-process server* rather than the in-process
 ``http_get_json``; the rest reach the network via ``urllib.urlopen`` or
 ``requests`` directly (``maintenance_scheduler``, ``notification_tester``,
 ``policy_opa_bridge``, and partially ``byo_check`` / ``federation_check`` /
-``shadow_verify`` / ``threshold_govern`` / ``discover_instance_mappings``).  One
+``shadow_verify`` / ``discover_instance_mappings``).  One
 real socket covers every one of them uniformly, and subprocess execution gives us
 the *actual, complete* stdout byte stream — which is the thing under test — with
 no import-time module-namespace crosstalk between 40 tools.
@@ -370,10 +370,6 @@ def _stub_payload(path: str) -> tuple[int, bytes, str]:
     # Pushgateway
     if path.startswith("/metrics/job"):
         return 200, b"", "text/plain"
-    # tenant-api (threshold_govern --apply opens PRs through this)
-    if path.startswith("/api/v1/tenants"):
-        return j({"pr_url": "https://example.invalid/pr/1", "pr_number": 1,
-                  "status": "open"})
     # Exporter /metrics scrape target (discover_instance_mappings --endpoint,
     # run_chaos_soak --target-url under the `/soak` personality)
     if path.rstrip("/").endswith("/metrics"):
@@ -1408,14 +1404,8 @@ RECIPES: list[Recipe] = [
                     "--manifest-path", _out(t, "manifest2.json"), "--json"]),
 
     # ── threshold_govern ───────────────────────────────────────────────────
-    R("threshold_govern", "dry-run",
+    R("threshold_govern", "report",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--prometheus", s, "--json"]),
-    R("threshold_govern", "apply",
-      lambda t, s: ["--config-dir", str(SEED_CONF_D), "--prometheus", s,
-                    "--apply", "--tenant-api-url", s,
-                    "--identity-email", "gate@example.invalid",
-                    "--identity-groups", "platform-admins",
-                    "--auth-token", "stub-token", "--json"]),
 
     # ── threshold_recommend  (⚠ known multi-mode trap) ─────────────────────
     R("threshold_recommend", "recommend",

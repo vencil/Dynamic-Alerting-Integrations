@@ -986,20 +986,6 @@ def test_reader_returns_the_tenant_id_as_written(tmp_path, capsys, reader, varia
 
 
 @pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
-def test_threshold_govern_finds_the_tenant_as_written(variant):
-    """Before: UNQ answered "tenant '010' vanished from config after edit"
-    for an edit that changed only the expected key."""
-    import threshold_govern as tg
-    old = _T2216.format(id=_ID_SPELLINGS[variant])
-    new, err = tg.edit_live_yaml(old, "010", {"mysql_connections": "45"})
-    assert err is None, err
-    assert 'mysql_connections: "45"' in new and "'70'" not in new, new
-    # Control: a key the tenant does not have is refused, not added.
-    assert tg.edit_live_yaml(old, "010", {"no_such_key": "45"}) == (
-        None, "keys not found in live config: ['no_such_key']")
-
-
-@pytest.mark.parametrize("variant", sorted(_ID_SPELLINGS))
 def test_offboard_precheck_sees_the_tenant_as_written(tmp_path, capsys, variant):
     """Before: UNQ found 0 metrics for tenant 010 and no reference to it in
     the platform file, because both held the key 8."""

@@ -315,20 +315,12 @@ commands:
     "--tenant": not_path
     "--timeout": not_path
   threshold-govern:
-    "--auth-token": not_path
-    "--auth-token-file": {kind: reader, by: "_lib_paths.classify_path when it is the only credential (#3511); a warning when identity headers carry the authz (#962)", pinned_by: "tests/ops/test_threshold_govern.py::test_sole_credential_token_file_unreadable_is_a_caller_error"}
     "--config-dir": dir
-    "--identity-email": not_path
-    "--identity-groups": not_path
     "--lookback": not_path
-    "--max-prs": not_path
     "--min-delta-pct": not_path
     "--min-samples": not_path
     "--prometheus": not_path
     "--tenant": not_path
-    "--tenant-api-url": not_path
-    "--throttle-seconds": not_path
-    "--timeout": not_path
   threshold-recommend:
     "--config-dir": dir
     "--lookback": not_path

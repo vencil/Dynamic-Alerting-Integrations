@@ -246,3 +246,8 @@ tests/dx/test_analyze_bench_history.py
 # #3489: the Python verdict is retired; this module now only reads
 # `da-guard key-verdict`'s document — removed, not truncated.
 scripts/tools/_lib_key_verdict.py
+# #1040 (ADR-027 §4): threshold-govern's --apply write path (tenant-api
+# client, dedup, throttle, circuit breaker) is removed; the tool and its
+# tests keep only the read-only report — removed, not truncated.
+scripts/tools/ops/threshold_govern.py
+tests/ops/test_threshold_govern.py

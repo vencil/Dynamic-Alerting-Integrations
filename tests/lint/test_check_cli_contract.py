@@ -1972,8 +1972,7 @@ class TestEnvironmentIsScrubbed:
                                   cwd=str(REPO_ROOT))
         clean = run({})
         polluted = run({"PROMETHEUS_URL": "http://sentinel.invalid:9090",
-                        "TENANT_API_URL": "http://sentinel.invalid",
-                        "DA_GOVERN_GROUPS": "sentinel"})
+                        "TENANT_API_URL": "http://sentinel.invalid"})
         assert clean.returncode == polluted.returncode == 0, (clean.stderr, polluted.stderr)
         assert clean.stdout == polluted.stdout
         assert b"sentinel.invalid" not in polluted.stdout

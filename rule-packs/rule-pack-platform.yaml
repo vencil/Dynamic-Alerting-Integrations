@@ -117,79 +117,13 @@ groups:
             the url_file is still the deploy placeholder, populate the Secret.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/alerting-plane-self-liveness.md"
 
-      # --- Platform governance loop liveness (#656) ---
-      # The weekly threshold-governance CronJob (`threshold-govern`, Mondays
-      # 03:00 UTC) retightens drifted thresholds into proposed-PRs. If it
-      # silently stops, config rot accrues with no signal. KSM already scrapes
-      # kube_cronjob_* (Prometheus job "kube-state-metrics"). Design notes:
-      #   - did-it-run != did-it-work: a run whose tenant-api writes failed
-      #     still "ran" and would advance last_successful_time.
-      #     threshold_govern.py exits non-zero (#656, #3054) when failures
-      #     (errors + circuit-breaker skips) reach >= 90% of the attempted
-      #     writes, even if a PR was opened (_is_systemic_failure) → the Job is
-      #     marked Failed and last_successful_time is NOT advanced, so this
-      #     staleness alert is honest, not a placebo.
-      #   - `max by (cronjob, namespace)` projects away the KSM scrape labels
-      #     (instance/job) so the fired alert identity is a stable {cronjob,
-      #     namespace} (and collapses cleanly if KSM ever runs >1 replica) — a
-      #     bare `time() - vector` would carry a meaningless KSM pod `instance`.
-      #   - `unless ... spec_suspend == 1`: a deliberately-paused CronJob (e.g.
-      #     during an incident) must not page.
-      #   - Cold-start safe: before the first successful run the series is absent
-      #     → max-by is empty → no fire. A CronJob DELETED entirely is NOT caught
-      #     here (its series vanishes); that belongs to deploy/review, not this
-      #     alert.
-      # severity:warning — config rot degrades over WEEKS; there is no 3am
-      # action, triage in business hours. Behaviour pinned by
-      # tests/rulepacks/platform-watchdog_test.yaml.
-      - alert: ThresholdGovernanceStale
-        expr: |
-          (
-            max by (cronjob, namespace) (
-              time() - kube_cronjob_status_last_successful_time{cronjob="threshold-govern", namespace="monitoring"}
-            ) > 691200
-          )
-          unless on (cronjob, namespace)
-            kube_cronjob_spec_suspend{cronjob="threshold-govern", namespace="monitoring"} == 1
-        for: 15m
-        labels:
-          severity: warning
-          alert_source: platform
-        annotations:
-          summary: "Threshold-governance loop has not succeeded in 8 days"
-          description: |
-            The weekly threshold-governance CronJob (threshold-govern,
-            Mondays 03:00 UTC) has not recorded a successful run for 8
-            days — at least one weekly run was missed or has been
-            failing, so drifted thresholds are no longer being
-            retightened into proposed-PRs.
-            NOT urgent: config rot degrades over weeks, there is no 3am
-            action — triage in business hours. Check (a) the CronJob is
-            not suspended, (b) recent threshold-govern Jobs and their
-            logs (`kubectl get jobs -n monitoring`), (c) tenant-api
-            reachability from the monitoring namespace.
-            did-it-run != did-it-work: a run whose failed tenant-api
-            writes (errors + circuit-breaker skips) reach >= 90% of the
-            attempted writes exits non-zero (Job Failed) even if it opened
-            a PR, and does NOT advance last_successful_time, so this fires
-            on a silent near-total write failure too — not only when the
-            scheduler stops. A CronJob deleted entirely is not caught here
-            (its KSM series vanishes); that surfaces at deploy/review time.
-          # Anchor = the ASCII '#### threshold-govern' heading in cli-reference.md — a
-          # CONTRACT: renaming the heading rots this link. Now mechanically held by
-          # TestPlatformRunbookCoverageContract
-          # (tests/ops/test_generate_routes_orchestration.py), which resolves
-          # every runbook_url in this tree to a real
-          # file + a real heading. Before that gate, rule-YAML URLs were not linted.
-          runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/cli-reference.md#threshold-govern"
-
-      # The companion to ThresholdGovernanceStale above, and the reason
-      # #1242 was opened: that alert reads the CRONJOB face
-      # (kube_cronjob_status_last_successful_time), which a CronJob that has
-      # NEVER succeeded simply does not have — so it is structurally
-      # incapable of firing for the worst case. threshold-govern was pinned
-      # to an image that did not contain its program and failed weekly for
-      # MONTHS with zero signal (see #1040 G2 / #1240). Design notes:
+      # Why #1242 was opened: a staleness alert on the CRONJOB face
+      # (kube_cronjob_status_last_successful_time) needs a previous success,
+      # which a CronJob that has NEVER succeeded simply does not have — so it
+      # is structurally incapable of firing for the worst case. A platform
+      # CronJob was pinned to an image that did not contain its program and
+      # failed weekly for MONTHS with zero signal (see #1040 G2 / #1240).
+      # Design notes:
       #   - Reads the JOB face instead. Job objects only exist once
       #     something actually ran, so a fresh install is silent by
       #     construction — this is what lets this rule be strict where the
@@ -222,8 +156,8 @@ groups:
       #   - Every join operand is pre-projected with `max by (job_name,
       #     namespace)`. Without it the KSM scrape labels (instance/job)
       #     reach the join and a second KSM replica turns group_left into an
-      #     illegal many-to-many — the same alert-identity class the sibling
-      #     documents at the top of this file.
+      #     illegal many-to-many, and a fired alert would carry a KSM pod's
+      #     meaningless `instance` label as part of its identity.
       #   - Generic over the monitoring namespace rather than pinned to one
       #     cronjob name: "the next CronJob repeats the gap" is precisely
       #     what #1242 is about. Tenant namespaces are out of scope.
@@ -287,23 +221,22 @@ groups:
           description: |
             The most recent Job created by CronJob {{ $labels.owner_name }}
             in namespace {{ $labels.namespace }} ended in a Failed
-            condition. Unlike ThresholdGovernanceStale — which needs a
-            PREVIOUS success to measure staleness against — this fires the
-            first time a run fails, including for a CronJob that has never
+            condition. Unlike a staleness alert — which needs a PREVIOUS
+            success to measure staleness against — this fires the first
+            time a run fails, including for a CronJob that has never
             succeeded even once.
-            NOT urgent: platform CronJobs are weekly (threshold-govern) or
-            every-5-minutes (maintenance-scheduler); neither carries a 3am
-            action. Triage in business hours.
+            NOT urgent: platform CronJobs (maintenance-scheduler, every 5
+            minutes) carry no 3am action. Triage in business hours.
             Check: (a) `kubectl get jobs -n {{ $labels.namespace }}` and the
             failing pod's logs; (b) whether the CronJob's pinned image
             actually contains the program it invokes — that failure mode is
             what motivated this alert and is now also gated at CI time by
             scripts/tools/lint/check_image_pin_capability.py; (c) whether a
-            dependency the Job talks to (tenant-api, Prometheus) is
+            dependency the Job talks to (Alertmanager, Prometheus) is
             reachable from this namespace.
             Self-resolving: a subsequent successful run clears this without
             anyone deleting the failed Job. Suspending the CronJob also
-            silences it, matching ThresholdGovernanceStale.
+            silences it.
           runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/troubleshooting-checklist.md#171-cronjoblastrunfailed"
 
       # --- Exporter Health ---

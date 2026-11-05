@@ -3,23 +3,20 @@
 同一個值（tenant-a 的 `mysql_connections` = 60）依序放在：根 `defaults:`、平台檔
 `tenants:`、租戶檔、子樹 `_defaults.yaml`、profile；外加三個形狀——租戶檔寫舊拼法
 `mysql_cpu`（ALIAS）、租戶檔在子目錄（NESTED）、同一租戶一個自有一個繼承（MIXED）。
-tenant-b 是對照組：永遠在根目錄自己的檔寫 `mysql_connections: "60"`，每格都要開 PR。
+tenant-b 是對照組：永遠在根目錄自己的檔寫 `mysql_connections: "60"`，每格都要進計畫。
 
 歸屬以 `da-guard effective` 的 key_sources 為準（layer == tenant 才是租戶自有）：測試的
 期望值同時由 oracle 推出、也寫死，避免兩邊一起錯。
 
-Prometheus 與 tenant-api 以 stub 取代：每條觀測序列回 2000 個 40.0（現值 60 → 建議 40，#2964）；GET 只讀
-`<conf.d>/<tenant>.yaml`（tenant-api 解析租戶檔只看根目錄），否則 404；PUT 回
-200 pending_review。跑的是真的 `threshold_govern.run()` 迴圈。
+Prometheus 以 stub 取代：每條觀測序列回 2000 個 40.0（現值 60 → 建議 40，#2964）。跑的是
+真的 `threshold_govern.run()`；它只讀（ADR-027 §4 移除了經 tenant-api 的寫入路徑），所以
+這裡驗的是計畫：只含租戶自有的 key，並指出要改的租戶檔。
 
 da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來就 fail、不 skip。
 """
 from __future__ import annotations
 
 import argparse
-import collections
-import json
-import urllib.parse
 from pathlib import Path
 
 import pytest
@@ -39,7 +36,8 @@ _A_PLAIN = 'tenants:\n  tenant-a:\n    foo_unmapped_key: "3"\n'
 _A_OWN = 'tenants:\n  tenant-a:\n    mysql_connections: "60"\n'
 
 # where -> (files, expected tenant-a owned keys, expected inherited
-#           mysql_connections source (layer, file) or None, tenant-a outcome)
+#           mysql_connections source (layer, file) or None, the file tenant-a's
+#           plan names, or None when tenant-a has no plan)
 MATRIX = {
     "defaults": ({"_defaults.yaml": "defaults:\n  mysql_connections: 60\n  mysql_threads_running: 80\n",
                   "tenant-a.yaml": _A_PLAIN, "tenant-b.yaml": _B},
@@ -49,7 +47,7 @@ MATRIX = {
                           "tenant-a.yaml": _A_PLAIN, "tenant-b.yaml": _B},
                          set(), ("platform", "_platform.yaml"), None),
     "tenant-file": ({"_defaults.yaml": _BASE, "tenant-a.yaml": _A_OWN, "tenant-b.yaml": _B},
-                    {"mysql_connections"}, None, "pr_opened"),
+                    {"mysql_connections"}, None, "tenant-a.yaml"),
     "subtree": ({"_defaults.yaml": _BASE,
                  "team/_defaults.yaml": "defaults:\n  mysql_connections: 60\n",
                  "team/tenant-a.yaml": _A_PLAIN, "tenant-b.yaml": _B},
@@ -62,13 +60,13 @@ MATRIX = {
     "alias": ({"_defaults.yaml": _BASE,
                "tenant-a.yaml": 'tenants:\n  tenant-a:\n    mysql_cpu: "60"\n',
                "tenant-b.yaml": _B},
-              {"mysql_cpu"}, ("defaults", "_defaults.yaml"), "pr_opened"),
+              {"mysql_cpu"}, ("defaults", "_defaults.yaml"), "tenant-a.yaml"),
     "nested": ({"_defaults.yaml": _BASE, "team/tenant-a.yaml": _A_OWN, "tenant-b.yaml": _B},
-               {"mysql_connections"}, None, "skipped_nested"),
+               {"mysql_connections"}, None, "team/tenant-a.yaml"),
     "mixed": ({"_defaults.yaml": "defaults:\n  mysql_connections: 60\n  mysql_threads_running: 80\n",
                "tenant-a.yaml": 'tenants:\n  tenant-a:\n    mysql_threads_running: "60"\n',
                "tenant-b.yaml": _B},
-              {"mysql_threads_running"}, ("defaults", "_defaults.yaml"), "pr_opened"),
+              {"mysql_threads_running"}, ("defaults", "_defaults.yaml"), "tenant-a.yaml"),
 }
 
 
@@ -81,51 +79,18 @@ def _tree(root: Path, files: dict[str, str]) -> Path:
     return conf_d
 
 
-class _StubAPI:
-    """tenant-api: GET reads `<conf_d>/<tenant>.yaml` at the top level only."""
-
-    def __init__(self, conf_d: Path):
-        self.conf_d = conf_d
-        self.gets: list[str] = []
-        self.puts: dict[str, str] = {}
-
-    def get(self, url, timeout=None, headers=None):
-        tenant = urllib.parse.unquote(url.rsplit("/", 1)[1])
-        self.gets.append(tenant)
-        f = self.conf_d / f"{tenant}.yaml"
-        if not f.is_file():
-            return None, "HTTP Error 404: Not Found"
-        return {"raw_yaml": f.read_text(encoding="utf-8")}, None
-
-    def put(self, url, body, headers, timeout):
-        tenant = urllib.parse.unquote(url.rsplit("/", 1)[1])
-        self.puts[tenant] = body
-        return 200, {"status": "pending_review", "pr_url": f"https://git/pr/{len(self.puts)}",
-                     "pr_number": len(self.puts)}, None
-
-
 @pytest.fixture
 def stubs(monkeypatch):
     # 2000 points a minute apart: ~33 distinct hours, above the #2941 floor of 24.
     monkeypatch.setattr(tr, "query_prometheus_range_ts",
                         lambda url, promql, *a, **k: [
                             (1_700_000_000.0 + 60 * i, 40.0) for i in range(2000)])
-    monkeypatch.setattr(tg.time, "sleep", lambda s: None)
-
-    def install(conf_d: Path) -> _StubAPI:
-        api = _StubAPI(conf_d)
-        monkeypatch.setattr(tg, "http_get_json", api.get)
-        monkeypatch.setattr(tg, "_http_put_yaml", api.put)
-        return api
-    return install
 
 
-def _args(conf_d: Path, max_prs: int = 100, apply: bool = True) -> argparse.Namespace:
+def _args(conf_d: Path) -> argparse.Namespace:
     return argparse.Namespace(
         config_dir=str(conf_d), prometheus="http://prom.stub", tenant=None, lookback="7d",
-        min_samples=100, min_delta_pct=25.0, max_prs=max_prs, apply=apply,
-        tenant_api_url="http://tenant-api.stub", identity_email="g@x", identity_groups="g",
-        auth_token=None, auth_token_file=None, throttle_seconds=0, timeout=5)
+        min_samples=100, min_delta_pct=25.0)
 
 
 def _owned_by_oracle(conf_d: Path, tenant: str) -> set[str]:
@@ -156,39 +121,31 @@ def test_recommend_splits_own_from_inherited(where, tmp_path, stubs):
 
 
 @pytest.mark.parametrize("where", sorted(MATRIX))
-def test_govern_opens_prs_for_own_keys_only(where, tmp_path, stubs):
-    files, own, _, a_outcome = MATRIX[where]
+def test_govern_plans_own_keys_only(where, tmp_path, stubs):
+    files, own, _, a_file = MATRIX[where]
     conf_d = _tree(tmp_path, files)
-    api = stubs(conf_d)
     res = tg.run(_args(conf_d))
-    by_tenant = {o.tenant: o for o in res.outcomes}
+    by_tenant = {p.tenant: p for p in res.plans}
 
-    assert all(o.status != "error" for o in res.outcomes), [(o.tenant, o.message) for o in res.outcomes]
-    assert not tg._is_systemic_failure(res.outcomes, True), where
-    # control: tenant-b's own key opens, in every position.
-    assert (by_tenant["tenant-b"].status, by_tenant["tenant-b"].keys) == ("pr_opened", ["mysql_connections"])
-    if a_outcome is None:
-        assert "tenant-a" not in by_tenant and "tenant-a" not in api.gets, where
+    # control: tenant-b's own key is planned, in every position.
+    b = by_tenant["tenant-b"]
+    assert ([c.key for c in b.changes], b.source_file) == (["mysql_connections"], "tenant-b.yaml")
+    if a_file is None:
+        assert "tenant-a" not in by_tenant, where
     else:
-        assert by_tenant["tenant-a"].status == a_outcome, where
-        assert set(by_tenant["tenant-a"].keys) == own, where
-    if a_outcome == "skipped_nested":
-        assert "tenant-a" not in api.gets, "a nested tenant must not reach tenant-api"
-    if a_outcome == "pr_opened":
-        # written back in the spelling the file writes; every other line as it was
-        new = yaml.safe_load(api.puts["tenant-a"])["tenants"]["tenant-a"]
-        old = yaml.safe_load((conf_d / "tenant-a.yaml").read_text(encoding="utf-8"))["tenants"]["tenant-a"]
-        assert set(new) == set(old), where
-        assert {k for k in new if new[k] != old[k]} == own, where
+        a = by_tenant["tenant-a"]
+        # the spelling the file writes, and the file to change (a nested one too)
+        assert {c.key for c in a.changes} == own, where
+        assert a.source_file == a_file, where
+        assert all(c.new_value == '"40"' for c in a.changes), where
     inherited = {(k.tenant, k.key) for k in res.inherited}
     assert not (inherited & {(p.tenant, c.key) for p in res.plans for c in p.changes}), where
 
 
-def test_inherited_keys_never_trip_the_breaker(tmp_path, stubs):
-    """More tenants than MAX_CONSECUTIVE_ERRORS that inherit their only mapped
-    key, plus as many nested tenants that own one: no request for any of them,
-    no error, and the control after them still opens (#2116 must-fire)."""
-    n = tg.MAX_CONSECUTIVE_ERRORS + 2
+def test_inherited_keys_never_enter_the_plan(tmp_path, stubs):
+    """Tenants that inherit their only mapped key get no plan; tenants whose
+    own file sits in a sub-directory are planned with that file (#2116)."""
+    n = 7
     files = {"_defaults.yaml": "defaults:\n  mysql_connections: 60\n  mysql_threads_running: 80\n",
              "_platform.yaml": "tenants:\n" + "".join(
                  f"  p{i}:\n    mysql_threads_running: 60\n" for i in range(n)),
@@ -198,22 +155,10 @@ def test_inherited_keys_never_trip_the_breaker(tmp_path, stubs):
         files[f"p{i}.yaml"] = f'tenants:\n  p{i}:\n    foo_unmapped_key: "3"\n'
         files[f"team/n{i}.yaml"] = f'tenants:\n  n{i}:\n    mysql_connections: "60"\n'
     conf_d = _tree(tmp_path, files)
-    api = stubs(conf_d)
     res = tg.run(_args(conf_d))
-    st = collections.Counter(o.status for o in res.outcomes)
-    assert st == {"skipped_nested": n, "pr_opened": 1}, st
-    assert api.gets == ["zz-control"]
-    assert not tg._is_systemic_failure(res.outcomes, True)
+    assert {(p.tenant, p.source_file) for p in res.plans} == (
+        {(f"n{i}", f"team/n{i}.yaml") for i in range(n)} | {("zz-control", "zz-control.yaml")})
     assert len(res.inherited) >= 2 * n
-
-
-def test_a_nested_skip_does_not_dilute_a_real_outage(tmp_path):
-    """`skipped_nested` sent no request: it must not water down the systemic
-    ratio of a run in which every request failed."""
-    errs = [tg.TenantOutcome(f"t{i}", "error") for i in range(tg.MAX_CONSECUTIVE_ERRORS)]
-    skips = [tg.TenantOutcome(f"s{i}", "skipped_breaker") for i in range(3)]
-    nested = [tg.TenantOutcome(f"n{i}", "skipped_nested") for i in range(50)]
-    assert tg._is_systemic_failure(errs + skips + nested, True)
 
 
 def test_export_patch_never_writes_an_inherited_value(tmp_path, stubs):
@@ -287,40 +232,27 @@ def test_an_inherited_key_reports_no_confidence(tmp_path, stubs):
     assert "LOW" not in row and tr.CONFIDENCE_NOT_QUERIED in row, row
 
 
-# ── govern: nested tenants and the PR budget / the summary ───────────────
+# ── govern: nested tenants in the summary ─────────────────────────────────
 def _nested_first_tree(tmp_path: Path, n_nested: int, n_root: int) -> Path:
     files = {"_defaults.yaml": _BASE}
-    for i in range(n_nested):  # "a…" sorts before "z…": these come first in the loop
+    for i in range(n_nested):  # "a…" sorts before "z…"
         files[f"team/a{i}.yaml"] = f'tenants:\n  a{i}:\n    mysql_connections: "60"\n'
     for i in range(n_root):
         files[f"z{i}.yaml"] = f'tenants:\n  z{i}:\n    mysql_connections: "60"\n'
     return _tree(tmp_path, files)
 
 
-def test_a_nested_tenant_does_not_use_up_max_prs(tmp_path, stubs):
-    """F3: --max-prs counts opened PRs; a nested tenant opens none and must not
-    take a slot from the root tenants after it."""
-    conf_d = _nested_first_tree(tmp_path, n_nested=3, n_root=3)
-    stubs(conf_d)
-    res = tg.run(_args(conf_d, max_prs=2))
-    got = [(o.tenant, o.status) for o in res.outcomes]
-    assert got == [("a0", "skipped_nested"), ("a1", "skipped_nested"), ("a2", "skipped_nested"),
-                   ("z0", "pr_opened"), ("z1", "pr_opened"), ("z2", "skipped")], got
-
-
-@pytest.mark.parametrize("apply", [False, True], ids=["dry-run", "apply"])
-def test_json_summary_counts_nested_as_the_text_does(apply, tmp_path, stubs):
-    """F7: a nested tenant gets no PR in either mode — JSON and text agree."""
+def test_json_summary_counts_nested_as_the_text_does(tmp_path, stubs):
+    """F7: nothing is written, so a tenant whose file is in a sub-directory is
+    as actionable as any other — JSON and text count it alike."""
     conf_d = _nested_first_tree(tmp_path, n_nested=2, n_root=1)
-    stubs(conf_d)
-    res = tg.run(_args(conf_d, apply=apply))
-    summary = tg.json_document(res.plans, res.outcomes, apply)["summary"]
-    assert (summary["tenants_actionable"], summary["changes"], summary["skipped_nested"]) == (1, 1, 2)
-    text = tg.format_text_report(res.plans, res.outcomes, apply).splitlines()[-1]
-    assert "2 tenant(s) with a file in a sub-directory get no PR" in text, text
-    want = "1 tenant(s) actionable" if apply else "1 tenant(s) / 1 change(s) would get a PR"
-    assert want in text, text
-
+    res = tg.run(_args(conf_d))
+    summary = tg.json_document(res.plans)["summary"]
+    assert (summary["tenants_actionable"], summary["changes"]) == (3, 3)
+    assert "skipped_nested" not in summary
+    text = tg.format_text_report(res.plans).splitlines()
+    assert text[-1].startswith("Summary: 3 tenant(s) / 3 change(s) need retuning."), text[-1]
+    assert any(ln.startswith("Tenant: a0 (1 change(s)) — team/a0.yaml") for ln in text), text
 
 
 # ── export-patch: a name that is not a plain YAML name gets no value line ──

@@ -613,7 +613,6 @@ _ALLOWED = frozenset({
     ("scripts/tools/ops/shadow_verify.py", "instant_or_error"),
     # not Prometheus / Alertmanager reads
     ("scripts/tools/ops/backtest_threshold.py", "http_get_json"),  # reachability probe
-    ("scripts/tools/ops/threshold_govern.py", "http_get_json"),  # tenant-api
 })
 
 

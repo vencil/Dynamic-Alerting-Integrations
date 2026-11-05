@@ -181,12 +181,12 @@ def test_render_netpol_admits_da_portal_as_fourth_entry(repo_root: Path):
     assert {"app.kubernetes.io/name": "da-portal"} in selectors, (
         f"8080 ingress must admit da-portal; got selectors {selectors}"
     )
-    # Five since #1595 D1b: Prometheus is admitted by the raw manifest's label
-    # AND a Prometheus Operator's (kube-prometheus-stack), one entry each.
+    # Four: Prometheus is admitted by the raw manifest's label AND a Prometheus
+    # Operator's (kube-prometheus-stack), one entry each (#1595 D1b); the
+    # threshold-govern CronJob's entry went with its write path (ADR-027 §4).
     assert selectors == [
         {"app": "prometheus"},
         {"app.kubernetes.io/name": "prometheus"},
-        {"component": "threshold-govern"},
         {"app.kubernetes.io/name": "recipe-preview"},
         {"app.kubernetes.io/name": "da-portal"},
     ], f"8080 ingress must admit exactly these pod-scoped clients; got {selectors}"

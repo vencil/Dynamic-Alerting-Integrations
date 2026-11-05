@@ -49,7 +49,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `evaluate-policy` | Policy-as-Code 評估引擎：宣告式 DSL 策略檢查 | --config-dir <PATH>, --policy <FILE>, --ci | `da-tools evaluate-policy --help` |
 | `test-notification` | 多通道通知連通性測試：驗證 receiver 可達性 | --config-dir <PATH>, --tenant <NAME>, --dry-run, --ci | `da-tools test-notification --help` |
 | `threshold-recommend` | 閾值推薦引擎：基於歷史 P50/P95/P99 數據 | --config-dir <PATH>, --prometheus <URL>, --lookback, --json | `da-tools threshold-recommend --help` |
-| `threshold-govern` | 閾值治理迴路：推薦→過濾→經 tenant-api 開 per-tenant proposed-PR (#656) | --config-dir <PATH>, --prometheus <URL>, --apply, --min-delta-pct | `da-tools threshold-govern --help` |
+| `threshold-govern` | 閾值治理報告：推薦→過濾→列出該調的腐敗閾值（唯讀，不寫入；#656） | --config-dir <PATH>, --prometheus <URL>, --min-delta-pct, --json | `da-tools threshold-govern --help` |
 | `explain-route` | 路由合併管線除錯器：四層展開 + 設定檔擴展 (ADR-007) | --config-dir <PATH>, --tenant <NAME>, --show-profile-expansion, --trace, --alertname <NAME>, --severity <LEVEL>, --label <KEY=VALUE>, --base-config <PATH>, --json | `da-tools explain-route --help` |
 | `explain-keys` | 逐鍵列出來源、讀取端、判決與 disable 的作用；--assert 對照預期結果 (ADR-038) | --config-dir <PATH>, --tenant <NAME>, --at <RFC3339>, --assert <FILE>, --json, --da-guard-binary <PATH>, --timeout <SECONDS> | `da-tools explain-keys --help` |
 | `discover-mappings` | 自動發現 1:N 實例-租戶映射 (ADR-006) | --endpoint <URL> 或 --prometheus <URL> --instance <INST>, --job, -o, --json | `da-tools discover-mappings --help` |

@@ -43,14 +43,12 @@ if a tool grows the flag without gaining a recipe;
 ``test_no_dry_run_declarer_outside_the_gate`` scans the WHOLE repo, so the
 denominator is not a function of the directories this gate chose to walk.
 
-Five files mention ``--dry-run`` without declaring it, and are held in an
+Four files mention ``--dry-run`` without declaring it, and are held in an
 explicit, meta-asserted allowlist (``MENTION_ONLY_ALLOWLIST``):
 
 * ``batchpr_dispatch`` — pure forwarder; the flag belongs to the ``da-batchpr``
   Go binary (not buildable/hermetic from this Python gate; covered Go-side).
 * ``drift_detect`` — docstring prose only; the tool has no ``--dry-run`` flag.
-* ``threshold_govern`` — dry-run is the *default* (absence of ``--apply``),
-  not a flag; its no-write default is exercised by its own test suite.
 * ``patch_config`` — the mention is ``da-guard write --dry-run``, which it
   runs itself (#3206); its own preview is ``--diff``. (``deprecate_rule``
   no longer dry-runs: its batch is one judged ``da-guard write`` call.)
@@ -193,7 +191,6 @@ DRY_RUN_MENTION_RE = re.compile(r"--dry-run")
 MENTION_ONLY_ALLOWLIST: dict[str, str] = {
     "batchpr_dispatch": "forwarder — the flag lives in the da-batchpr Go binary",
     "drift_detect": "docstring prose only; no --dry-run flag declared",
-    "threshold_govern": "dry-run is the default mode (no --apply), not a flag",
     "patch_config": "mentions `da-guard write --dry-run`, which it runs (#3206); its preview is --diff",
     "offboard_tenant": ("mentions `da-guard write --dry-run`, which its pre-check runs (#3206); "
                         "its preview is the default mode (no --execute)"),
