@@ -3,21 +3,30 @@ package rbac
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
-// captureHandler records the identity headers it observes on the request.
+// captureHandler records the identity object it observes on the request
+// (ADR-027 §2: the bypass injects a principal, never a header).
 func captureHandler(gotEmail, gotGroups *string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		*gotEmail = r.Header.Get("X-Forwarded-Email")
-		*gotGroups = r.Header.Get("X-Forwarded-Groups")
+		if p := RequestPrincipal(r); p != nil {
+			*gotEmail = p.Email
+			*gotGroups = strings.Join(p.Groups, ",")
+		}
 		w.WriteHeader(http.StatusOK)
 	})
 }
 
+// bypassChain is the UDS router's order: ResolveIdentity, then the bypass.
+func bypassChain(next http.Handler) http.Handler {
+	return ResolveIdentity(HeaderResolver{})(DevBypassMiddleware("dev@local", "demo-admins")(next))
+}
+
 func TestDevBypassMiddleware_InjectsWhenIdentityAbsent(t *testing.T) {
 	var gotEmail, gotGroups string
-	h := DevBypassMiddleware("dev@local", "demo-admins")(captureHandler(&gotEmail, &gotGroups))
+	h := bypassChain(captureHandler(&gotEmail, &gotGroups))
 
 	req := httptest.NewRequest("GET", "/api/v1/me", nil) // no X-Forwarded-* headers
 	rr := httptest.NewRecorder()
@@ -32,11 +41,55 @@ func TestDevBypassMiddleware_InjectsWhenIdentityAbsent(t *testing.T) {
 	if got := rr.Header().Get("X-Dev-Auth-Bypass"); got != "active" {
 		t.Errorf("tripwire header = %q, want active", got)
 	}
+	// The bypass sets no header: nothing downstream may read identity from one.
+	if got := req.Header.Get("X-Forwarded-Email"); got != "" {
+		t.Errorf("bypass set X-Forwarded-Email = %q; it must inject an identity object only", got)
+	}
+}
+
+// On the TCP listener ResolveIdentity reads nothing, and a request there is
+// not given the dev identity by a bypass mounted after it either way —
+// the TCP router mounts neither (cmd/server/tcp_router.go). What this pins:
+// a TCP-stamped request's headers never become a principal.
+func TestResolveIdentity_IgnoresHeadersOnTCP(t *testing.T) {
+	var gotEmail, gotGroups string
+	h := ResolveIdentity(HeaderResolver{})(captureHandler(&gotEmail, &gotGroups))
+	req := httptest.NewRequest("GET", "/api/v1/me", nil)
+	req.Header.Set("X-Forwarded-Email", "forged@example.com")
+	req = req.WithContext(WithListener(req.Context(), ListenerTCP))
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if gotEmail != "" {
+		t.Errorf("TCP-stamped request resolved to %q; headers must not be read off the UDS plane", gotEmail)
+	}
+
+	gotEmail = ""
+	req = httptest.NewRequest("GET", "/api/v1/me", nil)
+	req.Header.Set("X-Forwarded-Email", "real@example.com")
+	req = req.WithContext(WithListener(req.Context(), ListenerUDS))
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if gotEmail != "real@example.com" {
+		t.Errorf("UDS-stamped request resolved to %q, want real@example.com", gotEmail)
+	}
+}
+
+// The email and groups headers are the ones the oauth2-proxy config names.
+func TestResolveIdentity_ReadsTheConfiguredHeaderNames(t *testing.T) {
+	var gotEmail, gotGroups string
+	h := ResolveIdentity(HeaderResolver{EmailHeader: "X-Auth-Request-Email", GroupsHeader: "X-Auth-Request-Groups"})(
+		captureHandler(&gotEmail, &gotGroups))
+	req := httptest.NewRequest("GET", "/api/v1/me", nil)
+	req.Header.Set("X-Forwarded-Email", "conventional@example.com")
+	req.Header.Set("X-Auth-Request-Email", "configured@example.com")
+	req.Header.Set("X-Auth-Request-Groups", "ops")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if gotEmail != "configured@example.com" || gotGroups != "ops" {
+		t.Errorf("resolved %q / %q, want configured@example.com / ops", gotEmail, gotGroups)
+	}
 }
 
 func TestDevBypassMiddleware_RespectsRealIdentity(t *testing.T) {
 	var gotEmail, gotGroups string
-	h := DevBypassMiddleware("dev@local", "demo-admins")(captureHandler(&gotEmail, &gotGroups))
+	h := bypassChain(captureHandler(&gotEmail, &gotGroups))
 
 	req := httptest.NewRequest("GET", "/api/v1/me", nil)
 	req.Header.Set("X-Forwarded-Email", "real@corp.example")

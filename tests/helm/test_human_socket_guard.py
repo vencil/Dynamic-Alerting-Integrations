@@ -1,21 +1,18 @@
-"""test_human_socket_guard.py — ADR-027 D2-B human-plane Unix socket (Helm)
+"""test_human_socket_guard.py — the API's Unix socket in the tenant-api chart (ADR-027 §2)
 
-The tenant-api chart gains an OPT-IN human-plane Unix socket (issue #962,
-GHSA-3g2h-rf85-5rrv L7 root-cause series): when `humanSocket.enabled=true`,
-tenant-api serves the same router on a pod-internal Unix socket and the
-oauth2-proxy sidecar points its --upstream there instead of the network 8080
-plane. It is opt-in (default false = safe no-op); this test guards the Helm
-surface of that feature plus the da-portal netpol allow entry it depends on.
+tenant-api serves its API only on a pod-internal Unix socket, the oauth2-proxy
+sidecar's upstream; port 8080 serves only /health, /ready and /metrics, and
+tenant-api refuses to start without the socket or the oauth2-proxy config file.
+This test guards the Helm surface of that:
 
-Two layers, mirroring test_machine_identity_guard.py:
-  * static (no helm needed) — values.yaml carries the opt-in default
-    (humanSocket.enabled: false, path set) and the da-portal netpol selector;
-  * render (helm-gated) — proves the default (off) render stays free of the
-    socket wiring (upstream stays http, no volume/flag), the enabled render
-    switches upstream to unix:// and mounts the socket volume into BOTH
-    containers with NO per-container runAsUser (uid alignment), that the netpol
-    always admits da-portal as a fourth pod-scoped entry, and that an empty
-    daPortal selector aborts the render (fail-closed guard extension).
+  * static (no helm needed) — values.yaml defaults humanSocket on with a path,
+    the oauth2-proxy config's upstream is the socket and nothing else, and the
+    da-portal netpol selector is present;
+  * render (helm-gated) — the default render points oauth2-proxy at unix:// and
+    mounts the socket volume into BOTH containers with NO per-container
+    runAsUser (uid alignment); turning humanSocket or oauth2Proxy off fails
+    the render instead of shipping a pod that never starts; the netpol admits
+    da-portal; an empty daPortal selector aborts the render.
 """
 from __future__ import annotations
 
@@ -53,15 +50,15 @@ def repo_root() -> Path:
 
 
 # ── static layer ────────────────────────────────────────────────────────────
-def test_values_carry_optout_default_and_path(repo_root: Path):
-    """values.yaml ships humanSocket opt-out with a concrete socket path."""
-    txt = (repo_root / _VALUES).read_text(encoding="utf-8")
-    assert "humanSocket:" in txt, "values.yaml missing humanSocket block"
-    assert "path: /run/ta-human/human.sock" in txt, (
+def test_values_default_socket_on_with_path(repo_root: Path):
+    """values.yaml defaults humanSocket on, with a concrete socket path: tenant-api
+    refuses to start without the socket (ADR-027 §2)."""
+    values = yaml.safe_load((repo_root / _VALUES).read_text(encoding="utf-8"))
+    hs = values.get("humanSocket") or {}
+    assert hs.get("enabled") is True, "humanSocket.enabled must default to true"
+    assert hs.get("path") == "/run/ta-human/human.sock", (
         "values.yaml must default humanSocket.path to /run/ta-human/human.sock"
     )
-    # opt-in: enabled must default to false (image-flag coupling; safe no-op).
-    assert "enabled: false" in txt, "humanSocket.enabled must default to false"
 
 
 def test_values_carry_daportal_netpol_selector(repo_root: Path):
@@ -80,11 +77,11 @@ def test_deployment_gates_socket_on_flag(repo_root: Path):
     directives = "\n".join(
         line for line in raw.splitlines() if not line.lstrip().startswith("#")
     )
-    assert "humanSocket.enabled" in directives, (
-        "deployment must gate the socket wiring on humanSocket.enabled"
-    )
     assert "TA_HUMAN_SOCKET" in directives and "--human-socket" not in directives, (
-        "deployment must pass TA_HUMAN_SOCKET (env, ADR-036 §12) when enabled"
+        "deployment must pass TA_HUMAN_SOCKET (env, ADR-036 §12)"
+    )
+    assert 'include "tenant-api.identityPlaneGuard"' in directives, (
+        "deployment must refuse a render with the socket or oauth2-proxy turned off"
     )
     # The upstream itself lives in the oauth2-proxy config file (ADR-027
     # §10, _helpers.tpl tenant-api.oauth2ProxyConfig); the render tests below
@@ -93,8 +90,8 @@ def test_deployment_gates_socket_on_flag(repo_root: Path):
     assert 'printf "unix://%s" .Values.humanSocket.path' in helpers, (
         "the oauth2-proxy config must switch its upstream to unix:// when enabled"
     )
-    assert 'printf "http://localhost:%s" (include "tenant-api.apiPort" .)' in helpers, (
-        "the oauth2-proxy config must keep the http upstream for the disabled (default) path"
+    assert "http://localhost" not in helpers, (
+        "the oauth2-proxy config must not keep an http upstream: port 8080 has no API (ADR-027 §3)"
     )
 
 
@@ -117,29 +114,23 @@ def _helm_template(repo_root: Path, *set_args: str, template: str | None = None)
     return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
 
 
+@pytest.mark.parametrize("override", ["humanSocket.enabled=false", "oauth2Proxy.enabled=false"])
 @_needs_helm
-def test_render_default_omits_socket_wiring(repo_root: Path):
-    """Default (opt-out) render: upstream stays http, no socket flag/volume."""
-    res = _helm_template(repo_root)
-    assert res.returncode == 0, f"default render must succeed: {res.stderr}"
-    out = res.stdout
-    assert _upstream_uris(out) == ["http://localhost:8080"], (
-        "default render must keep the http upstream"
-    )
-    assert "unix://" not in out, "default render must NOT emit a unix:// upstream"
-    assert _ta_env(out, "TA_HUMAN_SOCKET") is None and "--human-socket" not in out, (
-        "default render must NOT pass the human socket"
-    )
-    assert "name: human-sock" not in out, (
-        "default render must NOT mount the human-sock volume"
+def test_render_without_socket_or_proxy_fails(repo_root: Path, override: str):
+    """tenant-api refuses to start without the socket or the oauth2-proxy config
+    (ADR-027 §2), so the chart refuses the render instead of shipping that pod."""
+    res = _helm_template(repo_root, override)
+    assert res.returncode != 0, f"{override} must fail the render"
+    assert override in res.stderr and "ADR-027" in res.stderr, (
+        f"the failure must name {override} and ADR-027: {res.stderr}"
     )
 
 
 @_needs_helm
-def test_render_enabled_switches_upstream_and_mounts_socket(repo_root: Path):
-    """Enabled render: unix:// upstream, --human-socket flag, and the human-sock
+def test_render_default_points_upstream_at_socket(repo_root: Path):
+    """Default render: unix:// upstream, TA_HUMAN_SOCKET, and the human-sock
     volume mounted into BOTH the tenant-api and oauth2-proxy containers."""
-    res = _helm_template(repo_root, "humanSocket.enabled=true")
+    res = _helm_template(repo_root)
     assert res.returncode == 0, f"enabled render must succeed: {res.stderr}"
     out = res.stdout
     assert _upstream_uris(out) == ["unix:///run/ta-human/human.sock"], (
@@ -163,8 +154,8 @@ def test_render_enabled_no_per_container_runasuser(repo_root: Path):
     """uid alignment (§2.5 / R2): both containers must inherit the pod-level
     runAsUser 65534 — a per-container runAsUser would break the 0660 socket dial.
     So the ONLY runAsUser in the render is the pod securityContext one."""
-    res = _helm_template(repo_root, "humanSocket.enabled=true")
-    assert res.returncode == 0, f"enabled render must succeed: {res.stderr}"
+    res = _helm_template(repo_root)
+    assert res.returncode == 0, f"default render must succeed: {res.stderr}"
     # Exactly one runAsUser line = the pod-level securityContext. Any second one
     # would be a per-container override that desyncs the socket uid.
     assert res.stdout.count("runAsUser:") == 1, (

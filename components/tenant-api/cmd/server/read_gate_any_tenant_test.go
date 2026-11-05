@@ -174,6 +174,7 @@ func newGateFixtureWith(t *testing.T, rbacYAML string, over routerDeps) *gateFix
 	router := buildRouter(routerDeps{
 		Deps:           deps,
 		RBAC:           mgr,
+		Identity:       mgr.HeaderResolver(),
 		Events:         handler.EventStream(deps, hub),
 		RateLimit:      rateLimit,
 		RequestTimeout: over.RequestTimeout,
@@ -619,8 +620,8 @@ func TestAnyTenantGate_StarGateRefusedScopedCallers(t *testing.T) {
 		req.Header.Set("X-Forwarded-Email", c.email())
 		req.Header.Set("X-Forwarded-Groups", c.group)
 		star, anyT := httptest.NewRecorder(), httptest.NewRecorder()
-		mgr.Middleware(rbac.PermRead, nil)(ok).ServeHTTP(star, req)
-		mgr.MiddlewareAnyTenant(rbac.PermRead)(ok).ServeHTTP(anyT, req)
+		rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.Middleware(rbac.PermRead, nil)(ok)).ServeHTTP(star, req)
+		rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.MiddlewareAnyTenant(rbac.PermRead)(ok)).ServeHTTP(anyT, req)
 		if star.Code != http.StatusForbidden || anyT.Code != http.StatusOK {
 			t.Errorf("%q: star gate %d / any-tenant gate %d, want 403 / 200", c.group, star.Code, anyT.Code)
 		}

@@ -90,7 +90,7 @@ func serveBatch(t *testing.T, files map[string]string, ep batchEndpoint, patch m
 	// The batch routes ask read on every tenant ("*") before the handler.
 	req.Header.Set("X-Forwarded-Groups", "platform")
 	w := httptest.NewRecorder()
-	mgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
+	rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.Middleware(rbac.PermRead, nil)(h)).ServeHTTP(w, req)
 	return w, gitHead(t, dir) != before
 }
 

@@ -36,6 +36,9 @@ func TestServerRefusesGitDriverConfigAtStartup(t *testing.T) {
 		"TA_CONFIG_DIR="+t.TempDir(),
 		"TA_GENERATOR_SOCKET=/nonexistent/generator.sock",
 		"TA_ADDR=127.0.0.1:0",
+		// ADR-027 §2: required before startup reaches the git check.
+		"TA_HUMAN_SOCKET="+filepath.Join(t.TempDir(), "human.sock"),
+		"TA_OAUTH2_PROXY_CONFIG="+validProxyConfig(t),
 		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=filter.x.clean", "GIT_CONFIG_VALUE_0="+secret)
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
@@ -82,6 +85,9 @@ func TestServerRefusesUnreadableGitConfigAtStartup(t *testing.T) {
 		"TA_CONFIG_DIR="+t.TempDir(),
 		"TA_GENERATOR_SOCKET=/nonexistent/generator.sock",
 		"TA_ADDR=127.0.0.1:0",
+		// ADR-027 §2: required before startup reaches the git check.
+		"TA_HUMAN_SOCKET="+filepath.Join(t.TempDir(), "human.sock"),
+		"TA_OAUTH2_PROXY_CONFIG="+validProxyConfig(t),
 		"GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=include.path", "GIT_CONFIG_VALUE_0="+bad)
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
@@ -96,4 +102,14 @@ func TestServerRefusesUnreadableGitConfigAtStartup(t *testing.T) {
 	if strings.Contains(string(out), "names programs git would run") {
 		t.Errorf("startup failure says a driver is configured. Got:\n%s", out)
 	}
+}
+
+// validProxyConfig is the oauth2-proxy config fixture tenant-api accepts.
+func validProxyConfig(t *testing.T) string {
+	t.Helper()
+	p, err := filepath.Abs(filepath.Join("..", "..", "internal", "proxyconfig", "testdata", "valid.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
 }

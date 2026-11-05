@@ -68,7 +68,7 @@ func postTenantBatch(t *testing.T, d *Deps, ops string) *httptest.ResponseRecord
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	req.Header.Set("X-Forwarded-Groups", "admins")
 	w := httptest.NewRecorder()
-	d.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(d)).ServeHTTP(w, req)
+	rbac.ResolveIdentity(d.RBAC.HeaderResolver())(d.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(d))).ServeHTTP(w, req)
 	return w
 }
 

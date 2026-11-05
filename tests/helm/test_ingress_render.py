@@ -174,7 +174,10 @@ def test_fails_closed_without_oauth2_proxy(repo_root: Path, chart: str):
         *clear_upstreams,
     )
     assert res.returncode != 0
-    assert "ingress.enabled=true requires oauth2Proxy.enabled=true" in res.stderr
+    # tenant-api refuses oauth2Proxy.enabled=false outright (ADR-027 §2: the
+    # API is reachable only through the sidecar), whichever template fails first.
+    assert ("ingress.enabled=true requires oauth2Proxy.enabled=true" in res.stderr
+            or (chart == "helm/tenant-api" and "oauth2Proxy.enabled=false is no longer supported" in res.stderr)), res.stderr
 
 
 @_needs_helm

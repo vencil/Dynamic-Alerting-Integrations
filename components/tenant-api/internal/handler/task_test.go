@@ -27,7 +27,7 @@ func asTaskTester(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		r.Header.Set("X-Forwarded-Email", taskTester)
 		r.Header.Set("X-Forwarded-Groups", unrestrictedGroup)
-		mgr.MiddlewareAuthenticated()(h).ServeHTTP(w, r)
+		rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.MiddlewareAuthenticated()(h)).ServeHTTP(w, r)
 	}
 }
 

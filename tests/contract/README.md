@@ -25,6 +25,11 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 需要：
 - Dev container（`make dc-up`）或 host 端有 Go 1.26 + Python 3.13 + `pip install -r tests/contract/requirements.txt`
 - `components/tenant-api/docs/swagger.json` 是最新的（如不確定先 `make api-docs`）
+- oauth2-proxy：預設以 `docker run` 跑 `helm/tenant-api/values.yaml` 釘的 image（同一個 digest）；沒有 docker 時設 `OAUTH2_PROXY_BIN` 指向同版 binary
+
+## 拓樸（ADR-027 §3）
+
+與 production、try-local 同一個拓樸：tenant-api 的 API 只在 Unix socket 上，前面是 oauth2-proxy，兩者讀同一份結構化設定檔（取自 `try-local/oauth2-proxy/oauth2-proxy.yaml`，只換 listener 與 socket 路徑）。oauth2-proxy 以 `--trusted-ip` 涵蓋所有來源位址、對所有請求免登入——不用 `--skip-auth-route`，因為 oauth2-proxy 對它認為不明確的路徑（控制字元、`;`、`//`，fuzz 會產生）拒絕套用路徑豁免、改回登入頁。沒有 session 就不注入身分 header，schemathesis 也不帶；tenant-api 的開發旁路在 socket 上注入 fuzz 身分（`schemathesis@example.com` / `contract-fuzz-admins`）。tenant-api 的 TCP port 只拿來輪詢 `/health`。
 
 > **schemathesis + hypothesis 版本已 pin**（[`requirements.txt`](requirements.txt)，#1158）。runner 依賴 4.x CLI 語意與 `filter_too_much` 壓制的生成器行為，未 pin 的 `pip install schemathesis` 會隨最新版漂移 flake 率／旗標語意（「本地綠 CI 首跑紅」那類）。**`hypothesis` 一起顯式釘**——`filter_too_much` 是 hypothesis 的 HealthCheck、且 hypothesis 才是 flake 生成源，只釘 schemathesis 會讓它的 transitive `hypothesis<7,>=…` 浮動、真正的變數沒鎖住。升版走顯式 PR：改 `requirements.txt` 版號、複驗 health-check／旗標名仍成立，CI cache key 綁該檔 hash 會自動失效重裝。
 
@@ -50,11 +55,11 @@ CONTRACT_MAX_EXAMPLES=50 make contract-test
 
 ## 排錯
 
-**`401 Unauthorized` 大量出現**：tenant-api 走 `X-Forwarded-Email` proxy auth。runner 已經自動帶 `-H "X-Forwarded-Email: schemathesis@example.com"`。如果還是 401，看 `internal/handler/middleware.go` 的 auth 邏輯有沒有改規則。
+**`401 Unauthorized` 大量出現**：身分由 tenant-api 的開發旁路在 Unix socket 上注入（runner 設 `TA_DEV_BYPASS_*`）。如果還是 401，看 `internal/rbac/identity.go`／`devbypass.go` 與 `cmd/server/routes.go` 的掛載順序有沒有改。回應是 HTML 登入頁時，是 oauth2-proxy 沒放行——看它的旗標（`--trusted-ip`）與 workdir 的 `oauth2-proxy.log`。
 
 **`Response violates schema`**：真實 spec 漂移。修法：
 1. 先看 schemathesis 報告的具體 endpoint
-2. 用 `curl -H "X-Forwarded-Email: a@b.com" http://localhost:8080/api/v1/<path>` 看實際回應
+2. 用 `curl http://localhost:<oauth2-proxy port>/api/v1/<path>` 看實際回應（runner 印出的 `behind oauth2-proxy on …` 那個位址；tenant-api 的 TCP port 只有 `/health`、`/ready`、`/metrics`）
 3. 對照 `components/tenant-api/docs/swagger.json` 的對應 path
 4. 決定要修 handler 回應 or 修 swag 註解（通常修註解）然後 `make api-docs`
 

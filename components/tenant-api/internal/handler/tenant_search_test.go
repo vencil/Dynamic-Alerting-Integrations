@@ -81,7 +81,7 @@ func runSearch(t *testing.T, configDir string, mgr *rbac.Manager, idpGroups []st
 	inner := SearchTenants(&Deps{ConfigDir: configDir, RBAC: mgr, SearchCache: cache})
 	// The list endpoint passes nil tenantIDFn (no per-tenant
 	// permission check) — same as the production route binding.
-	h := mgr.Middleware(rbac.PermRead, nil)(inner)
+	h := rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.Middleware(rbac.PermRead, nil)(inner))
 
 	url := "/api/v1/tenants/search"
 	if query != "" {

@@ -53,7 +53,7 @@ func wmServe(d *Deps, h http.HandlerFunc, req *http.Request) *httptest.ResponseR
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	req.Header.Set("X-Forwarded-Groups", "admins")
 	w := httptest.NewRecorder()
-	d.RBAC.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
+	rbac.ResolveIdentity(d.RBAC.HeaderResolver())(d.RBAC.Middleware(rbac.PermRead, nil)(h)).ServeHTTP(w, req)
 	return w
 }
 

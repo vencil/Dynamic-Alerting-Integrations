@@ -19,10 +19,18 @@ Fixture design (full-method fuzz):
     identity uses inline `-c user.name/email` fallback to the author,
     so no global git config is required — only the initial commit here
     needs the local repo config.
+  - ADR-027 §2, §3: the same topology as production and try-local. The API
+    is served only on tenant-api's Unix socket; an oauth2-proxy (the image and
+    digest the tenant-api chart pins, `docker run`; or OAUTH2_PROXY_BIN) runs
+    in front of it with every path exempt from login, from the structured
+    config file try-local uses (try-local/oauth2-proxy/oauth2-proxy.yaml), and
+    tenant-api reads the same file. No request carries an identity: the dev
+    bypass (ADR-022) injects the fuzz identity on the socket plane.
+    schemathesis talks to oauth2-proxy; the TCP port is only polled for
+    /health.
   - `_rbac.yaml` grants the fuzz group wildcard read+write+admin so the
     authz layer passes and fuzzing exercises handler/validation logic,
-    not just 401/403 short-circuits. Requests carry X-Forwarded-Email +
-    X-Forwarded-Groups, matching the oauth2-proxy-fronted contract.
+    not just 401/403 short-circuits.
   - The generator container's service runs beside tenant-api (#2903,
     ADR-036 §3): tenant-api refuses to start without --generator-socket, and
     every write asks it before committing. It is the REAL service
@@ -44,9 +52,9 @@ Fixture design (full-method fuzz):
     path never depends on fuzz luck.
 
 Skipped checks (and why — see also docs/internal/testing-playbook.md):
-  - `auth-required`: tenant-api auth is via X-Forwarded-* headers from
-    a fronting proxy; schemathesis can't simulate the proxy. Auth is
-    covered by Go-level handler tests.
+  - `auth-required`: identity comes from the fronting oauth2-proxy, which
+    this fixture runs without login (the dev bypass supplies the caller).
+    Auth is covered by Go-level handler tests.
 
 Excluded operations (known gaps + reopen conditions):
   - /api/v1/federation/tokens* + /api/v1/federation/accounts/backfill
@@ -83,6 +91,8 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+
+import yaml
 
 def _find_repo_root() -> Path:
     """Locate repo root regardless of where this script lives.
@@ -142,13 +152,18 @@ def wait_for_health(url: str, timeout: float = 30.0) -> None:
     raise TimeoutError(f"tenant-api not ready at {url} after {timeout}s; last err: {last_err}")
 
 
-# IdP group granted wildcard access in the fuzz _rbac.yaml; must match the
-# X-Forwarded-Groups header sent with every schemathesis request.
+# IdP group granted wildcard access in the fuzz _rbac.yaml; the dev bypass
+# injects it on every request (ADR-027 §3).
 FUZZ_GROUP = "contract-fuzz-admins"
 
 # Caller identity for every request (schemathesis AND the deterministic
 # policy smoke) — one identity, so TA_RATE_LIMIT_PER_MIN=0 stays required.
 FUZZ_EMAIL = "schemathesis@example.com"
+
+# ADR-027 §3: the structured oauth2-proxy config the dev topologies share.
+TRY_LOCAL_PROXY_CONFIG = REPO_ROOT / "try-local" / "oauth2-proxy" / "oauth2-proxy.yaml"
+# The oauth2-proxy image (repository, tag, digest) the tenant-api chart pins.
+TENANT_API_VALUES = REPO_ROOT / "helm" / "tenant-api" / "values.yaml"
 
 # Neutral fixture tenant (dev-rule #2: no real tenant ids in fixtures).
 # Seeded in conf.d so list endpoints have ≥1 tenant, and listed in the
@@ -249,16 +264,13 @@ def _tenant_body(receiver_yaml: str) -> bytes:
 
 
 def _put_tenant(base_url: str, body: bytes) -> tuple[int, str, bytes]:
-    """PUT the seed tenant with fuzz-identity headers; never raises on 4xx/5xx."""
+    """PUT the seed tenant through oauth2-proxy (the dev bypass supplies the
+    caller); never raises on 4xx/5xx."""
     req = urllib.request.Request(
         f"{base_url}/api/v1/tenants/{SEED_TENANT}",
         data=body,
         method="PUT",
-        headers={
-            "X-Forwarded-Email": FUZZ_EMAIL,
-            "X-Forwarded-Groups": FUZZ_GROUP,
-            "Content-Type": "application/yaml",
-        },
+        headers={"Content-Type": "application/yaml"},
     )
     try:
         with urllib.request.urlopen(req, timeout=10.0) as resp:
@@ -415,6 +427,95 @@ def start_generator(config_dir: Path, workdir: Path, log_fh) -> tuple[subprocess
     raise TimeoutError("generator service not ready after 30s")
 
 
+def oauth2_proxy_image() -> str:
+    """The oauth2-proxy image the tenant-api chart pins, tag and digest."""
+    with TENANT_API_VALUES.open(encoding="utf-8") as fh:
+        img = yaml.safe_load(fh)["oauth2Proxy"]["image"]
+    return f"{img['repository']}:{img['tag']}@{img['digest']}"
+
+
+def write_proxy_config(workdir: Path, upstream_socket: str) -> Path:
+    """try-local's oauth2-proxy config with this run's listener and socket.
+
+    Only the two fields that depend on where things run change; the
+    injectRequestHeaders tenant-api trusts are the try-local file's.
+    """
+    cfg = yaml.safe_load(TRY_LOCAL_PROXY_CONFIG.read_text(encoding="utf-8"))
+    cfg["server"]["bindAddress"] = "0.0.0.0:4180"
+    [api] = [u for u in cfg["upstreamConfig"]["upstreams"] if u["path"] == "/api/"]
+    api["uri"] = f"unix://{upstream_socket}"
+    cfg_dir = workdir / "oauth2-proxy"
+    cfg_dir.mkdir(exist_ok=True)
+    path = cfg_dir / "oauth2-proxy.yaml"
+    path.write_text(yaml.safe_dump(cfg, sort_keys=False), encoding="utf-8", newline="\n")
+    os.chmod(path, 0o644)
+    return path
+
+
+# oauth2-proxy flags of the dev topology (ADR-027 §3), the same as
+# try-local's: every request is exempt from login, so no session exists and
+# nothing is injected; client copies of the injected headers are still
+# stripped. Exempt by trusted source address (all of them), not by
+# --skip-auth-route: oauth2-proxy refuses a path exemption for a path it finds
+# ambiguous (a control character, `;`, `//`), which the fuzz generates, and
+# would answer those with its sign-in page instead of passing them on.
+PROXY_FLAGS = [
+    "--trusted-ip=0.0.0.0/0",
+    "--trusted-ip=::/0",
+    "--email-domain=*",
+    "--cookie-secret=contract-not-a-secret-32-bytes!!",
+    "--cookie-secure=false",
+]
+
+
+def start_oauth2_proxy(workdir: Path, sock_dir: Path, port: int, log_fh) -> tuple[list, subprocess.Popen]:
+    """Start oauth2-proxy in front of tenant-api's socket on 127.0.0.1:port.
+
+    OAUTH2_PROXY_BIN set → that binary, with the socket's host path. Else
+    `docker run` of the chart's pinned image, as this uid (the socket is
+    0660) with the socket directory mounted at /run/ta-human. Returns the
+    argv that stops it ([] for a plain process) and the process.
+    """
+    binary = os.environ.get("OAUTH2_PROXY_BIN", "").strip()
+    if binary:
+        cfg = write_proxy_config(workdir, str(sock_dir / "human.sock"))
+        argv = [binary, f"--alpha-config={cfg}", *PROXY_FLAGS]
+        # bindAddress comes from the file; point it at this run's port.
+        text = cfg.read_text(encoding="utf-8").replace("0.0.0.0:4180", f"127.0.0.1:{port}")
+        cfg.write_text(text, encoding="utf-8", newline="\n")
+        return [], subprocess.Popen(argv, stdout=log_fh, stderr=subprocess.STDOUT)
+    if not shutil.which("docker"):
+        raise RuntimeError("neither OAUTH2_PROXY_BIN nor docker is available to run oauth2-proxy")
+    cfg = write_proxy_config(workdir, "/run/ta-human/human.sock")
+    name = f"contract-oauth2-proxy-{os.getpid()}"
+    argv = [
+        "docker", "run", "--rm", "--name", name,
+        "--user", f"{os.getuid()}:{os.getgid()}",
+        "-v", f"{sock_dir}:/run/ta-human",
+        "-v", f"{cfg.parent}:/etc/oauth2-proxy:ro",
+        "-p", f"127.0.0.1:{port}:4180",
+        oauth2_proxy_image(),
+        "--alpha-config=/etc/oauth2-proxy/oauth2-proxy.yaml", *PROXY_FLAGS,
+    ]
+    return ["docker", "rm", "-f", name], subprocess.Popen(argv, stdout=log_fh, stderr=subprocess.STDOUT)
+
+
+def wait_for_proxy(url: str, proc: subprocess.Popen, timeout: float = 120.0) -> None:
+    """Poll oauth2-proxy's /ping (a pull of the image counts against timeout)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            raise RuntimeError(f"oauth2-proxy exited with code {proc.returncode}")
+        try:
+            with urllib.request.urlopen(url, timeout=1.0) as resp:
+                if resp.status == 200:
+                    return
+        except (urllib.error.URLError, ConnectionError, socket.timeout):
+            pass
+        time.sleep(0.5)
+    raise TimeoutError(f"oauth2-proxy not ready at {url} after {timeout}s")
+
+
 def build_tenant_api(workdir: Path) -> Path:
     """Build the tenant-api binary into workdir/tenant-api. Returns path."""
     binary = workdir / "tenant-api"
@@ -456,7 +557,7 @@ def main() -> int:
     init_git_repo(config_dir)
     rbac_path = write_rbac_fixture(workdir)
 
-    generator, generator_sock = None, None
+    generator, generator_sock, human_sock_dir = None, None, None
     gen_log_fh = (workdir / "generator.log").open("w", encoding="utf-8")
     try:
         binary = build_tenant_api(workdir)
@@ -464,7 +565,19 @@ def main() -> int:
         print(f"[contract] generator service ready on {generator_sock}")
         port = find_free_port()
         addr = f"127.0.0.1:{port}"
-        base_url = f"http://{addr}"
+        probe_url = f"http://{addr}"
+        proxy_port = find_free_port()
+        # Both ports are only free when picked; tenant-api binds the first
+        # one later, so the proxy must not get the same number.
+        while proxy_port == port:
+            proxy_port = find_free_port()
+        base_url = f"http://127.0.0.1:{proxy_port}"
+        # ADR-027 §2: the API's socket. A short temp dir (a Unix socket path
+        # is limited to ~107 bytes); 0777 so a container running as this uid
+        # under another mount namespace can still traverse it.
+        human_sock_dir = Path(tempfile.mkdtemp(prefix="ch"))
+        os.chmod(human_sock_dir, 0o777)
+        proxy_config = write_proxy_config(workdir, "/run/ta-human/human.sock")
 
         env = {
             **os.environ,
@@ -479,6 +592,14 @@ def main() -> int:
             "TA_RATE_LIMIT_PER_MIN": "0",
             # #2903: every write asks the generator started above.
             "TA_GENERATOR_SOCKET": generator_sock,
+            # ADR-027 §2, §3: the API only on this socket, behind oauth2-proxy;
+            # identity headers named by the config file oauth2-proxy runs
+            # with; the dev bypass injects the fuzz identity on the socket.
+            "TA_HUMAN_SOCKET": str(human_sock_dir / "human.sock"),
+            "TA_OAUTH2_PROXY_CONFIG": str(proxy_config),
+            "TA_DEV_BYPASS_AUTH": "true",
+            "TA_DEV_BYPASS_EMAIL": FUZZ_EMAIL,
+            "TA_DEV_BYPASS_GROUPS": FUZZ_GROUP,
             # #3175: tenant-api refuses to start when its git config names
             # a filter / diff / merge driver, and a host with git-lfs
             # installed has filter.lfs.* in its system or global config.
@@ -504,9 +625,14 @@ def main() -> int:
             text=True, encoding="utf-8", errors="replace",
         )
 
+        proxy_stop: list = []
+        proxy = None
+        proxy_log_fh = (workdir / "oauth2-proxy.log").open("w", encoding="utf-8")
         try:
-            wait_for_health(f"{base_url}/health", timeout=15.0)
-            print("[contract] tenant-api ready, running policy-gate smoke")
+            wait_for_health(f"{probe_url}/health", timeout=15.0)
+            proxy_stop, proxy = start_oauth2_proxy(workdir, human_sock_dir, proxy_port, proxy_log_fh)
+            wait_for_proxy(f"{base_url}/ping", proxy)
+            print(f"[contract] tenant-api ready behind oauth2-proxy on {base_url}, running policy-gate smoke")
 
             # Deterministic policy-gate contract case — BEFORE the fuzz so a
             # dead gate fails fast and the checks run against pristine state.
@@ -521,10 +647,10 @@ def main() -> int:
             #
             # --max-examples 10 keeps CI runtime bounded; bump locally via
             # CONTRACT_MAX_EXAMPLES=50 for deeper fuzz when investigating.
-            # tenant-api auth: X-Forwarded-Email + X-Forwarded-Groups match
-            # the proxy-fronted contract; the group maps to the wildcard
-            # write fixture in _rbac.yaml. Without these every endpoint
-            # returns 401/403 and the fuzz never reaches handler logic.
+            # No identity header: oauth2-proxy (no login) injects none and
+            # strips client copies; tenant-api's dev bypass injects
+            # FUZZ_EMAIL / FUZZ_GROUP on the socket plane (ADR-027 §3), the
+            # group mapping to the wildcard write fixture in _rbac.yaml.
             #
             # --exclude-path-regex: federation token ops need --federation-key
             # + a Kubernetes ConfigMap store (see module docstring, "Excluded
@@ -548,8 +674,6 @@ def main() -> int:
                     "schemathesis", "run",
                     str(SWAGGER_JSON),
                     "--url", base_url,
-                    "-H", f"X-Forwarded-Email: {FUZZ_EMAIL}",
-                    "-H", f"X-Forwarded-Groups: {FUZZ_GROUP}",
                     "--exclude-path-regex", "^/api/v1/federation/(tokens|accounts)",
                     "--exclude-path", "/api/v1/prs",
                     # POST /tenants/batch is excluded from fuzzing: its body
@@ -581,6 +705,26 @@ def main() -> int:
             )
             return result.returncode
         finally:
+            if proxy is not None:
+                print("[contract] tearing down oauth2-proxy")
+                if proxy_stop:
+                    try:
+                        subprocess.run(proxy_stop, timeout=30, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.STDOUT, check=False)
+                    except subprocess.TimeoutExpired:
+                        # Keep tearing down: tenant-api below must still stop.
+                        print("[contract] stopping the oauth2-proxy container timed out; continuing teardown")
+                proxy.terminate()
+                try:
+                    proxy.wait(timeout=10.0)
+                except subprocess.TimeoutExpired:
+                    proxy.kill()
+                    proxy.wait()
+                if proxy.returncode not in (0, -signal.SIGTERM, 143, 137):
+                    tail = (workdir / "oauth2-proxy.log").read_text(errors="replace").splitlines()[-30:]
+                    print(f"[contract] oauth2-proxy exited with code {proxy.returncode}; log tail:")
+                    print("\n".join(tail))
+            proxy_log_fh.close()
             print("[contract] tearing down tenant-api")
             proc.send_signal(signal.SIGTERM)
             try:
@@ -605,6 +749,8 @@ def main() -> int:
         gen_log_fh.close()
         if generator_sock is not None:
             shutil.rmtree(Path(generator_sock).parent, ignore_errors=True)
+        if human_sock_dir is not None:
+            shutil.rmtree(human_sock_dir, ignore_errors=True)
         shutil.rmtree(workdir, ignore_errors=True)
 
 

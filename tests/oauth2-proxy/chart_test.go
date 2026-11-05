@@ -40,7 +40,9 @@ type chartVariant struct {
 }
 
 var chartVariants = []chartVariant{
-	{Name: "default", Upstream: "http"},
+	// ADR-027 §2: the only upstream is tenant-api's Unix socket; the chart
+	// refuses a render with humanSocket.enabled=false.
+	{Name: "default", Upstream: "unix"},
 	{
 		Name: "gitlab-claims-socket",
 		Set: []string{
@@ -50,7 +52,6 @@ var chartVariants = []chartVariant{
 			"oauth2Proxy.gitlabGroups={acme/sre}",
 			"oauth2Proxy.claimHeaders.org=X-Auth-Request-Org",
 			"oauth2Proxy.claimHeaders.region=X-Auth-Request-Region",
-			"humanSocket.enabled=true",
 		},
 		Claims:   map[string]string{"org": "X-Auth-Request-Org", "region": "X-Auth-Request-Region"},
 		Upstream: "unix",

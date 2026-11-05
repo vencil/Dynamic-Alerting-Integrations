@@ -41,7 +41,7 @@ func TestBatchConflict_SyncAndAsyncSayNothingWasWritten(t *testing.T) {
 		req.Header.Set("X-Forwarded-Email", "alice@example.com")
 		req.Header.Set("X-Forwarded-Groups", "admins")
 		w := httptest.NewRecorder()
-		d.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(d)).ServeHTTP(w, req)
+		rbac.ResolveIdentity(d.RBAC.HeaderResolver())(d.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(d))).ServeHTTP(w, req)
 		if async_ {
 			var acc struct {
 				TaskID string `json:"task_id"`

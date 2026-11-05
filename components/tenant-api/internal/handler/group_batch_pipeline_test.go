@@ -70,7 +70,7 @@ func (f *groupBatchFixture) post(t *testing.T, body string) *httptest.ResponseRe
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	req.Header.Set("X-Forwarded-Groups", "admins")
 	w := httptest.NewRecorder()
-	f.deps.RBAC.Middleware(rbac.PermRead, nil)(GroupBatch(f.deps)).ServeHTTP(w, req)
+	rbac.ResolveIdentity(f.deps.RBAC.HeaderResolver())(f.deps.RBAC.Middleware(rbac.PermRead, nil)(GroupBatch(f.deps))).ServeHTTP(w, req)
 	return w
 }
 

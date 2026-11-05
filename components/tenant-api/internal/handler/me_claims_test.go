@@ -49,7 +49,7 @@ func TestMe_ClaimsExposed(t *testing.T) {
 	// X-Auth-Request-Region deliberately absent → no region claim.
 
 	w := httptest.NewRecorder()
-	wrapped := rbacMgr.Middleware(rbac.PermRead, nil)(handler)
+	wrapped := rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(handler))
 	wrapped.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
@@ -92,7 +92,7 @@ func TestMe_NoClaims_BodyOmitsClaimsKey(t *testing.T) {
 			req.Header.Set("X-Forwarded-Groups", "team-readers")
 
 			w := httptest.NewRecorder()
-			wrapped := rbacMgr.Middleware(rbac.PermRead, nil)(handler)
+			wrapped := rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(handler))
 			wrapped.ServeHTTP(w, req)
 
 			if w.Code != http.StatusOK {
@@ -154,7 +154,7 @@ func meOrgScopeRequest(t *testing.T, rbacYaml string, claimHeaders map[string]st
 	}
 
 	w := httptest.NewRecorder()
-	rbacMgr.Middleware(rbac.PermRead, nil)(handler).ServeHTTP(w, req)
+	rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(handler)).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
@@ -263,7 +263,7 @@ groups:
 	req.Header.Set("X-Forwarded-Groups", "legacy-group")
 
 	w := httptest.NewRecorder()
-	wrapped := rbacMgr.Middleware(rbac.PermRead, nil)(diverge)
+	wrapped := rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(diverge))
 	wrapped.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {

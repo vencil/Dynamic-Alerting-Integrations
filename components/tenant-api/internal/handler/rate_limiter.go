@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/vencil/tenant-api/internal/errcode"
+	"github.com/vencil/tenant-api/internal/rbac"
 )
 
 // RateLimitConfig configures the per-caller request budget. A
@@ -237,8 +238,8 @@ func (l *rateLimiter) allow(caller string, now time.Time) (bool, int) {
 // rateLimitCaller returns the identity used to bucket a request.
 // Order of precedence:
 //
-//  1. `X-Forwarded-Email` (set by oauth2-proxy after auth) —
-//     primary caller identity in production
+//  1. the email of the caller rbac.ResolveIdentity attached (UDS plane,
+//     ADR-027 §2) — never a header
 //  2. the true TCP peer address (`r.RemoteAddr`) — fallback for
 //     unauthenticated probes / pre-auth requests
 //  3. literal `_anonymous` — last resort, shouldn't happen in
@@ -250,8 +251,10 @@ func (l *rateLimiter) allow(caller string, now time.Time) (bool, int) {
 // middleware.RealIP is intentionally not mounted (see main.go) so
 // r.RemoteAddr is the true peer.
 func rateLimitCaller(r *http.Request) string {
-	if email := strings.TrimSpace(r.Header.Get("X-Forwarded-Email")); email != "" {
-		return email
+	if p := rbac.RequestPrincipal(r); p != nil {
+		if email := strings.TrimSpace(p.Email); email != "" {
+			return email
+		}
 	}
 	if ra := strings.TrimSpace(r.RemoteAddr); ra != "" {
 		// RemoteAddr typically includes ":port" — strip it so
