@@ -79,7 +79,7 @@ var errValidatorBase = errors.New("cannot read the commit the write lands on")
 // its key verdict for ctx's caller (adviseKeyVerdict) — or refuses the
 // write on it (*KeyVerdictError, keyVerdictRefusal); nothing when there is
 // nothing to write, ErrNoValidator when no validator is installed. Caller
-// holds w.mu.
+// holds w.mu, except a preview's (JudgePreview), which commits nothing.
 func (w *Writer) validateProposed(ctx context.Context, base string, files []ProposedFile) (verdictAdvice, error) {
 	if len(files) == 0 {
 		return verdictAdvice{}, nil

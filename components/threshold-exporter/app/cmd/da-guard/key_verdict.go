@@ -234,9 +234,14 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 		ec = ec.AsWritten() // #2031: as `da-guard effective` prints it
 		// A YAML `.inf` / `.nan` is text, as effective prints it.
 		in.Effective[ec.TenantID] = keyverdict.EffectiveTenant{Config: config.NonFiniteAsText(ec.EffectiveConfig),
-			Sources: ec.KeySources, Profile: ec.BoundProfile, DefaultsChain: ec.DefaultsChain}
+			Sources: ec.KeySources, Profile: ec.BoundProfile, DefaultsChain: ec.DefaultsChain,
+			NotServed: ec.NotServed}
 	}
 	in.RootProfiles = opts.profiles
+	// A profile no tenant binds is known only over every tenant (#3395):
+	// not with a --tenant subset, and not when a file the load drops, or a
+	// tenant set aside, may be the one binding it.
+	in.Whole = opts.tenants == nil && len(rep.ParseFailed) == 0 && len(rep.Unreadable) == 0 && len(setAside) == 0
 	res := keyVerdictResult{judged: true, tree: keyverdict.Judge(in),
 		keyChecks: map[string]servedKeyChecks{}, computed: map[string]bool{},
 		parseFailed: rep.ParseFailed, unreadable: unreadableEntries(rep.Unreadable), setAside: setAside}

@@ -141,6 +141,10 @@ type KeyFinding struct {
 	File     *string  `json:"file"`
 	Tenants  []string `json:"tenants"`
 	Reason   *string  `json:"reason"`
+	// Blocks is the shared verdict's own answer to whether this finding
+	// refuses a write (da-guard key-verdict's `blocks`, #3016); nil from a
+	// generator image before it sent one.
+	Blocks *bool `json:"blocks"`
 }
 
 // errorBody is the service's non-200 JSON body.

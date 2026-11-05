@@ -10,13 +10,14 @@ import (
 )
 
 func kvFinding(key, file string, tenants ...string) KeyFinding {
-	return KeyFinding{Severity: "error", Kind: "unread", Key: key, File: file, Tenants: tenants, Reason: "unregistered"}
+	return KeyFinding{Severity: "error", Kind: "unread", Key: key, File: file, Tenants: tenants, Reason: "unregistered",
+		Blocks: true}
 }
 
 // kvWarning is kvFinding at warning severity: reported, never refusing.
 func kvWarning(key, file string, tenants ...string) KeyFinding {
 	f := kvFinding(key, file, tenants...)
-	f.Severity = "warning"
+	f.Severity, f.Blocks = "warning", false
 	return f
 }
 

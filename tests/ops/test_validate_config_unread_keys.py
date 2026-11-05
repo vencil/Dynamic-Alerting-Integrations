@@ -100,6 +100,8 @@ def test_a_profile_key_is_judged_from_the_profile_layer_bound_or_not(tmp_path, t
         f"_profiles.yaml: error: unread `_namespaces` (not_read_in_profile) — {who}",
         f"_profiles.yaml: error: unread `_profile` (not_read_in_profile) — {who}",
         f"_profiles.yaml: error: unread `_unknown_thing` (unregistered) — {who}",
+        # p2 is bound by no tenant: its threshold key is not judged (#3395).
+        "_profiles.yaml: notice: profile_not_judged `mysql_connections` (profile_unbound) — no tenant",
     ], r["details"]
 
 
@@ -263,3 +265,14 @@ def test_undecidable_keeps_its_advice_next_to_a_key_check(tmp_path):
     r = vc.check_unread_keys(_tree(tmp_path, {"t-a.yaml": "tenants:\n  t-a:\n    mysql_cpu: \"40\"\n"}))
     assert any("renamed" in d for d in r["details"]), r["details"]
     assert r["hint"] == vc._UNREAD_KEYS_UNDECIDABLE_HINT, r
+
+
+def test_an_unbound_profiles_threshold_key_is_a_notice_not_a_failure(tmp_path):
+    """#3395: a threshold key of a profile no tenant binds is not judged;
+    the row says so (a notice) and does not fail."""
+    r = vc.check_unread_keys(_tree(tmp_path, {
+        "_defaults.yaml": _DEFAULTS,
+        "_profiles.yaml": "profiles:\n  gold:\n    redis_memory: \"60\"\n  silver:\n    redis_evictd: \"5\"\n",
+        "db-a.yaml": "tenants:\n  db-a:\n    _profile: gold\n"}))
+    assert r["status"] == vc.WARN, r
+    assert any("notice: profile_not_judged `redis_evictd` (profile_unbound)" in d for d in r["details"]), r

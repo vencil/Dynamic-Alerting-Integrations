@@ -373,6 +373,12 @@ type Writer struct {
 	// nil refuses every content-changing write with ErrNoValidator.
 	validator WriteValidator
 
+	// previewMu admits one PUT preview's judgement at a time (JudgePreview,
+	// #3016): the generator judges one write at a time, and a preview that
+	// waited behind another would queue ahead of the writes it competes
+	// with — a busy one is answered "not judged" instead.
+	previewMu sync.Mutex
+
 	// #2078 conf.d walk bound (see scanTree): 0 → defaultTreeScanTimeout.
 	// stuckTreeScans counts write-path walks that outlived it and are still
 	// running; stuckReadTreeScans does the same for the read path (#2153,
