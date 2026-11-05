@@ -380,7 +380,7 @@ _routing:
   `secret` 是實際的 Secret 名稱，不得以 `da-` 開頭（避免與租戶推導出的名稱撞名）；`fields` 只能列內容本身就是送達目的地的欄位，不能列 `auth_password`。沒有 policy 檔，或 policy 沒有 `shared_secrets`，就沒有任何共用例外。receiver 只要用了任一共用 Secret，就不能設 `http_config.proxy_url`：代理是租戶自己指定的，會看到送往共用目的地的請求（`secret_ref_proxy_url`）。`shared_secrets` 寫壞（不是 mapping、別名不是 DNS-1123 label、條目不是 `{secret, fields}`、名稱以 `da-` 開頭、`fields` 列了不接 Secret 的欄位）時整份 policy 不可用，結束碼 `2`。
 - **送往租戶自填目的地的憑證**（上表「憑證送往」不是欄位本身的那幾列：`auth_password` 與 `http_config` 底下各欄）：目的地是租戶自己填的，所以
   - 只能用自己的 Secret，共用 Secret 一律拒（`secret_ref_shared_confined`）；
-  - policy 必須設了非空的 `allowed_domains`，每個目的地的 host 都在其中（oauth2 那幾欄是 `oauth2.token_url` 與 `url` 兩個都要）；目的地沒寫、或本身也是參照（看不到 host）就拒（`secret_ref_destination_unconfined`）；
+  - policy 必須設了非空的 `allowed_domains`，每個目的地的 host 都在其中（oauth2 那幾欄是 `oauth2.token_url` 與 `url` 兩個都要；URL 類目的地必須以 `http://` 或 `https://` 開頭，`smarthost` 照舊寫 `host:port`）；目的地沒寫、或本身也是參照（看不到 host）就拒（`secret_ref_destination_unconfined`）；
   - 該請求經過的 `proxy_url`（webhook 請求是 `http_config.proxy_url`，token 請求是 `http_config.oauth2.proxy_url`；oauth2 那幾欄兩個都算）不能設（`secret_ref_proxy_url`）：代理不受 `allowed_domains` 約束，`http://` 的請求它整個看得到，`https://` 的請求在同一個 receiver 設了 `tls_config.ca` 或 `insecure_skip_verify` 時它也能攔截；
   - header 的值來自 Secret 時，`http_config.follow_redirects` 必須寫成 `false`（`secret_ref_header_redirects`）：Alertmanager 預設跟隨 redirect，跨 host 的 redirect 只拿掉 `Authorization` 這類固定的 header，自訂 header 會照送到 redirect 指向的 host。
 

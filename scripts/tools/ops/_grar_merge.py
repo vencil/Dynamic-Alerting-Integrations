@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 import fnmatch
 import os
+import re
 import sys
 from types import MappingProxyType
 from typing import Mapping, NamedTuple
@@ -40,7 +41,8 @@ from _lib_validation import (  # noqa: E402  (#2766 finding kinds)
     FIELD_NOT_STRING, FIELD_SET, receiver_field_state,
 )
 from _lib_validation import (  # noqa: E402  (#1560 Secret references)
-    CREDENTIAL_REF_SITES, CredentialRefSite, RefPath, find_credential_refs,
+    CREDENTIAL_REF_SITES, HOST_PORT_DESTINATIONS, CredentialRefSite, RefPath,
+    find_credential_refs,
     is_secret_ref, ref_path_text, ref_value_at,
 )
 
@@ -854,11 +856,16 @@ def secret_binding_findings(owner_tenant: str | None, receiver_obj: dict,
     return out
 
 
+_URL_SCHEME_RE = re.compile(r"[Hh][Tt][Tt][Pp][Ss]?://")
+
+
 def _destination_problem(receiver_obj: dict, destination: tuple[str, ...],
                          allowed_domains: list[str] | None) -> str | None:
     """Why a credential sent to *destination* (a receiver path) is not
     confined by *allowed_domains*, or None. The host is read exactly as the
-    domain allowlist reads it (``_grar_validate._extract_host``)."""
+    domain allowlist reads it (``_grar_validate._extract_host``); a URL
+    destination (every one but ``HOST_PORT_DESTINATIONS``) must carry an
+    http:// or https:// scheme, or that reader takes it for ``host:port``."""
     # Imported here: _grar_validate imports this leaf module.
     from _grar_validate import _extract_host
     dest_text = ref_path_text(destination)
@@ -869,6 +876,10 @@ def _destination_problem(receiver_obj: dict, destination: tuple[str, ...],
     if is_secret_ref(raw):
         return (f"{dest_text}, where it is sent, is itself a Secret reference, "
                 "whose host cannot be checked against allowed_domains")
+    if (isinstance(raw, str) and destination not in HOST_PORT_DESTINATIONS
+            and _URL_SCHEME_RE.match(raw) is None):
+        return (f"{dest_text} {raw!r}, where it is sent, is not an http:// or "
+                "https:// URL, so its host cannot be read for allowed_domains")
     host = _extract_host(raw) if isinstance(raw, str) else None
     if host is None or not any(fnmatch.fnmatch(host, p) for p in allowed_domains):
         return (f"the {dest_text} host {host!r} is not in the deployment "

@@ -942,3 +942,39 @@ def test_http_config_reference_renders_through_the_cli(tmp_path):
     p.write_text("shared_secrets: {}\n", encoding="utf-8")
     r = _run(d, "--validate", "--policy", str(p))
     assert r.returncode != 0 and "allowed_domains" in r.stdout + r.stderr
+
+
+# ── URL 類目的地必須帶 http:// 或 https://（smarthost 維持 host:port）────────
+
+@pytest.mark.parametrize("path,where,value", [
+    (_PW, "url", "hook.example.com:80@evil.example"),
+    (_PW, "url", "hook.example.com/a"),
+    (_CS, "token_url", "hook.example.com:80@evil.example"),
+    (_CS, "token_url", "ftp://token.example.com/t"),
+])
+def test_a_url_destination_without_an_http_scheme_is_refused(path, where, value):
+    """token_url 沒有格式檢查，只有這條規則擋；url 先被 receiverHttpUrl 格式擋下
+    （invalid_receiver_field），規則本身另以 _destination_problem 直接釘住。"""
+    from _grar_merge import _destination_problem
+    receiver = _ref_at(path, {"secret": {"key": "k"}})
+    if where == "url":
+        receiver["url"] = value
+        assert [k for k, _f in _kinds(receiver)] == ["invalid_receiver_field"]
+        assert _destination_problem(receiver, ("url",), _ALLOWED) is not None
+    else:
+        receiver["http_config"]["oauth2"]["token_url"] = value
+        assert _kinds(receiver) == [("secret_ref_destination_unconfined",
+                                     "receiver." + ".".join(path))]
+
+
+@pytest.mark.parametrize("value", ["HTTPS://token.example.com/t", "http://token.example.com/t"])
+def test_a_url_destination_with_either_scheme_in_any_case_passes(value):
+    receiver = _ref_at(_CS, {"secret": {"key": "k"}})
+    receiver["http_config"]["oauth2"]["token_url"] = value
+    cfg, warnings = _build(receiver)
+    assert warnings == [] and cfg is not None, warnings
+
+
+def test_the_smarthost_stays_host_port():
+    cfg, warnings = _build({**SMTP, "auth_password": {"secret": {"key": "pw"}}})
+    assert warnings == [] and cfg is not None

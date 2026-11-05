@@ -564,6 +564,14 @@ CREDENTIAL_REF_SITES: tuple[CredentialRefSite, ...] = (
 )
 
 
+#: the destinations of CREDENTIAL_REF_SITES written as `host:port` (email
+#: smarthost); every other destination is a URL and must be written with an
+#: http:// or https:// scheme (#1560: without one, the host read is the text
+#: before the first ':' — `hook.example.com:80@evil.example` would read as
+#: hook.example.com).
+HOST_PORT_DESTINATIONS: frozenset[tuple[str, ...]] = frozenset({("smarthost",)})
+
+
 def credential_ref_sites(rtype: str) -> tuple[CredentialRefSite, ...]:
     """The ``CREDENTIAL_REF_SITES`` of receiver type *rtype*."""
     return tuple(s for s in CREDENTIAL_REF_SITES if s.rtype == rtype)
