@@ -151,12 +151,33 @@ data:
         # pattern), not sentinel delivery.
 
     inhibit_rules:
-      # v1.2.0 Severity Dedup: the per-tenant rules (critical suppresses
-      # warning per metric_group; none for `_severity_dedup: "disable"`) are
-      # GENERATED from conf.d into the output — this file is the SOURCE the
-      # generator merges into (`generate_alertmanager_routes.py --config-dir
-      # conf.d/ --output-configmap --base-config <this alertmanager.yml>`,
-      # #1211), so it holds only the rules written by hand below.
+      # v1.2.0 Severity Dedup: per-tenant inhibit rules (critical suppresses
+      # warning per metric_group; none for `_severity_dedup: "disable"`).
+      # The generator renders them from conf.d into the OUTPUT; this file is
+      # the SOURCE it merges into (`generate_alertmanager_routes.py
+      # --config-dir conf.d/ --output-configmap --base-config <this
+      # alertmanager.yml>`, #1211). The two copies below are kept on purpose:
+      # tests/alertmanager-inhibit (TestK8sPerTenantDedupSemantics) proves the
+      # dedup semantics on this file. In the output they repeat the generated
+      # rules for these tenants — harmless, an identical rule twice.
+      - source_matchers:
+          - severity="critical"
+          - metric_group=~".+"
+          - tenant="db-a"
+        target_matchers:
+          - severity="warning"
+          - metric_group=~".+"
+          - tenant="db-a"
+        equal: ["metric_group"]
+      - source_matchers:
+          - severity="critical"
+          - metric_group=~".+"
+          - tenant="db-b"
+        target_matchers:
+          - severity="warning"
+          - metric_group=~".+"
+          - tenant="db-b"
+        equal: ["metric_group"]
 
       # #1132 invariant: every `equal:` label is presence-gated (`=~".+"`) on BOTH
       # sides. Alertmanager treats a label missing from source AND target as
@@ -192,8 +213,8 @@ data:
       # These two rules survive regeneration, so the matcher below is
       # committed-and-preserved rather than generated: every output mode and
       # --apply share one merge (_grar_render.merge_generated, #1211), which
-      # replaces only the severity-dedup rules of the generator's exact shape
-      # and keeps every other base rule — these two included.
+      # keeps every inhibit rule of this source and appends the generated
+      # ones — these two included.
       # Verified by re-running --output-configmap after this edit.
       # Guarded by _grar_validate.assert_platform_alerts_not_tenant_silenceable.
 
