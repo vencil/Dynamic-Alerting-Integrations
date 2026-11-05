@@ -321,9 +321,16 @@ def test_a_reference_counts_as_set_in_the_schemas_pairs():
     """參照在「至多一個」與「cert／key 互相要求」裡算有設，與 Alertmanager 對 render 後
     `*_file` 的判定一致（bearer_token_file 與 basic_auth 互斥、key_file 要 cert）。"""
     v = jsonschema.Draft7Validator(_load())
-    both = _webhook_with(("http_config", "bearer_token"), _ref())
-    both["http_config"]["basic_auth"] = {"username": "u"}
-    assert list(v.iter_errors(_doc(both))) != []
+    # bearer_token 參照與三個認證 mapping 各自互斥（#3616 review：oauth2、
+    # authorization 兩組原本只由字串案例釘住）。
+    for other, value in (("basic_auth", {"username": "u"}),
+                         ("oauth2", dict(_OAUTH)),
+                         ("authorization", {"credentials": "c"})):
+        both = _webhook_with(("http_config", "bearer_token"), _ref())
+        both["http_config"][other] = value
+        assert list(v.iter_errors(_doc(both))) != [], other
+        del both["http_config"]["bearer_token"]
+        assert list(v.iter_errors(_doc(both))) == [], other   # 只有那一組才拒
     lone_key = _webhook_with(("http_config", "tls_config", "key"), _ref())
     del lone_key["http_config"]["tls_config"]["cert"]
     assert list(v.iter_errors(_doc(lone_key))) != []

@@ -700,6 +700,9 @@ def test_each_http_config_row_renders_its_file_key(site):
         holder = _at(entry, site.path[:-1])
         assert site.path[-1] not in holder
         assert holder[site.file_key] == want
+        if site.path[-2:] == ("tls_config", "key"):
+            # 同層的 cert 原樣保留（#3616 review）
+            assert holder == {"cert": "client-cert-pem", "key_file": want}
     from _grar_merge import secret_ref_paths
     assert secret_ref_paths(entry, "receiver") == []
 

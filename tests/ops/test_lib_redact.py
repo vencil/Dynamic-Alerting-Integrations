@@ -421,18 +421,59 @@ def credential_marked_fields(schema) -> set[str]:
     return found
 
 
+def _marked_occurrences(node, name: str) -> int:
+    """`name` 標成 x-credential 的 property 出現幾次（整棵 schema，含內嵌）。"""
+    if isinstance(node, dict):
+        props = node.get("properties")
+        here = int(isinstance(props, dict) and isinstance(props.get(name), dict)
+                   and props[name].get("x-credential") is True)
+        return here + sum(_marked_occurrences(v, name) for v in node.values())
+    if isinstance(node, list):
+        return sum(_marked_occurrences(x, name) for x in node)
+    return 0
+
+
+def _refs_outside_properties(node) -> set[str]:
+    """node 自己這一層（allOf／anyOf／oneOf／$ref…，不進 properties）引用的 $ref。"""
+    if isinstance(node, dict):
+        out = {node["$ref"]} if isinstance(node.get("$ref"), str) else set()
+        for k, v in node.items():
+            if k != "properties":
+                out |= _refs_outside_properties(v)
+        return out
+    if isinstance(node, list):
+        return set().union(*(_refs_outside_properties(x) for x in node)) if node else set()
+    return set()
+
+
 def _covered_by_container(schema, name: str, listed: set[str]) -> bool:
-    """名字不在名單、但每一處都被整包遮掉：`name` 只出現在某些 definition 的
-    properties 裡，而 schema 中每個引用這些 definition 的 property，名字都在名單上
-    （遮罩遇到名單上的 key 就整包換掉，不往下走）。#1560：tls_config 的 `key`——
-    `key` 不能進名單，它也是 secretRef 自己的座標（見 test_config_diff 的同一決定）。"""
+    """名字不在名單、但每一處都被整包遮掉：
+
+    * `name` 的每個標記處都是某個 definition 的直接 property（內嵌在別的
+      property 底下、或 definitions 以外的，一律不算涵蓋）；
+    * 把「自己這一層（不經 properties）引用這些 definition 的 definition」遞移地
+      併進來（`plain_box → exposed → allOf → tls` 那種轉接），schema 中每個引用
+      其中任一個的 property，名字都在名單上（遮罩遇到名單上的 key 就整包換掉，
+      不往下走）。
+
+    #1560：tls_config 的 `key`——`key` 不能進名單，它也是 secretRef 自己的座標
+    （見 test_config_diff 的同一決定）。"""
     defs = schema.get("definitions", {})
     holders = {d for d, node in defs.items()
-               if isinstance(node.get("properties"), dict) and name in node["properties"]}
-    if not holders or credential_marked_fields(
-            {k: v for k, v in schema.items() if k != "definitions"}) & {name}:
+               if isinstance(node.get("properties"), dict)
+               and isinstance(node["properties"].get(name), dict)
+               and node["properties"][name].get("x-credential") is True}
+    if not holders or _marked_occurrences(schema, name) != len(holders):
         return False
-    targets = {f"#/definitions/{d}" for d in holders}
+    aliases = set(holders)
+    while True:
+        refs = {f"#/definitions/{d}" for d in aliases}
+        more = {d for d, node in defs.items()
+                if d not in aliases and _refs_outside_properties(node) & refs}
+        if not more:
+            break
+        aliases |= more
+    targets = {f"#/definitions/{d}" for d in aliases}
 
     def refs_in(node) -> set[str]:
         if isinstance(node, dict):
@@ -506,3 +547,30 @@ def test_a_marked_leaf_is_covered_only_when_every_referrer_is_a_listed_container
     assert unmasked_credential_fields(leak) == {"key"}
     del leak["definitions"]["a"]["properties"]["plain_box"]
     assert unmasked_credential_fields(leak) == set()
+
+
+def test_a_marked_leaf_nested_inside_another_property_is_not_covered():
+    """#3616 review：`key` 另外內嵌在某個 definition 的 property 底下（不是 definition
+    的直接 property）時，那一處沒有容器擔保，不算涵蓋。"""
+    schema = {"definitions": {
+        "tls": {"properties": {"key": {"x-credential": True}}},
+        "a": {"properties": {
+            "tls_config": {"$ref": "#/definitions/tls"},
+            "plain_box": {"type": "object", "properties": {"key": {"x-credential": True}}}}}}}
+    assert unmasked_credential_fields(schema) == {"key"}
+    redacted = r.redact({"plain_box": {"key": "S"}})
+    assert redacted == {"plain_box": {"key": "S"}}   # 名稱制遮罩確實不會遮它：所以要擋
+
+
+def test_an_indirect_reference_through_another_definition_is_followed():
+    """#3616 review：plain_box → exposed →（allOf）→ tls：引用 exposed 的 property
+    也要在名單上；只看直接引用 tls 的 property 會漏掉這條路。"""
+    schema = {"definitions": {
+        "tls": {"properties": {"key": {"x-credential": True}}},
+        "exposed": {"allOf": [{"$ref": "#/definitions/tls"}]},
+        "a": {"properties": {"tls_config": {"$ref": "#/definitions/tls"},
+                             "plain_box": {"$ref": "#/definitions/exposed"}}}}}
+    assert unmasked_credential_fields(schema) == {"key"}
+    schema["definitions"]["a"]["properties"]["tls_config"] = {"$ref": "#/definitions/exposed"}
+    del schema["definitions"]["a"]["properties"]["plain_box"]
+    assert unmasked_credential_fields(schema) == set()
