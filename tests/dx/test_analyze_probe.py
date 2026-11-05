@@ -965,7 +965,7 @@ def test_rejection_returns_two_in_process(tmp_path, capsys):
     """The refusal path returns rc=2 rather than raising — asserted in-process.
 
     The subprocess tests already pin the exit status; this one pins that `main`
-    RETURNS it, which is what `sys.exit(main())` depends on.
+    RETURNS it, which is what `_lib_exitcodes.run(main)` exits with.
     """
     import analyze_probe
 
