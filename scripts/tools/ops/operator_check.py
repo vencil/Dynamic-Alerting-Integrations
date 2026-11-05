@@ -389,12 +389,16 @@ class OperatorChecker:
         except KubectlError as exc:
             return self._unanswered("check_mounts", exc)
         name = getattr(self.args, "alertmanager", None)
-        if not crs and needed:
+        if not crs and name is not None:
+            # The CR the caller named is not there: nothing was compared,
+            # whatever the list holds.
             status = "fail"
             notes.append(i18n("mounts_cr_missing", self.lang).format(
-                ns=self.args.namespace, name=name) if name is not None
-                else i18n("mounts_no_cr", self.lang).format(ns=self.args.namespace,
-                                                            n=len(needed)))
+                ns=self.args.namespace, name=name))
+        elif not crs and needed:
+            status = "fail"
+            notes.append(i18n("mounts_no_cr", self.lang).format(ns=self.args.namespace,
+                                                                n=len(needed)))
         for cr in crs:
             cr_name = (cr.get("metadata") or {}).get("name", "?")
             listed = (cr.get("spec") or {}).get("secrets") or []

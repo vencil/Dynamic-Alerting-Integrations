@@ -332,6 +332,12 @@ class TestCheckSecretMounts:
         assert r.status == "fail" and "absent" in r.detail
 
     @pytest.mark.parametrize("crd", [True, False])
+    def test_alertmanager_flag_naming_no_cr_fails_with_an_empty_list(self, monkeypatch, crd):
+        r = _mounts(monkeypatch, _mount_list(), [_am("am-one")], crd=crd,
+                    args={"alertmanager": "absent"})
+        assert r.status == "fail" and "absent" in r.detail
+
+    @pytest.mark.parametrize("crd", [True, False])
     def test_no_cr_with_a_non_empty_list_fails(self, monkeypatch, crd):
         r = _mounts(monkeypatch, _mount_list("da-t-a"), [], crd=crd)
         assert r.status == "fail" and "monitoring" in r.detail
