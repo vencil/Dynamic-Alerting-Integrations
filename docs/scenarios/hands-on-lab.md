@@ -14,7 +14,7 @@ lang: zh
 >
 > 相關文件：[GitOps CI/CD 整合指南](gitops-ci-integration.md) · [Tenant 生命週期](tenant-lifecycle.md) · [CLI 參考](../cli-reference.md)
 
-> ⚠️ **版本**：本頁的預期輸出是用 main 上的 da-tools 實測的，比目前的 `ghcr.io/vencil/da-tools:latest`（v2.9.0）新。下一個版本發布前用 `:latest` 照做，會看到三處不同：練習 3 只有 5 項檢查（沒有 `tenant_uniqueness`）；`schema` 另有 7 條 `unknown key … not in defaults`（`jvm_memory`、`kafka_broker_count`、`mysql_threads_running`、`oracle_sessions_active`、`oracle_sessions_active_critical`、`redis_memory_used_bytes`、`redis_memory_used_bytes_critical`）；練習 8 的 `--strict` 在 v2.9.0 不存在，加上去會以結束碼 2 失敗（不加時 domain policy 的 WARN 照樣出現）。 <!-- image-caveat: v2.9.0 -->
+> ⚠️ **版本**：本頁的預期輸出是用 main 上的 da-tools 實測的，比目前的 `ghcr.io/vencil/da-tools:latest`（v2.9.0）新。下一個版本發布前用 `:latest` 照做，會看到四處不同：練習 3 只有 5 項檢查（沒有 `tenant_uniqueness`）；`schema` 另有 7 條 `unknown key … not in defaults`（`jvm_memory`、`kafka_broker_count`、`mysql_threads_running`、`oracle_sessions_active`、`oracle_sessions_active_critical`、`redis_memory_used_bytes`、`redis_memory_used_bytes_critical`）；練習 8 的 `--strict` 在 v2.9.0 不存在，加上去會以結束碼 2 失敗（不加時 domain policy 的 WARN 照樣出現）；v2.9.0 也沒有 `--output-alertmanager`，練習 4 的指令在那裡會失敗。 <!-- image-caveat: v2.9.0 -->
 
 > 💡 **想先 1 分鐘看產品跑起來、而不是動手敲 CLI？** → [try-local](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/try-local/README.md)（推薦首站：瀏覽器看 da-portal UI + 真實告警紅燈，不需 K8s；`⏱️ <1 min · 🟢 只需 Docker`）。**本實驗**聚焦**動手跑 da-tools CLI 工作流**（配置 / 路由 / blast radius；`⏱️ 30–45 min · 🟡 中度 (CLI)`）—— 兩者互補、深度不同，不是擇一。
 
@@ -285,6 +285,8 @@ docker run --rm \
 **檢查點**：你能解釋為什麼 `group_wait: "2s"` 會在 `routes` 出現 WARN，而且實際生效的是 5s 嗎？（提示：guardrail 範圍是 5s–5m，低於下限的值會被夾到 5s，只警告、不失敗）
 
 ## Exercise 4: Generate Alertmanager Routes
+
+> ⚠️ 下面的指令需要有 `--output-alertmanager` 的 da-tools；`:latest` 映像（v2.9.0）沒有這個旗標，見本頁開頭的版本說明。 <!-- image-caveat: v2.9.0 -->
 
 ```bash
 mkdir -p .output

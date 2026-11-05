@@ -223,6 +223,8 @@ class TestBaseShadowing:
                             ["data"]["alertmanager.yml"])
         mine = [r for r in am["receivers"] if r["name"] == f"tenant-{_BASE_T}"]
         assert len(mine) == 1, am["receivers"]
+        assert [c["url"] for c in mine[0].get("webhook_configs", [])] == [
+            "https://hooks.example.com/alert"], mine[0]
         assert "stale.example.com" not in str(mine[0]), (
             "the base's stale definition won over the conf.d one (#2279)")
 

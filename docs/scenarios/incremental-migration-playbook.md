@@ -337,6 +337,12 @@ amtool check-config alertmanager.merged.yaml
 
 **預期**：`--validate` 檢查租戶的 `_routing`（receiver 格式、時序參數護欄、routing profile 引用與 domain policy），沒有錯誤時結束碼 0；`amtool check-config` 驗合併後的整份設定。`da-tools shadow-verify preflight` 是給 migrate／shadow 流程用的（檢查 prefix mapping、`migration_status: shadow` 的規則與 Alertmanager 的 shadow 攔截），這條流程用不到。
 
+接著部署 `alertmanager.merged.yaml`（依你的部署方式更新 ConfigMap 或設定檔）並 reload；載入之前 Alertmanager 仍跑舊設定，租戶頻道收不到任何告警：
+
+```bash
+curl -X POST http://localhost:9093/-/reload
+```
+
 ### 步驟 2.4：監控雙軌運行（1-2 週）
 
 讓系統並行運作 1-2 週，期間實時觀察兩個 Slack channels 中的告警：
@@ -638,7 +644,7 @@ fi
 以 `docker run` 執行時，暫存目錄要掛進容器，輸出檔才寫得到它。兩次都用 `--output-configmap`（不帶 `--base-config`，組在內建 base 上）：新版不帶模式旗標是結束碼 2，而這個模式新舊兩版都有，比的是同一種輸出。
 
 - **新版拒收這棵樹**：`generate-routes` 以非 0 結束、不寫輸出檔，沒有東西可比。範例讓 job 在這裡失敗，原因要回頭看檢查一（新版 da-guard 的結束碼與它點名的檔）。目前版本就拒收時，`set -e` 讓 job 在第一條指令失敗。
-- **沒有輸出檔**：樹上沒有租戶時，`generate-routes` 以 0 結束、不寫輸出檔。兩版都沒有輸出視為一致；只有一版有輸出視為有差異，訊息說明是哪一版沒有。
+- **沒有輸出檔**：樹上沒有租戶時，目前版本（v2.9.0）以 0 結束、不寫輸出檔，新版則照樣寫出合併結果（只有內建 base 與平台路由）。只有一版有輸出視為有差異，訊息說明是哪一版沒有——拿這兩版比對這種樹時，這是預期中的結果。
 - **有差異**：範例只以 `diff -q` 判斷有沒有差異，並讓 job 失敗，不把完整差異印進 CI 日誌，因為輸出含租戶 `_routing.receiver` 的 webhook URL（例如 Slack 的 `api_url`），印出來就等於把它們寫進日誌。要看完整差異，請在本機或有權限控管的環境，以兩版映像跑同樣兩條 `generate-routes` 後再 `diff -u`。輸出檔同樣含這些 URL，不要上傳成公開的 CI artifact。
 
 比對看得到渲染結果哪裡變了，但不會指出是哪一項讀法改變造成的；要歸因，回頭看那一處的原文（例如 `send_resolved: yes` 在新版是字串、會被拒收，要寫成 `true`）。

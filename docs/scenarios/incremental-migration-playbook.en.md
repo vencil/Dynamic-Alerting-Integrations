@@ -337,6 +337,12 @@ amtool check-config alertmanager.merged.yaml
 
 **Expected**: `--validate` checks the tenants' `_routing` (receiver shape, timing guardrails, routing-profile references and domain policies) and exits 0 when there are no errors; `amtool check-config` validates the whole merged config. `da-tools shadow-verify preflight` belongs to the migrate / shadow flow (it checks the prefix mapping, `migration_status: shadow` rules and the Alertmanager shadow intercept) and does not apply here.
 
+Then deploy `alertmanager.merged.yaml` (update the ConfigMap or config file as your deployment requires) and reload; until it is loaded, Alertmanager keeps running the legacy config and the tenant channel receives nothing:
+
+```bash
+curl -X POST http://localhost:9093/-/reload
+```
+
 ### Step 2.4: Monitor Dual-Run (1-2 weeks)
 
 Let the system run in parallel for 1-2 weeks, observe alerts in both Slack channels:
@@ -639,7 +645,7 @@ fi
 When running with `docker run`, mount the temporary directory into the container so the output files can be written to it. Both runs use `--output-configmap` (no `--base-config`, so assembled on the built-in base): the new version exits 2 without a mode flag, and this mode exists in both versions, so the two outputs are of the same kind.
 
 - **The new version refuses the tree**: `generate-routes` exits non-zero and writes no output file, so there is nothing to compare. The example fails the job right there; the reason is in Check 1 (the new da-guard's exit code and the files it names). If the current version already refuses it, `set -e` fails the job on the first command.
-- **No output file**: on a tree with no tenants, `generate-routes` exits 0 and writes no output file. No output from both versions counts as the same; output from only one counts as a difference, and the message says which version produced none.
+- **No output file**: on a tree with no tenants, the current version (v2.9.0) exits 0 and writes no output file, while the new one still writes the merged output (the built-in base and the platform routes only). Output from only one version counts as a difference, and the message says which version produced none — expected on such a tree when comparing these two versions.
 - **A difference**: the example only asks `diff -q` whether the outputs differ and fails the job; it does not print the full diff into the CI log, because the output holds the webhook URLs of tenants' `_routing.receiver` (a Slack `api_url`, for example), and printing it writes them into the log. To see the full diff, run the same two `generate-routes` commands with the two images on your machine or in an access-controlled environment, then `diff -u`. The output files hold those URLs too: do not upload them as public CI artifacts.
 
 The comparison shows where the rendered output changed, but not which change in reading caused it; to attribute it, look at the source at that place (for example, `send_resolved: yes` is a string in the new version and is refused; write `true`).
