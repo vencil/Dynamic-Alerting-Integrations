@@ -65,12 +65,13 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang  # noqa: E402
-from _lib_paths import require_dir, require_file, supplied  # noqa: E402  (#3392)
+import _lib_input  # noqa: E402  (#3462: what --rule-packs-dir selects)
+from _lib_paths import require_file  # noqa: E402  (#3392)
 from _lib_prometheus import QueryError, prometheus_targets  # noqa: E402  (#3133)
 from _lib_kubectl import KubectlError, kubectl_get, kubectl_list  # noqa: E402  (#3207)
 import _lib_consumer_read  # noqa: E402  (#3426: rule_pack_files, the one declaration)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, die_caller_error)
 # #1560: the mount-list document generate-routes writes, and the Operator's
 # mount root (the generator's default) — one definition, the generator's.
 from _grar_merge import (  # noqa: E402
@@ -101,6 +102,8 @@ STRINGS = {
         "pass": "PASS", "warn": "WARN", "fail": "FAIL", "skip": "SKIP", "result": "Result",
         "operator_found": "Prometheus Operator detected",
         "rules_loaded": "rules loaded",
+        "rules_not_compared": ("the default {dir} is not there: the count is not compared "
+                               "(give --rule-packs-dir)"),
         "monitor_found": "ServiceMonitor found",
         "monitor_missing": "ServiceMonitor not found",
         "alertconfig_none": "no leftover AlertmanagerConfigs (routing lives in the configSecret rendered by generate-routes)",
@@ -150,7 +153,8 @@ STRINGS = {
         "mounts_unusable": "--secret-mounts {path}: not a generate-routes --secret-mounts-out list ({why})",
         "h_desc": "Verify Prometheus Operator CRD deployment status",
         "h_namespace": "Kubernetes namespace (default: monitoring)",
-        "h_rule_packs_dir": "Directory with rule pack YAML files (default: rule-packs/)",
+        "h_rule_packs_dir": ("Directory with rule pack YAML files (default: rule-packs; not "
+                             "there: the PrometheusRule count is not compared)"),
         "h_prometheus": "Prometheus API URL for target health check (optional)",
         "h_mount_list": (
             "The list `generate-routes --secret-mounts-out` wrote for the "
@@ -173,6 +177,7 @@ STRINGS = {
         "pass": "通過", "warn": "警告", "fail": "失敗", "skip": "跳過", "result": "結果",
         "operator_found": "Prometheus Operator 已偵測到",
         "rules_loaded": "已加載規則",
+        "rules_not_compared": "預設的 {dir} 不存在：未比對數量（請給 --rule-packs-dir）",
         "monitor_found": "ServiceMonitor 已找到",
         "monitor_missing": "ServiceMonitor 未找到",
         "alertconfig_none": "沒有殘留的 AlertmanagerConfig（路由由 generate-routes 產出的 configSecret 承載）",
@@ -218,7 +223,7 @@ STRINGS = {
         "mounts_unusable": "--secret-mounts {path}：不是 generate-routes --secret-mounts-out 產出的清單（{why}）",
         "h_desc": "驗證 Prometheus Operator 的 CRD 部署狀態",
         "h_namespace": "Kubernetes namespace（預設：monitoring）",
-        "h_rule_packs_dir": "Rule Pack YAML 所在目錄（預設：rule-packs/）",
+        "h_rule_packs_dir": "Rule Pack YAML 所在目錄（預設：rule-packs；不存在時不比對 PrometheusRule 數量）",
         "h_prometheus": "Prometheus API URL，給了才檢查 target 健康（選用）",
         "h_mount_list": (
             "`generate-routes --secret-mounts-out` 為 configSecret 寫出的清單："
@@ -302,11 +307,16 @@ class CheckResult:
 
 
 class OperatorChecker:
-    """Prometheus Operator checker."""
-    def __init__(self, args, mount_list: dict | None = None):
+    """Prometheus Operator checker. *rule_packs*: the rule packs
+    ``--rule-packs-dir`` selected (``main``, ``_lib_input.selected``), the
+    expected PrometheusRule count; None when the default nobody gave is not
+    there — the count is not compared, and the row says so (#3462)."""
+    def __init__(self, args, mount_list: dict | None = None, *,
+                 rule_packs: "list[Path] | None" = None):
         self.args = args
         #: #1560: the --secret-mounts document (None: not given).
         self.mount_list = mount_list
+        self.rule_packs = rule_packs
         self.lang = detect_cli_lang()
         self.checks: list[CheckResult] = []
         self._crds: dict[str, bool | KubectlError] = {}
@@ -348,19 +358,16 @@ class OperatorChecker:
         except KubectlError as exc:
             return self._unanswered("check_rules", exc)
 
-        # #3426: the one declaration of which files are rule packs; one that
-        # does not cover the directory is no expected count. The packs
-        # operator-generate emits: every declared pack, the platform pack
-        # included since #1595 D1b (as the rules operator mode can run).
-        try:
-            expected = len(_lib_consumer_read.rule_pack_files(self.args.rule_packs_dir)) \
-                if Path(self.args.rule_packs_dir).is_dir() else 0
-        except _lib_consumer_read.ConsumerReadError as exc:
-            return CheckResult(i18n("check_rules", self.lang), "fail",
-                               _lib_consumer_read.error_text(exc), caller_error=True)
-
-        status = "pass" if loaded == expected > 0 else ("warn" if loaded > 0 else "fail")
-        detail = f"{loaded}/{expected}" if expected > 0 else f"{loaded}"
+        # The packs operator-generate emits: every declared pack, the
+        # platform pack included since #1595 D1b (as the rules operator mode
+        # can run) — what --rule-packs-dir selected (never none: `main`).
+        if self.rule_packs is None:
+            status = "warn" if loaded > 0 else "fail"
+            detail = f"{loaded} ({i18n('rules_not_compared', self.lang).format(dir=self.args.rule_packs_dir)})"
+        else:
+            expected = len(self.rule_packs)
+            status = "pass" if loaded == expected > 0 else ("warn" if loaded > 0 else "fail")
+            detail = f"{loaded}/{expected}"
         if not installed:
             detail += f" (CRD {_CRD_RULES} not installed)"
         return CheckResult(i18n("check_rules", self.lang), status, detail)
@@ -599,8 +606,14 @@ def main():
         epilog=__doc__,
     )
     parser.add_argument("--namespace", default="monitoring", help=i18n("h_namespace", lang))
-    parser.add_argument("--rule-packs-dir", default="rule-packs/",
-                        help=i18n("h_rule_packs_dir", lang))
+    # #3462: the expected PrometheusRule count is what this selects (the
+    # rule-pack declaration, RULE_PACKS). None selected is a caller error
+    # (it was an expected count of 0 and a WARN that never named the path);
+    # the default nobody gave, not there, is no count to compare.
+    _lib_input.add_input(
+        parser, "--rule-packs-dir", select=_lib_consumer_read.RULE_PACKS,
+        empty=_lib_input.EMPTY_REFUSED, default="rule-packs",
+        absent_default=_lib_input.ABSENT_EMPTY, help=i18n("h_rule_packs_dir", lang))
     parser.add_argument("--prometheus", help=i18n("h_prometheus", lang))
     parser.add_argument("--secret-mounts", dest="mount_list", default=None, metavar="FILE",
                         help=i18n("h_mount_list", lang))
@@ -611,13 +624,16 @@ def main():
     parser.add_argument("--ci", action="store_true", help=i18n("h_ci", lang))
 
     args = parser.parse_args()
-    # #3392: a --rule-packs-dir the caller gave that is not there or not a
-    # directory is a caller error, before the cluster is asked — it was an
-    # expected count of 0 and a WARN that never named the path, rc 0. The
-    # default nobody gave keeps that reading. An empty directory is still a
-    # count of 0 (not this ticket).
-    if supplied(args, parser, "rule_packs_dir"):
-        require_dir(args.rule_packs_dir, lang=detect_cli_lang(), flag="--rule-packs-dir")
+    # #3392 / #3462: --rule-packs-dir is judged before the cluster is asked
+    # (`_lib_input`): given — or the default, when something is there — and
+    # not a directory, unlistable, or holding no rule pack, rc 2 naming it.
+    # It was an expected count of 0 and a WARN that never named the path,
+    # rc 0. #3426: an entry the rule-pack declaration does not cover is rc 2
+    # too, naming it.
+    try:
+        rule_packs = _lib_input.selected(args, "rule_packs_dir", lang=detect_cli_lang())
+    except _lib_consumer_read.ConsumerReadError as exc:
+        die_caller_error(f"ERROR: --rule-packs-dir: {_lib_consumer_read.error_text(exc)}")
 
     # #1560: an unusable list is a caller error before the cluster is asked;
     # --alertmanager only selects what --secret-mounts is compared with.
@@ -627,7 +643,8 @@ def main():
                           "<file> or drop --alertmanager", "flag_not_read")
     mount_list = (load_mount_list(args.mount_list, detect_cli_lang())
                   if args.mount_list is not None else None)
-    checker = OperatorChecker(args, mount_list)
+    # rule_packs is [] only for the default with nothing there: `empty` is refused.
+    checker = OperatorChecker(args, mount_list, rule_packs=rule_packs or None)
     checker.run_all_checks()
 
     if args.json:

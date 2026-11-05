@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import errno
 import importlib
-import json
 import os
 import pathlib
 import shutil
@@ -1052,12 +1051,17 @@ def test_an_empty_path_is_refused_not_taken_for_cwd(tmp_path, script, argv, flag
 # for it:
 #
 # * {E}: an empty directory — `empty` allowed: no caller error; refused: rc 2,
-#   `input_empty`.
+#   the flag and the path named, nothing written (#3462).
 # * {UL}: a directory that stats but cannot be listed (0311: x, no r) — rc 2,
 #   `dir_not_accessible`, the flag and the path named, nothing written. (Not
 #   {NX}: that one is r without x — listable, nothing under it stats.)
 # * the flag left out, its default not there — `absent_default` empty: no
-#   caller error; refused: rc 2, `dir_not_found`.
+#   caller error; refused: rc 2, the flag and the default named.
+# * the flag left out, its default there as a regular file — rc 2 whatever
+#   `absent_default` says: only "nothing there" is absent (#3548).
+#
+# Every run has a stand-in kubectl on PATH that answers "nothing installed":
+# a run that reaches the cluster (operator-check) answers without one.
 
 def _declared_inputs() -> "list[tuple[str, str, str, object, list[str], object]]":
     """(id, script under ops/, flag, InputSpec, its OPS_SITES argv, that
@@ -1092,23 +1096,28 @@ def _declared_run(box, script, argv, case_dir_name, holder):
     unprivileged uid can write (the row's outputs land there); returns the
     process and that directory."""
     root, run, subst = box
+    stub = root / "g1-bin" / "kubectl"
+    if not stub.exists():
+        stub.parent.mkdir()
+        stub.parent.chmod(0o755)
+        # `get <kind> <name> --ignore-not-found`: nothing; a list: no items.
+        stub.write_text("#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = --ignore-not-found ] && "
+                        "exit 0; done\necho '{\"items\": []}'\n", encoding="utf-8")
+        stub.chmod(0o755)
     scratch = root / f"g1-{case_dir_name}"
     scratch.mkdir()
     scratch.chmod(0o777)
     shutil.copy2(root / "silences.json", scratch / "silences.json")
     local = {**subst, "{BOX}": str(scratch), "{D}": holder}
     args = [_expand(a, local) for a in argv]
-    proc = run(["env", "DA_LANG=en", sys.executable,
-                str(root / "scripts" / "tools" / "ops" / script), *args],
+    proc = run(["env", "DA_LANG=en", f"PATH={stub.parent}{os.pathsep}{os.environ['PATH']}",
+                sys.executable, str(root / "scripts" / "tools" / "ops" / script), *args],
                stdin=subprocess.DEVNULL)
     return proc, scratch
 
 
-def _reason(proc):
-    try:
-        return json.loads(proc.stdout).get("reason")
-    except (ValueError, AttributeError):
-        return None
+def _written(scratch):
+    return sorted(p.name for p in scratch.rglob("*") if p.name != "silences.json")
 
 
 def test_a_declared_input_answers_an_empty_directory_as_declared(box, declared_inputs):
@@ -1118,14 +1127,16 @@ def test_a_declared_input_answers_an_empty_directory_as_declared(box, declared_i
         empty = root / f"g1-empty-{n}"
         empty.mkdir()
         empty.chmod(0o755)
-        proc, _ = _declared_run(box, script, argv, f"e{n}", str(empty))
+        proc, scratch = _declared_run(box, script, argv, f"e{n}", str(empty))
         out = proc.stdout + proc.stderr
         assert "Traceback" not in out, (rid, out[-3000:])
         if spec.empty == _lib_input.EMPTY_REFUSED:
             assert proc.returncode == 2, (rid, out[-3000:])
-            assert f"{flag} {empty}" in out, (rid, out[-3000:])
+            assert (f"{flag} {empty}" in out
+                    or f"{flag} {os.path.realpath(empty)}" in out), (rid, out[-3000:])
             if reason is not None:
-                assert _reason(proc) == "input_empty", (rid, proc.stdout)
+                assert proc.stdout == "", (rid, proc.stdout)  # #3558: no document
+            assert _written(scratch) == [], (rid, f"written: {_written(scratch)}")
         else:
             assert proc.returncode != 2, (rid, out[-3000:])
 
@@ -1149,8 +1160,8 @@ def test_a_declared_input_refuses_a_directory_it_cannot_list(box, declared_input
                 or f"{flag} {os.path.realpath(unlisted)}" in out), (rid, out[-3000:])
         if reason is not None:
             assert proc.stdout == "", (rid, proc.stdout)  # #3558: a caller error carries no document
-        written = sorted(p.name for p in scratch.rglob("*") if p.name != "silences.json")
-        assert written == [], (rid, f"written before the input was judged: {written}")
+        assert _written(scratch) == [], (rid, f"written before the input was judged: "
+                                              f"{_written(scratch)}")
 
 
 def test_a_declared_input_reads_its_absent_default_as_declared(box, declared_inputs):
@@ -1166,9 +1177,57 @@ def test_a_declared_input_reads_its_absent_default_as_declared(box, declared_inp
         out = proc.stdout + proc.stderr
         assert "Traceback" not in out, (rid, out[-3000:])
         if spec.absent_default == _lib_input.ABSENT_REFUSED:
-            assert proc.returncode == 2 and _reason(proc) in (None, "dir_not_found"), \
-                (rid, out[-3000:])
+            assert proc.returncode == 2, (rid, out[-3000:])
+            assert f"{flag} {spec.default}" in out, (rid, out[-3000:])
         else:
             assert proc.returncode != 2, (rid, out[-3000:])
         measured += 1
     assert measured, "no declared input has a default: this test measured nothing"
+
+
+def test_a_declared_default_that_is_there_but_no_directory_is_refused(box, declared_inputs):
+    """#3548: a regular file at the default is not "nothing there" — read as
+    an empty directory, state-reconcile overwrote its manifest with no
+    state, rc 0. Refused under either `absent_default`, nothing written."""
+    root = box[0]
+    measured = 0
+    for n, (rid, script, flag, spec, argv, _reason_) in enumerate(declared_inputs):
+        if spec.default is None:
+            continue
+        there = root / spec.default
+        there.parent.mkdir(parents=True, exist_ok=True)
+        there.write_text("x", encoding="utf-8")
+        there.chmod(0o644)
+        try:
+            i = argv.index(flag)
+            proc, scratch = _declared_run(box, script, argv[:i] + argv[i + 2:], f"nd{n}", "")
+        finally:
+            there.unlink()
+        out = proc.stdout + proc.stderr
+        assert "Traceback" not in out, (rid, out[-3000:])
+        assert proc.returncode == 2, (rid, out[-3000:])
+        assert f"{flag} {spec.default}: not a directory" in out, (rid, out[-3000:])
+        assert _written(scratch) == [], (rid, f"written: {_written(scratch)}")
+        measured += 1
+    assert measured, "no declared input has a default: this test measured nothing"
+
+
+#: ⛔ What the owner judged for each declared input (#3462 comment 2026-11-02,
+#: #3446 comment 2026-11-02, #3548): (empty, absent_default). The rows above
+#: prove each tool BEHAVES as its declaration says; this proves the
+#: declaration is the judged one — changing one is an edit here, reviewed,
+#: not a quiet keyword change on the parser. A new declared input needs its
+#: judgement here too.
+JUDGED_DECLARATIONS = {
+    "operator-generate --rule-packs-dir": ("refused", "refused"),
+    "operator-check --rule-packs-dir": ("refused", "empty"),
+    "runtime-audit --rule-packs-dir": ("refused", "refused"),
+    "migrate-to-operator --source-dir": ("refused", None),
+    "state-reconcile --state-dir": ("allowed", "empty"),
+}
+
+
+def test_each_declared_input_is_as_judged(declared_inputs):
+    found = {rid: (spec.empty, spec.absent_default)
+             for rid, _s, _f, spec, _a, _r in declared_inputs}
+    assert found == JUDGED_DECLARATIONS

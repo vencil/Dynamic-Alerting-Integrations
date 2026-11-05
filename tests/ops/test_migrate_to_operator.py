@@ -864,6 +864,11 @@ class TestReadsNoConfd:
         (confd / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
         src = tmp_path / "src"
         src.mkdir()
+        # #3462: a --source-dir with no source file is refused — one plain
+        # rule file, so the run reaches the read this test counts.
+        (src / "rules.yaml").write_text(
+            "groups:\n- name: g\n  rules:\n  - alert: A\n    expr: up == 0\n",
+            encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         loads, lists = [], []
         real, real_list = _lib_parse_tree.load, _lib_parse_tree.list_tree

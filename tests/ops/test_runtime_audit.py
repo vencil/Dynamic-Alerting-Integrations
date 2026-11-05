@@ -58,10 +58,16 @@ def _runtime(*rules: dict) -> dict:
 
 
 def _args(**kw) -> argparse.Namespace:
-    base = dict(rule_packs_dir="rule-packs/", prometheus=None, runtime_json=None,
-                strict_orphan=False, json=False, ci=False)
-    base.update(kw)
-    return argparse.Namespace(**base)
+    """The shipped parser's namespace (--rule-packs-dir is a `_lib_input`
+    declaration, #3462): *kw* as the flags they name."""
+    argv: list[str] = []
+    for dest, value in kw.items():
+        flag = "--" + dest.replace("_", "-")
+        if value is True:
+            argv.append(flag)
+        elif value not in (None, False):
+            argv += [flag, value]
+    return ra.build_parser().parse_args(argv)
 
 
 # ─── parse_declared_rules ─────────────────────────────────────────────
@@ -367,5 +373,20 @@ def test_run_no_runtime_source_is_caller_error(tmp_path):
 def test_run_empty_rule_packs_dir_is_caller_error(tmp_path):
     a = ra.RuntimeAuditor(_args(rule_packs_dir=str(tmp_path), runtime_json="x.json"))
     a.run()
-    assert a.caller_error is not None
     assert a.exit_code() == ra.EXIT_CALLER_ERROR
+    # #3462: says which — no rule pack there, not "not found or empty"
+    assert a.caller_error.startswith(f"--rule-packs-dir {tmp_path}: selects nothing"), \
+        a.caller_error
+
+
+@pytest.mark.parametrize("given", [True, False])
+def test_a_rule_packs_dir_with_nothing_there_says_so(tmp_path, monkeypatch, given):
+    """#3462: given or the default, nothing there is named as such — it was
+    "rule-packs dir not found or empty" for either."""
+    monkeypatch.chdir(tmp_path)
+    kw = {"rule_packs_dir": "nope"} if given else {}
+    a = ra.RuntimeAuditor(_args(runtime_json="x.json", **kw))
+    a.run()
+    assert a.exit_code() == ra.EXIT_CALLER_ERROR
+    assert a.caller_error.startswith(f"--rule-packs-dir {'nope' if given else 'rule-packs'}: ")
+    assert "empty" not in a.caller_error and "selects nothing" not in a.caller_error

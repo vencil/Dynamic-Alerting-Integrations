@@ -1467,6 +1467,21 @@ class RuleSource(NamedTuple):
         name = self.file_name(member)
         return name[:len(name) - len(self.rule_files[0].split("*")[1])]
 
+    @property
+    def wanted(self) -> str:
+        """What a selection of this source looks for (``rule-pack-*.yaml /
+        rule-pack-*.yml``), as a refusal of an empty one names it."""
+        return " / ".join(self.rule_files)
+
+    def choose(self, directory: "str | os.PathLike[str]",
+               names: "list[str]") -> "list[pathlib.Path]":
+        """``files_in`` on the listing *names* of *directory* made elsewhere:
+        the selector ``_lib_input.add_input(select=...)`` takes (#3462) —
+        ``selected`` lists once and hands the names here. Raises
+        :class:`SourcesUnlisted` as ``files_in`` does, the listing aside."""
+        root = pathlib.Path(directory)
+        return _chosen(root, [root / n for n in names], self)
+
     def files_in(self, directory: "str | os.PathLike[str]") -> "list[pathlib.Path]":
         """This declaration applied to *directory* — any directory: the
         repo's, a fixture, the da-tools image's flat layout — its rule
@@ -1650,6 +1665,13 @@ def _declared_in(directory: "str | os.PathLike[str]", source: RuleSource) -> "li
         entries = [root / n for n in _list(root)]
     except OSError as e:
         raise SourcesUnlisted([(str(root), f"cannot list this directory: {e.strerror}")]) from e
+    return _chosen(root, entries, source)
+
+
+def _chosen(root: pathlib.Path, entries: "list[pathlib.Path]",
+            source: RuleSource) -> "list[pathlib.Path]":
+    """*source*'s declaration applied to the top-level *entries* of *root*
+    (sorted): its rule files; raises :class:`SourcesUnlisted`."""
     found, problems = [], []
     for f in entries:
         if not _is_yaml_name(f.name):
