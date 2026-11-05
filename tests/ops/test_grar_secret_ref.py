@@ -840,7 +840,44 @@ def test_the_proxy_the_request_goes_through_is_refused(site, proxy_key):
 def test_every_row_has_a_proxy_case():
     """與 destination 測試同樣以全表參數化：有 proxy 的列都在上面的案例裡。"""
     assert {s for s, _p in _PROXY_CASES} == {s for s in CREDENTIAL_REF_SITES if s.proxies}
-    assert len({s for s, _p in _PROXY_CASES}) >= len(CREDENTIAL_REF_SITES) - 1   # 只有 email 沒有
+
+
+# 期望值逐字寫在這裡，不從 CREDENTIAL_REF_SITES 推導：表少列一個目的地或 proxy 時，
+# 上面由表生成的案例會跟著少、仍然全綠，這裡會紅。
+_URL_DEST = ("url",)
+_TOKEN_DEST = ("http_config", "oauth2", "token_url")
+_HTTP_PROXY_KEY = ("http_config", "proxy_url")
+_OAUTH2_PROXY_KEY = ("http_config", "oauth2", "proxy_url")
+_EXPECTED_ROWS = {
+    ("webhook", ("url",)): (set(), {_HTTP_PROXY_KEY}),
+    ("rocketchat", ("url",)): (set(), {_HTTP_PROXY_KEY}),
+    ("slack", ("api_url",)): (set(), {_HTTP_PROXY_KEY}),
+    ("teams", ("webhook_url",)): (set(), {_HTTP_PROXY_KEY}),
+    ("pagerduty", ("service_key",)): (set(), {_HTTP_PROXY_KEY}),
+    ("pagerduty", ("routing_key",)): (set(), {_HTTP_PROXY_KEY}),
+    ("email", ("auth_password",)): ({("smarthost",)}, set()),
+    ("webhook", ("http_config", "basic_auth", "password")): ({_URL_DEST}, {_HTTP_PROXY_KEY}),
+    ("webhook", ("http_config", "authorization", "credentials")): ({_URL_DEST}, {_HTTP_PROXY_KEY}),
+    ("webhook", ("http_config", "bearer_token")): ({_URL_DEST}, {_HTTP_PROXY_KEY}),
+    ("webhook", ("http_config", "tls_config", "key")): ({_URL_DEST}, {_HTTP_PROXY_KEY}),
+    ("webhook", ("http_config", "http_headers", "*", "secrets", "[]")):
+        ({_URL_DEST}, {_HTTP_PROXY_KEY}),
+    ("webhook", ("http_config", "oauth2", "client_secret")):
+        ({_TOKEN_DEST, _URL_DEST}, {_OAUTH2_PROXY_KEY, _HTTP_PROXY_KEY}),
+    ("webhook", ("http_config", "oauth2", "client_certificate_key")):
+        ({_TOKEN_DEST, _URL_DEST}, {_OAUTH2_PROXY_KEY, _HTTP_PROXY_KEY}),
+    ("webhook", ("http_config", "oauth2", "tls_config", "key")):
+        ({_TOKEN_DEST, _URL_DEST}, {_OAUTH2_PROXY_KEY, _HTTP_PROXY_KEY}),
+}
+
+
+def test_every_rows_destinations_and_proxies_are_the_expected_ones():
+    """oauth2 三列：目的地 {token_url, url}、proxy {oauth2.proxy_url, http_config.proxy_url}；
+    其餘 http_config 列：{url}、{http_config.proxy_url}；auth_password：{smarthost}、無 proxy；
+    頂層內容即目的地的列：沒有目的地。"""
+    got = {(s.rtype, s.path): (set(s.destinations), set(s.proxies)) for s in CREDENTIAL_REF_SITES}
+    assert len(got) == len(CREDENTIAL_REF_SITES)   # 沒有重複列
+    assert got == _EXPECTED_ROWS
 
 
 _TLS_KEY = ("http_config", "tls_config", "key")
