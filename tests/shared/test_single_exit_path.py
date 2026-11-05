@@ -1037,6 +1037,14 @@ MIGRATED: frozenset[str] = frozenset({
     "scripts/ops/plan_race_shards.py",
     "scripts/ops/route_metrics_through_field.py",
     "scripts/ops/use_get_metrics.py",
+    # #3579: scripts/session-guards/ — Claude Code hooks, under use_hook_protocol()
+    # (owner A′, 2026-11-05): a crash or a failed write ends at 1, never the blocking 2
+    "scripts/session-guards/paths_map.py",
+    "scripts/session-guards/preflight_bash.py",
+    "scripts/session-guards/session-init.py",
+    "scripts/session-guards/skill_usage.py",
+    "scripts/session-guards/stop_evidence.py",
+    "scripts/session-guards/vscode_git_toggle.py",
 })
 
 #: The ceiling of entries not yet through run(): it only shrinks. A new tool
@@ -1121,7 +1129,7 @@ def test_migrated_names_baseline_entries():
 def test_the_pending_entries_are_a_pinned_ceiling():
     """The count is written out so that a shorter PENDING is a visible edit of
     this line too (#3579): only ever lower it."""
-    assert len(PENDING) == 6
+    assert len(PENDING) == 0
 
 
 _RUN_TOOL = ("import _lib_exitcodes\ndef main(argv=None):\n    return 0\n"
@@ -2234,3 +2242,144 @@ def test_every_ops_entry_finds_its_exit_from_anywhere(via, tmp_path):
         if "No module named '_lib_" in proc.stderr:
             missing.append(f"{rel}: {proc.stderr.strip().splitlines()[-1]}")
     assert not missing, "\n".join(missing)
+
+
+# ── #3579 (owner A′, 2026-11-05): session-guards speak the hook protocol ──
+
+#: The tree whose entries are Claude Code hooks: exit 2 BLOCKS the tool call
+#: or the stop, so a crash or a failed write must end at 1 there.
+HOOK_TREE = "scripts/session-guards/"
+
+
+def _hook_declaration_fault(rel: str, source: str) -> str | None:
+    """None when *source* imports `_lib_exitcodes` at module level (plain
+    `import _lib_exitcodes`, no alias) and the very next statement is
+    `_lib_exitcodes.use_hook_protocol()` — the import installs the crash
+    hook with the blocking 2, so nothing may run between the two — and
+    nothing at module level rebinds `_lib_exitcodes` or sets an attribute
+    on it. What runs before the import ends at Python's own 1 (no hook
+    yet). Otherwise the reason."""
+    tree = ast.parse(source, filename=rel)
+    body = tree.body
+    for node in ast.walk(tree):
+        targets = []
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        for t in targets:
+            base = t
+            while isinstance(base, ast.Attribute):
+                base = base.value
+            if isinstance(base, ast.Name) and base.id == "_lib_exitcodes":
+                return f"{rel}:{node.lineno}: `{ast.unparse(node)}` rebinds `_lib_exitcodes`"
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            for a in node.names:
+                if (a.asname == "_lib_exitcodes"
+                        or (a.name == "_lib_exitcodes" and a.asname not in (None, "_lib_exitcodes"))):
+                    return f"{rel}:{node.lineno}: `{ast.unparse(node)}` aliases `_lib_exitcodes`"
+    for k, node in enumerate(body):
+        if (isinstance(node, ast.Import) and len(node.names) == 1
+                and node.names[0].name == "_lib_exitcodes" and node.names[0].asname is None):
+            nxt = body[k + 1] if k + 1 < len(body) else None
+            if (isinstance(nxt, ast.Expr) and isinstance(nxt.value, ast.Call)
+                    and ast.unparse(nxt.value.func) == "_lib_exitcodes.use_hook_protocol"
+                    and not nxt.value.args and not nxt.value.keywords):
+                return None
+            where = f"{rel}:{nxt.lineno}" if nxt is not None else rel
+            return (f"{where}: the statement after `import _lib_exitcodes` must be "
+                    "`_lib_exitcodes.use_hook_protocol()`")
+        if isinstance(node, (ast.Import, ast.ImportFrom)) and any(
+                a.name == "_lib_exitcodes" for a in node.names):
+            return f"{rel}:{node.lineno}: import `_lib_exitcodes` on a line of its own"
+    return f"{rel}: no module-level `import _lib_exitcodes` + `use_hook_protocol()`"
+
+
+def test_every_hook_declares_the_hook_protocol_first():
+    """A guard whose crash ended at run()'s default 2 would block every tool
+    call it matches (measured: a cp950 host and a CJK command, #3598)."""
+    hooks = {rel: src for rel, src in _gated_sources().items() if rel.startswith(HOOK_TREE)}
+    assert len(hooks) >= 6, sorted(hooks)
+    faults = [f for rel, src in sorted(hooks.items())
+              if (f := _hook_declaration_fault(rel, src))]
+    assert not faults, "\n".join(faults)
+
+
+def test_only_hooks_declare_the_hook_protocol():
+    """1 for a crash is the hook protocol's word, not a CLI tool's: anywhere
+    else it reads as a finding (dev-rules §13)."""
+    from _tree import REPO_ROOT as TREE_ROOT, repo_files  # noqa: E402
+    callers = set()
+    for path in repo_files(".py"):
+        rel = path.relative_to(TREE_ROOT).as_posix()
+        if rel.startswith("tests/") or rel == "scripts/tools/_lib_exitcodes.py":
+            continue
+        if "use_hook_protocol" in path.read_text(encoding="utf-8"):
+            callers.add(rel)
+    assert callers and all(rel.startswith(HOOK_TREE) for rel in callers), sorted(callers)
+
+
+_DECL = "import _lib_exitcodes\n_lib_exitcodes.use_hook_protocol()\n"
+
+
+@pytest.mark.parametrize("src,fault", [
+    ("import sys\n" + _DECL, False),
+    ('"""doc"""\nimport sys\nX = 1\nsys.path.insert(0, "x")\n' + _DECL + "Y = int('2')\n", False),
+    ("import _lib_exitcodes\nX = int('x')\n_lib_exitcodes.use_hook_protocol()\n", True),
+    ("import _lib_exitcodes\nimport no_such_mod\n_lib_exitcodes.use_hook_protocol()\n", True),
+    ("import _lib_exitcodes\nprint('x')\n_lib_exitcodes.use_hook_protocol()\n", True),
+    ("import _lib_exitcodes\ntry:\n    _lib_exitcodes.use_hook_protocol()\nexcept Exception:\n"
+     "    pass\n", True),
+    ("import _lib_exitcodes\ndef main():\n    _lib_exitcodes.use_hook_protocol()\n", True),
+    ("import _lib_exitcodes\n_lib_exitcodes.use_hook_protocol(1)\n", True),
+    ("import os as _lib_exitcodes\n_lib_exitcodes.use_hook_protocol()\n", True),
+    ("import _lib_exitcodes as ec\nec.use_hook_protocol()\n", True),
+    ("import os, _lib_exitcodes\n_lib_exitcodes.use_hook_protocol()\n", True),
+    (_DECL + "_lib_exitcodes.use_hook_protocol = lambda: None\n", True),
+    ("if False:\n    import _lib_exitcodes\n    _lib_exitcodes.use_hook_protocol()\n", True),
+], ids=["plain", "after-path-setup", "assign-between", "import-between", "call-between",
+        "in-try", "only-inside-main", "with-args", "lib-is-another-module", "lib-aliased",
+        "lib-on-a-shared-line", "lib-attr-rebound", "under-if"])
+def test_the_hook_declaration_rule(src, fault):
+    assert (_hook_declaration_fault("x.py", src) is not None) is fault
+
+
+_CRASH_AT_ENTRY = (
+    "import sys\n"
+    "def _prof(frame, event, arg):\n"
+    "    if (event == 'call' and frame.f_code.co_name == 'main'\n"
+    "            and frame.f_globals.get('__name__') == '__main__'):\n"
+    "        sys.setprofile(None)\n"
+    "        raise RuntimeError('injected crash')\n"
+    "sys.setprofile(_prof)\n")
+
+
+@pytest.mark.real_crash_exit_code
+@pytest.mark.parametrize("guard", sorted(
+    rel for rel in BASELINE if rel.startswith(HOOK_TREE)))
+def test_a_hook_that_crashes_does_not_block(guard, tmp_path):
+    """The declaration, run: a guard whose `main` crashes ends at 1 (a
+    non-blocking hook error), with the crash line — not run()'s default 2,
+    which would block the tool call or the stop."""
+    import subprocess
+    (tmp_path / "sitecustomize.py").write_text(_CRASH_AT_ENTRY, encoding="utf-8")
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
+    env["PYTHONPATH"] = str(tmp_path)
+    proc = subprocess.run([sys.executable, str(REPO_ROOT / guard)], input="{}",
+                          capture_output=True, text=True, encoding="utf-8",
+                          env=env, timeout=60)
+    assert proc.returncode == 1, (proc.returncode, proc.stderr[-600:])
+    assert "unexpected internal error (RuntimeError): injected crash" in proc.stderr
+
+
+@pytest.mark.skipif(not os.path.exists("/dev/full"), reason="needs /dev/full")
+def test_a_hook_whose_stdout_fails_does_not_block():
+    """stop_evidence --message-stdin prints its verdict: a failed stdout
+    write ends at 1 with the named line, not the blocking 2."""
+    import subprocess
+    env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
+    with open("/dev/full", "w", encoding="utf-8") as full:
+        proc = subprocess.run(
+            [sys.executable, str(REPO_ROOT / HOOK_TREE / "stop_evidence.py"), "--message-stdin"],
+            input="nothing claimed here", stdout=full, stderr=subprocess.PIPE, text=True,
+            encoding="utf-8", env=env, timeout=60)
+    assert proc.returncode == 1, (proc.returncode, proc.stderr)
+    assert "ERROR: cannot write to stdout:" in proc.stderr

@@ -122,11 +122,21 @@ extensions today:
   `da-tools generate-routes --config-dir <dir> --validate --strict`.
   Precedence 3 > 1 > 4 > 0. Same contract places as exit 3.
 
-No tool repurposes 1 or 2: dx/tenant_verify.py, which inverted them
+No CLI tool repurposes 1 or 2: dx/tenant_verify.py, which inverted them
 (exit 2 = verification finding, exit 1 = caller error and crash), follows
 the base meanings since #3393 — a breaking change to its customer rollback
-runbook, migrated with it. Do NOT repurpose 1 or 2 anywhere — new tools
-MUST follow the base violation / caller-error meanings above.
+runbook, migrated with it. Do NOT repurpose 1 or 2 in a CLI tool — new
+tools MUST follow the base violation / caller-error meanings above.
+
+The one sanctioned exception is a protocol that is not ours
+(:func:`use_hook_protocol`, #3579): scripts/session-guards/ are Claude Code
+hooks, where exit 2 BLOCKS the tool call or the stop and any other non-zero
+is a non-blocking error. There a crash, a failed stdout write or a caller
+error ended by this module must never block, so they end at 1; a guard
+blocks on purpose by returning 2. argparse's own usage error still exits 2
+(it calls sys.exit itself; owner, #3579). A failed stdout write overrides
+the entry's code as it does everywhere, a returned 2 included. Gate:
+tests/shared/test_single_exit_path.py.
 
 New subcommands MUST follow this contract — see docs/internal/dev-rules.md.
 """
@@ -308,6 +318,21 @@ def set_crash_exit_code(code: int) -> None:
     """
     global _crash_exit_code
     _crash_exit_code = _check_code("crash", code)
+
+
+def use_hook_protocol() -> None:
+    """Declare that this process is a Claude Code hook (#3579): a crash, a
+    failed stdout write and a caller error ended by this module end at 1 —
+    "non-blocking error" in the hook protocol — not at 2, which there
+    BLOCKS the tool call or the stop. argparse's own usage error is not
+    ours and stays 2. A hook blocks on purpose by returning 2 from its
+    entry, which ``run()`` passes through unless stdout then fails. Called
+    as the statement right after ``import _lib_exitcodes`` at module level,
+    so no crash between the two ends at the default 2. Only
+    scripts/session-guards/ call it (the gate's list).
+    """
+    set_crash_exit_code(1)
+    set_caller_error_code(1)
 
 
 def get_crash_exit_code() -> int:
