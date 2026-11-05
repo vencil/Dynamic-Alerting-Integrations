@@ -803,18 +803,44 @@ def test_an_http_config_reference_with_no_owner_is_refused():
     assert got == [("secret_ref_no_owner", "receiver.http_config.basic_auth.password")]
 
 
-@pytest.mark.parametrize("path,proxy_key", [
-    (_PW, ("http_config", "proxy_url")),
-    (("http_config", "http_headers", "*", "secrets", "[]"), ("http_config", "proxy_url")),
-    (_CS, ("http_config", "oauth2", "proxy_url")),
-    (_CS, ("http_config", "proxy_url")),          # access token 走 webhook 請求
-    (("http_config", "oauth2", "tls_config", "key"), ("http_config", "oauth2", "proxy_url")),
-])
-def test_the_proxy_the_request_goes_through_is_refused(path, proxy_key):
-    receiver = _ref_at(path, {"secret": {"key": "k"}})
-    _at(receiver, proxy_key[:-1])[proxy_key[-1]] = "http://proxy.example.com:3128"
-    got = _kinds(receiver)
-    assert got == [("secret_ref_proxy_url", "receiver." + ".".join(proxy_key))], got
+_ALL_TOP = frozenset(s.path[0] for s in CREDENTIAL_REF_SITES
+                     if len(s.path) == 1 and not s.destinations)
+_SHARED_ALL = SecretBinding(DEFAULT_SECRET_MOUNT_ROOT, MappingProxyType({
+    "corp-slack": SharedSecret("corp-alerting", _ALL_TOP)}))
+_PROXY_CASES = [(s, proxy) for s in CREDENTIAL_REF_SITES for proxy in s.proxies]
+
+
+def _proxied_receiver(site) -> tuple[dict, dict]:
+    """A receiver whose reference on *site* makes a proxy refusable, and the
+    build kwargs: the tenant's own Secret on a row with destinations, a listed
+    shared Secret on a row whose content is the destination."""
+    if site.destinations:
+        return _ref_at(site.path, {"secret": {"key": "k"}}), {}
+    receiver = {"type": site.rtype, site.path[0]: {"secret": {"shared": "corp-slack", "key": "k"}}}
+    return receiver, {"secrets": _SHARED_ALL}
+
+
+@pytest.mark.parametrize("site,proxy_key", _PROXY_CASES,
+                         ids=[f"{s.rtype}.{'.'.join(s.path)}->{'.'.join(p)}" for s, p in _PROXY_CASES])
+def test_the_proxy_the_request_goes_through_is_refused(site, proxy_key):
+    """全表：每一列的每一個 proxy（CREDENTIAL_REF_SITES 的 proxies）設了就拒。"""
+    receiver, kwargs = _proxied_receiver(site)
+    cfg, warnings = _build(receiver, **kwargs)
+    assert warnings == [] and cfg is not None, warnings      # 正向控制：沒設 proxy 時放行
+    node = receiver
+    for step in proxy_key[:-1]:
+        node = node.setdefault(step, {})
+    node[proxy_key[-1]] = "http://proxy.example.com:3128"
+    if proxy_key[1:] == ("oauth2", "proxy_url"):
+        node.setdefault("client_id", "c")
+        node.setdefault("token_url", _TOKEN_URL)
+    assert _kinds(receiver, **kwargs) == [("secret_ref_proxy_url", "receiver." + ".".join(proxy_key))]
+
+
+def test_every_row_has_a_proxy_case():
+    """與 destination 測試同樣以全表參數化：有 proxy 的列都在上面的案例裡。"""
+    assert {s for s, _p in _PROXY_CASES} == {s for s in CREDENTIAL_REF_SITES if s.proxies}
+    assert len({s for s, _p in _PROXY_CASES}) >= len(CREDENTIAL_REF_SITES) - 1   # 只有 email 沒有
 
 
 _TLS_KEY = ("http_config", "tls_config", "key")
