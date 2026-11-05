@@ -689,8 +689,8 @@ def main() -> Report:
     except KubectlError as exc:
         # issue 1513 / #2968 / #3349: no answer from the cluster — kubectl
         # missing (the da-tools image ships none), forbidden, unreachable or
-        # out of time — is the environment: rc 2 and one line, the reason
-        # `kubectl_error` under --json; never "Pod not found" (rc 1).
+        # out of time — is the environment: rc 2 and one stderr line (stdout
+        # empty under --json, #3558); never "Pod not found" (rc 1).
         raise KubectlError(f"{exc}; the MariaDB Pod check needs kubectl and a cluster "
                            "that answers") from None
     except CommandTimeoutError as exc:
