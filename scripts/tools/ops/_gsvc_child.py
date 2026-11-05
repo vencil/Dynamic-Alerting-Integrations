@@ -475,9 +475,9 @@ def _judge(job: ChildJob, stream: _Stream) -> dict:
 VERDICT_RESERVE_SECONDS = 2.0
 #: Less time than this left for the verdict: it is not started.
 VERDICT_MIN_SECONDS = 0.5
-#: Findings below error severity sent at most (the rest counted in
-#: ``truncated``). Error findings are never dropped: the write is refused on
-#: them (ADR-038 §5), so a refusal must list every one.
+#: Findings that do not block sent at most (the rest counted in
+#: ``truncated``). Blocking findings are never dropped: the write is refused
+#: on them (ADR-038 §5), so a refusal must list every one.
 VERDICT_MAX_FINDINGS = 1000
 
 
@@ -572,10 +572,11 @@ _OUT_OF_TIME = "the judgement deadline ran out"
 
 
 def kept_findings(findings: list) -> "tuple[list, int]":
-    """``(sent, truncated)``: every error finding, then the others up to
-    VERDICT_MAX_FINDINGS in all; ``truncated`` counts the others dropped."""
-    errors = [f for f in findings if f.severity == _lib_key_verdict.ERROR]
-    others = [f for f in findings if f.severity != _lib_key_verdict.ERROR]
+    """``(sent, truncated)``: every finding that blocks (the verdict's own
+    ``blocks``, #3016), then the others up to VERDICT_MAX_FINDINGS in all;
+    ``truncated`` counts the others dropped."""
+    errors = [f for f in findings if f.blocks]
+    others = [f for f in findings if not f.blocks]
     room = max(0, VERDICT_MAX_FINDINGS - len(errors))
     return errors + others[:room], max(0, len(others) - room)
 
@@ -611,9 +612,10 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
             return report("complete", tenants=0, findings=[], truncated=0)
         verdict = _lib_key_verdict.judge_tree(
             tree_dir, tenants=tenants, timeout=budget, reader=reader)
+        # The verdict's own answer (#3016), not re-derived from the keys.
         undecidable = sorted({k.key for ks in verdict.keys.values() for k in ks
                               if k.verdict == _lib_key_verdict.UNDECIDABLE})
-        if undecidable:
+        if verdict.undecidable_blocks:
             # ADR-038 §7: no root platform file, so a threshold key the
             # tenants write cannot be told from a misspelt one; a retry
             # changes nothing. Reserved keys alone are judged as always.
@@ -622,7 +624,8 @@ def _key_verdict(job: ChildJob, tree_dir: str, base: "dict[str, bytes]",
                                   "key(s) cannot be judged")
         kept, truncated = kept_findings(verdict.findings)
         findings = [{"severity": f.severity, "kind": f.kind, "key": f.key, "file": f.file,
-                     "tenants": list(f.tenants), "reason": f.reason} for f in kept]
+                     "tenants": list(f.tenants), "reason": f.reason, "blocks": f.blocks}
+                    for f in kept]
         return report("complete", tenants=len(tenants), findings=findings, truncated=truncated)
     except _VerdictDeadline:
         return report("not_completed", reason="deadline", tenants=len(tenants),

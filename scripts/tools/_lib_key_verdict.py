@@ -165,7 +165,7 @@ def note_root_only_policies(conf_d: str | os.PathLike[str], reader: Any = None) 
 
 _VERDICTS = frozenset({READ, UNREAD, UNDECIDABLE})
 _SEVERITIES = frozenset({ERROR, WARNING, NOTICE})
-_KINDS = frozenset({"unread", "disable_noop", "disable_partial"})
+_KINDS = frozenset({"unread", "disable_noop", "disable_partial", "profile_not_judged"})
 _DISABLES = frozenset({"effective", "partial", "noop"})
 
 

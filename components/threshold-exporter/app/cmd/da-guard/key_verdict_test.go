@@ -71,6 +71,13 @@ func TestKeyVerdict_TheErrorLayer(t *testing.T) {
 			map[string]string{"_defaults.yaml": "dimensions:\n  redis_queue_length: [queue]\n" + kvRoot,
 				"a.yaml": tenant(a, "    'redis_queue_length{queue=\"q\"}': 5\n")},
 			[]string{}},
+		// #3395: the profile's key only optional_overrides declares, with no
+		// platform value, is not filled in (#1189): unread on the profile file.
+		{"a bound profile's key the exporter does not fill in",
+			map[string]string{"_defaults.yaml": kvRoot + "optional_overrides:\n  - redis_evicted_keys\n",
+				"_profiles.yaml": "profiles:\n  gold:\n    redis_evicted_keys: \"11\"\n",
+				"a.yaml":         tenant(a, "    _profile: gold\n")},
+			[]string{a + " redis_evicted_keys profile_not_filled _profiles.yaml"}},
 		{"an unregistered reserved key in the tenant's file",
 			map[string]string{"_defaults.yaml": kvRoot, "a.yaml": tenant(a, "    _routng: disable\n")},
 			[]string{a + " _routng unregistered a.yaml"}},
@@ -501,5 +508,38 @@ func TestKeyVerdict_ReadsTheTreeQuietly(t *testing.T) {
 		if n > 2*g[line] {
 			t.Errorf("write logs %q %d times; validation of the two trees logs it %d", line, n, 2*g[line])
 		}
+	}
+}
+
+// #3395: "no tenant binds the profile" is said only over the whole tree —
+// not when a tenant file the load drops may be the one binding it.
+func TestKeyVerdict_AnUnboundProfileNeedsTheWholeTree(t *testing.T) {
+	t.Parallel()
+	notJudged := func(files map[string]string) (int, int) {
+		root := writeTree(t, files)
+		var out, errOut bytes.Buffer
+		code := run([]string{keyVerdictCmd, "--config-dir", root}, &out, &errOut)
+		var doc struct {
+			Findings []struct{ Kind string } `json:"findings"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+			t.Fatalf("exit %d: %v\n%s", code, err, errOut.String())
+		}
+		n := 0
+		for _, f := range doc.Findings {
+			if f.Kind == "profile_not_judged" {
+				n++
+			}
+		}
+		return code, n
+	}
+	profiles := "profiles:\n  gold:\n    mysql_connections: \"70\"\n"
+	if _, n := notJudged(map[string]string{"_defaults.yaml": kvRoot, "_profiles.yaml": profiles,
+		"b.yaml": "tenants:\n  t2: {}\n"}); n != 1 {
+		t.Errorf("unbound over the whole tree: %d notice(s), want 1", n)
+	}
+	if code, n := notJudged(map[string]string{"_defaults.yaml": kvRoot, "_profiles.yaml": profiles,
+		"a.yaml": "tenants:\n  t1:\n    _profile: gold\n  bad: [\n", "b.yaml": "tenants:\n  t2: {}\n"}); code != exitParseFailed || n != 0 {
+		t.Errorf("with a dropped file: exit %d, %d notice(s), want exit %d and none", code, n, exitParseFailed)
 	}
 }

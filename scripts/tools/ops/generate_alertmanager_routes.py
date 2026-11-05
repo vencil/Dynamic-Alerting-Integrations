@@ -1287,6 +1287,7 @@ _KEY_VERDICT_KINDS = {
     "unread": "key_unread",
     "disable_noop": "key_disable_noop",
     "disable_partial": "key_disable_partial",
+    "profile_not_judged": "key_profile_not_judged",
 }
 
 # The exporter's key checks (`_lib_key_verdict.key_check_lines`) → FINDING_KINDS.

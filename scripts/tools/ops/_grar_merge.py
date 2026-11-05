@@ -214,6 +214,9 @@ FINDING_KINDS: dict[str, str] = {
     "key_disable_partial":
         "A `disable` whose family is still served from another file (ADR-038 "
         "decision 8).",
+    "key_profile_not_judged":
+        "A threshold key of a profile no tenant binds, which the shared key "
+        "verdict does not judge (ADR-038 decision 4, #3395); a notice.",
     "key_undecidable":
         "No root platform file was read, so the threshold keys were not "
         "judged (ADR-038 decision 7); with any such key, --validate fails.",
