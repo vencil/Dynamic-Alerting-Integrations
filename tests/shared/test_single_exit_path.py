@@ -1997,6 +1997,66 @@ def test_a_registered_entry_keeps_its_own_code(tmp_path):
     assert proc.returncode == 5, proc.stderr
 
 
+def test_a_registered_entry_keeps_its_code_when_exec_ed_under_another_main(tmp_path):
+    """The da-tools image runs a tool by exec-ing it as ``__main__`` from
+    entrypoint.py, without putting it in sys.modules: ``__main__`` there is
+    still the entrypoint. The row is the entry's own file's (#3611 review)."""
+    tool = _coded(tmp_path, "def main():\n    return 5\n_lib_exitcodes.run(main)\n")
+    launcher = tmp_path / "entrypoint.py"
+    launcher.write_text(
+        "import importlib.util, sys\n"
+        f"spec = importlib.util.spec_from_file_location('__main__', {str(tool)!r})\n"
+        "spec.loader.exec_module(importlib.util.module_from_spec(spec))\n",
+        encoding="utf-8")
+    proc = _run(launcher)
+    assert proc.returncode == 5, proc.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a /bin/sh stand-in for da-guard")
+@pytest.mark.parametrize("code", [3, 4])
+def test_da_tools_guard_keeps_da_guards_codes_through_the_entrypoint(tmp_path, code):
+    """The customer path: `da-tools guard` through entrypoint.py ends at
+    da-guard's own 3 / 4, as dev-rules §13 lists (#3611 review)."""
+    fake = tmp_path / "fake-guard"
+    fake.write_text(f"#!/bin/sh\nexit {code}\n", encoding="utf-8")
+    fake.chmod(0o755)
+    (tmp_path / "cfg").mkdir()
+    proc = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "components/da-tools/app/entrypoint.py"),
+         "guard", "defaults-impact", "--config-dir", str(tmp_path / "cfg")],
+        capture_output=True, timeout=60, env=dict(_ENV, DA_GUARD_BINARY=str(fake)))
+    assert proc.returncode == code, proc.stderr
+
+
+@pytest.mark.real_crash_exit_code
+@pytest.mark.parametrize("status, rc", [(9, 9), (255, 255), (256, 2), (-1, 2)])
+def test_a_passthrough_entry_forwards_a_status_the_os_can_carry(tmp_path, status, rc):
+    """PASSTHROUGH forwards whatever the wrapped command ended with, as long as
+    an exit status can carry it: 256 would read as 0, a false success (#3611)."""
+    proc = _run(_script(tmp_path, f"_lib_exitcodes.run(lambda: {status})\n",
+                        name="dx_run.py"))
+    assert proc.returncode == rc, proc.stderr
+
+
+def test_a_decorated_entry_is_named_by_its_own_file(tmp_path):
+    """A functools.wraps decorator defined in a library must not move the
+    entry's name to the library's file (the allowed entry decorators are)."""
+    (tmp_path / "_deco_lib.py").write_text(
+        "import functools\n"
+        "def deco(fn):\n"
+        "    @functools.wraps(fn)\n"
+        "    def w(*a, **k):\n"
+        "        return fn(*a, **k)\n"
+        "    return w\n", encoding="utf-8")
+    proc = _run(_coded(tmp_path,
+                       "from _deco_lib import deco\n"
+                       "@deco\n"
+                       "def main():\n"
+                       "    return 6\n"
+                       "_lib_exitcodes.run(main)\n"))
+    assert proc.returncode == 6, proc.stderr
+
+
 def test_the_registry_cannot_be_changed_at_runtime():
     """A tool cannot register its own code on the way out: the one list is
     the module's (#3611)."""
@@ -2446,6 +2506,7 @@ NOT_EXIT_STATUS: frozenset[tuple[str, str]] = frozenset({
     ("scripts/tools/dx/scan_component_health.py", "_loc_score"),
     ("scripts/tools/dx/scan_component_health.py", "_recency_score"),
     ("scripts/tools/lint/check_account_registry_monotonic.py", "parse_next_account_id"),
+    ("scripts/tools/ops/diagnose.py", "kubectl_budget"),
 })
 
 
@@ -2459,32 +2520,54 @@ def _int_literal(node: ast.AST | None) -> int | None:
 
 
 def _extended_literals(tree: ast.Module) -> list[tuple[int, str, int]]:
-    """(line, where, value) for every exit-status-shaped int literal outside
-    0..2 in *tree*; *where* is the enclosing function for a return."""
+    """(line, where, value) for every exit-status-shaped int outside 0..2 in
+    *tree*. Read through the shapes the tools write: a literal, either arm of
+    `a if c else b`, and a name bound at module level to an int (`return
+    RC_X`); in `return`, a lambda's body, `sys.exit(…)` / `SystemExit(…)` /
+    `os._exit(…)` (positional or `code=`), and any `EXIT_*` / `_EXIT_*`
+    binding, module-level or local. *where* is the enclosing function for a
+    return. Not read (the runtime check in run() still refuses them): a value
+    reached through a local variable, a class or Enum attribute, or another
+    module."""
+    module_ints: dict[str, int] = {}
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and (v := _int_literal(node.value)) is not None:
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    module_ints[target.id] = v
+
+    def values(expr: ast.AST | None) -> list[int]:
+        if isinstance(expr, ast.IfExp):
+            return values(expr.body) + values(expr.orelse)
+        if isinstance(expr, ast.Name) and expr.id in module_ints:
+            return [module_ints[expr.id]]
+        v = _int_literal(expr)
+        return [] if v is None else [v]
+
     out = []
 
-    def outside(v: int | None) -> bool:
-        return v is not None and not 0 <= v <= 2
+    def add(line: int, where: str, expr: ast.AST | None) -> None:
+        out.extend((line, where, v) for v in values(expr) if not 0 <= v <= 2)
 
-    for node in tree.body:
-        if (isinstance(node, (ast.Assign, ast.AnnAssign))
-                and outside(v := _int_literal(node.value))):
-            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
-            names = [t.id for t in targets if isinstance(t, ast.Name)]
-            if any(n.startswith("EXIT_") for n in names):
-                out.append((node.lineno, names[0], v))
-    for fn in ast.walk(tree):
-        if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        for node in ast.walk(fn):
-            if isinstance(node, ast.Return) and outside(v := _int_literal(node.value)):
-                out.append((node.lineno, fn.name, v))
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and node.args:
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if (isinstance(target, ast.Name)
+                        and target.id.lstrip("_").startswith("EXIT_")):
+                    add(node.lineno, target.id, node.value)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Return):
+                    add(sub.lineno, node.name, sub.value)
+        elif isinstance(node, ast.Lambda):
+            add(node.lineno, "lambda", node.body)
+        elif isinstance(node, ast.Call):
             name = _dotted(node.func) or ""
-            if (name.rsplit(".", 1)[-1] in ("exit", "SystemExit", "_exit")
-                    and outside(v := _int_literal(node.args[0]))):
-                out.append((node.lineno, name, v))
+            if name.rsplit(".", 1)[-1] in ("exit", "SystemExit", "_exit"):
+                arg = node.args[0] if node.args else next(
+                    (k.value for k in node.keywords if k.arg in ("code", "status")), None)
+                add(node.lineno, name, arg)
     # a nested function's return is also walked from its parent: keep one
     return sorted(set(out))
 
@@ -2551,6 +2634,16 @@ _X = frozenset({("a/x.py", "v")})
      ["a/u.py:1: EXIT_X uses"]),
     ({"a/u.py": "COUNT = 3\ndef f():\n    return 2\n", "a/t.py": "", "a/p.py": ""},
      frozenset(), []),
+    ({"a/u.py": "RC_T = 3\ndef main():\n    return RC_T\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:3: main uses exit status 3"]),
+    ({"a/u.py": "def main(x):\n    return 4 if x else 0\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:2: main uses exit status 4"]),
+    ({"a/u.py": "import sys\nsys.exit(code=3)\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:2: sys.exit uses exit status 3"]),
+    ({"a/u.py": "def f():\n    _EXIT_T = 4\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:2: _EXIT_T uses exit status 4"]),
+    ({"a/u.py": "run(lambda: 3)\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:1: lambda uses exit status 3"]),
     ({"a/p.py": "def main(rc):\n    return rc\n", "a/t.py": ""}, frozenset(), []),
     ({"a/p.py": "def main():\n    return 9\n", "a/t.py": ""}, frozenset(),
      ["a/p.py:2: main uses exit status 9"]),
@@ -2560,7 +2653,8 @@ _X = frozenset({("a/x.py", "v")})
     ({"a/t.py": "", "a/p.py": "", "a/x.py": "def v():\n    return 60\n"}, _X, []),
     ({"a/t.py": "", "a/p.py": ""}, _X, ["NOT_EXIT_STATUS ('a/x.py', 'v'): excuses nothing"]),
 ], ids=["registered", "unregistered", "other-file", "helper-return", "sys-exit",
-        "negative", "exit-constant", "not-exit-shaped", "passthrough",
+        "negative", "exit-constant", "not-exit-shaped", "module-int-name", "ternary",
+        "exit-keyword", "local-private-exit-constant", "lambda", "passthrough",
         "passthrough-own-literal", "stem-collision",
         "row-without-file", "excused", "stale-excuse"])
 def test_the_registry_gate_on_known_shapes(files, not_exit, want):

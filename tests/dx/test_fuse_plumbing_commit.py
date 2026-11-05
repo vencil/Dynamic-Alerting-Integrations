@@ -254,3 +254,26 @@ def test_a_hook_refusal_is_a_finding_and_no_repo_is_a_caller_error(tmp_path: Pat
         env={**os.environ, "GIT_CEILING_DIRECTORIES": str(tmp_path)},
     )
     assert proc.returncode == 2, proc.stderr
+
+
+def test_a_git_fatal_error_on_commit_is_a_caller_error(tmp_path: Path) -> None:
+    """git ends a fatal commit error (here: no author identity) at 128, not
+    the 1 of a refusal: the commit could not be made, which is 2 — not a
+    finding about the content (#3577, #3611 review)."""
+    repo = _init_tmp_repo(tmp_path)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("GIT_AUTHOR_", "GIT_COMMITTER_"))}
+    home = tmp_path / "home"
+    home.mkdir()
+    env.update(HOME=str(home), XDG_CONFIG_HOME=str(home), GIT_CONFIG_NOSYSTEM="1",
+               GIT_CONFIG_GLOBAL=os.devnull, EMAIL="")
+    subprocess.run(["git", "config", "--unset", "user.email"], cwd=repo, check=False, timeout=30)
+    subprocess.run(["git", "config", "--unset", "user.name"], cwd=repo, check=False, timeout=30)
+    subprocess.run(["git", "config", "user.useConfigOnly", "true"], cwd=repo, check=True,
+                   timeout=30)
+    proc = subprocess.run(  # subprocess-timeout: ignore
+        [sys.executable, str(_SCRIPT), "--auto", "-m", "test: x", "f.txt"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=repo, env=env,
+    )
+    assert proc.returncode == 2, proc.stderr

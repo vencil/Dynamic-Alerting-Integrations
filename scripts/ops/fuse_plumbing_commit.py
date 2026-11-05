@@ -63,6 +63,14 @@ import tempfile
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
 
+class CommandFailed(RuntimeError):
+    """A command `_run` ran ended non-zero; *returncode* is its status."""
+
+    def __init__(self, returncode: int, message: str) -> None:
+        super().__init__(message)
+        self.returncode = returncode
+
+
 def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = True) -> str:
     """Run cmd, return stripped stdout; raise on non-zero if check=True."""
     merged_env = os.environ.copy()
@@ -77,7 +85,8 @@ def _run(cmd: list[str], *, env: dict[str, str] | None = None, check: bool = Tru
         timeout=60,
     )
     if check and result.returncode != 0:
-        raise RuntimeError(
+        raise CommandFailed(
+            result.returncode,
             f"cmd failed ({result.returncode}): {' '.join(cmd)}\n"
             f"stderr: {result.stderr.strip()}"
         )
@@ -205,9 +214,11 @@ def plumbing_commit(
 
 
 class CommitRefused(RuntimeError):
-    """The normal path's `git commit` itself failed — a hook's refusal, or
-    nothing to commit: the content needs a change (exit 1), unlike a failed
-    plumbing step (exit 2)."""
+    """The normal path's `git commit` refused the commit — a hook's refusal,
+    or nothing to commit, which git ends at 1: the content needs a change
+    (exit 1). git's fatal errors (no identity, signing failed, a held
+    index.lock) end at 128 and stay "could not commit" (exit 2), like a
+    failed plumbing step."""
 
 
 def normal_commit(
@@ -225,8 +236,10 @@ def normal_commit(
         cmd = ["git", "commit", "--amend", "-m", message]
     try:
         _run(cmd)
-    except RuntimeError as exc:
-        raise CommitRefused(str(exc)) from exc
+    except CommandFailed as exc:
+        if exc.returncode == 1:
+            raise CommitRefused(str(exc)) from exc
+        raise
     return _run(["git", "rev-parse", "HEAD"])
 
 

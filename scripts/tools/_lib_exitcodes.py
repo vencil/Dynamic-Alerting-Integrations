@@ -706,9 +706,9 @@ def run(entry: Callable[[], Any]) -> NoReturn:
     _stdout_failure_line = None
     _best_effort = False
     try:
-        status = _contract_status(emit_result(entry()))
+        status = _contract_status(emit_result(entry()), entry)
     except SystemExit as exc:
-        status = _contract_status(exc.code)
+        status = _contract_status(exc.code, entry)
     except Exception as exc:  # noqa: BLE001 — that is the point
         if _interactive():
             raise
@@ -745,21 +745,31 @@ EXTENDED_EXIT_CODES: Final = MappingProxyType({
 })
 
 
-def _entry_name() -> str:
-    main = sys.modules.get("__main__")
-    path = getattr(main, "__file__", None) or ""
+def _entry_name(entry: Callable[..., Any]) -> str:
+    """The file name (stem) of the module *entry* was defined in — the key of
+    its EXTENDED_EXIT_CODES row. Read from the entry, not ``__main__``: the
+    da-tools image runs a tool by exec-ing it under ``entrypoint.py``, where
+    ``sys.modules['__main__']`` is still the entrypoint (#3611). The allowed
+    decorators all ``functools.wraps``, so ``inspect.unwrap`` reaches the def."""
+    import inspect
+    try:
+        target = inspect.unwrap(entry)
+    except ValueError:  # a __wrapped__ cycle
+        target = entry
+    path = (getattr(target, "__globals__", None) or {}).get("__file__") or getattr(
+        sys.modules.get("__main__"), "__file__", None) or ""
     return os.path.splitext(os.path.basename(path))[0]
 
 
-def _contract_status(status: Any) -> Any:
+def _contract_status(status: Any, entry: Callable[..., Any]) -> Any:
     """*status* as ``run()`` may end with it (#3611): None, 0/1/2, a code
     the registry gives this entry — or, for anything else, the caller-error
     code after one ``ERROR:`` line (under tests: the test crash code, so a
     test pinning an unregistered code goes red). A string is printed first,
-    as Python would."""
+    as Python would. None and a bool end as Python ends them (0, 0/1)."""
     if status is None or isinstance(status, bool):
         return status
-    name = _entry_name()
+    name = _entry_name(entry)
     allowed = EXTENDED_EXIT_CODES.get(name, frozenset())
     if isinstance(status, int):
         if status in (0, 1, 2) or (
