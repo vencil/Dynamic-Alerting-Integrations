@@ -127,7 +127,7 @@ def test_exclude_tenants_matches_by_text(tmp_path, tenant_key, exclude, excluded
         "t.yaml": f"tenants:\n  {tenant_key}:\n    mem: 2\n"})
     rules = pe.load_policies(str(d / "_defaults.yaml"))
     inputs = pe.load_policy_inputs(str(d))   # #2115 0-B: the tenants as the exporter reads them
-    result = pe.evaluate_policies(rules, inputs.views, inputs.aliases)
+    result = pe.evaluate_policies(rules, inputs.views)
     assert (result.violations == []) is excluded, result.violations
 
 
