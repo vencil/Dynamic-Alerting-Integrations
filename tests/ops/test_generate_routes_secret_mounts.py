@@ -278,3 +278,19 @@ def test_an_unwritable_list_path_is_rc_2_naming_the_flag(tmp_path):
              "--secret-mounts-out", str(tmp_path / "absent" / "m.json"))
     assert r.returncode == 2, (r.stdout, r.stderr)
     assert "--secret-mounts-out" in r.stderr and "Traceback" not in r.stderr
+
+
+@pytest.mark.parametrize("mode", [["--validate"], ["--output-alertmanager", "--dry-run"]])
+@pytest.mark.parametrize("with_o", [False, True])
+def test_an_unread_stdout_list_is_refused_as_unread_not_as_a_stdout_clash(tmp_path, mode, with_o):
+    """A mode that never reads --secret-mounts-out must not let it take part
+    in sharing stdout: the refusal is the flag-not-read one. With -o the
+    findings document shares stdout with it; without -o `--findings-json -`
+    alone already clashes with the routes output (#3107 v2), so that shape
+    pairs the list with the routes output only."""
+    d = _tree(tmp_path, {"t-a": _OWN})
+    other = (["-o", str(tmp_path / "am.yml"), "--findings-json", "-"] if with_o else [])
+    r = _run(tmp_path, d, *mode, *other, "--secret-mounts-out", "-")
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert "--secret-mounts-out is not read in" in r.stderr
+    assert "standard output is already used" not in r.stderr
