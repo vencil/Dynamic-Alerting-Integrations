@@ -1045,8 +1045,9 @@ def test_the_converter_fails_as_a_PROCESS_not_just_as_a_function() -> None:
     same ENTRY POINT.
 
     #3579: asserted by RUNNING it, not by matching the guard's text. The
-    entry's shape is the single-exit gate's (`tests/shared/
-    test_single_exit_path.py`: `_lib_exitcodes.run(main)`); a second textual
+    entry's shape is the single-exit gate's
+    (`tests/shared/test_single_exit_path.py`: `_lib_exitcodes.run(main)`);
+    a second textual
     predicate here pinned the old `sys.exit(main())` and went red on a
     migration that kept the behaviour. What this test owns is the property:
     the PROCESS ends at the policy's code. The policy itself stays
