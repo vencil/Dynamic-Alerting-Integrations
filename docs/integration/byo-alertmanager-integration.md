@@ -342,7 +342,17 @@ PagerDuty 的 `routing_key` 與 `service_key` 兩個都給會被擋：Alertmanag
 
 ### 憑證放在 Secret（`secretRef`）
 
-7 個憑證欄位可以不寫值，改寫成 Kubernetes Secret 的參照（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）：webhook／Rocket.Chat 的 `url`、Slack 的 `api_url`、Teams 的 `webhook_url`、PagerDuty 的 `service_key`／`routing_key`、email 的 `auth_password`。email 的 `headers` 與 webhook 的 `http_config` 在 Alertmanager 沒有對應的 `*_file`，任何一層都不接：參照寫在別處，產生器在 render 之後掃到就擋下該 receiver（`secret_ref_unsupported_field`），不會原樣寫進 Alertmanager 設定。
+下列憑證欄位可以不寫值，改寫成 Kubernetes Secret 的參照（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)），各自 render 成 Alertmanager 讀檔的那個欄位：
+
+| 欄位 | render 成 | 憑證送往 |
+|---|---|---|
+| webhook／Rocket.Chat 的 `url`、Slack 的 `api_url`、Teams 的 `webhook_url`、PagerDuty 的 `service_key`／`routing_key` | `<欄位>_file` | 欄位本身 |
+| email 的 `auth_password` | `auth_password_file` | `smarthost` |
+| webhook `http_config` 的 `basic_auth.password`、`authorization.credentials`、`bearer_token`、`tls_config.key` | `password_file`、`credentials_file`、`bearer_token_file`、`key_file` | `url` |
+| webhook `http_config.http_headers.<名稱>.secrets` 的單一項目 | 移到同一個 header 的 `files` | `url` |
+| webhook `http_config.oauth2` 的 `client_secret`、`client_certificate_key`、`tls_config.key` | `client_secret_file`、`client_certificate_key_file`、`key_file` | `oauth2.token_url` |
+
+只有這些位置接參照（產生器與 schema 讀同一張表，`_lib_validation.CREDENTIAL_REF_SITES`）。email 的 `headers`、`http_config` 的其他欄位（`username`、`proxy_connect_header`、`oauth2.claims` 等）在 Alertmanager 沒有對應的 `*_file`，任何一層都不接：參照寫在別處，產生器在 render 之後掃到就擋下該 receiver（`secret_ref_unsupported_field`），不會原樣寫進 Alertmanager 設定。header 的值依 `values`、`secrets`、`files` 的順序送出，所以來自 Secret 的值排在直接寫的值之後。
 
 參照**不寫 Secret 名稱**，只有兩種形狀：
 
@@ -367,10 +377,14 @@ _routing:
     corp-alerting: {secret: corp-alerting, fields: [api_url, webhook_url, url]}
   ```
 
-  `secret` 是實際的 Secret 名稱，不得以 `da-` 開頭（避免與租戶推導出的名稱撞名）；`fields` 只能列內容本身就是送達目的地的欄位，不能列 `auth_password`。沒有 policy 檔，或 policy 沒有 `shared_secrets`，就沒有任何共用例外。receiver 只要用了任一共用 Secret，就不能設 `http_config.proxy_url`：代理是租戶自己指定的，會看到送往共用目的地的請求（`secret_ref_shared_proxy_url`）。`shared_secrets` 寫壞（不是 mapping、別名不是 DNS-1123 label、條目不是 `{secret, fields}`、名稱以 `da-` 開頭、`fields` 列了不接 Secret 的欄位）時整份 policy 不可用，結束碼 `2`。
-- **`auth_password`**：只能用自己的 Secret，而且 policy 必須設了非空的 `allowed_domains`、`smarthost` 的 host 也在其中。`smarthost` 是租戶自己填的，密碼會送到那台伺服器。
+  `secret` 是實際的 Secret 名稱，不得以 `da-` 開頭（避免與租戶推導出的名稱撞名）；`fields` 只能列內容本身就是送達目的地的欄位，不能列 `auth_password`。沒有 policy 檔，或 policy 沒有 `shared_secrets`，就沒有任何共用例外。receiver 只要用了任一共用 Secret，就不能設 `http_config.proxy_url`：代理是租戶自己指定的，會看到送往共用目的地的請求（`secret_ref_proxy_url`）。`shared_secrets` 寫壞（不是 mapping、別名不是 DNS-1123 label、條目不是 `{secret, fields}`、名稱以 `da-` 開頭、`fields` 列了不接 Secret 的欄位）時整份 policy 不可用，結束碼 `2`。
+- **送往租戶自填目的地的憑證**（上表「憑證送往」不是欄位本身的那幾列：`auth_password` 與 `http_config` 底下各欄）：目的地是租戶自己填的，所以
+  - 只能用自己的 Secret，共用 Secret 一律拒（`secret_ref_shared_confined`）；
+  - policy 必須設了非空的 `allowed_domains`，目的地的 host 也在其中；目的地沒寫、或本身也是參照（看不到 host）就拒（`secret_ref_destination_unconfined`）；
+  - 該請求經過的 `proxy_url`（webhook 請求是 `http_config.proxy_url`，token 請求是 `http_config.oauth2.proxy_url`）不能設（`secret_ref_proxy_url`）：代理不受 `allowed_domains` 約束，`http://` 的請求它整個看得到，`https://` 的請求在同一個 receiver 設了 `tls_config.ca` 或 `insecure_skip_verify` 時它也能攔截；
+  - header 的值來自 Secret 時，`http_config.follow_redirects` 必須寫成 `false`（`secret_ref_header_redirects`）：Alertmanager 預設跟隨 redirect，跨 host 的 redirect 只拿掉 `Authorization` 這類固定的 header，自訂 header 會照送到 redirect 指向的 host。
 
-產生器把參照寫成 Alertmanager 的 `<field>_file: <root>/<secret-name>/<key>`，拿掉原欄位；`<root>` 預設 `/etc/alertmanager/secrets`，用 `generate-routes --secret-mount-root` 改。違反上面任何一條，該 receiver 不產出，`generate-routes --validate` 非 0、`validate-config` 的 routes 列 FAIL、tenant-api 寫入回 422。URL 欄位是參照時，產生器看不到 host，`allowed_domains` 不檢查它：Secret 由 operator 或 ExternalSecrets 建立，租戶寫不到內容，也指定不了名稱。`test-notification` 讀不到 Secret，這類 receiver 一律 `SKIPPED`、不送出。
+產生器把參照寫成上表的檔案欄位，值是 `<root>/<secret-name>/<key>`，拿掉原欄位（header 的項目移進 `files`）；`<root>` 預設 `/etc/alertmanager/secrets`，用 `generate-routes --secret-mount-root` 改。違反上面任何一條，該 receiver 不產出，`generate-routes --validate` 非 0、`validate-config` 的 routes 列 FAIL、tenant-api 寫入回 422。URL 欄位是參照時，產生器看不到 host，`allowed_domains` 不檢查它：Secret 由 operator 或 ExternalSecrets 建立，租戶寫不到內容，也指定不了名稱。`test-notification` 讀不到 Secret，這類 receiver 一律 `SKIPPED`、不送出。
 
 ⛔ **掛載契約（BYO 必做）**：Alertmanager 容器必須把每個被引用的 Secret 掛在 `<root>/<secret-name>/`，Secret 的每個 key 是其中一個檔案。這與 Prometheus Operator 的 `spec.secrets` 掛到 `/etc/alertmanager/secrets/<name>` 的版面相同；repo 自帶的 `watchdog-heartbeat` 也掛在 `/etc/alertmanager/secrets/watchdog-heartbeat/`。產生器與 tenant-api 都沒有 Secret 讀權限，看不到 Secret 是否存在：檔案不在時 Alertmanager 在送出那一刻才失敗。
 
