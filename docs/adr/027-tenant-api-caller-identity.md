@@ -9,7 +9,7 @@ tracking_kind: adr
 status: proposed
 domain: tenant-api
 created_at: 2026-07-03
-updated_at: 2026-11-04
+updated_at: 2026-11-05
 ---
 
 # ADR-027: tenant-api 的呼叫端身分只在自己的 pod 內建立，網路上不轉送人類身分
@@ -18,7 +18,9 @@ updated_at: 2026-11-04
 
 ## 狀態
 
-🟡 **Proposed**（2026-11-04 改寫；同日 owner 裁決原待決的三項：瀏覽器入口、threshold-govern、範圍軸 shadow 模式）。owner 核可全文後昇格 Accepted。§10 是實作前必須先驗證的前提。
+🟡 **Proposed**（2026-11-04 改寫；同日 owner 裁決原待決的三項：瀏覽器入口、threshold-govern、範圍軸 shadow 模式）。owner 核可全文後昇格 Accepted。
+
+2026-11-05：§10 的前提已實測——依路徑分流到 UDS 只能用 oauth2-proxy 的結構化設定檔（alpha config），legacy 旗標做不到；同日 owner 裁決三項：採用結構化設定檔（§10）、tenant-api 直接讀 oauth2-proxy 的設定檔決定信任哪些 header（§2、§7）、「一次生效」指拒絕舊設定的變更（§6）。
 
 本 ADR 取代 2026-07 一份未公開的草稿。那份草稿的方向是「逐跳認證」：每個把身分轉給 tenant-api 的元件各自加上 workload token，先只做稽核、觀察數週後再強制。依那個方向合併的程式碼不是只做稽核、就是預設關閉，而且都不在任何已發布的 tenant-api image 裡。本 ADR 撤回那個方向，理由見 §背景 與 §考慮過但否決；那段期間完成、與方向無關的修正（`_rbac.yaml` 空檔拒絕存取、移除以 header 決定來源 IP 的中介層）保留。
 
@@ -35,7 +37,7 @@ updated_at: 2026-11-04
 3. TCP 只提供 metrics 與健康檢查，不提供 API（§3）。
 4. 目前沒有機器呼叫端；出現時的做法與觸發條件先訂好（§4）。
 5. 任何元件都不再把人類身分跨網路轉送。整個部署只有一個 oauth2-proxy；portal 與 recipe-preview 移進 tenant-api 的 pod（§5）。
-6. 一次 breaking release 直接生效，不設觀察期與開關（§6）。
+6. 拒絕舊設定的變更在同一個 breaking release 生效，不設觀察期與開關（§6）。
 7. 範圍軸預設強制、沒有 shadow 模式，升級前以離線檢查列出受影響的租戶（§7）。
 8. 這些決定以測試與 lint 表達，本文只指向它們（§9）。
 
@@ -79,9 +81,10 @@ tenant-api 唯一接受的身分來源，是同一個 pod 裡的 oauth2-proxy �
 - 連線來自哪個 listener，由伺服器在建立連線時標記，request 無法改寫。
 - 所有需要呼叫者身分的地方（含 rate limit 與 request log）都讀身分物件，不直接讀 header。
 - 開發模式的驗證旁路改為直接注入身分物件，不再注入 header。
-- UDS 不再是選項：tenant-api 啟動時沒有 UDS 就不啟動。pod 內只有 tenant-api 與 oauth2-proxy 兩個容器能掛載這個 socket；oauth2-proxy 必須清除 client 帶來的身分 header 後再設定。
+- UDS 不再是選項：tenant-api 啟動時沒有 UDS 就不啟動。pod 內只有 tenant-api 與 oauth2-proxy 兩個容器能掛載這個 socket。
+- 信任哪些 header，由 oauth2-proxy 實際使用的設定檔決定，不另設名單：同一份設定檔掛進兩個容器，tenant-api 啟動時讀其中的 `injectRequestHeaders`，得知 email、group 與各 claim 由哪個 header 帶來。oauth2-proxy 對每個注入的 header 預設先清除 client 帶來的同名值；設定檔裡任何一個身分 header 設了保留 client 值（`preserveRequestValue: true`），或沒有注入 email 與 group，tenant-api 就拒絕啟動。
 
-**取捨**：多一個必須存在的 socket 與共享 volume；換到的是「哪裡可以主張人類身分」變成拓撲事實，不是設定值。
+**取捨**：多一個必須存在的 socket 與共享 volume，且 tenant-api 要解析 oauth2-proxy 設定檔中與 header 注入有關的那一小段；換到的是「哪裡可以主張人類身分」變成拓撲事實，「proxy 注入什麼」與「tenant-api 信什麼」在每一種部署方式下都是同一份檔案。
 
 ### 3. TCP 平面
 
@@ -117,7 +120,8 @@ tenant-api 唯一接受的身分來源，是同一個 pod 裡的 oauth2-proxy �
 
 ### 6. 一次生效，不設觀察期
 
-- 本 ADR 的變更在同一個 breaking release 生效，所有受影響的元件一起發布。發布說明寫明升級後被拒絕的舊設定長什麼樣子。
+- 會拒絕舊設定的變更（TCP 不再提供 API、刪除轉送與開關、範圍軸強制）在同一個 breaking release 生效，所有受影響的元件一起發布。發布說明寫明升級後被拒絕的舊設定長什麼樣子。
+- 新拓撲中純新增、不拒絕任何舊設定的部分（例如 tenant-api 的 pod 加入 portal 容器）可以先合併；期間若有其他原因發布，這些部分會先出現在該版本，不使任何現有部署變得較不安全。
 - 稽核、轉送、「UDS 是否啟用」、「是否啟用 oauth2-proxy」、範圍軸 shadow、open mode 相關的開關全部刪除。chart 的 key 由 render 測試斷言不存在；tenant-api 的環境變數從已知清單移除，舊設定仍帶著它們時，既有的「未知 `TA_*` 變數拒絕啟動」機制會讓 tenant-api 不啟動（§9）。
 - 理由：採用者極少；稽核與 shadow 階段證明不了沒有偽造或沒有人受影響；而這些開關都不在任何已發布的 image 裡，觀察期實際上從未開始。
 
@@ -125,7 +129,7 @@ tenant-api 唯一接受的身分來源，是同一個 pod 裡的 oauth2-proxy �
 
 角色來自 IdP group，範圍（哪些租戶、環境、domain、組織）來自已驗證的身分屬性。
 
-- **哪些屬性可以當授權依據**：只有 oauth2-proxy 從簽章 token 取出、使用者改不了的 claim。claim header 只在 UDS 上讀取（§2）。chart 必須明確宣告 oauth2-proxy 會覆寫這些 header，tenant-api 才接受 claim header 的設定；沒有宣告就拒絕啟動。
+- **哪些屬性可以當授權依據**：只有 oauth2-proxy 從簽章 token 取出、使用者改不了的 claim。claim header 只在 UDS 上讀取，且只認 oauth2-proxy 設定檔中注入的那些（§2）；tenant-api 沒有獨立的 claim header 設定。oauth2-proxy 只有 OIDC 類的 provider（含 GitLab）會取出額外 claim，GitHub provider 不會，所以 GitHub 部署只能用 group 決定範圍。
 - **值要帶來源命名空間**，避免不同來源的同名值互相冒用。
 - **決定範圍的資料由平台控管**：組織與租戶的對應寫在平台管理員才能改的設定層。環境與 domain 標記目前寫在各租戶設定檔的 `_metadata` 裡，可經寫入 API 修改；改為只有平台管理員能變更這些標記，一般寫入若變更它們即拒絕，避免有寫入權的人改標記擴大自己的範圍。
 - **一律強制，沒有 shadow 模式**：讀取範圍、寫入範圍、組織範圍各自獨立判定，沒有「只記錄不擋」的選項。未標記的租戶在有範圍限制的規則下不可見、不可寫。
@@ -146,17 +150,46 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
 
 1. TCP 只註冊 §3 列舉的路徑（精確比對），其餘回 404；TCP 上帶任何身分 header 回 400。（§2、§3）
 2. 架構測試：從 header 建立身分只發生在 UDS listener 的路徑上；rate limit、request log 與驗證旁路都不讀身分 header。（§2）
-3. chart render 測試：整個部署只有一個 oauth2-proxy，且 `/api/` 未登入回 401；只有 tenant-api 與 oauth2-proxy 掛載 human socket；oauth2-proxy 沒有關閉清除 header 的選項；UDS 必定存在。portal 容器實際載入的 nginx 設定（不論來自 chart 或 image）沒有任何轉送。（§2、§5）
+3. chart render 測試：整個部署只有一個 oauth2-proxy，且 `/api/` 未登入回 401；只有 tenant-api 與 oauth2-proxy 掛載 human socket；UDS 必定存在；oauth2-proxy 與 tenant-api 掛載同一份設定檔。portal 容器實際載入的 nginx 設定（不論來自 chart 或 image）沒有任何轉送。（§2、§5）
 4. portal 原始碼呼叫的每個後端路徑都在 `/api/` 前綴下；simulate 路徑回 501 與原 body。（§5）
 5. 掃描 helm、k8s manifest 與 rule-pack：沒有任何設定把身分 header 跨網路轉送給任何元件；§6 刪除的 chart key 不存在；threshold-govern 的 CronJob、它在 NetworkPolicy 的放行與它的告警都不存在。§6 刪除的環境變數不在 tenant-api 的已知清單裡。（§4、§5、§6）
-6. 未宣告 oauth2-proxy 覆寫 claim header 時，設定 claim header 會拒絕啟動；沒有規則的 `_rbac.yaml` 拒絕所有存取，且不存在恢復 open mode 的開關；非平台管理員的寫入若變更租戶的環境或 domain 標記即被拒絕。（§7）
+6. oauth2-proxy 設定檔中的身分 header 保留 client 值、或缺少 email 或 group 的注入時，tenant-api 拒絕啟動；沒有規則的 `_rbac.yaml` 拒絕所有存取，且不存在恢復 open mode 的開關；非平台管理員的寫入若變更租戶的環境或 domain 標記即被拒絕。（§7）
 7. `tenant-api config check` 對每條範圍軸列出未標記租戶並非零退出，以固定 fixture 測試；CI 對 repo 內的範例設定執行它。（§7）
 8. 引用檢查：repo 內每個 `ADR-NNN` 後接的小節引用都必須對應到該 ADR 存在的小節（以小節標題的編號或名稱比對）；`ADR-027` 後接 §舊引用對照 表中的舊編號一律失敗。（本 ADR 與 [#1667](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1667)）
+9. CI 以 chart 釘住的 oauth2-proxy image（同一個 digest）對 chart 產生的設定檔執行設定檢查（`--config-test`），並以同版本的 oauth2-proxy 程式庫斷言分流結果與 §10 的範例一致。（§10）
 
-### 10. 實作前必須先驗證的前提
+### 10. oauth2-proxy 的分流設定
 
-1. **oauth2-proxy 能否依路徑分流到 UDS**：§5 需要 chart 釘住的 oauth2-proxy 版本支援多個 upstream，其中 API 路徑那條是 `unix://`。先以一個最小設定實測。portal 那條 upstream 可以是 pod 內的 loopback，因為 portal 不讀身分 header。
-2. **驗證失敗時的退路**：改由 Ingress 依路徑把 `/api/` 導到 tenant-api 的 oauth2-proxy、portal 不經登入；§5 對 401 與導去登入的要求同樣適用。
+已以 chart 釘住的 oauth2-proxy 版本（v7.15.5）實測：
+
+- **legacy 旗標做不到**：`--upstream=unix://…` 的路由路徑固定為 `/`，第二條 upstream 必然與它衝突，設定驗證失敗（`multiple upstreams found with path "/"`）。
+- **結構化設定檔（`--alpha-config`）做得到**：每條 upstream 的路徑與目的地分開設定。
+
+設定（節錄）：
+
+```yaml
+upstreamConfig:
+  upstreams:
+  - id: api
+    path: /api/
+    uri: unix:///run/ta-human/human.sock
+  - id: portal
+    path: /
+    uri: http://127.0.0.1:8081
+```
+
+分流結果：
+
+| 請求路徑 | 送到 |
+|---|---|
+| `/api/v1/me?x=1` | UDS，路徑與 query 原樣 |
+| `/api/` | UDS |
+| `/api`、`/apix` | portal |
+| `/`、`/index.html` | portal |
+
+改用結構化設定檔後，provider、header 注入與 listener 位址都寫在設定檔裡，對應的 legacy 旗標不能再並用；session、cookie、`--api-route`（未登入回 401 而非轉址）等其他旗標照舊。上游標示這個檔案的結構可能在 minor 版之間變動；檔案以嚴格模式解析，出現不認得的欄位時 oauth2-proxy 拒絕啟動，所以結構變動會在升級時立即失敗，而不是被默默忽略。§9 第 9 項讓這件事在 CI 就失敗。
+
+退路（不採用，保留紀錄）：由 Ingress 依路徑把 `/api/` 導到 tenant-api 的 oauth2-proxy、portal 不經登入。§7 的 claim header 注入同樣需要結構化設定檔，退路並不能免除它。
 
 ## 考慮過但否決
 
@@ -164,6 +197,9 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
 - **對外界面不變，只把稽核切成強制**：仍然信任 da-portal 與 recipe-preview 轉送的使用者身分，問題從「任何能連到 tenant-api 的 Pod」縮小成「任何能連到 da-portal 內部埠的 Pod」，沒有消除。
 - **da-portal 把瀏覽器的 session cookie 轉給 tenant-api 的 oauth2-proxy（兩個 proxy 共用 session）**：仍是在網路上轉送人類憑證；cookie secret 分在兩個 namespace，無法機械檢查一致；「誰能登入」有兩個判定點。
 - **Ingress 依路徑分流、portal 不經登入（作為主方案）**：Ingress 不能跨 namespace 指向 Service，同一個 host 要靠兩個 Ingress 由 controller 合併；host、redirect URL、TLS 要跨 chart 人工配對。保留為 §10 的退路。
+- **pod 內 portal nginx 在前、把 `/api/` 轉給同 pod 的 oauth2-proxy（以避開結構化設定檔）**：portal 容器重新出現轉送，§9 第 3 項失去意義；§7 的 claim header 仍需結構化設定檔，兩頭的代價都要付。
+- **chart 從同一份 values 同時產生 oauth2-proxy 設定與 tenant-api 的 claim header 設定**：只有 Helm 部署機械一致，本機試用的 compose 要另抄一份。
+- **tenant-api 另設旗標，宣告 oauth2-proxy 會覆寫哪些 header**：旗標本身是另一份需要人工同步的設定，設錯時 tenant-api 無從察覺。
 - **tenant-api 自己提供 portal 靜態檔**：要在 Go 裡重做 CSP、快取與 SPA fallback，並把 portal 與 tenant-api 的版號綁在一起。
 - **修好 threshold-govern 並同時建好機器身分**：見 §4；為唯一一個從未執行過的呼叫端建一整個身分平面。觸發條件見 §4。
 - **保留範圍軸的 shadow 模式（預設關閉）**：would-deny 計數只在有流量時才動，證明不了沒有人受影響；租戶是可列舉的，決定性的離線檢查較可靠（Gatekeeper、Kyverno 對可列舉的資源也以背景掃描為準，流量式 dry-run 只用在無法列舉的對象）。
@@ -191,6 +227,8 @@ GitLab group 以 full path（`org/subteam`）原樣比對，不加 provider 前�
   - 範圍軸一律強制：未標記的租戶在有範圍限制的規則下不可見；寫入首次受環境與 domain 範圍約束，已標記但不在範圍內的寫入也會被拒；組織範圍軸是新功能。升級前以 `tenant-api config check` 列出並補齊。
   - 本機試用環境（try-local）與在 TCP 上帶身分 header 的測試，依新拓撲改寫。
 - oauth2-proxy 是唯一的人類身分驗證者：版本以 digest 釘住並追蹤其安全公告。
+- 結構化設定檔的結構可能隨 oauth2-proxy 的 minor 版變動；升級 oauth2-proxy 時可能需要同步修改 chart 產生的設定檔，tenant-api 解析的那一段也一樣（§10）。
+- GitHub provider 不提供額外 claim，該類部署的範圍只能由 group 決定（§7）。
 - tenant-api 的 pod 同時承載 API、portal 與 recipe-preview，三者一起擴縮。
 - 被移出 group 的使用者，權限在 session 更新前仍有效（§8）。
 - GHSA-3g2h-rf85-5rrv 目前列出的修補版本是 L4 止血那一版；本 ADR 的 release 發布後，需更新該 advisory 的修補版本與說明。
