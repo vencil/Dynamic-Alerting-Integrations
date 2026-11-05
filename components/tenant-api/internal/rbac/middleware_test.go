@@ -31,7 +31,7 @@ func TestMiddleware_MissingEmail(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := m.Middleware(PermRead, nil)(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermRead, nil)(inner))
 
 	req := httptest.NewRequest("GET", "/test", nil)
 	// No X-Forwarded-Email header
@@ -53,7 +53,7 @@ func TestMiddleware_EmptyRuleSetDeniesRead(t *testing.T) {
 		t.Error("handler reached under an empty rule set")
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := m.Middleware(PermRead, nil)(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermRead, nil)(inner))
 
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -72,7 +72,7 @@ func TestMiddleware_EmptyRuleSetDeniesWrite(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := m.Middleware(PermWrite, nil)(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermWrite, nil)(inner))
 
 	req := httptest.NewRequest("PUT", "/test", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -96,7 +96,7 @@ func TestMiddleware_WithTenantIDFn(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	tenantFn := func(r *http.Request) string { return "db-a" }
-	mw := m.Middleware(PermWrite, tenantFn)(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermWrite, tenantFn)(inner))
 
 	req := httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil)
 	req.Header.Set("X-Forwarded-Email", "op@example.com")
@@ -121,7 +121,7 @@ func TestMiddleware_DeniedForWrongTenant(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	tenantFn := func(r *http.Request) string { return "db-b" }
-	mw := m.Middleware(PermWrite, tenantFn)(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermWrite, tenantFn)(inner))
 
 	req := httptest.NewRequest("PUT", "/api/v1/tenants/db-b", nil)
 	req.Header.Set("X-Forwarded-Email", "op@example.com")
@@ -147,7 +147,7 @@ func TestMiddleware_GroupsParsing(t *testing.T) {
 		gotGroups = RequestGroups(r)
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := m.Middleware(PermRead, nil)(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermRead, nil)(inner))
 
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -181,7 +181,7 @@ func TestMiddleware_EmptyGroups(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := m.MiddlewareAuthenticated()(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.MiddlewareAuthenticated()(inner))
 
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -222,7 +222,7 @@ func TestMiddleware_ClaimHeaders_PopulatesPrincipalClaims(t *testing.T) {
 		gotPrincipal = RequestPrincipal(r)
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := m.Middleware(PermRead, nil)(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermRead, nil)(inner))
 
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -268,7 +268,7 @@ func TestMiddleware_NoClaimConfig_PrincipalClaimsNil(t *testing.T) {
 		gotPrincipal = RequestPrincipal(r)
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := m.Middleware(PermRead, nil)(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermRead, nil)(inner))
 
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -298,7 +298,7 @@ func TestMiddleware_MatchRule_EndToEnd(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	mw := m.Middleware(PermWrite, func(*http.Request) string { return "any-tenant" })(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermWrite, func(*http.Request) string { return "any-tenant" })(inner))
 
 	serve := func(orgHeader string) int {
 		req := httptest.NewRequest("PUT", "/api/v1/tenants/any-tenant", nil)

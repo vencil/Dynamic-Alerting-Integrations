@@ -142,7 +142,7 @@ func (f *aonFixture) run(t *testing.T, group, body string, async_ bool) (int, []
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	req.Header.Set("X-Forwarded-Groups", "admins")
 	w := httptest.NewRecorder()
-	f.deps.RBAC.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
+	rbac.ResolveIdentity(f.deps.RBAC.HeaderResolver())(f.deps.RBAC.Middleware(rbac.PermRead, nil)(h)).ServeHTTP(w, req)
 
 	if w.Code == http.StatusAccepted {
 		var acc struct {

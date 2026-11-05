@@ -79,8 +79,7 @@ def test_threshold_exporter_annotation_override_naming_another_port_fails():
 @_needs_helm
 @pytest.mark.parametrize("listen", [":8080", "0.0.0.0:8080"])
 def test_tenant_api_every_port_reference_is_the_listener(listen):
-    r = _render("helm/tenant-api", "--set", f"tenantApi.listenAddr={listen}",
-                "--set", "humanSocket.enabled=false")
+    r = _render("helm/tenant-api", "--set", f"tenantApi.listenAddr={listen}")
     assert r.returncode == 0, r.stderr
     docs = _docs(r.stdout)
     got = _ports_named(docs, "tenant-api")
@@ -91,11 +90,6 @@ def test_tenant_api_every_port_reference_is_the_listener(listen):
     netpol = next(d for d in docs if d["kind"] == "NetworkPolicy")
     got["networkpolicy"] = {str(p["port"]) for rule in netpol["spec"].get("ingress") or []
                             for p in rule.get("ports") or [] if str(p["port"]) != "4180"}
-    dep = _one(docs, "Deployment")
-    args = [a for c in dep["spec"]["template"]["spec"]["containers"] for a in c.get("args") or []]
-    upstream = [a for a in args if a.startswith("--upstream=http://")]
-    if upstream:
-        got["oauth2 upstream"] = {u.rsplit(":", 1)[1] for u in upstream}
     assert all(v == {"8080"} for v in got.values()), got
 
 

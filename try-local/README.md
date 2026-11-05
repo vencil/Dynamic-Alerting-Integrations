@@ -17,7 +17,7 @@ Give it ~1 minute, then open:
 | 產品 | 開這個 | 你會看到 |
 |---|---|---|
 | **Tenant Manager**（da-portal） | <http://localhost:8081> | 2 個 demo 租戶 + 一個預存的 Saved View；改租戶閾值按 Save 會落一個**真實 git commit** |
-| **Tenant API**（tenant-api） | <http://localhost:8080/api/v1/me> | file-based 設定 API（commit-on-write），oauth2-proxy 身分模型 |
+| **Tenant API**（經 oauth2-proxy） | <http://localhost:8080/api/v1/me> | file-based 設定 API（commit-on-write）；API 只在 tenant-api 的 Unix socket 上、經 pod 內 oauth2-proxy 進來（[ADR-027](../docs/adr/027-tenant-api-caller-identity.md) §2）。tenant-api 自己的 port <http://localhost:8083/health> 只有 `/health`、`/ready`、`/metrics` |
 | **產生器容器**（generator） | （無對外 port） | tenant-api 每筆寫入 commit 前問它整棵 conf.d 是否過得了 `generate-routes --validate --strict`（[#2903](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2903)）；從 `generator/Dockerfile` build（Python + PyYAML、git、amtool），跑本 checkout 的 `scripts/tools`；與 tenant-api 同 uid（10001）、共用 socket volume |
 | **Prometheus** | <http://localhost:9090/alerts> | `MariaDBHighConnectionsCritical` **正在 firing**（紅燈） |
 | **Alertmanager** | <http://localhost:9093> | 同一個 firing 告警，路由到 null receiver |
@@ -136,7 +136,9 @@ bash try-local/chaos.sh <tamper|stale|drift|failopen|heal>
 
 ## 關於身分（dev-only auth bypass）
 
-完整 production 由 oauth2-proxy 在前面注入 `X-Forwarded-Email` / `X-Forwarded-Groups`。try-local 沒有 oauth2-proxy，所以 tenant-api 用 `--dev-bypass-auth`（**僅限本機**）在缺 header 時注入一個 dev 身分（`dev@local` / `demo-admins`），瀏覽器才打得開 Tenant Manager。
+try-local 與 production 同一個拓樸（[ADR-027](../docs/adr/027-tenant-api-caller-identity.md) §3）：API 只在 tenant-api 的 Unix socket 上，前面是 oauth2-proxy，兩者讀同一份結構化設定檔（`oauth2-proxy/oauth2-proxy.yaml`，與 Helm chart render 的是同一種檔）。差別只在登入：這裡的 oauth2-proxy 對所有請求免登入（`--trusted-ip` 涵蓋所有來源位址），所以沒有 session、不注入身分 header（client 自己帶的同名 header 照樣被清掉），由 tenant-api 的 `--dev-bypass-auth`（**僅限本機**）在 socket 上注入一個 dev 身分物件（`dev@local` / `demo-admins`），瀏覽器才打得開 Tenant Manager。portal 與 recipe-preview 都經這個 oauth2-proxy 呼叫 API。
+
+tenant-api 自己的 port（`EXPOSE_API_PROBE_PORT`，預設 8083）只有 `/health`、`/ready`、`/metrics`；打 API 會 404，帶身分 header 會 400。
 
 > ⚠️ 這個 flag 嚴禁進 production：在 Kubernetes 內啟動會直接 panic，且 SAST 禁止它出現在任何部署 manifest。細節見 ADR-022。
 
@@ -146,7 +148,7 @@ bash try-local/chaos.sh <tamper|stale|drift|failopen|heal>
 
 所有 port 只綁 `127.0.0.1`（本機限定）—— dev-bypass 會為無 header 的請求注入 **admin** 身分，故刻意不對 LAN 開放（避免同網段他人取得寫入/commit 權）。要從別台裝置連，請自行改 compose 的 port binding。
 
-預設用 3000 / 8080 / 8081 / 8082 / 9090 / 9091 / 9093。若被占用，編輯 `.env`（從 `.env.example` 複製來的）改任一 `EXPOSE_*_PORT` 後重啟：
+預設用 3000 / 8080 / 8081 / 8082 / 8083 / 9090 / 9091 / 9093。若被占用，編輯 `.env`（從 `.env.example` 複製來的）改任一 `EXPOSE_*_PORT` 後重啟：
 
 ```bash
 make clean-local && docker compose up -d
@@ -193,5 +195,5 @@ try-local 跑順了、看對胃口 —— 下一步是評估正式部署到 Kube
     - **Domain Expert** → [Rule Pack 客製與品質治理](../docs/getting-started/for-domain-experts.md)
 - **接上既有 Prometheus** → [BYO Prometheus](../docs/integration/byo-prometheus-integration.md) · [Prometheus Operator](../docs/integration/prometheus-operator-integration.md)
 
-> ⚠️ try-local 用的 `--dev-bypass-auth` + `127.0.0.1`-only binding 是**本機限定**捷徑；production 改由 oauth2-proxy 注入身分、Helm values 控管（見 [ADR-022](../docs/adr/022-dev-auth-bypass-four-layer-containment.md)）。
+> ⚠️ try-local 用的免登入 oauth2-proxy + `--dev-bypass-auth` + `127.0.0.1`-only binding 是**本機限定**捷徑；production 由 oauth2-proxy 登入後經 Unix socket 注入身分、Helm values 控管（見 [ADR-022](../docs/adr/022-dev-auth-bypass-four-layer-containment.md)）。
 

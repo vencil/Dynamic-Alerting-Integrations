@@ -660,7 +660,7 @@ func TestBatchTenants_PRMode_ForgeForbidden(t *testing.T) {
 	w := httptest.NewRecorder()
 	// Mirror production wiring (main.go): route-level middleware checks read +
 	// populates the identity context; per-op write is enforced inside the handler.
-	rbacMgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
+	rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(h)).ServeHTTP(w, req)
 
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected 403, got %d: %s", w.Code, w.Body.String())

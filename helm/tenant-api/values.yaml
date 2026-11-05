@@ -453,29 +453,14 @@ machineIdentity:
   # projected token with `audience: tenant-api` to match.
   audience: tenant-api
 
-# ADR-027 D2-B: human-plane Unix domain socket (GHSA-3g2h-rf85-5rrv L7 root-cause
-# series). When enabled, tenant-api serves the SAME router on a second listener
-# bound to a pod-internal Unix socket, and the oauth2-proxy sidecar's upstream
-# (in its config file) is that socket instead of http://localhost:8080. Human (browser)
-# traffic then reaches tenant-api over the socket — a physically pod-internal hop
-# that cannot be reached from the network — instead of the network 8080 plane.
-# The listener a request arrives on is stamped into its context (connection-
-# derived, unforgeable) and used to keep human traffic OUT of the machine-
-# identity audit denominator, so the audit reflects the machine/relay plane only.
-#
-# ⚠ PREREQUISITE: the running tenant-api image must already contain the
-# --human-socket setting (TA_HUMAN_SOCKET; image tag derives from appVersion). An
-# image from this chart's release on refuses a TA_* variable it does not read
-# (exit 2, named); an image older than that check still ignores it and never
-# opens the socket, so oauth2-proxy has no upstream — enable only once the
-# deployed image supports it (same discipline as machineIdentity).
-# ⚠ Do NOT enable via `helm upgrade --reuse-values` — pass humanSocket values
-# explicitly, matching the machineIdentity guidance above.
-#
-# opt-in (default false) = a safe no-op: single TCP listener, oauth2-proxy
-# upstream unchanged, render byte-identical to pre-D2-B.
+# ADR-027 §2: the Unix domain socket tenant-api serves its API on. The
+# oauth2-proxy sidecar's upstream (in its config file) is this socket; the
+# network port 8080 serves only /health, /ready and /metrics and refuses
+# identity headers. tenant-api refuses to start without the socket, so
+# `enabled` must stay true: false fails the render. The key itself is
+# removed later (ADR-027 §6: the switches go; the schema then refuses it).
 humanSocket:
-  enabled: false
+  enabled: true
   # Pod-internal socket path on a shared emptyDir mounted into both the
   # tenant-api and oauth2-proxy containers. Both run under the pod-level uid/gid
   # 65534 (podSecurityContext below), so the 0660 socket is reachable by the

@@ -9,13 +9,15 @@ tracking_kind: adr
 status: accepted
 domain: tenant-api
 created_at: 2026-05-25
-updated_at: 2026-05-27
+updated_at: 2026-11-05
 ---
 # ADR-022: tenant-api Dev-Auth Bypass — Local-Dev Identity Substitute, Four-Layer Containment
 
 ## 狀態
 
 ✅ **Accepted**（2026-05-25，v2.9.0 起草）。Tracker：[#464](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/464)。
+
+2026-11-05 修訂：旁路改為注入身分物件、只作用在 tenant-api 的 Unix socket 平面；本機試用改為也經 oauth2-proxy（[ADR-027](./027-tenant-api-caller-identity.md) §2、§3）。四層防線不變。
 
 ## 背景
 
@@ -35,21 +37,25 @@ production 一律有 oauth2-proxy 在前面注入這兩個 header，所以運作
 
 我們需要一個「**本機 dev 用的身分替身**」，在缺 header 時補上一個身分。
 
+（現況：依 [ADR-027](./027-tenant-api-caller-identity.md) §3，try-local 與契約測試也在 tenant-api 前面跑 oauth2-proxy，但對所有請求免登入，所以仍沒有任何身分 header——問題形狀相同。）
+
 但這裡有個張力：**在 production binary 裡放任何 auth bypass，本身就是資安風險**。本 ADR 的重點不在「要不要做替身」，而在「**怎麼把這個風險圍住**」。
 
 ## 決策
 
 新增一個**預設關閉**的 flag：`--dev-bypass-auth`（或環境變數 `TA_DEV_BYPASS_AUTH`）。
 
-啟用後，一個外層 middleware 的行為很單純：**請求若缺 `X-Forwarded-Email`，就注入一個 dev 身分**（預設 `dev@local` / `demo-admins`，可用 `--dev-bypass-email` / `--dev-bypass-groups` 改）。**若請求已帶真實的 forwarded 身分，絕不覆蓋。**
+啟用後，一個 middleware 的行為很單純：**請求若沒有從 oauth2-proxy 注入的 header 解析出身分，就注入一個 dev 身分**（預設 `dev@local` / `demo-admins`，可用 `--dev-bypass-email` / `--dev-bypass-groups` 改）。**若請求已帶真實的 forwarded 身分，絕不覆蓋。**
+
+注入的是身分物件，不是 header：rate limit、request log 與 RBAC 讀的都是這個物件，不讀 header。旁路只掛在 tenant-api 的 Unix socket 平面（API 只在那裡）；TCP port 只有 `/health`、`/ready`、`/metrics`，那裡沒有任何身分，旁路也碰不到（[ADR-027](./027-tenant-api-caller-identity.md) §2、§3）。
 
 ### 請求怎麼走
 
 ```mermaid
 flowchart TD
     R(["請求進來"]) --> F{"--dev-bypass-auth ?"}
-    F -->|"off（預設）"| H1{"有 X-Forwarded-Email ?"}
-    F -->|on| H2{"有 X-Forwarded-Email ?"}
+    F -->|"off（預設）"| H1{"header 解析出身分？"}
+    F -->|on| H2{"header 解析出身分？"}
     H1 -->|有| OK["RBAC enforce"]
     H1 -->|無| E401["401（行為不變）"]
     H2 -->|"有（真實身分，不覆蓋）"| OK
@@ -69,7 +75,7 @@ flowchart TD
 ### 跑起來長這樣
 
 ```console
-# Mode 0：請求沒有 X-Forwarded-* header，flag 已開
+# try-local：經 oauth2-proxy（免登入，不注入身分 header），flag 已開
 $ curl -is localhost:8080/api/v1/me
 HTTP/1.1 200 OK
 X-Dev-Auth-Bypass: active          # ← Layer 2 tripwire，每個 response 都帶

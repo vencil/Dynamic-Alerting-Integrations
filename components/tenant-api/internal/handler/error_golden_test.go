@@ -304,7 +304,7 @@ func goldenCaller(t *testing.T, mgr *rbac.Manager, group string) *http.Request {
 	req.Header.Set("X-Forwarded-Email", "op@example.com")
 	req.Header.Set("X-Forwarded-Groups", group)
 	var got *http.Request
-	mgr.MiddlewareAuthenticated()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = r })).
+	rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.MiddlewareAuthenticated()(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { got = r }))).
 		ServeHTTP(httptest.NewRecorder(), req)
 	if got == nil {
 		t.Fatalf("RBAC middleware refused group %q", group)

@@ -34,7 +34,7 @@ func TestRequestIDResponse_EchoesIDFromContext(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	handler.ServeHTTP(rec, resolved(req))
 
 	got := rec.Header().Get("X-Request-ID")
 	if got == "" {
@@ -56,7 +56,7 @@ func TestRequestIDResponse_PreservesIncomingHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-Request-ID", incoming)
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	handler.ServeHTTP(rec, resolved(req))
 
 	got := rec.Header().Get("X-Request-ID")
 	if got != incoming {
@@ -76,7 +76,7 @@ func TestRequestIDResponse_NoOpWhenContextEmpty(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	handler.ServeHTTP(rec, resolved(req))
 
 	got := rec.Header().Get("X-Request-ID")
 	if got != "" {
@@ -101,7 +101,7 @@ func TestRateLimit_AllowsUnderCap(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 		req.Header.Set("X-Forwarded-Email", "alice@example.com")
 		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
+		handler.ServeHTTP(rec, resolved(req))
 		if rec.Code != http.StatusOK {
 			t.Errorf("request %d: expected 200, got %d", i+1, rec.Code)
 		}
@@ -122,7 +122,7 @@ func TestRateLimit_BlocksAtCap(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 		req.Header.Set("X-Forwarded-Email", "alice@example.com")
 		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
+		handler.ServeHTTP(rec, resolved(req))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("request %d should pass; got %d", i+1, rec.Code)
 		}
@@ -132,7 +132,7 @@ func TestRateLimit_BlocksAtCap(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	handler.ServeHTTP(rec, resolved(req))
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("3rd request should return 429, got %d", rec.Code)
 	}
@@ -177,7 +177,7 @@ func TestRateLimit_PerCallerIsolation(t *testing.T) {
 	reqA := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 	reqA.Header.Set("X-Forwarded-Email", "alice@example.com")
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, reqA)
+	handler.ServeHTTP(rec, resolved(reqA))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("alice 1st request: got %d", rec.Code)
 	}
@@ -186,7 +186,7 @@ func TestRateLimit_PerCallerIsolation(t *testing.T) {
 	reqA2 := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 	reqA2.Header.Set("X-Forwarded-Email", "alice@example.com")
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, reqA2)
+	handler.ServeHTTP(rec, resolved(reqA2))
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("alice 2nd should be 429, got %d", rec.Code)
 	}
@@ -196,7 +196,7 @@ func TestRateLimit_PerCallerIsolation(t *testing.T) {
 	reqB := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 	reqB.Header.Set("X-Forwarded-Email", "bob@example.com")
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, reqB)
+	handler.ServeHTTP(rec, resolved(reqB))
 	if rec.Code != http.StatusOK {
 		t.Errorf("bob's 1st request should pass independent of alice; got %d", rec.Code)
 	}
@@ -217,7 +217,7 @@ func TestRateLimit_SkipPathsExempt(t *testing.T) {
 	for i := 0; i < 5; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/health", nil)
 		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
+		handler.ServeHTTP(rec, resolved(req))
 		if rec.Code != http.StatusOK {
 			t.Errorf("/health request %d: got %d, want 200 (skip path exempt)", i+1, rec.Code)
 		}
@@ -239,7 +239,7 @@ func TestRateLimit_DisabledWhenZero(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 		req.Header.Set("X-Forwarded-Email", "burst@example.com")
 		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
+		handler.ServeHTTP(rec, resolved(req))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("disabled limiter blocked request %d (got %d)", i+1, rec.Code)
 		}
@@ -261,7 +261,7 @@ func TestRateLimit_FallbackToIPWhenNoEmail(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 	req.RemoteAddr = "10.0.0.1:5001"
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+	handler.ServeHTTP(rec, resolved(req))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("first IP request: got %d", rec.Code)
 	}
@@ -269,7 +269,7 @@ func TestRateLimit_FallbackToIPWhenNoEmail(t *testing.T) {
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 	req2.RemoteAddr = "10.0.0.1:5002" // same IP, different port → same bucket
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req2)
+	handler.ServeHTTP(rec, resolved(req2))
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("second IP request should be 429 (same IP, cap=1); got %d", rec.Code)
 	}
@@ -279,7 +279,7 @@ func TestRateLimit_FallbackToIPWhenNoEmail(t *testing.T) {
 	req2b.RemoteAddr = "10.0.0.1:5003"
 	req2b.Header.Set("X-Real-IP", "10.0.0.99") // ignored
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req2b)
+	handler.ServeHTTP(rec, resolved(req2b))
 	if rec.Code != http.StatusTooManyRequests {
 		t.Errorf("spoofed X-Real-IP must not bypass the same-peer bucket; got %d", rec.Code)
 	}
@@ -288,7 +288,7 @@ func TestRateLimit_FallbackToIPWhenNoEmail(t *testing.T) {
 	req3 := httptest.NewRequest(http.MethodGet, "/api/v1/me", nil)
 	req3.RemoteAddr = "10.0.0.2:5001"
 	rec = httptest.NewRecorder()
-	handler.ServeHTTP(rec, req3)
+	handler.ServeHTTP(rec, resolved(req3))
 	if rec.Code != http.StatusOK {
 		t.Errorf("different IP should pass independently; got %d", rec.Code)
 	}
@@ -554,7 +554,7 @@ func TestSlogRequestLogger_EmitsStructuredLine(t *testing.T) {
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	handler.ServeHTTP(w, resolved(req))
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("inner status = %d, want 200", w.Code)
@@ -603,7 +603,7 @@ func TestSlogRequestLogger_5xxLogsAtWarn(t *testing.T) {
 
 	req := httptest.NewRequest("GET", "/x", nil)
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	handler.ServeHTTP(w, resolved(req))
 
 	var entry map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &entry); err != nil {
@@ -646,7 +646,7 @@ func TestRateLimit_RejectionsCounter(t *testing.T) {
 		req := httptest.NewRequest("GET", "/x", nil)
 		req.Header.Set("X-Forwarded-Email", "ratelimit-counter-test@example.com")
 		w := httptest.NewRecorder()
-		wrapped.ServeHTTP(w, req)
+		wrapped.ServeHTTP(w, resolved(req))
 	}
 
 	if got := limiter.Rejections(); got != 3 {

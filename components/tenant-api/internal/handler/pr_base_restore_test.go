@@ -151,7 +151,7 @@ func TestBatchTenants_PRMode_PushHookCannotStrandTheServingTree(t *testing.T) {
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	req.Header.Set("X-Forwarded-Groups", "admins")
 	rec := httptest.NewRecorder()
-	rbacMgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(rec, req)
+	rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(h)).ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK || !prCreated {
 		t.Fatalf("status = %d, PR created = %v; want 200 and a PR; body: %s", rec.Code, prCreated, rec.Body.String())

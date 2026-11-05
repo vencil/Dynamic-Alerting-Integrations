@@ -120,7 +120,7 @@ func TestBatchTenants_UnhashableMergeKeyInCurrentFileIsRefused(t *testing.T) {
 				req.Header.Set("X-Forwarded-Groups", "admins")
 				w := httptest.NewRecorder()
 				failOnPanic(t, fmt.Sprintf("%s (async=%v) batch", name, async_), func() {
-					rb.Middleware(rbac.PermRead, nil)(BatchTenants(d)).ServeHTTP(w, req)
+					rbac.ResolveIdentity(rb.HeaderResolver())(rb.Middleware(rbac.PermRead, nil)(BatchTenants(d))).ServeHTTP(w, req)
 				})
 
 				var status, code, msg string

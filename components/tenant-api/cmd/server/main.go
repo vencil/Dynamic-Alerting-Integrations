@@ -243,17 +243,13 @@ func main() {
 	machineIdentityIssuer := flag.String("machine-identity-issuer", envOrDefault("TA_MACHINE_IDENTITY_ISSUER", ""),
 		"ADR-027: comma-separated cluster-issuer allowlist for machine-identity audit dispatch. Empty (default) sends any issuer to TokenReview (the apiserver is the sole verifier). Reserved for keypool isolation when the human JWT-A path lands.")
 
-	// ADR-027 D2-B: human-plane Unix domain socket. When set, tenant-api serves
-	// the SAME router on a SECOND http.Server bound to this pod-internal UDS, in
-	// addition to the network TCP --addr. The same-pod oauth2-proxy points its
-	// --upstream at this socket, so human (browser) traffic never touches the
-	// network 8080 plane. Each listener stamps its identity (tcp|uds) into the
-	// request context via ConnContext — a connection-derived trust signal the
-	// request cannot forge — which the machine-identity audit uses to keep the
-	// UDS human plane OUT of its denominator. Empty (default) = single TCP
-	// listener, byte-identical to pre-D2-B behavior.
+	// ADR-027 §2: the API's only listener. The same pod's oauth2-proxy
+	// routes /api/ to this socket; the TCP --addr listener serves only
+	// /health, /ready and /metrics (tcp_router.go). Required: no socket, no
+	// start. The UDS listener stamps every connection (ConnContext) so
+	// identity is read from headers only on this plane.
 	humanSocket := flag.String("human-socket", envOrDefault("TA_HUMAN_SOCKET", ""),
-		"ADR-027 D2-B: path to a pod-internal Unix domain socket for the human (oauth2-proxy) plane. When set, the same router is ALSO served here and this listener is tagged as the trusted human hop (excluded from the machine-identity audit). Empty (default) = TCP-only, unchanged behavior.")
+		"ADR-027 §2: path of the pod-internal Unix domain socket the API is served on, behind the same pod's oauth2-proxy. Required: tenant-api refuses to start without it. The TCP --addr listener serves only /health, /ready and /metrics")
 
 	// #2903 (ADR-036 §3–§5): the generator container. Every content-changing
 	// conf.d write asks it first, so it is required: no socket, no start.
@@ -274,6 +270,9 @@ func main() {
 	if err := checkGeneratorSocketFlag(*generatorSocket); err != nil {
 		log.Fatalf("FATAL: %v", err)
 	}
+	if err := checkIdentityPlaneFlags(*humanSocket, *oauth2ProxyConfig); err != nil {
+		log.Fatalf("FATAL: %v", err)
+	}
 
 	// PR-10/11: structured (JSON) logging via slog. Configure before
 	// any Manager / Writer / Tracker construction so their initial-
@@ -288,7 +287,7 @@ func main() {
 	if *devBypassAuth {
 		rbac.DevBypassK8sGuard(os.Getenv, pathExists)
 		handler.SetDevBypassActive(true)
-		slog.Warn("⚠️  DEV AUTH BYPASS ACTIVE — a dev identity is injected for requests without an oauth2-proxy header. LOCAL DEV ONLY; never enable in production.",
+		slog.Warn("⚠️  DEV AUTH BYPASS ACTIVE — a dev identity is injected on the Unix-socket (API) plane for requests oauth2-proxy sent without one. LOCAL DEV ONLY; never enable in production.",
 			"inject_email", *devBypassEmail, "inject_groups", *devBypassGroups)
 	}
 
@@ -306,9 +305,7 @@ func main() {
 		log.Fatalf("FATAL: --oauth2-proxy-config: %v", err)
 	}
 	claimHeaders := proxyIdentity.ClaimHeaders
-	if *oauth2ProxyConfig != "" {
-		log.Printf("INFO: identity headers from %s: email=%s groups=%s claims=%s", *oauth2ProxyConfig, proxyIdentity.EmailHeader, proxyIdentity.GroupsHeader, formatClaimHeaders(claimHeaders))
-	}
+	log.Printf("INFO: identity headers from %s: email=%s groups=%s claims=%s", *oauth2ProxyConfig, proxyIdentity.EmailHeader, proxyIdentity.GroupsHeader, formatClaimHeaders(claimHeaders))
 
 	rbacMgr, err := rbac.NewManager(*rbacPath, claimHeaders)
 	if err != nil {
@@ -655,9 +652,8 @@ func main() {
 
 	// ── Router ────────────────────────────────────────────────────────────────
 	// v2.8.0 B-6 PR-1: per-caller rate limiter config. The middleware is
-	// mounted AFTER the chi standard chain (inside buildRouter) so the
-	// limiter sees the caller identity (X-Forwarded-Email, populated by
-	// oauth2-proxy upstream of tenant-api).
+	// mounted inside buildRouter after ResolveIdentity, so the limiter keys
+	// on the resolved caller (ADR-027 §2).
 	rlCfg, rlMalformed := handler.RateLimitConfigFromEnv(*rateLimitPerMin)
 	if rlMalformed {
 		slog.Warn("rate limit env malformed, falling back to default",
@@ -716,31 +712,33 @@ func main() {
 	// P4b §5b) so the route-manifest test can enumerate every write-method
 	// route against the org-gate manifest. Behavior-identical extraction.
 	r := buildRouter(routerDeps{
-		Deps:            deps,
-		RBAC:            rbacMgr,
-		Events:          handler.EventStream(deps, eventHub), // #3123: filtered per subscriber
+		Deps:   deps,
+		RBAC:   rbacMgr,
+		Events: handler.EventStream(deps, eventHub), // #3123: filtered per subscriber
+		Identity: rbac.HeaderResolver{
+			EmailHeader:  proxyIdentity.EmailHeader,
+			GroupsHeader: proxyIdentity.GroupsHeader,
+			ClaimHeaders: claimHeaders,
+		},
 		DevBypass:       *devBypassAuth,
 		DevBypassEmail:  *devBypassEmail,
 		DevBypassGroups: *devBypassGroups,
 		RateLimit:       rlMw,
 	})
 
-	// ── HTTP server(s) with graceful shutdown ─────────────────────────────────
+	// ── HTTP servers with graceful shutdown ───────────────────────────────────
 	// PR-11/11: timeouts now configurable via TA_{READ,WRITE,IDLE}_TIMEOUT.
 	//
-	// ADR-027 D2-B: the SAME router `r` is served by up to two http.Servers —
-	// the network TCP listener (--addr, machine/relay plane) and, when
-	// --human-socket is set, a pod-internal Unix domain socket (human plane
-	// fronted by the same-pod oauth2-proxy). Each server's ConnContext stamps
-	// its listener identity (tcp|uds) onto every request context at accept time.
-	// This is CONNECTION-derived: it reflects which socket accepted the
-	// connection, so a request cannot forge or strip it (contrast a header). The
-	// machine-identity audit reads it to keep the UDS human plane out of its
-	// denominator (ADR-027 §2.3). Absence of the stamp defaults to TCP
-	// (rbac.ListenerFromContext) — the fail-safe direction.
+	// ADR-027 §2, §3: two listeners, two routers. The network TCP listener
+	// (--addr) serves only /health, /ready and /metrics and refuses identity
+	// headers (buildTCPRouter); the API router `r` is served only on the
+	// pod-internal Unix socket behind the same pod's oauth2-proxy. Each
+	// server's ConnContext stamps its listener (tcp|uds) onto every request
+	// context at accept time — CONNECTION-derived, so a request cannot forge
+	// it. ResolveIdentity reads headers only on a UDS-stamped request.
 	srvTCP := &http.Server{
 		Addr:         *listenAddr,
-		Handler:      r,
+		Handler:      buildTCPRouter(deps, proxyIdentity),
 		ReadTimeout:  *readTimeout,
 		WriteTimeout: *writeTimeout,
 		IdleTimeout:  *idleTimeout,
@@ -751,31 +749,25 @@ func main() {
 	slog.Info("http server timeouts",
 		"read", *readTimeout, "write", *writeTimeout, "idle", *idleTimeout)
 
-	// Human-plane UDS server (optional). Built here so a bind failure is fatal
-	// (MED-7 fail-loud) rather than a silent fallback to TCP-only, which would
-	// route human traffic back over the network 8080 plane D2-B exists to drain.
-	var srvUDS *http.Server
-	var udsListener net.Listener
-	if *humanSocket != "" {
-		ln, err := listenUnix(*humanSocket)
-		if err != nil {
-			log.Fatalf("FATAL: human socket: %v", err)
-		}
-		udsListener = ln
-		// Emit the tenant_api_human_socket_up gauge (the Ready self-dial drives
-		// its value). Only when the socket is configured, so it's never a false 0.
-		handler.SetHumanSocketConfigured(true)
-		srvUDS = &http.Server{
-			Handler:      r,
-			ReadTimeout:  *readTimeout,
-			WriteTimeout: *writeTimeout,
-			IdleTimeout:  *idleTimeout,
-			ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
-				return rbac.WithListener(ctx, rbac.ListenerUDS)
-			},
-		}
-		slog.Info("human-plane Unix socket enabled (ADR-027 D2-B)", "path", *humanSocket)
+	// The API's Unix socket. A bind failure is fatal (fail-loud): without it
+	// tenant-api has no API at all.
+	udsListener, err := listenUnix(*humanSocket)
+	if err != nil {
+		log.Fatalf("FATAL: human socket: %v", err)
 	}
+	// Emit the tenant_api_human_socket_up gauge (the Ready self-dial drives
+	// its value).
+	handler.SetHumanSocketConfigured(true)
+	srvUDS := &http.Server{
+		Handler:      r,
+		ReadTimeout:  *readTimeout,
+		WriteTimeout: *writeTimeout,
+		IdleTimeout:  *idleTimeout,
+		ConnContext: func(ctx context.Context, _ net.Conn) context.Context {
+			return rbac.WithListener(ctx, rbac.ListenerUDS)
+		},
+	}
+	slog.Info("API served on the Unix socket (ADR-027 §2)", "path", *humanSocket)
 
 	// Graceful shutdown on SIGTERM / SIGINT
 	quit := make(chan os.Signal, 1)
@@ -788,18 +780,15 @@ func main() {
 		}
 	}()
 
-	if srvUDS != nil {
-		go func() {
-			slog.Info("tenant-api listening (human plane)", "socket", *humanSocket)
-			// Serve on the already-bound UDS listener. A non-ErrServerClosed
-			// error means the human plane died — fatal, so the kubelet restarts
-			// the pod rather than the process limping along serving only TCP
-			// (which would silently push humans back onto the 8080 plane).
-			if err := srvUDS.Serve(udsListener); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("FATAL: human socket serve: %v", err)
-			}
-		}()
-	}
+	go func() {
+		slog.Info("tenant-api listening (API)", "socket", *humanSocket)
+		// A non-ErrServerClosed error means the API plane died — fatal, so
+		// the kubelet restarts the pod rather than the process serving only
+		// probes.
+		if err := srvUDS.Serve(udsListener); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("FATAL: human socket serve: %v", err)
+		}
+	}()
 
 	<-quit
 	slog.Info("tenant-api shutting down")
@@ -825,10 +814,8 @@ func main() {
 	// logged but non-fatal (we're already exiting). srvUDS.Shutdown also closes
 	// the underlying listener, which unlinks the socket file (Go UnixListener
 	// semantics) — the successor pod's unlink-before-bind covers an unclean exit.
-	if srvUDS != nil {
-		if err := srvUDS.Shutdown(ctx); err != nil {
-			slog.Warn("human socket shutdown error", "error", err)
-		}
+	if err := srvUDS.Shutdown(ctx); err != nil {
+		slog.Warn("human socket shutdown error", "error", err)
 	}
 	if err := srvTCP.Shutdown(ctx); err != nil {
 		slog.Warn("shutdown error", "error", err)
@@ -922,6 +909,19 @@ var errGeneratorSocketMissing = errors.New("--generator-socket (TA_GENERATOR_SOC
 // checkGeneratorSocketFlag refuses to start without a generator socket
 // (#2903): writes are never committed unjudged, so there is no mode without
 // the generator container.
+// checkIdentityPlaneFlags refuses a start without the API's Unix socket or
+// without the oauth2-proxy config file that says which headers carry
+// identity (ADR-027 §2: neither is optional).
+func checkIdentityPlaneFlags(humanSocket, oauth2ProxyConfig string) error {
+	if strings.TrimSpace(humanSocket) == "" {
+		return errors.New("--human-socket (TA_HUMAN_SOCKET) is required: the API is served only on this Unix socket, behind the same pod's oauth2-proxy (ADR-027 §2)")
+	}
+	if strings.TrimSpace(oauth2ProxyConfig) == "" {
+		return errors.New("--oauth2-proxy-config (TA_OAUTH2_PROXY_CONFIG) is required: the oauth2-proxy config file decides which headers carry the caller's identity (ADR-027 §2)")
+	}
+	return nil
+}
+
 func checkGeneratorSocketFlag(v string) error {
 	if strings.TrimSpace(v) == "" {
 		return errGeneratorSocketMissing

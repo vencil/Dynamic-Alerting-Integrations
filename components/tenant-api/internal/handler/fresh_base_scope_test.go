@@ -357,7 +357,7 @@ func TestPRModeOrgScopeJudgedOnFreshBase(t *testing.T) {
 		if kind == "PUT" {
 			wrapWithRBACMiddleware(PutTenant(f.deps), mgr, rbac.PermWrite, TenantIDFromPath).ServeHTTP(w, req)
 		} else {
-			mgr.Middleware(rbac.PermRead, nil)(BatchTenants(f.deps)).ServeHTTP(w, req)
+			rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.Middleware(rbac.PermRead, nil)(BatchTenants(f.deps))).ServeHTTP(w, req)
 		}
 		return f, w, audit.n
 	}

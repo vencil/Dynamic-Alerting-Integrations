@@ -14,9 +14,9 @@ const (
 	keyPrincipal contextKey = iota
 )
 
-// errMissingIdentity is returned by HeaderResolver.Resolve when the
-// X-Forwarded-Email header is absent. The middleware maps it to 401,
-// preserving the pre-seam behavior.
+// errMissingIdentity is returned by HeaderResolver.Resolve when the email
+// header is absent; the RBAC gate answers a request with no principal 401
+// with its message.
 var errMissingIdentity = errors.New("missing identity: X-Forwarded-Email header required")
 
 // parseForwardedGroups splits an X-Forwarded-Groups header value into a slice
@@ -41,11 +41,8 @@ func withIdentity(ctx context.Context, email string, groups []string) context.Co
 	return ctx
 }
 
-// withPrincipal stores the resolved VerifiedPrincipal in ctx (ADR-027 identity
-// seam). This is additive: withIdentity is still called for the ~30 existing
-// RequestEmail/RequestGroups consumers, so nothing that reads email/groups
-// changes. Downstream code that wants provenance (Source/Assurance) reads
-// RequestPrincipal instead.
+// withPrincipal stores the caller in ctx. Only ResolveIdentity and the dev
+// bypass call it (ADR-027 §2).
 func withPrincipal(ctx context.Context, p *VerifiedPrincipal) context.Context {
 	return context.WithValue(ctx, keyPrincipal, p)
 }
@@ -62,11 +59,10 @@ func RequestGroups(r interface{ Context() context.Context }) []string {
 	return v
 }
 
-// RequestPrincipal returns the VerifiedPrincipal stored by the RBAC
-// middleware, or nil if none was attached (e.g. a request that never passed
-// through Middleware). Added by ADR-027 alongside RequestEmail/RequestGroups,
-// which remain the canonical accessors for the email/groups the middleware
-// trusted.
+// RequestPrincipal returns the caller ResolveIdentity (or the dev bypass)
+// attached, or nil when there is none — on the TCP listener there never is.
+// Unlike RequestEmail/RequestGroups it is set before the RBAC gate runs, so
+// the rate limiter and the request log read it too (ADR-027 §2).
 func RequestPrincipal(r interface{ Context() context.Context }) *VerifiedPrincipal {
 	v, _ := r.Context().Value(keyPrincipal).(*VerifiedPrincipal)
 	return v

@@ -301,6 +301,20 @@ Generator guard (#2902). Renders nothing; fails the render on a
 configuration the generator container cannot run in. The container is
 required since #2903, so this always applies.
 */}}
+{{- /*
+ADR-027 §2: tenant-api refuses to start without the API's Unix socket
+(TA_HUMAN_SOCKET) or the oauth2-proxy config file (TA_OAUTH2_PROXY_CONFIG),
+so a render without either would be a pod that never starts. Fail here.
+*/ -}}
+{{- define "tenant-api.identityPlaneGuard" -}}
+{{- if not .Values.humanSocket.enabled -}}
+{{- fail "humanSocket.enabled=false is no longer supported: tenant-api serves its API only on the pod-internal Unix socket and refuses to start without it; port 8080 serves only /health, /ready and /metrics (ADR-027 §2, §3). Remove the override." -}}
+{{- end -}}
+{{- if not .Values.oauth2Proxy.enabled -}}
+{{- fail "oauth2Proxy.enabled=false is no longer supported: the API is reachable only through the oauth2-proxy sidecar, and tenant-api refuses to start without its config file (ADR-027 §2). Remove the override." -}}
+{{- end -}}
+{{- end -}}
+
 {{- define "tenant-api.generatorGuard" -}}
 {{- $g := .Values.generator -}}
 {{- /* ADR-036 §3: git refuses a repository another uid owns ("dubious
@@ -402,8 +416,9 @@ oauth2-proxy.yaml
 The oauth2-proxy structured config (--alpha-config). Built as a dict and
 rendered with toYaml, so every value is quoted as YAML needs.
 
-  upstreamConfig        one upstream: tenant-api's human Unix socket when
-                        humanSocket.enabled, else its TCP port
+  upstreamConfig        one upstream: tenant-api's Unix socket, the only
+                        place it serves its API (ADR-027 §2; port 8080 has
+                        only /health, /ready and /metrics)
   injectRequestHeaders  X-Forwarded-Email ← email, X-Forwarded-Groups ←
                         groups, plus one header per oauth2Proxy.claimHeaders
                         entry (claim name → header name); the client's copy
@@ -415,10 +430,7 @@ rendered with toYaml, so every value is quoted as YAML needs.
 */}}
 {{- define "tenant-api.oauth2ProxyConfig" -}}
 {{- $o := .Values.oauth2Proxy -}}
-{{- $upstream := printf "http://localhost:%s" (include "tenant-api.apiPort" .) -}}
-{{- if .Values.humanSocket.enabled -}}
-{{- $upstream = printf "unix://%s" .Values.humanSocket.path -}}
-{{- end -}}
+{{- $upstream := printf "unix://%s" .Values.humanSocket.path -}}
 {{- $headers := list
       (dict "name" "X-Forwarded-Email" "values" (list (dict "claimSource" (dict "claim" "email"))))
       (dict "name" "X-Forwarded-Groups" "values" (list (dict "claimSource" (dict "claim" "groups")))) -}}

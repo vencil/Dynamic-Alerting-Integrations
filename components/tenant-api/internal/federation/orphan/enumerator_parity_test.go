@@ -64,7 +64,7 @@ func listViaHTTP(t *testing.T, configDir string) []string {
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
 	req.Header.Set("X-Forwarded-Email", "reader@example.com")
 	req.Header.Set("X-Forwarded-Groups", "readers")
-	mgr.Middleware(rbac.PermRead, nil)(handler.ListTenants(&handler.Deps{ConfigDir: configDir, RBAC: mgr})).ServeHTTP(w, req)
+	rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.Middleware(rbac.PermRead, nil)(handler.ListTenants(&handler.Deps{ConfigDir: configDir, RBAC: mgr}))).ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("GET /api/v1/tenants status = %d, body=%s", w.Code, w.Body.String())
 	}

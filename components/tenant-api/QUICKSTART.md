@@ -58,19 +58,36 @@ python3 "$REPO/scripts/tools/ops/generator_service.py" --socket "$(pwd)/gen/gene
 # 從 repo root build 一個本機 image（go.mod 需 threshold-exporter 模組）
 docker build -t tenant-api -f "$REPO/components/tenant-api/Dockerfile" "$REPO"
 
+# API 只在 Unix socket 上、經同一個 oauth2-proxy(ADR-027 §2);兩者讀同一份結構化設定檔。
+# 這裡沿用 try-local 的檔:oauth2-proxy 對所有請求免登入,由 tenant-api 的開發旁路注入身分。
+mkdir -p sock oauth2-proxy
+cp "$REPO/try-local/oauth2-proxy/oauth2-proxy.yaml" oauth2-proxy/
+
 # 以你的 uid 跑(與產生器同 uid);TA_STATE_*：tenant-api 自己的紀錄（群組、views…）存在 conf.d 之外，必填
-docker run --rm -d --name tenant-api -p 8080:8080 --user "$(id -u):$(id -g)" \
+# 8083 只有 /health、/ready、/metrics
+docker run --rm -d --name tenant-api -p 127.0.0.1:8083:8080 --user "$(id -u):$(id -g)" \
   -e TA_RBAC_PATH=/conf.d/_rbac.yaml \
   -e TA_STATE_STORE=dir -e TA_STATE_DIR=/state \
   -e TA_GENERATOR_SOCKET=/run/da-generator/generator.sock \
-  -v "$(pwd)/conf.d:/conf.d" -v "$(pwd)/gen:/run/da-generator" -v "$(pwd)/state:/state" tenant-api
+  -e TA_HUMAN_SOCKET=/run/ta-human/human.sock \
+  -e TA_OAUTH2_PROXY_CONFIG=/etc/oauth2-proxy/oauth2-proxy.yaml \
+  -e TA_DEV_BYPASS_AUTH=true \
+  -v "$(pwd)/conf.d:/conf.d" -v "$(pwd)/gen:/run/da-generator" -v "$(pwd)/state:/state" \
+  -v "$(pwd)/sock:/run/ta-human" -v "$(pwd)/oauth2-proxy:/etc/oauth2-proxy:ro" tenant-api
+
+# API 入口:oauth2-proxy(同 uid 才連得上 0660 的 socket)
+docker run --rm -d --name tenant-api-proxy -p 127.0.0.1:8080:8080 --user "$(id -u):$(id -g)" \
+  -v "$(pwd)/sock:/run/ta-human" -v "$(pwd)/oauth2-proxy:/etc/oauth2-proxy:ro" \
+  quay.io/oauth2-proxy/oauth2-proxy:v7.15.5 \
+  --alpha-config=/etc/oauth2-proxy/oauth2-proxy.yaml \
+  --trusted-ip=0.0.0.0/0 --trusted-ip=::/0 --email-domain='*' \
+  --cookie-secret=local-dev-not-a-secret-32-bytes! --cookie-secure=false
 ```
 
 ### 3) 我是誰、能管哪些租戶(零 DB 直接回)
 
 ```sh
-curl -s -H 'X-Forwarded-Email: dev@local' -H 'X-Forwarded-Groups: demo-admins' \
-  localhost:8080/api/v1/me
+curl -s localhost:8080/api/v1/me
 ```
 
 你會看到(HTTP 200):
@@ -80,9 +97,9 @@ curl -s -H 'X-Forwarded-Email: dev@local' -H 'X-Forwarded-Groups: demo-admins' \
  "accessible_tenants":["*"],"permissions":{"demo-admins":["admin","read","write"]}}
 ```
 
-全程**沒有任何資料庫**——身分來自 RBAC 規則、租戶 config 是檔案。清理:`docker rm -f tenant-api`,再停掉背景的產生器服務(`kill %1`)。
+全程**沒有任何資料庫**——身分來自 RBAC 規則、租戶 config 是檔案。清理:`docker rm -f tenant-api tenant-api-proxy`,再停掉背景的產生器服務(`kill %1`)。
 
-> ⚠️ **僅限 localhost dev**:production 由 oauth2-proxy 在前面注入 `X-Forwarded-*` 身分 header,本服務**信任**它們。手動帶 header 只適用本機;切勿把這個無 proxy 的接法搬上 production。
+> ⚠️ **僅限 localhost dev**:這裡的 oauth2-proxy 對所有請求免登入、身分由開發旁路注入([ADR-022](../../docs/adr/022-dev-auth-bypass-four-layer-containment.md);在 Kubernetes 內啟動會 panic)。production 由 oauth2-proxy 登入後經 Unix socket 注入身分 header;tenant-api 的 TCP port 只有 `/health`、`/ready`、`/metrics`,帶身分 header 的請求回 400。
 
 ---
 
@@ -91,7 +108,7 @@ curl -s -H 'X-Forwarded-Email: dev@local' -H 'X-Forwarded-Groups: demo-admins' \
 接上面的服務。所有 write 端點走相同的 RBAC + 寫回流程,適合 CI / 腳本。
 
 ```sh
-H='-H X-Forwarded-Email:dev@local -H X-Forwarded-Groups:demo-admins'
+H=''   # 身分由開發旁路注入;production 經 oauth2-proxy 登入
 
 # 讀:列出可見租戶 / 取得單一租戶的 effective config
 curl -s $H localhost:8080/api/v1/tenants

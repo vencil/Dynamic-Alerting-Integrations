@@ -44,10 +44,10 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DefaultEmailHeader and DefaultGroupsHeader are the headers tenant-api reads
-// when no config file is given (the dev and test topologies that run without
-// oauth2-proxy). They are also, for now, the only names a config file may use
-// for email and groups — see requiredEmailHeader.
+// DefaultEmailHeader and DefaultGroupsHeader are oauth2-proxy's conventional
+// names for the email and groups headers. The server always reads the names
+// the config file uses; these serve the offline `config check` without a
+// file, and the TCP listener refuses them in addition to the file's names.
 const (
 	DefaultEmailHeader  = "X-Forwarded-Email"
 	DefaultGroupsHeader = "X-Forwarded-Groups"
@@ -196,24 +196,7 @@ func parseHeaders(seq *yaml.Node) (Identity, error) {
 	if id.GroupsHeader == "" {
 		return Identity{}, errors.New("no header injects the groups claim; tenant-api needs it to know the caller's roles")
 	}
-	if err := requiredNames(id); err != nil {
-		return Identity{}, err
-	}
 	return id, nil
-}
-
-// requiredNames keeps email and groups on their default header names. The
-// request log and the rate limiter still read X-Forwarded-Email directly;
-// until they read the resolved identity instead (ADR-027 §9 item 2), another
-// name would leave them keyed on a header nothing sets.
-func requiredNames(id Identity) error {
-	if id.EmailHeader != DefaultEmailHeader {
-		return fmt.Errorf("the email claim is injected as %q; this tenant-api reads email only from %q", id.EmailHeader, DefaultEmailHeader)
-	}
-	if id.GroupsHeader != DefaultGroupsHeader {
-		return fmt.Errorf("the groups claim is injected as %q; this tenant-api reads groups only from %q", id.GroupsHeader, DefaultGroupsHeader)
-	}
-	return nil
 }
 
 // parseHeader checks one injectRequestHeaders entry and returns its header

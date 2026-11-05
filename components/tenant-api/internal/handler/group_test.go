@@ -36,7 +36,7 @@ func setRequestIdentity(req *http.Request, email string) *http.Request {
 func executeWithRBAC(t *testing.T, handler http.HandlerFunc, req *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
 	mgr := newRBACManager(t, "")
-	wrapped := mgr.MiddlewareAuthenticated()(handler)
+	wrapped := rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.MiddlewareAuthenticated()(handler))
 	w := httptest.NewRecorder()
 	wrapped.ServeHTTP(w, req)
 	return w
@@ -519,7 +519,7 @@ func TestGroupBatch_Success(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	h := GroupBatch(&Deps{State: mustDirState(configDir), Groups: groupMgr, Writer: writer, ConfigDir: configDir, RBAC: rbacMgr})
-	rbacMgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
+	rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(h)).ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("GroupBatch() status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())

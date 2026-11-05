@@ -223,7 +223,7 @@ func TestGroupBatch_RefusesFileExporterRejects(t *testing.T) {
 				bytes.NewBufferString(`{"patch":{"_silent_mode":"warning"}}`))
 			req = setRequestIdentity(req, "a@a.com")
 			w := httptest.NewRecorder()
-			rbacMgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
+			rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(h)).ServeHTTP(w, req)
 			// #2900: a refused member rejects the batch (422).
 			if want := http.StatusOK; c.reason != "" && w.Code != http.StatusUnprocessableEntity || c.reason == "" && w.Code != want {
 				t.Fatalf("status = %d; body: %s", w.Code, w.Body.String())
@@ -274,7 +274,7 @@ func prBatchRun(t *testing.T, dir, body string) (*httptest.ResponseRecorder, boo
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	req.Header.Set("X-Forwarded-Groups", "admins")
 	w := httptest.NewRecorder()
-	rbacMgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, req)
+	rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(h)).ServeHTTP(w, req)
 	return w, created
 }
 

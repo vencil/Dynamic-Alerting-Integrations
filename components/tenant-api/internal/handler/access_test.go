@@ -23,7 +23,7 @@ import (
 func accessRouter(rbacMgr *rbac.Manager) chi.Router {
 	r := chi.NewRouter()
 	r.Use(chimw.RequestID)
-	r.With(rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
+	r.With(rbac.ResolveIdentity(rbacMgr.HeaderResolver()), rbacMgr.Middleware(rbac.PermRead, TenantIDFromPath)).
 		Get("/api/v1/tenants/{id}/access", CheckTenantAccess())
 	return r
 }

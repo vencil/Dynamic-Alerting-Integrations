@@ -7,6 +7,7 @@
   replicaCount MUST stay 1. Horizontal write scaling needs a K8s Lease
   (leader-election) — ADR-023 Deferred option A3, not a replicaCount bump.
 */ -}}
+{{- include "tenant-api.identityPlaneGuard" . }}
 {{- include "tenant-api.writeBackGuard" . }}
 {{- include "tenant-api.generatorGuard" . }}
 {{- if gt (int .Values.replicaCount) 1 }}
@@ -231,12 +232,10 @@ spec:
             {{- include "tenant-api.taEnv" (list "TA_MACHINE_IDENTITY_AUDIENCE" (required "machineIdentity.audience MUST be set (ADR-027 G4: empty audience = TokenReview accepts ANY SA token incl default-audience)" .Values.machineIdentity.audience) "machineIdentity.audience") | nindent 12 }}
             {{- end }}
             {{- if .Values.humanSocket.enabled }}
-            # ADR-027 D2-B (GHSA-3g2h-rf85-5rrv L7 root-cause series): serve the
-            # human plane on a pod-internal Unix socket that the oauth2-proxy
-            # sidecar (below) targets as its upstream, so browser traffic never
-            # touches the network 8080 plane. The socket lives on the human-sock
-            # emptyDir mounted into both containers. audit-only impact: requests
-            # over this listener are excluded from the machine-identity audit.
+            # ADR-027 §2: the API is served only on this pod-internal Unix
+            # socket, the oauth2-proxy sidecar's upstream (below); port 8080
+            # serves only /health, /ready and /metrics. The socket lives on the
+            # human-sock emptyDir mounted into both containers.
             {{- include "tenant-api.taEnv" (list "TA_HUMAN_SOCKET" .Values.humanSocket.path "humanSocket.path") | nindent 12 }}
             {{- end }}
             - name: TA_STATE_STORE

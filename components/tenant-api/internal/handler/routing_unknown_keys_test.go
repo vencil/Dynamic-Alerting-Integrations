@@ -31,7 +31,7 @@ func TestBatchTenants_UnknownRoutingKeyIsTheKeyVerdicts(t *testing.T) {
 			req.Header.Set("X-Forwarded-Email", "alice@example.com")
 			req.Header.Set("X-Forwarded-Groups", "admins")
 			w := httptest.NewRecorder()
-			d.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(d)).ServeHTTP(w, req)
+			rbac.ResolveIdentity(d.RBAC.HeaderResolver())(d.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(d))).ServeHTTP(w, req)
 			if w.Code != http.StatusOK {
 				t.Fatalf("status %d body %s: want the write to land — the key verdict, not this check, refuses it", w.Code, w.Body.String())
 			}

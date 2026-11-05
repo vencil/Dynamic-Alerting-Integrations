@@ -14,14 +14,11 @@ import (
 // hostPath can't widen reachability.
 const humanSocketPerm = 0o660
 
-// listenUnix creates the human-plane Unix domain socket listener.
+// listenUnix creates the Unix domain socket the API is served on (ADR-027 §2).
 //
-// It deliberately does NOT degrade to "skip the socket" on any failure: a caller
-// that asked for --human-socket and cannot get one is a human-plane outage, and
-// the whole point of ADR-027 D2-B is that human traffic MUST leave the network
-// 8080 plane. Returning an error here is turned into log.Fatalf by the caller
-// (MED-7 fail-loud), matching the TCP listener's own fail-loud contract — never
-// a silent single-listener fallback that would route humans back over 8080.
+// Any failure is returned, and the caller turns it into log.Fatalf: without
+// the socket tenant-api has no API at all (the TCP listener serves only
+// /health, /ready and /metrics), so there is nothing to degrade to.
 //
 // unlink-before-bind: a Go UnixListener unlinks its socket file on a clean
 // Close, but a SIGKILL / OOM-kill leaves a stale socket file behind that would
