@@ -746,3 +746,38 @@ def test_control_findings_json_elsewhere_is_written(tmp_path):
                 "--findings-json", str(fj))
     assert proc.returncode == 0, proc.stderr[-3000:]
     assert json.loads(fj.read_text(encoding="utf-8"))["exit_code"] == 0
+
+
+# ── 第二輪盲審 ─────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("spelling", ["--base", "--base-con", "--base=", "--base-c="])
+def test_an_abbreviated_base_config_with_a_usage_error_keeps_the_source(tmp_path, spelling):
+    """argparse 接受縮寫；usage error 時只有早期掃描在看，它也得認得縮寫。"""
+    base = _base(tmp_path)
+    before = base.read_bytes()
+    pair = ([spelling + str(base)] if spelling.endswith("=") else [spelling, str(base)])
+    proc = _run("--config-dir", str(_tree(tmp_path)), "--output-alertmanager",
+                *pair, "--findings-json", str(base), "--no-such-flag")
+    assert proc.returncode == 2, proc.stderr[-3000:]
+    assert base.read_bytes() == before, "the source was overwritten"
+
+
+def test_a_bom_in_front_of_the_marker_is_still_an_output(tmp_path):
+    conf_d = _routeless_tree(tmp_path)
+    first = _emit_am(tmp_path, conf_d, _base(tmp_path), "first.yml")
+    bom = tmp_path / "bom.yml"
+    bom.write_bytes(b"\xef\xbb\xbf" + first.encode("utf-8"))
+    out = tmp_path / "second.yml"
+    proc = _run("--config-dir", str(conf_d), "--output-alertmanager",
+                "--base-config", str(bom), "-o", str(out))
+    assert proc.returncode == 1, proc.stderr[-3000:]
+    assert "is an output of da-tools generate-routes" in proc.stderr
+    assert not out.exists()
+
+
+def test_apply_refusal_names_the_remedy_apply_can_take(tmp_path, monkeypatch, capsys):
+    """--apply 不收 --base-config：補救是把來源放進 alertmanager.base.yml。"""
+    conf_d = _routeless_tree(tmp_path)
+    _fake_cluster(monkeypatch, _emit_am(tmp_path, conf_d, _base(tmp_path)))
+    assert _apply(tmp_path) == 1
+    assert "alertmanager.base.yml" in capsys.readouterr().err

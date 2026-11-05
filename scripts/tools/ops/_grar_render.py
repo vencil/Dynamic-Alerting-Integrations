@@ -697,16 +697,22 @@ class BaseIsAnOutputError(ValueError):
     ``assert_base_is_a_source``, not an invocation error."""
 
 
-def assert_text_is_not_an_output(text: str, where: str) -> None:
+_PASS_THE_SOURCE = ("Pass the source the output was rendered from (keep it next "
+                    "to the output, never overwrite it with it).")
+
+
+def assert_text_is_not_an_output(text: str, where: str,
+                                 remedy: str = _PASS_THE_SOURCE) -> None:
     """Raise ``BaseIsAnOutputError`` when *text* (the source, as read) has a
-    line starting with ``GENERATED_OUTPUT_MARKER``."""
-    if any(ln.strip().startswith(GENERATED_OUTPUT_MARKER) for ln in text.splitlines()):
+    line starting with ``GENERATED_OUTPUT_MARKER`` — a UTF-8 BOM in front of
+    it included (``str.strip`` keeps U+FEFF)."""
+    if any(ln.strip().lstrip("\ufeff").strip().startswith(GENERATED_OUTPUT_MARKER)
+           for ln in text.splitlines()):
         raise BaseIsAnOutputError(
             f"ERROR: {where} is an output of da-tools generate-routes (its "
             f"'{GENERATED_OUTPUT_MARKER}' line), not a source: rendered from it, "
             "the generated routing and inhibit rules would be merged in a second "
-            "time. Pass the source the output was rendered from (keep it next to "
-            "the output, never overwrite it with it).")
+            f"time. {remedy}")
 
 
 def assert_base_is_a_source(base: object) -> None:
@@ -1370,7 +1376,10 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     # surfaces. Only this step is wrapped.
     try:
         assert_text_is_not_an_output(
-            source_yml, f"the source in ConfigMap {namespace}/{configmap_name}")
+            source_yml, f"the source in ConfigMap {namespace}/{configmap_name}",
+            remedy=("--apply takes no --base-config: put your own config (the "
+                    f"source) under the ConfigMap's '{AM_BASE_CONFIGMAP_KEY}' key, "
+                    "then run --apply again."))
         existing = merge_generated(existing, routes, receivers, inhibit_rules,
                                    strict=strict)
     except ValueError as exc:

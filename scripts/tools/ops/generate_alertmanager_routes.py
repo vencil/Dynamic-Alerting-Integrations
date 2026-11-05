@@ -1548,13 +1548,22 @@ def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
         if tok == "--":
             break
         for flag, dest in (("--findings-json", "findings_json"),
-                           ("--config-dir", "config_dir"),
-                           ("--base-config", "base_config")):
+                           ("--config-dir", "config_dir")):
             if (tok == flag and i + 1 < len(argv)
                     and not argv[i + 1].startswith("-")):
                 setattr(early, dest, argv[i + 1])
             elif tok.startswith(flag + "="):
                 setattr(early, dest, tok[len(flag) + 1:])
+        # ⛔ --base-config is read in every spelling argparse accepts — an
+        # abbreviation too (`--base`; no other flag starts with `--b`): it
+        # only ever STOPS a write (`_names_the_source`), so reading too much
+        # is safe and reading too little overwrote the source (review F4').
+        name, eq, value = tok.partition("=")
+        if len(name) >= 3 and "--base-config".startswith(name):
+            if eq:
+                early.base_config = value
+            elif i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                early.base_config = argv[i + 1]
     return early
 
 
