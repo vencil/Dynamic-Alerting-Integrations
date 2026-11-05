@@ -260,11 +260,16 @@ def receiver_field_state(receiver: dict[str, Any], field: str) -> str:
     stricter than Alertmanager on purpose: it renders ``0`` as ``"0"`` but
     fails to load ``[]`` (``cannot unmarshal !!seq``), so no "counts as given"
     rule for non-strings is right for all of them.
+
+    #1560: a Secret reference (``is_secret_ref``) is ``FIELD_SET`` — it gives
+    the value, through a file. Whether its shape is right, and whether this
+    field may take one at all, is ``receiver_required_problem`` /
+    ``receiver_optional_problem``'s to judge.
     """
     value = receiver.get(field)
     if value is None or value == "":
         return FIELD_UNSET
-    if isinstance(value, str):
+    if isinstance(value, str) or is_secret_ref(value):
         return FIELD_SET
     return FIELD_NOT_STRING
 
@@ -346,8 +351,25 @@ def _receiver_field_schemas() -> dict[str, dict[str, dict[str, Any]]]:
 
     def resolve(prop: dict[str, Any]) -> dict[str, Any]:
         out = {"type": prop.get("type"), "pattern": prop.get("pattern"),
-               "ref": prop.get("$ref")}
-        for sub in prop.get("allOf", []):
+               "ref": prop.get("$ref"), "secret_ref": False}
+        subs = list(prop.get("allOf", []))
+        # #1560: a credential field is "a value, or a Secret reference" —
+        # exactly `anyOf: [<value schema>, {$ref: secretRef}]`. Its type and
+        # pattern are the value branch's. Any other anyOf on a receiver field
+        # is a shape this reader does not model: fail closed.
+        alts = prop.get("anyOf")
+        if alts is not None:
+            refs = [a for a in alts if a == {"$ref": _SECRET_REF_REF}]
+            values = [a for a in alts if "$ref" not in a]
+            if len(refs) != 1 or len(values) != 1 or len(alts) != 2:
+                raise RuntimeError(
+                    f"unsupported anyOf on a receiver field in {path}: {alts!r} "
+                    "(only [<value>, {$ref: #/definitions/secretRef}] is read)")
+            out["secret_ref"] = True
+            out["type"] = values[0].get("type")
+            out["pattern"] = values[0].get("pattern")
+            subs.extend(values[0].get("allOf", []))
+        for sub in subs:
             ref = sub["$ref"]
             if not ref.startswith("#/definitions/"):
                 raise RuntimeError(f"unsupported $ref {ref!r} in {path}")
@@ -363,6 +385,137 @@ def _receiver_field_schemas() -> dict[str, dict[str, dict[str, Any]]]:
             f: resolve(p) for f, p in d["properties"].items() if f != "type"}
     _RECEIVER_FIELD_SCHEMAS = table
     return table
+
+
+# ── #1560: Secret references on receiver credential fields ───────────────
+# A credential field may hold `{secret: {key: <k>}}` (the tenant's own Secret,
+# named `da-<tenant>`) or `{secret: {shared: <alias>, key: <k>}}` (a Secret
+# the deployment policy's `shared_secrets` lists) instead of the value. The
+# shape is tenant-config.schema.json `definitions.secretRef`; which fields
+# take it is the schema too (`_receiver_field_schemas`' `secret_ref`). Which
+# Secret a reference may name — the binding — is the route generator's
+# (`_grar_merge.secret_binding_findings`), and so is the rendering.
+_SECRET_REF_REF = "#/definitions/secretRef"
+_SECRET_REF_RULE: Optional[dict[str, tuple[re.Pattern[str], int]]] = None
+SECRET_REF_SHAPES = ("{secret: {key: <key>}} (the tenant's own Secret) or "
+                     "{secret: {shared: <alias>, key: <key>}}")
+
+
+def is_secret_ref(value: Any) -> bool:
+    """Whether *value* is written as a Secret reference: a mapping whose
+    ``secret`` key holds a mapping. Its shape is ``secret_ref_problem``'s to
+    judge — a malformed reference (``{secret: {name: …, key: …}}``, the shape
+    before the owner decision of 2026-11-04) is still a reference, refused
+    for its shape, never taken for a value. A ``secret`` key holding a
+    scalar is not one: an HTTP header, an oauth2 endpoint parameter or a
+    claim may be named ``secret`` (#1560 review)."""
+    return isinstance(value, dict) and isinstance(value.get("secret"), dict)
+
+
+def secret_ref_rule() -> dict[str, tuple[re.Pattern[str], int]]:
+    """``{"key" | "shared": (pattern, maxLength)}`` read from the schema's
+    ``definitions.secretRef`` (fails closed like ``tenant_id_rule``)."""
+    global _SECRET_REF_RULE
+    if _SECRET_REF_RULE is not None:
+        return _SECRET_REF_RULE
+    path = _find_tenant_schema()
+    if path is None:
+        raise RuntimeError(
+            f"{_TENANT_SCHEMA_BASENAME} not found beside {__file__} or under "
+            "docs/schemas/ of the project root; Secret references cannot be checked")
+    with open(path, encoding="utf-8") as f:
+        definition = json.load(f).get("definitions", {}).get("secretRef")
+    try:
+        props = definition["properties"]["secret"]["properties"]
+        rule = {name: (re.compile(props[name]["pattern"]), int(props[name]["maxLength"]))
+                for name in ("key", "shared")}
+    except (KeyError, TypeError, ValueError, re.error) as exc:
+        raise RuntimeError(
+            f"{path}: definitions.secretRef with key / shared patterns and "
+            f"maxLength is missing or malformed ({exc!r}); Secret references "
+            "cannot be checked") from exc
+    _SECRET_REF_RULE = rule
+    return rule
+
+
+def secret_ref_problem(value: Any) -> Optional[str]:
+    """What is wrong with the shape of Secret reference *value*, or None.
+
+    The schema's ``definitions.secretRef``: ``secret`` and nothing else;
+    under it ``key`` (required) and ``shared`` (optional) and nothing else;
+    each a string of at most maxLength that ``fullmatch``es its pattern (so a
+    trailing newline is refused, as the schema's ``not`` does), and ``key``
+    neither ``.`` nor starting with ``..`` (the schema's ``not`` on key,
+    Kubernetes IsConfigMapKey). tests/shared/test_secret_ref_schema.py gives
+    this and jsonschema the same cases.
+    """
+    if not isinstance(value, dict) or set(value) != {"secret"}:
+        keys = sorted(str(k) for k in value) if isinstance(value, dict) else []
+        has = f": it has {keys}" if keys else ""
+        return f"is not a Secret reference ({SECRET_REF_SHAPES}){has}"
+    inner = value["secret"]
+    if not isinstance(inner, dict):
+        return (f"is not a Secret reference ({SECRET_REF_SHAPES}): 'secret' is "
+                f"{_type_name(inner)}")
+    unknown = sorted(str(k) for k in inner if k not in ("key", "shared"))
+    if unknown:
+        hint = (" — a reference never names its Secret: the tenant's own is "
+                "da-<tenant>, a shared one is an alias the deployment policy's "
+                "shared_secrets lists" if "name" in unknown else "")
+        return (f"is not a Secret reference ({SECRET_REF_SHAPES}): "
+                f"'secret' has {unknown}{hint}")
+    if "key" not in inner:
+        return f"is not a Secret reference ({SECRET_REF_SHAPES}): 'secret.key' is missing"
+    rule = secret_ref_rule()
+    for name in ("key", "shared"):
+        if name not in inner:
+            continue
+        item = inner[name]
+        pattern, max_len = rule[name]
+        if (not isinstance(item, str) or len(item) > max_len
+                or pattern.fullmatch(item) is None
+                or (name == "key" and (item == "." or item.startswith("..")))):
+            what = ("a Secret data key (letters, digits, '-', '_', '.'; at most "
+                    f"{max_len}; not '.' and not starting with '..')"
+                    if name == "key" else
+                    f"a shared Secret alias (a DNS-1123 label, at most {max_len})")
+            return f"has 'secret.{name}' {_type_name(item)}, which is not {what}"
+    return None
+
+
+def receiver_secret_ref_fields(rtype: str) -> list[str]:
+    """The fields of *rtype* the schema lets hold a Secret reference."""
+    return [f for f, prop in _receiver_field_schemas().get(rtype, {}).items()
+            if prop.get("secret_ref")]
+
+
+def _receiver_secret_ref_problem(rtype: str, receiver: dict[str, Any]) -> Optional[str]:
+    """#1560: the first problem with a Secret reference in *receiver*:
+
+    - a credential field that takes one holds a malformed one
+      (``secret_ref_problem``), or a mapping / list that is no reference
+      (Alertmanager cannot load it as the string it reads there);
+    - a string field that does not take one holds one (``channel:
+      {secret: …}`` would be copied to Alertmanager as written).
+    """
+    fields = _receiver_field_schemas().get(rtype, {})
+    for field, prop in fields.items():
+        if field not in receiver:
+            continue
+        value = receiver[field]
+        if prop.get("secret_ref"):
+            if is_secret_ref(value):
+                problem = secret_ref_problem(value)
+                if problem:
+                    return f"field '{field}' {problem}"
+            elif isinstance(value, (dict, list)):
+                return (f"field '{field}' must be a string or a Secret reference "
+                        f"({SECRET_REF_SHAPES}), got {_type_name(value)}")
+        elif is_secret_ref(value) and prop.get("type") == "string":
+            takes = ", ".join(receiver_secret_ref_fields(rtype)) or "none"
+            return (f"field '{field}' does not take a Secret reference (the "
+                    f"fields of a {rtype} receiver that do: {takes})")
+    return None
 
 
 _TENANT_ID_RULE: Optional[tuple[re.Pattern[str], str]] = None
@@ -759,6 +912,11 @@ def receiver_optional_problem(rtype: str, receiver: dict[str, Any]) -> Optional[
     problem = receiver_file_reference_problem(receiver)
     if problem:
         return problem
+    # #1560: a Secret reference of the wrong shape, or on a field that does
+    # not take one. Which Secret it may name is the generator's binding check.
+    problem = _receiver_secret_ref_problem(rtype, receiver)
+    if problem:
+        return problem
     fields = _receiver_field_schemas().get(rtype, {})
     for field in receiver_bool_fields(rtype):
         if field in receiver and not is_bool_or_unset(receiver[field]):
@@ -796,6 +954,14 @@ def receiver_required_problem(rtype: str, receiver: dict[str, Any], field: str) 
         return f"requires '{field}'"
     value = receiver[field]
     prop = _receiver_field_schemas().get(rtype, {}).get(field, {})
+    if is_secret_ref(value):
+        # #1560: the value is in a Secret; its shape is all that is judged
+        # here (the URL format applies to the value, which is not visible).
+        if not prop.get("secret_ref"):
+            return (f"field '{field}' must be a string; it does not take a "
+                    "Secret reference")
+        problem = secret_ref_problem(value)
+        return f"field '{field}' {problem}" if problem else None
     if state == FIELD_NOT_STRING:
         if not (prop.get("type") == "array" and isinstance(value, list)):
             return f"field '{field}' must be a string, got {type(value).__name__}"

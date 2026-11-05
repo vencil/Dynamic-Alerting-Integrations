@@ -902,11 +902,16 @@ def check_routes(
     # since this row is the only one that reads `--policy`, an unusable path
     # must not hide behind a config finding — it is exit 2 either way.
     allowed_domains = None
+    secrets = None  # #1560: no policy, no shared Secret
     if policy_file is not None:   # ⛔ not truthiness: "" is supplied (#1616)
         # #3142: the generator's own resolver — the min_generator_version
         # gate (ADR-036 §6) included, as generate-routes applies it.
         try:
-            allowed_domains = gen.resolve_policy(policy_file).allowed_domains
+            policy = gen.resolve_policy(policy_file)
+            allowed_domains = policy.allowed_domains
+            # #1560: the mount root only shapes the rendered path, not the
+            # verdict, so this row renders with the default.
+            secrets = policy.secret_binding()
         except gen.PolicyInputError as exc:
             # ⛔ hint= is not decoration here. Without it this row inherits the
             # generic routes advice ("check _routing for invalid receiver
@@ -937,7 +942,7 @@ def check_routes(
     try:
         routes, receivers, route_warnings = gen.generate_routes(
             routing, allowed_domains=allowed_domains,
-            enforced_routing=enforced_routing, tenants=dedup)
+            enforced_routing=enforced_routing, tenants=dedup, secrets=secrets)
         inhibit_rules, dedup_warnings = gen.generate_inhibit_rules(dedup)
     finally:
         sys.stderr = old_stderr

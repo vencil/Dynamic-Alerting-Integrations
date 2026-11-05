@@ -112,14 +112,15 @@ data:
         # dead-man's-switch. The DMS webhook URL embeds a token/UUID → it is a
         # SECRET and MUST NOT be inlined here (would trip secret-scan L1/L2 and
         # leak). url_file points at a mounted Secret (secret-watchdog-heartbeat.yaml
-        # → /etc/alertmanager/secrets), read lazily at send time so rotation needs
+        # → /etc/alertmanager/secrets/watchdog-heartbeat/, #1560's
+        # <root>/<secret-name>/<key> layout), read lazily at send time so rotation needs
         # no config reload. Capability: webhook url_file has shipped since
         # Alertmanager v0.26.0 (PR prometheus/alertmanager#3223); the deployed
         # image (deployment-alertmanager.yaml) is well past that.
         # ⚠️ Until the operator populates the Secret, sends fail and
         # AlertmanagerWebhookNotificationsFailing fires as a "configure me" signal.
         webhook_configs:
-          - url_file: /etc/alertmanager/secrets/watchdog-heartbeat-url
+          - url_file: /etc/alertmanager/secrets/watchdog-heartbeat/watchdog-heartbeat-url
             send_resolved: false
       - name: "custom-alerts-firehose"
         # #741 S7/S8 + #1092 0-pre: FALLBACK receiver of the custom isolation

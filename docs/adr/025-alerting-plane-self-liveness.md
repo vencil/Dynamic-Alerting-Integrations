@@ -70,7 +70,7 @@ receivers:
     webhook_configs:
       # 心跳 URL 嵌 token/UUID＝機密，禁明文寫進 ConfigMap（會踩 secret-scan）。
       # 用 url_file 指向掛載的 Secret；Secret 未填＝停用、僅留盲點紀錄。
-      - url_file: /etc/alertmanager/secrets/watchdog-heartbeat-url
+      - url_file: /etc/alertmanager/secrets/watchdog-heartbeat/watchdog-heartbeat-url
       # ⚠️ 需要多通道冗餘（雙外部監測）時，在此處加多個 webhook_configs，
       #    絕不可在上方路由樹拆成多條 route——會被 continue: false 攔斷。
 ```

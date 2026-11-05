@@ -607,7 +607,8 @@ generator:
   workDir:
     sizeLimit: 1Gi
   # Deployment-side policy file (ADR-036 §5, #2826): `allowed_domains` (and
-  # optionally `min_generator_version`) kept OUTSIDE the tenant repository, so
+  # optionally `min_generator_version`, and `shared_secrets` — the shared
+  # Secrets a receiver's secretRef may name, #1560) kept OUTSIDE the tenant repository, so
   # a user who can write to the repository cannot loosen it. The chart ships
   # no policy content: name an existing ConfigMap you manage and its key. Set,
   # it is mounted read-only into the generator (passed as --policy) and into

@@ -88,14 +88,31 @@ _CASES = os.path.join(_REPO_ROOT, "components", "threshold-exporter", "app", "pk
 _UNMODELLED = ("anyOf", "allOf", "not", "if", "dependencies", "dependentRequired")
 
 
+_SECRET_REF = {"$ref": "#/definitions/secretRef"}
+
+
 def _rejects_empty(prop: dict | None) -> bool:
     """True when the property rejects "" and null, which Python reads as unset.
 
     The type must be pinned to one type: minLength / minItems do not apply to
     null, so `type: ["string", "null"]` + minLength would still let null in.
+
+    #1560: a credential field is `anyOf: [<value>, secretRef]`. secretRef is an
+    object (never "" or null), so the field rejects empty exactly when its
+    value branch does. An exactly-one branch may pin `type: [string, object]`:
+    the object is a Secret reference, which Python counts as set
+    (`receiver_field_state`), and null is still out.
     """
     prop = prop or {}
-    bound = {"string": "minLength", "array": "minItems"}.get(prop.get("type"))
+    alts = prop.get("anyOf")
+    if alts is not None:
+        values = [a for a in alts if a != _SECRET_REF]
+        assert len(alts) == 2 and len(values) == 1, f"unmodelled anyOf: {alts}"
+        return _rejects_empty(values[0])
+    rtype = prop.get("type")
+    if isinstance(rtype, list) and sorted(rtype) == ["object", "string"]:
+        rtype = "string"
+    bound = {"string": "minLength", "array": "minItems"}.get(rtype)
     return bound is not None and prop.get(bound, 0) >= 1
 
 
@@ -261,7 +278,7 @@ def test_shared_case_table_schema_and_python_agree(case):
     receiver = _receiver(case)
     doc = {"tenants": {"t1": {"_routing": {"receiver": receiver}}}}
     schema_errors = [e.message for e in _VALIDATOR.iter_errors(doc)]
-    cfg, warnings = build_receiver_config(dict(receiver), "t1")
+    cfg, warnings = build_receiver_config(dict(receiver), "t1", owner_tenant="t1")
     assert (not schema_errors) == case.get("schema_valid", case["valid"]), f"schema: {schema_errors}"
     differs = case.get("python_differs")
     python_valid = differs["valid"] if differs else case["valid"]
