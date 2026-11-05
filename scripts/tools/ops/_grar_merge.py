@@ -999,7 +999,9 @@ def render_secret_refs(am_entry: dict, rtype: str, owner_tenant: str | None,
     passed (a shared alias is listed; an own reference has an owner).
     *am_entry* must not share nested values with the tenant's receiver."""
     root = binding.mount_root.rstrip("/")  # "/" → "", so "/<name>/<key>"
-    emptied: list[tuple[dict, str]] = []
+    # (id(holder), key) → (holder, key): each list is filtered once, however
+    # many references it held (a dict is unhashable, so its identity is the key).
+    emptied: dict[tuple[int, str], tuple[dict, str]] = {}
     for site, path in find_credential_refs(am_entry, rtype):
         inner = ref_value_at(am_entry, path)["secret"]
         alias = inner.get("shared")
@@ -1009,12 +1011,12 @@ def render_secret_refs(am_entry: dict, rtype: str, owner_tenant: str | None,
         if isinstance(path[-1], int):
             holder = ref_value_at(am_entry, path[:-2])
             holder.setdefault(site.file_key, []).append(mounted)
-            emptied.append((holder, path[-2]))
+            emptied[(id(holder), path[-2])] = (holder, path[-2])
         else:
             holder = ref_value_at(am_entry, path[:-1])
             del holder[path[-1]]
             holder[site.file_key] = mounted
-    for holder, key in emptied:
+    for holder, key in emptied.values():
         if key in holder:
             kept = [v for v in holder[key] if not is_secret_ref(v)]
             if kept:
