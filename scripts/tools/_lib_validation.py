@@ -589,14 +589,18 @@ def _walk_site(value: Any, pattern: tuple[str, ...], here: RefPath) -> Iterator[
             yield from _walk_site(value[k], rest, here + (k,))
 
 
-def find_credential_refs(receiver: Any) -> list[tuple[CredentialRefSite, RefPath]]:
+def find_credential_refs(receiver: Any, rtype: Optional[str] = None,
+                         ) -> list[tuple[CredentialRefSite, RefPath]]:
     """``(site, concrete path)`` of every Secret reference (``is_secret_ref``)
     standing on a ``CREDENTIAL_REF_SITES`` path of *receiver*, in table
-    order. A receiver that is not a mapping, or whose ``type`` is not a
-    known type string, has none."""
-    if not isinstance(receiver, dict) or not isinstance(receiver.get("type"), str):
+    order. *rtype* defaults to the receiver's own ``type`` (an Alertmanager
+    entry has none). A receiver that is not a mapping, or of no known type,
+    has none."""
+    if rtype is None:
+        rtype = receiver.get("type") if isinstance(receiver, dict) else None
+    if not isinstance(receiver, dict) or not isinstance(rtype, str):
         return []
-    return [(site, path) for site in credential_ref_sites(receiver["type"])
+    return [(site, path) for site in credential_ref_sites(rtype)
             for path in _walk_site(receiver, site.path, ())]
 
 
@@ -626,14 +630,18 @@ def _receiver_secret_ref_problem(rtype: str, receiver: dict[str, Any]) -> Option
       (``secret_ref_problem``), or a mapping / list that is no reference
       (Alertmanager cannot load it as the string it reads there);
     - a string field that does not take one holds one (``channel:
-      {secret: …}`` would be copied to Alertmanager as written).
+      {secret: …}`` would be copied to Alertmanager as written);
+    - a nested ``CREDENTIAL_REF_SITES`` path (inside ``http_config``) holds
+      a malformed one. A reference anywhere else inside ``http_config`` is
+      the generator's output check's (``secret_ref_unsupported_field``).
     """
     fields = _receiver_field_schemas().get(rtype, {})
+    takes_ref = set(receiver_secret_ref_fields(rtype))
     for field, prop in fields.items():
         if field not in receiver:
             continue
         value = receiver[field]
-        if prop.get("secret_ref"):
+        if field in takes_ref:
             if is_secret_ref(value):
                 problem = secret_ref_problem(value)
                 if problem:
@@ -645,6 +653,11 @@ def _receiver_secret_ref_problem(rtype: str, receiver: dict[str, Any]) -> Option
             takes = ", ".join(receiver_secret_ref_fields(rtype)) or "none"
             return (f"field '{field}' does not take a Secret reference (the "
                     f"fields of a {rtype} receiver that do: {takes})")
+    for _site, path in find_credential_refs(receiver, rtype):
+        if len(path) > 1:
+            problem = secret_ref_problem(ref_value_at(receiver, path))
+            if problem:
+                return f"field '{ref_path_text(path)}' {problem}"
     return None
 
 
@@ -853,7 +866,8 @@ def _http_config_problem(value: Any) -> Optional[str]:
     - ``HTTP_CONFIG_AUTH_MAPPINGS`` keys: null is unset, else a mapping (set
       even when empty); the other ``HTTP_CONFIG_AUTH_FIELDS``: null and ``""``
       are unset, else a string (a number or date is refused: PyYAML has
-      already rewritten its text, '0123' → 83); at most one set;
+      already rewritten its text, '0123' → 83) or a Secret reference
+      (#1560, set); at most one set;
     - ``proxy_url`` / ``no_proxy``: null and ``""`` are unset; else a string
       (strict for the same reason). Whether a proxy_url
       parses as a URL is NOT checked here: that is Go's net/url.Parse, and the
@@ -878,6 +892,11 @@ def _http_config_problem(value: Any) -> Optional[str]:
             if not isinstance(item, dict):
                 return (f"field 'http_config.{key}' must be a mapping, "
                         f"got {_type_name(item)}")
+            set_keys.append(key)
+        elif is_secret_ref(item):
+            # #1560: bearer_token as a Secret reference renders as
+            # bearer_token_file, which conflicts the same way; its shape is
+            # _receiver_secret_ref_problem's.
             set_keys.append(key)
         elif not isinstance(item, str):
             return (f"field 'http_config.{key}' must be a string, "
@@ -1087,7 +1106,7 @@ def receiver_required_problem(rtype: str, receiver: dict[str, Any], field: str) 
     if is_secret_ref(value):
         # #1560: the value is in a Secret; its shape is all that is judged
         # here (the URL format applies to the value, which is not visible).
-        if not prop.get("secret_ref"):
+        if field not in receiver_secret_ref_fields(rtype):
             return (f"field '{field}' must be a string; it does not take a "
                     "Secret reference")
         problem = secret_ref_problem(value)

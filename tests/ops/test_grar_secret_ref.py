@@ -127,13 +127,13 @@ def test_a_reference_without_an_owner_argument_is_a_caller_bug():
     # 3. auth_password with a shared Secret
     ({**SMTP, "auth_password": CORP},
      {"secrets": BINDING, "allowed_domains": ["*.example.com"]},
-     "secret_ref_shared_auth_password"),
+     "secret_ref_shared_confined"),
     # 4. auth_password with the own Secret, but no allowed_domains / smarthost outside
-    ({**SMTP, "auth_password": OWN}, {}, "secret_ref_auth_password_unconfined"),
+    ({**SMTP, "auth_password": OWN}, {}, "secret_ref_destination_unconfined"),
     ({**SMTP, "auth_password": OWN}, {"allowed_domains": []},
-     "secret_ref_auth_password_unconfined"),
+     "secret_ref_destination_unconfined"),
     ({**SMTP, "smarthost": "smtp.attacker.example:587", "auth_password": OWN},
-     {"allowed_domains": ["*.example.com"]}, "secret_ref_auth_password_unconfined"),
+     {"allowed_domains": ["*.example.com"]}, "secret_ref_destination_unconfined"),
 ])
 def test_binding_violations_drop_the_receiver(receiver, kwargs, kind):
     cfg, warnings = build_receiver_config(receiver, "t-a", tenant_id="t-a",
@@ -522,7 +522,7 @@ def test_shared_reference_with_a_proxy_url_is_refused():
         tenant_id="t-a", owner_tenant="t-a", secrets=BINDING)
     assert cfg is None
     assert [(w.kind, w.field) for w in warnings] == [
-        ("secret_ref_shared_proxy_url", "receiver.http_config.proxy_url")]
+        ("secret_ref_proxy_url", "receiver.http_config.proxy_url")]
     assert "corp-slack" in warnings[0]
 
 
@@ -546,7 +546,7 @@ def test_shared_proxy_rule_holds_through_generate_routes():
                                                   secrets=BINDING)
     assert "tenant-t-a-override-0" not in [r["name"] for r in receivers]
     assert [(w.kind, w.field) for w in warnings if isinstance(w, SkippedEntryWarning)] == [
-        ("secret_ref_shared_proxy_url", "overrides[0].receiver.http_config.proxy_url")]
+        ("secret_ref_proxy_url", "overrides[0].receiver.http_config.proxy_url")]
 
 
 # ── F3：routes[i] 的參照歸該租戶 ─────────────────────────────────────────

@@ -571,8 +571,8 @@ def test_every_kind_literal_is_in_the_catalog():
 # #1560: the binding kinds secret_binding_findings produces in _grar_merge.
 _MERGE_PRODUCED_KINDS = frozenset({
     "secret_ref_shared_unknown", "secret_ref_shared_field_not_allowed",
-    "secret_ref_shared_auth_password", "secret_ref_auth_password_unconfined",
-    "secret_ref_no_owner", "secret_ref_shared_proxy_url",
+    "secret_ref_shared_confined", "secret_ref_destination_unconfined",
+    "secret_ref_no_owner", "secret_ref_proxy_url", "secret_ref_header_redirects",
     "secret_ref_unsupported_field",
 })
 

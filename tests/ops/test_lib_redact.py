@@ -393,7 +393,10 @@ _TENANT_SCHEMA = REPO / "docs" / "schemas" / "tenant-config.schema.json"
 
 # 正向控制：walker 壞掉時空集合不可靜默通過。
 _KNOWN_MARKED = {"url", "http_config", "auth_password", "headers", "api_url",
-                 "webhook_url", "service_key", "routing_key"}
+                 "webhook_url", "service_key", "routing_key",
+                 # #1560 ③-c: the http_config leaves that take a Secret reference
+                 "password", "credentials", "bearer_token", "key", "client_secret",
+                 "client_certificate_key", "secrets"}
 
 
 def credential_marked_fields(schema) -> set[str]:
@@ -418,10 +421,54 @@ def credential_marked_fields(schema) -> set[str]:
     return found
 
 
+def _covered_by_container(schema, name: str, listed: set[str]) -> bool:
+    """名字不在名單、但每一處都被整包遮掉：`name` 只出現在某些 definition 的
+    properties 裡，而 schema 中每個引用這些 definition 的 property，名字都在名單上
+    （遮罩遇到名單上的 key 就整包換掉，不往下走）。#1560：tls_config 的 `key`——
+    `key` 不能進名單，它也是 secretRef 自己的座標（見 test_config_diff 的同一決定）。"""
+    defs = schema.get("definitions", {})
+    holders = {d for d, node in defs.items()
+               if isinstance(node.get("properties"), dict) and name in node["properties"]}
+    if not holders or credential_marked_fields(
+            {k: v for k, v in schema.items() if k != "definitions"}) & {name}:
+        return False
+    targets = {f"#/definitions/{d}" for d in holders}
+
+    def refs_in(node) -> set[str]:
+        if isinstance(node, dict):
+            out = {node["$ref"]} if node.get("$ref") in targets else set()
+            for v in node.values():
+                out |= refs_in(v)
+            return out
+        if isinstance(node, list):
+            return set().union(*(refs_in(x) for x in node)) if node else set()
+        return set()
+
+    referrers: list[str] = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            props = node.get("properties")
+            if isinstance(props, dict):
+                for pname, sub in props.items():
+                    if refs_in(sub):
+                        referrers.append(pname)
+            for v in node.values():
+                walk(v)
+        elif isinstance(node, list):
+            for x in node:
+                walk(x)
+
+    walk(schema)
+    return bool(referrers) and all(p.lower() in listed for p in referrers)
+
+
 def unmasked_credential_fields(schema, fields=r.SECRET_FIELDS) -> set[str]:
-    """標成憑證、名字卻不在遮罩名單裡的欄位（比對同 is_secret_field，不分大小寫）。"""
+    """標成憑證、名字卻不在遮罩名單裡、也沒被名單上的容器整包遮掉的欄位
+    （比對同 is_secret_field，不分大小寫）。"""
     listed = {f.lower() for f in fields}
-    return {n for n in credential_marked_fields(schema) if n.lower() not in listed}
+    return {n for n in credential_marked_fields(schema) if n.lower() not in listed
+            and not _covered_by_container(schema, n, listed)}
 
 
 def test_every_schema_credential_field_is_on_the_redaction_list():
@@ -444,3 +491,18 @@ def test_the_inclusion_check_reports_a_marked_field_off_the_list():
         "url", "sms_token_x", "Deep_Secret", "branch_tok"}
     assert unmasked_credential_fields(schema) == {
         "sms_token_x", "Deep_Secret", "branch_tok"}
+
+
+def test_a_marked_leaf_is_covered_only_when_every_referrer_is_a_listed_container():
+    """#1560：`key` 不在名單，因為 tls_config（名單上）整包遮掉它；同一個定義只要
+    被一個不在名單上的 property 引用，就不算被涵蓋。"""
+    schema = json.loads(_TENANT_SCHEMA.read_text(encoding="utf-8"))
+    assert "key" in credential_marked_fields(schema)
+    assert "key" not in unmasked_credential_fields(schema)
+    leak = {"definitions": {
+        "tls": {"properties": {"key": {"x-credential": True}}},
+        "a": {"properties": {"tls_config": {"$ref": "#/definitions/tls"},
+                             "plain_box": {"anyOf": [{"$ref": "#/definitions/tls"}]}}}}}
+    assert unmasked_credential_fields(leak) == {"key"}
+    del leak["definitions"]["a"]["properties"]["plain_box"]
+    assert unmasked_credential_fields(leak) == set()

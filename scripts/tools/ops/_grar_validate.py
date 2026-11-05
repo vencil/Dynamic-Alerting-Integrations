@@ -57,7 +57,7 @@ from _lib_validation import (  # noqa: E402  (#1560)
 )
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     OWN_SECRET_PREFIX,
-    SECRET_REF_OWN_ONLY_FIELDS,
+    CONFINED_REF_FIELDS,
     SharedSecret,
     ROOT_LEVEL,
     Finding,
@@ -910,10 +910,12 @@ class PolicyDocument(NamedTuple):
 
 
 def _shared_secret_fields() -> frozenset[str]:
-    """The receiver fields a ``shared_secrets`` entry may list: every field
-    that takes a Secret reference, but auth_password (#1560)."""
+    """The receiver fields a ``shared_secrets`` entry may list: every
+    top-level field that takes a Secret reference, but those whose credential
+    goes to a destination the receiver names (``CONFINED_REF_FIELDS``:
+    auth_password) (#1560). The http_config leaves are never listable."""
     return frozenset(f for rtype in RECEIVER_TYPES
-                     for f in receiver_secret_ref_fields(rtype)) - SECRET_REF_OWN_ONLY_FIELDS
+                     for f in receiver_secret_ref_fields(rtype)) - CONFINED_REF_FIELDS
 
 
 # A Kubernetes object name (DNS-1123 subdomain), for a shared Secret's name.
@@ -975,7 +977,7 @@ def _load_shared_secrets(data: dict, policy_path: str) -> Mapping[str, SharedSec
         if bad:
             why = (" — auth_password never takes a shared Secret: the password "
                    "goes to the SMTP server the receiver names"
-                   if set(bad) & SECRET_REF_OWN_ONLY_FIELDS else "")
+                   if set(bad) & CONFINED_REF_FIELDS else "")
             raise PolicyInputError(
                 f"{where}: entry {alias!r} lists {bad} under fields; only "
                 f"{', '.join(sorted(allowed))} may use a shared Secret{why}")

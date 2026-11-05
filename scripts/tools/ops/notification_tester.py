@@ -96,7 +96,7 @@ from _grar_merge import receiver_type  # noqa: E402  (#2839 the one type read)
 from _grar_merge import build_receiver_config  # noqa: E402  (#3048 the generator's verdict)
 from _grar_merge import Finding  # noqa: E402  (#3076 a slot verdict's reason)
 from _grar_merge import SecretBinding  # noqa: E402  (#1560)
-from _lib_validation import is_secret_ref, receiver_secret_ref_fields  # noqa: E402  (#1560)
+from _lib_validation import find_credential_refs, ref_path_text  # noqa: E402  (#1560)
 from _lib_exitcodes import (  # noqa: E402
     EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 
@@ -440,7 +440,9 @@ def test_receiver(
     # #1560: a credential held in a Secret is read by Alertmanager from its
     # mount (<field>_file); this tool cannot read it, so nothing is sent and
     # the URL is not checked — SKIPPED, in dry-run too, never a pass.
-    in_secret = [f for f in receiver_secret_ref_fields(rtype) if is_secret_ref(receiver.get(f))]
+    # Any CREDENTIAL_REF_SITES row, an http_config leaf included: sending
+    # without the credential would test a request Alertmanager never makes.
+    in_secret = [ref_path_text(p) for _s, p in find_credential_refs(receiver, rtype)]
     if in_secret:
         return ReceiverTestResult(
             receiver_name=label,

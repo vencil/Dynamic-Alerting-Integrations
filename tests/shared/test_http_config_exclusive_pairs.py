@@ -65,7 +65,10 @@ def _defs() -> dict:
 def _value(key: str, shape: dict):
     if shape == {"type": "object"}:
         return _OBJECT_SAMPLES.get(key, {})
-    if shape == {"type": "string", "minLength": 1}:
+    # #1560: `type: [string, object]` is a non-empty string or a Secret
+    # reference (rendered as the key's *_file); the string half is the row.
+    if shape in ({"type": "string", "minLength": 1},
+                 {"type": ["string", "object"], "minLength": 1}):
         return "x"
     if shape == {"$ref": _PREFIX + "yamlTrue"}:
         return True
