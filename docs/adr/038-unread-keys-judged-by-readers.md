@@ -338,7 +338,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 ### 8. `disable` 關掉什麼、有沒有作用
 
-閾值鍵寫 `disable`，關掉的是**一整族**：base 鍵本身、`<key>_critical`，以及維度鍵 `<key>{…}`（租戶寫的，和根目錄 `defaults:` 給的維度預設值），不論同族鍵寫在哪一層（租戶檔、子目錄 `_defaults.yaml`、profile、根平台檔 `tenants:`）。排程式的 `disable` 只在它那段時間連帶。base 的 `disable` 過期（`expires:`）後是否還算數，跟 base 自己的規則走：根目錄 `defaults:` 有值的鍵過期即失效，其他（`optional_overrides:` 宣告的鍵、只在 `dimensions:` 出現的鍵）不看 `expires:`。只在 `dimensions:` 出現的鍵也是一族的 base：子目錄 `_defaults.yaml` 寫它的 `disable` 會傳到租戶，同樣連帶。`disable:critical` 這類帶等級的寫法不是停用，不連帶。
+閾值鍵寫 `disable`，關掉的是**一整族**：base 鍵本身、`<key>_critical`，以及維度鍵 `<key>{…}`（租戶寫的，和根目錄 `defaults:` 給的維度預設值），不論同族鍵寫在哪一層（租戶檔、子目錄 `_defaults.yaml`、profile、根平台檔 `tenants:`）。排程式的 `disable` 只在它那段時間連帶。base 的 `disable` 過期（`expires:`）後是否還算數，跟 base 自己的規則走：根目錄 `defaults:` 有值的鍵過期即失效，其他（`optional_overrides:` 宣告的鍵、只在 `dimensions:` 出現的鍵）不看 `expires:`。只在 `dimensions:` 出現的鍵也是一族的 base：子目錄 `_defaults.yaml` 寫它的 `disable` 會傳到租戶，同樣連帶；子目錄給它其他值則沒有讀取端讀，照舊報 `subtree_default_undeliverable`。`disable:critical` 這類帶等級的寫法不是停用，不連帶。
 
 只想留 critical 那一級，寫 `X: "90:critical"`，並刪掉 `X_critical`：它送出的 series 與舊的 `X: disable` 加 `X_critical: 90` 相同，兩者並存則會送出同一條 series 兩次，整份 `/metrics` 失敗。只想停 critical 那一級，寫 `X_critical: disable`。
 
@@ -356,7 +356,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 - 反事實重算要看整天的時段（含排程值），不只看某一個時間點，否則時窗內與時窗外的判斷會相反。重算時另外檢查：base 在某時段是 `disable`，那個時段同族就不得有列；有的話 da-guard 以內部錯誤結束，不當成判定。這條檢查抓的是 exporter 某個讀同族鍵的地方漏了連帶。
 - 成本：一個租戶的閾值列只取決於它自己的設定與平台的設定，所以每個租戶只在自己的排程切點重算，每次只建入同一輪的租戶；第 k 輪把所有租戶各自的第 k 個 `disable` 一起拿掉，輪數等於單一租戶最多有幾個 `disable`，與租戶數無關。
 - 寫在 profile 或平台檔的 `disable` 影響所有選用它的租戶，報在那個檔上。
-- `disable_noop` 與 `disable_cascade` 在整棵樹報警告。這次變更**新引入**的，另外出現在 config-diff 的 PR 留言，因為 reviewer 實際會看的是那裡（[ADR-037](./037-config-diff-compares-rendered-output.md)）。
+- `disable_noop` 與 `disable_cascade` 在整棵樹報警告。這次變更**新引入**的 `disable_noop`，另外出現在 config-diff 的 PR 留言（被連帶關掉的同族鍵在 config-diff 的閾值變更裡標為停用），因為 reviewer 實際會看的是那裡（[ADR-037](./037-config-diff-compares-rendered-output.md)）。
 - tenant-api 的寫入檢查只對被寫的租戶重算：輪數取決於那個租戶有幾個 `disable`，每輪只重建那個租戶，比起載入整棵樹，成本可以忽略。整棵樹的重算只在 explain、config-diff 與 CI 中進行：它的每一輪都要重建所有該輪的租戶，輪數又取決於設定內容，放不進寫入檢查的時間上限（[ADR-036](./036-single-parser-effective-config.md) §3）。
 
 不採用「租戶檔寫的同族鍵保留、繼承來的才連帶關掉」：exporter 算閾值時分不出同族鍵來自哪一層，profile 與子目錄 defaults 的值在那之前已併進租戶的設定；要分得出來，得逐鍵記錄來源，那是先前因效能退化否決過的做法。業界的對照是 kube-prometheus-stack 的 `defaultRules.disabled.<告警名>`：以告警名為單位關閉，同名的各嚴重度一起關。
@@ -480,7 +480,7 @@ db-a
 - **沒變的錯值會一直留著**：決定 12 讓沒改過的錯值只報 notice，它會留在檔裡直到有人改這個鍵；期間它照樣什麼都不靜音。
 - **探針不涵蓋兩類**：標註類的鍵（`_namespaces`），以及讀了但輸出不變的鍵，靠登錄表的明確標註。
 - **反事實重算的成本**：整棵樹時，重算的輪數等於單一租戶最多有幾個 `disable`，每輪是一次 served-values，所以不進入寫入檢查；寫入檢查只對被寫的租戶重算（決定 8）。
-- **`disable` 連帶關閉少了一種寫法**：「base 關掉、只對某個維度告警」（`X: disable` 加 `X{db="a"}: 5`）沒有替代寫法；要這麼做，得把 base 的門檻設成不會觸發的值。從舊語意升級時，`X: disable` 加 `X_critical: 90` 不再送出 critical；`X_critical` 寫在租戶自己檔裡時報 `disable_cascade` warning，寫在 profile 或子目錄時不報（決定 8 的遷移寫法）。根目錄 `defaults:` 自己給了 `X_critical` 的值時，它是一個獨立的閾值鍵（exporter 以 `metric="…_critical"` 的 warning 列送出），不屬於 `X` 這一族，`X: disable` 不連帶關掉它；這種寫法另有 `root_defaults_critical_key` 警告。
+- **`disable` 連帶關閉少了一種寫法**：「base 關掉、只對某個維度告警」（`X: disable` 加 `X{db="a"}: 5`）沒有替代寫法；要這麼做，得把 base 的門檻設成不會觸發的值。從舊語意升級時，`X: disable` 加 `X_critical: 90` 不再送出 critical；`X_critical` 寫在租戶自己檔裡時報 `disable_cascade` warning，寫在 profile 或子目錄時不報（決定 8 的遷移寫法）。根目錄 `defaults:` 自己給了 `X_critical` 的值時，它是一個獨立的閾值鍵（exporter 以 `metric="…_critical"` 的 warning 列送出），不屬於 `X` 這一族，`X: disable` 不連帶關掉它；這種寫法另有 `root_defaults_critical_key` 警告。`disable_cascade` 有兩種情況報不出來：拿掉 base 的 `disable` 之後那個時段整份 `/metrics` 無法產生（例如兩個維度鍵送出同一條 series），該時段沒有證據；同一個 base 的兩種 #1231 拼法都寫 `disable` 時，拿掉其中一個，另一個仍關著整族。
 - **實測中發現、另案處理的問題**：
   - 產生器讀了 `_metadata` 卻沒有使用（[#3043](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3043)）。
   - `_severity_dedup` 只讀租戶檔，其他保留鍵會繼承 profile；需要確認是否刻意（[#3044](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3044)）。

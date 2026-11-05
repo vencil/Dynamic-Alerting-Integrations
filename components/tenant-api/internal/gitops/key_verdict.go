@@ -126,7 +126,7 @@ var verdictReasons = map[string]string{
 var verdictKinds = map[string]string{
 	"unread":          "is read by no reader",
 	"disable_noop":    "is a disable that switches nothing off",
-	"disable_cascade": "is switched off with its base's disable; to keep the critical tier alone write the base as \"N:critical\" and delete this key",
+	"disable_cascade": "is switched off with its base's disable (ADR-038 decision 8)",
 }
 
 // verdictAdvice is a key verdict rendered for one caller: the lines for

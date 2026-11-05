@@ -330,8 +330,8 @@ func TestEffective_NotServedNamesBaseDisabled(t *testing.T) {
 // A base only `dimensions:` names is a family head (#3046): a subtree
 // `_defaults.yaml` that switches it off reaches the tenant and switches its
 // dimensional keys off — /metrics, served-values and the verdict agree with
-// /effective — and a numeric value there is a key no phase reads, not one
-// the overlay drops.
+// /effective. Any other value of it there is read by no phase: the overlay
+// does not carry it (undeliverable, as before).
 func TestServedValues_ASubtreeDisableOfABaseOnlyDimensionsNames(t *testing.T) {
 	t.Parallel()
 	code, doc, _, stderr := servedWith(t, map[string]string{
@@ -351,8 +351,8 @@ func TestServedValues_ASubtreeDisableOfABaseOnlyDimensionsNames(t *testing.T) {
 	if _, served := doc.Tenants["b"].Values[`bar_depth{db="a"}`]; !served {
 		t.Errorf("b: a numeric base switched the dimensional key off")
 	}
-	if e := doc.Tenants["b"].Keys["bar_depth"]; e.Reason != keyReasonNoRow {
-		t.Errorf("b: keys[bar_depth] = %+v, want no_row (a value no phase reads)", e)
+	if e := doc.Tenants["b"].Keys["bar_depth"]; e.Reason != keyReasonUndeliverable {
+		t.Errorf("b: keys[bar_depth] = %+v, want undeliverable (a value no phase reads)", e)
 	}
 }
 
@@ -393,5 +393,49 @@ func TestServedValues_SwitchedOffWith(t *testing.T) {
 		if got := doc.Tenants[c.tenant].Keys[c.key].SwitchedOffWith; got != c.base {
 			t.Errorf("%s: keys[%q].switched_off_with = %q, want %q", c.tenant, c.key, got, c.base)
 		}
+	}
+}
+
+// The guard keeps its findings on a base only `dimensions:` names (#3046
+// review): a subtree number for it is subtree_default_undeliverable, and a
+// root null with a tenant number is root_default_null_undeclared; only a
+// subtree `disable` of it reaches the tenant.
+func TestGuard_ABaseOnlyDimensionsNamesKeepsItsFindings(t *testing.T) {
+	t.Parallel()
+	kinds := func(files map[string]string) map[string]bool {
+		t.Helper()
+		var out, errOut bytes.Buffer
+		run([]string{"--config-dir", writeTree(t, files), "--format", "json"}, &out, &errOut)
+		var doc struct {
+			Report struct {
+				Findings []struct {
+					Kind string `json:"kind"`
+				} `json:"findings"`
+			} `json:"report"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+			t.Fatalf("%v: %s %s", err, out.String(), errOut.String())
+		}
+		got := map[string]bool{}
+		for _, f := range doc.Report.Findings {
+			got[f.Kind] = true
+		}
+		return got
+	}
+	root := "dimensions:\n  mysql_conn: [db]\ndefaults:\n  cpu: 80\n"
+	if got := kinds(map[string]string{"_defaults.yaml": root,
+		"team/_defaults.yaml": "defaults:\n  mysql_conn: 50\n",
+		"team/t1.yaml":        "tenants:\n  t1:\n    mysql_conn{db=\"a\"}: \"5\"\n"}); !got["subtree_default_undeliverable"] {
+		t.Errorf("subtree number: kinds %v, want subtree_default_undeliverable", got)
+	}
+	if got := kinds(map[string]string{"_defaults.yaml": root,
+		"team/_defaults.yaml": "defaults:\n  mysql_conn: disable\n",
+		"team/t1.yaml":        "tenants:\n  t1:\n    mysql_conn{db=\"a\"}: \"5\"\n"}); got["subtree_default_undeliverable"] {
+		t.Errorf("subtree disable: kinds %v, want it carried", got)
+	}
+	if got := kinds(map[string]string{
+		"_defaults.yaml": "dimensions:\n  mysql_conn: [db]\ndefaults:\n  cpu: 80\n  mysql_conn: null\n",
+		"t1.yaml":        "tenants:\n  t1:\n    mysql_conn: \"50\"\n    mysql_conn{db=\"a\"}: \"5\"\n"}); !got["root_default_null_undeclared"] {
+		t.Errorf("root null: kinds %v, want root_default_null_undeclared", got)
 	}
 }

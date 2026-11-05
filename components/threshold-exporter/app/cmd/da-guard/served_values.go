@@ -550,7 +550,8 @@ func parseServedValuesFlags(args []string, errOut io.Writer) (*servedValuesFlags
 			"Resolves the tree once per part of the day in which some schedule changes.")
 	fs.BoolVar(&f.disableEffects, "disable-effects", false,
 		"For every key a tenant switches off (disable), say in keys[].disable whether that changes\n"+
-			"what /metrics serves (effective / noop), by resolving the tree again without it.\n"+
+			"what /metrics serves (effective / noop), by resolving the tree again without it, and\n"+
+			"in keys[].switched_off_with the base whose disable switches a family key off (#3046).\n"+
 			"Costs (most switched-off keys of one tenant) x (parts of the day) resolves.")
 	fs.Var(&f.tenants, "tenant",
 		"Compute only this tenant (repeatable): the whole tree is still loaded, every platform file read;\n"+
