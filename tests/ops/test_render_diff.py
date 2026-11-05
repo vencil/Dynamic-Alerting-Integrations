@@ -368,6 +368,18 @@ def test_the_route_standing_in_for_the_root_is_not_a_level_of_its_own():
     assert [c for c in rd.diff_routes(flat, nested) if isinstance(c, rd.RouteChange)] == []
 
 
+def test_an_empty_same_receiver_route_before_a_sibling_is_a_level():
+    """Not the last child, it takes every alert before its later siblings —
+    a real delivery change, which the diff must report."""
+    flat = {"route": {"receiver": "d", "routes": [
+        {"matchers": ['team="db"'], "receiver": "db"}]}}
+    shadowing = {"route": {"receiver": "d", "routes": [
+        {"receiver": "d"},
+        {"matchers": ['team="db"'], "receiver": "db"}]}}
+    assert rd.flatten_routes(shadowing) != rd.flatten_routes(flat)
+    assert [c for c in rd.diff_routes(flat, shadowing) if isinstance(c, rd.RouteChange)]
+
+
 def test_control_a_matcher_less_route_to_another_receiver_is_a_level():
     cfg = {"route": {"receiver": "d", "routes": [{"receiver": "other", "routes": [
         {"matchers": ['team="db"'], "receiver": "db"}]}]}}

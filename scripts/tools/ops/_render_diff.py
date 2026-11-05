@@ -435,9 +435,13 @@ def flatten_routes(cfg: dict[str, Any]) -> dict[tuple[str, ...], dict[str, Any]]
         # below the enforced ones under one matcher-less route to the SAME
         # receiver, standing in for the root. It is not a level of its own:
         # its children are the node's children (the same routes, not moved).
+        # Only the LAST child: an earlier matcher-less route without
+        # `continue` takes every alert before its later siblings, a real
+        # difference the comparison must keep.
         out_: list[dict[str, Any]] = []
-        for child in node.get("routes") or []:
-            if (not _matchers(child) and not child.get("continue")
+        kids = node.get("routes") or []
+        for i, child in enumerate(kids):
+            if (i == len(kids) - 1 and not _matchers(child) and not child.get("continue")
                     and child.get("receiver") in (None, node.get("receiver"))
                     and set(child) <= {"receiver", "routes"}):
                 out_.extend(children(child))
