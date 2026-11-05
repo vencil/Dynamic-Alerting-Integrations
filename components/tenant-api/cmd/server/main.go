@@ -909,9 +909,6 @@ var errGeneratorSocketMissing = errors.New("--generator-socket (TA_GENERATOR_SOC
 	"is judged by the generator container (`da-tools generator-service`, ADR-036 §3) on that Unix socket, and without it " +
 	"no write could be judged (#2903)")
 
-// checkGeneratorSocketFlag refuses to start without a generator socket
-// (#2903): writes are never committed unjudged, so there is no mode without
-// the generator container.
 // checkIdentityPlaneFlags refuses a start without the API's Unix socket or
 // without the oauth2-proxy config file that says which headers carry
 // identity (ADR-027 §2: neither is optional).
@@ -925,6 +922,9 @@ func checkIdentityPlaneFlags(humanSocket, oauth2ProxyConfig string) error {
 	return nil
 }
 
+// checkGeneratorSocketFlag refuses to start without a generator socket
+// (#2903): writes are never committed unjudged, so there is no mode without
+// the generator container.
 func checkGeneratorSocketFlag(v string) error {
 	if strings.TrimSpace(v) == "" {
 		return errGeneratorSocketMissing
