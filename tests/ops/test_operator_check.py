@@ -364,6 +364,12 @@ class TestCheckSecretMounts:
         assert r.status == "fail"
         assert "/mnt/s" in r.detail and oc.DEFAULT_MOUNT_ROOT in r.detail
 
+    @pytest.mark.parametrize("root", ["/etc/alertmanager/secrets/", "/etc/alertmanager//secrets",
+                                      "/etc/alertmanager/./secrets"])
+    def test_another_spelling_of_the_default_root_passes(self, monkeypatch, root):
+        r = _mounts(monkeypatch, _mount_list("da-t-a", root=root), [_am("main", "da-t-a")])
+        assert r.status == "pass", r.detail
+
     def test_other_files_are_named_as_not_judged(self, monkeypatch):
         r = _mounts(monkeypatch, _mount_list("da-t-a", other=["/etc/ssl/ca.pem"]),
                     [_am("main", "da-t-a")])

@@ -50,6 +50,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import posixpath
 import sys
 from pathlib import Path
 
@@ -390,7 +391,11 @@ class OperatorChecker:
         root = self.mount_list["mount_root"]
         notes: list[str] = []
         status = "pass"
-        if needed and root.rstrip("/") != DEFAULT_MOUNT_ROOT:
+        # posixpath.normpath: `/etc/alertmanager//secrets/` or
+        # `/etc/alertmanager/./secrets` is the same directory inside the
+        # container (CodeRabbit on #3615); the render only strips the
+        # trailing slash, so a spelling like that must not read as another root.
+        if needed and posixpath.normpath(root) != DEFAULT_MOUNT_ROOT:
             status = "fail"
             notes.append(i18n("mounts_root", self.lang).format(
                 root=root, expected=DEFAULT_MOUNT_ROOT))
