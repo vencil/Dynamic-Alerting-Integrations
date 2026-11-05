@@ -974,15 +974,18 @@ def _destination_problem(receiver_obj: dict, destination: tuple[str, ...],
     if is_secret_ref(raw):
         return (f"{dest_text}, where it is sent, is itself a Secret reference, "
                 "whose host cannot be checked against allowed_domains")
-    if (isinstance(raw, str) and destination not in HOST_PORT_DESTINATIONS
-            and _URL_SCHEME_RE.match(raw) is None):
+    if not isinstance(raw, str) or raw == "":
+        # Missing, null, empty, or not a string: nothing to read a host from.
+        return (f"the {dest_text} it is sent to is missing or not a non-empty string (got {raw!r}), so it "
+                "cannot be checked against allowed_domains")
+    if destination not in HOST_PORT_DESTINATIONS and _URL_SCHEME_RE.match(raw) is None:
         return (f"{dest_text} {raw!r}, where it is sent, is not an http:// or "
                 "https:// URL, so its host cannot be read for allowed_domains")
-    host = _extract_host(raw) if isinstance(raw, str) else None
-    if host is None and isinstance(raw, str) and raw:
+    host = _extract_host(raw)
+    if host is None:
         return (f"the {dest_text} {raw!r}, where it is sent, has no host this "
                 "generator can read, so it cannot be checked against allowed_domains")
-    if host is None or not any(fnmatch.fnmatch(host, p) for p in allowed_domains):
+    if not any(fnmatch.fnmatch(host, p) for p in allowed_domains):
         return (f"the {dest_text} host {host!r} is not in the deployment "
                 "policy's allowed_domains")
     return None

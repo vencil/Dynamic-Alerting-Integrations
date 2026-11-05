@@ -804,6 +804,16 @@ def test_no_allowed_domains_is_said_once_naming_every_destination(allowed):
     assert "http_config.oauth2.token_url, url" in warnings[0], warnings[0]
 
 
+@pytest.mark.parametrize("value", [None, "", 5])
+def test_a_missing_destination_is_named_as_not_set(value):
+    """盲審 F3：目的地沒寫、空字串或不是字串時，訊息說「沒設或不是字串」，不是「host None 不在 allowlist」。"""
+    receiver = _ref_at(_CS, {"secret": {"key": "k"}})
+    receiver["http_config"]["oauth2"]["token_url"] = value
+    cfg, warnings = _build(receiver)
+    assert cfg is None and [w.kind for w in warnings] == ["secret_ref_destination_unconfined"]
+    assert "is missing or not a non-empty string" in warnings[0], warnings[0]
+
+
 def test_oauth2_rows_pass_when_both_destinations_pass():
     cfg, warnings = _build(_ref_at(_CS, {"secret": {"key": "k"}}))
     assert warnings == [] and cfg is not None
