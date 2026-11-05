@@ -52,6 +52,8 @@ from pathlib import Path
 # Phase B encoding sweep; on cp950 consoles the ✅ emoji print in
 # vscode_git_toggle crashed and falsified telemetry as "partial" for 7 weeks.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
+import _lib_exitcodes  # noqa: E402  (#3579: the run() exit, under the hook protocol)
+_lib_exitcodes.use_hook_protocol()  # a crash or a failed write never blocks (exit 1)
 try:
     from _lib_compat import try_utf8_stdout
 except Exception:  # pragma: no cover — standalone fallback, never block
@@ -640,4 +642,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)

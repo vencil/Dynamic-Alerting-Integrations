@@ -45,6 +45,8 @@ _REPO_ROOT = _THIS.parents[2]  # scripts/session-guards/preflight_bash.py → re
 # UTF-8 stdout/stderr guard (#824) — 本檔訊息目前全 ASCII，但與同目錄其他
 # guard 一致套用，避免未來訊息加非 ASCII 字元時重演 cp950 靜默失效。
 sys.path.insert(0, str(_THIS.parents[1] / "tools"))
+import _lib_exitcodes  # noqa: E402  (#3579: the run() exit, under the hook protocol)
+_lib_exitcodes.use_hook_protocol()  # a crash or a failed write never blocks (exit 1)
 try:
     from _lib_compat import try_utf8_stdout
 except Exception:  # pragma: no cover — standalone fallback, never block
@@ -212,5 +214,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    # Keep PYTHONUTF8 implicit; we only print ASCII through stderr.
-    sys.exit(main())
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)
