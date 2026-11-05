@@ -572,7 +572,7 @@ def test_every_kind_literal_is_in_the_catalog():
 _MERGE_PRODUCED_KINDS = frozenset({
     "secret_ref_shared_unknown", "secret_ref_shared_field_not_allowed",
     "secret_ref_shared_confined", "secret_ref_destination_unconfined",
-    "secret_ref_no_owner", "secret_ref_proxy_url", "secret_ref_header_redirects",
+    "secret_ref_no_owner", "secret_ref_proxy_url", "secret_ref_follow_redirects",
     "secret_ref_unsupported_field",
 })
 

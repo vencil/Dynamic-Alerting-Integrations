@@ -525,6 +525,7 @@ _OAUTH2_REFS = (
     "        type: webhook\n"
     "        url: https://hook.example.com/b\n"
     "        http_config:\n"
+    "          follow_redirects: false\n"
     "          oauth2:\n"
     "            client_id: c\n"
     "            token_url: https://token.example.com/t\n"
@@ -534,7 +535,7 @@ _OAUTH2_REFS = (
 _BEARER_REF = (
     "        type: webhook\n"
     "        url: https://hook.example.com/c\n"
-    "        http_config: {bearer_token: {secret: {key: bearer}}}\n"
+    "        http_config: {follow_redirects: false, bearer_token: {secret: {key: bearer}}}\n"
 )
 
 

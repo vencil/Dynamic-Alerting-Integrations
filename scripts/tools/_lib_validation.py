@@ -502,9 +502,15 @@ class CredentialRefSite(NamedTuple):
     credential the tenant's Secret yields — goes with every request to url.
     ``proxies`` are the proxy keys the requests carrying it go through (the
     token request through oauth2.proxy_url, the request to url through
-    http_config.proxy_url). ``follows_redirects``: upstream sends it again to
-    whatever host a redirect names (custom http_headers; Authorization is
-    dropped on a cross-host redirect).
+    http_config.proxy_url). ``follows_redirects``: Alertmanager sends it
+    again on a redirect (http_config.follow_redirects defaults to true) to a
+    host the allowlist did not judge. prometheus/common v0.70.1 re-adds
+    Authorization (basic_auth, authorization, bearer_token, the oauth2 access
+    token) on every hop isCrossHostRedirect does not flag, and that check
+    passes a SUBDOMAIN of the original host (isDomainOrSubdomain) — outside
+    an allowlist that names the host exactly; a custom http_headers value is
+    re-added on every hop, any host (sensitiveHeadersStripRT strips only
+    Authorization / Cookie-like names). A TLS client key is never sent.
     """
 
     rtype: str
@@ -546,21 +552,21 @@ CREDENTIAL_REF_SITES: tuple[CredentialRefSite, ...] = (
     CredentialRefSite("email", ("auth_password",), "auth_password_file",
                       (("smarthost",),), ()),
     CredentialRefSite("webhook", ("http_config", "basic_auth", "password"),
-                      "password_file", *_TO_URL),
+                      "password_file", *_TO_URL, follows_redirects=True),
     CredentialRefSite("webhook", ("http_config", "authorization", "credentials"),
-                      "credentials_file", *_TO_URL),
+                      "credentials_file", *_TO_URL, follows_redirects=True),
     CredentialRefSite("webhook", ("http_config", "bearer_token"),
-                      "bearer_token_file", *_TO_URL),
+                      "bearer_token_file", *_TO_URL, follows_redirects=True),
     CredentialRefSite("webhook", ("http_config", "tls_config", "key"),
                       "key_file", *_TO_URL),
     CredentialRefSite("webhook", ("http_config", "http_headers", "*", "secrets", "[]"),
                       "files", *_TO_URL, follows_redirects=True),
     CredentialRefSite("webhook", ("http_config", "oauth2", "client_secret"),
-                      "client_secret_file", *_TO_TOKEN_URL),
+                      "client_secret_file", *_TO_TOKEN_URL, follows_redirects=True),
     CredentialRefSite("webhook", ("http_config", "oauth2", "client_certificate_key"),
-                      "client_certificate_key_file", *_TO_TOKEN_URL),
+                      "client_certificate_key_file", *_TO_TOKEN_URL, follows_redirects=True),
     CredentialRefSite("webhook", ("http_config", "oauth2", "tls_config", "key"),
-                      "key_file", *_TO_TOKEN_URL),
+                      "key_file", *_TO_TOKEN_URL, follows_redirects=True),
 )
 
 

@@ -214,11 +214,12 @@ FINDING_KINDS: dict[str, str] = {
         "destination the allowlist confines, also sets the proxy_url that "
         "request goes through, a proxy the tenant chose that would see it; "
         "the entry is not rendered.",
-    "secret_ref_header_redirects":
-        "An http_headers value from the tenant's Secret on a receiver that "
-        "does not set http_config.follow_redirects: false; Alertmanager would "
-        "send the header again to whatever host a redirect names; the entry "
-        "is not rendered.",
+    "secret_ref_follow_redirects":
+        "A credential from the tenant's Secret that Alertmanager sends again "
+        "on a redirect (basic_auth, authorization, bearer_token, oauth2, an "
+        "http_headers value) on a receiver that does not set "
+        "http_config.follow_redirects: false; a redirect could carry it to a "
+        "host allowed_domains did not admit; the entry is not rendered.",
     "secret_ref_unsupported_field":
         "A Secret reference is still in the Alertmanager entry after "
         "rendering — on a field, at any depth, that has no *_file form "
@@ -872,10 +873,11 @@ def secret_binding_findings(owner_tenant: str | None, receiver_obj: dict,
       own tls_config — a CA the tenant chose, insecure_skip_verify — lets
       it intercept); an own reference whose content IS the destination does
       not (the tenant may route its own webhook as it likes, as before);
-    * a row that ``follows_redirects`` (an http_headers value) needs
-      ``http_config.follow_redirects: false``: upstream strips only
-      Authorization-like headers on a cross-host redirect, and sends the
-      rest to whatever host the redirect names.
+    * a row that ``follows_redirects`` (every http_config credential but the
+      TLS client key) needs ``http_config.follow_redirects: false``: upstream
+      re-adds Authorization on a redirect to a subdomain of the original
+      host, and a custom header on a redirect to any host
+      (``CredentialRefSite``).
     """
     out: list[Finding] = []
 
@@ -943,11 +945,12 @@ def secret_binding_findings(owner_tenant: str | None, receiver_obj: dict,
                    "drop it, or write the value itself",
                    ref_path_text(proxy), kind="secret_ref_proxy_url")
     if redirect_paths and ref_value_at(receiver_obj, ("http_config", "follow_redirects")) is not False:
-        refuse(f"is not false, but {', '.join(redirect_paths)} is a header value "
-               "from a Secret: Alertmanager follows redirects by default and "
-               "sends that header again to whatever host a redirect names; "
-               "set http_config.follow_redirects: false",
-               "http_config.follow_redirects", kind="secret_ref_header_redirects")
+        refuse(f"is not false, but {', '.join(redirect_paths)} is a credential "
+               "from a Secret that Alertmanager sends again on a redirect "
+               "(Authorization to a subdomain of the url host, a custom header "
+               "to any host), past allowed_domains; set "
+               "http_config.follow_redirects: false",
+               "http_config.follow_redirects", kind="secret_ref_follow_redirects")
     return out
 
 

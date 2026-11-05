@@ -907,23 +907,43 @@ def test_a_proxy_on_another_request_or_unset_is_not_refused(path, proxy_key, val
     assert warnings == [] and cfg is not None, warnings
 
 
+_REDIRECT_ROWS = [s for s in CREDENTIAL_REF_SITES if s.follows_redirects]
+
+
+@pytest.mark.parametrize("site", _REDIRECT_ROWS, ids=lambda s: ".".join(s.path))
 @pytest.mark.parametrize("follow", ["absent", True, None])
-def test_a_header_from_a_secret_needs_follow_redirects_false(follow):
-    receiver = _ref_at(("http_config", "http_headers", "*", "secrets", "[]"),
-                       {"secret": {"key": "k"}})
+def test_a_credential_resent_on_redirect_needs_follow_redirects_false(site, follow):
+    receiver = _ref_at(site.path, {"secret": {"key": "k"}})
     if follow == "absent":
         del receiver["http_config"]["follow_redirects"]
     else:
         receiver["http_config"]["follow_redirects"] = follow
-    assert _kinds(receiver) == [("secret_ref_header_redirects",
+    assert _kinds(receiver) == [("secret_ref_follow_redirects",
                                  "receiver.http_config.follow_redirects")]
 
 
-def test_follow_redirects_is_asked_only_of_a_header_reference():
-    receiver = _ref_at(_PW, {"secret": {"key": "k"}})
+def test_follow_redirects_is_not_asked_of_the_tls_client_key():
+    """TLS client key 從不送出（只用在 handshake），不必關掉 redirect。"""
+    receiver = _ref_at(_TLS_KEY, {"secret": {"key": "k"}})
     del receiver["http_config"]["follow_redirects"]
     cfg, warnings = _build(receiver)
     assert warnings == [] and cfg is not None
+
+
+# 逐字期望值，不從表推導：哪幾列在 redirect 時會被重送（#3616 review）。
+_EXPECTED_REDIRECT_ROWS = {
+    ("http_config", "basic_auth", "password"),
+    ("http_config", "authorization", "credentials"),
+    ("http_config", "bearer_token"),
+    ("http_config", "http_headers", "*", "secrets", "[]"),
+    ("http_config", "oauth2", "client_secret"),
+    ("http_config", "oauth2", "client_certificate_key"),
+    ("http_config", "oauth2", "tls_config", "key"),
+}
+
+
+def test_the_rows_resent_on_redirect_are_the_expected_ones():
+    assert {s.path for s in _REDIRECT_ROWS} == _EXPECTED_REDIRECT_ROWS
 
 
 def test_a_bearer_token_reference_still_conflicts_with_basic_auth():
@@ -974,6 +994,7 @@ def test_http_config_reference_renders_through_the_cli(tmp_path):
         "        type: webhook\n"
         "        url: https://hook.example.com/a\n"
         "        http_config:\n"
+        "          follow_redirects: false\n"
         "          basic_auth: {username: u, password: {secret: {key: hook-pw}}}\n"))
     out = tmp_path / "routes.yaml"
     r = _run(d, "--output-alertmanager", "--policy", _policy(tmp_path, ""), "-o", str(out))
