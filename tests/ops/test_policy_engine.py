@@ -614,6 +614,20 @@ class TestLoadPolicyInputs:
         assert "_severity_dedup" not in a and "_metadata" not in a and "_silent_mode" not in b
         assert "_routing" not in a                     # 沒有規則讀它就不載入
 
+    def test_an_unserved_retired_spelling_is_keyed_canonically(self, tmp_path):
+        """#3556: a threshold the config carries but /metrics does not serve,
+        written in a #1231 retired spelling, is in the view under the
+        exporter's canonical spelling, so a rule naming the canonical key
+        finds it configured."""
+        from _registry_lib import DEPRECATED_KEY_ALIASES
+        legacy, canon = next(iter(DEPRECATED_KEY_ALIASES.items()))
+        d = _write_tree(tmp_path, {
+            "_defaults.yaml": f"defaults:\n  {canon}: 80\n",
+            "tenant-a.yaml": f"tenants:\n  tenant-a:\n    {legacy}_critical{{db=\"a\"}}: '90'\n",
+        })
+        view = pe.load_policy_inputs(str(d)).views["tenant-a"]
+        assert isinstance(view.get(canon + '_critical{db="a"}'), pe.Unserved), view
+
     def test_flat_and_empty_files_are_not_tenants(self, tmp_path, capsys):
         """行為變更：沒有 `tenants:` 的檔（含空檔）不再以檔名當租戶，stderr 逐檔 WARN。"""
         d = _write_tree(tmp_path, {

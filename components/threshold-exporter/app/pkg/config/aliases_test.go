@@ -707,3 +707,34 @@ func TestResolveStats_PerTenantDeprecatedKeys(t *testing.T) {
 			stats.PerTenantDeprecatedKeys)
 	}
 }
+
+// #3556: a retired `_critical{…}` key is renamed like any other, but its
+// new spelling serves no row either (a `_critical` tier takes no
+// dimensions), so the notice names the per-dimension critical form instead
+// of a rename that fixes nothing — and stays a notice.
+func TestDeprecationNotice_CriticalTierWithDimensionsNamesTheNCriticalForm(t *testing.T) {
+	t.Parallel()
+	cfg := &ThresholdConfig{
+		Defaults:   map[string]float64{"mysql_threads_running": 10},
+		Dimensions: map[string][]string{"mysql_threads_running": {"db"}},
+		Tenants: map[string]map[string]ScheduledValue{"tenant-t": {
+			`mysql_cpu_critical{db="a"}`: {Default: "30"},
+		}},
+	}
+	kv := cfg.ValidateTenantKeys()
+	var got []string
+	for _, n := range kv.Notices {
+		if strings.Contains(n, "#1231") {
+			got = append(got, n)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], `write it as mysql_threads_running{db="a"}: "N:critical"`) ||
+		strings.Contains(got[0], "please update this override") {
+		t.Fatalf("want one notice naming the N:critical form, got %q", got)
+	}
+	for _, e := range kv.Errors {
+		if strings.Contains(e, "#1231") {
+			t.Errorf("a rename must stay a notice, got error %q", e)
+		}
+	}
+}

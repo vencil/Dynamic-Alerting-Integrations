@@ -17,8 +17,9 @@ package config
 // scripts/tools/ops/_registry_lib.py DEPRECATED_KEY_ALIASES). This table is a
 // runtime mirror, PINNED to that section by aliases_registry_test.go — a
 // drifted mirror fails CI. To open/close an alias window: edit the authored
-// table, regen the registry, then update this mirror (and the Python one in
-// _grar_validate.py) to match.
+// table, regen the registry, then update this mirror to match. It is the
+// only one: Python asks this package's rule through `da-guard key-spellings`
+// and keeps no copy of the table or the rule (#3556).
 //
 // Lookup contract: EXACT key match only, plus the two derived shapes that
 // canonicalKeyFor handles structurally, alone or together: "<base>_critical"

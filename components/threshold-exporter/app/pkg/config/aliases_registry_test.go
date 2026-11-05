@@ -8,9 +8,8 @@ package config
 // deprecatedKeyAliases table is a runtime mirror. This test asserts the two
 // are EQUAL — both directions — so a rename landing in the registry without
 // the Go mirror (or an alias window closed in the registry but left open
-// here) fails CI instead of silently drifting. The Python mirror
-// (_grar_validate.DEPRECATED_KEY_ALIASES) has the same pin in
-// tests/lint/test_check_threshold_registry.py.
+// here) fails CI instead of silently drifting. There is no Python mirror
+// (#3556): Python asks `da-guard key-spellings`.
 
 import (
 	"os"

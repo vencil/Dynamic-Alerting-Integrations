@@ -48,6 +48,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_kubectl import KubectlError, kubectl_list, kubectl_logs  # noqa: E402  (#3349)
 # #2526 / #2547: the tenant's resolution is threshold-exporter's own
 # (`da-guard effective`); see resolve_inheritance_chain.
+from _lib_parse_tree import KeySpellings  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
     EffectiveTree,
     ServedTree,
@@ -371,18 +372,28 @@ def resolve_inheritance_chain(tenant: str, config_dir: str | None) -> dict[str, 
 
     tree = _load_effective(base)
     _tenant_entry(tree, tenant, str(base))
-    return chain_for(tenant, ChainSource(base, tree, load_served_tree(base)))
+    return chain_for(tenant, _chain_source(base, tree, load_served_tree(base)))
 
 
 class ChainSource(NamedTuple):
-    """One read of a tree for many chains (#1525): `da-guard effective` and
-    `served-values` once, then `chain_for` per tenant."""
+    """One read of a tree for many chains (#1525): `da-guard effective`,
+    `served-values` and `key-spellings` (#3556) once, then `chain_for` per
+    tenant."""
 
     base: Path
     effective: EffectiveTree
     served: ServedTree
+    spellings: KeySpellings
+    """The #1231 spellings of every tenant's threshold keys."""
     where: str = ""
     """How a missing tenant names the tree (default: `base`)."""
+
+
+def _chain_source(base: Path, tree: EffectiveTree, served: ServedTree, where: str = "") -> ChainSource:
+    """`ChainSource` with one `key-spellings` run over every tenant's keys."""
+    spellings = key_spellings(k for te in tree.tenants.values() for k in te.key_sources
+                              if not k.startswith("_"))
+    return ChainSource(base, tree, served, spellings, where)
 
 
 def load_chain_source(config_dir: str | Path, *, where: str = "") -> ChainSource:
@@ -392,7 +403,7 @@ def load_chain_source(config_dir: str | Path, *, where: str = "") -> ChainSource
     require_config_dir(str(config_dir))
     base = Path(config_dir)
     tree = _load_effective(base)
-    return ChainSource(base, tree, load_served_tree(base), where)
+    return _chain_source(base, tree, load_served_tree(base), where)
 
 
 def _load_effective(base: Path) -> EffectiveTree:
@@ -440,7 +451,7 @@ def chain_for(tenant: str, source: ChainSource) -> dict[str, object]:
     # /effective keeps one spelling per threshold (it drops the shadowed
     # one), so each key below maps to its own canonical row — the exporter's
     # spelling, asked of it (#3556).
-    spellings = key_spellings(k for k in te.key_sources if not k.startswith("_"))
+    spellings = source.spellings
     for key, src in te.key_sources.items():
         if key.startswith("_"):
             continue

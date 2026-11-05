@@ -273,11 +273,10 @@ func fileLevelKey(key string) bool {
 
 // Judge is the verdict over the readings in.
 func Judge(in Input) Tree {
-	// A key in the exporter's canonical spelling (#1231): the exporter's
-	// own function, which maps a retired base key, its `_critical` and its
-	// dimensional spellings — and not a dimensional `_critical`, which the
-	// exporter serves as written. It looks a key up in the served reading.
-	canon := func(k string) string { c, _ := config.CanonicalKeyFor(k); return c }
+	// A key in the exporter's canonical spelling (#1231, canonicalSpelling):
+	// it looks a key up in the served reading, and it is how a policy rule
+	// names a key — one rule for both (#3556).
+	canon := canonicalSpelling
 	policy := canonicalSpelling
 	keys := map[string][]KeyVerdict{}
 	rootDefaults := map[string]string{}

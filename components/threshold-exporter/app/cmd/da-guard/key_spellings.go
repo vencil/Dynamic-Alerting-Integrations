@@ -16,6 +16,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"unicode/utf8"
 
 	"github.com/vencil/threshold-exporter/pkg/config"
 )
@@ -94,8 +95,13 @@ var errNotKeyList = errors.New("not a JSON array of strings")
 
 // decodeKeyList reads raw as exactly one JSON array whose elements are all
 // strings. Anything else — another JSON value, null, a non-string element,
-// trailing data — is an error, never a partial answer.
+// trailing data, bytes that are not UTF-8 (encoding/json would replace them
+// with U+FFFD and answer for a key nobody asked) — is an error, never a
+// partial answer.
 func decodeKeyList(raw []byte) ([]string, error) {
+	if !utf8.Valid(raw) {
+		return nil, fmt.Errorf("%w: not UTF-8", errNotKeyList)
+	}
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	if t, err := dec.Token(); err != nil || t != json.Delim('[') {
 		return nil, fmt.Errorf("%w: does not start with [ (%v)", errNotKeyList, tokenOrErr(t, err))

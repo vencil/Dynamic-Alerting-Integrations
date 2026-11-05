@@ -13,12 +13,10 @@ load read but serves no tenant from (a file outside the `_` files with no
 `tenants:` mapping, #2115 R3), each a `SkippedFile(file, reason)` in the words
 of the load; `stderr_lines` every non-empty line da-guard wrote to stderr on
 a run that succeeded (a successful run would otherwise swallow them), split on
-"\n" only. They are not sorted into kinds here. `aliases` is the exporter's
-own alias table, retired base key -> canonical base key (#2115): the keys of
-`values` / `severities` / `schedules` / `dropped` are canonical, and a key a
-caller holds in a retired spelling is looked up through this table, not
-through one kept here. The exporter canonicalizes the `<base>_critical` and
-`<base>{...}` spellings of a retired base the same way. `print_load_warnings` prints
+"\n" only. They are not sorted into kinds here. The keys of `values` / `severities` /
+`schedules` / `dropped` are canonical; a key a caller holds in a retired
+#1231 spelling is put in the canonical one by `key_spellings` (`da-guard
+key-spellings`, #3556) — no table or rule of it is kept here. `print_load_warnings` prints
 both: each of those lines behind `DA_GUARD_PREFIX` and escaped with
 `safe_label`, then one named WARN line per skipped file. A file the load
 cannot stat or read (da-guard's `unreadable`) is not a warning: it raises
@@ -515,7 +513,6 @@ class ServedTree(NamedTuple):
     tenants: dict[str, TenantValues]
     skipped: list[SkippedFile]
     stderr_lines: list[str]  # every non-empty line of da-guard's stderr, as written
-    aliases: dict[str, str]  # the exporter's table: retired base key -> canonical base key
     # With `partial=True` only: the files the load skips (they do not decode)
     # and cannot read; their tenants are absent from `tenants`.
     parse_failed: "tuple[str, ...] | list[str]" = ()
@@ -1053,28 +1050,14 @@ def load_served_tree(
     # A da-guard from before --schedules refuses the flag with exit 2; that
     # is named as older than this tool by `_run_da_guard`'s `-h` check, not
     # by a phrase of its stderr (#2725).
-    (tenants, skipped, aliases, dropped, absent, root_refused), returncode, stderr = _run_da_guard(
+    (tenants, skipped, dropped, absent, root_refused), returncode, stderr = _run_da_guard(
         SUBCOMMAND, extra, conf_d, binary, timeout, ServedValuesError, schema=SERVED_VALUES_SCHEMA,
         read=lambda doc: (doc["tenants"],
                           [SkippedFile(str(e["file"]), str(e["reason"])) for e in doc["skipped"]],
-                          doc.get("aliases"),
                           ([str(f) for f in doc["parse_failed"]],
                            [UnreadableFile(str(e["file"]), str(e["reason"])) for e in doc["unreadable"]]),
                           _subset_absent(doc, requested), doc.get("root_defaults_refused", _MISSING)),
         reads_unreadable=True, dropped_ok=partial)
-    # Read after the fields _run_da_guard checks, so an older da-guard is
-    # named by the first field it lacks.
-    if aliases is None:
-        raise ServedValuesError(
-            f"da-guard {SUBCOMMAND} exited {returncode} without the expected JSON ('aliases') — this "
-            "da-guard is older than this tool: upgrade or rebuild it", returncode, stderr, stale=True)
-    try:
-        aliases = {str(k): str(v) for k, v in aliases.items()}
-    except AttributeError as e:
-        raise ServedValuesError(
-            f"da-guard {SUBCOMMAND} exited {returncode} without the expected JSON (aliases: {e})",
-            returncode, stderr, broken=True) from e
-
     out: dict[str, TenantValues] = {}
     for tenant_id, tv in tenants.items():
         severities = dict(tv["severities"])
@@ -1165,7 +1148,7 @@ def load_served_tree(
                                      state_filters, time_boxes, routing, keys, alert_rows,
                                      custom_alerts, custom_alerts_error, custom_alerts_finding,
                                      key_checks)
-    return ServedTree(out, skipped, _nonempty_lines(stderr), aliases, *dropped, absent,
+    return ServedTree(out, skipped, _nonempty_lines(stderr), *dropped, absent,
                       _root_defaults_refused(root_refused, returncode, stderr, SUBCOMMAND, ServedValuesError))
 
 

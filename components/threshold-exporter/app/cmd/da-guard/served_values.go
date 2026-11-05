@@ -79,14 +79,10 @@ type servedValuesDoc struct {
 	// document still comes out, with no tenant and those files here (#2627).
 	Unreadable []skippedFile                 `json:"unreadable"`
 	Tenants    map[string]servedTenantValues `json:"tenants"`
-	// Aliases: the exporter's alias table (config.DeprecatedKeyAliases),
-	// retired base key → canonical base key, so a reader holding a key in
-	// its retired spelling finds it in Values, Severities, Schedules and
-	// Dropped, which are keyed by the canonical spelling. The exporter
-	// canonicalizes the `<base>_critical` and `<base>{…}` spellings of a
-	// retired base the same way (config.CanonicalKeyFor). Always present
-	// ({} when the table is empty).
-	Aliases map[string]string `json:"aliases"`
+	// ⛔ No alias table (#3556): Values, Severities, Schedules and Dropped
+	// are keyed by the canonical spelling, and a reader holding a key in a
+	// retired spelling asks `key-spellings` for it. The table this field
+	// once carried is what Python rebuilt its own copies of the rule from.
 	// UnreadKeys: keys a config file writes that the exporter's load does
 	// not read (config.LoadReport.RootDefaultsUnread, #2296), each
 	// {file, key, reason}. Today one reason: root_defaults_unwrapped — the
@@ -646,7 +642,6 @@ func runServedValues(args []string, stdout, errOut io.Writer) int {
 		Skipped:             skipped,
 		Unreadable:          unreadable,
 		Tenants:             tenants,
-		Aliases:             config.DeprecatedKeyAliases(),
 		UnreadKeys:          unreadKeys,
 		RootDefaultsRefused: rootDefaultsRefusedOf(rep),
 		tenantSubset: subset(requested, func(t string) bool {

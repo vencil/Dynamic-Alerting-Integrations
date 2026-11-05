@@ -1754,8 +1754,12 @@ def _main():
     results = []
     for change in changes:
         # `not_backtestable` is asked inside: a change it refuses is listed
-        # as not backtested and Prometheus is not asked about it.
-        result = backtest_change(args.prometheus, change, lookback_seconds)
+        # as not backtested and Prometheus is not asked about it. A `--tenant`
+        # key's canonical spelling is asked of da-guard there too (#3556).
+        try:
+            result = backtest_change(args.prometheus, change, lookback_seconds)
+        except (DaGuardNotFoundError, DaGuardError) as exc:
+            _exit_served_values_error(exc, args)
         if change.get("window"):  # #2119: the part of the day the values hold in
             result["window"] = change["window"]
         if "keys" in change:  # #3111: the keys serving the /metrics row

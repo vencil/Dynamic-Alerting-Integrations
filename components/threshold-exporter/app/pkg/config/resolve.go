@@ -1608,9 +1608,18 @@ func (c *ThresholdConfig) validateOverrideKeysOf(thresholdValues bool) KeyValida
 						tenant, key, canonKey, key))
 					continue
 				}
-				renamed(fmt.Sprintf(
-					"NOTICE: tenant=%s: key %q was renamed to %q (#1231) — the old name still resolves during the 2-release transition window; please update this override to %q",
-					tenant, key, canonKey, canonKey))
+				if head, labels := splitKeyHead(canonKey); labels != "" && DimensionBaseRefused(head) {
+					// #3556: the new spelling serves no row either — a
+					// `_critical` tier takes no dimensions — so it is no fix.
+					tier := strings.TrimSuffix(head, criticalSuffix)
+					renamed(fmt.Sprintf(
+						"NOTICE: tenant=%s: key %q was renamed to %q (#1231), but a `_critical` tier takes no dimensions and neither spelling is served (#3556); write it as %s: \"N:critical\"",
+						tenant, key, canonKey, tier+labels))
+				} else {
+					renamed(fmt.Sprintf(
+						"NOTICE: tenant=%s: key %q was renamed to %q (#1231) — the old name still resolves during the 2-release transition window; please update this override to %q",
+						tenant, key, canonKey, canonKey))
+				}
 			}
 
 			// #3045: a `_` key the registry does not list is read in no layer;

@@ -287,8 +287,8 @@ _REGISTRY_HEADER = (
     "# 本 registry 首要服務的 enforcement 路徑是 18-key 修復線（#1196 / TRK-337）。\n"
     "#\n"
     "# deprecated_aliases（#1231）：退役舊拼法 → canonical key（2-release 過渡窗）。\n"
-    "# 本區段是 alias SSOT——Go（pkg/config/aliases.go）與 Python（_grar_validate.py）\n"
-    "# 兩個 runtime 鏡像由 pin 測試釘住本區段（鏡像漂移＝CI 紅）。\n"
+    "# 本區段是 alias SSOT——唯一的 runtime 鏡像 Go（pkg/config/aliases.go）由 pin 測試\n"
+    "# 釘住本區段（鏡像漂移＝CI 紅）；Python 不留副本，經 da-guard key-spellings 問（#3556）。\n"
 )
 
 
