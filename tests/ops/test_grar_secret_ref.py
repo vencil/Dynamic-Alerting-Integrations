@@ -793,6 +793,14 @@ def test_oauth2_rows_are_confined_by_token_url_and_by_url(path, url, token_url):
     assert ("secret_ref_destination_unconfined", "receiver." + ".".join(path)) in _kinds(receiver)
 
 
+@pytest.mark.parametrize("allowed", [None, []])
+def test_no_allowed_domains_is_said_once_naming_every_destination(allowed):
+    cfg, warnings = _build(_ref_at(_CS, {"secret": {"key": "k"}}), allowed_domains=allowed)
+    assert cfg is None and [w.kind for w in warnings] == ["secret_ref_destination_unconfined"]
+    assert warnings[0].count("has no allowed_domains") == 1, warnings[0]
+    assert "http_config.oauth2.token_url, url" in warnings[0], warnings[0]
+
+
 def test_oauth2_rows_pass_when_both_destinations_pass():
     cfg, warnings = _build(_ref_at(_CS, {"secret": {"key": "k"}}))
     assert warnings == [] and cfg is not None

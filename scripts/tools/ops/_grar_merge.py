@@ -808,12 +808,17 @@ def secret_binding_findings(owner_tenant: str | None, receiver_obj: dict,
                        "_routing_enforced to render one receiver per tenant",
                        where, kind="secret_ref_no_owner")
             elif site.destinations:
-                problems = [p for d in site.destinations
-                            if (p := _destination_problem(receiver_obj, d, allowed_domains))]
-                if problems:
-                    refuse(f"references a Secret, but {'; '.join(dict.fromkeys(problems))}",
-                           where, kind="secret_ref_destination_unconfined")
                 checked = ", ".join(ref_path_text(d) for d in site.destinations)
+                if not allowed_domains:
+                    # One sentence for every destination, not one per destination.
+                    problems = ["the deployment policy (--policy) has no allowed_domains "
+                                f"to confine the {checked} it is sent to"]
+                else:
+                    problems = [p for d in site.destinations
+                                if (p := _destination_problem(receiver_obj, d, allowed_domains))]
+                if problems:
+                    refuse(f"references a Secret, but {'; '.join(problems)}",
+                           where, kind="secret_ref_destination_unconfined")
                 for proxy in site.proxies:
                     proxied.setdefault(proxy, []).append(
                         f"{where} is sent through it, past the allowed_domains "
