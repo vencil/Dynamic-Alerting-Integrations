@@ -48,6 +48,15 @@ hadolint is located as: ``hadolint`` on PATH, else
 ``docker run hadolint/hadolint:<ver>``. If neither exists the run aborts
 (exit 3) rather than silently passing.
 
+⛔ #3439: a hadolint run counts only when it shows that it ran. It is called
+with ``--no-fail``, so a run that read every file exits 0 whatever it found
+(the wrapper, not hadolint's ``failure-threshold``, turns levels into
+BLOCK), and ``--format json`` prints a JSON array even when clean (``[]``).
+Anything else — a non-zero exit (``docker run`` with no daemon exits 1 with
+an empty stdout; a file hadolint cannot open), an empty stdout, output that
+is not an array of findings — is the engine not having run: exit 3, its
+stderr shown. It was read as "no finding", rc 0.
+
 Usage:
     python3 scripts/tools/lint/check_iac_vibe_rules.py [--ci]
     python3 scripts/tools/lint/check_iac_vibe_rules.py --list
@@ -55,7 +64,8 @@ Usage:
 Exit codes:
     0  no BLOCK findings (WARN / INFO may be present), or bypass matched
     1  BLOCK findings present (only when --ci)
-    3  hadolint engine unavailable (no binary, no docker)
+    3  hadolint engine unavailable (no binary, no docker) or did not run
+       (non-zero exit, no JSON array on stdout; see above)
 
 Bypass (docs/internal/lint-policy.md §4): a BLOCK finding judged a
 legitimate exception can be waived from the PR body:
@@ -275,8 +285,11 @@ def locate_engine() -> tuple[str | None, str | None]:
 def run_hadolint(dockerfiles: list[str]) -> list[dict] | None:
     """Run hadolint over the given repo-relative Dockerfiles.
 
-    Returns parsed JSON findings, or None if the engine is unavailable / the
-    output could not be parsed (caller treats None as a hard error).
+    Returns the parsed findings, or None — the caller's hard error (exit 3) —
+    when the engine is unavailable or the run does not show that it ran
+    (#3439, see the module docstring): a non-zero exit, an empty stdout, or
+    stdout that is not a JSON array of objects. The reason and hadolint's /
+    docker's stderr are printed.
     """
     if not dockerfiles:
         # hadolint with no file args reads stdin and would block until the
@@ -284,8 +297,11 @@ def run_hadolint(dockerfiles: list[str]) -> list[dict] | None:
         return []
     mode, binary = locate_engine()
     cfg = REPO_ROOT / ".hadolint.yaml"
+    # --no-fail: exit 0 means "ran", never "found nothing at the threshold";
+    # what a finding is worth is classify_level's answer, not hadolint's.
+    flags = ["--no-fail", "--format", "json"]
     if mode == "binary":
-        cmd = [binary, "--config", str(cfg), "--format", "json", *dockerfiles]
+        cmd = [binary, "--config", str(cfg), *flags, *dockerfiles]
         cwd: str | None = str(REPO_ROOT)
     elif mode == "docker":
         cmd = [
@@ -294,7 +310,7 @@ def run_hadolint(dockerfiles: list[str]) -> list[dict] | None:
             "-w", "/repo",
             HADOLINT_IMAGE,
             "hadolint", "--config", ".hadolint.yaml",
-            "--format", "json", *dockerfiles,
+            *flags, *dockerfiles,
         ]
         cwd = None
     else:
@@ -309,25 +325,27 @@ def run_hadolint(dockerfiles: list[str]) -> list[dict] | None:
         return None
 
     out = (proc.stdout or "").strip()
-    if not out:
-        # hadolint prints nothing only on a non-JSON error path; clean runs
-        # in --format json still print "[]". Treat empty + nonzero as error.
-        if proc.returncode not in (0, 1):
-            print(
-                f"ERROR: hadolint produced no JSON (exit {proc.returncode}):\n"
-                f"{(proc.stderr or '').strip()}",
-                file=sys.stderr,
-            )
-            return None
-        return []
-    try:
-        return json.loads(out)
-    except json.JSONDecodeError:
-        print(
-            f"ERROR: could not parse hadolint JSON output:\n{out[:500]}",
-            file=sys.stderr,
-        )
+    stderr = (proc.stderr or "").strip()
+
+    def _no_run(why: str) -> None:
+        print(f"ERROR: hadolint ({mode}) did not run: {why}"
+              + (f"\n{stderr[:2000]}" if stderr else ""), file=sys.stderr)
+
+    if proc.returncode != 0:
+        _no_run(f"exit {proc.returncode} under --no-fail")
         return None
+    if not out:
+        _no_run("exit 0 but no JSON on stdout (a clean run prints [])")
+        return None
+    try:
+        findings = json.loads(out)
+    except json.JSONDecodeError:
+        _no_run(f"stdout is not JSON: {out[:500]}")
+        return None
+    if not (isinstance(findings, list) and all(isinstance(f, dict) for f in findings)):
+        _no_run(f"stdout is not a JSON array of findings: {out[:500]}")
+        return None
+    return findings
 
 
 # ---------------------------------------------------------------------------
@@ -361,8 +379,9 @@ def collect_findings(dockerfiles: list[str]) -> dict[str, list[str]]:
     hl = run_hadolint(registered)
     if hl is None:
         findings["BLOCK"].append(
-            "[engine] hadolint unavailable or unparseable — install the "
-            "hadolint binary or Docker (see check_iac_vibe_rules.py)"
+            "[engine] hadolint unavailable or did not run (the ERROR line "
+            "above says why) — install the hadolint binary, or Docker with a "
+            "running daemon (see check_iac_vibe_rules.py)"
         )
         # Signal hard error to caller via a sentinel.
         findings["__engine_error__"] = ["1"]
