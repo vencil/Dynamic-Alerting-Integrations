@@ -632,7 +632,9 @@ def run_pytest(result: dict, xdist_threshold: int, timeout_s: int,
     _warn("執行: " + " ".join(argv[2:]))
     child_out = None
     if json_mode:
-        child_out = 2 if sys.stderr is not None else subprocess.DEVNULL
+        # The stream, not fd 2: after `2>&-` fd 2 is a read-only null device
+        # (#3558) and sys.stderr a writable one — the child writes there.
+        child_out = sys.stderr if sys.stderr is not None else subprocess.DEVNULL
     proc = subprocess.run(argv, cwd=str(repo_root), env=env,
                           timeout=timeout_s, stdout=child_out)
     return EXIT_OK if proc.returncode == 0 else EXIT_VIOLATION
