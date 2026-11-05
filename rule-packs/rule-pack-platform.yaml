@@ -130,29 +130,31 @@ groups:
       #     rule above's (any failure for 15m, framed as the Watchdog egress);
       #     without the exclusion one webhook outage would page twice with two
       #     different stories. Together the two cover every integration.
-      #   - `sum without (reason)` on both sides: Alertmanager >= 0.27 splits
-      #     the failed counter by `reason` (clientError / serverError / other /
-      #     context*) and the total has no such label. The mixin's
-      #     `ignoring(reason) group_left` divides EACH reason by the whole
-      #     total, so 0.6% clientError + 0.6% serverError (1.2% of the
-      #     attempts failed) never crossed 1% — summing the reasons first makes
-      #     the ratio the integration's (CodeRabbit on #3615). Every other
-      #     label (instance / job / pod, `receiver_name` if that flag is on)
-      #     is kept, so each Alertmanager replica is judged on its own
-      #     counters. The total has no `reason`; the `without` there is a
-      #     no-op kept for symmetry. With an older Alertmanager (no `reason`)
-      #     both sums are identities.
-      #   - Known limit: the ratio is per integration, not per receiver
-      #     (`receiver_name` needs Alertmanager's `receiver-name-in-metrics`
-      #     feature flag), so one tenant's receiver failing among many on the
-      #     same integration can stay under 1%. Behaviour pinned by
+      #   - `sum without (reason, receiver_name)` on both sides: Alertmanager
+      #     >= 0.27 splits the failed counter by `reason` (clientError /
+      #     serverError / other / context*) and the total has no such label.
+      #     The mixin's `ignoring(reason) group_left` divides EACH reason by
+      #     the whole total, so 0.6% clientError + 0.6% serverError (1.2% of
+      #     the attempts failed) never crossed 1% — summing the reasons first
+      #     makes the ratio the integration's (CodeRabbit on #3615).
+      #     `receiver_name` exists only with Alertmanager's
+      #     `receiver-name-in-metrics` feature flag; summed away too, so the
+      #     ratio stays "this integration, all receivers together" whether
+      #     the flag is on or off (otherwise turning it on would silently
+      #     change the rule into a per-receiver one). Every other label
+      #     (instance / job / pod) is kept, so each Alertmanager replica is
+      #     judged on its own counters. Without `reason` / `receiver_name`
+      #     on the series the sums are identities.
+      #   - Known limit: the ratio is per integration, not per receiver (by
+      #     design, see above), so one tenant's receiver failing among many
+      #     on the same integration can stay under 1%. Behaviour pinned by
       #     tests/rulepacks/platform-notifications-failing_test.yaml.
       - alert: AlertmanagerNotificationsFailing
         expr: |
           (
-            sum without (reason) (rate(alertmanager_notifications_failed_total{integration!="webhook"}[15m]))
+            sum without (reason, receiver_name) (rate(alertmanager_notifications_failed_total{integration!="webhook"}[15m]))
           /
-            sum without (reason) (rate(alertmanager_notifications_total{integration!="webhook"}[15m]))
+            sum without (reason, receiver_name) (rate(alertmanager_notifications_total{integration!="webhook"}[15m]))
           ) > 0.01
         for: 5m
         labels:

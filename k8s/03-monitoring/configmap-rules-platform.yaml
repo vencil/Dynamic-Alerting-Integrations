@@ -35,8 +35,8 @@ data:
     \n        '\n      runbook_url: https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/alerting-plane-self-liveness.md\n\
     \      summary: Alertmanager webhook notifications are failing — Watchdog heartbeat\
     \ may not be egressing\n  - alert: AlertmanagerNotificationsFailing\n    expr:\
-    \ \"(\\n  sum without (reason) (rate(alertmanager_notifications_failed_total{integration!=\\\
-    \"webhook\\\"}[15m]))\\n/\\n  sum without (reason) (rate(alertmanager_notifications_total{integration!=\\\
+    \ \"(\\n  sum without (reason, receiver_name) (rate(alertmanager_notifications_failed_total{integration!=\\\
+    \"webhook\\\"}[15m]))\\n/\\n  sum without (reason, receiver_name) (rate(alertmanager_notifications_total{integration!=\\\
     \"webhook\\\"}[15m]))\\n) > 0.01\\n\"\n    for: 5m\n    labels:\n      alert_source:\
     \ platform\n      severity: warning\n    annotations:\n      description: '{{\
     \ $value | humanizePercentage }} of Alertmanager''s\n\n        {{ $labels.integration\
