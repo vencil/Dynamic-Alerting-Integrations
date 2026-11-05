@@ -148,11 +148,31 @@ class TestValidateFile:
         assert v.total_diagrams == 2
         assert v.valid_diagrams == 2
 
-    def test_nonexistent_file(self, tmp_path):
+    @pytest.mark.parametrize("content", [None, b"```mermaid\n\xff\xfe\n```\n"],
+                             ids=["missing", "not-utf8"])
+    def test_an_unreadable_file_is_not_checked_not_an_error(self, tmp_path,
+                                                            content):
+        """No verdict, so no diagram error: it is recorded as not checked (#3577)."""
+        md = tmp_path / "f.md"
+        if content is not None:
+            md.write_bytes(content)
         v = vm.MermaidValidator()
-        errors = v.validate_file(tmp_path / "missing.md")
-        assert len(errors) == 1
-        assert errors[0]["status"] == "error"
+        assert v.validate_file(md) == []
+        assert v.errors == []
+        assert len(v.not_checked) == 1
+
+    def test_main_exits_2_when_something_was_not_checked(self, tmp_path,
+                                                         cli_argv):
+        """Even next to a real diagram error, and with or without --ci: the run
+        did not get a verdict, which is the contract's 2 (#3577, #3611)."""
+        (tmp_path / "bad.md").write_text("```mermaid\nnotadiagram\n```\n",
+                                         encoding="utf-8")
+        (tmp_path / "z.md").write_bytes(b"\xff\xfe")
+        for argv in ([str(tmp_path)], ["--ci", str(tmp_path)]):
+            cli_argv("validate_mermaid", *argv)
+            with pytest.raises(SystemExit) as exc:
+                vm.main()
+            assert exc.value.code == EXIT_CALLER_ERROR, argv
 
     # ── unique edge cases (merged from _extended) ───────────────────────
 
@@ -254,6 +274,27 @@ class TestRenderWithMmdc:
         v = vm.MermaidValidator()
         result = v.render_with_mmdc(md)
         assert result is True
+
+
+    def test_a_render_timeout_is_not_checked_not_a_diagram_error(
+            self, tmp_path, monkeypatch):
+        """mmdc running out of time says nothing about the diagram (#3577)."""
+        calls = []
+
+        def mock_run(cmd, **kwargs):
+            calls.append(cmd)
+            if "--version" in cmd:
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            raise subprocess.TimeoutExpired(cmd, 10)
+        monkeypatch.setattr(subprocess, "run", mock_run)
+
+        md = tmp_path / "test.md"
+        md.write_text("```mermaid\ngraph TD\n    A-->B\n```\n",
+                      encoding="utf-8")
+        v = vm.MermaidValidator()
+        assert v.render_with_mmdc(md) is False
+        assert v.errors == []
+        assert len(v.not_checked) == 1 and "timeout" in v.not_checked[0]
 
 
 class TestPrintSummary:

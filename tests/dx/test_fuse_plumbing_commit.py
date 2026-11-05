@@ -228,3 +228,29 @@ def test_cli_rejects_message_conflict(tmp_path: Path, monkeypatch) -> None:
     )
     assert proc.returncode != 0
     assert "not allowed with" in proc.stderr or "argument" in proc.stderr
+
+
+def test_a_hook_refusal_is_a_finding_and_no_repo_is_a_caller_error(tmp_path: Path) -> None:
+    """#3577: the normal path's `git commit` refused by a hook asks for a
+    change to the content (1); not being in a repository is the caller's
+    (2). Both used to be 1."""
+    repo = _init_tmp_repo(tmp_path)
+    hook = repo / ".git" / "hooks" / "pre-commit"
+    hook.write_text("#!/bin/sh\necho 'lint: forbidden content' >&2\nexit 1\n", encoding="utf-8")
+    hook.chmod(0o755)
+    (repo / "f.txt").write_text("x\n", encoding="utf-8")
+    proc = subprocess.run(  # subprocess-timeout: ignore
+        [sys.executable, str(_SCRIPT), "--auto", "-m", "test: x", "f.txt"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=repo,
+    )
+    assert proc.returncode == 1, proc.stderr
+    assert "forbidden content" in proc.stderr
+
+    outside = tmp_path / "not-a-repo"
+    outside.mkdir()
+    proc = subprocess.run(  # subprocess-timeout: ignore
+        [sys.executable, str(_SCRIPT), "--show-locks"],
+        capture_output=True, text=True, encoding="utf-8", errors="replace", cwd=outside,
+        env={**os.environ, "GIT_CEILING_DIRECTORIES": str(tmp_path)},
+    )
+    assert proc.returncode == 2, proc.stderr

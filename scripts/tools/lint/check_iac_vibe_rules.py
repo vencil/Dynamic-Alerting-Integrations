@@ -46,7 +46,7 @@ above.
 
 hadolint is located as: ``hadolint`` on PATH, else
 ``docker run hadolint/hadolint:<ver>``. If neither exists the run aborts
-(exit 3) rather than silently passing.
+(exit 2, a caller error) rather than silently passing.
 
 ⛔ #3439: a hadolint run counts only when it shows that it ran. It is called
 with ``--no-fail``, so a run that read every file exits 0 whatever it found
@@ -92,7 +92,7 @@ if hasattr(sys.stdout, "reconfigure"):
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))  # Repo subdir layout
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION  # noqa: E402
 from _lint_helpers import parse_bypass_tag  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -472,8 +472,8 @@ def main() -> int:
         for line in findings[action]:
             print(f"  [{action}] {line}")
 
-    if engine_error:
-        return 3
+    if engine_error:  # the scan did not run: a caller error (#3577, #3611)
+        return EXIT_CALLER_ERROR
 
     n_block = len(findings["BLOCK"])
     n_warn = len(findings["WARN"])

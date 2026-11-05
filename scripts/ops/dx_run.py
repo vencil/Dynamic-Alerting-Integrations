@@ -44,6 +44,14 @@ from pathlib import Path
 # Appended, so a copy beside this file (one directory holding all three) wins.
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
+#: dx-run's own failures (no docker, the container not running, the doctor's
+#: missing set, docker exec failing, an exit status that cannot be read back)
+#: are the contract's caller error (scripts/tools/_lib_exitcodes.py; #3577,
+#: #3611). `--run` passes the wrapped command's own code through (the
+#: registry's PASSTHROUGH row), so a 2 there may be either: the `dx-run:` or
+#: `docker:` line on stderr says which.
+EXIT_ENV = 2
+
 DEFAULT_CONTAINER = "vibe-dev-container"
 DEFAULT_WORKSPACE = "/workspaces/vibe-k8s-lab"
 OUT_FILE = "_dx_out.txt"
@@ -159,7 +167,7 @@ def _run_dep_doctor(name: str, ws: str) -> int:
         f"Set {DOCTOR_SKIP_ENV}=1 to bypass this check.\n",
         file=sys.stderr,
     )
-    return 4
+    return EXIT_ENV
 
 
 def _container() -> str:
@@ -201,7 +209,7 @@ def cmd_status() -> int:
     name = _container()
     if not _docker_exists():
         print(f"docker: not available on PATH", file=sys.stderr)
-        return 1
+        return EXIT_ENV
     if not _container_exists(name):
         print(f"{name}: container does not exist (run scripts/dev_container_setup.sh)")
         return 2
@@ -209,14 +217,14 @@ def cmd_status() -> int:
         print(f"{name}: running")
         return 0
     print(f"{name}: stopped (run: scripts/ops/dx-run.sh --up)")
-    return 3
+    return EXIT_ENV
 
 
 def cmd_up() -> int:
     name = _container()
     if not _docker_exists():
         print("docker: not available on PATH", file=sys.stderr)
-        return 1
+        return EXIT_ENV
     if not _container_exists(name):
         print(f"{name}: container does not exist — create it first", file=sys.stderr)
         return 2
@@ -225,8 +233,9 @@ def cmd_up() -> int:
         return 0
     r = subprocess.run(["docker", "start", name], capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=60)
     if r.returncode != 0:
-        print(f"{name}: failed to start — {r.stderr.strip()}", file=sys.stderr)
-        return r.returncode
+        print(f"{name}: failed to start (docker rc {r.returncode}) — {r.stderr.strip()}",
+              file=sys.stderr)
+        return EXIT_ENV
     # Brief sanity wait for exec readiness.
     time.sleep(1)
     print(f"{name}: started")
@@ -242,13 +251,13 @@ def cmd_run(cmd: list[str], detach: bool = False) -> int:
     ws = _workspace()
     if not _docker_exists():
         print("docker: not available on PATH", file=sys.stderr)
-        return 1
+        return EXIT_ENV
     if not _container_running(name):
         print(
             f"{name}: not running. Start with: scripts/ops/dx-run.sh --up",
             file=sys.stderr,
         )
-        return 3
+        return EXIT_ENV
 
     # Live dependency check before we hand the command to the container —
     # see _run_dep_doctor. Cheap after the first run (stamped), skippable via
@@ -281,7 +290,7 @@ def cmd_run(cmd: list[str], detach: bool = False) -> int:
     if rc_exec != 0:
         # docker exec itself failed (not the user command).
         print(f"docker exec failed with rc={rc_exec}", file=sys.stderr)
-        return rc_exec
+        return EXIT_ENV
 
     # Read captured output back via `docker exec cat`.
     cat = subprocess.run(
@@ -294,10 +303,16 @@ def cmd_run(cmd: list[str], detach: bool = False) -> int:
         ["docker", "exec", name, "cat", out_path_in_container + ".rc"],
         capture_output=True, text=True, encoding="utf-8", errors="replace", check=False, timeout=30,
     )
+    # The wrapped command's own code, passed through (the registry's
+    # PASSTHROUGH row). No code read back is no verdict, never a success (#3609).
+    text = rc_cat.stdout.strip() if rc_cat.returncode == 0 else ""
     try:
-        return int(rc_cat.stdout.strip() or "0")
+        return int(text)
     except ValueError:
-        return 0
+        print(f"dx-run: could not read the command's exit status back "
+              f"({out_path_in_container}.rc: {text or rc_cat.stderr.strip() or 'empty'!r})",
+              file=sys.stderr)
+        return EXIT_ENV
 
 
 def main(argv: list[str] | None = None) -> int:

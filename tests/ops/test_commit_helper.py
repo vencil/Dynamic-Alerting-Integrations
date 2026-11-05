@@ -30,7 +30,7 @@ class TestCommitFile:
     def test_missing_file(self, tmp_path, capsys):
         mod = _load()
         rc = mod.commit_file(str(tmp_path / "nonexistent.txt"))
-        assert rc == 1
+        assert rc == 2
         assert "not found" in capsys.readouterr().err
 
     def test_invalid_utf8(self, tmp_path, capsys):
@@ -91,7 +91,7 @@ class TestCommitFile:
                 patch.object(mod.subprocess, "run", side_effect=FileNotFoundError):
             rc = mod.commit_file(str(msg_file))
 
-        assert rc == 127
+        assert rc == 2
         assert "git not found" in capsys.readouterr().err
 
 

@@ -170,11 +170,41 @@ def test_timeout_reaches_the_resolver_as_an_int(tmp_path: Path, monkeypatch) -> 
     seen: list = []
     monkeypatch.setattr(_cir, "_resolver", lambda: (lambda ref: ["true"], "stub"))
     monkeypatch.setattr(_cir, "_resolve_once",
-                        lambda cmd, timeout: (seen.append(timeout), (True, ""))[1])
+                        lambda cmd, timeout: (seen.append(timeout), (_cir.RESOLVED, ""))[1])
     monkeypatch.setattr(sys, "argv", ["check_image_refs_resolve.py",
                                       "--root", str(tmp_path), "--timeout", "7"])
     assert _cir.main() == 0
     assert seen == [7] and type(seen[0]) is int
+
+
+@pytest.mark.parametrize("outcomes, rc", [
+    ({"quay.io/o/a:v1": "not-resolved"}, 1),
+    ({"quay.io/o/a:v1": "unanswered"}, 2),
+    ({"quay.io/o/a:v1": "not-resolved", "quay.io/o/b:v1": "unanswered"}, 2),
+], ids=["finding", "no-answer", "both-no-answer-wins"])
+def test_a_resolver_that_gave_no_answer_is_not_a_finding(
+        tmp_path: Path, monkeypatch, capsys, outcomes, rc) -> None:
+    """A timeout says nothing about the ref: 2, not the 1 of a ref that does not
+    resolve, and ahead of it when both happen in one run (#3577, #3611)."""
+    _write(tmp_path / "helm/a/values.yaml", "image:\n  repository: quay.io/o/a\n  tag: v1\n")
+    if len(outcomes) > 1:
+        _write(tmp_path / "helm/b/values.yaml", "image:\n  repository: quay.io/o/b\n  tag: v1\n")
+    monkeypatch.setattr(_cir, "_resolver", lambda: (lambda ref: [ref], "stub"))
+    monkeypatch.setattr(_cir, "_resolve_once",
+                        lambda cmd, timeout: (outcomes[cmd[0]], "synthetic"))
+    monkeypatch.setattr(sys, "argv", ["check_image_refs_resolve.py", "--root", str(tmp_path)])
+    assert _cir.main() == rc
+    if rc == 2:
+        assert "NOT checked" in capsys.readouterr().err
+
+
+def test_resolve_once_tells_a_timeout_from_a_refusal() -> None:
+    """The structural half: only TimeoutExpired is UNANSWERED."""
+    assert _cir._resolve_once([sys.executable, "-c", "import time; time.sleep(5)"], 1)[0] \
+        == _cir.UNANSWERED
+    assert _cir._resolve_once([sys.executable, "-c", "raise SystemExit(1)"], 30)[0] \
+        == _cir.NOT_RESOLVED
+    assert _cir._resolve_once([sys.executable, "-c", ""], 30)[0] == _cir.RESOLVED
 
 
 # ── #3206 (ADR-036 §12): the sources are read as kubectl / Helm read them ──

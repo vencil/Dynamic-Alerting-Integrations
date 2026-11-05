@@ -262,10 +262,10 @@ class TestMainExitCodes:
         monkeypatch.delenv("PR_BODY", raising=False)
         assert iac.main() == 1
 
-    def test_engine_unavailable_returns_three(self, monkeypatch):
+    def test_engine_unavailable_is_a_caller_error(self, monkeypatch):
         monkeypatch.setattr(iac, "run_hadolint", lambda dfs: None)
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
-        assert iac.main() == 3
+        assert iac.main() == 2
 
 
 # ---------------------------------------------------------------------------

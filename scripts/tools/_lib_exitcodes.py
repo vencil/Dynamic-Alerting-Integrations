@@ -96,9 +96,13 @@ codes passed through from Go binaries are the binary's.
 
 Allowed extensions
 ------------------
-A tool MAY define higher codes (>= 3) for finer-grained caller-error
-subtypes, as long as 0/1/2 keep the meanings above. The sanctioned >= 3
-extensions today:
+A tool MAY use a code outside 0/1/2 only where :data:`EXTENDED_EXIT_CODES`
+registers it for that entry — the one list, read at runtime by ``run()``
+(an unregistered status ends at 2 with an ERROR line) and statically by
+tests/shared/test_single_exit_path.py (every exit-status literal outside
+0..2 under scripts/{tools,ops,dx,session-guards} must be in its entry's row),
+so a code can no longer be added by writing it. Adding a row is an owner
+decision (#3611). The rows, and why each exists:
 
 * diag_pr_ci.py's EXIT_NETWORK_BLOCKED = 3 (documented in
   docs/internal/windows-mcp-playbook.md trap #64 — "switch host" hint,
@@ -121,6 +125,11 @@ extensions today:
   the remedy is to run
   `da-tools generate-routes --config-dir <dir> --validate --strict`.
   Precedence 3 > 1 > 4 > 0. Same contract places as exit 3.
+* :data:`PASSTHROUGH` — ops/dx_run.py (``--run``: the command run in the
+  dev container) and ops/commit_helper.py (``git commit``): wrappers that
+  end with the wrapped command's own status, whatever it is (#3577). Their
+  own failures — docker, the container, the wrapper's inputs — are 2 like
+  any tool's, and a literal they choose is held to 0/1/2 by the gate.
 
 No CLI tool repurposes 1 or 2: dx/tenant_verify.py, which inverted them
 (exit 2 = verification finding, exit 1 = caller error and crash), follows
@@ -145,6 +154,7 @@ from __future__ import annotations
 import os
 import sys
 import traceback
+from types import MappingProxyType
 from typing import Any, Callable, Final, NoReturn, Optional
 
 
@@ -720,14 +730,19 @@ PASSTHROUGH: Final[str] = "passthrough"
 #: a code a tool picked on its own, a multiple of 256 (which the OS would
 #: truncate to 0 — a false success) or a non-int status. Each row is an
 #: owner-sanctioned exception; dev-rules §13 names them.
-EXTENDED_EXIT_CODES: Final[dict] = {
+EXTENDED_EXIT_CODES: Final = MappingProxyType({
     # Network-blocked host: "switch host", not 2's "gh missing" (diag_pr_ci).
     "diag_pr_ci": frozenset({3}),
     # What happened after or around the write (#1950, docs/cli-reference.md).
     "patch_config": frozenset({3, 4, 5, 6, 7}),
     # da-guard's 3 (cannot decode) and 4 (not judged), passed through (#2123, #2904).
     "guard_dispatch": frozenset({3, 4}),
-}
+    # Wrappers of an arbitrary command (#3577 R3): `--run` ends at the wrapped
+    # command's own code; the wrapper's own failures are 2, named on stderr.
+    "dx_run": PASSTHROUGH,
+    # `git commit`'s own code (a hook's refusal among them), passed through.
+    "commit_helper": PASSTHROUGH,
+})
 
 
 def _entry_name() -> str:

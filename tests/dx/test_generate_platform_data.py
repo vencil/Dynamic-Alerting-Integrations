@@ -522,11 +522,29 @@ class TestChartAppVersionIsHelmsReading:
         """`appVersion: 1.10` is the number 1.1 to Helm; it used to be
         str()-ed into "1.1" and composed into an image tag nobody wrote."""
         mod = self._chart(tmp_path, monkeypatch, "appVersion: 1.10")
-        with pytest.raises(SystemExit, match="not a string"):
+        with pytest.raises(mod.WizardImagesInconsistent, match="not a string"):
             mod._chart_app_version("x")
+
+    @pytest.mark.parametrize("exc_name, rc", [("WizardImagesInconsistent", 1),
+                                              ("WizardImagesUnreadable", 2)])
+    def test_main_tells_a_finding_from_no_verdict(self, monkeypatch, capsys,
+                                                  cli_argv, exc_name, rc):
+        """Sources that disagree are the repo's finding (1); a source that could
+        not be read is no verdict (2) — once both were `SystemExit(str)` (#3577)."""
+        mod = _load_module()
+        exc = getattr(mod, exc_name)
+
+        def _boom():
+            raise exc("ERROR: synthetic")
+        monkeypatch.setattr(mod, "build_wizard_images", _boom)
+        cli_argv("generate_platform_data", "--dry-run")
+        with pytest.raises(SystemExit) as ei:
+            mod.main()
+        assert ei.value.code == rc
+        assert "ERROR: synthetic" in capsys.readouterr().err
 
     def test_no_da_crdecode_is_refused_by_name(self, tmp_path, monkeypatch):
         mod = self._chart(tmp_path, monkeypatch, 'appVersion: "1.0.0"')
         monkeypatch.setenv("DA_CRDECODE_BINARY", str(tmp_path / "no-such-da-crdecode"))
-        with pytest.raises(SystemExit, match="the way Helm does"):
+        with pytest.raises(mod.WizardImagesUnreadable, match="the way Helm does"):
             mod._chart_app_version("x")
