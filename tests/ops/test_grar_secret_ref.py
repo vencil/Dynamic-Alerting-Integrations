@@ -914,7 +914,9 @@ _REDIRECT_ROWS = [s for s in CREDENTIAL_REF_SITES if s.follows_redirects]
 
 
 @pytest.mark.parametrize("site", _REDIRECT_ROWS, ids=lambda s: ".".join(s.path))
-@pytest.mark.parametrize("follow", ["absent", True, None])
+@pytest.mark.parametrize("follow", ["absent", True, None,
+                                    # 盲審 F2：要的是布林 false，字串 "false"／"no" 不算
+                                    "false", "no", 0])
 def test_a_credential_resent_on_redirect_needs_follow_redirects_false(site, follow):
     receiver = _ref_at(site.path, {"secret": {"key": "k"}})
     if follow == "absent":
