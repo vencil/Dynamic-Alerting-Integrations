@@ -281,6 +281,7 @@ def config_check(binary: str, kind: str, where: str, *, path: str | None = None,
                 proxy_config = os.path.join(tmp, "oauth2-proxy.yaml")
                 with open(proxy_config, "w", encoding="utf-8", newline="\n") as f:
                     f.write(claims)
+                os.chmod(proxy_config, 0o600)
             cmd += ["--oauth2-proxy-config", proxy_config]
         cmd.append(os.path.abspath(path) if path is not None else "-")
         return _run_config_check(cmd, binary, kind, where, data)
