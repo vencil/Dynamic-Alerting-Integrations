@@ -601,6 +601,31 @@ func applyBoundaryRules(name string, partial *ThresholdConfig, logger *log.Logge
 			partial.Profiles = nil
 		}
 	}
+	WarnRefusedDimensionBases(name, partial.Dimensions, logger)
+}
+
+// WarnRefusedDimensionBases logs each `dimensions:` base that is a
+// `_critical` tier (DimensionBaseRefused, #3556): it declares nothing, so no
+// key of that shape is served. Sorted, so the log is the same every reload.
+// applyBoundaryRules calls it for every directory-mode file; the single-file
+// Load, which applies no boundary rules, calls it itself.
+func WarnRefusedDimensionBases(name string, dims map[string][]string, logger *log.Logger) {
+	if logger == nil {
+		return
+	}
+	var refused []string
+	for base := range dims {
+		if DimensionBaseRefused(base) {
+			refused = append(refused, base)
+		}
+	}
+	sort.Strings(refused)
+	for _, base := range refused {
+		tier := strings.TrimSuffix(base, criticalSuffix)
+		logger.Printf("WARN: dimensions in %s declares %q, a `_critical` tier, not a base, so no %s{...} key is "+
+			"served (#3556). Write a per-dimension critical threshold as %s{label=\"v\"}: \"N:critical\" and "+
+			"declare its labels under %q", name, base, base, tier, tier)
+	}
 }
 
 // isPlatformKey reports whether a flat-cache key names a platform

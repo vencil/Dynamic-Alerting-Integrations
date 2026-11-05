@@ -5,8 +5,11 @@ package config
 // writes it. Tenant ids are fixture names (CLAUDE.md #9).
 
 import (
+	"bytes"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -143,5 +146,70 @@ func TestMergeTenant_CarriesRootDimensions(t *testing.T) {
 	}
 	if len(got) != 1 || got[0].CustomLabels["version"] != "v2" || got[0].Value != 60 {
 		t.Fatalf("GET's merge must serve the declared version row (60), got %+v", got)
+	}
+}
+
+// #3556: a `<base>_critical` base under `dimensions:` is a tier, not a base.
+// It declares nothing, in either #1231 spelling, so no `<base>_critical{…}`
+// key is served — the exporter used to serve one, when declared, as a metric
+// of its own (`<base>_critical`, severity=warning) no rule pack reads.
+func TestDimensionBaseRefused(t *testing.T) {
+	t.Parallel()
+	cases := map[string]bool{
+		"mysql_threads_running_critical": true,
+		"mysql_cpu_critical":             true, // retired spelling of the same tier
+		"container_cpu_critical":         true,
+		"mysql_threads_running":          false,
+		"mysql_cpu":                      false,
+		"_critical":                      false, // no base before the suffix
+		"criticality":                    false,
+		"container_cpu":                  false,
+	}
+	for base, want := range cases {
+		if got := DimensionBaseRefused(base); got != want {
+			t.Errorf("DimensionBaseRefused(%q) = %v, want %v", base, got, want)
+		}
+	}
+}
+
+func TestResolve_CriticalTierBaseDeclaresNothing(t *testing.T) {
+	t.Parallel()
+	for _, declared := range []string{"mysql_threads_running_critical", "mysql_cpu_critical"} {
+		cfg := &ThresholdConfig{
+			Defaults:   map[string]float64{"mysql_threads_running": 10},
+			Dimensions: map[string][]string{declared: {"db"}, "mysql_threads_running": {"db"}},
+			Tenants: map[string]map[string]ScheduledValue{"t-a": {
+				`mysql_threads_running_critical{db="x"}`: {Default: "30"},
+				`mysql_cpu_critical{db="y"}`:             {Default: "31"},
+				// The per-dimension critical threshold, still served.
+				`mysql_threads_running{db="z"}`: {Default: "40:critical"},
+			}},
+		}
+		rows := dimRows(t, cfg)
+		if _, ok := rows["mysql/threads_running/critical"]; !ok || len(rows) != 2 {
+			// the z row and its #1231 twin (mysql/cpu/critical)
+			t.Errorf("declared %q: want only the z row and its twin, got %v", declared, rows)
+		}
+		for k := range rows {
+			if strings.Contains(k, "_critical") {
+				t.Errorf("declared %q: a `_critical{…}` key was served as %s", declared, k)
+			}
+		}
+	}
+}
+
+func TestBoundary_WarnsCriticalTierDimensionBase(t *testing.T) {
+	t.Parallel()
+	var buf bytes.Buffer
+	p := ThresholdConfig{Dimensions: map[string][]string{
+		"mysql_threads_running_critical": {"db"}, "container_cpu": {"version"}}}
+	applyBoundaryRules("_defaults.yaml", &p, log.New(&buf, "", 0))
+	out := buf.String()
+	if !strings.Contains(out, `"mysql_threads_running_critical", a `+"`_critical`"+` tier`) ||
+		!strings.Contains(out, `mysql_threads_running{label="v"}: "N:critical"`) {
+		t.Errorf("want the #3556 WARN naming the tier and the N:critical form, got %q", out)
+	}
+	if strings.Contains(out, "container_cpu") {
+		t.Errorf("a base must not be warned about, got %q", out)
 	}
 }
