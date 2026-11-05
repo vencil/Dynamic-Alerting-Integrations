@@ -572,9 +572,10 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--render-cr", _threshold_cr(t),
                     "--config-dir", _out(t, "rendered"), "--dry-run"]),
 
+    # #1211 gap 2: no flagless mode — the output mode's dry-run preview.
     R("generate_alertmanager_routes",
       lambda t, s: ["--config-dir", _copy_into(t, SEED_CONF_D, "conf.d"),
-                    "--dry-run"]),
+                    "--output-alertmanager", "--dry-run"]),
 
     R("generate_tenant_mapping_rules",
       lambda t, s: ["--config-dir", _copy_into(t, SEED_CONF_D, "conf.d"),

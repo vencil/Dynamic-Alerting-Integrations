@@ -88,10 +88,10 @@ def test_validate_fails_on_it(enabled, tmp_path):
 
 @pytest.mark.parametrize("enabled", ["n", "'yes'", "'true'"])
 def test_render_refuses_the_tree_and_writes_nothing(enabled, tmp_path):
-    """#2906: render used to print the WARN and write a config without the
+    """#2906: render (now --output-alertmanager) used to print the WARN and write a config without the
     NOC route at rc 0; now the whole tree is refused."""
     out = tmp_path / "am.yaml"
-    p = _gen(_tree(tmp_path, enabled), "-o", str(out))
+    p = _gen(_tree(tmp_path, enabled), "--output-alertmanager", "-o", str(out))
     assert p.returncode == 1, p.stderr
     assert "config problem(s) — nothing was generated, written or applied" in p.stderr
     assert not out.exists()
@@ -106,7 +106,7 @@ def test_a_boolean_enabled_is_unchanged(enabled, on, tmp_path):
     assert not [w for w in warnings if "_routing_enforced" in w]
     assert _gen(d, "--validate").returncode == 0
     out = tmp_path / "am.yaml"
-    assert _gen(d, "-o", str(out)).returncode == 0
+    assert _gen(d, "--output-alertmanager", "-o", str(out)).returncode == 0
     assert ("platform-enforced" in out.read_text(encoding="utf-8")) is on
 
 

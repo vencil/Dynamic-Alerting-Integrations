@@ -686,9 +686,10 @@ ROWS: list[Row] = [
       out_name="federation-jwks.json",
       requires="openssl"),
     R("ops/generate_alertmanager_routes.py", "-o/--output", "file",
-      lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "-o", str(out)],
-      reach="in-repo try-local seed conf.d; the default render mode writes the "
-            "routing fragment to -o",
+      lambda c, out: ["--config-dir", str(_jsc.SEED_CONF_D), "--output-alertmanager",
+                      "-o", str(out)],
+      reach="in-repo try-local seed conf.d; --output-alertmanager writes the "
+            "merged alertmanager.yml to -o",
       out_name="alertmanager-routes.yaml"),
     R("ops/generate_tenant_mapping_rules.py", "-o/--output", "file",
       lambda c, out: ["--config-dir", _mapping_conf_d(c.tmp), "--metrics", "mysql_up",

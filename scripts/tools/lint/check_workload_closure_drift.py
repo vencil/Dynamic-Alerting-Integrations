@@ -157,4 +157,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)

@@ -228,8 +228,9 @@ def render_routes(conf_d: str | os.PathLike[str], *,
             kind = "config" if refused and not crashed else "tool"
             raise RenderError(RenderFailure(kind, f"route generator exited {proc.returncode}: {last}"))
         if not out.exists():
-            # A tree with no tenant: the generator exits 0 and writes nothing
-            # ("No tenants found in config directory.").
+            # Nothing written at rc 0. Since #1211 gap 2 a tree with no tenant
+            # is still written (the base and the platform routes), so this is
+            # only reached if the generator stops writing one again.
             return dict(EMPTY_ROUTES)
         # ADR-036 §12 (#3206): the ConfigMap as kubectl reads it (da-crdecode),
         # its alertmanager.yml as Alertmanager loads it (da-read alertmanager).

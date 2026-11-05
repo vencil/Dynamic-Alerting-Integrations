@@ -2298,11 +2298,11 @@ class TestStrictValidateCLI:
             assert result.returncode == 0, result.stdout + result.stderr
             assert "OK: all configs valid" in result.stdout
 
-    def test_strict_render_mode_aborts_on_violation(self):
-        """strict 不限 --validate：render 模式下違規也報錯終止（ADR-007）。"""
+    def test_strict_output_mode_aborts_on_violation(self):
+        """strict 不限 --validate：輸出模式下違規也報錯終止（ADR-007）。"""
         with tempfile.TemporaryDirectory() as d:
             self._write_confd(d, {"forbidden_receiver_types": ["slack"]})
-            result = self._run(d, "--strict")
+            result = self._run(d, "--output-alertmanager", "--dry-run", "--strict")
             assert result.returncode == 1, result.stdout + result.stderr
             assert "FAIL" in result.stderr
 

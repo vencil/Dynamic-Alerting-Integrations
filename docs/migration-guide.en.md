@@ -162,9 +162,14 @@ Migrating from "instance-based dispatch" to "tenant-based dispatch": use `tenant
 ```bash
 da-tools generate-routes --config-dir conf.d/ --validate \
                          --policy .github/custom-rule-policy.yaml
-da-tools generate-routes --config-dir conf.d/ -o alertmanager-routes.yaml
+# BYO Alertmanager outside K8s: merge into your own alertmanager.yml
+da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
+                         --base-config alertmanager.yml -o alertmanager.new.yml
+# K8s: merge into the cluster's ConfigMap and reload (GitOps: --output-configmap instead)
 da-tools generate-routes --config-dir conf.d/ --apply --yes
 ```
+
+The output modes merge the generated routing into your own config (`--base-config`, the source) and emit a separate output: your own routes, receivers and inhibit rules are kept; when conf.d changes, run it again on the same source, never with the output as the base (its `tenant-*` receivers are refused, exit 1); a run without a mode flag is exit 2. ⚠️ The v2.9.0 image has no `--output-alertmanager` and prints a fragment when no mode flag is given <!-- image-caveat: v2.9.0 -->
 
 The platform enforces guardrails on timing parameters (`group_wait` 5s–5m, `group_interval` 5s–5m, `repeat_interval` 1m–72h); out-of-range values are auto-clamped.
 

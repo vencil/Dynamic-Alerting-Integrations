@@ -378,10 +378,16 @@ def test_tenant_matcher(matcher, tenant):
     assert rd._tenant_of_matcher(matcher) == tenant
 
 
-def test_generator_renders_nothing_for_a_tree_without_tenants(tmp_path):
-    """產生器對沒有租戶的樹回 0 且不寫檔：讀成空的設定，不是工具失敗。"""
+def test_generator_renders_no_tenant_routing_for_a_tree_without_tenants(tmp_path):
+    """產生器對沒有租戶的樹回 0：#1211 缺口 2 起照樣寫出（只有 base 與平台
+    路由），讀成沒有任何租戶內容的設定，不是工具失敗。"""
     (tmp_path / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
-    assert rd.render_routes(tmp_path) == rd.EMPTY_ROUTES
+    cfg = rd.render_routes(tmp_path)
+    names = [r["name"] for r in cfg["receivers"]]
+    assert not [n for n in names if n.startswith(("tenant-", "platform-enforced"))], names
+    assert [r["receiver"] for r in cfg["route"]["routes"]] == [
+        "watchdog-heartbeat", "custom-alerts-firehose", "synthetic-receiver",
+        "sentinel-sinkhole"], cfg["route"]
 
 
 def test_generator_is_found_beside_this_module():

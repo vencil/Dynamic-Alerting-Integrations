@@ -182,5 +182,12 @@ def main(argv: list[str] | None = None) -> int:
     return EXIT_VIOLATION
 
 
+def _cli() -> int:
+    """The process entry: `main` with the command line (`main()` alone
+    parses no arguments, for importers and tests)."""
+    return main(sys.argv[1:])
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    import _lib_exitcodes
+    _lib_exitcodes.run(_cli)

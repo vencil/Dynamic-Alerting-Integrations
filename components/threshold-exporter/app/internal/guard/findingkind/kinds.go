@@ -71,6 +71,13 @@ var (
 	// inherited. Field is `<file>:defaults.<key>`.
 	FindingRootDefaultsReservedKey = register("root_defaults_reserved_key",
 		"judges a `_` key in the conf.d root defaults")
+	// FindingRootDimensionsCriticalBase (error, TenantID ""; #3556): a base
+	// under the conf.d root carrier's `dimensions:` that is a `<base>_critical`
+	// tier (either #1231 spelling; config.DimensionBaseRefused). It declares
+	// nothing: no `<base>_critical{…}` key is served. Field is
+	// `<file>:dimensions.<base>`.
+	FindingRootDimensionsCriticalBase = register("root_dimensions_critical_base",
+		"judges a `_critical` tier declared as a base under the conf.d root `dimensions:`")
 	// FindingRootDefaultNullUndeclared (warn; #2518): the tenant's config sets
 	// Field, which the conf.d root `_defaults.yaml` writes as null — not
 	// declared — so the exporter serves no series for it. Field may also be a

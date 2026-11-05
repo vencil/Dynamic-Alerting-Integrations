@@ -108,15 +108,19 @@ SHAPES: dict[str, list[list[str]]] = {
                                ["--config-dir", "{cfg}",
                                 "--output-dir", "{named}/m"]],
     "da_assembler.py": [["--render-cr", "{named}/tc.yaml"]],
-    "generate_alertmanager_routes.py": [["-o", "{named}/r.yaml"]],
+    # #1211 gap 2: no flagless mode — `--output-alertmanager` (stdout) stands
+    # where the bare shape's flagless render stood.
+    "generate_alertmanager_routes.py": [["--output-alertmanager"],
+                                        ["--output-alertmanager", "-o", "{named}/r.yaml"]],
     "generate_tenant_mapping_rules.py": [["-o", "{named}/r.yaml"]],
     "generate_tenant_metadata.py": [["--output", "{named}/m.json"]],
     "analyze_rule_pack_gaps.py": [["-o", "{named}/g.json"]],
 }
-# Tools whose bare shape fails argument validation (a required flag); their
+# Tools whose bare shape fails argument validation (a required flag, or —
+# generate_alertmanager_routes — a required mode: rc 2 "no mode given"); their
 # measured shapes are all in SHAPES.
 NO_BARE_SHAPE = {"run_chaos_soak.py", "config_history.py", "deprecate_rule.py",
-                 "offboard_tenant.py", "diagnose.py"}
+                 "offboard_tenant.py", "diagnose.py", "generate_alertmanager_routes.py"}
 # `migrate_to_operator` reads ConfigMaps from a required `--source-dir`; its
 # `--config-dir` (default `conf.d` under the cwd) is passed by its shapes.
 SOURCE_DIR_TOOLS = {"migrate_to_operator.py"}
@@ -139,7 +143,7 @@ EXPECTED_WRITES: dict[tuple[str, tuple[str, ...]], dict[str, str]] = {
 MUST_WRITE_NAMED = {
     ("compile_custom_alerts.py", ("--out", "{named}/pack.yaml")),
     ("operator_generate.py", ("--output-dir", "{named}/m")),
-    ("generate_alertmanager_routes.py", ("-o", "{named}/r.yaml")),
+    ("generate_alertmanager_routes.py", ("--output-alertmanager", "-o", "{named}/r.yaml")),
     ("generate_tenant_mapping_rules.py", ("-o", "{named}/r.yaml")),
     ("backtest_threshold.py", ("--baseline", "{cfg}", "--skip-if-unavailable",
                                "--markdown-output", "{named}/b.md")),
