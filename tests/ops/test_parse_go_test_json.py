@@ -30,6 +30,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "scripts" / "ops"))
 
+import parse_go_test_json as pgtj  # noqa: E402
 from parse_go_test_json import build_fragment, parse_stream  # noqa: E402
 
 
@@ -321,3 +322,73 @@ def test_test_runs_is_empty_for_a_clean_run_and_present_in_the_fragment(tmp_path
                           run_url="u", workdir="w", packages="./...")
     assert frag["test_runs"] == {}
     assert frag["failed"] is False
+
+
+# ── slow packages (#3541 PR-B) ───────────────────────────────────────────────
+
+
+def _pkg_verdict(pkg: str, elapsed, action: str = "pass") -> str:
+    return json.dumps({"Action": action, "Package": pkg, "Elapsed": elapsed})
+
+
+def test_slow_package_threshold_is_derived_from_the_timeout_constant() -> None:
+    """One SSOT: the threshold is ratio x the -timeout, not a literal of its own."""
+    res = parse_stream([], go_exit_code=0)
+    assert res["slow_package_threshold_s"] == pgtj.GO_TEST_TIMEOUT_S * pgtj.SLOW_PACKAGE_RATIO
+    assert res["go_test_timeout_s"] == pgtj.GO_TEST_TIMEOUT_S
+    assert pgtj.SLOW_PACKAGE_RATIO == 0.5
+
+
+def test_slow_packages_are_strictly_above_the_threshold_heaviest_first() -> None:
+    line = pgtj.GO_TEST_TIMEOUT_S * pgtj.SLOW_PACKAGE_RATIO
+    lines = [
+        _pkg_verdict("m/below", line - 0.1),
+        _pkg_verdict("m/at", line),
+        _pkg_verdict("m/above", line + 0.1),
+        _pkg_verdict("m/heaviest", line + 50, action="fail"),
+        # A test-level event is not the package's time, however long.
+        json.dumps({"Action": "pass", "Package": "m/test-level", "Test": "TestX",
+                    "Elapsed": line * 2}),
+        _pkg_verdict("m/garbage", "nan"),
+    ]
+    res = parse_stream(lines, go_exit_code=1)
+    assert res["slow_packages"] == [
+        {"package": "m/heaviest", "elapsed_s": round(line + 50, 3)},
+        {"package": "m/above", "elapsed_s": round(line + 0.1, 3)},
+    ]
+
+
+def test_a_timed_out_package_is_not_also_slow() -> None:
+    """The timeout is its own incident; filing it again as slow is noise."""
+    res = parse_stream(_timeout_lines(), go_exit_code=1)
+    assert res["timed_out"] is True
+    assert res["slow_packages"] == []
+    # The panic line alone excludes the package, whatever its Elapsed says.
+    lines = [
+        _pkg_output("m/t", "panic: test timed out after 30m0s\n", "TestT"),
+        _pkg_verdict("m/t", pgtj.GO_TEST_TIMEOUT_S + 1.0, action="fail"),
+        _pkg_verdict("m/slow", pgtj.GO_TEST_TIMEOUT_S * 0.9),
+    ]
+    got = parse_stream(lines, go_exit_code=1)["slow_packages"]
+    assert [s["package"] for s in got] == ["m/slow"]
+
+
+def test_a_slow_package_alone_does_not_fail_the_fragment(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.jsonl"
+    raw.write_text(_pkg_verdict("m/slow", pgtj.GO_TEST_TIMEOUT_S * 0.75) + "\n",
+                   encoding="utf-8")
+    frag = build_fragment(module="m", input_path=raw, go_exit_code=0,
+                          run_url="u", workdir="w", packages="./...")
+    assert frag["slow_packages"] == [{"package": "m/slow",
+                                      "elapsed_s": pgtj.GO_TEST_TIMEOUT_S * 0.75}]
+    assert frag["failed"] is False
+    assert frag["unattributed_failure"] is False
+
+
+def test_the_ratio_moves_the_line(monkeypatch) -> None:
+    """The detector reads the constants at call time, so the ratio is the only knob."""
+    lines = [_pkg_verdict(f"m/p{i}", s) for i, s in enumerate((100.0, 500.0, 1000.0))]
+    monkeypatch.setattr(pgtj, "SLOW_PACKAGE_RATIO", 0.05)
+    assert len(parse_stream(lines, go_exit_code=0)["slow_packages"]) == 3
+    monkeypatch.setattr(pgtj, "SLOW_PACKAGE_RATIO", 1.0)
+    assert parse_stream(lines, go_exit_code=0)["slow_packages"] == []

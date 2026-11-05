@@ -42,6 +42,12 @@ incident has a fingerprint `{module}|{kind}|{subject}`:
     incident (subject: module) listing them, so a broken shared fixture does not
     open 900 issues.
   * failing, none of the above -> `unattributed` (subject: module).
+  * each package in `slow_packages` -> `slow-package` (subject: the package),
+    #3541 PR-B: its package-level Elapsed passed SLOW_PACKAGE_RATIO of the
+    per-binary -timeout without timing out. WARNING-level: it is tracked like
+    the others (filed / refreshed / not seen) but never counts as a failure, so
+    it neither suppresses `unattributed` nor turns the module's verdict red.
+    A package that timed out is already a `timeout` and is never also slow.
   * fragment missing/unreadable -> `no-result` (subject: module). Kept separate
     from `unattributed`: "the leg never reported" and "the leg reported a
     failure nobody could attribute" are different problems.
@@ -187,7 +193,11 @@ FINGERPRINT_LINE_RE = re.compile(r"^<!-- race-fingerprint: (\S+) -->$")
 
 TITLE_PREFIX_TMPL = "Nightly go test -race — {module}"
 
-INCIDENT_KINDS = ("build", "timeout", "data-race", "test", "tests", "unattributed", "no-result")
+INCIDENT_KINDS = ("build", "timeout", "data-race", "test", "tests", "unattributed", "no-result",
+                  "slow-package")
+# Kinds that are tracked but are NOT failures: a module whose only incidents are
+# of these kinds still reads GREEN in the step summary.
+WARNING_KINDS = frozenset({"slow-package"})
 
 
 def today() -> str:
@@ -510,7 +520,7 @@ def load_fragment(frags_dir: Path, module: str) -> tuple[dict, str]:
         "module": module, "failed": True, "failed_tests": [], "race_tests": [],
         "had_data_race": False, "build_failed": False, "unattributed_failure": True,
         "timed_out": False, "timeout_packages": [], "timeout_running_tests": [],
-        "go_exit_code": -1, "fail_events": 0, "non_json_lines": 0, "total_events": 0,
+        "slow_packages": [], "go_exit_code": -1, "fail_events": 0, "non_json_lines": 0, "total_events": 0,
         "raw_missing": True, "run_url": "", "workdir": "", "packages": "",
         "fragment_missing": True,
     }
@@ -548,7 +558,8 @@ def derive_incidents(frag: dict) -> list[dict]:
       module; failing top-level tests that are not race tests and not merely
       running at a timeout -> `test` each, or one `tests` above
       MAX_TEST_INCIDENTS; nothing attributable -> `unattributed`; no fragment ->
-      `no-result`. A green fragment yields [].
+      `no-result`; then one warning-level `slow-package` per slow package. A
+      green fragment without slow packages yields [].
     """
     module = frag["module"]
 
@@ -601,7 +612,39 @@ def derive_incidents(frag: dict) -> list[dict]:
 
     if not out and frag.get("failed"):
         out.append(inc("unattributed", module))
+
+    # Warning-level, appended AFTER the unattributed check: a slow package is
+    # not an explanation for a failing exit code.
+    timed_out_pkgs = {str(tp.get("package") or "").strip() for tp in timeouts}
+    try:
+        threshold = float(frag.get("slow_package_threshold_s") or 0)
+        budget = float(frag.get("go_test_timeout_s") or 0)
+    except (TypeError, ValueError):
+        threshold, budget = 0.0, 0.0
+    for sp in frag.get("slow_packages") or []:
+        if not isinstance(sp, dict):
+            continue
+        pkg = str(sp.get("package") or "").strip()
+        if not pkg or pkg in timed_out_pkgs:
+            continue
+        try:
+            elapsed = float(sp.get("elapsed_s"))
+        except (TypeError, ValueError):
+            continue
+        out.append(inc("slow-package", pkg, tests=[], elapsed_s=elapsed,
+                       threshold_s=threshold, timeout_s=budget))
     return out
+
+
+def _secs(value) -> str:
+    """`954.8` -> `954.8 s`, `1800.0` -> `1800 s`; `?` when unknown."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "?"
+    if v <= 0:
+        return "?"
+    return f"{v:g} s" if v == int(v) else f"{v:.1f} s"
 
 
 def repetitions(runs: dict | None, test: str) -> tuple[str, int, int]:
@@ -662,6 +705,9 @@ def incident_verdict(inc: dict) -> str:
         return f"{len(names)} tests failing"
     if kind == "unattributed":
         return "failing, cause NOT attributed"
+    if kind == "slow-package":
+        return (f"WARNING, not failing — {_secs(inc.get('elapsed_s'))} of the "
+                f"{_secs(inc.get('timeout_s'))} -timeout")
     return "failing"
 
 
@@ -732,9 +778,12 @@ def compose_body(inc: dict, frag: dict, state: dict, run_url: str, date: str,
         warn.append(f"ℹ️ {frag['non_json_lines']} non-JSON line(s) in the stream were skipped.")
 
     run_filter = f" -run '^{subject}$'" if kind == "test" else ""
+    # A slow package is one binary: reproduce just it, with the nightly's flags.
+    targets = subject if kind == "slow-package" else (frag.get("packages") or "./...")
+    extra = " -short -json" if kind == "slow-package" else ""
     reproduce = (
         f"cd {frag.get('workdir') or '<workdir>'} && "
-        f"go test {frag.get('packages') or './...'} -race -count=10{run_filter}"
+        f"go test {targets} -race -count=10{extra}{run_filter}"
     )
     first_run = state.get("first_run") or run_url
     rows = [
@@ -745,7 +794,8 @@ def compose_body(inc: dict, frag: dict, state: dict, run_url: str, date: str,
         f"| First seen | {state.get('first_seen') or date} ([run]({first_run})) |",
         f"| Latest run | {date} ([run]({run_url})) |",
         f"| Last night not seen | {state.get('last_green') or 'never recorded'} |",
-        f"| Consecutive failing nights | {state.get('streak', 0)} |",
+        f"| Consecutive {'nights seen' if kind in WARNING_KINDS else 'failing nights'} "
+        f"| {state.get('streak', 0)} |",
     ]
 
     out = [
@@ -878,6 +928,36 @@ def compose_body(inc: dict, frag: dict, state: dict, run_url: str, date: str,
             "`pass`/`fail` events by `Elapsed`. Start with the tests listed as running "
             "at the deadline."
         )
+    elif kind == "slow-package":
+        elapsed, budget = inc.get("elapsed_s"), inc.get("timeout_s")
+        out += ["## Slow package", "",
+                f"`{subject}` took **{_secs(elapsed)}** (its package-level `Elapsed`) "
+                f"under `-race -count=10 -short`. Threshold: {_secs(inc.get('threshold_s'))}, "
+                f"i.e. more than half of the {_secs(budget)} per-binary `-timeout`.", ""]
+        nature.append(
+            "**A warning, not a failure.** The package finished inside its `-timeout`; "
+            "any test that failed tonight is tracked in its own issue. This one only says "
+            "the package is spending most of its time budget, and it does not turn the "
+            "module's nightly verdict red."
+        )
+        nature.append(
+            "**Sharding cannot fix it.** A package is ONE test binary, and `-timeout` is "
+            "a budget per binary: the nightly can put this package on a shard of its own, "
+            "but it cannot split it. If it keeps growing it becomes a `timeout` incident "
+            "(the binary is killed with `panic: test timed out`). The only fix is making "
+            "the package's tests cheaper — raising `-timeout` just postpones the collision."
+        )
+        steps.append(
+            f"Profile the heaviest tests from the `race-raw-{module}-<shard>` artifact of "
+            "the shard that ran this package: take its top-level `pass`/`fail` events "
+            f"(`Package` = `{subject}`, `Test` without a `/`; one event per repetition), "
+            "sum each test's `Elapsed` over its 10 repetitions and rank the tests by it."
+        )
+        steps.append(
+            "Cut the cost of the top few (a cheaper fixture, `testing.Short()` for an "
+            "exhaustive matrix that PR CI already runs in full, or `t.Parallel()` where "
+            "the test is independent), then compare the next nightly's `Elapsed` here."
+        )
     elif kind == "data-race":
         if tests:
             out += ["**Race banner attributed to:** " + ", ".join(f"`{t}`" for t in tests), ""]
@@ -999,8 +1079,13 @@ def handle_module(gh: Gh, repo: str, module: str, frag: dict, degraded: str,
     inconclusive = bool(frag.get("fragment_missing") or frag.get("build_failed")
                         or any(i["kind"] == "unattributed" for i in incidents))
 
-    head = (f"### {module} — {len(incidents)} incident(s)" if incidents
-            else f"### {module} — GREEN ({date})")
+    # The verdict counts FAILURES only; warning-level incidents (slow-package)
+    # are listed under a module that still reads GREEN.
+    failures = [i for i in incidents if i["kind"] not in WARNING_KINDS]
+    warnings = len(incidents) - len(failures)
+    note = f" — {warnings} warning(s)" if warnings else ""
+    head = (f"### {module} — {len(failures)} incident(s){note}" if failures
+            else f"### {module} — GREEN ({date}){note}")
     summary = [head]
     if degraded:
         summary.append(f"🚨 {degraded}")
@@ -1079,11 +1164,17 @@ def handle_module(gh: Gh, repo: str, module: str, frag: dict, degraded: str,
         if any(i["kind"] == "timeout" for i in incidents):
             caveat = ("Tonight's run also hit a package timeout, so tests scheduled after "
                       "the deadline did not run — absence is weaker evidence than usual.")
+        timed_out_tonight = {i["subject"] for i in incidents if i["kind"] == "timeout"}
         for fp, row in unseen:
             num = str(row.get("number"))
             prev = parse_state(str(row.get("body") or ""))
             p = prev or {}
             _, kind, subject = split_fingerprint(fp)
+            this_caveat = caveat
+            if kind == "slow-package" and subject in timed_out_tonight:
+                # Absent because it got WORSE: say so instead of reading as relief.
+                this_caveat = ("This package hit the `-timeout` tonight — it is tracked "
+                               "by its `timeout` issue now, not because it got faster.")
             inc = {"module": module, "kind": kind, "subject": subject, "fingerprint": fp,
                    "tests": p.get("tests", [])}
             state = {
@@ -1103,7 +1194,7 @@ def handle_module(gh: Gh, repo: str, module: str, frag: dict, degraded: str,
             }
             title = make_title(module, kind, subject, f"not seen on {date}")
             body = compose_body(inc, frag, state, run_url, date, prev is not None, "",
-                                seen=False, caveat=caveat)
+                                seen=False, caveat=this_caveat)
             print(f"refreshing #{num} for {fp} (not seen tonight, silent body edit)")
             ok = gh.must(
                 ["issue", "edit", num, "--repo", repo, "--title", title, "--body", body],
