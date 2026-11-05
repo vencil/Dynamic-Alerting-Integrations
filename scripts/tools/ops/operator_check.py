@@ -114,7 +114,7 @@ STRINGS = {
         "check_mounts": "Secret mounts",
         "mounts_skip": (
             "not judged: no --secret-mounts. Write the list with `da-tools generate-routes "
-            "--config-dir <conf.d> --output-alertmanager --base-config <alertmanager.yml> "
+            "--config-dir <tenant-config-dir> --output-alertmanager --base-config <alertmanager.yml> "
             "-o <out.yml> --secret-mounts-out secret-mounts.json` and pass "
             "--secret-mounts secret-mounts.json"
         ),
@@ -166,7 +166,7 @@ STRINGS = {
         "check_mounts": "Secret 掛載",
         "mounts_skip": (
             "未判定：沒有 --secret-mounts。先以 `da-tools generate-routes "
-            "--config-dir <conf.d> --output-alertmanager --base-config <alertmanager.yml> "
+            "--config-dir <tenant-config-dir> --output-alertmanager --base-config <alertmanager.yml> "
             "-o <out.yml> --secret-mounts-out secret-mounts.json` 產出清單，再帶 "
             "--secret-mounts secret-mounts.json"
         ),
