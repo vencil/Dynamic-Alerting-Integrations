@@ -3491,6 +3491,8 @@ GATED_ENTRIES_THIS_SCANNER_JUSTIFIES = {
         ("go", "scripts/ops/go_test_reads.py"),
         # go-tests-oauth2-proxy runs tests/oauth2-proxy/image_config_test.sh.
         ("go", "tests/oauth2-proxy/**"),
+        # ...and builds tenant-api through scripts/ops/go_build.sh (#3425).
+        ("go", "scripts/ops/go_build.sh"),
         ("portal", "scripts/tools/lint/check_portal_bundle_size.py"),
         ("python", "requirements/**"),
         ("python", "scripts/**"),

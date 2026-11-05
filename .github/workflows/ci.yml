@@ -2632,9 +2632,8 @@ jobs:
         run: bash tests/oauth2-proxy/image_config_test.sh "$RUNNER_TEMP/oauth2-proxy-render"
 
       - name: Read the same files with tenant-api's parser
-        working-directory: components/tenant-api
         run: |
-          go build -o "$RUNNER_TEMP/tenant-api" ./cmd/server
+          sh scripts/ops/go_build.sh components/tenant-api ./cmd/server "$RUNNER_TEMP/tenant-api"
           n=0
           for f in "$RUNNER_TEMP"/oauth2-proxy-render/*/oauth2-proxy.yaml; do
             n=$((n + 1))
