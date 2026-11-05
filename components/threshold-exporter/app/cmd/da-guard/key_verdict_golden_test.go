@@ -35,8 +35,8 @@ const kvgADRTenant = "tenants:\n  db-a:\n" +
 
 var keyVerdictGoldenTrees = map[string]map[string]string{
 	// ADR-038's worked example: a misspelt key, a noop disable, a misspelt
-	// reserved key, a disable that switches its critical tier off with it
-	// (#3046), an annotation.
+	// reserved key, a disable that switches its own critical tier off with
+	// it (#3046: disable_cascade), an annotation.
 	"adr-example": {"_defaults.yaml": kvgADRDefaults, "db-a.yaml": kvgADRTenant},
 	// A platform file's typo reaching two tenants is one notice; a tenant's
 	// own typo is one error per tenant; a disable switches off the critical

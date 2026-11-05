@@ -51,7 +51,7 @@ BILINGUAL = {"gitops-check", "policy-engine --config-dir", "policy-engine --poli
              "scaffold --from-onboard", "rule-pack-split --rule-packs-dir",
              "operator-generate --rule-packs-dir", "operator-generate --config-dir",
              "migrate-to-operator --source-dir", "migrate-to-operator --config-dir",
-             "operator-check --rule-packs-dir"}
+             "operator-check --rule-packs-dir", "operator-check --secret-mounts"}
 
 
 def _denied(script: str, lang: str = "en") -> str:
@@ -195,6 +195,8 @@ OPS_SITES = [
      "file_not_accessible"),
     ("operator-check --rule-packs-dir", "operator_check.py",
      ["--rule-packs-dir", "{D}", "--json"], "--rule-packs-dir", "dir_not_accessible"),
+    ("operator-check --secret-mounts", "operator_check.py",
+     ["--secret-mounts", "{F}", "--json"], "--secret-mounts", "file_not_accessible"),
     ("onboard --rule-files", "onboard_platform.py",
      ["--rule-files", "{F}", "--output-dir", "{BOX}/onboard-out", "--json"], "--rule-files",
      "path_not_accessible"),
@@ -801,6 +803,8 @@ INPUT_SITES_3392 = [
      ["convergence", "--readiness-json", "{P}", "--json"], "--readiness-json", "file"),
     ("operator-check --rule-packs-dir", "operator_check.py",
      ["--rule-packs-dir", "{P}", "--json"], "--rule-packs-dir", "dir"),
+    ("operator-check --secret-mounts", "operator_check.py",
+     ["--secret-mounts", "{P}", "--json"], "--secret-mounts", "file"),
     ("onboard --rule-files", "onboard_platform.py",
      ["--rule-files", "{P}", "--output-dir", "{OUT}", "--json"], "--rule-files", "any"),
     ("state-reconcile --state-dir", "state_reconcile.py",

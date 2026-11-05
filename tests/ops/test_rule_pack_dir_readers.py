@@ -53,7 +53,7 @@ def test_operator_generate(tmp_path):
 def _rules_check(rule_packs):
     checker = oc.OperatorChecker(SimpleNamespace(
         namespace="monitoring", rule_packs_dir="rp", prometheus=None,
-        kubeconfig=None, json=False, ci=False), rule_packs)
+        kubeconfig=None, json=False, ci=False), rule_packs=rule_packs)
     checker._installed = lambda crd: False
     return checker.check_prometheus_rule_status()
 

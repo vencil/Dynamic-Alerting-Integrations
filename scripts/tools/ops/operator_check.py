@@ -2,10 +2,11 @@
 """Verify Prometheus Operator CRD deployment status.
 
 Usage:
-    da-tools operator-check [--namespace NS] [--prometheus URL] [--json] [--ci]
+    da-tools operator-check [--namespace NS] [--prometheus URL]
+                            [--secret-mounts FILE [--alertmanager NAME]] [--json] [--ci]
 
 Checks: (1) Operator CRD, (2) PrometheusRule count, (3) ServiceMonitor,
-(4) leftover AlertmanagerConfigs, (5) Target Health (opt)
+(4) leftover AlertmanagerConfigs, (5) Secret mounts (opt), (6) Target Health (opt)
 
 Check 4 (#3572): operator-generate no longer emits AlertmanagerConfig —
 routing lives in the configSecret `generate-routes` renders. An
@@ -13,6 +14,28 @@ AlertmanagerConfig carrying this tool's part-of label is a leftover of an
 older operator-generate that the Prometheus Operator routes ahead of the
 platform routes with `continue: true`: it warns, naming how many to delete.
 None, or the CRD not installed (nothing can be left over), passes.
+
+Check 5 (#1560): the Secrets the configSecret reads against the Alertmanager
+CR's ``spec.secrets``. ``--secret-mounts`` is the list ``generate-routes
+--secret-mounts-out`` wrote from that same config; without it the row is
+SKIP (not judged, never a pass). The Prometheus Operator mounts each
+``spec.secrets`` entry at ``/etc/alertmanager/secrets/<name>/``:
+
+* a Secret the list names that ``spec.secrets`` does not → FAIL: every
+  notification through a receiver reading it fails when it is sent
+  (Alertmanager cannot open the ``*_file``), and that notification is lost;
+* a list written with another ``--secret-mount-root`` → FAIL: the files are
+  not where the Operator mounts them;
+* a ``da-`` Secret (the tenant-own prefix) in ``spec.secrets`` the list does
+  not name → WARN: nothing reads it, and if it does not exist the Pod cannot
+  start (the Operator's Secret volumes are not optional). Any other name may
+  be the deployment's own (TLS, a sidecar) and is not reported.
+
+Every Alertmanager CR in ``--namespace`` is judged and named in the detail;
+``--alertmanager NAME`` judges that one only. No CR (or the CRD not
+installed) with a non-empty list → FAIL: nothing mounts them. Only the CR is
+read — Secrets are never read (no ``get`` on secrets is needed), so whether a
+listed key exists inside its Secret is not judged.
 
 Every cluster read goes through ``_lib_kubectl`` (``kubectl_get`` /
 ``kubectl_list``, #3207): a
@@ -25,7 +48,9 @@ needs only `get` on customresourcedefinitions).
 from __future__ import annotations
 
 import argparse
+import json
 import os
+import posixpath
 import sys
 from pathlib import Path
 
@@ -41,11 +66,16 @@ sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, '..'))
 from _lib_python import detect_cli_lang  # noqa: E402
 import _lib_input  # noqa: E402  (#3462: what --rule-packs-dir selects)
+from _lib_paths import require_file  # noqa: E402  (#3392)
 from _lib_prometheus import QueryError, prometheus_targets  # noqa: E402  (#3133)
 from _lib_kubectl import KubectlError, kubectl_get, kubectl_list  # noqa: E402  (#3207)
 import _lib_consumer_read  # noqa: E402  (#3426: rule_pack_files, the one declaration)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, die_caller_error)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, die_caller_error)
+# #1560: the mount-list document generate-routes writes, and the Operator's
+# mount root (the generator's default) — one definition, the generator's.
+from _grar_merge import (  # noqa: E402
+    DEFAULT_MOUNT_ROOT, MOUNT_LIST_SCHEMA, OWN_NAME_PREFIX)
 
 # The CRDs of the kinds the checks list (#3207): whether each is installed
 # is a `kubectl_get` of the CRD by name — an answer, unlike a `kubectl get`
@@ -54,6 +84,9 @@ from _lib_exitcodes import (  # noqa: E402
 _CRD_RULES = "prometheusrules.monitoring.coreos.com"
 _CRD_MONITORS = "servicemonitors.monitoring.coreos.com"
 _CRD_AM_CONFIGS = "alertmanagerconfigs.monitoring.coreos.com"
+_CRD_AMS = "alertmanagers.monitoring.coreos.com"
+#: #1560: the Alertmanager CR field listing the Secrets the Operator mounts.
+_SPEC_MOUNTED = "secrets"
 _PART_OF = "app.kubernetes.io/part-of=dynamic-alerting"
 
 
@@ -84,6 +117,57 @@ STRINGS = {
         "targets_unhealthy": "targets unhealthy",
         "targets_skip": "no Prometheus URL",
         "error_api": "API call failed",
+        "check_mounts": "Secret mounts",
+        "mounts_skip": (
+            "not judged: no --secret-mounts. Write the list with `da-tools generate-routes "
+            "--config-dir <tenant-config-dir> --output-alertmanager --base-config <alertmanager.yml> "
+            "-o <out.yml> --secret-mounts-out secret-mounts.json` and pass "
+            "--secret-mounts secret-mounts.json"
+        ),
+        "mounts_none_needed": "the config reads no Secret under the mount root",
+        "mounts_ok": "{name}: spec.secrets mounts all {n} Secret(s) the config reads",
+        "mounts_missing": (
+            "{name}: spec.secrets lacks {names} — notifications through the receivers "
+            "reading them fail when sent (the *_file cannot be opened) and are lost; "
+            "add them to spec.secrets"
+        ),
+        "mounts_extra": (
+            "{name}: spec.secrets lists {names}, which the config does not read — if such "
+            "a Secret does not exist the Pod cannot start; remove it unless it is meant"
+        ),
+        "mounts_root": (
+            "the list was written with --secret-mount-root {root}, but the Prometheus "
+            "Operator mounts spec.secrets under {expected}: Alertmanager will not find "
+            "the files — regenerate without --secret-mount-root"
+        ),
+        "mounts_no_cr": (
+            "no Alertmanager CR in namespace {ns}: nothing mounts the {n} Secret(s) "
+            "the config reads"
+        ),
+        "mounts_cr_missing": "Alertmanager CR {ns}/{name} not found",
+        "mounts_pick_one": (
+            "every Alertmanager CR in {ns} is compared; if only one serves this "
+            "configSecret, pass --alertmanager <name> to compare that one"
+        ),
+        "mounts_other": "{n} *_file path(s) outside {root} not judged (other_files)",
+        "mounts_unusable": "--secret-mounts {path}: not a generate-routes --secret-mounts-out list ({why})",
+        "h_desc": "Verify Prometheus Operator CRD deployment status",
+        "h_namespace": "Kubernetes namespace (default: monitoring)",
+        "h_rule_packs_dir": ("Directory with rule pack YAML files (default: rule-packs; not "
+                             "there: the PrometheusRule count is not compared)"),
+        "h_prometheus": "Prometheus API URL for target health check (optional)",
+        "h_mount_list": (
+            "The list `generate-routes --secret-mounts-out` wrote for the "
+            "configSecret: compared with the Alertmanager CR's spec.secrets "
+            "(#1560). Without it that check is SKIP (not judged)"
+        ),
+        "h_alertmanager": (
+            "With --secret-mounts: judge this Alertmanager CR only "
+            "(default: every one in --namespace)"
+        ),
+        "h_kubeconfig": "Path to kubeconfig file (optional)",
+        "h_json": "Output results as JSON",
+        "h_ci": "Exit non-zero if any check fails",
     },
     "zh": {
         "title": "Dynamic Alerting — Operator 檢查報告",
@@ -107,6 +191,51 @@ STRINGS = {
         "targets_unhealthy": "Target 不健康",
         "targets_skip": "未提供 Prometheus URL",
         "error_api": "API 調用失敗",
+        "check_mounts": "Secret 掛載",
+        "mounts_skip": (
+            "未判定：沒有 --secret-mounts。先以 `da-tools generate-routes "
+            "--config-dir <tenant-config-dir> --output-alertmanager --base-config <alertmanager.yml> "
+            "-o <out.yml> --secret-mounts-out secret-mounts.json` 產出清單，再帶 "
+            "--secret-mounts secret-mounts.json"
+        ),
+        "mounts_none_needed": "設定沒有讀 mount root 下的任何 Secret",
+        "mounts_ok": "{name}：spec.secrets 已掛上設定讀的全部 {n} 個 Secret",
+        "mounts_missing": (
+            "{name}：spec.secrets 少了 {names}——經讀取它們的 receiver 送出的通知會在送出時"
+            "失敗（*_file 開不了）而遺失；請加進 spec.secrets"
+        ),
+        "mounts_extra": (
+            "{name}：spec.secrets 列了 {names}，設定沒有讀它——那個 Secret 不存在時 Pod 起不來；"
+            "不是刻意要掛的就移除"
+        ),
+        "mounts_root": (
+            "清單是以 --secret-mount-root {root} 產出的，但 Prometheus Operator 把 "
+            "spec.secrets 掛在 {expected} 下：Alertmanager 找不到那些檔案——請不帶 "
+            "--secret-mount-root 重新產出"
+        ),
+        "mounts_no_cr": "namespace {ns} 裡沒有 Alertmanager CR：設定讀的 {n} 個 Secret 沒有任何東西掛載",
+        "mounts_cr_missing": "找不到 Alertmanager CR {ns}/{name}",
+        "mounts_pick_one": (
+            "{ns} 裡每個 Alertmanager CR 都會比對；只有其中一個使用這份 configSecret 時，"
+            "帶 --alertmanager <名稱> 只比對那一個"
+        ),
+        "mounts_other": "{n} 個 *_file 路徑在 {root} 之外，未判定（other_files）",
+        "mounts_unusable": "--secret-mounts {path}：不是 generate-routes --secret-mounts-out 產出的清單（{why}）",
+        "h_desc": "驗證 Prometheus Operator 的 CRD 部署狀態",
+        "h_namespace": "Kubernetes namespace（預設：monitoring）",
+        "h_rule_packs_dir": "Rule Pack YAML 所在目錄（預設：rule-packs；不存在時不比對 PrometheusRule 數量）",
+        "h_prometheus": "Prometheus API URL，給了才檢查 target 健康（選用）",
+        "h_mount_list": (
+            "`generate-routes --secret-mounts-out` 為 configSecret 寫出的清單："
+            "與 Alertmanager CR 的 spec.secrets 比對（#1560）。不給則該項 SKIP（未判定）"
+        ),
+        "h_alertmanager": (
+            "與 --secret-mounts 同用：只比對這個 Alertmanager CR"
+            "（預設：--namespace 裡每一個）"
+        ),
+        "h_kubeconfig": "kubeconfig 路徑（選用）",
+        "h_json": "以 JSON 輸出結果",
+        "h_ci": "任一檢查失敗時以非 0 結束",
     }
 }
 
@@ -114,6 +243,46 @@ STRINGS = {
 def i18n(key: str, lang: str = "en") -> str:
     """Get i18n string."""
     return STRINGS.get(lang, STRINGS["en"]).get(key, key)
+
+
+def _mount_list_problem(doc: object) -> str | None:
+    """Why *doc* is not a ``generate-routes --secret-mounts-out`` document
+    (``MOUNT_LIST_SCHEMA``), or None."""
+    if not isinstance(doc, dict):
+        return "not a JSON object"
+    if doc.get("schema") != MOUNT_LIST_SCHEMA:
+        return f"schema is not {MOUNT_LIST_SCHEMA}"
+    if not isinstance(doc.get("mount_root"), str):
+        return "mount_root is not a string"
+    entries = doc.get("mounts")
+    if not isinstance(entries, list) or not all(
+            isinstance(e, dict) and isinstance(e.get("name"), str) and e["name"]
+            and isinstance(e.get("keys"), list)
+            and all(isinstance(k, str) for k in e["keys"]) for e in entries):
+        return "mounts is not a list of {name, keys}"
+    other = doc.get("other_files")
+    if not isinstance(other, list) or not all(isinstance(x, str) for x in other):
+        return "other_files is not a list of strings"
+    return None
+
+
+def load_mount_list(path: str, lang: str = "en") -> dict:
+    """The ``--secret-mounts`` document at *path* (#1560). A file that is not
+    there is `require_file`'s refusal; one that is not that document is a
+    `CallerError` too (rc 2): a list that cannot be read is not judged as
+    an empty one."""
+    require_file(path, lang=lang, flag="--secret-mounts")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            doc = json.load(fh)
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        doc, why = None, str(exc)
+    else:
+        why = _mount_list_problem(doc)
+    if why is not None:
+        raise CallerError(i18n("mounts_unusable", lang).format(path=path, why=why),
+                          "mount_list_unusable")
+    return doc
 
 
 class CheckResult:
@@ -142,8 +311,11 @@ class OperatorChecker:
     ``--rule-packs-dir`` selected (``main``, ``_lib_input.selected``), the
     expected PrometheusRule count; None when the default nobody gave is not
     there — the count is not compared, and the row says so (#3462)."""
-    def __init__(self, args, rule_packs: "list[Path] | None" = None):
+    def __init__(self, args, mount_list: dict | None = None, *,
+                 rule_packs: "list[Path] | None" = None):
         self.args = args
+        #: #1560: the --secret-mounts document (None: not given).
+        self.mount_list = mount_list
         self.rule_packs = rule_packs
         self.lang = detect_cli_lang()
         self.checks: list[CheckResult] = []
@@ -234,8 +406,81 @@ class OperatorChecker:
                   else f"CRD {_CRD_AM_CONFIGS} not installed")
         return CheckResult(i18n("check_alertconfig", self.lang), "pass", detail)
 
+    def _alertmanager_crs(self) -> list[dict]:
+        """The Alertmanager CRs check 5 judges: ``--alertmanager``'s alone
+        (a FAIL row names it when absent), else every one in the namespace
+        (none when the CRD is not installed)."""
+        if not self._installed(_CRD_AMS):
+            return []
+        name = getattr(self.args, "alertmanager", None)
+        if name is not None:
+            got = kubectl_get("alertmanager", name, namespace=self.args.namespace,
+                              kubeconfig=self.args.kubeconfig)
+            return [got] if got is not None else []
+        return self._list("alertmanager", namespace=self.args.namespace)
+
+    def check_mount_list(self) -> CheckResult:
+        """Check 5 (#1560): ``--secret-mounts`` against each Alertmanager CR's
+        ``spec.secrets`` (the rules are in the module docstring)."""
+        title = i18n("check_mounts", self.lang)
+        if self.mount_list is None:
+            return CheckResult(title, "skip", i18n("mounts_skip", self.lang))
+        needed = {e["name"] for e in self.mount_list["mounts"]}
+        root = self.mount_list["mount_root"]
+        notes: list[str] = []
+        status = "pass"
+        # posixpath.normpath: `/etc/alertmanager//secrets/` or
+        # `/etc/alertmanager/./secrets` is the same directory inside the
+        # container (CodeRabbit on #3615); the render only strips the
+        # trailing slash, so a spelling like that must not read as another root.
+        if needed and posixpath.normpath(root) != DEFAULT_MOUNT_ROOT:
+            status = "fail"
+            notes.append(i18n("mounts_root", self.lang).format(
+                root=root, expected=DEFAULT_MOUNT_ROOT))
+        try:
+            crs = self._alertmanager_crs()
+        except KubectlError as exc:
+            return self._unanswered("check_mounts", exc)
+        name = getattr(self.args, "alertmanager", None)
+        if not crs and name is not None:
+            # The CR the caller named is not there: nothing was compared,
+            # whatever the list holds.
+            status = "fail"
+            notes.append(i18n("mounts_cr_missing", self.lang).format(
+                ns=self.args.namespace, name=name))
+        elif not crs and needed:
+            status = "fail"
+            notes.append(i18n("mounts_no_cr", self.lang).format(ns=self.args.namespace,
+                                                                n=len(needed)))
+        for cr in crs:
+            cr_name = (cr.get("metadata") or {}).get("name", "?")
+            listed = (cr.get("spec") or {}).get(_SPEC_MOUNTED) or []
+            mounted = {x for x in listed if isinstance(x, str)}
+            missing = sorted(needed - mounted)
+            extra = sorted(x for x in mounted - needed if x.startswith(OWN_NAME_PREFIX))
+            if missing:
+                status = "fail"
+                notes.append(i18n("mounts_missing", self.lang).format(
+                    name=cr_name, names=", ".join(missing)))
+            if extra:
+                status = "warn" if status == "pass" else status
+                notes.append(i18n("mounts_extra", self.lang).format(
+                    name=cr_name, names=", ".join(extra)))
+            if not missing and not extra and needed:
+                notes.append(i18n("mounts_ok", self.lang).format(name=cr_name, n=len(needed)))
+        if not needed and not notes:
+            notes.append(i18n("mounts_none_needed", self.lang))
+        if len(crs) > 1 and name is None and any(
+                needed - {x for x in ((c.get("spec") or {}).get(_SPEC_MOUNTED) or [])
+                          if isinstance(x, str)} for c in crs):
+            notes.append(i18n("mounts_pick_one", self.lang).format(ns=self.args.namespace))
+        if self.mount_list["other_files"]:
+            notes.append(i18n("mounts_other", self.lang).format(
+                n=len(self.mount_list["other_files"]), root=root))
+        return CheckResult(title, status, "; ".join(notes))
+
     def check_target_health(self) -> CheckResult:
-        """Check 5: Prometheus target health (optional)."""
+        """Check 6: Prometheus target health (optional)."""
         if not self.args.prometheus:
             return CheckResult(i18n("check_targets", self.lang), "skip", i18n("targets_skip", self.lang))
 
@@ -267,6 +512,7 @@ class OperatorChecker:
         self.checks.append(self.check_prometheus_rule_status())
         self.checks.append(self.check_servicemonitor_status())
         self.checks.append(self.check_alertmanager_config())
+        self.checks.append(self.check_mount_list())
         self.checks.append(self.check_target_health())
 
     def print_human_report(self) -> None:
@@ -352,16 +598,14 @@ class OperatorChecker:
 
 def main():
     try_utf8_stdout()
+    # dev-rules §9 Layer 3 (CodeRabbit on #3615): help follows DA_LANG too.
+    lang = detect_cli_lang()
     parser = argparse.ArgumentParser(
-        description="Verify Prometheus Operator CRD deployment status",
+        description=i18n("h_desc", lang),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument(
-        "--namespace",
-        default="monitoring",
-        help="Kubernetes namespace (default: monitoring)",
-    )
+    parser.add_argument("--namespace", default="monitoring", help=i18n("h_namespace", lang))
     # #3462: the expected PrometheusRule count is what this selects (the
     # rule-pack declaration, RULE_PACKS). None selected is a caller error
     # (it was an expected count of 0 and a WARN that never named the path);
@@ -369,28 +613,15 @@ def main():
     _lib_input.add_input(
         parser, "--rule-packs-dir", select=_lib_consumer_read.RULE_PACKS,
         empty=_lib_input.EMPTY_REFUSED, default="rule-packs",
-        absent_default=_lib_input.ABSENT_EMPTY,
-        help="Directory with rule pack YAML files (default: rule-packs; not there: "
-             "the PrometheusRule count is not compared)",
-    )
-    parser.add_argument(
-        "--prometheus",
-        help="Prometheus API URL for target health check (optional)",
-    )
-    parser.add_argument(
-        "--kubeconfig",
-        help="Path to kubeconfig file (optional)",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output results as JSON",
-    )
-    parser.add_argument(
-        "--ci",
-        action="store_true",
-        help="Exit non-zero if any check fails",
-    )
+        absent_default=_lib_input.ABSENT_EMPTY, help=i18n("h_rule_packs_dir", lang))
+    parser.add_argument("--prometheus", help=i18n("h_prometheus", lang))
+    parser.add_argument("--secret-mounts", dest="mount_list", default=None, metavar="FILE",
+                        help=i18n("h_mount_list", lang))
+    parser.add_argument("--alertmanager", default=None, metavar="NAME",
+                        help=i18n("h_alertmanager", lang))
+    parser.add_argument("--kubeconfig", help=i18n("h_kubeconfig", lang))
+    parser.add_argument("--json", action="store_true", help=i18n("h_json", lang))
+    parser.add_argument("--ci", action="store_true", help=i18n("h_ci", lang))
 
     args = parser.parse_args()
     # #3392 / #3462: --rule-packs-dir is judged before the cluster is asked
@@ -403,8 +634,17 @@ def main():
         rule_packs = _lib_input.selected(args, "rule_packs_dir", lang=detect_cli_lang())
     except _lib_consumer_read.ConsumerReadError as exc:
         die_caller_error(f"ERROR: --rule-packs-dir: {_lib_consumer_read.error_text(exc)}")
-    # [] only for the default with nothing there: `empty` is refused.
-    checker = OperatorChecker(args, rule_packs or None)
+
+    # #1560: an unusable list is a caller error before the cluster is asked;
+    # --alertmanager only selects what --secret-mounts is compared with.
+    if args.alertmanager is not None and args.mount_list is None:
+        raise CallerError("--alertmanager is read only with --secret-mounts (it picks the "
+                          "Alertmanager CR the list is compared with): add --secret-mounts "
+                          "<file> or drop --alertmanager", "flag_not_read")
+    mount_list = (load_mount_list(args.mount_list, detect_cli_lang())
+                  if args.mount_list is not None else None)
+    # rule_packs is [] only for the default with nothing there: `empty` is refused.
+    checker = OperatorChecker(args, mount_list, rule_packs=rule_packs or None)
     checker.run_all_checks()
 
     if args.json:
