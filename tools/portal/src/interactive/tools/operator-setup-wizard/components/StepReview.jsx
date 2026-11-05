@@ -14,8 +14,7 @@ purpose: |
 
   Props:
     config  the wizard's accumulated config object built across steps
-            1-4 (operatorVersion / crdVersion / namespace / ruleMode /
-            receiverType / receiverSecret / selectedTenants).
+            1-2 (operatorVersion / namespace / ruleMode).
 
   Closure deps: window.__t (host-page i18n global). The 3 generators
   (generateOperatorCommand / generateMigrationCommand /
@@ -34,7 +33,6 @@ const t = window.__t || ((zh, en) => en);
 
 function StepReview({ config }) {
   const [activeTab, setActiveTab] = useState('command');
-  const selectedTenants = config.selectedTenants || [];
   const { copy } = useCopyToClipboard();
 
   const copyToClipboard = useCallback((text, label) => {
@@ -50,7 +48,7 @@ function StepReview({ config }) {
     <div className="space-y-4">
       <div>
         <h3 style={{ fontSize: 'var(--da-font-size-lg)', fontWeight: 'var(--da-font-weight-bold)', marginBottom: 'var(--da-space-2)' }}>
-          {t('第五步：產出與檢視', 'Step 5: Review & Generate')}
+          {t('第三步：產出與檢視', 'Step 3: Review & Generate')}
         </h3>
         <p style={{ fontSize: 'var(--da-font-size-sm)', color: 'var(--da-color-muted)', marginBottom: 'var(--da-space-4)' }}>
           {t('檢查生成的命令和 CRD 配置。複製並在你的環境中執行。', 'Review generated commands and CRD configs. Copy and run in your environment.')}
@@ -75,11 +73,9 @@ function StepReview({ config }) {
           color: 'var(--da-color-fg)',
         }}>
           <div><strong>{t('Operator 版本: ', 'Operator Version: ')}</strong>{config.operatorVersion || 'N/A'}</div>
-          <div><strong>{t('CRD API: ', 'CRD API: ')}</strong>monitoring.coreos.com/{config.crdVersion || 'v1'}</div>
+          <div><strong>{t('CRD API: ', 'CRD API: ')}</strong>monitoring.coreos.com/v1</div>
           <div><strong>{t('Namespace: ', 'Namespace: ')}</strong>{config.namespace || 'monitoring'}</div>
           <div><strong>{t('部署模式: ', 'Rule Mode: ')}</strong>{config.ruleMode || 'N/A'}</div>
-          <div><strong>{t('Receiver: ', 'Receiver: ')}</strong>{config.receiverType || 'N/A'}</div>
-          <div><strong>{t('Tenant 數: ', 'Tenant Count: ')}</strong>{selectedTenants.length}</div>
         </div>
       </div>
 

@@ -16,7 +16,7 @@ import React, { useState, useMemo, useCallback } from 'react';
 
 // TRK-230e: ESM imports; esbuild bundles them natively into the dist
 // file (TD-030z retired the old jsx-loader import-transform path).
-import { OSW_STEPS as STEPS, OSW_DEMO_TENANTS as DEMO_TENANTS, OSW_OPERATOR_VERSIONS as OPERATOR_VERSIONS, OSW_CLUSTER_TYPES as CLUSTER_TYPES, OSW_RECEIVER_TYPES as RECEIVER_TYPES, OSW_RULE_MODES as RULE_MODES } from './operator-setup-wizard/fixtures/wizard-defaults.js';
+import { OSW_STEPS as STEPS, OSW_OPERATOR_VERSIONS as OPERATOR_VERSIONS, OSW_CLUSTER_TYPES as CLUSTER_TYPES, OSW_RULE_MODES as RULE_MODES } from './operator-setup-wizard/fixtures/wizard-defaults.js';
 import { validateTenantName } from './operator-setup-wizard/utils/generators.js';
 import { StepReview } from './operator-setup-wizard/components/StepReview.jsx';
 // PR-portal-11: per-step boundary so a render error in step N
@@ -263,7 +263,7 @@ function StepCRDConfig({ config, onChange, helpOpen, setHelpOpen }) {
           fontSize: 'var(--da-font-size-sm)',
           color: 'var(--da-color-muted)',
         }}>
-          monitoring.coreos.com/{config.crdVersion || 'v1beta1'}
+          monitoring.coreos.com/v1
         </div>
       </div>
 
@@ -341,352 +341,6 @@ function StepCRDConfig({ config, onChange, helpOpen, setHelpOpen }) {
   );
 }
 
-function StepReceiver({ config, onChange, helpOpen, setHelpOpen }) {
-  const updateConfig = useCallback((updates) => {
-    onChange({ ...config, ...updates });
-  }, [config, onChange]);
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-start justify-between">
-        <div>
-          <h3 style={{ fontSize: 'var(--da-font-size-lg)', fontWeight: 'var(--da-font-weight-bold)', marginBottom: 'var(--da-space-2)' }}>
-            {t('第三步：Receiver 設定', 'Step 3: Receiver Setup')}
-          </h3>
-          <p style={{ fontSize: 'var(--da-font-size-sm)', color: 'var(--da-color-muted)', marginBottom: 'var(--da-space-4)' }}>
-            {t('選擇告警接收器並配置認證 Secret。', 'Select alert receiver and configure authentication secret.')}
-          </p>
-        </div>
-        <button
-          onClick={() => setHelpOpen(!helpOpen)}
-          aria-label={t('顯示幫助資訊', 'Show help information')}
-          aria-expanded={helpOpen}
-          style={{
-            background: 'none',
-            border: 'none',
-            fontSize: 'var(--da-font-size-lg)',
-            cursor: 'pointer',
-            padding: 'var(--da-space-2)',
-          }}
-        >
-          ?
-        </button>
-      </div>
-
-      {helpOpen && (
-        <div style={{
-          backgroundColor: 'var(--da-color-info-soft)',
-          border: '1px solid var(--da-color-info)',
-          borderRadius: 'var(--da-radius-md)',
-          padding: 'var(--da-space-3)',
-          fontSize: 'var(--da-font-size-sm)',
-          color: 'var(--da-color-fg)',
-        }}>
-          <p style={{ marginBottom: 'var(--da-space-2)' }}>
-            <strong>{t('Secret 管理最佳做法', 'Secret Management Best Practices')}</strong>
-          </p>
-          <ul style={{ marginLeft: 'var(--da-space-4)', listStyleType: 'disc', lineHeight: '1.6' }}>
-            <li>{t('Secret 應儲存在 Kubernetes Secret 或 external secrets operator', 'Store secrets in Kubernetes Secret or external secrets operator')}</li>
-            <li>{t('永遠不要在 config 檔案中存放明文認證資訊', 'Never store credentials in plaintext in config files')}</li>
-            <li>{t('使用 RBAC 限制 Secret 存取權限', 'Restrict Secret access with RBAC')}</li>
-          </ul>
-        </div>
-      )}
-
-      {/* Receiver type */}
-      <div style={{
-        padding: 'var(--da-space-4)',
-        border: '1px solid var(--da-color-surface-border)',
-        borderRadius: 'var(--da-radius-md)',
-        backgroundColor: 'var(--da-color-surface)',
-      }}>
-        <label style={{ display: 'block', marginBottom: 'var(--da-space-3)', fontWeight: 'var(--da-font-weight-semibold)', color: 'var(--da-color-fg)' }}>
-          {t('Receiver 類型', 'Receiver Type')}
-        </label>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 'var(--da-space-2)' }}>
-          {RECEIVER_TYPES.map(rt => (
-            <button
-              key={rt.id}
-              onClick={() => updateConfig({ receiverType: rt.id, receiverSecret: `${rt.id}-credentials` })}
-              style={{
-                padding: 'var(--da-space-3)',
-                border: config.receiverType === rt.id ? '2px solid var(--da-color-accent)' : '1px solid var(--da-color-surface-border)',
-                borderRadius: 'var(--da-radius-md)',
-                backgroundColor: config.receiverType === rt.id ? 'var(--da-color-accent-soft)' : 'var(--da-color-bg)',
-                cursor: 'pointer',
-                textAlign: 'center',
-              }}
-            >
-              <div style={{ fontSize: '1.5em' }}>{rt.icon}</div>
-              <div style={{ fontWeight: 'var(--da-font-weight-semibold)', marginTop: 'var(--da-space-1)', fontSize: 'var(--da-font-size-sm)' }}>
-                {rt.label}
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Secret name */}
-      <div style={{
-        padding: 'var(--da-space-4)',
-        border: '1px solid var(--da-color-surface-border)',
-        borderRadius: 'var(--da-radius-md)',
-        backgroundColor: 'var(--da-color-surface)',
-      }}>
-        <label style={{ display: 'block', marginBottom: 'var(--da-space-2)', fontWeight: 'var(--da-font-weight-semibold)', color: 'var(--da-color-fg)' }}>
-          {t('Secret 名稱', 'Secret Name')}
-        </label>
-        <input
-          type="text"
-          value={config.receiverSecret || ''}
-          onChange={(e) => updateConfig({ receiverSecret: e.target.value })}
-          style={{
-            width: '100%',
-            padding: 'var(--da-space-2) var(--da-space-3)',
-            border: '1px solid var(--da-color-surface-border)',
-            borderRadius: 'var(--da-radius-md)',
-            fontSize: 'var(--da-font-size-sm)',
-            backgroundColor: 'var(--da-color-bg)',
-            color: 'var(--da-color-fg)',
-            boxSizing: 'border-box',
-          }}
-          placeholder="e.g., slack-webhook-secret"
-        />
-        <p style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-muted)', marginTop: 'var(--da-space-1)' }}>
-          {t('Kubernetes Secret 的名稱，必須包含認證資訊。', 'Kubernetes Secret name containing credentials.')}
-        </p>
-      </div>
-
-      {/* Secret creation hint */}
-      <div style={{
-        padding: 'var(--da-space-3)',
-        backgroundColor: 'var(--da-color-info-soft)',
-        border: '1px solid var(--da-color-info)',
-        borderRadius: 'var(--da-radius-md)',
-        fontSize: 'var(--da-font-size-xs)',
-        color: 'var(--da-color-fg)',
-      }}>
-        <p style={{ fontWeight: 'var(--da-font-weight-semibold)', marginBottom: 'var(--da-space-2)' }}>
-          {t('建立 Secret 的範例命令', 'Example command to create secret')}
-        </p>
-        <pre style={{
-          backgroundColor: 'var(--da-color-bg)',
-          padding: 'var(--da-space-2)',
-          borderRadius: 'var(--da-radius-sm)',
-          overflow: 'auto',
-          fontSize: 'var(--da-font-size-xs)',
-        }}>
-{`kubectl create secret generic ${config.receiverSecret} \\
-  --from-literal=webhook_url='YOUR_WEBHOOK_URL' \\
-  -n monitoring`}
-        </pre>
-      </div>
-    </div>
-  );
-}
-
-function StepTenants({ config, onChange, helpOpen, setHelpOpen }) {
-  const [customTenant, setCustomTenant] = useState('');
-
-  const updateConfig = useCallback((updates) => {
-    onChange({ ...config, ...updates });
-  }, [config, onChange]);
-
-  const addCustomTenant = useCallback(() => {
-    if (customTenant.trim() && validateTenantName(customTenant.trim())) {
-      const tenants = Array.from(new Set([...(config.selectedTenants || []), customTenant.trim()]));
-      updateConfig({ selectedTenants: tenants });
-      setCustomTenant('');
-    }
-  }, [customTenant, config, updateConfig]);
-
-  const toggleTenant = useCallback((tenant) => {
-    const selected = config.selectedTenants || [];
-    const updated = selected.includes(tenant)
-      ? selected.filter(t => t !== tenant)
-      : [...selected, tenant];
-    updateConfig({ selectedTenants: updated });
-  }, [config, updateConfig]);
-
-  return (
-    <div className="space-y-4">
-      <div className="flex items-start justify-between">
-        <div>
-          <h3 style={{ fontSize: 'var(--da-font-size-lg)', fontWeight: 'var(--da-font-weight-bold)', marginBottom: 'var(--da-space-2)' }}>
-            {t('第四步：Tenant 選擇', 'Step 4: Tenant Selection')}
-          </h3>
-          <p style={{ fontSize: 'var(--da-font-size-sm)', color: 'var(--da-color-muted)', marginBottom: 'var(--da-space-4)' }}>
-            {t('選擇要遷移至 Operator 的 tenant，或輸入自訂 tenant 名稱。', 'Select tenants to migrate to Operator, or enter custom tenant names.')}
-          </p>
-        </div>
-        <button
-          onClick={() => setHelpOpen(!helpOpen)}
-          aria-label={t('顯示幫助資訊', 'Show help information')}
-          aria-expanded={helpOpen}
-          style={{
-            background: 'none',
-            border: 'none',
-            fontSize: 'var(--da-font-size-lg)',
-            cursor: 'pointer',
-            padding: 'var(--da-space-2)',
-          }}
-        >
-          ?
-        </button>
-      </div>
-
-      {helpOpen && (
-        <div style={{
-          backgroundColor: 'var(--da-color-success-soft)',
-          border: '1px solid var(--da-color-success)',
-          borderRadius: 'var(--da-radius-md)',
-          padding: 'var(--da-space-3)',
-          fontSize: 'var(--da-font-size-sm)',
-          color: 'var(--da-color-fg)',
-        }}>
-          <p style={{ marginBottom: 'var(--da-space-2)' }}>
-            <strong>{t('Tenant 命名規則', 'Tenant Naming Convention')}</strong>
-          </p>
-          <p style={{ marginBottom: 'var(--da-space-2)', fontSize: 'var(--da-font-size-xs)' }}>
-            {t('RFC 1123: 小寫字母、數字、連字號，必須以字母或數字開頭和結尾', 'RFC 1123: lowercase alphanumeric and hyphens, must start/end with alphanumeric')}
-          </p>
-          <p style={{ fontSize: 'var(--da-font-size-xs)' }}>
-            {t('有效例子: db-a, web-prod, cache-staging-01', 'Valid examples: db-a, web-prod, cache-staging-01')}
-          </p>
-        </div>
-      )}
-
-      {/* Demo tenants */}
-      <div style={{
-        padding: 'var(--da-space-4)',
-        border: '1px solid var(--da-color-surface-border)',
-        borderRadius: 'var(--da-radius-md)',
-        backgroundColor: 'var(--da-color-surface)',
-      }}>
-        <label style={{ display: 'block', marginBottom: 'var(--da-space-3)', fontWeight: 'var(--da-font-weight-semibold)', color: 'var(--da-color-fg)' }}>
-          {t('示範 Tenant', 'Demo Tenants')}
-        </label>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--da-space-2)' }}>
-          {DEMO_TENANTS.map(tenant => (
-            <button
-              key={tenant}
-              onClick={() => toggleTenant(tenant)}
-              style={{
-                padding: 'var(--da-space-2) var(--da-space-3)',
-                borderRadius: 'var(--da-radius-md)',
-                border: (config.selectedTenants || []).includes(tenant) ? '2px solid var(--da-color-accent)' : '1px solid var(--da-color-surface-border)',
-                backgroundColor: (config.selectedTenants || []).includes(tenant) ? 'var(--da-color-accent-soft)' : 'var(--da-color-bg)',
-                color: 'var(--da-color-fg)',
-                fontWeight: (config.selectedTenants || []).includes(tenant) ? 'var(--da-font-weight-semibold)' : 'normal',
-                cursor: 'pointer',
-                fontSize: 'var(--da-font-size-sm)',
-              }}
-            >
-              {tenant}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {/* Custom tenant input */}
-      <div style={{
-        padding: 'var(--da-space-4)',
-        border: '1px solid var(--da-color-surface-border)',
-        borderRadius: 'var(--da-radius-md)',
-        backgroundColor: 'var(--da-color-surface)',
-      }}>
-        <label style={{ display: 'block', marginBottom: 'var(--da-space-2)', fontWeight: 'var(--da-font-weight-semibold)', color: 'var(--da-color-fg)' }}>
-          {t('輸入自訂 Tenant 名稱', 'Enter Custom Tenant Name')}
-        </label>
-        <div style={{ display: 'flex', gap: 'var(--da-space-2)' }}>
-          <input
-            type="text"
-            value={customTenant}
-            onChange={(e) => setCustomTenant(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && addCustomTenant()}
-            style={{
-              flex: 1,
-              padding: 'var(--da-space-2) var(--da-space-3)',
-              border: '1px solid var(--da-color-surface-border)',
-              borderRadius: 'var(--da-radius-md)',
-              fontSize: 'var(--da-font-size-sm)',
-              backgroundColor: 'var(--da-color-bg)',
-              color: 'var(--da-color-fg)',
-              boxSizing: 'border-box',
-            }}
-            placeholder="e.g., my-prod-tenant"
-          />
-          <button
-            onClick={addCustomTenant}
-            disabled={!customTenant.trim() || !validateTenantName(customTenant.trim())}
-            style={{
-              padding: 'var(--da-space-2) var(--da-space-4)',
-              backgroundColor: !customTenant.trim() || !validateTenantName(customTenant.trim()) ? 'var(--da-color-muted)' : 'var(--da-color-accent)',
-              color: 'white',
-              border: 'none',
-              borderRadius: 'var(--da-radius-md)',
-              fontWeight: 'var(--da-font-weight-semibold)',
-              cursor: !customTenant.trim() || !validateTenantName(customTenant.trim()) ? 'not-allowed' : 'pointer',
-              fontSize: 'var(--da-font-size-sm)',
-            }}
-          >
-            {t('加入', 'Add')}
-          </button>
-        </div>
-        {customTenant.trim() && !validateTenantName(customTenant.trim()) && (
-          <p style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-error-text)', marginTop: 'var(--da-space-1)' }}>
-            <span aria-hidden="true">✗</span> {t('無效的 tenant 名稱。必須符合 RFC 1123', 'Invalid tenant name. Must comply with RFC 1123')}
-          </p>
-        )}
-      </div>
-
-      {/* Selected tenants */}
-      {(config.selectedTenants || []).length > 0 && (
-        <div style={{
-          padding: 'var(--da-space-3)',
-          backgroundColor: 'var(--da-color-success-soft)',
-          border: '1px solid var(--da-color-success)',
-          borderRadius: 'var(--da-radius-md)',
-          fontSize: 'var(--da-font-size-sm)',
-          color: 'var(--da-color-fg)',
-        }}>
-          <p style={{ fontWeight: 'var(--da-font-weight-semibold)', marginBottom: 'var(--da-space-1)' }}>
-            {t('已選擇 ', 'Selected ')}{config.selectedTenants.length}{t(' 個 Tenant', ' tenant(s)')}
-          </p>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--da-space-1)' }}>
-            {config.selectedTenants.map(t => (
-              <span key={t} style={{
-                display: 'inline-flex',
-                alignItems: 'center',
-                gap: 'var(--da-space-1)',
-                padding: 'var(--da-space-1) var(--da-space-2)',
-                backgroundColor: 'var(--da-color-bg)',
-                borderRadius: 'var(--da-radius-sm)',
-                fontSize: 'var(--da-font-size-xs)',
-              }}>
-                {t}
-                <button
-                  onClick={() => toggleTenant(t)}
-                  style={{
-                    background: 'none',
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontSize: 'var(--da-font-size-sm)',
-                    color: 'var(--da-color-error)' /* token-exempt: control glyph (× close affordance), non-text 3:1 */,
-                    padding: 0,
-                  }}
-                >
-                  ×
-                </button>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 
 /* ── Main Component ── */
 
@@ -703,12 +357,6 @@ export default function OperatorSetupWizard() {
     if (step.id === 'crd-config') {
       return config.namespace && config.ruleMode;
     }
-    if (step.id === 'receiver') {
-      return config.receiverType && config.receiverSecret;
-    }
-    if (step.id === 'tenants') {
-      return config.selectedTenants && config.selectedTenants.length > 0;
-    }
     return true;
   }, [currentStep, config]);
 
@@ -723,8 +371,6 @@ export default function OperatorSetupWizard() {
   const stepContent = {
     environment: <StepEnvironment config={config} onChange={setConfig} helpOpen={helpOpen} setHelpOpen={setHelpOpen} />,
     'crd-config': <StepCRDConfig config={config} onChange={setConfig} helpOpen={helpOpen} setHelpOpen={setHelpOpen} />,
-    receiver: <StepReceiver config={config} onChange={setConfig} helpOpen={helpOpen} setHelpOpen={setHelpOpen} />,
-    tenants: <StepTenants config={config} onChange={setConfig} helpOpen={helpOpen} setHelpOpen={setHelpOpen} />,
     review: <StepReview config={config} />,
   };
 
@@ -746,7 +392,7 @@ export default function OperatorSetupWizard() {
             {t('Operator 設定精靈', 'Operator Setup Wizard')}
           </h1>
           <p style={{ fontSize: 'var(--da-font-size-base)', color: 'var(--da-color-muted)' }}>
-            {t('五步流程引導設定 Prometheus Operator 整合和告警路由。', 'Five-step guided setup for Prometheus Operator integration and alert routing.')}
+            {t('三步流程引導設定 Prometheus Operator 整合；告警路由由 generate-routes 產出，交給 Alertmanager 的 configSecret。', 'Three-step guided setup for Prometheus Operator integration; alert routing comes from generate-routes, handed to the Alertmanager as its configSecret.')}
           </p>
         </div>
 

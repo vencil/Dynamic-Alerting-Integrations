@@ -157,7 +157,7 @@ da-tools generate-routes --config-dir conf.d/ --validate --strict --policy .gith
 
 The generator merges the tenant routing into **your own** Alertmanager config. The three output modes share one merge; pick one by how you deploy:
 
-**Mode A: `--output-alertmanager` (BYO Alertmanager outside Kubernetes)**
+**Mode A: `--output-alertmanager` (BYO Alertmanager outside Kubernetes, or the Prometheus Operator's configSecret)**
 
 ```bash
 # The source: your own config, kept on its own (in git, say); the first time, copy it from the current one
@@ -249,7 +249,7 @@ Exactly one mode flag; none is exit 2:
 | Flag | Description |
 |------|------|
 | `--validate` | Validate configuration legality (exit 0/1, suitable for CI); writes nothing |
-| `--output-alertmanager` | Output the merged plain `alertmanager.yml`, for a BYO Alertmanager outside Kubernetes |
+| `--output-alertmanager` | Output the merged plain `alertmanager.yml`, for a BYO Alertmanager outside Kubernetes or the Prometheus Operator's configSecret |
 | `--output-configmap` | Output the merged, complete ConfigMap YAML, suitable for GitOps PR flow |
 | `--apply [--yes]` | Merge into the cluster's Alertmanager ConfigMap + reload (`--yes` skips confirmation) |
 

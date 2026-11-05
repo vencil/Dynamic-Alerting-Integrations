@@ -17,6 +17,7 @@ lang: en
 - The decisions were settled by the owner in [#2655](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2655); two of them were settled after the external review.
 - The external review was carried out adversarially by a different model, and its conclusions have been merged into this document.
 - The owner has approved this document. Three revisions were made at approval time: former open question 1 (the tenant-api read and delete paths) is resolved, another DNS-1123 copy, in `init_project.py`, is now listed, and `definitions.tenantId` gains a `description`.
+- 2026-11-05 revision: `operator_generate.py` and `migrate_to_operator.py` no longer read tenants or produce objects carrying a tenant label ([ADR-008](008-operator-native-integration-path.en.md)) and are removed from the list of callers; the 63-character limit is unchanged, for the reason given under the open question below.
 - Revised 2026-10-16: where Go reads the rule now describes the current code (`Valid` in `pkg/tenantid`); the "Current state" section is the snapshot taken when this was drafted and is left as it was.
 
 ## Summary
@@ -96,7 +97,7 @@ Lowercase alphanumerics and `-`, length 1–63, must start and end with an alpha
 - `_lib_validation.is_valid_tenant_id` reads this pattern at runtime, reusing the `_find_tenant_schema()` lookup: inside the da-tools image it reads the flat layout; inside the repo it walks up to the project root.
 - build.sh's `REPO_DATA_FILES` already ships this schema, and `check_build_completeness` already lists it as a required file.
 - If the schema cannot be read, fail closed, following the #2180 receiver URL pattern.
-- The following four tools drop their own regex and call this function instead: `operator_generate.py`, `migrate_to_operator.py`, `alert_quality.py`, `init_project.py` (`_validate_tenant_name`); `scaffold_tenant.py`, which did no validation before, also calls it.
+- The following tools drop their own regex and call this function instead: `alert_quality.py`, `init_project.py` (`_validate_tenant_name`); `scaffold_tenant.py`, which did no validation before, also calls it. (`operator_generate.py` and `migrate_to_operator.py` were on this list then; they no longer read tenants.)
 
 **Go and the portal**
 
@@ -187,7 +188,7 @@ The exporter does not reject tenants with illegal ids; on every reload it prints
   - The new rule applies to every write path. The enforcement point is `gitops.guardTenantID` (`components/tenant-api/internal/gitops/writer.go`), which covers PUT, batch writes, group batch writes, custom-alerts, the federation subset, and dry-run.
   - The handlers keep `ValidateWritableTenantID` to return 400 early.
   - The rule is **not** put into `confd.IsAddressableTenantID`, because the read paths call it too.
-- **Whether the 63-character limit should subtract the prefix.** It should not. The external review confirmed by grep: what operator mode writes into K8s labels is the **bare id** (`metadata.labels: {"tenant": id}`, see `operator_generate.py:461-466`, `migrate_to_operator.py:356-361`). Only object names (limit 253) and Alertmanager receiver names (no 63 limit) carry the prefix.
+- **Whether the 63-character limit should subtract the prefix.** It should not. When this was decided, what operator mode wrote into K8s labels was the **bare id** (`metadata.labels: {"tenant": id}`); only object names (limit 253) and Alertmanager receiver names (no 63 limit) carried the prefix. Operator mode no longer produces those objects (ADR-008); the limit stays at the DNS-1123 label's 63, since the id is still used in file names and ConfigMap keys.
 
 ## Open questions
 

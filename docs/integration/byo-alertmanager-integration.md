@@ -151,7 +151,7 @@ da-tools generate-routes --config-dir conf.d/ --validate --strict --policy .gith
 
 產生器把 tenant 路由合併進**你自己的** Alertmanager 設定。三種輸出模式共用同一個合併，依部署方式選一個：
 
-**模式 A：`--output-alertmanager`（Kubernetes 以外的 BYO Alertmanager）**
+**模式 A：`--output-alertmanager`（Kubernetes 以外的 BYO Alertmanager，或 Prometheus Operator 的 configSecret）**
 
 ```bash
 # 來源：你自己的設定，另外保管（例如放 git）；第一次可從現有設定複製
@@ -243,7 +243,7 @@ curl -sf http://localhost:9093/-/ready && echo "Alertmanager ready"
 | Flag | 說明 |
 |------|------|
 | `--validate` | 驗證配置合法性（exit 0/1，適合 CI），不寫任何東西 |
-| `--output-alertmanager` | 產出合併後的純 `alertmanager.yml`，適合 Kubernetes 以外的 BYO Alertmanager |
+| `--output-alertmanager` | 產出合併後的純 `alertmanager.yml`，適合 Kubernetes 以外的 BYO Alertmanager 或 Prometheus Operator 的 configSecret |
 | `--output-configmap` | 產出合併後的完整 ConfigMap YAML，適合 GitOps PR flow |
 | `--apply [--yes]` | 合併進叢集上的 Alertmanager ConfigMap + reload（`--yes` 跳過確認） |
 

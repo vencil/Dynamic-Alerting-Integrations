@@ -127,7 +127,7 @@ jobs:
             --user $(id -u):$(id -g) \
             -v ${{ github.workspace }}/conf.d:/conf.d:ro \
             -v ${{ github.workspace }}/alertmanager:/alertmanager \
-            ghcr.io/vencil/da-tools:v2.9.0 \
+            ghcr.io/vencil/da-tools:latest \
             generate-routes --config-dir /conf.d --output-alertmanager \
               --base-config /alertmanager/alertmanager.base.yaml -o /alertmanager/alertmanager.yaml
           kubectl create secret generic da-alertmanager-config -n monitoring \

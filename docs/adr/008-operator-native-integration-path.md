@@ -19,7 +19,7 @@ updated_at: 2026-11-05
 
 ✅ **Accepted**（v2.3.0）
 
-- 2026-11-05 修訂：Alertmanager 路由不再產生成 `AlertmanagerConfig` CRD。兩條路徑的路由都由 `generate-routes` 產生；Operator 路徑把產出的 `alertmanager.yaml` 放進 Alertmanager 的 `configSecret`。`operator-generate` 只產 PrometheusRule 與 ServiceMonitor（[#3572](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3572)）。
+- 2026-11-05 修訂（同時把先前分段附加的修訂併進正文）：Alertmanager 路由不再產生成 `AlertmanagerConfig` CRD。兩條路徑的路由都由 `generate-routes` 產生；Operator 路徑把產出的 `alertmanager.yaml` 放進 Alertmanager 的 `configSecret`。`operator-generate` 只產 PrometheusRule 與 ServiceMonitor（[#3572](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3572)）。
 
 ## 決策
 
@@ -98,7 +98,9 @@ Prometheus Operator（kube-prometheus-stack）是 Kubernetes 上部署 Prometheu
 - **Alertmanager CR 若同時選取 `AlertmanagerConfig`**（設了 `alertmanagerConfigSelector`；kube-prometheus-stack 預設會設），那些 CR 的路由仍會被插在 configSecret 的路由之前。平台自己不再產 CR；舊版 `operator-generate` 留下的（帶 `app.kubernetes.io/part-of=dynamic-alerting`）要刪掉，`operator-check` 會對它們報 WARN。別的團隊的 CR 因為 `continue: true` 攔不走告警，但會多送一份；要讓平台路由之前什麼都沒有，就把 selector 設成不選任何 `AlertmanagerConfig`。
 - **Breaking**：`operator-generate --components alertmanager` 與只給 `AlertmanagerConfig` 用的旗標（`--config-dir`、`--api-version`、`--receiver-template`、`--secret-name`、`--secret-key`）結束碼 2，訊息附上 `generate-routes` 與 configSecret 的做法；`migrate-to-operator` 也不再產 `AlertmanagerConfig`。
 - **PrometheusRule 的 label 要對上 selector**：`operator-generate` 預設帶 `release=kube-prometheus-stack`，Helm release 名稱不同時用 `--selector-label` 改；`operator-check` 會報出沒被載入的情況。
-- **`--gitops`** 輸出排序過的鍵、不帶時間戳與伺服器端欄位，同一輸入產出相同 YAML。
+- **`--gitops`** 輸出排序過的鍵、不帶時間戳與伺服器端欄位，同一輸入產出相同 YAML；`--kustomize` 另產 `kustomization.yaml` 供多叢集部署；`drift_detect.py --mode operator` 比對跨叢集的 CRD 漂移。
+- **判斷叢集走哪條路徑**：`operator-check` 先看 `prometheusrules.monitoring.coreos.com` CRD 在不在；在就是 Operator 路徑。
+- **還沒做的**：常見 Operator 部署的 kube-prometheus-stack values 範例；多叢集 Federation 下以 ArgoCD ApplicationSet 部署 CRD 的自動化。
 
 ### 架構邊界
 
@@ -120,6 +122,7 @@ Prometheus Operator（kube-prometheus-stack）是 Kubernetes 上部署 Prometheu
 | 文件 | 關係 |
 |-----|------|
 | [ADR-001](001-severity-dedup-via-inhibit.md) | severity 去重的 inhibit rule，由 `generate-routes` 產生 |
+| [ADR-004](004-federation-central-exporter-first.md) | Federation 場景的 CRD 部署要考慮 edge／central 分層 |
 | [ADR-005](005-projected-volume-for-rule-packs.md) | ConfigMap 路徑的 projected volume；Operator 路徑以 PrometheusRule 取代 |
 | [ADR-007](007-cross-domain-routing-profiles.md) | 路由 profile，由 `generate-routes` 展開 |
 | [Operator Alertmanager 整合](../integration/operator-alertmanager-integration.md) | configSecret 的完整步驟 |

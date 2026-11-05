@@ -1074,8 +1074,8 @@ def _build_parser() -> argparse.ArgumentParser:
                                  "ConfigMap (for GitOps PR flow)")
     mode_group.add_argument("--output-alertmanager", action="store_true",
                             help="Output the merged Alertmanager config as a "
-                                 "plain alertmanager.yml (BYO Alertmanager "
-                                 "outside Kubernetes)")
+                                 "plain alertmanager.yml (BYO Alertmanager, or "
+                                 "the Prometheus Operator's configSecret)")
     parser.add_argument("--base-config", default=None,
                         help="Your Alertmanager YAML for --output-configmap / "
                              "--output-alertmanager — the SOURCE the generated "
