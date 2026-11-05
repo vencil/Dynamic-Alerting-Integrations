@@ -67,6 +67,11 @@ func TestCanonicalKeyFor_Shapes(t *testing.T) {
 		{"mysql_cpu", "mysql_threads_running", true},
 		{"mysql_cpu_critical", "mysql_threads_running_critical", true},
 		{`mysql_cpu{version="v2"}`, `mysql_threads_running{version="v2"}`, true},
+		// #3556: the two derived shapes compose — the rule Policy-as-Code and
+		// the shared key verdict compare a `_critical{…}` key by.
+		{`mysql_cpu_critical{db="a"}`, `mysql_threads_running_critical{db="a"}`, true},
+		{`mysql_cpu_util{db="a"}`, `mysql_cpu_util{db="a"}`, false},
+		{`mysql_cpu_util_critical{db="a"}`, `mysql_cpu_util_critical{db="a"}`, false},
 		// exact-match contract: prefix lookalikes must NOT canonicalize —
 		// they have to keep failing unknown-key validation (adversarial pin).
 		{"mysql_cpu_util", "mysql_cpu_util", false},
@@ -82,6 +87,12 @@ func TestCanonicalKeyFor_Shapes(t *testing.T) {
 		if gotKey != tt.wantKey || gotAlias != tt.wantAlias {
 			t.Errorf("canonicalKeyFor(%q) = (%q, %v), want (%q, %v)",
 				tt.key, gotKey, gotAlias, tt.wantKey, tt.wantAlias)
+		}
+		// legacySpellingFor is its inverse on every aliased shape.
+		if tt.wantAlias {
+			if legacy, ok := legacySpellingFor(tt.wantKey); !ok || legacy != tt.key {
+				t.Errorf("legacySpellingFor(%q) = (%q, %v), want (%q, true)", tt.wantKey, legacy, ok, tt.key)
+			}
 		}
 	}
 }

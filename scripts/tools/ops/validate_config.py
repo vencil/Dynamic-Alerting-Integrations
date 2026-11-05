@@ -1617,7 +1617,14 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
         return _make_result("policy_dsl", PASS,
                             ["No tenant configs found — skipped"])
 
-    result = pe.evaluate_policies(rules, tenant_configs, inputs.aliases)
+    try:
+        # It asks da-guard for the #1231 spellings (#3556): the load's failure.
+        result = pe.evaluate_policies(rules, tenant_configs)
+    except (DaGuardNotFoundError, DaGuardError) as exc:
+        return _tenant_load_failure_row(
+            "policy_dsl", exc, config_dir,
+            (_POLICY_DSL_TREE_UNREADABLE_HINT, _POLICY_DSL_NO_CONFIG_FILE_HINT,
+             _POLICY_DSL_NO_DA_GUARD_HINT))
     scope["evaluated"] = True
 
     details = []

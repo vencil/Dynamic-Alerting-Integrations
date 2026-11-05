@@ -52,8 +52,8 @@ from _lib_tenant_values import (  # noqa: E402
     EffectiveTree,
     ServedTree,
     ServedValuesError,
-    canonical_key,
     exit_on_served_values_error,
+    key_spellings,
     load_effective_tree,
     load_served_tree,
 )
@@ -438,11 +438,13 @@ def chain_for(tenant: str, source: ChainSource) -> dict[str, object]:
     resolved: dict[str, object] = {}
     groups: dict[tuple[str, str], dict[str, object]] = {}
     # /effective keeps one spelling per threshold (it drops the shadowed
-    # one), so each key below maps to its own canonical row.
+    # one), so each key below maps to its own canonical row — the exporter's
+    # spelling, asked of it (#3556).
+    spellings = key_spellings(k for k in te.key_sources if not k.startswith("_"))
     for key, src in te.key_sources.items():
         if key.startswith("_"):
             continue
-        canon = canonical_key(key, served_tree.aliases)
+        canon = spellings.canonical(key)
         written = te.effective_config[key]
         if canon in served.severities:
             value = served.values[canon]

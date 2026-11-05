@@ -34,7 +34,7 @@ def _matrix() -> dict:
 
 
 def _cases() -> list[dict]:
-    from _grar_validate import DEPRECATED_KEY_ALIASES
+    from _registry_lib import DEPRECATED_KEY_ALIASES  # the authored table
     # A row spelling the live alias stops meaning anything once the #1231
     # window closes (the matrix's own _comment): skipped then, not failed.
     return [c for c in _matrix()["cases"] if DEPRECATED_KEY_ALIASES or not c.get("requires_alias")]

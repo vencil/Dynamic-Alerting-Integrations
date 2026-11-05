@@ -70,11 +70,12 @@ from _lib_python import (  # noqa: E402
 # sample is read once, by the lib (#3213).
 from _lib_prometheus import QueryError, finite_row_samples, prometheus_instant  # noqa: E402
 # #2116: the tenants, their values and who owns each key come from Go
-# (`da-guard effective`); the alias table from `da-guard served-values`.
+# (`da-guard effective`); the #1231 spellings from `da-guard key-spellings`.
+from _lib_parse_tree import KeySpellings  # noqa: E402
 from _lib_tenant_values import (  # noqa: E402
     KeySource,
-    canonical_key,
     exit_on_served_values_error,
+    key_spellings,
     load_effective,
     load_served_tree,
     print_load_warnings,
@@ -841,7 +842,7 @@ def analyze_tenant(
     dry_run: bool = False,
     observed_map: Optional[dict[str, Any]] = None,
     key_sources: Optional[dict[str, KeySource]] = None,
-    aliases: Optional[dict[str, str]] = None,
+    spellings: Optional[KeySpellings] = None,
     source_file: str = "",
 ) -> TenantRecommendation:
     """Analyze one tenant and generate threshold recommendations.
@@ -856,8 +857,9 @@ def analyze_tenant(
     goes to `inherited`: listed with its current value and source file only —
     no Prometheus query, no recommended value (a change to it belongs in the
     file that owns it, not in this tenant's). A key written in a retired spelling
-    is looked up in the observed-map by its canonical spelling (`aliases`,
-    the exporter's table) and keeps the written one in `key`.
+    is looked up in the observed-map by its canonical spelling (the
+    exporter's rule, `da-guard key-spellings`, #3556) and keeps the written
+    one in `key`.
 
     Args:
         tenant_name: Tenant identifier.
@@ -870,7 +872,8 @@ def analyze_tenant(
         observed_map: conf.d-key -> observed-series map (loads default if None).
         key_sources: `{key: KeySource}` from `da-guard effective`; None reads
             every key as the tenant's own.
-        aliases: retired base key -> canonical base key (served-values).
+        spellings: `key_spellings` answers covering this tenant's keys; None
+            asks da-guard for them.
         source_file: the tenant's own file, relative to the config dir.
 
     Returns:
@@ -880,6 +883,8 @@ def analyze_tenant(
         observed_map = observed_map_lib.load_observed_map()
 
     report = TenantRecommendation(tenant=tenant_name, source_file=source_file)
+    if spellings is None:
+        spellings = key_spellings(k for k in tenant_config if not is_reserved_key(k))
 
     for key, current_value in sorted(tenant_config.items()):
         src = (key_sources or {}).get(key)
@@ -888,7 +893,7 @@ def analyze_tenant(
         # platform-level one merged from a root file (e.g. `_policies`).
         if is_reserved_key(key) or (layer != "tenant" and key.startswith("_")):
             continue
-        canonical = canonical_key(key, aliases)
+        canonical = spellings.canonical(key)
         if layer != "tenant":
             report.inherited.append(KeyRecommendation(
                 key=key, current_value=current_value, reason=_INHERITED_REASON,
@@ -1064,10 +1069,10 @@ def run_analysis(
         What `load_effective` / `load_served_tree` raise (da-guard missing,
         failing, or a file the exporter cannot load): fail-closed.
     """
-    # served-values is needed for the alias table either way. On a file the
-    # load cannot decode, both subcommands' stderr carry the exporter's parse
-    # reason (`da-guard effective` too since #2115), so the order does not
-    # decide which reason is shown.
+    # served-values first, for its load warnings. On a file the load cannot
+    # decode, both subcommands' stderr carry the exporter's parse reason
+    # (`da-guard effective` too since #2115), so the order does not decide
+    # which reason is shown.
     tree = load_served_tree(config_dir)
     print_load_warnings(tree)
     effective = load_effective(config_dir)
@@ -1082,6 +1087,9 @@ def run_analysis(
             return []
         effective = {tenant_filter: effective[tenant_filter]}
 
+    # One `da-guard key-spellings` run for every tenant's keys (#3556).
+    spellings = key_spellings(k for eff in effective.values() for k in eff.effective_config
+                              if not is_reserved_key(k))
     reports: list[TenantRecommendation] = []
     for tenant_name in sorted(effective):
         eff = effective[tenant_name]
@@ -1094,7 +1102,7 @@ def run_analysis(
             dry_run=dry_run,
             observed_map=observed_map,
             key_sources=eff.key_sources,
-            aliases=tree.aliases,
+            spellings=spellings,
             source_file=eff.source_file,
         )
         if report.keys or report.inherited:

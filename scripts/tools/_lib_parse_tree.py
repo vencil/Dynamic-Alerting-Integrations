@@ -1220,6 +1220,69 @@ def _run_names(names: "list[str]", binary: Optional[str],
     return {e.path: e for e in entries}, chosen
 
 
+#: `da-guard key-spellings` (#3556): every #1231 spelling of a tenant-config
+#: key, canonical first. Its stdout is a bare JSON array (no schema field).
+KEY_SPELLINGS = "key-spellings"
+_SPELLING_FIELDS = frozenset({"key", "canonical", "spellings"})
+
+
+@dataclass(frozen=True)
+class KeySpellings:
+    """`da-guard key-spellings`' answers for the keys it was asked: the
+    exporter's one rule for #1231 spellings (Go's config.SpellingsOf).
+    Python keeps no copy of that rule (#3556); a key that was not asked is a
+    caller error (KeyError), never "no alias"."""
+
+    of: "Mapping[str, tuple[str, tuple[str, ...]]]"
+
+    def canonical(self, key: str) -> str:
+        """*key* in the exporter's canonical spelling."""
+        return self.of[key][0]
+
+    def spellings(self, key: str) -> "tuple[str, ...]":
+        """Every spelling of *key*'s threshold, the canonical one first."""
+        return self.of[key][1]
+
+
+NO_SPELLINGS = KeySpellings(MappingProxyType({}))
+
+
+def key_spellings(keys: "Iterable[str]", binary: Optional[str] = None,
+                  timeout: Optional[float] = None) -> KeySpellings:
+    """Every #1231 spelling of each of *keys*: one `da-guard key-spellings`
+    run for all of them (none for no keys). Raises as `run` does —
+    `BinaryMissing` with no binary, `NotThisDocument` for a da-guard older
+    than this tool — and ParseTreeError for an answer that is not one
+    well-formed entry per key: unusable whole."""
+    keys = list(dict.fromkeys(keys))
+    if not keys:
+        return NO_SPELLINGS
+    what = KEY_SPELLINGS
+    try:
+        raw = json.dumps(keys, ensure_ascii=False).encode("utf-8")
+    except (TypeError, UnicodeEncodeError) as e:
+        raise ParseTreeError(f"da-guard {what}: a key JSON cannot carry ({e})") from None
+    out = _run_stdout([KEY_SPELLINGS], binary, timeout, stdin=raw, what=what)
+    try:
+        doc = json.loads(out.decode("utf-8"))
+        if not isinstance(doc, list) or len(doc) != len(keys):
+            raise ValueError(f"{len(doc) if isinstance(doc, list) else type(doc).__name__} "
+                             f"answers for {len(keys)} keys")
+        of: dict[str, tuple[str, tuple[str, ...]]] = {}
+        for key, a in zip(keys, doc):
+            if not isinstance(a, dict) or set(a) != _SPELLING_FIELDS or a["key"] != key:
+                raise ValueError(f"an answer is not {sorted(_SPELLING_FIELDS)} for {key!r}: {a!r}")
+            canon, spellings = a["canonical"], a["spellings"]
+            if not isinstance(canon, str) or not isinstance(spellings, list) or not spellings \
+                    or spellings[0] != canon or not all(isinstance(x, str) for x in spellings):
+                raise ValueError(f"an answer of the wrong shape: {a!r}")
+            of[key] = (canon, tuple(spellings))
+    except (ValueError, TypeError, KeyError) as e:  # UnicodeDecodeError is a ValueError
+        raise ParseTreeError(f"da-guard {what} wrote no answer this tool can read ({e}); "
+                             "nothing of it is used") from e
+    return KeySpellings(MappingProxyType(of))
+
+
 #: `da-guard threshold-values` (#3267): how the exporter reads a threshold
 #: value's text. Its stdout is a bare JSON array (no schema field).
 THRESHOLD_VALUES = "threshold-values"

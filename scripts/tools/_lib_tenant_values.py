@@ -297,9 +297,9 @@ __all__ = [
     "DA_GUARD_PREFIX",
     "MISSING_BINARY_MESSAGE",
     "ParseFailedError",
-    "canonical_key",
     "exit_on_served_values_error",
     "is_tenant_reserved_key",
+    "key_spellings",
     "load_effective",
     "load_effective_tree",
     "load_guard_report",
@@ -1649,22 +1649,22 @@ def is_tenant_reserved_key(key: str) -> bool:
     return key.startswith(VALID_RESERVED_PREFIXES) and key not in TOP_LEVEL_READ_ELSEWHERE
 
 
-_CRITICAL = "_critical"
-
-
-def canonical_key(key: str, aliases: dict[str, str] | None) -> str:
-    """A threshold key in the exporter's canonical spelling: a retired base
-    key (also as `<base>_critical` / `<base>{...}`) through `aliases`
-    (`ServedTree.aliases`, the exporter's own table). Reserved keys and keys
-    not in the table are returned as they are."""
-    if not aliases or key.startswith("_"):
-        return key
-    base, brace, dims = key.partition("{")
-    if base in aliases:
-        return aliases[base] + brace + dims
-    if base.endswith(_CRITICAL) and base[:-len(_CRITICAL)] in aliases:
-        return aliases[base[:-len(_CRITICAL)]] + _CRITICAL + brace + dims
-    return key
+def key_spellings(keys: "Iterable[str]", binary: str | None = None,
+                  timeout: float = DEFAULT_TIMEOUT) -> "_lib_parse_tree.KeySpellings":
+    """Every #1231 spelling of each of *keys*, canonical first: one `da-guard
+    key-spellings` run (none for no keys). The exporter's rule, asked — no
+    Python copy of it (#3556). Raises DaGuardNotFoundError with no binary
+    and ServedValuesError for any other failure, so every caller's handler
+    for a failing da-guard applies (rc 2)."""
+    import _lib_parse_tree  # lazy: it imports modules that import this one
+    try:
+        return _lib_parse_tree.key_spellings(keys, binary=binary, timeout=timeout)
+    except _lib_parse_tree.ParseTreeError as e:
+        text = " ".join(str(e).split())
+        if isinstance(e, _lib_parse_tree.BinaryMissing):
+            raise DaGuardNotFoundError(text) from e
+        stale = "older than this tool" in text
+        raise ServedValuesError(text, None, "", stale=stale, broken=not stale) from e
 
 
 _EMPTY_FILL = ("", [], {}, None)

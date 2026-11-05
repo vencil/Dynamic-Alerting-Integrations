@@ -20,9 +20,9 @@ package config
 // table, regen the registry, then update this mirror (and the Python one in
 // _grar_validate.py) to match.
 //
-// Lookup contract: EXACT key match only, plus exactly two derived shapes that
-// canonicalKeyFor handles structurally ("<base>_critical" and dimensional
-// "<base>{...}").
+// Lookup contract: EXACT key match only, plus the two derived shapes that
+// canonicalKeyFor handles structurally, alone or together: "<base>_critical"
+// and dimensional "<base>{...}" ("<base>_critical{...}" is both, #3556).
 // ⛔ Never prefix-match against this table: "mysql_cpu" is a string prefix of
 // BOTH "mysql_cpu_critical" (legitimate, handled via suffix derivation) and of
 // typos like "mysql_cpu_util" (must keep failing unknown-key validation). A
@@ -61,6 +61,20 @@ var legacyKeyByCanonical = func() map[string]string {
 // (exported for the overlay's reachability check and for testing).
 func CanonicalKeyFor(key string) (string, bool) { return canonicalKeyFor(key) }
 
+// SpellingsOf is every spelling of key's threshold, the canonical one first
+// (canonicalKeyFor, then its legacySpellingFor): `[key]` for a key no alias
+// touches. It is what `da-guard key-spellings` prints, so a reader that
+// compares keys across #1231 spellings (Policy-as-Code, diagnose, the
+// threshold tools) asks this rule instead of keeping its own (#3556).
+func SpellingsOf(key string) (canonical string, spellings []string) {
+	canonical, _ = canonicalKeyFor(key)
+	spellings = []string{canonical}
+	if legacy, ok := legacySpellingFor(canonical); ok {
+		spellings = append(spellings, legacy)
+	}
+	return canonical, spellings
+}
+
 // LegacySpellingFor is CanonicalKeyFor's inverse: given a canonical key it
 // returns the retired spelling that resolves to it, across all three shapes
 // (exact, `_critical`-suffixed, dimensional).
@@ -85,47 +99,58 @@ func CanonicalKeyFor(key string) (string, bool) { return canonicalKeyFor(key) }
 func LegacySpellingFor(canonical string) (string, bool) { return legacySpellingFor(canonical) }
 
 // canonicalKeyFor returns the canonical spelling for a tenant-config key and
-// whether the key was a deprecated alias. Exactly three shapes canonicalize:
+// whether the key was a deprecated alias. The alias applies to the key's
+// head (the part before `{`, or the whole key), exactly or with a
+// `_critical` suffix; a `{...}` part is carried as written:
 //
-//	mysql_cpu                → mysql_threads_running                (exact)
-//	mysql_cpu_critical       → mysql_threads_running_critical       (suffix-derived)
-//	mysql_cpu{version="v2"}  → mysql_threads_running{version="v2"}  (dimensional base)
+//	mysql_cpu                    → mysql_threads_running                    (exact)
+//	mysql_cpu_critical           → mysql_threads_running_critical           (suffix-derived)
+//	mysql_cpu{version="v2"}      → mysql_threads_running{version="v2"}      (dimensional base)
+//	mysql_cpu_critical{db="a"}   → mysql_threads_running_critical{db="a"}   (both, #3556)
 //
 // Everything else — including typos that merely share the prefix, like
 // mysql_cpu_util — is returned unchanged (exact-match contract, see the
-// package comment's ⛔ note).
+// package comment's ⛔ note). The one rule serves every reader: the Python
+// tools ask it through `da-guard key-spellings` and write none of their own
+// (#3556).
 func canonicalKeyFor(key string) (string, bool) {
-	if canon, ok := deprecatedKeyAliases[key]; ok {
-		return canon, true
-	}
-	if base, found := strings.CutSuffix(key, criticalSuffix); found {
-		if canon, ok := deprecatedKeyAliases[base]; ok {
-			return canon + criticalSuffix, true
-		}
-	}
-	if i := strings.IndexByte(key, '{'); i > 0 {
-		if canon, ok := deprecatedKeyAliases[key[:i]]; ok {
-			return canon + key[i:], true
-		}
+	head, rest := splitKeyHead(key)
+	if canon, ok := aliasHead(head, deprecatedKeyAliases); ok {
+		return canon + rest, true
 	}
 	return key, false
 }
 
-// legacySpellingFor is the inverse of canonicalKeyFor for the same three
-// shapes: given a canonical-spelled key, it returns the deprecated spelling
-// (if the key's base is an alias target). Used by hasAliasEquivalent.
+// legacySpellingFor is the inverse of canonicalKeyFor over the same shapes:
+// given a canonical-spelled key, it returns the deprecated spelling (if the
+// key's head is an alias target, exactly or with `_critical`). Used by
+// hasAliasEquivalent.
 func legacySpellingFor(key string) (string, bool) {
-	if legacy, ok := legacyKeyByCanonical[key]; ok {
-		return legacy, true
+	head, rest := splitKeyHead(key)
+	if legacy, ok := aliasHead(head, legacyKeyByCanonical); ok {
+		return legacy + rest, true
 	}
-	if base, found := strings.CutSuffix(key, criticalSuffix); found {
-		if legacy, ok := legacyKeyByCanonical[base]; ok {
-			return legacy + criticalSuffix, true
-		}
-	}
+	return "", false
+}
+
+// splitKeyHead splits a key at its first `{` (a dimensional key's label
+// part, kept as written); a key with none, or starting with one, is all head.
+func splitKeyHead(key string) (head, rest string) {
 	if i := strings.IndexByte(key, '{'); i > 0 {
-		if legacy, ok := legacyKeyByCanonical[key[:i]]; ok {
-			return legacy + key[i:], true
+		return key[:i], key[i:]
+	}
+	return key, ""
+}
+
+// aliasHead maps a key head through table, exactly or with its `_critical`
+// suffix carried over — the two shapes, one rule, for both directions.
+func aliasHead(head string, table map[string]string) (string, bool) {
+	if mapped, ok := table[head]; ok {
+		return mapped, true
+	}
+	if base, found := strings.CutSuffix(head, criticalSuffix); found {
+		if mapped, ok := table[base]; ok {
+			return mapped + criticalSuffix, true
 		}
 	}
 	return "", false
@@ -307,22 +332,19 @@ var aliasBases = func() map[string]struct{} {
 	return m
 }()
 
-// touchesAlias reports whether key could have another spelling: its base —
-// the part before `{` (dimensional), else the key without a `_critical`
-// suffix — is on either side of the alias table. It is exactly the union of
-// the shapes canonicalKeyFor and legacySpellingFor recognise, so a false
-// answer means otherSpellings is empty; it exists because the per-tenant
-// merge asks this for every key and almost every key is not aliased
-// (#2420 bench gate: MergePartialConfigs_1000 was +29% time without it).
+// touchesAlias reports whether key could have another spelling: its head
+// (splitKeyHead), exactly or without a `_critical` suffix, is on either side
+// of the alias table. It is exactly the union of the shapes canonicalKeyFor
+// and legacySpellingFor recognise, so a false answer means otherSpellings is
+// empty; it exists because the per-tenant merge asks this for every key and
+// almost every key is not aliased (#2420 bench gate: MergePartialConfigs_1000
+// was +29% time without it).
 func touchesAlias(key string) bool {
-	if i := strings.IndexByte(key, '{'); i > 0 {
-		_, ok := aliasBases[key[:i]]
-		return ok
-	}
-	if _, ok := aliasBases[key]; ok {
+	head, _ := splitKeyHead(key)
+	if _, ok := aliasBases[head]; ok {
 		return true
 	}
-	if base, found := strings.CutSuffix(key, criticalSuffix); found {
+	if base, found := strings.CutSuffix(head, criticalSuffix); found {
 		_, ok := aliasBases[base]
 		return ok
 	}
@@ -331,7 +353,7 @@ func touchesAlias(key string) bool {
 
 // otherSpellings is every spelling of key's threshold other than key itself
 // — its canonical form and the legacy form of that canonical, across the
-// three shapes canonicalKeyFor handles. Empty for a key no alias touches
+// shapes canonicalKeyFor handles. Empty for a key no alias touches
 // (every reserved `_` key, every key outside the table).
 //
 // The result is a slice of *buf, which the caller declares on its stack

@@ -282,6 +282,14 @@ echo '[{"key":"mysql_connections","text":"70:critical"},{"key":"mysql_connection
 #  {"key":"mysql_connections","text":"1e999","number":null,"non_finite":"+Inf","severity":"warning","refused":"unparsed"}]
 ```
 
+子命令 `key-spellings`（[#3556](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3556)）不讀樹：從 stdin 讀一個租戶設定鍵的 JSON 字串陣列，在 stdout 依同樣順序印出每個鍵的 `{key, canonical, spellings}`——`canonical` 是 exporter 的現行拼法（退役的 #1231 別名套在鍵的前段上，完全相同或帶 `_critical`，`{…}` 原樣保留），`spellings` 是同一個閾值的所有拼法，現行拼法排第一（沒有別名的鍵為 `[key]`）。判定全部來自 `pkg/config` 的 `SpellingsOf`；Policy-as-Code、`diagnose`、`backtest-threshold`、`threshold-recommend` 都用它比對新舊拼法，Python 不另寫一份。結束碼：0 正常；2 為多了參數、讀不到 stdin，或 stdin 不是字串陣列。
+
+```bash
+echo '["mysql_threads_running_critical{db=\"a\"}","mysql_connections"]' | da-guard key-spellings
+# [{"key":"mysql_threads_running_critical{db=\"a\"}","canonical":"mysql_threads_running_critical{db=\"a\"}","spellings":["mysql_threads_running_critical{db=\"a\"}","mysql_cpu_critical{db=\"a\"}"]},
+#  {"key":"mysql_connections","canonical":"mysql_connections","spellings":["mysql_connections"]}]
+```
+
 ### `da-parser` — kube-prometheus 規則 → ParseResult JSON
 
 導入既有 PrometheusRule 的第一步：解析、dialect 分類（標準 PromQL / VictoriaMetrics-only）、可選 portability gate。
