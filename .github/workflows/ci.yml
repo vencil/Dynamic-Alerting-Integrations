@@ -189,6 +189,11 @@ jobs:
               - "scripts/ops/go_testlog_exec.sh"
               - "scripts/ops/go_test_reads.py"
               - "scripts/ops/paths_filter_glob.py"
+              #   - ci_flake_retry.py and go_test_reads.py exit through
+              #     scripts/tools/_lib_exitcodes.run() (#3579), which imports
+              #     _lib_compat: a change there changes how those two exit.
+              - "scripts/tools/_lib_exitcodes.py"
+              - "scripts/tools/_lib_compat.py"
               - ".github/workflows/ci.yml"
             # Python Tests: pytest over tests/ + scripts/tools/ with real-
             # repo-tree reads well beyond *.py (grep-verified):

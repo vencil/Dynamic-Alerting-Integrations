@@ -40,6 +40,10 @@ import tempfile
 import time
 from pathlib import Path
 
+# #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
+# Appended, so a copy beside this file (one directory holding all three) wins.
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "tools"))
+
 DEFAULT_CONTAINER = "vibe-dev-container"
 DEFAULT_WORKSPACE = "/workspaces/vibe-k8s-lab"
 OUT_FILE = "_dx_out.txt"
@@ -323,4 +327,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)

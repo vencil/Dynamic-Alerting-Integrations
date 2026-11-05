@@ -53,6 +53,10 @@ import sys
 import sysconfig
 from pathlib import Path
 
+# #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
+# Appended, so a copy beside this file (one directory holding all three) wins.
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "tools"))
+
 # Distinct from EXIT_VIOLATION (1): "the check could not run" is not "the refs are
 # bad", and a reader of a CI log must be able to tell those apart.
 EXIT_NO_RESOLVER = 3
@@ -603,4 +607,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)

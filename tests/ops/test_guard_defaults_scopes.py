@@ -918,3 +918,35 @@ class _StdinBuffer:
 
     def read(self) -> bytes:
         return self._data
+
+
+# ── #3579：客戶複製的是三支檔案 ─────────────────────────────────────────
+# 這支經 _lib_exitcodes.run() 結束；客戶照 guard-defaults-impact.yml 的說明
+# 把它與 _lib_exitcodes.py、_lib_compat.py 放進同一個 scripts/ops/。repo 內
+# 則從 scripts/tools/ 找到後兩支（append 進 sys.path，同目錄的副本優先）。
+
+_THREE = ("scripts/ops/guard_defaults_scopes.py", "scripts/tools/_lib_exitcodes.py",
+          "scripts/tools/_lib_compat.py")
+
+
+@pytest.mark.parametrize("copied", [_THREE, _THREE[:1]], ids=["all-three", "helper-only"])
+def test_a_customer_copy_needs_all_three_files(tmp_path, copied):
+    ops = tmp_path / "scripts" / "ops"
+    ops.mkdir(parents=True)
+    for rel in copied:
+        shutil.copy(_REPO / rel, ops / Path(rel).name)
+    proc = subprocess.run([sys.executable, "scripts/ops/guard_defaults_scopes.py", "--null", "-"],
+                          input=b"a/_defaults.yaml\0", cwd=tmp_path, capture_output=True,
+                          timeout=60)
+    if len(copied) == 3:
+        assert proc.returncode == 0, proc.stderr
+        assert proc.stdout.startswith(b"unmanaged\ta/_defaults.yaml"), proc.stdout
+    else:
+        assert proc.returncode != 0
+        assert b"_lib_exitcodes" in proc.stderr, proc.stderr
+
+
+def test_the_workflow_note_names_all_three_files():
+    note = _WORKFLOW.read_text(encoding="utf-8")
+    for rel in _THREE:
+        assert Path(rel).name in note, rel

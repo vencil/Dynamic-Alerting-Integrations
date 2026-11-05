@@ -1021,6 +1021,22 @@ MIGRATED: frozenset[str] = frozenset({
     "scripts/tools/lint/check_structure.py",
     "scripts/tools/lint/check_vmalert_coverage.py",
     "scripts/tools/ops/_federation_revocation_reconciler.py",
+    # #3579 PR5: scripts/ops/ (scripts/tools/ appended to sys.path) — a crash 1→2,
+    # a failed stdout write 120→2, `>&-` 0→2 (owner-approved rule, #3579)
+    "scripts/ops/add_t_parallel.py",
+    "scripts/ops/check_image_refs_resolve.py",
+    "scripts/ops/ci_flake_retry.py",
+    "scripts/ops/commit_helper.py",
+    "scripts/ops/dx_run.py",
+    "scripts/ops/file_race_report.py",
+    "scripts/ops/fuse_plumbing_commit.py",
+    "scripts/ops/go_test_reads.py",
+    "scripts/ops/guard_defaults_scopes.py",
+    "scripts/ops/inject_default_key.py",
+    "scripts/ops/parse_go_test_json.py",
+    "scripts/ops/plan_race_shards.py",
+    "scripts/ops/route_metrics_through_field.py",
+    "scripts/ops/use_get_metrics.py",
 })
 
 #: The ceiling of entries not yet through run(): it only shrinks. A new tool
@@ -1105,7 +1121,7 @@ def test_migrated_names_baseline_entries():
 def test_the_pending_entries_are_a_pinned_ceiling():
     """The count is written out so that a shorter PENDING is a visible edit of
     this line too (#3579): only ever lower it."""
-    assert len(PENDING) == 20
+    assert len(PENDING) == 6
 
 
 _RUN_TOOL = ("import _lib_exitcodes\ndef main(argv=None):\n    return 0\n"
