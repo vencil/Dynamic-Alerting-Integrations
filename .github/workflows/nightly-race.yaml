@@ -187,6 +187,12 @@ jobs:
         # the vendored yaml.v3 TestLimits also skips under -short; tenant-api has
         # no testing.Short() call, so -short is a no-op there. Sharding (#3541)
         # superseded TRK-3180's plan of making the matrices themselves cheap.
+        # -short is PERMANENT, not a stopgap (#3541, decided 2026-11-05): this run
+        # is the repeat-stress tier, PR CI is the exhaustive-coverage tier — the
+        # same split Go's own builders use (race builders run -short, full runs
+        # live on -longtest builders). Dropping -short here would put da-guard's
+        # full matrices x10 back on one binary's 30m budget, which sharding
+        # cannot split: a package is one test binary.
         # PACKAGES is intentionally unquoted: it is a multi-package list.
         run: |
           set -o pipefail
