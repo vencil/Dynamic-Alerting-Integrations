@@ -385,7 +385,7 @@ def test_reports_name_the_keys_serving_a_row(tmp_path: Path, monkeypatch, capsys
     both reports (and `keys` in --json)."""
     b = _tree(tmp_path / "base", {"_defaults.yaml": _DEFAULTS, "tx.yaml": _wrapper("90:critical")})
     c = _tree(tmp_path / "cur", {"_defaults.yaml": _DEFAULTS, "tx.yaml": (
-        "tenants:\n  tx:\n    mysql_connections: disable\n    mysql_connections_critical: \"95\"\n")})
+        "tenants:\n  tx:\n    mysql_connections: \"70\"\n    mysql_connections_critical: \"95\"\n")})
     md = tmp_path / "r.md"
     _, out, _ = _run_main(monkeypatch, capsys, cli_argv, b, c, "--markdown-output", str(md))
     assert ("tx/mysql_connections_critical: 90 -> 95 "

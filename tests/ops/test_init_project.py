@@ -1035,11 +1035,11 @@ class TestCriticalTierPlacement:
         alone, and BOTH were mis-stated in the first version (blind review,
         #1218):
 
-        1. `<base>: "disable"` does not cascade to `<base>_critical` — the
-           warning row goes and the critical row keeps firing. Measured in
-           `pkg/config/critical_tier_placement_test.go`. The very next line of
-           this same header says `Set a key to "disable" to suppress that
-           metric`, so omitting this makes the file contradict itself.
+        1. `<base>: "disable"` switches `<base>_critical` off too (#3046,
+           `pkg/config/family_disable_test.go`), so the pre-filled critical
+           line serves nothing under a disabled base; keeping the critical
+           tier alone is `<base>: "N:critical"` with the `_critical` line
+           deleted (both together give one series twice).
         2. A dangling `<base>_critical` is write-blocking **on the tenant-api
            path only**. `validate_config.py` — the gate this tool actually
            installs into the customer's CI and pre-commit — reports WARN and
@@ -1051,16 +1051,16 @@ class TestCriticalTierPlacement:
         header = _flat_header(text)
         prefill = header.split('of them are written in below')[1]
 
-        # (1) the disable-cascade caveat, and it must sit in the same header as
+        # (1) the disable-cascade note, and it must sit in the same header as
         # the sentence it qualifies
-        assert 'does NOT disable' in prefill, header
+        assert 'switches its `<base>_critical` off too' in prefill, header
+        assert 'DELETE the `<base>_critical` line' in prefill, header
         assert 'Set a key to "disable"' in header, header
 
         # (1b) …and DELETE must not be offered as a synonym for disable.
         # Measured (round-2 blind review): both lines deleted → the warning row
         # comes BACK at the platform default, because an absent key is State 2.
         assert 'DELETING both lines is not the same thing' in prefill, header
-        assert 'BOTH lines must say "disable"' in prefill, header
 
         # (1c) ⛔ "BOTH lines" presumes both lines exist, and usually they do
         # not: base overrides are seeded from rule_packs[0] only while the
