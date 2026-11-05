@@ -370,3 +370,200 @@ def test_config_diff_redacts_a_reference_by_its_field_name():
     import _lib_redact
     assert _lib_redact.redact({"receiver": _slack(CORP)}) == {
         "receiver": {"type": "slack", "api_url": _lib_redact.REDACTED}}
+
+
+# ── F1：參照不得殘留在 Alertmanager 輸出（http_config 任一層、email headers）──
+# 產生器把 http_config / headers 整包照抄；render 之後若還有帶 `secret` 鍵的 mapping，
+# 就會原樣寫進 Alertmanager 設定。檢查在輸出上做，所以不分欄位、不分層。
+
+_HOOK = {"type": "webhook", "url": "https://hook.example.com/a"}
+_OAUTH = {"client_id": "id", "token_url": "https://token.example.com/t"}
+
+
+@pytest.mark.parametrize("receiver,path", [
+    ({**_HOOK, "http_config": OWN}, "receiver.http_config"),
+    ({**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {"sub": OWN}}}},
+     "receiver.http_config.oauth2.claims.sub"),
+    # 多層巢狀：mapping 裡的 list 裡的 mapping
+    ({**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {
+        "a": [{"b": {"c": [1, CORP]}}]}}}},
+     "receiver.http_config.oauth2.claims.a[0].b.c[1]"),
+    # 形狀壞掉的參照也算（is_secret_ref 只看 `secret` 鍵）
+    ({**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {
+        "x": {"secret": {"name": "da-t-b", "key": "k"}}}}}},
+     "receiver.http_config.oauth2.claims.x"),
+    ({**SMTP, "headers": {"X-Token": OWN}}, "receiver.headers.X-Token"),
+    ({**SMTP, "headers": OWN}, "receiver.headers"),
+])
+def test_a_reference_left_in_the_output_drops_the_receiver(receiver, path):
+    cfg, warnings = build_receiver_config(receiver, "t-a", tenant_id="t-a",
+                                          owner_tenant="t-a", secrets=BINDING)
+    assert cfg is None
+    assert [(w.kind, w.field, w.tenant) for w in warnings] == [
+        ("secret_ref_unsupported_field", path, "t-a")]
+    assert warnings[0].blocks == "validate"
+
+
+def test_every_leftover_reference_is_named():
+    receiver = {**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {"a": OWN, "b": CORP}}}}
+    cfg, warnings = build_receiver_config(receiver, "t-a", owner_tenant="t-a")
+    assert cfg is None
+    assert sorted(w.field for w in warnings) == [
+        "receiver.http_config.oauth2.claims.a", "receiver.http_config.oauth2.claims.b"]
+
+
+def test_a_rendered_reference_is_not_a_leftover():
+    """欄位本身接參照時 render 成 `<field>_file`，不算殘留；其他 http_config 照抄。"""
+    receiver = {"type": "webhook", "url": OWN,
+                "http_config": {"oauth2": {**_OAUTH, "claims": {"sub": "x"}}}}
+    cfg, warnings = build_receiver_config(receiver, "t-a", owner_tenant="t-a")
+    assert warnings == []
+    assert _entry(cfg) == {"url_file": f"{DEFAULT_SECRET_MOUNT_ROOT}/da-t-a/slack-url",
+                           "http_config": receiver["http_config"]}
+
+
+def test_leftover_reference_in_every_slot_is_refused_through_generate_routes():
+    bad = {**SMTP, "headers": {"X-Token": OWN}}
+    routing = _routing(bad, overrides=[{"alertname": "A", "receiver": bad}],
+                       routes=[{"match": {"severity": "critical"}, "receiver": bad}])
+    _r, receivers, warnings = gar.generate_routes({"t-a": routing}, tenants=["t-a"],
+                                                  secrets=BINDING)
+    assert receivers == []
+    got = [(w.kind, w.field) for w in warnings if isinstance(w, SkippedEntryWarning)]
+    assert ("secret_ref_unsupported_field", "receiver.headers.X-Token") in got
+
+
+def test_schema_refuses_a_reference_inside_http_config_at_any_depth():
+    import jsonschema
+    with open(REPO / "docs" / "schemas" / "tenant-config.schema.json", encoding="utf-8") as f:
+        v = jsonschema.Draft7Validator(yaml.safe_load(f))
+
+    def doc(receiver):
+        return {"tenants": {"t-a": {"_routing": {"receiver": receiver}}}}
+
+    plain = {**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {"a": [{"b": "x"}]}}}}
+    assert list(v.iter_errors(doc(plain))) == []
+    for receiver in (
+        {**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {"a": OWN}}}},
+        {**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {"a": [{"b": CORP}]}}}},
+        {**_HOOK, "http_config": OWN},
+        {**SMTP, "headers": {"X-Token": OWN}},
+    ):
+        assert list(v.iter_errors(doc(receiver))) != [], receiver
+
+
+# ── F2：用了共用 Secret 的 receiver 不收租戶自填的 proxy_url ──────────────
+
+def _shared_hook(**http_config) -> dict:
+    return {"type": "webhook", "url": CORP, "http_config": http_config}
+
+
+def test_shared_reference_with_a_proxy_url_is_refused():
+    cfg, warnings = build_receiver_config(
+        _shared_hook(proxy_url="http://proxy.attacker.example:3128"), "t-a",
+        tenant_id="t-a", owner_tenant="t-a", secrets=BINDING)
+    assert cfg is None
+    assert [(w.kind, w.field) for w in warnings] == [
+        ("secret_ref_shared_proxy_url", "receiver.http_config.proxy_url")]
+    assert "corp-slack" in warnings[0]
+
+
+@pytest.mark.parametrize("receiver", [
+    _shared_hook(proxy_url=""),                      # 空值視同沒設
+    _shared_hook(proxy_url=None),
+    _shared_hook(proxy_from_environment=True),       # Alertmanager 自己的環境
+    {"type": "webhook", "url": OWN,                  # 自己的 Secret：代理是自己的
+     "http_config": {"proxy_url": "http://proxy.example.com:3128"}},
+])
+def test_proxy_rule_admits_what_does_not_leak_a_shared_destination(receiver):
+    cfg, warnings = build_receiver_config(receiver, "t-a", owner_tenant="t-a",
+                                          secrets=BINDING)
+    assert warnings == [] and cfg is not None
+
+
+def test_shared_proxy_rule_holds_through_generate_routes():
+    routing = _routing(_slack("https://hooks.example.com/main"), overrides=[
+        {"alertname": "A", "receiver": _shared_hook(proxy_url="http://p.example.com:3128")}])
+    _r, receivers, warnings = gar.generate_routes({"t-a": routing}, tenants=["t-a"],
+                                                  secrets=BINDING)
+    assert "tenant-t-a-override-0" not in [r["name"] for r in receivers]
+    assert [(w.kind, w.field) for w in warnings if isinstance(w, SkippedEntryWarning)] == [
+        ("secret_ref_shared_proxy_url", "overrides[0].receiver.http_config.proxy_url")]
+
+
+# ── F3：routes[i] 的參照歸該租戶 ─────────────────────────────────────────
+
+def test_routes_receiver_own_reference_renders_the_tenants_path():
+    routing = _routing(_slack("https://hooks.example.com/main"), routes=[
+        {"match": {"severity": "critical"},
+         "receiver": {"type": "pagerduty", "routing_key": {"secret": {"key": "pd-key"}}}}])
+    configs = {"t-a": routing, "t-b": routing}
+    _r, receivers, warnings = gar.generate_routes(configs, tenants=list(configs),
+                                                  secrets=BINDING)
+    assert not [w for w in warnings if isinstance(w, SkippedEntryWarning)]
+    by_name = {r["name"]: r for r in receivers}
+    for tenant in ("t-a", "t-b"):
+        route = by_name[f"tenant-{tenant}-route-0"]
+        assert route["pagerduty_configs"] == [
+            {"routing_key_file": f"{DEFAULT_SECRET_MOUNT_ROOT}/da-{tenant}/pd-key"}]
+
+
+# ── F4：經 generate-routes 的正向路徑 ─────────────────────────────────────
+
+def test_override_with_a_shared_secret_renders_through_generate_routes():
+    routing = _routing(_slack("https://hooks.example.com/main"),
+                       overrides=[{"alertname": "A", "receiver": _slack(CORP)}])
+    _r, receivers, warnings = gar.generate_routes({"t-a": routing}, tenants=["t-a"],
+                                                  secrets=BINDING)
+    assert not [w for w in warnings if isinstance(w, SkippedEntryWarning)]
+    override = next(r for r in receivers if r["name"] == "tenant-t-a-override-0")
+    assert override["slack_configs"] == [
+        {"api_url_file": f"{DEFAULT_SECRET_MOUNT_ROOT}/corp-alerting/url"}]
+
+
+_PASSWORD = {**SMTP, "auth_password": {"secret": {"key": "smtp-password"}}}
+
+
+def test_auth_password_own_reference_renders_in_every_tenant_slot():
+    """policy 有 allowed_domains、smarthost 通過：main／override／routes／帶 {{tenant}} 的
+    enforced 都放行，並 render 成該租戶的路徑。"""
+    routing = _routing(_PASSWORD, overrides=[{"alertname": "A", "receiver": _PASSWORD}],
+                       routes=[{"match": {"severity": "critical"}, "receiver": _PASSWORD}])
+    enforced = {"receiver": {**_PASSWORD, "to": ["noc+{{tenant}}@example.com"]}}
+    _r, receivers, warnings = gar.generate_routes(
+        {"t-a": routing}, ["*.example.com"], enforced, tenants=["t-a"], secrets=BINDING)
+    assert not [w for w in warnings if isinstance(w, SkippedEntryWarning)]
+    by_name = {r["name"]: r for r in receivers}
+    want = f"{DEFAULT_SECRET_MOUNT_ROOT}/da-t-a/smtp-password"
+    for name in ("tenant-t-a", "tenant-t-a-override-0", "tenant-t-a-route-0",
+                 "platform-enforced-t-a"):
+        [entry] = by_name[name]["email_configs"]
+        assert entry["auth_password_file"] == want and "auth_password" not in entry, name
+
+
+def _explain_parsed(routing: dict) -> dict:
+    return {"routing_defaults": {}, "routing_profiles": {}, "tenant_profile_refs": {},
+            "explicit_routing": {"t-a": routing}, "enforced_routing": None,
+            "all_tenants": ["t-a"], "dedup_configs": {}, "domain_policies": {},
+            "disabled_tenants": set()}
+
+
+def test_explain_route_reads_the_policys_shared_secrets(da_crdecode_env):
+    """explain-route 帶 secrets 時，與產生器同樣認得共用 Secret：主 receiver 用共用 Secret
+    而放行，其下 override 的網域拒收才看得到；不帶就整條 tenant route 不產出。"""
+    import explain_route as er
+    routing = _routing(_slack(CORP), overrides=[
+        {"alertname": "A", "receiver": _slack("https://hooks.attacker.example/x")},
+        {"alertname": "B", "receiver": _slack(CORP)}])
+    parsed = _explain_parsed(routing)
+    allowed = ["*.example.com"]
+
+    explanation = er.explain_tenant_routing(parsed, "t-a", allowed, BINDING)
+    assert [x["source"] for x in explanation["policy_refused"]] == ["overrides[0]"]
+    assert len(explanation["sub_routes"]) == 1
+    trace = er.trace_alert_routing(parsed, "t-a", "A", allowed_domains=allowed,
+                                   secrets=BINDING)
+    assert [x["source"] for x in trace["policy_refused"]] == ["overrides[0]"]
+
+    unbound = er.explain_tenant_routing(parsed, "t-a", allowed, None)
+    assert unbound["policy_refused"] == [] and unbound["sub_routes"] == []

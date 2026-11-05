@@ -318,7 +318,7 @@ The shapes deliberately stricter than Alertmanager are the rows marked `strict` 
 
 ### Credentials in a Secret (`secretRef`)
 
-Seven credential fields may hold a reference to a Kubernetes Secret instead of the value ([#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)): webhook / Rocket.Chat `url`, Slack `api_url`, Teams `webhook_url`, PagerDuty `service_key` / `routing_key`, email `auth_password`. Email `headers` and webhook `http_config` have no Alertmanager `*_file` counterpart and take none.
+Seven credential fields may hold a reference to a Kubernetes Secret instead of the value ([#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)): webhook / Rocket.Chat `url`, Slack `api_url`, Teams `webhook_url`, PagerDuty `service_key` / `routing_key`, email `auth_password`. Email `headers` and webhook `http_config` have no Alertmanager `*_file` counterpart and take none, at any depth: a reference anywhere else is found by the generator after rendering and the receiver is refused (`secret_ref_unsupported_field`), never written into the Alertmanager config as is.
 
 A reference **never names its Secret**; it has one of two shapes:
 
@@ -343,7 +343,7 @@ _routing:
     corp-alerting: {secret: corp-alerting, fields: [api_url, webhook_url, url]}
   ```
 
-  `secret` is the real Secret name and may not start with `da-` (it would collide with a tenant's derived name); `fields` lists only fields whose content is the destination itself, never `auth_password`. With no policy file, or no `shared_secrets` in it, there is no shared exception at all. A malformed `shared_secrets` (not a mapping, an alias that is not a DNS-1123 label, an entry that is not `{secret, fields}`, a name starting with `da-`, a field that takes no Secret) makes the whole policy unusable: exit code `2`.
+  `secret` is the real Secret name and may not start with `da-` (it would collide with a tenant's derived name); `fields` lists only fields whose content is the destination itself, never `auth_password`. With no policy file, or no `shared_secrets` in it, there is no shared exception at all. A receiver that uses any shared Secret may not set `http_config.proxy_url`: the tenant chose that proxy, and it would see the request to the shared destination (`secret_ref_shared_proxy_url`). A malformed `shared_secrets` (not a mapping, an alias that is not a DNS-1123 label, an entry that is not `{secret, fields}`, a name starting with `da-`, a field that takes no Secret) makes the whole policy unusable: exit code `2`.
 - **`auth_password`**: the tenant's own Secret only, and only under a policy whose `allowed_domains` is non-empty and admits the `smarthost` host. The tenant writes the `smarthost`, and the password is sent there.
 
 The generator writes the reference as Alertmanager's `<field>_file: <root>/<secret-name>/<key>` and drops the field; `<root>` defaults to `/etc/alertmanager/secrets` and is set with `generate-routes --secret-mount-root`. A receiver that breaks any rule above is not rendered: `generate-routes --validate` exits non-zero, `validate-config`'s routes row FAILs, and a tenant-api write gets 422. When a URL field is a reference the generator cannot see its host, and `allowed_domains` does not check it: the Secret is created by the operator or ExternalSecrets, and a tenant can write neither its content nor its name. `test-notification` cannot read the Secret, so such a receiver is always `SKIPPED` and nothing is sent.
