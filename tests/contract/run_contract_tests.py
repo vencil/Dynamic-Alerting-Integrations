@@ -557,7 +557,7 @@ def main() -> int:
     init_git_repo(config_dir)
     rbac_path = write_rbac_fixture(workdir)
 
-    generator, generator_sock = None, None
+    generator, generator_sock, human_sock_dir = None, None, None
     gen_log_fh = (workdir / "generator.log").open("w", encoding="utf-8")
     try:
         binary = build_tenant_api(workdir)
@@ -567,6 +567,10 @@ def main() -> int:
         addr = f"127.0.0.1:{port}"
         probe_url = f"http://{addr}"
         proxy_port = find_free_port()
+        # Both ports are only free when picked; tenant-api binds the first
+        # one later, so the proxy must not get the same number.
+        while proxy_port == port:
+            proxy_port = find_free_port()
         base_url = f"http://127.0.0.1:{proxy_port}"
         # ADR-027 §2: the API's socket. A short temp dir (a Unix socket path
         # is limited to ~107 bytes); 0777 so a container running as this uid
@@ -704,8 +708,12 @@ def main() -> int:
             if proxy is not None:
                 print("[contract] tearing down oauth2-proxy")
                 if proxy_stop:
-                    subprocess.run(proxy_stop, timeout=30, stdout=subprocess.DEVNULL,
-                                   stderr=subprocess.STDOUT, check=False)
+                    try:
+                        subprocess.run(proxy_stop, timeout=30, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.STDOUT, check=False)
+                    except subprocess.TimeoutExpired:
+                        # Keep tearing down: tenant-api below must still stop.
+                        print("[contract] stopping the oauth2-proxy container timed out; continuing teardown")
                 proxy.terminate()
                 try:
                     proxy.wait(timeout=10.0)
@@ -741,6 +749,8 @@ def main() -> int:
         gen_log_fh.close()
         if generator_sock is not None:
             shutil.rmtree(Path(generator_sock).parent, ignore_errors=True)
+        if human_sock_dir is not None:
+            shutil.rmtree(human_sock_dir, ignore_errors=True)
         shutil.rmtree(workdir, ignore_errors=True)
 
 

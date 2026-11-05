@@ -459,6 +459,9 @@ machineIdentity:
 # identity headers. tenant-api refuses to start without the socket, so
 # `enabled` must stay true: false fails the render. The key itself is
 # removed later (ADR-027 §6: the switches go; the schema then refuses it).
+# An overridden image.tag must be a tenant-api build that serves its API on
+# TA_HUMAN_SOCKET: an older build serves the API on 8080 and never opens the
+# socket, so oauth2-proxy has no upstream and every API request fails.
 humanSocket:
   enabled: true
   # Pod-internal socket path on a shared emptyDir mounted into both the

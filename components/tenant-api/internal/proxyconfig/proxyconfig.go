@@ -119,6 +119,31 @@ var claimNameRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 // would be read differently by the two.
 var headerNameRe = regexp.MustCompile(`^[A-Za-z0-9]+(-[A-Za-z0-9]+)*$`)
 
+// reservedHeaders are request headers that cannot carry identity, with why.
+// Hop-by-hop headers are removed by oauth2-proxy's reverse proxy before the
+// request reaches tenant-api, so the identity would never arrive (every
+// request 401). The rest are sent by ordinary clients — the kubelet's probes
+// among them — and the TCP listener answers any request carrying an identity
+// header 400 (ADR-027 §2), so naming one of them would fail every probe.
+var reservedHeaders = map[string]string{
+	"Connection":          "a hop-by-hop header, removed by oauth2-proxy before the request reaches tenant-api",
+	"Keep-Alive":          "a hop-by-hop header, removed by oauth2-proxy before the request reaches tenant-api",
+	"Proxy-Connection":    "a hop-by-hop header, removed by oauth2-proxy before the request reaches tenant-api",
+	"Proxy-Authenticate":  "a hop-by-hop header, removed by oauth2-proxy before the request reaches tenant-api",
+	"Proxy-Authorization": "a hop-by-hop header, removed by oauth2-proxy before the request reaches tenant-api",
+	"Te":                  "a hop-by-hop header, removed by oauth2-proxy before the request reaches tenant-api",
+	"Trailer":             "a hop-by-hop header, removed by oauth2-proxy before the request reaches tenant-api",
+	"Transfer-Encoding":   "a hop-by-hop header, removed by oauth2-proxy before the request reaches tenant-api",
+	"Upgrade":             "a hop-by-hop header, removed by oauth2-proxy before the request reaches tenant-api",
+	"User-Agent":          "ordinary clients and the kubelet's probes send it, and the network listener answers a request carrying an identity header 400",
+	"Accept":              "ordinary clients and the kubelet's probes send it, and the network listener answers a request carrying an identity header 400",
+	"Accept-Encoding":     "ordinary clients send it, and the network listener answers a request carrying an identity header 400",
+	"Content-Length":      "it describes the request body; Go's HTTP server consumes it",
+	"Content-Type":        "it describes the request body",
+	"Cookie":              "it carries the client's own cookies, including oauth2-proxy's session cookie",
+	"Authorization":       "it carries the client's own credentials",
+}
+
 // Parse parses the bytes of an oauth2-proxy alpha config file.
 func Parse(data []byte) (Identity, error) {
 	if i := bytes.IndexByte(data, '$'); i >= 0 {
@@ -223,6 +248,9 @@ func parseHeader(entry *yaml.Node) (name, claim string, err error) {
 		// Go's server moves Host out of r.Header, so tenant-api could never
 		// read a claim carried in it.
 		return "", "", fmt.Errorf("line %d: header %q cannot carry identity: Go's HTTP server removes it from the request headers", nameNode.Line, name)
+	}
+	if why, ok := reservedHeaders[http.CanonicalHeaderKey(name)]; ok {
+		return "", "", fmt.Errorf("line %d: header %q cannot carry identity: %s", nameNode.Line, name, why)
 	}
 	if n, ok := f["preserveRequestValue"]; ok {
 		if keep, err := boolScalar(n, "preserveRequestValue"); err != nil {

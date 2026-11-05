@@ -285,6 +285,9 @@ func main() {
 	// Layer 3: runtime poison pill — refuse (panic) to start with the bypass
 	// inside a Kubernetes cluster. Layer 2: loud WARN + /metrics tripwire gauge.
 	if *devBypassAuth {
+		if err := checkDevBypassEmail(*devBypassEmail); err != nil {
+			log.Fatalf("FATAL: %v", err)
+		}
 		rbac.DevBypassK8sGuard(os.Getenv, pathExists)
 		handler.SetDevBypassActive(true)
 		slog.Warn("⚠️  DEV AUTH BYPASS ACTIVE — a dev identity is injected on the Unix-socket (API) plane for requests oauth2-proxy sent without one. LOCAL DEV ONLY; never enable in production.",
@@ -918,6 +921,16 @@ func checkIdentityPlaneFlags(humanSocket, oauth2ProxyConfig string) error {
 	}
 	if strings.TrimSpace(oauth2ProxyConfig) == "" {
 		return errors.New("--oauth2-proxy-config (TA_OAUTH2_PROXY_CONFIG) is required: the oauth2-proxy config file decides which headers carry the caller's identity (ADR-027 §2)")
+	}
+	return nil
+}
+
+// checkDevBypassEmail refuses a dev bypass whose identity has no email: the
+// injected principal would pass the RBAC gate on its groups alone while
+// carrying no caller to log, rate-limit or attribute commits to.
+func checkDevBypassEmail(email string) error {
+	if strings.TrimSpace(email) == "" {
+		return errors.New("--dev-bypass-email (TA_DEV_BYPASS_EMAIL) is empty: the dev bypass needs an email for the identity it injects (ADR-022)")
 	}
 	return nil
 }

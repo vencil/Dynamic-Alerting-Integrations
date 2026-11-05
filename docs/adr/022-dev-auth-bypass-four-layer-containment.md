@@ -98,7 +98,7 @@ tenant_api_dev_auth_bypass_active 1
 | 層 | 機制 | 防什麼 |
 |---|---|---|
 | **L1 預設 off** | flag 預設 `false`；middleware 只在 flag on 時才掛上（off = 零行為改變、零開銷） | 不會被「不小心」啟用 |
-| **L2 可觀測 tripwire** | 每個 response 帶 `X-Dev-Auth-Bypass: active`、`/metrics` 出 `tenant_api_dev_auth_bypass_active 1`、啟動印 loud WARN | 讓「bypass 在 prod 開著」**在任何環境**都被監控 / proxy / `curl` 抓到 —— 包含 L3 偵測不到的非 k8s prod |
+| **L2 可觀測 tripwire** | Unix socket（API）上每個 response 帶 `X-Dev-Auth-Bypass: active`（TCP 的 probe port 不帶）、`/metrics` 出 `tenant_api_dev_auth_bypass_active 1`、啟動印 loud WARN | 讓「bypass 在 prod 開著」**在任何環境**都被監控 / proxy / `curl` 抓到 —— 包含 L3 偵測不到的非 k8s prod |
 | **L3 runtime poison pill** | 啟動時若 flag on 且偵測到 `KUBERNETES_SERVICE_HOST` 或 serviceaccount token 掛載 → **直接 panic**（fail-closed） | k8s production（auth bypass 絕不該在叢集內跑） |
 | **L4 deploy-time SAST** | `check_dev_bypass_manifest.py` HARD-block `TA_DEV_BYPASS_AUTH` / `--dev-bypass-auth` 出現在 `helm/`、`k8s/`、operator manifest（pre-commit + CI `Lint`） | 在「引入它的 PR」階段就擋下；涵蓋 L3 看不到的非 k8s manifest |
 

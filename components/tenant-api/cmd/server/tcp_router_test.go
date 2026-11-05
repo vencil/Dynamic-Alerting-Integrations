@@ -32,7 +32,7 @@ func newTCPRouter(t *testing.T) *chi.Mux {
 	if err != nil {
 		t.Fatalf("rbac.NewManager: %v", err)
 	}
-	return buildTCPRouter(&handler.Deps{RBAC: mgr}, tcpTestIdentity)
+	return buildTCPRouter(&handler.Deps{RBAC: mgr, ConfigDir: t.TempDir()}, tcpTestIdentity)
 }
 
 func serveTCP(t *testing.T, r http.Handler, method, path string, hdr map[string]string) int {
@@ -123,5 +123,50 @@ func TestCheckIdentityPlaneFlags(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("checkIdentityPlaneFlags(%q, %q) = %v, want an error naming %s", c.sock, c.cfg, err, c.want)
 		}
+	}
+}
+
+func TestCheckDevBypassEmail(t *testing.T) {
+	t.Parallel()
+	if err := checkDevBypassEmail("dev@local"); err != nil {
+		t.Errorf("dev@local: %v", err)
+	}
+	for _, e := range []string{"", "  "} {
+		if err := checkDevBypassEmail(e); err == nil || !strings.Contains(err.Error(), "--dev-bypass-email") {
+			t.Errorf("checkDevBypassEmail(%q) = %v, want an error naming --dev-bypass-email", e, err)
+		}
+	}
+}
+
+// /ready and /metrics are bound to their own handlers, not /health's: /ready
+// reports readiness, /metrics the Prometheus exposition.
+func TestTCPRouter_ReadyAndMetricsAnswerWithTheirOwnHandlers(t *testing.T) {
+	t.Parallel()
+	r := newTCPRouter(t)
+	for path, want := range map[string]string{
+		"/health":  `"status":"ok"`,
+		"/ready":   `"status":"ready"`,
+		"/metrics": "tenant_api_",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req = req.WithContext(rbac.WithListener(req.Context(), rbac.ListenerTCP))
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), want) {
+			t.Errorf("GET %s on TCP = %d %.120q, want 200 with %q", path, w.Code, w.Body.String(), want)
+		}
+	}
+}
+
+// A probe path with another method is 405 with an Allow header (chi), not 404.
+func TestTCPRouter_WrongMethodIs405(t *testing.T) {
+	t.Parallel()
+	r := newTCPRouter(t)
+	req := httptest.NewRequest(http.MethodPost, "/health", nil)
+	req = req.WithContext(rbac.WithListener(req.Context(), rbac.ListenerTCP))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusMethodNotAllowed || !strings.Contains(w.Header().Get("Allow"), http.MethodGet) {
+		t.Errorf("POST /health on TCP = %d (Allow %q), want 405 with Allow: GET", w.Code, w.Header().Get("Allow"))
 	}
 }

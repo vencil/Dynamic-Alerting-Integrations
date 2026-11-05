@@ -50,6 +50,21 @@ func TestRateLimitCaller_IgnoresSpoofedXForwardedFor(t *testing.T) {
 	}
 }
 
+// The caller key comes from the resolved principal, not from a header that
+// happens to hold the same value: removing the header after resolution must
+// not change the key.
+func TestRateLimitCaller_PrincipalSurvivesHeaderRemoval(t *testing.T) {
+	t.Parallel()
+	req := httptest.NewRequest("GET", "/x", nil)
+	req.Header.Set("X-Forwarded-Email", "alice@example.com")
+	req.RemoteAddr = "10.0.0.5:4321"
+	req = resolved(req)
+	req.Header.Del("X-Forwarded-Email")
+	if got := rateLimitCaller(req); got != "alice@example.com" {
+		t.Errorf("rateLimitCaller = %q, want the principal's email after the header is removed", got)
+	}
+}
+
 // resolved returns req as rbac.ResolveIdentity hands it on — the UDS router's
 // first step, so the rate limiter and the request log see the principal the
 // identity headers resolve to (ADR-027 §2: they never read the header).

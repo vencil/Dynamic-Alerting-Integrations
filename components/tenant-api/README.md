@@ -418,7 +418,7 @@ oauth2-proxy 會先清除 client 帶來的同名 header 再注入,所以這些 h
 只接受意義不含糊的設定檔,其餘一律拒絕啟動(`config check --kind oauth2-proxy` 判定這份檔時拒絕為 exit 1;`--kind rbac|scope` 經 `--oauth2-proxy-config` 讀到不合格的檔時為 exit 2,因為 server 用它根本不會啟動):
 
 - 每個注入的 header 恰好一個值,且取自一個 session claim:不加前綴(`prefix`)、不轉成 basic auth、不用固定值(`secretSource`)、不保留 client 值(`preserveRequestValue: true`)、不關閉 header 名稱正規化(`InsecureSkipHeaderNormalization: true`)。
-- `email` 與 `groups` 各恰好由一個 header 注入;其他 claim 至多一個 header,且不得是 token 或時間戳(`access_token`、`id_token`、`refresh_token`、`created_at`、`expires_on`)。header 名只用英數與單個 `-`(oauth2-proxy 清除 client 值時把 `_` 當成 `-`,Go 不會)。
+- `email` 與 `groups` 各恰好由一個 header 注入;其他 claim 至多一個 header,且不得是 token 或時間戳(`access_token`、`id_token`、`refresh_token`、`created_at`、`expires_on`)。header 名只用英數與單個 `-`(oauth2-proxy 清除 client 值時把 `_` 當成 `-`,Go 不會),且不得是 `Host`、hop-by-hop header(`Connection` 等,oauth2-proxy 轉送前會移除)、一般 client 與 kubelet probe 都會送的 `User-Agent`／`Accept`／`Accept-Encoding`(TCP 對身分 header 回 400,probe 會全失敗),或 `Content-Length`、`Content-Type`、`Cookie`、`Authorization`。
 - oauth2-proxy 會先展開設定檔裡的環境變數參照、且不分大小寫比對欄位名稱,所以**檔案含 `$`**、或欄位名稱不是 oauth2-proxy 的拼法,一律拒絕;YAML anchor／alias／merge key 與多文件檔也拒絕。
 
 email 與 group 的 header 名照設定檔,不限 `X-Forwarded-Email`／`X-Forwarded-Groups`:request log 與 rate limit 讀的是解析後的身分物件,不讀 header。server 沒有設定檔就不啟動;本機試用與契約測試也經 oauth2-proxy(見「兩個 listener」)。
@@ -428,7 +428,7 @@ email 與 group 的 header 名照設定檔,不限 `X-Forwarded-Email`／`X-Forwa
 連線來自哪個 listener 決定身分來源([ADR-027 §2、§3](../../docs/adr/027-tenant-api-caller-identity.md)):
 
 - **Unix socket**(`--human-socket`／`TA_HUMAN_SOCKET`,必填):整套 API。身分只在這裡、只由一處從 header 建立,rate limit、request log、RBAC 與開發旁路都讀那個身分物件。
-- **TCP**(`--addr`／`TA_ADDR`):只有 `GET /health`、`/ready`、`/metrics`,路徑精確比對(`/health/`、`/api/v1/health` 都不算),其餘 404;帶任何身分 header(`X-Forwarded-Email`、`X-Forwarded-Groups`,以及設定檔注入的 email、group 與 claim header)的請求不論路徑一律 400,讓仍把身分轉送到 8080 的舊設定立刻失敗。
+- **TCP**(`--addr`／`TA_ADDR`):只有 `GET /health`、`/ready`、`/metrics`,路徑精確比對(`/health/`、`/api/v1/health` 都不算),其餘路徑 404,這三條路徑用 GET 以外的方法回 405(附 `Allow` header);帶任何身分 header(`X-Forwarded-Email`、`X-Forwarded-Groups`,以及設定檔注入的 email、group 與 claim header)的請求不論路徑一律 400,讓仍把身分轉送到 8080 的舊設定立刻失敗。
 
 開發旁路(`--dev-bypass-auth`)只在 Unix socket 上作用:oauth2-proxy 以全路徑免登入執行時沒有任何 session,也就不注入身分 header(client 帶來的同名 header 照樣被清掉),由旁路注入開發身分。本機試用(`try-local/`)與契約測試(`tests/contract/`)都是這個拓樸。
 

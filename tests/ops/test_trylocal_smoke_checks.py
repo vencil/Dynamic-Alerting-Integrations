@@ -133,7 +133,8 @@ def _make_probe_handler(preview: dict, seen: list):
     """tenant-api's own TCP port (ADR-027 §3): /health, /ready, /metrics only,
     404 for anything else, 400 for any request carrying an identity header.
     preview["probe"] == "serves-api" plays the old topology, where this port
-    served the API and trusted the headers."""
+    served the API and trusted the headers; "ignores-identity" a port with no
+    API that does not refuse identity headers either."""
     class P(BaseHTTPRequestHandler):
         def _send(self, status, body, ctype="application/json"):
             data = body if isinstance(body, bytes) else json.dumps(body).encode()
@@ -147,7 +148,8 @@ def _make_probe_handler(preview: dict, seen: list):
             path = self.path.split("?", 1)[0]
             seen.append(("PROBE", path))
             old = preview.get("probe") == "serves-api"
-            if not old and ("X-Forwarded-Email" in self.headers or "X-Forwarded-Groups" in self.headers):
+            refuses = preview.get("probe") not in ("serves-api", "ignores-identity")
+            if refuses and ("X-Forwarded-Email" in self.headers or "X-Forwarded-Groups" in self.headers):
                 self._send(400, {"error": "identity header on the network listener"})
             elif path == "/health":
                 self._send(200, {"status": "ok"})
@@ -262,6 +264,15 @@ def test_smoke_fails_when_the_tcp_port_still_serves_the_api(tmp_path):
     proc, _ = _run_smoke(tmp_path, {**GOOD_PREVIEW, "probe": "serves-api"})
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "want 404: the API is only behind oauth2-proxy" in proc.stderr, proc.stderr
+
+
+def test_smoke_fails_when_the_tcp_port_accepts_identity_headers(tmp_path):
+    """ADR-027 §2: the TCP port answers a request carrying an identity header
+    400. A port that serves no API but lets the header through must go red at
+    that check (it passes the 404 check before it)."""
+    proc, _ = _run_smoke(tmp_path, {**GOOD_PREVIEW, "probe": "ignores-identity"})
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "with an identity header returned HTTP 200 (want 400)" in proc.stderr, proc.stderr
 
 
 def test_smoke_fails_when_nothing_listens_on_the_preview_port(tmp_path):
