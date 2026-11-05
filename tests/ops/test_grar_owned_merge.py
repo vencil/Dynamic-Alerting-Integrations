@@ -48,7 +48,9 @@ pytestmark = pytest.mark.usefixtures("judging_run")
 
 import _grar_render as render  # noqa: E402
 from _grar_parse import load_tenant_tree  # noqa: E402
-from _grar_routes import generate_inhibit_rules, generate_routes  # noqa: E402
+from _grar_routes import (  # noqa: E402
+    GENERATED_TIME_INTERVAL, generate_inhibit_rules, generate_routes,
+    generated_time_interval)
 from test_alertmanager_amtool_validity import _AM_IMAGE, _DOCKER, ensure_am_image  # noqa: E402
 
 _GAR = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
@@ -444,3 +446,107 @@ def test_apply_judges_the_clusters_watchdog_receiver(tmp_path, monkeypatch, caps
     else:
         [line] = lines
         assert line.startswith(level), line
+
+
+# ── 擁有標記（owner 裁決 A）：fallthrough 以保留的 time interval 標記 ─────
+
+_FIXTURE = (Path(__file__).resolve().parents[2] / "components" / "da-read"
+            / "testdata" / "platform-generated-always.yaml")
+
+
+def _fallthroughs(am: dict) -> list[dict]:
+    return [r for r in am["route"]["routes"]
+            if GENERATED_TIME_INTERVAL in (r.get("active_time_intervals") or [])]
+
+
+def test_every_fallthrough_carries_the_mark_and_the_interval_is_defined_once(tmp_path):
+    am = render.alertmanager_reading(_emit_am(tmp_path, _tree(tmp_path), _base(tmp_path)))
+    fts = _fallthroughs(am)
+    assert [r["matchers"] for r in fts] == [['tenant="t-thr"']], fts
+    assert all(r["receiver"] == "cust-default" for r in fts), fts
+    defs = [t for t in am.get("time_intervals", []) if t["name"] == GENERATED_TIME_INTERVAL]
+    assert defs == [generated_time_interval()], am.get("time_intervals")
+
+
+def test_the_interval_definition_is_the_one_the_go_test_pins():
+    """components/da-read/generated_time_interval_test.go proves Alertmanager
+    reads the fixture's interval as active at every instant; this proves the
+    generator emits that same interval."""
+    fixture = yaml.safe_load(_FIXTURE.read_text(encoding="utf-8"))
+    assert fixture["time_intervals"] == [generated_time_interval()]
+
+
+def test_a_customer_tenant_route_to_the_root_receiver_is_kept(tmp_path):
+    """F1: an operator's own `tenant="x"` → root route has the fallthrough's
+    shape; without the mark it is the operator's, kept where it was — for a
+    tenant in conf.d and for one that is not."""
+    base = _CUSTOMER_BASE.replace(
+        "  routes:\n",
+        "  routes:\n"
+        "    - matchers: ['tenant=\"t-thr\"']\n"
+        "      receiver: cust-default\n"
+        "    - matchers: ['tenant = \"t-gone\"']\n"
+        "      receiver: cust-default\n", 1)
+    assert base != _CUSTOMER_BASE
+    am_text = _emit_am(tmp_path, _tree(tmp_path), _base(tmp_path, base))
+    routes = render.alertmanager_reading(am_text)["route"]["routes"]
+    mine = [r for r in routes if not r.get("active_time_intervals")
+            and r.get("receiver") == "cust-default"]
+    assert mine == [{"matchers": ['tenant="t-thr"'], "receiver": "cust-default"},
+                    {"matchers": ['tenant="t-gone"'], "receiver": "cust-default"}], routes
+    am = tmp_path / "out"
+    am.mkdir()
+    (am / "alertmanager.yml").write_text(am_text, encoding="utf-8")
+    # the customer's route takes t-thr's critical alert before its noc-pager route
+    r = _routes_test(am / "alertmanager.yml",
+                     {"alertname": "CpuHigh", "tenant": "t-thr", "severity": "critical"},
+                     "platform-enforced-t-thr,cust-default")
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_a_changed_root_receiver_leaves_no_stale_fallthrough(tmp_path):
+    """F2: the base's root receiver renamed between runs — the earlier run's
+    fallthrough (pinned to the old name) is still recognised by its mark."""
+    conf_d = _tree(tmp_path)
+    first = _emit_am(tmp_path, conf_d, _base(tmp_path), "first.yml")
+    renamed = first.replace("  receiver: cust-default\n  group_by", "  receiver: noc-pager\n  group_by", 1)
+    assert renamed != first
+    second = render.alertmanager_reading(
+        _emit_am(tmp_path, conf_d, _base(tmp_path, renamed, "base2.yml"), "second.yml"))
+    fts = _fallthroughs(second)
+    assert [(r["matchers"], r["receiver"]) for r in fts] == [(['tenant="t-thr"'], "noc-pager")], fts
+
+
+@pytest.mark.parametrize("keep_enforced", [True, False],
+                         ids=["enforced-left:no-valid-routes", "nothing-left:no-tenants"])
+def test_removing_every_tenant_still_writes_and_leaves_nothing_behind(tmp_path, keep_enforced):
+    """F3: an output mode on a tree with no tenant left writes the base with
+    the earlier run's content removed (it used to exit early writing nothing,
+    so re-running on the earlier output kept every stale tenant). Both early
+    exits: `_routing_enforced` still declared (no route generated) and
+    nothing routable declared at all (no tenants found)."""
+    conf_d = _tree(tmp_path)
+    first = _emit_am(tmp_path, conf_d, _base(tmp_path), "first.yml")
+    for t in _TENANTS:
+        (conf_d / f"{t}.yaml").unlink()
+    if not keep_enforced:
+        (conf_d / "_defaults.yaml").write_text(
+            "defaults:\n  cpu_usage_percent: 80\n", encoding="utf-8")
+    second = _emit_am(tmp_path, conf_d, _base(tmp_path, first, "base2.yml"), "second.yml")
+    assert "tenant-" not in second and "platform-enforced" not in second, second
+    assert GENERATED_TIME_INTERVAL not in second, "the mark outlived its last fallthrough"
+    assert "noc-pager" in second and "CustDown" in second
+
+
+def test_control_apply_keeps_refusing_an_empty_tree(tmp_path, monkeypatch, capsys):
+    """--apply keeps the early exit on an empty tree (a wrong --config-dir
+    must not strip the cluster's routing): nothing is applied."""
+    import generate_alertmanager_routes as gar
+    calls = _fake_cluster(monkeypatch, _CUSTOMER_BASE)
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / "_defaults.yaml").write_text("defaults:\n  cpu_usage_percent: 80\n", encoding="utf-8")
+    with pytest.raises(SystemExit) as exc:
+        gar.main(["--config-dir", str(d), "--apply", "--yes"])
+    assert exc.value.code == 0
+    assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls

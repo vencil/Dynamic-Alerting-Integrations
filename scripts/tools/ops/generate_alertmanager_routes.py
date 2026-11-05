@@ -1667,8 +1667,16 @@ def _run(args: argparse.Namespace, findings: list[str], *,
             for e in errors:
                 print(safe_label(e), file=sys.stderr)
             sys.exit(EXIT_VIOLATION)
-        print("No tenants found in config directory.")
-        sys.exit(EXIT_OK)
+        if not (writes_a_file_mode and not args.validate):
+            print("No tenants found in config directory.")
+            sys.exit(EXIT_OK)
+        # #1211 gap 2: an output mode still writes the merge — a base that is
+        # an earlier run's output loses that run's tenant routing, which is
+        # the point of "only what the generator owns is replaced". --apply
+        # keeps the early exit: an empty tree is more often a wrong
+        # --config-dir than an intent to strip the cluster's routing.
+        print("No tenants found in config directory; the output keeps the "
+              "base's own content and the platform routes only.")
 
     _print_config_summary(routing_configs, dedup_configs, enforced_routing)
 
@@ -1688,7 +1696,12 @@ def _run(args: argparse.Namespace, findings: list[str], *,
         # to --validate / --json consumers, which must stay raw.
         print(safe_label(w), file=sys.stderr)
 
-    if not routes and not inhibit_rules:
+    # A tree WITH tenants that renders nothing is refused in every mode (a
+    # tenant whose only receiver is unusable must not vanish from the
+    # output). Only a tree with no tenant at all reaches an output mode with
+    # nothing generated (#1211 gap 2: the base loses the earlier run's part).
+    if not routes and not inhibit_rules and (
+            dedup_configs or not (writes_a_file_mode and not args.validate)):
         print("No valid routes or inhibit rules generated.")
         sys.exit(EXIT_VIOLATION)
 

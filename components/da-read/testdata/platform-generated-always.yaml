@@ -1,0 +1,17 @@
+# The always-active time interval the route generator marks its root
+# fallthrough routes with (#1211 gap 2). The generator's own definition
+# (scripts/tools/ops/_grar_routes.py `generated_time_interval`) must equal the
+# `time_intervals` entry below — tests/ops/test_grar_owned_merge.py checks it —
+# and generated_time_interval_test.go checks Alertmanager reads it as active
+# at every instant.
+route:
+  receiver: root
+  routes:
+    - matchers: ['tenant="t"']
+      receiver: root
+      active_time_intervals: [platform-generated-always]
+receivers:
+  - name: root
+time_intervals:
+  - name: platform-generated-always
+    time_intervals: [{}]

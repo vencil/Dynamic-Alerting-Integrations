@@ -3465,9 +3465,12 @@ class TestMainCLI:
         d.mkdir()
         cli_argv("generate_alertmanager_routes", "--config-dir", str(d),
                  "--output-alertmanager")
-        with pytest.raises(SystemExit) as exc:
-            gar.main()
-        assert exc.value.code == 0
+        # #1211 gap 2: an output mode still writes the merge on an empty tree
+        # (the base's own content and the platform routes only).
+        gar.main()
+        out = capsys.readouterr().out
+        assert "No tenants found in config directory;" in out
+        assert "watchdog-heartbeat" in out and "tenant-" not in out
 
     def test_validate_with_errors(self, tmp_path, monkeypatch, capsys, cli_argv):
         """Validate mode with bad config should exit 1."""

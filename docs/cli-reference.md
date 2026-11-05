@@ -1907,7 +1907,9 @@ da-tools rule-pack-split --rule-packs-dir rule-packs/ --output-dir federation-sp
 2. base 裡你自己的頂層路由，照 base 原順序；
 3. 租戶路由與 root fallthrough（指向 base 的 root receiver）。
 
-receiver 與 inhibit rule 同理：你自己的原樣保留，產生器擁有的換成這次的，這次沒有的（例如已移除的租戶）就刪掉，不殘留。四個平台 receiver 若在 base 裡有比只有名字更完整的定義（例如 `watchdog-heartbeat` 接了你的 dead-man's switch），保留 base 的定義。輸出回灌當 base 再跑一次，結果逐位元相同，所以可以每次都拿上次的輸出當 base 重跑。⚠️ 名稱落在保留命名空間的 receiver 一律視為產生器的：你自己的 receiver 若叫 `tenant-…` 或 `platform-enforced…`，會被取代或刪除——請改名。
+root fallthrough 的 receiver 是 base 自己的 root receiver，名字說不出是誰寫的，所以產生器給它一個標記：`active_time_intervals: [platform-generated-always]`，並在 `time_intervals` 定義這個不帶任何條件、永遠生效的 interval（投遞與分組不受影響）。合併只認這個標記，不看路由形狀——你自己寫的 `tenant="x"` → root receiver 路由沒有標記，照原樣保留；base 換了 root receiver 名字，上一輪的 fallthrough 照樣認得出來。`platform-generated-always` 這個 interval 名稱也是保留的。⚠️ 從舊的 fragment 模式遷過來時，你貼進 base 的舊 fallthrough（只有 `matchers: [tenant="…"]`、沒有 receiver 的路由）沒有標記，會被當成你的路由保留；投遞結果相同，但請手動刪掉一次。
+
+receiver 與 inhibit rule 同理：你自己的原樣保留，產生器擁有的換成這次的，這次沒有的（例如已移除的租戶）就刪掉，不殘留；conf.d 裡一個租戶都不剩時，`--output-configmap`／`--output-alertmanager` 照樣寫出（只剩 base 自己的內容與平台路由），`--apply` 則維持「No tenants found」、什麼都不套用，以免指錯 `--config-dir` 時清掉叢集上的路由。四個平台 receiver 若在 base 裡有比只有名字更完整的定義（例如 `watchdog-heartbeat` 接了你的 dead-man's switch），保留 base 的定義。輸出回灌當 base 再跑一次，結果逐位元相同，所以可以每次都拿上次的輸出當 base 重跑。⚠️ 名稱落在保留命名空間的 receiver 一律視為產生器的：你自己的 receiver 若叫 `tenant-…` 或 `platform-enforced…`，會被取代或刪除——請改名。
 
 **讀法**（ADR-036 步驟 4，[#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)）：conf.d 一律經 `da-guard parse-tree`（yaml.v3）讀，與 exporter 同一種讀法；未加引號的 `yes`／`no`／`on`／`off` 是字串。需要 da-guard：`$DA_GUARD_BINARY`，否則 `$PATH` 上的 `da-guard`（da-tools 映像已內建；repo 內 `make da-guard-build`）；沒有或執行失敗時結束碼 2，什麼都不讀；巢狀深到接近 yaml.v3 上限（10,000 層）、本工具解不開 `parse-tree` 的 JSON 時也一樣（實測 9,999 層的巢狀陣列；9,990 層照讀，超過上限則是該檔 `syntax_error`）。`parse-tree` 讀不了的檔（`kind` 見 [ADR-036](adr/036-single-parser-effective-config.md) §2）整份略過並在拒收訊息裡帶上 `kind`。`validate-config`、`policy-engine`、`explain-route`、`notification-tester` 經產生器讀 conf.d，同樣需要 da-guard。
 
@@ -1984,7 +1986,7 @@ da-tools generate-routes --config-dir <path> {--validate | --output-configmap | 
 
 **Receiver 名稱不可重複（#2279）**：租戶 id 可以含 `-`，所以租戶 `<t>` 的 `routes[0]` receiver（`tenant-<t>-route-0`）可能和另一個叫 `<t>-route-0` 的租戶的主 receiver 同名（`-override-<n>` 同理）。兩個來源產生同名 receiver 時，所有模式都回 1、不寫檔、不 apply，不分 `--strict`，訊息點名雙方來源。⚠️ v2.9.0 映像回 0 <!-- image-caveat: v2.9.0 -->
 
-base 裡的 receiver 與產生的同名則**不再拒收**：先前 `--output-configmap --base-config` 對這種 base 回 1，這個守衛已拿掉，因為它與冪等衝突——上一次的輸出本來就含產生的 receiver，回灌當 base 會被它擋下。現在名稱落在保留命名空間（`tenant-*`、`platform-enforced*`）的 base receiver 一律視為上一次的輸出，被這次產生的取代（這次沒有就刪掉），三個輸出模式相同；平台固定的 `custom-alerts-firehose` / `watchdog-heartbeat` / `synthetic-receiver` / `sentinel-sinkhole` 則保留 base 的定義（見上方「合併」）。
+base 裡的 receiver 與產生的同名則**不再拒收**：先前 `--output-configmap --base-config` 對這種 base 回 1，這個守衛已拿掉，因為它與冪等衝突——上一次的輸出本來就含產生的 receiver，回灌當 base 會被它擋下。現在名稱落在保留命名空間（`tenant-*`、`platform-enforced*`）的 base receiver 一律視為上一次的輸出，被這次產生的取代（這次沒有就刪掉），三個輸出模式相同；平台固定的 `custom-alerts-firehose` / `watchdog-heartbeat` / `synthetic-receiver` / `sentinel-sinkhole` 則保留 base 的定義（見上方「合併」）。保留命名空間**以外**的同名（產生的 receiver 與 base 的 receiver 撞名）仍拒收、結束碼 1。
 
 **範例**
 

@@ -62,8 +62,8 @@ sys.path.insert(0, os.path.join(_THIS_DIR, '..'))  # Repo subdir layout
 
 from _grar_routes import (  # noqa: E402
     _build_custom_alert_routes, _build_watchdog_route, _build_synthetic_probe_route,
-    _build_sentinel_sinkhole_route, _build_inhibit_rules, is_root_fallthrough_route,
-    pin_root_fallthrough_receiver)
+    _build_sentinel_sinkhole_route, _build_inhibit_rules, GENERATED_TIME_INTERVAL,
+    generated_time_interval, pin_root_fallthrough_receiver)
 from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_VIOLATION  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#3276)
 from _lib_confd import WARN_LIMIT  # noqa: E402  (#1211: the alert names a line lists)
@@ -674,18 +674,20 @@ def _is_enforced_route(route: dict) -> bool:
                                    or r.startswith("platform-enforced-"))
 
 
-def _is_generator_owned_route(route: object, root_receiver: object) -> bool:
+def _is_generator_owned_route(route: object) -> bool:
     """A TOP-LEVEL route of the base that an earlier run produced: its
-    receiver is generator-owned, or it is a root fallthrough (#2519) — the
-    one generated route that delivers to the root's receiver, recognised by
-    its exact emitted shape (only ``matchers`` + the root's ``receiver``)."""
+    receiver is generator-owned, or it carries the generator's mark
+    ``active_time_intervals: [GENERATED_TIME_INTERVAL]`` — the root
+    fallthroughs (#2519), whose receiver is the base's own root receiver.
+    ⛔ Never by shape: an operator's ``tenant="x"`` → root route looks exactly
+    like a fallthrough, and a fallthrough pinned to an earlier root receiver
+    name would not match a shape test at all."""
     if not isinstance(route, dict):
         return False
     if is_generator_owned_receiver(route.get("receiver")):
         return True
-    if set(route) == {"matchers", "receiver"} and route["receiver"] == root_receiver:
-        return is_root_fallthrough_route({"matchers": route["matchers"]})
-    return is_root_fallthrough_route(route)
+    marks = route.get("active_time_intervals")
+    return isinstance(marks, list) and GENERATED_TIME_INTERVAL in marks
 
 
 _TENANT_MATCHER = re.compile(r'^tenant="(.*)"$')
@@ -730,8 +732,11 @@ def merge_generated(base: dict, routes: list[dict], receivers: list[dict],
     3. the tenant routes and the root fallthroughs (#2519, pinned to the
        base's root receiver).
 
-    A base route the generator owns (``_is_generator_owned_route``) is an
-    earlier run's output and is dropped; the run's own replaces it.
+    A base route the generator owns (``_is_generator_owned_route``: an owned
+    receiver, or the fallthroughs' ``active_time_intervals`` mark) is an
+    earlier run's output and is dropped; the run's own replaces it. The
+    mark's always-active interval is defined in ``time_intervals`` whenever a
+    fallthrough carries it (owner decision A on #1211 gap 2).
 
     Receivers — a generator-owned base receiver is replaced in place by this
     run's of the same name, or dropped when this run has none (a removed
@@ -763,9 +768,26 @@ def merge_generated(base: dict, routes: list[dict], receivers: list[dict],
     head = generated[:4] + [r for r in generated[4:] if _is_enforced_route(r)]
     tail = [r for r in generated[4:] if not _is_enforced_route(r)]
     own = [r for r in (root.get("routes") or [])
-           if not _is_generator_owned_route(r, root_receiver)]
+           if not _is_generator_owned_route(r)]
     root["routes"] = head + own + tail
     merged["route"] = root
+
+    # The mark's definition: the base's (an earlier run's) is dropped, this
+    # run's added when a fallthrough carries the mark. A base interval of
+    # that name under the deprecated `mute_time_intervals` key is dropped
+    # too — the name is the generator's.
+    for key in ("time_intervals", "mute_time_intervals"):
+        if key in merged:
+            kept = [t for t in (merged.get(key) or [])
+                    if not (isinstance(t, dict) and t.get("name") == GENERATED_TIME_INTERVAL)]
+            if kept:
+                merged[key] = kept
+            else:
+                del merged[key]
+    if any(GENERATED_TIME_INTERVAL in (r.get("active_time_intervals") or [])
+           for r in tail):
+        merged["time_intervals"] = (list(merged.get("time_intervals") or [])
+                                    + [generated_time_interval()])
 
     base_receivers = [r for r in (merged.get("receivers") or []) if isinstance(r, dict)]
     base_by_name = {r.get("name"): r for r in base_receivers}

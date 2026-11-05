@@ -188,7 +188,7 @@ da-tools generate-routes --config-dir conf.d/ --apply --yes
 - **只換掉產生器擁有的部分**：名稱在保留命名空間 `tenant-*`、`platform-enforced*` 的 receiver、四個平台 receiver（`watchdog-heartbeat`、`custom-alerts-firehose`、`synthetic-receiver`、`sentinel-sinkhole`）、送往它們的路由、root fallthrough，以及產生器形狀的 severity-dedup inhibit rule。你自己的路由、receiver、inhibit rule、`global:`、root route 原樣保留。
 - **順序**：`route.routes` 變成「平台 4 條 + enforced NOC 路由（`continue: true`）」→「你的路由，原順序」→「租戶路由 + root fallthrough」。平台路由在你的路由之前，所以你的 catch-all 搶不走 Watchdog；租戶路由在你的路由之後。
 - **可重複執行**：conf.d 改了就再跑一次。把上次的輸出直接當 `--base-config` 也行——conf.d 沒變時輸出逐位元相同，移除的租戶不殘留。
-- **保留命名空間**：你自己的 receiver 不要取名 `tenant-…` 或 `platform-enforced…`，那會被當成產生器的而被取代或刪除。四個平台 receiver 若在你的 base 有完整定義（例如 `watchdog-heartbeat` 接了 dead-man's switch），保留你的定義。
+- **保留命名空間**：你自己的 receiver 不要取名 `tenant-…` 或 `platform-enforced…`，那會被當成產生器的而被取代或刪除；time interval 名稱 `platform-generated-always` 也是保留的——產生器用它標記 root fallthrough（永遠生效，不影響投遞），你自己寫的「租戶 → root receiver」路由沒有這個標記，照原樣保留。從舊 fragment 模式遷來時，base 裡貼過的舊 fallthrough（只有 `matchers: [tenant="…"]`、沒有 receiver）請手動刪掉一次。四個平台 receiver 若在你的 base 有完整定義（例如 `watchdog-heartbeat` 接了 dead-man's switch），保留你的定義。
 - **Watchdog 要接出去**：你的 base 裡 `watchdog-heartbeat` 沒有 integration 時，輸出模式印 `watchdog_undelivered` WARN，加 `--strict` 時結束碼 1、不寫檔。接法見[告警平面自我存活性](alerting-plane-self-liveness.md)。⚠️ v2.9.0 映像不報這項 <!-- image-caveat: v2.9.0 -->
 
 不提供 `--base-config` 時合併進內建 placeholder base（`resolve_timeout: 5m`、`group_by: [alertname, tenant]`、空的 `default` receiver）——那不是你的設定，BYO 部署請一律帶 `--base-config`。

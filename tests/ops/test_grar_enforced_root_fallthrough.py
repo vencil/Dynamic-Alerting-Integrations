@@ -169,7 +169,9 @@ def test_assembly_pins_the_bases_root_receiver(tmp_path, base_name):
     root = base["route"]["receiver"]
     tails = [r for r in am["route"]["routes"]
              if r.get("receiver") == root and "continue" not in r]
-    assert tails == [{"matchers": [f'tenant="{t}"'], "receiver": root}
+    # #1211 gap 2: each carries the generator's ownership mark.
+    assert tails == [{"matchers": [f'tenant="{t}"'], "receiver": root,
+                      "active_time_intervals": ["platform-generated-always"]}
                      for t in _UNROUTED]
 
 
