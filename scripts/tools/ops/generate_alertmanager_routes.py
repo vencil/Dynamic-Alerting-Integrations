@@ -450,7 +450,8 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
                            dry_run: bool, output: str | None, strict: bool = False,
                            judge_emitted=None, *, as_configmap: bool,
                            mounts_out: str | None = None,
-                           mount_root: str = DEFAULT_SECRET_MOUNT_ROOT) -> None:
+                           mount_root: str = DEFAULT_SECRET_MOUNT_ROOT,
+                           mount_lists: list[tuple[str, dict]] | None = None) -> None:
     """Handle --output-configmap (*as_configmap*) and --output-alertmanager:
     ``merge_generated`` on *base*, emitted as a ConfigMap or as a plain
     alertmanager.yml — one merge, two wrappers (#1211 gap 2).
@@ -467,8 +468,11 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
     emitted config reads under *mount_root* (``required_mounts``), read off
     the same reading of the emitted text the judges above saw — so the base
     config's own ``*_file`` paths are in it and nothing conf.d did not render
-    is. Written after the config itself (the list describes an output that
-    exists); a failed write of either is rc 2.
+    is. Handed to *mount_lists* (``main`` writes it after the run, outside
+    the stdout redirect a stdout document needs), else written here; either
+    way after the config itself (the list describes an output that exists);
+    a failed write of either is rc 2. Which documents may share stdout is
+    decided in ``main`` before the run.
     """
     what = "the ConfigMap" if as_configmap else "the alertmanager.yml"
     am_what = "the ConfigMap's alertmanager.yml" if as_configmap else "the alertmanager.yml"
@@ -550,19 +554,13 @@ def _assembled_output_mode(routes: list[dict], receivers: list[dict], inhibit_ru
         print(f"Written to {output} ({route_count} routes, "
               f"{len(receivers)} receivers, {inhibit_count} inhibit rules)")
     else:
-        if mounts_out is not None:
-            # The config goes to stdout: `--secret-mounts-out -` would put a
-            # second document there: refused (rc 2) before the config is
-            # printed, not after.
-            try:
-                _lib_io.claim_stdout("the routes output (no -o)")
-                if _lib_io.targets_stdout(mounts_out):
-                    _lib_io.claim_stdout("--secret-mounts-out")
-            except OutputWriteError as exc:
-                die_caller_error(f"ERROR: {exc}")
         print(content)
     if mounts_out is not None:
-        _write_mount_list(mounts_out, required_mounts(emitted, mount_root))
+        doc = required_mounts(emitted, mount_root)
+        if mount_lists is not None:
+            mount_lists.append((mounts_out, doc))
+        else:
+            _write_mount_list(mounts_out, doc)
 
 
 def _write_mount_list(path: str, doc: dict) -> None:
@@ -1379,22 +1377,36 @@ def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
         # #3107 v2: `--findings-json -` (or the file stdout already is) owns
         # stdout. Without -o the routes go there too — refused before any is
         # printed; with -o the run's own stdout lines move to stderr, so
-        # stdout carries the findings document alone.
+        # stdout carries the findings document alone. #1560: the same for
+        # `--secret-mounts-out -` in the modes that read it; the two together
+        # on stdout are two documents on one stream (claim_stdout: rc 2).
         receipts = contextlib.nullcontext()
-        if args.findings_json is not None and _lib_io.targets_stdout(args.findings_json):
-            if args.output is None:
-                try:
+        reads_mount_list = ((args.output_alertmanager or args.output_configmap)
+                            and not args.validate and not args.dry_run)
+        stdout_documents = [flag for flag, value in (
+            ("--findings-json", args.findings_json),
+            ("--secret-mounts-out", args.secret_mounts_out if reads_mount_list else None))
+            if value is not None and _lib_io.targets_stdout(value)]
+        if stdout_documents:
+            try:
+                if args.output is None:
                     _lib_io.claim_stdout("the routes output (no -o)")
-                    _lib_io.claim_stdout("--findings-json")
-                except _lib_io.OutputWriteError as exc:
-                    print(f"ERROR: {_lib_io.safe_label(str(exc))}", file=sys.stderr)
-                    sys.exit(EXIT_CALLER_ERROR)
+                for flag in stdout_documents:
+                    _lib_io.claim_stdout(flag)
+            except _lib_io.OutputWriteError as exc:
+                print(f"ERROR: {_lib_io.safe_label(str(exc))}", file=sys.stderr)
+                sys.exit(EXIT_CALLER_ERROR)
             receipts = contextlib.redirect_stdout(sys.stderr)
+        # #1560: the mount list is written HERE, after the redirect ends, so
+        # `--secret-mounts-out -` reaches the real stdout.
+        mount_lists: list[tuple[str, dict]] = []
         # ADR-036 step 4 (#2906): one `da-guard parse-tree` reading per run.
         # A judge (#3206): it refuses a tree Go names paths on as its own
         # finding, so the reader's fail-closed exit stands aside.
         with receipts, _lib_parse_cache.session(), _lib_parse_cache.judging():
-            _run(args, findings, key_verdict=key_verdict)
+            _run(args, findings, key_verdict=key_verdict, mount_lists=mount_lists)
+        for path, doc in mount_lists:
+            _write_mount_list(path, doc)
         code = EXIT_OK
     except SystemExit as exc:
         code = _exit_code_of(exc)
@@ -1644,9 +1656,12 @@ def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def _run(args: argparse.Namespace, findings: list[str], *,
-         key_verdict: bool = True) -> None:
+         key_verdict: bool = True,
+         mount_lists: list[tuple[str, dict]] | None = None) -> None:
     """``main`` after argument parsing; appends each finding to *findings*
-    (#2766) as soon as the run has determined it. *key_verdict*: ``main``'s."""
+    (#2766) as soon as the run has determined it. *key_verdict*: ``main``'s.
+    *mount_lists* (#1560): receives ``(path, document)`` for
+    ``--secret-mounts-out``, which ``main`` writes once the run is done."""
 
     # #1650: four more flags of the #1616 class — accepted, then never read
     # by the mode that is about to run. Decided HERE, before any conf.d work,
@@ -1934,7 +1949,8 @@ def _run(args: argparse.Namespace, findings: list[str], *,
                            strict=args.strict, judge_emitted=assembled_judge,
                            as_configmap=bool(args.output_configmap),
                            mounts_out=args.secret_mounts_out,
-                           mount_root=args.secret_mount_root)
+                           mount_root=args.secret_mount_root,
+                           mount_lists=mount_lists)
 
 
 if __name__ == "__main__":

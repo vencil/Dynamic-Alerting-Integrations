@@ -257,8 +257,19 @@ def test_stdout_list_with_the_config_in_a_file(tmp_path):
     r = _run(tmp_path, d, "--output-alertmanager", "-o", str(tmp_path / "am.yml"),
              "--secret-mounts-out", "-")
     assert r.returncode == 0, r.stderr
-    doc = json.loads(r.stdout[r.stdout.index("{"):])
+    # stdout carries the list alone: the run's own lines moved to stderr.
+    doc = json.loads(r.stdout)
     assert doc["secrets"] == [{"name": "da-t-a", "keys": ["hook"]}]
+    assert "Written to" in r.stderr
+
+
+def test_the_list_and_the_findings_both_on_stdout_are_refused(tmp_path):
+    d = _tree(tmp_path, {"t-a": _OWN})
+    r = _run(tmp_path, d, "--output-alertmanager", "-o", str(tmp_path / "am.yml"),
+             "--secret-mounts-out", "-", "--findings-json", "-")
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    assert "standard output is already used" in r.stderr
+    assert not (tmp_path / "am.yml").exists()
 
 
 def test_an_unwritable_list_path_is_rc_2_naming_the_flag(tmp_path):
