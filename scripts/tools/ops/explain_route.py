@@ -59,7 +59,7 @@ from generate_alertmanager_routes import (  # noqa: E402
     tree_refusal,
 )
 from _grar_render import (  # noqa: E402
-    ConsumerReadError, InputRefused, _run_binary, alertmanager_reading, assemble_configmap,
+    BaseIsAnOutputError, ConsumerReadError, InputRefused, _run_binary, alertmanager_reading, assemble_configmap,
     consumer_read_message, emitted_alertmanager_yml, receiver_integration_kinds,
 )
 from _grar_validate import (  # noqa: E402
@@ -1496,6 +1496,11 @@ def main(argv: list[str] | None = None) -> int | Report:
             return EXIT_CALLER_ERROR
         try:
             base_config = load_base_config(args.base_config)
+        except BaseIsAnOutputError as exc:
+            # #1211 gap 2. explain-route has no verdict exit (#2958): an
+            # output passed as the base is a wrong invocation here (rc 2).
+            print(safe_label(str(exc)), file=sys.stderr)
+            return EXIT_CALLER_ERROR
         except BaseConfigInputError as exc:
             print(f"ERROR: {safe_label(str(exc))}", file=sys.stderr)
             return EXIT_CALLER_ERROR

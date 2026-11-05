@@ -314,7 +314,7 @@ da-tools generate-routes --config-dir conf.d/ \
   --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
 ```
 
-The resulting `route.routes` is the four platform routes, the parent route above, then `tenant="redis-prod"` → `tenant-redis-prod`; receivers gain `tenant-redis-prod` and the four platform receivers, and inhibit_rules gains redis-prod's critical-suppresses-warning rule. The legacy receivers and inhibit rules stay as written. `alertmanager.yaml` is the source and `alertmanager.merged.yaml` the output; keep them apart: when conf.d changes later, run the command above again on `alertmanager.yaml` (the source). Do not pass `alertmanager.merged.yaml` as `--base-config` — it holds `tenant-*` receivers and is refused (exit 1), and `-o` naming the source itself is refused too (exit 2). To change the legacy config, edit `alertmanager.yaml` as well and regenerate. ⚠️ While the platform's `watchdog-heartbeat` receiver is wired to nothing, a `watchdog_undelivered` WARN is printed (under `--strict`, exit 1 and nothing written); during dual-run you can accept that WARN, and wire it in the base per [Alerting-plane self-liveness](../integration/alerting-plane-self-liveness.en.md) before the cutover.
+The resulting `route.routes` is the four platform routes, the parent route above, then `tenant="redis-prod"` → `tenant-redis-prod`; receivers gain `tenant-redis-prod` and the four platform receivers, and inhibit_rules gains redis-prod's critical-suppresses-warning rule. The legacy receivers and inhibit rules stay as written. `alertmanager.yaml` is the source and `alertmanager.merged.yaml` the output; keep them apart: when conf.d changes later, run the command above again on `alertmanager.yaml` (the source). Do not pass `alertmanager.merged.yaml` as `--base-config` — its first line marks it as an output, and it is refused (exit 1), and `-o` naming the source itself is refused too (exit 2). To change the legacy config, edit `alertmanager.yaml` as well and regenerate. ⚠️ While the platform's `watchdog-heartbeat` receiver is wired to nothing, a `watchdog_undelivered` WARN is printed (under `--strict`, exit 1 and nothing written); during dual-run you can accept that WARN, and wire it in the base per [Alerting-plane self-liveness](../integration/alerting-plane-self-liveness.en.md) before the cutover.
 
 After merging, check the syntax, then test each kind of alert:
 
@@ -399,18 +399,36 @@ cp alertmanager.yaml alertmanager.yaml.backup-phase3
 #    expr and labels included), then check the format
 promtool check rules prometheus-rules.yaml
 
-# 2. Alertmanager: drop continue: true from the pilot tenant's route, then test
-amtool config routes test --config.file=alertmanager.yaml \
+# 2. Alertmanager: in the source alertmanager.yaml, stop Step 2.2's parent route
+#    from matching the pilot tenant (one matchers line, below), then regenerate
+#    from the source and test
+da-tools generate-routes --config-dir conf.d/ \
+  --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
+amtool config routes test --config.file=alertmanager.merged.yaml \
   alertname=RedisHighMemory tenant=redis-prod severity=warning
+amtool config routes test --config.file=alertmanager.merged.yaml \
+  alertname=RedisDownLegacy tenant=redis-prod severity=critical
+amtool config routes test --config.file=alertmanager.merged.yaml \
+  alertname=OtherDown severity=critical
 ```
 
-**Expected**: `promtool` reports `SUCCESS`; `amtool` prints only `tenant-redis-prod`.
+```yaml
+# alertmanager.yaml (the source): only Step 2.2's parent route changes
+  - receiver: legacy-default
+    matchers: ['tenant!="redis-prod"']   # cutover: the pilot tenant skips the legacy routes
+    continue: true                       # kept: the next domain's dual-run needs it
+    routes:
+    - matchers: ['severity="critical"']
+      receiver: legacy-pager
+```
 
-**Verify dry-run output**: Confirm only the pilot domain's legacy alert rules were removed and other domains' rules remain; confirm the destination of other alerts (those without `tenant="redis-prod"`) did not change.
+**Expected**: `promtool` reports `SUCCESS`; the first two `amtool` tests print only `tenant-redis-prod`, and the third (a legacy alert without `tenant`) still prints `legacy-pager`. The change goes into the source `alertmanager.yaml`, not `alertmanager.merged.yaml`: the output is regenerated from the source every time, so an edit made to the output is gone on the next run.
+
+**Verify dry-run output**: Confirm only the pilot domain's legacy alert rules were removed and other domains' rules remain; confirm the destination of other alerts (those without `tenant="redis-prod"`) did not change. When the next domain cuts over, add it to the same matcher (e.g. `tenant!~"redis-prod|mariadb-prod"`).
 
 ### Step 3.2: Execute Cutover
 
-After confirming dry-run, apply both configs to the cluster (update the ConfigMaps or config files as your deployment requires), then reload:
+After confirming dry-run, apply `prometheus-rules.yaml` and the `alertmanager.merged.yaml` regenerated in Step 3.1 to the cluster (update the ConfigMaps or config files as your deployment requires), then reload:
 
 ```bash
 kubectl rollout restart deployment/prometheus -n monitoring
@@ -450,9 +468,11 @@ curl -sG http://localhost:9093/api/v2/alerts \
 
 ### Phase 3 Rollback
 
-If cutover fails, restore the two Step 3.1 backups (`*.backup-phase3`) and reload: legacy rules fire again and the pilot tenant's route gets `continue: true` back, returning to dual-run.
+If cutover fails, restore the two Step 3.1 backups (`*.backup-phase3`), regenerate `alertmanager.merged.yaml` from the restored source, apply it and reload: legacy rules fire again and the parent route matches the pilot tenant again, returning to dual-run.
 
 ```bash
+da-tools generate-routes --config-dir conf.d/ \
+  --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
 kubectl rollout restart deployment/prometheus -n monitoring
 curl -X POST http://localhost:9093/-/reload
 ```
@@ -762,7 +782,7 @@ Until they exist, run the procedures in this section by hand; this section is al
 
 ### Q5: What if I get duplicate alerts (both old and new)?
 
-**A**: In Phase 2 the pilot tenant's route has `continue: true` and the route list ends with a catch-all, so both channels receive the tenant's old and new alerts; that is the dual-run design (see Step 2.2). Phase 3 deletes the old rules and drops `continue: true` to eliminate duplicates.
+**A**: In Phase 2 the source wraps the legacy sub-routes in a parent route with `continue: true`, so both channels receive the tenant's old and new alerts; that is the dual-run design (see Step 2.2). Phase 3 deletes the old rules, makes that parent route skip the pilot tenant with `tenant!="…"`, and regenerates the merged file, which eliminates the duplicates (see Step 3.1).
 
 ### Q6: What if a Rule Pack doesn't fit my domain?
 

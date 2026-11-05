@@ -314,7 +314,7 @@ da-tools generate-routes --config-dir conf.d/ \
   --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
 ```
 
-產出的 `route.routes` 依序是平台 4 條路由、上面那條上層路由、`tenant="redis-prod"` → `tenant-redis-prod`；receivers 多了 `tenant-redis-prod` 與四個平台 receiver，inhibit_rules 多了 redis-prod 的 critical 抑制 warning。舊的 receiver 與 inhibit rule 原樣保留。`alertmanager.yaml` 是來源、`alertmanager.merged.yaml` 是產物，兩份分開放：之後 conf.d 有變，就拿 `alertmanager.yaml`（來源）再跑一次上面的指令；不要拿 `alertmanager.merged.yaml` 當 `--base-config`——它含 `tenant-*` receiver，會被拒收（結束碼 1），`-o` 指向來源本身也不行（結束碼 2）。要改舊設定也改 `alertmanager.yaml`，再重新產生。⚠️ 平台的 `watchdog-heartbeat` receiver 沒接任何管道時會印 `watchdog_undelivered` WARN（加 `--strict` 是結束碼 1、不寫檔）；雙軌期間可以先接受這行 WARN，正式切換前照[告警平面自我存活性](../integration/alerting-plane-self-liveness.md)在 base 裡接上。
+產出的 `route.routes` 依序是平台 4 條路由、上面那條上層路由、`tenant="redis-prod"` → `tenant-redis-prod`；receivers 多了 `tenant-redis-prod` 與四個平台 receiver，inhibit_rules 多了 redis-prod 的 critical 抑制 warning。舊的 receiver 與 inhibit rule 原樣保留。`alertmanager.yaml` 是來源、`alertmanager.merged.yaml` 是產物，兩份分開放：之後 conf.d 有變，就拿 `alertmanager.yaml`（來源）再跑一次上面的指令；不要拿 `alertmanager.merged.yaml` 當 `--base-config`——產物第一行標明它是產物，會被拒收（結束碼 1），`-o` 指向來源本身也不行（結束碼 2）。要改舊設定也改 `alertmanager.yaml`，再重新產生。⚠️ 平台的 `watchdog-heartbeat` receiver 沒接任何管道時會印 `watchdog_undelivered` WARN（加 `--strict` 是結束碼 1、不寫檔）；雙軌期間可以先接受這行 WARN，正式切換前照[告警平面自我存活性](../integration/alerting-plane-self-liveness.md)在 base 裡接上。
 
 合併後先驗語法，再逐類測去向：
 
@@ -398,18 +398,35 @@ cp alertmanager.yaml alertmanager.yaml.backup-phase3
 #    試點域的舊告警規則（連同 expr、labels 整段），再驗格式
 promtool check rules prometheus-rules.yaml
 
-# 2. Alertmanager：拿掉試點租戶 route 的 continue: true，再測去向
-amtool config routes test --config.file=alertmanager.yaml \
+# 2. Alertmanager：在來源 alertmanager.yaml 裡，讓步驟 2.2 的上層路由不再比對試點租戶
+#    （加一行 matchers，見下方），再從來源重新產生、測去向
+da-tools generate-routes --config-dir conf.d/ \
+  --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
+amtool config routes test --config.file=alertmanager.merged.yaml \
   alertname=RedisHighMemory tenant=redis-prod severity=warning
+amtool config routes test --config.file=alertmanager.merged.yaml \
+  alertname=RedisDownLegacy tenant=redis-prod severity=critical
+amtool config routes test --config.file=alertmanager.merged.yaml \
+  alertname=OtherDown severity=critical
 ```
 
-**預期**：`promtool` 回報 `SUCCESS`；`amtool` 只輸出 `tenant-redis-prod`。
+```yaml
+# alertmanager.yaml（來源）：只改步驟 2.2 那條上層路由
+  - receiver: legacy-default
+    matchers: ['tenant!="redis-prod"']   # 切換：試點租戶不再進舊路由
+    continue: true                       # 保留：下一個域雙軌時還要用
+    routes:
+    - matchers: ['severity="critical"']
+      receiver: legacy-pager
+```
 
-**驗證乾跑輸出**：確認被刪的只有試點域的舊告警規則，其他域的規則仍在；確認其他（沒有 `tenant="redis-prod"` 的）告警的去向沒變。
+**預期**：`promtool` 回報 `SUCCESS`；前兩個 `amtool` 測試都只輸出 `tenant-redis-prod`，第三個（沒有 `tenant` 的舊告警）照舊輸出 `legacy-pager`。改的是來源 `alertmanager.yaml`，不是 `alertmanager.merged.yaml`：產物每次都從來源重新產生，直接改產物的內容下一次產生就不見了。
+
+**驗證乾跑輸出**：確認被刪的只有試點域的舊告警規則，其他域的規則仍在；確認其他（沒有 `tenant="redis-prod"` 的）告警的去向沒變。下一個域切換時，把它加進同一個 matcher（例如 `tenant!~"redis-prod|mariadb-prod"`）。
 
 ### 步驟 3.2：執行切換
 
-確認乾跑結果無誤，執行實際切換：把兩份設定套用到叢集（依你的部署方式更新 ConfigMap 或設定檔），再重載：
+確認乾跑結果無誤，執行實際切換：把 `prometheus-rules.yaml` 與步驟 3.1 重新產生的 `alertmanager.merged.yaml` 套用到叢集（依你的部署方式更新 ConfigMap 或設定檔），再重載：
 
 ```bash
 kubectl rollout restart deployment/prometheus -n monitoring
@@ -449,9 +466,11 @@ curl -sG http://localhost:9093/api/v2/alerts \
 
 ### 階段 3 回滾
 
-若切換失敗，用步驟 3.1 的兩份備份（`*.backup-phase3`）還原並重載：舊規則恢復觸發，試點租戶的 route 恢復 `continue: true`，回到雙軌狀態。
+若切換失敗，用步驟 3.1 的兩份備份（`*.backup-phase3`）還原，從還原後的來源重新產生 `alertmanager.merged.yaml`，套用並重載：舊規則恢復觸發，上層路由恢復比對試點租戶，回到雙軌狀態。
 
 ```bash
+da-tools generate-routes --config-dir conf.d/ \
+  --output-alertmanager --base-config alertmanager.yaml -o alertmanager.merged.yaml
 kubectl rollout restart deployment/prometheus -n monitoring
 curl -X POST http://localhost:9093/-/reload
 ```
@@ -760,7 +779,7 @@ Rehearsal 內容：
 
 ### Q5：Double 告警（舊新都發）怎麼辦？
 
-**A**：Phase 2 的試點租戶 route 設 `continue: true`、末尾補 catch-all，新舊兩個頻道都會收到該租戶的新舊告警，這是雙軌的設計（見步驟 2.2）。切換時（Phase 3）刪除舊規則、拿掉 `continue: true` 即可消除重複。
+**A**：Phase 2 在來源裡把舊子路由包進一條帶 `continue: true` 的上層路由，新舊兩個頻道都會收到該租戶的新舊告警，這是雙軌的設計（見步驟 2.2）。切換時（Phase 3）刪除舊規則，並讓那條上層路由以 `tenant!="…"` 跳過試點租戶、重新產生合併檔，即可消除重複（見步驟 3.1）。
 
 ### Q6：Rule Pack 不適用怎麼辦？
 

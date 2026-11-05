@@ -282,11 +282,17 @@ def test_the_same_source_renders_the_same_output(tmp_path):
     assert second == first
 
 
+def _without_header(text: str) -> str:
+    assert text.startswith(render.GENERATED_OUTPUT_HEADER), text[:200]
+    return text[len(render.GENERATED_OUTPUT_HEADER):]
+
+
 def test_feeding_the_output_back_as_the_base_is_refused(tmp_path):
     """The base is a source: an earlier output (it holds `tenant-*` /
-    `platform-enforced*` receivers) is refused, rc 1, nothing written."""
+    `platform-enforced*` receivers) is refused, rc 1, nothing written —
+    by its receivers, so also with the header line gone (an older output)."""
     conf_d = _tree(tmp_path)
-    first = _emit_am(tmp_path, conf_d, _base(tmp_path), "first.yml")
+    first = _without_header(_emit_am(tmp_path, conf_d, _base(tmp_path), "first.yml"))
     out = tmp_path / "second.yml"
     proc = _run("--config-dir", str(conf_d), "--output-alertmanager",
                 "--base-config", str(_base(tmp_path, first, "base2.yml")), "-o", str(out))
@@ -486,7 +492,7 @@ def test_apply_refuses_a_cluster_config_that_is_already_an_output(tmp_path, monk
     older --apply): there is no source to render from — refused, nothing
     applied."""
     conf_d = _tree(tmp_path)
-    generated = _emit_am(tmp_path, conf_d, _base(tmp_path))
+    generated = _without_header(_emit_am(tmp_path, conf_d, _base(tmp_path)))
     calls = _fake_cluster(monkeypatch, generated)
     assert _apply(tmp_path) == 1
     assert "not an earlier output of this tool" in capsys.readouterr().err
@@ -632,3 +638,111 @@ def test_a_gitops_configmap_carries_its_source_so_apply_can_take_over(
     applied = _created(calls)
     assert render.alertmanager_reading(applied["alertmanager.yml"]) == \
         render.alertmanager_reading(data["alertmanager.yml"])
+
+
+# ── 盲審 F1／F3／F4：來源判準不只靠 receiver 名稱 ─────────────────────
+
+#: 沒有任何 _routing／_routing_enforced 的樹：輸出裡沒有 tenant-*／
+#: platform-enforced* receiver，只有每租戶的 dedup inhibit。
+_ROUTELESS_DEFAULTS = "defaults:\n  cpu_usage_percent: 80\n"
+
+
+def _routeless_tree(tmp_path: Path) -> Path:
+    d = tmp_path / "conf.d"
+    d.mkdir()
+    (d / "_defaults.yaml").write_text(_ROUTELESS_DEFAULTS, encoding="utf-8")
+    (d / "t-thr.yaml").write_text(_TENANTS["t-thr"], encoding="utf-8")
+    return d
+
+
+def test_every_output_says_it_is_an_output_and_the_source_does_not(tmp_path):
+    conf_d = _tree(tmp_path)
+    out = _emit_am(tmp_path, conf_d, _base(tmp_path))
+    assert out.splitlines()[0].startswith(render.GENERATED_OUTPUT_MARKER), out[:300]
+    cm = _run("--config-dir", str(conf_d), "--output-configmap",
+              "--base-config", str(_base(tmp_path)))
+    assert cm.returncode == 0, cm.stderr[-3000:]
+    data = yaml.safe_load(cm.stdout)["data"]
+    assert data["alertmanager.yml"] == out
+    assert render.GENERATED_OUTPUT_MARKER not in data["alertmanager.base.yml"]
+
+
+def test_a_routeless_output_fed_back_is_refused(tmp_path):
+    """F1：沒有 tenant-* receiver 的輸出（只有 dedup inhibit）餵回去也拒收 ——
+    否則 inhibit 每跑一次多一份、刪掉的租戶規則留著。"""
+    conf_d = _routeless_tree(tmp_path)
+    first = _emit_am(tmp_path, conf_d, _base(tmp_path), "first.yml")
+    assert not any(render.is_generated_receiver_name(r["name"])
+                   for r in yaml.safe_load(first)["receivers"]), "前提：沒有產生的 receiver"
+    out = tmp_path / "second.yml"
+    proc = _run("--config-dir", str(conf_d), "--output-alertmanager",
+                "--base-config", str(_base(tmp_path, first, "base2.yml")), "-o", str(out))
+    assert proc.returncode == 1, proc.stderr[-3000:]
+    assert "is an output of da-tools generate-routes" in proc.stderr, proc.stderr[-3000:]
+    assert not out.exists()
+
+
+def test_apply_refuses_to_adopt_a_routeless_output(tmp_path, monkeypatch, capsys):
+    conf_d = _routeless_tree(tmp_path)
+    calls = _fake_cluster(monkeypatch, _emit_am(tmp_path, conf_d, _base(tmp_path)))
+    assert _apply(tmp_path) == 1
+    assert "is an output of da-tools generate-routes" in capsys.readouterr().err
+    assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
+
+
+def test_apply_refuses_an_output_written_into_the_base_key(tmp_path, monkeypatch, capsys):
+    conf_d = _routeless_tree(tmp_path)
+    generated = _emit_am(tmp_path, conf_d, _base(tmp_path))
+    calls = _fake_cluster(monkeypatch, generated, base_yml=generated)
+    assert _apply(tmp_path) == 1
+    assert "is an output of da-tools generate-routes" in capsys.readouterr().err
+    assert not [c for c in calls if c[:2] == ["kubectl", "apply"]], calls
+
+
+@pytest.mark.parametrize("name", ["platform-enforced", "platform-enforcedX",
+                                  "platform-enforced-t-thr", "tenant-x"])
+def test_the_whole_generated_namespace_is_refused_in_the_base(tmp_path, name):
+    """F3：訊息與文件寫 `platform-enforced*`，判準就是它（含剛好 `platform-enforced`）。"""
+    base = _CUSTOMER_BASE.replace("  - name: cust-db\n", f"  - name: {name}\n").replace(
+        "receiver: cust-db", f"receiver: {name}")
+    proc = _run("--config-dir", str(_tree(tmp_path)), "--output-alertmanager",
+                "--base-config", str(_base(tmp_path, base)), "-o", str(tmp_path / "o.yml"))
+    assert proc.returncode == 1, proc.stderr[-3000:]
+    assert repr(name) in proc.stderr, proc.stderr[-3000:]
+
+
+def test_control_a_name_outside_the_namespace_is_accepted(tmp_path):
+    base = _CUSTOMER_BASE.replace("  - name: cust-db\n", "  - name: platformenforced\n").replace(
+        "receiver: cust-db", "receiver: platformenforced")
+    _emit_am(tmp_path, _tree(tmp_path), _base(tmp_path, base))
+
+
+def test_findings_json_over_the_source_is_a_caller_error(tmp_path):
+    """F4：--findings-json 指向 --base-config 會蓋掉來源 —— 跟 -o 一樣拒絕。"""
+    base = _base(tmp_path)
+    before = base.read_bytes()
+    proc = _run("--config-dir", str(_tree(tmp_path)), "--output-alertmanager",
+                "--base-config", str(base), "-o", str(tmp_path / "o.yml"),
+                "--findings-json", str(base))
+    assert proc.returncode == 2, proc.stderr[-3000:]
+    assert "--base-config file itself" in proc.stderr, proc.stderr[-3000:]
+    assert base.read_bytes() == before, "the source was overwritten"
+
+
+def test_a_usage_error_does_not_write_findings_over_the_source(tmp_path):
+    """The findings document is written on every exit, a usage error too."""
+    base = _base(tmp_path)
+    before = base.read_bytes()
+    proc = _run("--config-dir", str(_tree(tmp_path)), "--output-alertmanager",
+                "--base-config", str(base), "--findings-json", str(base), "--no-such-flag")
+    assert proc.returncode == 2, proc.stderr[-3000:]
+    assert base.read_bytes() == before, "the source was overwritten"
+
+
+def test_control_findings_json_elsewhere_is_written(tmp_path):
+    fj = tmp_path / "f.json"
+    proc = _run("--config-dir", str(_tree(tmp_path)), "--output-alertmanager",
+                "--base-config", str(_base(tmp_path)), "-o", str(tmp_path / "o.yml"),
+                "--findings-json", str(fj))
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    assert json.loads(fj.read_text(encoding="utf-8"))["exit_code"] == 0

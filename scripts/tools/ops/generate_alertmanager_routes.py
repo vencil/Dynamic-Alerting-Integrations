@@ -153,7 +153,8 @@ from _grar_render import (  # noqa: E402, F401
 # #2219: used here, not re-exported — hence no `# noqa: F401` (see the
 # `_lib_io` block above for why that marker must stay off used imports).
 from _grar_render import (  # noqa: E402
-    AlertmanagerConfigInvariantViolated, AlertmanagerConfigRejected, amtool_gate,
+    AlertmanagerConfigInvariantViolated, AlertmanagerConfigRejected, BaseIsAnOutputError,
+    amtool_gate,
 )
 # #2660: the root-receiver-has-no-integration WARN (--output-configmap here;
 # --apply emits it inside apply_to_configmap). Used, so no F401 marker.
@@ -1493,6 +1494,13 @@ def _assembled_judge(undelivered: list[UndeliveredCustomAlerts], *, strict: bool
     return judge
 
 
+def _names_the_source(dest: str | None, base_config: str | None) -> bool:
+    """Whether writing *dest* would overwrite the --base-config file (the
+    source, #1211 gap 2). Same file by inode (``os.path.samefile``)."""
+    return bool(dest and base_config and os.path.exists(dest)
+                and os.path.exists(base_config) and os.path.samefile(dest, base_config))
+
+
 def _write_findings_if_asked(early: argparse.Namespace,
                              args: argparse.Namespace | None,
                              findings: list[str], code: int, *,
@@ -1503,6 +1511,13 @@ def _write_findings_if_asked(early: argparse.Namespace,
     prints its ERROR line but does not exit, so the exception survives."""
     src = args if args is not None else early
     if src.findings_json is None:
+        return
+    if _names_the_source(src.findings_json, getattr(src, "base_config", None)):
+        # #1211 gap 2 (blind review F4): the document is written on every
+        # exit — a usage error included — so this is where the source is
+        # protected; `_run` refuses the invocation itself (rc 2).
+        print("ERROR: --findings-json names the --base-config file itself — "
+              "not written, the source is kept as it is", file=sys.stderr)
         return
     doc = findings_document(findings, config_dir=src.config_dir,
                             exit_code=code, validate=src.validate,
@@ -1519,21 +1534,22 @@ def _write_findings_if_asked(early: argparse.Namespace,
 
 
 def _early_findings_args(argv: list[str] | None = None) -> argparse.Namespace:
-    """The four flags the --findings-json document needs, read from argv
-    before the full parse (#2766), so a usage error still replaces a stale
-    document. A plain scan, not a second parser (the CLI contract check reads
+    """The flags the --findings-json document needs, read from argv before
+    the full parse (#2766), so a usage error still replaces a stale document
+    — and ``--base-config``, so it never replaces the source (#1211 gap 2). A plain scan, not a second parser (the CLI contract check reads
     this file's parser): the exact spellings ``--flag VALUE`` /
     ``--flag=VALUE`` only — an abbreviated flag is found by the full parse
     alone."""
     argv = sys.argv[1:] if argv is None else argv
-    early = argparse.Namespace(findings_json=None, config_dir=None,
+    early = argparse.Namespace(findings_json=None, config_dir=None, base_config=None,
                                validate="--validate" in argv,
                                strict="--strict" in argv)
     for i, tok in enumerate(argv):
         if tok == "--":
             break
         for flag, dest in (("--findings-json", "findings_json"),
-                           ("--config-dir", "config_dir")):
+                           ("--config-dir", "config_dir"),
+                           ("--base-config", "base_config")):
             if (tok == flag and i + 1 < len(argv)
                     and not argv[i + 1].startswith("-")):
                 setattr(early, dest, argv[i + 1])
@@ -1653,17 +1669,21 @@ def _run(args: argparse.Namespace, findings: list[str], *,
     # #1211 gap 2 (owner decision S): the base is the operator's SOURCE and
     # the output is rendered from it — writing the output over the source
     # would turn the next run's base into an output, which it refuses.
-    if (writes_a_file_mode and args.output and args.base_config
-            and os.path.exists(args.output) and os.path.exists(args.base_config)
-            and os.path.samefile(args.output, args.base_config)):
-        die_caller_error(
-            "-o/--output names the --base-config file itself: the base is your "
-            "source config and the output is rendered from it, so writing over "
-            "it would make the next run's base an output (refused).\n"
-            "  Write the output to another path and keep the source as it is.")
+    # ⛔ Every path this run writes, not just -o: --findings-json over the
+    # source destroys it just the same (blind review F4).
+    for flag, dest in (("-o/--output", args.output),
+                       ("--findings-json", args.findings_json)):
+        if writes_a_file_mode and _names_the_source(dest, args.base_config):
+            die_caller_error(
+                f"{flag} names the --base-config file itself: the base is your "
+                "source config and the output is rendered from it, so writing over "
+                "it would destroy the source (refused).\n"
+                "  Write it to another path and keep the source as it is.")
     if writes_a_file_mode:
         try:
             base_config = load_base_config(args.base_config)
+        except BaseIsAnOutputError as exc:
+            _assembly_failed(exc, "nothing was generated or written")
         except BaseConfigInputError as exc:
             die_caller_error(str(exc))
         # #3257: a credential in the base's global reaches every conf.d
