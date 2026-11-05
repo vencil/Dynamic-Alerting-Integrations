@@ -34,7 +34,7 @@ from pathlib import Path
 
 # #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
 # Appended, so a copy beside this file (one directory holding all three) wins.
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "tools"))
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
 # ⛔ Same predicate as every other producer of a `defaults:` block, imported
 # rather than respelled (#1412). This file lives outside `scripts/tools/`, so the

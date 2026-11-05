@@ -55,7 +55,7 @@ from pathlib import Path
 
 # #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
 # Appended, so a copy beside this file (one directory holding all three) wins.
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "tools"))
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
 # Distinct from EXIT_VIOLATION (1): "the check could not run" is not "the refs are
 # bad", and a reader of a CI log must be able to tell those apart.
@@ -63,8 +63,9 @@ EXIT_NO_RESOLVER = 3
 
 
 def _consumer_read():
-    """`scripts/tools/_lib_consumer_read.py` (stdlib only), loaded by file so
-    this module adds nothing to `sys.path` (see `_positive_timeout`)."""
+    """`scripts/tools/_lib_consumer_read.py` (stdlib only), loaded by file: the
+    one `sys.path` entry this module adds is scripts/tools, appended at the end
+    for its run() exit (#3579), so it shadows nothing (see `_positive_timeout`)."""
     import importlib.util
     name = "_cir_lib_consumer_read"
     if name in sys.modules:
@@ -507,8 +508,8 @@ def _positive_timeout(text: str) -> int:
 
     Local on purpose, not scripts/tools/_lib_validation.positive_int_seconds
     (whose ceiling is threading.TIMEOUT_MAX, too high for a subprocess timeout):
-    importing it needs scripts/tools on sys.path for the whole process, and this
-    module (also loaded in-process by tests) keeps its path and module cache
+    this module (also loaded in-process by tests) only appends scripts/tools to
+    the end of sys.path, for its run() exit (#3579), and keeps its module cache
     effects confined to the init_project load above.
     """
     try:

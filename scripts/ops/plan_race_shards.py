@@ -57,7 +57,7 @@ from pathlib import Path
 
 # #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
 # Appended, so a copy beside this file (one directory holding all three) wins.
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), os.pardir, "tools"))
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
 # Explicit, so `python3 -I` (which drops the script's own directory from
 # sys.path) still finds the sibling parser whose timeout regex, -timeout value
