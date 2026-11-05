@@ -1,24 +1,18 @@
-"""Tests for threshold_govern.py — the #656 governance loop.
+"""Tests for threshold_govern.py — the read-only threshold governance report.
 
-Focus areas (highest-risk first):
-  1. read-modify-write correctness: the surgical YAML edit must change ONLY the
-     recommended threshold value lines and leave comments / other keys / other
-     tenants byte-identical (a wrong edit would silently wipe a tenant's config).
-  2. the verify gate: a refusal to PUT when anything unexpected changed.
-  3. governance gate: rot-magnitude + confidence filtering.
-  4. tenant-api wiring: 200 → pr_opened; a refusal by its code's remedy in
-     tenant-api's error contract (#3271): existing → already_pending (dedup
-     skip), refresh_retry → one re-GET/re-PUT, other → error; PUT is never sent
-     on a GET/merge/verify failure.
-  5. orchestration: --max-prs cap (dedup/errors don't consume it), throttle,
-     and dry-run sending zero network calls.
+ADR-027 §4 removed the former ``--apply`` write path (tenant-api PUT, its
+identity / token flags, dedup, throttle, ``--max-prs``, the circuit breaker
+and the systemic-failure exit). What stays, and is pinned here:
+  1. governance gate: rot-magnitude + confidence filtering.
+  2. the plan and the surfaced-but-not-planned categories (ungoverned ``<``,
+     by-design N/A, force_manual, inherited, not measured).
+  3. the text / JSON report, and that the tool writes nothing and sends no
+     request but the recommender's Prometheus queries.
+  4. the CLI: exit 0 for a complete report, 2 for a caller error or a partial
+     report; the removed flags are refused as unknown (rc 2).
 """
 import argparse
-import os
 import json
-
-import types
-from pathlib import Path
 
 import pytest
 
@@ -31,8 +25,6 @@ def _as_run(result):
     """What `_lib_exitcodes.run` does with main()'s answer (#3216): a Report's
     document is written and its status is the exit, as SystemExit."""
     raise SystemExit(emit_result(result))
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 # ---------------------------------------------------------------------------
@@ -54,14 +46,18 @@ def _args(**over):
     base = dict(
         config_dir="conf.d", prometheus="http://prom:9090", tenant=None,
         lookback="7d", min_samples=100, min_delta_pct=tg.DEFAULT_MIN_DELTA_PCT,
-        max_prs=tg.DEFAULT_MAX_PRS, apply=False, tenant_api_url="http://ta:8080",
-        identity_email="gov@p.local", identity_groups="threshold-governance",
-        auth_token=None, auth_token_file=None, throttle_seconds=0.0, timeout=5,
         json_output=False,
     )
     base.update(over)
     return argparse.Namespace(**base)
 
+
+def _plan(tenant="db-a", key="mysql_connections", new='"45"', source_file=""):
+    return tg.TenantPlan(tenant=tenant, source_file=source_file, changes=[
+        tg.PlannedChange(key=key, current_value="50", recommended=45.0,
+                         new_value=new, delta_pct=-10.0,
+                         confidence=recommend.CONFIDENCE_HIGH, p95=45.0, reason="r"),
+    ])
 
 # ---------------------------------------------------------------------------
 # 1. Governance gate
@@ -118,460 +114,7 @@ def test_plan_empty_when_nothing_actionable():
 
 
 # ---------------------------------------------------------------------------
-# 3. edit_live_yaml — da-guard write sets the values (ADR-036 §2, #3206)
-# ---------------------------------------------------------------------------
-FIXTURE = (
-    "# headline tenant — do not delete this comment\n"
-    "tenants:\n"
-    "  db-a:\n"
-    '    mysql_connections: "50"            # warning threshold\n'
-    '    mysql_connections_critical: "120"  # critical\n'
-    "    mysql_threads_running: \"75\"\n"
-    "    _metadata:\n"
-    '      owner: "team-db"\n'
-    '      tier: "tier-1"\n'
-    "  db-b:\n"
-    '    redis_mem: "512"\n'
-)
-
-
-def _edit(raw, tenant, values, **kw):
-    new, err = tg.edit_live_yaml(raw, tenant, values, **kw)
-    assert err is None, err
-    return new
-
-
-def test_edit_changes_only_target_value_and_preserves_comments():
-    new = _edit(FIXTURE, "db-a", {"mysql_connections": "45"})
-    # target line changed, its trailing comment kept (da-guard writes one
-    # space before it: a layout change, not a content one)
-    assert '    mysql_connections: "45" # warning threshold\n' in new
-    # every other line: same content and comments (the head comment was a
-    # PyYAML-era special case; da-guard keeps every comment outside the edit)
-    assert new.startswith("# headline tenant — do not delete this comment\n")
-    assert '    mysql_connections_critical: "120" # critical\n' in new
-    assert '    mysql_threads_running: "75"\n' in new
-    assert '      owner: "team-db"\n' in new
-    assert '    redis_mem: "512"\n' in new
-    differs = [(a, b) for a, b in zip(FIXTURE.split("\n"), new.split("\n"))
-               if a.split() != b.split()]
-    assert len(differs) == 1 and differs[0][1].strip().startswith("mysql_connections:"), differs
-
-
-def test_edit_multiple_keys_one_tenant():
-    new = _edit(FIXTURE, "db-a", {"mysql_connections": "45", "mysql_threads_running": "90"})
-    assert '    mysql_connections: "45" # warning threshold\n' in new
-    assert '    mysql_threads_running: "90"\n' in new
-    assert '    redis_mem: "512"\n' in new
-
-
-def test_edit_does_not_touch_other_tenant():
-    new = _edit(FIXTURE, "db-b", {"redis_mem": "1024"})
-    assert '    redis_mem: "1024"\n' in new
-    assert '    mysql_connections: "50" # warning threshold\n' in new
-    assert '    mysql_threads_running: "75"\n' in new
-
-
-def test_edit_refuses_a_missing_key():
-    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"nonexistent_key": "1"})
-    assert new is None and err == "keys not found in live config: ['nonexistent_key']"
-
-
-def test_edit_does_not_match_nested_metadata_key():
-    # a key that only exists nested under _metadata is not a direct child
-    # (it isn't a threshold): refused, never added to the tenant block
-    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"owner": "hacked"})
-    assert new is None and err == "keys not found in live config: ['owner']"
-
-
-def test_edit_preserves_crlf_line_endings():
-    # A CRLF-authored tenant file (Windows checkout) must NOT become mixed-EOL.
-    crlf = (
-        "tenants:\r\n  db-a:\r\n"
-        '    mysql_connections: "50"\r\n'
-        '    mysql_threads_running: "75"  # cpu\r\n'
-    )
-    new = _edit(crlf, "db-a", {"mysql_connections": "45"})
-    assert '    mysql_connections: "45"\r\n' in new
-    assert "\n" not in new.replace("\r\n", "")  # every LF is part of a CRLF pair
-
-
-def test_edit_writes_the_value_as_a_string():
-    old = "tenants:\n  db-a:\n    k1: 10\n    k2: \"20\"\n"
-    new = _edit(old, "db-a", {"k1": "15"})
-    assert new == 'tenants:\n  db-a:\n    k1: "15"\n    k2: "20"\n', new
-
-
-def test_edit_leaves_the_config_dir_as_it_was(tmp_path):
-    conf = tmp_path / "conf.d"
-    conf.mkdir()
-    (conf / "db-a.yaml").write_text("tenants:\n  db-a:\n    k1: \"1\"\n", encoding="utf-8")
-    before = (conf / "db-a.yaml").read_bytes()
-    new = _edit('tenants:\n  db-a:\n    k1: "10"\n', "db-a", {"k1": "15"},
-                config_dir=str(conf), rel="db-a.yaml")
-    assert new == 'tenants:\n  db-a:\n    k1: "15"\n'
-    assert sorted(p.name for p in conf.iterdir()) == ["db-a.yaml"]
-    assert (conf / "db-a.yaml").read_bytes() == before
-
-
-@pytest.mark.parametrize("rel", ["../db-a.yaml", "sub/db-a.yaml", "/abs/db-a.yaml", "..", "."])
-def test_edit_a_rel_that_is_not_one_file_name_is_refused_before_the_stage(rel, monkeypatch):
-    monkeypatch.setattr(tg, "_stage", lambda config_dir: pytest.fail("staged"))
-    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"mysql_connections": "45"}, rel=rel)
-    assert new is None and "is not one file name" in err, err
-
-
-def test_edit_a_directory_named_as_the_tenant_file_is_that_tenants_error(tmp_path):
-    conf = tmp_path / "conf.d"
-    (conf / "db-a.yaml").mkdir(parents=True)
-    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"mysql_connections": "45"},
-                                 config_dir=str(conf), rel="db-a.yaml")
-    assert new is None and "could not lay out the live text as db-a.yaml" in err, err
-
-
-def test_edit_a_config_dir_that_cannot_be_copied_is_that_tenants_error(monkeypatch):
-    def boom(config_dir):
-        raise OSError("Permission denied")
-    monkeypatch.setattr(tg, "_stage", boom)
-    new, err = tg.edit_live_yaml(FIXTURE, "db-a", {"mysql_connections": "45"},
-                                 config_dir="conf.d")
-    assert new is None and "could not copy conf.d" in err and "Permission denied" in err
-
-
-# #2231: a key written twice — not the one being edited — makes a file the
-# exporter drops whole: da-guard write refuses the original.
-_DUP_OTHER_KEY = ('tenants:\n  tenant-a:\n    k1: "10"\n    k2: "20"\n'
-                  '    k2: "30"\n')
-
-
-def test_edit_refuses_a_duplicate_key_elsewhere_in_the_tenant():
-    new, err = tg.edit_live_yaml(_DUP_OTHER_KEY, "tenant-a", {"k1": "15"})
-    assert new is None
-    assert "original_unreadable" in err and "duplicate_key" in err, err
-
-
-def test_open_pr_never_puts_a_file_with_a_duplicate_key(monkeypatch):
-    calls = _patch_http(monkeypatch, get_raw=_DUP_OTHER_KEY)
-    out = tg.open_governance_pr(_plan(tenant="tenant-a", key="k1", new='"15"'), _args())
-    assert out.status == "error"
-    assert "verify failed" in out.message
-    assert calls["put_count"] == 0
-
-
-# ---------------------------------------------------------------------------
-# 5. open_governance_pr — tenant-api wiring with a fake HTTP layer
-# ---------------------------------------------------------------------------
-def _plan(tenant="db-a", key="mysql_connections", new='"45"'):
-    return tg.TenantPlan(tenant=tenant, changes=[
-        tg.PlannedChange(key=key, current_value="50", recommended=45.0,
-                         new_value=new, delta_pct=-10.0,
-                         confidence=recommend.CONFIDENCE_HIGH, p95=45.0, reason="r"),
-    ])
-
-
-def _synth_tenant_yaml(tenant):
-    """A minimal live config the GET would return for `tenant` — one big-delta
-    key so the orchestration tests' stub plans actually apply."""
-    return f'tenants:\n  {tenant}:\n    mysql_connections: "2000"\n'
-
-
-# More PUTs than any bounded path sends for one tenant (the first + one retry).
-_PUT_CAP = 3
-
-
-def _patch_http(monkeypatch, *, get_raw=FIXTURE, get_err=None,
-                put_result=(200, {}, None), per_tenant=False):
-    calls = {"put_body": None, "put_count": 0, "put_url": None, "get_headers": None}
-    per_url = {}
-
-    def fake_get(url, *, timeout=10, headers=None):
-        calls["get_headers"] = headers
-        if get_err:
-            return None, get_err
-        if per_tenant:
-            tenant = url.rstrip("/").rsplit("/", 1)[-1]
-            return {"raw_yaml": _synth_tenant_yaml(tenant)}, None
-        return {"raw_yaml": get_raw}, None
-
-    def fake_put(url, yaml_body, headers, timeout):
-        calls["put_count"] += 1
-        # A runaway retry loop must fail here, not hang until a CI timeout.
-        per_url[url] = per_url.get(url, 0) + 1
-        assert per_url[url] <= _PUT_CAP, (
-            f"{per_url[url]} PUTs to {url} — the retry bound is gone")
-        calls["put_body"] = yaml_body
-        calls["put_url"] = url
-        return put_result
-
-    monkeypatch.setattr(tg, "http_get_json", fake_get)
-    monkeypatch.setattr(tg, "_http_put_yaml", fake_put)
-    return calls
-
-
-def test_open_pr_success_maps_to_pr_opened(monkeypatch):
-    calls = _patch_http(monkeypatch, put_result=(
-        200, {"status": "pending_review", "pr_url": "https://gh/7", "pr_number": 7}, None))
-    out = tg.open_governance_pr(_plan(), _args())
-    assert out.status == "pr_opened"
-    assert out.pr_url == "https://gh/7" and out.pr_number == 7
-    # the PUT body must be the merged config: target changed, others intact
-    assert '    mysql_connections: "45" # warning threshold\n' in calls["put_body"]
-    assert '    mysql_threads_running: "75"' in calls["put_body"]
-    # governance channel header sent on both GET and PUT
-    assert calls["get_headers"]["X-DA-Write-Source"] == tg.WRITE_SOURCE
-
-
-def test_open_pr_409_maps_to_already_pending_dedup(monkeypatch):
-    # Real tenant-api 409 envelope: code=PENDING_PR_EXISTS + flattened existing_pr_url.
-    _patch_http(monkeypatch, put_result=(
-        409, {"code": "PENDING_PR_EXISTS", "existing_pr_url": "https://gh/9"}, None))
-    out = tg.open_governance_pr(_plan(), _args())
-    assert out.status == "already_pending"
-    assert out.pr_url == "https://gh/9"
-
-
-def test_open_pr_no_changes_is_not_an_error(monkeypatch):
-    # A PR-mode tenant-api answers 200 {status: no_changes} when the body it was
-    # handed already equals the branch base it just cut. That is a healthy no-op:
-    # this run planned off the pod's on-disk copy, while the write path
-    # re-resolves the fresh origin base per write, so the two legitimately
-    # disagree once the change has landed upstream.
-    #
-    # Classifying it as an error would print "tenant-api is not in PR write-mode"
-    # at a deployment that IS in PR write-mode, and feed the systemic-failure
-    # ratio — failing a Job that had nothing left to do.
-    calls = _patch_http(monkeypatch, put_result=(
-        200, {"status": "no_changes", "tenant_id": "db-a",
-              "message": "No changes to apply; no PR/MR created."}, None))
-    out = tg.open_governance_pr(_plan(), _args())
-    assert out.status == "no_changes"
-    assert "PR write-mode" not in out.message
-    assert calls["put_count"] == 1
-
-
-def test_no_changes_does_not_trip_systemic_failure(monkeypatch):
-    # The dead-man's switch must not fire on a run whose every tenant was
-    # already at base: no PR opened, but also nothing broken.
-    outcomes = [tg.TenantOutcome("db-a", "no_changes", []),
-                tg.TenantOutcome("db-b", "no_changes", [])]
-    assert tg._is_systemic_failure(outcomes, applied=True) is False
-
-
-def test_open_pr_direct_mode_200_is_error(monkeypatch):
-    # tenant-api in default "direct" write-mode returns 200 {status: ok} having
-    # committed straight to base — NOT a PR. The tool must refuse to claim a PR
-    # (else it silently bypasses the human review gate). #656 B1.
-    calls = _patch_http(monkeypatch, put_result=(200, {"status": "ok", "tenant_id": "db-a"}, None))
-    out = tg.open_governance_pr(_plan(), _args())
-    assert out.status == "error"
-    assert "PR write-mode" in out.message
-    assert calls["put_count"] == 1  # the PUT happened; only the classification refuses
-
-
-def test_open_pr_409_without_a_code_is_error(monkeypatch):
-    # An answer carrying no code cannot be looked up in the contract: it is an
-    # error (fail-closed), never a dedup signal.
-    calls = _patch_http(monkeypatch, put_result=(409, {"error": "conflict: retry after refresh"}, None))
-    out = tg.open_governance_pr(_plan(), _args())
-    assert out.status == "error"
-    assert "409" in out.message
-    assert calls["put_count"] == 1
-
-
-@pytest.mark.parametrize("code", ["TENANT_FILE_DIRTY", "TENANT_GIT_MANAGED"])
-def test_open_pr_409_file_state_codes_are_errors_not_dedup(monkeypatch, code):
-    # #1535 / #3064: a 409 about the state of the tenant file in tenant-api's
-    # repository is not "a PR is already open" — it must surface as an error
-    # (an operator has to act), never be skipped as already_pending.
-    _patch_http(monkeypatch, put_result=(409, {"code": code, "error": "refused (" + code + ")"}, None))
-    out = tg.open_governance_pr(_plan(), _args())
-    assert out.status == "error"
-    assert code in out.message
-
-
-# ---------------------------------------------------------------------------
-# #3271: a refused PUT is classified by its code's remedy in tenant-api's error
-# contract (generated by tenant-api's cmd/gen-error-contract), not by a code
-# string this tool hardcodes.
-# ---------------------------------------------------------------------------
-_CONTRACT_PATH = (REPO_ROOT / "tools" / "portal" / "src" / "interactive" / "tools"
-                  / "_common" / "data" / "tenant-api-errors.json")
-
-
-def _contract_rows():
-    return json.loads(_CONTRACT_PATH.read_text(encoding="utf-8"))["codes"]
-
-
-def _codes_by_remedy():
-    by = {}
-    for row in _contract_rows():
-        by.setdefault(row["remedy"], []).append(row)
-    return by
-
-
-def test_tool_reads_the_generated_contract():
-    # The repo-layout lookup lands on the generator's output, and reads every code.
-    assert tg._find_error_contract() == _CONTRACT_PATH.resolve()
-    assert tg.load_error_remedies() == {r["code"]: r["remedy"] for r in _contract_rows()}
-
-
-def test_every_contract_remedy_has_an_explicit_action():
-    # ⛔ A remedy tenant-api adds must be decided on HERE, not fall through to
-    # the fail-closed default unnoticed. And no row of the table may name a
-    # remedy the contract no longer has (a dead decision reads as coverage).
-    contract = set(_codes_by_remedy())
-    assert contract == set(tg._REMEDY_ACTIONS), (
-        f"contract-only: {sorted(contract - set(tg._REMEDY_ACTIONS))}; "
-        f"table-only: {sorted(set(tg._REMEDY_ACTIONS) - contract)}")
-    assert set(tg._REMEDY_ACTIONS.values()) <= {"dedup", "retry", "error"}
-
-
-_EXPECTED_ACTION = {"existing": "dedup", "refresh_retry": "retry"}
-
-
-@pytest.mark.parametrize("remedy", sorted(_codes_by_remedy()))
-def test_one_code_per_contract_remedy_drives_the_expected_outcome(monkeypatch, remedy):
-    # One code of every remedy the contract carries, sent as the PUT answer:
-    # existing → already_pending; refresh_retry → a second GET+PUT, then error;
-    # every other remedy → error after one PUT.
-    row = _codes_by_remedy()[remedy][0]
-    status = row["statuses"][0]
-    calls = _patch_http(monkeypatch, put_result=(
-        status, {"code": row["code"], "error": "refused", "existing_pr_url": "https://gh/9"},
-        None))
-    out = tg.open_governance_pr(_plan(), _args())
-    action = _EXPECTED_ACTION.get(remedy, "error")
-    if action == "dedup":
-        assert out.status == "already_pending"
-        assert out.pr_url == "https://gh/9"
-        assert calls["put_count"] == 1
-    elif action == "retry":
-        assert out.status == "error"
-        assert calls["put_count"] == tg._MAX_PUT_ATTEMPTS == 2
-        assert row["code"] in out.message and "after 2 attempts" in out.message
-    else:
-        assert out.status == "error"
-        assert calls["put_count"] == 1
-        assert row["code"] in out.message and remedy in out.message
-
-
-def test_refresh_retry_refetches_and_succeeds_on_the_second_put(monkeypatch):
-    # CONFLICT (refresh_retry): the base moved under the PUT. The retry re-GETs
-    # (a fresh raw_yaml), re-merges, re-verifies and PUTs again — the second
-    # PUT carries the SECOND base, never the first attempt's merged body.
-    conflict = next(r for r in _contract_rows() if r["remedy"] == "refresh_retry")
-    answers = iter([
-        (409, {"code": conflict["code"], "error": "conflict"}, None),
-        (200, {"status": "pending_review", "pr_url": "https://gh/7", "pr_number": 7}, None),
-    ])
-    moved = FIXTURE.replace("# headline tenant — do not delete this comment",
-                            "# headline tenant — base moved upstream")
-    assert moved != FIXTURE
-    bases = iter([FIXTURE, moved])
-    puts = []
-
-    def fake_get(url, *, timeout=10, headers=None):
-        return {"raw_yaml": next(bases)}, None
-
-    def fake_put(url, yaml_body, headers, timeout):
-        puts.append(yaml_body)
-        assert len(puts) <= _PUT_CAP, "the retry bound is gone"
-        return next(answers)
-
-    monkeypatch.setattr(tg, "http_get_json", fake_get)
-    monkeypatch.setattr(tg, "_http_put_yaml", fake_put)
-    out = tg.open_governance_pr(_plan(), _args())
-    assert out.status == "pr_opened" and out.pr_url == "https://gh/7"
-    assert len(puts) == 2
-    assert "base moved upstream" not in puts[0]
-    assert "base moved upstream" in puts[1]
-    assert '    mysql_connections: "45" # warning threshold\n' in puts[1]
-
-
-@pytest.mark.parametrize("why, remedies, body", [
-    ("code not in the contract", {"CONFLICT": "refresh_retry"},
-     {"code": "SOMETHING_NEW", "error": "x"}),
-    ("remedy the table does not handle", {"PENDING_PR_EXISTS": "brand_new_remedy"},
-     {"code": "PENDING_PR_EXISTS", "error": "x"}),
-])
-def test_unknown_code_or_remedy_fails_closed(monkeypatch, why, remedies, body):
-    monkeypatch.setattr(tg, "_ERROR_REMEDIES", remedies)
-    calls = _patch_http(monkeypatch, put_result=(409, body, None))
-    out = tg.open_governance_pr(_plan(), _args())
-    assert out.status == "error", why
-    assert calls["put_count"] == 1
-    assert body["code"] in out.message
-
-
-def test_missing_contract_is_rc2_before_any_write(monkeypatch, tmp_path, capsys):
-    # The --apply pre-check must refuse BEFORE run(): a run reaching tenant-api
-    # without the contract could not tell a pending PR from any other 409.
-    monkeypatch.setattr(tg, "_ERROR_REMEDIES", None)
-    monkeypatch.setattr(tg, "_find_error_contract", lambda: None)
-
-    def no_run(_args):
-        raise AssertionError("run() reached without an error contract")
-
-    monkeypatch.setattr(tg, "run", no_run)
-    args = _args(apply=True, config_dir=str(tmp_path))
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda self: args)
-    with pytest.raises(SystemExit) as exc:
-        _as_run(tg.main())
-    assert exc.value.code == 2
-    assert "tenant-api-errors.json not found" in capsys.readouterr().err
-
-
-@pytest.mark.parametrize("outcomes, rc", [
-    (["error", "error"], 1),          # every write failed: systemic → rc 1
-    (["pr_opened", "error"], 0),      # the write plane works → rc 0
-])
-def test_apply_json_exit_is_the_systemic_verdict(monkeypatch, tmp_path, capsys, outcomes, rc):
-    """#656 under --json (#3216): the document goes out through run(), and
-    an --apply run whose writes all failed still exits 1 (not 0, not 2)."""
-    monkeypatch.setattr(tg, "_error_remedies", lambda: {})
-    monkeypatch.setattr(tg, "run", lambda _a: tg.GovernanceResult(
-        plans=[], outcomes=[_oc(s) for s in outcomes], ungoverned=[]))
-    args = _args(apply=True, config_dir=str(tmp_path), json_output=True)
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda self: args)
-    with pytest.raises(SystemExit) as exc:
-        _as_run(tg.main())
-    assert exc.value.code == rc
-    doc = json.loads(capsys.readouterr().out)
-    assert doc["applied"] is True and doc["summary"]["errors"] == outcomes.count("error")
-
-
-@pytest.mark.parametrize("doc", ['{"codes": []}', '{"codes": [{"code": "X"}]}', "not json"])
-def test_malformed_contract_raises(tmp_path, doc):
-    p = tmp_path / "tenant-api-errors.json"
-    p.write_text(doc, encoding="utf-8")
-    with pytest.raises(tg.ErrorContractError):
-        tg.load_error_remedies(p)
-
-
-def test_open_pr_500_maps_to_error(monkeypatch):
-    _patch_http(monkeypatch, put_result=(500, {"error": "boom"}, None))
-    out = tg.open_governance_pr(_plan(), _args())
-    assert out.status == "error"
-    assert "500" in out.message
-
-
-def test_open_pr_get_failure_skips_put(monkeypatch):
-    calls = _patch_http(monkeypatch, get_err="connection refused")
-    out = tg.open_governance_pr(_plan(), _args())
-    assert out.status == "error"
-    assert calls["put_count"] == 0  # never PUT on a failed GET
-
-
-def test_open_pr_missing_key_skips_put(monkeypatch):
-    calls = _patch_http(monkeypatch, get_raw=FIXTURE)
-    out = tg.open_governance_pr(_plan(key="ghost_key"), _args())
-    assert out.status == "error"
-    assert "not found" in out.message
-    assert calls["put_count"] == 0  # fail loud, never PUT a no-op/corrupt file
-
-
-# ---------------------------------------------------------------------------
-# 6. run() orchestration — cap, dedup-doesn't-consume-cap, throttle, dry-run
+# 3. run() / the report writes nothing
 # ---------------------------------------------------------------------------
 def _stub_reports(monkeypatch, tenants):
     """Make run_analysis return one big-delta actionable key per tenant."""
@@ -583,84 +126,107 @@ def _stub_reports(monkeypatch, tenants):
     monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
 
 
-def test_run_dry_run_makes_no_write_calls(monkeypatch):
-    # Dry-run still QUERIES Prometheus (via run_analysis) but must make zero
-    # tenant-api writes. (run_analysis is stubbed here, so this asserts no PUTs.)
+def test_run_sends_no_request_beyond_the_recommender(monkeypatch):
+    # run_analysis is stubbed, so ANY request the tool still sent would be its
+    # own (the removed tenant-api client): every HTTP entry point fails the test.
+    import urllib.request
     _stub_reports(monkeypatch, ["db-a", "db-b"])
-    calls = _patch_http(monkeypatch)
-    res = tg.run(_args(apply=False))
-    assert len(res.plans) == 2
-    assert res.outcomes == []
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        lambda *a, **k: pytest.fail("threshold-govern sent a request"))
+    res = tg.run(_args())
+    assert [p.tenant for p in res.plans] == ["db-a", "db-b"]
     assert res.ungoverned == []      # _stub_reports has no lower-bound `<` keys
     assert res.not_applicable == [] and res.force_manual == []
-    assert calls["put_count"] == 0
 
 
-def test_run_apply_respects_max_prs(monkeypatch):
-    _stub_reports(monkeypatch, ["db-a", "db-b", "db-c"])
-    _patch_http(monkeypatch, per_tenant=True,
-                put_result=(200, {"status": "pending_review", "pr_url": "u", "pr_number": 1}, None))
-    outcomes = tg.run(_args(apply=True, max_prs=2)).outcomes
-    opened = [o for o in outcomes if o.status == "pr_opened"]
-    skipped = [o for o in outcomes if o.status == "skipped"]
-    assert len(opened) == 2
-    assert len(skipped) == 1
+def test_the_write_path_is_gone():
+    # ADR-027 §4: no tenant-api client, no write-source header, no PR outcome.
+    for name in ("open_governance_pr", "edit_live_yaml", "TenantOutcome",
+                 "WRITE_SOURCE", "_is_systemic_failure", "DEFAULT_MAX_PRS"):
+        assert not hasattr(tg, name), name
 
 
-def test_run_apply_dedup_does_not_consume_cap(monkeypatch):
-    # db-a is already_pending (409); with max_prs=1, db-b must still get a real PR
-    # because the dedup skip doesn't spend the per-run budget.
-    _stub_reports(monkeypatch, ["db-a", "db-b"])
-    seq = iter([
-        (409, {"code": "PENDING_PR_EXISTS", "existing_pr_url": "https://gh/1"}, None),  # db-a
-        (200, {"status": "pending_review", "pr_url": "https://gh/2", "pr_number": 2}, None),  # db-b
-    ])
-
-    def fake_get(url, *, timeout=10, headers=None):
-        tenant = url.rstrip("/").rsplit("/", 1)[-1]
-        return {"raw_yaml": _synth_tenant_yaml(tenant)}, None
-
-    def fake_put(url, yaml_body, headers, timeout):
-        return next(seq)
-
-    monkeypatch.setattr(tg, "http_get_json", fake_get)
-    monkeypatch.setattr(tg, "_http_put_yaml", fake_put)
-
-    outcomes = tg.run(_args(apply=True, max_prs=1)).outcomes
-    by_tenant = {o.tenant: o.status for o in outcomes}
-    assert by_tenant["db-a"] == "already_pending"
-    assert by_tenant["db-b"] == "pr_opened"
+def test_text_report_names_the_tenant_file_and_says_nothing_is_written():
+    out = tg.format_text_report([_plan("db-a", source_file="db-a.yaml"),
+                                 _plan("db-b", source_file="team/db-b.yaml")])
+    lines = out.splitlines()
+    assert "read-only" in lines[0]
+    assert any(ln.startswith("Tenant: db-a (1 change(s)) — db-a.yaml") for ln in lines)
+    assert any(ln.startswith("Tenant: db-b (1 change(s)) — team/db-b.yaml") for ln in lines)
+    assert lines[-1] == ("Summary: 2 tenant(s) / 2 change(s) need retuning. "
+                         "Nothing was written: set the values in each tenant's file by hand.")
+    assert "--apply" not in out and "PR" not in out
 
 
-def test_run_apply_throttles_between_opened_prs(monkeypatch):
-    _stub_reports(monkeypatch, ["db-a", "db-b"])
-    _patch_http(monkeypatch, per_tenant=True,
-                put_result=(200, {"status": "pending_review", "pr_url": "u", "pr_number": 1}, None))
-    sleeps = []
-    # Only the tool's own `time`: the pre-PUT parse-tree check runs da-guard
-    # through subprocess, whose waits sleep too (ADR-036 §2, #2906).
-    monkeypatch.setattr(tg, "time", types.SimpleNamespace(sleep=sleeps.append))
-    tg.run(_args(apply=True, max_prs=10, throttle_seconds=2.0))
-    # 2 PRs opened → exactly one inter-PR sleep (none after the last)
-    assert sleeps == [2.0]
+def test_json_document_has_no_write_fields():
+    out = tg.json_document([_plan("db-a", source_file="sub/db-a.yaml")])
+    assert "applied" not in out and "outcomes" not in out
+    assert out["plans"][0]["source_file"] == "sub/db-a.yaml"
+    assert out["summary"]["tenants_actionable"] == 1   # a nested file counts too
+    assert out["summary"]["changes"] == 1
+    for gone in ("prs_opened", "already_pending", "no_changes", "errors",
+                 "skipped", "skipped_breaker", "skipped_nested"):
+        assert gone not in out["summary"], gone
 
 
-def test_run_apply_circuit_breaks_on_consecutive_errors(monkeypatch):
-    # A degraded write plane (every PUT 503s) must not be hammered once per
-    # tenant: after MAX_CONSECUTIVE_ERRORS the run aborts the remainder.
-    n = tg.MAX_CONSECUTIVE_ERRORS + 3
-    _stub_reports(monkeypatch, [f"db-{i}" for i in range(n)])
-    calls = _patch_http(monkeypatch, per_tenant=True, put_result=(503, {"error": "overloaded"}, None))
-    outcomes = tg.run(_args(apply=True, max_prs=100)).outcomes
-    errors = [o for o in outcomes if o.status == "error"]
-    aborted = [o for o in outcomes if o.status == "skipped_breaker" and "aborted" in o.message]
-    assert len(errors) == tg.MAX_CONSECUTIVE_ERRORS          # stopped attempting after the cap
-    assert len(aborted) == n - tg.MAX_CONSECUTIVE_ERRORS     # the rest are marked, not attempted
-    assert calls["put_count"] == tg.MAX_CONSECUTIVE_ERRORS   # no further round-trips after the break
+@pytest.mark.parametrize("flag", [
+    ["--apply"], ["--tenant-api-url", "http://ta:8080"], ["--identity-email", "a@b"],
+    ["--identity-groups", "g"], ["--auth-token", "t"], ["--auth-token-file", "/f"],
+    ["--throttle-seconds", "1"], ["--max-prs", "5"], ["--timeout", "5"],
+])
+def test_removed_flags_are_caller_errors(monkeypatch, tmp_path, capsys, flag):
+    import sys
+    monkeypatch.setattr(tg, "run", lambda args: pytest.fail("ran"))
+    monkeypatch.setattr(sys, "argv", [
+        "threshold_govern.py", "--config-dir", str(tmp_path), *flag])
+    with pytest.raises(SystemExit) as exc:
+        _as_run(tg.main())
+    assert exc.value.code == tg.EXIT_CALLER_ERROR
+    assert "unrecognized arguments" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("json_output", [False, True], ids=["text", "json"])
+def test_main_rc0_with_rotten_thresholds(monkeypatch, tmp_path, capsys, json_output):
+    import sys
+    _stub_reports(monkeypatch, ["db-a"])
+    monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path),
+                                      *(["--json"] if json_output else [])])
+    with pytest.raises(SystemExit) as exc:
+        _as_run(tg.main())
+    assert exc.value.code == tg.EXIT_OK
+    out = capsys.readouterr().out
+    if json_output:
+        assert json.loads(out)["summary"]["tenants_actionable"] == 1
+    else:
+        assert "Summary: 1 tenant(s) / 1 change(s) need retuning." in out
+
+
+def test_main_rc0_on_empty_plan(monkeypatch, tmp_path):
+    import sys
+    monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: [])
+    monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path)])
+    with pytest.raises(SystemExit) as exc:
+        _as_run(tg.main())
+    assert exc.value.code == tg.EXIT_OK
+
+
+def test_main_exits_caller_error_on_missing_observed_map(monkeypatch, tmp_path, capsys):
+    # #3017: govern reads the map through recommend.run_analysis; an absent
+    # map is an environment error (rc 2, named), not a traceback.
+    import sys
+    missing = tmp_path / "metric_observed_map.yaml"
+    monkeypatch.setattr(tg.recommend.observed_map_lib, "DEFAULT_MAP_PATH", str(missing))
+    monkeypatch.setattr(tg, "run",
+                        lambda args: tg.recommend.observed_map_lib.load_observed_map())
+    monkeypatch.setattr(sys, "argv", ["threshold_govern.py", "--config-dir", str(tmp_path)])
+    with pytest.raises(SystemExit) as exc:
+        _as_run(tg.main())
+    assert exc.value.code == tg.EXIT_CALLER_ERROR
+    assert str(missing) in capsys.readouterr().err
 
 
 # ---------------------------------------------------------------------------
-# 7. ungoverned lower-bound `<` visibility (#656 — DETECT `<` deferred; surface
+# 4. ungoverned lower-bound `<` visibility (#656 — DETECT `<` deferred; surface
 #    the blind spot so it is observable, not a silent coverage hole)
 # ---------------------------------------------------------------------------
 def test_collect_ungoverned_isolates_lower_bound():
@@ -693,7 +259,7 @@ def test_run_surfaces_ungoverned_but_keeps_it_out_of_plans(monkeypatch):
             reason="skipped: lower-bound (<) metric — not supported (#916)"),
     ])]
     monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
-    res = tg.run(_args(apply=False))
+    res = tg.run(_args())
     assert [(u.tenant, u.key) for u in res.ungoverned] == [("db-a", "db2_hit_ratio")]
     planned_keys = [c.key for p in res.plans for c in p.changes]
     assert planned_keys == ["mysql_connections"]          # `<` never becomes actionable
@@ -702,7 +268,7 @@ def test_run_surfaces_ungoverned_but_keeps_it_out_of_plans(monkeypatch):
 def test_text_report_shows_ungoverned_even_with_no_plans():
     # guards the no-plans early-return path (must still surface the blind spot)
     ung = [tg.UngovernedKey("db-a", "db2_hit_ratio", "skipped: lower-bound (<) ...")]
-    out = tg.format_text_report([], [], applied=False, ungoverned=ung)
+    out = tg.format_text_report([], ungoverned=ung)
     assert "db-a / db2_hit_ratio" in out
     assert ("未治理" in out) or ("ungoverned" in out.lower())
 
@@ -715,7 +281,7 @@ def test_text_report_plans_path_detail_above_summary_count_in_summary():
         _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH, p95=100.0)])
     plans = tg.build_governance_plan([report], 25.0)
     ung = [tg.UngovernedKey("db-b", "db2_hit_ratio", "skipped: lower-bound (<) ...")]
-    lines = tg.format_text_report(plans, [], applied=False, ungoverned=ung).splitlines()
+    lines = tg.format_text_report(plans, ungoverned=ung).splitlines()
     summary_idx = next(i for i, ln in enumerate(lines) if ln.startswith("Summary:"))
     detail_idx = next(i for i, ln in enumerate(lines) if "db-b / db2_hit_ratio" in ln)
     assert detail_idx < summary_idx                  # detail ABOVE the bottom line
@@ -725,7 +291,7 @@ def test_text_report_plans_path_detail_above_summary_count_in_summary():
 
 def test_json_report_includes_ungoverned_count_and_list():
     ung = [tg.UngovernedKey("db-a", "db2_hit_ratio", "skipped: lower-bound (<) ...")]
-    out = tg.json_document([], [], applied=False, ungoverned=ung)
+    out = tg.json_document([], ungoverned=ung)
     assert out["summary"]["ungoverned_lower_bound"] == 1
     assert out["ungoverned_lower_bound"][0]["key"] == "db2_hit_ratio"
 
@@ -786,593 +352,7 @@ def test_committed_lower_bound_entries_satisfy_three_state_invariant():
 
 
 # ---------------------------------------------------------------------------
-# 7. #656 / #3054 dead-man's-switch exit code — an --apply run whose failures
-#    (errors + circuit-breaker skips) reach >= 90% of the attempted writes must exit
-#    non-zero, even if it opened a PR, so the CronJob Job is marked Failed AND
-#    kube_cronjob_status_last_successful_time stays frozen (→ ThresholdGovernanceStale
-#    can fire). Without it the run exits 0 / Job Successful / clock advances while
-#    the writes fail — the staleness alert would be a placebo. STRICTER than
-#    maintenance_scheduler's any-error exit contract: only a near-total write failure
-#    trips it (a single flaky tenant amid successes must not freeze the clock).
-# ---------------------------------------------------------------------------
-def _oc(status):
-    return tg.TenantOutcome("t", status)
-
-
-def test_systemic_failure_true_when_apply_run_all_errored():
-    assert tg._is_systemic_failure([_oc("error"), _oc("error")], applied=True) is True
-
-
-def test_systemic_failure_false_when_pr_opened_and_half_errored():
-    # a 50% failure share is partial degradation — one flaky tenant must not
-    # fail the whole governance run (#3054: by the ratio, not because a PR opened).
-    assert tg._is_systemic_failure([_oc("pr_opened"), _oc("error")], applied=True) is False
-
-
-def test_systemic_failure_false_when_failures_dont_dominate():
-    # A balanced error/already-pending split (50% failure) is partial degradation,
-    # not a systemic write outage — the loop still functions for half the fleet.
-    assert tg._is_systemic_failure([_oc("error"), _oc("already_pending")], applied=True) is False
-
-
-def test_systemic_failure_true_when_errors_swamp_one_pending_survivor():
-    # Gemini adversarial review: a 99%-error outage must NOT be masked by ONE surviving
-    # already_pending (tenant-api answered 409 for a single tenant whose PR already
-    # existed). The old `pending == 0` gate false-negatived here; the ratio gate trips.
-    outcomes = [_oc("error")] * 99 + [_oc("already_pending")]
-    assert tg._is_systemic_failure(outcomes, applied=True) is True
-
-
-def test_systemic_failure_true_when_breaker_skips_with_pending_survivor():
-    # Same masking scenario WITH the circuit breaker engaged: a total outage shows up
-    # as ~MAX_CONSECUTIVE_ERRORS errors + many `skipped_breaker`. Counting those as
-    # failures keeps the share high; a bare error ratio (5/100) would dilute it.
-    outcomes = [_oc("error")] * 5 + [_oc("skipped_breaker")] * 94 + [_oc("already_pending")]
-    assert tg._is_systemic_failure(outcomes, applied=True) is True
-
-
-def test_systemic_failure_false_when_few_errors_among_many_pending():
-    # A few flaky tenants among a mostly-healthy (already-pending) fleet is NOT
-    # systemic — low failure share, the write plane clearly works.
-    outcomes = [_oc("error")] * 3 + [_oc("already_pending")] * 97
-    assert tg._is_systemic_failure(outcomes, applied=True) is False
-
-
-def test_systemic_failure_false_in_dry_run():
-    # dry-run issues no writes, so even all-error planning never fails the Job.
-    assert tg._is_systemic_failure([_oc("error"), _oc("error")], applied=False) is False
-
-
-def test_systemic_failure_false_when_nothing_actionable():
-    # healthy fleet, nothing drifted → no outcomes → exit 0.
-    assert tg._is_systemic_failure([], applied=True) is False
-
-
-def test_systemic_failure_false_when_skipped_only():
-    # --max-prs skips sent no request — a run that only cap-skipped attempted
-    # nothing, so it is not a write failure.
-    assert tg._is_systemic_failure([_oc("skipped"), _oc("skipped")], applied=True) is False
-
-
-def test_systemic_failure_live_path_all_503(monkeypatch):
-    # INPUT-EDGE: drive the REAL run() so the helper classifies the statuses run()
-    # actually emits (not hand-built ones). tenant-api 503 for every tenant → every
-    # outcome is "error" → systemic.
-    _stub_reports(monkeypatch, ["db-a", "db-b"])
-    _patch_http(monkeypatch, per_tenant=True, put_result=(503, {"error": "overloaded"}, None))
-    outcomes = tg.run(_args(apply=True, max_prs=100)).outcomes
-    assert outcomes and all(o.status == "error" for o in outcomes)
-    assert tg._is_systemic_failure(outcomes, applied=True) is True
-
-
-def test_systemic_failure_live_path_success_is_clean(monkeypatch):
-    _stub_reports(monkeypatch, ["db-a", "db-b"])
-    _patch_http(monkeypatch, per_tenant=True,
-                put_result=(200, {"status": "pending_review", "pr_url": "u", "pr_number": 1}, None))
-    outcomes = tg.run(_args(apply=True, max_prs=100)).outcomes
-    assert outcomes and all(o.status == "pr_opened" for o in outcomes)
-    assert tg._is_systemic_failure(outcomes, applied=True) is False
-
-
-def test_main_exits_violation_on_total_apply_failure(monkeypatch, tmp_path):
-    # END-TO-END wiring: main() must convert a systemic failure into a non-zero exit.
-    monkeypatch.setattr(tg, "run",
-                        lambda args: tg.GovernanceResult([], [tg.TenantOutcome("t", "error")], []))
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
-                        lambda self: _args(apply=True, config_dir=str(tmp_path)))
-    with pytest.raises(SystemExit) as exc:
-        _as_run(tg.main())
-    assert exc.value.code == tg.EXIT_VIOLATION
-
-
-def test_main_exits_caller_error_on_missing_observed_map(monkeypatch, tmp_path, capsys):
-    # #3017: govern reads the map through recommend.run_analysis; an absent
-    # map is an environment error (rc 2, named), not a traceback at rc 1 —
-    # rc 1 here means "the write plane failed" to CronJobLastRunFailed.
-    missing = tmp_path / "metric_observed_map.yaml"
-    monkeypatch.setattr(tg.recommend.observed_map_lib, "DEFAULT_MAP_PATH", str(missing))
-    monkeypatch.setattr(tg, "run",
-                        lambda args: tg.recommend.observed_map_lib.load_observed_map())
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
-                        lambda self: _args(apply=True, config_dir=str(tmp_path)))
-    with pytest.raises(SystemExit) as exc:
-        _as_run(tg.main())
-    assert exc.value.code == tg.EXIT_CALLER_ERROR
-    assert str(missing) in capsys.readouterr().err
-
-
-def test_main_exits_ok_on_successful_apply(monkeypatch, tmp_path):
-    monkeypatch.setattr(tg, "run",
-                        lambda args: tg.GovernanceResult([], [tg.TenantOutcome("t", "pr_opened")], []))
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
-                        lambda self: _args(apply=True, config_dir=str(tmp_path)))
-    with pytest.raises(SystemExit) as exc:
-        _as_run(tg.main())
-    assert exc.value.code == tg.EXIT_OK
-
-
-def _main_rc_with_failing_writes(monkeypatch, tmp_path, rec):
-    monkeypatch.setattr(recommend, "run_analysis",
-                        lambda *a, **k: [_report("db-a", [rec])])
-    calls = _patch_http(monkeypatch, per_tenant=True,
-                        put_result=(503, {"error": "overloaded"}, None))
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
-                        lambda self: _args(apply=True, config_dir=str(tmp_path)))
-    with pytest.raises(SystemExit) as exc:
-        _as_run(tg.main())
-    return exc.value.code, calls
-
-
-def test_main_zero_current_key_attempts_no_write_so_rc_stays_ok(
-        monkeypatch, tmp_path, capsys):
-    """#2997 (accepted by the owner): an upper-bound key whose current is 0 is
-    force_manual, so no write is attempted for it — a run whose only drifted key
-    is one exits 0 even with every tenant-api write failing. Before #2997 it was
-    a 0 → P95 plan at +100% and that run exited 1."""
-    vals = [0.0] * 900 + [0.3] * 100
-    rec = recommend.recommend_threshold(
-        "mysql_connections", "0", recommend.compute_percentiles(vals),
-        1000, 100, values=vals)
-    code, calls = _main_rc_with_failing_writes(monkeypatch, tmp_path, rec)
-    assert code == tg.EXIT_OK
-    assert calls["put_count"] == 0
-    out = capsys.readouterr().out
-    assert f"db-a / mysql_connections: {rec.guardrail_reason}" in out
-
-
-def test_main_failing_writes_control_exits_violation(monkeypatch, tmp_path):
-    """Control for the test above: the same harness with an actionable key
-    reaches the failing write and exits 1."""
-    rec = _kr("mysql_connections", "2000", 100.0, -95.0,
-              recommend.CONFIDENCE_HIGH, p95=100.0)
-    code, calls = _main_rc_with_failing_writes(monkeypatch, tmp_path, rec)
-    assert code == tg.EXIT_VIOLATION
-    assert calls["put_count"] == 1
-
-
-def _zero_current_rec():
-    vals = [0.0] * 900 + [0.3] * 100
-    return recommend.recommend_threshold(
-        "mysql_connections", "0", recommend.compute_percentiles(vals),
-        1000, 100, values=vals)
-
-
-def _two_tenant_main(monkeypatch, tmp_path, put_by_tenant, **over):
-    """ta: only a zero-current key; tb: a real -95% key. Returns (rc, PUT tenants)."""
-    reports = [
-        _report("ta", [_zero_current_rec()]),
-        _report("tb", [_kr("mysql_connections", "2000", 100.0, -95.0,
-                           recommend.CONFIDENCE_HIGH, p95=100.0)]),
-    ]
-    monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
-    _patch_http(monkeypatch, per_tenant=True)
-    put_to: list[str] = []
-
-    def fake_put(url, yaml_body, headers, timeout):
-        tenant = next(t for t in put_by_tenant if f"/tenants/{t}" in url)
-        put_to.append(tenant)
-        return put_by_tenant[tenant]
-
-    monkeypatch.setattr(tg, "_http_put_yaml", fake_put)
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args",
-                        lambda self: _args(apply=True, config_dir=str(tmp_path), **over))
-    with pytest.raises(SystemExit) as exc:
-        _as_run(tg.main())
-    return exc.value.code, put_to
-
-
-_OK_PUT = (200, {"status": "pending_review", "pr_url": "u", "pr_number": 1}, None)
-
-
-def test_main_zero_current_write_no_longer_masks_another_tenants_failure(
-        monkeypatch, tmp_path):
-    """#2997 (accepted by the owner), the 0 → 1 direction: before #2997 ta's
-    0 → P95 write succeeded (or got a 409 already-pending) and counted as
-    progress, masking tb's failed write (rc 0). Now ta is force_manual and not
-    written, so tb's failure is the whole run: rc 1, and only tb is PUT."""
-    code, put_to = _two_tenant_main(monkeypatch, tmp_path, {
-        "ta": _OK_PUT, "tb": (503, {"error": "overloaded"}, None)})
-    assert code == tg.EXIT_VIOLATION
-    assert put_to == ["tb"]
-
-
-def test_main_zero_current_key_takes_no_max_prs_slot(monkeypatch, tmp_path):
-    """#2997: with --max-prs 1 the slot used to go to ta (first in order) for
-    its 0 → P95 write; now it goes to tb."""
-    code, put_to = _two_tenant_main(monkeypatch, tmp_path,
-                                    {"ta": _OK_PUT, "tb": _OK_PUT}, max_prs=1)
-    assert code == tg.EXIT_OK
-    assert put_to == ["tb"]
-
-
-def test_systemic_failure_live_path_circuit_breaker_many_tenants(monkeypatch):
-    # HEADLINE #656 scenario: tenant-api down for a week with MANY drifted tenants.
-    # After MAX_CONSECUTIVE_ERRORS the circuit breaker emits "skipped_breaker" outcomes
-    # — pin that the {error, skipped_breaker} mix STILL trips the switch (errors>0 dominates), so a
-    # future breaker refactor can't silently turn the headline case green. The 2-tenant
-    # live tests above stay below the breaker, so this exercises the
-    # error+skipped_breaker path end-to-end.
-    n = tg.MAX_CONSECUTIVE_ERRORS + 3
-    _stub_reports(monkeypatch, [f"db-{i}" for i in range(n)])
-    _patch_http(monkeypatch, per_tenant=True, put_result=(503, {"error": "down"}, None))
-    outcomes = tg.run(_args(apply=True, max_prs=100)).outcomes
-    statuses = {o.status for o in outcomes}
-    assert statuses == {"error", "skipped_breaker"}   # breaker actually tripped
-    assert tg._is_systemic_failure(outcomes, applied=True) is True
-
-
-# ---------------------------------------------------------------------------
-# #3054: the rc follows the plan, but is monotone in write-plane health.
-# A PR opened no longer marks the run healthy on its own: what counts is the
-# failure share of the ATTEMPTED set — errors plus circuit-breaker skips, over
-# every outcome that sent (or was going to send) a write. A --max-prs skip and
-# a skipped_nested sent nothing and say nothing about the write plane.
-# ---------------------------------------------------------------------------
-_OK = (200, {"status": "pending_review", "pr_url": "u", "pr_number": 1}, None)
-_DOWN = (503, {"error": "down"}, None)
-_PENDING = (409, {"code": "PENDING_PR_EXISTS", "existing_pr_url": "https://gh/1"}, None)
-
-
-def _main_rc(monkeypatch, tmp_path, tenants, put_results, **over):
-    """Run main() end to end; the PUT for tenants[i] answers put_results[i]."""
-    _stub_reports(monkeypatch, tenants)
-    answers = dict(zip(tenants, put_results))
-
-    def fake_get(url, *, timeout=10, headers=None):
-        tenant = url.rstrip("/").rsplit("/", 1)[-1]
-        return {"raw_yaml": _synth_tenant_yaml(tenant)}, None
-
-    def fake_put(url, yaml_body, headers, timeout):
-        return answers[url.rstrip("/").rsplit("/", 1)[-1]]
-
-    monkeypatch.setattr(tg, "http_get_json", fake_get)
-    monkeypatch.setattr(tg, "_http_put_yaml", fake_put)
-    args = _args(apply=True, config_dir=str(tmp_path), max_prs=100)
-    for k, v in over.items():
-        setattr(args, k, v)
-    monkeypatch.setattr(argparse.ArgumentParser, "parse_args", lambda self: args)
-    with pytest.raises(SystemExit) as exc:
-        _as_run(tg.main())
-    return exc.value.code
-
-
-def test_systemic_failure_true_when_pr_opened_but_rest_errored():
-    # The 0 → 1 change #3054 makes: one PR opened no longer hides a run whose
-    # other writes (≥ 90% of the attempted set) all failed.
-    outcomes = [_oc("pr_opened")] + [_oc("error")] * 9
-    assert tg._is_systemic_failure(outcomes, applied=True) is True
-
-
-def test_main_rc1_when_first_pr_opens_then_write_plane_dies(monkeypatch, tmp_path):
-    # Live path: 1 PR opened, then 5 errors trip the breaker and the remaining
-    # 6 tenants are breaker-skipped → (5 + 6) / 12 ≥ 0.9 → rc 1 (was 0).
-    tenants = [f"t{i}" for i in range(12)]
-    rc = _main_rc(monkeypatch, tmp_path, tenants, [_OK] + [_DOWN] * 11)
-    assert rc == tg.EXIT_VIOLATION
-
-
-def test_breaker_skip_has_its_own_status(monkeypatch):
-    # The two skips must be told apart, or a --max-prs skip would count as a
-    # failure once `opened > 0` no longer short-circuits.
-    _stub_reports(monkeypatch, [f"t{i}" for i in range(tg.MAX_CONSECUTIVE_ERRORS + 2)])
-    _patch_http(monkeypatch, per_tenant=True, put_result=_DOWN)
-    statuses = [o.status for o in tg.run(_args(apply=True, max_prs=100)).outcomes]
-    assert statuses == ["error"] * tg.MAX_CONSECUTIVE_ERRORS + ["skipped_breaker"] * 2
-
-
-def test_cap_skip_keeps_the_skipped_status(monkeypatch):
-    _stub_reports(monkeypatch, ["t0", "t1", "t2"])
-    _patch_http(monkeypatch, per_tenant=True, put_result=_OK)
-    statuses = [o.status for o in tg.run(_args(apply=True, max_prs=1)).outcomes]
-    assert statuses == ["pr_opened", "skipped", "skipped"]
-
-
-def test_main_rc0_when_cap_skips_dominate(monkeypatch, tmp_path):
-    # max_prs=1: 1 PR opened + 9 --max-prs skips. The skips sent nothing, so
-    # they are neither failures nor attempts → rc 0.
-    tenants = [f"t{i}" for i in range(10)]
-    rc = _main_rc(monkeypatch, tmp_path, tenants, [_OK] * 10, max_prs=1)
-    assert rc == tg.EXIT_OK
-
-
-def test_cap_skip_is_not_attempted():
-    # 9 errors + 1 PR opened is 0.9 of the attempted set. The 90 --max-prs
-    # skips sent nothing; counting them as attempts would dilute it to 0.09.
-    outcomes = [_oc("error")] * 9 + [_oc("pr_opened")] + [_oc("skipped")] * 90
-    assert tg._is_systemic_failure(outcomes, applied=True) is True
-
-
-def test_breaker_skip_counts_as_failure():
-    outcomes = [_oc("error")] * 5 + [_oc("skipped_breaker")] * 4 + [_oc("pr_opened")]
-    assert tg._is_systemic_failure(outcomes, applied=True) is True
-
-
-def test_main_rc0_when_every_write_is_already_pending(monkeypatch, tmp_path):
-    tenants = [f"t{i}" for i in range(4)]
-    assert _main_rc(monkeypatch, tmp_path, tenants, [_PENDING] * 4) == tg.EXIT_OK
-
-
-def _mixed_outcomes():
-    return ([tg.TenantOutcome("t0", "pr_opened", pr_url="u")]
-            + [tg.TenantOutcome(f"e{i}", "error", message="HTTP 503: down") for i in range(5)]
-            + [tg.TenantOutcome(f"b{i}", "skipped_breaker") for i in range(2)]
-            + [tg.TenantOutcome(f"c{i}", "skipped") for i in range(3)])
-
-
-def test_text_report_labels_and_counts_the_breaker_skip():
-    # The rc counts breaker skips as failures; the report must show them as such,
-    # apart from the --max-prs skips, or Summary cannot explain an rc 1.
-    plans = [_plan(t) for t in ("t0", "e0", "b0")]
-    text = tg.format_text_report(plans, _mixed_outcomes(), applied=True)
-    assert "[✗ skip (circuit breaker)] b0:" in text
-    line = _summary(text)
-    assert "5 error(s), 3 skipped (--max-prs), 2 skipped (circuit breaker);" in line
-
-
-def test_json_summary_counts_both_skips():
-    summary = tg.json_document([], _mixed_outcomes(), applied=True)["summary"]
-    assert (summary["errors"], summary["skipped"], summary["skipped_breaker"]) == (5, 3, 2)
-
-
-def test_main_rc0_on_empty_plan(monkeypatch, tmp_path):
-    assert _main_rc(monkeypatch, tmp_path, [], []) == tg.EXIT_OK
-
-
-def test_main_rc0_in_dry_run_even_if_writes_would_fail(monkeypatch, tmp_path):
-    tenants = [f"t{i}" for i in range(3)]
-    assert _main_rc(monkeypatch, tmp_path, tenants, [_DOWN] * 3, apply=False) == tg.EXIT_OK
-
-
-_RESPONSES = ("pr_opened", "already_pending", "no_changes", "error")
-
-
-@pytest.mark.parametrize("ratio,breaker", [(0.9, 5), (0.5, 2), (0.75, 3)])
-def test_rc_is_monotone_in_write_failures(monkeypatch, ratio, breaker):
-    """For a fixed plan, turning any one successful write into an error never
-    takes the rc from 1 to 0 — over every response sequence of length ≤ 7 and
-    several --max-prs values, through the real run() loop (breaker and cap).
-
-    At the shipped 0.9 a run of ≤ 7 tenants is rc 1 only when no write
-    succeeded, so the ratio and breaker are also lowered: monotonicity must
-    hold for any ratio, and the lower ones put successes inside rc-1 runs.
-    """
-    import itertools
-
-    monkeypatch.setattr(tg, "_SYSTEMIC_FAILURE_RATIO", ratio)
-    monkeypatch.setattr(tg, "MAX_CONSECUTIVE_ERRORS", breaker)
-    answers = {}
-
-    def fake_open(plan, args):
-        return tg.TenantOutcome(plan.tenant, answers[plan.tenant], [])
-
-    monkeypatch.setattr(tg, "open_governance_pr", fake_open)
-    all_tenants = [f"t{i}" for i in range(7)]
-    reports = {n: [_report(t, [_kr("mysql_connections", "2000", 100.0, -95.0,
-                                    recommend.CONFIDENCE_HIGH, p95=100.0)])
-                   for t in all_tenants[:n]] for n in range(8)}
-    current = {"n": 0}
-    monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports[current["n"]])
-
-    memo = {}
-
-    def rc(seq, max_prs):
-        key = (seq, max_prs)
-        if key not in memo:
-            current["n"] = len(seq)
-            answers.clear()
-            answers.update(zip(all_tenants, seq))
-            out = tg.run(_args(apply=True, max_prs=max_prs)).outcomes
-            ok = any(o.status in ("pr_opened", "already_pending", "no_changes") for o in out)
-            memo[key] = (1 if tg._is_systemic_failure(out, applied=True) else 0, ok)
-        return memo[key][0]
-
-    flips = 0
-    for n in range(8):
-        for seq in itertools.product(_RESPONSES, repeat=n):
-            for max_prs in (1, 2, 3, 7):
-                if rc(seq, max_prs) == 0:
-                    continue
-                for i, r in enumerate(seq):
-                    if r == "error":
-                        continue
-                    worse = seq[:i] + ("error",) + seq[i + 1:]
-                    assert rc(worse, max_prs) == 1, (seq, worse, max_prs)
-                    flips += 1
-    assert flips > 0
-    if ratio < 0.9:
-        # non-vacuous: some rc-1 run did have a write that succeeded
-        assert any(v == (1, True) for v in memo.values())
-
-
-# ---------------------------------------------------------------------------
-# 6. Bearer token resolution (ADR-027 machine-identity audit; #962 PR-1b-ii-b)
-# ---------------------------------------------------------------------------
-def test_resolve_auth_token_literal_flag_wins(monkeypatch, tmp_path):
-    # A literal --auth-token beats both the env and a token file.
-    monkeypatch.setenv("DA_GOVERN_TOKEN", "env-tok")
-    f = tmp_path / "tok"
-    f.write_text("file-tok", encoding="utf-8")
-    assert tg._resolve_auth_token(_args(auth_token="flag-tok", auth_token_file=str(f))) == "flag-tok"
-
-
-def test_resolve_auth_token_env_literal_when_no_flag(monkeypatch):
-    monkeypatch.setenv("DA_GOVERN_TOKEN", "env-tok")
-    assert tg._resolve_auth_token(_args(auth_token=None)) == "env-tok"
-
-
-def test_resolve_auth_token_reads_file_stripped(tmp_path, monkeypatch):
-    # A projected SA token is a rotated FILE — read it at call time, newline-stripped.
-    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
-    f = tmp_path / "token"
-    f.write_text("ksa-jwt-value\n", encoding="utf-8")
-    assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=str(f))) == "ksa-jwt-value"
-
-
-def test_resolve_auth_token_literal_beats_file(tmp_path, monkeypatch):
-    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
-    f = tmp_path / "token"
-    f.write_text("file-tok", encoding="utf-8")
-    assert tg._resolve_auth_token(_args(auth_token="lit", auth_token_file=str(f))) == "lit"
-
-
-def test_resolve_auth_token_env_literal_beats_explicit_file(tmp_path, monkeypatch):
-    # Documents the precedence: a literal token SOURCE (flag or DA_GOVERN_TOKEN env)
-    # wins over a file SOURCE — even an explicitly-passed --auth-token-file. The
-    # in-cluster CronJob sets ONLY --auth-token-file (no DA_GOVERN_TOKEN), so the
-    # ordering is never ambiguous there; pinned so any future reorder is deliberate.
-    monkeypatch.setenv("DA_GOVERN_TOKEN", "env-tok")
-    f = tmp_path / "token"
-    f.write_text("file-tok", encoding="utf-8")
-    assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=str(f))) == "env-tok"
-
-
-def test_resolve_auth_token_file_read_error_degrades_not_raises(tmp_path, monkeypatch, capsys):
-    # ADR-027 never-block: a missing/unreadable token file must NOT abort governance
-    # — it degrades to no Bearer (audit records no_token) with a stderr warning.
-    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
-    missing = tmp_path / "nope"
-    assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=str(missing))) == ""
-    assert "could not read" in capsys.readouterr().err
-
-
-def test_resolve_auth_token_malformed_utf8_degrades_not_raises(tmp_path, monkeypatch, capsys):
-    # A non-UTF-8 / corrupt token file raises UnicodeDecodeError (NOT an OSError
-    # subclass). The never-block contract must still hold — degrade to no Bearer,
-    # never crash governance on a mis-configured mount / partial write (#962).
-    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
-    f = tmp_path / "token"
-    f.write_bytes(b"\xff\xfe not valid utf-8")
-    assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=str(f))) == ""
-    assert "could not read" in capsys.readouterr().err
-
-
-# #3511: the token file as the ONLY credential (no identity headers, no
-# literal token) — unreadable is a named caller error, not a warning.
-def _sole(path):
-    return _args(auth_token=None, auth_token_file=str(path), identity_groups=None)
-
-
-@pytest.mark.parametrize("make, reason", [
-    (lambda d: d / "nope", "file_not_found"),                        # missing
-    (lambda d: d, "file_not_found"),                                 # a directory
-    (lambda d: (d / "t").write_bytes(b"\xff\xfe x") and d / "t", "file_not_utf8"),
-    (lambda d: (d / "t").write_bytes(b"") or d / "t", "file_empty"),
-    (lambda d: (d / "t").write_bytes(b" \n\t\n") and d / "t", "file_empty"),
-])
-def test_sole_credential_token_file_unreadable_is_a_caller_error(tmp_path, monkeypatch, make, reason):
-    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
-    path = make(tmp_path)
-    with pytest.raises(tg.CallerError) as exc:
-        tg._resolve_auth_token(_sole(path))
-    assert exc.value.reason == reason
-    assert "--auth-token-file" in str(exc.value) and str(path) in str(exc.value)
-
-
-def test_sole_credential_readable_token_file_is_its_token(tmp_path, monkeypatch):
-    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
-    f = tmp_path / "token"
-    f.write_text("ksa-jwt\n", encoding="utf-8")
-    assert tg._resolve_auth_token(_sole(f)) == "ksa-jwt"
-
-
-def test_empty_token_file_with_identity_headers_sends_no_bearer(tmp_path, monkeypatch):
-    """Not the only credential: an empty file stays no Bearer, no error."""
-    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
-    f = tmp_path / "token"
-    f.write_text("\n", encoding="utf-8")
-    assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=str(f))) == ""
-
-
-@pytest.mark.parametrize("over", [
-    {"identity_groups": "threshold-governance"},   # headers carry the authz
-    {"auth_token": "lit"},                          # a literal token is the credential
-])
-def test_token_file_is_not_sole_with_another_credential(over):
-    assert not tg._token_file_is_sole_credential(
-        _args(**{"auth_token": None, "auth_token_file": "/x", "identity_groups": None, **over}))
-
-
-def test_env_literal_token_makes_the_file_not_sole(monkeypatch):
-    monkeypatch.setenv("DA_GOVERN_TOKEN", "env-tok")
-    assert not tg._token_file_is_sole_credential(_sole("/x"))
-
-
-def test_sole_token_resolved_by_the_precheck_is_sent_for_the_whole_run(tmp_path, monkeypatch):
-    """A file gone after the precheck read it does not end the run between
-    tenants (PRs already opened would leave the report): the resolved token
-    is what every request sends."""
-    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
-    args = _sole(tmp_path / "gone")
-    args.resolved_sole_token = "jwt-from-precheck"
-    assert tg._auth_headers(args)["Authorization"] == "Bearer jwt-from-precheck"
-
-
-def test_apply_with_an_unreadable_sole_token_file_stops_before_any_write(tmp_path):
-    """End to end: `--apply --auth-token-file <missing>` without
-    `--identity-groups` exits 2 naming the flag — before run() reaches
-    tenant-api (no URL there is reachable: a request would be a different error)."""
-    import subprocess
-    import sys as _sys
-    env = {k: v for k, v in os.environ.items()
-           if k not in ("DA_GOVERN_TOKEN", "DA_GOVERN_GROUPS", "DA_GOVERN_TOKEN_FILE")}
-    missing = tmp_path / "no-token"
-    proc = subprocess.run(
-        [_sys.executable, str(REPO_ROOT / "scripts/tools/ops/threshold_govern.py"),
-         "--config-dir", str(tmp_path), "--apply", "--tenant-api-url", "http://127.0.0.1:9",
-         "--auth-token-file", str(missing), "--json"],
-        capture_output=True, text=True, encoding="utf-8", env=env, timeout=60, check=False)
-    assert proc.returncode == 2, proc.stderr
-    assert "--auth-token-file" in proc.stderr and str(missing) in proc.stderr
-    assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
-
-
-def test_resolve_auth_token_none_configured(monkeypatch):
-    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
-    assert tg._resolve_auth_token(_args(auth_token=None, auth_token_file=None)) == ""
-
-
-def test_auth_headers_bearer_and_identity_coexist(tmp_path, monkeypatch):
-    # THE ADR-027 invariant for the governance caller: the identity headers (authz)
-    # and the projected-token Bearer (audit) are sent TOGETHER — the audit is a
-    # side-channel, not a replacement for the header identity.
-    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
-    f = tmp_path / "token"
-    f.write_text("ksa-jwt", encoding="utf-8")
-    h = tg._auth_headers(_args(auth_token_file=str(f)))
-    assert h["Authorization"] == "Bearer ksa-jwt"
-    assert h["X-Forwarded-Email"] == "gov@p.local"
-    assert h["X-Forwarded-Groups"] == "threshold-governance"
-
-
-def test_auth_headers_no_token_still_has_identity(monkeypatch):
-    monkeypatch.delenv("DA_GOVERN_TOKEN", raising=False)
-    h = tg._auth_headers(_args(auth_token=None, auth_token_file=None))
-    assert "Authorization" not in h
-    assert h["X-Forwarded-Groups"] == "threshold-governance"
-
-
-# ---------------------------------------------------------------------------
-# 8. #916 Item A — lower-bound integration: by-design N/A (INFO) + force_manual
+# 5. #916 Item A — lower-bound integration: by-design N/A (INFO) + force_manual
 #    (manual-review section). N/A must LEAVE the ⚠ ungoverned list.
 # ---------------------------------------------------------------------------
 def _fm(key, tenant_reason, delta=None):
@@ -1420,11 +400,11 @@ def test_run_surfaces_not_applicable_and_force_manual(monkeypatch):
         _fm("db2_bufferpool_hit_ratio", "would relax the floor (lower it)", delta=40.0),
     ])]
     monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: reports)
-    res = tg.run(_args(apply=False))
+    res = tg.run(_args())
     assert [(u.tenant, u.key) for u in res.not_applicable] == [("db-a", "kafka_active_controllers")]
     assert [(u.tenant, u.key) for u in res.force_manual] == [("db-a", "db2_bufferpool_hit_ratio")]
     assert res.ungoverned == []                       # N/A left the ⚠ list
-    # force_manual / N/A never become an auto-PR plan
+    # force_manual / N/A never enter the plan
     assert [c.key for p in res.plans for c in p.changes] == ["mysql_connections"]
 
 
@@ -1432,7 +412,7 @@ def test_text_report_shows_force_manual_section_and_na_info():
     fm = [tg.ForceManualKey("db-a", "db2_bufferpool_hit_ratio",
                             "would relax the floor (lower it)", 40.0)]
     na = [tg.NotApplicableKey("db-b", "kafka_active_controllers", "by-design ...")]
-    out = tg.format_text_report([], [], applied=False, force_manual=fm, not_applicable=na)
+    out = tg.format_text_report([], force_manual=fm, not_applicable=na)
     # force_manual: a ⚠ manual-review detail line with the guardrail reason + miss delta
     assert "db-a / db2_bufferpool_hit_ratio" in out
     assert "would relax the floor" in out
@@ -1447,7 +427,7 @@ def test_text_report_force_manual_count_folded_into_summary():
         _kr("mysql_connections", "2000", 100.0, -95.0, recommend.CONFIDENCE_HIGH, p95=100.0)])
     plans = tg.build_governance_plan([report], 25.0)
     fm = [tg.ForceManualKey("db-b", "db2_bufferpool_hit_ratio", "relax", None)]
-    lines = tg.format_text_report(plans, [], applied=False, force_manual=fm).splitlines()
+    lines = tg.format_text_report(plans, force_manual=fm).splitlines()
     summary_idx = next(i for i, ln in enumerate(lines) if ln.startswith("Summary:"))
     detail_idx = next(i for i, ln in enumerate(lines) if "db-b / db2_bufferpool_hit_ratio" in ln)
     assert detail_idx < summary_idx                   # detail above the bottom line
@@ -1458,7 +438,7 @@ def test_text_report_force_manual_count_folded_into_summary():
 def test_json_report_includes_na_and_force_manual():
     fm = [tg.ForceManualKey("db-a", "db2_bufferpool_hit_ratio", "relax", 40.0)]
     na = [tg.NotApplicableKey("db-b", "kafka_active_controllers", "by-design ...")]
-    out = tg.json_document([], [], applied=False,
+    out = tg.json_document([],
                            not_applicable=na, force_manual=fm)
     assert out["summary"]["force_manual"] == 1
     assert out["summary"]["not_applicable"] == 1
@@ -1482,7 +462,7 @@ def test_govern_plan_table_tags_lower_bound_delta_with_miss():
               reason="lower-bound P5 floor → tighten (raise floor); miss-rate -40.0%")
     plans = tg.build_governance_plan([_report("db-a", [rec])], 25.0)
     assert plans and plans[0].changes                    # actionable tighten
-    out = tg.format_text_report(plans, [], applied=False)
+    out = tg.format_text_report(plans)
     assert any("db2_bufferpool_hit_ratio" in ln and "miss" in ln
                for ln in out.splitlines())
 
@@ -1507,7 +487,7 @@ class TestPrometheusEnvFallback:
 
         def fake_run(args):
             captured["url"] = args.prometheus
-            return SimpleNamespace(plans=[], outcomes=[], ungoverned=[],
+            return SimpleNamespace(plans=[], ungoverned=[],
                                    not_applicable=[], force_manual=[], inherited=[],
                                    not_measured=[])
 
@@ -1517,7 +497,7 @@ class TestPrometheusEnvFallback:
             "threshold_govern.py", "--config-dir", str(tmp_path), *extra])
         with pytest.raises(SystemExit) as exc_info:
             _as_run(tg.main())
-        assert exc_info.value.code == 0     # 空 outcomes → EXIT_OK
+        assert exc_info.value.code == 0     # 完整報告 → EXIT_OK
         return captured["url"]
 
     def test_uses_env_when_flag_absent(self, monkeypatch, tmp_path):
@@ -1538,157 +518,6 @@ class TestPrometheusEnvFallback:
         url = self._run_main_capture_url(
             monkeypatch, tmp_path, extra=("--prometheus", "http://cli:9099"))
         assert url == "http://cli:9099"
-
-
-# ---------------------------------------------------------------------------
-# #2929: --max-prs in the dry-run Summary, and its range
-# ---------------------------------------------------------------------------
-_THREE = ("db-a", "db-b", "db-c")
-
-
-def _summary(text):
-    [line] = [ln for ln in text.splitlines() if ln.startswith("Summary:")]
-    return line
-
-
-def test_dry_run_summary_names_the_cap_below_actionable():
-    plans = [_plan(t) for t in _THREE]
-    line = _summary(tg.format_text_report(plans, [], applied=False, max_prs=1))
-    assert line.startswith("Summary: 3 tenant(s) / 3 change(s) actionable; "
-                           "with --max-prs 1, at most 1 PR(s) would be opened.")
-    assert "would get a PR" not in line
-
-
-@pytest.mark.parametrize("max_prs", [3, 10, None])
-def test_dry_run_summary_unchanged_when_cap_covers_all(max_prs):
-    """Control for the test above: same plans, a cap that does not bite."""
-    plans = [_plan(t) for t in _THREE]
-    line = _summary(tg.format_text_report(plans, [], applied=False, max_prs=max_prs))
-    assert line.startswith("Summary: 3 tenant(s) / 3 change(s) would get a PR. "
-                           "Re-run with --apply")
-    assert "--max-prs" not in line
-
-
-def test_dry_run_summary_cap_ignores_nested_tenants():
-    """A tenant whose file is in a sub-directory gets no PR and does not use
-    up the cap (run() records it as skipped_nested), so 2 PR-able tenants and
-    one nested one under --max-prs 2 is not capped."""
-    nested = _plan("db-c")
-    nested.source_file = "sub/db-c.yaml"
-    plans = [_plan("db-a"), _plan("db-b"), nested]
-    line = _summary(tg.format_text_report(plans, [], applied=False, max_prs=2))
-    assert line.startswith("Summary: 2 tenant(s) / 2 change(s) would get a PR. ")
-    assert "--max-prs" not in line
-
-
-class TestMaxPrsCli:
-    def _main(self, monkeypatch, tmp_path, capsys, *extra):
-        import sys
-        ran = []
-
-        def fake_run(args):
-            ran.append(args.max_prs)
-            return tg.GovernanceResult([_plan(t) for t in _THREE], [], [])
-
-        monkeypatch.setattr(tg, "run", fake_run)
-        monkeypatch.setattr(sys, "argv", [
-            "threshold_govern.py", "--config-dir", str(tmp_path), *extra])
-        with pytest.raises(SystemExit) as exc:
-            _as_run(tg.main())
-        captured = capsys.readouterr()
-        return exc.value.code, ran, captured
-
-    @pytest.mark.parametrize("value", ["0", "-1"])
-    def test_below_one_is_caller_error(self, monkeypatch, tmp_path, capsys, value):
-        code, ran, captured = self._main(monkeypatch, tmp_path, capsys,
-                                         "--max-prs", value)
-        assert code == tg.EXIT_CALLER_ERROR
-        assert ran == []                       # refused before any work
-        assert "--max-prs" in captured.err
-
-    def test_one_is_accepted_and_reaches_the_summary(self, monkeypatch, tmp_path,
-                                                     capsys):
-        code, ran, captured = self._main(monkeypatch, tmp_path, capsys,
-                                         "--max-prs", "1")
-        assert code == tg.EXIT_OK
-        assert ran == [1]
-        assert "at most 1 PR(s) would be opened" in _summary(captured.out)
-
-
-# ---------------------------------------------------------------------------
-# #2942: --timeout must be above 0
-# ---------------------------------------------------------------------------
-class TestTimeoutCli:
-    def _main(self, monkeypatch, tmp_path, capsys, *extra):
-        import sys
-        ran = []
-
-        def fake_run(args):
-            ran.append(args.timeout)
-            return tg.GovernanceResult([], [], [])
-
-        monkeypatch.setattr(tg, "run", fake_run)
-        monkeypatch.setattr(sys, "argv", [
-            "threshold_govern.py", "--config-dir", str(tmp_path), *extra])
-        with pytest.raises(SystemExit) as exc:
-            _as_run(tg.main())
-        return exc.value.code, ran, capsys.readouterr()
-
-    @pytest.mark.parametrize("value", ["0", "-1", "nan", "inf"])
-    def test_not_above_zero_is_caller_error(self, monkeypatch, tmp_path, capsys, value):
-        """0 made every tenant-api call fail at once and a negative value
-        raised inside urlopen; with --apply both looked like a systemic
-        failure (rc 1). Refused at parse time, with or without --apply."""
-        code, ran, captured = self._main(monkeypatch, tmp_path, capsys,
-                                         "--timeout", value)
-        assert code == tg.EXIT_CALLER_ERROR
-        assert ran == []
-        assert "--timeout" in captured.err
-
-    def test_fraction_is_accepted(self, monkeypatch, tmp_path, capsys):
-        code, ran, _ = self._main(monkeypatch, tmp_path, capsys, "--timeout", "0.5")
-        assert code == tg.EXIT_OK
-        assert ran == [0.5]
-
-
-# ---------------------------------------------------------------------------
-# #2966: --throttle-seconds must be 0 or above (0 = do not wait)
-# ---------------------------------------------------------------------------
-class TestThrottleCli:
-    def _main(self, monkeypatch, tmp_path, capsys, *extra):
-        import sys
-        ran = []
-
-        def fake_run(args):
-            ran.append(args.throttle_seconds)
-            return tg.GovernanceResult([], [], [])
-
-        monkeypatch.setattr(tg, "run", fake_run)
-        monkeypatch.setattr(sys, "argv", [
-            "threshold_govern.py", "--config-dir", str(tmp_path), *extra])
-        with pytest.raises(SystemExit) as exc:
-            _as_run(tg.main())
-        return exc.value.code, ran, capsys.readouterr()
-
-    @pytest.mark.parametrize("value", ["-1", "nan", "inf"])
-    def test_below_zero_or_not_finite_is_caller_error(self, monkeypatch, tmp_path,
-                                                      capsys, value):
-        """A negative pause was skipped silently; ``inf`` raised OverflowError
-        in time.sleep AFTER the first PR had been opened, with no JSON report.
-        Refused at parse time, before any PR."""
-        code, ran, captured = self._main(monkeypatch, tmp_path, capsys,
-                                         "--throttle-seconds", value)
-        assert code == tg.EXIT_CALLER_ERROR
-        assert ran == []
-        assert "--throttle-seconds" in captured.err
-
-    @pytest.mark.parametrize("value, expected", [("0", 0.0), ("0.5", 0.5)])
-    def test_zero_and_fraction_are_accepted(self, monkeypatch, tmp_path, capsys,
-                                            value, expected):
-        code, ran, _ = self._main(monkeypatch, tmp_path, capsys,
-                                  "--throttle-seconds", value)
-        assert code == tg.EXIT_OK
-        assert ran == [expected]
 
 
 @pytest.mark.parametrize("value", ["99", "0", "-1"])
@@ -1725,20 +554,20 @@ class TestNotMeasured:
 
     def test_json_is_partial_and_lists_them(self):
         nm = tg.collect_not_measured(self._reports())
-        out = tg.json_document([], [], False, not_measured=nm)
+        out = tg.json_document([], not_measured=nm)
         assert (out["status"], out["reason"]) == ("partial", "prometheus_query_error")
         assert out["summary"]["not_measured"] == 2
         assert out["not_measured"][0] == {"tenant": "db-a", "key": "mysql_connections",
                                           "error": "connection refused"}
 
     def test_json_without_them_has_no_status(self):
-        out = tg.json_document([], [], False)
+        out = tg.json_document([])
         assert "status" not in out and out["summary"]["not_measured"] == 0
 
     def test_text_never_says_all_within_margin(self):
         """It used to: "No thresholds need governance (all within margin …)"."""
         nm = tg.collect_not_measured(self._reports())
-        text = tg.format_text_report([], [], False, not_measured=nm)
+        text = tg.format_text_report([], not_measured=nm)
         assert "all within margin" not in text
         assert "2 threshold(s) not measured" in text
         assert "db-a/mysql_connections: connection refused" in text
@@ -1758,32 +587,6 @@ class TestNotMeasured:
                                   "the report is partial (first: db-a/mysql_connections:")
         if json_output:
             assert json.loads(captured.out)["status"] == "partial"
-
-    def test_apply_still_writes_the_measured_and_partial_outranks_systemic(
-            self, monkeypatch, tmp_path, capsys):
-        """--apply opens the PRs of the thresholds that were measured, and the
-        partial verdict (2) wins over a write plane that failed outright (1)."""
-        import sys
-        monkeypatch.setattr(recommend, "run_analysis", lambda *a, **k: self._reports())
-        written = []
-
-        def fail_write(plan, args):
-            written.append((plan.tenant, [c.key for c in plan.changes]))
-            return tg.TenantOutcome(plan.tenant, "error", [c.key for c in plan.changes],
-                                    message="HTTP 500")
-        monkeypatch.setattr(tg, "open_governance_pr", fail_write)
-        monkeypatch.setattr(sys, "argv", [
-            "threshold_govern.py", "--config-dir", str(tmp_path), "--apply",
-            "--tenant-api-url", "http://tenant-api", "--identity-groups", "g", "--json"])
-        assert tg._is_systemic_failure(
-            [tg.TenantOutcome("db-a", "error", ["redis_memory"])], True)
-        with pytest.raises(SystemExit) as exc:
-            _as_run(tg.main())
-        assert written == [("db-a", ["redis_memory"])]
-        assert exc.value.code == tg.EXIT_CALLER_ERROR
-        out = json.loads(capsys.readouterr().out)
-        assert out["status"] == "partial"
-        assert out["summary"]["not_measured"] == 2
 
     def test_measured_keys_are_still_planned(self):
         plans = tg.build_governance_plan(self._reports(), 10.0)

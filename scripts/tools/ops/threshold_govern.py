@@ -1,68 +1,45 @@
 #!/usr/bin/env python3
-"""threshold_govern.py — 閾值治理迴路（Renovate-for-thresholds，#656）。
+"""threshold_govern.py — 閾值治理報告（唯讀，#656；ADR-027 §4 移除寫入路徑）。
 
-把現成的「閾值推薦引擎」(``threshold_recommend.py``) 接成**主動治理迴路**：
-定期跑推薦 → 過濾出值得介入的腐敗閾值 → 透過 tenant-api 為每個租戶開一個
-**可一鍵批准的 proposed-PR**（reuse ADR-011 WritePR / 單寫者 ADR-023），把
-「沒人主動回收的過鬆閾值」從「需要有人想起來」降到「批准一個 PR」。
+把現成的「閾值推薦引擎」(``threshold_recommend.py``) 的結果過一道治理閘門，列出
+**值得回頭調的腐敗閾值**（哪個租戶、哪個 key、現值、建議值、偏離幅度、信心等級）。
+本工具**只讀**：不呼叫 tenant-api、不開 PR、不改任何檔案；要調的值由人改進租戶檔。
 
-Activate the existing recommendation ENGINE as an active governance loop (the
-"DELIVER" rung of the PREVENT→DETECT→DELIVER ladder, #656): run the recommender,
-gate on rot magnitude + confidence, then open one approvable per-tenant PR via
-the tenant-api (single-writer, ADR-023) instead of a Slack nudge nobody acts on.
+Run the recommendation ENGINE, gate its output on rot magnitude + confidence, and
+report which thresholds are worth retuning. Read-only: it never calls tenant-api,
+opens no PR and writes no file (ADR-027 §4 removed the former ``--apply`` write
+path, its CronJob and its staleness alert). The operator applies a reported value
+to the tenant's own file by hand.
 
-設計重點（與 issue #656 鎖定設計一致）：
-  - **介入 = proposed-PR**：不自己 git push（違反單寫者）；POST 給 tenant-api
-    （唯一寫者）開 per-tenant PR。天然 human-in-loop（owner 批 PR）。
+設計重點：
   - **DETECT = recommender 的 delta%**：current vs P95 偏離幅度就是腐敗訊號。
-  - **閘門**：只納 |delta| ≥ ``--min-delta-pct`` 且 confidence ∈ {HIGH, MEDIUM}
-    （樣本不足不開 PR，防破窗 / 防噪音治理）。
-  - **dedup**：tenant-api 的錯誤答覆依其錯誤碼在錯誤契約（``tenant-api-errors.json``，
-    #3202）裡的 remedy 判讀（#3271）：``existing``（該租戶已有待審 PR）→ 視為已在處理、
-    跳過，所以重跑不會洗出重複 PR；``refresh_retry``（base 動了）→ 重新 GET／合併／驗證後
-    再 PUT 一次；其他 remedy、未知 remedy、契約沒列的碼 → error。
-  - **通道隔離**：對 tenant-api 帶 ``X-DA-Write-Source: threshold-governance``
-    header（PR-mode PUT 端消費）→ PR 走獨立 label / 標題 / 來源，不冒充
-    tenant-manager UI、不污染告警平面。
-  - **快照精神**：對 Prometheus 的查詢沿用 recommender（一次性 range 查詢），
-    排程在離峰 + ``concurrencyPolicy: Forbid``，不持續 hammer prod。
-  - **安全預設 dry-run**：不帶 ``--apply`` 只印出「會開哪些 PR」，**不發任何寫入**。
-
-讀-改-寫的正確性（重要）：本工具 GET 當前完整租戶 YAML → 把那份文字放進 ``--config-dir``
-的私有複本、當成租戶檔所在路徑的那個檔 → 交給 ``da-guard write --dry-run``（ADR-036 §2：寫
-conf.d 的只有 Go，#3206）把被推薦的 key 設成推薦值（字串，寫成 ``"45"``）→ 拿它回的文字 PUT。
-要改的 key 必須已是該租戶區塊的直接子純量（不新增 key）；da-guard 只改被編輯的節點，其餘鍵、
-註解、每個純量的寫法照舊，只重排版面（縮排 2 格、行尾註解前一個空格、空行可能消失；CRLF 與
-BOM 保留），並拒絕讀不了或驗證會點名的原檔、沒有讀取端的路徑、讀回不是「原檔套上這些編輯」
-的結果。不通過的租戶記為 ``error``、不送 PUT；沒有可用的 da-guard 結束碼 2。產出的 PR diff
-因此是那幾個值的變化，加上第一次經 da-guard 寫的檔的版面重排。
-自 #3064 起 tenant-api 只寫「API 管理」的租戶：租戶檔只宣告它自己，body 整檔逐位元組
-寫入。共用檔等其他形狀的租戶由 git 管理：GET 不給 ``raw_yaml``（本工具記為 error、
-不寫入），PUT 回 409 ``TENANT_GIT_MANAGED``（remedy ``fix_in_repo``，不當成 dedup）。
+  - **閘門**：只列 |delta| ≥ ``--min-delta-pct`` 且 confidence ∈ {HIGH, MEDIUM}
+    （樣本不足不列，防噪音治理）。
+  - **快照精神**：對 Prometheus 的查詢沿用 recommender（一次性 range 查詢）。
 
 只治理租戶檔自己寫的 key（#2116）：歸屬取自 ``da-guard effective`` 的逐 key 來源；
 繼承自 defaults／平台／profile 的 key 只列參考（``inherited``），不進計畫、不查
-Prometheus；寫回用檔案裡的拼法（舊別名照舊）。租戶檔在子目錄時 tenant-api 讀不到，
-不送 GET、記 ``skipped_nested``，不計入斷路器與 ``--max-prs``。
+Prometheus。每個計畫帶租戶檔的路徑（``source_file``，相對 ``--config-dir``），
+指出要改哪個檔。
 
-領域邊界：本工具是 recommender 的**主動層**，推薦邏輯/資料源完全沿用
+另外列出的類別（都不進計畫）：沒量成的閾值（``not_measured``，#3133，報告不完整、
+結束碼 2）、需人工 review 的（``force_manual``）、未分類的 lower-bound ``<``
+（``ungoverned_lower_bound``）、by-design 不適用的（``not_applicable``）。
+
+結束碼（dev-rules §13）：0 = 報告完整（不論有沒有腐敗閾值）；2 = 呼叫端錯誤（參數、
+路徑、da-guard 或 observed-map 不可用）或有閾值沒量成（報告不完整）。本工具不產生 1。
+
+領域邊界：本工具是 recommender 的**治理閘門層**，推薦邏輯/資料源完全沿用
 ``threshold_recommend``（Day-N，查 observed recording rule）。冷啟動粗估請用
 ``baseline_discovery``（Day-0，查 raw exporter）——⛔ 三者勿混用。
 
 Usage:
-  # Dry-run（預設，安全）：印出會為哪些租戶開 PR，不發任何寫入
+  # 列出需要調的閾值（不寫入任何東西）
   da-tools threshold-govern --config-dir ./conf.d/ --prometheus http://prometheus:9090
 
-  # 真正開 PR（--apply）：經 tenant-api 為每個租戶開 per-tenant governance PR
+  # 收緊閘門：只列偏離 ≥ 40% 的
   da-tools threshold-govern --config-dir ./conf.d/ --prometheus http://prometheus:9090 \\
-    --apply --tenant-api-url http://tenant-api.tenant-api.svc.cluster.local:8080 \\
-    --identity-email threshold-governance@platform.local \\
-    --identity-groups threshold-governance
-
-  # 收緊閘門 + 限制每次最多開 5 個 PR（防洪 / alert-fatigue budget）
-  da-tools threshold-govern --config-dir ./conf.d/ --prometheus http://prometheus:9090 \\
-    --min-delta-pct 40 --max-prs 5 --apply --tenant-api-url http://tenant-api.tenant-api.svc.cluster.local:8080 \\
-    --identity-groups threshold-governance
+    --min-delta-pct 40
 
   # JSON 輸出（pipeline / 觀測）
   da-tools threshold-govern --config-dir ./conf.d/ --prometheus http://prometheus:9090 --json
@@ -71,16 +48,9 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import json
 import os
-import re
 import sys
-import time
-import urllib.error
-import urllib.parse
-import urllib.request
 from dataclasses import asdict, dataclass, field
-from pathlib import Path
 from typing import Any, Optional
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -91,22 +61,15 @@ from _lib_python import (  # noqa: E402
     add_prometheus_arg,
     detect_cli_lang,
     exit_on_yaml_file_error,
-    non_negative_seconds,
     parse_duration_seconds,
-    positive_seconds,
 )
-from _lib_compat import find_project_root  # noqa: E402
-# tenant-api GETs (not Prometheus): the tuple reader, by name in test_query_error's gate
-from _lib_prometheus import http_get_json  # noqa: E402
 from _lib_tenant_values import exit_on_served_values_error  # noqa: E402  (#2116)
-from _lib_parse_cache import exit_on_parse_tree_error  # noqa: E402  (ADR-036 §2, #2906)
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
-from _lib_prometheus import _validate_url_scheme  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report)
+    EXIT_CALLER_ERROR, EXIT_OK, CallerError, Report)
 
-# Reuse the recommendation engine wholesale — threshold_govern is its active
+# Reuse the recommendation engine wholesale — threshold_govern is its gate
 # layer, never a re-implementation (the engine owns percentiles / observed-map /
 # direction-skip / confidence). Importing runs only its module-level setup; its
 # main() is __main__-guarded.
@@ -114,26 +77,8 @@ import threshold_recommend as recommend  # noqa: E402
 
 _LANG = detect_cli_lang()
 
-# The allowlisted X-DA-Write-Source value the tenant-api maps to the governance
-# PR channel (distinct label/title/source). MUST match the Go const
-# handler.WriteSourceThresholdGovernance.
-WRITE_SOURCE = "threshold-governance"
-
 # Governance defaults (tunable via flags).
-DEFAULT_MIN_DELTA_PCT = 25.0   # only intervene past meaningful rot (engine margin is 5%)
-DEFAULT_MAX_PRS = 10           # cap PRs per run — anti-flood / alert-fatigue budget
-DEFAULT_THROTTLE_SECONDS = 2.0  # pause between tenant writes (don't stampede the writer)
-DEFAULT_IDENTITY_EMAIL = "threshold-governance@platform.local"
-# Circuit-break: stop attempting after this many CONSECUTIVE errors so a degraded
-# write plane (503 / git contention) isn't hammered once per remaining tenant.
-MAX_CONSECUTIVE_ERRORS = 5
-# #656 dead-man's-switch: an --apply run whose failure share (errors + breaker
-# skips) reaches this fraction of the attempted set is a SYSTEMIC write failure and
-# exits non-zero (#3054: whether or not a PR was opened). < 1.0 so a single surviving
-# already_pending can't mask a near-total outage (Gemini adversarial review); high
-# enough that ordinary partial degradation (a few flaky tenants among many successes)
-# does NOT trip it.
-_SYSTEMIC_FAILURE_RATIO = 0.90
+DEFAULT_MIN_DELTA_PCT = 25.0   # only report meaningful rot (engine margin is 5%)
 
 
 # ---------------------------------------------------------------------------
@@ -146,7 +91,7 @@ class PlannedChange:
     key: str
     current_value: Any
     recommended: float
-    new_value: str          # conf.d-quoted string actually written (e.g. '"45"')
+    new_value: str          # the conf.d-quoted value to set by hand (e.g. '"45"')
     delta_pct: float
     confidence: str
     p95: Optional[float]
@@ -164,31 +109,12 @@ class TenantPlan:
 
 
 @dataclass
-class TenantOutcome:
-    """The result of attempting (or simulating) a governance PR for one tenant."""
-
-    tenant: str
-    # pr_opened | already_pending | no_changes | error | skipped |
-    # skipped_breaker | skipped_nested.
-    #   skipped: --max-prs reached this run (no request was sent)
-    #   skipped_breaker (#3054): not attempted because the circuit breaker
-    #     tripped after MAX_CONSECUTIVE_ERRORS consecutive errors
-    #   skipped_nested (#2116): the tenant's file is in a sub-directory, which
-    #     tenant-api's tenant read does not cover — no request was sent
-    status: str
-    keys: list[str] = field(default_factory=list)
-    pr_url: str = ""
-    pr_number: int = 0
-    message: str = ""
-
-
-@dataclass
 class UngovernedKey:
     """A threshold governance cannot act on — a bare/half-resolved lower-bound
     ``<`` still engine-skipped (#916 left it needs_review / not-supported).
 
     Surfaced so the un-classified ``<`` tail is an OBSERVABLE blind spot, not a
-    silent coverage hole: these never reach a PR (``recommended is None`` fails
+    silent coverage hole: these never reach the plan (``recommended is None`` fails
     the gate). After #916 the real map has none of these (every ``<`` key is
     classified percentile-lower or not-applicable); the field stays for a
     hand-edited / half-resolved entry.
@@ -225,7 +151,7 @@ class ForceManualKey:
 
     This is the floor-rot CORE signal — a floor drifting toward relaxation must
     never be invisible — so it gets its own manual-review section + summary count,
-    distinct from the auto-PR plan and the by-design N/A INFO.
+    distinct from the plan and the by-design N/A INFO.
     """
 
     tenant: str
@@ -248,8 +174,8 @@ class NotMeasuredKey:
 @dataclass
 class InheritedKey:
     """A threshold a tenant inherits from a defaults / platform / profile file
-    (#2116): its value is not in the tenant's file, so a governance PR on that
-    file cannot change it and must not pin it. Listed for reference only (not
+    (#2116): its value is not in the tenant's file, so retuning that file
+    cannot change it and must not pin it. Listed for reference only (not
     queried; threshold-recommend lists it the same way)."""
 
     tenant: str
@@ -266,7 +192,6 @@ class GovernanceResult:
     """
 
     plans: list[TenantPlan]
-    outcomes: list[TenantOutcome]
     ungoverned: list[UngovernedKey]
     not_applicable: list[NotApplicableKey] = field(default_factory=list)
     force_manual: list[ForceManualKey] = field(default_factory=list)
@@ -280,12 +205,12 @@ class GovernanceResult:
 def is_governance_actionable(
     rec: "recommend.KeyRecommendation", min_delta_pct: float
 ) -> bool:
-    """True iff this recommendation is strong enough to warrant a proposed-PR.
+    """True iff this recommendation is strong enough to report as rotten.
 
-    Stricter than the engine's ``_exportable`` (5% margin): a governance PR fires
+    Stricter than the engine's ``_exportable`` (5% margin): a key is reported
     only when the threshold has drifted meaningfully (``|delta| >= min_delta_pct``)
     AND the recommendation rests on enough samples (HIGH/MEDIUM confidence). The
-    confidence floor is the anti-noise guard — we never nag an operator to retune
+    confidence floor is the anti-noise guard — we never tell an operator to retune
     a threshold off a thin sample (防破窗). Since #2969 ``_exportable`` applies the
     same confidence floor — both call ``recommend.confidence_actionable`` — so at
     an equal margin the two agree; only the margin (5% vs ``min_delta_pct``)
@@ -307,7 +232,7 @@ def is_governance_actionable(
 
 
 def _quoted_value(rec: "recommend.KeyRecommendation") -> str:
-    """Render a recommendation as the conf.d string literal to write (quoted)."""
+    """Render a recommendation as the conf.d string literal to set (quoted)."""
     return '"' + recommend._format_threshold_value(rec.recommended) + '"'
 
 
@@ -317,8 +242,8 @@ def build_governance_plan(
     """Filter the engine's reports down to per-tenant actionable change sets.
 
     Only `report.keys` — the keys the tenant's own file writes — can enter a
-    plan (#2116): an inherited key (`report.inherited`) is not in the file the
-    PR edits, and writing it there would pin the tenant."""
+    plan (#2116): an inherited key (`report.inherited`) is not in the tenant's
+    file, and setting it there would pin the tenant."""
     plans: list[TenantPlan] = []
     for report in reports:
         changes = [
@@ -355,18 +280,6 @@ def collect_inherited(
     return out
 
 
-def _is_nested(plan: TenantPlan) -> bool:
-    """The tenant's file sits in a sub-directory of --config-dir (#2116).
-    tenant-api reads a tenant's file at the top level of its config dir only,
-    so a GET for this tenant cannot return the file the change belongs in."""
-    return "/" in plan.source_file
-
-
-def _split_nested(plans: list[TenantPlan]) -> tuple[list[TenantPlan], list[TenantPlan]]:
-    """(plans a PR can be opened for, plans whose tenant file is nested)."""
-    return ([p for p in plans if not _is_nested(p)], [p for p in plans if _is_nested(p)])
-
-
 # The recommender marks lower-bound ``<`` thresholds (hit-ratio / availability —
 # where rot means LOWERING a floor) as skipped: a P95-upper recommendation would
 # REDUCE protection, so the engine emits ``recommended=None`` and never queries
@@ -383,7 +296,7 @@ def collect_ungoverned_lower_bound(
 
     These fail the gate silently (``recommended is None``), so surfacing a count
     keeps any un-classified ``<`` tail observable instead of an invisible coverage
-    hole. NOT actionable here (no PR) — they need manual classification. After
+    hole. NOT in the plan — they need manual classification. After
     #916 the real map yields none (every ``<`` is percentile-lower or N/A); the
     detector stays for hand-edited entries.
     """
@@ -464,571 +377,22 @@ def collect_not_measured(
 _STAGES: dict[str, str] = {}
 
 
-def _cleanup_stages() -> None:
-    import shutil
-    for tmp in _STAGES.values():
-        shutil.rmtree(tmp, ignore_errors=True)
-    _STAGES.clear()
 
-
-def _stage(config_dir: Optional[str]) -> Path:
-    """A private copy of *config_dir* (`<tmp>/conf.d`; an empty one for a
-    missing or unnamed directory), made once per process: the tree the live
-    text is edited in, so `da-guard write` reads the tenant file with the role
-    it has in the real tree. Directories, regular files and symlinks are
-    copied (a symlink as a link); anything else (a FIFO, a socket) is left
-    out — a tree holding one is refused by the run's read before any edit."""
-    import atexit
-    import shutil
-    import stat
-    import tempfile
-
-    key = os.path.abspath(config_dir) if config_dir else ""
-    if key not in _STAGES:
-        if not _STAGES:
-            atexit.register(_cleanup_stages)
-        tmp = tempfile.mkdtemp(prefix="threshold-govern-")
-        dst = Path(tmp) / "conf.d"
-
-        def _special(d: str, names: list[str]) -> list[str]:
-            out = []
-            for n in names:
-                mode = os.lstat(os.path.join(d, n)).st_mode
-                if not (stat.S_ISDIR(mode) or stat.S_ISREG(mode) or stat.S_ISLNK(mode)):
-                    out.append(n)
-            return out
-        try:
-            if key and os.path.isdir(key):
-                shutil.copytree(key, dst, symlinks=True, ignore=_special)
-            else:
-                dst.mkdir()
-        except OSError:
-            shutil.rmtree(tmp, ignore_errors=True)
-            raise
-        _STAGES[key] = tmp
-    return Path(_STAGES[key]) / "conf.d"
-
-
-def edit_live_yaml(
-    raw_yaml: str, tenant: str, new_values: dict[str, str],
-    *, config_dir: Optional[str] = None, rel: str = "",
-) -> tuple[Optional[str], Optional[str]]:
-    """The live tenant text with ``new_values`` set, as ``da-guard write``
-    writes it (ADR-036 §2, #3206): ``(text, None)``, or ``(None, why)``
-    when the edit is refused.
-
-    ``new_values`` maps key → the string to write (``"45"``; the plan's
-    recommendation as `_quoted_value` formats it): each key must already be a
-    scalar DIRECT child of ``tenant``'s
-    block in the live text (as ``da-guard parse-tree`` reads it) — a key
-    missing there is refused, never added. The live text is laid out as the
-    file at *rel* (``<tenant>.yaml`` when unknown) of a private copy of
-    *config_dir* (`_stage`; a missing *config_dir* is an empty tree) and sent
-    to ``da-guard write --dry-run``: it applies the edits on yaml.v3's node
-    tree — every other node, comment and spelling kept, the file only
-    re-laid out (2-space indentation, one space before a trailing comment,
-    blank lines may go; CRLF and a BOM kept) — and refuses an original it
-    cannot read, a path no reader reads, or a result that validation would
-    name or that does not read back as the original with these edits. The
-    value is written as a string (``"45"``). *rel* must be one file name
-    (the tool skips a tenant file in a sub-directory before this); a name
-    that is not, or a stage file that cannot be laid out (a directory of
-    that name, …), is that tenant's error. No usable da-guard, or one that
-    fails, raises ``_lib_parse_tree.ParseTreeError``.
-    """
-    import _lib_confedit  # lazy: keeps `--dry-run` import-light
-    import _lib_parse_tree
-
-    rel = rel or f"{tenant}.yaml"
-    if (not rel or rel in (".", "..") or "/" in rel or "\\" in rel
-            or os.path.isabs(rel) or "\0" in rel):
-        return None, f"the tenant file path {rel!r} is not one file name in --config-dir"
-    ops = [_lib_confedit.set_op(["tenants", tenant, key], _lib_confedit.str_value(text))
-           for key, text in sorted(new_values.items())]
-    try:
-        root = _stage(config_dir)
-    except OSError as exc:  # shutil.Error included: a file it could not copy
-        return None, f"could not copy {config_dir} to edit the live text in: {exc}"
-    target = root / rel
-    data = raw_yaml.encode("utf-8")
-    try:
-        saved = target.read_bytes() if target.is_file() and not target.is_symlink() else None
-        link = os.readlink(target) if target.is_symlink() else None
-        if target.is_symlink() or target.exists():
-            target.unlink()
-        target.write_bytes(data)
-    except OSError as exc:  # e.g. a directory of that name in --config-dir
-        return None, f"could not lay out the live text as {rel} to edit it: {exc}"
-    try:
-        try:
-            node = _lib_parse_tree.load_file(root, rel, data).node(rel)
-        except (_lib_parse_tree.FileUnreadable, KeyError):
-            node = None  # da-guard write names it (original_unreadable / not_read)
-        if node is not None:
-            tenants = node.get("tenants")
-            block = (tenants.get(tenant) if isinstance(tenants, dict)
-                     and not _lib_parse_tree.is_scalar(tenants) else None)
-            if not isinstance(block, dict) or _lib_parse_tree.is_scalar(block):
-                return None, f"tenant {tenant!r} has no mapping block in the live config"
-            missing = sorted(k for k in new_values
-                             if not _lib_parse_tree.is_scalar(block.get(k)))
-            if missing:
-                return None, f"keys not found in live config: {missing}"
-        try:
-            doc = _lib_confedit.edit(root, rel, ops, dry_run=True)
-        except _lib_confedit.EditError as exc:
-            return None, f"da-guard write {exc.status} ({exc.reason}): {exc.message}"
-    finally:
-        # The stage back as it was copied, for the next tenant: best effort
-        # (a stage that cannot be restored shows in that tenant's own read).
-        try:
-            target.unlink(missing_ok=True)
-            if link is not None:
-                os.symlink(link, target)
-            elif saved is not None:
-                target.write_bytes(saved)
-        except OSError:
-            pass
-    return (raw_yaml if doc["status"] == _lib_confedit.UNCHANGED else doc["content"]), None
-
-
-# ---------------------------------------------------------------------------
-# tenant-api client (read-modify-write a per-tenant governance PR)
-# ---------------------------------------------------------------------------
-def _token_file_is_sole_credential(args: argparse.Namespace) -> bool:
-    """True when the token file is the request's only credential: no
-    identity headers (``--identity-groups``) and no literal token
-    (``--auth-token`` / ``DA_GOVERN_TOKEN``) — the oauth2-proxy mode the
-    ``--apply`` precheck lets through on ``--auth-token-file`` alone (#3511)."""
-    literal = args.auth_token or os.environ.get("DA_GOVERN_TOKEN", "")
-    return bool(args.auth_token_file) and not literal and not args.identity_groups
-
-
-def _resolve_auth_token(args: argparse.Namespace) -> str:
-    """Resolve the Bearer token: a literal (``--auth-token`` / ``DA_GOVERN_TOKEN``)
-    wins, else a token FILE (``--auth-token-file`` / ``DA_GOVERN_TOKEN_FILE``) — a
-    Kubernetes audience-bound projected SA token (ADR-027). kubelet rotates the
-    file, so it is read at call time (this one-shot CLI reads it once per run).
-
-    What an unreadable token file means depends on what else authenticates
-    the request (#3511):
-
-    * identity headers are sent (``--identity-groups``): the Bearer only
-      feeds tenant-api's machine-identity AUDIT, which never gates the write;
-      authz rides on the headers. The read error degrades to no Bearer (the
-      audit records no_token) with a warning (#962).
-    * the file is the only credential (`_token_file_is_sole_credential`): a
-      request without it carries no credential at all and is refused at the
-      proxy, far from the cause. The read error is a named caller error
-      (rc 2): the path through `_lib_paths.classify_path`, its content
-      when it is not UTF-8 or holds nothing but whitespace (client-go's
-      fileTokenSource refuses an empty token the same way). ``--apply`` resolves it once, before any
-      write, and the whole run sends that token (``resolved_sole_token``).
-
-    Returns "" when no token is configured or the file cannot be read.
-    """
-    literal = args.auth_token or os.environ.get("DA_GOVERN_TOKEN", "")
-    if literal:
-        return literal
-    if not args.auth_token_file:
-        return ""
-    # Resolved once by the --apply precheck (#3511): the run sends what it
-    # judged, so a file gone mid-run cannot end it after PRs were opened.
-    resolved = getattr(args, "resolved_sole_token", None)
-    if resolved is not None:
-        return resolved
-    sole = _token_file_is_sole_credential(args)
-    flag = "--auth-token-file"
-    if sole:
-        problem = classify_path(args.auth_token_file, "file", lang=_LANG, flag=flag)
-        if problem is not None:
-            raise CallerError(
-                f"唯一憑證讀不到: {problem.message}" if _LANG == "zh" else
-                f"the only credential cannot be read: {problem.message}",
-                problem.reason)
-    try:
-        with open(args.auth_token_file, encoding="utf-8") as fh:
-            token = fh.read().strip()
-        if sole and not token:
-            # As client-go's fileTokenSource: an empty token is no token.
-            shown = safe_label(str(args.auth_token_file))
-            raise CallerError(
-                f"唯一憑證讀不到: {flag} {shown}: 檔案是空的" if _LANG == "zh" else
-                f"the only credential cannot be read: {flag} {shown}: the file is empty",
-                "file_empty")
-        return token
-    except (OSError, UnicodeDecodeError) as exc:
-        # OSError = I/O failure; UnicodeDecodeError = a non-UTF-8/corrupt file
-        # (NOT an OSError subclass).
-        if sole:
-            shown = safe_label(str(args.auth_token_file))
-            if isinstance(exc, UnicodeDecodeError):
-                why = "不是 UTF-8" if _LANG == "zh" else "not UTF-8"
-                reason = "file_not_utf8"
-            else:
-                why = exc.strerror or str(exc)
-                reason = "file_not_accessible"
-            raise CallerError(
-                f"唯一憑證讀不到: {flag} {shown}: {why}" if _LANG == "zh" else
-                f"the only credential cannot be read: {flag} {shown}: {why}",
-                reason) from exc
-        print(f"warning: could not read --auth-token-file "
-              f"{args.auth_token_file!r}: {exc}; continuing without a Bearer "
-              f"(tenant-api machine-identity audit will record no_token)",
-              file=sys.stderr)
-    return ""
-
-
-def _auth_headers(args: argparse.Namespace) -> dict[str, str]:
-    """Identity + audit headers for the tenant-api call.
-
-    Direct in-cluster mode injects ``X-Forwarded-Email`` / ``X-Forwarded-Groups``
-    (the tenant-api RBAC reads these — see rbac/middleware.go); a NetworkPolicy
-    must restrict who can reach the API directly with injected identity. An
-    oauth2-proxy-fronted deployment instead passes a Bearer and lets the proxy
-    inject identity. The Bearer may ALSO be a Kubernetes projected SA token
-    (``--auth-token-file``) that tenant-api audits (ADR-027 machine-identity);
-    that audit is orthogonal to authz, so the identity headers and the Bearer
-    may (and, for in-cluster governance, do) coexist.
-    """
-    headers: dict[str, str] = {"X-DA-Write-Source": WRITE_SOURCE}
-    if args.identity_email:
-        headers["X-Forwarded-Email"] = args.identity_email
-    if args.identity_groups:
-        headers["X-Forwarded-Groups"] = args.identity_groups
-    token = _resolve_auth_token(args)
-    if token:
-        headers["Authorization"] = "Bearer " + token
-    return headers
-
-
-def _http_put_yaml(
-    url: str, yaml_body: str, headers: dict[str, str], timeout: float
-) -> tuple[int, Optional[dict], Optional[str]]:
-    """PUT a raw-YAML body. Returns ``(status_code, parsed_json|None, error|None)``.
-
-    The tenant-api PUT commits the body verbatim over the tenant's own file; it
-    writes only an API-managed tenant (#3064: a git-managed one, e.g. in a file
-    shared with other tenants, is a 409 TENANT_GIT_MANAGED). The body is sent as
-    ``application/yaml`` (NOT JSON-wrapped). The status code and parsed body are
-    surfaced so the caller can classify a refusal by its code's remedy
-    (``classify_error_answer``).
-    """
-    scheme_err = _validate_url_scheme(url)
-    if scheme_err:
-        return 0, None, scheme_err
-    req = urllib.request.Request(  # nosec B310 — scheme validated above
-        url, data=yaml_body.encode("utf-8"), method="PUT"
-    )
-    req.add_header("Content-Type", "application/yaml")
-    for k, v in headers.items():
-        req.add_header(k, v)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:  # nosec B310
-            body = resp.read().decode("utf-8")
-            return resp.status, (json.loads(body) if body else {}), None
-    except urllib.error.HTTPError as exc:
-        body = ""
-        try:
-            body = exc.read().decode("utf-8")
-        except Exception:  # noqa: BLE001 — body is best-effort diagnostics only
-            pass
-        parsed = None
-        if body:
-            try:
-                parsed = json.loads(body)
-            except ValueError:
-                parsed = {"raw": body[:300]}
-        return exc.code, parsed, None
-    except (urllib.error.URLError, OSError) as exc:
-        return 0, None, str(exc)
-
-
-# ---------------------------------------------------------------------------
-# tenant-api error contract (#3202 / #3271)
-# ---------------------------------------------------------------------------
-# What a non-200 answer means is NOT decided here. tenant-api gives every error
-# a code, and every code ONE remedy, in its internal/errcode; cmd/gen-error-contract
-# writes that table to tenant-api-errors.json (drift-gated by `make
-# error-contract-check`). This tool reads the code off the answer, the remedy off
-# the contract, and acts on the remedy through _REMEDY_ACTIONS below — so a code
-# tenant-api adds under an existing remedy is handled without touching this file.
-_ERROR_CONTRACT_BASENAME = "tenant-api-errors.json"
-# Where the generator writes it in a checkout (gen-error-contract's contractRel).
-_ERROR_CONTRACT_REPO_DIR = ("tools", "portal", "src", "interactive", "tools",
-                            "_common", "data")
-
-# Remedy → what this tool does with a PUT answering it. ⛔ Every remedy the
-# contract can carry is listed, deliberately, error ones included: the test
-# test_every_contract_remedy_has_an_explicit_action compares this table with the
-# contract's remedies, so a remedy tenant-api adds turns CI red until someone
-# decides here what it means for a governance write. At run time a remedy missing
-# from the table (or a code missing from the contract) is an error — fail-closed,
-# never a silent dedup skip.
-#   dedup — something already there stands in the way (an open PR/MR for this
-#           tenant): a prior run's change is in flight → already_pending.
-#   retry — what the PUT was prepared on changed: GET, re-merge, re-verify and PUT
-#           once more; a second refusal is reported as an error.
-#   error — recorded as this tenant's error (the next scheduled run tries again).
-_REMEDY_ACTIONS: dict[str, str] = {
-    "existing": "dedup",
-    "refresh_retry": "retry",
-    "retry_after": "error",
-    "fix_request": "error",
-    "fix_in_repo": "error",
-    "choose_other": "error",
-    "permission": "error",
-    "operator": "error",
-    "not_found": "error",
-    "refresh": "error",
-}
-
-# Attempts per tenant for a refresh_retry answer: the first PUT plus one retry.
-_MAX_PUT_ATTEMPTS = 2
-
-
-class ErrorContractError(RuntimeError):
-    """tenant-api-errors.json is missing or not the generator's shape."""
-
-
-_ERROR_REMEDIES: Optional[dict[str, str]] = None
-
-
-def _find_error_contract() -> Optional[Path]:
-    """Locate tenant-api-errors.json in either shipping layout.
-
-    Flat first: the da-tools image copies it beside this module (build.sh
-    ``REPO_DATA_FILES``, paired by ``REQUIRED_DATA_FILES`` in
-    check_build_completeness.py) and has no repo tree. Otherwise the
-    generator's output path under THIS tree's root (``find_project_root``).
-    """
-    here = Path(__file__).resolve().parent
-    flat = here / _ERROR_CONTRACT_BASENAME
-    if flat.is_file():
-        return flat
-    root = find_project_root(here)
-    if root is not None:
-        candidate = root.joinpath(*_ERROR_CONTRACT_REPO_DIR, _ERROR_CONTRACT_BASENAME)
-        if candidate.is_file():
-            return candidate
-    return None
-
-
-def load_error_remedies(path: Optional[Path] = None) -> dict[str, str]:
-    """``{code: remedy}`` from tenant-api's error contract. Fails closed.
-
-    Raises ErrorContractError when the file is absent or is not
-    ``{"codes": [{"code": str, "remedy": str, ...}, ...]}``.
-    """
-    if path is None:
-        path = _find_error_contract()
-    if path is None:
-        raise ErrorContractError(
-            f"{_ERROR_CONTRACT_BASENAME} not found beside this tool nor under this "
-            f"tree's {'/'.join(_ERROR_CONTRACT_REPO_DIR)}/ — tenant-api answers "
-            "cannot be classified")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            doc = json.load(fh)
-    except (OSError, ValueError) as exc:
-        raise ErrorContractError(f"cannot read {path}: {exc}") from exc
-    codes = doc.get("codes") if isinstance(doc, dict) else None
-    if not isinstance(codes, list) or not codes:
-        raise ErrorContractError(f"{path}: no 'codes' list")
-    remedies: dict[str, str] = {}
-    for row in codes:
-        code = row.get("code") if isinstance(row, dict) else None
-        remedy = row.get("remedy") if isinstance(row, dict) else None
-        if not isinstance(code, str) or not code or not isinstance(remedy, str) or not remedy:
-            raise ErrorContractError(f"{path}: malformed row {row!r}")
-        remedies[code] = remedy
-    return remedies
-
-
-def _error_remedies() -> dict[str, str]:
-    """The contract's ``{code: remedy}``, loaded once per process."""
-    global _ERROR_REMEDIES
-    if _ERROR_REMEDIES is None:
-        _ERROR_REMEDIES = load_error_remedies()
-    return _ERROR_REMEDIES
-
-
-def classify_error_answer(body: Any) -> tuple[str, str, str]:
-    """``(action, code, remedy)`` for a non-200 tenant-api answer.
-
-    *action* is one of ``_REMEDY_ACTIONS``' values. An answer with no code, a
-    code the contract does not list, or a remedy the table does not handle is
-    ``error`` — fail-closed.
-    """
-    code = body.get("code") if isinstance(body, dict) else None
-    if not isinstance(code, str) or not code:
-        return "error", "", ""
-    remedy = _error_remedies().get(code, "")
-    return _REMEDY_ACTIONS.get(remedy, "error"), code, remedy
-
-
-def _error_answer_message(status: int, body: Any, code: str, remedy: str,
-                          attempts: int) -> str:
-    detail = ""
-    if isinstance(body, dict):
-        detail = body.get("error") or body.get("message") or json.dumps(body)[:200]
-    head = f"HTTP {status}" + (f" {code}" if code else "")
-    if code and not remedy:
-        note = " (code not in tenant-api's error contract)"
-    elif remedy and remedy not in _REMEDY_ACTIONS:
-        note = f" (remedy {remedy!r} not handled by this tool)"
-    elif remedy:
-        note = f" (remedy {remedy})"
-    else:
-        note = ""
-    if attempts > 1:
-        note += f" after {attempts} attempts"
-    return f"{head}: {detail}{note}"
-
-
-def _prepare_put_body(plan: TenantPlan, args: argparse.Namespace, get_url: str,
-                      headers: dict, keys: list[str]) -> "str | TenantOutcome":
-    """GET the live tenant YAML, have da-guard write set the changes; the body to PUT.
-
-    Returns a TenantOutcome (``error``) instead when any step refuses.
-    """
-    detail, err = http_get_json(get_url, timeout=args.timeout, headers=headers)
-    if err:
-        return TenantOutcome(plan.tenant, "error", keys, message=f"GET failed: {err}")
-    raw_yaml = (detail or {}).get("raw_yaml")
-    if not raw_yaml:
-        return TenantOutcome(
-            plan.tenant, "error", keys, message="GET returned no raw_yaml"
-        )
-
-    new_values = {c.key: recommend._format_threshold_value(c.recommended)
-                  for c in plan.changes}
-    import _lib_parse_tree  # lazy, as in edit_live_yaml
-    try:
-        merged, verify_err = edit_live_yaml(raw_yaml, plan.tenant, new_values,
-                                            config_dir=args.config_dir,
-                                            rel=plan.source_file)
-    except _lib_parse_tree.BinaryMissing:
-        raise  # no da-guard at all: the whole run is rc 2 (main's decorator)
-    except _lib_parse_tree.ParseTreeError as exc:
-        # A da-guard that failed on THIS tenant (a timeout, the memory
-        # limit, an unexpected exit): this tenant's error, the run goes on
-        # and its summary still lists the PRs already opened.
-        return TenantOutcome(
-            plan.tenant, "error", keys,
-            message=f"refused to PUT (verify could not run): {exc}",
-        )
-    if verify_err:
-        return TenantOutcome(
-            plan.tenant, "error", keys,
-            message=f"refused to PUT (verify failed): {verify_err}",
-        )
-    assert merged is not None
-    return merged
-
-
-def _classify_200(plan: TenantPlan, keys: list[str], body: Any) -> TenantOutcome:
-    """Outcome of a 200 PUT answer: ``pr_opened``, ``no_changes`` or ``error``."""
-    body = body or {}
-    # The PR IS the human gate (#656). Only PR write-mode returns
-    # status=pending_review + a pr_url; a tenant-api in the DEFAULT "direct"
-    # write-mode returns status=ok having committed straight to the base
-    # branch — which would silently bypass review AND kill the 409 dedup.
-    # Refuse to claim a PR we didn't get, so a non-PR-mode target fails loud
-    # on the first run instead of direct-committing tenant config for weeks.
-    # A PR-mode API answers `no_changes` when the body it was handed is
-    # already byte-identical to the branch base it just cut. That is a
-    # healthy no-op, not a misconfigured deployment: this run planned the
-    # change off the pod's on-disk copy, which the write path deliberately
-    # does NOT treat as the base (the fresh origin base is re-resolved per
-    # write), so the two can legitimately disagree once the change has
-    # landed upstream. Recording it as an error would (a) tell the operator
-    # to set a write-mode that is already set, and (b) feed the systemic-
-    # failure ratio, failing a Job that in fact had nothing left to do.
-    if body.get("status") == "no_changes":
-        return TenantOutcome(
-            plan.tenant, "no_changes", keys,
-            message="tenant-api reports the proposed content already matches "
-                    "its base — nothing to propose",
-        )
-    if body.get("status") != "pending_review" or not body.get("pr_url"):
-        return TenantOutcome(
-            plan.tenant, "error", keys,
-            message=(f"tenant-api is not in PR write-mode (status="
-                     f"{body.get('status')!r}) — refusing to direct-commit; "
-                     "set --write-mode pr-github/pr-gitlab on the API"),
-        )
-    return TenantOutcome(
-        plan.tenant, "pr_opened", keys,
-        pr_url=body["pr_url"], pr_number=body.get("pr_number", 0),
-        message=body.get("message", ""),
-    )
-
-
-def open_governance_pr(
-    plan: TenantPlan, args: argparse.Namespace
-) -> TenantOutcome:
-    """GET → da-guard write (verified) → PUT a per-tenant governance PR.
-
-    Maps the tenant-api response: 200 + ``pending_review`` → ``pr_opened``;
-    200 + ``no_changes`` → ``no_changes`` (the API found the body already equal
-    to its fresh base — nothing to propose, and no PR to open). Any other answer
-    is classified by its code's remedy in tenant-api's error contract
-    (``classify_error_answer``): remedy ``existing`` → ``already_pending`` (the
-    dedup path — a prior run's PR is still open, leave it); ``refresh_retry`` →
-    GET, merge, verify and PUT once more; anything else, and a second
-    ``refresh_retry`` → ``error`` (recorded, not raised, so one bad tenant
-    doesn't sink the run).
-    """
-    keys = [c.key for c in plan.changes]
-    base = args.tenant_api_url.rstrip("/")
-    enc = urllib.parse.quote(plan.tenant, safe="")
-    get_url = f"{base}/api/v1/tenants/{enc}"
-    headers = _auth_headers(args)
-
-    attempt = 0
-    while True:
-        attempt += 1
-        merged = _prepare_put_body(plan, args, get_url, headers, keys)
-        if isinstance(merged, TenantOutcome):
-            return merged
-        status, body, put_err = _http_put_yaml(get_url, merged, headers, args.timeout)
-        if put_err:
-            return TenantOutcome(plan.tenant, "error", keys,
-                                 message=f"PUT failed: {put_err}")
-        if status == 200:
-            return _classify_200(plan, keys, body)
-        action, code, remedy = classify_error_answer(body)
-        if action == "retry" and attempt < _MAX_PUT_ATTEMPTS:
-            continue
-        if action == "dedup":
-            return TenantOutcome(
-                plan.tenant, "already_pending", keys,
-                pr_url=str(body.get("existing_pr_url") or ""),
-                message=(f"tenant-api answered {code} (remedy {remedy}): an "
-                         "existing PR/MR for this tenant is in the way — skipped"),
-            )
-        return TenantOutcome(
-            plan.tenant, "error", keys,
-            message=_error_answer_message(status, body, code, remedy, attempt),
-        )
 
 
 # ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
 def format_text_report(
-    plans: list[TenantPlan], outcomes: list[TenantOutcome], applied: bool,
+    plans: list[TenantPlan],
     ungoverned: Optional[list["UngovernedKey"]] = None,
     not_applicable: Optional[list["NotApplicableKey"]] = None,
     force_manual: Optional[list["ForceManualKey"]] = None,
     inherited: Optional[list["InheritedKey"]] = None,
-    max_prs: Optional[int] = None,
     not_measured: Optional[list["NotMeasuredKey"]] = None,
 ) -> str:
     lines: list[str] = []
-    mode = "APPLY" if applied else "DRY-RUN (no writes — pass --apply to open PRs)"
-    lines.append(f"Threshold governance loop — {mode}")
+    lines.append("Threshold governance report — read-only (nothing is written)")
     lines.append("=" * 78)
 
     def _ungoverned_lines() -> list[str]:
@@ -1088,11 +452,11 @@ def format_text_report(
             f" (+{len(files) - 5} more)" if len(files) > 5 else "")
         head = (
             f"ℹ {n_tenants} 個租戶的 {len(inh)} 個閾值繼承自平台／defaults／profile 檔"
-            f"（{shown}），只列參考、不治理：PR 只改租戶自己的檔（#2116）。"
+            f"（{shown}），只列參考、不治理：要調的只有租戶自己的檔（#2116）。"
             if _LANG == "zh" else
             f"ℹ {len(inh)} threshold(s) across {n_tenants} tenant(s) are inherited from a "
             f"defaults / platform / profile file ({shown}) — reference only, not governed: "
-            "a PR edits the tenant's own file only (#2116)."
+            "only the tenant's own file is retuned (#2116)."
         )
         return ["", "-" * 78, head]
 
@@ -1133,7 +497,7 @@ def format_text_report(
         return "".join(parts)
 
     def _deferred_block() -> list[str]:
-        # All surfaced-but-no-auto-PR categories, above the bottom line.
+        # All surfaced-but-not-planned categories, above the bottom line.
         return (_not_measured_lines() + _force_manual_lines() + _ungoverned_lines()
                 + _not_applicable_lines() + _inherited_lines())
 
@@ -1159,10 +523,9 @@ def format_text_report(
         return "\n".join(lines)
 
     for plan in plans:
-        nested = (f" — {safe_label(plan.source_file)} is in a sub-directory: no PR via "
-                  "tenant-api, change it by hand") if _is_nested(plan) else ""
+        where = f" — {safe_label(plan.source_file)}" if plan.source_file else ""
         lines.append(f"\nTenant: {safe_label(plan.tenant)} "
-                     f"({len(plan.changes)} change(s)){nested}")
+                     f"({len(plan.changes)} change(s)){where}")
         lines.append(f"  {'Key':<26s} {'Current':>10s} {'→':^3s} {'Recommend':>10s} {'Delta':>13s} {'Conf':<8s}")
         lines.append(f"  {'-' * 26} {'-' * 10} {'-' * 3} {'-' * 10} {'-' * 13} {'-' * 8}")
         for c in plan.changes:
@@ -1178,62 +541,24 @@ def format_text_report(
                 f"{delta:>13s} {c.confidence:<8s}"
             )
 
-    if applied and outcomes:
-        lines.append("\n" + "-" * 78)
-        lines.append("Outcomes:")
-        for o in outcomes:
-            tag = {
-                "pr_opened": "✓ PR",
-                "already_pending": "• skip (already open)",
-                "no_changes": "• no-op (already at base)",
-                "error": "✗ error",
-                "skipped_breaker": "✗ skip (circuit breaker)",
-                "skipped_nested": "• skip (file in a sub-directory)",
-            }.get(o.status, o.status)
-            detail = o.pr_url or o.message
-            lines.append(f"  [{tag}] {safe_label(o.tenant)}: {safe_label(detail)}")
-
     # Blind-spot / manual-review detail goes ABOVE the bottom line so Summary
     # stays the last line a reader scanning the tail expects (CLI bottom-line
     # convention); the review counts are folded into Summary via _deferred_note().
     lines += _deferred_block()
 
-    opened = sum(1 for o in outcomes if o.status == "pr_opened")
-    pending = sum(1 for o in outcomes if o.status == "already_pending")
-    nochange = sum(1 for o in outcomes if o.status == "no_changes")
-    errors = sum(1 for o in outcomes if o.status == "error")
-    capped = sum(1 for o in outcomes if o.status == "skipped")
-    breaker = sum(1 for o in outcomes if o.status == "skipped_breaker")
-    prable, nested = _split_nested(plans)
-    nested_note = (f" {len(nested)} tenant(s) with a file in a sub-directory get no PR "
-                   "(change by hand)." if nested else "")
+    total_changes = sum(len(p.changes) for p in plans)
     lines.append("\n" + "=" * 78)
-    if applied:
-        lines.append(
-            f"Summary: {opened} PR(s) opened, {pending} already-pending (skipped), "
-            f"{nochange} no-op, {errors} error(s), {capped} skipped (--max-prs), "
-            f"{breaker} skipped (circuit breaker); {len(prable)} tenant(s) actionable."
-            + nested_note + _deferred_note()
-        )
-    else:
-        total_changes = sum(len(p.changes) for p in prable)
-        if max_prs is not None and max_prs < len(prable):
-            # #2929: --apply stops at the cap. "at most": a dry run does not ask
-            # tenant-api, so it cannot foresee a 409 (already pending) or error.
-            head = (f"Summary: {len(prable)} tenant(s) / {total_changes} change(s) "
-                    f"actionable; with --max-prs {max_prs}, at most {max_prs} PR(s) "
-                    "would be opened. ")
-        else:
-            head = (f"Summary: {len(prable)} tenant(s) / {total_changes} change(s) "
-                    "would get a PR. ")
-        lines.append(
-            head + "Re-run with --apply to open them." + nested_note + _deferred_note()
-        )
+    lines.append(
+        f"Summary: {len(plans)} tenant(s) / {total_changes} change(s) need retuning. "
+        "Nothing was written: set the values in each tenant's file by hand."
+        + _deferred_note()
+    )
     return "\n".join(lines)
 
 
+
 def json_document(
-    plans: list[TenantPlan], outcomes: list[TenantOutcome], applied: bool,
+    plans: list[TenantPlan],
     ungoverned: Optional[list["UngovernedKey"]] = None,
     not_applicable: Optional[list["NotApplicableKey"]] = None,
     force_manual: Optional[list["ForceManualKey"]] = None,
@@ -1246,32 +571,17 @@ def json_document(
     na = not_applicable or []
     fm = force_manual or []
     inh = inherited or []
-    prable, nested = _split_nested(plans)
     out = {
         "tool": "threshold-govern",
-        "applied": applied,
         "plans": [asdict(p) for p in plans],
-        "outcomes": [asdict(o) for o in outcomes],
         "ungoverned_lower_bound": [asdict(u) for u in ung],
         "not_applicable": [asdict(u) for u in na],
         "force_manual": [asdict(u) for u in fm],
         "inherited": [asdict(u) for u in inh],
         "not_measured": [asdict(u) for u in nm],
         "summary": {
-            # As the text Summary counts them (#2116): a tenant whose file is in
-            # a sub-directory gets no PR, in a dry run or with --apply, so it is
-            # counted under `skipped_nested`, not as actionable.
-            "tenants_actionable": len(prable),
-            "changes": sum(len(p.changes) for p in prable),
-            "prs_opened": sum(1 for o in outcomes if o.status == "pr_opened"),
-            "already_pending": sum(1 for o in outcomes if o.status == "already_pending"),
-            "no_changes": sum(1 for o in outcomes if o.status == "no_changes"),
-            "errors": sum(1 for o in outcomes if o.status == "error"),
-            # --max-prs reached (no request sent) vs circuit breaker tripped
-            # (#3054); the same split as outcomes[].status.
-            "skipped": sum(1 for o in outcomes if o.status == "skipped"),
-            "skipped_breaker": sum(1 for o in outcomes if o.status == "skipped_breaker"),
-            "skipped_nested": len(nested),
+            "tenants_actionable": len(plans),
+            "changes": sum(len(p.changes) for p in plans),
             "ungoverned_lower_bound": len(ung),
             "not_applicable": len(na),
             "force_manual": len(fm),
@@ -1289,13 +599,13 @@ def json_document(
 # CLI
 # ---------------------------------------------------------------------------
 def run(args: argparse.Namespace) -> GovernanceResult:
-    """Run the recommender, gate, and (if --apply) open per-tenant PRs.
+    """Run the recommender and gate its output. Writes nothing.
 
-    Returns a ``GovernanceResult``. In dry-run, outcomes is empty (no writes). The
-    three surfaced-but-not-auto-PR categories are always populated independent of
-    --apply (all informational): ``ungoverned`` (un-classified ``<`` tail),
-    ``not_applicable`` (by-design N/A INFO), and ``force_manual`` (manual review:
-    lower-bound guardrail trip, upper-bound current of 0, recommender exception).
+    The surfaced-but-not-planned categories are always populated (all
+    informational): ``ungoverned`` (un-classified ``<`` tail),
+    ``not_applicable`` (by-design N/A INFO), ``force_manual`` (manual review:
+    lower-bound guardrail trip, upper-bound current of 0, recommender
+    exception), ``inherited`` and ``not_measured``.
     """
     reports = recommend.run_analysis(
         args.config_dir,
@@ -1305,130 +615,26 @@ def run(args: argparse.Namespace) -> GovernanceResult:
         min_samples=args.min_samples,
         dry_run=False,
     )
-    plans = build_governance_plan(reports, args.min_delta_pct)
-    ungoverned = collect_ungoverned_lower_bound(reports)
-    not_applicable = collect_not_applicable(reports)
-    force_manual = collect_force_manual(reports)
-    inherited = collect_inherited(reports)
-    not_measured = collect_not_measured(reports)
-
-    outcomes: list[TenantOutcome] = []
-    if not args.apply:
-        return GovernanceResult(plans, outcomes, ungoverned, not_applicable, force_manual,
-                                inherited, not_measured)
-
-    opened = 0
-    attempted = 0
-    consecutive_errors = 0
-    for plan in plans:
-        if _is_nested(plan):
-            # #2116: no request is sent, so this is neither an error for the
-            # circuit breaker nor a PR against --max-prs.
-            outcomes.append(TenantOutcome(
-                plan.tenant, "skipped_nested", [c.key for c in plan.changes],
-                message=(f"tenant file {plan.source_file} is in a sub-directory; tenant-api "
-                         "reads tenant files at the top level of its config dir only, so no "
-                         "PR is opened — apply the change to that file by hand"),
-            ))
-            continue
-        if opened >= args.max_prs:
-            outcomes.append(TenantOutcome(
-                plan.tenant, "skipped", [c.key for c in plan.changes],
-                message=f"--max-prs={args.max_prs} reached this run",
-            ))
-            continue
-        if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-            outcomes.append(TenantOutcome(
-                plan.tenant, "skipped_breaker", [c.key for c in plan.changes],
-                message=(f"aborted after {consecutive_errors} consecutive errors "
-                         "(tenant-api likely degraded)"),
-            ))
-            continue
-        # Pace BEFORE each attempt except the first — paces every API round-trip
-        # without an idle sleep after the final one.
-        if attempted > 0 and args.throttle_seconds > 0:
-            time.sleep(args.throttle_seconds)
-        attempted += 1
-        outcome = open_governance_pr(plan, args)
-        outcomes.append(outcome)
-        # Only a NEW PR counts against the per-run cap (dedup skips / errors don't
-        # consume the alert-fatigue budget). Errors trip the circuit breaker;
-        # a pr_opened OR a clean already_pending round-trip resets it.
-        if outcome.status == "pr_opened":
-            opened += 1
-            consecutive_errors = 0
-        elif outcome.status == "error":
-            consecutive_errors += 1
-        else:
-            consecutive_errors = 0
-    return GovernanceResult(plans, outcomes, ungoverned, not_applicable, force_manual,
-                            inherited, not_measured)
-
-
-def _is_systemic_failure(outcomes: list[TenantOutcome], applied: bool) -> bool:
-    """Whether an ``--apply`` run's writes failed overwhelmingly (#656, #3054).
-
-    #656 dead-man's-switch honesty: a run where the write plane is broken still
-    *executed*, so without a non-zero exit the process returns 0, K8s marks the Job
-    Successful, and ``kube_cronjob_status_last_successful_time`` advances even though
-    the writes failed — the staleness alert would stay green during exactly the
-    silent degradation it exists to catch (did-it-run != did-it-work). Exiting
-    non-zero makes it honest: the Job is marked Failed AND last_successful_time is not
-    advanced, so ``ThresholdGovernanceStale`` can fire.
-
-    Shares maintenance_scheduler's MECHANISM (non-zero exit -> Job Failed -> KSM signal
-    stays honest) but is STRICTER than that sibling's any-error contract: a governance
-    run legitimately has per-tenant errors amid successes, so a single flaky tenant
-    must not fail the whole run.
-
-    Trip condition: the attempted set is non-empty AND
-    ``(errors + skipped_breaker) / attempted >= _SYSTEMIC_FAILURE_RATIO``.
-      * attempted = every outcome that sent a write or was going to: ``pr_opened``,
-        ``already_pending`` (409), ``no_changes``, ``error`` and ``skipped_breaker``.
-        A ``skipped`` (--max-prs reached) or ``skipped_nested`` (#2116) outcome sent
-        no request and would not have sent one this run, so it says nothing about
-        the write plane and is left out of the attempted set altogether.
-      * ``error`` is not only a write-plane fault (PUT failed / HTTP 5xx / not in
-        PR write-mode): it also covers a failed read (``GET failed`` / ``GET
-        returned no raw_yaml``) and the local checks that refuse to write
-        (``keys not found in live config``, ``refused to PUT (verify failed)``).
-        All of them count as failures here.
-      * Breaker skips count as failures. The run's own circuit breaker caps
-        consecutive errors at ``MAX_CONSECUTIVE_ERRORS`` then skips the rest, so a
-        TOTAL outage shows up as ~5 errors + N breaker skips — a bare error ratio
-        would dilute that to ~5% and miss it.
-      * There is no "a PR was opened, so the run is healthy" short-circuit (#3054):
-        one PR opened before the write plane died no longer hides the outage. Nor
-        does one surviving ``already_pending`` (Gemini review). A genuinely
-        half-degraded run and an all-already-pending run both stay exit 0; dry-run
-        never fails — it issues no writes; an empty plan has nothing to judge.
-
-    What the rc measures: it still depends on the plan — the same write-plane fault
-    fails a run of 3 tenants sooner than a run of 300, and an empty plan is rc 0 no
-    matter how the write plane is. But for a fixed plan it is monotone in write-plane
-    health: turning any one successful write into an error never takes the rc from
-    1 to 0. For a signal that does not depend on the plan, watch tenant-api itself:
-    ``tenant_api_writes_total{result}`` and the ``TenantApiWriteErrorsHigh`` alert.
-    """
-    if not applied:
-        return False
-    attempted = [o for o in outcomes if o.status not in ("skipped", "skipped_nested")]
-    if not attempted:
-        return False
-    failed = sum(1 for o in attempted if o.status in ("error", "skipped_breaker"))
-    return failed / len(attempted) >= _SYSTEMIC_FAILURE_RATIO
+    return GovernanceResult(
+        plans=build_governance_plan(reports, args.min_delta_pct),
+        ungoverned=collect_ungoverned_lower_bound(reports),
+        not_applicable=collect_not_applicable(reports),
+        force_manual=collect_force_manual(reports),
+        inherited=collect_inherited(reports),
+        not_measured=collect_not_measured(reports),
+    )
 
 
 @exit_on_yaml_file_error  # a config file the load cannot read → rc 2, named
 @exit_on_served_values_error  # #2116: da-guard missing or failing → rc 2, named
-@exit_on_parse_tree_error  # ADR-036 §2: the pre-PUT da-guard write has no da-guard → rc 2
 @recommend.observed_map_lib.exit_on_observed_map_error  # #3017: no usable observed-map → rc 2, named
 def main() -> "Report | None":
     parser = argparse.ArgumentParser(
         description=(
-            "閾值治理迴路 — 把推薦引擎接成 proposed-PR（Renovate-for-thresholds，#656）"
+            "閾值治理報告 — 列出值得回頭調的腐敗閾值（唯讀，不寫入；#656）"
             if _LANG == "zh" else
-            "Threshold governance loop — turn recommendations into proposed-PRs (#656)"
+            "Threshold governance report — list the rotten thresholds worth "
+            "retuning (read-only, writes nothing; #656)"
         ),
     )
     parser.add_argument("--config-dir", required=True,
@@ -1454,52 +660,14 @@ def main() -> "Report | None":
                                    "least this many samples (default 100, may not be "
                                    "below 100; HIGH also needs >= 1000)"))
     parser.add_argument("--min-delta-pct", type=float, default=DEFAULT_MIN_DELTA_PCT,
-                        help=("治理介入門檻：|delta%%| 須 ≥ 此值才開 PR（預設 25）。注意"
+                        help=("治理門檻：|delta%%| 須 ≥ 此值才列入報告（預設 25）。注意"
                               "上界為 value 空間、下界為 miss-rate 空間——同旋鈕敏感度不同"
                               "（0.95 floor 的 25%% miss ≈ 1.3%% value）"
                               if _LANG == "zh" else
-                              "Governance gate: only open a PR when |delta%%| >= this (default 25). "
+                              "Governance gate: only report a key when |delta%%| >= this (default 25). "
                               "NB asymmetric: upper-bound is value space, lower-bound is MISS-RATE "
                               "space — same knob, different sensitivity (25%% miss on a 0.95 floor "
                               "≈ 1.3%% value)"))
-    parser.add_argument("--max-prs", type=int, default=DEFAULT_MAX_PRS,
-                        help=("每次最多開幾個 PR（防洪，預設 10；須 ≥ 1）" if _LANG == "zh"
-                              else "Max PRs opened per run (anti-flood, default 10; "
-                                   "must be >= 1)"))
-    parser.add_argument("--apply", action="store_true",
-                        help=("真正經 tenant-api 開 PR（預設僅 dry-run，不寫入）"
-                              if _LANG == "zh" else
-                              "Actually open PRs via tenant-api (default: dry-run, no writes)"))
-    parser.add_argument("--tenant-api-url", default=os.environ.get("TENANT_API_URL"),
-                        help="tenant-api base URL（--apply 必填）" if _LANG == "zh"
-                        else "tenant-api base URL (required with --apply)")
-    parser.add_argument("--identity-email", default=DEFAULT_IDENTITY_EMAIL,
-                        help="X-Forwarded-Email（PR git author / 治理身分）" if _LANG == "zh"
-                        else "X-Forwarded-Email (PR git author / governance identity)")
-    parser.add_argument("--identity-groups", default=os.environ.get("DA_GOVERN_GROUPS"),
-                        help=("X-Forwarded-Groups（須具 write 權限的 RBAC 群組；--apply 直連模式必填）"
-                              if _LANG == "zh" else
-                              "X-Forwarded-Groups (an RBAC group with write perm; required for direct --apply)"))
-    parser.add_argument("--auth-token", default=None,
-                        help=("Bearer token（oauth2-proxy 前置模式；亦可用 DA_GOVERN_TOKEN）"
-                              if _LANG == "zh" else
-                              "Bearer token (oauth2-proxy mode; or env DA_GOVERN_TOKEN)"))
-    parser.add_argument("--auth-token-file", default=os.environ.get("DA_GOVERN_TOKEN_FILE"),
-                        help=("Bearer token 檔路徑（K8s audience-bound projected SA token；"
-                              "呼叫時讀取；亦可用 DA_GOVERN_TOKEN_FILE）"
-                              if _LANG == "zh" else
-                              "Path to a Bearer token file (K8s audience-bound projected SA "
-                              "token, read at call time; or env DA_GOVERN_TOKEN_FILE)"))
-    parser.add_argument("--throttle-seconds", type=non_negative_seconds, default=DEFAULT_THROTTLE_SECONDS,
-                        help="開 PR 之間的間隔秒數（≥ 0，0 = 不等待，可帶小數；預設 2）" if _LANG == "zh"
-                        else "Seconds to pause between opened PRs (>= 0, 0 = no wait, "
-                        "fractions allowed; default 2)")
-    parser.add_argument("--timeout", type=positive_seconds, default=30,
-                        help=("tenant-api 的 HTTP 逾時秒數（> 0，可帶小數；預設 30；"
-                              "不影響 Prometheus 查詢）" if _LANG == "zh" else
-                              "HTTP timeout in seconds for tenant-api calls (> 0, "
-                              "fractions allowed; default 30; Prometheus queries "
-                              "are not affected)"))
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="JSON 格式輸出" if _LANG == "zh" else "Output as JSON")
     args = parser.parse_args()
@@ -1528,52 +696,15 @@ def main() -> "Report | None":
         print(msg, file=sys.stderr)
         sys.exit(EXIT_CALLER_ERROR)
 
-    if args.max_prs < 1:
-        # #2929: 0 or less used to skip every tenant and still exit 0.
-        msg = (f"--max-prs 必須 ≥ 1: {args.max_prs}" if _LANG == "zh"
-               else f"--max-prs must be >= 1: {args.max_prs}")
-        print(msg, file=sys.stderr)
-        sys.exit(EXIT_CALLER_ERROR)
-
-    if args.apply:
-        if not args.tenant_api_url:
-            msg = ("--apply 需要 --tenant-api-url" if _LANG == "zh"
-                   else "--apply requires --tenant-api-url")
-            print(msg, file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
-        if not args.identity_groups and not args.auth_token and not args.auth_token_file:
-            msg = ("--apply 需要 --identity-groups（直連）或 --auth-token/--auth-token-file（oauth2-proxy）"
-                   if _LANG == "zh" else
-                   "--apply requires --identity-groups (direct) or "
-                   "--auth-token/--auth-token-file (oauth2-proxy)")
-            print(msg, file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
-        # #3271: tenant-api's answers are classified by its error contract.
-        # Without it no 409 can be told apart, so refuse before any write.
-        try:
-            _error_remedies()
-        except ErrorContractError as exc:
-            msg = (f"--apply 需要 tenant-api 錯誤契約才能判讀被拒的寫入: {exc}"
-                   if _LANG == "zh" else
-                   f"--apply needs tenant-api's error contract to classify a "
-                   f"refused write: {exc}")
-            print(msg, file=sys.stderr)
-            sys.exit(EXIT_CALLER_ERROR)
-        # #3511: a token file that is the only credential is read before any
-        # write — unreadable, the run stops here (rc 2), not at the proxy.
-        if _token_file_is_sole_credential(args):
-            args.resolved_sole_token = _resolve_auth_token(args)
-
     result = run(args)
 
     if not args.json_output:
         print(format_text_report(
-            result.plans, result.outcomes, args.apply, result.ungoverned,
-            result.not_applicable, result.force_manual, result.inherited,
-            max_prs=args.max_prs, not_measured=result.not_measured))
+            result.plans, result.ungoverned, result.not_applicable,
+            result.force_manual, result.inherited, not_measured=result.not_measured))
 
-    # #3133: a threshold not measured makes the run partial — a caller error
-    # (exit 2), and it outranks the write-plane verdict below.
+    # #3133: a threshold not measured makes the report partial — a caller error
+    # (exit 2). A complete report is exit 0 whether or not it lists rot.
     if result.not_measured:
         first = result.not_measured[0]
         print(f"ERROR: Prometheus query failed for {len(result.not_measured)} threshold(s); "
@@ -1581,17 +712,11 @@ def main() -> "Report | None":
               f"{safe_label(first.key)}: {safe_label(first.error[:80])})", file=sys.stderr)
         status = EXIT_CALLER_ERROR
     else:
-        # #656: surface a governance run whose writes overwhelmingly failed as a
-        # non-zero exit (-> Job Failed + a frozen last_successful_time so
-        # ThresholdGovernanceStale can fire). A clean / partly degraded / dry-run
-        # run, every threshold measured (above), stays exit 0. See
-        # _is_systemic_failure for why the dead-man's-switch needs this to be honest.
-        status = EXIT_VIOLATION if _is_systemic_failure(result.outcomes, args.apply) else EXIT_OK
+        status = EXIT_OK
     if args.json_output:
         return Report(json_document(  # #3216: run() encodes it
-            result.plans, result.outcomes, args.apply, result.ungoverned,
-            result.not_applicable, result.force_manual, result.inherited,
-            result.not_measured), status)
+            result.plans, result.ungoverned, result.not_applicable,
+            result.force_manual, result.inherited, result.not_measured), status)
     sys.exit(status)
 
 

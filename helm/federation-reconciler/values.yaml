@@ -13,9 +13,8 @@
 # FederationRevocationReconcileStale (
 # k8s/03-monitoring/configmap-rules-platform.yaml) is severity:critical / for:10m with an `or absent(...)` arm, so
 # scaling to zero would page on-call within 10 minutes. (That `absent(...)` arm
-# is what makes this reasoning hold HERE and not for the sibling case: the
-# threshold-govern CronJob's staleness alert has no such arm, so that outage has
-# no runtime detector at all — see k8s/03-monitoring/cronjob-threshold-govern.yaml.)
+# is what makes this reasoning hold: a staleness alert without one has no
+# runtime detector for a workload that never succeeded.)
 # Registered in EXEMPTIONS in scripts/tools/lint/check_image_pin_capability.py.
 # The exemption key includes the TAG (`helm/federation-reconciler`,
 # `_federation_revocation_reconciler.py`, `v2.9.0`), so moving this pin to

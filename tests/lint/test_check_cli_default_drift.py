@@ -222,8 +222,7 @@ class TestEnvironmentIsScrubbed:
 
         clean = run({})
         polluted = run({"PROMETHEUS_URL": "http://sentinel.invalid:9090",
-                        "TENANT_API_URL": "http://sentinel.invalid",
-                        "DA_GOVERN_GROUPS": "sentinel"})
+                        "TENANT_API_URL": "http://sentinel.invalid"})
         assert clean.returncode == polluted.returncode
         assert clean.stdout == polluted.stdout, (
             "the verdict changed when unrelated environment variables were "

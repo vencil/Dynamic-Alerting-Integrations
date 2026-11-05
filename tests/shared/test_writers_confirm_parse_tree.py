@@ -7,12 +7,11 @@
    yaml.v3 讀成數字的樣子（`1e3`）⇒ 拒寫、一個位元組都不動、結束碼照工具的約定。
 3. **原檔讀不了就不寫**：parse-tree 讀不了的原檔（重複鍵）⇒ 拒寫、具名。
 4. **沒有讀取端的路徑不寫**：隱藏路徑、目錄沒選上的 `_defaults` 拼法 ⇒ 拒寫。
-5. **沒有 da-guard ⇒ exit 2**（threshold_govern 的函式層是 `ParseTreeError`，main 的
-   decorator 給 2）。
+5. **沒有 da-guard ⇒ exit 2**。
 6. **判定是 parse-tree 的**：一個 yaml.v3 與 PyYAML 讀法不同的輸入，工具給的是 yaml.v3
    的判定。
 
-deprecate_rule、patch_config、threshold_govern 改既有檔時改由 `da-guard write` 寫
+deprecate_rule、patch_config 改既有檔時改由 `da-guard write` 寫
 （ADR-036 步驟 10b，#3206）：第 2 列對它們是「edit 拒寫就不寫」（PyYAML 換寫法的那種
 讀回不同已不會發生，改釘「沒動到的寫法照原樣」），deprecate_rule 另有一列「多檔中一個
 被拒就都不寫」。
@@ -547,46 +546,6 @@ def test_scaffold_tenant_without_da_guard_is_exit_2(tmp_path, monkeypatch):
     assert not out.exists()
 
 
-# ── threshold_govern (the pre-PUT edit) ──────────────────────────────────
-# #3206: the PUT body is `da-guard write`'s text, so row 2's "a text that
-# reads back differently" is da-guard's own check (pkg/confedit); here: an
-# untouched spelling yaml.v3 and PyYAML read differently is kept as written,
-# and the value is written with the type the plan means (a string).
-
-def test_threshold_govern_passes_an_edit_that_reads_back(tmp_path):
-    import threshold_govern as tg
-    old = 'tenants:\n  tenant-a:\n    k1: "10"\n    k2: 0o17\n'
-    new, err = tg.edit_live_yaml(old, "tenant-a", {"k1": "15"}, config_dir=str(tmp_path))
-    assert (new, err) == ('tenants:\n  tenant-a:\n    k1: "15"\n    k2: 0o17\n', None)
-
-
-def test_threshold_govern_writes_the_value_as_the_string_the_plan_means(tmp_path):
-    # `k1: 10` is an int; the plan writes the string "15", never the int 15.
-    import threshold_govern as tg
-    old = 'tenants:\n  tenant-a:\n    k1: 10\n'
-    new, err = tg.edit_live_yaml(old, "tenant-a", {"k1": "15"}, config_dir=str(tmp_path))
-    assert err is None and 'k1: "15"\n' in new, (new, err)
-
-
-def test_threshold_govern_refuses_an_unreadable_original_and_an_unread_path(tmp_path):
-    import threshold_govern as tg
-    dup = 'tenants:\n  tenant-a:\n    k1: "10"\n    k1: "11"\n'
-    new, err = tg.edit_live_yaml(dup, "tenant-a", {"k1": "15"}, config_dir=str(tmp_path))
-    assert new is None and err and "original_unreadable" in err, err
-    ok = 'tenants:\n  tenant-a:\n    k1: "10"\n'
-    new, err = tg.edit_live_yaml(ok, "tenant-a", {"k1": "15"},
-                                 config_dir=str(tmp_path), rel=".tenant-a.yaml")
-    assert new is None and err and "(not_read)" in err, err
-
-
-def test_threshold_govern_without_da_guard_raises(tmp_path, monkeypatch):
-    import threshold_govern as tg
-    monkeypatch.setenv("DA_GUARD_BINARY", str(tmp_path / "no-such-da-guard"))
-    ok = 'tenants:\n  tenant-a:\n    k1: "10"\n'
-    with pytest.raises(_lib_parse_tree.ParseTreeError):
-        tg.edit_live_yaml(ok, "tenant-a", {"k1": "10"}, config_dir=str(tmp_path))
-
-
 # ── migrate_conf_d ────────────────────────────────────────────────────────
 
 def _mcd(root, *extra, env=None):
@@ -1058,28 +1017,6 @@ def test_migrate_conf_d_refuses_a_destination_outside_the_tree(tmp_path):
         assert r.returncode == 2, r.stdout + r.stderr
         assert "../tenant-a.yaml" in r.stderr and "inside --config-dir" in r.stderr, r.stderr
         assert _bytes(root) == before
-
-
-def test_threshold_govern_a_failing_da_guard_is_that_tenants_error(tmp_path, monkeypatch):
-    import _lib_parse_tree as pt
-    import threshold_govern as tg
-
-    def boom(*a, **k):
-        raise pt.ParseTreeError("da-guard parse-tree did not finish within 120s")
-    monkeypatch.setattr(tg, "edit_live_yaml", boom)
-    monkeypatch.setattr(tg, "http_get_json", lambda url, timeout, headers: (
-        {"raw_yaml": 'tenants:\n  tenant-a:\n    k1: "10"\n'}, None))
-    plan = tg.TenantPlan("tenant-a", [tg.PlannedChange("k1", "10", 15.0, '"15"', 50.0,
-                                                       "HIGH", 15.0, "")])
-    args = type("A", (), {"tenant_api_url": "http://x", "timeout": 1, "config_dir": str(tmp_path),
-                          "identity_email": "", "identity_groups": "", "auth_token": "",
-                          "auth_token_file": ""})()
-    out = tg.open_governance_pr(plan, args)
-    assert out.status == "error" and "verify could not run" in out.message, out
-    monkeypatch.setattr(tg, "edit_live_yaml",
-                        lambda *a, **k: (_ for _ in ()).throw(pt.BinaryMissing("no da-guard")))
-    with pytest.raises(pt.BinaryMissing):
-        tg.open_governance_pr(plan, args)
 
 
 def test_patch_config_refuses_keys_that_differ_only_in_case():

@@ -477,7 +477,7 @@ machineIdentity:
   # TokenReview accepts a token only if its audience list contains this value;
   # an empty/unset audience would accept ANY ServiceAccount token, including the
   # default kube-apiserver-audience token every pod already mounts (ADR-027 G4).
-  # Callers (PR-1b-ii: recipe-preview / threshold-govern) must mint their
+  # Callers (PR-1b-ii: recipe-preview) must mint their
   # projected token with `audience: tenant-api` to match.
   audience: tenant-api
 
@@ -699,11 +699,11 @@ networkPolicy:
   prometheusNamespace: monitoring
   # Pod-level allow-list for the internal port (8080). ns-level alone over-grants
   # every pod in prometheusNamespace to a header-trusting port — these podSelector
-  # matchLabels narrow it to exactly the four legitimate 8080 clients (incl.
+  # matchLabels narrow it to exactly the three legitimate 8080 clients (incl.
   # recipe-preview's GET /tenants/{id}/access authz probe, #1004, and da-portal's
   # relay of the human's /api/v1 requests with an audience-bound SA token,
-  # ADR-027 D2-B O1). Change only if you relabel Prometheus / the threshold-govern
-  # CronJob / recipe-preview / da-portal.
+  # ADR-027 D2-B O1). Change only if you relabel Prometheus / recipe-preview /
+  # da-portal.
   internalPortAllow:
     # This repo's raw Prometheus (k8s/03-monitoring/deployment-prometheus.yaml).
     prometheus:
@@ -715,8 +715,6 @@ networkPolicy:
     # Same namespace scoping (prometheusNamespace) as every entry here.
     prometheusOperator:
       app.kubernetes.io/name: prometheus
-    thresholdGovern:
-      component: threshold-govern
     recipePreview:
       app.kubernetes.io/name: recipe-preview
     # da-portal (ADR-027 D2-B O1): its nginx forwards the human's oauth2-proxy

@@ -84,7 +84,6 @@ type PutTenantResponse struct {
 // @Produce     json
 // @Param       id    path     string true  "Tenant ID"
 // @Param       body  body     string true  "Tenant YAML content"
-// @Param       X-DA-Write-Source header string false "Attribute the PR to a non-UI write source. Allowlisted: threshold-governance (#656). Omit for tenant-manager UI."
 // @Param       X-DA-Base-Hash header string false "Optimistic concurrency: the source_hash GET /tenants/{id} returned for the file this body was derived from. 409 if the file changed since. 16 lowercase hex chars; a malformed value is a 400, never ignored. Direct write-back mode only (501 in PR mode)."
 // @Success     200   {object} PutTenantResponse
 // @Failure     400   {object} ErrorResponse "Bad request. A value the body writes that is the masked-credential placeholder is code INVALID_BODY with one violations[] entry per value (#1560; send the real value; nothing written); A key no reader reads (a misspelt threshold or reserved key, the flat _routing_receiver_type — the receiver type is _routing.receiver.type) is a 400 BAD_REQUEST naming it, from the shared key verdict the route generator container returns (ADR-038 decision 5; a key the file already held counts too). Routing (receivers, matcher values, group_by, the domain policy) is judged by the route generator container: a refusal is a 422 GENERATOR_FINDINGS (#2903). Also 400 when the tenant id is not a DNS-1123 label: 1-63 lowercase letters, digits and -, starting and ending with a letter or digit (ADR-035; the route generator refuses a tree that declares any other id; nothing written). Also 400 when parse-tree refuses the body, the error naming its kind (#3206, ADR-036): more than one YAML document (an empty trailing --- included), a tag outside !!str !!int !!float !!bool !!null !!timestamp !!map !!seq (!!binary, !!set and local or non-specific ! tags included), a null or non-scalar key, a repeated key, a byte order mark past the start, or a syntax or decode error (nothing written). Also 400 when the body is not API-shaped (#3064): it declares a tenant besides {id}, several documents, or an anchor, alias, merge key or tagged key at the top level or directly under tenants: (nothing written). Also 400 when the current tenant file's tenants: block cannot be decoded for the end-of-life check and the caller lacks write permission on all tenants (#2405; nothing written)"
@@ -294,15 +293,14 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 
 	// Create PR/MR via platform client + register in tracker.
 	// PR-6/11: shared with BatchTenants via createPRAndRegister.
-	// #656: attribute the PR to its declared write source (UI by default; an
-	// allowlisted X-DA-Write-Source header routes automation writes like the
-	// threshold governance loop onto their own label/title/Source channel).
-	ws := resolveWriteSource(r)
-	prTitle := ws.titleSingle(tenantID)
-	prBody := fmt.Sprintf("**Operator:** %s\n**Source:** %s\n**Tenant:** %s", email, ws.sourceLine, tenantID)
+	// Every single-tenant PR is attributed to the tenant-manager UI: tenant-api
+	// has no machine caller (ADR-027 §4), so no request header selects another
+	// title, label or Source line.
+	prTitle := fmt.Sprintf("[tenant-api] Update %s configuration", tenantID)
+	prBody := fmt.Sprintf("**Operator:** %s\n**Source:** tenant-manager UI\n**Tenant:** %s", email, tenantID)
 	pr, err := createPRAndRegister(d,
 		prTitle, prBody, result.BranchName,
-		ws.labels(),
+		[]string{"tenant-api", "auto-generated"},
 		[]string{tenantID},
 	)
 	if err != nil {
@@ -360,8 +358,8 @@ func writePRPutError(rw http.ResponseWriter, r *http.Request, d *Deps, tenantID 
 //
 // It is a header rather than a body field because this endpoint's body is the
 // tenant YAML document itself (its sections written as sent) — there is nowhere in it to
-// put a protocol field. The name follows the X-DA-* convention this endpoint
-// already uses for X-DA-Write-Source, and deliberately not If-Match: honouring
+// put a protocol field. The name follows the X-DA-* header convention, and
+// deliberately not If-Match: honouring
 // If-Match would imply the rest of HTTP conditional requests (ETag on GET,
 // If-None-Match, 304, weak validators), none of which this API provides.
 const BaseHashHeader = "X-DA-Base-Hash"

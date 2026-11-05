@@ -102,12 +102,11 @@ import subprocess
 import sys
 import threading
 import time
-import uuid
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
-from urllib.parse import parse_qs, unquote, urlsplit
+from urllib.parse import parse_qs, urlsplit
 
 import pytest
 
@@ -323,33 +322,6 @@ def _alert_quality_matrix(now: float) -> list[dict]:
     ]
 
 
-# threshold_govern: every tenant writes GOVERN_KEY at GOVERN_CURRENT, and the
-# observed series it maps to (metric_observed_map.yaml) samples GOVERN_OBSERVED
-# GOVERN_SAMPLES times, GOVERN_STEP_S apart: P95 80 vs 50 is +60 % (past the
-# 25 % gate) at MEDIUM confidence (>= 100 samples in more than the 24 distinct
-# hours #2941 asks for), so each tenant plans exactly one change.
-GOVERN_TENANTS = ("tenant-one", "tenant-two", "tenant-three")
-GOVERN_KEY = "mysql_connections"
-GOVERN_SERIES = "tenant:mysql_threads_connected:max"
-GOVERN_CURRENT = 50
-GOVERN_OBSERVED = 80.0
-GOVERN_SAMPLES = 120
-GOVERN_STEP_S = 900          # 119 steps of 15 min ≈ 29.75h
-# tenant-api paths, optionally under a per-run prefix /ta/<run>/ so the stub
-# can count each run's PUTs (and play a per-run personality, see below).
-_TENANT_PATH = re.compile(r"(?:/ta/([^/]+))?/api/v1/tenants/([^/]+)")
-# PUTs the stub received, per run prefix. A run whose prefix ends in
-# PENDING_SUFFIX answers tenant-one's PUT with 409 pending-PR (dedup), so a
-# cap that counted attempts instead of new PRs would show.
-GOVERN_PUTS: dict[str, int] = {}
-_GOVERN_PUTS_LOCK = threading.Lock()
-PENDING_SUFFIX = "-tenant-one-pending"
-
-
-def _govern_tenant_yaml(tenant: str) -> str:
-    return f'tenants:\n  {tenant}:\n    {GOVERN_KEY}: "{GOVERN_CURRENT}"\n'
-
-
 def _cardinality_matrix(now: float) -> list[dict]:
     """One tenant's threshold-series count over the last 10 days: 100 -> 400,
     +30/day. Against --limit 1000 that is 20 days to the limit."""
@@ -370,23 +342,8 @@ class _StubHandler(BaseHTTPRequestHandler):
     def do_GET(self):  # noqa: N802
         url = urlsplit(self.path)
         params = parse_qs(url.query)
-        tenant_path = _TENANT_PATH.fullmatch(url.path)
         if url.path == "/api/v1/query":
             query = params.get("query", [""])[0]
-            if query.startswith(GOVERN_SERIES + "{"):
-                # threshold_recommend's range-vector query -> a matrix.
-                m = re.search(r'tenant="([^"]+)"', query)
-                if m is None:
-                    self._send({"error": "stub: no tenant label"}, status=400)
-                    return
-                tenant = m.group(1)
-                now = time.time()
-                self._send({"status": "success", "data": {
-                    "resultType": "matrix",
-                    "result": [{"metric": {"tenant": tenant},
-                                "values": [[now - GOVERN_STEP_S * i, str(GOVERN_OBSERVED)]
-                                           for i in range(GOVERN_SAMPLES)]}]}})
-                return
             value = INSTANT_VALUES.get(query)
             result = [] if value is None else [
                 {"metric": {"tenant": "tenant-one"},
@@ -413,32 +370,10 @@ class _StubHandler(BaseHTTPRequestHandler):
                                  "result": _alert_quality_matrix(time.time())}})
         elif url.path == "/api/v2/alerts":
             self._send([])
-        elif tenant_path:
-            # tenant-api GET: the file threshold_govern edits surgically.
-            self._send({"raw_yaml": _govern_tenant_yaml(unquote(tenant_path.group(2)))})
         else:
             self._send({"error": f"stub: no route for {url.path}"}, status=404)
 
     do_POST = do_GET  # noqa: N815
-
-    def do_PUT(self):  # noqa: N802
-        # tenant-api PR write-mode: every PUT opens a PR.
-        url = urlsplit(self.path)
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        tenant_path = _TENANT_PATH.fullmatch(url.path)
-        if tenant_path is None:
-            self._send({"error": f"stub: no PUT route for {url.path}"}, status=404)
-            return
-        run, tenant = tenant_path.group(1) or "", unquote(tenant_path.group(2))
-        with _GOVERN_PUTS_LOCK:
-            GOVERN_PUTS[run] = GOVERN_PUTS.get(run, 0) + 1
-        if run.endswith(PENDING_SUFFIX) and tenant == "tenant-one":
-            self._send({"code": "PENDING_PR_EXISTS", "error": "pending_pr_exists",
-                        "existing_pr_url": "https://git.example/pulls/old"},
-                       status=409)
-            return
-        self._send({"status": "pending_review", "pr_number": 1,
-                    "pr_url": f"https://git.example/pulls/{tenant}"})
 
     def log_message(self, *args):
         pass
@@ -649,41 +584,6 @@ def _risk_and_rc(proc: subprocess.CompletedProcess) -> object:
         return UNPARSABLE
 
 
-def _govern_confd(tmp: Path) -> str:
-    """GOVERN_TENANTS, each in its own top-level file writing GOVERN_KEY."""
-    d = tmp / "confd-govern"
-    for tenant in GOVERN_TENANTS:
-        _write(d / f"{tenant}.yaml", _govern_tenant_yaml(tenant))
-    return str(d)
-
-
-def _govern_argv(tmp: Path, stub: str, pending: bool = False) -> list[str]:
-    """threshold_govern --apply against the stub, under a fresh run prefix
-    (one per call, so each run's PUTs are counted on their own)."""
-    run = uuid.uuid4().hex + (PENDING_SUFFIX if pending else "")
-    return ["--config-dir", _govern_confd(tmp), "--prometheus", stub,
-            "--apply", "--tenant-api-url", f"{stub}/ta/{run}",
-            "--identity-groups", "threshold-governance",
-            "--throttle-seconds", "0", "--json"]
-
-
-def _prs_opened_puts_and_rc(proc: subprocess.CompletedProcess) -> object:
-    """(outcomes reported pr_opened, PUTs the tenant-api actually received,
-    exit code). The cap skips with exit 0, so the exit code alone cannot see
-    it; and a cap applied after the PUT would still report `skipped`, so the
-    PUTs the stub saw are counted too."""
-    try:
-        outcomes = json.loads(proc.stdout)["outcomes"]
-        url = proc.args[proc.args.index("--tenant-api-url") + 1]
-        run = url.rsplit("/ta/", 1)[1]
-    except (ValueError, KeyError, TypeError, IndexError):
-        return UNPARSABLE
-    with _GOVERN_PUTS_LOCK:
-        puts = GOVERN_PUTS.get(run, 0)
-    return (sum(1 for o in outcomes if o["status"] == "pr_opened"), puts,
-            proc.returncode)
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Recipes
 # ═══════════════════════════════════════════════════════════════════════════
@@ -734,28 +634,6 @@ def _json_status_and_rc(proc: subprocess.CompletedProcess) -> object:
 
 R = Recipe
 RECIPES: list[Recipe] = [
-    # Three tenants, one planned change each, a tenant-api that opens every
-    # PR. The default cap 10 and a cap equal to the tenant count open all
-    # three; a cap of 1 opens one, and the other two get no PUT at all.
-    R("threshold_govern", "--max-prs",
-      lambda t, s: _govern_argv(t, s),
-      flip=("--max-prs", "1"), boundary=("--max-prs", str(len(GOVERN_TENANTS))),
-      without=(3, 3, EXIT_OK), with_=(1, 1, EXIT_OK),
-      observe=_prs_opened_puts_and_rc,
-      note="3 actionable tenants: default 10 and 3 open 3 PRs, 1 opens 1 and "
-           "PUTs only once; every run exits 0"),
-
-    # The cap counts NEW PRs only (threshold_govern: "dedup skips / errors
-    # don't consume the alert-fatigue budget"). tenant-one is already pending
-    # (409), so a cap of 1 still opens a PR for the next tenant; a cap of 2
-    # opens both others, as the default does.
-    R("threshold_govern", "--max-prs", mode="one tenant already pending",
-      base=lambda t, s: _govern_argv(t, s, pending=True),
-      flip=("--max-prs", "1"), boundary=("--max-prs", "2"),
-      without=(2, 3, EXIT_OK), with_=(1, 2, EXIT_OK),
-      observe=_prs_opened_puts_and_rc,
-      note="409 on tenant-one does not use the cap: cap 1 -> 1 new PR after "
-           "2 PUTs; cap 2 and the default -> 2 new PRs after 3 PUTs"),
     # #2494's regression. New is 5 % above old: the 0.1 % default rejects it,
     # 10 % accepts it, 1 % still rejects it.
     R("validate_migration", "--tolerance",

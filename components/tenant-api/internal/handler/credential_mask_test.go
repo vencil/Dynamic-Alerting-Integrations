@@ -452,7 +452,7 @@ func TestCredentialMask_DiffRefusesUnmaskableCurrentFile(t *testing.T) {
 
 // The masked text cannot be written back over the real credentials, however
 // the placeholder is spelled — and the read-modify-write of a caller who CAN
-// write (the threshold-governance machine identity's shape) keeps them.
+// write keeps them.
 func TestCredentialMask_PutRefusesPlaceholder(t *testing.T) {
 	t.Parallel()
 	f := newMaskFixture(t, maskTenantYAML)
