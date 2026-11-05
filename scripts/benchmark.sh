@@ -412,18 +412,15 @@ if [[ "${ROUTING_BENCH}" == true ]]; then
 
   CONF_DIR="${SCRIPT_DIR}/../components/threshold-exporter/config/conf.d"
   TOOLS_DIR="${SCRIPT_DIR}/tools"
-  # #2906 (ADR-036 step 4) moves the route generator onto da-guard parse-tree;
-  # from then on it exits 2 without one. Build it from this checkout unless $DA_GUARD_BINARY
-  # is set, as demo-showcase.sh does; a failed build stops here by name.
-  # A blank value counts as unset, as with_da_guard.sh reads it.
-  _dg="${DA_GUARD_BINARY:-}"
-  if [[ -z "${_dg//[[:space:]]/}" ]]; then
-    if ! make -C "${SCRIPT_DIR}/.." --no-print-directory da-guard-build; then
-      err "could not build da-guard (see above) — set DA_GUARD_BINARY to one, or install Go"
-      exit 2
-    fi
-    export DA_GUARD_BINARY="${SCRIPT_DIR}/../.build/da-guard"
-  fi
+  # The route generator exits 2 without any of its Go readers: da-guard
+  # (parse-tree, ADR-036), da-read and da-crdecode (the shipped platform
+  # rules). Each is built from this checkout unless its DA_*_BINARY is set;
+  # a failed build stops here by name.
+  # shellcheck source=ops/_da_binaries.sh
+  . "${SCRIPT_DIR}/ops/_da_binaries.sh"
+  ensure_da_binary da-guard || exit 2
+  ensure_da_binary da-read || exit 2
+  ensure_da_binary da-crdecode || exit 2
   RB_TMPDIR=$(mktemp -d)
   trap "rm -rf ${RB_TMPDIR}; cleanup" EXIT
 

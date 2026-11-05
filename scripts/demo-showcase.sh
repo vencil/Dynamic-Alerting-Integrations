@@ -226,14 +226,13 @@ step "Validate all tenant configs"
 # `make validate-config` runs) rather than trust a da-guard on $PATH, which may
 # be older than these tools. A failed build stops the demo here, by name,
 # rather than as an rc=2 from validate-config below.
-if [ -z "${DA_GUARD_BINARY:-}" ]; then
-  info "Building da-guard (make da-guard-build) — validate-config reads the tenants through it"
-  if ! make -C "$PROJECT_DIR" --no-print-directory da-guard-build; then
-    warn "could not build da-guard (see above) — set DA_GUARD_BINARY to one, or install Go"
-    exit 2
-  fi
-  export DA_GUARD_BINARY="$PROJECT_DIR/.build/da-guard"
-fi
+# generate-routes below also needs da-read and da-crdecode (the shipped
+# platform rules); each is built the same way unless its DA_*_BINARY is set.
+# shellcheck source=ops/_da_binaries.sh
+. "$PROJECT_DIR/scripts/ops/_da_binaries.sh"
+ensure_da_binary da-guard || exit 2
+ensure_da_binary da-read || exit 2
+ensure_da_binary da-crdecode || exit 2
 
 info "Running: da-tools validate-config --config-dir $CONF_DIR"
 vc_rc=0
