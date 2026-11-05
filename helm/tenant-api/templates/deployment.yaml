@@ -492,7 +492,7 @@ spec:
             capabilities:
               drop: ["ALL"]
           # ADR-027 §10: provider, request-header injection and the listener
-          # (with the upstream: humanSocket.path when humanSocket.enabled) are
+          # (with the upstream: tenant-api's Unix socket, humanSocket.path) are
           # in the structured config file; oauth2-proxy refuses the legacy
           # flags for them alongside it. Session, cookie and route flags stay.
           args:
@@ -531,8 +531,8 @@ spec:
               mountPath: {{ include "tenant-api.oauth2ProxyClientSecretDir" . }}
               readOnly: true
             {{- if .Values.humanSocket.enabled }}
-            # ADR-027 D2-B: mount the shared human-sock dir so oauth2-proxy can dial
-            # the Unix socket tenant-api binds. readOnly: the proxy only connects to
+            # ADR-027 §2: mount the shared human-sock dir so oauth2-proxy can dial
+            # the Unix socket tenant-api serves its API on. readOnly: the proxy only connects to
             # the socket, never creates files here (its rootfs stays read-only).
             - name: human-sock
               mountPath: {{ dir .Values.humanSocket.path }}

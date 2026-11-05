@@ -23,7 +23,10 @@ import (
 //
 // ⛔ Mount it only on the router the UDS listener serves. As a second line,
 // a request whose context says it arrived on another listener is passed on
-// untouched: its headers are never read as identity.
+// untouched: its headers are never read as identity. A request with no
+// listener stamp at all IS resolved — that is how handler tests drive the
+// chain in-process — so any http.Server serving this router must stamp
+// ListenerUDS in its ConnContext (cmd/server/main.go does).
 func ResolveIdentity(res HeaderResolver) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

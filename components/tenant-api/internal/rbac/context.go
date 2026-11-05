@@ -17,7 +17,7 @@ const (
 // errMissingIdentity is returned by HeaderResolver.Resolve when the email
 // header is absent; the RBAC gate answers a request with no principal 401
 // with its message.
-var errMissingIdentity = errors.New("missing identity: X-Forwarded-Email header required")
+var errMissingIdentity = errors.New("missing identity: the request carries no authenticated caller (oauth2-proxy injected no email header)")
 
 // parseForwardedGroups splits an X-Forwarded-Groups header value into a slice
 // of non-empty, trimmed group names. Extracted verbatim from the middleware's

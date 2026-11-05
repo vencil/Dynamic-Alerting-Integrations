@@ -141,7 +141,7 @@ func TestCheckTenantAccess_Unauthorized(t *testing.T) {
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode 401 body: %v", err)
 	}
-	if resp["error"] != "missing identity: X-Forwarded-Email header required" {
+	if resp["error"] != "missing identity: the request carries no authenticated caller (oauth2-proxy injected no email header)" {
 		t.Errorf("401 error = %q, want the pre-envelope message unchanged", resp["error"])
 	}
 }

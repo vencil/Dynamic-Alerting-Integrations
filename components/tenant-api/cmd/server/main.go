@@ -735,7 +735,10 @@ func main() {
 	// pod-internal Unix socket behind the same pod's oauth2-proxy. Each
 	// server's ConnContext stamps its listener (tcp|uds) onto every request
 	// context at accept time — CONNECTION-derived, so a request cannot forge
-	// it. ResolveIdentity reads headers only on a UDS-stamped request.
+	// it. ResolveIdentity, mounted only on `r`, skips headers on a request
+	// stamped with any other listener; an unstamped request (an in-process
+	// test serving `r` directly) is resolved, so every http.Server serving
+	// `r` must stamp ListenerUDS.
 	srvTCP := &http.Server{
 		Addr:         *listenAddr,
 		Handler:      buildTCPRouter(deps, proxyIdentity),

@@ -63,7 +63,7 @@ func TestHeaderResolver_EmptyEmailIsError(t *testing.T) {
 		t.Errorf("expected nil principal on error, got %+v", p)
 	}
 	// The error text is surfaced verbatim as the 401 body; keep it stable.
-	if err.Error() != "missing identity: X-Forwarded-Email header required" {
+	if err.Error() != "missing identity: the request carries no authenticated caller (oauth2-proxy injected no email header)" {
 		t.Errorf("unexpected error text: %q", err.Error())
 	}
 }

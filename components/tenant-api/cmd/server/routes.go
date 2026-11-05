@@ -140,10 +140,10 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	// ADR-027: middleware.RealIP is deliberately NOT used. It unconditionally
 	// overwrites r.RemoteAddr from the client-supplied X-Forwarded-For /
 	// X-Real-IP headers, so anything keyed on RemoteAddr (rate limiting,
-	// audit logs) would be forgeable by any caller. tenant-api sits behind a
-	// same-pod oauth2-proxy (localhost) and a network 8080 port with no
-	// trusted L7 proxy in front, so there is no legitimate reason to trust
-	// those headers for the peer address; keep the true TCP peer.
+	// audit logs) would be forgeable by any caller. This router is served on
+	// the pod-internal Unix socket behind the same pod's oauth2-proxy; nothing
+	// in front of it is trusted to name a peer address, so RemoteAddr is
+	// kept as the listener reports it.
 	r.Use(handler.SlogRequestLogger) // PR-10/11: structured JSON request log w/ request_id
 	// #3226: chi's Recoverer and Timeout answer a panic and the deadline with
 	// a bare status; these answer in the error envelope (handler/http_exits.go).
