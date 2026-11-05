@@ -61,7 +61,7 @@ A **reader** is a program that reads tenant config: the exporter (turns threshol
 1. Whether a key does anything is decided by **what the readers actually do**, not predicted from the key name: for the exporter, look at the values it actually serves; for the generator, look at the registry's declarations, which the probe checks against the generator's actual output.
 2. Facts that cannot be measured (which reader owns each `_`-prefixed reserved key, which layers it may be written in, which keys are retired) go in **one registry** (JSON). The Python and Go reserved-key constants and the top-level declarations of the two JSON schemas are all generated from it.
 3. The "no reader reads it" verdict is computed by **one shared function**. validate-config, the generator's `--validate`, and tenant-api's write check all call it; none implements its own.
-4. A `disable` that turns off nothing, or only part of what it targets, must be reported. A **user-facing output to check and test it themselves** is also provided.
+4. A `disable` that turns off nothing must be reported. A **user-facing output to check and test it themselves** is also provided.
 
 This ADR decides how to judge and how to report, and the rules tenant-api's write check follows once it blocks (decision 5). When each gate (validate-config, the generator's `--validate`, da-guard, tenant-api's write check) changes to "block when judged" is driven, in order, by [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016); that will be a breaking change.
 

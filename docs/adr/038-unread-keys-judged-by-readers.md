@@ -67,7 +67,7 @@ updated_at: 2026-11-05
 1. 一個鍵有沒有用，**看讀取端實際做了什麼**，不從鍵名預測：exporter 的部分看它實際送出的值，產生器的部分看登錄表的宣告，而宣告由探針對照產生器的實際輸出。
 2. 量不到的事實（每個 `_` 開頭的保留鍵歸哪個讀取端、可以寫在哪一層、哪些鍵已退役）寫在**一份登錄表**（JSON）。Python、Go 的保留鍵常數與兩份 JSON schema 的頂層宣告都由它產生。
 3. 「沒有任何讀取端讀」的判決由**一個共用函式**計算，validate-config、產生器 `--validate` 與 tenant-api 的寫入檢查都呼叫它，不各自實作。
-4. `disable` 沒關到任何東西、或只關到一部分時要報出來；並提供一個**讓使用者自己檢查與測試**的輸出。
+4. `disable` 沒關到任何東西時要報出來；並提供一個**讓使用者自己檢查與測試**的輸出。
 
 本 ADR 決定怎麼判、怎麼報，以及 tenant-api 的寫入檢查改成擋下時依什麼規則（決定 5）。各閘門（validate-config、產生器 `--validate`、da-guard、tenant-api 的寫入檢查）何時改成「判到就擋」由 [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016) 依序推進，屆時是 breaking change。
 

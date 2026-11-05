@@ -163,6 +163,8 @@ def note_root_only_policies(conf_d: str | os.PathLike[str], reader: Any = None) 
 _VERDICTS = frozenset({READ, UNREAD, UNDECIDABLE})
 _SEVERITIES = frozenset({ERROR, WARNING, NOTICE})
 _KINDS = frozenset({"unread", "disable_noop", "profile_not_judged"})
+#: Finding kinds only a da-guard older than #3046 writes (`tv._OlderOutput`).
+_RETIRED_KINDS = frozenset({"disable_partial"})
 _DISABLES = frozenset({"effective", "noop"})
 
 
@@ -218,10 +220,20 @@ def _key_verdict(tenant: str, r: dict) -> KeyVerdict:
     return KeyVerdict(tenant, _str(r["key"], f"{w}.key"), _optional(r["layer"], f"{w}.layer"),
                       _optional(r["file"], f"{w}.file"), _tuple(r["read_by"], f"{w}.read_by"), verdict,
                       severity, _optional(r["reason"], f"{w}.reason"),
-                      _optional(r["disable"], f"{w}.disable", _DISABLES), r["value"], r["served"])
+                      _optional(_current_disable(r["disable"], f"{w}.disable"), f"{w}.disable", _DISABLES),
+                      r["value"], r["served"])
+
+
+def _current_disable(v: Any, what: str) -> Any:
+    """v, unless it is an effect only an older da-guard writes (#3046)."""
+    if v in tv.RETIRED_DISABLE_EFFECTS:
+        raise tv._OlderOutput(f"{what}: {v!r}")
+    return v
 
 
 def _finding(f: dict) -> Finding:
+    if f.get("kind") in _RETIRED_KINDS:
+        raise tv._OlderOutput(f"findings.kind: {f['kind']!r}")
     return Finding(_one_of(f["severity"], "findings.severity", _SEVERITIES),
                    _one_of(f["kind"], "findings.kind", _KINDS), _str(f["key"], "findings.key"),
                    _optional(f["file"], "findings.file"), _tuple(f["tenants"], "findings.tenants"),

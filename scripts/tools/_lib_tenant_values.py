@@ -754,6 +754,17 @@ class _OlderSchema(ValueError):
     reader reads (`_run_da_guard`'s *older_schemas*)."""
 
 
+class _OlderOutput(ValueError):
+    """A value only a da-guard older than this tool writes (#3046: the
+    retired `disable: partial` effect and `disable_partial` finding kind) —
+    named as a da-guard to upgrade, not as broken output."""
+
+
+#: Disable effects a da-guard older than #3046 writes and this tool no
+#: longer reads: the base's `disable` now switches its family off.
+RETIRED_DISABLE_EFFECTS = frozenset({"partial"})
+
+
 def _run_da_guard(
     subcommand: str,
     extra: list[str],
@@ -868,7 +879,7 @@ def _run_da_guard(
         # version, #3489, #3016). A schema this reader does not know may be a newer one: not
         # called older.
         stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
-                 if isinstance(e, _OlderSchema)
+                 if isinstance(e, (_OlderSchema, _OlderOutput))
                  or (isinstance(e, KeyError) and (e.args in _FIELDS_ADDED_SINCE
                                                   or (e.args == ("schema",) and subcommand == SUBCOMMAND)))
                 else "")
@@ -1127,6 +1138,10 @@ def load_served_tree(
                 raise ValueError(f"custom_alerts_finding {custom_alerts_finding!r} "
                                  f"with custom_alerts_error {custom_alerts_error!r}")
             key_checks = None if "key_checks" not in tv else _key_checks(tv["key_checks"])
+        except _OlderOutput as e:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries {e} — this da-guard is "
+                "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True) from e
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries keys, routing or custom alerts that are not of their shape ({e!r})",
@@ -1216,6 +1231,8 @@ def _served_key(e: Any) -> ServedKey:
     declared = {str(r): tuple(str(l) for l in layers) for r, layers in (e.get("declared") or {}).items()}
     hint = e.get("hint")
     disable = e.get("disable")
+    if disable in RETIRED_DISABLE_EFFECTS:
+        raise _OlderOutput(f"disable {disable!r}")
     if disable is not None and disable not in DISABLE_EFFECTS:
         raise ValueError(f"disable {disable!r}")
     refused = e.get("refused")

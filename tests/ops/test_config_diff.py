@@ -1379,6 +1379,10 @@ class TestDisableWarnings:
         assert got["mysql_slave_lagg"]["tenants"] == ["db-a"]
         # 有作用的 disable 不列，新加的也一樣；base 就有的也不列。
         assert set(got) == {"mysql_slave_lagg"}
+        # 連帶關掉的 critical 仍列在 threshold_changes，標為停用（#3046）。
+        assert any(c["key"] == "redis_memory_critical" and c.get("disabled") == ["new"]
+                   and c["tenants"] == ["db-a"] for c in _json(p)["threshold_changes"]), \
+            _json(p)["threshold_changes"]
 
         md = _run_cli(old, new).stdout
         assert "## `disable` With No Effect" in md
