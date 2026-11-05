@@ -511,6 +511,11 @@ class CredentialRefSite(NamedTuple):
     an allowlist that names the host exactly; a custom http_headers value is
     re-added on every hop, any host (sensitiveHeadersStripRT strips only
     Authorization / Cookie-like names). A TLS client key is never sent.
+    The oauth2 rows carry the flag for the access token they yield, which
+    rides the webhook client's redirects: http_config.follow_redirects
+    governs only that client. The token request itself goes through a
+    separate client that does not read FollowRedirects, so the flag says
+    nothing about it.
     """
 
     rtype: str
