@@ -31,7 +31,13 @@ type routerDeps struct {
 	RBAC   *rbac.Manager    // route-level RBAC middleware factory
 	Events http.HandlerFunc // SSE endpoint (handler.EventStream: hub filtered per subscriber, #3123)
 
-	// dev-auth-bypass (ADR-022, Layer 1 = default off).
+	// Identity resolves the caller from the identity headers the same pod's
+	// oauth2-proxy injects (ADR-027 §2). This router is served only on the
+	// UDS listener; the TCP listener has buildTCPRouter.
+	Identity rbac.HeaderResolver
+
+	// dev-auth-bypass (ADR-022, Layer 1 = default off): injects an identity
+	// object on this (UDS) router when the request carried none.
 	DevBypass       bool
 	DevBypassEmail  string
 	DevBypassGroups string
@@ -123,13 +129,21 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	r := chi.NewRouter()
 	r.Use(middleware.RequestID)
 	r.Use(handler.RequestIDResponse) // v2.8.0 B-6 PR-1: echo X-Request-ID
+	// ADR-027 §2: the caller is resolved once, here, from the oauth2-proxy
+	// headers; everything below — request log, rate limiter, RBAC gate —
+	// reads the principal from the context. The dev bypass (ADR-022) comes
+	// right after, so its identity is the one they all see.
+	r.Use(rbac.ResolveIdentity(rd.Identity))
+	if rd.DevBypass {
+		r.Use(rbac.DevBypassMiddleware(rd.DevBypassEmail, rd.DevBypassGroups))
+	}
 	// ADR-027: middleware.RealIP is deliberately NOT used. It unconditionally
 	// overwrites r.RemoteAddr from the client-supplied X-Forwarded-For /
 	// X-Real-IP headers, so anything keyed on RemoteAddr (rate limiting,
-	// audit logs) would be forgeable by any caller. tenant-api sits behind a
-	// same-pod oauth2-proxy (localhost) and a network 8080 port with no
-	// trusted L7 proxy in front, so there is no legitimate reason to trust
-	// those headers for the peer address; keep the true TCP peer.
+	// audit logs) would be forgeable by any caller. This router is served on
+	// the pod-internal Unix socket behind the same pod's oauth2-proxy; nothing
+	// in front of it is trusted to name a peer address, so RemoteAddr is
+	// kept as the listener reports it.
 	r.Use(handler.SlogRequestLogger) // PR-10/11: structured JSON request log w/ request_id
 	// #3226: chi's Recoverer and Timeout answer a panic and the deadline with
 	// a bare status; these answer in the error envelope (handler/http_exits.go).
@@ -148,24 +162,17 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	r.Use(handler.MethodNotAllowedEnvelope)
 	r.NotFound(handler.NotFound)
 
-	// dev-auth-bypass (ADR-022): mounted only when --dev-bypass-auth is set
-	// (Layer 1 = default off). Placed before the rate limiter so the injected
-	// X-Forwarded-Email is the bucketing key; downstream RBAC enforces normally.
-	if rd.DevBypass {
-		r.Use(rbac.DevBypassMiddleware(rd.DevBypassEmail, rd.DevBypassGroups))
-	}
-
-	// v2.8.0 B-6 PR-1: per-caller rate limiter. Mounted AFTER the chi
-	// standard chain so the limiter sees the caller identity
-	// (X-Forwarded-Email, populated by oauth2-proxy upstream of tenant-api).
+	// v2.8.0 B-6 PR-1: per-caller rate limiter, keyed on the principal
+	// ResolveIdentity attached above.
 	r.Use(rd.RateLimit)
 
-	// Health / readiness / metrics (no auth)
+	// Health / readiness / metrics (no auth). The TCP router serves the same
+	// three; here /health is what the readiness self-dial asks over the socket.
 	r.Get("/health", handler.Health)
 	r.Get("/ready", handler.Ready(deps))
 	r.Get("/metrics", handler.MetricsHandler)
 
-	// API v1 — all routes require identity headers (injected by oauth2-proxy)
+	// API v1 — every route requires the caller ResolveIdentity attached
 	r.Route(apiV1Prefix, func(r chi.Router) {
 		// Identity endpoint: the caller's own rules (RulesMatching) and
 		// nothing else — authentication only, like OIDC userinfo (#2520; it

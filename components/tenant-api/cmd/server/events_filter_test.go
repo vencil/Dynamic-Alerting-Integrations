@@ -48,7 +48,7 @@ func TestEventsRoute_FiltersPerSubscriber(t *testing.T) {
 	w := httptest.NewRecorder()
 	done := make(chan struct{})
 	go func() {
-		mgr.MiddlewareAnyTenant(rbac.PermRead)(handler.EventStream(d, hub)).ServeHTTP(w, req)
+		rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.MiddlewareAnyTenant(rbac.PermRead)(handler.EventStream(d, hub))).ServeHTTP(w, req)
 		close(done)
 	}()
 	deadline := time.Now().Add(2 * time.Second)

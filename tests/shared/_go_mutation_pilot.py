@@ -52,13 +52,16 @@ MODULE "tenant-api" — `internal/rbac/rbac.go` (LD-6 permission core)
 MODULE "tenant-api" — `internal/rbac/context.go`
   - parseForwardedGroups — X-Forwarded-Groups splitter, empty-entry drop (1 mut)
 
+MODULE "tenant-api" — `internal/rbac/identity.go`
+  - ResolveIdentity   — headers become identity only on the UDS listener (ADR-027 §2) (1 mut)
+
 MODULE "tenant-api" — `internal/proxyconfig/proxyconfig.go`
   - parseHeader       — oauth2-proxy injectRequestHeaders entry (ADR-027 §2) (2 muts)
 
 MODULE "tenant-api" — `internal/federation/token/manager.go`
   - audienceFor       — capability→JWT audience (cross-plane replay guard) (1 mut)
 
-Total: 30 mutations across 14 functions (15 exporter + 15 tenant-api).
+Total: 31 mutations across 15 functions (15 exporter + 16 tenant-api).
 
 Kill targets, exporter: existing Go tests in the parent `package main`
 (e.g., config_three_state_test.go for parseHHMM, config_hierarchy_test.go
@@ -554,6 +557,21 @@ MUTATIONS: list[Mutation] = [
         old='if g != "" {\n\t\t\tgroups = append(groups, g)\n\t\t}',
         new="if true {\n\t\t\tgroups = append(groups, g)\n\t\t}",
         kill_test="TestHeaderResolver_NoGroups",
+    ),
+
+    # ── ResolveIdentity (identity.go) — ADR-027 §2 listener decides ───────
+    Mutation(
+        target_file="internal/rbac/identity.go",
+        test_target="./internal/rbac/...",
+        module="tenant-api",
+        label="ResolveIdentity: read identity headers on a TCP-stamped request",
+        fn_name="ResolveIdentity",
+        # bug class: a request that arrived on the network listener would have
+        # its headers read as identity — anyone who can reach port 8080 could
+        # claim any caller. Kill: TestResolveIdentity_IgnoresHeadersOnTCP.
+        old="if l, stamped := ListenerFromContext(r.Context()); stamped && l != ListenerUDS {",
+        new="if l, stamped := ListenerFromContext(r.Context()); stamped && l != ListenerUDS && false {",
+        kill_test="TestResolveIdentity_IgnoresHeadersOnTCP",
     ),
 
     # ── parseHeader (proxyconfig.go) — ADR-027 §2 identity-header shape ──

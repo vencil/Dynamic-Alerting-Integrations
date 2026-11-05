@@ -15,27 +15,38 @@ package rbac
 // Identity-only: this injects an identity when the upstream proxy did not; RBAC
 // is still fully enforced against the injected group. It does NOT grant extra
 // permissions — the injected group's access comes from _rbac.yaml as usual.
+//
+// ADR-027 §2, §3: the bypass injects an identity OBJECT, never a header, and
+// only on the UDS plane: it is mounted after ResolveIdentity on the router the
+// UDS listener serves, so the TCP listener (no identity at all) never sees it.
 
 import (
 	"net/http"
 )
 
-// DevBypassMiddleware injects a dev identity (email + groups) when no
-// oauth2-proxy header is present, and marks every response with the
-// `X-Dev-Auth-Bypass: active` tripwire header (Layer 2). A real forwarded
-// identity is never overridden. Mounted only when --dev-bypass-auth is set.
+// DevBypassMiddleware attaches a dev identity (email + groups) to a request
+// that ResolveIdentity gave none, and marks every response with the
+// `X-Dev-Auth-Bypass: active` tripwire header (Layer 2). A real identity from
+// the oauth2-proxy headers is never overridden. Mounted only when
+// --dev-bypass-auth is set, and only after ResolveIdentity.
 func DevBypassMiddleware(devEmail, devGroups string) func(http.Handler) http.Handler {
+	dev := VerifiedPrincipal{
+		Subject:   devEmail,
+		Email:     devEmail,
+		Groups:    parseForwardedGroups(devGroups),
+		Source:    SourceDevBypass,
+		Assurance: AssuranceHopAttested,
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Layer 2 tripwire: make the dangerous mode detectable on every
 			// response (monitoring / proxies / curl -I), in any environment.
 			w.Header().Set("X-Dev-Auth-Bypass", "active")
 
-			// Inject identity ONLY when the upstream proxy did not. Never
-			// override a real oauth2-proxy identity.
-			if r.Header.Get("X-Forwarded-Email") == "" {
-				r.Header.Set("X-Forwarded-Email", devEmail)
-				r.Header.Set("X-Forwarded-Groups", devGroups)
+			if RequestPrincipal(r) == nil {
+				p := dev
+				p.Groups = append([]string(nil), dev.Groups...)
+				r = r.WithContext(withPrincipal(r.Context(), &p))
 			}
 			next.ServeHTTP(w, r)
 		})

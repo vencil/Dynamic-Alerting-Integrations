@@ -10,24 +10,18 @@ import (
 	"github.com/vencil/tenant-api/internal/errcode"
 )
 
-// Middleware returns an HTTP middleware that reads IdP identity from
-// oauth2-proxy-injected headers and enforces RBAC for the given permission.
-//
-// Headers read:
-//   - X-Forwarded-Email  — operator identity (used as git commit author)
-//   - X-Forwarded-Groups — comma-separated IdP group names
+// Middleware returns an HTTP middleware that enforces RBAC for the given
+// permission on the caller ResolveIdentity attached to the request (ADR-027
+// §2). It reads no header.
 //
 // On success, the email and groups are available via RequestEmail/RequestGroups.
 // On failure, responds 401 (missing identity) or 403 (insufficient permission).
 //
 // tenantIDFn extracts the tenant ID from the request (may be nil — see below).
 //
-// ADR-027 identity seam (PR-1b-i): the header identity is now resolved through
-// HeaderResolver into a VerifiedPrincipal, and — when a machine-identity
-// auditor is installed (SetMachineAuditor) — an audit side-channel runs before
-// the authorization check. The authorization decision itself is UNCHANGED: it
-// runs entirely off the hop-B header groups. With no auditor installed (the
-// default) the observable behavior is byte-identical to the pre-seam version.
+// When a machine-identity auditor is installed (SetMachineAuditor) an audit
+// side-channel runs before the authorization check; it never changes the
+// decision.
 //
 // tenantIDFn == nil checks `want` on the platform wildcard "*" — passed only by
 // a rule whose tenants list holds the literal "*". That is the coarse route
@@ -79,21 +73,19 @@ func (m *Manager) MiddlewareAuthenticated() func(http.Handler) http.Handler {
 }
 
 // gate is the shared body of Middleware, MiddlewareAnyTenant and
-// MiddlewareAuthenticated: resolve the hop-B principal (401 on a missing
-// identity), run the machine-identity audit side-channel, let authorize decide
+// MiddlewareAuthenticated: take the principal from the context (401 without
+// one), run the machine-identity audit side-channel, let authorize decide
 // (it writes its own denial), then attach the identity to the request context
 // for the handler.
 func (m *Manager) gate(authorize func(http.ResponseWriter, *http.Request, *VerifiedPrincipal) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Resolve the trusted-hop (header) principal. Empty email → 401,
-			// same message and status as before the seam. ClaimHeaders
-			// (ADR-027 / LD-6 P2) loads the declared named claims onto the
-			// principal; nil (the default) resolves byte-identically to the
-			// pre-P2 zero-value HeaderResolver{}.
-			bPrincipal, err := HeaderResolver{ClaimHeaders: m.claimHeaders}.Resolve(r)
-			if err != nil {
-				writeError(w, r, http.StatusUnauthorized, err.Error())
+			// The caller ResolveIdentity (or the dev bypass) attached on the
+			// UDS plane (ADR-027 §2). No principal → 401; this gate never
+			// reads a header itself.
+			bPrincipal := RequestPrincipal(r)
+			if bPrincipal == nil {
+				writeError(w, r, http.StatusUnauthorized, errMissingIdentity.Error())
 				return
 			}
 
@@ -122,12 +114,9 @@ func (m *Manager) gate(authorize func(http.ResponseWriter, *http.Request, *Verif
 				return
 			}
 
-			// Attach identity to request context for downstream use. withIdentity
-			// keeps RequestEmail/RequestGroups working for the ~30 existing
-			// consumers; withPrincipal additionally exposes provenance.
-			ctx := withIdentity(r.Context(), bPrincipal.Email, bPrincipal.Groups)
-			ctx = withPrincipal(ctx, bPrincipal)
-			r = r.WithContext(ctx)
+			// Attach email/groups for the RequestEmail/RequestGroups consumers;
+			// the principal itself is already on the context.
+			r = r.WithContext(withIdentity(r.Context(), bPrincipal.Email, bPrincipal.Groups))
 			next.ServeHTTP(w, r)
 		})
 	}

@@ -39,7 +39,6 @@ func TestLoad_RefusesAmbiguousShapes(t *testing.T) {
 		"secret-source.yaml":            "fixed value",
 		"prefix.yaml":                   "adds the prefix",
 		"basic-auth.yaml":               "basic auth",
-		"claim-swapped.yaml":            `email claim is injected as "X-Forwarded-Groups"`,
 		"claim-wrong.yaml":              "no header injects the email claim",
 		"missing-email.yaml":            "no header injects the email claim",
 		"missing-groups.yaml":           "no header injects the groups claim",
@@ -98,10 +97,12 @@ func TestParse_Refusals(t *testing.T) {
 		{"bool as string", headersDoc("- name: X-Org\n  preserveRequestValue: \"false\"\n  values:\n  - claimSource:\n      claim: org\n"), "not true or false"},
 		{"alias", "x: &h\n  - claimSource:\n      claim: email\n" + headersDoc(""), "anchor"},
 		{"host header", headersDoc("- name: host\n  values:\n  - claimSource:\n      claim: org\n"), "cannot carry identity"},
+		{"hop-by-hop header", headersDoc("- name: connection\n  values:\n  - claimSource:\n      claim: org\n"), "hop-by-hop"},
+		{"probe header", headersDoc("- name: User-Agent\n  values:\n  - claimSource:\n      claim: org\n"), "probes"},
+		{"accept header", headersDoc("- name: accept\n  values:\n  - claimSource:\n      claim: org\n"), "probes"},
 		{"duplicate field", headersDoc("- name: X-Org\n  preserveRequestValue: true\n  preserveRequestValue: false\n  values:\n  - claimSource:\n      claim: org\n"), "written twice"},
 		{"merge key", "injectRequestHeaders:\n- <<: {name: X-Forwarded-Email}\n  values:\n  - claimSource:\n      claim: email\n", "merge key"},
 		{"claim charset", headersDoc("- name: X-Org\n  values:\n  - claimSource:\n      claim: \"o rg\"\n"), "claim name"},
-		{"renamed email header", strings.Replace(headersDoc(""), "X-Forwarded-Email", "X-Auth-Request-Email", 1), "reads email only from"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -133,5 +134,44 @@ func TestDefault(t *testing.T) {
 	t.Parallel()
 	if d := Default(); d.EmailHeader != DefaultEmailHeader || d.GroupsHeader != DefaultGroupsHeader || d.ClaimHeaders != nil {
 		t.Errorf("Default = %+v", d)
+	}
+}
+
+// TestParse_HeaderNamesFollowTheFile: email and groups are read from whatever
+// header the file injects them as (ADR-027 §2) — the claim decides, not the
+// name. The rate limiter and the request log read the resolved principal, so
+// nothing else depends on the conventional names.
+func TestParse_HeaderNamesFollowTheFile(t *testing.T) {
+	t.Parallel()
+	renamed := strings.Replace(headersDoc(""), "X-Forwarded-Email", "X-Auth-Request-Email", 1)
+	id, err := Parse([]byte(renamed))
+	if err != nil {
+		t.Fatalf("Parse refused a renamed email header: %v", err)
+	}
+	if id.EmailHeader != "X-Auth-Request-Email" || id.GroupsHeader != DefaultGroupsHeader {
+		t.Errorf("Parse = %+v, want email from X-Auth-Request-Email, groups from %s", id, DefaultGroupsHeader)
+	}
+
+	swapped, err := Load(filepath.Join("testdata", "claim-swapped.yaml"))
+	if err != nil {
+		t.Fatalf("Load(claim-swapped.yaml): %v", err)
+	}
+	if swapped.EmailHeader != DefaultGroupsHeader || swapped.GroupsHeader != DefaultEmailHeader {
+		t.Errorf("Load(claim-swapped.yaml) = %+v, want email read from %s and groups from %s",
+			swapped, DefaultGroupsHeader, DefaultEmailHeader)
+	}
+}
+
+// TestLoad_TryLocalConfig: try-local and the contract test run oauth2-proxy
+// and tenant-api from try-local/oauth2-proxy/oauth2-proxy.yaml (ADR-027 §3).
+// A file tenant-api refuses would leave the demo stack without an API.
+func TestLoad_TryLocalConfig(t *testing.T) {
+	t.Parallel()
+	id, err := Load(filepath.Join("..", "..", "..", "..", "try-local", "oauth2-proxy", "oauth2-proxy.yaml"))
+	if err != nil {
+		t.Fatalf("tenant-api refuses try-local's oauth2-proxy config: %v", err)
+	}
+	if id.EmailHeader != DefaultEmailHeader || id.GroupsHeader != DefaultGroupsHeader || id.ClaimHeaders != nil {
+		t.Errorf("try-local config = %+v, want email/groups on the conventional headers and no claims", id)
 	}
 }

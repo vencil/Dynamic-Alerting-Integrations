@@ -45,7 +45,7 @@ func TestMiddleware_AuditMode_DoesNotBlock(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	tenantFn := func(r *http.Request) string { return "db-a" }
-	mw := m.Middleware(PermWrite, tenantFn)(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermWrite, tenantFn)(inner))
 
 	req := httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil)
 	req.Header.Set("X-Forwarded-Email", "op@example.com")
@@ -86,7 +86,7 @@ func TestMiddleware_AuditMode_DoesNotGrant(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 	})
 	tenantFn := func(r *http.Request) string { return "db-b" } // no rule for db-b
-	mw := m.Middleware(PermWrite, tenantFn)(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermWrite, tenantFn)(inner))
 
 	req := httptest.NewRequest("PUT", "/api/v1/tenants/db-b", nil)
 	req.Header.Set("X-Forwarded-Email", "op@example.com")
@@ -112,7 +112,7 @@ func TestMiddleware_AuditMode_MissingEmailStill401(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := m.Middleware(PermRead, nil)(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermRead, nil)(inner))
 
 	req := httptest.NewRequest("GET", "/test", nil) // no X-Forwarded-Email
 	req.Header.Set("Authorization", "Bearer forged.token.value")
@@ -147,7 +147,7 @@ func TestMiddleware_NoAuditor_AttachesPrincipalAndKeepsLegacyAccessors(t *testin
 		gotPrincipal = RequestPrincipal(r)
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := m.Middleware(PermRead, nil)(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermRead, nil)(inner))
 
 	req := httptest.NewRequest("GET", "/test", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -209,7 +209,7 @@ func TestMiddleware_AuditPanic_DoesNotBlock(t *testing.T) {
 		innerReached = true
 		w.WriteHeader(http.StatusOK)
 	})
-	mw := m.Middleware(PermWrite, func(*http.Request) string { return "db-a" })(inner)
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermWrite, func(*http.Request) string { return "db-a" })(inner))
 
 	req := httptest.NewRequest("PUT", "/api/v1/tenants/db-a", nil)
 	req.Header.Set("X-Forwarded-Email", "op@example.com")
@@ -256,6 +256,13 @@ func auditBindingObserveCount(t *testing.T, stamp func(context.Context) context.
 	if withBearer {
 		req.Header.Set("Authorization", "Bearer forged.token.value")
 	}
+	// The principal is resolved first (as the UDS router does) and the
+	// listener stamped after: ResolveIdentity reads no header on a TCP-stamped
+	// request (ADR-027 §2), and this test is about the audit binding alone.
+	resolved := req
+	ResolveIdentity(m.HeaderResolver())(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) { resolved = r })).
+		ServeHTTP(httptest.NewRecorder(), req)
+	req = resolved
 	if stamp != nil {
 		req = req.WithContext(stamp(req.Context()))
 	}
@@ -263,7 +270,7 @@ func auditBindingObserveCount(t *testing.T, stamp func(context.Context) context.
 	mw.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200 (authz is header-driven regardless of listener)", w.Code)
+		t.Fatalf("status = %d, want 200 (authz runs off the principal regardless of listener)", w.Code)
 	}
 	return aud.called.Load()
 }
@@ -314,7 +321,7 @@ func TestMiddleware_AuditPanic_DoesNotGrant(t *testing.T) {
 	m.SetMachineAuditor(&panickingAuditor{})
 
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
-	mw := m.Middleware(PermWrite, func(*http.Request) string { return "db-b" })(inner) // no rule for db-b
+	mw := ResolveIdentity(m.HeaderResolver())(m.Middleware(PermWrite, func(*http.Request) string { return "db-b" })(inner)) // no rule for db-b
 
 	req := httptest.NewRequest("PUT", "/api/v1/tenants/db-b", nil)
 	req.Header.Set("X-Forwarded-Email", "op@example.com")

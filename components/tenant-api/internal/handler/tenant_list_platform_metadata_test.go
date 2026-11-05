@@ -369,7 +369,7 @@ func TestListAndSearch_UnreadablePlatformLayerMakesMetadataUnknown(t *testing.T)
 			}
 			return out
 		}
-		h := mgr.Middleware(rbac.PermRead, nil)(ListTenants(&Deps{ConfigDir: dir, RBAC: mgr}))
+		h := rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.Middleware(rbac.PermRead, nil)(ListTenants(&Deps{ConfigDir: dir, RBAC: mgr})))
 		req := httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil)
 		req.Header.Set("X-Forwarded-Email", "test@example.com")
 		req.Header.Set("X-Forwarded-Groups", "all-tenants")

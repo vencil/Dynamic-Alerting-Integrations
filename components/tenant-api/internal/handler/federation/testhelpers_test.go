@@ -96,7 +96,7 @@ func newRBACManager(t *testing.T, yaml string) *rbac.Manager {
 }
 
 func wrapWithRBACMiddleware(handler http.HandlerFunc, mgr *rbac.Manager, perm rbac.Permission, tenantIDFn func(*http.Request) string) http.Handler {
-	return mgr.Middleware(perm, tenantIDFn)(handler)
+	return rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.Middleware(perm, tenantIDFn)(handler))
 }
 
 // setRequestIdentity wraps a request through the RBAC middleware to set context identity.
@@ -114,7 +114,7 @@ func setRequestIdentity(req *http.Request, email string) *http.Request {
 func executeWithRBAC(t *testing.T, handler http.HandlerFunc, req *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
 	mgr := newRBACManager(t, "")
-	wrapped := mgr.MiddlewareAuthenticated()(handler)
+	wrapped := rbac.ResolveIdentity(mgr.HeaderResolver())(mgr.MiddlewareAuthenticated()(handler))
 	w := httptest.NewRecorder()
 	wrapped.ServeHTTP(w, req)
 	return w

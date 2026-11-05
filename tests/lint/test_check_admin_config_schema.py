@@ -50,6 +50,7 @@ from check_admin_config_schema import (  # noqa: E402
     _CallerError,
     _Readers,
     claim_declaration,
+    config_check,
     embedded_source_for,
     schema_for,
     validate_embedded_file,
@@ -580,6 +581,27 @@ class TestFailClosed:
         p = _write(tmp, "_tenant_orgs.yaml", "tenant_orgs: {}\n")
         result = _run("--tenant-api-binary", os.path.join(tmp, "nope"), p)
         assert result.returncode == EXIT_CALLER_ERROR, result.stdout + result.stderr
+
+    # The temporary oauth2-proxy config config_check hands tenant-api: a
+    # failure to create or write it is a caller error naming what it was for,
+    # never a silent check without the declared claims.
+    def test_temp_dir_failure_is_a_caller_error(self, monkeypatch):
+        import check_admin_config_schema as mod
+
+        def no_tmp(*_a, **_k):
+            raise OSError("no space left on device")
+        monkeypatch.setattr(mod.tempfile, "TemporaryDirectory", no_tmp)
+        with pytest.raises(_CallerError, match="cannot create a temporary directory.*no space left"):
+            config_check("/nonexistent/tenant-api", "rbac", "x.yaml", path="x.yaml", claims="c")
+
+    def test_temp_config_write_failure_is_a_caller_error(self, monkeypatch):
+        import check_admin_config_schema as mod
+
+        def no_write(*_a, **_k):
+            raise OSError("read-only file system")
+        monkeypatch.setattr(mod, "open", no_write, raising=False)
+        with pytest.raises(_CallerError, match="cannot write the temporary oauth2-proxy config.*read-only"):
+            config_check("/nonexistent/tenant-api", "rbac", "x.yaml", path="x.yaml", claims="c")
 
     def test_a_binary_without_config_check_is_exit_two(self, tmp):
         # A tenant-api older than `config check` prints no config-check document.

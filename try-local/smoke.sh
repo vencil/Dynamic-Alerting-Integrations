@@ -4,14 +4,19 @@
 # Checks, any failure → exit 1 with a reason on stderr:
 #   1. Prometheus :9090/api/v1/alerts — POLL until a critical alert is firing
 #      (proves the exporter→prometheus→rule-pack fire-chain end to end).
-#   2. tenant-api :8080/api/v1/me — oauth2-proxy-style headers → HTTP 200.
-#   3. tenant-api :8080/api/v1/tenants — RBAC-filtered list == 2 tenants
+#   2. The API through oauth2-proxy (:8080/api/v1/me) → HTTP 200 as the dev
+#      identity, even when the client sends identity headers of its own:
+#      oauth2-proxy strips them and tenant-api's dev bypass injects the demo
+#      identity on the Unix-socket plane (ADR-027 §2, §3).
+#   2c. tenant-api's TCP port (:8083) is probes only (ADR-027 §3): /api/v1/me
+#      → 404, any path with an identity header → 400, /health → 200.
+#   3. The API through oauth2-proxy: /api/v1/tenants — RBAC-filtered list == 2 tenants
 #      (db-demo + cache-demo). NOTE: the literal C7 AC said /me
 #      accessible_tenants==2, but that is impossible with the published
 #      tenant-api — the /me gate needs tenants:["*"], which makes
 #      accessible_tenants==["*"]. The "2 tenants" the portal shows come from
 #      /api/v1/tenants, so that is what we assert. See README.
-#   3b. tenant-api :8080/metrics — tenant_api_policy_available 1: the
+#   3b. tenant-api :8083/metrics — tenant_api_policy_available 1: the
 #      generator container answers tenant-api's status read (#2903), so the
 #      two run as one uid and share the socket; without it every write the
 #      portal makes answers 503.
@@ -39,6 +44,7 @@ fi
 HOST="${SMOKE_HOST:-localhost}"
 PROM_PORT="${EXPOSE_PROM_PORT:-9090}"
 API_PORT="${EXPOSE_API_PORT:-8080}"
+PROBE_PORT="${EXPOSE_API_PROBE_PORT:-8083}"
 PORTAL_PORT="${EXPOSE_PORTAL_PORT:-8081}"
 PREVIEW_PORT="${EXPOSE_PREVIEW_PORT:-8082}"
 # Headroom: the mariadb pack's recording rules run at interval:15s, then the
@@ -68,26 +74,35 @@ while :; do
   sleep 3
 done
 
-# 2. /api/v1/me → 200.
-code="$(curl -s -o /dev/null -w '%{http_code}' \
-  -H 'X-Forwarded-Email: dev@local' -H 'X-Forwarded-Groups: demo-admins' \
-  "http://${HOST}:${API_PORT}/api/v1/me")"
-[ "$code" = "200" ] || fail "/api/v1/me returned HTTP ${code} (want 200)"
-echo "[smoke] OK: /api/v1/me 200"
+# 2. /api/v1/me through oauth2-proxy → 200, as the dev identity. The request
+#    claims another identity: oauth2-proxy must strip the client's copy of
+#    every header it injects, so tenant-api still sees no identity and its dev
+#    bypass supplies dev@local. Seeing the forged email here would mean a
+#    client can choose who it is.
+me="$(curl -sf -H 'X-Forwarded-Email: forged@example.com' -H 'X-Forwarded-Groups: forged-admins' \
+  "http://${HOST}:${API_PORT}/api/v1/me")" || fail "/api/v1/me through oauth2-proxy did not answer 2xx"
+email="$(printf '%s' "$me" | jq -r '.email // empty')"
+[ "$email" = "dev@local" ] || fail "/api/v1/me answered as '${email}' (want dev@local: oauth2-proxy must strip client identity headers)"
+echo "[smoke] OK: /api/v1/me 200 via oauth2-proxy as dev@local (client identity headers stripped)"
 
-# 2b. Browser path: portal proxy → tenant-api /api/v1/me with NO identity
-#     headers. This is exactly what a real browser sends; the dev-bypass MUST
-#     inject an identity or the Tenant Manager renders blank. This catches a
-#     tenant-api image that lacks --dev-bypass-auth (a header-only check on
-#     :8080 would pass while the actual showcase is broken).
+# 2b. Browser path: portal proxy → oauth2-proxy → tenant-api /api/v1/me with NO
+#     identity headers. This is exactly what a real browser sends; the
+#     dev-bypass MUST inject an identity or the Tenant Manager renders blank.
 code="$(curl -s -o /dev/null -w '%{http_code}' "http://${HOST}:${PORTAL_PORT}/api/v1/me")"
 [ "$code" = "200" ] || fail "portal-proxied /api/v1/me (no headers) returned HTTP ${code} (want 200 — dev-bypass must inject identity for the browser path)"
 echo "[smoke] OK: browser path /api/v1/me via portal (dev-bypass injected) 200"
 
+# 2c. tenant-api's own TCP port serves probes only (ADR-027 §3).
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://${HOST}:${PROBE_PORT}/api/v1/me")"
+[ "$code" = "404" ] || fail "tenant-api TCP :${PROBE_PORT}/api/v1/me returned HTTP ${code} (want 404: the API is only behind oauth2-proxy)"
+code="$(curl -s -o /dev/null -w '%{http_code}' -H 'X-Forwarded-Email: dev@local' "http://${HOST}:${PROBE_PORT}/health")"
+[ "$code" = "400" ] || fail "tenant-api TCP :${PROBE_PORT}/health with an identity header returned HTTP ${code} (want 400)"
+code="$(curl -s -o /dev/null -w '%{http_code}' "http://${HOST}:${PROBE_PORT}/health")"
+[ "$code" = "200" ] || fail "tenant-api TCP :${PROBE_PORT}/health returned HTTP ${code} (want 200)"
+echo "[smoke] OK: tenant-api TCP port is probes only (API 404, identity header 400)"
+
 # 3. /api/v1/tenants → exactly 2 tenants (db-demo, cache-demo).
-tenants="$(curl -sf \
-  -H 'X-Forwarded-Email: dev@local' -H 'X-Forwarded-Groups: demo-admins' \
-  "http://${HOST}:${API_PORT}/api/v1/tenants")"
+tenants="$(curl -sf "http://${HOST}:${API_PORT}/api/v1/tenants")"
 count="$(printf '%s' "$tenants" | jq 'length')"
 [ "$count" = "2" ] || fail "/api/v1/tenants listed '${count}' tenants (want 2: db-demo, cache-demo)"
 echo "[smoke] OK: /api/v1/tenants lists 2 tenants"
@@ -99,7 +114,7 @@ ok=""
 for _ in $(seq 1 $(( (GENERATOR_TIMEOUT + 1) / 2 ))); do
   # Captured first, no pipe: `curl | grep -q` under pipefail reads the
   # writer's SIGPIPE (grep stops at the match) as a failure.
-  metrics="$(curl -sf "http://${HOST}:${API_PORT}/metrics" || true)"
+  metrics="$(curl -sf "http://${HOST}:${PROBE_PORT}/metrics" || true)"
   if grep -qx 'tenant_api_policy_available 1' <<<"$metrics"; then
     ok=1
     break

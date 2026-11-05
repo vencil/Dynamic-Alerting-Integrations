@@ -217,7 +217,7 @@ func TestBatchTenants_DeclaredElsewhere(t *testing.T) {
 		req.Header.Set("X-Forwarded-Email", "alice@example.com")
 		req.Header.Set("X-Forwarded-Groups", "admins")
 		w := httptest.NewRecorder()
-		rbacMgr.Middleware(rbac.PermRead, nil)(BatchTenants(d)).ServeHTTP(w, req)
+		rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(BatchTenants(d))).ServeHTTP(w, req)
 		return w
 	}
 

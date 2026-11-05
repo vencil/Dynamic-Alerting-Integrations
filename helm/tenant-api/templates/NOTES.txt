@@ -3,34 +3,13 @@ tenant-api installed — ADR-009 Tenant Manager CRUD API.
   Service   : {{ include "tenant-api.name" . }}.{{ .Release.Namespace }}.svc
   Write mode: single-writer (replicaCount={{ .Values.replicaCount }}, strategy Recreate)
 
-SECURITY (GHSA-3g2h-rf85-5rrv) — internal port 8080 BYPASSES oauth2-proxy and
-  blindly trusts X-Forwarded-Groups / X-Forwarded-Email. Anything that can reach
-  8080 can assert ANY identity (incl. platform-admins -> fleet admin write +
-  federation token minting + git PR-write). The pod-scoped NetworkPolicy (three
-  admitted clients: Prometheus + recipe-preview + da-portal)
-  is the ONLY control on that port — this is why networkPolicy.enabled=false is a
-  hard failure.
-
-{{- if .Values.humanSocket.enabled }}
-
-HUMAN SOCKET (ADR-027 D2-B) — ENABLED. The oauth2-proxy sidecar forwards human
-  traffic to tenant-api over a pod-internal Unix socket ({{ .Values.humanSocket.path }}),
-  not the network 8080 plane. That human traffic is excluded from the machine-
-  identity audit denominator. Requires a tenant-api image that supports the
-  human socket (TA_HUMAN_SOCKET; image tag derives from appVersion {{ .Chart.AppVersion }}); an
-  image from this release on refuses a TA_* variable it does not read (exit 2, named);
-  an image older than that check ignores it and never opens the socket. Do NOT flip this via
-  `helm upgrade --reuse-values` — pass humanSocket values explicitly.
-{{- else }}
-
-HUMAN SOCKET (ADR-027 D2-B) — disabled (default). oauth2-proxy upstream stays
-  http://localhost:8080. Enable ONLY once the deployed image supports
-  the human socket, TA_HUMAN_SOCKET (tag derives from appVersion); pass humanSocket values
-  explicitly, never via --reuse-values. Example:
-    helm upgrade {{ .Release.Name }} helm/tenant-api \
-      --set humanSocket.enabled=true \
-      --set humanSocket.path=/run/ta-human/human.sock
-{{- end }}
+IDENTITY (ADR-027 §2, §3; GHSA-3g2h-rf85-5rrv) — the API is served only on a
+  pod-internal Unix socket ({{ .Values.humanSocket.path }}) behind the oauth2-proxy
+  sidecar, which reads the same config file tenant-api does. Port 8080 serves
+  only /health, /ready and /metrics; a request there carrying an identity header
+  (X-Forwarded-Email, X-Forwarded-Groups or a configured claim header) is
+  answered 400. A client that still calls the API on 8080 gets 404: point it at
+  the oauth2-proxy port (Service port `http`).
 
 NetworkPolicy only works if your CNI ENFORCES it. Flannel (base) and some managed
   "simple" CNIs SILENTLY IGNORE NetworkPolicy: the API server accepts it and this

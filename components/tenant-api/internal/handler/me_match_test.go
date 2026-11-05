@@ -48,7 +48,7 @@ func serveMe(t *testing.T, rbacMgr *rbac.Manager, groups, orgHeader string) MeRe
 		req.Header.Set("X-Auth-Request-Org", orgHeader)
 	}
 	w := httptest.NewRecorder()
-	wrapped := rbacMgr.Middleware(rbac.PermRead, nil)(handler)
+	wrapped := rbac.ResolveIdentity(rbacMgr.HeaderResolver())(rbacMgr.Middleware(rbac.PermRead, nil)(handler))
 	wrapped.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())

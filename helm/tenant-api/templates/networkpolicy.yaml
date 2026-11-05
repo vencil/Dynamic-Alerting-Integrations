@@ -1,14 +1,15 @@
 {{- /*
-  Fail-closed guard (GHSA-3g2h-rf85-5rrv). tenant-api ALWAYS trusts injected
-  identity headers (X-Forwarded-Groups / X-Forwarded-Email) on internal port 8080,
-  which deliberately bypasses oauth2-proxy. The NetworkPolicy is the ONLY control
-  that stops an arbitrary pod from asserting any identity (incl. platform-admins)
-  over that port — it is a REQUIRED security control, never an optional toggle.
-  `--set networkPolicy.enabled=false` therefore renders a hard failure instead of
+  Fail-closed guard (GHSA-3g2h-rf85-5rrv). Since ADR-027 §2, §3 port 8080
+  serves only /health, /ready and /metrics and answers a request carrying an
+  identity header 400; the API is on the pod-internal Unix socket behind
+  oauth2-proxy. The NetworkPolicy stays a required defense-in-depth control
+  (the recipe-preview and da-portal relay entries below are the old
+  topology's channels and go with later ADR-027 changes):
+  `--set networkPolicy.enabled=false` renders a hard failure instead of
   silently dropping the policy.
 */ -}}
 {{- if not .Values.networkPolicy.enabled }}
-{{- fail "networkPolicy.enabled=false is forbidden: tenant-api trusts internal headers on port 8080 (X-Forwarded-Groups/Email bypass oauth2-proxy); the NetworkPolicy is a REQUIRED security control (GHSA-3g2h-rf85-5rrv), not an optional feature. Do not disable it." }}
+{{- fail "networkPolicy.enabled=false is forbidden: the NetworkPolicy is a REQUIRED defense-in-depth control on tenant-api's port 8080 (GHSA-3g2h-rf85-5rrv; ADR-027 §8), not an optional feature. Do not disable it." }}
 {{- end }}
 {{- /*
   Empty-selector guard (GHSA-3g2h-rf85-5rrv). internalPortAllow.prometheus /
@@ -44,10 +45,10 @@ spec:
         - port: 4180
           protocol: TCP
 
-    # Allow ONLY the workloads that legitimately use internal port 8080, pod-scoped
-    # (GHSA-3g2h-rf85-5rrv). Port 8080 bypasses oauth2-proxy and trusts injected
-    # identity headers, so a bare namespaceSelector over-grants every pod in the
-    # monitoring ns. Each `from` entry AND-s ns+pod; entries are OR-ed.
+    # Allow ONLY the listed workloads on internal port 8080, pod-scoped
+    # (GHSA-3g2h-rf85-5rrv; defense in depth since ADR-027 §2, §3 left 8080
+    # with probes only and a 400 for identity headers). Each `from` entry
+    # AND-s ns+pod; entries are OR-ed.
     - from:
         # Prometheus scrape (/metrics on 8080): this repo's raw Prometheus.
         - namespaceSelector:
@@ -71,9 +72,9 @@ spec:
           podSelector:
             matchLabels:
               {{- toYaml .Values.networkPolicy.internalPortAllow.recipePreview | nindent 14 }}
-        # da-portal relay (ADR-027 D2-B O1) — forwards the human's /api/v1 requests
-        # to 8080 with an audience-bound SA token. Same pod+ns AND-scoping as the
-        # others; this is the human-plane network entry that D2-B makes explicit.
+        # da-portal relay — the old topology forwarded the human's /api/v1
+        # requests here; since ADR-027 §2 port 8080 has no API (404 / 400).
+        # Removed with the relay list in a later ADR-027 change.
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: {{ .Values.networkPolicy.prometheusNamespace }}

@@ -108,7 +108,7 @@ func (f *prFixture) batch(t *testing.T, body string) *httptest.ResponseRecorder 
 	req.Header.Set("X-Forwarded-Email", "alice@example.com")
 	req.Header.Set("X-Forwarded-Groups", "admins")
 	rec := httptest.NewRecorder()
-	f.deps.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(f.deps)).ServeHTTP(rec, req)
+	rbac.ResolveIdentity(f.deps.RBAC.HeaderResolver())(f.deps.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(f.deps))).ServeHTTP(rec, req)
 	return rec
 }
 
@@ -280,7 +280,7 @@ func TestPRMode_CancelledRequestIs503(t *testing.T) {
 		req = req.WithContext(ctx)
 		rec := httptest.NewRecorder()
 		if batch {
-			f.deps.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(f.deps)).ServeHTTP(rec, req)
+			rbac.ResolveIdentity(f.deps.RBAC.HeaderResolver())(f.deps.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(f.deps))).ServeHTTP(rec, req)
 		} else {
 			wrapWithRBACMiddleware(PutTenant(f.deps), f.deps.RBAC, rbac.PermWrite, TenantIDFromPath).ServeHTTP(rec, req)
 		}

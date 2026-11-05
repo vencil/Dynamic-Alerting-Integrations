@@ -14,8 +14,10 @@ injectRequestHeaders to decide which identity headers it trusts. Pinned here:
     stripped), with oauth2Proxy.claimHeaders as the extra claims;
   * the removed identity.claimHeaders key fails the render and
     TA_IDENTITY_CLAIM_HEADERS is gone (ADR-027 §6);
-  * a '$' in any value fails the render: oauth2-proxy expands environment
-    references in the file and tenant-api refuses such a file.
+  * a '$' in a value the chart writes into the config file fails the render:
+    oauth2-proxy expands environment references in the file and tenant-api
+    refuses such a file (a value that becomes a flag, such as redirectUrl,
+    is not in the file and is not checked).
 
 tests/oauth2-proxy/ loads the same render with oauth2-proxy's own code, and
 CI runs `--config-test` in the pinned image (ADR-027 §9 item 9).

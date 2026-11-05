@@ -31,7 +31,7 @@
 
 **不做**
 
-- **不做認證**——身分來自 oauth2-proxy 注入的 `X-Forwarded-Email` / `X-Forwarded-Groups`
+- **不做認證**——身分來自同一個 pod 的 oauth2-proxy 經 Unix socket 注入的 header(哪些 header 由 oauth2-proxy 設定檔決定);TCP port 不提供 API,只有 `/health`、`/ready`、`/metrics`([ADR-027](../../docs/adr/027-tenant-api-caller-identity.md) §2、§3,見「兩個 listener」)
 - **不做 schema 演化**——YAML schema 由 threshold-exporter 的 config 套件擁有
 - **不做持久化 task store**——async task 存在記憶體,pod 重啟後消失(polling 收到 404 視為 task 遺失)。持久狀態只有聯邦 token 記錄與 tenant-api 自己的紀錄(群組、saved view、聯邦白名單與子集、AccountID 帳本),各存於一個 ConfigMap(單機為一個目錄),非資料庫
 - **不做 PR / MR 合併**——建立後等人工 review,只追蹤狀態
@@ -220,7 +220,7 @@ Prometheus 文字格式(`text/plain; version=0.0.4`)。「何時出現」寫「�
 | `tenant_api_store_scan_last_success_timestamp_seconds` | Gauge | conf.d 掃描成功過一次之後 | 上一列那次成功掃描的 unix 秒數;掃描失敗時不前進。tenant-api 在跑、這個值卻不存在或久未前進(超過規則設定的閾值)時,上一列的值不可信(告警 `TenantApiStoreScanStale`) |
 | `tenant_api_dev_auth_bypass_active` | Gauge | 恆有 | 1 = `--dev-bypass-auth` 開著(僅限本機開發,正式環境須為 0) |
 | `tenant_api_sse_clients` | Gauge | 恆有 | 目前連線中的 SSE(`/api/v1/events`)客戶端數 |
-| `tenant_api_human_socket_up` | Gauge | 設了 `--human-socket` | 1 = human-plane Unix socket 回應了 readiness 自我探測 |
+| `tenant_api_human_socket_up` | Gauge | 恆有 | 1 = 提供 API 的 Unix socket 回應了 readiness 自我探測 |
 | `tenant_api_forge_circuit_state{provider}` | Gauge | PR／MR 寫回模式 | forge 斷路器狀態:0 = closed、1 = half-open、2 = open(forge 故障,寫入回 503) |
 | `tenant_api_forge_pr_conflicts{provider}` | Gauge | PR／MR 寫回模式,tracker 同步過一次後 | 上次同步時處於 merge conflict 的 PR／MR 數 |
 | `tenant_api_generator_rejections_total{reason}` | Counter | 恆有 | 產生器容器沒能判定而拒收的寫入數(`GENERATOR_REJECTED`／可重試的 `GENERATOR_BUSY`,#2903、#3202);全部未寫入。值:`deadline` / `memory` / `incomplete` / `git_read` / `busy` / `too_large` / `invalid_request` / `mismatch` / `no_time` / `normalized` / `key_verdict_no_time` / `key_verdict_deadline` / `key_verdict_memory` / `key_verdict_error` / `key_verdict_undecidable` / `key_verdict_platform_file`;`key_verdict_*` 是產生器放行、但鍵的判決沒判完而拒收的(ADR-038 決定 5),其中 `key_verdict_no_time`、`key_verdict_deadline` 可重試 |
@@ -259,7 +259,7 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 | `TA_ADDR` | `:8080` | HTTP listen address |
 | `TA_GENERATOR_SOCKET` | (空) | **必填**。產生器容器(`da-tools generator-service`)的 Unix socket;每筆會改變 conf.d 內容的寫入 commit 前都問它(ADR-036,#2903)。不設或只有空白就**拒絕啟動**。產生器必須以同一個 uid 執行、讀同一個 git repo |
 | `TA_DEPLOY_POLICY` | (空) | 部署端 policy 檔(產生器 `--policy` 的同一份,唯讀掛載)的路徑;tenant-api 算它的 sha256 核對產生器判定時用的是同一份。空 = 產生器也不帶 `--policy`(兩邊須一致,否則寫入回 429 `mismatch`) |
-| `TA_HUMAN_SOCKET` | (空) | 給 human plane(同 pod 的 oauth2-proxy)用的 Unix socket 路徑;設了就在這個 socket 上**另外**提供同一套路由。空 = 只有 TCP |
+| `TA_HUMAN_SOCKET` | (空) | **必填**:提供 API 的 Unix socket 路徑,同一個 pod 的 oauth2-proxy 把 `/api/` 轉到這裡;沒有就拒絕啟動。TCP(`TA_ADDR`)只有 `/health`、`/ready`、`/metrics` |
 | `TA_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error`;其他值當成 `info` |
 
 **請求上限與逾時**
@@ -305,7 +305,7 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 
 | 變數 | 預設 | 說明 |
 |------|------|------|
-| `TA_OAUTH2_PROXY_CONFIG` | (空) | 同一個 pod 的 oauth2-proxy 所用的結構化設定檔(`--alpha-config`)路徑;tenant-api 讀其中的 `injectRequestHeaders` 決定 email、group 與各 claim 由哪個 header 帶來,形狀不符即拒絕啟動(見「身分 header 由 oauth2-proxy 設定檔決定」)。空 = 不讀額外 claim,email／group 取自 `X-Forwarded-Email`／`X-Forwarded-Groups` |
+| `TA_OAUTH2_PROXY_CONFIG` | (空) | 同一個 pod 的 oauth2-proxy 所用的結構化設定檔(`--alpha-config`)路徑;tenant-api 讀其中的 `injectRequestHeaders` 決定 email、group 與各 claim 由哪個 header 帶來,形狀不符即拒絕啟動(見「身分 header 由 oauth2-proxy 設定檔決定」)。server **必填**;`config check` 可省略(不讀額外 claim) |
 | `TA_MACHINE_IDENTITY_AUDIT` | `false` | 以 TokenReview 稽核呼叫端的 ServiceAccount token;只記錄,不影響授權。需要 in-cluster config |
 | `TA_MACHINE_IDENTITY_AUDIENCE` | `tenant-api` | 上述稽核要求的 audience |
 | `TA_MACHINE_IDENTITY_ISSUER` | (空) | 稽核的 issuer 允許清單(逗號分隔);空 = 全部交給 TokenReview |
@@ -314,7 +314,7 @@ data: {"type":"config_change","tenant_id":"db-a-prod","timestamp":"2026-05-03T10
 
 | 變數 | 預設 | 說明 |
 |------|------|------|
-| `TA_DEV_BYPASS_AUTH` | `false` | 沒有 oauth2-proxy header 時注入開發身分;在 Kubernetes 內啟動會 panic([ADR-022](../../docs/adr/022-dev-auth-bypass-four-layer-containment.md)) |
+| `TA_DEV_BYPASS_AUTH` | `false` | Unix socket 上的請求沒有身分時注入開發身分(身分物件,不是 header;TCP 不受影響);在 Kubernetes 內啟動會 panic([ADR-022](../../docs/adr/022-dev-auth-bypass-four-layer-containment.md)) |
 | `TA_DEV_BYPASS_EMAIL` | `dev@local` | 注入的身分 email |
 | `TA_DEV_BYPASS_GROUPS` | `demo-admins` | 注入的 IdP group(逗號分隔;須在 `_rbac.yaml` 對得到租戶) |
 
@@ -418,11 +418,19 @@ oauth2-proxy 會先清除 client 帶來的同名 header 再注入,所以這些 h
 只接受意義不含糊的設定檔,其餘一律拒絕啟動(`config check --kind oauth2-proxy` 判定這份檔時拒絕為 exit 1;`--kind rbac|scope` 經 `--oauth2-proxy-config` 讀到不合格的檔時為 exit 2,因為 server 用它根本不會啟動):
 
 - 每個注入的 header 恰好一個值,且取自一個 session claim:不加前綴(`prefix`)、不轉成 basic auth、不用固定值(`secretSource`)、不保留 client 值(`preserveRequestValue: true`)、不關閉 header 名稱正規化(`InsecureSkipHeaderNormalization: true`)。
-- `email` 與 `groups` 各恰好由一個 header 注入;其他 claim 至多一個 header,且不得是 token 或時間戳(`access_token`、`id_token`、`refresh_token`、`created_at`、`expires_on`)。header 名只用英數與單個 `-`(oauth2-proxy 清除 client 值時把 `_` 當成 `-`,Go 不會)。
+- `email` 與 `groups` 各恰好由一個 header 注入;其他 claim 至多一個 header,且不得是 token 或時間戳(`access_token`、`id_token`、`refresh_token`、`created_at`、`expires_on`)。header 名只用英數與單個 `-`(oauth2-proxy 清除 client 值時把 `_` 當成 `-`,Go 不會),且不得是 `Host`、hop-by-hop header(`Connection` 等,oauth2-proxy 轉送前會移除)、一般 client 與 kubelet probe 都會送的 `User-Agent`／`Accept`／`Accept-Encoding`(TCP 對身分 header 回 400,probe 會全失敗),或 `Content-Length`、`Content-Type`、`Cookie`、`Authorization`。
 - oauth2-proxy 會先展開設定檔裡的環境變數參照、且不分大小寫比對欄位名稱,所以**檔案含 `$`**、或欄位名稱不是 oauth2-proxy 的拼法,一律拒絕;YAML anchor／alias／merge key 與多文件檔也拒絕。
-- 這一版 email 與 group 只能是 `X-Forwarded-Email`／`X-Forwarded-Groups`:request log 與 rate limit 仍直接讀 `X-Forwarded-Email`,改讀身分物件之後才放寬。
 
-沒有設定檔時(本機試用、契約測試這類不經 oauth2-proxy 的拓撲)不讀任何額外 claim,email／group 取自 `X-Forwarded-Email`／`X-Forwarded-Groups`。
+email 與 group 的 header 名照設定檔,不限 `X-Forwarded-Email`／`X-Forwarded-Groups`:request log 與 rate limit 讀的是解析後的身分物件,不讀 header。server 沒有設定檔就不啟動;本機試用與契約測試也經 oauth2-proxy(見「兩個 listener」)。
+
+### 兩個 listener
+
+連線來自哪個 listener 決定身分來源([ADR-027 §2、§3](../../docs/adr/027-tenant-api-caller-identity.md)):
+
+- **Unix socket**(`--human-socket`／`TA_HUMAN_SOCKET`,必填):整套 API。身分只在這裡、只由一處從 header 建立,rate limit、request log、RBAC 與開發旁路都讀那個身分物件。
+- **TCP**(`--addr`／`TA_ADDR`):只有 `GET /health`、`/ready`、`/metrics`,路徑精確比對(`/health/`、`/api/v1/health` 都不算),其餘路徑 404,這三條路徑用 GET 以外的方法回 405(附 `Allow` header);帶任何身分 header(`X-Forwarded-Email`、`X-Forwarded-Groups`,以及設定檔注入的 email、group 與 claim header)的請求不論路徑一律 400,讓仍把身分轉送到 8080 的舊設定立刻失敗。
+
+開發旁路(`--dev-bypass-auth`)只在 Unix socket 上作用:oauth2-proxy 以全路徑免登入執行時沒有任何 session,也就不注入身分 header(client 帶來的同名 header 照樣被清掉),由旁路注入開發身分。本機試用(`try-local/`)與契約測試(`tests/contract/`)都是這個拓樸。
 
 `tenant-api config check --kind oauth2-proxy FILE` 以 server 的同一個解析函式判定設定檔,印出 email、group 與各 claim 的 header,或拒絕的理由。
 
@@ -479,12 +487,16 @@ docker build -t tenant-api -f components/tenant-api/Dockerfile .
 python3 scripts/tools/ops/generator_service.py --socket "$(pwd)/gen/generator.sock" \
   --repo "$(pwd)/conf.d" --config-subdir . --work-dir "$(pwd)/gen/work" &
 # TA_STATE_*：群組、views、federation 設定與 AccountID 帳本存在 conf.d 之外（必填，#2856）
+# API 只在 Unix socket 上(TA_HUMAN_SOCKET),由同一個 oauth2-proxy 設定檔決定身分 header;
+# 完整的 oauth2-proxy + socket 拓樸見 try-local/docker-compose.yaml。
 docker run -p 8080:8080 --user "$(id -u):$(id -g)" -v "$(pwd)/conf.d:/conf.d" \
   -e TA_GENERATOR_SOCKET=/run/da-generator/generator.sock -v "$(pwd)/gen:/run/da-generator" \
+  -e TA_HUMAN_SOCKET=/run/ta-human/human.sock -v "$(pwd)/sock:/run/ta-human" \
+  -e TA_OAUTH2_PROXY_CONFIG=/etc/oauth2-proxy/oauth2-proxy.yaml -v "$(pwd)/oauth2-proxy:/etc/oauth2-proxy:ro" \
   -e TA_STATE_STORE=dir -e TA_STATE_DIR=/state -v "$(pwd)/state:/state" tenant-api
 ```
 
-Smoke test:
+Smoke test(TCP 只有這三條):
 
 ```bash
 curl -s localhost:8080/health

@@ -1,0 +1,40 @@
+# try-local's oauth2-proxy structured config (--alpha-config; ADR-027 §2, §3).
+#
+# The same kind of file the tenant-api Helm chart renders
+# (helm/tenant-api/templates/configmap-oauth2-proxy.yaml), mounted into BOTH
+# the oauth2-proxy and the tenant-api containers: tenant-api reads its
+# injectRequestHeaders to know which headers carry email and groups
+# (TA_OAUTH2_PROXY_CONFIG) and refuses a file whose shape is ambiguous.
+#
+# Dev topology (ADR-027 §3): docker-compose.yaml starts oauth2-proxy with every
+# request exempt from login (--trusted-ip for every source address), so no
+# session ever exists and no identity header is injected; oauth2-proxy still
+# strips any client-sent copy of the headers below. tenant-api's dev bypass (ADR-022) then injects the demo
+# identity on the Unix-socket plane. There is no way to reach the API without
+# going through this proxy.
+#
+# ⛔ No dollar sign anywhere, comments included: oauth2-proxy expands
+# environment references in this file before parsing it, and tenant-api
+# refuses a file holding the character at all. The provider
+# below is a placeholder that is never used: no request requires a login.
+injectRequestHeaders:
+- name: X-Forwarded-Email
+  values:
+  - claimSource:
+      claim: email
+- name: X-Forwarded-Groups
+  values:
+  - claimSource:
+      claim: groups
+providers:
+- id: github
+  provider: github
+  clientID: try-local-unused
+  clientSecret: try-local-unused
+server:
+  bindAddress: 0.0.0.0:8080
+upstreamConfig:
+  upstreams:
+  - id: api
+    path: /api/
+    uri: unix:///run/ta-human/human.sock

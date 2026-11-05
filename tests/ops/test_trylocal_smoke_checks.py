@@ -90,20 +90,18 @@ def _make_handler(preview: dict, seen: list):
                 self._send(200, {"data": {"alerts": [
                     {"labels": {"severity": "critical"}, "state": "firing"}]}})
             elif path == "/api/v1/me":
-                self._send(200, {"email": "dev@local"})
+                # ADR-027 §3: oauth2-proxy strips the client's identity headers
+                # and the dev bypass answers as dev@local; `me` overrides it
+                # to play a stack that lets the client choose who it is.
+                forged = self.headers.get("X-Forwarded-Email")
+                if preview.get("me") == "echo-forged" and forged:
+                    self._send(200, {"email": forged})
+                else:
+                    self._send(200, {"email": "dev@local"})
             elif path == "/api/v1/tenants":
                 self._send(200, [{"id": "tenant-one"}, {"id": "tenant-two"}])
             elif path == "/":
                 self._send(200, {})
-            elif path == "/metrics":
-                # #2903: tenant-api's view of the generator container.
-                text = ("tenant_api_up 1\ntenant_api_policy_available "
-                        f"{preview.get('generator', '1')}\n").encode()
-                self.send_response(200)
-                self.send_header("Content-Type", "text/plain")
-                self.send_header("Content-Length", str(len(text)))
-                self.end_headers()
-                self.wfile.write(text)
             elif path == "/healthz":
                 mode = preview["healthz"]
                 if mode == "down":
@@ -131,6 +129,45 @@ def _make_handler(preview: dict, seen: list):
     return H
 
 
+def _make_probe_handler(preview: dict, seen: list):
+    """tenant-api's own TCP port (ADR-027 §3): /health, /ready, /metrics only,
+    404 for anything else, 400 for any request carrying an identity header.
+    preview["probe"] == "serves-api" plays the old topology, where this port
+    served the API and trusted the headers; "ignores-identity" a port with no
+    API that does not refuse identity headers either."""
+    class P(BaseHTTPRequestHandler):
+        def _send(self, status, body, ctype="application/json"):
+            data = body if isinstance(body, bytes) else json.dumps(body).encode()
+            self.send_response(status)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            path = self.path.split("?", 1)[0]
+            seen.append(("PROBE", path))
+            old = preview.get("probe") == "serves-api"
+            refuses = preview.get("probe") not in ("serves-api", "ignores-identity")
+            if refuses and ("X-Forwarded-Email" in self.headers or "X-Forwarded-Groups" in self.headers):
+                self._send(400, {"error": "identity header on the network listener"})
+            elif path == "/health":
+                self._send(200, {"status": "ok"})
+            elif path == "/metrics":
+                # #2903: tenant-api's view of the generator container.
+                self._send(200, ("tenant_api_up 1\ntenant_api_policy_available "
+                                 f"{preview.get('generator', '1')}\n").encode(), "text/plain")
+            elif old and path == "/api/v1/me":
+                self._send(200, {"email": "dev@local"})
+            else:
+                self._send(404, {"error": "not found"})
+
+        def log_message(self, *a):
+            pass
+
+    return P
+
+
 def _serve(srv: ThreadingHTTPServer) -> threading.Thread:
     """Serve srv on a thread that _stop joins. Request threads are not
     daemons, so server_close joins them too: no thread of this test outlives
@@ -152,7 +189,9 @@ def _stop(srv: ThreadingHTTPServer, t: threading.Thread) -> None:
 def _run_smoke(tmp_path: Path, preview: dict):
     seen: list = []
     srv = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(preview, seen))
+    probe = ThreadingHTTPServer(("127.0.0.1", 0), _make_probe_handler(preview, seen))
     t = _serve(srv)
+    tp = _serve(probe)
     try:
         # A copy, so a developer's try-local/.env (which smoke.sh sources and
         # which would override the ports below) cannot leak in.
@@ -162,11 +201,13 @@ def _run_smoke(tmp_path: Path, preview: dict):
         env = {**os.environ, "SMOKE_HOST": "127.0.0.1", "SMOKE_ALERT_TIMEOUT": "5",
                "SMOKE_GENERATOR_TIMEOUT": "2",
                "EXPOSE_PROM_PORT": port, "EXPOSE_API_PORT": port,
-               "EXPOSE_PORTAL_PORT": port, "EXPOSE_PREVIEW_PORT": port}
+               "EXPOSE_PORTAL_PORT": port, "EXPOSE_PREVIEW_PORT": port,
+               "EXPOSE_API_PROBE_PORT": str(probe.server_address[1])}
         proc = subprocess.run([BASH, str(script)], capture_output=True, text=True,
                               encoding="utf-8", env=env, timeout=60)
     finally:
         _stop(srv, t)
+        _stop(probe, tp)
     return proc, seen
 
 
@@ -209,6 +250,31 @@ def test_smoke_fails_when_the_generator_container_cannot_judge(tmp_path):
     assert "tenant_api_policy_available is not 1" in proc.stderr, proc.stderr
 
 
+def test_smoke_fails_when_a_client_can_choose_its_identity(tmp_path):
+    """ADR-027 §2: the identity headers a client sends must be stripped by
+    oauth2-proxy; a stack that answers /me as the forged caller is broken."""
+    proc, _ = _run_smoke(tmp_path, {**GOOD_PREVIEW, "me": "echo-forged"})
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "answered as 'forged@example.com'" in proc.stderr, proc.stderr
+
+
+def test_smoke_fails_when_the_tcp_port_still_serves_the_api(tmp_path):
+    """ADR-027 §3: tenant-api's own TCP port serves probes only; the old
+    topology (API on 8080, identity headers trusted) must go red."""
+    proc, _ = _run_smoke(tmp_path, {**GOOD_PREVIEW, "probe": "serves-api"})
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "want 404: the API is only behind oauth2-proxy" in proc.stderr, proc.stderr
+
+
+def test_smoke_fails_when_the_tcp_port_accepts_identity_headers(tmp_path):
+    """ADR-027 §2: the TCP port answers a request carrying an identity header
+    400. A port that serves no API but lets the header through must go red at
+    that check (it passes the 404 check before it)."""
+    proc, _ = _run_smoke(tmp_path, {**GOOD_PREVIEW, "probe": "ignores-identity"})
+    assert proc.returncode == 1, proc.stdout + proc.stderr
+    assert "with an identity header returned HTTP 200 (want 400)" in proc.stderr, proc.stderr
+
+
 def test_smoke_fails_when_nothing_listens_on_the_preview_port(tmp_path):
     """#2873 as smoke.sh sees it: app.py fails at import, the container
     crash-loops, nothing listens — connection refused, no HTTP status."""
@@ -217,7 +283,9 @@ def test_smoke_fails_when_nothing_listens_on_the_preview_port(tmp_path):
     dead = ThreadingHTTPServer(("127.0.0.1", 0), _make_handler(GOOD_PREVIEW, seen))
     dead_port = str(dead.server_address[1])
     dead.server_close()  # the port is now closed
+    probe = ThreadingHTTPServer(("127.0.0.1", 0), _make_probe_handler(GOOD_PREVIEW, seen))
     t = _serve(srv)
+    tp = _serve(probe)
     try:
         script = tmp_path / "smoke.sh"
         shutil.copy(SMOKE, script)
@@ -225,11 +293,13 @@ def test_smoke_fails_when_nothing_listens_on_the_preview_port(tmp_path):
         env = {**os.environ, "SMOKE_HOST": "127.0.0.1", "SMOKE_ALERT_TIMEOUT": "5",
                "SMOKE_GENERATOR_TIMEOUT": "2",
                "EXPOSE_PROM_PORT": port, "EXPOSE_API_PORT": port,
-               "EXPOSE_PORTAL_PORT": port, "EXPOSE_PREVIEW_PORT": dead_port}
+               "EXPOSE_PORTAL_PORT": port, "EXPOSE_PREVIEW_PORT": dead_port,
+               "EXPOSE_API_PROBE_PORT": str(probe.server_address[1])}
         proc = subprocess.run([BASH, str(script)], capture_output=True, text=True,
                               encoding="utf-8", env=env, timeout=60)
     finally:
         _stop(srv, t)
+        _stop(probe, tp)
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "recipe-preview /healthz returned HTTP 000" in proc.stderr, proc.stderr
 

@@ -4,7 +4,11 @@
 #
 # What you get (full stack):
 #   - da-portal      :8081  live Tenant Manager (2 demo tenants + a saved view)
-#   - tenant-api     :8080  file-based config API (commit-on-write, dev-bypass auth)
+#   - oauth2-proxy   :8080  the API's front door: /api/ → tenant-api's Unix
+#                           socket, every path exempt from login (ADR-027 §3)
+#   - tenant-api     :8083  file-based config API (commit-on-write, dev-bypass
+#                           auth); the API is only behind oauth2-proxy — this
+#                           port answers /health, /ready and /metrics only
 #   - generator             the generator container's service: tenant-api asks
 #                           it before every write (#2903; built from source)
 #   - recipe-preview :8082  would-fire preview API (POST /preview; #657)
@@ -16,7 +20,7 @@
 #   - pushgateway    :9091  holds the synthetic DB metric the seed pushed
 #
 # Mode 0 (core twins) — just the live Tenant Manager, no monitoring:
-#   docker compose up da-portal tenant-api
+#   docker compose up da-portal oauth2-proxy tenant-api
 # (pulls in only the fast seed-git one-shot and the generator service, which
 # tenant-api needs to write; pushgateway/prometheus/etc. stay down)
 #
@@ -76,10 +80,17 @@ services:
       # volume keeps them across `docker compose down` / `up`.
       TA_STATE_STORE: dir
       TA_STATE_DIR: /state
-      # LOCAL-DEV-ONLY auth bypass (ADR-022). Injects a dev identity when no
-      # oauth2-proxy header is present, so the browser (and Mode 0) work without
-      # an auth proxy. Panics if ever run inside Kubernetes; SAST forbids this
-      # var in deploy manifests. try-local/ is intentionally NOT scanned by L4.
+      # ADR-027 §2: the API is served only on this Unix socket, behind the
+      # oauth2-proxy service below (same socket volume); the TCP port answers
+      # /health, /ready and /metrics only. tenant-api reads which headers
+      # carry identity from the same config file oauth2-proxy runs with.
+      TA_HUMAN_SOCKET: /run/ta-human/human.sock
+      TA_OAUTH2_PROXY_CONFIG: /etc/oauth2-proxy/oauth2-proxy.yaml
+      # LOCAL-DEV-ONLY auth bypass (ADR-022, ADR-027 §3). oauth2-proxy runs
+      # with every path exempt from login, so no request carries an identity;
+      # the bypass injects the demo identity on the socket plane. Panics if
+      # ever run inside Kubernetes; SAST forbids this var in deploy manifests.
+      # try-local/ is intentionally NOT scanned by L4.
       TA_DEV_BYPASS_AUTH: "true"
       TA_DEV_BYPASS_EMAIL: dev@local
       TA_DEV_BYPASS_GROUPS: demo-admins
@@ -99,11 +110,15 @@ services:
       # Demo state records + state-seed.sh (#2885). Directory mount, not
       # single-file (the WSL2 single-file bind-mount landmine).
       - ./seed:/seed:ro
+      # ADR-027 §2: the oauth2-proxy config (directory mount, not single-file:
+      # the WSL2 single-file bind-mount landmine) and the API's socket.
+      - ./oauth2-proxy:/etc/oauth2-proxy:ro
+      - human-sock:/run/ta-human
     ports:
-      # Loopback-only: dev-bypass injects an ADMIN identity for header-less
-      # requests, so exposing this on 0.0.0.0 would hand anyone on the LAN
-      # write/commit access. try-local is local-only by design.
-      - "127.0.0.1:${EXPOSE_API_PORT:-8080}:8080"
+      # Probes and metrics only (ADR-027 §3: /health, /ready, /metrics; any
+      # other path is 404, an identity header is 400). The API is :8080 on
+      # the oauth2-proxy service.
+      - "127.0.0.1:${EXPOSE_API_PROBE_PORT:-8083}:8080"
     depends_on:
       seed-git:
         condition: service_completed_successfully
@@ -112,12 +127,50 @@ services:
       # with the generator image's ownership (uid 10001).
       generator:
         condition: service_healthy
+    restart: unless-stopped
+
+  oauth2-proxy:
+    # ADR-027 §2, §3: the only way to the API. Same image and the same kind of
+    # structured config file (--alpha-config) as the tenant-api Helm chart; the
+    # file routes /api/ to tenant-api's Unix socket (shared `human-sock`
+    # volume). Dev topology: every path is exempt from login, so nothing is
+    # authenticated and no identity header is injected (client copies are
+    # stripped); tenant-api's dev bypass supplies the demo identity.
+    image: quay.io/oauth2-proxy/oauth2-proxy:v7.15.5
+    # tenant-api's uid: the socket is 0660, owner tenant-api (uid 10001).
+    user: "10001:10001"
+    command:
+      - --alpha-config=/etc/oauth2-proxy/oauth2-proxy.yaml
+      # Every request exempt from login: by source address (all of them),
+      # not --skip-auth-route, which oauth2-proxy refuses for a path it finds
+      # ambiguous (control character, `;`, `//`) and answers with its sign-in
+      # page. Same flags as the contract test (tests/contract/).
+      - --trusted-ip=0.0.0.0/0
+      - --trusted-ip=::/0
+      - --email-domain=*
+      # A fixed demo value (32 bytes): no session is ever created.
+      - --cookie-secret=try-local-not-a-secret-32-bytes!
+      - --cookie-secure=false
+    volumes:
+      - ./oauth2-proxy:/etc/oauth2-proxy:ro
+      - human-sock:/run/ta-human
+    ports:
+      # Loopback-only: dev-bypass injects an ADMIN identity for every request,
+      # so exposing this on 0.0.0.0 would hand anyone on the LAN write/commit
+      # access. try-local is local-only by design.
+      - "127.0.0.1:${EXPOSE_API_PORT:-8080}:8080"
+    depends_on:
+      tenant-api:
+        condition: service_started
     networks:
       default:
-        # da-portal's nginx has a baked-in upstream of this exact FQDN
-        # (components/da-portal/nginx.conf — tenant-api lives in its dedicated
-        # `tenant-api` namespace, #1004). The alias makes it resolve inside
-        # compose so the published portal image runs UNCHANGED (no file mount).
+        # da-portal's nginx has a baked-in upstream of this exact FQDN, port
+        # 8080 (components/da-portal/nginx.conf — tenant-api lives in its
+        # dedicated `tenant-api` namespace, #1004). The alias makes it resolve
+        # to THIS proxy inside compose, so the published portal image runs
+        # UNCHANGED (no file mount) and reaches the API the only way there is:
+        # through oauth2-proxy (ADR-027 §2). recipe-preview's
+        # PREVIEW_TENANT_API_URL resolves here the same way.
         # The old .monitoring alias is kept ONLY because the pinned PUBLISHED
         # v2.8.0 portal image still bakes the pre-#1004 upstream — nginx dies at
         # startup ("host not found in upstream") without it. Drop it when
@@ -168,10 +221,10 @@ services:
       - "127.0.0.1:${EXPOSE_PORTAL_PORT:-8081}:80"
     depends_on:
       # nginx resolves the upstream FQDN at startup with no `resolver`, so the
-      # tenant-api container (which owns the alias) MUST be started first or
+      # oauth2-proxy container (which owns the alias) MUST be started first or
       # nginx dies with `host not found in upstream`. service_started is enough
       # — Docker DNS registers the alias as soon as the container starts.
-      tenant-api:
+      oauth2-proxy:
         condition: service_started
     healthcheck:
       # The published image's baked healthcheck is `wget http://localhost/healthz`,
@@ -197,14 +250,14 @@ services:
       dockerfile: components/recipe-preview/Dockerfile
     image: da-try-local/recipe-preview:source
     environment:
-      # Prod-parity FQDN (#1004) — resolves via the tenant-api service alias above.
+      # Prod-parity FQDN (#1004) — resolves via the oauth2-proxy service alias
+      # above: the API is reachable only through it (ADR-027 §2).
       PREVIEW_TENANT_API_URL: http://tenant-api.tenant-api.svc.cluster.local:8080
       PREVIEW_LISTEN_PORT: "8082"
       # try-local only (mirrors tenant-api ADR-022): inject a demo identity when
       # no oauth2-proxy header is present, so a header-less curl / the portal
-      # work. In prod the auth proxy injects the real identity + a NetworkPolicy
-      # restricts ingress to it; the service forwards that identity to
-      # tenant-api's /access probe for the RBAC decision.
+      # work. The identity it forwards to tenant-api's /access probe is
+      # stripped by oauth2-proxy; tenant-api's own dev bypass decides.
       PREVIEW_DEV_BYPASS_AUTH: "true"
       PREVIEW_DEV_BYPASS_EMAIL: dev@local
       PREVIEW_DEV_BYPASS_GROUPS: demo-admins
@@ -213,8 +266,9 @@ services:
       # as the demo admin, so LAN exposure would be an access risk.
       - "127.0.0.1:${EXPOSE_PREVIEW_PORT:-8082}:8082"
     depends_on:
-      # the PEP calls tenant-api GET /tenants/{id}/access — it must be up first.
-      tenant-api:
+      # the PEP calls tenant-api GET /tenants/{id}/access through oauth2-proxy
+      # — it must be up first.
+      oauth2-proxy:
         condition: service_started
     restart: unless-stopped
 
@@ -395,3 +449,11 @@ volumes:
   tenant-api-state:
   # The generator's socket directory (#2903); see the generator service.
   generator-sock:
+  # The API's Unix socket directory (ADR-027 §2), shared by tenant-api (binds
+  # the socket) and oauth2-proxy (dials it). tmpfs like the Helm chart's
+  # memory emptyDir, owned by the uid both run as.
+  human-sock:
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: "uid=10001,gid=10001,mode=0770"

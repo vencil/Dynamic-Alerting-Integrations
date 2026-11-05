@@ -134,7 +134,7 @@ func lgBatch(t *testing.T, d *Deps, group, ops string) *httptest.ResponseRecorde
 	req.Header.Set("Content-Type", "application/json")
 	lgIdentity(req, group)
 	w := httptest.NewRecorder()
-	d.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(d)).ServeHTTP(w, req)
+	rbac.ResolveIdentity(d.RBAC.HeaderResolver())(d.RBAC.Middleware(rbac.PermRead, nil)(BatchTenants(d))).ServeHTTP(w, req)
 	return w
 }
 
