@@ -442,13 +442,13 @@ def test_receiver(
     # the URL is not checked — SKIPPED, in dry-run too, never a pass.
     # Any CREDENTIAL_REF_SITES row, an http_config leaf included: sending
     # without the credential would test a request Alertmanager never makes.
-    in_secret = [ref_path_text(p) for _s, p in find_credential_refs(receiver, rtype)]
-    if in_secret:
+    held_by_ref = [ref_path_text(p) for _s, p in find_credential_refs(receiver, rtype)]
+    if held_by_ref:
         return ReceiverTestResult(
             receiver_name=label,
             receiver_type=rtype,
             status=STATUS_SKIPPED,
-            detail=(f"{', '.join(in_secret)} is a Secret reference; Alertmanager "
+            detail=(f"{', '.join(held_by_ref)} is a Secret reference; Alertmanager "
                     "reads it from the mounted Secret, which this tool cannot "
                     "read, so nothing is sent"),
         )
