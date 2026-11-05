@@ -415,7 +415,7 @@ tenant-api 信任哪些 header,由同一個 pod 的 oauth2-proxy 實際使用的
 
 oauth2-proxy 會先清除 client 帶來的同名 header 再注入,所以這些 header 不能被 client 偽造;同一個 claim 有多個值時 oauth2-proxy 以逗號接成一行——group 依逗號拆開,額外 claim 原樣當作一個值比對(多值 claim 因此不會命中單一值條件,fail-closed)。空值不會成為 claim;同名 header 出現多行時該 claim 拒載並記警告。
 
-只接受意義不含糊的設定檔,其餘一律拒絕啟動(`config check` 則以 exit 2 拒絕):
+只接受意義不含糊的設定檔,其餘一律拒絕啟動(`config check --kind oauth2-proxy` 判定這份檔時拒絕為 exit 1;`--kind rbac|scope` 經 `--oauth2-proxy-config` 讀到不合格的檔時為 exit 2,因為 server 用它根本不會啟動):
 
 - 每個注入的 header 恰好一個值,且取自一個 session claim:不加前綴(`prefix`)、不轉成 basic auth、不用固定值(`secretSource`)、不保留 client 值(`preserveRequestValue: true`)、不關閉 header 名稱正規化(`InsecureSkipHeaderNormalization: true`)。
 - `email` 與 `groups` 各恰好由一個 header 注入;其他 claim 至多一個 header,且不得是 token 或時間戳(`access_token`、`id_token`、`refresh_token`、`created_at`、`expires_on`)。header 名只用英數與單個 `-`(oauth2-proxy 清除 client 值時把 `_` 當成 `-`,Go 不會)。

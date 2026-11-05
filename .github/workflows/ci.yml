@@ -100,12 +100,12 @@ jobs:
               - "tests/alertmanager-inhibit/**"
               #   - tests/oauth2-proxy/** — the oauth2-proxy leg (ADR-027 §9
               #     item 9). It renders the tenant-api chart with helm (a child
-              #     process go_test_reads.py cannot see) and reads the ADR's §10
-              #     example, so the chart templates, the render baseline and
-              #     that ADR are in the filter too; values.yaml and
-              #     values.schema.json are listed below for other legs.
+              #     process go_test_reads.py cannot see; the test also reads
+              #     every chart file itself so Go's test cache sees an edit)
+              #     and reads the ADR's §10 example, so the whole chart, the
+              #     render baseline and that ADR are in the filter too.
               - "tests/oauth2-proxy/**"
-              - "helm/tenant-api/templates/**"
+              - "helm/tenant-api/**"
               - "tests/helm/tenant_api_render_baseline.yaml"
               - "docs/adr/027-tenant-api-caller-identity.md"
               #   - components/da-read/** — the da-read leg (#3206): its own
@@ -2647,6 +2647,13 @@ jobs:
           mkdir -p "$GO_TESTLOG_DIR"
           go test ./... -count=1 -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
 
+      # image_config_test.sh and go_test_reads.py below both import yaml.
+      - name: Install pyyaml
+        run: |
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
+          fi
+
       - name: Run --config-test in the chart's oauth2-proxy image (by digest)
         run: bash tests/oauth2-proxy/image_config_test.sh "$RUNNER_TEMP/oauth2-proxy-render"
 
@@ -2662,12 +2669,6 @@ jobs:
           if [ "$n" -eq 0 ]; then
             echo "::error::no rendered oauth2-proxy config to check"
             exit 1
-          fi
-
-      - name: Install pyyaml for the read-coverage check
-        run: |
-          if ! python3 -c 'import yaml' 2>/dev/null; then
-            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
           fi
 
       - name: Check the tests read nothing this leg's filter misses (#1399)

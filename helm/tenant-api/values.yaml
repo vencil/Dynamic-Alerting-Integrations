@@ -38,7 +38,10 @@ oauth2Proxy:
   # (--alpha-config) rendered from the values below (provider, header
   # injection, listener); the same file is mounted into tenant-api, which
   # reads from it which header carries email, groups and each claim
-  # (templates/configmap-oauth2-proxy.yaml). No value may hold '$'.
+  # (templates/configmap-oauth2-proxy.yaml). No value written into that file
+  # (provider, clientID, scope, oidcIssuerUrl, gitlabGroups, claimHeaders) may
+  # hold '$': the render fails. Values passed as flags (redirectUrl, cookie*)
+  # are not in the file and not checked here.
   # Provider: github | google | oidc | gitlab
   provider: github
   # ⛔ Replace before deploying: the OAuth client ID, like the placeholder
@@ -632,6 +635,9 @@ podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65534
   runAsGroup: 65534
+  # ⛔ Keep fsGroup when oauth2Proxy.enabled: the client-secret file is
+  # mounted 0440 and oauth2-proxy (pod-level uid/gid) reads it through this
+  # group; without it oauth2-proxy cannot read clientSecretFile and exits.
   fsGroup: 65534
   seccompProfile:
     type: RuntimeDefault

@@ -64,7 +64,8 @@ oauth2Proxy:
   emailDomain: "*"
   cookieSecure: true
   cookieHttpOnly: true
-  cookieSameSite: "Lax"
+  # lower case: oauth2-proxy v7.15.5 refuses "Lax" at start.
+  cookieSameSite: "lax"
   cookieName: "_da_portal_session"
   createSecret: false
   secretName: oauth2-proxy-secrets

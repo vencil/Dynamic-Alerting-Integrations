@@ -74,6 +74,7 @@ func renderChart(t *testing.T, v chartVariant) rendered {
 		t.Skip("helm not on PATH: the chart's oauth2-proxy config was not checked")
 	}
 	root := repoRoot(t)
+	readChartInputs(t, root)
 	args := []string{"template", "t", filepath.Join(root, "helm", "tenant-api"),
 		"-f", filepath.Join(root, "tests", "helm", "tenant_api_render_baseline.yaml")}
 	for _, s := range v.Set {
@@ -127,6 +128,28 @@ func renderChart(t *testing.T, v chartVariant) rendered {
 	return out
 }
 
+// readChartInputs reads every file helm reads for the render. helm is a
+// child process, so without this Go's test cache would not see a chart edit
+// and `go test` could report a cached pass for a chart it never rendered.
+func readChartInputs(t *testing.T, root string) {
+	t.Helper()
+	inputs := []string{filepath.Join(root, "tests", "helm", "tenant_api_render_baseline.yaml")}
+	err := filepath.WalkDir(filepath.Join(root, "helm", "tenant-api"), func(p string, d os.DirEntry, err error) error {
+		if err == nil && !d.IsDir() {
+			inputs = append(inputs, p)
+		}
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range inputs {
+		if _, err := os.ReadFile(p); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // writeRenderOut writes a variant for the CI --config-test step: the config
 // file, the container args (JSON) and the image.
 func writeRenderOut(t *testing.T, dir string, r rendered) {
@@ -173,6 +196,23 @@ func TestChartConfig(t *testing.T) {
 			opts, err := loadAlpha(path)
 			if err != nil {
 				t.Fatalf("oauth2-proxy refuses the chart's config: %v\n%s", err, r.Config)
+			}
+			// oauth2-proxy copies a claim into the session only when the
+			// provider lists it in additionalClaims
+			// (providers/provider_data.go extractAdditionalClaims); a claim
+			// header for any other claim is injected empty. The session below
+			// is built by hand, so this is what ties it to the provider.
+			if len(opts.Providers) != 1 {
+				t.Fatalf("providers = %d, want 1", len(opts.Providers))
+			}
+			listed := map[string]bool{}
+			for _, c := range opts.Providers[0].AdditionalClaims {
+				listed[c] = true
+			}
+			for claim := range v.Claims {
+				if !listed[claim] {
+					t.Errorf("claim %q has a header but the provider's additionalClaims %v do not list it: the header would be empty", claim, opts.Providers[0].AdditionalClaims)
+				}
 			}
 			ups := opts.UpstreamServers.Upstreams
 			if len(ups) != 1 || ups[0].Path != "/" || !strings.HasPrefix(ups[0].URI, v.Upstream+"://") {

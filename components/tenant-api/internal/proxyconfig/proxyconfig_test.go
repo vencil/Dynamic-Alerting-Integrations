@@ -97,6 +97,7 @@ func TestParse_Refusals(t *testing.T) {
 		{"skip normalisation", headersDoc("- name: X-Org\n  InsecureSkipHeaderNormalization: true\n  values:\n  - claimSource:\n      claim: org\n"), "normalisation"},
 		{"bool as string", headersDoc("- name: X-Org\n  preserveRequestValue: \"false\"\n  values:\n  - claimSource:\n      claim: org\n"), "not true or false"},
 		{"alias", "x: &h\n  - claimSource:\n      claim: email\n" + headersDoc(""), "anchor"},
+		{"host header", headersDoc("- name: host\n  values:\n  - claimSource:\n      claim: org\n"), "cannot carry identity"},
 		{"duplicate field", headersDoc("- name: X-Org\n  preserveRequestValue: true\n  preserveRequestValue: false\n  values:\n  - claimSource:\n      claim: org\n"), "written twice"},
 		{"merge key", "injectRequestHeaders:\n- <<: {name: X-Forwarded-Email}\n  values:\n  - claimSource:\n      claim: email\n", "merge key"},
 		{"claim charset", headersDoc("- name: X-Org\n  values:\n  - claimSource:\n      claim: \"o rg\"\n"), "claim name"},

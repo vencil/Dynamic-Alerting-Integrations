@@ -57,6 +57,13 @@ func section10(t *testing.T) (yamlBlock string, routes []adrRoute) {
 			inYAML = false
 		case inYAML:
 			block.WriteString(line + "\n")
+		case strings.HasPrefix(line, "|") && !strings.HasPrefix(line, "| `"):
+			// Only the header row and the separator row may skip parsing; any
+			// other table row must be a backticked path, or a reshaped row
+			// would silently drop out of the routes checked.
+			if !strings.HasPrefix(line, "|---") && !strings.Contains(line, "請求路徑") {
+				t.Fatalf("ADR §10 table row %q: not a header, separator or `path` row", line)
+			}
 		case strings.HasPrefix(line, "| `"):
 			cells := strings.Split(line, "|")
 			if len(cells) < 3 {

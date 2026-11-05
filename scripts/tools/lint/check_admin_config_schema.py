@@ -272,16 +272,25 @@ def config_check(binary: str, kind: str, where: str, *, path: str | None = None,
     a caller error. For `rbac`, *claims* is claim_declaration()'s oauth2-proxy
     config ("" = none)."""
     cmd = [binary, "config", "check", "--kind", kind]
-    with tempfile.TemporaryDirectory() as tmp:
+    try:
+        tmp_dir = tempfile.TemporaryDirectory()
+    except OSError as exc:
+        raise _CallerError(f"{where}: cannot create a temporary directory for the "
+                           f"oauth2-proxy config: {exc}") from exc
+    with tmp_dir as tmp:
         if kind == "rbac":
             # Always passed, so a TA_OAUTH2_PROXY_CONFIG in the caller's
             # environment cannot change what is checked; "" = no claims.
             proxy_config = ""
             if claims:
                 proxy_config = os.path.join(tmp, "oauth2-proxy.yaml")
-                with open(proxy_config, "w", encoding="utf-8", newline="\n") as f:
-                    f.write(claims)
-                os.chmod(proxy_config, 0o600)
+                try:
+                    with open(proxy_config, "w", encoding="utf-8", newline="\n") as f:
+                        f.write(claims)
+                    os.chmod(proxy_config, 0o600)
+                except OSError as exc:
+                    raise _CallerError(f"{where}: cannot write the temporary oauth2-proxy "
+                                       f"config {proxy_config}: {exc}") from exc
             cmd += ["--oauth2-proxy-config", proxy_config]
         cmd.append(os.path.abspath(path) if path is not None else "-")
         return _run_config_check(cmd, binary, kind, where, data)

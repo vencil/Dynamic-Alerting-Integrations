@@ -236,6 +236,11 @@ func parseHeader(entry *yaml.Node) (name, claim string, err error) {
 	if !headerNameRe.MatchString(name) {
 		return "", "", fmt.Errorf("line %d: header name %q: use letters, digits and single '-' only (oauth2-proxy and tenant-api normalise other characters differently)", nameNode.Line, name)
 	}
+	if http.CanonicalHeaderKey(name) == "Host" {
+		// Go's server moves Host out of r.Header, so tenant-api could never
+		// read a claim carried in it.
+		return "", "", fmt.Errorf("line %d: header %q cannot carry identity: Go's HTTP server removes it from the request headers", nameNode.Line, name)
+	}
 	if n, ok := f["preserveRequestValue"]; ok {
 		if keep, err := boolScalar(n, "preserveRequestValue"); err != nil {
 			return "", "", err

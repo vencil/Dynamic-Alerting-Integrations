@@ -24,7 +24,8 @@ func TestLibraryVersionIsTheChartImage(t *testing.T) {
 		t.Fatal("go.mod: no direct require of github.com/oauth2-proxy/oauth2-proxy/v7")
 	}
 	lib := string(m[1])
-	if regexp.MustCompile(`(?m)^replace\b.*oauth2-proxy`).Match(mod) {
+	// Both `replace x => y` and an entry inside a `replace ( ... )` block.
+	if regexp.MustCompile(`(?m)^(replace[ \t]+|[ \t]+)github\.com/oauth2-proxy/oauth2-proxy/v7\b[^\n]*=>`).Match(mod) {
 		t.Fatal("go.mod replaces oauth2-proxy: the tests would not run the released code")
 	}
 	data, err := os.ReadFile(filepath.Join(repoRoot(t), "helm", "tenant-api", "values.yaml"))

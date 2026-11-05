@@ -409,7 +409,8 @@ rendered with toYaml, so every value is quoted as YAML needs.
                         entry (claim name → header name); the client's copy
                         of each is stripped (preserveRequestValue defaults to
                         false)
-  providers             one provider; the client secret from a file
+  providers             one provider; the client secret from a file; the
+                        claimHeaders claims listed in additionalClaims
   server                the listener (was --http-address)
 */}}
 {{- define "tenant-api.oauth2ProxyConfig" -}}
@@ -449,6 +450,12 @@ rendered with toYaml, so every value is quoted as YAML needs.
 {{- end -}}
 {{- with $o.gitlabGroups -}}
 {{- $_ := set $provider "gitlabConfig" (dict "group" .) -}}
+{{- end -}}
+{{- /* oauth2-proxy copies a claim into the session only when the provider
+     lists it in additionalClaims (providers/provider_data.go); without this
+     every claim header would be injected empty. */ -}}
+{{- with $o.claimHeaders -}}
+{{- $_ := set $provider "additionalClaims" (keys . | sortAlpha) -}}
 {{- end -}}
 {{- $config := dict
       "upstreamConfig" (dict "upstreams" (list (dict "id" "tenant-api" "path" "/" "uri" $upstream)))
