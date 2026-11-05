@@ -138,7 +138,6 @@ ENGLISH_ONLY: dict[str, str] = {
     "lint_custom_rules.py": _R_OPS,
     "maintenance_scheduler.py": _R_OPS,
     "onboard_platform.py": _R_OPS,
-    "operator_check.py": _R_OPS_RT,
     "patch_config.py": _R_OPS,
     "rule_pack_diff.py": _R_OPS,
     "shadow_verify.py": _R_OPS,

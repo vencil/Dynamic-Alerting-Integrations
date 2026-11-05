@@ -148,6 +148,22 @@ STRINGS = {
         ),
         "mounts_other": "{n} *_file path(s) outside {root} not judged (other_files)",
         "mounts_unusable": "--secret-mounts {path}: not a generate-routes --secret-mounts-out list ({why})",
+        "h_desc": "Verify Prometheus Operator CRD deployment status",
+        "h_namespace": "Kubernetes namespace (default: monitoring)",
+        "h_rule_packs_dir": "Directory with rule pack YAML files (default: rule-packs/)",
+        "h_prometheus": "Prometheus API URL for target health check (optional)",
+        "h_mount_list": (
+            "The list `generate-routes --secret-mounts-out` wrote for the "
+            "configSecret: compared with the Alertmanager CR's spec.secrets "
+            "(#1560). Without it that check is SKIP (not judged)"
+        ),
+        "h_alertmanager": (
+            "With --secret-mounts: judge this Alertmanager CR only "
+            "(default: every one in --namespace)"
+        ),
+        "h_kubeconfig": "Path to kubeconfig file (optional)",
+        "h_json": "Output results as JSON",
+        "h_ci": "Exit non-zero if any check fails",
     },
     "zh": {
         "title": "Dynamic Alerting — Operator 檢查報告",
@@ -200,6 +216,21 @@ STRINGS = {
         ),
         "mounts_other": "{n} 個 *_file 路徑在 {root} 之外，未判定（other_files）",
         "mounts_unusable": "--secret-mounts {path}：不是 generate-routes --secret-mounts-out 產出的清單（{why}）",
+        "h_desc": "驗證 Prometheus Operator 的 CRD 部署狀態",
+        "h_namespace": "Kubernetes namespace（預設：monitoring）",
+        "h_rule_packs_dir": "Rule Pack YAML 所在目錄（預設：rule-packs/）",
+        "h_prometheus": "Prometheus API URL，給了才檢查 target 健康（選用）",
+        "h_mount_list": (
+            "`generate-routes --secret-mounts-out` 為 configSecret 寫出的清單："
+            "與 Alertmanager CR 的 spec.secrets 比對（#1560）。不給則該項 SKIP（未判定）"
+        ),
+        "h_alertmanager": (
+            "與 --secret-mounts 同用：只比對這個 Alertmanager CR"
+            "（預設：--namespace 裡每一個）"
+        ),
+        "h_kubeconfig": "kubeconfig 路徑（選用）",
+        "h_json": "以 JSON 輸出結果",
+        "h_ci": "任一檢查失敗時以非 0 結束",
     }
 }
 
@@ -560,55 +591,24 @@ class OperatorChecker:
 
 def main():
     try_utf8_stdout()
+    # dev-rules §9 Layer 3 (CodeRabbit on #3615): help follows DA_LANG too.
+    lang = detect_cli_lang()
     parser = argparse.ArgumentParser(
-        description="Verify Prometheus Operator CRD deployment status",
+        description=i18n("h_desc", lang),
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument(
-        "--namespace",
-        default="monitoring",
-        help="Kubernetes namespace (default: monitoring)",
-    )
-    parser.add_argument(
-        "--rule-packs-dir",
-        default="rule-packs/",
-        help="Directory with rule pack YAML files (default: rule-packs/)",
-    )
-    parser.add_argument(
-        "--prometheus",
-        help="Prometheus API URL for target health check (optional)",
-    )
-    parser.add_argument(
-        "--secret-mounts",
-        dest="mount_list",
-        default=None,
-        metavar="FILE",
-        help="The list `generate-routes --secret-mounts-out` wrote for the "
-             "configSecret: compared with the Alertmanager CR's spec.secrets "
-             "(#1560). Without it that check is SKIP (not judged)",
-    )
-    parser.add_argument(
-        "--alertmanager",
-        default=None,
-        metavar="NAME",
-        help="With --secret-mounts: judge this Alertmanager CR only "
-             "(default: every one in --namespace)",
-    )
-    parser.add_argument(
-        "--kubeconfig",
-        help="Path to kubeconfig file (optional)",
-    )
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Output results as JSON",
-    )
-    parser.add_argument(
-        "--ci",
-        action="store_true",
-        help="Exit non-zero if any check fails",
-    )
+    parser.add_argument("--namespace", default="monitoring", help=i18n("h_namespace", lang))
+    parser.add_argument("--rule-packs-dir", default="rule-packs/",
+                        help=i18n("h_rule_packs_dir", lang))
+    parser.add_argument("--prometheus", help=i18n("h_prometheus", lang))
+    parser.add_argument("--secret-mounts", dest="mount_list", default=None, metavar="FILE",
+                        help=i18n("h_mount_list", lang))
+    parser.add_argument("--alertmanager", default=None, metavar="NAME",
+                        help=i18n("h_alertmanager", lang))
+    parser.add_argument("--kubeconfig", help=i18n("h_kubeconfig", lang))
+    parser.add_argument("--json", action="store_true", help=i18n("h_json", lang))
+    parser.add_argument("--ci", action="store_true", help=i18n("h_ci", lang))
 
     args = parser.parse_args()
     # #3392: a --rule-packs-dir the caller gave that is not there or not a
