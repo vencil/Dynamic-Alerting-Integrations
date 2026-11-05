@@ -318,6 +318,50 @@ func checkRootDefaultsRefused(input CheckInput) []Finding {
 	return out
 }
 
+// checkRootDimensionsCriticalBase reports
+// findingkind.FindingRootDimensionsCriticalBase for each base under the
+// conf.d root carrier's top-level `dimensions:` that is a `_critical` tier
+// (config.DimensionBaseRefused, #3556 — the predicate dimensionDeclared
+// refuses it by, so what is named here is what serves no row). The root
+// decode reads `dimensions:` whether or not `defaults:` wraps the file, so a
+// root without the wrapper is judged too. A file in ParseFailed is skipped,
+// as checkRootCriticalKeys does.
+func checkRootDimensionsCriticalBase(input CheckInput) []Finding {
+	failed := make(map[string]bool, len(input.ParseFailed))
+	for _, pf := range input.ParseFailed {
+		failed[pf] = true
+	}
+	var out []Finding
+	for _, f := range input.DefaultsFiles {
+		if failed[f.Name] || strings.Contains(f.Name, "/") {
+			continue
+		}
+		doc := decodeDefaultsDoc(f.Data)
+		dims, _ := doc["dimensions"].(map[string]any)
+		bases := make([]string, 0, len(dims))
+		for base := range dims {
+			if config.DimensionBaseRefused(base) {
+				bases = append(bases, base)
+			}
+		}
+		sort.Strings(bases)
+		for _, base := range bases {
+			tier := strings.TrimSuffix(base, "_critical")
+			out = append(out, Finding{
+				Severity: SeverityError,
+				Kind:     findingkind.FindingRootDimensionsCriticalBase,
+				Field:    f.Name + ":dimensions." + base,
+				Message: fmt.Sprintf("%s: `%s` under the conf.d root `dimensions:` is a `_critical` tier, not a "+
+					"base, so it declares nothing and no `%s{...}` key is served. The exporter reads `%s` as the "+
+					"severity=critical tier of `%s`; a per-dimension critical threshold is "+
+					"`%s{label=\"v\"}: \"N:critical\"`, its labels declared under `%s`.",
+					f.Name, base, base, base, tier, tier, tier),
+			})
+		}
+	}
+	return out
+}
+
 // checkRootReservedKeys reports findingkind.FindingRootDefaultsReservedKey for
 // each `_` key under the root carrier's `defaults:` mapping that reaches no
 // tenant (config.RootDefaultsReservedKey). A null is no write (#2518) and a

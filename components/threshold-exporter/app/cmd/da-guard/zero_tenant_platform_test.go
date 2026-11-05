@@ -139,6 +139,12 @@ var zeroTenantTreeLevelCases = map[string]zeroTenantPlatformCase{
 		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\n  _silent_mode: warning\n"},
 		finding: findingkind.FindingRootDefaultsReservedKey,
 	},
+	// #3556: a `_critical` tier declared as a `dimensions:` base is judged in
+	// the carrier.
+	"_critical tier under the root dimensions": {
+		files:   map[string]string{"_defaults.yaml": "defaults:\n  cpu: 80\ndimensions:\n  cpu_critical: [db]\n"},
+		finding: findingkind.FindingRootDimensionsCriticalBase,
+	},
 	// #2031: one series two keys share fails the whole tree's scrape,
 	// whatever the scope; the tenant is outside it.
 	"/metrics not gatherable": {
@@ -188,11 +194,12 @@ var zeroTenantKindClass = map[string]string{
 	"custom_alert_over_cap":         kindNeedsTenant,
 
 	// The defaults carriers (DefaultsFiles).
-	"root_defaults_unwrapped":    kindTreeLevel,
-	"defaults_toplevel_ignored":  kindTreeLevel,
-	"root_defaults_critical_key": kindTreeLevel,
-	"root_default_refused":       kindTreeLevel,
-	"root_defaults_reserved_key": kindTreeLevel,
+	"root_defaults_unwrapped":       kindTreeLevel,
+	"defaults_toplevel_ignored":     kindTreeLevel,
+	"root_defaults_critical_key":    kindTreeLevel,
+	"root_default_refused":          kindTreeLevel,
+	"root_defaults_reserved_key":    kindTreeLevel,
+	"root_dimensions_critical_base": kindTreeLevel,
 	// The whole tree's /metrics.
 	"metrics_not_gatherable": kindTreeLevel,
 }
