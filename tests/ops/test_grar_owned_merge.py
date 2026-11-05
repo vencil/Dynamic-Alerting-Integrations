@@ -17,7 +17,7 @@ custom 告警與 sentinel 叫醒客戶 NOC（#741 的隔離失效）。
   `tenant-*`／`platform-enforced*` receiver ⇒ 結束碼 1、不寫檔；`-o` 指向
   `--base-config` 本身 ⇒ 結束碼 2。
 * 合併後順序：[平台 4 條 ＋ enforced NOC] → [客戶路由，原順序] →
-  [租戶路由 ＋ root fallthrough]；客戶的 receiver、inhibit 原樣保留。
+  [租戶路由]（有 per-tenant enforced 時，客戶路由與租戶路由收在一條送往 root receiver 的上層路由底下）；客戶的 receiver、inhibit 原樣保留。
 * `--apply` 以叢集 ConfigMap 的 `alertmanager.base.yml` 為來源（首次沒有時
   採用 `alertmanager.yml`），寫回時兩個 key 一起寫。
 * `watchdog-heartbeat` 沒接 integration：WARN；有真實 base（`--base-config`，
@@ -56,7 +56,7 @@ _GAR = (Path(__file__).resolve().parents[2] / "scripts" / "tools" / "ops"
 # ── fixture tree ────────────────────────────────────────────────────
 
 #: per-tenant enforced NOC（`{{tenant}}`）：每個租戶一條 continue:true 的
-#: `platform-enforced-<t>`，沒有 tenant route 的租戶另有 root fallthrough。
+#: `platform-enforced-<t>`，沒有 tenant route 的租戶經代替 root 的上層路由回到 root receiver。
 _DEFAULTS = textwrap.dedent("""\
     defaults:
       cpu_usage_percent: 80
@@ -76,7 +76,7 @@ _TENANTS = {
                 type: webhook
                 url: "https://tenant.example.com/hook"
     """),
-    # 只有閾值 ⇒ 沒有 tenant route，只有 root fallthrough。
+    # 只有閾值 ⇒ 沒有 tenant route，經代替 root 的上層路由回到 root receiver。
     "t-thr": "tenants:\n  t-thr:\n    cpu_usage_percent: '85'\n",
 }
 
@@ -203,7 +203,7 @@ _DELIVERIES = [
      "platform-enforced-t-routed,noc-pager"),
     ({"alertname": "CpuHigh", "tenant": "t-routed", "severity": "warning"},
      "platform-enforced-t-routed,tenant-t-routed"),
-    # 沒有 tenant route 的租戶：fallthrough 回客戶的 root receiver（#2519）。
+    # 沒有 tenant route 的租戶：經代替 root 的上層路由回到客戶的 root receiver（#2519）。
     ({"alertname": "CpuHigh", "tenant": "t-thr", "severity": "warning"},
      "platform-enforced-t-thr,cust-default"),
     # 客戶自己的告警照客戶路由走。
@@ -226,6 +226,40 @@ def test_alertmanager_routes_each_alert_where_the_spec_says(tmp_path, labels, ex
                                f"{r.stdout}\n{r.stderr}")
 
 
+#: 客戶的 critical 路由帶 `continue: true`（例如雙軌期的上層路由）。
+_CONTINUE_BASE = _CUSTOMER_BASE.replace(
+    "    - matchers: ['severity=\"critical\"']\n      receiver: noc-pager\n",
+    "    - matchers: ['severity=\"critical\"']\n      receiver: noc-pager\n"
+    "      continue: true\n")
+assert _CONTINUE_BASE != _CUSTOMER_BASE
+
+#: Alertmanager 的 root 只在「沒有任何子路由命中」時才送；客戶自己 continue:true 的
+#: 路由命中也算。沒有 tenant route 的租戶不能因為 enforced 路由而多收一份 root。
+_CONTINUE_DELIVERIES = [
+    ({"alertname": "CpuHigh", "tenant": "t-thr", "severity": "critical"},
+     "platform-enforced-t-thr,noc-pager"),
+    ({"alertname": "CpuHigh", "tenant": "t-thr", "severity": "warning"},
+     "platform-enforced-t-thr,cust-default"),
+    ({"alertname": "CpuHigh", "tenant": "t-routed", "severity": "critical"},
+     "platform-enforced-t-routed,noc-pager,tenant-t-routed"),
+    ({"alertname": "NodeDown", "severity": "critical"}, "noc-pager"),
+    ({"alertname": "Other", "severity": "info"}, "cust-default"),
+]
+
+
+@pytest.mark.parametrize("labels,expected", _CONTINUE_DELIVERIES,
+                         ids=[f"{d[0]['alertname']}-{d[0].get('severity')}-"
+                              f"{d[0].get('tenant', '-')}" for d in _CONTINUE_DELIVERIES])
+def test_a_customer_continue_route_does_not_add_a_root_delivery(tmp_path, labels, expected):
+    am = tmp_path / "out"
+    am.mkdir()
+    (am / "alertmanager.yml").write_text(
+        _emit_am(tmp_path, _tree(tmp_path), _base(tmp_path, _CONTINUE_BASE)), encoding="utf-8")
+    r = _routes_test(am / "alertmanager.yml", labels, expected)
+    assert r.returncode == 0, (f"{labels} did not resolve to [{expected}]\n"
+                               f"{r.stdout}\n{r.stderr}")
+
+
 def test_control_amtool_rejects_a_wrong_expectation(tmp_path):
     """反例控制組：預期錯時 amtool 必須非 0，否則上面全綠沒有意義。"""
     am = tmp_path / "out"
@@ -242,23 +276,40 @@ def _routes_of(am_text: str) -> list[dict]:
     return render.alertmanager_reading(am_text)["route"]["routes"]
 
 
+def _below_enforced(routes: list[dict]) -> dict:
+    """The one route after the enforced routes that plays the root (#2519)."""
+    [below] = [r for r in routes if "matchers" not in r]
+    assert routes[-1] is below, routes
+    return below
+
+
 def test_customer_routes_are_kept_in_order_between_enforced_and_tenant_routes(tmp_path):
+    """Top level: platform routes, enforced routes, then ONE matcher-less
+    route to the root receiver holding the customer's routes (in order,
+    unchanged) and then the tenant routes."""
     routes = _routes_of(_emit_am(tmp_path, _tree(tmp_path), _base(tmp_path)))
     receivers = [r.get("receiver") for r in routes]
     assert receivers[:4] == list(_PLATFORM_RECEIVERS), receivers
-    enforced = [i for i, r in enumerate(receivers)
-                if str(r).startswith("platform-enforced")]
-    cust = [receivers.index("noc-pager"), receivers.index("cust-db")]
-    tenant = [i for i, r in enumerate(receivers) if str(r).startswith("tenant-")]
-    fallthrough = [i for i, r in enumerate(routes)
-                   if r.get("receiver") == "cust-default"]
-    assert enforced and tenant and fallthrough, receivers
-    assert cust[0] < cust[1], "customer routes reordered"
-    assert cust == list(range(cust[0], cust[0] + 2)), "customer routes split up"
-    assert max(enforced) < cust[0] < cust[1] < min(tenant + fallthrough), receivers
+    assert all(str(r).startswith("platform-enforced") for r in receivers[4:-1]), receivers
+    below = _below_enforced(routes)
+    assert below["receiver"] == "cust-default"
+    children = [r.get("receiver") for r in below["routes"]]
+    assert children[:2] == ["noc-pager", "cust-db"], children
+    assert children[2:] and all(c.startswith("tenant-") for c in children[2:]), children
     # the customer's routes come back exactly as written (as Alertmanager reads them)
-    assert routes[cust[0]] == {"matchers": ['severity="critical"'], "receiver": "noc-pager"}
-    assert routes[cust[1]] == {"matchers": ['team="db"'], "receiver": "cust-db"}
+    assert below["routes"][0] == {"matchers": ['severity="critical"'], "receiver": "noc-pager"}
+    assert below["routes"][1] == {"matchers": ['team="db"'], "receiver": "cust-db"}
+
+
+def test_without_per_tenant_enforced_routes_the_tree_stays_flat(tmp_path):
+    """Control: no `{{tenant}}` enforced routing ⇒ nothing takes the root's
+    place, so no extra level."""
+    conf_d = _tree(tmp_path)
+    (conf_d / "_defaults.yaml").write_text("defaults:\n  cpu_usage_percent: 80\n",
+                                           encoding="utf-8")
+    routes = _routes_of(_emit_am(tmp_path, conf_d, _base(tmp_path)))
+    assert all("matchers" in r for r in routes), routes
+    assert [r.get("receiver") for r in routes][4:6] == ["noc-pager", "cust-db"]
 
 
 def test_the_customer_receivers_and_inhibit_rules_are_kept(tmp_path):
@@ -357,7 +408,8 @@ def test_a_customer_tenant_route_is_kept_whatever_its_spelling(tmp_path):
         "      receiver: cust-db\n"
         "    - matchers: ['team=\"db\"']\n")
     assert base != _CUSTOMER_BASE
-    routes = _routes_of(_emit_am(tmp_path, _tree(tmp_path), _base(tmp_path, base)))
+    routes = _below_enforced(_routes_of(
+        _emit_am(tmp_path, _tree(tmp_path), _base(tmp_path, base))))["routes"]
     assert {"matchers": ['tenant="t-routed"'], "receiver": "cust-db"} in routes
 
 
@@ -521,18 +573,11 @@ def test_apply_judges_the_clusters_watchdog_receiver(tmp_path, monkeypatch, caps
         assert line.startswith(level), line
 
 
-# ── fallthrough 與來源：客戶自己的路由、root receiver 改名、空樹 ────────
-
-def _fallthroughs(am: dict, root: str) -> list[dict]:
-    return [r for r in am["route"]["routes"]
-            if r.get("receiver") == root and set(r) == {"matchers", "receiver"}
-            and r["matchers"][0].startswith('tenant="')]
-
+# ── root 的位置與來源：客戶自己的路由、root receiver 改名、空樹 ────────
 
 def test_a_customer_tenant_route_to_the_root_receiver_is_kept(tmp_path):
-    """An operator's own `tenant="x"` → root route has the fallthrough's
-    shape; in the source it is the operator's, kept where it was — for a
-    tenant in conf.d and for one that is not."""
+    """An operator's own `tenant="x"` → root route is the operator's, kept
+    where it was — for a tenant in conf.d and for one that is not."""
     base = _CUSTOMER_BASE.replace(
         "  routes:\n",
         "  routes:\n"
@@ -542,7 +587,7 @@ def test_a_customer_tenant_route_to_the_root_receiver_is_kept(tmp_path):
         "      receiver: cust-default\n", 1)
     assert base != _CUSTOMER_BASE
     am_text = _emit_am(tmp_path, _tree(tmp_path), _base(tmp_path, base))
-    routes = render.alertmanager_reading(am_text)["route"]["routes"]
+    routes = _below_enforced(render.alertmanager_reading(am_text)["route"]["routes"])["routes"]
     cust_at = [i for i, r in enumerate(routes) if r.get("receiver") == "noc-pager"][0]
     assert routes[cust_at - 2:cust_at] == [
         {"matchers": ['tenant="t-thr"'], "receiver": "cust-default"},
@@ -557,16 +602,15 @@ def test_a_customer_tenant_route_to_the_root_receiver_is_kept(tmp_path):
     assert r.returncode == 0, r.stdout + r.stderr
 
 
-def test_a_renamed_root_receiver_moves_the_fallthrough_with_it(tmp_path):
-    """The source's root receiver renamed: the fallthrough is rendered from
-    the source, so it names the new root and nothing names the old one."""
+def test_a_renamed_root_receiver_moves_the_roots_place_with_it(tmp_path):
+    """The source's root receiver renamed: the route that plays the root is
+    rendered from the source, so it names the new root."""
     renamed = _CUSTOMER_BASE.replace("  receiver: cust-default\n  group_by",
                                      "  receiver: noc-pager\n  group_by", 1)
     assert renamed != _CUSTOMER_BASE
     am = render.alertmanager_reading(
         _emit_am(tmp_path, _tree(tmp_path), _base(tmp_path, renamed)))
-    assert [r["matchers"] for r in _fallthroughs(am, "noc-pager")] == [['tenant="t-thr"']]
-    assert _fallthroughs(am, "cust-default") == []
+    assert _below_enforced(am["route"]["routes"])["receiver"] == "noc-pager"
 
 
 @pytest.mark.parametrize("keep_enforced", [True, False],
