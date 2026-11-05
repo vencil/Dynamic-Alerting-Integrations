@@ -14,6 +14,8 @@
 from __future__ import annotations
 
 import json
+import os
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -338,18 +340,30 @@ def _out_args(tmp_path):
     return _tree(tmp_path, {"t-a": _OWN}), tmp_path / "out.yml"
 
 
+def _alias(target: Path, kind: str) -> Path:
+    """*target* itself, or a symlink / hard link to it."""
+    if kind == "same":
+        return target
+    link = target.with_name(f"{kind}-of-{target.name}")
+    if kind == "symlink":
+        symlink_or_skip(target, link)
+    else:
+        try:
+            os.link(target, link)
+        except (OSError, NotImplementedError) as exc:  # a filesystem without hard links
+            pytest.skip(f"cannot make a hard link here: {exc}")
+    return link
+
+
 @pytest.mark.parametrize("first,second", [
     ("-o", "--findings-json"), ("-o", "--secret-mounts-out"),
     ("--findings-json", "--secret-mounts-out")])
-@pytest.mark.parametrize("alias", ["same", "symlink"])
+@pytest.mark.parametrize("alias", ["same", "symlink", "hardlink"])
 def test_two_outputs_that_are_one_file_are_refused(tmp_path, first, second, alias):
     d, _ = _out_args(tmp_path)
     target = tmp_path / "one.file"
     target.write_text("kept\n", encoding="utf-8")
-    other = target
-    if alias == "symlink":
-        other = tmp_path / "alias.file"
-        symlink_or_skip(target, other)
+    other = _alias(target, alias)
     flags = {first: str(target), second: str(other)}
     argv = ["--output-alertmanager"]
     for flag, value in flags.items():
@@ -360,17 +374,17 @@ def test_two_outputs_that_are_one_file_are_refused(tmp_path, first, second, alia
     assert r.returncode == 2, (r.stdout, r.stderr)
     assert "names the same file as" in r.stderr, r.stderr
     assert not (tmp_path / "am.yml").exists()
-    if "--findings-json" not in flags:
-        # Nothing was written: the file keeps its content.
-        assert target.read_text(encoding="utf-8") == "kept\n"
+    # Nothing was written — the --findings-json document either, although it
+    # is written on every exit: a taken destination is not written.
+    assert target.read_text(encoding="utf-8") == "kept\n"
 
 
 @pytest.mark.parametrize("flag", ["-o", "--findings-json", "--secret-mounts-out"])
-def test_a_symlink_to_the_base_config_is_the_base_config(tmp_path, flag):
+@pytest.mark.parametrize("kind", ["symlink", "hardlink"])
+def test_a_link_to_the_base_config_is_the_base_config(tmp_path, flag, kind):
     d, _ = _out_args(tmp_path)
     base = _base(tmp_path)
-    alias = tmp_path / "base-alias.yml"
-    symlink_or_skip(base, alias)
+    alias = _alias(Path(base), kind)
     argv = ["--output-alertmanager", "--base-config", base, flag, str(alias)]
     if flag != "-o":
         argv += ["-o", str(tmp_path / "am.yml")]
@@ -412,3 +426,14 @@ def test_the_base_configs_templates_reach_the_list_through_the_cli(tmp_path):
     assert r.returncode == 0, r.stderr
     doc = json.loads(mounts.read_text(encoding="utf-8"))
     assert {"name": "am-templates", "keys": []} in doc["mounts"]
+
+
+def test_devices_collide_with_nothing(tmp_path):
+    """`/dev/null` for two outputs replaces nothing (it is not a regular
+    file): no clash, as before #1560's one judgement."""
+    if not os.path.exists("/dev/null") or not stat.S_ISCHR(os.stat("/dev/null").st_mode):
+        pytest.skip("no /dev/null character device on this host")
+    d, _ = _out_args(tmp_path)
+    r = _run(tmp_path, d, "--output-alertmanager", "-o", "/dev/null",
+             "--findings-json", "/dev/null", "--secret-mounts-out", "/dev/null")
+    assert r.returncode == 0, (r.stdout, r.stderr)

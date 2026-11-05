@@ -42,6 +42,7 @@ import argparse
 import contextlib
 import json
 import os
+import stat
 import sys
 import textwrap
 from types import MappingProxyType
@@ -1571,11 +1572,23 @@ def _assembled_judge(undelivered: list[UndeliveredCustomAlerts], *, strict: bool
     return judge
 
 
+def _is_special_file(path: str) -> bool:
+    """Whether *path* is there and is not a regular file (``/dev/null``, a
+    tty, a FIFO): writing it replaces nothing, so it collides with nothing.
+    Whether it is fd 1 is the stdout owners' question, not this one."""
+    try:
+        return not stat.S_ISREG(os.stat(path).st_mode)
+    except OSError:
+        return False
+
+
 def _same_file(a: str | None, b: str | None) -> bool:
-    """Whether paths *a* and *b* name one file: the same path once symlinks
-    are resolved (``os.path.realpath`` — also for a file not created yet),
-    or the same inode (``os.path.samefile`` — a hard link)."""
-    if not a or not b:
+    """Whether paths *a* and *b* name one file, so that writing one replaces
+    the other: the same path once symlinks are resolved
+    (``os.path.realpath`` — also for a file not created yet), or the same
+    inode (``os.path.samefile`` — a hard link). A path that is not a regular
+    file (``_is_special_file``) is never the same file."""
+    if not a or not b or _is_special_file(a) or _is_special_file(b):
         return False
     if os.path.realpath(a) == os.path.realpath(b):
         return True
@@ -1637,37 +1650,48 @@ def output_destinations(args: argparse.Namespace) -> tuple[list[tuple[str, str]]
     return files, stdout
 
 
-def refuse_clashing_outputs(args: argparse.Namespace) -> bool:
-    """Refuse (rc 2, before anything is written) a run two of whose outputs
-    land in one place (#1560): two files that are one file
+def output_clashes(args: argparse.Namespace) -> list[tuple[frozenset[str], str]]:
+    """Every pair of this run's outputs that land in one place (#1560), as
+    ``(flags, line)``: the flags whose destination is taken — none of them
+    may be written — and the line that says why. Two files that are one file
     (``_same_file``: a symlink or a hard link to it included), a file that
-    is the ``--base-config`` source (in the modes that read it), or more
-    than one writer of stdout. Returns whether an operator output owns
-    stdout (the caller moves its own receipts to stderr); the stdout owners
-    are claimed (``_lib_io.claim_stdout``)."""
+    is the ``--base-config`` source (in the modes that read it), more than
+    one writer of stdout. The ONE judgement: ``refuse_clashing_outputs``
+    refuses the run by it, ``_write_findings_if_asked`` skips the document
+    by it (the document is written on every exit, a refusal included)."""
     files, stdout = output_destinations(args)
-    lines: list[str] = []
+    found: list[tuple[frozenset[str], str]] = []
     reads_base = ((args.output_alertmanager or args.output_configmap)
                   and not args.validate and args.base_config is not None)
     for flag, path in files:
         if reads_base and _names_the_source(path, args.base_config):
-            lines.append(
+            found.append((frozenset({flag}),
                 f"{flag} names the --base-config file itself: the base is your "
                 "source config and the output is rendered from it, so writing over "
                 "it would destroy the source (refused).\n"
-                "  Write it to another path and keep the source as it is.")
+                "  Write it to another path and keep the source as it is."))
     for i, (flag_a, path_a) in enumerate(files):
         for flag_b, path_b in files[i + 1:]:
             if _same_file(path_a, path_b):
-                lines.append(
+                found.append((frozenset({flag_a, flag_b}),
                     f"{flag_b} names the same file as {flag_a}: one would replace "
-                    "the other (refused).\n  Write each to its own path.")
+                    "the other (refused).\n  Write each to its own path."))
     if len(stdout) > 1:
-        lines.append(
+        found.append((frozenset(stdout),
             f"standard output was asked for by: {', '.join(stdout)} — only one of "
-            "them may write there (refused).")
-    if lines:
-        die_caller_error("ERROR: " + "\nERROR: ".join(lines))
+            "them may write there (refused)."))
+    return found
+
+
+def refuse_clashing_outputs(args: argparse.Namespace) -> bool:
+    """Refuse (rc 2, before anything is written) a run with an
+    ``output_clashes`` entry. Returns whether an operator output owns
+    stdout (the caller moves its own receipts to stderr); the stdout owners
+    are claimed (``_lib_io.claim_stdout``)."""
+    clashes = output_clashes(args)
+    if clashes:
+        die_caller_error("ERROR: " + "\nERROR: ".join(line for _, line in clashes))
+    _, stdout = output_destinations(args)
     for owner in stdout:
         _lib_io.claim_stdout(owner)
     return any(owner != ROUTES_ON_STDOUT and not owner.startswith("-o/") for owner in stdout)
@@ -1683,6 +1707,13 @@ def _write_findings_if_asked(early: argparse.Namespace,
     prints its ERROR line but does not exit, so the exception survives."""
     src = args if args is not None else early
     if src.findings_json is None:
+        return
+    # #1560: a destination another output (or the source) also names is not
+    # written — the same judgement that refused the run.
+    if args is not None and any("--findings-json" in flags
+                                for flags, _ in output_clashes(args)):
+        print("ERROR: --findings-json names a destination another output of this "
+              "run also names — not written, the file is kept as it is", file=sys.stderr)
         return
     if _names_the_source(src.findings_json, getattr(src, "base_config", None)):
         # #1211 gap 2 (blind review F4): the document is written on every
