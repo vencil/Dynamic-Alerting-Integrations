@@ -794,8 +794,8 @@ def required_mounts(config: Mapping, mount_root: str) -> dict:
             other.add(path)
     templates = config.get("templates") if isinstance(config, Mapping) else None
     for path in templates if isinstance(templates, list) else []:
-        if not isinstance(path, str):
-            continue
+        if not isinstance(path, str) or not path:
+            continue  # an empty entry names no file: nothing to mount or provide
         parts = segments(path)
         if not parts or _GLOB_CHARS & set(parts[0]):
             other.add(path)

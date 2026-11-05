@@ -121,6 +121,12 @@ def test_top_level_templates_are_listed(template, mounts, other):
     assert doc["mounts"] == mounts and doc["other_files"] == other
 
 
+def test_an_empty_template_entry_is_skipped():
+    doc = required_mounts({"templates": ["", f"{ROOT}/tmpl/a.tmpl"]}, ROOT)
+    assert doc["mounts"] == [{"name": "tmpl", "keys": ["a.tmpl"]}]
+    assert doc["other_files"] == []
+
+
 def test_a_template_glob_key_does_not_hide_a_literal_key_of_the_same_secret():
     doc = required_mounts({"templates": [f"{ROOT}/tmpl/*.tmpl"], "receivers": [
         {"name": "r", "webhook_configs": [{"url_file": f"{ROOT}/tmpl/hook"}]}]}, ROOT)
