@@ -388,7 +388,7 @@ _OAUTH = {"client_id": "id", "token_url": "https://token.example.com/t"}
     ({**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {
         "a": [{"b": {"c": [1, CORP]}}]}}}},
      "receiver.http_config.oauth2.claims.a[0].b.c[1]"),
-    # 形狀壞掉的參照也算（is_secret_ref 只看 `secret` 鍵）
+    # 形狀壞掉的參照也算（is_secret_ref 看 `secret` 鍵的值是不是 mapping）
     ({**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {
         "x": {"secret": {"name": "da-t-b", "key": "k"}}}}}},
      "receiver.http_config.oauth2.claims.x"),
@@ -422,15 +422,68 @@ def test_a_rendered_reference_is_not_a_leftover():
                            "http_config": receiver["http_config"]}
 
 
-def test_leftover_reference_in_every_slot_is_refused_through_generate_routes():
+def test_leftover_reference_in_the_main_slot_is_refused_through_generate_routes():
     bad = {**SMTP, "headers": {"X-Token": OWN}}
-    routing = _routing(bad, overrides=[{"alertname": "A", "receiver": bad}],
-                       routes=[{"match": {"severity": "critical"}, "receiver": bad}])
-    _r, receivers, warnings = gar.generate_routes({"t-a": routing}, tenants=["t-a"],
+    _r, receivers, warnings = gar.generate_routes({"t-a": _routing(bad)}, tenants=["t-a"],
                                                   secrets=BINDING)
     assert receivers == []
     got = [(w.kind, w.field) for w in warnings if isinstance(w, SkippedEntryWarning)]
     assert ("secret_ref_unsupported_field", "receiver.headers.X-Token") in got
+
+
+def test_leftover_reference_in_each_sub_slot_is_refused_through_generate_routes():
+    # The main receiver is valid, so overrides and routes each reach
+    # build_receiver_config themselves: a refused main would turn them into
+    # parent_receiver_not_rendered and prove nothing about their own scan.
+    good = {"type": "slack", "api_url": "https://hooks.slack.com/services/T0/B0/x"}
+    bad = {**SMTP, "headers": {"X-Token": OWN}}
+    routing = _routing(good, overrides=[{"alertname": "A", "receiver": bad}],
+                       routes=[{"match": {"severity": "critical"}, "receiver": bad}])
+    _r, receivers, warnings = gar.generate_routes({"t-a": routing}, tenants=["t-a"],
+                                                  secrets=BINDING)
+    got = {(w.kind, w.field) for w in warnings if isinstance(w, SkippedEntryWarning)}
+    assert ("secret_ref_unsupported_field", "overrides[0].receiver.headers.X-Token") in got
+    assert ("secret_ref_unsupported_field", "routes[0].receiver.headers.X-Token") in got
+    assert [r["name"] for r in receivers] == ["tenant-t-a"]
+
+
+@pytest.mark.parametrize("receiver", [
+    {**SMTP, "headers": {"secret": "v"}},
+    {**_HOOK, "http_config": {"oauth2": {**_OAUTH, "endpoint_params": {"secret": "v"}}}},
+    {**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {"secret": None}}}},
+])
+def test_a_key_named_secret_holding_a_scalar_is_not_a_reference(receiver):
+    cfg, warnings = build_receiver_config(receiver, "t-a", tenant_id="t-a",
+                                          owner_tenant="t-a", secrets=BINDING)
+    assert cfg is not None, warnings
+    assert not [w for w in warnings
+                if getattr(w, "kind", "").startswith("secret_ref_")], warnings
+
+
+def test_an_http_header_named_secret_is_refused_as_a_known_limit():
+    # http_headers values are mappings ({values: [...]}), so a header named
+    # `secret` has the shape of a reference and is refused like one. Telling
+    # the two apart would take a second rule on the inner keys; a header with
+    # that name is rare enough to stay refused (documented in the schema).
+    receiver = {**_HOOK, "http_config": {"http_headers": {"secret": {"values": ["v"]}}}}
+    cfg, warnings = build_receiver_config(receiver, "t-a", tenant_id="t-a",
+                                          owner_tenant="t-a", secrets=BINDING)
+    assert cfg is None
+    assert ("secret_ref_unsupported_field", "receiver.http_config.http_headers") in {
+        (w.kind, w.field) for w in warnings if isinstance(w, SkippedEntryWarning)}
+
+
+def test_a_nested_malformed_reference_is_named_once():
+    from _grar_merge import secret_ref_paths
+    value = {"a": {"secret": {"secret": {"key": "k"}}}}
+    assert secret_ref_paths(value, "r") == ["r.a"]
+
+
+def test_a_scalar_secret_mapping_in_a_credential_field_is_still_refused():
+    cfg, warnings = build_receiver_config(
+        {"type": "slack", "api_url": {"secret": "https://hooks.slack.com/x"}}, "t-a",
+        tenant_id="t-a", owner_tenant="t-a", secrets=BINDING)
+    assert cfg is None, warnings
 
 
 def test_schema_refuses_a_reference_inside_http_config_at_any_depth():
@@ -441,8 +494,11 @@ def test_schema_refuses_a_reference_inside_http_config_at_any_depth():
     def doc(receiver):
         return {"tenants": {"t-a": {"_routing": {"receiver": receiver}}}}
 
-    plain = {**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {"a": [{"b": "x"}]}}}}
-    assert list(v.iter_errors(doc(plain))) == []
+    for plain in (
+        {**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {"a": [{"b": "x"}]}}}},
+        {**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {"secret": "x"}}}},
+    ):
+        assert list(v.iter_errors(doc(plain))) == [], plain
     for receiver in (
         {**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {"a": OWN}}}},
         {**_HOOK, "http_config": {"oauth2": {**_OAUTH, "claims": {"a": [{"b": CORP}]}}}},

@@ -402,12 +402,14 @@ SECRET_REF_SHAPES = ("{secret: {key: <key>}} (the tenant's own Secret) or "
 
 
 def is_secret_ref(value: Any) -> bool:
-    """Whether *value* is written as a Secret reference: a mapping with a
-    ``secret`` key. Its shape is ``secret_ref_problem``'s to judge — a
-    malformed reference (``{secret: {name: …, key: …}}``, the shape before
-    the owner decision of 2026-11-04) is still a reference, refused for its
-    shape, never taken for a value."""
-    return isinstance(value, dict) and "secret" in value
+    """Whether *value* is written as a Secret reference: a mapping whose
+    ``secret`` key holds a mapping. Its shape is ``secret_ref_problem``'s to
+    judge — a malformed reference (``{secret: {name: …, key: …}}``, the shape
+    before the owner decision of 2026-11-04) is still a reference, refused
+    for its shape, never taken for a value. A ``secret`` key holding a
+    scalar is not one: an HTTP header, an oauth2 endpoint parameter or a
+    claim may be named ``secret`` (#1560 review)."""
+    return isinstance(value, dict) and isinstance(value.get("secret"), dict)
 
 
 def secret_ref_rule() -> dict[str, tuple[re.Pattern[str], int]]:

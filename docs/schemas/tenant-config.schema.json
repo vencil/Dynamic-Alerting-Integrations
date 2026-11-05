@@ -1074,9 +1074,9 @@
     },
     "secretRefFree": {
       "title": "No Secret reference at any depth",
-      "description": "A value with nothing shaped like a Secret reference (a mapping with a `secret` key, definitions.secretRef) anywhere inside it: the value itself, every value of every mapping and every list item in turn. Alertmanager has no `*_file` form there, so a reference would reach its config as written (#1560).",
-      "$comment": "#1560: applied to definitions.httpConfig — the one free-form subtree of a receiver that can hold a mapping (oauth2 claims); email headers take only strings. The route generator refuses the same thing on its output, for every receiver field at any depth (_grar_merge.secret_ref_paths, kind secret_ref_unsupported_field), so a field added later is covered there even before it is here. Shaped like _lib_validation.is_secret_ref, not like definitions.secretRef: a malformed reference is refused too.",
-      "not": { "type": "object", "required": ["secret"] },
+      "description": "A value with nothing shaped like a Secret reference (a mapping whose `secret` key holds a mapping, definitions.secretRef) anywhere inside it: the value itself, every value of every mapping and every list item in turn. Alertmanager has no `*_file` form there, so a reference would reach its config as written (#1560).",
+      "$comment": "#1560: applied to definitions.httpConfig — the one free-form subtree of a receiver that can hold a mapping (oauth2 claims); email headers take only strings. The route generator refuses the same thing on its output, for every receiver field at any depth (_grar_merge.secret_ref_paths, kind secret_ref_unsupported_field), so a field added later is covered there even before it is here. Shaped like _lib_validation.is_secret_ref, not like definitions.secretRef: a malformed reference is refused too; a `secret` key holding a scalar (a header or an oauth2 parameter named secret) is not a reference. An http_headers entry named `secret` holds a mapping ({values: [...]}) and is refused like a reference: a known limit.",
+      "not": { "type": "object", "required": ["secret"], "properties": { "secret": { "type": "object" } } },
       "additionalProperties": { "$ref": "#/definitions/secretRefFree" },
       "items": { "$ref": "#/definitions/secretRefFree" }
     },
