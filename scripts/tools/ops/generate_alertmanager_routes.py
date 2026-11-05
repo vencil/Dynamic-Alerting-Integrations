@@ -1388,13 +1388,16 @@ def main(argv: list[str] | None = None, *, key_verdict: bool = True) -> None:
             ("--secret-mounts-out", args.secret_mounts_out if reads_mount_list else None))
             if value is not None and _lib_io.targets_stdout(value)]
         if stdout_documents:
+            asked = (["the routes output (no -o)"] if args.output is None else []) \
+                + stdout_documents
             try:
-                if args.output is None:
-                    _lib_io.claim_stdout("the routes output (no -o)")
-                for flag in stdout_documents:
-                    _lib_io.claim_stdout(flag)
+                for owner in asked:
+                    _lib_io.claim_stdout(owner)
             except _lib_io.OutputWriteError as exc:
                 print(f"ERROR: {_lib_io.safe_label(str(exc))}", file=sys.stderr)
+                # The shared line names the first clash only; name them all.
+                print(f"  standard output was asked for by: {', '.join(asked)} — "
+                      "only one of them may write there", file=sys.stderr)
                 sys.exit(EXIT_CALLER_ERROR)
             receipts = contextlib.redirect_stdout(sys.stderr)
         # #1560: the mount list is written HERE, after the redirect ends, so

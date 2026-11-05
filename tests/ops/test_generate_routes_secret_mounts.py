@@ -294,3 +294,13 @@ def test_an_unread_stdout_list_is_refused_as_unread_not_as_a_stdout_clash(tmp_pa
     assert r.returncode == 2, (r.stdout, r.stderr)
     assert "--secret-mounts-out is not read in" in r.stderr
     assert "standard output is already used" not in r.stderr
+
+
+def test_every_stdout_claimant_is_named_when_they_clash(tmp_path):
+    d = _tree(tmp_path, {"t-a": _OWN})
+    r = _run(tmp_path, d, "--output-alertmanager", "--secret-mounts-out", "-",
+             "--findings-json", "-")
+    assert r.returncode == 2, (r.stdout, r.stderr)
+    named = r.stderr[r.stderr.index("asked for by:"):]
+    assert all(x in named for x in ("the routes output (no -o)", "--findings-json",
+                                    "--secret-mounts-out"))
