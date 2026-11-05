@@ -1,23 +1,23 @@
 package rbac
 
-// ADR-027 / LD-6 P4 — the org-scope authorization axis, both planes.
+// ADR-027 / LD-6 P4 — the org-scope authorization axis, both planes, under
+// ADR-027 §7 (every axis enforced; no shadow mode).
 //
 // List plane (ScopeAllowed): the org axis is folded into the SAME per-rule
 // loop as the metadata axis (never a top-level AND, which would leak
-// cross-rule access), the four (metadata,org) visibility booleans select the
-// effective decision + per-axis would-deny signals, and a config with no
-// org-scoped rule degenerates BYTE-IDENTICALLY to the pre-P4 metadata filter.
+// cross-rule access), and a config with no org-scoped rule degenerates to the
+// metadata filter.
 //
 // Write plane (AllowedInOrg, P4b): the org axis is folded into the SAME
 // per-rule loop as the permission check (never a top-level AND — T4), Allowed
-// stays the byte-identical org-blind degeneration (T3, plus the full
-// legacy_equiv_test matrix), the org axis only ever narrows a grant (T2
-// monotonicity), and would-deny observations land on the org_write axis from
-// AllowedInOrg ONLY (T5 — Allowed and the list-plane ScopeAllowed must never
-// pollute the write-plane soak signal). T7's rbac half proves the gate
-// consumes orgs resolved AT DECISION TIME (a swapped tenantorg snapshot flips
-// the decision), backing the "resolve inside the execution loop, never at
-// submit time" rule for batch handlers.
+// stays the scope-blind entry point (T3, plus the full legacy_equiv_test
+// matrix), the scope axes only ever narrow a grant (T2 monotonicity), and
+// scope-denied observations land on the org_write axis from AllowedInOrg ONLY
+// (T5 — Allowed and the list-plane ScopeAllowed never record on the
+// write-plane series). T7's rbac half proves the gate consumes orgs resolved
+// AT DECISION TIME (a swapped tenantorg snapshot flips the decision), backing
+// the "resolve inside the execution loop, never at submit time" rule for batch
+// handlers.
 //
 // fakeScopeRecorder / newFakeScopeRecorder and equivConfig / equivGroupSets /
 // equivTenants live in testhelpers_test.go. The org-scope claim-key LOAD
@@ -30,30 +30,27 @@ import (
 	"github.com/vencil/tenant-api/internal/tenantorg"
 )
 
-// ── pure scopeSetModes (the org analogue of scopeFieldModes) ────────────────
+// ── pure scopeSetPasses (the org analogue of scopeFieldPasses) ──────────────
 
-func TestScopeSetModes(t *testing.T) {
+func TestScopeSetPasses(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name        string
-		userOrgVal  string
-		tenantOrgs  []string
-		wantShadow  bool
-		wantEnforce bool
+		name       string
+		userOrgVal string
+		tenantOrgs []string
+		want       bool
 	}{
-		{"unlabeled (nil): shadow yes, enforce no", "ORG-A", nil, true, false},
-		{"unlabeled (empty slice): shadow yes, enforce no", "ORG-A", []string{}, true, false},
-		{"unlabeled + no caller claim: shadow yes, enforce no", "", nil, true, false},
-		{"labeled member: both yes", "ORG-A", []string{"ORG-A", "ORG-B"}, true, true},
-		{"labeled non-member: both no", "ORG-C", []string{"ORG-A", "ORG-B"}, false, false},
-		{"labeled + no caller claim: both no", "", []string{"ORG-A"}, false, false},
+		{"unlabeled (nil) fails", "ORG-A", nil, false},
+		{"unlabeled (empty slice) fails", "ORG-A", []string{}, false},
+		{"unlabeled + no caller claim fails", "", nil, false},
+		{"labeled member passes", "ORG-A", []string{"ORG-A", "ORG-B"}, true},
+		{"labeled non-member fails", "ORG-C", []string{"ORG-A", "ORG-B"}, false},
+		{"labeled + no caller claim fails", "", []string{"ORG-A"}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			gotShadow, gotEnforce := scopeSetModes(c.userOrgVal, c.tenantOrgs)
-			if gotShadow != c.wantShadow || gotEnforce != c.wantEnforce {
-				t.Errorf("scopeSetModes(%q, %v) = (%v, %v), want (%v, %v)",
-					c.userOrgVal, c.tenantOrgs, gotShadow, gotEnforce, c.wantShadow, c.wantEnforce)
+			if got := scopeSetPasses(c.userOrgVal, c.tenantOrgs); got != c.want {
+				t.Errorf("scopeSetPasses(%q, %v) = %v, want %v", c.userOrgVal, c.tenantOrgs, got, c.want)
 			}
 		})
 	}
@@ -89,15 +86,15 @@ func TestScopeAllowed_CrossRuleUnionNoLeak(t *testing.T) {
 	}
 
 	// Leak case: env=staging (B fails) AND org=ORG-OTHER (A fails). No single
-	// rule grants both → MUST be invisible in every flag combination.
-	for _, meta := range []bool{false, true} {
-		for _, org := range []bool{false, true} {
-			m.metadataScopeEnforce = meta
-			m.orgScopeEnforce = org
-			if m.ScopeAllowed(p, "db-x", "staging", "", []string{"ORG-OTHER"}) {
-				t.Errorf("cross-rule leak: metaEnforce=%v orgEnforce=%v showed a tenant no single rule grants", meta, org)
-			}
-		}
+	// rule grants both → MUST be invisible, and each axis that cut a rule is
+	// counted once.
+	rec := newFakeScopeRecorder()
+	m.SetScopeAuditor(rec)
+	if m.ScopeAllowed(p, "db-x", "staging", "", []string{"ORG-OTHER"}) {
+		t.Error("cross-rule leak: showed a tenant no single rule grants")
+	}
+	if rec.counts[scopeAxisMetadata] != 1 || rec.counts[scopeAxisOrg] != 1 {
+		t.Errorf("leak case: want metadata=1 org=1 (rule B cut by metadata, rule A by org), got %v", rec.counts)
 	}
 }
 
@@ -109,17 +106,16 @@ func TestScopeAllowed_OrgEvaluationMatrix(t *testing.T) {
 		{Name: "ops", Tenants: []string{"db-*"}, Permissions: []Permission{PermRead}, OrgScope: "org"},
 	}}
 	cases := []struct {
-		name        string
-		claimOrg    string   // caller's org claim ("" = none)
-		tenantOrgs  []string // tenant org list (nil/empty = unlabeled)
-		wantShadow  bool
-		wantEnforce bool
+		name       string
+		claimOrg   string   // caller's org claim ("" = none)
+		tenantOrgs []string // tenant org list (nil/empty = unlabeled)
+		want       bool
 	}{
-		{"hit: caller org in tenant list", "ORG-A", []string{"ORG-A"}, true, true},
-		{"miss: caller org not in list", "ORG-C", []string{"ORG-A"}, false, false},
-		{"no caller org claim, labeled tenant", "", []string{"ORG-A"}, false, false},
-		{"unlabeled tenant (empty list)", "ORG-A", []string{}, true, false},
-		{"unlabeled tenant (nil list)", "ORG-A", nil, true, false},
+		{"hit: caller org in tenant list", "ORG-A", []string{"ORG-A"}, true},
+		{"miss: caller org not in list", "ORG-C", []string{"ORG-A"}, false},
+		{"no caller org claim, labeled tenant", "", []string{"ORG-A"}, false},
+		{"unlabeled tenant (empty list)", "ORG-A", []string{}, false},
+		{"unlabeled tenant (nil list)", "ORG-A", nil, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -129,22 +125,27 @@ func TestScopeAllowed_OrgEvaluationMatrix(t *testing.T) {
 			}
 			p := &VerifiedPrincipal{Groups: []string{"ops"}, Claims: claims}
 
-			shadowM := NewForTest(cfg)
-			if got := shadowM.ScopeAllowed(p, "db-a", "", "", c.tenantOrgs); got != c.wantShadow {
-				t.Errorf("shadow: ScopeAllowed = %v, want %v", got, c.wantShadow)
+			m := NewForTest(cfg)
+			rec := newFakeScopeRecorder()
+			m.SetScopeAuditor(rec)
+			if got := m.ScopeAllowed(p, "db-org1", "", "", c.tenantOrgs); got != c.want {
+				t.Errorf("ScopeAllowed = %v, want %v", got, c.want)
 			}
-			enforceM := NewForTest(cfg)
-			enforceM.EnableOrgScopeEnforce()
-			if got := enforceM.ScopeAllowed(p, "db-a", "", "", c.tenantOrgs); got != c.wantEnforce {
-				t.Errorf("enforce: ScopeAllowed = %v, want %v", got, c.wantEnforce)
+			// Every denial here is the org axis cutting the one matching rule.
+			wantOrg := 0
+			if !c.want {
+				wantOrg = 1
+			}
+			if rec.counts[scopeAxisOrg] != wantOrg || rec.counts[scopeAxisMetadata] != 0 {
+				t.Errorf("counts = %v, want org=%d metadata=0", rec.counts, wantOrg)
 			}
 		})
 	}
 }
 
-// ── #4 per-axis would-deny independence, no double count ─────────────────────
+// ── #4 per-axis scope-denied independence, no double count ──────────────────
 
-func TestScopeAllowed_PerAxisWouldDenyIndependent(t *testing.T) {
+func TestScopeAllowed_PerAxisScopeDeniedIndependent(t *testing.T) {
 	t.Parallel()
 	cfg := &RBACConfig{Groups: []GroupRule{
 		{Name: "ops", Tenants: []string{"db-org"}, Permissions: []Permission{PermRead}, OrgScope: "org"},                                        // org-scoped only
@@ -153,54 +154,78 @@ func TestScopeAllowed_PerAxisWouldDenyIndependent(t *testing.T) {
 	}}
 	p := &VerifiedPrincipal{Groups: []string{"ops"}, Claims: map[string]string{"org": "ORG-A"}}
 
-	t.Run("org gap records org only", func(t *testing.T) {
+	t.Run("unlabeled org denies and records org only", func(t *testing.T) {
 		m := NewForTest(cfg)
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
 		// unlabeled org (nil), env irrelevant (this rule's env is wildcard).
-		if !m.ScopeAllowed(p, "db-org", "staging", "", nil) {
-			t.Error("shadow: unlabeled-org tenant must stay visible")
+		if m.ScopeAllowed(p, "db-org", "staging", "", nil) {
+			t.Error("unlabeled-org tenant must be hidden")
 		}
 		if rec.counts[scopeAxisOrg] != 1 || rec.counts[scopeAxisMetadata] != 0 {
-			t.Errorf("org gap: want org=1 metadata=0, got org=%d metadata=%d", rec.counts[scopeAxisOrg], rec.counts[scopeAxisMetadata])
+			t.Errorf("org denial: want org=1 metadata=0, got org=%d metadata=%d", rec.counts[scopeAxisOrg], rec.counts[scopeAxisMetadata])
 		}
 	})
 
-	t.Run("metadata gap records metadata only", func(t *testing.T) {
+	t.Run("unlabeled env denies and records metadata only", func(t *testing.T) {
 		m := NewForTest(cfg)
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
 		// unlabeled env (""), org axis absent on this rule.
-		if !m.ScopeAllowed(p, "db-meta", "", "", []string{"ORG-A"}) {
-			t.Error("shadow: unlabeled-env tenant must stay visible")
+		if m.ScopeAllowed(p, "db-meta", "", "", []string{"ORG-A"}) {
+			t.Error("unlabeled-env tenant must be hidden")
 		}
 		if rec.counts[scopeAxisMetadata] != 1 || rec.counts[scopeAxisOrg] != 0 {
-			t.Errorf("metadata gap: want metadata=1 org=0, got metadata=%d org=%d", rec.counts[scopeAxisMetadata], rec.counts[scopeAxisOrg])
+			t.Errorf("metadata denial: want metadata=1 org=0, got metadata=%d org=%d", rec.counts[scopeAxisMetadata], rec.counts[scopeAxisOrg])
 		}
 	})
 
-	t.Run("both axes gap records each exactly once (no double count)", func(t *testing.T) {
+	t.Run("both axes deny: each recorded exactly once (no double count)", func(t *testing.T) {
 		m := NewForTest(cfg)
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
-		if !m.ScopeAllowed(p, "db-both", "", "", nil) { // unlabeled env AND unlabeled org
-			t.Error("shadow: both-unlabeled tenant must stay visible")
+		if m.ScopeAllowed(p, "db-both", "", "", nil) { // unlabeled env AND unlabeled org
+			t.Error("both-unlabeled tenant must be hidden")
 		}
 		if rec.counts[scopeAxisOrg] != 1 || rec.counts[scopeAxisMetadata] != 1 {
-			t.Errorf("both gap: want org=1 metadata=1 (one each), got org=%d metadata=%d", rec.counts[scopeAxisOrg], rec.counts[scopeAxisMetadata])
+			t.Errorf("both denial: want org=1 metadata=1 (one each), got org=%d metadata=%d", rec.counts[scopeAxisOrg], rec.counts[scopeAxisMetadata])
 		}
 	})
 
-	t.Run("labeled non-match records nothing (just denied)", func(t *testing.T) {
+	t.Run("labeled non-match denies and records org", func(t *testing.T) {
 		m := NewForTest(cfg)
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
-		// labeled tenant, caller not a member → denied, but NOT a migration gap.
+		// labeled tenant, caller not a member → denied by the org axis.
 		if m.ScopeAllowed(p, "db-org", "staging", "", []string{"ORG-OTHER"}) {
 			t.Error("labeled non-match must be invisible")
 		}
-		if rec.counts[scopeAxisOrg] != 0 || rec.counts[scopeAxisMetadata] != 0 {
-			t.Errorf("labeled non-match: want no would-deny, got org=%d metadata=%d", rec.counts[scopeAxisOrg], rec.counts[scopeAxisMetadata])
+		if rec.counts[scopeAxisOrg] != 1 || rec.counts[scopeAxisMetadata] != 0 {
+			t.Errorf("labeled non-match: want org=1 metadata=0, got org=%d metadata=%d", rec.counts[scopeAxisOrg], rec.counts[scopeAxisMetadata])
+		}
+	})
+
+	t.Run("labeled in-scope tenant visible, records nothing", func(t *testing.T) {
+		m := NewForTest(cfg)
+		rec := newFakeScopeRecorder()
+		m.SetScopeAuditor(rec)
+		if !m.ScopeAllowed(p, "db-both", "production", "", []string{"ORG-A"}) {
+			t.Error("tenant in scope on both axes must be visible")
+		}
+		if len(rec.counts) != 0 {
+			t.Errorf("an allowed decision must record nothing, got %v", rec.counts)
+		}
+	})
+
+	t.Run("tenant no rule names records nothing", func(t *testing.T) {
+		m := NewForTest(cfg)
+		rec := newFakeScopeRecorder()
+		m.SetScopeAuditor(rec)
+		if m.ScopeAllowed(p, "db-unnamed", "", "", nil) {
+			t.Error("tenant outside every pattern must be hidden")
+		}
+		if len(rec.counts) != 0 {
+			t.Errorf("a denial no rule would have granted must record nothing, got %v", rec.counts)
 		}
 	})
 }
@@ -216,33 +241,31 @@ func TestScopeAllowed_AdminNotLockedOut(t *testing.T) {
 	// Cross-org admin: matches only the org-less admin rule, carries NO org claim.
 	admin := &VerifiedPrincipal{Groups: []string{"platform-admins"}}
 
-	for _, meta := range []bool{false, true} {
-		for _, org := range []bool{false, true} {
-			m := NewForTest(cfg)
-			rec := newFakeScopeRecorder()
-			m.SetScopeAuditor(rec)
-			m.metadataScopeEnforce = meta
-			m.orgScopeEnforce = org
-			// Tenant belongs to some OTHER org; admin still sees it (its rule
-			// does not opt into org-scope), even in full enforce.
-			if !m.ScopeAllowed(admin, "db-x", "", "", []string{"ORG-X"}) {
-				t.Errorf("metaEnforce=%v orgEnforce=%v: admin (no org-scope rule) must see any tenant", meta, org)
-			}
-			if rec.counts[scopeAxisOrg] != 0 {
-				t.Errorf("metaEnforce=%v orgEnforce=%v: admin grant is not a would-deny, got org=%d", meta, org, rec.counts[scopeAxisOrg])
-			}
+	m := NewForTest(cfg)
+	rec := newFakeScopeRecorder()
+	m.SetScopeAuditor(rec)
+	// Tenant belongs to some OTHER org, or none; admin still sees it (its rule
+	// does not opt into org-scope).
+	for _, orgs := range [][]string{{"ORG-X"}, nil} {
+		if !m.ScopeAllowed(admin, "db-x", "", "", orgs) {
+			t.Errorf("orgs=%v: admin (no org-scope rule) must see any tenant", orgs)
 		}
+		if !m.AllowedInOrg(admin, "db-x", PermAdmin, orgs, "", "") {
+			t.Errorf("orgs=%v: admin (no org-scope rule) must administer any tenant", orgs)
+		}
+	}
+	if len(rec.counts) != 0 {
+		t.Errorf("admin grants are not scope denials, got %v", rec.counts)
 	}
 }
 
 // ── #1 + degeneration: ScopeAllowed with no org-scoped rule == MetadataAllowed ─
 
-// TestScopeAllowed_DegeneratesToMetadata pins the byte-identical degeneration:
-// with no org-scoped rule the org axis is (true,true) on every rule, so the
-// effective decision equals the pre-P4 MetadataAllowed across the full matrix,
-// AND the org would-deny counter never increments (org-would-deny ≡ false).
-// tenantOrgs is deliberately non-nil to prove the org list is IGNORED when no
-// rule opts in.
+// TestScopeAllowed_DegeneratesToMetadata pins the degeneration: with no
+// org-scoped rule the org axis restricts no rule, so the decision equals
+// MetadataAllowed across the full matrix, AND the org scope-denied counter
+// never increments. tenantOrgs is deliberately non-nil to prove the org list is
+// IGNORED when no rule opts in.
 func TestScopeAllowed_DegeneratesToMetadata(t *testing.T) {
 	t.Parallel()
 	metaCases := []struct{ env, domain string }{
@@ -253,28 +276,21 @@ func TestScopeAllowed_DegeneratesToMetadata(t *testing.T) {
 	rec := newFakeScopeRecorder()
 	scoped.SetScopeAuditor(rec)
 
-	for _, metaEnforce := range []bool{false, true} {
-		oracle.metadataScopeEnforce = metaEnforce
-		scoped.metadataScopeEnforce = metaEnforce
-		for _, orgEnforce := range []bool{false, true} {
-			scoped.orgScopeEnforce = orgEnforce // must not matter: no org rule
-			for gName, groups := range equivGroupSets() {
-				p := &VerifiedPrincipal{Groups: groups}
-				for _, tenant := range equivTenants {
-					for _, mc := range metaCases {
-						want := oracle.MetadataAllowed(p, tenant, mc.env, mc.domain)
-						got := scoped.ScopeAllowed(p, tenant, mc.env, mc.domain, []string{"ORG-Z"})
-						if got != want {
-							t.Errorf("[groups=%s tenant=%q env=%q dom=%q metaEnforce=%v orgEnforce=%v] ScopeAllowed=%v, MetadataAllowed=%v",
-								gName, tenant, mc.env, mc.domain, metaEnforce, orgEnforce, got, want)
-						}
-					}
+	for gName, groups := range equivGroupSets() {
+		p := &VerifiedPrincipal{Groups: groups}
+		for _, tenant := range equivTenants {
+			for _, mc := range metaCases {
+				want := oracle.MetadataAllowed(p, tenant, mc.env, mc.domain)
+				got := scoped.ScopeAllowed(p, tenant, mc.env, mc.domain, []string{"ORG-Z"})
+				if got != want {
+					t.Errorf("[groups=%s tenant=%q env=%q dom=%q] ScopeAllowed=%v, MetadataAllowed=%v",
+						gName, tenant, mc.env, mc.domain, got, want)
 				}
 			}
 		}
 	}
 	if rec.counts[scopeAxisOrg] != 0 {
-		t.Errorf("degeneration: org would-deny must stay 0 with no org-scoped rule, got %d", rec.counts[scopeAxisOrg])
+		t.Errorf("degeneration: org scope-denied must stay 0 with no org-scoped rule, got %d", rec.counts[scopeAxisOrg])
 	}
 }
 
@@ -283,16 +299,13 @@ func TestScopeAllowed_DegeneratesToMetadata(t *testing.T) {
 func TestMetadataAllowed_EqualsScopeAllowedNilOrgs(t *testing.T) {
 	t.Parallel()
 	m := NewForTest(equivConfig())
-	for _, enforce := range []bool{false, true} {
-		m.metadataScopeEnforce = enforce
-		for _, groups := range equivGroupSets() {
-			p := &VerifiedPrincipal{Groups: groups}
-			for _, tenant := range equivTenants {
-				for _, mc := range []struct{ env, dom string }{{"", ""}, {"production", "finance"}, {"staging", ""}} {
-					if a, b := m.MetadataAllowed(p, tenant, mc.env, mc.dom), m.ScopeAllowed(p, tenant, mc.env, mc.dom, nil); a != b {
-						t.Errorf("MetadataAllowed=%v != ScopeAllowed(nil orgs)=%v (tenant=%q env=%q dom=%q enforce=%v)",
-							a, b, tenant, mc.env, mc.dom, enforce)
-					}
+	for _, groups := range equivGroupSets() {
+		p := &VerifiedPrincipal{Groups: groups}
+		for _, tenant := range equivTenants {
+			for _, mc := range []struct{ env, dom string }{{"", ""}, {"production", "finance"}, {"staging", ""}} {
+				if a, b := m.MetadataAllowed(p, tenant, mc.env, mc.dom), m.ScopeAllowed(p, tenant, mc.env, mc.dom, nil); a != b {
+					t.Errorf("MetadataAllowed=%v != ScopeAllowed(nil orgs)=%v (tenant=%q env=%q dom=%q)",
+						a, b, tenant, mc.env, mc.dom)
 				}
 			}
 		}
@@ -322,58 +335,63 @@ func TestAllowedInOrg_Matrix(t *testing.T) {
 		name       string
 		p          *VerifiedPrincipal
 		tenantOrgs []string
-		wantShadow bool // expected for read AND write (the rule grants write ⊇ read)
-		wantWrite  bool // expected under enforce
+		want       bool // expected for read AND write (the rule grants write ⊇ read)
 	}{
-		{"member on labeled tenant", member, []string{"ORG-A", "ORG-B"}, true, true},
-		{"non-member on labeled tenant", nonMember, []string{"ORG-A"}, false, false},
-		{"member claim, unlabeled tenant (nil)", member, nil, true, false},
-		{"member claim, unlabeled tenant (empty)", member, []string{}, true, false},
-		{"no org claim, labeled tenant", noClaim, []string{"ORG-A"}, false, false},
-		{"no org claim, unlabeled tenant", noClaim, nil, true, false},
+		{"member on labeled tenant", member, []string{"ORG-A", "ORG-B"}, true},
+		{"non-member on labeled tenant", nonMember, []string{"ORG-A"}, false},
+		{"member claim, unlabeled tenant (nil)", member, nil, false},
+		{"member claim, unlabeled tenant (empty)", member, []string{}, false},
+		{"no org claim, labeled tenant", noClaim, []string{"ORG-A"}, false},
+		{"no org claim, unlabeled tenant", noClaim, nil, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
 			for _, want := range []Permission{PermRead, PermWrite} {
-				shadowM := NewForTest(orgWriteCfg())
-				if got := shadowM.AllowedInOrg(c.p, "db-a", want, c.tenantOrgs, "", ""); got != c.wantShadow {
-					t.Errorf("shadow: AllowedInOrg(%s) = %v, want %v", want, got, c.wantShadow)
+				m := NewForTest(orgWriteCfg())
+				rec := newFakeScopeRecorder()
+				m.SetScopeAuditor(rec)
+				if got := m.AllowedInOrg(c.p, "db-a", want, c.tenantOrgs, "", ""); got != c.want {
+					t.Errorf("AllowedInOrg(%s) = %v, want %v", want, got, c.want)
 				}
-				enforceM := NewForTest(orgWriteCfg())
-				enforceM.EnableOrgScopeEnforce()
-				if got := enforceM.AllowedInOrg(c.p, "db-a", want, c.tenantOrgs, "", ""); got != c.wantWrite {
-					t.Errorf("enforce: AllowedInOrg(%s) = %v, want %v", want, got, c.wantWrite)
+				wantOrgWrite := 0
+				if !c.want {
+					wantOrgWrite = 1 // the only matching rule grants the perm; org cut it
+				}
+				if rec.counts[scopeAxisOrgWrite] != wantOrgWrite || rec.counts[scopeAxisMetadataWrite] != 0 {
+					t.Errorf("AllowedInOrg(%s) counts = %v, want org_write=%d metadata_write=0", want, rec.counts, wantOrgWrite)
 				}
 			}
-			// Admin exceeds the rule's write grant — denied in EVERY mode and org
-			// combination (org membership must never widen a permission grant).
-			for _, enforce := range []bool{false, true} {
-				m := NewForTest(orgWriteCfg())
-				if enforce {
-					m.EnableOrgScopeEnforce()
-				}
-				if m.AllowedInOrg(c.p, "db-a", PermAdmin, c.tenantOrgs, "", "") {
-					t.Errorf("enforce=%v: AllowedInOrg(admin) must be false (rule grants write only)", enforce)
-				}
+			// Admin exceeds the rule's write grant — denied whatever the org
+			// (org membership must never widen a permission grant), and the
+			// denial is the permission check's, not a scope axis's.
+			m := NewForTest(orgWriteCfg())
+			rec := newFakeScopeRecorder()
+			m.SetScopeAuditor(rec)
+			if m.AllowedInOrg(c.p, "db-a", PermAdmin, c.tenantOrgs, "", "") {
+				t.Error("AllowedInOrg(admin) must be false (rule grants write only)")
+			}
+			if len(rec.counts) != 0 {
+				t.Errorf("AllowedInOrg(admin) denial attributed to a scope axis: %v", rec.counts)
 			}
 		})
 	}
 }
 
-// ── T2: monotonicity — AllowedInOrg(enforce) ⟹ AllowedInOrg(shadow) ⟹ Allowed ─
+// ── T2: monotonicity — AllowedInOrg ⟹ Allowed ────────────────────────────────
 
-// TestAllowedInOrg_Monotonic sweeps a mixed fixture (org-scoped, plain, and
-// admin rules × principals × tenants × org lists × permissions × manager
-// modes) and asserts the two implications hold everywhere: the org axis only
-// ever NARROWS a grant. A violation means enforce granted something shadow
-// denies (swapped returns) or the org axis widened access past the org-blind
-// Allowed.
+// TestAllowedInOrg_Monotonic sweeps a mixed fixture (org-scoped,
+// metadata-scoped, plain, and admin rules × principals × tenants × org lists
+// × metadata × permissions, plus the empty rule set) and asserts the scope
+// axes only ever NARROW a grant: AllowedInOrg ⟹ Allowed, and likewise
+// AllowedInOrgRead ⟹ Allowed. A violation means a scope axis widened access
+// past the scope-blind Allowed.
 func TestAllowedInOrg_Monotonic(t *testing.T) {
 	t.Parallel()
 	cfg := &RBACConfig{Groups: []GroupRule{
 		{Name: "platform-admins", Tenants: []string{"*"}, Permissions: []Permission{PermAdmin}},
 		{Name: "org-ops", Tenants: []string{"db-*"}, Permissions: []Permission{PermRead, PermWrite}, OrgScope: "org"},
+		{Name: "prod-ops", Tenants: []string{"db-*"}, Permissions: []Permission{PermWrite}, Environments: []string{"production"}},
 		{Name: "viewers", Tenants: []string{"*"}, Permissions: []Permission{PermRead}},
 	}}
 	principals := map[string]*VerifiedPrincipal{
@@ -381,6 +399,7 @@ func TestAllowedInOrg_Monotonic(t *testing.T) {
 		"admin":          {Groups: []string{"platform-admins"}},
 		"org-member":     {Groups: []string{"org-ops"}, Claims: map[string]string{"org": "ORG-A"}},
 		"org-no-claim":   {Groups: []string{"org-ops"}},
+		"prod-ops":       {Groups: []string{"prod-ops"}},
 		"viewer":         {Groups: []string{"viewers"}},
 		"viewer+org-ops": {Groups: []string{"viewers", "org-ops"}, Claims: map[string]string{"org": "ORG-A"}},
 	}
@@ -391,35 +410,25 @@ func TestAllowedInOrg_Monotonic(t *testing.T) {
 		"other":  {"ORG-B"},
 		"multi":  {"ORG-B", "ORG-A"},
 	}
-	managers := func() map[string][2]*Manager { // [shadow, enforce] per mode
-		build := func(cfg *RBACConfig, failClosed bool) [2]*Manager {
-			s, e := NewForTest(cfg), NewForTest(cfg)
-			s.failClosedOnEmpty, e.failClosedOnEmpty = failClosed, failClosed
-			e.EnableOrgScopeEnforce()
-			return [2]*Manager{s, e}
-		}
-		return map[string][2]*Manager{
-			"configured":  build(cfg, false),
-			"open":        build(&RBACConfig{}, false),
-			"fail-closed": build(&RBACConfig{}, true),
-		}
-	}()
-	for mode, pair := range managers {
-		shadowM, enforceM := pair[0], pair[1]
+	managers := map[string]*Manager{
+		"configured": NewForTest(cfg),
+		"empty":      NewForTest(&RBACConfig{}),
+	}
+	for mode, m := range managers {
 		for pName, p := range principals {
-			for _, tenant := range []string{"db-a", "redis-01", "*"} {
+			for _, tenant := range []string{"db-mono", "redis-01", "*"} {
 				for oName, orgs := range orgLists {
-					for _, want := range []Permission{PermRead, PermWrite, PermAdmin} {
-						e := enforceM.AllowedInOrg(p, tenant, want, orgs, "", "")
-						s := shadowM.AllowedInOrg(p, tenant, want, orgs, "", "")
-						a := shadowM.Allowed(p, tenant, want)
-						if e && !s {
-							t.Errorf("[%s p=%s tenant=%q orgs=%s want=%s] enforce=true but shadow=false (org axis must only narrow)",
-								mode, pName, tenant, oName, want)
-						}
-						if s && !a {
-							t.Errorf("[%s p=%s tenant=%q orgs=%s want=%s] shadow=true but Allowed=false (org axis must only narrow)",
-								mode, pName, tenant, oName, want)
+					for _, env := range []string{"", "production", "dev"} {
+						for _, want := range []Permission{PermRead, PermWrite, PermAdmin} {
+							a := m.Allowed(p, tenant, want)
+							if m.AllowedInOrg(p, tenant, want, orgs, env, "") && !a {
+								t.Errorf("[%s p=%s tenant=%q orgs=%s env=%q want=%s] AllowedInOrg=true but Allowed=false (scope axes must only narrow)",
+									mode, pName, tenant, oName, env, want)
+							}
+							if m.AllowedInOrgRead(p, tenant, want, orgs) && !a {
+								t.Errorf("[%s p=%s tenant=%q orgs=%s want=%s] AllowedInOrgRead=true but Allowed=false (scope axes must only narrow)",
+									mode, pName, tenant, oName, want)
+							}
 						}
 					}
 				}
@@ -430,27 +439,29 @@ func TestAllowedInOrg_Monotonic(t *testing.T) {
 
 // ── T3: Allowed stays org-blind under an org-scoped rule ─────────────────────
 
-// The full byte-identity pin is the legacy_equiv_test matrix (Allowed vs the
-// legacy HasPermission across every mode). This adds the P4b-explicit case:
-// even with enforce ON and the caller OUTSIDE the tenant's org, Allowed still
-// grants — it is the org-blind entry point by contract (platform "*" checks
-// and read-plane filtering); only AllowedInOrg sees the org axis.
+// The full delegate pin is the legacy_equiv_test matrix (Allowed vs the
+// legacy HasPermission). This adds the P4b-explicit case: with the caller
+// OUTSIDE the tenant's org, Allowed still grants — it is the scope-blind entry
+// point by contract (platform "*" checks); only the AllowedInOrg* methods see
+// the org axis.
 func TestAllowed_OrgBlindUnderOrgScopedRule(t *testing.T) {
 	t.Parallel()
 	m := NewForTest(orgWriteCfg())
-	m.EnableOrgScopeEnforce()
 	rec := newFakeScopeRecorder()
 	m.SetScopeAuditor(rec)
 	outsider := &VerifiedPrincipal{Groups: []string{"ops"}, Claims: map[string]string{"org": "ORG-C"}}
 
 	if !m.Allowed(outsider, "db-a", PermWrite) {
-		t.Error("Allowed must stay org-blind (grant) even under enforce with a non-member caller")
+		t.Error("Allowed must stay org-blind (grant) with a non-member caller")
+	}
+	if len(rec.counts) != 0 {
+		t.Errorf("Allowed must record nothing, got %v", rec.counts)
 	}
 	if m.AllowedInOrg(outsider, "db-a", PermWrite, []string{"ORG-A"}, "", "") {
-		t.Error("AllowedInOrg must deny the same non-member caller (labeled tenant, enforce)")
+		t.Error("AllowedInOrg must deny the same non-member caller (labeled tenant)")
 	}
-	if rec.counts[scopeAxisOrgWrite] != 0 {
-		t.Errorf("org-blind Allowed + labeled non-match must record no org_write would-deny, got %d", rec.counts[scopeAxisOrgWrite])
+	if rec.counts[scopeAxisOrgWrite] != 1 {
+		t.Errorf("AllowedInOrg's org denial must record org_write once, got %d", rec.counts[scopeAxisOrgWrite])
 	}
 }
 
@@ -460,7 +471,7 @@ func TestAllowed_OrgBlindUnderOrgScopedRule(t *testing.T) {
 // on the write plane. Rule A grants write but fails org for this tenant; rule
 // B passes org (no org restriction) but only grants read. A top-level
 // Allowed(write, from A) && orgPasses(from B) would grant the write — but no
-// SINGLE rule grants it, so the per-rule fold must deny in BOTH modes.
+// SINGLE rule grants it, so the per-rule fold must deny.
 func TestAllowedInOrg_CrossRuleUnionNoLeak(t *testing.T) {
 	t.Parallel()
 	cfg := &RBACConfig{Groups: []GroupRule{
@@ -471,95 +482,105 @@ func TestAllowedInOrg_CrossRuleUnionNoLeak(t *testing.T) {
 	}}
 	p := &VerifiedPrincipal{Groups: []string{"org-writers", "viewers"}, Claims: map[string]string{"org": "ORG-USER"}}
 
-	for _, enforce := range []bool{false, true} {
+	for _, orgs := range [][]string{{"ORG-OTHER"}, nil} {
 		m := NewForTest(cfg)
-		if enforce {
-			m.EnableOrgScopeEnforce()
-		}
-		// Leak case: tenant labeled with a DIFFERENT org → A fails org in both
-		// modes (labeled non-match), B never grants write. MUST deny.
-		if m.AllowedInOrg(p, "db-x", PermWrite, []string{"ORG-OTHER"}, "", "") {
-			t.Errorf("enforce=%v: cross-rule leak — write granted though no single rule grants it", enforce)
-		}
-		// Control 1: A alone grants when the org matches (proves A is live).
-		if !m.AllowedInOrg(p, "db-x", PermWrite, []string{"ORG-USER"}, "", "") {
-			t.Errorf("enforce=%v: control — same-org write via rule A must be granted", enforce)
+		// Leak case: tenant labeled with a DIFFERENT org, or unlabeled → A
+		// fails org, B never grants write. MUST deny.
+		if m.AllowedInOrg(p, "db-x", PermWrite, orgs, "", "") {
+			t.Errorf("orgs=%v: cross-rule leak — write granted though no single rule grants it", orgs)
 		}
 		// Control 2: read still flows through org-less rule B regardless of org
 		// (proves B is live and the leak-case denial is genuinely cross-rule).
-		if !m.AllowedInOrg(p, "db-x", PermRead, []string{"ORG-OTHER"}, "", "") {
-			t.Errorf("enforce=%v: control — read via org-less rule B must be granted", enforce)
+		if !m.AllowedInOrg(p, "db-x", PermRead, orgs, "", "") {
+			t.Errorf("orgs=%v: control — read via org-less rule B must be granted", orgs)
 		}
+	}
+	// Control 1: A alone grants when the org matches (proves A is live).
+	if !NewForTest(cfg).AllowedInOrg(p, "db-x", PermWrite, []string{"ORG-USER"}, "", "") {
+		t.Error("control — same-org write via rule A must be granted")
 	}
 }
 
-// ── T5: would-deny lands on org_write, from AllowedInOrg ONLY ────────────────
+// ── T5: scope-denied lands on org_write, from AllowedInOrg ONLY ──────────────
 
-func TestAllowedInOrg_WouldDenyRecording(t *testing.T) {
+func TestAllowedInOrg_ScopeDeniedRecording(t *testing.T) {
 	t.Parallel()
 	member := &VerifiedPrincipal{Groups: []string{"ops"}, Claims: map[string]string{"org": "ORG-A"}}
 
-	t.Run("shadow: unlabeled tenant allows and records org_write once", func(t *testing.T) {
+	t.Run("unlabeled tenant denies and records org_write once", func(t *testing.T) {
 		t.Parallel()
 		m := NewForTest(orgWriteCfg())
-		rec := newFakeScopeRecorder()
-		m.SetScopeAuditor(rec)
-		if !m.AllowedInOrg(member, "db-a", PermWrite, nil, "", "") {
-			t.Error("shadow: unlabeled tenant must still be granted")
-		}
-		if rec.counts[scopeAxisOrgWrite] != 1 || rec.counts[scopeAxisOrg] != 0 || rec.counts[scopeAxisMetadata] != 0 {
-			t.Errorf("want org_write=1 org=0 metadata=0, got org_write=%d org=%d metadata=%d",
-				rec.counts[scopeAxisOrgWrite], rec.counts[scopeAxisOrg], rec.counts[scopeAxisMetadata])
-		}
-	})
-
-	t.Run("enforce: unlabeled tenant denies and still records org_write", func(t *testing.T) {
-		t.Parallel()
-		m := NewForTest(orgWriteCfg())
-		m.EnableOrgScopeEnforce()
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
 		if m.AllowedInOrg(member, "db-a", PermWrite, nil, "", "") {
-			t.Error("enforce: unlabeled tenant must be denied")
+			t.Error("unlabeled tenant must be denied")
 		}
-		if rec.counts[scopeAxisOrgWrite] != 1 {
-			t.Errorf("enforce keeps counting the denied-by-scope signal: want org_write=1, got %d", rec.counts[scopeAxisOrgWrite])
+		if rec.counts[scopeAxisOrgWrite] != 1 || rec.counts[scopeAxisOrg] != 0 || rec.counts[scopeAxisMetadata] != 0 || rec.counts[scopeAxisMetadataWrite] != 0 {
+			t.Errorf("want org_write=1 and nothing else, got %v", rec.counts)
 		}
 	})
 
-	t.Run("Allowed never records org_write (read-plane volume must not pollute the soak)", func(t *testing.T) {
+	t.Run("labeled non-member denies and records org_write once", func(t *testing.T) {
+		t.Parallel()
+		m := NewForTest(orgWriteCfg())
+		rec := newFakeScopeRecorder()
+		m.SetScopeAuditor(rec)
+		if m.AllowedInOrg(member, "db-a", PermWrite, []string{"ORG-OTHER"}, "", "") {
+			t.Error("labeled non-member must be denied")
+		}
+		if rec.counts[scopeAxisOrgWrite] != 1 {
+			t.Errorf("labeled non-match is a scope denial: want org_write=1, got %d", rec.counts[scopeAxisOrgWrite])
+		}
+	})
+
+	t.Run("member on labeled tenant allows and records nothing", func(t *testing.T) {
+		t.Parallel()
+		m := NewForTest(orgWriteCfg())
+		rec := newFakeScopeRecorder()
+		m.SetScopeAuditor(rec)
+		if !m.AllowedInOrg(member, "db-a", PermWrite, []string{"ORG-A"}, "", "") {
+			t.Error("member must be granted")
+		}
+		if len(rec.counts) != 0 {
+			t.Errorf("an allowed write must record nothing, got %v", rec.counts)
+		}
+	})
+
+	t.Run("both axes deny: each write axis recorded once", func(t *testing.T) {
+		t.Parallel()
+		m := NewForTest(&RBACConfig{Groups: []GroupRule{
+			{Name: "ops", Tenants: []string{"db-*"}, Permissions: []Permission{PermWrite}, OrgScope: "org", Environments: []string{"production"}},
+		}})
+		rec := newFakeScopeRecorder()
+		m.SetScopeAuditor(rec)
+		if m.AllowedInOrg(member, "db-both1", PermWrite, nil, "", "") {
+			t.Error("tenant unlabeled on both axes must be denied")
+		}
+		if rec.counts[scopeAxisOrgWrite] != 1 || rec.counts[scopeAxisMetadataWrite] != 1 || rec.counts[scopeAxisOrg] != 0 || rec.counts[scopeAxisMetadata] != 0 {
+			t.Errorf("want org_write=1 metadata_write=1 and nothing on the read axes, got %v", rec.counts)
+		}
+	})
+
+	t.Run("Allowed never records", func(t *testing.T) {
 		t.Parallel()
 		m := NewForTest(orgWriteCfg())
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
 		if !m.Allowed(member, "db-a", PermWrite) {
-			t.Error("Allowed (org-blind) must grant")
+			t.Error("Allowed (scope-blind) must grant")
 		}
 		if len(rec.counts) != 0 {
 			t.Errorf("Allowed must record nothing on any axis, got %v", rec.counts)
 		}
 	})
 
-	t.Run("labeled non-member: denied, but not a migration gap", func(t *testing.T) {
+	t.Run("list-plane ScopeAllowed records org, never org_write", func(t *testing.T) {
 		t.Parallel()
 		m := NewForTest(orgWriteCfg())
 		rec := newFakeScopeRecorder()
 		m.SetScopeAuditor(rec)
-		if m.AllowedInOrg(member, "db-a", PermWrite, []string{"ORG-OTHER"}, "", "") {
-			t.Error("labeled non-member must be denied even in shadow")
-		}
-		if rec.counts[scopeAxisOrgWrite] != 0 {
-			t.Errorf("labeled non-match is denied in BOTH modes → no would-deny, got %d", rec.counts[scopeAxisOrgWrite])
-		}
-	})
-
-	t.Run("list-plane ScopeAllowed still records org, never org_write", func(t *testing.T) {
-		t.Parallel()
-		m := NewForTest(orgWriteCfg())
-		rec := newFakeScopeRecorder()
-		m.SetScopeAuditor(rec)
-		if !m.ScopeAllowed(member, "db-a", "", "", nil) {
-			t.Error("shadow list plane: unlabeled tenant must stay visible")
+		if m.ScopeAllowed(member, "db-a", "", "", nil) {
+			t.Error("list plane: unlabeled tenant must be hidden")
 		}
 		if rec.counts[scopeAxisOrg] != 1 || rec.counts[scopeAxisOrgWrite] != 0 {
 			t.Errorf("list plane: want org=1 org_write=0, got org=%d org_write=%d",
@@ -580,7 +601,6 @@ func TestAllowedInOrg_WouldDenyRecording(t *testing.T) {
 func TestAllowedInOrg_TenantorgSnapshotSwap(t *testing.T) {
 	t.Parallel()
 	m := NewForTest(orgWriteCfg())
-	m.EnableOrgScopeEnforce()
 	p := &VerifiedPrincipal{Groups: []string{"ops"}, Claims: map[string]string{"org": "ORG-A"}}
 
 	torg := tenantorg.NewForTest(&tenantorg.Config{TenantOrgs: map[string][]string{
@@ -588,7 +608,7 @@ func TestAllowedInOrg_TenantorgSnapshotSwap(t *testing.T) {
 	}})
 	orgs, _ := torg.OrgsForTenant("db-a")
 	if m.AllowedInOrg(p, "db-a", PermWrite, orgs, "", "") {
-		t.Fatal("mapping A: non-member write must be denied under enforce")
+		t.Fatal("mapping A: non-member write must be denied")
 	}
 
 	// Hot-swap the tenantorg snapshot (models a _tenant_orgs.yaml reload while

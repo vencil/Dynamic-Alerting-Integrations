@@ -210,8 +210,8 @@ func (f *staleFixture) tenantBranches(t *testing.T) string {
 	return strings.Join(out, ",")
 }
 
-// writeTestRBACYAML grants the "ops" IdP group write on every tenant (RBAC
-// open mode is read-only, so a write test needs an explicit rule).
+// writeTestRBACYAML grants the "ops" IdP group write on every tenant (with
+// no rules nothing is granted, so a write test needs an explicit rule).
 const writeTestRBACYAML = `groups:
   - name: ops
     tenants: ["*"]

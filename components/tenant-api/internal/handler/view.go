@@ -21,9 +21,7 @@ const viewsEntity = "views"
 // view belongs to no tenant and no org — the handlers return and overwrite
 // every view as stored — so the bar is a NON-org-scoped "*" rule
 // (rbac.PlatformNonOrgScoped) at want: read for GET, write for PUT/DELETE.
-// Reads also pass in open mode (readsViews); a write never does, as open mode
-// grants read only. An org-scoped "*" rule fails it in enforce and shadow mode
-// alike. A Deps without an RBAC manager is a test-only state (see
+// An org-scoped "*" rule fails it. A Deps without an RBAC manager is a test-only state (see
 // requireOrgWriteWithMeta) and is let through. Returns false after writing the
 // 403.
 func requireViewsAccess(w http.ResponseWriter, r *http.Request, d *Deps, want rbac.Permission) bool {
@@ -65,8 +63,7 @@ type ViewResponse struct {
 //
 // @Summary     List all saved views
 // @Description Returns all saved filter views defined in _views.yaml.
-// @Description Requires read on "*" from a rule with no org-scope (open mode
-// @Description reads them too).
+// @Description Requires read on "*" from a rule with no org-scope.
 // @Tags        views
 // @Produce     json
 // @Success     200 {array}  ViewResponse

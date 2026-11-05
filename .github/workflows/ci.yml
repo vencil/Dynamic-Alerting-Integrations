@@ -2414,6 +2414,18 @@ jobs:
             go test ./cmd/... ./internal/... -race -count=1 -coverprofile=coverage.out \
             -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
 
+      # ADR-027 §9 item 7: the offline scope check over the repo's sample
+      # config — the conf.d tree, _rbac.yaml and (absent) _tenant_orgs.yaml
+      # try-local mounts as TA_CONFIG_DIR / TA_RBAC_PATH. Any rule × untagged
+      # tenant (or a tenant file the list cannot read) exits 1. A step running
+      # the CLI rather than a Go test, so what is checked is the command an
+      # operator runs before upgrading, flags and exit code included; a moved
+      # tree exits 2 here instead of skipping. try-local/** is in the `go`
+      # filter above, so a sample-only change wakes this leg.
+      - name: Scope check on the try-local sample config (ADR-027 §7)
+        working-directory: components/tenant-api
+        run: go run ./cmd/server config check --kind scope --config-dir ../../try-local/seed/conf.d
+
       # #616: the forge_e2e real-forge E2E package is build-tag gated, so the
       # regular `go test ./...` above never compiles it. This step keeps it from
       # rotting (compile under the tag) AND asserts skip-safety: with no E2E_*

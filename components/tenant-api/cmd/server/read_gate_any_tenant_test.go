@@ -101,15 +101,15 @@ func writeFixtureFile(t *testing.T, dir, name, body string) {
 // newGateFixture builds the production router over three tenants (alpha-one
 // in ORG-A, alpha-two in ORG-B, beta-one unlabeled), one group per tenant
 // plus a mixed one, a saved view, and one pending PR per tenant.
-func newGateFixture(t *testing.T, rbacYAML string, orgEnforce bool) *gateFixture {
+func newGateFixture(t *testing.T, rbacYAML string) *gateFixture {
 	t.Helper()
-	return newGateFixtureWith(t, rbacYAML, orgEnforce, routerDeps{})
+	return newGateFixtureWith(t, rbacYAML, routerDeps{})
 }
 
 // newGateFixtureWith is newGateFixture with the router knobs a test sets
 // itself: RequestTimeout and RateLimit (nil = pass-through) are taken from
 // over; Deps, RBAC and Events are always the fixture's.
-func newGateFixtureWith(t *testing.T, rbacYAML string, orgEnforce bool, over routerDeps) *gateFixture {
+func newGateFixtureWith(t *testing.T, rbacYAML string, over routerDeps) *gateFixture {
 	t.Helper()
 	confd := t.TempDir()
 	for _, id := range []string{"alpha-one", "alpha-two", "beta-one"} {
@@ -130,8 +130,8 @@ func newGateFixtureWith(t *testing.T, rbacYAML string, orgEnforce bool, over rou
 		t.Fatal(err)
 	}
 
-	// rbacYAML == "" is open mode: no --rbac path at all (not an empty file,
-	// which is MED-8's configured-but-empty).
+	// rbacYAML == "" is no --rbac path at all (not an empty file); both deny
+	// every request (ADR-027 §7: there is no open mode).
 	rbacPath := ""
 	if rbacYAML != "" {
 		rbacDir := t.TempDir()
@@ -147,9 +147,6 @@ func newGateFixtureWith(t *testing.T, rbacYAML string, orgEnforce bool, over rou
 		"alpha-two": {"ORG-B"},
 	}})
 	mgr.SetOrgResolver(func(id string) []string { o, _ := torg.OrgsForTenant(id); return o })
-	if orgEnforce {
-		mgr.EnableOrgScopeEnforce()
-	}
 
 	tasks := async.NewManager(1)
 	t.Cleanup(func() { _ = tasks.Close() })
@@ -268,7 +265,7 @@ var (
 // their own tenants.
 func TestAnyTenantGate_TenantListAndSearch(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 	cases := []struct {
 		c    caller
 		want []string
@@ -277,8 +274,9 @@ func TestAnyTenantGate_TenantListAndSearch(t *testing.T) {
 		{prefixCaller, []string{"alpha-one", "alpha-two"}},
 		{adminCaller, []string{"alpha-one", "alpha-two", "beta-one"}},
 		{ghostCaller, nil},
-		// org axis in shadow: its own org's tenant, plus the unlabeled one
-		{caller{group: "orgs", org: "ORG-A"}, []string{"alpha-one", "beta-one"}},
+		// org axis: its own org's tenant only — the unlabeled beta-one is
+		// hidden (ADR-027 §7: an org-scoped rule grants nothing on it)
+		{caller{group: "orgs", org: "ORG-A"}, []string{"alpha-one"}},
 	}
 	for _, tc := range cases {
 		for _, path := range []string{"/api/v1/tenants", "/api/v1/tenants/search"} {
@@ -292,7 +290,7 @@ func TestAnyTenantGate_TenantListAndSearch(t *testing.T) {
 // /me: a scoped caller now reaches it and sees its own patterns only.
 func TestAnyTenantGate_Me(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 	for _, tc := range []struct {
 		c    caller
 		want []string
@@ -313,7 +311,7 @@ func TestAnyTenantGate_Me(t *testing.T) {
 // readable members; a group of another tenant answers 404 as a missing one.
 func TestAnyTenantGate_Groups(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 
 	type grp struct {
 		ID      string   `json:"id"`
@@ -365,7 +363,7 @@ func TestAnyTenantGate_Groups(t *testing.T) {
 // the handler is the real bar.
 func TestAnyTenantGate_GroupWrites(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 
 	// read-only everywhere → the write gate refuses before the handler
 	if w := f.do(t, prefixCaller, http.MethodDelete, "/api/v1/groups/g-alpha-one", ""); w.Code != http.StatusForbidden {
@@ -394,7 +392,7 @@ func TestAnyTenantGate_GroupWrites(t *testing.T) {
 // /tasks/{id}: the submitter sees its task, filtered to the tenants it can read.
 func TestAnyTenantGate_Tasks(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 	id := async.NewTaskID()
 	owner := rbac.SourceHumanHopB + ":" + exactCaller.email()
 	if _, err := f.tasks.Submit(id, owner, func(context.Context) ([]async.TaskResult, error) {
@@ -430,7 +428,7 @@ func TestAnyTenantGate_Tasks(t *testing.T) {
 // /prs: only the PRs of tenants the caller reads.
 func TestAnyTenantGate_PRs(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 	prTenants := func(c caller, query string) []string {
 		var resp handler.PRListResponse
 		f.getOK(t, c, "/api/v1/prs"+query, &resp)
@@ -454,7 +452,7 @@ func TestAnyTenantGate_PRs(t *testing.T) {
 // /events: the stream is reachable and carries only the caller's tenants.
 func TestAnyTenantGate_Events(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -502,7 +500,7 @@ func TestAnyTenantGate_Events(t *testing.T) {
 // with the same body.
 func TestAnyTenantGate_FederationTokensNoOracle(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 	existing := f.do(t, exactCaller, http.MethodGet, "/api/v1/federation/tokens?tenant_id=alpha-two", "")
 	absent := f.do(t, exactCaller, http.MethodGet, "/api/v1/federation/tokens?tenant_id=alpha-zzz", "")
 	if existing.Code != http.StatusForbidden || absent.Code != http.StatusForbidden {
@@ -521,7 +519,7 @@ func TestAnyTenantGate_FederationTokensNoOracle(t *testing.T) {
 // the platform-admin routes.
 func TestAnyTenantGate_PlatformRoutesStayOnStar(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 	for _, c := range []caller{exactCaller, prefixCaller, ghostCaller, {group: "orgs", org: "ORG-A"}} {
 		for _, rt := range []struct{ method, path, body string }{
 			{http.MethodGet, "/api/v1/views", ""},
@@ -566,12 +564,12 @@ func TestAnyTenantGate_PlatformRoutesStayOnStar(t *testing.T) {
 // No rule, or no usable grant: still 403 at the gate, on every moved route.
 func TestAnyTenantGate_DeniesCallersWithoutAnyGrant(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, true) // org axis enforced
+	f := newGateFixture(t, anyTenantRBACYAML)
 	// /me is not here: it is authentication-only (TestMe_AuthenticatedOnly).
 	paths := []string{"/api/v1/tenants", "/api/v1/tenants/search", "/api/v1/groups", "/api/v1/prs", "/api/v1/tasks/x", "/api/v1/federation/policy"}
 	for _, c := range []caller{
 		noRuleCaller,
-		// org-scoped rule, no org claim, enforce on: it can grant no tenant.
+		// org-scoped rule, no org claim: it can grant no tenant.
 		{group: "orgs"},
 	} {
 		for _, p := range paths {
@@ -586,9 +584,9 @@ func TestAnyTenantGate_DeniesCallersWithoutAnyGrant(t *testing.T) {
 		}
 	}
 	// the same org-scoped rule WITH a claim passes and sees its org only
-	// (enforce: the unlabeled beta-one is hidden).
+	// (the unlabeled beta-one is hidden).
 	if got := tenantIDsOf(t, f, caller{group: "orgs", org: "ORG-A"}, "/api/v1/tenants"); !reflect.DeepEqual(got, []string{"alpha-one"}) {
-		t.Errorf("/tenants as orgs/ORG-A under enforce = %v, want [alpha-one]", got)
+		t.Errorf("/tenants as orgs/ORG-A = %v, want [alpha-one]", got)
 	}
 }
 
@@ -597,7 +595,7 @@ func TestAnyTenantGate_DeniesCallersWithoutAnyGrant(t *testing.T) {
 // 200 with no grants there: TestMe_AuthenticatedOnly.)
 func TestAnyTenantGate_EmptyConfigFailsClosed(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, "groups: []\n", false)
+	f := newGateFixture(t, "groups: []\n")
 	for _, p := range []string{"/api/v1/tenants", "/api/v1/groups", "/api/v1/prs", "/api/v1/events"} {
 		if w := f.do(t, adminCaller, http.MethodGet, p, ""); w.Code != http.StatusForbidden {
 			t.Errorf("%s with an empty configured _rbac.yaml: %d, want 403 (MED-8); body=%s", p, w.Code, w.Body.String())
@@ -637,7 +635,7 @@ func TestAnyTenantGate_StarGateRefusedScopedCallers(t *testing.T) {
 // never named and nothing is written.
 func TestAnyTenantGate_GroupBatchHiddenUnwritableMemberBit(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 	w := f.do(t, exactCaller, http.MethodPost, "/api/v1/groups/g-mixed/batch", `{"patch":{"cpu":"80"}}`)
 	if w.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("group batch on g-mixed as exact: %d, want 422; body=%s", w.Code, w.Body.String())

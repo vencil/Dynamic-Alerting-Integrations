@@ -26,7 +26,7 @@ const shortRequestTimeout = 150 * time.Millisecond
 // opened through the production router.
 func TestEventsStreamOutlivesRequestTimeout(t *testing.T) {
 	t.Parallel()
-	f := newGateFixtureWith(t, anyTenantRBACYAML, false, routerDeps{RequestTimeout: shortRequestTimeout})
+	f := newGateFixtureWith(t, anyTenantRBACYAML, routerDeps{RequestTimeout: shortRequestTimeout})
 	srv := httptest.NewServer(f.router)
 	defer srv.Close()
 
@@ -107,7 +107,7 @@ func TestRequestTimeoutStillAppliesToOtherRoutes(t *testing.T) {
 			next.ServeHTTP(w, r)
 		})
 	}
-	f := newGateFixtureWith(t, anyTenantRBACYAML, false, routerDeps{RequestTimeout: time.Minute, RateLimit: probe})
+	f := newGateFixtureWith(t, anyTenantRBACYAML, routerDeps{RequestTimeout: time.Minute, RateLimit: probe})
 	for _, rt := range []struct{ method, path string }{
 		{http.MethodGet, "/api/v1/me"},
 		{http.MethodGet, "/api/v1/tenants"},
@@ -143,7 +143,7 @@ func TestRequestTimeoutDefault(t *testing.T) {
 			}
 		})
 	}
-	f := newGateFixtureWith(t, anyTenantRBACYAML, false, routerDeps{RateLimit: probe})
+	f := newGateFixtureWith(t, anyTenantRBACYAML, routerDeps{RateLimit: probe})
 	f.do(t, adminCaller, http.MethodGet, "/api/v1/me", "")
 	if got <= 29*time.Second || got > 30*time.Second {
 		t.Errorf("default request deadline %v from now, want ~30s", got)

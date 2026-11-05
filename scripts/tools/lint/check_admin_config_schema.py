@@ -23,8 +23,9 @@ any of them with PyYAML:
     groups (an empty or comment-only file, `groups:` null or `[]`, a null
     embedded block) is a violation. The parser reads it (`config check` exits
     0), but a server started with `--rbac` (the Helm chart always passes it)
-    fails CLOSED on it (MED-8): every request is denied, unless the server runs
-    with --rbac-empty-open, which the chart never sets. A bad permission VALUE (`permissions: [readonly]`) is not a load error
+    fails CLOSED on it (MED-8): every request is denied, reads included. There
+    is no open mode to fall back to (ADR-027 §7 deleted --rbac-empty-open).
+    A bad permission VALUE (`permissions: [readonly]`) is not a load error
     (Permission is an unconstrained string) and silently grants nothing; the
     schema's enum can only reject a typo, never a real permission.
   * `_domain_policy.yaml` is a conf.d file: read, like every other conf.d reader,
@@ -348,8 +349,8 @@ def _zero_groups(config: dict | None, path: str, where: str = "") -> list[str]:
         return []
     return [f"ERROR: {path}: {where}the RBAC config has zero groups: tenant-api reads it, but a "
             "server started with --rbac (the Helm chart always passes it) fails closed on it "
-            "and denies every request (MED-8; only --rbac-empty-open, which the chart never "
-            "sets, opens it). Add the groups, or remove the file."]
+            "and denies every request, reads included (MED-8; there is no open mode, "
+            "ADR-027 §7). Add the groups: a missing file denies every request too."]
 
 
 def validate_file(path: str, schema: dict, validator, readers: _Readers) -> list[str]:

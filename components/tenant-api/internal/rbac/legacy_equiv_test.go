@@ -6,7 +6,7 @@ package rbac
 // export_test.go as one-line delegates onto the new principal-based core
 // (Allowed / MetadataAllowed / AccessibleEnvironmentsFor /
 // AccessibleDomainsFor). These matrices pin delegate equivalence in full:
-// for every combination of manager mode (open / fail-closed / configured),
+// for every combination of manager state (empty / configured),
 // groups set, tenant and permission, Allowed(&VerifiedPrincipal{Groups: g},
 // ...) returns exactly what HasPermission(g, ...) returns (and likewise for
 // the other three). Trivially true today BY CONSTRUCTION — the point is to
@@ -50,21 +50,15 @@ func TestMetadataAllowed_EquivalentToLegacyHasMetadataAccess(t *testing.T) {
 		{"staging", "finance"},      // env mismatch
 		{"production", "ecommerce"}, // domain mismatch
 	}
-	// Run the matrix under BOTH scope fail-modes (LD-6 P1 shadow/enforce).
-	for _, enforce := range []bool{false, true} {
-		for mode, m := range equivManagers() {
-			if enforce {
-				m.EnableMetadataScopeEnforce()
-			}
-			for gName, groups := range equivGroupSets() {
-				for _, tenant := range equivTenants {
-					for _, mc := range metaCases {
-						legacy := m.HasMetadataAccess(groups, tenant, mc.env, mc.domain)
-						core := m.MetadataAllowed(&VerifiedPrincipal{Groups: groups}, tenant, mc.env, mc.domain)
-						if legacy != core {
-							t.Errorf("[%s enforce=%v groups=%s] MetadataAllowed(%q, %q, %q) = %v, legacy = %v",
-								mode, enforce, gName, tenant, mc.env, mc.domain, core, legacy)
-						}
+	for mode, m := range equivManagers() {
+		for gName, groups := range equivGroupSets() {
+			for _, tenant := range equivTenants {
+				for _, mc := range metaCases {
+					legacy := m.HasMetadataAccess(groups, tenant, mc.env, mc.domain)
+					core := m.MetadataAllowed(&VerifiedPrincipal{Groups: groups}, tenant, mc.env, mc.domain)
+					if legacy != core {
+						t.Errorf("[%s groups=%s] MetadataAllowed(%q, %q, %q) = %v, legacy = %v",
+							mode, gName, tenant, mc.env, mc.domain, core, legacy)
 					}
 				}
 			}

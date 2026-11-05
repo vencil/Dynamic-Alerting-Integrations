@@ -67,9 +67,9 @@ func (m *Manager) MiddlewareAnyTenant(want Permission) func(http.Handler) http.H
 // GET /user shape): it requires an identity (401 without one, exactly as
 // Middleware) and grants nothing to decide. No rule has to match: a caller
 // with zero grants — no rule names it, an org-scoped rule it lacks the claim
-// for under enforce, or a configured _rbac.yaml with zero groups (MED-8) —
-// passes and learns only that it holds no grant. MED-8 is about access to
-// tenant data, which this gate never guards.
+// for, or an _rbac.yaml with no rules — passes and learns only that it holds
+// no grant. The empty-rules denial is about access to tenant data, which this
+// gate never guards.
 //
 // ⛔ Mount it only on a route whose response is derived from the caller's own
 // principal (its matched rules) and names nothing else; any route that reads
@@ -150,13 +150,11 @@ func (m *Manager) authorizeTenant(w http.ResponseWriter, r *http.Request, bPrinc
 	// feed the one shared ruleMatches predicate.
 	//
 	// ADR-027 / LD-6 P4c: per-tenant READ routes additionally gate on the
-	// org axis. A read-by-id of another org's tenant is the read-only
-	// IDOR the enforce flip must close, so when this is a read on a
-	// concrete tenant (want == PermRead AND the resolved tenant is not the
-	// platform wildcard "*"), resolve the tenant's org list and route
-	// through AllowedInOrgRead (records the read/visibility would-deny on
-	// axis="org", flips atomically with list+write via the same
-	// orgScopeEnforce flag). The wildcard "*" (platform-scope routes,
+	// org axis. A read-by-id of another org's tenant is a read-only IDOR,
+	// so when this is a read on a concrete tenant (want == PermRead AND the
+	// resolved tenant is not the platform wildcard "*"), resolve the
+	// tenant's org list and route through AllowedInOrgRead (records a
+	// scope denial on axis="org", the same series as the list plane). The wildcard "*" (platform-scope routes,
 	// tenantIDFn==nil) stays org-blind by design — invariant I6: a READ, or
 	// any check that judges no tenant, has no tenant org list for the org
 	// axis to compare against. I6 covers ONLY that: it does not make an
@@ -280,22 +278,15 @@ func (m *Manager) writeForbiddenAnyTenant(w http.ResponseWriter, r *http.Request
 // Unified-envelope migration: help/action/message preserved verbatim;
 // code + request_id added.
 //
-// #1597: the environments[]/domains[] half of the Action is now CONDITIONAL on
-// the metadata axis actually being in enforce mode. That sentence was
-// unconditional and shared by both planes, which made it actively misleading in
-// the one case that mattered: a WRITE denied while the metadata axis was blind
-// (pre-#1597) or still in shadow. An operator following it would tune
-// environments[] forever without changing the outcome, because that field could
-// not deny a write. Naming a knob that cannot move the result is worse than
-// naming no knob at all, so the sentence appears only when the knob is live.
+// The environments[]/domains[] half of the Action appears only on a plane the
+// metadata axis can deny (write/admin). writeForbidden also serves PermRead
+// denials (the middleware's read-by-id and list gates), where the metadata axis
+// is not bound — naming a knob that cannot change the outcome is worse than
+// naming no knob at all.
 func (m *Manager) writeForbidden(w http.ResponseWriter, r *http.Request, tenantID string, want Permission) {
 	action := "Check your _rbac.yaml group rules. Ensure your IdP group has '" + string(want) +
 		"' permission for tenant '" + tenantID + "'"
-	// ...and only on a plane the axis can actually deny. writeForbidden also
-	// serves PermRead denials (the middleware's read-by-id and list gates),
-	// where the metadata axis is not live — naming a knob that cannot change
-	// that outcome is the same failure this conditional exists to fix.
-	if want != PermRead && m.metadataWriteScopeEnforce {
+	if want != PermRead {
 		action += ", and that environments[]/domains[] constraints match the tenant metadata"
 	}
 	writeEnvelope(w, r, http.StatusForbidden, errorEnvelope{

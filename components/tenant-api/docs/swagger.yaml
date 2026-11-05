@@ -420,13 +420,6 @@ definitions:
         description: Browser-accessible URL
         type: string
     type: object
-  github_com_vencil_tenant-api_internal_rbac.BoolProvenance:
-    properties:
-      source:
-        type: string
-      value:
-        type: boolean
-    type: object
   github_com_vencil_tenant-api_internal_rbac.CoverageGap:
     properties:
       status:
@@ -470,13 +463,6 @@ definitions:
         $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.StringProvenance'
       tenant_orgs_sha256:
         $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.StringProvenance'
-    type: object
-  github_com_vencil_tenant-api_internal_rbac.ReverseFlags:
-    properties:
-      metadata_scope_enforce:
-        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.BoolProvenance'
-      org_scope_enforce:
-        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.BoolProvenance'
     type: object
   github_com_vencil_tenant-api_internal_rbac.ReverseGrant:
     properties:
@@ -550,9 +536,7 @@ definitions:
     properties:
       claim_key:
         type: string
-      outcome_enforce:
-        type: string
-      outcome_shadow:
+      outcome:
         type: string
       passing_org_values:
         description: opt-in (IncludeOrgValues); sorted
@@ -572,8 +556,6 @@ definitions:
         $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseCompleteness'
       config_anchor:
         $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseConfigAnchor'
-      flags:
-        $ref: '#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseFlags'
       generated_at:
         type: string
       grants:
@@ -813,11 +795,11 @@ definitions:
         type: string
       parse_failed_files:
         description: conf.d files threshold-exporter skips because they fail to parse
-          — a broken file, not a missing tenant. Unrestricted callers (open mode,
-          or an admin restricted on no org, environment or domain) get root-relative
-          paths; any other caller gets only the file name, and only for a file named
-          after a tenant it could see as a degraded list row. Other files are left
-          out without trace (not even counted).
+          — a broken file, not a missing tenant. Unrestricted callers (an admin restricted
+          on no org, environment or domain) get root-relative paths; any other caller
+          gets only the file name, and only for a file named after a tenant it could
+          see as a degraded list row. Other files are left out without trace (not
+          even counted).
         items:
           type: string
         type: array
@@ -892,18 +874,16 @@ definitions:
         allOf:
         - $ref: '#/definitions/internal_handler.StringDelta'
         description: |-
-          ClaimKey is the fourth axis: org_gate.claim_key (rule.OrgScope). A
+          ClaimKey is the third axis: org_gate.claim_key (rule.OrgScope). A
           same-name pair that re-scopes to a different declared claim key changes
-          here even when the three outcome axes are identical (e.g. an unlabeled
-          tenant, where every required gate reads pass/fail_unlabeled regardless of
+          here even when the outcome axes are identical (e.g. an unlabeled
+          tenant, where every required gate reads fail_unlabeled regardless of
           which key). The claim key IS a claim identifier, so it is DROPPED in the
           redacted view (mirroring ReverseOrgGate.ClaimKey) — the redact rebuild's
           allowlist simply never copies it forward.
       live_index:
         type: integer
-      outcome_enforce:
-        $ref: '#/definitions/internal_handler.StringDelta'
-      outcome_shadow:
+      outcome:
         $ref: '#/definitions/internal_handler.StringDelta'
       rule:
         description: stripped in the redacted view
@@ -1740,8 +1720,7 @@ paths:
       description: |-
         Enumerates the live RBAC config with the SAME predicates the
         forward gates run and reports, per rule, who is granted what on
-        tenant {id} under which org-gate conditions (both shadow and
-        enforce outcomes). Audit-only: authorization decisions remain
+        tenant {id} under which org-gate conditions. Audit-only: authorization decisions remain
         with the forward gates. Requires a NON-org-scoped platform
         admin grant; all other callers receive a constant 403
         regardless of {id} (no tenant-enumeration oracle). Note the
@@ -3489,8 +3468,7 @@ paths:
     get:
       description: |-
         Returns all saved filter views defined in _views.yaml.
-        Requires read on "*" from a rule with no org-scope (open mode
-        reads them too).
+        Requires read on "*" from a rule with no org-scope.
       produces:
       - application/json
       responses:

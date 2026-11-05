@@ -58,9 +58,6 @@ var scopeMetadataKeys = cfg.ScopeMetadataKeys()
 // environment=production cannot move a tenant to dev by patching its
 // `_profile`. prior is the same tenant's earlier ops of the request, merged
 // onto the same base before this one.
-// Like the
-// pre-state check it inherits the metadata write axis's flag: inert in
-// shadow, refusing under --rbac-metadata-write-scope-enforce.
 func gateBatchOpPostState(configDir string, prior []BatchOperation, op BatchOperation, p *rbac.VerifiedPrincipal, rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager) (BatchResult, bool) {
 	return gateBatchOpPostStateAt(scopePairOf(postStateScopeMeta(configDir, prior, op), op.TenantID), op, p, rbacMgr, tenantOrg)
 }
@@ -95,12 +92,18 @@ func touchesScopeMetadata(op BatchOperation) bool {
 // disk with prior, then op, laid over it (applyBatchEdit), read as a proposed
 // body is (proposedScopeMeta: over configDir's root platform layer).
 func postStateScopeMeta(configDir string, prior []BatchOperation, op BatchOperation) ScopeMetaFunc {
-	block := scopeBlockOnDisk(configDir, op.TenantID)
-	for _, p := range prior {
-		applyBatchEdit(block, p)
+	return stackedScopeMeta(configDir, op.TenantID, append(append([]BatchOperation(nil), prior...), op))
+}
+
+// stackedScopeMeta is postStateScopeMeta for any number of ops on tenantID's
+// block, none included (the block on disk alone, read the same way — the
+// "before" of the label check, gateBatchOpLabels).
+func stackedScopeMeta(configDir, tenantID string, ops []BatchOperation) ScopeMetaFunc {
+	block := scopeBlockOnDisk(configDir, tenantID)
+	for _, o := range ops {
+		applyBatchEdit(block, o)
 	}
-	applyBatchEdit(block, op)
-	body, err := yaml.Marshal(map[string]any{"tenants": map[string]any{op.TenantID: block}})
+	body, err := yaml.Marshal(map[string]any{"tenants": map[string]any{tenantID: block}})
 	if err != nil {
 		// Not reachable for a block decoded from YAML plus string patches;
 		// an unreadable proposal reads as unlabeled, as an unreadable file does.

@@ -9,7 +9,9 @@ package handler
 //  1. planPut, in the handler, on the serving tree: the id; the write
 //     scope on {id} as the file holds it now (requireOrgWriteAt's rule);
 //     {id}'s file not a regular file; the body; the write scope on {id} as
-//     the body proposes it; a masked-credential placeholder (#1560).
+//     the body proposes it; the body changing {id}'s environment/domain
+//     labels without platform admin (ADR-027 §7, label_guard.go); a
+//     masked-credential placeholder (#1560).
 //  2. gitops: the body-only pre-flight (validateBodyOnly — among others, the
 //     body must be API-shaped: tenants.{id} and no other tenant, #3064), then
 //     resolvePut on the tree the write replaces: the tenant file's
@@ -86,6 +88,10 @@ type putPlan struct {
 	// comment).
 	masked            bool
 	gatePre, gatePost writeGate
+	// labelsBefore: the tenant's environment/domain labels on the serving
+	// tree as the label check read them (label_guard.go) — PR mode's
+	// fallback on a base whose file's labels cannot be read.
+	labelsBefore scopePair
 }
 
 // readPutBody reads the request body as one endpoint receives it, writing a
@@ -107,7 +113,7 @@ func planPut(rw, verdict http.ResponseWriter, r *http.Request, d *Deps, ep putEn
 	// ADR-027 / LD-6 P4b: org-scope-aware write gate, BEFORE the body is
 	// read, so a denied caller triggers no side effect and learns nothing
 	// from policy-violation details. Judged once (a second OrgAllowed would
-	// count a second shadow would-deny).
+	// count a second scope denial).
 	var allowed bool
 	p.gatePre, allowed = orgWriteAt(r, d, tenantID)
 	if !allowed {
@@ -140,6 +146,14 @@ func planPut(rw, verdict http.ResponseWriter, r *http.Request, d *Deps, ep putEn
 	// already.
 	if !p.masked {
 		if p.gatePost, ok = requireOrgWriteProposedAt(verdict, r, d, tenantID, rbac.PermWrite, body); !ok {
+			return nil, false
+		}
+		// ADR-027 §7: the environment/domain labels decide the scope gates
+		// above, so only a platform administrator changes them
+		// (label_guard.go). After the scope gates: a caller they refuse
+		// learns nothing more here.
+		p.labelsBefore = servingLabelsBefore(d.ConfigDir, tenantID)
+		if !requireLabelsUnchangedAt(verdict, r, d, tenantID, p.labelsBefore, p.gatePost.pair) {
 			return nil, false
 		}
 	}

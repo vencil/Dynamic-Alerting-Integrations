@@ -267,6 +267,11 @@ func putTenantPRMode(d *Deps, rw http.ResponseWriter, r *http.Request, plan *put
 		if ok, err := freshScopeAllowed(d, p, configDir, tenantID, gatePost, post, !judged); err != nil || !ok {
 			return orFreshScopeError(err, &freshBaseScopeError{TenantID: tenantID, Put: true})
 		}
+		// ADR-027 §7: the labels change judged on the tree the body
+		// replaces, not the serving tree's (label_guard.go).
+		if !labelChangeAllowed(d.RBAC, p, freshLabelsBeforeOnTree(configDir, tenantID, plan.labelsBefore), post) {
+			return &freshBaseScopeError{TenantID: tenantID, Put: true, Labels: true}
+		}
 		return nil
 	}
 	result, err := d.Writer.WritePRChecked(r.Context(), tenantID, email, yamlContent, check)

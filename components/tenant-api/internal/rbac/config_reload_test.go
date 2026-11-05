@@ -243,8 +243,8 @@ func TestWatchLoop_StopsOnClose(t *testing.T) {
 func TestGet_EmptyConfig(t *testing.T) {
 	t.Parallel()
 	// PR-8/11: with the configwatcher embed, a Manager constructed
-	// via NewForTest(&RBACConfig{}) is the canonical "open mode" /
-	// empty config shape. Pre-PR-8 this test exercised the
+	// via NewForTest(&RBACConfig{}) is the canonical empty config
+	// shape (which grants nothing — ADR-027 §7). Pre-PR-8 this test exercised the
 	// uninitialized-Manager case (`&Manager{}`); that's no longer
 	// constructible without panic since Get is promoted through
 	// a possibly-nil Watcher pointer. The behavior under test

@@ -1,0 +1,5 @@
+# No labels, but no scoped rule's tenant pattern matches it: no finding.
+tenants:
+  zulu-other:
+    _metadata:
+      owner: someone

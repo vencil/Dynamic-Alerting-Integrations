@@ -86,7 +86,7 @@ func NewForTest(cfg *Config) *Manager {
 //     (created-but-unassigned).
 //
 // For the org-scope evaluation the two "no orgs" states behave identically
-// (an org-scoped rule denies both, shadow-lenient), but they are reported
+// (an org-scoped rule denies both), but they are reported
 // separately so P6's reverse lookup can distinguish "never onboarded" from
 // "onboarded, no org yet". A nil receiver (a Deps built without wiring the
 // manager, e.g. a handler test literal) reports (nil, false) rather than

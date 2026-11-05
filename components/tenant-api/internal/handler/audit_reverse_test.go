@@ -124,7 +124,7 @@ func TestAuditReverse_OptInOrgValuesGate(t *testing.T) {
 	if !strings.Contains(body, `"org_status":"labeled"`) {
 		t.Errorf("default view lost the org_status enum: %s", body)
 	}
-	if !strings.Contains(body, `"schema_version":1`) {
+	if !strings.Contains(body, `"schema_version":2`) {
 		t.Errorf("default view missing schema_version: %s", body)
 	}
 
@@ -177,7 +177,7 @@ func TestAuditReverse_RedactedView(t *testing.T) {
 	if strings.Contains(body, "db-audit-*") {
 		t.Errorf("redacted body leaks the verbatim tenant pattern: %s", body)
 	}
-	for _, tok := range []string{`"pattern_kind"`, `"groups_count"`, `"claims_count"`, `"unsatisfiable"`, `"schema_version":1`} {
+	for _, tok := range []string{`"pattern_kind"`, `"groups_count"`, `"claims_count"`, `"unsatisfiable"`, `"schema_version":2`} {
 		if !strings.Contains(body, tok) {
 			t.Errorf("redacted body missing skeleton field %s: %s", tok, body)
 		}

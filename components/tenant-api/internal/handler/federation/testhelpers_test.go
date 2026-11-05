@@ -107,10 +107,14 @@ func setRequestIdentity(req *http.Request, email string) *http.Request {
 	return req
 }
 
+// executeWithRBAC runs handler behind the identity-only RBAC middleware
+// (MiddlewareAuthenticated: no grant required), so the request's identity
+// reaches the handler's own authorization; there is no open mode to lean on
+// (ADR-027 §7).
 func executeWithRBAC(t *testing.T, handler http.HandlerFunc, req *http.Request) *httptest.ResponseRecorder {
 	t.Helper()
 	mgr := newRBACManager(t, "")
-	wrapped := wrapWithRBACMiddleware(handler, mgr, rbac.PermRead, nil)
+	wrapped := mgr.MiddlewareAuthenticated()(handler)
 	w := httptest.NewRecorder()
 	wrapped.ServeHTTP(w, req)
 	return w

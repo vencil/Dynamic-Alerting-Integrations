@@ -55,7 +55,7 @@ func TestReadEndpoints_ExplicitTagMismatchIsInvalidConfig(t *testing.T) {
 				"_defaults.yaml": "defaults:\n  mysql_connections: 50\n",
 				"tx.yaml":        c.file,
 			})
-			mgr := newRBACManager(t, "")
+			mgr := unrestrictedRBAC(t)
 			noLeak := func(ep string, body []byte) {
 				t.Helper()
 				var m map[string]any
@@ -117,7 +117,7 @@ func TestReadEndpoints_ExplicitTagMismatchIsInvalidConfig(t *testing.T) {
 
 			// GET /tenants
 			w = httptest.NewRecorder()
-			ListTenants(&Deps{ConfigDir: dir, RBAC: mgr})(w, httptest.NewRequest("GET", "/api/v1/tenants", nil))
+			asUnrestricted(mgr, ListTenants(&Deps{ConfigDir: dir, RBAC: mgr}))(w, httptest.NewRequest("GET", "/api/v1/tenants", nil))
 			if w.Code != http.StatusOK {
 				t.Fatalf("GET /tenants status = %d; body: %.300s", w.Code, w.Body.String())
 			}
@@ -141,7 +141,7 @@ func TestReadEndpoints_ExplicitTagMismatchIsInvalidConfig(t *testing.T) {
 			}
 
 			// GET /tenants/search
-			resp, code, body := runSearch(t, dir, openModeRBAC(t), nil, "")
+			resp, code, body := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "")
 			if code != http.StatusOK {
 				t.Fatalf("search status = %d; body: %.300s", code, body)
 			}

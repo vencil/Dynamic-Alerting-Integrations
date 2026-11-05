@@ -106,15 +106,15 @@ func buildRouter(rd routerDeps) *chi.Mux {
 	//   - platformRead / platformWrite (Middleware(perm, nil)): the permission
 	//     on the platform wildcard "*", i.e. a rule listing "*". For routes
 	//     whose handler bar is a NON-org-scoped "*" rule
-	//     (rbac.PlatformNonOrgScoped): saved views — read for GET (open mode
-	//     reads too), write for PUT/DELETE — and, at admin level
+	//     (rbac.PlatformNonOrgScoped): saved views — read for GET, write for
+	//     PUT/DELETE — and, at admin level
 	//     (PlatformAdminNonOrgScoped), federation policy PUT, account backfill
 	//     and the /audit surface (#3160) — there the any-tenant gate would
 	//     admit no caller the handler does not then refuse, so they keep the
 	//     narrower gate. The route gate is only a coarse first layer: an
 	//     org-scoped "*" rule passes it and is refused by the handler bar.
 	//
-	// Both keep MED-8: a configured _rbac.yaml with zero groups denies all.
+	// Both deny everything when _rbac.yaml has no rules (ADR-027 §7).
 	anyTenantRead := rbacMgr.MiddlewareAnyTenant(rbac.PermRead)
 	anyTenantWrite := rbacMgr.MiddlewareAnyTenant(rbac.PermWrite)
 	platformRead := rbacMgr.Middleware(rbac.PermRead, nil)
@@ -262,9 +262,8 @@ func buildRouter(rd routerDeps) *chi.Mux {
 		// return and overwrite every view as stored — so the any-tenant gate
 		// would hand every tenant-scoped caller the whole set. The real bar is
 		// in each handler (#3160): a "*" rule with NO org-scope
-		// (rbac.PlatformNonOrgScoped) — read for GET, where open mode reads
-		// too, write for PUT/DELETE. An org-scoped "*" rule passes this route
-		// gate and is refused there, in enforce and shadow mode alike.
+		// (rbac.PlatformNonOrgScoped) — read for GET, write for PUT/DELETE. An
+		// org-scoped "*" rule passes this route gate and is refused there.
 		r.With(platformRead).
 			Get("/views", handler.ListViews(deps))
 

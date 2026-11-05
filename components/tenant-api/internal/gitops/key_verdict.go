@@ -170,8 +170,8 @@ func adviseKeyVerdict(ctx context.Context, files []ProposedFile, kv *KeyVerdict)
 		}
 	}
 	// One RBAC answer per tenant, as DiscloseKeyValidation asks each
-	// tenant once: every Shown is an org-read check that counts a deny the
-	// enforce flip reads, and this runs under the writer lock.
+	// tenant once: every Shown is an org-read check that counts a scope
+	// denial, and this runs under the writer lock.
 	shown := map[string]bool{}
 	mayName := func(t string) bool {
 		v, ok := shown[t]

@@ -20,7 +20,7 @@ const docTemplate = `{
     "paths": {
         "/api/v1/audit/tenants/{id}/access-report": {
             "get": {
-                "description": "Enumerates the live RBAC config with the SAME predicates the\nforward gates run and reports, per rule, who is granted what on\ntenant {id} under which org-gate conditions (both shadow and\nenforce outcomes). Audit-only: authorization decisions remain\nwith the forward gates. Requires a NON-org-scoped platform\nadmin grant; all other callers receive a constant 403\nregardless of {id} (no tenant-enumeration oracle). Note the\nredacted view cannot remove the org-membership inference carried\nby a grant entry's mere existence: for a value-pinned org rule,\nthe grant entry itself is weakly identifying.",
+                "description": "Enumerates the live RBAC config with the SAME predicates the\nforward gates run and reports, per rule, who is granted what on\ntenant {id} under which org-gate conditions. Audit-only: authorization decisions remain\nwith the forward gates. Requires a NON-org-scoped platform\nadmin grant; all other callers receive a constant 403\nregardless of {id} (no tenant-enumeration oracle). Note the\nredacted view cannot remove the org-membership inference carried\nby a grant entry's mere existence: for a value-pinned org rule,\nthe grant entry itself is weakly identifying.",
                 "produces": [
                     "application/json"
                 ],
@@ -1779,7 +1779,7 @@ const docTemplate = `{
         },
         "/api/v1/views": {
             "get": {
-                "description": "Returns all saved filter views defined in _views.yaml.\nRequires read on \"*\" from a rule with no org-scope (open mode\nreads them too).",
+                "description": "Returns all saved filter views defined in _views.yaml.\nRequires read on \"*\" from a rule with no org-scope.",
                 "produces": [
                     "application/json"
                 ],
@@ -2513,17 +2513,6 @@ const docTemplate = `{
                 }
             }
         },
-        "github_com_vencil_tenant-api_internal_rbac.BoolProvenance": {
-            "type": "object",
-            "properties": {
-                "source": {
-                    "type": "string"
-                },
-                "value": {
-                    "type": "boolean"
-                }
-            }
-        },
         "github_com_vencil_tenant-api_internal_rbac.CoverageGap": {
             "type": "object",
             "properties": {
@@ -2587,17 +2576,6 @@ const docTemplate = `{
                 },
                 "tenant_orgs_sha256": {
                     "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.StringProvenance"
-                }
-            }
-        },
-        "github_com_vencil_tenant-api_internal_rbac.ReverseFlags": {
-            "type": "object",
-            "properties": {
-                "metadata_scope_enforce": {
-                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.BoolProvenance"
-                },
-                "org_scope_enforce": {
-                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.BoolProvenance"
                 }
             }
         },
@@ -2686,10 +2664,7 @@ const docTemplate = `{
                 "claim_key": {
                     "type": "string"
                 },
-                "outcome_enforce": {
-                    "type": "string"
-                },
-                "outcome_shadow": {
+                "outcome": {
                     "type": "string"
                 },
                 "passing_org_values": {
@@ -2718,9 +2693,6 @@ const docTemplate = `{
                 },
                 "config_anchor": {
                     "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseConfigAnchor"
-                },
-                "flags": {
-                    "$ref": "#/definitions/github_com_vencil_tenant-api_internal_rbac.ReverseFlags"
                 },
                 "generated_at": {
                     "type": "string"
@@ -2981,7 +2953,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "parse_failed_files": {
-                    "description": "conf.d files threshold-exporter skips because they fail to parse — a broken file, not a missing tenant. Unrestricted callers (open mode, or an admin restricted on no org, environment or domain) get root-relative paths; any other caller gets only the file name, and only for a file named after a tenant it could see as a degraded list row. Other files are left out without trace (not even counted).",
+                    "description": "conf.d files threshold-exporter skips because they fail to parse — a broken file, not a missing tenant. Unrestricted callers (an admin restricted on no org, environment or domain) get root-relative paths; any other caller gets only the file name, and only for a file named after a tenant it could see as a degraded list row. Other files are left out without trace (not even counted).",
                     "type": "array",
                     "items": {
                         "type": "string"
@@ -3075,7 +3047,7 @@ const docTemplate = `{
                     "type": "integer"
                 },
                 "claim_key": {
-                    "description": "ClaimKey is the fourth axis: org_gate.claim_key (rule.OrgScope). A\nsame-name pair that re-scopes to a different declared claim key changes\nhere even when the three outcome axes are identical (e.g. an unlabeled\ntenant, where every required gate reads pass/fail_unlabeled regardless of\nwhich key). The claim key IS a claim identifier, so it is DROPPED in the\nredacted view (mirroring ReverseOrgGate.ClaimKey) — the redact rebuild's\nallowlist simply never copies it forward.",
+                    "description": "ClaimKey is the third axis: org_gate.claim_key (rule.OrgScope). A\nsame-name pair that re-scopes to a different declared claim key changes\nhere even when the outcome axes are identical (e.g. an unlabeled\ntenant, where every required gate reads fail_unlabeled regardless of\nwhich key). The claim key IS a claim identifier, so it is DROPPED in the\nredacted view (mirroring ReverseOrgGate.ClaimKey) — the redact rebuild's\nallowlist simply never copies it forward.",
                     "allOf": [
                         {
                             "$ref": "#/definitions/internal_handler.StringDelta"
@@ -3085,10 +3057,7 @@ const docTemplate = `{
                 "live_index": {
                     "type": "integer"
                 },
-                "outcome_enforce": {
-                    "$ref": "#/definitions/internal_handler.StringDelta"
-                },
-                "outcome_shadow": {
+                "outcome": {
                     "$ref": "#/definitions/internal_handler.StringDelta"
                 },
                 "rule": {

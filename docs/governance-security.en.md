@@ -71,7 +71,7 @@ tenant-api enforces API-level read/write permissions via `_rbac.yaml`. RBAC Mana
 | Helm chart | `/etc/rbac/_rbac.yaml` | ConfigMap `rbac-config` (content from the `rbac._rbacYaml` value) |
 | try-local / QUICKSTART | `/conf.d/_rbac.yaml` | the `conf.d` directory itself |
 
-**Empty config fails closed — it is not open-read**: whenever a `--rbac` path is set (all three postures above), a missing file or an empty group set **denies everything, reads included**. Only two situations enter open-read mode (all authenticated users can read, no one can write): no RBAC path configured at all (neither `--rbac` nor `TA_RBAC_PATH`), or an explicit `--rbac-empty-open` / `TA_RBAC_EMPTY_OPEN=true` — which no shipped asset sets. `--rbac=` or an empty `TA_RBAC_PATH` does **not** enter open-read; it refuses to start, so a template that rendered no value cannot silently open every tenant to reads ([#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)).
+**There is no open mode: no rules means everything is denied, reads included**. No RBAC path configured at all (neither `--rbac` nor `TA_RBAC_PATH`), a missing file, or a file with no rules in it (an empty group set) all **deny every access, reads included**. Earlier versions entered open-read mode (all authenticated users can read, no one can write) when no RBAC path was configured, and `--rbac-empty-open` / `TA_RBAC_EMPTY_OPEN` restored it for an empty config; both are deleted ([ADR-027](adr/027-tenant-api-caller-identity.en.md) §7), and a deployment still carrying that environment variable makes tenant-api refuse to start as an unknown `TA_*` variable. `--rbac=` or an empty `TA_RBAC_PATH` refuses to start: a template that rendered no value is a configuration error and should surface at startup ([#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)).
 
 ### RBAC Rescue SOP (Break-Glass Procedure)
 
@@ -110,7 +110,7 @@ git push
 
 **⛔ Do NOT delete `_rbac.yaml`**
 
-An earlier version of this section advised deleting `_rbac.yaml` to "return to open-read mode and restore visibility". The real behaviour is the opposite, and differs by posture:
+An earlier version of this section advised deleting `_rbac.yaml` to "return to open-read mode and restore visibility". Even while open-read mode existed, the real behaviour was the opposite; it has since been deleted (see API RBAC above). What deleting the file does depends on the posture:
 
 - **ConfigMap source**: deleting `conf.d/_rbac.yaml` in Git is a no-op — RBAC never reads that path, so permissions are unchanged.
 - **`conf.d` source**: the file disappearing means an empty group set, fail-closed applies → **403 for everything, reads included** — strictly worse than the state you started from.

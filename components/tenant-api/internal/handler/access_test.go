@@ -146,28 +146,25 @@ func TestCheckTenantAccess_Unauthorized(t *testing.T) {
 	}
 }
 
-func TestCheckTenantAccess_OpenMode(t *testing.T) {
+func TestCheckTenantAccess_NoRBACPathDenies(t *testing.T) {
 	t.Parallel()
-	// Path-less open mode (no --rbac configured): any authenticated user has
-	// read. This is the case an /api/v1/me-based check gets WRONG (me returns
-	// accessible_tenants [] in open mode), which is why the probe reuses the
-	// read middleware. (ADR-027 MED-8: a *configured-but-empty* _rbac.yaml now
-	// fails closed instead — see TestCheckTenantAccess_ConfiguredEmptyFailsClosed.)
-	rbacMgr := newRBACManager(t, "") // path-less = open mode
+	// Path-less (no --rbac configured): there is no open mode (ADR-027 §7), so
+	// the probe answers 403 exactly as for a configured-but-empty _rbac.yaml
+	// (TestCheckTenantAccess_ConfiguredEmptyFailsClosed).
+	rbacMgr := newRBACManager(t, "") // path-less
 
 	req := httptest.NewRequest("GET", "/api/v1/tenants/db-a/access", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
 	w := httptest.NewRecorder()
 	accessRouter(rbacMgr).ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("open-mode status = %d, want %d, body: %s", w.Code, http.StatusOK, w.Body.String())
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("path-less status = %d, want %d, body: %s", w.Code, http.StatusForbidden, w.Body.String())
 	}
 }
 
 // ADR-027 MED-8: a configured --rbac path that parses to zero groups is a
-// misconfiguration and must fail closed — the /access probe returns 403, not
-// the legacy open-read 200.
+// misconfiguration and must fail closed — the /access probe returns 403.
 func TestCheckTenantAccess_ConfiguredEmptyFailsClosed(t *testing.T) {
 	t.Parallel()
 	rbacMgr := newRBACManager(t, "groups: []\n") // configured but empty → deny
@@ -184,7 +181,7 @@ func TestCheckTenantAccess_ConfiguredEmptyFailsClosed(t *testing.T) {
 
 func TestCheckTenantAccess_EmptyID_FailsClosed(t *testing.T) {
 	t.Parallel()
-	// The RBAC middleware authorizes an EMPTY id under open-mode / a "*" grant
+	// The RBAC middleware authorizes an EMPTY id under a "*" grant
 	// (and chi routes /tenants//access to id=""), but "" is not a real tenant.
 	// Reaching the handler with id="" must fail closed (400) — never allow:true
 	// — mirroring GetTenant's ValidateTenantID. Invoke the handler directly with

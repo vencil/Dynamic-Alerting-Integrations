@@ -31,7 +31,7 @@ func TestSnapshotReloadWritesNoProfileLog(t *testing.T) {
 		"tx.yaml":        "tenants:\n  tx:\n    _profile: no-such-profile\n",
 		"ty.yaml":        "tenants:\n  ty:\n    _profile: real-profile\n",
 	})
-	d := &Deps{ConfigDir: configDir, RBAC: newRBACManager(t, ""), SearchCache: NewTenantSnapshotCache()}
+	d := &Deps{ConfigDir: configDir, RBAC: unrestrictedRBAC(t), SearchCache: NewTenantSnapshotCache()}
 	var buf bytes.Buffer
 	log.SetOutput(&buf)
 	t.Cleanup(func() { log.SetOutput(os.Stderr) })
@@ -39,7 +39,7 @@ func TestSnapshotReloadWritesNoProfileLog(t *testing.T) {
 	list := func() {
 		t.Helper()
 		w := httptest.NewRecorder()
-		ListTenants(d)(w, httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
+		asUnrestricted(d.RBAC, ListTenants(d)).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
 		if w.Code != http.StatusOK {
 			t.Fatalf("GET /api/v1/tenants = %d: %s", w.Code, w.Body.String())
 		}
