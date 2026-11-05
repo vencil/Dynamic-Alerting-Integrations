@@ -1,13 +1,18 @@
 # promtool behavioural test for AlertmanagerNotificationsFailing (#1560).
 # Validates:
 #   1) It FIRES when more than 1% of a non-webhook integration's notification
-#      attempts fail over 15m, held for 5m — one alert per failure `reason`
-#      (`ignoring(reason) group_left`: many failed series to one total).
-#   2) It is still PENDING before the 5m hold.
-#   3) It does NOT fire for webhook (AlertmanagerWebhookNotificationsFailing
+#      attempts fail over 15m, held for 5m — ONE alert per integration, the
+#      failure reasons summed (`sum without (reason)`), firing by 7m (pins the
+#      5m hold: the ratio is above 1% from the first evaluation).
+#   2) Reasons that are each under 1% but together over it still fire
+#      (the per-reason ratio of the mixin's `ignoring(reason) group_left`
+#      would not).
+#   3) It is still PENDING before the 5m hold.
+#   4) It does NOT fire for webhook (AlertmanagerWebhookNotificationsFailing
 #      owns those; no double page for one outage).
-#   4) It does NOT fire when delivery is healthy (failed counter flat).
-#   5) It does NOT fire at or under 1% (0.5% here).
+#   5) It does NOT fire when delivery is healthy (failed counter flat).
+#   6) It FIRES at 5% (pins the 1% line from above) and does NOT at 0.5%
+#      (from below).
 # Series carry real scrape labels (instance / job), per the testing playbook.
 # Run: promtool test rules tests/rulepacks/platform-notifications-failing_test.yaml
 rule_files:
@@ -17,9 +22,9 @@ evaluation_interval: 1m
 
 tests:
   # 1) Slack: half of the attempts fail (5 of 10 per minute), split over two
-  #    reasons — each reason is its own alert at 25% of the attempts.
+  #    reasons — one alert for the integration at 50%.
   - interval: 1m
-    name: non-webhook-failures-fire-per-reason
+    name: non-webhook-failures-fire-per-integration
     input_series:
       - series: 'alertmanager_notifications_total{integration="slack",instance="alertmanager:9093",job="alertmanager"}'
         values: '0+10x40'
@@ -28,6 +33,27 @@ tests:
       - series: 'alertmanager_notifications_failed_total{integration="slack",reason="other",instance="alertmanager:9093",job="alertmanager"}'
         values: '0+2x40'
     alert_rule_test:
+      - eval_time: 7m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              integration: slack
+              instance: alertmanager:9093
+              job: alertmanager
+            exp_annotations:
+              summary: "Alertmanager slack notifications are failing"
+              description: |
+                50% of Alertmanager's
+                slack notification attempts failed over the
+                last 15m (all failure reasons together). Those notifications did
+                not reach their receivers. Check Alertmanager's log for the
+                failing receiver and why; a credential read from a Secret file
+                that is not mounted fails here (run operator-check
+                --secret-mounts, or check your own mounts), as do an unreachable
+                endpoint and a rejected credential.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/operator-alertmanager-integration.md"
       - eval_time: 25m
         alertname: AlertmanagerNotificationsFailing
         exp_alerts:
@@ -35,42 +61,56 @@ tests:
               severity: warning
               alert_source: platform
               integration: slack
-              reason: clientError
               instance: alertmanager:9093
               job: alertmanager
             exp_annotations:
               summary: "Alertmanager slack notifications are failing"
               description: |
-                30% of Alertmanager's
+                50% of Alertmanager's
                 slack notification attempts failed over the
-                last 15m (reason: clientError). Those notifications did
+                last 15m (all failure reasons together). Those notifications did
                 not reach their receivers. Check Alertmanager's log for the
-                failing receiver; a credential read from a Secret file that is not
-                mounted fails here (run operator-check --secret-mounts, or check
-                your own mounts), as do an unreachable endpoint and a rejected
-                credential.
+                failing receiver and why; a credential read from a Secret file
+                that is not mounted fails here (run operator-check
+                --secret-mounts, or check your own mounts), as do an unreachable
+                endpoint and a rejected credential.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/operator-alertmanager-integration.md"
+
+  # 2) Email: 0.6% clientError + 0.6% serverError of 1000 attempts a minute —
+  #    each reason under 1%, the integration at 1.2%.
+  - interval: 1m
+    name: reasons-are-summed-before-the-threshold
+    input_series:
+      - series: 'alertmanager_notifications_total{integration="email",instance="alertmanager:9093",job="alertmanager"}'
+        values: '0+1000x40'
+      - series: 'alertmanager_notifications_failed_total{integration="email",reason="clientError",instance="alertmanager:9093",job="alertmanager"}'
+        values: '0+6x40'
+      - series: 'alertmanager_notifications_failed_total{integration="email",reason="serverError",instance="alertmanager:9093",job="alertmanager"}'
+        values: '0+6x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts:
           - exp_labels:
               severity: warning
               alert_source: platform
-              integration: slack
-              reason: other
+              integration: email
               instance: alertmanager:9093
               job: alertmanager
             exp_annotations:
-              summary: "Alertmanager slack notifications are failing"
+              summary: "Alertmanager email notifications are failing"
               description: |
-                20% of Alertmanager's
-                slack notification attempts failed over the
-                last 15m (reason: other). Those notifications did
+                1.2% of Alertmanager's
+                email notification attempts failed over the
+                last 15m (all failure reasons together). Those notifications did
                 not reach their receivers. Check Alertmanager's log for the
-                failing receiver; a credential read from a Secret file that is not
-                mounted fails here (run operator-check --secret-mounts, or check
-                your own mounts), as do an unreachable endpoint and a rejected
-                credential.
+                failing receiver and why; a credential read from a Secret file
+                that is not mounted fails here (run operator-check
+                --secret-mounts, or check your own mounts), as do an unreachable
+                endpoint and a rejected credential.
               runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/operator-alertmanager-integration.md"
 
-  # 2) Same failure, before the 5m hold: pending, not firing.
+  # 3) Same kind of failure, before the 5m hold: pending, not firing.
   - interval: 1m
     name: non-webhook-failures-pending-before-hold
     input_series:
@@ -83,7 +123,7 @@ tests:
         alertname: AlertmanagerNotificationsFailing
         exp_alerts: []
 
-  # 3) Webhook failing just as hard: this rule stays silent (the webhook rule's).
+  # 4) Webhook failing just as hard: this rule stays silent (the webhook rule's).
   - interval: 1m
     name: webhook-failures-are-not-this-rules
     input_series:
@@ -96,7 +136,7 @@ tests:
         alertname: AlertmanagerNotificationsFailing
         exp_alerts: []
 
-  # 4) Healthy delivery: failed counter flat → rate 0 → no fire.
+  # 5) Healthy delivery: failed counter flat → rate 0 → no fire.
   - interval: 1m
     name: healthy-delivery-no-fire
     input_series:
@@ -109,7 +149,38 @@ tests:
         alertname: AlertmanagerNotificationsFailing
         exp_alerts: []
 
-  # 5) 0.5% of the attempts fail (1 of 200 per minute): under the 1% line.
+  # 6a) 5% of the attempts fail (5 of 100 per minute): over the 1% line.
+  - interval: 1m
+    name: five-percent-fires
+    input_series:
+      - series: 'alertmanager_notifications_total{integration="discord",instance="alertmanager:9093",job="alertmanager"}'
+        values: '0+100x40'
+      - series: 'alertmanager_notifications_failed_total{integration="discord",reason="serverError",instance="alertmanager:9093",job="alertmanager"}'
+        values: '0+5x40'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: AlertmanagerNotificationsFailing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              alert_source: platform
+              integration: discord
+              instance: alertmanager:9093
+              job: alertmanager
+            exp_annotations:
+              summary: "Alertmanager discord notifications are failing"
+              description: |
+                5% of Alertmanager's
+                discord notification attempts failed over the
+                last 15m (all failure reasons together). Those notifications did
+                not reach their receivers. Check Alertmanager's log for the
+                failing receiver and why; a credential read from a Secret file
+                that is not mounted fails here (run operator-check
+                --secret-mounts, or check your own mounts), as do an unreachable
+                endpoint and a rejected credential.
+              runbook_url: "https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/docs/integration/operator-alertmanager-integration.md"
+
+  # 6b) 0.5% of the attempts fail (1 of 200 per minute): under the 1% line.
   - interval: 1m
     name: under-one-percent-no-fire
     input_series:
