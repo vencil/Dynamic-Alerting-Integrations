@@ -315,3 +315,26 @@ def test_unwired_fields_refuse_a_reference():
     ):
         doc = {"tenants": {"t1": {"_routing": {"receiver": receiver}}}}
         assert list(v.iter_errors(doc)) != [], receiver
+
+
+def test_a_reference_counts_as_set_in_the_schemas_pairs():
+    """參照在「至多一個」與「cert／key 互相要求」裡算有設，與 Alertmanager 對 render 後
+    `*_file` 的判定一致（bearer_token_file 與 basic_auth 互斥、key_file 要 cert）。"""
+    v = jsonschema.Draft7Validator(_load())
+    both = _webhook_with(("http_config", "bearer_token"), _ref())
+    both["http_config"]["basic_auth"] = {"username": "u"}
+    assert list(v.iter_errors(_doc(both))) != []
+    lone_key = _webhook_with(("http_config", "tls_config", "key"), _ref())
+    del lone_key["http_config"]["tls_config"]["cert"]
+    assert list(v.iter_errors(_doc(lone_key))) != []
+    lone_cert = {"type": "webhook", "url": _URL, "http_config": {"tls_config": {"cert": "c"}}}
+    assert list(v.iter_errors(_doc(lone_cert))) != []
+
+
+def test_a_header_named_secret_is_refused_like_the_generator_refuses_it():
+    v = jsonschema.Draft7Validator(_load())
+    receiver = {"type": "webhook", "url": _URL,
+                "http_config": {"http_headers": {"secret": {"values": ["v"]}}}}
+    assert list(v.iter_errors(_doc(receiver))) != []
+    receiver["http_config"]["http_headers"] = {"X-Secret": {"values": ["v"]}}
+    assert list(v.iter_errors(_doc(receiver))) == []

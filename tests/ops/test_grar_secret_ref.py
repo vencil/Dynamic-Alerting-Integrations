@@ -634,3 +634,267 @@ def test_a_receiver_that_is_not_a_known_mapping_has_no_secret_references(receive
     # read as carrying references (nor crash the reference lookup).
     from _grar_merge import _receiver_secret_refs
     assert _receiver_secret_refs(receiver) == []
+
+
+# ── ③-c：http_config 的認證子欄位（#1560 owner 裁決第 2-a 列）────────────────
+# 可收參照的位置、render 成的 key、送達目的地都取自 CREDENTIAL_REF_SITES。
+# 規則與 auth_password 同一條：只收租戶自己的 Secret；policy 要有 allowed_domains，
+# 且目的地（url；oauth2 三項是 oauth2.token_url）明文並通過。
+
+from _lib_validation import CREDENTIAL_REF_SITES  # noqa: E402
+
+_NESTED = [s for s in CREDENTIAL_REF_SITES if len(s.path) > 1]
+_ALLOWED = ["*.example.com"]
+_TOKEN_URL = "https://token.example.com/t"
+
+
+def _ref_at(path: tuple, value, **http_config) -> dict:
+    """A webhook receiver (url on the allowlist, follow_redirects: false)
+    with *value* at site *path* ("*" → header X-Token, "[]" → a one-item
+    list), plus what that path needs (oauth2 client_id / token_url, a
+    client cert for a client key) and the extra http_config keys given."""
+    receiver = {"type": "webhook", "url": "https://hook.example.com/a",
+                "http_config": {"follow_redirects": False, **http_config}}
+    node = receiver
+    for i, step in enumerate(path):
+        key = "X-Token" if step == "*" else step
+        rest = path[i + 1:]
+        if rest == ("[]",):
+            node[key] = [value]
+            break
+        if not rest:
+            node[key] = value
+            break
+        node = node.setdefault(key, {})
+        if key == "oauth2":
+            node.setdefault("client_id", "c")
+            node.setdefault("token_url", _TOKEN_URL)
+        if key == "tls_config" and rest == ("key",):
+            node.setdefault("cert", "client-cert-pem")
+    return receiver
+
+
+def _at(value, path: tuple):
+    for step in path:
+        value = value[step]
+    return value
+
+
+def _build(receiver, **kwargs):
+    kwargs.setdefault("owner_tenant", "t-a")
+    kwargs.setdefault("allowed_domains", _ALLOWED)
+    return build_receiver_config(receiver, "t-a", tenant_id="t-a", **kwargs)
+
+
+@pytest.mark.parametrize("site", _NESTED, ids=lambda s: ".".join(s.path))
+def test_each_http_config_row_renders_its_file_key(site):
+    receiver = _ref_at(site.path, {"secret": {"key": "cred"}})
+    cfg, warnings = _build(receiver)
+    assert warnings == [], warnings
+    entry = _entry(cfg)
+    want = f"{DEFAULT_SECRET_MOUNT_ROOT}/da-t-a/cred"
+    if site.path[-1] == "[]":
+        header = _at(entry, ("http_config", "http_headers", "X-Token"))
+        assert header == {"files": [want]}           # secrets 只剩參照 → 整個拿掉
+    else:
+        holder = _at(entry, site.path[:-1])
+        assert site.path[-1] not in holder
+        assert holder[site.file_key] == want
+    from _grar_merge import secret_ref_paths
+    assert secret_ref_paths(entry, "receiver") == []
+
+
+def test_header_secrets_keep_plain_values_and_move_references_in_order():
+    receiver = _ref_at(("http_config", "http_headers", "*", "secrets", "[]"), "x")
+    receiver["http_config"]["http_headers"] = {
+        "X-A": {"values": ["v"], "secrets": ["lit-1", {"secret": {"key": "h1"}}, "lit-2",
+                                             {"secret": {"key": "h2"}}]},
+        "X-B": {"values": ["only-values"]},
+    }
+    cfg, warnings = _build(receiver)
+    assert warnings == []
+    headers = _entry(cfg)["http_config"]["http_headers"]
+    root = f"{DEFAULT_SECRET_MOUNT_ROOT}/da-t-a"
+    assert headers == {"X-A": {"values": ["v"], "secrets": ["lit-1", "lit-2"],
+                               "files": [f"{root}/h1", f"{root}/h2"]},
+                       "X-B": {"values": ["only-values"]}}
+
+
+def test_rendering_does_not_change_the_tenants_receiver():
+    receiver = _ref_at(("http_config", "basic_auth", "password"), {"secret": {"key": "pw"}})
+    import copy
+    before = copy.deepcopy(receiver)
+    cfg, _w = _build(receiver)
+    assert cfg is not None and receiver == before
+
+
+def _kinds(receiver, **kwargs):
+    cfg, warnings = _build(receiver, **kwargs)
+    assert cfg is None, cfg
+    assert all(isinstance(w, SkippedEntryWarning) and w.blocks == "validate" for w in warnings)
+    return [(w.kind, w.field) for w in warnings]
+
+
+_PW = ("http_config", "basic_auth", "password")
+_CS = ("http_config", "oauth2", "client_secret")
+
+
+@pytest.mark.parametrize("site", _NESTED, ids=lambda s: ".".join(s.path))
+def test_a_shared_secret_is_never_taken_on_an_http_config_row(site):
+    receiver = _ref_at(site.path, {"secret": {"shared": "corp-slack", "key": "k"}})
+    got = _kinds(receiver, secrets=BINDING)
+    assert ("secret_ref_shared_confined",
+            "receiver." + ".".join(str(p) for p in site.path).replace(".[]", "[0]")
+            .replace(".*", ".X-Token")) in got, got
+
+
+@pytest.mark.parametrize("site", _NESTED, ids=lambda s: ".".join(s.path))
+@pytest.mark.parametrize("allowed", [None, []])
+def test_no_allowed_domains_refuses_every_http_config_row(site, allowed):
+    got = _kinds(_ref_at(site.path, {"secret": {"key": "k"}}), allowed_domains=allowed)
+    assert [k for k, _f in got] == ["secret_ref_destination_unconfined"]
+
+
+@pytest.mark.parametrize("path,dest_edit", [
+    # url（webhook 的 url）：不在 allowlist、本身是參照
+    (_PW, {"url": "https://hook.attacker.example/a"}),
+    (_PW, {"url": {"secret": {"key": "url"}}}),
+    # oauth2.token_url：不在 allowlist、缺漏、是參照（schema 只收字串，產生器照樣擋）
+    (_CS, {"token_url": "https://token.attacker.example/t"}),
+    (_CS, {"token_url": None}),
+    (_CS, {"token_url": {"secret": {"key": "tok"}}}),
+])
+def test_a_destination_outside_or_unreadable_refuses_the_reference(path, dest_edit):
+    receiver = _ref_at(path, {"secret": {"key": "k"}})
+    if "url" in dest_edit:
+        receiver["url"] = dest_edit["url"]
+    else:
+        receiver["http_config"]["oauth2"]["token_url"] = dest_edit["token_url"]
+    got = _kinds(receiver)
+    assert ("secret_ref_destination_unconfined", "receiver." + ".".join(path)) in got, got
+
+
+def test_oauth2_rows_are_confined_by_token_url_not_by_url():
+    """oauth2 的憑證送往 token_url：url 在 allowlist 外不影響它（url 的網域檢查
+    是 validate_receiver_domains 的事），token_url 在 allowlist 內就放行。"""
+    receiver = _ref_at(_CS, {"secret": {"key": "k"}})
+    receiver["url"] = "https://hook.attacker.example/a"
+    cfg, warnings = _build(receiver)
+    assert warnings == [] and cfg is not None
+
+
+def test_an_http_config_reference_with_no_owner_is_refused():
+    got = _kinds(_ref_at(_PW, {"secret": {"key": "k"}}), owner_tenant=None)
+    assert got == [("secret_ref_no_owner", "receiver.http_config.basic_auth.password")]
+
+
+@pytest.mark.parametrize("path,proxy_key", [
+    (_PW, ("http_config", "proxy_url")),
+    (("http_config", "http_headers", "*", "secrets", "[]"), ("http_config", "proxy_url")),
+    (_CS, ("http_config", "oauth2", "proxy_url")),
+    (("http_config", "oauth2", "tls_config", "key"), ("http_config", "oauth2", "proxy_url")),
+])
+def test_the_proxy_the_request_goes_through_is_refused(path, proxy_key):
+    receiver = _ref_at(path, {"secret": {"key": "k"}})
+    _at(receiver, proxy_key[:-1])[proxy_key[-1]] = "http://proxy.example.com:3128"
+    got = _kinds(receiver)
+    assert got == [("secret_ref_proxy_url", "receiver." + ".".join(proxy_key))], got
+
+
+_TLS_KEY = ("http_config", "tls_config", "key")
+
+
+@pytest.mark.parametrize("path,proxy_key,value", [
+    # oauth2 的 token 請求不走 http_config.proxy_url；webhook 請求不走 oauth2.proxy_url
+    (_CS, ("http_config", "proxy_url"), "http://proxy.example.com:3128"),
+    (_TLS_KEY, ("http_config", "oauth2", "proxy_url"), "http://proxy.example.com:3128"),
+    # 空值／null 視同沒設
+    (_PW, ("http_config", "proxy_url"), ""),
+    (_PW, ("http_config", "proxy_url"), None),
+])
+def test_a_proxy_on_another_request_or_unset_is_not_refused(path, proxy_key, value):
+    receiver = _ref_at(path, {"secret": {"key": "k"}})
+    if proxy_key[1] == "oauth2":
+        receiver["http_config"]["oauth2"] = {"client_id": "c", "token_url": _TOKEN_URL}
+    _at(receiver, proxy_key[:-1])[proxy_key[-1]] = value
+    cfg, warnings = _build(receiver)
+    assert warnings == [] and cfg is not None, warnings
+
+
+@pytest.mark.parametrize("follow", ["absent", True, None])
+def test_a_header_from_a_secret_needs_follow_redirects_false(follow):
+    receiver = _ref_at(("http_config", "http_headers", "*", "secrets", "[]"),
+                       {"secret": {"key": "k"}})
+    if follow == "absent":
+        del receiver["http_config"]["follow_redirects"]
+    else:
+        receiver["http_config"]["follow_redirects"] = follow
+    assert _kinds(receiver) == [("secret_ref_header_redirects",
+                                 "receiver.http_config.follow_redirects")]
+
+
+def test_follow_redirects_is_asked_only_of_a_header_reference():
+    receiver = _ref_at(_PW, {"secret": {"key": "k"}})
+    del receiver["http_config"]["follow_redirects"]
+    cfg, warnings = _build(receiver)
+    assert warnings == [] and cfg is not None
+
+
+def test_a_bearer_token_reference_still_conflicts_with_basic_auth():
+    receiver = _ref_at(("http_config", "bearer_token"), {"secret": {"key": "k"}},
+                       basic_auth={"username": "u", "password": "p"})
+    assert [k for k, _f in _kinds(receiver)] == ["invalid_receiver_field"]
+
+
+@pytest.mark.parametrize("site", _NESTED, ids=lambda s: ".".join(s.path))
+def test_a_malformed_reference_on_an_http_config_row_is_an_invalid_field(site):
+    receiver = _ref_at(site.path, {"secret": {"name": "da-t-b", "key": "k"}})
+    assert [k for k, _f in _kinds(receiver)] == ["invalid_receiver_field"]
+
+
+@pytest.mark.parametrize("path", [
+    ("http_config", "basic_auth", "username"),
+    ("http_config", "authorization", "type"),
+    ("http_config", "oauth2", "client_id"),
+    ("http_config", "tls_config", "ca"),
+])
+def test_a_reference_on_an_http_config_leaf_off_the_table_is_still_a_leftover(path):
+    receiver = _ref_at(path, {"secret": {"key": "k"}})
+    got = _kinds(receiver)
+    assert ("secret_ref_unsupported_field", "receiver." + ".".join(path)) in got, got
+
+
+def test_notification_tester_skips_a_receiver_with_an_http_config_reference():
+    report = nt.test_tenant_receivers(
+        "t-a", {"_routing": _routing(_ref_at(_PW, {"secret": {"key": "k"}}))},
+        rate_limit=0, allowed_domains=_ALLOWED)
+    [result] = report.receivers
+    assert result.status == nt.STATUS_SKIPPED, result
+    assert "http_config.basic_auth.password" in result.detail
+
+
+def test_redaction_masks_an_http_config_reference_with_its_container():
+    import _lib_redact
+    receiver = _ref_at(_PW, {"secret": {"key": "k"}})
+    assert _lib_redact.redact({"receiver": receiver})["receiver"]["http_config"] == \
+        _lib_redact.REDACTED
+
+
+def test_http_config_reference_renders_through_the_cli(tmp_path):
+    d = _tree(tmp_path, (
+        "        type: webhook\n"
+        "        url: https://hook.example.com/a\n"
+        "        http_config:\n"
+        "          basic_auth: {username: u, password: {secret: {key: hook-pw}}}\n"))
+    out = tmp_path / "routes.yaml"
+    r = _run(d, "--output-alertmanager", "--policy", _policy(tmp_path, ""), "-o", str(out))
+    assert r.returncode == 0, r.stderr
+    receivers = yaml.safe_load(out.read_text(encoding="utf-8"))["receivers"]
+    main = next(x for x in receivers if x["name"] == "tenant-t-a")
+    assert main["webhook_configs"][0]["http_config"]["basic_auth"] == {
+        "username": "u", "password_file": f"{DEFAULT_SECRET_MOUNT_ROOT}/da-t-a/hook-pw"}
+    # 同一棵樹、policy 沒有 allowed_domains：--validate 非 0
+    p = tmp_path / "bare-policy.yaml"
+    p.write_text("shared_secrets: {}\n", encoding="utf-8")
+    r = _run(d, "--validate", "--policy", str(p))
+    assert r.returncode != 0 and "allowed_domains" in r.stdout + r.stderr
