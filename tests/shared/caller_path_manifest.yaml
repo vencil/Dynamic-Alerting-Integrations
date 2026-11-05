@@ -152,6 +152,7 @@ commands:
     # #1560: a path inside the Alertmanager container, written into the
     # rendered `<field>_file`; never opened here.
     "--secret-mount-root": not_path
+    "--secret-mounts-out": output
   generator-service:
     "--cache-max-bytes": not_path
     "--config-subdir": {kind: reader, by: "git ls-tree of HEAD at start, the judgement's own reading (_gsvc_child.tree_entries): no directory there is refused, no entry at all is an empty conf.d", pinned_by: "tests/shared/test_caller_paths.py::test_generator_service_refuses_a_config_subdir_that_is_no_directory"}
@@ -234,10 +235,13 @@ commands:
     "--policy-package": not_path
     "--policy-path": {kind: reader, by: "opa eval -d (a failed eval is rc 2)", pinned_by: "tests/ops/test_policy_opa_bridge.py::test_binary_that_does_not_evaluate"}
   operator-check:
+    # #1560: a CR name, not a path.
+    "--alertmanager": not_path
     "--kubeconfig": {kind: reader, by: "kubectl through _lib_kubectl (KubectlError)", pinned_by: "tests/shared/test_caller_path_manifest.py::test_kubectls_refusal_of_a_kubeconfig_is_relayed"}
     "--namespace": not_path
     "--prometheus": not_path
     "--rule-packs-dir": dir
+    "--secret-mounts": file
   operator-generate:
     "--api-version": not_path
     "--components": not_path

@@ -1730,7 +1730,7 @@ promtool query instant 'count(ALERTS{alertstate="firing"})'
 
 #### operator-check
 
-驗證 Prometheus Operator 叢集中 CRD 部署狀態，檢查 5 項指標並產生診斷報告。
+驗證 Prometheus Operator 叢集中 CRD 部署狀態，檢查 6 項指標並產生診斷報告。
 
 **用途**：Operator 整合健康檢查；部署完整性驗證；故障診斷。
 
@@ -1748,6 +1748,8 @@ da-tools operator-check [options]
 | `--json` | JSON 格式輸出 | false |
 | `--rule-packs-dir <DIR>` | Rule Pack 目錄；pack 清單取自 `rule_pack_files` 這份宣告（頂層 `rule-pack-*.yaml`／`.yml`，旁邊的 `threshold-registry.yaml` 也已宣告），目錄頂層其他 YAML（副檔名不分大小寫）或懸空 symlink 會被點名、結束碼 2（[#3426](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3426)）；PrometheusRule 檢查拿叢集裡已載入的數量與這裡的 pack 數比；宣告蓋不住目錄時該列 fail（caller error）。明確給了卻不存在、不是目錄或是 symlink 迴圈 ⇒ 結束碼 `2`，問叢集之前點名（`--json` 時 stdout 為空（[#3558](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3558)）；先前當成 0 個、只報 `⚠ WARN PrometheusRule`、完全沒提到路徑，rc 0，[#3392](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3392)）。沒給時的預設值不存在、或給了空目錄，仍是 0 個。宣告為平台 pack 的（`_lib_consumer_read.PLATFORM_PACKS`，即 `rule-pack-platform.yaml`）也算在內：`operator-generate` 為它輸出一份 PrometheusRule（[#1595](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1595)）。 | `rule-packs/` |
 | `--prometheus <URL>` | Prometheus API URL；給了才檢查 exporter target 健康，不給則該項略過。給了卻讀不到 targets（連不上、回錯或回應格式不對）時該項 FAIL、結束碼 2，先前只是 warn（[#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） | （無） |
+| `--secret-mounts <FILE>` | `generate-routes --secret-mounts-out` 為 `configSecret` 那份設定寫出的 Secret 掛載清單；給了才跑第 5 項，不給則該項 SKIP（未判定，不算通過），並印出產生清單的指令。檔案不存在、不是一般檔，或不是那份清單（JSON 讀不了、`schema` 不是 `da-tools.secret-mounts/v1`、欄位形狀不對）⇒ 結束碼 `2`，問叢集之前點名（[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)） | （無） |
+| `--alertmanager <NAME>` | 與 `--secret-mounts` 同用：只拿這個 Alertmanager CR 比對（不給時比對 `--namespace` 裡每一個）。沒帶 `--secret-mounts` 卻給了它 ⇒ 結束碼 `2` | （全部） |
 | `--kubeconfig <FILE>` | kubeconfig 路徑 | （無） |
 | `--ci` | 任一檢查為 fail 時結束碼 1（不帶時 fail 也是 0；kubectl 沒有回答、或給了 `--prometheus` 卻讀不到 targets，一律 2，見下方與 [#3133](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3133)） | false |
 
@@ -1757,9 +1759,10 @@ da-tools operator-check [options]
 2. PrometheusRule：`--namespace` 裡帶 `app.kubernetes.io/part-of=dynamic-alerting` 的數量，與 `--rule-packs-dir` 的 pack 數（`rule-pack-*.yaml`／`.yml`，同上宣告）比（相等 pass、少於但大於 0 warn、0 fail）；CRD 沒裝時為 0、fail，並註明 CRD 沒裝。
 3. ServiceMonitor：同一 namespace、同一 label 至少一個（否則 fail；CRD 沒裝時註明）。
 4. AlertmanagerConfig 殘留：平台不再產生 AlertmanagerConfig，同一 namespace、同一 label 的 AlertmanagerConfig 是舊版留下的——有則 warn（刪掉它們：`kubectl delete alertmanagerconfig -n <ns> -l app.kubernetes.io/part-of=dynamic-alerting`；它們的路由仍會被 Operator 插在 `configSecret` 的路由之前），沒有則 pass，CRD 沒裝時 pass。⚠️ v2.9.0 映像是反過來的：0 個 warn、CRD 沒裝 warn <!-- image-caveat: v2.9.0 -->
-5. Target 健康（給了 `--prometheus` 才跑）：job 名含 `threshold` 或 `exporter` 的 target 是否都 `up`。
+5. Secret 掛載（給了 `--secret-mounts` 才跑，[#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)）：清單與 Alertmanager CR 的 `spec.secrets` 比對。清單有、`spec.secrets` 沒有 ⇒ fail：讀那個 Secret 的 receiver 每則通知都會在送出當下失敗（Alertmanager 開不了 `*_file`）而遺失。`spec.secrets` 有、清單沒有且名稱以 `da-` 開頭（租戶自己的 Secret 字首）⇒ warn：沒人讀它，而那個 Secret 不存在時 Pod 起不來（Operator 掛 Secret 的 volume 不是 optional）；其他名稱可能是部署自己要掛的（TLS、sidecar），不報。清單是以非預設 `--secret-mount-root` 產出的 ⇒ fail（Operator 一律掛在 `/etc/alertmanager/secrets/<名稱>/`）。`--namespace` 裡沒有 Alertmanager CR（或沒裝 CRD）而清單不是空的 ⇒ fail。每個 CR 各自判、名稱寫在說明裡；`other_files`（根目錄外的路徑）只報數量、不判。只讀 CR，不讀 Secret（不需要 secrets 的權限），所以 Secret 裡有沒有那個 key 不判。
+6. Target 健康（給了 `--prometheus` 才跑）：job 名含 `threshold` 或 `exporter` 的 target 是否都 `up`。
 
-**叢集讀取**（[#3207](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3207)）：每一次讀取都經 `_lib_kubectl`（`kubectl_get`／`kubectl_list`，`kubectl get … -o json`）。kubectl 沒有回答——叢集連不上、權限不足（forbidden）、kubectl 不在 PATH 或逾時——該列標 `caller_error`、結束碼 2，不再當成「not found」。CRD 有沒有裝是以名稱 `get` 該 CRD（`--ignore-not-found`，不存在時有回答、為 finding，不是讀取失敗）。需要的權限：`customresourcedefinitions` 的 `get`（叢集範圍），以及 `--namespace` 內 PrometheusRule／ServiceMonitor／AlertmanagerConfig 的 `list`。⚠️ **行為變更**：叢集連不上或權限不足時，先前三列報 `fail`／"not found"、結束碼 0（`--ci` 為 1），現在結束碼 2；AlertmanagerConfig 讀取失敗先前是 warn、結束碼 0，現在也是 2。
+**叢集讀取**（[#3207](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3207)）：每一次讀取都經 `_lib_kubectl`（`kubectl_get`／`kubectl_list`，`kubectl get … -o json`）。kubectl 沒有回答——叢集連不上、權限不足（forbidden）、kubectl 不在 PATH 或逾時——該列標 `caller_error`、結束碼 2，不再當成「not found」。CRD 有沒有裝是以名稱 `get` 該 CRD（`--ignore-not-found`，不存在時有回答、為 finding，不是讀取失敗）。需要的權限：`customresourcedefinitions` 的 `get`（叢集範圍），以及 `--namespace` 內 PrometheusRule／ServiceMonitor／AlertmanagerConfig 的 `list`；帶 `--secret-mounts` 時另需 Alertmanager 的 `list`（給了 `--alertmanager` 時是 `get`）。⚠️ **行為變更**：叢集連不上或權限不足時，先前三列報 `fail`／"not found"、結束碼 0（`--ci` 為 1），現在結束碼 2；AlertmanagerConfig 讀取失敗先前是 warn、結束碼 0，現在也是 2。
 
 **範例**
 

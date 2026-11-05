@@ -239,6 +239,178 @@ class TestCheckAlertmanagerConfig:
 
 
 # ---------------------------------------------------------------------------
+# check_secret_mounts (#1560)
+# ---------------------------------------------------------------------------
+def _mount_list(*names, root="/etc/alertmanager/secrets", other=()):
+    return {"schema": oc.MOUNT_LIST_SCHEMA, "mount_root": root,
+            "secrets": [{"name": n, "keys": ["k"]} for n in names],
+            "other_files": list(other)}
+
+
+def _am(name, *mounted):
+    return {"metadata": {"name": name}, "spec": {"secrets": list(mounted)}}
+
+
+def _stub_alertmanagers(monkeypatch, crs, *, crd=True, fail=None):
+    """An in-memory cluster with *crs* as the Alertmanager CRs. Returns the
+    calls; a read of a Secret fails the test (the check never needs one)."""
+    calls = []
+
+    def fake_list(kind, **kw):
+        calls.append((kind, kw))
+        assert kind == "alertmanager", kind
+        if fail:
+            raise oc.KubectlError(fail)
+        return crs
+
+    def fake_get(kind, name, **kw):
+        calls.append((kind, {"name": name, **kw}))
+        assert kind in ("crd", "alertmanager"), kind
+        if fail:
+            raise oc.KubectlError(fail)
+        if kind == "crd":
+            return {"metadata": {"name": name}} if crd and name == oc._CRD_AMS else None
+        return next((c for c in crs if c["metadata"]["name"] == name), None)
+
+    monkeypatch.setattr(oc, "kubectl_list", fake_list)
+    monkeypatch.setattr(oc, "kubectl_get", fake_get)
+    return calls
+
+
+def _mounts(monkeypatch, mount_list, crs, **kw):
+    args = kw.pop("args", {})
+    _stub_alertmanagers(monkeypatch, crs, **kw)
+    return oc.OperatorChecker(_make_args(**args), mount_list).check_secret_mounts()
+
+
+class TestCheckSecretMounts:
+    """#1560: the generate-routes mount list against spec.secrets. Only the
+    Alertmanager CR is read — never a Secret."""
+
+    def test_complete_passes_and_names_the_cr(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a", "corp-alerting"),
+                    [_am("main", "da-t-a", "corp-alerting", "tls-certs")])
+        assert r.status == "pass", r.detail
+        assert "main" in r.detail and not r.caller_error
+
+    def test_a_listed_secret_missing_from_spec_secrets_fails(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a", "da-t-b"), [_am("main", "da-t-a")])
+        assert r.status == "fail" and not r.caller_error
+        assert "da-t-b" in r.detail and "da-t-a" not in r.detail.split("lacks")[1]
+
+    def test_an_extra_da_secret_warns(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a"), [_am("main", "da-t-a", "da-t-gone")])
+        assert r.status == "warn"
+        assert "da-t-gone" in r.detail
+
+    def test_an_extra_secret_of_another_name_is_not_reported(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a"), [_am("main", "da-t-a", "tls-certs")])
+        assert r.status == "pass"
+        assert "tls-certs" not in r.detail
+
+    def test_a_missing_one_outranks_an_extra_one(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a"), [_am("main", "da-t-x")])
+        assert r.status == "fail"
+        assert "da-t-a" in r.detail and "da-t-x" in r.detail
+
+    def test_every_cr_is_judged_and_one_lacking_fails(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a"),
+                    [_am("am-one", "da-t-a"), _am("am-two")])
+        assert r.status == "fail"
+        assert "am-one" in r.detail and "am-two" in r.detail
+
+    def test_alertmanager_flag_judges_that_cr_only(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a"),
+                    [_am("am-one", "da-t-a"), _am("am-two")],
+                    args={"alertmanager": "am-one"})
+        assert r.status == "pass", r.detail
+        assert "am-two" not in r.detail
+
+    def test_alertmanager_flag_naming_no_cr_fails(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a"), [_am("am-one", "da-t-a")],
+                    args={"alertmanager": "absent"})
+        assert r.status == "fail" and "absent" in r.detail
+
+    @pytest.mark.parametrize("crd", [True, False])
+    def test_no_cr_with_a_non_empty_list_fails(self, monkeypatch, crd):
+        r = _mounts(monkeypatch, _mount_list("da-t-a"), [], crd=crd)
+        assert r.status == "fail" and "monitoring" in r.detail
+
+    def test_an_empty_list_with_no_cr_passes(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list(), [])
+        assert r.status == "pass"
+
+    def test_another_mount_root_fails(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a", root="/mnt/s"), [_am("main", "da-t-a")])
+        assert r.status == "fail"
+        assert "/mnt/s" in r.detail and oc.DEFAULT_SECRET_MOUNT_ROOT in r.detail
+
+    def test_other_files_are_named_as_not_judged(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a", other=["/etc/ssl/ca.pem"]),
+                    [_am("main", "da-t-a")])
+        assert r.status == "pass" and "other_files" in r.detail
+
+    def test_no_flag_is_skip_with_how_to_make_the_list(self, monkeypatch):
+        calls = _stub_alertmanagers(monkeypatch, [_am("main")])
+        r = oc.OperatorChecker(_make_args(), None).check_secret_mounts()
+        assert r.status == "skip"
+        assert "--secret-mounts-out" in r.detail and "--config-dir" in r.detail
+        assert calls == []  # nothing asked of the cluster
+
+    def test_kubectl_not_answering_is_a_caller_error(self, monkeypatch):
+        r = _mounts(monkeypatch, _mount_list("da-t-a"), [], fail="unreachable")
+        assert r.status == "fail" and r.caller_error
+        assert "unreachable" in r.detail
+
+    def test_no_secret_is_ever_read(self, monkeypatch):
+        calls = _stub_alertmanagers(monkeypatch, [_am("main", "da-t-a")])
+        oc.OperatorChecker(_make_args(), _mount_list("da-t-a")).check_secret_mounts()
+        assert {kind for kind, _ in calls} <= {"crd", "alertmanager"}
+
+
+class TestMountListFlag:
+    """#1560: --secret-mounts is read before the cluster is asked."""
+
+    def _write(self, tmp_path, doc) -> str:
+        p = tmp_path / "mounts.json"
+        p.write_text(doc if isinstance(doc, str) else json.dumps(doc), encoding="utf-8")
+        return str(p)
+
+    def test_a_valid_list_loads(self, tmp_path):
+        doc = _mount_list("da-t-a")
+        assert oc.load_mount_list(self._write(tmp_path, doc)) == doc
+
+    @pytest.mark.parametrize("doc", [
+        "{not json",
+        [],
+        {"schema": "other/v1", "mount_root": "/x", "secrets": [], "other_files": []},
+        {"schema": "da-tools.secret-mounts/v1", "mount_root": 1, "secrets": [], "other_files": []},
+        {"schema": "da-tools.secret-mounts/v1", "mount_root": "/x", "secrets": [{"name": "a"}],
+         "other_files": []},
+        {"schema": "da-tools.secret-mounts/v1", "mount_root": "/x", "secrets": [],
+         "other_files": "x"},
+    ])
+    def test_an_unusable_list_is_a_caller_error(self, tmp_path, doc):
+        with pytest.raises(oc.CallerError, match="--secret-mounts"):
+            oc.load_mount_list(self._write(tmp_path, doc))
+
+    def test_unusable_list_through_the_cli_is_rc_2_before_any_check(self, tmp_path):
+        proc = subprocess.run(
+            [sys.executable, _OPERATOR_CHECK, "--secret-mounts",
+             self._write(tmp_path, "{not json"), "--kubeconfig", str(tmp_path / "none")],
+            capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=tmp_path)
+        assert proc.returncode == 2, (proc.stdout, proc.stderr)
+        assert "--secret-mounts" in proc.stderr and "Traceback" not in proc.stderr
+
+    def test_alertmanager_without_secret_mounts_is_a_caller_error(self, tmp_path):
+        proc = subprocess.run(
+            [sys.executable, _OPERATOR_CHECK, "--alertmanager", "main"],
+            capture_output=True, text=True, encoding="utf-8", timeout=60, cwd=tmp_path)
+        assert proc.returncode == 2, (proc.stdout, proc.stderr)
+        assert "--alertmanager" in proc.stderr and "Traceback" not in proc.stderr
+
+
+# ---------------------------------------------------------------------------
 # check_target_health
 # ---------------------------------------------------------------------------
 class TestCheckTargetHealth:
@@ -326,13 +498,14 @@ class TestCheckTargetHealth:
 # run_all_checks + reports + exit_code
 # ---------------------------------------------------------------------------
 class TestRunAllChecks:
-    def test_appends_five_checks(self, monkeypatch):
+    def test_appends_six_checks(self, monkeypatch):
         # Stub each individual check_* to return a known PASS result.
         for fn_name in (
             "check_operator_detection",
             "check_prometheus_rule_status",
             "check_servicemonitor_status",
             "check_alertmanager_config",
+            "check_secret_mounts",
             "check_target_health",
         ):
             monkeypatch.setattr(
@@ -341,7 +514,7 @@ class TestRunAllChecks:
             )
         checker = oc.OperatorChecker(_make_args())
         checker.run_all_checks()
-        assert len(checker.checks) == 5
+        assert len(checker.checks) == 6
         assert all(c.status == "pass" for c in checker.checks)
 
 
