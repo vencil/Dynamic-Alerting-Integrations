@@ -56,9 +56,7 @@ from _lib_python import (  # noqa: E402
     write_json_or_die,
 )
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report,
-    arm_crash_envelope,
-)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 from _lib_consumer_read import binary_data_bytes  # noqa: E402  (#3461: the one binaryData decode)
 import _lib_parse_cache  # noqa: E402  (#1525: exit_on_parse_tree_error)
 import _lib_parse_tree  # noqa: E402  (ADR-036 §7 step 9: Go classes the key names)
@@ -442,20 +440,6 @@ def main():
         help="Output JSON only (no text report)",
     )
     args = parser.parse_args()
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope, with the
-        # dry-run document's keys below (nothing checked, no tenant counted)
-        arm_crash_envelope(build=lambda: {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "prometheus_url": args.prometheus,
-            "total_tenants": 0,
-            "healthy_count": None,
-            "unchecked_count": None,
-            "issue_count": None,
-            "health_score": None,
-            "tenants": {},
-            "recommendations": [],
-        })
 
     # #1525: both modes read the ConfigMap; --tenants picks among its tenants.
     requested = ([t.strip() for t in args.tenants.split(",") if t.strip()]
@@ -540,7 +524,8 @@ def main():
     if args.output:
         # #1641: an unwritable -o is rc=2 + one line, not a traceback at rc=1.
         # Under --json it is written before the document goes out (#3216):
-        # an unwritable -o is then the envelope, not a document beside rc 2.
+        # an unwritable -o is then rc 2 with stdout empty, not a document
+        # beside rc 2.
         write_json_or_die(args.output, report, flag="-o/--output")
         if not args.json:
             print(f"\nJSON report written to: {args.output}")

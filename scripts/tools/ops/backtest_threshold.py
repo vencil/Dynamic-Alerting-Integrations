@@ -64,9 +64,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_io import OutputWriteError  # noqa: E402  (#3089 output preflight)
 import _lib_parse_tree  # noqa: E402  (#3206 the shared conf.d refusal)
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR,
-    OutputNotSerializable, Report, arm_crash_envelope, encode_json,
-)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, OutputNotSerializable, Report, encode_json)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (#3066)
 from _lib_validation import THRESHOLD_SEVERITIES  # noqa: E402  (#3071)
 # #2119: both trees (`--config-dir` / `--baseline`) are read by the exporter,
@@ -1646,10 +1644,6 @@ def _main():
         help="Write Markdown report to file (for PR comments)",
     )
     args = parser.parse_args()
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope(build=lambda: empty_report(
-            args.lookback, "caller_error", "internal_error"))
 
     # #3059: argument errors first — before the Prometheus check, so
     # `--skip-if-unavailable` cannot turn them into a green skip — and with

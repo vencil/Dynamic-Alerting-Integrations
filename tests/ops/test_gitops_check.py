@@ -106,12 +106,7 @@ class TestLocalDirMissingIsCallerError:
         assert proc.stderr.count("ERROR:") == 1, proc.stderr
         # named before da-guard is asked — not da-guard failing on no tree
         assert f"ERROR: --dir {missing}: {os.strerror(errno.ENOENT)}" in proc.stderr, proc.stderr
-        if as_json:
-            doc = json.loads(proc.stdout)
-            assert (doc["status"], doc["reason"]) == ("caller_error", "dir_not_found")
-            # dev-rules §13: the report's own keys stay, zeroed
-            assert (doc["overall_status"], doc["checks"]) == ("", []), doc
-            assert doc["timestamp"], doc
+        assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
 
     def test_a_file_is_not_a_directory(self, tmp_path):
         """`--dir` naming a regular file: the same caller error, named before
@@ -122,7 +117,7 @@ class TestLocalDirMissingIsCallerError:
                                "--json"], capture_output=True, text=True, encoding="utf-8",
                               timeout=120)
         assert proc.returncode == EXIT_CALLER_ERROR, proc.stderr
-        assert json.loads(proc.stdout)["reason"] == "dir_not_found", proc.stdout
+        assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
 
 
 class TestLocalDirNotAccessibleIsCallerError:
@@ -204,8 +199,7 @@ class TestLocalDirNotAccessibleIsCallerError:
                 shutil.rmtree(base)
         assert proc.returncode == EXIT_CALLER_ERROR, proc.stderr
         assert "Traceback" not in proc.stderr, proc.stderr
-        doc = json.loads(proc.stdout)
-        assert (doc["status"], doc["reason"]) == ("caller_error", "dir_not_accessible"), doc
+        assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
 
 
 # ── 3. check_local() Tests ──────────────────────────────────────────────────
@@ -950,9 +944,8 @@ class TestErrorRecovery:
         assert "Traceback" not in proc.stderr, proc.stderr
         assert "(walk_error)" in proc.stderr, proc.stderr
         assert "_defaults.yaml" not in proc.stdout + proc.stderr, proc.stdout + proc.stderr
-        doc = json.loads(proc.stdout)
-        assert (doc["status"], doc["reason"]) == ("caller_error", "conf_d_not_servable"), doc
-        assert doc["refused_paths"] == [{"path": ".", "verdict": "unservable"}], doc
+        assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
+        assert "ERROR: .: " in proc.stderr, proc.stderr  # the refused path, named
 
 
 # ── 11. Timestamp Tests ────────────────────────────────────────────────────

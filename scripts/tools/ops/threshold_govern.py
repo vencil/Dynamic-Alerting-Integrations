@@ -104,8 +104,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #327
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 from _lib_prometheus import _validate_url_scheme  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report, arm_crash_envelope,
-)
+    EXIT_CALLER_ERROR, EXIT_OK, EXIT_VIOLATION, CallerError, Report)
 
 # Reuse the recommendation engine wholesale — threshold_govern is its active
 # layer, never a re-implementation (the engine owns percentiles / observed-map /
@@ -1504,9 +1503,6 @@ def main() -> "Report | None":
     parser.add_argument("--json", action="store_true", dest="json_output",
                         help="JSON 格式輸出" if _LANG == "zh" else "Output as JSON")
     args = parser.parse_args()
-    if args.json_output:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope(tool="threshold-govern")
 
     # #3276: the shared judgement of a caller-given path, in this tool's words.
     config_dir_problem = classify_path(args.config_dir, "dir", lang=_LANG, flag="--config-dir")

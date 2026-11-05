@@ -1,19 +1,29 @@
 """`--json` stdout contract gate for da-tools ops CLI tools (#1112).
 
-THE CONTRACT (strict)
----------------------
+THE CONTRACT (strict; #3558)
+----------------------------
 When a tool is invoked with ``--json`` (or its ``--json-output`` spelling),
-**stdout MUST contain exactly one JSON document — nothing else** — on *every*
-terminal path the tool can reach: the happy path, an empty/no-op result, a
-graceful skip (``--skip-if-unavailable``), a ``--dry-run``, a ``--checklist-only``
-early return, a detected-violation exit, and a "wrote the report to a file"
-path.  Every human-readable message (progress lines, summaries, warnings,
-"Prometheus unavailable — skipping", "No tenant configs found", …) belongs on
-**stderr**.
+**stdout is non-empty exactly when the tool handed a Report back to
+``_lib_exitcodes.run``, and then it is exactly one JSON document — nothing
+else** — on *every* terminal path the tool can reach: the happy path, an
+empty/no-op result, a graceful skip (``--skip-if-unavailable``), a
+``--dry-run``, a ``--checklist-only`` early return, a detected-violation exit,
+a "wrote the report to a file" path, and a caller error the tool answers with
+its own document (``Report(doc, 2)``). A caller error the library ends
+(``die_caller_error``, ``CallerError``, ``sys.exit(2)``) and a crash leave
+stdout EMPTY: no envelope (#3558 retired it). Every human-readable message
+(progress lines, summaries, warnings, "Prometheus unavailable — skipping",
+"No tenant configs found", …) belongs on **stderr**.
 
-The observable form of the contract is exactly one line:
+The observable form of the contract, per recipe:
 
-    json.loads(stdout)   # must succeed on the FULL stdout text
+    bool(stdout) == the tool returned a Report == recipe.expect_document
+    json.loads(stdout)   # when non-empty: must succeed on the FULL text
+
+Whether a Report reached ``run()`` is observed, not inferred: every recipe
+runs under ``_report_probe_runner``, which logs each one. The tools #3216
+left printing their one document themselves are listed
+(``SELF_PRINTED_DOCUMENT``) and held to the second line only.
 
 Full-text ``json.loads`` is deliberate: it simultaneously proves (a) valid JSON
 and (b) no leading/trailing prose.  We never scan for "the first ``{``" — a
@@ -63,21 +73,18 @@ SCOPE — WHAT THIS GATE ASSERTS
   Recipes whose mode identity is observable in the payload (a discriminator
   field, a must-not-be-empty field, a precedence between two flags) now carry a
   ``doc_check`` that asserts it.
-* **``expect_caller_error`` recipes assert the exit code as well as the
-  document**: the tool must reject the invocation with exit 2 *and* still put
-  one JSON document on stdout (``patch_config``'s early exits). Since #3115
-  the library prints that document for the shared exits — the ``exit_on_*``
-  decorators, ``die_caller_error``, a hand-written ``sys.exit(2)`` reaching
-  ``_lib_exitcodes.run`` — and one recipe per decorator pins its named
-  ``reason`` (``served_values_unavailable`` / ``yaml_file_unreadable`` /
-  ``output_unwritable`` / ``observed_map_unavailable``).
-* **A crash is a terminal path too** (#3094): every tool is driven once more
-  with an exception injected right where it arms its crash envelope, and must
-  exit 2 with exactly one ``caller_error`` / ``internal_error`` envelope on
-  stdout (``test_crash_in_json_mode_emits_one_envelope``). That proves every
-  tool arms in ``--json`` mode; it does not prove a crash LATER in the run
-  gets no second document — that rests on each tool disarming after printing
-  its own report where more code can still run.
+* **``expect_caller_error`` recipes assert the exit code as well**: the tool
+  must reject the invocation with exit 2. Whether that path carries a
+  document is ``expect_document``: ``patch_config``'s early exits do (its
+  own ``Report(doc, 2)``); the shared exits — the ``exit_on_*`` decorators,
+  ``die_caller_error``, a hand-written ``sys.exit(2)`` — do not since #3558.
+* **A crash is a terminal path too** (#3094 → #3558): every tool is driven
+  once more with an exception injected right after ``parse_args`` returns,
+  and must exit 2 with the crash line on stderr and stdout EMPTY
+  (``test_a_crash_in_json_mode_leaves_stdout_empty``).
+* **Who may deliver best effort** (#3558 P2): ``Report(...,
+  delivery="best_effort")`` / ``note_stdout_failure`` keep a tool's status when
+  stdout fails; ``BEST_EFFORT_ALLOWED`` lists the tools that may (AST).
 
 HOW THE MODES ARE DRIVEN (every dependency is mocked, none is contacted)
 -----------------------------------------------------------------------
@@ -153,6 +160,7 @@ of the offending stdout.
 """
 from __future__ import annotations
 
+import ast
 import json
 import os
 import re
@@ -640,9 +648,14 @@ class Recipe:
     build: Callable[[Path, str], list[str]]   # (tmp_path, stub_url) -> argv tail
     sandbox: bool = False                     # run from the sandbox_repo copy
     needs_kubectl: bool = False               # relies on the fake-kubectl shim
-    # An invocation the tool must REJECT: exit EXIT_CALLER_ERROR, and still
-    # exactly one JSON document on stdout.
+    # An invocation the tool must REJECT: exit EXIT_CALLER_ERROR.
     expect_caller_error: bool = False
+    # #3558: whether this path carries a document — the tool returns a
+    # Report (stdout: exactly one JSON document) — or not (stdout empty: a
+    # caller error the library ends, `die_caller_error` / `CallerError` /
+    # `sys.exit(2)`). Pinned per recipe, so a path cannot drift from one
+    # side to the other unseen.
+    expect_document: bool = True
     # OPTIONAL payload assertion, run after the document parses. Returns a
     # reason string when the document is wrong, or None when it is fine.
     #
@@ -695,21 +708,6 @@ def _caller_error_doc(reason: str) -> Callable[[object], str | None]:
         if got != ("caller_error", reason):
             return f"(status, reason) must be ('caller_error', {reason!r}), got {got}"
         return None
-    return check
-
-
-def _refusal_doc(paths: "list[dict[str, str]]") -> Callable[[object], str | None]:
-    """The shared conf.d refusal's envelope (#3206): reason
-    `conf_d_not_servable` and `refused_paths` — every refused path with its
-    verdict, as stderr names them."""
-    base = _caller_error_doc("conf_d_not_servable")
-
-    def check(doc: object) -> str | None:
-        why = base(doc)
-        if why is None and doc.get("refused_paths") != paths:  # type: ignore[union-attr]
-            why = (f"refused_paths must be {paths!r}, "
-                   f"got {doc.get('refused_paths')!r}")  # type: ignore[union-attr]
-        return why
     return check
 
 
@@ -937,7 +935,7 @@ RECIPES: list[Recipe] = [
     # no named reason, but still one envelope (from `_lib_exitcodes.run`).
     R("alert_quality", "invalid-period",
       lambda t, s: ["--prometheus", "http://127.0.0.1:1", "--period", "bogus", "--json"],
-      expect_caller_error=True, doc_check=_caller_error_doc("caller_error")),
+      expect_caller_error=True, expect_document=False),
 
     # ── analyze_rule_pack_gaps ─────────────────────────────────────────────
     R("analyze_rule_pack_gaps", "config-dir",
@@ -971,7 +969,7 @@ RECIPES: list[Recipe] = [
     # #3115: `exit_on_output_write_error` — the output cannot be created.
     R("assemble_config_dir", "output-unwritable",
       lambda t, s: ["--sources", str(SEED_CONF_D), "--output", _path_under_a_file(t), "--json"],
-      expect_caller_error=True, doc_check=_caller_error_doc("output_unwritable")),
+      expect_caller_error=True, expect_document=False),
 
     # ── backtest_threshold  (⚠ known multi-mode trap) ──────────────────────
     # #3017: a key a shipped alert compares, so Prometheus is really asked
@@ -1041,7 +1039,7 @@ RECIPES: list[Recipe] = [
     R("batch_diagnose", "tenant-not-found",
       lambda t, s: ["--tenants", "db-a,no-such-tenant", "--prometheus", s, "--json"],
       needs_kubectl=True, expect_caller_error=True,
-      doc_check=_caller_error_doc("tenant_not_found")),
+      expect_document=False),
 
     # ── blind_spot_discovery  (--json-output spelling) ─────────────────────
     R("blind_spot_discovery", "scan",
@@ -1097,17 +1095,17 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["tenant-one", "--config-dir", str(SEED_CONF_D),
                     "--prometheus", "http://127.0.0.1:1", "--json"],
       env=_MISSING_DA_GUARD, expect_caller_error=True,
-      doc_check=_caller_error_doc("served_values_unavailable")),
+      expect_document=False),
     # #1524: a given --config-dir that is not there, or a tree without the
     # tenant — once an `{"error": ...}` object and rc 0.
     R("diagnose", "config-dir-missing",
       lambda t, s: ["db-demo", "--config-dir", str(t / "no-such-conf.d"),
                     "--show-inheritance", "--json"],
-      expect_caller_error=True, doc_check=_caller_error_doc("dir_not_found")),
+      expect_caller_error=True, expect_document=False),
     R("diagnose", "tenant-not-found",
       lambda t, s: ["no-such-tenant", "--config-dir", str(SEED_CONF_D),
                     "--show-inheritance", "--json"],
-      expect_caller_error=True, doc_check=_caller_error_doc("tenant_not_found")),
+      expect_caller_error=True, expect_document=False),
 
     # ── discover_instance_mappings  (⚠ known multi-mode trap) ──────────────
     R("discover_instance_mappings", "prometheus",
@@ -1133,7 +1131,7 @@ RECIPES: list[Recipe] = [
     # #3431: a --tenant the tree does not declare — once `[]` and rc 0.
     R("explain_route", "tenant-not-found",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--tenant", "no-such-tenant", "--json"],
-      expect_caller_error=True, doc_check=_caller_error_doc("tenant_not_found")),
+      expect_caller_error=True, expect_document=False),
     R("explain_route", "trace",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--tenant", "db-demo",
                     "--trace", "--alertname", "HighConnectionCount",
@@ -1169,7 +1167,7 @@ RECIPES: list[Recipe] = [
     # #3276: the shared caller-path judgement's reason (was the generic one).
     R("grafana_import", "dashboard-dir-missing",
       lambda t, s: ["--dashboard-dir", _out(t, "absent"), "--json"],
-      expect_caller_error=True, doc_check=_caller_error_doc("dir_not_found")),
+      expect_caller_error=True, expect_document=False),
     R("grafana_import", "verify", lambda t, s: ["--verify", "--json"], needs_kubectl=True),
     # COMBINATION recipe (#1112 flag-matrix sweep): `--dry-run` + `--verify`.
     # `--verify` wins; it is read-only, so nothing is lost by `--dry-run` being
@@ -1233,12 +1231,12 @@ RECIPES: list[Recipe] = [
     R("onboard_platform", "unreadable-yaml",
       lambda t, s: ["--alertmanager-config", _broken_yaml_file(t),
                     "-o", _out(t, "onboard3"), "--dry-run", "--json"],
-      expect_caller_error=True, doc_check=_caller_error_doc("yaml_file_unreadable")),
+      expect_caller_error=True, expect_document=False),
     # #3115 review: no phase input at all — the help text is prose, so under
     # --json it goes to stderr and stdout keeps the one envelope.
     R("onboard_platform", "no-inputs",
       lambda t, s: ["-o", _out(t, "onboard4"), "--json"],
-      expect_caller_error=True, doc_check=_caller_error_doc("caller_error")),
+      expect_caller_error=True, expect_document=False),
 
     # ── operator_check ─────────────────────────────────────────────────────
     R("operator_check", "check",
@@ -1334,7 +1332,7 @@ RECIPES: list[Recipe] = [
       lambda t, s: ["--config-dir", _confd_the_exporter_drops(t),
                     "--policy", _policy_file(t), "--json"],
       expect_caller_error=True,
-      doc_check=_refusal_doc([{"path": "_platform.yaml", "verdict": "unservable"}])),
+      expect_document=False),
 
     # ── policy_opa_bridge ──────────────────────────────────────────────────
     R("policy_opa_bridge", "dry-run",
@@ -1344,7 +1342,7 @@ RECIPES: list[Recipe] = [
     R("policy_opa_bridge", "served-values-unavailable",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--dry-run", "--json"],
       env=_MISSING_DA_GUARD, expect_caller_error=True,
-      doc_check=_caller_error_doc("served_values_unavailable")),
+      expect_document=False),
     R("policy_opa_bridge", "opa-url",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--opa-url", s, "--json"]),
     # #2115 0-B: the tenants come from da-guard, which refuses a directory
@@ -1371,7 +1369,7 @@ RECIPES: list[Recipe] = [
     # #3115: a hand-written rc 2 (an input that does not exist) — generic reason.
     R("rule_pack_diff", "input-missing",
       lambda t, s: ["--from", _out(t, "absent-a.yaml"), "--to", _out(t, "absent-b.yaml"), "--json"],
-      expect_caller_error=True, doc_check=_caller_error_doc("caller_error")),
+      expect_caller_error=True, expect_document=False),
 
     # ── runtime_audit ──────────────────────────────────────────────────────
     R("runtime_audit", "runtime-json",
@@ -1431,7 +1429,7 @@ RECIPES: list[Recipe] = [
     R("threshold_recommend", "observed-map-unreadable",
       lambda t, s: ["--config-dir", str(SEED_CONF_D), "--prometheus", s, "--json"],
       private_tree=_break_observed_map, expect_caller_error=True,
-      doc_check=_caller_error_doc("observed_map_unavailable")),
+      expect_document=False),
 
     # ── validate_config ────────────────────────────────────────────────────
     # Every recipe also pins the entry-key contract (#1653); `broken-yaml` and
@@ -1543,9 +1541,12 @@ def _private_tree(tmp_path: Path, breaker: Callable[[Path], None]) -> Path:
 
 
 def _run(recipe: Recipe, tmp_path: Path, stub: str, sandbox_root: Path,
-         fake_bin: Path, net_log: Path | None = None) -> subprocess.CompletedProcess:
+         fake_bin: Path, net_log: Path | None = None,
+         report_log: Path | None = None) -> subprocess.CompletedProcess:
     """Run *recipe*. With *net_log*, under ``_net_hook_runner`` — the tool's
-    network use is logged there (``test_ops_http_through_lib``, #3215)."""
+    network use is logged there (``test_ops_http_through_lib``, #3215). With
+    *report_log*, under ``_report_probe_runner`` — every Report the tool
+    hands back to ``run()`` is logged there (#3558)."""
     root = sandbox_root if recipe.sandbox else REPO_ROOT
     if recipe.private_tree is not None:
         root = _private_tree(tmp_path, recipe.private_tree)
@@ -1570,18 +1571,41 @@ def _run(recipe: Recipe, tmp_path: Path, stub: str, sandbox_root: Path,
         env["NET_HOOK_OPS"] = str(root / "scripts" / "tools" / "ops")
         env["NET_HOOK_LIB"] = str(root / "scripts" / "tools" / "_lib_prometheus.py")
         argv.insert(1, str(Path(__file__).with_name("_net_hook_runner.py")))
+    elif report_log is not None:
+        env["REPORT_PROBE_LOG"] = str(report_log)
+        env["REPORT_PROBE_TOOLS"] = str(root / "scripts" / "tools")
+        argv.insert(1, str(Path(__file__).with_name("_report_probe_runner.py")))
     return subprocess.run(argv, capture_output=True, timeout=TIMEOUT_S, cwd=str(root), env=env)
 
 
+#: #3216, owner 2026-11-03 "先不動": the --json tools of this population that
+#: still print their one document themselves (`encode_json`, then their own
+#: write) instead of returning a Report. They keep "exactly one document" (C3)
+#: and are held to it here; the "iff a Report" half waits for #3216. Only
+#: shrinks: a tool that moves to Report fails `..._still_prints_itself`.
+SELF_PRINTED_DOCUMENT = frozenset({"migrate_to_operator"})
+
+
+def test_the_self_printed_list_is_still_true():
+    assert SELF_PRINTED_DOCUMENT <= set(JSON_TOOLS)
+    for tool in SELF_PRINTED_DOCUMENT:
+        src = (REPO_ROOT / JSON_TOOL_PATHS[tool]).read_text(encoding="utf-8")
+        assert "Report(" not in src, f"{tool} returns a Report now: drop it from the list"
+
+
 @pytest.mark.parametrize("recipe", RECIPES, ids=[r.id for r in RECIPES])
-def test_json_mode_emits_exactly_one_json_document(
+def test_json_mode_stdout_is_one_document_iff_the_tool_returned_a_report(
     recipe: Recipe, tmp_path: Path, stub_url: str, sandbox_repo: Path,
     fake_kubectl_dir: Path,
 ):
-    """`--json` ⇒ stdout is exactly one JSON document, on every terminal path.
+    """#3558: `--json` ⇒ stdout is non-empty exactly when the tool handed a
+    Report back to `run()`, and then it is exactly one JSON document.
 
-    Full-text `json.loads(stdout)` is the assertion: it proves the document
-    parses AND that no prose leaked in before or after it.
+    Full-text `json.loads(stdout)` is the assertion on the document: it
+    proves the document parses AND that no prose leaked in before or after
+    it. Which side of the "iff" a path is on is pinned per recipe
+    (`expect_document`): a caller error the library ends carries none; one a
+    tool answers with its own document (rc 2 included) returns a Report.
     """
     if recipe.needs_kubectl and os.name == "nt":
         pytest.skip(
@@ -1592,9 +1616,13 @@ def test_json_mode_emits_exactly_one_json_document(
             f"is where this gate is authoritative."
         )
 
-    proc = _run(recipe, tmp_path, stub_url, sandbox_repo, fake_kubectl_dir)
+    report_log = tmp_path / "reports.log"
+    proc = _run(recipe, tmp_path, stub_url, sandbox_repo, fake_kubectl_dir,
+                report_log=report_log)
     stdout = proc.stdout.decode("utf-8", "replace")
     stderr = proc.stderr.decode("utf-8", "replace")
+    reports = (report_log.read_text(encoding="utf-8").splitlines()
+               if report_log.exists() else [])
 
     def fail(why: str) -> str:
         return (
@@ -1603,10 +1631,11 @@ def test_json_mode_emits_exactly_one_json_document(
             f"  mode  : {recipe.mode}\n"
             f"  reason: {why}\n"
             f"  exit  : {proc.returncode}\n"
+            f"  Report: {reports}\n"
             f"  stdout[:200]: {stdout[:200]!r}\n"
             f"  stderr[:200]: {stderr[:200]!r}\n"
-            f"  fix   : route every human-readable line to stderr; emit the one "
-            f"JSON document to stdout on THIS path too.\n"
+            f"  fix   : route every human-readable line to stderr; a document "
+            f"goes out only as `return Report(doc, status)`.\n"
         )
 
     if recipe.expect_caller_error:
@@ -1614,8 +1643,19 @@ def test_json_mode_emits_exactly_one_json_document(
             f"a rejected invocation must exit "
             f"EXIT_CALLER_ERROR ({EXIT_CALLER_ERROR}), got {proc.returncode}"
         )
-
-    assert stdout.strip(), fail("stdout is EMPTY — no JSON document at all")
+    assert len(reports) <= 1, fail("more than one Report reached run()")
+    if recipe.tool in SELF_PRINTED_DOCUMENT:  # #3216: one document, its own write
+        assert not reports, fail("listed as printing itself, yet returned a Report")
+    else:
+        assert bool(stdout) == bool(reports), fail(
+            "stdout is not empty but the tool returned no Report (it printed a "
+            "document or prose itself)" if stdout else
+            "the tool returned a Report but stdout is empty")
+    assert bool(stdout) == recipe.expect_document, fail(
+        f"this path is pinned to {'carry' if recipe.expect_document else 'carry no'} "
+        f"document (Recipe.expect_document)")
+    if not stdout:
+        return
 
     try:
         doc = json.loads(stdout)
@@ -1633,28 +1673,27 @@ def test_json_mode_emits_exactly_one_json_document(
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# A crash is a terminal path too (#3094)
+# A crash is a terminal path too (#3094 → #3558: no envelope)
 # ═══════════════════════════════════════════════════════════════════════════
-# An uncaught exception ends at rc 2 (#3090), and rc 2 owes `--json` its
-# envelope (#3059). Each tool arms that envelope with
-# `_lib_exitcodes.arm_crash_envelope()` once it knows `--json` was given; the
-# crash is injected right there — the wrapper makes the arm call raise after
-# arming — so a tool that never arms has no envelope and fails here, by name.
-# One recipe per tool (its first non-rejecting one) is enough: the crash path
-# does not depend on the mode.
+# An uncaught exception ends at rc 2 (#3090) with stdout EMPTY (#3558: the
+# crash envelope is gone — a consumer reads the exit code first). Each tool
+# is driven once more with an exception injected right after its arguments
+# are parsed — `ArgumentParser.parse_args` returns, then raises — so the crash
+# is in --json mode, past the tool's own argument checks. One recipe per tool
+# (its first non-rejecting one) is enough: the crash path does not depend on
+# the mode.
 _INJECTED = "injected crash (#3094)"
 _CRASH_WRAPPER = f"""
-import os, runpy, sys
+import argparse, os, runpy, sys
 tools_dir, script = sys.argv[1], sys.argv[2]
 sys.argv = sys.argv[2:]
 sys.path.insert(0, os.path.dirname(script))
 sys.path.insert(0, tools_dir)
-import _lib_exitcodes
-_arm = _lib_exitcodes.arm_crash_envelope
-def _arm_then_crash(*args, **kwargs):
-    _arm(*args, **kwargs)
+_parse = argparse.ArgumentParser.parse_args
+def _parse_then_crash(self, *args, **kwargs):
+    _parse(self, *args, **kwargs)
     raise RuntimeError({_INJECTED!r})
-_lib_exitcodes.arm_crash_envelope = _arm_then_crash
+argparse.ArgumentParser.parse_args = _parse_then_crash
 runpy.run_path(script, run_name="__main__")
 """
 CRASH_RECIPES = list({r.tool: r for r in reversed(RECIPES)
@@ -1662,14 +1701,14 @@ CRASH_RECIPES = list({r.tool: r for r in reversed(RECIPES)
 
 # These tools catch `Exception` around their work themselves (their own word
 # for "no result": a stderr line and rc 2). The injected crash above fires
-# before that handler, so green there is not coverage for it; until #3115 the
-# handler left stdout empty. The crash is injected INSIDE the handler's reach
-# here — a library function the work calls is replaced by one that raises —
-# and the handler must still end at rc 2 with one named envelope.
-# (module, attribute to break, reason the handler names)
+# before that handler, so green there is not coverage for it. The crash is
+# injected INSIDE the handler's reach here — a library function the work
+# calls is replaced by one that raises — and the handler must still end at
+# rc 2, name the failure on stderr, and write nothing to stdout.
+# (module, attribute to break)
 OWN_BROAD_HANDLER = {
-    "config_diff": ("_render_diff", "compare", "compare_failed"),
-    "operator_generate": ("_lib_confd", "tree_tenants", "generate_failed"),
+    "config_diff": ("_render_diff", "compare"),
+    "operator_generate": ("_lib_confd", "tree_tenants"),
 }
 _HANDLER_WRAPPER = f"""
 import importlib, os, runpy, sys
@@ -1684,31 +1723,22 @@ setattr(importlib.import_module(module), attr, _broken)
 runpy.run_path(script, run_name="__main__")
 """
 
-# Known gap: these tools' --json document is an ARRAY, but the crash envelope
-# is an object. Whether to normalise envelope shapes is an owner decision in
-# #3115; until then a consumer tells the crash apart by the top-level type.
-CRASH_ENVELOPE_TYPE_DIFFERS = {
-    "validate_config": "#3115", "analyze_rule_pack_gaps": "#3115",
-    "blind_spot_discovery": "#3115", "explain_route": "#3115",
-}
-
 
 def test_every_json_tool_has_a_crash_recipe():
     """Anti-vacuity: the crash gate below reaches every --json tool."""
     assert sorted(r.tool for r in CRASH_RECIPES) == JSON_TOOLS
-    for gaps in (OWN_BROAD_HANDLER, CRASH_ENVELOPE_TYPE_DIFFERS):
-        assert set(gaps) <= set(JSON_TOOLS), (
-            "a known-gap list names a tool that is no longer a --json tool")
+    assert set(OWN_BROAD_HANDLER) <= set(JSON_TOOLS), (
+        "OWN_BROAD_HANDLER names a tool that is no longer a --json tool")
 
 
 @pytest.mark.parametrize("tool", sorted(OWN_BROAD_HANDLER))
-def test_a_crash_caught_by_the_tools_own_handler_still_emits_one_envelope(
+def test_a_crash_caught_by_the_tools_own_handler_writes_nothing_to_stdout(
     tool: str, tmp_path: Path, stub_url: str, sandbox_repo: Path,
     fake_kubectl_dir: Path,
 ):
-    """#3115: `config_diff` / `operator_generate` turn any exception from
-    their work into rc 2 themselves — that path owes one envelope too."""
-    module, attr, reason = OWN_BROAD_HANDLER[tool]
+    """#3115 → #3558: `config_diff` / `operator_generate` turn any exception
+    from their work into rc 2 themselves — named on stderr, stdout empty."""
+    module, attr = OWN_BROAD_HANDLER[tool]
     recipe = next(r for r in CRASH_RECIPES if r.tool == tool)
     script = REPO_ROOT / JSON_TOOL_PATHS[tool]
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
@@ -1723,21 +1753,17 @@ def test_a_crash_caught_by_the_tools_own_handler_still_emits_one_envelope(
              f"  stderr[-300:]: {proc.stderr[-300:]!r}")
     assert _INJECTED in proc.stderr, f"the injected failure never reached the handler: {where}"
     assert proc.returncode == EXIT_CALLER_ERROR, where
-    try:
-        doc = json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        raise AssertionError(f"stdout is not one JSON document ({e}): {where}") from None
-    assert _caller_error_doc(reason)(doc) is None, where
-    assert _INJECTED in doc.get("error", ""), where
+    assert proc.stdout == "", where
 
 
 @pytest.mark.parametrize("recipe", CRASH_RECIPES, ids=[r.tool for r in CRASH_RECIPES])
 @pytest.mark.real_crash_exit_code
-def test_crash_in_json_mode_emits_one_envelope(
+def test_a_crash_in_json_mode_leaves_stdout_empty(
     recipe: Recipe, tmp_path: Path, stub_url: str, sandbox_repo: Path,
     fake_kubectl_dir: Path,
 ):
-    """`--json` + an unexpected crash ⇒ rc 2 and exactly one envelope on stdout."""
+    """`--json` + an unexpected crash ⇒ rc 2, the crash line on stderr, and
+    nothing on stdout (#3558: no envelope)."""
     if recipe.needs_kubectl and os.name == "nt":
         pytest.skip(f"{recipe.id}: fake-kubectl shim cannot intercept on Windows")
     root = sandbox_repo if recipe.sandbox else REPO_ROOT
@@ -1757,42 +1783,62 @@ def test_crash_in_json_mode_emits_one_envelope(
     where = (f"{recipe.tool}.py ({recipe.mode}) rc={proc.returncode}\n"
              f"  stdout[:300]: {proc.stdout[:300]!r}\n"
              f"  stderr[-300:]: {proc.stderr[-300:]!r}")
-    assert _INJECTED in proc.stderr, (
-        f"the injected crash never fired — the tool did not call "
-        f"_lib_exitcodes.arm_crash_envelope() in --json mode: {where}")
+    assert f"ERROR: unexpected internal error (RuntimeError): {_INJECTED}" in proc.stderr, (
+        f"the injected crash never fired (the tool parses no arguments through "
+        f"ArgumentParser.parse_args?): {where}")
     assert proc.returncode == EXIT_CALLER_ERROR, f"a crash must exit 2: {where}"
-    try:
-        doc = json.loads(proc.stdout)
-    except json.JSONDecodeError as e:
-        raise AssertionError(f"stdout is not one JSON document ({e}): {where}") from None
-    assert isinstance(doc, dict) and (doc.get("status"), doc.get("reason")) == (
-        "caller_error", "internal_error"), f"not the crash envelope: {where}"
-    assert _INJECTED in doc.get("error", ""), f"envelope does not name the crash: {where}"
+    assert proc.stdout == "", f"a crash must write nothing to stdout: {where}"
 
-    # dev-rules §13: an early exit keeps the tool's own schema keys. Where a
-    # rejecting recipe shows the tool's own caller_error document, the crash
-    # envelope must carry every one of its keys.
-    rejecting = next((r for r in RECIPES
-                      if r.tool == recipe.tool and r.expect_caller_error), None)
-    if rejecting is not None:
-        own_tmp = tmp_path / "own"
-        own_tmp.mkdir()
-        own = json.loads(_run(rejecting, own_tmp, stub_url, sandbox_repo,
-                              fake_kubectl_dir).stdout)
-        # A listed tool's DOCUMENT is an array; its own refusal may still be
-        # the shared caller_error envelope (explain_route's `CallerError`s,
-        # #3431) — that one is held to the object rules below, as any tool's.
-        shared_envelope = isinstance(own, dict) and own.get("status") == "caller_error"
-        if recipe.tool in CRASH_ENVELOPE_TYPE_DIFFERS and not shared_envelope:
-            assert isinstance(own, list), (
-                f"{recipe.tool} is listed as array-shaped but its document is "
-                f"{type(own).__name__}; drop it from CRASH_ENVELOPE_TYPE_DIFFERS")
-        else:
-            assert isinstance(own, dict), (
-                f"the tool's own caller_error document is "
-                f"{type(own).__name__}, the crash envelope an object: {where}")
-            # `refused_paths` is the shared conf.d refusal's own field (#3206):
-            # the paths that refusal names, with no meaning on a crash.
-            missing = sorted(set(own) - set(doc) - {"refused_paths"})
-            assert not missing, (f"crash envelope lacks keys of the tool's own "
-                                 f"caller_error document {missing}: {where}")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# #3558 P2: who may deliver best effort
+# ═══════════════════════════════════════════════════════════════════════════
+#: The tools allowed `Report(..., delivery=<anything but "all">)` and
+#: `note_stdout_failure` — a stdout failure that keeps the tool's status.
+#: patch-config only: its exit code says what the ConfigMap holds after a
+#: write (dev-rules §13). Adding a tool here is an owner decision.
+BEST_EFFORT_ALLOWED = frozenset({"scripts/tools/ops/patch_config.py"})
+
+
+def _best_effort_uses(tree: ast.AST) -> list[str]:
+    """Calls asking for the best-effort delivery: a `delivery=` keyword
+    whose value is not the literal "all" (a name or an expression counts —
+    it cannot be read here), and any call of `note_stdout_failure`."""
+    found = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        name = f.attr if isinstance(f, ast.Attribute) else getattr(f, "id", None)
+        if name == "note_stdout_failure":
+            found.append(f"{node.lineno}: note_stdout_failure")
+        for kw in node.keywords:
+            if kw.arg == "delivery" and not (isinstance(kw.value, ast.Constant)
+                                             and kw.value.value == "all"):
+                found.append(f"{node.lineno}: delivery={ast.unparse(kw.value)}")
+    return found
+
+
+def test_only_the_listed_tools_deliver_best_effort():
+    seen = {}
+    for f in sorted(TOOLS_DIR.rglob("*.py")):
+        if f.name == "_lib_exitcodes.py":
+            continue
+        uses = _best_effort_uses(ast.parse(f.read_text(encoding="utf-8"), filename=str(f)))
+        if uses:
+            seen[str(f.relative_to(REPO_ROOT))] = uses
+    # anti-vacuity: the allowed tool really uses it (both halves)
+    pc = seen.get("scripts/tools/ops/patch_config.py", [])
+    assert any("delivery=" in u for u in pc) and any("note_stdout_failure" in u for u in pc), seen
+    extra = {p: u for p, u in seen.items() if p not in BEST_EFFORT_ALLOWED}
+    assert not extra, f"best-effort delivery outside {sorted(BEST_EFFORT_ALLOWED)}: {extra}"
+
+
+@pytest.mark.parametrize("src, n", [
+    ("Report(d, 3, delivery='best_effort')\n", 1),
+    ("Report(d, 3, delivery=how)\n", 1),
+    ("lib.note_stdout_failure(exc)\n", 1),
+    ("Report(d, 3, delivery='all')\nReport(d)\n", 0),
+])
+def test_best_effort_predicate_on_known_shapes(src, n):
+    assert len(_best_effort_uses(ast.parse(src))) == n

@@ -23,6 +23,17 @@ NOT_FOUND = ("Error from server (NotFound): the server could not find the "
              "requested resource")
 
 
+def run_main():
+    """`pc.main()` ended the way `_lib_exitcodes.run` ends it (#3558): its
+    answer — a `Report` is written to `sys.stdout` here — and a non-zero
+    status raised as `SystemExit`. Before #3558 main printed its document
+    and called `sys.exit` itself; the tests keep reading it that way."""
+    import _lib_exitcodes
+    status = _lib_exitcodes.emit_result(pc.main())
+    if status not in (None, 0):
+        raise SystemExit(status)
+
+
 def fake_config_hash(data, mode="directory"):
     """What an exporter serving `data` ({key: text}) reports as config_hash."""
     if mode == "single-file":

@@ -28,8 +28,7 @@ from typing import Any, Optional
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope,
-)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 # ADR-036 step 4 (#2906): the conf.d is read through `da-guard parse-tree`.
 import _lib_parse_cache  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3276)
@@ -90,7 +89,7 @@ def check_local(dir_path: str) -> CheckResult:
     base = Path(dir_path)
 
     # No directory to check is the caller's input, not a verdict (#3211):
-    # the caller-error exit (rc 2, its --json envelope) via `run()`, named
+    # the caller-error exit (rc 2, nothing on stdout) via `run()`, named
     # by the shared judgement of a caller-given path (#3241 → #3276).
     problem = classify_path(dir_path, "dir", lang=_LANG, flag="--dir")
     if problem is not None:
@@ -187,13 +186,6 @@ def main() -> "Report | None":
     )
 
     args = parser.parse_args()
-    # #3094: a crash in --json mode still prints one envelope (no subcommand
-    # means no `json` attribute)
-    if getattr(args, "json", False):
-        # dev-rules §13: an early exit keeps the report's keys, zeroed
-        arm_crash_envelope(build=lambda: GitOpsReport(
-            overall_status="", checks=[],
-            timestamp=datetime.now(timezone.utc).isoformat()).to_dict())
 
     if not args.action:
         parser.print_help()

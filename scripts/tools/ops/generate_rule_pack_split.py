@@ -81,8 +81,7 @@ except ImportError:
         return _nullcontext()
 
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope, die_caller_error,
-)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, die_caller_error)
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
 
 
@@ -801,20 +800,6 @@ def main():
     )
 
     args = parser.parse_args()
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope, with the
-        # keys of process_rule_packs' report as it starts (all zero/empty)
-        arm_crash_envelope(build=lambda: {
-            "errors": [],
-            "warnings": [],
-            "processed_files": [],
-            "validation": {
-                "total_packs": 0,
-                "edge_rules": 0,
-                "central_rules": 0,
-                "metric_mismatches": [],
-            },
-        })
 
     # #3415: judged before anything is written — a missing directory was
     # "No rule pack files found" (read as empty) after the output tree had

@@ -81,7 +81,7 @@ from _lib_tenant_values import (  # noqa: E402
 )
 from _lib_io import OutputWriteError, safe_label  # noqa: E402  (#1538; #1641; #3276)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
-from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, CallerError, Report, arm_crash_envelope  # noqa: E402
+from _lib_exitcodes import EXIT_CALLER_ERROR, EXIT_OK, CallerError, Report  # noqa: E402
 import _observed_map_lib as observed_map_lib  # noqa: E402
 
 _LANG = detect_cli_lang()
@@ -1572,11 +1572,6 @@ def main() -> "Report | None":
         ),
     )
     args = parser.parse_args()
-    # #3094: a crash in --json mode still prints one envelope, in the report's
-    # shape with no tenant. Not when stdout is YAML: below, --export-patch
-    # beats --json everywhere except --generate-observed-map, which ignores it.
-    if args.json_output and (args.generate_observed_map or not args.export_patch):
-        arm_crash_envelope(build=lambda: json_document([]))
 
     # #719: regenerate the observed-map and exit (does not need --config-dir).
     if args.generate_observed_map:

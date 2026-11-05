@@ -457,6 +457,23 @@ class TestRunToolExitPassthrough:
                     OSError("a\nb\tc"), RuntimeError("x" * 2000), Unprintable()):
             assert entrypoint._crash_message(exc) == _lib_exitcodes.crash_message(exc)
 
+    def test_the_fd_filling_is_the_ssots_byte_for_byte(self):
+        """#3558：entrypoint 不能 import _lib_*，`sanitize_std_fds`（fd 0–2
+        關閉者以唯讀 /dev/null 補齊）在這裡有一份鏡像；兩份原始碼必須逐字相同——
+        不是「行為相近」：任一份改了另一份沒跟，這裡就紅。"""
+        import inspect
+        mine = inspect.getsource(entrypoint.sanitize_std_fds)
+        assert mine == inspect.getsource(_lib_exitcodes.sanitize_std_fds)
+        assert "os.O_RDONLY" in mine  # anti-vacuity: the function, not an empty stub
+
+    def test_main_fills_the_fds_before_anything_else(self):
+        """`main()` 的第一個呼叫就是補 fd：在它之前沒有任何輸出或開檔。"""
+        import ast
+        import inspect
+        body = ast.parse(inspect.getsource(entrypoint.main)).body[0].body
+        first = body[0].value
+        assert isinstance(first, ast.Call) and first.func.id == "sanitize_std_fds"
+
     @pytest.mark.parametrize("raw", [
         None, "70", "3", "255", "070", "2", "1", "0", "256", "-5", "+70", " 70",
         "", "abc", "７０"])

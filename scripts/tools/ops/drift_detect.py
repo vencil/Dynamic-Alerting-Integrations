@@ -36,9 +36,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
 from _lib_python import detect_cli_lang, i18n_text  # noqa: E402
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope,
-)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_confd import warn_nested  # noqa: E402
 import _lib_parse_cache  # noqa: E402  (#3206: da-guard's listing)
 from _lib_paths import classify_path, raise_path_problems, require_dir  # noqa: E402  (#3276)
@@ -554,9 +552,6 @@ def main():
     """CLI entry point for drift detection."""
     parser = build_parser()
     args = parser.parse_args()
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
 
     dirs = [d.strip() for d in args.dirs.split(",") if d.strip()]
     ignore_prefixes = tuple(

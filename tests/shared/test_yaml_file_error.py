@@ -502,11 +502,16 @@ def test_control_clean_bytes_keep_the_normal_rc(fx, label, script, bad, cwd, nam
      "conf_d_not_servable"),
 ], ids=["backtest --config-dir", "policy_engine tenant", "policy_engine _defaults"])
 def test_json_envelope_tools_still_emit_one_document(fx, label, script, argv, cwd, reason):
-    """These two tools promise --json one document on EVERY terminal path
-    (their existing ``caller_error`` envelope); measured before: 0 bytes."""
+    """backtest answers this refusal with its own not-run report (one
+    document, its ``caller_error`` status). policy_engine's conf.d refusal
+    is the shared one, which since #3558 carries no document: stdout empty."""
     import json
     p = _run(script, argv(fx), fx[cwd] if cwd else None)
     assert p.returncode == EXIT_CALLER_ERROR, p.stderr[-500:]
+    assert "Traceback" not in p.stderr
+    if label.startswith("policy_engine"):
+        assert p.stdout == "", p.stdout
+        return
     doc = json.loads(p.stdout)
     assert doc["status"] == "caller_error"
     assert doc["reason"] == reason
@@ -522,17 +527,15 @@ def test_json_envelope_tools_still_emit_one_document(fx, label, script, argv, cw
     ("policy_opa_bridge --json", OPS / "policy_opa_bridge.py",
      lambda f: ["--config-dir", str(f["confd_bad"]), "--json"], "conf_d_not_servable"),
 ], ids=["analyze_gaps", "onboard", "policy_opa_bridge"])
-def test_decorated_tools_emit_one_envelope_under_json(fx, label, script, argv, reason):
-    """The decorators exit through ``_lib_exitcodes.die_caller_error`` (#3115):
-    a tool that armed its ``--json`` envelope gets exactly one, naming the
-    reason — stdout used to be empty here — and still no traceback."""
-    import json
+def test_decorated_tools_end_at_rc_2_with_one_line_under_json(fx, label, script, argv, reason):
+    """The decorators exit through ``_lib_exitcodes.die_caller_error``: rc 2,
+    the named line on stderr, no traceback — and under ``--json`` nothing on
+    stdout (#3558: the #3115 envelope is gone)."""
     p = _run(script, argv(fx))
     assert p.returncode == EXIT_CALLER_ERROR, p.stderr[-500:]
-    doc = json.loads(p.stdout)
-    assert (doc["status"], doc["reason"]) == ("caller_error", reason), doc
-    assert doc["error"].startswith("ERROR: cannot read" if reason != "conf_d_not_servable"
-                                   else "ERROR: the conf.d at "), doc
+    assert p.stdout == "", p.stdout
+    head = "ERROR: cannot read" if reason != "conf_d_not_servable" else "ERROR: the conf.d at "
+    assert any(ln.startswith(head) for ln in p.stderr.splitlines()), p.stderr[-500:]
     assert "Traceback" not in p.stderr
 
 

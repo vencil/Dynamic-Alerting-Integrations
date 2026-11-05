@@ -118,11 +118,12 @@ def test_the_document_is_the_one_encoders_text_at_the_paths_status(tree, tool, a
 @pytest.mark.real_crash_exit_code
 @pytest.mark.usefixtures("da_guard_env")
 @pytest.mark.parametrize("tool, argv, status", CASES, ids=IDS)
-def test_a_nan_in_the_document_is_the_envelope_not_the_document(tree, tool, argv, status):
+def test_a_nan_in_the_document_is_named_and_none_of_it_printed(tree, tool, argv, status):
+    """#3558: no part of the document and no envelope on stdout — one stderr
+    line naming the value, the crash code."""
     p = _run(tree, tool, argv, _NAN_WRAPPER)
     assert p.returncode == 2, p.stderr[-2000:]
-    env = json.loads(p.stdout)  # one document: the envelope alone
-    assert (env["status"], env["reason"]) == ("caller_error", "output_not_serializable"), env
+    assert p.stdout == "", p.stdout
     assert "injected: nan is not a JSON number" in p.stderr
     assert "NaN" not in p.stdout
 
