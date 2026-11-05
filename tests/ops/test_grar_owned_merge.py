@@ -612,3 +612,23 @@ def test_a_base_that_carries_the_platform_routes_gets_each_once(tmp_path):
     for name in _PLATFORM_RECEIVERS:
         assert receivers.count(name) == 1, receivers
     assert receivers[:4] == list(_PLATFORM_RECEIVERS), receivers
+
+
+def test_a_gitops_configmap_carries_its_source_so_apply_can_take_over(
+        tmp_path, monkeypatch, capsys):
+    """--output-configmap writes the source beside the output (the pair
+    --apply keeps); --apply on that ConfigMap then renders from the source
+    and produces the same output — not a refusal of its own output."""
+    conf_d = _tree(tmp_path)
+    cm = tmp_path / "cm.yaml"
+    proc = _run("--config-dir", str(conf_d), "--output-configmap",
+                "--base-config", str(_base(tmp_path)), "-o", str(cm))
+    assert proc.returncode == 0, proc.stderr[-3000:]
+    data = yaml.safe_load(cm.read_text(encoding="utf-8"))["data"]
+    assert render.alertmanager_reading(data["alertmanager.base.yml"]) == \
+        render.alertmanager_reading(_CUSTOMER_BASE)
+    calls = _fake_cluster(monkeypatch, data["alertmanager.yml"], data["alertmanager.base.yml"])
+    assert _apply(tmp_path) == 0, capsys.readouterr().err[-3000:]
+    applied = _created(calls)
+    assert render.alertmanager_reading(applied["alertmanager.yml"]) == \
+        render.alertmanager_reading(data["alertmanager.yml"])

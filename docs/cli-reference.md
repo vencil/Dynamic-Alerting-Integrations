@@ -1913,7 +1913,7 @@ base 可以寫四個平台 receiver（`watchdog-heartbeat`、`custom-alerts-fire
 
 **可重複執行**：conf.d 改了就拿**同一份來源**再跑一次。每次都從來源重新渲染，所以移除的租戶不會殘留。conf.d 裡一個租戶都不剩時，`--output-configmap`／`--output-alertmanager` 照樣寫出（來源加上平台路由），`--apply` 則維持「No tenants found」、什麼都不套用，以免指錯 `--config-dir` 時清掉叢集上的路由。
 
-**`--apply` 的來源**：叢集上的 ConfigMap 多一個 key `alertmanager.base.yml` 存來源。`--apply` 以它為來源渲染，寫回 `alertmanager.yml`（產物）與 `alertmanager.base.yml`（來源）；Alertmanager 會忽略多出來的檔。第一次 `--apply`（ConfigMap 還沒有這個 key）採用現有的 `alertmanager.yml` 當來源；它若已經是先前產生的（含 `tenant-*` receiver），結束碼 1、不套用——先把你的來源放進 `alertmanager.base.yml` 再跑。要改設定請改 `alertmanager.base.yml`（或 git 裡的來源），不要改 `alertmanager.yml`：下一次 `--apply` 會從來源重新渲染它。
+**`--apply` 的來源**：叢集上的 ConfigMap 多一個 key `alertmanager.base.yml` 存來源；`--output-configmap` 產出的 ConfigMap 同樣帶這個 key（它渲染時用的來源），所以走 GitOps 部署的 ConfigMap 之後也能直接 `--apply`。`--apply` 以它為來源渲染，寫回 `alertmanager.yml`（產物）與 `alertmanager.base.yml`（來源）；Alertmanager 會忽略多出來的檔。第一次 `--apply`（ConfigMap 還沒有這個 key）採用現有的 `alertmanager.yml` 當來源；它若已經是先前產生的（含 `tenant-*` receiver），結束碼 1、不套用——先把你的來源放進 `alertmanager.base.yml` 再跑。要改設定請改 `alertmanager.base.yml`（或 git 裡的來源），不要改 `alertmanager.yml`：下一次 `--apply` 會從來源重新渲染它。
 
 **從 fragment 模式遷移（一次性）**：先前把 fragment 貼進自己設定的人，那份設定含 `tenant-*` receiver，會被拒收。把貼進去的部分（fragment 的 receiver、路由與 inhibit rule）刪掉，留下你自己原本的設定當來源。
 

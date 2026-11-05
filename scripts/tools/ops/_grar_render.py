@@ -794,7 +794,10 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
                        namespace: str = "monitoring", configmap_name: str = "alertmanager-config",
                        strict: bool = False) -> str:
     """``assemble_alertmanager_yml`` wrapped as a Kubernetes ConfigMap
-    (``--output-configmap``): ``data.alertmanager.yml`` is that text."""
+    (``--output-configmap``): ``data.alertmanager.yml`` is that text, and
+    ``data.alertmanager.base.yml`` the source it was rendered from — the same
+    pair ``--apply`` keeps, so a ConfigMap deployed through GitOps can be
+    ``--apply``-ed later without losing its source (#1211 gap 2)."""
     configmap = {
         "apiVersion": "v1",
         "kind": "ConfigMap",
@@ -805,6 +808,7 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
         "data": {
             AM_CONFIGMAP_KEY: assemble_alertmanager_yml(
                 base, routes, receivers, inhibit_rules, strict=strict),
+            AM_BASE_CONFIGMAP_KEY: dump_alertmanager_yml(base),
         },
     }
     return yaml.dump(configmap, default_flow_style=False,
