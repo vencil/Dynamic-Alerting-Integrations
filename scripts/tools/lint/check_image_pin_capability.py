@@ -6,7 +6,8 @@ Why this exists
 Two shipped workloads were pinned to `ghcr.io/vencil/da-tools:v2.9.0` — an
 image built from a tag whose tree does not contain the program they invoke:
 
-  1. `k8s/03-monitoring/cronjob-threshold-govern.yaml` runs the entrypoint
+  1. `k8s/03-monitoring/cronjob-threshold-govern.yaml` (removed since, with
+     the write path it ran — ADR-027 §4) ran the entrypoint
      subcommand `threshold-govern`. `tools/v2.9.0`'s `entrypoint.py` has no
      such key in `COMMAND_MAP` (the subcommand landed after the tag), so the
      weekly Job dies with `Unknown command` + a non-zero exit (the code is
@@ -221,21 +222,6 @@ CAPABILITY_SOURCES = {
 # a lie about the deploy plane, and an un-self-cleaning registry only grows) —
 # the fix is to delete the two lines.
 EXEMPTIONS: dict[tuple[str, str, str], str] = {
-    ("k8s/03-monitoring/cronjob-threshold-govern.yaml", "threshold-govern", "v2.9.0"):
-        "#656 shipped threshold_govern.py AFTER tools/v2.9.0 was cut, and "
-        "tools/v2.9.0 is still the newest da-tools tag, so no released image "
-        "can run this CronJob. Left ENABLED rather than suspend:-ed because "
-        "`suspend: true` asserts a deliberate pause, which this is not (it is "
-        "broken and awaiting a release), and because un-suspending schedules "
-        "an immediate catch-up run for the most recent missed slot. Note this "
-        "outage has NO runtime detector: ThresholdGovernanceStale keys on "
-        "kube_cronjob_status_last_successful_time, which a CronJob that has "
-        "never succeeded never emits (deliberate cold-start safety, pinned by "
-        "tests/rulepacks/platform-watchdog_test.yaml "
-        "'governance-cold-start-absent-no-fire'), and the repo has no "
-        "job-failure alert — THIS GATE IS THE ONLY SIGNAL. EXIT: bump the pin "
-        "in the next tools/v* release; then delete this entry (the gate will "
-        "demand it).",
     ("helm/federation-reconciler", "_federation_revocation_reconciler.py", "v2.9.0"):
         "#924 / ADR-028 added the reconciler to build.sh TOOL_FILES AFTER "
         "tools/v2.9.0 was cut, so the pinned image has no such file. Not "
@@ -1197,16 +1183,13 @@ def main() -> int:
                 "condition. The exemption key includes the TAG, so a pin that "
                 "moves must be re-registered rather than inheriting the old "
                 "licence.\nDo NOT 'fix' it by suspending the CronJob or scaling "
-                "the Deployment to zero. Those are not equivalent, and neither "
-                "is a fix: scaling federation-reconciler to zero PAGES on-call "
+                "the Deployment to zero. Neither is a fix: scaling "
+                "federation-reconciler to zero PAGES on-call "
                 "(FederationRevocationReconcileStale is severity:critical / "
-                "for:10m with an `or absent(...)` arm), while suspending "
-                "threshold-govern is silent — ThresholdGovernanceStale keys on "
-                "a last-success series that a never-successful CronJob never "
-                "emits, so there is no runtime detector to lose, and `suspend: "
-                "true` would additionally assert a deliberate pause that is not "
-                "what happened. In both cases the only real fix is a release "
-                "that ships the entry point."
+                "for:10m with an `or absent(...)` arm), and `suspend: true` "
+                "asserts a deliberate pause that is not what happened. In both "
+                "cases the only real fix is a release that ships the entry "
+                "point."
             )
         return EXIT_VIOLATION
 
@@ -1217,4 +1200,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)

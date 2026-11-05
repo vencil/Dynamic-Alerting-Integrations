@@ -347,6 +347,11 @@ func TestFormatUndeliverableLog_NamesDimensionsForADimensionalKey(t *testing.T) 
 	if !strings.Contains(line, "declare its labels for its base under the ROOT `dimensions:`") {
 		t.Errorf("log must name the root `dimensions:` for a dimensional key, got:\n%s", line)
 	}
+	// #3556: no declaration serves a `<key>_critical{…}` key, so the fix
+	// names its N:critical form too.
+	if !strings.Contains(line, "`<key>_critical{…}` key is served by no declaration: write it as `<key>{…}: \"N:critical\"`") {
+		t.Errorf("log must give the N:critical form for a `_critical` dimensional key, got:\n%s", line)
+	}
 }
 
 // TestUndeliverableAudit_PairsOneInstant pins that the audit judges the

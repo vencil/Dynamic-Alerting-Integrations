@@ -47,6 +47,15 @@
       "sha256": "2a30ef3e41278a09aecdb038b7bc6b12916d22698542356a53a4f019ad66f02b",
       "url": "https://raw.githubusercontent.com/fluxcd/source-controller/v1.7.0/config/crd/bases/source.toolkit.fluxcd.io_gitrepositories.yaml"
     },
+    "prometheus-operator-alertmanager": {
+      "fetched": "2026-11-05",
+      "outputs": [
+        "docs/schemas/crd/monitoring.coreos.com/Alertmanager_v1.json"
+      ],
+      "ref": "v0.86.0",
+      "sha256": "6912a38ecbc957d0d130cb871a55044812393d81e40c8ce02328a6a172075807",
+      "url": "https://raw.githubusercontent.com/prometheus-operator/prometheus-operator/v0.86.0/example/prometheus-operator-crd-full/monitoring.coreos.com_alertmanagers.yaml"
+    },
     "prometheus-operator-alertmanagerconfig": {
       "fetched": "2026-09-19",
       "outputs": [

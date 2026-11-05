@@ -6,15 +6,15 @@ as an empty result — ``(None, err)`` collapsed into ``[]`` by the caller, or a
 was reported as "no data" with a meaningful-looking exit code. The first batch
 of #3133 (#3073, #3074) moves the range query and the Alertmanager alert list
 to readers that raise ``QueryError`` (a named ``CallerError``: rc 2, one
-``ERROR:`` line, the ``--json`` envelope), with the shape check in one place.
+``ERROR:`` line, nothing on stdout — #3558), with the shape check in one place.
 
 Three parts:
 
 * the shape check (``_matrix_rows`` / ``alertmanager_alerts``) — every
   defect named, the good shapes kept;
-* ``QueryError`` reaching ``_lib_exitcodes.run`` uncaught: rc 2 and an
-  envelope naming ``<source>_query_error`` (a subprocess: the exit path is
-  only observable at the end of a real interpreter);
+* ``QueryError`` reaching ``_lib_exitcodes.run`` uncaught: rc 2 and one
+  line naming the source (a subprocess: the exit path is only observable at
+  the end of a real interpreter);
 * the static gate: no tool defines its own ``*QueryError`` again, and the
   set of tools still on the tuple helpers only shrinks (raw HTTP is
   observed at run time: ``test_ops_http_through_lib``).
@@ -551,8 +551,6 @@ import _lib_exitcodes, _lib_prometheus
 _lib_prometheus.http_get_json = lambda url, timeout=0: ({answer!r}, None)
 
 def main():
-    if {armed!r}:
-        _lib_exitcodes.arm_crash_envelope(build=lambda: {{"rows": []}})
     _lib_prometheus.{call}
     print("measured")
     return 0
@@ -561,7 +559,6 @@ _lib_exitcodes.run(main)
 """
 
 
-@pytest.mark.parametrize("armed", [True, False], ids=["json", "text"])
 @pytest.mark.parametrize("call,answer,reason,line", [
     ("prometheus_range('http://p', 'up', 0, 60, '1m')", {"status": "success"},
      "prometheus_query_error",
@@ -571,23 +568,19 @@ _lib_exitcodes.run(main)
      "ERROR: Alertmanager query failed: malformed Alertmanager response: "
      "body is not a JSON array"),
 ], ids=["prometheus", "alertmanager"])
-def test_uncaught_query_error_is_rc2_with_its_envelope(tmp_path, armed, call, answer,
-                                                       reason, line):
+def test_uncaught_query_error_is_rc2_with_one_line(tmp_path, call, answer, reason, line):
     """A tool that does not catch it still fails closed: rc 2, one stderr
-    line, no traceback; in --json mode one envelope naming the source."""
+    line naming the source, no traceback, nothing on stdout (#3558: no
+    envelope, --json or not)."""
     script = tmp_path / "tool.py"
-    script.write_text(_SCRIPT.format(tools=str(TOOLS_DIR), answer=answer, armed=armed,
-                                     call=call), encoding="utf-8")
+    script.write_text(_SCRIPT.format(tools=str(TOOLS_DIR), answer=answer, call=call),
+                      encoding="utf-8")
     env = {k: v for k, v in os.environ.items() if k != "PYTHONUNBUFFERED"}
     proc = subprocess.run([sys.executable, str(script)], capture_output=True, text=True,
                           encoding="utf-8", timeout=60, env=env)
     assert proc.returncode == 2, (proc.stdout, proc.stderr)
     assert proc.stderr.strip().splitlines() == [line], proc.stderr
-    if armed:
-        assert json.loads(proc.stdout) == {"rows": [], "status": "caller_error",
-                                           "reason": reason, "error": line}
-    else:
-        assert proc.stdout == ""
+    assert proc.stdout == ""
 
 
 # ── static gate ──────────────────────────────────────────────────────
@@ -620,7 +613,6 @@ _ALLOWED = frozenset({
     ("scripts/tools/ops/shadow_verify.py", "instant_or_error"),
     # not Prometheus / Alertmanager reads
     ("scripts/tools/ops/backtest_threshold.py", "http_get_json"),  # reachability probe
-    ("scripts/tools/ops/threshold_govern.py", "http_get_json"),  # tenant-api
 })
 
 

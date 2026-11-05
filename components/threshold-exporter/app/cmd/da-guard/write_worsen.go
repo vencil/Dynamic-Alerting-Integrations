@@ -44,6 +44,7 @@ import (
 
 	"github.com/vencil/threshold-exporter/internal/guard"
 	"github.com/vencil/threshold-exporter/pkg/config"
+	"github.com/vencil/threshold-exporter/pkg/keyverdict"
 )
 
 // The closed set of writeWorsened.Kind values.
@@ -144,46 +145,48 @@ func worsening(disk, after *config.TreeScan, afterDoc *parseTreeDoc, overlays []
 	return append(out, unread...), nil
 }
 
-// newlyUnread is the key verdict's half of the comparison (#3489): every
-// tenant key the after-tree reads as unread at ERROR (key_verdict.go) in a
-// file the batch writes (an overlay with bytes: an edit, a create, a
-// replace, a move's target, a copy) that the before-tree did not read so,
-// by (tenant, key) — so a batch that writes a misspelt key into a tenant
-// file is refused, one that fixes such a key or touches another key beside
-// it is not.
+// newlyUnread is the key verdict's half of the comparison (#3489, #3016):
+// every Block of the after-tree (keyverdict.Blocks: a key no reader reads at
+// ERROR, wherever it is written — a tenant file, a profile, a subtree
+// `_defaults.yaml`, a root platform file's `tenants:`) in a file the batch writes (an overlay with
+// bytes: an edit, a create, a replace, a move's target, a copy) that the
+// before-tree did not have (keyverdict.NewBlocks). So a batch that writes a
+// misspelt key is refused, one that fixes such a key or touches another key
+// beside it is not.
 //
-// ⛔ Scoped to the tenants whose own file the batch writes, as tenant-api's
-// write gate is (components/tenant-api/internal/gitops/key_verdict.go,
-// keyVerdictRefusal: an error finding in a file the write changes, about a
-// tenant that file is written for; ADR-038 decision 6). A batch that writes
-// only a platform file — a root `_defaults.yaml` dropping a default, a
-// `dimensions:` declaration removed, a rule pack deprecated — and so leaves
-// a key in some other tenant's file read by nothing is not refused for that
-// here: the two writers must not disagree on what one write may do, and
-// validate-config and the route generator's `--validate` (CI) still report
-// the key. A write that also touches that tenant's file is judged on it.
+// ⛔ Scoped to the files the batch writes (ADR-038 decision 6): a batch that
+// writes only a platform file — a root `_defaults.yaml` dropping a default,
+// a `dimensions:` declaration removed — and so leaves a key in some other
+// file read by nothing is not refused for that here; validate-config and
+// the route generator's `--validate` (CI) refuse the tree. tenant-api's
+// write gate (components/tenant-api/internal/gitops/key_verdict.go) refuses
+// the same files' errors.
 //
-// A tenant moved into a batch file keeps its baseline: an error it already
-// had (same tenant, same key) is not new, whichever file now holds it; one
-// the move or its edit adds is.
+// What is new is keyverdict's one rule (Block.identity): a block about a
+// tenant is the tenant and the key, wherever the file is — a tenant moved
+// into a batch file, or onto a renamed profile, keeps its baseline — and
+// one about no tenant (a profile no tenant binds) is the file and the key.
 //
 // The baseline is the before-tree judged as decidable even when it has no
-// root platform file (decision 7's undecidable is a report's caution, not a
-// write's): its threshold keys enter the baseline, so a batch that adds the
-// root carrier is not charged with the keys already there, and a new key it
-// writes beside them is judged.
+// root platform file: its threshold keys enter the baseline, so a batch
+// that adds the root carrier is not charged with the keys already there.
+// A threshold key the after-tree cannot judge (no root platform file,
+// decision 7) is no block here: a write into such a tree is the tool's
+// ordinary case (a scaffold before its root file, a fixture), and the
+// whole-tree gates — validate-config, the route generator's `--validate` —
+// refuse the tree.
 //
 // A tenant declared in two files is set aside on both sides
 // (keyVerdictOf's SkipDuplicated), with every tenant its files declare; the
 // rest of the tree is judged. A tenant set aside before the call has no
-// baseline, so its errors after it are not new — removing a copy repairs
+// baseline, so its blocks after it are not new — removing a copy repairs
 // the tree (treeValidation's rule). An empty before-tree is judged: no
-// tenant, no error. A tree the verdict still cannot judge (a /metrics that
+// tenant, no block. A tree the verdict still cannot judge (a /metrics that
 // cannot be gathered, a file the merge cannot decode) is no silent pass:
 // note gets one line saying the check had no tree to judge and why.
 //
-// The after-tree is judged first: when no key of a written file is unread
-// at ERROR there, nothing can be new and the before-tree is not read.
+// The after-tree is judged first: when no block is in a written file,
+// nothing can be new and the before-tree is not read.
 func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOverlay, mkdirs bool,
 	at time.Time, note func(string)) ([]writeWorsened, error) {
 	noBaseline := func(which string, why error) {
@@ -191,7 +194,8 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 			"were not checked for a reader", which, strings.ReplaceAll(fmt.Sprint(why), "\n", " ")))
 	}
 	now, err := keyVerdictOf(root, keyVerdictOpts{scan: config.ScanOptions{Overlays: overlays,
-		OverlayMakesDirs: mkdirs, SkipDuplicated: true}, rootPlatform: hasRootPlatformFile(afterDoc)}, at)
+		OverlayMakesDirs: mkdirs, SkipDuplicated: true}, rootPlatform: hasRootPlatformFile(afterDoc),
+		profiles: rootProfilesOf(afterDoc)}, at)
 	if err != nil {
 		return nil, err
 	}
@@ -205,16 +209,16 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 			written[o.Rel] = true
 		}
 	}
-	var candidates []keyError
-	for _, e := range now.errors {
-		if written[e.File] {
-			candidates = append(candidates, e)
-		}
-	}
-	if len(candidates) == 0 {
+	isWritten := func(file string) bool { return written[file] }
+	if len(judgedBlocks(keyverdict.NewBlocks(keyverdict.Tree{}, now.tree, isWritten))) == 0 {
 		return nil, nil
 	}
-	was, err := keyVerdictOf(root, keyVerdictOpts{scan: config.ScanOptions{SkipDuplicated: true}, rootPlatform: true}, at)
+	opts, err := treeFacts(root)
+	if err != nil {
+		return nil, err
+	}
+	opts.scan, opts.rootPlatform = config.ScanOptions{SkipDuplicated: true}, true
+	was, err := keyVerdictOf(root, opts, at)
 	if err != nil {
 		return nil, err
 	}
@@ -222,23 +226,37 @@ func newlyUnread(root string, afterDoc *parseTreeDoc, overlays []config.FileOver
 		noBaseline("before-call", was.why)
 		return nil, nil
 	}
-	before := make(map[[2]string]bool, len(was.errors))
-	for _, e := range was.errors {
-		before[[2]string{e.Tenant, e.Key}] = true
-	}
 	var out []writeWorsened
-	for _, e := range candidates { // sorted by tenant, key
-		if before[[2]string{e.Tenant, e.Key}] || was.setAside[e.Tenant] {
+	for _, b := range judgedBlocks(keyverdict.NewBlocks(was.tree, now.tree, isWritten)) {
+		if b.Tenant != "" && was.setAside[b.Tenant] {
 			continue
 		}
 		why := ""
-		if e.Reason != "" {
-			why = " (" + e.Reason + ")"
+		if b.Reason != "" {
+			why = " (" + b.Reason + ")"
 		}
-		out = append(out, writeWorsened{Kind: worsenUnread, Path: e.File, Tenant: e.Tenant, Finding: e.Reason,
-			Message: fmt.Sprintf("tenant %s: key %q would be unread%s — no reader reads it", e.Tenant, e.Key, why)})
+		who := "tenant " + b.Tenant
+		if b.Tenant == "" {
+			who = "no tenant"
+		}
+		what := "would be unread" + why + " — no reader reads it"
+		out = append(out, writeWorsened{Kind: worsenUnread, Path: b.File, Tenant: b.Tenant, Finding: b.Reason,
+			Message: fmt.Sprintf("%s: key %q %s", who, b.Key, what)})
 	}
 	return out, nil
+}
+
+// judgedBlocks is blocks without the keys the verdict could not judge (see
+// newlyUnread: a writer refuses what it judged, not a tree with no root
+// platform file).
+func judgedBlocks(blocks []keyverdict.Block) []keyverdict.Block {
+	out := blocks[:0:0]
+	for _, b := range blocks {
+		if b.Kind != keyverdict.Undecidable {
+			out = append(out, b)
+		}
+	}
+	return out
 }
 
 // treeValidation is what `da-guard --config-dir <root>` with no other flag

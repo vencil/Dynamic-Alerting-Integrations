@@ -38,8 +38,7 @@ from _lib_python import probe_health, add_prometheus_arg  # noqa: E402
 from _lib_prometheus import (  # noqa: E402
     QueryError, alertmanager_alerts, alertmanager_silences, alertmanager_status,
     collapse_replicas, instant_or_error, prometheus_rules, vector_count, vector_sample)
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 # #1132 structural check is the SINGLE implementation in _grar_validate.py (the
 # generator's fail-closed invariant); reuse it here so the BYO runtime check and
 # the generation-time guard can never disagree on "is this equal-label gated".
@@ -884,9 +883,6 @@ def main():
     parser.add_argument("--json", action="store_true",
                         help="Output as JSON (for CI integration)")
     args = parser.parse_args()
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope(tool="byo-check")
 
     all_results = []
     has_failure = False

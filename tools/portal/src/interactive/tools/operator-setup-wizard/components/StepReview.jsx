@@ -2,8 +2,10 @@
 title: "Operator Setup Wizard — Step 5: Review & Generate"
 purpose: |
   Final wizard step. Renders configuration summary + 4 tabbed views
-  (operator command / migration command / AlertmanagerConfig preview /
-  manual checklist) with copy-to-clipboard buttons.
+  (operator command / migration command / Alertmanager routing commands /
+  manual checklist) with copy-to-clipboard buttons. Routing is rendered by
+  generate-routes and given to the Alertmanager as its configSecret, not
+  AlertmanagerConfig CRDs (#3572).
 
   Pre-PR-portal-4 lived inline as the largest function in
   operator-setup-wizard.jsx (~240 LOC, lines 815-1053). Extracted to drop the
@@ -12,12 +14,11 @@ purpose: |
 
   Props:
     config  the wizard's accumulated config object built across steps
-            1-4 (operatorVersion / crdVersion / namespace / ruleMode /
-            receiverType / receiverSecret / selectedTenants).
+            1-2 (operatorVersion / namespace / ruleMode).
 
   Closure deps: window.__t (host-page i18n global). The 3 generators
   (generateOperatorCommand / generateMigrationCommand /
-  generateAlertmanagerConfigPreview) are ESM-imported from
+  generateRoutingCommands) are ESM-imported from
   `../utils/generators.js`; esbuild orders them ahead of this module.
 ---
 
@@ -25,14 +26,13 @@ import { useState, useCallback } from "react";  // TRK-233 ESM import
 
 // TRK-230e: ESM imports for sibling utilities; esbuild bundles them
 // natively (TD-030z retired the old jsx-loader import transform).
-import { generateOperatorCommand, generateMigrationCommand, generateAlertmanagerConfigPreview } from '../utils/generators.js';
+import { generateOperatorCommand, generateMigrationCommand, generateRoutingCommands } from '../utils/generators.js';
 import { useCopyToClipboard } from '../../_common/hooks/useCopyToClipboard.js';
 
 const t = window.__t || ((zh, en) => en);
 
 function StepReview({ config }) {
   const [activeTab, setActiveTab] = useState('command');
-  const selectedTenants = config.selectedTenants || [];
   const { copy } = useCopyToClipboard();
 
   const copyToClipboard = useCallback((text, label) => {
@@ -42,13 +42,13 @@ function StepReview({ config }) {
 
   const generatedCommand = generateOperatorCommand(config);
   const migrationCommand = generateMigrationCommand(config);
-  const firstTenantConfig = generateAlertmanagerConfigPreview(config, 0);
+  const routingCommands = generateRoutingCommands(config);
 
   return (
     <div className="space-y-4">
       <div>
         <h3 style={{ fontSize: 'var(--da-font-size-lg)', fontWeight: 'var(--da-font-weight-bold)', marginBottom: 'var(--da-space-2)' }}>
-          {t('第五步：產出與檢視', 'Step 5: Review & Generate')}
+          {t('第三步：產出與檢視', 'Step 3: Review & Generate')}
         </h3>
         <p style={{ fontSize: 'var(--da-font-size-sm)', color: 'var(--da-color-muted)', marginBottom: 'var(--da-space-4)' }}>
           {t('檢查生成的命令和 CRD 配置。複製並在你的環境中執行。', 'Review generated commands and CRD configs. Copy and run in your environment.')}
@@ -73,17 +73,15 @@ function StepReview({ config }) {
           color: 'var(--da-color-fg)',
         }}>
           <div><strong>{t('Operator 版本: ', 'Operator Version: ')}</strong>{config.operatorVersion || 'N/A'}</div>
-          <div><strong>{t('CRD API: ', 'CRD API: ')}</strong>monitoring.coreos.com/{config.crdVersion || 'v1'}</div>
+          <div><strong>{t('CRD API: ', 'CRD API: ')}</strong>monitoring.coreos.com/v1</div>
           <div><strong>{t('Namespace: ', 'Namespace: ')}</strong>{config.namespace || 'monitoring'}</div>
           <div><strong>{t('部署模式: ', 'Rule Mode: ')}</strong>{config.ruleMode || 'N/A'}</div>
-          <div><strong>{t('Receiver: ', 'Receiver: ')}</strong>{config.receiverType || 'N/A'}</div>
-          <div><strong>{t('Tenant 數: ', 'Tenant Count: ')}</strong>{selectedTenants.length}</div>
         </div>
       </div>
 
       {/* Tabs */}
       <div style={{ display: 'flex', gap: 'var(--da-space-1)', borderBottom: '1px solid var(--da-color-surface-border)' }}>
-        {['command', 'migration', 'alertmanager', 'checklist'].map(tab => (
+        {['command', 'migration', 'routing', 'checklist'].map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
@@ -100,7 +98,7 @@ function StepReview({ config }) {
           >
             {tab === 'command' && t('Operator 命令', 'Operator Command')}
             {tab === 'migration' && t('遷移命令', 'Migration Command')}
-            {tab === 'alertmanager' && t('AlertmanagerConfig', 'AlertmanagerConfig')}
+            {tab === 'routing' && t('Alertmanager 路由', 'Alertmanager Routing')}
             {tab === 'checklist' && t('檢查清單', 'Checklist')}
           </button>
         ))}
@@ -187,10 +185,13 @@ function StepReview({ config }) {
           </div>
         )}
 
-        {activeTab === 'alertmanager' && (
+        {activeTab === 'routing' && (
           <div className="space-y-3">
             <p style={{ fontSize: 'var(--da-font-size-xs)', color: 'var(--da-color-muted)', marginBottom: 'var(--da-space-2)' }}>
-              {t('第 1 個 Tenant 的 AlertmanagerConfig 預覽:', 'AlertmanagerConfig preview for tenant 1:')}
+              {t(
+                'Alertmanager 路由不以 AlertmanagerConfig CRD 產生：Prometheus Operator 會把它們的路由排在最前面、強制 continue: true 並加上 namespace matcher，平台路由（Watchdog、custom 隔離、synthetic probe、sentinel）因此無法排在第一。用 generate-routes 產出 alertmanager.yaml（各 tenant 的 receiver 寫在 conf.d 的 _routing），交給 Alertmanager 當 configSecret：',
+                'Alertmanager routing is not generated as AlertmanagerConfig CRDs: the Prometheus Operator puts their routes first with continue: true and a namespace matcher, so the platform routes (Watchdog, custom isolation, synthetic probe, sentinel) could not come first. Render alertmanager.yaml with generate-routes (each tenant\'s receiver lives in its conf.d _routing) and give it to the Alertmanager as its configSecret:',
+              )}
             </p>
             <pre style={{
               backgroundColor: 'var(--da-color-bg)',
@@ -204,10 +205,10 @@ function StepReview({ config }) {
               wordBreak: 'break-word',
               maxHeight: '300px',
             }}>
-              {firstTenantConfig || '(No data)'}
+              {routingCommands}
             </pre>
             <button
-              onClick={() => copyToClipboard(firstTenantConfig, t('AlertmanagerConfig', 'AlertmanagerConfig'))}
+              onClick={() => copyToClipboard(routingCommands, t('路由命令', 'routing commands'))}
               style={{
                 padding: 'var(--da-space-2) var(--da-space-3)',
                 backgroundColor: 'var(--da-color-accent)',
@@ -219,7 +220,7 @@ function StepReview({ config }) {
                 fontSize: 'var(--da-font-size-sm)',
               }}
             >
-              📋 {t('複製 YAML', 'Copy YAML')}
+              📋 {t('複製路由命令', 'Copy Routing Commands')}
             </button>
           </div>
         )}
@@ -240,6 +241,8 @@ function StepReview({ config }) {
                   <li style={{ marginBottom: 'var(--da-space-2)' }}>☐ {t('完全遷移後，移除 ConfigMap 中的規則', 'Remove rules from ConfigMap after complete migration')}</li>
                 </>
               )}
+              <li style={{ marginBottom: 'var(--da-space-2)' }}>☐ {t('用 generate-routes 產出 alertmanager.yaml，建立 Secret 並設為 Alertmanager 的 configSecret（見「Alertmanager 路由」分頁）', 'Render alertmanager.yaml with generate-routes, create the Secret and set it as the Alertmanager\'s configSecret (see the Alertmanager Routing tab)')}</li>
+              <li style={{ marginBottom: 'var(--da-space-2)' }}>☐ {t('刪除舊版 operator-generate 留下的 AlertmanagerConfig（da-tools operator-check 會警告）', 'Delete AlertmanagerConfigs an older operator-generate left behind (da-tools operator-check warns about them)')}</li>
               <li style={{ marginBottom: 'var(--da-space-2)' }}>☐ {t('監控告警是否正確路由到 receiver', 'Monitor if alerts route correctly to receiver')}</li>
               <li>☐ {t('根據文件更新 CHANGELOG 和部署說明', 'Update CHANGELOG and deployment docs')}</li>
             </ul>

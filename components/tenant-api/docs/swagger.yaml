@@ -1604,6 +1604,22 @@ definitions:
         - TENANT_GIT_MANAGED
         - TENANT_FILE_DIRTY
         type: string
+      judged:
+        description: |-
+          Judged: the write's own judgement — the route generator and the shared
+          key verdict, as PUT asks them — ran on this body and gave a verdict on
+          it (#3016). When false, Valid reflects only the steps before it, and
+          NotJudged says why: an earlier step refused the body (refused), PR
+          write mode (pr_mode), the body changes nothing (unchanged), another
+          preview is being judged (preview_busy, retry), no validator is wired
+          (no_validator), the caller went away (canceled), an unexpected failure
+          (error, in the log), or the generator's reason when it gave no verdict
+          on the body — what PUT answers 429 (retry) or 503 (the container cannot
+          judge) with, or the container's own failure (memory, incomplete,
+          key_verdict_memory, key_verdict_error).
+        type: boolean
+      not_judged:
+        type: string
       notices:
         items:
           type: string
@@ -2542,11 +2558,6 @@ paths:
         required: true
         schema:
           type: string
-      - description: 'Attribute the PR to a non-UI write source. Allowlisted: threshold-governance
-          (#656). Omit for tenant-manager UI.'
-        in: header
-        name: X-DA-Write-Source
-        type: string
       - description: 'Optimistic concurrency: the source_hash GET /tenants/{id} returned
           for the file this body was derived from. 409 if the file changed since.
           16 lowercase hex chars; a malformed value is a 400, never ignored. Direct
@@ -3226,6 +3237,13 @@ paths:
         listed bare, one per warning). In PR write mode PUT runs the steps from the tenant file's resolution on the latest
         base branch, which this server's copy may lag: they are not run here, only the body-only pre-flight (#1718) —
         so a reserved key's value (_silent_mode, #3227), which validation judges against the file the write replaces, is not judged here in PR mode.
+        In direct mode a body that passes those steps is then judged as PUT judges it (#3016): the route generator and the shared key verdict.
+        Their refusal is valid: false with PUT's text (its 400 key-verdict lines, its 422 findings as the caller may see them, a GENERATOR_REJECTED
+        that is a verdict on the write: too_large, invalid_request, normalized, key_verdict_undecidable, key_verdict_platform_file).
+        judged is false when that judgement gave no verdict on the body, with not_judged saying why: refused (an earlier step refused the body),
+        pr_mode, unchanged (the body changes nothing), preview_busy (another preview is being judged; retry), no_validator, canceled,
+        error, or the generator's reason — what PUT would answer 429 (retry) or 503 with, or the container's own failure (memory,
+        incomplete, key_verdict_memory, key_verdict_error). Then valid reflects only the earlier steps.
         This route needs read permission only, but the verdict is the write's: a caller who may read the tenant and not write
         it gets valid: false with the write gate's text, as its PUT is refused (#3062; before, such a caller got a verdict on
         the body alone). POST /api/v1/tenants/{id}/diff shows that caller a masked preview instead.

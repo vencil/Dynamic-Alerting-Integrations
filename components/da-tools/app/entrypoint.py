@@ -38,7 +38,7 @@ def _build_help_text(lang):
     alert-correlate   告警關聯分析 (時間窗口聚類 + 根因推斷)
 
 命令 (配置生成 — 讀取租戶 YAML):
-    generate-routes   租戶 YAML → Alertmanager route/receiver/inhibit 片段
+    generate-routes   租戶 YAML → route/receiver/inhibit 合併進 Alertmanager 設定
     patch-config      修補 threshold-config ConfigMap (含 --diff 預覽)
     analyze-gaps      Rule Pack 間隙分析 (用於自訂規則)
 
@@ -57,7 +57,7 @@ def _build_help_text(lang):
     cardinality-forecast  基數預測 (線性回歸趨勢分析)
     test-notification 多通道通知連通性測試 (驗證 receiver 可達性)
     threshold-recommend 閾值推薦引擎 (基於歷史 P50/P95/P99)
-    threshold-govern  閾值治理迴路 — 推薦→過濾→經 tenant-api 開 per-tenant proposed-PR (#656)
+    threshold-govern  閾值治理報告 — 推薦→過濾→列出該調的腐敗閾值（唯讀，不寫入；#656）
     explain-route     路由合併管線除錯器 (四層展開 + 設定檔擴展)
     byo-check         BYO Alertmanager 整合前檢 (端點 + 配置驗證)
     federation-check  Prometheus Federation 健康檢查
@@ -74,7 +74,7 @@ def _build_help_text(lang):
     generator-service 產生器容器的服務：經 Unix socket 判定寫入後的 conf.d 能否通過 generate-routes --validate --strict (ADR-036 §3)
 
 命令 (Operator-Native — CRD 產生與驗證):
-    operator-generate 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
+    operator-generate 產出 PrometheusRule / ServiceMonitor CRD YAML（Alertmanager 路由改用 generate-routes → configSecret）
     operator-check    驗證 Operator CRD 部署狀態 (5 項檢查 + 診斷報告)
     runtime-audit     Git rule-packs ↔ Prometheus runtime 唯讀對帳 (#747；MISSING/UNHEALTHY/ORPHAN)
     migrate-to-operator ConfigMap 格式遷移至 Operator 原生 CRD (含遷移清單與預檢)
@@ -128,7 +128,7 @@ Commands (Prometheus API — portable):
     alert-correlate   Alert correlation analysis (time-window clustering + root cause)
 
 Commands (Config Generation — reads tenant YAML):
-    generate-routes   Tenant YAML → Alertmanager route/receiver/inhibit fragment
+    generate-routes   Tenant YAML → route/receiver/inhibit merged into Alertmanager config
     patch-config      Patch threshold-config ConfigMap (with --diff preview)
     analyze-gaps      Rule Pack gap analysis for custom rules
 
@@ -147,7 +147,7 @@ Commands (File System — offline):
     cardinality-forecast  Cardinality forecasting (linear regression trend)
     test-notification Multi-channel notification connectivity testing
     threshold-recommend Threshold recommendation engine (historical P50/P95/P99)
-    threshold-govern  Threshold governance loop — recommend→gate→open per-tenant proposed-PR via tenant-api (#656)
+    threshold-govern  Threshold governance report — recommend→gate→list rotten thresholds (read-only; #656)
     explain-route     Routing merge pipeline debugger (four-layer expansion + profile)
     byo-check         BYO Alertmanager pre-integration check (endpoint + config)
     federation-check  Prometheus Federation health check
@@ -164,7 +164,7 @@ Commands (File System — offline):
     generator-service Generator container service: judge a conf.d plus writes with generate-routes --validate --strict over a Unix socket (ADR-036 §3)
 
 Commands (Operator-Native — CRD generation & validation):
-    operator-generate Generate PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML
+    operator-generate Generate PrometheusRule / ServiceMonitor CRD YAML (Alertmanager routing: generate-routes → configSecret)
     operator-check    Validate Operator CRD deployment status (5 checks + diagnostic report)
     runtime-audit     Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747; MISSING/UNHEALTHY/ORPHAN)
     migrate-to-operator Migrate ConfigMap format to Operator native CRD (migration checklist + pre-check)
@@ -358,9 +358,9 @@ COMMAND_MAP = {
     "cardinality-forecast": "cardinality_forecasting.py",
     "test-notification": "notification_tester.py",
     "threshold-recommend": "threshold_recommend.py",
-    # #656 — active governance layer over threshold-recommend: gate on rot
-    # magnitude + confidence, open per-tenant proposed-PRs via tenant-api
-    # (single-writer, ADR-011/023). Default dry-run; --apply to open PRs.
+    # #656 — governance gate over threshold-recommend: gate on rot magnitude +
+    # confidence and report the rotten thresholds. Read-only: the write path
+    # (--apply, PRs via tenant-api) was removed by ADR-027 §4.
     "threshold-govern": "threshold_govern.py",
     "explain-route": "explain_route.py",
     "byo-check": "byo_check.py",
@@ -488,18 +488,49 @@ _USAGE_LABELS = {
 
 def print_usage():
     """Print help message in detected language."""
-    print(_build_help_text(_LANG))
-    print()
-    examples_label, env_label, env_prom, env_lang = \
-        _USAGE_LABELS["zh"] if _LANG == "zh" else _USAGE_LABELS["en"]
-    print(examples_label)
-    for example in _USAGE_EXAMPLES:
-        print(f"  {example}")
-    print()
-    print(env_label)
-    print(env_prom)
-    print(env_lang)
-    sys.exit(0)
+    try:
+        print(_build_help_text(_LANG))
+        print()
+        examples_label, env_label, env_prom, env_lang = \
+            _USAGE_LABELS["zh"] if _LANG == "zh" else _USAGE_LABELS["en"]
+        print(examples_label)
+        for example in _USAGE_EXAMPLES:
+            print(f"  {example}")
+        print()
+        print(env_label)
+        print(env_prom)
+        print(env_lang)
+    except OSError as exc:
+        _exit_stdout_failed(exc)
+    _exit_flushed(0)
+
+
+def _exit_stdout_failed(exc):
+    """stdout failed (EPIPE, ENOSPC, `>&-`'s EBADF): one stderr line and
+    EXIT_CALLER_ERROR, never 0 — the exit _lib_exitcodes gives a tool
+    (#3124, #3558). stdout's fd goes to the null device first, so what it
+    still buffers cannot fail the interpreter's own last flush (rc 120)."""
+    try:
+        null = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(null, sys.stdout.fileno())
+        os.close(null)
+    except Exception:  # noqa: BLE001 — best effort
+        pass
+    try:
+        print(f"ERROR: cannot write to stdout: {exc.strerror or exc}",
+              file=sys.stderr, flush=True)
+    except Exception:  # noqa: BLE001 — the exit code still says it
+        pass
+    sys.exit(EXIT_CALLER_ERROR)
+
+
+def _exit_flushed(code):
+    """Exit with *code* once stdout took all of it (gnulib close_stdout)."""
+    try:
+        sys.stdout.flush()
+    except OSError as exc:
+        _exit_stdout_failed(exc)
+    sys.exit(code)
 
 
 def inject_prometheus_env(args, command=None):
@@ -627,10 +658,60 @@ def _print_version(tools_dir=None):
     version_file = os.path.join(tools_dir, "VERSION")
     if os.path.isfile(version_file):
         with open(version_file, encoding="utf-8") as f:
-            print(f"da-tools {f.read().strip()}")
+            text = f"da-tools {f.read().strip()}"
     else:
-        print("da-tools (dev)")
-    sys.exit(0)
+        text = "da-tools (dev)"
+    try:
+        print(text)
+    except OSError as exc:
+        _exit_stdout_failed(exc)
+    _exit_flushed(0)
+
+
+# Mirrors scripts/tools/_lib_exitcodes.sanitize_std_fds byte for byte (zero-
+# import, as above; #3558); tests/shared/test_entrypoint.py pins the two.
+def sanitize_std_fds():
+    """Give each closed fd 0, 1, 2 the null device, read-only (#3558).
+
+    As git's ``sanitize_stdfds`` and Rust's std: checked in order, so the
+    null device opens at the very fd it fills (``dup2`` if not). Read-only
+    for all three: reading fd 0 gets EOF, writing fd 1 or 2 fails (EBADF)
+    instead of vanishing or landing in a file a later ``open()`` was handed.
+    A ``sys.stdout`` the interpreter left None (fd 1 was closed at start) is
+    pointed at fd 1, so a write fails as any stdout failure does; a None
+    ``sys.stderr`` at a writable null device, so a tool's stderr line is
+    neither printed on stdout (``print(file=None)``) nor a failure of its own.
+    Best effort: an fd that cannot be filled is left as it was.
+
+    ⚠️ components/da-tools/app/entrypoint.py holds this same function, byte
+    for byte (it may not import _lib_*): tests/shared/test_entrypoint.py.
+    """
+    import os
+    import sys
+    filled = set()
+    for fd in (0, 1, 2):
+        try:
+            os.fstat(fd)
+            continue
+        except OSError:
+            pass
+        try:
+            null = os.open(os.devnull, os.O_RDONLY)
+            if null == fd:
+                os.set_inheritable(fd, True)
+            else:
+                os.dup2(null, fd)
+                os.close(null)
+            filled.add(fd)
+        except OSError:
+            pass
+    if sys.stdout is None and 1 in filled:
+        sys.stdout = sys.__stdout__ = open(  # noqa: SIM115
+            1, "w", encoding="utf-8", errors="backslashreplace", newline="\n",
+            closefd=False)
+    if sys.stderr is None:
+        sys.stderr = sys.__stderr__ = open(  # noqa: SIM115
+            os.devnull, "w", encoding="utf-8", errors="backslashreplace", newline="\n")
 
 
 def _configure_std_utf8():
@@ -661,6 +742,7 @@ def _configure_std_utf8():
 
 
 def main():
+    sanitize_std_fds()  # before anything writes or opens: `>&-` is then a failing write
     _configure_std_utf8()
     if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
         print_usage()

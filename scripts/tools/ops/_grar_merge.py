@@ -17,8 +17,11 @@ Functions:
 """
 from __future__ import annotations
 
+import fnmatch
 import os
 import sys
+from types import MappingProxyType
+from typing import Mapping, NamedTuple
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)  # Docker flat layout
@@ -34,6 +37,9 @@ from _lib_python import (  # noqa: E402
 from _lib_validation import INVALID_DURATION_HINT, am_duration_seconds  # noqa: E402
 from _lib_validation import (  # noqa: E402  (#2766 finding kinds)
     FIELD_NOT_STRING, FIELD_SET, receiver_field_state,
+)
+from _lib_validation import (  # noqa: E402  (#1560 Secret references)
+    is_secret_ref, receiver_secret_ref_fields,
 )
 
 
@@ -176,6 +182,35 @@ FINDING_KINDS: dict[str, str] = {
     "receiver_host_unparseable":
         "A receiver URL whose host cannot be read, so the --policy domain "
         "check cannot run; the entry is not rendered.",
+    # #1560: which Secret a receiver's Secret reference may name.
+    "secret_ref_shared_unknown":
+        "A Secret reference names a shared alias the deployment policy's "
+        "shared_secrets does not list (or no --policy is given); the entry "
+        "is not rendered.",
+    "secret_ref_shared_field_not_allowed":
+        "A Secret reference uses a shared Secret on a field its "
+        "shared_secrets entry does not list under `fields`; the entry is not "
+        "rendered.",
+    "secret_ref_shared_auth_password":
+        "auth_password references a shared Secret, which is never allowed: "
+        "the password goes to the SMTP server the receiver names; the entry "
+        "is not rendered.",
+    "secret_ref_auth_password_unconfined":
+        "auth_password references the tenant's Secret, but the --policy "
+        "allowed_domains is empty or absent, or does not admit the "
+        "smarthost; the entry is not rendered.",
+    "secret_ref_no_owner":
+        "A receiver no tenant owns (the platform-wide _routing_enforced, "
+        "without {{tenant}}) references a tenant's own Secret, whose name "
+        "derives from the tenant; the entry is not rendered.",
+    "secret_ref_shared_proxy_url":
+        "A receiver with a shared Secret reference also sets "
+        "http_config.proxy_url, a proxy the tenant chose that would see the "
+        "request to the shared destination; the entry is not rendered.",
+    "secret_ref_unsupported_field":
+        "A Secret reference is still in the Alertmanager entry after "
+        "rendering — on a field, at any depth, that has no *_file form "
+        "(http_config, email headers); the entry is not rendered.",
     "invalid_override_entry":
         "An overrides value or entry that is not the expected list / "
         "mapping; it is not rendered.",
@@ -204,19 +239,22 @@ FINDING_KINDS: dict[str, str] = {
     "timing_value_replaced":
         "A timing value Alertmanager cannot read, rendered as the platform "
         "default.",
-    # ADR-038 §5: the shared key verdict, under --validate. Reported only
-    # (`blocks: never`) until the gates block (#3016).
+    # ADR-038 §5: the shared key verdict, under --validate. A finding the
+    # verdict says blocks (an error) is `blocks: validate` (#3016).
     "key_unread":
         "A key no reader reads, by the shared key verdict (ADR-038); the line "
-        "names the verdict's own severity.",
+        "names the verdict's own severity, and an error fails --validate.",
     "key_disable_noop":
         "A `disable` that switches nothing off (ADR-038 decision 8).",
     "key_disable_partial":
         "A `disable` whose family is still served from another file (ADR-038 "
         "decision 8).",
+    "key_profile_not_judged":
+        "A threshold key of a profile no tenant binds, which the shared key "
+        "verdict does not judge (ADR-038 decision 4, #3395); a notice.",
     "key_undecidable":
         "No root platform file was read, so the threshold keys were not "
-        "judged (ADR-038 decision 7).",
+        "judged (ADR-038 decision 7); with any such key, --validate fails.",
     "key_version_label":
         "A dimensional key's `version` label the exporter refuses (ADR-024 "
         "OQ-6), as the exporter words it.",
@@ -224,14 +262,19 @@ FINDING_KINDS: dict[str, str] = {
         "A key written in a retired spelling (#1231), as the exporter words "
         "it; advisory.",
     "key_verdict_incomplete":
-        "The shared key verdict could not be given (da-guard failing); the "
-        "keys were not judged and the run's verdict is unchanged.",
+        "The shared key verdict could not be given (da-guard failing, rules "
+        "Policy-as-Code refuses); the keys were not judged and --validate "
+        "fails.",
     # #1211: a tenant's served page-mode custom alerts get no delivery child
     # under the component="custom" route and fall to the firehose receiver.
     "custom_alert_undelivered":
         "A tenant's served page-mode custom alerts fall to the custom-alerts "
         "firehose receiver; the line says whether that receiver has an "
         "integration or could not be checked.",
+    "watchdog_undelivered":
+        "The assembled config's watchdog-heartbeat receiver has no "
+        "integration, so the Watchdog heartbeat reaches no dead-man's switch; "
+        "an error under --strict only on the operator's own base (#1211).",
     "custom_alert_delivery_unchecked":
         "The tenants' served custom alerts could not be read (da-guard "
         "failing), so their delivery was not checked; the verdict is unchanged.",
@@ -626,9 +669,202 @@ def receiver_type(receiver_obj: object) -> str:
     return rtype if isinstance(rtype, str) else ""
 
 
+# ── #1560: Secret references — which Secret, and the path Alertmanager reads ─
+# Owner decision of 2026-11-04 on #1560. A reference never names its Secret:
+# `{secret: {key}}` is the owner tenant's own Secret, `da-<tenant>`, and
+# `{secret: {shared: <alias>, key}}` is the Secret the deployment policy's
+# `shared_secrets[<alias>]` names, for the fields that entry lists. A name a
+# tenant cannot write is a name it cannot point at another tenant's Secret.
+# The ConfigMap output reads it as `<field>_file: <root>/<secret>/<key>`;
+# <root> defaults to Prometheus Operator's `spec.secrets` mount layout. The
+# Secrets are created by the operator / ExternalSecrets, and mounting each one
+# at <root>/<name>/ is the deployment's contract (BYO integration guide §5:
+# docs/integration/byo-alertmanager-integration.md); the generator cannot see them.
+DEFAULT_SECRET_MOUNT_ROOT = "/etc/alertmanager/secrets"
+#: the tenant's own Secret is `da-<tenant>`; a shared Secret may not start so.
+OWN_SECRET_PREFIX = "da-"
+#: the receiver field a shared Secret is never allowed on: its value goes to
+#: the server the receiver itself names (the smarthost).
+SECRET_REF_OWN_ONLY_FIELDS = frozenset({"auth_password"})
+#: the http_config keys a receiver with a shared Secret may not set: each
+#: sends the request to a host the tenant chose instead of the destination.
+#: proxy_url is the only one — oauth2's proxy_url carries the token request
+#: (to token_url), not the request to the shared URL; proxy_from_environment
+#: is Alertmanager's own environment, not the tenant's to choose.
+SHARED_SECRET_REFUSED_HTTP_KEYS = ("proxy_url",)
+
+
+class SharedSecret(NamedTuple):
+    """One ``shared_secrets`` entry of the deployment policy."""
+
+    secret: str
+    fields: frozenset[str]
+
+
+class SecretBinding(NamedTuple):
+    """What the generator needs to bind and render Secret references: the
+    mount root and the policy's ``shared_secrets`` (empty: no shared
+    reference is accepted). The default is no policy."""
+
+    mount_root: str = DEFAULT_SECRET_MOUNT_ROOT
+    shared_secrets: Mapping[str, SharedSecret] = MappingProxyType({})
+
+
+NO_SECRET_POLICY = SecretBinding()
+
+# `owner_tenant` not passed (distinct from None, "no tenant owns it").
+_OWNER_UNSET = object()
+
+
+def own_secret_name(tenant: str) -> str:
+    """The name of tenant *tenant*'s own Secret: ``da-<tenant>``. A tenant id
+    is a DNS-1123 label (ADR-035), so this is a valid Secret name."""
+    return f"{OWN_SECRET_PREFIX}{tenant}"
+
+
+def _receiver_secret_refs(receiver_obj: object) -> list[tuple[str, dict]]:
+    """``(field, reference)`` of every Secret reference on a field of
+    *receiver_obj* that takes one."""
+    if not isinstance(receiver_obj, dict):
+        return []
+    rtype = receiver_type(receiver_obj)
+    if rtype not in RECEIVER_TYPES:
+        return []
+    return [(f, receiver_obj[f]) for f in receiver_secret_ref_fields(rtype)
+            if is_secret_ref(receiver_obj.get(f))]
+
+
+def secret_binding_findings(owner_tenant: str | None, receiver_obj: dict,
+                            binding: SecretBinding, allowed_domains: list[str] | None,
+                            *, ctx: str, tenant_id: str | None = None,
+                            field: str = "receiver") -> list[Finding]:
+    """#1560: the binding problems of the Secret references in one EFFECTIVE
+    receiver (after the routing layers are merged and ``{{tenant}}`` is
+    substituted) — every one blocks (the entry is not rendered).
+
+    *owner_tenant* is the tenant the receiver delivers for: its own Secret is
+    ``da-<owner_tenant>``. None means no tenant owns it (the platform-wide
+    ``_routing_enforced``), where only a shared reference can be bound.
+    *binding* carries the policy's ``shared_secrets``; *allowed_domains* is
+    the policy's allowlist (None or empty: none). The reference shapes have
+    already been judged (``receiver_optional_problem``).
+
+    The rules: a shared alias must be listed; its entry must list the field;
+    ``auth_password`` never takes a shared Secret, and takes the tenant's own
+    only when *allowed_domains* is non-empty and admits the smarthost (the
+    smarthost is the tenant's to write, and the password goes there); a
+    receiver with any shared reference sets no ``http_config.proxy_url``
+    (``SHARED_SECRET_REFUSED_HTTP_KEYS``).
+    """
+    out: list[Finding] = []
+
+    def refuse(text: str, fld: str, *, kind: str) -> None:
+        out.append(skipped_entry_warning(
+            f"  WARN: {ctx}: receiver {fld} {text}, skipping",
+            kind=kind, tenant=tenant_id, field=f"{field}.{fld}"))
+
+    for fld, ref in _receiver_secret_refs(receiver_obj):
+        alias = ref["secret"].get("shared")
+        if alias is None:
+            if owner_tenant is None:
+                refuse("references a tenant's own Secret (no 'shared'), but "
+                       "no tenant owns this receiver; use a shared Secret the "
+                       "deployment policy lists, or write {{tenant}} in "
+                       "_routing_enforced to render one receiver per tenant",
+                       fld, kind="secret_ref_no_owner")
+            elif fld in SECRET_REF_OWN_ONLY_FIELDS:
+                # The smarthost read exactly as the domain allowlist reads it.
+                # Imported here: _grar_validate imports this leaf module.
+                from _grar_validate import _extract_host
+                host = _extract_host(receiver_obj.get("smarthost"))
+                if not allowed_domains:
+                    refuse("references a Secret, but the deployment policy "
+                           "(--policy) has no allowed_domains to confine the "
+                           "smarthost the password is sent to",
+                           fld, kind="secret_ref_auth_password_unconfined")
+                elif host is None or not any(fnmatch.fnmatch(host, p)
+                                             for p in allowed_domains):
+                    refuse(f"references a Secret, but the smarthost host "
+                           f"{host!r} is not in the deployment policy's "
+                           "allowed_domains",
+                           fld, kind="secret_ref_auth_password_unconfined")
+            continue
+        if fld in SECRET_REF_OWN_ONLY_FIELDS:
+            refuse(f"references the shared Secret '{alias}', which "
+                   f"{fld} may never use: the password goes to the SMTP "
+                   "server this receiver names; use the tenant's own Secret "
+                   "({secret: {key: …}})",
+                   fld, kind="secret_ref_shared_auth_password")
+        elif alias not in binding.shared_secrets:
+            refuse(f"references the shared Secret '{alias}', which the "
+                   "deployment policy's shared_secrets does not list"
+                   + ("" if binding.shared_secrets else
+                      " (it lists none, or no --policy is given)"),
+                   fld, kind="secret_ref_shared_unknown")
+        elif fld not in binding.shared_secrets[alias].fields:
+            refuse(f"references the shared Secret '{alias}', whose "
+                   "shared_secrets entry does not list this field under "
+                   f"fields ({', '.join(sorted(binding.shared_secrets[alias].fields))})",
+                   fld, kind="secret_ref_shared_field_not_allowed")
+    # A shared Secret is admitted only on a field whose content IS the
+    # destination; a proxy the tenant names would see that request (and, for
+    # plain http, the shared URL itself). Empty / null counts as not set, as
+    # in Alertmanager.
+    aliases = sorted({ref["secret"]["shared"] for _f, ref in _receiver_secret_refs(receiver_obj)
+                      if ref["secret"].get("shared") is not None})
+    http_config = receiver_obj.get("http_config")
+    if aliases and isinstance(http_config, dict):
+        for key in SHARED_SECRET_REFUSED_HTTP_KEYS:
+            if http_config.get(key) not in (None, ""):
+                refuse(f"sets a proxy the tenant chose, but the receiver uses "
+                       f"the shared Secret {', '.join(map(repr, aliases))}: the "
+                       "proxy would see the request to the shared destination; "
+                       "drop it, or use the tenant's own Secret",
+                       f"http_config.{key}", kind="secret_ref_shared_proxy_url")
+    return out
+
+
+def render_secret_refs(am_entry: dict, rtype: str, owner_tenant: str | None,
+                       binding: SecretBinding) -> None:
+    """#1560: rewrite, in place, every Secret reference of Alertmanager entry
+    *am_entry* as ``<field>_file: <root>/<secret>/<key>`` and drop the field.
+    Only for references ``secret_binding_findings`` passed (a shared alias is
+    listed; an own reference has an owner)."""
+    root = binding.mount_root.rstrip("/")  # "/" → "", so "/<secret>/<key>"
+    for fld in receiver_secret_ref_fields(rtype):
+        ref = am_entry.get(fld)
+        if not is_secret_ref(ref):
+            continue
+        inner = ref["secret"]
+        alias = inner.get("shared")
+        name = (binding.shared_secrets[alias].secret if alias is not None
+                else own_secret_name(owner_tenant))
+        del am_entry[fld]
+        am_entry[f"{fld}_file"] = f"{root}/{name}/{inner['key']}"
+
+
+def secret_ref_paths(value: object, path: str) -> list[str]:
+    """The paths (``<path>.<key>``, ``<path>[<i>]``) of every value inside
+    *value*, *value* itself included, that ``is_secret_ref``."""
+    if is_secret_ref(value):
+        return [path]
+    out: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            out += secret_ref_paths(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for idx, item in enumerate(value):
+            out += secret_ref_paths(item, f"{path}[{idx}]")
+    return out
+
+
 def build_receiver_config(receiver_obj: dict, tenant: str, *,
                           tenant_id: str | None = None,
-                          field: str = "receiver") -> tuple[dict | None, list[str]]:
+                          field: str = "receiver",
+                          owner_tenant: object = _OWNER_UNSET,
+                          secrets: SecretBinding | None = None,
+                          allowed_domains: list[str] | None = None,
+                          ) -> tuple[dict | None, list[str]]:
     """Build Alertmanager receiver config from structured receiver object.
 
     Args:
@@ -638,12 +874,24 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
             (``alpha-override-0``) or the caller knows it; else None.
         field: #2766 — the receiver's path in the routing (``receiver``,
             ``overrides[0].receiver``, ``_routing_enforced.receiver``).
+        owner_tenant: #1560 — the tenant this receiver delivers for, whose
+            own Secret (``da-<tenant>``) a ``{secret: {key}}`` reference
+            names; None when no tenant owns it. ⛔ Passed explicitly by every
+            caller, never inferred from *tenant_id* (a Finding field): a
+            receiver with a Secret reference and no *owner_tenant* argument
+            is a caller bug and raises ``TypeError``.
+        secrets: #1560 — mount root and the policy's ``shared_secrets``
+            (None: the default root, no shared Secret).
+        allowed_domains: #1560 — the --policy allowlist, read only by the
+            auth_password rule of ``secret_binding_findings`` (the domain
+            allowlist itself is the caller's ``validate_receiver_domains``).
 
     Returns:
         (am_config_dict, warnings) where am_config_dict is e.g.
         {"webhook_configs": [{"url": "..."}]} or None on error.
     """
     warnings = []
+    binding = secrets if secrets is not None else NO_SECRET_POLICY
 
     def at(suffix: str = "") -> dict:
         """#2766: the Finding fields of a line about *field* + *suffix*."""
@@ -704,6 +952,19 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
             kind="invalid_receiver_field", **at()))
         return None, warnings
 
+    # #1560: which Secret each reference may name, on the effective receiver.
+    if _receiver_secret_refs(receiver_obj):
+        if owner_tenant is _OWNER_UNSET:
+            raise TypeError("build_receiver_config: a receiver with a Secret "
+                            "reference needs owner_tenant= (the tenant it "
+                            "delivers for, or None)")
+        binding_warnings = secret_binding_findings(
+            owner_tenant, receiver_obj, binding, allowed_domains,
+            ctx=tenant, tenant_id=tenant_id, field=field)
+        if binding_warnings:
+            warnings.extend(binding_warnings)
+            return None, warnings
+
     # Build AM config — include required + present optional fields
     am_entry = {}
     for fld in spec["required"] + spec["optional"]:
@@ -724,5 +985,24 @@ def build_receiver_config(receiver_obj: dict, tenant: str, *,
     # ADR-036 §2 forbids the semantic layer.
     if rtype == "email" and isinstance(am_entry.get("to"), list):
         am_entry["to"] = ", ".join(str(addr) for addr in am_entry["to"])
+
+    # #1560: a Secret reference becomes the `<field>_file` Alertmanager reads.
+    # #3257 does not refuse this: it judges the tenant's input, not this output.
+    render_secret_refs(am_entry, rtype, owner_tenant, binding)
+
+    # #1560: whatever is still shaped like a reference after that is on a
+    # field with no `*_file` form (http_config at any depth, email headers)
+    # and would reach Alertmanager as written. Judged on the OUTPUT, so every
+    # receiver slot and every field — today's and one added later — is
+    # covered by this one check rather than by a rule per field.
+    leftover = secret_ref_paths(am_entry, field)
+    if leftover:
+        takes = ", ".join(receiver_secret_ref_fields(rtype)) or "none"
+        for path in leftover:
+            warnings.append(skipped_entry_warning(
+                f"  WARN: {tenant}: receiver type '{rtype}' field '{path}' holds a "
+                f"Secret reference, which only these fields take: {takes}; skipping",
+                kind="secret_ref_unsupported_field", tenant=tenant_id, field=path))
+        return None, warnings
 
     return {spec["am_key"]: [am_entry]}, warnings

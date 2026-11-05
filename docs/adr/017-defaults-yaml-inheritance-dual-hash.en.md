@@ -177,7 +177,7 @@ Each key below has its own reader, and a change to it is not necessarily reflect
 | Key you changed | Where to confirm |
 |:--|:--|
 | `state_filters` | `user_state_filter{tenant,filter,severity}` on `/metrics` |
-| `_routing_defaults`, `_routing_enforced` | the full output of `generate_alertmanager_routes.py --config-dir conf.d/ --dry-run`, before vs after |
+| `_routing_defaults`, `_routing_enforced` | the full output of `generate_alertmanager_routes.py --config-dir conf.d/ --output-alertmanager --dry-run`, before vs after |
 | `_custom_alerts` | `custom_alerts` in `da-guard served-values` (`_custom_alerts` in a `_defaults.yaml` is not served and not compiled into rules, see [ADR-024](024-version-aware-threshold-via-dimensional-label.en.md) §3) |
 | `max_metrics_per_tenant` | see below |
 

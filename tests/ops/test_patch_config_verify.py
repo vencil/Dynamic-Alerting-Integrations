@@ -5,6 +5,7 @@
 不只看訊息。真 exporter 的那一半在 `test_patch_config_exporter.py`。
 """
 import contextlib
+import io
 import json
 import os
 import re
@@ -16,7 +17,7 @@ import pytest
 import yaml
 
 import patch_config as pc  # noqa: E402
-from _patch_config_fake import MIRROR, FakeCluster, render_thresholds  # noqa: E402
+from _patch_config_fake import MIRROR, FakeCluster, render_thresholds, run_main  # noqa: E402
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -40,7 +41,7 @@ def _run(cluster, *argv):
     with mock.patch("patch_config.run_cmd", side_effect=cluster), \
             mock.patch("sys.argv", ["patch_config.py", *argv, *FAST]):
         try:
-            pc.main()
+            run_main()
             code = 0
         except SystemExit as exc:
             code = exc.code
@@ -302,7 +303,7 @@ def test_diff_does_not_touch_the_exporter():
     with mock.patch("patch_config.run_cmd", side_effect=c), \
             mock.patch("sys.argv", ["patch_config.py", "--diff", "--json",
                                     "t-a", "mysql_connections", "65"]):
-        pc.main()
+        run_main()
     assert [x[:3] for x in c.calls] == [["kubectl", "get", "configmap"]]
 
 
@@ -389,7 +390,7 @@ class TestAfterTheWriteAborts:
         with mock.patch("patch_config.run_cmd", side_effect=side), \
                 mock.patch("sys.argv", ["patch_config.py", "--json", *argv, *FAST]):
             try:
-                pc.main()
+                run_main()
                 code = 0
             except SystemExit as exc:
                 code = exc.code
@@ -427,7 +428,7 @@ class TestAfterTheWriteAborts:
                 mock.patch("sys.argv", ["patch_config.py", "t-a",
                                         "mysql_connections", "65", *FAST]):
             with pytest.raises(KeyboardInterrupt):
-                pc.main()
+                run_main()
         assert c.patches == []
 
     def test_v2_only_running_pods_not_being_deleted_are_verified(self):
@@ -526,7 +527,7 @@ class TestRollbackAndEnvelopeEdges:
                 mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
                                         "mysql_connections", "65", *FAST]):
             with pytest.raises(SystemExit) as exc:
-                pc.main()
+                run_main()
         doc = json.loads(capsys.readouterr().out)
         assert (exc.value.code, doc["status"], doc["written"]) == (
             pc.EXIT_STATE_UNKNOWN, "state-unknown", None)
@@ -548,7 +549,7 @@ class TestTheGuardDecidesFromTheConfigMap:
                 mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
                                         "mysql_connections", "65", *FAST]):
             try:
-                pc.main()
+                run_main()
                 code = 0
             except SystemExit as exc:
                 code = exc.code
@@ -613,7 +614,7 @@ class TestTheGuardDecidesFromTheConfigMap:
                     mock.patch("sys.argv", ["patch_config.py", "t-a",
                                             "mysql_connections", "65", *FAST]):
                 with pytest.raises(SystemExit):
-                    pc.main()
+                    run_main()
         assert events == ["patch", "patch", "say"]
 
     def test_a_broken_stderr_does_not_stop_the_rollback(self, capsys):
@@ -681,7 +682,14 @@ _STREAMS = {
                             "stderr": _Raises(RuntimeError("boom"))},
     "EPIPE": {"stdout": _Raises(BrokenPipeError(32, "Broken pipe")),
               "stderr": _Raises(BrokenPipeError(32, "Broken pipe"))},
+    # #3558 P2: stdout alone fails; stderr takes the one line saying so.
+    "stdout-EPIPE": {"stdout": _Raises(BrokenPipeError(32, "Broken pipe"))},
+    "stdout-EBADF": {"stdout": _Raises(OSError(9, "Bad file descriptor"))},
+    "stdout-ENOSPC": {"stdout": _Raises(OSError(28, "No space left on device"))},
 }
+# The streams under which stdout fails and stderr works: the failure is said.
+_STDOUT_ONLY = {"stdout-EPIPE": "Broken pipe", "stdout-EBADF": "Bad file descriptor",
+                "stdout-ENOSPC": "No space left on device"}
 
 
 @pytest.mark.parametrize("outcome", _OUTCOMES)
@@ -689,7 +697,9 @@ _STREAMS = {
 @pytest.mark.parametrize("streams", _STREAMS)
 def test_w1_output_streams_never_change_the_outcome(outcome, as_json, streams):
     """W1：輸出的任何毛病（fd 關閉 ⇒ None、寫入丟任何例外、EPIPE）都不改變
-    apply 做了什麼，也不改變結束碼。"""
+    apply 做了什麼，也不改變結束碼。#3558 P2：stdout 寫不出去不再靜默——
+    stderr 還能寫時，多一行 `ERROR: cannot write to stdout: <原因>`（恰一行），
+    結束碼照舊（`Report(..., delivery="best_effort")`／`note_stdout_failure`）。"""
     make, value, rc_want, new_want = _OUTCOMES[outcome]
     c = make()
     key = "config.yaml" if outcome == "verify-fail" else "t-a.yaml"
@@ -700,16 +710,25 @@ def test_w1_output_streams_never_change_the_outcome(outcome, as_json, streams):
                mock.patch("sys.argv", argv)]
     patches += [mock.patch(f"sys.{name}", stream)
                 for name, stream in _STREAMS[streams].items()]
+    err = io.StringIO()
+    if "stderr" not in _STREAMS[streams]:
+        patches.append(mock.patch("sys.stderr", err))
     with contextlib.ExitStack() as stack:
         for p in patches:
             stack.enter_context(p)
         try:
-            pc.main()
+            run_main()
             code = 0
         except SystemExit as exc:
             code = exc.code
     assert code == rc_want
     assert (c.data[key] != old) is new_want
+    said = err.getvalue().count("ERROR: cannot write to stdout:")
+    if streams in _STDOUT_ONLY:
+        assert said == 1, err.getvalue()
+        assert f"ERROR: cannot write to stdout: {_STDOUT_ONLY[streams]}" in err.getvalue()
+    else:
+        assert said == 0, err.getvalue()
 
 
 class TestEnvelopeFieldsFollowTheConfigMap:
@@ -755,7 +774,7 @@ class TestRound6Pins:
         with mock.patch("patch_config.run_cmd", side_effect=side or c), \
                 mock.patch("sys.argv", ["patch_config.py", "--json", *argv, *FAST]):
             try:
-                pc.main()
+                run_main()
                 return 0
             except SystemExit as exc:
                 return exc.code
@@ -907,7 +926,7 @@ class TestCompareAndSwap:
                 mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
                                         "mysql_connections", "65", *FAST]):
             with pytest.raises(SystemExit) as exc:
-                pc.main()
+                run_main()
         doc = json.loads(capsys.readouterr().out)
         assert (exc.value.code, doc["status"]) == (1, "verify-failed-rolled-back")
         assert "another" in doc["message"]
@@ -929,7 +948,7 @@ class TestCompareAndSwap:
                 mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
                                         "mysql_connections", "65", *FAST]):
             with pytest.raises(SystemExit) as exc:
-                pc.main()
+                run_main()
         doc = json.loads(capsys.readouterr().out)
         assert (exc.value.code, doc["status"]) == (
             pc.EXIT_STATE_UNKNOWN, "overwritten-by-another-writer")
@@ -948,7 +967,7 @@ class TestCompareAndSwap:
                 mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
                                         "mysql_connections", "65", *FAST]):
             with pytest.raises(SystemExit) as exc:
-                pc.main()
+                run_main()
         doc = json.loads(capsys.readouterr().out)
         assert (exc.value.code, doc["reason"]) == (2, "configmap_shape")
         assert c.patches == []
@@ -1065,7 +1084,7 @@ class TestRollbackAccounting:
                 mock.patch("sys.argv", ["patch_config.py", "--json", "t-a",
                                         "mysql_connections", "60", *FAST]):
             try:
-                pc.main()
+                run_main()
                 code = 0
             except SystemExit as exc:
                 code = exc.code

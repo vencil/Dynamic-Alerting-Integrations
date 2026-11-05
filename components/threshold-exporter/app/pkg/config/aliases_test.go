@@ -67,6 +67,11 @@ func TestCanonicalKeyFor_Shapes(t *testing.T) {
 		{"mysql_cpu", "mysql_threads_running", true},
 		{"mysql_cpu_critical", "mysql_threads_running_critical", true},
 		{`mysql_cpu{version="v2"}`, `mysql_threads_running{version="v2"}`, true},
+		// #3556: the two derived shapes compose — the rule Policy-as-Code and
+		// the shared key verdict compare a `_critical{…}` key by.
+		{`mysql_cpu_critical{db="a"}`, `mysql_threads_running_critical{db="a"}`, true},
+		{`mysql_cpu_util{db="a"}`, `mysql_cpu_util{db="a"}`, false},
+		{`mysql_cpu_util_critical{db="a"}`, `mysql_cpu_util_critical{db="a"}`, false},
 		// exact-match contract: prefix lookalikes must NOT canonicalize —
 		// they have to keep failing unknown-key validation (adversarial pin).
 		{"mysql_cpu_util", "mysql_cpu_util", false},
@@ -82,6 +87,12 @@ func TestCanonicalKeyFor_Shapes(t *testing.T) {
 		if gotKey != tt.wantKey || gotAlias != tt.wantAlias {
 			t.Errorf("canonicalKeyFor(%q) = (%q, %v), want (%q, %v)",
 				tt.key, gotKey, gotAlias, tt.wantKey, tt.wantAlias)
+		}
+		// legacySpellingFor is its inverse on every aliased shape.
+		if tt.wantAlias {
+			if legacy, ok := legacySpellingFor(tt.wantKey); !ok || legacy != tt.key {
+				t.Errorf("legacySpellingFor(%q) = (%q, %v), want (%q, true)", tt.wantKey, legacy, ok, tt.key)
+			}
 		}
 	}
 }
@@ -694,5 +705,36 @@ func TestResolveStats_PerTenantDeprecatedKeys(t *testing.T) {
 	if _, present := stats.PerTenantDeprecatedKeys["tenant-clean"]; present {
 		t.Errorf("tenant-clean must have NO entry (gauge doesn't emit for migrated tenants), got %v",
 			stats.PerTenantDeprecatedKeys)
+	}
+}
+
+// #3556: a retired `_critical{…}` key is renamed like any other, but its
+// new spelling serves no row either (a `_critical` tier takes no
+// dimensions), so the notice names the per-dimension critical form instead
+// of a rename that fixes nothing — and stays a notice.
+func TestDeprecationNotice_CriticalTierWithDimensionsNamesTheNCriticalForm(t *testing.T) {
+	t.Parallel()
+	cfg := &ThresholdConfig{
+		Defaults:   map[string]float64{"mysql_threads_running": 10},
+		Dimensions: map[string][]string{"mysql_threads_running": {"db"}},
+		Tenants: map[string]map[string]ScheduledValue{"tenant-t": {
+			`mysql_cpu_critical{db="a"}`: {Default: "30"},
+		}},
+	}
+	kv := cfg.ValidateTenantKeys()
+	var got []string
+	for _, n := range kv.Notices {
+		if strings.Contains(n, "#1231") {
+			got = append(got, n)
+		}
+	}
+	if len(got) != 1 || !strings.Contains(got[0], `write it as mysql_threads_running{db="a"}: "N:critical", its labels declared for mysql_threads_running under the root `+"`dimensions:`") ||
+		strings.Contains(got[0], "please update this override") {
+		t.Fatalf("want one notice naming the N:critical form, got %q", got)
+	}
+	for _, e := range kv.Errors {
+		if strings.Contains(e, "#1231") {
+			t.Errorf("a rename must stay a notice, got error %q", e)
+		}
 	}
 }

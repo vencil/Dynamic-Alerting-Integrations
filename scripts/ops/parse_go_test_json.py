@@ -67,6 +67,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -91,6 +92,37 @@ RUNNING_TESTS_HEADER = "running tests:"
 # Go rewrites spaces in test names to underscores, so the LAST " (" is the
 # separator even for names that contain parentheses.
 RUNNING_TEST_RE = re.compile(r"^\t\t(\S.*) \([^()]*\)\s*$")
+
+# The workflow's `go test -timeout` in seconds — a per-package-BINARY budget.
+# Defined once, here, because this parser and plan_race_shards.py both need it
+# and the planner already imports from this module (the reverse import would be
+# circular). plan_race_shards re-exports it; tests/ops/test_plan_race_shards.py
+# pins it to the `-timeout=` in nightly-race.yaml.
+GO_TEST_TIMEOUT_S = 30 * 60
+# A package whose package-level `Elapsed` exceeds this fraction of the -timeout
+# is reported in `slow_packages` (#3541 PR-B). A package is one test binary, so
+# sharding cannot split it; past this line it is closer to the next `timeout`
+# incident than to being comfortably inside its budget. Warning-level only:
+# it never makes the fragment `failed`.
+SLOW_PACKAGE_RATIO = 0.5
+
+
+def package_verdict(ev: dict) -> tuple[str, float | None] | None:
+    """(action, Elapsed seconds) of a PACKAGE-level pass/fail event, else None.
+
+    The single definition of "a package's elapsed time" in a `go test -json`
+    stream: plan_race_shards.stream_timings (tomorrow's shard plan) and
+    `slow_packages` below both read it through here, so the timings artifact and
+    the slow-package incident cannot disagree about a package. Elapsed is None
+    when absent or not a finite non-negative number.
+    """
+    action = ev.get("Action")
+    if action not in ("pass", "fail") or ev.get("Test") or not isinstance(ev.get("Package"), str):
+        return None
+    e = ev.get("Elapsed")
+    if isinstance(e, (int, float)) and not isinstance(e, bool) and math.isfinite(e) and e >= 0:
+        return action, float(e)
+    return action, None
 
 
 def parse_stream(lines, go_exit_code: int) -> dict:
@@ -122,6 +154,8 @@ def parse_stream(lines, go_exit_code: int) -> dict:
     # package verdict (job killed mid-dump) stays "unattributed", which is the
     # fail-closed direction.
     pkg_failed: set[str] = set()
+    # Package -> Elapsed of its package-level pass/fail event (`slow_packages`).
+    pkg_elapsed: dict[str, float] = {}
 
     for raw in lines:
         line = raw.strip()
@@ -144,6 +178,10 @@ def parse_stream(lines, go_exit_code: int) -> dict:
         # break; `build-fail` is the build-scoped event. Either alone is proof.
         if action == "build-fail" or ev.get("FailedBuild"):
             build_failed = True
+
+        verdict = package_verdict(ev)
+        if verdict is not None and verdict[1] is not None:
+            pkg_elapsed[ev["Package"]] = verdict[1]
 
         if action in ("pass", "fail"):
             name = ev.get("Test")
@@ -191,6 +229,13 @@ def parse_stream(lines, go_exit_code: int) -> dict:
     timeout_pkgs = sorted(p for p in timeout_after if p in pkg_failed)
     timed_out = bool(timeout_pkgs)
 
+    # Strictly over the line. A package that printed the timeout panic is its own
+    # `timeout` incident already (its Elapsed is ~the whole budget), so it is
+    # never ALSO slow — whether or not its package verdict arrived.
+    slow_threshold = GO_TEST_TIMEOUT_S * SLOW_PACKAGE_RATIO
+    slow_pkgs = sorted(p for p, e in pkg_elapsed.items()
+                       if e > slow_threshold and p not in timeout_after)
+
     # A failing run we could not attribute to anything is the dangerous case:
     # the old workflow's body was exactly this state and it read as informative.
     unattributed = (bool(go_exit_code) and not failed and not build_failed
@@ -210,6 +255,14 @@ def parse_stream(lines, go_exit_code: int) -> dict:
         "timeout_running_tests": sorted(
             {t for p in timeout_pkgs for t in timeout_running.get(p, ())}
         ),
+        # Packages over SLOW_PACKAGE_RATIO of the -timeout, heaviest first.
+        # Warning-level: deliberately NOT part of `failed` below.
+        "slow_packages": [
+            {"package": p, "elapsed_s": round(pkg_elapsed[p], 3)}
+            for p in sorted(slow_pkgs, key=lambda p: (-pkg_elapsed[p], p))
+        ],
+        "slow_package_threshold_s": slow_threshold,
+        "go_test_timeout_s": GO_TEST_TIMEOUT_S,
         "race_tests": sorted(race_tests),
         # Per top-level test that FAILED at least once: its fail/pass counts
         # across the repetitions. Tests that only passed are left out so a
@@ -249,7 +302,8 @@ def build_fragment(
 
     result.update(
         {
-            # Still 1: the timeout fields (#3177) and `test_runs` are additive,
+            # Still 1: the timeout fields (#3177), `test_runs` and the
+            # `slow_packages` fields (#3541) are additive,
             # and the only consumer (file_race_report) reads every field with
             # .get(), so a fragment without them reads as "did not time out" —
             # which is what an older parser that could not detect timeouts

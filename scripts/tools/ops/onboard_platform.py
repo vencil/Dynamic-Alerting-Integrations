@@ -75,7 +75,7 @@ from _lib_python import (  # noqa: E402
     METRIC_PREFIX_DB_MAP,
 )
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
 import _lib_consumer_read  # noqa: E402  (ADR-036 §12: the Alertmanager config as its consumers read it)
 from _lib_validation import is_valid_tenant_id, tenant_id_rule  # noqa: E402  (ADR-035)
 import _lib_confedit  # noqa: E402  (ADR-036 §2: Go writes conf.d, #3206)
@@ -1617,8 +1617,6 @@ def main():
                         help="JSON output for CI pipeline integration")
 
     args = parser.parse_args()
-    if args.json:  # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
 
     if not any([args.alertmanager_config, args.rule_files is not None, args.scrape_config]):
         # --json: stdout is the document's alone (#3115); the help is prose.

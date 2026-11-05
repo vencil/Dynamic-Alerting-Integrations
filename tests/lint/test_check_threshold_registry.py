@@ -317,24 +317,7 @@ def test_regen_surfaces_rejects_path_escaping_repo_root(tmp_path, monkeypatch):
         "root — the containment check let a `..`-carrying registry path through")
 
 
-# ── deprecated_aliases (#1231) — SSOT section + the Python-mirror pin ──────
-
-def test_python_alias_mirror_pinned_to_registry():
-    """_grar_validate.DEPRECATED_KEY_ALIASES (the Python runtime mirror) must
-    equal the registry's deprecated_aliases section exactly — both directions.
-    The Go mirror has the same pin in
-    components/threshold-exporter/app/pkg/config/aliases_registry_test.go."""
-    import importlib.util as _ilu
-    grar_path = REPO_ROOT / "scripts" / "tools" / "ops" / "_grar_validate.py"
-    spec = _ilu.spec_from_file_location("_grar_validate_pin", grar_path)
-    grar = _ilu.module_from_spec(spec)
-    spec.loader.exec_module(grar)
-    doc = lib.load_registry()
-    assert grar.DEPRECATED_KEY_ALIASES == doc.get("deprecated_aliases", {}), (
-        "_grar_validate.DEPRECATED_KEY_ALIASES drifted from the registry "
-        "deprecated_aliases SSOT — edit _registry_lib.DEPRECATED_KEY_ALIASES, "
-        "regen, then update the mirror")
-
+# ── deprecated_aliases (#1231) — SSOT section ───────────────────────────────
 
 def test_alias_targets_are_active_keys_and_old_spellings_are_retired():
     doc = lib.load_registry()

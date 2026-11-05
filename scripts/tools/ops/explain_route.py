@@ -59,7 +59,7 @@ from generate_alertmanager_routes import (  # noqa: E402
     tree_refusal,
 )
 from _grar_render import (  # noqa: E402
-    ConsumerReadError, InputRefused, _run_binary, alertmanager_reading, assemble_configmap,
+    BaseIsAnOutputError, ConsumerReadError, InputRefused, _run_binary, alertmanager_reading, assemble_configmap,
     consumer_read_message, emitted_alertmanager_yml, receiver_integration_kinds,
 )
 from _grar_validate import (  # noqa: E402
@@ -74,6 +74,7 @@ from _grar_validate import (  # noqa: E402
 )
 from _grar_parse import BLOCKING_TREE_KINDS, policy_level_source, print_reader_warnings  # noqa: E402
 from _grar_routes import _build_enforced_routes, enforced_route_tenants  # noqa: E402
+from _grar_merge import SecretBinding  # noqa: E402  (#1560)
 # #2326: the layer chain across conf.d directory levels — the generator's own.
 from _grar_merge import (  # noqa: E402
     ROOT_LEVEL,
@@ -87,8 +88,7 @@ from _grar_merge import (  # noqa: E402
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping; #3276)
 from _lib_paths import require_dir  # noqa: E402  (#3276)
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_CALLER_ERROR, CallerError, Report, arm_crash_envelope)
+from _lib_exitcodes import EXIT_OK, EXIT_CALLER_ERROR, CallerError, Report  # noqa: E402
 
 #: the status of a receiver slot the --policy domain allowlist refuses (#3142).
 STATUS_POLICY_REFUSED = "POLICY_REFUSED"
@@ -106,16 +106,18 @@ SUB_ROUTE_SOURCE_KEYS = ("overrides", "routes")
 
 
 def effective_sub_routes(tenant: str, merged: dict,
-                         allowed_domains: list[str] | None = None
+                         allowed_domains: list[str] | None = None,
+                         secrets: SecretBinding | None = None,
                          ) -> tuple[list[dict], list[str]]:
     """``(sub_routes, skipped)`` of :func:`rendered_tenant_routes`."""
     sub_routes, skipped, _replaced = rendered_tenant_routes(tenant, merged,
-                                                            allowed_domains)
+                                                            allowed_domains, secrets)
     return sub_routes, skipped
 
 
 def rendered_tenant_routes(tenant: str, merged: dict,
-                           allowed_domains: list[str] | None = None
+                           allowed_domains: list[str] | None = None,
+                           secrets: SecretBinding | None = None,
                            ) -> tuple[list[dict], list[str], list[str]]:
     """The child routes the generator renders under the tenant's main route.
 
@@ -147,7 +149,8 @@ def rendered_tenant_routes(tenant: str, merged: dict,
     verdicts: list[SlotVerdict] = []
     routes, receivers, warnings = _build_tenant_routes({tenant: merged},
                                                        allowed_domains,
-                                                       verdicts=verdicts)
+                                                       verdicts=verdicts,
+                                                       secrets=secrets)
     types: dict[str, str] = {}
     for recv in receivers:
         for key in recv:
@@ -181,7 +184,8 @@ def rendered_tenant_routes(tenant: str, merged: dict,
 
 def policy_refused_slots(tenant: str, merged: dict,
                          allowed_domains: list[str] | None,
-                         enforced: dict | None = None) -> list[dict]:
+                         enforced: dict | None = None,
+                         secrets: SecretBinding | None = None) -> list[dict]:
     """Every receiver slot of *tenant* the --policy domain allowlist refuses
     (#3142) — the main receiver (``receiver``) included, whose refusal takes
     the tenant's whole route out, and the platform's enforced (NOC) receiver
@@ -193,14 +197,15 @@ def policy_refused_slots(tenant: str, merged: dict,
     refused: list[dict] = []
     if isinstance(merged, dict):
         verdicts: list[SlotVerdict] = []
-        _build_tenant_routes({tenant: merged}, allowed_domains, verdicts=verdicts)
+        _build_tenant_routes({tenant: merged}, allowed_domains, verdicts=verdicts,
+                             secrets=secrets)
         refused += [{"source": v.slot, "status": STATUS_POLICY_REFUSED,
                      "detail": str(v.reason).strip(), "remedy": POLICY_REFUSAL_REMEDY}
                     for v in verdicts if not v.rendered and is_policy_refusal(v.reason)]
     if isinstance(enforced, dict):
         _r, _recv, warnings = _build_enforced_routes(
             enforced, {tenant: merged if isinstance(merged, dict) else {}},
-            allowed_domains, tenants=[tenant])
+            allowed_domains, tenants=[tenant], secrets=secrets)
         refused += [{"source": "_routing_enforced.receiver",
                      "status": STATUS_POLICY_REFUSED,
                      "detail": str(w).strip(), "remedy": POLICY_REFUSAL_REMEDY}
@@ -211,6 +216,7 @@ def explain_tenant_routing(
     parsed: dict,
     tenant: str,
     allowed_domains: list[str] | None = None,
+    secrets: SecretBinding | None = None,
 ) -> dict:
     """Build a layer-by-layer explanation of a tenant's routing merge.
 
@@ -285,7 +291,7 @@ def explain_tenant_routing(
 
     # #2245: what the generator actually renders from `overrides` / `routes`.
     sub_routes, skipped, replaced = rendered_tenant_routes(tenant, merged,
-                                                           allowed_domains)
+                                                           allowed_domains, secrets)
 
     return {
         "tenant": tenant,
@@ -300,7 +306,8 @@ def explain_tenant_routing(
         "policy_refused": policy_refused_slots(
             tenant, merged, allowed_domains,
             enforced if (isinstance(enforced, dict)
-                         and enforced.get("enabled") is not False) else None),
+                         and enforced.get("enabled") is not False) else None,
+            secrets),
     }
 
 
@@ -779,7 +786,8 @@ class AssemblyRefusedByAlertmanager(Exception):
 
 
 def build_trace_tree(parsed: dict, base: dict | None = None,
-                     allowed_domains: list[str] | None = None
+                     allowed_domains: list[str] | None = None,
+                     secrets: SecretBinding | None = None,
                      ) -> tuple[str, dict, dict[str, dict], dict[str, str]]:
     """The alertmanager.yml ``--output-configmap`` would emit, and its tree.
 
@@ -801,7 +809,8 @@ def build_trace_tree(parsed: dict, base: dict | None = None,
         enforced = None
     tenants = parsed.get("dedup_configs") or {}
     routes, receivers, _warnings = generate_routes(
-        routing_configs, allowed_domains, enforced_routing=enforced, tenants=tenants)
+        routing_configs, allowed_domains, enforced_routing=enforced, tenants=tenants,
+        secrets=secrets)
     inhibit_rules, _warnings = generate_inhibit_rules(tenants)
     try:
         cm_yaml = assemble_configmap(
@@ -981,6 +990,7 @@ def trace_alert_routing(
     *,
     base_config: dict | None = None,
     allowed_domains: list[str] | None = None,
+    secrets: SecretBinding | None = None,
 ) -> dict:
     """Simulate how a specific alert would be routed through the pipeline.
 
@@ -1017,7 +1027,7 @@ def trace_alert_routing(
     steps: list[dict] = []
 
     # Step 1: Resolve tenant routing config (4-layer merge)
-    explanation = explain_tenant_routing(parsed, tenant, allowed_domains)
+    explanation = explain_tenant_routing(parsed, tenant, allowed_domains, secrets)
     final_routing = explanation.get("final", {})
 
     # Build alert label set
@@ -1063,7 +1073,7 @@ def trace_alert_routing(
     else:
         try:
             am_yml, root, receivers, conf_types = build_trace_tree(
-                parsed, base_config, allowed_domains)
+                parsed, base_config, allowed_domains, secrets)
         except UnassemblableBase as exc:
             _warn("the generator cannot assemble this config (malformed "
                   f"--base-config?): {exc}")
@@ -1390,9 +1400,6 @@ def main(argv: list[str] | None = None) -> int | Report:
     add_policy_argument(parser, lang=lang)  # #3142: the generator's own flag
 
     args = parser.parse_args(argv)
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
 
     # #2264: --label only feeds the trace; outside it the flag would be
     # silently ignored, so refuse it (argparse caller error → rc 2).
@@ -1422,6 +1429,7 @@ def main(argv: list[str] | None = None) -> int | Report:
     if not policy.applied and not args.show_profile_expansion:
         print(POLICY_NOT_APPLIED_NOTICE, file=sys.stderr)
     allowed_domains = policy.allowed_domains
+    secrets = policy.secret_binding()  # #1560: the policy's shared_secrets
 
     parsed = _parse_config_files(args.config_dir)
     # #2906: in every mode (--trace too), as the reader's own multi-carrier
@@ -1488,6 +1496,11 @@ def main(argv: list[str] | None = None) -> int | Report:
             return EXIT_CALLER_ERROR
         try:
             base_config = load_base_config(args.base_config)
+        except BaseIsAnOutputError as exc:
+            # #1211 gap 2. explain-route has no verdict exit (#2958): an
+            # output passed as the base is a wrong invocation here (rc 2).
+            print(safe_label(str(exc)), file=sys.stderr)
+            return EXIT_CALLER_ERROR
         except BaseConfigInputError as exc:
             print(f"ERROR: {safe_label(str(exc))}", file=sys.stderr)
             return EXIT_CALLER_ERROR
@@ -1503,7 +1516,7 @@ def main(argv: list[str] | None = None) -> int | Report:
             trace = trace_alert_routing(
                 parsed, t, args.alertname, args.severity,
                 extra_labels=extra_labels, base_config=base_config,
-                allowed_domains=allowed_domains)
+                allowed_domains=allowed_domains, secrets=secrets)
             trace["policy_applied"] = policy.applied
             traces.append(trace)
         if args.json:
@@ -1543,7 +1556,7 @@ def main(argv: list[str] | None = None) -> int | Report:
             print(safe_label(routing_not_mapping_warning(t, refused[t])),
                   file=sys.stderr)
             continue
-        explanation = explain_tenant_routing(parsed, t, allowed_domains)
+        explanation = explain_tenant_routing(parsed, t, allowed_domains, secrets)
         explanation["policy_applied"] = policy.applied
         results.append(explanation)
 

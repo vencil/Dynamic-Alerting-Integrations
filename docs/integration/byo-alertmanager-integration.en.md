@@ -30,7 +30,7 @@ Both Silent Mode and Maintenance Mode support structured object configuration, i
 
 > The table above is the **quick-reference view for the BYO integration context**. For the full alerting best practices (what to alert on → notification → action-layer idempotency), see the series: [Alert Design Fundamentals](../alerting-design-fundamentals.en.md) · [Beyond Actionable](../alerting-best-practices.en.md).
 
-All Alertmanager configuration fragments are automatically generated from tenant YAML by `generate_alertmanager_routes.py`:
+All Alertmanager routing is automatically generated from tenant YAML by `generate_alertmanager_routes.py` and merged into your own Alertmanager config (the source), emitted as a separate output and never written back over the source:
 
 ```mermaid
 graph LR
@@ -47,18 +47,21 @@ graph LR
 
     GEN["generate_alertmanager_routes.py"]
 
+    BASE["Your alertmanager.yml<br/>(--base-config)"]
+
     TY --> GEN
     PL --> GEN
+    BASE --> GEN
 
-    subgraph AM["Alertmanager Fragment"]
-        RT["route.routes[]<br/>Per-tenant routing"]
-        RC["receivers[]<br/>Per-tenant receiver"]
-        IR["inhibit_rules[]<br/>Severity dedup + Silent mode"]
+    subgraph AM["Merged alertmanager.yml"]
+        RT["route.routes[]<br/>platform routes → your routes → per-tenant routes"]
+        RC["receivers[]<br/>your receivers + per-tenant receivers"]
+        IR["inhibit_rules[]<br/>your rules + severity dedup"]
     end
 
     GEN --> AM
 
-    AM -->|"merge + reload"| ALM["Alertmanager"]
+    AM -->|"deploy + reload"| ALM["Alertmanager"]
 
     style TY fill:#e8f4fd,stroke:#1a73e8
     style PL fill:#fff3e0,stroke:#e65100
@@ -136,72 +139,90 @@ tenants:
       repeat_interval: "4h"
 ```
 
-### Step 4: Generate Alertmanager Fragment
+### Step 4: Validate the Tenant Config
 
 ```bash
-# Generate fragment
-da-tools generate-routes --config-dir conf.d/ -o alertmanager-routes.yaml
-
-# Verify output
-da-tools generate-routes --config-dir conf.d/ --validate
+# Validate the whole conf.d (CI runs --strict)
+da-tools generate-routes --config-dir conf.d/ --validate --strict
 
 # Validate + webhook domain allowlist check
-da-tools generate-routes --config-dir conf.d/ --validate --policy .github/custom-rule-policy.yaml
+da-tools generate-routes --config-dir conf.d/ --validate --strict --policy .github/custom-rule-policy.yaml
 ```
 
-Generated output includes:
-- `route.routes[]`: Per-tenant routing (with `tenant="<name>"` matcher + timing guardrails)
-- `receivers[]`: Per-tenant receiver (webhook/email/slack/teams/rocketchat/pagerduty)
-- `inhibit_rules[]`: Per-tenant severity dedup rules
+`--validate` writes nothing. The generator's output is always the **complete merged Alertmanager config**; there is no "emit a fragment and paste it yourself" mode: a run without a mode flag (only `-o`, only `--dry-run`) is exit 2. ⚠️ The v2.9.0 image still prints a fragment when no mode flag is given <!-- image-caveat: v2.9.0 -->
 
-⚠️ When merging the fragment by hand, put the fragment's `route.routes` **last** among the root's child routes. Placed before your own child routes, the alerts of a tenant without a tenant route are handed back to the root receiver by the fragment's trailing route (matching only `tenant="<id>"`, no `continue`) and never reach your later child routes ([#2519](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2519)).
+> **Why there is no fragment any more** ([#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)): the old fragment's header told you to append it **after** your own child routes. But four platform routes in it (Watchdog heartbeat, custom-alert isolation, synthetic probe, sentinel sink) must come first — appended last, your own catch-all child route took their alerts: the Watchdog heartbeat went to your default channel (and never reached the external dead-man's switch), and custom and sentinel alerts paged your NOC. Only a merge done by the generator places them right.
 
 ### Step 5: Merge into Alertmanager ConfigMap
 
-Merge the generated fragment into the Alertmanager main configuration. **Choose one of two modes based on your deployment flow:**
+The generator merges the tenant routing into **your own** Alertmanager config. The three output modes share one merge; pick one by how you deploy:
 
-**Mode A: `--apply` (Runtime direct operation, v1.4.0)**
+**Mode A: `--output-alertmanager` (BYO Alertmanager outside Kubernetes, or the Prometheus Operator's configSecret)**
 
 ```bash
-# One-shot automatic merge + apply + reload
-da-tools generate-routes --config-dir conf.d/ --apply --yes
+# The source: your own config, kept on its own (in git, say); the first time, copy it from the current one
+cp /etc/alertmanager/alertmanager.yml alertmanager.base.yml
+
+# Preview first
+da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
+  --base-config alertmanager.base.yml --dry-run
+
+# Write the merged alertmanager.yml (the output), deploy it to /etc/alertmanager/ and reload (Step 6)
+da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
+  --base-config alertmanager.base.yml -o alertmanager.yml
 ```
 
-Best for: Initial deployment testing, P0 emergency fixes, non-GitOps environments.
+When conf.d changes later, run it again on the same `alertmanager.base.yml`; to change your own config, edit that file too, not the deployed `alertmanager.yml`.
 
 **Mode B: `--output-configmap` (GitOps PR flow, v1.10.0)**
 
 ```bash
-# Generate complete ConfigMap YAML (with global + default route/receiver + tenant routes)
-da-tools generate-routes --config-dir conf.d/ --output-configmap -o deploy/alertmanager-configmap.yaml
-
-# With custom base configuration
+# Generate the merged, complete ConfigMap YAML
 da-tools generate-routes --config-dir conf.d/ --output-configmap \
-  --base-config conf.d/base-alertmanager.yaml -o deploy/alertmanager-configmap.yaml
+  --base-config base-alertmanager.yaml -o deploy/alertmanager-configmap.yaml
 
 # File into Git → PR review → merge → ArgoCD/Flux auto sync
 git add deploy/alertmanager-configmap.yaml && git commit -m "update AM routes"
 ```
 
-Best for: Formal GitOps workflow. The generated ConfigMap YAML is in complete `kubectl apply` format, no manual merge needed. When `--base-config` is not provided, built-in defaults are used (`resolve_timeout: 5m`, `group_by: [alertname, tenant]`, default receiver).
+**Mode C: `--apply` (Runtime direct operation, v1.4.0)**
+
+```bash
+# Render from the ConfigMap's alertmanager.base.yml (the source) + apply + reload
+da-tools generate-routes --config-dir conf.d/ --apply --yes
+```
+
+Best for: initial deployment testing, P0 emergency fixes, non-GitOps environments. It does not read `--base-config`; its source is in the cluster: the ConfigMap's `alertmanager.base.yml` key holds the source, `--apply` renders from it and writes back `alertmanager.yml` (the output) and `alertmanager.base.yml` (the source); Alertmanager ignores the extra file. The first `--apply` (no such key yet) adopts the existing `alertmanager.yml` as the source; if that is already generated (its first line is the `# GENERATED by da-tools generate-routes` marker, or it holds `tenant-*` receivers), exit 1 and nothing is applied — put your source into `alertmanager.base.yml` first. ⚠️ Upgrading: an `alertmanager.yml` an older `--apply` wrote has no marker; from a conf.d without any `_routing` / `_routing_enforced` it holds no `tenant-*` receiver either, so the first `--apply` adopts it and its dedup inhibit rules appear twice in the output (once, they do not keep growing) — put your own config into `alertmanager.base.yml` before that first run. To change the config, edit `alertmanager.base.yml`, not `alertmanager.yml` — the next `--apply` renders that one afresh from the source. ⚠️ **Behaviour change**: `--apply` used to replace the cluster's `route.routes` whole, so child routes you had added vanished; it is now the same merge as the other two modes and your routes are kept. The v2.9.0 image still has the old behaviour <!-- image-caveat: v2.9.0 -->
+
+**Merge rules** (the same in all three modes; full description in [CLI reference §generate-routes](../cli-reference.en.md#generate-routes)):
+
+- **Source and output kept apart**: output = merge(source base, conf.d). The base is your own config, not an earlier output of this tool; the output is a separate product and cannot be used as a base again (as with Prometheus Operator, which reads the user's Secret and writes to another, `<name>-generated`, never back). Your own routes, receivers, inhibit rules, `global:` and root route stay as written, and this run's are added.
+- **Order**: `route.routes` becomes "the four platform routes + the enforced NOC route(s) (`continue: true`)" → "your routes, in their order" → "the tenant routes + root fallthroughs". The platform routes come before yours, so your catch-all cannot take the Watchdog; the tenant routes come after yours.
+- **Re-runnable**: when conf.d changes, run it again on **the same source**. Every run renders from the source, so a removed tenant leaves nothing behind.
+- **The base cannot be an output**: every output starts with a `# GENERATED by da-tools generate-routes` comment; a base carrying that line, or a `tenant-*` / `platform-enforced*` receiver (names only the generator writes) ⇒ exit 1, nothing written, and the message says it looks like this tool's output and asks for the source; do not give your own receivers those names either. `-o` naming the `--base-config` file itself ⇒ exit 2. The four platform receivers may be defined in your base, and a full definition (e.g. `watchdog-heartbeat` wired to a dead-man's switch) wins; a top-level route of the base to one of them is taken to be the platform's and emitted once, in its canonical form, first.
+- **Migrating from the fragment mode (once)**: a base you pasted the fragment into (it holds `tenant-*` receivers) is refused. Delete what you pasted and keep your own original config as the source.
+- **Wire the Watchdog out**: when `watchdog-heartbeat` in your base has no integration, the output modes print a `watchdog_undelivered` WARN, and under `--strict` exit 1 and write nothing. How to wire it: [Alerting-plane self-liveness](alerting-plane-self-liveness.en.md). ⚠️ The v2.9.0 image does not report it <!-- image-caveat: v2.9.0 -->
+
+Without `--base-config` the merge goes into a built-in placeholder base (`resolve_timeout: 5m`, `group_by: [alertname, tenant]`, an empty `default` receiver) — that is not your config, so for a BYO deployment always pass `--base-config`.
 
 ⚠️ **`--base-config` must be a complete config Alertmanager accepts** ([#3206](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3206)): it needs `route:` and the `receivers:` it names; `global:` and `inhibit_rules:` may be left out and fall back to the built-in values. The generator reads the base with Alertmanager's own loader (`da-read alertmanager`); without `route:` or its receivers the loader refuses it — exit code 2, in the loader's own words — and no built-in route is filled in any more.
 
-⚠️ **From v2.10.0, "supplied but unusable" is no longer the same as "not supplied" (BREAKING, [#1616](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1616))**. The `--base-config` above is a relative path. Old behaviour: a mistyped path, a directory, an empty file, or a comment-only file all exited **0** and quietly substituted the built-in defaults — the emitted ConfigMap was **byte-for-byte identical** to one produced with no `--base-config` at all, so your `global:` (SMTP smarthost, Slack webhook) was replaced and then synced into the cluster by ArgoCD/Flux. New behaviour: **exit 2, naming the flag**. ⛔ The fix is to correct the path, not to drop `--base-config` — dropping it reproduces the old broken outcome. Also, only `--output-configmap` reads the flag (`--validate` returns before the ConfigMap is assembled), so passing it in another mode is now exit 2 rather than a silent no-op.
+⚠️ **From v2.10.0, "supplied but unusable" is no longer the same as "not supplied" (BREAKING, [#1616](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1616))**. The `--base-config` above is a relative path. Old behaviour: a mistyped path, a directory, an empty file, or a comment-only file all exited **0** and quietly substituted the built-in defaults — the emitted ConfigMap was **byte-for-byte identical** to one produced with no `--base-config` at all, so your `global:` (SMTP smarthost, Slack webhook) was replaced and then synced into the cluster by ArgoCD/Flux. New behaviour: **exit 2, naming the flag**. ⛔ The fix is to correct the path, not to drop `--base-config` — dropping it reproduces the old broken outcome. Also, only `--output-configmap` and `--output-alertmanager` read the flag (`--validate` returns before the config is assembled, and `--apply`'s base is the cluster's config), so passing it in another mode is now exit 2 rather than a silent no-op.
 
 **Mode Comparison:**
 
-| | `--apply` | `--output-configmap` |
-|---|-----------|---------------------|
-| Operation | Direct K8s ConfigMap modification | Output YAML file |
-| Workflow | CLI manual operation / emergency fix | Git PR → review → GitOps sync |
-| Requires K8s connection | Yes (kubectl context) | No (pure file output) |
-| Alertmanager reload | `--apply` triggers automatically | Triggered by sidecar/webhook after GitOps sync |
-| Auditability | No Git record | Complete Git history |
+| | `--output-alertmanager` | `--output-configmap` | `--apply` |
+|---|---|---|---|
+| Operation | Output `alertmanager.yml` | Output ConfigMap YAML file | Direct K8s ConfigMap modification |
+| Base | `--base-config` | `--base-config` | The ConfigMap's `alertmanager.base.yml` (the first time, the existing `alertmanager.yml`) |
+| Workflow | Alertmanager outside Kubernetes | Git PR → review → GitOps sync | CLI manual operation / emergency fix |
+| Requires K8s connection | No | No (pure file output) | Yes (kubectl context) |
+| Alertmanager reload | Yours to trigger after deploying (Step 6) | Triggered by sidecar/webhook after GitOps sync | `--apply` triggers automatically |
+| Auditability | Depends on how you deploy | Complete Git history | No Git record |
 
-> **Note**: `--apply` and `--output-configmap` are mutually exclusive and cannot be used simultaneously.
+> **Note**: the three modes (and `--validate`) are mutually exclusive; pass exactly one. `--namespace` / `--configmap` are read only by `--output-configmap` and `--apply`; with `--output-alertmanager` they are exit 2.
 
-When `amtool` is on PATH, both modes first validate the `alertmanager.yml` they are about to write / apply with it; if Alertmanager rejects it the exit code is 1 and nothing is written or applied. Without `amtool` a NOTICE says the config was not validated by Alertmanager. `--validate` does this too, but on the **built-in default base** rather than yours (#2260), so validating your own base still takes `--output-configmap --base-config`; the fragment output is not validated this way. A failed reload under `--apply` is exit code 2 (#2219). ⚠️ In the v2.9.0 image `--validate` does not go through `amtool` <!-- image-caveat: v2.9.0 -->
+When `amtool` is on PATH, all three modes first validate the `alertmanager.yml` they are about to write / apply with it; if Alertmanager rejects it the exit code is 1 and nothing is written or applied. Without `amtool` a NOTICE says the config was not validated by Alertmanager. `--validate` does this too, but on the **built-in default base** rather than yours (#2260), so validating your own base still takes `--output-alertmanager --base-config ... --dry-run` (or `--output-configmap`). A failed reload under `--apply` is exit code 2 (#2219). ⚠️ In the v2.9.0 image `--validate` does not go through `amtool` <!-- image-caveat: v2.9.0 -->
 
 ### Step 6: Reload Alertmanager
 
@@ -219,19 +240,28 @@ curl -sf http://localhost:9093/-/ready && echo "Alertmanager ready"
 
 ### Features
 
-Reads all tenant YAML from `conf.d/`, scans `_routing` and `_severity_dedup` settings, generates valid Alertmanager YAML fragment.
+Reads all tenant YAML from `conf.d/`, scans `_routing` and `_severity_dedup` settings, generates routes, receivers and inhibit rules, and merges them into a base config (your own config, the source) to emit a complete, valid Alertmanager config; see Step 5.
 
 ### Modes
 
+Exactly one mode flag; none is exit 2:
+
 | Flag | Description |
 |------|------|
-| `--dry-run` | Output to stdout, no file write |
-| `-o FILE` | Write to specified file |
-| `--validate` | Validate configuration legality (exit 0/1, suitable for CI) |
+| `--validate` | Validate configuration legality (exit 0/1, suitable for CI); writes nothing |
+| `--output-alertmanager` | Output the merged plain `alertmanager.yml`, for a BYO Alertmanager outside Kubernetes or the Prometheus Operator's configSecret |
+| `--output-configmap` | Output the merged, complete ConfigMap YAML, suitable for GitOps PR flow |
+| `--apply [--yes]` | Merge into the cluster's Alertmanager ConfigMap + reload (`--yes` skips confirmation) |
+
+Other flags:
+
+| Flag | Description |
+|------|------|
+| `--base-config FILE` | With `--output-alertmanager` / `--output-configmap`: your Alertmanager config, which the generated routing is merged into |
+| `-o FILE` | With `--output-alertmanager` / `--output-configmap`: write to the file (default stdout) |
+| `--dry-run` | With `--output-alertmanager` / `--output-configmap`: preview the output, no file write |
 | `--policy FILE` | Load `allowed_domains` for webhook URL compliance check |
-| `--apply [--yes]` | Auto merge into Alertmanager ConfigMap + reload (`--yes` skips confirmation) |
-| `--output-configmap` | Output complete ConfigMap YAML (mutually exclusive with `--apply`), suitable for GitOps PR flow  |
-| `--base-config FILE` | With `--output-configmap`, load base Alertmanager config (global / default receiver, etc.) |
+| `--strict` | Escalate the escalatable WARNs to ERROR with exit 1 (for CI) |
 
 ### Timing Guardrails
 
@@ -266,7 +296,7 @@ curl -X POST http://alertmanager:9093/-/reload
 | **ConfigMap Watcher Sidecar** | Similar to `prometheus-config-reloader` | Fully automatic, suitable for production |
 | **CI Pipeline Integration** | GitOps: `generate-routes --validate` + apply + reload | Suitable for GitOps workflow |
 | **GitOps ConfigMap Output** | `generate-routes --output-configmap` outputs complete ConfigMap YAML into Git PR flow | v1.10.0+, replaces `--apply` direct manipulation |
-| **Alertmanager Operator** | `kube-prometheus-stack`'s AlertmanagerConfig CRD | Suitable for environments already using Operator |
+| **Alertmanager Operator** | `generate-routes --output-alertmanager` output in a Secret, loaded by the Alertmanager CR's `spec.configSecret` (the Operator reloads) | Suitable for environments already using Operator |
 
 ---
 
@@ -309,12 +339,46 @@ All types support `send_resolved: true` (default false) to control if resolved a
 Optional values are checked too ([#2295](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2295)): only the values Alertmanager refuses, which make the whole reload fail, as amtool 0.34.1 judges them.
 
 - `send_resolved`, email `require_tls` and webhook `http_config.proxy_from_environment` take a boolean or an empty value (not given); write an unquoted `true` / `false`. An unquoted YAML 1.1 boolean word `yes` / `no` / `on` / `off` is a string: the route generator reads yaml.v3 through `da-guard parse-tree` and refuses it too, so write `true` / `false`. A quoted `"yes"` or `"true"`, and `maybe`, `1` or `""`, are rejected: the route generator refuses the whole tree in every mode ([#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)).
-- webhook `http_config`: an empty value counts as not given; otherwise it must be a mapping. Its keys are Alertmanager's `http_config` keys minus the file-reference ones: `basic_auth`, `oauth2`, `authorization`, `bearer_token`, `tls_config`, `follow_redirects`, `enable_http2`, `http_headers`, `proxy_url`, `no_proxy`, `proxy_from_environment`, `proxy_connect_header` ([#2984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2984)). ⚠️ **File-reference keys are always refused** ([#3257](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3257)): a key ending in `_file` or `_ref`, or a key named `files`, at any depth of a receiver (`http_config` included) — such as `bearer_token_file`, `basic_auth.password_file`, `tls_config.key_file`, `oauth2.client_secret_ref` or the `files` list of `http_headers` — makes Alertmanager read a file inside its own container or look for a secret manager it does not have, so the schema and the route generator refuse it; the generator refuses the whole tree in every mode (rc 1, nothing written) and a tenant-api write gets a 422. Write the credential's value itself; for a credential that must live in a Secret, until the `secretRef` of [#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560) is wired, have the platform put it on the platform's own receiver in the base config. Alertmanager refuses the whole config over any other key; validate-config's JSON schema rejects it, and the route generator leaves it to its `--validate` amtool gate. `follow_redirects` / `enable_http2` reach Alertmanager as written, so write an unquoted `true` / `false`. What sits inside `tls_config`, `oauth2`, `authorization`, `basic_auth`, `http_headers` and `proxy_connect_header` follows Alertmanager's rules (unknown keys, `oauth2` without `client_id` / `token_url`, `authorization` with `type: basic`, reserved header names such as `Authorization`); only validate-config's JSON schema rejects these, the route generator leaves them to its `--validate` amtool gate, and da-guard and tenant-api do not check them. At most one of `basic_auth`, `oauth2`, `authorization`, `bearer_token` may be set: empty values and `bearer_token: ""` count as unset, `basic_auth: {}` as set. `bearer_token` / `proxy_url` / `no_proxy` must be strings (quote a value YAML would read as a boolean, number or date). The same holds for the string fields under `basic_auth`, `oauth2`, `authorization` and `tls_config`: quote an all-digit `password`, `username`, `client_id`, `client_secret` or `credentials`, or a value yaml.v3 reads as a number or date (`1e3`, `0x1F`, `2024-01-02`), as in `password: "123456"`. Unquoted, validate-config's `yaml_quoting` row fails and lists each one with the file, field path and the fix (such as `quote it, without a tag: password: "123456"`); add the quotes as it says. The reason: the route generator and the validation tools (validate-config and the conf.d lints) read conf.d with yaml.v3 through `da-guard parse-tree`, and the value is what the tag it resolves says — an unquoted `0x1F` is the integer 31, `1e3` the float 1000, `2024-01-02` a date — so Alertmanager would not receive the string you wrote ([#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)).
+- webhook `http_config`: an empty value counts as not given; otherwise it must be a mapping. Its keys are Alertmanager's `http_config` keys minus the file-reference ones: `basic_auth`, `oauth2`, `authorization`, `bearer_token`, `tls_config`, `follow_redirects`, `enable_http2`, `http_headers`, `proxy_url`, `no_proxy`, `proxy_from_environment`, `proxy_connect_header` ([#2984](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2984)). ⚠️ **File-reference keys are always refused** ([#3257](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3257)): a key ending in `_file` or `_ref`, or a key named `files`, at any depth of a receiver (`http_config` included) — such as `bearer_token_file`, `basic_auth.password_file`, `tls_config.key_file`, `oauth2.client_secret_ref` or the `files` list of `http_headers` — makes Alertmanager read a file inside its own container or look for a secret manager it does not have, so the schema and the route generator refuse it; the generator refuses the whole tree in every mode (rc 1, nothing written) and a tenant-api write gets a 422. Write the credential's value itself, or use a [`secretRef`](#credentials-in-a-secret-secretref) (below). Alertmanager refuses the whole config over any other key; validate-config's JSON schema rejects it, and the route generator leaves it to its `--validate` amtool gate. `follow_redirects` / `enable_http2` reach Alertmanager as written, so write an unquoted `true` / `false`. What sits inside `tls_config`, `oauth2`, `authorization`, `basic_auth`, `http_headers` and `proxy_connect_header` follows Alertmanager's rules (unknown keys, `oauth2` without `client_id` / `token_url`, `authorization` with `type: basic`, reserved header names such as `Authorization`); only validate-config's JSON schema rejects these, the route generator leaves them to its `--validate` amtool gate, and da-guard and tenant-api do not check them. At most one of `basic_auth`, `oauth2`, `authorization`, `bearer_token` may be set: empty values and `bearer_token: ""` count as unset, `basic_auth: {}` as set. `bearer_token` / `proxy_url` / `no_proxy` must be strings (quote a value YAML would read as a boolean, number or date). The same holds for the string fields under `basic_auth`, `oauth2`, `authorization` and `tls_config`: quote an all-digit `password`, `username`, `client_id`, `client_secret` or `credentials`, or a value yaml.v3 reads as a number or date (`1e3`, `0x1F`, `2024-01-02`), as in `password: "123456"`. Unquoted, validate-config's `yaml_quoting` row fails and lists each one with the file, field path and the fix (such as `quote it, without a tag: password: "123456"`); add the quotes as it says. The reason: the route generator and the validation tools (validate-config and the conf.d lints) read conf.d with yaml.v3 through `da-guard parse-tree`, and the value is what the tag it resolves says — an unquoted `0x1F` is the integer 31, `1e3` the float 1000, `2024-01-02` a date — so Alertmanager would not receive the string you wrote ([#2906](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2906)).
 - `http_config.proxy_url`: must be a string; tenant-api rejects only values Go's `net/url` cannot parse (such as `::x`, a host with a space, `%zz`, a bad port), and the route generator leaves that to its `--validate` amtool gate. `proxy_from_environment: true` cannot be combined with a non-empty `proxy_url` or with `no_proxy`; `no_proxy` needs `proxy_url`; `proxy_connect_header` needs a non-empty `proxy_url` or `proxy_from_environment`.
 
 The shapes deliberately stricter than Alertmanager are the rows marked `strict` in the shared table [`receiver_presence_cases.json`](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/app/pkg/receiverspec/testdata/receiver_presence_cases.json).
 
 `generate_alertmanager_routes` (also without amtool on PATH, except whether `proxy_url` parses) and tenant-api's `PUT /api/v1/tenants/{id}` and `POST /api/v1/tenants/{id}/validate` apply the same rules. tenant-api answers PUT with 400 `INVALID_BODY` and validate with `valid: false`, judging only the receivers the body writes. ⚠️ For the generator, "rejected" means one of two things. A boolean field (`send_resolved`, `require_tls`, `proxy_from_environment`) holding a value of the wrong type refuses the whole tree in every mode: rc 1 and no output written (the first item above). For every other rule it means a WARN and that tenant's receiver and route are skipped; the output is still written with rc 0 (`--strict` does not change that). Only `--validate` exits 1, so CI must run `--validate`.
+
+### Credentials in a Secret (`secretRef`)
+
+Seven credential fields may hold a reference to a Kubernetes Secret instead of the value ([#1560](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1560)): webhook / Rocket.Chat `url`, Slack `api_url`, Teams `webhook_url`, PagerDuty `service_key` / `routing_key`, email `auth_password`. Email `headers` and webhook `http_config` have no Alertmanager `*_file` counterpart and take none, at any depth: a reference anywhere else is found by the generator after rendering and the receiver is refused (`secret_ref_unsupported_field`), never written into the Alertmanager config as is.
+
+A reference **never names its Secret**; it has one of two shapes:
+
+```yaml
+_routing:
+  receiver:
+    type: slack
+    api_url: {secret: {key: slack-url}}                    # the tenant's own Secret: da-<tenant>
+  routes:
+    - match: {severity: critical}
+      receiver:
+        type: webhook
+        url: {secret: {shared: corp-alerting, key: url}}   # a shared Secret, listed in the deployment policy
+```
+
+- **The tenant's own Secret**: `{secret: {key: <key>}}`. Its name is always `da-<tenant>`, derived from the tenant id; a tenant cannot write another name, so it cannot reference another tenant's Secret. A reference in `_routing_defaults` is derived for each tenant that inherits it. With `{{tenant}}`, each receiver `_routing_enforced` expands to belongs to that tenant; the platform-wide receiver (no `{{tenant}}`) belongs to no tenant and can use a shared Secret only.
+- **A shared Secret**: `{secret: {shared: <alias>, key: <key>}}`. The alias must be listed under `shared_secrets` of the deployment policy file (`generate-routes --policy`, tenant-api's `generator.policy`):
+
+  ```yaml
+  allowed_domains: ["*.example.com"]
+  shared_secrets:
+    corp-alerting: {secret: corp-alerting, fields: [api_url, webhook_url, url]}
+  ```
+
+  `secret` is the real Secret name and may not start with `da-` (it would collide with a tenant's derived name); `fields` lists only fields whose content is the destination itself, never `auth_password`. With no policy file, or no `shared_secrets` in it, there is no shared exception at all. A receiver that uses any shared Secret may not set `http_config.proxy_url`: the tenant chose that proxy, and it would see the request to the shared destination (`secret_ref_shared_proxy_url`). A malformed `shared_secrets` (not a mapping, an alias that is not a DNS-1123 label, an entry that is not `{secret, fields}`, a name starting with `da-`, a field that takes no Secret) makes the whole policy unusable: exit code `2`.
+- **`auth_password`**: the tenant's own Secret only, and only under a policy whose `allowed_domains` is non-empty and admits the `smarthost` host. The tenant writes the `smarthost`, and the password is sent there.
+
+The generator writes the reference as Alertmanager's `<field>_file: <root>/<secret-name>/<key>` and drops the field; `<root>` defaults to `/etc/alertmanager/secrets` and is set with `generate-routes --secret-mount-root`. A receiver that breaks any rule above is not rendered: `generate-routes --validate` exits non-zero, `validate-config`'s routes row FAILs, and a tenant-api write gets 422. When a URL field is a reference the generator cannot see its host, and `allowed_domains` does not check it: the Secret is created by the operator or ExternalSecrets, and a tenant can write neither its content nor its name. `test-notification` cannot read the Secret, so such a receiver is always `SKIPPED` and nothing is sent.
+
+⛔ **Mount contract (required for BYO)**: the Alertmanager container must mount every referenced Secret at `<root>/<secret-name>/`, one file per key. This is the layout Prometheus Operator's `spec.secrets` uses (`/etc/alertmanager/secrets/<name>`); the repo's own `watchdog-heartbeat` is mounted at `/etc/alertmanager/secrets/watchdog-heartbeat/`. Neither the generator nor tenant-api can read Secrets, so neither sees whether one exists: a missing file fails in Alertmanager only when it sends.
 
 ### Message Templates (Go Template)
 
@@ -348,8 +412,9 @@ Email and Teams use the same Go template syntax, only field names differ:
 ### Tool Verification
 
 ```bash
-# 1. Generate fragment (dry-run preview)
-da-tools generate-routes --config-dir /data/conf.d --dry-run
+# 1. Preview the merged alertmanager.yml (dry-run, no file written)
+da-tools generate-routes --config-dir /data/conf.d --output-alertmanager \
+  --base-config /data/alertmanager.yml --dry-run
 
 # 2. Validate configuration legality
 da-tools generate-routes --config-dir /data/conf.d --validate
@@ -566,7 +631,7 @@ Four things must be understood up front, or you will form the wrong expectation:
    - Pick `alert_source="platform"` → every platform self-monitoring alert except `Watchdog` is delivered; tenant criticals go through each tenant's own `_routing` (and not to the NOC).
    - Pick `severity="critical"` → the NOC gets every tenant critical, but platform self-monitoring coverage stops at the `severity: critical` ones; the `warning` and `info` ones stay silent.
 
-   ⚠️ Do not try to work around this by hand-adding a second route to the base ConfigMap: `route.routes` is **replaced wholesale** on regeneration (`assemble_configmap`), so a hand-added route disappears at the next regen.
+   ⚠️ If you hand-add a second route to the base config for the other need: it is kept on regeneration (every output is rendered afresh from your base, [#1211](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/1211)), placed after the platform and enforced routes and before the tenant routes. So if it has no `continue: true` and matches tenant alerts, those alerts never reach the tenants' own routes — make the hand-added route match only the alerts you want, or give it `continue: true`. Do not name its receiver `tenant-…` / `platform-enforced…`: only the generator writes those names, and a base holding one is refused (exit 1). ⚠️ The v2.9.0 image still replaces `route.routes` wholesale, so a hand-added route disappears at the next regeneration <!-- image-caveat: v2.9.0 -->
 
 4. **Mode B (`{{tenant}}` expansion) is the wrong tool for platform alerts — and it fails in two opposite directions**: each per-tenant enforced route hard-codes a `tenant="<name>"` matcher (`scripts/tools/ops/_grar_routes.py`).
    - **Never delivered**: the alerts with no `tenant` label at all (every one except the 3 in the next item) can never match any per-tenant route.
@@ -603,7 +668,7 @@ Apply during a maintenance window, or at least outside a known incident.
 
 ## Alertmanager Operator Path
 
-> Using Prometheus Operator's AlertmanagerConfig CRD? See the [Prometheus Operator Integration Guide](prometheus-operator-integration.en.md) for AlertmanagerConfig v1beta1 generation, validation, and migration guidance.
+> Managing Alertmanager with the Prometheus Operator? Routing is still rendered by `generate-routes`; the output goes into a Secret the Alertmanager CR loads through `spec.configSecret`. The platform does not generate AlertmanagerConfig CRDs (the Operator would prepend their routes before the global routes with a forced `continue: true`). Procedure: [Operator Alertmanager Integration](operator-alertmanager-integration.en.md); overview: [Prometheus Operator Integration Guide](prometheus-operator-integration.en.md).
 
 ## Related Resources
 

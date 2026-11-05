@@ -58,9 +58,11 @@ Checks:
   14. Unread keys  — every key of every tenant that no reader reads, by the
                     shared verdict (`_lib_key_verdict`, ADR-038): misspelt
                     keys, a `disable` that switches nothing off, a key read
-                    in no layer it is written in. Report only: WARN, never
-                    FAIL, and da-guard failing is a WARN that the verdict is
-                    incomplete, not a refusal (ADR-038 decisions 4 and 5)
+                    in no layer it is written in. FAIL on an error, on a
+                    threshold key no root platform file lets it judge, and
+                    when no verdict is given (exit 2 when da-guard fails);
+                    warnings and notices alone are a WARN (ADR-038
+                    decisions 4–7, #3016)
   15. Custom alert sources — the custom alerts the compiler builds a rule
                     for beside the ones the exporter serves a threshold for
                     (#3042): a rule that never fires, a served threshold no
@@ -131,8 +133,7 @@ sys.path.insert(0, str(_THIS_DIR.parent))  # Repo subdir layout
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_confd import (  # noqa: E402
     WARN_LIMIT,
     FlatRead,
@@ -901,11 +902,16 @@ def check_routes(
     # since this row is the only one that reads `--policy`, an unusable path
     # must not hide behind a config finding — it is exit 2 either way.
     allowed_domains = None
+    secrets = None  # #1560: no policy, no shared Secret
     if policy_file is not None:   # ⛔ not truthiness: "" is supplied (#1616)
         # #3142: the generator's own resolver — the min_generator_version
         # gate (ADR-036 §6) included, as generate-routes applies it.
         try:
-            allowed_domains = gen.resolve_policy(policy_file).allowed_domains
+            policy = gen.resolve_policy(policy_file)
+            allowed_domains = policy.allowed_domains
+            # #1560: the mount root only shapes the rendered path, not the
+            # verdict, so this row renders with the default.
+            secrets = policy.secret_binding()
         except gen.PolicyInputError as exc:
             # ⛔ hint= is not decoration here. Without it this row inherits the
             # generic routes advice ("check _routing for invalid receiver
@@ -936,7 +942,7 @@ def check_routes(
     try:
         routes, receivers, route_warnings = gen.generate_routes(
             routing, allowed_domains=allowed_domains,
-            enforced_routing=enforced_routing, tenants=dedup)
+            enforced_routing=enforced_routing, tenants=dedup, secrets=secrets)
         inhibit_rules, dedup_warnings = gen.generate_inhibit_rules(dedup)
     finally:
         sys.stderr = old_stderr
@@ -1611,7 +1617,14 @@ def _policy_dsl_row(config_dir: str, policy_dsl_file: str | None,
         return _make_result("policy_dsl", PASS,
                             ["No tenant configs found — skipped"])
 
-    result = pe.evaluate_policies(rules, tenant_configs, inputs.aliases)
+    try:
+        # It asks da-guard for the #1231 spellings (#3556): the load's failure.
+        result = pe.evaluate_policies(rules, tenant_configs)
+    except (DaGuardNotFoundError, DaGuardError) as exc:
+        return _tenant_load_failure_row(
+            "policy_dsl", exc, config_dir,
+            (_POLICY_DSL_TREE_UNREADABLE_HINT, _POLICY_DSL_NO_CONFIG_FILE_HINT,
+             _POLICY_DSL_NO_DA_GUARD_HINT))
     scope["evaluated"] = True
 
     details = []
@@ -2098,32 +2111,40 @@ def check_guard_errors(config_dir: str) -> dict[str, object]:
 _UNREAD_KEYS_INCOMPLETE_HINT = (
     "No key was judged: the verdict needs da-guard (built into the image; in "
     "the repo `make da-guard-build`, or set `DA_GUARD_BINARY`). Fix what the "
-    "line above names and run again. Reported only, not yet blocking (#3016).")
+    "line above names and run again: a tree no verdict was given for does not "
+    "pass (#3016).")
 _UNREAD_KEYS_UNDECIDABLE_HINT = (
     "Whether a threshold key is read is judged against the root platform "
     "files (`_defaults.yaml` at the root of --config-dir); none was read. "
-    "Point --config-dir at the conf.d root, or add the root `_defaults.yaml`, "
-    "and run again. Reported only, not yet blocking (#3016).")
+    "Point --config-dir at the conf.d root (a sharded team's directory alone "
+    "has none: validate the assembled tree), or add the root `_defaults.yaml`, "
+    "and run again (#3016).")
 
 
 def check_unread_keys(config_dir: str) -> dict[str, object]:
     """Keys no reader reads (ADR-038), by the shared verdict
     (`_lib_key_verdict.judge_tree`: `da-guard key-verdict`).
 
-    Report only, until the gates block (#3016): every finding is a WARN
-    line with the severity the verdict gives it once they do, and the exit
-    code does not change. A verdict that cannot be given — no da-guard, or
-    da-guard failing — is a WARN saying so, never a FAIL (decision 5: a
-    broken da-guard must not refuse writes). No root platform file read:
-    the threshold keys are undecidable, said in one line (decision 7).
+    FAIL when the verdict blocks (#3016): a finding at error, or a
+    threshold key it cannot judge because no root platform file was read
+    (decision 7) — the document's `blocks`, Go's one rule. Warnings and
+    notices alone are a WARN. A verdict that cannot be given is a FAIL too,
+    as tenant-api refuses a write it has no verdict for (decision 5): a
+    caller error when da-guard itself fails (exit 2), a plain FAIL when the
+    tree's own content stops it (rules Policy-as-Code refuses).
     """
     try:
         verdict = key_verdict.judge_tree(config_dir)
-    except Exception as exc:  # noqa: BLE001 — any failure is "not judged", never a refusal
-        return _make_result("unread_keys", WARN, [
+    except Exception as exc:  # noqa: BLE001 — any failure is "not judged": no pass
+        # The binary's fault (missing, stale, broken) is a caller error; a
+        # tree da-guard refuses to judge (a tenant in two files) is the
+        # tree's own, already a FAIL in the row that names it (#2725).
+        tool = isinstance(exc, DaGuardNotFoundError) or (
+            isinstance(exc, DaGuardError) and exc.binary_fault)
+        return _make_result("unread_keys", FAIL, [
             "verdict incomplete: the keys no reader reads were not judged "
             f"({type(exc).__name__}: {' '.join(str(exc).split())})"],
-            hint=_UNREAD_KEYS_INCOMPLETE_HINT)
+            caller_error=tool, hint=_UNREAD_KEYS_INCOMPLETE_HINT)
     details = [key_verdict.finding_line(f, WARN_LIMIT) for f in verdict.findings]
     undecidable = key_verdict.undecidable_line(verdict)
     if undecidable is not None:
@@ -2142,7 +2163,7 @@ def check_unread_keys(config_dir: str) -> dict[str, object]:
             # ⛔ A platform declaring nothing: every key reads as unread, and
             # "remove a key nothing reads" would delete a working config.
             hint = _no_declared_defaults_hint(config_dir)
-        return _make_result("unread_keys", WARN, details, hint=hint)
+        return _make_result("unread_keys", FAIL if verdict.blocks else WARN, details, hint=hint)
     return _make_result("unread_keys", PASS, [
         f"{len(verdict.keys)} tenant(s): every key is read by some reader"])
 
@@ -2447,7 +2468,8 @@ _CHECK_HINTS: dict[str, tuple[str, str]] = {
         "switches nothing off usually sits on a misspelt key; a line on a "
         "`version` label or a renamed key is the exporter's and says what to "
         "change. `da-tools explain-keys --config-dir <dir> --tenant <name>` shows, per "
-        "key, who reads it and why not. Reported only, not yet blocking (#3016).",
+        "key, who reads it and why not. An error, or a threshold key no root "
+        "platform file lets the verdict judge, fails the run (#3016).",
         "docs/cli-reference.md#validate-config",
     ),
     # #1653: not a check — the one row `main()` emits under --json when
@@ -2961,9 +2983,6 @@ def _main() -> "Report | None":
     parser.add_argument("--strict", action="store_true",
                         help=_h('strict'))
     args = parser.parse_args()
-    if args.json:
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope()
 
     # #3276: the shared judgement of a caller-given path — a directory under
     # a parent the caller cannot enter is named as such, not "not found".
@@ -3077,8 +3096,8 @@ def _main() -> "Report | None":
     results.append(_run_check("guard_errors", check_guard_errors,
                               args.config_dir, _config_dir=args.config_dir))
 
-    # 14. Keys no reader reads (ADR-038) — unconditional, report only:
-    # WARN, never FAIL, until the gates block (#3016).
+    # 14. Keys no reader reads (ADR-038) — unconditional; FAIL when the
+    # verdict blocks or cannot be given (#3016).
     results.append(_run_check("unread_keys", check_unread_keys,
                               args.config_dir, _config_dir=args.config_dir))
 

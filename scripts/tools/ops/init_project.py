@@ -693,8 +693,8 @@ def _critical_prefill_note(critical: dict) -> str:
         argument available for the rule it states.
 
         What survives every regime is the invariant: bare `validate-config`
-        WARNs and exits 0 on this input (measured, `--strict` included), so its
-        verdict never establishes that a dangling `_critical` is gone. A
+        FAILs and exits 1 on this input (measured, `--strict` included; it
+        warned and exited 0 until the key verdict blocked, #3016). A
         customer-facing file must carry the invariant, not the current state of
         a neighbouring defect.
 
@@ -733,11 +733,10 @@ def _critical_prefill_note(critical: dict) -> str:
         '#     back to the platform value, so the warning row returns at the\n'
         '#     _defaults.yaml number. Delete only suppresses the critical row.\n'
         '#   * If a `<base>` ever leaves `defaults:`, its `<base>_critical`\n'
-        '#     line here must go too. ONLY the tenant-api write path treats a\n'
-        '#     dangling one as blocking, and it rejects THIS WHOLE FILE —\n'
-        '#     every other change in the same save with it. `da-tools\n'
-        '#     validate-config` reports it as a WARNING and exits 0, so its\n'
-        '#     verdict never establishes that this is fixed.'
+        '#     line here must go too: no reader reads it. `da-tools\n'
+        '#     validate-config` FAILs on it (exit 1), and the tenant-api write\n'
+        '#     path rejects THIS WHOLE FILE while it is there — every other\n'
+        '#     change in the same save with it.'
     ).format(n=len(critical))
 
 

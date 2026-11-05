@@ -57,6 +57,11 @@ modules:
       receiver_required_problem: "#2180 required receiver fields by the schema's type + pattern (data-driven, not a numeric/string law); table-covered by receiver_presence_cases.json, whose AM column is asserted against Alertmanager config.Load in tests/alertmanager-inhibit"
       _find_tenant_schema: "#2180 file locator (I/O); same two-layout shape as _grar_validate._find_platform_rules_configmap, exercised by every receiver_required_problem call"
       _receiver_field_schemas: "#2180 schema reader (I/O + cache); its output is pinned by tests/shared/test_receiver_spec_parity.py"
+      is_secret_ref: "#1560 one-line shape test (a mapping with a `secret` key); a malformed reference counts as one and is refused for its shape, pinned by tests/ops/test_grar_secret_ref.py::test_malformed_or_misplaced_references_are_invalid_fields"
+      secret_ref_rule: "#1560 schema reader (definitions.secretRef key / shared pattern + maxLength, cached, fail-closed); same shape as tenant_id_rule, pinned against jsonschema by tests/shared/test_secret_ref_schema.py"
+      secret_ref_problem: "#1560 shape judge of definitions.secretRef (data-driven by the schema, not a numeric/string law); the same accept / refuse cases given to it and to jsonschema by tests/shared/test_secret_ref_schema.py"
+      receiver_secret_ref_fields: "#1560 schema-table filter (fields whose anyOf carries the secretRef branch); the wired field set pinned per receiver type by tests/shared/test_receiver_spec_parity.py"
+      _receiver_secret_ref_problem: "#1560 per-field composition of is_secret_ref + secret_ref_problem (wrong shape, or a reference on a field that takes none); example-pinned by tests/ops/test_grar_secret_ref.py::test_malformed_or_misplaced_references_are_invalid_fields"
       is_file_reference_key: "#3257 the file-reference key rule (suffix _file / _ref, or files); pinned key by key against the schema's definitions.fileReferenceKey pattern by tests/shared/test_receiver_file_reference_rule.py"
       file_reference_paths: "#3257 recursive walk naming every rule-matching key of a receiver; example-pinned at every depth (http_config, nested auth blocks, header lists, list items) by tests/shared/test_receiver_file_reference_rule.py"
       file_reference_problem: "#3257 message helper (the paths joined into one problem string); no law to property-test"
@@ -318,15 +323,16 @@ modules:
       as_finding: "#2766 writer fallback for a plain str (unclassified, never); the guard test_every_stream_and_refusal_line_is_a_finding keeps it unreached"
       _exactly_one_kind: "#2766 kind of a receiver exactly-one problem from the same field states (invalid / missing / conflicting); closed case list pinned by test_grar_findings.py::test_receiver_kinds_follow_the_field_states"
       _exactly_one_field: "#2904 the receiver field an exactly-one finding names (da-guard's choice: first non-string / group's first when none set / last set); closed case list pinned by test_grar_findings.py::test_exactly_one_field_is_da_guards and cross-language by the route_findings column of routing_policy_parity_matrix.json"
+      own_secret_name: "#1560 one-line name derivation (da-<tenant>); every rendered own reference pinned by tests/ops/test_grar_secret_ref.py::test_own_reference_renders_as_the_file_field"
+      _receiver_secret_refs: "#1560 list of (field, reference) on the fields that take one; exercised by every binding and render case in tests/ops/test_grar_secret_ref.py"
+      secret_binding_findings: "#1560 the binding refusals (incl. the shared-Secret proxy_url rule) over one effective receiver (rule table, not a numeric/string law); each kind example-pinned by tests/ops/test_grar_secret_ref.py::test_binding_violations_drop_the_receiver and the owner / layer cases there"
+      render_secret_refs: "#1560 in-place rewrite to <field>_file: <root>/<secret>/<key>; own, shared and configurable-root rows pinned by tests/ops/test_grar_secret_ref.py"
+      secret_ref_paths: "#1560 recursive walk naming each mapping-with-a-secret-key left in the output; flat, nested-list and multi-leftover paths pinned by tests/ops/test_grar_secret_ref.py::test_a_reference_left_in_the_output_drops_the_receiver"
 
   scripts/tools/ops/_grar_validate.py:
     covered:
       - _extract_host
       - validate_receiver_domains
-      - _legacy_tenant_key
-      - _other_tenant_key_spellings
-      - overlay_across_spellings
-      - drop_shadowed_spellings
     excluded:
       load_policy: "I/O-bound; thin wrapper over load_yaml_file (covered)"
       load_policy_document: "#2901 I/O-bound policy reader (load_policy is its wrapper); every accepted and refused min_generator_version shape example-pinned by test_grar_min_generator_version.py"
@@ -382,7 +388,6 @@ modules:
       _matchers_gate_label_present: "#1132 presence-gate predicate (does a side exclude the empty string for a label); fully covered by test_generate_routes_orchestration.py::TestEqualLabelGatedInvariant (matchall/exact/neg-empty/legacy-map cases)"
       find_ungated_equal_label_inhibits: "#1132 ungated-equal-label finder; covered by TestEqualLabelGatedInvariant (gated/ungated/partial/legacy-map/malformed) + the committed-configmap regression guard"
       assert_equal_labels_gated: "Raises-wrapper over find_ungated_equal_label_inhibits; covered by TestEqualLabelGatedInvariant + the strict-raise/warn enforce test"
-      _canonical_tenant_key: "#1231 alias canonicalizer, exact-match mirror of Go canonicalKeyFor; its inverse law with _legacy_tenant_key is property-tested in test_property_tools.py (the alias-spellings class) + pinned to the registry SSOT by test_check_threshold_registry.py::test_python_alias_mirror_pinned_to_registry"
       is_routing_tree_error: "#2326 one-line prefix test on ROUTING_TREE_ERROR_PREFIX; example-pinned by test_generate_routes_nested_tree.py (validate-config schema row FAIL)"
       is_field_type_error: "#2906 one-line prefix test on FIELD_TYPE_ERROR_PREFIX; example-pinned by test_grar_field_types.py (validate-config schema row FAIL)"
       routing_block_receivers: "#2906 closed walk (receiver / overrides[i] / routes[i] receiver per block kind), the positions ignored_routing_keys looks into; example-pinned by test_grar_field_types.py"
@@ -398,6 +403,8 @@ modules:
       blocking_generation_errors: "#2279 two-category filter (WARN…skipping | duplicate receiver name) shared by --validate and validate-config; example-covered by test_grar_receiver_name_collision.py (CLI rc 1, validate-config FAIL, shared-caller pin) + the existing #2164 skipped-entry tests"
       receiver_name_collisions: "#2279 group-by-name over (name, source) pairs; example-covered by test_grar_receiver_name_collision.py (routes- and overrides-type collisions name both sources, no-collision control)"
       duplicate_tenant_errors: "#2315 formatter over _lib_confd.duplicate_declarations' {id: [files]} (the grouping is that shared predicate's); example-covered by test_grar_duplicate_tenant.py (root pair, .yaml+.yml, root+nested name every file; overlay / distinct-tenant / filename controls; shared-scan agreement with validate-config)"
+      _load_shared_secrets: "#1560 fail-closed reader of the --policy shared_secrets (alias / Secret name / fields shape, da- prefix, auth_password); accepted and every refused shape pinned by tests/ops/test_grar_secret_ref.py::test_policy_reads_shared_secrets and test_unusable_shared_secrets_make_the_policy_unusable"
+      _shared_secret_fields: "#1560 set algebra (every field that takes a Secret reference, minus auth_password); read through _load_shared_secrets' refusals in tests/ops/test_grar_secret_ref.py"
 
   # ── Lint helpers (small but load-bearing) ─────────────────────────
 

@@ -996,10 +996,9 @@ def overlay_platform_tenants(
 
     *merge* ``(dst, src)`` applies one entry; default ``dst.update(src)``,
     per literal key — right for the routing readers, whose keys have one
-    spelling. A reader of THRESHOLD keys passes
-    ``_grar_validate.overlay_across_spellings`` so a tenant's legacy
-    ``mysql_cpu`` beats a platform ``mysql_threads_running`` (#2368) as it
-    does on /metrics.
+    spelling. Threshold keys, whose #1231 spellings merge per threshold
+    (#2368), are Go's to merge (`da-guard effective`); no Python reader
+    merges them (#3556).
     """
     apply = merge if merge is not None else dict.update
     platform_entries: list[tuple[str, str, dict]] = []

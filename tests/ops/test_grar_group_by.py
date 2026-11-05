@@ -207,13 +207,14 @@ class TestStrict:
         d = _tree(tmp_path, _MAIN + "      group_by: [alertname, \"on\", \"8\"]\n")
         assert _strict_errors(d) == []
 
-    @pytest.mark.parametrize("mode", [["--dry-run", "--strict"], ["--validate", "--strict"]])
+    @pytest.mark.parametrize("mode", [["--output-alertmanager", "--dry-run", "--strict"],
+                                      ["--validate", "--strict"]])
     def test_cli_strict_rc1(self, tmp_path, mode):
         d = _tree(tmp_path, _MAIN + "      group_by: [alertname, true, 8]\n")
         r = _gar(d, *mode)
         assert r.returncode == 1, r.stdout + r.stderr
         assert f"ERROR: tenant '{_T}': group_by[1] is bool True, not a string" in r.stderr
-        assert "DRY RUN OUTPUT" not in r.stdout
+        assert "--- DRY RUN" not in r.stdout
 
 
 class TestNonStrictRepair:
@@ -279,18 +280,18 @@ class TestNonStrictRepair:
                   "    constraints:\n      enforce_group_by: [tenant]\n")
         d = _tree(tmp_path, _MAIN + "      group_by: [alertname, {a: 1}, tenant]\n",
                   {"_domain_policy.yaml": policy})
-        r = _gar(d, "--dry-run")
+        r = _gar(d, "--output-alertmanager", "--dry-run")
         assert r.returncode == 0, r.stdout + r.stderr
         assert "missing required labels" not in r.stderr
         assert f"WARN: {_T}: group_by[1] is dict {{'a': 1}}, not a string" in r.stderr
 
     def test_cli_dry_run_rc0_and_output(self, tmp_path):
         d = _tree(tmp_path, _MAIN + "      group_by: [alertname, true, 8]\n")
-        r = _gar(d, "--dry-run")
+        r = _gar(d, "--output-alertmanager", "--dry-run")
         assert r.returncode == 0, r.stdout + r.stderr
         assert (f"WARN: {_T}: group_by[1] is bool True, not a string — quote it in "
                 "YAML") in r.stderr
         assert "ERROR" not in r.stderr
-        body = r.stdout.split("--- DRY RUN OUTPUT ---\n", 1)[1].split("\n\n--- ", 1)[0]
+        body = r.stdout.split("--- DRY RUN: alertmanager.yml ---\n", 1)[1].split("\n\n--- ", 1)[0]
         doc = yaml.safe_load(body)
         assert _tenant_route(doc["route"]["routes"])["group_by"] == ["alertname"], body

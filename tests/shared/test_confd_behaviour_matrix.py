@@ -169,10 +169,6 @@ class Tool:
         raise AssertionError(f"{self.argv}: no script named")
 
 
-def _empty_source(cell: pathlib.Path) -> None:
-    (cell / "src").mkdir()
-
-
 def _helm_values(cell: pathlib.Path) -> None:
     """A K8s target for every tenant the catalogue's files declare a db_type
     for, so a tree with nothing flagged is no retire-ordering violation."""
@@ -253,10 +249,6 @@ TOOLS: dict[str, Tool] = {
     "init_project": Tool((_PY, _T + "ops/init_project.py", "--non-interactive", "--tenants", "newt",
                           "--deploy", "helm", "--force", "-o", "{cell}",
                           "--da-tools-image", "ghcr.io/vencil/da-tools:v0.0.0")),
-    "operator_generate": Tool((_PY, _T + "ops/operator_generate.py", "--config-dir", "{conf}",
-                               "--rule-packs-dir", "{box}/rule-packs", "--dry-run")),
-    "migrate_to_operator": Tool((_PY, _T + "ops/migrate_to_operator.py", "--source-dir", "{cell}/src",
-                                 "--config-dir", "{conf}", "--dry-run"), prep=_empty_source),
     "check_retire_drift": Tool((_PY, _T + "lint/check_retire_drift.py", "--config-dir", "{conf}",
                                 "--helm-dir", "{cell}/helm", "--namespaces-file", "{cell}/ns.yaml",
                                 "--ci"), prep=_helm_values),
@@ -369,6 +361,13 @@ NOT_IN_MATRIX: dict[str, str] = {
                                              "needs helm and amtool, and reads its tree through "
                                              "the generator and da-guard, which have their own rows"),
     "tools/ops/generate_rule_pack_split.py": "splits rule packs; reads no conf.d",
+    # #3572: neither emits AlertmanagerConfig any more, so neither reads a
+    # conf.d; their --config-dir is refused (rc 2) with the routing remedy
+    # (tests/ops/test_operator_routing_single_renderer.py).
+    "tools/ops/operator_generate.py": "reads rule packs only; reads no conf.d since #3572",
+    "tools/ops/migrate_to_operator.py": ("reads a --source-dir of ConfigMap dumps / rule files "
+                                         "(da-guard's list-only walk), not a conf.d tree; "
+                                         "reads no conf.d since #3572"),
     "tools/dx/generate_platform_data.py": "reads the repo's own conf.d at a fixed path; takes no operand",
     "tools/dx/sync_schema.py": "generates the schema from Go source; reads no conf.d",
     "tools/lint/check_account_registry_monotonic.py": "reads one registry file across commits, not a tree",
@@ -640,8 +639,6 @@ def test_xfail_keys_are_cells_of_the_matrix():
     assert not stale, f"XFAIL entries for no cell: {stale}"
     for key, reason in XFAIL.items():
         assert reason.startswith(("X: ", "β2: ")), f"{key}: the reason names no follow-up: {reason!r}"
-    for tool in ("operator_generate", "migrate_to_operator"):
-        assert not [k for k in XFAIL if k[0] == tool], f"{tool} must pass every cell"
 
 
 def test_catalogue_rows_have_a_matrix_class():

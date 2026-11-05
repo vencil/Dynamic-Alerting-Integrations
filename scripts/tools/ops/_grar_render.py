@@ -6,15 +6,16 @@ from generate_alertmanager_routes for backwards-compatible test imports.
 
 Functions:
   Output rendering:
-    render_output(...)           → fragment YAML (route + receivers + inhibit_rules)
     load_base_config(path)       → base AM YAML; defaults ONLY when the flag was
                                    omitted — a supplied-but-unusable value
                                    raises BaseConfigInputError (#1616)
-    assemble_configmap(...)      → full K8s ConfigMap YAML for GitOps PR
+    merge_generated(base, ...)   → the ONE merge every output mode uses (#1211):
+                                   renders output = merge(source base, conf.d)
+    assemble_alertmanager_yml(...) → merged alertmanager.yml text
+    assemble_configmap(...)      → the same text wrapped as a K8s ConfigMap
 
   ConfigMap operations (--apply mode, K8s cluster deploy):
     _read_existing_configmap(...)         → kubectl get + parse
-    _merge_routes_receivers_inhibits(...) → merge generated into existing
     _apply_merged_configmap(...)          → kubectl apply via stdin
     _reload_alertmanager(namespace)       → curl POST /-/reload (False on failure, #2219)
     apply_to_configmap(...)              → orchestrate read → merge → amtool gate
@@ -200,39 +201,6 @@ def _inject_custom_alert_isolation(routes: list[dict], receivers: list[dict]) ->
     return out_routes, out_receivers
 
 
-def render_output(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict] | None = None) -> str:
-    """Render Alertmanager route + receiver + inhibit config as YAML fragment.
-
-    Constructs a clean YAML dictionary containing the tenant routing config
-    (route tree + receivers + inhibit rules) suitable for merging into an
-    existing alertmanager.yml or for --dry-run output.
-
-    Args:
-        routes: list of Alertmanager route dicts
-        receivers: list of Alertmanager receiver dicts
-        inhibit_rules: optional list of inhibit_rule dicts (severity dedup)
-
-    Returns:
-        YAML string fragment with keys: route (with nested routes), receivers, inhibit_rules.
-        Empty sections are omitted from the output.
-    """
-    # Build the fragment as a clean dict
-    fragment = {}
-
-    if routes:
-        fragment["route"] = {
-            "routes": routes,
-        }
-
-    if receivers:
-        fragment["receivers"] = receivers
-
-    if inhibit_rules:
-        fragment["inhibit_rules"] = inhibit_rules
-
-    return yaml.dump(fragment, default_flow_style=False, allow_unicode=True, sort_keys=False)
-
-
 # ── Root receiver with no integration (#2660) ──────────────────────
 
 def receiver_integration_kinds(receiver: object) -> list[str]:
@@ -379,7 +347,47 @@ def custom_firehose_findings(undelivered: list[UndeliveredCustomAlerts],
     return out
 
 
-# ── §11.3 AM GitOps: --output-configmap ────────────────────────────
+# ── watchdog-heartbeat with no integration (#1211 gap 2) ───────────
+
+#: The Watchdog route's receiver, as its builder names it.
+WATCHDOG_RECEIVER = _build_watchdog_route()[1][0]["name"]
+WATCHDOG_DOC = "docs/integration/alerting-plane-self-liveness.en.md"
+
+
+def watchdog_receiver_findings(am: object, *, strict: bool,
+                               real_base: bool) -> list[Finding]:
+    """The finding for an assembled config whose ``watchdog-heartbeat``
+    receiver delivers nowhere (no non-empty ``*_configs``,
+    ``receiver_integration_kinds``), or none (ADR-025 D1: the always-firing
+    Watchdog must reach an external dead-man's switch, or a dead alerting
+    pipeline goes unnoticed).
+
+    *real_base*: the config was assembled on the operator's own base
+    (``--base-config``, or the cluster's on ``--apply``). Only then is the
+    finding ``blocks: strict`` (ERROR, rc 1 under ``--strict``); the built-in
+    base leaves the receiver unwired by design, and refusing it would break
+    every ``--strict`` run that assembles on it — so it stays a WARN, like
+    ``custom_firehose_findings``' explicit opt-out.
+    """
+    receivers = am.get("receivers") if isinstance(am, dict) else None
+    entry = next((r for r in (receivers if isinstance(receivers, list) else [])
+                  if isinstance(r, dict) and r.get("name") == WATCHDOG_RECEIVER), None)
+    if receiver_integration_kinds(entry):
+        return []
+    level = "ERROR" if (strict and real_base) else "WARN"
+    where = ("the base config's" if real_base
+             else "the built-in base's (no --base-config: it is unwired by "
+                  "design, so --strict does not escalate this)")
+    return [Finding(
+        f"{level}: {where} {WATCHDOG_RECEIVER!r} receiver has no integration "
+        "(no non-empty *_configs) — the always-firing Watchdog heartbeat "
+        "reaches no external dead-man's switch, so a dead alerting pipeline "
+        f"goes unnoticed. Wire it to one: see {WATCHDOG_DOC}.",
+        kind="watchdog_undelivered",
+        blocks="strict" if real_base else "never")]
+
+
+# ── §11.3 AM GitOps: --output-configmap / --output-alertmanager ────────────────────────────
 
 # Minimal inline defaults when --base-config is not provided
 _DEFAULT_BASE_CONFIG = {
@@ -413,6 +421,10 @@ class BaseConfigInputError(ValueError):
 
 #: The ConfigMap key Alertmanager's config is mounted from.
 AM_CONFIGMAP_KEY = "alertmanager.yml"
+#: The key ``--apply`` keeps the SOURCE config under, beside the output it
+#: renders from it (#1211 gap 2) — Prometheus Operator's input / generated
+#: Secret pair, in one ConfigMap. Alertmanager ignores the extra file.
+AM_BASE_CONFIGMAP_KEY = "alertmanager.base.yml"
 
 
 def emitted_alertmanager_yml(cm_yaml: str) -> str:
@@ -490,7 +502,7 @@ def load_base_config(path: str | None) -> dict:
     try:
         with open(path, "rb") as fh:
             raw = fh.read()
-        raw.decode("utf-8")
+        raw_text = raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise BaseConfigInputError(
             f"--base-config: {path!r} is not valid UTF-8: {exc}") from exc
@@ -516,6 +528,8 @@ def load_base_config(path: str | None) -> dict:
             f"{consumer_read_message(exc)}\n"
             "  --base-config takes a complete Alertmanager config (at least `route:` and "
             "the `receivers:` it names); `global:` / `inhibit_rules:` may be left out.") from exc
+    # #1211 gap 2: an output fed back as the source (BaseIsAnOutputError, rc 1).
+    assert_text_is_not_an_output(raw_text, f"--base-config {path!r}")
     # Ensure required keys exist. deepcopy so a caller mutating the result
     # cannot reach into _DEFAULT_BASE_CONFIG's nested lists and change what
     # every later call in this process returns.
@@ -595,7 +609,7 @@ def assert_base_global_inherits_no_credentials(base: object) -> None:
     """Fail-closed guard (#3257): raise ValueError when the base config's
     ``global`` carries a credential a conf.d receiver would inherit
     (``base_global_inherited_credentials``). A config violation (rc 1), like
-    ``assert_base_does_not_shadow_generated``."""
+    the merged-set invariants ``merge_generated`` asserts."""
     keys = base_global_inherited_credentials(base)
     if not keys:
         return
@@ -624,117 +638,211 @@ def _platform_placeholder_receiver_names() -> frozenset[str]:
     return frozenset(names)
 
 
-def assert_base_does_not_shadow_generated(base_receivers: list | None,
-                                          generated: list[dict] | None) -> None:
-    """Fail-closed guard (#2279): raise ValueError when a base-config receiver
-    has the name of a receiver this run generates from conf.d.
+# ── The one merge every output mode uses (#1211 gap 2) ─────────────
+#
+# `--output-configmap`, `--output-alertmanager` and `--apply` all render
+# OUTPUT = merge(SOURCE base, conf.d): the base is the operator's own
+# config — the `--base-config` file, the built-in base, or on `--apply` the
+# `alertmanager.base.yml` key of the cluster's ConfigMap — and is never an
+# earlier run's output (owner decision S on #1211 gap 2). Prometheus Operator
+# works the same way: it reads the user's config from one Secret and writes
+# the merged result to another (`<name>-generated`), never back. So nothing
+# here has to tell the generator's part of a base from the operator's: a
+# base that holds generated receivers is refused instead.
+# Before #1211 gap 2 the two ConfigMap paths replaced the whole
+# `route.routes` (a BYO customer's own routes vanished), and the only path
+# that kept them — the routing fragment — lacked the four platform routes
+# that must come first.
 
-    ``assemble_configmap`` keeps the base receiver and drops the generated one
-    of the same name, so the conf.d definition would vanish without a word.
-    ⛔ The ``--apply`` path (``_merge_routes_receivers_inhibits``) is NOT
-    guarded: there the same-named receiver in the cluster is the previous
-    run's output, and replacing it is the point (owner decision on #2279).
-    """
-    placeholders = _platform_placeholder_receiver_names()
-    generated_names = {r.get("name") for r in (generated or [])
-                       if isinstance(r, dict)} - placeholders
-    shadowed = sorted({r.get("name") for r in (base_receivers or [])
-                       if isinstance(r, dict)} & generated_names)
-    if not shadowed:
+#: Receiver-name prefixes only the generator writes: ``tenant-<t>`` (+ its
+#: ``-route-<i>`` / ``-override-<i>``) and ``platform-enforced-<t>``.
+GENERATED_RECEIVER_PREFIXES = ("tenant-", "platform-enforced")
+#: The single (matcher-less) enforced NOC route's receiver.
+SINGLE_ENFORCED_RECEIVER = "platform-enforced"
+
+
+def is_generated_receiver_name(name: object) -> bool:
+    """Whether *name* is in the namespace only generated receivers use
+    (``tenant-*``, ``platform-enforced*``). The four platform receivers are
+    not: a base defines them on purpose (watchdog-heartbeat's ``url_file``)."""
+    return isinstance(name, str) and name.startswith(GENERATED_RECEIVER_PREFIXES)
+
+
+def _is_enforced_route(route: dict) -> bool:
+    r = route.get("receiver")
+    return isinstance(r, str) and (r == SINGLE_ENFORCED_RECEIVER
+                                   or r.startswith("platform-enforced-"))
+
+
+def _routes_to(route: object, names: frozenset[str]) -> bool:
+    return isinstance(route, dict) and route.get("receiver") in names
+
+
+#: The first line of every alertmanager.yml an output mode writes (#1211 gap 2,
+#: decision S). A comment, so Alertmanager ignores it; it is how an output fed
+#: back as the source is recognised when its receivers alone cannot tell —
+#: a conf.d without `_routing` / `_routing_enforced` generates no `tenant-*` /
+#: `platform-enforced*` receiver, only per-tenant inhibit rules.
+#: ⚠️ Not closed: an output with this line deleted (and no generated receiver)
+#: still passes as a source.
+GENERATED_OUTPUT_MARKER = "# GENERATED by da-tools generate-routes"
+GENERATED_OUTPUT_HEADER = (
+    f"{GENERATED_OUTPUT_MARKER} from a source config — an output, not a source:\n"
+    "# never pass it as --base-config; render again from the source instead.\n")
+
+
+class BaseIsAnOutputError(ValueError):
+    """The text offered as the source carries ``GENERATED_OUTPUT_MARKER``: it
+    is an output of this tool. A config verdict (rc 1), like
+    ``assert_base_is_a_source``, not an invocation error."""
+
+
+_PASS_THE_SOURCE = ("Pass the source the output was rendered from (keep it next "
+                    "to the output, never overwrite it with it).")
+
+
+def assert_text_is_not_an_output(text: str, where: str,
+                                 remedy: str = _PASS_THE_SOURCE) -> None:
+    """Raise ``BaseIsAnOutputError`` when *text* (the source, as read) has a
+    line starting with ``GENERATED_OUTPUT_MARKER`` — a UTF-8 BOM in front of
+    it included (``str.strip`` keeps U+FEFF)."""
+    if any(ln.strip().lstrip("\ufeff").strip().startswith(GENERATED_OUTPUT_MARKER)
+           for ln in text.splitlines()):
+        raise BaseIsAnOutputError(
+            f"ERROR: {where} is an output of da-tools generate-routes (its "
+            f"'{GENERATED_OUTPUT_MARKER}' line), not a source: rendered from it, "
+            "the generated routing and inhibit rules would be merged in a second "
+            f"time. {remedy}")
+
+
+def assert_base_is_a_source(base: object) -> None:
+    """Fail-closed guard (#2279, #1211 gap 2): the base must be the
+    operator's own config, not an earlier run's output — raise ValueError
+    (rc 1) naming the receivers when it defines any in the generated
+    namespace. Fed back, a previous output would merge its tenant routing in
+    a second time (and an operator's own ``tenant-*`` receiver would shadow
+    the generated one of that name, #2279)."""
+    receivers = base.get("receivers") if isinstance(base, dict) else None
+    names = sorted({r.get("name") for r in (receivers if isinstance(receivers, list) else [])
+                    if isinstance(r, dict) and is_generated_receiver_name(r.get("name"))})
+    if not names:
         return
     raise ValueError(
-        "ERROR: the base config defines receiver(s) with the same name as "
-        f"receiver(s) generated from conf.d: {', '.join(map(repr, shadowed))}. "
-        "The base definition would win and the conf.d one would be silently "
-        "dropped, so alerts would go to the base's endpoint. Remove or rename "
-        "them in the base config (receivers generated from conf.d do not "
-        "belong in it).")
+        "ERROR: the base config defines receiver(s) in the namespace only the "
+        f"generator writes (tenant-*, platform-enforced*): {', '.join(map(repr, names))}. "
+        "The base is your own Alertmanager config — the source the generated "
+        "routing is merged into — not an earlier output of this tool: pass that "
+        "source (keep it next to the output, never overwrite it with it), or "
+        "rename your own receivers out of that namespace.")
+
+
+def merge_generated(base: dict, routes: list[dict], receivers: list[dict],
+                    inhibit_rules: list[dict] | None, *,
+                    strict: bool = False) -> dict:
+    """*base* (a SOURCE config, ``assert_base_is_a_source``) with this run's
+    routing merged in (#1211 gap 2). *base* is not modified.
+
+    Routes — ``route.routes`` becomes, in this order:
+
+    1. the four platform routes (Watchdog, custom isolation, synthetic
+       probe, sentinel sink; ``_inject_custom_alert_isolation``) and the
+       enforced NOC route(s) (``continue: true``) — ahead of everything, so
+       no route of the base can take their alerts first;
+    2. the base's own top-level routes, in the base's order — except one to a
+       platform receiver: those four routes are the platform's, emitted
+       canonically in 1;
+    3. the tenant routes and the root fallthroughs (#2519, pinned to the
+       base's root receiver).
+
+    Receivers — the base's, then this run's; a name-only platform
+    placeholder defers to a richer base definition (watchdog-heartbeat's
+    ``url_file``). Inhibit rules — the base's, then this run's.
+
+    Raises ``ValueError`` for a base that is not a source, a receiver name
+    clash, or a merged config that breaks a platform invariant;
+    ``PlatformProbeSetUnverifiable`` (#1533) when it cannot be checked.
+    """
+    merged = copy.deepcopy(base) if isinstance(base, dict) else {}
+
+    assert_base_is_a_source(merged)
+    # #3257: a credential in the base's global would reach every conf.d
+    # receiver that leaves the field out.
+    assert_base_global_inherits_no_credentials(merged)
+
+    routes, receivers = _inject_custom_alert_isolation(routes, receivers)
+    placeholders = _platform_placeholder_receiver_names()
+
+    root = dict(merged.get("route") or {})
+    # #2519: the root fallthrough routes name THIS base's root receiver.
+    generated = pin_root_fallthrough_receiver(routes, root.get("receiver"))
+    head = generated[:4] + [r for r in generated[4:] if _is_enforced_route(r)]
+    tail = [r for r in generated[4:] if not _is_enforced_route(r)]
+    own = [r for r in (root.get("routes") or []) if not _routes_to(r, placeholders)]
+    root["routes"] = head + own + tail
+    merged["route"] = root
+
+    base_receivers = [r for r in (merged.get("receivers") or []) if isinstance(r, dict)]
+    base_names = {r.get("name") for r in base_receivers}
+    # #2279: a base receiver named like a generated one (outside the four
+    # platform receivers) would be emitted twice, or one definition lost.
+    shadowed = sorted(r["name"] for r in receivers
+                      if r["name"] in base_names and r["name"] not in placeholders)
+    if shadowed:
+        raise ValueError(
+            "ERROR: the base config defines receiver(s) with the same name as "
+            f"receiver(s) generated from conf.d: {', '.join(map(repr, shadowed))}. "
+            "The base definition would clash with the conf.d one. Rename them "
+            "in the base config.")
+    merged["receivers"] = base_receivers + [r for r in receivers if r["name"] not in base_names]
+
+    merged["inhibit_rules"] = (list(merged.get("inhibit_rules") or [])
+                               + list(inhibit_rules or []))
+
+    # ADR-025 D1: fail-closed if any inhibit rule (base or generated) would
+    # suppress the always-firing Watchdog heartbeat — it must always egress.
+    assert_watchdog_inhibit_immunity(merged["inhibit_rules"])
+    # A tenant-triggered inhibit (Silent Mode) must never suppress a PLATFORM
+    # self-monitoring alert — three of them carry a tenant label at fire time.
+    assert_platform_alerts_not_tenant_silenceable(merged["inhibit_rules"])
+    # #1132: every equal-label must be presence-gated on some side (strict →
+    # fail, else → warn), the base's hand-written rules included.
+    _enforce_equal_labels_gated(merged["inhibit_rules"], strict)
+    # #1533: with a degraded probe set the silencing check above cannot vouch
+    # for a tenant-triggered BASE rule — refuse (rc 2). Last, so any verdict
+    # that does not depend on the probe set (rc 1) is reported first. This
+    # run's generated rules are exempt.
+    assert_tenant_inhibits_verifiable(merged["inhibit_rules"],
+                                      exempt=list(inhibit_rules or []))
+    return merged
+
+
+def dump_alertmanager_yml(am: dict) -> str:
+    """*am* as alertmanager.yml text (the source, under
+    ``alertmanager.base.yml``, is written with this)."""
+    return yaml.dump(am, default_flow_style=False, allow_unicode=True, sort_keys=False)
+
+
+def dump_output_yml(merged: dict) -> str:
+    """*merged* as the alertmanager.yml every output mode writes:
+    ``GENERATED_OUTPUT_HEADER`` first."""
+    return GENERATED_OUTPUT_HEADER + dump_alertmanager_yml(merged)
+
+
+def assemble_alertmanager_yml(base: dict, routes: list[dict], receivers: list[dict],
+                              inhibit_rules: list[dict], strict: bool = False) -> str:
+    """``merge_generated`` rendered as alertmanager.yml (``--output-alertmanager``)."""
+    return dump_output_yml(
+        merge_generated(base, routes, receivers, inhibit_rules, strict=strict))
 
 
 def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], inhibit_rules: list[dict],
                        namespace: str = "monitoring", configmap_name: str = "alertmanager-config",
                        strict: bool = False) -> str:
-    """Merge tenant routing fragments into base Alertmanager config and wrap as K8s ConfigMap.
-
-    Merges generated routes, receivers, and inhibit_rules into a base Alertmanager
-    configuration, then wraps the result as a Kubernetes ConfigMap YAML suitable
-    for kubectl apply or GitOps workflows.
-
-    Merge Strategy:
-      - Routes: replace base route.routes with generated tenant routes
-      - Receivers: append tenant receivers to base receivers (dedup by name)
-      - Inhibit Rules: append tenant rules to base rules
-      - Global/Other: preserve from base config
-
-    Args:
-        base: base Alertmanager config dict (from load_base_config or YAML file)
-        routes: generated tenant route dicts
-        receivers: generated tenant receiver dicts
-        inhibit_rules: generated inhibit_rules for severity dedup
-        namespace: K8s namespace for ConfigMap (default: monitoring)
-        configmap_name: ConfigMap name (default: alertmanager-config)
-
-    Returns:
-        Complete Kubernetes ConfigMap YAML string (apiVersion, kind, metadata, data.alertmanager.yml).
-    """
-    merged = dict(base)
-
-    # #3257: a credential in the base's global would reach every conf.d
-    # receiver that leaves the field out (generate-routes checks this already
-    # right after loading the base; here for every other caller).
-    assert_base_global_inherits_no_credentials(merged)
-
-    # #2279: a base receiver named like a generated one would WIN the
-    # de-duplicating merge below, silently dropping the conf.d definition
-    # (measured: alerts went to the base's stale endpoint, rc 0, amtool
-    # accepted). Checked on what the generator produced, BEFORE the platform
-    # placeholders are injected — those are "add only if absent" by design.
-    assert_base_does_not_shadow_generated(merged.get("receivers", []), receivers)
-
-    # S7/S8 (#741): ensure the Custom Alerts isolation route + firehose receiver
-    # are present and FIRST, regardless of what generate_routes produced.
-    routes, receivers = _inject_custom_alert_isolation(routes, receivers)
-
-    # Merge routes into base route. #2519: the root fallthrough routes name
-    # THIS base's root receiver (built-in or --base-config).
-    merged_route = dict(merged.get("route", {}))
-    merged_route["routes"] = pin_root_fallthrough_receiver(
-        routes, merged_route.get("receiver"))
-    merged["route"] = merged_route
-
-    # Merge receivers: keep base receivers, append tenant receivers
-    base_names = {r["name"] for r in merged.get("receivers", [])}
-    tenant_receivers = [r for r in receivers if r["name"] not in base_names]
-    merged["receivers"] = list(merged.get("receivers", [])) + tenant_receivers
-
-    # Merge inhibit_rules: keep base rules, append tenant rules
-    merged["inhibit_rules"] = list(merged.get("inhibit_rules", [])) + list(inhibit_rules or [])
-
-    # ADR-025 D1: fail-closed if any inhibit rule (base or generated) would
-    # suppress the always-firing Watchdog heartbeat — it must always egress.
-    assert_watchdog_inhibit_immunity(merged["inhibit_rules"])
-
-    # A tenant-triggered inhibit (Silent Mode) must never suppress a PLATFORM
-    # self-monitoring alert — three of them carry a tenant label at fire time.
-    assert_platform_alerts_not_tenant_silenceable(merged["inhibit_rules"])
-
-    # #1132: every equal-label must be presence-gated on some side (strict → fail,
-    # else → warn). Runs on the base+generated merge, so a hand-written base rule
-    # (Silent Mode / Custom silence) is guarded here too.
-    _enforce_equal_labels_gated(merged["inhibit_rules"], strict)
-
-    # #1533: with a degraded probe set the silencing check above cannot vouch
-    # for a tenant-triggered BASE rule — refuse (rc 2) instead of passing it.
-    # Last of the invariants, so any verdict that does not depend on the probe
-    # set (rc 1) is reported first. This run's generated rules are exempt.
-    assert_tenant_inhibits_verifiable(merged["inhibit_rules"],
-                                      exempt=list(inhibit_rules or []))
-
-    # Render alertmanager.yml content
-    am_yml = yaml.dump(merged, default_flow_style=False,
-                       allow_unicode=True, sort_keys=False)
-
-    # Wrap in ConfigMap structure
+    """``assemble_alertmanager_yml`` wrapped as a Kubernetes ConfigMap
+    (``--output-configmap``): ``data.alertmanager.yml`` is that text, and
+    ``data.alertmanager.base.yml`` the source it was rendered from — the same
+    pair ``--apply`` keeps, so a ConfigMap deployed through GitOps can be
+    ``--apply``-ed later without losing its source (#1211 gap 2)."""
     configmap = {
         "apiVersion": "v1",
         "kind": "ConfigMap",
@@ -743,7 +851,9 @@ def assemble_configmap(base: dict, routes: list[dict], receivers: list[dict], in
             "namespace": namespace,
         },
         "data": {
-            "alertmanager.yml": am_yml,
+            AM_CONFIGMAP_KEY: assemble_alertmanager_yml(
+                base, routes, receivers, inhibit_rules, strict=strict),
+            AM_BASE_CONFIGMAP_KEY: dump_alertmanager_yml(base),
         },
     }
     return yaml.dump(configmap, default_flow_style=False,
@@ -1042,10 +1152,17 @@ class AlertmanagerConfigInvariantViolated(ValueError):
     the apply path could raise."""
 
 
-def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict | None, list[str]]:
-    """Read existing Alertmanager ConfigMap from K8s cluster.
+def _read_existing_configmap(namespace: str, configmap_name: str
+                             ) -> tuple[dict | None, list[str], str | None]:
+    """Read the SOURCE config ``--apply`` merges into from the cluster's
+    Alertmanager ConfigMap (#1211 gap 2, owner decision S): its
+    ``alertmanager.base.yml`` key — written by the previous ``--apply`` — or,
+    on the first ``--apply`` against a ConfigMap without one, its
+    ``alertmanager.yml`` (adopted as the source; ``merge_generated`` refuses
+    it if it already holds generated routing).
 
-    Returns (config_dict, warnings) — config_dict is None if read failed.
+    Returns (config_dict, warnings, source_text) — config_dict is None if
+    the read failed.
     """
     warnings = []
     result = _run_binary(
@@ -1053,7 +1170,7 @@ def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict 
         timeout=60)
     if result.returncode != 0:
         warnings.append(f"ERROR: Failed to read ConfigMap {configmap_name}: {result.stderr}")
-        return None, warnings
+        return None, warnings, None
 
     # ⛔ This function must not hand the caller a `None` it cannot explain:
     # every failure exit below appends a warning first, and `apply_to_configmap`
@@ -1072,21 +1189,21 @@ def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict 
     except ValueError as exc:
         warnings.append(
             f"ERROR: kubectl returned output that is not JSON: {exc}")
-        return None, warnings
+        return None, warnings, None
     if not isinstance(cm, dict):
         warnings.append(
             f"ERROR: kubectl returned JSON that is not an object "
             f"({type(cm).__name__}); expected a ConfigMap resource")
-        return None, warnings
+        return None, warnings, None
     if "data" not in cm:
         warnings.append("ERROR: ConfigMap has no `data` block at all")
-        return None, warnings
+        return None, warnings, None
     data = cm["data"]
     if not isinstance(data, dict):
         warnings.append(
             f"ERROR: ConfigMap `data` is {type(data).__name__}, expected a "
             f"mapping of keys to strings")
-        return None, warnings
+        return None, warnings, None
     # ⛔ Membership, not truthiness — the same distinction the two guards above
     # draw for `data`. `data.get(key, "")` collapsed "the cluster has no such
     # key" into "the key is there and empty", and the message named the first:
@@ -1095,10 +1212,11 @@ def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict 
     # `false`, `[]`) before the type guard below could name its type. An empty
     # string now flows on and is diagnosed by the mapping guard further down,
     # which reads the raw TEXT and says the key holds nothing usable.
-    if "alertmanager.yml" not in data:
+    key = AM_BASE_CONFIGMAP_KEY if AM_BASE_CONFIGMAP_KEY in data else AM_CONFIGMAP_KEY
+    if key not in data:
         warnings.append("ERROR: ConfigMap has no 'alertmanager.yml' key")
-        return None, warnings
-    existing_yml = data["alertmanager.yml"]
+        return None, warnings, None
+    existing_yml = data[key]
     if not isinstance(existing_yml, str):
         # ⛔ The reader below takes text; a non-string value reaching it was
         # once an uncaught error at rc=1 with no diagnostic — the exact
@@ -1109,9 +1227,9 @@ def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict 
         # sentence claiming "every failure exit appends a warning" has to be
         # true for the whole function or it is not worth writing.
         warnings.append(
-            f"ERROR: ConfigMap key 'alertmanager.yml' is "
+            f"ERROR: ConfigMap key '{key}' is "
             f"{type(existing_yml).__name__}, expected a string")
-        return None, warnings
+        return None, warnings, None
 
     # ADR-036 §12 (#3206): the cluster's config as Alertmanager loads it
     # (da-read alertmanager). A text its loader refuses — not YAML, empty,
@@ -1122,9 +1240,9 @@ def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict 
     except ConsumerReadError as exc:
         if not isinstance(exc, InputRefused):
             warnings.append(
-                f"ERROR: cannot read ConfigMap key 'alertmanager.yml' the way "
+                f"ERROR: cannot read ConfigMap key '{key}' the way "
                 f"Alertmanager does: {exc}")
-            return None, warnings
+            return None, warnings, None
         # ⛔ The parenthetical is a GUESS, so it is gated on evidence: it reads
         # the TEXT — blank, or nothing but comments — which is the thing the
         # sentence claims (`null`, `~`, `---` hold text and are refused too).
@@ -1134,94 +1252,24 @@ def _read_existing_configmap(namespace: str, configmap_name: str) -> tuple[dict 
                 "whitespace only)") if looks_empty else ""
         warnings.append(
             f"ERROR: Alertmanager's config loader refuses ConfigMap key "
-            f"'alertmanager.yml'{hint}: {consumer_read_message(exc)}")
-        return None, warnings
-    return existing, warnings
+            f"'{key}'{hint}: {consumer_read_message(exc)}")
+        return None, warnings, None
+    return existing, warnings, existing_yml
 
 
-def _is_previously_generated_inhibit(rule: dict) -> bool:
-    """The merge's own "this came from the generator" test: a source matcher
-    naming ``metric_group`` (only ``_build_inhibit_rules`` writes one)."""
-    return any('metric_group' in m for m in rule.get("source_matchers", []))
-
-
-def _merge_routes_receivers_inhibits(existing: dict, routes: list[dict],
-                                     receivers: list[dict], inhibit_rules: list[dict],
-                                     strict: bool = False) -> dict:
-    """Merge generated routes, receivers, and inhibit rules into existing config.
-
-    Returns merged config dict.
-    """
-    # S7/S8 (#741): keep the Custom Alerts isolation route + firehose receiver
-    # present and FIRST across --apply (which REPLACES route.routes).
-    routes, receivers = _inject_custom_alert_isolation(routes, receivers)
-
-    if routes:
-        if "route" not in existing:
-            existing["route"] = {}
-        # #2519: the root fallthrough routes name the CLUSTER config's root
-        # receiver — the root they fall through to on this path.
-        existing["route"]["routes"] = pin_root_fallthrough_receiver(
-            routes, existing["route"].get("receiver"))
-
-    if receivers:
-        # Generated tenant receivers REPLACE the existing same-named ones (they
-        # are regenerated from conf.d each run). BUT the injected platform-static
-        # placeholders (custom-alerts-firehose / watchdog-heartbeat / synthetic-
-        # receiver / sentinel-sinkhole are emitted NAME-ONLY) must NOT clobber a
-        # richer base definition — most critically
-        # watchdog-heartbeat's webhook_configs[].url_file, which lives only in the
-        # base ConfigMap. For a name-only placeholder, defer to the existing
-        # definition if one is present; otherwise add the placeholder so the route
-        # still resolves.
-        existing_by_name = {r["name"]: r for r in existing.get("receivers", [])}
-        gen_names = {r["name"] for r in receivers}
-
-        def _resolve(r: dict) -> dict:
-            if set(r.keys()) == {"name"} and r["name"] in existing_by_name:
-                return existing_by_name[r["name"]]
-            return r
-
-        merged_gen = [_resolve(r) for r in receivers]
-        kept = [r for r in existing.get("receivers", [])
-                if r["name"] not in gen_names]
-        existing["receivers"] = kept + merged_gen
-
-    if inhibit_rules:
-        # Keep non-generated inhibit rules (e.g., Silent Mode sentinel rules)
-        kept_rules = [r for r in existing.get("inhibit_rules", [])
-                      if not _is_previously_generated_inhibit(r)]
-        existing["inhibit_rules"] = kept_rules + inhibit_rules
-
-    # ADR-025 D1: fail-closed on the FINAL inhibit set (validated even when no
-    # inhibit rules were generated this run) — the Watchdog heartbeat must never
-    # be inhibited before it reaches the external dead-man's-switch.
-    assert_watchdog_inhibit_immunity(existing.get("inhibit_rules", []))
-    # #3257: the cluster config's global is the base on this path.
-    assert_base_global_inherits_no_credentials(existing)
-    # Same tenant-cannot-silence-platform invariant on the --apply merge path.
-    assert_platform_alerts_not_tenant_silenceable(existing.get("inhibit_rules", []))
-    # #1132: same equal-label-gated invariant on the --apply merge path.
-    _enforce_equal_labels_gated(existing.get("inhibit_rules", []), strict)
-    # #1533: a degraded probe set cannot vouch for the CLUSTER's own
-    # tenant-triggered rules — refuse (rc 2), after every verdict above. An
-    # earlier run's generated rules need no exemption here: their target
-    # requires `metric_group`, which the predicate itself treats as unable to
-    # reach a platform alert (a source-only lookalike is still judged).
-    assert_tenant_inhibits_verifiable(existing.get("inhibit_rules", []),
-                                      exempt=list(inhibit_rules or []))
-
-    return existing
-
-
-def _apply_merged_configmap(merged_yml: str, namespace: str, configmap_name: str) -> bool:
-    """Apply merged ConfigMap to K8s cluster.
+def _apply_merged_configmap(merged_yml: str, namespace: str, configmap_name: str,
+                            source_yml: str | None = None) -> bool:
+    """Apply merged ConfigMap to K8s cluster: the output under
+    ``alertmanager.yml`` and, when given, the source it was rendered from
+    under ``alertmanager.base.yml`` (#1211 gap 2).
 
     Returns True if successful, False otherwise.
     """
     apply_result = _run_binary(
         ["kubectl", "create", "configmap", configmap_name,
-         f"--from-literal=alertmanager.yml={merged_yml}",
+         f"--from-literal={AM_CONFIGMAP_KEY}={merged_yml}",
+         *([f"--from-literal={AM_BASE_CONFIGMAP_KEY}={source_yml}"]
+           if source_yml is not None else []),
          "-n", namespace, "--dry-run=client", "-o", "yaml"],
         timeout=60)
     if apply_result.returncode != 0:
@@ -1273,22 +1321,24 @@ def _reload_alertmanager(namespace: str) -> bool:
 
 
 def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules: list[dict], namespace: str, configmap_name: str, strict: bool = False,
-                       judge_merged: Callable[[dict], bool] | None = None) -> bool:
+                       judge_merged: Callable[[dict], list[str]] | None = None) -> bool:
     """Merge generated routing config into existing Alertmanager ConfigMap and reload.
 
     Applies tenant routing configuration directly to a running Alertmanager cluster.
     This is the --apply mode for immediate deployment without GitOps workflow.
 
     Process:
-      1. kubectl get configmap → extract alertmanager.yml
-      2. Merge generated routes, receivers, inhibit_rules into existing config
+      1. kubectl get configmap → the source: ``alertmanager.base.yml``, or
+         on the first --apply ``alertmanager.yml`` (``_read_existing_configmap``)
+      2. ``merge_generated`` on that source (#1211: the same merge as
+         --output-configmap / --output-alertmanager)
       3. amtool check-config on the merged text, when amtool is on PATH (#2219)
-      4. kubectl apply ConfigMap with merged config
+      4. kubectl apply the ConfigMap: the output under alertmanager.yml, the
+         source under alertmanager.base.yml
       5. curl POST /-/reload to trigger Alertmanager configuration reload
 
     Notes:
-      - Keeps existing base routes/receivers, appends tenant-generated ones
-      - Preserves non-generated inhibit rules (e.g., Silent Mode sentinel rules)
+      - Keeps the source's own routes, receivers and inhibit rules
       - /-/reload needs no Alertmanager flag; it is always enabled (#1243)
 
     Args:
@@ -1298,7 +1348,8 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         namespace: K8s namespace where ConfigMap is located
         configmap_name: ConfigMap name (typically alertmanager-config)
         judge_merged: #1211 — called with the merged config as Alertmanager
-            reads it, before anything is applied; True refuses it (rc 1).
+            reads it, before anything is applied; it returns the reasons to
+            refuse it (rc 1), an empty list to go on.
 
     Returns:
         True if merge, apply and reload all succeeded, False otherwise.
@@ -1313,7 +1364,7 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
         nothing was sent to the cluster. #1533.
     """
     # 1. Read existing ConfigMap
-    existing, read_warnings = _read_existing_configmap(namespace, configmap_name)
+    existing, read_warnings, source_yml = _read_existing_configmap(namespace, configmap_name)
     if existing is None:
         for w in read_warnings:
             print(w, file=sys.stderr)
@@ -1324,12 +1375,16 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
     # by the merge, so this is where an existing Watchdog-suppressing rule
     # surfaces. Only this step is wrapped.
     try:
-        existing = _merge_routes_receivers_inhibits(existing, routes, receivers,
-                                                    inhibit_rules, strict=strict)
+        assert_text_is_not_an_output(
+            source_yml, f"the source in ConfigMap {namespace}/{configmap_name}",
+            remedy=("--apply takes no --base-config: put your own config (the "
+                    f"source) under the ConfigMap's '{AM_BASE_CONFIGMAP_KEY}' key, "
+                    "then run --apply again."))
+        existing = merge_generated(existing, routes, receivers, inhibit_rules,
+                                   strict=strict)
     except ValueError as exc:
         raise AlertmanagerConfigInvariantViolated(str(exc)) from exc
-    merged_yml = yaml.dump(existing, default_flow_style=False,
-                           allow_unicode=True, sort_keys=False)
+    merged_yml = dump_output_yml(existing)
 
     # 3. #2219: Alertmanager's parser gets the final say BEFORE the cluster is
     # touched. `merged_yml` is the exact string handed to
@@ -1357,17 +1412,17 @@ def apply_to_configmap(routes: list[dict], receivers: list[dict], inhibit_rules:
               f"{safe_label(consumer_read_message(exc))}", file=sys.stderr)
         raise AlertmanagerConfigRejected(EXIT_VIOLATION) from exc
     warn_if_root_receiver_without_integration(merged)
-    # #1211: on the same reading — the cluster's own firehose receiver is
-    # what decides whether undelivered page-mode custom alerts notify anyone.
-    if judge_merged is not None and judge_merged(merged):
-        print(f"FAIL: page-mode custom alerts would notify no one (the ERROR "
-              f"line(s) above, --strict) — refusing to apply the merged "
-              f"alertmanager.yml to {namespace}/{configmap_name} (nothing was "
-              f"applied)", file=sys.stderr)
+    # #1211: on the same reading — the cluster's own firehose and
+    # watchdog-heartbeat receivers decide whether those alerts reach anyone.
+    reasons = judge_merged(merged) if judge_merged is not None else []
+    if reasons:
+        print(f"FAIL: {'; '.join(reasons)} (the ERROR line(s) above, --strict) "
+              f"— refusing to apply the merged alertmanager.yml to "
+              f"{namespace}/{configmap_name} (nothing was applied)", file=sys.stderr)
         raise AlertmanagerConfigRejected(EXIT_VIOLATION)
 
     # 4. Apply updated ConfigMap
-    if not _apply_merged_configmap(merged_yml, namespace, configmap_name):
+    if not _apply_merged_configmap(merged_yml, namespace, configmap_name, source_yml):
         return False
 
     # 5. Reload Alertmanager

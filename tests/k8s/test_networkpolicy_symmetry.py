@@ -82,16 +82,12 @@ def _uses_match_expressions(selector: dict | None) -> bool:
 # egress selector AND the rendered ingress must admit the raw source workload
 # (test_helm_resident_destinations_are_symmetric). Exit-locked: an entry whose
 # edge resolves to a raw workload again fails, so the map can only shrink.
-_HELM_RESIDENT_DESTINATIONS = {
-    _edge_key("allow-threshold-govern-egress", "tenant-api",
-              {"matchLabels": {"app.kubernetes.io/name": "tenant-api"}}): (
-        "helm/tenant-api",
-        # the chart refuses to render until writeBack.mode is chosen (#2855);
-        # the shared baseline adds no NetworkPolicy or pod label
-        ["-f", str(_REPO_ROOT / "tests" / "helm" / "tenant_api_render_baseline.yaml")],
-        "#1594: the raw tenant-api manifests were removed; helm/tenant-api is "
-        "the only deployment source",
-    ),
+_HELM_RESIDENT_DESTINATIONS: dict = {
+    # Empty since ADR-027 §4 removed the threshold-govern CronJob, the only raw
+    # workload with an egress edge to the helm-only tenant-api (#1594). The
+    # shape of an entry, for the next one:
+    #   _edge_key("<policy>", "<dst ns>", {"matchLabels": {...}}):
+    #       ("helm/<chart>", [<extra helm template args>], "<why helm-only>"),
 }
 
 

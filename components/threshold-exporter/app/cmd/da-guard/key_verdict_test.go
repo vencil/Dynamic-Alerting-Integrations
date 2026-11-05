@@ -71,6 +71,13 @@ func TestKeyVerdict_TheErrorLayer(t *testing.T) {
 			map[string]string{"_defaults.yaml": "dimensions:\n  redis_queue_length: [queue]\n" + kvRoot,
 				"a.yaml": tenant(a, "    'redis_queue_length{queue=\"q\"}': 5\n")},
 			[]string{}},
+		// #3395: the profile's key only optional_overrides declares, with no
+		// platform value, is not filled in (#1189): unread on the profile file.
+		{"a bound profile's key the exporter does not fill in",
+			map[string]string{"_defaults.yaml": kvRoot + "optional_overrides:\n  - redis_evicted_keys\n",
+				"_profiles.yaml": "profiles:\n  gold:\n    redis_evicted_keys: \"11\"\n",
+				"a.yaml":         tenant(a, "    _profile: gold\n")},
+			[]string{a + " redis_evicted_keys profile_not_filled _profiles.yaml"}},
 		{"an unregistered reserved key in the tenant's file",
 			map[string]string{"_defaults.yaml": kvRoot, "a.yaml": tenant(a, "    _routng: disable\n")},
 			[]string{a + " _routng unregistered a.yaml"}},
@@ -94,12 +101,13 @@ func TestKeyVerdict_TheErrorLayer(t *testing.T) {
 		{"no root platform file: threshold keys are undecidable, reserved keys judged",
 			map[string]string{"a.yaml": tenant(a, "    mysql_conections: \"70\"\n    _routng: x\n")},
 			[]string{a + " _routng unregistered a.yaml"}},
-		{"a key from a platform file or a profile is the platform's notice",
+		{"a key from a platform file or a profile is an error too (#3394)",
 			map[string]string{"_defaults.yaml": kvRoot,
 				"_platform.yaml": tenant(a, "    mysql_conections: \"70\"\n    _routng: x\n"),
 				"_profiles.yaml": "profiles:\n  p1:\n    redis_memroy: 5\n",
 				"a.yaml":         tenant(a, "    _profile: p1\n")},
-			[]string{}},
+			[]string{a + " _routng unregistered _platform.yaml", a + " mysql_conections no_row _platform.yaml",
+				a + " redis_memroy no_row _profiles.yaml"}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -150,8 +158,9 @@ func TestKeyVerdict_Subcommand(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
 		t.Fatal(err)
 	}
-	if doc["schema"] != keyVerdictSchema || doc["at"] != "2026-07-01T03:00:00Z" || doc["undecidable"] != false {
-		t.Fatalf("head %v %v %v", doc["schema"], doc["at"], doc["undecidable"])
+	if doc["schema"] != keyVerdictSchema || doc["at"] != "2026-07-01T03:00:00Z" || doc["undecidable"] != false ||
+		doc["blocks"] != true {
+		t.Fatalf("head %v %v %v %v", doc["schema"], doc["at"], doc["undecidable"], doc["blocks"])
 	}
 	misspelt := map[string]any{"key": "mysql_conections", "layer": "tenant", "file": "a.yaml", "read_by": []any{},
 		"verdict": "unread", "severity": "error", "reason": "no_row", "disable": nil, "served_family": []any{},
@@ -164,7 +173,7 @@ func TestKeyVerdict_Subcommand(t *testing.T) {
 		t.Fatalf("t1's misspelt key %v, want %v", rows[0], misspelt)
 	}
 	finding := map[string]any{"severity": "error", "kind": "unread", "key": "mysql_conections", "file": "a.yaml",
-		"tenants": []any{"t1"}, "reason": "no_row", "served_family": []any{}, "served_from": []any{}}
+		"tenants": []any{"t1"}, "reason": "no_row", "served_family": []any{}, "served_from": []any{}, "blocks": true}
 	if fs := doc["findings"].([]any); len(fs) != 1 || !reflect.DeepEqual(fs[0], finding) {
 		t.Fatalf("findings %v, want [%v]", fs, finding)
 	}
@@ -222,6 +231,60 @@ func TestWrite_ANewUnreadKeyWorsensTheTree(t *testing.T) {
 		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot, "a.yaml": "tenants:\n  t1: {}\n"})
 		code, res := runBatch(t, writeCmd, set(`redis_memory{queue="q"}`, "5"), "--config-dir", root)
 		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread a.yaml t1"}) {
+			t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
+		}
+	})
+	t.Run("a new misspelt key in a profile file is refused (#3016, #3394)", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"_profiles.yaml": "profiles:\n  p1:\n    mysql_connections: \"70\"\n",
+			"a.yaml":         "tenants:\n  t1:\n    _profile: p1\n"})
+		in := `{"files":[{"path":"_profiles.yaml","ops":[{"op":"set","path":["profiles","p1","mysql_conections"],` +
+			`"value":{"str":"60"}}]}]}`
+		code, res := runBatch(t, writeCmd, in, "--config-dir", root)
+		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread _profiles.yaml t1"}) {
+			t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
+		}
+		// The same key already there: an edit beside it is not refused.
+		root = writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"_profiles.yaml": "profiles:\n  p1:\n    mysql_conections: \"70\"\n",
+			"a.yaml":         "tenants:\n  t1:\n    _profile: p1\n"})
+		in = `{"files":[{"path":"_profiles.yaml","ops":[{"op":"set","path":["profiles","p1","redis_memory"],` +
+			`"value":{"str":"60"}}]}]}`
+		if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitOK {
+			t.Fatalf("an existing error blocked another key: exit %d worsened %v", code, worsenedOf(res))
+		}
+	})
+	t.Run("unbinding a profile's last tenant does not make its old error new (#3016)", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"_profiles.yaml": "profiles:\n  p1:\n    _routng: x\n",
+			"a.yaml":         "tenants:\n  t1:\n    _profile: p1\n"})
+		in := `{"files":[{"path":"a.yaml","ops":[{"op":"unset","path":["tenants","t1","_profile"]}]},` +
+			`{"path":"_profiles.yaml","ops":[{"op":"set","path":["profiles","p1","redis_memory"],"value":{"str":"60"}}]}]}`
+		if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitOK {
+			t.Fatalf("exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
+		}
+	})
+	t.Run("fixing a tenant entry beside a profile with the same error in one file passes (#3016)", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"_profiles.yaml": "profiles:\n  p1:\n    _routng: x\ntenants:\n  t1:\n    _routng: x\n",
+			"a.yaml":         "tenants:\n  t1:\n    _profile: p1\n"})
+		in := `{"files":[{"path":"_profiles.yaml","ops":[{"op":"unset","path":["tenants","t1","_routng"]}]}]}`
+		if code, res := runBatch(t, writeCmd, in, "--config-dir", root); code != exitOK {
+			t.Fatalf("exit %d worsened %v (%v)", code, worsenedOf(res), res.Message)
+		}
+	})
+	t.Run("a profile's new error is refused though the tenant's file has the same one (#3016)", func(t *testing.T) {
+		t.Parallel()
+		root := writeTree(t, map[string]string{"_defaults.yaml": kvRoot,
+			"_profiles.yaml": "profiles:\n  p1:\n    redis_memory: \"60\"\n",
+			"a.yaml":         "tenants:\n  t1:\n    _profile: p1\n    _routng: x\n"})
+		in := `{"files":[{"path":"_profiles.yaml","ops":[{"op":"set","path":["profiles","p1","_routng"],` +
+			`"value":{"str":"y"}}]}]}`
+		code, res := runBatch(t, writeCmd, in, "--config-dir", root)
+		if code != exitFindings || !reflect.DeepEqual(worsenedOf(res), []string{"unread _profiles.yaml t1"}) {
 			t.Fatalf("exit %d worsened %v", code, worsenedOf(res))
 		}
 	})
@@ -445,5 +508,38 @@ func TestKeyVerdict_ReadsTheTreeQuietly(t *testing.T) {
 		if n > 2*g[line] {
 			t.Errorf("write logs %q %d times; validation of the two trees logs it %d", line, n, 2*g[line])
 		}
+	}
+}
+
+// #3395: "no tenant binds the profile" is said only over the whole tree —
+// not when a tenant file the load drops may be the one binding it.
+func TestKeyVerdict_AnUnboundProfileNeedsTheWholeTree(t *testing.T) {
+	t.Parallel()
+	notJudged := func(files map[string]string) (int, int) {
+		root := writeTree(t, files)
+		var out, errOut bytes.Buffer
+		code := run([]string{keyVerdictCmd, "--config-dir", root}, &out, &errOut)
+		var doc struct {
+			Findings []struct{ Kind string } `json:"findings"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &doc); err != nil {
+			t.Fatalf("exit %d: %v\n%s", code, err, errOut.String())
+		}
+		n := 0
+		for _, f := range doc.Findings {
+			if f.Kind == "profile_not_judged" {
+				n++
+			}
+		}
+		return code, n
+	}
+	profiles := "profiles:\n  gold:\n    mysql_connections: \"70\"\n"
+	if _, n := notJudged(map[string]string{"_defaults.yaml": kvRoot, "_profiles.yaml": profiles,
+		"b.yaml": "tenants:\n  t2: {}\n"}); n != 1 {
+		t.Errorf("unbound over the whole tree: %d notice(s), want 1", n)
+	}
+	if code, n := notJudged(map[string]string{"_defaults.yaml": kvRoot, "_profiles.yaml": profiles,
+		"a.yaml": "tenants:\n  t1:\n    _profile: gold\n  bad: [\n", "b.yaml": "tenants:\n  t2: {}\n"}); code != exitParseFailed || n != 0 {
+		t.Errorf("with a dropped file: exit %d, %d notice(s), want exit %d and none", code, n, exitParseFailed)
 	}
 }

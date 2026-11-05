@@ -623,13 +623,6 @@ class TestDeprecationNoticePin:
     `SkippedEntryWarning`），也不得以 _policy_errors 的 `ERROR:` 前綴開頭。"""
 
 
-    def test_alias_table_mirrors_go_side(self):
-        """alias 表雙點名內容 pin：commit 2 改接 registry 前，Python↔Go
-        兩份手 pin 表必須同內容（Go 側在 pkg/config/aliases.go）。"""
-        from _grar_validate import DEPRECATED_KEY_ALIASES
-        assert DEPRECATED_KEY_ALIASES == {
-            "mysql_cpu": "mysql_threads_running"}
-
 
 class TestGenerateRoutes:
     """generate_routes() 整合測試。"""
@@ -2298,11 +2291,11 @@ class TestStrictValidateCLI:
             assert result.returncode == 0, result.stdout + result.stderr
             assert "OK: all configs valid" in result.stdout
 
-    def test_strict_render_mode_aborts_on_violation(self):
-        """strict 不限 --validate：render 模式下違規也報錯終止（ADR-007）。"""
+    def test_strict_output_mode_aborts_on_violation(self):
+        """strict 不限 --validate：輸出模式下違規也報錯終止（ADR-007）。"""
         with tempfile.TemporaryDirectory() as d:
             self._write_confd(d, {"forbidden_receiver_types": ["slack"]})
-            result = self._run(d, "--strict")
+            result = self._run(d, "--output-alertmanager", "--dry-run", "--strict")
             assert result.returncode == 1, result.stdout + result.stderr
             assert "FAIL" in result.stderr
 

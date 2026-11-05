@@ -14,7 +14,7 @@
 ## 1. What & Why
 
 - **Input** — Prometheus HTTP API（可攜式工具）、`conf.d/` YAML（檔案系統工具）、CSV/JSON spec（規則 / mapping 等）；透過 `docker run -v` 掛載
-- **Output** — stdout 表格 / Markdown 報告 / JSON（`--json` 結構化）；部分工具寫檔（route fragment、ConfigMap、scaffold 結果）
+- **Output** — stdout 表格 / Markdown 報告 / JSON（`--json` 結構化）；部分工具寫檔（合併後的 alertmanager.yml、ConfigMap、scaffold 結果）
 - **Why container-bundled** — 1) 客戶現場常無 Python ≥3.12，**避開 dependency hell**；2) 整合 Go binary（`da-guard` / `da-batchpr` / `da-parser`），air-gapped 環境一顆 image 就夠；3) `tools/v*` tag 與平台版號脫鉤，工具迭代不影響 helm chart
 - **Why one CLI, not a pile of binaries** — 客戶旅程是連續的（discover → onboard → validate → cutover → operate → tune → migrate），分散成幾十個獨立 binary 反而難記；統一 `da-tools <cmd>` 入口配 `--help` 自我描述
 - **不做的事** — 不執行 PromQL 查詢以外的 alerting reconcile（交給 `threshold-exporter`）；不 hot-reload（短命 CLI，每次 fresh state）；不持久化（除非 `-o` 明確指定輸出檔）；不 silent fail（CI 模式預設 exit 1 on any issue）
@@ -96,7 +96,7 @@ docker run --rm \
 | **Cutover** | Platform | Shadow Monitoring → 正式切換 | `validate`、`shadow-verify`、`backtest`、`cutover` |
 | **Operate** | Platform（自己租戶含 Tenant） | 日常健康檢查、噪音治理、容量預測 | `diagnose`、`batch-diagnose`、`check-alert`、`alert-quality`、`alert-correlate`、`cardinality-forecast`、`maintenance-scheduler` |
 | **Tune** | Domain（含 Tenant） | 觀測 baseline、推薦閾值、改 ConfigMap | `baseline`、`threshold-recommend`、`patch-config`、`explain-route`、`explain-keys` |
-| **GitOps** | Platform | 產 Alertmanager fragment、批次 PR、快照比對 | `generate-routes`、`generator-service`、`batch-pr`、`config-history`、`gitops-check`、`tenant-verify`、`state-reconcile` |
+| **GitOps** | Platform | 產生合併後的 Alertmanager 設定、批次 PR、快照比對 | `generate-routes`、`generator-service`、`batch-pr`、`config-history`、`gitops-check`、`tenant-verify`、`state-reconcile` |
 | **Migrate** | Platform | ConfigMap → Operator CRD、edge/central 拆分 | `migrate-to-operator`、`operator-generate`、`operator-check`、`runtime-audit`、`rule-pack-split`、`rule-pack-diff`、`silencer-drift-check` |
 | **Decommission** | Platform | 下架 tenant、棄用 metric | `offboard`、`deprecate` |
 | **Bridge** | Platform | 整合外掛 AM / Federation / 通知 | `byo-check`、`test-notification`、`federation-check`、`fed-key` |
@@ -159,7 +159,7 @@ docker run --rm \
 |------|------|----------|
 | `baseline` | 觀測指標 + 閾值建議 | `--tenant <name>` |
 | `threshold-recommend` | 閾值推薦引擎（歷史 P50/P95/P99） | `--config-dir <dir>`（可加 `--tenant <name>`） |
-| `threshold-govern` | 閾值治理迴路（#656）：推薦→過濾→經 tenant-api 開 per-tenant proposed-PR | `--config-dir <dir> --apply --tenant-api-url <url>` |
+| `threshold-govern` | 閾值治理報告（#656）：推薦→過濾→列出該調的腐敗閾值（唯讀，不寫入任何東西） | `--config-dir <dir>`（可加 `--min-delta-pct <n>`、`--json`） |
 | `patch-config` | ConfigMap 局部更新（`--diff` 模式預覽） | `<tenant> <metric> <value>` 或 `--diff` |
 | `explain-route` | 路由 merge pipeline 除錯器（四層展開 + profile） | `--tenant <name>` |
 | `explain-keys` | 逐鍵列出來源、讀取端、判決與 `disable` 的作用；`--assert` 對照預期結果（ADR-038）；需要 da-guard | `--config-dir <dir>` |
@@ -168,7 +168,7 @@ docker run --rm \
 
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
-| `generate-routes` | tenant YAML → AM route + receiver + inhibit fragment 或完整 ConfigMap | `--config-dir <dir>` |
+| `generate-routes` | tenant YAML → AM route + receiver + inhibit，合併進你的 Alertmanager 設定（只換掉產生器擁有的部分），輸出 alertmanager.yml 或 ConfigMap、或直接 apply | `--config-dir <dir>` + 一個模式旗標（`--validate`／`--output-alertmanager`／`--output-configmap`／`--apply`） |
 | `generator-service` | 產生器容器的服務：經 Unix socket 判定寫入後的 conf.d 能否通過 `generate-routes --validate --strict`（ADR-036 §3） | `--socket <path> --repo <dir> --config-subdir <path> --work-dir <dir>` |
 | `batch-pr` ✨v2.8.0 | Hierarchy-aware Batch PR（子命令：`apply` / `refresh` / `refresh-source`） | `apply --plan <p> --emit-dir <d> --repo <r> --workdir <w>` |
 | `config-history` | 配置快照與歷史追蹤（子命令：`snapshot` / `log` / `diff` / `show`） | `--config-dir <dir> snapshot` |
@@ -180,8 +180,8 @@ docker run --rm \
 
 | 命令 | 用途 | 最小參數 |
 |------|------|----------|
-| `migrate-to-operator` | ConfigMap 格式 → Operator 原生 CRD（含遷移清單與預檢） | `--source-dir <d> --config-dir <d>` |
-| `operator-generate` | 產出 PrometheusRule / AlertmanagerConfig / ServiceMonitor CRD YAML | `--config-dir <dir>` |
+| `migrate-to-operator` | ConfigMap 格式 → Operator 原生 PrometheusRule CRD（含遷移清單與預檢；Alertmanager 路由改用 `generate-routes` → configSecret） | `--source-dir <d>` |
+| `operator-generate` | 產出 PrometheusRule / ServiceMonitor CRD YAML（Alertmanager 路由改用 `generate-routes` → configSecret，#3572） | `--rule-packs-dir <dir>` |
 | `operator-check` | 驗證 Operator CRD 部署狀態（檢查項目 + 診斷） | `--namespace <ns>` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（MISSING / UNHEALTHY / ORPHAN；偵測-only，不自癒） | `--prometheus <url>` 或 `--runtime-json <file>` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | `--rule-packs-dir <dir> --output-dir <dir>` |

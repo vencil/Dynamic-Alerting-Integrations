@@ -656,6 +656,9 @@ func (m *ConfigManager) Load() error {
 
 	// Expand profile values into tenant overrides (v1.12.0)
 	cfg.ApplyProfiles()
+	// #3556: directory mode logs this in applyBoundaryRules; the single file
+	// applies no boundary rules, so it is logged here.
+	config.WarnRefusedDimensionBases(m.path, cfg.Dimensions, m.getLogger())
 
 	m.commitConfig(&cfg, hash, nil, fmt.Sprintf("Config loaded (%s)", m.Mode()))
 	m.getMetrics().SetConfigShape(shape)

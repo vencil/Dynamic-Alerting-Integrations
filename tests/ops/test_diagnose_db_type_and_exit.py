@@ -148,8 +148,8 @@ def test_missing_kubectl_is_a_caller_error_not_a_traceback(tmp_path, mariadb_pro
 
 def test_a_forbidden_pod_read_is_kubectl_error_not_pod_not_found(tmp_path, mariadb_prom):
     """#3349：Pod 讀取被拒（kubectl rc 1，stdout 照樣印一個空 List）以前讀成
-    `Pod not found`（rc 1，像是租戶的問題）；現在是環境錯誤：rc 2，--json 的
-    envelope reason 是 `kubectl_error`，kubectl 自己那行話被點名。"""
+    `Pod not found`（rc 1，像是租戶的問題）；現在是環境錯誤：rc 2，stderr
+    點名 kubectl 自己那行話；--json 的 stdout 是空的（#3558：不帶文件）。"""
     bindir = tmp_path / "bin"
     bindir.mkdir()
     kubectl = bindir / "kubectl"
@@ -165,7 +165,6 @@ def test_a_forbidden_pod_read_is_kubectl_error_not_pod_not_found(tmp_path, maria
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "Pod not found" not in proc.stdout + proc.stderr
     assert "Traceback" not in proc.stderr
-    doc = json.loads(proc.stdout)
-    assert doc["reason"] == "kubectl_error", doc
-    assert "Forbidden" in doc["error"] and "needs kubectl and a cluster that answers" in doc["error"]
+    assert proc.stdout == "", proc.stdout
     assert "Forbidden" in proc.stderr
+    assert "needs kubectl and a cluster that answers" in proc.stderr, proc.stderr

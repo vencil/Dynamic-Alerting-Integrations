@@ -107,9 +107,12 @@ _CASES = [
      "validate_config.py",
      lambda c: ["--config-dir", str(c)],
      ["--rule-packs", _MISSING]),
+    # #1211 gap 2: no mode flag is rc 2 on its own, so the base argv names
+    # one (`--output-alertmanager`, the plain alertmanager.yml) — without it
+    # the caller-error assertions would pass on the missing mode.
     ("generate-routes --policy",
      "generate_alertmanager_routes.py",
-     lambda c: ["--config-dir", str(c)],
+     lambda c: ["--config-dir", str(c), "--output-alertmanager"],
      ["--policy", _DOC_POLICY_VALUE]),
     ("lint --policy",
      "lint_custom_rules.py",
@@ -131,7 +134,9 @@ _CASES = [
     # exit 0 with an empty stderr — so the operator's `global:` (SMTP
     # smarthost, Slack webhook) was silently replaced by a built-in
     # placeholder and notifications went nowhere. `--output-configmap` is in
-    # the base argv because it is the only mode that reads the flag.
+    # the base argv because it is a mode that reads the flag (#1211 gap 2:
+    # `--output-alertmanager` reads it too; the ConfigMap is the one Method C
+    # applies).
     # ⚠️ NOT "the only carrier whose artifact reaches a cluster" — an earlier
     # revision said that and it is false: `generate-routes --policy` changes
     # the same emitted ConfigMap (measured, 1871 vs 1915 bytes), and its old
@@ -250,7 +255,8 @@ class TestUnusableIsMoreThanMissing:
 
     @pytest.mark.parametrize("script,base", [
         ("validate_config.py", lambda c: ["--config-dir", str(c)]),
-        ("generate_alertmanager_routes.py", lambda c: ["--config-dir", str(c)]),
+        ("generate_alertmanager_routes.py",
+         lambda c: ["--config-dir", str(c), "--output-alertmanager"]),
         ("lint_custom_rules.py", lambda c: [str(c), "--ci"]),
     ], ids=["validate-config", "generate-routes", "lint"])
     @pytest.mark.parametrize("kind", ["malformed", "nonutf8", "scalar"])
@@ -269,7 +275,8 @@ class TestUnusableIsMoreThanMissing:
 
     @pytest.mark.parametrize("script,base", [
         ("validate_config.py", lambda c: ["--config-dir", str(c)]),
-        ("generate_alertmanager_routes.py", lambda c: ["--config-dir", str(c)]),
+        ("generate_alertmanager_routes.py",
+         lambda c: ["--config-dir", str(c), "--output-alertmanager"]),
         ("lint_custom_rules.py", lambda c: [str(c), "--ci"]),
     ], ids=["validate-config", "generate-routes", "lint"])
     def test_control_a_well_formed_policy_still_runs(
@@ -570,7 +577,7 @@ _EMPTY_CARRIERS = [
     ("validate-config --policy-dsl", "validate_config.py",
      lambda c: ["--config-dir", str(c)], "--policy-dsl"),
     ("generate-routes --policy", "generate_alertmanager_routes.py",
-     lambda c: ["--config-dir", str(c)], "--policy"),
+     lambda c: ["--config-dir", str(c), "--output-alertmanager"], "--policy"),
     ("generate-routes --base-config", "generate_alertmanager_routes.py",
      lambda c: ["--config-dir", str(c), "--output-configmap"], "--base-config"),
     ("lint --policy", "lint_custom_rules.py",

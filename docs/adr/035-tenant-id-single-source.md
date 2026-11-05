@@ -9,7 +9,7 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-10-03
-updated_at: 2026-10-16
+updated_at: 2026-11-05
 ---
 
 # ADR-035: tenant id 合法字元集的單一來源
@@ -24,6 +24,7 @@ updated_at: 2026-10-16
 - 外審由不同模型以對抗方式進行，結論已併入本文。
 - owner 已核可本文。核可時一併修訂三處：原待決問題 1（tenant-api 讀取與刪除路徑）結案、補列 `init_project.py` 另一份 DNS-1123 寫法、`definitions.tenantId` 加上 `description`。
 - 2026-10-16 修訂：Go 端讀規則的地方改寫為現況（`pkg/tenantid` 的 `Valid`）；「現況」一節是起草時的快照，不改。
+- 2026-11-05 修訂：`operator_generate.py` 與 `migrate_to_operator.py` 不再讀租戶、不再產帶租戶 label 的物件（[ADR-008](008-operator-native-integration-path.md)），從呼叫者清單移除；63 字元上限不變，理由見下方待決問題的說明。
 
 ## 摘要
 
@@ -102,7 +103,7 @@ updated_at: 2026-10-16
 - `_lib_validation.is_valid_tenant_id` 在 runtime 讀這個 pattern，讀法沿用 `_find_tenant_schema()`：在 da-tools image 內讀扁平佈局，在 repo 內往上找專案根目錄。
 - build.sh 的 `REPO_DATA_FILES` 已經出貨這份 schema，`check_build_completeness` 也把它列為必要檔案。
 - 讀不到 schema 時 fail-closed，作法比照 #2180 的 receiver URL pattern。
-- 以下四支工具刪除各自的 regex，改呼叫這個函式：`operator_generate.py`、`migrate_to_operator.py`、`alert_quality.py`、`init_project.py`（`_validate_tenant_name`）；`scaffold_tenant.py` 原本不驗證，也改為呼叫。
+- 以下工具刪除各自的 regex，改呼叫這個函式：`alert_quality.py`、`init_project.py`（`_validate_tenant_name`）；`scaffold_tenant.py` 原本不驗證，也改為呼叫。（`operator_generate.py`、`migrate_to_operator.py` 當時也在此列，後來不再讀租戶。）
 
 **Go 與 portal**
 
@@ -193,7 +194,7 @@ exporter 不拒收不合法 id 的租戶，每次 reload 時對每個不合法 i
   - 新規則套用到所有寫入路徑。強制點放在 `gitops.guardTenantID`（`components/tenant-api/internal/gitops/writer.go`），它涵蓋 PUT、批次寫入、group 批次寫入、custom-alerts、federation subset 與 dry-run。
   - handler 保留 `ValidateWritableTenantID`，用來提早回 400。
   - 規則**不放進** `confd.IsAddressableTenantID`，因為讀取路徑也呼叫它。
-- **63 字元上限要不要扣掉前綴。** 不用扣。外審 grep 確認：operator 模式寫進 K8s label 的是**裸 id**（`metadata.labels: {"tenant": id}`，見 `operator_generate.py:461-466`、`migrate_to_operator.py:356-361`）。帶前綴的只有物件名稱（上限 253）與 Alertmanager receiver 名稱（沒有 63 的限制）。
+- **63 字元上限要不要扣掉前綴。** 不用扣。決策當時 operator 模式寫進 K8s label 的是**裸 id**（`metadata.labels: {"tenant": id}`），帶前綴的只有物件名稱（上限 253）與 Alertmanager receiver 名稱（沒有 63 的限制）。operator 模式後來不再產這些物件（ADR-008），上限仍是 DNS-1123 label 的 63：id 照樣用在檔名與 ConfigMap key。
 
 ## 待決問題
 

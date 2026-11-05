@@ -114,7 +114,7 @@ package config
 // The effective side only answers WHOSE value the effective config shows
 // (keySources, the winning layer and file) and looks that up in the tables
 // above. A #1231 retired spelling is not a reason: /metrics serves it under
-// the canonical spelling (served-values' `aliases` maps one to the other).
+// the canonical spelling (`da-guard key-spellings` maps one to the other).
 
 import (
 	"path/filepath"

@@ -14,7 +14,7 @@ Config-driven 多租戶告警平台，基於 Prometheus `group_left` 向量匹�
 > **100 租戶的監控管理：從 5,000 條手寫規則 → 237 條固定規則。**
 > 租戶只寫 YAML、不碰 PromQL —— 連自訂告警都用參數化 recipe 自助產出（v2.9.0 **Custom Alerts**）。新租戶**設定**分鐘級（rule-pack 已涵蓋的指標）、變更秒級生效；遷移既有複雜告警（自訂 exporter / 拓樸指標）視形態而定，見[遷移指南](docs/migration-guide.md)。
 
-![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-172-red) ![Bilingual](https://img.shields.io/badge/bilingual-100%20pairs-blue)
+![CI](https://github.com/vencil/Dynamic-Alerting-Integrations/actions/workflows/ci.yml/badge.svg) ![Version](https://img.shields.io/badge/version-v2.9.0-brightgreen) ![Coverage](https://img.shields.io/badge/coverage-%E2%89%A585%25-green) ![Rule Packs](https://img.shields.io/badge/rule%20packs-16-orange) ![Alerts](https://img.shields.io/badge/alerts-171-red) ![Bilingual](https://img.shields.io/badge/bilingual-100%20pairs-blue)
 
 ---
 
@@ -208,7 +208,7 @@ O(M) 複雜度（`group_left` 向量匹配）· 各 Rule Pack 以 Projected Volu
 
 ### 租戶管理
 
-三態模式（Normal / Silent / Maintenance，支援 `expires` 自動失效）· 四層路由合併：`_routing_defaults` → profile → tenant → enforced（[ADR-007](docs/adr/007-cross-domain-routing-profiles.md)）· 排程式閾值與維護窗口 · Schema Validation 雙端驗證 · Cardinality Guard（per-tenant 500 上限）
+三態模式（Normal / Silent / Maintenance，支援 `expires` 自動失效）· 四層路由合併：`_routing_defaults` → profile → tenant → enforced（[ADR-007](docs/adr/007-cross-domain-routing-profiles.md)）· 排程式閾值與維護窗口 · Schema Validation 雙端驗證 · Cardinality Guard（per-tenant 500 上限） · receiver 憑證可放在 Kubernetes Secret（`secretRef`，名稱由租戶 id 推導為 `da-<tenant>`，共用 Secret 由部署端 policy `shared_secrets` 列管；[BYO 整合指南 §5](docs/integration/byo-alertmanager-integration.md#憑證放在-secretsecretref)）
 
 ### 租戶自助與跨叢集
 

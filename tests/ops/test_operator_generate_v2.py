@@ -1,25 +1,18 @@
-"""test_operator_generate_v2.py — operator-generate v2.6.0 功能驗證
+"""test_operator_generate_v2.py — operator-generate 的 CLI 與輸出通道
 
-驗證 Phase .a 新功能：
-- 6 種 receiver 模板（Slack, PagerDuty, Email, Teams, OpsGenie, Webhook）
-- Secret 引用（secretKeyRef）— 禁止明文 credential
-- 三態 CRD 抑制規則（severity dedup + silent + maintenance）
-- --receiver-template / --secret-name / --secret-key CLI 參數
-
-v2.6.0 Phase A 新增。
+#3572 起 operator-generate 不再產 AlertmanagerConfig（receiver 模板、secret 引用、
+抑制規則、租戶探索都隨之移除）；拒收路由相關旗標的契約釘在
+test_operator_routing_single_renderer.py。這裡留下 PrometheusRule / ServiceMonitor
+的輸出、--json 單一文件、寫檔 opt-in 與 selector label。
 """
 from __future__ import annotations
 
 import json
-import os
 import sys
 from pathlib import Path
-from typing import Any, Dict
 from unittest.mock import patch
 
 import pytest
-from _platform_fs import symlink_or_skip  # noqa: E402
-from _go_refusal import go_refused, refuses  # noqa: E402  (#3206)
 
 # Add scripts/tools to path
 _REPO_ROOT = Path(__file__).parent.parent.parent
@@ -28,263 +21,6 @@ sys.path.insert(0, str(_REPO_ROOT / "scripts" / "tools"))
 
 import operator_generate as og
 from _lib_exitcodes import emit_result  # noqa: E402  (#3216: in-process main() → exit status)
-from operator_generate import (
-    _build_inhibit_rules_crd,
-    _build_receiver_config,
-    _DEFAULT_SECRET_KEYS,
-    _RECEIVER_TEMPLATES,
-    build_alertmanager_config,
-    build_prometheus_rule,
-    build_servicemonitor,
-)
-
-
-# ── Fixtures ────────────────────────────────────────────────────────────────
-
-
-@pytest.fixture
-def sample_tenant() -> str:
-    return "db-a"
-
-
-@pytest.fixture
-def namespace() -> str:
-    return "monitoring"
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Receiver Template Tests
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-class TestReceiverTemplates:
-    """Verify all 6 receiver templates produce correct CRD structure."""
-
-    @pytest.mark.parametrize("receiver_type", list(_RECEIVER_TEMPLATES))
-    def test_all_templates_produce_valid_receiver(
-        self, sample_tenant: str, receiver_type: str
-    ):
-        """Each template type produces a receiver with correct name."""
-        receiver = _build_receiver_config(sample_tenant, receiver_type)
-        assert receiver["name"] == f"{sample_tenant}-{receiver_type}"
-
-    def test_slack_has_slack_configs(self, sample_tenant: str):
-        receiver = _build_receiver_config(sample_tenant, "slack")
-        assert "slackConfigs" in receiver
-        config = receiver["slackConfigs"][0]
-        assert "apiURL" in config
-        assert "secret" in config["apiURL"]
-        assert config["channel"] == f"#alerts-{sample_tenant}"
-        assert config["sendResolved"] is True
-
-    def test_pagerduty_has_pagerduty_configs(self, sample_tenant: str):
-        receiver = _build_receiver_config(sample_tenant, "pagerduty")
-        assert "pagerdutyConfigs" in receiver
-        config = receiver["pagerdutyConfigs"][0]
-        assert "routingKey" in config
-        assert "secret" in config["routingKey"]
-        assert config["sendResolved"] is True
-
-    def test_email_has_email_configs(self, sample_tenant: str):
-        receiver = _build_receiver_config(sample_tenant, "email")
-        assert "emailConfigs" in receiver
-        config = receiver["emailConfigs"][0]
-        assert "authPassword" in config
-        assert "secret" in config["authPassword"]
-        assert config["requireTLS"] is True
-
-    def test_teams_has_webhook_with_auth(self, sample_tenant: str):
-        receiver = _build_receiver_config(sample_tenant, "teams")
-        assert "webhookConfigs" in receiver
-        config = receiver["webhookConfigs"][0]
-        assert "httpConfig" in config
-        assert "authorization" in config["httpConfig"]
-        assert "secret" in config["httpConfig"]["authorization"]["credentials"]
-
-    def test_opsgenie_has_opsgenie_configs(self, sample_tenant: str):
-        receiver = _build_receiver_config(sample_tenant, "opsgenie")
-        assert "opsgenieConfigs" in receiver
-        config = receiver["opsgenieConfigs"][0]
-        assert "apiKey" in config
-        assert "secret" in config["apiKey"]
-
-    def test_webhook_has_webhook_configs(self, sample_tenant: str):
-        receiver = _build_receiver_config(sample_tenant, "webhook")
-        assert "webhookConfigs" in receiver
-        config = receiver["webhookConfigs"][0]
-        assert f"/webhook/{sample_tenant}" in config["url"]
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Secret Integration Tests (Enterprise Audit Requirement)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-class TestSecretIntegration:
-    """Verify NO plaintext credentials appear in generated CRDs."""
-
-    @pytest.mark.parametrize("receiver_type", list(_RECEIVER_TEMPLATES))
-    def test_no_plaintext_credentials(
-        self, sample_tenant: str, receiver_type: str
-    ):
-        """Generated receiver must use secretKeyRef, never plaintext values."""
-        receiver = _build_receiver_config(sample_tenant, receiver_type)
-        receiver_json = json.dumps(receiver)
-        # Must NOT contain actual credential values
-        assert "your-secret" not in receiver_json.lower()
-        assert "password" not in receiver_json.lower() or "authPassword" in receiver_json
-        # Must contain secret references
-        assert "secret" in receiver_json
-
-    @pytest.mark.parametrize("receiver_type", list(_RECEIVER_TEMPLATES))
-    def test_default_secret_name_convention(
-        self, sample_tenant: str, receiver_type: str
-    ):
-        """Default secret name follows da-{tenant}-{type} pattern."""
-        receiver = _build_receiver_config(sample_tenant, receiver_type)
-        receiver_json = json.dumps(receiver)
-        expected_name = f"da-{sample_tenant}-{receiver_type}"
-        assert expected_name in receiver_json
-
-    def test_custom_secret_name(self, sample_tenant: str):
-        """Custom --secret-name is respected."""
-        receiver = _build_receiver_config(
-            sample_tenant, "slack",
-            secret_name="my-custom-secret",
-            secret_key="my-key",
-        )
-        config = receiver["slackConfigs"][0]
-        assert config["apiURL"]["secret"]["name"] == "my-custom-secret"
-        assert config["apiURL"]["secret"]["key"] == "my-key"
-
-    @pytest.mark.parametrize("receiver_type", list(_RECEIVER_TEMPLATES))
-    def test_default_secret_key_matches_type(
-        self, sample_tenant: str, receiver_type: str
-    ):
-        """Default secret key is inferred from receiver type."""
-        receiver = _build_receiver_config(sample_tenant, receiver_type)
-        receiver_json = json.dumps(receiver)
-        expected_key = _DEFAULT_SECRET_KEYS[receiver_type]
-        assert expected_key in receiver_json
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Inhibit Rules Tests (Tri-state: severity dedup + silent + maintenance)
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-class TestInhibitRules:
-    """Verify CRD-format inhibit rules for all three modes."""
-
-    def test_produces_four_rules(self, sample_tenant: str):
-        """Four rules: severity dedup + silent warning + silent critical + maintenance."""
-        rules = _build_inhibit_rules_crd(sample_tenant)
-        assert len(rules) == 4
-
-    def test_severity_dedup_rule(self, sample_tenant: str):
-        """Critical suppresses Warning for same alertname+instance."""
-        rules = _build_inhibit_rules_crd(sample_tenant)
-        dedup = rules[0]
-        source_names = {m["name"]: m["value"] for m in dedup["sourceMatch"]}
-        target_names = {m["name"]: m["value"] for m in dedup["targetMatch"]}
-        assert source_names["severity"] == "critical"
-        assert target_names["severity"] == "warning"
-        assert "alertname" in dedup["equal"]
-        assert "instance" in dedup["equal"]
-
-    def test_silent_mode_warning_rule(self, sample_tenant: str):
-        """TenantSilentWarning sentinel suppresses warnings."""
-        rules = _build_inhibit_rules_crd(sample_tenant)
-        silent_warn = rules[1]
-        source_names = {m["name"]: m["value"] for m in silent_warn["sourceMatch"]}
-        assert source_names["alertname"] == "TenantSilentWarning"
-        target_names = {m["name"]: m["value"] for m in silent_warn["targetMatch"]}
-        assert target_names["severity"] == "warning"
-
-    def test_silent_mode_critical_rule(self, sample_tenant: str):
-        """TenantSilentCritical sentinel suppresses criticals."""
-        rules = _build_inhibit_rules_crd(sample_tenant)
-        silent_crit = rules[2]
-        source_names = {m["name"]: m["value"] for m in silent_crit["sourceMatch"]}
-        assert source_names["alertname"] == "TenantSilentCritical"
-
-    def test_maintenance_mode_rule(self, sample_tenant: str):
-        """TenantMaintenanceMode suppresses ALL alerts for tenant."""
-        rules = _build_inhibit_rules_crd(sample_tenant)
-        maint = rules[3]
-        source_names = {m["name"]: m["value"] for m in maint["sourceMatch"]}
-        assert source_names["alertname"] == "TenantMaintenanceMode"
-        # Target should match all alerts for tenant (no severity filter)
-        target_names = {m["name"] for m in maint["targetMatch"]}
-        assert "severity" not in target_names
-
-    def test_all_rules_scoped_to_tenant(self, sample_tenant: str):
-        """All inhibit rules are tenant-scoped."""
-        rules = _build_inhibit_rules_crd(sample_tenant)
-        for rule in rules:
-            source_tenants = [
-                m["value"] for m in rule["sourceMatch"] if m["name"] == "tenant"
-            ]
-            assert sample_tenant in source_tenants
-
-
-# ──────────────────────────────────────────────────────────────────────────────
-# AlertmanagerConfig CRD Integration Tests
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-class TestAlertmanagerConfigCRD:
-    """End-to-end tests for build_alertmanager_config."""
-
-    def test_default_produces_webhook_receiver(
-        self, sample_tenant: str, namespace: str
-    ):
-        """Without --receiver-template, fallback to generic webhook."""
-        crd = build_alertmanager_config(sample_tenant, namespace)
-        assert crd["kind"] == "AlertmanagerConfig"
-        receivers = crd["spec"]["receivers"]
-        assert len(receivers) == 1
-        assert "webhookConfigs" in receivers[0]
-
-    @pytest.mark.parametrize("template", list(_RECEIVER_TEMPLATES))
-    def test_receiver_template_produces_correct_crd(
-        self, sample_tenant: str, namespace: str, template: str
-    ):
-        """Each receiver template produces valid AlertmanagerConfig."""
-        crd = build_alertmanager_config(
-            sample_tenant, namespace,
-            receiver_template=template,
-        )
-        assert crd["apiVersion"] == "monitoring.coreos.com/v1beta1"
-        assert crd["kind"] == "AlertmanagerConfig"
-        assert crd["metadata"]["labels"]["tenant"] == sample_tenant
-        # Must have inhibitRules
-        assert "inhibitRules" in crd["spec"]
-        assert len(crd["spec"]["inhibitRules"]) == 4
-        # Must have matchers in route
-        assert "matchers" in crd["spec"]["route"]
-
-    def test_api_version_v1alpha1(self, sample_tenant: str, namespace: str):
-        """v1alpha1 API version is supported."""
-        crd = build_alertmanager_config(
-            sample_tenant, namespace, api_version="v1alpha1"
-        )
-        assert crd["apiVersion"] == "monitoring.coreos.com/v1alpha1"
-
-    def test_custom_secret_passthrough(
-        self, sample_tenant: str, namespace: str
-    ):
-        """Custom secret name/key passed to receiver."""
-        crd = build_alertmanager_config(
-            sample_tenant, namespace,
-            receiver_template="slack",
-            secret_name="org-slack-secret",
-            secret_key="url",
-        )
-        receiver = crd["spec"]["receivers"][0]
-        secret = receiver["slackConfigs"][0]["apiURL"]["secret"]
-        assert secret["name"] == "org-slack-secret"
-        assert secret["key"] == "url"
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -360,41 +96,6 @@ class TestHelmChartThresholdExporter:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Snapshot: AlertmanagerConfig CRD structure validation
-# ──────────────────────────────────────────────────────────────────────────────
-
-
-class TestAlertmanagerConfigSnapshot:
-    """Snapshot-style tests for CRD structure stability."""
-
-    def test_crd_structure_keys(self, sample_tenant: str, namespace: str):
-        """CRD has exactly the expected top-level structure."""
-        crd = build_alertmanager_config(
-            sample_tenant, namespace, receiver_template="slack"
-        )
-        assert set(crd.keys()) == {"apiVersion", "kind", "metadata", "spec"}
-        assert set(crd["metadata"].keys()) == {"name", "namespace", "labels"}
-        assert set(crd["spec"].keys()) == {"route", "receivers", "inhibitRules"}
-
-    def test_route_has_matchers(self, sample_tenant: str, namespace: str):
-        """Route includes tenant matchers (v2.6.0 addition)."""
-        crd = build_alertmanager_config(
-            sample_tenant, namespace, receiver_template="slack"
-        )
-        matchers = crd["spec"]["route"]["matchers"]
-        assert len(matchers) == 1
-        assert matchers[0]["name"] == "tenant"
-        assert matchers[0]["value"] == sample_tenant
-
-    def test_receiver_template_count(self):
-        """Exactly 6 receiver templates are supported."""
-        assert len(_RECEIVER_TEMPLATES) == 6
-        assert set(_RECEIVER_TEMPLATES) == {
-            "slack", "pagerduty", "email", "teams", "opsgenie", "webhook"
-        }
-
-
-# ──────────────────────────────────────────────────────────────────────────────
 # main() --json：單一文件形狀 (#1112)
 # ──────────────────────────────────────────────────────────────────────────────
 
@@ -438,7 +139,6 @@ class TestMainJsonSingleDocument:
         with patch("sys.argv", [
             "operator_generate.py",
             "--rule-packs-dir", str(packs),
-            "--config-dir", str(confd),
             "--output-dir", str(out),
             "--json", *extra,
         ]):
@@ -456,7 +156,7 @@ class TestMainJsonSingleDocument:
 
         assert isinstance(doc["crds"], list)
         kinds = [c["kind"] for c in doc["crds"]]
-        assert kinds == ["PrometheusRule", "AlertmanagerConfig", "ServiceMonitor"]
+        assert kinds == ["PrometheusRule", "ServiceMonitor"]   # #3572: no AlertmanagerConfig
 
         # 沒有 --kustomize ⇒ 該欄確實是 null（不是 {} 也不是缺鍵）
         assert doc["kustomization"] is None
@@ -464,10 +164,9 @@ class TestMainJsonSingleDocument:
         # summary 保留原本那些計數鍵
         assert doc["summary"] == {
             "prometheus_rules": 1,
-            "alertmanager_configs": 1,
             "service_monitor": 1,
             "kustomization": 0,
-            "total": 3,
+            "total": 2,
         }
 
     def test_kustomize_json_is_still_one_document(self, gen_dirs, capsys):
@@ -477,8 +176,8 @@ class TestMainJsonSingleDocument:
         assert set(doc) == {"crds", "kustomization", "summary"}
         assert doc["kustomization"]["kind"] == "Kustomization"
         assert doc["summary"]["kustomization"] == 1
-        assert doc["summary"]["total"] == 4      # 3 CRD + 1 kustomization
-        assert len(doc["crds"]) == 3
+        assert doc["summary"]["total"] == 3      # 2 CRD + 1 kustomization
+        assert len(doc["crds"]) == 2
 
     def test_dry_run_kustomize_combo_keeps_kustomization(self, gen_dirs, capsys):
         """#1112 flag-matrix sweep: `--dry-run --kustomize` 是**獨立分支**，不能把
@@ -496,305 +195,8 @@ class TestMainJsonSingleDocument:
         assert doc["kustomization"]["kind"] == "Kustomization"
         assert doc["kustomization"]["namespace"] == "monitoring"
         assert doc["summary"]["kustomization"] == 1
-        assert doc["summary"]["total"] == 4
-        assert len(doc["crds"]) == 3
-
-
-# ---------------------------------------------------------------------------
-# #1607 — unusable-entry reporting, called IN-PROCESS
-# ---------------------------------------------------------------------------
-#
-# ⛔ The cross-tool harness in `tests/shared/test_confd_case_parity_across_tools.py`
-# drives these tools through `subprocess`, which is right for asserting what an
-# operator sees on their terminal but leaves the branches uncovered: this repo's
-# `[tool.coverage.run]` sets no `concurrency`/`COVERAGE_PROCESS_START`, so a
-# child process is not measured. Measured on the PR that added the harness:
-# `operator_generate` -0.3%, `deprecate_rule` -2.6%, `offboard_tenant` -2.2%,
-# while `custom_alerts/loader` — the one exercised in-process — went UP 2.0%.
-# These tests call the functions directly, so the same branches are both
-# asserted and measured.
-
-
-def _unusable_confd(root: Path) -> Path:
-    """conf.d with one real tenant and three entries no reader can read."""
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "_defaults.yaml").write_text(
-        "defaults:\n  pg_connections: 80\n", encoding="utf-8")
-    (root / "alpha.yaml").write_text(
-        "tenants:\n  alpha:\n    pg_connections: 90\n", encoding="utf-8")
-    (root / "notes.yaml").mkdir()                       # directory-shaped
-    symlink_or_skip(root / "gone.yaml", (root / "broken.yaml"))   # dangling
-    return root
-
-
-def test_discover_tenant_configs_names_unusable_entries(tmp_path, capsys):
-    """#2906: a directory and a dangling symlink with config names are
-    entries parse-tree cannot read (`not_regular_file` / `read_failure`).
-    What they declare is unknown, so the tenant set is: the discovery
-    refuses (the shared conf.d refusal, #3206: exit 2) and names each with
-    its kind — neither is invented as a tenant (#1607) nor dropped with only
-    a warning."""
-    tree = _unusable_confd(tmp_path / "conf.d")
-
-    with refuses("broken.yaml", "notes.yaml") as err:
-        og.discover_tenant_configs(tree)
-    assert "(not_regular_file: " in err.getvalue(), err.getvalue()
-    assert "(read_failure: " in err.getvalue(), err.getvalue()
-
-
-def test_discover_tenant_configs_is_silent_about_reserved_entries(
-        tmp_path, capsys):
-    """`_`-prefixed entries are never tenant files, whatever their shape —
-    but since #3206 the question is not "which tenant was lost": the tool
-    refuses a tree da-guard validation names any path on, and names every
-    path validation names, a reserved one included (a directory-shaped
-    `_defaults.yaml` is one: the route generator refuses the tree on it)."""
-    tree = _unusable_confd(tmp_path / "conf.d")
-    (tree / "_defaults.yaml").unlink()
-    (tree / "_defaults.yaml").mkdir()
-
-    named = go_refused(tree)
-    assert named == ["_defaults.yaml", "broken.yaml", "notes.yaml"], named
-    with refuses(*named):
-        og.discover_tenant_configs(tree)
-
-
-def test_discover_tenant_configs_is_quiet_on_a_clean_tree(tmp_path, capsys):
-    """⛔ Blast radius: a healthy conf.d must gain no new output."""
-    tree = tmp_path / "conf.d"
-    tree.mkdir()
-    (tree / "_defaults.yaml").write_text("defaults: {}\n", encoding="utf-8")
-    (tree / "alpha.yaml").write_text(
-        "tenants:\n  alpha: {}\n", encoding="utf-8")
-
-    assert og.discover_tenant_configs(tree) == ["alpha"]
-    captured = capsys.readouterr()
-    assert captured.err == "" and captured.out == ""
-
-
-# ── the extension-SPELLING axis (#1603) ───────────────────────────────
-#
-# The last of the four readers #1603 names. Both selection sites here used
-# to pass `suffixes=(".yaml",)` while the exporter's scanner
-# (`config_hierarchy.go:195`) lowercases the entry name and accepts BOTH
-# spellings — and this is the reader where that costs a KUBERNETES OBJECT
-# rather than a report line. Measured on two trees whose contents are
-# byte-identical and differ only in the extension:
-#
-#     db-a.yaml -> 18 CRDs, including `da-tenant-db-a.yaml`   <- control
-#     db-a.yml  -> 17 CRDs, no tenant CRD at all              <- before
-#     db-a.yml  -> 18 CRDs, including `da-tenant-db-a.yaml`   <- after
-#
-# rc=0 in every row, and in the `.yml` row the string `db-a` appears in
-# NEITHER stdout NOR stderr.
-#
-# ⚠️ SCOPE — the other axes are NOT covered here. Open tickets DO cover
-# parts of them (#1630, #1604), but neither is about THIS reader, so read
-# these notes rather than the ticket numbers:
-#   * Hidden names: closed by #2067, and since #2906 parse-tree's answer —
-#     the exporter's walker skips dot-prefixed entries and so does the
-#     selection this reader takes its tenants from. Pinned by the ceiling
-#     test below (both halves: not a tenant, not mentioned) and across
-#     tools by `tests/shared/test_confd_hidden_axis_across_tools.py`.
-#   * Recursion: since #2906 this reader is the whole tree (parse-tree's
-#     selection) — `TestNestedTenantsAreSeen` below.
-#   * ⛔ RAW GLOBS are structurally invisible to a census keyed on literal
-#     suffix tuples, so the ones that read a conf.d are named rather than
-#     counted: the SIBLING `migrate_to_operator.discover_tenant_configs` —
-#     same name, same job — narrows via `config_dir.glob("*.yaml")`, and so
-#     do `config_history.py:66` (`_scan_config_dir`, whose parameter is
-#     literally `config_dir`) and `drift_detect.py:151`. On Linux a raw
-#     glob is blind to `.yml` AND to `upper.YAML`. All out of scope here.
-#     ⚠️ Ticket-wise: #1604 is open on the `migrate_to_operator` twin and
-#     that twin is its whole subject; no ticket covers the others.
-
-
-class TestDiscoverTenantConfigsExtensionSpelling:
-    """`.yml` carriers must yield exactly what `.yaml` ones do — no more."""
-
-    @staticmethod
-    def _seed(root: Path, ext: str) -> Path:
-        """One conf.d whose every carrier uses `ext`. Bodies never change."""
-        root.mkdir(parents=True, exist_ok=True)
-        (root / f"_defaults{ext}").write_text(
-            "defaults:\n  pg_connections: 80\n", encoding="utf-8")
-        for tid in ("db-a", "db-b"):
-            (root / f"{tid}{ext}").write_text(
-                f"tenants:\n  {tid}:\n    pg_connections: 90\n",
-                encoding="utf-8")
-        return root
-
-    def test_discovery_agrees_across_extension_spellings(self, tmp_path):
-        """FLOOR. Two trees, same bytes, different extension → same answer.
-
-        ⛔ An EQUALITY between the two runs, not "`.yml` is accepted": the
-        latter is satisfied by a reader that takes `.yml` and drops `.yaml`.
-
-        ⚠️ Attribution, measured rather than assumed: the detection lives
-        in the pinned-list guard below, on BOTH sides. Once both guards
-        pass, `assert a == b` holds by construction — blind review swapped
-        it for `a == a` and no verdict in this class changed. Keep it as
-        the statement of the property, but do NOT weaken the guard on the
-        theory that the equality still holds the line. A THIRD spelling is
-        covered by `test_every_spelling_the_shared_set_names_is_discovered`,
-        not here.
-        """
-        a = og.discover_tenant_configs(self._seed(tmp_path / "yaml", ".yaml"))
-        b = og.discover_tenant_configs(self._seed(tmp_path / "yml", ".yml"))
-
-        # ⛔ Vacuity guard FIRST, on BOTH sides: two trees this cannot read
-        # at all also compare equal. Pinned as the concrete list so that
-        # gutting the comparison cannot silently disarm the equality.
-        for label, got in (("`.yaml`", a), ("`.yml`", b)):
-            assert got == ["db-a", "db-b"], (
-                f"the {label} tree discovered {got}, not ['db-a', 'db-b'] — "
-                f"the equality below would prove nothing"
-            )
-        assert a == b, (
-            f"operator-generate discovers a different tenant set for a "
-            f"conf.d whose only difference is `.yaml` vs `.yml`, both of "
-            f"which the exporter serves:\n  .yaml: {a}\n  .yml : {b}"
-        )
-
-    def test_an_unusable_yml_carrier_is_named_and_a_json_one_is_not(
-            self, tmp_path, capsys):
-        """FLOOR **and** CEILING for unusable entries, both spellings.
-
-        #2906: an entry with a config name parse-tree cannot read (here a
-        DIRECTORY named like a carrier) makes the tenant set unknown — the
-        discovery refuses and names it with parse-tree's kind, for `.yml`
-        exactly as for `.yaml`. ⛔ The ceiling half: the same shape with an
-        extension the exporter never reads (`db-payload.json`) is not a
-        config entry at all and must not be named — that would be a finding
-        the operator cannot act on from this tool.
-
-        ⛔ A DIRECTORY, not a broken symlink: `symlink_to` needs
-        administrator rights on Windows, so a symlink fixture would be
-        skipped on the host most of this repo's maintainers use.
-        """
-        for ext in (".yaml", ".yml"):
-            root = self._seed(tmp_path / ext.lstrip("."), ext)
-            (root / f"db-broken{ext}").mkdir()
-            # Same shape, but an extension this tool never reads.
-            (root / "db-payload.json").mkdir()
-
-            # #3206: the shared refusal names the unusable entry with the
-            # reason it could not be read.
-            with refuses(f"db-broken{ext}") as err:
-                og.discover_tenant_configs(root)
-            msg = err.getvalue()
-
-            assert "(not_regular_file: " in msg, msg
-            assert "db-payload.json" not in msg, (
-                f"an entry this tool never reads was reported; got {msg!r}"
-            )
-
-    def test_carriers_the_exporter_would_not_serve_are_not_tenants(
-            self, tmp_path, capsys):
-        """CEILING, by counterexample — that is all a ceiling can be.
-
-        ⛔ You cannot enumerate the complement of an accept-set, so this
-        pins THREE carriers, each stopped by a DIFFERENT mechanism:
-
-          * `db-json.json` — over-widening a call site to
-            `(".yaml", ".yml", ".json")` is a single token, and
-            the docstring of the (since deleted, #3206)
-            `has_yaml_extension` says this argument gets
-            touched. Measured on this change's base: with that widening
-            applied and this class absent, the CI-exact suite is green.
-          * `_profiles.yaml` — reserved. ⛔ The stderr half is what makes
-            this half of the name provable: a `_`-prefixed stem fails RFC
-            1123 anyway, so dropping the reserved (`_`) filter does not
-            change the RETURNED list at all. Blind review measured exactly
-            that — before the silence assertion, this carrier could not
-            testify under any single-point mutation.
-          * `.hidden.yaml` — hidden. parse-tree never selects it (the
-            exporter's walker skips dot-prefixed entries, #2067); its
-            tenant `hidden` would be a VALID id, so the returned list is
-            the witness, and stderr must not mention it either.
-
-        ⚠️ Since #2906 the tenant id comes from file CONTENT (the
-        `tenants:` keys), so each counterexample declares a tenant whose id
-        differs from every expected one — `db-json`, `hidden` — or the
-        assertion on the returned list could never fail (#1663's oracle
-        trap).
-
-        ⚠️ Three samples are still three samples. Over-widening the call
-        site to an extension NONE of them use (measured: `.txt`) has no
-        witness here, and adding one more sample would not change that —
-        the honest boundary is the sentence at the top of this docstring.
-        """
-        root = self._seed(tmp_path / "confd", ".yaml")
-        (root / "db-json.json").write_text(
-            '{"tenants": {"db-json": {"pg_connections": 90}}}\n',
-            encoding="utf-8")
-        # A profile the exporter serves (#3206: one it cannot is a tree no
-        # conf.d tool reads, which is not this test's question).
-        (root / "_profiles.yaml").write_text(
-            "profiles:\n  x:\n    pg_connections: 1\n", encoding="utf-8")
-        (root / ".hidden.yaml").write_text(
-            "tenants:\n  hidden:\n    pg_connections: 90\n",
-            encoding="utf-8")
-
-        tenants = og.discover_tenant_configs(root)
-        err = capsys.readouterr().err
-
-        assert tenants == ["db-a", "db-b"], (
-            f"a carrier the exporter does not serve became a tenant, so a "
-            f"CRD would be emitted for it: {tenants}"
-        )
-        assert "_profiles" not in err, (
-            f"a reserved carrier was mentioned on stderr; the exporter "
-            f"drops these silently and so must this reader — this is the "
-            f"only observable signal the reserved (`_`) filter has. "
-            f"stderr was {err!r}"
-        )
-        assert ".hidden" not in err, (
-            f"a hidden carrier was mentioned on stderr; the exporter never "
-            f"reads it, so warning about it reports a loss that did not "
-            f"happen (#2067). stderr was {err!r}"
-        )
-
-    def test_every_spelling_the_shared_set_names_is_discovered(self, tmp_path):
-        """FLOOR, derived: one carrier per member of `SUFFIXES`.
-
-        The tests above hard-code `.yaml` and `.yml`, so they stop covering
-        the floor the day the exporter grows a third spelling and
-        the shared name table follows it. This reads the set instead
-        of restating it.
-
-        It reads the set from the shared name table
-        (`_confd_name_table.config_suffixes`), which Go owns — pkg/confdname's
-        matrix test asserts every cell; no Python rule restates it (#3206).
-        ⚠️ Floor only — a too-WIDE reader satisfies it, which is what the counterexample test is for.
-        """
-        from _confd_name_table import config_suffixes  # noqa: PLC0415
-        SUFFIXES = config_suffixes()  # Go's table (#3206)
-
-        # ⛔ Anti-vacuity: an empty set makes the assertion `[] == []`.
-        # Guarding that set is not this test's job, so name who does.
-        assert len(SUFFIXES) >= 2, (
-            f"SUFFIXES collapsed to {SUFFIXES!r}; the shared "
-            f"classification matrix should have gone red first"
-        )
-
-        root = tmp_path / "confd"
-        root.mkdir()
-        (root / "_defaults.yaml").write_text(
-            "defaults:\n  pg_connections: 80\n", encoding="utf-8")
-        for i, suffix in enumerate(SUFFIXES):
-            (root / f"t{i}{suffix}").write_text(
-                f"tenants:\n  t{i}:\n    pg_connections: 90\n",
-                encoding="utf-8")
-
-        tenants = og.discover_tenant_configs(root)
-        expected = sorted(f"t{i}" for i in range(len(SUFFIXES)))
-
-        assert tenants == expected, (
-            f"one carrier was written per member of SUFFIXES "
-            f"({SUFFIXES!r}) and discovery returned {tenants}, "
-            f"expected {expected}"
-        )
+        assert doc["summary"]["total"] == 3
+        assert len(doc["crds"]) == 2
 
 
 class TestWritingIsOptIn:
@@ -835,7 +237,6 @@ class TestWritingIsOptIn:
         with patch("sys.argv", [
             "operator_generate.py",
             "--rule-packs-dir", str(packs),
-            "--config-dir", str(confd),
         ]):
             emit_result(og.main())
         after = self._tree(tmp_path)
@@ -863,7 +264,6 @@ class TestWritingIsOptIn:
         with patch("sys.argv", [
             "operator_generate.py",
             "--rule-packs-dir", str(packs),
-            "--config-dir", str(confd),
             "--output-dir", str(out_dir),
         ]):
             emit_result(og.main())
@@ -925,7 +325,6 @@ class TestWritingIsOptIn:
         with patch("sys.argv", [
             "operator_generate.py",
             "--rule-packs-dir", str(packs),
-            "--config-dir", str(confd),
             "--components", "rules",
         ]):
             emit_result(og.main())
@@ -965,8 +364,7 @@ class TestWritingIsOptIn:
                 with patch("sys.argv", [
                     "operator_generate.py",
                     "--rule-packs-dir", str(packs),
-                    "--config-dir", str(confd),
-                    "--output-dir", bad,
+                            "--output-dir", bad,
                 ]):
                     emit_result(og.main())
             assert exc.value.code == 2, f"argparse caller error expected for {bad!r}"
@@ -979,7 +377,6 @@ class TestWritingIsOptIn:
         with patch("sys.argv", [
             "operator_generate.py",
             "--rule-packs-dir", str(packs),
-            "--config-dir", str(confd),
             "--output-dir", ".",
         ]):
             emit_result(og.main())
@@ -996,7 +393,6 @@ class TestWritingIsOptIn:
         argv = [
             "operator_generate.py",
             "--rule-packs-dir", str(packs),
-            "--config-dir", str(confd),
         ]
         with patch("sys.argv", list(argv)):
             emit_result(og.main())
@@ -1011,48 +407,6 @@ class TestWritingIsOptIn:
             "ignores it, the two runs are byte-identical and the flag is silently "
             "dropped — which is what this test exists to catch."
         )
-
-
-class TestNestedTenantsAreSeen:
-    """#2906: the tenant set is the whole tree's, as the exporter's.
-
-    Until #2906 this reader was flat by design and named the nested files it
-    skipped (`warn_nested`, #1604): a hierarchical conf.d returned zero
-    tenants, distinguishable from an empty one only by that warning. Now
-    parse-tree selects the files at any depth, so a nested tenant IS a
-    tenant and there is nothing skipped to name.
-    """
-
-    def test_a_nested_tenant_is_a_tenant_and_nothing_is_warned(self, tmp_path, capsys):
-        root = tmp_path / "conf.d"
-        (root / "team-a").mkdir(parents=True)
-        (root / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
-        (root / "team-a" / "_defaults.yaml").write_text(
-            "defaults:\n  x: 3\n", encoding="utf-8")
-        (root / "team-a" / "carrier.yaml").write_text(
-            "tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
-
-        tenants = og.discover_tenant_configs(root)
-        err = capsys.readouterr().err
-
-        assert tenants == ["db-a"], (
-            f"the nested tenant is served by the exporter and must get its "
-            f"AlertmanagerConfig; got {tenants}")
-        assert "subdirectories" not in err and "SKIPPED" not in err, (
-            f"nothing is skipped, so nothing may be warned about; stderr was {err!r}")
-
-    def test_a_flat_confd_says_nothing(self, tmp_path, capsys):
-        """必響對照組：扁平樹照舊，也不印任何東西。"""
-        root = tmp_path / "conf.d"
-        root.mkdir()
-        (root / "_defaults.yaml").write_text("defaults:\n  x: 1\n", encoding="utf-8")
-        (root / "db-a.yaml").write_text("tenants:\n  db-a:\n    x: 2\n", encoding="utf-8")
-
-        tenants = og.discover_tenant_configs(root)
-        err = capsys.readouterr().err
-
-        assert tenants == ["db-a"]
-        assert err == "", err
 
 
 class TestSelectorLabels:

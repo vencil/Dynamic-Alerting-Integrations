@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import io
 import json
+import re
 import subprocess
 import sys
 import zipfile
@@ -222,6 +223,21 @@ def test_timeout_constant_matches_the_workflow() -> None:
     assert f"-timeout={prs.GO_TEST_TIMEOUT_S // 60}m" in text, (
         "GO_TEST_TIMEOUT_S drifted from the workflow's go test -timeout"
     )
+
+
+def test_timeout_constant_is_defined_once() -> None:
+    """The planner and the slow-package detector (#3541 PR-B) share ONE -timeout.
+
+    The guard above pins the planner's name to the workflow; this one keeps a
+    second definition from appearing beside it, where the slow-package threshold
+    could quietly follow a different budget than the one the workflow runs with.
+    """
+    import parse_go_test_json as pgtj
+
+    defs = [p.name for p in (ROOT / "scripts" / "ops").glob("*.py")
+            if re.search(r"^GO_TEST_TIMEOUT_S\s*=", p.read_text(encoding="utf-8"), re.M)]
+    assert defs == ["parse_go_test_json.py"], defs
+    assert prs.GO_TEST_TIMEOUT_S == pgtj.GO_TEST_TIMEOUT_S
 
 
 # ── fetch ────────────────────────────────────────────────────────────────────

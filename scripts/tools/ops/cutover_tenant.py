@@ -48,9 +48,7 @@ _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, str(_THIS_DIR))
 sys.path.insert(0, os.path.join(str(_THIS_DIR), ".."))
 from _lib_compat import try_utf8_stdout  # noqa: E402
-from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope,
-)
+from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
 from _lib_python import add_prometheus_arg  # noqa: E402
 from _lib_paths import classify_path  # noqa: E402  (#3415)
 from _lib_prometheus import (  # noqa: E402
@@ -358,17 +356,6 @@ def main():
     try_utf8_stdout()
     parser = build_parser()
     args = parser.parse_args()
-    if args.json_output:
-        # #3094: a crash in --json mode still prints one envelope, with the
-        # keys of apply_cutover's report as its caller-error return has them
-        arm_crash_envelope(build=lambda: {
-            "success": False,
-            "steps_completed": [],
-            "failed_step": None,
-            "message": "",
-            "caller_error": True,
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        })
 
     report = apply_cutover(
         readiness_json=args.readiness_json,

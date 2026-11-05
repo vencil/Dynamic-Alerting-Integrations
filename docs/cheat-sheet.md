@@ -49,7 +49,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `evaluate-policy` | Policy-as-Code 評估引擎：宣告式 DSL 策略檢查 | --config-dir <PATH>, --policy <FILE>, --ci | `da-tools evaluate-policy --help` |
 | `test-notification` | 多通道通知連通性測試：驗證 receiver 可達性 | --config-dir <PATH>, --tenant <NAME>, --dry-run, --ci | `da-tools test-notification --help` |
 | `threshold-recommend` | 閾值推薦引擎：基於歷史 P50/P95/P99 數據 | --config-dir <PATH>, --prometheus <URL>, --lookback, --json | `da-tools threshold-recommend --help` |
-| `threshold-govern` | 閾值治理迴路：推薦→過濾→經 tenant-api 開 per-tenant proposed-PR (#656) | --config-dir <PATH>, --prometheus <URL>, --apply, --min-delta-pct | `da-tools threshold-govern --help` |
+| `threshold-govern` | 閾值治理報告：推薦→過濾→列出該調的腐敗閾值（唯讀，不寫入；#656） | --config-dir <PATH>, --prometheus <URL>, --min-delta-pct, --json | `da-tools threshold-govern --help` |
 | `explain-route` | 路由合併管線除錯器：四層展開 + 設定檔擴展 (ADR-007) | --config-dir <PATH>, --tenant <NAME>, --show-profile-expansion, --trace, --alertname <NAME>, --severity <LEVEL>, --label <KEY=VALUE>, --base-config <PATH>, --json | `da-tools explain-route --help` |
 | `explain-keys` | 逐鍵列出來源、讀取端、判決與 disable 的作用；--assert 對照預期結果 (ADR-038) | --config-dir <PATH>, --tenant <NAME>, --at <RFC3339>, --assert <FILE>, --json, --da-guard-binary <PATH>, --timeout <SECONDS> | `da-tools explain-keys --help` |
 | `discover-mappings` | 自動發現 1:N 實例-租戶映射 (ADR-006) | --endpoint <URL> 或 --prometheus <URL> --instance <INST>, --job, -o, --json | `da-tools discover-mappings --help` |
@@ -59,10 +59,10 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
 | `state-reconcile` | 遷移狀態目錄一致化（.da/state/ schema 驗證 + .da/manifest.json 重建，#405 Cat A） | --state-dir <DIR>, --manifest-path <PATH>, --dry-run, --ci, --json | `da-tools state-reconcile --help` |
 | `rule-pack-diff` | Rule Pack 兩版本機械比對（added / removed / breaking label schema，#405 Cat D） | --from <V1.YAML>, --to <V2.YAML>, --json, --ci | `da-tools rule-pack-diff --help` |
 | `silencer-drift-check` | AM silence 對 v2 rule pack 漂移偵測（offline，吃 amtool dump，#405 Cat B） | --silences-file <JSON>, --rule-source <PATH>, --include-inactive, --json, --ci | `da-tools silencer-drift-check --help` |
-| `operator-generate` | Operator CRD 產生（PrometheusRule / AlertmanagerConfig / ServiceMonitor） | --rule-packs-dir <DIR>, --config-dir <DIR>, --output-dir <DIR>, --components, --selector-label | `da-tools operator-generate --help` |
+| `operator-generate` | Operator CRD 產生（PrometheusRule / ServiceMonitor；路由走 `generate-routes`） | --rule-packs-dir <DIR>, --output-dir <DIR>, --components, --selector-label | `da-tools operator-generate --help` |
 | `operator-check` | Operator CRD 部署狀態驗證（檢查項目 + 診斷報告） | --namespace <NS>, --json | `da-tools operator-check --help` |
 | `runtime-audit` | Git rule-packs ↔ Prometheus runtime 唯讀對帳（#747；MISSING/UNHEALTHY/ORPHAN，偵測-only） | --prometheus <URL>, --runtime-json <FILE>, --ci | `da-tools runtime-audit --help` |
-| `migrate-to-operator` | 讀取 ConfigMap 格式規則，產出等效 CRD YAML + 6 階段遷移計畫 | --source-dir <DIR>, --dry-run, --receiver-template | `da-tools migrate-to-operator --help` |
+| `migrate-to-operator` | 讀取 ConfigMap 格式規則，產出等效 PrometheusRule CRD YAML + 遷移清單 | --source-dir <DIR>, --dry-run, --checklist-only | `da-tools migrate-to-operator --help` |
 | `rule-pack-split` | Rule Pack 分層拆分（edge Part 1 + central Parts 2+3） | --rule-packs-dir <DIR>, --output-dir <DIR>, --operator | `da-tools rule-pack-split --help` |
 | `opa-evaluate` | OPA Rego 策略評估橋接（OPA 整合） | --config-dir <PATH>, --opa-url <URL>, --opa-binary, --policy-path, --dry-run | `da-tools opa-evaluate --help` |
 | `guard` | Dangling Defaults Guard（v2.8.0），shell-out 至 `da-guard` Go binary 驗 conf.d/ schema + cardinality（路由交給 `generate-routes`，樹上有路由時 exit 4） | defaults-impact 子命令 + --config-dir <PATH>, --scope, --required-fields, --cardinality-limit, --format md\|json | `da-tools guard --help` |
@@ -85,7 +85,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
   - `threshold-recommend` — 閾值推薦（P50/P95/P99）
 
 - **配置生成工具**
-  - `generate-routes` — Tenant YAML → Alertmanager fragment
+  - `generate-routes` — Tenant YAML → 合併進你的 Alertmanager 設定（`--output-alertmanager`／`--output-configmap`／`--apply`；`--validate` 只驗證）
   - `patch-config` — ConfigMap 快速更新
   - `generator-service` — 產生器容器的服務（tenant-api 寫入前的判定）
 
@@ -110,7 +110,7 @@ da-tools 命令速查表。完整文件見 [cli-reference.md](cli-reference.md)�
   - `silencer-drift-check` — AM silence 漂移偵測（offline，cutover 必跑）
 
 - **Operator + Federation**
-  - `operator-generate` — Operator CRD 產生（PrometheusRule / AlertmanagerConfig / ServiceMonitor）
+  - `operator-generate` — Operator CRD 產生（PrometheusRule / ServiceMonitor）
   - `operator-check` — Operator CRD 部署狀態驗證
   - `rule-pack-split` — Rule Pack 分層拆分（Federation Scenario B）
   - `opa-evaluate` — OPA Rego 策略評估橋接

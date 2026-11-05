@@ -1859,10 +1859,15 @@ class TestRealRepo:
         assert v7(cut) == [("backtest", "--skip-if-unavailable")]
 
     def test_the_v7_disclosures_are_counted_on_the_real_tree(self, result):
-        """init's four `help=SUPPRESS` GitOps flags and backtest's removed
-        `--git-diff` (#3111) are the only hidden ones; every section with
+        """init's four `help=SUPPRESS` GitOps flags, backtest's removed
+        `--git-diff` (#3111), and the nine flags that only fed AlertmanagerConfig
+        — operator-generate's `--config-dir` / `--api-version` /
+        `--receiver-template` / `--secret-name` / `--secret-key` and
+        migrate-to-operator's `--config-dir` / `--receiver-template` /
+        `--secret-name` / `--secret-key`, kept only to be refused with the
+        routing remedy (#3572) — are the only hidden ones; every section with
         options now has an option table."""
-        assert result["stats"]["v7_suppressed_options"] == 5, result["stats"]
+        assert result["stats"]["v7_suppressed_options"] == 14, result["stats"]
         assert result["stats"]["v7_sections_without_option_table"] == 0
         # guard / batch-pr / parser: Go wrappers, no argparse parser to compare
         assert result["stats"]["v7_sections_without_parser"] == 3, result["stats"]
@@ -1972,8 +1977,7 @@ class TestEnvironmentIsScrubbed:
                                   cwd=str(REPO_ROOT))
         clean = run({})
         polluted = run({"PROMETHEUS_URL": "http://sentinel.invalid:9090",
-                        "TENANT_API_URL": "http://sentinel.invalid",
-                        "DA_GOVERN_GROUPS": "sentinel"})
+                        "TENANT_API_URL": "http://sentinel.invalid"})
         assert clean.returncode == polluted.returncode == 0, (clean.stderr, polluted.stderr)
         assert clean.stdout == polluted.stdout
         assert b"sentinel.invalid" not in polluted.stdout

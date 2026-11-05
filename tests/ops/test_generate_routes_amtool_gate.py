@@ -59,6 +59,9 @@ _NOT_VALIDATED = ("NOTICE: amtool not found on PATH; generated Alertmanager "
 def tenant_dir(tmp_path):
     d = tmp_path / "conf.d"
     d.mkdir()
+    # A root platform file declaring the tenant's threshold: without one the
+    # key is undecidable, which fails --validate before amtool runs (#3016).
+    (d / "_defaults.yaml").write_text("defaults:\n  mysql_connections: 80\n", encoding="utf-8")
     (d / "t1.yaml").write_text(
         make_tenant_yaml("t1", keys={"mysql_connections": "70"},
                          routing=make_routing_config("t1")),
@@ -178,23 +181,31 @@ class TestOutputConfigmapGate:
 
 # ── render (fragment) mode ──────────────────────────────────────────
 @_POSIX_ONLY
-class TestFragmentIsNeverClaimedValidated:
+class TestAlertmanagerModeIsGated:
+    """#1211 gap 2: the routing-fragment mode (never validated — a fragment is
+    not a complete config) is gone; its replacement, --output-alertmanager,
+    emits a whole config and goes through the same amtool gate as
+    --output-configmap: amtool is RUN, and its refusal writes nothing."""
 
-    @pytest.mark.parametrize("with_amtool", [True, False])
-    def test_fragment_says_not_validated(self, tenant_dir, tmp_path, with_amtool):
-        if with_amtool:
-            bin_dir, seen = _install_amtool(tmp_path, 0, "SUCCESS")
-            path = str(bin_dir)
-        else:
-            seen, path = None, _empty_path(tmp_path)
-        out = tmp_path / "frag.yaml"
-        r = _gar(["--config-dir", str(tenant_dir), "-o", str(out)], path)
+    def test_amtool_is_run_on_the_emitted_alertmanager_yml(self, tenant_dir, tmp_path):
+        bin_dir, seen = _install_amtool(tmp_path, 0, "SUCCESS")
+        out = tmp_path / "alertmanager.yml"
+        r = _gar(["--config-dir", str(tenant_dir), "--output-alertmanager",
+                  "-o", str(out)], str(bin_dir))
         err = r.stderr.decode("utf-8", "replace")
         assert r.returncode == 0, err
         assert out.is_file()
-        assert "routing fragment mode; generated output was NOT validated" in err, err
-        if seen is not None:
-            assert not seen.exists(), "amtool cannot validate a fragment; it must not be run"
+        assert seen.exists(), "amtool was not run on the emitted config"
+        assert seen.read_bytes() == out.read_bytes(), (
+            "amtool checked other text than the one written")
+
+    def test_an_amtool_refusal_writes_nothing(self, tenant_dir, tmp_path):
+        bin_dir, _seen = _install_amtool(tmp_path, 1, "FAILED: nope")
+        out = tmp_path / "alertmanager.yml"
+        r = _gar(["--config-dir", str(tenant_dir), "--output-alertmanager",
+                  "-o", str(out)], str(bin_dir))
+        assert r.returncode == 1, r.stderr.decode("utf-8", "replace")
+        assert not out.exists(), "a config amtool refused was written"
 
 
 # ── --apply (in-process: no shell stub, runs on every platform) ─────

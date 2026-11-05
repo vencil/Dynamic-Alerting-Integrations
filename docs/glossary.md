@@ -117,7 +117,7 @@ lang: zh
 :   Open Container Initiative 標準的容器/Helm chart 儲存庫。本平台的 Helm chart 和 Docker images 均發佈至 `ghcr.io/vencil/`。
 
 **Operator CRD**
-:   Prometheus Operator 的 Custom Resource Definition（`ServiceMonitor` / `PrometheusRule` / `AlertmanagerConfig`）。本平台以 `da-tools operator-generate` 按需產生這些 CRD 來整合既有 Operator 環境（repo 不提交產物）。
+:   Prometheus Operator 的 Custom Resource Definition。本平台以 `da-tools operator-generate` 按需產生 `PrometheusRule` 與 `ServiceMonitor` 來整合既有 Operator 環境（repo 不提交產物）；告警路由不用 `AlertmanagerConfig`，而是 `generate-routes` 的輸出經 Alertmanager CR 的 `spec.configSecret` 載入。
 
 ## P
 

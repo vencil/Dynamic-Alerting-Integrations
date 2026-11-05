@@ -54,7 +54,7 @@ lang: zh
 | PE | 調 defaults/routing | `patch_config` · `generate_alertmanager_routes` · `explain_route` · `config_diff` | `generate-routes --validate --strict`（路由判定）· config-diff PR 留言（`config-diff-advisory`）· GitOps PR | 🟡 | reuse |
 | TA | 調自己 threshold/routing | tenant-api PUT · portal | admission validators · SHA-256 hot-reload | 🟢🟡 | reuse |
 | SRE | 健康/診斷/品質 | `diagnose` · `batch_diagnose` · `alert_quality` · `alert_correlate` · `runtime_audit` · `check_alert` | （唯讀為主） | 🟡 | reuse |
-| DE | threshold 治理 | `threshold_recommend` · `backtest_threshold` · **`threshold_govern` CronJob**（recommend→gate→PR） | `ha-max-threshold-aggregation` · `guard/cardinality.go` | 🟢 | reuse（自動調參迴路**典範**，他階段可仿） |
+| DE | threshold 治理 | `threshold_recommend` · `backtest_threshold` · **`threshold_govern`**（recommend→gate→唯讀報告；寫入路徑與 CronJob 已依 ADR-027 §4 移除） | `ha-max-threshold-aggregation` · `guard/cardinality.go` | 🟢 | reuse（推薦→閘門報告的**典範**，他階段可仿） |
 | SEC | 稽核變更 | `config_history` · GitOps commit trail · `policy_engine`/`policy_opa_bridge` | OPA bridge | 🟡 | reuse |
 
 ### 病 MAINTAIN/DEGRADE（維護/drain/事故）— ⚠️ THIN，gate 多為 SOFT（[ADR-026](../adr/026-node-maintenance-liveness-suppression.md) 所在）

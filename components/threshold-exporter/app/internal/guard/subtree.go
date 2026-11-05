@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"github.com/vencil/threshold-exporter/internal/guard/findingkind"
+	"github.com/vencil/threshold-exporter/pkg/config"
 )
 
 // checkSubtreeUndeliverable reports one findingkind.FindingSubtreeDefaultUndeliverable per
@@ -76,9 +77,16 @@ func checkSubtreeUndeliverable(input CheckInput) []Finding {
 // A dimensional key (`<base>{…}`) is served only when every label its row
 // serves is declared for its base under the root `dimensions:` (ADR-038
 // §11, #3475): declaring the key or its base fixes nothing, so its sentence
-// names `dimensions:` instead.
+// names `dimensions:` instead — except for a `_critical` tier as base
+// (config.DimensionBaseRefused, #3556), which no declaration serves.
 func undeliverableFix(k string) string {
 	if base, _, ok := strings.Cut(k, "{"); ok {
+		if config.DimensionBaseRefused(base) {
+			tier := strings.TrimSuffix(base, "_critical")
+			return fmt.Sprintf("`%s` is a `_critical` tier, which takes no dimensions: write the per-dimension "+
+				"critical threshold as `%s{…}: \"N:critical\"`, its labels declared for `%s` under the conf.d root "+
+				"`dimensions:`.", base, tier, tier)
+		}
 		return fmt.Sprintf("Declare every label `%s` serves for its base `%s` under `dimensions:` in the conf.d root "+
 			"`_defaults.yaml` (a regex matcher serves `<label>_re`); declaring the key itself or its base does not serve it.", k, base)
 	}
@@ -87,6 +95,9 @@ func undeliverableFix(k string) string {
 
 // undeliverableWhy is why key k is not served, in the finding's words.
 func undeliverableWhy(k string) string {
+	if base, _, ok := strings.Cut(k, "{"); ok && config.DimensionBaseRefused(base) {
+		return "a `_critical` tier with dimensions is no threshold the exporter serves"
+	}
 	if strings.Contains(k, "{") {
 		return "the conf.d root `_defaults.yaml` `dimensions:` does not declare its labels for its base"
 	}

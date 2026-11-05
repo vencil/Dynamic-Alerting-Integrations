@@ -141,7 +141,7 @@ Three deployment options:
 
 - **Option A (Recommended)**: OCI Registry — `helm upgrade --install threshold-exporter oci://ghcr.io/vencil/charts/threshold-exporter --version 2.9.0 -n monitoring -f values-override.yaml`
 - **Option B**: Local build — `docker build` + `kind load` + `make component-deploy`
-- **Option C**: Operator CRD path — `da-tools operator-generate`, replacing ConfigMap mounting (suitable when kube-prometheus-stack is already installed)
+- **Option C**: Operator CRD path — `da-tools operator-generate` produces PrometheusRule / ServiceMonitor, replacing ConfigMap mounting; alert routing is produced by `generate-routes` and loaded through the Alertmanager CR's `configSecret` (suitable when kube-prometheus-stack is already installed)
 
 Comparison and decision guidance for the two paths: [Deployment Decision Matrix](getting-started/decision-matrix.en.md). Full Helm values, Operator CRD migration, and "Use da-tools in K8s Cluster" mode: [threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署) · [Operator integration guides](integration/operator-prometheus-integration.en.md).
 
@@ -162,9 +162,14 @@ Migrating from "instance-based dispatch" to "tenant-based dispatch": use `tenant
 ```bash
 da-tools generate-routes --config-dir conf.d/ --validate \
                          --policy .github/custom-rule-policy.yaml
-da-tools generate-routes --config-dir conf.d/ -o alertmanager-routes.yaml
+# BYO Alertmanager outside K8s: merge into your own alertmanager.yml
+da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
+                         --base-config alertmanager.yml -o alertmanager.new.yml
+# K8s: merge into the cluster's ConfigMap and reload (GitOps: --output-configmap instead)
 da-tools generate-routes --config-dir conf.d/ --apply --yes
 ```
+
+The output modes merge the generated routing into your own config (`--base-config`, the source) and emit a separate output: your own routes, receivers and inhibit rules are kept; when conf.d changes, run it again on the same source, never with the output as the base (its `tenant-*` receivers are refused, exit 1); a run without a mode flag is exit 2. ⚠️ The v2.9.0 image has no `--output-alertmanager` and prints a fragment when no mode flag is given <!-- image-caveat: v2.9.0 -->
 
 The platform enforces guardrails on timing parameters (`group_wait` 5s–5m, `group_interval` 5s–5m, `repeat_interval` 1m–72h); out-of-range values are auto-clamped.
 

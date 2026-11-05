@@ -50,7 +50,7 @@ from _lib_io import safe_label  # noqa: E402  (#1538; #3276)
 from _lib_paths import classify_path, raise_path_problems  # noqa: E402  (#3276)
 import _lib_parse_tree  # noqa: E402
 from _lib_exitcodes import (  # noqa: E402
-    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, arm_crash_envelope, die_caller_error)
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report, die_caller_error)
 from _threshold_alerts import alerts_for_key  # noqa: E402
 import _render_diff as rd  # noqa: E402
 
@@ -1693,9 +1693,6 @@ def _main():
     platform files, or the like.
     """
     args = build_parser().parse_args()
-    if args.json_output or args.format == "json":
-        # #3094: a crash in --json mode still prints one envelope
-        arm_crash_envelope(schema=JSON_SCHEMA)
     # A side with nothing at its path is an empty tree (a first import, see
     # `_tree_doc`); anything else the shared judgement refuses is a caller
     # error with its own reason — a file, or a path under a parent the caller
@@ -1711,7 +1708,7 @@ def _main():
         # BaseException, so the tool's own 0/1/2 exits pass through untouched.
         # ``str(exc)``, not ``repr(exc)``: it carries the file name where the
         # exception has one; the type name because str() alone can be terse.
-        # #3115: through die_caller_error, so --json gets its one envelope.
+        # rc 2 and one line; nothing on stdout, --json or not (#3558).
         die_caller_error(
             f"ERROR: cannot compare configs "
             f"(--old-dir {args.old_dir} --new-dir {args.new_dir}): "

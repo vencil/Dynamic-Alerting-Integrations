@@ -26,7 +26,8 @@ import os
 import re
 import sys
 from pathlib import Path
-from typing import NamedTuple
+from types import MappingProxyType
+from typing import Mapping, NamedTuple
 from urllib.parse import urlparse
 
 import yaml
@@ -51,7 +52,13 @@ from _lib_validation import tenant_id_rule  # noqa: E402  (ADR-035)
 from _lib_validation import am_duration_seconds  # noqa: E402  (#2490)
 from _lib_validation import receiver_bool_problems  # noqa: E402  (#2906)
 from _lib_validation import file_reference_paths, file_reference_problem  # noqa: E402  (#3257)
+from _lib_validation import (  # noqa: E402  (#1560)
+    is_secret_ref, receiver_secret_ref_fields, secret_ref_rule,
+)
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
+    OWN_SECRET_PREFIX,
+    SECRET_REF_OWN_ONLY_FIELDS,
+    SharedSecret,
     ROOT_LEVEL,
     Finding,
     unclassified,
@@ -108,6 +115,14 @@ def validate_receiver_domains(receiver_obj: dict, tenant: str, allowed_domains: 
     for field in url_fields:
         raw = receiver_obj.get(field)
         if not raw:
+            continue
+        if is_secret_ref(raw):
+            # #1560: the URL is in a Secret, so its host is not visible here.
+            # Not refused, and not the "cannot parse host" refusal below: the
+            # Secret is created by the operator / ExternalSecrets, and a
+            # tenant can write neither its content nor its name (its own is
+            # da-<tenant>, a shared one is listed in the deployment policy) —
+            # the content is as trusted as the policy itself.
             continue
         host = _extract_host(raw)
         if not host:
@@ -886,6 +901,86 @@ class PolicyDocument(NamedTuple):
     #: only — never from a policy file inside conf.d, which anyone who can
     #: write to the repo could use to make the generator container unusable.
     min_generator_version: str | None
+    #: #1560: ``{alias: SharedSecret}`` — the shared Secrets a receiver may
+    #: reference as ``{secret: {shared: <alias>, key}}``, and on which
+    #: fields. Empty (key absent): no shared reference is accepted. Like
+    #: ``allowed_domains``, only from the deployment ``--policy`` file: in
+    #: conf.d a tenant could list any Secret.
+    shared_secrets: Mapping[str, SharedSecret] = MappingProxyType({})
+
+
+def _shared_secret_fields() -> frozenset[str]:
+    """The receiver fields a ``shared_secrets`` entry may list: every field
+    that takes a Secret reference, but auth_password (#1560)."""
+    return frozenset(f for rtype in RECEIVER_TYPES
+                     for f in receiver_secret_ref_fields(rtype)) - SECRET_REF_OWN_ONLY_FIELDS
+
+
+# A Kubernetes object name (DNS-1123 subdomain), for a shared Secret's name.
+_SECRET_NAME_RE = re.compile(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*")
+
+
+def _load_shared_secrets(data: dict, policy_path: str) -> Mapping[str, SharedSecret]:
+    """#1560: the ``shared_secrets`` of a policy document, or a
+    PolicyInputError naming what makes it unusable. ⛔ Fail closed like the
+    rest of the file: an entry that cannot be read is an unusable policy,
+    never a silently dropped alias (a dropped alias only refuses receivers,
+    but an entry read loosely — a string ``fields`` iterated per letter —
+    would admit what its author did not list).
+
+    Shape::
+
+        shared_secrets:
+          corp-slack: {secret: corp-alerting, fields: [api_url, webhook_url, url]}
+    """
+    raw = data.get("shared_secrets")
+    if raw is None:
+        return MappingProxyType({})
+    where = f"--policy: `shared_secrets` in {policy_path!r}"
+    if not isinstance(raw, dict):
+        raise PolicyInputError(
+            f"{where} is {type(raw).__name__}, expected a mapping of alias → "
+            "{secret: <Secret name>, fields: [<receiver field>, ...]}")
+    alias_re, alias_max = secret_ref_rule()["shared"]
+    allowed = _shared_secret_fields()
+    out: dict[str, SharedSecret] = {}
+    for alias, entry in raw.items():
+        if (not isinstance(alias, str) or len(alias) > alias_max
+                or alias_re.fullmatch(alias) is None):
+            raise PolicyInputError(
+                f"{where}: alias {alias!r} is not a DNS-1123 label (lowercase "
+                f"letters, digits and '-', at most {alias_max})")
+        if not isinstance(entry, dict) or set(entry) != {"secret", "fields"}:
+            raise PolicyInputError(
+                f"{where}: entry {alias!r} must be exactly "
+                "{secret: <Secret name>, fields: [<receiver field>, ...]}")
+        name, fields = entry["secret"], entry["fields"]
+        if (not isinstance(name, str) or len(name) > 253
+                or _SECRET_NAME_RE.fullmatch(name) is None):
+            raise PolicyInputError(
+                f"{where}: entry {alias!r} secret {name!r} is not a Kubernetes "
+                "Secret name (DNS-1123 subdomain)")
+        if name.startswith(OWN_SECRET_PREFIX):
+            raise PolicyInputError(
+                f"{where}: entry {alias!r} secret {name!r} starts with "
+                f"{OWN_SECRET_PREFIX!r}, the prefix of the tenants' own Secrets "
+                f"({OWN_SECRET_PREFIX}<tenant>); a shared Secret may not take a "
+                "name a tenant's own Secret can have")
+        if (not isinstance(fields, list) or not fields
+                or not all(isinstance(f, str) for f in fields)):
+            raise PolicyInputError(
+                f"{where}: entry {alias!r} fields must be a non-empty list of "
+                f"receiver field names (of {', '.join(sorted(allowed))})")
+        bad = sorted(set(fields) - allowed)
+        if bad:
+            why = (" — auth_password never takes a shared Secret: the password "
+                   "goes to the SMTP server the receiver names"
+                   if set(bad) & SECRET_REF_OWN_ONLY_FIELDS else "")
+            raise PolicyInputError(
+                f"{where}: entry {alias!r} lists {bad} under fields; only "
+                f"{', '.join(sorted(allowed))} may use a shared Secret{why}")
+        out[alias] = SharedSecret(name, frozenset(fields))
+    return MappingProxyType(out)
 
 
 # #2901: exactly three dot-separated numbers — no `v`, no pre-release.
@@ -1096,7 +1191,8 @@ def load_policy_document(policy_path: str | None) -> PolicyDocument:
             f"--policy: `min_generator_version` in {policy_path!r} is "
             f"{minimum!r}, expected a quoted version \"X.Y.Z\" (for example "
             f"\"2.9.0\"); remove the key to accept any generator version")
-    return PolicyDocument(list(domains), minimum)
+    return PolicyDocument(list(domains), minimum,
+                          _load_shared_secrets(data, policy_path))
 
 
 def is_null_schedule(value: object) -> bool:
@@ -1123,28 +1219,6 @@ def writes_nothing(key: object, value: object) -> bool:
     if isinstance(key, str) and key.startswith("_"):
         return False
     return value is None or is_null_schedule(value)
-
-
-def _canonical_tenant_key(key: str) -> tuple[str, bool]:
-    """Canonical spelling for a tenant-config key (#1231 alias boundary).
-
-    Mirrors Go's ``canonicalKeyFor`` (threshold-exporter
-    pkg/config/aliases.go): EXACT match against DEPRECATED_KEY_ALIASES,
-    plus exactly two structurally-derived shapes — ``<base>_critical`` and
-    dimensional ``<base>{...}``. Everything else — including typos that
-    merely share the prefix, like ``mysql_cpu_util`` — returns unchanged.
-    Never prefix-match.
-    """
-    if key in DEPRECATED_KEY_ALIASES:
-        return DEPRECATED_KEY_ALIASES[key], True
-    if key.endswith("_critical"):
-        base = key.removesuffix("_critical")
-        if base in DEPRECATED_KEY_ALIASES:
-            return DEPRECATED_KEY_ALIASES[base] + "_critical", True
-    brace = key.find("{")
-    if brace > 0 and key[:brace] in DEPRECATED_KEY_ALIASES:
-        return DEPRECATED_KEY_ALIASES[key[:brace]] + key[brace:], True
-    return key, False
 
 
 def _validate_profile_refs(parsed: dict) -> list[str]:
@@ -1400,80 +1474,6 @@ def receiver_name_collisions(labelled: list[tuple[str, str]]) -> list[str]:
             "name would silently keep only one of them). Rename one of the "
             "tenants, or remove one of the entries.", blocks="always"))
     return lines
-
-# ── #1231: deprecated tenant-config key aliases ──
-# Python mirror of the Go alias boundary (threshold-exporter
-# pkg/config/aliases.go `deprecatedKeyAliases`): during the 2-release
-# transition window the OLD spelling keeps resolving as its canonical key
-# (see _canonical_tenant_key above); the rename NOTICE is the exporter's own,
-# from da-guard served-values' key_checks (ADR-038 §11).
-# SSOT note: the alias SSOT is the registry's deprecated_aliases section
-# (rule-packs/threshold-registry.yaml, authored in _registry_lib.py
-# DEPRECATED_KEY_ALIASES). This dict is a runtime mirror, PINNED to that
-# section by tests/lint/test_check_threshold_registry.py
-# (test_python_alias_mirror_pinned_to_registry) — a drifted mirror fails
-# CI. To open/close an alias window: edit the authored table, regen the
-# registry, then update this mirror (and the Go one) to match.
-DEPRECATED_KEY_ALIASES = {
-    # #944 / #1231: the metric measures mysql threads_running saturation,
-    # never host CPU% — the poisoned name is being retired.
-    "mysql_cpu": "mysql_threads_running",
-}
-
-_LEGACY_BY_CANONICAL = {canon: legacy for legacy, canon in DEPRECATED_KEY_ALIASES.items()}
-
-
-def _legacy_tenant_key(key: str) -> "str | None":
-    """Go `legacySpellingFor`: the deprecated spelling of a canonical key
-    (exact, `_critical`-suffixed, dimensional), or None."""
-    if key in _LEGACY_BY_CANONICAL:
-        return _LEGACY_BY_CANONICAL[key]
-    if key.endswith("_critical"):
-        base = key.removesuffix("_critical")
-        if base in _LEGACY_BY_CANONICAL:
-            return _LEGACY_BY_CANONICAL[base] + "_critical"
-    brace = key.find("{")
-    if brace > 0 and key[:brace] in _LEGACY_BY_CANONICAL:
-        return _LEGACY_BY_CANONICAL[key[:brace]] + key[brace:]
-    return None
-
-
-def _other_tenant_key_spellings(key: object) -> "list[str]":
-    """Go `otherSpellings`: every spelling of `key`'s threshold but `key`.
-    Empty for a key no alias touches — every routing / reserved key."""
-    if not isinstance(key, str):
-        return []  # a non-text YAML key names no aliased threshold
-    canon, _ = _canonical_tenant_key(key)
-    out = [canon] if canon != key else []
-    legacy = _legacy_tenant_key(canon)
-    if legacy is not None and legacy != key:
-        out.append(legacy)
-    return out
-
-
-def drop_shadowed_spellings(m: dict) -> dict:
-    """Go `dropShadowedSpellings` / resolve's canonical-wins dedup inside
-    ONE layer: a deprecated spelling whose canonical spelling the same map
-    also sets is dropped (a lone deprecated spelling is kept, not renamed).
-    Returns `m` itself when nothing is dropped."""
-    drop = [k for k in m if isinstance(k, str)
-            and _canonical_tenant_key(k)[1] and _canonical_tenant_key(k)[0] in m]
-    if not drop:
-        return m
-    return {k: v for k, v in m.items() if k not in drop}
-
-
-def overlay_across_spellings(dst: dict, src: dict) -> None:
-    """Go `overlayAcrossSpellings` (#2368): `src` over `dst` per THRESHOLD,
-    not per spelling — a key `src` writes also drops from `dst` every other
-    spelling of it that `src` does not write itself. For a key no alias
-    touches (every routing and reserved key) this is exactly
-    ``dst.update(src)``."""
-    for k, v in src.items():
-        for s in _other_tenant_key_spellings(k):
-            if s not in src:
-                dst.pop(s, None)
-        dst[k] = v
 
 # Prometheus/Go-style duration grammar for domain-policy checks: one or
 # more <number><unit> tokens (multi-unit "1h30m", fractional "1.5h") or

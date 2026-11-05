@@ -56,7 +56,7 @@ lang: en
 | `offboard_tenant.py` | 安全的 Tenant 下架工具。 |
 | `onboard_platform.py` | Reverse-analyze existing configs for Dynamic Alerting onboarding. |
 | `operator_check.py` | Verify Prometheus Operator CRD deployment status. |
-| `operator_generate.py` | operator-generate — Generate Kubernetes CRD YAML for Prometheus + Alertmanager. |
+| `operator_generate.py` | operator-generate — Generate the Prometheus Operator CRD YAML of the dynamic alerting stack. |
 | `parser_dispatch.py` | `da-tools parser` Python entrypoint. |
 | `patch_config.py` | Patch threshold-config ConfigMap for a specific tenant. |
 | `policy_engine.py` | Policy-as-Code 引擎（Path A — 內建 DSL）。 |
@@ -67,7 +67,7 @@ lang: en
 | `shadow_verify.py` | Shadow Monitoring readiness and convergence verification. |
 | `silencer_drift_check.py` | Alertmanager silence drift auditor. |
 | `state_reconcile.py` | Migration State directory reconciliation. |
-| `threshold_govern.py` | 閾值治理迴路（Renovate-for-thresholds，#656）。 |
+| `threshold_govern.py` | 閾值治理報告（唯讀，#656；ADR-027 §4 移除寫入路徑）。 |
 | `threshold_recommend.py` | 閾值推薦引擎。 |
 | `validate_config.py` | One-stop configuration validation. |
 | `validate_migration.py` | Shadow Monitoring 驗證工具。 |

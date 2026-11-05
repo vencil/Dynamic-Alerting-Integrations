@@ -3,7 +3,7 @@
 Go 的選擇（`SelectDefaultsCarriers`）只選一份；其餘可讀的那份**沒有任何平面讀**
 （da-guard parse-tree 的 `not_read` reason `unselected_defaults_carrier`）。
 產生器把它當成一筆 WARN finding（同名 kind），`--validate`（含 `--strict`）
-擋、render 照常產出 rc 0——比照 `routing_key_ignored`「寫了但不生效」那一類。
+擋、`--output-alertmanager` 照常產出 rc 0——比照 `routing_key_ignored`「寫了但不生效」那一類。
 
 產生器**不開**這份檔：裡面寫了 `_routing_enforced`、或根本不是合法 YAML，
 結果都一樣。#2906 之前，子目錄的未選拼法若含 `_routing_enforced` 會被讀出來
@@ -84,7 +84,7 @@ def _mine(findings: list[dict]) -> list[dict]:
 @pytest.mark.parametrize("where", ["root", "sub"])
 def test_render_produces_output_and_names_the_unselected_carrier(tmp_path, where, body):
     d, unselected, chosen = _tree(tmp_path, where, _BODIES[body])
-    res, findings = _gar(d, tmp_path / "f.json", "--dry-run")
+    res, findings = _gar(d, tmp_path / "f.json", "--output-alertmanager", "--dry-run")
     assert res.returncode == EXIT_OK, res.stderr
     assert "receiver: tenant-t-" in res.stdout, res.stdout  # rendered
     [f] = _mine(findings)
@@ -107,7 +107,11 @@ def test_validate_fails_on_it(tmp_path, where, body, strict):
     d, unselected, _chosen = _tree(tmp_path, where, _BODIES[body])
     res, findings = _gar(d, tmp_path / "f.json", "--validate", *(["--strict"] if strict else []))
     assert res.returncode == EXIT_VIOLATION, res.stdout + res.stderr
-    assert "FAIL: 1 error(s) found" in res.stderr, res.stderr
+    # One error of the generator's own. The exporter decodes a subtree's
+    # unselected `_defaults.yml` too, and drops it when it does not decode:
+    # the key verdict is then not given, one more blocking line (#3016).
+    own = [x for x in findings if x["blocks"] != "never" and not x["kind"].startswith("key_")]
+    assert len(own) == 1, findings
     [f] = _mine(findings)
     assert f["file"] == unselected
     # The only finding about that file: its content was never read, so

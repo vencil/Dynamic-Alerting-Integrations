@@ -1170,10 +1170,10 @@ kubectl get jobs -n monitoring -w
 告警會自己解除：下一次（或手動觸發的那次）成功後，最新一次 Job 就不是 Failed。不需要刪掉失敗的 Job。
 
 **If not this**：
-- (a) log 是連線錯誤 → Job 依賴的服務（tenant-api、Prometheus）從 `monitoring` 連不到；查該服務是否健康、NetworkPolicy 是否放行
+- (a) log 是連線錯誤 → Job 依賴的服務（Alertmanager、Prometheus）從 `monitoring` 連不到；查該服務是否健康、NetworkPolicy 是否放行
 - (b) 這支 CronJob 暫時不該跑 → `kubectl patch cronjob <owner_name> -n monitoring -p '{"spec":{"suspend":true}}'`。suspend 的 CronJob 不會觸發這條告警
 
-**Cross-ref**：`ThresholdGovernanceStale` 只看「上次成功距今多久」，從未成功過的 CronJob 要靠這條告警。
+**Cross-ref**：只看「上次成功距今多久」的 staleness 告警抓不到從未成功過的 CronJob，那要靠這條告警。
 
 #### 1.7.2 MassExporterOutage
 

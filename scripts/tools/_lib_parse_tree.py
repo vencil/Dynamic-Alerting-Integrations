@@ -610,7 +610,7 @@ VERDICT_WORDS = {
     "tree_refused": ("the route generator refuses the whole tree on it "
                      "(da-guard validation exits 4)"),
 }
-#: The `reason` of the `--json` envelope the refusal prints.
+#: The refusal's name (the `reason` a tool's own report gives it — backtest's).
 REFUSAL_REASON = "conf_d_not_servable"
 
 
@@ -662,9 +662,8 @@ def refuse_unservable(entries: "Iterable[Entry]", root: "Path | str") -> None:
     """THE fail-closed exit of a conf.d tool run (#3206): when any of a
     tree-mode document's *entries* has a `verdict`, print `refusal_lines`
     to stderr and end the process with the caller-error code (2, the tool
-    could not read its whole input; `_lib_exitcodes.exit_caller_error`, so a
-    `--json` run prints its one envelope, reason `REFUSAL_REASON`). Returns
-    only when no entry has one.
+    could not read its whole input; `_lib_exitcodes.exit_caller_error`:
+    nothing on stdout, #3558). Returns only when no entry has one.
 
     ⛔ Tree mode only: list mode knows only the walk's half of the verdict
     and file mode judges only its `--path` (see the module docstring). The
@@ -680,12 +679,13 @@ def refuse_unservable(entries: "Iterable[Entry]", root: "Path | str") -> None:
     if handler is not None:
         handler(bad, lines)
     from _lib_exitcodes import exit_caller_error  # lazy: no import cycle at load
-    exit_caller_error(lines[-1], REFUSAL_REASON, fields={"refused_paths": refused_paths(bad)})
+    exit_caller_error(lines[-1], REFUSAL_REASON)
 
 
 def refused_paths(entries: "Iterable[Entry]") -> "list[dict[str, str]]":
-    """The refusal's `--json` field: every refused entry as {path, verdict},
-    in order — all of them, as on stderr (#3206)."""
+    """The refusal's paths for a tool's own report (backtest's): every
+    refused entry as {path, verdict}, in order — all of them, as on stderr
+    (#3206)."""
     return [{"path": e.path, "verdict": e.verdict} for e in entries]
 
 
@@ -1218,6 +1218,69 @@ def _run_names(names: "list[str]", binary: Optional[str],
                              f"{dict(carriers)!r} does not match the entries' not_read; nothing "
                              "of it is used")
     return {e.path: e for e in entries}, chosen
+
+
+#: `da-guard key-spellings` (#3556): every #1231 spelling of a tenant-config
+#: key, canonical first. Its stdout is a bare JSON array (no schema field).
+KEY_SPELLINGS = "key-spellings"
+_SPELLING_FIELDS = frozenset({"key", "canonical", "spellings"})
+
+
+@dataclass(frozen=True)
+class KeySpellings:
+    """`da-guard key-spellings`' answers for the keys it was asked: the
+    exporter's one rule for #1231 spellings (Go's config.SpellingsOf).
+    Python keeps no copy of that rule (#3556); a key that was not asked is a
+    caller error (KeyError), never "no alias"."""
+
+    of: "Mapping[str, tuple[str, tuple[str, ...]]]"
+
+    def canonical(self, key: str) -> str:
+        """*key* in the exporter's canonical spelling."""
+        return self.of[key][0]
+
+    def spellings(self, key: str) -> "tuple[str, ...]":
+        """Every spelling of *key*'s threshold, the canonical one first."""
+        return self.of[key][1]
+
+
+NO_SPELLINGS = KeySpellings(MappingProxyType({}))
+
+
+def key_spellings(keys: "Iterable[str]", binary: Optional[str] = None,
+                  timeout: Optional[float] = None) -> KeySpellings:
+    """Every #1231 spelling of each of *keys*: one `da-guard key-spellings`
+    run for all of them (none for no keys). Raises as `run` does —
+    `BinaryMissing` with no binary, `NotThisDocument` for a da-guard older
+    than this tool — and ParseTreeError for an answer that is not one
+    well-formed entry per key: unusable whole."""
+    keys = list(dict.fromkeys(keys))
+    if not keys:
+        return NO_SPELLINGS
+    what = KEY_SPELLINGS
+    try:
+        raw = json.dumps(keys, ensure_ascii=False).encode("utf-8")
+    except (TypeError, UnicodeEncodeError) as e:
+        raise ParseTreeError(f"da-guard {what}: a key JSON cannot carry ({e})") from None
+    out = _run_stdout([KEY_SPELLINGS], binary, timeout, stdin=raw, what=what)
+    try:
+        doc = json.loads(out.decode("utf-8"))
+        if not isinstance(doc, list) or len(doc) != len(keys):
+            raise ValueError(f"{len(doc) if isinstance(doc, list) else type(doc).__name__} "
+                             f"answers for {len(keys)} keys")
+        of: dict[str, tuple[str, tuple[str, ...]]] = {}
+        for key, a in zip(keys, doc):
+            if not isinstance(a, dict) or set(a) != _SPELLING_FIELDS or a["key"] != key:
+                raise ValueError(f"an answer is not {sorted(_SPELLING_FIELDS)} for {key!r}: {a!r}")
+            canon, spellings = a["canonical"], a["spellings"]
+            if not isinstance(canon, str) or not isinstance(spellings, list) or not spellings \
+                    or spellings[0] != canon or not all(isinstance(x, str) for x in spellings):
+                raise ValueError(f"an answer of the wrong shape: {a!r}")
+            of[key] = (canon, tuple(spellings))
+    except (ValueError, TypeError, KeyError, RecursionError) as e:  # UnicodeDecodeError is a ValueError
+        raise ParseTreeError(f"da-guard {what} wrote no answer this tool can read ({e}); "
+                             "nothing of it is used") from e
+    return KeySpellings(MappingProxyType(of))
 
 
 #: `da-guard threshold-values` (#3267): how the exporter reads a threshold

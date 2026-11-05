@@ -141,7 +141,7 @@ AST 引擎深度（為什麼 `promql-parser` 比 regex 準）+ 完整啟發規�
 
 - **選項 A（推薦）**：OCI Registry — `helm upgrade --install threshold-exporter oci://ghcr.io/vencil/charts/threshold-exporter --version 2.9.0 -n monitoring -f values-override.yaml`
 - **選項 B**：本地建置 — `docker build` + `kind load` + `make component-deploy`
-- **選項 C**：Operator CRD 路徑 — `da-tools operator-generate`，取代 ConfigMap 掛載（已安裝 kube-prometheus-stack 環境適用）
+- **選項 C**：Operator CRD 路徑 — `da-tools operator-generate` 產生 PrometheusRule／ServiceMonitor，取代 ConfigMap 掛載；告警路由由 `generate-routes` 產出、經 Alertmanager CR 的 `configSecret` 載入（已安裝 kube-prometheus-stack 環境適用）
 
 兩種路徑的詳細比較與決策指引見 [Deployment Decision Matrix](getting-started/decision-matrix.md)。完整 Helm values、Operator CRD migration、Use da-tools in K8s Cluster 模式：[threshold-exporter README](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/components/threshold-exporter/README.md#6-部署) · [Operator integration guides](integration/operator-prometheus-integration.md)。
 
@@ -162,9 +162,14 @@ curl -s http://localhost:8080/api/v1/config | python3 -m json.tool
 ```bash
 da-tools generate-routes --config-dir conf.d/ --validate \
                          --policy .github/custom-rule-policy.yaml
-da-tools generate-routes --config-dir conf.d/ -o alertmanager-routes.yaml
+# 非 K8s 的 BYO Alertmanager：合併進你自己的 alertmanager.yml
+da-tools generate-routes --config-dir conf.d/ --output-alertmanager \
+                         --base-config alertmanager.yml -o alertmanager.new.yml
+# K8s：合併進叢集上的 ConfigMap 並 reload（GitOps 改用 --output-configmap）
 da-tools generate-routes --config-dir conf.d/ --apply --yes
 ```
+
+輸出模式把產生的路由合併進你自己的設定（`--base-config`，即來源），輸出另一份產物：你自己的路由、receiver、inhibit rule 保留；conf.d 改了就拿同一份來源再跑，不要拿產物當 base（含 `tenant-*` receiver 會被拒收，結束碼 1）；不帶模式旗標是結束碼 2。⚠️ v2.9.0 映像沒有 `--output-alertmanager`，不帶模式旗標時輸出片段 <!-- image-caveat: v2.9.0 -->
 
 平台對時序參數設 guardrails（`group_wait` 5s–5m、`group_interval` 5s–5m、`repeat_interval` 1m–72h），超限值自動 clamp。
 

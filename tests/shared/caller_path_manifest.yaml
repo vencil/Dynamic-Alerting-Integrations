@@ -149,6 +149,9 @@ commands:
     "--namespace": not_path
     "--output": output
     "--policy": file
+    # #1560: a path inside the Alertmanager container, written into the
+    # rendered `<field>_file`; never opened here.
+    "--secret-mount-root": not_path
   generator-service:
     "--cache-max-bytes": not_path
     "--config-subdir": {kind: reader, by: "git ls-tree of HEAD at start, the judgement's own reading (_gsvc_child.tree_entries): no directory there is refused, no entry at all is an empty conf.d", pinned_by: "tests/shared/test_caller_paths.py::test_generator_service_refuses_a_config_subdir_that_is_no_directory"}
@@ -205,7 +208,7 @@ commands:
     "--prefix": not_path
     input_file: {kind: reader, by: "da-read (Prometheus' rule loader)", pinned_by: "tests/ops/test_migrate_rule_outputs.py::test_missing_input_file_exits_caller_error"}
   migrate-to-operator:
-    "--config-dir": dir
+    "--config-dir": {kind: reader, by: "refused whatever the value: no conf.d is read, rc 2 with the routing remedy (#3572)", pinned_by: "tests/ops/test_operator_routing_single_renderer.py::test_each_alertmanagerconfig_flag_is_refused_naming_it"}
     "--namespace": not_path
     "--output-dir": output
     "--receiver-template": not_path
@@ -238,7 +241,7 @@ commands:
   operator-generate:
     "--api-version": not_path
     "--components": not_path
-    "--config-dir": dir
+    "--config-dir": {kind: reader, by: "refused whatever the value: no conf.d is read, rc 2 with the routing remedy (#3572)", pinned_by: "tests/ops/test_operator_routing_single_renderer.py::test_each_alertmanagerconfig_flag_is_refused_naming_it"}
     "--namespace": not_path
     "--output-dir": output
     "--receiver-template": not_path
@@ -315,20 +318,12 @@ commands:
     "--tenant": not_path
     "--timeout": not_path
   threshold-govern:
-    "--auth-token": not_path
-    "--auth-token-file": {kind: reader, by: "_lib_paths.classify_path when it is the only credential (#3511); a warning when identity headers carry the authz (#962)", pinned_by: "tests/ops/test_threshold_govern.py::test_sole_credential_token_file_unreadable_is_a_caller_error"}
     "--config-dir": dir
-    "--identity-email": not_path
-    "--identity-groups": not_path
     "--lookback": not_path
-    "--max-prs": not_path
     "--min-delta-pct": not_path
     "--min-samples": not_path
     "--prometheus": not_path
     "--tenant": not_path
-    "--tenant-api-url": not_path
-    "--throttle-seconds": not_path
-    "--timeout": not_path
   threshold-recommend:
     "--config-dir": dir
     "--lookback": not_path

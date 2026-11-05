@@ -93,9 +93,10 @@ OPS_SITES = [
      ["--config-dir", "{CONF}", "--trace", "--tenant", "tenant-a", "--base-config", "{F}", "--json"],
      "--base-config", None),
     ("generate-routes --config-dir", "generate_alertmanager_routes.py",
-     ["--config-dir", "{D}", "--dry-run"], "--config-dir", None),
+     ["--config-dir", "{D}", "--output-alertmanager", "--dry-run"], "--config-dir", None),
     ("generate-routes --policy", "generate_alertmanager_routes.py",
-     ["--config-dir", "{CONF}", "--dry-run", "--policy", "{F}"], "--policy", None),
+     ["--config-dir", "{CONF}", "--output-alertmanager", "--dry-run", "--policy", "{F}"],
+     "--policy", None),
     ("generate-routes --base-config", "generate_alertmanager_routes.py",
      ["--config-dir", "{CONF}", "--output-configmap", "--base-config", "{F}",
       "-o", "{BOX}/routes.yaml"], "--base-config", None),
@@ -175,16 +176,12 @@ OPS_SITES = [
      "dir_not_accessible"),
     ("runtime-audit --runtime-json", "runtime_audit.py",
      ["--rule-packs-dir", "{RP}", "--runtime-json", "{F}", "--json"], "--runtime-json", None),
-    # #3392
+    # #3392 (#3572: the two --config-dir rows left — that flag is refused
+    # whatever its value; tests/ops/test_operator_routing_single_renderer.py)
     ("operator-generate --rule-packs-dir", "operator_generate.py",
      ["--rule-packs-dir", "{D}", "--json"], "--rule-packs-dir", "dir_not_accessible"),
-    ("operator-generate --config-dir", "operator_generate.py",
-     ["--config-dir", "{D}", "--json"], "--config-dir", "dir_not_accessible"),
     ("migrate-to-operator --source-dir", "migrate_to_operator.py",
      ["--source-dir", "{D}", "--json"], "--source-dir", "dir_not_accessible"),
-    ("migrate-to-operator --config-dir", "migrate_to_operator.py",
-     ["--source-dir", "{CONF}", "--config-dir", "{D}", "--json"], "--config-dir",
-     "dir_not_accessible"),
     ("blind-spot --config-dir", "blind_spot_discovery.py",
      ["--config-dir", "{D}", "--json-output", "--prometheus", "http://127.0.0.1:9"],
      "--config-dir", "dir_not_accessible"),
@@ -368,8 +365,8 @@ def _ops_row(box, script, argv, flag, reason, lang):
     named = f"{flag} {path}" if flag else path
     assert f"{named}: {_denied('ops/' + script, lang)}" in out, out[-3000:]
     _one_language(out, "ops/" + script, lang)
-    if reason is not None:
-        assert json.loads(proc.stdout)["reason"] == reason, proc.stdout
+    if reason is not None:  # a --json run
+        assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
 
 
 @pytest.mark.parametrize("script, argv, named, rc",
@@ -775,7 +772,7 @@ def test_rule_pack_split_names_a_dir_it_cannot_list(box):
     out = proc.stdout + proc.stderr
     assert proc.returncode == 2, out[-3000:]
     assert f"--rule-packs-dir {noread}: {DENIED}" in out, out[-3000:]
-    assert json.loads(proc.stdout)["reason"] == "dir_not_accessible", proc.stdout
+    assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
     assert not out_dir.exists(), "the output tree was made before the input was judged"
 
 
@@ -792,13 +789,8 @@ _NO_PROM = "http://127.0.0.1:9"
 INPUT_SITES_3392 = [
     ("operator-generate --rule-packs-dir", "operator_generate.py",
      ["--rule-packs-dir", "{P}", "--output-dir", "{OUT}", "--json"], "--rule-packs-dir", "dir"),
-    ("operator-generate --config-dir", "operator_generate.py",
-     ["--config-dir", "{P}", "--output-dir", "{OUT}", "--json"], "--config-dir", "dir"),
     ("migrate-to-operator --source-dir", "migrate_to_operator.py",
      ["--source-dir", "{P}", "--output-dir", "{OUT}", "--json"], "--source-dir", "dir"),
-    ("migrate-to-operator --config-dir", "migrate_to_operator.py",
-     ["--source-dir", _CONF_3392, "--config-dir", "{P}", "--output-dir", "{OUT}", "--json"],
-     "--config-dir", "dir"),
     ("blind-spot --config-dir", "blind_spot_discovery.py",
      ["--config-dir", "{P}", "--json-output", "--prometheus", _NO_PROM], "--config-dir", "dir"),
     ("shadow-verify --mapping", "shadow_verify.py",
@@ -850,7 +842,7 @@ def test_a_missing_input_is_named_not_read_as_empty(tmp_path, script, argv, flag
     assert proc.returncode == 2, out[-3000:]
     assert "Traceback" not in out, out[-3000:]
     assert f"{flag} {path}: {detail}" in proc.stderr, out[-3000:]
-    assert json.loads(proc.stdout)["reason"] == reason, proc.stdout
+    assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
     assert not out_dir.exists(), "an output was written before the input was judged"
 
 
@@ -880,7 +872,7 @@ def test_onboard_rule_files_that_select_no_file_are_a_caller_error(tmp_path, pat
                                             "--output-dir", str(out_dir), "--json"])
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert f"--rule-files {rules / pattern}: selects no file" in proc.stderr
-    assert json.loads(proc.stdout)["reason"] == "file_not_found", proc.stdout
+    assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
     assert not out_dir.exists()
 
 
@@ -894,7 +886,7 @@ def test_onboard_an_empty_rule_files_is_a_caller_error(tmp_path):
                                             "--output-dir", str(out_dir), "--json"])
     assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "--rule-files '': an empty value names no file" in proc.stderr
-    assert json.loads(proc.stdout)["reason"] == "file_not_found", proc.stdout
+    assert proc.stdout == "", proc.stdout  # #3558: a caller error carries no document
     assert not out_dir.exists()
 
 
@@ -1152,7 +1144,7 @@ def test_a_declared_input_refuses_a_directory_it_cannot_list(box, declared_input
         assert (f"{flag} {unlisted}" in out
                 or f"{flag} {os.path.realpath(unlisted)}" in out), (rid, out[-3000:])
         if reason is not None:
-            assert _reason(proc) == "dir_not_accessible", (rid, proc.stdout)
+            assert proc.stdout == "", (rid, proc.stdout)  # #3558: a caller error carries no document
         written = sorted(p.name for p in scratch.rglob("*") if p.name != "silences.json")
         assert written == [], (rid, f"written before the input was judged: {written}")
 

@@ -217,21 +217,25 @@ class TestCheckServiceMonitorStatus:
 # check_alertmanager_config
 # ---------------------------------------------------------------------------
 class TestCheckAlertmanagerConfig:
-    def test_with_tenants_passes(self, monkeypatch):
+    """#3572: operator-generate emits no AlertmanagerConfig any more, so one
+    carrying its part-of label is a leftover (warn); none, or no CRD, passes.
+    The detail wording is pinned in test_operator_routing_single_renderer.py."""
+
+    def test_leftovers_warn(self, monkeypatch):
         _stub_cluster(monkeypatch, lists={"alertmanagerconfig": [{"x": 1}, {"x": 2}, {"x": 3}]})
         result = oc.OperatorChecker(_make_args()).check_alertmanager_config()
-        assert result.status == "pass"
-        assert "3" in result.detail
+        assert result.status == "warn"
+        assert result.detail.startswith("3 ")
 
-    def test_no_tenants_warns(self, monkeypatch):
+    def test_none_passes(self, monkeypatch):
         _stub_cluster(monkeypatch)
         result = oc.OperatorChecker(_make_args()).check_alertmanager_config()
-        assert result.status == "warn" and result.detail == "no tenants"
+        assert result.status == "pass"
 
-    def test_crd_not_installed_warns_and_says_so(self, monkeypatch):
+    def test_crd_not_installed_passes_and_says_so(self, monkeypatch):
         _stub_cluster(monkeypatch, crds=(oc._CRD_RULES, oc._CRD_MONITORS))
         result = oc.OperatorChecker(_make_args()).check_alertmanager_config()
-        assert result.status == "warn" and oc._CRD_AM_CONFIGS in result.detail
+        assert result.status == "pass" and oc._CRD_AM_CONFIGS in result.detail
 
 
 # ---------------------------------------------------------------------------

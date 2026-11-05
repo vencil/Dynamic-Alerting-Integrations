@@ -65,6 +65,9 @@ type KeyFinding struct {
 	File     string
 	Tenants  []string
 	Reason   string
+	// Blocks: the shared verdict says this finding refuses a write
+	// (keyverdict.Blocking, #3016) — the one answer keyVerdictRefusal reads.
+	Blocks bool
 }
 
 // KeyVerdict statuses and the reason of a verdict the generator did not
@@ -223,10 +226,6 @@ func adviseKeyVerdict(ctx context.Context, files []ProposedFile, kv *KeyVerdict)
 	return adv
 }
 
-// keyVerdictSeverityError is the severity of a finding that refuses a write
-// (ADR-038 decision 4).
-const keyVerdictSeverityError = "error"
-
 // KeyVerdictError refuses a write whose key verdict has error findings about
 // a tenant the write is for (ADR-038 decision 5): ByTenant is, per such
 // tenant, its findings' lines. Those are the caller's own (its write for the
@@ -245,6 +244,10 @@ func (e *KeyVerdictError) Unwrap() error { return ErrValidation }
 
 // ErrorKind is errkind.Validation.
 func (e *KeyVerdictError) ErrorKind() errkind.Kind { return errkind.Validation }
+
+// Lines is every tenant's lines, in tenant order, capped (capVerdictLines):
+// the text a write's 400 carries, for a preview to answer with (#3016).
+func (e *KeyVerdictError) Lines() []string { return e.lines() }
 
 // lines is every tenant's lines, in tenant order, capped (capVerdictLines).
 func (e *KeyVerdictError) lines() []string {
@@ -280,7 +283,7 @@ func keyVerdictRefusal(files []ProposedFile, kv *KeyVerdict) *KeyVerdictError {
 	}
 	var out *KeyVerdictError
 	for _, f := range kv.Findings {
-		if f.Severity != keyVerdictSeverityError {
+		if !f.Blocks {
 			continue
 		}
 		for _, t := range f.Tenants {

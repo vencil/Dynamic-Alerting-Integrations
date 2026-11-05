@@ -321,6 +321,22 @@ class TestAnalyzeTenant:
         assert "tenant:mysql_threads_connected:max" in rec.promql
         assert "dry-run" in rec.reason
 
+    def test_retired_spelling_is_looked_up_by_the_exporters_rule(self, da_guard_env):
+        """#3556: a key in a #1231 retired spelling — a dimensional `_critical`
+        included — is looked up in the observed-map by its canonical spelling,
+        which the exporter's rule gives (`da-guard key-spellings`)."""
+        from _registry_lib import DEPRECATED_KEY_ALIASES
+        legacy, canon = next(iter(DEPRECATED_KEY_ALIASES.items()))
+        key, canonical = legacy + '_critical{db="a"}', canon + '_critical{db="a"}'
+        observed_map = {canonical: {"scope": "tenant", "direction": ">",
+                                    "observed_series": "tenant:mysql_threads_running:avg1m"}}
+        report = tr.analyze_tenant("db-a", {key: 5}, dry_run=True, observed_map=observed_map)
+        rec = report.keys[0]
+        assert (rec.key, rec.canonical_key) == (key, canonical), rec
+        # The observed-map is keyed by the canonical spelling only: the
+        # lookup found it, so the query names its series.
+        assert "tenant:mysql_threads_running:avg1m" in rec.promql, rec
+
     def test_unmapped_key_skipped(self):
         """未對映的 key fail-loud skip。"""
         config = {"totally_unknown": 5}
@@ -1094,7 +1110,7 @@ class TestAnalyzeTenantUpperBoundFiniteSamples:
 
     def test_short_history_is_low_and_not_governed(self):
         """1000 points of a 15s rule are ~4.2h of data: HIGH by count, LOW
-        by coverage, so threshold_govern opens no PR for it."""
+        by coverage, so threshold_govern does not report it."""
         import threshold_govern as tg
         rec = self._upper(self._BIG_DELTA, step=15.0)
         assert rec.confidence == tr.CONFIDENCE_LOW
@@ -1817,7 +1833,7 @@ class TestUpperBoundFloor2964:
         assert [(u.tenant, u.key) for u in fm] == [("db-x", "connections")]
         assert fm[0].delta_pct is None
         assert tg.build_governance_plan([report], 0.0) == []
-        text = tg.format_text_report([], [], applied=False, force_manual=fm)
+        text = tg.format_text_report([], force_manual=fm)
         line = next(ln for ln in text.splitlines() if "db-x / connections" in ln)
         assert line.strip() == f"db-x / connections: {fm[0].guardrail_reason}"
         assert "miss" not in text
@@ -1827,7 +1843,7 @@ class TestUpperBoundFloor2964:
         assert head in ("⚠ 1 threshold(s) need manual review "
                         "(no value proposed — reason per line):",
                         "⚠ 1 個閾值需人工 review（不提供建議值，原因見各行）：")
-        out = tg.json_document([], [], False, force_manual=fm)
+        out = tg.json_document([], force_manual=fm)
         assert out["summary"]["force_manual"] == 1
         assert out["force_manual"][0]["delta_pct"] is None
 

@@ -69,6 +69,13 @@ type keyVerdictDoc struct {
 	// Undecidable: no root platform file was read (decision 7): a threshold
 	// key's verdict is "undecidable".
 	Undecidable bool `json:"undecidable"`
+	// Blocks: a gate that judges the whole tree refuses it — some finding
+	// blocks, or some key is undecidable (keyverdict.Blocks; #3016).
+	Blocks bool `json:"blocks"`
+	// UndecidableBlocks: some key is undecidable, which blocks such a gate
+	// — the answer a report of the undecidable keys prints, so no reader
+	// infers it from Blocks and the findings.
+	UndecidableBlocks bool `json:"undecidable_blocks"`
 	// Tenants: tenant → the verdict on each of its keys, sorted by key.
 	Tenants map[string][]keyverdict.KeyVerdict `json:"tenants"`
 	// Findings: what a report prints, error first.
@@ -227,9 +234,14 @@ func keyVerdictOf(dir string, opts keyVerdictOpts, at time.Time) (keyVerdictResu
 		ec = ec.AsWritten() // #2031: as `da-guard effective` prints it
 		// A YAML `.inf` / `.nan` is text, as effective prints it.
 		in.Effective[ec.TenantID] = keyverdict.EffectiveTenant{Config: config.NonFiniteAsText(ec.EffectiveConfig),
-			Sources: ec.KeySources, Profile: ec.BoundProfile, DefaultsChain: ec.DefaultsChain}
+			Sources: ec.KeySources, Profile: ec.BoundProfile, DefaultsChain: ec.DefaultsChain,
+			NotServed: ec.NotServed}
 	}
 	in.RootProfiles = opts.profiles
+	// A profile no tenant binds is known only over every tenant (#3395):
+	// not with a --tenant subset, and not when a file the load drops, or a
+	// tenant set aside, may be the one binding it.
+	in.Whole = opts.tenants == nil && len(rep.ParseFailed) == 0 && len(rep.Unreadable) == 0 && len(setAside) == 0
 	res := keyVerdictResult{judged: true, tree: keyverdict.Judge(in),
 		keyChecks: map[string]servedKeyChecks{}, computed: map[string]bool{},
 		parseFailed: rep.ParseFailed, unreadable: unreadableEntries(rep.Unreadable), setAside: setAside}
@@ -550,6 +562,7 @@ func runKeyVerdict(args []string, stdout, errOut io.Writer) int {
 		return fail(res.why)
 	}
 	out := keyVerdictDoc{Schema: keyVerdictSchema, At: at.Format(time.RFC3339), Undecidable: res.tree.Undecidable,
+		Blocks: res.tree.Blocks, UndecidableBlocks: res.tree.UndecidableBlocks,
 		Tenants: res.tree.Keys, Findings: res.tree.Findings, KeyChecks: res.keyChecks,
 		ParseFailed: nonNilStrings(res.parseFailed), Unreadable: res.unreadable,
 		tenantSubset: subset(requested, func(t string) bool { return res.computed[t] })}
