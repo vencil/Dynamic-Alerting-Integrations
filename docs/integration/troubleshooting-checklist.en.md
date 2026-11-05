@@ -1172,10 +1172,10 @@ kubectl get jobs -n monitoring -w
 The alert resolves on its own: once the next run (or the manual one) succeeds, the newest Job is no longer Failed. There is no need to delete the failed Job.
 
 **If not this**:
-- (a) the log shows a connection error → a service the Job depends on (tenant-api, Prometheus) is unreachable from `monitoring`; check that service's health and whether NetworkPolicy allows the traffic
+- (a) the log shows a connection error → a service the Job depends on (Alertmanager, Prometheus) is unreachable from `monitoring`; check that service's health and whether NetworkPolicy allows the traffic
 - (b) the CronJob should not run for now → `kubectl patch cronjob <owner_name> -n monitoring -p '{"spec":{"suspend":true}}'`. A suspended CronJob does not trigger this alert
 
-**Cross-ref**: `ThresholdGovernanceStale` only measures time since the last success; a CronJob that has never succeeded is caught by this alert instead.
+**Cross-ref**: a staleness alert that only measures time since the last success cannot catch a CronJob that has never succeeded; this alert does.
 
 #### 1.7.2 MassExporterOutage
 

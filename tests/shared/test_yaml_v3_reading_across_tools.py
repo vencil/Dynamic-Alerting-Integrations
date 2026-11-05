@@ -198,7 +198,7 @@ _GO_KEYS = (_GO + "; Python reads only key names / truthiness from parse-tree, n
 #: only produces the text of a write, and parse-tree reads that text back
 #: before it is written (ADR-036 §2). They take no conf.d argument a probe can
 #: drive without a cluster or an API (patch_config: a ConfigMap via kubectl;
-#: threshold_govern: tenant-api; da_assembler: a CR), or write what they
+#: da_assembler: a CR), or write what they
 #: generate rather than read a value (init_project, scaffold_tenant; and since
 #: step F1 onboard_platform, migrate_rule, generate_tenant_fixture, which read
 #: no conf.d at all — their inputs are Alertmanager / rule / scrape files, and
@@ -301,7 +301,11 @@ _NOT_PROBED: dict[str, str] = {
     "ops/migrate_to_operator.py": _GO_KEYS,
     "ops/onboard_platform.py": _GO_WRITER, "ops/operator_generate.py": _GO_KEYS,
     "ops/patch_config.py": _GO_EDIT,
-    "ops/scaffold_tenant.py": _GO_WRITER, "ops/threshold_govern.py": _GO_EDIT,
+    "ops/scaffold_tenant.py": _GO_WRITER,
+    # Read-only since ADR-027 §4: it reads conf.d only through
+    # threshold_recommend.run_analysis (probed above as ops/threshold_recommend.py),
+    # and has no --dry-run to keep a probe off Prometheus.
+    "ops/threshold_govern.py": _GO + "; only through threshold_recommend.run_analysis",
 }
 
 

@@ -184,3 +184,40 @@ func TestPlaceholderPaths_DecodedSpellings(t *testing.T) {
 		t.Errorf("PlaceholderPaths on a real value = %v, want none", got)
 	}
 }
+
+// #1560 ③-a: a credential field may hold a Secret reference
+// ({secret: {key}} / {secret: {shared, key}}) instead of the value. The
+// reference is coordinates, not the secret, but it is masked whole all the
+// same: the rule is by key name and fail-closed, a key's text can be the
+// credential pasted in the wrong place, and unmasking by shape would be a
+// second rule to keep right. The cost is one value a reader cannot see.
+func TestMaskYAML_MasksASecretReferenceWhole(t *testing.T) {
+	t.Parallel()
+	in := `tenants:
+  t1:
+    _routing:
+      receiver:
+        type: slack
+        api_url: {secret: {key: CANARY-1}}
+      routes:
+        - match: {severity: critical}
+          receiver:
+            type: pagerduty
+            routing_key:
+              secret: {shared: CANARY-2, key: CANARY-3}
+`
+	out, err := MaskYAML([]byte(in))
+	if err != nil {
+		t.Fatalf("MaskYAML: %v", err)
+	}
+	if strings.Contains(string(out), "CANARY") || strings.Contains(string(out), "secret:") {
+		t.Fatalf("a Secret reference survived the mask:\n%s", out)
+	}
+	if n := strings.Count(string(out), Placeholder); n != 2 {
+		t.Errorf("placeholder count = %d, want 2:\n%s", n, out)
+	}
+	v := MaskValue(map[string]any{"api_url": map[string]any{"secret": map[string]any{"key": "CANARY-4"}}})
+	if got := v.(map[string]any)["api_url"]; got != Placeholder {
+		t.Errorf("MaskValue api_url = %#v, want the placeholder", got)
+	}
+}

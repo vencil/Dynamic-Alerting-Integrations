@@ -57,7 +57,7 @@ def _build_help_text(lang):
     cardinality-forecast  基數預測 (線性回歸趨勢分析)
     test-notification 多通道通知連通性測試 (驗證 receiver 可達性)
     threshold-recommend 閾值推薦引擎 (基於歷史 P50/P95/P99)
-    threshold-govern  閾值治理迴路 — 推薦→過濾→經 tenant-api 開 per-tenant proposed-PR (#656)
+    threshold-govern  閾值治理報告 — 推薦→過濾→列出該調的腐敗閾值（唯讀，不寫入；#656）
     explain-route     路由合併管線除錯器 (四層展開 + 設定檔擴展)
     byo-check         BYO Alertmanager 整合前檢 (端點 + 配置驗證)
     federation-check  Prometheus Federation 健康檢查
@@ -147,7 +147,7 @@ Commands (File System — offline):
     cardinality-forecast  Cardinality forecasting (linear regression trend)
     test-notification Multi-channel notification connectivity testing
     threshold-recommend Threshold recommendation engine (historical P50/P95/P99)
-    threshold-govern  Threshold governance loop — recommend→gate→open per-tenant proposed-PR via tenant-api (#656)
+    threshold-govern  Threshold governance report — recommend→gate→list rotten thresholds (read-only; #656)
     explain-route     Routing merge pipeline debugger (four-layer expansion + profile)
     byo-check         BYO Alertmanager pre-integration check (endpoint + config)
     federation-check  Prometheus Federation health check
@@ -358,9 +358,9 @@ COMMAND_MAP = {
     "cardinality-forecast": "cardinality_forecasting.py",
     "test-notification": "notification_tester.py",
     "threshold-recommend": "threshold_recommend.py",
-    # #656 — active governance layer over threshold-recommend: gate on rot
-    # magnitude + confidence, open per-tenant proposed-PRs via tenant-api
-    # (single-writer, ADR-011/023). Default dry-run; --apply to open PRs.
+    # #656 — governance gate over threshold-recommend: gate on rot magnitude +
+    # confidence and report the rotten thresholds. Read-only: the write path
+    # (--apply, PRs via tenant-api) was removed by ADR-027 §4.
     "threshold-govern": "threshold_govern.py",
     "explain-route": "explain_route.py",
     "byo-check": "byo_check.py",

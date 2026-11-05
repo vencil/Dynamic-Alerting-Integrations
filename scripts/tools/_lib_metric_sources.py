@@ -265,8 +265,8 @@ def operator_unportable(expr: str, produced: "dict[str, list[str]] | None" = Non
     ⚠️ Of the labels a selector matches, only `job` is modelled. Other labels
     that exist in one mode only are not: the raw tenant-exporters job's
     `tenant` relabel, or a `namespace="monitoring"` pin on an object this
-    repo's raw manifests put there (ThresholdGovernanceStale,
-    CronJobLastRunFailed, ConfigReloader*) — such a rule counts as portable
+    repo's raw manifests put there (CronJobLastRunFailed,
+    ConfigReloader*) — such a rule counts as portable
     because its series exist, though it may watch nothing under the Operator.
     """
     produced = produced or {}

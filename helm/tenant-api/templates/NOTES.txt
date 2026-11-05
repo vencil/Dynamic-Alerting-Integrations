@@ -6,8 +6,8 @@ tenant-api installed — ADR-009 Tenant Manager CRUD API.
 SECURITY (GHSA-3g2h-rf85-5rrv) — internal port 8080 BYPASSES oauth2-proxy and
   blindly trusts X-Forwarded-Groups / X-Forwarded-Email. Anything that can reach
   8080 can assert ANY identity (incl. platform-admins -> fleet admin write +
-  federation token minting + git PR-write). The pod-scoped NetworkPolicy (four
-  admitted clients: Prometheus + threshold-govern + recipe-preview + da-portal)
+  federation token minting + git PR-write). The pod-scoped NetworkPolicy (three
+  admitted clients: Prometheus + recipe-preview + da-portal)
   is the ONLY control on that port — this is why networkPolicy.enabled=false is a
   hard failure.
 

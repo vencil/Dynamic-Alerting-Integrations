@@ -27,6 +27,7 @@ flush), so every behavioural case runs a subprocess:
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import shutil
@@ -385,35 +386,189 @@ def test_run_returns_the_mains_value_as_the_exit_status(tmp_path):
 # ═══════════════════════════════════════════════════════════════════════════
 
 
+def _is_main_test(node: ast.AST) -> bool:
+    """A comparison of `__name__` with "__main__" — either order, any
+    operator, anywhere in an expression (#3579 F1: the population is every
+    module that asks the question, not only the ones that ask it the
+    standard way)."""
+    if not isinstance(node, ast.Compare):
+        return False
+    parts = [node.left, *node.comparators]
+    return (any(isinstance(p, ast.Name) and p.id == "__name__" for p in parts)
+            and any(isinstance(p, ast.Constant) and p.value == "__main__" for p in parts))
+
+
 def _is_main_guard(node: ast.stmt) -> bool:
-    return (isinstance(node, ast.If) and isinstance(node.test, ast.Compare)
+    """The one standard shape: `if __name__ == "__main__":` with no else."""
+    return (isinstance(node, ast.If) and not node.orelse
+            and isinstance(node.test, ast.Compare)
             and isinstance(node.test.left, ast.Name) and node.test.left.id == "__name__"
+            and len(node.test.ops) == 1 and isinstance(node.test.ops[0], ast.Eq)
             and len(node.test.comparators) == 1
             and isinstance(node.test.comparators[0], ast.Constant)
             and node.test.comparators[0].value == "__main__")
 
 
-def _guard_problem(tree: ast.Module) -> str | None:
+def _module_scope(tree: ast.Module):
+    """Every node evaluated when the module runs: function and lambda bodies
+    are left out (they run when called); decorators, defaults and class
+    bodies are kept (they run at import)."""
+    stack: list[ast.AST] = list(tree.body)
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+            if not isinstance(node, ast.Lambda):
+                stack.extend(node.decorator_list)
+            stack.extend(node.args.defaults)
+            stack.extend(d for d in node.args.kw_defaults if d is not None)
+        else:
+            stack.extend(ast.iter_child_nodes(node))
+
+
+def _bindings(tree: ast.Module, name: str) -> list[ast.AST]:
+    """Every statement or name that binds *name* in the module's namespace,
+    in source order. `import *` and `global <name>` count: either can put
+    something else under the name."""
+    out: list[ast.AST] = []
+    for node in _module_scope(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            if node.name == name:
+                out.append(node)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            if any(a.name == "*" or (a.asname or a.name.split(".")[0]) == name
+                   for a in node.names):
+                out.append(node)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, (ast.Store, ast.Del)):
+            if node.id == name:
+                out.append(node)
+    out += [n for n in ast.walk(tree)
+            if isinstance(n, (ast.Global, ast.Nonlocal)) and name in n.names]
+    return sorted(out, key=lambda n: (n.lineno, n.col_offset))
+
+
+#: The decorators the run() tools put on their entry (26 of 97 measured on
+#: 2026-11-05): each turns one library error into rc 2 and forwards
+#: `*args, **kwargs` to the def, so run()'s no-argument call reaches it
+#: unchanged — test_the_allowed_entry_decorators_forward_a_bare_call runs
+#: each. Matched by the last name of a dotted reference; `session()` is
+#: `_lib_parse_cache.session()`, a context manager used as a decorator.
+_ENTRY_DECORATORS = frozenset({
+    "exit_on_yaml_file_error", "exit_on_output_write_error", "exit_on_served_values_error",
+    "exit_on_parse_tree_error", "exit_on_observed_map_error",
+})
+
+
+def _dotted(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute) and (head := _dotted(node.value)):
+        return f"{head}.{node.attr}"
+    return None
+
+
+def _is_allowed_entry_decorator(deco: ast.expr) -> bool:
+    if isinstance(deco, ast.Call):
+        return (not deco.args and not deco.keywords
+                and _dotted(deco.func) == "_lib_parse_cache.session")
+    name = _dotted(deco)
+    return name is not None and name.rsplit(".", 1)[-1] in _ENTRY_DECORATORS
+
+
+def _is_plain_lib_import(node: ast.AST) -> bool:
+    return (isinstance(node, ast.Import) and len(node.names) == 1
+            and node.names[0].name == "_lib_exitcodes" and node.names[0].asname is None)
+
+
+def _entry_signature_fault(fn: ast.FunctionDef) -> str | None:
+    """`run()` calls the entry with no arguments (#3579): a parameter without
+    a default is a TypeError on the first run, and a ``main(argv)`` whose
+    argv is required cannot be reached through run() at all."""
+    a = fn.args
+    positional = a.posonlyargs + a.args
+    required = [p.arg for p in positional[:len(positional) - len(a.defaults)]]
+    required += [k.arg for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is None]
+    if required:
+        return (f"`{fn.name}` takes {', '.join(required)} without a default, but "
+                "run() calls it with no arguments — give every parameter a default, "
+                "or hand run() a no-argument wrapper")
+    return None
+
+
+def _guard_fault(tree: ast.Module) -> tuple[int, str] | None:
+    """(line, why) when the module does not enter through
+    `_lib_exitcodes.run(<entry>)` and only through it, else None (#3579).
+
+    The shape that passes, and nothing looser:
+
+    * exactly one module-level `if __name__ == "__main__":` (no else), and no
+      other test of `__name__` against "__main__" anywhere in the module;
+    * its body is `_lib_exitcodes.run(<entry>)`, optionally preceded by
+      `import _lib_exitcodes` — the two shapes the run() tools use (94 / 3
+      of 97 measured on 2026-11-05);
+    * `_lib_exitcodes` is bound only by plain `import _lib_exitcodes`;
+    * `<entry>` is bound once, by a module-level `def` decorated only with
+      _ENTRY_DECORATORS, whose every parameter has a default, and is not
+      called at module scope.
+
+    ⚠️ Not seen: rebinding through `globals()` / `setattr` on the module, a
+    `sys.modules` entry planted before the import, or a module that defines
+    its own function under an _ENTRY_DECORATORS name (one does, as a no-op
+    fallback: generate_rule_pack_split.py)."""
     guards = [n for n in tree.body if _is_main_guard(n)]
-    if len(guards) != 1:
-        return f"expected one `if __name__ == \"__main__\":` guard, found {len(guards)}"
-    last = guards[0].body[-1]
+    tests = [n for n in ast.walk(tree) if _is_main_test(n)]
+    if len(guards) != 1 or len(tests) != 1:
+        stray = [t for t in tests if not guards or t is not guards[0].test]
+        line = stray[0].lineno if stray else 1
+        return line, ("expected exactly one module-level `if __name__ == \"__main__\":` "
+                      "and no other test of `__name__` against \"__main__\"; found "
+                      f"{len(guards)} guard(s) and {len(tests)} test(s)")
+    *before, last = guards[0].body
+    if before and not (len(before) == 1 and _is_plain_lib_import(before[0])):
+        stmt = before[-1] if len(before) == 1 else before[0]
+        return stmt.lineno, ("the guard holds only `_lib_exitcodes.run(<entry>)`, optionally "
+                             f"after `import _lib_exitcodes`; got `{ast.unparse(stmt)}`")
     call = last.value if isinstance(last, ast.Expr) else None
     if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
             and call.func.attr == "run" and isinstance(call.func.value, ast.Name)
             and call.func.value.id == "_lib_exitcodes"
             and len(call.args) == 1 and isinstance(call.args[0], ast.Name)
             and not call.keywords):
-        return f"the guard must end with `_lib_exitcodes.run(<entry>)`, got `{ast.unparse(last)}`"
+        return (last.lineno,
+                f"the guard must end with `_lib_exitcodes.run(<entry>)`, got `{ast.unparse(last)}`")
+    lib = _bindings(tree, "_lib_exitcodes")
+    if not lib:
+        return last.lineno, "`_lib_exitcodes` is never imported"
+    for node in lib:
+        if not _is_plain_lib_import(node):
+            return node.lineno, ("`_lib_exitcodes` must be bound only by "
+                                 f"`import _lib_exitcodes`, got `{ast.unparse(node).splitlines()[0]}`")
     entry = call.args[0].id
-    defined = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
-    if entry not in defined:
-        return f"`{entry}` is not a module-level function"
-    for stmt in guards[0].body[:-1]:
-        for node in ast.walk(stmt):
-            if isinstance(node, ast.Call) and getattr(node.func, "id", None) == entry:
-                return f"`{entry}` is also called outside run(): `{ast.unparse(stmt)}`"
+    binds = _bindings(tree, entry)
+    if len(binds) != 1 or not isinstance(binds[0], ast.FunctionDef) or binds[0] not in tree.body:
+        odd = next((b for b in binds if not (isinstance(b, ast.FunctionDef) and b in tree.body)),
+                   binds[1] if len(binds) > 1 else None)
+        line = odd.lineno if odd is not None else last.lineno
+        got = ast.unparse(odd).splitlines()[0] if odd is not None else "no definition"
+        return line, (f"`{entry}` must be bound once, by one module-level `def`; "
+                      f"found {len(binds)} binding(s), e.g. `{got}`")
+    fn = binds[0]
+    for deco in fn.decorator_list:
+        if not _is_allowed_entry_decorator(deco):
+            return deco.lineno, (f"`{entry}` is decorated with `{ast.unparse(deco)}`, which is "
+                                 "not one of the decorators known to forward run()'s no-argument "
+                                 "call (_ENTRY_DECORATORS)")
+    for node in _module_scope(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == entry:
+            return node.lineno, f"`{entry}` is also called outside run(): `{ast.unparse(node)}`"
+    if why := _entry_signature_fault(fn):
+        return fn.lineno, why
     return None
+
+
+def _guard_problem(tree: ast.Module) -> str | None:
+    fault = _guard_fault(tree)
+    return None if fault is None else f"line {fault[0]}: {fault[1]}"
 
 
 def _da_tools_scripts() -> dict[str, Path]:
@@ -460,6 +615,401 @@ def test_guard_predicate_on_known_shapes(src, ok):
     """The gate's predicate, fed shapes whose answer is known."""
     tree = ast.parse("def main():\n    pass\n" + src)
     assert (_guard_problem(tree) is None) is ok, _guard_problem(tree)
+
+
+@pytest.mark.parametrize("sig, ok", [
+    ("def main():", True),
+    ("def main(argv=None):", True),
+    ("def main(argv: list[str] | None = None, *, lang='en'):", True),
+    ("def main(*args, **kwargs):", True),
+    ("def main(argv):", False),
+    ("def main(argv, /, x=1):", False),
+    ("def main(argv=None, *, lang):", False),
+])
+def test_entry_signature_on_known_shapes(sig, ok):
+    """#3579: run() calls the entry with no arguments, so every parameter
+    needs a default. The fault names the def's own line."""
+    src = ("import _lib_exitcodes\n" + sig + "\n    pass\n"
+           "if __name__ == '__main__':\n    _lib_exitcodes.run(main)\n")
+    fault = _guard_fault(ast.parse(src))
+    assert (fault is None) is ok, fault
+    if not ok:
+        assert fault[0] == 2, fault
+
+
+_OK_TOOL = ("import sys\nimport _lib_exitcodes\n"
+            "def main(argv=None):\n    return 0\n"
+            "if __name__ == '__main__':\n    _lib_exitcodes.run(main)\n")
+_GUARD = "if __name__ == '__main__':\n    _lib_exitcodes.run(main)\n"
+
+
+def _shape(old: str, new: str) -> str:
+    assert _OK_TOOL.count(old) == 1, old
+    return _OK_TOOL.replace(old, new)
+
+
+@pytest.mark.parametrize("src", [
+    _OK_TOOL,
+    _shape("import _lib_exitcodes\n", "").replace(
+        "':\n", "':\n    import _lib_exitcodes\n"),
+    _OK_TOOL.replace("':\n", "':\n    import _lib_exitcodes\n"),
+    _shape("def main(argv=None):",
+           "@exit_on_yaml_file_error\n@_lib_parse_cache.session()\n"
+           "@recommend.observed_map_lib.exit_on_observed_map_error\ndef main(argv=None):"),
+], ids=["module-import", "guard-import", "both-imports", "allowed-decorators"])
+def test_the_shapes_the_run_tools_use_pass(src):
+    assert _guard_fault(ast.parse(src)) is None
+
+
+def test_the_allowed_entry_decorators_forward_a_bare_call():
+    """Each name in _ENTRY_DECORATORS, taken from the library the tools take
+    it from, leaves a no-argument call reaching the def: what run() does."""
+    import _lib_io
+    import _lib_parse_cache
+    import _lib_tenant_values
+    import _observed_map_lib  # noqa: E402  (scripts/tools/ops, path set by conftest.py)
+    found = {
+        "exit_on_yaml_file_error": _lib_io.exit_on_yaml_file_error,
+        "exit_on_output_write_error": _lib_io.exit_on_output_write_error,
+        "exit_on_served_values_error": _lib_tenant_values.exit_on_served_values_error,
+        "exit_on_parse_tree_error": _lib_parse_cache.exit_on_parse_tree_error,
+        "exit_on_observed_map_error": _observed_map_lib.exit_on_observed_map_error,
+    }
+    assert set(found) == _ENTRY_DECORATORS
+
+    def entry(argv=None, *, lang="en"):
+        return (argv, lang)
+
+    for name, deco in found.items():
+        assert deco(entry)() == (None, "en"), name
+    assert _lib_parse_cache.session()(entry)() == (None, "en")
+
+
+@pytest.mark.parametrize("src, line", [
+    (_shape(_GUARD, "if '__main__' == __name__:\n    _lib_exitcodes.run(main)\n"), 5),
+    (_shape("== '__main__':", "== '__main__' and sys.argv:"), 5),
+    (_shape(_GUARD, "try:\n    " + _GUARD.replace("\n    ", "\n        ") + "except Exception:\n"
+                    "    pass\n"), 6),
+    (_shape(_GUARD, _GUARD + "else:\n    pass\n"), 5),
+    (_shape("== '__main__'", "!= '__main__'"), 5),
+    (_shape("import sys\n", "import sys\n_X = __name__ == '__main__'\n"), 2),
+    (_shape("':\n", "':\n    sys.exit(other())\n"), 6),
+    (_shape(_GUARD, "main()\n" + _GUARD), 5),
+    (_shape("def main(argv=None):", "def helper(x=main()):\n    pass\ndef main(argv=None):"), 3),
+    (_shape("import _lib_exitcodes\n",
+            "class _lib_exitcodes:\n    run = staticmethod(lambda f: f())\n"), 2),
+    (_shape("import _lib_exitcodes\n", "import _lib_exitcodes\n_lib_exitcodes = object()\n"),
+     3),
+    (_shape("import _lib_exitcodes\n", "import os as _lib_exitcodes\n"), 2),
+    (_shape("import _lib_exitcodes\n", "from os import *\nimport _lib_exitcodes\n"), 2),
+    (_shape("import _lib_exitcodes\n", ""), 5),
+    (_shape(_GUARD, "main = lambda: 1\n" + _GUARD), 5),
+    (_shape(_GUARD, "def main():\n    return 1\n" + _GUARD), 5),
+    (_shape("def main(argv=None):", "@wrap\ndef main(argv=None):"), 3),
+    (_shape("def main(argv=None):", "@exit_on_yaml_file_error\n@wrap(1)\ndef main(argv=None):"),
+     4),
+    (_shape("def main(argv=None):", "async def main(argv=None):"), 3),
+    (_shape(_GUARD, "def f():\n    global main\n    main = 1\n" + _GUARD), 6),
+    (_shape("    _lib_exitcodes.run(main)\n",
+            "    from _lib_exitcodes import run as r\n    r(main)\n"), 6),
+    (_shape("    _lib_exitcodes.run(main)\n", "    _lib_exitcodes.run(lambda: main())\n"), 6),
+], ids=["reversed-guard", "and-guard", "guard-in-try", "guard-with-else", "ne-guard",
+        "stray-test", "call-before-run", "module-level-call", "call-in-default",
+        "class-named-lib", "lib-reassigned", "lib-alias", "star-import", "lib-not-imported",
+        "entry-rebound", "entry-redefined", "entry-decorated", "entry-decorated-twice",
+        "entry-async",
+        "entry-global-rebind", "run-alias", "run-lambda"])
+def test_ways_around_run_are_faults(src, line):
+    """#3579 F1/F2: each shape reaches the entry some other way than through
+    `_lib_exitcodes.run`, or hands run() something other than the `def`
+    the source shows. Each is a fault, on the line that carries it."""
+    fault = _guard_fault(ast.parse(src))
+    assert fault is not None and fault[0] == line, (fault, src)
+
+
+# ── #3579: every `__main__` under the tool trees, not only da-tools ─────────
+
+#: The trees whose modules must enter through run() (#3579, owner
+#: 2026-11-05). Repo-relative POSIX prefixes.
+GATED_TREES = ("scripts/tools/", "scripts/ops/", "scripts/dx/", "scripts/session-guards/")
+
+#: ⛔ Frozen: the entries that did not go through run() when the gate widened
+#: (#3579, 2026-11-05). Never edited — its digest is pinned in
+#: test_the_baseline_is_frozen, so an entry can neither be added nor swapped
+#: for another. A tool that migrates joins MIGRATED instead.
+BASELINE: frozenset[str] = frozenset({
+    "scripts/dx/generate_adr_index.py",
+    "scripts/dx/generate_planning_index.py",
+    "scripts/ops/add_t_parallel.py",
+    "scripts/ops/audit_rules_drift.py",
+    "scripts/ops/bench_synth_tenants.py",
+    "scripts/ops/check_image_refs_resolve.py",
+    "scripts/ops/ci_flake_retry.py",
+    "scripts/ops/commit_helper.py",
+    "scripts/ops/configmap_assemble.py",
+    "scripts/ops/dx_run.py",
+    "scripts/ops/file_race_report.py",
+    "scripts/ops/fuse_plumbing_commit.py",
+    "scripts/ops/go_test_reads.py",
+    "scripts/ops/guard_defaults_scopes.py",
+    "scripts/ops/inject_default_key.py",
+    "scripts/ops/parse_go_test_json.py",
+    "scripts/ops/plan_race_shards.py",
+    "scripts/ops/route_metrics_through_field.py",
+    "scripts/ops/use_get_metrics.py",
+    "scripts/session-guards/paths_map.py",
+    "scripts/session-guards/preflight_bash.py",
+    "scripts/session-guards/session-init.py",
+    "scripts/session-guards/skill_usage.py",
+    "scripts/session-guards/stop_evidence.py",
+    "scripts/session-guards/vscode_git_toggle.py",
+    "scripts/tools/dx/add_frontmatter.py",
+    "scripts/tools/dx/analyze_bench_history.py",
+    "scripts/tools/dx/analyze_probe.py",
+    "scripts/tools/dx/axe_lite_static.py",
+    "scripts/tools/dx/bench_verdict.py",
+    "scripts/tools/dx/bump_docs.py",
+    "scripts/tools/dx/bump_playbook_versions.py",
+    "scripts/tools/dx/check_aria_references.py",
+    "scripts/tools/dx/compile_custom_alerts.py",
+    "scripts/tools/dx/converge_status.py",
+    "scripts/tools/dx/describe_tenant.py",
+    "scripts/tools/dx/gen_agent_adapters.py",
+    "scripts/tools/dx/gen_am_duration_json.py",
+    "scripts/tools/dx/gen_recipe_contract.py",
+    "scripts/tools/dx/gen_tenant_id_json.py",
+    "scripts/tools/dx/generate_alert_reference.py",
+    "scripts/tools/dx/generate_byo_rulepack_table.py",
+    "scripts/tools/dx/generate_changelog.py",
+    "scripts/tools/dx/generate_crd_schemas.py",
+    "scripts/tools/dx/generate_doc_map.py",
+    "scripts/tools/dx/generate_nav.py",
+    "scripts/tools/dx/generate_rule_pack_readme.py",
+    "scripts/tools/dx/generate_rulepack_configmaps.py",
+    "scripts/tools/dx/generate_tenant_fixture.py",
+    "scripts/tools/dx/generate_tool_map.py",
+    "scripts/tools/dx/measure_judgement_budget.py",
+    "scripts/tools/dx/migrate_conf_d.py",
+    "scripts/tools/dx/migrate_ssot_language.py",
+    "scripts/tools/dx/pair_bench_ratio.py",
+    "scripts/tools/dx/paired_trend_watch.py",
+    "scripts/tools/dx/pr_preflight.py",
+    "scripts/tools/dx/render_soak_diff.py",
+    "scripts/tools/dx/reword_chain.py",
+    "scripts/tools/dx/run_chaos_soak.py",
+    "scripts/tools/dx/scaffold_lint.py",
+    "scripts/tools/dx/suggest_related.py",
+    "scripts/tools/dx/sync_glossary_abbr.py",
+    "scripts/tools/dx/sync_schema.py",
+    "scripts/tools/dx/sync_tool_registry.py",
+    "scripts/tools/lint/check_account_registry_monotonic.py",
+    "scripts/tools/lint/check_ad_hoc_git_scripts.py",
+    "scripts/tools/lint/check_admin_config_schema.py",
+    "scripts/tools/lint/check_bat_ascii_purity.py",
+    "scripts/tools/lint/check_bilingual_annotations.py",
+    "scripts/tools/lint/check_changelog_no_tbd.py",
+    "scripts/tools/lint/check_chart_package_contents.py",
+    "scripts/tools/lint/check_chart_pull_surface.py",
+    "scripts/tools/lint/check_chart_ship_surface.py",
+    "scripts/tools/lint/check_codename_gate.py",
+    "scripts/tools/lint/check_codename_leak.py",
+    "scripts/tools/lint/check_confd_schema.py",
+    "scripts/tools/lint/check_configmap_mount_completeness.py",
+    "scripts/tools/lint/check_cross_ns_url_consistency.py",
+    "scripts/tools/lint/check_design_token_usage.py",
+    "scripts/tools/lint/check_dev_bypass_manifest.py",
+    "scripts/tools/lint/check_dev_rules_enforcement.py",
+    "scripts/tools/lint/check_devrules_size.py",
+    "scripts/tools/lint/check_dist_source_consistency.py",
+    "scripts/tools/lint/check_doc_links.py",
+    "scripts/tools/lint/check_env_bool_parsers.py",
+    "scripts/tools/lint/check_flaky_registry.py",
+    "scripts/tools/lint/check_go_fmt.py",
+    "scripts/tools/lint/check_ha_threshold_aggregation.py",
+    "scripts/tools/lint/check_hardcode_tenant.py",
+    "scripts/tools/lint/check_head_blob_hygiene.py",
+    "scripts/tools/lint/check_helm_values_secrets.py",
+    "scripts/tools/lint/check_hub_badge_drift.py",
+    "scripts/tools/lint/check_iac_helm.py",
+    "scripts/tools/lint/check_iac_vibe_rules.py",
+    "scripts/tools/lint/check_image_pin_capability.py",
+    "scripts/tools/lint/check_includes_sync.py",
+    "scripts/tools/lint/check_init_chart_pin_published.py",
+    "scripts/tools/lint/check_jsx_loader_compat.py",
+    "scripts/tools/lint/check_k8s_manifests.py",
+    "scripts/tools/lint/check_ksm_version_allowlist.py",
+    "scripts/tools/lint/check_leftouterjoin_enrichment.py",
+    "scripts/tools/lint/check_lint_toolchain_fit.py",
+    "scripts/tools/lint/check_maintenance_symmetry.py",
+    "scripts/tools/lint/check_md_yaml_drift.py",
+    "scripts/tools/lint/check_metric_group_pairs.py",
+    "scripts/tools/lint/check_open_encoding.py",
+    "scripts/tools/lint/check_orphan_docs.py",
+    "scripts/tools/lint/check_orphan_lint.py",
+    "scripts/tools/lint/check_orphan_recordings.py",
+    "scripts/tools/lint/check_path_metadata_consistency.py",
+    "scripts/tools/lint/check_pint.py",
+    "scripts/tools/lint/check_planning_status_sync.py",
+    "scripts/tools/lint/check_playbook_freshness.py",
+    "scripts/tools/lint/check_playwright_rtl_drift.py",
+    "scripts/tools/lint/check_portal_asset_shipping.py",
+    "scripts/tools/lint/check_portal_audience_enum.py",
+    "scripts/tools/lint/check_pr_scope_drift.py",
+    "scripts/tools/lint/check_repo_name.py",
+    "scripts/tools/lint/check_routing_profiles.py",
+    "scripts/tools/lint/check_scrape_reachability.py",
+    "scripts/tools/lint/check_session_guard_liveness.py",
+    "scripts/tools/lint/check_single_writer_invariant.py",
+    "scripts/tools/lint/check_skip_a11y_justification.py",
+    "scripts/tools/lint/check_structure.py",
+    "scripts/tools/lint/check_subprocess_timeout.py",
+    "scripts/tools/lint/check_threshold_observed_map.py",
+    "scripts/tools/lint/check_threshold_reachability.py",
+    "scripts/tools/lint/check_threshold_registry.py",
+    "scripts/tools/lint/check_tool_registry_jsx_parity.py",
+    "scripts/tools/lint/check_undefined_tokens.py",
+    "scripts/tools/lint/check_unpinned_deps.py",
+    "scripts/tools/lint/check_vmalert_coverage.py",
+    "scripts/tools/lint/check_window_x_no_fallback.py",
+    "scripts/tools/lint/check_workflow_git_push_permissions.py",
+    "scripts/tools/lint/check_workload_closure_drift.py",
+    "scripts/tools/lint/detect_sed_damage.py",
+    "scripts/tools/lint/fix_file_hygiene.py",
+    "scripts/tools/lint/lint_html_doc_links.py",
+    "scripts/tools/lint/lint_jsx_babel.py",
+    "scripts/tools/lint/trufflehog_to_sarif.py",
+    "scripts/tools/lint/validate_mermaid.py",
+    "scripts/tools/lint/validate_planning_session_row.py",
+    "scripts/tools/ops/_federation_revocation_reconciler.py",
+    "scripts/tools/ops/da_assembler.py",
+    "scripts/tools/ops/generate_tenant_mapping_rules.py",
+    "scripts/tools/ops/inject_metadata_join.py",
+})
+
+#: BASELINE entries that enter through run() now (or are gone). Add a line
+#: when a tool migrates, and lower the count in
+#: test_the_pending_entries_are_a_pinned_ceiling with it.
+MIGRATED: frozenset[str] = frozenset()
+
+#: The ceiling of entries not yet through run(): it only shrinks. A new tool
+#: enters through run() from its first commit — there is no way to add one.
+PENDING: frozenset[str] = BASELINE - MIGRATED
+
+_BASELINE_SHA256 = "f6d1e806ad139f85efdf4e8ac4937fa4f28ded1a9b24e4fa7963d74c5f78cbfc"
+
+
+def _gated_sources() -> dict[str, str]:
+    """repo-relative path -> source of every `.py` under GATED_TREES that
+    tests `__name__` against "__main__" anywhere, in any shape (#3579 F1: a
+    module asking the question the wrong way is in the population and is a
+    fault, not left out). The population is the tree itself (`git ls-files`,
+    tests/_tree.py), not a list kept here."""
+    from _tree import REPO_ROOT as TREE_ROOT, repo_files  # noqa: E402
+    out = {}
+    for path in repo_files(".py"):
+        rel = path.relative_to(TREE_ROOT).as_posix()
+        if not rel.startswith(GATED_TREES):
+            continue
+        source = path.read_text(encoding="utf-8")
+        if "__main__" not in source:
+            continue
+        tree = ast.parse(source, filename=rel)  # a file that cannot parse fails here
+        if any(_is_main_test(n) for n in ast.walk(tree)):
+            out[rel] = source
+    return out
+
+
+def _gate_faults(sources: dict[str, str], pending: frozenset[str]) -> list[str]:
+    """Every fault of the gate over *sources* (path -> source) with *pending*
+    as the ceiling. A pure function, so its answers can be pinned on shapes
+    whose answer is known (test_gate_faults_on_known_shapes)."""
+    faults = []
+    for rel in sorted(pending - set(sources)):
+        faults.append(f"{rel}: pending but not an entry point under the gated trees "
+                      "(gone, or moved) — add it to MIGRATED")
+    for rel, source in sorted(sources.items()):
+        fault = _guard_fault(ast.parse(source, filename=rel))
+        if fault is None and rel in pending:
+            faults.append(f"{rel}: enters through run() now — add it to MIGRATED "
+                          "and lower the pinned count")
+        elif fault is not None and rel not in pending:
+            faults.append(f"{rel}:{fault[0]}: {fault[1]}")
+    return faults
+
+
+def test_every_tool_entry_enters_through_run():
+    """#3579 (owner, 2026-11-05): every `__main__` under scripts/{tools,ops,
+    dx,session-guards} ends through `_lib_exitcodes.run`, with an entry run()
+    can call. The ones not migrated yet are PENDING, a ceiling that only
+    shrinks."""
+    sources = _gated_sources()
+    # anti-vacuity: each gated tree is in the population, and so is every
+    # da-tools script (the narrower gate above is a subset of this one).
+    for tree in GATED_TREES:
+        assert any(rel.startswith(tree) for rel in sources), (tree, len(sources))
+    in_cli = {p.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+              for p in _da_tools_scripts().values()}
+    assert in_cli <= set(sources), sorted(in_cli - set(sources))
+    assert len(sources) >= 200, len(sources)
+    faults = _gate_faults(sources, PENDING)
+    assert not faults, "\n".join(faults)
+
+
+def test_the_baseline_is_frozen():
+    """BASELINE is the list as it stood when the gate widened; it is never
+    edited (#3579 F3). A changed digest means an entry was added or swapped —
+    put it back, and migrate the tool instead."""
+    digest = hashlib.sha256("\n".join(sorted(BASELINE)).encode()).hexdigest()
+    assert digest == _BASELINE_SHA256
+    assert len(BASELINE) == 146
+
+
+def test_migrated_names_baseline_entries():
+    """A MIGRATED line outside BASELINE subtracts nothing — a typo there would
+    leave its tool pending without anyone seeing it."""
+    assert MIGRATED <= BASELINE, sorted(MIGRATED - BASELINE)
+
+
+def test_the_pending_entries_are_a_pinned_ceiling():
+    """The count is written out so that a shorter PENDING is a visible edit of
+    this line too (#3579): only ever lower it."""
+    assert len(PENDING) == 146
+
+
+_RUN_TOOL = ("import _lib_exitcodes\ndef main(argv=None):\n    return 0\n"
+             "if __name__ == '__main__':\n    _lib_exitcodes.run(main)\n")
+_BARE_TOOL = ("import sys\ndef main():\n    return 0\n"
+              "if __name__ == '__main__':\n    sys.exit(main())\n")
+_REQUIRED_ARG_TOOL = _RUN_TOOL.replace("main(argv=None)", "main(argv)")
+
+
+@pytest.mark.parametrize("sources, pending, want", [
+    ({"a.py": _RUN_TOOL}, frozenset(), []),
+    ({"a.py": _BARE_TOOL}, frozenset({"a.py"}), []),
+    ({"a.py": _BARE_TOOL}, frozenset(),
+     ["a.py:5: the guard must end with `_lib_exitcodes.run(<entry>)`, got `sys.exit(main())`"]),
+    ({"a.py": _RUN_TOOL}, frozenset({"a.py"}),
+     ["a.py: enters through run() now — add it to MIGRATED and lower the pinned count"]),
+    ({}, frozenset({"gone.py"}),
+     ["gone.py: pending but not an entry point under the gated trees (gone, or moved) "
+      "— add it to MIGRATED"]),
+    ({"a.py": _REQUIRED_ARG_TOOL}, frozenset(),
+     ["a.py:2: `main` takes argv without a default, but run() calls it with no "
+      "arguments — give every parameter a default, or hand run() a no-argument wrapper"]),
+], ids=["compliant", "pending", "new-bare", "pending-but-compliant", "pending-gone",
+        "required-arg"])
+def test_gate_faults_on_known_shapes(sources, pending, want):
+    assert _gate_faults(sources, pending) == want
+
+
+@pytest.mark.parametrize("kind", ["ast", "text", "yaml", "meta", "freshness"])
+def test_a_scaffolded_lint_enters_through_run(kind):
+    """#3579: `scaffold_lint.py` writes new lints into scripts/tools/lint, a
+    gated tree — what it generates must pass the gate from its first commit."""
+    import scaffold_lint as sl  # noqa: E402  (path set by conftest.py)
+    assert kind in sl.VALID_KINDS
+    source = sl.render_script(sl.derive_paths("probe", kind), "probe")
+    assert _guard_fault(ast.parse(source)) is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════

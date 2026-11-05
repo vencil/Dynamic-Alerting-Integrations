@@ -138,7 +138,7 @@ CONFIDENCE_LOW = "LOW"
 # which would read as "too few samples".
 CONFIDENCE_NOT_QUERIED = "n/a"
 # The confidences a recommendation may act on: an --export-patch value line
-# (`_exportable`) and a governance PR (threshold_govern) both read this (#2969).
+# (`_exportable`) and the governance report (threshold_govern) both read this (#2969).
 ACTIONABLE_CONFIDENCES = (CONFIDENCE_HIGH, CONFIDENCE_MEDIUM)
 
 
@@ -1001,7 +1001,7 @@ def _recommend_key(
             if (hours < MIN_UPPER_COVERAGE_HOURS and rec.confidence != CONFIDENCE_LOW
                     and not rec.force_manual):
                 # #2941: too little history for any recommendation to be
-                # trusted; LOW keeps threshold_govern from opening a PR.
+                # trusted; LOW keeps it out of threshold_govern's report.
                 # #2997: a force_manual key has no recommendation to downgrade,
                 # and its reason is the manual-review text govern shows.
                 rec.confidence = CONFIDENCE_LOW

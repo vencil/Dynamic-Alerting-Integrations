@@ -54,7 +54,7 @@ _SEARCH_DIRS = ("scripts/tools/ops", "scripts/tools/dx", "scripts/tools")
 # PROMETHEUS_URL exported, 14 flags across 12 subcommands change their default,
 # and this check would go red with no doc change at all. The scrub is the
 # difference between a gate and a coin flip.
-_SCRUBBED_ENV = ("PROMETHEUS_URL", "TENANT_API_URL", "DA_GOVERN_GROUPS",
+_SCRUBBED_ENV = ("PROMETHEUS_URL", "TENANT_API_URL",
                  "DA_AUTH_TOKEN_FILE", "DA_LANG", "LC_ALL", "LANG", "LANGUAGE")
 
 # Header shapes that carry a default column, mapped to that column's index.

@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/vencil/tenant-api/internal/errcode"
 	"github.com/vencil/tenant-api/internal/platform"
@@ -196,15 +197,19 @@ func TestBatchTenants_PRMode_PushFailureIs503(t *testing.T) {
 	}
 }
 
+// prGitTimeout is the git deadline the timeout tests give their Writer
+// (Writer.SetGitTimeout, not the process-wide TENANT_API_GIT_TIMEOUT, so
+// they run in parallel: #3574); their hooks sleep far past it.
+const prGitTimeout = 2 * time.Second
+
 // A push that hits the git deadline is GIT_PUSH_FAILED, not the generic
 // cancelled-write 503: the deadline is the push's.
-//
-// Not parallel: TENANT_API_GIT_TIMEOUT is process-global (t.Setenv).
 func TestPutTenant_PRMode_PushTimeoutIs503PushFailed(t *testing.T) {
-	t.Setenv("TENANT_API_GIT_TIMEOUT", "2s")
+	t.Parallel()
 	r := newHookRepo(t)
 	r.hook(t, "pre-push", "exec sleep 30")
 	f := newPRFixture(t, r)
+	f.deps.Writer.SetGitTimeout(prGitTimeout)
 
 	assertPushFailed503(t, f.put(t, "tenants:\n  db-a:\n    _silent_mode: \"critical\"\n"), r)
 	if f.prs != 0 {
@@ -215,10 +220,8 @@ func TestPutTenant_PRMode_PushTimeoutIs503PushFailed(t *testing.T) {
 // A git command other than the push that hits its deadline on the PR path
 // is the cancelled-write 503 (msgWriteCancelled), as on the direct path —
 // not the generic 500 it used to be.
-//
-// Not parallel: TENANT_API_GIT_TIMEOUT is process-global (t.Setenv).
 func TestPRMode_GitTimeoutIs503(t *testing.T) {
-	t.Setenv("TENANT_API_GIT_TIMEOUT", "2s")
+	t.Parallel()
 	for _, c := range []struct {
 		name string
 		run  func(*prFixture, *testing.T) *httptest.ResponseRecorder
@@ -231,9 +234,11 @@ func TestPRMode_GitTimeoutIs503(t *testing.T) {
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
 			r := newHookRepo(t)
 			r.hook(t, "pre-commit", "exec sleep 30")
 			f := newPRFixture(t, r)
+			f.deps.Writer.SetGitTimeout(prGitTimeout)
 			rec := c.run(f, t)
 			if rec.Code != http.StatusServiceUnavailable {
 				t.Fatalf("status = %d, want 503; body: %s", rec.Code, rec.Body.String())
