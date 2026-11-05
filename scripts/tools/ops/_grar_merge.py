@@ -719,6 +719,66 @@ def own_secret_name(tenant: str) -> str:
     return f"{OWN_SECRET_PREFIX}{tenant}"
 
 
+# ── #1560: which Secrets the emitted config needs mounted, and which keys ────
+# The list is read off the EMITTED config (as Alertmanager loads it), never
+# re-derived from conf.d: every path Alertmanager will open is in that config,
+# the base config's own receivers (watchdog-heartbeat's `url_file`) and its
+# `global:` included, and nothing else is. A second derivation from the
+# references would miss the base's paths and could disagree with the render.
+#: `generate-routes --secret-mounts-out`'s document.
+MOUNT_LIST_SCHEMA = "da-tools.secret-mounts/v1"
+
+
+def _file_paths(node: object, in_headers: bool = False) -> list[str]:
+    """Every file path *node* (a config as Alertmanager loads it) names: the
+    string value of each ``*_file`` key, at any depth, and the entries of an
+    ``http_headers.<name>.files`` list (prometheus/common's header files)."""
+    found: list[str] = []
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if isinstance(k, str) and k.endswith("_file") and isinstance(v, str):
+                found.append(v)
+            elif in_headers and k == "files" and isinstance(v, list):
+                found.extend(x for x in v if isinstance(x, str))
+            else:
+                found.extend(_file_paths(v, in_headers or k == "http_headers"))
+    elif isinstance(node, list):
+        for item in node:
+            found.extend(_file_paths(item, in_headers))
+    return found
+
+
+def required_mounts(config: Mapping, mount_root: str) -> dict:
+    """The Secrets *config* (an Alertmanager config as Alertmanager loads it)
+    reads under *mount_root*, as the ``--secret-mounts-out`` document.
+
+    A path ``<root>/<name>/<key>`` (exactly two non-empty segments under the
+    root: Prometheus Operator mounts Secret ``<name>`` at ``<root>/<name>/``,
+    one file per key, and a key holds no ``/``) lists Secret ``<name>`` with
+    ``<key>``. Every other path a ``*_file`` field names — outside the root,
+    or under it in another shape — is not a Secret this list can name; it is
+    kept in ``other_files`` so the deployment sees it has to provide it some
+    other way, instead of it vanishing. Names and keys are coordinates, never
+    the values. Sorted, so the same config gives the same bytes."""
+    root = mount_root.rstrip("/")  # "/" → "": the render's own spelling
+    prefix = root + "/"
+    keys_by_name: dict[str, set[str]] = {}
+    other: set[str] = set()
+    for path in _file_paths(config):
+        parts = path[len(prefix):].split("/") if path.startswith(prefix) else []
+        if len(parts) == 2 and all(parts):
+            keys_by_name.setdefault(parts[0], set()).add(parts[1])
+        else:
+            other.add(path)
+    return {
+        "schema": MOUNT_LIST_SCHEMA,
+        "mount_root": mount_root,
+        "secrets": [{"name": n, "keys": sorted(keys_by_name[n])}
+                    for n in sorted(keys_by_name)],
+        "other_files": sorted(other),
+    }
+
+
 def _receiver_secret_refs(receiver_obj: object) -> list[tuple[str, dict]]:
     """``(field, reference)`` of every Secret reference on a field of
     *receiver_obj* that takes one."""
