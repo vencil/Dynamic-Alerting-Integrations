@@ -393,10 +393,28 @@ def _is_main_guard(node: ast.stmt) -> bool:
             and node.test.comparators[0].value == "__main__")
 
 
-def _guard_problem(tree: ast.Module) -> str | None:
+def _entry_signature_fault(fn: ast.FunctionDef) -> str | None:
+    """`run()` calls the entry with no arguments (#3579): a parameter without
+    a default is a TypeError on the first run, and a ``main(argv)`` whose
+    argv is required cannot be reached through run() at all."""
+    a = fn.args
+    positional = a.posonlyargs + a.args
+    required = [p.arg for p in positional[:len(positional) - len(a.defaults)]]
+    required += [k.arg for k, d in zip(a.kwonlyargs, a.kw_defaults) if d is None]
+    if required:
+        return (f"`{fn.name}` takes {', '.join(required)} without a default, but "
+                "run() calls it with no arguments — give every parameter a default, "
+                "or hand run() a no-argument wrapper")
+    return None
+
+
+def _guard_fault(tree: ast.Module) -> tuple[int, str] | None:
+    """(line, why) when the module does not enter through
+    `_lib_exitcodes.run(<entry>)`, else None."""
     guards = [n for n in tree.body if _is_main_guard(n)]
     if len(guards) != 1:
-        return f"expected one `if __name__ == \"__main__\":` guard, found {len(guards)}"
+        line = guards[1].lineno if guards else 1
+        return line, f"expected one `if __name__ == \"__main__\":` guard, found {len(guards)}"
     last = guards[0].body[-1]
     call = last.value if isinstance(last, ast.Expr) else None
     if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
@@ -404,16 +422,25 @@ def _guard_problem(tree: ast.Module) -> str | None:
             and call.func.value.id == "_lib_exitcodes"
             and len(call.args) == 1 and isinstance(call.args[0], ast.Name)
             and not call.keywords):
-        return f"the guard must end with `_lib_exitcodes.run(<entry>)`, got `{ast.unparse(last)}`"
+        return (last.lineno,
+                f"the guard must end with `_lib_exitcodes.run(<entry>)`, got `{ast.unparse(last)}`")
     entry = call.args[0].id
-    defined = {n.name for n in tree.body if isinstance(n, ast.FunctionDef)}
-    if entry not in defined:
-        return f"`{entry}` is not a module-level function"
+    # The definition the guard sees: the last module-level one of that name.
+    defs = [n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == entry]
+    if not defs:
+        return last.lineno, f"`{entry}` is not a module-level function"
     for stmt in guards[0].body[:-1]:
         for node in ast.walk(stmt):
             if isinstance(node, ast.Call) and getattr(node.func, "id", None) == entry:
-                return f"`{entry}` is also called outside run(): `{ast.unparse(stmt)}`"
+                return stmt.lineno, f"`{entry}` is also called outside run(): `{ast.unparse(stmt)}`"
+    if why := _entry_signature_fault(defs[-1]):
+        return defs[-1].lineno, why
     return None
+
+
+def _guard_problem(tree: ast.Module) -> str | None:
+    fault = _guard_fault(tree)
+    return None if fault is None else f"line {fault[0]}: {fault[1]}"
 
 
 def _da_tools_scripts() -> dict[str, Path]:
@@ -460,6 +487,295 @@ def test_guard_predicate_on_known_shapes(src, ok):
     """The gate's predicate, fed shapes whose answer is known."""
     tree = ast.parse("def main():\n    pass\n" + src)
     assert (_guard_problem(tree) is None) is ok, _guard_problem(tree)
+
+
+@pytest.mark.parametrize("sig, ok", [
+    ("def main():", True),
+    ("def main(argv=None):", True),
+    ("def main(argv: list[str] | None = None, *, lang='en'):", True),
+    ("def main(*args, **kwargs):", True),
+    ("def main(argv):", False),
+    ("def main(argv, /, x=1):", False),
+    ("def main(argv=None, *, lang):", False),
+])
+def test_entry_signature_on_known_shapes(sig, ok):
+    """#3579: run() calls the entry with no arguments, so every parameter
+    needs a default. The fault names the def's own line."""
+    src = ("import sys\n" + sig + "\n    pass\n"
+           "if __name__ == '__main__':\n    _lib_exitcodes.run(main)\n")
+    fault = _guard_fault(ast.parse(src))
+    assert (fault is None) is ok, fault
+    if not ok:
+        assert fault[0] == 2, fault
+
+
+def test_the_entry_the_guard_sees_is_the_last_definition():
+    src = ("def main(argv):\n    pass\n"
+           "def main():\n    pass\n"
+           "if __name__ == '__main__':\n    _lib_exitcodes.run(main)\n")
+    assert _guard_fault(ast.parse(src)) is None
+    flipped = src.replace("def main(argv)", "def tmp(argv)").replace(
+        "def main():", "def main(argv):")
+    assert _guard_fault(ast.parse(flipped)) == (3, _entry_signature_fault(
+        ast.parse(flipped).body[1]))
+
+
+# ── #3579: every `__main__` under the tool trees, not only da-tools ─────────
+
+#: The trees whose `if __name__ == "__main__":` modules must enter through
+#: run() (#3579, owner 2026-11-05). Repo-relative POSIX prefixes.
+GATED_TREES = ("scripts/tools/", "scripts/ops/", "scripts/dx/", "scripts/session-guards/")
+
+#: ⛔ The ceiling of entries not yet through run() (#3579): remove a line when
+#: its tool migrates, and lower the count in
+#: test_the_pending_entries_are_a_pinned_ceiling with it. An addition here is
+#: a new tool outside the one exit and needs its own ticket first — a new
+#: tool enters through run() from its first commit.
+PENDING: frozenset[str] = frozenset({
+    "scripts/dx/generate_adr_index.py",
+    "scripts/dx/generate_planning_index.py",
+    "scripts/ops/add_t_parallel.py",
+    "scripts/ops/audit_rules_drift.py",
+    "scripts/ops/bench_synth_tenants.py",
+    "scripts/ops/check_image_refs_resolve.py",
+    "scripts/ops/ci_flake_retry.py",
+    "scripts/ops/commit_helper.py",
+    "scripts/ops/configmap_assemble.py",
+    "scripts/ops/dx_run.py",
+    "scripts/ops/file_race_report.py",
+    "scripts/ops/fuse_plumbing_commit.py",
+    "scripts/ops/go_test_reads.py",
+    "scripts/ops/guard_defaults_scopes.py",
+    "scripts/ops/inject_default_key.py",
+    "scripts/ops/parse_go_test_json.py",
+    "scripts/ops/plan_race_shards.py",
+    "scripts/ops/route_metrics_through_field.py",
+    "scripts/ops/use_get_metrics.py",
+    "scripts/session-guards/paths_map.py",
+    "scripts/session-guards/preflight_bash.py",
+    "scripts/session-guards/session-init.py",
+    "scripts/session-guards/skill_usage.py",
+    "scripts/session-guards/stop_evidence.py",
+    "scripts/session-guards/vscode_git_toggle.py",
+    "scripts/tools/dx/add_frontmatter.py",
+    "scripts/tools/dx/analyze_bench_history.py",
+    "scripts/tools/dx/analyze_probe.py",
+    "scripts/tools/dx/axe_lite_static.py",
+    "scripts/tools/dx/bench_verdict.py",
+    "scripts/tools/dx/bump_docs.py",
+    "scripts/tools/dx/bump_playbook_versions.py",
+    "scripts/tools/dx/check_aria_references.py",
+    "scripts/tools/dx/compile_custom_alerts.py",
+    "scripts/tools/dx/converge_status.py",
+    "scripts/tools/dx/describe_tenant.py",
+    "scripts/tools/dx/gen_agent_adapters.py",
+    "scripts/tools/dx/gen_am_duration_json.py",
+    "scripts/tools/dx/gen_recipe_contract.py",
+    "scripts/tools/dx/gen_tenant_id_json.py",
+    "scripts/tools/dx/generate_alert_reference.py",
+    "scripts/tools/dx/generate_byo_rulepack_table.py",
+    "scripts/tools/dx/generate_changelog.py",
+    "scripts/tools/dx/generate_crd_schemas.py",
+    "scripts/tools/dx/generate_doc_map.py",
+    "scripts/tools/dx/generate_nav.py",
+    "scripts/tools/dx/generate_rule_pack_readme.py",
+    "scripts/tools/dx/generate_rulepack_configmaps.py",
+    "scripts/tools/dx/generate_tenant_fixture.py",
+    "scripts/tools/dx/generate_tool_map.py",
+    "scripts/tools/dx/measure_judgement_budget.py",
+    "scripts/tools/dx/migrate_conf_d.py",
+    "scripts/tools/dx/migrate_ssot_language.py",
+    "scripts/tools/dx/pair_bench_ratio.py",
+    "scripts/tools/dx/paired_trend_watch.py",
+    "scripts/tools/dx/pr_preflight.py",
+    "scripts/tools/dx/render_soak_diff.py",
+    "scripts/tools/dx/reword_chain.py",
+    "scripts/tools/dx/run_chaos_soak.py",
+    "scripts/tools/dx/scaffold_lint.py",
+    "scripts/tools/dx/suggest_related.py",
+    "scripts/tools/dx/sync_glossary_abbr.py",
+    "scripts/tools/dx/sync_schema.py",
+    "scripts/tools/dx/sync_tool_registry.py",
+    "scripts/tools/lint/check_account_registry_monotonic.py",
+    "scripts/tools/lint/check_ad_hoc_git_scripts.py",
+    "scripts/tools/lint/check_admin_config_schema.py",
+    "scripts/tools/lint/check_bat_ascii_purity.py",
+    "scripts/tools/lint/check_bilingual_annotations.py",
+    "scripts/tools/lint/check_changelog_no_tbd.py",
+    "scripts/tools/lint/check_chart_package_contents.py",
+    "scripts/tools/lint/check_chart_pull_surface.py",
+    "scripts/tools/lint/check_chart_ship_surface.py",
+    "scripts/tools/lint/check_codename_gate.py",
+    "scripts/tools/lint/check_codename_leak.py",
+    "scripts/tools/lint/check_confd_schema.py",
+    "scripts/tools/lint/check_configmap_mount_completeness.py",
+    "scripts/tools/lint/check_cross_ns_url_consistency.py",
+    "scripts/tools/lint/check_design_token_usage.py",
+    "scripts/tools/lint/check_dev_bypass_manifest.py",
+    "scripts/tools/lint/check_dev_rules_enforcement.py",
+    "scripts/tools/lint/check_devrules_size.py",
+    "scripts/tools/lint/check_dist_source_consistency.py",
+    "scripts/tools/lint/check_doc_links.py",
+    "scripts/tools/lint/check_env_bool_parsers.py",
+    "scripts/tools/lint/check_flaky_registry.py",
+    "scripts/tools/lint/check_go_fmt.py",
+    "scripts/tools/lint/check_ha_threshold_aggregation.py",
+    "scripts/tools/lint/check_hardcode_tenant.py",
+    "scripts/tools/lint/check_head_blob_hygiene.py",
+    "scripts/tools/lint/check_helm_values_secrets.py",
+    "scripts/tools/lint/check_hub_badge_drift.py",
+    "scripts/tools/lint/check_iac_helm.py",
+    "scripts/tools/lint/check_iac_vibe_rules.py",
+    "scripts/tools/lint/check_image_pin_capability.py",
+    "scripts/tools/lint/check_includes_sync.py",
+    "scripts/tools/lint/check_init_chart_pin_published.py",
+    "scripts/tools/lint/check_jsx_loader_compat.py",
+    "scripts/tools/lint/check_k8s_manifests.py",
+    "scripts/tools/lint/check_ksm_version_allowlist.py",
+    "scripts/tools/lint/check_leftouterjoin_enrichment.py",
+    "scripts/tools/lint/check_lint_toolchain_fit.py",
+    "scripts/tools/lint/check_maintenance_symmetry.py",
+    "scripts/tools/lint/check_md_yaml_drift.py",
+    "scripts/tools/lint/check_metric_group_pairs.py",
+    "scripts/tools/lint/check_open_encoding.py",
+    "scripts/tools/lint/check_orphan_docs.py",
+    "scripts/tools/lint/check_orphan_lint.py",
+    "scripts/tools/lint/check_orphan_recordings.py",
+    "scripts/tools/lint/check_path_metadata_consistency.py",
+    "scripts/tools/lint/check_pint.py",
+    "scripts/tools/lint/check_planning_status_sync.py",
+    "scripts/tools/lint/check_playbook_freshness.py",
+    "scripts/tools/lint/check_playwright_rtl_drift.py",
+    "scripts/tools/lint/check_portal_asset_shipping.py",
+    "scripts/tools/lint/check_portal_audience_enum.py",
+    "scripts/tools/lint/check_pr_scope_drift.py",
+    "scripts/tools/lint/check_repo_name.py",
+    "scripts/tools/lint/check_routing_profiles.py",
+    "scripts/tools/lint/check_scrape_reachability.py",
+    "scripts/tools/lint/check_session_guard_liveness.py",
+    "scripts/tools/lint/check_single_writer_invariant.py",
+    "scripts/tools/lint/check_skip_a11y_justification.py",
+    "scripts/tools/lint/check_structure.py",
+    "scripts/tools/lint/check_subprocess_timeout.py",
+    "scripts/tools/lint/check_threshold_observed_map.py",
+    "scripts/tools/lint/check_threshold_reachability.py",
+    "scripts/tools/lint/check_threshold_registry.py",
+    "scripts/tools/lint/check_tool_registry_jsx_parity.py",
+    "scripts/tools/lint/check_undefined_tokens.py",
+    "scripts/tools/lint/check_unpinned_deps.py",
+    "scripts/tools/lint/check_vmalert_coverage.py",
+    "scripts/tools/lint/check_window_x_no_fallback.py",
+    "scripts/tools/lint/check_workflow_git_push_permissions.py",
+    "scripts/tools/lint/check_workload_closure_drift.py",
+    "scripts/tools/lint/detect_sed_damage.py",
+    "scripts/tools/lint/fix_file_hygiene.py",
+    "scripts/tools/lint/lint_html_doc_links.py",
+    "scripts/tools/lint/lint_jsx_babel.py",
+    "scripts/tools/lint/trufflehog_to_sarif.py",
+    "scripts/tools/lint/validate_mermaid.py",
+    "scripts/tools/lint/validate_planning_session_row.py",
+    "scripts/tools/ops/_federation_revocation_reconciler.py",
+    "scripts/tools/ops/da_assembler.py",
+    "scripts/tools/ops/generate_tenant_mapping_rules.py",
+    "scripts/tools/ops/inject_metadata_join.py",
+})
+
+
+def _gated_sources() -> dict[str, str]:
+    """repo-relative path -> source of every `.py` under GATED_TREES that has
+    a module-level `__main__` guard. The population is the tree itself
+    (`git ls-files`, tests/_tree.py), not a list kept here."""
+    from _tree import REPO_ROOT as TREE_ROOT, repo_files  # noqa: E402
+    out = {}
+    for path in repo_files(".py"):
+        rel = path.relative_to(TREE_ROOT).as_posix()
+        if not rel.startswith(GATED_TREES):
+            continue
+        source = path.read_text(encoding="utf-8")
+        if "__main__" not in source:
+            continue
+        tree = ast.parse(source, filename=rel)  # a file that cannot parse fails here
+        if any(_is_main_guard(n) for n in tree.body):
+            out[rel] = source
+    return out
+
+
+def _gate_faults(sources: dict[str, str], pending: frozenset[str]) -> list[str]:
+    """Every fault of the gate over *sources* (path -> source) with *pending*
+    as the ceiling. A pure function, so its answers can be pinned on shapes
+    whose answer is known (test_gate_faults_on_known_shapes)."""
+    faults = []
+    for rel in sorted(pending - set(sources)):
+        faults.append(f"{rel}: in PENDING but not an entry point under the gated "
+                      "trees (gone, moved, or no `__main__` guard) — drop it from PENDING")
+    for rel, source in sorted(sources.items()):
+        fault = _guard_fault(ast.parse(source, filename=rel))
+        if fault is None and rel in pending:
+            faults.append(f"{rel}: enters through run() now — drop it from PENDING "
+                          "and lower the pinned count")
+        elif fault is not None and rel not in pending:
+            faults.append(f"{rel}:{fault[0]}: {fault[1]}")
+    return faults
+
+
+def test_every_tool_entry_enters_through_run():
+    """#3579 (owner, 2026-11-05): every `__main__` under scripts/{tools,ops,
+    dx,session-guards} ends through `_lib_exitcodes.run`, with an entry run()
+    can call. The ones not migrated yet are PENDING, a ceiling that only
+    shrinks."""
+    sources = _gated_sources()
+    # anti-vacuity: each gated tree is in the population, and so is every
+    # da-tools script (the narrower gate above is a subset of this one).
+    for tree in GATED_TREES:
+        assert any(rel.startswith(tree) for rel in sources), (tree, len(sources))
+    in_cli = {p.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
+              for p in _da_tools_scripts().values()}
+    assert in_cli <= set(sources), sorted(in_cli - set(sources))
+    assert len(sources) >= 200, len(sources)
+    faults = _gate_faults(sources, PENDING)
+    assert not faults, "\n".join(faults)
+
+
+def test_the_pending_entries_are_a_pinned_ceiling():
+    """The count is written out so that a shorter or longer PENDING is a
+    visible edit of this line too (#3579): only ever lower it."""
+    assert len(PENDING) == 146
+
+
+_RUN_TOOL = ("import _lib_exitcodes\ndef main(argv=None):\n    return 0\n"
+             "if __name__ == '__main__':\n    _lib_exitcodes.run(main)\n")
+_BARE_TOOL = ("import sys\ndef main():\n    return 0\n"
+              "if __name__ == '__main__':\n    sys.exit(main())\n")
+_REQUIRED_ARG_TOOL = _RUN_TOOL.replace("main(argv=None)", "main(argv)")
+
+
+@pytest.mark.parametrize("sources, pending, want", [
+    ({"a.py": _RUN_TOOL}, frozenset(), []),
+    ({"a.py": _BARE_TOOL}, frozenset({"a.py"}), []),
+    ({"a.py": _BARE_TOOL}, frozenset(),
+     ["a.py:5: the guard must end with `_lib_exitcodes.run(<entry>)`, got `sys.exit(main())`"]),
+    ({"a.py": _RUN_TOOL}, frozenset({"a.py"}),
+     ["a.py: enters through run() now — drop it from PENDING and lower the pinned count"]),
+    ({}, frozenset({"gone.py"}),
+     ["gone.py: in PENDING but not an entry point under the gated trees (gone, moved, "
+      "or no `__main__` guard) — drop it from PENDING"]),
+    ({"a.py": _REQUIRED_ARG_TOOL}, frozenset(),
+     ["a.py:2: `main` takes argv without a default, but run() calls it with no "
+      "arguments — give every parameter a default, or hand run() a no-argument wrapper"]),
+], ids=["compliant", "pending", "new-bare", "pending-but-compliant", "pending-gone",
+        "required-arg"])
+def test_gate_faults_on_known_shapes(sources, pending, want):
+    assert _gate_faults(sources, pending) == want
+
+
+@pytest.mark.parametrize("kind", ["ast", "text", "yaml", "meta", "freshness"])
+def test_a_scaffolded_lint_enters_through_run(kind):
+    """#3579: `scaffold_lint.py` writes new lints into scripts/tools/lint, a
+    gated tree — what it generates must pass the gate from its first commit."""
+    import scaffold_lint as sl  # noqa: E402  (path set by conftest.py)
+    assert kind in sl.VALID_KINDS
+    source = sl.render_script(sl.derive_paths("probe", kind), "probe")
+    assert _guard_fault(ast.parse(source)) is None
 
 
 # ═══════════════════════════════════════════════════════════════════════════

@@ -232,6 +232,7 @@ from pathlib import Path
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _THIS_DIR)
 sys.path.insert(0, os.path.join(_THIS_DIR, ".."))
+import _lib_exitcodes  # noqa: E402
 from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR  # noqa: E402
 {helper_imports}
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -666,7 +667,8 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # The one exit (#3579): run() owns the last flush and the exit code.
+    _lib_exitcodes.run(main)
 '''
 
 
