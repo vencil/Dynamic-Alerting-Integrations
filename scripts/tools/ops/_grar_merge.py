@@ -976,6 +976,9 @@ def _destination_problem(receiver_obj: dict, destination: tuple[str, ...],
         return (f"{dest_text} {raw!r}, where it is sent, is not an http:// or "
                 "https:// URL, so its host cannot be read for allowed_domains")
     host = _extract_host(raw) if isinstance(raw, str) else None
+    if host is None and isinstance(raw, str) and raw:
+        return (f"the {dest_text} {raw!r}, where it is sent, has no host this "
+                "generator can read, so it cannot be checked against allowed_domains")
     if host is None or not any(fnmatch.fnmatch(host, p) for p in allowed_domains):
         return (f"the {dest_text} host {host!r} is not in the deployment "
                 "policy's allowed_domains")

@@ -77,7 +77,8 @@ from _grar_merge import (  # noqa: E402  (#2326 directory scope)
 def _extract_host(value: str | None) -> str | None:
     """Extract hostname from a URL or host:port string.
 
-    Returns hostname (lowercase) or None if unparseable.
+    Returns hostname (lowercase) or None if unparseable (a malformed URL
+    included: callers turn None into a per-receiver finding).
     """
     if not value or not isinstance(value, str):
         return None
@@ -85,8 +86,14 @@ def _extract_host(value: str | None) -> str | None:
     # host:port format (e.g., smtp.example.com:587)
     if "://" not in value:
         return value.split(":")[0].lower() or None
-    parsed = urlparse(value)
-    return parsed.hostname
+    try:
+        # #1560 review: urlparse raises on a malformed IPv6 netloc
+        # (`https://[broken/x`); that is a host this reader cannot read, the
+        # same as any other unparseable value — never an exception that ends
+        # the whole run for every tenant.
+        return urlparse(value).hostname
+    except ValueError:
+        return None
 
 
 def validate_receiver_domains(receiver_obj: dict, tenant: str, allowed_domains: list[str],

@@ -1023,3 +1023,38 @@ def test_a_url_destination_with_either_scheme_in_any_case_passes(value):
 def test_the_smarthost_stays_host_port():
     cfg, warnings = _build({**SMTP, "auth_password": {"secret": {"key": "pw"}}})
     assert warnings == [] and cfg is not None
+
+
+# ── 不合法的 URL 是該 receiver 的 finding，不是整支程式的例外（#3616 review）────
+
+_BROKEN_URL = "https://[broken/token"
+
+
+def test_extract_host_reads_a_malformed_url_as_no_host():
+    from _grar_validate import _extract_host
+    assert _extract_host(_BROKEN_URL) is None
+    assert _extract_host("https://hook.example.com/a") == "hook.example.com"
+
+
+def test_a_malformed_token_url_refuses_only_that_receiver():
+    receiver = _ref_at(_CS, {"secret": {"key": "k"}})
+    receiver["http_config"]["oauth2"]["token_url"] = _BROKEN_URL
+    got = _kinds(receiver)
+    assert got == [("secret_ref_destination_unconfined", "receiver." + ".".join(_CS))]
+
+
+def test_a_malformed_url_in_the_domain_check_is_an_unparseable_host():
+    w = validate_receiver_domains({"type": "webhook", "url": "https://[broken/x"}, "t-a",
+                                  _ALLOWED, tenant_id="t-a")
+    assert [x.kind for x in w] == ["receiver_host_unparseable"]
+
+
+def test_a_malformed_token_url_does_not_stop_the_other_tenants():
+    bad = _ref_at(_CS, {"secret": {"key": "k"}})
+    bad["http_config"]["oauth2"]["token_url"] = _BROKEN_URL
+    good = _slack("https://hooks.example.com/x")
+    _r, receivers, warnings = gar.generate_routes(
+        {"t-a": _routing(bad), "t-b": _routing(good)}, _ALLOWED, tenants=["t-a", "t-b"])
+    assert [r["name"] for r in receivers] == ["tenant-t-b"]
+    assert ("secret_ref_destination_unconfined", "t-a") in {
+        (w.kind, w.tenant) for w in warnings if isinstance(w, SkippedEntryWarning)}
