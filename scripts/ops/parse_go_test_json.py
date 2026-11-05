@@ -68,9 +68,14 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 import re
 import sys
 from pathlib import Path
+
+# #3579: the run() exit (_lib_exitcodes, with _lib_compat) lives in scripts/tools/.
+# Appended, so a copy beside this file (one directory holding all three) wins.
+sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
 # Precise race-detector banners. Deliberately NOT a bare "DATA RACE" substring:
 # a test that merely PRINTS those words would flip the issue title to "DATA RACE",
@@ -360,4 +365,5 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    import _lib_exitcodes
+    _lib_exitcodes.run(main)

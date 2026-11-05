@@ -51,7 +51,12 @@
 #       Measured in a copy without it: rc=2 and a bare interpreter error,
 #       no `::error::` annotation. ⛔ The invocation is a REPO-RELATIVE path,
 #       so the helper has to land at `scripts/ops/guard_defaults_scopes.py`
-#       from the repo root. An earlier version of this line said "copy the
+#       from the repo root — with `_lib_exitcodes.py` and `_lib_compat.py`
+#       (stdlib-only; it exits through `_lib_exitcodes.run()`, #3579) copied
+#       into that same directory: all three files, or none works. Run it as
+#       `python3 scripts/ops/guard_defaults_scopes.py` — `-I`/`-P` (or
+#       PYTHONSAFEPATH) drop the script's own directory from sys.path and the
+#       two copies beside it are not found. An earlier version of this line said "copy the
 #       helper alongside the workflow"; following that literally puts it in
 #       `.github/workflows/` and reproduces the rc=2 the sentence is warning
 #       about — advice that does not work is worse than no advice.
