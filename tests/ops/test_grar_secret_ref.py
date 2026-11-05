@@ -623,3 +623,12 @@ def test_explain_route_reads_the_policys_shared_secrets(da_crdecode_env):
 
     unbound = er.explain_tenant_routing(parsed, "t-a", allowed, None)
     assert unbound["policy_refused"] == [] and unbound["sub_routes"] == []
+
+
+@pytest.mark.parametrize("receiver", [None, "slack", ["type", "slack"],
+                                      {"type": "carrier-pigeon", "url": OWN}, {"url": OWN}])
+def test_a_receiver_that_is_not_a_known_mapping_has_no_secret_references(receiver):
+    # A malformed receiver is refused for its shape elsewhere; it must not be
+    # read as carrying references (nor crash the reference lookup).
+    from _grar_merge import _receiver_secret_refs
+    assert _receiver_secret_refs(receiver) == []
