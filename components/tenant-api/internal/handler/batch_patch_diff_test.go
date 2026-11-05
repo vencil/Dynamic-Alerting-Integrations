@@ -310,6 +310,11 @@ func generatorDiff(t *testing.T, in []map[string]any) []struct {
 }
 
 func TestBatchPatchMerge_OfflineDiffAgainstGenerator(t *testing.T) {
+	// Parallel (#3574): it shares nothing process-wide — the generator tools
+	// are built once per binary (generatorTool.once), as for the other
+	// real-generator tests — and run serially its build and Python run added
+	// straight onto the package's time.
+	t.Parallel()
 	in := make([]map[string]any, len(patchDiffCases))
 	outcome := make([]string, len(patchDiffCases))
 	for i, c := range patchDiffCases {
