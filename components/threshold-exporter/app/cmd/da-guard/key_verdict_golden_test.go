@@ -35,12 +35,13 @@ const kvgADRTenant = "tenants:\n  db-a:\n" +
 
 var keyVerdictGoldenTrees = map[string]map[string]string{
 	// ADR-038's worked example: a misspelt key, a noop disable, a misspelt
-	// reserved key, a partial disable the tenant chose, an annotation.
+	// reserved key, a disable that switches its critical tier off with it
+	// (#3046), an annotation.
 	"adr-example": {"_defaults.yaml": kvgADRDefaults, "db-a.yaml": kvgADRTenant},
 	// A platform file's typo reaching two tenants is one notice; a tenant's
-	// own typo is one error per tenant; a partial disable that leaves an
-	// inherited sibling served is a warning naming where it comes from.
-	"platform-and-partial": {
+	// own typo is one error per tenant; a disable switches off the critical
+	// tier it inherits too, with no finding (#3046).
+	"platform-and-cascade": {
 		"_defaults.yaml":      "defaults:\n  mysql_connections: 80\n  redis_memory: 70\n",
 		"_platform.yaml":      "tenants:\n  ta:\n    mysql_conections: 5\n  tb:\n    mysql_conections: 5\n",
 		"team/_defaults.yaml": "defaults:\n  redis_memory_critical: 95\n",

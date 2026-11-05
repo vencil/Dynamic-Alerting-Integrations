@@ -60,7 +60,7 @@ func TestServedValues_KeysSayWhetherTheExporterReadsEachKey(t *testing.T) {
 		"mysql_slave_lagg":              {reason: keyReasonDisabled},
 		"_routng":                       {reason: keyReasonUnregistered, registered: no()}, // its `disable` switches nothing off (#3045)
 		"redis_memory":                  {reason: keyReasonDisabled},
-		"redis_memory_critical":         {exporter: true},
+		"redis_memory_critical":         {reason: keyReasonBaseDisabled}, // switched off with redis_memory (#3046)
 		"_namespaces":                   {reason: keyReasonNotExporterKey, registered: yes(), declared: map[string][]string{"annotation": {"tenant", "platform_tenants"}}},
 		"_routing":                      {reason: keyReasonNotExporterKey, registered: yes(), declared: map[string][]string{"generator": {"tenant", "platform_tenants"}}},
 		"_state_maint":                  {exporter: true, registered: yes()},
@@ -72,7 +72,7 @@ func TestServedValues_KeysSayWhetherTheExporterReadsEachKey(t *testing.T) {
 		`mysql_connections{tenant="x"}`: {exporter: true},
 		"redis_evicted_keys":            {reason: keyReasonUndeliverable},
 		`_myth{__x="a"}`:                {reason: keyReasonUnregistered, registered: no()},
-		`redis_memory{ db = "a" }`:      {exporter: true}, // keyed as written
+		`redis_memory{ db = "a" }`:      {reason: keyReasonBaseDisabled}, // keyed as written; switched off with redis_memory (#3046)
 	}
 	for k, w := range want {
 		e, ok := got[k]

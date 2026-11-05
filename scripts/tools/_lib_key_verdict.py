@@ -64,8 +64,7 @@ class KeyVerdict(NamedTuple):
     verdict: str                   # READ / UNREAD / UNDECIDABLE
     severity: str | None           # ERROR / WARNING / NOTICE; None for READ
     reason: str | None             # served-values' reason, "disable_noop", or None
-    disable: str | None            # "effective" / "partial" / "noop" / None
-    served_family: tuple[str, ...]
+    disable: str | None            # "effective" / "noop" / None
     value: Any                     # the effective config's value (as written); None when absent
     served: Any                    # what /metrics serves for it; None when nothing
 
@@ -74,13 +73,11 @@ class Finding(NamedTuple):
     """One thing to report: a tenant's own key, or a platform file / profile
     key reaching `tenants`."""
     severity: str
-    kind: str                      # "unread" | "disable_noop" | "disable_partial"
+    kind: str                      # "unread" | "disable_noop" | "profile_not_judged"
     key: str
     file: str | None
     tenants: tuple[str, ...]
     reason: str | None
-    served_family: tuple[str, ...] = ()
-    served_from: tuple[str, ...] = ()   # each of served_family's files (", "-joined when the tenants differ; "?" unknown)
     blocks: bool = False                # a whole-tree gate refuses it (Go's keyverdict.Blocking)
 
 
@@ -165,8 +162,10 @@ def note_root_only_policies(conf_d: str | os.PathLike[str], reader: Any = None) 
 
 _VERDICTS = frozenset({READ, UNREAD, UNDECIDABLE})
 _SEVERITIES = frozenset({ERROR, WARNING, NOTICE})
-_KINDS = frozenset({"unread", "disable_noop", "disable_partial", "profile_not_judged"})
-_DISABLES = frozenset({"effective", "partial", "noop"})
+_KINDS = frozenset({"unread", "disable_noop", "profile_not_judged"})
+#: Finding kinds only a da-guard older than #3046 writes (`tv._OlderOutput`).
+_RETIRED_KINDS = frozenset({"disable_partial"})
+_DISABLES = frozenset({"effective", "noop"})
 
 
 def _str(v: Any, what: str) -> str:
@@ -221,17 +220,24 @@ def _key_verdict(tenant: str, r: dict) -> KeyVerdict:
     return KeyVerdict(tenant, _str(r["key"], f"{w}.key"), _optional(r["layer"], f"{w}.layer"),
                       _optional(r["file"], f"{w}.file"), _tuple(r["read_by"], f"{w}.read_by"), verdict,
                       severity, _optional(r["reason"], f"{w}.reason"),
-                      _optional(r["disable"], f"{w}.disable", _DISABLES),
-                      _tuple(r["served_family"], f"{w}.served_family"), r["value"], r["served"])
+                      _optional(_current_disable(r["disable"], f"{w}.disable"), f"{w}.disable", _DISABLES),
+                      r["value"], r["served"])
+
+
+def _current_disable(v: Any, what: str) -> Any:
+    """v, unless it is an effect only an older da-guard writes (#3046)."""
+    if v in tv.RETIRED_DISABLE_EFFECTS:
+        raise tv._OlderOutput(f"{what}: {v!r}")
+    return v
 
 
 def _finding(f: dict) -> Finding:
+    if f.get("kind") in _RETIRED_KINDS:
+        raise tv._OlderOutput(f"findings.kind: {f['kind']!r}")
     return Finding(_one_of(f["severity"], "findings.severity", _SEVERITIES),
                    _one_of(f["kind"], "findings.kind", _KINDS), _str(f["key"], "findings.key"),
                    _optional(f["file"], "findings.file"), _tuple(f["tenants"], "findings.tenants"),
-                   _optional(f["reason"], "findings.reason"),
-                   _tuple(f["served_family"], "findings.served_family"),
-                   _tuple(f["served_from"], "findings.served_from"), _bool(f["blocks"], "findings.blocks"))
+                   _optional(f["reason"], "findings.reason"), _bool(f["blocks"], "findings.blocks"))
 
 
 def _read(doc: dict[str, Any], requested: "list[str] | None") -> TreeVerdict:
@@ -287,12 +293,9 @@ def finding_line(f: Finding, limit: int) -> str:
     who = ", ".join(f.tenants[:limit]) + (
         f" (+{len(f.tenants) - limit} more)" if len(f.tenants) > limit else "")
     why = f" ({f.reason})" if f.reason else ""
-    fam = ("; still served: " + ", ".join(
-        f"{k} (from {src or '?'})" for k, src in zip(f.served_family, f.served_from))
-        if f.served_family else "")
     # A profile key no tenant binds names none (#3042).
     who = f"tenant(s) {who}" if who else "no tenant"
-    return f"{f.file or '?'}: {f.severity}: {f.kind} `{f.key}`{why}{fam} — {who}"
+    return f"{f.file or '?'}: {f.severity}: {f.kind} `{f.key}`{why} — {who}"
 
 
 def undecidable_line(verdict: TreeVerdict) -> str | None:

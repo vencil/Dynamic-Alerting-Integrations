@@ -38,19 +38,18 @@ def test_each_finding_is_one_line_and_an_error_fails(tmp_path):
     assert r["details"] == [
         "db-a.yaml: error: unread `mysql_conections` (no_row) — tenant(s) db-a",
         "db-a.yaml: warning: disable_noop `mysql_slave_lagg` (disable_noop) — tenant(s) db-a",
-    ]  # `redis_memory_critical` is db-a's own: keeping the critical tier only (#3046)
+    ]  # `redis_memory_critical` is switched off with its base: read, no finding (#3046)
 
 
-def test_disable_partial_names_where_the_still_served_sibling_comes_from(tmp_path):
+def test_an_inherited_sibling_switched_off_with_its_base_is_no_finding(tmp_path):
+    """#3046: the inherited `redis_memory_critical` is switched off with
+    `redis_memory: disable` — read by the exporter, nothing to report."""
     r = vc.check_unread_keys(_tree(tmp_path, {
         "_defaults.yaml": _DEFAULTS,
         "team/_defaults.yaml": "defaults:\n  redis_memory_critical: 95\n",
         "team/db-a.yaml": "tenants:\n  db-a:\n    redis_memory: disable\n"}))
-    assert r["details"] == [
-        "team/db-a.yaml: warning: disable_partial `redis_memory`; still served: redis_memory_critical"
-        " (from team/_defaults.yaml) — tenant(s) db-a",
-    ]
-    assert r["status"] == vc.WARN  # a warning alone does not fail
+    assert r["details"] == ["1 tenant(s): every key is read by some reader"]
+    assert r["status"] == vc.PASS
 
 
 def test_a_platform_side_finding_is_one_line_with_its_tenants(tmp_path):

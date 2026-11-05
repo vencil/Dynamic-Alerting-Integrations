@@ -1,8 +1,7 @@
 // Package keyverdict is the one verdict on "does any reader read this key"
 // (ADR-038 decisions 4–7): for every key of every tenant, read / unread /
 // undecidable with a severity and a reason, and the findings a report
-// prints — deduplicated by file and key, the profile-layer judgment, the
-// keys a `partial` disable leaves served.
+// prints — deduplicated by file and key, the profile-layer judgment.
 //
 // ⛔ NO READING OF ITS OWN. Judge joins readings the caller hands it, each
 // produced by the exporter's own code (da-guard builds them: served-values
@@ -25,12 +24,13 @@
 // declaration, decision 7). The severity describes the defect, not who is
 // blocked: which gate refuses what is Blocks / NewBlocks (decision 6).
 //
-// A `disable` is read when it switches something off (effective /
-// partial); a noop one is unread at warning — except on a `_` key the
-// registry does not list, which is a misspelt reserved key, unread at the
-// severity of any other unread key. A partial one also yields a
-// disable_partial warning for the siblings the tenant inherits that are
-// still served.
+// A `disable` is read when it switches something off (effective); a noop
+// one is unread at warning — except on a `_` key the registry does not
+// list, which is a misspelt reserved key, unread at the severity of any
+// other unread key. A base's `disable` switches its family off with it
+// (#3046), so a `<base>_critical` / `<base>{…}` key served no row for that
+// reason (ReasonBaseDisabled) is read: the exporter read it to switch it
+// off.
 //
 // A `_` key written in a profile is judged on its own, from the
 // registry's `profile` layer, whether or not a tenant binds the profile: a
@@ -66,9 +66,8 @@ const (
 
 // Finding kinds.
 const (
-	KindUnread         = "unread"
-	KindDisableNoop    = "disable_noop"
-	KindDisablePartial = "disable_partial"
+	KindUnread      = "unread"
+	KindDisableNoop = "disable_noop"
 	// KindProfileNotJudged: a threshold key of a profile no tenant binds —
 	// not judged (whether the exporter reads it is measured on a tenant),
 	// said so rather than left to read as judged and fine (#3395).
@@ -82,6 +81,11 @@ const (
 	// ReasonDisabled: served-values' reason for a key switched off at the
 	// instant read; whether that changed what /metrics serves is Disable's.
 	ReasonDisabled = "disabled"
+	// ReasonBaseDisabled: served-values' reason for a `<base>_critical` /
+	// `<base>{…}` key served no row at the instant read because the tenant
+	// switches its base off there (#3046) — read, by the phase that
+	// switches it off.
+	ReasonBaseDisabled = "base_disabled"
 	// ReasonRetired: a retired reserved key.
 	ReasonRetired = "retired"
 	// ReasonUnregistered: a `_` key the registry does not list.
@@ -104,7 +108,6 @@ const (
 // Disable effects (served-values' keys[].disable).
 const (
 	DisableEffective = "effective"
-	DisablePartial   = "partial"
 	DisableNoop      = "noop"
 )
 
@@ -123,8 +126,6 @@ type ServedKey struct {
 	// Disable: what switching the key off does (Disable*); "" when it
 	// reads no disable.
 	Disable string
-	// ServedFamily: for a partial Disable, the family keys still served.
-	ServedFamily []string
 }
 
 // ServedTenant is one tenant's served reading.
@@ -199,8 +200,6 @@ type KeyVerdict struct {
 	Severity *string  `json:"severity"`
 	Reason   *string  `json:"reason"`
 	Disable  *string  `json:"disable"`
-	// ServedFamily: a partial disable's siblings still served; [] for none.
-	ServedFamily []string `json:"served_family"`
 	// Value: the effective config's value as written; nil when absent.
 	Value any `json:"value"`
 	// Served: what /metrics serves for it; nil when nothing.
@@ -217,11 +216,6 @@ type Finding struct {
 	// Tenants: sorted; [] for a profile no tenant binds.
 	Tenants []string `json:"tenants"`
 	Reason  *string  `json:"reason"`
-	// ServedFamily / ServedFrom: a disable_partial's siblings still served
-	// and, per sibling, the files it comes from (", "-joined when the
-	// tenants differ; "?" unknown). [] otherwise.
-	ServedFamily []string `json:"served_family"`
-	ServedFrom   []string `json:"served_from"`
 	// Blocks: a gate that judges the whole tree refuses it (Blocking).
 	Blocks bool `json:"blocks"`
 }
@@ -329,7 +323,7 @@ func Judge(in Input) Tree {
 		sort.SliceStable(rows, func(i, j int) bool { return rows[i].Key < rows[j].Key })
 		keys[tenant] = rows
 	}
-	findings := findingsOf(keys, rootDefaults, canon)
+	findings := findingsOf(keys, rootDefaults)
 	if in.RootProfiles != nil {
 		findings = mergeProfileFindings(keys, findings, profileLayerFindings(in.RootProfiles, in.Effective))
 		if in.Whole {
@@ -394,7 +388,13 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 		// declared where the exporter reads declarations (decision 7).
 		reason = ReasonStateFilterUndeclared
 	}
-	if hasSk && reason == ReasonDisabled && (disable == DisableEffective || disable == DisablePartial) {
+	if hasSk && reason == ReasonDisabled && disable == DisableEffective {
+		readBy["exporter"] = true
+		reason = ""
+	}
+	if hasSk && reason == ReasonBaseDisabled {
+		// #3046: read by the critical / dimensional phase, which switches
+		// it off with its base.
 		readBy["exporter"] = true
 		reason = ""
 	}
@@ -440,14 +440,10 @@ func judgeKey(tenant, key string, sk ServedKey, hasSk bool, src config.KeySource
 			reason = ReasonNotServed
 		}
 	}
-	family := sk.ServedFamily
-	if family == nil {
-		family = []string{}
-	}
 	return KeyVerdict{
 		Tenant: tenant, Key: key, Layer: nilIfEmpty(layer, hasSrc), File: nilIfEmpty(src.File, hasSrc),
 		ReadBy: sortedKeys(readBy), Verdict: verdict, Severity: optional(severity), Reason: optional(reason),
-		Disable: optional(disable), ServedFamily: append([]string{}, family...), Value: value, Served: servedValue,
+		Disable: optional(disable), Value: value, Served: servedValue,
 	}
 }
 
@@ -494,16 +490,14 @@ func (g groupKey) id() string {
 // undeclared state filter is the platform's: one finding per key, on the
 // root `_defaults.yaml` that should declare it, with every tenant it
 // reaches — never charged to a tenant's own file (decision 6, 7).
-func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string,
-	canon func(string) string) []Finding {
+func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string) []Finding {
 	type group struct {
-		gk  groupKey
-		vs  []KeyVerdict
-		per []familyFiles // disable_partial: each tenant's inherited siblings
+		gk groupKey
+		vs []KeyVerdict
 	}
 	var order []string
 	groups := map[string]*group{}
-	add := func(gk groupKey, v KeyVerdict, fam familyFiles) {
+	add := func(gk groupKey, v KeyVerdict) {
 		id := gk.id()
 		g, ok := groups[id]
 		if !ok {
@@ -512,53 +506,18 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string,
 			order = append(order, id)
 		}
 		g.vs = append(g.vs, v)
-		if fam != nil {
-			g.per = append(g.per, fam)
-		}
 	}
 	for _, tenant := range sortedKeys(keys) {
-		rows := keys[tenant]
-		// served-values names a family in the exporter's canonical spelling;
-		// the tenant's rows keep the spelling each file writes (#1231).
-		byKey := map[string]KeyVerdict{}
-		for _, v := range rows {
-			byKey[canon(v.Key)] = v
-		}
-		for _, v := range rows {
-			type kindFam struct {
-				kind string
-				fam  familyFiles
-			}
-			var kinds []kindFam
+		for _, v := range keys[tenant] {
+			var kinds []string
 			if v.Verdict == Unread {
 				k := KindUnread
 				if deref(v.Reason) == ReasonDisableNoop {
 					k = KindDisableNoop
 				}
-				kinds = append(kinds, kindFam{kind: k})
+				kinds = append(kinds, k)
 			}
-			if deref(v.Disable) == DisablePartial {
-				// #3046: a sibling the tenant's own file writes is the
-				// tenant's choice (`X: disable` + `X_critical: 90` keeps the
-				// critical tier only); one it inherits still serving after
-				// the base is switched off is the surprise to report.
-				var fam familyFiles
-				for _, k := range v.ServedFamily {
-					sib, ok := byKey[canon(k)]
-					if ok && deref(sib.Layer) == config.KeyLayerTenant {
-						continue
-					}
-					var file *string
-					if ok {
-						file = sib.File
-					}
-					fam = append(fam, familyFile{key: k, file: file})
-				}
-				if len(fam) > 0 {
-					kinds = append(kinds, kindFam{kind: KindDisablePartial, fam: fam})
-				}
-			}
-			for _, kf := range kinds {
+			for _, kind := range kinds {
 				var gk groupKey
 				if deref(v.Reason) == ReasonStateFilterUndeclared {
 					// The platform's to fix: `state_filters:` is declared in
@@ -567,14 +526,14 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string,
 					if r, ok := rootDefaults[v.Tenant]; ok {
 						root = &r
 					}
-					gk = groupKey{kind: kf.kind, file: root, key: v.Key}
+					gk = groupKey{kind: kind, file: root, key: v.Key}
 				} else {
-					gk = groupKey{kind: kf.kind, file: v.File, key: v.Key}
+					gk = groupKey{kind: kind, file: v.File, key: v.Key}
 					if deref(v.Layer) == config.KeyLayerTenant {
 						gk.tenant = v.Tenant
 					}
 				}
-				add(gk, v, kf.fam)
+				add(gk, v)
 			}
 		}
 	}
@@ -582,59 +541,19 @@ func findingsOf(keys map[string][]KeyVerdict, rootDefaults map[string]string,
 	for _, id := range order {
 		g := groups[id]
 		sev := deref(g.vs[0].Severity)
-		if g.gk.kind == KindDisablePartial {
-			sev = SeverityWarning
-		} else if sev == "" {
+		if sev == "" {
 			sev = SeverityNotice
 		}
 		tenantSet := map[string]bool{}
 		for _, v := range g.vs {
 			tenantSet[v.Tenant] = true
 		}
-		f := Finding{Severity: sev, Kind: g.gk.kind, Key: g.gk.key, File: g.gk.file,
-			Tenants: sortedKeys(tenantSet), ServedFamily: []string{}, ServedFrom: []string{}}
-		if g.gk.kind == KindDisablePartial {
-			// One finding per platform file and key: every sibling any of
-			// the tenants still serves, with every file it comes from.
-			seen := map[string]bool{}
-			for _, p := range g.per {
-				for _, ff := range p {
-					if !seen[ff.key] {
-						seen[ff.key] = true
-						f.ServedFamily = append(f.ServedFamily, ff.key)
-					}
-				}
-			}
-			for _, k := range f.ServedFamily {
-				files := map[string]bool{}
-				for _, p := range g.per {
-					for _, ff := range p {
-						if ff.key == k {
-							if ff.file == nil || *ff.file == "" {
-								files["?"] = true
-							} else {
-								files[*ff.file] = true
-							}
-						}
-					}
-				}
-				f.ServedFrom = append(f.ServedFrom, strings.Join(sortedKeys(files), ", "))
-			}
-		} else {
-			f.Reason = g.vs[0].Reason
-		}
-		out = append(out, f)
+		out = append(out, Finding{Severity: sev, Kind: g.gk.kind, Key: g.gk.key, File: g.gk.file,
+			Tenants: sortedKeys(tenantSet), Reason: g.vs[0].Reason})
 	}
 	sortFindings(out)
 	return out
 }
-
-type familyFile struct {
-	key  string
-	file *string
-}
-
-type familyFiles []familyFile
 
 // profileLayerFindings: the notices for `_` keys written in a profile that
 // no reader reads in the `profile` layer.
@@ -691,7 +610,7 @@ func profileLayerFindings(byFile map[string]map[string]any, effective map[string
 	for fk, f := range got {
 		file, reason := fk[0], f.reason
 		out = append(out, Finding{Severity: SeverityError, Kind: KindUnread, Key: fk[1], File: &file,
-			Tenants: sortedKeys(f.tenants), Reason: &reason, ServedFamily: []string{}, ServedFrom: []string{}})
+			Tenants: sortedKeys(f.tenants), Reason: &reason})
 	}
 	return out
 }
@@ -712,7 +631,7 @@ func profileNotFilled(tenant string, notServed map[string]config.NotServedKey, a
 		layer, file := config.KeyLayerProfile, ns.File
 		sev, reason := SeverityError, ns.Reason
 		out = append(out, KeyVerdict{Tenant: tenant, Key: key, Layer: &layer, File: &file, ReadBy: []string{},
-			Verdict: Unread, Severity: &sev, Reason: &reason, ServedFamily: []string{}})
+			Verdict: Unread, Severity: &sev, Reason: &reason})
 	}
 	return out
 }
@@ -748,7 +667,7 @@ func unboundProfileFindings(byFile map[string]map[string]any, effective map[stri
 	for fk := range got {
 		file, reason := fk[0], ReasonProfileUnbound
 		out = append(out, Finding{Severity: SeverityNotice, Kind: KindProfileNotJudged, Key: fk[1], File: &file,
-			Tenants: []string{}, Reason: &reason, ServedFamily: []string{}, ServedFrom: []string{}})
+			Tenants: []string{}, Reason: &reason})
 	}
 	return out
 }

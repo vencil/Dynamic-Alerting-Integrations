@@ -24,7 +24,7 @@ updated_at: 2026-11-05
 
 2026-10-17 修訂：`_` 開頭的鍵都不再產生閾值列，登錄表沒有的 `_` 鍵 exporter 完全不讀，與 JSON schema 一致（決定 2）；判決因此不再有 `platform_violation`，這類鍵判為 `unread`（決定 4、6）。
 
-2026-10-17 修訂：`disable_partial` 只在仍送出的同族鍵不是租戶檔自己寫的時候報，並指名它來自哪個檔；`disable` 的語意之後改成連帶關閉（決定 8）。
+2026-11-05 修訂：閾值鍵的 `disable` 連帶關掉同一族的 `_critical` 與維度鍵，不分同族鍵來自哪一層；被連帶關掉的鍵判為有讀。「只關到一部分」的警告因此不再存在，一併移除（決定 8）。
 
 2026-10-17 修訂：自訂告警編譯器改照 exporter 的讀法編譯，兩者讀 `_custom_alerts` 的層相同（決定 2）。
 
@@ -67,7 +67,7 @@ updated_at: 2026-11-05
 1. 一個鍵有沒有用，**看讀取端實際做了什麼**，不從鍵名預測：exporter 的部分看它實際送出的值，產生器的部分看登錄表的宣告，而宣告由探針對照產生器的實際輸出。
 2. 量不到的事實（每個 `_` 開頭的保留鍵歸哪個讀取端、可以寫在哪一層、哪些鍵已退役）寫在**一份登錄表**（JSON）。Python、Go 的保留鍵常數與兩份 JSON schema 的頂層宣告都由它產生。
 3. 「沒有任何讀取端讀」的判決由**一個共用函式**計算，validate-config、產生器 `--validate` 與 tenant-api 的寫入檢查都呼叫它，不各自實作。
-4. `disable` 沒關到任何東西、或只關到一部分時要報出來；並提供一個**讓使用者自己檢查與測試**的輸出。
+4. `disable` 沒關到任何東西時要報出來；並提供一個**讓使用者自己檢查與測試**的輸出。
 
 本 ADR 決定怎麼判、怎麼報，以及 tenant-api 的寫入檢查改成擋下時依什麼規則（決定 5）。各閘門（validate-config、產生器 `--validate`、da-guard、tenant-api 的寫入檢查）何時改成「判到就擋」由 [#3016](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3016) 依序推進，屆時是 breaking change。
 
@@ -101,12 +101,12 @@ tenants:
     mysql_conections: "70"        # 拼錯
     mysql_slave_lagg: disable     # 拼錯，原意是關掉 mysql_slave_lag
     _routng: disable              # 拼錯，原意是停用路由
-    redis_memory: disable         # 關掉 warning 那一級
-    redis_memory_critical: "90"   # 只留 critical
+    redis_memory: disable         # 關掉這個告警
+    redis_memory_critical: "90"
     _namespaces: [prod-ns]        # 給工具看的標註
 ```
 
-今天的結果（在 main 上實跑）：
+起草時（2026-10-16）在 main 上實跑的結果：
 
 | 工具 | 結果 |
 |---|---|
@@ -119,7 +119,7 @@ validate-config 擋下了 `_routng`，但其餘幾件事都沒有人擋：
 
 - 租戶以為門檻是 70，實際生效的是預設的 80。
 - 租戶以為關掉了 `mysql_slave_lag`，它照樣以 30 送出。
-- `redis_memory_critical` 照樣送出 90。這裡是租戶自己寫的、本來就要只留 critical；但同一條若是從子目錄 `_defaults.yaml` 或 profile 繼承來的，租戶寫了 `redis_memory: disable` 以為整個告警關了，critical 告警卻照常會響。
+- `redis_memory_critical` 照樣送出 90：租戶寫了 `redis_memory: disable` 以為整個告警關了，critical 告警卻照常會響；同一條從子目錄 `_defaults.yaml` 或 profile 繼承來時也一樣。決定 8 改成連帶關閉。
 
 ### 為什麼不再補鍵名規則
 
@@ -250,7 +250,7 @@ profiles:
 
 `redis_evicted_keys` 判為 `unread`、等級 error，報在 `_profiles.yaml`，列出 `t1`；`redis_evictd` 不判，報一筆 `profile_not_judged` notice，租戶清單是空的。誰被擋見決定 6。
 
-`disable_noop` 只報 warning、拼錯的閾值鍵報 error，理由是：一個沒關到東西的 `disable` 不會讓任何值錯誤生效，也可能是刻意的保險寫法（例如預設日後才會加上的鍵）；它的風險在於原意要關的東西沒關到，所以除了 warning，這次變更新引入的還會出現在 config-diff 的 PR 留言（見決定 8）。`disable_partial` 不改變 verdict（鍵有被讀），另以 warning 報。
+`disable_noop` 只報 warning、拼錯的閾值鍵報 error，理由是：一個沒關到東西的 `disable` 不會讓任何值錯誤生效，也可能是刻意的保險寫法（例如預設日後才會加上的鍵）；它的風險在於原意要關的東西沒關到，所以除了 warning，這次變更新引入的還會出現在 config-diff 的 PR 留言（見決定 8）。
 
 等級只描述缺陷，不決定誰被擋；一道寫入閘門擋不擋，看的是 finding 所在的檔（決定 6）。
 
@@ -299,9 +299,9 @@ tenants:
 ```json
 {"key": "mysql_conections", "layer": "tenant", "file": "db-a.yaml", "read_by": [],
  "verdict": "unread", "severity": "error", "reason": "no_row", "disable": null,
- "served_family": [], "value": "70", "served": null}
+ "value": "70", "served": null}
 {"severity": "error", "kind": "unread", "key": "mysql_conections", "file": "db-a.yaml",
- "tenants": ["db-a"], "reason": "no_row", "served_family": [], "served_from": []}
+ "tenants": ["db-a"], "reason": "no_row", "blocks": true}
 ```
 
 這帶來一個連動修訂：[ADR-036](./036-single-parser-effective-config.md) §9 規定單獨執行的 da-guard 對它判不了的內容回 exit 4（未判定）。原本觸發條件只有「樹上有路由或 policy 內容」，現在擴大為「樹上有只有產生器能判值的內容」，例如租戶寫了 `_routing_profile`，它指向的 profile 存不存在只有產生器能判。鍵名本身不需要產生器：共用判決以 da-guard 與登錄表就判得出來（決定 1）。否則單獨跑 da-guard 的人會把「沒判」讀成「判過、沒問題」。exit 4 本身要等 ADR-036 §7 的步驟 2（da-guard 加上「未判定」）完成後才存在，這個擴大範圍也從那時起生效。
@@ -336,23 +336,29 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 
 `_state_<filter>` 指向平台沒有宣告的 filter，或 filter 宣告在子目錄（不會被讀）時，原因在平台檔。這類先報成平台側的 notice，指名缺的宣告；等到「平台刪掉 filter 時不會讓既有租戶懸空」的守衛到位，才考慮升級。
 
-### 8. `disable` 有沒有作用
+### 8. `disable` 關掉什麼、有沒有作用
+
+閾值鍵寫 `disable`，關掉的是**一整族**：base 鍵本身、`<key>_critical`，以及維度鍵 `<key>{…}`（租戶寫的，和根目錄 `defaults:` 給的維度預設值），不論同族鍵寫在哪一層（租戶檔、子目錄 `_defaults.yaml`、profile、根平台檔 `tenants:`）。排程式的 `disable` 只在它那段時間連帶。base 的 `disable` 過期（`expires:`）後是否還算數，跟 base 自己的規則走：根目錄 `defaults:` 有值的鍵過期即失效，其他（`optional_overrides:` 宣告的鍵、只在 `dimensions:` 出現的鍵）不看 `expires:`。`disable:critical` 這類帶等級的寫法不是停用，不連帶。
+
+只想留 critical 那一級，寫 `X: "90:critical"`，並刪掉 `X_critical`：它送出的 series 與舊的 `X: disable` 加 `X_critical: 90` 相同，兩者並存則會送出同一條 series 兩次，整份 `/metrics` 失敗。只想停 critical 那一級，寫 `X_critical: disable`。
+
+被連帶關掉的同族鍵，exporter 讀了它才決定不送，所以判為有讀（`read_by` 為 exporter），不報；`/effective` 的 `not_served` 與 served-values 的 `keys`、逐時段 `schedules` 以原因 `base_disabled` 標出。這個原因不是 `value_not_served`：不送正是 `disable` 要的。同族鍵的值本身讀不懂時，照樣報 `value_unparsed_dropped`，不被 `base_disabled` 蓋掉。
+
+`disable` 有沒有作用，以反事實重算判定：
 
 | 報告 | 什麼情況 | 怎麼判 |
 |---|---|---|
-| `disable_partial` | base 鍵關掉了，但同一族的 `_critical` 或維度鍵仍在送出，而且那個鍵不是租戶檔自己寫的（來自子目錄 `_defaults.yaml`、profile、根平台檔 `tenants:`，或根 defaults 的維度鍵） | 一次 served-values 比對同族的鍵，不需要重算；同族鍵的來源取自 `da-guard effective` 的來源資訊 |
 | `disable_noop` | 拿掉這個 `disable`，送出的值完全不變 | 反事實重算：假設這個 `disable` 不存在，再算一次，看結果有沒有變；重算在 Go 內進行 |
 
 - 保留鍵（`_routing: disable`、`_silent_mode: disable` …）沒有豁免，照決定 4 判。
 - `disable_noop` 常見的原因是鍵拼錯：上面例子的 `mysql_slave_lagg: disable` 沒關到任何東西，真正的 `mysql_slave_lag` 照樣送出。
-- 反事實重算要看整天的時段（含排程值），不只看某一個時間點，否則時窗內與時窗外的判斷會相反。
+- 反事實重算要看整天的時段（含排程值），不只看某一個時間點，否則時窗內與時窗外的判斷會相反。重算時另外檢查：base 在某時段是 `disable`，那個時段同族就不得有列；有的話 da-guard 以內部錯誤結束，不當成判定。這條檢查抓的是 exporter 某個讀同族鍵的地方漏了連帶。
 - 成本：一個租戶的閾值列只取決於它自己的設定與平台的設定，所以每個租戶只在自己的排程切點重算，每次只建入同一輪的租戶；第 k 輪把所有租戶各自的第 k 個 `disable` 一起拿掉，輪數等於單一租戶最多有幾個 `disable`，與租戶數無關。
 - 寫在 profile 或平台檔的 `disable` 影響所有選用它的租戶，報在那個檔上。
-- 租戶檔自己寫的同族鍵是刻意的：`X: disable` 加 `X_critical: 90` 表示只留 critical 那一級。explain 的 `disable` 欄照實列 `partial`，但不成為警告；報出來的警告會指名仍送出的鍵各自來自哪個檔。
-- 兩者在整棵樹報警告。這次變更**新引入**的，另外出現在 config-diff 的 PR 留言，因為 reviewer 實際會看的是那裡（[ADR-037](./037-config-diff-compares-rendered-output.md)）；config-diff 不分同族鍵的來源，新引入的 partial 都列。
+- `disable_noop` 在整棵樹報警告。這次變更**新引入**的，另外出現在 config-diff 的 PR 留言，因為 reviewer 實際會看的是那裡（[ADR-037](./037-config-diff-compares-rendered-output.md)）。
 - tenant-api 的寫入檢查只對被寫的租戶重算：輪數取決於那個租戶有幾個 `disable`，每輪只重建那個租戶，比起載入整棵樹，成本可以忽略。整棵樹的重算只在 explain、config-diff 與 CI 中進行：它的每一輪都要重建所有該輪的租戶，輪數又取決於設定內容，放不進寫入檢查的時間上限（[ADR-036](./036-single-parser-effective-config.md) §3）。
 
-`disable` 只關 base 鍵、不連帶關掉 `_critical` 與維度鍵，這是現行語意。之後會改成一律連帶關掉同一族的鍵、不分來源，只留 critical 那一級時改寫成 `X: "90:critical"`（它送出的 series 與 `X: disable` 加 `X_critical: 90` 相同）；這是 breaking change，與各閘門改成「判到就擋」一起推出（[#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)）。不採用「租戶檔寫的同族鍵保留、繼承來的才連帶關掉」：exporter 算閾值時分不出同族鍵來自哪一層，profile 與子目錄 defaults 的值在那之前已併進租戶的設定。
+不採用「租戶檔寫的同族鍵保留、繼承來的才連帶關掉」：exporter 算閾值時分不出同族鍵來自哪一層，profile 與子目錄 defaults 的值在那之前已併進租戶的設定；要分得出來，得逐鍵記錄來源，那是先前因效能退化否決過的做法。業界的對照是 kube-prometheus-stack 的 `defaultRules.disabled.<告警名>`：以告警名為單位關閉，同名的各嚴重度一起關。
 
 ### 9. 讓使用者自己檢查
 
@@ -361,7 +367,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 - 來源層與檔案；
 - 哪些讀取端讀它，沒讀的原因；
 - 有效值；
-- `disable` 的作用：`effective`（有關掉東西）、`partial`（對應 `disable_partial`）、`noop`（對應 `disable_noop`）。
+- `disable` 的作用：`effective`（有關掉東西）、`noop`（對應 `disable_noop`）。
 
 輸出是一份帶版本號的 JSON（另有給人讀的表格），由現有的 `da-guard effective` 來源資訊、served-values 的原因欄位與反事實結果組成，不另造第三種格式。`--assert <檔案>` 拿輸出與一份預期結果比對，不同就回非 0，可以放進客戶自己的 CI。這和 `amtool config routes test`（給一組 label，回答會送到哪個 receiver）、`promtool test rules` 的用法相同。
 
@@ -383,7 +389,7 @@ exporter 那半能不能判，取決於**有沒有讀到任何根平台檔**，�
 每一項都可以單獨發布：
 
 1. 登錄表、產生出來的常數與 schema、黑箱探針。行為不變。
-2. da-guard 輸出 `read_by` 與原因、`disable_partial`、反事實 `disable_noop`、explain 與 `--assert`；共用函式接上 validate-config，只報不擋。
+2. da-guard 輸出 `read_by` 與原因、反事實 `disable_noop`、explain 與 `--assert`；共用函式接上 validate-config，只報不擋。
 3. 產生器 `--validate` 與產生器容器接上共用函式，da-guard 的 exit 4 擴大範圍。需要等 [ADR-036](./036-single-parser-effective-config.md) §7 的步驟 2（da-guard 加上「未判定」）先完成；接上容器前，served-values 先能只算指定的租戶並量過記憶體（決定 5）。
 4. 決定 10 的各項，以及 `_state_` 的平台側 notice。
 
@@ -435,8 +441,8 @@ db-a
   mysql_conections        db-a.yaml     —           unread   —        ← error：沒有讀取端讀
   mysql_slave_lagg        db-a.yaml     —           unread   noop     ← warning：沒關到任何東西，mysql_slave_lag 仍送出 30
   _routng                 db-a.yaml     —           unread   —        ← error
-  redis_memory            db-a.yaml     exporter    read     partial  ← 不報：redis_memory_critical 是 db-a 自己寫的，只留 critical
-  redis_memory_critical   db-a.yaml     exporter    read     —
+  redis_memory            db-a.yaml     exporter    read     effective
+  redis_memory_critical   db-a.yaml     exporter    read     —        ← 跟著 redis_memory 關掉（base_disabled），不送、不報
   _namespaces             db-a.yaml     annotation  read     —
 ```
 
@@ -473,10 +479,10 @@ db-a
 - **沒變的錯值會一直留著**：決定 12 讓沒改過的錯值只報 notice，它會留在檔裡直到有人改這個鍵；期間它照樣什麼都不靜音。
 - **探針不涵蓋兩類**：標註類的鍵（`_namespaces`），以及讀了但輸出不變的鍵，靠登錄表的明確標註。
 - **反事實重算的成本**：整棵樹時，重算的輪數等於單一租戶最多有幾個 `disable`，每輪是一次 served-values，所以不進入寫入檢查；寫入檢查只對被寫的租戶重算（決定 8）。
+- **`disable` 連帶關閉少了一種寫法**：「base 關掉、只對某個維度告警」（`X: disable` 加 `X{db="a"}: 5`）沒有替代寫法；要這麼做，得把 base 的門檻設成不會觸發的值。被連帶關掉的同族鍵不報，所以從舊語意升級時，`X: disable` 加 `X_critical: 90` 會靜靜地不再送出 critical（決定 8 的遷移寫法）。根目錄 `defaults:` 自己給了 `X_critical` 的值時，它是一個獨立的閾值鍵（exporter 以 `metric="…_critical"` 的 warning 列送出），不屬於 `X` 這一族，`X: disable` 不連帶關掉它；這種寫法另有 `root_defaults_critical_key` 警告。
 - **實測中發現、另案處理的問題**：
   - 產生器讀了 `_metadata` 卻沒有使用（[#3043](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3043)）。
   - `_severity_dedup` 只讀租戶檔，其他保留鍵會繼承 profile；需要確認是否刻意（[#3044](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3044)）。
-  - `disable` 不連帶關掉 `_critical` 與維度鍵（見決定 8，[#3046](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3046)）。
 
 ## 考慮過但否決
 

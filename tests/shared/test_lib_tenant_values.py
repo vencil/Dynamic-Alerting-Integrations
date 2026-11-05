@@ -805,13 +805,12 @@ def test_output_without_keys_is_refused_as_older(tmp_path):
     '{"k": {"exporter": false, "reason": "typo"}}',
     '{"k": {"exporter": false, "reason": "no_row", "registered": "no"}}',
     '{"k": {"exporter": false, "reason": "disabled", "disable": "maybe"}}',
-    '{"k": {"exporter": false, "reason": "disabled", "disable": "noop", "served_family": ["k_critical"]}}',
     '{"k": {"exporter": true, "refused": "nan"}}',
     '{"k": {"exporter": false, "reason": "value_non_finite"}}',
     '{"k": {"exporter": false, "reason": "no_row", "refused": "non_finite"}}',
     '{"k": {"exporter": false, "reason": "root_default_refused"}}',
 ], ids=["list", "no-exporter", "exporter-not-bool", "read-with-reason", "unread-without-reason",
-        "unknown-reason", "registered-not-bool", "unknown-disable", "family-without-partial",
+        "unknown-reason", "registered-not-bool", "unknown-disable",
         "unknown-refusal", "refused-reason-without-refusal", "refusal-without-refused-reason",
         "root-reason-without-refusal"])
 def test_keys_not_of_their_shape_are_refused(tmp_path, keys):
@@ -819,6 +818,17 @@ def test_keys_not_of_their_shape_are_refused(tmp_path, keys):
     with pytest.raises(tv.ServedValuesError) as ei:
         tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
     assert "keys" in str(ei.value) and ei.value.binary_fault and not ei.value.stale
+
+
+def test_a_retired_disable_effect_names_an_older_da_guard(tmp_path):
+    """#3046：`disable: partial` 只有比這支工具舊的 da-guard 會寫；要說「舊」（stale），
+    呼叫端與使用者據此知道要升級 da-guard，不是當成壞掉的輸出。"""
+    doc = _sv_doc(tv.SERVED_VALUES_SCHEMA).replace(
+        '"keys": {}', '"keys": {"k": {"exporter": false, "reason": "disabled", "disable": "partial"}}')
+    with pytest.raises(tv.ServedValuesError) as ei:
+        tv.load_served_tree(tmp_path, binary=_old_da_guard(tmp_path, doc))
+    assert ei.value.stale and not ei.value.broken, ei.value
+    assert "older than this tool" in str(ei.value)
 
 
 def test_real_da_guard_names_a_refused_value_apart_from_a_disable(tmp_path, da_guard):
@@ -917,8 +927,9 @@ def test_disable_effects_are_asked_for_and_read(tmp_path, da_guard):
     got = tv.load_served_values(conf_d, binary=da_guard, disable_effects=True)["t"].keys
     assert got["mysql_conections"].disable == "noop"
     assert got["mysql_connections"].disable == "effective"
-    assert (got["redis_memory"].disable, got["redis_memory"].served_family) == \
-        ("partial", ("redis_memory_critical",))
+    assert got["redis_memory"].disable == "effective"
+    # #3046：critical 跟著 base 關掉，exporter 讀了它（base_disabled）。
+    assert got["redis_memory_critical"] == tv.ServedKey(False, "base_disabled")
     # 對照：沒要求就不算（也不付重算的成本）
     plain = tv.load_served_values(conf_d, binary=da_guard)["t"].keys
     assert plain["mysql_conections"].disable is None

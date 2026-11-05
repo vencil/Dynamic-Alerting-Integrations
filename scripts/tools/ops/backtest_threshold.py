@@ -416,7 +416,7 @@ def extract_changes_from_dirs(config_dir, baseline_dir, trees=None):
     #3111: rows are per tenant and /metrics row (its family name and full
     label set, `_series_identity`) — what the alerts see — not per threshold
     key. The same row written under another key (`90:critical` on the base
-    key, or `disable` plus `90` on its `_critical` key) is no change; moving
+    key, or `90` on its `_critical` key beside a base value) is no change; moving
     a value to another severity (`70` -> `70:critical`) is two rows, one that
     stops being served and one that starts, because each is compared by
     another alert (#3060). A legacy twin is not a row of its own.

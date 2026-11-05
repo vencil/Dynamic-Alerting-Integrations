@@ -105,14 +105,15 @@ is what keeps either of them off column 0.
   for, not a switch-off, and `refused` names such a refusal also when the
   platform default is served instead; `root_default_refused` is a key
   the tenant does not write whose root `defaults:` value the resolver
-  refuses, so it gets no default row — `refused` says why, #3250). A no-row schedule segment's `reason`
+  refuses, so it gets no default row — `refused` says why, #3250;
+  `base_disabled` is a `<base>_critical` / `<base>{…}` key served no row
+  because the tenant switches its base off, #3046). A no-row schedule segment's `reason`
   says the same per part of the day (`SEGMENT_REASONS`). For a `_` key, `registered` says whether
   the registry lists it and `declared` names its other readers, reader ->
   layers. Facts, not a verdict: `disabled` does not say whether switching
   the key off changed anything: with `disable_effects=True` (da-guard
-  `--disable-effects`) `disable` says so — "effective", "partial" (the
-  `_critical` or dimensional keys of `served_family` are still served) or
-  "noop" — for every key that reads `disable` in some part of the day,
+  `--disable-effects`) `disable` says so — "effective" or "noop" — for
+  every key that reads `disable` in some part of the day,
   registered `_` keys aside. A da-guard whose output lacks the field is
   named as older than this tool.
 
@@ -351,7 +352,8 @@ class ScheduleSegment(NamedTuple):
     error: str | None = None  # da-guard's text when /metrics cannot be gathered in [start, end)
     series: tuple[Series, ...] | None = None  # None exactly when value is None
     # #3140, only when value is None: why there is no row — one of
-    # SEGMENT_REASONS ("disabled", "value_non_finite", "value_unparsed"), or
+    # SEGMENT_REASONS ("disabled", "value_non_finite", "value_unparsed",
+    # "base_disabled"), or
     # None when there is nothing to serve.
     reason: str | None = None
 
@@ -469,10 +471,8 @@ class ServedKey(NamedTuple):
     declared: dict[str, tuple[str, ...]] = {}
     hint: str | None = None
     # Only from `disable_effects=True`, for a key that reads `disable` in some
-    # part of the day: "effective" | "partial" | "noop" (ADR-038 decision 8),
-    # and for partial the family keys still served.
+    # part of the day: "effective" | "noop" (ADR-038 decision 8).
     disable: str | None = None
-    served_family: tuple[str, ...] = ()
     # #3140: why the exporter's row resolver refused the key's value at
     # `at` — one of `SERVED_KEY_REFUSALS` ("non_finite", "unparsed") — both
     # when it then served the platform default (`exporter` True) and when it
@@ -485,18 +485,18 @@ class ServedKey(NamedTuple):
 #: The closed set of served-values' `keys[*].refused` (pkg/config Refused*).
 SERVED_KEY_REFUSALS = frozenset({"non_finite", "unparsed"})
 
-#: The closed set of a no-row schedule segment's `reason` (#3140).
-SEGMENT_REASONS = frozenset({"disabled", "value_non_finite", "value_unparsed"})
+#: The closed set of a no-row schedule segment's `reason` (#3140; `base_disabled`, #3046).
+SEGMENT_REASONS = frozenset({"disabled", "value_non_finite", "value_unparsed", "base_disabled"})
 
 #: The closed set of served-values' `keys[*].disable`.
-DISABLE_EFFECTS = frozenset({"effective", "partial", "noop"})
+DISABLE_EFFECTS = frozenset({"effective", "noop"})
 
 #: The closed set of served-values' `keys[*].reason` (cmd/da-guard
 #: served_values.go keyReason*).
 SERVED_KEY_REASONS = frozenset({
     "disabled", "no_row", "undeliverable", "shadowed", "not_exporter_key",
     "state_filter_undeclared", "unregistered", "retired",
-    "value_non_finite", "value_unparsed", "root_default_refused",
+    "value_non_finite", "value_unparsed", "root_default_refused", "base_disabled",
 })
 
 #: The `keys[*].reason` values of a refused value that leaves no row: the
@@ -754,6 +754,17 @@ class _OlderSchema(ValueError):
     reader reads (`_run_da_guard`'s *older_schemas*)."""
 
 
+class _OlderOutput(ValueError):
+    """A value only a da-guard older than this tool writes (#3046: the
+    retired `disable: partial` effect and `disable_partial` finding kind) —
+    named as a da-guard to upgrade, not as broken output."""
+
+
+#: Disable effects a da-guard older than #3046 writes and this tool no
+#: longer reads: the base's `disable` now switches its family off.
+RETIRED_DISABLE_EFFECTS = frozenset({"partial"})
+
+
 def _run_da_guard(
     subcommand: str,
     extra: list[str],
@@ -868,7 +879,7 @@ def _run_da_guard(
         # version, #3489, #3016). A schema this reader does not know may be a newer one: not
         # called older.
         stale = (" — this da-guard is older than this tool: upgrade or rebuild it"
-                 if isinstance(e, _OlderSchema)
+                 if isinstance(e, (_OlderSchema, _OlderOutput))
                  or (isinstance(e, KeyError) and (e.args in _FIELDS_ADDED_SINCE
                                                   or (e.args == ("schema",) and subcommand == SUBCOMMAND)))
                 else "")
@@ -1127,6 +1138,10 @@ def load_served_tree(
                 raise ValueError(f"custom_alerts_finding {custom_alerts_finding!r} "
                                  f"with custom_alerts_error {custom_alerts_error!r}")
             key_checks = None if "key_checks" not in tv else _key_checks(tv["key_checks"])
+        except _OlderOutput as e:
+            raise ServedValuesError(
+                f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries {e} — this da-guard is "
+                "older than this tool: upgrade or rebuild it", returncode, stderr, stale=True) from e
         except (ValueError, KeyError, TypeError, AttributeError) as e:
             raise ServedValuesError(
                 f"da-guard {SUBCOMMAND}: tenant {tenant_id!r} carries keys, routing or custom alerts that are not of their shape ({e!r})",
@@ -1216,18 +1231,17 @@ def _served_key(e: Any) -> ServedKey:
     declared = {str(r): tuple(str(l) for l in layers) for r, layers in (e.get("declared") or {}).items()}
     hint = e.get("hint")
     disable = e.get("disable")
+    if disable in RETIRED_DISABLE_EFFECTS:
+        raise _OlderOutput(f"disable {disable!r}")
     if disable is not None and disable not in DISABLE_EFFECTS:
         raise ValueError(f"disable {disable!r}")
-    family = tuple(str(k) for k in (e.get("served_family") or ()))
-    if family and disable != "partial":
-        raise ValueError(f"served_family with disable {disable!r}")
     refused = e.get("refused")
     if refused is not None and refused not in SERVED_KEY_REFUSALS:
         raise ValueError(f"refused {refused!r}")
     if (reason in SERVED_KEY_REFUSED_REASONS) != (refused is not None and not exporter):
         raise ValueError(f"reason {reason!r} with refused {refused!r}")
     return ServedKey(exporter, reason, registered, declared, None if hint is None else str(hint),
-                     disable, family, refused)
+                     disable, refused)
 
 
 def _time_boxes(m: Any) -> dict[str, tuple[TimeBox, ...]]:

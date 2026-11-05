@@ -43,94 +43,51 @@ def test_the_adr_example(tmp_path):
         "mysql_conections": ((), "unread", "error", None),
         "mysql_slave_lagg": ((), "unread", "warning", "noop"),
         "_routng": ((), "unread", "error", "noop"),
-        "redis_memory": (("exporter",), "read", None, "partial"),
+        "redis_memory": (("exporter",), "read", None, "effective"),
         "redis_memory_critical": (("exporter",), "read", None, None),
         "_namespaces": (("annotation",), "read", None, None),
         # 繼承來的閾值：exporter 有送
         "mysql_connections": (("exporter",), "read", None, None),
         "mysql_slave_lag": (("exporter",), "read", None, None),
     }
-    # `redis_memory` 是 partial（`redis_memory_critical` 照送），但那條 critical
-    # 是租戶自己寫的：「只要 critical」，不報（#3046）。
+    # `redis_memory: disable` 連同 `redis_memory_critical` 一起關掉（#3046）：
+    # 那條 critical 是 exporter 讀了、跟著 base 關掉的，算 read，不報。
     kinds = {(f.kind, f.key, f.severity) for f in t.findings}
     assert kinds == {("unread", "mysql_conections", "error"), ("unread", "_routng", "error"),
                      ("disable_noop", "mysql_slave_lagg", "warning")}
     assert not t.undecidable
 
 
-def test_disable_partial_names_the_inherited_siblings_and_their_files(tmp_path):
-    """#3046：base 寫 `disable` 之後仍送出的同族鍵，只有不是租戶檔自己寫的才報，
-    並指名它來自哪個檔。"""
+def test_a_disable_switches_off_its_whole_family_wherever_it_comes_from(tmp_path):
+    """#3046：base 寫 `disable` 連帶關掉同族的 `_critical` 與維度鍵，不分同族鍵
+    來自哪一層（租戶檔、子目錄 `_defaults.yaml`、profile、根平台檔 `tenants:`、
+    根 defaults 的維度預設值，#1231 舊拼法亦同）。這些同族鍵 exporter 讀了才關，
+    判 read、沒有 finding；/metrics 不送。"""
     t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "dimensions:\n  mysql_connections: [db]\n"
+        "_defaults.yaml": "dimensions:\n  mysql_connections: [db]\n  mysql_threads_running: [db]\n"
                           "defaults:\n  redis_memory: 70\n  mysql_connections: 80\n"
-                          "  mysql_connections{db=\"x\"}: 12\n  pg_conn: 50\n",
+                          "  mysql_connections{db=\"x\"}: 12\n  pg_conn: 50\n  mysql_threads_running: 50\n",
+        "_platform.yaml": "tenants:\n  tp:\n    redis_memory_critical: \"95\"\n",
         "team/_defaults.yaml": "defaults:\n  redis_memory_critical: 95\n",
         "_profiles.yaml": "profiles:\n  p1:\n    pg_conn_critical: 96\n",
         "t.yaml": "tenants:\n  ta:\n    redis_memory: disable\n    redis_memory_critical: \"90\"\n"
-                  "    mysql_connections: disable\n  tc:\n    _profile: p1\n    pg_conn: disable\n",
+                  "    mysql_connections: disable\n    mysql_connections{db=\"y\"}: \"7\"\n"
+                  "  tc:\n    _profile: p1\n    pg_conn: disable\n",
         "team/tb.yaml": "tenants:\n  tb:\n    redis_memory: disable\n",
-    }))
-    got = {(f.key, f.file, f.tenants, f.served_family, f.served_from)
-           for f in t.findings if f.kind == "disable_partial"}
-    assert got == {
-        ("mysql_connections", "t.yaml", ("ta",), ('mysql_connections{db="x"}',), ("_defaults.yaml",)),
-        ("pg_conn", "t.yaml", ("tc",), ("pg_conn_critical",), ("_profiles.yaml",)),
-        ("redis_memory", "team/tb.yaml", ("tb",), ("redis_memory_critical",), ("team/_defaults.yaml",)),
-    }
-    # ta 的 redis_memory 仍是 partial（事實照列），只是不成為 finding。
-    assert _by_key(t, "ta")["redis_memory"].disable == "partial"
-
-
-def test_disable_partial_sources_cover_platform_tenants_and_old_spellings(tmp_path):
-    """#3046：根平台檔 `tenants:` 給的同族鍵算繼承；同族鍵用舊拼法（#1231）寫時，
-    served-values 回的是新拼法，仍要認得出是不是租戶自己寫的、來自哪個檔。"""
-    t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  redis_memory: 70\n  mysql_threads_running: 50\n",
-        "_platform.yaml": "tenants:\n  tp:\n    redis_memory_critical: \"95\"\n",
-        "team/_defaults.yaml": "defaults:\n  mysql_cpu_critical: 95\n",
         "tp.yaml": "tenants:\n  tp:\n    redis_memory: disable\n",
-        "own.yaml": "tenants:\n  town:\n    mysql_cpu: disable\n    mysql_cpu_critical: \"90\"\n",
-        "team/tl.yaml": "tenants:\n  tl:\n    mysql_cpu: disable\n",
+        "own.yaml": "tenants:\n  town:\n    mysql_cpu: disable\n    mysql_cpu_critical: \"90\"\n"
+                    "    mysql_cpu{db=\"z\"}: \"4\"\n",
     }))
-    got = {(f.key, f.tenants, f.served_from) for f in t.findings if f.kind == "disable_partial"}
-    assert got == {("redis_memory", ("tp",), ("_platform.yaml",)),
-                   ("mysql_cpu", ("tl",), ("team/_defaults.yaml",))}
-
-
-def test_disable_partial_old_spelling_dimensional_siblings(tmp_path):
-    """維度鍵的舊拼法：根 defaults 給的算繼承（tdim 報），租戶自己寫的不報（tdown）。"""
-    t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "dimensions:\n  mysql_threads_running: [db]\n"
-                          "defaults:\n  mysql_threads_running: 50\n",
-        "tdim.yaml": "tenants:\n  tdim:\n    mysql_cpu: disable\n",
-        "tdown.yaml": "tenants:\n  tdown:\n    mysql_cpu: disable\n    mysql_cpu{db=\"y\"}: \"4\"\n",
-        "dims/_defaults.yaml": "defaults:\n  mysql_cpu{db=\"x\"}: 3\n",
-        "dims/tsub.yaml": "tenants:\n  tsub:\n    mysql_cpu: disable\n",
-    }))
-    got = {(f.key, f.tenants, f.served_family, f.served_from)
-           for f in t.findings if f.kind == "disable_partial"}
-    assert got == {("mysql_cpu", ("tsub",), ('mysql_threads_running{db="x"}',), ("dims/_defaults.yaml",))}
-
-
-def test_one_platform_side_disable_is_one_finding_naming_every_source(tmp_path):
-    """profile 寫的 `disable` 影響的租戶，從不同檔繼承同一個同族鍵：仍是一筆，
-    來源檔合併列出。"""
-    t = kv.judge_tree(_tree(tmp_path, {
-        "_defaults.yaml": "defaults:\n  redis_memory: 70\n",
-        "_profiles.yaml": "profiles:\n  p1:\n    redis_memory: disable\n",
-        "t1/_defaults.yaml": "defaults:\n  redis_memory_critical: 95\n",
-        "t2/_defaults.yaml": "defaults:\n  redis_memory_critical: 96\n",
-        "t1/ta.yaml": "tenants:\n  ta:\n    _profile: p1\n",
-        "t2/tb.yaml": "tenants:\n  tb:\n    _profile: p1\n",
-        # td 另外繼承一個根 defaults 的維度鍵：同族鍵集合不同，仍併成同一筆。
-        "t3/_defaults.yaml": "defaults:\n  redis_memory_critical: 97\n",
-        "t3/td.yaml": "tenants:\n  td:\n    _profile: p1\n    redis_memory{x=\"a\"}: 5\n",
-    }))
-    got = [(f.file, f.tenants, f.served_family, f.served_from)
-           for f in t.findings if f.kind == "disable_partial"]
-    assert got == [("_profiles.yaml", ("ta", "tb", "td"), ("redis_memory_critical",),
-                    ("t1/_defaults.yaml, t2/_defaults.yaml, t3/_defaults.yaml",))]
+    family = {"ta": ("redis_memory_critical", 'mysql_connections{db="y"}'),
+              "tb": ("redis_memory_critical",), "tc": ("pg_conn_critical",), "tp": ("redis_memory_critical",),
+              "town": ("mysql_cpu_critical", 'mysql_cpu{db="z"}')}
+    for tenant, keys in family.items():
+        by = _by_key(t, tenant)
+        for k in keys:
+            v = by[k]
+            assert (v.read_by, v.verdict, v.severity, v.reason, v.served) == \
+                (("exporter",), "read", None, None, None), (tenant, k, v)
+    assert not t.findings, t.findings
 
 
 def test_a_platform_side_typo_is_one_error_naming_the_file_and_its_tenants(tmp_path):
@@ -407,7 +364,19 @@ def _da_guard_answering(tmp_path, document: str) -> str:
     # `blocks` but not `undecidable_blocks` (#3016 review).
     '{"schema": "da-guard.key-verdict/v2", "at": "x", "undecidable": false, "tenants": {},'
     ' "findings": [], "key_checks": {}, "parse_failed": [], "unreadable": [], "blocks": false}',
-], ids=["v1", "v2-without-parse_failed", "v2-without-blocks", "v2-without-undecidable_blocks"])
+    # #3046: a da-guard that still judges a partial disable.
+    '{"schema": "da-guard.key-verdict/v2", "at": "x", "undecidable": false, "tenants": {"t": [{"key": "k",'
+    ' "layer": "tenant", "file": "a.yaml", "read_by": ["exporter"], "verdict": "read", "severity": null,'
+    ' "reason": null, "disable": "partial", "served_family": ["k_critical"], "value": "disable",'
+    ' "served": null}]}, "findings": [], "key_checks": {}, "parse_failed": [], "unreadable": [],'
+    ' "blocks": false, "undecidable_blocks": false}',
+    '{"schema": "da-guard.key-verdict/v2", "at": "x", "undecidable": false, "tenants": {},'
+    ' "findings": [{"severity": "warning", "kind": "disable_partial", "key": "k", "file": "a.yaml",'
+    ' "tenants": ["t"], "reason": null, "served_family": ["k_critical"], "served_from": ["b.yaml"],'
+    ' "blocks": false}], "key_checks": {}, "parse_failed": [], "unreadable": [], "blocks": false,'
+    ' "undecidable_blocks": false}',
+], ids=["v1", "v2-without-parse_failed", "v2-without-blocks", "v2-without-undecidable_blocks",
+        "partial-disable", "disable_partial-finding"])
 def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
     """#3489 審查：舊版 da-guard 的文件要說「比這支工具舊」（stale），不是「壞掉」——
     呼叫端與使用者據此知道要升級 da-guard，而不是去查樹。"""
@@ -420,10 +389,10 @@ def test_an_older_da_guard_is_named_older_not_broken(tmp_path, document):
 
 
 _ROW = {"key": "k", "layer": "tenant", "file": "a.yaml", "read_by": [], "verdict": "unread",
-        "severity": "error", "reason": "no_row", "disable": None, "served_family": [],
+        "severity": "error", "reason": "no_row", "disable": None,
         "value": 1, "served": None}
 _FINDING = {"severity": "error", "kind": "unread", "key": "k", "file": "a.yaml", "tenants": ["t"],
-            "reason": "no_row", "served_family": [], "served_from": [], "blocks": True}
+            "reason": "no_row", "blocks": True}
 
 
 def _doc(**over):

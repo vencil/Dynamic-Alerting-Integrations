@@ -656,13 +656,10 @@ def _critical_prefill_note(critical: dict) -> str:
 
     ⛔ The costs it DOES carry are the ones a tenant cannot infer, and every
     one of them is measured against the real resolver, not read off it:
-      * `<base>: "disable"` does not cascade to `<base>_critical`.
-        `resolveCriticalRows` tests the `_critical` override's own value and
-        `defaults[<base>]`'s existence, never the base override — measured:
-        base disabled + critical pre-filled yields exactly one row,
-        `{metric="connections", severity="critical"}`, with `ValidateTenantKeys`
-        silent. Before the pre-fill this could bite at most one accidental key;
-        now it is every critical key of every selected pack.
+      * `<base>: "disable"` switches its `<base>_critical` off too (#3046:
+        the resolver's familyHeadOff), so keeping the critical tier alone is
+        `<base>: "N:critical"` with the `<base>_critical` line deleted — both
+        together give one series twice and the whole `/metrics` fails.
       * …and DELETE is not a synonym for disable, which an earlier draft
         offered as one ("Disable or delete BOTH lines"). Measured, same three
         cases: both disabled → 0 rows; both deleted → 1 row,
@@ -719,10 +716,10 @@ def _critical_prefill_note(critical: dict) -> str:
         '# in them, so diff before you keep the result.\n'
         '#\n'
         '# What editing alone will not tell you:\n'
-        '#   * `<base>: "disable"` does NOT disable its `<base>_critical`\n'
-        '#     twin. The warning row goes away and the critical row keeps\n'
-        '#     firing, with no warning tier beneath it and no validation\n'
-        '#     message anywhere. BOTH lines must say "disable".\n'
+        '#   * `<base>: "disable"` switches its `<base>_critical` off too:\n'
+        '#     the critical line below then serves nothing. To keep the\n'
+        '#     critical tier only, write `<base>: "N:critical"` and DELETE\n'
+        '#     the `<base>_critical` line (both together fail /metrics).\n'
         '#   * …and most `<base>` lines are NOT in this file. The illustrative\n'
         '#     base overrides above come from the FIRST selected pack only,\n'
         '#     while the critical tier is seeded for every selected pack — so a\n'

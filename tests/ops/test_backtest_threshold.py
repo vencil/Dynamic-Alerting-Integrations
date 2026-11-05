@@ -2141,8 +2141,9 @@ _CRIT_DEFAULTS = "defaults:\n  mysql_connections: 80\n  mongodb_connections_curr
 @pytest.mark.usefixtures("da_guard_env")
 class TestServedSeriesGrouping:
     """#3111：變更以 /metrics 實際送出的 series 為單位，不以 threshold key 為單位。
-    同一條 series 換一個 key 來寫（`90:critical` ↔ `disable` + `_critical: 90`），
-    exporter 送出的東西沒變，就沒有變更。"""
+    同一條 series 換一個 key 來寫（`90:critical` ↔ `_critical: 90`，base 另有自己的列），
+    exporter 送出的那一條沒變，就沒有那一條的變更。#3046 之後 `disable` 連帶關掉
+    `_critical`，`disable` + `_critical: 90` 什麼都不送。"""
 
     def _pair(self, tmp_path, old_body, new_body):
         base = _confd(tmp_path / "base", {"_defaults.yaml": _CRIT_DEFAULTS, "db-a.yaml": old_body})
@@ -2150,26 +2151,40 @@ class TestServedSeriesGrouping:
         return bt.extract_changes_from_dirs(str(cur), str(base))
 
     def test_same_series_written_by_another_key_is_no_change(self, tmp_path):
-        """票上的 sb／sc：兩棵樹都只送一條 critical 90，舊版報兩列、rc 1。"""
+        """critical 90 由 `mysql_connections` 改由 `mysql_connections_critical` 送：
+        那一條沒變，只報新出現的 warning 列。"""
+        changes = self._pair(
+            tmp_path,
+            'tenants:\n  db-a:\n    mysql_connections: "90:critical"\n',
+            'tenants:\n  db-a:\n    mysql_connections: "70"\n'
+            '    mysql_connections_critical: "90"\n')
+        assert [r["metric"] for r in _rows(changes)] == ["mysql_connections"]
+
+    def test_a_disabled_base_switches_its_critical_tier_off(self, tmp_path):
+        """#3046：`disable` + `_critical: 90` 不再送 critical 90，是一列 90 → None。"""
         changes = self._pair(
             tmp_path,
             'tenants:\n  db-a:\n    mysql_connections: "90:critical"\n',
             'tenants:\n  db-a:\n    mysql_connections: disable\n'
             '    mysql_connections_critical: "90"\n')
-        assert _rows(changes) == []
+        assert _rows(changes) == [{
+            "tenant": "db-a", "metric": "mysql_connections_critical",
+            "old_value": "90", "new_value": None, "keys": ["mysql_connections"]}]
 
     def test_a_real_change_of_that_series_is_still_one_row(self, tmp_path):
         """同一條 critical series 90 → 95：一列，metric 是比它的告警 key，keys 列出供值的 key。"""
         changes = self._pair(
             tmp_path,
             'tenants:\n  db-a:\n    mysql_connections: "90:critical"\n',
-            'tenants:\n  db-a:\n    mysql_connections: disable\n'
+            'tenants:\n  db-a:\n    mysql_connections: "70"\n'
             '    mysql_connections_critical: "95"\n')
-        assert _rows(changes) == [{
+        crit = [r for r in _rows(changes) if r["metric"] == "mysql_connections_critical"]
+        assert crit == [{
             "tenant": "db-a", "metric": "mysql_connections_critical",
             "old_value": "90", "new_value": "95",
             "keys": ["mysql_connections", "mysql_connections_critical"]}]
-        assert [s.labels["severity"] for s in changes[0]["series"]] == ["critical"]
+        assert [s.labels["severity"] for s in changes[[r["metric"] for r in _rows(changes)].index(
+            "mysql_connections_critical")]["series"]] == ["critical"]
 
     def test_split_into_two_levels_reports_only_the_new_warning(self, tmp_path):
         """票上的「拆成兩級」：critical 90 → 90 沒變，warning None → 70 新啟用。"""
@@ -2413,8 +2428,7 @@ class TestTwoTreesCompare:
         cur, base = _dirs(
             tmp_path,
             {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connections: "90:critical"\n')},
-            {**_D, "db-a.yaml": _tenant_file("db-a", "    mysql_connections: disable\n"
-                                                     '    mysql_connections_critical: "90"\n')})
+            {**_D, "db-a.yaml": _tenant_file("db-a", '    mysql_connections: "90.0:critical"\n')})
         rc, doc, err = self._run(cli_argv, capsys, fake_prom, cur, base)
         assert (rc, doc["status"]) == (0, "no_changes"), doc
 

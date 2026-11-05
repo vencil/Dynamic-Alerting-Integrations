@@ -555,7 +555,9 @@ func TestServedSchedules_NullReasonUnderARetiredSpelling(t *testing.T) {
 	code, doc, _, stderr := servedS(t, files, scheduleAt)
 	mustOK(t, code, stderr)
 	checkNullReason(t, doc, "tenant-a", "mysql_threads_running", map[string]string{"01:00": keyReasonDisabled})
-	checkNullReason(t, doc, "tenant-a", "mysql_threads_running_critical", map[string]string{"05:00": "value_non_finite"})
+	// #3046: its critical tier is switched off with the base in 01:00–02:00.
+	checkNullReason(t, doc, "tenant-a", "mysql_threads_running_critical",
+		map[string]string{"01:00": keyReasonBaseDisabled, "05:00": "value_non_finite"})
 	for _, tn := range both {
 		checkNullReason(t, doc, tn, "mysql_threads_running", map[string]string{"03:00": keyReasonDisabled})
 	}
