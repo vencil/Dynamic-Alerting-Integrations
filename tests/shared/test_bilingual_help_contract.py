@@ -56,9 +56,10 @@ HONEST BOUNDARIES
 -----------------
 * The en output is asserted *different from zh*, NOT CJK-free — bilingual
   content purity is a different lint's jurisdiction, not this gate's.
-* Only ``--help`` is gated. Runtime-message i18n (several ENGLISH_ONLY tools
-  wire ``detect_cli_lang`` for report strings only, e.g. operator_check.py)
-  is out of scope here.
+* Only ``--help`` is gated. Runtime-message i18n (a tool may wire
+  ``detect_cli_lang`` for its report strings as well as its help — as
+  operator_check.py does since #1560, which took it out of ENGLISH_ONLY) is
+  out of scope here.
 * Windows hosts: children print CJK safely because tests/conftest.py forces
   ``PYTHONIOENCODING=utf-8`` into the inherited env (session autouse).
 """
@@ -109,8 +110,6 @@ def _stdout(proc: subprocess.CompletedProcess) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 _R_OPS = ("ops tool authored with English-only help; bilingual wiring never "
           "added")
-_R_OPS_RT = ("detect_cli_lang wired for RUNTIME report strings only; "
-             "--help body is English-only")
 _R_DX = "dx internal tool (not customer-facing) — English-only per dx convention"
 _R_LINT = "lint/CI gate (dev-internal) — English-only per dx convention"
 _R_LINT_RT = ("lint tool with detect_cli_lang wired for runtime messages "
