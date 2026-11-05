@@ -1,0 +1,3 @@
+tenant_orgs:
+  tenant-alpha: [ORG-1]
+  tenant-delta: []              # listed with no organization: still unlabeled

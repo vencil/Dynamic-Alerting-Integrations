@@ -13,7 +13,7 @@ import (
 )
 
 // #2491: TA_WRITE_MODE and the RBAC path default to the MORE OPEN choice
-// (direct write, open-read). Before the fix an empty value fell through
+// (direct write; for RBAC, formerly open-read). Before the fix an empty value fell through
 // envOrDefault to that default, indistinguishable from choosing it.
 
 func TestResolveNonEmptyEnvContract(t *testing.T) {
@@ -54,7 +54,7 @@ func TestCheckRBACFlag(t *testing.T) {
 		v        string
 		wantErr  bool
 	}{
-		{explicit: false, v: "", wantErr: false},    // no RBAC path anywhere: open-read, as documented
+		{explicit: false, v: "", wantErr: false},    // no RBAC path anywhere: accepted; every request is then denied (ADR-027 §7)
 		{explicit: true, v: "", wantErr: true},      // --rbac=
 		{explicit: true, v: "   ", wantErr: true},   // --rbac="   "
 		{explicit: true, v: "/etc/rbac/_rbac.yaml"}, // the chart's form

@@ -234,62 +234,6 @@ rbac:
         tenants: ["*"]
         permissions: [read]
 
-  # ADR-027 / LD-6 P1 — env/domain metadata scope filter fail-mode.
-  # false (default) = SHADOW: a tenant with no value for a restricted rule's
-  # env/domain still appears in the list (byte-identical to the legacy
-  # behavior) but is counted in tenant_api_scope_would_deny_total{axis="metadata"}.
-  # Flip to true = ENFORCE (hide unlabeled tenants) ONLY after that counter
-  # STOPS INCREMENTING over the soak window — it is a monotonic counter, so the
-  # signal is increase(...[window])==0 (a zero rate), not an absolute-zero value.
-  # Pair it with a scan for still-unlabeled tenants (the counter is traffic-
-  # driven: a tenant nobody LISTed never increments it). Matches the
-  # machineIdentity audit→enforce discipline. Independent of
-  # machineIdentity/humanSocket.
-  metadataScopeEnforce: false
-
-  # ADR-027 / #1597 — the SAME env/domain metadata axis, on the WRITE plane.
-  # Before #1597 a rule's environments[]/domains[] constrained list visibility
-  # only: a rule scoped to environments: [dev] could still PUT a prod tenant it
-  # could not see. This binds that axis to writes too.
-  # false (default) = SHADOW: writes are allowed exactly as before, but a write
-  # that enforce mode would reject is counted in
-  # tenant_api_scope_would_deny_total{axis="metadata_write"}.
-  # ⚠ NOT co-gated with metadataScopeEnforce, deliberately. That flag flips an
-  # axis the list plane has bound all along (only the UNLABELED arm is still
-  # migrating); this one binds the write plane for the FIRST time. Sharing one
-  # flag would tighten writes the instant a deployment that already soaked and
-  # flipped the list plane upgrades — no soak window at all. Same reasoning
-  # ADR-027 D4 used to give the org axis its own flag.
-  # Flip criterion: increase(...{axis="metadata_write"}[soak])==0 across the soak
-  # window. Unlike axis="metadata" (which measures UNLABELED tenants), a non-zero
-  # rate here names real writes that would start being rejected — read it as a
-  # blast-radius list, not a labeling backlog.
-  metadataWriteScopeEnforce: false
-
-  # ADR-027 / LD-6 P4 — org (tenant→organization) scope axis fail-mode.
-  # false (default) = SHADOW: a tenant with no orgs in _tenant_orgs.yaml still
-  # passes org-scoped rules, but is counted in
-  # tenant_api_scope_would_deny_total{axis="org"} (list + read-by-id/collection)
-  # and {axis="org_write"} (write). Flip to true = ENFORCE, noting:
-  # (a) ATOMIC: one flag flips list visibility (ScopeAllowed), write
-  #     authorization (AllowedInOrg) AND read-by-id (AllowedInOrgRead) to
-  #     fail-closed together — P4a+P4b+P4c, no list-only / write-only / read-only
-  #     enforce.
-  # (b) read-by-id is org-gated (P4c) — the read-only IDOR the enforce flip must
-  #     close (#1040) is closed; axis="org" is the read/visibility soak signal.
-  # (c) Flip criterion: increase(...{axis="org"}[soak]) AND
-  #     increase(...{axis="org_write"}[soak]) must BOTH stay 0 over the soak
-  #     window (monotonic counters — the rate is the signal), plus a scan for
-  #     still-unlabeled tenants (the counters are traffic-driven). NOTE: a
-  #     labeled tenant is already org-enforced in shadow on every plane — the
-  #     behavior-change trigger is LABELING, so verify the org claim reaches
-  #     tenant-api through every PEP (incl. recipe-preview, PREVIEW_CLAIM_HEADERS)
-  #     before labeling.
-  # (d) Reload ordering when labeling: ship _tenant_orgs.yaml BEFORE the
-  #     org-scoped rules in _rbac.yaml — the reverse order opens a window where
-  #     a rule restricts on orgs no tenant carries yet.
-  orgScopeEnforce: false
-
 # ── Tenant federation (ADR-020 IV-2m, issue #519) ───────────────────────────
 # Disabled by default. When enabled, tenant-api exposes
 # /api/v1/federation/tokens so a tenant can mint short-lived RS256 JWTs and

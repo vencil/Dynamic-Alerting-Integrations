@@ -63,7 +63,7 @@ func ListGroups(d *Deps) http.HandlerFunc {
 // hasAccessibleMember returns true if the user can access at least one member.
 // Org-aware read (ADR-027 / LD-6 P4c): each member tenant is checked through
 // OrgAllowedRead, so a group with only other-org members is hidden from an
-// org-scoped caller once the org flag flips (records on axis="org"). tenantOrg
+// org-scoped caller (records on axis="org"). tenantOrg
 // may be nil (nil-receiver-safe → unlabeled).
 func hasAccessibleMember(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal, members []string) bool {
 	for _, m := range members {
@@ -87,12 +87,7 @@ func hasAccessibleMember(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p 
 // member to authorize against, so it used to be visible to — and overwritable
 // and deletable by — every caller; a PUT can no longer create one (members:
 // min=1), and the admin is who can still see and remove one left from before.
-//
-// Open mode (no RBAC rules) sees everything, as before.
 func groupVisible(d *Deps, p *rbac.VerifiedPrincipal, members []string) bool {
-	if len(d.RBAC.Get().Groups) == 0 {
-		return true
-	}
 	if len(members) == 0 {
 		return d.RBAC.PlatformAdminUnrestricted(p)
 	}
@@ -127,9 +122,7 @@ var errGroupIDUnavailable = errors.New("group id is held by a group the caller c
 
 // filterAccessibleMembers returns only the members the user has read
 // access to. Members are tenant IDs themselves (so the identity
-// extractor `tenantIDFromString` is just `s -> s`). Open-mode RBAC
-// is handled inside filterByRBAC via OrgAllowedRead's open-mode
-// short-circuit.
+// extractor `tenantIDFromString` is just `s -> s`).
 func filterAccessibleMembers(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager, p *rbac.VerifiedPrincipal, members []string) []string {
 	return filterByRBAC(rbacMgr, tenantOrg, p, members, tenantIDFromString, rbac.PermRead)
 }
@@ -170,12 +163,9 @@ func GetGroup(d *Deps) http.HandlerFunc {
 		// the list view. Hide the group entirely (an identical 404 to a missing
 		// group, so existence leaks nothing) when the caller can read none of
 		// its members, mirroring ListGroups' skip; otherwise return only the
-		// members they can read. Byte-identical for deployments with no
-		// org-scope rules and in open mode (filterAccessibleMembers is the
-		// identity transform there). Where org-scope rules label member
-		// tenants, this filters them on the org axis exactly as ListGroups
-		// already does — labeled cross-org members drop in both shadow and
-		// enforce; the enforce flag only governs unlabeled-tenant leniency.
+		// members they can read. Where org-scope rules label member tenants,
+		// this filters them on the org axis exactly as ListGroups already
+		// does — cross-org and unlabeled members drop.
 		p := rbac.RequestPrincipal(r)
 		if !groupVisible(d, p, g.Members) {
 			writeGroupNotFound(w, r, groupID)

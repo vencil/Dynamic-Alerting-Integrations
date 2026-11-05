@@ -86,6 +86,50 @@ func newRBACManagerWithClaims(t *testing.T, yaml string, claimHeaders map[string
 	return mgr
 }
 
+// unrestrictedGroup is the IdP group unrestrictedRBAC's one rule names.
+const unrestrictedGroup = "platform-unrestricted"
+
+// unrestrictedGroups is unrestrictedGroup as runSearch's idpGroups argument.
+var unrestrictedGroups = []string{unrestrictedGroup}
+
+// unrestrictedRBAC returns a manager whose one rule grants read, write and
+// admin on every tenant ("*", no org-scope, environments or domains) to
+// unrestrictedGroup — an unrestricted platform admin
+// (rbac.PlatformAdminUnrestricted). There is no open mode (ADR-027 §7): a
+// manager with no rules denies everything, so a test that is not about
+// authorization uses this and sends unrestrictedGroup.
+func unrestrictedRBAC(t *testing.T) *rbac.Manager {
+	t.Helper()
+	return newRBACManager(t, `groups:
+  - name: `+unrestrictedGroup+`
+    tenants: ["*"]
+    permissions: [read, write, admin]
+`)
+}
+
+// asUnrestricted serves h behind mgr's read middleware on the platform route
+// gate (Middleware(PermRead, nil), as the list routes mount it), with the
+// request's groups set to unrestrictedGroup (and an email, when the request
+// carries none) — so a handler that reads the principal from the context
+// sees unrestrictedRBAC's caller.
+func asUnrestricted(mgr *rbac.Manager, h http.Handler) http.HandlerFunc {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Forwarded-Email") == "" {
+			r.Header.Set("X-Forwarded-Email", "platform-unrestricted@example.com")
+		}
+		r.Header.Set("X-Forwarded-Groups", unrestrictedGroup)
+		mgr.Middleware(rbac.PermRead, nil)(h).ServeHTTP(w, r)
+	})
+}
+
+// asUnrestrictedOn builds handler h over d with d.RBAC set to
+// unrestrictedRBAC and serves it as unrestrictedGroup (asUnrestricted).
+func asUnrestrictedOn(t *testing.T, h func(*Deps) http.HandlerFunc, d *Deps) http.HandlerFunc {
+	t.Helper()
+	d.RBAC = unrestrictedRBAC(t)
+	return asUnrestricted(d.RBAC, h(d))
+}
+
 // wrapWithRBACMiddleware wraps a handler with the RBAC middleware, setting
 // identity headers on the request.
 func wrapWithRBACMiddleware(handler http.HandlerFunc, mgr *rbac.Manager, perm rbac.Permission, tenantIDFn func(*http.Request) string) http.Handler {
@@ -290,7 +334,7 @@ func TestListTenants_Empty(t *testing.T) {
 	t.Parallel()
 	configDir := setupConfigDir(t, nil)
 
-	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListTenants, &Deps{ConfigDir: configDir})
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -314,7 +358,7 @@ func TestListTenants_MultipleTenants(t *testing.T) {
 		"db-b.yaml": "tenants:\n  db-b:\n    _state_maintenance: \"enable\"\n",
 	})
 
-	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListTenants, &Deps{ConfigDir: configDir})
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -356,7 +400,7 @@ func TestListTenants_SkipsHiddenAndDefaults(t *testing.T) {
 		"not-yaml.txt":   "not yaml",
 	})
 
-	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListTenants, &Deps{ConfigDir: configDir})
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -376,7 +420,7 @@ func TestListTenants_WithYmlExtension(t *testing.T) {
 		"db-c.yml": "tenants:\n  db-c:\n    mysql_threads_running: \"75\"\n",
 	})
 
-	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListTenants, &Deps{ConfigDir: configDir})
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -400,7 +444,7 @@ func TestListTenants_MalformedYAML(t *testing.T) {
 		"acme.yaml": "tenants:\n  acme:\n    mysql_threads_running: \"80\"\n",
 	})
 
-	h := ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListTenants, &Deps{ConfigDir: configDir})
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	w := httptest.NewRecorder()
 	h(w, req)
@@ -1214,7 +1258,7 @@ func TestFullRouter_ListTenants(t *testing.T) {
 
 	r := chi.NewRouter()
 	r.With(rbacMgr.Middleware(rbac.PermRead, nil)).
-		Get("/api/v1/tenants", ListTenants(&Deps{ConfigDir: configDir, RBAC: newRBACManager(t, "")}))
+		Get("/api/v1/tenants", asUnrestrictedOn(t, ListTenants, &Deps{ConfigDir: configDir}))
 
 	req := httptest.NewRequest("GET", "/api/v1/tenants", nil)
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
@@ -1339,7 +1383,9 @@ func TestMe_EmptyGroupsRendersAsArray(t *testing.T) {
 	req.Header.Set("X-Forwarded-Email", "anon@example.com")
 
 	w := httptest.NewRecorder()
-	wrapped := rbacMgr.Middleware(rbac.PermRead, nil)(handler)
+	// /me's production gate is identity-only (MiddlewareAuthenticated): a
+	// caller with no grant still reaches it.
+	wrapped := rbacMgr.MiddlewareAuthenticated()(handler)
 	wrapped.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {

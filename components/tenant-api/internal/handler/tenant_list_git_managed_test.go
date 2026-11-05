@@ -91,7 +91,7 @@ func TestLoadAllTenants_ManagementMarkers(t *testing.T) {
 func TestListTenants_ManagementMarkersJSON(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, lgFiles())
-	h := ListTenants(&Deps{ConfigDir: dir, RBAC: newRBACManager(t, "")})
+	h := asUnrestrictedOn(t, ListTenants, &Deps{ConfigDir: dir})
 	w := httptest.NewRecorder()
 	h(w, httptest.NewRequest(http.MethodGet, "/api/v1/tenants", nil))
 	if w.Code != http.StatusOK {
@@ -175,10 +175,8 @@ func TestListTenants_ManagementMatchesGet(t *testing.T) {
 // id's metadata (lgDeclared's, labeled staging / web), so the row's own is
 // UNKNOWN, not unlabeled. The row is metadata_incomplete and the list filter
 // decides it as a degraded row (rbac.ScopeAllowedUnknownMetadata): a caller
-// restricted on environments or domains does not see it, in shadow mode as in
-// enforce mode, although shadow mode lets an unlabeled tenant through. A
-// caller whose rule restricts neither axis still sees it. Breaking against
-// the behaviour before, where shadow mode showed it to restricted callers.
+// restricted on environments or domains does not see it. A caller whose rule
+// restricts neither axis still sees it.
 func TestListTenants_IDMismatchRowVisibility(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, map[string]string{
@@ -186,27 +184,16 @@ func TestListTenants_IDMismatchRowVisibility(t *testing.T) {
 		lgStem + ".yaml": fixtureTenantYAML(lgDeclared, "staging", "tier2", "web", "redis", "bob"),
 	})
 	for _, c := range []struct {
-		enforce bool
-		group   string
-		want    []string
+		group string
+		want  []string
 	}{
-		{false, "all-tenants", []string{lgOwn, lgStem}},
-		{false, "prod-only", []string{lgOwn}}, // no unlabeled leniency: unknown
-		{false, "db-only", []string{lgOwn}},
-		{true, "all-tenants", []string{lgOwn, lgStem}},
-		{true, "prod-only", []string{lgOwn}},
-		{true, "db-only", []string{lgOwn}},
+		{"all-tenants", []string{lgOwn, lgStem}},
+		{"prod-only", []string{lgOwn}},
+		{"db-only", []string{lgOwn}},
 	} {
-		mode := "metadata=shadow"
-		if c.enforce {
-			mode = "metadata=enforce"
-		}
-		t.Run(mode+"/"+c.group, func(t *testing.T) {
+		t.Run(c.group, func(t *testing.T) {
 			t.Parallel()
 			mgr := newRBACManager(t, degradedRBACYAML)
-			if c.enforce {
-				mgr.EnableMetadataScopeEnforce()
-			}
 			rows := listTenantsAs(t, dir, mgr, c.group)
 			if got := idsOf(rows); !reflect.DeepEqual(got, c.want) {
 				t.Errorf("ids = %v, want %v", got, c.want)

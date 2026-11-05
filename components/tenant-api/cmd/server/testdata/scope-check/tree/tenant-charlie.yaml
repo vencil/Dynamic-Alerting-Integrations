@@ -1,0 +1,5 @@
+# No domain: a finance-readers finding.
+tenants:
+  tenant-charlie:
+    _metadata:
+      environment: staging

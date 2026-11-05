@@ -71,7 +71,7 @@ tenant-api 透過 `_rbac.yaml` 控制 API 層級的讀寫權限。RBAC Manager �
 | Helm chart | `/etc/rbac/_rbac.yaml` | ConfigMap `rbac-config`（內容來自 values 的 `rbac._rbacYaml`） |
 | try-local / QUICKSTART | `/conf.d/_rbac.yaml` | `conf.d` 目錄本身 |
 
-**空設定的行為是 fail-closed，不是 open-read**：只要指定了 `--rbac` 路徑（上表三種姿態皆是），檔案不存在或群組為空即 **一律拒絕，含讀取**。只有兩種情況會進入 open-read mode（所有已認證使用者可讀、無人可寫）：完全沒有設定 RBAC 路徑（既不帶 `--rbac`、也不設 `TA_RBAC_PATH`），或明示 `--rbac-empty-open` / `TA_RBAC_EMPTY_OPEN=true`——出貨資產均未設定後者。`--rbac=` 或 `TA_RBAC_PATH` 設成空字串**不會**進 open-read，而是拒絕啟動：模板沒渲染到值時，不該靜默把全部租戶開放讀取（[#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)）。
+**沒有 open mode：沒有規則就一律拒絕，含讀取**。完全沒有設定 RBAC 路徑（既不帶 `--rbac`、也不設 `TA_RBAC_PATH`）、檔案不存在、或檔內沒有任何規則（群組為空），都 **拒絕所有存取，含讀取**。早期版本在未設 RBAC 路徑時進入 open-read mode（所有已認證使用者可讀、無人可寫），並有 `--rbac-empty-open` / `TA_RBAC_EMPTY_OPEN` 可在空設定下恢復它；兩者都已刪除（[ADR-027](adr/027-tenant-api-caller-identity.md) §7），部署仍帶著該環境變數時，tenant-api 以「未知 `TA_*` 變數」拒絕啟動。`--rbac=` 或 `TA_RBAC_PATH` 設成空字串則拒絕啟動：模板沒渲染到值是設定錯誤，該在啟動時就看見（[#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)）。
 
 ### RBAC 救援 SOP（Break-Glass Procedure）
 
@@ -110,7 +110,7 @@ git push
 
 **⛔ 不要刪除 `_rbac.yaml`**
 
-本節早期版本曾建議「刪掉 `_rbac.yaml` 回到 open-read mode 恢復可見性」。實際行為與此相反，且兩種姿態各自不同：
+本節早期版本曾建議「刪掉 `_rbac.yaml` 回到 open-read mode 恢復可見性」。即使在 open-read mode 還存在時，實際行為也與此相反；現在它已刪除（見上方 API RBAC 一節）。刪檔的效果依姿態而異：
 
 - **ConfigMap 來源**：刪掉 git 裡的 `conf.d/_rbac.yaml` 是 no-op——RBAC 不讀那個路徑，權限完全不變。
 - **`conf.d` 來源**：檔案消失即空群組集，fail-closed 生效 → **全站 403（含讀取）**，比原本的狀態更糟。

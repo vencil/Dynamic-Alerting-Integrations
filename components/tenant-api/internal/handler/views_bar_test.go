@@ -2,7 +2,7 @@ package handler
 
 // #3160: the saved-views bar. A view belongs to no tenant and no org, so the
 // views handlers bar on a "*" rule WITHOUT org-scope (rbac.PlatformNonOrgScoped)
-// — read for GET (open mode reads too, via readsViews), write for PUT/DELETE.
+// — read for GET (via readsViews), write for PUT/DELETE.
 // The route gates (Middleware(perm, nil)) are org-blind and admit an
 // org-scoped "*" rule; every 403 below therefore comes from the handler. The
 // requests go through that same route gate, as routed in production.
@@ -63,13 +63,9 @@ func viewsBarDeps(t *testing.T, rbacMgr *rbac.Manager) (*Deps, string) {
 	}, configDir
 }
 
-func viewsBarRBAC(t *testing.T, enforce bool) *rbac.Manager {
+func viewsBarRBAC(t *testing.T) *rbac.Manager {
 	t.Helper()
-	m := newRBACManagerWithClaims(t, viewsBarRBACYAML, map[string]string{"org": orgEnfClaimHeader})
-	if enforce {
-		m.EnableOrgScopeEnforce()
-	}
-	return m
+	return newRBACManagerWithClaims(t, viewsBarRBACYAML, map[string]string{"org": orgEnfClaimHeader})
 }
 
 func viewsBarIdentity(req *http.Request, group, org string) *http.Request {
@@ -125,134 +121,127 @@ func viewsBarFile(t *testing.T, configDir string) string {
 
 func TestViewsBar_OrgScopedStarRefused(t *testing.T) {
 	t.Parallel()
-	for _, mode := range []struct {
-		name    string
-		enforce bool
-	}{{"enforce", true}, {"shadow", false}} {
-		t.Run(mode.name, func(t *testing.T) {
-			t.Parallel()
-
-			// Writes: an org-scoped "*" writer is refused whatever org it
-			// carries, and _views.yaml is left byte-identical.
-			for _, method := range []string{"PUT", "DELETE"} {
-				for _, org := range []string{orgEnfMemberOrg, orgEnfOutsiderOrg} {
-					t.Run(method+"_org_scoped_403_unchanged_"+org, func(t *testing.T) {
-						t.Parallel()
-						d, configDir := viewsBarDeps(t, viewsBarRBAC(t, mode.enforce))
-						w := viewsBarCall(t, d, method, viewsBarOrgGroup, org)
-						if w.Code != http.StatusForbidden {
-							t.Fatalf("status = %d, want 403 for an org-scoped \"*\" writer; body=%s", w.Code, w.Body.String())
-						}
-						if !strings.Contains(w.Body.String(), "non-org-scoped") {
-							t.Errorf("403 body does not name the non-org-scoped bar; body=%s", w.Body.String())
-						}
-						if got := viewsBarFile(t, configDir); got != viewsBarSeed {
-							t.Errorf("denied %s changed _views.yaml:\n got %q\nwant %q", method, got, viewsBarSeed)
-						}
-					})
-				}
-			}
-
-			// Contrast: a non-org-scoped "*" writer writes.
-			t.Run("PUT_non_org_scoped_200_written", func(t *testing.T) {
+	// Writes: an org-scoped "*" writer is refused whatever org it
+	// carries, and _views.yaml is left byte-identical.
+	for _, method := range []string{"PUT", "DELETE"} {
+		for _, org := range []string{orgEnfMemberOrg, orgEnfOutsiderOrg} {
+			t.Run(method+"_org_scoped_403_unchanged_"+org, func(t *testing.T) {
 				t.Parallel()
-				d, configDir := viewsBarDeps(t, viewsBarRBAC(t, mode.enforce))
-				w := viewsBarCall(t, d, "PUT", viewsBarPlatformGroup, orgEnfOutsiderOrg)
-				if w.Code != http.StatusOK {
-					t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
-				}
-				if !strings.Contains(viewsBarFile(t, configDir), viewsBarNewID+":") {
-					t.Errorf("allowed PUT did not write view %q: %s", viewsBarNewID, viewsBarFile(t, configDir))
-				}
-			})
-			t.Run("DELETE_non_org_scoped_200_removed", func(t *testing.T) {
-				t.Parallel()
-				d, configDir := viewsBarDeps(t, viewsBarRBAC(t, mode.enforce))
-				w := viewsBarCall(t, d, "DELETE", viewsBarPlatformGroup, "")
-				if w.Code != http.StatusOK {
-					t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
-				}
-				if strings.Contains(viewsBarFile(t, configDir), viewsBarSeedID+":") {
-					t.Errorf("allowed DELETE left view %q in place", viewsBarSeedID)
-				}
-			})
-			// A non-org-scoped "*" READER may not write: the level is the
-			// caller's, not a bare "is non-org-scoped" check.
-			t.Run("PUT_non_org_scoped_reader_403", func(t *testing.T) {
-				t.Parallel()
-				d, configDir := viewsBarDeps(t, viewsBarRBAC(t, mode.enforce))
-				w := viewsBarCall(t, d, "PUT", viewsBarReaderGroup, "")
+				d, configDir := viewsBarDeps(t, viewsBarRBAC(t))
+				w := viewsBarCall(t, d, method, viewsBarOrgGroup, org)
 				if w.Code != http.StatusForbidden {
-					t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+					t.Fatalf("status = %d, want 403 for an org-scoped \"*\" writer; body=%s", w.Code, w.Body.String())
+				}
+				if !strings.Contains(w.Body.String(), "non-org-scoped") {
+					t.Errorf("403 body does not name the non-org-scoped bar; body=%s", w.Body.String())
 				}
 				if got := viewsBarFile(t, configDir); got != viewsBarSeed {
-					t.Errorf("denied PUT changed _views.yaml: %q", got)
+					t.Errorf("denied %s changed _views.yaml:\n got %q\nwant %q", method, got, viewsBarSeed)
 				}
 			})
+		}
+	}
 
-			// Reads: an org-scoped "*" reader is refused both GETs; a
-			// non-org-scoped one reads, environment-restricted or not.
-			for _, method := range []string{"LIST", "GET"} {
-				t.Run(method+"_org_scoped_403", func(t *testing.T) {
-					t.Parallel()
-					d, _ := viewsBarDeps(t, viewsBarRBAC(t, mode.enforce))
-					w := viewsBarCall(t, d, method, viewsBarOrgGroup, orgEnfMemberOrg)
-					if w.Code != http.StatusForbidden {
-						t.Fatalf("status = %d, want 403 for an org-scoped \"*\" reader; body=%s", w.Code, w.Body.String())
-					}
-					if strings.Contains(w.Body.String(), "Seeded") {
-						t.Errorf("403 body carries view content: %s", w.Body.String())
-					}
-				})
-				for _, group := range []string{viewsBarReaderGroup, viewsBarEnvGroup} {
-					t.Run(method+"_non_org_scoped_200_"+group, func(t *testing.T) {
-						t.Parallel()
-						d, _ := viewsBarDeps(t, viewsBarRBAC(t, mode.enforce))
-						w := viewsBarCall(t, d, method, group, "")
-						if w.Code != http.StatusOK {
-							t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
-						}
-						if !strings.Contains(w.Body.String(), "Seeded") {
-							t.Errorf("200 body lacks the seeded view: %s", w.Body.String())
-						}
-					})
-				}
+	// Contrast: a non-org-scoped "*" writer writes.
+	t.Run("PUT_non_org_scoped_200_written", func(t *testing.T) {
+		t.Parallel()
+		d, configDir := viewsBarDeps(t, viewsBarRBAC(t))
+		w := viewsBarCall(t, d, "PUT", viewsBarPlatformGroup, orgEnfOutsiderOrg)
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if !strings.Contains(viewsBarFile(t, configDir), viewsBarNewID+":") {
+			t.Errorf("allowed PUT did not write view %q: %s", viewsBarNewID, viewsBarFile(t, configDir))
+		}
+	})
+	t.Run("DELETE_non_org_scoped_200_removed", func(t *testing.T) {
+		t.Parallel()
+		d, configDir := viewsBarDeps(t, viewsBarRBAC(t))
+		w := viewsBarCall(t, d, "DELETE", viewsBarPlatformGroup, "")
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+		}
+		if strings.Contains(viewsBarFile(t, configDir), viewsBarSeedID+":") {
+			t.Errorf("allowed DELETE left view %q in place", viewsBarSeedID)
+		}
+	})
+	// A non-org-scoped "*" READER may not write: the level is the
+	// caller's, not a bare "is non-org-scoped" check.
+	t.Run("PUT_non_org_scoped_reader_403", func(t *testing.T) {
+		t.Parallel()
+		d, configDir := viewsBarDeps(t, viewsBarRBAC(t))
+		w := viewsBarCall(t, d, "PUT", viewsBarReaderGroup, "")
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("status = %d, want 403; body=%s", w.Code, w.Body.String())
+		}
+		if got := viewsBarFile(t, configDir); got != viewsBarSeed {
+			t.Errorf("denied PUT changed _views.yaml: %q", got)
+		}
+	})
+
+	// Reads: an org-scoped "*" reader is refused both GETs; a
+	// non-org-scoped one reads, environment-restricted or not.
+	for _, method := range []string{"LIST", "GET"} {
+		t.Run(method+"_org_scoped_403", func(t *testing.T) {
+			t.Parallel()
+			d, _ := viewsBarDeps(t, viewsBarRBAC(t))
+			w := viewsBarCall(t, d, method, viewsBarOrgGroup, orgEnfMemberOrg)
+			if w.Code != http.StatusForbidden {
+				t.Fatalf("status = %d, want 403 for an org-scoped \"*\" reader; body=%s", w.Code, w.Body.String())
+			}
+			if strings.Contains(w.Body.String(), "Seeded") {
+				t.Errorf("403 body carries view content: %s", w.Body.String())
 			}
 		})
+		for _, group := range []string{viewsBarReaderGroup, viewsBarEnvGroup} {
+			t.Run(method+"_non_org_scoped_200_"+group, func(t *testing.T) {
+				t.Parallel()
+				d, _ := viewsBarDeps(t, viewsBarRBAC(t))
+				w := viewsBarCall(t, d, method, group, "")
+				if w.Code != http.StatusOK {
+					t.Fatalf("status = %d, want 200; body=%s", w.Code, w.Body.String())
+				}
+				if !strings.Contains(w.Body.String(), "Seeded") {
+					t.Errorf("200 body lacks the seeded view: %s", w.Body.String())
+				}
+			})
+		}
 	}
 }
 
-// Open mode (no _rbac.yaml) still reads the views — through the route gate
-// and, called bare, through the handler's own bar — and still may not write
-// them (open mode grants read only). The fail-closed-empty state (a configured
-// _rbac.yaml with zero groups) reads nothing, in the handler as at the route.
+// No _rbac.yaml reads nothing and writes nothing — through the route gate
+// and, called bare, through the handler's own bar (ADR-027 §7: there is no
+// open mode). A configured _rbac.yaml with zero groups is the same.
 func TestViewsBar_ZeroGroupStates(t *testing.T) {
 	t.Parallel()
-	t.Run("open_mode_reads", func(t *testing.T) {
+	t.Run("no_rbac_reads_nothing", func(t *testing.T) {
 		t.Parallel()
 		for _, method := range []string{"LIST", "GET"} {
 			d, _ := viewsBarDeps(t, newRBACManager(t, ""))
-			if w := viewsBarCall(t, d, method, "anyone", ""); w.Code != http.StatusOK {
-				t.Fatalf("%s: status = %d, want 200 in open mode; body=%s", method, w.Code, w.Body.String())
+			if w := viewsBarCall(t, d, method, "anyone", ""); w.Code != http.StatusForbidden {
+				t.Fatalf("%s: status = %d, want 403 with no _rbac.yaml; body=%s", method, w.Code, w.Body.String())
 			}
 		}
 	})
-	t.Run("open_mode_handler_bar", func(t *testing.T) {
+	t.Run("no_rbac_handler_bar", func(t *testing.T) {
 		t.Parallel()
 		d, configDir := viewsBarDeps(t, newRBACManager(t, ""))
 		w := httptest.NewRecorder()
 		ListViews(d)(w, httptest.NewRequest("GET", "/api/v1/views", nil))
-		if w.Code != http.StatusOK {
-			t.Fatalf("bare ListViews: status = %d, want 200 in open mode; body=%s", w.Code, w.Body.String())
+		if w.Code != http.StatusForbidden {
+			t.Fatalf("bare ListViews: status = %d, want 403 with no _rbac.yaml; body=%s", w.Code, w.Body.String())
+		}
+		if strings.Contains(w.Body.String(), "Seeded") {
+			t.Errorf("bare ListViews 403 body carries view content: %s", w.Body.String())
 		}
 		pw := httptest.NewRecorder()
 		PutView(d)(pw, newRequestWithChiParam("PUT", "/api/v1/views/"+viewsBarNewID, "id", viewsBarNewID,
 			bytes.NewBufferString(`{"label":"Fresh","filters":{"environment":"staging"}}`)))
 		if pw.Code != http.StatusForbidden {
-			t.Fatalf("bare PutView: status = %d, want 403 in open mode; body=%s", pw.Code, pw.Body.String())
+			t.Fatalf("bare PutView: status = %d, want 403 with no _rbac.yaml; body=%s", pw.Code, pw.Body.String())
 		}
 		if got := viewsBarFile(t, configDir); got != viewsBarSeed {
-			t.Errorf("open-mode PUT changed _views.yaml: %q", got)
+			t.Errorf("PUT with no _rbac.yaml changed _views.yaml: %q", got)
 		}
 	})
 	t.Run("fail_closed_empty_reads_nothing", func(t *testing.T) {
@@ -275,7 +264,7 @@ func TestViewsBar_ZeroGroupStates(t *testing.T) {
 // not (#3160).
 func TestViewsBar_EventMatchesGET(t *testing.T) {
 	t.Parallel()
-	m := viewsBarRBAC(t, true)
+	m := viewsBarRBAC(t)
 	d := &Deps{RBAC: m}
 	viewsEvt := StateChangeEvent(viewsEntity)
 	groupsEvt := StateChangeEvent("groups")
@@ -300,9 +289,9 @@ func TestViewsBar_EventMatchesGET(t *testing.T) {
 			t.Errorf("%s: groups event visible = %v, want %v", c.group, got, c.wantGroups)
 		}
 	}
-	open := &Deps{RBAC: newRBACManager(t, "")}
-	if !eventVisible(open, &rbac.VerifiedPrincipal{Groups: []string{"anyone"}}, viewsEvt) {
-		t.Errorf("open mode lost the views event")
+	noRBAC := &Deps{RBAC: newRBACManager(t, "")}
+	if eventVisible(noRBAC, &rbac.VerifiedPrincipal{Groups: []string{"anyone"}}, viewsEvt) {
+		t.Errorf("no _rbac.yaml received the views event (ADR-027 §7: no open mode)")
 	}
 	closed := &Deps{RBAC: newRBACManager(t, "groups: []\n")}
 	if eventVisible(closed, &rbac.VerifiedPrincipal{Groups: []string{"anyone"}}, viewsEvt) {

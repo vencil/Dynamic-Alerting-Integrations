@@ -10,47 +10,46 @@
  *       still print, an absent axis must print the sentinel, not '').
  *   R5  identity is `.index` (a cfg.Groups position, NOT a grants[] offset).
  *       findByIndex NEVER subscripts; callers handle undefined.
- *   R8  verdict/mode tokens gloss with an unknown-value passthrough — two
- *       zero-rule modes (open_read / fail_closed_empty) emit the same diff and
- *       mean the opposite, so the band token is the only discriminator.
+ *   R8  verdict/mode tokens gloss with an unknown-value passthrough, so a
+ *       server that grows a new enum value shows the raw token.
  *   R9  grantSetIdentical is SET ARITHMETIC over server output (never authz /
  *       match / redaction re-derivation); single-directional (only ever
  *       reports "differ"); excludes index. Caller guards it to the full view.
  */
 
 // ── Token gloss maps (verbatim token → bilingual gloss) ────────────────────
-// Values mirror reverse.go: outcome tokens :74-77, verdict tokens :58-64,
-// mode tokens :44-55. An unknown token is passed through verbatim (R8) so a
+// Values mirror components/tenant-api/internal/rbac/reverse.go: the
+// OrgOutcome*, ReverseVerdict* and ReverseMode* constants. An unknown token is passed through verbatim (R8) so a
 // server that grows a new enum value degrades to "show the raw token" rather
 // than rendering blank or throwing.
 
 const OUTCOME_GLOSS = Object.freeze({
   not_required: { zh: '無需 org 範圍', en: 'org scope not required' },
   conditional_on_caller_org: { zh: '取決於呼叫者 org 值', en: 'conditional on caller org' },
-  pass_unlabeled: { zh: '未標記租戶：shadow 放行', en: 'unlabeled tenant: shadow passes' },
-  fail_unlabeled: { zh: '未標記租戶：enforce 拒絕', en: 'unlabeled tenant: enforce denies' },
+  fail_unlabeled: { zh: '未標記租戶：拒絕', en: 'unlabeled tenant: denied' },
 });
 
 const VERDICT_GLOSS = Object.freeze({
   grants_found: { zh: '有授權', en: 'grants found' },
   no_grants: { zh: '無授權', en: 'no grants' },
-  open_read: { zh: '開放讀取——任何已認證者皆可讀', en: 'open read — any authenticated caller can read' },
-  fail_closed_empty: { zh: '全部拒絕——fail-closed 空配置', en: 'all denied — fail-closed empty config' },
+  fail_closed_empty: { zh: '全部拒絕——沒有任何規則', en: 'all denied — no rules' },
 });
 
 const MODE_GLOSS = Object.freeze({
   rules: { zh: '規則模式', en: 'rules' },
-  open_read: { zh: '開放讀取模式', en: 'open read' },
-  fail_closed_empty: { zh: 'fail-closed 空配置模式', en: 'fail-closed empty' },
+  fail_closed_empty: { zh: '無規則（全部拒絕）', en: 'no rules (all denied)' },
 });
 
 // ── Frozen render driver (R2) ──────────────────────────────────────────────
-// The three diffable axes, in a fixed order. The renderer maps over THIS —
-// never Object.keys(row) — so a false-valued or absent axis can never vanish.
+// The three diffable axes the server classifies (audit_dryrun.go
+// changedEntry), in a fixed order. The renderer maps over THIS — never
+// Object.keys(row) — so a false-valued or absent axis can never vanish.
+// claim_key is absent in the redacted view (a claim identifier), where it
+// renders as unchanged like any absent axis.
 const AXES = Object.freeze([
-  Object.freeze({ key: 'outcome_shadow', labelZh: 'Org 閘門（shadow）', labelEn: 'Org gate (shadow)' }),
-  Object.freeze({ key: 'outcome_enforce', labelZh: 'Org 閘門（enforce）', labelEn: 'Org gate (enforce)' }),
+  Object.freeze({ key: 'outcome', labelZh: 'Org 閘門', labelEn: 'Org gate' }),
   Object.freeze({ key: 'unsatisfiable', labelZh: '無法滿足', labelEn: 'Unsatisfiable' }),
+  Object.freeze({ key: 'claim_key', labelZh: 'Org claim key', labelEn: 'Org claim key' }),
 ]);
 
 const defaultT = (zh, en) => en;
@@ -77,7 +76,8 @@ function fmtBool(v, t) {
 
 // fmtAxis renders ONE axis delta to {absent} | {from,to} display strings.
 // A boolean-valued delta (unsatisfiable) glosses via fmtBool; a string-valued
-// delta (the two outcome axes) glosses via the outcome token map. An
+// delta glosses via the outcome token map (a claim key is not a token there
+// and passes through verbatim). An
 // absent/undefined delta returns the "未變更 / unchanged" sentinel (R2) — never
 // blank, never undefined.
 function fmtAxis(delta, t) {

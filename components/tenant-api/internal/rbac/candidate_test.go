@@ -2,8 +2,8 @@ package rbac
 
 // Candidate-config seam tests (ADR-027 / LD-6 P7): the dry-run's value rests
 // on two invariants — a candidate report is indistinguishable from a
-// path-loaded report except for the anchor (fidelity), and the empty-config
-// verdict follows the LIVE fail-closed bit, never a zero value (tripwire).
+// path-loaded report except for the anchor (fidelity), and an empty candidate
+// reports fail_closed_empty exactly as a live manager does (ADR-027 §7).
 // The parse table pins that ParseCandidateConfig keeps the full live
 // pipeline (strict decode / null-match detection / claim-key validation).
 
@@ -48,7 +48,7 @@ func TestNewCandidate_FidelityWithPathLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseCandidateConfig: %v", err)
 	}
-	cand := NewCandidate(cfg, live.EvaluationMode())
+	cand := NewCandidate(cfg)
 
 	orgs := []string{"ORG-1", "ORG-9"}
 	opts := ReverseReportOptions{IncludeOrgValues: true}
@@ -70,57 +70,37 @@ func TestNewCandidate_FidelityWithPathLoad(t *testing.T) {
 	}
 }
 
-// Fidelity under enforce: an enforce-enabled deployment must produce a
-// candidate report whose runtime enforce flags match the live side. A
-// constructor that cloned only failClosedOnEmpty (the original bug) would emit
-// candidate flags of false while the baseline reads true — a spurious "not
-// comparable" signal against the flags-parity contract. Pins that
-// EvaluationMode carries the enforce bits.
-func TestNewCandidate_FidelityUnderEnforce(t *testing.T) {
-	_, rbacFile := testutil.MkTempYAML(t, "_rbac.yaml", candidateFidelityYAML)
-	live, err := NewManager(rbacFile, candidateClaimHeaders)
-	if err != nil {
-		t.Fatalf("NewManager: %v", err)
-	}
-	live.EnableMetadataScopeEnforce()
-	live.EnableOrgScopeEnforce()
-
-	cfg, err := ParseCandidateConfig([]byte(candidateFidelityYAML), candidateClaimHeaders)
-	if err != nil {
-		t.Fatalf("ParseCandidateConfig: %v", err)
-	}
-	cand := NewCandidate(cfg, live.EvaluationMode())
-
-	rep := cand.ReverseAccessReport("db-team-1", []string{"ORG-1"}, true, "torgs-h", ReverseReportOptions{})
-	if !rep.Flags.OrgScopeEnforce.Value {
-		t.Errorf("candidate org_scope_enforce = false, want true (live enforce bit not cloned)")
-	}
-	if !rep.Flags.MetadataScopeEnforce.Value {
-		t.Errorf("candidate metadata_scope_enforce = false, want true (live enforce bit not cloned)")
-	}
-}
-
-// Tripwire: an empty candidate under a fail-closed deployment must report
-// fail_closed_empty — a constructor that dropped the bit (e.g. wrapping
-// NewForTest's zero value) would report open_read, inverting the verdict an
-// operator is about to act on. Both wire states are pinned.
-func TestNewCandidate_EmptyConfigFollowsFailClosedBit(t *testing.T) {
+// Empty candidate: a candidate with zero groups reports fail_closed_empty —
+// there is no open_read state any more (ADR-027 §7), and no live mode bit can
+// change that. Pinned against both a path-less live manager and a configured
+// path that parses to zero groups, so a candidate can never claim a verdict
+// the same bytes would not produce once deployed.
+func TestNewCandidate_EmptyConfigIsFailClosed(t *testing.T) {
 	opts := ReverseReportOptions{}
 
-	rep := NewCandidate(&RBACConfig{}, CandidateMode{FailClosedOnEmpty: true}).ReverseAccessReport("db-x", nil, false, "", opts)
+	rep := NewCandidate(&RBACConfig{}).ReverseAccessReport("cand-x", nil, false, "", opts)
 	if rep.Mode != ReverseModeFailClosedEmpty {
-		t.Errorf("fail-closed candidate mode = %q, want %q", rep.Mode, ReverseModeFailClosedEmpty)
+		t.Errorf("empty candidate mode = %q, want %q", rep.Mode, ReverseModeFailClosedEmpty)
 	}
 	if rep.Verdict != ReverseVerdictFailClosedEmpty {
-		t.Errorf("fail-closed candidate verdict = %q, want %q", rep.Verdict, ReverseVerdictFailClosedEmpty)
+		t.Errorf("empty candidate verdict = %q, want %q", rep.Verdict, ReverseVerdictFailClosedEmpty)
 	}
 
-	rep = NewCandidate(&RBACConfig{}, CandidateMode{}).ReverseAccessReport("db-x", nil, false, "", opts)
-	if rep.Mode != ReverseModeOpenRead {
-		t.Errorf("open candidate mode = %q, want %q", rep.Mode, ReverseModeOpenRead)
+	pathless, err := NewManager("", nil)
+	if err != nil {
+		t.Fatalf("NewManager(\"\"): %v", err)
 	}
-	if rep.Verdict != ReverseVerdictOpenRead {
-		t.Errorf("open candidate verdict = %q, want %q", rep.Verdict, ReverseVerdictOpenRead)
+	_, emptyFile := testutil.MkTempYAML(t, "_rbac.yaml", "groups: []\n")
+	configured, err := NewManager(emptyFile, nil)
+	if err != nil {
+		t.Fatalf("NewManager(empty file): %v", err)
+	}
+	for name, live := range map[string]*Manager{"path-less": pathless, "configured-empty": configured} {
+		liveRep := live.ReverseAccessReport("cand-x", nil, false, "", opts)
+		if liveRep.Mode != rep.Mode || liveRep.Verdict != rep.Verdict {
+			t.Errorf("[%s] live mode/verdict = %q/%q, candidate = %q/%q — must agree",
+				name, liveRep.Mode, liveRep.Verdict, rep.Mode, rep.Verdict)
+		}
 	}
 }
 

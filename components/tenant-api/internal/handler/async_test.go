@@ -178,7 +178,7 @@ func TestGroupBatch_Async_ReturnsTaskID(t *testing.T) {
 
 	groupMgr := groups.NewDirManager(configDir)
 	writer := newTestWriter(configDir)
-	rbacMgr := newRBACManager(t, "")
+	rbacMgr := unrestrictedRBAC(t)
 	taskMgr := async.NewManager(2)
 	defer taskMgr.Close()
 
@@ -198,7 +198,7 @@ func TestGroupBatch_Async_ReturnsTaskID(t *testing.T) {
 	req.Header.Set("X-Forwarded-Email", "test@example.com")
 
 	w := httptest.NewRecorder()
-	GroupBatch(deps)(w, req)
+	asUnrestricted(rbacMgr, GroupBatch(deps))(w, req)
 
 	if w.Code != http.StatusAccepted {
 		t.Fatalf("status = %d, want %d (Accepted), body: %s", w.Code, http.StatusAccepted, w.Body.String())

@@ -50,25 +50,16 @@ func TestTenantsLackingPermission_EmptyInput(t *testing.T) {
 	}
 }
 
-func TestTenantsLackingPermission_OpenModeRead(t *testing.T) {
+// No rules (no _rbac.yaml) grant nothing — read included (ADR-027 §7:
+// there is no open mode) — so every tenant is lacking, whatever the level.
+func TestTenantsLackingPermission_NoRulesRejectsAll(t *testing.T) {
 	t.Parallel()
-	// Open-mode RBAC grants PermRead to any caller. tenantsLackingPermission
-	// for PermRead in open mode returns empty (no restrictions).
 	rbacMgr := newRBACManager(t, "")
-	got := tenantsLackingPermission(rbacMgr, nil, principalWithGroups("any"), []string{"db-a", "db-b"}, rbac.PermRead, nil)
-	if len(got) != 0 {
-		t.Errorf("open-mode read: got %v, want empty", got)
-	}
-}
-
-func TestTenantsLackingPermission_OpenModeWriteRejectsAll(t *testing.T) {
-	t.Parallel()
-	// Open-mode RBAC does NOT grant PermWrite (intentional —
-	// missing _rbac.yaml is a pre-prod state, writes should fail).
-	rbacMgr := newRBACManager(t, "")
-	got := tenantsLackingPermission(rbacMgr, nil, principalWithGroups("any"), []string{"db-a", "db-b"}, rbac.PermWrite, nil)
-	if len(got) != 2 {
-		t.Errorf("open-mode write: got %v, want all 2 forbidden", got)
+	for _, want := range []rbac.Permission{rbac.PermRead, rbac.PermWrite} {
+		got := tenantsLackingPermission(rbacMgr, nil, principalWithGroups("any"), []string{"db-a", "db-b"}, want, nil)
+		if len(got) != 2 {
+			t.Errorf("no rules, %s: got %v, want all 2 forbidden", want, got)
+		}
 	}
 }
 
@@ -438,8 +429,8 @@ func principalWithGroups(groups ...string) *rbac.VerifiedPrincipal {
 	return &rbac.VerifiedPrincipal{Groups: groups}
 }
 
-// servePopulatingRBAC drives `inner` through a no-op RBAC middleware
-// (open-mode manager, PermRead) so that `rbac.RequestEmail` and
+// servePopulatingRBAC drives `inner` through the identity-only RBAC
+// middleware (MiddlewareAuthenticated: no grant required) so that `rbac.RequestEmail` and
 // `rbac.RequestGroups` see the values inside `inner` — the same way
 // production handlers see them after the route-level RBAC middleware
 // runs. We cannot just `req.WithContext(rbacContextHelper(...))`
@@ -457,7 +448,7 @@ func servePopulatingRBAC(t *testing.T, inner http.HandlerFunc, req *http.Request
 		req.Header.Set("X-Forwarded-Groups", joinGroups(idpGroups))
 	}
 	mgr, _ := rbac.NewManager("", nil)
-	wrapped := mgr.Middleware(rbac.PermRead, nil)(inner)
+	wrapped := mgr.MiddlewareAuthenticated()(inner)
 	rec := httptest.NewRecorder()
 	wrapped.ServeHTTP(rec, req)
 	return rec

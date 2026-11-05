@@ -9,14 +9,14 @@ tracking_kind: adr
 status: accepted
 domain: platform
 created_at: 2026-08-23
-updated_at: 2026-10-13
+updated_at: 2026-11-05
 ---
 
 # ADR-034: 合法值不得同時當作無法辨識時的 fallback
 
 ## 狀態
 
-✅ **Accepted**（2026-08-23 起草，2026-08-29 由 owner 核可）。本規則自核可起生效。2026-10-13 修訂：案例一補上「空值」的判準（設成空字串的 `TA_WRITE_MODE` 拒絕啟動）。
+✅ **Accepted**（2026-08-23 起草，2026-08-29 由 owner 核可）。本規則自核可起生效。2026-10-13 修訂：案例一補上「空值」的判準（設成空字串的 `TA_WRITE_MODE` 拒絕啟動）。2026-11-05 修訂：案例二舉例的三個 RBAC 環境變數已依 [ADR-027](027-tenant-api-caller-identity.md) §7 刪除，相關句子改為現況。
 
 > 依語言政策（自 ADR-019 起預設 ZH-only；ADR-024 / ADR-025 為保留 `.en.md` sibling 的例外），本 ADR 不另製 `.en.md`。
 
@@ -111,7 +111,7 @@ default:                  → 直接 commit
 **已於本規則生效後修正**（`parseWriteMode` + `wirePRBackend`）。四件值得記下的，因為它們是「套用本規則」在真實程式碼上的具體形狀：
 
 - **`default:` 分支不再是任何合法值的家。** `direct` 升為具名 `case`，`default:` 改成 `log.Fatalf("BUG: ...")`。這一步不是為了擋使用者輸入（那由 `parseWriteMode` 擋掉了），而是擋**下一次的自己**：往合法值集合加第五個模式卻忘了配線，會 fail-loud，而不是無聲落回 direct commit-on-write——那正是本 ADR 講的同一個形狀，只是往上挪了一層。
-- **設成空字串不等於沒設。** 環境變數 `TA_WRITE_MODE` 沒設時沿用預設的 `direct`；設成空字串或只有空白（常見於 Helm、Kustomize、Compose 模板沒渲染到值）則拒絕啟動，不會當成沒設而落到 `direct`。判準是：**空值只能落到偏保守的預設值；預設值是比較開放的那一側時，空值必須拒絕。** 案例二的布林旗標預設值都是 `false`（不放寬），所以那裡把空白當成沒設；`direct` 是不經審核的那一側，所以這裡不行。同一條判準也套用在 tenant-api 的 RBAC 路徑：它不是列舉值、不在本規則範圍內，但空路徑會進入「所有已認證身分可讀」的 open-read 模式，失敗形狀相同，所以空值一樣拒絕；要 open-read 就完全不設。追蹤於 [#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)。
+- **設成空字串不等於沒設。** 環境變數 `TA_WRITE_MODE` 沒設時沿用預設的 `direct`；設成空字串或只有空白（常見於 Helm、Kustomize、Compose 模板沒渲染到值）則拒絕啟動，不會當成沒設而落到 `direct`。判準是：**空值只能落到偏保守的預設值；預設值是比較開放的那一側時，空值必須拒絕。** 案例二的布林旗標預設值都是 `false`（不放寬），所以那裡把空白當成沒設；`direct` 是不經審核的那一側，所以這裡不行。同一條判準也套用在 tenant-api 的 RBAC 路徑：它不是列舉值、不在本規則範圍內，但當時不設路徑會進入「所有已認證身分可讀」的 open-read 模式，空路徑若當成沒設，失敗形狀相同，所以空值一樣拒絕。open-read 模式後來依 [ADR-027](027-tenant-api-caller-identity.md) §7 刪除，現在不設路徑是拒絕所有存取，空路徑仍拒絕啟動。追蹤於 [#2491](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/2491)。
   - 範例：`TA_WRITE_MODE=""` → 啟動失敗，訊息含 `TA_WRITE_MODE is set but empty`；不設 `TA_WRITE_MODE` → 以 `direct` 啟動。
 - **空白 trim，大小寫不 trim。** 兩者看似對稱，判準卻不同：trim 空白不會把無法辨識的值變成合法值（`" pr-guthub "` 照樣被拒），這條界線是案例二的 doc comment 先寫下的，這裡沿用；折疊大小寫則會（`PR` → `pr`），而且沒有標準庫的既有契約可繼承——那是程式在猜意圖。⇒ `PR` / `DIRECT` 一律拒絕。
 - ⚠️ **這件事有代價，且它不在原票的預期內**：一個今天寫 `TA_WRITE_MODE=DIRECT` 的部署，現在拿到的**就是**它想要的 direct，修法後會直接開不起來。它不是「帶著打錯字在跑」——原票的 rollout 段只設想了後者。
@@ -120,18 +120,18 @@ default:                  → 直接 commit
 
 ## 案例二：`envBool`（已修，並觸發本 ADR 的修訂條件）
 
-`components/tenant-api/cmd/server/main.go` 的 `envBool` 是一支自己寫的 6 行 switch，接受 `true`/`1`/`yes`/`on`，**其餘一律回 `false`，不報錯也不記錄**。它被當成五個 `flag.Bool` 的預設值用。
+`components/tenant-api/cmd/server/main.go` 的 `envBool` 是一支自己寫的 6 行 switch，接受 `true`/`1`/`yes`/`on`，**其餘一律回 `false`，不報錯也不記錄**。修法時它被當成五個 `flag.Bool` 的預設值用；其中三個（`TA_RBAC_METADATA_SCOPE_ENFORCE`、`TA_RBAC_ORG_SCOPE_ENFORCE`、`TA_RBAC_EMPTY_OPEN`）後來依 [ADR-027](027-tenant-api-caller-identity.md) §7 刪除（範圍軸一律強制、沒有 open mode），現在只剩 `TA_MACHINE_IDENTITY_AUDIT` 與 `TA_DEV_BYPASS_AUTH`。下表與下文的計數描述的是修法時的五個。
 
 | 條件 | 判定 |
 |:--|:--|
 | 列舉型？ | 是——布林的合法字面值集合有限且明確，`strconv.ParseBool` 就是它的定義（`1`/`t`/`T`/`TRUE`/`true`/`True`/`0`/`f`/`F`/`FALSE`/`false`/`False`） |
-| 決定檢查跑不跑？ | 是——五個消費端裡**三個**是：`TA_RBAC_METADATA_SCOPE_ENFORCE` 與 `TA_RBAC_ORG_SCOPE_ENFORCE` 決定 RBAC scope 走 SHADOW 還是 fail-closed，`TA_MACHINE_IDENTITY_AUDIT` 決定機器身分稽核跑不跑 |
+| 決定檢查跑不跑？ | 是——修法時五個消費端裡**三個**是：`TA_RBAC_METADATA_SCOPE_ENFORCE` 與 `TA_RBAC_ORG_SCOPE_ENFORCE` 決定 RBAC scope 只記錄（shadow）還是實際拒絕（兩者已刪除，範圍一律強制），`TA_MACHINE_IDENTITY_AUDIT` 決定機器身分稽核跑不跑 |
 | 有合法值當 fallback 嗎？ | 有——`false` 既是合法輸入，又是所有無法辨識輸入的落點 |
 | **結論** | **適用，必須驗證** |
 
 **它比案例一更尖銳的地方**：同一個打錯字走命令列會**當場 parse error 停下來**（`flag.Bool` 用的就是 `strconv.ParseBool`），走環境變數則靜默降級。差別只在中間多了那支自製解析器——所以這不是「還沒做驗證」，是**繞過了標準庫已經做好的驗證**。
 
-⚠️ **適用範圍與修法範圍不重合，這裡說清楚**：五個消費端裡另外兩個（`TA_RBAC_EMPTY_OPEN` 是 MED-8 的 rollback 逃生門、`TA_DEV_BYPASS_AUTH` 是 local-dev 身分注入）嚴格說不完全落在本規則的交集內，而且它們打錯字的方向是**較安全**的（維持 fail-closed）。修法仍一次涵蓋五個，理由是它們共用同一支解析器——留一半不改，等於留下本規則要禁的東西的縮小版，下一個消費端接上去時分歧會再出現。**這是修法者的判斷，不是本規則的主張。**
+⚠️ **適用範圍與修法範圍不重合，這裡說清楚**：五個消費端裡另外兩個（`TA_RBAC_EMPTY_OPEN` 是「沒有任何規則就拒絕所有存取」的回退開關，已刪除；`TA_DEV_BYPASS_AUTH` 是 local-dev 身分注入）嚴格說不完全落在本規則的交集內，而且它們打錯字的方向是**較安全**的（維持 fail-closed）。修法仍一次涵蓋五個，理由是它們共用同一支解析器——留一半不改，等於留下本規則要禁的東西的縮小版，下一個消費端接上去時分歧會再出現。**這是修法者的判斷，不是本規則的主張。**
 
 **修法**（[#1624](https://github.com/vencil/Dynamic-Alerting-Integrations/pull/1624)）：未設或只有空白維持該 flag 自己的預設；其餘一律交給 `strconv.ParseBool`；解析不了就 `log.Fatalf`。
 

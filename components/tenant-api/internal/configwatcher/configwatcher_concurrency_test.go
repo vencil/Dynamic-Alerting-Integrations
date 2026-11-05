@@ -86,8 +86,8 @@ func TestReload_RacesWatchLoop(t *testing.T) {
 // looks like a bug and is not: a configured path whose file has vanished
 // reloads to the EMPTY snapshot and reports success.
 //
-// This is load-bearing. For rbac it is the mechanism behind ADR-027
-// MED-8 fail-closed (an empty group set with failClosedOnEmpty denies
+// This is load-bearing. For rbac it is the mechanism behind ADR-027 §7
+// (an empty rule set denies
 // everything — see internal/rbac config_reload_test.go TestLoad_DeletedFile), and for
 // every manager it is how a GitOps `git rm` of the config takes effect.
 // "Hardening" this into an error would keep a deleted _rbac.yaml

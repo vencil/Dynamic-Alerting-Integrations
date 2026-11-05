@@ -42,7 +42,7 @@ func envelopeOf(t *testing.T, what string, w *httptest.ResponseRecorder, status 
 
 func TestRouter_NoRouteAndNoMethodAreEnvelopes(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 
 	w := httptest.NewRecorder()
 	f.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/no-such-route", nil))
@@ -127,7 +127,7 @@ func TestTimeoutExceptStream_DeadlineIsAnEnvelope(t *testing.T) {
 // 500), not chi's (a bare 500).
 func TestRouter_RecoversWithTheEnvelopeRecoverer(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 	want := reflect.ValueOf(handler.Recoverer).Pointer()
 	chiOwn := reflect.ValueOf(middleware.Recoverer).Pointer()
 	var found bool
@@ -148,7 +148,7 @@ func TestRouter_RecoversWithTheEnvelopeRecoverer(t *testing.T) {
 // Retry-After, through the production router.
 func TestEvents_RefusedWhileShuttingDownIsAnEnvelope(t *testing.T) {
 	t.Parallel()
-	f := newGateFixture(t, anyTenantRBACYAML, false)
+	f := newGateFixture(t, anyTenantRBACYAML)
 	f.hub.Shutdown(0)
 	req := httptest.NewRequest(http.MethodGet, eventsPath, nil)
 	req.Header.Set("X-Forwarded-Email", exactCaller.email())

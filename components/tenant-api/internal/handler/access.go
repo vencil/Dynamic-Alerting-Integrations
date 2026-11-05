@@ -52,7 +52,7 @@ func CheckTenantAccess() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := chi.URLParam(r, "id")
 		// The route middleware already authorized read on {id}; but the
-		// open-mode and "*"-grant RBAC paths also authorize an EMPTY id (an
+		// "*"-grant RBAC path also authorizes an EMPTY id (an
 		// empty path segment, /tenants//access, reaches here), which is not a
 		// real tenant. Mirror the ValidateTenantID guard every sibling read
 		// handler has (e.g. GetTenant) so a consumer never receives allow:true

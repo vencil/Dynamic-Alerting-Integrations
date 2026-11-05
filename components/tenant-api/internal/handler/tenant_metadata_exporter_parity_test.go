@@ -55,10 +55,10 @@ func TestListTenants_MetadataReadLikeExporter(t *testing.T) {
 func TestSearchTenants_MetadataReadLikeExporter(t *testing.T) {
 	t.Parallel()
 	dir := setupConfigDir(t, exporterParityTree())
-	mgr := newRBACManager(t, "")
+	mgr := unrestrictedRBAC(t)
 	search := func(query string) map[string]TenantSummary {
 		t.Helper()
-		resp, code, body := runSearch(t, dir, mgr, nil, query)
+		resp, code, body := runSearch(t, dir, mgr, unrestrictedGroups, query)
 		if code != http.StatusOK {
 			t.Fatalf("search %q: status %d: %s", query, code, body)
 		}

@@ -1,0 +1,21 @@
+# Fixture for `tenant-api config check --kind scope` (scope_check_test.go).
+# Read with --identity-claim-headers org=X-Auth-Request-Org (rule 2's org-scope).
+# Copied into the test's tree as _rbac.yaml; checked in under another name so
+# the admin-config schema lint (which reads every _rbac.yaml without that
+# claim declaration) does not judge it.
+groups:
+  - name: env-operators            # rule 0: environment axis
+    tenants: ["tenant-*"]
+    permissions: [read]
+    environments: [production, staging]
+  - name: finance-readers          # rule 1: domain axis
+    tenants: ["tenant-*"]
+    permissions: [read]
+    domains: [finance]
+  - name: org-writers              # rule 2: org axis, three prefixes only
+    tenants: ["tenant-a*", "tenant-d*", "tenant-e*"]
+    permissions: [read, write]
+    org-scope: org
+  - name: platform-admins          # rule 3: no scope restriction
+    tenants: ["*"]
+    permissions: [read, write, admin]

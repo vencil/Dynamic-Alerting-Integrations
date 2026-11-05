@@ -117,8 +117,8 @@ var writeRouteManifest = map[string]string{
 const (
 	// gateReadByIDOrg — per-tenant read (PermRead middleware + TenantIDFromPath):
 	// the middleware resolves the tenant's orgs and routes through
-	// AllowedInOrgRead, closing the read-by-id IDOR. Flips atomically with
-	// list+write under --rbac-org-scope-enforce.
+	// AllowedInOrgRead, closing the read-by-id IDOR. The same org axis binds
+	// list and write (ADR-027 §7: always enforced).
 	gateReadByIDOrg = "read-by-id org gate (middleware AllowedInOrgRead)"
 	// gateReadAnyTenant — collection read behind MiddlewareAnyTenant (#2520):
 	// the route admits any caller who may read SOME tenant
@@ -130,10 +130,10 @@ const (
 	// these routes read on "*" (the old gateReadListOrgBlind label).
 	gateReadAnyTenant = "any-tenant read gate (MiddlewareAnyTenant) — handler filters per tenant"
 	// gateReadPlatformNonOrg — route middleware checks read on "*"
-	// (Middleware(PermRead, nil)); the handler's bar is readsViews: open mode,
-	// or rbac.PlatformNonOrgScoped at read level — an ORG-SCOPED "*" rule
+	// (Middleware(PermRead, nil)); the handler's bar is readsViews:
+	// rbac.PlatformNonOrgScoped at read level — an ORG-SCOPED "*" rule
 	// fails it (#3160). For data with no per-tenant owner and no org.
-	gateReadPlatformNonOrg = "platform-\"*\" read gate + non-org-scoped read bar in handler (open mode reads)"
+	gateReadPlatformNonOrg = "platform-\"*\" read gate + non-org-scoped read bar in handler"
 	// gateReadNoAuth — infra endpoint mounted with no RBAC middleware.
 	gateReadNoAuth = "no-auth infra endpoint"
 	// gateReadAuthenticated — identity only (MiddlewareAuthenticated): 401

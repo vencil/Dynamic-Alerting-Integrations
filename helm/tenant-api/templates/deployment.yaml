@@ -192,44 +192,6 @@ spec:
             {{- include "tenant-api.taEnv" (list "TA_GITLAB_PROJECT" (ternary (toString ($project | int64)) (toString $project) (kindIs "float64" $project)) "writeBack.gitlab.project") | nindent 12 }}
             {{- include "tenant-api.taEnv" (list "TA_GITLAB_TARGET_BRANCH" .Values.writeBack.gitlab.targetBranch "writeBack.gitlab.targetBranch") | nindent 12 }}
             {{- end }}
-            {{- if .Values.rbac.metadataScopeEnforce }}
-            # ADR-027 / LD-6 P1: flip the env/domain metadata scope filter from
-            # SHADOW (default) to fail-closed — an unlabeled tenant on a
-            # restricted rule is DENIED (hidden from the list). Flip ONLY after
-            # increase(tenant_api_scope_would_deny_total{axis="metadata"}[soak])
-            # has stayed 0 over the soak window (monotonic counter — a zero rate,
-            # not an absolute-zero value) AND a scan confirms no still-unlabeled
-            # tenant, mirroring the machineIdentity audit→enforce discipline.
-            - name: TA_RBAC_METADATA_SCOPE_ENFORCE
-              value: "true"
-            {{- end }}
-            {{- if .Values.rbac.metadataWriteScopeEnforce }}
-            # ADR-027 / #1597: bind the env/domain metadata axis to the WRITE
-            # plane too (before #1597 it constrained list visibility only, so a
-            # rule scoped to one environment could still PUT a tenant in
-            # another). Its OWN switch, not metadataScopeEnforce: that one flips
-            # an already-bound axis, this one binds writes for the first time, so
-            # sharing would tighten a list-plane-soaked deployment on upgrade
-            # with no soak window. Flip ONLY after
-            # increase(tenant_api_scope_would_deny_total{axis="metadata_write"}[soak])
-            # has stayed 0 over the window — a non-zero rate names the real
-            # writes this flip starts rejecting.
-            - name: TA_RBAC_METADATA_WRITE_SCOPE_ENFORCE
-              value: "true"
-            {{- end }}
-            {{- if .Values.rbac.orgScopeEnforce }}
-            # ADR-027 / LD-6 P4: flip the org scope axis from SHADOW (default) to
-            # fail-closed — ONE switch atomically enforces list visibility, write
-            # authorization AND read-by-id (P4a+P4b+P4c) for org-scoped rules; no
-            # split-brain. Flip ONLY after
-            # increase(tenant_api_scope_would_deny_total{axis="org"}[soak]) AND
-            # {axis="org_write"} BOTH stay 0 over the soak window (axis="org" now
-            # covers list + read-by-id/collection reads — P4c closed the read
-            # IDOR, #1040) plus a scan for still-unlabeled tenants. Ship
-            # _tenant_orgs.yaml before the org-scoped _rbac.yaml rules.
-            - name: TA_RBAC_ORG_SCOPE_ENFORCE
-              value: "true"
-            {{- end }}
             # ADR-036 §3–§5 (#2903): every content-changing write asks the
             # generator container on this socket before it commits; with a
             # deployment policy file, tenant-api reads the same file (same

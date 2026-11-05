@@ -22,50 +22,14 @@ func ParseCandidateConfig(data []byte, declaredClaimKeys map[string]string) (*RB
 	return parseConfig(data, declaredClaimKeys)
 }
 
-// CandidateMode carries the live manager's evaluation-mode bits into a
-// candidate snapshot so the report reflects what the bytes would do once
-// deployed HERE, not under zero-value defaults. Every mode field that
-// ReverseAccessReport reads MUST be listed: one left out silently reverts to
-// its zero value in candidate reports. That is not hypothetical — the
-// enforce bits surface in ReverseFlags with a "runtime" provenance, so an
-// enforce-enabled deployment would otherwise emit a candidate side claiming
-// SHADOW while the baseline claims ENFORCE, a false "not comparable" signal
-// against the flags-parity contract (P7 dry-run diff, definition 11).
-type CandidateMode struct {
-	// FailClosedOnEmpty gates the empty-config verdict (fail_closed_empty vs
-	// open_read); a candidate under the wrong bit reports the opposite verdict.
-	FailClosedOnEmpty bool
-	// MetadataScopeEnforce / OrgScopeEnforce are the per-axis fail-mode flags
-	// echoed verbatim (source: runtime) in ReverseFlags.
-	MetadataScopeEnforce bool
-	OrgScopeEnforce      bool
-}
-
-// EvaluationMode snapshots the live manager's mode bits for NewCandidate. It
-// is the ONLY supported way to build a fidelity-preserving candidate: cloning
-// the whole mode struct (not a hand-picked subset) is what keeps a future mode
-// flag from silently defaulting to zero in dry-run reports.
-func (m *Manager) EvaluationMode() CandidateMode {
-	return CandidateMode{
-		FailClosedOnEmpty:    m.failClosedOnEmpty,
-		MetadataScopeEnforce: m.metadataScopeEnforce,
-		OrgScopeEnforce:      m.orgScopeEnforce,
-	}
-}
-
 // NewCandidate returns a Manager over an in-memory candidate snapshot for
 // report generation. No file path is configured: WatchLoop and Reload are
 // no-ops, LastHash is empty (a candidate report's rbac anchor is always
 // AnchorUnanchored), and the snapshot never enters any live serving state.
 //
-// mode must be the LIVE manager's EvaluationMode(): the empty-config verdict
-// and the enforce flags are mode-dependent, and a candidate evaluated under
-// the wrong mode would misreport what the same bytes produce once deployed.
-func NewCandidate(cfg *RBACConfig, mode CandidateMode) *Manager {
-	return &Manager{
-		Watcher:              configwatcher.NewForTest("rbac-candidate", cfg),
-		failClosedOnEmpty:    mode.FailClosedOnEmpty,
-		metadataScopeEnforce: mode.MetadataScopeEnforce,
-		orgScopeEnforce:      mode.OrgScopeEnforce,
-	}
+// There are no evaluation-mode bits to carry over from the live manager: every
+// scope axis is enforced and an empty rule set denies everything (ADR-027 §7),
+// so the same bytes evaluate the same way in any deployment.
+func NewCandidate(cfg *RBACConfig) *Manager {
+	return &Manager{Watcher: configwatcher.NewForTest("rbac-candidate", cfg)}
 }

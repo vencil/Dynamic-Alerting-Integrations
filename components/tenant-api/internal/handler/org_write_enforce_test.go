@@ -1,6 +1,6 @@
 package handler
 
-// ADR-027 / LD-6 P4b §5c — enforce-mode 403 harness for the write-plane
+// ADR-027 / LD-6 P4b §5c — 403 harness for the write-plane
 // org-scope gates in the handler package (sites #1-#5, #10, #11; the
 // federation sites #6-#9 live in federation/org_write_enforce_test.go).
 //
@@ -10,7 +10,7 @@ package handler
 //     passes validateConfig (org claim key declared via claim headers) and
 //     the middleware resolves the caller's X-Auth-Request-Org header into
 //     the principal claim the rule keys off.
-//   - EnableOrgScopeEnforce() — the axis under test is fail-closed.
+//   - The org axis is fail-closed (ADR-027 §7: always enforced).
 //   - A REAL tenantorg manager labeling orgEnfTenantIn with the caller's org
 //     and orgEnfTenantOut with a different org.
 //   - A git-backed gitops.Writer with an onWrite spy: a denied request must
@@ -21,7 +21,7 @@ package handler
 // labeled with; the "outsider" carries a different org. Outsider → 403 (or
 // per-item error) + zero writes; member → non-403.
 //
-// "*"-semantics pins (invariant I6) live at the bottom: enforce mode must
+// "*"-semantics pins (invariant I6) live at the bottom: the org axis must
 // NOT change platform-scope ("*") gates or non-tenant-data writes — the org
 // axis narrows per-tenant write grants only.
 //
@@ -80,7 +80,7 @@ const orgEnfRBACYAML = `groups:
     org-scope: org
 `
 
-// orgEnfFixture bundles the enforce-mode org-scope harness pieces.
+// orgEnfFixture bundles the org-scope harness pieces.
 type orgEnfFixture struct {
 	configDir string
 	writer    *gitops.Writer
@@ -124,7 +124,6 @@ func newOrgEnfFixture(t *testing.T, files map[string]string) *orgEnfFixture {
 
 	f.rbacMgr = newRBACManagerWithClaims(t, orgEnfRBACYAML,
 		map[string]string{"org": orgEnfClaimHeader})
-	f.rbacMgr.EnableOrgScopeEnforce()
 
 	f.tenantOrg = tenantorg.NewForTest(&tenantorg.Config{TenantOrgs: map[string][]string{
 		orgEnfTenantIn:  {orgEnfMemberOrg},
@@ -800,8 +799,7 @@ func TestOrgWriteEnforce_GroupBatch_Async(t *testing.T) {
 }
 
 // Saved views are NOT tenant data, but they are not exempt from the org axis
-// either: an org-scoped "*" rule may neither write nor read them, in enforce
-// and shadow mode alike (#3160). TestViewsBar_OrgScopedStarRefused
+// either: an org-scoped "*" rule may neither write nor read them (#3160). TestViewsBar_OrgScopedStarRefused
 // (views_bar_test.go) pins it; it replaced the I6 pin that used to live here
 // (TestOrgWriteEnforce_StarSemantics_ViewsWriteUnchanged), which asserted the
 // opposite.

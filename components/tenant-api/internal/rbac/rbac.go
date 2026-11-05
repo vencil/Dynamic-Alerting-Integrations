@@ -114,23 +114,11 @@ type RBACConfig struct {
 // embedded configwatcher.Watcher; this type only adds the
 // permission-check methods.
 //
-// Open-read mode: when the configured path is empty (no _rbac.yaml
-// supplied), the underlying Watcher stores an empty RBACConfig{}.
-// Allowed's `len(cfg.Groups) == 0` check then degrades to
-// "authenticated users have read access only" — matches the
-// pre-PR-8 behavior.
+// No open mode (ADR-027 §7): an absent or empty _rbac.yaml — no --rbac path,
+// or one that parses to zero groups — grants nothing. Every evaluation method
+// below reaches that by iterating an empty rule set.
 type Manager struct {
 	*configwatcher.Watcher[RBACConfig]
-
-	// failClosedOnEmpty (ADR-027 MED-8): when true, an empty group set
-	// (a mistyped or empty _rbac.yaml that parses to zero groups) DENIES
-	// all access instead of degrading to open-read. Set when a --rbac
-	// PATH was configured — a configured-but-empty policy is a
-	// misconfiguration and must fail closed, not silently grant read to
-	// every authenticated identity. A bare run with no --rbac path stays
-	// open-read (intentional no-RBAC, e.g. local/demo), and an operator
-	// can restore the legacy behavior with --rbac-empty-open.
-	failClosedOnEmpty bool
 
 	// machineAuditor (ADR-027 PR-1b-i): optional machine-identity audit
 	// side-channel. When non-nil, Middleware calls Observe on every request
@@ -142,49 +130,11 @@ type Manager struct {
 	// SetMachineAuditor.
 	machineAuditor MachineIdentityAuditor
 
-	// metadataScopeEnforce (ADR-027 / LD-6 P1) controls the fail-mode of the
-	// metadata (environment/domain) scope filter for an UNLABELED tenant — one
-	// that carries no value for a field a matching rule restricts. false (the
-	// default) is SHADOW mode: the unlabeled tenant still passes (byte-identical
-	// to the legacy fail-OPEN behavior) but a would-deny signal is recorded so
-	// operators can backfill labels before flipping. true is ENFORCE mode: the
-	// unlabeled tenant is denied (fail-CLOSED). Set once at startup via
-	// EnableMetadataScopeEnforce. Per-axis by design (ADR-027 D4): the org scope
-	// axis (P4) carries its own flag so the two audit→enforce rollouts stay
-	// independent.
-	metadataScopeEnforce bool
-
-	// metadataWriteScopeEnforce (#1597) is the WRITE plane's own metadata-axis
-	// fail-mode flag. Separate from metadataScopeEnforce on purpose: that one
-	// governs an axis the list plane has always bound (only its unlabeled arm is
-	// in migration), whereas the write plane's metadata axis is new in its
-	// entirety, so it needs its own audit→enforce rollout — the same reasoning
-	// ADR-027 D4 used to give the org axis a flag of its own. Default false =
-	// shadow: the axis allows everything and only counts
-	// tenant_api_scope_would_deny_total{axis="metadata_write"}.
-	metadataWriteScopeEnforce bool
-
-	// orgScopeEnforce (ADR-027 / LD-6 P4) is the org-scope axis's own fail-mode
-	// flag, mirroring metadataScopeEnforce but for the org (tenant→organization)
-	// axis. false (the default) is SHADOW: an unlabeled tenant (one with no orgs
-	// in _tenant_orgs.yaml) that an org-scoped rule would otherwise hide still
-	// passes, but a would-deny is recorded so operators can backfill org labels
-	// before flipping. true is ENFORCE (fail-closed). Per-axis by design so the
-	// metadata and org audit→enforce rollouts stay independent (ADR-027 D4).
-	//
-	// P4b NOTE: this ONE flag governs BOTH decision surfaces of the org axis —
-	// list visibility (ScopeAllowed) and per-tenant write authorization
-	// (AllowedInOrg) — so they flip to enforce ATOMICALLY under one control
-	// (--rbac-org-scope-enforce / TA_RBAC_ORG_SCOPE_ENFORCE / helm
-	// rbac.orgScopeEnforce, wired in main.go via EnableOrgScopeEnforce).
-	// Flipping either surface alone would be a false-safe isolation.
-	orgScopeEnforce bool
-
-	// scopeAudit is the optional would-deny metric sink for scope filters
+	// scopeAudit is the optional denied-by-scope metric sink for scope filters
 	// (instance-method DI, mirroring machineAuditor / the rate-limiter bridge,
 	// so metric state is not a package singleton and tests stay isolatable).
 	// nil (the default) means no recording — the filter still behaves correctly,
-	// it just emits no would-deny counter. Set once at startup via
+	// it just emits no scope-denied counter. Set once at startup via
 	// SetScopeAuditor. Shared across scope axes (P1 metadata; P4 org).
 	scopeAudit ScopeAuditRecorder
 
@@ -220,34 +170,7 @@ type Manager struct {
 // unchanged.
 func (m *Manager) SetMachineAuditor(a MachineIdentityAuditor) { m.machineAuditor = a }
 
-// EnableMetadataScopeEnforce switches the metadata (environment/domain) scope
-// filter from SHADOW (default) to ENFORCE mode: an unlabeled tenant on a
-// restricted field is DENIED instead of allowed-with-would-deny-signal
-// (ADR-027 / LD-6 P1). Called from main when --rbac-metadata-scope-enforce is
-// set — after a shadow soak has driven the would-deny counter to zero. Kept a
-// setter (not a NewManager arg) so the many NewManager call sites stay
-// unchanged, mirroring AllowOpenReadOnEmpty / SetMachineAuditor.
-func (m *Manager) EnableMetadataScopeEnforce() { m.metadataScopeEnforce = true }
-
-// EnableMetadataWriteScopeEnforce switches the WRITE plane's metadata
-// (environment/domain) axis from SHADOW (default, allow-and-count) to ENFORCE
-// (#1597). Flip only after tenant_api_scope_would_deny_total{axis="metadata_write"}
-// shows increase()==0 over the soak window — a non-zero counter names exactly
-// the writes this flip would start rejecting.
-func (m *Manager) EnableMetadataWriteScopeEnforce() { m.metadataWriteScopeEnforce = true }
-
-// EnableOrgScopeEnforce switches the org-scope axis from SHADOW (default) to
-// ENFORCE: an unlabeled tenant on an org-scoped rule is DENIED instead of
-// allowed-with-would-deny-signal (ADR-027 / LD-6 P4). Called from main when
-// --rbac-org-scope-enforce is set (P4b) — the single control that flips list
-// visibility (ScopeAllowed) and write authorization (AllowedInOrg) to enforce
-// atomically; flip only after the axis="org" AND axis="org_write" would-deny
-// counters both hold increase()==0 over the soak window. Kept a setter (not a
-// NewManager arg) to mirror EnableMetadataScopeEnforce and to drive the
-// enforce branch from tests.
-func (m *Manager) EnableOrgScopeEnforce() { m.orgScopeEnforce = true }
-
-// SetScopeAuditor installs the would-deny metric sink for scope filters
+// SetScopeAuditor installs the denied-by-scope metric sink for scope filters
 // (ADR-027 / LD-6 P1). Called once at startup. Passing nil leaves recording
 // disabled (the filter still behaves correctly). Mirrors SetMachineAuditor.
 func (m *Manager) SetScopeAuditor(a ScopeAuditRecorder) { m.scopeAudit = a }
@@ -261,8 +184,8 @@ func (m *Manager) SetScopeAuditor(a ScopeAuditRecorder) { m.scopeAudit = a }
 func (m *Manager) SetOrgResolver(fn func(tenantID string) []string) { m.orgResolver = fn }
 
 // NewManager creates a Manager and loads the RBAC config from path.
-// If path is empty, the manager starts in open mode (all
-// authenticated users have read access, no write).
+// If path is empty, the manager starts with an empty rule set, which grants
+// nothing (ADR-027 §7: there is no open mode).
 //
 // claimHeaders is the claimKey→headerName declaration parsed from
 // --identity-claim-headers (ParseClaimHeaders); nil means no claim axes.
@@ -286,22 +209,8 @@ func NewManager(path string, claimHeaders map[string]string) (*Manager, error) {
 	if err != nil {
 		return nil, fmt.Errorf("rbac: initial load failed: %w", err)
 	}
-	// MED-8: a configured --rbac path that parses to zero groups is a
-	// misconfiguration → fail closed. Path-less (open) mode keeps read.
-	return &Manager{Watcher: w, failClosedOnEmpty: path != "", claimHeaders: claimHeaders}, nil
+	return &Manager{Watcher: w, claimHeaders: claimHeaders}, nil
 }
-
-// AllowOpenReadOnEmpty restores the legacy open-read-on-empty behavior
-// even when a --rbac path is configured (the --rbac-empty-open escape
-// hatch). MED-8 fail-closed is the secure default; this exists only for
-// backward compatibility / rollback.
-func (m *Manager) AllowOpenReadOnEmpty() { m.failClosedOnEmpty = false }
-
-// FailClosedOnEmpty reports whether this manager denies all access when the
-// configured policy resolves to zero groups (ADR-027 MED-8) — vs. path-less
-// open-read mode. Callers use it to distinguish the two zero-group states
-// (e.g. for accurate startup warnings).
-func (m *Manager) FailClosedOnEmpty() bool { return m.failClosedOnEmpty }
 
 // NewForTest returns a Manager pre-populated with cfg and no file
 // path. WatchLoop and Reload become no-ops; only the embedded
@@ -323,7 +232,7 @@ func emptyConfig() *RBACConfig { return &RBACConfig{} }
 //
 // An empty or comment-only file decodes to the empty config (the strict
 // decoder surfaces io.EOF where the previous lenient yaml.Unmarshal returned
-// a zero struct; MED-8 fail-closed-on-empty still governs what that means).
+// a zero struct); an empty config grants nothing (ADR-027 §7).
 //
 // declaredClaimKeys is the --identity-claim-headers declaration captured by
 // the NewManager parse closure; validateConfig rejects a config whose
@@ -461,7 +370,7 @@ func validateRule(rule *GroupRule, declaredClaimKeys map[string]string) error {
 	// match.claims key. Checked for EVERY rule — independently of the match
 	// block — because a rule can be legacy name-matched AND org-scoped. An
 	// org-scope on an undeclared claim could never carry a value at runtime,
-	// so it would silently deny (shadow) / hide (enforce) every tenant; that
+	// so it would silently deny every tenant; that
 	// dead authorization rule must fail loud at load, not deny in silence.
 	if rule.OrgScope != "" {
 		if _, declared := declaredClaimKeys[rule.OrgScope]; !declared {
@@ -508,9 +417,8 @@ func validateRule(rule *GroupRule, declaredClaimKeys map[string]string) error {
 //
 // nil-principal contract: p == nil is a documented ANONYMOUS caller — no
 // groups, no claims (e.g. a request that never passed through Middleware).
-// It evaluates exactly as the empty groups slice always has: open mode still
-// grants read (and MetadataAllowed passes), configured/fail-closed modes
-// deny, and no rule can ever match.
+// It evaluates exactly as the empty groups slice always has: no rule can ever
+// match, so every check denies.
 
 // matchSubject is the precomputed view of the caller that ruleMatches
 // evaluates each GroupRule against. It is built once per evaluation call
@@ -613,123 +521,124 @@ func ruleGrants(rule *GroupRule, want Permission) bool {
 	return false
 }
 
-// allowedOrgModes is the single per-tenant permission evaluation core
-// (ADR-027 / LD-6 P4b): it folds the org-scope axis into the SAME per-rule
-// loop as the permission check and evaluates BOTH org fail-modes in one pass,
-// returning (passShadow, passEnforce).
+// scopeEval is the result of one per-tenant scope evaluation (ADR-027 §7).
+// Every scope axis is enforced; there is no shadow mode.
+//
+//   - granted: at least one rule passes every check on its own (ruleMatches,
+//     tenant pattern, the permission when one is asked for, and each of ITS
+//     scope restrictions).
+//   - metaBlocked / orgBlocked: at least one rule that would otherwise have
+//     granted was cut by that axis. Read only when granted is false, to
+//     attribute the denial for tenant_api_scope_denied_total{axis}.
+//   - blockedRule: the name of the first such rule — the diagnostic handle for
+//     the deny log line. Rule NAMES only; claim values never leave the
+//     evaluation (principal.go logging discipline).
+type scopeEval struct {
+	granted     bool
+	metaBlocked bool
+	orgBlocked  bool
+	blockedRule string
+}
+
+// scopeQuery describes one scope evaluation. checkPerm=false is the list
+// plane (visibility: any matching rule counts, whatever it grants); metaLive=false
+// leaves the metadata axis out of the decision (read-by-id, which has never
+// bound environments/domains).
+type scopeQuery struct {
+	tenantID    string
+	want        Permission
+	checkPerm   bool
+	tenantOrgs  []string
+	environment string
+	domain      string
+	metaLive    bool
+}
+
+// evalScope is the single per-tenant scope evaluation core.
 //
 // ⚠️ Correctness core — a rule grants iff ruleMatches && tenantMatches &&
-// ruleGrants && its OWN org restriction passes (per-rule fold). Unioning "any
-// rule grants the permission" and "any rule passes org" separately and AND'ing
-// the two unions at the top level would leak access no single rule grants —
-// the exact cross-rule hazard ScopeAllowed documents; see
-// TestAllowedInOrg_CrossRuleUnionNoLeak / TestScopeAllowed_CrossRuleUnionNoLeak.
+// (ruleGrants when a permission is asked) && its OWN metadata restriction
+// passes && its OWN org restriction passes (per-rule fold). Unioning "any
+// rule passes metadata" and "any rule passes org" separately and AND'ing the
+// two unions would leak access no single rule grants (rule A passes metadata
+// but fails org, rule B passes org but fails metadata); see
+// TestScopeAllowed_CrossRuleUnionNoLeak / TestAllowedInOrg_CrossRuleUnionNoLeak.
 //
-// orgBlockedRule is the name of the first matching rule whose grant the org
-// axis curtailed (its org modes were not (true,true)) — the diagnostic handle
-// for AllowedInOrg's deny/would-deny log line. Rule NAMES only; claim values
-// never leave the evaluation (principal.go logging discipline). Empty when no
-// matching rule was org-restricted.
+// Pure with respect to observability: the decision-site wrappers own metric
+// recording and logging.
 //
-// Pure with respect to observability: no metric recording, no enforce-flag
-// read — the decision-site wrappers (Allowed / AllowedInOrg) own both, so the
-// read-plane wrapper can never pollute the org_write would-deny signal.
-//
-// Empty-config semantics are byte-identical to the historical Allowed:
-// failClosedOnEmpty denies both modes; open mode grants read-only in both.
-func (m *Manager) allowedScopedModes(p *VerifiedPrincipal, tenantID string, want Permission,
-	tenantOrgs []string, environment, domain string) (passSS, passSE, passES, passEE bool, blockedRule string) {
+// An empty rule set grants nothing (ADR-027 §7: no open mode).
+func (m *Manager) evalScope(p *VerifiedPrincipal, q scopeQuery) scopeEval {
+	var out scopeEval
 	cfg := m.Get()
-	if len(cfg.Groups) == 0 {
-		if m.failClosedOnEmpty {
-			return false, false, false, false, "" // MED-8: configured but empty _rbac.yaml → deny
-		}
-		// Open mode — authenticated users have read access only
-		open := want == PermRead
-		return open, open, open, open, ""
-	}
-
 	subject := subjectFor(p)
 	for i := range cfg.Groups {
 		rule := &cfg.Groups[i]
 		if !subject.ruleMatches(rule) {
 			continue
 		}
-		if !tenantMatches(rule.Tenants, tenantID) {
+		if !tenantMatches(rule.Tenants, q.tenantID) {
 			continue
 		}
-		if !ruleGrants(rule, want) {
+		if q.checkPerm && !ruleGrants(rule, q.want) {
 			continue
 		}
-		// #1597: the metadata axis on the write plane. NOTE the deliberate
-		// asymmetry with ScopeAllowed: there, shadow/enforce differ only on the
-		// UNLABELED arm, because the axis has always bound labeled values on the
-		// list plane. Here the whole axis is NEW, so its shadow outcome is
-		// unconditionally "allow" — anything else would tighten every existing
-		// deployment the moment this ships, with no flag and no soak, which is
-		// precisely the migration hazard #1597 called out. Only enforce applies
-		// the real predicate.
-		_, envEnforce := scopeFieldModes(rule.Environments, environment)
-		_, domEnforce := scopeFieldModes(rule.Domains, domain)
-		metaShadow := true
-		metaEnforce := envEnforce && domEnforce
-
-		orgShadow, orgEnforce := true, true // no org-scope on this rule = no org restriction
+		metaOK := true
+		if q.metaLive {
+			metaOK = scopeFieldPasses(rule.Environments, q.environment) &&
+				scopeFieldPasses(rule.Domains, q.domain)
+		}
+		orgOK := true // no org-scope on this rule = no org restriction
 		if rule.OrgScope != "" {
-			orgShadow, orgEnforce = scopeSetModes(subject.claims[rule.OrgScope], tenantOrgs)
+			orgOK = scopeSetPasses(subject.claims[rule.OrgScope], q.tenantOrgs)
 		}
-		if blockedRule == "" && (!metaShadow || !metaEnforce || !orgShadow || !orgEnforce) {
-			blockedRule = rule.Name
+		if metaOK && orgOK {
+			out.granted = true
+			return out
 		}
-		passSS = passSS || (metaShadow && orgShadow)
-		passSE = passSE || (metaShadow && orgEnforce)
-		passES = passES || (metaEnforce && orgShadow)
-		passEE = passEE || (metaEnforce && orgEnforce)
-		if passSS && passSE && passES && passEE {
-			break // all four outcomes granted; further rules cannot change any
+		out.metaBlocked = out.metaBlocked || !metaOK
+		out.orgBlocked = out.orgBlocked || !orgOK
+		if out.blockedRule == "" {
+			out.blockedRule = rule.Name
 		}
 	}
-	return passSS, passSE, passES, passEE, blockedRule
+	return out
 }
 
 // Allowed checks whether the caller p is granted the wanted permission for
-// the given tenantID by any rule matching the principal.
+// the given tenantID by any rule matching the principal, WITHOUT the scope
+// axes.
 //
 // Permission hierarchy: admin ⊇ write ⊇ read.
 // An "admin" grant satisfies "write" and "read" checks.
 //
-// ⚠️ ORG-BLIND (ADR-027 / LD-6 P4): Allowed is the org-scope-degenerate wrapper
-// over allowedOrgModes — with tenantOrgs=nil every org-scoped rule passes shadow
-// mode (scopeSetModes' unlabeled-tenant leniency is (true,false)), so the shadow
-// component returned here is byte-identical to the pre-P4 permission check and
-// the org axis is invisible. Every per-tenant authorization decision MUST route
-// through an org-aware method instead: WRITE/ADMIN gates via AllowedInOrg
-// (handler.OrgAllowed), and per-tenant READS via AllowedInOrgRead (the middleware
-// read-by-id gate + handler.OrgAllowedRead for the collection filters). The only
-// legitimate Allowed callers left are the platform-scope tenantID="*" checks
-// for READS and checks that judge no tenant (invariant I6: there is no tenant
-// org list for the org axis to compare against) and the middleware's own
-// write-mount branch (which checks read on "*" or defers the per-tenant org
-// decision to the handler's RequireOrgWrite). Pinned by the go/ast tripwire,
-// see guards_ast_test.go (P4c emptied its allowlist).
+// ⚠️ SCOPE-BLIND: Allowed never reads environments/domains/org-scope. Every
+// per-tenant authorization decision MUST route through a scope-aware method
+// instead: WRITE/ADMIN gates via AllowedInOrg (handler.OrgAllowed), and
+// per-tenant READS via AllowedInOrgRead (the middleware read-by-id gate +
+// handler.OrgAllowedRead for the collection filters). The only legitimate
+// Allowed callers left are the platform-scope tenantID="*" checks for READS
+// and checks that judge no tenant (invariant I6: there is no tenant org list
+// for the org axis to compare against) and the middleware's own write-mount
+// branch (which checks read on "*" or defers the per-tenant decision to the
+// handler's RequireOrgWrite). Pinned by the go/ast tripwire, see
+// guards_ast_test.go.
 //
 // ⛔ Allowed(p, "*", PermAdmin) is NOT a platform-admin bar: an ORG-SCOPED
-// "*" admin rule passes it in every mode. I6 does not make an org-scoped
-// rule a platform admin; a platform-admin decision uses
-// PlatformAdminNonOrgScoped (reverse.go) — the /audit endpoints, the
-// federation whitelist PUT and the account backfill (#3160).
+// "*" admin rule passes it. A platform-admin decision uses
+// PlatformAdminNonOrgScoped (reverse.go).
 //
-// Allowed records NO would-deny signal — recording lives in AllowedInOrg
-// (org_write) and AllowedInOrgRead (org) only, so nothing routed through the
-// org-blind path can pollute the enforce-flip soak metrics.
+// Allowed records nothing: a scope-blind decision cannot be denied by scope.
 func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission) bool {
-	// Both axes held at SHADOW and fed unlabeled inputs (nil orgs, empty
-	// environment/domain) — scopeFieldModes documents empty-value-under-shadow
-	// as (true, false), so passSS here is byte-identical to the pre-#1597
-	// passShadow this line used to read. Deliberately blind on both axes: this
-	// is the platform-wildcard path, and it must record no would-deny.
-	passSS, _, _, _, _ := m.allowedScopedModes(p, tenantID, want, nil, "", "")
-	return passSS
+	cfg := m.Get()
+	subject := subjectFor(p)
+	for i := range cfg.Groups {
+		rule := &cfg.Groups[i]
+		if subject.ruleMatches(rule) && tenantMatches(rule.Tenants, tenantID) && ruleGrants(rule, want) {
+			return true
+		}
+	}
+	return false // includes the empty rule set: no open mode (ADR-027 §7)
 }
 
 // GrantsSomeTenant is the bar of the "any tenant" route gate
@@ -744,15 +653,15 @@ func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission
 // from the principal and _rbac.yaml ALONE — never "p can read at least one
 // EXISTING tenant". Reasons:
 //
-//   - No new oracle. The answer depends on nothing but the caller's own rules
-//     (and the org enforce flag) — the same facts GET /me hands back once the
-//     gate is passed. An existence-based bar would make the 403/200 split a
-//     function of conf.d and _tenant_orgs.yaml, so every route behind the gate
-//     — including the ones whose handlers answer the same for "absent" and
-//     "not yours" (federation tokens, batch, groups PUT) — would become a probe
-//     of "does a tenant matching my pattern / in my org exist". With this bar,
-//     a rule naming a tenant that does not exist passes and the handlers
-//     return what they would for any reader: an empty list.
+//   - No new oracle. The answer depends on nothing but the caller's own rules —
+//     the same facts GET /me hands back once the gate is passed. An
+//     existence-based bar would make the 403/200 split a function of conf.d
+//     and _tenant_orgs.yaml, so every route behind the gate — including the
+//     ones whose handlers answer the same for "absent" and "not yours"
+//     (federation tokens, batch, groups PUT) — would become a probe of "does a
+//     tenant matching my pattern / in my org exist". With this bar, a rule
+//     naming a tenant that does not exist passes and the handlers return what
+//     they would for any reader: an empty list.
 //   - Consistent with the filters. Each filter decides per tenant with the same
 //     ruleMatches / ruleGrants / tenant pattern / org-scope evaluation; this is
 //     its existential closure over every POSSIBLE tenant (any id, any metadata,
@@ -767,27 +676,18 @@ func (m *Manager) Allowed(p *VerifiedPrincipal, tenantID string, want Permission
 //
 //   - no org-scope → yes;
 //   - org-scope and p carries a value for the claim → yes (a tenant labeled
-//     with that org passes in both modes; whether one exists is data);
-//   - org-scope and p carries NO value → only while the org axis is in shadow
-//     (an unlabeled tenant passes); under --rbac-org-scope-enforce such a rule
-//     grants nothing on any tenant (scopeSetModes), so it does not count.
+//     with that org passes; whether one exists is data);
+//   - org-scope and p carries NO value → no: such a rule grants nothing on any
+//     tenant (scopeSetPasses).
 //
 // The metadata axes (environments / domains) never disqualify a rule: a tenant
-// labeled with an allowed value passes on every plane and in both modes.
+// labeled with an allowed value passes.
 //
-// Zero-group config keeps the historical semantics exactly: MED-8
-// (failClosedOnEmpty) denies everything; path-less open mode grants read only.
+// An empty rule set denies everything (ADR-027 §7: no open mode).
 //
-// Records no would-deny: this is not a per-tenant decision, and counting here
-// would pollute the soak series the enforce flips are gated on.
+// Records nothing: this is not a per-tenant decision.
 func (m *Manager) GrantsSomeTenant(p *VerifiedPrincipal, want Permission) bool {
 	cfg := m.Get()
-	if len(cfg.Groups) == 0 {
-		if m.failClosedOnEmpty {
-			return false // MED-8: configured but empty _rbac.yaml → deny
-		}
-		return want == PermRead // open mode — authenticated users have read access only
-	}
 	subject := subjectFor(p)
 	for i := range cfg.Groups {
 		rule := &cfg.Groups[i]
@@ -797,8 +697,8 @@ func (m *Manager) GrantsSomeTenant(p *VerifiedPrincipal, want Permission) bool {
 		if !namesSomeTenant(rule.Tenants) {
 			continue
 		}
-		if rule.OrgScope != "" && subject.claims[rule.OrgScope] == "" && m.orgScopeEnforce {
-			continue // no org claim: matches no labeled tenant, and enforce hides unlabeled ones
+		if rule.OrgScope != "" && subject.claims[rule.OrgScope] == "" {
+			continue // no org claim: matches no labeled tenant, and unlabeled ones are denied
 		}
 		return true
 	}
@@ -817,32 +717,25 @@ func namesSomeTenant(patterns []string) bool {
 	return false
 }
 
-// AllowedInOrg is now scope-aware on BOTH axes (#1597). It used to take no
-// environment/domain and never read rule.Environments / rule.Domains, so a
-// rule's `environments:` constrained only what a subject could SEE (list plane,
-// ScopeAllowed) and never what it could WRITE — while the 403 told the denied
-// operator to go adjust exactly that field. The metadata axis now runs here
-// under its own flag (metadataScopeEnforce) and its own write-plane soak series
-// (scopeAxisMetadataWrite), mirroring how the org axis already spans planes.
-//
 // AllowedInOrg is the scope-aware per-tenant permission check and the ONLY
-// write-plane authorization entry point (ADR-027 / LD-6 P4b). tenantOrgs is
-// the target tenant's organization list (tenantorg.OrgsForTenant), resolved by
-// the caller AT DECISION TIME — rbac does not import tenantorg, mirroring
-// ScopeAllowed; nil/empty means the tenant is unlabeled.
+// write-plane authorization entry point (ADR-027 §7). It binds BOTH scope
+// axes: a rule's environments[]/domains[] against the tenant's metadata
+// (#1597) and its org-scope against tenantOrgs. tenantOrgs is the target
+// tenant's organization list (tenantorg.OrgsForTenant), resolved by the caller
+// AT DECISION TIME — rbac does not import tenantorg; nil/empty means the
+// tenant is unlabeled, and an unlabeled tenant fails every rule that restricts
+// that axis.
 //
-// Mode selection is governed by the SAME m.orgScopeEnforce flag as
-// ScopeAllowed (list visibility and write enforcement flip atomically — one
-// control, no split-brain): SHADOW (default) returns the lenient decision and
-// records a would-deny observation on the org_write axis whenever enforce
-// would have denied; ENFORCE returns the strict decision (the same observation
-// keeps counting as a "denied by org scope" signal). Monotonicity holds by
-// construction: AllowedInOrg(enforce) ⟹ AllowedInOrg(shadow) ⟹ Allowed —
-// the org axis only ever narrows a grant, never widens one.
+// A denial that a scope axis caused is counted on
+// tenant_api_scope_denied_total{axis="metadata_write"|"org_write"}.
+// Monotonicity holds by construction: AllowedInOrg ⟹ Allowed — the scope axes
+// only ever narrow a grant, never widen one.
 func (m *Manager) AllowedInOrg(p *VerifiedPrincipal, tenantID string, want Permission,
 	tenantOrgs []string, environment, domain string) bool {
-	return m.allowedScopedOnAxes(p, tenantID, want, tenantOrgs, environment, domain,
-		scopeAxisMetadataWrite, scopeAxisOrgWrite, "write-plane", true)
+	return m.allowedScopedOnAxes(p, scopeQuery{
+		tenantID: tenantID, want: want, checkPerm: true,
+		tenantOrgs: tenantOrgs, environment: environment, domain: domain, metaLive: true,
+	}, scopeAxisMetadataWrite, scopeAxisOrgWrite, "write-plane")
 }
 
 // AllowedInOrgRejudge is AllowedInOrg for a write-plane decision taken again
@@ -850,210 +743,107 @@ func (m *Manager) AllowedInOrg(p *VerifiedPrincipal, tenantID string, want Permi
 // on the fresh base its branch is cut from (#2857). The decision is the same
 // as AllowedInOrg's for the same inputs, so it is always taken; what differs
 // is the bookkeeping, because AllowedInOrg already counted the first
-// decision. Each axis's would-deny is recorded only when the caller asks for
-// it — it sets countMetadata when the tenant's environment/domain on this tree
+// decision. Each axis's denial is recorded only when the caller asks for it —
+// it sets countMetadata when the tenant's environment/domain on this tree
 // differs from what the first decision judged, and countOrg when its
 // organizations do — so a write is counted once per value it is judged on.
 func (m *Manager) AllowedInOrgRejudge(p *VerifiedPrincipal, tenantID string, want Permission,
 	tenantOrgs []string, environment, domain string, countMetadata, countOrg bool) bool {
-	passSS, passSE, passES, passEE, _ := m.allowedScopedModes(p, tenantID, want, tenantOrgs, environment, domain)
-	metaFlag := m.metadataWriteScopeEnforce
-	orgFlag := m.orgScopeEnforce
-	if countMetadata {
-		m.recordScopeShadowGap(
-			visAt(passSS, passSE, passES, passEE, false, orgFlag),
-			visAt(passSS, passSE, passES, passEE, true, orgFlag),
-			scopeAxisMetadataWrite)
+	ev := m.evalScope(p, scopeQuery{
+		tenantID: tenantID, want: want, checkPerm: true,
+		tenantOrgs: tenantOrgs, environment: environment, domain: domain, metaLive: true,
+	})
+	if !ev.granted {
+		if countMetadata && ev.metaBlocked {
+			m.recordScopeDenied(scopeAxisMetadataWrite)
+		}
+		if countOrg && ev.orgBlocked {
+			m.recordScopeDenied(scopeAxisOrgWrite)
+		}
 	}
-	if countOrg {
-		m.recordScopeShadowGap(
-			visAt(passSS, passSE, passES, passEE, metaFlag, false),
-			visAt(passSS, passSE, passES, passEE, metaFlag, true),
-			scopeAxisOrgWrite)
-	}
-	return visAt(passSS, passSE, passES, passEE, metaFlag, orgFlag)
+	return ev.granted
 }
 
 // AllowedInOrgRead is the org-scope-aware per-tenant permission check for the
-// READ/VISIBILITY plane (ADR-027 / LD-6 P4c): the read-by-id middleware gate
-// and the collection read filters (filterByRBAC / hasAccessibleMember / ListPRs
-// via handler.OrgAllowedRead). It is byte-for-byte AllowedInOrg except it
-// records its would-deny on the scopeAxisOrg ("org") series — the SAME axis the
-// list-plane ScopeAllowed records — so the read/visibility plane and the list
-// plane share one soak signal (both answer "can this subject SEE this tenant",
-// both track only the unlabeled-tenant leniency), while the write plane keeps
-// its own scopeAxisOrgWrite series. The enforce-flip soak criterion's existing
-// increase({axis="org"})==0 clause therefore auto-covers read-by-id — no fourth
-// axis, no separate flip gate. Governed by the same m.orgScopeEnforce flag, so
-// list + write + read flip atomically.
+// READ/VISIBILITY plane: the read-by-id middleware gate and the collection
+// read filters (filterByRBAC / hasAccessibleMember / ListPRs via
+// handler.OrgAllowedRead). It records a denial on the scopeAxisOrg ("org")
+// series — the SAME axis the list-plane ScopeAllowed records — so the
+// read/visibility plane and the list plane share one signal, while the write
+// plane keeps its own scopeAxisOrgWrite series.
+//
+// Metadata-blind by design: read-by-id has never bound environments/domains;
+// the list plane (ScopeAllowed) and the write plane (AllowedInOrg) do.
 func (m *Manager) AllowedInOrgRead(p *VerifiedPrincipal, tenantID string, want Permission, tenantOrgs []string) bool {
-	// Metadata-blind by design: binding that axis on the read plane is a
-	// separate plane with its own migration (#1597 scopes itself to writes).
-	// Passing the unlabeled pair keeps this byte-identical to its pre-#1597 self.
-	return m.allowedScopedOnAxes(p, tenantID, want, tenantOrgs, "", "",
-		scopeAxisMetadata, scopeAxisOrg, "read-plane", false)
+	return m.allowedScopedOnAxes(p, scopeQuery{
+		tenantID: tenantID, want: want, checkPerm: true, tenantOrgs: tenantOrgs,
+	}, "", scopeAxisOrg, "read-plane")
 }
 
-// allowedInOrgOnAxis is the shared org-scope decision + would-deny recording for
-// AllowedInOrg (write plane) and AllowedInOrgRead (read plane). axis selects
-// which scope_would_deny series records the observation (scopeAxisOrgWrite vs
-// scopeAxisOrg); plane names the plane in the deny/would-deny log line. The
-// decision (allowedOrgModes) is axis-independent — only the observability label
-// differs — so a read call can never pollute the write-plane soak counter and
-// vice versa.
-func (m *Manager) allowedScopedOnAxes(p *VerifiedPrincipal, tenantID string, want Permission,
-	tenantOrgs []string, environment, domain string, metaAxis, orgAxis, plane string, metaAxisLive bool) bool {
-	passSS, passSE, passES, passEE, blockedRule := m.allowedScopedModes(p, tenantID, want, tenantOrgs, environment, domain)
-
-	// The write plane's metadata axis has its OWN flag (ADR-027 D4's per-axis
-	// rule): a deployment that already finished the LIST plane's soak and set
-	// metadataScopeEnforce must not have its writes tightened by an upgrade.
-	// Planes where the axis is not bound at all pass metaAxisLive=false and are
-	// pinned to shadow, so they cost nothing and record nothing new.
-	metaFlag := metaAxisLive && m.metadataWriteScopeEnforce
-	orgFlag := m.orgScopeEnforce
-
-	// Per-axis would-deny, recorded exactly as ScopeAllowed does it: hold the
-	// OTHER axis at its current effective flag and compare this axis's shadow
-	// vs enforce outcome. A grant is a would-deny for an axis iff flipping that
-	// axis ALONE from shadow→enforce takes it away — which is what makes each
-	// axis's soak counter a usable flip criterion on its own.
-	// Only record the metadata gap on a plane where the axis actually
-	// participates. A plane with metaAxisLive=false (read-by-id) is fed the
-	// unlabeled pair and can never be denied by metadata — but the lattice
-	// still shows a shadow/enforce difference for any rule carrying
-	// environments/domains, so recording unconditionally made every read-by-id
-	// increment {axis="metadata"}: the LIST plane's soak series, whose
-	// increase()==0 gates the unrelated --rbac-metadata-scope-enforce flip.
-	// Measured: one AllowedInOrgRead against an environments-scoped rule moved
-	// that counter to 1.
-	if metaAxisLive {
-		m.recordScopeShadowGap(
-			visAt(passSS, passSE, passES, passEE, false, orgFlag), // metadata=shadow
-			visAt(passSS, passSE, passES, passEE, true, orgFlag),  // metadata=enforce
-			metaAxis)
+// allowedScopedOnAxes is the shared scope decision + denial recording for
+// AllowedInOrg (write plane) and AllowedInOrgRead (read plane). metaAxis /
+// orgAxis select which scope_denied series records a denial (metaAxis "" =
+// the metadata axis is not bound on this plane); plane names the plane in the
+// deny log line.
+func (m *Manager) allowedScopedOnAxes(p *VerifiedPrincipal, q scopeQuery, metaAxis, orgAxis, plane string) bool {
+	ev := m.evalScope(p, q)
+	if ev.granted {
+		return true
 	}
-	m.recordScopeShadowGap(
-		visAt(passSS, passSE, passES, passEE, metaFlag, false), // org=shadow
-		visAt(passSS, passSE, passES, passEE, metaFlag, true),  // org=enforce
-		orgAxis)
-
-	effective := visAt(passSS, passSE, passES, passEE, metaFlag, orgFlag)
-
-	switch {
-	case !effective && blockedRule != "":
+	if ev.metaBlocked && metaAxis != "" {
+		m.recordScopeDenied(metaAxis)
+	}
+	if ev.orgBlocked {
+		m.recordScopeDenied(orgAxis)
+	}
+	if ev.blockedRule != "" {
 		// A scope axis curtailed an otherwise-granting rule → loud enough to
 		// debug a 403. Tenant + rule NAME only; claim values never reach logs
 		// (principal.go multi-value-refusal discipline).
 		slog.Warn("scope denied "+plane+" permission",
-			"tenant", tenantID, "rule", blockedRule, "perm", string(want),
-			"metadata_enforce", metaFlag, "org_enforce", orgFlag)
-	case effective && !visAt(passSS, passSE, passES, passEE, true, true):
-		// Migration gap: at least one axis still in shadow is carrying this
-		// grant. One line per observation (matches the would-deny increments)
-		// so operators can attribute the soak counters to a tenant/rule.
-		slog.Info("scope "+plane+" would-deny (shadow mode)",
-			"tenant", tenantID, "rule", blockedRule, "perm", string(want),
-			"metadata_enforce", metaFlag, "org_enforce", orgFlag)
+			"tenant", q.tenantID, "rule", ev.blockedRule, "perm", string(q.want),
+			"metadata", ev.metaBlocked, "org", ev.orgBlocked)
 	}
-	return effective
+	return false
 }
 
 // MetadataAllowed checks whether the caller p is granted access for a tenant
 // with the given environment and domain metadata, WITHOUT the org axis. It is
-// the org-less thin wrapper over ScopeAllowed (tenantOrgs=nil): with no orgs
-// and no org-scoped rule the org axis degenerates to (true,true) and the result
-// is byte-identical to the pre-P4 metadata-only filter. Retained so the
-// existing metadata test matrix and the /me-adjacent callers stay unchanged.
+// the org-less thin wrapper over ScopeAllowed (tenantOrgs=nil): with no
+// org-scoped rule the org axis does not restrict, and the result is the
+// metadata-only filter.
 func (m *Manager) MetadataAllowed(p *VerifiedPrincipal, tenantID, environment, domain string) bool {
 	return m.ScopeAllowed(p, tenantID, environment, domain, nil)
 }
 
 // ScopeAllowed is the single scope-filter decision for the tenant list: it
 // evaluates the metadata (environment/domain) axis and the org axis TOGETHER,
-// per matching rule, and returns whether the tenant is visible to caller p
-// (ADR-027 / LD-6 P1 metadata + P4 org).
+// per matching rule (evalScope's per-rule fold), and returns whether the
+// tenant is visible to caller p (ADR-027 §7).
 //
-// ⚠️ Correctness core — the two axes are folded into the SAME per-rule loop, not
-// AND'd at the top level. Metadata and org each grant a tenant only via a rule
-// that passes BOTH of its own restrictions; unioning per-axis "does any rule
-// pass this axis" separately and AND'ing the two unions would leak access no
-// single rule grants (rule A passes metadata but fails org, rule B passes org
-// but fails metadata → the top-level AND would show the tenant; the per-rule
-// fold correctly hides it). See TestScopeAllowed_CrossRuleUnionNoLeak.
-//
-// Four aggregate visibility booleans are accumulated, one per (metadataMode,
-// orgMode) combination, so the effective decision AND the per-axis would-deny
-// signals can all be read from the single pass without re-evaluating:
-//
-//	visSS = shadow-metadata  & shadow-org
-//	visSE = shadow-metadata  & enforce-org
-//	visES = enforce-metadata & shadow-org
-//	visEE = enforce-metadata & enforce-org
-//
-// Degeneration (pinned by tests): when no matching rule is org-scoped, every
-// rule's org modes are (true,true), so visSE==visSS and visES==visEE; the
-// effective result and the metadata would-deny then equal the pre-P4
-// MetadataAllowed exactly, and the org would-deny is identically false.
+// An unlabeled tenant — no value for a field a matching rule restricts, or no
+// orgs in _tenant_orgs.yaml under an org-scoped rule — is NOT visible through
+// that rule. `tenant-api config check --kind scope` lists those tenants
+// before an upgrade.
 //
 // tenantOrgs is the target tenant's organization list (tenantorg.OrgsForTenant);
 // nil/empty means the tenant is unlabeled. rbac does not import tenantorg — the
 // handler resolves the orgs and passes them in.
 func (m *Manager) ScopeAllowed(p *VerifiedPrincipal, tenantID, environment, domain string, tenantOrgs []string) bool {
-	cfg := m.Get()
-	if len(cfg.Groups) == 0 {
-		if m.failClosedOnEmpty {
-			return false // MED-8: configured but empty _rbac.yaml → deny
-		}
-		return true // open mode — no scope restrictions
+	ev := m.evalScope(p, scopeQuery{
+		tenantID: tenantID, tenantOrgs: tenantOrgs,
+		environment: environment, domain: domain, metaLive: true,
+	})
+	if ev.granted {
+		return true
 	}
-
-	subject := subjectFor(p)
-
-	var visSS, visSE, visES, visEE bool
-	for i := range cfg.Groups {
-		rule := &cfg.Groups[i]
-		if !subject.ruleMatches(rule) {
-			continue
-		}
-		if !tenantMatches(rule.Tenants, tenantID) {
-			continue
-		}
-		envShadow, envEnforce := scopeFieldModes(rule.Environments, environment)
-		domShadow, domEnforce := scopeFieldModes(rule.Domains, domain)
-		metaShadow := envShadow && domShadow
-		metaEnforce := envEnforce && domEnforce
-
-		orgShadow, orgEnforce := true, true // no org-scope on this rule = no org restriction
-		if rule.OrgScope != "" {
-			orgShadow, orgEnforce = scopeSetModes(subject.claims[rule.OrgScope], tenantOrgs)
-		}
-
-		visSS = visSS || (metaShadow && orgShadow)
-		visSE = visSE || (metaShadow && orgEnforce)
-		visES = visES || (metaEnforce && orgShadow)
-		visEE = visEE || (metaEnforce && orgEnforce)
-		if visSS && visSE && visES && visEE {
-			break // all four outcomes decided; further rules cannot change any
-		}
+	if ev.metaBlocked {
+		m.recordScopeDenied(scopeAxisMetadata)
 	}
-
-	metaFlag := m.metadataScopeEnforce
-	orgFlag := m.orgScopeEnforce
-
-	// Per-axis would-deny: hold the OTHER axis at its current effective flag and
-	// compare that axis's shadow vs enforce visibility. A tenant is a would-deny
-	// for an axis iff flipping that axis alone from shadow→enforce hides it.
-	m.recordScopeShadowGap(
-		visAt(visSS, visSE, visES, visEE, false, orgFlag), // metadata=shadow
-		visAt(visSS, visSE, visES, visEE, true, orgFlag),  // metadata=enforce
-		scopeAxisMetadata)
-	m.recordScopeShadowGap(
-		visAt(visSS, visSE, visES, visEE, metaFlag, false), // org=shadow
-		visAt(visSS, visSE, visES, visEE, metaFlag, true),  // org=enforce
-		scopeAxisOrg)
-
-	return visAt(visSS, visSE, visES, visEE, metaFlag, orgFlag)
+	if ev.orgBlocked {
+		m.recordScopeDenied(scopeAxisOrg)
+	}
+	return false
 }
 
 // ScopeAllowedUnknownMetadata is the list-plane visibility decision for a
@@ -1061,51 +851,23 @@ func (m *Manager) ScopeAllowed(p *VerifiedPrincipal, tenantID, environment, doma
 // not usable, so its `_metadata` could not be read (#1680's degraded row).
 //
 // ⛔ Unknown is NOT unlabeled, which is why this is not ScopeAllowed(p, id,
-// "", "", orgs). scopeFieldModes reads an empty value as an unlabeled tenant
-// and shadow mode lets that through on a restricted field; for a broken file
-// that would show an environment-restricted caller a tenant whose real
-// environment — merely unreadable right now — they may not be allowed. So the
-// metadata axis here has no shadow leniency: a rule grants only if it places
-// NO restriction on either metadata axis (empty Environments AND empty
-// Domains), identically in shadow and enforce mode, whatever
-// metadataScopeEnforce says.
+// "", "", orgs): a rule grants here only if it places NO restriction on
+// either metadata axis (empty Environments AND empty Domains). An
+// environment-restricted caller must not see a tenant whose real environment
+// — merely unreadable right now — they may not be allowed.
 //
-// The org axis IS evaluated exactly as ScopeAllowed does under the current
-// orgScopeEnforce flag: tenantOrgs comes from _tenant_orgs.yaml, which is
-// independent of the broken file, so the tenant's org labels are as known as
-// they ever are.
+// The org axis IS evaluated exactly as ScopeAllowed does: tenantOrgs comes from
+// _tenant_orgs.yaml, which is independent of the broken file.
 //
 // Per-rule fold, like ScopeAllowed: a single rule must pass tenant pattern,
-// the metadata wildcard AND its own org restriction. Rule A (metadata
-// wildcard, wrong tenant pattern) plus rule B (right pattern,
-// environment-restricted) grants nothing.
+// the metadata wildcard AND its own org restriction.
 //
-// Would-deny recording: the ORG axis only, never the metadata axis.
-//
-//   - Metadata axis: nothing to record. The scope_would_deny series measure
-//     how many grants hinge on the unlabeled-tenant leniency, and their
-//     increase()==0 is the flip criterion for the enforce flags. This
-//     decision grants no metadata leniency at all (unrestricted-only in both
-//     modes), so flipping --rbac-metadata-scope-enforce can never change it,
-//     and a broken file is an incident state rather than a labeling gap.
-//   - Org axis: recorded exactly as ScopeAllowed records it, with the
-//     metadata side held at "unrestricted-only". tenantOrgs comes from
-//     _tenant_orgs.yaml, which the broken file does not touch, so an
-//     unlabeled tenant here is a GENUINE labeling gap: a degraded row that is
-//     visible only through the org axis's shadow leniency would otherwise
-//     vanish, unannounced, the moment --rbac-org-scope-enforce is flipped
-//     after the {axis="org"} soak showed increase()==0.
-//
-// Open mode (no groups) matches ScopeAllowed: failClosedOnEmpty denies,
-// otherwise visible (and records nothing, as ScopeAllowed does).
+// Denial recording: the ORG axis only. A broken file is an incident state,
+// not a labeling gap, so the metadata axis records nothing here.
 func (m *Manager) ScopeAllowedUnknownMetadata(p *VerifiedPrincipal, tenantID string, tenantOrgs []string) bool {
 	cfg := m.Get()
-	if len(cfg.Groups) == 0 {
-		return !m.failClosedOnEmpty // MED-8 deny when configured-but-empty; open mode otherwise
-	}
-
 	subject := subjectFor(p)
-	var visShadow, visEnforce bool // per org mode; metadata fixed at unrestricted-only
+	orgBlocked := false
 	for i := range cfg.Groups {
 		rule := &cfg.Groups[i]
 		if !subject.ruleMatches(rule) {
@@ -1117,53 +879,27 @@ func (m *Manager) ScopeAllowedUnknownMetadata(p *VerifiedPrincipal, tenantID str
 		if len(rule.Environments) != 0 || len(rule.Domains) != 0 {
 			continue // restricted on a metadata axis whose value is unknown
 		}
-		orgShadow, orgEnforce := true, true // no org-scope on this rule = no org restriction
-		if rule.OrgScope != "" {
-			orgShadow, orgEnforce = scopeSetModes(subject.claims[rule.OrgScope], tenantOrgs)
+		if rule.OrgScope == "" || scopeSetPasses(subject.claims[rule.OrgScope], tenantOrgs) {
+			return true
 		}
-		visShadow = visShadow || orgShadow
-		visEnforce = visEnforce || orgEnforce
-		if visShadow && visEnforce {
-			break // both org modes decided; further rules cannot change either
-		}
+		orgBlocked = true
 	}
-
-	m.recordScopeShadowGap(visShadow, visEnforce, scopeAxisOrg)
-	if m.orgScopeEnforce {
-		return visEnforce
+	if orgBlocked {
+		m.recordScopeDenied(scopeAxisOrg)
 	}
-	return visShadow
-}
-
-// visAt selects one of the four aggregate visibility booleans by the effective
-// per-axis modes (false=shadow, true=enforce). The index order matches the
-// visSS/visSE/visES/visEE naming: first bit = metadata mode, second = org mode.
-func visAt(visSS, visSE, visES, visEE, metaEnforce, orgEnforce bool) bool {
-	switch {
-	case !metaEnforce && !orgEnforce:
-		return visSS
-	case !metaEnforce && orgEnforce:
-		return visSE
-	case metaEnforce && !orgEnforce:
-		return visES
-	default:
-		return visEE
-	}
+	return false // includes the empty rule set: no open mode (ADR-027 §7)
 }
 
 // accessibleFieldFor is the shared implementation behind AccessibleEnvironmentsFor
 // and AccessibleDomainsFor: the two differ ONLY in which per-rule string slice
-// they collect, supplied here by selector. It preserves that pair's semantics
-// byte-for-byte — open mode (no groups) returns nil, a matched rule with an
-// EMPTY selected slice is the wildcard that short-circuits to nil ("no
-// restriction"), and otherwise the union of the selected values across every
+// they collect, supplied here by selector. A matched rule with an EMPTY
+// selected slice is the wildcard that short-circuits to nil ("no
+// restriction"); otherwise the union of the selected values across every
 // matched rule is returned (map-collected, so unordered and de-duplicated).
+// No matched rule — including the empty rule set — yields a non-nil empty
+// slice: no access.
 func (m *Manager) accessibleFieldFor(p *VerifiedPrincipal, selector func(*GroupRule) []string) []string {
 	cfg := m.Get()
-	if len(cfg.Groups) == 0 {
-		return nil // open mode
-	}
-
 	subject := subjectFor(p)
 	hasWildcard := false
 	values := make(map[string]bool)
@@ -1226,76 +962,55 @@ func (m *Manager) RulesMatching(p *VerifiedPrincipal) []GroupRule {
 	return out
 }
 
-// scopeFieldModes evaluates one metadata field (environment or domain) against
-// a matching rule's allow-list under BOTH scope modes at once, returning
-// (passesShadow, passesEnforce). It is pure (no side effects) — the would-deny
-// recording happens once per tenant at the decision site (recordScopeShadowGap),
-// not per field, so the counter measures would-be-hidden tenants rather than
-// field-checks (ADR-027 / LD-6 P1).
+// scopeFieldPasses evaluates one metadata field (environment or domain)
+// against a matching rule's allow-list (ADR-027 §7):
 //
-//   - Empty allow-list → (true, true):  the rule does not restrict this field.
-//   - Empty value      → (true, false): unlabeled tenant on a restricted field —
-//     shadow is lenient (passes, legacy fail-open), enforce is strict (denies).
-//   - Labeled value    → (ok, ok):      exact membership, identical in both modes.
-//
-// Shared across scope axes (P1 metadata; P4 org) as the pure evaluation rail.
-func scopeFieldModes(allowList []string, value string) (passShadow, passEnforce bool) {
+//   - Empty allow-list → true:  the rule does not restrict this field.
+//   - Empty value      → false: unlabeled tenant on a restricted field.
+//   - Labeled value    → exact membership.
+func scopeFieldPasses(allowList []string, value string) bool {
 	if len(allowList) == 0 {
-		return true, true // wildcard — no restriction on this field
+		return true // wildcard — no restriction on this field
 	}
 	if value == "" {
-		return true, false // unlabeled: shadow allows, enforce denies
+		return false // unlabeled tenant on a restricted field
 	}
-	ok := metadataMatches(allowList, value)
-	return ok, ok
+	return metadataMatches(allowList, value)
 }
 
-// scopeSetModes is the org-axis analogue of scopeFieldModes (ADR-027 / LD-6 P4):
-// a set-membership test of the caller's org value against the tenant's org list,
-// evaluated under BOTH scope modes at once, returning (passesShadow,
-// passesEnforce). Pure — the would-deny recording happens once per axis at the
-// decision site (recordScopeShadowGap in ScopeAllowed for the list plane,
-// AllowedInOrg for the write plane), not here.
+// scopeSetPasses is the org-axis analogue of scopeFieldPasses: a
+// set-membership test of the caller's org value against the tenant's org list.
 //
-//   - len(tenantOrgs)==0 (UNLABELED tenant) → (true, false): shadow allows
-//     (migration leniency, would-deny recorded), enforce denies. ⚠️ This is the
-//     OPPOSITE of scopeFieldModes' empty-allow-list wildcard: an empty org list
-//     means "tenant not yet assigned to any org", NOT "no org restriction". An
-//     org-scoped rule with a wildcard-on-empty here would grant every unlabeled
-//     tenant to every caller — the exact leak org-scope exists to prevent.
-//   - userOrgVal=="" (caller carries no org claim) on a LABELED tenant →
-//     (false, false): denied in both modes (no basis to match), mirroring a
-//     metadata labeled-non-match.
-//   - LABELED tenant, non-empty caller org → (ok, ok) with ok = membership;
-//     identical in both modes (a labeled non-match is denied even in shadow).
-func scopeSetModes(userOrgVal string, tenantOrgs []string) (passShadow, passEnforce bool) {
+//   - len(tenantOrgs)==0 (UNLABELED tenant) → false. ⚠️ This is the OPPOSITE of
+//     scopeFieldPasses' empty-allow-list wildcard: an empty org list means
+//     "tenant not yet assigned to any org", NOT "no org restriction". A
+//     wildcard-on-empty here would grant every unlabeled tenant to every
+//     caller — the exact leak org-scope exists to prevent.
+//   - userOrgVal=="" (caller carries no org claim) → false: no basis to match.
+//   - otherwise → membership.
+func scopeSetPasses(userOrgVal string, tenantOrgs []string) bool {
 	if len(tenantOrgs) == 0 {
-		return true, false // unlabeled tenant: shadow allows, enforce denies
+		return false // unlabeled tenant: no org to match
 	}
 	if userOrgVal == "" {
-		return false, false // labeled tenant, no caller org → no basis to match
+		return false // caller carries no org claim: no basis to match
 	}
 	for _, o := range tenantOrgs {
 		if o == userOrgVal {
-			return true, true
+			return true
 		}
 	}
-	return false, false // labeled non-match: denied in both modes
+	return false
 }
 
-// recordScopeShadowGap records one would-deny for axis iff a subject is visible
-// under shadow but would be hidden under enforce — i.e. its access hinges on the
-// unlabeled-tenant leniency. Called once per scope decision (per user+tenant),
-// so the counter measures would-be-hidden subjects, not per-field checks: a
-// tenant with two restricted-and-unlabeled fields is one observation, and a
-// tenant that another rule grants under strict semantics is zero (no false
-// positive that would keep the shadow-soak counter off zero forever). Under
-// enforce mode the same condition holds for a tenant that IS being hidden, so
-// the counter keeps doubling as a "denied by scope" signal. nil sink → no-op.
-// Shared across scope axes (P1 metadata; P4 org).
-func (m *Manager) recordScopeShadowGap(shadowVisible, enforceVisible bool, axis string) {
-	if shadowVisible && !enforceVisible && m.scopeAudit != nil {
-		m.scopeAudit.IncWouldDeny(axis)
+// recordScopeDenied counts one decision that a scope axis denied — a rule
+// matched the caller and the tenant (and granted the permission asked for)
+// but its scope restriction on axis did not pass, and no other rule granted.
+// Called at most once per axis per decision, so the counter measures denied
+// decisions, not per-field checks. nil sink → no-op.
+func (m *Manager) recordScopeDenied(axis string) {
+	if m.scopeAudit != nil {
+		m.scopeAudit.IncScopeDenied(axis)
 	}
 }
 

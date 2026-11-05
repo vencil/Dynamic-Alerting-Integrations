@@ -148,13 +148,13 @@ func OrgAllowed(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
 
 // OrgAllowedRead is the READ/VISIBILITY-plane sibling of OrgAllowed (ADR-027 /
 // LD-6 P4c): it resolves the tenant's org list and routes through
-// rbac.AllowedInOrgRead, which records its would-deny on axis="org" (the same
+// rbac.AllowedInOrgRead, which records a scope denial on axis="org" (the same
 // series the list-plane ScopeAllowed uses) rather than the write plane's
 // axis="org_write". Used by the collection read filters (filterByRBAC over
 // PR lists / task results, and hasAccessibleMember/filterAccessibleMembers for
 // the ListGroups and GetGroup member lists) so those reads stop being a
-// cross-org tenant-reference oracle once the org flag flips — the read plane
-// closes in lockstep with read-by-id. Like OrgAllowed, tenantOrg may be nil
+// cross-org tenant-reference oracle — the read plane closes in lockstep with
+// read-by-id. Like OrgAllowed, tenantOrg may be nil
 // (nil-receiver-safe → unlabeled).
 func OrgAllowedRead(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manager,
 	p *rbac.VerifiedPrincipal, tenantID string, want rbac.Permission) bool {
@@ -219,9 +219,7 @@ func orgWriteAt(r *http.Request, d *Deps, tenantID string) (writeGate, bool) {
 // cfg.PatchableAsString) and runs the same post-state check per op
 // (gateBatchOpPostState).
 //
-// The check runs the SAME predicate against the PROPOSED metadata, so it
-// inherits the axis's flag: in shadow it changes nothing, and it closes the gap
-// exactly when --rbac-metadata-write-scope-enforce is flipped. Call it AFTER
+// The check runs the SAME predicate against the PROPOSED metadata. Call it AFTER
 // the body is read and BEFORE any write; RequireOrgWrite still runs first so a
 // denied caller learns nothing from a body it was never allowed to submit.
 func RequireOrgWriteProposed(w http.ResponseWriter, r *http.Request, d *Deps,
@@ -263,7 +261,7 @@ func scopePairOf(meta ScopeMetaFunc, tenantID string) scopePair {
 
 // writeGate is what a gate on the local tree judged a tenant on: its
 // (environment, domain) and its organizations (orgsKey). A PR-mode write
-// passes it down to the in-lock re-judgement, which counts a would-deny only
+// passes it down to the in-lock re-judgement, which counts a scope denial only
 // for a value that differs on the fresh base (freshScopeAllowed).
 type writeGate struct {
 	pair scopePair
@@ -323,7 +321,7 @@ func freshWriteScope(configDir, tenantID string) (pair scopePair, judged bool) {
 // (environment, domain) there.
 //
 // gate is what the gate on the local tree judged (passed down, not read
-// again). A shadow would-deny is recorded only for a value that differs from
+// again). A scope denial is recorded only for a value that differs from
 // it, so each write is counted once per value; countOrg is set on one of a
 // write's calls only, as the organizations are the same for all of them.
 // An org file that does not parse on the base refuses the write.
@@ -343,7 +341,7 @@ func requireOrgWriteWithMeta(w http.ResponseWriter, r *http.Request, d *Deps,
 	tenantID string, want rbac.Permission, meta ScopeMetaFunc, denyMsg string) bool {
 	// A Deps literal without an RBAC manager is a TEST-ONLY state (nil-safe
 	// contract, mirroring TenantOrg above): main.go always wires a non-nil
-	// manager — even open mode is a non-nil Manager — and the route-level
+	// manager — even with no _rbac.yaml — and the route-level
 	// RBAC middleware dereferences the same manager, so a nil here can never
 	// be reached by a routed production request. Treating it as "no RBAC
 	// layer configured" preserves the pre-P4b behavior of the handlers these
@@ -366,12 +364,9 @@ func requireOrgWriteWithMeta(w http.ResponseWriter, r *http.Request, d *Deps,
 //
 // "All tenants" is rbac.PlatformUnrestricted(p, PermWrite): a matching rule
 // whose tenant list holds the literal "*" (a prefix pattern such as "svc-*" is
-// not all tenants) and that carries no org-scope, environments or domains. The
-// scope-axis flags (orgScopeEnforce / metadata*ScopeEnforce) are deliberately
-// NOT consulted: in shadow mode a scoped "*" rule still reaches unlabeled
-// tenants, but that is migration leniency on tenants whose labels are known,
-// and a file that cannot be parsed has no labels to check — so a scoped caller
-// never passes, in either mode. RequireOrgWrite has already authorized the URL
+// not all tenants) and that carries no org-scope, environments or domains: a
+// file that cannot be parsed has no labels to check, so a scoped caller never
+// passes. RequireOrgWrite has already authorized the URL
 // tenant; this only decides the extra bit. A Deps without an RBAC manager (a
 // test-only state, see requireOrgWriteWithMeta) does not get the bit — the
 // refusal is the fail-closed side.
@@ -400,14 +395,8 @@ func mayReplaceUnparseable(r *http.Request, d *Deps) bool {
 // member tenant it covers. tenantOrg may be nil (test literals) —
 // see OrgAllowed.
 //
-// Open mode (no `_rbac.yaml`): the permission check grants READ
-// only — a write/admin check denies every tenant, so for
-// PermWrite/PermAdmin this helper returns the full input list.
-// In practice the route-level middleware's platform-scope gate
-// (`Allowed(p, "*", PermWrite)`) already 403s an open-mode write
-// request before any handler calling this helper runs; the
-// per-tenant denial here is the defense-in-depth layer (see
-// TestTenantsLackingPermission_OpenModeWriteRejectsAll).
+// No rules (no `_rbac.yaml`, or one without rules): every tenant is
+// denied, so this helper returns the full input list (ADR-027 §7).
 //
 // Edge cases:
 //   - tenantIDs is nil/empty → empty result (nothing to check)
@@ -438,17 +427,15 @@ func tenantsLackingPermission(rbacMgr *rbac.Manager, tenantOrg *tenantorg.Manage
 // single tenant) end up surfacing to readers without false-403'ing
 // on a missing tag.
 //
-// Empty / nil input → returned as-is. Open-read mode (no
-// _rbac.yaml) → OrgAllowedRead returns true for every tenant, so
-// this helper effectively becomes the identity transform — no
-// restrictions, allocation cost only.
+// Empty / nil input → returned as-is. No rules (no _rbac.yaml) →
+// OrgAllowedRead denies every tenant, so the result is empty.
 //
 // Org-aware read filter (ADR-027 / LD-6 P4c): each item's tenant is checked
 // through OrgAllowedRead, so a group-member / PR / task entry belonging to a
-// tenant outside the caller's org is filtered out once --rbac-org-scope-enforce
-// flips — the read plane closes in lockstep with read-by-id (P4c converted this
-// from the pre-P4c org-blind Allowed, removing its org_write_guard exemption).
-// The would-deny records on axis="org" (read/visibility plane). tenantOrg may be
+// tenant outside the caller's org is filtered out — the read plane closes in
+// lockstep with read-by-id (P4c converted this from the pre-P4c org-blind
+// Allowed, removing its org_write_guard exemption). A scope denial records on
+// axis="org" (read/visibility plane). tenantOrg may be
 // nil (test literals) — OrgsForTenant is nil-receiver-safe → unlabeled.
 //
 // Generic over the slice element type so it covers the four

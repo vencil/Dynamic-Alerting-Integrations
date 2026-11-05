@@ -10,17 +10,15 @@ package handler
 //   - authorized-caller 400 matrix: id/query/body-shell/candidate/limit
 //     failures fire only AFTER the bar (grounding the check order from the
 //     authorized side, mirroring the GET tests).
-//   - diff goldens: the unlabeled-tenant shadow/enforce divergent pair
-//     (pass_unlabeled vs fail_unlabeled — the ONLY outcome pair where the
-//     two fail-modes flip), the labeled-tenant conditional convergence, the
+//   - diff goldens: the unlabeled-tenant not_required → fail_unlabeled flip,
+//     the labeled-tenant not_required → conditional_on_caller_org flip, the
 //     unsatisfiable-only delta, rename→removed+added, duplicate-name→coarse.
 //   - redact-then-diff property: the redacted response serializes with ZERO
 //     rule/group names, claim keys or org values while the pre-redaction
 //     pairing (indexes + outcome deltas) survives.
 //   - meta-audit: hashes and diff counts are logged, candidate content never.
 //
-// Candidate-evaluation fidelity (parse pipeline, fail-closed bit, report
-// equivalence) is pinned at the rbac layer (candidate_test.go); these tests
+// Candidate-evaluation fidelity (parse pipeline, report equivalence) is pinned at the rbac layer (candidate_test.go); these tests
 // pin what the HTTP surface adds.
 
 import (
@@ -120,7 +118,7 @@ const dryrunCandidateRBACYAML = `groups:
 // newDryRunFixture mirrors newAuditReverseFixture: production RBAC
 // constructor with the org claim header declared, tenantorg labeling one
 // tenant and onboarding a second with zero orgs (the unlabeled state the
-// shadow/enforce divergence keys on).
+// fail_unlabeled outcome keys on).
 func newDryRunFixture(t *testing.T) *Deps {
 	t.Helper()
 	claimHeaders := map[string]string{"org": dryrunOrgClaimHeader}
@@ -309,10 +307,10 @@ func TestDryRun_AuthorizedCaller400s(t *testing.T) {
 }
 
 // TestDryRun_DiffGolden_UnlabeledFlip pins the diff on the UNLABELED tenant:
-// adding org-scope to a matched rule is the ONLY combination where the two
-// fail-modes diverge — shadow flips to pass_unlabeled while enforce flips to
-// fail_unlabeled — plus the rename rendered as removed+added, exact
-// alignment, and the envelope basics (versions, hash, anchors, caveats).
+// adding org-scope to a matched rule flips its outcome to fail_unlabeled
+// (an org-scoped rule grants nothing on an unlabeled tenant), plus the rename
+// rendered as removed+added, exact alignment, and the envelope basics
+// (versions, hash, anchors, caveats).
 func TestDryRun_DiffGolden_UnlabeledFlip(t *testing.T) {
 	t.Parallel()
 	d := newDryRunFixture(t)
@@ -321,8 +319,8 @@ func TestDryRun_DiffGolden_UnlabeledFlip(t *testing.T) {
 		dryRunBody(t, dryrunCandidateRBACYAML))
 	resp := decodeDryRun(t, w)
 
-	if resp.SchemaVersion != 1 {
-		t.Errorf("schema_version = %d, want 1", resp.SchemaVersion)
+	if resp.SchemaVersion != 2 {
+		t.Errorf("schema_version = %d, want 2", resp.SchemaVersion)
 	}
 	sum := sha256.Sum256([]byte(dryrunCandidateRBACYAML))
 	if want := hex.EncodeToString(sum[:]); resp.CandidateSHA256 != want {
@@ -348,13 +346,9 @@ func TestDryRun_DiffGolden_UnlabeledFlip(t *testing.T) {
 	if c.Rule != "dryrun-ops" || c.LiveIndex != 3 || c.CandidateIndex != 3 {
 		t.Errorf("changed entry = %+v, want dryrun-ops live_index=3 candidate_index=3", c)
 	}
-	if c.OutcomeShadow == nil || c.OutcomeShadow.From != rbac.OrgOutcomeNotRequired ||
-		c.OutcomeShadow.To != rbac.OrgOutcomePassUnlabeled {
-		t.Errorf("outcome_shadow delta = %+v, want not_required → pass_unlabeled", c.OutcomeShadow)
-	}
-	if c.OutcomeEnforce == nil || c.OutcomeEnforce.From != rbac.OrgOutcomeNotRequired ||
-		c.OutcomeEnforce.To != rbac.OrgOutcomeFailUnlabeled {
-		t.Errorf("outcome_enforce delta = %+v, want not_required → fail_unlabeled", c.OutcomeEnforce)
+	if c.Outcome == nil || c.Outcome.From != rbac.OrgOutcomeNotRequired ||
+		c.Outcome.To != rbac.OrgOutcomeFailUnlabeled {
+		t.Errorf("outcome delta = %+v, want not_required → fail_unlabeled", c.Outcome)
 	}
 	if c.Unsatisfiable != nil {
 		t.Errorf("unsatisfiable delta = %+v, want absent (false on both sides)", c.Unsatisfiable)
@@ -371,8 +365,8 @@ func TestDryRun_DiffGolden_UnlabeledFlip(t *testing.T) {
 }
 
 // TestDryRun_DiffGolden_LabeledConditional pins the diff on the LABELED
-// tenant: the same org-scope addition converges to conditional_on_caller_org
-// in BOTH fail-modes (the divergent unlabeled pair must not appear), and the
+// tenant: the same org-scope addition flips to conditional_on_caller_org
+// (not fail_unlabeled: the tenant has an org), and the
 // re-pinned rule surfaces as an unsatisfiable-ONLY delta — proving the third
 // axis alone marks a pair changed.
 func TestDryRun_DiffGolden_LabeledConditional(t *testing.T) {
@@ -395,20 +389,16 @@ func TestDryRun_DiffGolden_LabeledConditional(t *testing.T) {
 	if ops.Rule != "dryrun-ops" {
 		t.Fatalf("changed[0] = %+v, want dryrun-ops (live config order)", ops)
 	}
-	for name, delta := range map[string]*StringDelta{"outcome_shadow": ops.OutcomeShadow, "outcome_enforce": ops.OutcomeEnforce} {
-		if delta == nil || delta.From != rbac.OrgOutcomeNotRequired || delta.To != rbac.OrgOutcomeConditional {
-			t.Errorf("ops %s delta = %+v, want not_required → conditional_on_caller_org (both modes converge on a labeled tenant)",
-				name, delta)
-		}
+	if delta := ops.Outcome; delta == nil || delta.From != rbac.OrgOutcomeNotRequired || delta.To != rbac.OrgOutcomeConditional {
+		t.Errorf("ops outcome delta = %+v, want not_required → conditional_on_caller_org (a labeled tenant)", delta)
 	}
 
 	pinned := resp.Diff.Changed[1]
 	if pinned.Rule != "dryrun-pinned" || pinned.LiveIndex != 4 || pinned.CandidateIndex != 4 {
 		t.Fatalf("changed[1] = %+v, want dryrun-pinned live_index=4 candidate_index=4", pinned)
 	}
-	if pinned.OutcomeShadow != nil || pinned.OutcomeEnforce != nil {
-		t.Errorf("pinned outcome deltas = %+v / %+v, want both absent (conditional on both sides)",
-			pinned.OutcomeShadow, pinned.OutcomeEnforce)
+	if pinned.Outcome != nil {
+		t.Errorf("pinned outcome delta = %+v, want absent (conditional on both sides)", pinned.Outcome)
 	}
 	if pinned.Unsatisfiable == nil || pinned.Unsatisfiable.From || !pinned.Unsatisfiable.To {
 		t.Errorf("pinned unsatisfiable delta = %+v, want false → true (re-pinned to an org the tenant lacks)",
@@ -565,7 +555,7 @@ func TestDryRun_RedactedNoIdentifiers(t *testing.T) {
 	if len(resp.Diff.Changed) != 2 || len(resp.Diff.Added) != 1 || len(resp.Diff.Removed) != 1 {
 		t.Fatalf("redacted diff lost the pre-redaction pairing: %+v", resp.Diff)
 	}
-	if resp.Diff.Changed[0].LiveIndex != 3 || resp.Diff.Changed[0].OutcomeShadow == nil {
+	if resp.Diff.Changed[0].LiveIndex != 3 || resp.Diff.Changed[0].Outcome == nil {
 		t.Errorf("redacted changed entry lost indexes/outcomes: %+v", resp.Diff.Changed[0])
 	}
 	if resp.CandidateSHA256 == "" {
@@ -676,10 +666,10 @@ func TestDryRun_UnchangedBucket(t *testing.T) {
 	}
 }
 
-// TestDryRun_ChangedGolden_ClaimKeyAxis pins the fourth diffable axis
+// TestDryRun_ChangedGolden_ClaimKeyAxis pins the third diffable axis
 // (org_gate.claim_key): a same-name pair re-scoped from one declared claim key
-// to another, evaluated against an UNLABELED tenant, leaves the three outcome
-// axes identical (both read pass/fail_unlabeled, unsatisfiable false) — so the
+// to another, evaluated against an UNLABELED tenant, leaves the two outcome
+// axes identical (both read fail_unlabeled, unsatisfiable false) — so the
 // claim_key axis is the ONLY thing that marks the pair changed. Without it the
 // re-scope would silently drop into unchanged.
 func TestDryRun_ChangedGolden_ClaimKeyAxis(t *testing.T) {
@@ -726,9 +716,9 @@ func TestDryRun_ChangedGolden_ClaimKeyAxis(t *testing.T) {
 	if c.ClaimKey == nil || c.ClaimKey.From != "org" || c.ClaimKey.To != "team" {
 		t.Errorf("claim_key delta = %+v, want org → team", c.ClaimKey)
 	}
-	if c.OutcomeShadow != nil || c.OutcomeEnforce != nil || c.Unsatisfiable != nil {
-		t.Errorf("outcome deltas = %+v/%+v/%+v, want all absent (only claim_key changed on an unlabeled tenant)",
-			c.OutcomeShadow, c.OutcomeEnforce, c.Unsatisfiable)
+	if c.Outcome != nil || c.Unsatisfiable != nil {
+		t.Errorf("outcome deltas = %+v/%+v, want both absent (only claim_key changed on an unlabeled tenant)",
+			c.Outcome, c.Unsatisfiable)
 	}
 }
 

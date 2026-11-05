@@ -69,8 +69,8 @@ func makeFixtureDir(t *testing.T, n int, factory func(i int) (string, string)) s
 // cmd/server/main.go) so context-stored identity reaches the handler
 // — `rbac.RequestGroups()` reads from request context, not headers
 // directly. Without the middleware the context value is nil and
-// every test would silently behave as "open mode" regardless of
-// the configured groups.
+// every test would silently see nothing regardless of the configured
+// groups.
 //
 // `X-Forwarded-Email` is required by the middleware (it 401s if
 // missing); we set a stub email ("test@example.com") on every
@@ -106,13 +106,6 @@ func runSearch(t *testing.T, configDir string, mgr *rbac.Manager, idpGroups []st
 	return &resp, rec.Code, body
 }
 
-// openModeRBAC returns a manager with no group config — the RBAC
-// open-mode contract grants read to everything.
-func openModeRBAC(t *testing.T) *rbac.Manager {
-	t.Helper()
-	return newRBACManager(t, "")
-}
-
 // ── happy path ─────────────────────────────────────────────────────
 
 func TestSearchTenants_DefaultsReturnAllInPageSize(t *testing.T) {
@@ -121,7 +114,7 @@ func TestSearchTenants_DefaultsReturnAllInPageSize(t *testing.T) {
 		id := fmt.Sprintf("tenant-%d", i)
 		return id + ".yaml", fixtureTenantYAML(id, "prod", "tier1", "db", "mariadb", "alice")
 	})
-	resp, code, _ := runSearch(t, dir, openModeRBAC(t), nil, "")
+	resp, code, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "")
 	if code != http.StatusOK {
 		t.Fatalf("status = %d, want 200", code)
 	}
@@ -147,7 +140,7 @@ func TestSearchTenants_SortedByIDAscByDefault(t *testing.T) {
 		"alpha.yaml": fixtureTenantYAML("alpha", "prod", "tier1", "db", "mariadb", "alice"),
 		"mid.yaml":   fixtureTenantYAML("mid", "prod", "tier1", "db", "mariadb", "alice"),
 	})
-	resp, _, _ := runSearch(t, dir, openModeRBAC(t), nil, "")
+	resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "")
 	got := []string{resp.Items[0].ID, resp.Items[1].ID, resp.Items[2].ID}
 	want := []string{"alpha", "mid", "zeta"}
 	for i := range got {
@@ -166,9 +159,9 @@ func TestSearchTenants_PaginationProducesStableSlices(t *testing.T) {
 		return id + ".yaml", fixtureTenantYAML(id, "prod", "tier1", "db", "mariadb", "alice")
 	})
 	// page_size=10 → expect 3 pages (10, 10, 5).
-	page1, _, _ := runSearch(t, dir, openModeRBAC(t), nil, "page_size=10&offset=0")
-	page2, _, _ := runSearch(t, dir, openModeRBAC(t), nil, "page_size=10&offset=10")
-	page3, _, _ := runSearch(t, dir, openModeRBAC(t), nil, "page_size=10&offset=20")
+	page1, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "page_size=10&offset=0")
+	page2, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "page_size=10&offset=10")
+	page3, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "page_size=10&offset=20")
 
 	if len(page1.Items) != 10 || len(page2.Items) != 10 || len(page3.Items) != 5 {
 		t.Errorf("page sizes = %d/%d/%d, want 10/10/5",
@@ -205,7 +198,7 @@ func TestSearchTenants_OffsetPastEndReturnsEmpty(t *testing.T) {
 		id := fmt.Sprintf("t-%d", i)
 		return id + ".yaml", fixtureTenantYAML(id, "prod", "tier1", "db", "mariadb", "alice")
 	})
-	resp, code, _ := runSearch(t, dir, openModeRBAC(t), nil, "page_size=10&offset=100")
+	resp, code, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "page_size=10&offset=100")
 	if code != http.StatusOK {
 		t.Fatalf("status = %d, want 200 (empty page is not an error)", code)
 	}
@@ -227,7 +220,7 @@ func TestSearchTenants_PageSizeOverMaxReturns400(t *testing.T) {
 	dir := makeFixtureDir(t, 1, func(i int) (string, string) {
 		return "x.yaml", fixtureTenantYAML("x", "prod", "tier1", "db", "mariadb", "alice")
 	})
-	_, code, body := runSearch(t, dir, openModeRBAC(t), nil, "page_size=501")
+	_, code, body := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "page_size=501")
 	if code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", code)
 	}
@@ -241,7 +234,7 @@ func TestSearchTenants_NegativePageSizeReturns400(t *testing.T) {
 	dir := makeFixtureDir(t, 1, func(i int) (string, string) {
 		return "x.yaml", fixtureTenantYAML("x", "prod", "tier1", "db", "mariadb", "alice")
 	})
-	_, code, _ := runSearch(t, dir, openModeRBAC(t), nil, "page_size=-5")
+	_, code, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "page_size=-5")
 	if code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", code)
 	}
@@ -252,7 +245,7 @@ func TestSearchTenants_NegativeOffsetReturns400(t *testing.T) {
 	dir := makeFixtureDir(t, 1, func(i int) (string, string) {
 		return "x.yaml", fixtureTenantYAML("x", "prod", "tier1", "db", "mariadb", "alice")
 	})
-	_, code, _ := runSearch(t, dir, openModeRBAC(t), nil, "offset=-1")
+	_, code, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "offset=-1")
 	if code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", code)
 	}
@@ -263,7 +256,7 @@ func TestSearchTenants_UnknownSortKeyReturns400(t *testing.T) {
 	dir := makeFixtureDir(t, 1, func(i int) (string, string) {
 		return "x.yaml", fixtureTenantYAML("x", "prod", "tier1", "db", "mariadb", "alice")
 	})
-	_, code, body := runSearch(t, dir, openModeRBAC(t), nil, "sort=created_at")
+	_, code, body := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "sort=created_at")
 	if code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", code)
 	}
@@ -277,7 +270,7 @@ func TestSearchTenants_NonNumericPageSizeReturns400(t *testing.T) {
 	dir := makeFixtureDir(t, 1, func(i int) (string, string) {
 		return "x.yaml", fixtureTenantYAML("x", "prod", "tier1", "db", "mariadb", "alice")
 	})
-	_, code, _ := runSearch(t, dir, openModeRBAC(t), nil, "page_size=banana")
+	_, code, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "page_size=banana")
 	if code != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400", code)
 	}
@@ -292,7 +285,7 @@ func TestSearchTenants_EnvironmentFilterExactMatch(t *testing.T) {
 		"prod-2.yaml":    fixtureTenantYAML("prod-2", "prod", "tier2", "db", "mariadb", "alice"),
 		"staging-1.yaml": fixtureTenantYAML("staging-1", "staging", "tier1", "db", "mariadb", "alice"),
 	})
-	resp, _, _ := runSearch(t, dir, openModeRBAC(t), nil, "environment=prod")
+	resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "environment=prod")
 	if resp.TotalMatched != 2 {
 		t.Errorf("total_matched = %d, want 2 (prod-1, prod-2)", resp.TotalMatched)
 	}
@@ -312,7 +305,7 @@ func TestSearchTenants_MultipleFiltersAreANDed(t *testing.T) {
 		"d.yaml": fixtureTenantYAML("d", "staging", "tier1", "billing", "mariadb", "alice"),
 	})
 	// Only `a` matches all three (env=prod, tier=tier1, domain=billing).
-	resp, _, _ := runSearch(t, dir, openModeRBAC(t), nil,
+	resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups,
 		"environment=prod&tier=tier1&domain=billing")
 	if resp.TotalMatched != 1 {
 		t.Fatalf("total_matched = %d, want 1", resp.TotalMatched)
@@ -329,7 +322,7 @@ func TestSearchTenants_TagFilterRequiresExactMatch(t *testing.T) {
 		"b.yaml": fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice", "audited"),
 		"c.yaml": fixtureTenantYAML("c", "prod", "tier1", "db", "mariadb", "alice"),
 	})
-	resp, _, _ := runSearch(t, dir, openModeRBAC(t), nil, "tag=audited")
+	resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "tag=audited")
 	if resp.TotalMatched != 2 {
 		t.Errorf("total_matched = %d, want 2 (a, b)", resp.TotalMatched)
 	}
@@ -346,7 +339,7 @@ func TestSearchTenants_FreeTextMatchesIDOwnerDomain(t *testing.T) {
 		"unrelated.yaml":  fixtureTenantYAML("unrelated", "prod", "tier1", "ops", "mariadb", "carol"),
 	})
 	// `q=alpha` should match: alpha-prod (id), beta (domain), gamma (owner)
-	resp, _, _ := runSearch(t, dir, openModeRBAC(t), nil, "q=alpha")
+	resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "q=alpha")
 	if resp.TotalMatched != 3 {
 		t.Errorf("total_matched = %d, want 3 (alpha-prod / beta / gamma)", resp.TotalMatched)
 	}
@@ -370,7 +363,7 @@ func TestSearchTenants_FreeTextIsCaseInsensitive(t *testing.T) {
 		"Tenant-A.yaml": fixtureTenantYAML("Tenant-A", "prod", "tier1", "billing", "mariadb", "alice"),
 	})
 	for _, q := range []string{"tenant-a", "TENANT-A", "TeNaNt-A"} {
-		resp, _, _ := runSearch(t, dir, openModeRBAC(t), nil, "q="+q)
+		resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "q="+q)
 		if resp.TotalMatched != 1 {
 			t.Errorf("q=%q: matched %d, want 1 (case insensitive)", q, resp.TotalMatched)
 		}
@@ -383,7 +376,7 @@ func TestSearchTenants_FreeTextMatchesTags(t *testing.T) {
 		"a.yaml": fixtureTenantYAML("a", "prod", "tier1", "db", "mariadb", "alice", "kubernetes"),
 		"b.yaml": fixtureTenantYAML("b", "prod", "tier1", "db", "mariadb", "alice", "vmware"),
 	})
-	resp, _, _ := runSearch(t, dir, openModeRBAC(t), nil, "q=kuber")
+	resp, _, _ := runSearch(t, dir, unrestrictedRBAC(t), unrestrictedGroups, "q=kuber")
 	if resp.TotalMatched != 1 || resp.Items[0].ID != "a" {
 		t.Errorf("expected only 'a' to match q=kuber; got %+v", resp)
 	}

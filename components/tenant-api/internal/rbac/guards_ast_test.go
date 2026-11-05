@@ -119,10 +119,10 @@ func TestVerifiedPrincipalConstructionConfinedToRBACAndTests(t *testing.T) {
 //
 // AllowedInOrg (via handler.OrgAllowed) is the ONLY legitimate per-tenant
 // write/admin authorization entry point after P4b: a handler that calls the
-// org-blind `Allowed` for a write decision compiles, behaves identically
-// today (shadow mode), and silently DROPS the org-scope axis the moment
-// --rbac-org-scope-enforce flips — the exact silent-failure shape guard 1
-// pins for hand-built principals.
+// scope-blind `Allowed` for a write decision compiles, looks right on any
+// unscoped rule, and silently DROPS the org-scope (and metadata) axis — an
+// org-scoped rule then grants writes on every tenant its pattern names. The
+// exact silent-failure shape guard 1 pins for hand-built principals.
 //
 // This test parses every non-test .go file in the module outside
 // internal/rbac (the package that legitimately implements the check) and
@@ -257,8 +257,8 @@ func TestWritePlaneAllowedCallsConfinedToAllowlist(t *testing.T) {
 
 	if len(violations) > 0 {
 		t.Errorf("org-blind rbac Allowed call in production code outside the sanctioned sites "+
-			"(ADR-027 / LD-6 P4b — the org-scope axis is invisible to Allowed, so a write gate here "+
-			"silently ignores org restrictions once --rbac-org-scope-enforce flips):\n  %s\n"+
+			"(ADR-027 / LD-6 P4b — the scope axes are invisible to Allowed, so a write gate here "+
+			"silently ignores org and environment/domain restrictions):\n  %s\n"+
 			"Fix: per-tenant WRITE/ADMIN decisions must use handler.OrgAllowed / rbac.AllowedInOrg; "+
 			"platform-level gates must pass the literal \"*\" as the tenant argument; a genuine "+
 			"read-plane filter may be added to orgWriteAllowlist with a reason.",

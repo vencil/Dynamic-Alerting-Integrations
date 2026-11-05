@@ -103,10 +103,6 @@ class TestLiveRepoIsClean:
             site.startswith("Makefile:") for site in sites["helm/threshold-exporter"]
         ), sites["helm/threshold-exporter"]
 
-    def test_the_one_exclude_is_honoured_by_a_real_helmignore_line(self) -> None:
-        patterns = gate.helmignore_patterns(REPO_ROOT / "helm" / "tenant-api")
-        assert gate._is_ignored("values-scope-enforce.yaml", patterns)
-
     def test_every_live_ship_declaration_survives_helmignore(self) -> None:
         """The SHIP side, asserted on the live repo rather than a fixture.
 

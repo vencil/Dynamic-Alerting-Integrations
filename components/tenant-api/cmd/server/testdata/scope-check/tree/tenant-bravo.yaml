@@ -1,0 +1,5 @@
+# No environment: an env-operators finding.
+tenants:
+  tenant-bravo:
+    _metadata:
+      domain: finance

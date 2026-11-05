@@ -105,8 +105,7 @@ func eventVisible(d *Deps, p *rbac.VerifiedPrincipal, evt ws.Event) bool {
 }
 
 // readsEveryTenant reports whether p may read every tenant on every scope
-// axis: open mode (no rules, and not the fail-closed-empty state), or a rule
-// granting read on the literal "*" with no org-scope, environments or domains
+// axis: a rule granting read on the literal "*" with no org-scope, environments or domains
 // (rbac.PlatformUnrestricted). It is the bar for anything that is not tied to
 // one tenant and so cannot be judged per tenant — a groups / views state event,
 // a batch PR whose covered tenants are unknown (#3123).
@@ -120,7 +119,7 @@ func readsEveryTenant(m *rbac.Manager, p *rbac.VerifiedPrincipal) bool {
 }
 
 // readsViews reports whether p may read the saved views (GET /views, GET
-// /views/{id}, a views change event): open mode, or a rule granting read on
+// /views/{id}, a views change event): a rule granting read on
 // the literal "*" with no org-scope (rbac.PlatformNonOrgScoped, #3160). A view
 // belongs to no tenant and no org, so an org-scoped "*" rule does not reach
 // it; environments / domains are not consulted — a view's filters name label
@@ -129,16 +128,10 @@ func readsViews(m *rbac.Manager, p *rbac.VerifiedPrincipal) bool {
 	return m != nil && readsPlatform(m, p, m.PlatformNonOrgScoped)
 }
 
-// readsPlatform is the shape every platform-level READ bar shares: with no
-// rules it is open mode's answer (read everything) unless the manager is in
-// the fail-closed-empty state (MED-8: a configured _rbac.yaml with zero groups
-// denies all); with rules it is bar at read level. The rule predicates
-// themselves return false in both zero-group states, so open-mode read access
-// has to be decided here, before them.
-func readsPlatform(m *rbac.Manager, p *rbac.VerifiedPrincipal,
+// readsPlatform is the shape every platform-level READ bar shares: bar at
+// read level. With no rules the bar finds no rule and denies (ADR-027 §7:
+// there is no open mode).
+func readsPlatform(_ *rbac.Manager, p *rbac.VerifiedPrincipal,
 	bar func(*rbac.VerifiedPrincipal, rbac.Permission) bool) bool {
-	if len(m.Get().Groups) == 0 {
-		return !m.FailClosedOnEmpty()
-	}
 	return bar(p, rbac.PermRead)
 }

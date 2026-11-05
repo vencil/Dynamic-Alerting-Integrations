@@ -40,7 +40,7 @@ tenants:
 EOF
 ```
 
-### 2) 跑產生器服務與 tenant-api(零 DB;`TA_RBAC_PATH` 啟用 RBAC,不設則為 open-read;設成空字串會拒絕啟動)
+### 2) 跑產生器服務與 tenant-api(零 DB;`TA_RBAC_PATH` 指向 `_rbac.yaml`,不設則所有存取都被拒絕;設成空字串會拒絕啟動)
 
 tenant-api 每筆會改變 conf.d 內容的寫入,commit 前都問產生器服務(`da-tools generator-service`,經 Unix socket;[ADR-036](../../docs/adr/036-single-parser-effective-config.md)),沒給 `TA_GENERATOR_SOCKET` 就拒絕啟動。產生器只讀 git 物件,所以 conf.d 要是 git repo;兩邊必須同一個 uid(服務只回應同 uid 的對端)。
 

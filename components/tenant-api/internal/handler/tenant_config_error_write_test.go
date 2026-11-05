@@ -362,7 +362,7 @@ func TestBatchTenants_PRMode_NotLoadableJudgedOnFreshBase(t *testing.T) {
 
 // #2405 callers: write on the URL tenant only, write via a prefix pattern that
 // covers it, write via a "*" rule restricted to an environment (a scoped
-// caller — in shadow mode it still reaches the URL tenant), read via an
+// caller — refused on a file whose metadata cannot be read), read via an
 // unrestricted "*" rule plus write on the URL tenant only (all tenants are
 // reachable, but only for read), and write via an unrestricted "*" rule. Only
 // the last may replace a current file that cannot be parsed.
@@ -373,16 +373,21 @@ const repairRBACYAML = "groups:\n" +
 	"  - name: auditors\n    tenants: [\"*\"]\n    permissions: [read]\n" +
 	"  - name: platform\n    tenants: [\"*\"]\n    permissions: [read, write]\n"
 
+// scopeDenied: the caller's only write rule restricts environments, and a
+// file that cannot be read for its metadata is unlabeled to the write gate,
+// which refuses it (403) before any other step (ADR-027 §7: the write plane's
+// environments/domains always bind).
 var repairCallers = []struct {
 	name            string
 	groups          []string
 	platformWritten bool
+	scopeDenied     bool
 }{
-	{"ops", []string{"ops"}, false},
-	{"svc-team", []string{"svc-team"}, false},
-	{"staging-ops", []string{"staging-ops"}, false},
-	{"read-all-write-one", []string{"auditors", "ops"}, false},
-	{"platform", []string{"platform"}, true},
+	{"ops", []string{"ops"}, false, false},
+	{"svc-team", []string{"svc-team"}, false, false},
+	{"staging-ops", []string{"staging-ops"}, false, true},
+	{"read-all-write-one", []string{"auditors", "ops"}, false, false},
+	{"platform", []string{"platform"}, true, false},
 }
 
 // #2405: before the fix, a file whose YAML does not parse, whose `tenants:` is
@@ -453,6 +458,15 @@ func TestPutTenant_RepairsFileExporterRejects(t *testing.T) {
 				req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+id, "id", id, bytes.NewBufferString(repaired))
 				w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", caller.groups)
 				after := mustRead(t, filepath.Join(dir, id+".yaml"))
+				if caller.scopeDenied {
+					if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), string(errcode.Forbidden)) {
+						t.Fatalf("PUT status = %d, want 403 %s; body: %s", w.Code, errcode.Forbidden, w.Body.String())
+					}
+					if after != c.body {
+						t.Errorf("file changed on a refused PUT:\n%s", after)
+					}
+					return
+				}
 				if c.gitManaged {
 					if w.Code != http.StatusConflict || !strings.Contains(w.Body.String(), string(errcode.TenantGitManaged)) {
 						t.Fatalf("PUT status = %d, want 409 %s; body: %s", w.Code, errcode.TenantGitManaged, w.Body.String())
@@ -552,6 +566,12 @@ func TestPutTenant_PRMode_UnparseableBaseFollowsCaller(t *testing.T) {
 				WriteMode: WriteModePR, PRClient: mc, PRTracker: &mockPlatformTracker{}}
 			req := newRequestWithChiParam("PUT", "/api/v1/tenants/"+id, "id", id, bytes.NewBufferString(repaired))
 			w := servePopulatingRBAC(t, PutTenant(deps), req, "alice@example.com", caller.groups)
+			if caller.scopeDenied {
+				if w.Code != http.StatusForbidden || created {
+					t.Fatalf("status = %d, PR created = %v; want 403 and no PR; body: %s", w.Code, created, w.Body.String())
+				}
+				return
+			}
 			if caller.platformWritten {
 				if w.Code != http.StatusOK || !created {
 					t.Fatalf("status = %d, PR created = %v; want 200 and a PR; body: %s", w.Code, created, w.Body.String())
