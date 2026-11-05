@@ -44,15 +44,18 @@ func canonicalDimensionBase(base string) string {
 }
 
 // DimensionBaseRefused reports whether a `dimensions:` base (in either #1231
-// spelling, which share the suffix) names a `<base>_critical` tier rather than a base (#3556). The
-// exporter reads every `<base>_critical` key as the severity=critical tier
-// of `<base>`, so a dimensional `<base>_critical{…}` is no tier: when it was
-// declared it was served as a metric of its own, `<base>_critical` at
-// severity=warning, which no rule pack reads and which has no #1231 twin.
-// A per-dimension critical threshold is `<base>{label="v"}: "N:critical"`.
-// So such a base declares nothing (dimensionDeclared), the root declaration
-// is an error (da-guard's root_dimensions_critical_base) and the build logs
-// it.
+// spelling, which share the suffix) is a `<base>_critical` name (#3556). That
+// name is the severity=critical tier of `<base>` — the one exception, a root
+// `defaults:` valuing `<base>_critical` without `<base>`, is served as a
+// metric of its own and is itself a misconfiguration (#2544's
+// root_defaults_critical_key). A dimensional `<base>_critical{…}` is no tier:
+// when declared it was served as a metric of its own, `<base>_critical` at
+// severity=warning, which no rule pack reads and which has no #1231 twin. A
+// per-dimension critical threshold is `<base>{label="v"}: "N:critical"`. So
+// such a base declares nothing (dimensionDeclared) in every case, the
+// exception above included — deliberately stricter than #2544's warning —,
+// the root declaration is an error (da-guard's
+// root_dimensions_critical_base) and the build logs it.
 func DimensionBaseRefused(base string) bool {
 	b, ok := strings.CutSuffix(base, criticalSuffix)
 	return ok && b != ""

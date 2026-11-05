@@ -351,11 +351,11 @@ func checkRootDimensionsCriticalBase(input CheckInput) []Finding {
 				Severity: SeverityError,
 				Kind:     findingkind.FindingRootDimensionsCriticalBase,
 				Field:    f.Name + ":dimensions." + base,
-				Message: fmt.Sprintf("%s: `%s` under the conf.d root `dimensions:` is a `_critical` tier, not a "+
-					"base, so it declares nothing and no `%s{...}` key is served. The exporter reads `%s` as the "+
-					"severity=critical tier of `%s`; a per-dimension critical threshold is "+
-					"`%s{label=\"v\"}: \"N:critical\"`, its labels declared under `%s`.",
-					f.Name, base, base, base, tier, tier, tier),
+				Message: fmt.Sprintf("%s: `%s` under the conf.d root `dimensions:` is the name of the "+
+					"severity=critical tier of `%s`, not a base, so it declares nothing and no `%s{...}` key is "+
+					"served. A per-dimension critical threshold is `%s{label=\"v\"}: \"N:critical\"`, its labels "+
+					"declared under `%s`.",
+					f.Name, base, tier, base, tier, tier),
 			})
 		}
 	}
