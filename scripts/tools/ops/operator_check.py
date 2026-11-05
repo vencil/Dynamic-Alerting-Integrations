@@ -423,7 +423,7 @@ class OperatorChecker:
         return CheckResult(title, status, "; ".join(notes))
 
     def check_target_health(self) -> CheckResult:
-        """Check 5: Prometheus target health (optional)."""
+        """Check 6: Prometheus target health (optional)."""
         if not self.args.prometheus:
             return CheckResult(i18n("check_targets", self.lang), "skip", i18n("targets_skip", self.lang))
 
