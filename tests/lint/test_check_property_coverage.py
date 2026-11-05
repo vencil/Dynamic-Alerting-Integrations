@@ -243,6 +243,46 @@ class TestValidateManifest:
         assert len(no_reason) == 1
         assert "excluded_fn" in no_reason[0].detail
 
+    def _with_reason(self, repo, reason):
+        return {"modules": {"scripts/tools/_lib_demo.py": {
+            "covered": ["covered_fn"], "excluded": {"excluded_fn": reason}}}}
+
+    @pytest.mark.parametrize("ref", [
+        "tests/shared/test_property_tools.py::test_covered_fn",
+        "tests/shared/test_helpers.py::TestThing::test_it",
+        "tests/shared/test_helpers.py::TestThing",
+    ])
+    def test_a_test_reference_that_resolves_passes(self, fake_repo, ref):
+        repo, _, test = fake_repo
+        _write(repo / "tests" / "shared" / "test_helpers.py", """
+            class TestThing:
+                def test_it(self):
+                    pass
+        """)
+        issues = mod.validate_manifest(self._with_reason(repo, f"pinned by {ref}"), repo, test)
+        assert issues == [], issues
+
+    @pytest.mark.parametrize("ref,why", [
+        ("tests/shared/test_property_tools.py::test_gone", "test_gone"),
+        ("tests/shared/test_nowhere.py::test_x", "test_nowhere.py"),
+        ("tests/shared/test_helpers.py::TestThing::test_gone", "TestThing::test_gone"),
+        ("tests/shared/test_helpers.py::TestGone::test_it", "TestGone"),
+    ])
+    def test_a_test_reference_that_does_not_resolve_is_flagged(self, fake_repo, ref, why):
+        """An exclusion reason that names the test pinning the function
+        must name a test that exists — a dangling name reads as coverage."""
+        repo, _, test = fake_repo
+        _write(repo / "tests" / "shared" / "test_helpers.py", """
+            class TestThing:
+                def test_it(self):
+                    pass
+        """)
+        issues = mod.validate_manifest(
+            self._with_reason(repo, f"I/O; pinned by {ref} and more"), repo, test)
+        dangling = [i for i in issues if i.kind == "dangling-test-ref"]
+        assert len(dangling) == 1, issues
+        assert why in dangling[0].detail and "excluded_fn" in dangling[0].detail
+
     def test_non_string_reason_flagged(self, fake_repo):
         repo, _, test = fake_repo
         manifest = {

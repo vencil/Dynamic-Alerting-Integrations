@@ -63,6 +63,7 @@ from __future__ import annotations
 import argparse
 import ast
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -280,7 +281,52 @@ def validate_manifest(
                     ),
                 ))
 
+        # 5. A test an exclusion reason names as pinning the function must
+        # exist (`tests/<path>.py::name` or `::Class::name`). A dangling
+        # name reads as coverage that is not there.
+        for name, reason in sorted(excluded.items()):
+            if not isinstance(reason, str):
+                continue
+            for ref in _TEST_REF.finditer(reason):
+                problem = _dangling_test_ref(repo_root, *ref.groups())
+                if problem:
+                    issues.append(Issue(
+                        module=rel_path, severity="error", kind="dangling-test-ref",
+                        detail=(
+                            f"the `excluded:` reason of {name!r} names "
+                            f"{ref.group(0)!r}, but {problem}. Point it at the "
+                            "test that pins the function now, or drop the claim."
+                        ),
+                    ))
+
     return issues
+
+
+_TEST_REF = re.compile(r"(tests/[\w./-]+\.py)::(\w+)(?:::(\w+))?")
+
+
+def _dangling_test_ref(repo_root: Path, path: str, first: str,
+                       second: Optional[str]) -> Optional[str]:
+    """Why `path::first[::second]` does not name a test, or None if it does."""
+    test_file = repo_root / path
+    if not test_file.is_file():
+        return f"{path} does not exist"
+    try:
+        tree = ast.parse(test_file.read_text(encoding="utf-8"))
+    except (SyntaxError, ValueError) as exc:
+        return f"{path} does not parse ({exc})"
+    top = {n.name: n for n in tree.body
+           if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    if first not in top:
+        return f"{path} defines no {first!r}"
+    if second is None:
+        return None
+    owner = top[first]
+    members = {n.name for n in getattr(owner, "body", [])
+               if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))}
+    if second not in members:
+        return f"{path} defines no {first}::{second}"
+    return None
 
 
 def main(argv: Optional[list] = None) -> "int | Report":
