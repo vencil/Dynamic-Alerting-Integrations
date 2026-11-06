@@ -120,18 +120,8 @@ type RBACConfig struct {
 type Manager struct {
 	*configwatcher.Watcher[RBACConfig]
 
-	// machineAuditor (ADR-027 PR-1b-i): optional machine-identity audit
-	// side-channel. When non-nil, Middleware calls Observe on every request
-	// AFTER resolving the header principal and independently of the authz
-	// decision — audit only (verify + log + metric); it never changes authz or
-	// fails the request (a synchronous review may add bounded latency). nil
-	// (the default) means the feature is disabled and Middleware behaves
-	// byte-identically to the pre-seam version. Set once at startup via
-	// SetMachineAuditor.
-	machineAuditor MachineIdentityAuditor
-
 	// scopeAudit is the optional denied-by-scope metric sink for scope filters
-	// (instance-method DI, mirroring machineAuditor / the rate-limiter bridge,
+	// (instance-method DI, mirroring the rate-limiter bridge,
 	// so metric state is not a package singleton and tests stay isolatable).
 	// nil (the default) means no recording — the filter still behaves correctly,
 	// it just emits no scope-denied counter. Set once at startup via
@@ -154,7 +144,7 @@ type Manager struct {
 	// list for the read-by-id middleware gate. rbac must NOT import tenantorg
 	// (import direction: handler → rbac), so the resolver is injected as a func
 	// value wired from tenantorg.OrgsForTenant in main.go — the same DI shape as
-	// SetScopeAuditor / SetMachineAuditor. nil (the default, e.g. a bare NewManager
+	// SetScopeAuditor. nil (the default, e.g. a bare NewManager
 	// in tests) means the middleware read gate resolves no orgs → the tenant is
 	// treated as unlabeled, which with no org-scoped rule is byte-identical to the
 	// pre-P4c org-blind read path. Only the middleware read path uses it; the
@@ -162,17 +152,9 @@ type Manager struct {
 	orgResolver func(tenantID string) []string
 }
 
-// SetMachineAuditor installs the machine-identity audit side-channel
-// (ADR-027 PR-1b-i). Called once at startup from main after wiring the
-// TokenReview-backed KSAResolver. Passing nil leaves auditing disabled. This
-// is a prod setter (mirrors the test-only setter style) rather than a
-// constructor arg so NewManager's signature — and its many call sites — stay
-// unchanged.
-func (m *Manager) SetMachineAuditor(a MachineIdentityAuditor) { m.machineAuditor = a }
-
 // SetScopeAuditor installs the denied-by-scope metric sink for scope filters
 // (ADR-027 / LD-6 P1). Called once at startup. Passing nil leaves recording
-// disabled (the filter still behaves correctly). Mirrors SetMachineAuditor.
+// disabled (the filter still behaves correctly).
 func (m *Manager) SetScopeAuditor(a ScopeAuditRecorder) { m.scopeAudit = a }
 
 // SetOrgResolver installs the tenant→organization-list resolver used by the
@@ -461,7 +443,7 @@ func subjectFor(p *VerifiedPrincipal) matchSubject {
 //     group set;
 //   - every match.claims key → the principal must CARRY that claim and its
 //     value must equal (exact string comparison) one of the allowed values.
-//     A missing claim, a nil claims map (anonymous / machine principals) or
+//     A missing claim, a nil claims map (anonymous principals) or
 //     a value outside the list fails the rule — fail-closed.
 //
 // An empty match block never matches. validateConfig already rejects it at

@@ -3,7 +3,6 @@ package rbac
 import (
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -18,10 +17,6 @@ import (
 // On failure, responds 401 (missing identity) or 403 (insufficient permission).
 //
 // tenantIDFn extracts the tenant ID from the request (may be nil — see below).
-//
-// When a machine-identity auditor is installed (SetMachineAuditor) an audit
-// side-channel runs before the authorization check; it never changes the
-// decision.
 //
 // tenantIDFn == nil checks `want` on the platform wildcard "*" — passed only by
 // a rule whose tenants list holds the literal "*". That is the coarse route
@@ -39,8 +34,8 @@ func (m *Manager) Middleware(want Permission, tenantIDFn func(*http.Request) str
 // narrows the response per tenant (#2520): the caller passes iff some rule
 // could grant `want` on at least one tenant (GrantsSomeTenant — decided from
 // the principal and _rbac.yaml alone, see there for why it is not "an existing
-// tenant"). Everything else — identity resolution, the 401, the
-// machine-identity audit, the context the handler reads — is Middleware's.
+// tenant"). Everything else — identity resolution, the 401, the context the
+// handler reads — is Middleware's.
 //
 // ⛔ Mount it only on a route whose handler decides visibility per tenant
 // itself. This gate admits a caller holding ["db-a"]; a handler that returns
@@ -74,8 +69,7 @@ func (m *Manager) MiddlewareAuthenticated() func(http.Handler) http.Handler {
 
 // gate is the shared body of Middleware, MiddlewareAnyTenant and
 // MiddlewareAuthenticated: take the principal from the context (401 without
-// one), run the machine-identity audit side-channel, let authorize decide
-// (it writes its own denial), then attach the identity to the request context
+// one), let authorize decide (it writes its own denial), then attach the identity to the request context
 // for the handler.
 func (m *Manager) gate(authorize func(http.ResponseWriter, *http.Request, *VerifiedPrincipal) bool) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -87,27 +81,6 @@ func (m *Manager) gate(authorize func(http.ResponseWriter, *http.Request, *Verif
 			if bPrincipal == nil {
 				writeError(w, r, http.StatusUnauthorized, errMissingIdentity.Error())
 				return
-			}
-
-			// Machine-identity audit (ADR-027): a pure side-channel that runs
-			// BEFORE and independently of authz. It verifies + logs + counts a
-			// workload token if present. It never fails the request and never
-			// influences the decision below (which stays header-driven); being a
-			// synchronous TokenReview it may add bounded latency to a Bearer request.
-			//
-			// ADR-027 D2-B §2.3: the audit is bound to the NETWORK (TCP) listener.
-			// Human traffic arrives over the pod-internal Unix socket (--human-socket,
-			// fronted by the same-pod oauth2-proxy); that is a physically-isolated
-			// trusted hop, not a machine caller, so observing it would pollute the
-			// Phase-2 gate denominator (which is meant to be the machine/relay plane
-			// only). The listener identity is CONNECTION-derived (ConnContext), so
-			// a request cannot dodge the audit by faking it. A context with no
-			// listener stamp defaults to TCP (fail-safe) → still audited. Only an
-			// explicit UDS stamp skips it.
-			if m.machineAuditor != nil {
-				if l, _ := ListenerFromContext(r.Context()); l != ListenerUDS {
-					observeSafely(m.machineAuditor, r, bPrincipal)
-				}
 			}
 
 			if !authorize(w, r, bPrincipal) {
@@ -173,26 +146,6 @@ func (m *Manager) authorizeTenant(w http.ResponseWriter, r *http.Request, bPrinc
 		return false
 	}
 	return true
-}
-
-// observeSafely runs a machine-identity audit as a guaranteed side-channel:
-// any panic escaping the auditor is recovered HERE so an audit bug can never
-// turn a normal request into a 500. This makes "an audit bug never FAILS the
-// request" a middleware-level invariant instead of a contract each
-// MachineIdentityAuditor implementation must self-enforce. It does NOT make the
-// audit non-blocking: a synchronous auditor still adds its own bounded latency
-// (see the MachineIdentityAuditor contract for the ADR-027 concurrency posture
-// and why bounded-async is deferred to PR-1b-ii). Defense-in-depth:
-// KSAResolver.Observe also recovers internally; this is the outer guard
-// covering any current/future auditor (and the seam where a mis-written one
-// would otherwise escape).
-func observeSafely(a MachineIdentityAuditor, r *http.Request, header *VerifiedPrincipal) {
-	defer func() {
-		if rec := recover(); rec != nil {
-			slog.Error("machine-identity audit panic escaped the auditor (recovered at middleware; request unaffected)", "panic", rec)
-		}
-	}()
-	a.Observe(r, header)
 }
 
 // errorEnvelope is a package-local copy of the wire shape of

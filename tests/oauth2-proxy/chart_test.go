@@ -40,8 +40,8 @@ type chartVariant struct {
 }
 
 var chartVariants = []chartVariant{
-	// ADR-027 §2: the only upstream is tenant-api's Unix socket; the chart
-	// refuses a render with humanSocket.enabled=false.
+	// ADR-027 §2: the only upstream is tenant-api's Unix socket, at a path the
+	// chart fixes (there is no humanSocket key).
 	{Name: "default", Upstream: "unix"},
 	{
 		Name: "gitlab-claims-socket",

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -94,6 +95,23 @@ func TestCheckTAEnv(t *testing.T) {
 	if msg := errb.String(); !strings.Contains(msg, "TA_ALSO_UNKNOWN, TA_NO_SUCH_SETTING\n") ||
 		!strings.Contains(msg, "older than the Helm chart") {
 		t.Errorf("message: %s", msg)
+	}
+}
+
+// ADR-027 §6 / §9 item 5: the machine-identity audit settings are gone, so a
+// deployment still setting them is refused at start instead of running as if
+// an audit were happening.
+func TestCheckTAEnv_RefusesRemovedMachineIdentitySettings(t *testing.T) {
+	for _, name := range []string{"TA_MACHINE_IDENTITY_AUDIT", "TA_MACHINE_IDENTITY_AUDIENCE", "TA_MACHINE_IDENTITY_ISSUER"} {
+		if slices.Contains(knownTAEnv, name) {
+			t.Errorf("%s is still in knownTAEnv", name)
+		}
+		var errb bytes.Buffer
+		if checkTAEnv([]string{name + "=x"}, &errb) {
+			t.Errorf("%s=x accepted; a removed setting must stop the start", name)
+		} else if !strings.Contains(errb.String(), name) {
+			t.Errorf("%s: the refusal does not name it:\n%s", name, errb.String())
+		}
 	}
 }
 

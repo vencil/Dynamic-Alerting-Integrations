@@ -27,14 +27,6 @@ tenant_api_federation_orphaned_tokens 0
 # HELP tenant_api_federation_orphaned_subset_files Tenants no longer in conf.d that still have a federation subset record in the tenant-api state store (name kept from when subsets were conf.d/_federation/ files).
 # TYPE tenant_api_federation_orphaned_subset_files gauge
 tenant_api_federation_orphaned_subset_files 0
-# HELP tenant_api_identity_audit_total Machine-identity (KSA/TokenReview) audit observations by result (ADR-027; audit-only, does not affect authz).
-# TYPE tenant_api_identity_audit_total counter
-tenant_api_identity_audit_total{result="mismatch"} 0
-tenant_api_identity_audit_total{result="no_token"} 0
-tenant_api_identity_audit_total{result="unknown_issuer"} 0
-tenant_api_identity_audit_total{result="unknown_workload"} 0
-tenant_api_identity_audit_total{result="verified"} 0
-tenant_api_identity_audit_total{result="verify_failed"} 0
 # HELP tenant_api_scope_denied_total Decisions a scope axis denied, by axis: a rule matched the caller and the tenant but its environments/domains or org-scope did not pass, and no other rule granted (an unlabeled tenant fails every restricting rule; ADR-027 §7). The list plane counts each hidden tenant per list request.
 # TYPE tenant_api_scope_denied_total counter
 tenant_api_scope_denied_total{axis="metadata"} 0
