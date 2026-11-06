@@ -55,6 +55,7 @@ the step that runs the behavioural module itself.
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 import shlex
@@ -1443,3 +1444,56 @@ def test_a_failing_lint_is_propagated(tmp_path: Path) -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     sys.exit(pytest.main([__file__, "-v"]))
+
+
+# ── #1449: nothing may replace the config's reporter list ────────────────────
+
+_PLAYWRIGHT_CONFIG = _REPO_ROOT / "tests/e2e/playwright.config.ts"
+_PARKED_REPORTER = "./reporters/parked-tests.ts"
+
+
+def _playwright_invocations() -> list[tuple[str, str]]:
+    """(where, command) for every place that starts the Playwright runner.
+
+    Workflow `run:` steps that name `playwright` or run `npm test` from
+    tests/e2e, and tests/e2e/package.json scripts that call `playwright test`.
+    """
+    found: list[tuple[str, str]] = []
+    for path in sorted((_REPO_ROOT / ".github" / "workflows").glob("*.y*ml")):
+        doc = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        for job_id, job in (doc.get("jobs") or {}).items():
+            for step in (job or {}).get("steps") or []:
+                run = str((step or {}).get("run") or "")
+                wd = str((step or {}).get("working-directory") or "")
+                if "playwright test" in run or (
+                        wd.rstrip("/").endswith("tests/e2e") and "npm test" in run):
+                    found.append((f"{path.name}::{job_id}", run))
+    pkg = json.loads((_REPO_ROOT / "tests/e2e/package.json").read_text(encoding="utf-8"))
+    for name, cmd in (pkg.get("scripts") or {}).items():
+        if "playwright test" in cmd:
+            found.append((f"tests/e2e/package.json::{name}", cmd))
+    return found
+
+
+def test_no_playwright_invocation_replaces_the_reporter_list():
+    """A `--reporter` flag replaces the config's list and drops parked-tests.
+
+    That reporter is what fails a run whose skipped / fixme / fail-expected
+    test names no issue (#1449); dropping it on the CI command line would turn
+    the gate off with every check still green.
+    """
+    found = _playwright_invocations()
+    assert any("::smoke" in w or "playwright.yml" in w for w, _c in found), (
+        "found no Playwright invocation in playwright.yml — this scan stopped "
+        f"seeing the CI run, so it checks nothing: {found}")
+    overriding = [(w, c) for w, c in found if "--reporter" in c]
+    assert not overriding, (
+        "these Playwright invocations pass --reporter, which replaces "
+        f"playwright.config.ts's list and drops {_PARKED_REPORTER}: {overriding}")
+
+
+def test_the_parked_tests_reporter_is_on_every_config_branch():
+    text = _PLAYWRIGHT_CONFIG.read_text(encoding="utf-8")
+    assert text.count(f"['{_PARKED_REPORTER}']") == 2, (
+        f"{_PARKED_REPORTER} must be in BOTH reporter lists of "
+        "playwright.config.ts (the CI branch and the local one).")

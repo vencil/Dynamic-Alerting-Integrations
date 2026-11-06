@@ -16,6 +16,9 @@ import { defineConfig, devices } from '@playwright/test';
  */
 export default defineConfig({
   testDir: './',
+  /* `_*` files are scratch probes (dev-rules §11); eslint.config.mjs ignores the
+   * same pattern, so the runner must not collect what the linter never read. */
+  testIgnore: ['**/_*'],
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */
@@ -31,8 +34,13 @@ export default defineConfig({
    * single-worker.
    */
   workers: process.env.CI ? 4 : undefined,
-  /* Reporter to use. See https://playwright.dev/docs/test-reporters */
-  reporter: 'html',
+  /* The ONE reporter list. parked-tests fails the run when a skipped / fixme /
+   * fail-expected test names no issue (#1449). A `--reporter` flag replaces
+   * this list and drops that check, so CI passes none (pinned by
+   * tests/lint/test_e2e_spec_lint.py). */
+  reporter: process.env.CI
+    ? [['list'], ['html', { open: 'never' }], ['./reporters/parked-tests.ts']]
+    : [['html'], ['./reporters/parked-tests.ts']],
   /* Shared settings for all the projects below. See https://playwright.dev/docs/api/class-testoptions. */
   use: {
     /* Base URL to use in actions like `await page.goto('./')`. */
