@@ -104,7 +104,9 @@ from _lib_compat import try_utf8_stdout  # noqa: E402
 from _lib_python import detect_cli_lang  # noqa: E402
 from _lib_prometheus import QueryError, prometheus_rules, rules_groups  # noqa: E402
 import _lib_consumer_read  # noqa: E402  (#3206: rule packs as Prometheus reads them)
-from _lib_exitcodes import EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, Report  # noqa: E402
+from _lib_exitcodes import (  # noqa: E402
+    EXIT_OK, EXIT_VIOLATION, EXIT_CALLER_ERROR, CallerError, Report)
+import _lib_input  # noqa: E402  (#3462: what --rule-packs-dir selects)
 from _lib_paths import classify_path  # noqa: E402  (#3276)
 
 # Finding categories.
@@ -127,13 +129,12 @@ STRINGS = {
         "err_no_source": "no runtime source: pass --prometheus URL or --runtime-json FILE",
         "err_prom": "Prometheus query failed",
         "err_runtime_json": "cannot read --runtime-json file",
-        "err_rule_packs": "rule-packs dir not found or empty",
         "err_rule_packs_unlisted": ("rule-packs dir holds entries the rule-pack declaration "
                                     "does not cover, or that cannot be read"),
         "err_parse": "malformed input",
         "cli_desc": "Read-only Git rule-packs ↔ Prometheus runtime reconciliation (#747)",
         "cli_src_group": "runtime source (one required)",
-        "h_rule_packs_dir": "Directory with rule pack YAML files (default: rule-packs/)",
+        "h_rule_packs_dir": "Directory with rule pack YAML files (default: rule-packs)",
         "h_prometheus": "Prometheus API URL, e.g. http://localhost:9090",
         "h_runtime_json": "Path to a saved /api/v1/rules JSON response (offline / fixtures)",
         "h_strict_orphan": "Treat ORPHAN (stale loaded rule) as a --ci gate failure too",
@@ -153,12 +154,11 @@ STRINGS = {
         "err_no_source": "未提供 runtime 來源：請給 --prometheus URL 或 --runtime-json FILE",
         "err_prom": "Prometheus 查詢失敗",
         "err_runtime_json": "無法讀取 --runtime-json 檔",
-        "err_rule_packs": "rule-packs 目錄不存在或為空",
         "err_rule_packs_unlisted": "rule-packs 目錄有 rule pack 宣告蓋不住、或讀不了的項目",
         "err_parse": "輸入格式錯誤",
         "cli_desc": "唯讀 Git rule-packs ↔ Prometheus runtime 對帳 (#747)",
         "cli_src_group": "runtime 來源（擇一必填）",
-        "h_rule_packs_dir": "rule pack YAML 檔目錄（預設 rule-packs/）",
+        "h_rule_packs_dir": "rule pack YAML 檔目錄（預設 rule-packs）",
         "h_prometheus": "Prometheus API URL，例如 http://localhost:9090",
         "h_runtime_json": "已存的 /api/v1/rules JSON 回應路徑（離線 / fixture）",
         "h_strict_orphan": "將 ORPHAN（孤兒殘留規則）也視為 --ci 閘門失敗",
@@ -337,22 +337,20 @@ class RuntimeAuditor:
         self.declared_group_count = 0
 
     def _load_declared(self) -> Optional[dict]:
-        rule_dir = Path(self.args.rule_packs_dir)
-        rule_dir_problem = classify_path(rule_dir, "dir", lang=self.lang, flag="--rule-packs-dir")  # #3276
-        if rule_dir_problem is not None:
-            self.caller_error = f"{i18n('err_rule_packs', self.lang)}: {rule_dir_problem.message}"
-            return None
-        # #3426: the one declaration of which files are rule packs.
+        # #3462: what --rule-packs-dir selects (`_lib_input`, the rule-pack
+        # declaration): not there, no directory, unlistable, or no rule pack
+        # — given or the default — is a caller error that says which. It was
+        # one line, "not found or empty", for all of them.
         try:
-            paths = _lib_consumer_read.rule_pack_files(rule_dir)
+            paths = _lib_input.selected(self.args, "rule_packs_dir", lang=self.lang)
+        except CallerError as exc:
+            self.caller_error = str(exc)
+            return None
         except _lib_consumer_read.ConsumerReadError as exc:
             # Not "not found or empty": the directory is there, and holds
             # an undeclared YAML or an entry that cannot be read.
             self.caller_error = (f"{i18n('err_rule_packs_unlisted', self.lang)}: "
                                  f"{_lib_consumer_read.error_text(exc)}")
-            return None
-        if not paths:
-            self.caller_error = i18n("err_rule_packs", self.lang)
             return None
         try:
             declared = parse_declared_rules(paths)
@@ -467,8 +465,8 @@ class RuntimeAuditor:
         return EXIT_VIOLATION if gating > 0 else EXIT_OK
 
 
-def main():
-    try_utf8_stdout()
+def build_parser() -> argparse.ArgumentParser:
+    """The runtime-audit parser (--rule-packs-dir declared with `_lib_input`)."""
     # Help text responds to DA_LANG (dev-rules §9 bilingual-help contract).
     # epilog keeps the English design-rationale docstring (supplementary
     # appendix); the description + option help are what switch language.
@@ -478,8 +476,10 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument(
-        "--rule-packs-dir", default="rule-packs/",
+    _lib_input.add_input(
+        parser, "--rule-packs-dir", select=_lib_consumer_read.RULE_PACKS,
+        empty=_lib_input.EMPTY_REFUSED, default="rule-packs",
+        absent_default=_lib_input.ABSENT_REFUSED,
         help=i18n("h_rule_packs_dir", lang),
     )
     src = parser.add_argument_group(i18n("cli_src_group", lang))
@@ -491,8 +491,12 @@ def main():
     )
     parser.add_argument("--json", action="store_true", help=i18n("h_json", lang))
     parser.add_argument("--ci", action="store_true", help=i18n("h_ci", lang))
+    return parser
 
-    args = parser.parse_args()
+
+def main():
+    try_utf8_stdout()
+    args = build_parser().parse_args()
 
     auditor = RuntimeAuditor(args)
     auditor.run()

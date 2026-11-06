@@ -82,6 +82,16 @@ _UNBUFFERED_ENV = dict(_ENV, PYTHONUNBUFFERED="1")
 _BUFFERING = {"buffered": _ENV, "unbuffered": _UNBUFFERED_ENV}
 
 
+#: A registered entry name (#3611): its 3..7 are the tool's own codes, so a
+#: toy tool that must end at a code of its own other than 0/1/2 is written
+#: under this name — any other name ends such a code as a caller error.
+_CODED_TOOL = "patch_config.py"
+
+
+def _coded(tmp_path: Path, body: str) -> Path:
+    return _script(tmp_path, body, name=_CODED_TOOL)
+
+
 def _run(script: Path, stdout: int = subprocess.PIPE,
          env: dict[str, str] | None = None) -> subprocess.CompletedProcess:
     """Bytes out (no text mode): stdout is compared byte for byte."""
@@ -125,7 +135,7 @@ def _run_closed(tmp_path: Path, body: str, closure: str,
                 env: dict[str, str] | None = None) -> tuple[int, str]:
     """Run *body* with stdout closed the *closure* way; (rc, stderr)."""
     env = _ENV if env is None else env
-    script = _script(tmp_path, body)
+    script = _coded(tmp_path, body)
     if closure == "fd-closed":
         proc = _run(script, env=env)
         return proc.returncode, proc.stderr.decode("utf-8", "replace")
@@ -369,7 +379,7 @@ def test_no_report_means_an_empty_stdout(tmp_path, how):
     empty — a caller error and a crash included — with the tool's line as
     the last line of stderr and its code."""
     body, code, line = _NO_REPORT_EXITS[how]
-    proc = _run(_script(tmp_path, _armed(body)))
+    proc = _run(_coded(tmp_path, _armed(body)))
     err = proc.stderr.decode("utf-8", "replace")
     assert proc.returncode == code, err
     assert proc.stdout == b"", proc.stdout
@@ -1655,7 +1665,7 @@ def test_a_still_closed_fd_1_keeps_the_tools_own_code(tmp_path, buffering):
             "            _lib_exitcodes.die_caller_error(f'ERROR: cannot write --output: {e}', "
             "reason='output_unwritable', code=5)\n"
             "    return 0\n_lib_exitcodes.run(main)\n")
-    proc = _run(_script(tmp_path, body), env=_BUFFERING[buffering])
+    proc = _run(_coded(tmp_path, body), env=_BUFFERING[buffering])
     err = proc.stderr.decode("utf-8", "replace")
     assert "ERROR: cannot write --output" in err, err
     if buffering == "buffered":
@@ -1813,7 +1823,7 @@ def test_a_clean_exit_goes_back_to_the_interpreter(tmp_path):
     hands the exit back as ``SystemExit`` instead of ``os._exit``. An
     embedding caller (``runpy`` + ``except SystemExit``) carries on, and a
     ``NamedTemporaryFile`` the tool still holds is deleted at shutdown."""
-    tool = _script(tmp_path, (
+    tool = _coded(tmp_path, (
         "import tempfile\n"
         "HELD = tempfile.NamedTemporaryFile(prefix='held-', dir={d!r}, delete=True)\n"
         "def main():\n    print('report')\n    return 3\n"
@@ -1959,11 +1969,100 @@ def test_a_second_wrapper_on_a_failed_stdout_leaks_nothing_into_a_reused_fd(tmp_
     assert log.read_text(encoding="utf-8") == "tool log line\n"
 
 
-def test_an_exit_status_beyond_a_c_long_is_handed_back_unmasked(tmp_path):
-    """Review F5: ``run()`` hands the tool's status back as given — 2**70 ends
-    the way the interpreter ends it (255), never masked to 0 (success)."""
-    proc = _run(_script(tmp_path, "_lib_exitcodes.run(lambda: 2 ** 70)\n"))
-    assert proc.returncode == 255, proc.stderr
+_NOT_IN_CONTRACT = b"exit-code contract (scripts/tools/_lib_exitcodes.py EXTENDED_EXIT_CODES"
+
+
+@pytest.mark.real_crash_exit_code
+@pytest.mark.parametrize("status", [2 ** 70, 256, 512, -256, 3, -1])
+def test_a_status_outside_the_contract_is_a_caller_error(tmp_path, status):
+    """#3611: ``run()`` ends a status its entry is not registered for at the
+    caller-error code, with one line naming it — never as given. Review F5
+    (2**70) and the multiples of 256 the OS would truncate to 0 (a false
+    success) are the reason; an unregistered 3 is the same refusal."""
+    proc = _run(_script(tmp_path, f"_lib_exitcodes.run(lambda: {status})\n"))
+    assert proc.returncode == 2, proc.stderr
+    assert proc.stderr.count(_NOT_IN_CONTRACT) == 1, proc.stderr
+
+
+def test_under_tests_a_status_outside_the_contract_is_the_test_crash_code(tmp_path):
+    """Under the suite (DA_TEST_CRASH_EXIT_CODE), the refusal ends at the test
+    crash code, so a test pinning an unregistered code goes red (#3611)."""
+    proc = _run(_script(tmp_path, "_lib_exitcodes.run(lambda: 3)\n"))
+    assert proc.returncode == int(os.environ["DA_TEST_CRASH_EXIT_CODE"]), proc.stderr
+
+
+def test_a_registered_entry_keeps_its_own_code(tmp_path):
+    """The registry's row for the entry's name lets its own codes through."""
+    proc = _run(_coded(tmp_path, "_lib_exitcodes.run(lambda: 5)\n"))
+    assert proc.returncode == 5, proc.stderr
+
+
+def test_a_registered_entry_keeps_its_code_when_exec_ed_under_another_main(tmp_path):
+    """The da-tools image runs a tool by exec-ing it as ``__main__`` from
+    entrypoint.py, without putting it in sys.modules: ``__main__`` there is
+    still the entrypoint. The row is the entry's own file's (#3611 review)."""
+    tool = _coded(tmp_path, "def main():\n    return 5\n_lib_exitcodes.run(main)\n")
+    launcher = tmp_path / "entrypoint.py"
+    launcher.write_text(
+        "import importlib.util, sys\n"
+        f"spec = importlib.util.spec_from_file_location('__main__', {str(tool)!r})\n"
+        "spec.loader.exec_module(importlib.util.module_from_spec(spec))\n",
+        encoding="utf-8")
+    proc = _run(launcher)
+    assert proc.returncode == 5, proc.stderr
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="a /bin/sh stand-in for da-guard")
+@pytest.mark.parametrize("code", [3, 4])
+def test_da_tools_guard_keeps_da_guards_codes_through_the_entrypoint(tmp_path, code):
+    """The customer path: `da-tools guard` through entrypoint.py ends at
+    da-guard's own 3 / 4, as dev-rules §13 lists (#3611 review)."""
+    fake = tmp_path / "fake-guard"
+    fake.write_text(f"#!/bin/sh\nexit {code}\n", encoding="utf-8")
+    fake.chmod(0o755)
+    (tmp_path / "cfg").mkdir()
+    proc = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "components/da-tools/app/entrypoint.py"),
+         "guard", "defaults-impact", "--config-dir", str(tmp_path / "cfg")],
+        capture_output=True, timeout=60, env=dict(_ENV, DA_GUARD_BINARY=str(fake)))
+    assert proc.returncode == code, proc.stderr
+
+
+@pytest.mark.real_crash_exit_code
+@pytest.mark.parametrize("status, rc", [(9, 9), (255, 255), (256, 2), (-1, 2)])
+def test_a_passthrough_entry_forwards_a_status_the_os_can_carry(tmp_path, status, rc):
+    """PASSTHROUGH forwards whatever the wrapped command ended with, as long as
+    an exit status can carry it: 256 would read as 0, a false success (#3611)."""
+    proc = _run(_script(tmp_path, f"_lib_exitcodes.run(lambda: {status})\n",
+                        name="dx_run.py"))
+    assert proc.returncode == rc, proc.stderr
+
+
+def test_a_decorated_entry_is_named_by_its_own_file(tmp_path):
+    """A functools.wraps decorator defined in a library must not move the
+    entry's name to the library's file (the allowed entry decorators are)."""
+    (tmp_path / "_deco_lib.py").write_text(
+        "import functools\n"
+        "def deco(fn):\n"
+        "    @functools.wraps(fn)\n"
+        "    def w(*a, **k):\n"
+        "        return fn(*a, **k)\n"
+        "    return w\n", encoding="utf-8")
+    proc = _run(_coded(tmp_path,
+                       "from _deco_lib import deco\n"
+                       "@deco\n"
+                       "def main():\n"
+                       "    return 6\n"
+                       "_lib_exitcodes.run(main)\n"))
+    assert proc.returncode == 6, proc.stderr
+
+
+def test_the_registry_cannot_be_changed_at_runtime():
+    """A tool cannot register its own code on the way out: the one list is
+    the module's (#3611)."""
+    import _lib_exitcodes as ec
+    with pytest.raises(TypeError):
+        ec.EXTENDED_EXIT_CODES["tool"] = frozenset({3})
 
 
 _HELD = {
@@ -2025,12 +2124,14 @@ def test_a_string_exit_status_is_still_printed_when_stdout_is_lost(tmp_path):
     assert "bad thing" in err and STDOUT_CLOSED_LINE in err, err
 
 
-def test_a_string_exit_status_is_printed_on_a_clean_exit(tmp_path):
-    """Review 2, mutation C: the clean path hands ``sys.exit("msg")`` back
-    as given — the interpreter prints it and ends at 1."""
+@pytest.mark.real_crash_exit_code
+def test_a_string_exit_status_is_printed_and_ends_as_a_caller_error(tmp_path):
+    """Review 2, mutation C, and #3611: ``sys.exit("msg")`` prints the
+    message, as the interpreter would, and ends at the caller-error code —
+    not the interpreter's 1, which reads as a finding."""
     proc = _run(_script(tmp_path, "def main():\n    sys.exit('bad thing')\n_lib_exitcodes.run(main)\n"))
-    assert proc.returncode == 1
-    assert b"bad thing" in proc.stderr
+    assert proc.returncode == 2
+    assert proc.stderr.count(b"bad thing") == 1, proc.stderr
 
 
 def test_a_healthy_stderr_that_cannot_encode_is_not_sealed(tmp_path):
@@ -2134,7 +2235,7 @@ def _deliver(tmp_path: Path, kwargs: str, way: str, buffering: str) -> tuple[int
     how, size = _DELIVERY_WAYS[way]
     body = (f"_lib_exitcodes.run(lambda: _lib_exitcodes.Report("
             f"{{'x': 'y' * ({size})}}, 5{kwargs}))\n")
-    script = _script(tmp_path, body)
+    script = _coded(tmp_path, body)
     env = _BUFFERING[buffering]
     if how == "dev-full":
         if not os.path.exists("/dev/full"):
@@ -2176,7 +2277,7 @@ def test_the_default_delivery_replaces_the_status(tmp_path, way, buffering):
 
 
 def test_best_effort_with_a_healthy_stdout_is_the_plain_report(tmp_path):
-    proc = _run(_script(tmp_path, "_lib_exitcodes.run(lambda: _lib_exitcodes.Report("
+    proc = _run(_coded(tmp_path, "_lib_exitcodes.run(lambda: _lib_exitcodes.Report("
                                   "{'n': 1}, 3, delivery='best_effort'))\n"))
     assert proc.returncode == 3, proc.stderr
     assert json.loads(proc.stdout) == {"n": 1}
@@ -2383,3 +2484,211 @@ def test_a_hook_whose_stdout_fails_does_not_block():
             encoding="utf-8", env=env, timeout=60)
     assert proc.returncode == 1, (proc.returncode, proc.stderr)
     assert "ERROR: cannot write to stdout:" in proc.stderr
+
+
+# ── #3611: an exit status outside 0/1/2 is registered, or it is a fault ─────
+#
+# run() refuses an unregistered status at runtime (`_contract_status`), but a
+# test that calls `main()` in-process never reaches run(): it can pin
+# `main() == 3` and stay green while the real process ends at 2. So the
+# literals are also read here, statically, from every entry under the gated
+# trees — any function's `return N`, `sys.exit(N)` / `SystemExit(N)` /
+# `os._exit(N)`, and a module-level `EXIT_* = N`, for an int N outside 0..2 —
+# and each must be in the entry's EXTENDED_EXIT_CODES row. A PASSTHROUGH row
+# excuses only what it forwards, never a literal it chose itself. Measured on main before #3611: the ten unregistered 3 / 4 /
+# 127 the runtime check then turned into 2 are all found by this read.
+
+#: Functions under the gated trees whose int return is a value, not an exit
+#: status. Each entry must still match something (stale entries fail), so
+#: the list cannot outlive what it excuses.
+NOT_EXIT_STATUS: frozenset[tuple[str, str]] = frozenset({
+    ("scripts/tools/dx/inject_waveform.py", "_parse_group_interval"),
+    ("scripts/tools/dx/scan_component_health.py", "_loc_score"),
+    ("scripts/tools/dx/scan_component_health.py", "_recency_score"),
+    ("scripts/tools/lint/check_account_registry_monotonic.py", "parse_next_account_id"),
+    ("scripts/tools/ops/diagnose.py", "kubectl_budget"),
+})
+
+
+def _int_literal(node: ast.AST | None) -> int | None:
+    if isinstance(node, ast.Constant) and type(node.value) is int:
+        return node.value
+    if (isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub)
+            and isinstance(node.operand, ast.Constant) and type(node.operand.value) is int):
+        return -node.operand.value
+    return None
+
+
+def _extended_literals(tree: ast.Module) -> list[tuple[int, str, int]]:
+    """(line, where, value) for every exit-status-shaped int outside 0..2 in
+    *tree*. Read through the shapes the tools write: a literal, either arm of
+    `a if c else b`, and a name bound at module level to an int, annotated or
+    not (`return RC_X`); in `return` (of the function it is in, not of a
+    nested def), a lambda's body, `sys.exit(…)` / `SystemExit(…)` /
+    `os._exit(…)` (positional or `code=`), `Report(doc, status)`,
+    `die_caller_error(…, code=)`, and any `EXIT_*` / `_EXIT_*` binding,
+    module-level or local. *where* is the enclosing function for a
+    return. Not read (the runtime check in run() still refuses them): a value
+    reached through a local variable, a class or Enum attribute, or another
+    module. A name a function rebinds locally is still read as the module's
+    int: that false alarm fails loudly, and renaming the local clears it."""
+    module_ints: dict[str, int] = {}
+    for node in tree.body:
+        if (isinstance(node, (ast.Assign, ast.AnnAssign))
+                and (v := _int_literal(node.value)) is not None):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    module_ints[target.id] = v
+
+    def values(expr: ast.AST | None) -> list[int]:
+        if isinstance(expr, ast.IfExp):
+            return values(expr.body) + values(expr.orelse)
+        if isinstance(expr, ast.Name) and expr.id in module_ints:
+            return [module_ints[expr.id]]
+        v = _int_literal(expr)
+        return [] if v is None else [v]
+
+    out = []
+
+    def add(line: int, where: str, expr: ast.AST | None) -> None:
+        out.extend((line, where, v) for v in values(expr) if not 0 <= v <= 2)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                if (isinstance(target, ast.Name)
+                        and target.id.lstrip("_").startswith("EXIT_")):
+                    add(node.lineno, target.id, node.value)
+        elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            # A return belongs to the function it is in: a nested def is
+            # walked on its own (as ast.walk reaches it), never as its parent.
+            stack = list(ast.iter_child_nodes(node))
+            while stack:
+                sub = stack.pop()
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                    continue
+                if isinstance(sub, ast.Return):
+                    add(sub.lineno, node.name, sub.value)
+                stack.extend(ast.iter_child_nodes(sub))
+        elif isinstance(node, ast.Lambda):
+            add(node.lineno, "lambda", node.body)
+        elif isinstance(node, ast.Call):
+            name = _dotted(node.func) or ""
+            last = name.rsplit(".", 1)[-1]
+            if last in ("exit", "SystemExit", "_exit"):
+                arg = node.args[0] if node.args else next(
+                    (k.value for k in node.keywords if k.arg in ("code", "status")), None)
+                add(node.lineno, name, arg)
+            elif last == "Report":  # Report(doc, status)
+                arg = node.args[1] if len(node.args) > 1 else next(
+                    (k.value for k in node.keywords if k.arg == "status"), None)
+                add(node.lineno, name, arg)
+            elif last in ("die_caller_error", "exit_caller_error"):
+                add(node.lineno, name, next(
+                    (k.value for k in node.keywords if k.arg == "code"), None))
+    # a nested function's return is also walked from its parent: keep one
+    return sorted(set(out))
+
+
+def _extended_code_faults(sources: dict[str, str], registry, passthrough,
+                          not_exit: frozenset[tuple[str, str]]) -> list[str]:
+    """Every fault of the registry gate. Pure, so it is pinned on known shapes."""
+    faults = []
+    stems: dict[str, list[str]] = {}
+    for rel in sources:
+        stems.setdefault(Path(rel).stem, []).append(rel)
+    for stem in sorted(registry):
+        if stem not in stems:
+            faults.append(f"EXTENDED_EXIT_CODES[{stem!r}]: no entry under the gated "
+                          "trees has that name — remove the row")
+        elif len(stems[stem]) > 1:
+            faults.append(f"EXTENDED_EXIT_CODES[{stem!r}]: names {sorted(stems[stem])} "
+                          "— the registry is keyed by file name, so it must be unique")
+    excused = set()
+    for rel, source in sorted(sources.items()):
+        row = registry.get(Path(rel).stem, frozenset())
+        for line, where, value in _extended_literals(ast.parse(source, filename=rel)):
+            if (rel, where) in not_exit:
+                excused.add((rel, where))
+                continue
+            # A PASSTHROUGH row forwards a status it did not choose; a literal
+            # is one the wrapper chose itself, so it is held to 0/1/2 too.
+            if row is not passthrough and value in row:
+                continue
+            faults.append(f"{rel}:{line}: {where} uses exit status {value}, which is not "
+                          f"in its EXTENDED_EXIT_CODES row (scripts/tools/_lib_exitcodes.py)"
+                          " — use 0/1/2, or register it (an owner decision, #3611)")
+    for rel, where in sorted(not_exit - excused):
+        faults.append(f"NOT_EXIT_STATUS {(rel, where)}: excuses nothing any more — remove it")
+    return faults
+
+
+def test_every_exit_status_outside_0_1_2_is_registered():
+    import _lib_exitcodes as lib
+    sources = _gated_sources()
+    assert len(sources) >= 200, len(sources)
+    faults = _extended_code_faults(sources, lib.EXTENDED_EXIT_CODES, lib.PASSTHROUGH,
+                                   NOT_EXIT_STATUS)
+    assert not faults, "\n".join(faults)
+
+
+_REG = {"t": frozenset({3}), "p": "passthrough"}
+_X = frozenset({("a/x.py", "v")})
+
+
+@pytest.mark.parametrize("files, not_exit, want", [
+    ({"a/t.py": "def main():\n    return 3\n", "a/p.py": ""}, frozenset(), []),
+    ({"a/t.py": "def main():\n    return 4\n", "a/p.py": ""}, frozenset(),
+     ["a/t.py:2: main uses exit status 4"]),
+    ({"a/u.py": "def main():\n    return 3\n", "a/t.py": "", "a/p.py": ""}, frozenset(),
+     ["a/u.py:2: main uses"]),
+    ({"a/u.py": "def h():\n    return 127\n", "a/t.py": "", "a/p.py": ""}, frozenset(),
+     ["a/u.py:2: h uses"]),
+    ({"a/u.py": "import sys\nsys.exit(64)\n", "a/t.py": "", "a/p.py": ""}, frozenset(),
+     ["a/u.py:2: sys.exit uses"]),
+    ({"a/u.py": "raise SystemExit(-1)\n", "a/t.py": "", "a/p.py": ""}, frozenset(),
+     ["a/u.py:1: SystemExit uses"]),
+    ({"a/u.py": "EXIT_X = 3\n", "a/t.py": "", "a/p.py": ""}, frozenset(),
+     ["a/u.py:1: EXIT_X uses"]),
+    ({"a/u.py": "COUNT = 3\ndef f():\n    return 2\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), []),
+    ({"a/u.py": "RC_T = 3\ndef main():\n    return RC_T\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:3: main uses exit status 3"]),
+    ({"a/u.py": "def main(x):\n    return 4 if x else 0\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:2: main uses exit status 4"]),
+    ({"a/u.py": "import sys\nsys.exit(code=3)\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:2: sys.exit uses exit status 3"]),
+    ({"a/u.py": "def f():\n    _EXIT_T = 4\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:2: _EXIT_T uses exit status 4"]),
+    ({"a/u.py": "run(lambda: 3)\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:1: lambda uses exit status 3"]),
+    ({"a/u.py": "RC_T: int = 4\ndef main():\n    return RC_T\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:3: main uses exit status 4"]),
+    ({"a/u.py": "def main():\n    return Report({}, 3)\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:2: Report uses exit status 3"]),
+    ({"a/u.py": "def main():\n    die_caller_error('x', code=5)\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:2: die_caller_error uses exit status 5"]),
+    ({"a/t.py": "", "a/p.py": "",
+      "a/x.py": "def main():\n    def v():\n        return 60\n    return 0\n"},
+     frozenset({("a/x.py", "v")}), []),
+    ({"a/p.py": "def main(rc):\n    return rc\n", "a/t.py": ""}, frozenset(), []),
+    ({"a/p.py": "def main():\n    return 9\n", "a/t.py": ""}, frozenset(),
+     ["a/p.py:2: main uses exit status 9"]),
+    ({"a/t.py": "", "b/t.py": "", "a/p.py": ""}, frozenset(),
+     ["EXTENDED_EXIT_CODES['t']: names"]),
+    ({"a/p.py": ""}, frozenset(), ["EXTENDED_EXIT_CODES['t']: no entry"]),
+    ({"a/t.py": "", "a/p.py": "", "a/x.py": "def v():\n    return 60\n"}, _X, []),
+    ({"a/t.py": "", "a/p.py": ""}, _X, ["NOT_EXIT_STATUS ('a/x.py', 'v'): excuses nothing"]),
+], ids=["registered", "unregistered", "other-file", "helper-return", "sys-exit",
+        "negative", "exit-constant", "not-exit-shaped", "module-int-name", "ternary",
+        "exit-keyword", "local-private-exit-constant", "lambda", "annotated-module-int",
+        "report-status", "die-caller-error-code", "nested-def-is-its-own", "passthrough",
+        "passthrough-own-literal", "stem-collision",
+        "row-without-file", "excused", "stale-excuse"])
+def test_the_registry_gate_on_known_shapes(files, not_exit, want):
+    faults = _extended_code_faults(files, _REG, "passthrough", not_exit)
+    assert len(faults) == len(want), faults
+    for fault, prefix in zip(faults, want):
+        assert fault.startswith(prefix), (fault, prefix)

@@ -2463,6 +2463,15 @@ def _scope_empty_note(line, all_rules, scope):
             f"was NOT checked. Widen or drop --scope to cover it.")
 
 
+class CapabilityNotChecked(Exception):
+    """A --tools capability check could not run (a source unreadable, or parsed
+    to nothing). The reason is already on stderr; main() turns this into the
+    contract's 2 — the bump could not do its job — kept apart from the issues
+    those checks find, which are 1 (scripts/tools/_lib_exitcodes.py; #3577,
+    #3611). An exception, not a sentinel count, so "could not check" can never
+    be summed into "found N issues"."""
+
+
 def _check_portal_playground_capability(command_map: dict, tool_files: set,
                                         new_ver: str) -> int:
     """The portal CLI Playground's subcommands must be runnable by the tag too.
@@ -2498,7 +2507,7 @@ def _check_portal_playground_capability(command_map: dict, tool_files: set,
         print(f"\n❌ could not read the portal CLI Playground command catalog, "
               f"so the subcommands its Copy button pins at v{new_ver} were NOT "
               f"checked: {exc}", file=sys.stderr)
-        return 1
+        raise CapabilityNotChecked
     rel = PORTAL_PLAYGROUND_PATH.relative_to(REPO_ROOT).as_posix()
     issues = []
     for sub, line in commands:
@@ -2577,13 +2586,13 @@ def _check_datools_pin_capability(new_ver: str) -> int:
         print(f"\n❌ could not read the da-tools entrypoint / build.sh to "
               f"determine what v{new_ver} will be able to run: {exc}",
               file=sys.stderr)
-        return 1
+        raise CapabilityNotChecked
     if not command_map or not tool_files:
         print(f"\n❌ parsed 0 COMMAND_MAP entries and/or 0 TOOL_FILES from the "
               f"da-tools sources — refusing to grade documented invocations "
               f"against an empty capability set (the parser is out of step "
               f"with the source layout).", file=sys.stderr)
-        return 1
+        raise CapabilityNotChecked
     # ⛔ A corpus that lost files, or collapsed to nothing, raises rather than
     # returning fewer invocations — otherwise "checked, all clean" and "checked
     # almost nothing" print identically (#1790's lesson, applied here).
@@ -2593,7 +2602,7 @@ def _check_datools_pin_capability(new_ver: str) -> int:
     except (RuntimeError, OSError) as exc:
         print(f"\n❌ could not assemble the documented-invocation corpus: "
               f"{exc}", file=sys.stderr)
-        return 1
+        raise CapabilityNotChecked
     # ⛔ Zero extracted invocations is a FAILURE, not a pass. `doc_files` being
     # non-empty proves the corpus was found, not that anything was read out of
     # it: a fence style the extractor stops recognising, or a docs reorg that
@@ -2609,7 +2618,7 @@ def _check_datools_pin_capability(new_ver: str) -> int:
               f"check_doc_datools_cmds.py), or the docs genuinely stopped "
               f"pinning any image — if it is the latter, delete this check "
               f"rather than letting it pass over nothing.", file=sys.stderr)
-        return 1
+        raise CapabilityNotChecked
     issues = check_pinned_subcommands_against(
         command_map, tool_files, doc_files, REPO_ROOT)
     # ⛔ Say what was checked even when nothing is wrong. Without this line a
@@ -3180,6 +3189,7 @@ def main():
     missing_rules = 0
     glob_broken = 0
     pin_capability_issues = 0
+    not_checked = 0
 
     for line, new_ver in requested:
 
@@ -3211,7 +3221,10 @@ def main():
                 glob_broken += 1
 
         if line == "tools":
-            pin_capability_issues += _check_datools_pin_capability(new_ver)
+            try:
+                pin_capability_issues += _check_datools_pin_capability(new_ver)
+            except CapabilityNotChecked:
+                not_checked += 1
 
     # MISSING 與 DEAD 在這裡同等對待，理由一致：explicit bump 是 release 動作，
     # 「這條規則沒 bump 到任何東西」不論成因是 pattern 撈不到（DEAD）還是檔案
@@ -3233,7 +3246,13 @@ def main():
               f"A release bump ran with those trees UNTOUCHED — fix "
               f"glob_dir/glob_pattern or the \"pattern\" in _build_*_rules().")
 
-    if dead_rules or missing_rules or glob_broken or pin_capability_issues:
+    # The tool's own rules (MISSING / DEAD / GLOB: fix _build_*_rules()) or a
+    # capability check that could not run: the bump could not do its job —
+    # the contract's 2, and 2 wins over the 1 of a capability issue found
+    # (scripts/tools/_lib_exitcodes.py; #3577, #3611).
+    if dead_rules or missing_rules or glob_broken or not_checked:
+        sys.exit(EXIT_CALLER_ERROR)
+    if pin_capability_issues:
         sys.exit(EXIT_VIOLATION)
 
     if args.check:

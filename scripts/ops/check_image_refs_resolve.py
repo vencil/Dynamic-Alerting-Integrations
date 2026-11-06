@@ -57,9 +57,11 @@ from pathlib import Path
 # Appended, so a copy beside this file (one directory holding all three) wins.
 sys.path.append(os.path.join(os.path.dirname(os.path.realpath(__file__)), os.pardir, "tools"))
 
+# No resolver under CI, or a resolver that gave no answer (timeout).
 # Distinct from EXIT_VIOLATION (1): "the check could not run" is not "the refs are
-# bad", and a reader of a CI log must be able to tell those apart.
-EXIT_NO_RESOLVER = 3
+# bad", and a reader of a CI log must be able to tell those apart. That is the
+# contract's caller error, 2 (scripts/tools/_lib_exitcodes.py; #3577, #3611).
+EXIT_NOT_CHECKED = 2
 
 
 def _consumer_read():
@@ -522,16 +524,28 @@ def _positive_timeout(text: str) -> int:
     return value
 
 
-def _resolve_once(cmd: list[str], timeout: int) -> tuple[bool, str]:
-    """Run one resolver command; return (resolved, last-line-of-reason)."""
+#: `_resolve_once` outcomes. UNANSWERED is a resolver that ran out of time: the
+#: registry said nothing about the ref, so it is no verdict (the contract's 2),
+#: not the "does not resolve" finding (1) (#3577, #3611).
+RESOLVED, NOT_RESOLVED, UNANSWERED = "resolved", "not-resolved", "unanswered"
+
+
+def _resolve_once(cmd: list[str], timeout: int) -> tuple[str, str]:
+    """Run one resolver command; return (outcome, last-line-of-reason).
+
+    ⚠️ A non-zero resolver exit is NOT_RESOLVED whatever its cause: skopeo and
+    docker exit 1 both for a tag the registry does not have and for a registry
+    they could not reach, so the exit status cannot tell those apart, and this
+    does not guess from the message text. Only a timeout is known to be no answer.
+    """
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout)
     except subprocess.TimeoutExpired:
-        return (False, f"timeout after {timeout}s")
+        return (UNANSWERED, f"timeout after {timeout}s")
     if proc.returncode == 0:
-        return (True, "")
+        return (RESOLVED, "")
     lines = (proc.stderr or proc.stdout or "non-zero exit").strip().splitlines()
-    return (False, lines[-1] if lines else "non-zero exit")
+    return (NOT_RESOLVED, lines[-1] if lines else "non-zero exit")
 
 
 def main() -> int:
@@ -580,18 +594,22 @@ def main() -> int:
               + ". Refs that WOULD be checked:", file=stream)
         for ref in refs:
             print(f"  - {ref}", file=stream)
-        return EXIT_NO_RESOLVER if in_ci else 0
+        return EXIT_NOT_CHECKED if in_ci else 0
 
     print(f"Resolving {len(refs)} concrete image ref(s) [scope={args.scope}] via {name}...")
     failed: list[tuple[str, str]] = []
+    unanswered: list[tuple[str, str]] = []
     for ref in refs:
         resolvable = _resolvable(ref)  # `repo:tag@digest` → `repo@digest` for the resolver
-        ok, reason = _resolve_once(build_cmd(resolvable), args.timeout)
-        if not ok:
+        outcome, reason = _resolve_once(build_cmd(resolvable), args.timeout)
+        if outcome != RESOLVED:
             # One retry absorbs a transient registry blip before failing the gate.
-            ok, reason = _resolve_once(build_cmd(resolvable), args.timeout)
-        if ok:
+            outcome, reason = _resolve_once(build_cmd(resolvable), args.timeout)
+        if outcome == RESOLVED:
             print(f"  ok       {ref}")
+        elif outcome == UNANSWERED:
+            unanswered.append((ref, reason))
+            print(f"  NO-ANSWER {ref}  ({reason})")
         else:
             failed.append((ref, reason))
             print(f"  FAIL     {ref}  ({reason})")
@@ -601,6 +619,13 @@ def main() -> int:
               f"(the #897 class — typo'd / yanked tag):", file=sys.stderr)
         for ref, reason in failed:
             print(f"  - {ref}: {reason}", file=sys.stderr)
+    if unanswered:
+        print(f"\n::error:: {len(unanswered)} image ref(s) got NO answer from the "
+              f"resolver, so whether they resolve was NOT checked:", file=sys.stderr)
+        for ref, reason in unanswered:
+            print(f"  - {ref}: {reason}", file=sys.stderr)
+        return EXIT_NOT_CHECKED
+    if failed:
         return 1
 
     print(f"\nAll {len(refs)} image refs resolve.")

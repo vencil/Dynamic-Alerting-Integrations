@@ -133,7 +133,7 @@ pre-commit run --hook-stage manual --all-files   # manual stage（較重）
 
 > **主路徑** Dev Container 做所有事（code / test / commit / push，優先 `make dc-*`）；**逃生門** FUSE 卡死時用 Windows 原生 git（`make win-commit` / `scripts/ops/win_git_escape.bat`）。目標：不讓任何 session 因 FUSE 卡死。
 
-- **Dev Container**：`make dc-up` / `dc-test` / `dc-run CMD="..."`（或 `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`）。⚠️ raw `docker exec` 走的是 **root**（非 `remoteUser`）——依賴一律 system-wide 安裝以確保兩種身分皆可用。容器落後於 `devcontainer.json` 時 `make dc-run` 會 **exit 4** 並提示 rebuild（`VIBE_SKIP_DC_DOCTOR=1` 可繞過）。
+- **Dev Container**：`make dc-up` / `dc-test` / `dc-run CMD="..."`（或 `docker exec -w /workspaces/vibe-k8s-lab vibe-dev-container <cmd>`）。⚠️ raw `docker exec` 走的是 **root**（非 `remoteUser`）——依賴一律 system-wide 安裝以確保兩種身分皆可用。容器落後於 `devcontainer.json` 時 `make dc-run` 會失敗並提示 rebuild（`VIBE_SKIP_DC_DOCTOR=1` 可繞過）：dx-run 回 2，make 本身一律回 2，原碼看 make 印的 `Error N`（#3577）。
 - **測試**：Python 測試直接跑；**Go 測試需 Dev Container**（`make dc-go-test`，用 `MOD=` / `PKG=` 縮小範圍，單 package 秒級）。掛載路徑的檔案清理要走 `docker exec ... rm -f`。
 - **K8s MCP** 常 timeout → fallback `docker exec`；**Prometheus / Alertmanager** 走 `port-forward` + `localhost:9090/9093`。
 

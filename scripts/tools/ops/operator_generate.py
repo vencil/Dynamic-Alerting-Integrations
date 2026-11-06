@@ -58,7 +58,8 @@ import _lib_metric_sources  # noqa: E402  (#1595 D1b: which platform rules opera
 from _lib_io import safe_label  # noqa: E402  (#1538 output-layer escaping)
 from _lib_yaml import _dict_to_yaml, write_yaml_crd  # noqa: E402
 from _lib_constants import OPERATOR_ROUTING_REMEDY_EN, OPERATOR_ROUTING_REMEDY_ZH  # noqa: E402  (#3572)
-from _lib_paths import classify_path, raise_path_problems, supplied  # noqa: E402  (#3392)
+from _lib_paths import supplied  # noqa: E402  (#3392)
+import _lib_input  # noqa: E402  (#3462: what --rule-packs-dir selects)
 
 # ---------------------------------------------------------------------------
 # Constants and Help Text
@@ -90,7 +91,7 @@ _HELP = {
             "Alertmanager 路由不在此產生：用 generate-routes 產出 alertmanager.yaml，"
             "交給 Alertmanager 當 configSecret（#3572）"
         ),
-        "rule_packs_dir": "Rule packs 目錄（預設 rule-packs/）",
+        "rule_packs_dir": "Rule packs 目錄（預設 rule-packs；須至少有一個 rule pack）",
         "output_dir": "把 CRD 寫進這個目錄。不給、或帶 --dry-run，就改印到 stdout 而不寫任何檔案",
         "namespace": "目標命名空間（預設 monitoring）",
         "gitops": "啟用 GitOps 模式（排序鍵、無時間戳）",
@@ -110,7 +111,7 @@ _HELP = {
             "Alertmanager routing is not generated here: render alertmanager.yaml with "
             "generate-routes and give it to the Alertmanager as its configSecret (#3572)"
         ),
-        "rule_packs_dir": "Rule packs directory (default rule-packs/)",
+        "rule_packs_dir": "Rule packs directory (default rule-packs; must hold at least one rule pack)",
         "output_dir": "Write CRDs into this directory. Omit it, or pass --dry-run, and they go to stdout instead; nothing is written",
         "namespace": "Target namespace (default monitoring)",
         "gitops": "Enable GitOps mode (sorted keys, no timestamps)",
@@ -248,42 +249,13 @@ def build_servicemonitor(
 # ---------------------------------------------------------------------------
 
 
-def discover_rule_packs(rule_packs_dir: Path) -> List[Path]:
-    """Discover the rule packs to emit: every declared rule pack — the
-    platform packs (``_lib_consumer_read.PLATFORM_PACKS``) included since
-    #1595 D1b, as the subset ``platform_pack_for_operator`` keeps.
-
-    Args:
-        rule_packs_dir: Directory containing rule packs
-
-    Returns:
-        Sorted list of rule pack file paths
-
-    Raises:
-        FileNotFoundError: If directory does not exist
-    """
-    if not rule_packs_dir.is_dir():
-        raise FileNotFoundError(
-            i18n_text(
-                f"rule-packs 目錄不存在: {rule_packs_dir}",
-                f"rule-packs directory not found: {rule_packs_dir}",
-            )
-        )
-    # #3426: the one declaration of what in a rule-packs directory is a rule
-    # pack (rule-pack-*.yaml|yml; an undeclared YAML there raises
-    # `SourcesUnlisted`, a ConsumerReadError: `main` stops at rc 2 naming it).
-    # #1595 D1b: the platform packs are included; generate_crds emits each as
-    # the rules a kube-prometheus-stack install can run.
-    return _lib_consumer_read.rule_pack_files(rule_packs_dir)
-
-
 # ---------------------------------------------------------------------------
 # Main Logic
 # ---------------------------------------------------------------------------
 
 
 def generate_crds(
-    rule_packs_dir: Path,
+    rule_pack_files: List[Path],
     namespace: str,
     components: str,
     selector_labels: Optional[Dict[str, str]] = None,
@@ -291,7 +263,11 @@ def generate_crds(
     """Generate all CRDs from the rule-packs directory.
 
     Args:
-        rule_packs_dir: Path to rule-packs directory
+        rule_pack_files: the rule packs to emit, as ``--rule-packs-dir``
+            selected them (``_lib_input.selected``: every declared pack of
+            ``_lib_consumer_read.RULE_PACKS``, the platform packs included
+            since #1595 D1b as the subset ``platform_pack_for_operator``
+            keeps)
         namespace: Target Kubernetes namespace
         components: One of ``_COMPONENTS`` (``all`` = rules + servicemonitor)
         selector_labels: Extra labels on the PrometheusRule / ServiceMonitor CRDs
@@ -310,43 +286,39 @@ def generate_crds(
 
     # PrometheusRule CRDs
     if components in ("all", "rules"):
-        try:
-            rule_pack_files = discover_rule_packs(rule_packs_dir)
-            # #3206 (ADR-036 §12): the packs are read the way Prometheus'
-            # rule loader reads them (`da-read prometheus-rules`, one run for
-            # all). A pack the loader refuses raises `RuleFilesRefused` and
-            # the generator stops (rc 2, naming it) — it used to be a WARNING
-            # and a CRD set with the pack missing.
-            rule_files = _lib_consumer_read.prometheus_rule_files(rule_pack_files)
-            for rule_pack_file, rule_file in zip(rule_pack_files, rule_files):
-                rule_pack_data = rule_file.documents[0]
-                if "groups" in rule_pack_data:
-                    rule_pack_name = _lib_consumer_read.RULE_PACKS.member(rule_pack_file)
-                    dropped: list = []
-                    if _lib_consumer_read.is_platform_pack(rule_pack_name):
-                        rule_pack_data, dropped = platform_pack_for_operator(rule_pack_data)
-                    for rule, reasons in dropped:
-                        result["excluded_rules"].append(
-                            {"pack": rule_pack_name, "rule": rule, "reasons": reasons})
-                        print(i18n_text(
-                            f"NOTE: {safe_label(rule_pack_file.name)} 的 {safe_label(rule)} "
-                            f"未輸出（Prometheus Operator 模式沒有它讀的指標來源）："
-                            f"{safe_label('; '.join(reasons))}",
-                            f"NOTE: {safe_label(rule)} from {safe_label(rule_pack_file.name)} "
-                            f"left out (no source for a metric it reads under the "
-                            f"Prometheus Operator): {safe_label('; '.join(reasons))}",
-                        ), file=sys.stderr)
-                    crd = build_prometheus_rule(
-                        rule_pack_name, rule_pack_data, namespace, selector_labels,
-                        [rule for rule, _ in dropped],
-                    )
-                    result["prometheus_rules"].append({
-                        "name": crd["metadata"]["name"],
-                        "file": rule_pack_file.name,
-                        "crd": crd,
-                    })
-        except FileNotFoundError as exc:
-            print(f"WARNING: {safe_label(exc)}", file=sys.stderr)
+        # #3206 (ADR-036 §12): the packs are read the way Prometheus'
+        # rule loader reads them (`da-read prometheus-rules`, one run for
+        # all). A pack the loader refuses raises `RuleFilesRefused` and
+        # the generator stops (rc 2, naming it) — it used to be a WARNING
+        # and a CRD set with the pack missing.
+        rule_files = _lib_consumer_read.prometheus_rule_files(rule_pack_files)
+        for rule_pack_file, rule_file in zip(rule_pack_files, rule_files):
+            rule_pack_data = rule_file.documents[0]
+            if "groups" in rule_pack_data:
+                rule_pack_name = _lib_consumer_read.RULE_PACKS.member(rule_pack_file)
+                dropped: list = []
+                if _lib_consumer_read.is_platform_pack(rule_pack_name):
+                    rule_pack_data, dropped = platform_pack_for_operator(rule_pack_data)
+                for rule, reasons in dropped:
+                    result["excluded_rules"].append(
+                        {"pack": rule_pack_name, "rule": rule, "reasons": reasons})
+                    print(i18n_text(
+                        f"NOTE: {safe_label(rule_pack_file.name)} 的 {safe_label(rule)} "
+                        f"未輸出（Prometheus Operator 模式沒有它讀的指標來源）："
+                        f"{safe_label('; '.join(reasons))}",
+                        f"NOTE: {safe_label(rule)} from {safe_label(rule_pack_file.name)} "
+                        f"left out (no source for a metric it reads under the "
+                        f"Prometheus Operator): {safe_label('; '.join(reasons))}",
+                    ), file=sys.stderr)
+                crd = build_prometheus_rule(
+                    rule_pack_name, rule_pack_data, namespace, selector_labels,
+                    [rule for rule, _ in dropped],
+                )
+                result["prometheus_rules"].append({
+                    "name": crd["metadata"]["name"],
+                    "file": rule_pack_file.name,
+                    "crd": crd,
+                })
 
     # ServiceMonitor CRD
     if components in ("all", "servicemonitor"):
@@ -426,10 +398,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         description=i18n_text(_HELP["zh"]["desc"], _HELP["en"]["desc"]),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument(
-        "--rule-packs-dir",
-        type=Path,
-        default=Path("rule-packs"),
+    # #3462: the rule packs it emits are what this selects — the rule-pack
+    # declaration (RULE_PACKS) of the directory's top level. None is no CRD
+    # set (it was 0 PrometheusRules, rc 0), and the default `rule-packs`
+    # nobody gave is judged as if given (owner, 2026-11-02).
+    _lib_input.add_input(
+        parser, "--rule-packs-dir", select=_lib_consumer_read.RULE_PACKS,
+        empty=_lib_input.EMPTY_REFUSED, default="rule-packs",
+        absent_default=_lib_input.ABSENT_REFUSED,
         help=i18n_text(_HELP["zh"]["rule_packs_dir"], _HELP["en"]["rule_packs_dir"]),
     )
     parser.add_argument(
@@ -722,8 +698,6 @@ def main():
     refuse_routing_flags(args, parser)
     refuse_routing_component(args)
 
-    # Resolve paths relative to current directory
-    rule_packs_dir = args.rule_packs_dir.resolve()
     # #1582：沒給 --output-dir 就沒有寫入目標。⛔ 不要在這裡塞回一個預設值——
     # 那正是本票的缺陷形狀（輸入被重導、輸出沒被重導，仍寫進呼叫目錄）。
     output_dir = args.output_dir.resolve() if args.output_dir is not None else None
@@ -740,20 +714,21 @@ def main():
     except (AttributeError, ValueError, OSError):  # 非 TextIOWrapper 的 stdout
         pass
 
-    # #3392: a directory the caller gave that is not there or not a
-    # directory is a caller error, named before anything is generated or
-    # written — it was a WARNING and a CRD set without its PrometheusRules,
-    # rc 0. Only when the chosen --components reads it; a default nobody
-    # gave keeps the WARNING below.
-    raise_path_problems([
-        classify_path(args.rule_packs_dir, "dir", lang=_LANG, flag="--rule-packs-dir")
-        if args.components in ("all", "rules") and supplied(args, parser, "rule_packs_dir")
-        else None])
-
     # Generate CRDs
     try:
+        # #3392 / #3462: --rule-packs-dir — given or the default — that is not
+        # there, no directory, cannot be listed or holds no rule pack is a
+        # caller error (rc 2, `_lib_input`), named before anything is
+        # generated or written: it was a WARNING and a CRD set without its
+        # PrometheusRules, rc 0. Only when the chosen --components reads it.
+        # ⛔ Not resolved file by file: a pack name is the file's own name
+        # (RULE_PACKS.member), and a symlinked rule-pack-x.yaml resolved to
+        # its target would be named after the target (PR #3610 review).
+        rule_pack_files = (
+            _lib_input.selected(args, "rule_packs_dir", lang=_LANG)
+            if args.components in ("all", "rules") else [])
         result = generate_crds(
-            rule_packs_dir,
+            rule_pack_files,
             args.namespace,
             args.components,
             selector_labels=dict(args.selector_label),

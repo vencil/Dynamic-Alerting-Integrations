@@ -36,8 +36,8 @@ SECRET_FIELDS = frozenset({
     "proxy_connect_header", "endpoint_params",
     "url", "api_url", "webhook_url", "proxy_url",
     "routing_key", "service_key", "auth_password", "auth_secret", "password",
-    "bearer_token", "credentials", "client_secret", "api_key", "token",
-    "bot_token", "user_key",
+    "bearer_token", "credentials", "client_secret", "client_certificate_key",
+    "secrets", "api_key", "token", "bot_token", "user_key",
 })
 
 

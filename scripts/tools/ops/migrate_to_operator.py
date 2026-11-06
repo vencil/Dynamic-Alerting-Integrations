@@ -167,6 +167,15 @@ def list_source_dir(source_dir: Path) -> "_lib_parse_tree.Listing":
     return listing
 
 
+def source_files(source_dir: Path, listing: "_lib_parse_tree.Listing") -> List[Path]:
+    """⛔ The files of *source_dir* a migration reads: the top-level config
+    files of its da-guard *listing* (its `list_source_dir`). What is nested
+    is not read, and `warn_nested` names it. `parse_configmap_rules` reads
+    these, and `main` refuses a --source-dir with none (#3462)."""
+    warn_nested(source_dir, tool="migrate_to_operator", listing=listing)
+    return [source_dir / e.path for e in listing.config_files() if e.depth == 0]
+
+
 class SourceFilesUnreadable(Exception):
     """Files of --source-dir that are neither a Kubernetes manifest kubectl
     reads nor a plain rule file (#3426). ``files`` is ``[(name, reason)]``,
@@ -232,8 +241,7 @@ def parse_configmap_rules(source_dir: Path,
     # Top level only; `warn_nested` names what that leaves out.
     if listing is None:
         listing = list_source_dir(source_dir)
-    warn_nested(source_dir, tool="migrate_to_operator", listing=listing)
-    paths = [source_dir / e.path for e in listing.config_files() if e.depth == 0]
+    paths = source_files(source_dir, listing)
     try:
         found = _lib_consumer_read.rule_files_in(paths)
     except _lib_consumer_read.RuleFileSourcesRefused as exc:
@@ -849,7 +857,7 @@ def main():
     )
     _lib_input.add_input(
         parser, "--source-dir", select=_lib_input.DA_GUARD_LISTS,
-        empty=_lib_input.EMPTY_ALLOWED, required=True,
+        empty=_lib_input.EMPTY_REFUSED, required=True,
         help=i18n_text(_HELP["zh"]["source_dir"], _HELP["en"]["source_dir"]),
     )
     parser.add_argument(
@@ -922,8 +930,15 @@ def main():
         file=sys.stderr,
     )
     # One listing of --source-dir for analysis and generation (#3206).
-    source_listing = (_sources_or_exit(list_source_dir, source_dir)
-                      if source_dir.is_dir() else None)
+    source_listing = _sources_or_exit(list_source_dir, source_dir)
+    # #3462: a --source-dir whose top level holds no file da-guard lists as
+    # a config file is a caller error (rc 2, nothing written) — it was a
+    # checklist and a CRD set made from no source, rc 0.
+    _lib_input.require_selection(
+        args, "source_dir", source_files(source_dir, source_listing),
+        wanted=i18n_text("da-guard 列為頂層 config 檔的檔案",
+                         "a top-level file da-guard lists as a config file"),
+        lang=_LANG)
     analysis = _sources_or_exit(analyze_migration, source_dir, source_listing)
 
     if analysis["issues"]:

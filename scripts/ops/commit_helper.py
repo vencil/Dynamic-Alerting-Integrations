@@ -74,17 +74,24 @@ def check_commit_msg(data: bytes) -> int:
             )
         except subprocess.TimeoutExpired:
             print("ERROR: commit-msg validation timed out", file=sys.stderr)
-            return 1
-        return result.returncode
+            return 2  # did not get a verdict: the contract's caller error (#3577)
+        return _forwarded(result.returncode)
     finally:
         os.unlink(tmp)
+
+
+def _forwarded(returncode: int) -> int:
+    """The wrapped command's status as a shell reports it: subprocess gives a
+    signal-killed child as -N, which an exit status cannot carry — 128 + N, the
+    shell's convention (PASSTHROUGH row in _lib_exitcodes, #3611)."""
+    return 128 - returncode if returncode < 0 else returncode
 
 
 def commit_file(path_str: str) -> int:
     p = Path(path_str)
     if not p.exists():
         print(f"ERROR: file not found: {p}", file=sys.stderr)
-        return 1
+        return 2  # the caller's path: a caller error (#3577)
     data = p.read_bytes()
     # Strip UTF-8 BOM if present — git's -F interprets BOM as part of the message.
     if data.startswith(b"\xef\xbb\xbf"):
@@ -109,10 +116,10 @@ def commit_file(path_str: str) -> int:
             check=False,
             timeout=120,
         )
-        return result.returncode
+        return _forwarded(result.returncode)
     except FileNotFoundError:
         print("ERROR: git not found on PATH", file=sys.stderr)
-        return 127
+        return 2  # a missing prerequisite binary: a caller error (#3577)
 
 
 def main(argv: list[str] | None = None) -> int:

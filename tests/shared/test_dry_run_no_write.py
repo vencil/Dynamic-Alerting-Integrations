@@ -656,13 +656,14 @@ RECIPES: list[Recipe] = [
 
     # 版號規則的三種寫法（pattern / pair_anchor / whole_file）各一個守衛；
     # --sync-counts 的第四個守衛在另一條分支、且不接受版號旗標 ⇒ 兩個 variant。
-    # ok_exits=(1,)：沙箱只帶了少數目標檔，其餘規則回報 SKIP/DEAD ⇒ exit 1，
-    # 寫入模式在同樣的 exit 1 下仍會寫（write_control 量的就是這個）。
+    # ok_exits=(2,)：沙箱只帶了少數目標檔，其餘規則回報 SKIP/DEAD/GLOB-EMPTY，
+    # --tools 的語料也組不起來——bump 沒能做完它的事 ⇒ exit 2（#3577、#3611；
+    # 先前是 1）。寫入模式在同樣的 exit 2 下仍會寫（write_control 量的就是這個）。
     R("bump_docs", variant="versions",
       build=lambda t, s: ["--platform", "99.0.0", "--tools", "99.0.0", "--dry-run"],
       sandbox=("CLAUDE.md", "components/da-tools/app",
                "helm/federation-reconciler/values.yaml"),
-      cwd="repo", ok_exits=(1,), write_ok_exits=(1,), write_control=True),
+      cwd="repo", ok_exits=(2,), write_ok_exits=(2,), write_control=True),
     R("bump_docs", variant="sync-counts",
       build=lambda t, s: (
           _edit(_sb(t, "CLAUDE.md"), " auto-run + ", "0 auto-run + ")

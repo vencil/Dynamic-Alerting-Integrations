@@ -44,8 +44,10 @@ Exit codes:
      the default, that cannot be listed (#3446 — it was read as empty and the
      manifest overwritten with no state; nothing is written); an existing
      --manifest-path that cannot be read as a manifest (#3392 — it is not
-     overwritten). The default --state-dir missing is still an empty state
-     directory, reported as `state_dir_missing`.
+     overwritten); the default --state-dir with something there but no
+     directory (a regular file, a dangling link, a file as its parent; #3548 — it was read as no state and the manifest
+     overwritten). The default --state-dir with nothing there is still an
+     empty state directory, reported as `state_dir_missing`.
 """
 from __future__ import annotations
 
@@ -501,9 +503,11 @@ def main(argv: list[str] | None = None) -> "int | Report":
     # directory is a caller error, before anything is written — it was read
     # as an empty state directory and an empty manifest written, rc 0 (a file
     # given here was not even reported as missing). The default nobody gave
-    # keeps that reading (`state_dir_missing`). #3446: one that cannot be
-    # listed, given or default, is a caller error too — the glob read it as
-    # empty and the manifest was overwritten with no state, rc 0.
+    # keeps that reading (`state_dir_missing`) — only when nothing is there
+    # (#3548: a regular file at the default was read as no state and the
+    # manifest overwritten, rc 0). #3446: one that cannot be listed, given or
+    # default, is a caller error too — the glob read it as empty and the
+    # manifest was overwritten with no state, rc 0.
     state_files = _lib_input.selected(args, "state_dir", lang="en")
     # #3107 v2: checked BEFORE the read — a FIFO or /dev/stdout would block it.
     check_repo_artifact(manifest_path, flag="--manifest-path")
