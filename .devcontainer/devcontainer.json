@@ -19,8 +19,9 @@
     // 2. K8s 工具 (kubectl, helm) — PINNED, never "latest" (#1337).
     // ⛔ In this feature `version` IS the kubectl version; there is no
     // `kubectl` option (an earlier revision set one; the feature ignored it).
-    // kubectl tracks the node image of the pinned kind below (kind v0.33.0
-    // defaults to kindest/node v1.37.0) — kubectl supports ±1 minor of skew.
+    // kubectl tracks the kind node image pinned in scripts/ops/kind-node-image.env
+    // (kindest/node v1.37.0) — kubectl supports ±1 minor of skew; enforced by
+    // tests/shared/test_toolchain_pin_parity.py.
     // helm == every setup-helm `version:` in .github/workflows (except the
     // Container SAST job, see ci.yml). No `v` prefix needed: the feature adds it.
     "ghcr.io/devcontainers/features/kubectl-helm-minikube:1": {
@@ -74,8 +75,9 @@
   //      `make lint-docs-mkdocs` 需要的三件組（dev-rules.md #4 Doc-as-Code
   //      要求 docs/**.md push 前必跑此 lint；缺它就只能等 CI 回報 site-root
   //      vs filesystem path 語意衝突）。PR #375 從踩到的痛中加進來。
-  // 2. 安裝 Kind（pinned v0.33.0 + 上游 sha256sum 驗證；預設 node image 為
-  //    kindest/node v1.37.0，上方 kubectl 1.37.1 跟著它走。原本的 v0.20.0 預設
+  // 2. 安裝 Kind（pinned v0.33.0 + 上游 sha256sum 驗證）。叢集的 node image 不靠
+  //    kind 預設值，釘在 scripts/ops/kind-node-image.env（kindest/node v1.37.0），
+  //    上方 kubectl 1.37.1 跟著它走。原本的 v0.20.0 預設
   //    起 k8s 1.27 的叢集，早已 EOL，且與 "latest" kubectl 的版本差遠超 ±1。）
   // 3. 安裝 promtool（pinned，與 ci.yml 同版——手裝 2.x vs CI pin 3.x 的
   //    lookback 語意 skew 燒過 #1134；pin parity 由

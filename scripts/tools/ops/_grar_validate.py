@@ -57,7 +57,7 @@ from _lib_validation import (  # noqa: E402  (#1560)
 )
 from _grar_merge import (  # noqa: E402  (#2326 directory scope)
     OWN_NAME_PREFIX,
-    SECRET_REF_OWN_ONLY_FIELDS,
+    CONFINED_REF_FIELDS,
     SharedSecret,
     ROOT_LEVEL,
     Finding,
@@ -77,7 +77,8 @@ from _grar_merge import (  # noqa: E402  (#2326 directory scope)
 def _extract_host(value: str | None) -> str | None:
     """Extract hostname from a URL or host:port string.
 
-    Returns hostname (lowercase) or None if unparseable.
+    Returns hostname (lowercase) or None if unparseable (a malformed URL
+    included: callers turn None into a per-receiver finding).
     """
     if not value or not isinstance(value, str):
         return None
@@ -85,8 +86,14 @@ def _extract_host(value: str | None) -> str | None:
     # host:port format (e.g., smtp.example.com:587)
     if "://" not in value:
         return value.split(":")[0].lower() or None
-    parsed = urlparse(value)
-    return parsed.hostname
+    try:
+        # #1560 review: urlparse raises on a malformed IPv6 netloc
+        # (`https://[broken/x`); that is a host this reader cannot read, the
+        # same as any other unparseable value — never an exception that ends
+        # the whole run for every tenant.
+        return urlparse(value).hostname
+    except ValueError:
+        return None
 
 
 def validate_receiver_domains(receiver_obj: dict, tenant: str, allowed_domains: list[str],
@@ -910,10 +917,12 @@ class PolicyDocument(NamedTuple):
 
 
 def _shared_secret_fields() -> frozenset[str]:
-    """The receiver fields a ``shared_secrets`` entry may list: every field
-    that takes a Secret reference, but auth_password (#1560)."""
+    """The receiver fields a ``shared_secrets`` entry may list: every
+    top-level field that takes a Secret reference, but those whose credential
+    goes to a destination the receiver names (``CONFINED_REF_FIELDS``:
+    auth_password) (#1560). The http_config leaves are never listable."""
     return frozenset(f for rtype in RECEIVER_TYPES
-                     for f in receiver_secret_ref_fields(rtype)) - SECRET_REF_OWN_ONLY_FIELDS
+                     for f in receiver_secret_ref_fields(rtype)) - CONFINED_REF_FIELDS
 
 
 # A Kubernetes object name (DNS-1123 subdomain), for a shared Secret's name.
@@ -975,7 +984,7 @@ def _load_shared_secrets(data: dict, policy_path: str) -> Mapping[str, SharedSec
         if bad:
             why = (" — auth_password never takes a shared Secret: the password "
                    "goes to the SMTP server the receiver names"
-                   if set(bad) & SECRET_REF_OWN_ONLY_FIELDS else "")
+                   if set(bad) & CONFINED_REF_FIELDS else "")
             raise PolicyInputError(
                 f"{where}: entry {alias!r} lists {bad} under fields; only "
                 f"{', '.join(sorted(allowed))} may use a shared Secret{why}")

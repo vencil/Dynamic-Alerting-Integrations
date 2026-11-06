@@ -14,7 +14,7 @@ own run is the CI lint job, which installs the pinned binary):
 5. **Level -> action mapping**: error=BLOCK, warning=WARN, info/style=INFO.
 6. **A run that does not show it ran is no run** (#3439): stand-ins for
    hadolint / docker on PATH, the wrapper run as a process. A non-zero exit,
-   an empty stdout, or stdout that is no JSON array of findings is exit 3 —
+   an empty stdout, or stdout that is no JSON array of findings is exit 2 —
    `docker run` with no daemon (rc 1, nothing on stdout) printed OK, rc 0.
 """
 from __future__ import annotations
@@ -209,6 +209,17 @@ class TestCollectFindings:
         f = iac.collect_findings(["some/random/Dockerfile"])
         assert any("unregistered" in x.lower() for x in f["BLOCK"])
 
+    def test_a_skipped_engine_pass_still_runs_the_vibe_rules(self, monkeypatch):
+        """R2 skips only hadolint: V1-V3 still decide on a dev box with no
+        engine (review on #3626 — the skip used to return before them)."""
+        monkeypatch.setattr(iac, "locate_engine", lambda: (None, None))
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: pytest.fail("engine was run"))
+        monkeypatch.setattr(iac, "healthcheck_violation", lambda content: True)
+        f = iac.collect_findings(["components/da-tools/app/Dockerfile"], strict=False)
+        assert any("hadolint pass skipped" in w for w in f["WARN"]), f["WARN"]
+        assert any("[V1 healthcheck]" in b for b in f["BLOCK"]), f["BLOCK"]
+        assert "__engine_error__" not in f
+
     def test_engine_unavailable_sets_sentinel(self, monkeypatch):
         monkeypatch.setattr(iac, "run_hadolint", lambda dfs: None)
         f = iac.collect_findings(["components/da-tools/app/Dockerfile"])
@@ -262,10 +273,10 @@ class TestMainExitCodes:
         monkeypatch.delenv("PR_BODY", raising=False)
         assert iac.main() == 1
 
-    def test_engine_unavailable_returns_three(self, monkeypatch):
+    def test_engine_unavailable_is_a_caller_error(self, monkeypatch):
         monkeypatch.setattr(iac, "run_hadolint", lambda dfs: None)
         monkeypatch.setattr(sys, "argv", ["prog", "--ci"])
-        assert iac.main() == 3
+        assert iac.main() == 2
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +310,34 @@ def _wrapper(path):
                           encoding="utf-8", timeout=120, env=env, stdin=subprocess.DEVNULL)
 
 
+@pytest.mark.parametrize("ci, rc", [(True, 2), (False, 0)], ids=["ci", "dev-box"])
+def test_no_engine_at_all_is_rc_2_only_under_ci(tmp_path, ci, rc):
+    """#3577 R2, the switch check_iac_helm / check_k8s_manifests already use:
+    no hadolint and no docker is a hard error under --ci, a WARN and exit 0
+    on a dev box. The non-engine rules still run either way."""
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    proc = _wrapper(str(empty)) if ci else _wrapper_bare(str(empty))
+    assert proc.returncode == rc, proc.stdout + proc.stderr
+    if not ci:
+        assert "hadolint pass skipped" in proc.stdout, proc.stdout
+
+
+def test_a_broken_engine_is_rc_2_on_a_dev_box_too(tmp_path):
+    """R2 relaxes only "no engine at all": an engine that is there and does not
+    show it ran is no verdict, with or without --ci (as check_iac_helm's
+    render / kube-linter failures)."""
+    proc = _wrapper_bare(_stand_in(tmp_path, "hadolint", _replies(1, "")))
+    assert proc.returncode == 2, proc.stdout + proc.stderr
+
+
+def _wrapper_bare(path):
+    env = {k: v for k, v in os.environ.items() if k != "PR_BODY"}
+    env["PATH"] = path
+    return subprocess.run([sys.executable, _SCRIPT], capture_output=True, text=True,
+                          encoding="utf-8", timeout=120, env=env, stdin=subprocess.DEVNULL)
+
+
 def _replies(rc, stdout):
     return f"#!/bin/sh\nprintf '%s' '{stdout}'\necho 'engine said why' >&2\nexit {rc}\n"
 
@@ -308,7 +347,7 @@ def test_docker_with_no_daemon_is_no_run(tmp_path):
     proc = _wrapper(_stand_in(tmp_path, "docker", (
         "#!/bin/sh\necho 'failed to connect to the docker API at "
         "unix:///var/run/docker.sock' >&2\nexit 1\n")))
-    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "failed to connect to the docker API" in proc.stderr, proc.stderr
     assert "OK Container SAST" not in proc.stdout, proc.stdout
 
@@ -325,9 +364,9 @@ def test_docker_with_no_daemon_is_no_run(tmp_path):
     (0, '[{"message":"parse failed"}]'),   # no level: it would pass as INFO
 ], ids=["rc0-empty", "rc1-array", "rc2-array", "rc125-empty", "object", "null",
         "array-of-number", "not-json", "finding-without-level"])
-def test_an_engine_run_that_does_not_show_it_ran_is_exit_3(tmp_path, rc, stdout):
+def test_an_engine_run_that_does_not_show_it_ran_is_a_caller_error(tmp_path, rc, stdout):
     proc = _wrapper(_stand_in(tmp_path, "hadolint", _replies(rc, stdout)))
-    assert proc.returncode == 3, proc.stdout + proc.stderr
+    assert proc.returncode == 2, proc.stdout + proc.stderr
     assert "did not run" in proc.stderr and "engine said why" in proc.stderr, proc.stderr
     assert "OK Container SAST" not in proc.stdout, proc.stdout
 
@@ -342,7 +381,7 @@ def test_a_clean_engine_run_passes(tmp_path):
 
 def test_a_finding_is_a_finding_not_an_engine_failure(tmp_path):
     """--no-fail is what lets an error-level finding (hadolint exit 1 without
-    it) reach the wrapper as a BLOCK, rc 1 — not exit 3."""
+    it) reach the wrapper as a BLOCK, rc 1 — not exit 2."""
     proc = _wrapper(_stand_in(tmp_path, "hadolint", _FAITHFUL))
     assert proc.returncode == 1, proc.stdout + proc.stderr
     assert "[BLOCK] x/Dockerfile:1 [DL3007 error]" in proc.stdout, proc.stdout

@@ -21,7 +21,11 @@ cleanup() { kind delete cluster --name "$CLUSTER" >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 echo "== create kind cluster $CLUSTER =="
-kind create cluster --name "$CLUSTER" --wait 90s >/dev/null
+# Node image (= Kubernetes version) comes from the SSOT, not kind's default.
+unset KIND_NODE_IMAGE  # an exported value must not stand in for the file
+source "$HERE/../../scripts/ops/kind-node-image.env"
+: "${KIND_NODE_IMAGE:?scripts/ops/kind-node-image.env did not set KIND_NODE_IMAGE}"
+kind create cluster --name "$CLUSTER" --image "${KIND_NODE_IMAGE}" --wait 90s >/dev/null
 
 echo "== deploy KSM (default, NO allowlist) + versioned pods =="
 kubectl apply -f "$HERE/ksm-and-versioned-pods.yaml" >/dev/null

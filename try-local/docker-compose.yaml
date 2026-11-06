@@ -184,14 +184,17 @@ services:
     # #2903 (ADR-036 §3): the generator container's service. tenant-api asks it
     # before every write that changes conf.d, over a Unix socket on the shared
     # `generator-sock` volume, and refuses to start without it. Built from
-    # ./generator (Python + PyYAML, git, amtool, uid 10001 — the runtime the
-    # da-tools image gives it); the service itself is the CHECKOUT's
+    # try-local/generator/Dockerfile (Python + PyYAML, git, amtool, da-guard,
+    # uid 10001 — the runtime the da-tools image gives it; the context is the
+    # repo root because da-guard is built from the exporter's Go, #3530); the
+    # service itself is the CHECKOUT's
     # scripts/tools, mounted read-only (tools/v2.9.0 has no generator-service
     # yet). tenant-api runs as the same uid (`user:` there) — the service
     # answers only its own uid. It reads the config repo from git objects
     # only, read-only.
     build:
-      context: ./generator
+      context: ..
+      dockerfile: try-local/generator/Dockerfile
     image: da-try-local/generator:source
     command:
       - --socket=/run/da-generator/generator.sock

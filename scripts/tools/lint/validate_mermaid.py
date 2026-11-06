@@ -54,6 +54,10 @@ class MermaidValidator:
     def __init__(self, verbose: bool = False):
         self.verbose = verbose
         self.errors: List[Dict] = []
+        # What could not be checked (a file unreadable, mmdc timing out or
+        # failing internally) — no verdict, so main() exits the contract's 2
+        # rather than reporting it as a diagram error (#3577, #3611).
+        self.not_checked: List[str] = []
         self.total_diagrams = 0
         self.valid_diagrams = 0
         # Lazily materialised on first render call.
@@ -104,16 +108,8 @@ class MermaidValidator:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
-        except OSError as e:
-            error = {
-                'file': str(filepath),
-                'line': 0,
-                'diagram_type': 'unknown',
-                'status': 'error',
-                'message': f'Failed to read file: {e}'
-            }
-            self.errors.append(error)
-            file_errors.append(error)
+        except (OSError, ValueError) as e:
+            self._not_checked(f'{filepath}: failed to read file: {e}')
             return file_errors
 
         # Extract Mermaid blocks with line numbers
@@ -322,8 +318,8 @@ class MermaidValidator:
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 content = f.read()
-        except OSError as e:
-            print(f"Error reading {filepath}: {e}", file=sys.stderr)
+        except (OSError, ValueError) as e:
+            self._not_checked(f'{filepath}: failed to read file: {e}')
             return False
 
         # Extract and render each Mermaid block
@@ -409,25 +405,16 @@ class MermaidValidator:
                 os.unlink(tmp_path)
 
         except subprocess.TimeoutExpired:
-            error = {
-                'file': str(filepath),
-                'line': line_number,
-                'diagram_type': 'unknown',
-                'status': 'error',
-                'message': 'mmdc render timeout'
-            }
-            self.errors.append(error)
+            self._not_checked(f'{filepath}:{line_number}: mmdc render timeout')
             return False
-        except (ValueError, TypeError, IndexError) as e:
-            error = {
-                'file': str(filepath),
-                'line': line_number,
-                'diagram_type': 'unknown',
-                'status': 'error',
-                'message': f'mmdc render error: {e}'
-            }
-            self.errors.append(error)
+        except (OSError, ValueError, TypeError, IndexError) as e:
+            self._not_checked(f'{filepath}:{line_number}: mmdc render error: {e}')
             return False
+
+    def _not_checked(self, why: str) -> None:
+        """Record (and say on stderr) one thing that could not be checked."""
+        self.not_checked.append(why)
+        print(f"ERROR: not checked: {why}", file=sys.stderr)
 
     def print_summary(self):
         """列印驗證摘要"""
@@ -522,7 +509,12 @@ def main():
     # Print summary
     validator.print_summary()
 
-    # Exit with appropriate code
+    # Exit with appropriate code. Something not checked is no verdict — the
+    # contract's 2, with or without --ci, and ahead of any error found (#3577).
+    if validator.not_checked:
+        print(f"ERROR: {len(validator.not_checked)} item(s) could not be "
+              f"checked; see the lines above", file=sys.stderr)
+        sys.exit(EXIT_CALLER_ERROR)
     if args.ci and validator.errors:
         sys.exit(EXIT_VIOLATION)
 

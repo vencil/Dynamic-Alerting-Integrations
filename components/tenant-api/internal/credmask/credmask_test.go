@@ -221,3 +221,45 @@ func TestMaskYAML_MasksASecretReferenceWhole(t *testing.T) {
 		t.Errorf("MaskValue api_url = %#v, want the placeholder", got)
 	}
 }
+
+// #1560 ③-c: a Secret reference on an http_config leaf (basic_auth.password,
+// a header's secrets item, oauth2.tls_config.key, ...) is masked with the
+// http_config container, and a leaf written outside its container is masked
+// by its own name — `key` excepted, which only its container masks.
+func TestMaskYAML_MasksANestedSecretReference(t *testing.T) {
+	t.Parallel()
+	in := `tenants:
+  t1:
+    _routing:
+      receiver:
+        type: webhook
+        url: https://hook.example.com/a
+        http_config:
+          basic_auth: {username: u, password: {secret: {key: CANARY-1}}}
+          http_headers:
+            X-Token: {values: [v], secrets: [CANARY-2, {secret: {key: CANARY-3}}]}
+          oauth2:
+            client_id: c
+            token_url: https://token.example.com/t
+            client_certificate_key: {secret: {key: CANARY-4}}
+            tls_config: {cert: c, key: {secret: {key: CANARY-5}}}
+`
+	out, err := MaskYAML([]byte(in))
+	if err != nil {
+		t.Fatalf("MaskYAML: %v", err)
+	}
+	if strings.Contains(string(out), "CANARY") || strings.Contains(string(out), "secret:") {
+		t.Fatalf("a nested Secret reference survived the mask:\n%s", out)
+	}
+	if n := strings.Count(string(out), Placeholder); n != 2 { // url + http_config
+		t.Errorf("placeholder count = %d, want 2:\n%s", n, out)
+	}
+	for _, key := range []string{"password", "secrets", "client_certificate_key", "client_secret", "credentials", "bearer_token"} {
+		if !IsCredentialKey(key) {
+			t.Errorf("IsCredentialKey(%q) = false, want true", key)
+		}
+	}
+	if IsCredentialKey("key") {
+		t.Errorf("IsCredentialKey(\"key\") = true: `key` is a Secret reference's coordinate, masked by its container")
+	}
+}

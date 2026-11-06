@@ -111,6 +111,17 @@ jobs:
               #   - components/da-read/** — the da-read leg (#3206): its own
               #     module, beside the two component trees above.
               - "components/da-read/**"
+              #   - tests/pss/** — the Pod Security gate (#1018). It judges every
+              #     pod the charts and k8s/ manifests render, at the version
+              #     pinned by the kind node image, so every chart, every
+              #     manifest and that pin are inputs. Joining `go` (not a
+              #     filter of its own) keeps the `Go Tests` gate's one
+              #     "needed" flag true for every leg it aggregates; the cost
+              #     is that a chart-only edit runs all Go legs.
+              - "tests/pss/**"
+              - "helm/**"
+              - "k8s/**"
+              - "scripts/ops/kind-node-image.env"
               #   - tests/e2e-bench/receiver/** — the receiver leg (#1280).
               #     `**/go.mod` above already woke the Go legs on a go.mod
               #     edit; this entry makes an edit to main.go / main_test.go
@@ -2677,6 +2688,66 @@ jobs:
       - name: Check the tests read nothing this leg's filter misses (#1399)
         run: python3 scripts/ops/go_test_reads.py --job go-tests-oauth2-proxy --logs "$RUNNER_TEMP/go-testlog"
 
+  go-tests-pss:
+    name: Go Tests — Pod Security gate
+    runs-on: ubuntu-24.04
+    # #1018: every pod the charts (defaults + each helm/*/ci/*.yaml) and the
+    # k8s/ manifests render is judged by the upstream Pod Security Admission
+    # library — the code the API server's PodSecurity plugin is built from —
+    # at the level the chart declares in Chart.yaml (absent = restricted) and
+    # the version pinned by scripts/ops/kind-node-image.env. No hand-written
+    # copy of the profile to drift. Path-gated on `go` like its siblings
+    # (that filter carries this module, helm/**, k8s/** and the pin).
+    needs: detect-changes
+    if: needs.detect-changes.outputs.go_changed == 'true'
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: tests/pss/go.mod
+
+      - name: Cache Go modules + build cache
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/go/pkg/mod
+            ~/.cache/go-build
+          # Own key: this module's go.sum shares nothing with the others.
+          key: ${{ runner.os }}-go-pss-${{ hashFiles('tests/pss/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-pss-
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          # Explicit, never the action's `latest` default.
+          # tests/shared/test_toolchain_pin_parity.py.
+          version: v4.3.0
+
+      - name: Judge every rendered pod with the Pod Security Admission library
+        working-directory: tests/pss
+        env:
+          PSS_REQUIRE_HELM: "1"
+        run: |
+          export GO_TESTLOG_DIR="$RUNNER_TEMP/go-testlog"
+          mkdir -p "$GO_TESTLOG_DIR"
+          go test ./... -count=1 -v -exec "sh $GITHUB_WORKSPACE/scripts/ops/go_testlog_exec.sh"
+
+      # go_test_reads.py below imports yaml.
+      - name: Install pyyaml
+        run: |
+          if ! python3 -c 'import yaml' 2>/dev/null; then
+            sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends python3-yaml
+          fi
+
+      - name: Check the tests read nothing this leg's filter misses (#1399)
+        run: python3 scripts/ops/go_test_reads.py --job go-tests-pss --logs "$RUNNER_TEMP/go-testlog"
+
   go-tests-da-read:
     name: Go Tests — da-read
     runs-on: ubuntu-24.04
@@ -2832,7 +2903,7 @@ jobs:
     runs-on: ubuntu-24.04
     # Pure result-aggregation gate — touches no repo content, needs no token.
     permissions: {}
-    needs: [detect-changes, go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit, go-tests-oauth2-proxy, go-tests-da-read, go-tests-e2e-bench-receiver, go-tests-bench-filter]
+    needs: [detect-changes, go-tests-threshold-exporter, go-tests-tenant-api, go-tests-am-inhibit, go-tests-oauth2-proxy, go-tests-da-read, go-tests-e2e-bench-receiver, go-tests-bench-filter, go-tests-pss]
     # always(): without it a failed dependency SKIPS this job, and a skipped
     # check would satisfy branch protection — the gate must FAIL, not skip,
     # when any split job fails.
@@ -2855,6 +2926,7 @@ jobs:
           R_DR: ${{ needs.go-tests-da-read.result }}
           R_RX: ${{ needs.go-tests-e2e-bench-receiver.result }}
           R_BF: ${{ needs.go-tests-bench-filter.result }}
+          R_PS: ${{ needs.go-tests-pss.result }}
         run: |
           echo "detect-changes:     $DETECT_RESULT (go_changed=$GO_CHANGED)"
           echo "threshold-exporter: $R_TE"
@@ -2864,11 +2936,12 @@ jobs:
           echo "da-read:            $R_DR"
           echo "e2e-bench receiver: $R_RX"
           echo "bench-filter:       $R_BF"
+          echo "pod-security:       $R_PS"
           if [ "$DETECT_RESULT" != "success" ]; then
             echo "::error::detect-changes did not succeed — refusing to treat skipped tests as green"
             exit 1
           fi
-          for r in "$R_TE" "$R_TA" "$R_AM" "$R_OP" "$R_DR" "$R_RX" "$R_BF"; do
+          for r in "$R_TE" "$R_TA" "$R_AM" "$R_OP" "$R_DR" "$R_RX" "$R_BF" "$R_PS"; do
             if [ "$r" = "success" ]; then
               continue
             fi

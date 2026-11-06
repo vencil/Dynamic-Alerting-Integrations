@@ -415,6 +415,102 @@ def test_kubectl_is_pinned_through_the_option_the_feature_actually_reads() -> No
         f"kubectl (feature `version`) is {feat.get('version')!r}; pin an x.y.z.")
 
 
+# ── kind node image (= the Kubernetes version of every local cluster) ────────
+
+_KIND_NODE_ENV = _REPO / "scripts" / "ops" / "kind-node-image.env"
+_KIND_NODE_RE = r"kindest/node:v(\d+)\.(\d+)\.(\d+)@sha256:[0-9a-f]{64}"
+# Where a cluster can be created from. Markdown is out of scope: runbooks show
+# commands to a reader, they do not create the clusters `make setup` or CI use.
+_KIND_CREATE_SURFACES = (".sh", ".bash", "Makefile", ".mk", ".yml", ".yaml", ".py", ".ps1")
+_KIND_CREATE = re.compile(
+    r"\bkind\s+create\s+cluster\b"                                # shell
+    r"|[\"']kind[\"']\s*,\s*[\"']create[\"']\s*,\s*[\"']cluster[\"']")   # argv list
+_KIND_IMAGE_ARG = re.compile(r'--image[ =]"?\$\{?KIND_NODE_IMAGE\b(?![A-Za-z0-9_])\}?"?')
+_SOURCES_SSOT = re.compile(r"^\s*(source|\.)\s+[^#\n]*kind-node-image\.env\b", re.MULTILINE)
+
+
+def _kind_node_image() -> str:
+    """The value as bash sees it after `source`, in an empty environment, so an
+    exported KIND_NODE_IMAGE cannot stand in for a missing line in the file."""
+    import subprocess
+    out = subprocess.run(
+        ["env", "-i", "bash", "--noprofile", "--norc", "-c",
+         'set -eu; source "$1"; printf %s "${KIND_NODE_IMAGE:-}"', "_", str(_KIND_NODE_ENV)],
+        capture_output=True, text=True, encoding="utf-8", timeout=30, check=True).stdout
+    assert out, f"{_KIND_NODE_ENV} does not set KIND_NODE_IMAGE"
+    return out
+
+
+def _kind_node_minor() -> tuple[int, int]:
+    m = re.fullmatch(_KIND_NODE_RE, _kind_node_image())
+    assert m, f"KIND_NODE_IMAGE must be kindest/node:vX.Y.Z@sha256:<64 hex>, got {_kind_node_image()!r}"
+    return int(m.group(1)), int(m.group(2))
+
+
+def _logical_lines(text: str) -> list[str]:
+    """Join backslash continuations, so a command split over lines is one line."""
+    return re.sub(r"\\\n\s*", " ", text).splitlines()
+
+
+def test_kind_node_image_is_digest_pinned() -> None:
+    """A tag alone can be re-pushed; without an image at all the cluster runs
+    whatever the installed kind binary defaults to (#1018)."""
+    _kind_node_minor()
+
+
+def test_every_kind_cluster_uses_the_pinned_node_image() -> None:
+    """Each `kind create cluster` (shell, or an argv list in Python) passes
+    `--image "${KIND_NODE_IMAGE}"`, and its file sources the SSOT on a line of
+    its own. A workflow using helm/kind-action must pass `node_image` from
+    KIND_NODE_IMAGE. Lines that only print the command (echo/printf) and
+    comments are not cluster creations.
+
+    Limit: this reads text. A command assembled from variables
+    (`K=kind; $K create cluster`) is not recognised."""
+    sites, bad = [], []
+    for f in repo_files(*_KIND_CREATE_SURFACES):
+        if f.resolve() == Path(__file__).resolve():
+            continue  # this guard names the pattern it looks for
+        text = f.read_text(encoding="utf-8", errors="replace")
+        rel = f.relative_to(_REPO)
+        if f.suffix in (".yml", ".yaml") and "kind-action" in text:
+            data = yaml.safe_load(text)
+            for job in (data or {}).get("jobs", {}).values() if isinstance(data, dict) else []:
+                for step in (job or {}).get("steps", []) or []:
+                    if "kind-action" in str(step.get("uses", "")):
+                        sites.append(f"{rel} (kind-action)")
+                        if "KIND_NODE_IMAGE" not in str((step.get("with") or {}).get("node_image", "")):
+                            bad.append(f"{rel}: helm/kind-action step without node_image from KIND_NODE_IMAGE")
+        hits = [ln for ln in _logical_lines(text)
+                if _KIND_CREATE.search(ln)
+                and not ln.lstrip().startswith(("#", "echo ", "printf ", "//"))]
+        if not hits:
+            continue
+        sites.append(str(rel))
+        if f.suffix != ".py" and not _SOURCES_SSOT.search(text):
+            bad.append(f"{rel}: no `source .../kind-node-image.env` line")
+        for ln in hits:
+            if f.suffix == ".py":
+                if "KIND_NODE_IMAGE" not in ln:
+                    bad.append(f"{rel}: {ln.strip()}  (no KIND_NODE_IMAGE in the argv)")
+            elif not _KIND_IMAGE_ARG.search(ln):
+                bad.append(f"{rel}: {ln.strip()}  (no --image \"${{KIND_NODE_IMAGE}}\")")
+    assert sites, "found no kind cluster creation at all: the scan is broken, not the repo clean"
+    assert not bad, "kind clusters not on the pinned node image:\n  " + "\n  ".join(bad)
+
+
+def test_kubectl_is_within_one_minor_of_the_node_image() -> None:
+    """Kubernetes version-skew policy: kubectl is supported within one minor of
+    the API server. The API server is the kind node image."""
+    major, minor = _kind_node_minor()
+    kubectl = str(_feature("kubectl-helm-minikube").get("version"))
+    km = re.fullmatch(r"(\d+)\.(\d+)\.\d+", kubectl)
+    assert km, f"kubectl version {kubectl!r} is not x.y.z"
+    assert int(km.group(1)) == major and abs(int(km.group(2)) - minor) <= 1, (
+        f"kubectl {kubectl} is more than one minor away from the kind node image "
+        f"v{major}.{minor} ({_KIND_NODE_ENV.relative_to(_REPO)})")
+
+
 def test_kind_is_pinned_and_checksum_verified() -> None:
     cmd = _devcontainer()["postCreateCommand"]
     urls = re.findall(r"kind/releases/download/(v\d+\.\d+\.\d+)/kind-linux-amd64", cmd)
@@ -492,6 +588,6 @@ def test_precommit_hook_dependency_pins_match_ci_constraints() -> None:
 
 
 @pytest.mark.parametrize("path", [_DEVCONTAINER, _INSTALL_TRIVY, _MAKEFILE, _IAC_HELM,
-                                  _SESSION_START, _PRECOMMIT, _CONSTRAINTS])
+                                  _SESSION_START, _PRECOMMIT, _CONSTRAINTS, _KIND_NODE_ENV])
 def test_inputs_exist(path: Path) -> None:
     assert path.is_file(), f"missing {path}"

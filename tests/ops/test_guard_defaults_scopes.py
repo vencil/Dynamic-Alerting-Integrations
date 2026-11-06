@@ -662,7 +662,7 @@ class TestNonAsciiPathsAreNotSilentlyMisplaced:
         monkeypatch.setattr("sys.stdin", _Stdin(bad + "\0"))
         rc = mod.main(["--null", "-"])
         out = capsys.readouterr()
-        assert rc == 3, f"an unrepresentable path was emitted: {out.out!r}"
+        assert rc == mod.EXIT_UNREPRESENTABLE_PATH == 1, f"an unrepresentable path was emitted: {out.out!r}"
         assert not out.out, out.out
         assert "control character" in out.err, out.err
         # ⛔ 訊息要指名是哪一個字元。第一版只說「TAB or newline」，而現在被拒的
@@ -685,7 +685,7 @@ class TestNonAsciiPathsAreNotSilentlyMisplaced:
             "sys.stdin", _Stdin("conf.d/we" + sep + "ird/_defaults.yaml\n"))
         rc = mod.main(["-"])
         out = capsys.readouterr()
-        assert rc == 3, (
+        assert rc == mod.EXIT_UNREPRESENTABLE_PATH == 1, (
             f"{sep!r} split the path instead of being refused: {out.out!r}")
         assert not out.out, out.out
 
@@ -797,7 +797,7 @@ class TestNonAsciiPathsAreNotSilentlyMisplaced:
         rc = mod.main(["--null", "-"])
         out = capsys.readouterr()
         if refused:
-            assert rc == 3, f"{path!r} was emitted anyway: {out.out!r}"
+            assert rc == mod.EXIT_UNREPRESENTABLE_PATH == 1, f"{path!r} was emitted anyway: {out.out!r}"
             assert not out.out, out.out
         else:
             assert rc == 0, f"a legal path was refused: {out.err!r}"
