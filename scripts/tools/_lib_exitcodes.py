@@ -763,10 +763,12 @@ def _entry_name(entry: Callable[..., Any]) -> str:
 
 def _contract_status(status: Any, entry: Callable[..., Any]) -> Any:
     """*status* as ``run()`` may end with it (#3611): None, 0/1/2, a code
-    the registry gives this entry — or, for anything else, the caller-error
-    code after one ``ERROR:`` line (under tests: the test crash code, so a
-    test pinning an unregistered code goes red). A string is printed first,
-    as Python would. None and a bool end as Python ends them (0, 0/1)."""
+    the registry gives this entry — or, for any other int, the caller-error
+    code after one ``ERROR:`` line naming the registry (under tests: the test
+    crash code, so a test pinning an unregistered code goes red). A string is
+    printed as Python would and is its own explanation — ``SystemExit("ERROR:
+    …")`` is how tools say why — so it ends at the caller-error code with no
+    second line; under tests it also gets the line and the test crash code. None and a bool end as Python ends them (0, 0/1)."""
     if status is None or isinstance(status, bool):
         return status
     name = _entry_name(entry)

@@ -277,7 +277,11 @@ def cmd_run(cmd: list[str], detach: bool = False) -> int:
         # Detached docker exec returns immediately; user command runs in
         # background and may take arbitrarily long (test/build/long-running).
         # Ignore lint: timeout governs the *exec dispatch* not the inner cmd.
-        subprocess.run(args, check=False)  # subprocess-timeout: ignore
+        rc_detach = subprocess.run(args, check=False).returncode  # subprocess-timeout: ignore
+        if rc_detach != 0:
+            # The command was never started: the wrapper's own failure (#3577).
+            print(f"docker exec -d failed with rc={rc_detach}", file=sys.stderr)
+            return EXIT_ENV
         print(f"[detached] output will be at (host path): {OUT_FILE} inside workspace")
         return 0
 
@@ -297,6 +301,13 @@ def cmd_run(cmd: list[str], detach: bool = False) -> int:
         ["docker", "exec", name, "cat", out_path_in_container],
         capture_output=True, check=False, timeout=60,
     )
+    if cat.returncode != 0:
+        # The command ran but its output is lost: the caller did not get what
+        # it asked for — the wrapper's own failure, not the command's (#3577).
+        err = cat.stderr.decode("utf-8", "replace").strip() or "unknown error"
+        print(f"dx-run: could not read the command's output back "
+              f"({out_path_in_container}: {err})", file=sys.stderr)
+        return EXIT_ENV
     sys.stdout.buffer.write(cat.stdout)
     sys.stdout.flush()
     rc_cat = subprocess.run(

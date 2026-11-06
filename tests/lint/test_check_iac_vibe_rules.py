@@ -209,6 +209,17 @@ class TestCollectFindings:
         f = iac.collect_findings(["some/random/Dockerfile"])
         assert any("unregistered" in x.lower() for x in f["BLOCK"])
 
+    def test_a_skipped_engine_pass_still_runs_the_vibe_rules(self, monkeypatch):
+        """R2 skips only hadolint: V1-V3 still decide on a dev box with no
+        engine (review on #3626 — the skip used to return before them)."""
+        monkeypatch.setattr(iac, "locate_engine", lambda: (None, None))
+        monkeypatch.setattr(iac, "run_hadolint", lambda dfs: pytest.fail("engine was run"))
+        monkeypatch.setattr(iac, "healthcheck_violation", lambda content: True)
+        f = iac.collect_findings(["components/da-tools/app/Dockerfile"], strict=False)
+        assert any("hadolint pass skipped" in w for w in f["WARN"]), f["WARN"]
+        assert any("[V1 healthcheck]" in b for b in f["BLOCK"]), f["BLOCK"]
+        assert "__engine_error__" not in f
+
     def test_engine_unavailable_sets_sentinel(self, monkeypatch):
         monkeypatch.setattr(iac, "run_hadolint", lambda dfs: None)
         f = iac.collect_findings(["components/da-tools/app/Dockerfile"])

@@ -2522,17 +2522,22 @@ def _int_literal(node: ast.AST | None) -> int | None:
 def _extended_literals(tree: ast.Module) -> list[tuple[int, str, int]]:
     """(line, where, value) for every exit-status-shaped int outside 0..2 in
     *tree*. Read through the shapes the tools write: a literal, either arm of
-    `a if c else b`, and a name bound at module level to an int (`return
-    RC_X`); in `return`, a lambda's body, `sys.exit(…)` / `SystemExit(…)` /
-    `os._exit(…)` (positional or `code=`), and any `EXIT_*` / `_EXIT_*`
-    binding, module-level or local. *where* is the enclosing function for a
+    `a if c else b`, and a name bound at module level to an int, annotated or
+    not (`return RC_X`); in `return` (of the function it is in, not of a
+    nested def), a lambda's body, `sys.exit(…)` / `SystemExit(…)` /
+    `os._exit(…)` (positional or `code=`), `Report(doc, status)`,
+    `die_caller_error(…, code=)`, and any `EXIT_*` / `_EXIT_*` binding,
+    module-level or local. *where* is the enclosing function for a
     return. Not read (the runtime check in run() still refuses them): a value
     reached through a local variable, a class or Enum attribute, or another
-    module."""
+    module. A name a function rebinds locally is still read as the module's
+    int: that false alarm fails loudly, and renaming the local clears it."""
     module_ints: dict[str, int] = {}
     for node in tree.body:
-        if isinstance(node, ast.Assign) and (v := _int_literal(node.value)) is not None:
-            for target in node.targets:
+        if (isinstance(node, (ast.Assign, ast.AnnAssign))
+                and (v := _int_literal(node.value)) is not None):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
                 if isinstance(target, ast.Name):
                     module_ints[target.id] = v
 
@@ -2557,17 +2562,32 @@ def _extended_literals(tree: ast.Module) -> list[tuple[int, str, int]]:
                         and target.id.lstrip("_").startswith("EXIT_")):
                     add(node.lineno, target.id, node.value)
         elif isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            for sub in ast.walk(node):
+            # A return belongs to the function it is in: a nested def is
+            # walked on its own (as ast.walk reaches it), never as its parent.
+            stack = list(ast.iter_child_nodes(node))
+            while stack:
+                sub = stack.pop()
+                if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
+                    continue
                 if isinstance(sub, ast.Return):
                     add(sub.lineno, node.name, sub.value)
+                stack.extend(ast.iter_child_nodes(sub))
         elif isinstance(node, ast.Lambda):
             add(node.lineno, "lambda", node.body)
         elif isinstance(node, ast.Call):
             name = _dotted(node.func) or ""
-            if name.rsplit(".", 1)[-1] in ("exit", "SystemExit", "_exit"):
+            last = name.rsplit(".", 1)[-1]
+            if last in ("exit", "SystemExit", "_exit"):
                 arg = node.args[0] if node.args else next(
                     (k.value for k in node.keywords if k.arg in ("code", "status")), None)
                 add(node.lineno, name, arg)
+            elif last == "Report":  # Report(doc, status)
+                arg = node.args[1] if len(node.args) > 1 else next(
+                    (k.value for k in node.keywords if k.arg == "status"), None)
+                add(node.lineno, name, arg)
+            elif last in ("die_caller_error", "exit_caller_error"):
+                add(node.lineno, name, next(
+                    (k.value for k in node.keywords if k.arg == "code"), None))
     # a nested function's return is also walked from its parent: keep one
     return sorted(set(out))
 
@@ -2644,6 +2664,15 @@ _X = frozenset({("a/x.py", "v")})
      frozenset(), ["a/u.py:2: _EXIT_T uses exit status 4"]),
     ({"a/u.py": "run(lambda: 3)\n", "a/t.py": "", "a/p.py": ""},
      frozenset(), ["a/u.py:1: lambda uses exit status 3"]),
+    ({"a/u.py": "RC_T: int = 4\ndef main():\n    return RC_T\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:3: main uses exit status 4"]),
+    ({"a/u.py": "def main():\n    return Report({}, 3)\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:2: Report uses exit status 3"]),
+    ({"a/u.py": "def main():\n    die_caller_error('x', code=5)\n", "a/t.py": "", "a/p.py": ""},
+     frozenset(), ["a/u.py:2: die_caller_error uses exit status 5"]),
+    ({"a/t.py": "", "a/p.py": "",
+      "a/x.py": "def main():\n    def v():\n        return 60\n    return 0\n"},
+     frozenset({("a/x.py", "v")}), []),
     ({"a/p.py": "def main(rc):\n    return rc\n", "a/t.py": ""}, frozenset(), []),
     ({"a/p.py": "def main():\n    return 9\n", "a/t.py": ""}, frozenset(),
      ["a/p.py:2: main uses exit status 9"]),
@@ -2654,7 +2683,8 @@ _X = frozenset({("a/x.py", "v")})
     ({"a/t.py": "", "a/p.py": ""}, _X, ["NOT_EXIT_STATUS ('a/x.py', 'v'): excuses nothing"]),
 ], ids=["registered", "unregistered", "other-file", "helper-return", "sys-exit",
         "negative", "exit-constant", "not-exit-shaped", "module-int-name", "ternary",
-        "exit-keyword", "local-private-exit-constant", "lambda", "passthrough",
+        "exit-keyword", "local-private-exit-constant", "lambda", "annotated-module-int",
+        "report-status", "die-caller-error-code", "nested-def-is-its-own", "passthrough",
         "passthrough-own-literal", "stem-collision",
         "row-without-file", "excused", "stale-excuse"])
 def test_the_registry_gate_on_known_shapes(files, not_exit, want):

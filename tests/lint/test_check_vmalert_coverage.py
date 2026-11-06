@@ -132,8 +132,9 @@ def test_main_reports_duplicate_as_violation_not_traceback(tree, monkeypatch):
     assert cov.main() == 1   # graceful violation exit, not an uncaught ValueError
 
 
-@pytest.mark.parametrize("content", [b"tests: [\xff\xfe]\n", b"tests: [unclosed\n"],
-                         ids=["not-utf8", "not-yaml"])
+@pytest.mark.parametrize("content", [b"tests: [\xff\xfe]\n", b"tests: [unclosed\n",
+                                     b"- a\n- b\n"],
+                         ids=["not-utf8", "not-yaml", "not-a-mapping"])
 def test_an_unreadable_fixture_is_a_caller_error_not_a_finding(tree, monkeypatch, content):
     """A fixture the tool cannot read means nothing was checked: 2, never the 1 of
     a coverage finding (#3577). Before, a decode error rode the duplicate-alertname

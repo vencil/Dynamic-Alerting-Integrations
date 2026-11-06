@@ -389,12 +389,12 @@ def collect_findings(dockerfiles: list[str], strict: bool = True) -> dict[str, l
     registered = [df for df in dockerfiles if df in DOCKERFILE_CONTEXTS]
 
     # Engine (hadolint) findings.
-    if registered and not strict and locate_engine() == (None, None):
+    skip_engine = bool(registered) and not strict and locate_engine() == (None, None)
+    if skip_engine:
         findings["WARN"].append(
             "[engine] hadolint pass skipped — neither the hadolint binary nor "
             "docker is on PATH (with --ci this is exit 2)")
-        return findings
-    hl = run_hadolint(registered)
+    hl = [] if skip_engine else run_hadolint(registered)
     if hl is None:
         findings["BLOCK"].append(
             "[engine] hadolint unavailable or did not run (the ERROR line "

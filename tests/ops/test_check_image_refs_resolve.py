@@ -198,6 +198,20 @@ def test_a_resolver_that_gave_no_answer_is_not_a_finding(
         assert "NOT checked" in capsys.readouterr().err
 
 
+def test_a_timeout_then_an_answer_is_the_answer(tmp_path: Path, monkeypatch) -> None:
+    """The one retry: a resolver that timed out and then answered RESOLVED is
+    a resolved ref (0), and it was asked twice (review on #3626)."""
+    _write(tmp_path / "helm/a/values.yaml", "image:\n  repository: quay.io/o/a\n  tag: v1\n")
+    replies = iter([(_cir.UNANSWERED, "timeout after 30s"), (_cir.RESOLVED, "")])
+    calls: list = []
+    monkeypatch.setattr(_cir, "_resolver", lambda: (lambda ref: [ref], "stub"))
+    monkeypatch.setattr(_cir, "_resolve_once",
+                        lambda cmd, timeout: (calls.append(cmd), next(replies))[1])
+    monkeypatch.setattr(sys, "argv", ["check_image_refs_resolve.py", "--root", str(tmp_path)])
+    assert _cir.main() == 0
+    assert len(calls) == 2
+
+
 def test_resolve_once_tells_a_timeout_from_a_refusal() -> None:
     """The structural half: only TimeoutExpired is UNANSWERED."""
     assert _cir._resolve_once([sys.executable, "-c", "import time; time.sleep(5)"], 1)[0] \

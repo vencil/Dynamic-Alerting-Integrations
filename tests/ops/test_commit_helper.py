@@ -95,6 +95,21 @@ class TestCommitFile:
         assert "git not found" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("returncode, rc", [(1, 1), (128, 128), (-15, 143), (-9, 137)])
+def test_git_s_status_is_forwarded_as_the_shell_reports_it(tmp_path, returncode, rc):
+    """PASSTHROUGH (#3611): git's own status is the answer, and a git killed
+    by a signal (subprocess: -N) is forwarded as the shell's 128 + N — an
+    exit status cannot carry -N, and run() would end it at 2 (review, #3626)."""
+    mod = _load()
+    msg_file = tmp_path / "msg.txt"
+    msg_file.write_text("fix: x", encoding="utf-8")
+    with patch.object(mod, "check_commit_msg", return_value=0), \
+            patch.object(mod.subprocess, "run") as mock_run:
+        mock_run.return_value = subprocess.CompletedProcess(
+            args=[], returncode=returncode, stdout=b"", stderr=b"")
+        assert mod.commit_file(str(msg_file)) == rc
+
+
 class TestCommitMsgGate:
     """#1914: EXTRA_GIT_ARGS carries --no-verify, which also skips the
     commit-msg hook, so commit-file must run the hook's validator itself.

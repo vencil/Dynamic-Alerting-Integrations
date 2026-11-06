@@ -84,7 +84,13 @@ _BASELINE_HEADER = """\
 def _load_yaml(p: Path) -> dict:
     """A promtool test fixture or this lint's own baseline — never a rule
     pack, which is read the way Prometheus reads it (`declared_alerts`)."""
-    return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+    data = yaml.safe_load(p.read_text(encoding="utf-8"))
+    if data is None:
+        return {}
+    if not isinstance(data, dict):
+        # main() reports it as unreadable input (2), not a traceback.
+        raise ValueError(f"{p}: the top-level YAML document is not a mapping")
+    return data
 
 
 class RulePacksRefused(Exception):

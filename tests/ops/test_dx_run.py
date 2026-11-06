@@ -23,7 +23,8 @@ def _load():
 
 
 def _fake_run_factory(docker_version_ok=True, ps_names=(), ps_a_names=(),
-                     start_ok=True, exec_rc=0, cat_stdout=b"", cat_rc="0"):
+                     start_ok=True, exec_rc=0, cat_stdout=b"", cat_rc="0",
+                     cat_out_returncode=0, cat_rc_returncode=0, detach_rc=0):
     """Build a side_effect callable for subprocess.run that mimics docker calls.
 
     Recognizes these command shapes:
@@ -53,12 +54,18 @@ def _fake_run_factory(docker_version_ok=True, ps_names=(), ps_a_names=(),
             out.returncode = 0 if start_ok else 1
             out.stderr = "" if start_ok else "no such container"
             return out
+        if cmd[:3] == ["docker", "exec", "-d"]:
+            out.returncode = detach_rc
+            return out
         if cmd[:2] == ["docker", "exec"]:
             if "cat" in cmd and cmd[-1].endswith(".rc"):
                 out.stdout = cat_rc
+                out.returncode = cat_rc_returncode
                 return out
             if "cat" in cmd:
                 out.stdout = cat_stdout
+                out.returncode = cat_out_returncode
+                out.stderr = b"cat: no such file" if cat_out_returncode else b""
                 return out
             out.returncode = exec_rc
             return out
@@ -208,6 +215,36 @@ class TestRun:
             rc = mod.cmd_run(["pytest"])
         assert rc == 2
         assert "could not read the command's exit status back" in capsys.readouterr().err
+
+    def test_a_failed_status_read_is_no_verdict_even_if_it_printed_0(self, capsys):
+        """The `.rc` read failing while its stdout says 0 must not be read as
+        the command's 0 (#3609; review on #3626)."""
+        mod = _load()
+        fake = _fake_run_factory(
+            ps_names=("vibe-dev-container",), ps_a_names=("vibe-dev-container",),
+            cat_stdout=b"output\n", cat_rc="0", cat_rc_returncode=1)
+        with patch.object(mod.subprocess, "run", side_effect=fake):
+            assert mod.cmd_run(["pytest"]) == 2
+
+    def test_lost_output_is_the_wrappers_failure(self, capsys):
+        """The command ran but its output could not be read back: the caller
+        did not get what it asked for — 2, whatever the command's own code."""
+        mod = _load()
+        fake = _fake_run_factory(
+            ps_names=("vibe-dev-container",), ps_a_names=("vibe-dev-container",),
+            cat_rc="0", cat_out_returncode=1)
+        with patch.object(mod.subprocess, "run", side_effect=fake):
+            assert mod.cmd_run(["pytest"]) == 2
+        assert "could not read the command's output back" in capsys.readouterr().err
+
+    def test_a_detach_that_did_not_start_is_the_wrappers_failure(self, capsys):
+        mod = _load()
+        fake = _fake_run_factory(
+            ps_names=("vibe-dev-container",), ps_a_names=("vibe-dev-container",),
+            detach_rc=1)
+        with patch.object(mod.subprocess, "run", side_effect=fake):
+            assert mod.cmd_run(["long_task.sh"], detach=True) == 2
+        assert "docker exec -d failed" in capsys.readouterr().err
 
     def test_detach_uses_docker_exec_dash_d(self):
         mod = _load()
