@@ -45,8 +45,11 @@ across all four layers in TRK-314; Layer 1 uses the BLOCK/WARN reduction
 above.
 
 hadolint is located as: ``hadolint`` on PATH, else
-``docker run hadolint/hadolint:<ver>``. If neither exists the run aborts
-(exit 2, a caller error) rather than silently passing.
+``docker run hadolint/hadolint:<ver>``. If neither exists, ``--ci`` (CI and
+the pre-commit hook) aborts with exit 2, a caller error, rather than silently
+passing; without ``--ci`` the engine pass is skipped with a WARN and the other
+rules still decide — the same switch as check_iac_helm / check_k8s_manifests
+(#3577 R2).
 
 ⛔ #3439: a hadolint run counts only when it shows that it ran. It is called
 with ``--no-fail``, so a run that read every file exits 0 whatever it found
@@ -366,8 +369,13 @@ def _read_pr_body(pr_body_file: str | None) -> str | None:
     return os.environ.get("PR_BODY") or None
 
 
-def collect_findings(dockerfiles: list[str]) -> dict[str, list[str]]:
-    """Run all rules; return {'BLOCK': [...], 'WARN': [...], 'INFO': [...]}."""
+def collect_findings(dockerfiles: list[str], strict: bool = True) -> dict[str, list[str]]:
+    """Run all rules; return {'BLOCK': [...], 'WARN': [...], 'INFO': [...]}.
+
+    *strict* is ``--ci``, the same switch as check_iac_helm / check_k8s_manifests
+    (#3577 R2): with no engine at all, strict is a hard error (exit 2) and
+    otherwise a WARN and a skipped engine pass (exit 0 on a dev box). An engine
+    that is there but does not show it ran is exit 2 either way."""
     findings: dict[str, list[str]] = {"BLOCK": [], "WARN": [], "INFO": []}
 
     # Unregistered Dockerfiles (governance) -> BLOCK.
@@ -381,6 +389,11 @@ def collect_findings(dockerfiles: list[str]) -> dict[str, list[str]]:
     registered = [df for df in dockerfiles if df in DOCKERFILE_CONTEXTS]
 
     # Engine (hadolint) findings.
+    if registered and not strict and locate_engine() == (None, None):
+        findings["WARN"].append(
+            "[engine] hadolint pass skipped — neither the hadolint binary nor "
+            "docker is on PATH (with --ci this is exit 2)")
+        return findings
     hl = run_hadolint(registered)
     if hl is None:
         findings["BLOCK"].append(
@@ -466,7 +479,7 @@ def main() -> int:
             print(f"  {df}  ->  {ctx}")
         return EXIT_OK
 
-    findings = collect_findings(dockerfiles)
+    findings = collect_findings(dockerfiles, strict=args.ci)
     engine_error = findings.pop("__engine_error__", None)
 
     for action in ("BLOCK", "WARN", "INFO"):
