@@ -154,6 +154,13 @@ for that tenant (`effective_config`, `merged_hash`, `source_file`,
   field is named as older than this tool (#2065). Which of them da-guard's
   `value_not_served` refuses is da-guard's to say (its check's findings,
   `load_guard_report`, #3387), not re-derived here.
+* `maintenance_recurring` (#3620) — the recurring maintenance windows of
+  `_state_maintenance` that maintenance-scheduler silences, a tuple of
+  `RecurringWindow(cron, duration, reason)` by the exporter's one reading of
+  the value: none when its switch (`target` / `enabled`) says off, its
+  `expires` is not RFC3339, or the exporter does not read the value. A
+  da-guard whose effective document lacks the field is named as older than
+  this tool.
 
 `effective_config` is the JSON as /effective sends it: a YAML `.inf` / `.nan`
 arrives as the text `"Infinity"` / `"-Infinity"` / `"NaN"`.
@@ -410,6 +417,26 @@ class TenantValues(NamedTuple):
     key_checks: "KeyChecks | None" = None
 
 
+class RecurringWindow(NamedTuple):
+    """One entry of `da-guard effective`'s per-tenant `maintenance_recurring`
+    (#3620), each field as written ("" when the entry leaves it out)."""
+    cron: str
+    duration: str
+    reason: str
+
+
+def _maintenance_recurring(e: Any) -> "tuple[RecurringWindow, ...]":
+    if not isinstance(e, list):
+        raise TypeError(f"maintenance_recurring is a {type(e).__name__}")
+    out = []
+    for w in e:
+        if not isinstance(w, dict) or not set(w) <= set(RecurringWindow._fields) \
+                or not all(isinstance(v, str) for v in w.values()):
+            raise TypeError(f"maintenance_recurring entry {w!r}")
+        out.append(RecurringWindow(*(w.get(f, "") for f in RecurringWindow._fields)))
+    return tuple(out)
+
+
 class KeyChecks(NamedTuple):
     """served-values' per-tenant `key_checks`: the exporter's messages
     (Go's ValidateTenantKeys) about a dimensional key's `version` label
@@ -593,6 +620,10 @@ class TenantEffective(NamedTuple):
     profile_overlay: list[dict[str, Any]]
     warnings: list[str]
     not_served: dict[str, NotServedKey]
+    # #3620: the recurring maintenance windows of `_state_maintenance` that
+    # maintenance-scheduler silences, by the exporter's one reading of the
+    # value (none when its switch says off or the exporter does not read it).
+    maintenance_recurring: "tuple[RecurringWindow, ...]" = ()
 
 
 class EffectiveTree(NamedTuple):
@@ -1540,6 +1571,12 @@ def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, 
                     returncode, stderr, stale=True)
             not_served = {str(k): NotServedKey(str(v["reason"]), str(v.get("file") or ""))
                           for k, v in t["not_served"].items()}
+            if "maintenance_recurring" not in t:
+                raise EffectiveError(
+                    f"da-guard {EFFECTIVE_SUBCOMMAND}: tenant {tenant_id!r} has no `maintenance_recurring` — "
+                    "this da-guard is older than this tool: upgrade or rebuild it",
+                    returncode, stderr, stale=True)
+            recurring = _maintenance_recurring(t["maintenance_recurring"])
             if set(sources) != set(effective):
                 raise ValueError(f"tenant {tenant_id!r}: key_sources and effective_config differ on "
                                  f"{sorted(set(sources) ^ set(effective))!r}")
@@ -1556,6 +1593,7 @@ def _effective_tenants(tenants: Any, returncode: int, stderr: str) -> dict[str, 
                 profile_overlay=list(t.get("profile_overlay") or []),
                 warnings=list(t.get("warnings") or []),
                 not_served=not_served,
+                maintenance_recurring=recurring,
             )
     except (ValueError, KeyError, TypeError, AttributeError) as e:
         raise EffectiveError(

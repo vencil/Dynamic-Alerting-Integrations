@@ -16,6 +16,12 @@ reason 缺省為 "Recurring maintenance"）。另外 CLI 對每格 rc 0。
 
 da-guard 不可用時不得靜默回空排程：rc 2、印 ERROR、不印 "No recurring"。
 
+#3620 起 scheduler 讀的是 effective 的 `maintenance_recurring`（exporter 對
+`_state_maintenance` 同一個讀法給出的窗，開關說關或讀不懂的值沒有窗）；本矩陣每格都
+沒寫開關（只有 `recurring`），所以與下面以 `effective_config` 取的 oracle 仍應相等——
+它守的是「從哪裡讀」，開關的讀法由 `tests/ops/test_maintenance_scheduler.py` 與 Go 的
+state_value_test.go 守。
+
 da-guard 由 conftest 的 session fixture 以 `go build` 建出；建不起來就 fail、不 skip。
 """
 from __future__ import annotations

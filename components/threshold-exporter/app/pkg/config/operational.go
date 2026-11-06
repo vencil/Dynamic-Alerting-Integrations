@@ -8,7 +8,8 @@ package config
 // maintenance" from the same values. Before this file the Expired filter lived
 // only in collector.go, and tenant-api's only other option was
 // IsMaintenanceActive — which disagreed with the collector on `""` / `~` (it
-// said inactive; ResolveStateFiltersAt treats any non-disable value as enabled)
+// said inactive; ResolveStateFiltersAt then treated any non-disable value as
+// enabled — since #3620 neither is on: stateValueOf)
 // and ignored the platform's `state_filters.maintenance` entirely (no filter →
 // the collector emits nothing; `default_state` unset → it emits for every
 // tenant without an override). A second reader re-deriving any of this is the

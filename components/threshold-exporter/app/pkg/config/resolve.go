@@ -1121,14 +1121,17 @@ func canonicalLabelKey(custom, regex map[string]string) string {
 }
 
 // ResolveStateFiltersAt resolves state-based monitoring filters for all
-// tenants at now. For each state filter defined in config, each tenant gets
-// an enabled flag unless explicitly disabled via _state_<filter_name>:
-// "disable" in tenants map.
+// tenants at now. For each state filter defined in config, a tenant that does
+// not write `_state_<filter_name>` gets the filter's default_state (on unless
+// it is a disable word); a tenant that writes it gets the one reading of the
+// value (stateValueOf, #3620): `enable` or a structured value that is on
+// turns it on, a disable word or a switch that says off turns it off, and a
+// value the reader does not read is NOT on (with a WARN naming tenant, key
+// and value) — fail-closed: more alerts, never silenced.
 //
-// v1.7.0: _state_maintenance supports structured format with expires.
-// When expires is past, the filter is treated as disabled (maintenance auto-deactivates).
-// When expires is not RFC3339, the setting is ignored and the filter is not
-// emitted for that tenant (#2000: fail-closed — never mute without an end).
+// _state_maintenance's structured form may carry expires: past → off; not
+// RFC3339 → the setting is ignored and the filter is not emitted for that
+// tenant (#2000: fail-closed — never mute without an end).
 //
 // Returns the list of enabled state filters to expose as Prometheus metrics.
 func (c *ThresholdConfig) ResolveStateFiltersAt(now time.Time) []ResolvedStateFilter {
@@ -1162,43 +1165,16 @@ func (c *ThresholdConfig) resolveStateFiltersAt(now time.Time, logf func(format 
 			// A tenant-side null is no key (tenantReserved, #3341): the
 			// filter follows default_state.
 			if sv, exists := tenantReserved(overrides, stateKey); exists {
-				val := strings.TrimSpace(sv.Default)
-				lower := strings.TrimSpace(strings.ToLower(val))
-
-				if isDisabled(lower) {
-					continue // 明確停用
+				// #3620: the one reading. A value it does not read (and #2000's
+				// invalid expires) is not on, with a WARN — never the
+				// default_state, never on.
+				r := stateValueOf(filterName, sv)
+				if w := r.warn(tenant, filterName, strings.TrimSpace(sv.Default)); w != "" {
+					logf("%s", w)
 				}
-
-				// v1.7.0: Check for structured format with expires (maintenance mode)
-				if filterName == "maintenance" && strings.Contains(val, "expires:") {
-					parsed := maintenanceModeStructured{}
-					if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
-						logf("WARN: failed to parse structured _state_maintenance for tenant=%s: %v", tenant, err)
-						continue
-					}
-					if parsed.Expires != "" {
-						t, err := time.Parse(time.RFC3339, parsed.Expires)
-						if err != nil {
-							// #2000: fail-CLOSED. An unparseable expires means we
-							// cannot tell when the window ends, so the whole
-							// _state_maintenance setting is ignored (maintenance NOT
-							// active) instead of muting forever. Neither write path
-							// can stop a malformed value from landing here (tenant-api
-							// leaves structured expires to downstream; patch-config
-							// re-serialises RFC3339 as "YYYY-MM-DD HH:MM:SS+00:00"),
-							// so the exporter is the one choke point — and "noisier
-							// than intended" is the recoverable failure, "alerts
-							// silently lost" is not. Keep in sync with
-							// ResolveMaintenanceExpiriesAt.
-							logf("%s", maintenanceExpiresIgnoredWarn(tenant, parsed.Expires, err))
-							continue
-						} else if now.After(t) {
-							continue // Expired → maintenance auto-deactivated
-						}
-					}
+				if !r.onAt(now) {
+					continue
 				}
-
-				// 明確啟用 (任何非 disable 的值，如 "enable" or structured object)
 			} else if !defaultEnabled {
 				continue // 無覆寫 + 預設關閉 = 跳過
 			}
@@ -1293,8 +1269,9 @@ func resolveSilentTarget(tenant, target string, expires time.Time, reason string
 }
 
 // ResolveMaintenanceExpiriesAt resolves maintenance mode expiry state for all
-// tenants at now. Only returns entries for tenants with structured
-// _state_maintenance that have an expires field. Used by the collector to
+// tenants at now. Only returns entries for tenants whose structured
+// _state_maintenance is on with an expires field (stateValueOf, #3620: not
+// one whose switch says off, nor one the reader does not read). Used by the collector to
 // emit da_config_event when maintenance mode expires.
 func (c *ThresholdConfig) ResolveMaintenanceExpiriesAt(now time.Time) []ResolvedMaintenanceExpiry {
 	return c.resolveMaintenanceExpiriesAt(now, true, log.Printf)
@@ -1325,11 +1302,14 @@ func (c *ThresholdConfig) ResolveMaintenanceExpiriesAfterStateFiltersAtLogf(now 
 }
 
 // resolveMaintenanceExpiriesAt resolves the expiries; warn=false skips the
-// WARNs for values ResolveStateFiltersAt has already logged. The two readers
-// parse the same values: ResolveStateFiltersAt parses a tenant's
-// _state_maintenance exactly when the maintenance filter is declared and the
-// value contains "expires:" (no such value is one isDisabled accepts), which is
-// the set this function parses.
+// WARNs for values ResolveStateFiltersAt has already logged. Both readers
+// classify a tenant's _state_maintenance with stateValueOf (#3620), so they
+// cannot disagree about a value: an expiry entry exists exactly for a value
+// that reading turns on with an expires — none for a switch that says off,
+// a value it does not read, or #2000's invalid expires. ResolveStateFiltersAt
+// logs a structured value's WARN exactly when the maintenance filter is
+// declared; otherwise this reading is the one that logs it (a scalar's WARN
+// is the state-filter reader's alone: a scalar has no expiry).
 func (c *ThresholdConfig) resolveMaintenanceExpiriesAt(now time.Time, warn bool,
 	logf func(format string, args ...any)) []ResolvedMaintenanceExpiry {
 	if logf == nil {
@@ -1338,45 +1318,26 @@ func (c *ThresholdConfig) resolveMaintenanceExpiriesAt(now time.Time, warn bool,
 	var result []ResolvedMaintenanceExpiry
 
 	for tenant, overrides := range c.Tenants {
-		// Check all _state_* keys for maintenance filter specifically
-		sv, exists := overrides["_state_maintenance"]
+		sv, exists := tenantReserved(overrides, "_state_"+maintenanceFilterName)
 		if !exists {
 			continue
 		}
 
-		val := strings.TrimSpace(sv.Default)
-		// Only structured format supports expires
-		if !strings.Contains(val, "expires:") {
-			continue
-		}
-
-		parsed := maintenanceModeStructured{}
-		if err := yaml.Unmarshal([]byte(val), &parsed); err != nil {
-			if warn {
-				logf("WARN: failed to parse structured _state_maintenance for tenant=%s: %v", tenant, err)
+		r := stateValueOf(maintenanceFilterName, sv)
+		if warn && r.structured {
+			if w := r.warn(tenant, maintenanceFilterName, strings.TrimSpace(sv.Default)); w != "" {
+				logf("%s", w)
 			}
-			continue
 		}
-
-		if parsed.Expires == "" {
-			continue
-		}
-
-		t, err := time.Parse(time.RFC3339, parsed.Expires)
-		if err != nil {
-			// #2000: the setting is ignored as a whole (ResolveStateFiltersAt
-			// drops it too), so there is no window to report as expired.
-			if warn {
-				logf("%s", maintenanceExpiresIgnoredWarn(tenant, parsed.Expires, err))
-			}
+		if r.kind != stateValueOn || !r.hasExpires {
 			continue
 		}
 
 		result = append(result, ResolvedMaintenanceExpiry{
 			Tenant:  tenant,
-			Expires: t,
-			Reason:  parsed.Reason,
-			Expired: now.After(t),
+			Expires: r.expires,
+			Reason:  r.reason,
+			Expired: now.After(r.expires),
 		})
 	}
 

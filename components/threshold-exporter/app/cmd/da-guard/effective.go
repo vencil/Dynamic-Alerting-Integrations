@@ -13,7 +13,10 @@ package main
 // fields the body leaves out: the profile the tenant is bound to
 // (EffectiveConfig.BoundProfile) and per-key attribution
 // (EffectiveConfig.KeySources). TestEffective_MatchesResolveEffective keeps
-// every entry equal to ResolveEffective's own answer.
+// every entry equal to ResolveEffective's own answer. One field is a
+// reading rather than the body: maintenance_recurring (#3620), the
+// exporter's own reading of effective_config's `_state_maintenance`
+// (config.MaintenanceRecurringOfValue), not one of this file's.
 
 import (
 	"encoding/json"
@@ -105,6 +108,35 @@ type effectiveTenant struct {
 	// because they do not parse, read as empty here (#2296). Always present
 	// ([] when none). Such a file is in parse_failed too (exit 3).
 	ChainParseFailed []string `json:"chain_parse_failed"`
+	// MaintenanceRecurring (#3620): the recurring maintenance windows of
+	// effective_config's `_state_maintenance` that maintenance-scheduler
+	// creates Alertmanager silences for, by the exporter's one reading of
+	// the value (config.MaintenanceRecurringOfValue): those of a value that
+	// is on or recurring-only; none for a value whose switch (`target` /
+	// `enabled`) says off, whose expires is not RFC3339, or that the reader
+	// does not read — so the scheduler applies the reader's switch rather
+	// than re-deriving it. Each entry {cron, duration, reason} in order, an
+	// empty field (or one not written as a YAML string) absent; the
+	// scheduler judges a missing cron / duration. Always present ([] when
+	// none).
+	MaintenanceRecurring []recurringWindow `json:"maintenance_recurring"`
+}
+
+// recurringWindow is one entry of effectiveTenant.MaintenanceRecurring.
+type recurringWindow struct {
+	Cron     string `json:"cron,omitempty"`
+	Duration string `json:"duration,omitempty"`
+	Reason   string `json:"reason,omitempty"`
+}
+
+// maintenanceRecurring is effectiveTenant.MaintenanceRecurring for a
+// tenant's effective_config.
+func maintenanceRecurring(effective map[string]any) []recurringWindow {
+	out := []recurringWindow{}
+	for _, r := range config.MaintenanceRecurringOfValue(effective["_state_maintenance"]) {
+		out = append(out, recurringWindow{Cron: r.Cron, Duration: r.Duration, Reason: r.Reason})
+	}
+	return out
 }
 
 // effectiveFlags is the parsed command line.
@@ -269,7 +301,8 @@ func runEffective(args []string, stdout, errOut io.Writer) int {
 		for _, ec := range tree.Tenants {
 			ec = ec.AsWritten() // #2031: every key as its layer wrote it
 			t := effectiveTenant{EffectiveConfig: *ec, KeySources: ec.KeySources,
-				NotServed: ec.NotServed, ChainParseFailed: ec.ChainParseFailed}
+				NotServed: ec.NotServed, ChainParseFailed: ec.ChainParseFailed,
+				MaintenanceRecurring: maintenanceRecurring(ec.EffectiveConfig)}
 			// A YAML `.inf` / `.nan` is sent as text, as tenant-api sends it.
 			t.EffectiveConfig.EffectiveConfig = config.NonFiniteAsText(ec.EffectiveConfig)
 			if ec.BoundProfile != "" {

@@ -22,30 +22,42 @@ const (
 // valueCheck is what a registry `value.check` name is bound to: the
 // exporter's own reading of the value, in the two forms the write gate needs.
 type valueCheck struct {
-	// problem judges a value: "" when the exporter reads it, otherwise the
-	// reason it ignores it, in one tenant-free sentence.
-	problem func(ScheduledValue) string
+	// problem judges a value of key k: "" when the exporter reads it,
+	// otherwise the reason it ignores it, in one tenant-free sentence. k is
+	// the key itself, so a check bound to a prefix (`_state_`) knows which
+	// key under it it judges.
+	problem func(k string, sv ScheduledValue) string
 	// reading is the value as the exporter reads it, as a comparable value:
 	// two values whose readings are == are read the same way — quoting, key
 	// order, comments and every spelling the reader treats alike fall away.
 	// KeyValidation.Ratchet compares these, never the ScheduledValue itself.
-	reading func(ScheduledValue) any
+	// It must be a value == can compare (a string, or a struct of scalars):
+	// == on an interface holding a slice panics.
+	reading func(k string, sv ScheduledValue) any
 	// effect is what happens while the reader ignores the value, for the
 	// write gate's message ("nothing is silenced while it is set").
 	effect string
 }
 
-// valueChecks binds each `value.check` name the registry may carry to the
-// exporter-side reading that judges it. TestValueChecks_BoundBothWays keeps
-// it equal to the names the registry uses, in both directions.
+// valueChecks binds each `value.check` name the registry may carry (on a
+// key or on a prefix) to the exporter-side reading that judges it.
+// TestValueChecks_BoundBothWays keeps it equal to the names the registry
+// uses, in both directions.
 var valueChecks = map[string]valueCheck{
 	"silent_mode": {
-		problem: silentModeProblem,
-		reading: func(sv ScheduledValue) any {
+		problem: func(_ string, sv ScheduledValue) string { return silentModeProblem(sv) },
+		reading: func(_ string, sv ScheduledValue) any {
 			r := silentModeOf(sv)
 			return r.canonical()
 		},
 		effect: "nothing is silenced while it is set",
+	},
+	// #3620: every `_state_<filter>` (prefixes._state_), by the one reading
+	// of such a value (stateValueOf).
+	"state_filter": {
+		problem: stateFilterValueProblem,
+		reading: stateFilterValueReading,
+		effect:  "the state filter is not switched on while it is set",
 	},
 }
 
@@ -92,18 +104,44 @@ func BatchUnsettableKeys() []string { return sortedCopy(batchUnsettableKeys) }
 func ScopeMetadataKeys() []string { return sortedCopy(scopeMetadataKeys) }
 
 // CheckReservedValue judges sv as the value of reserved key k with the
-// function its registry `value.check` names: "" when k has no check, or the
-// value is one the exporter reads; otherwise the problem.
+// function its registry `value.check` names — the key's own, or else the
+// one of the prefix k is under (#3620: `_state_`): "" when k has no check,
+// or the value is one the exporter reads; otherwise the problem.
 func CheckReservedValue(k string, sv ScheduledValue) string {
-	return checkReservedValue(k, sv, reservedValueChecks, valueChecks)
+	return checkReservedValue(k, sv, reservedValueChecks, reservedPrefixValueChecks, valueChecks)
 }
 
-func checkReservedValue(k string, sv ScheduledValue, names map[string]string, checks map[string]valueCheck) string {
-	c, ok := checks[names[k]]
+func checkReservedValue(k string, sv ScheduledValue, names, prefixNames map[string]string, checks map[string]valueCheck) string {
+	c, ok := checks[valueCheckName(k, names, prefixNames)]
 	if !ok || c.problem == nil {
 		return ""
 	}
-	return c.problem(sv)
+	return c.problem(k, sv)
+}
+
+// valueCheckName is the `value.check` that judges k: its own entry's, or
+// else that of the registered prefix k is under ("" for none). A key's own
+// entry wins: a prefix's check covers only the keys the registry does not
+// list one by one.
+func valueCheckName(k string, names, prefixNames map[string]string) string {
+	if name, ok := names[k]; ok {
+		return name
+	}
+	if _, listed := validReservedKeys[k]; listed {
+		return ""
+	}
+	for p, name := range prefixNames {
+		if len(k) > len(p) && k[:len(p)] == p {
+			return name
+		}
+	}
+	return ""
+}
+
+// reservedCheck is the check bound to k (the key's or its prefix's).
+func reservedCheck(k string) (valueCheck, bool) {
+	c, ok := valueChecks[valueCheckName(k, reservedValueChecks, reservedPrefixValueChecks)]
+	return c, ok
 }
 
 // readAlike reports whether the exporter reads a and b, two values of key k,
@@ -118,16 +156,19 @@ func readAlike(k string, a, b ScheduledValue) bool {
 		// A threshold key: its row resolver's reading (#3267).
 		return thresholdReadAlike(k, a, b)
 	}
-	c, ok := valueChecks[reservedValueChecks[k]]
+	c, ok := reservedCheck(k)
 	if !ok || c.reading == nil {
 		return false
 	}
-	return c.reading(a) == c.reading(b)
+	return c.reading(k, a) == c.reading(k, b)
 }
 
 // valueEffect is what happens while the reader ignores a value of k ("" when
 // k's check does not say).
-func valueEffect(k string) string { return valueChecks[reservedValueChecks[k]].effect }
+func valueEffect(k string) string {
+	c, _ := reservedCheck(k)
+	return c.effect
+}
 
 func sortedCopy(in []string) []string {
 	out := append([]string(nil), in...)

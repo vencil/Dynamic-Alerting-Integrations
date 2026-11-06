@@ -108,7 +108,7 @@ func TestLogConfigStats_Format(t *testing.T) {
 			"db-a": {
 				"mysql_connections":  {Default: "90"},
 				"_silent_mode":       {Default: "warning"},
-				"_state_maintenance": {Default: "1"},
+				"_state_maintenance": {Default: "enable"}, // #3620: "1" is no longer read as on
 			},
 			"db-b": {
 				"mysql_connections":     {Default: "85"},

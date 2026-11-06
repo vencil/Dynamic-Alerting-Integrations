@@ -124,7 +124,7 @@ def check_registry(reg, path="registry"):
             where = f"{section}.{name}"
             if not name.startswith("_") or name != name.strip():
                 raise RegistryError(f"{where}: a name must start with '_'")
-            allowed = ("read_by", "description", "note") + (("value", "batch") if section == "keys" else ())
+            allowed = ("read_by", "description", "note") + (("value", "batch") if section == "keys" else ("value",))
             if not isinstance(entry, dict) or not set(entry) <= set(allowed):
                 raise RegistryError(f"{where}: allowed fields are {', '.join(allowed)}")
             if not isinstance(entry.get("description"), str) or not entry["description"]:
@@ -144,6 +144,8 @@ def check_registry(reg, path="registry"):
     for name, entry in reg["keys"].items():
         _check_value(f"keys.{name}", entry)
         _check_batch(f"keys.{name}", entry)
+    for name, entry in reg["prefixes"].items():
+        _check_prefix_value(f"prefixes.{name}", entry)
     for name, hint in reg["retired"].items():
         if not name.startswith("_") or name in reg["keys"]:
             raise RegistryError(f"retired.{name}: must start with '_' and not be a key")
@@ -173,15 +175,32 @@ def _check_value(where, entry):
     if value.get("shape") not in SHAPES:
         raise RegistryError(f"{where}.value.shape: must be one of {', '.join(SHAPES)}")
     if "check" in value:
-        if not isinstance(value["check"], str) or not value["check"]:
-            raise RegistryError(f"{where}.value.check: must be a non-empty string")
-        # The check is bound to a function of the exporter's parser
-        # (pkg/config/reserved_values.go): a key the exporter does not read
-        # has no parser there to judge it.
-        if "exporter" not in entry["read_by"]:
-            raise RegistryError(f"{where}.value.check: only a key the exporter reads can name a check")
+        _check_check(where, value, entry)
     if "refers_to" in value and value["refers_to"] not in LAYERS:
         raise RegistryError(f"{where}.value.refers_to: must be one of {', '.join(LAYERS)}")
+
+
+def _check_prefix_value(where, entry):
+    """A prefix's `value`: `check` alone (#3620). It judges every key under
+    the prefix that the registry does not list itself; a prefix declares no
+    shape (its keys' shapes are their own)."""
+    if "value" not in entry:
+        return
+    value = entry["value"]  # an explicit null is refused below, not taken as absent
+    if not isinstance(value, dict) or set(value) != {"check"}:
+        raise RegistryError(f"{where}.value: a prefix's value carries check alone")
+    _check_check(where, value, entry)
+
+
+def _check_check(where, value, entry):
+    """`value.check` of a key or a prefix."""
+    if not isinstance(value["check"], str) or not value["check"]:
+        raise RegistryError(f"{where}.value.check: must be a non-empty string")
+    # The check is bound to a function of the exporter's parser
+    # (pkg/config/reserved_values.go): a key the exporter does not read
+    # has no parser there to judge it.
+    if "exporter" not in entry["read_by"]:
+        raise RegistryError(f"{where}.value.check: only a key or prefix the exporter reads can name a check")
 
 
 def _check_batch(where, entry):
@@ -249,6 +268,10 @@ def derive(reg):
         "value_shapes": {k: e["value"]["shape"] for k, e in sorted(keys.items()) if "value" in e},
         "value_checks": {k: e["value"]["check"] for k, e in sorted(keys.items())
                          if "check" in e.get("value", {})},
+        # #3620: a prefix's check judges the keys under it the registry does
+        # not list itself.
+        "prefix_value_checks": {p: e["value"]["check"] for p, e in sorted(reg["prefixes"].items())
+                                if "check" in e.get("value", {})},
         "batch_unsettable": batch_unsettable_keys(reg),
         "scope_metadata_keys": scope_metadata_keys(reg),
     }
@@ -381,6 +404,11 @@ def render_go(d):
         "// reservedValueChecks names, per key, the exporter-side function that\n"
         "// judges its value (`value.check`; bound in valueChecks).\n"
         f"var reservedValueChecks = {str_map(d['value_checks'])}\n"
+        "\n"
+        "// reservedPrefixValueChecks names, per prefix, the function that judges\n"
+        "// the value of every key under it the registry does not list itself\n"
+        "// (`prefixes.<p>.value.check`; bound in valueChecks).\n"
+        f"var reservedPrefixValueChecks = {str_map(d['prefix_value_checks'])}\n"
         "\n"
         "// batchUnsettableKeys are the keys a tenant-api batch op's `unset` may\n"
         "// remove: `batch.unset`, and every retired key — on purpose: nothing\n"

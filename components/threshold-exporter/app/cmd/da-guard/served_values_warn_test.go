@@ -76,14 +76,15 @@ func TestServedValues_EachResolverWarnOnce(t *testing.T) {
 	const maintenanceWarn = `invalid expires "nope" in _state_maintenance for tenant=a8`
 	// a9's value is not YAML at all: the other maintenance WARN, same two
 	// resolvers, same once-per-scrape rule (#2426).
-	const maintenanceParseWarn = `failed to parse structured _state_maintenance for tenant=a9`
+	const maintenanceParseWarn = `_state_maintenance for tenant=a9: value "expires: [" is not read: it does not parse as YAML`
 	tenants := map[string]string{
 		"a9.yaml": "tenants:\n  a9:\n    _state_maintenance: \"expires: [\"\n",
 		"a1.yaml": "tenants:\n  a1:\n    _silent_mode: \"bogus\"\n",
 		"a3.yaml": "tenants:\n  a3:\n    _severity_dedup: \"bogus\"\n",
 		"b2.yaml": "tenants:\n  b2:\n    _metadata: [1, 2]\n",
 		"a6.yaml": "tenants:\n  a6:\n    _silent_mode:\n      target: all\n      expires: \"not-a-date\"\n",
-		"a8.yaml": "tenants:\n  a8:\n    _state_maintenance:\n      target: all\n      expires: \"nope\"\n",
+		// #3620: `target: enable` — `all` is not a state-filter switch.
+		"a8.yaml": "tenants:\n  a8:\n    _state_maintenance:\n      target: enable\n      expires: \"nope\"\n",
 		"a7.yaml": "tenants:\n  a7:\n    container_cpu_critical: \"xyz\"\n",
 	}
 	for _, tc := range []struct {
