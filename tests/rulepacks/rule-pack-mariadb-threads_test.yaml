@@ -84,6 +84,7 @@ tests:
         exp_alerts:
           # db-a: enriched (branch A) — carries runbook_url/owner/tier.
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: threads_running
               tenant: db-a
@@ -99,6 +100,7 @@ tests:
               tier: gold
           # db-b: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: threads_running
               tenant: db-b
@@ -125,6 +127,7 @@ tests:
         exp_alerts:
           # db-a: still firing enriched (unchanged steady breach).
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: threads_running
               tenant: db-a
@@ -140,6 +143,7 @@ tests:
               tier: gold
           # db-b: still firing bare (unchanged).
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: threads_running
               tenant: db-b
@@ -155,6 +159,7 @@ tests:
               tier: ""
           # db-e: maintenance RELEASED → fires BARE (branch B) — the release-path pin.
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: threads_running
               tenant: db-e
@@ -217,6 +222,7 @@ tests:
         exp_alerts:
           # db-a: enriched (branch A) — carries runbook_url/owner/tier.
           - exp_labels:
+              maintenance: mute
               severity: critical
               metric_group: threads_running
               tenant: db-a
@@ -232,6 +238,7 @@ tests:
               tier: gold
           # db-b: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
           - exp_labels:
+              maintenance: mute
               severity: critical
               metric_group: threads_running
               tenant: db-b

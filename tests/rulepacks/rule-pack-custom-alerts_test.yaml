@@ -23,6 +23,7 @@ tests:
         alertname: Custom_threshold__mysql_global_status_threads_connected__gt__w5m__for1m
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               component: custom
               severity: warning
               tenant: db-b
@@ -54,6 +55,7 @@ tests:
         alertname: Custom_rate__mysql_global_status_slow_queries__gt__w5m__for1m
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               component: custom
               severity: warning
               tenant: db-b
@@ -75,6 +77,7 @@ tests:
         alertname: CustomRecipeSilent
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: none
               component: sentinel
               tenant: db-b

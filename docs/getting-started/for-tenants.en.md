@@ -145,7 +145,7 @@ tenants:
       reason: "Planned DB migration"
 ```
 
-In maintenance mode, threshold and custom alerts that carry the maintenance condition don't fire (PromQL-level suppression); down, cluster-survival and exporter-absent alerts keep firing — for the scope see [config-driven §2.7](../design/config-driven.en.md#27-three-state-operational-modes). Automatically resumes after expiry.
+In maintenance mode, alerts labelled `maintenance: mute` don't fire (PromQL-level suppression; threshold and custom alerts are all `mute`); cluster-survival, exporter-absent and single-instance critical down alerts (such as `PostgreSQLDown`) are `page` and keep firing — per alert see the *In maintenance* column of the [alert reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/ALERT-REFERENCE.en.md); for the scope see [config-driven §2.7](../design/config-driven.en.md#27-three-state-operational-modes). Automatically resumes after expiry.
 
 > **Timezone:** The `expires` field uses RFC 3339 format (with timezone). Scheduled thresholds' `window` and recurring maintenance's `cron` both use **UTC timezone**.
 

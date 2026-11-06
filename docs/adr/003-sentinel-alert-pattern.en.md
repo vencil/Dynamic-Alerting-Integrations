@@ -28,7 +28,7 @@ Tenants on the platform have three operational states:
 
 - **Normal**: alerts fire and are notified as usual.
 - **Silent**: alerts still fire, but no notification is sent.
-- **Maintenance**: when maintenance mode is turned on with `_state_maintenance`, alert rules carrying the maintenance condition do not fire.
+- **Maintenance**: when maintenance mode is turned on with `_state_maintenance`, alert rules labelled `maintenance: mute` do not fire.
 
 We need a mechanism that lets a tenant's state switch dynamically with its settings, and that is easy to combine and easy to troubleshoot.
 

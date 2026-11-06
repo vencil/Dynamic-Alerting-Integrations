@@ -50,6 +50,7 @@ tests:
         alertname: DB2DatabaseDown
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: critical
               tenant: db-a
               instance: db2-exporter-a:9953
@@ -296,6 +297,7 @@ tests:
         exp_alerts:
           # db-a: metadata present — annotations carry runbook_url/owner/tier.
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -310,6 +312,7 @@ tests:
               tier: gold
           # db-b: no metadata — fires, metadata annotations empty.
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:
@@ -332,6 +335,7 @@ tests:
         alertname: DB2LowBufferpoolHitRatio
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -345,6 +349,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:
@@ -367,6 +372,7 @@ tests:
         alertname: DB2HighLogUsage
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -380,6 +386,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:
@@ -403,6 +410,7 @@ tests:
         alertname: DB2HighDeadlockRate
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -416,6 +424,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:
@@ -438,6 +447,7 @@ tests:
         alertname: DB2TablespaceAlmostFull
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -451,6 +461,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:
@@ -475,6 +486,7 @@ tests:
         alertname: DB2HighLockWaitTime
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -488,6 +500,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:
@@ -511,6 +524,7 @@ tests:
         alertname: DB2HighSortOverflow
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -524,6 +538,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:

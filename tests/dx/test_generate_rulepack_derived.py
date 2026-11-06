@@ -1,0 +1,220 @@
+"""generate_rulepack_derived — the `maintenance` label decides the maintenance clause (#3309).
+
+The label is the one written decision; these tests pin that the clause follows
+it in every direction a hand edit could break it, that the rewrite is the
+canonical form and idempotent, and that the canonical tail is spelled the way
+the Go custom-alert compiler spells it.
+"""
+from __future__ import annotations
+
+import importlib.util
+import re
+import shutil
+import sys
+from pathlib import Path
+
+import pytest
+
+_REPO = Path(__file__).resolve().parents[2]
+_SPEC = importlib.util.spec_from_file_location(
+    "generate_rulepack_derived", _REPO / "scripts/tools/dx/generate_rulepack_derived.py")
+grd = importlib.util.module_from_spec(_SPEC)
+sys.modules["generate_rulepack_derived"] = grd
+_SPEC.loader.exec_module(grd)
+
+TAIL = grd.MAINTENANCE_TAIL
+
+
+# ── derive_expr ──────────────────────────────────────────────────────────────
+
+def test_wrapped_clause_becomes_the_canonical_tail():
+    wrapped = (
+        "(\n"
+        "  (\n"
+        "    a > on(tenant) group_left b\n"
+        "  )\n"
+        "  unless on(tenant)\n"
+        '  (user_state_filter{filter="maintenance"} == 1)\n'
+        ")"
+    )
+    assert grd.derive_expr(wrapped, mute=True) == "(\n  a > on(tenant) group_left b\n)\n" + TAIL
+
+
+def test_canonical_form_is_a_fixed_point():
+    expr = "x > 1\n" + TAIL
+    assert grd.derive_expr(expr, mute=True) == expr
+    assert grd.derive_expr(grd.derive_expr(expr, mute=True), mute=True) == expr
+
+
+def test_page_strips_the_clause():
+    assert grd.derive_expr("x > 1\n" + TAIL, mute=False) == "x > 1"
+
+
+def test_mute_adds_the_clause_to_a_bare_expr():
+    assert grd.derive_expr("pg_up == 0", mute=True) == "pg_up == 0\n" + TAIL
+
+
+def test_top_level_or_is_parenthesised_before_the_tail():
+    # `A or B unless M` parses as `A or (B unless M)`: only B would be muted.
+    got = grd.derive_expr("a > 1 or b > 1", mute=True)
+    assert got == "(\n  a > 1 or b > 1\n)\n" + TAIL
+
+
+def test_or_inside_parens_or_label_values_is_not_top_level():
+    assert not grd._top_level_or('(a or b) > 1')
+    assert not grd._top_level_or('x{job="or"} > 1')
+    assert not grd._top_level_or('x_or_y > 1')
+    assert grd._top_level_or('a or b')
+
+
+def test_two_clauses_are_refused():
+    with pytest.raises(grd.ShapeError):
+        grd.derive_expr("(a\n" + TAIL + ")\nor\n(b\n" + TAIL + ")", mute=True)
+
+
+@pytest.mark.parametrize("variant", [
+    'x unless on(tenant) (user_state_filter{filter="maintenance"} == bool 1)',
+    'x unless on(tenant) (user_state_filter{filter=~"maintenance"} == 1)',
+    'x and on(tenant) (user_state_filter{filter="maintenance"} == 0)',
+])
+def test_non_canonical_maintenance_references_are_refused(variant):
+    with pytest.raises(grd.ShapeError):
+        grd.derive_expr(variant, mute=True)
+
+
+def test_a_clause_in_the_middle_is_refused():
+    with pytest.raises(grd.ShapeError):
+        grd.derive_expr("(x " + TAIL.replace("\n", " ") + ") > on(tenant) y", mute=True)
+
+
+def test_other_user_state_filters_are_left_alone():
+    expr = 'x * on(tenant) group_left max by(tenant) (user_state_filter{filter="container_crashloop"})'
+    assert grd.derive_expr(expr, mute=False) == expr
+
+
+def test_a_commented_out_clause_does_not_count():
+    expr = "x > 1\n# unless on(tenant) (user_state_filter{filter=\"maintenance\"} == 1)"
+    assert grd.clause_count(expr) == 0
+
+
+# ── sync_text ────────────────────────────────────────────────────────────────
+
+_PACK = """groups:
+  - name: g
+    rules:
+      - record: r:core
+        expr: |
+          y > 1
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
+      - alert: A
+        expr: x > 1
+        for: 1m
+        labels:
+          severity: warning
+          maintenance: @A@
+      - alert: B
+        expr: |
+          (
+            (z > 1)
+            unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+          )
+        labels:
+          severity: warning
+          maintenance: @B@
+"""
+
+
+def test_sync_rewrites_every_item_to_its_label():
+    out, problems = grd.sync_text(_PACK.replace("@A@", "mute").replace("@B@", "page"), "p.yaml")
+    assert problems == []
+    assert "      - alert: A\n        expr: |\n          x > 1\n          unless on(tenant)\n" in out
+    assert "        expr: |\n          (z > 1)\n        labels:" in out
+    # a record never carries the clause
+    assert "      - record: r:core\n        expr: |\n          y > 1\n      - alert: A" in out
+    again, problems = grd.sync_text(out, "p.yaml")
+    assert again == out and problems == []
+
+
+def test_sync_reports_a_missing_or_unknown_label():
+    pack = _PACK.replace("@A@", "mute").replace("@B@", "sometimes").replace("          maintenance: mute\n", "")
+    _, problems = grd.sync_text(pack, "p.yaml")
+    assert any("alert A: missing label" in p for p in problems)
+    assert any("alert B: maintenance='sometimes'" in p for p in problems)
+
+
+def test_every_shipped_pack_is_already_a_fixed_point():
+    """The committed packs are what the generator writes (the --check contract)."""
+    packs = [p for p in sorted((_REPO / "rule-packs").glob("rule-pack-*.yaml"))
+             if p.name not in ("rule-pack-platform.yaml", "rule-pack-custom-alerts.yaml")]
+    assert len(packs) >= 10
+    for p in packs:
+        text = p.read_text(encoding="utf-8")
+        out, problems = grd.sync_text(text, p.name)
+        assert problems == [], problems
+        assert out == text, f"{p.name} is stale: run scripts/tools/dx/generate_rulepack_derived.py"
+
+
+# ── semantic check (alert + the records it reads) ────────────────────────────
+
+class _RF:
+    def __init__(self, rules):
+        self.path = "x.yaml"
+        self.documents = [{"groups": [{"name": "g", "rules": rules}]}]
+
+
+def _alert(name, expr, value):
+    return {"alert": name, "expr": expr, "labels": {"severity": "warning", "maintenance": value}}
+
+
+def test_semantic_check_follows_recording_rules():
+    rules = [{"record": "r:core", "expr": "y > 1\n" + TAIL},
+             _alert("ViaCore", "r:core", "mute"),
+             _alert("PageButMuted", "r:core", "page"),
+             _alert("MuteButBare", "y > 1", "mute"),
+             _alert("Unlabelled", "y > 1", None)]
+    problems = grd.semantic_problems([_RF(rules)])
+    assert not any("ViaCore" in p for p in problems)
+    assert any("PageButMuted" in p and "hold 1" in p for p in problems)
+    assert any("MuteButBare" in p and "hold 0" in p for p in problems)
+    assert any("Unlabelled" in p for p in problems)
+
+
+def test_semantic_check_catches_a_double_clause():
+    rules = [{"record": "r:core", "expr": "y > 1\n" + TAIL},
+             _alert("Twice", "r:core\n" + TAIL, "mute")]
+    assert any("Twice" in p and "hold 2" in p for p in grd.semantic_problems([_RF(rules)]))
+
+
+# ── one spelling ─────────────────────────────────────────────────────────────
+
+def test_tail_is_the_go_compilers_maintenance_tail():
+    src = (_REPO / "components/threshold-exporter/app/pkg/config/custom_alert_compile.go"
+           ).read_text(encoding="utf-8")
+    m = re.search(r'const maintenanceTail = "((?:[^"\\]|\\.)*)"', src)
+    assert m, "maintenanceTail const not found"
+    assert m.group(1).encode().decode("unicode_escape") == TAIL
+    for value, const in ((grd.MUTE, "maintenanceMute"), (grd.PAGE, "maintenancePage")):
+        assert re.search(rf'{const}\s*=\s*"{value}"', src), const
+
+
+# ── end to end, through da-read ──────────────────────────────────────────────
+
+def test_check_passes_on_the_repo(da_read_env):
+    assert grd.main(["--check"]) == 0
+
+
+def test_check_fails_on_a_hand_edited_pack(da_read_env, tmp_path):
+    rp = tmp_path / "rule-packs"
+    shutil.copytree(_REPO / "rule-packs", rp)
+    p = rp / "rule-pack-postgresql.yaml"
+    text = p.read_text(encoding="utf-8")
+    # A hand edit drops the clause of one mute alert.
+    head, sep, rest = text.partition("      - alert: PostgreSQLRecentRestart\n")
+    rest = rest.replace("          unless on(tenant)\n          (user_state_filter{filter=\"maintenance\"} == 1)\n", "", 1)
+    p.write_text(head + sep + rest, encoding="utf-8")
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 1
+    # The generator puts it back; the check passes again.
+    assert grd.main(["--rule-packs-dir", str(rp)]) == 0
+    assert grd.main(["--check", "--rule-packs-dir", str(rp)]) == 0
+    assert p.read_text(encoding="utf-8") == text

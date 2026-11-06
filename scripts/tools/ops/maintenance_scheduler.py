@@ -76,10 +76,18 @@ def _tenant_silence_matchers(tenant):
     as "platform fault, not a tenant rejection". Mirrors the same carve-out on
     the silent-mode inhibit rules in configmap-alertmanager.yaml; the two faces
     have to move together or the hole just changes shape.
+
+    ``maintenance="mute"`` (#3309) narrows it to the alerts a one-shot
+    ``_state_maintenance`` mutes. Every tenant rule-pack alert carries that
+    label, and it is the one place the decision is written (generate_rulepack_derived.py
+    writes the PromQL clause from it). Before it, a recurring window silenced
+    every tenant alert — cluster liveness and exporter absence included — while
+    a one-shot window left those firing.
     """
     return [
         {"name": "tenant", "value": tenant, "isRegex": False},
         {"name": "alert_source", "value": "", "isRegex": False},
+        {"name": "maintenance", "value": "mute", "isRegex": False},
     ]
 
 # Pre-compiled regex for Go-style duration parsing (e.g. "1d", "4h", "2h30m", "1h15m30s")

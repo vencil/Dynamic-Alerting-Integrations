@@ -69,6 +69,7 @@ tests:
         exp_alerts:
           # redis-a: enriched (branch A) — carries runbook_url/owner/tier.
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: redis-a
             exp_annotations:
@@ -83,6 +84,7 @@ tests:
               tier: gold
           # redis-b: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: redis-b
             exp_annotations:

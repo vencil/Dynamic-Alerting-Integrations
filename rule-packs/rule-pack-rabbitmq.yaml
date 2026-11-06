@@ -110,6 +110,7 @@ groups:
         for: 30s
         labels:
           severity: critical
+          maintenance: page
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "RabbitMQ exporter target missing"
@@ -120,17 +121,16 @@ groups:
       - alert: RabbitMQHighQueueDepth
         expr: |
           (
-            (
-              tenant:rabbitmq_queue_messages:max
-              > on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_queue_messages
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:rabbitmq_queue_messages:max
+            > on(tenant) group_left
+            tenant:alert_threshold:rabbitmq_queue_messages
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "rabbitmq_queue_messages"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -148,17 +148,16 @@ groups:
       - alert: RabbitMQHighQueueDepthCritical
         expr: |
           (
-            (
-              tenant:rabbitmq_queue_messages:max
-              > on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_queue_messages_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:rabbitmq_queue_messages:max
+            > on(tenant) group_left
+            tenant:alert_threshold:rabbitmq_queue_messages_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "rabbitmq_queue_messages"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -175,17 +174,16 @@ groups:
       - alert: RabbitMQHighMemory
         expr: |
           (
-            (
-              tenant:rabbitmq_node_mem_percent:ratio
-              > on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_node_mem_percent
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:rabbitmq_node_mem_percent:ratio
+            > on(tenant) group_left
+            tenant:alert_threshold:rabbitmq_node_mem_percent
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "rabbitmq_node_mem_percent"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -203,17 +201,16 @@ groups:
       - alert: RabbitMQHighMemoryCritical
         expr: |
           (
-            (
-              tenant:rabbitmq_node_mem_percent:ratio
-              > on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_node_mem_percent_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:rabbitmq_node_mem_percent:ratio
+            > on(tenant) group_left
+            tenant:alert_threshold:rabbitmq_node_mem_percent_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "rabbitmq_node_mem_percent"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -230,17 +227,16 @@ groups:
       - alert: RabbitMQHighConnections
         expr: |
           (
-            (
-              tenant:rabbitmq_connections:max
-              > on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_connections
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:rabbitmq_connections:max
+            > on(tenant) group_left
+            tenant:alert_threshold:rabbitmq_connections
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "rabbitmq_connections"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -257,17 +253,16 @@ groups:
       - alert: RabbitMQLowConsumers
         expr: |
           (
-            (
-              tenant:rabbitmq_consumers:max
-              < on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_consumers
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:rabbitmq_consumers:max
+            < on(tenant) group_left
+            tenant:alert_threshold:rabbitmq_consumers
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "rabbitmq_consumers"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -284,17 +279,16 @@ groups:
       - alert: RabbitMQHighUnackedMessages
         expr: |
           (
-            (
-              tenant:rabbitmq_unacked_messages:max
-              > on(tenant) group_left
-              tenant:alert_threshold:rabbitmq_unacked_messages
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:rabbitmq_unacked_messages:max
+            > on(tenant) group_left
+            tenant:alert_threshold:rabbitmq_unacked_messages
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "rabbitmq_unacked_messages"
           tenant: "{{ $labels.tenant }}"
         annotations:

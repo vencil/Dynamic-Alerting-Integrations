@@ -89,6 +89,7 @@ groups:
         for: 3m
         labels:
           severity: critical
+          maintenance: page
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "Exporter absent for tenant {{ $labels.tenant }} ({{ $labels.db_type }})"
