@@ -80,6 +80,7 @@ groups:
     expr: max by(tenant, name) (user_threshold{component="custom", mode="silent"})
     labels:
       severity: none
+      maintenance: page
       component: sentinel
       tenant: '{{ $labels.tenant }}'
       name: '{{ $labels.name }}'
@@ -93,6 +94,7 @@ groups:
     for: 1m
     labels:
       severity: warning
+      maintenance: mute
       tenant: '{{ $labels.tenant }}'
       recipe: rate
       component: custom
@@ -110,6 +112,7 @@ groups:
     for: 1m
     labels:
       severity: warning
+      maintenance: mute
       tenant: '{{ $labels.tenant }}'
       recipe: threshold
       component: custom

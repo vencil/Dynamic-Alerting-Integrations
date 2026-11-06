@@ -34,7 +34,7 @@ updated_at: 2026-10-10
 
 - **Normal**：正常觸發告警、正常通知。
 - **Silent（靜默）**：告警照常觸發，但不送通知。
-- **Maintenance（維護）**：以 `_state_maintenance` 開啟維護模式時，帶維護條件的告警規則不觸發。
+- **Maintenance（維護）**：以 `_state_maintenance` 開啟維護模式時，帶 `maintenance: mute` label 的告警規則不觸發。
 
 需要一個機制，讓租戶的狀態可以隨設定動態切換，而且容易組合、容易排查。
 

@@ -206,6 +206,7 @@ func silentSentinel() orderedMap {
 		{"expr", `max by(tenant, name) (user_threshold{component="custom", mode="silent"})`},
 		{"labels", orderedMap{
 			{"severity", "none"},
+			{"maintenance", maintenancePage},
 			{"component", "sentinel"},
 			{"tenant", "{{ $labels.tenant }}"},
 			{"name", "{{ $labels.name }}"},
@@ -458,6 +459,17 @@ func sloBurnRecords(id string, sh customAlertShape, sel string) []any {
 
 const maintenanceTail = "unless on(tenant)\n(user_state_filter{filter=\"maintenance\"} == 1)"
 
+// The `maintenance` label every tenant alert carries (#3309): `mute` when the
+// rule holds maintenanceTail (here: every compiled alert, through its :core
+// record), `page` when it does not. The recurring-maintenance silences match
+// maintenance="mute", so a recurring window mutes exactly what a one-shot
+// _state_maintenance does. scripts/tools/dx/generate_rulepack_derived.py
+// checks the pairing for this pack and writes it for the hand-written ones.
+const (
+	maintenanceMute = "mute"
+	maintenancePage = "page"
+)
+
 // metadataQuery is the one query an annotation reads a tenant's metadata
 // (runbook_url, owner, tier) with. Metadata is not joined into the alert any
 // more (#3483): a join made it part of the alert's identity, and the
@@ -601,6 +613,7 @@ func alertRule(id string, sh customAlertShape, sev, sel, op string) orderedMap {
 		{"for", sh.For},
 		{"labels", orderedMap{
 			{"severity", sev},
+			{"maintenance", maintenanceMute},
 			{"tenant", "{{ $labels.tenant }}"},
 			{"recipe", sh.Recipe},
 			{"component", "custom"},

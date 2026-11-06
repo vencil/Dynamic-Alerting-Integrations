@@ -98,17 +98,16 @@ groups:
       - alert: JVMHighGCPause
         expr: |
           (
-            (
-              tenant:jvm_gc_pause:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:jvm_gc_pause
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:jvm_gc_pause:rate5m
+            > on(tenant) group_left
+            tenant:alert_threshold:jvm_gc_pause
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "jvm_gc_pause"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -125,17 +124,16 @@ groups:
       - alert: JVMHighGCPauseCritical
         expr: |
           (
-            (
-              tenant:jvm_gc_pause:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:jvm_gc_pause_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:jvm_gc_pause:rate5m
+            > on(tenant) group_left
+            tenant:alert_threshold:jvm_gc_pause_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 3m
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "jvm_gc_pause"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -153,17 +151,16 @@ groups:
       - alert: JVMMemoryPressure
         expr: |
           (
-            (
-              tenant:jvm_memory_used:percent
-              > on(tenant) group_left
-              tenant:alert_threshold:jvm_memory
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:jvm_memory_used:percent
+            > on(tenant) group_left
+            tenant:alert_threshold:jvm_memory
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "jvm_memory"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -180,17 +177,16 @@ groups:
       - alert: JVMMemoryPressureCritical
         expr: |
           (
-            (
-              tenant:jvm_memory_used:percent
-              > on(tenant) group_left
-              tenant:alert_threshold:jvm_memory_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:jvm_memory_used:percent
+            > on(tenant) group_left
+            tenant:alert_threshold:jvm_memory_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 3m
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "jvm_memory"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -208,17 +204,16 @@ groups:
       - alert: JVMThreadPoolExhaustion
         expr: |
           (
-            (
-              tenant:jvm_threads:current
-              > on(tenant) group_left
-              tenant:alert_threshold:jvm_threads
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:jvm_threads:current
+            > on(tenant) group_left
+            tenant:alert_threshold:jvm_threads
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "jvm_threads"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -235,17 +230,16 @@ groups:
       - alert: JVMThreadPoolExhaustionCritical
         expr: |
           (
-            (
-              tenant:jvm_threads:current
-              > on(tenant) group_left
-              tenant:alert_threshold:jvm_threads_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:jvm_threads:current
+            > on(tenant) group_left
+            tenant:alert_threshold:jvm_threads_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 3m
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "jvm_threads"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -263,17 +257,16 @@ groups:
       - alert: JVMPerformanceDegraded
         expr: |
           (
-            (
-              tenant:jvm_gc_pause:rate5m > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause
-              and on(tenant)
-              tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:jvm_gc_pause:rate5m > on(tenant) group_left tenant:alert_threshold:jvm_gc_pause
+            and on(tenant)
+            tenant:jvm_memory_used:percent > on(tenant) group_left tenant:alert_threshold:jvm_memory
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "jvm_performance"
           tenant: "{{ $labels.tenant }}"
         annotations:

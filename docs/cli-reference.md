@@ -678,7 +678,7 @@ cron 一律以 **UTC** 解讀，指定時區的選項尚未實作；例如台北
 
 **輸出**
 
-stderr 列出每個排程目前是否在窗口內，最後一行是摘要：實際建立時是 `Summary: N created, N skipped, N errors`；沒給 `--alertmanager` 時是 `Summary: N in window (report only …)`；帶 `--dry-run` 時是 `Summary: N would be created (dry run …)`。實際建立的 silence 以 `tenant="<tenant>"` 與 `alert_source=""` 比對，建立者是 `da-tools/maintenance-scheduler`，comment 是排程的 `reason`，結束時間是窗口結束；同一個窗口已有 silence、且涵蓋到窗口結束時記為 skipped；既有 silence 在窗口結束前就會到期時，工具把它延長到窗口結束（stderr 印 `Extended silence …`），這種延長記為 created。⚠️ `--dry-run` 不讀 Alertmanager 既有的 silence，所以已經存在的也算在「會建立」裡。v2.9.0 映像在這兩種情況下仍印 `N created`，也沒有 `mode` 欄位，實際上什麼都沒建立。 <!-- image-caveat: v2.9.0 -->
+stderr 列出每個排程目前是否在窗口內，最後一行是摘要：實際建立時是 `Summary: N created, N skipped, N errors`；沒給 `--alertmanager` 時是 `Summary: N in window (report only …)`；帶 `--dry-run` 時是 `Summary: N would be created (dry run …)`。實際建立的 silence 以 `tenant="<tenant>"`、`alert_source=""` 與 `maintenance="mute"` 比對（只擋一次性 `_state_maintenance` 也會擋的那組告警），建立者是 `da-tools/maintenance-scheduler`，comment 是排程的 `reason`，結束時間是窗口結束；同一個窗口已有 silence、且涵蓋到窗口結束時記為 skipped；既有 silence 在窗口結束前就會到期時，工具把它延長到窗口結束（stderr 印 `Extended silence …`），這種延長記為 created。⚠️ `--dry-run` 不讀 Alertmanager 既有的 silence，所以已經存在的也算在「會建立」裡。v2.9.0 映像在這兩種情況下仍印 `N created`，也沒有 `mode` 欄位，實際上什麼都沒建立。 <!-- image-caveat: v2.9.0 -->
 
 **範例**
 

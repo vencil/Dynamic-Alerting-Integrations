@@ -180,6 +180,7 @@ groups:
         for: 15s
         labels:
           severity: critical
+          maintenance: page
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 instance {{ $labels.instance }} is DOWN"
@@ -190,17 +191,16 @@ groups:
       - alert: DB2HighConnections
         expr: |
           (
-            (
-              tenant:db2_connections_active:max
-              > on(tenant) group_left
-              tenant:alert_threshold:db2_connections_active
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:db2_connections_active:max
+            > on(tenant) group_left
+            tenant:alert_threshold:db2_connections_active
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 high active connections on {{ $labels.tenant }}"
@@ -216,17 +216,16 @@ groups:
       - alert: DB2LowBufferpoolHitRatio
         expr: |
           (
-            (
-              tenant:db2_bufferpool_hit_ratio:min
-              < on(tenant) group_left
-              tenant:alert_threshold:db2_bufferpool_hit_ratio
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:db2_bufferpool_hit_ratio:min
+            < on(tenant) group_left
+            tenant:alert_threshold:db2_bufferpool_hit_ratio
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 10m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 low bufferpool hit ratio on {{ $labels.tenant }}"
@@ -242,17 +241,16 @@ groups:
       - alert: DB2HighLogUsage
         expr: |
           (
-            (
-              tenant:db2_log_usage_percent:max
-              > on(tenant) group_left
-              tenant:alert_threshold:db2_log_usage_percent
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:db2_log_usage_percent:max
+            > on(tenant) group_left
+            tenant:alert_threshold:db2_log_usage_percent
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 high transaction log usage on {{ $labels.tenant }}"
@@ -268,17 +266,16 @@ groups:
       - alert: DB2HighDeadlockRate
         expr: |
           (
-            (
-              tenant:db2_deadlocks:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:db2_deadlock_rate
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:db2_deadlocks:rate5m
+            > on(tenant) group_left
+            tenant:alert_threshold:db2_deadlock_rate
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 high deadlock rate on {{ $labels.tenant }}"
@@ -294,17 +291,16 @@ groups:
       - alert: DB2TablespaceAlmostFull
         expr: |
           (
-            (
-              tenant:db2_tablespace_used_percent:max
-              > on(tenant) group_left
-              tenant:alert_threshold:db2_tablespace_used_percent
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:db2_tablespace_used_percent:max
+            > on(tenant) group_left
+            tenant:alert_threshold:db2_tablespace_used_percent
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 tablespace nearing capacity on {{ $labels.tenant }}"
@@ -328,17 +324,16 @@ groups:
       - alert: DB2HighLockWaitTime
         expr: |
           (
-            (
-              tenant:db2_lock_wait_time:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:db2_lock_wait_time
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:db2_lock_wait_time:rate5m
+            > on(tenant) group_left
+            tenant:alert_threshold:db2_lock_wait_time
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 high lock wait time on {{ $labels.tenant }}"
@@ -353,14 +348,13 @@ groups:
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: DB2HighSortOverflow
         expr: |
-          (
-            tenant:db2_sort_overflow_ratio:avg > 0.05
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
-          )
+          tenant:db2_sort_overflow_ratio:avg > 0.05
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 10m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "DB2 high sort overflow ratio on {{ $labels.tenant }}"

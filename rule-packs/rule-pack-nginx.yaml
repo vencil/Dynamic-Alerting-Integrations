@@ -95,17 +95,16 @@ groups:
       - alert: NginxHighConnections
         expr: |
           (
-            (
-              tenant:nginx_connections_active:max
-              > on(tenant) group_left
-              tenant:alert_threshold:nginx_connections
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:nginx_connections_active:max
+            > on(tenant) group_left
+            tenant:alert_threshold:nginx_connections
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "nginx_connections"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -122,17 +121,16 @@ groups:
       - alert: NginxHighConnectionsCritical
         expr: |
           (
-            (
-              tenant:nginx_connections_active:max
-              > on(tenant) group_left
-              tenant:alert_threshold:nginx_connections_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:nginx_connections_active:max
+            > on(tenant) group_left
+            tenant:alert_threshold:nginx_connections_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 3m
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "nginx_connections"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -150,17 +148,16 @@ groups:
       - alert: NginxRequestRateSpike
         expr: |
           (
-            (
-              tenant:nginx_requests:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:nginx_request_rate
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:nginx_requests:rate5m
+            > on(tenant) group_left
+            tenant:alert_threshold:nginx_request_rate
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "nginx_request_rate"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -177,17 +174,16 @@ groups:
       - alert: NginxRequestRateSpikeCritical
         expr: |
           (
-            (
-              tenant:nginx_requests:rate5m
-              > on(tenant) group_left
-              tenant:alert_threshold:nginx_request_rate_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:nginx_requests:rate5m
+            > on(tenant) group_left
+            tenant:alert_threshold:nginx_request_rate_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 3m
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "nginx_request_rate"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -205,17 +201,16 @@ groups:
       - alert: NginxConnectionBacklog
         expr: |
           (
-            (
-              tenant:nginx_connections_waiting:max
-              > on(tenant) group_left
-              tenant:alert_threshold:nginx_waiting
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:nginx_connections_waiting:max
+            > on(tenant) group_left
+            tenant:alert_threshold:nginx_waiting
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "nginx_waiting"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -232,17 +227,16 @@ groups:
       - alert: NginxConnectionBacklogCritical
         expr: |
           (
-            (
-              tenant:nginx_connections_waiting:max
-              > on(tenant) group_left
-              tenant:alert_threshold:nginx_waiting_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:nginx_connections_waiting:max
+            > on(tenant) group_left
+            tenant:alert_threshold:nginx_waiting_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 3m
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "nginx_waiting"
           tenant: "{{ $labels.tenant }}"
         annotations:

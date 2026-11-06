@@ -1,10 +1,12 @@
-# Pod Security Standards (#1018 phased rollout, PR-1 soak stage):
-# warn+audit=restricted on every app-tier namespace — surfaces violations as
-# kubectl warnings + apiserver audit annotations WITHOUT rejecting anything.
-# ⛔ Deliberately NO `enforce` label yet: the enforce flip is a follow-up PR
-# after the soak window (see docs/internal/pss-enforcement-runbook.md).
-# Unpinned (latest) level form on warn/audit is intentional — pin a minor
-# version only at enforce-flip time.
+# Pod Security Standards (#1018): every app-tier namespace ENFORCES restricted.
+# - enforce-version is the minor of the kind node image
+#   (scripts/ops/kind-node-image.env), so an apiserver upgrade does not tighten
+#   the profile under running workloads unannounced.
+# - warn/audit stay on the unpinned (latest) form on purpose: they report drift
+#   against the newest standard before it is enforced.
+# - Held by tests/pss (TestLabNamespacesEnforce): every namespace here enforces,
+#   at restricted unless a chart of the same name declares a weaker level in
+#   its Chart.yaml (only `vector`), at that pinned version.
 apiVersion: v1
 kind: Namespace
 metadata:
@@ -12,6 +14,8 @@ metadata:
   labels:
     purpose: database
     instance: db-a
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.37
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/audit: restricted
 ---
@@ -22,6 +26,8 @@ metadata:
   labels:
     purpose: database
     instance: db-b
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.37
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/audit: restricted
 ---
@@ -31,5 +37,7 @@ metadata:
   name: monitoring
   labels:
     purpose: monitoring
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.37
     pod-security.kubernetes.io/warn: restricted
     pod-security.kubernetes.io/audit: restricted

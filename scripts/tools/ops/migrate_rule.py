@@ -642,6 +642,12 @@ def rewrite_dropped_label_refs(templates, lhs, keep=(), explain=True):
     return rewritten, sorted(dropped)
 
 
+#: The maintenance clause as every generated tenant alert spells it (#3309).
+#: Same text as scripts/tools/dx/generate_rulepack_derived.MAINTENANCE_TAIL
+#: (pinned by a test; the da-tools image ships this module without that one).
+MAINTENANCE_TAIL = 'unless on(tenant)\n(user_state_filter{filter="maintenance"} == 1)'
+
+
 def _build_alert_rule(rule, alert_name, parsed, record_name,
                       threshold_name, prefix):
     """產生 Alert Rule（含 labels/annotations 繼承）。
@@ -657,7 +663,7 @@ def _build_alert_rule(rule, alert_name, parsed, record_name,
             f"  {parsed['op']} on(tenant) group_left\n"
             f"  {threshold_name}\n"
             f")\n"
-            f'unless on(tenant) (user_state_filter{{filter="maintenance"}} == 1)'
+            f"{MAINTENANCE_TAIL}"
         ),
     }
     if 'for' in rule:
@@ -668,6 +674,10 @@ def _build_alert_rule(rule, alert_name, parsed, record_name,
     if prefix:
         labels['source'] = 'legacy'
         labels['migration_status'] = 'shadow'
+    # #3309: the expr above always holds the maintenance clause, so the rule is
+    # `mute`; the recurring-maintenance silences match this label, and without
+    # it a migrated rule would page through a recurring window.
+    labels['maintenance'] = 'mute'
     if labels:
         alert_rule['labels'] = labels
     dropped_a = []

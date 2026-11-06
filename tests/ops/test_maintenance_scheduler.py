@@ -445,7 +445,22 @@ class TestSilenceScopeExcludesPlatformAlerts:
     _EXPECTED = [
         {"name": "tenant", "value": "db-a", "isRegex": False},
         {"name": "alert_source", "value": "", "isRegex": False},
+        {"name": "maintenance", "value": "mute", "isRegex": False},
     ]
+
+    def test_scope_label_is_the_rule_pack_decision_label(self):
+        """#3309: the recurring silence mutes what a one-shot _state_maintenance
+        mutes because both read the same label. The scheduler ships in the
+        da-tools image without the rule-pack generator, so the spelling is
+        pinned here instead of imported."""
+        import importlib.util
+        gen_path = (Path(__file__).resolve().parents[2]
+                    / "scripts/tools/dx/generate_rulepack_derived.py")
+        spec = importlib.util.spec_from_file_location("grd", gen_path)
+        grd = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(grd)
+        scope = {m["name"]: m["value"] for m in ms._tenant_silence_matchers("t")}
+        assert scope[grd.MAINTENANCE_LABEL] == grd.MUTE
 
     @mock.patch.object(ms, "_api_request")
     def test_create_silence_carves_out_platform_alerts(self, mock_api):

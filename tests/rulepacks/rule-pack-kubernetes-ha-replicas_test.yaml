@@ -74,6 +74,7 @@ tests:
         alertname: TenantHAReplicasDegraded
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -87,6 +88,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:
@@ -150,6 +152,7 @@ tests:
         alertname: TenantHAReplicasDegraded
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -237,6 +240,7 @@ tests:
         alertname: TenantHAReplicasDegraded
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-f
             exp_annotations:
@@ -348,6 +352,7 @@ tests:
         alertname: TenantHAReplicasDegraded
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:

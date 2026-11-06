@@ -51,6 +51,7 @@ tests:
         alertname: OracleDatabaseDown
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: critical
               tenant: db-a
               instance: oracledb-exporter-a:9161
@@ -232,6 +233,7 @@ tests:
         exp_alerts:
           # db-a: enriched (branch A) — carries runbook_url/owner/tier.
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -246,6 +248,7 @@ tests:
               tier: gold
           # db-b: VACUUM-FIRE (branch B) — fires WITHOUT enrichment labels.
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:
@@ -268,6 +271,7 @@ tests:
         alertname: OracleTablespaceAlmostFull
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -281,6 +285,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:
@@ -304,6 +309,7 @@ tests:
         alertname: OracleHighWaitTime
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -317,6 +323,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:
@@ -339,6 +346,7 @@ tests:
         alertname: OracleHighProcessCount
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -352,6 +360,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:
@@ -374,6 +383,7 @@ tests:
         alertname: OracleHighPGAUsage
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -387,6 +397,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:
@@ -412,6 +423,7 @@ tests:
         alertname: OracleHighSessionUtilization
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-a
             exp_annotations:
@@ -425,6 +437,7 @@ tests:
               owner: team-a
               tier: gold
           - exp_labels:
+              maintenance: mute
               severity: warning
               tenant: db-b
             exp_annotations:

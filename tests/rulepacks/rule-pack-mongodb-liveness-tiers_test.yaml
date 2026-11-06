@@ -49,6 +49,7 @@ tests:
         alertname: MongoDBDown
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: liveness
               tenant: db-a
@@ -98,6 +99,7 @@ tests:
         alertname: MongoDBClusterDown
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: critical
               metric_group: liveness
               tenant: db-a
@@ -135,6 +137,7 @@ tests:
         alertname: MongoDBNoPrimary
         exp_alerts:
           - exp_labels:
+              maintenance: page
               severity: critical
               metric_group: liveness
               tenant: db-a
@@ -214,6 +217,7 @@ tests:
         alertname: MongoDBDown
         exp_alerts:
           - exp_labels:
+              maintenance: mute
               severity: warning
               metric_group: liveness
               tenant: db-b

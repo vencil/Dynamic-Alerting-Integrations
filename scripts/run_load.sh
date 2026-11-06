@@ -136,9 +136,20 @@ spec:
         tenant: ${tenant}
     spec:
       restartPolicy: Never
+      # Restricted Pod Security (#1018): the tenant namespaces enforce it.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: conn-storm
           image: python:3.12-alpine
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: MARIADB_ROOT_PASSWORD
               valueFrom:
@@ -151,7 +162,9 @@ spec:
             - |
               echo "=== Connection Storm: ${num_connections} connections ==="
               echo "Target: ${target_host}:3306"
-              pip install --quiet PyMySQL 2>/dev/null
+              # Non-root (restricted): install into /tmp, not site-packages.
+              export HOME=/tmp PYTHONPATH=/tmp/pydeps
+              pip install --quiet --disable-pip-version-check --target /tmp/pydeps PyMySQL 2>/dev/null
               python3 -c "
               import pymysql, time, os, sys
               HOST='${target_host}'; PORT=3306; USER='root'
@@ -232,9 +245,20 @@ spec:
         tenant: ${tenant}
     spec:
       restartPolicy: Never
+      # Restricted Pod Security (#1018): the tenant namespaces enforce it.
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        runAsGroup: 65534
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: cpu-burn
           image: severalnines/sysbench
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
           env:
             - name: MARIADB_ROOT_PASSWORD
               valueFrom:
@@ -334,9 +358,20 @@ metadata:
     tenant: ${tenant}
 spec:
   restartPolicy: Never
+  # Restricted Pod Security (#1018): the tenant namespaces enforce it.
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 65534
+    runAsGroup: 65534
+    seccompProfile:
+      type: RuntimeDefault
   containers:
     - name: cpu-stress
       image: alpine:3.19
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
       command:
         - /bin/sh
         - -c

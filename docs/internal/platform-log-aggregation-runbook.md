@@ -318,7 +318,9 @@ EOF
 
 ```sh
 # 看 VictoriaLogs（既有 query 一樣）
-kubectl run vlq --rm -i --restart=Never --image=busybox:1.36 --quiet -- \
+# 安全性設定（--overrides）讓 debug pod 能在 enforce restricted 的 namespace 起來（#1018）
+kubectl run vlq --rm -i --restart=Never --image=busybox:1.36 --quiet \
+  --override-type=strategic --overrides='{"spec":{"securityContext":{"runAsNonRoot":true,"runAsUser":65534,"seccompProfile":{"type":"RuntimeDefault"}},"containers":[{"name":"vlq","securityContext":{"allowPrivilegeEscalation":false,"capabilities":{"drop":["ALL"]}}}]}}' -- \
   wget -qO- 'http://victorialogs.monitoring.svc:9428/select/logsql/query?query=*&limit=1'
 
 # 看 SIEM 端是否到貨（依 SIEM 操作；若是 mock HTTP 就 kubectl logs）

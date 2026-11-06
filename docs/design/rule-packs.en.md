@@ -96,10 +96,12 @@ groups:
             > on(tenant) group_left
             tenant:alert_threshold:mysql_connections
           )
-          unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute   # required: mute | page; generate_rulepack_derived.py writes the two maintenance lines above from it
         annotations:
           summary: "MariaDB connections {{ $value }} exceeds threshold ({{ $labels.tenant }})"
 ```

@@ -15,7 +15,6 @@
 uncovered:
   rule-pack-clickhouse.yaml:
   - ClickHouseDown
-  - ClickHouseHighFailedQueryRate
   - ClickHouseHighMemoryUsage
   - ClickHouseHighPartCount
   - ClickHouseHighQueryRate
@@ -55,7 +54,6 @@ uncovered:
   - MariaDBHighConnections
   - MariaDBHighConnectionsCritical
   - MariaDBHighSlowQueries
-  - MariaDBRecentRestart
   - MariaDBSystemBottleneck
   rule-pack-mongodb.yaml:
   - MongoDBConnectionSaturation
@@ -84,7 +82,6 @@ uncovered:
   - ThresholdExporterDown
   - ThresholdExporterTooFewReplicas
   rule-pack-postgresql.yaml:
-  - PostgreSQLDown
   - PostgreSQLExporterAbsent
   - PostgreSQLHighConnections
   - PostgreSQLHighConnectionsCritical
@@ -92,7 +89,6 @@ uncovered:
   - PostgreSQLHighReplicationLag
   - PostgreSQLHighReplicationLagCritical
   - PostgreSQLHighRollbackRatio
-  - PostgreSQLRecentRestart
   rule-pack-rabbitmq.yaml:
   - RabbitMQExporterAbsent
   - RabbitMQHighConnections

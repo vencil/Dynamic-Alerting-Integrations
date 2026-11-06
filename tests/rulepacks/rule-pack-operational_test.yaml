@@ -29,6 +29,7 @@ tests:
     alertname: TenantConfigEvent
     exp_alerts:
     - exp_labels:
+        maintenance: page
         severity: warning
         tenant: tenant-x
         event: silence_expired
@@ -40,6 +41,7 @@ tests:
         description: 'Timed config for tenant tenant-x has expired and auto-deactivated. Event: silence_expired. Reason: DB maintenance. Please update or remove the expired config entry.'
         description_zh: tenant-x 的定時組態已過期並自動停用。事件：silence_expired。原因：DB maintenance。請更新或移除過期的組態項目。
     - exp_labels:
+        maintenance: page
         severity: warning
         tenant: tenant-x
         event: silence_expired
@@ -51,6 +53,7 @@ tests:
         description: 'Timed config for tenant tenant-x has expired and auto-deactivated. Event: silence_expired. Reason: DB maintenance. Please update or remove the expired config entry.'
         description_zh: tenant-x 的定時組態已過期並自動停用。事件：silence_expired。原因：DB maintenance。請更新或移除過期的組態項目。
     - exp_labels:
+        maintenance: page
         severity: warning
         tenant: tenant-y
         event: maintenance_expired
@@ -61,6 +64,7 @@ tests:
         description: 'Timed config for tenant tenant-y has expired and auto-deactivated. Event: maintenance_expired. Reason: window. Please update or remove the expired config entry.'
         description_zh: tenant-y 的定時組態已過期並自動停用。事件：maintenance_expired。原因：window。請更新或移除過期的組態項目。
     - exp_labels:
+        maintenance: page
         severity: warning
         tenant: tenant-z
         event: threshold_expired

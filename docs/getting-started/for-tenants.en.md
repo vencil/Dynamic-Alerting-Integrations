@@ -145,7 +145,7 @@ tenants:
       reason: "Planned DB migration"
 ```
 
-In maintenance mode, threshold and custom alerts that carry the maintenance condition don't fire (PromQL-level suppression); down, cluster-survival and exporter-absent alerts keep firing — for the scope see [config-driven §2.7](../design/config-driven.en.md#27-three-state-operational-modes). Automatically resumes after expiry.
+In maintenance mode, alerts labelled `maintenance: mute` don't fire (PromQL-level suppression; threshold and custom alerts are all `mute`); cluster-survival, exporter-absent and single-instance critical down alerts (such as `PostgreSQLDown`) are `page` and keep firing — per alert see the *In maintenance* column of the [alert reference](https://github.com/vencil/Dynamic-Alerting-Integrations/blob/main/rule-packs/ALERT-REFERENCE.en.md); for the scope see [config-driven §2.7](../design/config-driven.en.md#27-three-state-operational-modes). Automatically resumes after expiry.
 
 The switch is `enabled: true` (a YAML boolean) or `target: enable`; to turn it off write `enabled: false` / `target: disable`, or `disable` as the whole value. A scalar is read only as `enable` or `disable` (and its aliases) — values such as `"yes"`, `"true"` or `"1"` do **not** turn maintenance mode on: the exporter logs a WARN and tenant-api refuses them. An object with `recurring:` and no switch gives only the Alertmanager silences inside each window; maintenance mode itself stays off. The full reading is in [config-driven §2.7](../design/config-driven.en.md#27-three-state-operational-modes) ([#3620](https://github.com/vencil/Dynamic-Alerting-Integrations/issues/3620)).
 

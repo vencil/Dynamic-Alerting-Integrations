@@ -176,6 +176,7 @@ groups:
         for: 15s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -199,6 +200,7 @@ groups:
         for: 30s
         labels:
           severity: critical
+          maintenance: page
           metric_group: liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -233,6 +235,7 @@ groups:
         for: 2m
         labels:
           severity: critical
+          maintenance: page
           metric_group: liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -265,10 +268,12 @@ groups:
               mysql_global_status_rpl_semi_sync_master_status{job="tenant-exporters"} == 0
             )
           )
-          unless on(tenant) (user_state_filter{filter="maintenance"} == 1)
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 2m
         labels:
           severity: warning
+          maintenance: mute
           metric_group: liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -293,6 +298,7 @@ groups:
         for: 1m
         labels:
           severity: critical
+          maintenance: page
           metric_group: liveness
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -356,6 +362,7 @@ groups:
         for: 1m
         labels:
           severity: critical
+          maintenance: page
           metric_group: replication_lag
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -374,6 +381,7 @@ groups:
         for: 1m
         labels:
           severity: critical
+          maintenance: page
           metric_group: replication_lag
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -409,17 +417,16 @@ groups:
       - alert: MariaDBReplicationLag
         expr: |
           (
-            (
-              tenant:mysql_replication_lag:max
-              > on(tenant) group_left
-              tenant:alert_threshold:mysql_replication_lag
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:mysql_replication_lag:max
+            > on(tenant) group_left
+            tenant:alert_threshold:mysql_replication_lag
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "replication_lag"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -437,17 +444,16 @@ groups:
       - alert: MariaDBReplicationLagCritical
         expr: |
           (
-            (
-              tenant:mysql_replication_lag:max
-              > on(tenant) group_left
-              tenant:alert_threshold:mysql_replication_lag_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:mysql_replication_lag:max
+            > on(tenant) group_left
+            tenant:alert_threshold:mysql_replication_lag_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "replication_lag"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -472,6 +478,7 @@ groups:
         for: 30s
         labels:
           severity: critical
+          maintenance: page
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "mysqld-exporter target missing"
@@ -482,17 +489,16 @@ groups:
       - alert: MariaDBHighConnections
         expr: |
           (
-            (
-              tenant:mysql_threads_connected:max
-              > on(tenant) group_left
-              tenant:alert_threshold:mysql_connections
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:mysql_threads_connected:max
+            > on(tenant) group_left
+            tenant:alert_threshold:mysql_connections
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "connections"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -510,17 +516,16 @@ groups:
       - alert: MariaDBHighConnectionsCritical
         expr: |
           (
-            (
-              tenant:mysql_threads_connected:max
-              > on(tenant) group_left
-              tenant:alert_threshold:mysql_connections_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:mysql_threads_connected:max
+            > on(tenant) group_left
+            tenant:alert_threshold:mysql_connections_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 30s
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "connections"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -557,20 +562,19 @@ groups:
       - alert: MariaDBHighThreadsRunning
         expr: |
           (
-            (
-              tenant:mysql_threads_running:avg1m
-              > on(tenant) group_left
-              tenant:alert_threshold:mysql_threads_running
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:mysql_threads_running:avg1m
+            > on(tenant) group_left
+            tenant:alert_threshold:mysql_threads_running
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         # for:30s: the metric is already 1m-smoothed (avg_over_time, see recording rule),
         # which removes the spiky-gauge `for` reset-trap — so a long `for:` is unnecessary
         # and a 30s debounce both suffices and responds faster than the raw+for:1m would.
         for: 30s
         labels:
           severity: warning
+          maintenance: mute
           metric_group: "threads_running"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -588,18 +592,17 @@ groups:
       - alert: MariaDBHighThreadsRunningCritical
         expr: |
           (
-            (
-              tenant:mysql_threads_running:avg1m
-              > on(tenant) group_left
-              tenant:alert_threshold:mysql_threads_running_critical
-            )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            tenant:mysql_threads_running:avg1m
+            > on(tenant) group_left
+            tenant:alert_threshold:mysql_threads_running_critical
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         # for:30s — metric is 1m-smoothed (see warning tier); 30s debounce suffices.
         for: 30s
         labels:
           severity: critical
+          maintenance: mute
           metric_group: "threads_running"
           tenant: "{{ $labels.tenant }}"
         annotations:
@@ -618,24 +621,23 @@ groups:
         expr: |
           (
             (
-              (
-                tenant:mysql_threads_connected:max
-                > on(tenant) group_left
-                tenant:alert_threshold:mysql_connections
-              )
-              and on(tenant)
-              (
-                tenant:mysql_threads_running:avg1m
-                > on(tenant) group_left
-                tenant:alert_threshold:mysql_threads_running
-              )
+              tenant:mysql_threads_connected:max
+              > on(tenant) group_left
+              tenant:alert_threshold:mysql_connections
             )
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
+            and on(tenant)
+            (
+              tenant:mysql_threads_running:avg1m
+              > on(tenant) group_left
+              tenant:alert_threshold:mysql_threads_running
+            )
           )
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 60s
         labels:
           severity: critical
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "System bottleneck on {{ $labels.tenant }}"
@@ -649,10 +651,14 @@ groups:
           owner: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.owner }}{{ end }}{{ end }}"
           tier: "{{ with query (printf `topk(1, tenant_metadata_info{tenant=%q})` $labels.tenant) }}{{ with index . 0 }}{{ .Labels.tier }}{{ end }}{{ end }}"
       - alert: MariaDBRecentRestart
-        expr: mysql_global_status_uptime < 300
+        expr: |
+          mysql_global_status_uptime < 300
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 0s
         labels:
           severity: info
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "{{ $labels.instance }} restarted recently"
@@ -663,14 +669,13 @@ groups:
       # Percona-inspired: High slow queries rate
       - alert: MariaDBHighSlowQueries
         expr: |
-          (
-            tenant:mysql_slow_queries:rate5m > 1
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
-          )
+          tenant:mysql_slow_queries:rate5m > 1
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High slow query rate on {{ $labels.tenant }}"
@@ -686,14 +691,13 @@ groups:
       # Percona-inspired: High aborted connections
       - alert: MariaDBHighAbortedConnections
         expr: |
-          (
-            tenant:mysql_aborted_connections:rate5m > 5
-            unless on(tenant)
-            (user_state_filter{filter="maintenance"} == 1)
-          )
+          tenant:mysql_aborted_connections:rate5m > 5
+          unless on(tenant)
+          (user_state_filter{filter="maintenance"} == 1)
         for: 5m
         labels:
           severity: warning
+          maintenance: mute
           tenant: "{{ $labels.tenant }}"
         annotations:
           summary: "High aborted connections on {{ $labels.tenant }}"
